@@ -168,8 +168,17 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 			windowPos.y + (windowSize.y - logoHeight) * 0.5f);
 		ImVec2 logoMax(logoMin.x + logoWidth, logoMin.y + logoHeight);
 
-		// Render as subtle watermark background (alpha = 180 for stronger logo)
-		ImU32 watermarkColor = IM_COL32(255, 255, 255, 180);
+		// Determine watermark color based on monochrome logo setting
+		ImU32 watermarkColor;
+		if (menu->GetSettings().Theme.UseMonochromeLogo) {
+			ImVec4 textColor = menu->GetSettings().Theme.Palette.Text;
+			textColor.w = 0.24f;  // Low alpha for watermark effect
+			watermarkColor = ImGui::GetColorU32(textColor);
+		} else {
+			watermarkColor = IM_COL32(255, 255, 255, 60);
+		}
+
+		// Render as subtle watermark background
 		ImGui::GetWindowDrawList()->AddImage(menu->uiIcons.logo.texture, logoMin, logoMax,
 			ImVec2(0, 0), ImVec2(1, 1), watermarkColor);
 	}

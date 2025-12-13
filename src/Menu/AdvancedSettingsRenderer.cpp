@@ -232,7 +232,8 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
 
-		if (ImGui::CollapsingHeader("Currently Blocked Shader", ImGuiTreeNodeFlags_DefaultOpen)) {
+		float maxHeight = ImGui::GetContentRegionAvail().y * 0.3f;  // Limit to 30% to keep Active Shaders visible
+		if (ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, maxHeight), true, ImGuiChildFlags_AutoResizeY)) {
 			ImGui::TextColored(Util::Colors::GetError(), "Shader Blocking Active");
 			ImGui::SameLine();
 			if (ImGui::SmallButton("Stop Blocking##Section")) {

@@ -14,7 +14,7 @@ namespace FeatureVersions
         {"DynamicCubemaps"sv,      {2,2,2}},
         {"ExtendedMaterials"sv,    {1,1,0}},
         {"ExtendedTranslucency"sv, {1,0,0}},
-        {"GrassCollision"sv,       {2,0,0}}, // ←  lower minimum needed for SSS 1.2.1
+        {"GrassCollision"sv,       {2,0,0}}, // ←  lower minimum
         {"GrassLighting"sv,        {2,0,0}},
         {"HairSpecular"sv,         {1,0,1}},
         {"ImageBasedLighting"sv,   {1,0,1}},
@@ -38,6 +38,6 @@ namespace FeatureVersions
         {"VolumetricLighting"sv,   {1,0,0}},
         {"WaterEffects"sv,         {1,0,1}},
         {"WeatherPicker"sv,        {1,0,0}},
-        {"WetnessEffects"sv,       {3,0,0}},
+        {"WetnessEffects"sv,       {2,0,0}}, // ← lower minimum, 2.2 better for VR?
     };
 }

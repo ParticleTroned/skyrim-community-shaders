@@ -2704,7 +2704,7 @@ SharedData::lodBlendingSettings.LODTerrainBrightness;
 	}
 #	endif
 
-#	if defined(EYE)
+#	if defined(EYE) && defined(VANILLA_EYE_NORMAL)
 	worldNormal.xyz = input.EyeNormal;
 #	endif  // EYE
 

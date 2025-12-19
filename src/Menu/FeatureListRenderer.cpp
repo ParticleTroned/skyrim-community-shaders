@@ -446,7 +446,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettingsTab(Feature* fea
 		}
 
 		if (!isDisabled && isLoaded) {
-			ImVec2 childSize = ImGui::GetWindowSize();
+			const ImVec2 windowPos = ImGui::GetWindowPos();
+			const ImVec2 windowSize = ImGui::GetWindowSize();
+			const float scrollbarWidth = (ImGui::GetScrollMaxY() > 0.0f) ? ImGui::GetStyle().ScrollbarSize : 0.0f;
 			float iconDimension = ImGui::GetFrameHeight() * 1.2f;
 			ImVec2 iconSize = ImVec2(iconDimension, iconDimension);
 			ImGui::SetCursorPos(ImVec2(childSize.x - iconSize.x - 10.0f, childSize.y - iconSize.y - 10.0f));

@@ -296,14 +296,5 @@ namespace Hair
 		}
 		return lerp(1.0, shadow, SharedData::hairSpecularSettings.SelfShadowStrength);
 	}
-		return SpecularIrradiance;
-	}
-#endif
-		return SpecularIrradiance;
-	}
-#endif
-		return SpecularIrradiance;
-	}
-#endif
 }
 #endif  //__HAIR_DEPENDENCY_HLSL__

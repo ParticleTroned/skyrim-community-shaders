@@ -30,7 +30,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RippleStrength,
 	RippleRadius,
 	RippleBreadth,
-	RippleLifetime)
+	RippleLifetime,
+	EnableChaoticRipples,
+	EnableLegacyWetSpecular,
+	EnableLegacyAmbientSheen,
+	EnableLegacySpecularLightScale,
+	LegacySpecularF0Mode,
+	LegacyAmbientSheenMode,
+	LegacySpecularF0Custom,
+	ChaoticRippleStrength,
+	ChaoticRippleScale,
+	ChaoticRippleSpeed)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::DebugSettings,
@@ -362,6 +372,74 @@ void WetnessEffects::DrawSettings()
 				"Disabling may not take effect until the next weather change." });
 		}
 		ImGui::EndDisabled();
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+
+		if (ImGui::TreeNodeEx("Legacy / Performance Toggles", ImGuiTreeNodeFlags_DefaultOpen)) {
+			// Chaotic ripples
+			ImGui::Checkbox("Enable Chaotic Ripples (Legacy turbulence)", (bool*)&settings.EnableChaoticRipples);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Adds turbulence noise to ripple normals. Extra ALU cost on wet surfaces.");
+
+			ImGui::BeginDisabled(!settings.EnableChaoticRipples);
+			ImGui::SliderFloat("Chaotic Ripple Strength", &settings.ChaoticRippleStrength, 0.0f, 2.0f, "%.3f");
+			ImGui::SliderFloat("Chaotic Ripple Scale", &settings.ChaoticRippleScale, 1.0f, 200.0f, "%.2f");
+			ImGui::SliderFloat("Chaotic Ripple Speed", &settings.ChaoticRippleSpeed, 0.0f, 10.0f, "%.2f");
+			ImGui::EndDisabled();
+
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
+
+			// Legacy wet specular
+			ImGui::Checkbox("Enable Legacy Wet Specular", (bool*)&settings.EnableLegacyWetSpecular);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Switches wet specular model to legacy behavior for comparison (OFF = default 1.4.6).");
+
+			ImGui::BeginDisabled(!settings.EnableLegacyWetSpecular);
+
+			ImGui::Checkbox("Legacy Specular Light Scale (x0.1)", (bool*)&settings.EnableLegacySpecularLightScale);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Applies the old lightColor *= 0.1 scaling to wet specular.");
+
+			{
+				const char* f0Modes[] = { "F0 = 1 - roughness (~legacy)", "F0 = custom fixed value" };
+				int mode = (int)settings.LegacySpecularF0Mode;
+				if (ImGui::Combo("Legacy F0 Mode", &mode, f0Modes, IM_ARRAYSIZE(f0Modes))) {
+					settings.LegacySpecularF0Mode = (uint)mode;
+				}
+			}
+
+			if (settings.LegacySpecularF0Mode == 1) {
+				ImGui::SliderFloat("Legacy F0 Custom", &settings.LegacySpecularF0Custom, 0.0f, 1.0f, "%.3f");
+			}
+
+			ImGui::EndDisabled();
+
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
+
+			// Legacy ambient sheen
+			ImGui::Checkbox("Enable Legacy Ambient Sheen", (bool*)&settings.EnableLegacyAmbientSheen);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Adds/adjusts wet ambient sheen. Mode 0 is ALU-only; Mode 1 can add an extra envmap sample.");
+
+			ImGui::BeginDisabled(!settings.EnableLegacyAmbientSheen);
+			{
+				const char* sheenModes[] = { "Mode 0: cheap lobe tweak", "Mode 1: force extra env sample (if envmap available)" };
+				int mode = (int)settings.LegacyAmbientSheenMode;
+				if (ImGui::Combo("Legacy Ambient Sheen Mode", &mode, sheenModes, IM_ARRAYSIZE(sheenModes))) {
+					settings.LegacyAmbientSheenMode = (uint)mode;
+				}
+			}
+			ImGui::EndDisabled();
+
+			ImGui::TreePop();
+		}
+
 		ImGui::SliderFloat("Effect Range", &settings.RaindropFxRange, 1e2f, 2e3f, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			std::vector<std::string> tooltipLines = {
@@ -780,6 +858,7 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 	data.settings.RaindropGridSize = 1.0f / settings.RaindropGridSize;
 	data.settings.RaindropInterval = 1.0f / settings.RaindropInterval;
 	data.settings.RippleLifetime = settings.RaindropInterval / settings.RippleLifetime;
+	data.settings.ChaoticRippleScale = (settings.ChaoticRippleScale > 1e-6f) ? (1.0f / settings.ChaoticRippleScale) : 0.0f;
 
 	return data;
 }

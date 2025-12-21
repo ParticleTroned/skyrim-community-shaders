@@ -2262,13 +2262,14 @@ SharedData::lodBlendingSettings.LODTerrainBrightness;
 		}
 #		endif
 
-		if (!dynamicCubemap) {
+		if (!dynamicCubemap)
+		{
 			float3 envColorBase = Color::GammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
-			envColor = envColorBase.xyz * envMask;
+			envColor = envColorBase * envMask;
 		}
-	}
+	} // closes: if (envMask > 0.0) {
 
-#	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
+#endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
 	float porosity = 1.0;
 
@@ -2849,21 +2850,18 @@ SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif  // LOD_BLENDING
 #	endif  // defined (HAIR)
 
-	float4 color = 0;
+	float4 color = 0.0;
+
+	// Wetness reflectance must exist in every permutation (some later code uses it outside WETNESS_EFFECTS)
+	float3 wetnessReflectance = 0.0;
 
 	indirectContext = CreateIndirectLightingContext(ambientNormal, vertexNormal.xyz, viewDirection);
 
 	GetIndirectLobeWeights(indirectLobeWeights, indirectContext, material, uvOriginal);
 
 #	if defined(WETNESS_EFFECTS)
-#		if defined(DYNAMIC_CUBEMAPS)
-	float3 wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
-#		else
-	float3 wetnessReflectance = 0.0;
-#		endif
-#	endif
-#	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
-	indirectLobeWeights.specular *= envMask;
+    // ALU-only; safe across permutations
+    wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
 #	endif
 
 #	if defined(SPECULAR) && !defined(TRUE_PBR)
@@ -2927,9 +2925,35 @@ SharedData::lodBlendingSettings.LODTerrainBrightness;
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (!dynamicCubemap)
+	{
 #		endif
-		specularColor += envColor * Color::GammaToLinear(diffuseColor);
-#	endif
+
+#		if defined(WETNESS_EFFECTS)
+	// Legacy Ambient Sheen Mode 1: force extra env sample (can be moderate cost)
+	// Placed here: wetnessReflectance is valid, and adding to specularColor guarantees visible effect.
+	if (SharedData::wetnessEffectsSettings.EnableLegacyAmbientSheen != 0 &&
+	    SharedData::wetnessEffectsSettings.LegacyAmbientSheenMode == 1 &&
+	    envMask > 0.0)
+	{
+		float wetSheen = saturate(wetnessReflectance.x);
+		if (wetSheen > 0.0)
+		{
+			float3 Rwet = reflect(-viewDirection, normalize(wetnessNormal));
+			float mip = saturate(waterRoughnessSpecular) * 9.0;
+
+			float3 wetEnv = Color::GammaToLinear(TexEnvSampler.SampleLevel(SampEnvSampler, Rwet, mip).xyz);
+			specularColor += wetEnv * envMask * wetSheen * Color::GammaToLinear(diffuseColor);
+		}
+	}
+#		endif  // WETNESS_EFFECTS
+
+	// Existing env contribution
+	specularColor += envColor * Color::GammaToLinear(diffuseColor);
+
+#		if defined(DYNAMIC_CUBEMAPS)
+	}
+		#endif  // DYNAMIC_CUBEMAPS
+#	endif  // (ENVMAP || MULTI_LAYER_PARALLAX || EYE)
 
 #	if defined(EMAT_ENVMAP)
 	specularColor *= complexSpecular;
@@ -2952,30 +2976,37 @@ SharedData::lodBlendingSettings.LODTerrainBrightness;
 	indirectLobeWeights.diffuse *= Color::PBRLightingScale;
 #	endif
 
-#	if !defined(DEFERRED)
-	if (any(indirectLobeWeights.specular > 0)
-#		if defined(WETNESS_EFFECTS)
-		|| any(wetnessReflectance > 0)
-#		endif
-	)
-#		if defined(DYNAMIC_CUBEMAPS)
-#			if defined(SKYLIGHTING)
-		color.xyz += indirectLobeWeights.specular * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness, skylightingSH);
-#				if defined(WETNESS_EFFECTS)
+#if !defined(DEFERRED)
+	if (any(indirectLobeWeights.specular > 0) || any(wetnessReflectance > 0))
+	{
+#if defined(DYNAMIC_CUBEMAPS)
+
+#if defined(SKYLIGHTING)
+		color.xyz += indirectLobeWeights.specular *
+			DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness, skylightingSH);
+
+#if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
-			color.xyz += wetnessReflectance * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, skylightingSH);
-#				endif
-#			else
-		color.xyz += indirectLobeWeights.specular * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness);
-#				if defined(WETNESS_EFFECTS)
+			color.xyz += wetnessReflectance *
+				DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, skylightingSH);
+#endif
+
+#else
+		color.xyz += indirectLobeWeights.specular *
+			DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness);
+
+#if defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
-			color.xyz += wetnessReflectance * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular);
-#				endif
-#			endif
-#		else
+			color.xyz += wetnessReflectance *
+				DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular);
+#endif
+#endif  // SKYLIGHTING
+
+#else
 		color.xyz += indirectLobeWeights.specular * directionalAmbientColor;
-#		endif
-#	endif
+#endif  // DYNAMIC_CUBEMAPS
+	}
+#endif  // !DEFERRED
 
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
 

@@ -119,7 +119,27 @@ namespace SharedData
 		float RippleRadius;
 		float RippleBreadth;
 		float RippleLifetimeRcp;
-		float pad0;
+
+		// Legacy / optional wetness toggles + params
+		// Use uints (not bools) to avoid C++ packing mismatches.
+		
+		uint EnableChaoticRipples;
+		uint EnableLegacyWetSpecular;
+		uint EnableLegacyAmbientSheen;
+		uint EnableLegacySpecularLightScale;
+
+		uint LegacySpecularF0Mode;      // 0: F0 = 1 - roughness, 1: use LegacySpecularF0Custom
+		uint LegacyAmbientSheenMode;    // 0: cheap lobe tweak, 1: force extra env sample (Lighting.hlsl)
+		float LegacySpecularF0Custom;   // used when LegacySpecularF0Mode == 1
+		float padLegacy0;
+
+		// Chaotic ripples (interpreted as: strength, scaleRcp, speed)
+		float ChaoticRippleStrength;
+		float ChaoticRippleScaleRcp;
+		float ChaoticRippleSpeed;
+		float padLegacy1;
+
+		
 	};
 
 	struct SkylightingSettings

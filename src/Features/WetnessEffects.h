@@ -57,6 +57,27 @@ public:
 		float RippleRadius = 1.f;
 		float RippleBreadth = .5f;
 		float RippleLifetime = .5f;
+		
+		// Legacy / optional wetness toggles + params
+		// (uint to mirror HLSL uint fields cleanly)
+		
+		uint EnableChaoticRipples = false;
+		uint EnableLegacyWetSpecular = false;
+		uint EnableLegacyAmbientSheen = false;
+		uint EnableLegacySpecularLightScale = false;
+
+		uint LegacySpecularF0Mode = 0;    // 0: F0 = 1-roughness, 1: custom fixed
+		uint LegacyAmbientSheenMode = 0;  // 0: cheap lobe tweak, 1: force extra env sample
+		float LegacySpecularF0Custom = 0.02f;
+
+		// Chaotic ripple controls (UI-friendly). We will convert Scale -> ScaleRcp on upload.
+		float ChaoticRippleStrength = 0.25f;
+		float ChaoticRippleScale = 20.0f;  // larger = broader features; converted to rcp in GetCommonBufferData
+		float ChaoticRippleSpeed = 1.0f;
+
+		// Padding to keep Settings size aligned (mirrors HLSL padLegacy0/padLegacy1)
+		float padLegacy0 = 0.0f;
+		float padLegacy1 = 0.0f;
 	};
 
 	struct alignas(16) PerFrame

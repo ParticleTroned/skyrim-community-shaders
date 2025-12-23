@@ -138,6 +138,7 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; };
+	virtual bool IsCore() const override { return true; };
 
 	// Override to provide weather analysis configuration
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const override

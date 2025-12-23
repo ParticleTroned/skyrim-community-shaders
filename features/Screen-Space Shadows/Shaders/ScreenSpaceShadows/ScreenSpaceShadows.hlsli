@@ -18,12 +18,12 @@ namespace ScreenSpaceShadows
 #if defined(VR)
 		return ScreenSpaceShadowsTexture.Load(int3(int2(screenPosition.xy + float2(0.5f, 0.5f)), 0)).x;
 #else
-		noise *= Math::TAU;
+        noise *= Math::TAU;
 
-		half2x2 rotationMatrix = half2x2(cos(noise), sin(noise), -sin(noise), cos(noise));
+        half2x2 rotationMatrix = half2x2(cos(noise), sin(noise), -sin(noise), cos(noise));
 
-		float4 shadowSamples = 0;
-		float4 depthSamples = 0;
+        float4 shadowSamples = 0;
+        float4 depthSamples = 0;
 
 #if defined(DEFERRED) && !defined(DO_ALPHA_TEST)
 		depthSamples[0] = screenPosition.z;

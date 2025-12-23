@@ -20,10 +20,37 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BurleySamples,
 	MeanFreePathBase,
 	MeanFreePathHuman,
-	HumanSSSIntensity,
-	HumanSSSSaturation,
-	HumanSSSBrightness,
-	HumanSSSBaseSaturation)
+	HumanMaleSSSIntensity,
+	HumanMaleSSSSaturation,
+	HumanMaleSSSBrightness,
+	HumanMaleSSSBaseSaturation,
+	HumanFemaleSSSIntensity,
+	HumanFemaleSSSSaturation,
+	HumanFemaleSSSBrightness,
+	HumanFemaleSSSBaseSaturation)
+
+
+namespace
+{
+	// Helper to detect actor sex across CommonLib variants.
+	// Prefers TESNPC::IsFemale() if available; falls back to TESNPC::GetSex() == RE::SEX::kFemale.
+	template <class TNPC>
+	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
+	{
+		return npc->IsFemale();
+	}
+
+	template <class TNPC>
+	auto IsFemaleImpl(TNPC* npc, long) -> decltype(npc->GetSex(), bool{})
+	{
+		return npc->GetSex() == RE::SEX::kFemale;
+	}
+
+	inline bool GetNPCIsFemale(RE::TESNPC* npc)
+	{
+		return npc ? IsFemaleImpl(npc, 0) : false;
+	}
+}
 
 void SubsurfaceScattering::DrawSettings()
 {
@@ -97,49 +124,101 @@ void SubsurfaceScattering::DrawSettings()
 				}
 
 				// --- aligned sliders (value column + label column) ---
-				if (ImGui::BeginTable("##HumanProfileSliders", 2, ImGuiTableFlags_SizingFixedFit)) {
+				auto RowSliderFloat = [&](const char* id, float* v, float vmin, float vmax, const char* fmt,
+					const char* label, const char* tooltip) {
+					ImGui::TableNextRow();
+
+					ImGui::TableSetColumnIndex(0);
+					ImGui::SetNextItemWidth(-FLT_MIN);  // fill the whole value column
+					ImGui::SliderFloat(id, v, vmin, vmax, fmt);
+					if (tooltip) {
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::TextUnformatted(tooltip);
+						}
+					}
+
+					ImGui::TableSetColumnIndex(1);
+					ImGui::TextUnformatted(label);
+				};
+
+				// Mean Free Path Distance stays shared (male/female split is applied only to the skin controls below)
+				if (ImGui::BeginTable("##HumanProfileMFP", 2, ImGuiTableFlags_SizingFixedFit)) {
 					ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
 					ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
-
-					auto RowSliderFloat = [&](const char* id, float* v, float vmin, float vmax, const char* fmt,
-											  const char* label, const char* tooltip) {
-						ImGui::TableNextRow();
-
-						ImGui::TableSetColumnIndex(0);
-						ImGui::SetNextItemWidth(-FLT_MIN);  // fill the whole value column
-						ImGui::SliderFloat(id, v, vmin, vmax, fmt);
-						if (tooltip) {
-							if (auto _tt = Util::HoverTooltipWrapper()) {
-								ImGui::TextUnformatted(tooltip);
-							}
-						}
-
-						ImGui::TableSetColumnIndex(1);
-						ImGui::TextUnformatted(label);
-					};
 
 					RowSliderFloat("##HumanMFPDistance", &settings.MeanFreePathHuman.w, 0.01f, 10.0f, "%.2f",
 						"Mean Free Path Distance",
 						"Controls the distance that Mean Free Path Color goes into subsurface.");
 
-					RowSliderFloat("##HumanSSSIntensity", &settings.HumanSSSIntensity, 0.0f, 2.0f, "%.2f",
-						"SSS Intensity",
-						"Scales the Burley SSS contribution for pixels flagged as Human Profile. 1.0 = default.");
-
-					RowSliderFloat("##HumanSSSSaturation", &settings.HumanSSSSaturation, 0.0f, 2.0f, "%.2f",
-						"SSS Saturation",
-						"Adjusts saturation of the final human-profile SSS result. 1.0 = unchanged.");
-
-					RowSliderFloat("##HumanSSSBrightness", &settings.HumanSSSBrightness, 0.0f, 2.0f, "%.2f",
-						"Skin Brightness",
-						"Multiplies the base skin color for Human Profile pixels. 1.0 = unchanged.");
-
-					RowSliderFloat("##HumanSSSBaseSaturation", &settings.HumanSSSBaseSaturation, 0.0f, 2.0f, "%.2f",
-						"Skin Saturation",
-						"Adjusts saturation of the base skin color for Human Profile pixels. 1.0 = unchanged.");
-
 					ImGui::EndTable();
 				}
+
+				ImGui::Spacing();
+				ImGui::Separator();
+				ImGui::Spacing();
+
+				// ----------------------------
+				// Male skin controls
+				// ----------------------------
+				if (ImGui::TreeNodeEx("Human Skin (Male)", ImGuiTreeNodeFlags_DefaultOpen)) {
+					if (ImGui::BeginTable("##HumanMaleProfileSliders", 2, ImGuiTableFlags_SizingFixedFit)) {
+						ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+						ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
+
+						RowSliderFloat("##HumanMaleSSSIntensity", &settings.HumanMaleSSSIntensity, 0.0f, 2.0f, "%.2f",
+							"SSS Intensity",
+							"Scales the Burley SSS contribution for pixels flagged as Human (Male). 1.0 = default.");
+
+						RowSliderFloat("##HumanMaleSSSSaturation", &settings.HumanMaleSSSSaturation, 0.0f, 2.0f, "%.2f",
+							"SSS Saturation",
+							"Adjusts saturation of the final human-profile SSS result (Male). 1.0 = unchanged.");
+
+						RowSliderFloat("##HumanMaleSSSBrightness", &settings.HumanMaleSSSBrightness, 0.0f, 2.0f, "%.2f",
+							"Skin Brightness",
+							"Multiplies the base skin color for Human (Male) pixels. 1.0 = unchanged.");
+
+						RowSliderFloat("##HumanMaleSSSBaseSaturation", &settings.HumanMaleSSSBaseSaturation, 0.0f, 2.0f, "%.2f",
+							"Skin Saturation",
+							"Adjusts saturation of the base skin color for Human (Male) pixels. 1.0 = unchanged.");
+
+						ImGui::EndTable();
+					}
+					ImGui::TreePop();
+				}
+
+				ImGui::Spacing();
+				ImGui::Separator();
+				ImGui::Spacing();
+
+				// ----------------------------
+				// Female skin controls
+				// ----------------------------
+				if (ImGui::TreeNodeEx("Human Skin (Female)", ImGuiTreeNodeFlags_DefaultOpen)) {
+					if (ImGui::BeginTable("##HumanFemaleProfileSliders", 2, ImGuiTableFlags_SizingFixedFit)) {
+						ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+						ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
+
+						RowSliderFloat("##HumanFemaleSSSIntensity", &settings.HumanFemaleSSSIntensity, 0.0f, 2.0f, "%.2f",
+							"SSS Intensity",
+							"Scales the Burley SSS contribution for pixels flagged as Human (Female). 1.0 = default.");
+
+						RowSliderFloat("##HumanFemaleSSSSaturation", &settings.HumanFemaleSSSSaturation, 0.0f, 2.0f, "%.2f",
+							"SSS Saturation",
+							"Adjusts saturation of the final human-profile SSS result (Female). 1.0 = unchanged.");
+
+						RowSliderFloat("##HumanFemaleSSSBrightness", &settings.HumanFemaleSSSBrightness, 0.0f, 2.0f, "%.2f",
+							"Skin Brightness",
+							"Multiplies the base skin color for Human (Female) pixels. 1.0 = unchanged.");
+
+						RowSliderFloat("##HumanFemaleSSSBaseSaturation", &settings.HumanFemaleSSSBaseSaturation, 0.0f, 2.0f, "%.2f",
+							"Skin Saturation",
+							"Adjusts saturation of the base skin color for Human (Female) pixels. 1.0 = unchanged.");
+
+						ImGui::EndTable();
+					}
+					ImGui::TreePop();
+				}
+
 
 				ImGui::Spacing();
 				ImGui::Separator();
@@ -389,10 +468,15 @@ void SubsurfaceScattering::SetupResources()
 void SubsurfaceScattering::Reset()
 {
 	if (auto state = globals::state) {
-		state->sssHumanIntensity = std::clamp(settings.HumanSSSIntensity, 0.0f, 2.0f);
-		state->sssHumanSaturation = std::clamp(settings.HumanSSSSaturation, 0.0f, 2.0f);
-		state->sssHumanBrightness = std::clamp(settings.HumanSSSBrightness, 0.0f, 2.0f);
-		state->sssHumanBaseSaturation = std::clamp(settings.HumanSSSBaseSaturation, 0.0f, 2.0f);
+		state->sssHumanMaleIntensity = std::clamp(settings.HumanMaleSSSIntensity, 0.0f, 2.0f);
+		state->sssHumanMaleSaturation = std::clamp(settings.HumanMaleSSSSaturation, 0.0f, 2.0f);
+		state->sssHumanMaleBrightness = std::clamp(settings.HumanMaleSSSBrightness, 0.0f, 2.0f);
+		state->sssHumanMaleBaseSaturation = std::clamp(settings.HumanMaleSSSBaseSaturation, 0.0f, 2.0f);
+
+		state->sssHumanFemaleIntensity = std::clamp(settings.HumanFemaleSSSIntensity, 0.0f, 2.0f);
+		state->sssHumanFemaleSaturation = std::clamp(settings.HumanFemaleSSSSaturation, 0.0f, 2.0f);
+		state->sssHumanFemaleBrightness = std::clamp(settings.HumanFemaleSSSBrightness, 0.0f, 2.0f);
+		state->sssHumanFemaleBaseSaturation = std::clamp(settings.HumanFemaleSSSBaseSaturation, 0.0f, 2.0f);
 	}
 	auto shaderManager = globals::game::smState;
 	auto shaderCache = globals::shaderCache;
@@ -419,6 +503,30 @@ void SubsurfaceScattering::RestoreDefaultSettings()
 void SubsurfaceScattering::LoadSettings(json& o_json)
 {
 	settings = o_json;
+
+	// Backward compatibility: older configs stored a single set of Burley human skin controls
+	// (HumanSSSIntensity/HumanSSSSaturation/HumanSSSBrightness/HumanSSSBaseSaturation).
+	// If present, replicate them into both Male and Female sets unless the new keys exist.
+	if (o_json.contains("HumanSSSIntensity") && !o_json.contains("HumanMaleSSSIntensity")) {
+		float v = o_json["HumanSSSIntensity"].get<float>();
+		settings.HumanMaleSSSIntensity = v;
+		settings.HumanFemaleSSSIntensity = v;
+	}
+	if (o_json.contains("HumanSSSSaturation") && !o_json.contains("HumanMaleSSSSaturation")) {
+		float v = o_json["HumanSSSSaturation"].get<float>();
+		settings.HumanMaleSSSSaturation = v;
+		settings.HumanFemaleSSSSaturation = v;
+	}
+	if (o_json.contains("HumanSSSBrightness") && !o_json.contains("HumanMaleSSSBrightness")) {
+		float v = o_json["HumanSSSBrightness"].get<float>();
+		settings.HumanMaleSSSBrightness = v;
+		settings.HumanFemaleSSSBrightness = v;
+	}
+	if (o_json.contains("HumanSSSBaseSaturation") && !o_json.contains("HumanMaleSSSBaseSaturation")) {
+		float v = o_json["HumanSSSBaseSaturation"].get<float>();
+		settings.HumanMaleSSSBaseSaturation = v;
+		settings.HumanFemaleSSSBaseSaturation = v;
+	}
 }
 
 void SubsurfaceScattering::SaveSettings(json& o_json)
@@ -487,12 +595,17 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 	if (deferred->deferredPass) {
 		if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint)) {
 			bool isBeastRace = true;
+			bool isFemale = false;
 
 			auto geometry = a_pass->geometry;
 			if (auto userData = geometry->GetUserData())
-				if (auto actor = userData->As<RE::Actor>())
+				if (auto actor = userData->As<RE::Actor>()) {
 					if (auto race = actor->GetRace())
 						isBeastRace = race->HasKeyword(isBeastRaceKeyword);
+
+					if (auto base = actor->GetActorBase())
+						isFemale = GetNPCIsFemale(base);
+				}
 
 			validMaterials = true;
 
@@ -500,6 +613,11 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 				state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::IsBeastRace;
 			else
 				state->permutationData.ExtraShaderDescriptor &= ~(uint)State::ExtraShaderDescriptors::IsBeastRace;
+
+			if (isFemale)
+				state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::IsFemale;
+			else
+				state->permutationData.ExtraShaderDescriptor &= ~(uint)State::ExtraShaderDescriptors::IsFemale;
 		}
 	}
 }

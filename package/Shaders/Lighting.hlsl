@@ -3188,7 +3188,11 @@ if (alpha - AlphaTestRefRS < 0) {
 #		endif
 
 #		if defined(SSS) && defined(SKIN)
-	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
+	float humanClass = 0.0;
+	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace)) {
+		humanClass = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsFemale) ? 2.0 : 1.0;
+	}
+	psout.Masks = float4(saturate(baseColor.a), humanClass, Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
 #		else
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
 #		endif

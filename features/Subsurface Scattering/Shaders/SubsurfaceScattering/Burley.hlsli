@@ -48,7 +48,7 @@ float3 GetScalingFactor(float3 albedo)
 	return 3.5f + 100.f * pow(abs(value), 4);
 }
 
-float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssAmount, bool humanProfile)
+float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssAmount, bool humanProfile, bool isFemale)
 {
 	float centerDepth = SharedData::GetScreenDepth(DepthTexture[DTid].x);
 
@@ -142,10 +142,10 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
         float3 base0 = centerColor.xyz;
 
     // Clamp user controls to sane ranges (boost allowed for intensity)
-        float intensity = clamp(SharedData::SSSHumanIntensity, 0.0f, 2.0f);
-        float brightness = clamp(SharedData::SSSHumanBrightness, 0.0f, 2.0f);
-        float baseSat = clamp(SharedData::SSSHumanBaseSaturation, 0.0f, 2.0f);
-        float finalSat = clamp(SharedData::SSSHumanSaturation, 0.0f, 2.0f);
+        float intensity = clamp(isFemale ? SharedData::SSSHumanFemaleIntensity : SharedData::SSSHumanMaleIntensity, 0.0f, 2.0f);
+        float brightness = clamp(isFemale ? SharedData::SSSHumanFemaleBrightness : SharedData::SSSHumanMaleBrightness, 0.0f, 2.0f);
+        float baseSat = clamp(isFemale ? SharedData::SSSHumanFemaleBaseSaturation : SharedData::SSSHumanMaleBaseSaturation, 0.0f, 2.0f);
+        float finalSat = clamp(isFemale ? SharedData::SSSHumanFemaleSaturation : SharedData::SSSHumanMaleSaturation, 0.0f, 2.0f);
 
     // Base “skin texture” brightness + saturation
         float3 base = base0 * brightness;

@@ -54,10 +54,17 @@ public:
 
 	float timer = 0;
 	float refractionScale = 1.0f;  // 1.0 = current behavior, <1.0 = weaker heat warp
-	float sssHumanIntensity = 1.0f;   // 1.0 = current look
-	float sssHumanSaturation = 1.0f;  // 1.0 = unchanged; 0 = grayscale; >1 = more saturated
-	float sssHumanBrightness = 1.0f;	// 1.0 = unchanged; < 1 = darker
-	float sssHumanBaseSaturation = 1.0f; // 1.0 = unchanged; >1 = more saturated
+	// Burley SSS human skin controls (driven in real time via SharedDataCB)
+	// These are applied only for pixels flagged as Human Profile (see mask encoding in Lighting.hlsl + SeparableSSSCS.hlsl).
+	float sssHumanMaleIntensity = 1.0f;        // 1.0 = default
+	float sssHumanMaleSaturation = 1.0f;       // 1.0 = unchanged; 0 = grayscale; >1 = more saturated
+	float sssHumanMaleBrightness = 1.0f;       // 1.0 = unchanged; <1 = darker
+	float sssHumanMaleBaseSaturation = 1.0f;   // 1.0 = unchanged; >1 = more saturated
+
+	float sssHumanFemaleIntensity = 1.0f;      // 1.0 = default
+	float sssHumanFemaleSaturation = 1.0f;     // 1.0 = unchanged; 0 = grayscale; >1 = more saturated
+	float sssHumanFemaleBrightness = 1.0f;     // 1.0 = unchanged; <1 = darker
+	float sssHumanFemaleBaseSaturation = 1.0f; // 1.0 = unchanged; >1 = more saturated
 
 	double smoothDrawCalls[RE::BSShader::Type::Total + 1];
 	int drawCalls[RE::BSShader::Type::Total + 1];
@@ -156,7 +163,8 @@ public:
 		IsBeastRace = 1 << 2,
 		EffectShadows = 1 << 3,
 		IsTree = 1 << 4,
-		GrassSphereNormal = 1 << 5
+		GrassSphereNormal = 1 << 5,
+		IsFemale = 1 << 6
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -209,10 +217,17 @@ public:
 		uint HideSky;
 		float MipBias;
 		float RefractionScale;  // new: matches HLSL SharedData::RefractionScale
-		float SSSHumanIntensity;   // new: matches HLSL SharedData::SSSHumanIntensity
-		float SSSHumanSaturation;  // new: matches HLSL SharedData::SSSHumanSaturation
-		float SSSHumanBrightness;
-		float SSSHumanBaseSaturation;
+
+		// Burley SSS human skin controls (real-time uniforms)
+		float SSSHumanMaleIntensity;
+		float SSSHumanMaleSaturation;
+		float SSSHumanMaleBrightness;
+		float SSSHumanMaleBaseSaturation;
+
+		float SSSHumanFemaleIntensity;
+		float SSSHumanFemaleSaturation;
+		float SSSHumanFemaleBrightness;
+		float SSSHumanFemaleBaseSaturation;
 	};
 	static_assert(sizeof(SharedDataCB) % 16 == 0, "SharedDataCB must be 16-byte aligned sized for HLSL constant buffer");
 	ConstantBuffer* sharedDataCB = nullptr;

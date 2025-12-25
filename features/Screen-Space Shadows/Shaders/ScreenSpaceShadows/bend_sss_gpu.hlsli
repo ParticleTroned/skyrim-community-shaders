@@ -1,3 +1,6 @@
+#ifndef BEND_SSS_GPU_HLSLI_INCLUDED
+#define BEND_SSS_GPU_HLSLI_INCLUDED
+
 
 // Copyright 2023 Sony Interactive Entertainment.
 //
@@ -69,27 +72,27 @@ struct DispatchParameters
 	// These values will require manual tuning.
 	// All shadow computation is performed in non-linear depth space (not in world space), so tuned value choices will depend on scene depth distribution (as determined by the Projection Matrix setup).
 
-	half SurfaceThickness;  // This is the assumed thickness of each pixel for shadow-casting, measured as a percentage of the difference in non-linear depth between the sample and FarDepthValue.
+    half SurfaceThickness; // This is the assumed thickness of each pixel for shadow-casting, measured as a percentage of the difference in non-linear depth between the sample and FarDepthValue.
 							// Recommended starting value: 0.005 (0.5%)
 
-	half BilinearThreshold;  // Percentage threshold for determining if the difference between two depth values represents an edge, and should not perform interpolation.
+    half BilinearThreshold; // Percentage threshold for determining if the difference between two depth values represents an edge, and should not perform interpolation.
 							 // To tune this value, set 'DebugOutputEdgeMask' to true to visualize where edges are being detected.
 							 // Recommended starting value: 0.02 (2%)
 
-	half ShadowContrast;  // A contrast boost is applied to the transition in/out of shadow.
+    half ShadowContrast; // A contrast boost is applied to the transition in/out of shadow.
 						  // Recommended starting value: 2 or 4. Values >= 1 are valid.
 
-	float2 DynamicRes;
+    float2 DynamicRes;
 
-	bool IgnoreEdgePixels;  // If an edge is detected, the edge pixel will not contribute to the shadow.
+    bool IgnoreEdgePixels; // If an edge is detected, the edge pixel will not contribute to the shadow.
 							// If a very flat surface is being lit and rendered at an grazing angles, the edge detect may incorrectly detect multiple 'edge' pixels along that flat surface.
 							// In these cases, the grazing angle of the light may subsequently produce aliasing artefacts in the shadow where these incorrect edges were detected.
 							// Setting this value to true would mean that those pixels would not cast a shadow, however it can also thin out otherwise valid shadows, especially on foliage edges.
 							// Recommended starting value: false, unless typical scenes have numerous large flat surfaces, in which case true.
 
-	bool UsePrecisionOffset;  // A small offset is applied to account for an imprecise depth buffer (recommend off)
+    bool UsePrecisionOffset; // A small offset is applied to account for an imprecise depth buffer (recommend off)
 
-	bool BilinearSamplingOffsetMode;  // There are two modes to compute bilinear samples for shadow depth:
+    bool BilinearSamplingOffsetMode; // There are two modes to compute bilinear samples for shadow depth:
 									  // true = sampling points for pixels are offset to the wavefront shared ray, shadow depths and starting depths are the same. Can project more jagged/aliased shadow lines in some cases.
 									  // false = sampling points for pixels are not offset and start from pixel centers. Shadow depths are biased based on depth gradient across the current pixel bilinear sample. Has more issues in back-face / grazing areas.
 									  // Both modes have subtle visual differences, which may / may not exaggerate depth buffer aliasing that gets projected in to the shadow.
@@ -97,9 +100,9 @@ struct DispatchParameters
 									  // Recommended starting value: false
 
 	// Debug views
-	bool DebugOutputEdgeMask;     // Use this to visualize edges, for tuning the 'BilinearThreshold' value.
-	bool DebugOutputThreadIndex;  // Debug output to visualize layout of compute threads
-	bool DebugOutputWaveIndex;    // Debug output to visualize layout of compute wavefronts, useful to sanity check the Light Coordinate is being computed correctly.
+    bool DebugOutputEdgeMask; // Use this to visualize edges, for tuning the 'BilinearThreshold' value.
+    bool DebugOutputThreadIndex; // Debug output to visualize layout of compute threads
+    bool DebugOutputWaveIndex; // Debug output to visualize layout of compute wavefronts, useful to sanity check the Light Coordinate is being computed correctly.
 
 	// Culling / Early out:
 	//half2 DepthBounds;					// Depth Bounds (min, max) for the on-screen volume of the light. Typically (0,1) for directional lights. Only used when 'UseEarlyOut' is true.
@@ -110,36 +113,36 @@ struct DispatchParameters
 	// Note; Early-out is most efficient when WAVE_SIZE matches the hardware wavefront size - otherwise cross wave communication is required.
 
 	// Set sensible starting tuning values
-	void SetDefaults()
-	{
-		SurfaceThickness = 0.005;
-		BilinearThreshold = 0.02;
-		ShadowContrast = 4;
-		IgnoreEdgePixels = false;
-		UsePrecisionOffset = false;
-		BilinearSamplingOffsetMode = false;
-		DebugOutputEdgeMask = false;
-		DebugOutputThreadIndex = false;
-		DebugOutputWaveIndex = false;
-	}
+    void SetDefaults()
+    {
+        SurfaceThickness = 0.005;
+        BilinearThreshold = 0.02;
+        ShadowContrast = 4;
+        IgnoreEdgePixels = false;
+        UsePrecisionOffset = false;
+        BilinearSamplingOffsetMode = false;
+        DebugOutputEdgeMask = false;
+        DebugOutputThreadIndex = false;
+        DebugOutputWaveIndex = false;
+    }
 
 	// Runtime data returned from BuildDispatchList():
-	half4 LightCoordinate;  // Values stored in DispatchList::LightCoordinate_Shader by BuildDispatchList()
-	int2 WaveOffset;        // Values stored in DispatchData::WaveOffset_Shader by BuildDispatchList()
+    half4 LightCoordinate; // Values stored in DispatchList::LightCoordinate_Shader by BuildDispatchList()
+    int2 WaveOffset; // Values stored in DispatchData::WaveOffset_Shader by BuildDispatchList()
 
 	// Renderer Specific Values:
-	half FarDepthValue;   // Set to the Depth Buffer Value for the far clip plane, as determined by renderer projection matrix setup (typically 0).
-	half NearDepthValue;  // Set to the Depth Buffer Value for the near clip plane, as determined by renderer projection matrix setup (typically 1).
+    half FarDepthValue; // Set to the Depth Buffer Value for the far clip plane, as determined by renderer projection matrix setup (typically 0).
+    half NearDepthValue; // Set to the Depth Buffer Value for the near clip plane, as determined by renderer projection matrix setup (typically 1).
 
 	// Sampling data:
-	half2 InvDepthTextureSize;  // Inverse of the texture dimensions for 'DepthTexture' (used to convert from pixel coordinates to UVs)
+    half2 InvDepthTextureSize; // Inverse of the texture dimensions for 'DepthTexture' (used to convert from pixel coordinates to UVs)
 								// If 'PointBorderSampler' is an Unnormalized sampler, then this value can be hard-coded to 1.
 								// The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
-	Texture2D<unorm half> DepthTexture;     // Depth Buffer Texture (rasterized non-linear depth)
-	RWTexture2D<unorm half> OutputTexture;  // Output screen-space shadow buffer (typically single-channel, 8bit)
+    Texture2D<unorm half> DepthTexture; // Depth Buffer Texture (rasterized non-linear depth)
+    RWTexture2D<unorm half> OutputTexture; // Output screen-space shadow buffer (typically single-channel, 8bit)
 
-	SamplerState PointBorderSampler;  // A point sampler, with Wrap Mode set to Clamp-To-Border-Color (D3D12_TEXTURE_ADDRESS_MODE_BORDER), and Border Color set to "FarDepthValue" (typically zero), or some other far-depth value out of DepthBounds.
+    SamplerState PointBorderSampler; // A point sampler, with Wrap Mode set to Clamp-To-Border-Color (D3D12_TEXTURE_ADDRESS_MODE_BORDER), and Border Color set to "FarDepthValue" (typically zero), or some other far-depth value out of DepthBounds.
 									  // If you have issues where invalid shadows are appearing from off-screen, it is likely that this sampler is not correctly setup
 };
 
@@ -149,13 +152,13 @@ struct DispatchParameters
 //
 //	(int3)	inGroupID:			Compute shader group id register (SV_GroupID)
 //	(int)	inGroupThreadId:	Compute shader group thread id register (SV_GroupThreadID)
-void WriteScreenSpaceShadow(struct DispatchParameters inParameters, int3 inGroupID, int inGroupThreadID);
+void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int inGroupThreadID);
 
 #if !defined(WAVE_SIZE) || !defined(SAMPLE_COUNT) || !defined(HARD_SHADOW_SAMPLES) || !defined(FADE_OUT_SAMPLES)
 #	error Before including bend_sss_gpu.h, four macros must be defined to configure the shader compile: WAVE_SIZE, SAMPLE_COUNT, HARD_SHADOW_SAMPLES, and FADE_OUT_SAMPLES. See the top of this file for details.
 #else
 
-// static bool EarlyOutPixel(struct DispatchParameters inParameters, int2 pixel_xy, half depth)
+// static bool EarlyOutPixel(DispatchParameters inParameters, int2 pixel_xy, half depth)
 // {
 // 	//OPTIONAL TODO; customize this function to return true if the pixel should early-out for custom reasons. E.g., A shadow map pass already found the pixel was in shadow / backfaced, etc.
 // 	// Recommended to keep this code very simple!
@@ -223,7 +226,7 @@ static void ComputeWavefrontExtents(DispatchParameters inParameters, int3 inGrou
 }
 
 // Number of bilinear sample reads performed per-thread
-#	define READ_COUNT (SAMPLE_COUNT / WAVE_SIZE + 2)
+#define READ_COUNT (SAMPLE_COUNT / WAVE_SIZE + 2)
 
 // Common shared data
 groupshared half DepthData[READ_COUNT * WAVE_SIZE];
@@ -255,9 +258,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	bool is_edge = false;
 	bool skip_pixel = false;
 
-#	if defined(RIGHT)
+#if defined(RIGHT)
 	pixel_xy.x += 1.0 / inParameters.InvDepthTextureSize.x;
-#	endif
+#endif
 
 	half2 write_xy = floor(pixel_xy);
 
@@ -274,9 +277,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 		half2 depths;
 		half bilinear = frac(minor_axis) - 0.5;
 
-#	if USE_HALF_PIXEL_OFFSET
+#if USE_HALF_PIXEL_OFFSET
 		read_xy += 0.5;
-#	endif
+#endif
 
 		half bias = bilinear > 0 ? 1 : -1;
 		half2 offset_xy = half2(x_axis_major ? 0 : bias, x_axis_major ? bias : 0);
@@ -285,16 +288,16 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 		// So this fallback will use a manual uv offset instead
 		half2 coord = read_xy * inParameters.InvDepthTextureSize * inParameters.DynamicRes;
 		half2 coord_with_offset = (read_xy + offset_xy) * inParameters.InvDepthTextureSize * inParameters.DynamicRes;
-#	if defined(VR)
+#if defined(VR)
 		coord *= half2(0.5, 1.0);
 		coord_with_offset *= half2(0.5, 1.0);
-#	endif
+#endif
 		depths.x = inParameters.DepthTexture.SampleLevel(inParameters.PointBorderSampler, coord, 0);
 		depths.y = inParameters.DepthTexture.SampleLevel(inParameters.PointBorderSampler, coord_with_offset, 0);
-#	if defined(VR)
+#if defined(VR)
 		depths.x = lerp(depths.x, 1.0, (float)(depths.x == 0));  // Stencil area
 		depths.y = lerp(depths.y, 1.0, (float)(depths.y == 0));  // Stencil area
-#	endif
+#endif
 
 		// Depth thresholds (bilinear/shadow thickness) are based on a fractional ratio of the difference between sampled depth and the far clip depth
 		depth_thickness_scale[i] = abs(inParameters.FarDepthValue - depths.x);
@@ -381,9 +384,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	GroupMemoryBarrierWithGroupSync();
 
 	// Skip first person
-#	if !defined(VR)
+#if !defined(VR)
 	skip_pixel = skip_pixel;
-#	endif
+#endif
 
 	// If the starting depth isn't in depth bounds, then we don't need a shadow
 	if (skip_pixel)
@@ -465,3 +468,5 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 }
 
 #endif  // macro check
+
+#endif // BEND_SSS_GPU_HLSLI_INCLUDED

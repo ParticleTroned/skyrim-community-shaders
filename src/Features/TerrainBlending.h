@@ -20,6 +20,24 @@ public:
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
+	// --- UI / Settings ---
+	struct Settings
+	{
+		// Fix #3: Clear the blended depth UAV(s) before blending each frame.
+		// Helps robustness in VR/dynamic-res/FFR paths at the cost of an extra full-surface write.
+		bool clearBlendedDepthUAVs = true;
+
+		// If enabled, DepthBlend uses max(depth) instead of min(depth). Useful for reversed-Z style paths.
+		bool useMaxDepthBlend = false;
+	};
+
+	Settings settings{};
+
+	virtual void DrawSettings() override;
+	virtual void SaveSettings(json& o_json) override;
+	virtual void RestoreDefaultSettings() override;
+	virtual bool DrawFailLoadMessage() const override;
+
 	virtual void SetupResources() override;
 
 	ID3D11VertexShader* GetTerrainVertexShader();
@@ -28,7 +46,7 @@ public:
 	ID3D11VertexShader* terrainVertexShader = nullptr;
 	ID3D11VertexShader* terrainOffsetVertexShader = nullptr;
 
-	ID3D11ComputeShader* GetDepthBlendShader();
+	ID3D11ComputeShader* GetDepthBlendShader(bool useMax);
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
@@ -67,6 +85,7 @@ public:
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;
 
 	ID3D11ComputeShader* depthBlendShader = nullptr;
+	ID3D11ComputeShader* depthBlendShaderMax = nullptr;
 
 	virtual void ClearShaderCache() override;
 
@@ -97,5 +116,6 @@ public:
 			logger::info("[Terrain Blending] Installed hooks");
 		}
 	};
-	virtual bool SupportsVR() override { return false; };
+
+	virtual bool SupportsVR() override { return true; };
 };

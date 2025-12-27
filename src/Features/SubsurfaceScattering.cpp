@@ -6,7 +6,6 @@
 #include "State.h"
 #include <cfloat>  // for FLT_MIN
 
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
 
@@ -27,9 +26,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HumanFemaleSSSIntensity,
 	HumanFemaleSSSSaturation,
 	HumanFemaleSSSBrightness,
-	HumanFemaleSSSBaseSaturation)
-
-
+	HumanFemaleSSSBaseSaturation,
+	BrowMaskBlendStrength,
+	BrowMaskEdgeSensitivity,
+	BrowMaskDepthGateEnabled,
+	BrowMaskDepthThreshold)
 namespace
 {
 	// Helper to detect actor sex across CommonLib variants.
@@ -125,7 +126,7 @@ void SubsurfaceScattering::DrawSettings()
 
 				// --- aligned sliders (value column + label column) ---
 				auto RowSliderFloat = [&](const char* id, float* v, float vmin, float vmax, const char* fmt,
-					const char* label, const char* tooltip) {
+										  const char* label, const char* tooltip) {
 					ImGui::TableNextRow();
 
 					ImGui::TableSetColumnIndex(0);
@@ -219,6 +220,39 @@ void SubsurfaceScattering::DrawSettings()
 					ImGui::TreePop();
 				}
 
+				// ----------------------------
+				// Transition smoothing (Burley)
+				// ----------------------------
+				if (ImGui::TreeNodeEx("Transition Smoothing", ImGuiTreeNodeFlags_DefaultOpen)) {
+					if (ImGui::BeginTable("##SSSTransitionSmoothing", 2, ImGuiTableFlags_SizingFixedFit)) {
+						ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+						ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed);
+
+						RowSliderFloat("##SSSBrowMaskBlendStrength", &settings.BrowMaskBlendStrength, 0.0f, 1.0f, "%.2f", "Brow/Hairline Blend Strength",
+							"Softens the boundary between skin SSS and overlay materials (e.g. brows / hairline decals) that do not write the SSS mask. "
+							"0 disables the effect. Recommended range: 0.15-0.45.");
+
+						RowSliderFloat("##SSSBrowMaskEdgeSensitivity", &settings.BrowMaskEdgeSensitivity, 10.0f, 120.0f, "%.0f",
+							"Brow/Hairline Edge Sensitivity",
+							"Controls how tightly the HAIR-written mask is limited to the alpha transition edge. Higher = thinner edge band (less bleed into hair/beard).");
+
+						ImGui::TableNextRow();
+						ImGui::TableNextColumn();
+						ImGui::Checkbox("##SSSBrowMaskDepthGateEnabled", (bool*)&settings.BrowMaskDepthGateEnabled);
+						ImGui::TableNextColumn();
+						ImGui::TextUnformatted("Enable Depth Gate (optional)");
+						if (ImGui::IsItemHovered())
+							ImGui::SetTooltip("Further restricts the HAIR-written mask to overlays that are very close in depth to underlying skin. Adds ~1 depth read per affected pixel.");
+
+						if (settings.BrowMaskDepthGateEnabled) {
+							RowSliderFloat("##SSSBrowMaskDepthThreshold", &settings.BrowMaskDepthThreshold, 0.01f, 5.0f, "%.2f",
+								"Depth Gate Threshold",
+								"Linear depth difference threshold. Smaller = stricter (less bleed), larger = looser.");
+						}
+						ImGui::EndTable();
+					}
+					ImGui::TreePop();
+				}
 
 				ImGui::Spacing();
 				ImGui::Separator();
@@ -229,7 +263,6 @@ void SubsurfaceScattering::DrawSettings()
 		}
 	}
 }
-
 
 float3 SubsurfaceScattering::Gaussian(DiffusionProfile& a_profile, float variance, float r)
 {
@@ -477,6 +510,11 @@ void SubsurfaceScattering::Reset()
 		state->sssHumanFemaleSaturation = std::clamp(settings.HumanFemaleSSSSaturation, 0.0f, 2.0f);
 		state->sssHumanFemaleBrightness = std::clamp(settings.HumanFemaleSSSBrightness, 0.0f, 2.0f);
 		state->sssHumanFemaleBaseSaturation = std::clamp(settings.HumanFemaleSSSBaseSaturation, 0.0f, 2.0f);
+		state->sssBrowMaskBlendStrength = std::clamp(settings.BrowMaskBlendStrength, 0.0f, 1.0f);
+
+		state->sssBrowMaskEdgeSensitivity = std::clamp(settings.BrowMaskEdgeSensitivity, 10.0f, 120.0f);
+		state->sssBrowMaskDepthThreshold = std::clamp(settings.BrowMaskDepthThreshold, 0.01f, 5.0f);
+		state->sssBrowMaskDepthGateEnabled = settings.BrowMaskDepthGateEnabled ? 1u : 0u;
 	}
 	auto shaderManager = globals::game::smState;
 	auto shaderCache = globals::shaderCache;

@@ -56,15 +56,19 @@ public:
 	float refractionScale = 1.0f;  // 1.0 = current behavior, <1.0 = weaker heat warp
 	// Burley SSS human skin controls (driven in real time via SharedDataCB)
 	// These are applied only for pixels flagged as Human Profile (see mask encoding in Lighting.hlsl + SeparableSSSCS.hlsl).
-	float sssHumanMaleIntensity = 1.0f;        // 1.0 = default
-	float sssHumanMaleSaturation = 1.0f;       // 1.0 = unchanged; 0 = grayscale; >1 = more saturated
-	float sssHumanMaleBrightness = 1.0f;       // 1.0 = unchanged; <1 = darker
-	float sssHumanMaleBaseSaturation = 1.0f;   // 1.0 = unchanged; >1 = more saturated
+	float sssHumanMaleIntensity = 1.0f;       // 1.0 = default
+	float sssHumanMaleSaturation = 1.0f;      // 1.0 = unchanged; 0 = grayscale; >1 = more saturated
+	float sssHumanMaleBrightness = 1.0f;      // 1.0 = unchanged; <1 = darker
+	float sssHumanMaleBaseSaturation = 1.0f;  // 1.0 = unchanged; >1 = more saturated
 
-	float sssHumanFemaleIntensity = 1.0f;      // 1.0 = default
-	float sssHumanFemaleSaturation = 1.0f;     // 1.0 = unchanged; 0 = grayscale; >1 = more saturated
-	float sssHumanFemaleBrightness = 1.0f;     // 1.0 = unchanged; <1 = darker
-	float sssHumanFemaleBaseSaturation = 1.0f; // 1.0 = unchanged; >1 = more saturated
+	float sssHumanFemaleIntensity = 1.0f;       // 1.0 = default
+	float sssHumanFemaleSaturation = 1.0f;      // 1.0 = unchanged; 0 = grayscale; >1 = more saturated
+	float sssHumanFemaleBrightness = 1.0f;      // 1.0 = unchanged; <1 = darker
+	float sssHumanFemaleBaseSaturation = 1.0f;  // 1.0 = unchanged; >1 = more saturated
+	float sssBrowMaskBlendStrength = 0.35f;     // Brow/hairline transition smoothing (HAIR mask write strength)
+	float sssBrowMaskEdgeSensitivity = 60.0f;   // Edge-band sensitivity multiplier (higher = narrower band)
+	float sssBrowMaskDepthThreshold = 0.15f;    // Linear-depth threshold for optional depth gating
+	uint32_t sssBrowMaskDepthGateEnabled = 0;   // 0=off, 1=on
 
 	double smoothDrawCalls[RE::BSShader::Type::Total + 1];
 	int drawCalls[RE::BSShader::Type::Total + 1];
@@ -228,6 +232,11 @@ public:
 		float SSSHumanFemaleSaturation;
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
+
+		float SSSBrowMaskBlendStrength;
+		float SSSBrowMaskEdgeSensitivity;
+		float SSSBrowMaskDepthThreshold;
+		uint32_t SSSBrowMaskDepthGateEnabled;
 	};
 	static_assert(sizeof(SharedDataCB) % 16 == 0, "SharedDataCB must be 16-byte aligned sized for HLSL constant buffer");
 	ConstantBuffer* sharedDataCB = nullptr;

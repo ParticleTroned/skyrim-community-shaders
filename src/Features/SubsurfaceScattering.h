@@ -36,6 +36,15 @@ public:
 		float HumanFemaleSSSSaturation = 1.0f;
 		float HumanFemaleSSSBrightness = 1.0f;
 		float HumanFemaleSSSBaseSaturation = 1.0f;
+		// Brow / hairline transition smoothing (writes SSS mask for alpha-blended brow/hairline overlays when they are in the deferred path).
+		// 0.0 = off (no mask written for HAIR), 1.0 = strongest blending.
+		float BrowMaskBlendStrength = 0.35f;
+		// Always-on edge-band shaping (prevents mask noise from spreading into full hair/beard interiors)
+		float BrowMaskEdgeSensitivity = 60.0f;  // fwidth(alpha) multiplier; higher = thinner edge band
+		// Optional depth gate (1 extra depth read) to further restrict effect to overlays sitting on/near skin.
+		uint BrowMaskDepthGateEnabled = false;
+		float BrowMaskDepthThreshold = 0.15f;  // linear depth units; smaller = stricter
+		\
 	};
 
 	Settings settings;
@@ -136,4 +145,4 @@ public:
 	};
 
 	virtual bool SupportsVR() override { return true; };
-	};
+};

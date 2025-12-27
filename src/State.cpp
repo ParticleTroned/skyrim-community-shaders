@@ -793,6 +793,11 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.SSSHumanFemaleSaturation = sssHumanFemaleSaturation;
 		data.SSSHumanFemaleBrightness = sssHumanFemaleBrightness;
 		data.SSSHumanFemaleBaseSaturation = sssHumanFemaleBaseSaturation;
+		data.SSSBrowMaskBlendStrength = sssBrowMaskBlendStrength;
+
+		data.SSSBrowMaskEdgeSensitivity = sssBrowMaskEdgeSensitivity;
+		data.SSSBrowMaskDepthThreshold = sssBrowMaskDepthThreshold;
+		data.SSSBrowMaskDepthGateEnabled = sssBrowMaskDepthGateEnabled;
 		sharedDataCB->Update(data);
 	}
 

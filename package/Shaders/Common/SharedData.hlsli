@@ -35,6 +35,11 @@ namespace SharedData
 		float SSSHumanFemaleSaturation;
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
+
+		float SSSBrowMaskBlendStrength;
+		float SSSBrowMaskEdgeSensitivity;
+		float SSSBrowMaskDepthThreshold;
+		uint SSSBrowMaskDepthGateEnabled;
 	};
 
 	struct GrassLightingSettings

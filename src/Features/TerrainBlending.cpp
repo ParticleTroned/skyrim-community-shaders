@@ -206,41 +206,107 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	auto shaderCache = globals::shaderCache;
 	auto renderer = globals::game::renderer;
 
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-
+	// Keep updating for distance-based terrain gating inside BSBatchRenderer hook.
 	singleton.averageEyePosition = Util::GetAverageEyePosition();
 
-	if (shaderCache->IsEnabled()) {
-		mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
-		zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
-
-		singleton.renderDepth = true;
-		singleton.ResetDepth();
-
-		func(a1, a2);
+	// IMPORTANT (VR fix): do NOT drive Terrain Blending from Main_RenderDepth.
+	// In VR this hook can correspond to shadow/aux depth phases; we only use it for debug/cleanup.
+	if (!shaderCache || !shaderCache->IsEnabled()) {
+		// Ensure we restore original SRVs when the shader cache / feature is disabled.
+		if (renderer) {
+			auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+			auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+			mainDepth.depthSRV = singleton.depthSRVBackup;
+			zPrepassCopy.depthSRV = singleton.prepassSRVBackup;
+		}
 
 		singleton.renderDepth = false;
-
 		if (singleton.renderTerrainDepth) {
 			singleton.renderTerrainDepth = false;
 			singleton.ResetTerrainDepth();
 		}
-
-		singleton.BlendPrepassDepths();
-	} else {
-		mainDepth.depthSRV = singleton.depthSRVBackup;
-		zPrepassCopy.depthSRV = singleton.prepassSRVBackup;
-
-		func(a1, a2);
 	}
+
+	func(a1, a2);
 }
 
 void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 {
 	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
 
+	// VR fix: detect and drive Terrain Blending from the *main camera* depth-only z-prepass,
+	// identified by "kMAIN DSV bound" AND "no RTVs bound".
+	if (shaderCache && shaderCache->IsEnabled() && renderer && context) {
+		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+		ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+		ID3D11DepthStencilView* dsv = nullptr;
+		context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+
+		bool depthOnly = true;
+		for (auto* rtv : rtvs) {
+			if (rtv) {
+				depthOnly = false;
+				break;
+			}
+		}
+
+		bool matchesMain = false;
+		if (dsv) {
+			ID3D11Resource* res = nullptr;
+			dsv->GetResource(&res);
+			if (res) {
+				ID3D11Texture2D* tex = nullptr;
+				if (SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex))) && tex) {
+					matchesMain = (tex == mainDepth.texture);
+					tex->Release();
+				}
+				res->Release();
+			}
+		}
+
+		for (auto*& rtv : rtvs) {
+			if (rtv) {
+				rtv->Release();
+				rtv = nullptr;
+			}
+		}
+		if (dsv) {
+			dsv->Release();
+			dsv = nullptr;
+		}
+
+		const bool isMainDepthPrepass = depthOnly && matchesMain;
+
+		// Enter main depth prepass
+		if (isMainDepthPrepass && !singleton.renderDepth) {
+			singleton.averageEyePosition = Util::GetAverageEyePosition();
+
+			// Redirect depth SRVs to our blended depth (the effect needs these SRVs for later passes).
+			mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
+			zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+
+			singleton.renderDepth = true;
+			singleton.ResetDepth();
+		}
+		// Exit main depth prepass
+		else if (!isMainDepthPrepass && singleton.renderDepth) {
+			singleton.renderDepth = false;
+
+			if (singleton.renderTerrainDepth) {
+				singleton.renderTerrainDepth = false;
+				singleton.ResetTerrainDepth();
+			}
+
+			singleton.BlendPrepassDepths();
+		}
+	}
+
+	// --- Original Terrain Blending pass classification logic ---
 	if (shaderCache->IsEnabled()) {
 		if (singleton.renderDepth) {
 			// Entering or exiting terrain depth section

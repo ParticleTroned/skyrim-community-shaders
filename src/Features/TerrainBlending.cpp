@@ -593,7 +593,18 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 		singleton.averageEyePosition = Util::GetAverageEyePosition();
-		mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
+
+		// IMPORTANT (VR): don't override the engine's main depth SRV globally here.
+		// Keeping mainDepth.depthSRV untouched prevents HMD-relative 'swimming' in any screen-space effect
+		// (contact shadows, SSGI, AO, etc.) that runs outside of the dedicated TB passes.
+		// We only override depth SRVs inside RenderTerrainBlendingPasses() for the duration of the TB draws.
+		//
+		// Also refresh our backups in case the runtime recreated depth views (VR dynamic res / swapchain changes).
+		singleton.depthSRVBackup = mainDepth.depthSRV;
+		{
+			auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+			singleton.prepassSRVBackup = zPrepassCopy.depthSRV;
+		}
 
 		singleton.renderDepth = true;
 		singleton.ResetDepth();
@@ -667,6 +678,21 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 
+	// Scoped depth SRV override:
+	// Terrain blending shaders expect main depth SRV to point at the blended depth, but we must not leak that
+	// into the rest of the frame (it causes view-dependent artifacts in VR).
+	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+	ID3D11ShaderResourceView* prevMainDepthSRV = mainDepth.depthSRV;
+	ID3D11ShaderResourceView* prevPrepassCopySRV = zPrepassCopy.depthSRV;
+
+	if (blendedDepthTexture && blendedDepthTexture->srv) {
+		mainDepth.depthSRV = blendedDepthTexture->srv.get();
+		// Keep the post-prepass depth SRV consistent too (some shaders/features sample this instead of kMAIN).
+		zPrepassCopy.depthSRV = blendedDepthTexture->srv.get();
+	}
+
 	// Used to get the distance of the surface to the lowest depth
 	auto view = terrainDepth.depthSRV;
 	context->PSSetShaderResources(55, 1, &view);
@@ -702,6 +728,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		renderPasses.clear();
 	}
 
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	mainDepth.depthSRV = depthSRVBackup;
+	// Restore original depth SRVs so the rest of the renderer sees the engine-provided depth.
+	mainDepth.depthSRV = prevMainDepthSRV;
+	zPrepassCopy.depthSRV = prevPrepassCopySRV;
 }

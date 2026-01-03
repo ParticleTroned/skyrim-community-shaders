@@ -355,6 +355,56 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 
+	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+	const bool hasBlendedDepthSRV = blendedDepthTexture && blendedDepthTexture->srv;
+	ID3D11ShaderResourceView* blendedDepthSRV = hasBlendedDepthSRV ? blendedDepthTexture->srv.get() : nullptr;
+
+	struct ScopedDepthSRVOverride
+	{
+		ScopedDepthSRVOverride(
+			RE::BSGraphics::DepthStencilData& a_mainDepth,
+			RE::BSGraphics::DepthStencilData& a_prepassDepth,
+			ID3D11ShaderResourceView* a_srv)
+			: mainDepth(a_mainDepth),
+			  prepassDepth(a_prepassDepth),
+			  prevMainDepthSRV(a_mainDepth.depthSRV),
+			  prevPrepassCopySRV(a_prepassDepth.depthSRV)
+		{
+			mainDepth.depthSRV = a_srv;
+			prepassDepth.depthSRV = a_srv;
+		}
+
+		~ScopedDepthSRVOverride()
+		{
+			mainDepth.depthSRV = prevMainDepthSRV;
+			prepassDepth.depthSRV = prevPrepassCopySRV;
+		}
+
+		RE::BSGraphics::DepthStencilData& mainDepth;
+		RE::BSGraphics::DepthStencilData& prepassDepth;
+		ID3D11ShaderResourceView* prevMainDepthSRV;
+		ID3D11ShaderResourceView* prevPrepassCopySRV;
+	};
+
+	auto drawPass = [&](const RenderPass& renderPass) {
+		auto invoke = [&]() {
+			Hooks::BSBatchRenderer__RenderPassImmediately::func(
+				renderPass.a_pass,
+				renderPass.a_technique,
+				renderPass.a_alphaTest,
+				renderPass.a_renderFlags);
+		};
+
+		if (hasBlendedDepthSRV) {
+			ScopedDepthSRVOverride scope(mainDepth, zPrepassCopy, blendedDepthSRV);
+			invoke();
+			return;
+		}
+
+		invoke();
+	};
+
 	// Used to get the distance of the surface to the lowest depth
 	auto view = terrainDepth.depthSRV;
 	context->PSSetShaderResources(55, 1, &view);
@@ -373,7 +423,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
 		for (auto& renderPass : terrainRenderPasses)
-			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+			drawPass(renderPass);
 
 		// Reset alpha blending
 		alphaBlendMode = 0;
@@ -384,12 +434,10 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 
 		for (auto& renderPass : renderPasses)
-			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+			drawPass(renderPass);
 
 		terrainRenderPasses.clear();
 		renderPasses.clear();
 	}
 
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	mainDepth.depthSRV = depthSRVBackup;
 }

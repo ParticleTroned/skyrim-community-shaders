@@ -55,6 +55,8 @@ public:
 	void ResetDepth();
 	void ResetTerrainDepth();
 	void BlendPrepassDepths();
+	void ToggleDebugCapture();
+	void DumpDebugStats();
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;

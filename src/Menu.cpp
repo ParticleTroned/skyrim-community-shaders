@@ -23,6 +23,7 @@
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
 #include "Features/Upscaling.h"
+#include "Features/TerrainBlending.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
@@ -704,6 +705,8 @@ void Menu::ProcessInputEventQueue()
 						{ settings.OverlayToggleKey, []() {
 							 Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible;
 						 } },
+						{ '8', []() { globals::features::terrainBlending.ToggleDebugCapture(); } },
+						{ '9', []() { globals::features::terrainBlending.DumpDebugStats(); } },
 					};
 					for (const auto& ka : keyActions) {
 						if (key == ka.settingKey) {

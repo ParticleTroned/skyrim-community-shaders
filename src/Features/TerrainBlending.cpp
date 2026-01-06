@@ -1,8 +1,70 @@
 #include "TerrainBlending.h"
 
+#include <algorithm>
+#include <atomic>
+
 #include "Deferred.h"
 #include "ShaderCache.h"
 #include "State.h"
+
+namespace
+{
+	struct TbDebugStats
+	{
+		uint32_t prepassEnter = 0;
+		uint32_t prepassExit = 0;
+		uint32_t terrainPasses = 0;
+		uint32_t terrainAccepted = 0;
+		uint32_t terrainRejected = 0;
+		uint32_t terrainToggleTrue = 0;
+		uint32_t terrainToggleFalse = 0;
+		uint32_t queuedTerrain = 0;
+		uint32_t queuedExtra = 0;
+		uint32_t blendDispatch = 0;
+		uint32_t renderCalls = 0;
+		uint32_t renderCallsWithWork = 0;
+		size_t maxTerrainQueue = 0;
+		size_t maxExtraQueue = 0;
+		float terrainDistMin = 0.0f;
+		float terrainDistMax = 0.0f;
+		bool terrainDistInit = false;
+		uint32_t mainWidth = 0;
+		uint32_t mainHeight = 0;
+		uint32_t mainArraySize = 0;
+		int mainFormat = 0;
+		int mainSrvDim = 0;
+		bool mainInfoValid = false;
+
+		void ResetCounts()
+		{
+			prepassEnter = 0;
+			prepassExit = 0;
+			terrainPasses = 0;
+			terrainAccepted = 0;
+			terrainRejected = 0;
+			terrainToggleTrue = 0;
+			terrainToggleFalse = 0;
+			queuedTerrain = 0;
+			queuedExtra = 0;
+			blendDispatch = 0;
+			renderCalls = 0;
+			renderCallsWithWork = 0;
+			maxTerrainQueue = 0;
+			maxExtraQueue = 0;
+			terrainDistMin = 0.0f;
+			terrainDistMax = 0.0f;
+			terrainDistInit = false;
+		}
+	};
+
+	std::atomic<bool> g_tbStatsEnabled{ false };
+	TbDebugStats g_tbStats{};
+
+	bool TbStatsEnabled()
+	{
+		return g_tbStatsEnabled.load(std::memory_order_relaxed);
+	}
+}
 
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
 {
@@ -50,6 +112,13 @@ void TerrainBlending::SetupResources()
 		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc;
 		mainDepth.views[0]->GetDesc(&dsvDesc);
 		DX::ThrowIfFailed(device->CreateDepthStencilView(terrainDepth.texture, &dsvDesc, &terrainDepth.views[0]));
+
+		g_tbStats.mainWidth = texDesc.Width;
+		g_tbStats.mainHeight = texDesc.Height;
+		g_tbStats.mainArraySize = texDesc.ArraySize;
+		g_tbStats.mainFormat = static_cast<int>(texDesc.Format);
+		g_tbStats.mainSrvDim = static_cast<int>(srvDesc.ViewDimension);
+		g_tbStats.mainInfoValid = true;
 	}
 
 	{
@@ -153,6 +222,9 @@ void TerrainBlending::BlendPrepassDepths()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	auto dispatchCount = Util::GetScreenDispatchCount();
+	if (TbStatsEnabled()) {
+		g_tbStats.blendDispatch++;
+	}
 
 	{
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
@@ -236,6 +308,7 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	auto shaderCache = globals::shaderCache;
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	const bool statsEnabled = TbStatsEnabled();
 
 	// VR fix: detect and drive Terrain Blending from the *main camera* depth-only z-prepass,
 	// identified by "kMAIN DSV bound" AND "no RTVs bound".
@@ -292,6 +365,9 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 
 			singleton.renderDepth = true;
 			singleton.ResetDepth();
+			if (statsEnabled) {
+				g_tbStats.prepassEnter++;
+			}
 		}
 		// Exit main depth prepass
 		else if (!isMainDepthPrepass && singleton.renderDepth) {
@@ -303,6 +379,9 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 			}
 
 			singleton.BlendPrepassDepths();
+			if (statsEnabled) {
+				g_tbStats.prepassExit++;
+			}
 		}
 	}
 
@@ -313,12 +392,38 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
 
 			if (inTerrain) {
-				if ((a_pass->geometry->worldBound.center.GetDistance(singleton.averageEyePosition) - a_pass->geometry->worldBound.radius) > 2048.0f) {
+				if (statsEnabled) {
+					g_tbStats.terrainPasses++;
+				}
+				const float terrainDist = a_pass->geometry->worldBound.center.GetDistance(singleton.averageEyePosition) - a_pass->geometry->worldBound.radius;
+				if (statsEnabled) {
+					if (!g_tbStats.terrainDistInit) {
+						g_tbStats.terrainDistMin = terrainDist;
+						g_tbStats.terrainDistMax = terrainDist;
+						g_tbStats.terrainDistInit = true;
+					} else {
+						g_tbStats.terrainDistMin = std::min(g_tbStats.terrainDistMin, terrainDist);
+						g_tbStats.terrainDistMax = std::max(g_tbStats.terrainDistMax, terrainDist);
+					}
+				}
+				if (terrainDist > 2048.0f) {
 					inTerrain = false;
+					if (statsEnabled) {
+						g_tbStats.terrainRejected++;
+					}
+				} else if (statsEnabled) {
+					g_tbStats.terrainAccepted++;
 				}
 			}
 
 			if (singleton.renderTerrainDepth != inTerrain) {
+				if (statsEnabled) {
+					if (inTerrain) {
+						g_tbStats.terrainToggleTrue++;
+					} else {
+						g_tbStats.terrainToggleFalse++;
+					}
+				}
 				if (!inTerrain)
 					singleton.ResetTerrainDepth();
 				singleton.renderTerrainDepth = inTerrain;
@@ -332,6 +437,9 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 					if (shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
 						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
 						singleton.terrainRenderPasses.push_back(call);
+						if (statsEnabled) {
+							g_tbStats.queuedTerrain++;
+						}
 						return;
 					}
 
@@ -339,6 +447,9 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 					if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
 						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
 						singleton.renderPasses.push_back(call);
+						if (statsEnabled) {
+							g_tbStats.queuedExtra++;
+						}
 						return;
 					}
 				}
@@ -354,6 +465,16 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto context = globals::d3d::context;
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
+	const bool statsEnabled = TbStatsEnabled();
+	const bool hasWork = !terrainRenderPasses.empty() || !renderPasses.empty();
+	if (statsEnabled) {
+		g_tbStats.renderCalls++;
+		if (hasWork) {
+			g_tbStats.renderCallsWithWork++;
+		}
+		g_tbStats.maxTerrainQueue = std::max(g_tbStats.maxTerrainQueue, terrainRenderPasses.size());
+		g_tbStats.maxExtraQueue = std::max(g_tbStats.maxExtraQueue, renderPasses.size());
+	}
 
 	// Used to get the distance of the surface to the lowest depth
 	auto view = terrainDepth.depthSRV;
@@ -392,4 +513,50 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	mainDepth.depthSRV = depthSRVBackup;
+}
+
+void TerrainBlending::ToggleDebugCapture()
+{
+	const bool newEnabled = !g_tbStatsEnabled.load(std::memory_order_relaxed);
+	g_tbStatsEnabled.store(newEnabled, std::memory_order_relaxed);
+	g_tbStats.ResetCounts();
+	logger::info("[TB] Debug stats capture {}", newEnabled ? "enabled" : "disabled");
+}
+
+void TerrainBlending::DumpDebugStats()
+{
+	const bool enabled = TbStatsEnabled();
+	const float distMin = g_tbStats.terrainDistInit ? g_tbStats.terrainDistMin : -1.0f;
+	const float distMax = g_tbStats.terrainDistInit ? g_tbStats.terrainDistMax : -1.0f;
+	const char* depthInfo = g_tbStats.mainInfoValid ? "" : " (main depth info unavailable)";
+
+	logger::info(
+		"[TB][STAT] enabled={} prepass enter={} exit={} terrainPass={} accept={} reject={} toggleT={} toggleF={} queuedTerrain={} queuedExtra={} maxTerrainQueue={} maxExtraQueue={} blendDispatch={} renderCalls={} workCalls={} renderDepth={} renderTerrainDepth={} distMin={} distMax={} mainDepth={}x{} fmt={} array={} srvDim={}{}",
+		enabled,
+		g_tbStats.prepassEnter,
+		g_tbStats.prepassExit,
+		g_tbStats.terrainPasses,
+		g_tbStats.terrainAccepted,
+		g_tbStats.terrainRejected,
+		g_tbStats.terrainToggleTrue,
+		g_tbStats.terrainToggleFalse,
+		g_tbStats.queuedTerrain,
+		g_tbStats.queuedExtra,
+		g_tbStats.maxTerrainQueue,
+		g_tbStats.maxExtraQueue,
+		g_tbStats.blendDispatch,
+		g_tbStats.renderCalls,
+		g_tbStats.renderCallsWithWork,
+		renderDepth,
+		renderTerrainDepth,
+		distMin,
+		distMax,
+		g_tbStats.mainWidth,
+		g_tbStats.mainHeight,
+		g_tbStats.mainFormat,
+		g_tbStats.mainArraySize,
+		g_tbStats.mainSrvDim,
+		depthInfo);
+
+	g_tbStats.ResetCounts();
 }

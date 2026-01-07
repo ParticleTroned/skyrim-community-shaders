@@ -198,7 +198,9 @@ namespace SharedData
 	struct TerrainBlendingSettings
 	{
 		float BlendRange;
-		float3 pad0;
+		float BlendGain;
+		uint BlendShapeMode;
+		float pad0;
 	};
 
 	cbuffer FeatureData : register(b6)

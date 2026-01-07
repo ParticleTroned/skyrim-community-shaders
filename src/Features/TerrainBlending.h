@@ -36,12 +36,16 @@ public:
 	struct Settings
 	{
 		float BlendRange = 20.0f;
+		float BlendGain = 1.5f;
+		uint BlendShapeMode = 0;
 	};
 
 	struct alignas(16) PerFrame
 	{
 		float BlendRange;
-		float3 pad0;
+		float BlendGain;
+		uint BlendShapeMode;
+		float pad0;
 	};
 
 	Settings settings;

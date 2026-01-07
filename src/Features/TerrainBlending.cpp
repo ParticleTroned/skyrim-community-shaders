@@ -9,7 +9,9 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
-	BlendRange)
+	BlendRange,
+	BlendGain,
+	BlendShapeMode)
 
 namespace
 {
@@ -185,6 +187,8 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 {
 	PerFrame data{};
 	data.BlendRange = settings.BlendRange;
+	data.BlendGain = settings.BlendGain;
+	data.BlendShapeMode = settings.BlendShapeMode;
 	return data;
 }
 
@@ -192,8 +196,13 @@ void TerrainBlending::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 5.0f, 50.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Blend Gain", &settings.BlendGain, 0.5f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::Combo("Blend Shape", (int*)&settings.BlendShapeMode, "Linear\0Squared\0Sqrt\0");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Controls the depth range over which terrain blending fades.");
+			ImGui::Text(
+				"Blend Range controls the depth range over which terrain blending fades.\n"
+				"Blend Gain scales the blend strength.\n"
+				"Blend Shape controls the falloff curve.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();

@@ -1030,7 +1030,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float blendRange = SharedData::terrainBlendingSettings.BlendRange;
 	float dz = abs(depthPixelLinear - depthSampledLinear);
 	float blendFactorTerrain = 1.0 - saturate(dz / blendRange);
-	blendFactorTerrain *= blendFactorTerrain;
+
+	uint shapeMode = SharedData::terrainBlendingSettings.BlendShapeMode;
+	if (shapeMode == 1) {
+		blendFactorTerrain = blendFactorTerrain * blendFactorTerrain;
+	} else if (shapeMode == 2) {
+		blendFactorTerrain = sqrt(blendFactorTerrain);
+	}
+
+	float blendGain = SharedData::terrainBlendingSettings.BlendGain;
+	blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
 #	endif
 
 	float2 uv = input.TexCoord0.xy;

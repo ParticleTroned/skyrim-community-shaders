@@ -3,15 +3,15 @@
 struct TerrainBlending : Feature
 {
 public:
-	virtual inline std::string GetName() override { return "Terrain Blending"; }
+	virtual inline std::string GetName() override { return "Terrain Blending VR"; }
 	virtual inline std::string GetShortName() override { return "TerrainBlending"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_BLENDING"; }
 	virtual std::string_view GetCategory() const override { return "Landscape & Textures"; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides seamless blending between terrain and objects, eliminating harsh transitions where objects meet the ground for more natural-looking landscapes.",
-			{ "Seamless terrain-to-object blending transitions",
+			"Provides seamless blending between terrain and objects in VR, eliminating harsh transitions where objects meet the ground for more natural-looking landscapes.",
+			{ "Seamless terrain-to-object blending transitions (VR)",
 				"Advanced depth buffer manipulation for smooth integration",
 				"Support for alternative terrain rendering modes",
 				"Multi-pass rendering optimization for complex scenes",

@@ -1040,6 +1040,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float blendGain = SharedData::terrainBlendingSettings.BlendGain;
 	blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
+
+	if (SharedData::TerrainBlendingReplayActive != 0 && blendFactorTerrain <= 0.001) {
+		clip(-1);
+	}
 #	endif
 
 	float2 uv = input.TexCoord0.xy;

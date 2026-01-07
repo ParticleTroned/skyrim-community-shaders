@@ -170,6 +170,7 @@ public:
 	bool activeReflections = false;
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	void SetTerrainBlendingReplayActive(bool active);
 
 	struct PermutationCB
 	{
@@ -204,9 +205,12 @@ public:
 		uint HideSky;
 		float MipBias;
 		float RefractionScale;  // new: matches HLSL SharedData::RefractionScale
-		};
+		uint TerrainBlendingReplayActive;
+		uint pad0[3];
+	};
 
 	ConstantBuffer* sharedDataCB = nullptr;
+	SharedDataCB sharedData{};
 	ConstantBuffer* featureDataCB = nullptr;
 
 	PermutationCB permutationData{};

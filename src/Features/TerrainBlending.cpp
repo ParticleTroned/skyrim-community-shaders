@@ -513,14 +513,22 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	struct ScopedReplayFlag
 	{
 		TerrainBlending& owner;
+		State* state;
 		explicit ScopedReplayFlag(TerrainBlending& a_owner) :
-			owner(a_owner)
+			owner(a_owner),
+			state(globals::state)
 		{
 			owner.inTBReplay = true;
+			if (state) {
+				state->SetTerrainBlendingReplayActive(true);
+			}
 		}
 		~ScopedReplayFlag()
 		{
 			owner.inTBReplay = false;
+			if (state) {
+				state->SetTerrainBlendingReplayActive(false);
+			}
 		}
 	};
 

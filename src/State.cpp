@@ -713,7 +713,8 @@ void State::SetAdapterDescription(const std::wstring& description)
 void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] bool a_prepass)
 {
 	{
-		SharedDataCB data{};
+		auto& data = sharedData;
+		data = {};
 
 		const auto shaderManager = globals::game::smState;
 		const RE::NiTransform& dalcTransform = shaderManager->directionalAmbientTransform;
@@ -780,6 +781,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 		// New: push the global refraction scale into the shared CB
 		data.RefractionScale = refractionScale;
+		auto& terrainBlendingFeature = globals::features::terrainBlending;
+		data.TerrainBlendingReplayActive = terrainBlendingFeature.inTBReplay ? 1u : 0u;
 		sharedDataCB->Update(data);
 	}
 
@@ -807,6 +810,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 	}
 
 	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
+}
+
+void State::SetTerrainBlendingReplayActive(bool active)
+{
+	sharedData.TerrainBlendingReplayActive = active ? 1u : 0u;
+	if (sharedDataCB) {
+		sharedDataCB->Update(sharedData);
+	}
 }
 
 void State::ClearDisabledFeatures()

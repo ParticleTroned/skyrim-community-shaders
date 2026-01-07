@@ -24,6 +24,8 @@ namespace SharedData
 		bool HideSky;     // HideSky flag in WorldSpace, e.g. Blackreach
 		float MipBias;    // Offset to mip level for TAA sharpness#
 		float RefractionScale; // Global scale for ImageSpace refraction heat warp (1.0 = vanilla CS)
+		uint TerrainBlendingReplayActive;
+		uint3 pad0;
 	};
 
 	struct GrassLightingSettings

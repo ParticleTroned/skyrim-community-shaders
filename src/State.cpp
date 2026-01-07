@@ -791,8 +791,20 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		delete[] data;
 	}
 
+	auto& terrainBlending = globals::features::terrainBlending;
+	static ID3D11ShaderResourceView* s_enginePostZPrepassCopySRV = nullptr;
+
 	const auto& depth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-	auto srv = depth.depthSRV;
+	auto currentSrv = depth.depthSRV;
+
+	if (!terrainBlending.loaded || !terrainBlending.inTBReplay) {
+		s_enginePostZPrepassCopySRV = currentSrv;
+	}
+
+	ID3D11ShaderResourceView* srv = currentSrv;
+	if (terrainBlending.loaded && terrainBlending.inTBReplay && s_enginePostZPrepassCopySRV) {
+		srv = s_enginePostZPrepassCopySRV;
+	}
 
 	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
 }

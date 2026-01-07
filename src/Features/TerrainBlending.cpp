@@ -159,7 +159,7 @@ void TerrainBlending::SetupResources()
 	{
 		D3D11_DEPTH_STENCIL_DESC depthStencilDesc{};
 		depthStencilDesc.DepthEnable = true;
-		depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
 		depthStencilDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 		depthStencilDesc.StencilEnable = false;
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
@@ -461,7 +461,22 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 
 void TerrainBlending::RenderTerrainBlendingPasses()
 {
-	auto renderer = globals::game::renderer;
+	struct ScopedReplayFlag
+	{
+		TerrainBlending& owner;
+		explicit ScopedReplayFlag(TerrainBlending& a_owner) :
+			owner(a_owner)
+		{
+			owner.inTBReplay = true;
+		}
+		~ScopedReplayFlag()
+		{
+			owner.inTBReplay = false;
+		}
+	};
+
+	ScopedReplayFlag replayFlag(*this);
+
 	auto context = globals::d3d::context;
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
@@ -476,54 +491,12 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		g_tbStats.maxExtraQueue = std::max(g_tbStats.maxExtraQueue, renderPasses.size());
 	}
 
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-	const bool hasBlendedDepthSRV = blendedDepthTexture && blendedDepthTexture->srv;
-	ID3D11ShaderResourceView* blendedDepthSRV = hasBlendedDepthSRV ? blendedDepthTexture->srv.get() : nullptr;
-
-	struct ScopedDepthSRVOverride
-	{
-		ScopedDepthSRVOverride(
-			RE::BSGraphics::DepthStencilData& a_mainDepth,
-			RE::BSGraphics::DepthStencilData& a_prepassDepth,
-			ID3D11ShaderResourceView* a_srv)
-			: mainDepth(a_mainDepth),
-			  prepassDepth(a_prepassDepth),
-			  prevMainDepthSRV(a_mainDepth.depthSRV),
-			  prevPrepassCopySRV(a_prepassDepth.depthSRV)
-		{
-			mainDepth.depthSRV = a_srv;
-			prepassDepth.depthSRV = a_srv;
-		}
-
-		~ScopedDepthSRVOverride()
-		{
-			mainDepth.depthSRV = prevMainDepthSRV;
-			prepassDepth.depthSRV = prevPrepassCopySRV;
-		}
-
-		RE::BSGraphics::DepthStencilData& mainDepth;
-		RE::BSGraphics::DepthStencilData& prepassDepth;
-		ID3D11ShaderResourceView* prevMainDepthSRV;
-		ID3D11ShaderResourceView* prevPrepassCopySRV;
-	};
-
 	auto drawPass = [&](const RenderPass& renderPass) {
-		auto invoke = [&]() {
-			Hooks::BSBatchRenderer__RenderPassImmediately::func(
-				renderPass.a_pass,
-				renderPass.a_technique,
-				renderPass.a_alphaTest,
-				renderPass.a_renderFlags);
-		};
-
-		if (hasBlendedDepthSRV) {
-			ScopedDepthSRVOverride scope(mainDepth, zPrepassCopy, blendedDepthSRV);
-			invoke();
-			return;
-		}
-
-		invoke();
+		Hooks::BSBatchRenderer__RenderPassImmediately::func(
+			renderPass.a_pass,
+			renderPass.a_technique,
+			renderPass.a_alphaTest,
+			renderPass.a_renderFlags);
 	};
 
 	// Used to get the distance of the surface to the lowest depth

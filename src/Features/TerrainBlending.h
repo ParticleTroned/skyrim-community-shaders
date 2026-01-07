@@ -36,6 +36,7 @@ public:
 	bool renderDepth = false;
 	bool renderTerrainDepth = false;
 	bool renderAltTerrain = false;
+	bool inTBReplay = false;
 
 	RE::NiPoint3 averageEyePosition;
 

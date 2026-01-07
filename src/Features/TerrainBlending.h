@@ -33,6 +33,25 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 
+	struct Settings
+	{
+		float BlendRange = 20.0f;
+	};
+
+	struct alignas(16) PerFrame
+	{
+		float BlendRange;
+		float3 pad0;
+	};
+
+	Settings settings;
+
+	PerFrame GetCommonBufferData();
+	virtual void DrawSettings() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
+	virtual void RestoreDefaultSettings() override;
+
 	bool renderDepth = false;
 	bool renderTerrainDepth = false;
 	bool renderAltTerrain = false;

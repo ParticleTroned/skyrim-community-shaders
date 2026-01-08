@@ -9,6 +9,7 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
+	Enable,
 	BlendRange,
 	BlendGain,
 	BlendShapeMode)
@@ -195,6 +196,7 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 void TerrainBlending::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable", &settings.Enable);
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 5.0f, 50.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Blend Gain", &settings.BlendGain, 0.5f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::Combo("Blend Shape", (int*)&settings.BlendShapeMode, "Linear\0Squared\0Sqrt\0");
@@ -202,7 +204,8 @@ void TerrainBlending::DrawSettings()
 			ImGui::Text(
 				"Blend Range controls the depth range over which terrain blending fades.\n"
 				"Blend Gain scales the blend strength.\n"
-				"Blend Shape controls the falloff curve.");
+				"Blend Shape controls the falloff curve.\n"
+				"VR: adjust Blend Range/Gain to reduce floating seams.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -227,6 +230,16 @@ void TerrainBlending::RestoreDefaultSettings()
 
 void TerrainBlending::TerrainShaderHacks()
 {
+	if (!settings.Enable) {
+		if (renderTerrainDepth) {
+			renderTerrainDepth = false;
+			ResetTerrainDepth();
+		}
+		renderDepth = false;
+		renderAltTerrain = false;
+		return;
+	}
+
 	if (renderTerrainDepth) {
 		auto renderer = globals::game::renderer;
 		auto context = globals::d3d::context;
@@ -326,7 +339,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 
 	// IMPORTANT (VR fix): do NOT drive Terrain Blending from Main_RenderDepth.
 	// In VR this hook can correspond to shadow/aux depth phases; we only use it for debug/cleanup.
-	if (!shaderCache || !shaderCache->IsEnabled()) {
+	if (!shaderCache || !shaderCache->IsEnabled() || !singleton.settings.Enable) {
 		// Ensure we restore original SRVs when the shader cache / feature is disabled.
 		if (renderer) {
 			auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -340,6 +353,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 			singleton.renderTerrainDepth = false;
 			singleton.ResetTerrainDepth();
 		}
+		singleton.renderAltTerrain = false;
 	}
 
 	func(a1, a2);
@@ -353,9 +367,24 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	auto context = globals::d3d::context;
 	const bool statsEnabled = TbStatsEnabled();
 
+	if (!shaderCache || !shaderCache->IsEnabled() || !singleton.settings.Enable || !renderer || !context) {
+		if (!singleton.settings.Enable) {
+			if (singleton.renderTerrainDepth) {
+				singleton.renderTerrainDepth = false;
+				singleton.ResetTerrainDepth();
+			}
+			singleton.renderDepth = false;
+			singleton.renderAltTerrain = false;
+			singleton.terrainRenderPasses.clear();
+			singleton.renderPasses.clear();
+		}
+		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		return;
+	}
+
 	// VR fix: detect and drive Terrain Blending from the *main camera* depth-only z-prepass,
 	// identified by "kMAIN DSV bound" AND "no RTVs bound".
-	if (shaderCache && shaderCache->IsEnabled() && renderer && context) {
+	if (renderer && context) {
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
@@ -510,6 +539,12 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 
 void TerrainBlending::RenderTerrainBlendingPasses()
 {
+	if (!settings.Enable) {
+		terrainRenderPasses.clear();
+		renderPasses.clear();
+		return;
+	}
+
 	struct ScopedReplayFlag
 	{
 		TerrainBlending& owner;

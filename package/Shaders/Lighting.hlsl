@@ -1041,6 +1041,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float blendGain = SharedData::terrainBlendingSettings.BlendGain;
 	blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
 
+	// Max-gap fade-out: stop blending when the depth gap is too large.
+	const float maxGapMul = 3.0;
+	const float fadeOutMul = 1.0;
+	float maxGap = blendRange * maxGapMul;
+	float fadeOut = blendRange * fadeOutMul;
+	float farFade = 1.0 - saturate((dz - maxGap) / max(1e-3, fadeOut));
+	blendFactorTerrain *= farFade;
+
 	if (SharedData::TerrainBlendingReplayActive != 0 && blendFactorTerrain <= 0.001) {
 		clip(-1);
 	}

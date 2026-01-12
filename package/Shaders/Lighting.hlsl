@@ -1022,17 +1022,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(TERRAIN_BLENDING)
-	float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
+	float blendFactorTerrain = 1.0;
+	if (SharedData::terrainBlendingSettings.Enable != 0) {
+		float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
 
-	float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
-	float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
+		float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
+		float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
-	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 10.0);
+		blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 10.0);
 
-	if (input.Position.z == depthSampled)
-		blendFactorTerrain = 1;
+		if (input.Position.z == depthSampled)
+			blendFactorTerrain = 1.0;
 
-	blendFactorTerrain = saturate(blendFactorTerrain);
+		blendFactorTerrain = saturate(blendFactorTerrain);
+	}
 #	endif
 
 	float2 uv = input.TexCoord0.xy;

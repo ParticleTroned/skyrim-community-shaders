@@ -20,6 +20,19 @@ public:
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
+	struct alignas(16) Settings
+	{
+		uint Enable = 1;
+		float pad0[3]{};
+	};
+
+	Settings settings;
+
+	virtual void DrawSettings() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
+	virtual void RestoreDefaultSettings() override;
+
 	virtual void SetupResources() override;
 
 	ID3D11VertexShader* GetTerrainVertexShader();
@@ -54,6 +67,7 @@ public:
 
 	void ResetDepth();
 	void ResetTerrainDepth();
+	void ResetRuntimeState();
 	void BlendPrepassDepths();
 
 	Texture2D* blendedDepthTexture = nullptr;

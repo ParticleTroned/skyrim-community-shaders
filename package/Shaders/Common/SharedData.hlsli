@@ -175,6 +175,12 @@ namespace SharedData
 		float2 pad0;
 	};
 
+	struct TerrainBlendingSettings
+	{
+		uint Enable;
+		float3 pad0;
+	};
+
 	struct IBLSettings
 	{
 		uint EnableDiffuseIBL;
@@ -210,6 +216,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		TerrainBlendingSettings terrainBlendingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

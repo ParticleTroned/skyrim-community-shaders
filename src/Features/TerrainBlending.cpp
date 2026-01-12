@@ -4,6 +4,10 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TerrainBlending::Settings,
+	Enable)
+
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
 {
 	if (!terrainVertexShader) {
@@ -29,6 +33,29 @@ ID3D11ComputeShader* TerrainBlending::GetDepthBlendShader()
 		depthBlendShader = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\TerrainBlending\\DepthBlend.hlsl", {}, "cs_5_0");
 	}
 	return depthBlendShader;
+}
+
+void TerrainBlending::DrawSettings()
+{
+	bool enabled = settings.Enable != 0;
+	if (ImGui::Checkbox("Enable Terrain Blending", &enabled)) {
+		settings.Enable = enabled ? 1u : 0u;
+	}
+}
+
+void TerrainBlending::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void TerrainBlending::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void TerrainBlending::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 void TerrainBlending::SetupResources()
@@ -110,6 +137,11 @@ void TerrainBlending::DataLoaded()
 
 void TerrainBlending::TerrainShaderHacks()
 {
+	if (!settings.Enable) {
+		ResetRuntimeState();
+		return;
+	}
+
 	if (renderTerrainDepth) {
 		auto renderer = globals::game::renderer;
 		auto context = globals::d3d::context;
@@ -147,8 +179,39 @@ void TerrainBlending::ResetTerrainDepth()
 	context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
 }
 
+void TerrainBlending::ResetRuntimeState()
+{
+	renderDepth = false;
+
+	if (renderTerrainDepth) {
+		renderTerrainDepth = false;
+		ResetTerrainDepth();
+	}
+
+	renderAltTerrain = false;
+
+	renderPasses.clear();
+	terrainRenderPasses.clear();
+
+	auto renderer = globals::game::renderer;
+	if (renderer && depthSRVBackup && prepassSRVBackup) {
+		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+		mainDepth.depthSRV = depthSRVBackup;
+		zPrepassCopy.depthSRV = prepassSRVBackup;
+	}
+
+	if (auto context = globals::d3d::context) {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		context->PSSetShaderResources(55, 1, &nullSRV);
+	}
+}
+
 void TerrainBlending::BlendPrepassDepths()
 {
+	if (!settings.Enable)
+		return;
+
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
@@ -206,6 +269,12 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	auto shaderCache = globals::shaderCache;
 	auto renderer = globals::game::renderer;
 
+	if (!singleton.settings.Enable) {
+		singleton.ResetRuntimeState();
+		func(a1, a2);
+		return;
+	}
+
 	// Keep updating for distance-based terrain gating inside BSBatchRenderer hook.
 	singleton.averageEyePosition = Util::GetAverageEyePosition();
 
@@ -236,6 +305,12 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	auto shaderCache = globals::shaderCache;
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+
+	if (!singleton.settings.Enable) {
+		singleton.ResetRuntimeState();
+		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		return;
+	}
 
 	// VR fix: detect and drive Terrain Blending from the *main camera* depth-only z-prepass,
 	// identified by "kMAIN DSV bound" AND "no RTVs bound".
@@ -350,6 +425,11 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 
 void TerrainBlending::RenderTerrainBlendingPasses()
 {
+	if (!settings.Enable) {
+		ResetRuntimeState();
+		return;
+	}
+
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	auto shadowState = globals::game::shadowState;

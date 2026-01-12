@@ -6,7 +6,7 @@ Texture2D<unorm float> TerrainDepthTexture : register(t1);
 
 [numthreads(8, 8, 1)] void main(uint3 DTid
 								: SV_DispatchThreadID) {
-	float mixedDepth = min(MainDepthTexture[DTid.xy], TerrainDepthTexture[DTid.xy]);
+	float mixedDepth = max(MainDepthTexture[DTid.xy], TerrainDepthTexture[DTid.xy]);
 	BlendedDepthTexture[DTid.xy] = mixedDepth;
 	BlendedDepthTexture16[DTid.xy] = mixedDepth;
 }

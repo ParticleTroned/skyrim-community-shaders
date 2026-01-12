@@ -4,6 +4,28 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+namespace
+{
+	enum class TBDepthOverrideMode : uint8_t
+	{
+		kTBOnly = 1,        // Option 1: override depth SRVs only for TB passes
+		kGlobalPrepass = 2  // Legacy: override depth SRVs during main prepass
+	};
+
+	constexpr TBDepthOverrideMode kTBDepthOverrideMode = TBDepthOverrideMode::kTBOnly;
+
+	enum class TBMaskSource : uint8_t
+	{
+		kTerrainDepth = 1,   // terrainDepth as rendered (no post-copy)
+		kMainDepthCopy = 2,  // terrainDepth after CopyResource(mainDepth)
+		kMainDepthSRV = 3,   // depthSRVBackup (main depth SRV)
+		kBlendedDepth = 4,   // blendedDepthTexture (R32)
+		kBlendedDepth16 = 5  // blendedDepthTexture16 (R16 UNORM)
+	};
+
+	constexpr TBMaskSource kTBMaskSource = TBMaskSource::kBlendedDepth;
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
 	Enable)
@@ -244,7 +266,9 @@ void TerrainBlending::BlendPrepassDepths()
 	auto renderer = globals::game::renderer;
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	context->CopyResource(terrainDepth.texture, mainDepth.texture);
+	if constexpr (kTBMaskSource == TBMaskSource::kMainDepthCopy) {
+		context->CopyResource(terrainDepth.texture, mainDepth.texture);
+	}
 }
 
 void TerrainBlending::ClearShaderCache()
@@ -361,9 +385,11 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 		if (isMainDepthPrepass && !singleton.renderDepth) {
 			singleton.averageEyePosition = Util::GetAverageEyePosition();
 
-			// Redirect depth SRVs to our blended depth (the effect needs these SRVs for later passes).
-			mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
-			zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+			if constexpr (kTBDepthOverrideMode == TBDepthOverrideMode::kGlobalPrepass) {
+				// Legacy behavior: redirect depth SRVs to blended depth for the entire frame.
+				mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
+				zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+			}
 
 			singleton.renderDepth = true;
 			singleton.ResetDepth();
@@ -486,7 +512,18 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	};
 
 	// Used to get the distance of the surface to the lowest depth
-	auto view = terrainDepth.depthSRV;
+	ID3D11ShaderResourceView* view = nullptr;
+	if constexpr (kTBMaskSource == TBMaskSource::kTerrainDepth) {
+		view = terrainDepth.depthSRV;
+	} else if constexpr (kTBMaskSource == TBMaskSource::kMainDepthCopy) {
+		view = terrainDepth.depthSRV;
+	} else if constexpr (kTBMaskSource == TBMaskSource::kMainDepthSRV) {
+		view = depthSRVBackup;
+	} else if constexpr (kTBMaskSource == TBMaskSource::kBlendedDepth) {
+		view = blendedDepthTexture ? blendedDepthTexture->srv.get() : nullptr;
+	} else if constexpr (kTBMaskSource == TBMaskSource::kBlendedDepth16) {
+		view = blendedDepthTexture16 ? blendedDepthTexture16->srv.get() : nullptr;
+	}
 	context->PSSetShaderResources(55, 1, &view);
 
 	if (!terrainRenderPasses.empty() || !renderPasses.empty()) {

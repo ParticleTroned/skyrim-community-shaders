@@ -7,6 +7,7 @@
 #include "Deferred.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/Game.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
@@ -21,7 +22,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AngleEndDeg,
 	AngleRangeScale,
 	AngleGainScale,
-	MaxGap)
+	MaxGap,
+	ReplayCullDistance,
+	ReplayCullMinPixels)
 
 namespace
 {
@@ -202,8 +205,11 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.EdgeStart = std::max(0.0f, settings.EdgeStart);
 	data.EdgeEnd = std::max(data.EdgeStart + 1e-3f, settings.EdgeEnd);
 	data.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
-	data.AngleStartDeg = std::max(0.0f, settings.AngleStartDeg);
-	data.AngleEndDeg = std::max(data.AngleStartDeg + 1e-3f, settings.AngleEndDeg);
+	float angleStartDeg = std::max(0.0f, settings.AngleStartDeg);
+	float angleEndDeg = std::max(angleStartDeg + 1e-3f, settings.AngleEndDeg);
+	constexpr float kDegToRad = 3.14159265359f / 180.0f;
+	data.AngleStartCos = std::cos(angleStartDeg * kDegToRad);
+	data.AngleEndCos = std::cos(angleEndDeg * kDegToRad);
 	data.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
 	data.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
 	data.MaxGap = 0.0f;
@@ -237,6 +243,8 @@ void TerrainBlending::DrawSettings()
 		ImGui::SliderFloat("Angle End", &settings.AngleEndDeg, 0.0f, 90.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Angle Range Scale", &settings.AngleRangeScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Replay Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		settings.EdgeStart = std::max(0.0f, settings.EdgeStart);
 		settings.EdgeEnd = std::max(settings.EdgeEnd, settings.EdgeStart + 1e-3f);
 		settings.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
@@ -244,6 +252,8 @@ void TerrainBlending::DrawSettings()
 		settings.AngleEndDeg = std::max(settings.AngleEndDeg, settings.AngleStartDeg + 1e-3f);
 		settings.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
 		settings.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
+		settings.ReplayCullDistance = std::max(0.0f, settings.ReplayCullDistance);
+		settings.ReplayCullMinPixels = std::max(0.0f, settings.ReplayCullMinPixels);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Blend Range controls the depth range over which terrain blending fades.\n"
@@ -253,6 +263,8 @@ void TerrainBlending::DrawSettings()
 				"Edge Boost biases edge detection based on view-dependent slope.\n"
 				"Angle Start/End scale blending based on the angle between terrain and the object.\n"
 				"Angle Range/Gain Scale set the max multiplier at Angle End.\n"
+				"Replay Cull Distance skips blending beyond the cutoff (0 disables).\n"
+				"Replay Cull Min Pixels skips blending for tiny projected patches (0 disables).\n"
 				"VR: adjust Blend Range/Gain to reduce floating seams.");
 		}
 		ImGui::Spacing();
@@ -414,6 +426,25 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	const bool statsEnabled = TbStatsEnabled();
+	const float replayCullDistance = std::max(0.0f, singleton.settings.ReplayCullDistance);
+	const float replayCullMinPixels = std::max(0.0f, singleton.settings.ReplayCullMinPixels);
+	float pixelsPerUnit = 0.0f;
+	if (replayCullMinPixels > 0.0f && globals::state) {
+		const float2 screenSize = Util::ConvertToDynamic(globals::state->screenSize);
+		const float screenHeight = std::max(1.0f, screenSize.y);
+		const float tanHalfFov = std::tan(Util::GetVerticalFOVRad() * 0.5f);
+		if (tanHalfFov > 1e-4f) {
+			pixelsPerUnit = (screenHeight * 0.5f) / tanHalfFov;
+		}
+	}
+	auto ShouldCullByScreenSize = [&](const RE::NiPoint3& center, float radius) {
+		if (replayCullMinPixels <= 0.0f || pixelsPerUnit <= 0.0f) {
+			return false;
+		}
+		const float centerDist = std::max(center.GetDistance(singleton.averageEyePosition), 1.0f);
+		const float pixelDiameter = (radius / centerDist) * pixelsPerUnit * 2.0f;
+		return pixelDiameter < replayCullMinPixels;
+	};
 
 	if (!shaderCache || !shaderCache->IsEnabled() || !singleton.settings.Enable || !renderer || !context) {
 		if (!singleton.settings.Enable) {
@@ -521,7 +552,8 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 				if (statsEnabled) {
 					g_tbStats.terrainPasses++;
 				}
-				const float terrainDist = a_pass->geometry->worldBound.center.GetDistance(singleton.averageEyePosition) - a_pass->geometry->worldBound.radius;
+				const auto& worldBound = a_pass->geometry->worldBound;
+				const float terrainDist = worldBound.center.GetDistance(singleton.averageEyePosition) - worldBound.radius;
 				if (statsEnabled) {
 					if (!g_tbStats.terrainDistInit) {
 						g_tbStats.terrainDistMin = terrainDist;
@@ -532,7 +564,8 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 						g_tbStats.terrainDistMax = std::max(g_tbStats.terrainDistMax, terrainDist);
 					}
 				}
-				if (terrainDist > 2048.0f) {
+				if ((replayCullDistance > 0.0f && terrainDist > replayCullDistance) ||
+					ShouldCullByScreenSize(worldBound.center, worldBound.radius)) {
 					inTerrain = false;
 					if (statsEnabled) {
 						g_tbStats.terrainRejected++;
@@ -560,23 +593,35 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 		} else if (globals::state->inWorld) {
 			if (auto shaderProperty = a_pass->shaderProperty) {
 				if (a_pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
+					float replayDist = 0.0f;
+					bool replayCull = false;
+					if (a_pass->geometry) {
+						const auto& worldBound = a_pass->geometry->worldBound;
+						replayDist = worldBound.center.GetDistance(singleton.averageEyePosition) - worldBound.radius;
+						replayCull = (replayCullDistance > 0.0f && replayDist > replayCullDistance) ||
+						             ShouldCullByScreenSize(worldBound.center, worldBound.radius);
+					}
 					if (shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
-						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-						singleton.terrainRenderPasses.push_back(call);
-						if (statsEnabled) {
-							g_tbStats.queuedTerrain++;
+						if (!replayCull) {
+							RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
+							singleton.terrainRenderPasses.push_back(call);
+							if (statsEnabled) {
+								g_tbStats.queuedTerrain++;
+							}
+							return;
 						}
-						return;
 					}
 
 					// Detect meshes which should not get terrain blending using an unused flag (kNoTransparencyMultiSample)
 					if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
-						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-						singleton.renderPasses.push_back(call);
-						if (statsEnabled) {
-							g_tbStats.queuedExtra++;
+						if (!replayCull) {
+							RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
+							singleton.renderPasses.push_back(call);
+							if (statsEnabled) {
+								g_tbStats.queuedExtra++;
+							}
+							return;
 						}
-						return;
 					}
 				}
 			}

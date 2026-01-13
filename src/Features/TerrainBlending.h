@@ -47,6 +47,8 @@ public:
 		float AngleRangeScale = 0.25f;
 		float AngleGainScale = 1.0f;
 		float MaxGap = 0.0f;
+		float ReplayCullDistance = 2048.0f;
+		float ReplayCullMinPixels = 0.0f;
 	};
 
 	struct alignas(16) PerFrame
@@ -57,8 +59,8 @@ public:
 		float EdgeStart;
 		float EdgeEnd;
 		float EdgeBoost;
-		float AngleStartDeg;
-		float AngleEndDeg;
+		float AngleStartCos;
+		float AngleEndCos;
 		float AngleRangeScale;
 		float AngleGainScale;
 		float MaxGap;

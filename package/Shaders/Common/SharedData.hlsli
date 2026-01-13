@@ -205,8 +205,8 @@ namespace SharedData
 		float EdgeStart;
 		float EdgeEnd;
 		float EdgeBoost;
-		float AngleStartDeg;
-		float AngleEndDeg;
+		float AngleStartCos;
+		float AngleEndCos;
 		float AngleRangeScale;
 		float AngleGainScale;
 		float MaxGap;

@@ -1028,7 +1028,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 		float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
-
 		float blendRange = max(1e-3, SharedData::terrainBlendingSettings.BlendRange);
 		float blendGain = SharedData::terrainBlendingSettings.BlendGain;
 
@@ -1065,10 +1064,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (nMaskLenSq > 1e-6) {
 				nMaskVS *= rsqrt(nMaskLenSq);
 				float cosAngle = saturate(abs(dot(nCurrentVS, nMaskVS)));
-				float angleStart = max(0.0, SharedData::terrainBlendingSettings.AngleStartDeg);
-				float angleEnd = max(angleStart + 1e-3, SharedData::terrainBlendingSettings.AngleEndDeg);
-				float cosStart = cos(angleStart * (Math::PI / 180.0));
-				float cosEnd = cos(angleEnd * (Math::PI / 180.0));
+				float cosStart = SharedData::terrainBlendingSettings.AngleStartCos;
+				float cosEnd = SharedData::terrainBlendingSettings.AngleEndCos;
 				float angleT = saturate((cosStart - cosAngle) / max(1e-3, cosStart - cosEnd));
 				float rangeScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleRangeScale, angleT);
 				float gainScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleGainScale, angleT);

@@ -39,11 +39,11 @@ public:
 		float BlendRange = 20.0f;
 		float BlendGain = 1.0f;
 		uint BlendShapeMode = 0;
-		float EdgeStart = 0.01f;
-		float EdgeEnd = 0.1f;
+		float EdgeStart = 0.001f;
+		float EdgeEnd = 0.14f;
 		float EdgeBoost = 1.0f;
 		float AngleStartDeg = 0.0f;
-		float AngleEndDeg = 90.0f;
+		float AngleEndDeg = 5.0f;
 		float AngleRangeScale = 0.25f;
 		float AngleGainScale = 1.0f;
 		float MaxGap = 0.0f;

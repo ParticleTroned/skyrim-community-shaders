@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 
 #include "Deferred.h"
 #include "ShaderCache.h"
@@ -12,7 +13,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Enable,
 	BlendRange,
 	BlendGain,
-	BlendShapeMode)
+	BlendShapeMode,
+	EdgeStart,
+	EdgeEnd,
+	EdgeBoost,
+	AngleStartDeg,
+	AngleEndDeg,
+	AngleRangeScale,
+	AngleGainScale,
+	MaxGap)
 
 namespace
 {
@@ -190,6 +199,14 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.BlendRange = settings.BlendRange;
 	data.BlendGain = settings.BlendGain;
 	data.BlendShapeMode = settings.BlendShapeMode;
+	data.EdgeStart = std::max(0.0f, settings.EdgeStart);
+	data.EdgeEnd = std::max(data.EdgeStart + 1e-3f, settings.EdgeEnd);
+	data.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
+	data.AngleStartDeg = std::max(0.0f, settings.AngleStartDeg);
+	data.AngleEndDeg = std::max(data.AngleStartDeg + 1e-3f, settings.AngleEndDeg);
+	data.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
+	data.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
+	data.MaxGap = 0.0f;
 	return data;
 }
 
@@ -197,14 +214,45 @@ void TerrainBlending::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable", &settings.Enable);
-		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 5.0f, 50.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 1.0f, 50.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Blend Gain", &settings.BlendGain, 0.5f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::Combo("Blend Shape", (int*)&settings.BlendShapeMode, "Linear\0Squared\0Sqrt\0");
+		float edgeStartMax = std::max(1.0f, settings.BlendRange);
+		float edgeEndMax = std::max(2.0f, settings.BlendRange * 2.0f);
+		constexpr float edgeExponent = 3.0f;
+		auto edgeSlider = [&](const char* label, float* value, float maxValue) {
+			float clampedValue = std::min(std::max(*value, 0.0f), maxValue);
+			float normalized = maxValue > 0.0f ? std::pow(clampedValue / maxValue, 1.0f / edgeExponent) : 0.0f;
+			if (ImGui::SliderFloat(label, &normalized, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+				clampedValue = std::pow(normalized, edgeExponent) * maxValue;
+			}
+			*value = clampedValue;
+			ImGui::SameLine();
+			ImGui::Text("%.3f", *value);
+		};
+		edgeSlider("Edge Start", &settings.EdgeStart, edgeStartMax);
+		edgeSlider("Edge End", &settings.EdgeEnd, edgeEndMax);
+		ImGui::SliderFloat("Edge Boost", &settings.EdgeBoost, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Angle Start", &settings.AngleStartDeg, 0.0f, 45.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Angle End", &settings.AngleEndDeg, 0.0f, 90.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Angle Range Scale", &settings.AngleRangeScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		settings.EdgeStart = std::max(0.0f, settings.EdgeStart);
+		settings.EdgeEnd = std::max(settings.EdgeEnd, settings.EdgeStart + 1e-3f);
+		settings.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
+		settings.AngleStartDeg = std::max(0.0f, settings.AngleStartDeg);
+		settings.AngleEndDeg = std::max(settings.AngleEndDeg, settings.AngleStartDeg + 1e-3f);
+		settings.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
+		settings.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Blend Range controls the depth range over which terrain blending fades.\n"
 				"Blend Gain scales the blend strength.\n"
 				"Blend Shape controls the falloff curve.\n"
+				"Edge Start/End control the depth discontinuity needed for edge-only blending.\n"
+				"Edge Boost biases edge detection based on view-dependent slope.\n"
+				"Angle Start/End scale blending based on the angle between terrain and the object.\n"
+				"Angle Range/Gain Scale set the max multiplier at Angle End.\n"
 				"VR: adjust Blend Range/Gain to reduce floating seams.");
 		}
 		ImGui::Spacing();

@@ -202,6 +202,14 @@ namespace SharedData
 		float BlendRange;
 		float BlendGain;
 		uint BlendShapeMode;
+		float EdgeStart;
+		float EdgeEnd;
+		float EdgeBoost;
+		float AngleStartDeg;
+		float AngleEndDeg;
+		float AngleRangeScale;
+		float AngleGainScale;
+		float MaxGap;
 		float pad0;
 	};
 

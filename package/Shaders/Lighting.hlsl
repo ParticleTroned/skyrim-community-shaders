@@ -708,6 +708,20 @@ float3 TransformNormal(float3 normal)
 	return normal * 2 + -1.0.xxx;
 }
 
+float3 TerrainBlending_NormalizeSafe(float3 v)
+{
+	return v * rsqrt(max(dot(v, v), 1e-6));
+}
+
+float3 TerrainBlending_ReconstructViewPosition(float2 screenPos, float depth, uint eyeIndex)
+{
+	float2 uv = screenPos * VPOSOffset.xy + VPOSOffset.zw;
+	uv = Stereo::ConvertFromStereoUV(uv * FrameBuffer::DynamicResolutionParams2.xy, eyeIndex);
+	float2 ndc = float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0;
+	float4 viewPos = mul(FrameBuffer::CameraProjInverse[eyeIndex], float4(ndc, depth, 1.0));
+	return viewPos.xyz / viewPos.w;
+}
+
 float GetLodLandBlendParameter(float3 color)
 {
 	float result = saturate(1.6666666 * (dot(color, 0.55.xxx) - 0.4));
@@ -1029,7 +1043,113 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 		float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
-		float blendRange = SharedData::terrainBlendingSettings.BlendRange;
+		float blendRange = max(1e-3, SharedData::terrainBlendingSettings.BlendRange);
+		float blendGain = SharedData::terrainBlendingSettings.BlendGain;
+
+		float3 nCurrentVS = TerrainBlending_NormalizeSafe(cross(ddx(viewPosition), ddy(viewPosition)));
+
+		uint tbW, tbH;
+		TerrainBlending::TerrainBlendingMaskTexture.GetDimensions(tbW, tbH);
+		int2 p = int2(input.Position.xy);
+		int2 minCoord = int2(0, 0);
+		int2 maxCoord = int2((int)tbW - 1, (int)tbH - 1);
+		int2 pL = clamp(p + int2(-1, 0), minCoord, maxCoord);
+		int2 pR = clamp(p + int2(1, 0), minCoord, maxCoord);
+		int2 pU = clamp(p + int2(0, -1), minCoord, maxCoord);
+		int2 pD = clamp(p + int2(0, 1), minCoord, maxCoord);
+
+		float depthL = TerrainBlending::TerrainBlendingMaskTexture[pL].x;
+		float depthR = TerrainBlending::TerrainBlendingMaskTexture[pR].x;
+		float depthU = TerrainBlending::TerrainBlendingMaskTexture[pU].x;
+		float depthD = TerrainBlending::TerrainBlendingMaskTexture[pD].x;
+
+		float depthLLinear = SharedData::GetScreenDepth(depthL);
+		float depthRLinear = SharedData::GetScreenDepth(depthR);
+		float depthULinear = SharedData::GetScreenDepth(depthU);
+		float depthDLinear = SharedData::GetScreenDepth(depthD);
+
+		float maxDiff = max(max(max(depthLLinear - depthSampledLinear, 0.0), max(depthRLinear - depthSampledLinear, 0.0)),
+			max(max(depthULinear - depthSampledLinear, 0.0), max(depthDLinear - depthSampledLinear, 0.0)));
+
+		float frontGap = depthPixelLinear - depthSampledLinear;
+		const float gapEps = 1e-4;
+
+		float minDeeperLinear = 1e9;
+		float minDeeperRaw = depthSampled;
+		if (depthLLinear > depthSampledLinear + gapEps && depthLLinear < minDeeperLinear) {
+			minDeeperLinear = depthLLinear;
+			minDeeperRaw = depthL;
+		}
+		if (depthRLinear > depthSampledLinear + gapEps && depthRLinear < minDeeperLinear) {
+			minDeeperLinear = depthRLinear;
+			minDeeperRaw = depthR;
+		}
+		if (depthULinear > depthSampledLinear + gapEps && depthULinear < minDeeperLinear) {
+			minDeeperLinear = depthULinear;
+			minDeeperRaw = depthU;
+		}
+		if (depthDLinear > depthSampledLinear + gapEps && depthDLinear < minDeeperLinear) {
+			minDeeperLinear = depthDLinear;
+			minDeeperRaw = depthD;
+		}
+		bool hasDeeper = (minDeeperLinear < 1e8);
+
+		bool useAngle = (frontGap > gapEps) || hasDeeper;
+		if (useAngle) {
+			float3 upperNormalVS;
+			float3 lowerNormalVS;
+
+			if (frontGap > gapEps) {
+				float2 spL = float2(pL) + 0.5;
+				float2 spR = float2(pR) + 0.5;
+				float2 spU = float2(pU) + 0.5;
+				float2 spD = float2(pD) + 0.5;
+
+				float3 posL = TerrainBlending_ReconstructViewPosition(spL, depthL, eyeIndex);
+				float3 posR = TerrainBlending_ReconstructViewPosition(spR, depthR, eyeIndex);
+				float3 posU = TerrainBlending_ReconstructViewPosition(spU, depthU, eyeIndex);
+				float3 posD = TerrainBlending_ReconstructViewPosition(spD, depthD, eyeIndex);
+				float3 nDepthVS = TerrainBlending_NormalizeSafe(cross(posR - posL, posD - posU));
+
+				upperNormalVS = nDepthVS;
+				lowerNormalVS = nCurrentVS;
+			} else {
+				float depthLowerC = minDeeperRaw;
+				float depthLowerL = (depthLLinear > depthSampledLinear + gapEps) ? depthL : depthLowerC;
+				float depthLowerR = (depthRLinear > depthSampledLinear + gapEps) ? depthR : depthLowerC;
+				float depthLowerU = (depthULinear > depthSampledLinear + gapEps) ? depthU : depthLowerC;
+				float depthLowerD = (depthDLinear > depthSampledLinear + gapEps) ? depthD : depthLowerC;
+
+				float2 spL = float2(pL) + 0.5;
+				float2 spR = float2(pR) + 0.5;
+				float2 spU = float2(pU) + 0.5;
+				float2 spD = float2(pD) + 0.5;
+
+				float3 posL = TerrainBlending_ReconstructViewPosition(spL, depthLowerL, eyeIndex);
+				float3 posR = TerrainBlending_ReconstructViewPosition(spR, depthLowerR, eyeIndex);
+				float3 posU = TerrainBlending_ReconstructViewPosition(spU, depthLowerU, eyeIndex);
+				float3 posD = TerrainBlending_ReconstructViewPosition(spD, depthLowerD, eyeIndex);
+				float3 nLowerVS = TerrainBlending_NormalizeSafe(cross(posR - posL, posD - posU));
+
+				upperNormalVS = nCurrentVS;
+				lowerNormalVS = nLowerVS;
+			}
+
+			float upperLenSq = dot(upperNormalVS, upperNormalVS);
+			float lowerLenSq = dot(lowerNormalVS, lowerNormalVS);
+			if (upperLenSq > 1e-4 && lowerLenSq > 1e-4) {
+				float cosAngle = saturate(abs(dot(upperNormalVS, lowerNormalVS)));
+				float angleDeg = acos(cosAngle) * (180.0 / Math::PI);
+				float angleStart = max(0.0, SharedData::terrainBlendingSettings.AngleStartDeg);
+				float angleEnd = max(angleStart + 1e-3, SharedData::terrainBlendingSettings.AngleEndDeg);
+				float angleT = saturate((angleDeg - angleStart) / max(1e-3, angleEnd - angleStart));
+				float rangeScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleRangeScale, angleT);
+				float gainScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleGainScale, angleT);
+				blendRange = max(1e-3, blendRange * rangeScale);
+				blendGain *= gainScale;
+			}
+		}
+
 		float dz = abs(depthPixelLinear - depthSampledLinear);
 		blendFactorTerrain = 1.0 - saturate(dz / blendRange);
 
@@ -1040,16 +1160,36 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			blendFactorTerrain = sqrt(blendFactorTerrain);
 		}
 
-		float blendGain = SharedData::terrainBlendingSettings.BlendGain;
 		blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
 
-		// Max-gap fade-out: stop blending when the depth gap is too large.
-		const float maxGapMul = 3.0;
-		const float fadeOutMul = 1.0;
-		float maxGap = blendRange * maxGapMul;
-		float fadeOut = blendRange * fadeOutMul;
-		float farFade = 1.0 - saturate((dz - maxGap) / max(1e-3, fadeOut));
-		blendFactorTerrain *= farFade;
+		float gap = 0.0;
+		bool hasGap = false;
+		if (frontGap > gapEps) {
+			gap = frontGap;
+			hasGap = true;
+		} else if (hasDeeper) {
+			gap = max(0.0, minDeeperLinear - depthSampledLinear);
+			hasGap = true;
+		}
+		float maxGap = SharedData::terrainBlendingSettings.MaxGap;
+		bool gapReject = (maxGap > 0.0 && (!hasGap || gap > maxGap));
+
+		float edgeFactor = 1.0;
+		if (frontGap > gapEps) {
+			// Edge-only blending: detect local depth discontinuities in the TB mask.
+			float3 viewDirVS = normalize(-viewPosition);
+			float slope = 1.0 - abs(dot(nCurrentVS, viewDirVS));
+
+			float edgeBoost = max(0.0, SharedData::terrainBlendingSettings.EdgeBoost);
+			float biasedGrad = maxDiff * (1.0 + edgeBoost * slope);
+			float edgeStart = max(0.0, SharedData::terrainBlendingSettings.EdgeStart);
+			float edgeEnd = max(edgeStart + 1e-3, SharedData::terrainBlendingSettings.EdgeEnd);
+			edgeFactor = saturate((biasedGrad - edgeStart) / max(1e-3, edgeEnd - edgeStart));
+		}
+		blendFactorTerrain *= edgeFactor;
+		if (gapReject) {
+			blendFactorTerrain = 1.0;
+		}
 
 		if (blendFactorTerrain <= 0.001) {
 			clip(-1);

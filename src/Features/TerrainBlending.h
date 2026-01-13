@@ -3,18 +3,18 @@
 struct TerrainBlending : Feature
 {
 public:
-	virtual inline std::string GetName() override { return "Terrain Overlay"; }
+	virtual inline std::string GetName() override { return "Terrain Overlay VR"; }
 	virtual inline std::string GetShortName() override { return "TerrainBlending"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_BLENDING"; }
 	virtual std::string_view GetCategory() const override { return "Landscape & Textures"; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides VR-friendly terrain overlay blending to soften transitions where objects meet the ground without affecting shadow stability.",
+			"Provides VR-friendly terrain overlay blending with edge-aware, angle-scaled fades to soften object-ground seams without affecting shadow stability.",
 			{ "Terrain-to-object overlay blending tuned for VR",
-				"Depth-mask-based contact smoothing",
-				"Multi-pass terrain replay for consistent grounding",
-				"Configurable blend range/gain/shape",
+				"Edge-only blending using depth-mask discontinuities",
+				"Angle-aware blend range/gain for steep seams",
+				"Configurable blend shape and edge thresholds",
 				"Isolated depth usage to avoid shadow swimming" }
 		};
 	}
@@ -37,8 +37,16 @@ public:
 	{
 		bool Enable = true;
 		float BlendRange = 20.0f;
-		float BlendGain = 1.5f;
+		float BlendGain = 1.0f;
 		uint BlendShapeMode = 0;
+		float EdgeStart = 0.01f;
+		float EdgeEnd = 0.1f;
+		float EdgeBoost = 1.0f;
+		float AngleStartDeg = 0.0f;
+		float AngleEndDeg = 90.0f;
+		float AngleRangeScale = 0.25f;
+		float AngleGainScale = 1.0f;
+		float MaxGap = 0.0f;
 	};
 
 	struct alignas(16) PerFrame
@@ -46,6 +54,14 @@ public:
 		float BlendRange;
 		float BlendGain;
 		uint BlendShapeMode;
+		float EdgeStart;
+		float EdgeEnd;
+		float EdgeBoost;
+		float AngleStartDeg;
+		float AngleEndDeg;
+		float AngleRangeScale;
+		float AngleGainScale;
+		float MaxGap;
 		float pad0;
 	};
 

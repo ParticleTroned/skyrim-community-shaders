@@ -14,14 +14,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Enable,
 	BlendRange,
 	BlendGain,
+	SpecularFade,
 	BlendShapeMode,
 	EdgeStart,
 	EdgeEnd,
 	EdgeBoost,
+	EdgeSlopeMode,
+	EdgeSlopeScale,
 	AngleStartDeg,
 	AngleEndDeg,
 	AngleRangeScale,
 	AngleGainScale,
+	BypassAngleEdge,
 	MaxGap,
 	ReplayCullDistance,
 	ReplayCullMinPixels)
@@ -202,9 +206,12 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.BlendRange = settings.BlendRange;
 	data.BlendGain = settings.BlendGain;
 	data.BlendShapeMode = settings.BlendShapeMode;
+	data.SpecularFade = std::max(0.0f, settings.SpecularFade);
 	data.EdgeStart = std::max(0.0f, settings.EdgeStart);
 	data.EdgeEnd = std::max(data.EdgeStart + 1e-3f, settings.EdgeEnd);
 	data.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
+	data.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
+	data.EdgeSlopeScale = std::max(0.0f, settings.EdgeSlopeScale);
 	float angleStartDeg = std::max(0.0f, settings.AngleStartDeg);
 	float angleEndDeg = std::max(angleStartDeg + 1e-3f, settings.AngleEndDeg);
 	constexpr float kDegToRad = 3.14159265359f / 180.0f;
@@ -212,6 +219,7 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.AngleEndCos = std::cos(angleEndDeg * kDegToRad);
 	data.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
 	data.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
+	data.BypassAngleEdge = settings.BypassAngleEdge ? 1u : 0u;
 	data.MaxGap = 0.0f;
 	return data;
 }
@@ -222,6 +230,7 @@ void TerrainBlending::DrawSettings()
 		ImGui::Checkbox("Enable", &settings.Enable);
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 1.0f, 50.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Blend Gain", &settings.BlendGain, 0.5f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Specular Fade", &settings.SpecularFade, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::Combo("Blend Shape", (int*)&settings.BlendShapeMode, "Linear\0Squared\0Sqrt\0");
 		float edgeStartMax = std::max(1.0f, settings.BlendRange);
 		float edgeEndMax = std::max(2.0f, settings.BlendRange * 2.0f);
@@ -239,15 +248,21 @@ void TerrainBlending::DrawSettings()
 		edgeSlider("Edge Start", &settings.EdgeStart, edgeStartMax);
 		edgeSlider("Edge End", &settings.EdgeEnd, edgeEndMax);
 		ImGui::SliderFloat("Edge Boost", &settings.EdgeBoost, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::Combo("Edge Slope Mode", (int*)&settings.EdgeSlopeMode, "View\0Mesh\0None\0");
+		ImGui::SliderFloat("Edge Slope Scale", &settings.EdgeSlopeScale, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Angle Start", &settings.AngleStartDeg, 0.0f, 45.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Angle End", &settings.AngleEndDeg, 0.0f, 90.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Angle Range Scale", &settings.AngleRangeScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::Checkbox("Bypass Angle/Edge (Debug)", &settings.BypassAngleEdge);
 		ImGui::SliderFloat("Replay Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		settings.EdgeStart = std::max(0.0f, settings.EdgeStart);
 		settings.EdgeEnd = std::max(settings.EdgeEnd, settings.EdgeStart + 1e-3f);
 		settings.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
+		settings.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
+		settings.EdgeSlopeScale = std::max(0.0f, settings.EdgeSlopeScale);
+		settings.SpecularFade = std::max(0.0f, settings.SpecularFade);
 		settings.AngleStartDeg = std::max(0.0f, settings.AngleStartDeg);
 		settings.AngleEndDeg = std::max(settings.AngleEndDeg, settings.AngleStartDeg + 1e-3f);
 		settings.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
@@ -258,11 +273,15 @@ void TerrainBlending::DrawSettings()
 			ImGui::Text(
 				"Blend Range controls the depth range over which terrain blending fades.\n"
 				"Blend Gain scales the blend strength.\n"
+				"Specular Fade scales specular/reflectance during TB replay (0 = no extra fade).\n"
 				"Blend Shape controls the falloff curve.\n"
 				"Edge Start/End control the depth discontinuity needed for edge-only blending.\n"
-				"Edge Boost biases edge detection based on view-dependent slope.\n"
-				"Angle Start/End scale blending based on the angle between terrain and the object.\n"
-				"Angle Range/Gain Scale set the max multiplier at Angle End.\n"
+				"Edge Boost biases edge detection based on the chosen slope mode.\n"
+				"Edge Slope Mode picks view angle, mesh angle, or none.\n"
+				"Edge Slope Scale caps slope influence.\n"
+				"Angle Start/End scale edge sensitivity based on the angle between terrain and the object.\n"
+				"Angle Range/Gain Scale set the max edge multiplier at Angle End.\n"
+				"Bypass Angle/Edge disables angle scaling and slope-biased edge boost (debug).\n"
 				"Replay Cull Distance skips blending beyond the cutoff (0 disables).\n"
 				"Replay Cull Min Pixels skips blending for tiny projected patches (0 disables).\n"
 				"VR: adjust Blend Range/Gain to reduce floating seams.");
@@ -385,6 +404,14 @@ void TerrainBlending::ClearShaderCache()
 	if (depthBlendShader) {
 		depthBlendShader->Release();
 		depthBlendShader = nullptr;
+	}
+	if (terrainScissorState) {
+		terrainScissorState->Release();
+		terrainScissorState = nullptr;
+	}
+	if (terrainScissorBaseState) {
+		terrainScissorBaseState->Release();
+		terrainScissorBaseState = nullptr;
 	}
 }
 
@@ -663,6 +690,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	ScopedReplayFlag replayFlag(*this);
 
 	auto context = globals::d3d::context;
+	auto device = globals::d3d::device;
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 	const bool statsEnabled = TbStatsEnabled();
@@ -693,6 +721,163 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		UINT prevStencilRef = 0;
 		context->OMGetDepthStencilState(&prevDSS, &prevStencilRef);
 
+		ID3D11RasterizerState* prevRS = nullptr;
+		context->RSGetState(&prevRS);
+
+		UINT prevScissorCount = 0;
+		context->RSGetScissorRects(&prevScissorCount, nullptr);
+		std::vector<D3D11_RECT> prevScissorRects;
+		if (prevScissorCount > 0) {
+			prevScissorRects.resize(prevScissorCount);
+			context->RSGetScissorRects(&prevScissorCount, prevScissorRects.data());
+		}
+
+		UINT viewportCount = 0;
+		context->RSGetViewports(&viewportCount, nullptr);
+		std::vector<D3D11_VIEWPORT> viewports;
+		if (viewportCount > 0) {
+			viewports.resize(viewportCount);
+			context->RSGetViewports(&viewportCount, viewports.data());
+		}
+
+		bool scissorActive = false;
+		ID3D11RasterizerState* scissorState = prevRS;
+		if (prevRS && viewportCount > 0) {
+			D3D11_RASTERIZER_DESC rsDesc{};
+			prevRS->GetDesc(&rsDesc);
+			if (rsDesc.ScissorEnable) {
+				scissorActive = true;
+			} else if (device) {
+				if (terrainScissorBaseState != prevRS) {
+					if (terrainScissorState) {
+						terrainScissorState->Release();
+						terrainScissorState = nullptr;
+					}
+					if (terrainScissorBaseState) {
+						terrainScissorBaseState->Release();
+						terrainScissorBaseState = nullptr;
+					}
+
+					rsDesc.ScissorEnable = true;
+					if (SUCCEEDED(device->CreateRasterizerState(&rsDesc, &terrainScissorState))) {
+						terrainScissorBaseState = prevRS;
+						terrainScissorBaseState->AddRef();
+					}
+				}
+				if (terrainScissorState) {
+					scissorState = terrainScissorState;
+					scissorActive = true;
+				}
+			}
+		}
+		if (scissorState && scissorState != prevRS) {
+			context->RSSetState(scissorState);
+		}
+
+		std::vector<D3D11_RECT> scissorRects;
+		std::vector<D3D11_RECT> fullScissorRects;
+		Matrix viewMat[2]{};
+		Matrix projMat[2]{};
+		Matrix viewProjMat[2]{};
+		const bool vrEnabled = REL::Module::IsVR();
+		const uint32_t eyeCount = (vrEnabled && viewportCount >= 2) ? 2u : 1u;
+		if (scissorActive) {
+			scissorRects.resize(viewportCount);
+			fullScissorRects.resize(viewportCount);
+
+			for (uint32_t i = 0; i < viewportCount; ++i) {
+				const auto& vp = viewports[i];
+				const float vpLeft = vp.TopLeftX;
+				const float vpTop = vp.TopLeftY;
+				const float vpRight = vp.TopLeftX + vp.Width;
+				const float vpBottom = vp.TopLeftY + vp.Height;
+				fullScissorRects[i].left = static_cast<LONG>(std::floor(vpLeft));
+				fullScissorRects[i].top = static_cast<LONG>(std::floor(vpTop));
+				fullScissorRects[i].right = static_cast<LONG>(std::ceil(vpRight));
+				fullScissorRects[i].bottom = static_cast<LONG>(std::ceil(vpBottom));
+			}
+
+			auto& frameBuffer = globals::game::frameBufferCached;
+			for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+				viewMat[eye] = frameBuffer.GetCameraView(eye);
+				projMat[eye] = frameBuffer.GetCameraProjUnjittered(eye);
+				viewProjMat[eye] = frameBuffer.GetCameraViewProjUnjittered(eye);
+			}
+		}
+
+		auto setScissorForPass = [&](const RenderPass& renderPass) {
+			if (!scissorActive || viewportCount == 0) {
+				return;
+			}
+			if (!renderPass.a_pass || !renderPass.a_pass->geometry) {
+				context->RSSetScissorRects(viewportCount, fullScissorRects.data());
+				return;
+			}
+
+			const auto& worldBound = renderPass.a_pass->geometry->worldBound;
+			const float radius = worldBound.radius;
+			const float3 center = { worldBound.center.x, worldBound.center.y, worldBound.center.z };
+
+			for (uint32_t i = 0; i < viewportCount; ++i) {
+				const auto& vp = viewports[i];
+				const uint32_t eyeIndex = (eyeCount > 1) ? (i % eyeCount) : 0u;
+				const auto viewPos = DirectX::SimpleMath::Vector3::Transform(center, viewMat[eyeIndex]);
+
+				if (viewPos.z <= 1e-3f) {
+					scissorRects[i] = fullScissorRects[i];
+					continue;
+				}
+
+				const auto clipPos = DirectX::SimpleMath::Vector4::Transform(float4(center.x, center.y, center.z, 1.0f), viewProjMat[eyeIndex]);
+				if (clipPos.w <= 1e-3f) {
+					scissorRects[i] = fullScissorRects[i];
+					continue;
+				}
+
+				const float ndcX = clipPos.x / clipPos.w;
+				const float ndcY = clipPos.y / clipPos.w;
+				const float radiusNdcX = (radius * projMat[eyeIndex]._11) / viewPos.z;
+				const float radiusNdcY = (radius * projMat[eyeIndex]._22) / viewPos.z;
+
+				if (!std::isfinite(ndcX) || !std::isfinite(ndcY) || !std::isfinite(radiusNdcX) || !std::isfinite(radiusNdcY)) {
+					scissorRects[i] = fullScissorRects[i];
+					continue;
+				}
+
+				const float centerPxX = (ndcX * 0.5f + 0.5f) * vp.Width + vp.TopLeftX;
+				const float centerPxY = (-ndcY * 0.5f + 0.5f) * vp.Height + vp.TopLeftY;
+				const float radiusPxX = std::abs(radiusNdcX) * 0.5f * vp.Width;
+				const float radiusPxY = std::abs(radiusNdcY) * 0.5f * vp.Height;
+
+				float left = centerPxX - radiusPxX;
+				float right = centerPxX + radiusPxX;
+				float top = centerPxY - radiusPxY;
+				float bottom = centerPxY + radiusPxY;
+
+				const float vpLeft = vp.TopLeftX;
+				const float vpTop = vp.TopLeftY;
+				const float vpRight = vp.TopLeftX + vp.Width;
+				const float vpBottom = vp.TopLeftY + vp.Height;
+
+				left = std::clamp(left, vpLeft, vpRight);
+				right = std::clamp(right, vpLeft, vpRight);
+				top = std::clamp(top, vpTop, vpBottom);
+				bottom = std::clamp(bottom, vpTop, vpBottom);
+
+				if (right <= left || bottom <= top) {
+					scissorRects[i] = fullScissorRects[i];
+					continue;
+				}
+
+				scissorRects[i].left = static_cast<LONG>(std::floor(left));
+				scissorRects[i].top = static_cast<LONG>(std::floor(top));
+				scissorRects[i].right = static_cast<LONG>(std::ceil(right));
+				scissorRects[i].bottom = static_cast<LONG>(std::ceil(bottom));
+			}
+
+			context->RSSetScissorRects(viewportCount, scissorRects.data());
+		};
+
 		GET_INSTANCE_MEMBER(alphaBlendMode, shadowState)
 		GET_INSTANCE_MEMBER(alphaBlendWriteMode, shadowState)
 		GET_INSTANCE_MEMBER(depthStencilDepthMode, shadowState)
@@ -705,8 +890,10 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		// Enable rendering for depth below the surface
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
-		for (auto& renderPass : terrainRenderPasses)
+		for (auto& renderPass : terrainRenderPasses) {
+			setScissorForPass(renderPass);
 			drawPass(renderPass);
+		}
 
 		// Reset alpha blending
 		alphaBlendMode = 0;
@@ -716,13 +903,26 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		depthStencilDepthMode = RE::BSGraphics::DepthStencilDepthMode::kTestEqual;
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 
-		for (auto& renderPass : renderPasses)
+		for (auto& renderPass : renderPasses) {
+			setScissorForPass(renderPass);
 			drawPass(renderPass);
+		}
 
 		context->OMSetDepthStencilState(prevDSS, prevStencilRef);
 		if (prevDSS) {
 			prevDSS->Release();
 			prevDSS = nullptr;
+		}
+
+		if (prevRS || scissorState) {
+			context->RSSetState(prevRS);
+		}
+		if (prevScissorCount > 0 && !prevScissorRects.empty()) {
+			context->RSSetScissorRects(prevScissorCount, prevScissorRects.data());
+		}
+		if (prevRS) {
+			prevRS->Release();
+			prevRS = nullptr;
 		}
 
 		terrainRenderPasses.clear();

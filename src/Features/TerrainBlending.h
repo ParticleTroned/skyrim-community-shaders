@@ -36,16 +36,20 @@ public:
 	struct Settings
 	{
 		bool Enable = true;
-		float BlendRange = 20.0f;
+		float BlendRange = 10.0f;
 		float BlendGain = 1.0f;
+		float SpecularFade = 1.0f;
 		uint BlendShapeMode = 0;
 		float EdgeStart = 0.001f;
 		float EdgeEnd = 0.14f;
 		float EdgeBoost = 1.0f;
+		uint EdgeSlopeMode = 1;
+		float EdgeSlopeScale = 1.0f;
 		float AngleStartDeg = 0.0f;
-		float AngleEndDeg = 5.0f;
+		float AngleEndDeg = 25.0f;
 		float AngleRangeScale = 0.25f;
-		float AngleGainScale = 1.0f;
+		float AngleGainScale = 1f;
+		bool BypassAngleEdge = false;
 		float MaxGap = 0.0f;
 		float ReplayCullDistance = 2048.0f;
 		float ReplayCullMinPixels = 0.0f;
@@ -56,14 +60,18 @@ public:
 		float BlendRange;
 		float BlendGain;
 		uint BlendShapeMode;
+		float SpecularFade;
 		float EdgeStart;
 		float EdgeEnd;
 		float EdgeBoost;
+		uint EdgeSlopeMode;
+		float EdgeSlopeScale;
 		float AngleStartCos;
 		float AngleEndCos;
 		float AngleRangeScale;
 		float AngleGainScale;
 		float MaxGap;
+		uint BypassAngleEdge;
 		float pad0;
 	};
 
@@ -107,6 +115,8 @@ public:
 	RE::BSGraphics::DepthStencilData terrainDepth;
 
 	ID3D11DepthStencilState* terrainDepthStencilState = nullptr;
+	ID3D11RasterizerState* terrainScissorState = nullptr;
+	ID3D11RasterizerState* terrainScissorBaseState = nullptr;
 
 	ID3D11ShaderResourceView* depthSRVBackup = nullptr;
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;

@@ -1023,15 +1023,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(TERRAIN_BLENDING)
 	float blendFactorTerrain = 1.0;
+	float terrainSpecularFade = 1.0;
+	uint bypassAngleEdge = 0;
+	bool tbActive = false;
+	float depthSampledLinear = 0.0;
+	float depthPixelLinear = 0.0;
+	float depthRLinear = 0.0;
+	float depthDLinear = 0.0;
+	float maxDiff = 0.0;
+	float frontGap = 0.0;
+	const float gapEps = 1e-4;
 	if (SharedData::TerrainBlendingReplayActive != 0) {
+		tbActive = true;
+		bypassAngleEdge = SharedData::terrainBlendingSettings.BypassAngleEdge;
 		float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
 
-		float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
-		float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
+		depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
+		depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 		float blendRange = max(1e-3, SharedData::terrainBlendingSettings.BlendRange);
 		float blendGain = SharedData::terrainBlendingSettings.BlendGain;
-
-		float3 nCurrentVS = normalize(cross(ddx(viewPosition), ddy(viewPosition)));
 
 		uint tbW, tbH;
 		TerrainBlending::TerrainBlendingMaskTexture.GetDimensions(tbW, tbH);
@@ -1044,35 +1054,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float depthR = TerrainBlending::TerrainBlendingMaskTexture[pR].x;
 		float depthD = TerrainBlending::TerrainBlendingMaskTexture[pD].x;
 
-		float depthRLinear = SharedData::GetScreenDepth(depthR);
-		float depthDLinear = SharedData::GetScreenDepth(depthD);
+		depthRLinear = SharedData::GetScreenDepth(depthR);
+		depthDLinear = SharedData::GetScreenDepth(depthD);
 
-		float maxDiff = max(abs(depthRLinear - depthSampledLinear), abs(depthDLinear - depthSampledLinear));
-		float frontGap = depthPixelLinear - depthSampledLinear;
-		const float gapEps = 1e-4;
-
-		{
-			float3 viewPosCenter = viewPosition;
-			float3 viewPosRightApprox = viewPosition + ddx(viewPosition);
-			float3 viewPosDownApprox = viewPosition + ddy(viewPosition);
-			float3 viewPosMaskCenter = normalize(viewPosCenter) * depthSampledLinear;
-			float3 viewPosMaskRight = normalize(viewPosRightApprox) * depthRLinear;
-			float3 viewPosMaskDown = normalize(viewPosDownApprox) * depthDLinear;
-
-			float3 nMaskVS = cross(viewPosMaskRight - viewPosMaskCenter, viewPosMaskDown - viewPosMaskCenter);
-			float nMaskLenSq = dot(nMaskVS, nMaskVS);
-			if (nMaskLenSq > 1e-6) {
-				nMaskVS *= rsqrt(nMaskLenSq);
-				float cosAngle = saturate(abs(dot(nCurrentVS, nMaskVS)));
-				float cosStart = SharedData::terrainBlendingSettings.AngleStartCos;
-				float cosEnd = SharedData::terrainBlendingSettings.AngleEndCos;
-				float angleT = saturate((cosStart - cosAngle) / max(1e-3, cosStart - cosEnd));
-				float rangeScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleRangeScale, angleT);
-				float gainScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleGainScale, angleT);
-				blendRange = max(1e-3, blendRange * rangeScale);
-				blendGain *= gainScale;
-			}
-		}
+		maxDiff = max(abs(depthRLinear - depthSampledLinear), abs(depthDLinear - depthSampledLinear));
+		frontGap = depthPixelLinear - depthSampledLinear;
 
 		float dz = abs(depthPixelLinear - depthSampledLinear);
 		blendFactorTerrain = 1.0 - saturate(dz / blendRange);
@@ -1085,20 +1071,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 
 		blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
-
-		float edgeFactor = 1.0;
-		if (frontGap > gapEps) {
-			// Edge-only blending: detect local depth discontinuities in the TB mask.
-			float3 viewDirVS = normalize(-viewPosition);
-			float slope = 1.0 - abs(dot(nCurrentVS, viewDirVS));
-
-			float edgeBoost = max(0.0, SharedData::terrainBlendingSettings.EdgeBoost);
-			float biasedGrad = maxDiff * (1.0 + edgeBoost * slope);
-			float edgeStart = max(0.0, SharedData::terrainBlendingSettings.EdgeStart);
-			float edgeEnd = max(edgeStart + 1e-3, SharedData::terrainBlendingSettings.EdgeEnd);
-			edgeFactor = saturate((biasedGrad - edgeStart) / max(1e-3, edgeEnd - edgeStart));
-		}
-		blendFactorTerrain *= edgeFactor;
 
 		if (blendFactorTerrain <= 0.001) {
 			clip(-1);
@@ -2158,6 +2130,71 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	float3 screenSpaceNormal = normalize(FrameBuffer::WorldToView(worldNormal, false, eyeIndex));
+
+#	if defined(TERRAIN_BLENDING)
+	if (tbActive) {
+		float angleRangeScale = 1.0;
+		float angleGainScale = 1.0;
+		float3 nMaskVS = 0.0.xxx;
+		bool nMaskValid = false;
+
+		float3 nCurrentVS = normalize(FrameBuffer::WorldToView(worldNormal, false, eyeIndex));
+
+		if (bypassAngleEdge == 0) {
+			float3 viewPosCenter = viewPosition;
+			float3 viewPosRightApprox = viewPosition + ddx(viewPosition);
+			float3 viewPosDownApprox = viewPosition + ddy(viewPosition);
+			float3 viewPosMaskCenter = normalize(viewPosCenter) * depthSampledLinear;
+			float3 viewPosMaskRight = normalize(viewPosRightApprox) * depthRLinear;
+			float3 viewPosMaskDown = normalize(viewPosDownApprox) * depthDLinear;
+
+			nMaskVS = cross(viewPosMaskRight - viewPosMaskCenter, viewPosMaskDown - viewPosMaskCenter);
+			float nMaskLenSq = dot(nMaskVS, nMaskVS);
+			if (nMaskLenSq > 1e-6) {
+				nMaskVS *= rsqrt(nMaskLenSq);
+				nMaskValid = true;
+				float cosAngle = saturate(abs(dot(nCurrentVS, nMaskVS)));
+				float cosStart = SharedData::terrainBlendingSettings.AngleStartCos;
+				float cosEnd = SharedData::terrainBlendingSettings.AngleEndCos;
+				float angleT = saturate((cosStart - cosAngle) / max(1e-3, cosStart - cosEnd));
+				angleRangeScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleRangeScale, angleT);
+				angleGainScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleGainScale, angleT);
+			}
+		}
+
+		float edgeFactor = 1.0;
+		if (frontGap > gapEps) {
+			// Edge-only blending: detect local depth discontinuities in the TB mask.
+			float edgeBoost = max(0.0, SharedData::terrainBlendingSettings.EdgeBoost);
+			float slope = 0.0;
+			if (bypassAngleEdge != 0) {
+				edgeBoost = 0.0;
+			} else if (edgeBoost > 0.0) {
+				uint slopeMode = SharedData::terrainBlendingSettings.EdgeSlopeMode;
+				if (slopeMode == 0) {
+					float3 viewDirVS = normalize(-viewPosition);
+					slope = 1.0 - abs(dot(nCurrentVS, viewDirVS));
+				} else if (slopeMode == 1 && nMaskValid) {
+					slope = 1.0 - abs(dot(nCurrentVS, nMaskVS));
+				}
+			}
+			float slopeScale = max(0.0, SharedData::terrainBlendingSettings.EdgeSlopeScale);
+			slope = saturate(slope * slopeScale);
+			float biasedGrad = maxDiff * (1.0 + edgeBoost * slope);
+			biasedGrad *= angleRangeScale;
+			float edgeStart = max(0.0, SharedData::terrainBlendingSettings.EdgeStart);
+			float edgeEnd = max(edgeStart + 1e-3, SharedData::terrainBlendingSettings.EdgeEnd);
+			edgeFactor = saturate((biasedGrad - edgeStart) / max(1e-3, edgeEnd - edgeStart));
+			edgeFactor = saturate(edgeFactor * angleGainScale);
+		}
+		blendFactorTerrain *= edgeFactor;
+
+		float specularFade = max(0.0, SharedData::terrainBlendingSettings.SpecularFade);
+		if (specularFade > 0.0) {
+			terrainSpecularFade = pow(max(1e-4, blendFactorTerrain), specularFade);
+		}
+	}
+#	endif
 
 #	if defined(HAIR) && defined(CS_HAIR)
 	float3 Bitangent = normalize(float3(input.TBN0.y, input.TBN1.y, input.TBN2.y));
@@ -3446,6 +3483,13 @@ if (alpha - AlphaTestRefRS < 0) {
 #			endif
 #		endif
 
+#		if defined(TERRAIN_BLENDING)
+	if (SharedData::TerrainBlendingReplayActive != 0) {
+		psout.Specular.xyz *= terrainSpecularFade;
+		psout.Reflectance.xyz *= terrainSpecularFade;
+	}
+#		endif
+
 #		if defined(SSS) && defined(SKIN)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
 #		else
@@ -3453,6 +3497,11 @@ if (alpha - AlphaTestRefRS < 0) {
 #		endif
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
+#		if defined(TERRAIN_BLENDING)
+	if (SharedData::TerrainBlendingReplayActive != 0) {
+		stochasticBlend = psout.Diffuse.w;
+	}
+#		endif
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 

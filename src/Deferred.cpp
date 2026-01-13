@@ -430,9 +430,6 @@ void Deferred::DeferredPasses()
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 	if (dynamicCubemaps.loaded)
 		dynamicCubemaps.UpdateCubemap();
-
-	auto& terrainBlending = globals::features::terrainBlending;
-
 	auto& ibl = globals::features::ibl;
 
 	// Deferred Composite
@@ -444,7 +441,7 @@ void Deferred::DeferredPasses()
 			albedo.SRV,
 			normalRoughness.SRV,
 			masks.SRV,
-			dynamicCubemaps.loaded || REL::Module::IsVR() ? (terrainBlending.loaded ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
+			dynamicCubemaps.loaded || REL::Module::IsVR() ? depth.depthSRV : nullptr,
 			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,

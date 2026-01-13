@@ -1022,35 +1022,38 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(TERRAIN_BLENDING)
-	float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
+	float blendFactorTerrain = 1.0;
+	if (SharedData::TerrainBlendingReplayActive != 0) {
+		float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
 
-	float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
-	float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
+		float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
+		float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
-	float blendRange = SharedData::terrainBlendingSettings.BlendRange;
-	float dz = abs(depthPixelLinear - depthSampledLinear);
-	float blendFactorTerrain = 1.0 - saturate(dz / blendRange);
+		float blendRange = SharedData::terrainBlendingSettings.BlendRange;
+		float dz = abs(depthPixelLinear - depthSampledLinear);
+		blendFactorTerrain = 1.0 - saturate(dz / blendRange);
 
-	uint shapeMode = SharedData::terrainBlendingSettings.BlendShapeMode;
-	if (shapeMode == 1) {
-		blendFactorTerrain = blendFactorTerrain * blendFactorTerrain;
-	} else if (shapeMode == 2) {
-		blendFactorTerrain = sqrt(blendFactorTerrain);
-	}
+		uint shapeMode = SharedData::terrainBlendingSettings.BlendShapeMode;
+		if (shapeMode == 1) {
+			blendFactorTerrain = blendFactorTerrain * blendFactorTerrain;
+		} else if (shapeMode == 2) {
+			blendFactorTerrain = sqrt(blendFactorTerrain);
+		}
 
-	float blendGain = SharedData::terrainBlendingSettings.BlendGain;
-	blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
+		float blendGain = SharedData::terrainBlendingSettings.BlendGain;
+		blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
 
-	// Max-gap fade-out: stop blending when the depth gap is too large.
-	const float maxGapMul = 3.0;
-	const float fadeOutMul = 1.0;
-	float maxGap = blendRange * maxGapMul;
-	float fadeOut = blendRange * fadeOutMul;
-	float farFade = 1.0 - saturate((dz - maxGap) / max(1e-3, fadeOut));
-	blendFactorTerrain *= farFade;
+		// Max-gap fade-out: stop blending when the depth gap is too large.
+		const float maxGapMul = 3.0;
+		const float fadeOutMul = 1.0;
+		float maxGap = blendRange * maxGapMul;
+		float fadeOut = blendRange * fadeOutMul;
+		float farFade = 1.0 - saturate((dz - maxGap) / max(1e-3, fadeOut));
+		blendFactorTerrain *= farFade;
 
-	if (SharedData::TerrainBlendingReplayActive != 0 && blendFactorTerrain <= 0.001) {
-		clip(-1);
+		if (blendFactorTerrain <= 0.001) {
+			clip(-1);
+		}
 	}
 #	endif
 

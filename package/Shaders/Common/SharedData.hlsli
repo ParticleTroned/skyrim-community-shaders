@@ -202,7 +202,6 @@ namespace SharedData
 		float BlendRange;
 		float BlendGain;
 		uint BlendShapeMode;
-		float SpecularFade;
 		float EdgeStart;
 		float EdgeEnd;
 		float EdgeBoost;
@@ -213,12 +212,9 @@ namespace SharedData
 		float AngleRangeScale;
 		float AngleGainScale;
 		float MaxGap;
-		float DepthOffsetPixels;
 		uint BypassAngleEdge;
 		float pad0;
 		float pad1;
-		float pad2;
-		float pad3;
 	};
 
 	cbuffer FeatureData : register(b6)

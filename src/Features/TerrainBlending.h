@@ -38,7 +38,6 @@ public:
 		bool Enable = true;
 		float BlendRange = 10.0f;
 		float BlendGain = 1.0f;
-		float SpecularFade = 1.0f;
 		uint BlendShapeMode = 0;
 		float EdgeStart = 0.001f;
 		float EdgeEnd = 0.055f;
@@ -46,13 +45,12 @@ public:
 		uint EdgeSlopeMode = 1;
 		float EdgeSlopeScale = 1.0f;
 		float AngleStartDeg = 0.0f;
-		float AngleEndDeg = 25.0f;
+		float AngleEndDeg = 12.5f;
 		float AngleRangeScale = 0.25f;
 		float AngleGainScale = 1.0f;
 		bool BypassAngleEdge = false;
 		float MaxGap = 0.0f;
-		float DepthOffsetPixels = 0.0f;
-		float ReplayCullDistance = 2048.0f;
+		float ReplayCullDistance = 768.0f;
 		float ReplayCullMinPixels = 0.0f;
 	};
 
@@ -61,7 +59,6 @@ public:
 		float BlendRange;
 		float BlendGain;
 		uint BlendShapeMode;
-		float SpecularFade;
 		float EdgeStart;
 		float EdgeEnd;
 		float EdgeBoost;
@@ -72,12 +69,9 @@ public:
 		float AngleRangeScale;
 		float AngleGainScale;
 		float MaxGap;
-		float DepthOffsetPixels;
 		uint BypassAngleEdge;
 		float pad0;
 		float pad1;
-		float pad2;
-		float pad3;
 	};
 
 	Settings settings;

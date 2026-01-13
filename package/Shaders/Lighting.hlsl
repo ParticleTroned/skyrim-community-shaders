@@ -1023,7 +1023,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(TERRAIN_BLENDING)
 	float blendFactorTerrain = 1.0;
-	float terrainSpecularFade = 1.0;
 	uint bypassAngleEdge = 0;
 	bool tbActive = false;
 	float depthSampledLinear = 0.0;
@@ -1040,13 +1039,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 		depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
-		float depthOffsetPixels = SharedData::terrainBlendingSettings.DepthOffsetPixels;
-		if (depthOffsetPixels != 0.0) {
-			float projY = FrameBuffer::CameraProj[eyeIndex]._22;
-			float screenHeight = max(1.0, SharedData::BufferDim.y);
-			float pixelWorld = (2.0 * depthPixelLinear) / max(1e-4, projY * screenHeight);
-			depthPixelLinear += (-depthOffsetPixels) * pixelWorld;
-		}
 		float blendRange = max(1e-3, SharedData::terrainBlendingSettings.BlendRange);
 		float blendGain = SharedData::terrainBlendingSettings.BlendGain;
 
@@ -1078,10 +1070,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 
 		blendFactorTerrain = saturate(blendFactorTerrain * blendGain);
-
-		if (blendFactorTerrain <= 0.001) {
-			clip(-1);
-		}
 	}
 #	endif
 
@@ -2196,9 +2184,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		blendFactorTerrain *= edgeFactor;
 
-		float specularFade = max(0.0, SharedData::terrainBlendingSettings.SpecularFade);
-		if (specularFade > 0.0) {
-			terrainSpecularFade = pow(max(1e-4, blendFactorTerrain), specularFade);
+		if (blendFactorTerrain <= 0.001) {
+			clip(-1);
 		}
 	}
 #	endif
@@ -3490,13 +3477,6 @@ if (alpha - AlphaTestRefRS < 0) {
 #			endif
 #		endif
 
-#		if defined(TERRAIN_BLENDING)
-	if (SharedData::TerrainBlendingReplayActive != 0) {
-		psout.Specular.xyz *= terrainSpecularFade;
-		psout.Reflectance.xyz *= terrainSpecularFade;
-	}
-#		endif
-
 #		if defined(SSS) && defined(SKIN)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
 #		else
@@ -3511,6 +3491,7 @@ if (alpha - AlphaTestRefRS < 0) {
 #		endif
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
+
 
 	return psout;
 }

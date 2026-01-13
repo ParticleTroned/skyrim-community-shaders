@@ -592,7 +592,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	};
 
 	// Used to get the distance of the surface to the lowest depth
-	ID3D11ShaderResourceView* view = blendedDepthTexture16 ? blendedDepthTexture16->srv.get() : nullptr;
+	ID3D11ShaderResourceView* view = blendedDepthTexture ? blendedDepthTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(55, 1, &view);
 
 	if (!terrainRenderPasses.empty() || !renderPasses.empty()) {

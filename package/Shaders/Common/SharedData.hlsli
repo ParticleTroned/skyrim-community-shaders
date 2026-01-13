@@ -200,21 +200,17 @@ namespace SharedData
 	struct TerrainBlendingSettings
 	{
 		float BlendRange;
-		float BlendGain;
 		uint BlendShapeMode;
+		uint BlendMode;
+		uint DitherMode;
 		float EdgeStart;
 		float EdgeEnd;
-		float EdgeBoost;
 		uint EdgeSlopeMode;
-		float EdgeSlopeScale;
 		float AngleStartCos;
 		float AngleEndCos;
 		float AngleRangeScale;
 		float AngleGainScale;
-		float MaxGap;
 		uint BypassAngleEdge;
-		float pad0;
-		float pad1;
 	};
 
 	cbuffer FeatureData : register(b6)

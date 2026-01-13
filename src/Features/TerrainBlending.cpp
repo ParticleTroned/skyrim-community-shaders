@@ -13,19 +13,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
 	Enable,
 	BlendRange,
-	BlendGain,
 	BlendShapeMode,
+	BlendMode,
+	DitherMode,
 	EdgeStart,
 	EdgeEnd,
-	EdgeBoost,
 	EdgeSlopeMode,
-	EdgeSlopeScale,
 	AngleStartDeg,
 	AngleEndDeg,
 	AngleRangeScale,
 	AngleGainScale,
 	BypassAngleEdge,
-	MaxGap,
 	ReplayCullDistance,
 	ReplayCullMinPixels)
 
@@ -85,6 +83,25 @@ namespace
 	bool TbStatsEnabled()
 	{
 		return g_tbStatsEnabled.load(std::memory_order_relaxed);
+	}
+
+	TerrainBlending::Settings MakeDefaultSettings(uint blendMode, uint ditherMode)
+	{
+		TerrainBlending::Settings defaults{};
+		defaults.BlendMode = std::min<uint>(blendMode, 1u);
+		defaults.DitherMode = std::min<uint>(ditherMode, 2u);
+
+		if (defaults.BlendMode == 0) {
+			// Alpha defaults.
+			defaults.BlendRange = 10.0f;
+			defaults.AngleGainScale = 1.0f;
+		} else {
+			// Stochastic defaults (applies to both 4x4 and noise).
+			defaults.BlendRange = 5.0f;
+			defaults.AngleGainScale = 3.0f;
+		}
+
+		return defaults;
 	}
 }
 
@@ -203,13 +220,12 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 {
 	PerFrame data{};
 	data.BlendRange = settings.BlendRange;
-	data.BlendGain = settings.BlendGain;
 	data.BlendShapeMode = settings.BlendShapeMode;
+	data.BlendMode = std::min<uint>(settings.BlendMode, 1u);
+	data.DitherMode = std::min<uint>(settings.DitherMode, 2u);
 	data.EdgeStart = std::max(0.0f, settings.EdgeStart);
 	data.EdgeEnd = std::max(data.EdgeStart + 1e-3f, settings.EdgeEnd);
-	data.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
 	data.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
-	data.EdgeSlopeScale = std::max(0.0f, settings.EdgeSlopeScale);
 	float angleStartDeg = std::max(0.0f, settings.AngleStartDeg);
 	float angleEndDeg = std::max(angleStartDeg + 1e-3f, settings.AngleEndDeg);
 	constexpr float kDegToRad = 3.14159265359f / 180.0f;
@@ -218,69 +234,88 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
 	data.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
 	data.BypassAngleEdge = settings.BypassAngleEdge ? 1u : 0u;
-	data.MaxGap = 0.0f;
 	return data;
 }
 
 void TerrainBlending::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+		auto tooltip = [](const char* text) {
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(text);
+			}
+		};
+
 		ImGui::Checkbox("Enable", &settings.Enable);
+		tooltip("Toggle terrain overlay blending.");
+		ImGui::Spacing();
+
+		ImGui::Text("Performance");
+		ImGui::Separator();
+		ImGui::SliderFloat("Replay Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Skip blending beyond this distance (0 disables).");
+		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Skip blending for tiny projected patches (0 disables).");
+		ImGui::Spacing();
+
+		ImGui::Text("Blending");
+		ImGui::Separator();
 		ImGui::SliderFloat("Blend Range", &settings.BlendRange, 1.0f, 50.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat("Blend Gain", &settings.BlendGain, 0.5f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Depth range over which the blend fades.");
 		ImGui::Combo("Blend Shape", (int*)&settings.BlendShapeMode, "Linear\0Squared\0Sqrt\0");
+		tooltip("Falloff curve for the blend.");
+		ImGui::Combo("Blend Mode", (int*)&settings.BlendMode, "Alpha\0Stochastic\0");
+		tooltip("Alpha blending or stochastic coverage.");
+		if (settings.BlendMode == 1) {
+			ImGui::Combo("Dither Mode", (int*)&settings.DitherMode, "Ordered 4x4\0Ordered 8x8\0Noise\0");
+			tooltip("Ordered or noise dither for stochastic coverage.");
+		}
+		ImGui::Spacing();
+
+		ImGui::Text("Edge Detection");
+		ImGui::Separator();
 		float edgeStartMax = std::max(1.0f, settings.BlendRange);
 		float edgeEndMax = std::max(2.0f, settings.BlendRange * 2.0f);
-		constexpr float edgeExponent = 3.0f;
-		auto edgeSlider = [&](const char* label, float* value, float maxValue) {
+		constexpr float edgeExponent = 4.0f;
+		auto edgeSlider = [&](const char* label, float* value, float maxValue, const char* help) {
 			float clampedValue = std::min(std::max(*value, 0.0f), maxValue);
 			float normalized = maxValue > 0.0f ? std::pow(clampedValue / maxValue, 1.0f / edgeExponent) : 0.0f;
 			if (ImGui::SliderFloat(label, &normalized, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 				clampedValue = std::pow(normalized, edgeExponent) * maxValue;
 			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(help);
+			}
 			*value = clampedValue;
 			ImGui::SameLine();
 			ImGui::Text("%.3f", *value);
 		};
-		edgeSlider("Edge Start", &settings.EdgeStart, edgeStartMax);
-		edgeSlider("Edge End", &settings.EdgeEnd, edgeEndMax);
-		ImGui::SliderFloat("Edge Boost", &settings.EdgeBoost, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		edgeSlider("Edge Start", &settings.EdgeStart, edgeStartMax, "Depth discontinuity where edge blending begins.");
+		edgeSlider("Edge End", &settings.EdgeEnd, edgeEndMax, "Depth discontinuity where edge blending is full.");
 		ImGui::Combo("Edge Slope Mode", (int*)&settings.EdgeSlopeMode, "View\0Mesh\0None\0");
-		ImGui::SliderFloat("Edge Slope Scale", &settings.EdgeSlopeScale, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Slope source for edge bias.");
 		ImGui::SliderFloat("Angle Start", &settings.AngleStartDeg, 0.0f, 45.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Angle where edge scaling begins.");
 		ImGui::SliderFloat("Angle End", &settings.AngleEndDeg, 0.0f, 90.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Angle where edge scaling is full.");
 		ImGui::SliderFloat("Angle Range Scale", &settings.AngleRangeScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Edge range multiplier at Angle End.");
+		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Edge gain multiplier at Angle End.");
 		ImGui::Checkbox("Bypass Angle/Edge (Debug)", &settings.BypassAngleEdge);
-		ImGui::SliderFloat("Replay Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Disable angle scaling and slope bias (debug).");
+
 		settings.EdgeStart = std::max(0.0f, settings.EdgeStart);
 		settings.EdgeEnd = std::max(settings.EdgeEnd, settings.EdgeStart + 1e-3f);
-		settings.EdgeBoost = std::max(0.0f, settings.EdgeBoost);
 		settings.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
-		settings.EdgeSlopeScale = std::max(0.0f, settings.EdgeSlopeScale);
+		settings.BlendMode = std::min<uint>(settings.BlendMode, 1u);
+		settings.DitherMode = std::min<uint>(settings.DitherMode, 2u);
 		settings.AngleStartDeg = std::max(0.0f, settings.AngleStartDeg);
 		settings.AngleEndDeg = std::max(settings.AngleEndDeg, settings.AngleStartDeg + 1e-3f);
 		settings.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
 		settings.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
 		settings.ReplayCullDistance = std::max(0.0f, settings.ReplayCullDistance);
 		settings.ReplayCullMinPixels = std::max(0.0f, settings.ReplayCullMinPixels);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Blend Range controls the depth range over which terrain blending fades.\n"
-				"Blend Gain scales the blend strength.\n"
-				"Blend Shape controls the falloff curve.\n"
-				"Edge Start/End control the depth discontinuity needed for edge-only blending.\n"
-				"Edge Boost biases edge detection based on the chosen slope mode.\n"
-				"Edge Slope Mode picks view angle, mesh angle, or none.\n"
-				"Edge Slope Scale caps slope influence.\n"
-				"Angle Start/End scale edge sensitivity based on the angle between terrain and the object.\n"
-				"Angle Range/Gain Scale set the max edge multiplier at Angle End.\n"
-				"Bypass Angle/Edge disables angle scaling and slope-biased edge boost (debug).\n"
-				"Replay Cull Distance skips blending beyond the cutoff (0 disables).\n"
-				"Replay Cull Min Pixels skips blending for tiny projected patches (0 disables).\n"
-				"VR: adjust Blend Range/Gain to reduce floating seams.");
-		}
 		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::TreePop();
@@ -299,7 +334,7 @@ void TerrainBlending::SaveSettings(json& o_json)
 
 void TerrainBlending::RestoreDefaultSettings()
 {
-	settings = {};
+	settings = MakeDefaultSettings(settings.BlendMode, settings.DitherMode);
 }
 
 void TerrainBlending::TerrainShaderHacks()

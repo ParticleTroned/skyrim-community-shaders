@@ -3,19 +3,19 @@
 struct TerrainBlending : Feature
 {
 public:
-	virtual inline std::string GetName() override { return "Terrain Overlay VR"; }
+	virtual inline std::string GetName() override { return "Terrain Blending"; }
 	virtual inline std::string GetShortName() override { return "TerrainBlending"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_BLENDING"; }
 	virtual std::string_view GetCategory() const override { return "Landscape & Textures"; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides VR-friendly terrain overlay blending with edge-aware, angle-scaled fades to soften object-ground seams without affecting shadow stability.",
-			{ "Terrain-to-object overlay blending tuned for VR",
-				"Edge-only blending using depth-mask discontinuities",
-				"Angle-aware blend range/gain for steep seams",
-				"Configurable blend shape and edge thresholds",
-				"Isolated depth usage to avoid shadow swimming" }
+			"Provides seamless blending between terrain and objects, eliminating harsh transitions where objects meet the ground for more natural-looking landscapes.",
+			{ "Seamless terrain-to-object blending transitions",
+				"Advanced depth buffer manipulation for smooth integration",
+				"Support for alternative terrain rendering modes",
+				"Multi-pass rendering optimization for complex scenes",
+				"Enhanced visual continuity in landscape interactions" }
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
@@ -33,53 +33,9 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 
-	struct Settings
-	{
-		bool Enable = true;
-		float BlendRange = 5.0f;
-		uint BlendShapeMode = 2;
-		uint BlendMode = 1;
-		uint DitherMode = 2;
-		float EdgeStart = 0.001f;
-		float EdgeEnd = 0.055f;
-		uint EdgeSlopeMode = 1;
-		float AngleStartDeg = 0.0f;
-		float AngleEndDeg = 12.5f;
-		float AngleRangeScale = 0.25f;
-		float AngleGainScale = 3.0f;
-		bool BypassAngleEdge = false;
-		float ReplayCullDistance = 768.0f;
-		float ReplayCullMinPixels = 0.0f;
-	};
-
-	struct alignas(16) PerFrame
-	{
-		float BlendRange;
-		uint BlendShapeMode;
-		uint BlendMode;
-		uint DitherMode;
-		float EdgeStart;
-		float EdgeEnd;
-		uint EdgeSlopeMode;
-		float AngleStartCos;
-		float AngleEndCos;
-		float AngleRangeScale;
-		float AngleGainScale;
-		uint BypassAngleEdge;
-	};
-
-	Settings settings;
-
-	PerFrame GetCommonBufferData();
-	virtual void DrawSettings() override;
-	virtual void LoadSettings(json& o_json) override;
-	virtual void SaveSettings(json& o_json) override;
-	virtual void RestoreDefaultSettings() override;
-
 	bool renderDepth = false;
 	bool renderTerrainDepth = false;
 	bool renderAltTerrain = false;
-	bool inTBReplay = false;
 
 	RE::NiPoint3 averageEyePosition;
 
@@ -99,8 +55,6 @@ public:
 	void ResetDepth();
 	void ResetTerrainDepth();
 	void BlendPrepassDepths();
-	void ToggleDebugCapture();
-	void DumpDebugStats();
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;
@@ -108,8 +62,6 @@ public:
 	RE::BSGraphics::DepthStencilData terrainDepth;
 
 	ID3D11DepthStencilState* terrainDepthStencilState = nullptr;
-	ID3D11RasterizerState* terrainScissorState = nullptr;
-	ID3D11RasterizerState* terrainScissorBaseState = nullptr;
 
 	ID3D11ShaderResourceView* depthSRVBackup = nullptr;
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;
@@ -142,9 +94,8 @@ public:
 			// To manipulate the depth buffer write, depth testing, alpha blending
 			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
 
-			logger::info("[Terrain Overlay] Installed hooks");
+			logger::info("[Terrain Blending] Installed hooks");
 		}
 	};
-	virtual bool SupportsVR() override { return true; };
-	virtual bool IsCore() const override { return true; };
+	virtual bool SupportsVR() override { return false; };
 };

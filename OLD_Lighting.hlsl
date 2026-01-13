@@ -187,7 +187,7 @@ VS_OUTPUT main(VS_INPUT input)
 	);
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
 	inputPosition = LodLandscape::AdjustLodLandscapeVertexPositionMS(inputPosition, float4x4(World[eyeIndex], float4(0, 0, 0, 1)), HighDetailRange[eyeIndex]);
-#	endif  // defined(LODLANDNOISE) || defined(LODLANDSCAPE)                                                                 
+#	endif  // defined(LODLANDNOISE) || defined(LODLANDSCAPE)                                                                   \
 
 	precise float4 previousInputPosition = inputPosition;
 
@@ -329,36 +329,6 @@ typedef VS_OUTPUT PS_INPUT;
 
 #if !defined(LANDSCAPE)
 #	undef TERRAIN_BLENDING
-#endif
-
-#if defined(TERRAIN_BLENDING)
-float TerrainBlendingDither4x4(uint2 pixelCoord)
-{
-	static const float kBayer4x4[16] = {
-		0.0 / 16.0, 8.0 / 16.0, 2.0 / 16.0, 10.0 / 16.0,
-		12.0 / 16.0, 4.0 / 16.0, 14.0 / 16.0, 6.0 / 16.0,
-		3.0 / 16.0, 11.0 / 16.0, 1.0 / 16.0, 9.0 / 16.0,
-		15.0 / 16.0, 7.0 / 16.0, 13.0 / 16.0, 5.0 / 16.0
-	};
-	uint index = ((pixelCoord.y & 3u) << 2) | (pixelCoord.x & 3u);
-	return kBayer4x4[index];
-}
-
-float TerrainBlendingDither8x8(uint2 pixelCoord)
-{
-	static const float kBayer8x8[64] = {
-		0.0 / 64.0, 32.0 / 64.0, 8.0 / 64.0, 40.0 / 64.0, 2.0 / 64.0, 34.0 / 64.0, 10.0 / 64.0, 42.0 / 64.0,
-		48.0 / 64.0, 16.0 / 64.0, 56.0 / 64.0, 24.0 / 64.0, 50.0 / 64.0, 18.0 / 64.0, 58.0 / 64.0, 26.0 / 64.0,
-		12.0 / 64.0, 44.0 / 64.0, 4.0 / 64.0, 36.0 / 64.0, 14.0 / 64.0, 46.0 / 64.0, 6.0 / 64.0, 38.0 / 64.0,
-		60.0 / 64.0, 28.0 / 64.0, 52.0 / 64.0, 20.0 / 64.0, 62.0 / 64.0, 30.0 / 64.0, 54.0 / 64.0, 22.0 / 64.0,
-		3.0 / 64.0, 35.0 / 64.0, 11.0 / 64.0, 43.0 / 64.0, 1.0 / 64.0, 33.0 / 64.0, 9.0 / 64.0, 41.0 / 64.0,
-		51.0 / 64.0, 19.0 / 64.0, 59.0 / 64.0, 27.0 / 64.0, 49.0 / 64.0, 17.0 / 64.0, 57.0 / 64.0, 25.0 / 64.0,
-		15.0 / 64.0, 47.0 / 64.0, 7.0 / 64.0, 39.0 / 64.0, 13.0 / 64.0, 45.0 / 64.0, 5.0 / 64.0, 37.0 / 64.0,
-		63.0 / 64.0, 31.0 / 64.0, 55.0 / 64.0, 23.0 / 64.0, 61.0 / 64.0, 29.0 / 64.0, 53.0 / 64.0, 21.0 / 64.0
-	};
-	uint index = ((pixelCoord.y & 7u) << 3) | (pixelCoord.x & 7u);
-	return kBayer8x8[index];
-}
 #endif
 
 #if defined(DEFERRED)
@@ -1052,58 +1022,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(TERRAIN_BLENDING)
-	float blendFactorTerrain = 1.0;
-	uint bypassAngleEdge = 0;
-	uint blendMode = 0;
-	uint ditherMode = 0;
-	bool tbActive = false;
-	float depthSampledLinear = 0.0;
-	float depthPixelLinear = 0.0;
-	float depthRLinear = 0.0;
-	float depthDLinear = 0.0;
-	float maxDiff = 0.0;
-	float frontGap = 0.0;
-	const float gapEps = 1e-4;
-	if (SharedData::TerrainBlendingReplayActive != 0) {
-		tbActive = true;
-		bypassAngleEdge = SharedData::terrainBlendingSettings.BypassAngleEdge;
-		blendMode = SharedData::terrainBlendingSettings.BlendMode;
-		ditherMode = SharedData::terrainBlendingSettings.DitherMode;
-		float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
+	float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
 
-		depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
-		depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
-		float blendRange = max(1e-3, SharedData::terrainBlendingSettings.BlendRange);
+	float depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
+	float depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
 
-		uint tbW, tbH;
-		TerrainBlending::TerrainBlendingMaskTexture.GetDimensions(tbW, tbH);
-		int2 p = int2(input.Position.xy);
-		int2 minCoord = int2(0, 0);
-		int2 maxCoord = int2((int)tbW - 1, (int)tbH - 1);
-		int2 pR = clamp(p + int2(1, 0), minCoord, maxCoord);
-		int2 pD = clamp(p + int2(0, 1), minCoord, maxCoord);
+	float blendFactorTerrain = saturate((depthSampledLinear - depthPixelLinear) / 10.0);
 
-		float depthR = TerrainBlending::TerrainBlendingMaskTexture[pR].x;
-		float depthD = TerrainBlending::TerrainBlendingMaskTexture[pD].x;
+	if (input.Position.z == depthSampled)
+		blendFactorTerrain = 1;
 
-		depthRLinear = SharedData::GetScreenDepth(depthR);
-		depthDLinear = SharedData::GetScreenDepth(depthD);
-
-		maxDiff = max(abs(depthRLinear - depthSampledLinear), abs(depthDLinear - depthSampledLinear));
-		frontGap = depthPixelLinear - depthSampledLinear;
-
-		float dz = abs(depthPixelLinear - depthSampledLinear);
-		blendFactorTerrain = 1.0 - saturate(dz / blendRange);
-
-		uint shapeMode = SharedData::terrainBlendingSettings.BlendShapeMode;
-		if (shapeMode == 1) {
-			blendFactorTerrain = blendFactorTerrain * blendFactorTerrain;
-		} else if (shapeMode == 2) {
-			blendFactorTerrain = sqrt(blendFactorTerrain);
-		}
-
-		blendFactorTerrain = saturate(blendFactorTerrain);
-	}
+	blendFactorTerrain = saturate(blendFactorTerrain);
 #	endif
 
 	float2 uv = input.TexCoord0.xy;
@@ -1701,7 +1630,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			else
 			landRMAOS4 = TexLandRMAOS4Sampler.SampleBias(SampLandRMAOS4Sampler, uv, SharedData::MipBias) * float4(LandscapeTexture4PBRParams.x, 1, 1, LandscapeTexture4PBRParams.z);
 #			endif
-			if ((PBRFlags & PBR::TerrainFlags::LandTile3HasGlint) != 0) {
+			if ((PBRFlags & PBR::TerrainFlags::LandTile3HasGlint) != 0) {\
 				glintParameters += weight * LandscapeTexture4GlintParameters;
 			}
 		}
@@ -2158,87 +2087,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	float3 screenSpaceNormal = normalize(FrameBuffer::WorldToView(worldNormal, false, eyeIndex));
-
-#	if defined(TERRAIN_BLENDING)
-	if (tbActive) {
-		float angleRangeScale = 1.0;
-		float angleGainScale = 1.0;
-		float3 nMaskVS = 0.0.xxx;
-		bool nMaskValid = false;
-
-		float3 nCurrentVS = normalize(FrameBuffer::WorldToView(worldNormal, false, eyeIndex));
-
-		if (bypassAngleEdge == 0) {
-			float3 viewPosCenter = viewPosition;
-			float3 viewPosRightApprox = viewPosition + ddx(viewPosition);
-			float3 viewPosDownApprox = viewPosition + ddy(viewPosition);
-			float3 viewPosMaskCenter = normalize(viewPosCenter) * depthSampledLinear;
-			float3 viewPosMaskRight = normalize(viewPosRightApprox) * depthRLinear;
-			float3 viewPosMaskDown = normalize(viewPosDownApprox) * depthDLinear;
-
-			nMaskVS = cross(viewPosMaskRight - viewPosMaskCenter, viewPosMaskDown - viewPosMaskCenter);
-			float nMaskLenSq = dot(nMaskVS, nMaskVS);
-			if (nMaskLenSq > 1e-6) {
-				nMaskVS *= rsqrt(nMaskLenSq);
-				nMaskValid = true;
-				float cosAngle = saturate(abs(dot(nCurrentVS, nMaskVS)));
-				float cosStart = SharedData::terrainBlendingSettings.AngleStartCos;
-				float cosEnd = SharedData::terrainBlendingSettings.AngleEndCos;
-				float angleT = saturate((cosStart - cosAngle) / max(1e-3, cosStart - cosEnd));
-				angleRangeScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleRangeScale, angleT);
-				angleGainScale = lerp(1.0, SharedData::terrainBlendingSettings.AngleGainScale, angleT);
-			}
-		}
-
-		float edgeFactor = 1.0;
-		if (frontGap > gapEps) {
-			// Edge-only blending: detect local depth discontinuities in the TB mask.
-			float edgeBoost = bypassAngleEdge != 0 ? 0.0 : 1.0;
-			float slope = 0.0;
-			if (edgeBoost > 0.0) {
-				uint slopeMode = SharedData::terrainBlendingSettings.EdgeSlopeMode;
-				if (slopeMode == 0) {
-					float3 viewDirVS = normalize(-viewPosition);
-					slope = 1.0 - abs(dot(nCurrentVS, viewDirVS));
-				} else if (slopeMode == 1 && nMaskValid) {
-					slope = 1.0 - abs(dot(nCurrentVS, nMaskVS));
-				}
-			}
-			slope = saturate(slope);
-			float biasedGrad = maxDiff * (1.0 + edgeBoost * slope);
-			biasedGrad *= angleRangeScale;
-			float edgeStart = max(0.0, SharedData::terrainBlendingSettings.EdgeStart);
-			float edgeEnd = max(edgeStart + 1e-3, SharedData::terrainBlendingSettings.EdgeEnd);
-			edgeFactor = saturate((biasedGrad - edgeStart) / max(1e-3, edgeEnd - edgeStart));
-			edgeFactor = saturate(edgeFactor * angleGainScale);
-		}
-		blendFactorTerrain *= edgeFactor;
-
-		if (blendMode == 0) {
-			if (blendFactorTerrain <= 0.001) {
-				clip(-1);
-			}
-		} else {
-			float alpha = saturate(blendFactorTerrain);
-			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
-			if (alpha <= 0.0) {
-				clip(-1);
-			}
-			float dither = 0.0;
-			if (ditherMode == 0) {
-				dither = TerrainBlendingDither4x4(uint2(input.Position.xy));
-			} else if (ditherMode == 1) {
-				dither = TerrainBlendingDither8x8(uint2(input.Position.xy));
-			} else {
-				dither = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-			}
-			if (dither > alpha) {
-				clip(-1);
-			}
-			blendFactorTerrain = 1.0;
-		}
-	}
-#	endif
 
 #	if defined(HAIR) && defined(CS_HAIR)
 	float3 Bitangent = normalize(float3(input.TBN0.y, input.TBN1.y, input.TBN2.y));
@@ -3366,21 +3214,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 	alpha = saturate(1.05 * alpha);
 #			endif  // DEPTH_WRITE_DECALS
-#if defined(TREE_ANIM)
-// VRS Fix: For TREE_ANIM (full tree models), use a fixed low alpha threshold
-// instead of the variable AlphaTestRefRS.
-//
-// This fixes white outline artifacts caused by VRS coarse shading at alpha edges.
-// A low threshold (0.1) reduces the "gradient zone" where VRS can misclassify pixels.
-const float vrsFixedAlphaThreshold = 0.1;
-if (alpha - vrsFixedAlphaThreshold < 0) {
-    discard;
-}
-#else
-if (alpha - AlphaTestRefRS < 0) {
-    discard;
-}
-#endif  // TREE_ANIM
+	if (alpha - AlphaTestRefRS < 0) {
+		discard;
+	}
 #		endif      // DO_ALPHA_TEST
 
 #		if defined(ANISOTROPIC_ALPHA)
@@ -3534,14 +3370,8 @@ if (alpha - AlphaTestRefRS < 0) {
 #		endif
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
-#		if defined(TERRAIN_BLENDING)
-	if (SharedData::TerrainBlendingReplayActive != 0) {
-		stochasticBlend = psout.Diffuse.w;
-	}
-#		endif
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
-
 
 	return psout;
 }

@@ -41,14 +41,14 @@ public:
 		float SpecularFade = 1.0f;
 		uint BlendShapeMode = 0;
 		float EdgeStart = 0.001f;
-		float EdgeEnd = 0.14f;
+		float EdgeEnd = 0.055f;
 		float EdgeBoost = 1.0f;
 		uint EdgeSlopeMode = 1;
 		float EdgeSlopeScale = 1.0f;
 		float AngleStartDeg = 0.0f;
 		float AngleEndDeg = 25.0f;
 		float AngleRangeScale = 0.25f;
-		float AngleGainScale = 1f;
+		float AngleGainScale = 1.0f;
 		bool BypassAngleEdge = false;
 		float MaxGap = 0.0f;
 		float ReplayCullDistance = 2048.0f;

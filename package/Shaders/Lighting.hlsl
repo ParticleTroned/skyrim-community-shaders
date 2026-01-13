@@ -1040,6 +1040,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 		depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
+		float depthOffsetPixels = SharedData::terrainBlendingSettings.DepthOffsetPixels;
+		if (depthOffsetPixels != 0.0) {
+			float projY = FrameBuffer::CameraProj[eyeIndex]._22;
+			float screenHeight = max(1.0, SharedData::BufferDim.y);
+			float pixelWorld = (2.0 * depthPixelLinear) / max(1e-4, projY * screenHeight);
+			depthPixelLinear += (-depthOffsetPixels) * pixelWorld;
+		}
 		float blendRange = max(1e-3, SharedData::terrainBlendingSettings.BlendRange);
 		float blendGain = SharedData::terrainBlendingSettings.BlendGain;
 

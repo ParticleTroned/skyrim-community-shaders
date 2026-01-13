@@ -27,6 +27,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AngleGainScale,
 	BypassAngleEdge,
 	MaxGap,
+	DepthOffsetPixels,
 	ReplayCullDistance,
 	ReplayCullMinPixels)
 
@@ -219,6 +220,7 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.AngleEndCos = std::cos(angleEndDeg * kDegToRad);
 	data.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
 	data.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
+	data.DepthOffsetPixels = settings.DepthOffsetPixels;
 	data.BypassAngleEdge = settings.BypassAngleEdge ? 1u : 0u;
 	data.MaxGap = 0.0f;
 	return data;
@@ -255,6 +257,7 @@ void TerrainBlending::DrawSettings()
 		ImGui::SliderFloat("Angle Range Scale", &settings.AngleRangeScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::Checkbox("Bypass Angle/Edge (Debug)", &settings.BypassAngleEdge);
+		ImGui::SliderFloat("Depth Offset (Pixels)", &settings.DepthOffsetPixels, -10.0f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Replay Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		settings.EdgeStart = std::max(0.0f, settings.EdgeStart);
@@ -267,6 +270,7 @@ void TerrainBlending::DrawSettings()
 		settings.AngleEndDeg = std::max(settings.AngleEndDeg, settings.AngleStartDeg + 1e-3f);
 		settings.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
 		settings.AngleGainScale = std::max(0.0f, settings.AngleGainScale);
+		settings.DepthOffsetPixels = std::max(-100.0f, std::min(100.0f, settings.DepthOffsetPixels));
 		settings.ReplayCullDistance = std::max(0.0f, settings.ReplayCullDistance);
 		settings.ReplayCullMinPixels = std::max(0.0f, settings.ReplayCullMinPixels);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -279,6 +283,7 @@ void TerrainBlending::DrawSettings()
 				"Edge Boost biases edge detection based on the chosen slope mode.\n"
 				"Edge Slope Mode picks view angle, mesh angle, or none.\n"
 				"Edge Slope Scale caps slope influence.\n"
+				"Depth Offset (Pixels) pushes the upper mesh down when negative.\n"
 				"Angle Start/End scale edge sensitivity based on the angle between terrain and the object.\n"
 				"Angle Range/Gain Scale set the max edge multiplier at Angle End.\n"
 				"Bypass Angle/Edge disables angle scaling and slope-biased edge boost (debug).\n"

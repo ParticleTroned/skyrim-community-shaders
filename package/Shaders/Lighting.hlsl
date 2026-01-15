@@ -1056,7 +1056,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	uint bypassAngleEdge = 0;
 	uint blendMode = 0;
 	uint ditherMode = 0;
+	uint skipEdgeSamplesWhenNoGap = 0;
 	bool tbActive = false;
+	bool computeEdgeSamples = false;
 	float depthSampledLinear = 0.0;
 	float depthPixelLinear = 0.0;
 	float depthRLinear = 0.0;
@@ -1069,28 +1071,32 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		bypassAngleEdge = SharedData::terrainBlendingSettings.BypassAngleEdge;
 		blendMode = SharedData::terrainBlendingSettings.BlendMode;
 		ditherMode = SharedData::terrainBlendingSettings.DitherMode;
+		skipEdgeSamplesWhenNoGap = SharedData::terrainBlendingSettings.SkipEdgeSamplesWhenNoGap;
 		float depthSampled = TerrainBlending::TerrainBlendingMaskTexture[input.Position.xy].x;
 
 		depthSampledLinear = SharedData::GetScreenDepth(depthSampled);
 		depthPixelLinear = SharedData::GetScreenDepth(input.Position.z);
+		frontGap = depthPixelLinear - depthSampledLinear;
 		float blendRange = max(1e-3, SharedData::terrainBlendingSettings.BlendRange);
 
-		uint tbW, tbH;
-		TerrainBlending::TerrainBlendingMaskTexture.GetDimensions(tbW, tbH);
-		int2 p = int2(input.Position.xy);
-		int2 minCoord = int2(0, 0);
-		int2 maxCoord = int2((int)tbW - 1, (int)tbH - 1);
-		int2 pR = clamp(p + int2(1, 0), minCoord, maxCoord);
-		int2 pD = clamp(p + int2(0, 1), minCoord, maxCoord);
+		computeEdgeSamples = (skipEdgeSamplesWhenNoGap == 0) || (frontGap > gapEps);
+		if (computeEdgeSamples) {
+			uint tbW, tbH;
+			TerrainBlending::TerrainBlendingMaskTexture.GetDimensions(tbW, tbH);
+			int2 p = int2(input.Position.xy);
+			int2 minCoord = int2(0, 0);
+			int2 maxCoord = int2((int)tbW - 1, (int)tbH - 1);
+			int2 pR = clamp(p + int2(1, 0), minCoord, maxCoord);
+			int2 pD = clamp(p + int2(0, 1), minCoord, maxCoord);
 
-		float depthR = TerrainBlending::TerrainBlendingMaskTexture[pR].x;
-		float depthD = TerrainBlending::TerrainBlendingMaskTexture[pD].x;
+			float depthR = TerrainBlending::TerrainBlendingMaskTexture[pR].x;
+			float depthD = TerrainBlending::TerrainBlendingMaskTexture[pD].x;
 
-		depthRLinear = SharedData::GetScreenDepth(depthR);
-		depthDLinear = SharedData::GetScreenDepth(depthD);
+			depthRLinear = SharedData::GetScreenDepth(depthR);
+			depthDLinear = SharedData::GetScreenDepth(depthD);
 
-		maxDiff = max(abs(depthRLinear - depthSampledLinear), abs(depthDLinear - depthSampledLinear));
-		frontGap = depthPixelLinear - depthSampledLinear;
+			maxDiff = max(abs(depthRLinear - depthSampledLinear), abs(depthDLinear - depthSampledLinear));
+		}
 
 		float dz = abs(depthPixelLinear - depthSampledLinear);
 		blendFactorTerrain = 1.0 - saturate(dz / blendRange);
@@ -2169,18 +2175,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 nCurrentVS = normalize(FrameBuffer::WorldToView(worldNormal, false, eyeIndex));
 
 		if (bypassAngleEdge == 0) {
-			float3 viewPosCenter = viewPosition;
-			float3 viewPosRightApprox = viewPosition + ddx(viewPosition);
-			float3 viewPosDownApprox = viewPosition + ddy(viewPosition);
-			float3 viewPosMaskCenter = normalize(viewPosCenter) * depthSampledLinear;
-			float3 viewPosMaskRight = normalize(viewPosRightApprox) * depthRLinear;
-			float3 viewPosMaskDown = normalize(viewPosDownApprox) * depthDLinear;
+			if (computeEdgeSamples) {
+				float3 viewPosCenter = viewPosition;
+				float3 viewPosRightApprox = viewPosition + ddx(viewPosition);
+				float3 viewPosDownApprox = viewPosition + ddy(viewPosition);
+				float3 viewPosMaskCenter = normalize(viewPosCenter) * depthSampledLinear;
+				float3 viewPosMaskRight = normalize(viewPosRightApprox) * depthRLinear;
+				float3 viewPosMaskDown = normalize(viewPosDownApprox) * depthDLinear;
 
-			nMaskVS = cross(viewPosMaskRight - viewPosMaskCenter, viewPosMaskDown - viewPosMaskCenter);
-			float nMaskLenSq = dot(nMaskVS, nMaskVS);
-			if (nMaskLenSq > 1e-6) {
-				nMaskVS *= rsqrt(nMaskLenSq);
-				nMaskValid = true;
+				nMaskVS = cross(viewPosMaskRight - viewPosMaskCenter, viewPosMaskDown - viewPosMaskCenter);
+				float nMaskLenSq = dot(nMaskVS, nMaskVS);
+				if (nMaskLenSq > 1e-6) {
+					nMaskVS *= rsqrt(nMaskLenSq);
+					nMaskValid = true;
+				}
+			}
+
+			if (nMaskValid) {
 				float cosAngle = saturate(abs(dot(nCurrentVS, nMaskVS)));
 				float cosStart = SharedData::terrainBlendingSettings.AngleStartCos;
 				float cosEnd = SharedData::terrainBlendingSettings.AngleEndCos;

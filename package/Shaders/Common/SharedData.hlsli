@@ -206,11 +206,13 @@ namespace SharedData
 		float EdgeStart;
 		float EdgeEnd;
 		uint EdgeSlopeMode;
+		uint SkipEdgeSamplesWhenNoGap;
 		float AngleStartCos;
 		float AngleEndCos;
 		float AngleRangeScale;
 		float AngleGainScale;
 		uint BypassAngleEdge;
+		uint pad0[3];
 	};
 
 	cbuffer FeatureData : register(b6)

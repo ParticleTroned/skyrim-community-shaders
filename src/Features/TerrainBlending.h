@@ -43,11 +43,13 @@ public:
 		float EdgeStart = 0.001f;
 		float EdgeEnd = 0.055f;
 		uint EdgeSlopeMode = 1;
+		bool SkipEdgeSamplesWhenNoGap = true;
 		float AngleStartDeg = 0.0f;
 		float AngleEndDeg = 12.5f;
 		float AngleRangeScale = 0.25f;
 		float AngleGainScale = 3.0f;
 		bool BypassAngleEdge = false;
+		bool EnableReplayCulling = true;
 		float ReplayCullDistance = 768.0f;
 		float ReplayCullMinPixels = 0.0f;
 	};
@@ -61,11 +63,13 @@ public:
 		float EdgeStart;
 		float EdgeEnd;
 		uint EdgeSlopeMode;
+		uint SkipEdgeSamplesWhenNoGap;
 		float AngleStartCos;
 		float AngleEndCos;
 		float AngleRangeScale;
 		float AngleGainScale;
 		uint BypassAngleEdge;
+		uint pad0[3];
 	};
 
 	Settings settings;
@@ -93,6 +97,10 @@ public:
 
 	std::vector<RenderPass> renderPasses;
 	std::vector<RenderPass> terrainRenderPasses;
+	std::vector<D3D11_RECT> prevScissorRectsCache;
+	std::vector<D3D11_RECT> scissorRectsCache;
+	std::vector<D3D11_RECT> fullScissorRectsCache;
+	std::vector<D3D11_VIEWPORT> viewportsCache;
 
 	void TerrainShaderHacks();
 

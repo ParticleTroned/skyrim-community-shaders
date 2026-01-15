@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <limits>
 
 #include "Deferred.h"
 #include "ShaderCache.h"
@@ -19,11 +20,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EdgeStart,
 	EdgeEnd,
 	EdgeSlopeMode,
+	SkipEdgeSamplesWhenNoGap,
 	AngleStartDeg,
 	AngleEndDeg,
 	AngleRangeScale,
 	AngleGainScale,
 	BypassAngleEdge,
+	EnableReplayCulling,
 	ReplayCullDistance,
 	ReplayCullMinPixels)
 
@@ -54,6 +57,10 @@ namespace
 		int mainFormat = 0;
 		int mainSrvDim = 0;
 		bool mainInfoValid = false;
+		float depthBlendGpuMs = 0.0f;
+		float replayGpuMs = 0.0f;
+		float depthBlendGpuMsLast = 0.0f;
+		float replayGpuMsLast = 0.0f;
 
 		void ResetCounts()
 		{
@@ -74,11 +81,249 @@ namespace
 			terrainDistMin = 0.0f;
 			terrainDistMax = 0.0f;
 			terrainDistInit = false;
+			depthBlendGpuMs = 0.0f;
+			replayGpuMs = 0.0f;
+			depthBlendGpuMsLast = 0.0f;
+			replayGpuMsLast = 0.0f;
 		}
 	};
 
 	std::atomic<bool> g_tbStatsEnabled{ false };
 	TbDebugStats g_tbStats{};
+
+	void UpdateTbGpuStat(float& smoothedMs, float& lastMs, float sampleMs)
+	{
+		lastMs = sampleMs;
+		if (smoothedMs <= 0.0f) {
+			smoothedMs = sampleMs;
+		} else {
+			constexpr float kAlpha = 0.2f;
+			smoothedMs = smoothedMs * (1.0f - kAlpha) + sampleMs * kAlpha;
+		}
+	}
+
+	constexpr uint32_t kTbGpuQueryRingSize = 4;
+
+	struct TbGpuTimers
+	{
+		struct QueryPair
+		{
+			ID3D11Query* disjoint = nullptr;
+			ID3D11Query* start = nullptr;
+			ID3D11Query* end = nullptr;
+			bool issued = false;
+		};
+
+		struct QueryRing
+		{
+			QueryPair slots[kTbGpuQueryRingSize]{};
+			uint32_t nextIndex = 0;
+		};
+
+		QueryRing depth{};
+		QueryRing replay{};
+		bool ready = false;
+		uint32_t lastResolvedFrame = std::numeric_limits<uint32_t>::max();
+
+		void Release()
+		{
+			ReleaseRing(depth);
+			ReleaseRing(replay);
+			ready = false;
+			lastResolvedFrame = std::numeric_limits<uint32_t>::max();
+		}
+
+		bool Ensure(ID3D11Device* device)
+		{
+			if (ready) {
+				return true;
+			}
+			if (!device) {
+				return false;
+			}
+
+			Release();
+			for (auto& slot : depth.slots) {
+				if (!CreatePair(device, slot)) {
+					Release();
+					return false;
+				}
+			}
+			for (auto& slot : replay.slots) {
+				if (!CreatePair(device, slot)) {
+					Release();
+					return false;
+				}
+			}
+
+			ready = true;
+			return true;
+		}
+
+		bool IsReady() const
+		{
+			return ready;
+		}
+
+		QueryPair* Begin(ID3D11DeviceContext* context, QueryRing& ring)
+		{
+			if (!ready || !context) {
+				return nullptr;
+			}
+			auto* slot = AcquireSlot(ring);
+			if (!slot) {
+				return nullptr;
+			}
+			context->Begin(slot->disjoint);
+			context->End(slot->start);
+			slot->issued = true;
+			return slot;
+		}
+
+		void End(ID3D11DeviceContext* context, QueryPair* slot)
+		{
+			if (!context || !slot) {
+				return;
+			}
+			context->End(slot->end);
+			context->End(slot->disjoint);
+		}
+
+		QueryPair* BeginDepth(ID3D11DeviceContext* context)
+		{
+			return Begin(context, depth);
+		}
+
+		QueryPair* BeginReplay(ID3D11DeviceContext* context)
+		{
+			return Begin(context, replay);
+		}
+
+		void EndDepth(ID3D11DeviceContext* context, QueryPair* slot)
+		{
+			End(context, slot);
+		}
+
+		void EndReplay(ID3D11DeviceContext* context, QueryPair* slot)
+		{
+			End(context, slot);
+		}
+
+		void Resolve(ID3D11DeviceContext* context, TbDebugStats& stats)
+		{
+			if (!ready || !context) {
+				return;
+			}
+
+			if (auto* state = globals::state) {
+				if (state->frameCount == lastResolvedFrame) {
+					return;
+				}
+				lastResolvedFrame = state->frameCount;
+			}
+
+			float sampleMs = 0.0f;
+			for (auto& slot : depth.slots) {
+				if (ResolvePair(context, slot, sampleMs)) {
+					UpdateTbGpuStat(stats.depthBlendGpuMs, stats.depthBlendGpuMsLast, sampleMs);
+				}
+			}
+			for (auto& slot : replay.slots) {
+				if (ResolvePair(context, slot, sampleMs)) {
+					UpdateTbGpuStat(stats.replayGpuMs, stats.replayGpuMsLast, sampleMs);
+				}
+			}
+		}
+
+	private:
+		static void ReleasePair(QueryPair& pair)
+		{
+			if (pair.disjoint) {
+				pair.disjoint->Release();
+				pair.disjoint = nullptr;
+			}
+			if (pair.start) {
+				pair.start->Release();
+				pair.start = nullptr;
+			}
+			if (pair.end) {
+				pair.end->Release();
+				pair.end = nullptr;
+			}
+			pair.issued = false;
+		}
+
+		static void ReleaseRing(QueryRing& ring)
+		{
+			for (auto& slot : ring.slots) {
+				ReleasePair(slot);
+			}
+			ring.nextIndex = 0;
+		}
+
+		static bool CreatePair(ID3D11Device* device, QueryPair& pair)
+		{
+			D3D11_QUERY_DESC desc{};
+			desc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+			if (FAILED(device->CreateQuery(&desc, &pair.disjoint))) {
+				return false;
+			}
+			desc.Query = D3D11_QUERY_TIMESTAMP;
+			if (FAILED(device->CreateQuery(&desc, &pair.start))) {
+				return false;
+			}
+			if (FAILED(device->CreateQuery(&desc, &pair.end))) {
+				return false;
+			}
+			return true;
+		}
+
+		static QueryPair* AcquireSlot(QueryRing& ring)
+		{
+			for (uint32_t i = 0; i < kTbGpuQueryRingSize; ++i) {
+				uint32_t index = (ring.nextIndex + i) % kTbGpuQueryRingSize;
+				auto& slot = ring.slots[index];
+				if (!slot.issued) {
+					ring.nextIndex = (index + 1) % kTbGpuQueryRingSize;
+					return &slot;
+				}
+			}
+			return nullptr;
+		}
+
+		static bool ResolvePair(ID3D11DeviceContext* context, QueryPair& pair, float& outMs)
+		{
+			if (!pair.issued) {
+				return false;
+			}
+
+			D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+			if (context->GetData(pair.disjoint, &disjoint, sizeof(disjoint), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+				return false;
+			}
+
+			UINT64 start = 0;
+			if (context->GetData(pair.start, &start, sizeof(start), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+				return false;
+			}
+
+			UINT64 end = 0;
+			if (context->GetData(pair.end, &end, sizeof(end), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+				return false;
+			}
+
+			pair.issued = false;
+
+			if (disjoint.Disjoint || disjoint.Frequency == 0 || end < start) {
+				return false;
+			}
+
+			outMs = static_cast<float>((end - start) * 1000.0 / static_cast<double>(disjoint.Frequency));
+			return true;
+		}
+	};
+
+	TbGpuTimers g_tbGpuTimers{};
 
 	bool TbStatsEnabled()
 	{
@@ -90,6 +335,8 @@ namespace
 		TerrainBlending::Settings defaults{};
 		defaults.BlendMode = std::min<uint>(blendMode, 1u);
 		defaults.DitherMode = std::min<uint>(ditherMode, 2u);
+		defaults.SkipEdgeSamplesWhenNoGap = true;
+		defaults.EnableReplayCulling = true;
 
 		if (defaults.BlendMode == 0) {
 			// Alpha defaults.
@@ -131,6 +378,7 @@ ID3D11ComputeShader* TerrainBlending::GetDepthBlendShader()
 	}
 	return depthBlendShader;
 }
+
 
 void TerrainBlending::SetupResources()
 {
@@ -226,6 +474,7 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.EdgeStart = std::max(0.0f, settings.EdgeStart);
 	data.EdgeEnd = std::max(data.EdgeStart + 1e-3f, settings.EdgeEnd);
 	data.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
+	data.SkipEdgeSamplesWhenNoGap = settings.SkipEdgeSamplesWhenNoGap ? 1u : 0u;
 	float angleStartDeg = std::max(0.0f, settings.AngleStartDeg);
 	float angleEndDeg = std::max(angleStartDeg + 1e-3f, settings.AngleEndDeg);
 	constexpr float kDegToRad = 3.14159265359f / 180.0f;
@@ -252,10 +501,30 @@ void TerrainBlending::DrawSettings()
 
 		ImGui::Text("Performance");
 		ImGui::Separator();
+		ImGui::Checkbox("Enable Replay Culling", &settings.EnableReplayCulling);
+		tooltip("Toggle distance/screen-size culling for the replay pass.");
 		ImGui::SliderFloat("Replay Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		tooltip("Skip blending beyond this distance (0 disables).");
 		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		tooltip("Skip blending for tiny projected patches (0 disables).");
+		bool captureTimings = TbStatsEnabled();
+		if (ImGui::Checkbox("Capture TB GPU Timings", &captureTimings)) {
+			if (captureTimings != TbStatsEnabled()) {
+				ToggleDebugCapture();
+			}
+		}
+		tooltip("Record GPU timings for TB passes (debug).");
+		if (captureTimings) {
+			if (!g_tbGpuTimers.IsReady()) {
+				ImGui::TextUnformatted("GPU timing queries unavailable.");
+			} else {
+				ImGui::Text("DepthBlend: %.3f ms (last %.3f)", g_tbStats.depthBlendGpuMs, g_tbStats.depthBlendGpuMsLast);
+				ImGui::Text("Replay: %.3f ms (last %.3f)", g_tbStats.replayGpuMs, g_tbStats.replayGpuMsLast);
+				const float tbTotalMs = g_tbStats.depthBlendGpuMs + g_tbStats.replayGpuMs;
+				const float tbTotalLastMs = g_tbStats.depthBlendGpuMsLast + g_tbStats.replayGpuMsLast;
+				ImGui::Text("Total: %.3f ms (last %.3f)", tbTotalMs, tbTotalLastMs);
+			}
+		}
 		ImGui::Spacing();
 
 		ImGui::Text("Blending");
@@ -274,6 +543,8 @@ void TerrainBlending::DrawSettings()
 
 		ImGui::Text("Edge Detection");
 		ImGui::Separator();
+		ImGui::Checkbox("Skip Edge Samples When No Gap", &settings.SkipEdgeSamplesWhenNoGap);
+		tooltip("Avoid neighbor depth samples when there is no front-gap.");
 		float edgeStartMax = std::max(1.0f, settings.BlendRange);
 		float edgeEndMax = std::max(2.0f, settings.BlendRange * 2.0f);
 		constexpr float edgeExponent = 4.0f;
@@ -394,25 +665,42 @@ void TerrainBlending::BlendPrepassDepths()
 	auto dispatchCount = Util::GetScreenDispatchCount();
 	if (TbStatsEnabled()) {
 		g_tbStats.blendDispatch++;
+		g_tbGpuTimers.Ensure(globals::d3d::device);
+		g_tbGpuTimers.Resolve(context, g_tbStats);
 	}
 
 	{
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[2] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get() };
+		ID3D11UnorderedAccessView* uavs[2] = {
+			blendedDepthTexture->uav.get(),
+			blendedDepthTexture16->uav.get()
+		};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
+		TbGpuTimers::QueryPair* depthQuery = nullptr;
+		if (TbStatsEnabled()) {
+			depthQuery = g_tbGpuTimers.BeginDepth(context);
+		}
 		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
 
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+		g_tbGpuTimers.EndDepth(context, depthQuery);
+	}
+
+	{
+		ID3D11UnorderedAccessView* uavs[2] = { nullptr, nullptr };
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+	}
+	{
+		ID3D11ShaderResourceView* nullViews[2] = { nullptr, nullptr };
+		context->CSSetShaderResources(0, ARRAYSIZE(nullViews), nullViews);
 	}
 
 	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
-
-	ID3D11UnorderedAccessView* uavs[2] = { nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 	ID3D11ComputeShader* shader = nullptr;
 	context->CSSetShader(shader, nullptr, 0);
@@ -483,8 +771,9 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	const bool statsEnabled = TbStatsEnabled();
-	const float replayCullDistance = std::max(0.0f, singleton.settings.ReplayCullDistance);
-	const float replayCullMinPixels = std::max(0.0f, singleton.settings.ReplayCullMinPixels);
+	const bool replayCullEnabled = singleton.settings.EnableReplayCulling;
+	const float replayCullDistance = replayCullEnabled ? std::max(0.0f, singleton.settings.ReplayCullDistance) : 0.0f;
+	const float replayCullMinPixels = replayCullEnabled ? std::max(0.0f, singleton.settings.ReplayCullMinPixels) : 0.0f;
 	float pixelsPerUnit = 0.0f;
 	if (replayCullMinPixels > 0.0f && globals::state) {
 		const float2 screenSize = Util::ConvertToDynamic(globals::state->screenSize);
@@ -724,6 +1013,10 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 	const bool statsEnabled = TbStatsEnabled();
+	if (statsEnabled) {
+		g_tbGpuTimers.Ensure(device);
+		g_tbGpuTimers.Resolve(context, g_tbStats);
+	}
 	const bool hasWork = !terrainRenderPasses.empty() || !renderPasses.empty();
 	if (statsEnabled) {
 		g_tbStats.renderCalls++;
@@ -743,10 +1036,17 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	};
 
 	// Used to get the distance of the surface to the lowest depth
-	ID3D11ShaderResourceView* view = blendedDepthTexture ? blendedDepthTexture->srv.get() : nullptr;
-	context->PSSetShaderResources(55, 1, &view);
+	ID3D11ShaderResourceView* views[1] = {
+		blendedDepthTexture ? blendedDepthTexture->srv.get() : nullptr
+	};
+	context->PSSetShaderResources(55, ARRAYSIZE(views), views);
 
 	if (!terrainRenderPasses.empty() || !renderPasses.empty()) {
+		TbGpuTimers::QueryPair* replayQuery = nullptr;
+		if (statsEnabled) {
+			replayQuery = g_tbGpuTimers.BeginReplay(context);
+		}
+
 		ID3D11DepthStencilState* prevDSS = nullptr;
 		UINT prevStencilRef = 0;
 		context->OMGetDepthStencilState(&prevDSS, &prevStencilRef);
@@ -756,7 +1056,8 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 
 		UINT prevScissorCount = 0;
 		context->RSGetScissorRects(&prevScissorCount, nullptr);
-		std::vector<D3D11_RECT> prevScissorRects;
+		auto& prevScissorRects = prevScissorRectsCache;
+		prevScissorRects.clear();
 		if (prevScissorCount > 0) {
 			prevScissorRects.resize(prevScissorCount);
 			context->RSGetScissorRects(&prevScissorCount, prevScissorRects.data());
@@ -764,7 +1065,8 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 
 		UINT viewportCount = 0;
 		context->RSGetViewports(&viewportCount, nullptr);
-		std::vector<D3D11_VIEWPORT> viewports;
+		auto& viewports = viewportsCache;
+		viewports.clear();
 		if (viewportCount > 0) {
 			viewports.resize(viewportCount);
 			context->RSGetViewports(&viewportCount, viewports.data());
@@ -804,8 +1106,8 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 			context->RSSetState(scissorState);
 		}
 
-		std::vector<D3D11_RECT> scissorRects;
-		std::vector<D3D11_RECT> fullScissorRects;
+		auto& scissorRects = scissorRectsCache;
+		auto& fullScissorRects = fullScissorRectsCache;
 		Matrix viewMat[2]{};
 		Matrix projMat[2]{};
 		Matrix viewProjMat[2]{};
@@ -957,6 +1259,8 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 
 		terrainRenderPasses.clear();
 		renderPasses.clear();
+
+		g_tbGpuTimers.EndReplay(context, replayQuery);
 	}
 
 }
@@ -966,6 +1270,11 @@ void TerrainBlending::ToggleDebugCapture()
 	const bool newEnabled = !g_tbStatsEnabled.load(std::memory_order_relaxed);
 	g_tbStatsEnabled.store(newEnabled, std::memory_order_relaxed);
 	g_tbStats.ResetCounts();
+	if (newEnabled) {
+		g_tbGpuTimers.Ensure(globals::d3d::device);
+	} else {
+		g_tbGpuTimers.Release();
+	}
 	logger::info("[TB] Debug stats capture {}", newEnabled ? "enabled" : "disabled");
 }
 
@@ -975,9 +1284,11 @@ void TerrainBlending::DumpDebugStats()
 	const float distMin = g_tbStats.terrainDistInit ? g_tbStats.terrainDistMin : -1.0f;
 	const float distMax = g_tbStats.terrainDistInit ? g_tbStats.terrainDistMax : -1.0f;
 	const char* depthInfo = g_tbStats.mainInfoValid ? "" : " (main depth info unavailable)";
+	const float tbTotalLastMs = g_tbStats.depthBlendGpuMsLast + g_tbStats.replayGpuMsLast;
+	const float tbTotalMs = g_tbStats.depthBlendGpuMs + g_tbStats.replayGpuMs;
 
 	logger::info(
-		"[TB][STAT] enabled={} prepass enter={} exit={} terrainPass={} accept={} reject={} toggleT={} toggleF={} queuedTerrain={} queuedExtra={} maxTerrainQueue={} maxExtraQueue={} blendDispatch={} renderCalls={} workCalls={} renderDepth={} renderTerrainDepth={} distMin={} distMax={} mainDepth={}x{} fmt={} array={} srvDim={}{}",
+		"[TB][STAT] enabled={} prepass enter={} exit={} terrainPass={} accept={} reject={} toggleT={} toggleF={} queuedTerrain={} queuedExtra={} maxTerrainQueue={} maxExtraQueue={} blendDispatch={} renderCalls={} workCalls={} renderDepth={} renderTerrainDepth={} distMin={} distMax={} mainDepth={}x{} fmt={} array={} srvDim={} depthBlendMs={} replayMs={} totalMs={} totalMsSmoothed={}{}",
 		enabled,
 		g_tbStats.prepassEnter,
 		g_tbStats.prepassExit,
@@ -1002,6 +1313,10 @@ void TerrainBlending::DumpDebugStats()
 		g_tbStats.mainFormat,
 		g_tbStats.mainArraySize,
 		g_tbStats.mainSrvDim,
+		g_tbStats.depthBlendGpuMsLast,
+		g_tbStats.replayGpuMsLast,
+		tbTotalLastMs,
+		tbTotalMs,
 		depthInfo);
 
 	g_tbStats.ResetCounts();

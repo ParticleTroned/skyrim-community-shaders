@@ -40,8 +40,8 @@ public:
 		uint BlendShapeMode = 2;
 		uint BlendMode = 1;
 		uint DitherMode = 2;
-		float EdgeStart = 0.001f;
-		float EdgeEnd = 0.055f;
+		float EdgeStart = 0.002f;
+		float EdgeEnd = 0.06f;
 		uint EdgeSlopeMode = 1;
 		bool SkipEdgeSamplesWhenNoGap = true;
 		float AngleStartDeg = 0.0f;

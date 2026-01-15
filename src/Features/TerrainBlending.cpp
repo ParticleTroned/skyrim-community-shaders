@@ -507,6 +507,8 @@ void TerrainBlending::DrawSettings()
 		tooltip("Skip blending beyond this distance (0 disables).");
 		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		tooltip("Skip blending for tiny projected patches (0 disables).");
+		ImGui::Checkbox("Bypass Angle/Edge", &settings.BypassAngleEdge);
+		tooltip("Disable angle scaling and slope bias.");
 		bool captureTimings = TbStatsEnabled();
 		if (ImGui::Checkbox("Capture TB GPU Timings", &captureTimings)) {
 			if (captureTimings != TbStatsEnabled()) {
@@ -573,8 +575,6 @@ void TerrainBlending::DrawSettings()
 		tooltip("Edge range multiplier at Angle End.");
 		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		tooltip("Edge gain multiplier at Angle End.");
-		ImGui::Checkbox("Bypass Angle/Edge (Debug)", &settings.BypassAngleEdge);
-		tooltip("Disable angle scaling and slope bias (debug).");
 
 		settings.EdgeStart = std::max(0.0f, settings.EdgeStart);
 		settings.EdgeEnd = std::max(settings.EdgeEnd, settings.EdgeStart + 1e-3f);

@@ -8,6 +8,7 @@
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint MAX_LIGHTS = 1024;
 
+// Settings include particle clustering, per-emitter limits, and distance culling for particle lights.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LightLimitFix::Settings,
 	EnableParticleLights,
@@ -19,9 +20,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ParticleRadius,
 	BillboardBrightness,
 	BillboardRadius,
-	ParticleClusterThreshold,  // NEW
-	MaxParticlesPerEmitter,    // NEW
-	MaxParticleDistance,       // NEW
+	ParticleClusterThreshold,
+	MaxParticlesPerEmitter,
+	MaxParticleDistance,
 	EnableContactShadows,
 	EnableLightsVisualisation,
 	LightsVisualisationMode)
@@ -29,6 +30,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void LightLimitFix::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Particle Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+		// Particle lights UI exposes culling, clustering, and distance controls alongside tuning sliders.
 		ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables Particle Lights.");
@@ -49,7 +51,6 @@ void LightLimitFix::DrawSettings()
 			ImGui::Text("Merges vertices which are close enough to each other to improve performance.");
 		}
 
-		// NEW: clustering controls
 		ImGui::SliderFloat("Cluster Threshold", &settings.ParticleClusterThreshold, 8.0f, 128.0f, "%.1f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -66,7 +67,6 @@ void LightLimitFix::DrawSettings()
 				"Lower = faster, especially for very dense effects.");
 		}
 
-		// NEW: distance cutoff for particle lights
 		ImGui::SliderFloat("Max Particle Distance", &settings.MaxParticleDistance, 1000.0f, 20000.0f, "%.0f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -410,8 +410,7 @@ void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPo
 
 float LightLimitFix::CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point)
 {
-	// See BSLight::CalculateLuminance_14131D3D0
-	// Performs lighting on the CPU which is identical to GPU code
+	// CPU luminance mirrors the engine light falloff used by BSLight::CalculateLuminance.
 
 	auto lightDirection = light.position - point;
 	float lightDist = lightDirection.Length();
@@ -481,6 +480,7 @@ struct VertexPosition
 
 std::string ExtractTextureStem(std::string_view a_path)
 {
+	// Normalize a texture path to a lowercase filename stem.
 	if (a_path.size() < 1)
 		return {};
 
@@ -489,7 +489,7 @@ std::string ExtractTextureStem(std::string_view a_path)
 		return {};
 
 	a_path = a_path.substr(lastSeparatorPos + 1);
-	a_path.remove_suffix(4);  // Remove ".dds"
+	a_path.remove_suffix(4);
 
 	auto textureNameView = a_path | std::views::transform([](auto c) { return (char)::tolower(c); });
 	std::string textureName = { textureNameView.begin(), textureNameView.end() };
@@ -499,14 +499,13 @@ std::string ExtractTextureStem(std::string_view a_path)
 
 LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass)
 {
+	// Resolve particle light configs from effect materials and cache per-geometry results (see https://www.nexusmods.com/skyrimspecialedition/articles/1391).
 	auto& particleLights = globals::features::llf::particleLights;
 
-	// see https://www.nexusmods.com/skyrimspecialedition/articles/1391
 	if (settings.EnableParticleLights) {
 		if (auto shaderProperty = a_pass->shaderProperty->GetRTTI() == globals::rtti::BSEffectShaderPropertyRTTI.get() ? static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty) : nullptr) {
 			if (!shaderProperty->lightData) {
 				if (auto material = shaderProperty->GetMaterial()) {
-					// Check if it's a valid particle light
 					bool billboard = false;
 					if (a_pass->geometry->GetRTTI() != globals::rtti::NiParticleSystemRTTI.get()) {
 						if (auto parent = a_pass->geometry->parent) {
@@ -520,14 +519,11 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 						}
 					}
 
-					// Already scanned
 					{
 						auto it = particleLightsReferences.find(reinterpret_cast<RE::NiNode*>(a_pass->geometry));
 						if (it != particleLightsReferences.end())
 							return (*it).second;
 					}
-
-					// Not scanned, scan now
 
 					if (!material->sourceTexturePath.empty()) {
 						std::string textureName = ExtractTextureStem(material->sourceTexturePath.c_str());
@@ -711,19 +707,18 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 
 void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light)
 {
+	// Add a particle light to the cache with max-distance culling and fade-based attenuation.
 	static float& lightFadeStart = *reinterpret_cast<float*>(REL::RelocationID(527668, 414582).address());
 	static float& lightFadeEnd = *reinterpret_cast<float*>(REL::RelocationID(527669, 414583).address());
 
-	// NEW: hard distance cutoff for particle lights
 	if (settings.MaxParticleDistance > 0.0f) {
 		float maxDist = settings.MaxParticleDistance;
 		float maxDistSq = maxDist * maxDist;
 
-		const auto& pos = light.positionWS[0].data;  // camera-relative
+		const auto& pos = light.positionWS[0].data;
 		float distSq = (pos.x * pos.x) + (pos.y * pos.y) + (pos.z * pos.z);
 
 		if (distSq > maxDistSq) {
-			// Too far away: don't add this particle light at all
 			return;
 		}
 	}
@@ -772,12 +767,11 @@ namespace RE
 
 void LightLimitFix::UpdateLights()
 {
+	// Gather active lights and particle lights while caching eye positions for stable camera data.
 	auto smState = globals::game::smState;
 	auto& isl = globals::features::inverseSquareLighting;
 
 	auto shadowSceneNode = smState->shadowSceneNode[0];
-
-	// Cache data since cameraData can become invalid in first-person
 
 	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
 		auto eyePosition = globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
@@ -786,8 +780,6 @@ void LightLimitFix::UpdateLights()
 
 	eastl::vector<LightData> lightsData{};
 	lightsData.reserve(MAX_LIGHTS);
-
-	// Process point lights
 
 	roomNodes.clear();
 
@@ -822,11 +814,9 @@ void LightLimitFix::UpdateLights()
 					light.color *= bsLight->lodDimmer;
 
 					if (!IsGlobalLight(bsLight)) {
-						// List of BSMultiBoundRooms affected by a light
 						for (const auto& roomPtr : bsLight->rooms) {
 							addRoom(roomPtr, light);
 						}
-						// List of BSPortals affected by a light
 						for (const auto& portalPtr : bsLight->portals) {
 							addRoom(portalPtr->portalSharedNode.get(), light);
 						}
@@ -840,7 +830,6 @@ void LightLimitFix::UpdateLights()
 						light.lightFlags.set(LightFlags::Shadow);
 					}
 
-					// Check for inactive shadow light
 					if (light.shadowMaskIndex != 255) {
 						SetLightPosition(light, niLight->world.translate);
 
@@ -873,15 +862,12 @@ void LightLimitFix::UpdateLights()
 			if (!particleLight.billboard) {
 				auto particleSystem = static_cast<RE::NiParticleSystem*>(particleLight.node);
 				if (particleSystem && particleSystem->GetParticleRuntimeData().particleData.get()) {
-					// Process BSGeometry
 					auto particleData = particleSystem->GetParticleRuntimeData().particleData.get();
 					auto& particleSystemRuntimeData = particleSystem->GetParticleSystemRuntimeData();
 					auto& particleRuntimeData = particleData->GetParticlesRuntimeData();
 
-					// Use explicit 32-bit type to avoid narrowing warnings
 					std::uint32_t numVertices = static_cast<std::uint32_t>(particleData->GetActiveVertexCount());
 
-					// NEW: clamp by MaxParticlesPerEmitter (also 32-bit)
 					std::uint32_t maxPerEmitter = static_cast<std::uint32_t>(std::max(1, settings.MaxParticlesPerEmitter));
 					if (numVertices > maxPerEmitter) {
 						numVertices = maxPerEmitter;
@@ -893,7 +879,6 @@ void LightLimitFix::UpdateLights()
 
 						auto initialPosition = particleRuntimeData.positions[p];
 						if (!particleSystemRuntimeData.isWorldspace) {
-							// Detect first-person meshes
 							if ((particleLight.node->GetModelData().modelBound.radius * particleLight.node->world.scale) != particleLight.node->worldBound.radius)
 								initialPosition += particleLight.node->worldBound.center;
 							else
@@ -909,7 +894,6 @@ void LightLimitFix::UpdateLights()
 							auto averagePosition = clusteredLight.positionWS[0].data / (float)clusteredLights;
 							float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
 
-							// NEW: use configurable cluster threshold
 							if ((radiusDiff + positionDiff) > settings.ParticleClusterThreshold ||
 								!settings.EnableParticleLightsOptimization) {
 								clusteredLight.radius /= (float)clusteredLights;
@@ -962,7 +946,6 @@ void LightLimitFix::UpdateLights()
 					}
 				}
 			} else {
-				// Process billboard
 				LightData light{};
 
 				light.color.x = particleLight.color.red;
@@ -976,7 +959,7 @@ void LightLimitFix::UpdateLights()
 
 				auto position = particleLight.node->world.translate;
 
-				SetLightPosition(light, position);  // Light is complete for both eyes by now
+				SetLightPosition(light, position);
 
 				light.lightFlags.set(LightFlags::Simple);
 

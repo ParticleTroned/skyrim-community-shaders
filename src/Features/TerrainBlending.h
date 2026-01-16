@@ -142,10 +142,9 @@ public:
 
 		static void Install()
 		{
-			// To know when we are rendering z-prepass depth vs shadows depth
+			// Install hooks for main depth and render-pass interception used by terrain blending.
 			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395, 0x2EE));
 
-			// To manipulate the depth buffer write, depth testing, alpha blending
 			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
 
 			logger::info("[Terrain Overlay] Installed hooks");

@@ -198,6 +198,7 @@ struct ParticleLightInfo
 
 	struct Settings
 	{
+		// Particle light tuning includes clustering, per-emitter limits, and distance culling.
 		bool EnableContactShadows = false;
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
@@ -209,9 +210,9 @@ struct ParticleLightInfo
 		float ParticleRadius = 1.0f;
 		float BillboardBrightness = 1.0f;
 		float BillboardRadius = 1.0f;
-		float ParticleClusterThreshold = 32.0f;  // default = previous hardcoded value
-		int MaxParticlesPerEmitter = 256;        // max default						
-		float MaxParticleDistance = 6000.0f;  // distance cutoff for particle lights (in game units)
+		float ParticleClusterThreshold = 32.0f;
+		int MaxParticlesPerEmitter = 256;
+		float MaxParticleDistance = 6000.0f;
 		bool EnableParticleLightsOptimization = true;
 	};
 
@@ -314,29 +315,23 @@ struct ParticleLightInfo
 template <>
 struct fmt::formatter<LightLimitFix::LightData>
 {
-	// Presentation format: 'f' - fixed.
+	// Formatter supports fixed presentation for LightData diagnostics.
 	char presentation = 'f';
 
-	// Parses format specifications of the form ['f'].
 	constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator
 	{
 		auto it = ctx.begin(), end = ctx.end();
 		if (it != end && (*it == 'f'))
 			presentation = *it++;
 
-		// Check if reached the end of the range:
 		if (it != end && *it != '}')
 			throw format_error("invalid format");
 
-		// Return an iterator past the end of the parsed range:
 		return it;
 	}
 
-	// Formats the point p using the parsed format specification (presentation)
-	// stored in this formatter.
 	auto format(const LightLimitFix::LightData& l, format_context& ctx) const -> format_context::iterator
 	{
-		// ctx.out() is an output iterator to write to.
 		return fmt::format_to(ctx.out(), "{{address {:x} color {} radius {} posWS {} {}}}",
 			reinterpret_cast<uintptr_t>(&l),
 			(Vector3)l.color,

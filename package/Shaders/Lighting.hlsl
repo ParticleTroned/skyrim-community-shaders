@@ -1036,6 +1036,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(TERRAIN_BLENDING)
+	// Terrain blending builds a per-pixel blend factor from mask depth and edge metrics.
 	float blendFactorTerrain = 1.0;
 	uint bypassAngleEdge = 0;
 	uint blendMode = 0;
@@ -2150,6 +2151,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 screenSpaceNormal = normalize(FrameBuffer::WorldToView(worldNormal, false, eyeIndex));
 
 #	if defined(TERRAIN_BLENDING)
+	// Terrain blending applies edge/angle scaling and alpha or dithered clipping.
 	if (tbActive) {
 		float angleRangeScale = 1.0;
 		float angleGainScale = 1.0;
@@ -2187,7 +2189,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float edgeFactor = 1.0;
 		if (frontGap > gapEps) {
-			// Edge-only blending: detect local depth discontinuities in the TB mask.
 			float edgeBoost = bypassAngleEdge != 0 ? 0.0 : 1.0;
 			float slope = 0.0;
 			if (edgeBoost > 0.0) {

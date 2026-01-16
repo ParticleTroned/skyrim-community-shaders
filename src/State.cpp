@@ -281,7 +281,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
 			if (advanced["Frame Annotations"].is_boolean())
 				frameAnnotations = advanced["Frame Annotations"];
-			// NEW: load refraction / heat-warp strength (uniform) from config
+			// Load ImageSpace refraction (heat warp) scale from config.
 			if (advanced["Refraction Scale"].is_number())
 				refractionScale = std::clamp(advanced["Refraction Scale"].get<float>(), 0.0f, 2.0f);
 		}

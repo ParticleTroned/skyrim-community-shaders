@@ -82,7 +82,7 @@ void AdvancedSettingsRenderer::RenderAdvancedSection()
 
 		ImGui::Spacing();
 
-		// Heat warp / refraction strength slider
+		// ImageSpace refraction (heat warp) control.
 		ImGui::Separator();
 		ImGui::Text("ImageSpace Refraction");
 

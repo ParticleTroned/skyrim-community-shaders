@@ -568,6 +568,7 @@ void TerrainBlending::DrawSettings()
 					ImGui::TableSetupColumn("GPU (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
 					ImGui::TableSetupColumn("CPU (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
 					ImGui::TableSetupColumn("Total (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
+					ImGui::TableHeadersRow();
 
 					auto timingRow = [](const char* label, float gpuMs, float gpuLast, float cpuMs, float cpuLast, float totalMs, float totalLast) {
 						ImGui::TableNextRow();

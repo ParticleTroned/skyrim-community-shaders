@@ -244,8 +244,31 @@ endif()
 file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
+set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
+
+# #######################################################################################################################
+# # CMake install() infrastructure for manual packaging
+# #######################################################################################################################
+
+# Append a '/' to the end of each feature path to install contents only
+set(FEATURE_PATHS_SLASH ${FEATURE_PATHS})
+list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
+
+install(CODE "file(REMOVE_RECURSE \${CMAKE_INSTALL_PREFIX})")
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
+install(
+    FILES $<TARGET_PDB_FILE:${PROJECT_NAME}>
+    DESTINATION SKSE/Plugins
+    COMPONENT SKSE
+)
+install(
+    DIRECTORY ${CMAKE_SOURCE_DIR}/package/ ${FEATURE_PATHS_SLASH}
+    DESTINATION .
+    COMPONENT Shaders
+)
+install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
+
 if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
-    set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
     message("Preparing AIO package in ${AIO_DIR}")
 
     # Prepare AIO only when sources change. Gather package + feature files as
@@ -660,14 +683,50 @@ if(AIO_ZIP_TO_DIST)
         )
     endif()
 
+    # Create a stamp-producing custom command so the archive is created only
+    # when AIO inputs change and after PREPARE_AIO has populated ${AIO_DIR}.
     set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
-    message("Zipping ${AIO_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
+    set(AIO_ARCHIVE "${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
+    set(AIO_ZIP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_package.stamp")
+
+    message("Zipping ${AIO_DIR} to ${AIO_ARCHIVE}")
     add_custom_command(
-        TARGET ${PROJECT_NAME}
-        POST_BUILD
-        COMMAND
-            ${CMAKE_COMMAND} -E tar cf
-            ${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP} --format=7zip -- .
+        OUTPUT ${AIO_ZIP_STAMP}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
+        COMMAND ${CMAKE_COMMAND} -E tar cf ${AIO_ARCHIVE} --format=7zip -- .
+        COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
         WORKING_DIRECTORY ${AIO_DIR}
+        DEPENDS PREPARE_AIO
+        COMMENT "Creating AIO archive ${AIO_ARCHIVE}"
     )
+
+    add_custom_target(AIO_ZIP_PACKAGE ALL DEPENDS ${AIO_ZIP_STAMP})
 endif()
+
+# #######################################################################################################################
+# # Manual packaging targets (AIO)
+# #######################################################################################################################
+
+set(DIST_PATH "${CMAKE_SOURCE_DIR}/dist")
+file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
+
+add_custom_command(
+    OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
+    DEPENDS ${PROJECT_NAME}
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+    COMMENT "Installing to AIO folder"
+)
+add_custom_target(AIO DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
+
+set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
+add_custom_command(
+    OUTPUT ${AIO_PACKAGE}
+    DEPENDS ${PROJECT_NAME}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+    COMMAND
+        ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
+        ${AIO_PACKAGE} --format=7zip -- .
+    COMMENT "Creating AIO zip package (manual)"
+)
+add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})

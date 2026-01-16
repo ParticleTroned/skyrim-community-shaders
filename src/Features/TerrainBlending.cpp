@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
 
@@ -26,7 +27,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AngleRangeScale,
 	AngleGainScale,
 	BypassAngleEdge,
-	EnableReplayCulling,
 	ReplayCullDistance,
 	ReplayCullMinPixels)
 
@@ -61,6 +61,10 @@ namespace
 		float replayGpuMs = 0.0f;
 		float depthBlendGpuMsLast = 0.0f;
 		float replayGpuMsLast = 0.0f;
+		float depthBlendCpuMs = 0.0f;
+		float replayCpuMs = 0.0f;
+		float depthBlendCpuMsLast = 0.0f;
+		float replayCpuMsLast = 0.0f;
 
 		void ResetCounts()
 		{
@@ -85,13 +89,17 @@ namespace
 			replayGpuMs = 0.0f;
 			depthBlendGpuMsLast = 0.0f;
 			replayGpuMsLast = 0.0f;
+			depthBlendCpuMs = 0.0f;
+			replayCpuMs = 0.0f;
+			depthBlendCpuMsLast = 0.0f;
+			replayCpuMsLast = 0.0f;
 		}
 	};
 
 	std::atomic<bool> g_tbStatsEnabled{ false };
 	TbDebugStats g_tbStats{};
 
-	void UpdateTbGpuStat(float& smoothedMs, float& lastMs, float sampleMs)
+	void UpdateTbStat(float& smoothedMs, float& lastMs, float sampleMs)
 	{
 		lastMs = sampleMs;
 		if (smoothedMs <= 0.0f) {
@@ -225,12 +233,12 @@ namespace
 			float sampleMs = 0.0f;
 			for (auto& slot : depth.slots) {
 				if (ResolvePair(context, slot, sampleMs)) {
-					UpdateTbGpuStat(stats.depthBlendGpuMs, stats.depthBlendGpuMsLast, sampleMs);
+					UpdateTbStat(stats.depthBlendGpuMs, stats.depthBlendGpuMsLast, sampleMs);
 				}
 			}
 			for (auto& slot : replay.slots) {
 				if (ResolvePair(context, slot, sampleMs)) {
-					UpdateTbGpuStat(stats.replayGpuMs, stats.replayGpuMsLast, sampleMs);
+					UpdateTbStat(stats.replayGpuMs, stats.replayGpuMsLast, sampleMs);
 				}
 			}
 		}
@@ -330,23 +338,11 @@ namespace
 		return g_tbStatsEnabled.load(std::memory_order_relaxed);
 	}
 
-	TerrainBlending::Settings MakeDefaultSettings(uint blendMode, uint ditherMode)
+	TerrainBlending::Settings MakeDefaultSettings()
 	{
 		TerrainBlending::Settings defaults{};
-		defaults.BlendMode = std::min<uint>(blendMode, 1u);
-		defaults.DitherMode = std::min<uint>(ditherMode, 2u);
-		defaults.SkipEdgeSamplesWhenNoGap = true;
-		defaults.EnableReplayCulling = true;
-
-		if (defaults.BlendMode == 0) {
-			// Alpha defaults.
-			defaults.BlendRange = 10.0f;
-			defaults.AngleGainScale = 1.0f;
-		} else {
-			// Stochastic defaults (applies to both 4x4 and noise).
-			defaults.BlendRange = 5.0f;
-			defaults.AngleGainScale = 3.0f;
-		}
+		defaults.BlendMode = 0;
+		defaults.BlendShapeMode = 0;
 
 		return defaults;
 	}
@@ -428,14 +424,6 @@ void TerrainBlending::SetupResources()
 		uavDesc.Format = texDesc.Format;
 		blendedDepthTexture->CreateUAV(uavDesc);
 
-		texDesc.Format = DXGI_FORMAT_R16_UNORM;
-		srvDesc.Format = texDesc.Format;
-		uavDesc.Format = texDesc.Format;
-
-		blendedDepthTexture16 = new Texture2D(texDesc);
-		blendedDepthTexture16->CreateSRV(srvDesc);
-		blendedDepthTexture16->CreateUAV(uavDesc);
-
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		depthSRVBackup = mainDepth.depthSRV;
 
@@ -470,7 +458,7 @@ TerrainBlending::PerFrame TerrainBlending::GetCommonBufferData()
 	data.BlendRange = settings.BlendRange;
 	data.BlendShapeMode = settings.BlendShapeMode;
 	data.BlendMode = std::min<uint>(settings.BlendMode, 1u);
-	data.DitherMode = std::min<uint>(settings.DitherMode, 2u);
+	data.DitherMode = std::min<uint>(settings.DitherMode, 1u);
 	data.EdgeStart = std::max(0.0f, settings.EdgeStart);
 	data.EdgeEnd = std::max(data.EdgeStart + 1e-3f, settings.EdgeEnd);
 	data.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
@@ -501,14 +489,14 @@ void TerrainBlending::DrawSettings()
 
 		ImGui::Text("Performance");
 		ImGui::Separator();
-		ImGui::Checkbox("Enable Replay Culling", &settings.EnableReplayCulling);
-		tooltip("Toggle distance/screen-size culling for the replay pass.");
-		ImGui::SliderFloat("Replay Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
-		tooltip("Skip blending beyond this distance (0 disables).");
-		ImGui::SliderFloat("Replay Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
-		tooltip("Skip blending for tiny projected patches (0 disables).");
+		ImGui::SliderFloat("Cull Distance", &settings.ReplayCullDistance, 0.0f, 8192.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Skip blending beyond this distance (0 disables culling).");
+		ImGui::SliderFloat("Cull Min Pixels", &settings.ReplayCullMinPixels, 0.0f, 256.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		tooltip("Skip blending for tiny projected patches (0 disables culling).");
 		ImGui::Checkbox("Bypass Angle/Edge", &settings.BypassAngleEdge);
 		tooltip("Disable angle scaling and slope bias.");
+		ImGui::Checkbox("Skip Edge Samples When No Gap", &settings.SkipEdgeSamplesWhenNoGap);
+		tooltip("Avoid neighbor depth samples when there is no front-gap.");
 		bool captureTimings = TbStatsEnabled();
 		if (ImGui::Checkbox("Capture TB GPU Timings", &captureTimings)) {
 			if (captureTimings != TbStatsEnabled()) {
@@ -520,11 +508,53 @@ void TerrainBlending::DrawSettings()
 			if (!g_tbGpuTimers.IsReady()) {
 				ImGui::TextUnformatted("GPU timing queries unavailable.");
 			} else {
-				ImGui::Text("DepthBlend: %.3f ms (last %.3f)", g_tbStats.depthBlendGpuMs, g_tbStats.depthBlendGpuMsLast);
-				ImGui::Text("Replay: %.3f ms (last %.3f)", g_tbStats.replayGpuMs, g_tbStats.replayGpuMsLast);
-				const float tbTotalMs = g_tbStats.depthBlendGpuMs + g_tbStats.replayGpuMs;
-				const float tbTotalLastMs = g_tbStats.depthBlendGpuMsLast + g_tbStats.replayGpuMsLast;
-				ImGui::Text("Total: %.3f ms (last %.3f)", tbTotalMs, tbTotalLastMs);
+				const float depthTotalMs = g_tbStats.depthBlendGpuMs + g_tbStats.depthBlendCpuMs;
+				const float depthTotalLastMs = g_tbStats.depthBlendGpuMsLast + g_tbStats.depthBlendCpuMsLast;
+				const float replayTotalMs = g_tbStats.replayGpuMs + g_tbStats.replayCpuMs;
+				const float replayTotalLastMs = g_tbStats.replayGpuMsLast + g_tbStats.replayCpuMsLast;
+				const float tbTotalGpuMs = g_tbStats.depthBlendGpuMs + g_tbStats.replayGpuMs;
+				const float tbTotalGpuLastMs = g_tbStats.depthBlendGpuMsLast + g_tbStats.replayGpuMsLast;
+				const float tbTotalCpuMs = g_tbStats.depthBlendCpuMs + g_tbStats.replayCpuMs;
+				const float tbTotalCpuLastMs = g_tbStats.depthBlendCpuMsLast + g_tbStats.replayCpuMsLast;
+				const float tbTotalMs = tbTotalGpuMs + tbTotalCpuMs;
+				const float tbTotalLastMs = tbTotalGpuLastMs + tbTotalCpuLastMs;
+
+				constexpr float kPassColWidth = 120.0f;
+				constexpr float kTimingColWidth = 140.0f;
+				ImGui::TextUnformatted("Capture CPU/GPU Timings");
+				if (ImGui::BeginTable("Capture CPU/GPU Timings", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
+					ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, kPassColWidth);
+					ImGui::TableSetupColumn("GPU (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
+					ImGui::TableSetupColumn("CPU (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
+					ImGui::TableSetupColumn("Total (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
+					ImGui::TableHeadersRow();
+
+					auto timingRow = [](const char* label, float gpuMs, float gpuLast, float cpuMs, float cpuLast, float totalMs, float totalLast) {
+						ImGui::TableNextRow();
+						ImGui::TableSetColumnIndex(0);
+						ImGui::TextUnformatted(label);
+						ImGui::TableSetColumnIndex(1);
+						ImGui::Text("%7.3f / %7.3f", gpuMs, gpuLast);
+						ImGui::TableSetColumnIndex(2);
+						ImGui::Text("%7.3f / %7.3f", cpuMs, cpuLast);
+						ImGui::TableSetColumnIndex(3);
+						ImGui::Text("%7.3f / %7.3f", totalMs, totalLast);
+					};
+
+					timingRow("DepthBlend",
+						g_tbStats.depthBlendGpuMs, g_tbStats.depthBlendGpuMsLast,
+						g_tbStats.depthBlendCpuMs, g_tbStats.depthBlendCpuMsLast,
+						depthTotalMs, depthTotalLastMs);
+					timingRow("Replay",
+						g_tbStats.replayGpuMs, g_tbStats.replayGpuMsLast,
+						g_tbStats.replayCpuMs, g_tbStats.replayCpuMsLast,
+						replayTotalMs, replayTotalLastMs);
+					timingRow("Total",
+						tbTotalGpuMs, tbTotalGpuLastMs,
+						tbTotalCpuMs, tbTotalCpuLastMs,
+						tbTotalMs, tbTotalLastMs);
+					ImGui::EndTable();
+				}
 			}
 		}
 		ImGui::Spacing();
@@ -538,49 +568,52 @@ void TerrainBlending::DrawSettings()
 		ImGui::Combo("Blend Mode", (int*)&settings.BlendMode, "Alpha\0Stochastic\0");
 		tooltip("Alpha blending or stochastic coverage.");
 		if (settings.BlendMode == 1) {
-			ImGui::Combo("Dither Mode", (int*)&settings.DitherMode, "Ordered 4x4\0Ordered 8x8\0Noise\0");
+			ImGui::Combo("Dither Mode", (int*)&settings.DitherMode, "Ordered 4x4\0Noise\0");
 			tooltip("Ordered or noise dither for stochastic coverage.");
 		}
 		ImGui::Spacing();
 
 		ImGui::Text("Edge Detection");
 		ImGui::Separator();
-		ImGui::Checkbox("Skip Edge Samples When No Gap", &settings.SkipEdgeSamplesWhenNoGap);
-		tooltip("Avoid neighbor depth samples when there is no front-gap.");
 		float edgeStartMax = std::max(1.0f, settings.BlendRange);
 		float edgeEndMax = std::max(2.0f, settings.BlendRange * 2.0f);
 		constexpr float edgeExponent = 4.0f;
 		auto edgeSlider = [&](const char* label, float* value, float maxValue, const char* help) {
 			float clampedValue = std::min(std::max(*value, 0.0f), maxValue);
 			float normalized = maxValue > 0.0f ? std::pow(clampedValue / maxValue, 1.0f / edgeExponent) : 0.0f;
-			if (ImGui::SliderFloat(label, &normalized, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+			if (ImGui::SliderFloat(label, &normalized, 0.0f, 1.0f, "%.6f", ImGuiSliderFlags_AlwaysClamp)) {
 				clampedValue = std::pow(normalized, edgeExponent) * maxValue;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted(help);
+				ImGui::Separator();
+				ImGui::Text("Real: %.6e", *value);
 			}
 			*value = clampedValue;
-			ImGui::SameLine();
-			ImGui::Text("%.3f", *value);
 		};
 		edgeSlider("Edge Start", &settings.EdgeStart, edgeStartMax, "Depth discontinuity where edge blending begins.");
 		edgeSlider("Edge End", &settings.EdgeEnd, edgeEndMax, "Depth discontinuity where edge blending is full.");
-		ImGui::Combo("Edge Slope Mode", (int*)&settings.EdgeSlopeMode, "View\0Mesh\0None\0");
-		tooltip("Slope source for edge bias.");
-		ImGui::SliderFloat("Angle Start", &settings.AngleStartDeg, 0.0f, 45.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		tooltip("Angle where edge scaling begins.");
-		ImGui::SliderFloat("Angle End", &settings.AngleEndDeg, 0.0f, 90.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		tooltip("Angle where edge scaling is full.");
-		ImGui::SliderFloat("Angle Range Scale", &settings.AngleRangeScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		tooltip("Edge range multiplier at Angle End.");
-		ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		tooltip("Edge gain multiplier at Angle End.");
+		ImGui::Spacing();
+
+		if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_None)) {
+			ImGui::Combo("Edge Slope Mode", (int*)&settings.EdgeSlopeMode, "View\0Mesh\0None\0");
+			tooltip("Slope source for edge bias.");
+			ImGui::SliderFloat("Angle Start", &settings.AngleStartDeg, 0.0f, 45.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			tooltip("Angle where edge scaling begins.");
+			ImGui::SliderFloat("Angle End", &settings.AngleEndDeg, 0.0f, 90.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			tooltip("Angle where edge scaling is full.");
+			ImGui::SliderFloat("Angle Range Scale", &settings.AngleRangeScale, 0.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			tooltip("Edge range multiplier at Angle End.");
+			ImGui::SliderFloat("Angle Gain Scale", &settings.AngleGainScale, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			tooltip("Edge gain multiplier at Angle End.");
+			ImGui::TreePop();
+		}
 
 		settings.EdgeStart = std::max(0.0f, settings.EdgeStart);
 		settings.EdgeEnd = std::max(settings.EdgeEnd, settings.EdgeStart + 1e-3f);
-		settings.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
-		settings.BlendMode = std::min<uint>(settings.BlendMode, 1u);
-		settings.DitherMode = std::min<uint>(settings.DitherMode, 2u);
+	settings.EdgeSlopeMode = std::min<uint>(settings.EdgeSlopeMode, 2u);
+	settings.BlendMode = std::min<uint>(settings.BlendMode, 1u);
+	settings.DitherMode = std::min<uint>(settings.DitherMode, 1u);
 		settings.AngleStartDeg = std::max(0.0f, settings.AngleStartDeg);
 		settings.AngleEndDeg = std::max(settings.AngleEndDeg, settings.AngleStartDeg + 1e-3f);
 		settings.AngleRangeScale = std::max(0.0f, settings.AngleRangeScale);
@@ -605,7 +638,7 @@ void TerrainBlending::SaveSettings(json& o_json)
 
 void TerrainBlending::RestoreDefaultSettings()
 {
-	settings = MakeDefaultSettings(settings.BlendMode, settings.DitherMode);
+	settings = MakeDefaultSettings();
 }
 
 void TerrainBlending::TerrainShaderHacks()
@@ -669,14 +702,17 @@ void TerrainBlending::BlendPrepassDepths()
 		g_tbGpuTimers.Resolve(context, g_tbStats);
 	}
 
+	const bool statsEnabled = TbStatsEnabled();
+	std::chrono::steady_clock::time_point cpuStart{};
+	if (statsEnabled) {
+		cpuStart = std::chrono::steady_clock::now();
+	}
+
 	{
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[2] = {
-			blendedDepthTexture->uav.get(),
-			blendedDepthTexture16->uav.get()
-		};
+		ID3D11UnorderedAccessView* uavs[1] = { blendedDepthTexture->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		TbGpuTimers::QueryPair* depthQuery = nullptr;
@@ -690,8 +726,14 @@ void TerrainBlending::BlendPrepassDepths()
 		g_tbGpuTimers.EndDepth(context, depthQuery);
 	}
 
+	if (statsEnabled) {
+		const auto cpuEnd = std::chrono::steady_clock::now();
+		const float cpuMs = std::chrono::duration<float, std::milli>(cpuEnd - cpuStart).count();
+		UpdateTbStat(g_tbStats.depthBlendCpuMs, g_tbStats.depthBlendCpuMsLast, cpuMs);
+	}
+
 	{
-		ID3D11UnorderedAccessView* uavs[2] = { nullptr, nullptr };
+		ID3D11UnorderedAccessView* uavs[1] = { nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 	}
 	{
@@ -771,9 +813,8 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	const bool statsEnabled = TbStatsEnabled();
-	const bool replayCullEnabled = singleton.settings.EnableReplayCulling;
-	const float replayCullDistance = replayCullEnabled ? std::max(0.0f, singleton.settings.ReplayCullDistance) : 0.0f;
-	const float replayCullMinPixels = replayCullEnabled ? std::max(0.0f, singleton.settings.ReplayCullMinPixels) : 0.0f;
+	const float replayCullDistance = std::max(0.0f, singleton.settings.ReplayCullDistance);
+	const float replayCullMinPixels = std::max(0.0f, singleton.settings.ReplayCullMinPixels);
 	float pixelsPerUnit = 0.0f;
 	if (replayCullMinPixels > 0.0f && globals::state) {
 		const float2 screenSize = Util::ConvertToDynamic(globals::state->screenSize);
@@ -1018,6 +1059,10 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		g_tbGpuTimers.Resolve(context, g_tbStats);
 	}
 	const bool hasWork = !terrainRenderPasses.empty() || !renderPasses.empty();
+	std::chrono::steady_clock::time_point replayCpuStart{};
+	if (statsEnabled && hasWork) {
+		replayCpuStart = std::chrono::steady_clock::now();
+	}
 	if (statsEnabled) {
 		g_tbStats.renderCalls++;
 		if (hasWork) {
@@ -1036,12 +1081,13 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	};
 
 	// Used to get the distance of the surface to the lowest depth
+	Texture2D* maskTexture = blendedDepthTexture;
 	ID3D11ShaderResourceView* views[1] = {
-		blendedDepthTexture ? blendedDepthTexture->srv.get() : nullptr
+		maskTexture ? maskTexture->srv.get() : nullptr
 	};
 	context->PSSetShaderResources(55, ARRAYSIZE(views), views);
 
-	if (!terrainRenderPasses.empty() || !renderPasses.empty()) {
+	if (hasWork) {
 		TbGpuTimers::QueryPair* replayQuery = nullptr;
 		if (statsEnabled) {
 			replayQuery = g_tbGpuTimers.BeginReplay(context);
@@ -1263,6 +1309,12 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		g_tbGpuTimers.EndReplay(context, replayQuery);
 	}
 
+	if (statsEnabled && hasWork) {
+		const auto replayCpuEnd = std::chrono::steady_clock::now();
+		const float cpuMs = std::chrono::duration<float, std::milli>(replayCpuEnd - replayCpuStart).count();
+		UpdateTbStat(g_tbStats.replayCpuMs, g_tbStats.replayCpuMsLast, cpuMs);
+	}
+
 }
 
 void TerrainBlending::ToggleDebugCapture()
@@ -1286,9 +1338,13 @@ void TerrainBlending::DumpDebugStats()
 	const char* depthInfo = g_tbStats.mainInfoValid ? "" : " (main depth info unavailable)";
 	const float tbTotalLastMs = g_tbStats.depthBlendGpuMsLast + g_tbStats.replayGpuMsLast;
 	const float tbTotalMs = g_tbStats.depthBlendGpuMs + g_tbStats.replayGpuMs;
+	const float tbTotalCpuLastMs = g_tbStats.depthBlendCpuMsLast + g_tbStats.replayCpuMsLast;
+	const float tbTotalCpuMs = g_tbStats.depthBlendCpuMs + g_tbStats.replayCpuMs;
+	const float tbTotalCombinedLastMs = tbTotalLastMs + tbTotalCpuLastMs;
+	const float tbTotalCombinedMs = tbTotalMs + tbTotalCpuMs;
 
 	logger::info(
-		"[TB][STAT] enabled={} prepass enter={} exit={} terrainPass={} accept={} reject={} toggleT={} toggleF={} queuedTerrain={} queuedExtra={} maxTerrainQueue={} maxExtraQueue={} blendDispatch={} renderCalls={} workCalls={} renderDepth={} renderTerrainDepth={} distMin={} distMax={} mainDepth={}x{} fmt={} array={} srvDim={} depthBlendMs={} replayMs={} totalMs={} totalMsSmoothed={}{}",
+		"[TB][STAT] enabled={} prepass enter={} exit={} terrainPass={} accept={} reject={} toggleT={} toggleF={} queuedTerrain={} queuedExtra={} maxTerrainQueue={} maxExtraQueue={} blendDispatch={} renderCalls={} workCalls={} renderDepth={} renderTerrainDepth={} distMin={} distMax={} mainDepth={}x{} fmt={} array={} srvDim={} depthBlendGpuMs={} replayGpuMs={} totalGpuMs={} totalGpuMsSmoothed={} depthBlendCpuMs={} replayCpuMs={} totalCpuMs={} totalCpuMsSmoothed={} totalCombinedMs={} totalCombinedMsSmoothed={}{}",
 		enabled,
 		g_tbStats.prepassEnter,
 		g_tbStats.prepassExit,
@@ -1317,6 +1373,12 @@ void TerrainBlending::DumpDebugStats()
 		g_tbStats.replayGpuMsLast,
 		tbTotalLastMs,
 		tbTotalMs,
+		g_tbStats.depthBlendCpuMsLast,
+		g_tbStats.replayCpuMsLast,
+		tbTotalCpuLastMs,
+		tbTotalCpuMs,
+		tbTotalCombinedLastMs,
+		tbTotalCombinedMs,
 		depthInfo);
 
 	g_tbStats.ResetCounts();

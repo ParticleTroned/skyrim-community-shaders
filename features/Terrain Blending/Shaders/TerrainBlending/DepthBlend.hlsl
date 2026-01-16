@@ -3,16 +3,14 @@
 // Computes a "closest-depth" field used by Terrain Blending:
 //   blendedDepth = min(mainDepth, terrainDepth)
 //
-// The output is written twice:
-//   u0: R32_FLOAT UAV (debug / high precision)
-//   u1: R16_UNORM UAV (cheap sampling in Lighting; quantized but sufficient)
+// The output is written to:
+//   u0: R32_FLOAT UAV (high precision mask)
 //
 // NOTE:
 //  - We intentionally use plain float types here (no 'unorm' modifiers) for maximum compiler compatibility.
 //  - We also guard dispatch bounds, since Dispatch() uses ceil(width/8), ceil(height/8).
 
 RWTexture2D<float> BlendedDepthTexture   : register(u0);
-RWTexture2D<float> BlendedDepthTexture16 : register(u1);
 
 Texture2D<float> MainDepthTexture   : register(t0);
 Texture2D<float> TerrainDepthTexture: register(t1);
@@ -36,6 +34,5 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	// Helps keep the R16_UNORM UAV write well-defined even if inputs contain tiny overshoots.
 	mixedDepth = saturate(mixedDepth);
 
-	BlendedDepthTexture[DTid.xy]   = mixedDepth;
-	BlendedDepthTexture16[DTid.xy] = mixedDepth;
+	BlendedDepthTexture[DTid.xy] = mixedDepth;
 }

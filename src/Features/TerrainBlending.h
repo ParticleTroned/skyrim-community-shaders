@@ -3,19 +3,19 @@
 struct TerrainBlending : Feature
 {
 public:
-	virtual inline std::string GetName() override { return "Terrain Overlay VR"; }
+	virtual inline std::string GetName() override { return "Terrain Blending VR"; }
 	virtual inline std::string GetShortName() override { return "TerrainBlending"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_BLENDING"; }
 	virtual std::string_view GetCategory() const override { return "Landscape & Textures"; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides VR-friendly terrain overlay blending with edge-aware, angle-scaled fades to soften object-ground seams without affecting shadow stability.",
-			{ "Terrain-to-object overlay blending tuned for VR",
-				"Edge-only blending using depth-mask discontinuities",
-				"Angle-aware blend range/gain for steep seams",
-				"Configurable blend shape and edge thresholds",
-				"Isolated depth usage to avoid shadow swimming" }
+			"Provides seamless blending between terrain and objects, eliminating harsh transitions where objects meet the ground for more natural-looking landscapes.",
+			{ "Seamless terrain-to-object blending transitions in VR",
+				"Advanced depth buffer manipulation for smooth integration",
+				"Support for alternative terrain rendering modes",
+				"Multi-pass rendering optimization for complex scenes",
+				"Enhanced visual continuity in landscape interactions" }
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
@@ -37,21 +37,20 @@ public:
 	{
 		bool Enable = true;
 		float BlendRange = 5.0f;
-		uint BlendShapeMode = 2;
-		uint BlendMode = 1;
-		uint DitherMode = 2;
-		float EdgeStart = 0.002f;
-		float EdgeEnd = 0.06f;
+		uint BlendShapeMode = 0;
+		uint BlendMode = 0;
+		uint DitherMode = 1;
+		float EdgeStart = 1.28e-9f;
+		float EdgeEnd = 1.0e-3f;
 		uint EdgeSlopeMode = 1;
 		bool SkipEdgeSamplesWhenNoGap = true;
 		float AngleStartDeg = 0.0f;
 		float AngleEndDeg = 12.5f;
 		float AngleRangeScale = 0.25f;
-		float AngleGainScale = 3.0f;
+		float AngleGainScale = 1.0f;
 		bool BypassAngleEdge = false;
-		bool EnableReplayCulling = true;
-		float ReplayCullDistance = 768.0f;
-		float ReplayCullMinPixels = 0.0f;
+		float ReplayCullDistance = 512.0f;
+		float ReplayCullMinPixels = 16.0f;
 	};
 
 	struct alignas(16) PerFrame
@@ -111,7 +110,6 @@ public:
 	void DumpDebugStats();
 
 	Texture2D* blendedDepthTexture = nullptr;
-	Texture2D* blendedDepthTexture16 = nullptr;
 
 	RE::BSGraphics::DepthStencilData terrainDepth;
 

@@ -343,22 +343,6 @@ float TerrainBlendingDither4x4(uint2 pixelCoord)
 	uint index = ((pixelCoord.y & 3u) << 2) | (pixelCoord.x & 3u);
 	return kBayer4x4[index];
 }
-
-float TerrainBlendingDither8x8(uint2 pixelCoord)
-{
-	static const float kBayer8x8[64] = {
-		0.0 / 64.0, 32.0 / 64.0, 8.0 / 64.0, 40.0 / 64.0, 2.0 / 64.0, 34.0 / 64.0, 10.0 / 64.0, 42.0 / 64.0,
-		48.0 / 64.0, 16.0 / 64.0, 56.0 / 64.0, 24.0 / 64.0, 50.0 / 64.0, 18.0 / 64.0, 58.0 / 64.0, 26.0 / 64.0,
-		12.0 / 64.0, 44.0 / 64.0, 4.0 / 64.0, 36.0 / 64.0, 14.0 / 64.0, 46.0 / 64.0, 6.0 / 64.0, 38.0 / 64.0,
-		60.0 / 64.0, 28.0 / 64.0, 52.0 / 64.0, 20.0 / 64.0, 62.0 / 64.0, 30.0 / 64.0, 54.0 / 64.0, 22.0 / 64.0,
-		3.0 / 64.0, 35.0 / 64.0, 11.0 / 64.0, 43.0 / 64.0, 1.0 / 64.0, 33.0 / 64.0, 9.0 / 64.0, 41.0 / 64.0,
-		51.0 / 64.0, 19.0 / 64.0, 59.0 / 64.0, 27.0 / 64.0, 49.0 / 64.0, 17.0 / 64.0, 57.0 / 64.0, 25.0 / 64.0,
-		15.0 / 64.0, 47.0 / 64.0, 7.0 / 64.0, 39.0 / 64.0, 13.0 / 64.0, 45.0 / 64.0, 5.0 / 64.0, 37.0 / 64.0,
-		63.0 / 64.0, 31.0 / 64.0, 55.0 / 64.0, 23.0 / 64.0, 61.0 / 64.0, 29.0 / 64.0, 53.0 / 64.0, 21.0 / 64.0
-	};
-	uint index = ((pixelCoord.y & 7u) << 3) | (pixelCoord.x & 7u);
-	return kBayer8x8[index];
-}
 #endif
 
 #if defined(DEFERRED)
@@ -2238,8 +2222,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float dither = 0.0;
 			if (ditherMode == 0) {
 				dither = TerrainBlendingDither4x4(uint2(input.Position.xy));
-			} else if (ditherMode == 1) {
-				dither = TerrainBlendingDither8x8(uint2(input.Position.xy));
 			} else {
 				dither = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 			}

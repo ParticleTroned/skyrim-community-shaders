@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <limits>
 
 #include "Deferred.h"
@@ -32,6 +33,38 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	struct RollingAverage
+	{
+		struct Sample
+		{
+			double timeSec;
+			float value;
+		};
+
+		std::deque<Sample> samples;
+		double sum = 0.0;
+
+		void Reset()
+		{
+			samples.clear();
+			sum = 0.0;
+		}
+
+		float Push(double nowSec, float value)
+		{
+			constexpr double kWindowSec = 5.0;
+			samples.push_back({ nowSec, value });
+			sum += value;
+			const double cutoff = nowSec - kWindowSec;
+			while (!samples.empty() && samples.front().timeSec < cutoff) {
+				sum -= samples.front().value;
+				samples.pop_front();
+			}
+			const size_t count = samples.size();
+			return count > 0 ? static_cast<float>(sum / static_cast<double>(count)) : value;
+		}
+	};
+
 	struct TbDebugStats
 	{
 		uint32_t prepassEnter = 0;
@@ -65,6 +98,10 @@ namespace
 		float replayCpuMs = 0.0f;
 		float depthBlendCpuMsLast = 0.0f;
 		float replayCpuMsLast = 0.0f;
+		RollingAverage depthBlendGpuAvg{};
+		RollingAverage replayGpuAvg{};
+		RollingAverage depthBlendCpuAvg{};
+		RollingAverage replayCpuAvg{};
 
 		void ResetCounts()
 		{
@@ -93,21 +130,26 @@ namespace
 			replayCpuMs = 0.0f;
 			depthBlendCpuMsLast = 0.0f;
 			replayCpuMsLast = 0.0f;
+			depthBlendGpuAvg.Reset();
+			replayGpuAvg.Reset();
+			depthBlendCpuAvg.Reset();
+			replayCpuAvg.Reset();
 		}
 	};
 
 	std::atomic<bool> g_tbStatsEnabled{ false };
 	TbDebugStats g_tbStats{};
 
-	void UpdateTbStat(float& smoothedMs, float& lastMs, float sampleMs)
+	double GetTbNowSeconds()
+	{
+		using clock = std::chrono::steady_clock;
+		return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
+	}
+
+	void UpdateTbStat(RollingAverage& history, float& smoothedMs, float& lastMs, float sampleMs)
 	{
 		lastMs = sampleMs;
-		if (smoothedMs <= 0.0f) {
-			smoothedMs = sampleMs;
-		} else {
-			constexpr float kAlpha = 0.2f;
-			smoothedMs = smoothedMs * (1.0f - kAlpha) + sampleMs * kAlpha;
-		}
+		smoothedMs = history.Push(GetTbNowSeconds(), sampleMs);
 	}
 
 	constexpr uint32_t kTbGpuQueryRingSize = 4;
@@ -233,12 +275,12 @@ namespace
 			float sampleMs = 0.0f;
 			for (auto& slot : depth.slots) {
 				if (ResolvePair(context, slot, sampleMs)) {
-					UpdateTbStat(stats.depthBlendGpuMs, stats.depthBlendGpuMsLast, sampleMs);
+					UpdateTbStat(stats.depthBlendGpuAvg, stats.depthBlendGpuMs, stats.depthBlendGpuMsLast, sampleMs);
 				}
 			}
 			for (auto& slot : replay.slots) {
 				if (ResolvePair(context, slot, sampleMs)) {
-					UpdateTbStat(stats.replayGpuMs, stats.replayGpuMsLast, sampleMs);
+					UpdateTbStat(stats.replayGpuAvg, stats.replayGpuMs, stats.replayGpuMsLast, sampleMs);
 				}
 			}
 		}
@@ -498,12 +540,12 @@ void TerrainBlending::DrawSettings()
 		ImGui::Checkbox("Skip Edge Samples When No Gap", &settings.SkipEdgeSamplesWhenNoGap);
 		tooltip("Avoid neighbor depth samples when there is no front-gap.");
 		bool captureTimings = TbStatsEnabled();
-		if (ImGui::Checkbox("Capture TB GPU Timings", &captureTimings)) {
+		if (ImGui::Checkbox("Capture CPU/GPU Timings", &captureTimings)) {
 			if (captureTimings != TbStatsEnabled()) {
 				ToggleDebugCapture();
 			}
 		}
-		tooltip("Record GPU timings for TB passes (debug).");
+		tooltip("Record CPU/GPU timings for TB passes (debug). First value is a 5s rolling average.");
 		if (captureTimings) {
 			if (!g_tbGpuTimers.IsReady()) {
 				ImGui::TextUnformatted("GPU timing queries unavailable.");
@@ -521,13 +563,11 @@ void TerrainBlending::DrawSettings()
 
 				constexpr float kPassColWidth = 120.0f;
 				constexpr float kTimingColWidth = 140.0f;
-				ImGui::TextUnformatted("Capture CPU/GPU Timings");
 				if (ImGui::BeginTable("Capture CPU/GPU Timings", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
 					ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, kPassColWidth);
 					ImGui::TableSetupColumn("GPU (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
 					ImGui::TableSetupColumn("CPU (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
 					ImGui::TableSetupColumn("Total (ms)", ImGuiTableColumnFlags_WidthFixed, kTimingColWidth);
-					ImGui::TableHeadersRow();
 
 					auto timingRow = [](const char* label, float gpuMs, float gpuLast, float cpuMs, float cpuLast, float totalMs, float totalLast) {
 						ImGui::TableNextRow();
@@ -729,7 +769,7 @@ void TerrainBlending::BlendPrepassDepths()
 	if (statsEnabled) {
 		const auto cpuEnd = std::chrono::steady_clock::now();
 		const float cpuMs = std::chrono::duration<float, std::milli>(cpuEnd - cpuStart).count();
-		UpdateTbStat(g_tbStats.depthBlendCpuMs, g_tbStats.depthBlendCpuMsLast, cpuMs);
+		UpdateTbStat(g_tbStats.depthBlendCpuAvg, g_tbStats.depthBlendCpuMs, g_tbStats.depthBlendCpuMsLast, cpuMs);
 	}
 
 	{
@@ -1298,7 +1338,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	if (statsEnabled && hasWork) {
 		const auto replayCpuEnd = std::chrono::steady_clock::now();
 		const float cpuMs = std::chrono::duration<float, std::milli>(replayCpuEnd - replayCpuStart).count();
-		UpdateTbStat(g_tbStats.replayCpuMs, g_tbStats.replayCpuMsLast, cpuMs);
+		UpdateTbStat(g_tbStats.replayCpuAvg, g_tbStats.replayCpuMs, g_tbStats.replayCpuMsLast, cpuMs);
 	}
 
 }

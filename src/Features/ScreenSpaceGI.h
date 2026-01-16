@@ -19,14 +19,6 @@ public:
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual std::string_view GetCategory() const override { return "Lighting"; }
 
-	// Macro injected into shaders
-	virtual inline std::string_view GetShaderDefineName() override { return "SCREEN_SPACE_GI"; }
-	// IMPORTANT: define must be present for ImageSpace permutations (ISLightingComposite)
-	virtual bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::ImageSpace; }
-
-	// Publish SSGI SRVs for the composite pass (t46..t49 in the .cpp)
-	virtual void Prepass() override;
-
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		std::string desc =

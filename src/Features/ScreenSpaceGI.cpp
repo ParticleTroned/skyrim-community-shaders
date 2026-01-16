@@ -892,25 +892,3 @@ void ScreenSpaceGI::DrawSSGI()
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
-/**
- * NEW: publish SSGI results for the lighting pass.
- * Binds AO / IL(Y) / IL(CoCg) / Specular-GI to t46..t49.
- * Make sure the lighting HLSL (including VR path) samples these under SCREEN_SPACE_GI.
- */
-void ScreenSpaceGI::Prepass()
-{
-	// Run the pipeline for this frame (fills texAo/texIl*/texGiSpecular)
-	DrawSSGI();
-
-	// Bind to free PS slots (avoid t45 used by SSS).
-	// Keep these indices in sync with the lighting HLSL registers!
-	ID3D11ShaderResourceView* srvs[4] = {
-		texAo[outputAoIdx]       ? texAo[outputAoIdx]->srv.get()        : nullptr, // t46
-		texIlY[outputIlIdx]      ? texIlY[outputIlIdx]->srv.get()       : nullptr, // t47
-		texIlCoCg[outputIlIdx]   ? texIlCoCg[outputIlIdx]->srv.get()    : nullptr, // t48
-		texGiSpecular[outputAoIdx]? texGiSpecular[outputAoIdx]->srv.get(): nullptr  // t49
-	};
-
-	auto ctx = globals::d3d::context;
-	ctx->PSSetShaderResources(46, 4, srvs);
-}

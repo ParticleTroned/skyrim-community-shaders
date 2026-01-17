@@ -83,7 +83,8 @@
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "ON",
                 "ENABLE_SKYRIM_SE": "ON",
-                "ENABLE_SKYRIM_VR": "ON"
+                "ENABLE_SKYRIM_VR": "ON",
+                "AUTO_PLUGIN_DEPLOYMENT": "OFF"
             },
             "inherits": "skyrim"
         },
@@ -115,9 +116,46 @@
     ],
     "buildPresets": [
         {
-            "name": "ALL",
+            "name": "Dev",
+            "description": "Default build preset for developers, generate an AIO folder thats ready to copy",
             "configurePreset": "ALL",
-            "configuration": "Release"
+            "configuration": "Release",
+            "targets": ["CommunityShaders", "AIO"]
+        },
+        {
+            "name": "CSmain",
+            "description": "Build CommunityShaders only (no AIO/package)",
+            "configurePreset": "ALL",
+            "configuration": "Release",
+            "targets": ["CommunityShaders"]
+        },
+        {
+            "name": "ALL",
+            "description": "(Deprecated), kept for for CI, use Package instead",
+            "configurePreset": "ALL",
+            "configuration": "Release",
+            "targets": ["CommunityShaders", "Package-AIO-Manual"]
+        },
+        {
+            "name": "Package",
+            "description": "Build preset to generate a AIO zip package in <SRC>/dist folder, mostly for CI",
+            "configurePreset": "ALL",
+            "configuration": "Release",
+            "targets": ["CommunityShaders", "Package-AIO-Manual"]
+        },
+        {
+            "name": "Shaders",
+            "description": "Build preset to copy shaders into <BUILD>/AIO folder for shader validation",
+            "configurePreset": "ALL",
+            "configuration": "Release",
+            "targets": ["prepare_shaders"]
+        },
+        {
+            "name": "Debug",
+            "description": "Debug build for CS SKSE plugin, generate an AIO folder thats ready to copy",
+            "configurePreset": "ALL",
+            "configuration": "Debug",
+            "targets": ["CommunityShaders", "AIO"]
         }
     ]
 }

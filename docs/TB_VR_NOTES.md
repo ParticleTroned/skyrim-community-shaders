@@ -28,6 +28,12 @@ Why this is done:
    fix the shadow issue because the global depth SRV override was still active.
 4) af60265: Added logging only.
 
+## Trigger alternatives to 589cb91 (VR)
+- Keep Main_RenderDepth as the trigger, but only accept the true main prepass (kMAIN DSV bound and no RTVs).
+- Detect the true prepass by technique/renderFlags signature instead of DSV pointer matching.
+- Gate the trigger on world-render boundaries and start TB on the first depth-only pass after world render begins.
+- As a last resort, run an explicit TB prepass (render terrain depth into terrainDepth) each frame.
+
 ## Most likely fix (recommended)
 - Keep the main prepass detection from 589cb91 (this is the correct trigger).
 - Do NOT globally override the engine depth SRVs in VR.

@@ -9,9 +9,23 @@ public:
 		bool LockSignatureAfterFrames = true;
 		int SignatureLockFrames = 60;
 		float TerrainCullDistance = 2048.0f;
+		float BlendStrength = 1.0f;
 	};
 
 	Settings settings;
+
+	struct alignas(16) PerFrame
+	{
+		float BlendStrength = 1.0f;
+		float pad0[3]{};
+	};
+
+	PerFrame GetCommonBufferData() const
+	{
+		PerFrame data{};
+		data.BlendStrength = settings.BlendStrength;
+		return data;
+	}
 
 	virtual inline std::string GetName() override { return "Terrain Blending"; }
 	virtual inline std::string GetShortName() override { return "TerrainBlending"; }

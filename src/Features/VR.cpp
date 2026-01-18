@@ -4,7 +4,6 @@
 #include "RE/B/BSOpenVR.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
-#include "Upscaling.h"
 #include <openvr.h>
 
 #include "State.h"
@@ -587,44 +586,16 @@ namespace
 		auto& vr = globals::features::vr;
 		VR::Settings& settings = vr.settings;
 		if (ImGui::CollapsingHeader("General Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			// If an upscaler is active that rewrites or repurposes the depth buffer,
-			// depth-buffer-culling must be disabled to avoid incorrect occlusion tests
-			// (which are especially problematic in VR). Query the Upscaling feature
-			// to see whether we're running FSR, XeSS or DLSS.
-			// Determine if an external upscaler is active by reading the numeric
-			// setting value directly. Avoid referencing Upscaling types here to
-			// prevent header/type collisions in this translation unit.
-			// Query the Upscaling feature for an authoritative state flag.
-			bool upscalingActive = globals::features::upscaling.IsUpscalingActive();
-
 			// Exteriors
-			if (upscalingActive)
-				ImGui::BeginDisabled();
 			ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
-			if (upscalingActive) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Disabled while an external upscaler is active (FSR/XeSS/DLSS) because upscalers may modify depth.\nThis prevents incorrect occlusion in VR.");
-				}
-				ImGui::EndDisabled();
-			} else {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Improves performance in exteriors, recommended ON.");
-				}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Improves performance in exteriors, recommended ON.");
 			}
 
 			// Interiors
-			if (upscalingActive)
-				ImGui::BeginDisabled();
 			ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
-			if (upscalingActive) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Disabled while an external upscaler is active (FSR/XeSS/DLSS) because upscalers may modify depth.\nThis prevents incorrect occlusion in VR.");
-				}
-				ImGui::EndDisabled();
-			} else {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Improves performance in interiors, recommended OFF due to occasional visual glitches.");
-				}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Improves performance in interiors, recommended OFF due to occasional visual glitches.");
 			}
 			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f"))
 				*vr.gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
@@ -1596,16 +1567,13 @@ void VR::SubmitOverlayFrame()
 // Helper to centralize VR depth buffer culling logic, reducing duplication between DataLoaded and EarlyPrepass.
 void VR::UpdateDepthBufferCulling(bool desired)
 {
-	if (globals::features::upscaling.IsUpscalingActive()) {
-		if (gDepthBufferCulling && *gDepthBufferCulling) {
-			logger::info("Upscaling detected, disabling incompatible depth buffer culling.");
-			*gDepthBufferCulling = false;
-		}
-	} else {
-		if (gDepthBufferCulling && *gDepthBufferCulling != desired) {
-			*gDepthBufferCulling = desired;
-			logger::info("VR depth buffer culling restored to {}", desired);
-		}
+	if (!gDepthBufferCulling) {
+		logger::warn("VR: gDepthBufferCulling is null, cannot update depth buffer culling");
+		return;
+	}
+	if (*gDepthBufferCulling != desired) {
+		*gDepthBufferCulling = desired;
+		logger::info("VR depth buffer culling set to {}", desired);
 	}
 }
 

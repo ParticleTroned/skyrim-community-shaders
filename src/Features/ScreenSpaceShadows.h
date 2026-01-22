@@ -34,7 +34,9 @@ public:
 		float ShadowContrast = 4.0f;
 		uint Enable = 1;
 		uint SampleCount = 1;
-		uint pad0[3];
+		uint DynamicSampleCapEnabled = 1;
+		uint DynamicSampleCap = 64;
+		uint pad0[1];
 	};
 
 	BendSettings bendSettings;
@@ -55,6 +57,10 @@ public:
 									   // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
 		float2 DynamicRes;
+
+		uint DynamicSampleCount;
+		uint DynamicReadCount;
+		float pad0[2];
 
 		BendSettings settings;
 	};
@@ -85,4 +91,5 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; };
+	virtual bool IsCore() const override { return true; };
 };

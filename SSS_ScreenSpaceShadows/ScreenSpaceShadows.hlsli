@@ -1,0 +1,36 @@
+
+namespace ScreenSpaceShadows
+{
+	Texture2D<unorm half> ScreenSpaceShadowsTexture : register(t45);
+
+float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, uint eyeIndex)
+{
+#if defined(VR)
+	// VR: Apply Gaussian blur for softer shadows
+	float result = 0;
+	const float blurRadius = 1;
+	
+	// 3x3 Gaussian kernel
+	const float weights[3][3] = {
+		{0.077847, 0.123317, 0.077847},
+		{0.123317, 0.195346, 0.123317},
+		{0.077847, 0.123317, 0.077847}
+	};
+	
+	for (int y = -1; y <= 1; y++)
+	{
+		for (int x = -1; x <= 1; x++)
+		{
+			float2 offset = float2(x, y) * blurRadius;
+			int2 samplePos = int2(screenPosition.xy + offset + 0.5f);
+			result += ScreenSpaceShadowsTexture.Load(int3(samplePos, 0)).x * weights[y+1][x+1];
+		}
+	}
+	
+	return result;
+#else
+	// Non-VR: Simple direct load
+	return ScreenSpaceShadowsTexture.Load(int3(int2(screenPosition.xy + 0.5f), 0)).x;
+#endif
+}
+}

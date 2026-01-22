@@ -1,0 +1,37 @@
+This simple gaussian blur wasnt in old sss code from 1.3.6 nexus. i asked claude sonnet 4.5 for a simple light gaussian blur and it suggested 3 types and this one was the simplest. 
+It works as i can see const float blurRadius = 1 <increasing this makes blurrier shadows.
+
+File: ScreenSpaceShadows.hlsli
+Replace the entire GetScreenSpaceShadow function with:
+
+
+float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, uint eyeIndex)
+{
+#if defined(VR)
+	// VR: Apply Gaussian blur for softer shadows
+	float result = 0;
+	const float blurRadius = 1;
+	
+	// 3x3 Gaussian kernel
+	const float weights[3][3] = {
+		{0.077847, 0.123317, 0.077847},
+		{0.123317, 0.195346, 0.123317},
+		{0.077847, 0.123317, 0.077847}
+	};
+	
+	for (int y = -1; y <= 1; y++)
+	{
+		for (int x = -1; x <= 1; x++)
+		{
+			float2 offset = float2(x, y) * blurRadius;
+			int2 samplePos = int2(screenPosition.xy + offset + 0.5f);
+			result += ScreenSpaceShadowsTexture.Load(int3(samplePos, 0)).x * weights[y+1][x+1];
+		}
+	}
+	
+	return result;
+#else
+	// Non-VR: Simple direct load
+	return ScreenSpaceShadowsTexture.Load(int3(int2(screenPosition.xy + 0.5f), 0)).x;
+#endif
+}

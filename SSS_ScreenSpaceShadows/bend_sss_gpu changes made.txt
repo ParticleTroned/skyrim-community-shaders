@@ -1,0 +1,162 @@
+I'll isolate all the changes we made and wrap them in #if defined(VR) flags so they only apply to VR builds.
+File: bend_sss_gpu.hlsli
+Location: Around line 338 - Find the shadow computation loop and replace it with:
+
+_______________________________________________________________________________________________________________
+Claude: This replaces everything from the main shadow loop through to where result is calculated, adding the VR/non-VR branching.
+
+
+FIND THIS:
+
+for (i = 0; i < SAMPLE_COUNT; i++)
+	{
+		if (i == inParameters.DynamicSampleCount)
+			break;
+
+		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
+
+		// By using 4 values, the average shadow can be taken, which can help soften single-pixel shadows.
+		shadow_value[i & 3] = min(shadow_value[i & 3], depth_delta);
+	}
+
+	// Apply the contrast value.
+	// A value of 0 indicates a sample was exactly matched to the reference depth (and the result is fully shadowed)
+	// We want some boost to this range, so samples don't have to exactly match to produce a full shadow.
+	shadow_value = saturate(shadow_value * (inParameters.ShadowContrast) + (1 - inParameters.ShadowContrast));
+
+	half result = 0;
+
+	// Take the average of 4 samples, this is useful to reduces aliasing noise in the source depth, especially with long shadows.
+	result = dot(shadow_value, 0.25);
+
+
+REPLACE WITH:
+
+
+
+
+#if defined(VR)
+	// VR: Old shader style with hard shadows and fade-out
+	half hard_shadow = 1;
+
+	// Hard shadow samples - single pixel can produce full shadow
+	[unroll] for (i = 0; i < HARD_SHADOW_SAMPLES; i++)
+	{
+		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
+		hard_shadow = min(hard_shadow, depth_delta);
+	}
+
+	// Main shadow samples - averaged
+	[unroll] for (i = HARD_SHADOW_SAMPLES; i < SAMPLE_COUNT - FADE_OUT_SAMPLES; i++)
+	{
+		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
+		shadow_value[i & 3] = min(shadow_value[i & 3], depth_delta);
+	}
+
+	// Fade out samples
+	[unroll] for (i = SAMPLE_COUNT - FADE_OUT_SAMPLES; i < SAMPLE_COUNT; i++)
+	{
+		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
+		const half fade_out = (half)(i + 1 - (SAMPLE_COUNT - FADE_OUT_SAMPLES)) / (half)(FADE_OUT_SAMPLES + 1) * 0.75;
+		shadow_value[i & 3] = min(shadow_value[i & 3], depth_delta + fade_out);
+	}
+#else
+	// Non-VR: New shader style (current code)
+	for (i = 0; i < SAMPLE_COUNT; i++)
+	{
+		if (i == inParameters.DynamicSampleCount)
+			break;
+
+		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
+
+		// By using 4 values, the average shadow can be taken, which can help soften single-pixel shadows.
+		shadow_value[i & 3] = min(shadow_value[i & 3], depth_delta);
+	}
+#endif
+
+	// Apply the contrast value.
+	// A value of 0 indicates a sample was exactly matched to the reference depth (and the result is fully shadowed)
+	// We want some boost to this range, so samples don't have to exactly match to produce a full shadow.
+	shadow_value = saturate(shadow_value * (inParameters.ShadowContrast) + (1 - inParameters.ShadowContrast));
+#if defined(VR)
+	hard_shadow = saturate(hard_shadow * (inParameters.ShadowContrast) + (1 - inParameters.ShadowContrast));
+#endif
+
+	half result = 0;
+
+	// Take the average of 4 samples, this is useful to reduces aliasing noise in the source depth, especially with long shadows.
+	result = dot(shadow_value, 0.25);
+
+#if defined(VR)
+	// VR: Apply hard shadow minimum
+	result = min(hard_shadow, result);
+#endif
+
+_______________________________________________________________________________________________________________
+
+
+Claude: These changes make the loops use [unroll] for VR (better performance) and [loop] for non-VR (more flexible), and only check the dynamic sample count break condition when not in VR mode.
+
+Location: Around line 226 - Change the first loop:
+
+FIND THIS:
+
+half2 write_xy = floor(pixel_xy);
+
+	[loop] for (i = 0; i < READ_COUNT; i++)
+	{
+		if (i == inParameters.DynamicSampleCount)
+			break;
+
+		// We sample depth twice per pixel per sample, and interpolate with an edge detect filter
+
+REPLACE WITH:
+
+half2 write_xy = floor(pixel_xy);
+
+#if defined(VR)
+	[unroll] for (i = 0; i < READ_COUNT; i++)
+#else
+	[loop] for (i = 0; i < READ_COUNT; i++)
+#endif
+	{
+#if !defined(VR)
+		if (i == inParameters.DynamicSampleCount)
+			break;
+#endif
+
+		// We sample depth twice per pixel per sample, and interpolate with an edge detect filter
+
+_______________________________________________________________________________________________________________
+
+Location: Around line 283 - Change the second loop:
+
+FIND THIS:
+
+// Write the shadow depths to LDS
+	[loop] for (i = 0; i < READ_COUNT; i++)
+	{
+		if (i == inParameters.DynamicSampleCount)
+			break;
+
+		// Perspective correct the shadowing depth, in this space, all light rays are parallel
+
+REPLACE WITH:
+
+// Write the shadow depths to LDS
+#if defined(VR)
+	[unroll] for (i = 0; i < READ_COUNT; i++)
+#else
+	[loop] for (i = 0; i < READ_COUNT; i++)
+#endif
+	{
+#if !defined(VR)
+		if (i == inParameters.DynamicSampleCount)
+			break;
+#endif
+
+		// Perspective correct the shadowing depth, in this space, all light rays are parallel
+
+
+
+

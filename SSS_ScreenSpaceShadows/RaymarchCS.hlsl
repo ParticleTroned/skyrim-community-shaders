@@ -1,6 +1,13 @@
 
 #include "Common/SharedData.hlsli"
 
+#if defined(VR)
+// VR: Use old shader configuration
+#define SAMPLE_COUNT 32 // Lower = shorter shadows, faster
+#define HARD_SHADOW_SAMPLES 8 // Crisp shadows near casters
+#define FADE_OUT_SAMPLES 16 // Soft shadow termination
+#endif
+
 #include "ScreenSpaceShadows/bend_sss_gpu.hlsli"
 
 Texture2D<unorm half> DepthTexture : register(t0);     // Depth Buffer Texture (rasterized non-linear depth)
@@ -58,6 +65,8 @@ cbuffer PerFrame : register(b1)
 
 	parameters.DynamicSampleCount = DynamicSampleCount;
 	parameters.DynamicReadCount = DynamicReadCount;
+
+	parameters.UsePrecisionOffset = true;
 
 	WriteScreenSpaceShadow(parameters, groupID, groupThreadID);
 }

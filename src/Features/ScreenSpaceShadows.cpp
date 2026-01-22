@@ -2,6 +2,8 @@
 
 #include "State.h"
 
+#include <cmath>
+
 #pragma warning(push)
 #pragma warning(disable: 4838 4244)
 #include "ScreenSpaceShadows/bend_sss_cpu.h"
@@ -13,6 +15,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceShadows::BendSettings,
 	Enable,
 	SampleCount,
+	DynamicSampleCapEnabled,
+	DynamicSampleCap,
 	SurfaceThickness,
 	BilinearThreshold,
 	ShadowContrast)
@@ -22,6 +26,14 @@ void ScreenSpaceShadows::DrawSettings()
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable", (bool*)&bendSettings.Enable);
 		ImGui::SliderInt("Sample Count Multiplier", (int*)&bendSettings.SampleCount, 1, 4);
+		ImGui::Checkbox("Dynamic Sample Cap", (bool*)&bendSettings.DynamicSampleCapEnabled);
+		if (!bendSettings.DynamicSampleCapEnabled) {
+			ImGui::BeginDisabled();
+		}
+		ImGui::SliderInt("Dynamic Sample Cap Value", (int*)&bendSettings.DynamicSampleCap, 16, 256);
+		if (!bendSettings.DynamicSampleCapEnabled) {
+			ImGui::EndDisabled();
+		}
 		ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, 0.005f, 0.05f);
 		ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, 0.02f, 1.0f);
 		ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, 0.0f, 4.0f);
@@ -47,9 +59,13 @@ void ScreenSpaceShadows::ClearShaderCache()
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 {
 	static uint sampleCount = bendSettings.SampleCount;
+	static uint capEnabled = bendSettings.DynamicSampleCapEnabled;
+	static uint capValue = bendSettings.DynamicSampleCap;
 
-	if (sampleCount != bendSettings.SampleCount) {
+	if (sampleCount != bendSettings.SampleCount || capEnabled != bendSettings.DynamicSampleCapEnabled || capValue != bendSettings.DynamicSampleCap) {
 		sampleCount = bendSettings.SampleCount;
+		capEnabled = bendSettings.DynamicSampleCapEnabled;
+		capValue = bendSettings.DynamicSampleCap;
 		if (raymarchCS) {
 			raymarchCS->Release();
 			raymarchCS = nullptr;
@@ -58,7 +74,11 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 
 	if (!raymarchCS) {
 		logger::debug("Compiling RaymarchCS");
-		raymarchCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", { { "SAMPLE_COUNT", std::format("{}", sampleCount * 64).c_str() } }, "cs_5_0");
+		uint compileSampleCount = sampleCount * 64;
+		if (bendSettings.DynamicSampleCapEnabled && bendSettings.DynamicSampleCap > 0 && bendSettings.DynamicSampleCap < compileSampleCount) {
+			compileSampleCount = bendSettings.DynamicSampleCap;
+		}
+		raymarchCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", { { "SAMPLE_COUNT", std::format("{}", compileSampleCount).c_str() } }, "cs_5_0");
 	}
 	return raymarchCS;
 }
@@ -66,9 +86,13 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRight()
 {
 	static uint sampleCount = bendSettings.SampleCount;
+	static uint capEnabled = bendSettings.DynamicSampleCapEnabled;
+	static uint capValue = bendSettings.DynamicSampleCap;
 
-	if (sampleCount != bendSettings.SampleCount) {
+	if (sampleCount != bendSettings.SampleCount || capEnabled != bendSettings.DynamicSampleCapEnabled || capValue != bendSettings.DynamicSampleCap) {
 		sampleCount = bendSettings.SampleCount;
+		capEnabled = bendSettings.DynamicSampleCapEnabled;
+		capValue = bendSettings.DynamicSampleCap;
 		if (raymarchRightCS) {
 			raymarchRightCS->Release();
 			raymarchRightCS = nullptr;
@@ -77,7 +101,11 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRight()
 
 	if (!raymarchRightCS) {
 		logger::debug("Compiling RaymarchCS RIGHT");
-		raymarchRightCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", { { "SAMPLE_COUNT", std::format("{}", sampleCount * 64).c_str() }, { "RIGHT", "" } }, "cs_5_0");
+		uint compileSampleCount = sampleCount * 64;
+		if (bendSettings.DynamicSampleCapEnabled && bendSettings.DynamicSampleCap > 0 && bendSettings.DynamicSampleCap < compileSampleCount) {
+			compileSampleCount = bendSettings.DynamicSampleCap;
+		}
+		raymarchRightCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", { { "SAMPLE_COUNT", std::format("{}", compileSampleCount).c_str() }, { "RIGHT", "" } }, "cs_5_0");
 	}
 	return raymarchRightCS;
 }
@@ -131,6 +159,21 @@ void ScreenSpaceShadows::DrawShadows()
 	auto viewport = globals::game::graphicsState;
 
 	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
+	float dynamicScale = std::sqrt(dynamicRes.x * dynamicRes.y);
+	if (dynamicScale > 1.0f) {
+		dynamicScale = 1.0f;
+	}
+
+	uint baseSampleCount = bendSettings.SampleCount * 64;
+	if (bendSettings.DynamicSampleCapEnabled && bendSettings.DynamicSampleCap > 0 && bendSettings.DynamicSampleCap < baseSampleCount) {
+		baseSampleCount = bendSettings.DynamicSampleCap;
+	}
+
+	uint dynamicSampleCount = static_cast<uint>(std::round(baseSampleCount * dynamicScale));
+	if (dynamicSampleCount < 1) {
+		dynamicSampleCount = 1;
+	}
+	uint dynamicReadCount = dynamicSampleCount / 64 + 2;
 
 	for (int i = 0; i < dispatchList.DispatchCount; i++) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSS - Ray March");
@@ -153,6 +196,9 @@ void ScreenSpaceShadows::DrawShadows()
 		data.InvDepthTextureSize[1] = 1.0f / (float)viewportSize[1];
 
 		data.DynamicRes = dynamicRes;
+
+		data.DynamicSampleCount = dynamicSampleCount;
+		data.DynamicReadCount = dynamicReadCount;
 
 		data.settings = bendSettings;
 
@@ -195,6 +241,9 @@ void ScreenSpaceShadows::DrawShadows()
 			data.InvDepthTextureSize[1] = 1.0f / (float)viewportSize[1];
 
 			data.DynamicRes = dynamicRes;
+
+			data.DynamicSampleCount = dynamicSampleCount;
+			data.DynamicReadCount = dynamicReadCount;
 
 			data.settings = bendSettings;
 

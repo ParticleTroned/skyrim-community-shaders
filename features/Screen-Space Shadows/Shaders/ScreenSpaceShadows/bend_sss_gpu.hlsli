@@ -80,6 +80,8 @@ struct DispatchParameters
 						  // Recommended starting value: 2 or 4. Values >= 1 are valid.
 
 	float2 DynamicRes;
+	uint DynamicSampleCount;
+	uint DynamicReadCount;
 
 	bool IgnoreEdgePixels;  // If an edge is detected, the edge pixel will not contribute to the shadow.
 							// If a very flat surface is being lit and rendered at an grazing angles, the edge detect may incorrectly detect multiple 'edge' pixels along that flat surface.
@@ -263,6 +265,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 
 	[unroll] for (i = 0; i < READ_COUNT; i++)
 	{
+		if (i >= inParameters.DynamicReadCount)
+			break;
+
 		// We sample depth twice per pixel per sample, and interpolate with an edge detect filter
 		// Interpolation should only occur on the minor axis of the ray - major axis coordinates should be at pixel centers
 		half2 read_xy = floor(pixel_xy);
@@ -363,6 +368,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	// Write the shadow depths to LDS
 	[unroll] for (i = 0; i < READ_COUNT; i++)
 	{
+		if (i >= inParameters.DynamicReadCount)
+			break;
+
 		// Perspective correct the shadowing depth, in this space, all light rays are parallel
 		half stored_depth = (shadowing_depth[i] - inParameters.LightCoordinate.z) / sample_distance[i];
 
@@ -417,6 +425,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	// The first number of hard shadow samples, a single pixel can produce a full shadow
 	[unroll] for (i = 0; i < HARD_SHADOW_SAMPLES; i++)
 	{
+		if (i >= inParameters.DynamicSampleCount)
+			break;
+
 		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
 
 		// We want to find the distance of the sample that is closest to the reference depth
@@ -427,6 +438,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	// The main shadow samples, averaged in to a set of 4 shadow values
 	[unroll] for (i = HARD_SHADOW_SAMPLES; i < SAMPLE_COUNT - FADE_OUT_SAMPLES; i++)
 	{
+		if (i >= inParameters.DynamicSampleCount)
+			break;
+
 		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
 
 		// Do the same as the hard_shadow code above, but this will accumulate to 4 separate values.
@@ -437,6 +451,9 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	// Final fade out samples
 	[unroll] for (i = SAMPLE_COUNT - FADE_OUT_SAMPLES; i < SAMPLE_COUNT; i++)
 	{
+		if (i >= inParameters.DynamicSampleCount)
+			break;
+
 		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
 
 		// Add the fade value to these samples

@@ -2,6 +2,7 @@
 
 #include "State.h"
 
+#include <algorithm>
 #include <cmath>
 
 #pragma warning(push)
@@ -164,6 +165,14 @@ void ScreenSpaceShadows::DrawShadows()
 		dynamicScale = 1.0f;
 	}
 
+	float tuningScale = std::clamp(dynamicScale, 0.5f, 1.0f);
+	float lowResFactor = 1.0f - tuningScale;
+
+	BendSettings tunedSettings = bendSettings;
+	tunedSettings.SurfaceThickness = std::clamp(tunedSettings.SurfaceThickness * (1.0f + 0.5f * lowResFactor), 0.001f, 0.2f);
+	tunedSettings.BilinearThreshold = std::clamp(tunedSettings.BilinearThreshold * (1.0f + 0.5f * lowResFactor), 0.0f, 1.0f);
+	tunedSettings.ShadowContrast = std::clamp(tunedSettings.ShadowContrast * (1.0f - 0.25f * lowResFactor), 0.0f, 4.0f);
+
 	uint baseSampleCount = bendSettings.SampleCount * 64;
 	if (bendSettings.DynamicSampleCapEnabled && bendSettings.DynamicSampleCap > 0 && bendSettings.DynamicSampleCap < baseSampleCount) {
 		baseSampleCount = bendSettings.DynamicSampleCap;
@@ -200,7 +209,7 @@ void ScreenSpaceShadows::DrawShadows()
 		data.DynamicSampleCount = dynamicSampleCount;
 		data.DynamicReadCount = dynamicReadCount;
 
-		data.settings = bendSettings;
+		data.settings = tunedSettings;
 
 		raymarchCB->Update(data);
 
@@ -245,7 +254,7 @@ void ScreenSpaceShadows::DrawShadows()
 			data.DynamicSampleCount = dynamicSampleCount;
 			data.DynamicReadCount = dynamicReadCount;
 
-			data.settings = bendSettings;
+			data.settings = tunedSettings;
 
 			raymarchCB->Update(data);
 

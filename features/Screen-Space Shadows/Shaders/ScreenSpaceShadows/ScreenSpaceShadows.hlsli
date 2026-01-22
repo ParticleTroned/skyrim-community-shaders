@@ -13,12 +13,20 @@ namespace ScreenSpaceShadows
 		return exp2(-depthDifference * depthDifference);
 	}
 
+	float StableNoise(int2 pixel)
+	{
+		float2 p = float2(pixel);
+		return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+	}
+
 	float GetScreenSpaceShadow(float3 screenPosition, float2 uv, float noise, uint eyeIndex)
 	{
 #if defined(VR)
-		return ScreenSpaceShadowsTexture.Load(int3(int2(screenPosition.xy + 0.5f), 0)).x;
+		int3 sampleCoord = SharedData::ConvertUVToSampleCoord(uv, eyeIndex);
+		return ScreenSpaceShadowsTexture.Load(sampleCoord).x;
 #else
-		noise *= Math::TAU;
+		int2 pixel = int2(screenPosition.xy);
+		noise = StableNoise(pixel) * Math::TAU;
 
 		half2x2 rotationMatrix = half2x2(cos(noise), sin(noise), -sin(noise), cos(noise));
 
@@ -41,7 +49,7 @@ namespace ScreenSpaceShadows
 
 		[unroll] for (uint i = 1; i < 4; i++)
 		{
-			float2 offset = mul(BlurOffsets[i - 1], rotationMatrix) * 0.0025;
+			float2 offset = mul(BlurOffsets[i - 1], rotationMatrix) * 0.0025 * FrameBuffer::DynamicResolutionParams2.xy;
 
 			float2 sampleUV = uv + offset;
 			sampleUV = saturate(sampleUV);

@@ -210,7 +210,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
-	singleton.gSetCameraData(globals::game::graphicsState, RE::Main::WorldRootCamera(), 1)
+	singleton.gSetCameraData(globals::game::graphicsState, RE::Main::WorldRootCamera(), 1);
 
 	singleton.averageEyePosition = Util::GetAverageEyePosition();
 	

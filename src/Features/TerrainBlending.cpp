@@ -4,6 +4,57 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+namespace
+{
+	uint64_t g_mainRenderDepthCalls = 0;
+	uint64_t g_depthOnlyCalls = 0;
+	uint64_t g_mainDSVCalls = 0;
+	uint64_t g_tbTriggered = 0;
+	uint64_t g_blendCalls = 0;
+	constexpr uint32_t kLogIntervalFrames = 120;
+	uint32_t g_logFrameCounter = 0;
+	uint64_t g_prevMainRenderDepthCalls = 0;
+	uint64_t g_prevDepthOnlyCalls = 0;
+	uint64_t g_prevMainDSVCalls = 0;
+	uint64_t g_prevTBTriggered = 0;
+	uint64_t g_prevBlendCalls = 0;
+
+	struct DepthPassInfo
+	{
+		bool depthOnly = false;
+		bool mainDSV = false;
+	};
+
+	DepthPassInfo GetDepthPassInfo(ID3D11DeviceContext* context, ID3D11DepthStencilView* mainDsv)
+	{
+		DepthPassInfo info{};
+		if (!context) {
+			return info;
+		}
+
+		ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+		ID3D11DepthStencilView* dsv = nullptr;
+		context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+
+		bool hasRTV = false;
+		for (auto& rtv : rtvs) {
+			if (rtv) {
+				hasRTV = true;
+				rtv->Release();
+			}
+		}
+
+		info.depthOnly = !hasRTV;
+		info.mainDSV = (dsv && dsv == mainDsv);
+
+		if (dsv) {
+			dsv->Release();
+		}
+
+		return info;
+	}
+}
+
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
 {
 	if (!terrainVertexShader) {
@@ -150,6 +201,11 @@ void TerrainBlending::ResetTerrainDepth()
 
 void TerrainBlending::BlendPrepassDepths()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "TB - Blend Prepass");
+
+	++g_blendCalls;
+
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
@@ -203,12 +259,51 @@ void TerrainBlending::ClearShaderCache()
 
 void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "TB - Main RenderDepth");
+
 	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
 	auto renderer = globals::game::renderer;
 
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+	++g_mainRenderDepthCalls;
+	{
+		const auto info = GetDepthPassInfo(globals::d3d::context, mainDepth.views[0]);
+		if (info.depthOnly) {
+			++g_depthOnlyCalls;
+		}
+		if (info.mainDSV) {
+			++g_mainDSVCalls;
+		}
+	}
+
+	if (globals::state->IsDeveloperMode() && (++g_logFrameCounter % kLogIntervalFrames == 0)) {
+		const auto deltaMainRenderDepth = g_mainRenderDepthCalls - g_prevMainRenderDepthCalls;
+		const auto deltaDepthOnly = g_depthOnlyCalls - g_prevDepthOnlyCalls;
+		const auto deltaMainDSV = g_mainDSVCalls - g_prevMainDSVCalls;
+		const auto deltaTBTriggered = g_tbTriggered - g_prevTBTriggered;
+		const auto deltaBlend = g_blendCalls - g_prevBlendCalls;
+		const auto pct = [](uint64_t num, uint64_t den) -> double {
+			return den ? (static_cast<double>(num) * 100.0 / static_cast<double>(den)) : 0.0;
+		};
+
+		logger::info("[TB][CNT] frames={} (+{}) MRD={} (+{}) depthOnly={} (+{} | {:5.1f}%) mainDSV={} (+{} | {:5.1f}%) tbTrig={} (+{} | {:5.1f}%) blend={} (+{} | {:5.1f}%)",
+			g_logFrameCounter, kLogIntervalFrames,
+			g_mainRenderDepthCalls, deltaMainRenderDepth,
+			g_depthOnlyCalls, deltaDepthOnly, pct(deltaDepthOnly, deltaMainRenderDepth),
+			g_mainDSVCalls, deltaMainDSV, pct(deltaMainDSV, deltaMainRenderDepth),
+			g_tbTriggered, deltaTBTriggered, pct(deltaTBTriggered, deltaMainRenderDepth),
+			g_blendCalls, deltaBlend, pct(deltaBlend, deltaMainRenderDepth));
+
+		g_prevMainRenderDepthCalls = g_mainRenderDepthCalls;
+		g_prevDepthOnlyCalls = g_depthOnlyCalls;
+		g_prevMainDSVCalls = g_mainDSVCalls;
+		g_prevTBTriggered = g_tbTriggered;
+		g_prevBlendCalls = g_blendCalls;
+	}
 
 	singleton.gSetCameraData(globals::game::graphicsState, RE::Main::WorldRootCamera(), 1);
 
@@ -218,6 +313,9 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 		mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
 		zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
 
+		if (!singleton.renderDepth) {
+			++g_tbTriggered;
+		}
 		singleton.renderDepth = true;
 		singleton.ResetDepth();
 
@@ -287,6 +385,9 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 
 void TerrainBlending::RenderTerrainBlendingPasses()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "TB - Render Passes");
+
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	auto shadowState = globals::game::shadowState;

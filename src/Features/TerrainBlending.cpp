@@ -242,6 +242,28 @@ namespace
 		return !hasRTV;
 	}
 
+	void LogTBTriggerCameraState(const char* reason)
+	{
+		auto state = globals::state;
+		if (!state || !state->IsDeveloperMode() || !globals::game::isVR) {
+			return;
+		}
+
+		const auto avg = Util::GetAverageEyePosition();
+		const auto eye0 = Util::GetEyePosition(0);
+		const auto eye1 = Util::GetEyePosition(1);
+		const float d0 = eye0.GetDistance(avg);
+		const float d1 = eye1.GetDistance(avg);
+
+		logger::info("[TB][CAM] {} frame={} avg=({:.3f},{:.3f},{:.3f}) eye0=({:.3f},{:.3f},{:.3f}) eye1=({:.3f},{:.3f},{:.3f}) d0={:.3f} d1={:.3f}",
+			reason,
+			state->frameCount,
+			avg.x, avg.y, avg.z,
+			eye0.x, eye0.y, eye0.z,
+			eye1.x, eye1.y, eye1.z,
+			d0, d1);
+	}
+
 	struct DepthPassInfo
 	{
 		bool depthOnly = false;
@@ -640,16 +662,17 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 		return;
 	}
 
-	if (shaderCache->IsEnabled()) {
-		mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
-		zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+		if (shaderCache->IsEnabled()) {
+			mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
+			zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
 
-		if (!singleton.renderDepth) {
-			++g_tbTriggered;
-		}
+			if (!singleton.renderDepth) {
+				++g_tbTriggered;
+				LogTBTriggerCameraState("main-renderdepth");
+			}
 
-		singleton.renderDepth = true;
-		singleton.ResetDepth();
+			singleton.renderDepth = true;
+			singleton.ResetDepth();
 
 		func(a1, a2);
 
@@ -721,6 +744,7 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 				zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
 
 				++g_tbTriggered;
+				LogTBTriggerCameraState("vr-signature");
 
 				singleton.renderDepth = true;
 				singleton.ResetDepth();

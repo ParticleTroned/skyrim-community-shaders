@@ -42,6 +42,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
+#include "Features/TerrainBlending.h"
 #include "Features/VR.h"
 #include "Features/WeatherPicker.h"
 #include "WeatherEditor/EditorWindow.h"
@@ -937,6 +938,8 @@ void Menu::ProcessInputEventQueue()
 						{ settings.OverlayToggleKey, []() {
 							 Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible;
 						 } },
+						{ '8', []() { globals::features::terrainBlending.StartLoggingWindow(120); } },
+						{ VK_NUMPAD8, []() { globals::features::terrainBlending.StartLoggingWindow(120); } },
 					};
 					for (const auto& ka : keyActions) {
 						if (key == ka.settingKey) {

@@ -199,6 +199,12 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
+	struct TerrainBlendingSettings
+	{
+		float BlendStrength;
+		float3 pad0;
+	};
+
 	struct LinearLightingSettings
 	{
 		uint enableLinearLighting;
@@ -250,6 +256,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		TerrainBlendingSettings terrainBlendingSettings;
 		LinearLightingSettings linearLightingSettings;
 	};
 

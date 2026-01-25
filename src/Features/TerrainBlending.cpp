@@ -1,8 +1,295 @@
 #include "TerrainBlending.h"
 
+#include <chrono>
+
 #include "Deferred.h"
 #include "ShaderCache.h"
 #include "State.h"
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TerrainBlending::Settings,
+	Enable,
+	LockSignatureAfterFrames,
+	SignatureLockFrames,
+	TerrainCullDistance,
+	BlendStrength)
+
+namespace
+{
+	struct PrepassSignature
+	{
+		uint32_t technique = 0;
+		uint32_t renderFlags = 0;
+		RE::BSShader::Type shaderType = RE::BSShader::Type::None;
+		bool valid = false;
+	};
+
+	struct SignatureCount
+	{
+		uint64_t key = 0;
+		RE::BSShader::Type shaderType = RE::BSShader::Type::None;
+		uint32_t count = 0;
+	};
+
+	struct LoggedSignature
+	{
+		uint64_t key = 0;
+		RE::BSShader::Type shaderType = RE::BSShader::Type::None;
+	};
+
+	PrepassSignature g_mainPrepassSignature{};
+	std::vector<SignatureCount> g_depthOnlySignatures;
+	std::vector<LoggedSignature> g_loggedDepthOnlySignatures;
+	bool g_signaturePrepassActive = false;
+	bool g_hasFrame = false;
+	uint32_t g_lastFrame = 0;
+	bool g_inMainDepthGroup = false;
+	bool g_signatureMatchedInGroup = false;
+	uint32_t g_signatureFrameCount = 0;
+	bool g_signatureLocked = false;
+
+	constexpr uint32_t kRenderFlagsSignatureMask = ~0x00000010u;
+	constexpr uint32_t kUtilityRenderDepthFlag = static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderDepth);
+	constexpr uint32_t kUtilityShadowFlags =
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmap) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapClamped) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapPb) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb);
+
+	uint64_t g_mainRenderDepthCalls = 0;
+	uint64_t g_depthOnlyCalls = 0;
+	uint64_t g_mainDSVCalls = 0;
+	uint64_t g_tbTriggered = 0;
+	uint64_t g_blendCalls = 0;
+	constexpr uint32_t kLogIntervalFrames = 120;
+	uint32_t g_logFrameCounter = 0;
+	uint64_t g_prevMainRenderDepthCalls = 0;
+	uint64_t g_prevDepthOnlyCalls = 0;
+	uint64_t g_prevMainDSVCalls = 0;
+	uint64_t g_prevTBTriggered = 0;
+	uint64_t g_prevBlendCalls = 0;
+	bool g_logWindowActive = false;
+	std::chrono::steady_clock::time_point g_logWindowEnd{};
+
+	uint32_t NormalizeRenderFlags(uint32_t renderFlags)
+	{
+		return renderFlags & kRenderFlagsSignatureMask;
+	}
+
+	uint64_t MakeSignatureKey(uint32_t technique, uint32_t renderFlags)
+	{
+		return (static_cast<uint64_t>(technique) << 32) | renderFlags;
+	}
+
+	uint32_t NormalizeLightingTechnique(uint32_t technique)
+	{
+		const uint32_t techniqueType = (technique >> 24) & 0x3F;
+		return techniqueType << 24;
+	}
+
+	bool GetNormalizedSignature(const RE::BSRenderPass* pass, uint32_t technique, uint32_t renderFlags, uint32_t& outTechnique, uint32_t& outFlags, RE::BSShader::Type& outShaderType)
+	{
+		if (!pass || !pass->shader) {
+			return false;
+		}
+
+		const auto shaderType = pass->shader->shaderType.get();
+		if (shaderType == RE::BSShader::Type::Utility) {
+			if ((technique & kUtilityRenderDepthFlag) == 0 || (technique & kUtilityShadowFlags) != 0) {
+				return false;
+			}
+			outTechnique = kUtilityRenderDepthFlag;
+			outFlags = NormalizeRenderFlags(renderFlags);
+			outShaderType = RE::BSShader::Type::Utility;
+			return true;
+		}
+
+		if (shaderType == RE::BSShader::Type::Lighting) {
+			outTechnique = NormalizeLightingTechnique(technique);
+			outFlags = NormalizeRenderFlags(renderFlags);
+			outShaderType = RE::BSShader::Type::Lighting;
+			return true;
+		}
+
+		return false;
+	}
+
+	void TrackDepthOnlySignature(const RE::BSRenderPass* pass, uint32_t technique, uint32_t renderFlags)
+	{
+		uint32_t normalizedTechnique = 0;
+		uint32_t normalizedFlags = 0;
+		RE::BSShader::Type normalizedShaderType = RE::BSShader::Type::None;
+		if (!GetNormalizedSignature(pass, technique, renderFlags, normalizedTechnique, normalizedFlags, normalizedShaderType)) {
+			return;
+		}
+
+		const uint64_t key = MakeSignatureKey(normalizedTechnique, normalizedFlags);
+		for (auto& entry : g_depthOnlySignatures) {
+			if (entry.key == key && entry.shaderType == normalizedShaderType) {
+				entry.count++;
+				return;
+			}
+		}
+		g_depthOnlySignatures.push_back({ key, normalizedShaderType, 1 });
+	}
+
+	void LogDepthOnlySignatureOnce(const RE::BSRenderPass* pass, uint32_t technique, uint32_t renderFlags)
+	{
+		uint32_t normalizedTechnique = 0;
+		uint32_t normalizedFlags = 0;
+		RE::BSShader::Type normalizedShaderType = RE::BSShader::Type::None;
+		if (!GetNormalizedSignature(pass, technique, renderFlags, normalizedTechnique, normalizedFlags, normalizedShaderType)) {
+			return;
+		}
+
+		const uint64_t key = MakeSignatureKey(normalizedTechnique, normalizedFlags);
+		for (const auto& logged : g_loggedDepthOnlySignatures) {
+			if (logged.key == key && logged.shaderType == normalizedShaderType) {
+				return;
+			}
+		}
+		g_loggedDepthOnlySignatures.push_back({ key, normalizedShaderType });
+
+		const auto shaderType = pass && pass->shader ? pass->shader->shaderType.get() : RE::BSShader::Type::Total;
+		const uint32_t shaderTypeValue = static_cast<uint32_t>(shaderType);
+		const uint32_t passEnum = pass ? pass->passEnum : 0;
+		const uint32_t hint = pass ? pass->accumulationHint : 0;
+		const uint32_t lights = pass ? pass->numLights : 0;
+		const uint32_t shadowLights = pass ? pass->numShadowLights : 0;
+		logger::debug("[TB][SIG] depth-only signature tech=0x{:X} flags=0x{:X} (norm tech=0x{:X} flags=0x{:X}) shader={} pass={} hint={} lights={} shadowLights={}",
+			technique, renderFlags, normalizedTechnique, normalizedFlags, shaderTypeValue, passEnum, hint, lights, shadowLights);
+	}
+
+	void UpdateMainPrepassSignature(uint32_t frame, bool logUpdates)
+	{
+		auto& settings = globals::features::terrainBlending.settings;
+		const bool lockEnabled = settings.LockSignatureAfterFrames && settings.SignatureLockFrames > 0;
+		if (!lockEnabled) {
+			g_signatureLocked = false;
+			g_signatureFrameCount = 0;
+		}
+
+		if (!g_hasFrame) {
+			g_lastFrame = frame;
+			g_hasFrame = true;
+			return;
+		}
+
+		if (frame == g_lastFrame) {
+			return;
+		}
+
+		g_lastFrame = frame;
+
+		if (g_signatureLocked) {
+			return;
+		}
+
+		++g_signatureFrameCount;
+
+		const SignatureCount* best = nullptr;
+		for (const auto& entry : g_depthOnlySignatures) {
+			if (!best || entry.count > best->count) {
+				best = &entry;
+			}
+		}
+
+		if (best) {
+			const uint32_t technique = static_cast<uint32_t>(best->key >> 32);
+			const uint32_t renderFlags = static_cast<uint32_t>(best->key);
+			const bool changed = !g_mainPrepassSignature.valid ||
+			                     g_mainPrepassSignature.technique != technique ||
+			                     g_mainPrepassSignature.renderFlags != renderFlags ||
+			                     g_mainPrepassSignature.shaderType != best->shaderType;
+			g_mainPrepassSignature = { technique, renderFlags, best->shaderType, true };
+			if (changed && logUpdates) {
+				logger::info("[TB] main prepass signature tech=0x{:X} flags=0x{:X} shader={} (depth-only count={})",
+					technique, renderFlags, static_cast<uint32_t>(g_mainPrepassSignature.shaderType), best->count);
+			}
+		}
+
+		if (lockEnabled && g_mainPrepassSignature.valid &&
+			g_signatureFrameCount >= static_cast<uint32_t>(settings.SignatureLockFrames)) {
+			g_signatureLocked = true;
+		}
+
+		g_depthOnlySignatures.clear();
+	}
+
+	bool IsDepthOnlyPass(ID3D11DeviceContext* context)
+	{
+		if (!context) {
+			return false;
+		}
+
+		ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+		ID3D11DepthStencilView* dsv = nullptr;
+		context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+
+		bool hasRTV = false;
+		for (auto& rtv : rtvs) {
+			if (rtv) {
+				hasRTV = true;
+				rtv->Release();
+			}
+		}
+		if (dsv) {
+			dsv->Release();
+		}
+
+		return !hasRTV;
+	}
+
+	struct DepthPassInfo
+	{
+		bool depthOnly = false;
+		bool mainDSV = false;
+	};
+
+	DepthPassInfo GetDepthPassInfo(ID3D11DeviceContext* context, ID3D11DepthStencilView* mainDsv)
+	{
+		DepthPassInfo info{};
+		if (!context) {
+			return info;
+		}
+
+		ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+		ID3D11DepthStencilView* dsv = nullptr;
+		context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+
+		bool hasRTV = false;
+		for (auto& rtv : rtvs) {
+			if (rtv) {
+				hasRTV = true;
+				rtv->Release();
+			}
+		}
+
+		info.depthOnly = !hasRTV;
+		info.mainDSV = (dsv && dsv == mainDsv);
+
+		if (dsv) {
+			dsv->Release();
+		}
+
+		return info;
+	}
+
+	bool IsLogWindowActive()
+	{
+		if (!g_logWindowActive) {
+			return false;
+		}
+		if (std::chrono::steady_clock::now() >= g_logWindowEnd) {
+			g_logWindowActive = false;
+			logger::info("[TB][CNT] Logging window ended");
+			return false;
+		}
+		return true;
+	}
+}
 
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
 {
@@ -95,7 +382,7 @@ void TerrainBlending::SetupResources()
 		depthStencilDesc.StencilEnable = false;
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 	}
-	gSetCameraData = reinterpret_cast<decltype(gSetCameraData)>(REL::RelocationID(75694, 77503).address());
+
 }
 
 void TerrainBlending::PostPostLoad()
@@ -107,6 +394,51 @@ void TerrainBlending::DataLoaded()
 {
 	auto bEnableLandFade = RE::GetINISetting("bEnableLandFade:Display");
 	bEnableLandFade->data.b = false;
+}
+
+void TerrainBlending::DrawSettings()
+{
+	ImGui::Checkbox("Enable Terrain Blending", &settings.Enable);
+	ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.75f, 3.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Scales the depth-based blend factor. 1.00 matches the current behavior.");
+	}
+	ImGui::Spacing();
+
+	if (ImGui::TreeNodeEx("Performance Options", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Lock Prepass Signature", &settings.LockSignatureAfterFrames);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Stops per-pass signature tracking after the signature stabilizes.");
+		}
+
+		ImGui::BeginDisabled(!settings.LockSignatureAfterFrames);
+		ImGui::SliderInt("Signature Lock Frames", &settings.SignatureLockFrames, 1, 240, "%d");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Number of frames to observe before locking the prepass signature.");
+		}
+		ImGui::EndDisabled();
+
+		ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Terrain farther than this distance skips TB depth rendering. Set to 0 to disable culling.");
+		}
+		ImGui::TreePop();
+	}
+}
+
+void TerrainBlending::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void TerrainBlending::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void TerrainBlending::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 void TerrainBlending::TerrainShaderHacks()
@@ -150,6 +482,11 @@ void TerrainBlending::ResetTerrainDepth()
 
 void TerrainBlending::BlendPrepassDepths()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "TB - Blend Prepass");
+
+	++g_blendCalls;
+
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
@@ -201,8 +538,31 @@ void TerrainBlending::ClearShaderCache()
 	}
 }
 
+void TerrainBlending::StartLoggingWindow(uint32_t durationSeconds)
+{
+	if (!globals::state->IsDeveloperMode()) {
+		logger::info("[TB][CNT] Logging requested but developer mode (log level debug) is required");
+		return;
+	}
+
+	g_logWindowActive = true;
+	g_logWindowEnd = std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
+	g_logFrameCounter = 0;
+
+	g_prevMainRenderDepthCalls = g_mainRenderDepthCalls;
+	g_prevDepthOnlyCalls = g_depthOnlyCalls;
+	g_prevMainDSVCalls = g_mainDSVCalls;
+	g_prevTBTriggered = g_tbTriggered;
+	g_prevBlendCalls = g_blendCalls;
+
+	logger::info("[TB][CNT] Logging window started ({}s)", durationSeconds);
+}
+
 void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "TB - Main RenderDepth");
+
 	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
 	auto renderer = globals::game::renderer;
@@ -210,13 +570,83 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
-	singleton.gSetCameraData(globals::game::graphicsState, RE::Main::WorldRootCamera(), 1)
+	++g_mainRenderDepthCalls;
+	{
+		const auto info = GetDepthPassInfo(globals::d3d::context, mainDepth.views[0]);
+		if (info.depthOnly) {
+			++g_depthOnlyCalls;
+		}
+		if (info.mainDSV) {
+			++g_mainDSVCalls;
+		}
+	}
+
+	if (globals::state->IsDeveloperMode() && IsLogWindowActive()) {
+		if (++g_logFrameCounter % kLogIntervalFrames == 0) {
+			const auto deltaMainRenderDepth = g_mainRenderDepthCalls - g_prevMainRenderDepthCalls;
+			const auto deltaDepthOnly = g_depthOnlyCalls - g_prevDepthOnlyCalls;
+			const auto deltaMainDSV = g_mainDSVCalls - g_prevMainDSVCalls;
+			const auto deltaTBTriggered = g_tbTriggered - g_prevTBTriggered;
+			const auto deltaBlend = g_blendCalls - g_prevBlendCalls;
+			const auto pct = [](uint64_t num, uint64_t den) -> double {
+				return den ? (static_cast<double>(num) * 100.0 / static_cast<double>(den)) : 0.0;
+			};
+
+			logger::info("[TB][CNT] frames={} (+{}) MRD={} (+{}) depthOnly={} (+{} | {:5.1f}%) mainDSV={} (+{} | {:5.1f}%) tbTrig={} (+{} | {:5.1f}%) blend={} (+{} | {:5.1f}%)",
+				g_logFrameCounter, kLogIntervalFrames,
+				g_mainRenderDepthCalls, deltaMainRenderDepth,
+				g_depthOnlyCalls, deltaDepthOnly, pct(deltaDepthOnly, deltaMainRenderDepth),
+				g_mainDSVCalls, deltaMainDSV, pct(deltaMainDSV, deltaMainRenderDepth),
+				g_tbTriggered, deltaTBTriggered, pct(deltaTBTriggered, deltaMainRenderDepth),
+				g_blendCalls, deltaBlend, pct(deltaBlend, deltaMainRenderDepth));
+
+			g_prevMainRenderDepthCalls = g_mainRenderDepthCalls;
+			g_prevDepthOnlyCalls = g_depthOnlyCalls;
+			g_prevMainDSVCalls = g_mainDSVCalls;
+			g_prevTBTriggered = g_tbTriggered;
+			g_prevBlendCalls = g_blendCalls;
+		}
+	}
+
+	if (!singleton.settings.Enable) {
+		singleton.renderDepth = false;
+		singleton.renderTerrainDepth = false;
+		singleton.renderAltTerrain = false;
+		mainDepth.depthSRV = singleton.depthSRVBackup;
+		zPrepassCopy.depthSRV = singleton.prepassSRVBackup;
+		func(a1, a2);
+		return;
+	}
 
 	singleton.averageEyePosition = Util::GetAverageEyePosition();
-	
+
+	if (globals::game::isVR && shaderCache->IsEnabled()) {
+		g_inMainDepthGroup = true;
+		g_signatureMatchedInGroup = false;
+		func(a1, a2);
+		g_inMainDepthGroup = false;
+
+		if (g_signatureMatchedInGroup) {
+			singleton.renderDepth = false;
+
+			if (singleton.renderTerrainDepth) {
+				singleton.renderTerrainDepth = false;
+				singleton.ResetTerrainDepth();
+			}
+
+			singleton.BlendPrepassDepths();
+		}
+		g_signaturePrepassActive = false;
+		return;
+	}
+
 	if (shaderCache->IsEnabled()) {
 		mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
 		zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+
+		if (!singleton.renderDepth) {
+			++g_tbTriggered;
+		}
 
 		singleton.renderDepth = true;
 		singleton.ResetDepth();
@@ -243,26 +673,84 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 {
 	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
+	auto state = globals::state;
+
+	if (!singleton.settings.Enable) {
+		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		return;
+	}
 
 	if (shaderCache->IsEnabled()) {
+		if (g_inMainDepthGroup) {
+			UpdateMainPrepassSignature(state->frameCount, state->IsDeveloperMode());
+
+			const bool depthOnly = IsDepthOnlyPass(globals::d3d::context);
+
+			if (depthOnly && !g_signatureLocked) {
+				TrackDepthOnlySignature(a_pass, a_technique, a_renderFlags);
+				if (state->IsDeveloperMode()) {
+					LogDepthOnlySignatureOnce(a_pass, a_technique, a_renderFlags);
+				}
+			}
+
+			bool signatureMatch = false;
+			if (g_mainPrepassSignature.valid) {
+				uint32_t normalizedTechnique = 0;
+				uint32_t normalizedFlags = 0;
+				RE::BSShader::Type normalizedShaderType = RE::BSShader::Type::None;
+				if (GetNormalizedSignature(a_pass, a_technique, a_renderFlags, normalizedTechnique, normalizedFlags, normalizedShaderType)) {
+					signatureMatch =
+						normalizedShaderType == g_mainPrepassSignature.shaderType &&
+						normalizedTechnique == g_mainPrepassSignature.technique &&
+						normalizedFlags == g_mainPrepassSignature.renderFlags;
+				}
+			}
+
+			if (depthOnly && signatureMatch) {
+				g_signatureMatchedInGroup = true;
+			}
+
+			if (!singleton.renderDepth && depthOnly && signatureMatch) {
+				auto renderer = globals::game::renderer;
+				auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+				auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+				singleton.averageEyePosition = Util::GetAverageEyePosition();
+
+				mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
+				zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+
+				++g_tbTriggered;
+
+				singleton.renderDepth = true;
+				singleton.ResetDepth();
+				g_signaturePrepassActive = true;
+			}
+		}
+
 		if (singleton.renderDepth) {
-			// Entering or exiting terrain depth section
 			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
 
 			if (inTerrain) {
-				if ((a_pass->geometry->worldBound.center.GetDistance(singleton.averageEyePosition) - a_pass->geometry->worldBound.radius) > 2048.0f) {
-					inTerrain = false;
+				const float cullDistance = singleton.settings.TerrainCullDistance;
+				if (cullDistance > 0.0f) {
+					if ((a_pass->geometry->worldBound.center.GetDistance(singleton.averageEyePosition) - a_pass->geometry->worldBound.radius) > cullDistance) {
+						inTerrain = false;
+					}
 				}
 			}
 
 			if (singleton.renderTerrainDepth != inTerrain) {
-				if (!inTerrain)
+				if (!inTerrain) {
 					singleton.ResetTerrainDepth();
+				}
 				singleton.renderTerrainDepth = inTerrain;
 			}
 
-			if (inTerrain)
-				func(a_pass, a_technique, a_alphaTest, a_renderFlags);  // Run terrain twice
+			if (inTerrain) {
+				// Render terrain depth now; normal pass still runs after this hook.
+				func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			}
 		} else if (globals::state->inWorld) {
 			if (auto shaderProperty = a_pass->shaderProperty) {
 				if (a_pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
@@ -272,7 +760,7 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 						return;
 					}
 
-					// Detect meshes which should not get terrain blending using an unused flag (kNoTransparencyMultiSample)
+					// Use kNoTransparencyMultiSample as a TB opt-out flag.
 					if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
 						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
 						singleton.renderPasses.push_back(call);
@@ -287,12 +775,29 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 
 void TerrainBlending::RenderTerrainBlendingPasses()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "TB - Render Passes");
+
+	if (!settings.Enable) {
+		renderDepth = false;
+		renderTerrainDepth = false;
+		renderAltTerrain = false;
+		terrainRenderPasses.clear();
+		renderPasses.clear();
+		auto renderer = globals::game::renderer;
+		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+		mainDepth.depthSRV = depthSRVBackup;
+		zPrepassCopy.depthSRV = prepassSRVBackup;
+		return;
+	}
+
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 
-	// Used to get the distance of the surface to the lowest depth
+	// Bind terrain depth mask for blending.
 	auto view = terrainDepth.depthSRV;
 	context->PSSetShaderResources(55, 1, &view);
 
@@ -301,22 +806,19 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		GET_INSTANCE_MEMBER(alphaBlendWriteMode, shadowState)
 		GET_INSTANCE_MEMBER(depthStencilDepthMode, shadowState)
 
-		// Reset alpha write and enable alpha blending
+		// TB pass: enable alpha blending and depth override, then restore for queued passes.
 		alphaBlendWriteMode = 1;
 		alphaBlendMode = 1;
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 
-		// Enable rendering for depth below the surface
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
 		for (auto& renderPass : terrainRenderPasses)
 			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
 
-		// Reset alpha blending
 		alphaBlendMode = 0;
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 
-		// Reset depth testing
 		depthStencilDepthMode = RE::BSGraphics::DepthStencilDepthMode::kTestEqual;
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 

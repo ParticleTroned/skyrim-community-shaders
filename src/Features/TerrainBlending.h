@@ -73,6 +73,7 @@ public:
 	virtual void ClearShaderCache() override;
 
 	void RenderTerrainBlendingPasses();
+	void StartLoggingWindow(uint32_t durationSeconds);
 
 	struct Hooks
 	{

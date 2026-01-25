@@ -4,6 +4,8 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include <chrono>
+
 namespace
 {
 	uint64_t g_mainRenderDepthCalls = 0;
@@ -18,6 +20,8 @@ namespace
 	uint64_t g_prevMainDSVCalls = 0;
 	uint64_t g_prevTBTriggered = 0;
 	uint64_t g_prevBlendCalls = 0;
+	bool g_logWindowActive = false;
+	std::chrono::steady_clock::time_point g_logWindowEnd{};
 
 	struct DepthPassInfo
 	{
@@ -52,6 +56,19 @@ namespace
 		}
 
 		return info;
+	}
+
+	bool IsLogWindowActive()
+	{
+		if (!g_logWindowActive) {
+			return false;
+		}
+		if (std::chrono::steady_clock::now() >= g_logWindowEnd) {
+			g_logWindowActive = false;
+			logger::info("[TB][CNT] Logging window ended");
+			return false;
+		}
+		return true;
 	}
 }
 
@@ -257,6 +274,26 @@ void TerrainBlending::ClearShaderCache()
 	}
 }
 
+void TerrainBlending::StartLoggingWindow(uint32_t durationSeconds)
+{
+	if (!globals::state->IsDeveloperMode()) {
+		logger::info("[TB][CNT] Logging requested but developer mode (log level debug) is required");
+		return;
+	}
+
+	g_logWindowActive = true;
+	g_logWindowEnd = std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
+	g_logFrameCounter = 0;
+
+	g_prevMainRenderDepthCalls = g_mainRenderDepthCalls;
+	g_prevDepthOnlyCalls = g_depthOnlyCalls;
+	g_prevMainDSVCalls = g_mainDSVCalls;
+	g_prevTBTriggered = g_tbTriggered;
+	g_prevBlendCalls = g_blendCalls;
+
+	logger::info("[TB][CNT] Logging window started ({}s)", durationSeconds);
+}
+
 void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 {
 	ZoneScoped;
@@ -280,7 +317,8 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 		}
 	}
 
-	if (globals::state->IsDeveloperMode() && (++g_logFrameCounter % kLogIntervalFrames == 0)) {
+	if (globals::state->IsDeveloperMode() && IsLogWindowActive()) {
+		if (++g_logFrameCounter % kLogIntervalFrames == 0) {
 		const auto deltaMainRenderDepth = g_mainRenderDepthCalls - g_prevMainRenderDepthCalls;
 		const auto deltaDepthOnly = g_depthOnlyCalls - g_prevDepthOnlyCalls;
 		const auto deltaMainDSV = g_mainDSVCalls - g_prevMainDSVCalls;
@@ -303,6 +341,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 		g_prevMainDSVCalls = g_mainDSVCalls;
 		g_prevTBTriggered = g_tbTriggered;
 		g_prevBlendCalls = g_blendCalls;
+		}
 	}
 
 	singleton.gSetCameraData(globals::game::graphicsState, RE::Main::WorldRootCamera(), 1);

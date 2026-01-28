@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // Copyright 2023 Sony Interactive Entertainment.
 //

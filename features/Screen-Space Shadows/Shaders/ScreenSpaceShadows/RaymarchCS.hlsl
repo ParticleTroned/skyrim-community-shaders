@@ -1,4 +1,4 @@
-
+﻿
 #include "Common/SharedData.hlsli"
 
 #include "ScreenSpaceShadows/bend_sss_gpu.hlsli"
@@ -23,10 +23,6 @@ cbuffer PerFrame : register(b1)
 								 // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
 	float2 DynamicRes;
-
-	uint DynamicSampleCount;
-	uint DynamicReadCount;
-	float2 pad0;
 
 	float SurfaceThickness;
 	float BilinearThreshold;
@@ -55,11 +51,6 @@ cbuffer PerFrame : register(b1)
 	parameters.ShadowContrast = ShadowContrast;
 
 	parameters.DynamicRes = DynamicRes;
-
-	parameters.DynamicSampleCount = DynamicSampleCount;
-	parameters.DynamicReadCount = DynamicReadCount;
-
-	parameters.UsePrecisionOffset = true;
 
 	WriteScreenSpaceShadow(parameters, groupID, groupThreadID);
 }

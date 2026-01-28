@@ -1,8 +1,30 @@
-#pragma once
+﻿#pragma once
 
 struct TerrainBlending : Feature
 {
 public:
+	struct Settings
+	{
+		bool Enable = true;
+		float TerrainCullDistance = 1024.0f;
+		float BlendStrength = 2.0f;
+	};
+
+	Settings settings;
+
+	struct alignas(16) PerFrame
+	{
+		float BlendStrength = 1.0f;
+		float pad0[3]{};
+	};
+
+	PerFrame GetCommonBufferData() const
+	{
+		PerFrame data{};
+		data.BlendStrength = settings.BlendStrength;
+		return data;
+	}
+
 	virtual inline std::string GetName() override { return "Terrain Blending"; }
 	virtual inline std::string GetShortName() override { return "TerrainBlending"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_BLENDING"; }
@@ -10,17 +32,22 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides seamless blending between terrain and objects, eliminating harsh transitions where objects meet the ground for more natural-looking landscapes.",
+			"Provides seamless blending between terrain and objects, eliminating harsh transitions where objects meet the ground for more natural-looking landscapes. In VR, TB detects the main depth prepass signature to trigger reliably.",
 			{ "Seamless terrain-to-object blending transitions",
 				"Advanced depth buffer manipulation for smooth integration",
 				"Support for alternative terrain rendering modes",
 				"Multi-pass rendering optimization for complex scenes",
-				"Enhanced visual continuity in landscape interactions" }
+				"Enhanced visual continuity in landscape interactions",
+				"VR: signature-based main prepass detection" }
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
 	virtual void SetupResources() override;
+	virtual void DrawSettings() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
+	virtual void RestoreDefaultSettings() override;
 
 	ID3D11VertexShader* GetTerrainVertexShader();
 	ID3D11VertexShader* GetTerrainOffsetVertexShader();
@@ -88,14 +115,14 @@ public:
 
 		static void Install()
 		{
-			// To know when we are rendering z-prepass depth vs shadows depth
+			// Hooks identify the main depth prepass and intercept render passes for TB.
 			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395, 0x2EE));
 
-			// To manipulate the depth buffer write, depth testing, alpha blending
 			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
 
 			logger::info("[Terrain Blending] Installed hooks");
 		}
 	};
-	virtual bool SupportsVR() override { return false; };
+	virtual bool SupportsVR() override { return true; };
+	virtual bool IsCore() const override { return true; };
 };

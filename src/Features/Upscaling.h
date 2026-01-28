@@ -3,14 +3,13 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
-#include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <winrt/base.h>
 
 /**
- * @brief Provides upscaling functionality including DLSS, FSR and TAA.
+ * @brief Provides upscaling functionality including DLSS, FSR, XeSS and TAA.
  *
  * This feature handles various upscaling methods and frame generation technologies
  * to improve performance while maintaining visual quality.
@@ -31,6 +30,7 @@ public:
 			"Advanced upscaling and frame generation technologies for improved performance",
 			{ "DLSS (Deep Learning Super Sampling) support",
 				"FSR (FidelityFX Super Resolution) support",
+				"XeSS (Intel Xe Super Sampling) support",
 				"TAA (Temporal Anti-Aliasing) support",
 				"Frame generation for supported systems" }
 		};
@@ -56,7 +56,8 @@ public:
 		uint frameGenerationForceEnable = 0;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 1.0f;
-		float sharpnessDLSS = 0.5f;
+		float sharpnessDLSS = 0.1f;
+		uint DLSSPreset = 2;  // VR-specific DLSS preset: 0=F, 1=J, 2=K
 	};
 
 	Settings settings;
@@ -138,15 +139,14 @@ public:
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
-	Texture2D* sharpenerTexture = nullptr;
+	Texture2D* nisSharpenerTexture = nullptr;
 
 	virtual void ClearShaderCache() override;
 
 	// Static instances instead of singletons
 	static inline Streamline streamline;
-	static inline FidelityFX fidelityFX;  ///< Only for frame generation
+	static inline FidelityFX fidelityFX;  // Only for frame generation
 	static inline DX12SwapChain dx12SwapChain;
-	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
 
 	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
 
@@ -163,12 +163,7 @@ public:
 	void PerformUpscaling();
 	void UpscaleDepth();
 
-	/**
-	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.
-	 *
-	 * Runs in HDR space before tonemapping. Only called when DLSS is active and sharpness > 0.
-	 */
-	void ApplySharpening();
+	void ApplyNISSharpening();
 
 	static void TimerSleepQPC(int64_t targetQPC);
 

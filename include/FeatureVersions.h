@@ -34,7 +34,7 @@ namespace FeatureVersions
         {"TerrainHelper"sv,        {1,0,0}},
         {"TerrainShadows"sv,       {1,0,0}},
         {"TerrainVariation"sv,     {1,0,1}},
-        {"Upscaling"sv,            {1,1,2}},  // ←  CS 1.4.7
+        {"Upscaling"sv,            {1,1,1}},  // ←  CS 1.4.6
         {"VR"sv,                   {1,0,1}},
         {"VolumetricLighting"sv,   {1,0,0}},
         {"WaterEffects"sv,         {1,0,1}},

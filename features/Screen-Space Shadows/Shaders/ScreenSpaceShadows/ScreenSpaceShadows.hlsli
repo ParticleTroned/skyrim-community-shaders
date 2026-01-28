@@ -1,4 +1,4 @@
-﻿#include "Common/Math.hlsli"
+#include "Common/Math.hlsli"
 
 namespace ScreenSpaceShadows
 {

@@ -1,4 +1,4 @@
-﻿
+
 #include "Common/SharedData.hlsli"
 
 #include "ScreenSpaceShadows/bend_sss_gpu.hlsli"

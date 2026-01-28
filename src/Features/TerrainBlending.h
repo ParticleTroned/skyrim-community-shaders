@@ -14,7 +14,7 @@ public:
 
 	struct alignas(16) PerFrame
 	{
-		float BlendStrength = 1.0f;
+		float BlendStrength = 2.0f;
 		float pad0[3]{};
 	};
 

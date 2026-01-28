@@ -327,13 +327,13 @@ void TerrainBlending::DataLoaded()
 void TerrainBlending::DrawSettings()
 {
 	ImGui::Checkbox("Enable Terrain Blending", &settings.Enable);
-	ImGui::SliderFloat("Blend Tightness", &settings.BlendStrength, 0.75f, 4.0f, "%.2f");
+ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.75f, 4.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Higher = sharper transition (less blending). Lower = softer blend, more transparency.");
+		ImGui::Text("Scales the depth-based blend factor. 1.00 matches the current behavior.");
 	}
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Performance Options", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::TreeNodeEx("Performance Options")) {
 		ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Terrain farther than this distance skips TB depth rendering. Set to 0 to disable culling.");

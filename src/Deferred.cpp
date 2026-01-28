@@ -422,12 +422,21 @@ void Deferred::DeferredPasses()
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
+		ID3D11ShaderResourceView* compositeDepthSRV = depth.depthSRV;
+		if (terrainBlending.loaded) {
+			compositeDepthSRV = terrainBlending.blendedDepthTexture16->srv.get();
+			if (terrainBlending.settings.Enable && terrainBlending.prepassSRVBackup) {
+				// Use engine depth so deferred composite doesn't sample TB depth.
+				compositeDepthSRV = terrainBlending.prepassSRVBackup;
+			}
+		}
+
 		ID3D11ShaderResourceView* srvs[16]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
 			masks.SRV,
-			dynamicCubemaps.loaded || REL::Module::IsVR() ? (terrainBlending.loaded ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
+			dynamicCubemaps.loaded || REL::Module::IsVR() ? compositeDepthSRV : nullptr,
 			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,

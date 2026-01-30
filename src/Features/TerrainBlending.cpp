@@ -10,6 +10,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainCullDistance,
 	BlendStrength,
 	ForceWhiteShadowMask,
+	ForceWhiteShadowmapSlot4,
+	ShadowmaskSlot2Source,
 	LogShadowmapPasses,
 	LogShadowmaskPasses,
 	LogShadowmaskSlots)
@@ -378,6 +380,11 @@ void TerrainBlending::SetupResources()
 		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc;
 		mainDepth.views[0]->GetDesc(&dsvDesc);
 		DX::ThrowIfFailed(device->CreateDepthStencilView(terrainDepth.texture, &dsvDesc, &terrainDepth.views[0]));
+
+		shadowmaskDepth = new Texture2D(texDesc);
+		D3D11_SHADER_RESOURCE_VIEW_DESC shadowSrvDesc{};
+		mainDepth.depthSRV->GetDesc(&shadowSrvDesc);
+		shadowmaskDepth->CreateSRV(shadowSrvDesc);
 	}
 
 	{
@@ -454,6 +461,58 @@ void TerrainBlending::SetupResources()
 	}
 
 	{
+		auto* shadowmaps = &renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM];
+		if (!shadowmaps->texture || !shadowmaps->depthSRV) {
+			shadowmaps = &renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS];
+		}
+
+		if (shadowmaps->texture && shadowmaps->depthSRV && shadowmaps->views[0]) {
+			D3D11_TEXTURE2D_DESC texDesc{};
+			shadowmaps->texture->GetDesc(&texDesc);
+			texDesc.Width = 1;
+			texDesc.Height = 1;
+			texDesc.MipLevels = 1;
+			texDesc.SampleDesc.Count = 1;
+			texDesc.SampleDesc.Quality = 0;
+			texDesc.Usage = D3D11_USAGE_DEFAULT;
+			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL;
+			texDesc.CPUAccessFlags = 0;
+			texDesc.MiscFlags = 0;
+
+			shadowmapWhite = new Texture2D(texDesc);
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+			shadowmaps->depthSRV->GetDesc(&srvDesc);
+			if (texDesc.ArraySize > 1) {
+				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+				srvDesc.Texture2DArray.MostDetailedMip = 0;
+				srvDesc.Texture2DArray.MipLevels = 1;
+				srvDesc.Texture2DArray.FirstArraySlice = 0;
+				srvDesc.Texture2DArray.ArraySize = texDesc.ArraySize;
+			} else {
+				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+				srvDesc.Texture2D.MostDetailedMip = 0;
+				srvDesc.Texture2D.MipLevels = 1;
+			}
+			shadowmapWhite->CreateSRV(srvDesc);
+
+			D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+			shadowmaps->views[0]->GetDesc(&dsvDesc);
+			if (texDesc.ArraySize > 1) {
+				dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+				dsvDesc.Texture2DArray.MipSlice = 0;
+				dsvDesc.Texture2DArray.FirstArraySlice = 0;
+				dsvDesc.Texture2DArray.ArraySize = texDesc.ArraySize;
+			} else {
+				dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+				dsvDesc.Texture2D.MipSlice = 0;
+			}
+			shadowmapWhite->CreateDSV(dsvDesc);
+			context->ClearDepthStencilView(shadowmapWhite->dsv.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+		}
+	}
+
+	{
 		D3D11_DEPTH_STENCIL_DESC depthStencilDesc{};
 		depthStencilDesc.DepthEnable = true;
 		depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
@@ -486,6 +545,14 @@ void TerrainBlending::DrawSettings()
 	if (globals::state->IsDeveloperMode()) {
 		ImGui::SeparatorText("Debug");
 		ImGui::Checkbox("Force White Shadow Mask (Debug)", &settings.ForceWhiteShadowMask);
+		ImGui::Checkbox("Shadowmask Slot4: Force White Shadowmap (Debug)", &settings.ForceWhiteShadowmapSlot4);
+		const char* shadowmaskDepthSources[] = {
+			"Default (no override)",
+			"Engine Prepass Depth",
+			"Engine Main Depth",
+			"Shadowmask Depth Copy"
+		};
+		ImGui::Combo("Shadowmask Slot2 Source (Debug)", &settings.ShadowmaskSlot2Source, shadowmaskDepthSources, IM_ARRAYSIZE(shadowmaskDepthSources));
 		ImGui::Checkbox("Log Shadowmap Passes (Debug)", &settings.LogShadowmapPasses);
 		ImGui::Checkbox("Log Shadowmask Passes (Debug)", &settings.LogShadowmaskPasses);
 		ImGui::Checkbox("Log Shadowmask Slot Overrides (Debug)", &settings.LogShadowmaskSlots);

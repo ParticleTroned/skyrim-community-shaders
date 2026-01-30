@@ -257,6 +257,12 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	constexpr uint32_t kShadowmaskBits =
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb) |
+		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskDpb);
+
 	struct ShadowmaskSlotLogLimiter
 	{
 		uint32_t frame = 0;
@@ -277,6 +283,7 @@ namespace globals
 	};
 
 	ShadowmaskSlotLogLimiter g_shadowmaskSlotLogLimiter{};
+	uint32_t g_shadowmaskCopyFrame = 0;
 
 	struct ID3D11DeviceContext_PSSetShaderResources
 	{
@@ -285,6 +292,135 @@ namespace globals
 			auto& terrainBlending = globals::features::terrainBlending;
 			auto statePtr = globals::state;
 			constexpr UINT kShadowMaskSlot = 14;
+			constexpr UINT kShadowmaskDepthSlot = 2;
+			constexpr UINT kShadowmapSlot = 4;
+
+			const bool isShadowmaskPass =
+				statePtr &&
+				statePtr->currentShader &&
+				statePtr->currentShader->shaderType.get() == RE::BSShader::Type::Utility &&
+				(statePtr->modifiedPixelDescriptor & kShadowmaskBits) != 0;
+
+			if (terrainBlending.settings.Enable &&
+				isShadowmaskPass &&
+				NumViews > 0 &&
+				ppSRVs) {
+				const bool wantsSlot2 =
+					terrainBlending.settings.ShadowmaskSlot2Source != 0 &&
+					StartSlot <= kShadowmaskDepthSlot &&
+					(StartSlot + NumViews) > kShadowmaskDepthSlot;
+				const bool wantsSlot4 =
+					terrainBlending.settings.ForceWhiteShadowmapSlot4 &&
+					terrainBlending.shadowmapWhite &&
+					terrainBlending.shadowmapWhite->srv &&
+					StartSlot <= kShadowmapSlot &&
+					(StartSlot + NumViews) > kShadowmapSlot;
+
+				if (wantsSlot2 || wantsSlot4) {
+					std::vector<ID3D11ShaderResourceView*> views(ppSRVs, ppSRVs + NumViews);
+
+					if (wantsSlot2) {
+						ID3D11ShaderResourceView* overrideSRV = nullptr;
+						const char* label = "unknown";
+
+						switch (terrainBlending.settings.ShadowmaskSlot2Source) {
+						case 1:
+							overrideSRV = terrainBlending.prepassSRVBackup;
+							label = "prepassSRVBackup";
+							break;
+						case 2:
+							overrideSRV = terrainBlending.depthSRVBackup;
+							label = "depthSRVBackup";
+							break;
+						case 3:
+							if (terrainBlending.shadowmaskDepth && terrainBlending.shadowmaskDepth->srv) {
+								auto context = globals::d3d::context;
+								if (context && statePtr && g_shadowmaskCopyFrame != statePtr->frameCount) {
+									ID3D11Resource* srcRes = nullptr;
+									ID3D11Resource* dstRes = nullptr;
+									if (terrainBlending.depthSRVBackup) {
+										terrainBlending.depthSRVBackup->GetResource(&srcRes);
+									}
+									terrainBlending.shadowmaskDepth->srv->GetResource(&dstRes);
+									if (srcRes && dstRes) {
+										context->CopyResource(dstRes, srcRes);
+										g_shadowmaskCopyFrame = statePtr->frameCount;
+										if (terrainBlending.settings.LogShadowmaskSlots && statePtr->IsDeveloperMode()) {
+											g_shadowmaskSlotLogLimiter.BeginFrame(statePtr->frameCount);
+											if (g_shadowmaskSlotLogLimiter.Allow(4)) {
+												logger::debug("[TB][Shadowmask] Captured depth copy from depthSRVBackup srcSRV={} res={} into shadowmaskDepth SRV={}",
+													reinterpret_cast<const void*>(terrainBlending.depthSRVBackup),
+													reinterpret_cast<const void*>(srcRes),
+													reinterpret_cast<const void*>(terrainBlending.shadowmaskDepth->srv.get()));
+											}
+										}
+									}
+									if (srcRes) {
+										srcRes->Release();
+									}
+									if (dstRes) {
+										dstRes->Release();
+									}
+								}
+								overrideSRV = terrainBlending.shadowmaskDepth->srv.get();
+								label = "shadowmaskDepth";
+							}
+							break;
+						default:
+							break;
+						}
+
+						if (overrideSRV) {
+							const uint32_t slotIndex = kShadowmaskDepthSlot - StartSlot;
+							const auto original = views[slotIndex];
+							views[slotIndex] = overrideSRV;
+
+							if (terrainBlending.settings.LogShadowmaskSlots && statePtr->IsDeveloperMode()) {
+								g_shadowmaskSlotLogLimiter.BeginFrame(statePtr->frameCount);
+								if (g_shadowmaskSlotLogLimiter.Allow(4)) {
+									const uint64_t pixDesc = statePtr->modifiedPixelDescriptor;
+									logger::debug(
+										"[TB][Shadowmask] PS SRV override slot2 orig={} -> {}={} (start={}, count={}) pixDesc=0x{:X} shaderType={} shader={}",
+										reinterpret_cast<const void*>(original),
+										label,
+										reinterpret_cast<const void*>(overrideSRV),
+										StartSlot,
+										NumViews,
+										pixDesc,
+										static_cast<uint32_t>(statePtr->currentShader->shaderType.get()),
+										statePtr->currentShader->fxpFilename);
+								}
+							}
+						}
+					}
+
+					if (wantsSlot4) {
+						const uint32_t slotIndex = kShadowmapSlot - StartSlot;
+						const auto original = views[slotIndex];
+						const auto overrideSRV = terrainBlending.shadowmapWhite->srv.get();
+						views[slotIndex] = overrideSRV;
+
+						if (terrainBlending.settings.LogShadowmaskSlots && statePtr->IsDeveloperMode()) {
+							g_shadowmaskSlotLogLimiter.BeginFrame(statePtr->frameCount);
+							if (g_shadowmaskSlotLogLimiter.Allow(4)) {
+								const uint64_t pixDesc = statePtr->modifiedPixelDescriptor;
+								logger::debug(
+									"[TB][Shadowmask] PS SRV override slot4 orig={} -> shadowmapWhite={} (start={}, count={}) pixDesc=0x{:X} shaderType={} shader={}",
+									reinterpret_cast<const void*>(original),
+									reinterpret_cast<const void*>(overrideSRV),
+									StartSlot,
+									NumViews,
+									pixDesc,
+									static_cast<uint32_t>(statePtr->currentShader->shaderType.get()),
+									statePtr->currentShader->fxpFilename);
+							}
+						}
+					}
+
+					func(This, StartSlot, NumViews, views.data());
+					return;
+				}
+			}
 
 			if (terrainBlending.settings.Enable &&
 				terrainBlending.settings.ForceWhiteShadowMask &&

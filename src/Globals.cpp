@@ -38,6 +38,7 @@
 #include "TruePBR.h"
 #include "Utils/Game.h"
 #include "Features/LightLimitFix/ParticleLights.h"
+#include <vector>
 
 namespace globals
 {
@@ -256,6 +257,78 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ShadowmaskSlotLogLimiter
+	{
+		uint32_t frame = 0;
+		uint32_t count = 0;
+
+		void BeginFrame(uint32_t currentFrame)
+		{
+			if (frame != currentFrame) {
+				frame = currentFrame;
+				count = 0;
+			}
+		}
+
+		bool Allow(uint32_t limit)
+		{
+			return count++ < limit;
+		}
+	};
+
+	ShadowmaskSlotLogLimiter g_shadowmaskSlotLogLimiter{};
+
+	struct ID3D11DeviceContext_PSSetShaderResources
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView* const* ppSRVs)
+		{
+			auto& terrainBlending = globals::features::terrainBlending;
+			auto statePtr = globals::state;
+			constexpr UINT kShadowMaskSlot = 14;
+
+			if (terrainBlending.settings.Enable &&
+				terrainBlending.settings.ForceWhiteShadowMask &&
+				terrainBlending.shadowmaskWhite &&
+				terrainBlending.shadowmaskWhite->srv &&
+				statePtr &&
+				statePtr->currentShader &&
+				statePtr->currentShader->shaderType.get() == RE::BSShader::Type::Lighting &&
+				NumViews > 0 &&
+				ppSRVs &&
+				StartSlot <= kShadowMaskSlot &&
+				(StartSlot + NumViews) > kShadowMaskSlot) {
+
+				const uint32_t slotIndex = kShadowMaskSlot - StartSlot;
+				std::vector<ID3D11ShaderResourceView*> views(ppSRVs, ppSRVs + NumViews);
+				const auto original = views[slotIndex];
+				const auto overrideSRV = terrainBlending.shadowmaskWhite->srv.get();
+				views[slotIndex] = overrideSRV;
+
+				if (terrainBlending.settings.LogShadowmaskSlots && statePtr->IsDeveloperMode()) {
+					g_shadowmaskSlotLogLimiter.BeginFrame(statePtr->frameCount);
+					if (g_shadowmaskSlotLogLimiter.Allow(4)) {
+						const uint64_t pixDesc = statePtr->modifiedPixelDescriptor;
+						logger::debug(
+							"[TB][Shadowmask] Lighting PS SRV override slot14 orig={} -> white={} (start={}, count={}) pixDesc=0x{:X} shaderType={} shader={}",
+							reinterpret_cast<const void*>(original),
+							reinterpret_cast<const void*>(overrideSRV),
+							StartSlot,
+							NumViews,
+							pixDesc,
+							static_cast<uint32_t>(statePtr->currentShader->shaderType.get()),
+							statePtr->currentShader->fxpFilename);
+					}
+				}
+
+				func(This, StartSlot, NumViews, views.data());
+				return;
+			}
+
+			func(This, StartSlot, NumViews, ppSRVs);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	/**
  * @brief Installs hooks on the Map and Unmap methods of the provided D3D11 device context.
  *
@@ -263,6 +336,7 @@ namespace globals
  */
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		stl::detour_vfunc<8, ID3D11DeviceContext_PSSetShaderResources>(a_context);
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 	}

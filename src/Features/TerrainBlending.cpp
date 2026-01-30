@@ -8,7 +8,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
 	Enable,
 	TerrainCullDistance,
-	BlendStrength)
+	BlendStrength,
+	ForceWhiteShadowMask,
+	LogShadowmapPasses,
+	LogShadowmaskPasses,
+	LogShadowmaskSlots)
 
 namespace
 {
@@ -45,14 +49,48 @@ namespace
 	bool g_signatureLocked = false;
 
 	constexpr uint32_t kRenderFlagsSignatureMask = ~0x00000010u;
-	constexpr uint32_t kUtilityRenderDepthFlag = static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderDepth);
-	constexpr uint32_t kUtilityShadowFlags =
-		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmap) |
-		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapClamped) |
-		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapPb) |
-		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask) |
-		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) |
-		static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb);
+	constexpr uint64_t kUtilityRenderDepthFlag = static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderDepth);
+	constexpr uint64_t kUtilityShadowmapFlags =
+		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmap) |
+		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapClamped) |
+		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapPb);
+	constexpr uint64_t kUtilityShadowmaskFlags =
+		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask) |
+		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) |
+		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb) |
+		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskDpb);
+	constexpr uint64_t kUtilityShadowFlags = kUtilityShadowmapFlags | kUtilityShadowmaskFlags;
+
+	constexpr uint32_t kShadowmapLogLimit = 8;
+	constexpr uint32_t kShadowmaskLogLimit = 8;
+
+	struct ShadowLogLimiter
+	{
+		uint32_t frame = 0;
+		uint32_t shadowmapPasses = 0;
+		uint32_t shadowmaskPasses = 0;
+
+		void BeginFrame(uint32_t currentFrame)
+		{
+			if (frame != currentFrame) {
+				frame = currentFrame;
+				shadowmapPasses = 0;
+				shadowmaskPasses = 0;
+			}
+		}
+
+		bool AllowShadowmap()
+		{
+			return shadowmapPasses++ < kShadowmapLogLimit;
+		}
+
+		bool AllowShadowmask()
+		{
+			return shadowmaskPasses++ < kShadowmaskLogLimit;
+		}
+	};
+
+	ShadowLogLimiter g_shadowLogLimiter{};
 
 	uint32_t NormalizeRenderFlags(uint32_t renderFlags)
 	{
@@ -78,10 +116,11 @@ namespace
 
 		const auto shaderType = pass->shader->shaderType.get();
 		if (shaderType == RE::BSShader::Type::Utility) {
-			if ((technique & kUtilityRenderDepthFlag) == 0 || (technique & kUtilityShadowFlags) != 0) {
+			const uint64_t tech = static_cast<uint64_t>(technique);
+			if ((tech & kUtilityRenderDepthFlag) == 0 || (tech & kUtilityShadowFlags) != 0) {
 				return false;
 			}
-			outTechnique = kUtilityRenderDepthFlag;
+			outTechnique = static_cast<uint32_t>(kUtilityRenderDepthFlag);
 			outFlags = NormalizeRenderFlags(renderFlags);
 			outShaderType = RE::BSShader::Type::Utility;
 			return true;
@@ -218,6 +257,78 @@ namespace
 
 		return !hasRTV;
 	}
+
+	bool IsUtilityShadowmapPass(const RE::BSRenderPass* pass, uint32_t technique)
+	{
+		return pass && pass->shader && pass->shader->shaderType.get() == RE::BSShader::Type::Utility &&
+		       (static_cast<uint64_t>(technique) & kUtilityShadowmapFlags) != 0;
+	}
+
+	bool IsUtilityShadowmaskPass(const RE::BSRenderPass* pass, uint32_t technique)
+	{
+		return pass && pass->shader && pass->shader->shaderType.get() == RE::BSShader::Type::Utility &&
+		       (static_cast<uint64_t>(technique) & kUtilityShadowmaskFlags) != 0;
+	}
+
+	const char* GetGeometryName(const RE::BSRenderPass* pass)
+	{
+		if (!pass || !pass->geometry) {
+			return "";
+		}
+		const auto name = pass->geometry->name.c_str();
+		return name ? name : "";
+	}
+
+	void LogShadowmapPass(const RE::BSRenderPass* pass, uint32_t technique, uint32_t renderFlags)
+	{
+		auto state = globals::state;
+		if (!state || !g_shadowLogLimiter.AllowShadowmap()) {
+			return;
+		}
+
+		const uint32_t passEnum = pass ? pass->passEnum : 0;
+		const uint32_t hint = pass ? pass->accumulationHint : 0;
+		const uint32_t lights = pass ? pass->numLights : 0;
+		const uint32_t shadowLights = pass ? pass->numShadowLights : 0;
+		const auto prop = pass ? pass->shaderProperty : nullptr;
+		const uint64_t propFlags = prop ? prop->flags.underlying() : 0;
+		const auto geom = pass ? pass->geometry : nullptr;
+
+		logger::debug("[TB][ShadowMapPass] tech=0x{:X} flags=0x{:X} pass={} hint={} lights={} shadowLights={} prop={} propFlags=0x{:X} geom={} name={}",
+			technique,
+			renderFlags,
+			passEnum,
+			hint,
+			lights,
+			shadowLights,
+			reinterpret_cast<const void*>(prop),
+			propFlags,
+			reinterpret_cast<const void*>(geom),
+			GetGeometryName(pass));
+	}
+
+	void LogShadowmaskPass(const RE::BSRenderPass* pass, uint32_t technique)
+	{
+		auto state = globals::state;
+		if (!state || !g_shadowLogLimiter.AllowShadowmask()) {
+			return;
+		}
+
+		const uint64_t pixelDesc = state->modifiedPixelDescriptor;
+		const uint64_t maskBits = pixelDesc & kUtilityShadowmaskFlags;
+		const auto prop = pass ? pass->shaderProperty : nullptr;
+		const uint64_t propFlags = prop ? prop->flags.underlying() : 0;
+		const auto geom = pass ? pass->geometry : nullptr;
+
+		logger::debug("[TB][ShadowmaskPass] #{} tech=0x{:X} maskBits=0x{:X} pixDesc=0x{:X} propFlags=0x{:X} geom={} name={}",
+			g_shadowLogLimiter.shadowmaskPasses,
+			technique,
+			maskBits,
+			pixelDesc,
+			propFlags,
+			reinterpret_cast<const void*>(geom),
+			GetGeometryName(pass));
+	}
 }
 
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
@@ -251,6 +362,7 @@ void TerrainBlending::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
 
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -304,6 +416,44 @@ void TerrainBlending::SetupResources()
 	}
 
 	{
+		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+		if (shadowMask.texture && shadowMask.SRV && shadowMask.RTV) {
+			D3D11_TEXTURE2D_DESC texDesc{};
+			shadowMask.texture->GetDesc(&texDesc);
+			texDesc.Width = 1;
+			texDesc.Height = 1;
+			texDesc.MipLevels = 1;
+			texDesc.ArraySize = 1;
+			texDesc.SampleDesc.Count = 1;
+			texDesc.SampleDesc.Quality = 0;
+			texDesc.Usage = D3D11_USAGE_DEFAULT;
+			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			texDesc.CPUAccessFlags = 0;
+			texDesc.MiscFlags = 0;
+
+			shadowmaskWhite = new Texture2D(texDesc);
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+			shadowMask.SRV->GetDesc(&srvDesc);
+			srvDesc.Format = texDesc.Format;
+			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.MipLevels = 1;
+			shadowmaskWhite->CreateSRV(srvDesc);
+
+			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+			shadowMask.RTV->GetDesc(&rtvDesc);
+			rtvDesc.Format = texDesc.Format;
+			rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+			rtvDesc.Texture2D.MipSlice = 0;
+			shadowmaskWhite->CreateRTV(rtvDesc);
+
+			const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+			context->ClearRenderTargetView(shadowmaskWhite->rtv.get(), white);
+		}
+	}
+
+	{
 		D3D11_DEPTH_STENCIL_DESC depthStencilDesc{};
 		depthStencilDesc.DepthEnable = true;
 		depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
@@ -327,11 +477,20 @@ void TerrainBlending::DataLoaded()
 void TerrainBlending::DrawSettings()
 {
 	ImGui::Checkbox("Enable Terrain Blending", &settings.Enable);
-ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.75f, 4.0f, "%.2f");
+	ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.75f, 4.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Scales the depth-based blend factor. 1.00 matches the current behavior.");
 	}
 	ImGui::Spacing();
+
+	if (globals::state->IsDeveloperMode()) {
+		ImGui::SeparatorText("Debug");
+		ImGui::Checkbox("Force White Shadow Mask (Debug)", &settings.ForceWhiteShadowMask);
+		ImGui::Checkbox("Log Shadowmap Passes (Debug)", &settings.LogShadowmapPasses);
+		ImGui::Checkbox("Log Shadowmask Passes (Debug)", &settings.LogShadowmaskPasses);
+		ImGui::Checkbox("Log Shadowmask Slot Overrides (Debug)", &settings.LogShadowmaskSlots);
+		ImGui::Spacing();
+	}
 
 	if (ImGui::TreeNodeEx("Performance Options")) {
 		ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
@@ -527,6 +686,17 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	}
 
 	if (shaderCache->IsEnabled()) {
+		if (state) {
+			g_shadowLogLimiter.BeginFrame(state->frameCount);
+		}
+
+		if (singleton.settings.LogShadowmapPasses && IsUtilityShadowmapPass(a_pass, a_technique)) {
+			LogShadowmapPass(a_pass, a_technique, a_renderFlags);
+		}
+		if (singleton.settings.LogShadowmaskPasses && IsUtilityShadowmaskPass(a_pass, a_technique)) {
+			LogShadowmaskPass(a_pass, a_technique);
+		}
+
 		if (g_inMainDepthGroup) {
 			UpdateMainPrepassSignature(state->frameCount, state->IsDeveloperMode());
 

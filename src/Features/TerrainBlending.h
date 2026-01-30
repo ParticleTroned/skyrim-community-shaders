@@ -8,6 +8,10 @@ public:
 		bool Enable = true;
 		float TerrainCullDistance = 1024.0f;
 		float BlendStrength = 2.0f;
+		bool ForceWhiteShadowMask = false;
+		bool LogShadowmapPasses = false;
+		bool LogShadowmaskPasses = false;
+		bool LogShadowmaskSlots = false;
 	};
 
 	Settings settings;
@@ -85,6 +89,7 @@ public:
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;
+	Texture2D* shadowmaskWhite = nullptr;
 
 	RE::BSGraphics::DepthStencilData terrainDepth;
 

@@ -1,4 +1,4 @@
-﻿#include "Common/FrameBuffer.hlsli"
+#include "Common/FrameBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"

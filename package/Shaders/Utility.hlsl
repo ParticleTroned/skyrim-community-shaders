@@ -1,4 +1,4 @@
-#include "Common/FrameBuffer.hlsli"
+﻿#include "Common/FrameBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
@@ -113,6 +113,7 @@ cbuffer PerGeometry : register(b2)
 	float4 TreeParams : packoffset(c12);
 #	endif  // VR
 };
+
 
 float2 SmoothSaturate(float2 value)
 {
@@ -270,7 +271,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(OFFSET_DEPTH)
-	vsout.PositionCS.z += 5.0;
+	vsout.PositionCS.z += 1.25;
 #	endif
 
 #	ifdef VR
@@ -866,3 +867,4 @@ PS_OUTPUT main(PS_INPUT input)
 }
 
 #endif
+

@@ -8,13 +8,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
 	Enable,
 	TerrainCullDistance,
-	BlendStrength,
-	ForceWhiteShadowMask,
-	ForceWhiteShadowmapSlot4,
-	ShadowmaskSlot2Source,
-	LogShadowmapPasses,
-	LogShadowmaskPasses,
-	LogShadowmaskSlots)
+	BlendStrength)
 
 namespace
 {
@@ -62,37 +56,6 @@ namespace
 		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb) |
 		static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskDpb);
 	constexpr uint64_t kUtilityShadowFlags = kUtilityShadowmapFlags | kUtilityShadowmaskFlags;
-
-	constexpr uint32_t kShadowmapLogLimit = 8;
-	constexpr uint32_t kShadowmaskLogLimit = 8;
-
-	struct ShadowLogLimiter
-	{
-		uint32_t frame = 0;
-		uint32_t shadowmapPasses = 0;
-		uint32_t shadowmaskPasses = 0;
-
-		void BeginFrame(uint32_t currentFrame)
-		{
-			if (frame != currentFrame) {
-				frame = currentFrame;
-				shadowmapPasses = 0;
-				shadowmaskPasses = 0;
-			}
-		}
-
-		bool AllowShadowmap()
-		{
-			return shadowmapPasses++ < kShadowmapLogLimit;
-		}
-
-		bool AllowShadowmask()
-		{
-			return shadowmaskPasses++ < kShadowmaskLogLimit;
-		}
-	};
-
-	ShadowLogLimiter g_shadowLogLimiter{};
 
 	uint32_t NormalizeRenderFlags(uint32_t renderFlags)
 	{
@@ -260,77 +223,6 @@ namespace
 		return !hasRTV;
 	}
 
-	bool IsUtilityShadowmapPass(const RE::BSRenderPass* pass, uint32_t technique)
-	{
-		return pass && pass->shader && pass->shader->shaderType.get() == RE::BSShader::Type::Utility &&
-		       (static_cast<uint64_t>(technique) & kUtilityShadowmapFlags) != 0;
-	}
-
-	bool IsUtilityShadowmaskPass(const RE::BSRenderPass* pass, uint32_t technique)
-	{
-		return pass && pass->shader && pass->shader->shaderType.get() == RE::BSShader::Type::Utility &&
-		       (static_cast<uint64_t>(technique) & kUtilityShadowmaskFlags) != 0;
-	}
-
-	const char* GetGeometryName(const RE::BSRenderPass* pass)
-	{
-		if (!pass || !pass->geometry) {
-			return "";
-		}
-		const auto name = pass->geometry->name.c_str();
-		return name ? name : "";
-	}
-
-	void LogShadowmapPass(const RE::BSRenderPass* pass, uint32_t technique, uint32_t renderFlags)
-	{
-		auto state = globals::state;
-		if (!state || !g_shadowLogLimiter.AllowShadowmap()) {
-			return;
-		}
-
-		const uint32_t passEnum = pass ? pass->passEnum : 0;
-		const uint32_t hint = pass ? pass->accumulationHint : 0;
-		const uint32_t lights = pass ? pass->numLights : 0;
-		const uint32_t shadowLights = pass ? pass->numShadowLights : 0;
-		const auto prop = pass ? pass->shaderProperty : nullptr;
-		const uint64_t propFlags = prop ? prop->flags.underlying() : 0;
-		const auto geom = pass ? pass->geometry : nullptr;
-
-		logger::debug("[TB][ShadowMapPass] tech=0x{:X} flags=0x{:X} pass={} hint={} lights={} shadowLights={} prop={} propFlags=0x{:X} geom={} name={}",
-			technique,
-			renderFlags,
-			passEnum,
-			hint,
-			lights,
-			shadowLights,
-			reinterpret_cast<const void*>(prop),
-			propFlags,
-			reinterpret_cast<const void*>(geom),
-			GetGeometryName(pass));
-	}
-
-	void LogShadowmaskPass(const RE::BSRenderPass* pass, uint32_t technique)
-	{
-		auto state = globals::state;
-		if (!state || !g_shadowLogLimiter.AllowShadowmask()) {
-			return;
-		}
-
-		const uint64_t pixelDesc = state->modifiedPixelDescriptor;
-		const uint64_t maskBits = pixelDesc & kUtilityShadowmaskFlags;
-		const auto prop = pass ? pass->shaderProperty : nullptr;
-		const uint64_t propFlags = prop ? prop->flags.underlying() : 0;
-		const auto geom = pass ? pass->geometry : nullptr;
-
-		logger::debug("[TB][ShadowmaskPass] #{} tech=0x{:X} maskBits=0x{:X} pixDesc=0x{:X} propFlags=0x{:X} geom={} name={}",
-			g_shadowLogLimiter.shadowmaskPasses,
-			technique,
-			maskBits,
-			pixelDesc,
-			propFlags,
-			reinterpret_cast<const void*>(geom),
-			GetGeometryName(pass));
-	}
 }
 
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
@@ -364,7 +256,6 @@ void TerrainBlending::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
-	auto context = globals::d3d::context;
 
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -381,10 +272,6 @@ void TerrainBlending::SetupResources()
 		mainDepth.views[0]->GetDesc(&dsvDesc);
 		DX::ThrowIfFailed(device->CreateDepthStencilView(terrainDepth.texture, &dsvDesc, &terrainDepth.views[0]));
 
-		shadowmaskDepth = new Texture2D(texDesc);
-		D3D11_SHADER_RESOURCE_VIEW_DESC shadowSrvDesc{};
-		mainDepth.depthSRV->GetDesc(&shadowSrvDesc);
-		shadowmaskDepth->CreateSRV(shadowSrvDesc);
 	}
 
 	{
@@ -422,95 +309,6 @@ void TerrainBlending::SetupResources()
 		prepassSRVBackup = zPrepassCopy.depthSRV;
 	}
 
-	{
-		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
-		if (shadowMask.texture && shadowMask.SRV && shadowMask.RTV) {
-			D3D11_TEXTURE2D_DESC texDesc{};
-			shadowMask.texture->GetDesc(&texDesc);
-			texDesc.Width = 1;
-			texDesc.Height = 1;
-			texDesc.MipLevels = 1;
-			texDesc.ArraySize = 1;
-			texDesc.SampleDesc.Count = 1;
-			texDesc.SampleDesc.Quality = 0;
-			texDesc.Usage = D3D11_USAGE_DEFAULT;
-			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-			texDesc.CPUAccessFlags = 0;
-			texDesc.MiscFlags = 0;
-
-			shadowmaskWhite = new Texture2D(texDesc);
-
-			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-			shadowMask.SRV->GetDesc(&srvDesc);
-			srvDesc.Format = texDesc.Format;
-			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-			srvDesc.Texture2D.MostDetailedMip = 0;
-			srvDesc.Texture2D.MipLevels = 1;
-			shadowmaskWhite->CreateSRV(srvDesc);
-
-			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-			shadowMask.RTV->GetDesc(&rtvDesc);
-			rtvDesc.Format = texDesc.Format;
-			rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-			rtvDesc.Texture2D.MipSlice = 0;
-			shadowmaskWhite->CreateRTV(rtvDesc);
-
-			const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-			context->ClearRenderTargetView(shadowmaskWhite->rtv.get(), white);
-		}
-	}
-
-	{
-		auto* shadowmaps = &renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM];
-		if (!shadowmaps->texture || !shadowmaps->depthSRV) {
-			shadowmaps = &renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS];
-		}
-
-		if (shadowmaps->texture && shadowmaps->depthSRV && shadowmaps->views[0]) {
-			D3D11_TEXTURE2D_DESC texDesc{};
-			shadowmaps->texture->GetDesc(&texDesc);
-			texDesc.Width = 1;
-			texDesc.Height = 1;
-			texDesc.MipLevels = 1;
-			texDesc.SampleDesc.Count = 1;
-			texDesc.SampleDesc.Quality = 0;
-			texDesc.Usage = D3D11_USAGE_DEFAULT;
-			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL;
-			texDesc.CPUAccessFlags = 0;
-			texDesc.MiscFlags = 0;
-
-			shadowmapWhite = new Texture2D(texDesc);
-
-			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-			shadowmaps->depthSRV->GetDesc(&srvDesc);
-			if (texDesc.ArraySize > 1) {
-				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-				srvDesc.Texture2DArray.MostDetailedMip = 0;
-				srvDesc.Texture2DArray.MipLevels = 1;
-				srvDesc.Texture2DArray.FirstArraySlice = 0;
-				srvDesc.Texture2DArray.ArraySize = texDesc.ArraySize;
-			} else {
-				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-				srvDesc.Texture2D.MostDetailedMip = 0;
-				srvDesc.Texture2D.MipLevels = 1;
-			}
-			shadowmapWhite->CreateSRV(srvDesc);
-
-			D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-			shadowmaps->views[0]->GetDesc(&dsvDesc);
-			if (texDesc.ArraySize > 1) {
-				dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
-				dsvDesc.Texture2DArray.MipSlice = 0;
-				dsvDesc.Texture2DArray.FirstArraySlice = 0;
-				dsvDesc.Texture2DArray.ArraySize = texDesc.ArraySize;
-			} else {
-				dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-				dsvDesc.Texture2D.MipSlice = 0;
-			}
-			shadowmapWhite->CreateDSV(dsvDesc);
-			context->ClearDepthStencilView(shadowmapWhite->dsv.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
-		}
-	}
 
 	{
 		D3D11_DEPTH_STENCIL_DESC depthStencilDesc{};
@@ -520,6 +318,7 @@ void TerrainBlending::SetupResources()
 		depthStencilDesc.StencilEnable = false;
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 	}
+
 }
 
 void TerrainBlending::PostPostLoad()
@@ -541,23 +340,6 @@ void TerrainBlending::DrawSettings()
 		ImGui::Text("Scales the terrain blend range. 1.00 matches the previous 10.0 divisor.");
 	}
 	ImGui::Spacing();
-
-	if (globals::state->IsDeveloperMode()) {
-		ImGui::SeparatorText("Debug");
-		ImGui::Checkbox("Force White Shadow Mask (Debug)", &settings.ForceWhiteShadowMask);
-		ImGui::Checkbox("Shadowmask Slot4: Force White Shadowmap (Debug)", &settings.ForceWhiteShadowmapSlot4);
-		const char* shadowmaskDepthSources[] = {
-			"Default (no override)",
-			"Engine Prepass Depth",
-			"Engine Main Depth",
-			"Shadowmask Depth Copy"
-		};
-		ImGui::Combo("Shadowmask Slot2 Source (Debug)", &settings.ShadowmaskSlot2Source, shadowmaskDepthSources, IM_ARRAYSIZE(shadowmaskDepthSources));
-		ImGui::Checkbox("Log Shadowmap Passes (Debug)", &settings.LogShadowmapPasses);
-		ImGui::Checkbox("Log Shadowmask Passes (Debug)", &settings.LogShadowmaskPasses);
-		ImGui::Checkbox("Log Shadowmask Slot Overrides (Debug)", &settings.LogShadowmaskSlots);
-		ImGui::Spacing();
-	}
 
 	if (ImGui::TreeNodeEx("Performance Options")) {
 		ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
@@ -753,17 +535,6 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	}
 
 	if (shaderCache->IsEnabled()) {
-		if (state) {
-			g_shadowLogLimiter.BeginFrame(state->frameCount);
-		}
-
-		if (singleton.settings.LogShadowmapPasses && IsUtilityShadowmapPass(a_pass, a_technique)) {
-			LogShadowmapPass(a_pass, a_technique, a_renderFlags);
-		}
-		if (singleton.settings.LogShadowmaskPasses && IsUtilityShadowmaskPass(a_pass, a_technique)) {
-			LogShadowmaskPass(a_pass, a_technique);
-		}
-
 		if (g_inMainDepthGroup) {
 			UpdateMainPrepassSignature(state->frameCount, state->IsDeveloperMode());
 

@@ -51,6 +51,14 @@
   - Any one toggle missing brought back the dark overlay or the rectangle.
   - Indicates stale or garbage data in kSHADOW_MASK is likely involved when DPB runs with no shadow lights.
 
+### 6) Terrain depth offset in Utility VS materially affects the artifact
+- Changing `vsout.PositionCS.z += 10.0` to `+= 5.0` (OFFSET_DEPTH path in Utility.hlsl) made a big difference in the rectangular shadow.
+- This suggests the artifact strength is sensitive to the TB terrain depth bias used in the offset depth pass.
+
+### 7) Final fix applied
+- Hardcoded the OFFSET_DEPTH bias to `vsout.PositionCS.z += 1.25;` in Utility.hlsl.
+- This removes the rectangular shadow artifact in testing.
+
 ## Current interpretation (based on tests)
 - The rectangle is generated during Utility shadowmask passes (Base + DPB).
 - The DPB pass is strongly implicated; it runs even when numShadowLights==0 and seems to write garbage or stale data into kSHADOW_MASK.

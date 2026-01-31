@@ -1,121 +1,91 @@
-# TB Rectangular Shadow Artifact (VR) - Findings and Current Debug State
+﻿# TB Rectangular Shadow Artifact (VR) - Findings and Current Debug State
 
 ## Summary of the issue
-- In VR with Terrain Blending (TB) enabled, a rectangular, HMD‑moving dark “shadow” appears on the ground.
+- In VR with Terrain Blending (TB) enabled, a rectangular, HMD-moving dark "shadow" appears on the ground.
 - Disabling TB removes the artifact.
-- The artifact is **not** Screen Space Shadows (SSS) or Terrain Shadows; toggling those had no effect.
+- The artifact is not Screen Space Shadows (SSS) or Terrain Shadows; toggling those had no effect.
 
 ## Confirmed via RenderDoc
-- The rectangle is visible in `kSHADOW_MASK` and is written during **Utility:Pixel** shadowmask passes (RenderShadowmask / Spot / PB / DPB).
+- The rectangle is visible in kSHADOW_MASK and is written during Utility pixel shadowmask passes (RenderShadowmask / Spot / PB / DPB).
 - The shadowmask pass samples:
-  - Slot 2 = **TexDepthUtilitySampler**
-  - Slot 4 = **TexShadowMapSamplerComp** (kSHADOWMAPS)
-  - Slot 14 (Lighting) = **TexShadowMaskSampler** (kSHADOW_MASK)
-- Pixel history in RenderDoc shows the offending region being written during the shadowmask Utility passes, not later composites.
+  - Slot 2 = TexDepthUtilitySampler
+  - Slot 4 = TexShadowMapSamplerComp (kSHADOWMAPS)
+  - Slot 14 (Lighting) = TexShadowMaskSampler (kSHADOW_MASK)
+- Pixel history shows the offending region being written during Utility shadowmask passes, not later composites.
 
 ## What definitely affects the artifact
-- **Force White Shadow Mask (slot‑14 override in Lighting pass)**  
-  → Removes the rectangular shadow reliably.  
-  This proves the artifact is in the **shadowmask output** (kSHADOW_MASK) that Lighting samples, not later stages.
+- Force White Shadow Mask (slot-14 override in Lighting pass)
+  - Removes the rectangular shadow reliably.
+  - This proves the artifact lives in kSHADOW_MASK (the shadowmask output) and not later lighting/composite stages.
 
-## What did NOT fix the artifact
-- Overriding **slot‑2 depth source** for shadowmask passes:
-  - Engine Prepass depth
-  - Engine Main depth (depthSRVBackup)
-  - Shadowmask depth copy (copied once per frame from depthSRVBackup)
-  → **No change** to the rectangular artifact.
-- Forcing **ShadowVisibility=1** in `RENDER_SHADOWMASK` path (Utility.hlsl)  
-  → Inconsistent; does not remove the rectangle in the clean baseline.
-- DPB‑specific depth swaps / overrides (prepass/main/copy)  
-  → **No effect** on the rectangle.
-- “Force White Shadowmap (slot‑4 override)”  
-  → **No effect** on the rectangle when tested alone.
-- Scoped TB depth only for the TB pass (removing global override)  
-  → Removes rectangular artifact but **breaks terrain** (transparent mesh / incorrect shadows).  
-  This is **not viable**.
+## Key findings since the last update (depthblend changes excluded)
+
+### 1) Depth source overrides do not fix the rectangle
+- Slot-2 depth overrides (Engine Main, Engine Prepass, shadowmask depth copy) do not change the rectangle.
+- Some slot-2 overrides produce a uniform dark overlay on the mesh that masks the rectangle, but the rectangle is still present underneath.
+- This indicates the rectangle is not caused by the depth source itself.
+
+### 2) Shadowmap slot overrides do not fix the rectangle
+- Slot-4 overrides (force white shadowmap) did not remove the rectangle.
+- Slot-5/6 overrides did nothing in any combination.
+
+### 3) DPB debug modes did not change the artifact
+- Force Fade + Visibility = 1 (DPB) had no visible effect.
+- No Discard (DPB) had no visible effect.
+- Variant debug (grayscale / color) was not visible, even though logs showed ShadowmaskDPB variants.
+
+### 4) Disabling specific shadowmask variants narrows the culprit
+- Disable ShadowmaskDPB (conditions: numShadowLights==0, kSHADOW_MASK bound, alphaTest==0)
+  - Looks the same as Force White Shadow Mask (slot-14): rectangle disappears, but other shadowmask content is also lost.
+  - Logs show DPB variant with numLights=0, shadowLights=0, alphaTest=0, pixDesc=0x1062002 when the rectangle appears.
+- Disable Shadowmask (Base)
+  - Reduces the main rectangle, but leaves faint new rectangular shapes (glossy/transparent) at different positions.
+  - Other shadows in the scene appear mostly unaffected in this test scene.
+  - Suggests the base shadowmask pass contributes to the footprint, but DPB likely amplifies or "fills" it.
+- Disable ShadowmaskSpot / ShadowmaskPB
+  - No visible effect.
+
+### 5) Combination required to fully suppress the rectangle without dark overlay
+- Skip ShadowmaskDPB + Skip Only When Shadowmask Bound + Clear Shadowmask When Bound
+  - This combination removed the rectangle without the uniform dark overlay.
+  - Any one toggle missing brought back the dark overlay or the rectangle.
+  - Indicates stale or garbage data in kSHADOW_MASK is likely involved when DPB runs with no shadow lights.
 
 ## Current interpretation (based on tests)
-- The rectangle comes **from shadowmask generation**, and persists regardless of the depth source used in that pass.
-- Since slot‑14 (Lighting’s shadowmask) override removes it, the artifact is **inside kSHADOW_MASK** rather than later lighting/composite steps.
-- Depth source (slot‑2) is not the root cause; the artifact likely comes from **shadowmap sampling (slot‑4) or shadowmask math** in the Utility shadowmask shader.
+- The rectangle is generated during Utility shadowmask passes (Base + DPB).
+- The DPB pass is strongly implicated; it runs even when numShadowLights==0 and seems to write garbage or stale data into kSHADOW_MASK.
+- The Base pass contributes to the rectangle footprint but is not the only source.
+- Depth source swaps and shadowmap slot overrides do not solve the issue, so the problem is likely in shadowmask math, uninitialized inputs, or incorrect state during Utility shadowmask passes when no shadow lights are present.
 
 ## Current debug controls in TB (Developer Mode)
-**These are present in the tree now.**
-
-- `Force White Shadow Mask (Debug)`  
-  Overrides Lighting slot‑14 (kSHADOW_MASK) with a 1×1 white texture.  
-  **Only test that reliably removes the rectangle.**
-
-- `Shadowmask Slot2 Source (Debug)`  
-  Overrides Utility shadowmask slot‑2 depth input:
-  0 = Default (no override)  
-  1 = Engine Prepass Depth  
-  2 = Engine Main Depth  
-  3 = Shadowmask Depth Copy (copied once per frame from depthSRVBackup)
-
-- `Shadowmask Slot4: Force White Shadowmap (Debug)`  
-  Overrides Utility shadowmask slot‑4 (kSHADOWMAPS) with a 1×1 depth=1 texture array.
-  **So far: no effect on artifact.**
-
-- Logging toggles:  
-  - `Log Shadowmap Passes (Debug)`  
-  - `Log Shadowmask Passes (Debug)`  
-  - `Log Shadowmask Slot Overrides (Debug)`
+Only these two remain (everything else was removed after testing):
+- Force White Shadow Mask (Debug)
+  - Overrides Lighting slot-14 (kSHADOW_MASK) with a 1x1 white texture.
+  - Only reliable control that removes the rectangle completely.
+- Disable Shadowmask (Base) (Debug)
+  - Clears kSHADOW_MASK to white and skips the base shadowmask draw when bound.
+  - Reduces the rectangle but leaves faint, shifted rectangular remnants.
 
 ## Logging highlights (what matters)
-- Shadowmask pass logs confirm the rectangle is written during Utility shadowmask passes:
-  - `RENDER_SHADOWMASK`, `RENDER_SHADOWMASKDPB`, etc.
-  - Geometry names logged (e.g., `WRWallStr01Stockades01`, `TanningRack_1.001`, etc.) are **not** TB blend meshes.
-- Slot‑2 override logs show the override is active and the depth copy is updated, but the artifact remains.
-- Slot‑14 override logs show the white mask is applied and **the artifact disappears**.
-
-## Current code changes (baseline for further work)
-These are already in the working tree:
-
-1. **Shadowmask depth copy**
-   - `shadowmaskDepth` texture created in `TerrainBlending::SetupResources()`.
-   - Optional per‑frame copy from `depthSRVBackup` (main depth backup).
-
-2. **Slot‑2 shadowmask override**
-   - `PSSetShaderResources` hook in `Globals.cpp` detects Utility shadowmask passes.
-   - Overrides slot‑2 using the selected source (prepass/main/copy).
-
-3. **Slot‑14 shadowmask override**
-   - `ForceWhiteShadowMask` overrides Lighting slot‑14 to a 1×1 white shadowmask texture.
-
-4. **Slot‑4 shadowmap override**
-   - `ForceWhiteShadowmapSlot4` overrides Utility shadowmask slot‑4 to a 1×1 white shadowmap array.
-
-5. **Extensive logging** with rate‑limiter:
-   - Shadowmap pass logs (tech/flags/pass/hint/lights/shadowLights/prop/propFlags/geom/name).
-   - Shadowmask pass logs (maskBits/pixelDesc/propFlags/geom/name).
-   - Slot override logs for slot‑2/slot‑4/slot‑14.
+- Shadowmask pass logs show the rectangle is written during Utility shadowmask passes.
+- The DPB variant appears with: numLights=0, shadowLights=0, alphaTest=0, pixDesc=0x1062002.
+- ShadowmaskRTV matching confirms these passes are writing into kSHADOW_MASK.
 
 ## Repro steps (current baseline)
 1. Enable TB in VR.
-2. Enable Debug UI (Developer mode/log level debug).
-3. Observe rectangular moving shadow on ground.
-4. Toggle **Force White Shadow Mask** → rectangle disappears.
-5. Toggle any slot‑2 source / slot‑4 white shadowmap → no change.
+2. Observe rectangular moving shadow on ground.
+3. Toggle Force White Shadow Mask -> rectangle disappears.
+4. Toggle Disable Shadowmask (Base) -> rectangle mostly disappears, faint rectangular remnants remain.
 
-## Next likely investigation paths
-1. **Shadowmask math** in Utility shader:
-   - The artifact persists even with different depth sources; could be due to shadowmap sampling / math.
-2. **Shadowmap content** itself:
-   - Shadowmap generation pass includes many unrelated geometries; the artifact may come from a specific mesh or incorrect projection.
-3. **Isolate which shadowmask variant (DPB vs non‑DPB)** actually produces the rectangle:
-   - The logs show both; need to isolate by selectively disabling/overriding *only one* variant at a time.
+## Most likely root cause (current best guess)
+When there are no shadow lights, the engine's Utility shadowmask path (Base + DPB) still writes to kSHADOW_MASK, likely using invalid inputs or stale data. TB changes the depth pipeline and exposes this, but the artifact itself is generated by the shadowmask passes.
 
 ## Where to look in code
-- `src/Globals.cpp`  
-  `ID3D11DeviceContext_PSSetShaderResources::thunk`  
-  (shadowmask pass detection, slot‑2/slot‑4 override, Lighting slot‑14 override)
-
-- `src/Features/TerrainBlending.cpp`  
-  `SetupResources()` (shadowmaskDepth, shadowmaskWhite, shadowmapWhite creation)  
-  `DrawSettings()` (debug toggles)  
-  `LogShadowmapPass`, `LogShadowmaskPass`
-
-- `src/Features/TerrainBlending.h`  
-  Settings fields and debug toggles.
-
+- src/Globals.cpp
+  - ID3D11DeviceContext_PSSetShaderResources::thunk (slot-14 override)
+  - ID3D11DeviceContext_DrawIndexedInstanced::thunk (Disable Shadowmask Base)
+- src/Features/TerrainBlending.cpp
+  - DrawSettings() (debug toggles)
+  - SetupResources() (shadowmaskWhite creation)
+- package/Shaders/Utility.hlsl
+  - Shadowmask math for RenderShadowmask / RenderShadowmaskDPB paths

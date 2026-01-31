@@ -7,7 +7,7 @@ public:
 	{
 		bool Enable = true;
 		float TerrainCullDistance = 1024.0f;
-		float BlendStrength = 2.0f;
+		float BlendStrength = 1.0f;
 		bool ForceWhiteShadowMask = false;
 		bool ForceWhiteShadowmapSlot4 = false;
 		int ShadowmaskSlot2Source = 0;
@@ -20,7 +20,7 @@ public:
 
 	struct alignas(16) PerFrame
 	{
-		float BlendStrength = 2.0f;
+		float BlendStrength = 1.0f;
 		float pad0[3]{};
 	};
 

@@ -235,6 +235,12 @@ namespace SharedData
 		float otherEffectMult;
 	};
 
+	struct TerrainBlendingSettings
+	{
+		float BlendStrength;
+		float3 pad0;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -251,6 +257,7 @@ namespace SharedData
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
+		TerrainBlendingSettings terrainBlendingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

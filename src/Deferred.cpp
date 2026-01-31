@@ -423,9 +423,9 @@ void Deferred::DeferredPasses()
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
 		ID3D11ShaderResourceView* compositeDepthSRV = depth.depthSRV;
-		if (terrainBlending.loaded) {
+		if (terrainBlending.loaded && terrainBlending.settings.Enable) {
 			compositeDepthSRV = terrainBlending.blendedDepthTexture16->srv.get();
-			if (terrainBlending.settings.Enable && terrainBlending.prepassSRVBackup) {
+			if (terrainBlending.prepassSRVBackup) {
 				// Use engine depth so deferred composite doesn't sample TB depth.
 				compositeDepthSRV = terrainBlending.prepassSRVBackup;
 			}

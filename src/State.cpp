@@ -11,6 +11,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
+#include "Features/VR.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
@@ -833,7 +834,18 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 	const auto& depth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto& terrainBlending = globals::features::terrainBlending;
-	auto srv = (terrainBlending.loaded && terrainBlending.settings.Enable) ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV;
+	auto& upscaling = globals::features::upscaling;
+	auto& vr = globals::features::vr;
+
+	bool useBlendedDepth = terrainBlending.loaded && terrainBlending.settings.Enable;
+	if (useBlendedDepth && globals::game::isVR) {
+		const bool depthCullingEnabled = vr.gDepthBufferCulling && *vr.gDepthBufferCulling;
+		if (depthCullingEnabled && upscaling.IsUpscalingActive()) {
+			useBlendedDepth = false;
+		}
+	}
+
+	auto srv = useBlendedDepth ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV;
 
 	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
 }

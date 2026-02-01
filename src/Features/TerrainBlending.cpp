@@ -3,6 +3,8 @@
 #include "Deferred.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Features/Upscaling.h"
+#include "Features/VR.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
@@ -12,6 +14,25 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	bool ShouldUseBlendedDepthSRV()
+	{
+		if (!globals::game::isVR) {
+			return true;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		if (!upscaling.IsUpscalingActive()) {
+			return true;
+		}
+
+		auto& vr = globals::features::vr;
+		if (vr.gDepthBufferCulling && *vr.gDepthBufferCulling) {
+			return false;
+		}
+
+		return true;
+	}
+
 	struct PrepassSignature
 	{
 		uint32_t technique = 0;
@@ -570,8 +591,13 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 
 				singleton.averageEyePosition = Util::GetAverageEyePosition();
 
-				mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
-				zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+				if (ShouldUseBlendedDepthSRV()) {
+					mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
+					zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+				} else {
+					mainDepth.depthSRV = singleton.depthSRVBackup;
+					zPrepassCopy.depthSRV = singleton.prepassSRVBackup;
+				}
 
 				singleton.renderDepth = true;
 				singleton.ResetDepth();

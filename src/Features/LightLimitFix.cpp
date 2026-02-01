@@ -6,7 +6,6 @@
 #include "Shadercache.h"
 #include "State.h"
 
-#include "RE/B/BSMultiBoundRoom.h"
 
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint MAX_LIGHTS = 1024;
@@ -287,7 +286,7 @@ void LightLimitFix::Reset()
 	for (auto& particleLight : currentParticleLights) {
 		if (!particleLight.billboard) {
 			if (const auto particleSystem = static_cast<RE::NiParticleSystem*>(particleLight.node)) {
-				if (auto particleData = particleSystem->GetParticlesRuntimeData().particleData.get()) {
+				if (auto particleData = particleSystem->GetParticleRuntimeData().particleData.get()) {
 					particleData->DecRefCount();
 				}
 			}
@@ -383,8 +382,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		if (i < a_pass->numShadowLights) {
 			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-			GET_INSTANCE_MEMBER(maskIndex, shadowLight);
-			light.shadowMaskIndex = maskIndex;
+			GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+			light.shadowMaskIndex = shadowLightIndex;
 			light.lightFlags.set(LightFlags::Shadow);
 		}
 
@@ -394,8 +393,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 	for (uint32_t i = 0; i < a_pass->numShadowLights; i++) {
 		auto bsLight = a_pass->sceneLights[i + 1];
 		auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-		GET_INSTANCE_MEMBER(maskIndex, shadowLight);
-		strictLightDataTemp.ShadowBitMask |= (1 << maskIndex);
+		GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+		strictLightDataTemp.ShadowBitMask |= (1 << shadowLightIndex);
 	}
 }
 
@@ -678,7 +677,7 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightRefe
 
 	if (!a_reference.billboard) {
 		if (auto particleSystem = static_cast<RE::NiParticleSystem*>(a_pass->geometry)) {
-			if (auto particleData = particleSystem->GetParticlesRuntimeData().particleData.get()) {
+			if (auto particleData = particleSystem->GetParticleRuntimeData().particleData.get()) {
 				particleData->IncRefCount();
 			}
 		}
@@ -859,9 +858,9 @@ void LightLimitFix::UpdateLights()
 
 					if (!IsGlobalLight(bsLight)) {
 						// List of BSMultiBoundRooms affected by a light
-						for (const auto& roomPtr : bsLight->rooms) {
-							addRoom(static_cast<RE::NiNode*>(roomPtr), light);
-						}
+					for (const auto& roomPtr : bsLight->rooms) {
+						addRoom(reinterpret_cast<RE::NiNode*>(roomPtr), light);
+					}
 						// List of BSPortals affected by a light
 						for (const auto& portalPtr : bsLight->portals) {
 							addRoom(static_cast<RE::NiNode*>(portalPtr->portalSharedNode.get()), light);
@@ -871,8 +870,8 @@ void LightLimitFix::UpdateLights()
 
 					if (bsLight->IsShadowLight()) {
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-						GET_INSTANCE_MEMBER(maskIndex, shadowLight);
-						light.shadowMaskIndex = maskIndex;
+						GET_INSTANCE_MEMBER(shadowLightIndex, shadowLight);
+						light.shadowMaskIndex = shadowLightIndex;
 						light.lightFlags.set(LightFlags::Shadow);
 					}
 
@@ -908,9 +907,9 @@ void LightLimitFix::UpdateLights()
 		for (const auto& particleLight : currentParticleLights) {
 			if (!particleLight.billboard) {
 				auto particleSystem = static_cast<RE::NiParticleSystem*>(particleLight.node);
-				if (particleSystem && particleSystem->GetParticlesRuntimeData().particleData.get()) {
+				if (particleSystem && particleSystem->GetParticleRuntimeData().particleData.get()) {
 					// Process BSGeometry
-					auto particleData = particleSystem->GetParticlesRuntimeData().particleData.get();
+					auto particleData = particleSystem->GetParticleRuntimeData().particleData.get();
 					auto& particleSystemRuntimeData = particleSystem->GetParticleSystemRuntimeData();
 					auto& particleRuntimeData = particleData->GetParticlesRuntimeData();
 

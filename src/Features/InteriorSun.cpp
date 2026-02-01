@@ -3,7 +3,6 @@
 
 #include <numbers>
 
-#include "RE/B/BSMultiBoundRoom.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	InteriorSun::Settings,
@@ -181,7 +180,7 @@ void InteriorSun::PopulateReplacementJobArrays(RE::TESObjectCELL* cell, const RE
 	}
 
 	const auto playerPos = RE::PlayerCharacter::GetSingleton()->GetPosition();
-	auto lightDir = -dirLight->GetShadowDirectionalLightRuntimeData().sunVector;
+	auto lightDir = -dirLight->GetShadowDirectionalLightRuntimeData().lightDirection;
 	lightDir.Unitize();
 
 	// Add extra rooms and portals that are in the direction of the sun
@@ -201,8 +200,8 @@ void InteriorSun::InitialiseOnNewCell(const RE::NiPointer<RE::BSPortalGraph>& po
 	currentCellRoomsAndPortals.clear();
 
 	if (const auto portalSharedNode = portalGraph->portalSharedNode) {
-		for (const auto room : portalGraph->rooms) {
-			currentCellRoomsAndPortals.push_back(RE::NiPointer<RE::NiAVObject>(static_cast<RE::NiAVObject*>(room.get())));
+		for (const auto& room : portalGraph->rooms) {
+			currentCellRoomsAndPortals.push_back(RE::NiPointer<RE::NiAVObject>(reinterpret_cast<RE::NiAVObject*>(room.get())));
 		}
 
 		for (auto child : portalGraph->portalSharedNode->GetChildren())

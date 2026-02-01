@@ -27,6 +27,37 @@ cbuffer JitterCB : register(b0)
 	float2 jitter;
 };
 
+float SampleMinDepth2x2(float2 uv)
+{
+	float4 depthQuad = DepthTex.GatherRed(LinearSampler, uv);
+	return min(min(depthQuad.x, depthQuad.y), min(depthQuad.z, depthQuad.w));
+}
+
+float SampleMinDepth3x3(float2 uv)
+{
+	uint width;
+	uint height;
+	DepthTex.GetDimensions(width, height);
+
+	float2 texelPos = uv * float2(width, height);
+	int2 centerCoord = int2(floor(texelPos));
+
+	float minDepth = 1.0f;
+
+	[unroll]
+	for (int y = -1; y <= 1; y++) {
+		[unroll]
+		for (int x = -1; x <= 1; x++) {
+			int2 sampleCoord = centerCoord + int2(x, y);
+			sampleCoord = clamp(sampleCoord, int2(0, 0), int2(width - 1, height - 1));
+			float sampleDepth = DepthTex.Load(int3(sampleCoord, 0));
+			minDepth = min(minDepth, sampleDepth);
+		}
+	}
+
+	return minDepth;
+}
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -52,8 +83,17 @@ PS_OUTPUT main(PS_INPUT input)
 
 	// Upscale using linear sampling
 	psout.RefractionNormals = RefractionNormals.SampleLevel(LinearSampler, uv, 0);
-	psout.Depth = DepthTex.SampleLevel(LinearSampler, uv, 0);
-	psout.SAOCameraZ = psout.Depth;
+	float bilinearDepth = DepthTex.SampleLevel(LinearSampler, uv, 0);
+
+	float2 drScale = FrameBuffer::DynamicResolutionParams1.xy;
+	float minScale = min(drScale.x, drScale.y);
+	float upscaleRatio = 1.0f / max(minScale, 1e-6f);
+
+	float conservativeDepth = (upscaleRatio > 1.5f) ? SampleMinDepth3x3(uv) : SampleMinDepth2x2(uv);
+
+	psout.Depth = conservativeDepth;
+	// Keep SAO camera Z smooth to avoid over-occlusion; depth culling uses SV_Depth.
+	psout.SAOCameraZ = bilinearDepth;
 
 	return psout;
 }

@@ -1280,7 +1280,8 @@ void Upscaling::PerformUpscaling()
 
 void Upscaling::UpscaleDepth()
 {
-	if (resolutionScale.x != 1.0f) {
+	auto method = GetUpscaleMethod();
+	if ((method == UpscaleMethod::kDLSS || method == UpscaleMethod::kFSR) && resolutionScale.x != 1.0f) {
 		globals::state->BeginPerfEvent("Render Target Upscaling");
 
 		auto& renderer = globals::game::renderer;

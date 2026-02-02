@@ -278,6 +278,8 @@ void TerrainBlending::SetupResources()
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 
+	depthBiasCB = new ConstantBuffer(ConstantBufferDesc<DepthBiasParams>());
+
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -392,6 +394,13 @@ void TerrainBlending::TerrainShaderHacks()
 		auto renderer = globals::game::renderer;
 		auto context = globals::d3d::context;
 		if (renderAltTerrain) {
+			if (depthBiasCB) {
+				DepthBiasParams params{};
+				params.UseUpscaleBias = (globals::game::isVR && globals::features::upscaling.IsUpscalingActive()) ? 1.0f : 0.0f;
+				depthBiasCB->Update(params);
+				ID3D11Buffer* cb = depthBiasCB->CB();
+				context->VSSetConstantBuffers(14, 1, &cb);
+			}
 			auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
 			context->VSSetShader(GetTerrainOffsetVertexShader(), NULL, NULL);

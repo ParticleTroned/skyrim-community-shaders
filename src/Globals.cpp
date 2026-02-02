@@ -281,11 +281,6 @@ namespace globals
 				return false;
 			}
 
-			auto& upscaling = globals::features::upscaling;
-			if (!upscaling.IsUpscalingActive()) {
-				return false;
-			}
-
 			auto& vr = globals::features::vr;
 			if (!vr.gDepthBufferCulling || !*vr.gDepthBufferCulling) {
 				return false;
@@ -327,8 +322,8 @@ namespace globals
 				return false;
 			}
 
-			auto& upscaling = globals::features::upscaling;
-			if (!upscaling.IsUpscalingActive()) {
+			auto& vr = globals::features::vr;
+			if (!vr.gDepthBufferCulling || !*vr.gDepthBufferCulling) {
 				return false;
 			}
 

@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "Buffer.h"
+
 struct TerrainBlending : Feature
 {
 public:
@@ -17,6 +19,13 @@ public:
 		float BlendStrength = 0.5f;
 		float pad0[3]{};
 	};
+
+	struct alignas(16) DepthBiasParams
+	{
+		float UseUpscaleBias = 0.0f;
+		float pad0[3]{};
+	};
+	STATIC_ASSERT_ALIGNAS_16(DepthBiasParams);
 
 	PerFrame GetCommonBufferData() const
 	{
@@ -94,8 +103,8 @@ public:
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;
 
 	ID3D11ComputeShader* depthBlendShader = nullptr;
-
-	virtual void ClearShaderCache() override;
+	ConstantBuffer* depthBiasCB = nullptr;
+virtual void ClearShaderCache() override;
 
 	void RenderTerrainBlendingPasses();
 
@@ -126,6 +135,8 @@ public:
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 };
+
+
 
 
 

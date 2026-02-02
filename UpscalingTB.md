@@ -60,6 +60,50 @@ stereo mismatch.
 Conclusion: swapping occlusion to TB depth does not fix the issue, and often
 breaks terrain.
 
+## What DID work (TB path)
+### Localized draw-call SRV overrides (OBB + Shadowmask only)
+Goal: fix occlusion and shadowmask sampling without touching TB’s global `t17`
+binding.
+
+Implementation (current):
+- Hook D3D11 Draw* calls and apply scoped overrides in `src/Globals.cpp`.
+- **OBB occlusion only**: override `t17` for the `OBBOcclusionTesting` shader.
+  - Current code uses TB blended **R32** if available, else `kMAIN_COPY`.
+- **Shadowmask only**: override `t2` (TexDepthUtilitySampler) in Utility
+  shadowmask passes.
+  - Current code prefers TB blended **R16**, then TB R32, then `kMAIN_COPY`.
+
+Result:
+- **Mesh popping is gone** with TB + upscaling + depth culling.
+- **Stereo mismatch** and rectangular artifacts were eliminated when
+  shadowmask uses **TB R16** (not R32, not `kMAIN_COPY`).
+
+## Shadowmask artifacts (ground shadows) + OFFSET_DEPTH tuning
+There are still rare, rectangular ground-shadow artifacts in some cases.
+We tested different depth offsets in `package/Shaders/Utility.hlsl`:
+- `OFFSET_DEPTH = 10.0`: removed darkening but caused large rectangular artifacts.
+- `OFFSET_DEPTH = 2.5`: partial improvement; still artifacts.
+- `OFFSET_DEPTH = 1.25`: best compromise for most cases.
+- `OFFSET_DEPTH = 1.0 / 0.75`: did not meaningfully improve artifacts.
+- `OFFSET_DEPTH = 0.25`: reduced some ground shadows but broke TB when close.
+
+**Current**: hardcoded depth-based lerp instead of a fixed offset.
+```
+bias = lerp(1.25, 0.1, saturate((abs(w) - 256) / (2048 - 256)));
+```
+This is no longer tied to TerrainCullDistance (previous attempt was).
+
+Artifacts appear most under **DLSS + TB + depth culling**.
+
+## Upscaler matrix (latest observations)
+- **DLAA + TB + depth culling** = OK (no ground shadows).
+- **DLSS + depth culling (no TB)** = OK.
+- **DLSS + TB + depth culling** = ground-shadow artifacts.
+
+Attempted DLSS-specific shadowmask routing:
+- Forcing shadowmask `t2` to `kMAIN_COPY` under DLSS reintroduced stereo mismatch
+  (similar to TB R32). Reverted.
+
 ### 3) Depth-only upscale pass before HZB (new pass)
 Goal: upscale depth into `kMAIN_COPY` before HZB/occlusion downsample.
 
@@ -103,7 +147,9 @@ to the occlusion binding site only (if at all).
 - The occlusion path (OBB) samples t17 in PS.
 - HZB compute uses kMAIN / kPOST_ZPREPASS_COPY in CS slots 0/1/3.
 - kMAIN_COPY is the upscaled depth (VR path).
-- Forcing t17 away from TB depth breaks terrain (transparent ground).
+- Forcing t17 away from TB depth **globally** breaks terrain (transparent ground).
+- Shadowmask pass uses `t2` (TexDepthUtilitySampler). TB R16 is the only
+  source that avoided stereo mismatch so far.
 
 Typical log patterns:
 - `stage=PS slot=17 tag=TB.blendedDepth(R16)`
@@ -118,11 +164,22 @@ Typical log patterns:
 3. Depth-only pre-pass before HZB did not fix popping and caused stereo issues.
 4. Routing TB depth to a different SRV slot and using it in TB shaders still
    broke terrain.
+5. For shadowmask, **TB R16** works; **TB R32** or **kMAIN_COPY** reintroduces
+   stereo mismatch in DLSS.
 
 ## Current working state (non-TB)
 - Conservative depth in `DepthRefractionUpscalePS` fixes depth culling with
   upscaling when TB is OFF.
 - Depth culling can be enabled in VR once that conservative path is active.
+
+## Current working state (TB path)
+- Scoped draw-call overrides in `src/Globals.cpp`:
+  - OBB occlusion overrides `t17`.
+  - Shadowmask overrides `t2` to TB R16.
+- Depth culling works with TB + upscaling, but **DLSS + TB** still shows
+  occasional rectangular ground-shadow artifacts.
+- TB depth bias is now depth-based (lerp 1.25→0.1 over 256–2048).
+- Default TB culling distance is now **2048** (Settings default).
 
 ## Files touched during experiments (reference only)
 - `src/Features/Upscaling.cpp` / `src/Features/Upscaling.h`
@@ -135,6 +192,12 @@ Typical log patterns:
   - Global SRV logging/override (failed approach).
 - `src/State.cpp`, `src/Features/TerrainBlending.cpp`
   - SRV guard experiments (transparent ground).
+- `package/Shaders/Utility.hlsl`
+  - OFFSET_DEPTH now uses hardcoded depth-based lerp (256–2048).
+- `src/Features/TerrainBlending.h/.cpp`
+  - Added DepthBiasParams CB + binding (currently unused after hardcoding).
+- `src/State.h`
+  - Default refractionScale (heatwarp) set to 0.5 (unrelated to TB, but noted).
 
 ## Open hypotheses (still unresolved)
 - TB blended depth is likely not upscaled (or not aligned per-eye), so
@@ -143,6 +206,8 @@ Typical log patterns:
   - Provide an occlusion-only SRV that is upscaled and stereo-correct without
     changing TB's SRV layout, or
   - Produce a TB-compatible upscaled depth for occlusion only (localized).
+ - Ground-shadow artifacts under DLSS may stem from depth bias or shadowmask
+   depth mismatch even with TB R16. OFFSET_DEPTH may not be the right lever.
 
 ## Notes
 - `TBshadow.md` exists but focuses on a separate shadowmask artifact, not this

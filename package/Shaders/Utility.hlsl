@@ -271,7 +271,10 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(OFFSET_DEPTH)
-	vsout.PositionCS.z += 1.25;
+	float depthDist = abs(vsout.PositionCS.w);
+	float t = saturate((depthDist - 256.0) / (2048.0 - 256.0));
+	float bias = lerp(1.25, 0.1, t);
+	vsout.PositionCS.z += bias;
 #	endif
 
 #	ifdef VR

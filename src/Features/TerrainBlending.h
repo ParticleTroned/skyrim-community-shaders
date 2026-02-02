@@ -6,7 +6,7 @@ public:
 	struct Settings
 	{
 		bool Enable = true;
-		float TerrainCullDistance = 1024.0f;
+		float TerrainCullDistance = 2048.0f;
 		float BlendStrength = 0.5f;
 	};
 

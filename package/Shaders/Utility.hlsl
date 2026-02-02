@@ -115,7 +115,7 @@ cbuffer PerGeometry : register(b2)
 };
 
 #	if defined(OFFSET_DEPTH) && defined(VR)
-cbuffer TerrainDepthBiasCB : register(b14)
+cbuffer TerrainDepthBiasCB : register(b11)
 {
 	float4 TerrainDepthBiasParams;  // x=UseUpscaleBias flag
 }

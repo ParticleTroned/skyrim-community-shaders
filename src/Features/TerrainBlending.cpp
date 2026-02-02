@@ -399,7 +399,7 @@ void TerrainBlending::TerrainShaderHacks()
 				params.UseUpscaleBias = (globals::game::isVR && globals::features::upscaling.IsUpscalingActive()) ? 1.0f : 0.0f;
 				depthBiasCB->Update(params);
 				ID3D11Buffer* cb = depthBiasCB->CB();
-				context->VSSetConstantBuffers(14, 1, &cb);
+				context->VSSetConstantBuffers(11, 1, &cb);
 			}
 			auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);

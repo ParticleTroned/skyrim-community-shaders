@@ -834,16 +834,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 	const auto& depth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto& terrainBlending = globals::features::terrainBlending;
-	auto& upscaling = globals::features::upscaling;
-	auto& vr = globals::features::vr;
 
 	bool useBlendedDepth = terrainBlending.loaded && terrainBlending.settings.Enable;
-	if (useBlendedDepth && globals::game::isVR) {
-		const bool depthCullingEnabled = vr.gDepthBufferCulling && *vr.gDepthBufferCulling;
-		if (depthCullingEnabled && upscaling.IsUpscalingActive()) {
-			useBlendedDepth = false;
-		}
-	}
 
 	auto srv = useBlendedDepth ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV;
 

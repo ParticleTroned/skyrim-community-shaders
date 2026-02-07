@@ -3,13 +3,14 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <winrt/base.h>
 
 /**
- * @brief Provides upscaling functionality including DLSS, FSR, XeSS and TAA.
+ * @brief Provides upscaling functionality including DLSS, FSR and TAA.
  *
  * This feature handles various upscaling methods and frame generation technologies
  * to improve performance while maintaining visual quality.
@@ -21,7 +22,7 @@ public:
 	virtual inline std::string GetName() override { return "Upscaling"; }
 	virtual inline std::string GetShortName() override { return "Upscaling"; }
 	virtual inline bool SupportsVR() override { return true; }
-	virtual inline bool IsCore() const override { return true; }
+	virtual inline bool IsCore() const override { return false; }
 	virtual inline std::string_view GetCategory() const override { return "Display"; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -30,11 +31,12 @@ public:
 			"Advanced upscaling and frame generation technologies for improved performance",
 			{ "DLSS (Deep Learning Super Sampling) support",
 				"FSR (FidelityFX Super Resolution) support",
-				"XeSS (Intel Xe Super Sampling) support",
 				"TAA (Temporal Anti-Aliasing) support",
 				"Frame generation for supported systems" }
 		};
 	}
+
+	virtual std::vector<FeatureConstraints::Constraint> GetActiveConstraints() const override;
 
 	float2 jitter = { 0, 0 };
 
@@ -55,9 +57,8 @@ public:
 		uint frameGenerationMode = 1;
 		uint frameGenerationForceEnable = 0;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
-		float sharpnessFSR = 1.0f;
-		float sharpnessDLSS = 0.1f;
-		uint DLSSPreset = 2;  // VR-specific DLSS preset: 0=F, 1=J, 2=K
+		float sharpnessFSR = 0.0f;
+		float sharpnessDLSS = 0.0f;
 	};
 
 	Settings settings;
@@ -92,7 +93,7 @@ public:
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationActive() const;
 	float GetFrameGenerationFrameTime() const;
-	bool IsUpscalingActive();
+	bool IsUpscalingActive() const;
 
 	// Feature interface overrides
 	virtual void DrawSettings() override;
@@ -110,7 +111,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 
-	UpscaleMethod GetUpscaleMethod();
+	UpscaleMethod GetUpscaleMethod() const;
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
@@ -170,14 +171,15 @@ public:
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
-	Texture2D* nisSharpenerTexture = nullptr;
+	Texture2D* sharpenerTexture = nullptr;
 
 	virtual void ClearShaderCache() override;
 
 	// Static instances instead of singletons
 	static inline Streamline streamline;
-	static inline FidelityFX fidelityFX;  // Only for frame generation
+	static inline FidelityFX fidelityFX;  ///< Only for frame generation
 	static inline DX12SwapChain dx12SwapChain;
+	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
 
 	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
 
@@ -195,7 +197,12 @@ public:
 	void PerformUpscaling();
 	void UpscaleDepth();
 
-	void ApplyNISSharpening();
+	/**
+	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.
+	 *
+	 * Runs in HDR space before tonemapping. Only called when DLSS is active and sharpness > 0.
+	 */
+	void ApplySharpening();
 
 	static void TimerSleepQPC(int64_t targetQPC);
 
@@ -263,5 +270,4 @@ private:
 		static void thunk();
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-
 };

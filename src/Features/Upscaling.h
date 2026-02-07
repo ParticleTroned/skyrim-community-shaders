@@ -65,7 +65,8 @@ public:
 	struct JitterCB
 	{
 		float2 jitter;
-		float2 pad0;
+		float useWideKernel;
+		float pad0;
 	};
 
 	struct UpscalingDataCB
@@ -187,6 +188,7 @@ public:
 	float dynamicResolutionHeightRatio = 1.0f;
 
 	bool previousUpscalingWasActive = false;
+	bool depthUpscaleUseWideKernel = false;
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();

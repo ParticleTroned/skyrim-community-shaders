@@ -130,8 +130,8 @@ void VR::PostPostLoad()
 
 void VR::DataLoaded()
 {
-	// Initialize occlusion culling based on settings, but force-disable if an external
-	// upscaler is active (FSR/DLSS) since upscalers may modify the depth buffer.
+	// Initialize occlusion culling from user settings.
+	// Upscaling compatibility is handled in the upscaling/TB paths.
 	bool desired = settings.EnableDepthBufferCullingExterior;
 	UpdateDepthBufferCulling(desired);
 
@@ -144,8 +144,7 @@ void VR::DataLoaded()
 
 void VR::EarlyPrepass()
 {
-	// Respect user settings unless an external upscaler is active; if so, force-disable
-	// depth-buffer culling to avoid incorrect occlusion tests in VR.
+	// Keep culling state in sync with interior/exterior setting each frame.
 	bool desired = RE::TES::GetSingleton()->interiorCell ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
 	UpdateDepthBufferCulling(desired);
 }

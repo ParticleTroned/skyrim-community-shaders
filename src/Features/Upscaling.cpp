@@ -1386,8 +1386,9 @@ bool Upscaling::IsUpscalingActive()
 		return false;
 	}
 
-	// resolutionScale.x represents renderWidth / displayWidth.
-	return resolutionScale.x < .99f;
+	// resolutionScale is render / display per-axis; use the stricter axis.
+	const float minScale = std::min(resolutionScale.x, resolutionScale.y);
+	return minScale < .99f;
 }
 
 /**
@@ -1589,8 +1590,9 @@ void Upscaling::PerformUpscaling()
 
 void Upscaling::UpscaleDepth()
 {
-	auto method = GetUpscaleMethod();
-	if ((method == UpscaleMethod::kDLSS || method == UpscaleMethod::kFSR) && resolutionScale.x != 1.0f) {
+	// Match VR/TB gating: only run depth upscaling when vendor upscaling is
+	// actually downscaling (DLSS/FSR with render scale < 1.0).
+	if (IsUpscalingActive()) {
 		globals::state->BeginPerfEvent("Render Target Upscaling");
 
 		auto& renderer = globals::game::renderer;
@@ -1629,9 +1631,28 @@ void Upscaling::UpscaleDepth()
 		ID3D11SamplerState* samplers[] = { deferred->linearSampler };
 		context->PSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
-		// Set up jitter constant buffer for upscaling
+		// Set up jitter/depth-kernel constant buffer for upscaling
 		JitterCB jitterData;
 		jitterData.jitter = jitter;
+		{
+			constexpr float kEnterWideKernelRatio = 1.55f;
+			constexpr float kExitWideKernelRatio = 1.45f;
+			const float minScale = std::max(std::min(resolutionScale.x, resolutionScale.y), 1e-6f);
+			const float upscaleRatio = 1.0f / minScale;
+
+			if (depthUpscaleUseWideKernel) {
+				if (upscaleRatio < kExitWideKernelRatio) {
+					depthUpscaleUseWideKernel = false;
+				}
+			} else {
+				if (upscaleRatio > kEnterWideKernelRatio) {
+					depthUpscaleUseWideKernel = true;
+				}
+			}
+
+			jitterData.useWideKernel = depthUpscaleUseWideKernel ? 1.0f : 0.0f;
+			jitterData.pad0 = 0.0f;
+		}
 
 		jitterCB->Update(jitterData);
 		auto bufferArray = jitterCB->CB();

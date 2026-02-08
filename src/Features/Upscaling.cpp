@@ -220,7 +220,7 @@ void Upscaling::DrawSettings()
 			// Format the label with preset name and resolution scale
 			std::string labelWithScale = std::format("{} ( {:.2f}x )", baseLabel, (resolutionScale.x + resolutionScale.y) * 0.5f);
 
-			ImGui::SliderInt("Upscale Preset", (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str());
+			ImGui::SliderInt("Upscaling", (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str());
 		}
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
@@ -1024,7 +1024,7 @@ void Upscaling::ConfigureTAA()
 
 	// Disable water TAA when upscaling is enabled
 	bool* enableWaterTAA = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISTemporalAA) + 0x38LL);
-	*enableWaterTAA = !(upscaleMethod == UpscaleMethod::kNONE || upscaleMethod == UpscaleMethod::kTAA);
+	*enableWaterTAA = (upscaleMethod == UpscaleMethod::kNONE || upscaleMethod == UpscaleMethod::kTAA);
 
 	// Force enable TAA if needed
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod != UpscaleMethod::kNONE;
@@ -1049,13 +1049,59 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		float resolutionScaleBase = 1.0f / ffxFsr3GetUpscaleRatioFromQualityMode((FfxFsr3QualityMode)settings.qualityMode);
+		auto renderWidth = screenWidth;
+		auto renderHeight = screenHeight;
 
-		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
-		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
+		if (upscaleMethod == UpscaleMethod::kDLSS && streamline.slDLSSGetOptimalSettings) {
+			sl::DLSSOptions dlssOptions{};
+			switch (settings.qualityMode) {
+			case 1:
+				dlssOptions.mode = sl::DLSSMode::eMaxQuality;
+				break;
+			case 2:
+				dlssOptions.mode = sl::DLSSMode::eBalanced;
+				break;
+			case 3:
+				dlssOptions.mode = sl::DLSSMode::eMaxPerformance;
+				break;
+			case 4:
+				dlssOptions.mode = sl::DLSSMode::eUltraPerformance;
+				break;
+			default:
+				dlssOptions.mode = sl::DLSSMode::eDLAA;
+				break;
+			}
+			dlssOptions.outputWidth = static_cast<uint32_t>(screenWidth);
+			dlssOptions.outputHeight = static_cast<uint32_t>(screenHeight);
 
-		resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
-		resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);
+			sl::DLSSOptimalSettings optimalSettings{};
+			const auto result = streamline.slDLSSGetOptimalSettings(dlssOptions, optimalSettings);
+			if (result == sl::Result::eOk && optimalSettings.optimalRenderWidth > 0 && optimalSettings.optimalRenderHeight > 0) {
+				renderWidth = static_cast<int>(optimalSettings.optimalRenderWidth);
+				renderHeight = static_cast<int>(optimalSettings.optimalRenderHeight);
+			} else {
+				// Fallback to quality-ratio path if DLSS optimal query is unavailable/fails.
+				const float resolutionScaleBase = 1.0f / ffxFsr3GetUpscaleRatioFromQualityMode((FfxFsr3QualityMode)settings.qualityMode);
+				renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
+				renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
+			}
+		} else {
+			const float resolutionScaleBase = 1.0f / ffxFsr3GetUpscaleRatioFromQualityMode((FfxFsr3QualityMode)settings.qualityMode);
+			renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
+			renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
+		}
+
+		renderWidth = std::clamp(renderWidth, 1, screenWidth);
+		renderHeight = std::clamp(renderHeight, 1, screenHeight);
+
+		// Preserve exact 1.0 scale for DLAA/native-quality style modes.
+		if (renderWidth == screenWidth && renderHeight == screenHeight) {
+			resolutionScale.x = 1.0f;
+			resolutionScale.y = 1.0f;
+		} else {
+			resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
+			resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);
+		}
 
 		auto phaseCount = GetJitterPhaseCount(renderWidth, screenWidth);
 

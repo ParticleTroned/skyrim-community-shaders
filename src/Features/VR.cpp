@@ -147,6 +147,11 @@ void VR::EarlyPrepass()
 	// Keep culling state in sync with interior/exterior setting each frame.
 	bool desired = RE::TES::GetSingleton()->interiorCell ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
 	UpdateDepthBufferCulling(desired);
+
+	// Keep the runtime value synced even if engine-side code writes over it.
+	if (gMinOccludeeBoxExtent && *gMinOccludeeBoxExtent != settings.MinOccludeeBoxExtent) {
+		*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+	}
 }
 
 //=============================================================================
@@ -597,7 +602,7 @@ namespace
 			bool upscalingActive = globals::features::upscaling.IsUpscalingActive();
 
 			// Exteriors
-			ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
+			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (upscalingActive) {
 					ImGui::Text("Compatible with upscaling using conservative depth upscaling. Disable if you notice artifacts.");
@@ -607,7 +612,7 @@ namespace
 			}
 
 			// Interiors
-			ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
+			bool interiorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (upscalingActive) {
 					ImGui::Text("Compatible with upscaling using conservative depth upscaling. Disable if you notice artifacts.");
@@ -615,10 +620,25 @@ namespace
 					ImGui::Text("Improves performance in interiors, recommended OFF due to occasional visual glitches.");
 				}
 			}
-			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f"))
+
+			if (exteriorChanged || interiorChanged) {
+				const auto* tes = RE::TES::GetSingleton();
+				const bool inInterior = tes && tes->interiorCell;
+				vr.UpdateDepthBufferCulling(inInterior ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior);
+			}
+
+			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
 				*vr.gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
+			}
+
+			if (vr.gDepthBufferCulling) {
+				ImGui::Text("Runtime Depth Culling: %s", *vr.gDepthBufferCulling ? "ON" : "OFF");
+			}
+			if (vr.gMinOccludeeBoxExtent) {
+				ImGui::Text("Runtime Min Occludee: %.1f", *vr.gMinOccludeeBoxExtent);
 			}
 		}
 	}
@@ -1585,9 +1605,18 @@ void VR::SubmitOverlayFrame()
 // Helper to centralize VR depth buffer culling logic, reducing duplication between DataLoaded and EarlyPrepass.
 void VR::UpdateDepthBufferCulling(bool desired)
 {
-	if (gDepthBufferCulling && *gDepthBufferCulling != desired) {
-		*gDepthBufferCulling = desired;
+	if (!gDepthBufferCulling) {
+		return;
+	}
+
+	const bool previous = *gDepthBufferCulling;
+	*gDepthBufferCulling = desired;
+
+	if (previous != desired) {
 		logger::info("VR depth buffer culling set to {}", desired);
+	}
+	if (*gDepthBufferCulling != desired) {
+		logger::warn("VR depth buffer culling write did not stick (wanted {}, got {})", desired, *gDepthBufferCulling);
 	}
 }
 

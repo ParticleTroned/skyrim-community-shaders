@@ -20,11 +20,6 @@ namespace
 			return true;
 		}
 
-		auto& upscaling = globals::features::upscaling;
-		if (!upscaling.IsUpscalingActive()) {
-			return true;
-		}
-
 		auto& vr = globals::features::vr;
 		if (vr.gDepthBufferCulling && *vr.gDepthBufferCulling) {
 			return false;

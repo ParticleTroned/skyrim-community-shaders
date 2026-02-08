@@ -131,8 +131,8 @@ void VR::PostPostLoad()
 
 void VR::DataLoaded()
 {
-	// Initialize occlusion culling based on settings, but force-disable if an external
-	// upscaler is active (FSR/XeSS/DLSS) since upscalers may modify the depth buffer.
+	// Initialize occlusion culling from user settings.
+	// Upscaling compatibility is handled in the upscaling/TB paths.
 	bool desired = settings.EnableDepthBufferCullingExterior;
 	UpdateDepthBufferCulling(desired);
 
@@ -145,10 +145,14 @@ void VR::DataLoaded()
 
 void VR::EarlyPrepass()
 {
-	// Respect user settings unless an external upscaler is active; if so, force-disable
-	// depth-buffer culling to avoid incorrect occlusion tests in VR.
+	// Keep culling state in sync with interior/exterior setting each frame.
 	bool desired = RE::TES::GetSingleton()->interiorCell ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
 	UpdateDepthBufferCulling(desired);
+
+	// Keep the runtime value synced even if engine-side code writes over it.
+	if (gMinOccludeeBoxExtent && *gMinOccludeeBoxExtent != settings.MinOccludeeBoxExtent) {
+		*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+	}
 }
 
 //=============================================================================
@@ -588,50 +592,46 @@ namespace
 		auto& vr = globals::features::vr;
 		VR::Settings& settings = vr.settings;
 		if (ImGui::CollapsingHeader("General Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			// If an upscaler is active that rewrites or repurposes the depth buffer,
-			// depth-buffer-culling must be disabled to avoid incorrect occlusion tests
-			// (which are especially problematic in VR). Query the Upscaling feature
-			// to see whether we're running FSR, XeSS or DLSS.
-			// Determine if an external upscaler is active by reading the numeric
-			// setting value directly. Avoid referencing Upscaling types here to
-			// prevent header/type collisions in this translation unit.
-			// Query the Upscaling feature for an authoritative state flag.
 			bool upscalingActive = globals::features::upscaling.IsUpscalingActive();
-			bool tbActive = globals::features::terrainBlending.loaded && globals::features::terrainBlending.settings.Enable;
 
 			// Exteriors
-			if (upscalingActive || tbActive)
-				ImGui::BeginDisabled();
-			ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
-			if (upscalingActive || tbActive) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Disabled while an external upscaler is active (FSR/XeSS/DLSS) or Terrain Blending is enabled because depth may be modified.\nThis prevents incorrect occlusion in VR.");
-				}
-				ImGui::EndDisabled();
-			} else {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
+			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				if (upscalingActive) {
+					ImGui::Text("Compatible with upscaling using conservative depth upscaling. Disable if you notice artifacts.");
+				} else {
 					ImGui::Text("Improves performance in exteriors, recommended ON.");
 				}
 			}
 
 			// Interiors
-			if (upscalingActive || tbActive)
-				ImGui::BeginDisabled();
-			ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
-			if (upscalingActive || tbActive) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Disabled while an external upscaler is active (FSR/XeSS/DLSS) or Terrain Blending is enabled because depth may be modified.\nThis prevents incorrect occlusion in VR.");
-				}
-				ImGui::EndDisabled();
-			} else {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
+			bool interiorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Interiors", &settings.EnableDepthBufferCullingInterior);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				if (upscalingActive) {
+					ImGui::Text("Compatible with upscaling using conservative depth upscaling. Disable if you notice artifacts.");
+				} else {
 					ImGui::Text("Improves performance in interiors, recommended OFF due to occasional visual glitches.");
 				}
 			}
-			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f"))
+
+			if (exteriorChanged || interiorChanged) {
+				const auto* tes = RE::TES::GetSingleton();
+				const bool inInterior = tes && tes->interiorCell;
+				vr.UpdateDepthBufferCulling(inInterior ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior);
+			}
+
+			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
 				*vr.gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
+			}
+
+			if (vr.gDepthBufferCulling) {
+				ImGui::Text("Runtime Depth Culling: %s", *vr.gDepthBufferCulling ? "ON" : "OFF");
+			}
+			if (vr.gMinOccludeeBoxExtent) {
+				ImGui::Text("Runtime Min Occludee: %.1f", *vr.gMinOccludeeBoxExtent);
 			}
 		}
 	}
@@ -1598,18 +1598,18 @@ void VR::SubmitOverlayFrame()
 // Helper to centralize VR depth buffer culling logic, reducing duplication between DataLoaded and EarlyPrepass.
 void VR::UpdateDepthBufferCulling(bool desired)
 {
-	const bool upscalingActive = globals::features::upscaling.IsUpscalingActive();
-	const bool tbActive = globals::features::terrainBlending.loaded && globals::features::terrainBlending.settings.Enable;
-	if (upscalingActive || tbActive) {
-		if (gDepthBufferCulling && *gDepthBufferCulling) {
-			logger::info("VR: disabling depth buffer culling due to {}", upscalingActive ? "upscaling" : "terrain blending");
-			*gDepthBufferCulling = false;
-		}
-	} else {
-		if (gDepthBufferCulling && *gDepthBufferCulling != desired) {
-			*gDepthBufferCulling = desired;
-			logger::info("VR depth buffer culling restored to {}", desired);
-		}
+	if (!gDepthBufferCulling) {
+		return;
+	}
+
+	const bool previous = *gDepthBufferCulling;
+	*gDepthBufferCulling = desired;
+
+	if (previous != desired) {
+		logger::info("VR depth buffer culling set to {}", desired);
+	}
+	if (*gDepthBufferCulling != desired) {
+		logger::warn("VR depth buffer culling write did not stick (wanted {}, got {})", desired, *gDepthBufferCulling);
 	}
 }
 

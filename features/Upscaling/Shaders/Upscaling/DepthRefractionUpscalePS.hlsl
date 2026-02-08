@@ -25,7 +25,58 @@ Texture2D<uint> StencilTex : register(t2);
 cbuffer JitterCB : register(b0)
 {
 	float2 jitter;
+	float useWideKernel;
+	float pad0;
 };
+
+float SampleMinDepth2x2(float2 uv)
+{
+	float4 depthQuad = DepthTex.GatherRed(LinearSampler, uv);
+	return min(min(depthQuad.x, depthQuad.y), min(depthQuad.z, depthQuad.w));
+}
+
+float SampleMinDepth3x3(float2 uv)
+{
+	uint width;
+	uint height;
+	DepthTex.GetDimensions(width, height);
+
+	float2 texelPos = uv * float2(width, height);
+	int2 centerCoord = int2(floor(texelPos));
+
+	float minDepth = 1.0f;
+
+	[unroll]
+	for (int y = -1; y <= 1; y++) {
+		[unroll]
+		for (int x = -1; x <= 1; x++) {
+			int2 sampleCoord = centerCoord + int2(x, y);
+			sampleCoord = clamp(sampleCoord, int2(0, 0), int2(width - 1, height - 1));
+			float sampleDepth = DepthTex.Load(int3(sampleCoord, 0));
+			minDepth = min(minDepth, sampleDepth);
+		}
+	}
+
+	return minDepth;
+}
+
+float2 ClampToDynamicResBounds(float2 uv, float2 screenPos)
+{
+	float2 minValue = float2(0.0, 0.0);
+	float2 maxValue = FrameBuffer::DynamicResolutionParams1.xy;
+
+#	if defined(VR)
+	// Keep sampling within the current eye after jitter removal.
+	// This avoids cross-eye gathers at the stereo seam.
+	bool isRight = screenPos.x >= 0.5;
+	float minFactor = isRight ? 1.0 : 0.0;
+	float maxFactor = isRight ? 2.0 : 1.0;
+	minValue.x = 0.5 * (FrameBuffer::DynamicResolutionParams2.z * minFactor);
+	maxValue.x = 0.5 * (FrameBuffer::DynamicResolutionParams2.z * maxFactor);
+#	endif
+
+	return clamp(uv, minValue, maxValue);
+}
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -36,8 +87,8 @@ PS_OUTPUT main(PS_INPUT input)
 	// Remove jitter offset to get the correct sampling coordinates
 	float2 uv = originalUV - (jitter * SharedData::BufferDim.zw);
 
-	// Clamp within bounds
-	uv = clamp(uv, 0.0, FrameBuffer::DynamicResolutionParams1.xy);
+	// Clamp within bounds (VR: preserve per-eye bounds).
+	uv = ClampToDynamicResBounds(uv, input.TexCoord);
 
 #	if defined(VR)
 	uint4 stencilSamples = StencilTex.GatherRed(LinearSampler, uv);
@@ -52,8 +103,17 @@ PS_OUTPUT main(PS_INPUT input)
 
 	// Upscale using linear sampling
 	psout.RefractionNormals = RefractionNormals.SampleLevel(LinearSampler, uv, 0);
-	psout.Depth = DepthTex.SampleLevel(LinearSampler, uv, 0);
-	psout.SAOCameraZ = psout.Depth;
+	float bilinearDepth = DepthTex.SampleLevel(LinearSampler, uv, 0);
+
+	float depthOut = bilinearDepth;
+#	if defined(VR)
+	float conservativeDepth = (useWideKernel > 0.5f) ? SampleMinDepth3x3(uv) : SampleMinDepth2x2(uv);
+	depthOut = conservativeDepth;
+#	endif
+
+	psout.Depth = depthOut;
+	// Keep SAO camera Z smooth to avoid over-occlusion; depth culling uses SV_Depth.
+	psout.SAOCameraZ = bilinearDepth;
 
 	return psout;
 }

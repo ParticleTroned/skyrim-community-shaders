@@ -218,8 +218,10 @@ void Upscaling::DrawSettings()
 
 			// VR DLSS preset selection
 			if (globals::game::isVR) {
-				const char* presets[] = { "F (Fast)", "J (Quality)", "K (Ultra)" };
-				ImGui::SliderInt("DLSS Preset", (int*)&settings.DLSSPreset, 0, 2, presets[settings.DLSSPreset]);
+				settings.DLSSPreset = std::min(settings.DLSSPreset, 1u);
+				const char* presets[] = { "E (Quality/Balanced/Performance)", "F (Quality/Balanced/Performance)" };
+				ImGui::SliderInt("DLSS Preset", (int*)&settings.DLSSPreset, 0, 1, presets[settings.DLSSPreset]);
+				ImGui::Text("Ultra Performance and DLAA use preset F");
 			}
 		}
 	}
@@ -370,6 +372,10 @@ void Upscaling::LoadSettings(json& o_json)
 	if (settings.upscaleMethodNoDLSS >= static_cast<uint>(enumCount)) {
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, enumCount ? enumCount - 1 : 0);
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
+	}
+	if (settings.DLSSPreset > 1) {
+		logger::warn("[Upscaling] Loaded DLSSPreset {} out of range, resetting to 0 (Preset E)", settings.DLSSPreset);
+		settings.DLSSPreset = 0;
 	}
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <d3d12.h>
+#include "D3D12Compat.h"
 #include <winrt/base.h>
 
 #include <FidelityFX/host/backends/dx11/ffx_dx11.h>

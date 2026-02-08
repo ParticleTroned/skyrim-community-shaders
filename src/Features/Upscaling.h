@@ -5,7 +5,7 @@
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
 #include <d3d11_4.h>
-#include <d3d12.h>
+#include "D3D12Compat.h"
 #include <winrt/base.h>
 
 /**
@@ -21,7 +21,7 @@ public:
 	virtual inline std::string GetName() override { return "Upscaling"; }
 	virtual inline std::string GetShortName() override { return "Upscaling"; }
 	virtual inline bool SupportsVR() override { return true; }
-	virtual inline bool IsCore() const override { return false; }
+	virtual inline bool IsCore() const override { return true; }
 	virtual inline std::string_view GetCategory() const override { return "Display"; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -57,7 +57,7 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 1.0f;
 		float sharpnessDLSS = 0.1f;
-		uint DLSSPreset = 2;  // VR-specific DLSS preset: 0=F, 1=J, 2=K
+		uint DLSSPreset = 0;  // DLSS preset for Quality/Balanced/Performance: 0=E (default), 1=F
 	};
 
 	Settings settings;

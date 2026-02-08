@@ -304,26 +304,21 @@ void Streamline::SetDLSSOptions()
 	dlssOptions.preExposure = 1.0f;
 	dlssOptions.sharpness = 0.0f;
 
-	// Set DLSS preset based on VR mode
-	sl::DLSSPreset preset = sl::DLSSPreset::ePresetK;  // Default
-	switch (globals::features::upscaling.settings.DLSSPreset) {
-	case 0:
-		preset = sl::DLSSPreset::ePresetF;
-		break;
-	case 1:
-		preset = sl::DLSSPreset::ePresetJ;
-		break;
-	case 2:
-	default:
-		preset = sl::DLSSPreset::ePresetK;
-		break;
-	}
+	// This Streamline header no longer names Preset E, but DLSS runtime still accepts value 5.
+	constexpr sl::DLSSPreset kPresetE = static_cast<sl::DLSSPreset>(5);
+	constexpr sl::DLSSPreset kPresetF = sl::DLSSPreset::ePresetF;
 
-	dlssOptions.dlaaPreset = preset;
-	dlssOptions.qualityPreset = preset;
-	dlssOptions.balancedPreset = preset;
-	dlssOptions.performancePreset = preset;
-	dlssOptions.ultraPerformancePreset = preset;
+	const bool usePresetFForQBP = globals::features::upscaling.settings.DLSSPreset == 1;
+	const sl::DLSSPreset qbpPreset = usePresetFForQBP ? kPresetF : kPresetE;
+
+	// Quality/Balanced/Performance share user-selected E/F.
+	dlssOptions.qualityPreset = qbpPreset;
+	dlssOptions.balancedPreset = qbpPreset;
+	dlssOptions.performancePreset = qbpPreset;
+
+	// Ultra Performance and DLAA are always preset F.
+	dlssOptions.ultraPerformancePreset = kPresetF;
+	dlssOptions.dlaaPreset = kPresetF;
 
 	if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 		logger::critical("[Streamline] Could not enable DLSS");

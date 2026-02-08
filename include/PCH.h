@@ -20,6 +20,7 @@ void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, cons
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#include "D3D12Compat.h"
 
 #ifndef TRACY_SUPPORT
 	#undef TRACY_ENABLE

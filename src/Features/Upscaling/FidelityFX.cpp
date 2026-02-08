@@ -1,7 +1,5 @@
 #include "FidelityFX.h"
 
-#include <directx/d3dx12.h>
-
 #include "../../State.h"
 #include "../../Utils/FileSystem.h"
 #include "../Upscaling.h"

@@ -10,7 +10,6 @@
 #include "VR.h"
 #include <Windows.h>
 #include <algorithm>
-#include <directx/d3dx12.h>
 #include <format>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -23,7 +22,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationForceEnable,
 	streamlineLogLevel,
 	sharpnessFSR,
-	sharpnessDLSS);
+	sharpnessDLSS,
+	presetDLSS);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -227,6 +227,15 @@ void Upscaling::DrawSettings()
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+
+			const char* presets[] = { "Default", "Preset J", "Preset F", "Preset L", "Preset M" };
+			ImGui::Combo("DLSS Model Preset", (int*)&settings.presetDLSS, presets, 5);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Choose which DLSS AI model preset to use.");
+				ImGui::Text("Each model offers different visual quality, performance, and motion stability.");
+				ImGui::Text("Set to 'Default' for automatic selection based on your Upscale Preset and hardware.");
+				ImGui::Text("Changing this setting requires a restart to take effect.");
+			}
 		}
 	}
 
@@ -421,6 +430,9 @@ void Upscaling::SaveSettings(json& o_json)
 void Upscaling::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	if (!o_json.contains("presetDLSS") && o_json.contains("DLSSPreset")) {
+		settings.presetDLSS = o_json["DLSSPreset"].get<uint>();
+	}
 
 	// Sanitize loaded settings to ensure enum indices are valid
 	constexpr auto enumCount = 4;  // UpscaleMethod has 4 values: kNONE, kTAA, kFSR, kDLSS
@@ -431,6 +443,10 @@ void Upscaling::LoadSettings(json& o_json)
 	if (settings.upscaleMethodNoDLSS >= static_cast<uint>(enumCount)) {
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, enumCount ? enumCount - 1 : 0);
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
+	}
+	if (settings.presetDLSS > 4) {
+		logger::warn("[Upscaling] Loaded presetDLSS {} out of range, resetting to 0 (Default)", settings.presetDLSS);
+		settings.presetDLSS = 0;
 	}
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
@@ -1382,12 +1398,6 @@ bool Upscaling::IsUpscalingActive() const
 	// resolutionScale is render / display per-axis; use the stricter axis.
 	const float minScale = std::min(resolutionScale.x, resolutionScale.y);
 	return minScale < .99f;
-}
-
-std::vector<FeatureConstraints::Constraint> Upscaling::GetActiveConstraints() const
-{
-	// VR depth-buffer culling remains user-controllable even when upscaling is active.
-	return {};
 }
 
 /**

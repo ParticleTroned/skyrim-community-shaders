@@ -22,7 +22,7 @@ public:
 	virtual inline std::string GetName() override { return "Upscaling"; }
 	virtual inline std::string GetShortName() override { return "Upscaling"; }
 	virtual inline bool SupportsVR() override { return true; }
-	virtual inline bool IsCore() const override { return false; }
+	virtual inline bool IsCore() const override { return true; }
 	virtual inline std::string_view GetCategory() const override { return "Display"; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -35,8 +35,6 @@ public:
 				"Frame generation for supported systems" }
 		};
 	}
-
-	virtual std::vector<FeatureConstraints::Constraint> GetActiveConstraints() const override;
 
 	float2 jitter = { 0, 0 };
 
@@ -59,6 +57,7 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.0f;
+		uint presetDLSS = 0;  // 0=Default, 1=J, 2=F, 3=L, 4=M
 	};
 
 	Settings settings;

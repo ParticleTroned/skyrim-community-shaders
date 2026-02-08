@@ -1,349 +1,175 @@
-# Upscaling + Terrain Blending + Depth Culling (VR) - Findings
+# Upscaling + Terrain Blending + VR Depth Culling (Current Handoff)
 
-This is a consolidated record of what was tried, what worked, and what failed,
-so we do not repeat dead ends in a future chat.
+This file is a current, practical handoff so a new chat can continue without re-discovery.
 
-## High-level overview (what we kept and why it works)
-### Root cause (simplified)
-- VR depth-buffer culling depends on a depth SRV that matches the active view (and, with upscaling, the upscaled depth).
-- Terrain Blending (TB) also depends on the global pixel shader depth SRV slot `t17` (bound in `src/State.cpp`) for its blending/composite.
-- With TB enabled, `t17` is typically `TB.blendedDepth(R16)`. The OBB occlusion path also samples `t17`.
-- We cannot “just change `t17` globally” to fix occlusion because TB expects its blended depth at `t17` and breaking that causes transparent ground.
+## 1) Scope
 
-### Kept solution (works in practice)
-**Upscaling + depth culling (no TB)**
-- Output conservative depth in `DepthRefractionUpscalePS.hlsl` (min depth from 2x2, optionally 3x3 at aggressive scales) so occlusion/HZB never under-estimates visibility.
-- Keep SAO smooth by using bilinear depth for `SAOCameraZ` while `SV_Depth` is conservative.
+Main topic:
+- VR depth buffer culling behavior across:
+  - `None/TAA` (no vendor upscaling)
+  - `DLSS/FSR` (vendor upscaling)
+  - `Terrain Blending` (TB) ON/OFF
 
-**TB + depth culling (+ optional upscaling)**
-- Keep TB’s global `t17` binding intact for terrain compositing.
-- Fix the broken consumers via localized, draw-call-scoped SRV overrides (in `src/Globals.cpp`):
-  - OBB occlusion (`OBBOcclusionTesting`): temporarily override PS `t17` during those draws (prefer TB blended R32, else `kMAIN_COPY`).
-  - Utility shadowmask passes: temporarily override PS `t2` (TexDepthUtilitySampler) (prefer TB blended R16, then TB R32, then `kMAIN_COPY`).
+Current focus:
+- Regression check: depth culling appears to work with vendor upscaling, but not with `TAA/DLAA` according to testers.
 
-**Guard rails / gating**
-- Avoid swapping engine depth-stencil SRV pointers to TB depth when it is known to be harmful (VR + real upscaling + depth culling) via `ShouldUseBlendedDepthSRV()` in `src/Features/TerrainBlending.cpp`.
-- Gate the localized draw-call overrides on VR + TB enabled + depth-buffer culling enabled.
-- Define “upscaling active” as “vendor upscaler actually downscaling” (DLSS/FSR + `resolutionScale.x < 0.99`) so we do not change behavior under 1:1 or DLAA.
+## 2) Repository Snapshot
 
-**Bias/artifact mitigation**
-- `OFFSET_DEPTH` bias in `package/Shaders/Utility.hlsl` is tuned to reduce the rectangular ground-shadow artifact. The depth-distance lerp (1.25 -> 0.1 over 256–2048) is enabled only when a TB-provided CB flag is set (otherwise bias stays fixed at 1.25).
+- Branch: `cs-1.4.7-PL-dlssA`
+- Current `HEAD`: `2086cb5e` (`fix(upscaling): add DLSS model presets and restore RCAS/DX12 compatibility`)
+- Working tree is currently dirty (not committed):
+  - `src/Features/TerrainBlending.cpp`
+  - `src/Features/Upscaling.cpp`
+  - `src/Features/VR.cpp`
 
-## Commit timeline (90278b4 -> f04c9b7e)
-This is a focused timeline of the changes that made **depth culling + TB + upscaling** coexist, plus the key reversions/guard rails.
+## 3) Important Commit Timeline (this branch)
 
-### 90278b4 - Baseline: conservative depth upscale (TB still broken)
-Key changes:
-- `features/Upscaling/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl`
-  - Added 2x2/3x3 min-depth sampling and wrote conservative depth to `SV_Depth`.
-  - Kept `SAOCameraZ` using bilinear depth to avoid over-occlusion.
-- `src/Features/VR.cpp`, `src/Features/Upscaling.cpp`
-  - Relaxed lock-outs so depth-buffer culling can be enabled with upscaling (non-TB path).
+Starting from prior TB/depth work already present in base branch:
+- `90278b49` depth-culling + upscaling groundwork
+- `df76319f` TB depth SRV guard in VR upscaling
+- `d6b1d7bf` scoped draw-call overrides for OBB/shadowmask
+- `597cb147` depth-bias tuning
+- `f952ae63` tighter gating for VR/upscaling/depth culling
+- `f04c9b7e` depth-bias CB slot fix
+- `820f190b` older `UpscalingTB.md` update
 
-Why it could work:
-- Occlusion never under-estimates depth after upscaling, so objects don't pop in/out when upscaling is on (TB off).
+Then on `cs-1.4.7-PL-dlssA`:
+- `eaf13137` `fix(VR): apply per eye upscaling (#1819)` (cherry-picked with incoming/theirs)
+- `e213f6ea` `fix(vr upscaling): stabilize depth upscaling with per-eye clamps`
+- `23835a03` `merge(upscaling): sync PR1819 files and keep VR depth-culling support`
+- `2086cb5e` `fix(upscaling): add DLSS model presets and restore RCAS/DX12 compatibility`
 
-Consequence:
-- Fixed **upscaling + depth culling** when TB is disabled.
-- TB still broke depth culling because TB repurposes `t17`.
+## 4) What Was Requested in This Session
 
-Notes:
-- This commit also touched unrelated files (`src/Features/InteriorSun.cpp`, `src/Features/LightLimitFix.cpp`, `src/Menu.cpp`).
+User requested:
+- Keep depth culling activation independent from TB enable state.
+- Re-check TAA/DLAA depth-culling behavior vs `v1.4.6_PL3.5-VR`.
+- Prefer DLSS-native scaling behavior (safer for DLAA interpretation) instead of generic FSR ratio for all methods.
+- Update this file with detailed current status for a fresh chat.
 
-### df76319f - Guard depth SRV swapping in VR upscaling
-Key changes:
-- `src/Features/TerrainBlending.cpp`
-  - Introduced `ShouldUseBlendedDepthSRV()`:
-    - If VR + real upscaling is active + depth-buffer culling is enabled, do **not** swap the engine depth-stencil SRVs (`kMAIN`, `kPOST_ZPREPASS_COPY`) to TB's blended depth; keep backups.
-- `src/State.cpp`
-  - Temporary experiment: prevented binding TB blended depth to PS `t17` in VR+upscaling+depth-culling cases. This was later reverted because it breaks terrain.
+## 5) Reported Test Results From User/Testers
 
-Why it could work:
-- Prevents non-upscaled / mismatched depth from leaking into other pipeline users when upscaling+depth culling is active.
+Reported outcomes:
+- Depth culling works with upscaling (DLSS/FSR path).
+- With `TAA/DLAA`, depth culling seems ineffective:
+  - no measurable perf increase
+  - setting occluding box extent to `0` did not produce expected behavior changes
+- Testers explicitly disabled TB and still saw TAA issue.
 
-Consequence:
-- Guarding TB's **global `t17`** binding was not viable (transparent ground), but guarding the **depth-stencil SRV pointer swaps** is viable and was kept.
+Implication:
+- TAA/DLAA issue is likely not TB-toggle gating alone.
 
-### 78c18af7 - Document dead ends
-Key change:
-- Added `UpscalingTB.md` to record what worked/failed and avoid repeating dead ends.
+## 6) Current Local (Uncommitted) Changes
 
-### d6b1d7bf - Localized draw-call SRV overrides (kept)
-Key changes:
-- `src/State.cpp`
-  - Reverted the global `t17` guard: TB keeps binding `t17` to its blended depth so terrain compositing stays correct.
-- `src/Globals.cpp`
-  - Added D3D11 draw-call detours (Draw/DrawIndexed/Draw*Instanced) and applied scoped SRV overrides:
-    - OBB occlusion: override PS `t17` only for the `OBBOcclusionTesting` shader.
-    - Utility shadowmask: override PS `t2` only for shadowmask variants.
-  - Overrides restore original SRVs after each draw.
-- TB tuning:
-  - Default `BlendStrength` changed to 0.5 and tooltip adjusted.
-  - Feature INI versions bumped.
+### A) `src/Features/TerrainBlending.cpp`
 
-Why it could work:
-- Keeps TB's required `t17` binding intact, but fixes the specific consumers that were broken by TB's depth SRV format/selection.
+Function: `ShouldUseBlendedDepthSRV()`
 
-Consequence:
-- Adds small per-draw overhead (scoped get/set + conditional checks).
-- Relies on identifying the exact occlusion/shadowmask passes (shader name/descriptor), so future engine/shader changes could require updates.
+Change:
+- Removed the `IsUpscalingActive()` early-return gate.
+- Now in VR, if depth culling is enabled (`vr.gDepthBufferCulling == true`), function returns `false` regardless of upscaling mode.
 
-### 597cb147 - Bias tuning + cull distance
-Key changes:
-- `package/Shaders/Utility.hlsl`
-  - `OFFSET_DEPTH` bias became depth-distance-based:
-    - `bias = lerp(1.25, 0.1, saturate((abs(w) - 256) / (2048 - 256)))`.
-- `src/Features/TerrainBlending.h`
-  - Default `TerrainCullDistance`: 1024 -> 2048.
-- `UpscalingTB.md`
-  - Added and expanded the “What DID work (TB path)” section and artifact notes.
+Intent:
+- Simplify TB depth SRV choice under active VR culling.
+- This is SRV behavior only, not culling enable/disable logic.
 
-Why it could work:
-- Makes the shadowmask artifact less sensitive to a single fixed offset by reducing bias with distance.
+### B) `src/Features/VR.cpp`
 
-Consequence:
-- Slightly more TB depth work at distance due to larger cull distance.
-- Bias changes can shift/reshape the ground-shadow artifact (see `TBshadow.md` for deeper notes).
+Changes:
+- `EarlyPrepass()` now also re-syncs `gMinOccludeeBoxExtent` every frame.
+- VR menu checkboxes for depth culling now apply immediately by calling `UpdateDepthBufferCulling(...)`.
+- Added runtime readback lines in UI:
+  - `Runtime Depth Culling: ON/OFF`
+  - `Runtime Min Occludee: <value>`
+- `UpdateDepthBufferCulling(...)` now:
+  - always writes desired value
+  - warns if write does not stick (`wanted X, got Y`)
 
-Notes:
-- Also changed `src/State.h` default `refractionScale` to 0.5 (unrelated to TB/depth culling).
+Intent:
+- Improve observability and detect runtime overwrite issues.
 
-### f952ae63 - Tighten VR/upscale gating and restrict depth/bias to “real upscaling”
-Key changes:
-- `features/Upscaling/Shaders/Upscaling/DepthRefractionUpscalePS.hlsl`
-  - Conservative depth output is now VR-only; non-VR uses bilinear depth.
-- `src/Features/Upscaling.cpp`
-  - `UpscaleDepth()` now runs only for DLSS/FSR and only when `resolutionScale.x != 1.0`.
-  - `IsUpscalingActive()` now means “DLSS/FSR actually downscaling” (`resolutionScale.x < 0.99`).
-- `package/Shaders/Utility.hlsl` + TB CB wiring
-  - Added `TerrainDepthBiasCB` with `TerrainDepthBiasParams.x` flag so the depth-distance bias lerp is only enabled for real upscaling; otherwise bias stays at 1.25.
-  - Added TB-side constant buffer update/bind in `src/Features/TerrainBlending.cpp` / `.h`.
-- `src/Globals.cpp`
-  - Scoped SRV overrides are now gated on depth-buffer culling (and VR + TB enabled), not on upscaling being active.
+### C) `src/Features/Upscaling.cpp`
 
-Why it could work:
-- Reduces side effects when there is no real upscaling going on (DLAA/1:1), while keeping the TB+depth-culling fixes active where needed.
+Changes:
+- UI label renamed from `Upscale Preset` to `Upscaling`.
+- Fixed `enableWaterTAA` logic in `ConfigureTAA()` to:
+  - `true` for `NONE/TAA`
+  - `false` for vendor upscalers
+- In `ConfigureUpscaling()`:
+  - Restored method-specific scale behavior for DLSS/DLAA path by querying:
+    - `streamline.slDLSSGetOptimalSettings(...)`
+  - Fallback to FSR quality-ratio path if DLSS query fails.
+  - Keep FSR path on FSR quality-ratio path.
+  - Clamp render dimensions and preserve exact `1.0` scale for native/DLAA-sized output.
 
-Consequence:
-- Makes the solution less invasive and more predictable across upscalers/modes.
+Intent:
+- Reduce risk of DLAA misclassification by avoiding FSR-derived scale for DLSS path.
 
-### f04c9b7e - Fix depth bias CB slot mismatch
-Key changes:
-- `package/Shaders/Utility.hlsl` and `src/Features/TerrainBlending.cpp`
-  - Corrected `TerrainDepthBiasCB` register/slot wiring (now `b11` / VS CB slot 11).
+## 7) Depth Culling vs TB Activation Logic (Current Understanding)
 
-Why it could work:
-- Without the slot fix, the shader did not reliably receive the “UseUpscaleBias” flag, making bias behavior inconsistent.
+Depth culling activation itself:
+- Controlled in VR feature (`src/Features/VR.cpp`) by user setting and interior/exterior state.
+- Not disabled by TB in current VR logic.
 
-Consequence:
-- Bias gating behaves as intended (depth-distance lerp only when explicitly enabled).
+TB interaction that still exists:
+- TB can still influence which depth SRV is used in TB-specific and scoped override paths.
+- That is separate from "is depth culling on/off".
 
-## Problem statement
-- In VR, depth culling breaks when upscaling is enabled because depth is not
-  upscaled. Objects pop in/out (incorrectly culled).
-- The same issue occurs when Terrain Blending (TB) is enabled. Even after the
-  upscaling fix, meshes still pop with TB active.
+## 8) Why TAA/DLAA May Still Differ From Old Tag
 
-## What DID work (upscaling without TB)
-### Conservative depth output in the existing upscale pass
-- Change: `DepthRefractionUpscalePS.hlsl` outputs conservative depth.
-  - Compute min depth from a 2x2 neighborhood (optionally 3x3 for aggressive
-    scales).
-  - Preserve VR-safe UV mapping + jitter removal:
-    `FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(...)`.
-  - Preserve the stencil discard path.
-- Why it works: writes conservative (nearer) depth into the upscaled DSV,
-  so occlusion never under-estimates visibility.
-- Result: depth culling works when upscaling is on if TB is disabled.
+Even after removing obvious lockouts, behavior is not guaranteed identical to old tag because:
+- Upscaling subsystem had major refactors from PR1819 and later merges.
+- Runtime state sync and diagnostics in VR are now stronger than older tag.
+- Depth consumers and scoped overrides introduced in TB-related evolution can still affect depth behavior in edge cases.
 
-### Allow depth culling in VR when conservative depth is active
-- Relaxed force-disable logic in:
-  - `src/Features/VR.cpp` (depth culling lock-out)
-  - `src/Features/Upscaling.cpp` (upscaling lock-out)
-- Result: depth culling can be enabled when upscaling is on (non-TB path).
+## 9) Practical Diagnostics Already Added
 
-## What DID NOT work (TB path)
-### 1) Forcing occlusion to use engine/main depth (t17 guard / SRV routing)
-Goal: prevent TB blended depth from being used for occlusion by forcing `t17`
-to engine depth (kMAIN or kMAIN_COPY).
+In VR menu -> General Settings:
+- `Runtime Depth Culling: ON/OFF`
+- `Runtime Min Occludee: <value>`
 
-Attempts:
-- Guard in `State.cpp` and/or `TerrainBlending.cpp` to keep `t17` as engine
-  depth.
-- Re-route TB to a different SRV slot, leaving `t17` as engine depth.
-- Bypass TB blended depth entirely.
+Use these while toggling settings to verify actual runtime values are changing.
 
-Result:
-- Depth culling improved, but the ground became transparent (terrain breaks).
-- Same failure when giving TB its own slot and sampling it in TB shaders.
+## 10) Recommended Next Steps in New Chat
 
-Conclusion:
-- TB expects its blended depth bound at `t17`. Touching that binding breaks the
-  terrain composite (transparent ground). Avoid modifying `t17` routing for TB.
+1. Build current dirty state and test with TB OFF:
+   - `TAA`, `DLAA`, `None`, `DLSS`, `FSR`
+2. For each mode, capture:
+   - runtime readback values from VR menu
+   - perf delta with depth culling ON/OFF
+   - visual response to `Min Occludee Box Extent` extreme values
+3. If runtime value shows ON but behavior unchanged:
+   - instrument direct reads around occlusion dispatch path to confirm engine-side variable is respected at draw time.
+4. Decide whether to commit current local trio (`VR.cpp`, `Upscaling.cpp`, `TerrainBlending.cpp`) or split into:
+   - diagnostics-only commit
+   - DLSS-scale logic commit
+   - TB SRV policy commit
 
-### 2) Using TB blended depth SRV for upscaling / occlusion
-Goal: feed occlusion with TB depth or an upscaled version of it.
+## 11) Quick Copy/Paste Context For New Chat
 
-Attempts:
-- Route TB blended depth into the upscaling path.
-- Use TB blended depth SRV as the occlusion input.
-- Try R16 vs R32 TB blended depth variants.
+Use this block directly:
 
-Result: still popping, and several variants caused transparent ground or
-stereo mismatch.
-
-Conclusion: swapping occlusion to TB depth does not fix the issue, and often
-breaks terrain.
-
-### 3) Depth-only upscale pass before HZB (new pass)
-Goal: upscale depth into `kMAIN_COPY` before HZB/occlusion downsample.
-
-Implementation:
-- New `DepthOnlyUpscalePS` shader.
-  - Conservative min depth (2x2 / optional 3x3).
-  - VR jitter removal and stencil discard.
-  - Writes depth only to `kMAIN_COPY` DSV.
-- Added `UpscaleDepthForOcclusion()` in `src/Features/Upscaling.cpp`.
-- Hooked into `src/FrameAnnotations.cpp` before HZB compute passes.
-- DSV clear to 1.0/0xFF before the pass so discarded pixels remain far.
-
-Result:
-- Still mesh popping, plus stereo misalignment artifacts.
-- Added a full-screen pass; performance cost felt non-trivial.
-
-Conclusion: depth-only pre-pass is not sufficient and introduces stereo issues.
-
-### 4) Global SRV override hook (PS/CS SetShaderResources)
-Goal: force occlusion/HZB shaders to sample upscaled depth (`kMAIN_COPY`)
-without touching TB shaders.
-
-Implementation:
-- Hooked `ID3D11DeviceContext::PSSetShaderResources` and
-  `CSSetShaderResources` in `src/Globals.cpp`.
-- Tagging and logging depth SRVs:
-  `kMAIN`, `kMAIN_COPY`, `kPOST_ZPREPASS_COPY`, `TB.blendedDepth(R16/R32)`,
-  `TB.depthSRVBackup`, `TB.prepassSRVBackup`, `TB.terrainDepth`.
-- Override replaced any "non-upscaled depth" with `kMAIN_COPY` when
-  VR + upscaling + depth culling + TB are active.
-
-Result:
-- Overrides fired too broadly (CS slots 0/1/3, PS slot 17), not just occlusion.
-- Stereo mismatch and still popping.
-
-Conclusion: global SRV override is too invasive. Any override must be localized
-to the occlusion binding site only (if at all).
-
-## What DID work (TB path)
-### Localized draw-call SRV overrides (OBB + Shadowmask only)
-Goal: fix occlusion and shadowmask sampling without touching TB’s global `t17`
-binding.
-
-Implementation (current):
-- Hook D3D11 Draw* calls and apply scoped overrides in `src/Globals.cpp`.
-- **OBB occlusion only**: override `t17` for the `OBBOcclusionTesting` shader.
-  - Current code uses TB blended **R32** if available, else `kMAIN_COPY`.
-- **Shadowmask only**: override `t2` (TexDepthUtilitySampler) in Utility
-  shadowmask passes.
-  - Current code prefers TB blended **R16**, then TB R32, then `kMAIN_COPY`.
-
-Result:
-- **Mesh popping is gone** with TB + upscaling + depth culling.
-- **Stereo mismatch** and rectangular artifacts were eliminated when
-  shadowmask uses **TB R16** (not R32, not `kMAIN_COPY`).
-
-## Shadowmask artifacts (ground shadows) + OFFSET_DEPTH tuning
-There are still rare, rectangular ground-shadow artifacts in some cases.
-We tested different depth offsets in `package/Shaders/Utility.hlsl`:
-- `OFFSET_DEPTH = 10.0`: removed darkening but caused large rectangular artifacts.
-- `OFFSET_DEPTH = 2.5`: partial improvement; still artifacts.
-- `OFFSET_DEPTH = 1.25`: best compromise for most cases.
-- `OFFSET_DEPTH = 1.0 / 0.75`: did not meaningfully improve artifacts.
-- `OFFSET_DEPTH = 0.25`: reduced some ground shadows but broke TB when close.
-
-**Current**: depth-based lerp (when enabled) instead of a fixed offset.
 ```
-bias = lerp(1.25, 0.1, saturate((abs(w) - 256) / (2048 - 256)));
+Branch: cs-1.4.7-PL-dlssA
+HEAD: 2086cb5e
+
+Goal: Fix/verify VR depth buffer culling behavior, especially TAA/DLAA with TB OFF.
+
+Already integrated:
+- PR1819 per-eye upscaling and follow-up merges.
+- Scoped TB depth overrides and previous TB/depth work from earlier commits.
+
+Current uncommitted files:
+- src/Features/TerrainBlending.cpp
+- src/Features/Upscaling.cpp
+- src/Features/VR.cpp
+
+Local changes summary:
+- VR: immediate culling apply + runtime readback + min-occludee resync + write-sticky warning.
+- Upscaling: water TAA logic fix + UI label rename + DLSS optimal-settings-based resolution scale (fallback to FSR ratio).
+- TB: ShouldUseBlendedDepthSRV now keyed on VR depth culling, not IsUpscalingActive.
+
+Observed issue to investigate:
+- Testers report depth culling gives expected effect with vendor upscaling, but not with TAA/DLAA, even when TB is disabled.
 ```
-This is no longer tied to TerrainCullDistance (previous attempt was).
 
-Artifacts appear most under **DLSS + TB + depth culling**.
-
-## Upscaler matrix (latest observations)
-- **DLAA + TB + depth culling** = OK (no ground shadows).
-- **DLSS + depth culling (no TB)** = OK.
-- **DLSS + TB + depth culling** = ground-shadow artifacts.
-
-Attempted DLSS-specific shadowmask routing:
-- Forcing shadowmask `t2` to `kMAIN_COPY` under DLSS reintroduced stereo mismatch
-  (similar to TB R32). Reverted.
-
-## Key observations from logs
-- When TB is enabled, t17 in PS is typically TB.blendedDepth (R16).
-- The occlusion path (OBB) samples t17 in PS.
-- HZB compute uses kMAIN / kPOST_ZPREPASS_COPY in CS slots 0/1/3.
-- kMAIN_COPY is the upscaled depth (VR path).
-- Forcing t17 away from TB depth **globally** breaks terrain (transparent ground).
-- Shadowmask pass uses `t2` (TexDepthUtilitySampler). TB R16 is the only
-  source that avoided stereo mismatch so far.
-
-Typical log patterns:
-- `stage=PS slot=17 tag=TB.blendedDepth(R16)`
-- `stage=PS [OBB] t17=TB.blendedDepth(R16)`
-- `stage=CS slot=0/1/3 tag=kMAIN.depthSRV` or `kPOST_ZPREPASS_COPY`
-- Overrides show `TB.blendedDepth -> kMAIN_COPY` and `kMAIN -> kMAIN_COPY`
-  in CS, which caused stereo artifacts.
-
-## Constraints (do not repeat these)
-1. Do not change TB's `t17` binding (causes transparent ground).
-2. Avoid global SRV overrides (too broad, stereo mismatch).
-3. Depth-only pre-pass before HZB did not fix popping and caused stereo issues.
-4. Routing TB depth to a different SRV slot and using it in TB shaders still
-   broke terrain.
-5. For shadowmask, **TB R16** works; **TB R32** or **kMAIN_COPY** reintroduces
-   stereo mismatch in DLSS.
-
-## Current working state (non-TB)
-- Conservative depth in `DepthRefractionUpscalePS` fixes depth culling with
-  upscaling when TB is OFF.
-- Depth culling can be enabled in VR once that conservative path is active.
-
-## Current working state (TB path)
-- Scoped draw-call overrides in `src/Globals.cpp`:
-  - OBB occlusion overrides `t17`.
-  - Shadowmask overrides `t2` to TB R16.
-- Depth culling works with TB + upscaling, but **DLSS + TB** still shows
-  occasional rectangular ground-shadow artifacts.
-- TB depth bias can be depth-based (lerp 1.25→0.1 over 256–2048) when enabled; otherwise it stays at 1.25.
-- Default TB culling distance is now **2048** (Settings default).
-
-## Files touched during experiments (reference only)
-- `src/Features/Upscaling.cpp` / `src/Features/Upscaling.h`
-  - `UpscaleDepthForOcclusion()`, `DepthOnlyUpscalePS` (failed approach).
-- `features/Upscaling/Shaders/Upscaling/DepthOnlyUpscalePS.hlsl`
-  - Depth-only conservative upscale shader (failed approach).
-- `src/FrameAnnotations.cpp`
-  - Hook to run depth-only upscale before HZB (failed approach).
-- `src/Globals.cpp`
-  - Global SRV logging/override (failed approach).
-- `src/State.cpp`, `src/Features/TerrainBlending.cpp`
-  - SRV guard experiments (transparent ground).
-- `package/Shaders/Utility.hlsl`
-  - OFFSET_DEPTH bias tuning (fixed vs depth-based lerp; now gated).
-- `src/Features/TerrainBlending.h/.cpp`
-  - Added DepthBiasParams CB + binding to gate the depth-distance lerp; fixed slot mismatch later.
-- `src/State.h`
-  - Default refractionScale (heatwarp) set to 0.5 (unrelated to TB, but noted).
-
-## Open hypotheses (still unresolved)
-- TB blended depth is likely not upscaled (or not aligned per-eye), so
-  occlusion sees a depth buffer that does not match the actual view.
-- Fix must not alter TB's `t17` binding, but may need a way to:
-  - Provide an occlusion-only SRV that is upscaled and stereo-correct without
-    changing TB's SRV layout, or
-  - Produce a TB-compatible upscaled depth for occlusion only (localized).
-- Ground-shadow artifacts under DLSS may stem from depth bias or shadowmask
-  depth mismatch even with TB R16. OFFSET_DEPTH may not be the right lever.
-
-## Notes
-- `TBshadow.md` exists but focuses on a separate shadowmask artifact, not this
-  depth culling/upscaling issue.

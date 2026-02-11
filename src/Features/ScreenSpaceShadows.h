@@ -64,8 +64,12 @@ public:
 	ConstantBuffer* raymarchCB = nullptr;
 	ID3D11ComputeShader* raymarchCS = nullptr;
 	ID3D11ComputeShader* raymarchRightCS = nullptr;
+	ID3D11ComputeShader* raymarchPerEyeCS = nullptr;
+	ID3D11ComputeShader* raymarchRightPerEyeCS = nullptr;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
+	Texture2D* screenSpaceShadowsTextureEye[2] = { nullptr, nullptr };
+	Texture2D* screenSpaceShadowsDepthEye[2] = { nullptr, nullptr };
 
 	virtual void SetupResources() override;
 
@@ -74,6 +78,8 @@ public:
 	virtual void ClearShaderCache() override;
 	ID3D11ComputeShader* GetComputeRaymarch();
 	ID3D11ComputeShader* GetComputeRaymarchRight();
+	ID3D11ComputeShader* GetComputeRaymarchPerEye();
+	ID3D11ComputeShader* GetComputeRaymarchRightPerEye();
 
 	virtual void Prepass() override;
 

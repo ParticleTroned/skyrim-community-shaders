@@ -255,7 +255,7 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	bool is_edge = false;
 	bool skip_pixel = false;
 
-#	if defined(RIGHT)
+#	if defined(RIGHT) && !defined(SSS_PER_EYE)
 	pixel_xy.x += 1.0 / inParameters.InvDepthTextureSize.x;
 #	endif
 
@@ -285,7 +285,7 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 		// So this fallback will use a manual uv offset instead
 		half2 coord = read_xy * inParameters.InvDepthTextureSize * inParameters.DynamicRes;
 		half2 coord_with_offset = (read_xy + offset_xy) * inParameters.InvDepthTextureSize * inParameters.DynamicRes;
-#	if defined(VR)
+#	if defined(VR) && !defined(SSS_PER_EYE)
 		coord *= half2(0.5, 1.0);
 		coord_with_offset *= half2(0.5, 1.0);
 #	endif

@@ -25,6 +25,8 @@ Texture2D<uint> StencilTex : register(t2);
 cbuffer JitterCB : register(b0)
 {
 	float2 jitter;
+	float useWideKernel;
+	float pad0;
 };
 
 float SampleMinDepth2x2(float2 uv)
@@ -58,6 +60,24 @@ float SampleMinDepth3x3(float2 uv)
 	return minDepth;
 }
 
+float2 ClampToDynamicResBounds(float2 uv, float2 screenPos)
+{
+	float2 minValue = float2(0.0, 0.0);
+	float2 maxValue = FrameBuffer::DynamicResolutionParams1.xy;
+
+#	if defined(VR)
+	// Keep sampling within the current eye after jitter removal.
+	// This avoids cross-eye gathers at the stereo seam.
+	bool isRight = screenPos.x >= 0.5;
+	float minFactor = isRight ? 1.0 : 0.0;
+	float maxFactor = isRight ? 2.0 : 1.0;
+	minValue.x = 0.5 * (FrameBuffer::DynamicResolutionParams2.z * minFactor);
+	maxValue.x = 0.5 * (FrameBuffer::DynamicResolutionParams2.z * maxFactor);
+#	endif
+
+	return clamp(uv, minValue, maxValue);
+}
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -67,8 +87,8 @@ PS_OUTPUT main(PS_INPUT input)
 	// Remove jitter offset to get the correct sampling coordinates
 	float2 uv = originalUV - (jitter * SharedData::BufferDim.zw);
 
-	// Clamp within bounds
-	uv = clamp(uv, 0.0, FrameBuffer::DynamicResolutionParams1.xy);
+	// Clamp within bounds (VR: preserve per-eye bounds).
+	uv = ClampToDynamicResBounds(uv, input.TexCoord);
 
 #	if defined(VR)
 	uint4 stencilSamples = StencilTex.GatherRed(LinearSampler, uv);
@@ -87,11 +107,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float depthOut = bilinearDepth;
 #	if defined(VR)
-	float2 drScale = FrameBuffer::DynamicResolutionParams1.xy;
-	float minScale = min(drScale.x, drScale.y);
-	float upscaleRatio = 1.0f / max(minScale, 1e-6f);
-
-	float conservativeDepth = (upscaleRatio > 1.5f) ? SampleMinDepth3x3(uv) : SampleMinDepth2x2(uv);
+	float conservativeDepth = (useWideKernel > 0.5f) ? SampleMinDepth3x3(uv) : SampleMinDepth2x2(uv);
 	depthOut = conservativeDepth;
 #	endif
 

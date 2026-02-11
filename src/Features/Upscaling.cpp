@@ -24,7 +24,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sharpnessFSR,
 	sharpnessDLSS,
 	DLSSPreset,
-	vrPerEyeDLSS);
+	vrPerEyeDLSS,
+	vrPerEyeDLSSUserOverride);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -235,7 +236,9 @@ void Upscaling::DrawSettings()
 				settings.DLSSPreset = std::min(settings.DLSSPreset, 2u);
 				ImGui::SliderInt("DLSS Preset", (int*)&settings.DLSSPreset, 0, 2, presets[settings.DLSSPreset]);
 
-				ImGui::Checkbox("DLSS Per-Eye (VR)", &settings.vrPerEyeDLSS);
+				if (ImGui::Checkbox("DLSS Per-Eye (VR)", &settings.vrPerEyeDLSS)) {
+					settings.vrPerEyeDLSSUserOverride = true;
+				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("A/B toggle: per-eye DLSS evaluation. Can affect SSS alignment.");
 				}
@@ -434,6 +437,9 @@ void Upscaling::SaveSettings(json& o_json)
 void Upscaling::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	if (!settings.vrPerEyeDLSSUserOverride) {
+		settings.vrPerEyeDLSS = true;
+	}
 	if (!o_json.contains("DLSSPreset") && o_json.contains("presetDLSS")) {
 		// Map newer presetDLSS values back to 3.10.4 F/J/K.
 		const uint preset = o_json["presetDLSS"].get<uint>();

@@ -138,11 +138,38 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRightPerEye()
 void ScreenSpaceShadows::DrawShadows()
 {
 	ZoneScoped;
-	auto state = globals::state;
-	TracyD3D11Zone(state->tracyCtx, "Screen Space Shadows");
+	TracyD3D11Zone(globals::state->tracyCtx, "Screen Space Shadows");
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+
+	// Ensure output texture matches current shadow mask size (can change across modes).
+	auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+	D3D11_TEXTURE2D_DESC maskDesc{};
+	shadowMask.texture->GetDesc(&maskDesc);
+	if (!screenSpaceShadowsTexture || screenSpaceShadowsTexture->desc.Width != maskDesc.Width ||
+		screenSpaceShadowsTexture->desc.Height != maskDesc.Height) {
+		delete screenSpaceShadowsTexture;
+		screenSpaceShadowsTexture = nullptr;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+
+		shadowMask.SRV->GetDesc(&srvDesc);
+
+		D3D11_TEXTURE2D_DESC texDesc = maskDesc;
+		texDesc.Format = DXGI_FORMAT_R8_UNORM;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		srvDesc.Format = texDesc.Format;
+		uavDesc.Format = texDesc.Format;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		uavDesc.Texture2D.MipSlice = 0;
+
+		screenSpaceShadowsTexture = new Texture2D(texDesc);
+		screenSpaceShadowsTexture->CreateSRV(srvDesc);
+		screenSpaceShadowsTexture->CreateUAV(uavDesc);
+	}
 
 	auto accumulator = *globals::game::currentAccumulator.get();
 	auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
@@ -157,7 +184,18 @@ void ScreenSpaceShadows::DrawShadows()
 	float4 lightProjection = DirectX::SimpleMath::Vector4::Transform(lightProjectionBase, viewProjMat);
 	float lightProjectionF[4] = { lightProjection.x, lightProjection.y, lightProjection.z, lightProjection.w };
 
-	float2 size = Util::ConvertToDynamic(state->screenSize);
+	auto viewport = globals::game::graphicsState;
+	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
+	auto& upscaler = globals::features::upscaling;
+	bool forceDLAAFullRes = upscaler.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
+		upscaler.settings.qualityMode == 0;
+
+	auto depthIndex = RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY;
+	auto depth = renderer->GetDepthStencilData().depthStencils[depthIndex];
+	D3D11_TEXTURE2D_DESC depthDesc{};
+	depth.texture->GetDesc(&depthDesc);
+
+	float2 size = Util::ConvertToDynamic(globals::state->screenSize);
 	int viewportSize[2] = { (int)size.x, (int)size.y };
 
 	if (REL::Module::IsVR())
@@ -166,15 +204,21 @@ void ScreenSpaceShadows::DrawShadows()
 	int minRenderBounds[2] = { 0, 0 };
 	int maxRenderBounds[2] = { viewportSize[0], viewportSize[1] };
 
-	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-
 	context->CSSetSamplers(0, 1, &pointBorderSampler);
 
 	auto buffer = raymarchCB->CB();
 	context->CSSetConstantBuffers(1, 1, &buffer);
 
-	auto viewport = globals::game::graphicsState;
-	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
+	if (forceDLAAFullRes) {
+		viewportSize[0] = (int)depthDesc.Width;
+		viewportSize[1] = (int)depthDesc.Height;
+		if (REL::Module::IsVR())
+			viewportSize[0] /= 2;
+		minRenderBounds[0] = 0;
+		minRenderBounds[1] = 0;
+		maxRenderBounds[0] = viewportSize[0];
+		maxRenderBounds[1] = viewportSize[1];
+	}
 
 	auto dispatchEye = [&](uint32_t eyeIndex,
 		ID3D11ShaderResourceView* depthSRV,
@@ -190,6 +234,60 @@ void ScreenSpaceShadows::DrawShadows()
 		}
 
 		auto dispatchList = Bend::BuildDispatchList(lightProjectionF, viewportSize, minRenderBounds, maxRenderBounds);
+		if (eyeIndex == 0) {
+			static uint32_t lastDepthW = 0;
+			static uint32_t lastDepthH = 0;
+			static uint32_t lastMaskW = 0;
+			static uint32_t lastMaskH = 0;
+			static int lastViewportW = 0;
+			static int lastViewportH = 0;
+			static int lastDispatchCount = -1;
+			static bool lastPerEye = false;
+			static bool lastDLAA = false;
+			static float lastDynX = -1.0f;
+			static float lastDynY = -1.0f;
+			static int lastDepthIndex = -1;
+
+			const int depthIndexValue = static_cast<int>(depthIndex);
+			const bool changed =
+				lastDepthW != depthDesc.Width ||
+				lastDepthH != depthDesc.Height ||
+				lastMaskW != maskDesc.Width ||
+				lastMaskH != maskDesc.Height ||
+				lastViewportW != viewportSize[0] ||
+				lastViewportH != viewportSize[1] ||
+				lastDispatchCount != dispatchList.DispatchCount ||
+				lastPerEye != perEye ||
+				lastDLAA != forceDLAAFullRes ||
+				lastDynX != dynamicRes.x ||
+				lastDynY != dynamicRes.y ||
+				lastDepthIndex != depthIndexValue;
+
+			if (changed) {
+				logger::info("[SSS] depth={}x{} mask={}x{} viewport={}x{} dyn={:.3f},{:.3f} dispatch={} perEye={} DLAA={} depthIndex={}",
+					depthDesc.Width, depthDesc.Height,
+					maskDesc.Width, maskDesc.Height,
+					viewportSize[0], viewportSize[1],
+					dynamicRes.x, dynamicRes.y,
+					dispatchList.DispatchCount,
+					perEye ? 1 : 0,
+					forceDLAAFullRes ? 1 : 0,
+					depthIndexValue);
+
+				lastDepthW = depthDesc.Width;
+				lastDepthH = depthDesc.Height;
+				lastMaskW = maskDesc.Width;
+				lastMaskH = maskDesc.Height;
+				lastViewportW = viewportSize[0];
+				lastViewportH = viewportSize[1];
+				lastDispatchCount = dispatchList.DispatchCount;
+				lastPerEye = perEye;
+				lastDLAA = forceDLAAFullRes;
+				lastDynX = dynamicRes.x;
+				lastDynY = dynamicRes.y;
+				lastDepthIndex = depthIndexValue;
+			}
+		}
 
 		for (int i = 0; i < dispatchList.DispatchCount; i++) {
 			TracyD3D11Zone(globals::state->tracyCtx, eyeIndex == 0 ? "SSS - Ray March" : "SSS - Ray March (VR Right Eye)");
@@ -232,11 +330,11 @@ void ScreenSpaceShadows::DrawShadows()
 		auto dispatchList = Bend::BuildDispatchList(lightProjectionF, viewportSize, minRenderBounds, maxRenderBounds);
 
 		if (globals::features::upscaling.IsUpscalingActive()) {
-			D3D11_TEXTURE2D_DESC depthDesc{};
-			depth.texture->GetDesc(&depthDesc);
 			dynamicRes.x = depthDesc.Width > 0 ? (float)viewportSize[0] / (float)depthDesc.Width : 1.0f;
 			dynamicRes.y = depthDesc.Height > 0 ? (float)viewportSize[1] / (float)depthDesc.Height : 1.0f;
 		}
+		if (forceDLAAFullRes)
+			dynamicRes = float2(1.0f, 1.0f);
 
 		for (int i = 0; i < dispatchList.DispatchCount; i++) {
 			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Ray March");
@@ -268,11 +366,8 @@ void ScreenSpaceShadows::DrawShadows()
 		}
 	} else {
 		// Ensure per-eye output textures exist and match current size.
-		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
-		D3D11_TEXTURE2D_DESC maskDesc{};
-		shadowMask.texture->GetDesc(&maskDesc);
-		const uint32_t eyeOutWidth = maskDesc.Width / 2;
-		const uint32_t eyeOutHeight = maskDesc.Height;
+	const uint32_t eyeOutWidth = maskDesc.Width / 2;
+	const uint32_t eyeOutHeight = maskDesc.Height;
 
 		if (!screenSpaceShadowsTextureEye[0] || screenSpaceShadowsTextureEye[0]->desc.Width != eyeOutWidth ||
 			screenSpaceShadowsTextureEye[0]->desc.Height != eyeOutHeight) {
@@ -304,8 +399,6 @@ void ScreenSpaceShadows::DrawShadows()
 		}
 
 		// Ensure per-eye depth textures match current depth size.
-		D3D11_TEXTURE2D_DESC depthDesc{};
-		depth.texture->GetDesc(&depthDesc);
 		const uint32_t eyeDepthWidth = depthDesc.Width / 2;
 		const uint32_t eyeDepthHeight = depthDesc.Height;
 
@@ -340,6 +433,8 @@ void ScreenSpaceShadows::DrawShadows()
 		bool usePerEye = depthCombined && maskCombined;
 		usePerEye = usePerEye && screenSpaceShadowsTextureEye[0] && screenSpaceShadowsTextureEye[1];
 		usePerEye = usePerEye && screenSpaceShadowsDepthEye[0] && screenSpaceShadowsDepthEye[1];
+		if (forceDLAAFullRes)
+			usePerEye = false;
 
 		if (usePerEye) {
 			// Copy per-eye depth slices.
@@ -358,6 +453,8 @@ void ScreenSpaceShadows::DrawShadows()
 				dynamicRes.x = eyeDepthWidth > 0 ? (float)viewportSize[0] / (float)eyeDepthWidth : 1.0f;
 				dynamicRes.y = eyeDepthHeight > 0 ? (float)viewportSize[1] / (float)eyeDepthHeight : 1.0f;
 			}
+			if (forceDLAAFullRes)
+				dynamicRes = float2(1.0f, 1.0f);
 
 			// Left eye
 			{
@@ -397,6 +494,8 @@ void ScreenSpaceShadows::DrawShadows()
 				dynamicRes.x = depthDesc.Width > 0 ? (float)viewportSize[0] * 2.0f / (float)depthDesc.Width : 1.0f;
 				dynamicRes.y = depthDesc.Height > 0 ? (float)viewportSize[1] / (float)depthDesc.Height : 1.0f;
 			}
+			if (forceDLAAFullRes)
+				dynamicRes = float2(1.0f, 1.0f);
 
 			// Left eye (combined)
 			{

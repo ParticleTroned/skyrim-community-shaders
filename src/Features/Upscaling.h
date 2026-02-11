@@ -58,7 +58,8 @@ public:
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.0f;
 		uint DLSSPreset = 2;  // VR: 0=F (Fast), 1=J (Quality), 2=K (Ultra)
-		bool vrPerEyeDLSS = false;  // VR: per-eye DLSS path for A/B testing
+		bool vrPerEyeDLSS = true;  // VR: per-eye DLSS path for A/B testing
+		bool vrPerEyeDLSSUserOverride = false;  // Tracks if user explicitly toggled per-eye setting
 	};
 
 	Settings settings;

@@ -26,7 +26,7 @@ public:
 
 	ffx::Context swapChainContext{};
 	ffx::Context frameGenContext;
-	FfxFsr3Context fsrContext[2];
+	FfxFsr3Context fsrContext;
 
 	bool featureFSR3FG = false;
 
@@ -43,6 +43,8 @@ public:
 	void CreateFSRResources();
 
 	void DestroyFSRResources();
+
+	float2 GetInputResolutionScale(uint32_t outputWidth, uint32_t outputHeight, uint32_t qualityMode);
 
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
 

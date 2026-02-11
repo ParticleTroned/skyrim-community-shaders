@@ -130,9 +130,12 @@ void VR::PostPostLoad()
 
 void VR::DataLoaded()
 {
-	// Initialize occlusion culling from user settings.
+	// Initialize occlusion culling from user settings using current interior/exterior state if available.
 	// Upscaling compatibility is handled in the upscaling/TB paths.
-	bool desired = settings.EnableDepthBufferCullingExterior;
+	const auto* tes = RE::TES::GetSingleton();
+	hasLastInteriorCellState = tes != nullptr;
+	lastInteriorCellState = hasLastInteriorCellState && tes->interiorCell;
+	bool desired = lastInteriorCellState ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
 	UpdateDepthBufferCulling(desired);
 
 	if (gMinOccludeeBoxExtent) {
@@ -144,13 +147,17 @@ void VR::DataLoaded()
 
 void VR::EarlyPrepass()
 {
-	// Keep culling state in sync with interior/exterior setting each frame.
-	bool desired = RE::TES::GetSingleton()->interiorCell ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
-	UpdateDepthBufferCulling(desired);
+	// Event-driven culling updates: only apply when transitioning between interior/exterior.
+	const auto* tes = RE::TES::GetSingleton();
+	if (!tes) {
+		return;
+	}
 
-	// Keep the runtime value synced even if engine-side code writes over it.
-	if (gMinOccludeeBoxExtent && *gMinOccludeeBoxExtent != settings.MinOccludeeBoxExtent) {
-		*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+	const bool inInterior = tes->interiorCell;
+	if (!hasLastInteriorCellState || inInterior != lastInteriorCellState) {
+		hasLastInteriorCellState = true;
+		lastInteriorCellState = inInterior;
+		UpdateDepthBufferCulling(inInterior ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior);
 	}
 }
 
@@ -634,12 +641,6 @@ namespace
 				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
 			}
 
-			if (vr.gDepthBufferCulling) {
-				ImGui::Text("Runtime Depth Culling: %s", *vr.gDepthBufferCulling ? "ON" : "OFF");
-			}
-			if (vr.gMinOccludeeBoxExtent) {
-				ImGui::Text("Runtime Min Occludee: %.1f", *vr.gMinOccludeeBoxExtent);
-			}
 		}
 	}
 

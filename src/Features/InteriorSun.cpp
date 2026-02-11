@@ -180,7 +180,7 @@ void InteriorSun::PopulateReplacementJobArrays(RE::TESObjectCELL* cell, const RE
 	}
 
 	const auto playerPos = RE::PlayerCharacter::GetSingleton()->GetPosition();
-	auto lightDir = -dirLight->GetShadowDirectionalLightRuntimeData().sunVector;
+	auto lightDir = -dirLight->GetShadowDirectionalLightRuntimeData().lightDirection;
 	lightDir.Unitize();
 
 	// Add extra rooms and portals that are in the direction of the sun

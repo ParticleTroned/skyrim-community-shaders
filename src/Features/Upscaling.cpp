@@ -229,7 +229,9 @@ void Upscaling::DrawSettings()
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 
 			const char* presets[] = { "Default", "Preset J", "Preset F", "Preset L", "Preset M" };
-			ImGui::Combo("DLSS Model Preset", (int*)&settings.presetDLSS, presets, 5);
+			int presetIndex = std::clamp(static_cast<int>(settings.presetDLSS), 0, 4);
+			ImGui::SliderInt("DLSS Model Preset", (int*)&settings.presetDLSS, 0, 4, presets[presetIndex]);
+			settings.presetDLSS = std::clamp(settings.presetDLSS, 0u, 4u);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Choose which DLSS AI model preset to use.");
 				ImGui::Text("Each model offers different visual quality, performance, and motion stability.");

@@ -300,15 +300,13 @@ namespace globals
 				return false;
 			}
 
-			using enum SIE::ShaderCache::UtilityShaderFlags;
 			const uint64_t descriptor = globalState->currentPixelDescriptor;
-			const uint64_t mask =
-				static_cast<uint64_t>(RenderShadowmask) |
-				static_cast<uint64_t>(RenderShadowmaskSpot) |
-				static_cast<uint64_t>(RenderShadowmaskPb) |
-				static_cast<uint64_t>(RenderShadowmaskDpb);
-
-			return (descriptor & mask) != 0;
+			// Base + DPB shadowmask descriptors.
+			// 0x262002 = RENDER_SHADOWMASK + TEXTURE + RENDER_DEPTH + DEPTH_WRITE_DECALS + DEBUG_SHADOW_SPLIT
+			// 0x1062002 = RENDER_SHADOWMASKDPB + TEXTURE + RENDER_DEPTH + DEPTH_WRITE_DECALS + DEBUG_SHADOW_SPLIT
+			constexpr uint64_t kShadowmaskBaseDescriptor = 0x262002;
+			constexpr uint64_t kShadowmaskDpbDescriptor = 0x1062002;
+			return descriptor == kShadowmaskBaseDescriptor || descriptor == kShadowmaskDpbDescriptor;
 		}
 
 		bool ShouldOverrideShadowmaskDepth()
@@ -341,7 +339,10 @@ namespace globals
 				}
 
 				auto& terrainBlending = globals::features::terrainBlending;
-				auto* overrideSrv = terrainBlending.blendedDepthTexture ? terrainBlending.blendedDepthTexture->srv.get() : nullptr;
+				auto* overrideSrv = terrainBlending.blendedDepthTexture16 ? terrainBlending.blendedDepthTexture16->srv.get() : nullptr;
+				if (!overrideSrv && terrainBlending.blendedDepthTexture) {
+					overrideSrv = terrainBlending.blendedDepthTexture->srv.get();
+				}
 				if (!overrideSrv) {
 					auto* renderer = globals::game::renderer;
 					if (!renderer) {

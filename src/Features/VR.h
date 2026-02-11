@@ -494,6 +494,8 @@ public:
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;
 	float* gMinOccludeeBoxExtent = nullptr;
+	bool hasLastInteriorCellState = false;
+	bool lastInteriorCellState = false;
 
 	// VR Controller state and logging
 	struct VRControllerEventLog

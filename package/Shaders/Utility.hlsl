@@ -279,13 +279,6 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if defined(OFFSET_DEPTH)
 	float bias = 1.25;
-#		if defined(VR)
-	if (TerrainDepthBiasParams.x > 0.5) {
-		float depthDist = abs(vsout.PositionCS.w);
-		float t = saturate((depthDist - 256.0) / (2048.0 - 256.0));
-		bias = lerp(1.25, 0.1, t);
-	}
-#		endif
 	vsout.PositionCS.z += bias;
 #	endif
 

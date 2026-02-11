@@ -315,41 +315,27 @@ void Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t width)
 	}
 	dlssOptions.useAutoExposure = sl::Boolean::eTrue;
 
-	bool useCustomPreset = true;
-	sl::DLSSPreset customPreset = sl::DLSSPreset::ePresetJ;
-	switch (globals::features::upscaling.settings.presetDLSS) {
+	// Set DLSS preset based on VR mode (3.10.4 naming)
+	sl::DLSSPreset preset = sl::DLSSPreset::ePresetK;  // Default
+	switch (globals::features::upscaling.settings.DLSSPreset) {
+	case 0:
+		preset = sl::DLSSPreset::ePresetF;
+		break;
 	case 1:
-		customPreset = sl::DLSSPreset::ePresetJ;
+		preset = sl::DLSSPreset::ePresetJ;
 		break;
 	case 2:
-		customPreset = sl::DLSSPreset::ePresetF;
-		break;
-	case 3:
-		customPreset = sl::DLSSPreset::ePresetL;
-		break;
-	case 4:
-		customPreset = sl::DLSSPreset::ePresetM;
-		break;
 	default:
-		useCustomPreset = false;
+		preset = sl::DLSSPreset::ePresetK;
 		break;
 	}
 
-	if (useCustomPreset) {
-		dlssOptions.dlaaPreset = customPreset;
-		dlssOptions.ultraQualityPreset = customPreset;
-		dlssOptions.qualityPreset = customPreset;
-		dlssOptions.balancedPreset = customPreset;
-		dlssOptions.performancePreset = customPreset;
-		dlssOptions.ultraPerformancePreset = customPreset;
-	} else {
-		dlssOptions.dlaaPreset = sl::DLSSPreset::ePresetJ;
-		dlssOptions.ultraQualityPreset = sl::DLSSPreset::ePresetJ;
-		dlssOptions.qualityPreset = sl::DLSSPreset::ePresetM;
-		dlssOptions.balancedPreset = sl::DLSSPreset::ePresetM;
-		dlssOptions.performancePreset = sl::DLSSPreset::ePresetM;
-		dlssOptions.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
-	}
+	dlssOptions.dlaaPreset = preset;
+	dlssOptions.ultraQualityPreset = preset;
+	dlssOptions.qualityPreset = preset;
+	dlssOptions.balancedPreset = preset;
+	dlssOptions.performancePreset = preset;
+	dlssOptions.ultraPerformancePreset = preset;
 
 	dlssOptions.preExposure = 1.0f;
 	dlssOptions.sharpness = 0.0f;

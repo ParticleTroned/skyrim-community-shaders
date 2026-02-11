@@ -301,12 +301,12 @@ namespace globals
 			}
 
 			const uint64_t descriptor = globalState->currentPixelDescriptor;
-			// Base + DPB shadowmask descriptors.
-			// 0x262002 = RENDER_SHADOWMASK + TEXTURE + RENDER_DEPTH + DEPTH_WRITE_DECALS + DEBUG_SHADOW_SPLIT
-			// 0x1062002 = RENDER_SHADOWMASKDPB + TEXTURE + RENDER_DEPTH + DEPTH_WRITE_DECALS + DEBUG_SHADOW_SPLIT
-			constexpr uint64_t kShadowmaskBaseDescriptor = 0x262002;
-			constexpr uint64_t kShadowmaskDpbDescriptor = 0x1062002;
-			return descriptor == kShadowmaskBaseDescriptor || descriptor == kShadowmaskDpbDescriptor;
+			constexpr uint64_t kUtilityShadowmaskFlags =
+				static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask) |
+				static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) |
+				static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb) |
+				static_cast<uint64_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskDpb);
+			return (descriptor & kUtilityShadowmaskFlags) != 0;
 		}
 
 		bool ShouldOverrideShadowmaskDepth()

@@ -23,7 +23,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
-	presetDLSS);
+	DLSSPreset);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -228,15 +228,11 @@ void Upscaling::DrawSettings()
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 
-			const char* presets[] = { "Default", "Preset J", "Preset F", "Preset L", "Preset M" };
-			int presetIndex = std::clamp(static_cast<int>(settings.presetDLSS), 0, 4);
-			ImGui::SliderInt("DLSS Model Preset", (int*)&settings.presetDLSS, 0, 4, presets[presetIndex]);
-			settings.presetDLSS = std::clamp(settings.presetDLSS, 0u, 4u);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Choose which DLSS AI model preset to use.");
-				ImGui::Text("Each model offers different visual quality, performance, and motion stability.");
-				ImGui::Text("Set to 'Default' for automatic selection based on your Upscale Preset and hardware.");
-				ImGui::Text("Changing this setting requires a restart to take effect.");
+			// VR-only DLSS preset selection (3.10.4 naming)
+			if (globals::game::isVR) {
+				const char* presets[] = { "F (Fast)", "J (Quality)", "K (Ultra)" };
+				settings.DLSSPreset = std::min(settings.DLSSPreset, 2u);
+				ImGui::SliderInt("DLSS Preset", (int*)&settings.DLSSPreset, 0, 2, presets[settings.DLSSPreset]);
 			}
 		}
 	}
@@ -432,8 +428,20 @@ void Upscaling::SaveSettings(json& o_json)
 void Upscaling::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	if (!o_json.contains("presetDLSS") && o_json.contains("DLSSPreset")) {
-		settings.presetDLSS = o_json["DLSSPreset"].get<uint>();
+	if (!o_json.contains("DLSSPreset") && o_json.contains("presetDLSS")) {
+		// Map newer presetDLSS values back to 3.10.4 F/J/K.
+		const uint preset = o_json["presetDLSS"].get<uint>();
+		switch (preset) {
+		case 1:  // J
+			settings.DLSSPreset = 1;
+			break;
+		case 2:  // F
+			settings.DLSSPreset = 0;
+			break;
+		default:  // Default/L/M -> K
+			settings.DLSSPreset = 2;
+			break;
+		}
 	}
 
 	// Sanitize loaded settings to ensure enum indices are valid
@@ -446,9 +454,9 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, enumCount ? enumCount - 1 : 0);
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
 	}
-	if (settings.presetDLSS > 4) {
-		logger::warn("[Upscaling] Loaded presetDLSS {} out of range, resetting to 0 (Default)", settings.presetDLSS);
-		settings.presetDLSS = 0;
+	if (settings.DLSSPreset > 2) {
+		logger::warn("[Upscaling] Loaded DLSSPreset {} out of range, resetting to 2 (K)", settings.DLSSPreset);
+		settings.DLSSPreset = 2;
 	}
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {

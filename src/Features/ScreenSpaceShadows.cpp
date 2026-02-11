@@ -1,6 +1,7 @@
 ﻿#include "ScreenSpaceShadows.h"
 
 #include "State.h"
+#include "Features/Upscaling.h"
 
 #pragma warning(push)
 #pragma warning(disable: 4838 4244)
@@ -131,6 +132,18 @@ void ScreenSpaceShadows::DrawShadows()
 	auto viewport = globals::game::graphicsState;
 
 	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
+	if (globals::features::upscaling.IsUpscalingActive()) {
+		D3D11_TEXTURE2D_DESC depthDesc{};
+		depth.texture->GetDesc(&depthDesc);
+		if (globals::game::isVR) {
+			// Match combined stereo depth size: X uses half-width in shader, so scale by 2.
+			dynamicRes.x = depthDesc.Width > 0 ? (float)viewportSize[0] * 2.0f / (float)depthDesc.Width : 1.0f;
+			dynamicRes.y = depthDesc.Height > 0 ? (float)viewportSize[1] / (float)depthDesc.Height : 1.0f;
+		} else {
+			dynamicRes.x = depthDesc.Width > 0 ? (float)viewportSize[0] / (float)depthDesc.Width : 1.0f;
+			dynamicRes.y = depthDesc.Height > 0 ? (float)viewportSize[1] / (float)depthDesc.Height : 1.0f;
+		}
+	}
 
 	for (int i = 0; i < dispatchList.DispatchCount; i++) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSS - Ray March");

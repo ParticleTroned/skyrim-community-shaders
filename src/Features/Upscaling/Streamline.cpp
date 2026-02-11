@@ -210,14 +210,56 @@ void Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		slGetNewFrameToken(frameToken, &globals::state->frameCount);
 	}
 
-	// In VR, we need to set constants for each viewport/eye separately
-	// In non-VR, this is called once per frame
 	auto state = globals::state;
-
 	sl::Constants slConstants = {};
 
-	// Calculate aspect ratio for the SINGLE EYE
-	float eyeWidth = state->screenSize.x * (globals::game::isVR ? 0.5f : 1.0f);
+	const bool usePerEyeVR = globals::game::isVR && globals::features::upscaling.settings.vrPerEyeDLSS;
+
+	if (!usePerEyeVR) {
+		if (globals::game::isVR) {
+			slConstants.cameraAspectRatio = (state->screenSize.x * 0.5f) / state->screenSize.y;
+		} else {
+			slConstants.cameraAspectRatio = state->screenSize.x / state->screenSize.y;
+		}
+
+		slConstants.cameraFOV = Util::GetVerticalFOVRad();
+		slConstants.cameraNear = *globals::game::cameraNear;
+		slConstants.cameraFar = *globals::game::cameraFar;
+
+		auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+		auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered().Transpose();
+
+		slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
+		slConstants.cameraPinholeOffset = { 0.f, 0.f };
+		slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
+		slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
+		slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
+		slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust();
+		slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
+		slConstants.depthInverted = sl::Boolean::eFalse;
+
+		recalculateCameraMatrices(slConstants);
+
+		auto& upscaling = globals::features::upscaling;
+		auto jitter = upscaling.jitter;
+		slConstants.jitterOffset = { -jitter.x, -jitter.y };
+		slConstants.reset = sl::Boolean::eFalse;
+
+		slConstants.mvecScale = { (globals::game::isVR ? 0.5f : 1.0f), 1.0f };
+		slConstants.motionVectors3D = sl::Boolean::eFalse;
+		slConstants.motionVectorsInvalidValue = FLT_MIN;
+		slConstants.orthographicProjection = sl::Boolean::eFalse;
+		slConstants.motionVectorsDilated = sl::Boolean::eFalse;
+		slConstants.motionVectorsJittered = sl::Boolean::eFalse;
+
+		if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
+			logger::error("[Streamline] Could not set constants");
+		}
+		return;
+	}
+
+	// Per-eye path (VR only).
+	float eyeWidth = state->screenSize.x * 0.5f;
 	slConstants.cameraAspectRatio = eyeWidth / state->screenSize.y;
 
 	slConstants.cameraFOV = Util::GetVerticalFOVRad();
@@ -236,24 +278,19 @@ void Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
-	if (globals::game::isVR) {
-		// VR: compute clipToCameraView / clipToPrevClip / prevClipToClip from Skyrim's per-eye matrices.
-		// recalculateCameraMatrices() uses a single static prev-frame slot -- unusable for two viewports.
-		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
+	// VR: compute clipToCameraView / clipToPrevClip / prevClipToClip from per-eye matrices.
+	sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
 
-		auto currViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Transpose();
-		auto prevViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex).Transpose();
+	auto currViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Transpose();
+	auto prevViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex).Transpose();
 
-		sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
-		sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
+	sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
+	sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
 
-		sl::float4x4 invCurrViewProj;
-		sl::matrixFullInvert(invCurrViewProj, currViewProjSL);
-		sl::matrixMul(slConstants.clipToPrevClip, invCurrViewProj, prevViewProjSL);
-		sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
-	} else {
-		recalculateCameraMatrices(slConstants);
-	}
+	sl::float4x4 invCurrViewProj;
+	sl::matrixFullInvert(invCurrViewProj, currViewProjSL);
+	sl::matrixMul(slConstants.clipToPrevClip, invCurrViewProj, prevViewProjSL);
+	sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
 
 	auto& upscaling = globals::features::upscaling;
 	auto jitter = upscaling.jitter;
@@ -426,10 +463,8 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto screenSize = state->screenSize;
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 
-	// VR: Combined-buffer mode with extent offsets causes temporal ghosting on the right eye
-	// because DLSS's internal history buffers use extent offsets as indices.
-	// Per-eye isolation with extents at {0,0} is required.
-	if (globals::game::isVR) {
+	// VR per-eye path (disabled by default for A/B testing)
+	if (globals::game::isVR && globals::features::upscaling.settings.vrPerEyeDLSS) {
 		auto& upscaling = globals::features::upscaling;
 		uint32_t eyeWidthOut = (uint32_t)(screenSize.x / 2);
 		uint32_t eyeHeightOut = (uint32_t)screenSize.y;
@@ -452,14 +487,35 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		upscaling.FinalizePerEyeOutputs(a_upscalingTexture);
 	} else {
-		// Non-VR: Simple full-texture upscale
-		sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
-		sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
+		// Combined-buffer path (dlss-style)
+		CheckFrameConstants(viewport, 0);
+		SetDLSSOptions(viewport, (uint)screenSize.x);
 
-		EvaluateDLSS(viewport, 0,
-			a_upscalingTexture, a_upscalingTexture,
-			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
-			extentIn, extentOut, (uint)screenSize.x);
+		sl::Extent lowResExtent{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
+		sl::Extent fullExtent{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
+
+		sl::Resource colorIn = { sl::ResourceType::eTex2d, a_upscalingTexture, 0 };
+		sl::Resource colorOut = { sl::ResourceType::eTex2d, a_upscalingTexture, 0 };
+		sl::Resource depth = { sl::ResourceType::eTex2d, depthTexture.texture, 0 };
+		sl::Resource mvec = { sl::ResourceType::eTex2d, a_motionVectors, 0 };
+
+		sl::ResourceTag colorInTag = sl::ResourceTag{ &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &lowResExtent };
+		sl::ResourceTag colorOutTag = sl::ResourceTag{ &colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &fullExtent };
+		sl::ResourceTag depthTag = sl::ResourceTag{ &depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
+		sl::ResourceTag mvecTag = sl::ResourceTag{ &mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
+
+		sl::Resource reactiveMask = { sl::ResourceType::eTex2d, a_reactiveMask, 0 };
+		sl::ResourceTag reactiveMaskTag = sl::ResourceTag{ &reactiveMask, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
+
+		sl::Resource transparencyCompositionMask = { sl::ResourceType::eTex2d, a_transparencyCompositionMask, 0 };
+		sl::ResourceTag transparencyCompositionMaskTag = sl::ResourceTag{ &transparencyCompositionMask, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
+
+		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, reactiveMaskTag, transparencyCompositionMaskTag };
+		slSetTag(viewport, resourceTags, _countof(resourceTags), globals::d3d::context);
+
+		sl::ViewportHandle view(viewport);
+		const sl::BaseStructure* inputs[] = { &view };
+		slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), globals::d3d::context);
 	}
 }
 /**

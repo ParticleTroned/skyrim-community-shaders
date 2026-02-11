@@ -23,7 +23,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
-	DLSSPreset);
+	DLSSPreset,
+	vrPerEyeDLSS);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -233,6 +234,11 @@ void Upscaling::DrawSettings()
 				const char* presets[] = { "F (Fast)", "J (Quality)", "K (Ultra)" };
 				settings.DLSSPreset = std::min(settings.DLSSPreset, 2u);
 				ImGui::SliderInt("DLSS Preset", (int*)&settings.DLSSPreset, 0, 2, presets[settings.DLSSPreset]);
+
+				ImGui::Checkbox("DLSS Per-Eye (VR)", &settings.vrPerEyeDLSS);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("A/B toggle: per-eye DLSS evaluation. Can affect SSS alignment.");
+				}
 			}
 		}
 	}
@@ -1488,9 +1494,8 @@ void Upscaling::LoadUpscalingSDKs()
 
 void Upscaling::CheckFrameConstants()
 {
-	// In VR, constants are set per-eye in the Upscale() loop
-	// Skip the early call from DeferredPasses to avoid issues
-	if (globals::game::isVR)
+	// If using per-eye DLSS in VR, constants are set per-eye inside Streamline::Upscale.
+	if (globals::game::isVR && settings.vrPerEyeDLSS)
 		return;
 	streamline.CheckFrameConstants(streamline.viewport, 0);
 }

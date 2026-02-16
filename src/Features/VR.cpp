@@ -19,8 +19,6 @@
 #include <imgui_impl_dx11.h>
 #include <unordered_map>
 #include <windows.h>
-#include <winver.h>
-#pragma comment(lib, "version.lib")
 
 using AttachMode = VR::Settings::OverlayAttachMode;
 
@@ -87,21 +85,26 @@ void VR::RestoreDefaultSettings()
 
 void VR::SetupResources()
 {
-	// Detect OpenVR version and compatibility early to avoid CTDs
+	// Detect OpenVR runtime/version/compatibility early to avoid menu crashes.
 	DetectOpenVRInfo();
 	stereoOpt.SetupResources();
 
-	// Log OpenVR information
+	// Log OpenVR detection details for runtime diagnostics (SteamVR/OpenComposite).
 	if (openVRInfo.isAvailable) {
 		logger::info("OpenVR DLL detected:");
 		logger::info("  Path: {}", openVRInfo.dllPath);
 		logger::info("  Version: {}", openVRInfo.version);
 		logger::info("  Size: {} bytes", openVRInfo.fileSize);
 		logger::info("  Modified: {}", openVRInfo.modificationTime);
+		logger::info("  Runtime: {}", VRDetection::RuntimeTypeToString(openVRInfo.runtimeType));
+		logger::info("  Interface probing: {}", openVRInfo.probingSucceeded ? "Passed" : "Failed");
+		logger::info("    Overlay ({}): {}", vr::IVROverlay_Version, openVRInfo.hasOverlayInterface ? "Yes" : "No");
+		logger::info("    System ({}): {}", vr::IVRSystem_Version, openVRInfo.hasSystemInterface ? "Yes" : "No");
+		logger::info("    Compositor ({}): {}", vr::IVRCompositor_Version, openVRInfo.hasCompositorInterface ? "Yes" : "No");
 		logger::info("  Compatible: {}", openVRInfo.isCompatible ? "Yes" : "No");
 
 		if (!openVRInfo.isCompatible) {
-			logger::info("OpenVR version is incompatible.");
+			logger::info("OpenVR runtime is incompatible.");
 			logger::info("Community Shaders VR menus will be disabled for stability");
 		}
 	} else {
@@ -2490,95 +2493,24 @@ void VR::SetFixedOverlayToCurrentHMD()
 
 void VR::DetectOpenVRInfo()
 {
-	// Reset info
 	openVRInfo = {};
-
-	// Find the OpenVR DLL module
-	HMODULE hModule = GetModuleHandleA("openvr_api.dll");
-	if (!hModule) {
-		openVRInfo.isAvailable = false;
-		return;
-	}
-
-	openVRInfo.isAvailable = true;
-
-	// Get the full path to the DLL
-	char dllPath[MAX_PATH];
-	if (GetModuleFileNameA(hModule, dllPath, MAX_PATH) == 0) {
-		openVRInfo.isCompatible = false;
-		return;
-	}
-
-	openVRInfo.dllPath = dllPath;
-
-	// Get file version information
-	DWORD dwSize = GetFileVersionInfoSizeA(dllPath, nullptr);
-	if (dwSize > 0) {
-		std::vector<BYTE> buffer(dwSize);
-		if (GetFileVersionInfoA(dllPath, 0, dwSize, buffer.data())) {
-			VS_FIXEDFILEINFO* pFileInfo = nullptr;
-			UINT len = 0;
-			if (VerQueryValueA(buffer.data(), "\\", (LPVOID*)&pFileInfo, &len)) {
-				DWORD major = HIWORD(pFileInfo->dwFileVersionMS);
-				DWORD minor = LOWORD(pFileInfo->dwFileVersionMS);
-				DWORD build = HIWORD(pFileInfo->dwFileVersionLS);
-				DWORD revision = LOWORD(pFileInfo->dwFileVersionLS);
-				openVRInfo.version = std::format("{}.{}.{}.{}", major, minor, build, revision);
-			}
-		}
-	}
-
-	if (openVRInfo.version.empty()) {
-		openVRInfo.version = "Unknown";
-	}
-
-	// Get file size and timestamp
-	WIN32_FIND_DATAA findData;
-	HANDLE hFind = FindFirstFileA(dllPath, &findData);
-	if (hFind != INVALID_HANDLE_VALUE) {
-		FindClose(hFind);
-		ULARGE_INTEGER fileSize;
-		fileSize.LowPart = findData.nFileSizeLow;
-		fileSize.HighPart = findData.nFileSizeHigh;
-		openVRInfo.fileSize = fileSize.QuadPart;
-
-		// Convert file time to readable format
-		SYSTEMTIME st;
-		FileTimeToSystemTime(&findData.ftLastWriteTime, &st);
-		openVRInfo.modificationTime = std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
-			st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-	}
-
-	// Check compatibility
-	openVRInfo.isCompatible = IsOpenVRCompatible();
+	const auto result = VRDetection::Detect();
+	openVRInfo.isAvailable = result.isAvailable;
+	openVRInfo.isCompatible = result.isCompatible;
+	openVRInfo.dllPath = result.dllPath;
+	openVRInfo.version = result.version;
+	openVRInfo.fileSize = result.fileSize;
+	openVRInfo.modificationTime = result.modificationTime;
+	openVRInfo.hasOverlayInterface = result.hasOverlayInterface;
+	openVRInfo.hasSystemInterface = result.hasSystemInterface;
+	openVRInfo.hasCompositorInterface = result.hasCompositorInterface;
+	openVRInfo.runtimeType = result.runtimeType;
+	openVRInfo.probingSucceeded = result.probingSucceeded;
 }
 
 bool VR::IsOpenVRCompatible() const
 {
-	if (!openVRInfo.isAvailable) {
-		return false;
-	}
-
-	// Whitelist: Only allow explicitly known compatible versions
-	struct WhitelistedVersion
-	{
-		std::string version;
-		uint64_t fileSize;
-		std::string modificationTime;
-	};
-
-	static const std::vector<WhitelistedVersion> whitelist = {
-		{ "1.0.10.0", 598816, "2022-04-18 00:47:59" },
-		// Add more known compatible versions here
-	};
-
-	for (const auto& entry : whitelist) {
-		if (openVRInfo.version == entry.version) {
-			return true;
-		}
-	}
-
-	return false;  // Not compatible unless explicitly whitelisted
+	return globals::game::isVR && openVRInfo.isCompatible;
 }
 
 //=============================================================================

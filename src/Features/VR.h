@@ -3,6 +3,7 @@
 #include "OverlayFeature.h"
 #include "VRStereoOptimizations.h"
 #include "Utils/Input.h"
+#include "VR/OpenVRDetection.h"
 #include <algorithm>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
@@ -121,7 +122,7 @@ public:
 	//=============================================================================
 
 	virtual void DrawOverlay() override;
-	virtual bool IsOverlayVisible() const override { return openVRInfo.isCompatible && settings.kAutoHideSeconds > 0 && !globals::menu->IsEnabled; }
+	virtual bool IsOverlayVisible() const override { return IsOpenVRCompatible() && settings.kAutoHideSeconds > 0 && globals::menu && !globals::menu->IsEnabled; }
 
 	//=============================================================================
 	// SETTINGS STRUCTURE
@@ -411,11 +412,20 @@ public:
 	struct OpenVRInfo
 	{
 		bool isAvailable = false;
-		bool isCompatible = true;
+		bool isCompatible = false;
 		std::string dllPath;
 		std::string version;
 		uint64_t fileSize = 0;
 		std::string modificationTime;
+
+		// Interface probing results
+		bool hasOverlayInterface = false;
+		bool hasSystemInterface = false;
+		bool hasCompositorInterface = false;
+
+		// Runtime detection metadata
+		VRDetection::RuntimeType runtimeType = VRDetection::RuntimeType::Unknown;
+		bool probingSucceeded = false;
 	} openVRInfo;
 
 	RE::NiPoint3 savedPlayerWorldPos = RE::NiPoint3();  // Used for auto-reset distance check

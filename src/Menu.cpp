@@ -233,8 +233,6 @@ Menu::~Menu()
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
 	dxgiAdapter3 = nullptr;
-
-	globals::features::vr.DestroyOverlay();
 }
 
 void Menu::Load(json& o_json)
@@ -651,10 +649,6 @@ void Menu::Init()
 	}
 
 	BuildCategoryCounts();
-
-	if (globals::features::vr.IsOpenVRCompatible()) {
-		globals::features::vr.EnsureOverlayInitialized();
-	}
 
 	initialized = true;
 }

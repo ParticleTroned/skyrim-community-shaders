@@ -23,7 +23,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationForceEnable,
 	streamlineLogLevel,
 	sharpnessFSR,
-	sharpnessDLSS);
+	sharpnessDLSS,
+	DLSSPreset);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -226,6 +227,11 @@ void Upscaling::DrawSettings()
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+			if (globals::game::isVR) {
+				const char* presets[] = { "F (Fast)", "J (Quality)", "K (Ultra)" };
+				settings.DLSSPreset = std::min(settings.DLSSPreset, 2u);
+				ImGui::SliderInt("DLSS Preset", (int*)&settings.DLSSPreset, 0, 2, presets[settings.DLSSPreset]);
+			}
 		}
 	}
 
@@ -376,6 +382,7 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, enumCount ? enumCount - 1 : 0);
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
 	}
+	settings.DLSSPreset = std::min(settings.DLSSPreset, 2u);
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");

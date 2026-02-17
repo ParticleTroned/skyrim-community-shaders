@@ -289,12 +289,26 @@ void Streamline::SetDLSSOptions()
 	}
 	dlssOptions.useAutoExposure = sl::Boolean::eTrue;
 
-	dlssOptions.dlaaPreset = sl::DLSSPreset::ePresetJ;
-	dlssOptions.ultraQualityPreset = sl::DLSSPreset::ePresetJ;
-	dlssOptions.qualityPreset = sl::DLSSPreset::ePresetM;
-	dlssOptions.balancedPreset = sl::DLSSPreset::ePresetM;
-	dlssOptions.performancePreset = sl::DLSSPreset::ePresetM;
-	dlssOptions.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
+	sl::DLSSPreset preset = sl::DLSSPreset::ePresetK;
+	switch (globals::features::upscaling.settings.DLSSPreset) {
+	case 0:
+		preset = sl::DLSSPreset::ePresetF;
+		break;
+	case 1:
+		preset = sl::DLSSPreset::ePresetJ;
+		break;
+	case 2:
+	default:
+		preset = sl::DLSSPreset::ePresetK;
+		break;
+	}
+
+	dlssOptions.dlaaPreset = preset;
+	dlssOptions.ultraQualityPreset = preset;
+	dlssOptions.qualityPreset = preset;
+	dlssOptions.balancedPreset = preset;
+	dlssOptions.performancePreset = preset;
+	dlssOptions.ultraPerformancePreset = preset;
 
 	dlssOptions.preExposure = 1.0f;
 	dlssOptions.sharpness = 0.0f;

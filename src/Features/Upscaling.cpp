@@ -8,7 +8,6 @@
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/UI.h"
-#include "VR.h"
 #include <Windows.h>
 #include <algorithm>
 #include <cmath>

@@ -24,7 +24,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
-	DLSSPreset);
+	DLSSPreset,
+	DLAAMode);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -232,6 +233,11 @@ void Upscaling::DrawSettings()
 				settings.DLSSPreset = std::min(settings.DLSSPreset, 2u);
 				ImGui::SliderInt("DLSS Preset", (int*)&settings.DLSSPreset, 0, 2, presets[settings.DLSSPreset]);
 			}
+			if (settings.qualityMode == 0u) {
+				const char* dlaaModes[] = { "Classic", "Fast" };
+				settings.DLAAMode = std::min(settings.DLAAMode, 1u);
+				ImGui::SliderInt("DLAA Mode", (int*)&settings.DLAAMode, 0, 1, dlaaModes[settings.DLAAMode]);
+			}
 		}
 	}
 
@@ -383,6 +389,7 @@ void Upscaling::LoadSettings(json& o_json)
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
 	}
 	settings.DLSSPreset = std::min(settings.DLSSPreset, 2u);
+	settings.DLAAMode = std::min(settings.DLAAMode, 1u);
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");
@@ -460,6 +467,11 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	if (streamline.featureDLSS)
 		return (UpscaleMethod)settings.upscaleMethod;
 	return (UpscaleMethod)settings.upscaleMethodNoDLSS;
+}
+
+bool Upscaling::IsFastDLAAEnabled() const
+{
+	return GetUpscaleMethod() == UpscaleMethod::kDLSS && settings.qualityMode == 0u && settings.DLAAMode == 1u;
 }
 
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
@@ -1255,6 +1267,10 @@ void Upscaling::Upscale()
 			upscalingData.seamHalfWidthPx = 2.0f;
 			upscalingData.maskDepthThreshold = 1e-6f;
 			upscalingData.vrSeamHardening = globals::game::isVR ? 1.0f : 0.0f;
+			upscalingData.dlaaFastPath = IsFastDLAAEnabled() ? 1.0f : 0.0f;
+			upscalingData.pad0 = 0.0f;
+			upscalingData.pad1 = 0.0f;
+			upscalingData.pad2 = 0.0f;
 
 			upscalingDataCB->Update(upscalingData);
 			auto upscalingBuffer = upscalingDataCB->CB();

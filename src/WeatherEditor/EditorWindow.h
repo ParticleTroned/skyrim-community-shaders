@@ -82,6 +82,9 @@ public:
 	bool DrawGameHourSlider(const char* label = "Game Time", const char* format = "%.2f");
 	void DrawTimeControls();
 
+	// Check if ESC key should close the editor (no popups open)
+	bool ShouldHandleEscapeKey() const;
+
 	void DisableVanityCamera();
 	void RestoreVanityCamera();
 

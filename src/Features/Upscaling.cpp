@@ -10,6 +10,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <directx/d3dx12.h>
 #include <format>
 
@@ -1248,22 +1249,34 @@ void Upscaling::Upscale()
 		return;
 	}
 
-	auto dispatchCount = Util::GetScreenDispatchCount(true);
-
 	{
 		state->BeginPerfEvent("Encode Upscaling Textures");
 
 		auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 		auto& normals = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[2]];
 		auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
+
+		D3D11_TEXTURE2D_DESC temporalAAMaskDesc{};
+		static_cast<ID3D11Texture2D*>(temporalAAMask.texture)->GetDesc(&temporalAAMaskDesc);
+
+		float safeRenderWidth = std::isfinite(renderSize.x) ? renderSize.x : static_cast<float>(temporalAAMaskDesc.Width);
+		float safeRenderHeight = std::isfinite(renderSize.y) ? renderSize.y : static_cast<float>(temporalAAMaskDesc.Height);
+		safeRenderWidth = std::clamp(safeRenderWidth, 1.0f, static_cast<float>(temporalAAMaskDesc.Width));
+		safeRenderHeight = std::clamp(safeRenderHeight, 1.0f, static_cast<float>(temporalAAMaskDesc.Height));
+		const float2 safeRenderSize{ safeRenderWidth, safeRenderHeight };
+
+		Util::DispatchCount dispatchCount{
+			static_cast<uint>(std::ceil(safeRenderSize.x / 8.0f)),
+			static_cast<uint>(std::ceil(safeRenderSize.y / 8.0f))
+		};
 
 		{
 			// Set up upscaling data constant buffer
-			auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
 			UpscalingDataCB upscalingData;
-			upscalingData.trueSamplingDim = renderSize;
-			upscalingData.invTrueSamplingDim = { renderSize.x > 0.0f ? 1.0f / renderSize.x : 0.0f, renderSize.y > 0.0f ? 1.0f / renderSize.y : 0.0f };
-			upscalingData.seamCenterX = renderSize.x * 0.5f;
+			upscalingData.trueSamplingDim = safeRenderSize;
+			upscalingData.invTrueSamplingDim = { safeRenderSize.x > 0.0f ? 1.0f / safeRenderSize.x : 0.0f, safeRenderSize.y > 0.0f ? 1.0f / safeRenderSize.y : 0.0f };
+			upscalingData.seamCenterX = safeRenderSize.x * 0.5f;
 			upscalingData.seamHalfWidthPx = 2.0f;
 			upscalingData.maskDepthThreshold = 1e-6f;
 			upscalingData.vrSeamHardening = globals::game::isVR ? 1.0f : 0.0f;

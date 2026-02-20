@@ -25,7 +25,8 @@ public:
 	struct Settings
 	{
 		uint32_t Enabled = true;
-		uint32_t pad[3];
+		uint32_t AllowSSSWithDepthCulling = false;
+		uint32_t pad[2]{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 

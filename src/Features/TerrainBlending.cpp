@@ -15,7 +15,8 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
-	Enabled)
+	Enabled,
+	AllowSSSWithDepthCulling)
 
 namespace
 {
@@ -325,6 +326,11 @@ std::vector<FeatureConstraints::Constraint> TerrainBlending::GetActiveConstraint
 		return constraints;
 	}
 
+	// Optional user bypass: allows SSS while TB + depth culling are active.
+	if (settings.AllowSSSWithDepthCulling != 0) {
+		return constraints;
+	}
+
 	constraints.push_back({ { "ScreenSpaceShadows", "Enable" },
 		false,
 		"Screen Space Shadows is disabled in VR when Terrain Blending and Depth Buffer Culling are both active.",
@@ -342,6 +348,16 @@ void TerrainBlending::DrawSettings()
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable seamless blending between terrain and objects.");
+	}
+
+	bool allowSSSWithDepthCulling = settings.AllowSSSWithDepthCulling != 0;
+	if (ImGui::Checkbox("Allow SSS with TB + Depth Culling", &allowSSSWithDepthCulling)) {
+		settings.AllowSSSWithDepthCulling = allowSSSWithDepthCulling ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Disables the automatic compatibility block that turns off");
+		ImGui::Text("Screen Space Shadows when VR Terrain Blending and Depth Buffer");
+		ImGui::Text("Culling are both active. May cause shadow artifacts.");
 	}
 }
 

@@ -26,7 +26,12 @@ public:
 	{
 		uint32_t Enabled = true;
 		uint32_t AllowSSSWithDepthCulling = false;
-		uint32_t pad[2]{};
+		uint32_t ForceVrDepthPathInFlat = false;
+		uint32_t ForceVrHooksWithBlendedDepthInFlat = false;
+		uint32_t FlatTestDepthCullingEnabled = true;
+		uint32_t DisableSlot2OverrideForTesting = false;
+		uint32_t DisableSlot17OverrideForTesting = false;
+		uint32_t pad[1]{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 

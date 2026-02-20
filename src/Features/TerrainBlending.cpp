@@ -16,7 +16,12 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
 	Enabled,
-	AllowSSSWithDepthCulling)
+	AllowSSSWithDepthCulling,
+	ForceVrDepthPathInFlat,
+	ForceVrHooksWithBlendedDepthInFlat,
+	FlatTestDepthCullingEnabled,
+	DisableSlot2OverrideForTesting,
+	DisableSlot17OverrideForTesting)
 
 namespace
 {
@@ -65,9 +70,10 @@ namespace
 	constexpr uint32_t kShadowmaskDepthDescriptor0 = 0x262002u;
 	constexpr uint32_t kShadowmaskDepthDescriptor1 = 0x1062002u;
 
-	// Slot2 allowlist is only evaluated in VR (gated by IsEngineHookFeatureGateSatisfied).
+	// Slot2 allowlist is only evaluated when the VR TB depth path is active
+	// (native VR, or flat test mode via ForceVrDepthPathInFlat).
 	// Keep variant mapping explicit to match existing codebase conventions.
-	// SE/AE offsets are intentionally 0 because this caller is VR-only.
+	// SE/AE offsets are intentionally 0 because this caller mapping is for VR path usage.
 	const std::array<uint32_t, 1> kSlot2CallerAllowlistRvas = {
 		static_cast<uint32_t>(REL::Relocate(0u, 0u, 0xDC35DBu))
 	};
@@ -103,10 +109,54 @@ uint32_t ToModuleRva(const void* a_returnAddress)
 	return static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(a_returnAddress) - REL::Module::get().base());
 }
 
-	bool ShouldUseBlendedDepthSRV()
+	bool IsVrLikeTbDepthPathEnabled(const TerrainBlending& a_tb)
 	{
+		return globals::game::isVR || a_tb.settings.ForceVrDepthPathInFlat != 0;
+	}
+
+	bool IsFlatForcedTbVrPathEnabled(const TerrainBlending& a_tb)
+	{
+		return !globals::game::isVR && a_tb.settings.ForceVrDepthPathInFlat != 0;
+	}
+
+	bool IsVrPathDepthCullingEnabled(const TerrainBlending& a_tb)
+	{
+		if (IsFlatForcedTbVrPathEnabled(a_tb)) {
+			return a_tb.settings.FlatTestDepthCullingEnabled != 0;
+		}
+
 		auto& vr = globals::features::vr;
-		return !globals::game::isVR || !vr.gDepthBufferCulling || !*vr.gDepthBufferCulling;
+		return vr.gDepthBufferCulling && *vr.gDepthBufferCulling;
+	}
+
+	bool ShouldForceFlatHooksWithBlendedDepth(const TerrainBlending& a_tb)
+	{
+		return IsFlatForcedTbVrPathEnabled(a_tb) && a_tb.settings.ForceVrHooksWithBlendedDepthInFlat != 0;
+	}
+
+	bool IsSlot2OverrideEnabled(const TerrainBlending& a_tb)
+	{
+		return a_tb.settings.DisableSlot2OverrideForTesting == 0;
+	}
+
+	bool IsSlot17OverrideEnabled(const TerrainBlending& a_tb)
+	{
+		return a_tb.settings.DisableSlot17OverrideForTesting == 0;
+	}
+
+	bool ShouldUseBlendedDepthSRV(const TerrainBlending& a_tb)
+	{
+		// Flat test mode (hooks + blended depth): keep blended depth as depth source
+		// while still allowing VR-style TB override hooks to run.
+		if (ShouldForceFlatHooksWithBlendedDepth(a_tb)) {
+			return true;
+		}
+
+		if (!IsVrLikeTbDepthPathEnabled(a_tb)) {
+			return true;
+		}
+
+		return !IsVrPathDepthCullingEnabled(a_tb);
 	}
 
 	bool IsShadowmaskDepthDescriptorWhitelisted(const uint32_t a_descriptor)
@@ -116,7 +166,7 @@ uint32_t ToModuleRva(const void* a_returnAddress)
 
 	bool IsTbVrDepthCullingActive(const TerrainBlending& a_tb)
 	{
-		return globals::game::isVR && a_tb.loaded && a_tb.settings.Enabled && !ShouldUseBlendedDepthSRV();
+		return IsVrLikeTbDepthPathEnabled(a_tb) && a_tb.loaded && a_tb.settings.Enabled && !ShouldUseBlendedDepthSRV(a_tb);
 	}
 
 	bool IsSlot2CallerAllowlisted(const uint32_t a_callerRva)
@@ -164,11 +214,15 @@ uint32_t ToModuleRva(const void* a_returnAddress)
 
 	bool IsEngineHookFeatureGateSatisfied(const TerrainBlending& a_singleton)
 	{
-		if (!globals::game::isVR || !a_singleton.loaded || !a_singleton.settings.Enabled) {
+		if (!IsVrLikeTbDepthPathEnabled(a_singleton) || !a_singleton.loaded || !a_singleton.settings.Enabled) {
 			return false;
 		}
 
-		return !ShouldUseBlendedDepthSRV();
+		if (ShouldForceFlatHooksWithBlendedDepth(a_singleton)) {
+			return true;
+		}
+
+		return !ShouldUseBlendedDepthSRV(a_singleton);
 	}
 
 	struct EngineHookPassGateState
@@ -333,7 +387,7 @@ std::vector<FeatureConstraints::Constraint> TerrainBlending::GetActiveConstraint
 
 	constraints.push_back({ { "ScreenSpaceShadows", "Enable" },
 		false,
-		"Screen Space Shadows is disabled in VR when Terrain Blending and Depth Buffer Culling are both active.",
+		"Screen Space Shadows is disabled when Terrain Blending and Depth Buffer Culling are both active in VR path mode.",
 		false });
 
 	return constraints;
@@ -358,6 +412,55 @@ void TerrainBlending::DrawSettings()
 		ImGui::Text("Disables the automatic compatibility block that turns off");
 		ImGui::Text("Screen Space Shadows when VR Terrain Blending and Depth Buffer");
 		ImGui::Text("Culling are both active. May cause shadow artifacts.");
+	}
+
+	bool forceVrDepthPathInFlat = settings.ForceVrDepthPathInFlat != 0;
+	if (ImGui::Checkbox("Force VR TB depth path in flat", &forceVrDepthPathInFlat)) {
+		settings.ForceVrDepthPathInFlat = forceVrDepthPathInFlat ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Flat-only test mode: enables the VR Terrain Blending depth-culling path");
+		ImGui::Text("for TB slot overrides and compatibility behavior without forcing global VR mode.");
+		ImGui::Text("In flatrim this works even if VR Depth Buffer Culling UI is unavailable.");
+	}
+
+	ImGui::BeginDisabled(settings.ForceVrDepthPathInFlat == 0);
+	bool flatTestDepthCullingEnabled = settings.FlatTestDepthCullingEnabled != 0;
+	if (ImGui::Checkbox("Flat test: emulate VR depth culling", &flatTestDepthCullingEnabled)) {
+		settings.FlatTestDepthCullingEnabled = flatTestDepthCullingEnabled ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Flat-only test mode: controls the VR-path depth-culling state used");
+		ImGui::Text("for depth source selection when forcing the TB VR depth path.");
+	}
+
+	bool forceVrHooksWithBlendedDepthInFlat = settings.ForceVrHooksWithBlendedDepthInFlat != 0;
+	if (ImGui::Checkbox("Flat test: keep blended depth source", &forceVrHooksWithBlendedDepthInFlat)) {
+		settings.ForceVrHooksWithBlendedDepthInFlat = forceVrHooksWithBlendedDepthInFlat ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Flat-only test mode: keeps blended depth as the active depth source");
+		ImGui::Text("while still forcing the TB VR-style slot override hooks.");
+		ImGui::Text("Use this to isolate depth-source issues from slot 2/17 binding issues.");
+	}
+	ImGui::EndDisabled();
+
+	bool disableSlot2OverrideForTesting = settings.DisableSlot2OverrideForTesting != 0;
+	if (ImGui::Checkbox("Test: disable slot 2 override", &disableSlot2OverrideForTesting)) {
+		settings.DisableSlot2OverrideForTesting = disableSlot2OverrideForTesting ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Testing toggle: prevents Terrain Blending from overriding shadowmask");
+		ImGui::Text("depth at PS slot 2 in the TB VR-path hook logic.");
+	}
+
+	bool disableSlot17OverrideForTesting = settings.DisableSlot17OverrideForTesting != 0;
+	if (ImGui::Checkbox("Test: disable slot 17 override", &disableSlot17OverrideForTesting)) {
+		settings.DisableSlot17OverrideForTesting = disableSlot17OverrideForTesting ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Testing toggle: prevents Terrain Blending from overriding OBB");
+		ImGui::Text("depth at PS slot 17 in the TB VR-path hook logic.");
 	}
 }
 
@@ -419,24 +522,30 @@ void TerrainBlending::OnBeginTechnique(RE::BSShader* a_shader, uint32_t a_pixelD
 
 	auto* obbOverrideSrv = ResolveEngineOverrideSrv(false);
 	auto* shadowmaskOverrideSrv = ResolveEngineOverrideSrv(true);
-	const auto obbResult = ApplyPixelShaderSlotOverride(
-		context,
-		17u,
-		obbOverrideSrv,
-		engineHookDiagnostics.obbApplied,
-		engineHookDiagnostics.obbAlreadyBound,
-		engineHookDiagnostics.obbMissingSrv,
-		nullptr,
-		0u);
-	const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
-		context,
-		2u,
-		shadowmaskOverrideSrv,
-		engineHookDiagnostics.shadowmaskApplied,
-		engineHookDiagnostics.shadowmaskAlreadyBound,
-		engineHookDiagnostics.shadowmaskMissingSrv,
-		&ShouldApplySlot2Rewrite,
-		a_callerRva);
+	if (IsSlot17OverrideEnabled(*this)) {
+		const auto obbResult = ApplyPixelShaderSlotOverride(
+			context,
+			17u,
+			obbOverrideSrv,
+			engineHookDiagnostics.obbApplied,
+			engineHookDiagnostics.obbAlreadyBound,
+			engineHookDiagnostics.obbMissingSrv,
+			nullptr,
+			0u);
+		(void)obbResult;
+	}
+	if (IsSlot2OverrideEnabled(*this)) {
+		const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
+			context,
+			2u,
+			shadowmaskOverrideSrv,
+			engineHookDiagnostics.shadowmaskApplied,
+			engineHookDiagnostics.shadowmaskAlreadyBound,
+			engineHookDiagnostics.shadowmaskMissingSrv,
+			&ShouldApplySlot2Rewrite,
+			a_callerRva);
+		(void)shadowmaskResult;
+	}
 
 }
 
@@ -465,24 +574,30 @@ void TerrainBlending::OnUtilitySetupGeometry(RE::BSShader* a_shader, RE::BSRende
 
 	auto* obbOverrideSrv = ResolveEngineOverrideSrv(false);
 	auto* shadowmaskOverrideSrv = ResolveEngineOverrideSrv(true);
-	const auto obbResult = ApplyPixelShaderSlotOverride(
-		context,
-		17u,
-		obbOverrideSrv,
-		engineHookDiagnostics.obbApplied,
-		engineHookDiagnostics.obbAlreadyBound,
-		engineHookDiagnostics.obbMissingSrv,
-		nullptr,
-		0u);
-	const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
-		context,
-		2u,
-		shadowmaskOverrideSrv,
-		engineHookDiagnostics.shadowmaskApplied,
-		engineHookDiagnostics.shadowmaskAlreadyBound,
-		engineHookDiagnostics.shadowmaskMissingSrv,
-		&ShouldApplySlot2Rewrite,
-		a_callerRva);
+	if (IsSlot17OverrideEnabled(*this)) {
+		const auto obbResult = ApplyPixelShaderSlotOverride(
+			context,
+			17u,
+			obbOverrideSrv,
+			engineHookDiagnostics.obbApplied,
+			engineHookDiagnostics.obbAlreadyBound,
+			engineHookDiagnostics.obbMissingSrv,
+			nullptr,
+			0u);
+		(void)obbResult;
+	}
+	if (IsSlot2OverrideEnabled(*this)) {
+		const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
+			context,
+			2u,
+			shadowmaskOverrideSrv,
+			engineHookDiagnostics.shadowmaskApplied,
+			engineHookDiagnostics.shadowmaskAlreadyBound,
+			engineHookDiagnostics.shadowmaskMissingSrv,
+			&ShouldApplySlot2Rewrite,
+			a_callerRva);
+		(void)shadowmaskResult;
+	}
 
 }
 
@@ -507,15 +622,18 @@ void TerrainBlending::OnShaderPropertySetupGeometry(RE::BSShaderProperty* a_shad
 	}
 
 	auto* shadowmaskOverrideSrv = ResolveEngineOverrideSrv(true);
-	const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
-		context,
-		2u,
-		shadowmaskOverrideSrv,
-		engineHookDiagnostics.shadowmaskApplied,
-		engineHookDiagnostics.shadowmaskAlreadyBound,
-		engineHookDiagnostics.shadowmaskMissingSrv,
-		&ShouldApplySlot2Rewrite,
-		a_callerRva);
+	if (IsSlot2OverrideEnabled(*this)) {
+		const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
+			context,
+			2u,
+			shadowmaskOverrideSrv,
+			engineHookDiagnostics.shadowmaskApplied,
+			engineHookDiagnostics.shadowmaskAlreadyBound,
+			engineHookDiagnostics.shadowmaskMissingSrv,
+			&ShouldApplySlot2Rewrite,
+			a_callerRva);
+		(void)shadowmaskResult;
+	}
 
 }
 
@@ -543,24 +661,30 @@ void TerrainBlending::OnSetDirtyStates(bool a_isCompute, uint32_t a_callerRva)
 
 	auto* obbOverrideSrv = ResolveEngineOverrideSrv(false);
 	auto* shadowmaskOverrideSrv = ResolveEngineOverrideSrv(true);
-	const auto obbResult = ApplyPixelShaderSlotOverride(
-		context,
-		17u,
-		obbOverrideSrv,
-		engineHookDiagnostics.obbApplied,
-		engineHookDiagnostics.obbAlreadyBound,
-		engineHookDiagnostics.obbMissingSrv,
-		nullptr,
-		0u);
-	const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
-		context,
-		2u,
-		shadowmaskOverrideSrv,
-		engineHookDiagnostics.shadowmaskApplied,
-		engineHookDiagnostics.shadowmaskAlreadyBound,
-		engineHookDiagnostics.shadowmaskMissingSrv,
-		&ShouldApplySlot2Rewrite,
-		a_callerRva);
+	if (IsSlot17OverrideEnabled(*this)) {
+		const auto obbResult = ApplyPixelShaderSlotOverride(
+			context,
+			17u,
+			obbOverrideSrv,
+			engineHookDiagnostics.obbApplied,
+			engineHookDiagnostics.obbAlreadyBound,
+			engineHookDiagnostics.obbMissingSrv,
+			nullptr,
+			0u);
+		(void)obbResult;
+	}
+	if (IsSlot2OverrideEnabled(*this)) {
+		const auto shadowmaskResult = ApplyPixelShaderSlotOverride(
+			context,
+			2u,
+			shadowmaskOverrideSrv,
+			engineHookDiagnostics.shadowmaskApplied,
+			engineHookDiagnostics.shadowmaskAlreadyBound,
+			engineHookDiagnostics.shadowmaskMissingSrv,
+			&ShouldApplySlot2Rewrite,
+			a_callerRva);
+		(void)shadowmaskResult;
+	}
 
 }
 
@@ -774,7 +898,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	singleton.averageEyePosition = Util::GetAverageEyePosition();
 
 	const bool tbActive = shaderCache->IsEnabled() && singleton.settings.Enabled;
-	const bool useBlendedDepthSRV = tbActive && ShouldUseBlendedDepthSRV();
+	const bool useBlendedDepthSRV = tbActive && ShouldUseBlendedDepthSRV(singleton);
 	tbHookDiagnostics.renderDepthCalls++;
 
 	if (tbActive) {

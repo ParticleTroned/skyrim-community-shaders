@@ -79,7 +79,6 @@ namespace Util
 		auto renderer = globals::game::renderer;
 		if (renderer)
 			return renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-
 		return nullptr;
 	}
 

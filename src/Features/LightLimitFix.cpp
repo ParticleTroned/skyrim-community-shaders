@@ -31,6 +31,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseLegacyParticleLighting)
 void LightLimitFix::DrawSettings()
 {
+	auto shaderCache = globals::shaderCache;
+
 	// Heat warp / refraction strength (moved from Advanced Settings)
 	ImGui::Text("ImageSpace Refraction");
 	ImGui::SliderFloat(
@@ -125,7 +127,6 @@ void LightLimitFix::DrawSettings()
 		ImGui::Spacing();
 		ImGui::TreePop();
 	}
-	auto shaderCache = globals::shaderCache;
 
 	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());

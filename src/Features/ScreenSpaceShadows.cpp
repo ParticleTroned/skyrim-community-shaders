@@ -2,7 +2,9 @@
 
 #include "FeatureConstraints.h"
 #include "State.h"
+#include "TerrainBlending.h"
 #include "Util.h"
+#include "VR.h"
 
 #pragma warning(push)
 #pragma warning(disable: 4838 4244)
@@ -22,6 +24,77 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 namespace
 {
 	const FeatureConstraints::SettingId kSssEnableSettingId{ "ScreenSpaceShadows", "Enable" };
+
+	bool IsTbVrDepthCullingActive()
+	{
+		if (!globals::game::isVR) {
+			return false;
+		}
+
+		auto& tb = globals::features::terrainBlending;
+		auto& vr = globals::features::vr;
+		return tb.loaded && tb.settings.Enabled && vr.gDepthBufferCulling && *vr.gDepthBufferCulling;
+	}
+
+	ID3D11ShaderResourceView* ResolveDepthSrvForSSS()
+	{
+		auto* renderer = globals::game::renderer;
+		if (!renderer) {
+			return nullptr;
+		}
+
+		auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+		ID3D11ShaderResourceView* resolved = depth.depthSRV;
+
+		if (!IsTbVrDepthCullingActive()) {
+			return resolved;
+		}
+
+		auto& tb = globals::features::terrainBlending;
+		if (tb.blendedDepthTexture && tb.blendedDepthTexture->srv) {
+			return tb.blendedDepthTexture->srv.get();
+		}
+		if (tb.blendedDepthTexture16 && tb.blendedDepthTexture16->srv) {
+			return tb.blendedDepthTexture16->srv.get();
+		}
+
+		return resolved;
+	}
+
+	bool GetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height)
+	{
+		o_width = 0;
+		o_height = 0;
+		if (!a_depthSrv) {
+			return false;
+		}
+
+		ID3D11Resource* resource = nullptr;
+		a_depthSrv->GetResource(&resource);
+		if (!resource) {
+			return false;
+		}
+
+		ID3D11Texture2D* texture = nullptr;
+		const HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+		resource->Release();
+
+		if (FAILED(hr) || !texture) {
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC desc{};
+		texture->GetDesc(&desc);
+		texture->Release();
+
+		if (desc.Width == 0 || desc.Height == 0) {
+			return false;
+		}
+
+		o_width = desc.Width;
+		o_height = desc.Height;
+		return true;
+	}
 }
 
 void ScreenSpaceShadows::DrawSettings()
@@ -123,8 +196,8 @@ void ScreenSpaceShadows::DrawShadows()
 	int minRenderBounds[2] = { 0, 0 };
 	int maxRenderBounds[2] = { viewportSize[0], viewportSize[1] };
 
-	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-	context->CSSetShaderResources(0, 1, &depth.depthSRV);
+	ID3D11ShaderResourceView* depthSrv = ResolveDepthSrvForSSS();
+	context->CSSetShaderResources(0, 1, &depthSrv);
 
 	auto uav = screenSpaceShadowsTexture->uav.get();
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
@@ -141,6 +214,19 @@ void ScreenSpaceShadows::DrawShadows()
 	auto viewport = globals::game::graphicsState;
 
 	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
+	uint32_t depthWidth = 0;
+	uint32_t depthHeight = 0;
+	if (GetDepthSrvDimensions(depthSrv, depthWidth, depthHeight)) {
+		if (globals::game::isVR) {
+			// For VR shadow raymarching, viewport width is per-eye while bound depth can be
+			// single-eye or double-wide. Scale X using the actual SRV size.
+			dynamicRes.x = (static_cast<float>(viewportSize[0]) * 2.0f) / static_cast<float>(depthWidth);
+			dynamicRes.y = static_cast<float>(viewportSize[1]) / static_cast<float>(depthHeight);
+		} else {
+			dynamicRes.x = static_cast<float>(viewportSize[0]) / static_cast<float>(depthWidth);
+			dynamicRes.y = static_cast<float>(viewportSize[1]) / static_cast<float>(depthHeight);
+		}
+	}
 
 	for (int i = 0; i < dispatchList.DispatchCount; i++) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSS - Ray March");

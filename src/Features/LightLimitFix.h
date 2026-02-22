@@ -103,7 +103,8 @@ public:
 	{
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float pad0[2];
+		uint UseLegacyParticleLighting;
+		uint pad0;
 		uint ClusterSize[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
@@ -134,6 +135,8 @@ public:
 	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
 	bool previousEnableLightsVisualisation = settings.EnableLightsVisualisation;
 	bool currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
+	bool previousUseLegacyParticleLighting = settings.UseLegacyParticleLighting;
+	bool currentUseLegacyParticleLighting = settings.UseLegacyParticleLighting;
 
 	ID3D11ComputeShader* clusterBuildingCS = nullptr;
 	ID3D11ComputeShader* clusterCullingCS = nullptr;
@@ -213,6 +216,7 @@ struct ParticleLightInfo
 		bool EnableContactShadows = false;
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
+		bool UseLegacyParticleLighting = true;
 		bool EnableParticleLights = true;
 		bool EnableParticleLightsCulling = true;
 		bool EnableParticleLightsDetection = true;

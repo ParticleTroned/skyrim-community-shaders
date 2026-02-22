@@ -27,7 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MaxParticlesPerEmitter,    // NEW
 	MaxParticleDistance,       // NEW
 	EnableLightsVisualisation,
-	LightsVisualisationMode)
+	LightsVisualisationMode,
+	UseLegacyParticleLighting)
 void LightLimitFix::DrawSettings()
 {
 	// Heat warp / refraction strength (moved from Advanced Settings)
@@ -62,6 +63,18 @@ void LightLimitFix::DrawSettings()
 		ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
+		}
+
+		ImGui::Checkbox("Legacy Particle Lighting", &settings.UseLegacyParticleLighting);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Uses pre-linear-lighting particle shading for particle pass only.\n"
+				"Helps preserve legacy warm/cool balance when Linear Lighting is enabled.");
+		}
+		currentUseLegacyParticleLighting = settings.UseLegacyParticleLighting;
+		if (previousUseLegacyParticleLighting != currentUseLegacyParticleLighting) {
+			shaderCache->Clear(RE::BSShader::Type::Particle);
+			previousUseLegacyParticleLighting = currentUseLegacyParticleLighting;
 		}
 
 		ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
@@ -176,6 +189,7 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	PerFrame perFrame{};
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
+	perFrame.UseLegacyParticleLighting = settings.UseLegacyParticleLighting;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }

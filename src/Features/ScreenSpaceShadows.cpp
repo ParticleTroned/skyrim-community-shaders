@@ -171,7 +171,6 @@ void ScreenSpaceShadows::DrawShadows()
 	auto state = globals::state;
 	TracyD3D11Zone(state->tracyCtx, "Screen Space Shadows");
 
-	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 
 	auto accumulator = *globals::game::currentAccumulator.get();

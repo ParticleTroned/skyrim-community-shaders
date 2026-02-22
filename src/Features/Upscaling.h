@@ -60,7 +60,6 @@ public:
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.0f;
 		uint DLSSPreset = 2;  // DLSS preset profile: 0=F, 1=J, 2=K
-		uint DLAAMode = 0;    // 0=Classic, 1=Fast
 	};
 
 	Settings settings;
@@ -80,10 +79,6 @@ public:
 		float seamHalfWidthPx;
 		float maskDepthThreshold;
 		float vrSeamHardening;
-		float dlaaFastPath;
-		float pad0;
-		float pad1;
-		float pad2;
 	};
 
 	ConstantBuffer* jitterCB = nullptr;
@@ -122,7 +117,6 @@ public:
 	virtual void SetupResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
-	bool IsFastDLAAEnabled() const;
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);

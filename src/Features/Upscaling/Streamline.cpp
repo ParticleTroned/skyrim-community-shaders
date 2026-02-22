@@ -67,21 +67,6 @@ void LoggingCallback(sl::LogType type, const char* msg)
 
 std::vector<std::pair<std::string, std::string>> Streamline::dllVersions = {};
 
-namespace
-{
-	struct DlaaFastOptionsCache
-	{
-		bool valid = false;
-		uint32_t qualityMode = 0;
-		uint32_t dlssPreset = 0;
-		uint32_t outputWidth = 0;
-		uint32_t outputHeight = 0;
-		bool colorBuffersHDR = false;
-	};
-
-	DlaaFastOptionsCache g_dlaaFastOptionsCache{};
-}
-
 void Streamline::LoadInterposer()
 {
 	triedInitialization = true;
@@ -268,12 +253,10 @@ void Streamline::CheckFrameConstants()
 
 void Streamline::SetDLSSOptions()
 {
-	auto& upscaling = globals::features::upscaling;
-	const bool fastDlaaMode = upscaling.IsFastDLAAEnabled();
 	sl::DLSSOptions dlssOptions{};
 
 	// Map quality mode to DLSS mode
-	uint32_t qualityMode = upscaling.settings.qualityMode;
+	uint32_t qualityMode = globals::features::upscaling.settings.qualityMode;
 	switch (qualityMode) {
 	case 1:
 		dlssOptions.mode = sl::DLSSMode::eMaxQuality;
@@ -296,19 +279,18 @@ void Streamline::SetDLSSOptions()
 
 	dlssOptions.outputWidth = (uint)state->screenSize.x;
 	dlssOptions.outputHeight = (uint)state->screenSize.y;
-	bool colorBuffersHDR = false;
 	{
 		auto renderer = globals::game::renderer;
 		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		D3D11_TEXTURE2D_DESC mainDesc;
 		static_cast<ID3D11Texture2D*>(main.texture)->GetDesc(&mainDesc);
-		colorBuffersHDR = mainDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM;
-		dlssOptions.colorBuffersHDR = colorBuffersHDR ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+		bool isHDR = mainDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM;
+		dlssOptions.colorBuffersHDR = isHDR ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	}
 	dlssOptions.useAutoExposure = sl::Boolean::eTrue;
 
 	sl::DLSSPreset preset = sl::DLSSPreset::ePresetK;
-	switch (upscaling.settings.DLSSPreset) {
+	switch (globals::features::upscaling.settings.DLSSPreset) {
 	case 0:
 		preset = sl::DLSSPreset::ePresetF;
 		break;
@@ -331,30 +313,8 @@ void Streamline::SetDLSSOptions()
 	dlssOptions.preExposure = 1.0f;
 	dlssOptions.sharpness = 0.0f;
 
-	if (fastDlaaMode &&
-		g_dlaaFastOptionsCache.valid &&
-		g_dlaaFastOptionsCache.qualityMode == qualityMode &&
-		g_dlaaFastOptionsCache.dlssPreset == upscaling.settings.DLSSPreset &&
-		g_dlaaFastOptionsCache.outputWidth == dlssOptions.outputWidth &&
-		g_dlaaFastOptionsCache.outputHeight == dlssOptions.outputHeight &&
-		g_dlaaFastOptionsCache.colorBuffersHDR == colorBuffersHDR) {
-		return;
-	}
-
 	if (SL_FAILED(result, slDLSSSetOptions(viewport, dlssOptions))) {
 		logger::critical("[Streamline] Could not enable DLSS");
-		return;
-	}
-
-	if (fastDlaaMode) {
-		g_dlaaFastOptionsCache.valid = true;
-		g_dlaaFastOptionsCache.qualityMode = qualityMode;
-		g_dlaaFastOptionsCache.dlssPreset = upscaling.settings.DLSSPreset;
-		g_dlaaFastOptionsCache.outputWidth = dlssOptions.outputWidth;
-		g_dlaaFastOptionsCache.outputHeight = dlssOptions.outputHeight;
-		g_dlaaFastOptionsCache.colorBuffersHDR = colorBuffersHDR;
-	} else {
-		g_dlaaFastOptionsCache.valid = false;
 	}
 }
 
@@ -412,5 +372,4 @@ void Streamline::DestroyDLSSResources()
 	dlssOptions.mode = sl::DLSSMode::eOff;
 	slDLSSSetOptions(viewport, dlssOptions);
 	slFreeResources(sl::kFeatureDLSS, viewport);
-	g_dlaaFastOptionsCache.valid = false;
 }

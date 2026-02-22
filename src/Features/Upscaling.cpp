@@ -1243,20 +1243,13 @@ void Upscaling::Upscale()
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	const bool fastDlaaMode = IsFastDLAAEnabled();
-	const bool useEncodedDlssInputs = upscaleMethod == UpscaleMethod::kDLSS && !fastDlaaMode;
-	const bool requiresEncodePass = useEncodedDlssInputs || upscaleMethod == UpscaleMethod::kFSR;
-	if (requiresEncodePass && (!motionVectorCopyTexture || !motionVectorCopyTexture->uav || !motionVectorCopyTexture->resource)) {
+	const bool requiresEncodedMotionVectors = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
+	if (requiresEncodedMotionVectors && (!motionVectorCopyTexture || !motionVectorCopyTexture->uav || !motionVectorCopyTexture->resource)) {
 		logger::error("[Upscaling] Missing encoded motion-vector resources for method {}", magic_enum::enum_name(upscaleMethod));
 		return;
 	}
-	if (requiresEncodePass && (!reactiveMaskTexture || !reactiveMaskTexture->uav || !reactiveMaskTexture->resource ||
-			transparencyCompositionMaskTexture == nullptr || !transparencyCompositionMaskTexture->uav || !transparencyCompositionMaskTexture->resource)) {
-		logger::error("[Upscaling] Missing upscaling hint-mask resources for method {}", magic_enum::enum_name(upscaleMethod));
-		return;
-	}
 
-	if (requiresEncodePass) {
+	{
 		state->BeginPerfEvent("Encode Upscaling Textures");
 
 		auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
@@ -1302,7 +1295,7 @@ void Upscaling::Upscale()
 			ID3D11UnorderedAccessView* uavs[3] = {
 				reactiveMaskTexture->uav.get(),
 				transparencyCompositionMaskTexture->uav.get(),
-				motionVectorCopyTexture->uav.get()
+				(upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR) ? motionVectorCopyTexture->uav.get() : nullptr
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -1328,14 +1321,12 @@ void Upscaling::Upscale()
 
 	{
 		state->BeginPerfEvent("Upscaling");
-		ID3D11Resource* reactiveMaskResource = requiresEncodePass ? reactiveMaskTexture->resource.get() : nullptr;
-		ID3D11Resource* transparencyCompositionMaskResource = requiresEncodePass ? transparencyCompositionMaskTexture->resource.get() : nullptr;
-		ID3D11Resource* motionVectorResource = requiresEncodePass ? motionVectorCopyTexture->resource.get() : motionVector.texture;
+		auto motionVectorResource = motionVectorCopyTexture->resource.get();
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
-			streamline.Upscale(main.texture, reactiveMaskResource, transparencyCompositionMaskResource, motionVectorResource);
+			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
-			fidelityFX.Upscale(main.texture, reactiveMaskResource, transparencyCompositionMaskResource, motionVectorResource, settings.sharpnessFSR);
+			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
 		}
 
 		state->EndPerfEvent();

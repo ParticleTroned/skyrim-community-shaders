@@ -385,30 +385,15 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		sl::ResourceTag depthTag = sl::ResourceTag{ &depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
 		sl::ResourceTag mvecTag = sl::ResourceTag{ &mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
 
-		sl::ResourceTag resourceTags[6]{};
-		uint32_t resourceTagCount = 0;
-		resourceTags[resourceTagCount++] = colorInTag;
-		resourceTags[resourceTagCount++] = colorOutTag;
-		resourceTags[resourceTagCount++] = depthTag;
-		resourceTags[resourceTagCount++] = mvecTag;
+		sl::Resource reactiveMask = { sl::ResourceType::eTex2d, a_reactiveMask, 0 };
+		sl::ResourceTag reactiveMaskTag = sl::ResourceTag{ &reactiveMask, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
 
-		sl::Resource reactiveMask{};
-		sl::ResourceTag reactiveMaskTag{};
-		if (a_reactiveMask != nullptr) {
-			reactiveMask = { sl::ResourceType::eTex2d, a_reactiveMask, 0 };
-			reactiveMaskTag = sl::ResourceTag{ &reactiveMask, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
-			resourceTags[resourceTagCount++] = reactiveMaskTag;
-		}
+		sl::Resource transparencyCompositionMask = { sl::ResourceType::eTex2d, a_transparencyCompositionMask, 0 };
+		sl::ResourceTag transparencyCompositionMaskTag = sl::ResourceTag{ &transparencyCompositionMask, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
 
-		sl::Resource transparencyCompositionMask{};
-		sl::ResourceTag transparencyCompositionMaskTag{};
-		if (a_transparencyCompositionMask != nullptr) {
-			transparencyCompositionMask = { sl::ResourceType::eTex2d, a_transparencyCompositionMask, 0 };
-			transparencyCompositionMaskTag = sl::ResourceTag{ &transparencyCompositionMask, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &lowResExtent };
-			resourceTags[resourceTagCount++] = transparencyCompositionMaskTag;
-		}
+		sl::ResourceTag resourceTags[] = { colorInTag, colorOutTag, depthTag, mvecTag, reactiveMaskTag, transparencyCompositionMaskTag };
 
-		slSetTag(viewport, resourceTags, resourceTagCount, globals::d3d::context);
+		slSetTag(viewport, resourceTags, _countof(resourceTags), globals::d3d::context);
 	}
 
 	sl::ViewportHandle view(viewport);

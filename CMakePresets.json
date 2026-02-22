@@ -89,6 +89,15 @@
             "inherits": "skyrim"
         },
         {
+            "name": "ALL-DEV",
+            "binaryDir": "${sourceDir}/build/ALL",
+            "cacheVariables": {
+                "ZIP_TO_DIST": "OFF",
+                "AIO_ZIP_TO_DIST": "OFF"
+            },
+            "inherits": "ALL"
+        },
+        {
             "name": "PRE-AE",
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "OFF",
@@ -118,7 +127,7 @@
         {
             "name": "Dev",
             "description": "Default build preset for developers, generate an AIO folder thats ready to copy",
-            "configurePreset": "ALL",
+            "configurePreset": "ALL-DEV",
             "configuration": "Release",
             "targets": ["CommunityShaders", "AIO"]
         },

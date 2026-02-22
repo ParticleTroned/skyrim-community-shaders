@@ -255,11 +255,14 @@ void ScreenSpaceGI::DrawSettings()
 		}
 		ImGui::TableNextColumn();
 		{
-			auto ssaoToggleGuard = Util::DisableGuard(!settings.Enabled);
+			auto vanillaSSAOGuard = Util::DisableGuard(!settings.Enabled || globals::game::isVR);
 			ImGui::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				if (globals::game::isVR)
+					ImGui::Text("Vanilla SSAO is not supported in VR.");
+				else
+					ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
+			}
 		}
 
 		ImGui::TableNextRow();
@@ -918,6 +921,7 @@ void ScreenSpaceGI::ClearShaderCache()
 		&centerGIMaskedCompute,
 		&centerGIMaskedAOOnlyCompute,
 		&blurCompute,
+		&stereoSyncCompute,
 		&upsampleCompute,
 		&upsampleAOOnlyCompute,
 		&centerBlendCompute,
@@ -954,6 +958,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &centerGIMaskedCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, true, true },
 			{ &centerGIMaskedAOOnlyCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, false, true },
 			{ &blurCompute, "blur.cs.hlsl", {} },
+			{ &stereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } } },
 			{ &upsampleCompute, "upsample.cs.hlsl", {} },
 			{ &upsampleAOOnlyCompute, "upsample.cs.hlsl", {}, true, false, false },
 			{ &centerBlendCompute, "centerBlend.cs.hlsl", {}, false, false },
@@ -1404,6 +1409,8 @@ void ScreenSpaceGI::DrawSSGI()
 	//////////////////////////////////////////////////////
 
 	context->CSSetConstantBuffers(1, 1, &cb);
+	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
+	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 
 	// prefilter depths
@@ -1545,6 +1552,36 @@ void ScreenSpaceGI::DrawSSGI()
 		lastFrameGITexIdx = inputGITexIdx;
 		if (temporalEnabled)
 			lastFrameAccumTexIdx = !lastFrameAccumTexIdx;
+	}
+
+	// VR stereo sync: bilateral blend of SSGI buffers between eyes
+	// Shi, Billeter, Eisemann 2022, "Stereo-consistent screen-space ambient occlusion"
+	if (REL::Module::IsVR() && stereoSyncCompute) {
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Stereo Sync");
+
+		if (globals::state->frameAnnotations)
+			globals::state->BeginPerfEvent("SSGI - Stereo Sync");
+
+		resetViews();
+		srvs.at(0) = texWorkingDepth->srv.get();
+		srvs.at(1) = texAo[inputAoTexIdx]->srv.get();
+		srvs.at(2) = texIlY[inputGITexIdx]->srv.get();
+		srvs.at(3) = texIlCoCg[inputGITexIdx]->srv.get();
+
+		uavs.at(0) = texAo[!inputAoTexIdx]->uav.get();
+		uavs.at(1) = texIlY[!inputGITexIdx]->uav.get();
+		uavs.at(2) = texIlCoCg[!inputGITexIdx]->uav.get();
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShader(stereoSyncCompute.get(), nullptr, 0);
+		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+
+		inputAoTexIdx = !inputAoTexIdx;
+		inputGITexIdx = !inputGITexIdx;
+
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
 	}
 
 	// upsample

@@ -74,7 +74,7 @@ public:
 
 	struct Settings
 	{
-		bool Enabled = REL::Module::IsVR() ? false : true;   // disabled in VR by default
+		bool Enabled = true;
 		bool EnableGI = REL::Module::IsVR() ? false : true;  // AO only for VR by default
 		bool EnableExperimentalSpecularGI = false;
 		bool EnableVanillaSSAO = false;
@@ -201,6 +201,7 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> stereoSyncCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> centerBlendCompute = nullptr;

@@ -67,16 +67,16 @@ void LightLimitFix::DrawSettings()
 			ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
 		}
 
-		ImGui::Checkbox("Legacy Particle Lighting", &settings.UseLegacyParticleLighting);
+		const bool legacyParticleLightingChanged =
+			ImGui::Checkbox("Legacy Particle Lighting", &settings.UseLegacyParticleLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Uses pre-linear-lighting particle shading for particle pass only.\n"
 				"Helps preserve legacy warm/cool balance when Linear Lighting is enabled.");
 		}
-		currentUseLegacyParticleLighting = settings.UseLegacyParticleLighting;
-		if (previousUseLegacyParticleLighting != currentUseLegacyParticleLighting) {
+		// Recompile particle shaders only on explicit user toggle changes.
+		if (legacyParticleLightingChanged) {
 			shaderCache->Clear(RE::BSShader::Type::Particle);
-			previousUseLegacyParticleLighting = currentUseLegacyParticleLighting;
 		}
 
 		ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);

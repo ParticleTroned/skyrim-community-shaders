@@ -27,9 +27,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MaxParticlesPerEmitter,    // NEW
 	MaxParticleDistance,       // NEW
 	EnableLightsVisualisation,
-	LightsVisualisationMode)
+	LightsVisualisationMode,
+	UseLegacyParticleLighting)
 void LightLimitFix::DrawSettings()
 {
+	auto shaderCache = globals::shaderCache;
+
 	// Heat warp / refraction strength (moved from Advanced Settings)
 	ImGui::Text("ImageSpace Refraction");
 	ImGui::SliderFloat(
@@ -52,6 +55,18 @@ void LightLimitFix::DrawSettings()
 		ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables Particle Lights.");
+		}
+
+		const bool legacyParticleLightingChanged =
+			ImGui::Checkbox("Legacy Particle Lighting", &settings.UseLegacyParticleLighting);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Pre-linear-lighting particle shading to preserve legacy warm/cool balance when Linear Lighting is enabled.\n"
+				"Note, when enabled, particle lights bypass the Linear Lighting pipeline, so their brightness and color can differ from the scene's physically consistent linear-light response.");
+		}
+		// Recompile particle shaders only on explicit user toggle changes.
+		if (legacyParticleLightingChanged) {
+			shaderCache->Clear(RE::BSShader::Type::Particle);
 		}
 
 		ImGui::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
@@ -112,8 +127,6 @@ void LightLimitFix::DrawSettings()
 		ImGui::Spacing();
 		ImGui::TreePop();
 	}
-	auto shaderCache = globals::shaderCache;
-
 	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
 		ImGui::Text(std::format("Particle Lights Count : {}", currentParticleLights.size()).c_str());
@@ -176,6 +189,7 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	PerFrame perFrame{};
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
+	perFrame.UseLegacyParticleLighting = settings.UseLegacyParticleLighting;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }

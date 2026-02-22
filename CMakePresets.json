@@ -84,7 +84,8 @@
                 "ENABLE_SKYRIM_AE": "ON",
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
-                "AUTO_PLUGIN_DEPLOYMENT": "OFF"
+                "AUTO_PLUGIN_DEPLOYMENT": "OFF",
+                "ZIP_TO_DIST": "ON"
             },
             "inherits": "skyrim"
         },

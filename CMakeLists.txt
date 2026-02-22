@@ -693,51 +693,32 @@ endif()
 if(ZIP_TO_DIST)
     set(ZIP_DIR "${CMAKE_CURRENT_BINARY_DIR}/zip")
     message("Copying base CommunityShader into ${ZIP_DIR}.")
-    add_custom_command(
-        TARGET ${PROJECT_NAME}
-        POST_BUILD
-        COMMAND
-            ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}"
-            ${CMAKE_SOURCE_DIR}/dist
-        COMMAND
-            ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}/SKSE/Plugins"
-            ${CMAKE_SOURCE_DIR}/dist
-        COMMAND
-            ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/package
-            "${ZIP_DIR}"
-        COMMAND
-            ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}>
-            "${ZIP_DIR}/SKSE/Plugins/"
-        COMMAND
-            ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:${PROJECT_NAME}>
-            "${ZIP_DIR}/SKSE/Plugins/"
+    set(
+        ZIP_DIST_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${ZIP_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ZIP_DIR}/SKSE/Plugins"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/package" "${ZIP_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${PROJECT_NAME}>" "${ZIP_DIR}/SKSE/Plugins/"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_PDB_FILE:${PROJECT_NAME}>" "${ZIP_DIR}/SKSE/Plugins/"
     )
     foreach(FEATURE_PATH ${FEATURE_PATHS})
         if(EXISTS "${FEATURE_PATH}/CORE")
-            add_custom_command(
-                TARGET ${PROJECT_NAME}
-                POST_BUILD
-                COMMAND
-                    ${CMAKE_COMMAND} -E copy_directory ${FEATURE_PATH}
-                    "${ZIP_DIR}"
+            list(
+                APPEND ZIP_DIST_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${FEATURE_PATH}" "${ZIP_DIR}"
             )
         endif()
     endforeach()
-    add_custom_command(
-        TARGET ${PROJECT_NAME}
-        POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E remove "${ZIP_DIR}/CORE"
-    )
+    list(APPEND ZIP_DIST_COMMANDS COMMAND ${CMAKE_COMMAND} -E remove "${ZIP_DIR}/CORE")
 
     set(TARGET_ZIP "${PROJECT_NAME}-${UTC_NOW}.7z")
     message("Zipping ${ZIP_DIR} to ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}")
-    add_custom_command(
-        TARGET ${PROJECT_NAME}
-        POST_BUILD
+    list(
+        APPEND ZIP_DIST_COMMANDS
         COMMAND
-            ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}
-            --format=7zip -- .
-        WORKING_DIRECTORY ${ZIP_DIR}
+            ${CMAKE_COMMAND} -E chdir "${ZIP_DIR}" ${CMAKE_COMMAND} -E tar
+            cf "${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}" --format=7zip -- .
     )
 
     foreach(FEATURE_PATH ${FEATURE_PATHS})
@@ -748,16 +729,22 @@ if(ZIP_TO_DIST)
         message(
             "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z"
         )
-        add_custom_command(
-            TARGET ${PROJECT_NAME}
-            POST_BUILD
+        list(
+            APPEND ZIP_DIST_COMMANDS
             COMMAND
-                ${CMAKE_COMMAND} -E tar cf
-                ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z --format=7zip
-                -- .
-            WORKING_DIRECTORY ${FEATURE_PATH}
+                ${CMAKE_COMMAND} -E chdir "${FEATURE_PATH}" ${CMAKE_COMMAND}
+                -E tar cf "${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${UTC_NOW}.7z"
+                --format=7zip -- .
         )
     endforeach()
+
+    add_custom_target(
+        ZIP_TO_DIST_PACKAGE
+        ${ZIP_DIST_COMMANDS}
+        DEPENDS ${PROJECT_NAME}
+        COMMENT "Refreshing dist zip packages"
+        VERBATIM
+    )
 endif()
 
 # Create a AIO zip for easier testing
@@ -876,13 +863,19 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 endforeach()
 
 # AIO Folder target
-add_custom_command(
-    OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
-    DEPENDS ${CORE_SOURCES}
-    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+# Always run install when AIO is requested so dev builds refresh the AIO folder
+# every time (matching zip regeneration behavior on CommunityShaders rebuilds).
+add_custom_target(
+    "AIO"
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${AIO_DIR}
+    DEPENDS ${PROJECT_NAME}
     COMMENT "Installing to AIO folder"
+    VERBATIM
 )
-add_custom_target("AIO" DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
+
+if(TARGET ZIP_TO_DIST_PACKAGE)
+    add_dependencies("AIO" ZIP_TO_DIST_PACKAGE)
+endif()
 
 # Manual AIO package target
 set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")

@@ -56,6 +56,13 @@ struct DispatchParameters
 	half ShadowContrast;  // A contrast boost is applied to the transition in/out of shadow.
 						  // Recommended starting value: 2 or 4. Values >= 1 are valid.
 
+	half MinDepthThicknessScale;  // Lower bound for depth-thickness normalization to avoid far-distance amplification.
+	half MaxDepthScale;           // Upper bound for normalized depth scaling to avoid instability.
+
+	half DistanceFadeStart;  // Start of optional far-distance fade.
+	half DistanceFadeEnd;    // End of optional far-distance fade.
+	uint EnableDistanceFade;
+
 	float2 DynamicRes;
 
 	uint DynamicSampleCount;
@@ -95,6 +102,11 @@ struct DispatchParameters
 		SurfaceThickness = 0.005;
 		BilinearThreshold = 0.02;
 		ShadowContrast = 4;
+		MinDepthThicknessScale = 0.01;
+		MaxDepthScale = 256.0;
+		DistanceFadeStart = 0.70;
+		DistanceFadeEnd = 0.92;
+		EnableDistanceFade = 0;
 		IgnoreEdgePixels = false;
 		UsePrecisionOffset = false;
 		BilinearSamplingOffsetMode = false;
@@ -280,7 +292,7 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 #	endif
 
 		// Depth thresholds (bilinear/shadow thickness) are based on a fractional ratio of the difference between sampled depth and the far clip depth
-		depth_thickness_scale[i] = abs(inParameters.FarDepthValue - depths.x);
+		depth_thickness_scale[i] = max(abs(inParameters.FarDepthValue - depths.x), inParameters.MinDepthThicknessScale);
 
 		// If depth variance is more than a specific threshold, then just use point filtering
 		bool use_point_filter = abs(depths.x - depths.y) > depth_thickness_scale[i] * inParameters.BilinearThreshold;
@@ -366,7 +378,8 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	// The 1.0 / inParameters.SurfaceThickness is to adjust user selected thickness. So a 0.5% thickness will scale depth values from [0,1] to [0,200]. The shadow window is always 1 wide.
 	// 1.0 / depth_thickness_scale[0] is because SurfaceThickness is percentage of remaining depth between the sample and the far clip - not a percentage of the full depth range.
 	// The min() function is to make sure the window is a minimum width when very close to the light. The +direction term will bias the result so the pixel at the very center of the light is either fully lit or shadowed
-	half depth_scale = min(sample_distance[0] + direction, 1.0 / inParameters.SurfaceThickness) * sample_distance[0] / depth_thickness_scale[0];
+	half depth_scale = min(sample_distance[0] + direction, 1.0 / inParameters.SurfaceThickness) * sample_distance[0] / max(depth_thickness_scale[0], inParameters.MinDepthThicknessScale);
+	depth_scale = min(depth_scale, inParameters.MaxDepthScale);
 
 	start_depth = start_depth * depth_scale - z_sign;
 
@@ -390,6 +403,14 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 
 	// Take the average of 4 samples, this is useful to reduces aliasing noise in the source depth, especially with long shadows.
 	result = dot(shadow_value, 0.25);
+
+	// Optional far-distance fade to suppress HMD-motion-sensitive distant shadow shimmer.
+	if (inParameters.EnableDistanceFade != 0) {
+		half depthRange = max(abs(inParameters.FarDepthValue - inParameters.NearDepthValue), 1e-5);
+		half farDistance = saturate(abs(inParameters.NearDepthValue - sampling_depth[0]) / depthRange);
+		half fade = 1.0 - smoothstep(inParameters.DistanceFadeStart, inParameters.DistanceFadeEnd, farDistance);
+		result = lerp(1.0, result, fade);
+	}
 
 	// Asking the GPU to write scattered single-byte pixels isn't great,
 	// But thankfully the latency is hidden by all the work we're doing...

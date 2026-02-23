@@ -34,14 +34,20 @@ public:
 		float SurfaceThickness = 0.02f;
 		float BilinearThreshold = 0.02f;
 		float ShadowContrast = 1.0f;
+		float MinDepthThicknessScale = 0.01f;
+		float MaxDepthScale = 256.0f;
+		float DistanceFadeStart = 0.70f;
+		float DistanceFadeEnd = 0.92f;
+		uint EnableDistanceFade = 0;
 		uint Enable = 1;
 		uint SampleCount = 1;
-		uint pad0[3];
+		uint pad0 = 0;
+		uint pad1 = 0;
 	};
 
 	BendSettings bendSettings;
 
-	struct alignas(16) RaymarchCB
+	struct RaymarchCB
 	{
 		// Runtime data returned from BuildDispatchList():
 		float LightCoordinate[4];  // Values stored in DispatchList::LightCoordinate_Shader by BuildDispatchList()

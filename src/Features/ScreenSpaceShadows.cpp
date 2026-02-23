@@ -5,6 +5,7 @@
 #include "TerrainBlending.h"
 #include "Util.h"
 #include "VR.h"
+#include <algorithm>
 
 #pragma warning(push)
 #pragma warning(disable: 4838 4244)
@@ -19,7 +20,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SampleCount,
 	SurfaceThickness,
 	BilinearThreshold,
-	ShadowContrast)
+	ShadowContrast,
+	MinDepthThicknessScale,
+	MaxDepthScale,
+	DistanceFadeStart,
+	DistanceFadeEnd,
+	EnableDistanceFade)
 
 namespace
 {
@@ -109,6 +115,30 @@ void ScreenSpaceShadows::DrawSettings()
 		ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, 0.005f, 0.05f);
 		ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, 0.02f, 1.0f);
 		ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, 0.0f, 4.0f);
+		ImGui::SliderFloat("Min Depth Thickness Scale", &bendSettings.MinDepthThicknessScale, 0.001f, 0.05f, "%.4f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Lower bound for depth thickness normalization. Prevents far-distance depth amplification instability.");
+		}
+		ImGui::SliderFloat("Max Depth Scale", &bendSettings.MaxDepthScale, 16.0f, 2048.0f, "%.0f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Upper bound for depth amplification in raymarch normalization.");
+		}
+
+		bool enableDistanceFade = bendSettings.EnableDistanceFade != 0;
+		if (ImGui::Checkbox("Enable Distance Fade Tuning (Optional)", &enableDistanceFade)) {
+			bendSettings.EnableDistanceFade = enableDistanceFade ? 1u : 0u;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Fades SSS in far distance to reduce HMD-motion-driven distant shadow shimmer.");
+		}
+
+		ImGui::BeginDisabled(!enableDistanceFade);
+		ImGui::SliderFloat("Distance Fade Start", &bendSettings.DistanceFadeStart, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat("Distance Fade End", &bendSettings.DistanceFadeEnd, 0.0f, 1.0f, "%.3f");
+		ImGui::EndDisabled();
+		if (bendSettings.DistanceFadeEnd < bendSettings.DistanceFadeStart) {
+			std::swap(bendSettings.DistanceFadeEnd, bendSettings.DistanceFadeStart);
+		}
 
 		ImGui::Spacing();
 		ImGui::Spacing();
@@ -134,6 +164,10 @@ uint ScreenSpaceShadows::GetScaledSampleCount(bool a_dynamic)
 
 	if (a_dynamic)
 		screenSize = Util::ConvertToDynamic(globals::state->screenSize);
+
+	// Raymarch runs per-eye in VR; scale against per-eye resolution.
+	if (globals::game::isVR)
+		screenSize.x *= 0.5f;
 
 	// Scale sample count based on both dimensions relative to 1920x1080 reference
 
@@ -202,7 +236,7 @@ void ScreenSpaceShadows::DrawShadows()
 
 	// Helper lambda to calculate light projection for a given eye
 	auto CalculateLightProjection = [&](uint32_t eyeIndex = 0) -> std::array<float, 4> {
-		auto viewProjMat = globals::game::frameBufferCached.GetCameraViewProj(eyeIndex).Transpose();
+		auto viewProjMat = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Transpose();
 		auto projectedLight = DirectX::SimpleMath::Vector4::Transform(lightProjection, viewProjMat);
 		return { projectedLight.x, projectedLight.y, projectedLight.z, projectedLight.w };
 	};

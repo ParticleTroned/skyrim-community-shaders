@@ -171,13 +171,16 @@ uint ScreenSpaceShadows::GetScaledSampleCount(bool a_dynamic)
 	if (globals::game::isVR)
 		screenSize.x *= 0.5f;
 
-	// Scale sample count based on both dimensions relative to 1920x1080 reference
+	// VR-tuned normalization:
+	// - 4.5 MP per-eye reference area
+	// - 44 base samples at that reference when SampleCount multiplier is 1
+	constexpr float kReferencePerEyeArea = 4'500'000.0f;
+	constexpr float kBaseSamplesAtReference = 44.0f;
 
-	float2 referenceRes = { 1920.0f, 1080.0f };
-	float referenceArea = referenceRes.x * referenceRes.y;
 	float currentArea = screenSize.x * screenSize.y;
-	float areaScale = std::sqrt(currentArea / referenceArea);
-	uint scaledSampleCount = static_cast<uint>(std::round(bendSettings.SampleCount * 60 * areaScale));
+	float areaScale = std::sqrt(currentArea / kReferencePerEyeArea);
+	uint scaledSampleCount = static_cast<uint>(std::round(bendSettings.SampleCount * kBaseSamplesAtReference * areaScale));
+	scaledSampleCount = std::max(1u, scaledSampleCount);
 
 	return scaledSampleCount;
 }

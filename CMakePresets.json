@@ -92,7 +92,7 @@
             "name": "ALL-DEV",
             "binaryDir": "${sourceDir}/build/ALL",
             "cacheVariables": {
-                "ZIP_TO_DIST": "OFF",
+                "ZIP_TO_DIST": "ON",
                 "AIO_ZIP_TO_DIST": "OFF"
             },
             "inherits": "ALL"

@@ -876,13 +876,15 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 endforeach()
 
 # AIO Folder target
-add_custom_command(
-    OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
-    DEPENDS ${CORE_SOURCES}
+# Keep this as an always-executed target so `cmake --build --preset Dev`
+# reliably refreshes the AIO staging folder each time.
+add_custom_target(
+    "AIO"
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
     COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${AIO_DIR}
+    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
     COMMENT "Installing to AIO folder"
 )
-add_custom_target("AIO" DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
 
 # Manual AIO package target
 set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")

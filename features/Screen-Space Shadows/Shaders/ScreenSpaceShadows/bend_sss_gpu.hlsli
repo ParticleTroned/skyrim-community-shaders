@@ -102,11 +102,11 @@ struct DispatchParameters
 		SurfaceThickness = 0.005;
 		BilinearThreshold = 0.02;
 		ShadowContrast = 4;
-		MinDepthThicknessScale = 0.01;
-		MaxDepthScale = 256.0;
-		DistanceFadeStart = 0.70;
-		DistanceFadeEnd = 0.92;
-		EnableDistanceFade = 0;
+		MinDepthThicknessScale = 0.02;
+		MaxDepthScale = 128.0;
+		DistanceFadeStart = 0.65;
+		DistanceFadeEnd = 0.90;
+		EnableDistanceFade = 1;
 		IgnoreEdgePixels = false;
 		UsePrecisionOffset = false;
 		BilinearSamplingOffsetMode = false;
@@ -343,14 +343,15 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	GroupMemoryBarrierWithGroupSync();
 
 #	if defined(VR)
-	// Check if the pixel we're writing to is on the correct eye side
-	half writeX = write_xy.x * inParameters.InvDepthTextureSize.x;
+	// Enforce strict per-eye write bounds in VR to prevent seam/boundary cross-eye leakage.
+	int eyeWidth = (int)round(1.0 / inParameters.InvDepthTextureSize.x);
+	int writeX = (int)write_xy.x;
 
 #		if defined(RIGHT)
-	if (writeX < 0.0)
+	if (writeX < eyeWidth || writeX >= eyeWidth * 2)
 		return;
 #		else
-	if (writeX > 1.0)
+	if (writeX < 0 || writeX >= eyeWidth)
 		return;
 #		endif
 #	endif

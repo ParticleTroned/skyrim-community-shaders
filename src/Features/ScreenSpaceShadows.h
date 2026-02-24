@@ -34,11 +34,11 @@ public:
 		float SurfaceThickness = 0.02f;
 		float BilinearThreshold = 0.02f;
 		float ShadowContrast = 1.0f;
-		float MinDepthThicknessScale = 0.01f;
-		float MaxDepthScale = 256.0f;
-		float DistanceFadeStart = 0.70f;
-		float DistanceFadeEnd = 0.92f;
-		uint EnableDistanceFade = 0;
+		float MinDepthThicknessScale = 0.02f;
+		float MaxDepthScale = 128.0f;
+		float DistanceFadeStart = 0.65f;
+		float DistanceFadeEnd = 0.90f;
+		uint EnableDistanceFade = 1;
 		uint Enable = 1;
 		uint SampleCount = 1;
 		uint pad0 = 0;
@@ -77,6 +77,8 @@ public:
 	ConstantBuffer* raymarchCB = nullptr;
 	ID3D11ComputeShader* raymarchCS = nullptr;
 	ID3D11ComputeShader* raymarchRightCS = nullptr;
+	uint compiledSampleCount = 0;
+	uint compiledSampleCountRight = 0;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 

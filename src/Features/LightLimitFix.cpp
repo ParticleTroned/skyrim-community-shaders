@@ -57,16 +57,6 @@ void LightLimitFix::DrawSettings()
 			ImGui::Text("Enables Particle Lights.");
 		}
 
-		ImGui::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
-		}
-
-		ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
-		}
-
 		const bool legacyParticleLightingChanged =
 			ImGui::Checkbox("Legacy Particle Lighting", &settings.UseLegacyParticleLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -77,6 +67,16 @@ void LightLimitFix::DrawSettings()
 		// Recompile particle shaders only on explicit user toggle changes.
 		if (legacyParticleLightingChanged) {
 			shaderCache->Clear(RE::BSShader::Type::Particle);
+		}
+
+		ImGui::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Significantly improves performance by not rendering empty textures. Only disable if you are encountering issues.");
+		}
+
+		ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Adds particle lights to the player light level, so that NPCs can detect them for stealth and gameplay.");
 		}
 
 		ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);

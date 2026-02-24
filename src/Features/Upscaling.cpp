@@ -18,6 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	upscaleMethod,
 	upscaleMethodNoDLSS,
 	qualityMode,
+	dlssPreset,
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
@@ -226,7 +227,35 @@ void Upscaling::DrawSettings()
 		if (upscaleMethod == UpscaleMethod::kFSR) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
+			const char* dlssProfiles[] = { "J", "K", "L", "M" };
+			settings.dlssPreset = std::min(settings.dlssPreset, 3u);
+			ImGui::SliderInt("DLSS Profile", (int*)&settings.dlssPreset, 0, 3, dlssProfiles[settings.dlssPreset]);
+			settings.dlssPreset = std::min(settings.dlssPreset, 3u);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				switch (settings.dlssPreset) {
+				case 0:
+					ImGui::Text("J (DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: ~K. Use only if K ghosts.)");
+					break;
+				case 1:
+					ImGui::Text("K (Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users)");
+					break;
+				case 2:
+					ImGui::Text("L (Best quality/stability, lowest ghosting. Slowest preset. Best for Ultra Performance (esp. 4K). FP8-optimized; not recommended on pre-RTX 40 cards.)");
+					break;
+				case 3:
+				default:
+					ImGui::Text("M (Near-L image quality with speed closer to K. Best for Performance mode. FP8-optimized; not recommended on pre-RTX 40 cards.)");
+					break;
+				}
+			}
+
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+
+			const auto& adapter = globals::state->adapterDescription;
+			const bool isNvidia = adapter.find("NVIDIA") != std::string::npos || adapter.find("Nvidia") != std::string::npos || adapter.find("nvidia") != std::string::npos;
+			if (isNvidia) {
+				ImGui::TextWrapped("Note: FP8-optimized presets (L/M) are best on RTX 40/50. On RTX 20/30, use K (default) or J for better FPS.");
+			}
 		}
 	}
 

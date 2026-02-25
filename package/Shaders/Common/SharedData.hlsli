@@ -112,8 +112,8 @@ namespace SharedData
 
 		bool EnableSplashes;
 		bool EnableRipples;
-        uint EnableVanillaRipples;
-        float RaindropFxRange;
+		uint EnableVanillaRipples;
+		float RaindropFxRange;
 
 		float RaindropGridSizeRcp;
 		float RaindropIntervalRcp;

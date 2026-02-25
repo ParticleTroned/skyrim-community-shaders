@@ -460,8 +460,10 @@ void CalculateGI(
 		{
 			float4 nMinY = currY, nMaxY = currY;
 			float2 nMinCoCg = currCoCg, nMaxCoCg = currCoCg;
-			[unroll] for (int dy = -1; dy <= 1; dy++) {
-				[unroll] for (int dx = -1; dx <= 1; dx++) {
+			[unroll] for (int dy = -1; dy <= 1; dy++)
+			{
+				[unroll] for (int dx = -1; dx <= 1; dx++)
+				{
 					if (dx == 0 && dy == 0)
 						continue;
 					int2 np = pxCoord + int2(dx, dy);

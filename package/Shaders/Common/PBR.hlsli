@@ -5,8 +5,8 @@
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
-#include "Common/SharedData.hlsli"
 #include "Common/PBRMath.hlsli"
+#include "Common/SharedData.hlsli"
 
 namespace PBR
 {

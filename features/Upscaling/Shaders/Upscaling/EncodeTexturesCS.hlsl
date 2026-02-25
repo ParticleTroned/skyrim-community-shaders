@@ -101,13 +101,13 @@ float ComputeSeamFactor(uint2 sourcePos)
 			float neighborDepth = DepthMask[samplePos];
 
 			// Take neighbor if it's longer AND closer
-			if (neighborDepth < depth){
+			if (neighborDepth < depth) {
 				float2 neighborMotionVector = MotionVectorMask[samplePos];
 
 				// Square motion vector for length
 				float motionLengthSq = dot(neighborMotionVector, neighborMotionVector);
 
-				if (motionLengthSq > maxMotionLengthSq){
+				if (motionLengthSq > maxMotionLengthSq) {
 					maxMotionLengthSq = motionLengthSq;
 					longestMotionVector = neighborMotionVector;
 				}

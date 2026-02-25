@@ -65,8 +65,7 @@ cbuffer UpdateData : register(b0)
 	uint CaptureFlags;
 }
 
-[numthreads(8, 8, 1)] void main(uint3 ThreadID
-								: SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void main(uint3 ThreadID : SV_DispatchThreadID) {
 	float3 captureDirection = -GetSamplingVector(ThreadID, DynamicCubemap);
 	float3 viewDirection = FrameBuffer::WorldToView(captureDirection, false);
 	float2 uv = FrameBuffer::ViewToUV(viewDirection, false);

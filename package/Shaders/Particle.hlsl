@@ -1,7 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
-#include "Common/VR.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/VR.hlsli"
 
 struct VS_INPUT
 {
@@ -333,12 +333,12 @@ PS_OUTPUT main(PS_INPUT input)
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - positionWS.xyz;
 				float lightDist = length(lightDirection);
 
-#			if defined(ISL)
+#		if defined(ISL)
 				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
-#			else
+#		else
 				float intensityFactor = saturate(lightDist / light.radius);
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#			endif
+#		endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade * 0.5;

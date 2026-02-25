@@ -80,9 +80,9 @@ struct VS_OUTPUT
 {
 #	if defined(SPECULAR) || defined(UNDERWATER)
 	float4 HPosition : SV_POSITION0;
-#   if !defined(UNIFIED_WATER)
+#		if !defined(UNIFIED_WATER)
 	float4 FogParam : COLOR0;
-#	endif
+#		endif
 	float4 WPosition : TEXCOORD0;
 	float4 TexCoord1 : TEXCOORD1;
 	float4 TexCoord2 : TEXCOORD2;
@@ -190,11 +190,11 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], inputPosition);
 #		else
 
-#		if !defined(UNIFIED_WATER)
+#			if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = min(VSFogFarColor.w, pow(saturate(length(worldViewPos.xyz) * VSFogParam.y - VSFogParam.x), NormalsScale.w));
 	vsout.FogParam.xyz = lerp(VSFogNearColor.xyz, VSFogFarColor.xyz, fogDistanceFactor);
 	vsout.FogParam.w = fogDistanceFactor;
-		#endif
+#			endif
 
 	vsout.WPosition.xyz = worldPos.xyz;
 	vsout.WPosition.w = length(worldPos.xyz);
@@ -569,11 +569,11 @@ float GetFlowmapMipLevel(float2 flowmapUV)
 	float2 textureDims;
 	FlowMapNormalsTex.GetDimensions(textureDims.x, textureDims.y);
 
-#if defined(VR)
+#				if defined(VR)
 	textureDims /= 16.0;
-#else
+#				else
 	textureDims /= 8.0;
-#endif
+#				endif
 
 	float2 texCoordsPerSize = flowmapUV * textureDims;
 	float2 dxSize = ddx(texCoordsPerSize);
@@ -587,7 +587,6 @@ float GetFlowmapMipLevel(float2 flowmapUV)
  * Samples height from flowmap texture (riverflow.dds alpha channel)
  * Uses the same UV calculation as GetFlowmapNormal for consistency
  */
-
 
 /**
  * Generates flowmap-based normal (no parallax - flowmap normals are not parallax-shifted)
@@ -709,7 +708,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 #			endif
 
 #			if defined(FLOWMAP)
-	#				if defined(UNIFIED_WATER)
+#				if defined(UNIFIED_WATER)
 	float2 flowmapDimensions = input.TexCoord4.xy;
 #				else
 	float2 flowmapDimensions = input.TexCoord4.xx;
@@ -750,20 +749,20 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	flowmapNormal.z =
 		sqrt(1 - flowmapNormal.x * flowmapNormal.x - flowmapNormal.y * flowmapNormal.y);
 	float2 baseNormalUv = input.TexCoord1.xy;
-#			if defined(WATER_PARALLAX)
+#				if defined(WATER_PARALLAX)
 	// Use flowmap-derived parallax offset for base normals
 	baseNormalUv += flowmapParallaxOffset.xy * normalScalesRcp.x;
-#			endif
+#				endif
 	float3 normals1 = Normals01Tex.SampleBias(Normals01Sampler, baseNormalUv, SharedData::MipBias).xyz * 2.0 + float3(-1, -1, -2);
-	#			endif  // End of FLOWMAP block
+#			endif  // End of FLOWMAP block
 
-	#			if !defined(FLOWMAP)
-	#				if defined(WATER_PARALLAX)
-		float3 normals1 = Normals01Tex.SampleBias(Normals01Sampler, input.TexCoord1.xy + parallaxOffset.xy * normalScalesRcp.x, SharedData::MipBias).xyz * 2.0 + float3(-1, -1, -2);
-	#				else
-		float3 normals1 = Normals01Tex.SampleBias(Normals01Sampler, input.TexCoord1.xy, SharedData::MipBias).xyz * 2.0 + float3(-1, -1, -2);
-	#				endif
-	#			endif  // End of !FLOWMAP block
+#			if !defined(FLOWMAP)
+#				if defined(WATER_PARALLAX)
+	float3 normals1 = Normals01Tex.SampleBias(Normals01Sampler, input.TexCoord1.xy + parallaxOffset.xy * normalScalesRcp.x, SharedData::MipBias).xyz * 2.0 + float3(-1, -1, -2);
+#				else
+	float3 normals1 = Normals01Tex.SampleBias(Normals01Sampler, input.TexCoord1.xy, SharedData::MipBias).xyz * 2.0 + float3(-1, -1, -2);
+#				endif
+#			endif  // End of !FLOWMAP block
 #			if defined(FLOWMAP) && !defined(BLEND_NORMALS)
 #				ifdef DISABLE_FLOWMAP_NORMALS
 	// FLOWMAP NORMALS DISABLED: Using only base normals (flow system still active for ripples/splashes)
@@ -1329,11 +1328,11 @@ float3 finalColor = lerp(finalColorPreFog, fogColor * PosAdjust[eyeIndex].w, Col
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 
 #						if !defined(UNIFIED_WATER)
-    float fogDistanceFactor = input.FogParam.w;
-    float3 preFogColor = Color::Fog(input.FogParam.xyz);
+	float fogDistanceFactor = input.FogParam.w;
+	float3 preFogColor = Color::Fog(input.FogParam.xyz);
 #						else
-    float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
-    float3 preFogColor = Color::Fog(lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor));
+	float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
+	float3 preFogColor = Color::Fog(lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor));
 #						endif
 
 #						if defined(IBL)

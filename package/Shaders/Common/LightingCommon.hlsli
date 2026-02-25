@@ -62,8 +62,8 @@ struct MaterialProperties
 	float Glossiness;
 	float3 SpecularColor;
 #	if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING) || defined(LOAD_SOFT_LIGHTING))
-    float3 rimSoftLightColor;
-#   endif
+	float3 rimSoftLightColor;
+#	endif
 #	if defined(BACK_LIGHTING)
 	float3 backLightColor;
 #	endif

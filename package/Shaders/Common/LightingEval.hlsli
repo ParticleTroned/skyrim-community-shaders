@@ -41,7 +41,7 @@ DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNorma
 		context.coatLightColor = context.lightColor;
 	}
 #endif
-    return context;
+	return context;
 }
 
 IndirectContext CreateIndirectLightingContext(float3 worldNormal, float3 vertexNormal, float3 viewDir)
@@ -66,24 +66,24 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv)
 	float LdotAN = dot(AN, L);
 	float HdotAN = dot(AN, H);
 	HdotN = 1 - min(1, abs(LdotAN - HdotAN));
-#	else
+#else
 	HdotN = saturate(dot(H, N));
-#	endif
+#endif
 
-#	if defined(SPECULAR)
+#if defined(SPECULAR)
 	float lightColorMultiplier = exp2(shininess * log2(HdotN));
 
-#	elif defined(SPARKLE)
+#elif defined(SPARKLE)
 	float lightColorMultiplier = 0;
-#	else
+#else
 	float lightColorMultiplier = HdotN;
-#	endif
+#endif
 
-#	if defined(ANISO_LIGHTING)
+#if defined(ANISO_LIGHTING)
 	lightColorMultiplier *= 0.7 * max(0, L.z);
-#	endif
+#endif
 
-#	if defined(SPARKLE) && !defined(SNOW)
+#if defined(SPARKLE) && !defined(SNOW)
 	float3 sparkleUvScale = exp2(float3(1.3, 1.6, 1.9) * log2(abs(SparkleParams.x)).xxx);
 
 	float sparkleColor1 = TexProjDetail.Sample(SampProjDetailSampler, uv * sparkleUvScale.xx).z;
@@ -95,7 +95,7 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv)
 	float sparkleMultiplier = exp2(SparkleParams.w * log2(saturate(dot(V, -L)))) * (SparkleParams.z * sparkleColor);
 	sparkleMultiplier = sparkleMultiplier >= 0.5 ? 1 : 0;
 	lightColorMultiplier += sparkleMultiplier * HdotN;
-#	endif
+#endif
 	return lightColorMultiplier;
 }
 
@@ -106,8 +106,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 	PBR::GetDirectLightInput(lightingOutput, context, material, tbnTr, uv);
 #else
 #	if defined(HAIR) && defined(CS_HAIR)
-	if (SharedData::hairSpecularSettings.Enabled)
-	{
+	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairDirectLight(lightingOutput, context, material, tbnTr, uv);
 		return;
 	}
@@ -136,8 +135,7 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 	PBR::GetIndirectLobeWeights(lobeWeights, context, material);
 #else
 #	if defined(HAIR) && defined(CS_HAIR)
-	if (SharedData::hairSpecularSettings.Enabled)
-	{
+	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairIndirectLobeWeights(lobeWeights, context, material, uv);
 		return;
 	}

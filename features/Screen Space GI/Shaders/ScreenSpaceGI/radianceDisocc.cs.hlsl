@@ -80,8 +80,7 @@ void readHistory(
 	}
 };
 
-[numthreads(8, 8, 1)] void main(const uint2 pixCoord
-								: SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void main(const uint2 pixCoord : SV_DispatchThreadID) {
 	const float2 frameScale = FrameDim * RcpTexDim;
 
 	const float2 uv = (pixCoord + .5) * RCP_OUT_FRAME_DIM;

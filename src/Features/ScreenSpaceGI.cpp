@@ -958,12 +958,14 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &centerGIMaskedCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, true, true },
 			{ &centerGIMaskedAOOnlyCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, false, true },
 			{ &blurCompute, "blur.cs.hlsl", {} },
-			{ &stereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } } },
 			{ &upsampleCompute, "upsample.cs.hlsl", {} },
 			{ &upsampleAOOnlyCompute, "upsample.cs.hlsl", {}, true, false, false },
 			{ &centerBlendCompute, "centerBlend.cs.hlsl", {}, false, false },
 			{ &centerBlendAOOnlyCompute, "centerBlend.cs.hlsl", {}, false, false, false },
 		};
+
+	if (REL::Module::IsVR())
+		shaderInfos.push_back({ &stereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } } });
 	for (auto& info : shaderInfos) {
 		if (REL::Module::IsVR())
 			info.defines.push_back({ "VR", "" });

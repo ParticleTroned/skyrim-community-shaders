@@ -4,6 +4,8 @@
 #include "Common/VR.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
+#ifdef VR
+
 Texture2D<float> srcDepth : register(t0);
 Texture2D<float> srcAo : register(t1);
 #ifdef GI
@@ -84,3 +86,5 @@ void StoreSource(uint2 dstPx, uint2 srcPx)
 	outIlCoCg[px] = lerp(srcIlCoCg[px], srcIlCoCg[r.otherPx], r.blendWeight);
 #endif
 }
+
+#endif  // VR

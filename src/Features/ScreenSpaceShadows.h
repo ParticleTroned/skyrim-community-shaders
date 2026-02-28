@@ -32,9 +32,9 @@ public:
 
 	struct BendSettings
 	{
-		float SurfaceThickness = 0.02f;
+		float SurfaceThickness = !globals::game::isVR ? 0.02f : 0.010f;
 		float BilinearThreshold = 0.02f;
-		float ShadowContrast = 1.0f;
+		float ShadowContrast = !globals::game::isVR ? 1.0f : 4.0f;
 		uint Enable = 1;
 		uint SampleCount = 1;
 		float VRBaseSamplesAtReference = 44.0f;
@@ -60,7 +60,6 @@ public:
 									   // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
 		float2 DynamicRes;
-
 		uint DynamicSampleCount;
 		uint DynamicReadCount;
 		float pad0[2];
@@ -68,6 +67,15 @@ public:
 		BendSettings settings;
 	};
 	STATIC_ASSERT_ALIGNAS_16(RaymarchCB);
+
+	bool enableStereoSync = true;
+
+	struct alignas(16) StereoSyncCB
+	{
+		float FrameDim[2];
+		float RcpFrameDim[2];
+	};
+	STATIC_ASSERT_ALIGNAS_16(StereoSyncCB);
 
 	ID3D11SamplerState* pointBorderSampler = nullptr;
 
@@ -79,11 +87,17 @@ public:
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
+	// VR stereo sync resources
+	Texture2D* stereoSyncCopyTex = nullptr;
+	ConstantBuffer* stereoSyncCB = nullptr;
+	ID3D11ComputeShader* stereoSyncCS = nullptr;
+
 	virtual void SetupResources() override;
 
 	virtual void DrawSettings() override;
 
 	virtual void ClearShaderCache() override;
+	void InvalidateRaymarchShaders();
 	uint GetScaledSampleCount(bool a_dynamic);
 	ID3D11ComputeShader* GetOrCreateRaymarchShader(ID3D11ComputeShader*& a_shader, uint& a_compiledSampleCount, bool a_rightEye);
 	ID3D11ComputeShader* GetComputeRaymarch();
@@ -95,6 +109,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 
 	void DrawShadows();
+	void DrawStereoSync();
 
 	virtual void RestoreDefaultSettings() override;
 

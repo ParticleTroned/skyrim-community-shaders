@@ -61,7 +61,6 @@ struct DispatchParameters
 	float VRCullDistance;  // 0 disables distance culling.
 
 	float2 DynamicRes;
-
 	uint DynamicSampleCount;
 	uint DynamicReadCount;
 
@@ -100,6 +99,8 @@ struct DispatchParameters
 		BilinearThreshold = 0.02;
 		ShadowContrast = 4;
 		VRCullDistance = 0.0;
+		DynamicSampleCount = 0;
+		DynamicReadCount = 0;
 		IgnoreEdgePixels = false;
 		UsePrecisionOffset = false;
 		BilinearSamplingOffsetMode = false;
@@ -228,11 +229,8 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 
 	SSS_COORD2 write_xy = floor(pixel_xy);
 
-	[loop] for (i = 0; i < READ_COUNT; i++)
+	[unroll] for (i = 0; i < READ_COUNT; i++)
 	{
-		if (i == inParameters.DynamicSampleCount)
-			break;
-
 		// We sample depth twice per pixel per sample, and interpolate with an edge detect filter
 		// Interpolation should only occur on the minor axis of the ray - major axis coordinates should be at pixel centers
 		SSS_COORD2 read_xy = floor(pixel_xy);
@@ -313,11 +311,8 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	}
 
 	// Write the shadow depths to LDS
-	[loop] for (i = 0; i < READ_COUNT; i++)
+	[unroll] for (i = 0; i < READ_COUNT; i++)
 	{
-		if (i == inParameters.DynamicSampleCount)
-			break;
-
 		// Perspective correct the shadowing depth, in this space, all light rays are parallel
 		half stored_depth = (shadowing_depth[i] - inParameters.LightCoordinate.z) / sample_distance[i];
 
@@ -394,7 +389,6 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 	for (i = 0; i < SAMPLE_COUNT; i++) {
 		if (i == inParameters.DynamicSampleCount)
 			break;
-
 		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
 
 		// By using 4 values, the average shadow can be taken, which can help soften single-pixel shadows.

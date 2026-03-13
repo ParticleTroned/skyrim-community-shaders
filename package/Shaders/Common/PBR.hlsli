@@ -5,8 +5,9 @@
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/Math.hlsli"
-#include "Common/SharedData.hlsli"
 #include "Common/PBRMath.hlsli"
+#include "Common/Shading.hlsli"
+#include "Common/SharedData.hlsli"
 
 namespace PBR
 {
@@ -280,11 +281,9 @@ namespace PBR
 		horizon = horizon * horizon;
 		lobeWeights.specular *= horizon;
 
-		float3 diffuseAO = material.AO;
-		float3 specularAO = Color::SpecularAOLagarde(NdotV, material.AO, material.Roughness);
-
-		diffuseAO = Color::MultiBounceAO(material.BaseColor, diffuseAO.x).y;
-		specularAO = Color::MultiBounceAO(material.F0, specularAO.x).y;
+		float3 diffuseAO = MultiBounceAO(material.BaseColor, material.AO);
+		float alpha = material.Roughness * material.Roughness;
+		float specularAO = SpecularOcclusion(NdotV, alpha, material.AO);
 
 		lobeWeights.diffuse *= diffuseAO;
 		lobeWeights.specular *= specularAO;

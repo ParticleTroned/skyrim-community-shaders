@@ -1654,7 +1654,7 @@ bool WeatherWidget::HasUnsavedChanges() const
 void WeatherWidget::DrawFeatureSettings()
 {
 	static constexpr std::string_view kIblFeatureName = "ImageBasedLighting";
-	static constexpr std::string_view kIblWeatherToggle = "EnableDiffuseIBL";
+	static constexpr std::string_view kIblWeatherToggle = "EnableIBL";
 
 	ImGui::TextWrapped(
 		"Configure feature-specific settings that will be applied when this weather is active. "

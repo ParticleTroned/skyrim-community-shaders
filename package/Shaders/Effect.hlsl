@@ -551,10 +551,10 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
 		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 		float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5 * Color::EffectLightingMult();
-		float3 ambientColor = max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 1, 1)));
+		float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
 
 #		if defined(IBL)
-		if (SharedData::iblSettings.EnableDiffuseIBL && (!SharedData::InInterior || SharedData::iblSettings.EnableInterior)) {
+		if (SharedData::iblSettings.EnableIBL && SharedData::iblSettings.DALCMode == 2) {
 			ambientColor *= SharedData::iblSettings.DALCAmount;
 		}
 #		endif
@@ -580,16 +580,15 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 #		endif
 
 #		if defined(IBL)
-		float3 iblColor = 0;
-		if (SharedData::iblSettings.EnableDiffuseIBL) {
-			if (!SharedData::InInterior || SharedData::iblSettings.EnableInterior)
-			{
+		if (SharedData::iblSettings.EnableIBL) {
+			if (SharedData::iblSettings.DALCMode == 2) {
+				float3 skyIBLColor = ImageBasedLighting::GetSkyIBLColor(float3(0, 0, -1));
 #			if defined(SKYLIGHTING)
-				iblColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1), skylightingDiffuse), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
-#			else
-				iblColor += Color::Saturation(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)), SharedData::iblSettings.IBLSaturation) * SharedData::iblSettings.DiffuseIBLScale;
+				skyIBLColor *= skylightingDiffuse;
 #			endif
-				color += Color::IrradianceToGamma(iblColor);
+				color += Color::IrradianceToGamma(skyIBLColor);
+			} else {
+				color = Color::IrradianceToGamma(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)));
 			}
 		}
 #		endif
@@ -835,8 +834,8 @@ PS_OUTPUT main(PS_INPUT input)
 		lerp(lightColor, 1.0.xxx, saturate(1.5 * Color::FogAlpha(input.FogParam.w)).xxx);
 #		else
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
-#			if defined(IBL)
-	if (SharedData::iblSettings.EnableDiffuseIBL && !SharedData::InInterior) {
+#		if defined(IBL)
+	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #			endif

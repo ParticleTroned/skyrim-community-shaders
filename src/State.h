@@ -240,6 +240,9 @@ public:
 		float SSSHumanFemaleSaturation;
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
+		float4 AmbientSHR;
+		float4 AmbientSHG;
+		float4 AmbientSHB;
 	};
 #ifdef _MSC_VER
 #pragma warning(pop)

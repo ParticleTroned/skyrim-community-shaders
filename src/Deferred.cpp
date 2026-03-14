@@ -428,8 +428,8 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
-			ibl.IsRuntimeEnabled() && ibl.diffuseIBLTexture ? ibl.diffuseIBLTexture->srv.get() : nullptr,
-			ibl.IsRuntimeEnabled() && ibl.diffuseSkyIBLTexture ? ibl.diffuseSkyIBLTexture->srv.get() : nullptr,
+			ibl.IsRuntimeEnabled() && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr,
+			ibl.IsRuntimeEnabled() && ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr,
 		};
 
 		if (dynamicCubemaps.loaded)

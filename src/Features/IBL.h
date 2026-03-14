@@ -14,18 +14,19 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Image Based Lighting provides realistic diffuse ambient lighting for exteriors.",
-			{ "Realistic diffuse ambient lighting from environment maps",
-				"Spherical harmonics-based ambient light calculation",
-				"Enhanced exterior ambient lighting quality",
-				"Configurable intensity and saturation, mixing with DALC" }
+			"Replaces the game's ambient lighting with physically-based IBL derived from cubemap spherical harmonics.",
+			{ "Projects environment and sky cubemaps into spherical harmonics (SH) for irradiance",
+				"Dual IBL sources: environment cubemap (Dynamic Cubemaps) and Skyrim's native sky reflections cubemap",
+				"DALC brightness matching to keep IBL consistent with the game's ambient light levels",
+				"Configurable per-source intensity, saturation, fog mixing, and per-weather overrides",
+				"Static IBL fallback textures for out-of-world objects (e.g. inventory items)" }
 		};
 	}
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
-	Texture2D* diffuseIBLTexture = nullptr;
-	Texture2D* diffuseSkyIBLTexture = nullptr;
+	Texture2D* envIBLTexture = nullptr;
+	Texture2D* skyIBLTexture = nullptr;
 	ID3D11ComputeShader* diffuseIBLCS = nullptr;
 
 	virtual void RestoreDefaultSettings() override;
@@ -43,27 +44,32 @@ public:
 	struct Settings
 	{
 		uint EnableIBL = 0;
-		uint EnableDiffuseIBL = 0;
 		uint PreserveFogLuminance = 0;
 		uint UseStaticIBL = 1;
-		uint EnableInterior = 0;
-		bool CaptureWeatherBaselineOnSliderChange = false;
-		float DiffuseIBLScale = 1.0f;
 		float DALCAmount = 1.0f;
-		float IBLSaturation = 1.0f;
+		float EnvIBLScale = 1.0f;
+		float SkyIBLScale = 1.0f;
+		float EnvIBLSaturation = 1.0f;
+		float SkyIBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
+		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
+		bool CaptureWeatherBaselineOnSliderChange = false;
 	} settings;
 
 	struct CommonBufferData
 	{
-		uint EnableDiffuseIBL;
+		uint EnableIBL;
 		uint PreserveFogLuminance;
 		uint UseStaticIBL;
-		uint EnableInterior;
-		float DiffuseIBLScale;
 		float DALCAmount;
-		float IBLSaturation;
+		float EnvIBLScale;
+		float SkyIBLScale;
+		float EnvIBLSaturation;
+		float SkyIBLSaturation;
 		float FogAmount;
+		uint DALCMode;
+		float pad0;
+		float pad1;
 	};
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;

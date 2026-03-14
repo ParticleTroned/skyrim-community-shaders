@@ -308,7 +308,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float dirShadow = ShadowSampling::GetWorldShadow(positionWS.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 	float3 dirLightRaw = SharedData::DirLightColor.xyz * dirShadow;
 	float3 dirLightColor = Color::DirectionalLight(dirLightRaw / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
-	float3 ambientColor = Color::Ambient(max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 1, 1)).xyz));
+	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 1))));
 
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;

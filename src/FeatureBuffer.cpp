@@ -95,7 +95,7 @@ namespace
 	static_assert(sizeof(LODBlendingSettingsCB) == 32);
 	static_assert(sizeof(HairSpecularSettingsCB) == 80);
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
-	static_assert(sizeof(IBLSettingsCB) == 32);
+	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
 	static_assert(sizeof(LinearLightingSettingsCB) == 112);
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);

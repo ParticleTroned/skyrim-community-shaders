@@ -1068,7 +1068,7 @@ void Upscaling::DrawSettings()
 			if (!frameGenerationDx12PathActive)
 				ImGui::EndDisabled();
 
-			ImGui::Text("Allows frame generation to function on low refresh rate monitors");
+			ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", refreshRate);
 			ImGui::SliderInt("Force Enable Frame Generation", (int*)&settings.frameGenerationForceEnable, 0, 1, std::format("{}", toggleModes[settings.frameGenerationForceEnable]).c_str());
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Forces Frame Generation on unsupported/low-refresh setups.");
@@ -3874,7 +3874,7 @@ double Upscaling::GetRefreshRate(HWND a_window)
 					sourceName.header.size = sizeof(sourceName);
 					sourceName.header.adapterId = p.sourceInfo.adapterId;
 					sourceName.header.id = p.sourceInfo.id;
-					if (DisplayConfigGetDeviceInfo(&sourceName.header) == ERROR_SUCCESS) {
+					if (DisplayConfigGetDeviceInfo(&sourceName.header) == ERROR_SUCCESS && wcscmp(info.szDevice, sourceName.viewGdiDeviceName) == 0) {
 						// find the matched device which is associated with current device
 						// there may be the possibility that display may be duplicated and windows may be one of them in such scenario
 						// there may be two callback because source is same target will be different

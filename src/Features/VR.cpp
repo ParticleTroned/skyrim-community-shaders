@@ -154,8 +154,7 @@ void VR::EarlyPrepass()
 bool VR::ShouldShowAutoHideOverlay() const
 {
 	return settings.kAutoHideSeconds > 0 &&
-	       globals::game::ui &&
-	       globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) &&
+	       globals::state->isMainMenuOpen &&
 	       globals::menu &&
 	       !globals::menu->IsEnabled;
 }

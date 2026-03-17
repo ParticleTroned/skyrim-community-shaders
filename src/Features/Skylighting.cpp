@@ -458,9 +458,8 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!a_inWorld)
 		return Skylighting::SkylightingCB{};
 
-	if (auto ui = globals::game::ui)
-		if (ui->IsMenuOpen(RE::MapMenu::MENU_NAME))
-			return Skylighting::SkylightingCB{};
+	if (globals::state->isMapMenuOpen)
+		return Skylighting::SkylightingCB{};
 
 	auto eyePosNI = Util::GetEyePosition(0);
 	auto eyePos = float3{ eyePosNI.x, eyePosNI.y, eyePosNI.z };
@@ -519,9 +518,8 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 
 void Skylighting::Prepass()
 {
-	if (auto ui = globals::game::ui)
-		if (ui->IsMenuOpen(RE::MapMenu::MENU_NAME))
-			return;
+	if (globals::state->isMapMenuOpen)
+		return;
 
 	bool interior = true;
 

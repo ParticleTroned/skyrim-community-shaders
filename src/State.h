@@ -188,6 +188,12 @@ public:
 	bool pendingPostLoadRuntimeReset = false;
 	bool activeReflections = false;
 
+	// Cached menu open states, updated once per frame in Reset().
+	// Avoids repeated IsMenuOpen calls (each constructs a BSFixedString).
+	bool isMainMenuOpen = false;
+	bool isLoadingMenuOpen = false;
+	bool isMapMenuOpen = false;
+
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 
 	struct PermutationCB

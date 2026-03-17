@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 class HomePageRenderer
 {
 public:
@@ -7,6 +8,7 @@ public:
 	static constexpr float TITLE_FONT_SCALE = 2.0f;
 	static constexpr float SETUP_DIALOG_FONT_SCALE = 0.75f;
 	static constexpr float HOTKEY_TEXT_SCALE_MULTIPLIER = 1.2f;
+	static constexpr uint8_t MODAL_OVERLAY_ALPHA = 160;
 
 	// Logo watermark height (in pixels)
 	static constexpr float LOGO_WATERMARK_HEIGHT = 260.0f;

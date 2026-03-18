@@ -566,8 +566,7 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, enumCount ? enumCount - 1 : 0);
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
 	}
-	settings.dlssPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	SanitizeFoveatedSettings(settings);
+	settings.dlssPreset = std::min<uint>(settings.dlssPreset, 3u);
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
 		settings.reflexFPSLimit = 60.0f;

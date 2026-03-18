@@ -103,6 +103,7 @@ public:
 
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationActive() const;
+	bool IsFrameGenerationDx12PathActive() const;
 	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
 

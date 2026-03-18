@@ -536,6 +536,29 @@ void Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		return;
 	SetDLSSOptions(vp, eyeIndex, outputWidth);
 
+	const bool emitPCLMarkers =
+		globals::features::upscaling.settings.reflexUseMarkersToOptimize &&
+		reflexOptionsCache.useMarkersToOptimize &&
+		featurePCL;
+	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
+		if (!emitPCLMarkers || !slPCLSetMarker || !frameToken)
+			return;
+		const sl::Result markerResult = slPCLSetMarker(marker, *frameToken);
+		if (markerResult != sl::Result::eOk) {
+			static bool markerErrorLogged[2][2] = { { false, false }, { false, false } };
+			const uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0u;
+			const uint32_t boundedStageIndex = std::min(stageIndex, 1u);
+			if (markerErrorLogged[logIdx][boundedStageIndex])
+				return;
+			markerErrorLogged[logIdx][boundedStageIndex] = true;
+			logger::warn(
+				"[Streamline] slPCLSetMarker({}) failed{}: {}",
+				stageName,
+				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
+				magic_enum::enum_name(markerResult));
+		}
+	};
+
 	sl::ResourceTag tags[] = {
 		{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentIn },
 		{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentOut },
@@ -561,7 +584,9 @@ void Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
+	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
+	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
 	if (state->frameAnnotations)
 		state->EndPerfEvent();
@@ -659,7 +684,7 @@ void Streamline::UpdateReflex()
 
 	const float fpsLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
 	options.frameLimitUs = settings.reflexUseFPSLimit ? static_cast<uint32_t>(std::round(1000000.0f / fpsLimit)) : 0u;
-	options.useMarkersToOptimize = settings.reflexUseMarkersToOptimize && featurePCL && slPCLSetMarker;
+	options.useMarkersToOptimize = settings.reflexUseMarkersToOptimize && featurePCL;
 
 	if (!reflexOptionsCache.valid ||
 		reflexOptionsCache.mode != options.mode ||

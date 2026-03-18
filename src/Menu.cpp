@@ -159,6 +159,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkipClearCacheConfirmation,
 	AutoHideFeatureList,
 	SkipConstraintWarning,
+	RequireShiftToDock,
 	Theme,
 	SelectedThemePreset)
 
@@ -615,6 +616,7 @@ void Menu::Init()
 
 	auto& imgui_io = ImGui::GetIO();
 	imgui_io.ConfigFlags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_DockingEnable;
+	imgui_io.ConfigDockingWithShift = settings.RequireShiftToDock;
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_HasGamepad;
 
 	cachedIniPath = Util::PathHelpers::GetImGuiIniPath().string();

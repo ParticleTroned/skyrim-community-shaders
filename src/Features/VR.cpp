@@ -197,8 +197,9 @@ void VR::DrawOverlay()
 	int secondsLeft = int(std::ceil(autoHideSeconds - elapsed));
 
 	ImGuiIO& io = ImGui::GetIO();
-	ImVec2 overlaySize(480, 0);  // width, height auto
-	ImVec2 overlayPos = ImVec2((io.DisplaySize.x - overlaySize.x) * 0.5f, 80.0f);
+	const float scale = Util::GetUIScale();
+	ImVec2 overlaySize(480.0f * scale, 0);  // width, height auto
+	ImVec2 overlayPos = ImVec2((io.DisplaySize.x - overlaySize.x) * 0.5f, 80.0f * scale);
 	ImGui::SetNextWindowPos(overlayPos, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(overlaySize, ImGuiCond_Always);
 	ImGui::SetNextWindowBgAlpha(0.92f);
@@ -273,7 +274,7 @@ void VR::DrawSettings()
 	// Combo recording popup
 	if (this->isCapturingCombo) {
 		ImGui::OpenPopup("Record Combo");
-		ImGui::SetNextWindowSize(ImVec2(400, 200), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(400.0f * Util::GetUIScale(), 200.0f * Util::GetUIScale()), ImGuiCond_FirstUseEver);
 		if (ImGui::BeginPopupModal("Record Combo", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 			// Helper function to get button name
 			auto GetButtonName = [](uint32_t key) -> const char* {

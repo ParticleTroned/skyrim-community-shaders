@@ -4,8 +4,10 @@
 #include "Features/InverseSquareLighting/Common.h"
 #include "LinearLighting.h"
 
+#include "Menu/ThemeManager.h"
 #include "Shadercache.h"
 #include "State.h"
+#include "Util.h"
 
 #include "RE/B/BSMultiBoundRoom.h"
 
@@ -472,7 +474,8 @@ void LightLimitFix::DrawOverlay()
 {
 	if (!settings.EnableLightsVisualisation)
 		return;
-	ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale();
+	ImGui::SetNextWindowPos(ImVec2(pos, pos), ImGuiCond_Always);
 	ImGui::Begin("##LLFDebug", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
 	ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "DEBUG FEATURE - LIGHT LIMIT VISUALISATION ENABLED");
 

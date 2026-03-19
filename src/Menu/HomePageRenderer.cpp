@@ -8,6 +8,7 @@
 #include "Plugin.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/UI.h"
 
 // Static member definitions
 bool HomePageRenderer::isFirstTimeSetupShown = false;
@@ -39,7 +40,8 @@ void HomePageRenderer::RenderHomePage()
 
 void HomePageRenderer::RenderWelcomeSection()
 {
-	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8));
+	const float scale = Util::GetUIScale();
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 8.0f * scale));
 
 	// Main title - centered with safe font handling
 	ImGuiIO& io = ImGui::GetIO();
@@ -85,7 +87,7 @@ void HomePageRenderer::RenderWelcomeSection()
 	ImGui::Spacing();
 
 	// Extra vertical padding - move banner down by 40.0f (pixels)
-	ImGui::Dummy(ImVec2(0.0f, 50.0f));
+	ImGui::Dummy(ImVec2(0.0f, 50.0f * scale));
 
 	// Discord banner - centered with proper error checking
 	auto menu = Menu::GetSingleton();
@@ -104,9 +106,9 @@ void HomePageRenderer::RenderWelcomeSection()
 		// Compute width based on window size with constraints and padding (handles very small windows)
 		float ratioWidth = windowSize.x * DISCORD_BANNER_TARGET_WIDTH_RATIO;
 		float aspectRatio = originalSize.y / originalSize.x;
-		float maxAllowed = std::max(1.0f, windowSize.x - DISCORD_BANNER_PADDING_MARGIN);
-		float upperBound = std::min(DISCORD_BANNER_MAX_WIDTH, maxAllowed);
-		float lowerBound = std::min(DISCORD_BANNER_MIN_WIDTH, upperBound);
+		float maxAllowed = std::max(1.0f, windowSize.x - DISCORD_BANNER_PADDING_MARGIN * scale);
+		float upperBound = std::min(DISCORD_BANNER_MAX_WIDTH * scale, maxAllowed);
+		float lowerBound = std::min(DISCORD_BANNER_MIN_WIDTH * scale, upperBound);
 		float targetWidth = std::clamp(ratioWidth, lowerBound, upperBound);
 
 		ImVec2 iconSize = ImVec2(targetWidth, targetWidth * aspectRatio);
@@ -117,7 +119,7 @@ void HomePageRenderer::RenderWelcomeSection()
 	} else {
 		// No Discord icon available: keep layout roughly consistent with a dummy spacer,
 		// but do not show a clickable button or link.
-		float dummyWidth = 200.0f;
+		float dummyWidth = 200.0f * scale;
 		ImGui::SetCursorPosX((windowSize.x - dummyWidth) * 0.5f);
 		ImGui::Dummy(ImVec2(dummyWidth, 0.0f));
 	}
@@ -135,15 +137,17 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	io.WantCaptureKeyboard = true;
 	io.MouseDrawCursor = true;  // Show ImGui cursor
 
+	const float uiScale = Util::GetUIScale();
+
 	// Center the window properly with rounded corners and thin border
 	ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
 	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 	// Set a minimum width for better layout, but allow auto-sizing for height
-	ImGui::SetNextWindowSizeConstraints(ImVec2(500, 0), ImVec2(600, FLT_MAX));
+	ImGui::SetNextWindowSizeConstraints(ImVec2(DIALOG_MIN_WIDTH * uiScale, 0), ImVec2(DIALOG_MAX_WIDTH * uiScale, FLT_MAX));
 	ImGui::SetNextWindowFocus();
 
 	// Style for rounded window with thin border
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, DIALOG_CORNER_ROUNDING * uiScale);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 
 	ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
@@ -164,7 +168,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	drawList->PopClipRect();
 
 	// Set absolute font size for better readability in this welcome dialog
-	float targetFontSize = 27.0f;
+	float targetFontSize = 27.0f * uiScale;
 	float currentFontSize = io.FontDefault ? io.FontDefault->FontSize : io.FontGlobalScale * 13.0f;
 	float fontScale = targetFontSize / currentFontSize;
 	ImGui::SetWindowFontScale(fontScale);
@@ -181,7 +185,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		float aspectRatio = textureSize.x / textureSize.y;
 
 		// Set desired height and calculate width to maintain aspect ratio
-		float logoHeight = LOGO_WATERMARK_HEIGHT;
+		float logoHeight = LOGO_WATERMARK_HEIGHT * uiScale;
 		float logoWidth = logoHeight * aspectRatio;
 
 		ImVec2 logoMin(windowPos.x + (windowSize.x - logoWidth) * 0.5f,
@@ -216,7 +220,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 
 	// Version text - wrapped and centered
 	const char* versionText = "This appears to be a new install, update, or reinstallation of Community Shaders.";
-	float textPadding = 40.0f;  // Padding from window edges
+	float textPadding = 40.0f * uiScale;  // Padding from window edges
 
 	// Use a centered region for wrapped text
 	ImGui::SetCursorPosX(textPadding);
@@ -302,9 +306,9 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	// "You can change this later" text - wrapped and centered
 	const char* laterText = "You can change this later in General > Keybindings.";
 	float laterWidth = ImGui::CalcTextSize(laterText).x;
-	if (laterWidth > windowWidth - 40.0f) {
+	if (laterWidth > windowWidth - 40.0f * uiScale) {
 		// Text is too wide, use wrapped text with centering
-		float laterTextPadding = 40.0f;
+		float laterTextPadding = 40.0f * uiScale;
 
 		ImGui::SetCursorPosX(laterTextPadding);
 		ImGui::BeginGroup();

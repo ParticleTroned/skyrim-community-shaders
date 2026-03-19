@@ -10,6 +10,11 @@ public:
 	static constexpr float HOTKEY_TEXT_SCALE_MULTIPLIER = 1.2f;
 	static constexpr uint8_t MODAL_OVERLAY_ALPHA = 160;
 
+	// First-time setup dialog layout (1080p baseline, scaled by GetUIScale)
+	static constexpr float DIALOG_MIN_WIDTH = 500.0f;
+	static constexpr float DIALOG_MAX_WIDTH = 600.0f;
+	static constexpr float DIALOG_CORNER_ROUNDING = 8.0f;
+
 	// Logo watermark height (in pixels)
 	static constexpr float LOGO_WATERMARK_HEIGHT = 260.0f;
 

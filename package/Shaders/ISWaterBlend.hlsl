@@ -18,7 +18,7 @@ SamplerState depthBufferSampler : register(s3);
 SamplerState waterMaskSampler : register(s4);
 
 Texture2D<float4> sourceTex : register(t0);
-Texture2D<float4> waterHistoryTex : register(t1);
+Texture2D<float3> waterHistoryTex : register(t1);
 Texture2D<float4> motionBufferTex : register(t2);
 Texture2D<float4> depthBufferTex : register(t3);
 Texture2D<float4> waterMaskTex : register(t4);
@@ -63,12 +63,13 @@ PS_OUTPUT main(PS_INPUT input)
 		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyzw;
 	waterHistory.xyz = LogToLinear(waterHistory.xyz) - LogToLinear(0);
 
+	float historyMask = waterMaskTex.Sample(waterMaskSampler, motionAdjustedScreenPosition).z;
 	float3 finalColor = sourceColor;
 	if (
 #	ifndef VR
 		motionScreenPosition.x >= 0 && motionScreenPosition.y >= 0 && motionScreenPosition.x <= 1 &&
 #	endif
-		motionScreenPosition.y <= 1 && waterHistory.w == 1) {
+		motionScreenPosition.y <= 1 && historyMask > 0.999) {
 		float historyFactor = 0.95;
 		if (NearFar_Menu_DistanceFactor.z == 0) {
 			float depth = depthBufferTex.Sample(depthBufferSampler, adjustedScreenPosition).x;

@@ -51,7 +51,7 @@
         },
         {
             "name": "imgui",
-            "version": "1.90"
+            "version": "1.92.6"
         },
         {
             "name": "tracy",
@@ -59,7 +59,7 @@
         },
         {
             "name": "directx-headers",
-            "version": "1.606.4"
+            "version": "1.614.1"
         }
     ],
     "builtin-baseline": "dddca6fa87f177e0678e2545c4b4636a44aa05bd"

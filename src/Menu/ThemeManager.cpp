@@ -99,7 +99,7 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	auto& io = ImGui::GetIO();
 	if (io.FontDefault) {
 		constexpr float kBaselineFontSize = Constants::DEFAULT_SCREEN_HEIGHT * Constants::DEFAULT_FONT_RATIO;
-		fontScale = io.FontDefault->FontSize / kBaselineFontSize;
+		fontScale = io.FontDefault->LegacySize / kBaselineFontSize;
 	}
 	const float scaleFactor = fontScale * exp2(globalScale);
 	styleCopy.ScaleAllSizes(scaleFactor);
@@ -448,7 +448,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 	}
 
 	// Verify font texture was created successfully
-	if (!io.Fonts->TexID) {
+	if (!io.Fonts->TexIsBuilt) {
 		logger::error("ReloadFont: Font texture not created");
 		return false;
 	}
@@ -460,7 +460,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		globalScale = Constants::DEFAULT_GLOBAL_SCALE;  // Ensure built-in themes stay at 0.0
 	}
 
-	io.FontGlobalScale = exp2(globalScale);
+	ImGui::GetStyle().FontScaleMain = exp2(globalScale);
 
 	cachedFontSize = fontSize;
 	// Also update cached font name in the menu instance

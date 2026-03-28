@@ -112,7 +112,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LogSliderDeadzone,
 	TabRounding,
 	TabBorderSize,
-	TabMinWidthForCloseButton,
+	TabCloseButtonMinWidthUnselected,
 	TabBarBorderSize,
 	TableAngledHeadersAngle,
 	ColorButtonPosition,
@@ -184,6 +184,17 @@ static void SanitizeFontRolesJson(json& themeJson)
 	}
 }
 
+// Remove FullPalette from theme JSON if its size doesn't match ImGuiCol_COUNT.
+// Prevents out_of_range exceptions when loading palettes saved with a different imgui version.
+static void SanitizeFullPaletteJson(json& themeJson)
+{
+	if (!themeJson.contains("FullPalette") || !themeJson["FullPalette"].is_array())
+		return;
+
+	if (themeJson["FullPalette"].size() != static_cast<size_t>(ImGuiCol_COUNT))
+		themeJson.erase("FullPalette");
+}
+
 std::optional<Menu::FontRole> Menu::ResolveFontRole(std::string_view key)
 {
 	for (size_t i = 0; i < FontRoleDescriptors.size(); ++i) {
@@ -244,6 +255,8 @@ void Menu::Load(json& o_json)
 	// Store current Theme state before loading config
 	auto currentTheme = settings.Theme;
 
+	if (o_json.contains("Theme") && o_json["Theme"].is_object())
+		SanitizeFullPaletteJson(o_json["Theme"]);
 	settings = o_json;
 
 	// Restore Theme - don't load it from config, only from theme preset files
@@ -292,6 +305,7 @@ void Menu::Load(json& o_json)
 	if (o_json.contains("Theme") && o_json["Theme"].is_object() && settings.SelectedThemePreset.empty()) {
 		bool hasFontRoles = o_json["Theme"].contains("FontRoles");
 		SanitizeFontRolesJson(o_json["Theme"]);
+		SanitizeFullPaletteJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
 		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
 
@@ -357,6 +371,7 @@ void Menu::LoadTheme(json& o_json)
 	if (o_json["Theme"].is_object()) {
 		bool hasFontRoles = o_json["Theme"].contains("FontRoles");
 		SanitizeFontRolesJson(o_json["Theme"]);
+		SanitizeFullPaletteJson(o_json["Theme"]);
 		settings.Theme = o_json["Theme"];
 		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
 
@@ -414,6 +429,9 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 		ThemeSettings backupTheme = settings.Theme;
 		ThemeSettings defaultTheme;  // For fallback values
 		bool hasFontRoles = themeSettings.contains("FontRoles");
+
+		SanitizeFontRolesJson(themeSettings);
+		SanitizeFullPaletteJson(themeSettings);
 
 		try {
 			// Attempt to load theme with protection against malformed data
@@ -681,7 +699,7 @@ void Menu::DrawSettings()
 	// Apply theme styling with universal contrast enhancement
 	ThemeManager::SetupImGuiStyle(*this);
 
-	ImGui::DockSpaceOverViewport(NULL, ImGuiDockNodeFlags_PassthruCentralNode);
+	ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), ImGuiCond_FirstUseEver);
@@ -871,7 +889,7 @@ void Menu::DrawOverlay()
 {
 	// Only process reloads when ImGui is NOT in an active frame
 	ImGuiContext* ctx = ImGui::GetCurrentContext();
-	bool canReload = ctx && !ctx->WithinFrameScope && !ctx->WithinEndChild;
+	bool canReload = ctx && !ctx->WithinFrameScope && ctx->WithinEndChildID == 0;
 
 	// Process deferred font reload BEFORE any ImGui operations
 	// This is the safest place to do font atlas modifications

@@ -56,6 +56,9 @@ namespace
 	constexpr float DRYING_HOURS_MIN = 1.0f;
 	constexpr float DRYING_HOURS_MAX = 24.0f;
 	constexpr float DRYING_SECONDS_PER_HOUR = 3600.0f;
+	constexpr uint WET_LOOK_PROFILE_DISABLED = 0u;
+	constexpr uint WET_LOOK_PROFILE_HOSTILES = 1u;
+	constexpr uint WET_LOOK_PROFILE_CRIMSON = 2u;
 	constexpr float DEFAULT_STONE_DRYING_HOURS = 6.0f;
 	constexpr float DEFAULT_GRASS_DRYING_HOURS = 3.0f;
 	constexpr float DEFAULT_DIRT_DRYING_HOURS = 12.0f;
@@ -459,7 +462,7 @@ namespace
 	template <class TSettings>
 	float GetLegacyReflectionUiMax(const TSettings& settings)
 	{
-		const bool hostilesWetProfileEnabled = settings.EnableHostilesWetProfile != 0;
+		const bool hostilesWetProfileEnabled = settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_HOSTILES;
 		const bool extendedLegacyRangeEnabled = hostilesWetProfileEnabled && settings.EnableExtendedLegacyReflectionRange != 0;
 		return extendedLegacyRangeEnabled ? HOSTILES_EXTENDED_LEGACY_WET_REFLECTION_SCALE_MAX : DEFAULT_LEGACY_WET_REFLECTION_SCALE_MAX;
 	}
@@ -532,6 +535,14 @@ namespace
 	uint SanitizeToggle(uint value)
 	{
 		return value != 0 ? 1u : 0u;
+	}
+
+	uint SanitizeWetLookProfileMode(uint value)
+	{
+		if (value == WET_LOOK_PROFILE_CRIMSON) {
+			return WET_LOOK_PROFILE_CRIMSON;
+		}
+		return value != 0 ? WET_LOOK_PROFILE_HOSTILES : WET_LOOK_PROFILE_DISABLED;
 	}
 
 	void SanitizeReflectionSettings(WetnessEffects::Settings& settings)
@@ -645,6 +656,7 @@ namespace
 	}
 
 	constexpr size_t DEFAULT_WETNESS_UI_PRESET_INDEX = 1;  // Balanced
+	constexpr size_t QUALITY_WETNESS_UI_PRESET_INDEX = 2;  // Quality
 
 	void ApplyDefaultWetnessUiPreset(
 		WetnessEffects::Settings& settings,
@@ -653,6 +665,19 @@ namespace
 	{
 		static_assert(DEFAULT_WETNESS_UI_PRESET_INDEX < WETNESS_UI_PRESETS.size(), "Default wetness preset index out of range.");
 		ApplyWetnessUiPreset(settings, modernScale, legacyScale, WETNESS_UI_PRESETS[DEFAULT_WETNESS_UI_PRESET_INDEX]);
+	}
+
+	void ApplyQualityReflectionBaseline(
+		WetnessEffects::Settings& settings,
+		float& modernScale,
+		float& legacyScale)
+	{
+		static_assert(QUALITY_WETNESS_UI_PRESET_INDEX < WETNESS_UI_PRESETS.size(), "Quality wetness preset index out of range.");
+		settings.EnableModernWetReflection = 1u;
+		settings.EnableLegacyWetReflection = 0u;
+		modernScale = WETNESS_UI_PRESETS[QUALITY_WETNESS_UI_PRESET_INDEX].modernReflectionShine;
+		legacyScale = DEFAULT_LEGACY_WET_INDIRECT_SPECULAR_SCALE;
+		SanitizePersistentReflectionSettings(settings, modernScale, legacyScale);
 	}
 
 	void SanitizeToggleSettings(WetnessEffects::Settings& settings)
@@ -664,13 +689,22 @@ namespace
 		settings.EnableVanillaRipples = SanitizeToggle(settings.EnableVanillaRipples);
 		settings.EnableLegacyRainBehavior = SanitizeToggle(settings.EnableLegacyRainBehavior);
 		settings.EnableDualPuddleModel = SanitizeToggle(settings.EnableDualPuddleModel);
-		settings.EnableHostilesWetProfile = SanitizeToggle(settings.EnableHostilesWetProfile);
+		settings.EnableHostilesWetProfile = SanitizeWetLookProfileMode(settings.EnableHostilesWetProfile);
 		settings.EnableMarch3WetnessProfile = SanitizeToggle(settings.EnableMarch3WetnessProfile);
 		settings.EnableExtendedLegacyReflectionRange = SanitizeToggle(settings.EnableExtendedLegacyReflectionRange);
 		settings.EnableForwardReflectionBias = SanitizeToggle(settings.EnableForwardReflectionBias);
 		settings.EnableVanillaReflectionCompensation = SanitizeToggle(settings.EnableVanillaReflectionCompensation);
 		settings.EnablePuddleInfluenceDebugReadout = SanitizeToggle(settings.EnablePuddleInfluenceDebugReadout);
 		settings.EnableLodSafeWetDarkening = SanitizeToggle(settings.EnableLodSafeWetDarkening);
+		if (settings.EnableHostilesWetProfile != WET_LOOK_PROFILE_HOSTILES) {
+			// Hostile-only options should be inactive outside Hostile mode.
+			settings.EnableMarch3WetnessProfile = 0u;
+			settings.EnableExtendedLegacyReflectionRange = 0u;
+			settings.EnableForwardReflectionBias = 0u;
+			settings.EnableVanillaReflectionCompensation = 0u;
+			settings.EnablePuddleInfluenceDebugReadout = 0u;
+			settings.EnableLodSafeWetDarkening = 0u;
+		}
 		SanitizeReflectionSettings(settings);
 	}
 
@@ -1149,15 +1183,35 @@ void WetnessEffects::DrawSettings()
 		}
 	}
 	ImGui::SameLine(0.0f, 14.0f);
-	drawUintCheckbox("Hostile's Wet", settings.EnableHostilesWetProfile);
+	bool hostilesWetEnabled = settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_HOSTILES;
+	if (ImGui::Checkbox("Hostile's Wet", &hostilesWetEnabled)) {
+		if (hostilesWetEnabled) {
+			settings.EnableHostilesWetProfile = WET_LOOK_PROFILE_HOSTILES;
+		} else if (settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_HOSTILES) {
+			settings.EnableHostilesWetProfile = WET_LOOK_PROFILE_DISABLED;
+		}
+	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Optional compatibility profile. Enables extra wetness look controls without changing default visuals.");
+	}
+	ImGui::SameLine(0.0f, 8.0f);
+	bool crimsonWetEnabled = settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_CRIMSON;
+	if (ImGui::Checkbox("Crimson's Wet", &crimsonWetEnabled)) {
+		if (crimsonWetEnabled) {
+			settings.EnableHostilesWetProfile = WET_LOOK_PROFILE_CRIMSON;
+			ApplyQualityReflectionBaseline(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale);
+		} else if (settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_CRIMSON) {
+			settings.EnableHostilesWetProfile = WET_LOOK_PROFILE_DISABLED;
+		}
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Optional profile for channel/basin puddle depth behavior. Uses Quality reflection baseline (not Hostile compatibility reflection behavior).");
 	}
 	ImGui::PopStyleColor(3);
 
 	ImGui::Separator();
 
-	if (settings.EnableHostilesWetProfile != 0 && ImGui::TreeNodeEx("Hostile's Wet (Optional Look)", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_HOSTILES && ImGui::TreeNodeEx("Hostile's Wet (Optional Look)", ImGuiTreeNodeFlags_DefaultOpen)) {
 		if (drawUintCheckbox("March 3 Wetness Profile", settings.EnableMarch3WetnessProfile) && settings.EnableMarch3WetnessProfile != 0) {
 			// Compatibility mode targets legacy reflection response behavior.
 			settings.EnableModernWetReflection = 0u;
@@ -1224,6 +1278,13 @@ void WetnessEffects::DrawSettings()
 			}
 		}
 
+		ImGui::TreePop();
+		ImGui::Separator();
+	}
+
+	if (settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_CRIMSON && ImGui::TreeNodeEx("Crimson's Wet (Optional Look)", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::TextUnformatted("Depth pooling profile tuned for connected channels and shallow basins.");
+		ImGui::TextUnformatted("Reflection basis follows Quality preset (modern wet reflection mode).");
 		ImGui::TreePop();
 		ImGui::Separator();
 	}
@@ -2080,6 +2141,7 @@ void WetnessEffects::LoadSettings(json& o_json)
 		 o_json.contains("PuddlePatternDominance") ||
 		 o_json.contains("EnablePuddleInfluenceDebugReadout") ||
 		 o_json.contains("EnableLodSafeWetDarkening") ||
+		 o_json.contains("EnableCrimsonsWetProfile") ||
 		 o_json.contains("WetIndirectSpecularScale"));
 	settings = {};
 	if (isObject) {
@@ -2103,6 +2165,11 @@ void WetnessEffects::LoadSettings(json& o_json)
 	}
 	if (isObject && !o_json.contains("EnableLegacyWetReflection")) {
 		settings.EnableLegacyWetReflection = 0u;
+	}
+	if (isObject && o_json.contains("EnableCrimsonsWetProfile")) {
+		if (JsonValueToBool(o_json["EnableCrimsonsWetProfile"], false)) {
+			settings.EnableHostilesWetProfile = WET_LOOK_PROFILE_CRIMSON;
+		}
 	}
 
 	const bool hasModernWetReflectionScale = isObject && o_json.contains("ModernWetIndirectSpecularScale");
@@ -2204,7 +2271,10 @@ void WetnessEffects::SaveSettings(json& o_json)
 {
 	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout);
 	InvalidateSanitizedSettingsCache();
-	o_json = settings;
+	Settings persistedSettings = settings;
+	persistedSettings.EnableHostilesWetProfile = (settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_HOSTILES) ? 1u : 0u;
+	o_json = persistedSettings;
+	o_json["EnableCrimsonsWetProfile"] = settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_CRIMSON;
 	o_json["ModernWetIndirectSpecularScale"] = modernWetIndirectSpecularScale;
 	o_json["LegacyWetIndirectSpecularScale"] = legacyWetIndirectSpecularScale;
 	o_json["PuddleDryingHours"] = puddleDryingHours;

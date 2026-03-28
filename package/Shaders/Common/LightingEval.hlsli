@@ -169,7 +169,7 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 #if defined(WETNESS_EFFECTS)
 bool IsHostilesWetProfileEnabled()
 {
-	return SharedData::wetnessEffectsSettings.EnableHostilesWetProfile != 0;
+	return SharedData::wetnessEffectsSettings.EnableHostilesWetProfile == 1;
 }
 
 bool IsHostilesWetOptionEnabled(uint optionToggle)

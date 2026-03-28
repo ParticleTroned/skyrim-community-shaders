@@ -2545,7 +2545,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 		float depthProxy = max(normalVarianceMask, cavityMask * 0.75);
 		float roughDepthConfidence = lerp(0.55, 1.0, roughDepthMask);
-		unevenDepthMask = saturate(depthProxy * roughDepthConfidence) * (1.0 - vegetationFactor * 0.85);
+		const bool crimsonWetProfileEnabled = SharedData::wetnessEffectsSettings.EnableHostilesWetProfile == 2;
+		if (crimsonWetProfileEnabled) {
+			float normalVarianceBand = saturate((normalVarianceMask - 0.06) * 6.0);
+			normalVarianceBand *= (1.0 - saturate((normalVarianceMask - 0.30) * 3.0));
+			float macroBasinMask = Random::perlinNoise(puddleCoords * 0.25) * 0.5 + 0.5;
+			depthProxy = max(max(normalVarianceBand, cavityMask * 0.80), macroBasinMask * 0.70);
+			roughDepthConfidence = lerp(0.60, 1.0, roughDepthMask);
+		}
+		float vegetationSuppression = crimsonWetProfileEnabled ? 0.90 : 0.85;
+		unevenDepthMask = saturate(depthProxy * roughDepthConfidence) * (1.0 - vegetationFactor * vegetationSuppression);
 #			endif
 		float depthPuddleMix = saturate((puddleSignal - 0.02) * (1.25 + depthBlend * 1.75)) * unevenDepthMask;
 		// Keep flat pooling as baseline and add depth pooling only where unevenness exists.
@@ -2561,7 +2570,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float flatMandatoryPuddle = max(wetness, puddleWetness) * flatAngleMask * flatWetGate;
 
 #		if !defined(SKINNED)
-		const bool hostilesWetProfileEnabled = SharedData::wetnessEffectsSettings.EnableHostilesWetProfile != 0;
+		const bool hostilesWetProfileEnabled = SharedData::wetnessEffectsSettings.EnableHostilesWetProfile == 1;
 		const bool march3CompatibilityProfileEnabled = hostilesWetProfileEnabled && SharedData::wetnessEffectsSettings.EnableMarch3WetnessProfile != 0;
 		const float puddlePatternDominance = hostilesWetProfileEnabled ? max(0.0, SharedData::wetnessEffectsSettings.PuddlePatternDominance) : 1.0;
 		// Keep mandatory pooling, but gate it by the puddle-pattern signal so
@@ -3134,7 +3143,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
 #			endif
 	float wetDarkeningStrength = max(0.0, SharedData::wetnessEffectsSettings.WetDarkeningStrength);
-	const bool hostilesWetProfileEnabled = SharedData::wetnessEffectsSettings.EnableHostilesWetProfile != 0;
+	const bool hostilesWetProfileEnabled = SharedData::wetnessEffectsSettings.EnableHostilesWetProfile == 1;
 	const bool lodSafeWetDarkeningEnabled = hostilesWetProfileEnabled && SharedData::wetnessEffectsSettings.EnableLodSafeWetDarkening != 0;
 	float lodSafeWetDarkeningFade = 1.0;
 	if (lodSafeWetDarkeningEnabled) {

@@ -41,6 +41,8 @@ public:
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
+	bool disableInInteriors = false;
+
 	struct Settings
 	{
 		uint EnableIBL = 0;
@@ -75,6 +77,7 @@ public:
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
+	Settings GetCommonBufferData() const;
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 	CommonBufferData GetCommonBufferData() const;
 	bool IsRuntimeEnabled() const;

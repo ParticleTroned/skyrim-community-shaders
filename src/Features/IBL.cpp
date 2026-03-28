@@ -112,6 +112,10 @@ void IBL::DrawSettings()
 		ImGui::Text("This prevents values from snapping back after interior/exterior transitions");
 		ImGui::Text("when the active weather has no override for that setting.");
 	}
+	ImGui::Checkbox("Disable in interiors", &disableInInteriors);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Disables IBL in interior cells.");
+	}
 	ImGui::EndDisabled();
 
 	if (settings.CaptureWeatherBaselineOnSliderChange && recaptureWeatherBaseline) {
@@ -122,16 +126,19 @@ void IBL::DrawSettings()
 void IBL::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	disableInInteriors = o_json.value("DisableInInteriors", false);
 }
 
 void IBL::SaveSettings(json& o_json)
 {
 	o_json = settings;
+	o_json["DisableInInteriors"] = disableInInteriors;
 }
 
 void IBL::RestoreDefaultSettings()
 {
 	settings = {};
+	disableInInteriors = false;
 }
 
 void IBL::RegisterWeatherVariables()
@@ -204,6 +211,14 @@ void IBL::RegisterWeatherVariables()
 		0.0f, 1.0f));
 }
 
+IBL::Settings IBL::GetCommonBufferData() const
+{
+	Settings data = settings;
+	if (disableInInteriors && Util::IsInterior())
+		data.EnableIBL = 0;
+	return data;
+}
+
 void IBL::ReflectionsPrepass()
 {
 	auto context = globals::d3d::context;
@@ -215,16 +230,21 @@ void IBL::ReflectionsPrepass()
 		return;
 	}
 
+	const bool interiorDisabled = disableInInteriors && Util::IsInterior();
+
 	SetIblPsSrvs(
 		context,
-		envIBLTexture->srv.get(),
-		skyIBLTexture->srv.get(),
+		interiorDisabled ? nullptr : envIBLTexture->srv.get(),
+		interiorDisabled ? nullptr : skyIBLTexture->srv.get(),
 		staticDiffuseIBLTexture ? staticDiffuseIBLTexture->srv.get() : nullptr,
 		staticSpecularIBLTexture ? staticSpecularIBLTexture->srv.get() : nullptr);
 }
 
 void IBL::Prepass()
 {
+	if (disableInInteriors && Util::IsInterior())
+		return;
+
 	auto context = globals::d3d::context;
 	if (!context)
 		return;

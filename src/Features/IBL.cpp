@@ -42,6 +42,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkyIBLSaturation,
 	FogAmount,
 	DALCMode,
+	DisableInInteriors,
 	CaptureWeatherBaselineOnSliderChange)
 
 void IBL::DrawSettings()
@@ -112,7 +113,7 @@ void IBL::DrawSettings()
 		ImGui::Text("This prevents values from snapping back after interior/exterior transitions");
 		ImGui::Text("when the active weather has no override for that setting.");
 	}
-	ImGui::Checkbox("Disable in interiors", &disableInInteriors);
+	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Disables IBL in interior cells.");
 	}
@@ -126,19 +127,16 @@ void IBL::DrawSettings()
 void IBL::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	disableInInteriors = o_json.value("DisableInInteriors", false);
 }
 
 void IBL::SaveSettings(json& o_json)
 {
 	o_json = settings;
-	o_json["DisableInInteriors"] = disableInInteriors;
 }
 
 void IBL::RestoreDefaultSettings()
 {
 	settings = {};
-	disableInInteriors = false;
 }
 
 void IBL::RegisterWeatherVariables()
@@ -211,14 +209,6 @@ void IBL::RegisterWeatherVariables()
 		0.0f, 1.0f));
 }
 
-IBL::Settings IBL::GetCommonBufferData() const
-{
-	Settings data = settings;
-	if (disableInInteriors && Util::IsInterior())
-		data.EnableIBL = 0;
-	return data;
-}
-
 void IBL::ReflectionsPrepass()
 {
 	auto context = globals::d3d::context;
@@ -230,7 +220,7 @@ void IBL::ReflectionsPrepass()
 		return;
 	}
 
-	const bool interiorDisabled = disableInInteriors && Util::IsInterior();
+	const bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
 
 	SetIblPsSrvs(
 		context,
@@ -242,7 +232,7 @@ void IBL::ReflectionsPrepass()
 
 void IBL::Prepass()
 {
-	if (disableInInteriors && Util::IsInterior())
+	if (settings.DisableInInteriors && Util::IsInterior())
 		return;
 
 	auto context = globals::d3d::context;
@@ -440,8 +430,10 @@ ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
 
 IBL::CommonBufferData IBL::GetCommonBufferData() const
 {
+	const bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
+
 	return {
-		.EnableIBL = IsRuntimeEnabled() ? 1u : 0u,
+		.EnableIBL = (IsRuntimeEnabled() && !interiorDisabled) ? 1u : 0u,
 		.PreserveFogLuminance = settings.PreserveFogLuminance,
 		.UseStaticIBL = settings.UseStaticIBL,
 		.DALCAmount = settings.DALCAmount,
@@ -451,8 +443,8 @@ IBL::CommonBufferData IBL::GetCommonBufferData() const
 		.SkyIBLSaturation = settings.SkyIBLSaturation,
 		.FogAmount = settings.FogAmount,
 		.DALCMode = settings.DALCMode,
-		.pad0 = 0.0f,
-		.pad1 = 0.0f
+		.DisableInInteriors = settings.DisableInInteriors,
+		.pad0 = 0.0f
 	};
 }
 

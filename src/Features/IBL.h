@@ -41,8 +41,6 @@ public:
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
-	bool disableInInteriors = false;
-
 	struct Settings
 	{
 		uint EnableIBL = 0;
@@ -55,6 +53,7 @@ public:
 		float SkyIBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
 		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
+		uint DisableInInteriors = 1;
 		bool CaptureWeatherBaselineOnSliderChange = false;
 	} settings;
 
@@ -70,14 +69,13 @@ public:
 		float SkyIBLSaturation;
 		float FogAmount;
 		uint DALCMode;
+		uint DisableInInteriors;
 		float pad0;
-		float pad1;
 	};
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
-	Settings GetCommonBufferData() const;
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 	CommonBufferData GetCommonBufferData() const;
 	bool IsRuntimeEnabled() const;

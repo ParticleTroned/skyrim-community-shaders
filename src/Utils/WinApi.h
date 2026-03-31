@@ -1,17 +1,12 @@
 #pragma once
 
-#include <cstdint>
-#include <optional>
-#include <string>
-
 namespace Util
 {
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath);
 
-	// Returns logical processor count, clamped to at least 1.
-	uint32_t GetLogicalCoreCount();
-
-	// Returns the logical processor count on the highest-efficiency cores.
-	// On non-hybrid CPUs this falls back to hardware_concurrency().
+	/// Returns the number of logical processors on the highest-efficiency cores
+	/// (P-cores on Intel hybrid CPUs). On non-hybrid CPUs all cores share the
+	/// same efficiency class, so this returns std::thread::hardware_concurrency().
+	/// Falls back to hardware_concurrency() on any API failure.
 	uint32_t GetPerformanceCoreCount();
 }  // namespace Util

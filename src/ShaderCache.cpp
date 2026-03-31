@@ -11,9 +11,6 @@
 
 #include "Plugin.h"
 
-#include <algorithm>
-#include <bit>
-
 namespace SIE
 {
 
@@ -125,53 +122,6 @@ namespace SIE
 				return ComputeShaderProfile;
 			}
 			return nullptr;
-		}
-
-		static std::string GetShaderSourceTreeStamp()
-		{
-			std::filesystem::path shaderRoot{ "Data/Shaders" };
-			std::error_code ec;
-			if (!std::filesystem::exists(shaderRoot, ec)) {
-				return {};
-			}
-
-			auto latestWriteTime = std::filesystem::file_time_type::min();
-			for (std::filesystem::recursive_directory_iterator it(shaderRoot, std::filesystem::directory_options::skip_permission_denied, ec), end;
-				it != end;
-				it.increment(ec)) {
-				if (ec) {
-					ec.clear();
-					continue;
-				}
-
-				if (!it->is_regular_file(ec)) {
-					ec.clear();
-					continue;
-				}
-
-				auto extension = it->path().extension().string();
-				std::ranges::transform(extension, extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-				if (extension != ".hlsl" && extension != ".hlsli") {
-					continue;
-				}
-
-				const auto writeTime = it->last_write_time(ec);
-				if (ec) {
-					ec.clear();
-					continue;
-				}
-				if (writeTime > latestWriteTime) {
-					latestWriteTime = writeTime;
-				}
-			}
-
-			if (latestWriteTime == std::filesystem::file_time_type::min()) {
-				return {};
-			}
-
-			const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(latestWriteTime);
-			const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(systemTime.time_since_epoch()).count();
-			return std::to_string(stamp);
 		}
 
 		uint32_t GetTechnique(uint32_t descriptor)
@@ -1348,29 +1298,15 @@ namespace SIE
 			mapBufferConsts("PerGeometry", bufferSizes[2]);
 		}
 
-		static std::string GetDiskCacheVariantKey(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor)
+		std::wstring GetDiskPath(const std::string_view& name, uint32_t descriptor, ShaderClass shaderClass)
 		{
-			std::string key = GetShaderString(shaderClass, shader, descriptor, true);
-			key += "|defines=";
-			key += globals::state->shaderDefinesString;
-			key += REL::Module::IsVR() ? "|runtime=VR" : "|runtime=Flat";
-			key += globals::state->IsDeveloperMode() ? "|mode=Developer" : "|mode=Release";
-			return key;
-		}
-
-		std::wstring GetDiskPath(const std::string_view& name, uint32_t descriptor, ShaderClass shaderClass, std::string_view variantKey = {})
-		{
-			const auto suffixNarrow = Util::GetShaderDefinesSuffix(std::string(variantKey));
-			const std::wstring suffix(suffixNarrow.begin(), suffixNarrow.end());
-			const auto wname = std::wstring(name.begin(), name.end());
-
 			switch (shaderClass) {
 			case ShaderClass::Pixel:
-				return std::format(L"Data/ShaderCache/{}/{:X}{}.pso", wname, descriptor, suffix);
+				return std::format(L"Data/ShaderCache/{}/{:X}.pso", std::wstring(name.begin(), name.end()), descriptor);
 			case ShaderClass::Vertex:
-				return std::format(L"Data/ShaderCache/{}/{:X}{}.vso", wname, descriptor, suffix);
+				return std::format(L"Data/ShaderCache/{}/{:X}.vso", std::wstring(name.begin(), name.end()), descriptor);
 			case ShaderClass::Compute:
-				return std::format(L"Data/ShaderCache/{}/{:X}{}.cso", wname, descriptor, suffix);
+				return std::format(L"Data/ShaderCache/{}/{:X}.cso", std::wstring(name.begin(), name.end()), descriptor);
 			}
 			return {};
 		}
@@ -1407,88 +1343,38 @@ namespace SIE
 
 			auto& cache = ShaderCache::Instance();
 			auto key = SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
-			ID3DBlob* shaderBlob = nullptr;
-			ID3DBlob* errorBlob = nullptr;
-			auto failPending = [&]() -> ID3DBlob* {
-				if (errorBlob != nullptr) {
-					errorBlob->Release();
-					errorBlob = nullptr;
-				}
-				if (shaderBlob != nullptr) {
-					shaderBlob->Release();
-					shaderBlob = nullptr;
-				}
-				cache.ResolvePendingFailure(key);
-				return nullptr;
-			};
 
-			if (cache.IsCompilationStopping()) {
-				return nullptr;
-			}
+			// Atomically check the shaderMap and either:
+			//  - return the blob if already Completed (cache hit),
+			//  - wait if another thread is compiling (Pending),
+			//  - claim the slot with Pending if nobody started yet.
 			auto [claimResult, cachedBlob] = cache.ClaimCompilation(key);
 			if (claimResult == ShaderCache::ClaimResult::CacheHit) {
 				cache.IncCacheHitTasks();
 				return cachedBlob;
 			}
-			if (cache.IsCompilationStopping()) {
-				return failPending();
-			}
 
 			const auto type = shader.shaderType.get();
 
-			const auto variantKey = GetDiskCacheVariantKey(shaderClass, shader, descriptor);
-
 			// check diskcache
-			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass, variantKey);
+			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
+			ID3DBlob* shaderBlob = nullptr;
 
 			if (useDiskCache && std::filesystem::exists(diskPath)) {
-				bool diskCacheOutdated = false;
-				std::error_code ec;
-				if (!cache.IsSkipUnchangedShaders()) {
-					diskCacheOutdated = true;
-					logger::debug("Recompiling cached shader because Skip Unchanged Shaders is disabled: {}", key);
-				} else {
-					const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
-					if (ec) {
-						logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
-						diskCacheOutdated = true;
-					} else if (cache.UseFileWatcher()) {
-						diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
-						if (diskCacheOutdated) {
-							logger::debug("Diskcached shader {} older than {}", key, std::format("{:%Y%m%d%H%M}", diskCacheTime));
-						}
-					} else {
-						const std::wstring shaderSourcePath = GetShaderPath(
-							shader.shaderType == RE::BSShader::Type::ImageSpace ?
-								static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-								shader.fxpFilename);
-						if (std::filesystem::exists(shaderSourcePath, ec)) {
-							const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shaderSourcePath, ec));
-							if (ec) {
-								logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
-							} else if (sourceTime > diskCacheTime) {
-								diskCacheOutdated = true;
-								logger::debug("Disk-cached shader {} outdated: source is newer than cache", key);
-							}
-						}
-					}
-				}
-
-				if (diskCacheOutdated) {
-					// Fall through to recompile from source.
+				// check build time of cache
+				auto diskCacheTime = cache.UseFileWatcher() ? std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath)) : system_clock::now();
+				if (cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime)) {
+					logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
 				} else if (FAILED(D3DReadFileToBlob(diskPath.c_str(), &shaderBlob))) {
 					logger::error("Failed to load {} shader {}::{:X}", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 
 					if (shaderBlob != nullptr) {
 						shaderBlob->Release();
-						shaderBlob = nullptr;
 					}
 				} else {
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
-					if (cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob, variantKey, true)) {
-						return shaderBlob;
-					}
-					return failPending();
+					cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob);
+					return shaderBlob;
 				}
 			}
 
@@ -1523,14 +1409,13 @@ namespace SIE
 			auto pathString = Util::WStringToString(path);
 			if (!std::filesystem::exists(path)) {
 				logger::error("Failed to compile {} shader {}::{:X}: {} does not exist", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor, pathString);
-				if (!cache.AddCompletedShader(shaderClass, shader, descriptor, nullptr, variantKey)) {
-					return failPending();
-				}
+				cache.AddCompletedShader(shaderClass, shader, descriptor, nullptr);
 				return nullptr;
 			}
 			logger::debug("Compiling {} {}:{}:{:X} to {}", pathString, magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor, MergeDefinesString(defines));
 
 			// compile shaders
+			ID3DBlob* errorBlob = nullptr;
 			const uint32_t flags = !globals::state->IsDeveloperMode() ? D3DCOMPILE_OPTIMIZATION_LEVEL3 : D3DCOMPILE_DEBUG;
 
 			// Track includes
@@ -1546,39 +1431,25 @@ namespace SIE
 			}
 
 			if (FAILED(compileResult)) {
-				if (cache.IsCompilationStopping()) {
-					return failPending();
-				}
 				if (errorBlob != nullptr) {
 					logger::error("Failed to compile {} shader {}::{:X}:\n{}",
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor,
 						static_cast<char*>(errorBlob->GetBufferPointer()));
 					errorBlob->Release();
-					errorBlob = nullptr;
 				} else {
 					logger::error("Failed to compile {} shader {}::{:X}",
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 				}
 				if (shaderBlob != nullptr) {
 					shaderBlob->Release();
-					shaderBlob = nullptr;
 				}
 
-				if (!cache.AddCompletedShader(shaderClass, shader, descriptor, nullptr, variantKey)) {
-					return failPending();
-				}
+				cache.AddCompletedShader(shaderClass, shader, descriptor, nullptr);
 				return nullptr;
 			}
-			if (errorBlob) {
+			if (errorBlob)
 				logger::debug("Shader logs:\n{}", static_cast<char*>(errorBlob->GetBufferPointer()));
-				errorBlob->Release();
-				errorBlob = nullptr;
-			}
 			logger::debug("Compiled shader {}:{}:{:X}", magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor);
-
-			if (cache.IsCompilationStopping()) {
-				return failPending();
-			}
 
 			// strip debug info
 			if (!globals::state->IsDeveloperMode()) {
@@ -1611,10 +1482,8 @@ namespace SIE
 					logger::debug("Saved shader to {}", Util::WStringToString(diskPath));
 				}
 			}
-			if (cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob, variantKey)) {
-				return shaderBlob;
-			}
-			return failPending();
+			cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob);
+			return shaderBlob;
 		}
 
 		std::unique_ptr<RE::BSGraphics::VertexShader> CreateVertexShader(ID3DBlob& shaderData,
@@ -2060,15 +1929,23 @@ namespace SIE
 
 	ShaderCache::~ShaderCache()
 	{
+		Clear();
 		StopFileWatcher();
-		if (RequestCompilationStop(true)) {
-			Clear();
+		// Signal management thread to stop dispatching; pool workers observe the same
+		// stop token and will not pick up new tasks after current compilations finish.
+		HANDLE managementHandle = managementJthread.native_handle();
+		managementJthread.request_stop();
+		// Purge unstarted tasks so we only wait for compilations already in flight.
+		compilationPool.purge();
+		if (!compilationPool.wait_for(std::chrono::milliseconds(1000))) {
+			logger::info("Tasks still running despite request to stop; killing management thread {}!", GetThreadId(managementHandle));
+			WaitForSingleObject(managementHandle, 1000);
+			TerminateThread(managementHandle, 0);
 		}
 	}
 
 	void ShaderCache::Clear()
 	{
-		ResetBackgroundCompilation();
 		{
 			std::lock_guard lockGuardV(vertexShadersMutex);
 			for (auto& shaders : vertexShaders) {
@@ -2100,7 +1977,6 @@ namespace SIE
 			std::unique_lock lockM{ mapMutex };
 			shaderMap.clear();
 		}
-		mapCV.notify_all();
 		{
 			std::unique_lock lockH{ hlslMapMutex };
 			hlslToShaderMap.clear();
@@ -2150,14 +2026,12 @@ namespace SIE
 			hlslToShaderMap.erase(it);
 		}
 
-		bool erasedShaderEntries = false;
-
 		// Step 2: Process the copied entries without holding hlslMapMutex
 		for (auto& entry : entries) {
 			// Remove shader key from shaderMap
 			{
 				std::unique_lock lockM{ mapMutex };
-				erasedShaderEntries = shaderMap.erase(entry.key) > 0 || erasedShaderEntries;
+				shaderMap.erase(entry.key);
 			}
 
 			// Handle vertex, pixel, and compute shaders (each will lock)
@@ -2194,11 +2068,7 @@ namespace SIE
 
 		if (!entries.empty()) {
 			logger::debug("Marked {} entries for recompile due to change to {}", entries.size(), a_path);
-			ResetBackgroundCompilation();
 			compilationSet.Clear();
-		}
-		if (erasedShaderEntries) {
-			mapCV.notify_all();
 		}
 
 		return true;
@@ -2207,7 +2077,6 @@ namespace SIE
 	void ShaderCache::Clear(RE::BSShader::Type a_type)
 	{
 		logger::debug("Clearing cache for {}", magic_enum::enum_name(a_type));
-		ResetBackgroundCompilation();
 		std::lock_guard lockGuardV(vertexShadersMutex);
 		{
 			for (auto& [id, shader] : vertexShaders[static_cast<size_t>(a_type)]) {
@@ -2233,21 +2102,17 @@ namespace SIE
 		compilationSet.Clear();
 	}
 
-	bool ShaderCache::AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob, std::string_view variantKey, bool fromDisk)
+	bool ShaderCache::AddCompletedShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, ID3DBlob* a_blob)
 	{
 		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		auto keyWithDescriptor = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, false);
 		auto status = a_blob ? ShaderCompilationTask::Status::Completed : ShaderCompilationTask::Status::Failed;
-		if (IsCompilationStopping()) {
-			logger::debug("Ignoring {} shader after compilation stop: {}", magic_enum::enum_name(status), keyWithDescriptor);
-			return false;
-		}
 		logger::debug("Adding {} shader to map: {}", magic_enum ::enum_name(status), keyWithDescriptor);
 		{
 			std::unique_lock lockM{ mapMutex };
-			shaderMap.insert_or_assign(key, ShaderCacheResult{ a_blob, status, system_clock::now(), fromDisk });
+			shaderMap.insert_or_assign(key, ShaderCacheResult{ a_blob, status, system_clock::now() });
 		}
-		mapCV.notify_all();
+		mapCV.notify_all();  // wake threads waiting on a Pending→Completed/Failed transition
 		const std::wstring path = SIE::SShaderCache::GetShaderPath(
 			shader.shaderType == RE::BSShader::Type::ImageSpace ?
 				static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
@@ -2260,8 +2125,7 @@ namespace SIE
 		{
 			std::unique_lock lockH{ hlslMapMutex };
 			auto it = hlslToShaderMap.find(lowerFilePath);
-			const auto resolvedVariantKey = variantKey.empty() ? SIE::SShaderCache::GetDiskCacheVariantKey(shaderClass, shader, descriptor) : std::string(variantKey);
-			hlslRecord newRecord{ key, shader.shaderType.get(), descriptor, shaderClass, SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass, resolvedVariantKey) };
+			hlslRecord newRecord{ key, shader.shaderType.get(), descriptor, shaderClass, SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass) };
 
 			if (it != hlslToShaderMap.end()) {
 				auto& entries = it->second;
@@ -2287,9 +2151,6 @@ namespace SIE
 
 	std::pair<ShaderCache::ClaimResult, ID3DBlob*> ShaderCache::ClaimCompilation(const std::string& key)
 	{
-		const auto type = SIE::SShaderCache::GetTypeFromShaderString(key);
-		UpdateShaderModifiedTime(type);
-
 		std::unique_lock lockM{ mapMutex };
 
 		for (;;) {
@@ -2298,27 +2159,23 @@ namespace SIE
 				auto& entry = it->second;
 				if (entry.status == ShaderCompilationTask::Status::Completed) {
 					if (entry.blob) {
-						if (ShaderModifiedSince(type, entry.compileTime)) {
-							logger::debug("Cached shader {} is stale; scheduling recompile", key);
-							entry = ShaderCacheResult{ nullptr, ShaderCompilationTask::Status::Failed, system_clock::now() };
-							break;
-						}
 						logger::debug("Shader already compiled; using cache: {}", key);
 						return { ClaimResult::CacheHit, entry.blob };
 					}
-					break;
+					break;  // Completed with nullptr blob — re-compile
 				}
 				if (entry.status == ShaderCompilationTask::Status::Failed) {
-					break;
+					break;  // Previous attempt failed — re-compile
 				}
-
+				// Status is Pending — another thread is compiling this shader.
 				logger::debug("Shader compilation in progress, waiting: {}", key);
 				mapCV.wait(lockM);
-				continue;
+				continue;  // re-check after wakeup
 			}
-			break;
+			break;  // not in map at all
 		}
 
+		// Claim the slot as Pending before releasing the lock
 		shaderMap.insert_or_assign(key, ShaderCacheResult{ nullptr, ShaderCompilationTask::Status::Pending, system_clock::now() });
 		return { ClaimResult::Claimed, nullptr };
 	}
@@ -2334,52 +2191,9 @@ namespace SIE
 				changed = true;
 			}
 		}
-
 		if (changed) {
 			mapCV.notify_all();
 		}
-	}
-
-	void ShaderCache::FailPendingCompilations()
-	{
-		bool changed = false;
-		const auto now = system_clock::now();
-		{
-			std::unique_lock lockM{ mapMutex };
-			for (auto& [_, entry] : shaderMap) {
-				if (entry.status == ShaderCompilationTask::Status::Pending) {
-					entry = ShaderCacheResult{ nullptr, ShaderCompilationTask::Status::Failed, now };
-					changed = true;
-				}
-			}
-		}
-
-		if (changed) {
-			mapCV.notify_all();
-		}
-	}
-
-	bool ShaderCache::RequestCompilationStop(bool waitForWorkers)
-	{
-		compilationStopping.store(true, std::memory_order_release);
-		ResetBackgroundCompilation();
-		managementJthread.request_stop();
-		compilationPool.purge();
-		FailPendingCompilations();
-		compilationSet.Clear();
-
-		if (!waitForWorkers) {
-			return true;
-		}
-
-		if (managementJthread.joinable()) {
-			managementJthread.join();
-		}
-		if (!compilationPool.wait_for(std::chrono::seconds(5))) {
-			logger::error("Shader compilation workers still running during shutdown; shader resources will not be cleared until workers exit");
-			return false;
-		}
-		return true;
 	}
 
 	ID3DBlob* ShaderCache::GetCompletedShader(const std::string& a_key)
@@ -2415,13 +2229,6 @@ namespace SIE
 		return GetCompletedShader(key);
 	}
 
-	bool ShaderCache::IsShaderLoadedFromDisk(const std::string& a_key)
-	{
-		std::scoped_lock lockM{ mapMutex };
-		auto it = shaderMap.find(a_key);
-		return it != shaderMap.end() && it->second.loadedFromDisk;
-	}
-
 	ShaderCompilationTask::Status ShaderCache::GetShaderStatus(const std::string& a_key)
 	{
 		std::scoped_lock lockM{ mapMutex };
@@ -2454,87 +2261,17 @@ namespace SIE
 
 	bool ShaderCache::IsCompiling()
 	{
-		const uint64_t total = compilationSet.totalTasks.load(std::memory_order_relaxed);
-		const uint64_t done = compilationSet.completedTasks.load(std::memory_order_relaxed) +
-		                      compilationSet.failedTasks.load(std::memory_order_relaxed);
-		return total > 0 && done < total;
+		return compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks;
 	}
 
 	void ShaderCache::StopCompilation()
 	{
-		const uint64_t total = compilationSet.totalTasks.load(std::memory_order_relaxed);
-		const uint64_t done = compilationSet.completedTasks.load(std::memory_order_relaxed) +
-		                      compilationSet.failedTasks.load(std::memory_order_relaxed);
-		if (total > done) {
-			logger::info("Stopping {} remaining shader compilation tasks", total - done);
+		if (IsCompiling()) {
+			logger::info("Stopping {} remaining shader compilation tasks", compilationSet.totalTasks - compilationSet.completedTasks - compilationSet.failedTasks);
 		}
-
-		RequestCompilationStop(false);
-	}
-
-	int32_t ShaderCache::GetCompilationThreadCount() const
-	{
-		return compilationThreadCount.load(std::memory_order_acquire);
-	}
-
-	void ShaderCache::SetCompilationThreadCount(int32_t value)
-	{
-		const auto clampedValue = std::clamp(value, 1, static_cast<int32_t>(Util::GetLogicalCoreCount()));
-		if (compilationThreadCount.exchange(clampedValue, std::memory_order_acq_rel) != clampedValue) {
-			compilationSet.NotifyDispatcher();
-		}
-	}
-
-	int32_t ShaderCache::GetBackgroundCompilationThreadCount() const
-	{
-		return backgroundCompilationThreadCount.load(std::memory_order_acquire);
-	}
-
-	void ShaderCache::SetBackgroundCompilationThreadCount(int32_t value)
-	{
-		const auto clampedValue = std::clamp(value, 1, static_cast<int32_t>(Util::GetLogicalCoreCount()));
-		if (backgroundCompilationThreadCount.exchange(clampedValue, std::memory_order_acq_rel) != clampedValue) {
-			compilationSet.NotifyDispatcher();
-		}
-	}
-
-	int32_t ShaderCache::GetActiveCompilationThreadCount() const
-	{
-		return IsBackgroundCompilation() ? GetBackgroundCompilationThreadCount() : GetCompilationThreadCount();
-	}
-
-	std::size_t ShaderCache::GetCompilationPoolTaskCount() const
-	{
-		return compilationPool.get_tasks_total();
-	}
-
-	bool ShaderCache::IsBackgroundCompilation() const
-	{
-		return backgroundCompilation.load(std::memory_order_acquire);
-	}
-
-	bool ShaderCache::TryEnableBackgroundCompilation()
-	{
-		if (!IsCompiling() || IsCompilationStopping()) {
-			return false;
-		}
-
-		if (!backgroundCompilation.exchange(true, std::memory_order_acq_rel)) {
-			compilationSet.NotifyDispatcher();
-		}
-		return true;
-	}
-
-	void ShaderCache::ResetBackgroundCompilation()
-	{
-		if (backgroundCompilation.exchange(false, std::memory_order_acq_rel)) {
-			compilationSet.NotifyDispatcher();
-		}
-	}
-
-	bool ShaderCache::IsCompilationStopping() const
-	{
-		return compilationStopping.load(std::memory_order_acquire);
+		ssource.request_stop();            // signals any legacy stop_token users
+		managementJthread.request_stop();  // stops management thread + in-flight compilations
+		compilationSet.Clear();
 	}
 
 	bool ShaderCache::IsEnabled() const
@@ -2577,16 +2314,6 @@ namespace SIE
 		isDiskCache = value;
 	}
 
-	bool ShaderCache::IsSkipUnchangedShaders() const
-	{
-		return isSkipUnchangedShaders;
-	}
-
-	void ShaderCache::SetSkipUnchangedShaders(bool value)
-	{
-		isSkipUnchangedShaders = value;
-	}
-
 	void ShaderCache::DeleteDiskCache()
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex };
@@ -2623,17 +2350,6 @@ namespace SIE
 			valid = false;
 		}
 
-		const auto shaderSourceStamp = SShaderCache::GetShaderSourceTreeStamp();
-		if (auto cachedShaderSourceStamp = ini.GetValue("Cache", "ShaderSourceStamp")) {
-			if (shaderSourceStamp != cachedShaderSourceStamp) {
-				logger::info("Disk cache outdated: shader sources changed");
-				valid = false;
-			}
-		} else {
-			logger::info("Disk cache outdated: no shader source stamp found");
-			valid = false;
-		}
-
 		if (valid) {
 			logger::info("Using disk cache");
 		} else {
@@ -2646,8 +2362,6 @@ namespace SIE
 		CSimpleIniA ini;
 		ini.SetUnicode();
 		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION.string().c_str());
-		const auto shaderSourceStamp = SShaderCache::GetShaderSourceTreeStamp();
-		ini.SetValue("Cache", "ShaderSourceStamp", shaderSourceStamp.c_str());
 		globals::state->WriteDiskCacheInfo(ini);
 		ini.SaveFile(L"Data\\ShaderCache\\Info.ini");
 		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION.string());
@@ -2657,9 +2371,9 @@ namespace SIE
 	{
 		dependencyTracker = std::make_unique<ShaderFileDependencyTracker>();
 		logger::debug("ShaderCache initialized: {} startup threads, {} background threads, {} pool threads",
-			compilationThreadCount.load(std::memory_order_relaxed),
-			backgroundCompilationThreadCount.load(std::memory_order_relaxed),
-			(int)compilationPool.get_thread_count());
+			(int)compilationThreadCount, (int)backgroundCompilationThreadCount, (int)compilationPool.get_thread_count());
+		// Management thread runs on a dedicated jthread, not in the compilation pool,
+		// so it doesn't consume a pool slot that could be used for shader compilation.
 		managementJthread = std::jthread([this](std::stop_token stoken) {
 			ManageCompilationSet(stoken);
 		});
@@ -2667,22 +2381,22 @@ namespace SIE
 
 	bool ShaderCache::UseFileWatcher() const
 	{
-		return useFileWatcher.load(std::memory_order_acquire);
+		return useFileWatcher;
 	}
 
 	void ShaderCache::SetFileWatcher(bool value)
 	{
-		auto oldValue = useFileWatcher.exchange(value, std::memory_order_acq_rel);
-		if (value && !oldValue)
+		auto oldValue = useFileWatcher;
+		useFileWatcher = value;
+		if (useFileWatcher && !oldValue)
 			StartFileWatcher();
-		else if (!value && oldValue)
+		else if (!useFileWatcher && oldValue)
 			StopFileWatcher();
 	}
 
 	void ShaderCache::StartFileWatcher()
 	{
 		logger::info("Starting FileWatcher");
-		useFileWatcher.store(true, std::memory_order_release);
 		if (!fileWatcher) {
 			fileWatcher = new efsw::FileWatcher();
 			listener = new UpdateListener(dependencyTracker.get());
@@ -2696,7 +2410,12 @@ namespace SIE
 				pathStr += std::format("{}; ", path);
 			}
 			logger::debug("ShaderCache watching for changes in {}", pathStr);
-			listener->StartProcessing();
+			// Capture listener by value so the thread does not race with StopFileWatcher()
+			// nulling this->listener before the thread has had a chance to start.
+			auto* capturedListener = listener;
+			capturedListener->fileWatcherThread = std::jthread([capturedListener]() {
+				capturedListener->processQueue();
+			});
 		} else {
 			logger::debug("ShaderCache already enabled");
 		}
@@ -2705,16 +2424,15 @@ namespace SIE
 	void ShaderCache::StopFileWatcher()
 	{
 		logger::info("Stopping FileWatcher");
-		useFileWatcher.store(false, std::memory_order_release);
-		if (listener) {
-			listener->StopProcessing();
-		}
+		// Set flag first so processQueue()'s loop condition becomes false before we join.
+		useFileWatcher = false;
 		if (fileWatcher) {
 			fileWatcher->removeWatch(watchID);
-			delete fileWatcher;
 			fileWatcher = nullptr;
 		}
 		if (listener) {
+			// ~jthread() calls request_stop() + join(); processQueue() exits when
+			// UseFileWatcher() returns false (set above).
 			delete listener;
 			listener = nullptr;
 		}
@@ -2773,9 +2491,6 @@ namespace SIE
 	{
 		if (const auto shaderBlob =
 				SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor, isDiskCache, dependencyTracker.get())) {
-			if (IsCompilationStopping()) {
-				return nullptr;
-			}
 			auto device = globals::d3d::device;
 
 			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader,
@@ -2805,9 +2520,6 @@ namespace SIE
 	{
 		if (const auto shaderBlob =
 				SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, isDiskCache, dependencyTracker.get())) {
-			if (IsCompilationStopping()) {
-				return nullptr;
-			}
 			auto device = globals::d3d::device;
 
 			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader,
@@ -2837,9 +2549,6 @@ namespace SIE
 	{
 		if (const auto shaderBlob =
 				SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor, isDiskCache, dependencyTracker.get())) {
-			if (IsCompilationStopping()) {
-				return nullptr;
-			}
 			auto device = globals::d3d::device;
 
 			auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader,
@@ -2901,7 +2610,6 @@ namespace SIE
 	{
 		return compilationSet.totalTasks;
 	}
-
 	void ShaderCache::IncCacheHitTasks()
 	{
 		compilationSet.cacheHitTasks++;
@@ -2912,25 +2620,100 @@ namespace SIE
 		return hideError;
 	}
 
+	int ShaderCache::GetHeavyTasksInFlight()
+	{
+		return static_cast<int>(compilationSet.heavyTasksInFlight.load(std::memory_order_relaxed));
+	}
+
+	uint64_t ShaderCache::GetSlowTasks()
+	{
+		return compilationSet.slowTasks.load(std::memory_order_relaxed);
+	}
+
+	uint64_t ShaderCache::GetVerySlowTasks()
+	{
+		return compilationSet.verySlowTasks.load(std::memory_order_relaxed);
+	}
+
+	std::vector<CompilationSet::SlowTaskRecord> CompilationSet::GetTopSlowTasks(size_t n) const
+	{
+		std::lock_guard lock(slowTasksMutex);
+		// Partial sort to get the N highest without fully sorting the whole vector.
+		std::vector<SlowTaskRecord> result = slowTaskRecords;
+		if (result.size() > n) {
+			std::partial_sort(result.begin(), result.begin() + n, result.end(),
+				[](const SlowTaskRecord& a, const SlowTaskRecord& b) { return a.elapsedMs > b.elapsedMs; });
+			result.resize(n);
+		} else {
+			std::sort(result.begin(), result.end(),
+				[](const SlowTaskRecord& a, const SlowTaskRecord& b) { return a.elapsedMs > b.elapsedMs; });
+		}
+		return result;
+	}
+
+	std::vector<CompilationSet::SlowTaskRecord> ShaderCache::GetTopSlowTasks(size_t n)
+	{
+		return compilationSet.GetTopSlowTasks(n);
+	}
+
+	std::optional<CompilationSet::ParallelismStats> CompilationSet::GetParallelismStats() const
+	{
+		std::vector<SlowTaskRecord> records;
+		{
+			std::lock_guard lock(slowTasksMutex);
+			if (slowTaskRecords.empty()) {
+				return std::nullopt;
+			}
+			records = slowTaskRecords;
+		}
+
+		ParallelismStats stats;
+		stats.sampleCount = records.size();
+		for (const auto& rec : records) {
+			stats.workMs += rec.elapsedMs;
+			stats.spanMs = std::max(stats.spanMs, rec.elapsedMs);
+			stats.avgQueueWaitMs += rec.queueWaitMs;
+			stats.maxQueueWaitMs = std::max(stats.maxQueueWaitMs, rec.queueWaitMs);
+		}
+		stats.avgQueueWaitMs /= static_cast<double>(stats.sampleCount);
+
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		int64_t endTime = completionTime.load(std::memory_order_relaxed);
+		if (endTime == 0) {
+			endTime = now.QuadPart;
+		}
+		stats.makespanMs = static_cast<double>(endTime - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
+
+		if (stats.spanMs > 0.0) {
+			stats.avgParallelism = stats.workMs / stats.spanMs;
+		}
+		if (stats.makespanMs > 0.0) {
+			stats.infiniteCoreEfficiency = stats.spanMs / stats.makespanMs;
+			stats.infiniteCoreGapPercent = std::max(0.0, 100.0 * (1.0 - stats.infiniteCoreEfficiency));
+		}
+
+		return stats;
+	}
+
+	std::optional<CompilationSet::ParallelismStats> ShaderCache::GetParallelismStats()
+	{
+		return compilationSet.GetParallelismStats();
+	}
+
 	void ShaderCache::ClearShaderMap(RE::BSShader::Type a_type)
 	{
 		std::string_view shaderTypeStr = magic_enum::enum_name(a_type);
 
 		std::unique_lock lockM{ SIE::ShaderCache::mapMutex };
 		logger::debug("Clearing shaderMap of {}", shaderTypeStr);
-		bool erasedAny = false;
 		for (auto it = shaderMap.begin(); it != shaderMap.end();) {
 			auto typeInKey = SIE::SShaderCache::GetTypeFromShaderString(it->first);
 			if (typeInKey == shaderTypeStr) {
 				it = shaderMap.erase(it);
-				erasedAny = true;
 			} else {
 				++it;
 			}
-		}
-		lockM.unlock();
-		if (erasedAny) {
-			mapCV.notify_all();
 		}
 	}
 
@@ -3037,7 +2820,7 @@ namespace SIE
 				shader.shaderType == RE::BSShader::Type::ImageSpace ?
 					static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
 					shader.fxpFilename,
-				descriptor, shaderClass, SIE::SShaderCache::GetDiskCacheVariantKey(shaderClass, shader, descriptor));
+				descriptor, shaderClass);
 		}
 
 		info.isActive = true;
@@ -3084,75 +2867,6 @@ namespace SIE
 		return result;
 	}
 
-	std::vector<CompilationSet::SlowTaskRecord> CompilationSet::GetTopSlowTasks(size_t n) const
-	{
-		std::lock_guard lock(slowTasksMutex);
-		if (slowTaskRecordsDirty) {
-			sortedSlowTaskRecordsCache = slowTaskRecords;
-			std::sort(sortedSlowTaskRecordsCache.begin(), sortedSlowTaskRecordsCache.end(), [](const SlowTaskRecord& a, const SlowTaskRecord& b) {
-				return a.elapsedMs > b.elapsedMs;
-			});
-			slowTaskRecordsDirty = false;
-		}
-
-		const size_t count = std::min(n, sortedSlowTaskRecordsCache.size());
-		return std::vector<SlowTaskRecord>(sortedSlowTaskRecordsCache.begin(), sortedSlowTaskRecordsCache.begin() + count);
-	}
-
-	std::vector<CompilationSet::SlowTaskRecord> ShaderCache::GetTopSlowTasks(size_t n)
-	{
-		return compilationSet.GetTopSlowTasks(n);
-	}
-
-	std::optional<CompilationSet::ParallelismStats> CompilationSet::GetParallelismStats() const
-	{
-		std::lock_guard lock(slowTasksMutex);
-		if (slowTaskRecords.empty()) {
-			return std::nullopt;
-		}
-
-		ParallelismStats stats;
-		stats.sampleCount = slowTaskRecords.size();
-
-		double totalQueueWaitMs = 0.0;
-		bool hasQpcTiming = false;
-		int64_t firstQueuedQpc = 0;
-		int64_t lastEndQpc = 0;
-		for (const auto& record : slowTaskRecords) {
-			stats.workMs += record.elapsedMs;
-			stats.spanMs = std::max(stats.spanMs, record.elapsedMs);
-			totalQueueWaitMs += record.queueWaitMs;
-			stats.maxQueueWaitMs = std::max(stats.maxQueueWaitMs, record.queueWaitMs);
-			if (record.endQpc > 0) {
-				const int64_t queuedQpc = record.queuedQpc > 0 ? record.queuedQpc : record.startQpc;
-				if (!hasQpcTiming) {
-					firstQueuedQpc = queuedQpc;
-					lastEndQpc = record.endQpc;
-					hasQpcTiming = true;
-				} else {
-					firstQueuedQpc = std::min(firstQueuedQpc, queuedQpc);
-					lastEndQpc = std::max(lastEndQpc, record.endQpc);
-				}
-			}
-		}
-		if (hasQpcTiming && lastEndQpc > firstQueuedQpc) {
-			stats.makespanMs = static_cast<double>(lastEndQpc - firstQueuedQpc) * 1000.0 / frequency.QuadPart;
-		} else {
-			stats.makespanMs = stats.spanMs;
-		}
-
-		stats.avgParallelism = stats.makespanMs > 0.0 ? stats.workMs / stats.makespanMs : 0.0;
-		stats.longestTaskShare = stats.makespanMs > 0.0 ? stats.spanMs / stats.makespanMs : 0.0;
-		stats.schedulingGapPercent = std::clamp(100.0 * (1.0 - stats.longestTaskShare), 0.0, 100.0);
-		stats.avgQueueWaitMs = totalQueueWaitMs / static_cast<double>(slowTaskRecords.size());
-		return stats;
-	}
-
-	std::optional<CompilationSet::ParallelismStats> ShaderCache::GetParallelismStats()
-	{
-		return compilationSet.GetParallelismStats();
-	}
-
 	void ShaderCache::ManageCompilationSet(std::stop_token stoken)
 	{
 		managementThread = GetCurrentThread();
@@ -3167,16 +2881,19 @@ namespace SIE
 
 	void ShaderCache::ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task)
 	{
-		if (stoken.stop_requested() || IsCompilationStopping()) {
+		if (stoken.stop_requested()) {
 			return;
 		}
 
 		const auto taskKey = task.GetString();
 
-		// Startup compilation stays normal for throughput; background compilation
-		// yields to foreground work.
+		// Thread priority serves as a signal to Intel Thread Director and
+		// the Windows scheduler for P-core vs E-core placement on hybrid CPUs.
+		// Heavy shaders compile at normal priority (favouring P-cores); light
+		// shaders stay below-normal (allowing E-core placement).  On non-hybrid
+		// CPUs this still gives heavy compiles slightly more scheduler attention.
 		SetThreadPriority(GetCurrentThread(),
-			IsBackgroundCompilation() ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_NORMAL);
+			task.GetPriority() >= SIE::kHeavyPriorityThreshold ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
 
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);
@@ -3197,20 +2914,18 @@ namespace SIE
 
 		QueryPerformanceCounter(&end);
 		const double elapsedMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / freq.QuadPart;
-		const uint64_t total = compilationSet.totalTasks.load(std::memory_order_relaxed);
-		const uint64_t done = compilationSet.completedTasks.load(std::memory_order_relaxed) +
-		                      compilationSet.failedTasks.load(std::memory_order_relaxed);
-		const uint64_t remaining = total > done ? total - done : 0;
+		const uint64_t remaining = compilationSet.totalTasks - compilationSet.completedTasks.load(std::memory_order_relaxed) - compilationSet.failedTasks.load(std::memory_order_relaxed);
+
+		// Proxy for permutation complexity: descriptor low 32 bits from GetId(); popcount = active defines.
+		// Shader file size provides a secondary signal for source complexity.
 		const auto descriptorComplexity = std::popcount(static_cast<uint32_t>(task.GetId()));
-		constexpr double kSlowMs = 2000.0;
-		constexpr double kVerySlowMs = 8000.0;
-		const bool includeSourceSize = elapsedMs >= kSlowMs ||
-		                               (spdlog::default_logger_raw() && spdlog::default_logger_raw()->should_log(spdlog::level::debug));
 		uintmax_t sourceBytes = 0;
-		if (includeSourceSize) {
-			const auto separator = taskKey.find(':');
-			if (separator != std::string::npos) {
-				const auto shaderName = taskKey.substr(0, separator);
+		{
+			// GetString() format: "fxpFilename:ShaderClass:defines" — filename is before the first colon.
+			const auto taskStr = task.GetString();
+			const auto sep = taskStr.find(':');
+			if (sep != std::string::npos) {
+				const auto shaderName = taskStr.substr(0, sep);
 				if (auto path = SIE::SShaderCache::GetShaderPath(shaderName); !path.empty()) {
 					std::error_code ec;
 					sourceBytes = std::filesystem::file_size(path, ec);
@@ -3218,27 +2933,33 @@ namespace SIE
 			}
 		}
 
+		// Debug: full per-task record for post-mortem straggler analysis.
 		logger::debug("[ShaderTiming] {:.0f}ms | queue_wait={:.0f}ms | remaining={} | defines={} | src={}B | prio={} | tid={} | {}",
 			elapsedMs, queueWaitMs, remaining, descriptorComplexity, sourceBytes,
 			task.GetPriority(), GetCurrentThreadId(), taskKey);
 
+		constexpr double kSlowMs = 2000.0;
+		constexpr double kVerySlowMs = 8000.0;
+
+		// Record every task for post-mortem analysis and developer UI (top-N display).
 		{
 			std::lock_guard lock(compilationSet.slowTasksMutex);
 			compilationSet.slowTaskRecords.push_back({ taskKey, elapsedMs, queueWaitMs, task.GetPriority(),
-				static_cast<int>(descriptorComplexity), sourceBytes,
-				task.GetEnqueuedQpc(), start.QuadPart, end.QuadPart });
-			compilationSet.slowTaskRecordsDirty = true;
+				static_cast<int>(descriptorComplexity), sourceBytes });
 		}
 
 		if (elapsedMs >= kVerySlowMs) {
+			compilationSet.verySlowTasks++;
+			compilationSet.slowTasks++;
 			logger::info("[ShaderTiming] Very slow {:.0f}ms | queue_wait={:.0f}ms | remaining={} | defines={} | src={}B | prio={} | {}",
 				elapsedMs, queueWaitMs, remaining, descriptorComplexity, sourceBytes, task.GetPriority(), taskKey);
 		} else if (elapsedMs >= kSlowMs) {
+			compilationSet.slowTasks++;
 			logger::debug("[ShaderTiming] Slow {:.0f}ms | queue_wait={:.0f}ms | remaining={} | defines={} | src={}B | prio={} | {}",
 				elapsedMs, queueWaitMs, remaining, descriptorComplexity, sourceBytes, task.GetPriority(), taskKey);
 		}
 
-		if (stoken.stop_requested() || IsCompilationStopping()) {
+		if (stoken.stop_requested()) {
 			return;
 		}
 
@@ -3288,6 +3009,8 @@ namespace SIE
 		int priority = 0;
 		const auto type = shader.shaderType.get();
 
+		// Base priority by shader type — Lighting is consistently the slowest
+		// (123KB source, 12s+ compile), followed by Effect (~31KB, up to 12s).
 		switch (type) {
 		case RE::BSShader::Type::Lighting:
 			priority += 1000;
@@ -3302,45 +3025,46 @@ namespace SIE
 			break;
 		}
 
-		if (shaderClass == ShaderClass::Pixel) {
+		// Pixel shaders compile significantly slower than vertex shaders
+		if (shaderClass == ShaderClass::Pixel)
 			priority += 200;
-		}
 
+		// More active descriptor bits → more #defines → more code paths for the compiler
 		priority += std::popcount(descriptor) * 30;
 
+		// Known heavy Lighting techniques and flags from straggler analysis
 		if (type == RE::BSShader::Type::Lighting) {
 			const auto technique = static_cast<ShaderCache::LightingShaderTechniques>(0x3F & (descriptor >> 24));
 
+			// LANDSCAPE techniques (MTLand, MTLandLODBlend) are among the heaviest
+			// due to multi-texture blending codegen — regularly 60-130s compile times
 			if (technique == ShaderCache::LightingShaderTechniques::MTLand ||
-				technique == ShaderCache::LightingShaderTechniques::MTLandLODBlend) {
+				technique == ShaderCache::LightingShaderTechniques::MTLandLODBlend)
 				priority += 500;
-			}
 			if (technique == ShaderCache::LightingShaderTechniques::Parallax ||
-				technique == ShaderCache::LightingShaderTechniques::ParallaxOcc) {
+				technique == ShaderCache::LightingShaderTechniques::ParallaxOcc)
 				priority += 300;
-			}
-			if (technique == ShaderCache::LightingShaderTechniques::Eye) {
+			if (technique == ShaderCache::LightingShaderTechniques::Eye)
 				priority += 200;
-			}
-			if (technique == ShaderCache::LightingShaderTechniques::MultilayerParallax) {
+			if (technique == ShaderCache::LightingShaderTechniques::MultilayerParallax)
 				priority += 200;
-			}
 
-			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr)) {
+			// TRUE_PBR and ANISO_LIGHTING are the dominant cost drivers,
+			// especially in combination with LANDSCAPE (115-130s observed)
+			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr))
 				priority += 500;
-			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting)) {
+			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting))
 				priority += 300;
-			}
-			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
+			// Deferred adds extra codegen overhead
+			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred))
 				priority += 200;
-			}
 
+			// LANDSCAPE + TRUE_PBR combination triggers extreme register pressure
+			// (6x unrolled texture layers * PBR params = 30+ textures, 180s+ compile)
 			if ((technique == ShaderCache::LightingShaderTechniques::MTLand ||
 					technique == ShaderCache::LightingShaderTechniques::MTLandLODBlend) &&
-				(descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr))) {
+				(descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr)))
 				priority += 500;
-			}
 		}
 
 		return priority;
@@ -3353,8 +3077,10 @@ namespace SIE
 		if (!conditionVariable.wait(
 				lock, stoken,
 				[this, &shaderCache]() { return !availableTasks.empty() &&
-			                                    static_cast<int32_t>(shaderCache->GetCompilationPoolTaskCount()) <
-			                                        shaderCache->GetActiveCompilationThreadCount(); })) {
+			                                    // Dispatch when pool has room. Use < (not <=) so that after
+			                                    // push_task() the total never exceeds the limit.
+			                                    (int)shaderCache->compilationPool.get_tasks_total() <
+			                                        (!shaderCache->backgroundCompilation ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
 			/*Woke up because of a stop request. */
 			return std::nullopt;
 		}
@@ -3362,7 +3088,15 @@ namespace SIE
 			QueryPerformanceCounter(&lastReset);
 			lastCalculation = lastReset;
 		}
-		auto bestIt = availableTasks.empty() ? availableTasks.end() : std::prev(availableTasks.end());
+
+		// Startup policy: keep dispatching the hardest queued work first.
+		// This preserves the existing priority score while preventing light tasks
+		// from bypassing queued heavy shaders and stretching the tail.
+		auto bestIt = availableTasks.end();
+		if (!availableTasks.empty()) {
+			bestIt = std::prev(availableTasks.end());
+		}
+
 		if (bestIt == availableTasks.end()) {
 			return std::nullopt;
 		}
@@ -3370,50 +3104,30 @@ namespace SIE
 		ShaderCompilationTask task = *bestIt;
 		availableTasks.erase(bestIt);
 
+		if (task.GetPriority() >= kHeavyPriorityThreshold) {
+			heavyTasksInFlight.fetch_add(1, std::memory_order_relaxed);
+		}
+
 		tasksInProgress.insert(task);
 		return task;
 	}
 
 	void CompilationSet::Add(const ShaderCompilationTask& task)
 	{
-		auto shaderCache = globals::shaderCache;
-		if (shaderCache->IsCompilationStopping()) {
-			return;
-		}
-
 		std::unique_lock lock(compilationMutex);
-		if (shaderCache->IsCompilationStopping()) {
-			return;
-		}
 		auto inProgressIt = tasksInProgress.find(task);
 		auto processedIt = processedTasks.find(task);
-		if (inProgressIt == tasksInProgress.end() && processedIt == processedTasks.end() && !shaderCache->GetCompletedShader(task)) {
+		if (inProgressIt == tasksInProgress.end() && processedIt == processedTasks.end() && !globals::shaderCache->GetCompletedShader(task)) {
 			LARGE_INTEGER now;
 			QueryPerformanceCounter(&now);
 			auto queuedTask = task;
 			queuedTask.SetEnqueuedQpc(now.QuadPart);
-			auto [availableIt, wasAdded] = availableTasks.insert(queuedTask);
-			(void)availableIt;
-			if (wasAdded) {
-				const uint64_t doneTasks = completedTasks.load(std::memory_order_relaxed) +
-				                           failedTasks.load(std::memory_order_relaxed);
-				const uint64_t prevTotal = totalTasks.load(std::memory_order_relaxed);
-				if (doneTasks >= prevTotal) {
-					shaderCache->ResetBackgroundCompilation();
-					QueryPerformanceCounter(&lastReset);
-					lastCalculation = lastReset;
-				}
-				if (completionTime.load(std::memory_order_relaxed) != 0) {
-					completionTime.store(0, std::memory_order_relaxed);
-					compilationPhaseStarted.store(false, std::memory_order_relaxed);
-					compilationPhaseStartQpc.store(0, std::memory_order_relaxed);
-				}
-				totalTasks++;
-				totalPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
-			}
+			auto [_, wasAdded] = availableTasks.insert(queuedTask);
 			lock.unlock();
 			if (wasAdded) {
 				conditionVariable.notify_one();
+				totalTasks++;
+				totalPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
 			}
 		}
 	}
@@ -3426,7 +3140,6 @@ namespace SIE
 
 		bool shouldLogCompletion = false;
 		double completionTimeMs = 0.0;
-		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
 
 		// Perform all completion operations under one mutex acquisition
 		{
@@ -3442,14 +3155,14 @@ namespace SIE
 			}
 			completedPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
 
-			if (wasDiskHit) {
-				diskHitTasks++;
-				diskHitPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
-			} else if (!compilationPhaseStarted.load(std::memory_order_relaxed)) {
-				LARGE_INTEGER phaseStart;
-				QueryPerformanceCounter(&phaseStart);
-				compilationPhaseStartQpc.store(phaseStart.QuadPart, std::memory_order_release);
-				compilationPhaseStarted.store(true, std::memory_order_release);
+			// Track heavy task completion for P-core concurrency limiting
+			if (task.GetPriority() >= kHeavyPriorityThreshold) {
+				auto current = heavyTasksInFlight.load(std::memory_order_relaxed);
+				while (current > 0 &&
+					   !heavyTasksInFlight.compare_exchange_weak(current, current - 1,
+						   std::memory_order_relaxed,
+						   std::memory_order_relaxed)) {
+				}
 			}
 
 			// Update timing
@@ -3473,46 +3186,34 @@ namespace SIE
 		// Log completion outside the lock
 		if (shouldLogCompletion) {
 			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
-			cache.ResetBackgroundCompilation();
 		}
 
-		conditionVariable.notify_one();
-	}
-
-	void CompilationSet::NotifyDispatcher()
-	{
 		conditionVariable.notify_one();
 	}
 
 	void CompilationSet::Clear()
 	{
+		std::scoped_lock lock(compilationMutex);
+		availableTasks.clear();
+		tasksInProgress.clear();
+		processedTasks.clear();
+		totalTasks = 0;
+		completedTasks = 0;
+		failedTasks = 0;
+		cacheHitTasks = 0;
+		slowTasks = 0;
+		verySlowTasks = 0;
+		totalPriorityWeight = 0;
+		completedPriorityWeight = 0;
+		heavyTasksInFlight = 0;
+		QueryPerformanceCounter(&lastReset);
+		QueryPerformanceCounter(&lastCalculation);
+		completionTime = { 0 };  // Reset completion time
+		totalTime = { 0 };
 		{
-			std::scoped_lock lock(compilationMutex);
-			availableTasks.clear();
-			tasksInProgress.clear();
-			processedTasks.clear();
-			totalTasks = 0;
-			completedTasks = 0;
-			failedTasks = 0;
-			cacheHitTasks = 0;
-			diskHitTasks = 0;
-			diskHitPriorityWeight = 0;
-			compilationPhaseStarted.store(false, std::memory_order_relaxed);
-			compilationPhaseStartQpc.store(0, std::memory_order_relaxed);
-			totalPriorityWeight = 0;
-			completedPriorityWeight = 0;
-			QueryPerformanceCounter(&lastReset);
-			QueryPerformanceCounter(&lastCalculation);
-			completionTime = { 0 };  // Reset completion time
-			totalTime = { 0 };
-			{
-				std::lock_guard slowLock(slowTasksMutex);
-				slowTaskRecords.clear();
-				sortedSlowTaskRecordsCache.clear();
-				slowTaskRecordsDirty = false;
-			}
+			std::lock_guard slowLock(slowTasksMutex);
+			slowTaskRecords.clear();
 		}
-		conditionVariable.notify_all();
 	}
 
 	std::string CompilationSet::GetHumanTime(double a_totalMs)
@@ -3520,37 +3221,29 @@ namespace SIE
 		return Util::FormatDuration(a_totalMs);
 	}
 
-	double CompilationSet::GetEta(int64_t endQpc, int64_t lastResetQpc)
+	double CompilationSet::GetEta()
 	{
-		auto weightedEta = [](double elapsedMs, double doneWeight, double totalWeight) -> double {
-			if (elapsedMs <= 0.0 || doneWeight <= 0.0 || totalWeight <= 0.0) {
-				return 0.0;
-			}
-			const double fraction = doneWeight / totalWeight;
-			return std::max(elapsedMs / fraction - elapsedMs, 0.0);
-		};
+		// Use wall-clock elapsed time since compilation started
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		int64_t endTime = (completionTime.load(std::memory_order_relaxed) != 0) ? completionTime.load(std::memory_order_relaxed) : now.QuadPart;
+		double elapsedMs = static_cast<double>(endTime - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
 
-		const uint64_t diskWeight = diskHitPriorityWeight.load(std::memory_order_relaxed);
-		const uint64_t totalWeight = totalPriorityWeight.load(std::memory_order_relaxed);
-		const uint64_t doneWeight = completedPriorityWeight.load(std::memory_order_relaxed);
+		if (elapsedMs <= 0.0)
+			return 0.0;
 
-		if (diskWeight > 0) {
-			if (!compilationPhaseStarted.load(std::memory_order_acquire)) {
-				return 0.0;
-			}
+		// Priority-weighted ETA: heavy tasks completing early should not inflate
+		// the estimate. We measure progress as a fraction of total priority weight
+		// completed, which accounts for the decreasing cost of remaining tasks.
+		double doneWeight = static_cast<double>(completedPriorityWeight.load(std::memory_order_relaxed));
+		double totalWeight = static_cast<double>(totalPriorityWeight.load(std::memory_order_relaxed));
 
-			const int64_t phaseStart = compilationPhaseStartQpc.load(std::memory_order_acquire);
-			if (phaseStart <= 0 || endQpc <= phaseStart) {
-				return 0.0;
-			}
-			const double compilationElapsedMs = static_cast<double>(endQpc - phaseStart) * 1000.0 / frequency.QuadPart;
-			const double compiledDone = static_cast<double>(doneWeight > diskWeight ? doneWeight - diskWeight : 0);
-			const double compiledTotal = static_cast<double>(totalWeight > diskWeight ? totalWeight - diskWeight : 0);
-			return weightedEta(compilationElapsedMs, compiledDone, compiledTotal);
-		}
+		if (doneWeight <= 0.0 || totalWeight <= 0.0)
+			return 0.0;
 
-		const double elapsedMs = static_cast<double>(endQpc - lastResetQpc) * 1000.0 / frequency.QuadPart;
-		return weightedEta(elapsedMs, static_cast<double>(doneWeight), static_cast<double>(totalWeight));
+		double fractionDone = doneWeight / totalWeight;
+		double estimatedTotalMs = elapsedMs / fractionDone;
+		return std::max(estimatedTotalMs - elapsedMs, 0.0);
 	}
 
 	std::string CompilationSet::GetStatsString(bool a_timeOnly, bool a_elapsedOnly)
@@ -3561,13 +3254,7 @@ namespace SIE
 
 		// Use completion time if compilation is finished, otherwise current time
 		int64_t endTime = (completionTime.load(std::memory_order_relaxed) != 0) ? completionTime.load(std::memory_order_relaxed) : currentTime.QuadPart;
-		int64_t lastResetQpc = 0;
-		{
-			std::scoped_lock lock(compilationMutex);
-			lastResetQpc = lastReset.QuadPart;
-		}
-		double totalMs = static_cast<double>(endTime - lastResetQpc) * 1000.0 / frequency.QuadPart;
-		double etaMs = GetEta(endTime, lastResetQpc);
+		double totalMs = static_cast<double>(endTime - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
 
 		if (a_timeOnly) {
 			if (a_elapsedOnly) {
@@ -3577,38 +3264,21 @@ namespace SIE
 				// Elapsed + estimated
 				return fmt::format("{}/{}",
 					GetHumanTime(totalMs),
-					GetHumanTime(etaMs + totalMs));
+					GetHumanTime(GetEta() + totalMs));
 			}
 		}
 
-		return fmt::format("{}/{} (successful/total)\tfailed: {}\tcachehits: {}\tdisk cache: {}\nElapsed/Estimated Time: {}/{}",
+		return fmt::format("{}/{} (successful/total)\tfailed: {}\tdeduplicated: {}\nElapsed/Estimated Time: {}/{}",
 			(std::uint64_t)completedTasks,
 			(std::uint64_t)totalTasks,
 			(std::uint64_t)failedTasks,
 			(std::uint64_t)cacheHitTasks,
-			(std::uint64_t)diskHitTasks,
 			GetHumanTime(totalMs),
-			GetHumanTime(etaMs + totalMs));
+			GetHumanTime(GetEta() + totalMs));
 	}
 
 	UpdateListener::UpdateListener(ShaderFileDependencyTracker* deps_) :
 		deps(deps_) {}
-
-	void UpdateListener::StartProcessing()
-	{
-		StopProcessing();
-		fileWatcherThread = std::jthread([this](std::stop_token stoken) {
-			processQueue(stoken);
-		});
-	}
-
-	void UpdateListener::StopProcessing()
-	{
-		fileWatcherThread.request_stop();
-		if (fileWatcherThread.joinable()) {
-			fileWatcherThread.join();
-		}
-	}
 
 	void UpdateListener::UpdateCache(const std::filesystem::path& filePath, SIE::ShaderCache* cache, bool& clearCache, bool& fileDone)
 	{
@@ -3676,12 +3346,12 @@ namespace SIE
 		fileDone = false;
 	}
 
-	void UpdateListener::processQueue(std::stop_token stoken)
+	void UpdateListener::processQueue()
 	{
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 		std::unique_lock lock(actionMutex, std::defer_lock);
 		auto cache = globals::shaderCache;
-		while (!stoken.stop_requested() && cache->UseFileWatcher()) {
+		while (cache->UseFileWatcher()) {
 			lock.lock();
 			if (!queue.empty()) {
 				bool clearCache = false;
@@ -3720,7 +3390,6 @@ namespace SIE
 			lock.unlock();
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		}
-		std::lock_guard clearLock(actionMutex);
 		queue.clear();
 	}
 

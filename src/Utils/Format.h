@@ -67,7 +67,13 @@ namespace Util
 	std::string FormatTimeAgo(std::filesystem::file_time_type fileTime);
 
 	/**
-	 * Formats a duration in milliseconds as HH:MM:SS.
+	 * Formats a duration given in milliseconds as HH:MM:SS.
+	 * Suitable for displaying long-running operation times (e.g. shader compilation).
+	 *
+	 * @param ms Duration in milliseconds. Fractional milliseconds are truncated.
+	 *           Non-finite (NaN/inf) or negative values are clamped to "00:00:00".
+	 *           Durations >= 24 hours display hours without limit (e.g., "125:34:56").
+	 * @return Formatted string like "00:02:35" or "00:00:00" for invalid inputs
 	 */
 	std::string FormatDuration(double ms);
 
@@ -114,10 +120,4 @@ namespace Util
 
 	/** Case-insensitive equality for two strings. */
 	bool IEquals(std::string_view a, std::string_view b);
-
-	/**
-	 * Returns a stable cache filename suffix for a shader variant string, or an
-	 * empty string when the variant string is empty.
-	 */
-	std::string GetShaderDefinesSuffix(const std::string& definesStr);
 }  // namespace Util

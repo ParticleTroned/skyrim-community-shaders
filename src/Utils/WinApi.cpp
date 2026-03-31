@@ -1,19 +1,7 @@
 #include "WinApi.h"
 
-#include <algorithm>
-#include <bit>
-#include <cstdint>
-#include <thread>
-#include <vector>
-
 namespace Util
 {
-	uint32_t GetLogicalCoreCount()
-	{
-		static const uint32_t cached = std::max(1u, std::thread::hardware_concurrency());
-		return cached;
-	}
-
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath)
 	{
 		DWORD handle = 0;
@@ -42,42 +30,43 @@ namespace Util
 
 	uint32_t GetPerformanceCoreCount()
 	{
+		// Cache the result — CPU topology never changes at runtime.
+		// C++11 guarantees thread-safe initialisation of static locals.
 		static const uint32_t cached = []() -> uint32_t {
-			const uint32_t fallback = GetLogicalCoreCount();
+			const uint32_t fallback = std::max(1u, std::thread::hardware_concurrency());
 
 			DWORD size = 0;
 			GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &size);
-			if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
+			if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0)
 				return fallback;
-			}
 
-			std::vector<uint8_t> buffer(size);
-			auto* info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
-			if (!GetLogicalProcessorInformationEx(RelationProcessorCore, info, &size)) {
+			std::vector<uint8_t> buf(size);
+			auto* info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data());
+			if (!GetLogicalProcessorInformationEx(RelationProcessorCore, info, &size))
 				return fallback;
-			}
 
-			BYTE maxEfficiencyClass = 0;
+			// First pass: find the highest efficiency class present.
+			BYTE maxClass = 0;
 			for (DWORD offset = 0; offset < size;) {
-				auto* entry = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
-				maxEfficiencyClass = std::max(maxEfficiencyClass, entry->Processor.EfficiencyClass);
+				auto* entry = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data() + offset);
+				if (entry->Processor.EfficiencyClass > maxClass)
+					maxClass = entry->Processor.EfficiencyClass;
 				offset += entry->Size;
 			}
 
+			// Second pass: count logical processors on those (P-)cores.
 			uint32_t count = 0;
 			for (DWORD offset = 0; offset < size;) {
-				auto* entry = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
-				if (entry->Processor.EfficiencyClass == maxEfficiencyClass) {
-					for (WORD group = 0; group < entry->Processor.GroupCount; ++group) {
-						count += static_cast<uint32_t>(std::popcount(entry->Processor.GroupMask[group].Mask));
-					}
+				auto* entry = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data() + offset);
+				if (entry->Processor.EfficiencyClass == maxClass) {
+					for (WORD g = 0; g < entry->Processor.GroupCount; ++g)
+						count += static_cast<uint32_t>(std::popcount(entry->Processor.GroupMask[g].Mask));
 				}
 				offset += entry->Size;
 			}
 
 			return count > 0 ? count : fallback;
 		}();
-
 		return cached;
 	}
 }  // namespace Util

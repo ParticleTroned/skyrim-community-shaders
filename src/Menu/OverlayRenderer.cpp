@@ -22,7 +22,6 @@
 
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
-#include "Features/OverlayFeature.h"
 #include "Features/VR.h"
 
 void OverlayRenderer::RenderOverlay(
@@ -40,16 +39,10 @@ void OverlayRenderer::RenderOverlay(
 		globals::features::vr.ProcessControllerInputForImGui();
 	}
 
-	auto drawableFeatureOverlays = CollectDrawableFeatureOverlays(menu);
-
-	if (ShouldSkipRendering(menu, !drawableFeatureOverlays.empty())) {
+	if (ShouldSkipRendering()) {
 		auto& io = ImGui::GetIO();
 		io.ClearInputKeys();
 		io.ClearEventsQueue();
-		if (globals::features::vr.IsOpenVRCompatible()) {
-			// Keep VR overlays in sync when the ImGui frame is skipped.
-			globals::features::vr.HideOverlaysIfPresent();
-		}
 		return;
 	}
 
@@ -59,15 +52,13 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
 
-	// Draw weather editor independently of main menu state
-	// Auto-close editor if player leaves valid game space (e.g., loading screen)
 	auto* editorWindow = EditorWindow::GetSingleton();
-	auto player = RE::PlayerCharacter::GetSingleton();
-	if (editorWindow->open && !(player && player->parentCell)) {
+	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
 		editorWindow->open = false;
 		if (editorWindow->IsInPreviewMode())
 			editorWindow->ExitPreviewMode();
 	}
+	editorWindow->UpdateOpenState();
 	if (editorWindow->open) {
 		bool flying = editorWindow->IsPreviewFlying();
 		auto& io = ImGui::GetIO();
@@ -84,7 +75,7 @@ void OverlayRenderer::RenderOverlay(
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
 
-	RenderFeatureOverlays(drawableFeatureOverlays);
+	RenderFeatureOverlays();
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
 	FinalizeImGuiFrame();
@@ -97,57 +88,21 @@ void OverlayRenderer::HandleVRSetup()
 	}
 }
 
-bool OverlayRenderer::ShouldSkipRendering(const Menu& menu, bool hasDrawableFeatureOverlay)
+bool OverlayRenderer::ShouldSkipRendering()
 {
 	auto shaderCache = globals::shaderCache;
 	auto failed = shaderCache->GetCurrentFailedCount();
 	auto hide = shaderCache->IsHideErrors();
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	auto* renderDoc = RenderDoc::GetSingleton();
-	auto* state = globals::state;
-	const bool shaderBlockingVisible = state && state->IsDeveloperMode() && !shaderCache->blockedKey.empty();
 
 	return !(shaderCache->IsCompiling() ||
-			 menu.IsEnabled ||
+			 Menu::GetSingleton()->IsEnabled ||
 			 EditorWindow::GetSingleton()->open ||
-			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||
-			 shaderBlockingVisible ||
-			 hasDrawableFeatureOverlay ||
+			 globals::features::performanceOverlay.settings.ShowInOverlay ||
 			 renderDoc->IsAvailable());
-}
-
-std::vector<OverlayFeature*> OverlayRenderer::CollectDrawableFeatureOverlays(const Menu& menu)
-{
-	std::vector<OverlayFeature*> overlays;
-	overlays.reserve(Feature::GetFeatureList().size());
-
-	for (Feature* feat : Feature::GetFeatureList()) {
-		if (!feat || !feat->loaded) {
-			continue;
-		}
-
-		auto* overlay = dynamic_cast<OverlayFeature*>(feat);
-		if (!overlay) {
-			continue;
-		}
-
-		if (ShouldDrawFeatureOverlay(*overlay, menu)) {
-			overlays.push_back(overlay);
-		}
-	}
-
-	return overlays;
-}
-
-bool OverlayRenderer::ShouldDrawFeatureOverlay(const OverlayFeature& overlay, const Menu& menu)
-{
-	if (!overlay.IsOverlayVisible()) {
-		return false;
-	}
-
-	return !overlay.RequiresGlobalOverlayToggle() || menu.overlayVisible;
 }
 
 void OverlayRenderer::HandleFontReload(Menu& menu, float& cachedFontSize, float currentFontSize)
@@ -198,10 +153,9 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto* renderDoc = RenderDoc::GetSingleton();
 	bool renderDocAvailable = renderDoc->IsAvailable();
 	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
-	const bool isBackgroundCompilation = shaderCache->IsBackgroundCompilation();
 
 	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
-		isBackgroundCompilation ? "Background " : "",
+		shaderCache->backgroundCompilation ? "Background " : "",
 		shaderCache->GetShaderStatsString(!state->IsDeveloperMode()).c_str());
 	auto percent = (float)compiledShaders / (float)totalShaders;
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
@@ -214,7 +168,24 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		}
 		ImGui::TextUnformatted(progressTitle.c_str());
 		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
-		if (!isBackgroundCompilation && shaderCache->menuLoaded) {
+		if (state->IsDeveloperMode()) {
+			int32_t threadLimit = shaderCache->backgroundCompilation ? shaderCache->backgroundCompilationThreadCount : shaderCache->compilationThreadCount;
+			int compilationRunning = (int)shaderCache->compilationPool.get_tasks_running();
+			int heavyInFlight = shaderCache->GetHeavyTasksInFlight();
+			int heavyLimit = static_cast<int>(Util::GetPerformanceCoreCount());
+			uint64_t slow = shaderCache->GetSlowTasks();
+			uint64_t verySlow = shaderCache->GetVerySlowTasks();
+			ImGui::Text("Threads: %d / %d limit | Heavy: %d / %d P-cores | %d workers",
+				compilationRunning,
+				threadLimit,
+				heavyInFlight,
+				heavyLimit,
+				(int)shaderCache->compilationPool.get_thread_count());
+			if (slow > 0) {
+				ImGui::Text("Slow shaders: %llu (very slow: %llu)", slow, verySlow);
+			}
+		}
+		if (!shaderCache->backgroundCompilation && shaderCache->menuLoaded) {
 			auto skipShadersText = fmt::format(
 				"Press {} to proceed without completing shader compilation. ",
 				keyIdToString(Menu::GetSingleton()->GetSettings().SkipCompilationKey));
@@ -226,7 +197,9 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, renderDocInformation.c_str());
 
 		ImGui::End();
-	} else if (failed) {
+	}
+
+	if (failed) {
 		if (!hide) {
 			ImGui::SetNextWindowPos(ImVec2(pos, pos));
 			if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
@@ -257,10 +230,15 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	}
 }
 
-void OverlayRenderer::RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays)
+void OverlayRenderer::RenderFeatureOverlays()
 {
-	for (OverlayFeature* overlay : overlays) {
-		overlay->DrawOverlay();
+	// load overlays
+	for (Feature* feat : Feature::GetFeatureList()) {
+		if (feat && feat->loaded) {
+			if (auto* overlay = dynamic_cast<OverlayFeature*>(feat)) {
+				overlay->DrawOverlay();
+			}
+		}
 	}
 }
 

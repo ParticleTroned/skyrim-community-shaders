@@ -696,15 +696,6 @@ namespace
 		settings.EnableVanillaReflectionCompensation = SanitizeToggle(settings.EnableVanillaReflectionCompensation);
 		settings.EnablePuddleInfluenceDebugReadout = SanitizeToggle(settings.EnablePuddleInfluenceDebugReadout);
 		settings.EnableLodSafeWetDarkening = SanitizeToggle(settings.EnableLodSafeWetDarkening);
-		if (settings.EnableHostilesWetProfile != WET_LOOK_PROFILE_HOSTILES) {
-			// Hostile-only options should be inactive outside Hostile mode.
-			settings.EnableMarch3WetnessProfile = 0u;
-			settings.EnableExtendedLegacyReflectionRange = 0u;
-			settings.EnableForwardReflectionBias = 0u;
-			settings.EnableVanillaReflectionCompensation = 0u;
-			settings.EnablePuddleInfluenceDebugReadout = 0u;
-			settings.EnableLodSafeWetDarkening = 0u;
-		}
 		SanitizeReflectionSettings(settings);
 	}
 
@@ -2190,6 +2181,14 @@ void WetnessEffects::LoadSettings(json& o_json)
 		} else {
 			modernWetIndirectSpecularScale = compatScale;
 		}
+	}
+
+	if (settings.EnableHostilesWetProfile == WET_LOOK_PROFILE_CRIMSON &&
+	    !hasModernWetReflectionScale &&
+	    !hasLegacyWetReflectionScale &&
+	    !hasExplicitWetReflectionScale) {
+		// Ensure Crimson mode defaults to the Quality reflection basis on legacy/manual configs.
+		ApplyQualityReflectionBaseline(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale);
 	}
 
 	if (isObject && o_json.contains("EnableWetIndirectSpecular") && !hasExplicitWetReflectionScale && !hasModernWetReflectionScale &&

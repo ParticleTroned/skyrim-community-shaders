@@ -88,6 +88,7 @@ public:
 		float VRCullDistance = 1500.0f;                  // 0 disables VR distance culling
 		float CenterFullResMaskScale = 0.0f;             // 0 = off, 1.0 = almost full frame center
 		int FoveatedPresetMode = 0;                      // 0=off, 1=strict foveated, 2=foveated
+		bool EnableVRStereoSync = true;                  // bilateral cross-eye SSGI stabilization pass (VR only)
 		// visual
 		float MinScreenRadius = 0.01f;
 		float AORadius = 256.f;

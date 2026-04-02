@@ -26,6 +26,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	constexpr const char* kVRStereoSyncJsonKey = "EnableVRStereoSync";
 	constexpr uint kSampleCountMin = 1u;
 	constexpr uint kSampleCountMax = 4u;
 	constexpr float kVRBaseSamplesMin = 16.0f;
@@ -110,7 +111,7 @@ void ScreenSpaceShadows::DrawSettings()
 			ImGui::Text("Controls overall shadow darkness.");
 		}
 
-		if (globals::game::isVR && globals::state->IsDeveloperMode()) {
+		if (globals::game::isVR) {
 			ImGui::Checkbox("VR Stereo Sync", &enableStereoSync);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(
@@ -468,17 +469,20 @@ void ScreenSpaceShadows::Prepass()
 void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
 	bendSettings = o_json;
+	enableStereoSync = o_json.value(kVRStereoSyncJsonKey, true);
 	SanitizeBendSettings(bendSettings);
 }
 
 void ScreenSpaceShadows::SaveSettings(json& o_json)
 {
 	o_json = bendSettings;
+	o_json[kVRStereoSyncJsonKey] = enableStereoSync;
 }
 
 void ScreenSpaceShadows::RestoreDefaultSettings()
 {
 	bendSettings = {};
+	enableStereoSync = true;
 }
 
 bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)

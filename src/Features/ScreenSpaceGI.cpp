@@ -25,6 +25,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VRCullDistance,
 	CenterFullResMaskScale,
 	FoveatedPresetMode,
+	EnableVRStereoSync,
 	MinScreenRadius,
 	AORadius,
 	GIRadius,
@@ -295,6 +296,20 @@ void ScreenSpaceGI::DrawSettings()
 			recompileFlag |= ImGui::Checkbox("(Experimental) HQ Specular IL", &settings.EnableExperimentalSpecularGI);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("An experimental specular GI that is more accurate but requires more samples. Won't be blurred.");
+		}
+
+		if (isVR) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			{
+				auto vrStereoSyncGuard = Util::DisableGuard(!settings.Enabled);
+				ImGui::Checkbox("VR Stereo Sync", &settings.EnableVRStereoSync);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"Runs an extra VR-only stereo bilateral sync pass for SSGI AO/IL after blur.\n"
+					"Disable for A/B performance testing.");
+			}
 		}
 
 		ImGui::EndTable();
@@ -1558,7 +1573,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 	// VR stereo sync: bilateral blend of SSGI buffers between eyes
 	// Shi, Billeter, Eisemann 2022, "Stereo-consistent screen-space ambient occlusion"
-	if (REL::Module::IsVR() && stereoSyncCompute) {
+	if (REL::Module::IsVR() && settings.EnableVRStereoSync && stereoSyncCompute) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Stereo Sync");
 
 		if (globals::state->frameAnnotations)

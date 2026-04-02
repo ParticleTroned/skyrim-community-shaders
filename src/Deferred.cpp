@@ -13,6 +13,7 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "Features/VR.h"
 #include "Features/WeatherEditor.h"
 
 #include "Hooks.h"
@@ -386,6 +387,9 @@ void Deferred::DeferredPasses()
 	auto reflectance = renderer->GetRuntimeData().renderTargets[REFLECTANCE];
 
 	auto motionVectors = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	if (main.texture)
+		main.texture->GetDesc(&mainDesc);
 
 	bool interior = Util::IsInterior();
 
@@ -409,17 +413,35 @@ void Deferred::DeferredPasses()
 
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& ibl = globals::features::ibl;
+	auto& vr = globals::features::vr;
+	const bool isVR = REL::Module::IsVR();
+
+	ID3D11ShaderResourceView* deferredDepthSRV = dynamicCubemaps.loaded || isVR ?
+		(terrainBlending.loaded && terrainBlending.settings.Enabled ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV) :
+		nullptr;
+
+	bool stereoReprojectionPrepared = false;
+	ID3D11ShaderResourceView* stereoModeSRV = nullptr;
+	if (isVR && vr.loaded) {
+		vr.stereoOpt.SetupResources();
+		stereoModeSRV = vr.stereoOpt.GetFallbackModeSRV();
+	}
+	if (isVR && vr.loaded && mainDesc.Width > 0 && mainDesc.Height > 0 && deferredDepthSRV) {
+		stereoReprojectionPrepared = vr.stereoOpt.Prepare(vr.settings.StereoOptimizations, deferredDepthSRV, mainDesc.Width, mainDesc.Height);
+		if (stereoReprojectionPrepared)
+			stereoModeSRV = vr.stereoOpt.GetModeSRV();
+	}
 
 	// Deferred Composite
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[16]{
+		ID3D11ShaderResourceView* srvs[17]{
 			specular.SRV,
 			albedo.SRV,
 			normalRoughness.SRV,
 			masks.SRV,
-			dynamicCubemaps.loaded || REL::Module::IsVR() ? (terrainBlending.loaded && terrainBlending.settings.Enabled ? terrainBlending.blendedDepthTexture16->srv.get() : depth.depthSRV) : nullptr,
+			deferredDepthSRV,
 			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,
@@ -431,6 +453,7 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl.IsRuntimeEnabled() && ibl.diffuseIBLTexture ? ibl.diffuseIBLTexture->srv.get() : nullptr,
 			ibl.IsRuntimeEnabled() && ibl.diffuseSkyIBLTexture ? ibl.diffuseSkyIBLTexture->srv.get() : nullptr,
+			stereoModeSRV,
 		};
 
 		if (dynamicCubemaps.loaded)
@@ -447,9 +470,13 @@ void Deferred::DeferredPasses()
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 	}
 
+	if (stereoReprojectionPrepared) {
+		vr.stereoOpt.DispatchBlend(vr.settings.StereoOptimizations, main.UAV, normals.UAV, motionVectors.UAV, deferredDepthSRV);
+	}
+
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[16]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[17]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -596,6 +623,9 @@ void Deferred::ClearShaderCache()
 		mainCompositeInteriorCS->Release();
 		mainCompositeInteriorCS = nullptr;
 	}
+	if (REL::Module::IsVR()) {
+		globals::features::vr.stereoOpt.ClearShaderCache();
+	}
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
@@ -619,6 +649,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
+
+		if (REL::Module::IsVR())
+			defines.push_back({ "VR_STEREO_OPT", nullptr });
 
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
@@ -644,6 +677,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (REL::Module::IsVR())
 			defines.push_back({ "FRAMEBUFFER", nullptr });
+
+		if (REL::Module::IsVR())
+			defines.push_back({ "VR_STEREO_OPT", nullptr });
 
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}

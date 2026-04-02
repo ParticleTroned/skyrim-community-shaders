@@ -1,6 +1,7 @@
 #pragma once
 #include "Menu.h"
 #include "OverlayFeature.h"
+#include "VRStereoOptimizations.h"
 #include "Utils/Input.h"
 #include <algorithm>
 #include <d3d11.h>
@@ -140,6 +141,7 @@ public:
 		bool EnableDepthBufferCullingExterior = true;  ///< Enable depth buffer culling for VR performance
 		bool EnableDepthBufferCullingInterior = true;
 		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
+		VRStereoOptimizationSettings StereoOptimizations{};  ///< Stereo reprojection optimization settings
 
 		// VR Menu Overlay positioning settings
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)
@@ -232,10 +234,12 @@ public:
 			mouseSpeed = std::clamp(mouseSpeed, 0.1f, 50.0f);
 			comboTimeout = std::clamp(comboTimeout, 1.0f, 10.0f);
 			kAutoHideSeconds = std::clamp(kAutoHideSeconds, 0, Config::kMaxAutoHideSeconds);
+			StereoOptimizations.ClampToValidRanges();
 		}
 	};
 
 	Settings settings;  ///< Current VR configuration settings
+	VRStereoOptimizations stereoOpt;  ///< Deferred-stage stereo reprojection optimization helper
 
 	//=============================================================================
 	// VR-SPECIFIC PUBLIC API

@@ -40,6 +40,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
 	MinOccludeeBoxExtent,
+	StereoOptimizations,
 	VRMenuScale,
 	VRMenuPositioningMethod,
 	attachMode,
@@ -88,6 +89,7 @@ void VR::SetupResources()
 {
 	// Detect OpenVR version and compatibility early to avoid CTDs
 	DetectOpenVRInfo();
+	stereoOpt.SetupResources();
 
 	// Log OpenVR information
 	if (openVRInfo.isAvailable) {
@@ -596,9 +598,9 @@ namespace
 				ImGui::Text("Improves performance in interiors, recommended ON.");
 			}
 
-		if (exteriorChanged || interiorChanged) {
-			vr.UpdateDepthBufferCulling();
-		}
+			if (exteriorChanged || interiorChanged) {
+				vr.UpdateDepthBufferCulling();
+			}
 
 			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
 				if (vr.gMinOccludeeBoxExtent) {
@@ -609,6 +611,47 @@ namespace
 				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
 			}
 
+			ImGui::Separator();
+			ImGui::Text("Stereo Reprojection Optimization (Experimental)");
+
+			auto& stereoSettings = settings.StereoOptimizations;
+			ImGui::Checkbox("Enable Deferred Stereo Reprojection", &stereoSettings.Enabled);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Skips native deferred shading for eligible right-eye pixels, then fills them from stereo reprojection.");
+				ImGui::TextUnformatted("Center and periphery are both eligible; center behavior is driven by foveated mask policy.");
+			}
+
+			const bool compatibilityBlocked = vr.stereoOpt.IsCompatibilityBlocked(stereoSettings);
+			if (compatibilityBlocked) {
+				ImGui::TextColored(ImVec4(1.0f, 0.76f, 0.28f, 1.0f), "Compatibility safety active: Terrain Blending + Wetness both enabled.");
+			}
+
+			const char* reprojectionPresets[] = { "Quality", "Performance" };
+			int presetIndex = static_cast<int>(stereoSettings.Mode);
+			if (ImGui::Combo("Reprojection Preset", &presetIndex, reprojectionPresets, IM_ARRAYSIZE(reprojectionPresets))) {
+				stereoSettings.Mode = static_cast<VRStereoOptimizationSettings::Preset>(presetIndex);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Quality: stronger center protection and larger edge guards.");
+				ImGui::TextUnformatted("Performance: broader reprojection eligibility for higher speed gains.");
+			}
+
+			ImGui::Checkbox("Near-Field Full Blend", &stereoSettings.EnableNearFieldFullBlend);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Blends native + reprojected right-eye shading in close range to preserve stereo depth cues.");
+			}
+
+			ImGui::BeginDisabled(!stereoSettings.EnableNearFieldFullBlend);
+			ImGui::SliderFloat("Near-Field Distance", &stereoSettings.NearFieldBlendDistance, 1.0f, 1500.0f, "%.0f");
+			ImGui::SliderFloat("Near-Field Range", &stereoSettings.NearFieldBlendRange, 1.0f, 1000.0f, "%.0f");
+			ImGui::EndDisabled();
+
+			ImGui::Checkbox("Disable with Terrain Blending + Wetness", &stereoSettings.DisableWhenTerrainBlendingAndWetness);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Keeps reprojection off when both Terrain Blending and Wetness are active to avoid known artifacts.");
+			}
+
+			stereoSettings.ClampToValidRanges();
 		}
 	}
 

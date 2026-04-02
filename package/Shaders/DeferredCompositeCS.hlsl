@@ -6,6 +6,7 @@
 #include "Common/SharedData.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 #include "Common/VR.hlsli"
+#include "VR/StereoMode.hlsli"
 
 Texture2D<float3> SpecularTexture : register(t0);
 Texture2D<unorm float3> AlbedoTexture : register(t1);
@@ -81,6 +82,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 #	endif
 #endif
 
+#if defined(VR_STEREO_OPT)
+Texture2D<uint> VRStereoModeTexture : register(t16);
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	// Early exit if dispatch thread is outside screen bounds
 	if (any(dispatchID.xy >= uint2(SharedData::BufferDim.xy)))
@@ -91,6 +96,15 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, out float ao, out float3 il, i
 
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
+
+#if defined(VR_STEREO_OPT) && defined(VR)
+	if (eyeIndex == 1) {
+		const uint mode = VRStereoModeTexture[dispatchID.xy];
+		if (mode == VR_STEREO_MODE_REPROJECT) {
+			return;
+		}
+	}
+#endif
 
 	float3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
 	float3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);

@@ -89,6 +89,7 @@ public:
 		float CenterFullResMaskScale = 0.0f;             // 0 = off, 1.0 = almost full frame center
 		int FoveatedPresetMode = 0;                      // 0=off, 1=strict foveated, 2=foveated
 		bool EnableVRStereoSync = true;                  // bilateral cross-eye SSGI stabilization pass (VR only)
+		bool EnableVRStereoSyncAOOnlyOptimization = false;  // uses AO-only stereo sync shader when IL is off
 		// visual
 		float MinScreenRadius = 0.01f;
 		float AORadius = 256.f;
@@ -203,6 +204,7 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> stereoSyncCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> stereoSyncAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> centerBlendCompute = nullptr;

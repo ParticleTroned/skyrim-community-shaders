@@ -27,6 +27,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 namespace
 {
 	constexpr const char* kVRStereoSyncJsonKey = "EnableVRStereoSync";
+	constexpr const char* kVRStereoSyncNoCopyJsonKey = "EnableVRStereoSyncNoCopyOptimization";
 	constexpr uint kSampleCountMin = 1u;
 	constexpr uint kSampleCountMax = 4u;
 	constexpr float kVRBaseSamplesMin = 16.0f;
@@ -118,6 +119,13 @@ void ScreenSpaceShadows::DrawSettings()
 					"Synchronizes shadow data between left and right eyes via bilateral reprojection "
 					"and applies a depth-weighted blur to reduce per-eye noise. "
 					"Uses min-blend so if either eye detects an occluder, the shadow is preserved.");
+
+			auto noCopyGuard = Util::DisableGuard(!enableStereoSync);
+			ImGui::Checkbox("Stereo Sync No-Copy Optimization", &enableStereoSyncNoCopyOptimization);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(
+					"Uses ping-pong textures to avoid a full-screen copy before stereo sync.\n"
+					"Intended to reduce GPU overhead without changing output.");
 		}
 
 		ImGui::Spacing();
@@ -393,7 +401,7 @@ void ScreenSpaceShadows::DrawShadows()
 
 void ScreenSpaceShadows::DrawStereoSync()
 {
-	if (!globals::game::isVR || !enableStereoSync || !stereoSyncCopyTex || !stereoSyncCB)
+	if (!globals::game::isVR || !enableStereoSync || !screenSpaceShadowsTexture || !stereoSyncCopyTex || !stereoSyncCB)
 		return;
 
 	if (!stereoSyncCS)
@@ -408,8 +416,12 @@ void ScreenSpaceShadows::DrawStereoSync()
 		globals::state->BeginPerfEvent("SSS - Stereo Sync");
 
 	auto context = globals::d3d::context;
-
-	context->CopyResource(stereoSyncCopyTex->resource.get(), screenSpaceShadowsTexture->resource.get());
+	const bool useNoCopyOptimization =
+		enableStereoSyncNoCopyOptimization &&
+		screenSpaceShadowsTexture &&
+		screenSpaceShadowsTexture->srv.get() &&
+		stereoSyncCopyTex &&
+		stereoSyncCopyTex->uav.get();
 
 	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize);
 
@@ -423,8 +435,20 @@ void ScreenSpaceShadows::DrawStereoSync()
 	auto cbPtr = stereoSyncCB->CB();
 
 	auto* depthSRV = Util::GetCurrentSceneDepthSRV();
-	ID3D11ShaderResourceView* srvs[2]{ depthSRV, stereoSyncCopyTex->srv.get() };
-	ID3D11UnorderedAccessView* uavs[1]{ screenSpaceShadowsTexture->uav.get() };
+	ID3D11ShaderResourceView* sourceShadowSRV = nullptr;
+	ID3D11UnorderedAccessView* targetShadowUAV = nullptr;
+
+	if (useNoCopyOptimization) {
+		sourceShadowSRV = screenSpaceShadowsTexture->srv.get();
+		targetShadowUAV = stereoSyncCopyTex->uav.get();
+	} else {
+		context->CopyResource(stereoSyncCopyTex->resource.get(), screenSpaceShadowsTexture->resource.get());
+		sourceShadowSRV = stereoSyncCopyTex->srv.get();
+		targetShadowUAV = screenSpaceShadowsTexture->uav.get();
+	}
+
+	ID3D11ShaderResourceView* srvs[2]{ depthSRV, sourceShadowSRV };
+	ID3D11UnorderedAccessView* uavs[1]{ targetShadowUAV };
 
 	context->CSSetConstantBuffers(1, 1, &cbPtr);
 	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
@@ -444,6 +468,9 @@ void ScreenSpaceShadows::DrawStereoSync()
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	context->CSSetConstantBuffers(1, 1, &cbPtr);
 	context->CSSetShader(nullptr, nullptr, 0);
+
+	if (useNoCopyOptimization)
+		std::swap(screenSpaceShadowsTexture, stereoSyncCopyTex);
 
 	if (globals::state->frameAnnotations)
 		globals::state->EndPerfEvent();
@@ -470,6 +497,7 @@ void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
 	bendSettings = o_json;
 	enableStereoSync = o_json.value(kVRStereoSyncJsonKey, true);
+	enableStereoSyncNoCopyOptimization = o_json.value(kVRStereoSyncNoCopyJsonKey, false);
 	SanitizeBendSettings(bendSettings);
 }
 
@@ -477,12 +505,14 @@ void ScreenSpaceShadows::SaveSettings(json& o_json)
 {
 	o_json = bendSettings;
 	o_json[kVRStereoSyncJsonKey] = enableStereoSync;
+	o_json[kVRStereoSyncNoCopyJsonKey] = enableStereoSyncNoCopyOptimization;
 }
 
 void ScreenSpaceShadows::RestoreDefaultSettings()
 {
 	bendSettings = {};
 	enableStereoSync = true;
+	enableStereoSyncNoCopyOptimization = false;
 }
 
 bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
@@ -543,6 +573,7 @@ void ScreenSpaceShadows::SetupResources()
 		if (globals::game::isVR) {
 			stereoSyncCopyTex = new Texture2D(texDesc);
 			stereoSyncCopyTex->CreateSRV(srvDesc);
+			stereoSyncCopyTex->CreateUAV(uavDesc);
 		}
 	}
 }

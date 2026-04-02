@@ -26,6 +26,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CenterFullResMaskScale,
 	FoveatedPresetMode,
 	EnableVRStereoSync,
+	EnableVRStereoSyncAOOnlyOptimization,
 	MinScreenRadius,
 	AORadius,
 	GIRadius,
@@ -309,6 +310,17 @@ void ScreenSpaceGI::DrawSettings()
 				ImGui::Text(
 					"Runs an extra VR-only stereo bilateral sync pass for SSGI AO/IL after blur.\n"
 					"Disable for A/B performance testing.");
+			}
+
+			ImGui::TableNextColumn();
+			{
+				auto aoOnlyStereoSyncGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableVRStereoSync);
+				ImGui::Checkbox("AO-Only Stereo Sync Optimizations", &settings.EnableVRStereoSyncAOOnlyOptimization);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"When IL is disabled, use an AO-only stereo sync shader to cut overhead.\n"
+					"Leaves visual output unchanged for AO-only mode.");
 			}
 		}
 
@@ -937,6 +949,7 @@ void ScreenSpaceGI::ClearShaderCache()
 		&centerGIMaskedAOOnlyCompute,
 		&blurCompute,
 		&stereoSyncCompute,
+		&stereoSyncAOOnlyCompute,
 		&upsampleCompute,
 		&upsampleAOOnlyCompute,
 		&centerBlendCompute,
@@ -979,8 +992,10 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &centerBlendAOOnlyCompute, "centerBlend.cs.hlsl", {}, false, false, false },
 		};
 
-	if (REL::Module::IsVR())
+	if (REL::Module::IsVR()) {
 		shaderInfos.push_back({ &stereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } } });
+		shaderInfos.push_back({ &stereoSyncAOOnlyCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" }, { "AO_ONLY", "" } }, true, true, false });
+	}
 	for (auto& info : shaderInfos) {
 		if (REL::Module::IsVR())
 			info.defines.push_back({ "VR", "" });
@@ -1573,7 +1588,12 @@ void ScreenSpaceGI::DrawSSGI()
 
 	// VR stereo sync: bilateral blend of SSGI buffers between eyes
 	// Shi, Billeter, Eisemann 2022, "Stereo-consistent screen-space ambient occlusion"
-	if (REL::Module::IsVR() && settings.EnableVRStereoSync && stereoSyncCompute) {
+	const bool useStereoSyncAOOnly =
+		settings.EnableVRStereoSyncAOOnlyOptimization &&
+		!runILPath &&
+		stereoSyncAOOnlyCompute.get();
+	ID3D11ComputeShader* activeStereoSyncCompute = useStereoSyncAOOnly ? stereoSyncAOOnlyCompute.get() : stereoSyncCompute.get();
+	if (REL::Module::IsVR() && settings.EnableVRStereoSync && !foveatedCenterOnlyMode && activeStereoSyncCompute) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Stereo Sync");
 
 		if (globals::state->frameAnnotations)
@@ -1582,20 +1602,23 @@ void ScreenSpaceGI::DrawSSGI()
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(1) = texAo[inputAoTexIdx]->srv.get();
-		srvs.at(2) = texIlY[inputGITexIdx]->srv.get();
-		srvs.at(3) = texIlCoCg[inputGITexIdx]->srv.get();
-
 		uavs.at(0) = texAo[!inputAoTexIdx]->uav.get();
-		uavs.at(1) = texIlY[!inputGITexIdx]->uav.get();
-		uavs.at(2) = texIlCoCg[!inputGITexIdx]->uav.get();
+		if (!useStereoSyncAOOnly) {
+			srvs.at(2) = texIlY[inputGITexIdx]->srv.get();
+			srvs.at(3) = texIlCoCg[inputGITexIdx]->srv.get();
+
+			uavs.at(1) = texIlY[!inputGITexIdx]->uav.get();
+			uavs.at(2) = texIlCoCg[!inputGITexIdx]->uav.get();
+		}
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(stereoSyncCompute.get(), nullptr, 0);
+		context->CSSetShader(activeStereoSyncCompute, nullptr, 0);
 		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
 
 		inputAoTexIdx = !inputAoTexIdx;
-		inputGITexIdx = !inputGITexIdx;
+		if (!useStereoSyncAOOnly)
+			inputGITexIdx = !inputGITexIdx;
 
 		if (globals::state->frameAnnotations)
 			globals::state->EndPerfEvent();

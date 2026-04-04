@@ -820,6 +820,7 @@ namespace Util
 
 		// Move cursor to next line
 		ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + textSize.y + 8.0f));
+		ImGui::Dummy(ImVec2(availableWidth, 0.0f));
 		return clicked;
 	}
 
@@ -883,6 +884,7 @@ namespace Util
 
 			// Move cursor to next line
 			ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + textSize.y + 8.0f));
+			ImGui::Dummy(ImVec2(availableWidth, 0.0f));
 		}
 
 		return stateChanged;

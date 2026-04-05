@@ -2201,6 +2201,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.Roughness = clamp(rawRMAOS.x, PBR::Constants::MinRoughness, PBR::Constants::MaxRoughness);
 	material.Metallic = saturate(rawRMAOS.y);
 	material.AO = rawRMAOS.z;
+
+	// Apply vertex color to base color so PBR metals use it
+	baseColor.xyz *= input.Color.xyz;
+
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
 		material.F0 = lerp(saturate(rawRMAOS.w), Color::SrgbToLinear(baseColor.xyz), material.Metallic);
 	} else {
@@ -3394,6 +3398,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		float3 glowColor = Color::Glowmap(TexGlowSampler.Sample(SampGlowSampler, uv).xyz);
 		emitColor *= glowColor;
+#		if defined(TRUE_PBR)
+		// TRUE_PBR sets vertexColor=1 and adds emitColor directly to color (see below),
+		// so vertex tint must be applied here. Non-PBR folds emitColor into diffuseColor
+		// and the global color.xyz *= vertexColor (line 2918) already covers it.
+		emitColor *= input.Color.xyz;
+#		endif
 	}
 #	endif
 
@@ -3573,11 +3583,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		vertexColor *= 1.0 + (1.0 - vertexAO) * (1.0 - skylightingDiffuse);
 #		endif
 	}
+#		if defined(TRUE_PBR)
+	vertexColor = 1;
+#		endif
 #	else
+#		if defined(TRUE_PBR)
+	float3 vertexColor = 1;
+#		else
 	float3 vertexColor = input.Color.xyz;
 #		if defined(LANDSCAPE) && defined(LOD_BLENDING)
 		vertexColor = lerp(vertexColor, 1, SharedData::lodBlendingSettings.DisableTerrainVertexColors);
 #		endif  // LOD_BLENDING
+#		endif
 #	endif  // defined (HAIR)
 
 	float4 color = 0;

@@ -639,6 +639,18 @@ namespace
 				ImGui::TextUnformatted("Performance: broader reprojection eligibility for higher speed gains.");
 			}
 
+			ImGui::SliderFloat("Forward Occlusion Scale", &stereoSettings.ForwardOcclusionScale, 0.0f, 1.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Prevents left-eye silhouette bleed onto right-eye backgrounds.");
+				ImGui::TextUnformatted("Lower values are more aggressive. 0 disables this guard.");
+			}
+
+			ImGui::Checkbox("Eye1-Only Dispatch Optimization", &stereoSettings.EnableEye1OnlyDispatchOptimization);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Experimental: dispatches stereo classify/blend compute only over the right eye.");
+				ImGui::TextUnformatted("Expected to reduce reprojection pass cost with unchanged visuals.");
+			}
+
 			ImGui::Checkbox("Near-Field Full Blend", &stereoSettings.EnableNearFieldFullBlend);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Blends native + reprojected right-eye shading in close range to preserve stereo depth cues.");

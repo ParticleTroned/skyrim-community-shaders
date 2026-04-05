@@ -1,17 +1,20 @@
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Math.hlsli"
+#include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 #include "VR/StereoMode.hlsli"
 #include "VR/StereoOptimizationCB.hlsli"
 
 Texture2D<float> DepthTexture : register(t0);
 RWTexture2D<uint> ModeTextureRW : register(u0);
+static const float kSkyDepthEpsilon = 1e-5;
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
-	if (any(dispatchID.xy >= uint2(VRStereoRenderDim.xy)))
+	const uint2 pixCoord = dispatchID.xy + uint2(VRStereoDispatchXOffsetPixels, 0u);
+	if (any(pixCoord >= uint2(VRStereoRenderDim.xy)))
 		return;
 
-	const uint2 pixCoord = dispatchID.xy;
 	const float2 uvDynamic = (float2(pixCoord) + 0.5) * VRStereoInvRenderDim;
 	const float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(uvDynamic);
 	const uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
@@ -31,14 +34,28 @@ RWTexture2D<uint> ModeTextureRW : register(u0);
 		return;
 	}
 
-	const float2 sourceStereoUV = Stereo::ConvertToStereoUV(reprojectedMono.xy, 1u - eyeIndex);
+	const uint sourceEyeIndex = 1u - eyeIndex;
+	float2 sourceStereoUV = Stereo::ConvertToStereoUV(reprojectedMono.xy, sourceEyeIndex);
+	sourceStereoUV = VRStereoClampStereoUVToEye(sourceStereoUV, sourceEyeIndex);
 	const float2 sourceStereoUVDynamic = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(sourceStereoUV);
 	const int2 sourceCoord = VRStereoUVToPixel(sourceStereoUVDynamic);
 	const float sourceDepth = DepthTexture[sourceCoord];
 
 	const float centerInfluence = VRStereoComputeCenterInfluence(monoUV, eyeIndex);
 	const float adjustedDisocclusionThreshold = VRStereoDisocclusionThreshold * max(0.2, 1.0 - centerInfluence * VRStereoCenterProtection);
-	const bool disoccluded = abs(depth - sourceDepth) > adjustedDisocclusionThreshold;
+	const float maxRawDepth = max(max(depth, sourceDepth), EPSILON_DIVISION);
+	const float rawRelDiff = abs(depth - sourceDepth) / maxRawDepth;
+	bool disoccluded = rawRelDiff > adjustedDisocclusionThreshold;
+
+	if (!disoccluded && eyeIndex == 1u && VRStereoForwardOcclusionScale > 0.0) {
+		const bool centerIsSky = (depth < kSkyDepthEpsilon) || (depth >= 1.0);
+		const bool sourceIsSky = (sourceDepth < kSkyDepthEpsilon) || (sourceDepth >= 1.0);
+		if (!centerIsSky && !sourceIsSky) {
+			const float linCenter = SharedData::GetScreenDepth(depth);
+			const float linSource = SharedData::GetScreenDepth(sourceDepth);
+			disoccluded = (linSource * VRStereoForwardOcclusionScale) < linCenter;
+		}
+	}
 
 	const int edgeRadius = max(1, (int)round(VRStereoEdgeBandPixels));
 	float maxDepthDelta = 0.0;

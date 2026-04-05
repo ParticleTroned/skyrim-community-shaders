@@ -183,6 +183,8 @@ void VRStereoOptimizations::UpdateConstantBuffer(const VRStereoOptimizationSetti
 	const float halfRange = 0.5f * clampedRange;
 	cb.nearFieldBlendStart = std::max(1.0f, clampedDistance - halfRange);
 	cb.nearFieldBlendEnd = std::max(cb.nearFieldBlendStart + 1.0f, clampedDistance + halfRange);
+	cb.forwardOcclusionScale = std::clamp(settings.ForwardOcclusionScale, 0.0f, 1.0f);
+	cb.dispatchXOffsetPixels = settings.EnableEye1OnlyDispatchOptimization ? (renderWidth / 2u) : 0u;
 
 	stereoOptimizationCB->Update(cb);
 }
@@ -269,7 +271,7 @@ bool VRStereoOptimizations::Prepare(const VRStereoOptimizationSettings& settings
 	const auto dispatchCount = Util::GetScreenDispatchCount(true);
 	if (dispatchCount.x == 0 || dispatchCount.y == 0)
 		return false;
-	dispatchGroupsX = dispatchCount.x;
+	dispatchGroupsX = settings.EnableEye1OnlyDispatchOptimization ? ((dispatchCount.x + 1u) / 2u) : dispatchCount.x;
 	dispatchGroupsY = dispatchCount.y;
 
 	if (state && state->frameAnnotations)

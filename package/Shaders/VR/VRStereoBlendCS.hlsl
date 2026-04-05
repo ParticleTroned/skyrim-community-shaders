@@ -12,10 +12,10 @@ RWTexture2D<float2> MotionRW : register(u2);
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
-	if (any(dispatchID.xy >= uint2(VRStereoRenderDim.xy)))
+	const uint2 pixCoord = dispatchID.xy + uint2(VRStereoDispatchXOffsetPixels, 0u);
+	if (any(pixCoord >= uint2(VRStereoRenderDim.xy)))
 		return;
 
-	const uint2 pixCoord = dispatchID.xy;
 	const float2 uvDynamic = (float2(pixCoord) + 0.5) * VRStereoInvRenderDim;
 	const float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(uvDynamic);
 	const uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
@@ -32,7 +32,9 @@ RWTexture2D<float2> MotionRW : register(u2);
 	if (!VRStereoIsInsideFrame(reprojectedMono.xy))
 		return;
 
-	const float2 sourceStereoUV = Stereo::ConvertToStereoUV(reprojectedMono.xy, 1u - eyeIndex);
+	const uint sourceEyeIndex = 1u - eyeIndex;
+	float2 sourceStereoUV = Stereo::ConvertToStereoUV(reprojectedMono.xy, sourceEyeIndex);
+	sourceStereoUV = VRStereoClampStereoUVToEye(sourceStereoUV, sourceEyeIndex);
 	const float2 sourceStereoUVDynamic = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(sourceStereoUV);
 	const int2 sourceCoord = VRStereoUVToPixel(sourceStereoUVDynamic);
 

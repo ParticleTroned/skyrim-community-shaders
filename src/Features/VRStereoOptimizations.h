@@ -13,6 +13,13 @@ struct VRStereoOptimizationSettings
 	bool Enabled = false;
 	Preset Mode = Preset::Quality;
 
+	// Directional disocclusion guard for right-eye reprojection.
+	// Lower values are more aggressive. 0 disables this guard.
+	float ForwardOcclusionScale = 0.2f;
+
+	// Experimental optimization: dispatch classify/blend only over Eye 1 pixels.
+	bool EnableEye1OnlyDispatchOptimization = false;
+
 	// Optional near-field full-blend band to preserve strong stereo depth on close geometry.
 	bool EnableNearFieldFullBlend = true;
 	float NearFieldBlendDistance = 300.0f;
@@ -25,6 +32,7 @@ struct VRStereoOptimizationSettings
 	{
 		NearFieldBlendDistance = std::clamp(NearFieldBlendDistance, 1.0f, 5000.0f);
 		NearFieldBlendRange = std::clamp(NearFieldBlendRange, 1.0f, 5000.0f);
+		ForwardOcclusionScale = std::clamp(ForwardOcclusionScale, 0.0f, 1.0f);
 	}
 };
 
@@ -43,6 +51,8 @@ inline void to_json(nlohmann::json& j, const VRStereoOptimizationSettings& setti
 		{ "EnableNearFieldFullBlend", settings.EnableNearFieldFullBlend },
 		{ "NearFieldBlendDistance", settings.NearFieldBlendDistance },
 		{ "NearFieldBlendRange", settings.NearFieldBlendRange },
+		{ "ForwardOcclusionScale", settings.ForwardOcclusionScale },
+		{ "EnableEye1OnlyDispatchOptimization", settings.EnableEye1OnlyDispatchOptimization },
 		{ "DisableWhenTerrainBlendingAndWetness", settings.DisableWhenTerrainBlendingAndWetness }
 	};
 }
@@ -58,6 +68,8 @@ inline void from_json(const nlohmann::json& j, VRStereoOptimizationSettings& set
 	settings.EnableNearFieldFullBlend = j.value("EnableNearFieldFullBlend", settings.EnableNearFieldFullBlend);
 	settings.NearFieldBlendDistance = j.value("NearFieldBlendDistance", settings.NearFieldBlendDistance);
 	settings.NearFieldBlendRange = j.value("NearFieldBlendRange", settings.NearFieldBlendRange);
+	settings.ForwardOcclusionScale = j.value("ForwardOcclusionScale", settings.ForwardOcclusionScale);
+	settings.EnableEye1OnlyDispatchOptimization = j.value("EnableEye1OnlyDispatchOptimization", settings.EnableEye1OnlyDispatchOptimization);
 	settings.DisableWhenTerrainBlendingAndWetness = j.value("DisableWhenTerrainBlendingAndWetness", settings.DisableWhenTerrainBlendingAndWetness);
 	settings.ClampToValidRanges();
 }
@@ -108,7 +120,9 @@ private:
 		float nearFieldBlendStart = 220.0f;
 		float nearFieldBlendEnd = 380.0f;
 		uint32_t enableNearFieldFullBlend = 1u;
-		float3 pad0 = { 0.0f, 0.0f, 0.0f };
+		float forwardOcclusionScale = 0.2f;
+		uint32_t dispatchXOffsetPixels = 0u;
+		float pad0 = 0.0f;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StereoOptimizationCB);
 

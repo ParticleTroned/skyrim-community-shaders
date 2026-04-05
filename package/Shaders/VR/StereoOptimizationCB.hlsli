@@ -19,7 +19,9 @@ cbuffer VRStereoOptimizationCB : register(b14)
 	float VRStereoNearFieldBlendStart;
 	float VRStereoNearFieldBlendEnd;
 	uint VRStereoEnableNearFieldFullBlend;
-	float3 VRStereoPad0;
+	float VRStereoForwardOcclusionScale;
+	uint VRStereoDispatchXOffsetPixels;
+	float VRStereoPad0;
 };
 
 float2 VRStereoGetCenterOffset(uint eyeIndex)
@@ -64,6 +66,18 @@ int2 VRStereoUVToPixel(float2 uv)
 	const float2 clamped = clamp(uv, float2(0.0, 0.0), FrameBuffer::DynamicResolutionParams1.xy);
 	const float2 pixel = clamped * VRStereoRenderDim;
 	return int2(min(pixel, VRStereoRenderDim - 1.0));
+}
+
+float2 VRStereoClampStereoUVToEye(float2 stereoUV, uint eyeIndex)
+{
+	const float halfPixelX = 0.5 * VRStereoInvRenderDim.x;
+	const float halfPixelY = 0.5 * VRStereoInvRenderDim.y;
+
+	const float minX = (eyeIndex == 0u) ? halfPixelX : (0.5 + halfPixelX);
+	const float maxX = (eyeIndex == 0u) ? (0.5 - halfPixelX) : (1.0 - halfPixelX);
+	const float minY = halfPixelY;
+	const float maxY = 1.0 - halfPixelY;
+	return clamp(stereoUV, float2(minX, minY), float2(maxX, maxY));
 }
 
 #endif  // __VR_STEREO_OPTIMIZATION_CB_HLSLI__

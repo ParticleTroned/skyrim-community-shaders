@@ -61,6 +61,9 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.1f;
+		bool dlssRawMotionVectors = false;
+		bool dlssDepthInverted = false;
+		bool dlssDisableHintMasks = false;
 		bool vrPipelineDeduplication = false;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;
@@ -100,6 +103,7 @@ public:
 		float vrSeamHardening;
 		float2 sourceOffset;  // Source offset in combined stereo inputs
 		float2 outputOffset;  // Output offset in per-eye intermediates
+		float4 dlssTemporalSettings;  // x=raw motion vectors (1=true), yzw reserved
 	};
 
 	struct FoveatedPeripheryCB

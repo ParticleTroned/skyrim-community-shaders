@@ -28,6 +28,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
+	dlssRawMotionVectors,
+	dlssDepthInverted,
+	dlssDisableHintMasks,
 	vrPipelineDeduplication,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
@@ -356,6 +359,24 @@ void Upscaling::DrawSettings()
 			}
 
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+			ImGui::Checkbox("DLSS Raw Motion Vectors (No Dilation)", &settings.dlssRawMotionVectors);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("A/B toggle for temporal stability testing.");
+				ImGui::TextUnformatted("ON: bypasses 5x5 DLSS motion-vector dilation and uses raw motion vectors.");
+				ImGui::TextUnformatted("OFF: keeps current 5x5 dilation path.");
+			}
+			ImGui::Checkbox("DLSS Reversed-Z Depth Input", &settings.dlssDepthInverted);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Sets Streamline depthInverted flag for DLSS constants.");
+				ImGui::TextUnformatted("Enable if your runtime depth convention is reversed-Z (far=0, near=1).");
+				ImGui::TextUnformatted("Use as an in-game validation toggle if you observe DLSS ghosting/swimming.");
+			}
+			ImGui::Checkbox("DLSS Disable Reactive/Transparency Hints", &settings.dlssDisableHintMasks);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("A/B toggle for DLSS ghosting diagnosis.");
+				ImGui::TextUnformatted("ON: do not submit reactive/transparency hint masks to Streamline.");
+				ImGui::TextUnformatted("OFF: keep current hint-mask submission behavior.");
+			}
 
 			const auto& adapter = globals::state->adapterDescription;
 			const bool isNvidia = IsNvidiaAdapterDescription(adapter);
@@ -2805,6 +2826,7 @@ void Upscaling::Upscale()
 	const bool vrPipelineDedupActive = IsVRPipelineDedupActive(upscaleMethod);
 	const bool requiresEncodedMotionVectors = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
 	const bool requiresCombinedEncodedMotionVectors = requiresEncodedMotionVectors && (!globals::game::isVR || vrPipelineDedupActive);
+	const float rawDlssMotionVectorFlag = settings.dlssRawMotionVectors ? 1.0f : 0.0f;
 	if (requiresCombinedEncodedMotionVectors && (!motionVectorCopyTexture || !motionVectorCopyTexture->uav || !motionVectorCopyTexture->resource)) {
 		logger::error("[Upscaling] Missing encoded motion-vector resources for method {}", magic_enum::enum_name(upscaleMethod));
 		return;
@@ -2849,6 +2871,7 @@ void Upscaling::Upscale()
 					upscalingData.maskDepthThreshold = 1e-6f;
 					upscalingData.vrSeamHardening = 1.0f;
 					upscalingData.sourceOffset = { i == 1 ? (float)eyeWidthIn : 0.0f, 0.0f };
+					upscalingData.dlssTemporalSettings = { rawDlssMotionVectorFlag, 0.0f, 0.0f, 0.0f };
 
 					upscalingDataCB->Update(upscalingData);
 
@@ -2873,6 +2896,7 @@ void Upscaling::Upscale()
 				upscalingData.maskDepthThreshold = 1e-6f;
 				upscalingData.vrSeamHardening = globals::game::isVR ? 1.0f : 0.0f;
 				upscalingData.sourceOffset = { 0.0f, 0.0f };
+				upscalingData.dlssTemporalSettings = { rawDlssMotionVectorFlag, 0.0f, 0.0f, 0.0f };
 				upscalingDataCB->Update(upscalingData);
 
 				ID3D11UnorderedAccessView* uavs[3] = {

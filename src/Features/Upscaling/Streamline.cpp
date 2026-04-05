@@ -349,6 +349,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	// In non-VR, this is called once per frame
 	auto state = globals::state;
 	auto& upscaling = globals::features::upscaling;
+	const bool useRawMotionVectors = upscaling.settings.dlssRawMotionVectors;
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -382,7 +383,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
 	slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
-	slConstants.depthInverted = sl::Boolean::eFalse;
+	slConstants.depthInverted = upscaling.settings.dlssDepthInverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 
 	if (globals::game::isVR) {
 		const bool isCroppedViewport = clampedViewportScaleX < 0.999f || clampedViewportScaleY < 0.999f;
@@ -458,7 +459,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.motionVectors3D = sl::Boolean::eFalse;
 	slConstants.motionVectorsInvalidValue = FLT_MIN;
 	slConstants.orthographicProjection = sl::Boolean::eFalse;
-	slConstants.motionVectorsDilated = sl::Boolean::eFalse;
+	slConstants.motionVectorsDilated = useRawMotionVectors ? sl::Boolean::eFalse : sl::Boolean::eTrue;
 	slConstants.motionVectorsJittered = sl::Boolean::eFalse;
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
@@ -652,6 +653,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	};
 
+	const bool disableHintMasks = globals::features::upscaling.settings.dlssDisableHintMasks;
 	sl::ResourceTag tags[] = {
 		{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentIn },
 		{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentOut },
@@ -660,8 +662,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn }
 	};
-
-	slSetTag(vp, tags, _countof(tags), context);
+	const uint32_t tagCount = disableHintMasks ? 4u : static_cast<uint32_t>(_countof(tags));
+	slSetTag(vp, tags, tagCount, context);
 
 	sl::ViewportHandle view(vp);
 	const sl::BaseStructure* inputs[] = { &view };

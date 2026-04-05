@@ -114,7 +114,7 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, uint32_t renderWidth = 0, uint32_t renderHeight = 0);
 	bool EnsureFrameToken();
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);

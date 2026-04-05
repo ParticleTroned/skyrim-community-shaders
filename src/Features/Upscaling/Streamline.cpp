@@ -337,7 +337,7 @@ bool Streamline::EnsureFrameToken()
 	return frameToken != nullptr;
 }
 
-bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY)
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, uint32_t renderWidth, uint32_t renderHeight)
 {
 	if (!globals::features::upscaling.streamline.initialized)
 		return false;
@@ -351,6 +351,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	auto& upscaling = globals::features::upscaling;
 	const bool useRawMotionVectors = upscaling.settings.dlssRawMotionVectors;
 	const float motionVectorDirectionSign = upscaling.settings.dlssInvertMotionVectors ? -1.0f : 1.0f;
+	const bool useProjectionDerivedConstants = upscaling.settings.dlssProjectionDerivedConstants;
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -368,14 +369,42 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	// Calculate aspect ratio for the SINGLE EYE
 	float eyeWidth = state->screenSize.x * (globals::game::isVR ? 0.5f : 1.0f);
 	float eyeHeight = state->screenSize.y;
-	slConstants.cameraAspectRatio = (eyeWidth * clampedViewportScaleX) / (eyeHeight * clampedViewportScaleY);
+	float baseAspectRatio = eyeHeight > 0.0f ? (eyeWidth / eyeHeight) : 1.0f;
+	float baseFovRad = Util::GetVerticalFOVRad();
 
-	slConstants.cameraFOV = Util::GetVerticalFOVRad();
+	auto cameraProjJittered = globals::game::frameBufferCached.GetCameraProj(eyeIndex);
+	auto cameraProjUnjittered = globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex);
+	auto tryDeriveProjectionFovAspect = [](const auto& projMatrix, float& outFovRad, float& outAspectRatio) {
+		const float projScaleX = std::abs(projMatrix._11);
+		const float projScaleY = std::abs(projMatrix._22);
+		if (!std::isfinite(projScaleX) || !std::isfinite(projScaleY) || projScaleX < 1e-6f || projScaleY < 1e-6f)
+			return false;
+
+		const float derivedFovRad = 2.0f * atanf(1.0f / projScaleY);
+		const float derivedAspectRatio = projScaleY / projScaleX;
+		if (!std::isfinite(derivedFovRad) || !std::isfinite(derivedAspectRatio) || derivedFovRad < 1e-4f || derivedAspectRatio < 1e-4f)
+			return false;
+
+		outFovRad = derivedFovRad;
+		outAspectRatio = derivedAspectRatio;
+		return true;
+	};
+	if (useProjectionDerivedConstants) {
+		float derivedFovRad = baseFovRad;
+		float derivedAspectRatio = baseAspectRatio;
+		if (tryDeriveProjectionFovAspect(cameraProjUnjittered, derivedFovRad, derivedAspectRatio)) {
+			baseFovRad = derivedFovRad;
+			baseAspectRatio = derivedAspectRatio;
+		}
+	}
+
+	slConstants.cameraAspectRatio = baseAspectRatio;
+	slConstants.cameraFOV = baseFovRad;
 	slConstants.cameraNear = *globals::game::cameraNear;
 	slConstants.cameraFar = *globals::game::cameraFar;
 
 	auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex).Transpose();
-	auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex).Transpose();
+	auto cameraViewToClip = cameraProjUnjittered.Transpose();
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
@@ -405,7 +434,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 			slConstants.cameraViewToClip[1].w *= invScaleY;
 
 			// cameraFOV is vertical; scale by cropped Y region.
-			slConstants.cameraFOV = 2.0f * atanf(clampedViewportScaleY * tanf(slConstants.cameraFOV * 0.5f));
+			slConstants.cameraAspectRatio = baseAspectRatio * (clampedViewportScaleX / clampedViewportScaleY);
+			slConstants.cameraFOV = 2.0f * atanf(clampedViewportScaleY * tanf(baseFovRad * 0.5f));
 			slConstants.cameraPinholeOffset = {
 				clampedPinholeOffsetX / clampedViewportScaleX,
 				clampedPinholeOffsetY / clampedViewportScaleY
@@ -447,8 +477,57 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		recalculateCameraMatrices(slConstants);
 	}
 
-	auto jitter = upscaling.jitter;
-	slConstants.jitterOffset = { -jitter.x, -jitter.y };
+	sl::float2 jitterOffset = { -upscaling.jitter.x, -upscaling.jitter.y };
+	if (useProjectionDerivedConstants && renderWidth > 0 && renderHeight > 0) {
+		struct ProjectionVec4
+		{
+			float x;
+			float y;
+			float z;
+			float w;
+		};
+		auto multiplyMatrixVec4 = [](const auto& matrix, const ProjectionVec4& v) {
+			return ProjectionVec4{
+				matrix._11 * v.x + matrix._12 * v.y + matrix._13 * v.z + matrix._14 * v.w,
+				matrix._21 * v.x + matrix._22 * v.y + matrix._23 * v.z + matrix._24 * v.w,
+				matrix._31 * v.x + matrix._32 * v.y + matrix._33 * v.z + matrix._34 * v.w,
+				matrix._41 * v.x + matrix._42 * v.y + matrix._43 * v.z + matrix._44 * v.w
+			};
+		};
+		auto tryDeriveProjectionJitter = [&](const ProjectionVec4& samplePos, sl::float2& outJitter) {
+			const ProjectionVec4 clipJittered = multiplyMatrixVec4(cameraProjJittered, samplePos);
+			const ProjectionVec4 clipUnjittered = multiplyMatrixVec4(cameraProjUnjittered, samplePos);
+			if (!std::isfinite(clipJittered.w) || !std::isfinite(clipUnjittered.w) || std::abs(clipJittered.w) < 1e-6f || std::abs(clipUnjittered.w) < 1e-6f)
+				return false;
+
+			const float ndcJitteredX = clipJittered.x / clipJittered.w;
+			const float ndcJitteredY = clipJittered.y / clipJittered.w;
+			const float ndcUnjitteredX = clipUnjittered.x / clipUnjittered.w;
+			const float ndcUnjitteredY = clipUnjittered.y / clipUnjittered.w;
+			if (!std::isfinite(ndcJitteredX) || !std::isfinite(ndcJitteredY) || !std::isfinite(ndcUnjitteredX) || !std::isfinite(ndcUnjitteredY))
+				return false;
+
+			const float ndcDeltaX = ndcJitteredX - ndcUnjitteredX;
+			const float ndcDeltaY = ndcJitteredY - ndcUnjitteredY;
+			const float derivedJitterX = ndcDeltaX * 0.5f * static_cast<float>(renderWidth);
+			const float derivedJitterY = -ndcDeltaY * 0.5f * static_cast<float>(renderHeight);
+			if (!std::isfinite(derivedJitterX) || !std::isfinite(derivedJitterY))
+				return false;
+
+			outJitter = { derivedJitterX, derivedJitterY };
+			return true;
+		};
+
+		sl::float2 derivedJitter = jitterOffset;
+		bool derivedJitterValid = tryDeriveProjectionJitter({ 0.0f, 0.0f, 1.0f, 1.0f }, derivedJitter);
+		if (!derivedJitterValid) {
+			derivedJitterValid = tryDeriveProjectionJitter({ 0.0f, 0.0f, 10.0f, 1.0f }, derivedJitter);
+		}
+		if (derivedJitterValid) {
+			jitterOffset = derivedJitter;
+		}
+	}
+	slConstants.jitterOffset = jitterOffset;
 	const bool requestHistoryReset = upscaling.ShouldResetHistoryThisFrame();
 	slConstants.reset = requestHistoryReset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 
@@ -630,7 +709,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
-	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY))
+	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, extentIn.width, extentIn.height))
 		return false;
 	SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height);
 

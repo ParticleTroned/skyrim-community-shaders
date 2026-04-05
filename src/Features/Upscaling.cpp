@@ -30,6 +30,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sharpnessDLSS,
 	dlssRawMotionVectors,
 	dlssInvertMotionVectors,
+	dlssProjectionDerivedConstants,
 	dlssDepthInverted,
 	dlssDisableHintMasks,
 	vrPipelineDeduplication,
@@ -371,6 +372,12 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("A/B toggle for testing motion-vector convention mismatch.");
 				ImGui::TextUnformatted("ON: flips DLSS motion-vector direction by negating Streamline mvecScale.");
 				ImGui::TextUnformatted("OFF: keeps current motion-vector direction.");
+			}
+			ImGui::Checkbox("DLSS Projection-Derived Jitter/FOV (A/B)", &settings.dlssProjectionDerivedConstants);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("A/B toggle for DLSS constants consistency.");
+				ImGui::TextUnformatted("ON: derives jitter offset and per-eye FOV/aspect from per-eye projection matrices.");
+				ImGui::TextUnformatted("OFF: uses legacy constants path.");
 			}
 			ImGui::Checkbox("DLSS Reversed-Z Depth Input", &settings.dlssDepthInverted);
 			if (auto _tt = Util::HoverTooltipWrapper()) {

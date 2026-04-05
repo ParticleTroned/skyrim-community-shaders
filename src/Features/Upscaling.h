@@ -62,6 +62,7 @@ public:
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.1f;
 		bool dlssRawMotionVectors = false;
+		bool dlssInvertMotionVectors = false;
 		bool dlssDepthInverted = false;
 		bool dlssDisableHintMasks = false;
 		bool vrPipelineDeduplication = false;

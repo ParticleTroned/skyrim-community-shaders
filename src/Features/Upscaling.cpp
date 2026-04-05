@@ -29,6 +29,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sharpnessFSR,
 	sharpnessDLSS,
 	dlssRawMotionVectors,
+	dlssInvertMotionVectors,
 	dlssDepthInverted,
 	dlssDisableHintMasks,
 	vrPipelineDeduplication,
@@ -364,6 +365,12 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("A/B toggle for temporal stability testing.");
 				ImGui::TextUnformatted("ON: bypasses 5x5 DLSS motion-vector dilation and uses raw motion vectors.");
 				ImGui::TextUnformatted("OFF: keeps current 5x5 dilation path.");
+			}
+			ImGui::Checkbox("DLSS Invert Motion Vector Direction (A/B)", &settings.dlssInvertMotionVectors);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("A/B toggle for testing motion-vector convention mismatch.");
+				ImGui::TextUnformatted("ON: flips DLSS motion-vector direction by negating Streamline mvecScale.");
+				ImGui::TextUnformatted("OFF: keeps current motion-vector direction.");
 			}
 			ImGui::Checkbox("DLSS Reversed-Z Depth Input", &settings.dlssDepthInverted);
 			if (auto _tt = Util::HoverTooltipWrapper()) {

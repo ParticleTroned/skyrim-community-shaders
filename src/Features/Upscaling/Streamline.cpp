@@ -350,6 +350,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	auto state = globals::state;
 	auto& upscaling = globals::features::upscaling;
 	const bool useRawMotionVectors = upscaling.settings.dlssRawMotionVectors;
+	const float motionVectorDirectionSign = upscaling.settings.dlssInvertMotionVectors ? -1.0f : 1.0f;
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -452,9 +453,12 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.reset = requestHistoryReset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 
 	if (globals::game::isVR && applyCroppedConstantsCorrection) {
-		slConstants.mvecScale = { 1.0f / clampedViewportScaleX, 1.0f / clampedViewportScaleY };
+		slConstants.mvecScale = {
+			motionVectorDirectionSign * (1.0f / clampedViewportScaleX),
+			motionVectorDirectionSign * (1.0f / clampedViewportScaleY)
+		};
 	} else {
-		slConstants.mvecScale = { 1.0f, 1.0f };
+		slConstants.mvecScale = { motionVectorDirectionSign, motionVectorDirectionSign };
 	}
 	slConstants.motionVectors3D = sl::Boolean::eFalse;
 	slConstants.motionVectorsInvalidValue = FLT_MIN;

@@ -7,6 +7,11 @@
 #define EPSILON_GLINTS 1e-8f       // For glints calculations
 #define EPSILON_WEIGHT_SUM 1e-10f  // For weight normalization
 
+#define DEPTH_SKY_SENTINEL 999999.0f  // Linearized depth sentinel for sky/unmapped pixels (beyond any real geometry)
+
+// GetWaterData returns .w = INT_MIN (~-2.147e9) when the tile is out of the 5x5 grid.
+// Use this threshold to test for "no water body present": waterHeight > WATER_HEIGHT_NO_TILE_SENTINEL.
+#define WATER_HEIGHT_NO_TILE_SENTINEL -1e9f
 namespace Math
 {
 	static const float4x4 IdentityMatrix = {

@@ -282,13 +282,11 @@ namespace Util
 	{
 		if (definesStr.empty())
 			return {};
-
-		uint32_t hash = 2166136261u;
+		uint32_t h = 2166136261u;  // FNV-1a 32-bit offset basis
 		for (unsigned char c : definesStr) {
-			hash ^= c;
-			hash *= 16777619u;
+			h ^= c;
+			h *= 16777619u;  // FNV prime
 		}
-
-		return std::format("_{:08X}", hash);
+		return std::format("_{:08X}", h);
 	}
 }  // namespace Util

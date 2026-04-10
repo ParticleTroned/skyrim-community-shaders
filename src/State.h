@@ -233,6 +233,7 @@ public:
 		uint InMapMenu;
 		uint HideSky;
 		float MipBias;
+		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
 		float RefractionScale;  // matches HLSL SharedData::RefractionScale
 		float PBRMetalReflectionScale;  // matches HLSL SharedData::PBRMetalReflectionScale
 		float PBRMetalHighlightScale;  // matches HLSL SharedData::PBRMetalHighlightScale

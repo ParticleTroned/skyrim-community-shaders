@@ -1092,6 +1092,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 uv = input.TexCoord0.xy;
 	float2 uvOriginal = uv;
+	float2 uvOriginal_ddx = ddx(uvOriginal);
+	float2 uvOriginal_ddy = ddy(uvOriginal);
 
 #	if defined(EMAT)
 	float parallaxShadowQuality = sqrt(1.0 - saturate(viewPosition.z / 2048.0));
@@ -3142,7 +3144,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-	EvaluateLighting(dirLightContext, material, tbnTr, uvOriginal, dirLightOutput);
+	EvaluateLighting(dirLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, dirLightOutput);
 	dirLightOutput.diffuse = SanitizeFloat3(dirLightOutput.diffuse);
 	dirLightOutput.specular = SanitizeFloat3(dirLightOutput.specular);
 	dirLightOutput.transmission = SanitizeFloat3(dirLightOutput.transmission);
@@ -3214,7 +3216,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 #				endif
 #			endif
-		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, pointLightOutput);
+		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, pointLightOutput);
 		pointLightOutput.diffuse = SanitizeFloat3(pointLightOutput.diffuse);
 		pointLightOutput.specular = SanitizeFloat3(pointLightOutput.specular);
 		pointLightOutput.transmission = SanitizeFloat3(pointLightOutput.transmission);
@@ -3348,7 +3350,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 #				endif
 #			endif
-		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, pointLightOutput);
+		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, pointLightOutput);
 		pointLightOutput.diffuse = SanitizeFloat3(pointLightOutput.diffuse);
 		pointLightOutput.specular = SanitizeFloat3(pointLightOutput.specular);
 		pointLightOutput.transmission = SanitizeFloat3(pointLightOutput.transmission);

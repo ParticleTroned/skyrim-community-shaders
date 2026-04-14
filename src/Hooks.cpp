@@ -381,8 +381,6 @@ struct BSShaderRenderTargets_Create
 
 namespace
 {
-	inline constexpr RE::InputEvent* kEmptyInputEvents[] = { nullptr };
-
 	[[nodiscard]] bool IsLikelyValidPointer(std::uintptr_t a_address, std::uintptr_t a_alignment = alignof(void*))
 	{
 		return a_address >= 0x10000 && (a_address & (a_alignment - 1)) == 0;
@@ -458,7 +456,10 @@ struct BSInputDeviceManager_PollInputDevices
 		bool blockedDevice = true;
 
 		auto menu = globals::menu;
-		auto forwardedEvents = a_events ? a_events : kEmptyInputEvents;
+		// Some downstream input hooks mutate the first slot in-place.
+		// Keep the fallback list writable to avoid AV when forwarding an empty chain.
+		RE::InputEvent* writableEmptyInputEvents[] = { nullptr };
+		auto forwardedEvents = a_events ? a_events : writableEmptyInputEvents;
 		RE::InputEvent* firstEvent = nullptr;
 		bool eventsValid = TryReadFirstInputEvent(a_events, firstEvent);
 
@@ -468,7 +469,7 @@ struct BSInputDeviceManager_PollInputDevices
 				loggedInvalidInputEventHead = true;
 				logger::error("[Input] Dropping malformed input event list (invalid head pointer) to prevent PollInputDevices CTD");
 			}
-			forwardedEvents = kEmptyInputEvents;
+			forwardedEvents = writableEmptyInputEvents;
 		}
 
 		if (eventsValid && !TryProcessInputEvents(menu, forwardedEvents)) {
@@ -478,7 +479,7 @@ struct BSInputDeviceManager_PollInputDevices
 				logger::error("[Input] Exception while reading input events, forwarding empty list to avoid CTD");
 			}
 			eventsValid = false;
-			forwardedEvents = kEmptyInputEvents;
+			forwardedEvents = writableEmptyInputEvents;
 			firstEvent = nullptr;
 		}
 
@@ -526,13 +527,13 @@ struct BSInputDeviceManager_PollInputDevices
 					logger::error("[Input] Exception while reading first input event device, dropping event list for safety");
 				}
 				eventsValid = false;
-				forwardedEvents = kEmptyInputEvents;
+				forwardedEvents = writableEmptyInputEvents;
 			}
 #endif
 		}
 
 		if (menu && blockedDevice && menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
-			func(a_dispatcher, kEmptyInputEvents);
+			func(a_dispatcher, writableEmptyInputEvents);
 			return;
 		}
 

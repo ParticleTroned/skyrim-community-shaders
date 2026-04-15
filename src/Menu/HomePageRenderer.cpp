@@ -60,7 +60,14 @@ void HomePageRenderer::RenderWelcomeSection()
 		ImGui::PushFont(titleFont, titleFont->LegacySize);
 	}
 
-	// (If you want a big title text, insert it here before PopFont)
+	ImVec2 windowSize = ImGui::GetWindowSize();
+	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+	auto expectedTag = std::format("v{}", versionStr);
+	auto baseTitle = std::format("Welcome to Community Shaders {} Particle Lights (Unofficial Fork)", versionStr);
+	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? baseTitle : std::format("{} [{}]", baseTitle, Plugin::BUILD_DESCRIBE);
+	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
+	ImGui::SetCursorPosX((windowSize.x - titleSize.x) * 0.5f);
+	ImGui::Text("%s", titleWithVersion.c_str());
 
 	// Only pop font if we pushed one
 	if (titleFont) {
@@ -72,8 +79,7 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	ImGui::Spacing();
 
-	// We use windowSize below, so define it here
-	ImVec2 windowSize = ImGui::GetWindowSize();
+	// windowSize is already captured above for title centering
 
 	// Intro text - centered
 	const char* introText =

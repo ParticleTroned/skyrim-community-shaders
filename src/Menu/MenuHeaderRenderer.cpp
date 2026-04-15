@@ -25,7 +25,10 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 		return;
 	}
 
-	auto title = std::format("Community Shaders {} Particle Lights Fork", Util::GetFormattedVersion(Plugin::VERSION));
+	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+	auto expectedTag = std::format("v{}", versionStr);
+	auto baseTitle = std::format("Community Shaders {} Particle Lights Fork", versionStr);
+	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? baseTitle : std::format("{} [{}]", baseTitle, Plugin::BUILD_DESCRIBE);
 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
 
 	if (isDocked) {

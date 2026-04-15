@@ -227,6 +227,9 @@ void Deferred::CopyShadowData()
 
 void Deferred::ReflectionsPrepasses()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "Reflections Prepass");
+
 	auto shaderCache = globals::shaderCache;
 
 	if (!shaderCache->IsEnabled())
@@ -236,9 +239,6 @@ void Deferred::ReflectionsPrepasses()
 
 	state->activeReflections = true;
 	state->UpdateSharedData(false, false);
-
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Reflections Prepass");
 
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
@@ -252,15 +252,15 @@ void Deferred::ReflectionsPrepasses()
 
 void Deferred::EarlyPrepasses()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "Early Prepass");
+
 	auto shaderCache = globals::shaderCache;
 
 	if (!shaderCache->IsEnabled())
 		return;
 
 	globals::state->UpdateSharedData(false, true);
-
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "Early Prepass");
 
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets

@@ -816,6 +816,7 @@ void Skylighting::RenderOcclusion()
 	auto sky = globals::game::sky;
 
 	if (!shaderCache->IsEnabled()) {
+		TracyD3D11Zone(globals::state->tracyCtx, "Precipitation Mask");
 		state->BeginPerfEvent("Precipitation Mask");
 		Main_Precipitation_RenderOcclusion::func();
 		state->EndPerfEvent();
@@ -829,6 +830,7 @@ void Skylighting::RenderOcclusion()
 				return;
 
 			{
+				TracyD3D11Zone(globals::state->tracyCtx, "Precipitation Mask");
 				state->BeginPerfEvent("Precipitation Mask");
 
 				if (auto precipObject = GetActivePrecipitationObject(precip)) {
@@ -841,6 +843,7 @@ void Skylighting::RenderOcclusion()
 			}
 
 			{
+				TracyD3D11Zone(globals::state->tracyCtx, "Skylighting Mask");
 				state->BeginPerfEvent("Skylighting Mask");
 
 				const bool forceOcclusionRefresh = queuedResetSkylighting;

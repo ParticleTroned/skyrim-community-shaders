@@ -3377,6 +3377,9 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 
 void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "VR Upscaling - Finalize Per Eye");
+
 	if (!globals::game::isVR)
 		return;
 
@@ -3708,6 +3711,8 @@ void Upscaling::ClearShaderCache()
 
 void Upscaling::CopySharedD3D12Resources()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
 	globals::state->BeginPerfEvent("Copy Shared D3D12 Resources");
 
 	auto renderer = globals::game::renderer;
@@ -4153,6 +4158,7 @@ IDXGISwapChain* Upscaling::GetProxySwapChain()
 
 void Upscaling::Upscale()
 {
+	ZoneScoped;
 	auto upscaleMethod = GetUpscaleMethod();
 	UpdateHistoryResetState(upscaleMethod);
 	LatchHistoryResetForCurrentFrame();
@@ -4179,6 +4185,7 @@ void Upscaling::Upscale()
 	auto encodeUpscalingTextures = [&](bool forceFullVREncode, const char* eventName) {
 		encodedVRFoveatedRegions = false;
 		state->BeginPerfEvent(eventName);
+		TracyD3D11Zone(globals::state->tracyCtx, "Encode Upscaling Textures");
 
 		auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 		auto& normals = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[2]];
@@ -4380,6 +4387,7 @@ void Upscaling::Upscale()
 		ID3D11Resource* motionVectorResource = globals::game::isVR ? motionVector.texture : motionVectorCopyTexture->resource.get();
 		bool dispatched = false;
 		static bool loggedFoveatedFallback = false;
+		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
 		if (foveatedDispatchRequested) {
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -4421,6 +4429,8 @@ void Upscaling::Upscale()
 
 void Upscaling::PerformUpscaling()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling");
 	Upscale();
 	UpscaleDepth();
 
@@ -4435,6 +4445,8 @@ void Upscaling::PerformUpscaling()
 
 void Upscaling::UpscaleDepth()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth");
 	// Optimization overview:
 	// 1) Early validation exits before issuing GPU work.
 	// 2) Wide-kernel depth mode uses hysteresis to avoid frequent toggles.
@@ -4602,6 +4614,9 @@ void Upscaling::UpscaleDepth()
 
 void Upscaling::ApplySharpening()
 {
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
+
 	if (settings.sharpnessDLSS <= 0.0f)
 		return;
 

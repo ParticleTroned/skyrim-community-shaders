@@ -6,6 +6,24 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
+#if defined(TERRAIN_SHADOWS)
+#	include "TerrainShadows/TerrainShadows.hlsli"
+#endif
+
+#if defined(CLOUD_SHADOWS)
+#	include "CloudShadows/CloudShadows.hlsli"
+#endif
+
+#if defined(IBL)
+#	include "IBL/IBL.hlsli"
+#elif defined(SKYLIGHTING)
+// sh2 type is needed for the ExtractLighting overload that accepts a visibility SH
+#	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+#endif
+
+#if defined(VOLUMETRIC_SHADOWS)
+#	include "VolumetricShadows/VolumetricShadows.hlsli"
+#endif
 namespace ShadowSampling
 {
 

@@ -790,20 +790,27 @@ bool ThemeManager::ValidateThemeData(const json& themeData) const
 
 float ThemeManager::ResolveFontSize(const Menu& menu)
 {
-	const auto& themeSettings = menu.GetTheme();
-	float configured = themeSettings.FontSize;
+	const auto& settings = menu.GetSettings();
 
-	// If user configured a positive size, use it (clamped)
-	if (std::round(configured) > 0) {
-		return std::clamp(configured, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
+	// When resolution-based font is disabled, use the theme's fixed size directly
+	if (!settings.UseResolutionFont) {
+		float configured = settings.Theme.FontSize;
+		if (std::round(configured) > 0)
+			return std::clamp(configured, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
 	}
 
-	// Otherwise, compute dynamic default based on current screen resolution
-	float dynamicSize = Constants::DEFAULT_FONT_SIZE;
-	if (globals::state && globals::state->screenSize.y > 0) {
+	// Compute dynamic size from screen resolution
+	float dynamicSize;
+	if (globals::game::isVR) {
+		// VR: use overlay height
+		dynamicSize = VR::Config::kOverlayHeight * Constants::DEFAULT_FONT_RATIO;
+	} else if (globals::state && globals::state->screenSize.y > 0) {
+		// Non-VR: use current screen height
 		dynamicSize = globals::state->screenSize.y * Constants::DEFAULT_FONT_RATIO;
 	} else {
-		logger::warn("ThemeManager::ResolveFontSize() - Falling back to DEFAULT_FONT_SIZE due to missing screen height.");
+		// Fallback: use default font size
+		logger::warn("ThemeManager::ResolveFontSize() - Falling back to Constants::DEFAULT_FONT_SIZE due to missing screen height.");
+		dynamicSize = Constants::DEFAULT_FONT_SIZE;
 	}
 	return std::clamp(dynamicSize, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
 }

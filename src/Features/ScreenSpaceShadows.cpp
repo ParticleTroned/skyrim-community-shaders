@@ -222,7 +222,7 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 
 void ScreenSpaceShadows::DrawShadows()
 {
-	ZoneScoped;
+	ZoneScopedS(8);
 	auto state = globals::state;
 	TracyD3D11Zone(state->tracyCtx, "Screen Space Shadows");
 

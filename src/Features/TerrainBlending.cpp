@@ -952,7 +952,7 @@ void TerrainBlending::ClearShaderCache()
 
 void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 {
-	ZoneScoped;
+	ZoneScopedS(8);
 
 	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
@@ -981,7 +981,10 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 		singleton.renderDepth = true;
 		singleton.ResetDepth();
 
-		func(a1, a2);
+		{
+			ZoneScopedN("Terrain Depth - Game Render");
+			func(a1, a2);
+		}
 
 		singleton.renderDepth = false;
 
@@ -995,7 +998,10 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 		mainDepth.depthSRV = singleton.depthSRVBackup;
 		zPrepassCopy.depthSRV = singleton.prepassSRVBackup;
 
-		func(a1, a2);
+		{
+			ZoneScopedN("Terrain Depth - Game Render");
+			func(a1, a2);
+		}
 	}
 
 }

@@ -451,7 +451,10 @@ void Deferred::DeferredPasses()
 		auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
 		context->CSSetShader(shader, nullptr, 0);
 
-		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		{
+			TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
+			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		}
 	}
 
 	// Clear

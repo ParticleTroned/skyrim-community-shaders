@@ -27,14 +27,6 @@ namespace SharedData
 		float PBRMetalReflectionScale; // Global scale for PBR metal reflections (1.0 = default)
 		float PBRMetalHighlightScale; // Global scale for direct PBR metal highlights (1.0 = default)
 		float2 PBRMetalReflectionScalePad0;
-		float SSSHumanMaleIntensity;
-		float SSSHumanMaleSaturation;
-		float SSSHumanMaleBrightness;
-		float SSSHumanMaleBaseSaturation;
-		float SSSHumanFemaleIntensity;
-		float SSSHumanFemaleSaturation;
-		float SSSHumanFemaleBrightness;
-		float SSSHumanFemaleBaseSaturation;
 	};
 
 	struct GrassLightingSettings

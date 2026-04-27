@@ -3976,7 +3976,7 @@ if (alpha - AlphaTestRefRS < 0) {
 #		if defined(SSS) && (defined(SKIN) || defined(HAIR))
 	float humanClass = 0.0;
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace)) {
-		humanClass = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsFemale) ? 2.0 : 1.0;
+		humanClass = 1.0;
 	}
 
 	float sssMask = 0.0;

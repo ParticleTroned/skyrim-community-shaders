@@ -27,6 +27,14 @@ namespace SharedData
 		float PBRMetalReflectionScale; // Global scale for PBR metal reflections (1.0 = default)
 		float PBRMetalHighlightScale; // Global scale for direct PBR metal highlights (1.0 = default)
 		float2 PBRMetalReflectionScalePad0;
+		float SSSHumanMaleIntensity;
+		float SSSHumanMaleSaturation;
+		float SSSHumanMaleBrightness;
+		float SSSHumanMaleBaseSaturation;
+		float SSSHumanFemaleIntensity;
+		float SSSHumanFemaleSaturation;
+		float SSSHumanFemaleBrightness;
+		float SSSHumanFemaleBaseSaturation;
 	};
 
 	struct GrassLightingSettings
@@ -123,18 +131,86 @@ namespace SharedData
 		float pad0;
 	};
 
+	struct WetternessSettings
+	{
+		row_major float4x4 OcclusionViewProj;
+
+		float Time;
+		float Raining;
+		float Wetness;
+		float PuddleWetness;
+
+		uint EnableWetnessEffects;
+		float MaxRainWetness;
+		float MaxPuddleWetness;
+		float MaxShoreWetness;
+
+		uint ShoreRange;
+		float PuddleRadius;
+		float PuddleMaxAngle;
+		float PuddleMinWetness;
+
+		float MinRainWetness;
+		float SkinWetness;
+		float PuddleLayout;
+		float StoneDryingMultiplier;
+		float DirtDryingMultiplier;
+		float GrassDryingMultiplier;
+		uint EnableRaindropFx;
+
+		uint EnableSplashes;
+		uint EnableRipples;
+		uint EnableModernWetReflection;
+		uint EnableLegacyWetReflection;
+		float WetIndirectSpecularScale;
+		float RaindropFxRange;
+
+		float RaindropGridSizeRcp;
+		float RaindropIntervalRcp;
+		float RaindropChance;
+		float SplashesLifetime;
+
+		float SplashesStrength;
+		float SplashesMinRadius;
+		float SplashesMaxRadius;
+		float RippleStrength;
+
+		float RippleRadius;
+		float RippleBreadth;
+		float RippleLifetimeRcp;
+		float PostRainPuddleWaterStrength;
+
+		float RaindropTransitionFalloff;
+		float WetDarkeningStrength;
+		float WetHighlightReduction;
+		uint EnableForwardReflectionBias;
+		uint EnableVanillaReflectionCompensation;
+		float WetFilmSpecularFloorScale;
+		float ShorePersistentDarkeningStrength;
+		uint PackedPostRainControl;
+		uint PackedRainReflectionControl;
+		// View-depth fade/cull range for dev-style wetness distance fading, in game units.
+		uint WetnessDistanceFadeRangePacked;
+		float RainContactWetnessScale;
+	};
+
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;
 
-		float4 PosOffset;   // xyz: cell origin in camera model space
-		uint4 ArrayOrigin;  // xyz: array origin
+		float3 PosOffset;  // cell origin in camera model space
+		uint FastSamplingMode;
+		uint3 ArrayOrigin;  // xyz: array origin
+		uint _pad0;
 		int4 ValidMargin;
+		uint3 ArrayDims;
+		uint _pad1;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		uint2 pad0;
+		uint ProbeUpdateSliceStart;
+		uint ProbeUpdateSliceCount;
 	};
 
 	struct CloudShadowsSettings
@@ -252,6 +328,7 @@ namespace SharedData
 		TerraOccSettings terraOccSettings;
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
+		WetternessSettings wetternessSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;

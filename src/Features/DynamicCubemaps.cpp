@@ -3,6 +3,7 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
+#include "Wetterness.h"
 #include "ShaderCache.h"
 #include "State.h"
 
@@ -12,6 +13,42 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DynamicCubemaps::Settings,
 	EnabledSSR,
 	EnabledCreator);
+
+namespace
+{
+	const Wetterness* GetActiveWetterness()
+	{
+		auto& wetterness = globals::features::wetterness;
+		return wetterness.IsRuntimeProcessingActive() ? &wetterness : nullptr;
+	}
+
+	RE::NiPoint3 GetCubemapCaptureAnchorPosition()
+	{
+		const auto* wetterness = GetActiveWetterness();
+		if (!(REL::Module::IsVR() && wetterness)) {
+			return Util::GetAverageEyePosition();
+		}
+
+		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+			if (auto* root = player->Get3D(false)) {
+				return root->world.translate;
+			}
+			return player->GetPosition();
+		}
+
+		return Util::GetAverageEyePosition();
+	}
+
+	uint GetVRCaptureFlags()
+	{
+		const auto* wetterness = GetActiveWetterness();
+		if (!(REL::Module::IsVR() && wetterness)) {
+			return 0u;
+		}
+
+		return DynamicCubemaps::kCaptureFlagDisableForwardGate | DynamicCubemaps::kCaptureFlagSuppressSkyAndFrameEdge;
+	}
+}
 
 std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetShaderDefineOptions()
 {
@@ -345,12 +382,16 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 
 	UpdateCubemapCB updateData{};
 
-	static float3 cameraPreviousPosAdjust[2] = { { 0, 0, 0 }, { 0, 0, 0 } };
-	updateData.CameraPreviousPosAdjust = cameraPreviousPosAdjust[index];
+	static float3 previousCaptureAnchor[2] = { { 0, 0, 0 }, { 0, 0, 0 } };
+	auto captureAnchor = GetCubemapCaptureAnchorPosition();
+	float3 currentCaptureAnchor{ captureAnchor.x, captureAnchor.y, captureAnchor.z };
 
-	auto eyePosition = Util::GetEyePosition(0);
-
-	cameraPreviousPosAdjust[index] = { eyePosition.x, eyePosition.y, eyePosition.z };
+	// Reproject stale cubemap texels using the same anchor used for capture history.
+	// Mixing player-root history with current eye-center reprojection makes VR reflections
+	// look attached to a small area around the player while moving.
+	updateData.CameraPosAdjustDelta = previousCaptureAnchor[index] - currentCaptureAnchor;
+	previousCaptureAnchor[index] = currentCaptureAnchor;
+	updateData.CaptureFlags = GetVRCaptureFlags();
 
 	updateCubemapCB->Update(updateData);
 

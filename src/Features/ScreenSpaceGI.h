@@ -19,14 +19,10 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		std::string desc =
-			"Screen Space Global Illumination adds realistic indirect lighting and "
-			"ambient occlusion to the game. This technique simulates how light "
-			"bounces off surfaces to illuminate other objects naturally.";
+			"Screen Space Global Illumination adds realistic indirect lighting and ambient occlusion.";
 		if (REL::Module::IsVR()) {
 			desc +=
-				"\n\n In VR use AO preset; use Full Res if you observe flimmer at a cost of speed. Warning: This feature may have visual artifacts and "
-				"can have a significant performance impact due to the nature of "
-				"screen space effects.";
+				"\nIn VR, use AO preset with Full Res for best quality at a cost of speed. For more performance use Foveated or Half/Quarter Res setting. Foveated is not compatible with IL.";
 		}
 		return std::make_pair(
 			desc,
@@ -58,18 +54,45 @@ public:
 	uint outputAoIdx = 0;
 	uint outputIlIdx = 0;
 
+	struct CenterDispatchRect
+	{
+		uint x = 0;
+		uint y = 0;
+		uint width = 0;
+		uint height = 0;
+	};
+
+	struct CenterRectCacheState
+	{
+		uint frameWidth = 0;
+		uint frameHeight = 0;
+		bool isVR = false;
+		float scale = -1.0f;
+		float horizontalScale = 1.0f;
+		std::array<float2, 2> centerOffsets{};
+		std::array<CenterDispatchRect, 2> rects{};
+	} centerRectCache;
+
+	static constexpr int kResourceProfileFullGI = 0;
+	static constexpr int kResourceProfileAOOnly = 1;
+
 	struct Settings
 	{
 		bool Enabled = REL::Module::IsVR() ? false : true;   // disabled in VR by default
 		bool EnableGI = REL::Module::IsVR() ? false : true;  // AO only for VR by default
 		bool EnableExperimentalSpecularGI = false;
 		bool EnableVanillaSSAO = false;
-		bool InteriorsOnly = REL::Module::IsVR() ? true : false;
+		bool AOInteriorsOnly = REL::Module::IsVR() ? true : false;
+		bool ILInteriorsOnly = REL::Module::IsVR() ? true : false;
 		// performance/quality
 		uint NumSlices = REL::Module::IsVR() ? 3u : 4u;
 		uint NumSteps = REL::Module::IsVR() ? 6u : 8u;   // AO preset for VR
-		int ResolutionMode = 1;  // Half Res default (VR and flat)
+		bool EnableAdaptiveSampling = true;
+		int ResolutionMode = 0;  // Full Res default (VR and flat)
+		int ResourceProfile = REL::Module::IsVR() ? kResourceProfileAOOnly : kResourceProfileFullGI;
 		float VRCullDistance = 1500.0f;                  // 0 disables VR distance culling
+		float CenterFullResMaskScale = 0.0f;             // runtime cache; foveated presets derive this from the active Upscaling FOV profile
+		int FoveatedPresetMode = 0;                      // 0=off, 1=strict foveated, 2=foveated
 		// visual
 		float MinScreenRadius = 0.01f;
 		float AORadius = 256.f;
@@ -92,7 +115,14 @@ public:
 		float DistanceNormalisation = 2.f;
 	} settings;
 
-	struct alignas(16) SSGICB
+	int activeResourceProfile = REL::Module::IsVR() ? kResourceProfileAOOnly : kResourceProfileFullGI;
+
+	bool HasGIResources() const { return activeResourceProfile == kResourceProfileFullGI; }
+	bool IsResourceProfileRestartPending() const { return settings.ResourceProfile != activeResourceProfile; }
+	bool IsGIActive() const { return settings.EnableGI && HasGIResources(); }
+	bool IsSpecularGIActive() const { return IsGIActive() && settings.EnableExperimentalSpecularGI; }
+
+	struct SSGICB
 	{
 		float4x4 PrevInvViewMat[2];
 		float2 NDCToViewMul[2];
@@ -130,10 +160,19 @@ public:
 		float BlurRadius;
 		float DistanceNormalisation;
 		float VRCullDistance;
-		float pad;
+		float CenterFullResMaskScale;
+		float4 CenterFullResMaskOffsets;
+		float CenterFullResMaskHorizontalScale;
+		float CenterFullResMaskFeather;
+		float CenterDispatchOffsetX;
+		float CenterDispatchOffsetY;
+		float CenterDispatchSizeX;
+		float CenterDispatchSizeY;
+		float pad[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;
+	SSGICB ssgiCBData{};
 
 	eastl::unique_ptr<Texture2D> texNoise = nullptr;
 	eastl::unique_ptr<Texture2D> texWorkingDepth = nullptr;
@@ -147,16 +186,22 @@ public:
 	eastl::unique_ptr<Texture2D> texIlY[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texIlCoCg[2] = { nullptr };
 	eastl::unique_ptr<Texture2D> texGiSpecular[2] = { nullptr };
+	eastl::unique_ptr<Texture2D> texCenterAo = nullptr;
+	eastl::unique_ptr<Texture2D> texCenterIlY = nullptr;
+	eastl::unique_ptr<Texture2D> texCenterIlCoCg = nullptr;
+	eastl::unique_ptr<Texture2D> texCenterGiSpecular = nullptr;
 
-	inline auto GetOutputTextures()
+	inline std::tuple<ID3D11ShaderResourceView*, ID3D11ShaderResourceView*, ID3D11ShaderResourceView*, ID3D11ShaderResourceView*> GetOutputTextures()
 	{
-		return (loaded && settings.Enabled) ?
-		           std::make_tuple(
-					   texAo[outputAoIdx]->srv.get(),
-					   texIlY[outputIlIdx]->srv.get(),
-					   texIlCoCg[outputIlIdx]->srv.get(),
-					   texGiSpecular[outputAoIdx]->srv.get()) :
-		           std::make_tuple(nullptr, nullptr, nullptr, nullptr);
+		if (!(loaded && settings.Enabled) || outputAoIdx >= 2 || outputIlIdx >= 2 || !texAo[outputAoIdx])
+			return { nullptr, nullptr, nullptr, nullptr };
+
+		return {
+			texAo[outputAoIdx]->srv.get(),
+			texIlY[outputIlIdx] ? texIlY[outputIlIdx]->srv.get() : nullptr,
+			texIlCoCg[outputIlIdx] ? texIlCoCg[outputIlIdx]->srv.get() : nullptr,
+			texGiSpecular[outputAoIdx] ? texGiSpecular[outputAoIdx]->srv.get() : nullptr
+		};
 	}
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
@@ -165,7 +210,14 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> prefilterDepthsCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterRadianceCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> radianceDisoccAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> giAOOnlyCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> upsampleAOOnlyCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> centerBlendCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> centerBlendAOOnlyCompute = nullptr;
 };

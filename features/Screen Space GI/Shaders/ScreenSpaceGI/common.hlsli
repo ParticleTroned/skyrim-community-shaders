@@ -20,8 +20,10 @@
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#include "Common/FoveatedMask.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/VR.hlsli"
 
 cbuffer SSGICB : register(b1)
 {
@@ -61,6 +63,15 @@ cbuffer SSGICB : register(b1)
 
 	float BlurRadius;
 	float DistanceNormalisation;
+	float VRCullDistance;
+	float CenterFullResMaskScale;
+	float4 CenterFullResMaskOffsets;
+	float CenterFullResMaskHorizontalScale;
+	float CenterFullResMaskFeather;
+	float CenterDispatchOffsetX;
+	float CenterDispatchOffsetY;
+	float CenterDispatchSizeX;
+	float CenterDispatchSizeY;
 	float2 pad;
 };
 
@@ -112,6 +123,69 @@ float4 filterInf(float4 v) { return float4(filterInf(v.x), filterInf(v.y), filte
 #	define RCP_OUT_FRAME_DIM RcpFrameDim
 #	define OUT_FRAME_SCALE frameScale
 #endif
+
+#ifdef VR
+uint GetEyeWidthPixels(float frameWidth)
+{
+	return max(1u, (uint)round(frameWidth * 0.5));
+}
+
+int2 ClampPixelCoordToEye(int2 pxCoord, uint eyeIndex, float2 frameDim)
+{
+	uint eyeWidth = GetEyeWidthPixels(frameDim.x);
+	int minX = (int)(eyeWidth * eyeIndex);
+	int maxX = minX + (int)eyeWidth - 1;
+	int maxY = max(0, (int)frameDim.y - 1);
+
+	pxCoord.x = clamp(pxCoord.x, minX, maxX);
+	pxCoord.y = clamp(pxCoord.y, 0, maxY);
+	return pxCoord;
+}
+
+uint2 ClampPixelCoordToEye(uint2 pxCoord, uint eyeIndex, float2 frameDim)
+{
+	int2 clamped = ClampPixelCoordToEye(int2(pxCoord), eyeIndex, frameDim);
+	return uint2(clamped);
+}
+
+float2 ClampUVToEye(float2 uv, uint eyeIndex, float2 frameDim)
+{
+	float2 minUV = float2(0.0, 0.0);
+	float2 maxUV = float2(1.0, 1.0);
+	float halfPixelX = 0.5 / max(frameDim.x, 1.0);
+
+	if (eyeIndex == 0) {
+		maxUV.x = 0.5 - halfPixelX;
+	} else {
+		minUV.x = 0.5 + halfPixelX;
+	}
+
+	return clamp(uv, minUV, maxUV);
+}
+
+float2 ClampPackedUVToEye(float2 uv, uint eyeIndex, float2 packedFrameDim, float2 packedTexDim)
+{
+	const uint eyeWidth = GetEyeWidthPixels(packedFrameDim.x);
+	const float safeTexWidth = max(packedTexDim.x, 1.0);
+	const float safeTexHeight = max(packedTexDim.y, 1.0);
+	const float minX = ((float)(eyeWidth * eyeIndex) + 0.5) / safeTexWidth;
+	const float maxX = ((float)(eyeWidth * (eyeIndex + 1)) - 0.5) / safeTexWidth;
+	const float minY = 0.5 / safeTexHeight;
+	const float maxY = (packedFrameDim.y - 0.5) / safeTexHeight;
+	return clamp(uv, float2(minX, minY), float2(maxX, maxY));
+}
+#endif
+
+float2 GetCenterFullMaskOffset(uint eyeIndex)
+{
+	return eyeIndex == 0 ? CenterFullResMaskOffsets.xy : CenterFullResMaskOffsets.zw;
+}
+
+float GetCenterFullMaskWeight(float2 stereoUv, uint eyeIndex)
+{
+	float2 eyeUv = Stereo::ConvertFromStereoUV(stereoUv, eyeIndex);
+	return FoveatedComputeCenterBlendWeight(eyeUv, CenterFullResMaskScale, CenterFullResMaskFeather, CenterFullResMaskHorizontalScale, GetCenterFullMaskOffset(eyeIndex));
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 

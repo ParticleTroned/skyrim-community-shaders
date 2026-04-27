@@ -31,7 +31,6 @@
 #include "Common/GBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-#include "Common/VR.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
 #define RCP_PI (0.31830988618)
@@ -45,16 +44,39 @@ Texture2D<float> srcPrevAo : register(t5);             // maybe half-res
 Texture2D<float4> srcPrevY : register(t6);             // maybe half-res
 Texture2D<float2> srcPrevCoCg : register(t7);          // maybe half-res
 Texture2D<float4> srcPrevGISpecular : register(t8);    // maybe half-res
+#ifdef CENTER_FULL_PASS
+Texture2D<float4> srcSceneColor : register(t9);
+#endif
 
 RWTexture2D<unorm float> outAo : register(u0);
+#ifdef GI
 RWTexture2D<float4> outY : register(u1);
 RWTexture2D<float2> outCoCg : register(u2);
 RWTexture2D<float4> outGISpecular : register(u3);
+#endif
 RWTexture2D<half3> outPrevGeo : register(u4);
 
 float GetDepthFade(float depth)
 {
 	return saturate((depth - DepthFadeRange.x) * DepthFadeScaleConst);
+}
+
+float GetVRCullFade(float depth)
+{
+#ifdef VR
+	static const float kVRCullFadeFraction = 0.2;
+	static const float kVRCullFadeBandMin = 200.0;
+	static const float kVRCullFadeBandMax = 1200.0;
+
+	if (VRCullDistance <= 0.0)
+		return 1.0;
+
+	float fadeBand = clamp(VRCullDistance * kVRCullFadeFraction, kVRCullFadeBandMin, kVRCullFadeBandMax);
+	float fadeStart = VRCullDistance - fadeBand;
+	return 1.0 - smoothstep(fadeStart, VRCullDistance, depth);
+#else
+	return 1.0;
+#endif
 }
 
 // Engine-specific screen & temporal noise loader
@@ -95,7 +117,8 @@ void CalculateGI(
 	float2 normalizedScreenPos = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
 	const float rcpNumSlices = rcp((float)NumSlices);
-	const float rcpNumSteps = rcp((float)NumSteps);
+	uint numSteps = NumSteps;
+	float rcpNumSteps = rcp((float)max(numSteps, 1u));
 
 	// if the offset is under approx pixel size (pixelTooCloseThreshold), push it out to the minimum distance
 	const float pixelTooCloseThreshold = 1.3;
@@ -119,6 +142,45 @@ void CalculateGI(
 	const float3 viewVec = normalize(-pixCenterPos);
 #ifdef GI_SPECULAR
 	const float NoV = clamp(dot(viewVec, viewspaceNormal), 1e-5, 1);
+#endif
+
+#ifdef ADAPTIVE_SAMPLING
+	{
+		const uint2 frameMax = uint2(max(OUT_FRAME_DIM.x - 1.0, 0.0), max(OUT_FRAME_DIM.y - 1.0, 0.0));
+		const uint2 pxL = uint2(max(int(dtid.x) - 1, 0), dtid.y);
+		const uint2 pxR = uint2(min(dtid.x + 1, frameMax.x), dtid.y);
+		const uint2 pxU = uint2(dtid.x, max(int(dtid.y) - 1, 0));
+		const uint2 pxD = uint2(dtid.x, min(dtid.y + 1, frameMax.y));
+
+		const float depthL = READ_DEPTH(srcWorkingDepth, pxL);
+		const float depthR = READ_DEPTH(srcWorkingDepth, pxR);
+		const float depthU = READ_DEPTH(srcWorkingDepth, pxU);
+		const float depthD = READ_DEPTH(srcWorkingDepth, pxD);
+		const float depthScale = rcp(max(viewspaceZ, 1.0));
+		const float depthVariance = (abs(depthL - viewspaceZ) + abs(depthR - viewspaceZ) + abs(depthU - viewspaceZ) + abs(depthD - viewspaceZ)) * 0.25 * depthScale;
+
+		const float2 uvL = (pxL + 0.5) * RCP_OUT_FRAME_DIM;
+		const float2 uvR = (pxR + 0.5) * RCP_OUT_FRAME_DIM;
+		const float2 uvU = (pxU + 0.5) * RCP_OUT_FRAME_DIM;
+		const float2 uvD = (pxD + 0.5) * RCP_OUT_FRAME_DIM;
+		const float3 normalL = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, pxL, uvL * frameScale, samplerLinearClamp).xy);
+		const float3 normalR = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, pxR, uvR * frameScale, samplerLinearClamp).xy);
+		const float3 normalU = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, pxU, uvU * frameScale, samplerLinearClamp).xy);
+		const float3 normalD = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, pxD, uvD * frameScale, samplerLinearClamp).xy);
+		const float normalVariance = ((1.0 - saturate(dot(viewspaceNormal, normalL))) +
+		                              (1.0 - saturate(dot(viewspaceNormal, normalR))) +
+		                              (1.0 - saturate(dot(viewspaceNormal, normalU))) +
+		                              (1.0 - saturate(dot(viewspaceNormal, normalD)))) * 0.25;
+
+		const float localVariance = saturate(depthVariance * 6.0 + normalVariance * 2.0);
+		const float farDepthT = saturate((viewspaceZ - DepthFadeRange.x) * DepthFadeScaleConst);
+		const float farStepScale = lerp(1.0, 0.45, farDepthT);
+		const float varianceStepScale = lerp(0.55, 1.0, localVariance);
+		const float adaptiveStepScale = min(farStepScale, varianceStepScale);
+		const uint adaptiveSteps = max(1u, (uint)round((float)NumSteps * adaptiveStepScale));
+		numSteps = min(NumSteps, adaptiveSteps);
+		rcpNumSteps = rcp((float)max(numSteps, 1u));
+	}
 #endif
 
 	// flip foliage normal
@@ -169,7 +231,7 @@ void CalculateGI(
 
 		[unroll] for (int sideSign = -1; sideSign <= 1; sideSign += 2)
 		{
-			[loop] for (uint step = 0; step < NumSteps; step++)
+			[loop] for (uint step = 0; step < numSteps; step++)
 			{
 				float s = (step + stepNoise) * rcpNumSteps;
 				s *= s;     // default 2 is fine
@@ -256,9 +318,15 @@ void CalculateGI(
 					if (frontBackMult > 0.f) {
 						float3 sampleHorizonVecWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], half4(sampleHorizonVec, 0)).xyz);
 
-						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance).rgb * frontBackMult * giBoost * countbits(validBits) * 0.03125;
-						sampleRadiance = max(sampleRadiance, 0);
-						float3 sampleRadianceYCoCg = Color::RGBToYCoCg(sampleRadiance);
+					float3 sampleRadiance;
+#ifdef CENTER_FULL_PASS
+					sampleRadiance = Color::RadianceToLinear(srcSceneColor.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).rgb * GIStrength);
+#else
+					sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance).rgb;
+#endif
+					sampleRadiance *= frontBackMult * giBoost * countbits(validBits) * 0.03125;
+					sampleRadiance = max(sampleRadiance, 0);
+					float3 sampleRadianceYCoCg = Color::RGBToYCoCg(sampleRadiance);
 
 						radianceY += sampleRadianceYCoCg.r * SphericalHarmonics::Evaluate(sampleHorizonVecWS);
 						radianceCoCg += sampleRadianceYCoCg.gb;
@@ -321,12 +389,35 @@ void CalculateGI(
 
 [numthreads(8, 8, 1)] void main(const uint2 dtid
 								: SV_DispatchThreadID) {
-	const float2 frameScale = FrameDim * RcpTexDim;
-
+#ifdef CENTER_FULL_PASS
+	const uint2 dispatchOffset = uint2(CenterDispatchOffsetX, CenterDispatchOffsetY);
+	const uint2 dispatchSize = uint2(CenterDispatchSizeX, CenterDispatchSizeY);
+	if (any(dtid >= dispatchSize))
+		return;
+	uint2 pxCoord = dtid + dispatchOffset;
+#else
+	if (any(dtid >= uint2(OUT_FRAME_DIM)))
+		return;
 	uint2 pxCoord = dtid;
+#endif
+
+	const float2 frameScale = FrameDim * RcpTexDim;
 
 	float2 uv = (pxCoord + .5) * RCP_OUT_FRAME_DIM;
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+#ifdef CENTER_FULL_PASS
+	if (GetCenterFullMaskWeight(uv, eyeIndex) <= 0.0) {
+		outAo[pxCoord] = 0;
+#ifdef GI
+		outY[pxCoord] = 0;
+		outCoCg[pxCoord] = 0;
+#ifdef GI_SPECULAR
+		outGISpecular[pxCoord] = 0;
+#endif
+#endif
+		return;
+	}
+#endif
 
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
 
@@ -334,17 +425,21 @@ void CalculateGI(
 	float3 viewspaceNormal = GBuffer::DecodeNormal(normalSample);
 
 	half2 encodedWorldNormal = GBuffer::EncodeNormal(ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]));
+#ifndef CENTER_FULL_PASS
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
+#endif
 
 	// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
 	viewspaceZ *= 0.99920h;  // this is good for FP16 depth buffer
+
+	float vrCullFade = GetVRCullFade(viewspaceZ);
 
 	float currAo = 0;
 	float4 currY = 0;
 	float2 currCoCg = 0;
 	float4 currGIAOSpecular = float4(0, 0, 0, 0);
 
-	bool needGI = viewspaceZ > FP_Z && viewspaceZ < DepthFadeRange.y;
+	bool needGI = viewspaceZ > FP_Z && viewspaceZ < DepthFadeRange.y && vrCullFade > 0.0;
 	if (needGI) {
 		CalculateGI(
 			pxCoord, uv, viewspaceZ, viewspaceNormal,
@@ -352,22 +447,33 @@ void CalculateGI(
 
 #ifdef TEMPORAL_DENOISER
 		float lerpFactor = rcp(srcAccumFrames[pxCoord] * 255);
-
+#ifdef GI
 		currY = lerp(srcPrevY[pxCoord], currY, lerpFactor);
 		currCoCg = lerp(srcPrevCoCg[pxCoord], currCoCg, lerpFactor);
-#	ifdef GI_SPECULAR
+#endif
+#	if defined(GI) && defined(GI_SPECULAR)
 		currGIAOSpecular = lerp(srcPrevGISpecular[pxCoord], currGIAOSpecular, lerpFactor);
 #	endif
-#endif
+	#endif
 	}
+
+	currAo *= vrCullFade;
+#ifdef GI
+	currY *= vrCullFade;
+	currCoCg *= vrCullFade;
+	currGIAOSpecular *= vrCullFade;
+
 	currY = filterNaN(currY);
 	currCoCg = filterNaN(currCoCg);
 	currGIAOSpecular = filterNaN(currGIAOSpecular);
+#endif
 
 	outAo[pxCoord] = currAo;
+#ifdef GI
 	outY[pxCoord] = currY;
 	outCoCg[pxCoord] = currCoCg;
 #ifdef GI_SPECULAR
 	outGISpecular[pxCoord] = currGIAOSpecular;
+#endif
 #endif
 }

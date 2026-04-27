@@ -12,6 +12,7 @@
 #include "Feature.h"
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
+#include "Features/Wetterness.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -693,6 +694,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled at boot.");
 		ImGui::Spacing();
 		ImGui::Text("Enable the feature above to access its configuration options.");
+		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
+			ImGui::Spacing();
+			ImGui::TextColored(
+				themeSettings.StatusPalette.Error,
+				"Wetness Effects and Wetterness cannot run together. Wetness Effects will be auto-disabled when Wetterness is active.");
+		}
 	} else {
 		if (isLoaded) {
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
@@ -764,6 +771,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();
+			} else if (hasFailedMessage) {
+				// Conflict/version failures are rendered below. Do not present them as pending restart.
 			} else if (IsFeatureInstalled(feat->GetShortName())) {
 				ImGui::Text("This feature will be available after restart.");
 			} else {

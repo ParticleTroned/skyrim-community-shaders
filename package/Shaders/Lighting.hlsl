@@ -935,8 +935,18 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef WETNESS_EFFECTS
 #	endif
 
-#	if defined(WETNESS_EFFECTS)
+#	if defined(WETTERNESS)
+#		define CS_WETNESS_SETTINGS SharedData::wetternessSettings
+#		include "Wetterness/Wetterness.hlsli"
+#		define CS_TEX_PRECIP_OCCLUSION Wetterness::TexPrecipOcclusion
+#		define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) Wetterness::GetRainDrops(worldPos, time, normal, strength)
+#		define CS_REORIENT_NORMAL(n1, n2) Wetterness::ReorientNormal(n1, n2)
+#	elif defined(WETNESS_EFFECTS)
+#		define CS_WETNESS_SETTINGS SharedData::wetnessEffectsSettings
 #		include "WetnessEffects/WetnessEffects.hlsli"
+#		define CS_TEX_PRECIP_OCCLUSION WetnessEffects::TexPrecipOcclusion
+#		define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) WetnessEffects::GetRainDrops(worldPos, time, normal, strength)
+#		define CS_REORIENT_NORMAL(n1, n2) WetnessEffects::ReorientNormal(n1, n2)
 #	endif
 
 #	if defined(TERRAIN_BLENDING)
@@ -982,13 +992,40 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	include "Common/LightingEval.hlsli"
 
+#	if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
+#		if defined(WETTERNESS)
+#			define CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, lightContext, wetRoughness, lightOutput) EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, GetWetReflectionModeConfig(SharedData::wetternessSettings.WetIndirectSpecularScale), lightOutput)
+#			define CS_GET_WETNESS_INDIRECT(lobeWeights, wetnessNormal, wetRoughness, indirectContext) GetWetnessIndirectLobeWeights(lobeWeights, wetnessNormal, wetRoughness, indirectContext, GetWetReflectionModeConfig(SharedData::wetternessSettings.WetIndirectSpecularScale))
+#		else
+#			define CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, lightContext, wetRoughness, lightOutput) EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, lightOutput)
+#			define CS_GET_WETNESS_INDIRECT(lobeWeights, wetnessNormal, wetRoughness, indirectContext) GetWetnessIndirectLobeWeights(lobeWeights, wetnessNormal, wetRoughness, indirectContext)
+#		endif
+#	endif
+
+bool IsFiniteFloat3(float3 v)
+{
+	const float3 finiteLimit = float3(1.0e8, 1.0e8, 1.0e8);
+	return all(v == v) && all(abs(v) < finiteLimit);
+}
+
+float3 SanitizeFloat3(float3 v)
+{
+	return IsFiniteFloat3(v) ? v : 0.0.xxx;
+}
+
+float3 SafeNormalize3(float3 v, float3 fallback)
+{
+	float lenSq = dot(v, v);
+	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
+}
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.Position, VPOSOffset);
 
 	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-	float3 viewDirection = -normalize(input.WorldPosition.xyz);
+	float3 viewDirection = -SafeNormalize3(input.WorldPosition.xyz, float3(0.0, 0.0, 1.0));
 
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
@@ -1013,9 +1050,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3x3 tbnTr = transpose(tbn);
 
-	tbnTr[0] = normalize(tbnTr[0]);
-	tbnTr[1] = normalize(tbnTr[1]);
-	tbnTr[2] = normalize(tbnTr[2]);
+	tbnTr[0] = SafeNormalize3(tbnTr[0], float3(1.0, 0.0, 0.0));
+	tbnTr[1] = SafeNormalize3(tbnTr[1], float3(0.0, 1.0, 0.0));
+	tbnTr[2] = SafeNormalize3(tbnTr[2], float3(0.0, 0.0, 1.0));
 
 	tbn = transpose(tbnTr);
 
@@ -2005,7 +2042,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 worldNormal = normal.xyz;
 	float3x3 tbnTr = ReconstructTBN(input.WorldPosition.xyz, worldNormal, screenUV);
 #	else
-	float3 worldNormal = normalize(mul(tbn, normal.xyz));
+	float3 worldNormal = SafeNormalize3(mul(tbn, normal.xyz), float3(0.0, 0.0, 1.0));
 
 #		if defined(SPARKLE)
 	float3 projectedNormal = normalize(mul(tbn, float3(ProjectedUVParams2.xx * normal.xy, normal.z)));
@@ -2111,7 +2148,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 vertexNormal = worldNormal;
 #	endif
 
-	float3 screenSpaceNormal = normalize(FrameBuffer::WorldToView(worldNormal, false, eyeIndex));
+	float3 screenSpaceNormal = SafeNormalize3(FrameBuffer::WorldToView(worldNormal, false, eyeIndex), float3(0.0, 0.0, 1.0));
 
 #	if defined(HAIR) && defined(CS_HAIR)
 	float3 Bitangent = normalize(float3(input.TBN0.y, input.TBN1.y, input.TBN2.y));
@@ -2347,7 +2384,508 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float waterRoughnessSpecular = 1;
 
-#	if defined(WETNESS_EFFECTS)
+#	if defined(WETTERNESS)
+	// Initialize wetness parameters
+	float rainWetness = 0.0;
+	float puddleWetness = 0.0;
+	float raindropWetness = 0.0;
+	float rainContactVisible = 0.0;
+	float wetSurfaceDarkeningMask = 0.0;
+	float nonPuddleFilmMask = 1.0;
+	float postRainBlend = 0.0;
+	float postRainOverridePhase = 0.0;
+	float postRainPuddleReflectionOverrideScale = 0.0;
+	float3 wetnessNormal = worldNormal;
+		float wetnessGlossinessAlbedo = 0.0;
+		float wetnessGlossinessSpecular = 0.0;
+		float wetHighlightReflectanceScale = 1.0;
+		float wetDirectSpecularScale = 1.0;
+		float wetRainCubemapSuppression = 0.0;
+		float wetPuddleSkyReflectionScale = 1.0;
+		float rainDarkeningAbsorption = 1.0;
+		float shoreDarkeningAbsorption = 1.0;
+		const bool wetnessEnabled = (CS_WETNESS_SETTINGS.EnableWetnessEffects != 0);
+		float postRainPuddleWaterStrength = max(0.0, CS_WETNESS_SETTINGS.PostRainPuddleWaterStrength);
+		// Packed control lane layout:
+		// - PackedPostRainControl[0..9]: post-rain spec boost (derived from Post-Rain Water Clarity)
+		// - PackedPostRainControl[10..19]: puddle sky/cubemap reflection scale
+		// - PackedPostRainControl[20..29]: faster wet-film rain phase
+		// - PackedRainReflectionControl[0..9]: post-rain cubemap glare reduction (derived from Post-Rain Water Clarity)
+		// - PackedRainReflectionControl[10..19]: in-rain cubemap suppression (derived from Rain Reflection Balance)
+		// - PackedRainReflectionControl[20..29]: in-rain wet-film specular boost (derived from Rain Reflection Balance)
+		// - PackedRainReflectionControl[30]: occlusion projection validity flag
+		uint packedPostRainControl = CS_WETNESS_SETTINGS.PackedPostRainControl;
+		float postRainSpecBoostFromClarity = saturate((float)(packedPostRainControl & 0x3FFu) * (1.0 / 1023.0));
+		float puddleSkyReflectionScale = saturate((float)((packedPostRainControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
+		float wetFilmRainingAmount = saturate((float)((packedPostRainControl >> 20) & 0x3FFu) * (1.0 / 1023.0));
+		uint packedRainReflectionControl = CS_WETNESS_SETTINGS.PackedRainReflectionControl;
+		float postRainCubemapGlareReductionFromClarity = saturate((float)(packedRainReflectionControl & 0x3FFu) * (1.0 / 1023.0));
+		float inRainCubemapSuppressionFromBalance = saturate((float)((packedRainReflectionControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
+		float inRainFilmSpecularBoostFromBalance = saturate((float)((packedRainReflectionControl >> 20) & 0x3FFu) * (1.0 / 1023.0));
+		const bool hasOcclusionViewProj = (packedRainReflectionControl & (1u << 30)) != 0;
+		float wetnessDistanceFadeRange = max(1.0, asfloat(CS_WETNESS_SETTINGS.WetnessDistanceFadeRangePacked));
+		float wetnessDistanceFade = lerp(1.0, 0.0, saturate(viewPosition.z / wetnessDistanceFadeRange));
+		float rainContactWetnessScale = max(0.0, CS_WETNESS_SETTINGS.RainContactWetnessScale);
+		float shoreHeightDelta = input.WorldPosition.z - waterHeight;
+		const bool wetSurfaceAllowed = shoreHeightDelta > 0.5;
+		// Keep puddle spawning farther away from the waterline than generic wet film.
+		// This prevents standing-water puddle patterns from appearing on water surfaces.
+		const float puddleWaterlineExclusionHeight = 12.0;
+		const bool puddleSurfaceAllowed = shoreHeightDelta > puddleWaterlineExclusionHeight;
+		float wetnessDistToWater = abs(shoreHeightDelta);
+		float shoreRangeSafe = max(1.0, (float)CS_WETNESS_SETTINGS.ShoreRange);
+		// Keep shore wetness continuous at the waterline. A hard height gate here creates
+		// a near-1 to 0 transition that shows up as a thin dark contour on shore geometry.
+		float shoreFactor = saturate(1.0 - (wetnessDistToWater / shoreRangeSafe));
+		float shoreFactorAlbedo = (input.WorldPosition.z < waterHeight) ? 1.0 : shoreFactor;
+		float shoreWetnessAlbedo = saturate(shoreFactorAlbedo * CS_WETNESS_SETTINGS.MaxShoreWetness);
+		float shoreWetnessDarkeningMask = shoreWetnessAlbedo * shoreWetnessAlbedo;
+
+	[branch] if (wetnessEnabled) {
+	// Calculate wetness angle and occlusion
+	float minWetnessValue = CS_WETNESS_SETTINGS.MinRainWetness;
+	float minWetnessAngle = saturate(max(minWetnessValue, worldNormal.z));
+#		if !defined(MODELSPACENORMALS)
+	float rainSurfaceUpness = saturate(vertexNormal.z);
+#		else
+	float rainSurfaceUpness = saturate(worldNormal.z);
+#		endif
+	const float rainingAmount = saturate(CS_WETNESS_SETTINGS.Raining);
+	const float inRainBlend = smoothstep(0.05, 0.35, rainingAmount);
+	const float wetFilmInRainBlend = max(inRainBlend, smoothstep(0.05, 0.35, wetFilmRainingAmount));
+	const float wetFilmPostRainBlend = 1.0 - smoothstep(0.02, 0.20, max(rainingAmount, wetFilmRainingAmount));
+
+	// Surface classification used for both in-rain response and post-rain drying.
+	float vegetationFactor = 0.0;
+	float stoneFactor = 0.0;
+	float dirtFactor = 1.0;
+#		if !defined(SKIN) && !defined(HAIR)
+	float3 surfaceBaseColor = saturate(material.BaseColor);
+	float surfaceRoughness = material.Roughness;
+#			if !defined(TRUE_PBR)
+	surfaceRoughness = 1.0 - saturate(material.Glossiness);
+#			endif
+	vegetationFactor = smoothstep(0.06, 0.30, surfaceBaseColor.g - max(surfaceBaseColor.r, surfaceBaseColor.b));
+	stoneFactor = saturate((0.62 - surfaceRoughness) * 2.4) * (1.0 - vegetationFactor);
+	dirtFactor = saturate(1.0 - vegetationFactor - stoneFactor);
+	float surfaceBrightness = dot(surfaceBaseColor, float3(0.299, 0.587, 0.114));
+	float surfaceMaxChannel = max(surfaceBaseColor.r, max(surfaceBaseColor.g, surfaceBaseColor.b));
+	float surfaceMinChannel = min(surfaceBaseColor.r, min(surfaceBaseColor.g, surfaceBaseColor.b));
+	float surfaceChroma = surfaceMaxChannel - surfaceMinChannel;
+	float surfaceWarmth = saturate(surfaceBaseColor.r - surfaceBaseColor.b + 0.20 * surfaceBaseColor.g);
+	float grassDarkeningFactor = vegetationFactor;
+	float remainingDarkeningSurface = saturate(1.0 - grassDarkeningFactor);
+	float sandDarkeningFactor =
+		smoothstep(0.42, 0.78, surfaceBrightness) *
+		smoothstep(0.02, 0.18, surfaceWarmth) *
+		(1.0 - smoothstep(0.14, 0.32, surfaceChroma)) *
+		saturate(surfaceRoughness * 1.15) *
+		remainingDarkeningSurface;
+	remainingDarkeningSurface = saturate(remainingDarkeningSurface - sandDarkeningFactor);
+	float woodDarkeningFactor =
+		smoothstep(0.06, 0.24, surfaceWarmth) *
+		smoothstep(0.08, 0.28, surfaceChroma) *
+		(1.0 - smoothstep(0.58, 0.86, surfaceBrightness)) *
+		saturate(1.0 - surfaceBaseColor.g * 0.75) *
+		remainingDarkeningSurface;
+	remainingDarkeningSurface = saturate(remainingDarkeningSurface - woodDarkeningFactor);
+	float stoneDarkeningFactor = saturate(stoneFactor) * remainingDarkeningSurface;
+	remainingDarkeningSurface = saturate(remainingDarkeningSurface - stoneDarkeningFactor);
+	float dirtDarkeningFactor = remainingDarkeningSurface;
+	rainDarkeningAbsorption = saturate(
+		stoneDarkeningFactor * 0.45 +
+		woodDarkeningFactor * 0.62 +
+		grassDarkeningFactor * 0.78 +
+		sandDarkeningFactor * 0.90 +
+		dirtDarkeningFactor);
+	shoreDarkeningAbsorption = rainDarkeningAbsorption;
+#		endif
+#		if defined(SKYLIGHTING)
+	float wetnessOcclusion = 0.0;
+	float openSkyVisibility = 0.0;
+	if (inWorld) {
+		float wetnessOcclusionBase = saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1)));
+		openSkyVisibility = wetnessOcclusionBase;
+		// Keep skylighting influence subtle for wetness so probe refresh latency does not
+		// create a player-following dark spotlight on terrain.
+		float wetnessOcclusionStable = max(wetnessOcclusionBase, 0.90);
+		wetnessOcclusion = lerp(1.0, wetnessOcclusionStable, 0.12);
+	}
+#		else
+	float wetnessOcclusion = inWorld;
+	float openSkyVisibility = inWorld;
+#		endif
+	// Keep rain coverage from collapsing in overcast/rainy lighting.
+	wetnessOcclusion = lerp(wetnessOcclusion, max(wetnessOcclusion, 0.82), inRainBlend);
+
+	// Surface drying response should mainly act after rain has mostly stopped.
+	postRainBlend = 1.0 - smoothstep(0.02, 0.20, rainingAmount);
+	float surfaceDryingPower = 1.0;
+	float stoneDryingHours = clamp(CS_WETNESS_SETTINGS.StoneDryingMultiplier, 1.0, 24.0);
+	float dirtDryingHours = clamp(CS_WETNESS_SETTINGS.DirtDryingMultiplier, 1.0, 24.0);
+	float grassDryingHours = clamp(CS_WETNESS_SETTINGS.GrassDryingMultiplier, 1.0, 24.0);
+	float stoneDryingPower = 24.0 / stoneDryingHours;
+	float dirtDryingPower = 24.0 / dirtDryingHours;
+	float grassDryingPower = 24.0 / grassDryingHours;
+	float dryingOverrideAmount = abs(stoneDryingPower - 1.0) +
+		abs(dirtDryingPower - 1.0) +
+		abs(grassDryingPower - 1.0);
+	[branch] if (postRainBlend > 0.0 && dryingOverrideAmount > 1e-3) {
+		// Surface response model for post-rain drying:
+		// stone/wood first, grass next, dirt last (via per-surface drying times in hours).
+		float surfaceDryingMultiplier =
+			stoneFactor * stoneDryingPower +
+			dirtFactor * dirtDryingPower +
+			vegetationFactor * grassDryingPower;
+
+#		if defined(SKIN) || defined(HAIR)
+		surfaceDryingMultiplier = dirtDryingPower;
+#		endif
+
+		surfaceDryingMultiplier = max(surfaceDryingMultiplier, 0.05);
+		surfaceDryingPower = lerp(1.0, surfaceDryingMultiplier, postRainBlend);
+	}
+
+	// Calculate raindrop effects
+	float4 raindropInfo = float4(0, 0, 1, 0);
+	float raindropRange = max(1.0, CS_WETNESS_SETTINGS.RaindropFxRange);
+	float maxRainDropDistance = raindropRange * raindropRange * 3.0;
+	float rainDropDistance = dot(viewPosition, viewPosition);
+	float distanceFadeout = saturate((1.0 - saturate(rainDropDistance / maxRainDropDistance)) * 3.0);
+	float localRainOcclusion = 1.0;
+	const float puddleOcclusionPhase = saturate(max(inRainBlend, postRainBlend));
+	float roofLikeMask = smoothstep(0.35, 0.92, 1.0 - saturate(openSkyVisibility));
+	const bool raindropFxActive =
+		rainSurfaceUpness > 0.05 &&
+		CS_WETNESS_SETTINGS.Raining > 0.0f &&
+		(CS_WETNESS_SETTINGS.EnableRaindropFx != 0) &&
+		(rainDropDistance < maxRainDropDistance);
+	const bool raindropOcclusionNeeded = raindropFxActive && inRainBlend > 0.0;
+	const bool shelterOcclusionNeeded = puddleOcclusionPhase * roofLikeMask > 1e-3;
+	if ((raindropOcclusionNeeded || shelterOcclusionNeeded) && hasOcclusionViewProj) {
+		float4 precipOcclusionTexCoord = mul(CS_WETNESS_SETTINGS.OcclusionViewProj, float4(input.WorldPosition.xyz, 1));
+		precipOcclusionTexCoord.y = -precipOcclusionTexCoord.y;
+		float2 precipOcclusionUV = precipOcclusionTexCoord.xy * 0.5 + 0.5;
+		float2 clampedPrecipOcclusionUV = saturate(precipOcclusionUV);
+		float2 occlusionOutsideDelta = abs(precipOcclusionUV - clampedPrecipOcclusionUV);
+		float occlusionDomainBlend = saturate(1.0 - max(occlusionOutsideDelta.x, occlusionOutsideDelta.y) * 8.0);
+		float precipOcclusionZ = CS_TEX_PRECIP_OCCLUSION.SampleLevel(SampColorSampler, clampedPrecipOcclusionUV, 0).x;
+		float2 occlusionUvMargin = min(clampedPrecipOcclusionUV, 1.0 - clampedPrecipOcclusionUV);
+		float occlusionEdgeFade = saturate(min(occlusionUvMargin.x, occlusionUvMargin.y) * 16.0);
+		float occlusionValidity = occlusionDomainBlend * occlusionEdgeFade;
+		float occlusionPass = (precipOcclusionTexCoord.z < precipOcclusionZ + 0.05) ? 1.0 : 0.0;
+		localRainOcclusion = lerp(1.0, occlusionPass, occlusionValidity);
+	}
+	// Keep strict occlusion for raindrop spawning, but make puddle/wet-film exposure
+	// effectively ignore local precipitation masking on open ground. This avoids the
+	// impression that wet highlights are attached to the player while still preserving
+	// shelter behavior in clearly roof-like low-sky areas.
+	float puddleOcclusionSoft = lerp(0.72, 1.0, localRainOcclusion);
+	float puddleOcclusion = lerp(puddleOcclusionSoft, localRainOcclusion, roofLikeMask);
+	float puddleOcclusionInfluence = roofLikeMask * roofLikeMask;
+	float puddleRainExposure = lerp(1.0, puddleOcclusion, puddleOcclusionPhase * puddleOcclusionInfluence);
+	[branch] if (inRainBlend > 0.0) {
+		// Open-sky bypass for puddles: use up-facing slope + ambient sky visibility,
+		// independent of direct sun intensity, so cloudy weather still qualifies.
+		float openSkyUpness = smoothstep(0.55, 0.96, rainSurfaceUpness);
+		float openSkyAmbient = smoothstep(0.35, 0.75, saturate(openSkyVisibility));
+		float openSkyMask = openSkyUpness * openSkyAmbient;
+		puddleRainExposure = lerp(puddleRainExposure, 1.0, openSkyMask);
+	}
+	if (raindropFxActive) {
+		float raindropFade = localRainOcclusion * distanceFadeout;
+
+		if (raindropFade > 0.0)
+#		if defined(SKINNED)
+				raindropInfo = CS_GET_RAIN_DROPS(input.ModelPosition.xyz, CS_WETNESS_SETTINGS.Time, worldNormal, raindropFade);
+#		elif defined(DEFERRED)
+				raindropInfo = CS_GET_RAIN_DROPS(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, CS_WETNESS_SETTINGS.Time, worldNormal, raindropFade);
+#		else
+				raindropInfo = CS_GET_RAIN_DROPS(!FrameBuffer::FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, CS_WETNESS_SETTINGS.Time, worldNormal, raindropFade);
+#		endif
+		raindropInfo.w *= raindropFade;
+	}
+	raindropWetness = raindropInfo.w;
+
+	// Calculate different wetness types
+	rainWetness = CS_WETNESS_SETTINGS.Wetness * minWetnessAngle * CS_WETNESS_SETTINGS.MaxRainWetness;
+	puddleWetness = CS_WETNESS_SETTINGS.PuddleWetness * minWetnessAngle;
+
+	// In-rain surface onset order:
+	// stone wets first, then dirt, then grass.
+	const float stoneRainStage = smoothstep(0.02, 0.12, rainingAmount);
+	const float dirtRainStage = smoothstep(0.10, 0.30, rainingAmount);
+	const float grassRainStage = smoothstep(0.22, 0.50, rainingAmount);
+	float surfaceRainCoverage = stoneFactor * stoneRainStage + dirtFactor * dirtRainStage + vegetationFactor * grassRainStage;
+	// Prevent near-field "dry islands" while preserving onset order.
+	surfaceRainCoverage = max(surfaceRainCoverage, 0.30 * inRainBlend);
+	float inRainWetnessScale = lerp(0.90, 1.20, surfaceRainCoverage);
+	rainWetness *= lerp(1.0, inRainWetnessScale, inRainBlend);
+	puddleWetness *= lerp(1.0, inRainWetnessScale * 1.10, inRainBlend);
+	puddleWetness *= puddleRainExposure;
+
+#		if defined(SKIN)
+	rainWetness = CS_WETNESS_SETTINGS.SkinWetness * CS_WETNESS_SETTINGS.Wetness;
+#		endif
+#		if defined(HAIR)
+	rainWetness = CS_WETNESS_SETTINGS.SkinWetness * CS_WETNESS_SETTINGS.Wetness * 0.8f;
+#		endif
+
+	float wetnessOcclusionMix = lerp(1.0, wetnessOcclusion, 0.35);
+	rainWetness *= wetnessOcclusionMix;
+	puddleWetness *= wetnessOcclusionMix;
+
+	// Apply per-surface post-rain drying response (neutral at multiplier=1.0).
+	rainWetness = pow(saturate(rainWetness), surfaceDryingPower);
+	// Keep puddle visual persistence decoupled from surface drying sliders.
+	// Puddle timing is controlled by the CPU puddle timeline (manual or weather-driven puddle hours).
+	puddleWetness = saturate(puddleWetness);
+	// Trim residual low-end surface gloss after rain so ground does not look wet forever.
+	float postRainDryCut = lerp(0.0, 0.08, postRainBlend);
+	rainWetness = saturate((rainWetness - postRainDryCut) / max(1e-3, 1.0 - postRainDryCut));
+	float rainFilmWetness = saturate(max(rainWetness, raindropWetness * inRainBlend));
+	if (!wetSurfaceAllowed) {
+		rainWetness = 0.0;
+		rainFilmWetness = 0.0;
+		puddleWetness = 0.0;
+	}
+	if (!puddleSurfaceAllowed) {
+		puddleWetness = 0.0;
+	}
+
+	float shoreWetness = shoreFactor * CS_WETNESS_SETTINGS.MaxShoreWetness;
+	float rainContactFilmScale = sqrt(max(0.0, rainContactWetnessScale)) * 1.35;
+	float rainContactMask = saturate(rainFilmWetness * wetnessDistanceFade);
+	float rainContactSlopeMask = smoothstep(0.32, 0.95, rainSurfaceUpness);
+	float rainContactBase = saturate(rainContactMask * rainContactSlopeMask);
+	rainContactVisible = saturate(rainContactBase * rainContactFilmScale);
+
+	// Calculate puddle effects
+	// Keep broad rain-contact wetness separate from standing-water puddle formation.
+	// Never form puddles on water surfaces.
+	const bool puddleAllowed = puddleSurfaceAllowed;
+	float puddle = 0.0;
+	float puddleFootprintMask = 0.0;
+	const float gameUnitsPerMeter = (1.0 / 0.01428);
+	const float puddleRadiusMin = 0.15 * gameUnitsPerMeter;
+	const float puddleRadiusMax = 50.0 * gameUnitsPerMeter;
+	#		if !defined(SKINNED)
+		const bool puddleRuntimeActive = puddleAllowed && puddleWetness > 0.0 && wetnessDistanceFade > 0.0;
+		if (puddleRuntimeActive) {
+			float puddleMaxAngleSafe = max(CS_WETNESS_SETTINGS.PuddleMaxAngle, 1e-3);
+			float puddleSlopeStart = max(0.0, puddleMaxAngleSafe * 0.45);
+			float puddleSlopeEnd = min(1.0, max(puddleSlopeStart + 1e-3, puddleMaxAngleSafe));
+			float puddleSlopeMask = smoothstep(puddleSlopeStart, puddleSlopeEnd, saturate(worldNormal.z));
+			// Slope gate is exact: if this is zero, downstream puddle/noise terms are guaranteed to be zero.
+			if (puddleSlopeMask > 0.0) {
+				float puddleRadiusSafe = max(CS_WETNESS_SETTINGS.PuddleRadius, 1e-3);
+				float puddleRadiusT = saturate((puddleRadiusSafe - puddleRadiusMin) / max(1e-3, puddleRadiusMax - puddleRadiusMin));
+				float puddleFootprintT = sqrt(puddleRadiusT);
+				float puddleFootprintThreshold = lerp(0.72, 0.20, puddleFootprintT);
+				float puddleFootprintSoftness = lerp(0.08, 0.22, puddleFootprintT);
+
+				float puddleLayoutSafe = clamp(CS_WETNESS_SETTINGS.PuddleLayout, 0.3, 10.0);
+				float3 puddleCoordsBase = ((input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz) * 0.5 + 0.5) * 0.01;
+				float layoutT = saturate((puddleLayoutSafe - 0.3) / 9.7);
+				float layoutFrequency = lerp(0.75, 2.10, layoutT);
+				float3 layoutSeed = float3(12.7, 19.1, 23.3) * puddleLayoutSafe;
+				float layoutWarpStrength = lerp(0.0, 0.38, layoutT);
+				float layoutWarp = 0.0;
+				// Keep exact look: only skip layout-warp noise when warp strength is exactly zero.
+				if (layoutWarpStrength > 0.0) {
+					layoutWarp = Random::perlinNoise(puddleCoordsBase * lerp(0.22, 0.72, layoutT) + layoutSeed) * 2.0 - 1.0;
+				}
+				float3 puddlePatternOffset = float3(31.0, 17.0, 43.0) * layoutT;
+				float3 puddleCoords = puddleCoordsBase * layoutFrequency + layoutWarp * float3(0.20, 0.14, 0.18) * layoutWarpStrength + puddlePatternOffset;
+				float puddleNoiseSignal = Random::perlinNoise(puddleCoords) * 0.5 + 0.5;
+				float puddleSignal = puddleNoiseSignal;
+				float puddleRadiusGate = smoothstep(
+					puddleFootprintThreshold - puddleFootprintSoftness,
+					puddleFootprintThreshold + puddleFootprintSoftness,
+					puddleNoiseSignal);
+				puddleSignal = puddleSignal * ((minWetnessAngle / puddleMaxAngleSafe) * CS_WETNESS_SETTINGS.MaxPuddleWetness * 0.25) + 0.5;
+				float puddleBlend = puddleWetness;
+				puddleFootprintMask = puddleRadiusGate * puddleSlopeMask;
+				puddle = puddleSignal * puddleBlend * puddleSlopeMask * puddleRadiusGate;
+			}
+		}
+	#		endif
+		puddle *= puddleRainExposure;
+		puddle *= saturate(wetnessOcclusion * 2.0);
+		// Match the old dev culling targets by fading puddle-driven wetness with view depth.
+		puddle *= wetnessDistanceFade;
+		float puddleDepthSignal = saturate(puddle);
+		float puddleSpecularBase = puddleDepthSignal;
+
+	float puddleSpecularBaseSaturated = saturate(puddleSpecularBase);
+	float wetPuddleSpecular = puddleSpecularBaseSaturated;
+	wetPuddleSpecular = lerp(wetPuddleSpecular, wetPuddleSpecular * shoreFactor, input.WorldPosition.z < waterHeight);
+	// Thin rain-contact sheen: broad enough to show wet ground and raindrop hits,
+	// but kept separate from standing-water puddles.
+	float wetFilmSource = rainContactVisible;
+	float wetFilmFloorScale = max(0.0, CS_WETNESS_SETTINGS.WetFilmSpecularFloorScale);
+	float wetFilmFloorResponse = lerp(0.50, 1.45, saturate(wetFilmFloorScale * (1.0 / 3.0)));
+	float wetFilmRainExposure = lerp(1.0, puddleRainExposure, wetFilmInRainBlend * 0.10 * rainContactSlopeMask);
+	wetFilmRainExposure = max(wetFilmRainExposure, lerp(1.0, 0.84, wetFilmInRainBlend));
+	float wetFilmSpecular = saturate(wetFilmSource * lerp(0.42, 0.78, wetFilmInRainBlend) * wetFilmRainExposure * wetFilmFloorResponse);
+	wetFilmSpecular *= rainContactSlopeMask;
+	wetFilmSpecular *= lerp(1.0, 1.25, inRainFilmSpecularBoostFromBalance * wetFilmInRainBlend);
+	// Keep post-rain readability focused on puddles rather than a broad uniform sheen.
+	wetFilmSpecular *= lerp(1.0, 0.28, wetFilmPostRainBlend);
+	// Match the legacy Wetness Effects shore mask: no extra height or slope gate.
+	float shoreWetnessSpecular = saturate(shoreWetness);
+	float puddleWaterThreshold = lerp(CS_WETNESS_SETTINGS.PuddleMinWetness, CS_WETNESS_SETTINGS.PuddleMinWetness * 0.8, inRainBlend);
+	float puddleWaterStart = min(puddleWaterThreshold, 0.98);
+	float puddleWaterFull = lerp(0.78, 0.88, inRainBlend);
+	puddleWaterFull = min(max(puddleWaterFull, puddleWaterStart + 0.08), 1.0);
+	float deepPuddleMask = smoothstep(puddleWaterStart, puddleWaterFull, puddleSpecularBaseSaturated);
+	wetSurfaceDarkeningMask = saturate(max(max(rainContactBase, puddleSpecularBaseSaturated), shoreWetnessDarkeningMask));
+	float puddleCoverageMask = saturate(puddleFootprintMask * smoothstep(0.55, 0.85, puddleSpecularBaseSaturated));
+	nonPuddleFilmMask = 1.0 - puddleCoverageMask;
+	wetPuddleSkyReflectionScale = lerp(1.0, puddleSkyReflectionScale, puddleCoverageMask);
+	float wetFilmSpecularNonPuddle = wetFilmSpecular * nonPuddleFilmMask;
+	float shoreWetnessSpecularNonPuddle = shoreWetnessSpecular * nonPuddleFilmMask;
+	wetnessGlossinessAlbedo = max(puddle, shoreWetnessAlbedo);
+	wetnessGlossinessAlbedo *= wetnessGlossinessAlbedo;
+	float rainPuddlePhase = saturate(inRainBlend * deepPuddleMask);
+	float postRainOverridePhaseCandidate = saturate(postRainBlend * smoothstep(0.36, 0.88, puddleDepthSignal));
+	const bool postRainVisible =
+		postRainBlend > 1e-4 &&
+		max(max(postRainOverridePhaseCandidate, wetFilmSpecular), puddleSpecularBaseSaturated) > 1e-4;
+	float postRainDirectScale = 1.0;
+	float postRainGlossScale = 1.0;
+	float postRainSpecBoostCurve = 0.0;
+	float postRainMirrorMix = 1.0;
+	if (postRainVisible) {
+		// Post-rain shine control:
+		// - 0..2.5 reduces post-rain puddle reflection intensity.
+		// - 2.5 is neutral/current intensity.
+		// - 2.5..5 increases intensity.
+		// This controls direct/gloss puddle sheen; cubemap reflection strength is
+		// driven by Post-Rain Water Clarity and scaled by this intensity control.
+		float postRainShineControl = clamp(postRainPuddleWaterStrength, 0.0, 5.0);
+		const float postRainShineNeutral = 2.5;
+		float postRainShineReduceT = saturate(postRainShineControl / postRainShineNeutral);
+		float postRainShineBoostT = saturate((postRainShineControl - postRainShineNeutral) / max(1e-3, 5.0 - postRainShineNeutral));
+		float postRainShineCubemapScale = 1.0;
+		postRainDirectScale = 0.82;
+		postRainGlossScale = 0.95;
+		if (postRainShineControl <= postRainShineNeutral) {
+			postRainShineCubemapScale = lerp(0.06, 1.0, postRainShineReduceT);
+			postRainDirectScale = lerp(0.06, 0.82, postRainShineReduceT);
+			postRainGlossScale = lerp(0.60, 0.95, postRainShineReduceT);
+		} else {
+			postRainShineCubemapScale = lerp(1.0, 3.20, postRainShineBoostT);
+			postRainDirectScale = lerp(0.82, 1.15, postRainShineBoostT);
+			postRainGlossScale = lerp(0.95, 1.28, postRainShineBoostT);
+		}
+
+		// Preserve clearer water appearance after rain by shaping mid-range puddle values upward.
+		float postRainSpecularPower = lerp(1.0, 0.75, saturate(postRainBlend * postRainShineBoostT));
+		wetPuddleSpecular = lerp(puddleSpecularBaseSaturated, saturate(pow(puddleSpecularBaseSaturated, postRainSpecularPower)), postRainBlend);
+		wetPuddleSpecular = lerp(wetPuddleSpecular, wetPuddleSpecular * shoreFactor, input.WorldPosition.z < waterHeight);
+
+		// Keep the post-rain cubemap override focused on clearly puddled areas.
+		// Broad wet film should not jump to a near-mirror state the moment rain stops.
+		postRainOverridePhase = postRainOverridePhaseCandidate;
+		postRainSpecBoostCurve = smoothstep(0.0, 1.0, postRainSpecBoostFromClarity);
+		postRainMirrorMix = 1.0 - postRainSpecBoostCurve;
+		// Post-rain cubemap scaling now layers on top of the user's general Wet Reflection
+		// setting instead of replacing it outright. Keep the modifier near 1.0 so the
+		// global wet reflection scale remains the dominant control.
+		float postRainClarityCubemapScale = lerp(1.15, 0.65, postRainSpecBoostCurve);
+		postRainPuddleReflectionOverrideScale = clamp(postRainClarityCubemapScale * postRainShineCubemapScale, 0.25, 1.6);
+	}
+
+	wetnessGlossinessSpecular = max(wetPuddleSpecular, max(wetFilmSpecularNonPuddle, shoreWetnessSpecularNonPuddle));
+	float wetFilmNonPuddleSpecular = max(wetFilmSpecularNonPuddle, shoreWetnessSpecularNonPuddle);
+	float wetFilmDominance = saturate(wetFilmNonPuddleSpecular / max(wetnessGlossinessSpecular, 1e-3));
+	// Keep wet-film looking like clear wetness (env reflection / darker surface) rather
+	// than milky white direct-light glare when puddle coverage is low.
+	float wetFilmDirectScale = lerp(0.55, 0.78, inRainFilmSpecularBoostFromBalance);
+	wetDirectSpecularScale = lerp(1.0, wetFilmDirectScale, wetFilmDominance * saturate(wetFilmFloorScale * 0.85));
+	// Rain phase: keep puddles wet-looking but reduce bright/milky white shine.
+	wetDirectSpecularScale *= lerp(1.0, 0.24, rainPuddlePhase);
+	wetnessGlossinessSpecular *= lerp(1.0, 0.88, rainPuddlePhase);
+	// Rain Reflection Balance compensation is applied to the thin wet film above.
+	// Deep puddles keep their normal rain-time response.
+	[branch] if (postRainVisible) {
+		// Post-rain phase: constrain direct white highlight while preserving cubemap clarity.
+		wetDirectSpecularScale *= lerp(1.0, postRainDirectScale, postRainOverridePhase);
+		wetnessGlossinessSpecular *= lerp(1.0, postRainGlossScale, postRainOverridePhase);
+		float postRainDirectMirrorScale = lerp(1.0, 0.82, postRainMirrorMix);
+		wetDirectSpecularScale *= lerp(1.0, postRainDirectMirrorScale, postRainOverridePhase * 0.90);
+		float postRainSpecBoostScale = lerp(1.0, 2.45, postRainSpecBoostCurve);
+		wetnessGlossinessSpecular *= lerp(1.0, postRainSpecBoostScale, postRainOverridePhase);
+		float postRainDirectSpecCompensation = lerp(1.0, 0.82, postRainSpecBoostCurve);
+		wetDirectSpecularScale *= lerp(1.0, postRainDirectSpecCompensation, postRainOverridePhase * 0.75);
+	}
+	[branch] if (postRainVisible) {
+		postRainPuddleReflectionOverrideScale = clamp(
+			postRainPuddleReflectionOverrideScale,
+			0.25,
+			1.9);
+	}
+	wetnessGlossinessSpecular = saturate(wetnessGlossinessSpecular * lerp(1.0, 1.90, deepPuddleMask));
+
+	// Update flatness and normal calculations
+	float flatnessAmount = smoothstep(max(CS_WETNESS_SETTINGS.PuddleMaxAngle, 0.0), 1.0, minWetnessAngle);
+	float puddleMinWetness = puddleWaterThreshold;
+	float puddleFlatness = smoothstep(puddleMinWetness, 1.0, wetPuddleSpecular);
+	float rainFilmFlatness = smoothstep(0.04, 0.22, wetFilmSpecularNonPuddle) * wetFilmInRainBlend * 0.16;
+	float shoreFilmFlatness = shoreWetnessSpecularNonPuddle * 0.10;
+	flatnessAmount *= max(puddleFlatness, max(rainFilmFlatness, shoreFilmFlatness));
+	flatnessAmount = saturate(lerp(flatnessAmount, 1.0, deepPuddleMask * 0.92));
+
+	wetnessNormal = normalize(lerp(wetnessNormal, float3(0, 0, 1), flatnessAmount));
+
+		// Apply ripple normal effects
+		if (any(raindropInfo.xyz != float3(0, 0, 1))) {
+			float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(1.0, flatnessAmount, 0.8)));
+			wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
+		}
+
+	// Suppress grazing-angle over-brightening: keep wet gloss from top-down views,
+	// but reduce "milky white" highlights when viewed close to horizontal.
+	float wetnessViewNdotV = saturate(abs(dot(wetnessNormal, viewDirection)));
+	float wetHighlightMask = smoothstep(0.03, 0.18, wetFilmNonPuddleSpecular);
+	float wetHighlightReduction = max(0.25, CS_WETNESS_SETTINGS.WetHighlightReduction);
+	float highlightReductionT = saturate((wetHighlightReduction - 1.0) / 9.0);
+	float highlightReductionCurve = (highlightReductionT * highlightReductionT) * wetHighlightMask;
+	float highlightRelaxT = saturate((1.0 - wetHighlightReduction) / 0.75) * wetHighlightMask;
+	float grazingMask = 1.0 - smoothstep(0.10, 0.60, wetnessViewNdotV);
+	float grazingMinAttenuation = 0.45;
+	grazingMinAttenuation = lerp(grazingMinAttenuation, 0.01, highlightReductionCurve);
+	grazingMinAttenuation = lerp(grazingMinAttenuation, 0.80, highlightRelaxT);
+	float wetnessGrazingAttenuation = saturate(lerp(1.0, grazingMinAttenuation, grazingMask));
+	wetnessGrazingAttenuation = lerp(1.0, wetnessGrazingAttenuation, wetHighlightMask);
+	wetnessGlossinessSpecular *= wetnessGrazingAttenuation;
+	// Persistent shore wetness is a dry-weather damp film control. Keep it visible even
+	// when the generic wet-film grazing suppression removes rain/puddle glare.
+	wetnessGlossinessSpecular = max(wetnessGlossinessSpecular, shoreWetnessSpecularNonPuddle);
+	wetHighlightReflectanceScale = lerp(1.0, wetnessGrazingAttenuation, saturate(0.30 * wetHighlightMask + highlightReductionCurve));
+	float wetHighlightViewDistance = abs(viewPosition.z);
+	float farWhiteDistanceMask = smoothstep(2048.0, 8192.0, wetHighlightViewDistance);
+	float farGrazingWhiteMask = saturate(grazingMask * farWhiteDistanceMask);
+	float farWhiteSuppression = farGrazingWhiteMask * highlightReductionCurve;
+	wetDirectSpecularScale *= lerp(1.0, 0.18, farWhiteSuppression);
+	wetHighlightReflectanceScale *= lerp(1.0, 0.65, farWhiteSuppression);
+	// Reflection phase shaping:
+	// - During rain: suppress wet cubemap reflections on thin rain film / shoreline dampness.
+	// - Deep puddles keep their normal cubemap response already during rain.
+	// - After rain: puddle cubemap response is set through the post-rain reflection
+	//   scale override path below.
+	float rainWetSurfaceMask = smoothstep(0.03, 0.20, max(rainContactVisible * nonPuddleFilmMask, shoreWetnessSpecularNonPuddle));
+	float rainReflectionBalanceCurve = inRainCubemapSuppressionFromBalance * inRainCubemapSuppressionFromBalance;
+	float rainCubemapSuppressionStrength = lerp(0.03, 0.32, rainReflectionBalanceCurve);
+	wetRainCubemapSuppression = saturate(wetFilmInRainBlend * rainWetSurfaceMask * rainCubemapSuppressionStrength);
+	wetHighlightReflectanceScale *= (1.0 - wetRainCubemapSuppression);
+
+	float wetRoughnessScale = lerp(0.97, 0.995, postRainOverridePhase * postRainSpecBoostCurve);
+	waterRoughnessSpecular = 1.0 - wetnessGlossinessSpecular * wetRoughnessScale;
+	}
+	const bool wetSpecularEnabled = wetnessEnabled;
+#	elif defined(WETNESS_EFFECTS)
 	// Initialize wetness parameters
 	float wetness = 0.0;
 	float3 wetnessNormal = vertexNormal.xyz;
@@ -2381,7 +2919,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 		float3 ripplePosition = !FrameBuffer::FrameParams.y ? input.ModelPosition.xyz : input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 #		endif
-		raindropInfo = WetnessEffects::GetRainDrops(ripplePosition, SharedData::wetnessEffectsSettings.Time, wetnessNormal, flatnessAmount);
+		raindropInfo = CS_GET_RAIN_DROPS(ripplePosition, SharedData::wetnessEffectsSettings.Time, wetnessNormal, flatnessAmount);
 	}
 
 	// Calculate different wetness types
@@ -2426,7 +2964,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Apply ripple normal effects
 	float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
-	wetnessNormal = WetnessEffects::ReorientNormal(rippleNormal, wetnessNormal);
+	wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
 
 	waterRoughnessSpecular = saturate(1.0 - wetnessGlossinessSpecular);
 #	endif
@@ -2532,6 +3070,30 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 lodLandDiffuseColor = 0;
 
+#	if defined(WETTERNESS)
+	float3 wetReflectionModeConfig = 0.0.xxx;
+	float3 wetReflectionModeConfigDirect = 0.0.xxx;
+	WetnessDirectLightingParams wetDirectLightingParams = (WetnessDirectLightingParams)0;
+	const bool wetLightingVisible = wetSpecularEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
+	bool wetDirectLightingVisible = false;
+	bool wetIndirectLightingVisible = false;
+	[branch] if (wetLightingVisible) {
+		wetReflectionModeConfig = GetWetReflectionModeConfig(CS_WETNESS_SETTINGS.WetIndirectSpecularScale);
+		if (postRainOverridePhase > 1e-4) {
+			// Post-rain puddles keep the general Wet Reflection scale as the baseline.
+			// The post-rain controls only bias that baseline up or down.
+			wetReflectionModeConfig.z = lerp(
+				wetReflectionModeConfig.z,
+				wetReflectionModeConfig.z * postRainPuddleReflectionOverrideScale,
+				postRainOverridePhase);
+		}
+		wetReflectionModeConfigDirect = wetReflectionModeConfig;
+		wetReflectionModeConfigDirect.z *= wetDirectSpecularScale;
+		wetDirectLightingVisible = wetReflectionModeConfigDirect.z > 1e-4;
+		wetIndirectLightingVisible = wetReflectionModeConfig.z > 1e-4 && wetHighlightReflectanceScale > 1e-4;
+	}
+#	endif
+
 	// Directiontal Lighting
 	DirectContext dirLightContext;
 	DirectLightingOutput dirLightOutput;
@@ -2547,10 +3109,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif
 
+#	if defined(WETTERNESS)
+	if (wetDirectLightingVisible) {
+		wetDirectLightingParams = CreateWetnessDirectLightingParams(wetnessNormal, dirLightContext.viewDir, waterRoughnessSpecular, wetReflectionModeConfigDirect);
+		wetDirectLightingVisible = wetDirectLightingParams.enabled > 0.0;
+	}
+#	endif
+
 	EvaluateLighting(dirLightContext, material, tbnTr, uvOriginal, dirLightOutput);
-#	if defined(WETNESS_EFFECTS)
+	dirLightOutput.diffuse = SanitizeFloat3(dirLightOutput.diffuse);
+	dirLightOutput.specular = SanitizeFloat3(dirLightOutput.specular);
+	dirLightOutput.transmission = SanitizeFloat3(dirLightOutput.transmission);
+#	if defined(TRUE_PBR)
+	dirLightOutput.coatDiffuse = SanitizeFloat3(dirLightOutput.coatDiffuse);
+#	endif
+#	if defined(WETTERNESS)
+		if (wetDirectLightingVisible)
+		EvaluateWetnessLighting(wetnessNormal, dirLightContext, waterRoughnessSpecular, wetDirectLightingParams, dirLightOutput);
+#	elif defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1)
-		EvaluateWetnessLighting(wetnessNormal, dirLightContext, waterRoughnessSpecular, dirLightOutput);
+		CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, dirLightContext, waterRoughnessSpecular, dirLightOutput);
 #	endif
 
 	lightsDiffuseColor += dirLightOutput.diffuse;
@@ -2569,7 +3147,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		float3 lightDirection = PointLightPosition[eyeIndex * numLights + lightIndex].xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
-		float intensityFactor = saturate(lightDist / PointLightPosition[lightIndex].w);
+		if (lightDist <= EPSILON_DIVISION)
+			continue;
+		float lightRadius = max(PointLightPosition[eyeIndex * numLights + lightIndex].w, EPSILON_DIVISION);
+		float intensityFactor = saturate(lightDist / lightRadius);
 		if (intensityFactor == 1)
 			continue;
 
@@ -2582,7 +3163,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 		}
 
-		float3 normalizedLightDirection = normalize(lightDirection);
+		float3 normalizedLightDirection = lightDirection / lightDist;
 
 		DirectContext pointLightContext;
 		DirectLightingOutput pointLightOutput;
@@ -2608,9 +3189,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 #			endif
 		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, pointLightOutput);
-#			if defined(WETNESS_EFFECTS)
+		pointLightOutput.diffuse = SanitizeFloat3(pointLightOutput.diffuse);
+		pointLightOutput.specular = SanitizeFloat3(pointLightOutput.specular);
+		pointLightOutput.transmission = SanitizeFloat3(pointLightOutput.transmission);
+#			if defined(TRUE_PBR)
+		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
+#			endif
+#			if defined(WETTERNESS)
+			if (wetDirectLightingVisible)
+			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
+#			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
-			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
+			CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
 #			endif
 		lightsDiffuseColor += pointLightOutput.diffuse;
 		lightsSpecularColor += pointLightOutput.specular;
@@ -2647,6 +3237,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
+		if (lightDist <= EPSILON_DIVISION)
+			continue;
 
 #			if defined(ISL)
 		float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
@@ -2671,7 +3263,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 		}
 
-		float3 normalizedLightDirection = normalize(lightDirection);
+		float3 normalizedLightDirection = lightDirection / lightDist;
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
 		float3 refractedLightDirection = normalizedLightDirection;
@@ -2731,9 +3323,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 #			endif
 		EvaluateLighting(pointLightContext, material, tbnTr, uvOriginal, pointLightOutput);
-#			if defined(WETNESS_EFFECTS)
+		pointLightOutput.diffuse = SanitizeFloat3(pointLightOutput.diffuse);
+		pointLightOutput.specular = SanitizeFloat3(pointLightOutput.specular);
+		pointLightOutput.transmission = SanitizeFloat3(pointLightOutput.transmission);
+#			if defined(TRUE_PBR)
+		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
+#			endif
+#			if defined(WETTERNESS)
+			if (wetDirectLightingVisible)
+			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
+#			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1)
-			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
+			CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
 #			endif
 
 		lightsDiffuseColor += pointLightOutput.diffuse;
@@ -2840,7 +3441,58 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
-#	if defined(WETNESS_EFFECTS)
+#	if defined(WETTERNESS)
+#		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
+	// Persistent dry shoreline darkening uses the same shore wetness/range mask
+	// as legacy Wetness Effects, but remains available when rain runtime is dry.
+	float shorePersistentDarkeningMask = shoreWetnessDarkeningMask;
+	float shorePersistentDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.ShorePersistentDarkeningStrength);
+	shorePersistentDarkeningStrength = (shorePersistentDarkeningStrength < 1e-5) ? 0.0 : shorePersistentDarkeningStrength;
+	const bool shorePersistentDarkeningEnabled = shorePersistentDarkeningStrength > 1e-4 && shorePersistentDarkeningMask > 1e-4;
+	[branch] if (wetnessEnabled || shorePersistentDarkeningEnabled) {
+#			if defined(TRUE_PBR)
+#				if !defined(LANDSCAPE)
+	[branch] if ((PBRFlags & PBR::Flags::TwoLayer) != 0)
+	{
+		porosity = 0;
+	}
+	else
+#				endif
+	{
+		porosity = lerp(porosity, 0.0, saturate(sqrt(material.Metallic)));
+	}
+#			elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
+	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
+#			endif
+	float wetDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.WetDarkeningStrength);
+	float lodSafeWetDarkeningFade = 1.0;
+	float viewDistance = abs(viewPosition.z);
+	lodSafeWetDarkeningFade = 1.0 - smoothstep(4096.0, 12288.0, viewDistance);
+	wetDarkeningStrength *= lerp(0.65, 1.0, lodSafeWetDarkeningFade);
+	float rainDrivenWetness = wetSurfaceDarkeningMask;
+	float wetnessDarkeningAmount = porosity * rainDarkeningAbsorption * rainDrivenWetness * wetDarkeningStrength;
+	float rainWetVisualMask = smoothstep(0.02, 0.08, rainDrivenWetness);
+	float wetDarkeningBlend = saturate(0.8 * wetDarkeningStrength) * rainWetVisualMask;
+	wetDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
+	if (wetDarkeningBlend > 0.0 && (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
+		float3 wetDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount);
+		material.BaseColor = lerp(material.BaseColor, wetDarkenedBaseColor, wetDarkeningBlend);
+	}
+#			if !defined(SKIN) && !defined(HAIR)
+	[branch] if (shorePersistentDarkeningEnabled) {
+		float shoreDarkeningMask = shorePersistentDarkeningMask;
+		float shoreDarkeningAmount = porosity * shoreDarkeningAbsorption * shoreDarkeningMask * shorePersistentDarkeningStrength;
+		float shoreDarkeningBlend = saturate(0.5 * shorePersistentDarkeningStrength) * shoreDarkeningMask;
+		shoreDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
+		if (shoreDarkeningBlend > 0.0 && (shoreDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
+			float3 shoreDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + shoreDarkeningAmount);
+			material.BaseColor = lerp(material.BaseColor, shoreDarkenedBaseColor, shoreDarkeningBlend);
+		}
+	}
+#			endif
+	}
+#		endif
+#	elif defined(WETNESS_EFFECTS)
 #		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
 #			if defined(TRUE_PBR)
 #				if !defined(LANDSCAPE)
@@ -2912,9 +3564,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	GetIndirectLobeWeights(indirectLobeWeights, indirectContext, material, uvOriginal);
 
-#	if defined(WETNESS_EFFECTS)
+#	if defined(WETTERNESS)
 #		if defined(DYNAMIC_CUBEMAPS)
-	float3 wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
+	float3 wetnessReflectance = 0.0;
+	bool wetCubemapReflectanceVisible = false;
+	float3 wetCubemapSampleDirection = 0.0;
+	if (wetIndirectLightingVisible) {
+		wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext, wetReflectionModeConfig);
+		wetnessReflectance *= wetHighlightReflectanceScale * wetPuddleSkyReflectionScale;
+		wetCubemapReflectanceVisible = any(wetnessReflectance > 0.0);
+		if (wetCubemapReflectanceVisible) {
+			wetCubemapSampleDirection = reflect(-viewDirection, wetnessNormal);
+		}
+	}
+#		else
+	float3 wetnessReflectance = 0.0;
+#		endif
+#	elif defined(WETNESS_EFFECTS)
+#		if defined(DYNAMIC_CUBEMAPS)
+	float3 wetnessReflectance = CS_GET_WETNESS_INDIRECT(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
 #		else
 	float3 wetnessReflectance = 0.0;
 #		endif
@@ -3010,27 +3678,62 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	indirectLobeWeights.diffuse *= Color::PBRLightingScale;
 #	endif
 
+	float3 baseMaterialCubemapSpecular = indirectLobeWeights.specular;
+#	if defined(WETTERNESS) && defined(DYNAMIC_CUBEMAPS)
+	baseMaterialCubemapSpecular *= (1.0 - wetRainCubemapSuppression);
+#	endif
+
 #	if !defined(DEFERRED)
-	if (any(indirectLobeWeights.specular > 0)
-#		if defined(WETNESS_EFFECTS)
-		|| any(wetnessReflectance > 0)
-#		endif
-	)
 #		if defined(DYNAMIC_CUBEMAPS)
 #			if defined(SKYLIGHTING)
-		color.xyz += indirectLobeWeights.specular * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness, skylightingSH);
-#				if defined(WETNESS_EFFECTS)
-		if (waterRoughnessSpecular < 1)
-			color.xyz += wetnessReflectance * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, skylightingSH);
+	if (any(baseMaterialCubemapSpecular > 0))
+		color.xyz += baseMaterialCubemapSpecular * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness, skylightingSH));
+#				if defined(WETTERNESS)
+		if (wetCubemapReflectanceVisible)
+		{
+			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetCubemapSampleDirection, skylightingSH));
+			float wetCubemapClarityAmount = saturate(postRainBlend * postRainCubemapGlareReductionFromClarity);
+			if (wetCubemapClarityAmount > 1e-4) {
+				float wetCubemapClarityT = sqrt(smoothstep(0.0, 1.0, wetCubemapClarityAmount));
+				float wetCubemapLuma = max(1e-4, dot(wetCubemapIrradiance, float3(0.2126, 0.7152, 0.0722)));
+				float3 wetCubemapHue = wetCubemapIrradiance / wetCubemapLuma;
+				float compressedLuma = wetCubemapLuma / (1.0 + wetCubemapClarityT * 1.8 * wetCubemapLuma);
+				float3 glareReducedIrradiance = wetCubemapHue * compressedLuma;
+				glareReducedIrradiance *= lerp(1.0, 1.12, wetCubemapClarityT);
+				wetCubemapIrradiance = lerp(wetCubemapIrradiance, glareReducedIrradiance, wetCubemapClarityT);
+			}
+			color.xyz += wetnessReflectance * wetCubemapIrradiance;
+		}
+#				elif defined(WETNESS_EFFECTS)
+		if (waterRoughnessSpecular < 1 && any(wetnessReflectance > 0))
+			color.xyz += wetnessReflectance * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, skylightingSH));
 #				endif
 #			else
-		color.xyz += indirectLobeWeights.specular * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness);
-#				if defined(WETNESS_EFFECTS)
-		if (waterRoughnessSpecular < 1)
-			color.xyz += wetnessReflectance * DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular);
+	if (any(baseMaterialCubemapSpecular > 0))
+		color.xyz += baseMaterialCubemapSpecular * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness));
+#				if defined(WETTERNESS)
+		if (wetCubemapReflectanceVisible)
+		{
+			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetCubemapSampleDirection));
+			float wetCubemapClarityAmount = saturate(postRainBlend * postRainCubemapGlareReductionFromClarity);
+			if (wetCubemapClarityAmount > 1e-4) {
+				float wetCubemapClarityT = sqrt(smoothstep(0.0, 1.0, wetCubemapClarityAmount));
+				float wetCubemapLuma = max(1e-4, dot(wetCubemapIrradiance, float3(0.2126, 0.7152, 0.0722)));
+				float3 wetCubemapHue = wetCubemapIrradiance / wetCubemapLuma;
+				float compressedLuma = wetCubemapLuma / (1.0 + wetCubemapClarityT * 1.8 * wetCubemapLuma);
+				float3 glareReducedIrradiance = wetCubemapHue * compressedLuma;
+				glareReducedIrradiance *= lerp(1.0, 1.12, wetCubemapClarityT);
+				wetCubemapIrradiance = lerp(wetCubemapIrradiance, glareReducedIrradiance, wetCubemapClarityT);
+			}
+			color.xyz += wetnessReflectance * wetCubemapIrradiance;
+		}
+#				elif defined(WETNESS_EFFECTS)
+		if (waterRoughnessSpecular < 1 && any(wetnessReflectance > 0))
+			color.xyz += wetnessReflectance * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular));
 #				endif
 #			endif
 #		else
+	if (any(baseMaterialCubemapSpecular > 0))
 		color.xyz += indirectLobeWeights.specular * directionalAmbientColor;
 #		endif
 #	endif
@@ -3062,6 +3765,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)
 		color.xyz = lerp(color.xyz, fogColor, Color::FogAlpha(input.FogParam.w));
 #	endif
+
+	color.xyz = SanitizeFloat3(color.xyz);
+	specularColor = SanitizeFloat3(specularColor);
+	indirectLobeWeights.diffuse = SanitizeFloat3(indirectLobeWeights.diffuse);
+	indirectLobeWeights.specular = SanitizeFloat3(indirectLobeWeights.specular);
+	screenSpaceNormal = SafeNormalize3(screenSpaceNormal, float3(0.0, 0.0, 1.0));
+	if (!(material.Roughness == material.Roughness) || abs(material.Roughness) > 1.0e8) {
+		material.Roughness = 1.0;
+	} else {
+		material.Roughness = saturate(material.Roughness);
+	}
 
 #	if defined(TESTCUBEMAP) && defined(ENVMAP) && defined(DYNAMIC_CUBEMAPS)
 	baseColor.xyz = 0.0;
@@ -3226,7 +3940,19 @@ if (alpha - AlphaTestRefRS < 0) {
 	psout.Specular = float4(specularColor, psout.Diffuse.w);
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
-#		if defined(WETNESS_EFFECTS)
+#		if defined(WETTERNESS)
+	// Match rain-time indirect cubemap suppression in the deferred output. Without
+	// this, the flattened wet normal/low roughness can still make the base material
+	// reflect temporal sky cubemaps even after the explicit Wetterness lobe is muted.
+	float wetDeferredCubemapScale = 1.0 - saturate(wetRainCubemapSuppression);
+	float wetDeferredBlend = saturate(wetnessGlossinessSpecular * wetDeferredCubemapScale);
+	indirectLobeWeights.specular *= lerp(1.0, wetDeferredCubemapScale, saturate(wetnessGlossinessSpecular));
+	indirectLobeWeights.specular += wetnessReflectance;
+	if (waterRoughnessSpecular < 1) {
+		screenSpaceNormal = lerp(screenSpaceNormal, normalize(FrameBuffer::WorldToView(wetnessNormal, false, eyeIndex)), wetDeferredBlend);
+		material.Roughness = lerp(material.Roughness, waterRoughnessSpecular, wetDeferredBlend);
+	}
+#		elif defined(WETNESS_EFFECTS)
 	indirectLobeWeights.specular += wetnessReflectance;
 	if (waterRoughnessSpecular < 1) {
 		screenSpaceNormal = lerp(screenSpaceNormal, normalize(FrameBuffer::WorldToView(wetnessNormal, false, eyeIndex)), saturate(wetnessGlossinessSpecular));
@@ -3247,8 +3973,27 @@ if (alpha - AlphaTestRefRS < 0) {
 	psout.Parameters.w = psout.Diffuse.w;
 #		endif
 
-#		if defined(SSS) && defined(SKIN)
-	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
+#		if defined(SSS) && (defined(SKIN) || defined(HAIR))
+	float humanClass = 0.0;
+	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace)) {
+		humanClass = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsFemale) ? 2.0 : 1.0;
+	}
+
+	float sssMask = 0.0;
+#			if defined(SKIN)
+	sssMask = saturate(baseColor.a);
+#			elif defined(HAIR)
+	float a = saturate(baseColor.a);
+	// Fixed, low-cost transition mask for brow/hairline blending in Burley SSS.
+	// This avoids derivative/depth-gated behavior and keeps runtime cost stable.
+	const float kHairTransitionStrength = 0.35;
+	const float2 kHairTransitionEdgeRange = float2(0.02, 0.20);
+	const float2 kHairTransitionBandRange = float2(0.35, 0.70);
+	float edgeRamp = smoothstep(kHairTransitionEdgeRange.x, kHairTransitionEdgeRange.y, a);
+	float midBand = 1.0 - smoothstep(kHairTransitionBandRange.x, kHairTransitionBandRange.y, a);
+	sssMask = saturate(kHairTransitionStrength * edgeRamp * midBand);
+#			endif
+	psout.Masks = float4(saturate(sssMask), humanClass, Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
 #		else
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, psout.Diffuse.w);
 #		endif

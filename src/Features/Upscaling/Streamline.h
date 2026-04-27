@@ -35,6 +35,7 @@ public:
 	bool featureDLSS = false;
 	bool featureReflex = false;
 	bool featurePCL = false;
+	bool reflexSupportedOnCurrentAdapter = false;
 
 	sl::ViewportHandle viewport{ 0 };
 	sl::ViewportHandle viewportRight{ 1 };
@@ -98,10 +99,11 @@ public:
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
 
 	// Helper: Execute DLSS for a single viewport with given resources
-	void EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
+	bool EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
-		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth);
+		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
+		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
 
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
@@ -112,15 +114,19 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0);
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
 	bool EnsureFrameToken();
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	void SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width);
+	void SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height);
 	void InvalidateDLSSOptionsCache();
 
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
+	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
+		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
+		uint32_t renderWidth, uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,
+		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
 	void UpdateReflex();
 
 	void DestroyDLSSResources();

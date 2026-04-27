@@ -10,9 +10,12 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
+#include "VRAPI/CSpluginapi.h"
 #include "WeatherManager.h"
 
 #include "ENB/ENBSeriesAPI.h"
+
+#include <atomic>
 
 #define DLLEXPORT __declspec(dllexport)
 
@@ -27,10 +30,12 @@ namespace
 		if (globals::state) {
 			globals::state->pendingPostLoadRuntimeReset = true;
 		}
+		globals::game::quitGame.store(false, std::memory_order_release);
 		globals::OnDataLoaded();
 		WeatherManager::GetSingleton()->ClearCache();
 		globals::features::lightLimitFix.Reset();
 		globals::features::interiorSun.isInteriorWithSun = false;
+		globals::features::upscaling.RequestPostLoadRuntimeReset();
 	}
 }
 
@@ -130,8 +135,15 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				auto shaderCache = globals::shaderCache;
 				shaderCache->menuLoaded = true;
-				while (shaderCache->IsCompiling() && !shaderCache->backgroundCompilation) {
+				while (shaderCache->IsCompiling() &&
+				       !shaderCache->IsBackgroundCompilation() &&
+				       !globals::game::quitGame.load(std::memory_order_relaxed)) {
 					std::this_thread::sleep_for(100ms);
+				}
+
+				if (globals::game::quitGame.load(std::memory_order_relaxed)) {
+					logger::info("Game was closed, skipping feature DataLoaded methods");
+					break;
 				}
 
 				if (shaderCache->IsDiskCache()) {
@@ -165,7 +177,7 @@ bool Load()
 	}
 
 	if (REL::Module::IsVR()) {
-		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.207.0", true);
+		REL::IDDatabase::get().IsVRAddressLibraryAtLeastVersion("0.200.0", true);
 	}
 
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");
@@ -174,7 +186,20 @@ bool Load()
 	}
 
 	auto messaging = SKSE::GetMessagingInterface();
-	messaging->RegisterListener("SKSE", MessageHandler);
+	if (!messaging) {
+		logger::error("SKSE messaging interface unavailable");
+		return false;
+	}
+
+	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
+		logger::error("Failed to register SKSE message listener");
+		return false;
+	}
+
+	if (!messaging->RegisterListener(nullptr, CSPluginAPI::ModMessageHandler)) {
+		logger::error("Failed to register Community Shaders API message listener");
+		return false;
+	}
 
 	globals::OnInit();
 	globals::ReInit();
@@ -198,7 +223,9 @@ bool Load()
 		L"Data/SKSE/Plugins/EVLaS.dll",
 		L"Data/SKSE/Plugins/AELAS.dll",
 		L"Data/SKSE/Plugins/SSEReShadeHelper.dll",
-		L"Data/SKSE/Plugins/trainwreck.dll"
+		L"Data/SKSE/Plugins/trainwreck.dll",
+		L"Data/SKSE/Plugins/TAASharpen.dll",
+		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll"
 	};
 
 	for (const auto dll : incompatibleDLLs) {

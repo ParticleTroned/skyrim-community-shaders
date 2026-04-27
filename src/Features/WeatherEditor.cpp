@@ -21,7 +21,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void WeatherEditor::DataLoaded()
 {
-	EditorWindow::GetSingleton()->SetupResources();
+	s_dataAvailable = true;
+}
+
+void WeatherEditor::EnsureDataLoaded()
+{
+	if (!s_dataAvailable)
+		return;
+
+	if (!s_resourcesInitialized) {
+		EditorWindow::GetSingleton()->SetupResources();
+		s_resourcesInitialized = true;
+	}
 	LoadAllWeathers();
 }
 
@@ -63,9 +74,11 @@ void LerpDirectional(RE::BGSDirectionalAmbientLightingColors::Directional& oldCo
 
 void WeatherEditor::DrawSettings()
 {
+	EnsureDataLoaded();
 	auto player = RE::PlayerCharacter::GetSingleton();
 	bool hasCell = player && player->parentCell;
-	ImGui::BeginDisabled(!hasCell);
+	bool canOpen = hasCell && s_dataAvailable;
+	ImGui::BeginDisabled(!canOpen);
 	if (ImGui::Button(hasCell ? "Open Editor" : "Open Editor (no active cell)", { -1, 0 })) {
 		EditorWindow::GetSingleton()->open = true;
 	}

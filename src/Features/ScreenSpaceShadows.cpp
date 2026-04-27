@@ -326,36 +326,41 @@ void ScreenSpaceShadows::DrawShadows()
 		auto dispatchList = Bend::BuildDispatchList(const_cast<float*>(lightProj), viewportSize, minRenderBounds, maxRenderBounds);
 
 		for (int i = 0; i < dispatchList.DispatchCount; i++) {
-			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Ray March");
-
 			auto dispatchData = dispatchList.Dispatch[i];
 
-			RaymarchCB data{};
-			data.LightCoordinate[0] = dispatchList.LightCoordinate_Shader[0];
-			data.LightCoordinate[1] = dispatchList.LightCoordinate_Shader[1];
-			data.LightCoordinate[2] = dispatchList.LightCoordinate_Shader[2];
-			data.LightCoordinate[3] = dispatchList.LightCoordinate_Shader[3];
+			{
+				TracyD3D11Zone(globals::state->tracyCtx, "SSS - DispatchEye CB");
 
-			data.WaveOffset[0] = dispatchData.WaveOffset_Shader[0];
-			data.WaveOffset[1] = dispatchData.WaveOffset_Shader[1];
+				RaymarchCB data{};
+				data.LightCoordinate[0] = dispatchList.LightCoordinate_Shader[0];
+				data.LightCoordinate[1] = dispatchList.LightCoordinate_Shader[1];
+				data.LightCoordinate[2] = dispatchList.LightCoordinate_Shader[2];
+				data.LightCoordinate[3] = dispatchList.LightCoordinate_Shader[3];
 
-			data.FarDepthValue = 1.0f;
-			data.NearDepthValue = 0.0f;
+				data.WaveOffset[0] = dispatchData.WaveOffset_Shader[0];
+				data.WaveOffset[1] = dispatchData.WaveOffset_Shader[1];
 
-			data.DynamicRes = dynamicRes;
-			data.DynamicSampleCount = dynamicSampleCount;
-			data.DynamicReadCount = dynamicReadCount;
+				data.FarDepthValue = 1.0f;
+				data.NearDepthValue = 0.0f;
 
-			data.InvDepthTextureSize[0] = invTexSizeX;
-			data.InvDepthTextureSize[1] = invTexSizeY;
+				data.DynamicRes = dynamicRes;
+				data.DynamicSampleCount = dynamicSampleCount;
+				data.DynamicReadCount = dynamicReadCount;
 
-			data.settings = bendSettings;
-			if (!globals::game::isVR)
-				data.settings.VRCullDistance = 0.0f;
+				data.InvDepthTextureSize[0] = invTexSizeX;
+				data.InvDepthTextureSize[1] = invTexSizeY;
 
-			raymarchCB->Update(data);
+				data.settings = bendSettings;
+				if (!globals::game::isVR)
+					data.settings.VRCullDistance = 0.0f;
 
-			context->Dispatch(dispatchData.WaveCount[0], dispatchData.WaveCount[1], dispatchData.WaveCount[2]);
+				raymarchCB->Update(data);
+			}
+
+			{
+				TracyD3D11Zone(globals::state->tracyCtx, "SSS - DispatchEye Sweep");
+				context->Dispatch(dispatchData.WaveCount[0], dispatchData.WaveCount[1], dispatchData.WaveCount[2]);
+			}
 		}
 
 		if (globals::state->frameAnnotations) {
@@ -369,11 +374,17 @@ void ScreenSpaceShadows::DrawShadows()
 	if (!globals::game::isVR) {
 		DispatchEye(nullptr, raymarchLeft, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 	} else {
-		DispatchEye("Left Eye", raymarchLeft, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+		{
+			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Left Eye");
+			DispatchEye("Left Eye", raymarchLeft, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+		}
 
 		// Calculate light projection for right eye
 		auto lightProjectionRightF = CalculateLightProjection(1);
-		DispatchEye("Right Eye", raymarchRight, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
+		{
+			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Right Eye");
+			DispatchEye("Right Eye", raymarchRight, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
+		}
 	}
 
 	ID3D11ShaderResourceView* views[1]{ nullptr };

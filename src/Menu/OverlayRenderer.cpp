@@ -16,6 +16,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "WeatherEditor/EditorWindow.h"
 
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
@@ -57,7 +58,11 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderBlockingStatus();
 	RenderFirstTimeSetupOverlay();
 
-	if (menu.IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup()) {
+	// Draw weather editor independently of main menu state
+	if (EditorWindow::GetSingleton()->open) {
+		ImGui::GetIO().MouseDrawCursor = true;
+		EditorWindow::GetSingleton()->Draw();
+	} else if (menu.IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup()) {
 		ImGui::GetIO().MouseDrawCursor = true;
 		if (menu.IsEnabled) {
 			drawSettings();
@@ -90,6 +95,7 @@ bool OverlayRenderer::ShouldSkipRendering(const Menu& menu, bool hasDrawableFeat
 
 	return !(shaderCache->IsCompiling() ||
 			 menu.IsEnabled ||
+			 EditorWindow::GetSingleton()->open ||
 			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||

@@ -273,6 +273,12 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 			state.settingOverlayToggleKey,
 			"Change##OverlayToggle");
 
+		Util::InputComboWidget(
+			"Weather Editor Toggle Key:",
+			settings.WeatherEditorToggleKey,
+			state.settingWeatherEditorToggleKey,
+			"Change##WeatherEditorToggle");
+
 		ImGui::EndTabItem();
 	}
 }

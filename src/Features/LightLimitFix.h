@@ -232,7 +232,6 @@ struct ParticleLightInfo
 
 	struct Settings
 	{
-		bool EnableContactShadows = false;
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
 		bool EnableParticleLights = true;

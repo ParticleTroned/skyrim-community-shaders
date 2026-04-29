@@ -1,5 +1,7 @@
 #include "Feature.h"
 
+#include <algorithm>
+
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
 #include "Features/CloudShadows.h"
@@ -266,6 +268,26 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 	} else {
 		return features;
 	}
+}
+
+Feature* Feature::FindFeatureByShortName(const std::string& shortName)
+{
+	for (auto* feature : GetFeatureList()) {
+		if (feature->loaded && feature->GetShortName() == shortName)
+			return feature;
+	}
+	return nullptr;
+}
+
+std::vector<std::string> Feature::GetLoadedFeatureNames()
+{
+	std::vector<std::string> names;
+	for (auto* feature : GetFeatureList()) {
+		if (feature->loaded && feature->IsInMenu())
+			names.push_back(feature->GetShortName());
+	}
+	std::sort(names.begin(), names.end());
+	return names;
 }
 
 bool Feature::ToggleAtBootSetting()

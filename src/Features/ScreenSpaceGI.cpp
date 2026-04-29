@@ -797,6 +797,7 @@ void ScreenSpaceGI::DrawSettings()
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
 	if (!o_json.contains("ResourceProfile")) {
 		// Existing VR configs that already run GI keep full resources; AO-only VR configs move to the lean profile.
 		settings.ResourceProfile = (REL::Module::IsVR() && !settings.EnableGI) ? kResourceProfileAOOnly : kResourceProfileFullGI;

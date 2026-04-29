@@ -355,6 +355,8 @@ VolumetricLighting::TextureSize& VolumetricLighting::FetchCurrentSizeInUnits(con
 void VolumetricLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.ExteriorQuality = std::clamp(settings.ExteriorQuality, 0, static_cast<int32_t>(Quality::Count) - 1);
+	settings.InteriorQuality = std::clamp(settings.InteriorQuality, 0, static_cast<int32_t>(Quality::Count) - 1);
 
 	// Backward-compat migration: older configs only had GodrayIntensity.
 	if (!o_json.contains("GodrayShaftIntensity")) {

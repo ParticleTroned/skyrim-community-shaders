@@ -16,6 +16,7 @@
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
+#include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
@@ -55,6 +56,9 @@ void State::Draw()
 	auto context = globals::d3d::context;
 
 	if (shaderCache->IsEnabled()) {
+		// Process deferred cell transitions (interior detection)
+		SceneSettingsManager::GetSingleton()->Update();
+
 		if (pendingPostLoadRuntimeReset) {
 			globals::OnDataLoaded();
 			WeatherManager::GetSingleton()->ClearCache();
@@ -203,6 +207,9 @@ void State::Setup()
 
 	// Load per-weather settings after features are setup
 	WeatherManager::GetSingleton()->LoadPerWeatherSettingsFromDisk();
+
+	// Load scene-specific settings (Interior Only, etc.)
+	SceneSettingsManager::GetSingleton()->LoadAll();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)

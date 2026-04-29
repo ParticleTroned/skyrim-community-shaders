@@ -55,14 +55,17 @@ public:
 		float4 OcclusionDir;
 
 		float3 PosOffset;  // cell origin in camera model space
+		uint FastSamplingMode;
+		uint ArrayOrigin[3];  // xyz: array origin
 		uint _pad0;
-		uint ArrayOrigin[3];  // xyz: array origin, w: max accum frames
-		uint _pad1;
 		int ValidMargin[4];
+		uint ArrayDims[3];
+		uint _pad1;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		uint _pad2[2];
+		uint ProbeUpdateSliceStart;
+		uint ProbeUpdateSliceCount;
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 

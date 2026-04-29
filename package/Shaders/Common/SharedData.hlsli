@@ -189,7 +189,7 @@ namespace SharedData
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionSHBasis4Pi;
+		float4 OcclusionDir;
 
 		float3 PosOffset;  // cell origin in camera model space
 		uint FastSamplingMode;

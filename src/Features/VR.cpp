@@ -151,6 +151,20 @@ void VR::EarlyPrepass()
 // OVERLAY FEATURE OVERRIDES
 //=============================================================================
 
+bool VR::ShouldShowAutoHideOverlay() const
+{
+	return settings.kAutoHideSeconds > 0 &&
+	       globals::game::ui &&
+	       globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) &&
+	       globals::menu &&
+	       !globals::menu->IsEnabled;
+}
+
+bool VR::IsOverlayVisible() const
+{
+	return openVRInfo.isCompatible && ShouldShowAutoHideOverlay();
+}
+
 void VR::DrawOverlay()
 {
 	auto& vr = globals::features::vr;
@@ -159,7 +173,7 @@ void VR::DrawOverlay()
 	static LARGE_INTEGER overlayShowStart = { 0 };
 	static LARGE_INTEGER freq = { 0 };
 
-	bool shouldShow = settings.kAutoHideSeconds > 0 && globals::game::ui && globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) && globals::menu && !globals::menu->IsEnabled;
+	bool shouldShow = ShouldShowAutoHideOverlay();
 
 	if (!shouldShow) {
 		overlayShowStart.QuadPart = 0;  // Reset timer when overlay is not shown
@@ -1569,7 +1583,8 @@ void VR::SubmitOverlayFrame()
 		}
 	}
 
-	if ((enabled || overlayVisible || settings.kAutoHideSeconds > 0) && menuOverlayHandle != vr::k_ulOverlayHandleInvalid && menuTexture.get() && menuRTV.get()) {
+	const bool shouldShowAutoHide = ShouldShowAutoHideOverlay();
+	if ((enabled || overlayVisible || shouldShowAutoHide) && menuOverlayHandle != vr::k_ulOverlayHandleInvalid && menuTexture.get() && menuRTV.get()) {
 		// Update drag logic only when overlay is active
 		UpdateOverlayDrag();
 		// Copy ImGui output to overlay texture

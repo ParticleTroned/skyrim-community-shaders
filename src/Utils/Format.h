@@ -65,6 +65,11 @@ namespace Util
 	std::string FormatTimeAgo(std::filesystem::file_time_type fileTime);
 
 	/**
+	 * Formats a duration in milliseconds as HH:MM:SS.
+	 */
+	std::string FormatDuration(double ms);
+
+	/**
 	 * Formats a delta value with percentage difference for A/B test comparisons.
 	 * Returns a string like "+0.45 ms (+12.3%)" or "-0.23 ms (-8.1%)".
 	 *
@@ -104,4 +109,10 @@ namespace Util
 	 * @return The remaining frame time not accounted for by measured components
 	 */
 	float CalculateOtherFrameTime(float totalFrameTime, float measuredSum);
+
+	/**
+	 * Returns a stable cache filename suffix for a shader variant string, or an
+	 * empty string when the variant string is empty.
+	 */
+	std::string GetShaderDefinesSuffix(const std::string& definesStr);
 }  // namespace Util

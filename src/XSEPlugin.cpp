@@ -136,7 +136,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				auto shaderCache = globals::shaderCache;
 				shaderCache->menuLoaded = true;
 				while (shaderCache->IsCompiling() &&
-				       !shaderCache->backgroundCompilation &&
+				       !shaderCache->IsBackgroundCompilation() &&
 				       !globals::game::quitGame.load(std::memory_order_relaxed)) {
 					std::this_thread::sleep_for(100ms);
 				}

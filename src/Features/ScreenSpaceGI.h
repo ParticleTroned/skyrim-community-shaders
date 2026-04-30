@@ -216,6 +216,10 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> centerGIMaskedAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> blurCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> stereoSyncCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> stereoSyncAOOnlyCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> centerStereoSyncCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> centerStereoSyncAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> upsampleAOOnlyCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> centerBlendCompute = nullptr;

@@ -50,6 +50,10 @@ void readHistory(
 	const half3 prev_geo = srcPrevGeo[pixCoord];
 	const float prev_depth = prev_geo.x;
 	// const float3 prev_normal = GBuffer::DecodeNormal(prev_geo.yz);  // prev normal is already world
+
+	if (abs(curr_depth - prev_depth) > curr_depth * DepthDisocclusion * 3)
+		return;
+
 	float3 prev_pos = ScreenToViewPosition(screen_pos, prev_depth, eyeIndex);
 	prev_pos = ViewToWorldPosition(prev_pos, PrevInvViewMat[eyeIndex]) + FrameBuffer::CameraPreviousPosAdjust[eyeIndex].xyz;
 
@@ -162,7 +166,16 @@ void readHistory(
 #endif
 
 #ifdef TEMPORAL_DENOISER
-	accum_frames = max(1, min(accum_frames * 255 + 1, MaxAccumFrames));
+	float prevAccum = accum_frames * 255;
+	if (wsum < 1e-2)
+		prevAccum *= 0.5;
+
+	float2 motionVec = prev_screen_pos - screen_pos;
+	float motionLen = length(motionVec);
+	float maxAccumFrames = (float)MaxAccumFrames;
+	float motionMaxAccum = lerp(maxAccumFrames, max(maxAccumFrames * 0.25, 4.0), saturate(motionLen * 20));
+
+	accum_frames = max(1, min(prevAccum + 1, motionMaxAccum));
 	outAccumFrames[pixCoord] = accum_frames / 255.0;
 	outRemappedAo[pixCoord] = prev_ao;
 #ifdef GI

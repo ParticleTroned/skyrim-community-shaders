@@ -410,6 +410,71 @@ namespace Stereo
 	{
 		return BlendEyeColors(float3(uv1, 0), color1, float3(uv2, 0), color2, dynamicres);
 	}
+
+	struct StereoBilateralResult
+	{
+		float2 otherStereoUV;
+		int2 otherPx;
+		float blendWeight;
+		bool valid;
+		bool backCheckPassed;
+	};
+
+	StereoBilateralResult ReprojectToOtherEye(
+		float2 stereoUV,
+		float depth,
+		uint eyeIndex,
+		float2 frameDim)
+	{
+		StereoBilateralResult result;
+		result.otherStereoUV = 0;
+		result.otherPx = int2(0, 0);
+		result.blendWeight = 0;
+		result.valid = false;
+		result.backCheckPassed = false;
+
+		uint otherEyeIndex = 1 - eyeIndex;
+
+		float2 monoUV = ConvertFromStereoUV(stereoUV, eyeIndex);
+		float3 otherEyeUV = ConvertMonoUVToOtherEye(float3(monoUV, depth), eyeIndex);
+
+		if (FrameBuffer::IsOutsideFrame(otherEyeUV.xy, false))
+			return result;
+
+		result.otherStereoUV = ConvertToStereoUV(otherEyeUV.xy, otherEyeIndex);
+		result.otherPx = clamp(int2(result.otherStereoUV * frameDim), int2(0, 0), int2(frameDim) - 1);
+		result.valid = true;
+		return result;
+	}
+
+	void FinalizeStereoBlend(
+		inout StereoBilateralResult result,
+		float2 stereoUV,
+		float depth,
+		float otherEyeDepth,
+		uint eyeIndex,
+		float2 frameDim,
+		float depthSigma,
+		float maxBlend,
+		float backCheckThreshold = 8.0)
+	{
+		float depthDiff = abs(depth - otherEyeDepth);
+		float depthWeight = exp(-depthDiff * depthDiff / (depthSigma * depthSigma + 1e-8));
+
+		uint otherEyeIndex = 1 - eyeIndex;
+		result.backCheckPassed = true;
+		if (backCheckThreshold > 0) {
+			float2 otherMonoUV = ConvertFromStereoUV(result.otherStereoUV, otherEyeIndex);
+			float3 roundTripUV = ConvertMonoUVToOtherEye(float3(otherMonoUV, otherEyeDepth), otherEyeIndex);
+			float2 roundTripStereoUV = ConvertToStereoUV(roundTripUV.xy, eyeIndex);
+			float2 pixelDist = abs(roundTripStereoUV * frameDim - (stereoUV * frameDim));
+			result.backCheckPassed = max(pixelDist.x, pixelDist.y) < backCheckThreshold;
+			if (!result.backCheckPassed)
+				depthWeight *= 0.1;
+		}
+
+		result.blendWeight = depthWeight * maxBlend;
+	}
 #	endif  // VR
 #endif      // PSHADER
 

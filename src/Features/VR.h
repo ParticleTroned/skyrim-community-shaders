@@ -59,6 +59,15 @@ public:
 	 */
 	struct Config
 	{
+		static constexpr int kOverlayWidth = 1920;
+		static constexpr int kOverlayHeight = 1080;
+		static constexpr float kOverlayAspect = static_cast<float>(kOverlayHeight) / static_cast<float>(kOverlayWidth);
+
+		static inline Matrix CreateOverlayScaleMatrix(float scale)
+		{
+			return Matrix::CreateScale(scale, scale * kOverlayAspect, scale);
+		}
+
 		static constexpr float kDefaultMenuScale = 1.0f;      ///< Default overlay scale factor
 		static constexpr float kMinMenuScale = 0.5f;          ///< Minimum allowed overlay scale
 		static constexpr float kMaxMenuScale = 2.0f;          ///< Maximum allowed overlay scale
@@ -152,7 +161,8 @@ public:
 		{
 			HMDOnly = 0,         ///< Overlay attached to HMD only
 			ControllerOnly = 1,  ///< Overlay attached to controller only
-			Both = 2             ///< Overlay can be attached to both HMD and controller
+			Both = 2,            ///< Overlay can be attached to both HMD and controller
+			None = 3             ///< Overlay display disabled
 		};
 		OverlayAttachMode attachMode = OverlayAttachMode::HMDOnly;              ///< Current overlay attachment mode
 		ControllerDevice VRMenuAttachController = ControllerDevice::Secondary;  ///< Which controller to attach overlay to
@@ -215,7 +225,7 @@ public:
 		 */
 		bool IsAttachModeValid() const
 		{
-			return attachMode >= OverlayAttachMode::HMDOnly && attachMode <= OverlayAttachMode::Both;
+			return attachMode >= OverlayAttachMode::HMDOnly && attachMode <= OverlayAttachMode::None;
 		}
 
 		/**
@@ -247,7 +257,13 @@ public:
 	void ProcessVREvents(std::vector<Menu::KeyEvent>& vrEvents);
 
 	// Wand pointing methods
-	bool ComputeWandIntersection(vr::VROverlayHandle_t overlayHandle, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
+	enum class OverlayType
+	{
+		HMD,
+		Controller
+	};
+	bool ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
+	bool ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
 	void UpdateCursorFromWandPointing();
 	void UpdateOverlayMenuStateFromInput();
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
@@ -310,6 +326,7 @@ public:
 	void UpdateActiveDrag();
 	void TryStartNewDrag();
 	void SetFixedOverlayToCurrentHMD();
+	void UpdateFixedWorldPositioning();
 	bool ShouldHighlightOverlayWindow() const { return overlayDragState.dragging; }
 
 	//=============================================================================
@@ -350,6 +367,7 @@ public:
 	struct OverlayWorldPosition
 	{
 		Matrix m = Matrix::Identity;
+		bool initialized = false;
 	} fixedWorldOverlayPosition;
 
 	struct OverlayDragState
@@ -373,6 +391,7 @@ public:
 
 		Vector3 initialHMDOffset = Vector3::Zero;
 		Vector3 initialControllerOffset = Vector3::Zero;
+		float initialHMDScale = 1.0f;
 		Matrix startControllerMatrix = Matrix::Identity;
 	} overlayDragState;
 
@@ -428,6 +447,36 @@ public:
 		Vector3 rayDirection = Vector3::Zero;
 	} wandState;
 
+	struct InSceneResources
+	{
+		winrt::com_ptr<ID3D11VertexShader> vs;
+		winrt::com_ptr<ID3D11PixelShader> ps;
+		winrt::com_ptr<ID3D11InputLayout> inputLayout;
+		winrt::com_ptr<ID3D11Buffer> vb;
+		winrt::com_ptr<ID3D11Buffer> ib;
+		winrt::com_ptr<ID3D11Buffer> cb;
+		winrt::com_ptr<ID3D11BlendState> blendState;
+		winrt::com_ptr<ID3D11DepthStencilState> depthState;
+		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
+		winrt::com_ptr<ID3D11SamplerState> sampler;
+		winrt::com_ptr<ID3D11ShaderResourceView> menuSRV;
+		ID3D11Texture2D* cachedMenuTexture = nullptr;
+
+		struct CachedRTV
+		{
+			ID3D11Texture2D* texture = nullptr;
+			winrt::com_ptr<ID3D11RenderTargetView> rtv;
+		};
+		CachedRTV cachedEyeRTVs[2];
+
+		bool initialized = false;
+	} inSceneResources;
+
+	struct InSceneCB
+	{
+		Matrix wvp;
+	};
+
 public:
 	//=============================================================================
 	// PRIVATE IMPLEMENTATION
@@ -435,4 +484,8 @@ public:
 
 	void DetectOpenVRInfo();
 	bool IsOpenVRCompatible() const;
+	void InitInSceneResources();
+	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds);
+	void InstallSubmitHook();
+	bool GetGripPressed(bool isLeft, bool isRight) const;
 };

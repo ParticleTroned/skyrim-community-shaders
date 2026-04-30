@@ -154,17 +154,6 @@ namespace Util
 	 */
 	bool GetDeviceToAbsoluteTrackingPoseCompatible(vr::ETrackingUniverseOrigin eOrigin, float fPredictedSecondsToPhotonsFromNow, vr::TrackedDevicePose_t* pTrackedDevicePoseArray, uint32_t unTrackedDevicePoseArrayCount);
 
-	/**
-	 * @brief Computes a controller ray intersection with an OpenVR overlay.
-	 * @param overlay OpenVR overlay interface
-	 * @param overlayHandle Overlay to intersect
-	 * @param controllerIndex Tracked controller device index
-	 * @param outUV Output UV coordinate on hit
-	 * @return true when the ray intersects the overlay
-	 */
-	bool ComputeWandIntersection(vr::IVROverlay* overlay, vr::VROverlayHandle_t overlayHandle,
-		vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
-
 	//=============================================================================
 	// MATRIX CONVERSION UTILITIES
 	//=============================================================================

@@ -36,10 +36,6 @@ function(add_cxx_files TARGET)
 		"src/*.cxx"
 	)
 
-	# This branch keeps VR implemented in src/Features/VR.cpp. The split VR
-	# modules were added for upstream's refactor and duplicate that code here.
-	list(FILTER SOURCE_FILES EXCLUDE REGEX "[/\\\\]src[/\\\\]Features[/\\\\]VR[/\\\\].*\\.(cpp|cxx)$")
-
 	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src
 		PREFIX "Source Files"
 		FILES ${SOURCE_FILES})

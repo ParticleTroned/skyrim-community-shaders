@@ -67,6 +67,24 @@ namespace Util
 	vr::HmdMatrix34_t ComputeOverlayTransformFromHMD(float offsetX, float offsetY, float offsetZ);
 
 	/**
+	 * @brief Sets input-related flags on an OpenVR overlay.
+	 * @param overlay OpenVR overlay interface
+	 * @param handle Overlay handle to configure
+	 */
+	void SetOverlayInputFlags(vr::IVROverlay* overlay, vr::VROverlayHandle_t handle);
+
+	/**
+	 * @brief Computes a controller-relative overlay transform.
+	 * @param offsetX Horizontal offset from controller in meters
+	 * @param offsetY Vertical offset from controller in meters
+	 * @param offsetZ Depth offset from controller in meters
+	 * @param width Overlay width in meters
+	 * @param height Overlay height in meters
+	 * @return Controller-relative OpenVR transform
+	 */
+	vr::HmdMatrix34_t CreateControllerOverlayTransform(float offsetX, float offsetY, float offsetZ, float width, float height);
+
+	/**
 	 * @brief Common OpenVR system access pattern with validation
 	 *
 	 * This struct provides a standardized way to access OpenVR interfaces
@@ -135,6 +153,17 @@ namespace Util
 	 * when available for better OpenComposite compatibility.
 	 */
 	bool GetDeviceToAbsoluteTrackingPoseCompatible(vr::ETrackingUniverseOrigin eOrigin, float fPredictedSecondsToPhotonsFromNow, vr::TrackedDevicePose_t* pTrackedDevicePoseArray, uint32_t unTrackedDevicePoseArrayCount);
+
+	/**
+	 * @brief Computes a controller ray intersection with an OpenVR overlay.
+	 * @param overlay OpenVR overlay interface
+	 * @param overlayHandle Overlay to intersect
+	 * @param controllerIndex Tracked controller device index
+	 * @param outUV Output UV coordinate on hit
+	 * @return true when the ray intersects the overlay
+	 */
+	bool ComputeWandIntersection(vr::IVROverlay* overlay, vr::VROverlayHandle_t overlayHandle,
+		vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
 
 	//=============================================================================
 	// MATRIX CONVERSION UTILITIES

@@ -21,6 +21,9 @@ Texture2D<float> DepthMask : register(t3);
 RWTexture2D<float> ReactiveMask : register(u0);
 RWTexture2D<float> TransparencyCompositionMask : register(u1);
 RWTexture2D<float2> MotionVectorOutput : register(u2);
+#if defined(DEPTH_OUTPUT)
+RWTexture2D<float> DepthOutput : register(u3);
+#endif
 
 float IsMaskedDepth(float depth)
 {
@@ -136,6 +139,10 @@ float ComputeSeamFactor(uint2 sourcePos)
 
 #if defined(DLSS) || defined(FSR)
 	MotionVectorOutput[outputPos] = outputMotionVector;
+#endif
+
+#if defined(DEPTH_OUTPUT)
+	DepthOutput[outputPos] = depth;
 #endif
 
 	ReactiveMask[outputPos] = reactiveMask;

@@ -1532,6 +1532,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 		vrIntermediateColorIn[i].reset();
 		vrIntermediateColorOut[i].reset();
 		vrIntermediateDepth[i].reset();
+		vrIntermediateLinearDepth[i].reset();
 		vrIntermediateMotionVectors[i].reset();
 		vrIntermediateReactiveMask[i].reset();
 		vrIntermediateTransparencyMask[i].reset();
@@ -1721,6 +1722,20 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 {
 	auto upscaleMethod = GetUpscaleMethod();
 	uint methodIndex = (uint)upscaleMethod;
+
+	// VR FSR requires a depth-output variant so we can feed FidelityFX a typed
+	// R32_FLOAT depth texture instead of relying on typeless depth resources.
+	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kFSR) {
+		if (!encodeTexturesCSDepthOutput) {
+			logger::debug("Compiling EncodeTexturesCS.hlsl for VR FSR (FSR + DEPTH_OUTPUT)");
+			std::vector<std::pair<const char*, const char*>> defines = {
+				{ "FSR", "" },
+				{ "DEPTH_OUTPUT", "" }
+			};
+			encodeTexturesCSDepthOutput.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
+		}
+		return encodeTexturesCSDepthOutput.get();
+	}
 
 	if (!encodeTexturesCS[methodIndex]) {
 		logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {}", methodIndex);
@@ -3218,15 +3233,15 @@ void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		vrIntermediateColorIn[i] = CreateTextureFromSource(colorSrc, inWidth, inHeight, false, true, true, ("Upscale_ColorIn_" + suffix).c_str());
 		vrIntermediateColorOut[i] = CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, true, ("Upscale_ColorOut_" + suffix).c_str());
 
-		// Depth: R32_TYPELESS base (matches kMAIN), with R32_FLOAT SRV for ClearHMDMaskCS.
-		// CopySubresourceRegion requires matching typeless formats; SRV reinterprets as R32_FLOAT.
+		// Depth copy: R24G8_TYPELESS matches the game's D24S8 typeless cast-group.
+		// This avoids format-group copy failures on some drivers.
 		{
 			D3D11_TEXTURE2D_DESC depthDesc = {};
 			depthDesc.Width = inWidth;
 			depthDesc.Height = inHeight;
 			depthDesc.MipLevels = 1;
 			depthDesc.ArraySize = 1;
-			depthDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+			depthDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
 			depthDesc.SampleDesc.Count = 1;
 			depthDesc.Usage = D3D11_USAGE_DEFAULT;
 			depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -3235,10 +3250,38 @@ void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			Util::SetResourceName(vrIntermediateDepth[i]->resource.get(), ("Upscale_Depth_" + suffix).c_str());
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-			srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 			srvDesc.Texture2D.MipLevels = 1;
 			vrIntermediateDepth[i]->CreateSRV(srvDesc);
+		}
+
+		// FSR input depth: typed R32_FLOAT so FidelityFX receives a known surface format.
+		{
+			D3D11_TEXTURE2D_DESC linearDepthDesc = {};
+			linearDepthDesc.Width = inWidth;
+			linearDepthDesc.Height = inHeight;
+			linearDepthDesc.MipLevels = 1;
+			linearDepthDesc.ArraySize = 1;
+			linearDepthDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			linearDepthDesc.SampleDesc.Count = 1;
+			linearDepthDesc.Usage = D3D11_USAGE_DEFAULT;
+			linearDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			vrIntermediateLinearDepth[i] = eastl::make_unique<Texture2D>(linearDepthDesc);
+
+			Util::SetResourceName(vrIntermediateLinearDepth[i]->resource.get(), ("Upscale_LinearDepth_" + suffix).c_str());
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC linearSRVDesc = {};
+			linearSRVDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			linearSRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			linearSRVDesc.Texture2D.MipLevels = 1;
+			vrIntermediateLinearDepth[i]->CreateSRV(linearSRVDesc);
+
+			D3D11_UNORDERED_ACCESS_VIEW_DESC linearUAVDesc = {};
+			linearUAVDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			linearUAVDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			linearUAVDesc.Texture2D.MipSlice = 0;
+			vrIntermediateLinearDepth[i]->CreateUAV(linearUAVDesc);
 		}
 
 		vrIntermediateMotionVectors[i] = CreateTextureFromSource(mvecSrc, inWidth, inHeight, false, true, true, ("Upscale_MVec_" + suffix).c_str());
@@ -3257,6 +3300,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		vrIntermediateColorIn[0] && vrIntermediateColorIn[1] &&
 		vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
 		vrIntermediateDepth[0] && vrIntermediateDepth[1] &&
+		vrIntermediateLinearDepth[0] && vrIntermediateLinearDepth[1] &&
 		vrIntermediateMotionVectors[0] && vrIntermediateMotionVectors[1] &&
 		vrIntermediateReactiveMask[0] && vrIntermediateReactiveMask[1] &&
 		vrIntermediateTransparencyMask[0] && vrIntermediateTransparencyMask[1];
@@ -3267,6 +3311,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			(vrIntermediateColorIn[0]->desc.Width != inWidth || vrIntermediateColorIn[0]->desc.Height != inHeight ||
 				vrIntermediateColorOut[0]->desc.Width != outWidth || vrIntermediateColorOut[0]->desc.Height != outHeight ||
 				!vrIntermediateColorOut[0]->uav || !vrIntermediateColorOut[1]->uav ||
+				!vrIntermediateLinearDepth[0]->uav || !vrIntermediateLinearDepth[1]->uav ||
 				!vrIntermediateMotionVectors[0]->uav || !vrIntermediateMotionVectors[1]->uav ||
 				!vrIntermediateReactiveMask[0]->uav || !vrIntermediateReactiveMask[1]->uav ||
 				!vrIntermediateTransparencyMask[0]->uav || !vrIntermediateTransparencyMask[1]->uav);
@@ -3700,6 +3745,7 @@ void Upscaling::ClearShaderCache()
 	for (int i = 0; i < 5; ++i) {
 		encodeTexturesCS[i] = nullptr;  // com_ptr automatically releases
 	}
+	encodeTexturesCSDepthOutput = nullptr;
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
@@ -4233,10 +4279,11 @@ void Upscaling::Upscale()
 				upscalingData.outputOffset = { static_cast<float>(inputMinX), static_cast<float>(inputMinY) };
 				upscalingDataCB->Update(upscalingData);
 
-				ID3D11UnorderedAccessView* uavs[3] = {
+				ID3D11UnorderedAccessView* uavs[4] = {
 					vrIntermediateReactiveMask[eye]->uav.get(),
 					vrIntermediateTransparencyMask[eye]->uav.get(),
-					vrIntermediateMotionVectors[eye]->uav.get()
+					vrIntermediateMotionVectors[eye]->uav.get(),
+					(upscaleMethod == UpscaleMethod::kFSR) ? vrIntermediateLinearDepth[eye]->uav.get() : nullptr
 				};
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 				context->Dispatch((dispatchWidth + 7u) >> 3, (dispatchHeight + 7u) >> 3, 1);
@@ -4356,10 +4403,11 @@ void Upscaling::Upscale()
 			upscalingData.outputOffset = { 0.0f, 0.0f };
 			upscalingDataCB->Update(upscalingData);
 
-			ID3D11UnorderedAccessView* uavs[3] = {
+			ID3D11UnorderedAccessView* uavs[4] = {
 				reactiveMaskTexture->uav.get(),
 				transparencyCompositionMaskTexture->uav.get(),
-				requiresCombinedEncodedMotionVectors ? motionVectorCopyTexture->uav.get() : nullptr
+				requiresCombinedEncodedMotionVectors ? motionVectorCopyTexture->uav.get() : nullptr,
+				nullptr
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
@@ -4368,7 +4416,7 @@ void Upscaling::Upscale()
 		ID3D11ShaderResourceView* nullSRV[4] = { nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSRV), nullSRV);
 
-		ID3D11UnorderedAccessView* nullUAV[3] = { nullptr, nullptr, nullptr };
+		ID3D11UnorderedAccessView* nullUAV[4] = { nullptr, nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUAV), nullUAV, nullptr);
 
 		ID3D11Buffer* nullBuffer = nullptr;

@@ -1396,7 +1396,7 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 
 	if (splitPerEyeContexts) {
-		upscaling.PreparePerEyeInputs(a_upscalingTexture, depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false);
+		upscaling.PreparePerEyeInputs(a_upscalingTexture, depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false);
 
 		const uint32_t eyeDisplayWidth = static_cast<uint32_t>(screenSize.x / 2.0f);
 		const uint32_t eyeDisplayHeight = static_cast<uint32_t>(screenSize.y);
@@ -1407,7 +1407,7 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			if (!UpscaleRegion(
 					i,
 					upscaling.vrIntermediateColorIn[i]->resource.get(),
-					upscaling.vrIntermediateDepth[i]->resource.get(),
+					upscaling.vrIntermediateLinearDepth[i]->resource.get(),
 					upscaling.vrIntermediateMotionVectors[i]->resource.get(),
 					upscaling.vrIntermediateReactiveMask[i]->resource.get(),
 					upscaling.vrIntermediateTransparencyMask[i]->resource.get(),

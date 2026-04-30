@@ -1,6 +1,6 @@
 RWTexture2D<float> BlendedDepthTexture : register(u0);
-RWTexture2D<unorm half> BlendedDepthTexture16 : register(u1);
-RWTexture2D<float> MainDepthCopy : register(u2);
+RWTexture2D<unorm float> BlendedDepthTexture16 : register(u1);
+RWTexture2D<float> MainDepthCopy : register(u2);  // R32_FLOAT snapshot replaces CopyResource(terrainDepth <- mainDepth)
 
 Texture2D<unorm float> MainDepthTexture : register(t0);
 Texture2D<unorm float> TerrainDepthTexture : register(t1);

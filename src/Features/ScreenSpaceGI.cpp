@@ -1348,7 +1348,8 @@ void ScreenSpaceGI::DrawSSGI()
 	const bool runRadianceDisoccPass = !foveatedCenterOnlyMode && (runILPath || temporalEnabled);
 	const bool runPrefilterRadiancePass = runILPath;
 	const bool blurEnabled = !foveatedCenterOnlyMode && settings.EnableBlur && runILPath;
-	const bool stereoSyncBaseEnabled = isVR && !foveatedCenterOnlyMode;
+	const bool ssgiOutputNeeded = allowAOSpace || runILPath;
+	const bool stereoSyncBaseEnabled = isVR && !foveatedCenterOnlyMode && ssgiOutputNeeded;
 	ID3D11ComputeShader* activeRadianceDisoccCompute = nullptr;
 	ID3D11ComputeShader* activeGICompute = nullptr;
 	ID3D11ComputeShader* activeCenterGICompute = nullptr;
@@ -1369,6 +1370,7 @@ void ScreenSpaceGI::DrawSSGI()
 	static uint lastFrameAoTexIdx = 0;
 	static uint lastFrameGITexIdx = 0;
 	static uint lastFrameAccumTexIdx = 0;
+	static bool skippedLastFrame = false;
 
 	auto resetHistoryState = [&](const char* a_reason) {
 		lastFrameAoTexIdx = 0;
@@ -1408,7 +1410,8 @@ void ScreenSpaceGI::DrawSSGI()
 		clearOutputIfValid(texGiSpecular, outputAoIdx);
 	};
 
-	if (!(settings.Enabled && (allowAOSpace || allowILSpace))) {
+	if (!(settings.Enabled && ssgiOutputNeeded)) {
+		skippedLastFrame = true;
 		clearOutputsAndReturn();
 		return;
 	}
@@ -1440,10 +1443,16 @@ void ScreenSpaceGI::DrawSSGI()
 	hashCombine(static_cast<uint64_t>(settings.EnableExperimentalSpecularGI));
 	hashCombine(static_cast<uint64_t>(allowAOSpace));
 	hashCombine(static_cast<uint64_t>(allowILSpace));
-	if (!hasModeSignature || modeSignature != lastModeSignature) {
+	const bool modeSignatureChanged = !hasModeSignature || modeSignature != lastModeSignature;
+	if (modeSignatureChanged) {
 		resetHistoryState("runtime mode switch");
 		lastModeSignature = modeSignature;
 		hasModeSignature = true;
+	}
+	if (skippedLastFrame) {
+		if (!modeSignatureChanged)
+			resetHistoryState("output resumed");
+		skippedLastFrame = false;
 	}
 
 	if (recompileFlag) {
@@ -1473,7 +1482,7 @@ void ScreenSpaceGI::DrawSSGI()
 	const bool centerMaskEnabled = centerShadersReady &&
 	                               (resolutionMode != 0) &&
 	                               (centerScale > 0.0f);
-	const bool stereoSyncCenterEnabled = isVR && centerMaskEnabled;
+	const bool stereoSyncCenterEnabled = isVR && centerMaskEnabled && ssgiOutputNeeded;
 	const bool centerBlendNeeded = centerMaskEnabled && (centerScale < 0.99f);
 	const bool centerDirectWrite = centerMaskEnabled && !centerBlendNeeded;
 

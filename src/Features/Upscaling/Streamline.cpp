@@ -728,32 +728,75 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	// because DLSS's internal history buffers use extent offsets as indices.
 	// Per-eye isolation with extents at {0,0} is required.
 	if (globals::game::isVR) {
+		auto context = globals::d3d::context;
 		uint32_t eyeWidthOut = (uint32_t)(screenSize.x / 2);
 		uint32_t eyeHeightOut = (uint32_t)screenSize.y;
 		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
 
+		// Split color only; DLSS eye 1 uses an explicit per-eye depth copy below.
 		upscaling.PreparePerEyeInputs(
 			a_upscalingTexture,
 			depthTexture.texture,
 			a_motionVectors,
 			a_reactiveMask,
 			a_transparencyCompositionMask,
+			false,
 			false);
 
-		for (uint32_t i = 0; i < 2; ++i) {
-			sl::ViewportHandle vp = (i == 1) ? viewportRight : viewport;
-			sl::Extent extentIn{ 0, 0, eyeWidthIn, eyeHeightIn };
-			sl::Extent extentOut{ 0, 0, eyeWidthOut, eyeHeightOut };
+		sl::Extent extentIn{ 0, 0, eyeWidthIn, eyeHeightIn };
+		sl::Extent extentOut{ 0, 0, eyeWidthOut, eyeHeightOut };
 
-			EvaluateDLSS(vp, i,
-				upscaling.vrIntermediateColorIn[i]->resource.get(), upscaling.vrIntermediateColorOut[i]->resource.get(),
-				upscaling.vrIntermediateDepth[i]->resource.get(), upscaling.vrIntermediateMotionVectors[i]->resource.get(),
-				upscaling.vrIntermediateReactiveMask[i]->resource.get(), upscaling.vrIntermediateTransparencyMask[i]->resource.get(),
-				extentIn, extentOut, eyeWidthOut);
+		const bool canUseDirectEye0 =
+			upscaling.vrIntermediateColorIn[0] && upscaling.vrIntermediateColorIn[0]->resource &&
+			upscaling.vrIntermediateColorIn[1] && upscaling.vrIntermediateColorIn[1]->resource &&
+			upscaling.vrIntermediateColorOut[0] && upscaling.vrIntermediateColorOut[0]->resource &&
+			upscaling.vrIntermediateColorOut[1] && upscaling.vrIntermediateColorOut[1]->resource &&
+			upscaling.vrIntermediateDepth[0] && upscaling.vrIntermediateDepth[0]->resource &&
+			upscaling.vrIntermediateDepth[1] && upscaling.vrIntermediateDepth[1]->resource &&
+			upscaling.vrIntermediateMotionVectors[0] && upscaling.vrIntermediateMotionVectors[0]->resource &&
+			upscaling.vrIntermediateMotionVectors[1] && upscaling.vrIntermediateMotionVectors[1]->resource &&
+			upscaling.vrIntermediateReactiveMask[0] && upscaling.vrIntermediateReactiveMask[0]->resource &&
+			upscaling.vrIntermediateReactiveMask[1] && upscaling.vrIntermediateReactiveMask[1]->resource &&
+			upscaling.vrIntermediateTransparencyMask[0] && upscaling.vrIntermediateTransparencyMask[0]->resource &&
+			upscaling.vrIntermediateTransparencyMask[1] && upscaling.vrIntermediateTransparencyMask[1]->resource;
+
+		if (!canUseDirectEye0) {
+			for (uint32_t i = 0; i < 2; ++i) {
+				sl::ViewportHandle vp = (i == 1) ? viewportRight : viewport;
+				EvaluateDLSS(vp, i,
+					upscaling.vrIntermediateColorIn[i]->resource.get(), upscaling.vrIntermediateColorOut[i]->resource.get(),
+					upscaling.vrIntermediateDepth[i]->resource.get(), upscaling.vrIntermediateMotionVectors[i]->resource.get(),
+					upscaling.vrIntermediateReactiveMask[i]->resource.get(), upscaling.vrIntermediateTransparencyMask[i]->resource.get(),
+					extentIn, extentOut, eyeWidthOut);
+			}
+
+			upscaling.FinalizePerEyeOutputs(colorOut);
+			return;
 		}
 
-		upscaling.FinalizePerEyeOutputs(colorOut);
+		// Copy right-eye depth before eye 0 evaluation; eye 0 output can overlap right-eye input
+		// in the combined target at non-DLAA scales.
+		D3D11_BOX rightIn = { eyeWidthIn, 0, 0, eyeWidthIn * 2, eyeHeightIn, 1 };
+		context->CopySubresourceRegion(upscaling.vrIntermediateDepth[1]->resource.get(), 0, 0, 0, 0, depthTexture.texture, 0, &rightIn);
+
+		// Eye 0 writes directly to combined output.
+		EvaluateDLSS(viewport, 0,
+			upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
+			depthTexture.texture, upscaling.vrIntermediateMotionVectors[0]->resource.get(),
+			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
+			extentIn, extentOut, eyeWidthOut);
+
+		// Eye 1 writes to intermediate, then copy into right half of combined output.
+		EvaluateDLSS(viewportRight, 1,
+			upscaling.vrIntermediateColorIn[1]->resource.get(), upscaling.vrIntermediateColorOut[1]->resource.get(),
+			upscaling.vrIntermediateDepth[1]->resource.get(), upscaling.vrIntermediateMotionVectors[1]->resource.get(),
+			upscaling.vrIntermediateReactiveMask[1]->resource.get(), upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
+			extentIn, extentOut, eyeWidthOut);
+
+		D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+		context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
+
 	} else {
 		// Non-VR: Simple full-texture upscale
 		sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };

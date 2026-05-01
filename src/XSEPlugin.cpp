@@ -258,6 +258,8 @@ bool Load()
 		}
 	}
 
+	// Additional required plugin DLLs checked at startup.
+	// Keep CrashLogger as an explicit hard requirement on this branch.
 	const std::array requiredDLLs = {
 		L"Data/SKSE/Plugins/CrashLogger.dll"
 	};

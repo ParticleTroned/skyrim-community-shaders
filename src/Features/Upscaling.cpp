@@ -1380,6 +1380,44 @@ void Upscaling::DataLoaded()
 	// The game defaults this to a non-zero value
 	static auto fDRClampOffset = RE::GetINISetting("fDRClampOffset:Display");
 	fDRClampOffset->data.f = 0.0f;
+
+	// VR + DLSS workaround: trigger a one-shot DLSS feature rebuild after loading-menu close.
+	if (globals::game::isVR)
+		MenuOpenCloseEventHandler::Register();
+}
+
+RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
+	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+{
+	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
+		globals::features::upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+bool Upscaling::MenuOpenCloseEventHandler::Register()
+{
+	static MenuOpenCloseEventHandler singleton;
+	static std::atomic<bool> registered{ false };
+
+	if (registered.load(std::memory_order_acquire))
+		return true;
+
+	auto ui = globals::game::ui;
+	if (!ui) {
+		logger::error("[Upscaling] UI event source not found; DLSS reset-on-load disabled");
+		return false;
+	}
+
+	auto eventSource = ui->GetEventSource<RE::MenuOpenCloseEvent>();
+	if (!eventSource) {
+		logger::error("[Upscaling] MenuOpenCloseEvent source not found; DLSS reset-on-load disabled");
+		return false;
+	}
+
+	eventSource->AddEventSink(&singleton);
+	registered.store(true, std::memory_order_release);
+	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for DLSS reset-on-load");
+	return true;
 }
 
 void Upscaling::Load()
@@ -4454,6 +4492,13 @@ void Upscaling::Upscale()
 		bool dispatched = false;
 		static bool loggedFoveatedFallback = false;
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
+
+		// VR-only workaround: loading transitions can leave DLSS in a slower persistent state
+		// until users manually toggle method/preset; force a one-shot feature rebuild instead.
+		if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
+			logger::debug("[Upscaling] LoadingMenu close detected - rebuilding DLSS feature");
+			streamline.DestroyDLSSResources();
+		}
 
 		if (foveatedDispatchRequested) {
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];

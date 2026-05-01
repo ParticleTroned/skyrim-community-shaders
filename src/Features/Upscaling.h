@@ -386,6 +386,7 @@ public:
 	float previousHistoryPeripheryTAACenterBlendFeather = 0.05f;
 	bool previousHistoryFSRRuntimePathActive = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
+	std::atomic<bool> pendingDLSSReset{ false };
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();
@@ -497,5 +498,12 @@ private:
 	{
 		static void thunk();
 		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
+		static bool Register();
 	};
 };

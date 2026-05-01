@@ -75,6 +75,7 @@ public:
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;
+	Texture2D* mainDepthCopy = nullptr;
 
 	ID3D11ShaderResourceView* GetBlendedDepthSRV() const
 	{

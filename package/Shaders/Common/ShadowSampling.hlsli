@@ -50,8 +50,7 @@ namespace ShadowSampling
 
 	float GetShadowDepth(float3 positionWS, uint eyeIndex)
 	{
-		float4 positionCSShifted = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(positionWS, 1));
-		return positionCSShifted.z / positionCSShifted.w;
+		return SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionWS, eyeIndex));
 	}
 
 	float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screenPosition, uint eyeIndex)

@@ -191,9 +191,17 @@ void Deferred::CopyShadowData()
 	ID3D11UnorderedAccessView* uavs[1]{ perShadow->uav.get() };
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-	ID3D11Buffer* buffers[3];
+	ID3D11Buffer* buffers[3]{};
 	context->PSGetConstantBuffers(0, 3, buffers);
-	context->PSGetConstantBuffers(12, 1, buffers + 1);
+
+	// Slot b12 contains the utility-shadow constants expected by CopyShadowDataCS.
+	// Replace b1 with b12 and release the overwritten COM ref from PSGetConstantBuffers.
+	ID3D11Buffer* utilityShadowBuffer = nullptr;
+	context->PSGetConstantBuffers(12, 1, &utilityShadowBuffer);
+	if (buffers[1]) {
+		buffers[1]->Release();
+	}
+	buffers[1] = utilityShadowBuffer;
 
 	context->CSSetConstantBuffers(0, 3, buffers);
 
@@ -204,7 +212,13 @@ void Deferred::CopyShadowData()
 	uavs[0] = nullptr;
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-	std::fill(buffers, buffers + ARRAYSIZE(buffers), nullptr);
+	// Release COM refs returned by PSGetConstantBuffers.
+	for (auto& buffer : buffers) {
+		if (buffer) {
+			buffer->Release();
+			buffer = nullptr;
+		}
+	}
 	context->CSSetConstantBuffers(0, 3, buffers);
 
 	context->CSSetShader(nullptr, nullptr, 0);

@@ -171,6 +171,14 @@ namespace FrameBuffer
 		return (uv.xy / uv.w) * float2(0.5f, -0.5f) + 0.5f;
 	}
 
+	// Projects a world-space (camera-relative) point into NDC using the eye's
+	// CameraViewProj and returns post-perspective z.
+	float GetShadowDepth(float3 positionWS, uint eyeIndex)
+	{
+		float4 positionCS = mul(CameraViewProj[eyeIndex], float4(positionWS, 1));
+		return positionCS.z / positionCS.w;
+	}
+
 	/**
 	* @brief Checks if the UV coordinates are outside the frame, considering dynamic resolution if specified.
 	*

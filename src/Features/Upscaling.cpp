@@ -504,6 +504,16 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	// Use better swap effect to prevent tearing and improve performance
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+	// FLIP_DISCARD requires at least two buffers.
+	if (pSwapChainDesc->BufferCount < 2)
+		pSwapChainDesc->BufferCount = 2;
+	// This branch currently runs without HDRDisplay integration; normalize sRGB
+	// swapchain formats to UNORM for the D3D12 proxy/inter-op path.
+	if (pSwapChainDesc->BufferDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) {
+		pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	} else if (pSwapChainDesc->BufferDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) {
+		pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	}
 
 	const bool isVR = REL::Module::IsVR();
 	bool shouldProxy = !isVR;

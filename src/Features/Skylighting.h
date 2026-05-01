@@ -86,7 +86,6 @@ public:
 	Texture3D* texAccumFramesArray = nullptr;
 
 	winrt::com_ptr<ID3D11ComputeShader> probeUpdateCompute = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> stbn_vec3_2Dx1D_128x128x64;
 
 	// misc parameters
 	uint probeArrayDims[3] = { 256, 256, 128 };

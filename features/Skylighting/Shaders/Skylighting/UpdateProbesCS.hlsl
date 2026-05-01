@@ -10,7 +10,7 @@ SamplerComparisonState comparisonSampler : register(s0);
 
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID) {
 	const float fadeInThreshold = 15;
-	const static sh2 unitSH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
+	const static sh2 unitSH = Skylighting::UNIT_SH;
 	const SharedData::SkylightingSettings settings = SharedData::skylightingSettings;
 	const uint3 arrayDims = max(settings.ArrayDims.xyz, uint3(1, 1, 1));
 	const float3 arrayDimsF = float3(arrayDims);

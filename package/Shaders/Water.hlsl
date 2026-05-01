@@ -822,7 +822,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 #					else
 	float3 positionMSSkylight = input.WPosition.xyz;
 #					endif
-	sh2 skylightingSH = Skylighting::sample(SharedData::skylightingSettings, Skylighting::SkylightingProbeArray, Skylighting::stbn_vec3_2Dx1D_128x128x64, input.HPosition.xy, positionMSSkylight, float3(0, 0, 1));
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, float3(0, 0, 1));
 	float skylighting = SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1));
 
 	float skylightingWetness = saturate(skylighting);
@@ -902,12 +902,10 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 				float3 positionMSSkylight = input.WPosition.xyz;
 #					endif
 
-				sh2 skylighting = Skylighting::sample(SharedData::skylightingSettings, Skylighting::SkylightingProbeArray, Skylighting::stbn_vec3_2Dx1D_128x128x64, input.HPosition.xy, positionMSSkylight, R);
+				sh2 skylighting = Skylighting::Sample(positionMSSkylight, R);
 				sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normal, -viewDirection, 0.0);
 
-				float skylightingSpecular = SphericalHarmonics::FuncProductIntegral(skylighting, specularLobe);
-				skylightingSpecular = lerp(1.0, skylightingSpecular, Skylighting::getFadeOutFactor(input.WPosition.xyz));
-				skylightingSpecular = Skylighting::mixSpecular(SharedData::skylightingSettings, skylightingSpecular);
+				float skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, specularLobe, Skylighting::GetFadeOutFactor(input.WPosition.xyz));
 
 				float3 specularIrradiance = 1;
 
@@ -1076,12 +1074,10 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 		float3 positionMSSkylight = skylightingPosition;
 #					endif
 
-		sh2 skylightingSH = Skylighting::sampleNoBias(SharedData::skylightingSettings, Skylighting::SkylightingProbeArray, positionMSSkylight);
-		float skylightingDiffuse = SphericalHarmonics::FuncProductIntegral(skylightingSH, SphericalHarmonics::EvaluateCosineLobe(float3(0, 0, 1))) / Math::PI;
-		skylightingDiffuse = saturate(skylightingDiffuse);
-		skylightingDiffuse = lerp(1.0, skylightingDiffuse, Skylighting::getFadeOutFactor(input.WPosition.xyz));
+		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
+		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(input.WPosition.xyz));
 
-		float3 refractionDiffuseColorSkylight = Skylighting::mixDiffuse(SharedData::skylightingSettings, skylightingDiffuse);
+		float3 refractionDiffuseColorSkylight = Skylighting::MixDiffuse(skylightingDiffuse);
 		refractionDiffuseColor = Color::LinearToSkyrimGamma(Color::SkyrimGammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);
 #				endif
 	}

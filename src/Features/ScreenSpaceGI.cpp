@@ -908,7 +908,6 @@ void ScreenSpaceGI::SetupResources()
 
 			texRadiance = eastl::make_unique<Texture2D>(texDesc);
 			texRadiance->CreateSRV(srvDesc);
-			texRadiance->CreateUAV(uavDesc);  // Create default UAV for mip 0
 
 			// Create individual UAVs for each mip level for prefiltering
 			for (uint i = 0; i < 5; ++i) {
@@ -920,10 +919,12 @@ void ScreenSpaceGI::SetupResources()
 				DX::ThrowIfFailed(device->CreateUnorderedAccessView(texRadiance->resource.get(), &mipUavDesc, uavRadiance[i].put()));
 			}
 
-			// Create temporary texture for prefiltering (single mip level, used as SRV input)
+			// Staging texture for mip 0 radiance. radianceDisocc writes it directly,
+			// prefilterRadiance reads it as SRV and writes the mip chain back to texRadiance.
+			// Avoids a full-texture CopySubresourceRegion each frame.
 			D3D11_TEXTURE2D_DESC tempTexDesc = texDesc;
 			tempTexDesc.MipLevels = 1;
-			tempTexDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			tempTexDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC tempSrvDesc = {
 				.Format = DXGI_FORMAT_R11G11B10_FLOAT,
@@ -933,8 +934,15 @@ void ScreenSpaceGI::SetupResources()
 					.MipLevels = 1 }
 			};
 
+			D3D11_UNORDERED_ACCESS_VIEW_DESC tempUavDesc = {
+				.Format = DXGI_FORMAT_R11G11B10_FLOAT,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+
 			texRadianceTemp = eastl::make_unique<Texture2D>(tempTexDesc);
 			texRadianceTemp->CreateSRV(tempSrvDesc);
+			texRadianceTemp->CreateUAV(tempUavDesc);
 		}
 
 		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_FLOAT;
@@ -1733,7 +1741,7 @@ void ScreenSpaceGI::DrawSSGI()
 		srvs.at(10) = nullptr;
 
 		// AO-only temporal mode does not need radiance or IL history traffic.
-		uavs.at(0) = runILPath ? texRadiance->uav.get() : nullptr;
+		uavs.at(0) = runILPath ? texRadianceTemp->uav.get() : nullptr;
 		if (temporalEnabled) {
 			uavs.at(1) = texAccumFrames[!lastFrameAccumTexIdx]->uav.get();
 			uavs.at(2) = texAo[!inputAoTexIdx]->uav.get();
@@ -1753,13 +1761,9 @@ void ScreenSpaceGI::DrawSSGI()
 		if (runPrefilterRadiancePass) {
 			TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Radiance");
 
-			// First copy mip 0 from radiance to temporary texture to avoid read/write conflict
-			context->CopySubresourceRegion(
-				texRadianceTemp->resource.get(), 0, 0, 0, 0,
-				texRadiance->resource.get(), 0, nullptr);
-
+			// radianceDisocc wrote mip 0 directly to texRadianceTemp above.
 			resetViews();
-			srvs.at(0) = texRadianceTemp->srv.get();  // Use temporary texture as input
+			srvs.at(0) = texRadianceTemp->srv.get();
 			uavs.at(0) = uavRadiance[0].get();        // Mip 0
 			uavs.at(1) = uavRadiance[1].get();        // Mip 1
 			uavs.at(2) = uavRadiance[2].get();        // Mip 2

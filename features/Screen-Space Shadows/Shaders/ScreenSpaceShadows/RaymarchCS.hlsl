@@ -61,7 +61,12 @@ cbuffer PerFrame : register(b1)
 	parameters.DynamicSampleCount = DynamicSampleCount;
 	parameters.DynamicReadCount = DynamicReadCount;
 
+#if defined(VR)
+	// Disabled in VR: depth bias causes subtle shadow shifting at stereo seams on camera motion.
+	parameters.UsePrecisionOffset = false;
+#else
 	parameters.UsePrecisionOffset = true;
+#endif
 
 	WriteScreenSpaceShadow(parameters, groupID, groupThreadID);
 }

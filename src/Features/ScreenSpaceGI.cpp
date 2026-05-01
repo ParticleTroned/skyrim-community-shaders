@@ -846,6 +846,9 @@ void ScreenSpaceGI::SetupResources()
 	texRadianceTemp = nullptr;
 	for (auto& uav : uavRadiance)
 		uav = nullptr;
+	texNormal = nullptr;
+	for (auto& uav : uavNormal)
+		uav = nullptr;
 	texIlY[0] = nullptr;
 	texIlY[1] = nullptr;
 	texIlCoCg[0] = nullptr;
@@ -954,6 +957,16 @@ void ScreenSpaceGI::SetupResources()
 			for (int i = 0; i < 5; ++i) {
 				uavDesc.Texture2D.MipSlice = i;
 				DX::ThrowIfFailed(device->CreateUnorderedAccessView(texWorkingDepth->resource.get(), &uavDesc, uavWorkingDepth[i].put()));
+			}
+		}
+
+		srvDesc.Format = uavDesc.Format = texDesc.Format = DXGI_FORMAT_R8G8_UNORM;
+		{
+			texNormal = eastl::make_unique<Texture2D>(texDesc);
+			texNormal->CreateSRV(srvDesc);
+			for (uint i = 0; i < 5; ++i) {
+				uavDesc.Texture2D.MipSlice = i;
+				DX::ThrowIfFailed(device->CreateUnorderedAccessView(texNormal->resource.get(), &uavDesc, uavNormal[i].put()));
 			}
 		}
 
@@ -1100,6 +1113,7 @@ void ScreenSpaceGI::ClearShaderCache()
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
 		&prefilterDepthsCompute,
 		&prefilterRadianceCompute,
+		&prefilterNormalCompute,
 		&radianceDisoccCompute,
 		&radianceDisoccAOOnlyCompute,
 		&giCompute,
@@ -1139,6 +1153,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
 			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "LINEAR_FILTER", "" } } },
+			{ &prefilterNormalCompute, "prefilterNormal.cs.hlsl", {} },
 			{ &radianceDisoccAOOnlyCompute, "radianceDisocc.cs.hlsl", {}, true, true, false },
 			{ &giAOOnlyCompute, "gi.cs.hlsl", {}, true, true, false, true },
 			{ &centerGIMaskedAOOnlyCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, false, true },
@@ -1195,11 +1210,13 @@ bool ScreenSpaceGI::ShadersOK()
 	const bool baseShadersOK = texNoise &&
 	                           texWorkingDepth &&
 	                           texPrevGeo &&
+	                           texNormal &&
 	                           texAo[0] &&
 	                           texAo[1] &&
 	                           texAccumFrames[0] &&
 	                           texAccumFrames[1] &&
 	                           prefilterDepthsCompute &&
+	                           prefilterNormalCompute &&
 	                           radianceDisoccAOOnlyCompute &&
 	                           giAOOnlyCompute &&
 	                           upsampleAOOnlyCompute &&
@@ -1782,6 +1799,24 @@ void ScreenSpaceGI::DrawSSGI()
 			lastFrameAccumTexIdx = !lastFrameAccumTexIdx;
 	}
 
+	// Prefilter normals for the regular AO/GI path.
+	if (!foveatedCenterOnlyMode) {
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Normals");
+
+		resetViews();
+		srvs.at(0) = rts[NORMALROUGHNESS].SRV;
+		uavs.at(0) = uavNormal[0].get();
+		uavs.at(1) = uavNormal[1].get();
+		uavs.at(2) = uavNormal[2].get();
+		uavs.at(3) = uavNormal[3].get();
+		uavs.at(4) = uavNormal[4].get();
+
+		context->CSSetShaderResources(0, 1, srvs.data());
+		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
+		context->CSSetShader(prefilterNormalCompute.get(), nullptr, 0);
+		context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
+	}
+
 	// GI
 	if (!foveatedCenterOnlyMode) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - GI");
@@ -1800,6 +1835,7 @@ void ScreenSpaceGI::DrawSSGI()
 				srvs.at(8) = texGiSpecular[inputAoTexIdx]->srv.get();
 			}
 		}
+		srvs.at(10) = texNormal->srv.get();
 
 		uavs.at(0) = texAo[!inputAoTexIdx]->uav.get();
 		if (runILPath) {
@@ -1903,6 +1939,7 @@ void ScreenSpaceGI::DrawSSGI()
 			srvs.at(2) = runILPath ? texRadiance->srv.get() : nullptr;
 			srvs.at(3) = texNoise->srv.get();
 			srvs.at(9) = runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr;
+			srvs.at(10) = texNormal->srv.get();
 
 			uavs.at(0) = centerBlendNeeded ? texCenterAo->uav.get() : texAo[!inputAoTexIdx]->uav.get();
 			if (runILPath) {

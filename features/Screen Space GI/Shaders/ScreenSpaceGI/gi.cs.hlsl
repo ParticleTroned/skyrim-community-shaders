@@ -44,6 +44,7 @@ Texture2D<float> srcPrevAo : register(t5);             // maybe half-res
 Texture2D<float4> srcPrevY : register(t6);             // maybe half-res
 Texture2D<float2> srcPrevCoCg : register(t7);          // maybe half-res
 Texture2D<float4> srcPrevGISpecular : register(t8);    // maybe half-res
+Texture2D<float2> srcNormal : register(t10);
 #ifdef CENTER_FULL_PASS
 Texture2D<float4> srcSceneColor : register(t9);
 #endif
@@ -262,11 +263,13 @@ void CalculateGI(
 				float SZ = srcWorkingDepth.SampleLevel(samplerPointClamp, sampleUV * frameScale, mipLevel);
 
 				float3 samplePos = ScreenToViewPosition(sampleScreenPos, SZ, sampleEyeIndex);
+#if defined(VR)
 				if (sampleEyeIndex != eyeIndex) {
 					if (abs(SZ - viewspaceZ) > viewspaceZ * 0.1)
 						continue;
 					samplePos = FrameBuffer::WorldToView(FrameBuffer::ViewToWorld(samplePos, true, sampleEyeIndex), true, eyeIndex);
 				}
+#endif
 				float3 sampleDelta = samplePos - pixCenterPos;
 				float3 sampleHorizonVec = normalize(sampleDelta);
 
@@ -316,7 +319,11 @@ void CalculateGI(
 					float giBoost = 4.0 * Math::PI * (1 + GIDistanceCompensation * smoothstep(0, GICompensationMaxDist, s * EffectRadius));
 
 					// IL
+#ifdef CENTER_FULL_PASS
 					float3 normalSample = GBuffer::DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
+#else
+					float3 normalSample = GBuffer::DecodeNormal(srcNormal.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance));
+#endif
 					if (dot(samplePos, normalSample) > 0)
 						normalSample = -normalSample;
 					float frontBackMult = -dot(normalSample, sampleHorizonVec);
@@ -428,7 +435,11 @@ void CalculateGI(
 
 	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pxCoord);
 
+#ifdef CENTER_FULL_PASS
 	float2 normalSample = FULLRES_LOAD(srcNormalRoughness, pxCoord, uv * frameScale, samplerLinearClamp).xy;
+#else
+	float2 normalSample = FULLRES_LOAD(srcNormal, pxCoord, uv * OUT_FRAME_SCALE, samplerLinearClamp);
+#endif
 	float3 viewspaceNormal = GBuffer::DecodeNormal(normalSample);
 
 	half2 encodedWorldNormal = GBuffer::EncodeNormal(ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]));

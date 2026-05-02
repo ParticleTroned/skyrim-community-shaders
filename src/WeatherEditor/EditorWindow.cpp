@@ -1395,17 +1395,11 @@ void EditorWindow::Draw()
 	static bool wasOpen = false;
 
 	if (open && !wasOpen) {
-		// Editor just opened - disable vanity camera and restore session
+		// Editor just opened - disable vanity camera
 		DisableVanityCamera();
-		RestoreSessionWidgets();
-		HideGameMenus();
-		BackgroundBlur::SetWeatherEditorActive(settings.showViewport);
 	} else if (!open && wasOpen) {
-		// Editor just closed - restore vanity camera and save session
+		// Editor just closed - restore vanity camera
 		RestoreVanityCamera();
-		SaveSessionWidgets();
-		ShowGameMenus();
-		BackgroundBlur::SetWeatherEditorActive(false);
 	}
 
 	wasOpen = open;

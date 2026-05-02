@@ -1,6 +1,8 @@
 #include "State.h"
 
+#include <algorithm>
 #include <codecvt>
+#include <thread>
 
 #include <pystring/pystring.h>
 
@@ -457,8 +459,8 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Dump Shaders"] = shaderCache->IsDump();
 	advanced["Log Level"] = logLevel;
 	advanced["Shader Defines"] = shaderDefinesString;
-	advanced["Compiler Threads"] = shaderCache->GetCompilationThreadCount();
-	advanced["Background Compiler Threads"] = shaderCache->GetBackgroundCompilationThreadCount();
+	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
+	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
 	advanced["Refraction Scale"] = refractionScale;
@@ -526,6 +528,7 @@ void State::LoadFromJson(nlohmann::json& settings)
 
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
+		const auto maxCompilerThreads = std::max(1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 		if (advanced.contains("Dump Shaders") && advanced["Dump Shaders"].is_boolean())
 			shaderCache->SetDump(advanced["Dump Shaders"]);
 		if (advanced.contains("Log Level") && advanced["Log Level"].is_number_integer())
@@ -533,9 +536,9 @@ void State::LoadFromJson(nlohmann::json& settings)
 		if (advanced.contains("Shader Defines") && advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
 		if (advanced.contains("Compiler Threads") && advanced["Compiler Threads"].is_number_integer())
-			shaderCache->SetCompilationThreadCount(advanced["Compiler Threads"].get<int32_t>());
+			shaderCache->compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Background Compiler Threads") && advanced["Background Compiler Threads"].is_number_integer())
-			shaderCache->SetBackgroundCompilationThreadCount(advanced["Background Compiler Threads"].get<int32_t>());
+			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Use FileWatcher") && advanced["Use FileWatcher"].is_boolean())
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())
@@ -985,7 +988,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		// partial submersion.  Stored as eye-0 camera-relative Z to match WaterData[].w.
 		data.WaterSystemHeight = -RE::NI_INFINITY;
 		if (globals::game::isVR) {
-			if (auto player = globals::game::player) {
+			if (auto player = RE::PlayerCharacter::GetSingleton()) {
 				if (player->loadedData && player->loadedData->underwaterCount > 0) {
 					float worldHeight = player->GetWaterHeight();
 					if (worldHeight > -RE::NI_INFINITY) {

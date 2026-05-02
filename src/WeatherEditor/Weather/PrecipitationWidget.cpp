@@ -6,6 +6,38 @@
 #include "RE/N/NiSourceTexture.h"
 #include "Utils/Game.h"
 
+namespace
+{
+	using PrecipitationData = RE::BGSShaderParticleGeometryData;
+	using DataID = PrecipitationData::DataID;
+	using SettingValue = PrecipitationData::SETTING_VALUE;
+
+	void SetSettingValue(PrecipitationData* precipitation, DataID id, SettingValue value)
+	{
+		const auto index = static_cast<uint32_t>(id);
+		if (REL::Module::IsVR()) {
+			precipitation->GetVRRuntimeData().data[index].value = value;
+			return;
+		}
+
+		precipitation->GetRuntimeData().data[index] = value;
+	}
+
+	void SetSetting(PrecipitationData* precipitation, DataID id, float value)
+	{
+		SettingValue setting{};
+		setting.f = value;
+		SetSettingValue(precipitation, id, setting);
+	}
+
+	void SetSetting(PrecipitationData* precipitation, DataID id, uint32_t value)
+	{
+		SettingValue setting{};
+		setting.i = value;
+		SetSettingValue(precipitation, id, setting);
+	}
+}
+
 void PrecipitationWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
@@ -206,20 +238,18 @@ void PrecipitationWidget::ApplyChanges()
 	if (!precipitation)
 		return;
 
-	using DataID = RE::BGSShaderParticleGeometryData::DataID;
-
-	precipitation->GetSettingRef(DataID::kGravityVelocity).f = settings.gravityVelocity;
-	precipitation->GetSettingRef(DataID::kRotationVelocity).f = settings.rotationVelocity;
-	precipitation->GetSettingRef(DataID::kParticleSizeX).f = settings.particleSizeX;
-	precipitation->GetSettingRef(DataID::kParticleSizeY).f = settings.particleSizeY;
-	precipitation->GetSettingRef(DataID::kCenterOffsetMin).f = settings.centerOffsetMin;
-	precipitation->GetSettingRef(DataID::kCenterOffsetMax).f = settings.centerOffsetMax;
-	precipitation->GetSettingRef(DataID::kStartRotationRange).f = settings.startRotationRange;
-	precipitation->GetSettingRef(DataID::kNumSubtexturesX).i = settings.numSubtexturesX;
-	precipitation->GetSettingRef(DataID::kNumSubtexturesY).i = settings.numSubtexturesY;
-	precipitation->GetSettingRef(DataID::kParticleType).i = settings.particleType;
-	precipitation->GetSettingRef(DataID::kBoxSize).f = settings.boxSize;
-	precipitation->GetSettingRef(DataID::kParticleDensity).f = settings.particleDensity;
+	SetSetting(precipitation, DataID::kGravityVelocity, settings.gravityVelocity);
+	SetSetting(precipitation, DataID::kRotationVelocity, settings.rotationVelocity);
+	SetSetting(precipitation, DataID::kParticleSizeX, settings.particleSizeX);
+	SetSetting(precipitation, DataID::kParticleSizeY, settings.particleSizeY);
+	SetSetting(precipitation, DataID::kCenterOffsetMin, settings.centerOffsetMin);
+	SetSetting(precipitation, DataID::kCenterOffsetMax, settings.centerOffsetMax);
+	SetSetting(precipitation, DataID::kStartRotationRange, settings.startRotationRange);
+	SetSetting(precipitation, DataID::kNumSubtexturesX, settings.numSubtexturesX);
+	SetSetting(precipitation, DataID::kNumSubtexturesY, settings.numSubtexturesY);
+	SetSetting(precipitation, DataID::kParticleType, settings.particleType);
+	SetSetting(precipitation, DataID::kBoxSize, settings.boxSize);
+	SetSetting(precipitation, DataID::kParticleDensity, settings.particleDensity);
 	GET_INSTANCE_MEMBER(particleTexture, precipitation)
 	particleTexture.textureName = settings.particleTexture.c_str();
 	ApplyLiveParticleTexture(settings.particleTexture);

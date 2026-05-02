@@ -3,6 +3,7 @@
 #include "ThemePresets.h"
 
 #include "BackgroundBlur.h"
+#include "Features/VR.h"
 #include "Fonts.h"
 
 #include <algorithm>

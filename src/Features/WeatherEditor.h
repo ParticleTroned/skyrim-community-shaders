@@ -164,6 +164,7 @@ private:
 
 	// Helper functions
 	static void EnsureDataLoaded();
+	static void ApplySavedEditorOverrides();
 	static void ApplySavedWeatherOverrides();
 	static void LoadAllWeathers();
 	static void UpdateFilteredWeathers();

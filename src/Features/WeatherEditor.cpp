@@ -10,7 +10,14 @@
 #include "WeatherManager.h"
 
 #include "WeatherEditor/EditorWindow.h"
+#include "WeatherEditor/Weather/ImageSpaceWidget.h"
+#include "WeatherEditor/Weather/LensFlareWidget.h"
+#include "WeatherEditor/Weather/LightingTemplateWidget.h"
+#include "WeatherEditor/Weather/PrecipitationWidget.h"
+#include "WeatherEditor/Weather/ReferenceEffectWidget.h"
+#include "WeatherEditor/Weather/VolumetricLightingWidget.h"
 #include "WeatherEditor/Weather/WeatherWidget.h"
+#include "WeatherEditor/WeatherUtils.h"
 
 #include <filesystem>
 #include <fstream>
@@ -26,6 +33,113 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	struct OverrideLoadStats
+	{
+		size_t applied = 0;
+		size_t skipped = 0;
+		size_t failed = 0;
+	};
+
+	bool LoadOverrideJson(const std::filesystem::directory_entry& entry, json& out, OverrideLoadStats& stats, std::string_view label)
+	{
+		std::ifstream settingsFile(entry.path());
+		if (!settingsFile.good() || !settingsFile.is_open()) {
+			logger::warn("Failed to open {} override file: {}", label, entry.path().string());
+			stats.failed++;
+			return false;
+		}
+
+		try {
+			settingsFile >> out;
+		} catch (const nlohmann::json::parse_error& e) {
+			logger::warn("Error parsing {} override file ({}): {}", label, entry.path().string(), e.what());
+			stats.failed++;
+			return false;
+		}
+
+		if (!out.is_object()) {
+			logger::warn("Skipping {} override file with non-object JSON: {}", label, entry.path().string());
+			stats.skipped++;
+			return false;
+		}
+
+		return true;
+	}
+
+	void LogOverrideStats(std::string_view label, const OverrideLoadStats& stats)
+	{
+		if (stats.applied > 0 || stats.failed > 0) {
+			logger::info("Applied saved {} overrides: applied={}, skipped={}, failed={}", label, stats.applied, stats.skipped, stats.failed);
+		}
+	}
+
+	template <class WidgetType, class FormType>
+	bool ApplyWidgetOverride(FormType* form, const json& settingsJson)
+	{
+		if (!form || !settingsJson.is_object()) {
+			return false;
+		}
+
+		WidgetType widget(form);
+		if (!widget.form) {
+			return false;
+		}
+
+		widget.CacheFormData();
+		widget.js = settingsJson;
+		widget.LoadSettings();
+		return true;
+	}
+
+	template <class WidgetType, class FormType>
+	OverrideLoadStats ApplySavedWidgetOverrides(const char* folderName, const char* label, bool warnUnmatched = true)
+	{
+		OverrideLoadStats stats;
+
+		const auto folderPath = Util::PathHelpers::GetCommunityShaderPath() / folderName;
+		std::error_code ec;
+		if (!std::filesystem::exists(folderPath, ec) || !std::filesystem::is_directory(folderPath, ec)) {
+			return stats;
+		}
+
+		try {
+			for (const auto& entry : std::filesystem::directory_iterator(folderPath)) {
+				if (!entry.is_regular_file() || entry.path().extension() != ".json") {
+					continue;
+				}
+
+				json settingsJson;
+				if (!LoadOverrideJson(entry, settingsJson, stats, label)) {
+					continue;
+				}
+
+				const auto formKey = entry.path().stem().string();
+				auto* form = WeatherUtils::FindFormByEditorIDOrFileKey<FormType>(formKey);
+				if (!form) {
+					if (warnUnmatched) {
+						logger::warn("{} override file has no matching form: {}", label, entry.path().string());
+						stats.failed++;
+					} else {
+						stats.skipped++;
+					}
+					continue;
+				}
+
+				if (ApplyWidgetOverride<WidgetType>(form, settingsJson)) {
+					stats.applied++;
+				} else {
+					stats.failed++;
+				}
+			}
+		} catch (const std::filesystem::filesystem_error& e) {
+			logger::warn("Error scanning {} override directory ({}): {}", label, folderPath.string(), e.what());
+			stats.failed++;
+		}
+
+		LogOverrideStats(label, stats);
+		return stats;
+	}
+
 	bool HasWeatherRecordOverrides(const json& weatherData)
 	{
 		if (!weatherData.is_object())
@@ -62,7 +176,7 @@ namespace
 void WeatherEditor::DataLoaded()
 {
 	s_dataAvailable = true;
-	ApplySavedWeatherOverrides();
+	ApplySavedEditorOverrides();
 }
 
 void WeatherEditor::EnsureDataLoaded()
@@ -72,6 +186,18 @@ void WeatherEditor::EnsureDataLoaded()
 
 	EditorWindow::GetSingleton()->EnsureResources();
 	LoadAllWeathers();
+}
+
+void WeatherEditor::ApplySavedEditorOverrides()
+{
+	ApplySavedWidgetOverrides<LightingTemplateWidget, RE::BGSLightingTemplate>("Lighting Templates", "lighting-template");
+	ApplySavedWidgetOverrides<ImageSpaceWidget, RE::TESImageSpace>("ImageSpaces", "imagespace");
+	ApplySavedWidgetOverrides<VolumetricLightingWidget, RE::BGSVolumetricLighting>("Volumetric Lighting", "volumetric-lighting");
+	ApplySavedWidgetOverrides<PrecipitationWidget, RE::BGSShaderParticleGeometryData>("Precipitation", "precipitation");
+	ApplySavedWidgetOverrides<ReferenceEffectWidget, RE::BGSReferenceEffect>("Visual Effects", "visual-effect");
+	ApplySavedWidgetOverrides<LensFlareWidget, RE::BGSLensFlare>("Other Editor Widgets", "lens-flare", false);
+
+	ApplySavedWeatherOverrides();
 }
 
 void WeatherEditor::ApplySavedWeatherOverrides()

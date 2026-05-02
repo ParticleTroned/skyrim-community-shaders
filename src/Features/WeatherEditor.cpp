@@ -29,10 +29,7 @@ void WeatherEditor::EnsureDataLoaded()
 	if (!s_dataAvailable)
 		return;
 
-	if (!s_resourcesInitialized) {
-		EditorWindow::GetSingleton()->SetupResources();
-		s_resourcesInitialized = true;
-	}
+	EditorWindow::GetSingleton()->EnsureResources();
 	LoadAllWeathers();
 }
 
@@ -285,6 +282,8 @@ void WeatherEditor::RenderWeatherDetailsWindow(bool* open)
 {
 	if (!open || !*open)
 		return;
+
+	EnsureDataLoaded();
 
 	auto player = RE::PlayerCharacter::GetSingleton();
 	if (!player || !player->parentCell)

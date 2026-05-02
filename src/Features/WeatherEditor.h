@@ -133,7 +133,6 @@ private:
 	// Static state for weather picker and data
 	static inline bool s_dataAvailable = false;
 	static inline bool s_weathersLoaded = false;
-	static inline bool s_resourcesInitialized = false;
 	static inline std::vector<RE::TESWeather*> s_allWeathers;
 	static inline std::vector<RE::TESWeather*> s_filteredWeathers;
 	static inline int s_selectedWeatherIdx = -1;

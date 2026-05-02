@@ -114,6 +114,7 @@ public:
 	void RenderUI();
 
 	void SetupResources();
+	void EnsureResources();
 
 	void Draw();
 
@@ -231,6 +232,7 @@ private:
 	void LoadSettings();
 	void ShowSettingsWindow();
 	void Load();
+	bool resourcesInitialized = false;
 	json j;
 	std::string settingsFilename = "EditorSettings";
 	bool showSettingsWindow = false;

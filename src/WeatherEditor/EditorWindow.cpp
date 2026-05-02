@@ -1318,6 +1318,8 @@ void EditorWindow::OpenWeatherFeatureSetting(RE::TESWeather* weather, const std:
 		return;
 	}
 
+	EnsureResources();
+
 	// Open the editor if it's not already open
 	if (!open) {
 		open = true;
@@ -1354,6 +1356,12 @@ EditorWindow::~EditorWindow()
 
 void EditorWindow::SetupResources()
 {
+	if (resourcesInitialized)
+		return;
+
+	if (!RE::TESDataHandler::GetSingleton())
+		return;
+
 	Load();
 	PaletteWindow::GetSingleton()->Load();
 	InvalidateJsonAttachmentCache();
@@ -1370,10 +1378,19 @@ void EditorWindow::SetupResources()
 	// Cache simple form widgets for form picker performance
 	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets);
 	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
+
+	resourcesInitialized = true;
+}
+
+void EditorWindow::EnsureResources()
+{
+	SetupResources();
 }
 
 void EditorWindow::Draw()
 {
+	EnsureResources();
+
 	// Track editor open state for vanity camera management
 	static bool wasOpen = false;
 

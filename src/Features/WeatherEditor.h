@@ -164,6 +164,7 @@ private:
 
 	// Helper functions
 	static void EnsureDataLoaded();
+	static void ApplySavedWeatherOverrides();
 	static void LoadAllWeathers();
 	static void UpdateFilteredWeathers();
 	static int FindWeatherIndex(RE::TESWeather* targetWeather);

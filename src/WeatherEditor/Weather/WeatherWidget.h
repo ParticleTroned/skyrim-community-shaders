@@ -108,6 +108,7 @@ public:
 
 	WeatherWidget* GetParent();
 	bool HasParent() const;
+	static bool ApplySavedSettings(RE::TESWeather* a_weather, const json& a_settingsJson);
 	void SetWeatherValues();
 	void LoadWeatherValues();
 	void ApplyChanges() override;

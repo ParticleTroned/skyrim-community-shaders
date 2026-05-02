@@ -440,7 +440,8 @@ void WeatherWidget::LoadSettings()
 					settings.fogProperties.size());
 			}
 
-			// Record form references (resolved by matching widget EditorID)
+			// Record form references. Prefer the loaded editor widget cache when it exists,
+			// but support direct form lookup so startup override loading does not build the UI.
 			// Three cases: key missing -> vanilla, key present with "" -> explicit None (nullptr), key present with id -> lookup form
 			auto* editorWindow = EditorWindow::GetSingleton();
 			auto loadRef = [&]<typename T>(const std::string& key, const std::vector<std::unique_ptr<Widget>>& widgets, T* vanillaValue) -> T* {
@@ -450,6 +451,8 @@ void WeatherWidget::LoadSettings()
 				if (id.empty())
 					return nullptr;
 				auto* f = WeatherUtils::FindFormByEditorID(id, widgets);
+				if (!f)
+					f = WeatherUtils::FindFormByEditorIDOrFileKey<T>(id);
 				return f ? static_cast<T*>(f) : vanillaValue;
 			};
 			for (size_t i = 0; i < ColorTimes::kTotal; i++) {
@@ -512,6 +515,23 @@ void WeatherWidget::SaveSettings()
 	} catch (const nlohmann::json::exception& e) {
 		logger::error("Weather {}: Failed to serialize settings to JSON: {}", GetEditorID(), e.what());
 	}
+}
+
+bool WeatherWidget::ApplySavedSettings(RE::TESWeather* a_weather, const json& a_settingsJson)
+{
+	if (!a_weather || !a_settingsJson.is_object()) {
+		return false;
+	}
+
+	WeatherWidget widget(a_weather);
+	if (!widget.weather) {
+		return false;
+	}
+
+	widget.CacheFormData();
+	widget.js = a_settingsJson;
+	widget.LoadSettings();
+	return true;
 }
 
 WeatherWidget* WeatherWidget::GetParent()

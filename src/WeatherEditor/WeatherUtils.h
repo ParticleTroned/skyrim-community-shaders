@@ -378,6 +378,56 @@ namespace WeatherUtils
 	RE::TESForm* FindFormByEditorID(std::string_view editorID, const std::vector<std::unique_ptr<Widget>>& widgets);
 	std::string FindEditorIDByForm(const RE::TESForm* form, const std::vector<std::unique_ptr<Widget>>& widgets);
 
+	template <typename T>
+	T* FindFormByEditorIDOrFileKey(std::string_view identifier)
+	{
+		if (identifier.empty())
+			return nullptr;
+
+		const std::string id(identifier);
+		std::string fileKey = id;
+		static constexpr std::string_view kFallbackPrefixes[] = {
+			"IS_",
+			"VL_",
+			"Particle_",
+			"LensFlare_",
+			"VisualEffect_",
+			"Form_",
+		};
+
+		for (const auto prefix : kFallbackPrefixes) {
+			if (fileKey.starts_with(prefix)) {
+				fileKey = fileKey.substr(prefix.size());
+				break;
+			}
+		}
+
+		// Saved weather-editor references may use the load-order-stable SPID key.
+		if (fileKey.starts_with("0x") || fileKey.starts_with("0X")) {
+			if (const auto formID = Util::SpidToFormId(fileKey)) {
+				if (auto* form = RE::TESForm::LookupByID<T>(formID)) {
+					return form;
+				}
+			}
+		}
+
+		auto* dataHandler = RE::TESDataHandler::GetSingleton();
+		if (!dataHandler)
+			return nullptr;
+
+		auto& forms = dataHandler->GetFormArray<T>();
+		for (auto* form : forms) {
+			if (!form)
+				continue;
+
+			if (Util::GetFormFileKey(form) == fileKey || Util::GetFormEditorID(form) == id) {
+				return form;
+			}
+		}
+
+		return nullptr;
+	}
+
 	// Set the current widget for undo tracking (should be called at start of widget Draw())
 	void SetCurrentWidget(Widget* widget);
 

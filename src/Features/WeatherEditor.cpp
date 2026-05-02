@@ -10,7 +10,12 @@
 #include "WeatherManager.h"
 
 #include "WeatherEditor/EditorWindow.h"
+#include "WeatherEditor/Weather/WeatherWidget.h"
+
+#include <filesystem>
+#include <fstream>
 #include <nlohmann/json.hpp>
+#include <unordered_map>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WeatherEditor::WeatherDetailsWindowSettings,
@@ -19,9 +24,45 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Position,
 	PositionSet)
 
+namespace
+{
+	bool HasWeatherRecordOverrides(const json& weatherData)
+	{
+		if (!weatherData.is_object())
+			return false;
+
+		static constexpr std::string_view kRecordKeys[] = {
+			"weatherProperties",
+			"weatherColors",
+			"fogProperties",
+			"atmosphereColors",
+			"dalc",
+			"clouds",
+			"precipitationDataRef",
+			"referenceEffectRef",
+		};
+
+		for (const auto key : kRecordKeys) {
+			if (weatherData.contains(key)) {
+				return true;
+			}
+		}
+
+		for (size_t i = 0; i < ColorTimes::kTotal; i++) {
+			if (weatherData.contains(std::format("imageSpaceRef_{}", i)) ||
+				weatherData.contains(std::format("volumetricLightingRef_{}", i))) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+}
+
 void WeatherEditor::DataLoaded()
 {
 	s_dataAvailable = true;
+	ApplySavedWeatherOverrides();
 }
 
 void WeatherEditor::EnsureDataLoaded()
@@ -31,6 +72,88 @@ void WeatherEditor::EnsureDataLoaded()
 
 	EditorWindow::GetSingleton()->EnsureResources();
 	LoadAllWeathers();
+}
+
+void WeatherEditor::ApplySavedWeatherOverrides()
+{
+	auto* dataHandler = RE::TESDataHandler::GetSingleton();
+	if (!dataHandler)
+		return;
+
+	const auto weathersPath = Util::PathHelpers::GetCommunityShaderPath() / "Weathers";
+	std::error_code ec;
+	if (!std::filesystem::exists(weathersPath, ec) || !std::filesystem::is_directory(weathersPath, ec)) {
+		return;
+	}
+
+	std::unordered_map<std::string, RE::TESWeather*> weatherByKey;
+	auto& weatherArray = dataHandler->GetFormArray<RE::TESWeather>();
+	weatherByKey.reserve(weatherArray.size());
+	for (auto* weather : weatherArray) {
+		if (!weather)
+			continue;
+
+		const auto fileKey = Util::GetFormFileKey(weather);
+		weatherByKey.emplace(fileKey, weather);
+		weatherByKey.emplace(std::format("Form_{}", fileKey), weather);
+		if (const auto editorID = Util::GetFormEditorID(weather); !editorID.empty()) {
+			weatherByKey.emplace(editorID, weather);
+		}
+	}
+
+	size_t appliedCount = 0;
+	size_t skippedCount = 0;
+	size_t failedCount = 0;
+
+	try {
+		for (const auto& entry : std::filesystem::directory_iterator(weathersPath)) {
+			if (!entry.is_regular_file() || entry.path().extension() != ".json") {
+				continue;
+			}
+
+			std::ifstream settingsFile(entry.path());
+			if (!settingsFile.good() || !settingsFile.is_open()) {
+				logger::warn("Failed to open weather override file: {}", entry.path().string());
+				failedCount++;
+				continue;
+			}
+
+			json weatherData;
+			try {
+				settingsFile >> weatherData;
+			} catch (const nlohmann::json::parse_error& e) {
+				logger::warn("Error parsing weather override file ({}): {}", entry.path().string(), e.what());
+				failedCount++;
+				continue;
+			}
+
+			if (!HasWeatherRecordOverrides(weatherData)) {
+				skippedCount++;
+				continue;
+			}
+
+			const auto weatherKey = entry.path().stem().string();
+			auto weatherIt = weatherByKey.find(weatherKey);
+			if (weatherIt == weatherByKey.end()) {
+				logger::warn("Weather override file has no matching weather record: {}", entry.path().string());
+				failedCount++;
+				continue;
+			}
+
+			if (WeatherWidget::ApplySavedSettings(weatherIt->second, weatherData)) {
+				appliedCount++;
+			} else {
+				failedCount++;
+			}
+		}
+	} catch (const std::filesystem::filesystem_error& e) {
+		logger::warn("Error scanning weather override directory ({}): {}", weathersPath.string(), e.what());
+		return;
+	}
+
+	if (appliedCount > 0 || failedCount > 0) {
+		logger::info("Applied saved weather record overrides: applied={}, skippedFeatureOnly={}, failed={}", appliedCount, skippedCount, failedCount);
+	}
 }
 
 int8_t LerpInt8_t(const int8_t oldValue, const int8_t newVal, const float lerpValue)

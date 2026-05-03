@@ -619,7 +619,7 @@ void Upscaling::DrawSettings()
 	std::vector<UpscaleUiChoice> upscaleChoices = {
 		{ UpscaleMethod::kNONE, false, "None" },
 		{ UpscaleMethod::kTAA, false, "TAA" },
-		{ UpscaleMethod::kFSR, false, "AMD FSR 3.1" }
+		{ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" }
 	};
 
 	const bool isAmdAdapter = fidelityFX.IsAmdAdapterDetected();
@@ -670,7 +670,7 @@ void Upscaling::DrawSettings()
 	ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Selects the upscaling backend.");
-		ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1, Runtime FSR 4, or None.");
+		ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
@@ -697,10 +697,10 @@ void Upscaling::DrawSettings()
 	if (upscaleMethod == UpscaleMethod::kFSR && settings.fsr4RuntimeEnable) {
 		ImGui::TextDisabled("Current frame path: %s", fidelityFX.GetRuntimeUpscalerLastFramePathLabel());
 		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
-			ImGui::TextDisabled("Runtime FSR4 is latched off after a runtime failure; using host FSR 3.1 fallback.");
+			ImGui::TextDisabled("Runtime FSR4 is latched off after a runtime failure; using host FSR 3.1.5 fallback.");
 		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
 		           !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
-			ImGui::TextDisabled("Runtime FSR4 context creation failed; using host FSR 3.1 fallback.");
+			ImGui::TextDisabled("Runtime FSR4 context creation failed; using host FSR 3.1.5 fallback.");
 		}
 	}
 
@@ -1190,7 +1190,7 @@ void Upscaling::DrawSettings()
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
 			ImGui::Separator();
-			ImGui::Text("AMD FSR Mode: %s", settings.fsr4RuntimeEnable ? "Runtime FSR 4 requested" : "FSR 3.1");
+			ImGui::Text("AMD FSR Mode: %s", settings.fsr4RuntimeEnable ? "Runtime FSR 4 requested" : "FSR 3.1.5");
 			ImGui::Text("Current Frame Path: %s", fidelityFX.GetRuntimeUpscalerLastFramePathLabel());
 			if (settings.fsr4RuntimeEnable) {
 				const bool supportKnown = fidelityFX.HasRuntimeUpscalerSupportCheckResult();
@@ -1746,7 +1746,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateUpscalingTextureResources(a_upscalemethod);
 		}
 
-		// Host FSR3.1 and runtime FSR4 keep separate temporal state; rebuild on path changes.
+		// Host FSR3.1.5 and runtime FSR4 keep separate temporal state; rebuild on path changes.
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR) {
 			fidelityFX.DestroyFSRResources();
 			fidelityFX.CreateFSRResources();

@@ -276,11 +276,11 @@ const char* FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
 
 	switch (runtimeUpscalerLastFramePath) {
 	case RuntimeUpscalerFramePath::kHostFsr31:
-		return "Host FSR 3.1";
+		return "Host FSR 3.1.5";
 	case RuntimeUpscalerFramePath::kRuntimeFsr4:
 		return "Runtime FSR4";
 	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
-		return "Host FSR 3.1 fallback";
+		return "Host FSR 3.1.5 fallback";
 	case RuntimeUpscalerFramePath::kInactive:
 	default:
 		return "Pending FSR dispatch";
@@ -320,7 +320,7 @@ void FidelityFX::LatchRuntimeUpscalerFailure()
 		return;
 
 	runtimeUpscalerFailureLatched = true;
-	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using host FSR3.1 until FSR resources are rebuilt or the method changes.");
+	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using host FSR3.1.5 until FSR resources are rebuilt or the method changes.");
 }
 
 void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)

@@ -1567,6 +1567,7 @@ void VR::SubmitOverlayFrame()
 	}
 
 	InstallSubmitHook();
+	const bool useInSceneOverlay = inSceneResources.submitHookInstalled;
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
 	auto* gameOverlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
@@ -1625,59 +1626,68 @@ void VR::SubmitOverlayFrame()
 		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 		globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 
-		// Apply highlight tint to HMD overlay if it's being dragged
-		bool hmdBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging &&
-		                       (overlayDragState.mode == OverlayDragState::DragMode::HMD ||
-								   overlayDragState.mode == OverlayDragState::DragMode::FixedWorld);
-		Util::ApplyHighlightTintToTexture(menuTexture.get(), hmdBeingDragged, settings.dragHighlightColor);
+		if (useInSceneOverlay) {
+			// The submit hook renders menuTexture into each eye. Keep the legacy
+			// IVROverlay handles hidden or the menu appears twice with a stereo offset.
+			const bool overlayBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging;
+			Util::ApplyHighlightTintToTexture(menuTexture.get(), overlayBeingDragged, settings.dragHighlightColor);
+			UpdateFixedWorldPositioning();
+			HideAllOverlays(gameOverlay);
+		} else {
+			// Apply highlight tint to HMD overlay if it's being dragged
+			bool hmdBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging &&
+			                       (overlayDragState.mode == OverlayDragState::DragMode::HMD ||
+									   overlayDragState.mode == OverlayDragState::DragMode::FixedWorld);
+			Util::ApplyHighlightTintToTexture(menuTexture.get(), hmdBeingDragged, settings.dragHighlightColor);
 
-		// Update overlay position and submit to SteamVR
-		UpdateVROverlayPosition();
-		vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-		if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
-			Util::SetOverlayInputFlags(gameOverlay, menuOverlayHandle);
-			vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
-			if (err != vr::VROverlayError_None) {
-				logger::error("SetOverlayTexture failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+			// Update overlay position and submit to SteamVR
+			UpdateVROverlayPosition();
+			vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
+			if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
+				Util::SetOverlayInputFlags(gameOverlay, menuOverlayHandle);
+				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
+				if (err != vr::VROverlayError_None) {
+					logger::error("SetOverlayTexture failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				}
+				err = gameOverlay->ShowOverlay(menuOverlayHandle);
+				if (err != vr::VROverlayError_None) {
+					logger::error("ShowOverlay failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				}
+			} else if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid) {
+				gameOverlay->HideOverlay(menuOverlayHandle);
 			}
-			err = gameOverlay->ShowOverlay(menuOverlayHandle);
-			if (err != vr::VROverlayError_None) {
-				logger::error("ShowOverlay failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
-			}
-		} else if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid) {
-			gameOverlay->HideOverlay(menuOverlayHandle);
-		}
-		// Controller overlay
-		if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
-			// Copy the same ImGui output to controller overlay texture
-			ID3D11RenderTargetView* menuControllerRTVPtr = menuControllerRTV.get();
-			globals::d3d::context->OMSetRenderTargets(1, &menuControllerRTVPtr, nullptr);
-			globals::d3d::context->ClearRenderTargetView(menuControllerRTV.get(), clearColor);
-			// Re-render ImGui for controller overlay
-			ImGui::Render();
-			ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
+			// Controller overlay
+			if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
+				// Copy the same ImGui output to controller overlay texture
+				ID3D11RenderTargetView* menuControllerRTVPtr = menuControllerRTV.get();
+				globals::d3d::context->OMSetRenderTargets(1, &menuControllerRTVPtr, nullptr);
+				globals::d3d::context->ClearRenderTargetView(menuControllerRTV.get(), clearColor);
+				// Re-render ImGui for controller overlay
+				ImGui::Render();
+				ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+				globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 
-			// Apply highlight tint to controller overlay if it's being dragged
-			bool controllerBeingDragged = overlayDragState.dragging &&
-			                              overlayDragState.mode == OverlayDragState::DragMode::Controller;
-			Util::ApplyHighlightTintToTexture(menuControllerTexture.get(), controllerBeingDragged, settings.dragHighlightColor);
+				// Apply highlight tint to controller overlay if it's being dragged
+				bool controllerBeingDragged = overlayDragState.dragging &&
+				                              overlayDragState.mode == OverlayDragState::DragMode::Controller;
+				Util::ApplyHighlightTintToTexture(menuControllerTexture.get(), controllerBeingDragged, settings.dragHighlightColor);
 
-			// Position controller overlay and submit
-			UpdateVROverlayControllerPosition();
+				// Position controller overlay and submit
+				UpdateVROverlayControllerPosition();
 
-			vr::Texture_t controllerTex = { menuControllerTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-			Util::SetOverlayInputFlags(gameOverlay, menuControllerOverlayHandle);
-			vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuControllerOverlayHandle, &controllerTex);
-			if (err != vr::VROverlayError_None) {
-				logger::error("SetOverlayTexture failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				vr::Texture_t controllerTex = { menuControllerTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
+				Util::SetOverlayInputFlags(gameOverlay, menuControllerOverlayHandle);
+				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuControllerOverlayHandle, &controllerTex);
+				if (err != vr::VROverlayError_None) {
+					logger::error("SetOverlayTexture failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				}
+				err = gameOverlay->ShowOverlay(menuControllerOverlayHandle);
+				if (err != vr::VROverlayError_None) {
+					logger::error("ShowOverlay failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
+				}
+			} else if (menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid) {
+				gameOverlay->HideOverlay(menuControllerOverlayHandle);
 			}
-			err = gameOverlay->ShowOverlay(menuControllerOverlayHandle);
-			if (err != vr::VROverlayError_None) {
-				logger::error("ShowOverlay failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
-			}
-		} else if (menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid) {
-			gameOverlay->HideOverlay(menuControllerOverlayHandle);
 		}
 
 		// Release oldRTV after all usage is complete to prevent use-after-free

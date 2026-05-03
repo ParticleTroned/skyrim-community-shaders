@@ -632,6 +632,10 @@ void Menu::Init()
 
 	BuildCategoryCounts();
 
+	if (globals::features::vr.IsOpenVRCompatible()) {
+		globals::features::vr.EnsureOverlayInitialized();
+	}
+
 	initialized = true;
 }
 

@@ -145,6 +145,9 @@ void OverlayRenderer::RenderOverlay(
 		io.ClearInputKeys();
 		io.ClearEventsQueue();
 		s_windowOverlapAlpha.clear();
+		if (globals::features::vr.IsOpenVRCompatible()) {
+			globals::features::vr.HideOverlaysIfPresent();
+		}
 		return;
 	}
 

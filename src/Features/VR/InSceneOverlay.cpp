@@ -248,7 +248,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Only render if overlay should be visible
-	if (!globals::menu || !(globals::menu->IsEnabled || globals::menu->overlayVisible || settings.kAutoHideSeconds > 0)) {
+	if (!globals::menu || !(globals::menu->IsEnabled || globals::menu->overlayVisible || ShouldShowAutoHideOverlay())) {
 		if (perf)
 			perf->EndEvent();
 		return;
@@ -560,8 +560,10 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 void VR::InstallSubmitHook()
 {
 	static bool installed = false;
-	if (installed)
+	if (installed) {
+		inSceneResources.submitHookInstalled = true;
 		return;
+	}
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
 	if (openvr && RE::BSOpenVR::GetIVRCompositor()) {
@@ -618,6 +620,7 @@ void VR::InstallSubmitHook()
 		// IVRCompositor::Submit is index 5
 		stl::detour_vfunc<5, IVRCompositor_Submit>(RE::BSOpenVR::GetIVRCompositor());
 		installed = true;
+		inSceneResources.submitHookInstalled = true;
 
 		logger::info("VR: In-scene overlay initialized");
 	} else {

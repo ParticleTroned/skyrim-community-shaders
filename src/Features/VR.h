@@ -470,6 +470,7 @@ public:
 		CachedRTV cachedEyeRTVs[2];
 
 		bool initialized = false;
+		bool submitHookInstalled = false;
 	} inSceneResources;
 
 	struct InSceneCB

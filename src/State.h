@@ -261,6 +261,7 @@ public:
 		float RefractionScale;  // matches HLSL SharedData::RefractionScale
 		float PBRMetalReflectionScale;  // matches HLSL SharedData::PBRMetalReflectionScale
 		float PBRMetalHighlightScale;  // matches HLSL SharedData::PBRMetalHighlightScale
+		float SharedDataPackingPad0;  // HLSL leaves one scalar before the float2 below
 		float PBRMetalReflectionScalePad0;
 		float PBRMetalReflectionScalePad1;
 		float SSSHumanMaleIntensity;
@@ -271,6 +272,8 @@ public:
 		float SSSHumanFemaleSaturation;
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
+		float SharedDataPackingPad1;
+		float SharedDataPackingPad2;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -279,6 +282,9 @@ public:
 #pragma warning(pop)
 #endif
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
+	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 

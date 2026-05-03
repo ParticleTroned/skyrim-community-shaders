@@ -39,7 +39,7 @@ public:
 		uint SampleCount = 1;
 		float VRBaseSamplesAtReference = 44.0f;
 		float VRCullDistance = 0.0f;  // 0 = disabled
-		uint pad0[1];
+		uint EnableFoveated = 0;
 	};
 
 	BendSettings bendSettings;
@@ -63,6 +63,8 @@ public:
 		uint DynamicSampleCount;
 		uint DynamicReadCount;
 		float pad0[2];
+		float FoveatedData0[4];  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
+		float FoveatedCenterOffset[4];
 
 		BendSettings settings;
 	};
@@ -74,6 +76,10 @@ public:
 	{
 		float FrameDim[2];
 		float RcpFrameDim[2];
+		float DispatchBase[2];
+		float DispatchExtent[2];
+		float FoveatedData0[4];  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
+		float FoveatedCenterOffset[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StereoSyncCB);
 

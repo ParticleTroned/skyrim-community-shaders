@@ -7,6 +7,7 @@
 // ambient occlusion" https://eprints.whiterose.ac.uk/id/eprint/187713/
 
 #include "Common/FrameBuffer.hlsli"
+#include "Common/FoveatedMask.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
@@ -29,6 +30,10 @@ cbuffer StereoSyncCB : register(b1)
 {
 	float2 FrameDim;
 	float2 RcpFrameDim;
+	float2 DispatchBase;
+	float2 DispatchExtent;
+	float4 FoveatedData0;      // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
+	float4 FoveatedCenterOffset;
 };
 
 static const float kDepthSigma = 0.01;          // Bilateral depth tolerance (NDC): surfaces within this range are considered the same and blended
@@ -84,13 +89,34 @@ float BlurShadow(int2 dtid, float centerDepth)
 	return weight > 0.0 ? shadow / weight : SrcShadowTexture[dtid];
 }
 
-[numthreads(8, 8, 1)] void main(uint2 dtid : SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void main(uint2 localID : SV_DispatchThreadID) {
+	if (any(localID >= uint2(DispatchExtent)))
+		return;
+
+	uint2 dtid = localID + uint2(DispatchBase);
 	if (any(dtid >= uint2(FrameDim)))
 		return;
 
 	float2 uv = (dtid + 0.5) * RcpFrameDim;
 
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+
+	if (FoveatedData0.w > 0.5) {
+		const float eyeWidth = max(FrameDim.x * 0.5, 1.0);
+		float2 eyePx = float2(dtid);
+		if (eyeIndex == 1)
+			eyePx.x -= eyeWidth;
+
+		const float2 eyeUV = saturate((eyePx + 0.5) / float2(eyeWidth, FrameDim.y));
+		const float centerWeight = FoveatedComputeCenterBlendWeight(
+			eyeUV,
+			FoveatedData0.x,
+			FoveatedData0.y,
+			FoveatedData0.z,
+			FoveatedCenterOffset.xy);
+		if (centerWeight <= 0.0)
+			return;
+	}
 
 	float depth = SrcDepthTexture[dtid];
 

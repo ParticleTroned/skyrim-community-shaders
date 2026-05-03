@@ -32,6 +32,8 @@ cbuffer PerFrame : register(b1)
 	uint DynamicSampleCount;
 	uint DynamicReadCount;
 	float2 pad0;
+	float4 FoveatedData0;      // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
+	float4 FoveatedCenterOffset;
 
 	float SurfaceThickness;
 	float BilinearThreshold;
@@ -40,7 +42,7 @@ cbuffer PerFrame : register(b1)
 	uint SampleCount;
 	float VRBaseSamplesAtReference;
 	float VRCullDistance;
-	uint settingsPad0;
+	uint EnableFoveated;
 };
 
 [numthreads(WAVE_SIZE, 1, 1)] void main(
@@ -66,6 +68,11 @@ cbuffer PerFrame : register(b1)
 	parameters.DynamicRes = DynamicRes;
 	parameters.DynamicSampleCount = DynamicSampleCount;
 	parameters.DynamicReadCount = DynamicReadCount;
+	parameters.FoveatedCenterScale = FoveatedData0.x;
+	parameters.FoveatedCenterFeather = FoveatedData0.y;
+	parameters.FoveatedCenterHorizontalScale = FoveatedData0.z;
+	parameters.FoveatedCenterOffset = FoveatedCenterOffset.xy;
+	parameters.FoveatedEnabled = FoveatedData0.w > 0.5;
 
 #if defined(VR)
 	// Disabled in VR: depth bias causes subtle shadow shifting at stereo seams on camera motion.

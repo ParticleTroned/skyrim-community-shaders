@@ -1965,6 +1965,39 @@ bool Upscaling::UseActiveFoveatedPeripheryTAAProfile() const
 	return IsPeripheryTAAEnabled(upscaleMethod);
 }
 
+bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable() const
+{
+	return IsFoveatedVendorDispatchEnabled(GetUpscaleMethod());
+}
+
+float Upscaling::GetActiveUpscalingFoveatedCenterArea() const
+{
+	if (UseActiveFoveatedPeripheryTAAProfile()) {
+		// For DLSS/FOV + Peripheral TAA, consumers that need the full visible
+		// foveated region should use the outside edge of the TAA mask.
+		return ClampPeripheryTAAOuterScaleForCenter(
+			settings.periphery_taa_outer_scale,
+			settings.periphery_taa_center_area,
+			settings.foveatedCenterHorizontalScale,
+			settings.periphery_taa_center_blend_feather);
+	}
+
+	return GetFoveatedMaskProfileParams(settings, false).centerArea;
+}
+
+float Upscaling::GetActiveUpscalingFoveatedCenterHorizontalScale() const
+{
+	return GetFoveatedMaskProfileParams(settings, UseActiveFoveatedPeripheryTAAProfile()).centerHorizontalScale;
+}
+
+std::array<float2, 2> Upscaling::GetActiveUpscalingResolvedFoveatedMaskCenterOffsets() const
+{
+	auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(UseActiveFoveatedPeripheryTAAProfile());
+	if (!globals::game::isVR)
+		centerOffsets[1] = { 0.0f, 0.0f };
+	return centerOffsets;
+}
+
 float Upscaling::GetActiveFoveatedCenterArea() const
 {
 	const auto upscaleMethod = GetUpscaleMethod();

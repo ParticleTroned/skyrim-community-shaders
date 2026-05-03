@@ -1,10 +1,13 @@
 #include "ScreenSpaceShadows.h"
 
 #include "Features/TerrainBlending.h"
+#include "FoveatedCommon.h"
 #include "State.h"
+#include "Upscaling.h"
 #include "Util.h"
 #include "Utils/D3D.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -21,6 +24,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SampleCount,
 	VRBaseSamplesAtReference,
 	VRCullDistance,
+	EnableFoveated,
 	SurfaceThickness,
 	BilinearThreshold,
 	ShadowContrast)
@@ -40,6 +44,15 @@ namespace
 	constexpr float kShadowContrastMin = 0.0f;
 	constexpr float kShadowContrastMax = 4.0f;
 
+	struct FoveatedShadowState
+	{
+		bool available = false;
+		bool active = false;
+		float centerScale = FoveatedCommon::kCenterAreaMax;
+		float centerHorizontalScale = 1.0f;
+		std::array<float2, 2> centerOffsets{};
+	};
+
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
 		if (!std::isfinite(a_value))
@@ -53,6 +66,7 @@ namespace
 		a_settings.SampleCount = std::clamp(a_settings.SampleCount, kSampleCountMin, kSampleCountMax);
 		a_settings.VRBaseSamplesAtReference = ClampFiniteOrDefault(a_settings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, 44.0f);
 		a_settings.VRCullDistance = ClampFiniteOrDefault(a_settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, 0.0f);
+		a_settings.EnableFoveated = a_settings.EnableFoveated ? 1u : 0u;
 		a_settings.SurfaceThickness = ClampFiniteOrDefault(a_settings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax, 0.02f);
 		a_settings.BilinearThreshold = ClampFiniteOrDefault(a_settings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax, 0.02f);
 		a_settings.ShadowContrast = ClampFiniteOrDefault(a_settings.ShadowContrast, kShadowContrastMin, kShadowContrastMax, 1.0f);
@@ -65,6 +79,43 @@ namespace
 		       tb.settings.Enabled &&
 		       tb.blendedDepthTexture &&
 		       tb.blendedDepthTexture->srv.get();
+	}
+
+	FoveatedShadowState ResolveFoveatedShadowState(const ScreenSpaceShadows::BendSettings& a_settings)
+	{
+		FoveatedShadowState state{};
+		if (!globals::game::isVR)
+			return state;
+
+		const auto& upscaling = globals::features::upscaling;
+		state.available = upscaling.IsActiveUpscalingFoveatedProfileAvailable();
+		if (!state.available || !a_settings.EnableFoveated)
+			return state;
+
+		state.centerScale = FoveatedCommon::ClampCenterArea(upscaling.GetActiveUpscalingFoveatedCenterArea());
+		state.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(upscaling.GetActiveUpscalingFoveatedCenterHorizontalScale());
+		state.centerOffsets = upscaling.GetActiveUpscalingResolvedFoveatedMaskCenterOffsets();
+		state.active = state.centerScale < 0.999f;
+		return state;
+	}
+
+	FoveatedCommon::DispatchBounds BuildFoveatedBounds(
+		const FoveatedShadowState& a_state,
+		uint32_t a_eyeIndex,
+		uint32_t a_eyeMinX,
+		uint32_t a_eyeMaxX,
+		uint32_t a_frameHeight)
+	{
+		const auto offset = a_state.centerOffsets[std::min<size_t>(a_eyeIndex, a_state.centerOffsets.size() - 1)];
+		return FoveatedCommon::BuildCenteredDispatchBounds(
+			a_eyeMinX,
+			a_eyeMaxX,
+			a_frameHeight,
+			a_state.centerScale,
+			offset.x,
+			offset.y,
+			FoveatedCommon::kCenterFeather,
+			a_state.centerHorizontalScale);
 	}
 }
 
@@ -99,6 +150,24 @@ void ScreenSpaceShadows::DrawSettings()
 				ImGui::Text("0 disables. Lower values improve performance but remove distant shadows.");
 			}
 			bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
+
+			const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
+			const bool foveatedAvailable = foveatedState.available;
+			bool foveatedEnabled = bendSettings.EnableFoveated != 0;
+			{
+				auto foveatedGuard = Util::DisableGuard(!foveatedAvailable);
+				Util::BlueFrameStyleWrapper blueFrameStyle(true);
+				if (ImGui::Checkbox("FOV Screen Space Shadows", &foveatedEnabled))
+					bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses the active Upscaling FOV mask for Screen Space Shadows.");
+				ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the FOV mask and fades to no SSS outside it.");
+				ImGui::TextUnformatted("Uses the DLSS/FOV center mask normally, or the outside edge of the Peripheral TAA mask when DLSS/FOV + Peripheral TAA is enabled.");
+				ImGui::TextUnformatted("The mask area, horizontal scale, offsets, and Peripheral TAA profile are taken from Upscaling; SSS has no separate FOV size.");
+				if (!foveatedAvailable)
+					ImGui::TextUnformatted("Requires active foveated upscaling.");
+			}
 
 			{
 				Util::BlueFrameStyleWrapper blueFrameStyle(true);
@@ -273,8 +342,7 @@ void ScreenSpaceShadows::DrawShadows()
 	if (globals::game::isVR)
 		viewportSize[0] /= 2;
 
-	int minRenderBounds[2] = { 0, 0 };
-	int maxRenderBounds[2] = { viewportSize[0], viewportSize[1] };
+	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
 
 	// Setup common render state.
 	// SSS always uses 24/32-bit depth, never the R16_UNORM half-precision path.
@@ -358,7 +426,7 @@ void ScreenSpaceShadows::DrawShadows()
 	dynamicSampleCount = std::max(dynamicSampleCount, 1u);
 	uint dynamicReadCount = (dynamicSampleCount / 64 + 2);
 	// Shared dispatch logic for both VR and non-VR
-	auto DispatchEye = [&](const char* eyeName, ID3D11ComputeShader* shader, const float* lightProj,
+	auto DispatchEye = [&](const char* eyeName, ID3D11ComputeShader* shader, uint32_t eyeIndex, const float* lightProj,
 						   float invTexSizeX, float invTexSizeY) {
 		if (globals::state->frameAnnotations && eyeName) {
 			std::string eventName = std::format("SSS - Ray March ({})", eyeName);
@@ -368,6 +436,22 @@ void ScreenSpaceShadows::DrawShadows()
 		}
 
 		context->CSSetShader(shader, nullptr, 0);
+
+		int minRenderBounds[2] = { 0, 0 };
+		int maxRenderBounds[2] = { viewportSize[0], viewportSize[1] };
+		if (foveatedState.active) {
+			const auto bounds = BuildFoveatedBounds(foveatedState, eyeIndex, 0u, static_cast<uint32_t>(viewportSize[0]), static_cast<uint32_t>(viewportSize[1]));
+			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY) {
+				if (globals::state->frameAnnotations)
+					globals::state->EndPerfEvent();
+				return;
+			}
+
+			minRenderBounds[0] = bounds.minX;
+			minRenderBounds[1] = bounds.minY;
+			maxRenderBounds[0] = bounds.maxX;
+			maxRenderBounds[1] = bounds.maxY;
+		}
 
 		auto dispatchList = Bend::BuildDispatchList(const_cast<float*>(lightProj), viewportSize, minRenderBounds, maxRenderBounds);
 
@@ -392,6 +476,15 @@ void ScreenSpaceShadows::DrawShadows()
 				data.DynamicRes = dynamicRes;
 				data.DynamicSampleCount = dynamicSampleCount;
 				data.DynamicReadCount = dynamicReadCount;
+				data.FoveatedData0[0] = foveatedState.centerScale;
+				data.FoveatedData0[1] = FoveatedCommon::kCenterFeather;
+				data.FoveatedData0[2] = foveatedState.centerHorizontalScale;
+				data.FoveatedData0[3] = foveatedState.active ? 1.0f : 0.0f;
+				const auto centerOffset = foveatedState.centerOffsets[std::min<size_t>(eyeIndex, foveatedState.centerOffsets.size() - 1)];
+				data.FoveatedCenterOffset[0] = centerOffset.x;
+				data.FoveatedCenterOffset[1] = centerOffset.y;
+				data.FoveatedCenterOffset[2] = 0.0f;
+				data.FoveatedCenterOffset[3] = 0.0f;
 
 				data.InvDepthTextureSize[0] = invTexSizeX;
 				data.InvDepthTextureSize[1] = invTexSizeY;
@@ -418,18 +511,18 @@ void ScreenSpaceShadows::DrawShadows()
 	float InvTexSizeY = 1.0f / (float)viewportSize[1];
 
 	if (!globals::game::isVR) {
-		DispatchEye(nullptr, raymarchLeft, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+		DispatchEye(nullptr, raymarchLeft, 0, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 	} else {
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Left Eye");
-			DispatchEye("Left Eye", raymarchLeft, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+			DispatchEye("Left Eye", raymarchLeft, 0, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 		}
 
 		// Calculate light projection for right eye
 		auto lightProjectionRightF = CalculateLightProjection(1);
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Right Eye");
-			DispatchEye("Right Eye", raymarchRight, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
+			DispatchEye("Right Eye", raymarchRight, 1, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
 		}
 	}
 
@@ -470,15 +563,9 @@ void ScreenSpaceShadows::DrawStereoSync()
 	context->CopyResource(stereoSyncCopyTex->resource.get(), screenSpaceShadowsTexture->resource.get());
 
 	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize);
-
-	StereoSyncCB cbData{};
-	cbData.FrameDim[0] = resolution.x;
-	cbData.FrameDim[1] = resolution.y;
-	cbData.RcpFrameDim[0] = 1.0f / resolution.x;
-	cbData.RcpFrameDim[1] = 1.0f / resolution.y;
-
-	stereoSyncCB->Update(cbData);
-	auto cbPtr = stereoSyncCB->CB();
+	const uint32_t frameWidth = static_cast<uint32_t>(resolution.x);
+	const uint32_t frameHeight = static_cast<uint32_t>(resolution.y);
+	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
 
 	// Same 24/32-bit depth path as the raymarch. SrcDepthTexture's HLSL type is
 	// conditional on TERRAIN_BLENDING via the active depth source.
@@ -486,20 +573,66 @@ void ScreenSpaceShadows::DrawStereoSync()
 	ID3D11ShaderResourceView* srvs[2]{ depthSRV, stereoSyncCopyTex->srv.get() };
 	ID3D11UnorderedAccessView* uavs[1]{ screenSpaceShadowsTexture->uav.get() };
 
-	context->CSSetConstantBuffers(1, 1, &cbPtr);
 	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
 	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
 	context->CSSetShaderResources(0, 2, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	context->CSSetShader(stereoSyncCS, nullptr, 0);
 
-	auto dispatchCount = Util::GetScreenDispatchCount(true);
-	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	auto DispatchSyncBounds = [&](const FoveatedCommon::DispatchBounds& bounds, uint32_t eyeIndex) {
+		if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
+			return;
+
+		const uint32_t dispatchWidth = static_cast<uint32_t>(bounds.maxX - bounds.minX);
+		const uint32_t dispatchHeight = static_cast<uint32_t>(bounds.maxY - bounds.minY);
+		if (dispatchWidth == 0 || dispatchHeight == 0)
+			return;
+
+		StereoSyncCB cbData{};
+		cbData.FrameDim[0] = resolution.x;
+		cbData.FrameDim[1] = resolution.y;
+		cbData.RcpFrameDim[0] = 1.0f / resolution.x;
+		cbData.RcpFrameDim[1] = 1.0f / resolution.y;
+		cbData.DispatchBase[0] = static_cast<float>(bounds.minX);
+		cbData.DispatchBase[1] = static_cast<float>(bounds.minY);
+		cbData.DispatchExtent[0] = static_cast<float>(dispatchWidth);
+		cbData.DispatchExtent[1] = static_cast<float>(dispatchHeight);
+		cbData.FoveatedData0[0] = foveatedState.centerScale;
+		cbData.FoveatedData0[1] = FoveatedCommon::kCenterFeather;
+		cbData.FoveatedData0[2] = foveatedState.centerHorizontalScale;
+		cbData.FoveatedData0[3] = foveatedState.active ? 1.0f : 0.0f;
+		const auto centerOffset = foveatedState.centerOffsets[std::min<size_t>(eyeIndex, foveatedState.centerOffsets.size() - 1)];
+		cbData.FoveatedCenterOffset[0] = centerOffset.x;
+		cbData.FoveatedCenterOffset[1] = centerOffset.y;
+		cbData.FoveatedCenterOffset[2] = 0.0f;
+		cbData.FoveatedCenterOffset[3] = 0.0f;
+
+		stereoSyncCB->Update(cbData);
+		auto cbPtr = stereoSyncCB->CB();
+		context->CSSetConstantBuffers(1, 1, &cbPtr);
+
+		const uint32_t groupsX = (dispatchWidth + 7u) / 8u;
+		const uint32_t groupsY = (dispatchHeight + 7u) / 8u;
+		context->Dispatch(groupsX, groupsY, 1);
+	};
+
+	if (foveatedState.active && frameWidth > 1 && frameHeight > 0) {
+		const uint32_t eyeWidth = frameWidth >> 1;
+		DispatchSyncBounds(BuildFoveatedBounds(foveatedState, 0, 0, eyeWidth, frameHeight), 0);
+		DispatchSyncBounds(BuildFoveatedBounds(foveatedState, 1, eyeWidth, frameWidth, frameHeight), 1);
+	} else {
+		FoveatedCommon::DispatchBounds fullBounds{};
+		fullBounds.minX = 0;
+		fullBounds.minY = 0;
+		fullBounds.maxX = static_cast<int>(frameWidth);
+		fullBounds.maxY = static_cast<int>(frameHeight);
+		DispatchSyncBounds(fullBounds, 0);
+	}
 
 	srvs[0] = nullptr;
 	srvs[1] = nullptr;
 	uavs[0] = nullptr;
-	cbPtr = nullptr;
+	ID3D11Buffer* cbPtr = nullptr;
 	context->CSSetShaderResources(0, 2, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	context->CSSetConstantBuffers(1, 1, &cbPtr);

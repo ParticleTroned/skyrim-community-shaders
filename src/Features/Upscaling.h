@@ -256,6 +256,11 @@ public:
 
 	UpscaleMethod GetUpscaleMethod() const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
+	bool IsActiveUpscalingFoveatedProfileAvailable() const;
+	// DLSS/FOV center mask normally; Peripheral TAA outer mask when DLSS/FOV + Peripheral TAA is enabled.
+	float GetActiveUpscalingFoveatedCenterArea() const;
+	float GetActiveUpscalingFoveatedCenterHorizontalScale() const;
+	std::array<float2, 2> GetActiveUpscalingResolvedFoveatedMaskCenterOffsets() const;
 	float GetActiveFoveatedCenterArea() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;

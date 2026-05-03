@@ -2915,7 +2915,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	return true;
 }
 
-bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11ShaderResourceView* colorSRV)
+bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11ShaderResourceView* colorSRV, ID3D11Resource* colorOutput)
 {
 	if (!globals::game::isVR)
 		return false;
@@ -3285,7 +3285,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		peripheryTAAHistoryValid = true;
 	}
 
-	FinalizePerEyeOutputs(colorTexture);
+	FinalizePerEyeOutputs(colorOutput ? colorOutput : colorTexture);
 	return true;
 }
 
@@ -4273,6 +4273,7 @@ void Upscaling::Upscale()
 {
 	ZoneScoped;
 	auto upscaleMethod = GetUpscaleMethod();
+	dlssUpscaleOutputInSharpenerTexture = false;
 	UpdateHistoryResetState(upscaleMethod);
 	LatchHistoryResetForCurrentFrame();
 
@@ -4513,6 +4514,14 @@ void Upscaling::Upscale()
 
 		if (foveatedDispatchRequested) {
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+			const bool foveatedOutputToSharpener =
+				upscaleMethod == UpscaleMethod::kDLSS &&
+				settings.sharpnessDLSS > 0.0f &&
+				sharpenerTexture &&
+				sharpenerTexture->resource &&
+				sharpenerTexture->srv &&
+				main.UAV;
+			ID3D11Resource* foveatedOutput = foveatedOutputToSharpener ? sharpenerTexture->resource.get() : main.texture;
 			dispatched = DispatchFoveatedVendorUpscaling(
 				upscaleMethod,
 				main.texture,
@@ -4520,7 +4529,10 @@ void Upscaling::Upscale()
 				motionVectorResource,
 				reactiveMaskTexture->resource.get(),
 				transparencyCompositionMaskTexture->resource.get(),
-				main.SRV);
+				main.SRV,
+				foveatedOutput);
+			if (dispatched && upscaleMethod == UpscaleMethod::kDLSS)
+				dlssUpscaleOutputInSharpenerTexture = foveatedOutputToSharpener;
 			if (!dispatched) {
 				if (!loggedFoveatedFallback) {
 					logger::warn("[Upscaling] Foveated vendor dispatch failed; falling back to full-frame {} dispatch.",
@@ -4767,12 +4779,20 @@ void Upscaling::ApplySharpening()
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	if (!main.UAV || !sharpenerTexture->srv)
-		return;
-
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	if (dlssUpscaleOutputInSharpenerTexture) {
+		if (!main.UAV || !sharpenerTexture->srv)
+			return;
+
+		rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	} else {
+		if (!main.SRV || !main.texture || !sharpenerTexture->uav)
+			return;
+
+		rcas.ApplySharpen(main.SRV, sharpenerTexture->uav.get(), currentSharpness);
+		context->CopyResource(main.texture, sharpenerTexture->resource.get());
+	}
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }

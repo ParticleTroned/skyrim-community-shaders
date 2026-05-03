@@ -89,6 +89,11 @@ float BlurShadow(int2 dtid, float centerDepth)
 	return weight > 0.0 ? shadow / weight : SrcShadowTexture[dtid];
 }
 
+float ApplyFoveatedOutputFade(float shadow, float centerWeight)
+{
+	return lerp(1.0, shadow, centerWeight);
+}
+
 [numthreads(8, 8, 1)] void main(uint2 localID : SV_DispatchThreadID) {
 	if (any(localID >= uint2(DispatchExtent)))
 		return;
@@ -101,6 +106,7 @@ float BlurShadow(int2 dtid, float centerDepth)
 
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
 
+	float centerWeight = 1.0;
 	if (FoveatedData0.w > 0.5) {
 		const float eyeWidth = max(FrameDim.x * 0.5, 1.0);
 		float2 eyePx = float2(dtid);
@@ -108,7 +114,7 @@ float BlurShadow(int2 dtid, float centerDepth)
 			eyePx.x -= eyeWidth;
 
 		const float2 eyeUV = saturate((eyePx + 0.5) / float2(eyeWidth, FrameDim.y));
-		const float centerWeight = FoveatedComputeCenterBlendWeight(
+		centerWeight = FoveatedComputeCenterBlendWeight(
 			eyeUV,
 			FoveatedData0.x,
 			FoveatedData0.y,
@@ -155,7 +161,7 @@ float BlurShadow(int2 dtid, float centerDepth)
 	Stereo::StereoBilateralResult r = Stereo::ReprojectToOtherEye(uv, depth, eyeIndex, FrameDim);
 
 	if (!r.valid) {
-		OutShadowTexture[dtid] = myShadow;
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}
 
@@ -163,7 +169,7 @@ float BlurShadow(int2 dtid, float centerDepth)
 
 	// Skip if other eye sees mask, sky, or first-person geometry
 	if (otherDepth < 1e-5 || otherDepth >= 1.0 || SharedData::GetScreenDepth(otherDepth) < VR_FP_Z) {
-		OutShadowTexture[dtid] = myShadow;
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}
 
@@ -180,7 +186,7 @@ float BlurShadow(int2 dtid, float centerDepth)
 		SrcDepthTexture[r.otherPx + int2(0, -kEdgeMargin)],
 		SrcDepthTexture[r.otherPx + int2(0, kEdgeMargin)]);
 	if (any(otherNeighbors < 1e-5) || MaxDepthDiff(otherDepth, otherNeighbors) > kEdgeDepthThreshold) {
-		OutShadowTexture[dtid] = myShadow;
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}
 
@@ -192,7 +198,7 @@ float BlurShadow(int2 dtid, float centerDepth)
 	// Use min (darkest) when depths agree: if either eye detected an
 	// occluder, that shadow should be visible.
 	float combined = min(myShadow, otherShadow);
-	OutShadowTexture[dtid] = lerp(myShadow, combined, r.blendWeight);
+	OutShadowTexture[dtid] = ApplyFoveatedOutputFade(lerp(myShadow, combined, r.blendWeight), centerWeight);
 }
 
 #endif  // VR

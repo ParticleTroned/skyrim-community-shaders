@@ -1967,35 +1967,33 @@ bool Upscaling::UseActiveFoveatedPeripheryTAAProfile() const
 
 bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable() const
 {
-	return IsFoveatedVendorDispatchEnabled(GetUpscaleMethod());
+	return fidelityFX.IsNvidiaAdapterDetected() && IsFoveatedVendorDispatchEnabled(GetUpscaleMethod());
 }
 
-float Upscaling::GetActiveUpscalingFoveatedCenterArea() const
+Upscaling::ActiveUpscalingFoveatedProfile Upscaling::GetActiveUpscalingFoveatedProfile() const
 {
-	if (UseActiveFoveatedPeripheryTAAProfile()) {
+	ActiveUpscalingFoveatedProfile profile{};
+	const auto upscaleMethod = GetUpscaleMethod();
+	profile.available = IsActiveUpscalingFoveatedProfileAvailable();
+	profile.usesPeripheryTAAOuterMask = profile.available && IsPeripheryTAAEnabled(upscaleMethod);
+
+	if (profile.usesPeripheryTAAOuterMask) {
 		// For DLSS/FOV + Peripheral TAA, consumers that need the full visible
 		// foveated region should use the outside edge of the TAA mask.
-		return ClampPeripheryTAAOuterScaleForCenter(
+		profile.coverageArea = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
 			settings.periphery_taa_center_area,
 			settings.foveatedCenterHorizontalScale,
 			settings.periphery_taa_center_blend_feather);
+	} else {
+		profile.coverageArea = GetFoveatedMaskProfileParams(settings, false).centerArea;
 	}
 
-	return GetFoveatedMaskProfileParams(settings, false).centerArea;
-}
-
-float Upscaling::GetActiveUpscalingFoveatedCenterHorizontalScale() const
-{
-	return GetFoveatedMaskProfileParams(settings, UseActiveFoveatedPeripheryTAAProfile()).centerHorizontalScale;
-}
-
-std::array<float2, 2> Upscaling::GetActiveUpscalingResolvedFoveatedMaskCenterOffsets() const
-{
-	auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(UseActiveFoveatedPeripheryTAAProfile());
+	profile.centerHorizontalScale = GetFoveatedMaskProfileParams(settings, profile.usesPeripheryTAAOuterMask).centerHorizontalScale;
+	profile.centerOffsets = GetResolvedFoveatedMaskCenterOffsets(profile.usesPeripheryTAAOuterMask);
 	if (!globals::game::isVR)
-		centerOffsets[1] = { 0.0f, 0.0f };
-	return centerOffsets;
+		profile.centerOffsets[1] = { 0.0f, 0.0f };
+	return profile;
 }
 
 float Upscaling::GetActiveFoveatedCenterArea() const

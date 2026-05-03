@@ -88,13 +88,14 @@ namespace
 			return state;
 
 		const auto& upscaling = globals::features::upscaling;
-		state.available = upscaling.IsActiveUpscalingFoveatedProfileAvailable();
+		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
+		state.available = profile.available;
 		if (!state.available || !a_settings.EnableFoveated)
 			return state;
 
-		state.centerScale = FoveatedCommon::ClampCenterArea(upscaling.GetActiveUpscalingFoveatedCenterArea());
-		state.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(upscaling.GetActiveUpscalingFoveatedCenterHorizontalScale());
-		state.centerOffsets = upscaling.GetActiveUpscalingResolvedFoveatedMaskCenterOffsets();
+		state.centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
+		state.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
+		state.centerOffsets = profile.centerOffsets;
 		state.active = state.centerScale < 0.999f;
 		return state;
 	}
@@ -560,12 +561,68 @@ void ScreenSpaceShadows::DrawStereoSync()
 
 	auto context = globals::d3d::context;
 
-	context->CopyResource(stereoSyncCopyTex->resource.get(), screenSpaceShadowsTexture->resource.get());
-
 	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize);
 	const uint32_t frameWidth = static_cast<uint32_t>(resolution.x);
 	const uint32_t frameHeight = static_cast<uint32_t>(resolution.y);
 	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
+	if (frameWidth == 0 || frameHeight == 0) {
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
+		return;
+	}
+
+	const bool foveatedStereoSync = foveatedState.active && frameWidth > 1;
+	std::array<FoveatedCommon::DispatchBounds, 2> syncBounds{};
+	if (foveatedStereoSync) {
+		const uint32_t eyeWidth = frameWidth >> 1;
+		syncBounds[0] = BuildFoveatedBounds(foveatedState, 0, 0, eyeWidth, frameHeight);
+		syncBounds[1] = BuildFoveatedBounds(foveatedState, 1, eyeWidth, frameWidth, frameHeight);
+	} else {
+		syncBounds[0].minX = 0;
+		syncBounds[0].minY = 0;
+		syncBounds[0].maxX = static_cast<int>(frameWidth);
+		syncBounds[0].maxY = static_cast<int>(frameHeight);
+	}
+
+	auto ForEachSyncBounds = [&](auto&& a_fn) {
+		a_fn(syncBounds[0], 0u);
+		if (foveatedStereoSync)
+			a_fn(syncBounds[1], 1u);
+	};
+
+	auto CopyStereoSyncSource = [&] {
+		if (!foveatedStereoSync || !stereoSyncCopyTex->uav) {
+			context->CopyResource(stereoSyncCopyTex->resource.get(), screenSpaceShadowsTexture->resource.get());
+			return;
+		}
+
+		const FLOAT white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		context->ClearUnorderedAccessViewFloat(stereoSyncCopyTex->uav.get(), white);
+		ForEachSyncBounds([&](const FoveatedCommon::DispatchBounds& bounds, uint32_t) {
+			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
+				return;
+
+			D3D11_BOX srcBox{
+				static_cast<UINT>(bounds.minX),
+				static_cast<UINT>(bounds.minY),
+				0u,
+				static_cast<UINT>(bounds.maxX),
+				static_cast<UINT>(bounds.maxY),
+				1u
+			};
+			context->CopySubresourceRegion(
+				stereoSyncCopyTex->resource.get(),
+				0,
+				srcBox.left,
+				srcBox.top,
+				0,
+				screenSpaceShadowsTexture->resource.get(),
+				0,
+				&srcBox);
+		});
+	};
+
+	CopyStereoSyncSource();
 
 	// Same 24/32-bit depth path as the raymarch. SrcDepthTexture's HLSL type is
 	// conditional on TERRAIN_BLENDING via the active depth source.
@@ -616,18 +673,7 @@ void ScreenSpaceShadows::DrawStereoSync()
 		context->Dispatch(groupsX, groupsY, 1);
 	};
 
-	if (foveatedState.active && frameWidth > 1 && frameHeight > 0) {
-		const uint32_t eyeWidth = frameWidth >> 1;
-		DispatchSyncBounds(BuildFoveatedBounds(foveatedState, 0, 0, eyeWidth, frameHeight), 0);
-		DispatchSyncBounds(BuildFoveatedBounds(foveatedState, 1, eyeWidth, frameWidth, frameHeight), 1);
-	} else {
-		FoveatedCommon::DispatchBounds fullBounds{};
-		fullBounds.minX = 0;
-		fullBounds.minY = 0;
-		fullBounds.maxX = static_cast<int>(frameWidth);
-		fullBounds.maxY = static_cast<int>(frameHeight);
-		DispatchSyncBounds(fullBounds, 0);
-	}
+	ForEachSyncBounds(DispatchSyncBounds);
 
 	srvs[0] = nullptr;
 	srvs[1] = nullptr;
@@ -738,6 +784,7 @@ void ScreenSpaceShadows::SetupResources()
 		if (globals::game::isVR) {
 			stereoSyncCopyTex = new Texture2D(texDesc);
 			stereoSyncCopyTex->CreateSRV(srvDesc);
+			stereoSyncCopyTex->CreateUAV(uavDesc);
 		}
 	}
 }

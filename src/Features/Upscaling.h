@@ -225,7 +225,6 @@ public:
 	// Runtime state
 	bool isWindowed = false;
 	bool lowRefreshRate = false;
-	bool fidelityFXMissing = false;
 	bool d3d12SwapChainActive = false;
 
 	// Timing and scaling

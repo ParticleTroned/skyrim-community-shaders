@@ -544,7 +544,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	if (shouldProxy) {
 		logger::info("[Frame Generation] Frame Generation enabled, using D3D12 proxy");
 
-		if (upscaling.HasFrameGenModule()) {
+		const bool hasFrameGenModule = upscaling.HasFrameGenModule();
+		if (hasFrameGenModule) {
 			DX::ThrowIfFailed(D3D11CreateDevice(
 				pAdapter,
 				DriverType,
@@ -579,7 +580,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			return S_OK;
 		} else {
 			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
-			upscaling.fidelityFXMissing = true;
 		}
 	}
 
@@ -616,31 +616,34 @@ void Upscaling::DrawSettings()
 		bool useRuntimeFsr4;
 		const char* label;
 	};
-	std::vector<UpscaleUiChoice> upscaleChoices = {
-		{ UpscaleMethod::kNONE, false, "None" },
-		{ UpscaleMethod::kTAA, false, "TAA" },
-		{ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" }
-	};
 
 	const bool isAmdAdapter = fidelityFX.IsAmdAdapterDetected();
 	const bool isNvidiaAdapter = fidelityFX.IsNvidiaAdapterDetected();
 	const bool runtimeFsr4Present = fidelityFX.IsRuntimeUpscalerPresent();
 	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeUpscalerAutoEligible();
 	const bool runtimeFsr4Available = fidelityFX.IsRuntimeUpscalerAvailable();
-	if (runtimeFsr4Available)
-		upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4" });
-
 	const bool featureDLSS = streamline.featureDLSS;
-	if (featureDLSS)
-		upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
 
-	// Determine available modes
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
 	const bool requestedRuntimeFsr4BeforeMethodSelection =
 		*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) &&
 		settings.fsr4RuntimeEnable;
+
+	std::vector<UpscaleUiChoice> upscaleChoices = {
+		{ UpscaleMethod::kNONE, false, "None" },
+		{ UpscaleMethod::kTAA, false, "TAA" },
+		{ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" }
+	};
+
+	if (runtimeFsr4Available)
+		upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4" });
+	else if (requestedRuntimeFsr4BeforeMethodSelection)
+		upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4 (Unavailable)" });
+
+	if (featureDLSS)
+		upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
 
 	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
 		if (static_cast<uint32_t>(choice.method) != *currentUpscaleMode)
@@ -667,19 +670,25 @@ void Upscaling::DrawSettings()
 	}
 
 	const char* currentMethodLabel = upscaleChoices[methodUiIndex].label;
-	ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
+	const bool methodChanged = ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Selects the upscaling backend.");
 		ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
-	*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
-	if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
-		settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+	const bool shouldApplyMethodSelection = methodChanged || !matchesCurrentChoice(selectedUpscaleChoice);
+	if (shouldApplyMethodSelection) {
+		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
+		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
+			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+	}
 
 	// Check the current upscale method
 	auto upscaleMethod = GetUpscaleMethod();
+	const bool runtimeFsr4Requested =
+		upscaleMethod == UpscaleMethod::kFSR &&
+		settings.fsr4RuntimeEnable;
 
 	auto drawFsr4OverrideControls = [&]() {
 		if (runtimeFsr4Present && isAmdAdapter && !runtimeFsr4AutoEligible) {
@@ -689,12 +698,14 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Keep this off unless your AMD card supports FSR4 and auto-detection failed.");
 			}
 		}
-		if (!runtimeFsr4Present && requestedRuntimeFsr4BeforeMethodSelection) {
+		if (!runtimeFsr4Present && runtimeFsr4Requested) {
 			ImGui::TextDisabled("Runtime FSR4 unavailable: missing FidelityFX upscaler runtime.");
+		} else if (runtimeFsr4Present && runtimeFsr4Requested && !runtimeFsr4Available && !(isAmdAdapter && !runtimeFsr4AutoEligible)) {
+			ImGui::TextDisabled("Runtime FSR4 unavailable for the detected adapter; using host FSR 3.1.5.");
 		}
 	};
 
-	if (upscaleMethod == UpscaleMethod::kFSR && settings.fsr4RuntimeEnable) {
+	if (runtimeFsr4Requested) {
 		ImGui::TextDisabled("Current frame path: %s", fidelityFX.GetRuntimeUpscalerLastFramePathLabel());
 		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
 			ImGui::TextDisabled("Runtime FSR4 is latched off after a runtime failure; using host FSR 3.1.5 fallback.");
@@ -1036,7 +1047,7 @@ void Upscaling::DrawSettings()
 				onlyRequiresRestart = false;
 			}
 
-			if (fidelityFXMissing) {
+			if (settings.frameGenerationMode && !HasFrameGenModule()) {
 				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
 				ImGui::Text("Warning: FidelityFX DLLs are not loaded");
 				ImGui::PopStyleColor();

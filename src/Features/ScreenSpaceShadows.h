@@ -84,6 +84,8 @@ public:
 	ID3D11ComputeShader* raymarchRightCS = nullptr;
 	uint compiledSampleCount = 0;
 	uint compiledSampleCountRight = 0;
+	bool raymarchUsesTerrainBlendingDepth = false;
+	bool raymarchRightUsesTerrainBlendingDepth = false;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
@@ -91,6 +93,7 @@ public:
 	Texture2D* stereoSyncCopyTex = nullptr;
 	ConstantBuffer* stereoSyncCB = nullptr;
 	ID3D11ComputeShader* stereoSyncCS = nullptr;
+	bool stereoSyncUsesTerrainBlendingDepth = false;
 
 	virtual void SetupResources() override;
 
@@ -99,7 +102,7 @@ public:
 	virtual void ClearShaderCache() override;
 	void InvalidateRaymarchShaders();
 	uint GetScaledSampleCount(bool a_dynamic);
-	ID3D11ComputeShader* GetOrCreateRaymarchShader(ID3D11ComputeShader*& a_shader, uint& a_compiledSampleCount, bool a_rightEye);
+	ID3D11ComputeShader* GetOrCreateRaymarchShader(ID3D11ComputeShader*& a_shader, uint& a_compiledSampleCount, bool& a_compiledUsesTerrainBlendingDepth, bool a_rightEye);
 	ID3D11ComputeShader* GetComputeRaymarch();
 	ID3D11ComputeShader* GetComputeRaymarchRight();
 

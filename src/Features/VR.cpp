@@ -19,8 +19,6 @@
 #include <imgui_impl_dx11.h>
 #include <unordered_map>
 #include <windows.h>
-#include <winver.h>
-#pragma comment(lib, "version.lib")
 
 using AttachMode = VR::Settings::OverlayAttachMode;
 
@@ -61,7 +59,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableDragToReposition,
 	kAutoHideSeconds,
 	VRMenuAutoResetDistance,
-	EnableWandPointing)
+	EnableWandPointing,
+	menuOverlayPath)
 
 //=============================================================================
 // FEATURE BASE CLASS OVERRIDES
@@ -96,6 +95,11 @@ void VR::SetupResources()
 		logger::info("  Version: {}", openVRInfo.version);
 		logger::info("  Size: {} bytes", openVRInfo.fileSize);
 		logger::info("  Modified: {}", openVRInfo.modificationTime);
+		logger::info("  Runtime: {}", VRDetection::RuntimeTypeToString(openVRInfo.runtimeType));
+		logger::info("  Interfaces: overlay={}, system={}, compositor={}",
+			openVRInfo.hasOverlayInterface ? "yes" : "no",
+			openVRInfo.hasSystemInterface ? "yes" : "no",
+			openVRInfo.hasCompositorInterface ? "yes" : "no");
 		logger::info("  Compatible: {}", openVRInfo.isCompatible ? "Yes" : "No");
 
 		if (!openVRInfo.isCompatible) {
@@ -157,6 +161,24 @@ bool VR::ShouldShowAutoHideOverlay() const
 	       globals::state->isMainMenuOpen &&
 	       globals::menu &&
 	       !globals::menu->IsEnabled;
+}
+
+bool VR::ShouldUseInSceneOverlay() const
+{
+	if (!openVRInfo.isCompatible) {
+		return false;
+	}
+
+	switch (settings.menuOverlayPath) {
+	case Settings::MenuOverlayPath::IVROverlay:
+		return false;
+	case Settings::MenuOverlayPath::InScene:
+		return true;
+	case Settings::MenuOverlayPath::Auto:
+	default:
+		return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
+		       (openVRInfo.runtimeType == VRDetection::RuntimeType::Unknown && !openVRInfo.hasOverlayInterface);
+	}
 }
 
 bool VR::IsOverlayVisible() const
@@ -640,6 +662,14 @@ namespace
 			if (ImGui::Combo("Attach Mode", &attachModeInt, attachModes, IM_ARRAYSIZE(attachModes))) {
 				settings.attachMode = static_cast<VR::Settings::OverlayAttachMode>(attachModeInt);
 			}
+			const char* menuOverlayPaths[] = { "Auto", "IVROverlay", "In-scene" };
+			int menuOverlayPath = static_cast<int>(settings.menuOverlayPath);
+			if (ImGui::Combo("Menu Overlay Path", &menuOverlayPath, menuOverlayPaths, IM_ARRAYSIZE(menuOverlayPaths))) {
+				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Auto uses IVROverlay for SteamVR and the per-eye in-scene path for OpenComposite.");
+			}
 
 			// Controller-specific settings (only show when controller mode is active)
 			if (settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
@@ -882,6 +912,12 @@ namespace
 				ImGui::Text("DLL Version: %s", info.version.c_str());
 				ImGui::Text("DLL Size: %llu bytes", info.fileSize);
 				ImGui::Text("Modified: %s", info.modificationTime.c_str());
+				ImGui::Text("Runtime: %s", VRDetection::RuntimeTypeToString(info.runtimeType));
+				ImGui::Text("Interfaces: overlay=%s system=%s compositor=%s",
+					info.hasOverlayInterface ? "yes" : "no",
+					info.hasSystemInterface ? "yes" : "no",
+					info.hasCompositorInterface ? "yes" : "no");
+				ImGui::Text("Menu Path: %s", vr.ShouldUseInSceneOverlay() ? "In-scene" : "IVROverlay");
 			} else {
 				ImGui::Text("OpenVR system not available");
 			}
@@ -1566,8 +1602,11 @@ void VR::SubmitOverlayFrame()
 		return;
 	}
 
-	InstallSubmitHook();
-	const bool useInSceneOverlay = inSceneResources.submitHookInstalled;
+	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
+	if (shouldUseInSceneOverlay) {
+		InstallSubmitHook();
+	}
+	const bool useInSceneOverlay = shouldUseInSceneOverlay && inSceneResources.submitHookInstalled;
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
 	auto* gameOverlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
@@ -1723,93 +1762,10 @@ void VR::UpdateDepthBufferCulling()
 
 void VR::DetectOpenVRInfo()
 {
-	// Reset info
-	openVRInfo = {};
-
-	// Find the OpenVR DLL module
-	HMODULE hModule = GetModuleHandleA("openvr_api.dll");
-	if (!hModule) {
-		openVRInfo.isAvailable = false;
-		return;
-	}
-
-	openVRInfo.isAvailable = true;
-
-	// Get the full path to the DLL
-	char dllPath[MAX_PATH];
-	if (GetModuleFileNameA(hModule, dllPath, MAX_PATH) == 0) {
-		openVRInfo.isCompatible = false;
-		return;
-	}
-
-	openVRInfo.dllPath = dllPath;
-
-	// Get file version information
-	DWORD dwSize = GetFileVersionInfoSizeA(dllPath, nullptr);
-	if (dwSize > 0) {
-		std::vector<BYTE> buffer(dwSize);
-		if (GetFileVersionInfoA(dllPath, 0, dwSize, buffer.data())) {
-			VS_FIXEDFILEINFO* pFileInfo = nullptr;
-			UINT len = 0;
-			if (VerQueryValueA(buffer.data(), "\\", (LPVOID*)&pFileInfo, &len)) {
-				DWORD major = HIWORD(pFileInfo->dwFileVersionMS);
-				DWORD minor = LOWORD(pFileInfo->dwFileVersionMS);
-				DWORD build = HIWORD(pFileInfo->dwFileVersionLS);
-				DWORD revision = LOWORD(pFileInfo->dwFileVersionLS);
-				openVRInfo.version = std::format("{}.{}.{}.{}", major, minor, build, revision);
-			}
-		}
-	}
-
-	if (openVRInfo.version.empty()) {
-		openVRInfo.version = "Unknown";
-	}
-
-	// Get file size and timestamp
-	WIN32_FIND_DATAA findData;
-	HANDLE hFind = FindFirstFileA(dllPath, &findData);
-	if (hFind != INVALID_HANDLE_VALUE) {
-		FindClose(hFind);
-		ULARGE_INTEGER fileSize;
-		fileSize.LowPart = findData.nFileSizeLow;
-		fileSize.HighPart = findData.nFileSizeHigh;
-		openVRInfo.fileSize = fileSize.QuadPart;
-
-		// Convert file time to readable format
-		SYSTEMTIME st;
-		FileTimeToSystemTime(&findData.ftLastWriteTime, &st);
-		openVRInfo.modificationTime = std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
-			st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-	}
-
-	// Check compatibility
-	openVRInfo.isCompatible = IsOpenVRCompatible();
+	openVRInfo = VRDetection::Detect();
 }
 
 bool VR::IsOpenVRCompatible() const
 {
-	if (!openVRInfo.isAvailable) {
-		return false;
-	}
-
-	// Whitelist: Only allow explicitly known compatible versions
-	struct WhitelistedVersion
-	{
-		std::string version;
-		uint64_t fileSize;
-		std::string modificationTime;
-	};
-
-	static const std::vector<WhitelistedVersion> whitelist = {
-		{ "1.0.10.0", 598816, "2022-04-18 00:47:59" },
-		// Add more known compatible versions here
-	};
-
-	for (const auto& entry : whitelist) {
-		if (openVRInfo.version == entry.version) {
-			return true;
-		}
-	}
-
-	return false;  // Not compatible unless explicitly whitelisted
+	return openVRInfo.isAvailable && openVRInfo.isCompatible;
 }

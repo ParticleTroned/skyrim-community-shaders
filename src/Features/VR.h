@@ -1,6 +1,7 @@
 #pragma once
 #include "Menu.h"
 #include "OverlayFeature.h"
+#include "Features/VR/OpenVRDetection.h"
 #include "Utils/Input.h"
 #include <algorithm>
 #include <d3d11.h>
@@ -182,6 +183,14 @@ public:
 		float mouseDeadzone = Config::kDefaultMouseDeadzone;  ///< Thumbstick deadzone for mouse input (0.0-1.0)
 		float mouseSpeed = Config::kDefaultMouseSpeed;        ///< Mouse speed multiplier (0.1-50.0)
 
+		enum class MenuOverlayPath
+		{
+			Auto = 0,
+			IVROverlay = 1,
+			InScene = 2
+		};
+		MenuOverlayPath menuOverlayPath = MenuOverlayPath::Auto;  ///< Runtime path used to present the menu in the headset
+
 		// Wand pointing settings
 		bool EnableWandPointing = true;  ///< Enable controller wand/ray-cast pointing (modern VR input)
 
@@ -242,6 +251,7 @@ public:
 			mouseSpeed = std::clamp(mouseSpeed, 0.1f, 50.0f);
 			comboTimeout = std::clamp(comboTimeout, 1.0f, 10.0f);
 			kAutoHideSeconds = std::clamp(kAutoHideSeconds, 0, Config::kMaxAutoHideSeconds);
+			menuOverlayPath = std::clamp(menuOverlayPath, MenuOverlayPath::Auto, MenuOverlayPath::InScene);
 		}
 	};
 
@@ -320,6 +330,7 @@ public:
 	void SubmitControllerOverlay(OverlayRenderContext& context);
 	void HideAllOverlays(vr::IVROverlay* gameOverlay);
 	bool ShouldShowAutoHideOverlay() const;
+	bool ShouldUseInSceneOverlay() const;
 
 	void UpdateOverlayDrag();
 	bool CanPerformDrag();
@@ -424,16 +435,8 @@ public:
 	// Button controller recording state for UI settings
 	std::unordered_map<uint32_t, ControllerDevice> recordingButtonControllers;
 
-	// OpenVR version and compatibility information
-	struct OpenVRInfo
-	{
-		bool isAvailable = false;
-		bool isCompatible = true;
-		std::string dllPath;
-		std::string version;
-		uint64_t fileSize = 0;
-		std::string modificationTime;
-	} openVRInfo;
+	// OpenVR runtime and compatibility information
+	VRDetection::OpenVRDetectionResult openVRInfo;
 
 	RE::NiPoint3 savedPlayerWorldPos = RE::NiPoint3();  // Used for auto-reset distance check
 

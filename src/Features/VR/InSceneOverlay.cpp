@@ -248,7 +248,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Only render if overlay should be visible
-	if (!globals::menu || !(globals::menu->IsEnabled || globals::menu->overlayVisible || ShouldShowAutoHideOverlay())) {
+	if (!ShouldUseInSceneOverlay() || !globals::menu || !(globals::menu->IsEnabled || globals::menu->overlayVisible || ShouldShowAutoHideOverlay())) {
 		if (perf)
 			perf->EndEvent();
 		return;

@@ -1,3 +1,6 @@
+#ifndef __CLOUD_SHADOWS_HLSLI__
+#define __CLOUD_SHADOWS_HLSLI__
+
 namespace CloudShadows
 {
 	TextureCube<float> CloudShadowsTexture : register(t25);
@@ -24,3 +27,5 @@ namespace CloudShadows
 		return lerp(1.0, 1.0 - cloudCubeSample, SharedData::cloudShadowsSettings.Opacity);
 	}
 }
+
+#endif  // __CLOUD_SHADOWS_HLSLI__

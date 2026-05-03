@@ -1,3 +1,6 @@
+#ifndef __TERRAIN_SHADOWS_HLSLI__
+#define __TERRAIN_SHADOWS_HLSLI__
+
 namespace TerrainShadows
 {
 	Texture2D<float2> ShadowHeightTexture : register(t60);
@@ -26,3 +29,5 @@ namespace TerrainShadows
 		;
 	}
 }
+
+#endif  // __TERRAIN_SHADOWS_HLSLI__

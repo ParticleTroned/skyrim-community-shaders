@@ -27,6 +27,8 @@ DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNorma
 	context.lightDir = SafeNormalizeLighting(lightDir, context.worldNormal);
 	context.halfVector = SafeNormalizeLighting(context.viewDir + context.lightDir, context.worldNormal);
 	context.lightColor = lightColor * shadowFactor * parallaxShadow;
+	context.detailedShadow = 1.0;
+	context.softShadow = 1.0;
 #if defined(TRUE_PBR)
 	context.coatWorldNormal = SafeNormalizeLighting(coatWorldNormal, context.worldNormal);
 	context.coatViewDir = SafeNormalizeLighting(coatViewDir, context.coatWorldNormal);

@@ -426,16 +426,8 @@ float CalculateDepthMultFromUV(float2 uv, float depth, uint eyeIndex = 0)
 #		define SampColorSampler Normals01Sampler
 #		define LinearSampler Normals01Sampler
 
-#		if defined(TERRAIN_SHADOWS)
-#			include "TerrainShadows/TerrainShadows.hlsli"
-#		endif
-
 #		if defined(SKYLIGHTING)
 #			include "Skylighting/Skylighting.hlsli"
-#		endif
-
-#		if defined(CLOUD_SHADOWS)
-#			include "CloudShadows/CloudShadows.hlsli"
 #		endif
 
 #		include "Common/ShadowSampling.hlsli"

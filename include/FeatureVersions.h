@@ -39,7 +39,6 @@ namespace FeatureVersions
         {"VR"sv,                   {1,1,5}},
         {"VolumetricLighting"sv,   {1,1,5}},
         {"WaterEffects"sv,         {1,1,0}},
-        {"WeatherPicker"sv,        {1,0,0}},
         {"WeatherEditor"sv,        {1,0,0}},  
         {"WetnessEffects"sv,       {3,0,0}},
         {"Wetterness"sv,           {1,0,0}},

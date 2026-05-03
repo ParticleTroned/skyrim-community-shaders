@@ -3,12 +3,14 @@
 
 struct DirectContext
 {
-    float3 worldNormal;
-    float3 vertexNormal;
-    float3 viewDir;
-    float3 lightDir;
-    float3 halfVector;
-    float3 lightColor;
+	float3 worldNormal;
+	float3 vertexNormal;
+	float3 viewDir;
+	float3 lightDir;
+	float3 halfVector;
+	float3 lightColor;
+	float detailedShadow;
+	float softShadow;
 #if defined(TRUE_PBR)
 	float3 coatWorldNormal;
 	float3 coatViewDir;

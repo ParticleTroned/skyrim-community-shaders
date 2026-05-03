@@ -155,6 +155,59 @@ namespace Stereo
 		return normalizedCoord;
 	}
 
+	/**
+	* @brief Returns the maximum absolute depth difference between a center depth and four neighbors.
+	*
+	* Used for depth-discontinuity edge detection in stereo sync passes.
+	* Works with both NDC depths (fixed absolute threshold) and linear view-space depths
+	* (relative threshold: divide result by max(center, 1.0)).
+	*
+	* @param[in] center    Depth at the pixel being tested.
+	* @param[in] neighbors Depths at four neighboring pixels (e.g. +-1 or +-2 cross pattern).
+	* @return Maximum of |center - neighbor| across all four samples.
+	*/
+	float MaxDepthDiff(float center, float4 neighbors)
+	{
+		return max(max(abs(center - neighbors.x), abs(center - neighbors.y)),
+			max(abs(center - neighbors.z), abs(center - neighbors.w)));
+	}
+
+	/**
+	* @brief Clamps a stereo UV coordinate to the eye-local X range of the packed stereo buffer.
+	*
+	* Prevents cross-neighbor UV samples from crossing the x=0.5 seam into the other eye's
+	* region of the side-by-side stereo texture. Y is not clamped; sampler address modes
+	* handle vertical out-of-bounds.
+	*
+	* @param[in] uv        Stereo UV coordinate to clamp.
+	* @param[in] eyeIndex  Eye index (0 = left [0, 0.5], 1 = right [0.5, 1]).
+	* @return UV with x restricted to eyeIndex's half of the stereo buffer.
+	*/
+	float2 ClampToEyeUV(float2 uv, uint eyeIndex)
+	{
+		uv.x = clamp(uv.x, eyeIndex == 0 ? 0.0f : 0.5f, eyeIndex == 0 ? 0.5f : 1.0f);
+		return uv;
+	}
+
+	/**
+	* @brief Clamps a pixel coordinate to the eye-local X bounds of the packed stereo buffer.
+	*
+	* Prevents cross-neighbor pixel reads from crossing the half-width seam into the
+	* other eye's region of the side-by-side stereo texture.
+	*
+	* @param[in] px        Pixel coordinate to clamp.
+	* @param[in] eyeIndex  Eye index (0 = left, 1 = right).
+	* @param[in] frameDim  Full stereo buffer dimensions (width covers both eyes).
+	* @return Clamped pixel coordinate, restricted to eyeIndex's half of the buffer.
+	*/
+	int2 ClampToEyeBounds(int2 px, uint eyeIndex, float2 frameDim)
+	{
+		int halfWidth = (int)((uint)frameDim.x >> 1);
+		px.x = clamp(px.x, eyeIndex == 0 ? 0 : halfWidth, eyeIndex == 0 ? (halfWidth - 1) : ((int)frameDim.x - 1));
+		px.y = clamp(px.y, 0, (int)frameDim.y - 1);
+		return px;
+	}
+
 #if defined(PSHADER) || defined(FRAMEBUFFER)
 	// These functions require the framebuffer which is typically provided with the PSHADER
 	/**
@@ -208,9 +261,35 @@ namespace Stereo
 	* @param[in] monoUV The UV coordinates and depth value (Z component) for the current eye, in the range [0,1].
 	* @param[in] eyeIndex Index of the source/current eye (0 for left, 1 for right).
 	* @param[in] dynamicres Optional flag indicating whether dynamic resolution is applied. Default is false.
+	* @param[in] useUnjittered Use the unjittered camera matrices. Required when the source effect was generated from unjittered VR projection data.
 	* @return UV coordinates adjusted to the other eye, with depth.
 	*/
-	float3 ConvertMonoUVToOtherEye(float3 monoUV, uint eyeIndex, bool dynamicres = false)
+	float4 UnprojectClipToWorld(float4 clipPos, uint eyeIndex, bool useUnjittered)
+	{
+		float4 worldPos;
+		if (useUnjittered) {
+			float4 viewPos = mul(FrameBuffer::CameraProjUnjitteredInverse[eyeIndex], clipPos);
+			viewPos /= viewPos.w;
+			worldPos = mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(viewPos.xyz, 1.0));
+		} else {
+			worldPos = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], clipPos);
+		}
+		worldPos /= worldPos.w;
+		return worldPos;
+	}
+
+	float4 ProjectWorldToClip(float4 worldPos, uint eyeIndex, bool useUnjittered)
+	{
+		float4 clipPos;
+		if (useUnjittered)
+			clipPos = mul(FrameBuffer::CameraViewProjUnjittered[eyeIndex], worldPos);
+		else
+			clipPos = mul(FrameBuffer::CameraViewProj[eyeIndex], worldPos);
+		clipPos /= clipPos.w;
+		return clipPos;
+	}
+
+	float3 ConvertMonoUVToOtherEye(float3 monoUV, uint eyeIndex, bool dynamicres = false, bool useUnjittered = false)
 	{
 		// Convert from dynamic res to true UV space if necessary
 		if (dynamicres)
@@ -220,15 +299,13 @@ namespace Stereo
 		float4 clipPos = float4(monoUV.xy * float2(2, -2) - float2(1, -1), monoUV.z, 1);
 
 		// Convert Clip Space to World Space for the current eye
-		float4 worldPos = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], clipPos);
-		worldPos /= worldPos.w;
+		float4 worldPos = UnprojectClipToWorld(clipPos, eyeIndex, useUnjittered);
 
 		// Apply eye offset adjustment in world space
 		worldPos.xyz += FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[1 - eyeIndex].xyz;
 
 		// Convert World Space to Clip Space for the other eye
-		float4 clipPosOtherEye = mul(FrameBuffer::CameraViewProj[1 - eyeIndex], worldPos);
-		clipPosOtherEye /= clipPosOtherEye.w;
+		float4 clipPosOtherEye = ProjectWorldToClip(worldPos, 1 - eyeIndex, useUnjittered);
 
 		// Convert Clip Space to UV (Y is flipped: clip +1 = top, UV 0 = top)
 		float3 monoUVOtherEye = float3(clipPosOtherEye.xy * float2(0.5f, -0.5f) + 0.5f, clipPosOtherEye.z);
@@ -424,7 +501,8 @@ namespace Stereo
 		float2 stereoUV,
 		float depth,
 		uint eyeIndex,
-		float2 frameDim)
+		float2 frameDim,
+		bool useUnjittered = false)
 	{
 		StereoBilateralResult result;
 		result.otherStereoUV = 0;
@@ -436,7 +514,7 @@ namespace Stereo
 		uint otherEyeIndex = 1 - eyeIndex;
 
 		float2 monoUV = ConvertFromStereoUV(stereoUV, eyeIndex);
-		float3 otherEyeUV = ConvertMonoUVToOtherEye(float3(monoUV, depth), eyeIndex);
+		float3 otherEyeUV = ConvertMonoUVToOtherEye(float3(monoUV, depth), eyeIndex, false, useUnjittered);
 
 		if (FrameBuffer::IsOutsideFrame(otherEyeUV.xy, false))
 			return result;
@@ -456,7 +534,8 @@ namespace Stereo
 		float2 frameDim,
 		float depthSigma,
 		float maxBlend,
-		float backCheckThreshold = 8.0)
+		float backCheckThreshold = 8.0,
+		bool useUnjittered = false)
 	{
 		float depthDiff = abs(depth - otherEyeDepth);
 		float depthWeight = exp(-depthDiff * depthDiff / (depthSigma * depthSigma + 1e-8));
@@ -465,7 +544,7 @@ namespace Stereo
 		result.backCheckPassed = true;
 		if (backCheckThreshold > 0) {
 			float2 otherMonoUV = ConvertFromStereoUV(result.otherStereoUV, otherEyeIndex);
-			float3 roundTripUV = ConvertMonoUVToOtherEye(float3(otherMonoUV, otherEyeDepth), otherEyeIndex);
+			float3 roundTripUV = ConvertMonoUVToOtherEye(float3(otherMonoUV, otherEyeDepth), otherEyeIndex, false, useUnjittered);
 			float2 roundTripStereoUV = ConvertToStereoUV(roundTripUV.xy, eyeIndex);
 			float2 pixelDist = abs(roundTripStereoUV * frameDim - (stereoUV * frameDim));
 			result.backCheckPassed = max(pixelDist.x, pixelDist.y) < backCheckThreshold;

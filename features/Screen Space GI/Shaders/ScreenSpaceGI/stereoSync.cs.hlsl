@@ -21,7 +21,11 @@ RWTexture2D<float2> outIlCoCg : register(u2);
 
 static const float kDepthSigma = 0.01;
 static const float kMaxBlend = 0.5;
-static const float kBackCheckThreshold = 8.0;
+static const float kBackCheckThreshold = 0.0;
+static const float kEdgeRelThreshold = 0.5;
+static const float kMaskDepth = 0.01;
+static const int kEdgeMargin = 2;
+static const bool kUseUnjitteredStereoReprojection = true;
 
 void StoreSource(uint2 dstPx, uint2 srcPx)
 {
@@ -30,6 +34,16 @@ void StoreSource(uint2 dstPx, uint2 srcPx)
 	outIlY[dstPx] = srcIlY[srcPx];
 	outIlCoCg[dstPx] = srcIlCoCg[srcPx];
 #endif
+}
+
+float4 SampleCrossDepths(float2 centerUV, float2 step, float2 texScale, uint eyeIndex)
+{
+	float2 uv = Stereo::ClampToEyeUV(centerUV, eyeIndex);
+	return float4(
+		srcDepth.SampleLevel(samplerPointClamp, (uv + float2(step.x, 0)) * texScale, RES_MIP),
+		srcDepth.SampleLevel(samplerPointClamp, (uv + float2(-step.x, 0)) * texScale, RES_MIP),
+		srcDepth.SampleLevel(samplerPointClamp, (uv + float2(0, step.y)) * texScale, RES_MIP),
+		srcDepth.SampleLevel(samplerPointClamp, (uv + float2(0, -step.y)) * texScale, RES_MIP));
 }
 
 [numthreads(8, 8, 1)] void main(uint2 dtid : SV_DispatchThreadID)
@@ -64,8 +78,15 @@ void StoreSource(uint2 dstPx, uint2 srcPx)
 		return;
 	}
 
+	float2 pixelStep = 1.0 / outFrameDim;
+	float4 srcNeighborDepths = SampleCrossDepths(uv, pixelStep, frameScale, eyeIndex);
+	if (Stereo::MaxDepthDiff(depth, srcNeighborDepths) / max(depth, 1.0) > kEdgeRelThreshold) {
+		StoreSource(px, px);
+		return;
+	}
+
 	float rawDepth = (SharedData::CameraData.x - SharedData::CameraData.w / depth) / SharedData::CameraData.z;
-	Stereo::StereoBilateralResult r = Stereo::ReprojectToOtherEye(uv, rawDepth, eyeIndex, outFrameDim);
+	Stereo::StereoBilateralResult r = Stereo::ReprojectToOtherEye(uv, rawDepth, eyeIndex, outFrameDim, kUseUnjitteredStereoReprojection);
 	if (!r.valid) {
 		StoreSource(px, px);
 		return;
@@ -77,8 +98,16 @@ void StoreSource(uint2 dstPx, uint2 srcPx)
 		return;
 	}
 
+	float2 marginStep = float(kEdgeMargin) / outFrameDim;
+	float4 otherNeighborDepths = SampleCrossDepths(r.otherStereoUV, marginStep, frameScale, 1 - eyeIndex);
+	if (any(otherNeighborDepths < kMaskDepth) ||
+		Stereo::MaxDepthDiff(otherLinearDepth, otherNeighborDepths) / max(otherLinearDepth, 1.0) > kEdgeRelThreshold) {
+		StoreSource(px, px);
+		return;
+	}
+
 	float otherRawDepth = (SharedData::CameraData.x - SharedData::CameraData.w / otherLinearDepth) / SharedData::CameraData.z;
-	Stereo::FinalizeStereoBlend(r, uv, rawDepth, otherRawDepth, eyeIndex, outFrameDim, kDepthSigma, kMaxBlend, kBackCheckThreshold);
+	Stereo::FinalizeStereoBlend(r, uv, rawDepth, otherRawDepth, eyeIndex, outFrameDim, kDepthSigma, kMaxBlend, kBackCheckThreshold, kUseUnjitteredStereoReprojection);
 
 	outAo[px] = lerp(srcAo[px], srcAo[r.otherPx], r.blendWeight);
 #ifdef GI

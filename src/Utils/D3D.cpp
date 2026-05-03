@@ -83,6 +83,24 @@ namespace Util
 		return nullptr;
 	}
 
+	void BindFrameBufferConstantBuffersForCS(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return;
+
+		ID3D11Buffer* buffers[1] = { *globals::game::perFrame };
+		a_context->CSSetConstantBuffers(12, 1, buffers);
+
+		if (REL::Module::IsVR()) {
+			static REL::Relocation<ID3D11Buffer**> VRValues{ REL::Offset(0x3180688) };
+			ID3D11Buffer* vrBuffer = nullptr;
+			if (auto vrValues = VRValues.get())
+				vrBuffer = *vrValues;
+			if (vrBuffer)
+				a_context->CSSetConstantBuffers(13, 1, &vrBuffer);
+		}
+	}
+
 	ID3D11ShaderResourceView* GetSRVFromRTV(const ID3D11RenderTargetView* a_rtv)
 	{
 		if (a_rtv) {

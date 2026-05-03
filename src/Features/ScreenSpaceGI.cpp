@@ -1718,6 +1718,7 @@ void ScreenSpaceGI::DrawSSGI()
 	//////////////////////////////////////////////////////
 
 	context->CSSetConstantBuffers(1, 1, &cb);
+	Util::BindFrameBufferConstantBuffersForCS(context);
 	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
 	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());

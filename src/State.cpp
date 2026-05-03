@@ -33,6 +33,10 @@ static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 
 namespace
 {
+	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
+		"UnifiedWater"
+	};
+
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
 		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
@@ -45,6 +49,24 @@ namespace
 				a_disabledFeaturesJson[featureKey] = isDisabled;
 				logger::info("Default boot state for '{}' set to {}", featureName, isDisabled ? "Disabled" : "Enabled");
 			}
+		}
+	}
+
+	bool IsForcedDisableAtBootFeature(std::string_view a_featureName)
+	{
+		return std::ranges::find(kForcedDisableAtBootFeatures, a_featureName) != std::end(kForcedDisableAtBootFeatures);
+	}
+
+	void ApplyForcedDisableAtBootSettings(json& a_disabledFeaturesJson)
+	{
+		// Temporary kill switch: keeps Unified Water registered for cache invalidation
+		// while preventing load, hooks, resources, prepass, and shader defines.
+		for (const auto featureName : kForcedDisableAtBootFeatures) {
+			const std::string featureKey(featureName);
+			if (!a_disabledFeaturesJson.value(featureKey, false)) {
+				logger::info("Feature '{}' is force-disabled at boot by this build", featureName);
+			}
+			a_disabledFeaturesJson[featureKey] = true;
 		}
 	}
 }
@@ -358,6 +380,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 		json& disabledFeaturesJson = settings["Disable at Boot"];
 		ApplyDefaultDisableAtBootSettings(disabledFeaturesJson);
+		ApplyForcedDisableAtBootSettings(disabledFeaturesJson);
 		logger::info("Loading 'Disable at Boot' settings");
 
 		disabledFeatures.clear();
@@ -489,6 +512,9 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	json disabledFeaturesJson;
 	for (const auto& [featureName, isDisabled] : disabledFeatures) {
+		if (IsForcedDisableAtBootFeature(featureName))
+			continue;
+
 		disabledFeaturesJson[featureName] = isDisabled;
 	}
 	ApplyDefaultDisableAtBootSettings(disabledFeaturesJson);

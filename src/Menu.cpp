@@ -821,6 +821,9 @@ void Menu::DrawDisableAtBootSettings()
 
 		// Display sorted features
 		for (auto* feature : featureList) {
+			if (feature->IsHiddenFromUserView())
+				continue;
+
 			const std::string featureName = feature->GetShortName();
 			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 
@@ -1218,7 +1221,7 @@ void Menu::BuildCategoryCounts()
 	const std::vector<Feature*>& features = Feature::GetFeatureList();
 	// Get the category of each feature, and increment the count for that category
 	for (auto& feature : features) {
-		if (feature->IsInMenu() && feature->loaded) {
+		if (!feature->IsHiddenFromUserView() && feature->IsInMenu() && feature->loaded) {
 			std::string_view category = feature->GetCategory();
 			categoryCounts[std::string(category)]++;
 		}

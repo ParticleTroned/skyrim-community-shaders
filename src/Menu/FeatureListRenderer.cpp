@@ -289,7 +289,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
 	for (Feature* feat : sortedFeatureList) {
-		if (feat->IsInMenu() && feat->loaded) {
+		if (!feat->IsHiddenFromUserView() && feat->IsInMenu() && feat->loaded) {
 			std::string category(feat->GetCategory());
 			categorizedFeatures[category].push_back(feat);
 		}
@@ -341,7 +341,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-		return !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
+		return !feat->IsHiddenFromUserView() && !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
 		menuList.push_back("Unloaded Features"s);

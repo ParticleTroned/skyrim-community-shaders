@@ -73,6 +73,11 @@ public:
 	virtual bool IsInMenu() const { return true; }
 
 	/**
+	 * Whether the feature should be hidden from user-facing feature lists.
+	 */
+	virtual bool IsHiddenFromUserView() const { return false; }
+
+	/**
 	 * Whether to print the INI version missing message when this feature is unloaded
 	 */
 	virtual bool DrawFailLoadMessage() const { return true; }

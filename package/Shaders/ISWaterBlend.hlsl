@@ -59,9 +59,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 motionScreenPosition = Stereo::ConvertToStereoUV(Stereo::ConvertFromStereoUV(input.TexCoord, eyeIndex) + motion, eyeIndex);
 	float2 motionAdjustedScreenPosition =
 		FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(motionScreenPosition);
-	float4 waterHistory =
-		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyzw;
-	waterHistory.xyz = LogToLinear(waterHistory.xyz) - LogToLinear(0);
+	float3 waterHistory =
+		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyz;
+	waterHistory = LogToLinear(waterHistory) - LogToLinear(0);
 
 	float historyMask = waterMaskTex.Sample(waterMaskSampler, motionAdjustedScreenPosition).z;
 	float3 finalColor = sourceColor;
@@ -82,7 +82,7 @@ PS_OUTPUT main(PS_INPUT input)
 				0.1, 0.95);
 			historyFactor = NearFar_Menu_DistanceFactor.w * (distanceFactor * (waterMask * -0.85 + 0.95));
 		}
-		finalColor = lerp(sourceColor, waterHistory.xyz, historyFactor);
+		finalColor = lerp(sourceColor, waterHistory, historyFactor);
 	}
 
 	psout.Color1 = float4(LinearToLog(finalColor + LogToLinear(0)), 1);

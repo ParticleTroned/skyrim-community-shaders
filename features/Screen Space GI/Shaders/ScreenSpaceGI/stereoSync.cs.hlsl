@@ -21,7 +21,7 @@ RWTexture2D<float2> outIlCoCg : register(u2);
 
 static const float kDepthSigma = 0.01;
 static const float kMaxBlend = 0.5;
-static const float kBackCheckThreshold = 0.0;
+static const float kBackCheckThreshold = 2.0;
 static const float kEdgeRelThreshold = 0.5;
 static const float kMaskDepth = 0.01;
 static const int kEdgeMargin = 2;
@@ -108,6 +108,10 @@ float4 SampleCrossDepths(float2 centerUV, float2 step, float2 texScale, uint eye
 
 	float otherRawDepth = (SharedData::CameraData.x - SharedData::CameraData.w / otherLinearDepth) / SharedData::CameraData.z;
 	Stereo::FinalizeStereoBlend(r, uv, rawDepth, otherRawDepth, eyeIndex, outFrameDim, kDepthSigma, kMaxBlend, kBackCheckThreshold, kUseUnjitteredStereoReprojection);
+	if (!r.backCheckPassed) {
+		StoreSource(px, px);
+		return;
+	}
 
 	outAo[px] = lerp(srcAo[px], srcAo[r.otherPx], r.blendWeight);
 #ifdef GI

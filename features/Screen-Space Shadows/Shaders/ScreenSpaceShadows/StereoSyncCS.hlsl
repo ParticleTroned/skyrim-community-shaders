@@ -37,7 +37,8 @@ cbuffer StereoSyncCB : register(b1)
 };
 
 static const float kDepthSigma = 0.01;          // Bilateral depth tolerance (NDC): surfaces within this range are considered the same and blended
-static const float kMaxBlend = 1.0;             // Maximum stereo blend weight; reduce below 1.0 to soften the cross-eye contribution
+static const float kMaxBlend = 0.5;             // Keep cross-eye darkening bounded; full-strength min() imports are too pop-prone in VR.
+static const float kBackCheckThreshold = 2.0;   // Round-trip reprojection tolerance in pixels. Failed matches are rejected.
 static const float kEdgeDepthThreshold = 0.05;  // NDC depth difference above which a pixel is considered a depth discontinuity and excluded from stereo sync
 static const int kEdgeMargin = 2;               // Neighbor offset (pixels) for destination edge + mask boundary check
 static const bool kUseUnjitteredStereoReprojection = true;
@@ -188,8 +189,11 @@ float ApplyFoveatedOutputFade(float shadow, float centerWeight)
 		return;
 	}
 
-	// Source + destination edge detection
-	Stereo::FinalizeStereoBlend(r, uv, depth, otherDepth, eyeIndex, FrameDim, kDepthSigma, kMaxBlend, 0.0, kUseUnjitteredStereoReprojection);
+	Stereo::FinalizeStereoBlend(r, uv, depth, otherDepth, eyeIndex, FrameDim, kDepthSigma, kMaxBlend, kBackCheckThreshold, kUseUnjitteredStereoReprojection);
+	if (!r.backCheckPassed) {
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
+		return;
+	}
 
 	float otherShadow = SrcShadowTexture[r.otherPx];
 

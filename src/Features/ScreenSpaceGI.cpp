@@ -25,6 +25,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ResourceProfile,
 	VRCullDistance,
 	FoveatedPresetMode,
+	EnableStereoSync,
 	MinScreenRadius,
 	AORadius,
 	GIRadius,
@@ -133,6 +134,7 @@ namespace
 		a_settings.VRCullDistance = defaults.VRCullDistance;
 		a_settings.CenterFullResMaskScale = defaults.CenterFullResMaskScale;
 		a_settings.FoveatedPresetMode = defaults.FoveatedPresetMode;
+		a_settings.EnableStereoSync = defaults.EnableStereoSync;
 	}
 
 	void StripVRSpecificSettings(json& o_json)
@@ -140,6 +142,7 @@ namespace
 		o_json.erase("VRCullDistance");
 		o_json.erase("CenterFullResMaskScale");
 		o_json.erase("FoveatedPresetMode");
+		o_json.erase("EnableStereoSync");
 	}
 
 	void DisableGIEffects(ScreenSpaceGI::Settings& a_settings)
@@ -559,6 +562,19 @@ void ScreenSpaceGI::DrawSettings()
 					ImGui::TextUnformatted("Higher values widen full-res SSGI coverage.");
 				}
 				upscaling.settings.ssgiFovCenterArea = FoveatedCommon::ClampCenterArea(upscaling.settings.ssgiFovCenterArea);
+			}
+		}
+
+		if (isVR) {
+			{
+				Util::BlueFrameStyleWrapper blueFrameStyle(true);
+				ImGui::Checkbox("VR Stereo Sync", &settings.EnableStereoSync);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Synchronizes SSGI AO/GI results between both VR eyes.");
+				ImGui::TextUnformatted("Reduces left/right mismatch with bilateral reprojection after the main SSGI pass.");
+				ImGui::TextUnformatted("Adds one extra compute pass, plus a center pass when foveated SSGI is active.");
+				ImGui::TextUnformatted("Disable this if you need the performance or are troubleshooting SSGI artifacts.");
 			}
 		}
 
@@ -1374,7 +1390,8 @@ void ScreenSpaceGI::DrawSSGI()
 	const bool runPrefilterRadiancePass = runILPath;
 	const bool blurEnabled = !foveatedCenterOnlyMode && settings.EnableBlur && runILPath;
 	const bool ssgiOutputNeeded = allowAOSpace || runILPath;
-	const bool stereoSyncBaseEnabled = isVR && !foveatedCenterOnlyMode && ssgiOutputNeeded;
+	const bool vrStereoSyncEnabled = isVR && settings.EnableStereoSync;
+	const bool stereoSyncBaseEnabled = vrStereoSyncEnabled && !foveatedCenterOnlyMode && ssgiOutputNeeded;
 	ID3D11ComputeShader* activeRadianceDisoccCompute = nullptr;
 	ID3D11ComputeShader* activeGICompute = nullptr;
 	ID3D11ComputeShader* activeCenterGICompute = nullptr;
@@ -1468,6 +1485,7 @@ void ScreenSpaceGI::DrawSSGI()
 	hashCombine(static_cast<uint64_t>(settings.EnableExperimentalSpecularGI));
 	hashCombine(static_cast<uint64_t>(allowAOSpace));
 	hashCombine(static_cast<uint64_t>(allowILSpace));
+	hashCombine(static_cast<uint64_t>(vrStereoSyncEnabled));
 	const bool modeSignatureChanged = !hasModeSignature || modeSignature != lastModeSignature;
 	if (modeSignatureChanged) {
 		resetHistoryState("runtime mode switch");
@@ -1507,7 +1525,7 @@ void ScreenSpaceGI::DrawSSGI()
 	const bool centerMaskEnabled = centerShadersReady &&
 	                               (resolutionMode != 0) &&
 	                               (centerScale > 0.0f);
-	const bool stereoSyncCenterEnabled = isVR && centerMaskEnabled && ssgiOutputNeeded;
+	const bool stereoSyncCenterEnabled = vrStereoSyncEnabled && centerMaskEnabled && ssgiOutputNeeded;
 	const bool centerBlendNeeded = centerMaskEnabled && (centerScale < 0.99f);
 	const bool centerDirectWrite = centerMaskEnabled && !centerBlendNeeded;
 

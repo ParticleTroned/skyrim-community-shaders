@@ -93,6 +93,7 @@ public:
 		float VRCullDistance = 1500.0f;                  // 0 disables VR distance culling
 		float CenterFullResMaskScale = 0.0f;             // runtime cache; foveated presets derive this from the active Upscaling FOV profile
 		int FoveatedPresetMode = 0;                      // 0=off, 1=strict foveated, 2=foveated
+		bool EnableStereoSync = true;                    // VR-only bilateral cross-eye stabilization pass
 		// visual
 		float MinScreenRadius = 0.01f;
 		float AORadius = 256.f;

@@ -25,6 +25,7 @@ cbuffer StereoBlendCB : register(b1)
 
 static const float kEdgeDepthThreshold = 0.05;
 static const int kEdgeMargin = 2;
+static const float kBackCheckThreshold = 2.0;
 
 float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 {
@@ -59,15 +60,17 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 
 				if (!any(dstEdgeDepths < 1e-5) && Stereo::MaxDepthDiff(otherDepth, dstEdgeDepths) <= kEdgeDepthThreshold) {
 					float4 otherColor = ColorTexture[r.otherPx];
-					Stereo::FinalizeStereoBlend(r, uv, centerDepth, otherDepth, eyeIndex, FrameDim, DepthSigma, MaxBlendFactor);
+					Stereo::FinalizeStereoBlend(r, uv, centerDepth, otherDepth, eyeIndex, FrameDim, DepthSigma, MaxBlendFactor, kBackCheckThreshold);
 
-					float colorDiff = abs(dot(centerColor.rgb, float3(0.2126, 0.7152, 0.0722)) -
-					                      dot(otherColor.rgb, float3(0.2126, 0.7152, 0.0722)));
-					float colorThreshold = max(ColorDiffThreshold, 1e-5);
-					float colorGate = smoothstep(colorThreshold * 0.5, colorThreshold * 2.0, colorDiff);
-					r.blendWeight *= colorGate;
+					if (r.backCheckPassed) {
+						float colorDiff = abs(dot(centerColor.rgb, float3(0.2126, 0.7152, 0.0722)) -
+						                      dot(otherColor.rgb, float3(0.2126, 0.7152, 0.0722)));
+						float colorThreshold = max(ColorDiffThreshold, 1e-5);
+						float colorGate = smoothstep(colorThreshold * 0.5, colorThreshold * 2.0, colorDiff);
+						r.blendWeight *= colorGate;
 
-					blendedColor = lerp(centerColor, otherColor, r.blendWeight);
+						blendedColor = lerp(centerColor, otherColor, r.blendWeight);
+					}
 				}
 			}
 		}

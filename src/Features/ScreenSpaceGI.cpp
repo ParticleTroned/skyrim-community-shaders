@@ -251,39 +251,35 @@ void ScreenSpaceGI::DrawSettings()
 	if (!ShadersOK())
 		ImGui::TextColored({ 1, 0, 0, 1 }, "Compute shaders failed to compile!");
 
+	auto drawCenteredSeparatorText = [](const char* a_label) {
+		ImGui::PushStyleVar(ImGuiStyleVar_SeparatorTextAlign, ImVec2(0.5f, 0.5f));
+		ImGui::SeparatorText(a_label);
+		ImGui::PopStyleVar();
+	};
+
 	///////////////////////////////
-	if (ImGui::BeginTable("TopToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
-		ImGui::TableSetupColumn("TopToggleCol1", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-		ImGui::TableSetupColumn("TopToggleCol2", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-		ImGui::TableSetupColumn("TopToggleCol3", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+	ImGui::Checkbox("Enable", &settings.Enabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
+	}
 
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		ImGui::Checkbox("Enable", &settings.Enabled);
+	ImGui::SameLine();
+	{
+		auto advancedGuard = Util::DisableGuard(!settings.Enabled);
+		ImGui::Checkbox("Advanced Options", &showAdvanced);
+	}
+
+	if (!isVR) {
+		ImGui::SameLine();
+		auto ssaoToggleGuard = Util::DisableGuard(!settings.Enabled);
+		ImGui::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
+			ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
 		}
-
-		ImGui::TableNextColumn();
-		if (!isVR) {
-			auto ssaoToggleGuard = Util::DisableGuard(!settings.Enabled);
-			ImGui::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
-			}
-		}
-
-		ImGui::TableNextColumn();
-		{
-			auto advancedGuard = Util::DisableGuard(!settings.Enabled);
-			ImGui::Checkbox("Advanced Option", &showAdvanced);
-		}
-
-		ImGui::EndTable();
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Presets");
+	drawCenteredSeparatorText("Presets");
 	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
 	ImGui::TextWrapped("Foveated/QRes keeps full-res AO in the FOV center and quarter-res AO outside; Foveated/Only disables AO outside the FOV center. Smaller FOV area is faster, but can reduce peripheral AO quality.");
 	ImGui::PopStyleColor();
@@ -439,7 +435,7 @@ void ScreenSpaceGI::DrawSettings()
 		}
 
 		///////////////////////////////
-		ImGui::SeparatorText("SSGI Effects & Resources");
+		drawCenteredSeparatorText("SSGI Effects & Resources");
 
 		const bool foveatedPresetActive = IsRuntimeFoveatedPresetActive(settings);
 		const int previousResourceProfile = settings.ResourceProfile;
@@ -534,7 +530,7 @@ void ScreenSpaceGI::DrawSettings()
 		}
 
 		if (isVR) {
-			ImGui::SeparatorText("Foveated SSGI");
+			drawCenteredSeparatorText("Foveated SSGI");
 
 			if (canLinkSsgiToUpscaling) {
 				Util::BlueFrameStyleWrapper linkStyle(true);
@@ -565,20 +561,7 @@ void ScreenSpaceGI::DrawSettings()
 			}
 		}
 
-		if (isVR) {
-			{
-				Util::BlueFrameStyleWrapper blueFrameStyle(true);
-				ImGui::Checkbox("VR Stereo Sync", &settings.EnableStereoSync);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Synchronizes SSGI AO/GI results between both VR eyes.");
-				ImGui::TextUnformatted("Reduces left/right mismatch with bilateral reprojection after the main SSGI pass.");
-				ImGui::TextUnformatted("Adds one extra compute pass, plus a center pass when foveated SSGI is active.");
-				ImGui::TextUnformatted("Disable this if you need the performance or are troubleshooting SSGI artifacts.");
-			}
-		}
-
-		ImGui::SeparatorText("Quality/Performance");
+		drawCenteredSeparatorText("Quality/Performance");
 
 		if (isVR) {
 			ImGui::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
@@ -605,6 +588,19 @@ void ScreenSpaceGI::DrawSettings()
 		recompileFlag |= ImGui::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Reduces AO sample count in far distance and low-variance regions to improve performance.");
+		}
+		if (isVR) {
+			ImGui::SameLine();
+			{
+				Util::BlueFrameStyleWrapper blueFrameStyle(true);
+				ImGui::Checkbox("VR Stereo Sync", &settings.EnableStereoSync);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Synchronizes SSGI AO/GI results between both VR eyes.");
+				ImGui::TextUnformatted("Reduces left/right mismatch with bilateral reprojection after the main SSGI pass.");
+				ImGui::TextUnformatted("Adds one extra compute pass, plus a center pass when foveated SSGI is active.");
+				ImGui::TextUnformatted("Disable this if you need the performance or are troubleshooting SSGI artifacts.");
+			}
 		}
 
 		const int previousResolutionMode = settings.ResolutionMode;
@@ -650,7 +646,7 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Visual");
+	drawCenteredSeparatorText("Visual");
 
 	{
 		auto visualGuard = Util::DisableGuard(!settings.Enabled);
@@ -718,7 +714,7 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Visual - IL");
+	drawCenteredSeparatorText("Visual - IL");
 
 	{
 		auto visualILGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
@@ -735,7 +731,7 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Denoising");
+	drawCenteredSeparatorText("Denoising");
 
 	{
 		const bool strictFoveatedActive = settings.FoveatedPresetMode == kFoveatedPresetModeStrict;
@@ -791,7 +787,7 @@ void ScreenSpaceGI::DrawSettings()
 	}
 
 	///////////////////////////////
-	ImGui::SeparatorText("Debug");
+	drawCenteredSeparatorText("Debug");
 
 	if (ImGui::TreeNode("Buffer Viewer")) {
 		static float debugRescale = .3f;

@@ -70,7 +70,7 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(RaymarchCB);
 
-	bool enableStereoSync = true;
+	bool enableStereoSync = false;
 
 	struct alignas(16) StereoSyncCB
 	{

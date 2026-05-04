@@ -707,7 +707,7 @@ void ScreenSpaceShadows::Prepass()
 void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
 	bendSettings = o_json;
-	enableStereoSync = o_json.is_object() ? o_json.value("EnableStereoSync", true) : true;
+	enableStereoSync = o_json.is_object() ? o_json.value("EnableStereoSync", false) : false;
 	SanitizeBendSettings(bendSettings);
 }
 
@@ -720,7 +720,7 @@ void ScreenSpaceShadows::SaveSettings(json& o_json)
 void ScreenSpaceShadows::RestoreDefaultSettings()
 {
 	bendSettings = {};
-	enableStereoSync = true;
+	enableStereoSync = false;
 }
 
 bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)

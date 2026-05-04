@@ -45,7 +45,7 @@ void GrassCollision::UpdateCollisions(PerFrame& perFrameData)
 	}
 
 	if (auto player = RE::PlayerCharacter::GetSingleton())
-		actorList.push_back(player);
+		actorList.push_back(RE::ActorPtr(player));
 
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition(0);
 

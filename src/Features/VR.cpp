@@ -355,8 +355,14 @@ bool VR::ShouldUseInSceneOverlay() const
 		return true;
 	case Settings::MenuOverlayPath::Auto:
 	default:
+		// Prefer compositor overlays whenever runtime support exists, as this keeps
+		// VR-only menu presentation separate from desktop UI rendering.
+		if (openVRInfo.hasOverlayInterface) {
+			return false;
+		}
+		// Fall back to in-scene only when overlay interface support is unavailable.
 		return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
-		       (openVRInfo.runtimeType == VRDetection::RuntimeType::Unknown && !openVRInfo.hasOverlayInterface);
+		       openVRInfo.runtimeType == VRDetection::RuntimeType::Unknown;
 	}
 }
 
@@ -846,10 +852,13 @@ namespace
 			ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
 			const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
 			ImGui::Combo("Menu Positioning Method", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods));
-			const char* attachModes[] = { "HMD Only", "Controller Only", "Both" };
+			const char* attachModes[] = { "HMD Only", "Controller Only", "Both", "None (Desktop Only)" };
 			int attachModeInt = static_cast<int>(settings.attachMode);
 			if (ImGui::Combo("Attach Mode", &attachModeInt, attachModes, IM_ARRAYSIZE(attachModes))) {
 				settings.attachMode = static_cast<VR::Settings::OverlayAttachMode>(attachModeInt);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Use 'None (Desktop Only)' to hide the VR menu and keep the menu only on desktop.");
 			}
 			const char* menuOverlayPaths[] = { "Auto", "IVROverlay", "In-scene" };
 			int menuOverlayPath = static_cast<int>(settings.menuOverlayPath);
@@ -857,7 +866,8 @@ namespace
 				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Auto uses IVROverlay for SteamVR and the per-eye in-scene path for OpenComposite.");
+				ImGui::Text("Auto prefers IVROverlay when available; falls back to in-scene only when runtime overlay support is missing.");
+				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
 			}
 
 			// Controller-specific settings (only show when controller mode is active)
@@ -1805,9 +1815,26 @@ void VR::DestroyOverlay()
 
 void VR::RecreateOverlayTexturesIfNeeded()
 {
-	// Smart pointers automatically release existing resources when put() assigns new ones
-	Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuTexture.put(), menuRTV.put());
-	Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuControllerTexture.put(), menuControllerRTV.put());
+	auto isTextureValid = [](ID3D11Texture2D* texture, ID3D11RenderTargetView* rtv) {
+		if (!texture || !rtv) {
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC desc{};
+		texture->GetDesc(&desc);
+		return desc.Width == kOverlayWidth &&
+		       desc.Height == kOverlayHeight &&
+		       desc.ArraySize == 1 &&
+		       desc.MipLevels == 1;
+	};
+
+	if (!isTextureValid(menuTexture.get(), menuRTV.get())) {
+		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuTexture.put(), menuRTV.put());
+	}
+
+	if (!isTextureValid(menuControllerTexture.get(), menuControllerRTV.get())) {
+		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuControllerTexture.put(), menuControllerRTV.put());
+	}
 }
 
 void VR::HideAllOverlays(vr::IVROverlay* gameOverlay)

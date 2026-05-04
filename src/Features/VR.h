@@ -9,6 +9,7 @@
 #include <imgui_impl_dx11.h>
 #include <magic_enum/magic_enum.hpp>
 #include <openvr.h>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -510,6 +511,9 @@ public:
 			winrt::com_ptr<ID3D11RenderTargetView> rtv;
 		};
 		CachedRTV cachedEyeRTVs[2];
+		vr::TrackedDevicePose_t cachedRenderPoses[vr::k_unMaxTrackedDeviceCount]{};
+		uint32_t cachedPoseFrame = 0;
+		bool cachedPosesValid = false;
 
 		bool initialized = false;
 		bool submitHookInstalled = false;

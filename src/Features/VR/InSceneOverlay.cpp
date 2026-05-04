@@ -2,6 +2,7 @@
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
+#include "State.h"
 #include "Util.h"
 #include "Utils/VRUtils.h"
 #include <DirectXMath.h>
@@ -275,11 +276,30 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Get HMD Pose and Eye matrices
-	vr::TrackedDevicePose_t hmdPose;
-	vr::TrackedDevicePose_t renderPose[vr::k_unMaxTrackedDeviceCount];
+	const bool hasState = globals::state != nullptr;
+	const uint32_t currentFrame = hasState ? globals::state->frameCount : 0;
+	const bool shouldRefreshPoses =
+		!hasState ||
+		!inSceneResources.cachedPosesValid ||
+		inSceneResources.cachedPoseFrame != currentFrame;
 
-	RE::BSOpenVR::GetIVRCompositor()->GetLastPoses(renderPose, vr::k_unMaxTrackedDeviceCount, nullptr, 0);
-	hmdPose = renderPose[vr::k_unTrackedDeviceIndex_Hmd];
+	if (shouldRefreshPoses) {
+		auto compositorError = RE::BSOpenVR::GetIVRCompositor()->GetLastPoses(
+			inSceneResources.cachedRenderPoses,
+			vr::k_unMaxTrackedDeviceCount,
+			nullptr,
+			0);
+		if (compositorError != vr::VRCompositorError_None) {
+			if (perf)
+				perf->EndEvent();
+			return;
+		}
+
+		inSceneResources.cachedPoseFrame = currentFrame;
+		inSceneResources.cachedPosesValid = true;
+	}
+
+	const vr::TrackedDevicePose_t& hmdPose = inSceneResources.cachedRenderPoses[vr::k_unTrackedDeviceIndex_Hmd];
 	if (!hmdPose.bPoseIsValid) {
 		if (perf)
 			perf->EndEvent();
@@ -506,7 +526,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	if ((settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) && menuTexture) {
 		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
 		if (attachIndex != vr::k_unTrackedDeviceIndexInvalid && attachIndex < vr::k_unMaxTrackedDeviceCount) {
-			vr::TrackedDevicePose_t controllerPose = renderPose[attachIndex];
+			const vr::TrackedDevicePose_t& controllerPose = inSceneResources.cachedRenderPoses[attachIndex];
 			if (controllerPose.bPoseIsValid) {
 				Matrix controllerWorld = Util::HmdMatrix34ToMatrix(controllerPose.mDeviceToAbsoluteTracking);
 				Matrix offset = Matrix::CreateTranslation(settings.VRMenuControllerOffsetX, settings.VRMenuControllerOffsetY, settings.VRMenuControllerOffsetZ);

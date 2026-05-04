@@ -1,5 +1,22 @@
-Texture naming scheme:
+Terrain Shadows accepts two heightmap naming schemes, but each scheme is only
+loaded from its matching directory.
+
+This directory installs to:
+Data\textures\heightmaps\
+
+Files placed here must use the original naming scheme:
 [worldspace editorID].HeightMap.[West cell].[South cell].[East cell].[North cell].[z black].[z white].[z min].[z max].dds
+
+Do not place xLODGen-style .Terrain.HeightMap files in this directory. They are
+ignored here. xLODGen-style files belong under:
+Data\textures\terrain\HeightMaps\
+
+xLODGen-style naming scheme:
+[worldspace editorID].Terrain.HeightMap.[West cell].[South cell].[East cell].[North cell].[z min].[z max].dds
+
+The loader scans Data\textures\terrain\ subdirectories first, then
+Data\textures\heightmaps\. If both locations contain a map for the same
+worldspace, the Data\textures\heightmaps\ entry replaces the terrain entry.
 
 - The min/max cell coordinates are the actual cells that contain terrain height data.
 - All z values are actual z values divided by 8.

@@ -1,4 +1,5 @@
 #pragma once
+#include "Buffer.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
 #include "Features/VR/OpenVRDetection.h"
@@ -77,6 +78,15 @@ public:
 		static constexpr float kDefaultMouseSpeed = 10.0f;    ///< Default mouse speed multiplier
 		static constexpr int kDefaultAutoHideSeconds = 30;    ///< Default auto-hide timeout for overlay messages
 		static constexpr int kMaxAutoHideSeconds = 300;       ///< Maximum auto-hide timeout (5 minutes)
+		static constexpr float kMinStereoBlendDepthSigma = 0.001f;
+		static constexpr float kMaxStereoBlendDepthSigma = 0.1f;
+		static constexpr float kDefaultStereoBlendDepthSigma = 0.01f;
+		static constexpr float kMinStereoBlendMaxFactor = 0.0f;
+		static constexpr float kMaxStereoBlendMaxFactor = 0.25f;
+		static constexpr float kDefaultStereoBlendMaxFactor = 0.05f;
+		static constexpr float kMinStereoBlendColorThreshold = 0.0f;
+		static constexpr float kMaxStereoBlendColorThreshold = 0.2f;
+		static constexpr float kDefaultStereoBlendColorThreshold = 0.02f;
 
 		// Default HMD overlay offset values (in meters, relative to HMD)
 		static constexpr float kDefaultHMDOffsetX = 0.26f;   ///< Default horizontal offset from HMD
@@ -108,6 +118,7 @@ public:
 	}
 
 	virtual void SetupResources() override;
+	virtual void ClearShaderCache() override;
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsCore() const override { return true; }
 
@@ -116,6 +127,9 @@ public:
 	virtual void EarlyPrepass() override;
 
 	void UpdateDepthBufferCulling();
+	void DrawStereoBlend();
+	bool EnsureStereoBlendResources();
+	static bool AnyScreenSpaceEffectActive();
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -150,6 +164,12 @@ public:
 		bool EnableDepthBufferCullingExterior = true;  ///< Enable depth buffer culling for VR performance
 		bool EnableDepthBufferCullingInterior = true;
 		float MinOccludeeBoxExtent = 10.0f;  ///< Minimum bounding box size for occlusion culling
+
+		// Post-composite VR stereo consistency pass. Default-off because it is a global final-color blend.
+		bool EnableStereoBlend = false;
+		float StereoBlendDepthSigma = Config::kDefaultStereoBlendDepthSigma;
+		float StereoBlendMaxFactor = Config::kDefaultStereoBlendMaxFactor;
+		float StereoBlendColorThreshold = Config::kDefaultStereoBlendColorThreshold;
 
 		// VR Menu Overlay positioning settings
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)
@@ -252,6 +272,9 @@ public:
 			comboTimeout = std::clamp(comboTimeout, 1.0f, 10.0f);
 			kAutoHideSeconds = std::clamp(kAutoHideSeconds, 0, Config::kMaxAutoHideSeconds);
 			menuOverlayPath = std::clamp(menuOverlayPath, MenuOverlayPath::Auto, MenuOverlayPath::InScene);
+			StereoBlendDepthSigma = std::clamp(StereoBlendDepthSigma, Config::kMinStereoBlendDepthSigma, Config::kMaxStereoBlendDepthSigma);
+			StereoBlendMaxFactor = std::clamp(StereoBlendMaxFactor, Config::kMinStereoBlendMaxFactor, Config::kMaxStereoBlendMaxFactor);
+			StereoBlendColorThreshold = std::clamp(StereoBlendColorThreshold, Config::kMinStereoBlendColorThreshold, Config::kMaxStereoBlendColorThreshold);
 		}
 	};
 
@@ -351,6 +374,22 @@ public:
 	winrt::com_ptr<ID3D11RenderTargetView> menuRTV;
 	winrt::com_ptr<ID3D11Texture2D> menuControllerTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> menuControllerRTV;
+
+	// Post-composite stereo blend resources, created lazily when the advanced option is enabled.
+	winrt::com_ptr<ID3D11ComputeShader> stereoBlendCS;
+	eastl::unique_ptr<Texture2D> stereoBlendCopyTex = nullptr;
+	eastl::unique_ptr<ConstantBuffer> stereoBlendCB = nullptr;
+
+	struct alignas(16) StereoBlendCB
+	{
+		float FrameDim[2];
+		float RcpFrameDim[2];
+		float DepthSigma;
+		float MaxBlendFactor;
+		float ColorDiffThreshold;
+		float pad;
+	};
+	STATIC_ASSERT_ALIGNAS_16(StereoBlendCB);
 
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;

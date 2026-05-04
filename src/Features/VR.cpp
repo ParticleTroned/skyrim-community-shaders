@@ -4,11 +4,17 @@
 #include "RE/B/BSOpenVR.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
+#include "DynamicCubemaps.h"
+#include "ScreenSpaceGI.h"
+#include "ScreenSpaceShadows.h"
+#include "SubsurfaceScattering.h"
 #include "Upscaling.h"
 #include <openvr.h>
 
+#include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/Game.h"
 #include "Utils/PerfUtils.h"
 #include "Utils/UI.h"
 #include "Utils/VRUtils.h"
@@ -60,6 +66,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	kAutoHideSeconds,
 	VRMenuAutoResetDistance,
 	EnableWandPointing,
+	EnableStereoBlend,
+	StereoBlendDepthSigma,
+	StereoBlendMaxFactor,
+	StereoBlendColorThreshold,
 	menuOverlayPath)
 
 //=============================================================================
@@ -109,6 +119,175 @@ void VR::SetupResources()
 	} else {
 		logger::info("OpenVR DLL not available in current process");
 	}
+}
+
+void VR::ClearShaderCache()
+{
+	stereoBlendCS = nullptr;
+}
+
+bool VR::AnyScreenSpaceEffectActive()
+{
+	const auto& ssgi = globals::features::screenSpaceGI;
+	const auto& shadows = globals::features::screenSpaceShadows;
+	const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+	const auto& sss = globals::features::subsurfaceScattering;
+
+	bool ssgiActive = false;
+	if (ssgi.loaded && ssgi.settings.Enabled) {
+		const bool isInterior = Util::IsInterior();
+		const bool ssgiAOActive = !ssgi.settings.AOInteriorsOnly || isInterior;
+		const bool ssgiGIActive = ssgi.IsGIActive() && (!ssgi.settings.ILInteriorsOnly || isInterior);
+		ssgiActive = ssgiAOActive || ssgiGIActive;
+	}
+
+	const auto* sky = globals::game::sky;
+	const bool shadowsActive = shadows.loaded &&
+	                           shadows.bendSettings.Enable != 0 &&
+	                           sky &&
+	                           sky->mode.get() == RE::Sky::Mode::kFull;
+
+	const bool dynamicSSRActive = dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0;
+
+	return ssgiActive ||
+	       shadowsActive ||
+	       dynamicSSRActive ||
+	       sss.loaded;
+}
+
+bool VR::EnsureStereoBlendResources()
+{
+	if (!globals::d3d::device || !globals::game::renderer)
+		return false;
+
+	if (!stereoBlendCS) {
+		std::vector<std::pair<const char*, const char*>> defines = { { "VR", "" }, { "FRAMEBUFFER", "" } };
+		auto* shader = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VR\\StereoBlendCS.hlsl", defines, "cs_5_0"));
+		if (!shader)
+			return false;
+		stereoBlendCS.attach(shader);
+	}
+
+	auto renderer = globals::game::renderer;
+	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.UAV)
+		return false;
+
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	main.texture->GetDesc(&mainDesc);
+	if (mainDesc.ArraySize != 1 || mainDesc.SampleDesc.Count != 1)
+		return false;
+
+	const bool copyMatches =
+		stereoBlendCopyTex &&
+		stereoBlendCopyTex->desc.Width == mainDesc.Width &&
+		stereoBlendCopyTex->desc.Height == mainDesc.Height &&
+		stereoBlendCopyTex->desc.MipLevels == mainDesc.MipLevels &&
+		stereoBlendCopyTex->desc.ArraySize == mainDesc.ArraySize &&
+		stereoBlendCopyTex->desc.SampleDesc.Count == mainDesc.SampleDesc.Count &&
+		stereoBlendCopyTex->desc.SampleDesc.Quality == mainDesc.SampleDesc.Quality &&
+		stereoBlendCopyTex->desc.Format == mainDesc.Format;
+
+	if (!copyMatches) {
+		D3D11_TEXTURE2D_DESC copyDesc = mainDesc;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		copyDesc.CPUAccessFlags = 0;
+		copyDesc.MiscFlags = 0;
+		copyDesc.Usage = D3D11_USAGE_DEFAULT;
+
+		stereoBlendCopyTex = eastl::make_unique<Texture2D>(copyDesc, "VR::StereoBlendCopy");
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = copyDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		stereoBlendCopyTex->CreateSRV(srvDesc);
+	}
+
+	if (!stereoBlendCB)
+		stereoBlendCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<StereoBlendCB>(), "VR::StereoBlendCB");
+
+	return stereoBlendCS && stereoBlendCopyTex && stereoBlendCopyTex->srv && stereoBlendCB;
+}
+
+void VR::DrawStereoBlend()
+{
+	if (!loaded)
+		return;
+
+	if (!REL::Module::IsVR() || !settings.EnableStereoBlend)
+		return;
+
+	if (settings.StereoBlendMaxFactor <= Config::kMinStereoBlendMaxFactor)
+		return;
+
+	if (!AnyScreenSpaceEffectActive())
+		return;
+
+	if (!EnsureStereoBlendResources())
+		return;
+
+	auto context = globals::d3d::context;
+	auto renderer = globals::game::renderer;
+	if (!context || !renderer)
+		return;
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto* depthSRV = Util::GetCurrentSceneDepthSRV();
+	if (!main.texture || !main.UAV || !depthSRV)
+		return;
+
+	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize);
+	if (resolution.x <= 0.0f || resolution.y <= 0.0f)
+		return;
+
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "VR Stereo Blend");
+
+	if (globals::state->frameAnnotations)
+		globals::state->BeginPerfEvent("VR Stereo Blend");
+
+	// Deferred composite leaves kMAIN bound as a UAV. Unbind before copying it as the source texture.
+	ID3D11UnorderedAccessView* nullUavs[3]{ nullptr, nullptr, nullptr };
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
+
+	context->CopyResource(stereoBlendCopyTex->resource.get(), main.texture);
+
+	StereoBlendCB cbData{};
+	cbData.FrameDim[0] = resolution.x;
+	cbData.FrameDim[1] = resolution.y;
+	cbData.RcpFrameDim[0] = 1.0f / resolution.x;
+	cbData.RcpFrameDim[1] = 1.0f / resolution.y;
+	cbData.DepthSigma = settings.StereoBlendDepthSigma;
+	cbData.MaxBlendFactor = settings.StereoBlendMaxFactor;
+	cbData.ColorDiffThreshold = settings.StereoBlendColorThreshold;
+	stereoBlendCB->Update(cbData);
+
+	Util::BindGlobalConstantBuffersForCS(context);
+
+	auto dispatchCount = Util::GetScreenDispatchCount(true);
+	auto* cbPtr = stereoBlendCB->CB();
+	ID3D11ShaderResourceView* srvs[2]{ stereoBlendCopyTex->srv.get(), depthSRV };
+	ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
+
+	context->CSSetConstantBuffers(1, 1, &cbPtr);
+	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+	context->CSSetShader(stereoBlendCS.get(), nullptr, 0);
+
+	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+	ID3D11ShaderResourceView* nullSrvs[2]{ nullptr, nullptr };
+	uavs[0] = nullptr;
+	cbPtr = nullptr;
+	context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+	context->CSSetConstantBuffers(1, 1, &cbPtr);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	if (globals::state->frameAnnotations)
+		globals::state->EndPerfEvent();
 }
 
 void VR::PostPostLoad()
@@ -248,6 +427,7 @@ namespace
 	void DrawMenuSettings();
 	void DrawMouseSettings();
 	void DrawDragSettings();
+	void DrawStereoBlendingSettings();
 	void DrawKeyBindings();
 	void DrawDebugSection();
 }
@@ -281,6 +461,15 @@ void VR::DrawSettings()
 				ImGui::EndTabItem();
 			}
 		}
+
+		if (BeginTabItemWithFont("Stereo Blending", Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##VRStereoBlendingFrame", { 0, 0 }, true)) {
+				DrawStereoBlendingSettings();
+			}
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+
 		// Debug Tab (existing debug functionality)
 		if (BeginTabItemWithFont("Debug", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRDebugFrame", { 0, 0 }, true)) {
@@ -762,6 +951,57 @@ namespace
 			}
 		}
 	}
+
+	void DrawStereoBlendingSettings()
+	{
+		auto& vr = globals::features::vr;
+		auto& settings = vr.settings;
+		const bool screenSpaceEffectActive = VR::AnyScreenSpaceEffectActive();
+		const bool blendCanRun = settings.EnableStereoBlend && settings.StereoBlendMaxFactor > VR::Config::kMinStereoBlendMaxFactor && screenSpaceEffectActive;
+
+		if (ImGui::CollapsingHeader("Stereo Blending", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::TextWrapped("Advanced post-composite safety net for VR screen-space effect mismatches. It is default-off and only runs when a supported screen-space effect is active.");
+			ImGui::Spacing();
+
+			ImGui::Checkbox("Enable Stereo Blending", &settings.EnableStereoBlend);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Depth-aware bilateral blend between eyes after deferred composite. Keep the maximum blend low to preserve stereo parallax.");
+			}
+
+			ImGui::Text("Runtime gate: %s", screenSpaceEffectActive ? "screen-space effect active" : "inactive - no supported screen-space effect");
+			ImGui::Text("Current state: %s", blendCanRun ? "will run" : "off");
+			ImGui::Spacing();
+
+			ImGui::BeginDisabled(!settings.EnableStereoBlend);
+
+			ImGui::SliderFloat("Maximum Blend", &settings.StereoBlendMaxFactor, VR::Config::kMinStereoBlendMaxFactor, VR::Config::kMaxStereoBlendMaxFactor, "%.3f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Upper limit for cross-eye color contribution. Lower values are safer; default is %.3f.", VR::Config::kDefaultStereoBlendMaxFactor);
+			}
+
+			ImGui::SliderFloat("Depth Match Sigma", &settings.StereoBlendDepthSigma, VR::Config::kMinStereoBlendDepthSigma, VR::Config::kMaxStereoBlendDepthSigma, "%.3f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Depth tolerance for accepting a cross-eye match. Lower values are stricter and reduce halo risk.");
+			}
+
+			ImGui::SliderFloat("Color Difference Threshold", &settings.StereoBlendColorThreshold, VR::Config::kMinStereoBlendColorThreshold, VR::Config::kMaxStereoBlendColorThreshold, "%.3f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Minimum luminance mismatch before blending is allowed. Higher values avoid unnecessary blend on already-matching pixels.");
+			}
+
+			if (ImGui::Button("Reset Stereo Blending Defaults")) {
+				settings.StereoBlendDepthSigma = VR::Config::kDefaultStereoBlendDepthSigma;
+				settings.StereoBlendMaxFactor = VR::Config::kDefaultStereoBlendMaxFactor;
+				settings.StereoBlendColorThreshold = VR::Config::kDefaultStereoBlendColorThreshold;
+			}
+
+			ImGui::EndDisabled();
+
+			ImGui::Spacing();
+			ImGui::TextWrapped("Per-feature toggles are intentionally not exposed: this pass operates on final composite color and cannot reliably attribute pixels to individual screen-space producers.");
+		}
+	}
+
 	void DrawKeyBindings()
 	{
 		auto& vr = globals::features::vr;

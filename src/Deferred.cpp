@@ -13,6 +13,7 @@
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
+#include "Features/VR.h"
 #include "Features/WeatherEditor.h"
 
 #include "Hooks.h"
@@ -448,6 +449,9 @@ void Deferred::DeferredPasses()
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 		}
 	}
+
+	if (globals::game::isVR && globals::features::vr.loaded)
+		globals::features::vr.DrawStereoBlend();
 
 	// Clear
 	{

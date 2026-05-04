@@ -160,6 +160,28 @@ Current design intent:
 - Screen-space shadows use stereo sync to reduce per-eye mismatch.
 - This is safer than a global full-frame color/depth reprojection pass because each feature owns the data being blended and can apply feature-specific validity checks.
 
+Recent negative debugging result (2026-05-04):
+
+- The reported issue, one eye effectively HMD-locked while the other remains world-stable, also occurs with FOV/foveated mode off.
+- Follow-up observation: the artifact is visible in each eye as a mixed result, with one rendered component HMD-locked and another component world-locked.
+- The HMD-locked component is not a complete world image. It contains only a partial scene contribution, observed on water, trees, mountains/clouds, fire, and buildings, while the full world view remains separately world-locked.
+- Reverting the feature-local stereo reprojection helper from the alternate unjittered projection/view-inverse path back to the full `CameraViewProjInverse` -> `CameraViewProj` path had no visible effect.
+- Removing the compute-side `VRValues`/`StereoEnabled` dependency from the SSGI/SSS stereo sync path also had no visible effect.
+- Testing the SSS stereo-sync validation patch, including extra cross-eye depth checks and eye-local blur clamping, also had no visible effect. The test changes were reverted; treat this as another negative result.
+- Testing runtime SSS stereo-sync diagnostic toggles also had no useful effect. The toggles covered source-copy-only output, disabling cross-eye blend, disabling same-eye blur, and scaled-depth sampling. None changed the artifact.
+- During that diagnostic-toggle build, the per-eye misaligned Community Shaders UI in VR reappeared. Treat the toggle build as invalid for further work and keep the branch reverted to the pre-toggle state.
+- Testing the depth-layout compatibility gate patch for SSGI/SSS stereo sync (combined-stereo-only guard and frame-dimension dispatch change) did not fix the world-locked/HMD-locked split artifact.
+- The same patch introduced a new VR UI regression: Community Shaders per-eye UI overlay no longer lines up correctly (stereo UI sync/overlay broken).
+- Do not keep chasing the unjittered/full-matrix helper difference as the primary cause. Next suspects are producer-side per-eye data, eye selection, dispatch/write bounds, or depth/shadow/AO texture layout feeding stereo sync.
+
+Targeted mitigation patch (2026-05-04, pending runtime validation):
+
+- Re-enabled stereo sync back-check in both feature-local shaders by restoring a non-zero threshold (`8.0`) instead of `0.0`.
+- SSGI change: `features/Screen Space GI/Shaders/ScreenSpaceGI/stereoSync.cs.hlsl` (`kBackCheckThreshold`).
+- SSS change: `features/Screen-Space Shadows/Shaders/ScreenSpaceShadows/StereoSyncCS.hlsl` (added `kBackCheckThreshold`, passed into `FinalizeStereoBlend`).
+- Rationale: `backCheckThreshold == 0.0` disables round-trip reprojection validation in `Stereo::FinalizeStereoBlend`, which can allow invalid cross-eye matches and produce overlay-like HMD-locked contributions.
+- Validation result: this did not solve the world-locked/HMD-locked split artifact. Treat back-check re-enable as another negative result, not a primary fix.
+
 Important guidance:
 
 - Keep stereo blending feature-local unless profiling proves a global pass gives a net win.
@@ -657,4 +679,3 @@ The best next work is not one giant optimization. It is a staged VR detail-budge
 3. Then apply it to auxiliary lighting work in `Lighting.hlsl`.
 4. Keep stereo blending feature-local.
 5. Avoid global reprojection until profiling proves it is worth its fixed cost and correctness risk.
-

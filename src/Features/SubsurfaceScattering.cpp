@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/D3D.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
@@ -322,6 +323,7 @@ void SubsurfaceScattering::DrawSSS()
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	Util::BindGlobalConstantBuffersForCS(context);
 
 	{
 		ID3D11Buffer* buffer[1] = { blurCB->CB() };

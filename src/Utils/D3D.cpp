@@ -88,7 +88,11 @@ namespace Util
 		if (!a_context)
 			return;
 
-		ID3D11Buffer* buffers[1] = { *globals::game::perFrame };
+		auto perFrame = globals::game::perFrame.get();
+		if (!perFrame || !*perFrame)
+			return;
+
+		ID3D11Buffer* buffers[1] = { *perFrame };
 		a_context->CSSetConstantBuffers(12, 1, buffers);
 
 		if (REL::Module::IsVR()) {
@@ -99,6 +103,24 @@ namespace Util
 			if (vrBuffer)
 				a_context->CSSetConstantBuffers(13, 1, &vrBuffer);
 		}
+	}
+
+	void BindSharedDataConstantBuffersForCS(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context || !globals::state)
+			return;
+
+		ID3D11Buffer* buffers[2] = {
+			globals::state->sharedDataCB ? globals::state->sharedDataCB->CB() : nullptr,
+			globals::state->featureDataCB ? globals::state->featureDataCB->CB() : nullptr
+		};
+		a_context->CSSetConstantBuffers(5, 2, buffers);
+	}
+
+	void BindGlobalConstantBuffersForCS(ID3D11DeviceContext* a_context)
+	{
+		BindSharedDataConstantBuffersForCS(a_context);
+		BindFrameBufferConstantBuffersForCS(a_context);
 	}
 
 	ID3D11ShaderResourceView* GetSRVFromRTV(const ID3D11RenderTargetView* a_rtv)

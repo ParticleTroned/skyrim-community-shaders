@@ -1718,9 +1718,7 @@ void ScreenSpaceGI::DrawSSGI()
 	//////////////////////////////////////////////////////
 
 	context->CSSetConstantBuffers(1, 1, &cb);
-	Util::BindFrameBufferConstantBuffersForCS(context);
-	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
-	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
+	Util::BindGlobalConstantBuffersForCS(context);
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 
 	// prefilter depths
@@ -2029,10 +2027,8 @@ void ScreenSpaceGI::DrawSSGI()
 
 	samplers.fill(nullptr);
 	cb = nullptr;
-	sharedDataBuf = nullptr;
 
 	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	context->CSSetShader(nullptr, nullptr, 0);
 }

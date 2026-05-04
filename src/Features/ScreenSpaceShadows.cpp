@@ -630,9 +630,7 @@ void ScreenSpaceShadows::DrawStereoSync()
 	ID3D11ShaderResourceView* srvs[2]{ depthSRV, stereoSyncCopyTex->srv.get() };
 	ID3D11UnorderedAccessView* uavs[1]{ screenSpaceShadowsTexture->uav.get() };
 
-	Util::BindFrameBufferConstantBuffersForCS(context);
-	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
-	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
+	Util::BindGlobalConstantBuffersForCS(context);
 	context->CSSetShaderResources(0, 2, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	context->CSSetShader(stereoSyncCS, nullptr, 0);
@@ -683,8 +681,6 @@ void ScreenSpaceShadows::DrawStereoSync()
 	context->CSSetShaderResources(0, 2, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	context->CSSetConstantBuffers(1, 1, &cbPtr);
-	sharedDataBuf = nullptr;
-	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	if (globals::state->frameAnnotations)

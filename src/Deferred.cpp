@@ -16,6 +16,7 @@
 #include "Features/WeatherEditor.h"
 
 #include "Hooks.h"
+#include "Utils/D3D.h"
 
 struct DepthStates
 {
@@ -367,21 +368,7 @@ void Deferred::DeferredPasses()
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 
-	{
-		ID3D11Buffer* buffers[1] = { *globals::game::perFrame };
-		ID3D11Buffer* vrBuffer = nullptr;
-
-		if (REL::Module::IsVR()) {
-			static REL::Relocation<ID3D11Buffer**> VRValues{ REL::Offset(0x3180688) };
-			vrBuffer = *VRValues.get();
-		}
-		if (vrBuffer) {
-			context->CSSetConstantBuffers(12, 1, buffers);
-			context->CSSetConstantBuffers(13, 1, &vrBuffer);
-		} else {
-			context->CSSetConstantBuffers(12, 1, buffers);
-		}
-	}
+	Util::BindGlobalConstantBuffersForCS(context);
 
 	auto specular = renderer->GetRuntimeData().renderTargets[SPECULAR];
 	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
@@ -420,6 +407,11 @@ void Deferred::DeferredPasses()
 	// Deferred Composite
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
+
+		// Compute features before this pass may bind their own private state.
+		// Rebind global CS constants here so deferred composite never depends on
+		// state left behind by SSGI/SSS/shadows or future feature passes.
+		Util::BindGlobalConstantBuffersForCS(context);
 
 		ID3D11ShaderResourceView* srvs[16]{
 			specular.SRV,
@@ -754,7 +746,7 @@ void Deferred::Hooks::Renderer_ResetState::thunk(void* This)
 
 	ID3D11Buffer* buffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, buffers);
-	context->CSSetConstantBuffers(5, 2, buffers + 1);
+	Util::BindSharedDataConstantBuffersForCS(context);
 
 	auto* singleton = globals::truePBR;
 	singleton->SetupFrame();

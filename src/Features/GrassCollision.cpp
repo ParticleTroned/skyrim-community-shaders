@@ -32,8 +32,12 @@ void GrassCollision::UpdateCollisions(PerFrame& perFrameData)
 		actors.push_back(&processLists->highActorHandles);  // High actors are in combat or doing something interesting
 		for (auto array : actors) {
 			for (auto& actorHandle : *array) {
-				auto actorPtr = actorHandle.get();
-				if (actorPtr && actorPtr.get() && actorPtr->Is3DLoaded()) {
+				RE::ActorPtr actorPtr;
+				if (!RE::Actor::LookupByHandle(actorHandle.native_handle(), actorPtr)) {
+					continue;
+				}
+
+				if (actorPtr && actorPtr->Is3DLoaded()) {
 					actorList.push_back(actorPtr);
 				}
 			}
@@ -41,12 +45,12 @@ void GrassCollision::UpdateCollisions(PerFrame& perFrameData)
 	}
 
 	if (auto player = RE::PlayerCharacter::GetSingleton())
-		actorList.push_back(player->GetHandle().get());
+		actorList.push_back(player);
 
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition(0);
 
 	// Sort actors by distance to eye, closest first
-	std::sort(actorList.begin(), actorList.end(), [&cameraPosition](RE::ActorPtr a, RE::ActorPtr b) {
+	std::sort(actorList.begin(), actorList.end(), [&cameraPosition](const RE::ActorPtr& a, const RE::ActorPtr& b) {
 		float distA = cameraPosition.GetSquaredDistance(a->GetPosition());
 		float distB = cameraPosition.GetSquaredDistance(b->GetPosition());
 		return distA < distB;

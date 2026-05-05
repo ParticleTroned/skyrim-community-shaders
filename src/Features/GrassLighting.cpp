@@ -1,5 +1,8 @@
 #include "GrassLighting.h"
 
+#include <algorithm>
+#include <cmath>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GrassLighting::Settings,
 	Glossiness,
@@ -10,13 +13,36 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableWrappedLighting,
 	ComplexGrassThreshold)
 
+float GrassLighting::ClampGlossiness(float glossiness, float fallback)
+{
+	if (!std::isfinite(glossiness)) {
+		return fallback;
+	}
+	return std::clamp(glossiness, kGlossinessMin, kGlossinessMax);
+}
+
+void GrassLighting::SanitizeSettings()
+{
+	settings.Glossiness = ClampGlossiness(settings.Glossiness, Settings{}.Glossiness);
+}
+
 void GrassLighting::DrawSettings()
 {
+	SanitizeSettings();
+
 	if (ImGui::TreeNodeEx("Complex Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Specular highlights for complex grass");
-		ImGui::SliderFloat("Glossiness", &settings.Glossiness, 1.0f, 100.0f);
+		ImGui::SliderFloat(
+			"Glossiness",
+			&settings.Glossiness,
+			kGlossinessMin,
+			kGlossinessMax,
+			"%.0f",
+			ImGuiSliderFlags_AlwaysClamp);
+		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Specular highlight glossiness.");
+			ImGui::TextUnformatted(
+				"Specular highlight glossiness. This also defines the dry endpoint for Wetterness grass glossiness after rain and grass drying finish.");
 		}
 
 		ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
@@ -83,14 +109,17 @@ void GrassLighting::DrawSettings()
 void GrassLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSettings();
 }
 
 void GrassLighting::SaveSettings(json& o_json)
 {
+	SanitizeSettings();
 	o_json = settings;
 }
 
 void GrassLighting::RestoreDefaultSettings()
 {
 	settings = {};
+	SanitizeSettings();
 }

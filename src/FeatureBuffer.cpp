@@ -154,14 +154,20 @@ namespace
 
 std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
+	auto grassLightingSettings = globals::features::grassLighting.settings;
+	const auto wetternessSettings = globals::features::wetterness.GetCommonBufferData();
+	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(
+		grassLightingSettings.Glossiness,
+		wetternessSettings);
+
 	return BuildFeatureBufferData(
-		globals::features::grassLighting.settings,
+		grassLightingSettings,
 		globals::features::extendedMaterials.settings,
 		globals::features::dynamicCubemaps.GetCommonBufferData(),
 		globals::features::terrainShadows.GetCommonBufferData(),
 		globals::features::lightLimitFix.GetCommonBufferData(),
 		globals::features::wetnessEffects.GetCommonBufferData(),
-		globals::features::wetterness.GetCommonBufferData(),
+		wetternessSettings,
 		globals::features::skylighting.GetCommonBufferData(a_inWorld),
 		globals::features::cloudShadows.settings,
 		globals::features::lodBlending.settings,

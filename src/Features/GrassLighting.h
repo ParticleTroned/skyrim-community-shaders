@@ -8,6 +8,9 @@ private:
 	static constexpr std::string_view MOD_ID = "86502";
 
 public:
+	static constexpr float kGlossinessMin = 1.0f;
+	static constexpr float kGlossinessMax = 100.0f;
+
 	virtual inline std::string GetName() override { return "Grass Lighting"; }
 	virtual inline std::string GetShortName() override { return "GrassLighting"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
@@ -43,6 +46,9 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
 	Settings settings;
+
+	static float ClampGlossiness(float glossiness, float fallback);
+	void SanitizeSettings();
 
 	virtual void DrawSettings() override;
 

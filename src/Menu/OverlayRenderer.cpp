@@ -142,12 +142,6 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderBlockingStatus();
 
 	auto* editorWindow = EditorWindow::GetSingleton();
-	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
-		editorWindow->open = false;
-		if (editorWindow->IsInPreviewMode())
-			editorWindow->ExitPreviewMode();
-	}
-	editorWindow->UpdateOpenState();
 	if (editorWindow->open) {
 		bool flying = editorWindow->IsPreviewFlying();
 		auto& io = ImGui::GetIO();

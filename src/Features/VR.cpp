@@ -386,7 +386,7 @@ void VR::DrawSettings()
 			}
 
 			// Handle ENTER key to accept combo
-			if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Enter)) || ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_KeypadEnter))) {
+			if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
 				if (!this->recordedCombo.empty()) {
 					// Apply the recorded combo to the correct settings vector
 					switch (this->currentComboType) {
@@ -418,7 +418,7 @@ void VR::DrawSettings()
 			}
 
 			// Handle ESC key to cancel
-			if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
+			if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
 				// Reset recording state
 				this->isCapturingCombo = false;
 				this->currentComboType = VR::ComboType::None;
@@ -827,7 +827,7 @@ namespace
 				char selectableId[64];
 				snprintf(selectableId, sizeof(selectableId), "##combo_row_%zu", row);
 				bool rowSelected = (row == static_cast<size_t>(selectedComboIndex));
-				if (ImGui::Selectable(selectableId, rowSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap, ImVec2(0, 0))) {
+				if (ImGui::Selectable(selectableId, rowSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap, ImVec2(0, 0))) {
 					selectedComboIndex = static_cast<int>(row);
 				}
 				ImGui::SameLine(0, 0);

@@ -48,15 +48,13 @@ public:
 
 private:
 	static void HandleVRSetup();
-	static bool ShouldSkipRendering(const Menu& menu, bool hasDrawableFeatureOverlay);
-	static std::vector<OverlayFeature*> CollectDrawableFeatureOverlays(const Menu& menu);
-	static bool ShouldDrawFeatureOverlay(const OverlayFeature& overlay, const Menu& menu);
+	static bool ShouldSkipRendering();
 	static void HandleFontReload(Menu& menu, float& cachedFontSize, float currentFontSize);
 	static void InitializeImGuiFrame(Menu& menu);
 	static void RenderShaderCompilationStatus(const std::function<const char*(std::vector<InputCombo>)>& keyIdToString);
 	static void RenderShaderBlockingStatus();
 	static void RenderFirstTimeSetupOverlay();
-	static void RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays);
+	static void RenderFeatureOverlays();
 	static void HandleABTesting();
 	static void FinalizeImGuiFrame();
 };

@@ -1002,17 +1002,17 @@ void Menu::ProcessInputEventQueue()
 				if (!handled) {
 					struct KeyAction
 					{
-						std::vector<InputCombo>& settingKey;
+						const std::vector<InputCombo>* settingKey;
 						std::function<void()> action;
 					};
 					KeyAction keyActions[] = {
-						{ settings.ToggleKey, [this]() { if (!HomePageRenderer::ShouldShowFirstTimeSetup()) IsEnabled = !IsEnabled; } },
-						{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput()) shaderCache->TryEnableBackgroundCompilation(); } },
-						{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
-						{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
-						{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
-						{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
-						{ settings.WeatherEditorToggleKey, []() {
+						{ &settings.ToggleKey, [this]() { if (!HomePageRenderer::ShouldShowFirstTimeSetup()) IsEnabled = !IsEnabled; } },
+						{ &settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput()) shaderCache->backgroundCompilation = true; } },
+						{ &settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
+						{ &settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
+						{ &settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
+						{ &settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
+						{ &settings.WeatherEditorToggleKey, []() {
 							 auto* ew = EditorWindow::GetSingleton();
 							 if (!ew)
 								 return;
@@ -1031,13 +1031,13 @@ void Menu::ProcessInputEventQueue()
 					};
 					for (const auto& ka : keyActions) {
 						// Check if key matches last key in combo and all modifiers are held (exact match)
-						if (!ka.settingKey.empty() &&
-							ka.settingKey.back().GetKey() == key &&
-							ka.settingKey.back().GetDevice() == InputDeviceType::Keyboard) {
+						if (ka.settingKey && !ka.settingKey->empty() &&
+							ka.settingKey->back().GetKey() == key &&
+							ka.settingKey->back().GetDevice() == InputDeviceType::Keyboard) {
 							// Build set of required modifiers from combo
 							bool requiresCtrl = false, requiresShift = false, requiresAlt = false;
-							for (size_t i = 0; i < ka.settingKey.size() - 1; ++i) {
-								uint32_t modKey = ka.settingKey[i].GetKey();
+							for (size_t i = 0; i < ka.settingKey->size() - 1; ++i) {
+								uint32_t modKey = (*ka.settingKey)[i].GetKey();
 								if (modKey == VK_CONTROL || modKey == VK_LCONTROL || modKey == VK_RCONTROL)
 									requiresCtrl = true;
 								else if (modKey == VK_SHIFT || modKey == VK_LSHIFT || modKey == VK_RSHIFT)

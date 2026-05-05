@@ -473,7 +473,7 @@ void FidelityFX::CreateFSRResources()
 
 	ResetRuntimeUpscalerTracking(true);
 
-	auto fsrDevice = ffxGetDeviceDX11(globals::d3d::device);
+	auto fsrDevice = ffxGetDeviceDX11_Fsr31(globals::d3d::device);
 
 	const uint32_t numContexts = splitPerEyeContexts ? 2u : 1u;
 	const size_t scratchBufferSize = ffxGetScratchMemorySizeDX11(numContexts);

@@ -1636,6 +1636,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFoveatedDispatch = false;
 	static bool previousPeripheryTAA = false;
 	static bool previousFSRRuntimePathActive = false;
+	static uint32_t previousQualityMode = settings.qualityMode;
 	static uint32_t previousFoveatedCenterAreaMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerArea * 1000.0f));
 	static uint32_t previousFoveatedCenterHorizontalScaleMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerHorizontalScale * 1000.0f));
 
@@ -1655,13 +1656,17 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	const bool peripheryTAAChanged = previousPeripheryTAA != peripheryTAACurrent;
 	const bool compareFSRRuntimePath = a_upscalemethod == UpscaleMethod::kFSR || previousUpscaleMode == UpscaleMethod::kFSR;
 	const bool fsrRuntimePathChanged = compareFSRRuntimePath && previousFSRRuntimePathActive != fsrRuntimePathCurrent;
+	const bool compareQualityMode = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR ||
+	                                previousUpscaleMode == UpscaleMethod::kDLSS || previousUpscaleMode == UpscaleMethod::kFSR;
+	const bool qualityModeChanged = compareQualityMode && previousQualityMode != settings.qualityMode;
 
-	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
-			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod), previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive,
+	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || qualityModeChanged) {
+		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
+			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
+			previousQualityMode, settings.qualityMode, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive,
 			previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 
-		const bool requiresFullPipelineUnbind = upscaleModeChanged || frameGenModeChanged || fsrRuntimePathChanged;
+		const bool requiresFullPipelineUnbind = upscaleModeChanged || frameGenModeChanged || fsrRuntimePathChanged || qualityModeChanged;
 		if (requiresFullPipelineUnbind)
 			UnbindUpscalingResources();
 
@@ -1696,6 +1701,31 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			RequestHistoryReset();
 		}
 
+		if (!upscaleModeChanged && qualityModeChanged) {
+			if (a_upscalemethod == UpscaleMethod::kDLSS) {
+				streamline.DestroyDLSSResources();
+			} else if (a_upscalemethod == UpscaleMethod::kFSR) {
+				fidelityFX.DestroyFSRResources();
+			}
+
+			if (globals::game::isVR) {
+				DestroyVRIntermediateTextures();
+			}
+
+			DestroyCommonUpscalingTextures();
+			if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
+				CreateUpscalingTextureResources(a_upscalemethod);
+			}
+			if (a_upscalemethod == UpscaleMethod::kFSR) {
+				fidelityFX.CreateFSRResources();
+			}
+
+			historyResetTrackingInitialized = false;
+			historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
+			historyResetThisFrame = false;
+			RequestHistoryReset();
+		}
+
 		if (upscaleModeChanged || foveatedDispatchChanged) {
 			if (!foveatedDispatchCurrent)
 				DestroyFoveatedResources();
@@ -1711,6 +1741,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousFoveatedDispatch = foveatedDispatchCurrent;
 		previousPeripheryTAA = peripheryTAACurrent;
 		previousFSRRuntimePathActive = fsrRuntimePathCurrent;
+		previousQualityMode = settings.qualityMode;
 		previousFoveatedCenterAreaMilli = foveatedCenterAreaMilli;
 		previousFoveatedCenterHorizontalScaleMilli = foveatedCenterHorizontalScaleMilli;
 		previousUpscalingWasActive = IsUpscalingActive();

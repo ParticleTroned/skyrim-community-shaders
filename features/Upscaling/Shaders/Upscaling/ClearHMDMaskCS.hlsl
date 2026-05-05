@@ -4,8 +4,8 @@
 // depth ~= 0.0 is the unrendered/hidden area value (Skyrim reversed-Z: far plane = 0).
 // Expands the mask in depth space so bilinear/current-neighborhood and upscaler
 // reconstruction taps cannot pull hidden-area clear color back across the edge.
-// DepthIn can be a packed stereo depth buffer or another depth source. The shader
-// supports direct eye-local addressing or scaled color->depth coordinate mapping.
+// DepthIn and StencilIn can be packed stereo buffers or another depth/stencil source.
+// The shader supports direct eye-local addressing or scaled color->depth coordinate mapping.
 
 cbuffer ClearHMDMaskCB : register(b0)
 {
@@ -20,6 +20,7 @@ cbuffer ClearHMDMaskCB : register(b0)
 };
 
 Texture2D<float> DepthIn : register(t0);
+Texture2D<uint> StencilIn : register(t1);
 RWTexture2D<float4> ColorInOut : register(u0);
 
 static const float kHiddenDepthThreshold = 1e-6;
@@ -70,7 +71,7 @@ bool IsHiddenDepth(float depth)
 			if (any(samplePos < int2(0, 0)) || samplePos.x >= int(depthTexWidth) || samplePos.y >= int(depthTexHeight))
 				continue;
 
-			if (IsHiddenDepth(DepthIn[uint2(samplePos)])) {
+			if (IsHiddenDepth(DepthIn[uint2(samplePos)]) || StencilIn[uint2(samplePos)] > 0) {
 				clearPixel = true;
 				break;
 			}

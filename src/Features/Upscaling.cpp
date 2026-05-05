@@ -3320,6 +3320,8 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	// in each per-eye buffer before temporal reuse.
 	// Bind CS/SRV/CB once for both eyes to reduce per-frame CPU overhead.
 	auto& depthTexture = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& depthCopyTexture = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+	auto* stencilSRV = depthTexture.stencilSRV ? depthTexture.stencilSRV : depthCopyTexture.stencilSRV;
 	if (!vrClearHMDMaskCS) {
 		vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
 
@@ -3331,14 +3333,14 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
 	}
 
-	if (vrClearHMDMaskCS && vrClearHMDMaskCB) {
+	if (vrClearHMDMaskCS && vrClearHMDMaskCB && depthTexture.depthSRV && stencilSRV) {
 		auto dispatchX = (eyeWidthIn + 7) / 8;
 		auto dispatchY = (eyeHeightIn + 7) / 8;
 
 		context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
 
-		ID3D11ShaderResourceView* srvs[1] = { depthTexture.depthSRV };
-		context->CSSetShaderResources(0, 1, srvs);
+		ID3D11ShaderResourceView* srvs[2] = { depthTexture.depthSRV, stencilSRV };
+		context->CSSetShaderResources(0, 2, srvs);
 
 		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
 		context->CSSetConstantBuffers(0, 1, cbs);
@@ -3362,10 +3364,10 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 
-		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+		ID3D11ShaderResourceView* nullSRV[2] = { nullptr, nullptr };
 		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
 		ID3D11Buffer* nullCB[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRV);
+		context->CSSetShaderResources(0, 2, nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 		context->CSSetConstantBuffers(0, 1, nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
@@ -3398,7 +3400,9 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 	auto renderer = globals::game::renderer;
 	if (renderer) {
 		auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-		if (depthTexture.depthSRV) {
+		auto& depthCopyTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+		auto* stencilSRV = depthTexture.stencilSRV ? depthTexture.stencilSRV : depthCopyTexture.stencilSRV;
+		if (depthTexture.depthSRV && stencilSRV) {
 			for (uint32_t i = 0; i < 2; ++i) {
 				if (!vrIntermediateColorOut[i] || !vrIntermediateColorOut[i]->uav)
 					continue;
@@ -3406,6 +3410,7 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 				ClearHMDMask(
 					vrIntermediateColorOut[i]->uav.get(),
 					depthTexture.depthSRV,
+					stencilSRV,
 					eyeWidthIn,
 					eyeHeightIn,
 					eyeWidthOut,
@@ -3427,12 +3432,12 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 		state->EndPerfEvent();
 }
 
-void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV, ID3D11ShaderResourceView* stencilSRV,
 	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY)
 {
 	if (!globals::game::isVR)
 		return;
-	if (!colorUAV || !depthSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
+	if (!colorUAV || !depthSRV || !stencilSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
 		return;
 
 	auto context = globals::d3d::context;
@@ -3456,8 +3461,8 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 
 		context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
 
-		ID3D11ShaderResourceView* srvs[1] = { depthSRV };
-		context->CSSetShaderResources(0, 1, srvs);
+		ID3D11ShaderResourceView* srvs[2] = { depthSRV, stencilSRV };
+		context->CSSetShaderResources(0, 2, srvs);
 
 		ID3D11UnorderedAccessView* uavs[1] = { colorUAV };
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
@@ -3480,10 +3485,10 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		context->Dispatch(dispatchX, dispatchY, 1);
 
 		// Unbind
-		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+		ID3D11ShaderResourceView* nullSRV[2] = { nullptr, nullptr };
 		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
 		ID3D11Buffer* nullCB[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRV);
+		context->CSSetShaderResources(0, 2, nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 		context->CSSetConstantBuffers(0, 1, nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);

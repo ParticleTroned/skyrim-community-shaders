@@ -17,6 +17,7 @@ SamplerState LinearSampler : register(s0);
 Texture2D<float> UnderwaterMask : register(t0);
 #	if defined(VR)
 Texture2D<float> SceneDepth : register(t1);
+Texture2D<uint> StencilTex : register(t2);
 #	endif
 
 cbuffer JitterCB : register(b0)
@@ -25,6 +26,32 @@ cbuffer JitterCB : register(b0)
 	float useWideKernel;
 	float pad0;
 };
+
+#if defined(VR)
+static const float kSkyDepthThreshold = 1e-6;
+
+bool IsHiddenStencil(uint2 coord)
+{
+	uint width;
+	uint height;
+	StencilTex.GetDimensions(width, height);
+	int2 maxCoord = int2(width, height) - 1;
+
+	[unroll]
+	for (int y = -1; y <= 1; ++y) {
+		[unroll]
+		for (int x = -1; x <= 1; ++x) {
+			int2 sampleCoord = int2(coord) + int2(x, y);
+			if (any(sampleCoord < int2(0, 0)) || any(sampleCoord > maxCoord))
+				continue;
+			if (StencilTex.Load(int3(sampleCoord, 0)) > 0)
+				return true;
+		}
+	}
+
+	return false;
+}
+#endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -55,6 +82,14 @@ PS_OUTPUT main(PS_INPUT input)
 	// but correctly per-eye.
 
 	uint eyeIndex = (input.TexCoord.x >= 0.5) ? 1 : 0;
+	uint depthWidth;
+	uint depthHeight;
+	SceneDepth.GetDimensions(depthWidth, depthHeight);
+	uint2 depthCoord = min(uint2(input.TexCoord * float2(depthWidth, depthHeight)), uint2(depthWidth, depthHeight) - 1);
+	if (IsHiddenStencil(depthCoord)) {
+		psout.UnderwaterMask = 0.0;
+		return psout;
+	}
 
 	// WaterData is a 5×5 grid centered on the camera; tile 12 (row 2, col 2) is
 	// always the camera's own tile.  Pass eyeIndex so GetWaterData corrects the .w
@@ -71,11 +106,11 @@ PS_OUTPUT main(PS_INPUT input)
 		// Convert to NDC [-1, 1].  UV y=0 is the top of the screen; NDC y=+1 is the top.
 		float2 ndc = float2(eyeUV.x * 2.0 - 1.0, 1.0 - eyeUV.y * 2.0);
 
-		// Sample depth using the shared de-jittered stereo UV (already DR-adjusted above).
-		// uv is in stereo space so no ConvertUVToSampleCoord round-trip is needed.
-		float depth = SceneDepth.Load(int3(uv * SharedData::BufferDim.xy, 0)).x;
+		// Sample the current full-resolution upscaled depth. The vanilla mask copy
+		// still uses dynamic-resolution uv, but this depth is already in output space.
+		float depth = SceneDepth.Load(int3(depthCoord, 0)).x;
 
-		if (depth > EPSILON_DEPTH_SKY) {
+		if (depth > kSkyDepthThreshold) {
 			// Geometry pixel: reconstruct world position from depth.
 			// CameraViewProjInverse[eyeIndex] maps clip-space back to the per-eye
 			// camera-relative world space.  waterHeight has been adjusted to the same
@@ -101,7 +136,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float threshold = (cameraUnderwater && lookingUp) ? waterHeight + kSurfaceBias : waterHeight - kSurfaceBias;
 			psout.UnderwaterMask = (worldPos.z < threshold) ? 1.0 : 0.0;
 		} else {
-			// depth <= EPSILON_DEPTH_SKY: sky / unrendered pixels (reversed-Z depth clear value).
+			// depth <= kSkyDepthThreshold: sky / unrendered pixels (reversed-Z depth clear value).
 			// Unproject to obtain the per-pixel ray direction and decide based on that.
 			float4 worldFarPos = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4(ndc, 0.0, 1.0));
 			worldFarPos /= worldFarPos.w;

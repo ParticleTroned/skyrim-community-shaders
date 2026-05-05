@@ -4566,6 +4566,11 @@ void Upscaling::UpscaleDepth()
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
 		context->Draw(3, 0);
+
+		// Depth copy is also used on VR.
+		if (globals::game::isVR) {
+			copyIfNonAliased(depthCopy.texture, depth.texture);
+		}
 	}
 
 	{
@@ -4577,9 +4582,8 @@ void Upscaling::UpscaleDepth()
 
 		context->OMSetDepthStencilState(nullptr, 0x00);
 
-		// t0: vanilla mask copy, t1: original depth (for VR per-eye analytical mask).
-		// depthCopy still holds the original pre-upscale depth here (VR re-copy deferred).
-		ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV };
+		// t0: vanilla mask copy, t1: current upscaled depth, t2: current stencil/HAM mask (VR).
+		ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV, depthCopy.stencilSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 		ID3D11RenderTargetView* rtvs[] = { underwaterMask.RTV };
@@ -4587,11 +4591,6 @@ void Upscaling::UpscaleDepth()
 
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);
 		context->Draw(3, 0);
-	}
-
-	// Now propagate the upscaled depth to kMAIN_COPY so downstream VR passes see it.
-	if (globals::game::isVR) {
-		copyIfNonAliased(depthCopy.texture, depth.texture);
 	}
 
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };

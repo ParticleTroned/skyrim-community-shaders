@@ -2657,11 +2657,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	puddleWetness *= lerp(1.0, inRainWetnessScale * 1.10, inRainBlend);
 	puddleWetness *= puddleRainExposure;
 
-#		if defined(SKIN)
-	rainWetness = CS_WETNESS_SETTINGS.SkinWetness * CS_WETNESS_SETTINGS.Wetness;
-#		endif
-#		if defined(HAIR)
-	rainWetness = CS_WETNESS_SETTINGS.SkinWetness * CS_WETNESS_SETTINGS.Wetness * 0.8f;
+#		if defined(SKIN) || defined(HAIR)
+	float characterWetnessScale = 1.0f;
+#			if defined(HAIR)
+	characterWetnessScale = 0.8f;
+#			endif
+	rainWetness = CS_WETNESS_SETTINGS.SkinWetness * CS_WETNESS_SETTINGS.Wetness * characterWetnessScale;
+	float characterWetnessSpecular = saturate(rainWetness);
 #		endif
 
 	float wetnessOcclusionMix = lerp(1.0, wetnessOcclusion, 0.35);
@@ -2681,6 +2683,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		rainWetness = 0.0;
 		rainFilmWetness = 0.0;
 		puddleWetness = 0.0;
+#			if defined(SKIN) || defined(HAIR)
+		characterWetnessSpecular = 0.0;
+#			endif
 	}
 	if (!puddleSurfaceAllowed) {
 		puddleWetness = 0.0;
@@ -2896,6 +2901,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Persistent shore wetness is a dry-weather damp film control. Keep it visible even
 	// when the generic wet-film grazing suppression removes rain/puddle glare.
 	wetnessGlossinessSpecular = max(wetnessGlossinessSpecular, shoreWetnessSpecularNonPuddle);
+#		if defined(SKIN) || defined(HAIR)
+	wetnessGlossinessSpecular = max(wetnessGlossinessSpecular, characterWetnessSpecular);
+#		endif
 	wetHighlightReflectanceScale = lerp(1.0, wetnessGrazingAttenuation, saturate(0.30 * wetHighlightMask + highlightReductionCurve));
 	float wetHighlightViewDistance = abs(viewPosition.z);
 	float farWhiteDistanceMask = smoothstep(2048.0, 8192.0, wetHighlightViewDistance);

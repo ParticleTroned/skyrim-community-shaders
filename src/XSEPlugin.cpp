@@ -26,6 +26,29 @@ bool Load();
 
 namespace
 {
+	void PushStartupError(std::string errorMessage)
+	{
+		logger::error("{}", errorMessage);
+		errors.push_back(std::move(errorMessage));
+	}
+
+	bool RegisterCommunityShadersAPIMessageListener()
+	{
+		auto messaging = SKSE::GetMessagingInterface();
+		if (!messaging) {
+			PushStartupError("SKSE messaging interface unavailable while registering Community Shaders API message listener. Check CommunityShaders.log for details.");
+			return false;
+		}
+
+		if (!messaging->RegisterListener(nullptr, CSPluginAPI::ModMessageHandler)) {
+			PushStartupError("Failed to register Community Shaders API message listener. Check CommunityShaders.log for details.");
+			return false;
+		}
+
+		logger::info("Registered Community Shaders API message listener during PostLoad");
+		return true;
+	}
+
 	void ResetRuntimeStateAfterGameLoad()
 	{
 		if (globals::state) {
@@ -100,6 +123,11 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, 
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
 	switch (message->type) {
+	case SKSE::MessagingInterface::kPostLoad:
+		{
+			RegisterCommunityShadersAPIMessageListener();
+			break;
+		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
@@ -198,11 +226,6 @@ bool Load()
 
 	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
 		logger::error("Failed to register SKSE message listener");
-		return false;
-	}
-
-	if (!messaging->RegisterListener(nullptr, CSPluginAPI::ModMessageHandler)) {
-		logger::error("Failed to register Community Shaders API message listener");
 		return false;
 	}
 

@@ -17,6 +17,7 @@ SamplerState LinearSampler : register(s0);
 Texture2D<float> UnderwaterMask : register(t0);
 #	if defined(VR)
 Texture2D<float> SceneDepth : register(t1);
+Texture2D<uint> StencilTex : register(t2);
 #	endif
 
 cbuffer JitterCB : register(b0)
@@ -55,6 +56,13 @@ PS_OUTPUT main(PS_INPUT input)
 	// but correctly per-eye.
 
 	uint eyeIndex = (input.TexCoord.x >= 0.5) ? 1 : 0;
+
+	uint4 stencilSamples = StencilTex.GatherRed(LinearSampler, uv);
+	uint minStencil = min(min(stencilSamples.x, stencilSamples.y), min(stencilSamples.z, stencilSamples.w));
+	if (minStencil > 0x00) {
+		psout.UnderwaterMask = 0.0;
+		return psout;
+	}
 
 	// WaterData is a 5×5 grid centered on the camera; tile 12 (row 2, col 2) is
 	// always the camera's own tile.  Pass eyeIndex so GetWaterData corrects the .w

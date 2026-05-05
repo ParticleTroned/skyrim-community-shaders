@@ -4577,9 +4577,9 @@ void Upscaling::UpscaleDepth()
 
 		context->OMSetDepthStencilState(nullptr, 0x00);
 
-		// t0: vanilla mask copy, t1: original depth (for VR per-eye analytical mask).
+		// t0: vanilla mask copy, t1: original depth, t2: stencil/HAM mask (VR).
 		// depthCopy still holds the original pre-upscale depth here (VR re-copy deferred).
-		ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV };
+		ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV, depthCopy.stencilSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 		ID3D11RenderTargetView* rtvs[] = { underwaterMask.RTV };

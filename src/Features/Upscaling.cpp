@@ -3495,6 +3495,34 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 	}
 }
 
+void Upscaling::ClearFinalHMDMask()
+{
+	if (!globals::game::isVR)
+		return;
+
+	auto state = globals::state;
+	auto renderer = globals::game::renderer;
+	if (!state || !renderer)
+		return;
+
+	auto screenSize = state->screenSize;
+	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f)
+		return;
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+
+	auto* depthSRV = depthCopy.depthSRV ? depthCopy.depthSRV : depth.depthSRV;
+	auto* stencilSRV = depthCopy.stencilSRV ? depthCopy.stencilSRV : depth.stencilSRV;
+	if (!main.UAV || !depthSRV)
+		return;
+
+	const uint32_t width = static_cast<uint32_t>(screenSize.x);
+	const uint32_t height = static_cast<uint32_t>(screenSize.y);
+	ClearHMDMask(main.UAV, depthSRV, stencilSRV, width, height, width, height, 0, 0);
+}
+
 int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth)
 {
 	const float basePhaseCount = 8.0f;
@@ -4662,11 +4690,15 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaling.d3d12SwapChainActive && upscaling.settings.frameGenerationMode)
 		upscaling.CopySharedD3D12Resources();
 
-	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
+	const bool didUpscale = upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA;
+	if (didUpscale)
 		upscaling.PerformUpscaling();
 
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		upscaling.ApplySharpening();
+
+	if (didUpscale)
+		upscaling.ClearFinalHMDMask();
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);

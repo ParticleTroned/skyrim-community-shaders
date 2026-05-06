@@ -361,6 +361,8 @@ void FidelityFX::LoadFFX()
 	featureFSR4Upscaler = runtimeUpscalerModule != nullptr;
 
 	FidelityFX::dllVersions = Util::EnumerateDllVersions(pluginDir);
+	for (const auto& [name, versionStr] : FidelityFX::dllVersions)
+		logger::info("[FidelityFX] {} version: {}", name, versionStr);
 
 	if (module) {
 		ffxLoadFunctions(&ffxModule, module);

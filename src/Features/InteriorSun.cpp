@@ -8,7 +8,33 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	InteriorSun::Settings,
 	ForceDoubleSidedRendering,
+	ForceSingleShadowCascade,
 	InteriorShadowDistance)
+
+namespace
+{
+	struct ScopedFirstSliceDistanceOverride
+	{
+		ScopedFirstSliceDistanceOverride(RE::Setting* a_setting, float a_value) :
+			setting(a_setting),
+			original(a_setting ? a_setting->data.f : 0.0f),
+			active(a_setting != nullptr)
+		{
+			if (active)
+				setting->data.f = a_value;
+		}
+
+		~ScopedFirstSliceDistanceOverride()
+		{
+			if (active)
+				setting->data.f = original;
+		}
+
+		RE::Setting* setting;
+		float original;
+		bool active;
+	};
+}
 
 void InteriorSun::DrawSettings()
 {
@@ -17,6 +43,12 @@ void InteriorSun::DrawSettings()
 		ImGui::Text(
 			"Disables backface culling during sun shadowmap rendering in interiors. "
 			"Will prevent most light leaking through unmasked/unprepared interiors at a small performance cost. ");
+	}
+	ImGui::Checkbox("Force Single Shadow Cascade", &settings.ForceSingleShadowCascade);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Uses the high-detail directional shadow split for the full Interior Sun distance. "
+			"Prevents prepared wall masks from falling into the lower-resolution later split.");
 	}
 	if (ImGui::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f)) {
 		*gInteriorShadowDistance = settings.InteriorShadowDistance;
@@ -64,11 +96,16 @@ void InteriorSun::PostPostLoad()
 
 	gShadowDistance = reinterpret_cast<float*>(REL::RelocationID(528314, 415263).address());
 	gInteriorShadowDistance = reinterpret_cast<float*>(REL::RelocationID(513755, 391724).address());
+	fFirstSliceDistance = RE::GetINISetting("fFirstSliceDistance:Display");
+	if (!fFirstSliceDistance)
+		logger::warn("[Interior Sun] fFirstSliceDistance:Display not found; single shadow cascade mode is unavailable");
 
 	// Patches BSShadowDirectionalLight::SetFrameCamera to read the correct shadow distance value in interior cells
 	const std::uintptr_t address = REL::RelocationID(101499, 108496).address() + REL::Relocate(0xD62, 0xE6C, 0xE72);
 	const std::int32_t displacement = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(gShadowDistance) - (address + 8));
 	REL::safe_write(address + 4, &displacement, sizeof(displacement));
+
+	stl::write_vfunc<0x10, BSShadowDirectionalLight_UpdateCamera>(RE::VTABLE_BSShadowDirectionalLight[0]);
 
 	rasterStateCullMode = globals::game::isVR ? &globals::game::shadowState->GetVRRuntimeData().rasterStateCullMode : &globals::game::shadowState->GetRuntimeData().rasterStateCullMode;
 
@@ -216,7 +253,57 @@ bool InteriorSun::IsInSunDirectionAndWithinShadowDistance(const RE::NiPointer<RE
 	const auto diff = object->worldBound.center - playerPos;
 	const float distance = diff.Length();
 	const float projection = lightDir.Dot(diff);
-	return projection >= -radius && (distance - radius) <= *gShadowDistance;
+	return projection >= -radius && (distance - radius) <= GetInteriorShadowDistance();
+}
+
+bool InteriorSun::ShouldForceSingleShadowCascade() const
+{
+	if (!(loaded && fFirstSliceDistance && settings.ForceSingleShadowCascade))
+		return false;
+
+	const auto* tes = RE::TES::GetSingleton();
+	return tes && IsInteriorWithSun(tes->interiorCell);
+}
+
+float InteriorSun::GetInteriorShadowDistance() const
+{
+	if (gInteriorShadowDistance)
+		return *gInteriorShadowDistance;
+	if (gShadowDistance)
+		return *gShadowDistance;
+	return settings.InteriorShadowDistance;
+}
+
+void InteriorSun::ApplySingleShadowCascade(RE::BSShadowDirectionalLight* dirLight) const
+{
+	if (!dirLight)
+		return;
+
+	auto& runtimeData = dirLight->GetShadowDirectionalLightRuntimeData();
+	const float shadowDistance = GetInteriorShadowDistance();
+
+	runtimeData.startSplitDistances[0] = 0.0f;
+	runtimeData.endSplitDistances[0] = shadowDistance;
+
+	for (std::uint32_t i = 1; i < 3; ++i) {
+		runtimeData.startSplitDistances[i] = shadowDistance;
+		runtimeData.endSplitDistances[i] = shadowDistance;
+	}
+}
+
+bool InteriorSun::BSShadowDirectionalLight_UpdateCamera::thunk(RE::BSShadowDirectionalLight* a_light, const RE::NiCamera* a_camera)
+{
+	auto& singleton = globals::features::interiorSun;
+	const bool forceSingleCascade = singleton.ShouldForceSingleShadowCascade();
+	const float shadowDistance = singleton.GetInteriorShadowDistance();
+
+	ScopedFirstSliceDistanceOverride firstSliceOverride(forceSingleCascade ? singleton.fFirstSliceDistance : nullptr, shadowDistance);
+	const bool result = func(a_light, a_camera);
+
+	if (result && forceSingleCascade)
+		singleton.ApplySingleShadowCascade(a_light);
+
+	return result;
 }
 
 void InteriorSun::SetShadowDistance(bool inInterior)
@@ -225,6 +312,3 @@ void InteriorSun::SetShadowDistance(bool inInterior)
 	static REL::Relocation<func_t> func{ REL::RelocationID(98978, 105631).address() };
 	func(inInterior);
 }
-
-
-

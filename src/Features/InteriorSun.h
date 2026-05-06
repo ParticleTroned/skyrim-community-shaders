@@ -36,6 +36,7 @@ public:
 	struct Settings
 	{
 		bool ForceDoubleSidedRendering = true;
+		bool ForceSingleShadowCascade = true;
 		float InteriorShadowDistance = 5000;
 	};
 
@@ -58,6 +59,12 @@ public:
 	struct BSBatchRenderer_RenderPassImmediately
 	{
 		static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSShadowDirectionalLight_UpdateCamera
+	{
+		static bool thunk(RE::BSShadowDirectionalLight* a_light, const RE::NiCamera* a_camera);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -107,6 +114,7 @@ private:
 
 	float* gShadowDistance = nullptr;
 	float* gInteriorShadowDistance = nullptr;
+	RE::Setting* fFirstSliceDistance = nullptr;
 	uint32_t* rasterStateCullMode = nullptr;
 
 	RE::TESObjectCELL* currentCell = nullptr;
@@ -126,6 +134,10 @@ private:
 	bool IsInSunDirectionAndWithinShadowDistance(const RE::NiPointer<RE::NiAVObject>& object, const RE::NiPoint3& lightDir, const RE::NiPoint3& playerPos) const;
 
 	void PopulateReplacementJobArrays(RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays);
+
+	bool ShouldForceSingleShadowCascade() const;
+	float GetInteriorShadowDistance() const;
+	void ApplySingleShadowCascade(RE::BSShadowDirectionalLight* dirLight) const;
 
 	static void SetShadowDistance(bool inInterior);
 };

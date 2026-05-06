@@ -1717,6 +1717,8 @@ namespace Util
 				return VK_RWIN;  // right win
 			case DIK_APPS:
 				return VK_APPS;
+			case DIK_SYSRQ:
+				return VK_SNAPSHOT;
 			default:
 				return dikKey;
 			}

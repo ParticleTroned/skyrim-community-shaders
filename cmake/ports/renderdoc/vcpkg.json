@@ -1,6 +1,6 @@
 {
     "name": "renderdoc",
-    "version-string": "1.43-v1x-9c4dc886",
+    "version": "1.43",
     "description": "RenderDoc in-application API for frame capture and debugging",
     "homepage": "https://github.com/baldurk/renderdoc",
     "license": "MIT",

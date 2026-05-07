@@ -90,7 +90,6 @@ find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(directx-headers CONFIG REQUIRED)
-find_path(RENDERDOC_INCLUDE_DIRS "Renderdoc/renderdoc_app.h" REQUIRED)
 add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 
 find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
@@ -117,9 +116,7 @@ endforeach()
 
 target_include_directories(
     ${PROJECT_NAME}
-    BEFORE
     PRIVATE
-        ${RENDERDOC_INCLUDE_DIRS}
         ${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
         ${CLIB_UTIL_INCLUDE_DIRS}
         "${CMAKE_SOURCE_DIR}/package/Shaders"

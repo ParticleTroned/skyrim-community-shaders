@@ -477,6 +477,21 @@ public:
 	IDXGISwapChain* GetProxySwapChain();
 
 private:
+	struct OpenCompositeUpscalingBlocker
+	{
+		bool active = false;
+		std::string settingName;
+		std::string configPath;
+	};
+
+	const OpenCompositeUpscalingBlocker& GetOpenCompositeUpscalingBlocker(bool a_forceRefresh = false) const;
+	void ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh = false);
+
+	mutable OpenCompositeUpscalingBlocker openCompositeUpscalingBlocker;
+	mutable bool openCompositeUpscalingBlockerCacheValid = false;
+	mutable ULONGLONG openCompositeUpscalingBlockerLastRefresh = 0;
+	bool openCompositeUpscalingBackendSkipLogged = false;
+
 	struct Main_UpdateJitter
 	{
 		static void thunk(RE::BSGraphics::State* a_state);

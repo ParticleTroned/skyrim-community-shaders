@@ -51,7 +51,7 @@ runs:
           uses: ilammy/msvc-dev-cmd@v1
           with:
               arch: x64
-              vsversion: ${{ inputs.vs-version == '2026' && '18.0' || '17.0' }}
+              vsversion: ${{ inputs.vs-version == '2026' && '18' || '17.0' }}
 
         - name: Get MSVC version
           id: msvc_version

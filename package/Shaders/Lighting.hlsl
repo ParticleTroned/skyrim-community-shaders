@@ -1135,21 +1135,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 complexMaterialColor = 1.0;
 
 #		if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
-	float4 envMaskSample = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
-	float envMaskBase = envMaskSample.x;
+	float envMaskBase = 1.0;
+	bool envMaskBaseSampled = false;
 	if (SharedData::extendedMaterialSettings.EnableComplexMaterial) {
 		const float kMaskEpsilon = (4.0 / 255.0);
+		float4 envMaskSample = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
+		float envMaskTest = envMaskSample.w;
+		envMaskBase = envMaskSample.x;
+		envMaskBaseSampled = true;
 
-		complexMaterial = envMaskSample.w < (1.0 - kMaskEpsilon);
+		complexMaterial = envMaskTest < (1.0 - kMaskEpsilon);
 
 		// Detect texture saved in the wrong format
 		if ((abs(envMaskSample.x - envMaskSample.y) < kMaskEpsilon) &&
 			(abs(envMaskSample.x - envMaskSample.z) < kMaskEpsilon) &&
-			(abs(envMaskSample.y - envMaskSample.z) < kMaskEpsilon))
+			(abs(envMaskSample.y - envMaskSample.z) < kMaskEpsilon) &&
+			(abs(envMaskSample.x - envMaskTest) < kMaskEpsilon))
 			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskSample.w > kMaskEpsilon) {
+			if (envMaskTest > kMaskEpsilon) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset
@@ -2317,6 +2322,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	if (envMask > 0.0) {
 		if (EnvmapData.y) {
+#		if defined(EMAT)
+			if (!envMaskBaseSampled)
+				envMaskBase = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).x;
+#		endif
 			envMask *= envMaskBase;
 		} else {
 			envMask *= glossiness;

@@ -69,6 +69,9 @@ public:
 	eastl::unique_ptr<Buffer> collisionBoundingBoxes = nullptr;
 	eastl::unique_ptr<Buffer> collisionInstances = nullptr;
 
+	eastl::vector<BoundingBoxPacked> queuedBoundingBoxes;
+	eastl::vector<float4> queuedCollisions;
+
 	virtual void ClearShaderCache() override;
 
 	ID3D11ComputeShader* GetCollisionUpdateCS();
@@ -79,7 +82,7 @@ public:
 	virtual void SetupResources() override;
 
 	virtual void DrawSettings() override;
-	void UpdateCollisions(PerFrame& perFrame);
+	void QueueCollisions();
 	void Update();
 
 	virtual void LoadSettings(json& o_json) override;
@@ -99,9 +102,16 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct MainUpdate_QueueCollisions
+		{
+			static void thunk();
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::write_vfunc<0x6, BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
+			stl::write_thunk_call<MainUpdate_QueueCollisions>(REL::RelocationID(35565, 36564).address() + REL::Relocate(0x748, 0xC26, 0x7EE));
 			logger::info("[GRASS COLLISION] Installed hooks");
 		}
 	};

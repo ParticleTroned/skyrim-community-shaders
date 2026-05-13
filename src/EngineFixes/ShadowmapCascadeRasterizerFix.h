@@ -30,10 +30,23 @@ struct ShadowmapRasterizerFix : EngineFix
 	static inline RasterStateArray backupGameRasterStates = {};
 	static inline RasterStateArray shadowmapRasterStates[maxCascades] = {};
 
-	// Keep the caster offset conservative and identical across cascades to avoid visible pulsing if the runtime cascade cadence changes.
-	static constexpr int stableCascadeDepthBias = 32;
-	static constexpr float stableCascadeDepthBiasClamp = 0.00075f;
-	static constexpr float stableCascadeSlopeScaleBias = 0.35f;
+	// Keep close-range casters unshifted; even small first-cascade bias can make nearby meshes lose contact shadows.
+	static constexpr int nearCascadeDepthBias = 0;
+	static constexpr float nearCascadeDepthBiasClamp = 0.0f;
+	static constexpr float nearCascadeSlopeScaleBias = 0.0f;
+
+	// Keep a small scoped caster offset on outer cascades for the PR1690/1888 behavior without global table mutation.
+	static constexpr int outerCascadeDepthBias = 32;
+	static constexpr float outerCascadeDepthBiasClamp = 0.00075f;
+	static constexpr float outerCascadeSlopeScaleBias = 0.35f;
+
+	static constexpr bool casterBiasEnabled =
+		nearCascadeDepthBias != 0 ||
+		nearCascadeDepthBiasClamp != 0.0f ||
+		nearCascadeSlopeScaleBias != 0.0f ||
+		outerCascadeDepthBias != 0 ||
+		outerCascadeDepthBiasClamp != 0.0f ||
+		outerCascadeSlopeScaleBias != 0.0f;
 
 	struct ShadowMapRasterizerDescriptor
 	{
@@ -44,9 +57,9 @@ struct ShadowmapRasterizerFix : EngineFix
 	static void GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputDesc, ShadowMapRasterizerDescriptor desc);
 
 	static constexpr ShadowMapRasterizerDescriptor cascadeDescriptors[maxCascades] = {
-		{ stableCascadeDepthBias, stableCascadeDepthBiasClamp, stableCascadeSlopeScaleBias },
-		{ stableCascadeDepthBias, stableCascadeDepthBiasClamp, stableCascadeSlopeScaleBias },
-		{ stableCascadeDepthBias, stableCascadeDepthBiasClamp, stableCascadeSlopeScaleBias }
+		{ nearCascadeDepthBias, nearCascadeDepthBiasClamp, nearCascadeSlopeScaleBias },
+		{ outerCascadeDepthBias, outerCascadeDepthBiasClamp, outerCascadeSlopeScaleBias },
+		{ outerCascadeDepthBias, outerCascadeDepthBiasClamp, outerCascadeSlopeScaleBias }
 	};
 
 	struct ScopedCascadeBias

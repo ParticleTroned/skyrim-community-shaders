@@ -102,6 +102,7 @@ public:
 	uint probeUpdateSliceStart = 0;
 	uint probeUpdateSliceCount = 128;
 	uint probeUpdateSliceCursor = 0;
+	uint probeUpdateCornerMask = 0;
 	uint forcedFullUpdateFrames = 1;
 	bool forceProbeUpdateThisFrame = true;
 	uint probeUpdateFrameCounter = 0;

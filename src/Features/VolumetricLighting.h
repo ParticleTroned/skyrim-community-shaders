@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RE/B/BSVolumetricLightingRenderData.h"
+
 struct VolumetricLighting : Feature
 {
 public:
@@ -94,8 +96,13 @@ public:
 	};
 
 private:
-	struct VolumetricLightingDescriptor
-	{};
+	using VolumetricLightingDescriptor = RE::BSVolumetricLightingRenderData;
+
+	struct ApplyVolumetricLighting_VolumetricLightingDescriptor_Get
+	{
+		static VolumetricLightingDescriptor* thunk();
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 
 	static const char* FromUnits(int32_t value, int32_t unitScale);
 	static VolumetricLightingDescriptor& GetVLDescriptor();

@@ -2,7 +2,19 @@
 
 #include "InteriorSun.h"
 #include "ShaderCache.h"
+#include "SkySync.h"
 #include "State.h"
+
+namespace
+{
+	void ApplySkySyncIntensity(RE::BSVolumetricLightingRenderData& descriptor)
+	{
+		const float intensity = globals::features::skySync.GetVolumetricLightingIntensityFactor();
+		if (intensity != 1.0f) {
+			descriptor.intensity *= intensity;
+		}
+	}
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VolumetricLighting::TextureSize,
@@ -170,6 +182,8 @@ void VolumetricLighting::PostPostLoad()
 		stl::write_thunk_call<RenderDepth>(REL::RelocationID(35560, 0).address() + REL::Relocate(0x2EE, 0));
 	}
 
+	stl::write_thunk_call<ApplyVolumetricLighting_VolumetricLightingDescriptor_Get>(REL::RelocationID(100475, 107193).address() + 0x354);
+
 	bEnableVolumetricLighting = reinterpret_cast<bool*>(REL::RelocationID(527940, 414913).address());
 	gVolumetricLightingSizeLow = reinterpret_cast<TextureSize*>(REL::RelocationID(527970, 414916).address());
 	gVolumetricLightingSizeMedium = reinterpret_cast<TextureSize*>(REL::RelocationID(527973, 414919).address());
@@ -264,6 +278,16 @@ void VolumetricLighting::RenderDepth::thunk()
 	func();
 	if (globals::features::volumetricLighting.bEnableVolumetricLighting)
 		RenderVolumetricLighting(&GetVLDescriptor(), RE::Main::WorldRootCamera(), false);
+}
+
+VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolumetricLighting_VolumetricLightingDescriptor_Get::thunk()
+{
+	auto* descriptor = func();
+	if (!descriptor)
+		return nullptr;
+
+	ApplySkySyncIntensity(*descriptor);
+	return descriptor;
 }
 
 RE::BSImagespaceShader* VolumetricLighting::CreateShader(const std::string_view& name, const std::string_view& fileName, RE::BSComputeShader* computeShader)

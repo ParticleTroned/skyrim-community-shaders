@@ -9,6 +9,9 @@
 
 namespace
 {
+	constexpr uint kOcclusionCornerCount = 4;
+	constexpr uint kAllOcclusionCornersMask = (1u << kOcclusionCornerCount) - 1u;
+
 	struct ProbeGridPreset
 	{
 		uint Width;
@@ -71,6 +74,12 @@ namespace
 		return std::max(ClampUpdateInterval(a_settings.ProbeUpdateInterval), ClampUpdateInterval(a_settings.OcclusionUpdateInterval));
 	}
 
+	bool UsesIncrementalProbeSlices(const Skylighting::Settings& a_settings, uint a_probeDepth)
+	{
+		return a_settings.EnableIncrementalProbeUpdates &&
+		       ClampStableSliceCount(a_settings.StableSliceCount, a_probeDepth) < a_probeDepth;
+	}
+
 	uint WrapIndex(int a_value, uint a_modulus)
 	{
 		const int modulus = std::max(1, static_cast<int>(a_modulus));
@@ -78,6 +87,32 @@ namespace
 		if (wrapped < 0)
 			wrapped += modulus;
 		return static_cast<uint>(wrapped);
+	}
+
+	uint GetOcclusionCorner(uint a_frameCount)
+	{
+		return a_frameCount % kOcclusionCornerCount;
+	}
+
+	uint GetOcclusionCornerBit(uint a_frameCount)
+	{
+		return 1u << GetOcclusionCorner(a_frameCount);
+	}
+
+	void ResetProbeUpdateWindow(Skylighting& a_skylighting)
+	{
+		a_skylighting.probeUpdateSliceCursor = 0;
+		a_skylighting.probeUpdateCornerMask = 0;
+	}
+
+	void ApplyOcclusionCornerFrustum(uint a_corner, RE::NiFrustum& a_frustum)
+	{
+		const float frustumSize = a_frustum.fTop;
+
+		a_frustum.fBottom = (a_corner == 0 || a_corner == 1) ? -frustumSize : 0.0f;
+		a_frustum.fLeft = (a_corner == 0 || a_corner == 2) ? -frustumSize : 0.0f;
+		a_frustum.fRight = (a_corner == 1 || a_corner == 3) ? frustumSize : 0.0f;
+		a_frustum.fTop = (a_corner == 2 || a_corner == 3) ? frustumSize : 0.0f;
 	}
 
 	bool ShouldRunPeriodicUpdate(uint& a_frameCounter, uint a_interval, bool a_forceRun)
@@ -205,7 +240,7 @@ void Skylighting::ResetSkylighting()
 		UINT clr[1] = { 0 };
 		context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
 	}
-	probeUpdateSliceCursor = 0;
+	ResetProbeUpdateWindow(*this);
 	forcedFullUpdateFrames = 1;
 	forceProbeUpdateThisFrame = true;
 	probeUpdateFrameCounter = 0;
@@ -265,6 +300,9 @@ void Skylighting::DrawSettings()
 		ImGui::Text("Updates skylighting less often for a bigger FPS gain. Higher values can react a bit slower.");
 
 	NormalizeSettingsForRuntime(settings);
+	uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
+	settings.StableSliceCount = stableSliceCount;
+	bool usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
 
 	ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
 	{
@@ -277,46 +315,63 @@ void Skylighting::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("How often skylight shadowing refreshes. 1 = every frame. Higher = faster, but slower reaction.");
 
+		ImGui::BeginDisabled(usesIncrementalProbeSlices);
 		int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
 		{
 			Util::BlueFrameStyleWrapper probeIntervalStyle;
 			if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
 				settings.ProbeUpdateInterval = ClampUpdateInterval(static_cast<uint>(probeIntervalUI));
 		}
+		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction.");
+			ImGui::Text(usesIncrementalProbeSlices ?
+			                "Incremental probe updates follow each fresh occlusion quadrant." :
+			                "How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction.");
 	}
 	ImGui::EndDisabled();
 	NormalizeSettingsForRuntime(settings);
 
 	if (settings.EnableReducedUpdateFrequency) {
 		ImGui::Text("Occlusion refresh cadence: every %u frame(s)", settings.OcclusionUpdateInterval);
-		ImGui::Text("Probe refresh cadence: every %u frame(s)", settings.ProbeUpdateInterval);
+		if (usesIncrementalProbeSlices)
+			ImGui::Text("Probe refresh cadence: each fresh occlusion quadrant");
+		else
+			ImGui::Text("Probe refresh cadence: every %u frame(s)", settings.ProbeUpdateInterval);
 	}
 
 	{
 		Util::BlueFrameStyleWrapper incrementalUpdateStyle(true);
-		ImGui::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates);
+		const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
+		if (ImGui::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
+			previousIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates) {
+			ResetProbeUpdateWindow(*this);
+		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Spreads skylighting work over multiple frames to smooth spikes.");
-
-	uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
-	settings.StableSliceCount = stableSliceCount;
 
 	ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
 	{
 		int stableSliceCountUI = static_cast<int>(stableSliceCount);
 		{
 			Util::BlueFrameStyleWrapper stableSliceStyle;
-			if (ImGui::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(probeArrayDims[2])))
-				settings.StableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), probeArrayDims[2]);
+			if (ImGui::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(probeArrayDims[2]))) {
+				const uint nextStableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), probeArrayDims[2]);
+				if (settings.StableSliceCount != nextStableSliceCount) {
+					settings.StableSliceCount = nextStableSliceCount;
+					ResetProbeUpdateWindow(*this);
+				}
+			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Lower = smoother performance but takes longer to settle. Higher = reacts faster with more cost.");
 	}
 	ImGui::EndDisabled();
-	const uint stableRefreshFrames = (probeArrayDims[2] + settings.StableSliceCount - 1) / settings.StableSliceCount;
+	usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
+	const uint stableSliceBatches = (probeArrayDims[2] + settings.StableSliceCount - 1) / settings.StableSliceCount;
+	const uint stableRefreshFrames = usesIncrementalProbeSlices ?
+		stableSliceBatches * kOcclusionCornerCount * GetOcclusionUpdateInterval(settings) :
+		GetProbeUpdateInterval(settings);
 	ImGui::Text("Stable probe field full refresh: ~%u frame(s)", stableRefreshFrames);
 
 	{
@@ -483,13 +538,13 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	probeUpdateSliceStart = 0;
 	probeUpdateSliceCount = probeArrayDims[2];
 
-	if (settings.EnableIncrementalProbeUpdates && !shouldForceFullUpdate) {
+	if (UsesIncrementalProbeSlices(settings, probeArrayDims[2]) && !shouldForceFullUpdate) {
 		uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
 
 		probeUpdateSliceStart = probeUpdateSliceCursor;
 		probeUpdateSliceCount = std::min(stableSliceCount, probeArrayDims[2] - probeUpdateSliceStart);
 	} else {
-		probeUpdateSliceCursor = 0;
+		ResetProbeUpdateWindow(*this);
 	}
 
 	if (forcedFullUpdateFrames > 0)
@@ -537,8 +592,16 @@ void Skylighting::Prepass()
 
 		// Update probe array
 		{
-			const uint probeUpdateInterval = GetProbeUpdateInterval(settings);
-			const bool shouldUpdateProbes = ShouldRunPeriodicUpdate(probeUpdateFrameCounter, probeUpdateInterval, forceProbeUpdateThisFrame);
+			const bool updatingIncrementalSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]) && probeUpdateSliceCount < probeArrayDims[2];
+			const uint occlusionCornerBit = GetOcclusionCornerBit(frameCount);
+
+			bool shouldUpdateProbes = false;
+			if (updatingIncrementalSlices) {
+				shouldUpdateProbes = forceProbeUpdateThisFrame || ((probeUpdateCornerMask & occlusionCornerBit) == 0);
+			} else {
+				const uint probeUpdateInterval = GetProbeUpdateInterval(settings);
+				shouldUpdateProbes = ShouldRunPeriodicUpdate(probeUpdateFrameCounter, probeUpdateInterval, forceProbeUpdateThisFrame);
+			}
 
 			uint dispatchSliceCount = probeUpdateSliceCount == 0 ? 1 : probeUpdateSliceCount;
 			if (dispatchSliceCount > probeArrayDims[2])
@@ -551,11 +614,20 @@ void Skylighting::Prepass()
 				context->CSSetShader(probeUpdateCompute.get(), nullptr, 0);
 				context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
 
-				// Advance the rotating incremental window only when work actually executes.
-				if (probeUpdateSliceCount < probeArrayDims[2]) {
-					probeUpdateSliceCursor += probeUpdateSliceCount;
-					if (probeUpdateSliceCursor >= probeArrayDims[2])
-						probeUpdateSliceCursor = 0;
+				if (updatingIncrementalSlices) {
+					probeUpdateCornerMask |= occlusionCornerBit;
+
+					// The occlusion map only covers one XY quadrant per render. Keep this
+					// Z-slice batch active until all quadrants have refreshed, otherwise
+					// slice batches can phase-lock to one quadrant and leave holes.
+					if ((probeUpdateCornerMask & kAllOcclusionCornersMask) == kAllOcclusionCornersMask) {
+						probeUpdateSliceCursor += probeUpdateSliceCount;
+						if (probeUpdateSliceCursor >= probeArrayDims[2])
+							probeUpdateSliceCursor = 0;
+						probeUpdateCornerMask = 0;
+					}
+				} else {
+					ResetProbeUpdateWindow(*this);
 				}
 			}
 		}
@@ -774,14 +846,7 @@ void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a
 	auto& skylighting = globals::features::skylighting;
 
 	if (skylighting.inOcclusion) {
-		uint corner = skylighting.frameCount % 4;
-
-		float frustumSize = a_frustum->fTop;
-
-		a_frustum->fBottom = (corner == 0 || corner == 1) ? -frustumSize : 0.0f;
-		a_frustum->fLeft = (corner == 0 || corner == 2) ? -frustumSize : 0.0f;
-		a_frustum->fRight = (corner == 1 || corner == 3) ? frustumSize : 0.0f;
-		a_frustum->fTop = (corner == 2 || corner == 3) ? frustumSize : 0.0f;
+		ApplyOcclusionCornerFrustum(GetOcclusionCorner(skylighting.frameCount), *a_frustum);
 	}
 
 	func(a_camera, a_frustum);
@@ -792,14 +857,7 @@ void Skylighting::SetViewFrustumVR::thunk(RE::NiCamera* a_camera, RE::NiFrustum*
 	auto& skylighting = globals::features::skylighting;
 
 	if (skylighting.inOcclusion) {
-		uint corner = skylighting.frameCount % 4;
-
-		float frustumSize = a_frustum->fTop;
-
-		a_frustum->fBottom = (corner == 0 || corner == 1) ? -frustumSize : 0.0f;
-		a_frustum->fLeft = (corner == 0 || corner == 2) ? -frustumSize : 0.0f;
-		a_frustum->fRight = (corner == 1 || corner == 3) ? frustumSize : 0.0f;
-		a_frustum->fTop = (corner == 2 || corner == 3) ? frustumSize : 0.0f;
+		ApplyOcclusionCornerFrustum(GetOcclusionCorner(skylighting.frameCount), *a_frustum);
 	}
 
 	func(a_camera, a_frustum, a_eyeIndex);

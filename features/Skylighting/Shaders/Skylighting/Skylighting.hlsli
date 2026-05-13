@@ -92,7 +92,7 @@ namespace Skylighting
 		if (SharedData::InInterior)
 			return scaledUnitSH;
 
-		positionMS.xyz += normalWS * cellSize * 0.5;  // Receiver normal bias
+		positionMS.xyz += normalWS * cellSize;  // Receiver normal bias
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
 		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;

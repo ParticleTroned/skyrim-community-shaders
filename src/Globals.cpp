@@ -33,6 +33,7 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
+#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -286,5 +287,6 @@ namespace globals
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+		ShadowmapRasterizerFix::InstallD3DHooks(a_context);
 	}
 }

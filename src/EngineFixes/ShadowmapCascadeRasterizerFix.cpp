@@ -1,5 +1,8 @@
 #include "ShadowmapCascadeRasterizerFix.h"
 
+#include "Globals.h"
+#include "Utils/Game.h"
+
 void ShadowmapRasterizerFix::Install()
 {
 	// This function is called once per cascade to begin the updating and rendering process.
@@ -11,6 +14,19 @@ void ShadowmapRasterizerFix::Install()
 	numCascades = static_cast<std::uint32_t>(std::clamp(configuredCascades, 1, static_cast<std::int32_t>(maxCascades)));
 	currentCascade = 0;
 	initialized = false;
+}
+
+void ShadowmapRasterizerFix::InstallD3DHooks(ID3D11DeviceContext* context)
+{
+	if (!context || d3dHooksInstalled)
+		return;
+
+	stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(context);
+	stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(context);
+	stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(context);
+	stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(context);
+
+	d3dHooksInstalled = true;
 }
 
 void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCascade::thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, std::uint32_t flags)
@@ -26,13 +42,7 @@ void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCas
 	const auto cascade = currentCascade % numCascades;
 
 	{
-		std::memcpy(*gRasterStates, shadowmapRasterStates[cascade], sizeof(RasterStateArray));
-
-		struct RestoreRasterStatesGuard
-		{
-			~RestoreRasterStatesGuard() { ShadowmapRasterizerFix::RestoreRasterStates(); }
-		} restoreRasterStates;
-
+		ScopedCascadeBias scopedCascadeBias(cascade);
 		func(light, arg1, arg2, flags);
 	}
 
@@ -76,8 +86,88 @@ void ShadowmapRasterizerFix::CloneRasterStates(const RasterStateArray& inputArra
 	}
 }
 
-void ShadowmapRasterizerFix::RestoreRasterStates()
+ID3D11RasterizerState* ShadowmapRasterizerFix::GetBiasedRasterState()
 {
-	if (gRasterStates)
-		std::memcpy(*gRasterStates, backupGameRasterStates, sizeof(RasterStateArray));
+	if (!initialized || activeCascade >= numCascades || !globals::game::shadowState)
+		return nullptr;
+
+	auto shadowState = globals::game::shadowState;
+	GET_INSTANCE_MEMBER(rasterStateFillMode, shadowState)
+	GET_INSTANCE_MEMBER(rasterStateCullMode, shadowState)
+	GET_INSTANCE_MEMBER(rasterStateDepthBiasMode, shadowState)
+	GET_INSTANCE_MEMBER(rasterStateScissorMode, shadowState)
+
+	if (rasterStateFillMode >= 2 || rasterStateCullMode >= 3 || rasterStateDepthBiasMode >= 12 || rasterStateScissorMode >= 2)
+		return nullptr;
+
+	return shadowmapRasterStates[activeCascade][rasterStateFillMode][rasterStateCullMode][rasterStateDepthBiasMode][rasterStateScissorMode];
+}
+
+ShadowmapRasterizerFix::ScopedCascadeBias::ScopedCascadeBias(std::uint32_t cascade) :
+	previousCascade(activeCascade)
+{
+	activeCascade = cascade;
+}
+
+ShadowmapRasterizerFix::ScopedCascadeBias::~ScopedCascadeBias()
+{
+	activeCascade = previousCascade;
+}
+
+ShadowmapRasterizerFix::ScopedBiasedRasterState::ScopedBiasedRasterState(ID3D11DeviceContext* a_context) :
+	context(a_context)
+{
+	auto* biasedState = GetBiasedRasterState();
+	if (!context || !biasedState)
+		return;
+
+	context->RSGetState(&previousState);
+	if (previousState != biasedState) {
+		context->RSSetState(biasedState);
+		applied = true;
+	}
+}
+
+ShadowmapRasterizerFix::ScopedBiasedRasterState::~ScopedBiasedRasterState()
+{
+	if (applied)
+		context->RSSetState(previousState);
+
+	if (previousState)
+		previousState->Release();
+}
+
+void ShadowmapRasterizerFix::ID3D11DeviceContext_DrawIndexed::thunk(ID3D11DeviceContext* context, UINT indexCount, UINT startIndexLocation, INT baseVertexLocation)
+{
+	ScopedBiasedRasterState scopedRasterState(context);
+	func(context, indexCount, startIndexLocation, baseVertexLocation);
+}
+
+void ShadowmapRasterizerFix::ID3D11DeviceContext_Draw::thunk(ID3D11DeviceContext* context, UINT vertexCount, UINT startVertexLocation)
+{
+	ScopedBiasedRasterState scopedRasterState(context);
+	func(context, vertexCount, startVertexLocation);
+}
+
+void ShadowmapRasterizerFix::ID3D11DeviceContext_DrawIndexedInstanced::thunk(
+	ID3D11DeviceContext* context,
+	UINT indexCountPerInstance,
+	UINT instanceCount,
+	UINT startIndexLocation,
+	INT baseVertexLocation,
+	UINT startInstanceLocation)
+{
+	ScopedBiasedRasterState scopedRasterState(context);
+	func(context, indexCountPerInstance, instanceCount, startIndexLocation, baseVertexLocation, startInstanceLocation);
+}
+
+void ShadowmapRasterizerFix::ID3D11DeviceContext_DrawInstanced::thunk(
+	ID3D11DeviceContext* context,
+	UINT vertexCountPerInstance,
+	UINT instanceCount,
+	UINT startVertexLocation,
+	UINT startInstanceLocation)
+{
+	ScopedBiasedRasterState scopedRasterState(context);
+	func(context, vertexCountPerInstance, instanceCount, startVertexLocation, startInstanceLocation);
 }

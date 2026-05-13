@@ -47,6 +47,7 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; }
+	float GetVolumetricLightingIntensityFactor() const;
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
@@ -136,8 +137,8 @@ private:
 		float fadeTimer = 0.0f;
 		float previousHoursPassed = 0.0f;
 
-		void Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime);
-		static void SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity);
+		float Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime);
+		static float SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity);
 		static void ClampDirection(RE::NiPoint3& dir);
 		void Reset();
 	};
@@ -155,6 +156,7 @@ private:
 	static constexpr float NewMoonIntensityFactor = 0.05f;
 	static constexpr float CrescentMoonIntensityFactor = 0.25f;
 	static constexpr float FullMoonIntensityFactor = 1.0f;
+	static constexpr float DefaultVolumetricLightingIntensityFactor = 1.0f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static float* gSunGlareSize = nullptr;
@@ -167,6 +169,7 @@ private:
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float masserPhaseIntensityFactor = 0.0f;
 	float secundaPhaseIntensityFactor = 0.0f;
+	float volumetricLightingIntensityFactor = DefaultVolumetricLightingIntensityFactor;
 
 	ClimateTimings timings = {};
 
@@ -176,6 +179,8 @@ private:
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
+	void ResetRuntimeState();
+	static float NormalizeVolumetricLightingIntensity(float intensity);
 
 	void Update(const RE::Sky* sky);
 

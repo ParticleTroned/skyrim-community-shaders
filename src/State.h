@@ -19,6 +19,8 @@ using json = nlohmann::json;
 class State
 {
 public:
+	static constexpr uint32_t kParallaxVisibilityDepthSlot = 56;
+
 	State()
 	{
 		std::lock_guard<std::mutex> lock(statsMutex);
@@ -193,7 +195,8 @@ public:
 		EffectShadows = 1 << 3,
 		IsTree = 1 << 4,
 		GrassSphereNormal = 1 << 5,
-		IsFemale = 1 << 6
+		IsFemale = 1 << 6,
+		TerrainBlendingPass = 1 << 7
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -219,6 +222,7 @@ public:
 	bool isMapMenuOpen = false;
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	void UpdatePermutationConstantBuffer();
 
 	struct PermutationCB
 	{

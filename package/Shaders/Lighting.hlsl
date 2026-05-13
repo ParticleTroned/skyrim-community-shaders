@@ -543,6 +543,7 @@ Texture2D<float4> TexLandLodNoiseSampler : register(t15);
 #	endif
 
 Texture2D<float4> TexShadowMaskSampler : register(t14);
+Texture2D<float4> TexParallaxVisibilityDepth : register(t56);
 
 cbuffer PerTechnique : register(b0)
 {
@@ -1016,6 +1017,35 @@ float3 SafeNormalize3(float3 v, float3 fallback)
 	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
 }
 
+#if defined(EMAT)
+bool IsHiddenByParallaxVisibilityDepth(float4 position, bool requireTerrainBlendingPass)
+{
+#	if defined(DEFERRED)
+	if (!SharedData::extendedMaterialSettings.EnableParallaxOcclusionCulling)
+		return false;
+
+	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsReflections) != 0)
+		return false;
+
+	if (requireTerrainBlendingPass &&
+		((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::TerrainBlendingPass) == 0))
+		return false;
+
+	float visibilityDepth = TexParallaxVisibilityDepth.Load(int3(int2(position.xy), 0)).x;
+	if (visibilityDepth <= 0.0 || visibilityDepth >= 0.999999)
+		return false;
+
+	float pixelLinearDepth = SharedData::GetScreenDepth(position.z);
+	float visibilityLinearDepth = SharedData::GetScreenDepth(visibilityDepth);
+	float depthEpsilon = max(0.25, visibilityLinearDepth * 0.0002);
+
+	return pixelLinearDepth > visibilityLinearDepth + depthEpsilon;
+#	else
+	return false;
+#	endif
+}
+#endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
@@ -1092,7 +1122,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(LANDSCAPE)
-	float mipLevels[6];
+	float mipLevels[6] = { 0, 0, 0, 0, 0, 0 };
 #	else
 	float mipLevel = 0;
 #	endif  // LANDSCAPE
@@ -1151,12 +1181,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 complexSpecular = 1.0;  // Declare complexSpecular at a higher scope so it's available throughout the shader (NEEDED FOR STOCH. FIX)
 
 #	if defined(EMAT)
+#		if defined(PARALLAX)
+	bool parallaxVisible = false;
+#		endif
 #		if defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
-		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
-			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
+		parallaxVisible = !IsHiddenByParallaxVisibilityDepth(input.Position, false);
+		if (parallaxVisible) {
+			mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
+			uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
+			if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
+				sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
+		}
 	}
 #		endif  // defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 
@@ -1185,12 +1221,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		if (complexMaterial) {
 			if (envMaskTest > kMaskEpsilon) {
-				complexMaterialParallax = true;
-				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
-				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);
-				if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
-					sh0 = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
-				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
+				complexMaterialParallax = !IsHiddenByParallaxVisibilityDepth(input.Position, false);
+				if (complexMaterialParallax) {
+					mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
+					uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);
+					if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
+						sh0 = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
+					complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
+				} else {
+					complexMaterialColor = envMaskSample;
+				}
 			} else {
 				complexMaterialColor = envMaskSample;
 			}
@@ -1210,33 +1250,35 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if !defined(FACEGEN)
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
-		PBRParallax = true;
-		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
-		{
-			displacementParams.HeightScale = PBRParams1.y;
-			displacementParams.DisplacementScale = 0.5;
-			displacementParams.DisplacementOffset = -0.25;
-
-			eta = lerp(1.0, (1 - sqrt(MultiLayerParallaxData.y)) / (1 + sqrt(MultiLayerParallaxData.y)), sampledCoatColor.w);
-			[branch] if ((PBRFlags & PBR::Flags::CoatNormal) != 0)
+		PBRParallax = !IsHiddenByParallaxVisibilityDepth(input.Position, false);
+		if (PBRParallax) {
+			[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 			{
-				entryNormalTS = normalize(TransformNormal(TexBackLightSampler.Sample(SampBackLightSampler, uvOriginal).xyz));
+				displacementParams.HeightScale = PBRParams1.y;
+				displacementParams.DisplacementScale = 0.5;
+				displacementParams.DisplacementOffset = -0.25;
+
+				eta = lerp(1.0, (1 - sqrt(MultiLayerParallaxData.y)) / (1 + sqrt(MultiLayerParallaxData.y)), sampledCoatColor.w);
+				[branch] if ((PBRFlags & PBR::Flags::CoatNormal) != 0)
+				{
+					entryNormalTS = normalize(TransformNormal(TexBackLightSampler.Sample(SampBackLightSampler, uvOriginal).xyz));
+				}
+				else
+				{
+					entryNormalTS = normalize(TransformNormal(TexNormalSampler.Sample(SampNormalSampler, uvOriginal).xyz));
+				}
+				entryNormal = normalize(mul(tbn, entryNormalTS));
+				refractedViewDirection = -refract(-viewDirection, entryNormal, eta);
 			}
 			else
 			{
-				entryNormalTS = normalize(TransformNormal(TexNormalSampler.Sample(SampNormalSampler, uvOriginal).xyz));
+				displacementParams.HeightScale *= PBRParams1.y;
 			}
-			entryNormal = normalize(mul(tbn, entryNormalTS));
-			refractedViewDirection = -refract(-viewDirection, entryNormal, eta);
+			mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
+			uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
+			if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
+				sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 		}
-		else
-		{
-			displacementParams.HeightScale *= PBRParams1.y;
-		}
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
-		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
-			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR
@@ -1300,10 +1342,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(EMAT)
 #			if defined(TRUE_PBR)
-	if (SharedData::extendedMaterialSettings.EnableParallax) {
+	bool terrainParallaxEnabled = SharedData::extendedMaterialSettings.EnableParallax;
 #			else
-	if (SharedData::extendedMaterialSettings.EnableTerrainParallax || (SharedData::extendedMaterialSettings.EnableParallax && Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement)) {
+	bool terrainParallaxEnabled =
+		SharedData::extendedMaterialSettings.EnableTerrainParallax ||
+		(SharedData::extendedMaterialSettings.EnableParallax &&
+			((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement) != 0));
 #			endif
+	bool terrainParallaxVisible = false;
+	[branch] if (terrainParallaxEnabled)
+	{
+		terrainParallaxVisible = !IsHiddenByParallaxVisibilityDepth(input.Position, true);
+	}
+
+	if (terrainParallaxEnabled && terrainParallaxVisible) {
 		mipLevels[0] = ExtendedMaterials::GetMipLevel(uv, TexColorSampler, screenNoise);
 		mipLevels[1] = ExtendedMaterials::GetMipLevel(uv, TexLandColor2Sampler, screenNoise);
 		mipLevels[2] = ExtendedMaterials::GetMipLevel(uv, TexLandColor3Sampler, screenNoise);
@@ -3067,11 +3119,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		float3 dirLightDirectionTS = mul(refractedDirLightDirection, tbn).xyz;
 #		if defined(LANDSCAPE)
-#			if defined(TRUE_PBR)
-		if (SharedData::extendedMaterialSettings.EnableParallax) {
-#			else
-		if (SharedData::extendedMaterialSettings.EnableTerrainParallax || (SharedData::extendedMaterialSettings.EnableParallax && Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement)) {
-#			endif
+		if (terrainParallaxEnabled && terrainParallaxVisible) {
 #			if defined(TERRAIN_VARIATION)
 			float weights[6];
 			// Initialize weights array
@@ -3086,7 +3134,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 		}
 #		elif defined(PARALLAX)
-		[branch] if (SharedData::extendedMaterialSettings.EnableParallax)
+		[branch] if (SharedData::extendedMaterialSettings.EnableParallax && parallaxVisible)
 			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
 #		elif defined(EMAT_ENVMAP)
 		[branch] if (complexMaterialParallax)
@@ -3336,19 +3384,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		{
 			float3 lightDirectionTS = normalize(mul(refractedLightDirection, tbn).xyz);
 #				if defined(PARALLAX)
-			[branch] if (SharedData::extendedMaterialSettings.EnableParallax)
+			[branch] if (SharedData::extendedMaterialSettings.EnableParallax && parallaxVisible)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams);
 #				elif defined(LANDSCAPE)
-#					if defined(TRUE_PBR)
-			if (SharedData::extendedMaterialSettings.EnableParallax)
-#					else
-			if (SharedData::extendedMaterialSettings.EnableTerrainParallax || (SharedData::extendedMaterialSettings.EnableParallax && Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement))
-#					endif
+			if (terrainParallaxEnabled && terrainParallaxVisible) {
 #					if defined(TERRAIN_VARIATION)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, lightDirectionTS, sh0, parallaxShadowQuality, screenNoise, displacementParams, sharedOffset, dx, dy);
 #					else
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, lightDirectionTS, sh0, parallaxShadowQuality, screenNoise, displacementParams);
 #					endif
+			}
 #				elif defined(EMAT_ENVMAP)
 			[branch] if (complexMaterialParallax)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, parallaxShadowQuality, screenNoise, displacementParams);

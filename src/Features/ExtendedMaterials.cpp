@@ -8,7 +8,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableHeightBlending,
 	EnableShadows,
 	ExtendShadows,
-	EnableParallaxWarpingFix)
+	EnableParallaxWarpingFix,
+	EnableParallaxOcclusionCulling)
 
 void ExtendedMaterials::DataLoaded()
 {
@@ -61,6 +62,10 @@ void ExtendedMaterials::DrawSettings()
 		ImGui::Checkbox("Enable Parallax Warping Fix", (bool*)&settings.EnableParallaxWarpingFix);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables a fix reducing parallax scale on curved and smooth normal triangles.");
+		}
+		ImGui::Checkbox("Cull Hidden Parallax Pixels", (bool*)&settings.EnableParallaxOcclusionCulling);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Skips parallax work for pixels hidden by the scene visibility depth prepass.");
 		}
 
 		ImGui::Spacing();

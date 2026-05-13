@@ -71,6 +71,17 @@ namespace
 	}
 }
 
+void State::UpdatePermutationConstantBuffer()
+{
+	if (!permutationCB)
+		return;
+
+	if (permutationData != permutationDataPrevious) {
+		permutationCB->Update(permutationData);
+		permutationDataPrevious = permutationData;
+	}
+}
+
 void State::Draw()
 {
 	ZoneScoped;
@@ -123,10 +134,7 @@ void State::Draw()
 			truePBR->SetShaderResouces(context);
 		}
 
-		if (permutationData != permutationDataPrevious) {
-			permutationCB->Update(permutationData);
-			permutationDataPrevious = permutationData;
-		}
+		UpdatePermutationConstantBuffer();
 
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
@@ -1089,6 +1097,9 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 	auto* srv = Util::GetCurrentSceneDepthSRV(true);
 	globals::d3d::context->PSSetShaderResources(17, 1, &srv);
+
+	auto* parallaxVisibilityDepthSrv = Util::GetCurrentSceneDepthSRV(false);
+	globals::d3d::context->PSSetShaderResources(State::kParallaxVisibilityDepthSlot, 1, &parallaxVisibilityDepthSrv);
 }
 
 void State::ClearDisabledFeatures()

@@ -64,7 +64,7 @@ namespace SharedData
 		bool EnableShadows;
 		bool ExtendShadows;
 		bool EnableParallaxWarpingFix;
-		float1 pad0;
+		bool EnableParallaxOcclusionCulling;
 	};
 
 	struct CubemapCreatorSettings

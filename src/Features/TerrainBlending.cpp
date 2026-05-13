@@ -1109,6 +1109,9 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	ID3D11ShaderResourceView* mainDepthSRV = mainDepthCopy ? mainDepthCopy->srv.get() : terrainDepth.depthSRV;
 	context->PSSetShaderResources(55, 1, &mainDepthSRV);
 
+	ID3D11ShaderResourceView* parallaxVisibilityDepthSRV = Util::GetCurrentSceneDepthSRV(false);
+	context->PSSetShaderResources(State::kParallaxVisibilityDepthSlot, 1, &parallaxVisibilityDepthSRV);
+
 	const uint64_t terrainPassCount = static_cast<uint64_t>(terrainRenderPasses.size());
 	const uint64_t noBlendPassCount = static_cast<uint64_t>(renderPasses.size());
 	tbHookDiagnostics.renderPassTerrainCount += terrainPassCount;
@@ -1132,8 +1135,16 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		// Enable rendering for depth below the surface
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
+		auto* state = globals::state;
+		const uint32_t previousExtraShaderDescriptor = state->permutationData.ExtraShaderDescriptor;
+		state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::TerrainBlendingPass);
+		state->UpdatePermutationConstantBuffer();
+
 		for (auto& renderPass : terrainRenderPasses)
 			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+
+		state->permutationData.ExtraShaderDescriptor = previousExtraShaderDescriptor;
+		state->UpdatePermutationConstantBuffer();
 
 		// Reset alpha blending
 		alphaBlendMode = 0;

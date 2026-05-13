@@ -6,6 +6,7 @@
 #include "RE/N/NiDirectionalLight.h"
 #include "InteriorSun.h"
 #include "ShaderCache.h"
+#include "SkySync.h"
 #include "State.h"
 
 namespace
@@ -177,6 +178,14 @@ namespace
 		       !IsNear(params.opacity, kDefaultGodrayOpacity) ||
 		       !IsNear(params.saturation, kDefaultGodraySaturation) ||
 		       !IsNear(params.customContribution, kDefaultCustomContribution);
+	}
+
+	void ApplySkySyncIntensity(RE::BSVolumetricLightingRenderData& descriptor)
+	{
+		const float intensity = ClampFinite(globals::features::skySync.GetVolumetricLightingIntensityFactor(), 0.0f, 1.0f, 1.0f);
+		if (!IsNear(intensity, 1.0f)) {
+			descriptor.intensity *= intensity;
+		}
 	}
 
 }
@@ -635,6 +644,8 @@ VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolum
 	if (!imageSpaceReplacementEnabled) {
 		return descriptor;
 	}
+
+	ApplySkySyncIntensity(*descriptor);
 
 	if (!HasDescriptorTuning(params)) {
 		return descriptor;

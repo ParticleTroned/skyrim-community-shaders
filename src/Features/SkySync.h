@@ -47,6 +47,7 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; }
+	float GetVolumetricLightingIntensityFactor() const;
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
@@ -160,6 +161,7 @@ private:
 	inline static float* gSunGlareSize = nullptr;
 	inline static uint32_t* gMasserSize = nullptr;
 	inline static uint32_t* gSecundaSize = nullptr;
+	inline static float volumetricLightingIntensityFactor = 1.0f;
 
 	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;

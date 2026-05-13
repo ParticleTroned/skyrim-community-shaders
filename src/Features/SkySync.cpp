@@ -99,6 +99,14 @@ void SkySync::RestoreDefaultSettings()
 	SetSunAngle();
 }
 
+float SkySync::GetVolumetricLightingIntensityFactor() const
+{
+	if (!loaded || !settings.Enabled)
+		return 1.0f;
+
+	return std::clamp(volumetricLightingIntensityFactor, 0.0f, 1.0f);
+}
+
 void SkySync::PostPostLoad()
 {
 	moonAndStarsLoaded = GetModuleHandle(L"po3_MoonMod.dll");
@@ -451,6 +459,7 @@ void SkySync::ShadowFader::SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, flo
 	sun->light->Update(updateData);
 
 	intensity = std::clamp(intensity, 0.0f, 1.0f);
+	volumetricLightingIntensityFactor = intensity;
 }
 
 inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)

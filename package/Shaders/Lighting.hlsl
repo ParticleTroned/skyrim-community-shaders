@@ -3266,20 +3266,30 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	uint totalLightCount = LightLimitFix::NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
+#		if defined(DEFERRED)
+	uint contactShadowOffset = 0;
+	uint contactShadowCount = 0;
+#		endif
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+#		if defined(DEFERRED)
+		LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
+#		endif
 	}
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
 		LightLimitFix::Light light;
+		uint clusteredLightIndex = 0;
+		bool isClusteredLight = false;
 		if (lightIndex < LightLimitFix::NumStrictLights) {
 			light = LightLimitFix::StrictLights[lightIndex];
 		} else {
-			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + (lightIndex - LightLimitFix::NumStrictLights)];
+			clusteredLightIndex = LightLimitFix::lightList[lightOffset + (lightIndex - LightLimitFix::NumStrictLights)];
 			light = LightLimitFix::lights[clusteredLightIndex];
+			isClusteredLight = true;
 
 			if (LightLimitFix::IsLightIgnored(light))
 				continue;
@@ -3315,6 +3325,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float3 normalizedLightDirection = lightDirection / lightDist;
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
+#			if defined(DEFERRED)
+		const bool isParticleLight = (light.lightFlags & LightLimitFix::LightFlags::Particle) != 0;
+		const bool canUseContactShadow = LightLimitFix::CanUseContactShadows(light, isParticleLight);
+		bool isContactShadowCandidate = false;
+		[branch] if (canUseContactShadow)
+		{
+			if (isClusteredLight) {
+				isContactShadowCandidate = contactShadowCount > 0 && LightLimitFix::IsContactShadowCandidate(clusteredLightIndex, contactShadowOffset, contactShadowCount);
+			} else {
+				isContactShadowCandidate = !isParticleLight && lightIndex < LightLimitFix::GetStrictContactShadowBudget();
+			}
+		}
+#			endif
 
 		float3 refractedLightDirection = normalizedLightDirection;
 #			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
@@ -3359,12 +3382,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 #			endif
 
+		float contactShadow = 1.0;
+#			if defined(DEFERRED)
+		[branch] if (
+			isContactShadowCandidate &&
+			lightAngle > 0.0 &&
+			shadowComponent != 0.0 &&
+			intensityMultiplier > 1e-5)
+		{
+			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenUV, light.positionWS[eyeIndex].xyz, screenNoise, isParticleLight, eyeIndex);
+		}
+#			endif
+
 		DirectContext pointLightContext;
 		DirectLightingOutput pointLightOutput;
 #			if defined(TRUE_PBR)
-		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, lightShadow, parallaxShadow);
+		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, lightShadow * contactShadow, parallaxShadow);
 #			else
-		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, lightShadow, parallaxShadow);
+		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, lightShadow * contactShadow, parallaxShadow);
 #				if defined(HAIR) && defined(CS_HAIR)
 		if (SharedData::hairSpecularSettings.Enabled) {
 			float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, normalizedLightDirection, screenNoise, eyeIndex);

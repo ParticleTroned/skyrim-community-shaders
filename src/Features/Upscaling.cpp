@@ -4618,7 +4618,20 @@ void Upscaling::UpscaleDepth()
 	// 3) Resource copies are skipped for aliased src/dst to reduce copy churn.
 
 	// (1) Early validation exits
-	if (!IsUpscalingActive()) {
+	const bool depthUpscaleActive = IsUpscalingActive();
+	const auto upscaleMethod = GetUpscaleMethod();
+	const bool isVR = globals::game::isVR;
+	const bool vendorUpscaler = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
+	const bool fullResolutionMaskPath =
+		upscaleMethod == UpscaleMethod::kNONE ||
+		upscaleMethod == UpscaleMethod::kTAA ||
+		(vendorUpscaler && settings.qualityMode == 0);
+	const bool repairVRFullResolutionMask =
+		isVR &&
+		fullResolutionMaskPath &&
+		!depthUpscaleActive;
+
+	if (!depthUpscaleActive && !repairVRFullResolutionMask) {
 		return;
 	}
 
@@ -4626,7 +4639,8 @@ void Upscaling::UpscaleDepth()
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
-	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState || !upscaleDepthStencilState) {
+	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState ||
+		(depthUpscaleActive && !upscaleDepthStencilState)) {
 		return;
 	}
 
@@ -4641,19 +4655,25 @@ void Upscaling::UpscaleDepth()
 	auto& saoCameraZ = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSAO_CAMERAZ];
 	auto& underwaterMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kUNDERWATER_MASK];
 
-	if (!depth.texture || !depth.views[0] || !depthCopy.texture || !depthCopy.depthSRV ||
-		!refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV ||
+	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV ||
 		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
 		return;
 	}
-	if (globals::game::isVR && (!depthCopy.views[0] || !depthCopy.stencilSRV)) {
+	if (depthUpscaleActive &&
+		(!depth.views[0] || !refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV)) {
+		return;
+	}
+	if (isVR && !depthCopy.stencilSRV) {
+		return;
+	}
+	if (depthUpscaleActive && isVR && !depthCopy.views[0]) {
 		return;
 	}
 
 	auto* fullscreenVS = GetUpscaleVS();
-	auto* depthUpscalePS = GetDepthRefractionUpscalePS();
+	auto* depthUpscalePS = depthUpscaleActive ? GetDepthRefractionUpscalePS() : nullptr;
 	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS();
-	if (!fullscreenVS || !depthUpscalePS || !underwaterMaskPS) {
+	if (!fullscreenVS || !underwaterMaskPS || (depthUpscaleActive && !depthUpscalePS)) {
 		return;
 	}
 
@@ -4686,10 +4706,10 @@ void Upscaling::UpscaleDepth()
 	context->PSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 	// Set up jitter/depth-kernel constant buffer for upscaling
-	JitterCB jitterData;
+	JitterCB jitterData{};
 	jitterData.jitter = jitter;
 	// (2) Wide-kernel hysteresis
-	{
+	if (depthUpscaleActive) {
 		constexpr float kEnterWideKernelRatio = 1.55f;
 		constexpr float kExitWideKernelRatio = 1.45f;
 		const float minScale = std::max(std::min(resolutionScale.x, resolutionScale.y), FLT_EPSILON);
@@ -4706,7 +4726,6 @@ void Upscaling::UpscaleDepth()
 		}
 
 		jitterData.useWideKernel = depthUpscaleUseWideKernel ? 1.0f : 0.0f;
-		jitterData.pad0 = 0.0f;
 	}
 
 	jitterCB->Update(jitterData);
@@ -4720,7 +4739,7 @@ void Upscaling::UpscaleDepth()
 		}
 	};
 
-	{
+	if (depthUpscaleActive) {
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth Upscale");
 
 		// Refresh the depth snapshot before sampling it below. Engine-side copies are
@@ -4728,7 +4747,7 @@ void Upscaling::UpscaleDepth()
 		copyIfNonAliased(depthCopy.texture, depth.texture);
 
 		// Clear stencil to be 0xFF
-		if (globals::game::isVR) {
+		if (isVR) {
 			context->ClearDepthStencilView(depthCopy.views[0], D3D11_CLEAR_STENCIL, 1.0f, 0xFF);
 		}
 
@@ -4743,16 +4762,21 @@ void Upscaling::UpscaleDepth()
 		// kSAO_CAMERAZ is at quarter-stereo resolution in VR; the full-stereo viewport would
 		// corrupt only the top-left quarter. The engine's ISSAOCameraZ pass populates it correctly.
 		ID3D11RenderTargetView* rtvs[] = { refractionNormals.RTV,
-			globals::game::isVR ? nullptr : saoCameraZ.RTV };
+			isVR ? nullptr : saoCameraZ.RTV };
 		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
 		context->Draw(3, 0);
 
 		// Depth copy is also used on VR.
-		if (globals::game::isVR) {
+		if (isVR) {
 			copyIfNonAliased(depthCopy.texture, depth.texture);
 		}
+	} else {
+		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Full Resolution Underwater Mask Depth Copy");
+
+		// Full-resolution paths only need to refresh the underwater mask depth source.
+		copyIfNonAliased(depthCopy.texture, depth.texture);
 	}
 
 	{
@@ -4845,8 +4869,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaling.d3d12SwapChainActive && upscaling.settings.frameGenerationMode)
 		upscaling.CopySharedD3D12Resources();
 
-	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
+	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		upscaling.PerformUpscaling();
+	} else if (globals::game::isVR) {
+		upscaling.UpscaleDepth();
+	}
 
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		upscaling.ApplySharpening();

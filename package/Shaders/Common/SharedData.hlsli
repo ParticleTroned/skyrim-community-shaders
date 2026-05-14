@@ -87,7 +87,8 @@ namespace SharedData
 	{
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		uint2 pad0;
+		uint ContactShadowFlags;
+		uint ContactShadowParams;
 		uint4 ClusterSize;
 	};
 

@@ -99,16 +99,20 @@ public:
 	struct alignas(16) LightCullingCB
 	{
 		uint LightCount;
-		uint pad[3];
+		uint ContactShadowFlags;
+		uint ContactShadowParams;
+		uint pad0;
 		uint ClusterSize[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightCullingCB);
+	static_assert(sizeof(LightCullingCB) == 32);
 
 	struct alignas(16) PerFrame
 	{
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		uint pad0[2];
+		uint ContactShadowFlags;
+		uint ContactShadowParams;
 		uint ClusterSize[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
@@ -152,6 +156,9 @@ public:
 	eastl::unique_ptr<Buffer> lightIndexCounter = nullptr;
 	eastl::unique_ptr<Buffer> lightIndexList = nullptr;
 	eastl::unique_ptr<Buffer> lightGrid = nullptr;
+	eastl::unique_ptr<Buffer> contactShadowIndexCounter = nullptr;
+	eastl::unique_ptr<Buffer> contactShadowIndexList = nullptr;
+	eastl::unique_ptr<Buffer> contactShadowGrid = nullptr;
 
 	std::uint32_t lightCount = 0;
 	float lightsNear = 1;
@@ -249,6 +256,13 @@ struct ParticleLightInfo
 		float JsonPlacedLightIntensity = 1.0f;
 		bool JsonPlacedLightsInteriorsOnly = false;
 		bool JsonPlacedLightsPortalStrictOnly = false;
+		bool EnableContactShadows = false;
+		bool ContactShadowsInteriorsOnly = false;
+		bool EnableParticleContactShadows = false;
+		uint ContactShadowQuality = 1;
+		uint ContactShadowClusterBudget = 4;
+		uint ParticleContactShadowBudget = 1;
+		uint StrictContactShadowBudget = 4;
 	};
 
 	uint clusterSize[3] = { 16 };

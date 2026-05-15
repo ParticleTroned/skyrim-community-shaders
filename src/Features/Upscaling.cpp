@@ -24,6 +24,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
+	frameGenerationAllowInMenus,
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
@@ -1094,6 +1095,12 @@ void Upscaling::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Forces Frame Generation on unsupported/low-refresh setups.");
 				ImGui::TextUnformatted("Range: 0 Disabled, 1 Enabled.");
+			}
+
+			ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Keeps frame generation active while game menus are open.");
+				ImGui::TextUnformatted("May feel smoother, but increases menu input latency.");
 			}
 
 			ImGui::TreePop();
@@ -3968,8 +3975,11 @@ void Upscaling::FrameLimiter()
 		if (settings.frameLimitMode) {
 			// Fall back to the original timing method
 			// Use integer arithmetic for more precise timing
-			int64_t targetFrameTimeNS = int64_t(1000000000.0 / (refreshRate * (settings.frameGenerationMode && !globals::game::ui->GameIsPaused() ? 0.5 : 1.0)));
-			int64_t targetFrameTicks = (targetFrameTimeNS * qpf.QuadPart) / 1000000000LL;
+			static constexpr int64_t kNanosecondsPerSecond = 1000000000LL;
+			static constexpr double kFrameGenerationRateScale = 0.5;
+			const double frameRateScale = ShouldUseFrameGenerationThisFrame() ? kFrameGenerationRateScale : 1.0;
+			int64_t targetFrameTimeNS = int64_t(static_cast<double>(kNanosecondsPerSecond) / (refreshRate * frameRateScale));
+			int64_t targetFrameTicks = (targetFrameTimeNS * qpf.QuadPart) / kNanosecondsPerSecond;
 
 			static LARGE_INTEGER lastFrame = {};
 			LARGE_INTEGER timeNow;
@@ -4045,13 +4055,24 @@ double Upscaling::GetRefreshRate(HWND a_window)
 
 bool Upscaling::IsFrameGenerationActive() const
 {
-	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && fidelityFX.isFrameGenActive;
+	return ShouldUseFrameGenerationThisFrame() && fidelityFX.isFrameGenActive;
 }
 
 bool Upscaling::IsFrameGenerationDx12PathActive() const
 {
 	// Frame generation in this implementation runs via the DX12 swap-chain proxy path.
 	return d3d12SwapChainActive && !globals::game::isVR;
+}
+
+bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+{
+	auto* ui = globals::game::ui;
+	const auto* state = globals::state;
+	const bool pausedMenuOpen = ui && ui->GameIsPaused();
+	const bool mainOrLoadingMenuOpen = state && (state->isMainMenuOpen || state->isLoadingMenuOpen);
+	const bool menuOpen = pausedMenuOpen || mainOrLoadingMenuOpen;
+
+	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -4873,7 +4894,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (upscaling.d3d12SwapChainActive && upscaling.settings.frameGenerationMode)
+	if (upscaling.ShouldUseFrameGenerationThisFrame())
 		upscaling.CopySharedD3D12Resources();
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {

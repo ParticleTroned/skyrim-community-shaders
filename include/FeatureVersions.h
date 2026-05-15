@@ -4,6 +4,7 @@
 
 #include <map>
 #include <string_view>
+#include <unordered_set>
 
 namespace FeatureVersions
 {
@@ -34,6 +35,7 @@ namespace FeatureVersions
         {"TerrainHelper"sv,        {1,0,0}},
         {"TerrainShadows"sv,       {1,0,1}},
         {"TerrainVariation"sv,     {1,0,1}},
+        {"TruePBR"sv,              {1,0,0}},
         {"UnifiedWater"sv,         {1,0,0}},
         {"Upscaling"sv,            {1,3,5}},  
         {"VR"sv,                   {1,1,5}},
@@ -42,5 +44,33 @@ namespace FeatureVersions
         {"WeatherEditor"sv,        {1,0,0}},  
         {"WetnessEffects"sv,       {3,0,0}},
         {"Wetterness"sv,           {1,0,0}},
+    };
+
+    inline const std::unordered_set<std::string_view> FEATURE_CORE_NAMES{
+        "DynamicCubemaps"sv,
+        "ExtendedMaterials"sv,
+        "ExtendedTranslucency"sv,
+        "GrassCollision"sv,
+        "GrassLighting"sv,
+        "ImageBasedLighting"sv,
+        "InteriorSun"sv,
+        "InverseSquareLighting"sv,
+        "LODBlending"sv,
+        "LightLimitFix"sv,
+        "LinearLighting"sv,
+        "PerformanceOverlay"sv,
+        "RenderDoc"sv,
+        "ScreenSpaceGI"sv,
+        "ScreenSpaceShadows"sv,
+        "Skylighting"sv,
+        "SubsurfaceScattering"sv,
+        "TerrainBlending"sv,
+        "TerrainShadows"sv,
+        "TruePBR"sv,
+        "Upscaling"sv,
+        "VR"sv,
+        "VolumetricLighting"sv,
+        "WaterEffects"sv,
+        "WeatherEditor"sv
     };
 }

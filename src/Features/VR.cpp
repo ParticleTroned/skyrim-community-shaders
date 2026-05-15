@@ -491,8 +491,7 @@ void VR::DrawSettings()
 	// Combo recording popup
 	if (this->isCapturingCombo) {
 		ImGui::OpenPopup("Record Combo");
-		ImGui::SetNextWindowSize(ImVec2(400.0f * Util::GetUIScale(), 200.0f * Util::GetUIScale()), ImGuiCond_FirstUseEver);
-		if (ImGui::BeginPopupModal("Record Combo", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		if (auto popup = Util::CenteredPopupModal("Record Combo")) {
 			// Helper function to get button name
 			auto GetButtonName = [](uint32_t key) -> const char* {
 				switch (key) {
@@ -678,8 +677,6 @@ void VR::DrawSettings()
 				recordingButtonControllers.clear();
 				ImGui::CloseCurrentPopup();
 			}
-
-			ImGui::EndPopup();
 		}
 	}
 }

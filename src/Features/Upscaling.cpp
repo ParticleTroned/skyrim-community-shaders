@@ -4055,7 +4055,7 @@ double Upscaling::GetRefreshRate(HWND a_window)
 
 bool Upscaling::IsFrameGenerationActive() const
 {
-	return ShouldUseFrameGenerationThisFrame() && fidelityFX.isFrameGenActive;
+	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && fidelityFX.isFrameGenActive;
 }
 
 bool Upscaling::IsFrameGenerationDx12PathActive() const
@@ -4067,9 +4067,9 @@ bool Upscaling::IsFrameGenerationDx12PathActive() const
 bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 {
 	auto* ui = globals::game::ui;
-	const auto* state = globals::state;
+	auto* state = globals::state;
 	const bool pausedMenuOpen = ui && ui->GameIsPaused();
-	const bool mainOrLoadingMenuOpen = state && (state->isMainMenuOpen || state->isLoadingMenuOpen);
+	const bool mainOrLoadingMenuOpen = state && state->IsMainOrLoadingMenuOpen(ui);
 	const bool menuOpen = pausedMenuOpen || mainOrLoadingMenuOpen;
 
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);

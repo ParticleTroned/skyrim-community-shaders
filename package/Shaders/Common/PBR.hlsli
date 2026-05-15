@@ -174,6 +174,7 @@ namespace PBR
 			}
 
 			[branch] if ((PBRFlags & Flags::Subsurface) != 0)
+#	if !defined(TREE_ANIM)
 			{
 				const float subsurfacePower = 12.234;
 				float forwardScatter = exp2(saturate(-VdotL) * subsurfacePower - subsurfacePower);
@@ -181,6 +182,12 @@ namespace PBR
 				float subsurface = lerp(backScatter, 1, forwardScatter) * (1.0 - material.Thickness);
 				lightingOutput.transmission += material.SubsurfaceColor * subsurface * context.lightColor * BRDF::Diffuse_Lambert() * kD;
 			}
+#	else
+			{
+				float subsurfaceFoliage = saturate(-NdotL) * (1.0 - material.Thickness);
+				lightingOutput.transmission += material.SubsurfaceColor * subsurfaceFoliage * context.lightColor * BRDF::Diffuse_Lambert() * kD;
+			}
+#	endif
 			else if ((PBRFlags & Flags::TwoLayer) != 0)
 			{
 				float coatNdotL = satNdotL;

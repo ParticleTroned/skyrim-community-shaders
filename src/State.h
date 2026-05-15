@@ -217,6 +217,12 @@ public:
 	bool isMainMenuOpen = false;
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
+	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
+	bool IsMainOrLoadingMenuOpen(RE::UI* ui) const
+	{
+		return IsMainOrLoadingMenuOpen() ||
+		       (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)));
+	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 

@@ -355,13 +355,17 @@ string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 # Set AIO directory path used by multiple targets below
 set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
 
-# Robocopy wrapper for Windows incremental file copy (used by deployment targets)
+# Robocopy wrapper for Windows incremental file copy (used by deployment targets).
+# Invoke through cmd /c with the absolute path: CMake may strip binary-dir
+# command paths in generated MSBuild rules, and Windows will not run a script
+# from the current directory without an explicit path prefix.
 if(WIN32)
-    set(ROBOCOPY_WRAPPER "${CMAKE_BINARY_DIR}/robocopy_wrapper.cmd")
+    set(ROBOCOPY_WRAPPER_PATH "${CMAKE_BINARY_DIR}/robocopy_wrapper.cmd")
     file(
-        WRITE ${ROBOCOPY_WRAPPER}
+        WRITE "${ROBOCOPY_WRAPPER_PATH}"
         "@echo off\r\nrem Robocopy wrapper: forwards all args to robocopy and normalizes exit codes\r\nrobocopy %*\r\nset rc=%ERRORLEVEL%\r\nif %rc% GEQ 8 exit /b %rc%\r\nexit /b 0\r\n"
     )
+    set(ROBOCOPY_WRAPPER cmd /c "${ROBOCOPY_WRAPPER_PATH}")
 endif()
 
 # #######################################################################################################################
@@ -421,14 +425,18 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     # Prepare AIO only when sources change. Gather package + feature files as
     # inputs so the prepare step runs only when something actually changed.
+    # Shader files are intentionally excluded: copy_shaders.stamp owns those
+    # destinations, and parallel copy_if_different calls can race on Windows.
     file(
         GLOB_RECURSE _AIO_PACKAGE_FILES
         LIST_DIRECTORIES FALSE
         "${CMAKE_SOURCE_DIR}/package/*"
     )
     list(FILTER _AIO_PACKAGE_FILES EXCLUDE REGEX "/Tests/")
+    list(FILTER _AIO_PACKAGE_FILES EXCLUDE REGEX "/Shaders/")
     foreach(_fpath IN LISTS FEATURE_PATHS)
         file(GLOB_RECURSE _tmp LIST_DIRECTORIES FALSE "${_fpath}/*")
+        list(FILTER _tmp EXCLUDE REGEX "/Shaders/")
         list(APPEND _AIO_PACKAGE_FILES ${_tmp})
     endforeach()
 
@@ -460,16 +468,19 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
 
-    # Copy package files (exclude test files from production packages)
+    # Copy package files (exclude test files and shaders from production
+    # non-shader copy; shader copying is handled by copy_shaders.stamp).
     file(
         GLOB_RECURSE _AIO_PACKAGE_SOURCE_FILES
         LIST_DIRECTORIES FALSE
         "${CMAKE_SOURCE_DIR}/package/*"
     )
     list(FILTER _AIO_PACKAGE_SOURCE_FILES EXCLUDE REGEX "/Tests/")
+    list(FILTER _AIO_PACKAGE_SOURCE_FILES EXCLUDE REGEX "/Shaders/")
     append_copy_if_different(_prepare_aio_cmds _AIO_PACKAGE_SOURCE_FILES "${CMAKE_SOURCE_DIR}/package" "${AIO_DIR}")
 
-    # Copy feature folders (only files, preserve existing files in AIO)
+    # Copy feature folders (only files, preserve existing files in AIO).
+    # Shader files are excluded because copy_shaders.stamp owns Shaders/.
     foreach(_fpath IN LISTS FEATURE_PATHS)
         if(EXISTS "${_fpath}")
             file(
@@ -477,6 +488,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
                 LIST_DIRECTORIES FALSE
                 "${_fpath}/*"
             )
+            list(FILTER _feature_files EXCLUDE REGEX "/Shaders/")
             append_copy_if_different(_prepare_aio_cmds _feature_files "${_fpath}" "${AIO_DIR}")
         endif()
     endforeach()

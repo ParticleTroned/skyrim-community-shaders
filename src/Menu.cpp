@@ -1066,9 +1066,7 @@ void Menu::ProcessInputEventQueue()
 								 // Locked or PlayMode -> fully exit preview
 								 ew->ExitPreviewMode();
 							 } else {
-								 auto p = RE::PlayerCharacter::GetSingleton();
-								 if (p && p->parentCell)
-									 ew->open = !ew->open;
+								 WeatherEditor::ToggleEditorWindow();
 							 }
 						 } },
 					};

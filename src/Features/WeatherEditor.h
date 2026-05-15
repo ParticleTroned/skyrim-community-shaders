@@ -41,6 +41,9 @@ public:
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;
 
+	static void OpenEditorWindow();
+	static void ToggleEditorWindow();
+
 	void LerpWeather(RE::TESWeather*, RE::TESWeather*, float);
 
 	/**
@@ -133,6 +136,9 @@ private:
 	// Static state for weather picker and data
 	static inline bool s_dataAvailable = false;
 	static inline bool s_weathersLoaded = false;
+	static inline bool s_resourcesInitialized = false;
+	static inline bool s_checkedWidgetJsonFiles = false;
+	static inline bool s_hasWidgetJsonFiles = false;
 	static inline std::vector<RE::TESWeather*> s_allWeathers;
 	static inline std::vector<RE::TESWeather*> s_filteredWeathers;
 	static inline int s_selectedWeatherIdx = -1;
@@ -163,6 +169,10 @@ private:
 	static void DisplayWindInfo(RE::TESWeather* weather);
 
 	// Helper functions
+	static bool CanOpenEditor();
+	static bool HasWidgetJsonFiles();
+	static bool ShouldPreloadEditorResources();
+	static void EnsureWeatherListLoaded();
 	static void EnsureDataLoaded();
 	static void ApplySavedEditorOverrides();
 	static void ApplySavedWeatherOverrides();

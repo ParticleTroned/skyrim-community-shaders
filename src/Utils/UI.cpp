@@ -1610,7 +1610,6 @@ namespace Util
 		ColoredTextV(Colors::ColorFn(), fmt, args); \
 		va_end(args);                               \
 	}
-
 #define UTIL_TEXT_WRAPPED(Name, ColorFn)                   \
 	void Name(const char* fmt, ...)                        \
 	{                                                      \

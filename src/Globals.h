@@ -36,6 +36,7 @@ struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
 struct WeatherEditor;
+struct ScreenshotFeature;
 
 class ParticleLights;
 class State;
@@ -94,6 +95,7 @@ namespace globals
 		extern ExtendedTranslucency extendedTranslucency;
 		extern Upscaling upscaling;
 		extern RenderDoc renderDoc;
+		extern ScreenshotFeature screenshotFeature;
 		extern WeatherEditor weatherEditor;
 		extern TruePBR truePBR;
 

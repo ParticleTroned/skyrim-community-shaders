@@ -320,8 +320,10 @@ void TruePBR::SetupResources()
 	SetupMaterialObjectData();
 }
 
-void TruePBR::PrePass()
+void TruePBR::Prepass()
 {
+	SetupDefaultPBRLandTextureSet();
+
 	auto context = globals::d3d::context;
 	if (!glintsNoiseTexture)
 		SetupGlintsTexture();
@@ -405,11 +407,6 @@ void TruePBR::SetupGlintsTexture()
 	}
 
 	noiseGenProgram->Release();
-}
-
-void TruePBR::SetupFrame()
-{
-	SetupDefaultPBRLandTextureSet();
 }
 
 void TruePBR::SetupTextureSetData()
@@ -1119,7 +1116,7 @@ void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::T
 		return;
 	}
 
-	auto truePBR = globals::truePBR;
+	auto truePBR = &globals::features::truePBR;
 	auto* textureSetData = truePBR->GetPBRTextureSetData(textureSet);
 	const bool isPbr = textureSetData != nullptr;
 
@@ -1152,7 +1149,7 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		return false;
 	}
 
-	auto singleton = globals::truePBR;
+	auto singleton = &globals::features::truePBR;
 
 	bool isPbr = false;
 	if (land->loadedData != nullptr) {
@@ -1256,7 +1253,7 @@ struct TESForm_GetFormEditorID
 {
 	static const char* thunk(const RE::TESForm* form)
 	{
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 		auto it = singleton->editorIDs.find(form->GetFormID());
 		if (it == singleton->editorIDs.cend()) {
 			return "";
@@ -1270,7 +1267,7 @@ struct TESForm_SetFormEditorID
 {
 	static bool thunk(RE::TESForm* form, const char* editorId)
 	{
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 		singleton->editorIDs[form->GetFormID()] = editorId;
 		return true;
 	}
@@ -1282,7 +1279,7 @@ struct BSTempEffectSimpleDecal_SetupGeometry
 	static void thunk(RE::BSTempEffectSimpleDecal* decal, RE::BSGeometry* geometry, RE::BGSTextureSet* textureSet, bool blended)
 	{
 		func(decal, geometry, textureSet, blended);
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 		auto unknownProperty = geometry->GetGeometryRuntimeData().shaderProperty.get();
 		if (auto shaderProperty = unknownProperty->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(unknownProperty) : nullptr;
 			shaderProperty != nullptr && singleton->IsPBRTextureSet(textureSet)) {
@@ -1319,7 +1316,7 @@ struct BSTempEffectGeometryDecal_Initialize
 	static void thunk(RE::BSTempEffectGeometryDecal* decal)
 	{
 		func(decal);
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 
 		if (decal->decal != nullptr && singleton->IsPBRTextureSet(decal->texSet)) {
 			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(RE::MemoryManager::GetSingleton()->Allocate(sizeof(RE::BSLightingShaderProperty), 0, false));
@@ -1364,7 +1361,7 @@ struct TESBoundObject_Clone3D
 {
 	static RE::NiAVObject* thunk(RE::TESBoundObject* object, RE::TESObjectREFR* ref, bool arg3)
 	{
-		auto truePBR = globals::truePBR;
+		auto truePBR = &globals::features::truePBR;
 		auto* result = func(object, ref, arg3);
 		if (result != nullptr && ref != nullptr && ref->data.objectReference != nullptr && ref->data.objectReference->formType == RE::FormType::Static) {
 			auto* stat = static_cast<RE::TESObjectSTAT*>(ref->data.objectReference);
@@ -1428,7 +1425,7 @@ struct BGSTextureSet_ToShaderTextureSet
 {
 	static RE::BSShaderTextureSet* thunk(RE::BGSTextureSet* textureSet)
 	{
-		auto truePBR = globals::truePBR;
+		auto truePBR = &globals::features::truePBR;
 		truePBR->currentTextureSet = textureSet;
 
 		return func(textureSet);
@@ -1442,7 +1439,7 @@ struct BSLightingShaderProperty_OnLoadTextureSet
 	{
 		func(property, a2);
 
-		auto truePBR = globals::truePBR;
+		auto truePBR = &globals::features::truePBR;
 		truePBR->currentTextureSet = nullptr;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;

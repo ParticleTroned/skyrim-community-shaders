@@ -17,8 +17,6 @@
 #include "Features/TerrainVariation.h"
 #include "Features/WetnessEffects.h"
 
-#include "TruePBR.h"
-
 #include <cstddef>
 #include <cstring>
 #include <memory>

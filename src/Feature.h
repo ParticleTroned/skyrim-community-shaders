@@ -100,6 +100,15 @@ public:
 	virtual void Prepass() {}
 	virtual void EarlyPrepass() {}
 
+	/**
+	 * @brief Called during disk-cache shader loading to generate additional shader permutations.
+	 *
+	 * Invoked once per BSShader load when the shader cache is in disk-cache mode.
+	 * Features can override this to inject custom permutation descriptors into the
+	 * shader cache so feature-specific technique variants are compiled and stored.
+	 */
+	virtual void GenerateShaderPermutations(RE::BSShader*) {}
+
 	virtual void Load() {}  // Called during SKSE Load - earliest hook point only for critical hooks like d3d
 	virtual void DataLoaded() {}
 	virtual void PostPostLoad() {}

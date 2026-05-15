@@ -967,6 +967,21 @@ namespace Util
 		ImVec4 GetDisabled();  // Gray - disabled items (from theme Disable)
 	}
 
+	// Theme-colored text rendering with scoped push/text/pop per call.
+	namespace Text
+	{
+		void Warning(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedWarning(const char* fmt, ...) IM_FMTARGS(1);
+		void Error(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedError(const char* fmt, ...) IM_FMTARGS(1);
+		void Success(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedSuccess(const char* fmt, ...) IM_FMTARGS(1);
+		void Info(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedInfo(const char* fmt, ...) IM_FMTARGS(1);
+		void Disabled(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedDisabled(const char* fmt, ...) IM_FMTARGS(1);
+	}
+
 	/**
 	 * @brief Input handling utilities for ImGui integration
 	 *

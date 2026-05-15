@@ -1,6 +1,7 @@
 #include "Hooks.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+#include "Utils/ExternalEmittance.h"
 
 #include "Feature.h"
 #include "Globals.h"
@@ -347,6 +348,7 @@ namespace EffectExtensions
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
+			ExternalEmittance::UpdatePermutation(pass);
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
 

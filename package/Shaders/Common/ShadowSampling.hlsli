@@ -26,6 +26,9 @@
 #endif
 namespace ShadowSampling
 {
+	static const float MinDirectionalLightMultiplier = 1e-5;
+	static const float3 LightingSampleNormal = float3(0, 0, 1);
+	static const float3 ImageBasedLightingNormal = float3(0, 0, -1);
 
 	Texture2DArray<float4> SharedShadowMap : register(t18);
 
@@ -211,6 +214,22 @@ namespace ShadowSampling
 		}
 
 		return worldShadow;
+	}
+
+	float3 GetSceneLightingColor()
+	{
+		float3 ambientColor = max(0, SharedData::GetAmbient(LightingSampleNormal));
+
+#if defined(IBL)
+		if (SharedData::iblSettings.EnableIBL) {
+			ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, ImageBasedLightingNormal);
+		}
+#endif
+
+		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+		float3 directionalColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, MinDirectionalLightMultiplier), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+
+		return ambientColor + directionalColor;
 	}
 }
 

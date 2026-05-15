@@ -193,7 +193,8 @@ public:
 		EffectShadows = 1 << 3,
 		IsTree = 1 << 4,
 		GrassSphereNormal = 1 << 5,
-		IsFemale = 1 << 6
+		IsFemale = 1 << 6,
+		SuppressExternalEmittance = 1 << 7
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t

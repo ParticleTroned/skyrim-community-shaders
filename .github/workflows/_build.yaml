@@ -35,6 +35,10 @@ on:
                 description: "Optional suffix to invalidate the build cache"
                 type: string
                 default: ""
+            run-vs2022:
+                description: "Include vs2022 in the build matrix; set false for release builds where only vs2026 artifacts are shipped"
+                type: boolean
+                default: true
         outputs:
             version:
                 description: "CMake project version extracted from the build"
@@ -63,6 +67,9 @@ jobs:
                       vs-version: "2022"
                       cmake-preset: ALL-VS2022
                       build-dir: build/ALL-VS2022
+                exclude:
+                    - compiler:
+                          name: ${{ !inputs.run-vs2022 && 'vs2022' || '' }}
             fail-fast: false
         steps:
             - name: Checkout code

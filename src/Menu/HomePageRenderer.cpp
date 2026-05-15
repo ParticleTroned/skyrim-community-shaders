@@ -307,6 +307,22 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		ImGui::Text("%s", pressKeyText);
 	}
 
+	// Weather Editor hotkey status — updates live as user picks keys
+	{
+		auto& weatherKey = menu->GetSettings().WeatherEditorToggleKey;
+		if (weatherKey.empty()) {
+			const char* warnText = "Weather Editor hotkey unbound - chosen key uses Shift";
+			float warnWidth = ImGui::CalcTextSize(warnText).x;
+			ImGui::SetCursorPosX((windowWidth - warnWidth) * 0.5f);
+			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.0f, 1.0f), "%s", warnText);
+		} else {
+			std::string infoStr = "Weather Editor hotkey will be: " + Util::Input::KeyIdToString(weatherKey);
+			float infoWidth = ImGui::CalcTextSize(infoStr.c_str()).x;
+			ImGui::SetCursorPosX((windowWidth - infoWidth) * 0.5f);
+			ImGui::TextDisabled("%s", infoStr.c_str());
+		}
+	}
+
 	ImGui::Spacing();
 
 	// "You can change this later" text - wrapped and centered

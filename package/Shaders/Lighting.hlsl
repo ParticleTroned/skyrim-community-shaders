@@ -3248,6 +3248,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pbrVertexColor = 1;
 #		endif
 	pbrVertexColor = Color::SrgbToLinear(pbrVertexColor);
+	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
+	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 
 	if (!Color::UseLinearLightingColorAdjustments()) {
 		baseColor.xyz = Color::SrgbToLinear(baseColor.xyz) * pbrVertexColor;
@@ -4076,17 +4078,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 glowColor = Color::Glowmap(TexGlowSampler.Sample(SampGlowSampler, uv).xyz);
 
 #		if defined(TRUE_PBR)
-		float3 vertexColor = Color::SrgbToLinear(input.Color.xyz);
+		float3 emitVertexColor = Color::SrgbToLinear(input.Color.xyz);
+		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
+		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 
 		if (!Color::UseLinearLightingColorAdjustments()) {
 			emitColor = Color::SrgbToLinear(emitColor);
 			glowColor = Color::SrgbToLinear(glowColor);
 			emitColor *= glowColor;
-			emitColor *= vertexColor;
+			emitColor *= emitVertexColor;
 			emitColor = Color::LinearToSrgb(emitColor);
 		} else {
 			emitColor *= glowColor;
-			emitColor *= vertexColor;
+			emitColor *= emitVertexColor;
 		}
 #		else
 		if (!Color::UseLinearLightingColorAdjustments()) {

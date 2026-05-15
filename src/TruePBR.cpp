@@ -40,6 +40,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	specularLevel,
 	glintParameters);
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TruePBR::Settings,
+	VertexAOStrength);
+
 #define CHECK_PBR_TEXTURE(textureName)                                                                         \
 	if (!(pbrMaterial->textureName)) {                                                                         \
 		logger::warn("[TruePBR] {} missing {}; treating as nonPBR", pbrMaterial->inputFilePath, #textureName); \
@@ -116,6 +120,7 @@ void TruePBR::DrawSettings()
 		if (ImGui::IsItemHovered()) {
 			ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
 		}
+		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 
 		if (ImGui::TreeNodeEx("Texture Set Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -309,7 +314,17 @@ void TruePBR::DrawSettings()
 				}
 			}
 			ImGui::TreePop();
-		}
+	}
+}
+
+void TruePBR::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void TruePBR::LoadSettings(json& o_json)
+{
+	settings = o_json;
 }
 
 void TruePBR::SetupResources()
@@ -326,6 +341,7 @@ void TruePBR::RestoreDefaultSettings()
 
 	globals::state->pbrMetalReflectionScale = State::kDefaultPbrMetalReflectionScale;
 	globals::state->pbrMetalHighlightScale = State::kDefaultPbrMetalHighlightScale;
+	settings = {};
 }
 
 void TruePBR::Prepass()

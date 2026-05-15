@@ -248,11 +248,12 @@ struct BSShader_LoadShaders
 
 		auto state = globals::state;
 		auto shaderCache = globals::shaderCache;
-		auto truePBR = globals::truePBR;
 
 		if (shaderCache->IsDiskCache() || shaderCache->IsDump()) {
 			if (shaderCache->IsDiskCache()) {
-				truePBR->GenerateShaderPermutations(shader);
+				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
+					feature->GenerateShaderPermutations(shader);
+				});
 			}
 
 			for (const auto& entry : shader->vertexShaders) {
@@ -855,8 +856,8 @@ namespace Hooks
 			bool vanillaResult = func(land);
 
 			// setup material for PBR
-			auto TruePBRSingleton = globals::truePBR;
-			if (TruePBRSingleton->TESObjectLAND_SetupMaterial(land)) {
+			auto& truePBR = globals::features::truePBR;
+			if (truePBR.loaded && truePBR.TESObjectLAND_SetupMaterial(land)) {
 				// if PBR, we are done
 				return true;
 			}
@@ -877,8 +878,8 @@ namespace Hooks
 		static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
 		{
 			// setup material for PBR
-			auto TruePBRSingleton = globals::truePBR;
-			if (TruePBRSingleton->BSLightingShader_SetupMaterial(shader, material)) {
+			auto& truePBR = globals::features::truePBR;
+			if (truePBR.loaded && truePBR.BSLightingShader_SetupMaterial(shader, material)) {
 				// if PBR, we are done
 				return;
 			}

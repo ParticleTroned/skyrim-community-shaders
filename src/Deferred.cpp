@@ -4,7 +4,6 @@
 
 #include "ShaderCache.h"
 #include "State.h"
-#include "TruePBR.h"
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
@@ -297,7 +296,6 @@ void Deferred::PrepassPasses()
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
-	globals::truePBR->PrePass();
 	Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); }, true);
 }
 
@@ -751,7 +749,4 @@ void Deferred::Hooks::Renderer_ResetState::thunk(void* This)
 	ID3D11Buffer* buffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, buffers);
 	Util::BindSharedDataConstantBuffersForCS(context);
-
-	auto* singleton = globals::truePBR;
-	singleton->SetupFrame();
 }

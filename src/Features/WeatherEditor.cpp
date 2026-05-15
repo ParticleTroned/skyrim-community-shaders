@@ -19,6 +19,7 @@
 #include "WeatherEditor/Weather/WeatherWidget.h"
 #include "WeatherEditor/WeatherUtils.h"
 
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -33,6 +34,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	constexpr const char* kJsonExtension = ".json";
+
 	struct OverrideLoadStats
 	{
 		size_t applied = 0;
@@ -179,13 +182,95 @@ void WeatherEditor::DataLoaded()
 	ApplySavedEditorOverrides();
 }
 
+bool WeatherEditor::CanOpenEditor()
+{
+	auto player = RE::PlayerCharacter::GetSingleton();
+	return player && player->parentCell && s_dataAvailable;
+}
+
+bool WeatherEditor::HasWidgetJsonFiles()
+{
+	if (s_checkedWidgetJsonFiles)
+		return s_hasWidgetJsonFiles;
+
+	const auto communityShaderPath = Util::PathHelpers::GetCommunityShaderPath();
+	for (const auto folderName : Widget::kSaveFolderNames) {
+		const auto widgetSettingsPath = communityShaderPath / std::filesystem::path(std::string(folderName.data(), folderName.size()));
+		std::error_code ec;
+		const bool isDirectory = std::filesystem::is_directory(widgetSettingsPath, ec);
+		if (ec) {
+			logger::warn("[WeatherEditor] Failed to inspect widget settings path '{}': {}", widgetSettingsPath.string(), ec.message());
+			continue;
+		}
+		if (!isDirectory)
+			continue;
+
+		for (std::filesystem::directory_iterator it(widgetSettingsPath, ec), end; !ec && it != end; it.increment(ec)) {
+			std::error_code entryEc;
+			const bool isRegularFile = it->is_regular_file(entryEc);
+			if (entryEc) {
+				logger::warn("[WeatherEditor] Failed to inspect widget settings file '{}': {}", it->path().string(), entryEc.message());
+				continue;
+			}
+			if (isRegularFile && _stricmp(it->path().extension().string().c_str(), kJsonExtension) == 0) {
+				s_hasWidgetJsonFiles = true;
+				s_checkedWidgetJsonFiles = true;
+				return true;
+			}
+		}
+		if (ec) {
+			logger::warn("[WeatherEditor] Failed to scan widget settings path '{}': {}", widgetSettingsPath.string(), ec.message());
+			continue;
+		}
+	}
+
+	s_checkedWidgetJsonFiles = true;
+	return false;
+}
+
+bool WeatherEditor::ShouldPreloadEditorResources()
+{
+	return s_dataAvailable && !s_resourcesInitialized && CanOpenEditor() && HasWidgetJsonFiles();
+}
+
+void WeatherEditor::EnsureWeatherListLoaded()
+{
+	if (!s_dataAvailable)
+		return;
+
+	LoadAllWeathers();
+}
+
 void WeatherEditor::EnsureDataLoaded()
 {
 	if (!s_dataAvailable)
 		return;
 
 	EditorWindow::GetSingleton()->EnsureResources();
+	s_resourcesInitialized = true;
 	LoadAllWeathers();
+}
+
+void WeatherEditor::OpenEditorWindow()
+{
+	if (!CanOpenEditor())
+		return;
+
+	EnsureDataLoaded();
+	EditorWindow::GetSingleton()->open = true;
+}
+
+void WeatherEditor::ToggleEditorWindow()
+{
+	auto* editorWindow = EditorWindow::GetSingleton();
+	if (!editorWindow)
+		return;
+
+	if (!editorWindow->open && !CanOpenEditor())
+		return;
+	if (!editorWindow->open)
+		EnsureDataLoaded();
+	editorWindow->open = !editorWindow->open;
 }
 
 void WeatherEditor::ApplySavedEditorOverrides()
@@ -320,13 +405,13 @@ void LerpDirectional(RE::BGSDirectionalAmbientLightingColors::Directional& oldCo
 
 void WeatherEditor::DrawSettings()
 {
-	EnsureDataLoaded();
+	EnsureWeatherListLoaded();
 	auto player = RE::PlayerCharacter::GetSingleton();
 	bool hasCell = player && player->parentCell;
-	bool canOpen = hasCell && s_dataAvailable;
+	bool canOpen = CanOpenEditor();
 	ImGui::BeginDisabled(!canOpen);
 	if (ImGui::Button(hasCell ? "Open Editor" : "Open Editor (no active cell)", { -1, 0 })) {
-		EditorWindow::GetSingleton()->open = true;
+		OpenEditorWindow();
 	}
 	ImGui::EndDisabled();
 
@@ -342,6 +427,10 @@ void WeatherEditor::DrawSettings()
 
 void WeatherEditor::Prepass()
 {
+	if (ShouldPreloadEditorResources()) {
+		EnsureDataLoaded();
+	}
+
 	// Re-enforce weather lock if active (handles time changes)
 	auto editorWindow = EditorWindow::GetSingleton();
 	if (editorWindow->IsWeatherLocked()) {

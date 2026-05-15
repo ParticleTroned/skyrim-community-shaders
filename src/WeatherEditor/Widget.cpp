@@ -85,7 +85,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("No saved file - reset {} to vanilla values", GetEditorID()),
-				ImVec4(0.3f, 0.8f, 1.0f, 1.0f),
+				Util::Colors::GetInfo(),
 				3.0f);
 		}
 		return;
@@ -99,7 +99,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Failed to open file for {}", GetEditorID()),
-				ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+				Util::Colors::GetWarning(),
 				3.0f);
 		}
 		return;
@@ -115,7 +115,7 @@ void Widget::Load(bool showNotification)
 			if (showNotification) {
 				EditorWindow::GetSingleton()->ShowNotification(
 					std::format("Invalid file for {} - resetting to vanilla", GetEditorID()),
-					ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+					Util::Colors::GetWarning(),
 					3.0f);
 			}
 			js = json();
@@ -128,7 +128,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Loaded saved settings for {}", GetEditorID()),
-				ImVec4(0.0f, 1.0f, 0.5f, 1.0f),
+				Util::Colors::GetSuccess(),
 				3.0f);
 		}
 
@@ -139,7 +139,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Parse error for {} - resetting to vanilla", GetEditorID()),
-				ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+				Util::Colors::GetError(),
 				3.0f);
 		}
 		js = json();
@@ -151,7 +151,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Error loading {} - resetting to vanilla", GetEditorID()),
-				ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+				Util::Colors::GetError(),
 				3.0f);
 		}
 		js = json();
@@ -183,7 +183,7 @@ void Widget::Delete()
 
 		EditorWindow::GetSingleton()->ShowNotification(
 			std::format("Deleted {} - reverted to vanilla values", GetEditorID()),
-			ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+			Util::Colors::GetSuccess(),
 			3.0f);
 	} catch (const std::filesystem::filesystem_error& e) {
 		logger::warn("Error deleting settings file ({}) : {}\n", filePath, e.what());
@@ -375,8 +375,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 		// Transparent icon button style
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.8f, 0.25f));
+		ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kIconButtonTransparent);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, WidgetUI::kIconButtonHover);
 
 		auto iconButton = [&](const char* suffix, void* texture, const char* tooltip, auto callback) {
 			if (!texture)

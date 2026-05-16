@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -9,7 +10,7 @@
 
 #include <algorithm>
 
-inline constexpr unsigned int CSBuildNumber = 2;
+inline constexpr unsigned int CSBuildNumber = 3;
 
 namespace CSPluginAPI
 {
@@ -33,6 +34,12 @@ namespace CSPluginAPI
 
 		virtual DLSSMode GetDLSSMode() override;
 		virtual void SetDLSSMode(DLSSMode mode) override;
+
+		virtual bool GetLightLimitFixContactShadowsEnabled() override;
+		virtual void SetLightLimitFixContactShadowsEnabled(bool enabled) override;
+
+		virtual DLSSProfile GetDLSSProfile() override;
+		virtual void SetDLSSProfile(DLSSProfile profile) override;
 	};
 
 	namespace detail
@@ -59,6 +66,20 @@ namespace CSPluginAPI
 			case DLSSMode::kBalanced:
 			case DLSSMode::kPerformance:
 			case DLSSMode::kUltraPerformance:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		inline bool IsValidDLSSProfile(DLSSProfile profile)
+		{
+			switch (profile) {
+			case DLSSProfile::kJ:
+			case DLSSProfile::kK:
+			case DLSSProfile::kL:
+			case DLSSProfile::kM:
+			case DLSSProfile::kF:
 				return true;
 			default:
 				return false;
@@ -142,5 +163,31 @@ namespace CSPluginAPI
 		}
 
 		globals::features::upscaling.settings.qualityMode = static_cast<uint32_t>(mode);
+	}
+
+	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()
+	{
+		return globals::features::lightLimitFix.settings.EnableContactShadows;
+	}
+
+	inline void CSInterface001::SetLightLimitFixContactShadowsEnabled(bool enabled)
+	{
+		globals::features::lightLimitFix.settings.EnableContactShadows = enabled;
+	}
+
+	inline DLSSProfile CSInterface001::GetDLSSProfile()
+	{
+		const uint32_t clampedProfile = std::min(globals::features::upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+		return static_cast<DLSSProfile>(clampedProfile);
+	}
+
+	inline void CSInterface001::SetDLSSProfile(DLSSProfile profile)
+	{
+		if (!detail::IsValidDLSSProfile(profile)) {
+			logger::warn("[CS API] Ignoring invalid DLSS profile value {}", static_cast<uint32_t>(profile));
+			return;
+		}
+
+		globals::features::upscaling.settings.dlssPreset = static_cast<uint32_t>(profile);
 	}
 }  // namespace CSPluginAPI

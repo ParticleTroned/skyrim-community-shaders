@@ -34,6 +34,15 @@ namespace CSPluginAPI
 		kUltraPerformance = 4
 	};
 
+	enum class DLSSProfile : uint32_t
+	{
+		kJ = 0,
+		kK = 1,
+		kL = 2,
+		kM = 3,
+		kF = 4
+	};
+
 	// This object provides access to Community Shaders' mod support API.
 	struct ICSInterface001
 	{
@@ -49,9 +58,15 @@ namespace CSPluginAPI
 		virtual bool GetVolumetricLightingExteriorEnabled() = 0;
 		virtual void SetVolumetricLightingExteriorEnabled(bool enabled) = 0;
 
-		// DLSS quality mode only (does not expose profile/reflex controls).
+		// DLSS quality mode only (does not expose reflex controls).
 		virtual DLSSMode GetDLSSMode() = 0;
 		virtual void SetDLSSMode(DLSSMode mode) = 0;
+
+		virtual bool GetLightLimitFixContactShadowsEnabled() = 0;
+		virtual void SetLightLimitFixContactShadowsEnabled(bool enabled) = 0;
+
+		virtual DLSSProfile GetDLSSProfile() = 0;
+		virtual void SetDLSSProfile(DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI
 

@@ -78,6 +78,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableOuterCascadeCasterBias,
 	EnableLightingFoveation,
 	EnableLightingFoveationHardCutoff,
+	EnableUtilityFoveation,
+	EnableUtilityFoveationHardCutoff,
 	menuOverlayPath)
 
 //=============================================================================
@@ -1106,7 +1108,9 @@ namespace
 		const bool isVR = REL::Module::IsVR();
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
 		const bool lightingActive = isVR && settings.EnableLightingFoveation && profile.available && profile.coverageArea < 0.999f;
+		const bool utilityActive = isVR && settings.EnableUtilityFoveation && profile.available && profile.coverageArea < 0.999f;
 		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" : "feathered";
+		const char* utilityMode = !settings.EnableUtilityFoveation ? "disabled" : settings.EnableUtilityFoveationHardCutoff ? "hard cutoff" : "feathered";
 
 		if (ImGui::CollapsingHeader("Shader Detail Foveation", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Checkbox("FOV Lighting Detail", &settings.EnableLightingFoveation);
@@ -1125,15 +1129,35 @@ namespace
 			}
 			ImGui::EndDisabled();
 
+			ImGui::Separator();
+
+			ImGui::Checkbox("FOV Utility Shadowmask Filtering", &settings.EnableUtilityFoveation);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive Utility shader shadowmask filtering.");
+				ImGui::TextUnformatted("The full visible FOV uses the normal DLSS/FOV mask, or the outside edge of Peripheral TAA when DLSS/FOV + Peripheral TAA is enabled.");
+				ImGui::TextUnformatted("Outside the mask, high-cost PCF filtering fades toward a single shadow comparison while keeping valid shadowmask output.");
+			}
+
+			ImGui::BeginDisabled(!settings.EnableUtilityFoveation);
+			ImGui::Checkbox("Hard Cutoff Outside FOV##Utility", &settings.EnableUtilityFoveationHardCutoff);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses a binary mask for Utility shader shadowmask filtering.");
+				ImGui::TextUnformatted("Inside the FOV mask keeps full shadowmask filtering; outside the mask skips PCF filtering and uses one shadow comparison.");
+				ImGui::TextUnformatted("This can save more work, but can make shadow filter transitions more visible near the mask edge.");
+			}
+			ImGui::EndDisabled();
+
 			ImGui::Spacing();
 			ImGui::Text("Lighting detail foveation: %s", lightingActive ? "active" : "inactive");
 			ImGui::Text("Lighting detail mode: %s", lightingMode);
+			ImGui::Text("Utility shadowmask foveation: %s", utilityActive ? "active" : "inactive");
+			ImGui::Text("Utility shadowmask mode: %s", utilityMode);
 			ImGui::Text("FOV profile: %s", profile.available ? "available" : "unavailable");
 			if (profile.available) {
 				ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "DLSS/FOV center");
 				ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
 				ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
-			} else if (settings.EnableLightingFoveation) {
+			} else if (settings.EnableLightingFoveation || settings.EnableUtilityFoveation) {
 				ImGui::TextDisabled("Requires active foveated upscaling.");
 			}
 		}

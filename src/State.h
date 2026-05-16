@@ -285,6 +285,7 @@ public:
 		float4 AmbientSHG;
 		float4 AmbientSHB;
 		float4 VRFoveationData0;           // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
+		float4 VRFoveationData1;           // x=utility shadowmask filtering mode: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationCenterOffsets;   // xy=left eye offset, zw=right eye offset
 	};
 #ifdef _MSC_VER
@@ -295,6 +296,7 @@ public:
 	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationData0) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VRFoveationData1) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationCenterOffsets) % 16 == 0);
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;

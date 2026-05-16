@@ -20,6 +20,9 @@
 #	define FOVEATED_MASK_SHAPE_POWER 4
 #endif
 
+static const float FOVEATED_DETAIL_MODE_FEATHERED = 1.0;
+static const float FOVEATED_DETAIL_MODE_HARD_CUTOFF = 2.0;
+
 float FoveatedClampCenterArea(float centerScale)
 {
 	return clamp(centerScale, FOVEATED_CENTER_AREA_MIN, FOVEATED_CENTER_AREA_MAX);
@@ -77,6 +80,24 @@ float FoveatedComputeCenterBlendWeight(float2 eyeUv, float centerScale, float ce
 float FoveatedComputeCenterBlendWeight(float2 eyeUv, float centerScale, float centerFeather)
 {
 	return FoveatedComputeCenterBlendWeight(eyeUv, centerScale, centerFeather, float2(0.0, 0.0));
+}
+
+float FoveatedComputeDetailWeight(float mode, float2 eyeUv, float centerScale, float centerFeather, float centerHorizontalScale, float2 centerOffset)
+{
+	if (mode < FOVEATED_DETAIL_MODE_FEATHERED)
+		return 1.0;
+
+	if (mode >= FOVEATED_DETAIL_MODE_HARD_CUTOFF) {
+		float maskDistance = FoveatedComputeMaskDistance(eyeUv, centerScale, centerHorizontalScale, centerOffset);
+		return maskDistance <= 1.0 ? 1.0 : 0.0;
+	}
+
+	return FoveatedComputeCenterBlendWeight(eyeUv, centerScale, centerFeather, centerHorizontalScale, centerOffset);
+}
+
+bool FoveatedShouldEvaluateDetail(float detailWeight)
+{
+	return detailWeight > 1e-4;
 }
 
 #endif

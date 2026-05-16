@@ -39,9 +39,17 @@ namespace
 		"UnifiedWater"
 	};
 
-	constexpr float kVRLightingFoveationModeOff = 0.0f;
-	constexpr float kVRLightingFoveationModeFeathered = 1.0f;
-	constexpr float kVRLightingFoveationModeHardCutoff = 2.0f;
+	constexpr float kVRFoveationModeOff = 0.0f;
+	constexpr float kVRFoveationModeFeathered = 1.0f;
+	constexpr float kVRFoveationModeHardCutoff = 2.0f;
+
+	constexpr float GetVRFoveationMode(bool a_enabled, bool a_hardCutoff)
+	{
+		if (!a_enabled)
+			return kVRFoveationModeOff;
+
+		return a_hardCutoff ? kVRFoveationModeHardCutoff : kVRFoveationModeFeathered;
+	}
 
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
@@ -1075,24 +1083,36 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHG = { dalcSH.g.c0, dalcSH.g.c1[0], dalcSH.g.c1[1], dalcSH.g.c1[2] };
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
-		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, kVRLightingFoveationModeOff };
+		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, kVRFoveationModeOff };
+		data.VRFoveationData1 = { kVRFoveationModeOff, 0.0f, 0.0f, 0.0f };
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
+		const bool anyShaderFoveationEnabled = vr.settings.EnableLightingFoveation || vr.settings.EnableUtilityFoveation;
 		if (globals::game::isVR &&
 			vr.loaded &&
-			vr.settings.EnableLightingFoveation &&
+			anyShaderFoveationEnabled &&
 			upscaling.loaded) {
 			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 			if (profile.available) {
 				const float centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
-				const float lightingFoveationMode = vr.settings.EnableLightingFoveationHardCutoff ?
-					kVRLightingFoveationModeHardCutoff :
-					kVRLightingFoveationModeFeathered;
+				const bool foveationActive = centerScale < 0.999f;
+				const float lightingFoveationMode = GetVRFoveationMode(
+					vr.settings.EnableLightingFoveation,
+					vr.settings.EnableLightingFoveationHardCutoff);
+				const float utilityFoveationMode = GetVRFoveationMode(
+					vr.settings.EnableUtilityFoveation,
+					vr.settings.EnableUtilityFoveationHardCutoff);
 				data.VRFoveationData0 = {
 					centerScale,
 					FoveatedCommon::kCenterFeather,
 					FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale),
-					centerScale < 0.999f ? lightingFoveationMode : kVRLightingFoveationModeOff
+					foveationActive ? lightingFoveationMode : kVRFoveationModeOff
+				};
+				data.VRFoveationData1 = {
+					foveationActive ? utilityFoveationMode : kVRFoveationModeOff,
+					0.0f,
+					0.0f,
+					0.0f
 				};
 				data.VRFoveationCenterOffsets = {
 					profile.centerOffsets[0].x,

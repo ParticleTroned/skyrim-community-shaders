@@ -178,6 +178,8 @@ public:
 		// Foveated shader detail budgets. These use the active Upscaling FOV profile.
 		bool EnableLightingFoveation = false;
 		bool EnableLightingFoveationHardCutoff = false;
+		bool EnableUtilityFoveation = false;
+		bool EnableUtilityFoveationHardCutoff = false;
 
 		// VR Menu Overlay positioning settings
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)

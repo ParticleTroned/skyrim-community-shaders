@@ -1022,57 +1022,53 @@ float3 SafeNormalize3(float3 v, float3 fallback)
 	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
 }
 
-static const float VR_LIGHTING_FOVEATION_MODE_FEATHERED = 1.0;
-static const float VR_LIGHTING_FOVEATION_MODE_HARD_CUTOFF = 2.0;
-
+#if defined(VR)
 float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
 {
-#if defined(VR)
 	float lightingFoveationMode = SharedData::VRFoveationData0.w;
-	if (lightingFoveationMode < VR_LIGHTING_FOVEATION_MODE_FEATHERED)
-		return 1.0;
-
 	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
-	float centerScale = SharedData::VRFoveationData0.x;
-	float centerHorizontalScale = SharedData::VRFoveationData0.z;
-	if (lightingFoveationMode >= VR_LIGHTING_FOVEATION_MODE_HARD_CUTOFF) {
-		float maskDistance = FoveatedComputeMaskDistance(eyeUv, centerScale, centerHorizontalScale, centerOffset);
-		return maskDistance <= 1.0 ? 1.0 : 0.0;
-	}
-
-	return FoveatedComputeCenterBlendWeight(
+	return FoveatedComputeDetailWeight(
+		lightingFoveationMode,
 		eyeUv,
-		centerScale,
+		SharedData::VRFoveationData0.x,
 		SharedData::VRFoveationData0.y,
-		centerHorizontalScale,
+		SharedData::VRFoveationData0.z,
 		centerOffset);
-#else
-	return 1.0;
-#endif
 }
 
 bool ShouldEvaluateVRLightingAuxiliaryDetail(float detailWeight)
 {
-	return detailWeight > 1e-4;
+	return FoveatedShouldEvaluateDetail(detailWeight);
 }
+#endif
 
 float ApplyVRLightingAuxiliaryShadowWeight(float shadow, float detailWeight)
 {
+#if defined(VR)
 	return lerp(1.0, shadow, detailWeight);
+#else
+	return shadow;
+#endif
 }
 
 float GetVRLightingAuxiliaryQuality(float fullQuality, float detailWeight)
 {
+#if defined(VR)
 	return fullQuality * detailWeight;
+#else
+	return fullQuality;
+#endif
 }
 
 void ApplyVRLightingAuxiliaryOutputWeight(inout DirectLightingOutput lightingOutput, DirectLightingOutput baseOutput, float detailWeight)
 {
+#if defined(VR)
 	lightingOutput.diffuse = lerp(baseOutput.diffuse, lightingOutput.diffuse, detailWeight);
 	lightingOutput.specular = lerp(baseOutput.specular, lightingOutput.specular, detailWeight);
 	lightingOutput.transmission = lerp(baseOutput.transmission, lightingOutput.transmission, detailWeight);
 #if defined(TRUE_PBR)
 	lightingOutput.coatDiffuse = lerp(baseOutput.coatDiffuse, lightingOutput.coatDiffuse, detailWeight);
+#endif
 #endif
 }
 
@@ -1086,8 +1082,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+#	if defined(VR)
 	float vrAuxDetailWeight = GetVRLightingAuxiliaryDetailWeight(screenUV, eyeIndex);
 	bool vrAuxDetailEnabled = ShouldEvaluateVRLightingAuxiliaryDetail(vrAuxDetailWeight);
+#	else
+	const float vrAuxDetailWeight = 1.0;
+	const bool vrAuxDetailEnabled = true;
+#	endif
 
 #	if defined(DEFERRED)
 	const bool inWorld = true;

@@ -200,7 +200,9 @@ public:
 	float shorePersistentDarkeningStrength = 1.1f;
 	float wetnessDistanceFadeRange = 10000.0f;
 	static constexpr float kDefaultRainGrassGlossiness = 60.0f;
+	static constexpr float kDefaultRainGrassSpecularStrength = 1.0f;
 	float rainGrassGlossiness = kDefaultRainGrassGlossiness;
+	float rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
 	// Climate preset system
 	enum class ClimatePreset : uint32_t
 	{
@@ -225,6 +227,7 @@ public:
 
 	PerFrame GetCommonBufferData() const;
 	float GetEffectiveGrassGlossiness(float dryGlossiness, const PerFrame& frameData) const;
+	float GetEffectiveGrassSpecularStrength(float drySpecularStrength, const PerFrame& frameData) const;
 
 	virtual void SetupResources() override;
 	virtual void Prepass() override;
@@ -275,7 +278,7 @@ private:
 		float postRainElapsedSeconds = 0.0f;
 		float postRainStartWetnessDepth = 0.0f;
 		float postRainStartPuddleDepth = 0.0f;
-		float grassGlossinessWetnessPhase = 0.0f;
+		float grassLightingWetnessPhase = 0.0f;
 		double rainTimerSeconds = 0.0;
 		double lastGameTimeSeconds = 0.0;
 		bool hasLastGameTime = false;

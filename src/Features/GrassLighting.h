@@ -10,6 +10,8 @@ private:
 public:
 	static constexpr float kGlossinessMin = 1.0f;
 	static constexpr float kGlossinessMax = 100.0f;
+	static constexpr float kSpecularStrengthMin = 0.0f;
+	static constexpr float kSpecularStrengthMax = 1.0f;
 
 	virtual inline std::string GetName() override { return "Grass Lighting"; }
 	virtual inline std::string GetShortName() override { return "GrassLighting"; }
@@ -47,6 +49,7 @@ public:
 	Settings settings;
 
 	static float ClampGlossiness(float glossiness, float fallback);
+	static float ClampSpecularStrength(float specularStrength, float fallback);
 	void SanitizeSettings();
 
 	virtual void DrawSettings() override;

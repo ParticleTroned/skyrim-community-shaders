@@ -20,9 +20,18 @@ float GrassLighting::ClampGlossiness(float glossiness, float fallback)
 	return std::clamp(glossiness, kGlossinessMin, kGlossinessMax);
 }
 
+float GrassLighting::ClampSpecularStrength(float specularStrength, float fallback)
+{
+	if (!std::isfinite(specularStrength)) {
+		return fallback;
+	}
+	return std::clamp(specularStrength, kSpecularStrengthMin, kSpecularStrengthMax);
+}
+
 void GrassLighting::SanitizeSettings()
 {
 	settings.Glossiness = ClampGlossiness(settings.Glossiness, Settings{}.Glossiness);
+	settings.SpecularStrength = ClampSpecularStrength(settings.SpecularStrength, Settings{}.SpecularStrength);
 }
 
 void GrassLighting::DrawSettings()
@@ -44,9 +53,17 @@ void GrassLighting::DrawSettings()
 				"Specular highlight glossiness. This also defines the dry endpoint for Wetterness grass glossiness after rain and grass drying finish.");
 		}
 
-		ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
+		ImGui::SliderFloat(
+			"Specular Strength",
+			&settings.SpecularStrength,
+			kSpecularStrengthMin,
+			kSpecularStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Specular highlight strength.");
+			ImGui::TextUnformatted(
+				"Specular highlight strength. This also defines the dry endpoint for Wetterness grass specular strength after rain and grass drying finish.");
 		}
 
 		ImGui::Spacing();

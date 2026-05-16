@@ -157,6 +157,9 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(
 		grassLightingSettings.Glossiness,
 		wetternessSettings);
+	grassLightingSettings.SpecularStrength = globals::features::wetterness.GetEffectiveGrassSpecularStrength(
+		grassLightingSettings.SpecularStrength,
+		wetternessSettings);
 
 	return BuildFeatureBufferData(
 		grassLightingSettings,

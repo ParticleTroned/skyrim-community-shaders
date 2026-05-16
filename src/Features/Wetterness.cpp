@@ -643,6 +643,13 @@ namespace
 		return bits0 | (bits1 << 10) | (bits2 << 20);
 	}
 
+	float BlendGrassLightingEndpoint(float dryEndpoint, float rainEndpoint, float wetnessPhase)
+	{
+		const float wetEndpoint = std::max(dryEndpoint, rainEndpoint);
+		const float phase = ClampFiniteOrDefault(wetnessPhase, 0.0f, 1.0f, 0.0f);
+		return std::lerp(dryEndpoint, wetEndpoint, phase);
+	}
+
 	void SanitizePersistentUiState(
 		Wetterness::Settings& settings,
 		float& modernScale,
@@ -741,6 +748,7 @@ namespace
 		wetterness.shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
 		wetterness.wetnessDistanceFadeRange = preset.wetnessFadeRange;
 		wetterness.rainGrassGlossiness = Wetterness::kDefaultRainGrassGlossiness;
+		wetterness.rainGrassSpecularStrength = Wetterness::kDefaultRainGrassSpecularStrength;
 		wetterness.modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
 		wetterness.legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
 
@@ -1410,8 +1418,10 @@ void Wetterness::DrawSettings()
 			ImGui::TextDisabled("Manual drying-time sliders are disabled while weather-driven drying is enabled.");
 		}
 
-		ImGui::Spacing();
-		ImGui::TextUnformatted("Grass Glossiness");
+		ImGui::Separator();
+		ImGui::TextUnformatted("Grass");
+
+		auto& grassLightingSettings = globals::features::grassLighting.settings;
 		ImGui::SliderFloat(
 			"Grass Rain Glossiness",
 			&rainGrassGlossiness,
@@ -1425,7 +1435,6 @@ void Wetterness::DrawSettings()
 				"Maximum effective grass glossiness while rain is active. Wetterness blends down from this value after rain using the grass drying time. If this is below the dry endpoint, the dry endpoint wins so rain never makes grass less glossy.");
 		}
 
-		auto& grassLightingSettings = globals::features::grassLighting.settings;
 		ImGui::SliderFloat(
 			"Grass Glossiness After Drying",
 			&grassLightingSettings.Glossiness,
@@ -1439,6 +1448,36 @@ void Wetterness::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
 				"Dry endpoint for grass glossiness after rain and grass drying finish. This is the same saved value as Grass Lighting > Complex Grass > Glossiness, so either slider edits the same setting.");
+		}
+
+		ImGui::SliderFloat(
+			"Grass Rain Specular Strength",
+			&rainGrassSpecularStrength,
+			GrassLighting::kSpecularStrengthMin,
+			GrassLighting::kSpecularStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		rainGrassSpecularStrength = GrassLighting::ClampSpecularStrength(
+			rainGrassSpecularStrength,
+			kDefaultRainGrassSpecularStrength);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(
+				"Maximum effective grass specular strength while rain is active. Wetterness blends down from this value after rain using the grass drying time. If this is below the dry endpoint, the dry endpoint wins so rain never makes grass less specular.");
+		}
+
+		ImGui::SliderFloat(
+			"Grass Specular Strength After Drying",
+			&grassLightingSettings.SpecularStrength,
+			GrassLighting::kSpecularStrengthMin,
+			GrassLighting::kSpecularStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		grassLightingSettings.SpecularStrength = GrassLighting::ClampSpecularStrength(
+			grassLightingSettings.SpecularStrength,
+			GrassLighting::Settings{}.SpecularStrength);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(
+				"Dry endpoint for grass specular strength after rain and grass drying finish. This is the same saved value as Grass Lighting > Complex Grass > Specular Strength, so either slider edits the same setting.");
 		}
 
 		ImGui::Separator();
@@ -1802,9 +1841,22 @@ float Wetterness::GetEffectiveGrassGlossiness(float dryGlossiness, const PerFram
 	}
 
 	const float rainEndpoint = GrassLighting::ClampGlossiness(rainGrassGlossiness, kDefaultRainGrassGlossiness);
-	const float wetEndpoint = std::max(dryEndpoint, rainEndpoint);
-	const float wetnessPhase = std::clamp(runtimeState.grassGlossinessWetnessPhase, 0.0f, 1.0f);
-	return std::lerp(dryEndpoint, wetEndpoint, wetnessPhase);
+	return BlendGrassLightingEndpoint(dryEndpoint, rainEndpoint, runtimeState.grassLightingWetnessPhase);
+}
+
+float Wetterness::GetEffectiveGrassSpecularStrength(float drySpecularStrength, const PerFrame& frameData) const
+{
+	const float dryEndpoint = GrassLighting::ClampSpecularStrength(
+		drySpecularStrength,
+		GrassLighting::Settings{}.SpecularStrength);
+	if (!loaded || settings.EnableWetterness == 0u || frameData.settings.EnableWetterness == 0u) {
+		return dryEndpoint;
+	}
+
+	const float rainEndpoint = GrassLighting::ClampSpecularStrength(
+		rainGrassSpecularStrength,
+		kDefaultRainGrassSpecularStrength);
+	return BlendGrassLightingEndpoint(dryEndpoint, rainEndpoint, runtimeState.grassLightingWetnessPhase);
 }
 
 Wetterness::PerFrame Wetterness::GetCommonBufferData() const
@@ -2208,22 +2260,22 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		(data.settings.EnableWetterness != 0 && !(isInterior && !debugSettings.EnableRainOverride)) ?
 			ClampFiniteOrDefault(wetFilmRainPhaseSource, 0.0f, 1.0f, 0.0f) :
 			0.0f;
-	const bool grassGlossinessRainActive = data.Raining > RUNTIME_DRY_EPSILON || (!isInterior && rainingNow);
-	float grassGlossinessWetnessPhase = 0.0f;
+	const bool grassLightingRainActive = data.Raining > RUNTIME_DRY_EPSILON || (!isInterior && rainingNow);
+	float grassLightingWetnessPhase = 0.0f;
 	if (masterWetnessEnabled && data.settings.EnableWetterness != 0 && !(isInterior && !debugSettings.EnableRainOverride)) {
-		if (grassGlossinessRainActive) {
-			grassGlossinessWetnessPhase = 1.0f;
+		if (grassLightingRainActive) {
+			grassLightingWetnessPhase = 1.0f;
 		} else if (runtimeState.postRainEventWeight > RUNTIME_DRY_EPSILON) {
 			const float grassDryingSeconds = DryingHoursToSeconds(effectiveDryingHours.grassHours);
 			if (grassDryingSeconds > 0.0f) {
-				grassGlossinessWetnessPhase = std::clamp(
+				grassLightingWetnessPhase = std::clamp(
 					1.0f - (std::max(0.0f, runtimeState.postRainElapsedSeconds) / grassDryingSeconds),
 					0.0f,
 					1.0f);
 			}
 		}
 	}
-	runtimeState.grassGlossinessWetnessPhase = grassGlossinessWetnessPhase;
+	runtimeState.grassLightingWetnessPhase = grassLightingWetnessPhase;
 	const float activePuddleSkyReflectionScale = masterWetnessEnabled ?
 		ClampFiniteOrDefault(
 			puddleSkyReflectionScale,
@@ -2324,6 +2376,7 @@ void Wetterness::LoadSettings(json& o_json)
 	shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
 	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 	rainGrassGlossiness = kDefaultRainGrassGlossiness;
+	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
 	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
 	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
 	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
@@ -2358,6 +2411,9 @@ void Wetterness::LoadSettings(json& o_json)
 	rainGrassGlossiness = GrassLighting::ClampGlossiness(
 		JsonValueOr<float>(o_json, "RainGrassGlossiness", kDefaultRainGrassGlossiness),
 		kDefaultRainGrassGlossiness);
+	rainGrassSpecularStrength = GrassLighting::ClampSpecularStrength(
+		JsonValueOr<float>(o_json, "RainGrassSpecularStrength", kDefaultRainGrassSpecularStrength),
+		kDefaultRainGrassSpecularStrength);
 
 	const bool hasModernWetReflectionScale = isObject && o_json.contains("ModernWetIndirectSpecularScale");
 	if (hasModernWetReflectionScale && o_json["ModernWetIndirectSpecularScale"].is_number()) {
@@ -2418,6 +2474,10 @@ void Wetterness::SaveSettings(json& o_json)
 	o_json["WetternessFadeRange"] = wetnessDistanceFadeRange;
 	rainGrassGlossiness = GrassLighting::ClampGlossiness(rainGrassGlossiness, kDefaultRainGrassGlossiness);
 	o_json["RainGrassGlossiness"] = rainGrassGlossiness;
+	rainGrassSpecularStrength = GrassLighting::ClampSpecularStrength(
+		rainGrassSpecularStrength,
+		kDefaultRainGrassSpecularStrength);
+	o_json["RainGrassSpecularStrength"] = rainGrassSpecularStrength;
 	o_json["EnableWeatherDrivenDryingModel"] = enableWeatherDrivenDryingModel;
 
 	o_json["DebugSettings"] = debugSettings;
@@ -2435,6 +2495,7 @@ void Wetterness::RestoreDefaultSettings()
 	shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
 	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 	rainGrassGlossiness = kDefaultRainGrassGlossiness;
+	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
 	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
 	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
 	climatePreset = defaultPreset;

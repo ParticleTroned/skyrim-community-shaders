@@ -5,9 +5,6 @@
 
 void ShadowmapRasterizerFix::Install()
 {
-	if constexpr (!casterBiasEnabled)
-		return;
-
 	// This function is called once per cascade to begin the updating and rendering process.
 	stl::write_thunk_call<BSShadowDirectionalLight_RenderShadowmaps_RenderCascade>(REL::RelocationID(101495, 108489).address() + REL::Relocate(0xC6, 0xC6, 0xF6));
 
@@ -21,7 +18,10 @@ void ShadowmapRasterizerFix::Install()
 
 void ShadowmapRasterizerFix::InstallD3DHooks(ID3D11DeviceContext* context)
 {
-	if constexpr (!casterBiasEnabled)
+	if (!REL::Module::IsVR())
+		return;
+
+	if constexpr (!vrCasterBiasEnabled)
 		return;
 
 	if (!context || d3dHooksInstalled)
@@ -37,6 +37,35 @@ void ShadowmapRasterizerFix::InstallD3DHooks(ID3D11DeviceContext* context)
 
 void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCascade::thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, std::uint32_t flags)
 {
+	if (!REL::Module::IsVR()) {
+		if (!gRasterStates) {
+			func(light, arg1, arg2, flags);
+			return;
+		}
+
+		const auto cascade = currentCascade % numCascades;
+		if (!initialized) {
+			if (cascade == 0) {
+				std::memcpy(backupGameRasterStates, *gRasterStates, sizeof(RasterStateArray));
+				numCascades = std::min(numCascades, maxCascades);
+			}
+
+			CloneRasterStates(*gRasterStates, cascade, flatCascadeDescriptors);
+
+			initialized = cascade == numCascades - 1;
+		}
+
+		std::memcpy(*gRasterStates, shadowmapRasterStates[cascade], sizeof(RasterStateArray));
+
+		func(light, arg1, arg2, flags);
+
+		if (cascade == numCascades - 1)
+			std::memcpy(*gRasterStates, backupGameRasterStates, sizeof(RasterStateArray));
+
+		currentCascade = (cascade + 1) % numCascades;
+		return;
+	}
+
 	if (!gRasterStates) {
 		func(light, arg1, arg2, flags);
 		return;
@@ -59,9 +88,9 @@ void ShadowmapRasterizerFix::InitializeRasterStates()
 {
 	std::memcpy(backupGameRasterStates, *gRasterStates, sizeof(RasterStateArray));
 
-	if constexpr (casterBiasEnabled) {
+	if constexpr (vrCasterBiasEnabled) {
 		for (std::uint32_t cascade = 0; cascade < numCascades; cascade++)
-			CloneRasterStates(backupGameRasterStates, cascade);
+			CloneRasterStates(backupGameRasterStates, cascade, vrCascadeDescriptors);
 	}
 
 	initialized = true;
@@ -74,7 +103,7 @@ void ShadowmapRasterizerFix::GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputD
 	outputDesc.SlopeScaledDepthBias = shadowmapDesc.rasterSlopeScaleBias;
 }
 
-void ShadowmapRasterizerFix::CloneRasterStates(const RasterStateArray& inputArray, std::uint32_t cascade)
+void ShadowmapRasterizerFix::CloneRasterStates(const RasterStateArray& inputArray, std::uint32_t cascade, const std::array<ShadowMapRasterizerDescriptor, maxCascades>& descriptors)
 {
 	for (int fill = 0; fill < 2; fill++) {
 		for (int cull = 0; cull < 3; cull++) {
@@ -84,7 +113,7 @@ void ShadowmapRasterizerFix::CloneRasterStates(const RasterStateArray& inputArra
 						D3D11_RASTERIZER_DESC desc{};
 						gRasterizer->GetDesc(&desc);
 
-						GetUpdatedRasterDesc(desc, cascadeDescriptors[cascade]);
+						GetUpdatedRasterDesc(desc, descriptors[cascade]);
 
 						DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&desc, &shadowmapRasterStates[cascade][fill][cull][depth][scissor]));
 					}
@@ -96,13 +125,16 @@ void ShadowmapRasterizerFix::CloneRasterStates(const RasterStateArray& inputArra
 
 ID3D11RasterizerState* ShadowmapRasterizerFix::GetBiasedRasterState()
 {
-	if constexpr (!casterBiasEnabled)
+	if (!REL::Module::IsVR())
+		return nullptr;
+
+	if constexpr (!vrCasterBiasEnabled)
 		return nullptr;
 
 	if (!initialized || activeCascade >= numCascades || !globals::game::shadowState)
 		return nullptr;
 
-	const auto desc = cascadeDescriptors[activeCascade];
+	const auto desc = vrCascadeDescriptors[activeCascade];
 	if (desc.rasterDepthBias == 0 && desc.rasterDepthBiasClamp == 0.0f && desc.rasterSlopeScaleBias == 0.0f)
 		return nullptr;
 

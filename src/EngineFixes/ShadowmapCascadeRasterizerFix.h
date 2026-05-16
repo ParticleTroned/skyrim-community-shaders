@@ -3,9 +3,11 @@
 #include "EngineFix.h"
 #include "Utils/GameSetting.h"
 
+#include <array>
 #include <limits>
 
-// Applies shadowmap caster bias without mutating the shared rasterizer table at draw time.
+// Applies shadowmap caster bias. Flat keeps the v1.5.2 rasterizer table behavior;
+// VR uses scoped draw-call state to avoid HMD flicker.
 struct ShadowmapRasterizerFix : EngineFix
 {
 	std::string GetName() override { return "Shadowmap Cascade Rasterizer Fix"; }
@@ -13,13 +15,20 @@ struct ShadowmapRasterizerFix : EngineFix
 
 	using RasterStateArray = ID3D11RasterizerState* [2][3][12][2];
 
-	static void InstallD3DHooks(ID3D11DeviceContext* context);
-	static void InitializeRasterStates();
-	static void CloneRasterStates(const RasterStateArray& inputArray, std::uint32_t cascade);
-	static ID3D11RasterizerState* GetBiasedRasterState();
+	struct ShadowMapRasterizerDescriptor
+	{
+		int rasterDepthBias;
+		float rasterDepthBiasClamp;
+		float rasterSlopeScaleBias;
+	};
 
 	static constexpr std::uint32_t maxCascades = 3;
 	static constexpr std::uint32_t invalidCascade = std::numeric_limits<std::uint32_t>::max();
+	static void InstallD3DHooks(ID3D11DeviceContext* context);
+	static void InitializeRasterStates();
+	static void CloneRasterStates(const RasterStateArray& inputArray, std::uint32_t cascade, const std::array<ShadowMapRasterizerDescriptor, maxCascades>& descriptors);
+	static ID3D11RasterizerState* GetBiasedRasterState();
+
 	static inline std::uint32_t numCascades = 0;
 	static inline std::uint32_t currentCascade = 0;
 	static inline std::uint32_t activeCascade = invalidCascade;
@@ -30,37 +39,49 @@ struct ShadowmapRasterizerFix : EngineFix
 	static inline RasterStateArray backupGameRasterStates = {};
 	static inline RasterStateArray shadowmapRasterStates[maxCascades] = {};
 
-	// Keep close-range casters unshifted; even small first-cascade bias can make nearby meshes lose contact shadows.
-	static constexpr int nearCascadeDepthBias = 0;
-	static constexpr float nearCascadeDepthBiasClamp = 0.0f;
-	static constexpr float nearCascadeSlopeScaleBias = 0.0f;
-
-	// Keep a small scoped caster offset on outer cascades for the PR1690/1888 behavior without global table mutation.
-	static constexpr int outerCascadeDepthBias = 32;
-	static constexpr float outerCascadeDepthBiasClamp = 0.00075f;
-	static constexpr float outerCascadeSlopeScaleBias = 0.35f;
-
-	static constexpr bool casterBiasEnabled =
-		nearCascadeDepthBias != 0 ||
-		nearCascadeDepthBiasClamp != 0.0f ||
-		nearCascadeSlopeScaleBias != 0.0f ||
-		outerCascadeDepthBias != 0 ||
-		outerCascadeDepthBiasClamp != 0.0f ||
-		outerCascadeSlopeScaleBias != 0.0f;
-
-	struct ShadowMapRasterizerDescriptor
-	{
-		int rasterDepthBias;
-		float rasterDepthBiasClamp;
-		float rasterSlopeScaleBias;
-	};
 	static void GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputDesc, ShadowMapRasterizerDescriptor desc);
 
-	static constexpr ShadowMapRasterizerDescriptor cascadeDescriptors[maxCascades] = {
-		{ nearCascadeDepthBias, nearCascadeDepthBiasClamp, nearCascadeSlopeScaleBias },
-		{ outerCascadeDepthBias, outerCascadeDepthBiasClamp, outerCascadeSlopeScaleBias },
-		{ outerCascadeDepthBias, outerCascadeDepthBiasClamp, outerCascadeSlopeScaleBias }
+	static constexpr int flatFirstCascadeDepthBias = 160;
+	static constexpr float flatFirstCascadeDepthBiasClamp = 0.015f;
+	static constexpr float flatFirstCascadeSlopeScaleBias = 3.2f;
+
+	static constexpr int flatSecondCascadeDepthBias = 100;
+	static constexpr float flatSecondCascadeDepthBiasClamp = 0.015f;
+	static constexpr float flatSecondCascadeSlopeScaleBias = 3.8f;
+
+	static constexpr int flatThirdCascadeDepthBias = 100;
+	static constexpr float flatThirdCascadeDepthBiasClamp = 0.015f;
+	static constexpr float flatThirdCascadeSlopeScaleBias = 3.8f;
+
+	static constexpr std::array<ShadowMapRasterizerDescriptor, maxCascades> flatCascadeDescriptors = {
+		ShadowMapRasterizerDescriptor{ flatFirstCascadeDepthBias, flatFirstCascadeDepthBiasClamp, flatFirstCascadeSlopeScaleBias },
+		ShadowMapRasterizerDescriptor{ flatSecondCascadeDepthBias, flatSecondCascadeDepthBiasClamp, flatSecondCascadeSlopeScaleBias },
+		ShadowMapRasterizerDescriptor{ flatThirdCascadeDepthBias, flatThirdCascadeDepthBiasClamp, flatThirdCascadeSlopeScaleBias }
 	};
+
+	// Keep close-range casters unshifted; even small first-cascade bias can make nearby meshes lose contact shadows.
+	static constexpr int vrNearCascadeDepthBias = 0;
+	static constexpr float vrNearCascadeDepthBiasClamp = 0.0f;
+	static constexpr float vrNearCascadeSlopeScaleBias = 0.0f;
+
+	// Keep a small scoped caster offset on outer cascades for the PR1690/1888 behavior without global table mutation.
+	static constexpr int vrOuterCascadeDepthBias = 32;
+	static constexpr float vrOuterCascadeDepthBiasClamp = 0.00075f;
+	static constexpr float vrOuterCascadeSlopeScaleBias = 0.35f;
+
+	static constexpr std::array<ShadowMapRasterizerDescriptor, maxCascades> vrCascadeDescriptors = {
+		ShadowMapRasterizerDescriptor{ vrNearCascadeDepthBias, vrNearCascadeDepthBiasClamp, vrNearCascadeSlopeScaleBias },
+		ShadowMapRasterizerDescriptor{ vrOuterCascadeDepthBias, vrOuterCascadeDepthBiasClamp, vrOuterCascadeSlopeScaleBias },
+		ShadowMapRasterizerDescriptor{ vrOuterCascadeDepthBias, vrOuterCascadeDepthBiasClamp, vrOuterCascadeSlopeScaleBias }
+	};
+
+	static constexpr bool vrCasterBiasEnabled =
+		vrNearCascadeDepthBias != 0 ||
+		vrNearCascadeDepthBiasClamp != 0.0f ||
+		vrNearCascadeSlopeScaleBias != 0.0f ||
+		vrOuterCascadeDepthBias != 0 ||
+		vrOuterCascadeDepthBiasClamp != 0.0f ||
+		vrOuterCascadeSlopeScaleBias != 0.0f;
 
 	struct ScopedCascadeBias
 	{

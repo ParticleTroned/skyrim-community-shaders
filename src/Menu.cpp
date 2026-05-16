@@ -22,6 +22,7 @@
 #include "Feature.h"
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
+#include "Features/RenderDoc.h"
 #include "Features/Upscaling.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/BackgroundBlur.h"
@@ -779,7 +780,7 @@ void Menu::DrawAdvancedSettings()
 {
 	// Render advanced settings using extracted component
 	AdvancedSettingsRenderer::RenderAdvancedSettings(
-		[this]() { globals::truePBR->DrawSettings(); },
+		[this]() { globals::features::truePBR.DrawSettings(); },
 		[this]() { DrawDisableAtBootSettings(); });
 }
 
@@ -794,27 +795,6 @@ void Menu::DrawDisableAtBootSettings()
 		"Restart will be required to reenable.");
 
 	ImGui::Spacing();
-
-	if (ImGui::CollapsingHeader("Special Features", ImGuiTreeNodeFlags_DefaultOpen)) {
-		// Prepare a sorted list of special feature names
-		std::vector<std::string> specialFeatureNames;
-		for (const auto& [featureName, _] : state->specialFeatures) {
-			specialFeatureNames.push_back(featureName);
-		}
-		std::sort(specialFeatureNames.begin(), specialFeatureNames.end());
-
-		// Display sorted special features
-		for (const auto& featureName : specialFeatureNames) {
-			// Check if the feature is currently disabled
-			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
-
-			// Create a checkbox for each feature
-			if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
-				// Update the disabledFeatures map based on user interaction
-				disabledFeatures[featureName] = isDisabled;
-			}
-		}
-	}
 
 	if (ImGui::CollapsingHeader("Features", ImGuiTreeNodeFlags_DefaultOpen)) {
 		// Prepare a sorted list of feature pointers
@@ -912,6 +892,27 @@ void Menu::DrawOverlay()
  * @note This method contains Menu-specific logic and state management that makes it
  *       inappropriate for extraction to a utility class.
  */
+static std::vector<InputCombo> DeriveWeatherEditorKey(const std::vector<InputCombo>& menuKey)
+{
+	bool hasShift = false;
+	uint32_t baseKey = 0;
+
+	for (const auto& combo : menuKey) {
+		uint32_t vk = combo.GetKey();
+		if (vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT) {
+			hasShift = true;
+		} else if (vk != VK_CONTROL && vk != VK_LCONTROL && vk != VK_RCONTROL &&
+		           vk != VK_MENU && vk != VK_LMENU && vk != VK_RMENU) {
+			baseKey = vk;
+		}
+	}
+
+	if (hasShift || baseKey == 0)
+		return {};
+
+	return { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(baseKey) };
+}
+
 void Menu::ProcessInputEventQueue()
 {
 	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
@@ -983,7 +984,12 @@ void Menu::ProcessInputEventQueue()
 				};
 				auto shaderCache = globals::shaderCache;
 				HotkeyAction hotkeyActions[] = {
-					{ &settings.ToggleKey, &settingToggleKey, [this](std::vector<InputCombo> keys) { settings.ToggleKey = keys; settingToggleKey = false; } },
+					{ &settings.ToggleKey, &settingToggleKey, [this](std::vector<InputCombo> keys) {
+						settings.ToggleKey = keys;
+						settingToggleKey = false;
+						if (!settings.FirstTimeSetupCompleted)
+							settings.WeatherEditorToggleKey = DeriveWeatherEditorKey(keys);
+					} },
 					{ &settings.SkipCompilationKey, &settingSkipCompilationKey, [this](std::vector<InputCombo> keys) { settings.SkipCompilationKey = keys; settingSkipCompilationKey = false; } },
 					{ &settings.EffectToggleKey, &settingsEffectsToggle, [this](std::vector<InputCombo> keys) { settings.EffectToggleKey = keys; settingsEffectsToggle = false; } },
 					{ &settings.OverlayToggleKey, &settingOverlayToggleKey, [this](std::vector<InputCombo> keys) { settings.OverlayToggleKey = keys; settingOverlayToggleKey = false; } },
@@ -1065,16 +1071,16 @@ void Menu::ProcessInputEventQueue()
 								 // Locked or PlayMode -> fully exit preview
 								 ew->ExitPreviewMode();
 							 } else {
-								 auto p = RE::PlayerCharacter::GetSingleton();
-								 if (p && p->parentCell)
-									 ew->open = !ew->open;
+								 WeatherEditor::ToggleEditorWindow();
 							 }
 						 } },
 					};
-					for (const auto& ka : keyActions) {
-						if (InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
-							ka.action();
-							break;
+					if (!RenderDoc::GetSingleton()->HandleCaptureHotkey(key)) {
+						for (const auto& ka : keyActions) {
+							if (InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
+								ka.action();
+								break;
+							}
 						}
 					}
 				}

@@ -317,6 +317,49 @@ def get_commit_author(commit_hash):
     except Exception:
         return None
 
+def get_feature_changelog(feature_dir, feature_info, base_ref):
+    """Return bullet-point changelog of user-facing commits since base_ref.
+
+    Includes feat, fix, perf, and breaking-change commits only.
+    Deduplicates by subject line and preserves commit order (newest first).
+    """
+    if not base_ref:
+        return ""
+    paths = [str(feature_dir).replace("\\", "/")]
+    if feature_info:
+        name = feature_info.get('name', '')
+        for suffix in ('.h', '.cpp'):
+            p = DEFAULT_FEATURE_HEADERS_DIR / (name + suffix)
+            if p.exists():
+                paths.append(str(p).replace("\\", "/"))
+        src_dir = DEFAULT_FEATURE_HEADERS_DIR / name
+        if src_dir.exists() and src_dir.is_dir():
+            paths.append(str(src_dir).replace("\\", "/"))
+    try:
+        # Use ASCII unit-separator (0x1f) between subject and body so BREAKING
+        # CHANGE footers are detected even when the subject lacks the '!' marker.
+        # Null bytes are not used because Windows subprocess rejects them.
+        raw = subprocess.check_output(
+            ["git", "log", f"{base_ref}..{HEAD_REF}", "--pretty=format:%s\x1f%b\x1f", "--"] + paths,
+            cwd=str(PROJECT_ROOT),
+            stderr=subprocess.DEVNULL,
+        ).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    parts = raw.split("\x1f")
+    seen = set()
+    lines = []
+    for subject, body in zip(parts[::2], parts[1::2]):
+        subject = subject.strip()
+        if not subject or subject in seen:
+            continue
+        seen.add(subject)
+        full = subject + "\n" + body
+        if (RE_COMMIT_FEAT.match(subject) or RE_COMMIT_FIX.match(subject) or
+                RE_COMMIT_PERF.match(subject) or RE_COMMIT_BREAKING.search(full)):
+            lines.append(f"- {subject}")
+    return "\n".join(lines)
+
 def apply_version_bump(ini_path, proposed_ver_str):
     try:
         with open(ini_path, "r", encoding="utf-8") as f:
@@ -875,7 +918,63 @@ def format_metadata_summary(feature_metadata):
     return lines, metadata_issues
 
 
-def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core_artifact_pattern):
+def _build_compat_bullets(feature_metadata, base_ref):
+    """Compatibility bullets for the core file_description.
+
+    Lists every Nexus auto_upload feature with its current mod_version,
+    annotating rows whose version is unchanged from `base_ref` so users
+    can see at a glance which features moved and which carried over.
+    Sorted by display name for stable diff-friendly output.
+
+    Returns a list of strings like:
+        ['• Cloud Shadows 1.4.0',
+         '• HDR 1.0.1',
+         '• Upscaling 1.3.1',
+         '• Wetness Effects 1.0.0 (unchanged)']
+    Returns [] if there are no auto_upload features.
+    """
+    bullets = []
+    for info in sorted(feature_metadata, key=lambda x: (x.get('mod_filename') or x['name']).lower()):
+        if info.get('is_core') or not info.get('mod_id'):
+            continue
+        ini_path = get_feature_ini(info['name'])
+        if not ini_path:
+            continue
+        ini_meta = get_feature_ini_metadata(ini_path)
+        if not ini_meta.get('auto_upload', False):
+            continue
+        cur_tuple = get_version_from_ini(ini_path)
+        if not cur_tuple:
+            continue
+        cur_ver = '.'.join(str(v) for v in cur_tuple)
+        display = ini_meta.get('mod_filename') or info.get('mod_filename') or info['name']
+        suffix = ''
+        if base_ref:
+            prior = get_prior_version(ini_path, base_ref)
+            if prior is not None and prior == cur_tuple:
+                suffix = ' (unchanged)'
+        bullets.append(f'• {display} {cur_ver}{suffix}')
+    return bullets
+
+
+def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core_artifact_pattern, base_ref=None, release_version=None):
+    """Build the Nexus upload matrix.
+
+    `release_version` is the Community Shaders version being released
+    (e.g. "1.5.2"). When provided, each row gets a `file_description`
+    that anchors the upload to this CS release — replacing the upstream
+    "See mod description for details." default. Empty when omitted so
+    the upstream default is preserved.
+    """
+    compat_bullets = _build_compat_bullets(feature_metadata, base_ref) if release_version else []
+    if release_version and compat_bullets:
+        core_description = (
+            f'Community Shaders {release_version} — feature versions in this release:\n'
+            + '\n'.join(compat_bullets)
+        )
+    else:
+        core_description = ''
+
     rows = [
         {
             'name': 'core',
@@ -883,6 +982,8 @@ def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core
             'artifact_name': 'nexus-upload-core',
             'nexus_mod_id': core_mod_id,
             'mod_filename': core_filename,
+            'changelog': '',  # filled by workflow from GitHub release body
+            'file_description': core_description,
         }
     ]
     def sanitize_name(name):
@@ -895,9 +996,8 @@ def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core
         if not mod_id:
             continue
         name = info['name']
-        artifact_pattern = info.get('artifact_pattern') or f'{name}-*.7z'
 
-        # Read INI metadata (version, filename, etc.)
+        # Read INI metadata first; mod_filename is needed to derive artifact_pattern.
         ini_path = get_feature_ini(name)  # Pass name as string for fuzzy matching
         ini_metadata = {}
         mod_version = None
@@ -910,8 +1010,24 @@ def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core
         # Use mod_filename from INI if available, else from feature metadata, else use name
         mod_filename = ini_metadata.get('mod_filename') or info.get('mod_filename') or name
 
+        # artifact_pattern: explicit INI value takes precedence; fallback derives the
+        # pattern from the display name using the cmake convention of replacing spaces
+        # with dots, for example "Cloud Shadows" -> "Cloud.Shadows-*.7z".
+        artifact_pattern = (ini_metadata.get('artifact_pattern')
+                            or info.get('artifact_pattern')
+                            or f"{mod_filename.replace(' ', '.')}-*.7z")
+
         # Auto-upload is opt-in; missing metadata should not enable uploads.
         auto_upload = ini_metadata.get('auto_upload', False)
+
+        # Per-feature file_description anchors this .7z to the CS release
+        # it shipped with. We don't know forward compatibility (the next CS
+        # may or may not re-bundle this version), so the description is a
+        # single-CS-version stamp and never gets revised — Nexus uploads
+        # are skipped via check_existing once a version is on file.
+        file_description = ''
+        if release_version and mod_version:
+            file_description = f'{mod_filename} {mod_version} — released for Community Shaders {release_version}.'
 
         row = {
             'name': name,
@@ -920,9 +1036,15 @@ def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core
             'nexus_mod_id': mod_id,
             'mod_filename': mod_filename,
             'auto_upload': auto_upload,
+            'file_description': file_description,
         }
         if mod_version:
             row['mod_version'] = mod_version
+        if base_ref:
+            feature_dir = find_feature_dir(name) or FEATURES_DIR / name
+            changelog = get_feature_changelog(feature_dir, info, base_ref)
+            if changelog:
+                row['changelog'] = changelog
 
         rows.append(row)
     return rows
@@ -1064,6 +1186,7 @@ def main():
     parser.add_argument('--core-mod-id', type=str, default='86492', help='Core Nexus mod ID for the generated upload matrix')
     parser.add_argument('--core-filename', type=str, default='Community Shaders', help='Core Nexus filename for the generated upload matrix')
     parser.add_argument('--core-artifact-pattern', type=str, default='CommunityShaders-*.7z', help='Core artifact pattern for the generated upload matrix')
+    parser.add_argument('--release-version', type=str, default=None, help='Community Shaders release version (e.g. "1.5.2") used to anchor file_description on each upload row. When omitted, file_description is empty and the upstream Nexus action default ("See mod description for details.") is preserved.')
     args = parser.parse_args()
 
     global HEAD_REF
@@ -1129,6 +1252,8 @@ def main():
             args.core_mod_id,
             args.core_filename,
             args.core_artifact_pattern,
+            base_ref=base_ref,
+            release_version=args.release_version,
         )
         output_path = args.matrix_output
         with open(output_path, 'w', encoding='utf-8') as f:

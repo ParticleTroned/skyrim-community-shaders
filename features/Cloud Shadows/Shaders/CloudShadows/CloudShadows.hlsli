@@ -1,12 +1,14 @@
 #ifndef __CLOUD_SHADOWS_HLSLI__
 #define __CLOUD_SHADOWS_HLSLI__
 
+#include "Common/Game.hlsli"
+
 namespace CloudShadows
 {
 	TextureCube<float> CloudShadowsTexture : register(t25);
 
-	const static float CloudHeight = (2e3f / 1.428e-2) * 0.25;
-	const static float PlanetRadius = (6371e3f / 1.428e-2);
+	const static float CloudHeight = (2e3f / GAME_UNIT_TO_M) * 0.25;
+	const static float PlanetRadius = (6371e3f / GAME_UNIT_TO_M);
 	const static float RcpHPlusR = (1.0 / (CloudHeight + PlanetRadius));
 
 	float3 GetCloudShadowSampleDir(float3 rel_pos, float3 eye_to_sun)

@@ -93,6 +93,28 @@ namespace Util
 	};
 
 	/**
+	 * RAII wrapper for centered popup modals. Positions the window before BeginPopupModal
+	 * and calls EndPopup() automatically on destruction.
+	 */
+	class CenteredPopupModal
+	{
+	public:
+		static constexpr ImVec2 kPopupCenter{ -FLT_MAX, -FLT_MAX };
+
+		CenteredPopupModal(const char* name, bool* p_open = nullptr, ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize, ImVec2 pos = kPopupCenter, ImVec2 pivot = ImVec2(0.5f, 0.5f));
+		~CenteredPopupModal();
+		operator bool() const { return isOpen; }
+
+		CenteredPopupModal(const CenteredPopupModal&) = delete;
+		CenteredPopupModal& operator=(const CenteredPopupModal&) = delete;
+		CenteredPopupModal(CenteredPopupModal&&) = delete;
+		CenteredPopupModal& operator=(CenteredPopupModal&&) = delete;
+
+	private:
+		bool isOpen;
+	};
+
+	/**
 	 * Usage:
 	 * {
 	 *      auto _ = DisableGuard(disableThis);
@@ -945,6 +967,21 @@ namespace Util
 		ImVec4 GetDisabled();  // Gray - disabled items (from theme Disable)
 	}
 
+	// Theme-colored text rendering with scoped push/text/pop per call.
+	namespace Text
+	{
+		void Warning(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedWarning(const char* fmt, ...) IM_FMTARGS(1);
+		void Error(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedError(const char* fmt, ...) IM_FMTARGS(1);
+		void Success(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedSuccess(const char* fmt, ...) IM_FMTARGS(1);
+		void Info(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedInfo(const char* fmt, ...) IM_FMTARGS(1);
+		void Disabled(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedDisabled(const char* fmt, ...) IM_FMTARGS(1);
+	}
+
 	/**
 	 * @brief Input handling utilities for ImGui integration
 	 *
@@ -1508,4 +1545,23 @@ namespace Util
 		std::vector<InputCombo>& combo,
 		bool& isRecording,
 		const char* recordingLabel);
+
+	/**
+	 * @brief Displays a DLL version information table with a clickable folder link.
+	 *
+	 * Shows a selectable label that opens the given directory when clicked,
+	 * followed by a sortable table of DLL names and their versions.
+	 * This is a general-purpose utility for any feature that distributes DLLs
+	 * and wants to expose their versions in the settings UI.
+	 *
+	 * @param label  Display label for the clickable folder link.
+	 * @param pluginDir  Wide string path to the plugin directory (opened on click).
+	 * @param dllVersions  Vector of (name, version) pairs to display.
+	 * @param tableId  Unique ImGui table identifier.
+	 */
+	void DrawDllVersionTable(
+		const char* label,
+		const wchar_t* pluginDir,
+		const std::vector<std::pair<std::string, std::string>>& dllVersions,
+		const char* tableId);
 }  // namespace Util

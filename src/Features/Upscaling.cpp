@@ -28,6 +28,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
+	frameGenerationAllowInMenus,
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
@@ -795,7 +796,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			if (upscaling.IsBackendInitialized()) {
 				upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-				upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
+				// Keep the D3D12 proxy swap chain as the outermost layer. Its GetDevice()
+				// override must remain visible to other SKSE plugins that query the
+				// swap chain for the D3D11 device.
 				upscaling.SetBackendD3DDevice(*ppDevice);
 				// Some Streamline features (notably Reflex/PCL) may not report
 				// load/support status reliably until the D3D device is bound.
@@ -974,11 +977,9 @@ void Upscaling::DrawSettings()
 	if (!globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS) {
 		auto screenSize = globals::state->screenSize;
 		if (screenSize.x > streamline.MAX_RESOLUTION || screenSize.y > streamline.MAX_RESOLUTION) {
-			ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-			ImGui::Text("Warning: Requested resolution %.0f x %.0f exceeds maximum supported resolution %d x %d for DLSS.",
+			Util::Text::Warning("Warning: Requested resolution %.0f x %.0f exceeds maximum supported resolution %d x %d for DLSS.",
 				screenSize.x, screenSize.y, streamline.MAX_RESOLUTION, streamline.MAX_RESOLUTION);
-			ImGui::Text("DLSS will not function. Lower your resolution or select a different upscaling method.");
-			ImGui::PopStyleColor();
+			Util::Text::Warning("DLSS will not function. Lower your resolution or select a different upscaling method.");
 		}
 	}
 
@@ -1287,40 +1288,28 @@ void Upscaling::DrawSettings()
 			bool onlyRequiresRestart = true;
 
 			if (!isWindowed) {
-				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-				ImGui::Text("Warning: Requires windowed mode");
-				ImGui::PopStyleColor();
+				Util::Text::Warning("Warning: Requires windowed mode");
 
 				onlyRequiresRestart = false;
 			}
 
 			if (lowRefreshRate && !settings.frameGenerationForceEnable) {
-				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-				ImGui::Text("Warning: Requires a high refresh rate monitor or Force Enable Frame Generation");
-				ImGui::PopStyleColor();
+				Util::Text::Warning("Warning: Requires a high refresh rate monitor or Force Enable Frame Generation");
 
 				onlyRequiresRestart = false;
 			}
 
 			if (settings.frameGenerationMode && !HasFrameGenModule()) {
-				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-				ImGui::Text("Warning: FidelityFX DLLs are not loaded");
-				ImGui::PopStyleColor();
+				Util::Text::Warning("Warning: FidelityFX DLLs are not loaded");
 
 				onlyRequiresRestart = false;
 			}
 
-			if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive) {
-				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-				ImGui::Text("Warning: Requires restart");
-				ImGui::PopStyleColor();
-			}
+			if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive)
+				Util::Text::Warning("Warning: Requires restart");
 
-			if (!settings.frameGenerationMode && frameGenerationDx12PathActive) {
-				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-				ImGui::Text("Warning: Requires restart");
-				ImGui::PopStyleColor();
-			}
+			if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
+				Util::Text::Warning("Warning: Requires restart");
 
 			std::string enabledLabel = "Enabled";
 			const char* toggleModes[] = { "Disabled", "Enabled" };
@@ -1349,6 +1338,12 @@ void Upscaling::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Forces Frame Generation on unsupported/low-refresh setups.");
 				ImGui::TextUnformatted("Range: 0 Disabled, 1 Enabled.");
+			}
+
+			ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Keeps frame generation active while game menus are open.");
+				ImGui::TextUnformatted("May feel smoother, but increases menu input latency.");
 			}
 
 			ImGui::TreePop();
@@ -1537,38 +1532,8 @@ void Upscaling::DrawSettings()
 		}
 
 		ImGui::Separator();
-		// FidelityFX section
-		if (ImGui::Selectable("AMD FidelityFX DLLs (click to open folder)")) {
-			ShellExecuteW(nullptr, L"open", FidelityFX::PluginDir, nullptr, nullptr, SW_SHOWNORMAL);
-		}
-		std::vector<std::string> headers = { "DLL Name", "Version" };
-		std::vector<std::vector<std::string>> ffRows;
-		for (const auto& [name, dllVersion] : FidelityFX::dllVersions)
-			ffRows.push_back({ name, dllVersion });
-		std::vector<Util::TableSortFunc> ffSorters = { nullptr, Util::VersionSortComparator };
-		Util::ShowSortedStringTableStrings(
-			"ffx_dll_versions",
-			headers,
-			ffRows,
-			0,
-			true,
-			ffSorters);
-
-		// Streamline section
-		if (ImGui::Selectable("NVIDIA Streamline DLLs (click to open folder)")) {
-			ShellExecuteW(nullptr, L"open", Streamline::PluginDir, nullptr, nullptr, SW_SHOWNORMAL);
-		}
-		std::vector<std::vector<std::string>> slRows;
-		for (const auto& [name, dllVersion] : Streamline::dllVersions)
-			slRows.push_back({ name, dllVersion });
-		std::vector<Util::TableSortFunc> slSorters = { nullptr, Util::VersionSortComparator };
-		Util::ShowSortedStringTableStrings(
-			"sl_dll_versions",
-			headers,
-			slRows,
-			0,
-			true,
-			slSorters);
+		Util::DrawDllVersionTable("AMD FidelityFX DLLs (click to open folder)", FidelityFX::PluginDir, FidelityFX::dllVersions, "ffx_dll_versions");
+		Util::DrawDllVersionTable("NVIDIA Streamline DLLs (click to open folder)", Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
 		ImGui::TreePop();
 	}
 }
@@ -4299,8 +4264,11 @@ void Upscaling::FrameLimiter()
 		if (settings.frameLimitMode) {
 			// Fall back to the original timing method
 			// Use integer arithmetic for more precise timing
-			int64_t targetFrameTimeNS = int64_t(1000000000.0 / (refreshRate * (settings.frameGenerationMode && !globals::game::ui->GameIsPaused() ? 0.5 : 1.0)));
-			int64_t targetFrameTicks = (targetFrameTimeNS * qpf.QuadPart) / 1000000000LL;
+			static constexpr int64_t kNanosecondsPerSecond = 1000000000LL;
+			static constexpr double kFrameGenerationRateScale = 0.5;
+			const double frameRateScale = ShouldUseFrameGenerationThisFrame() ? kFrameGenerationRateScale : 1.0;
+			int64_t targetFrameTimeNS = int64_t(static_cast<double>(kNanosecondsPerSecond) / (refreshRate * frameRateScale));
+			int64_t targetFrameTicks = (targetFrameTimeNS * qpf.QuadPart) / kNanosecondsPerSecond;
 
 			static LARGE_INTEGER lastFrame = {};
 			LARGE_INTEGER timeNow;
@@ -4383,6 +4351,17 @@ bool Upscaling::IsFrameGenerationDx12PathActive() const
 {
 	// Frame generation in this implementation runs via the DX12 swap-chain proxy path.
 	return d3d12SwapChainActive && !globals::game::isVR;
+}
+
+bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+{
+	auto* ui = globals::game::ui;
+	auto* state = globals::state;
+	const bool pausedMenuOpen = ui && ui->GameIsPaused();
+	const bool mainOrLoadingMenuOpen = state && state->IsMainOrLoadingMenuOpen(ui);
+	const bool menuOpen = pausedMenuOpen || mainOrLoadingMenuOpen;
+
+	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -4968,7 +4947,20 @@ void Upscaling::UpscaleDepth()
 	// 3) Resource copies are skipped for aliased src/dst to reduce copy churn.
 
 	// (1) Early validation exits
-	if (!IsUpscalingActive()) {
+	const bool depthUpscaleActive = IsUpscalingActive();
+	const auto upscaleMethod = GetUpscaleMethod();
+	const bool isVR = globals::game::isVR;
+	const bool vendorUpscaler = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
+	const bool fullResolutionMaskPath =
+		upscaleMethod == UpscaleMethod::kNONE ||
+		upscaleMethod == UpscaleMethod::kTAA ||
+		(vendorUpscaler && settings.qualityMode == 0);
+	const bool repairVRFullResolutionMask =
+		isVR &&
+		fullResolutionMaskPath &&
+		!depthUpscaleActive;
+
+	if (!depthUpscaleActive && !repairVRFullResolutionMask) {
 		return;
 	}
 
@@ -4976,7 +4968,8 @@ void Upscaling::UpscaleDepth()
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
-	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState || !upscaleDepthStencilState) {
+	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState ||
+		(depthUpscaleActive && !upscaleDepthStencilState)) {
 		return;
 	}
 
@@ -4991,19 +4984,25 @@ void Upscaling::UpscaleDepth()
 	auto& saoCameraZ = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSAO_CAMERAZ];
 	auto& underwaterMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kUNDERWATER_MASK];
 
-	if (!depth.texture || !depth.views[0] || !depthCopy.texture || !depthCopy.depthSRV ||
-		!refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV ||
+	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV ||
 		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
 		return;
 	}
-	if (globals::game::isVR && (!depthCopy.views[0] || !depthCopy.stencilSRV)) {
+	if (depthUpscaleActive &&
+		(!depth.views[0] || !refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV)) {
+		return;
+	}
+	if (isVR && !depthCopy.stencilSRV) {
+		return;
+	}
+	if (depthUpscaleActive && isVR && !depthCopy.views[0]) {
 		return;
 	}
 
 	auto* fullscreenVS = GetUpscaleVS();
-	auto* depthUpscalePS = GetDepthRefractionUpscalePS();
+	auto* depthUpscalePS = depthUpscaleActive ? GetDepthRefractionUpscalePS() : nullptr;
 	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS();
-	if (!fullscreenVS || !depthUpscalePS || !underwaterMaskPS) {
+	if (!fullscreenVS || !underwaterMaskPS || (depthUpscaleActive && !depthUpscalePS)) {
 		return;
 	}
 
@@ -5036,10 +5035,10 @@ void Upscaling::UpscaleDepth()
 	context->PSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 	// Set up jitter/depth-kernel constant buffer for upscaling
-	JitterCB jitterData;
+	JitterCB jitterData{};
 	jitterData.jitter = jitter;
 	// (2) Wide-kernel hysteresis
-	{
+	if (depthUpscaleActive) {
 		constexpr float kEnterWideKernelRatio = 1.55f;
 		constexpr float kExitWideKernelRatio = 1.45f;
 		const float minScale = std::max(std::min(resolutionScale.x, resolutionScale.y), FLT_EPSILON);
@@ -5056,7 +5055,6 @@ void Upscaling::UpscaleDepth()
 		}
 
 		jitterData.useWideKernel = depthUpscaleUseWideKernel ? 1.0f : 0.0f;
-		jitterData.pad0 = 0.0f;
 	}
 
 	jitterCB->Update(jitterData);
@@ -5070,7 +5068,7 @@ void Upscaling::UpscaleDepth()
 		}
 	};
 
-	{
+	if (depthUpscaleActive) {
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth Upscale");
 
 		// Engine copies kMAIN->kMAIN_COPY during 3D scene rendering.
@@ -5085,7 +5083,7 @@ void Upscaling::UpscaleDepth()
 		}
 
 		// Clear stencil to be 0xFF
-		if (globals::game::isVR) {
+		if (isVR) {
 			context->ClearDepthStencilView(depthCopy.views[0], D3D11_CLEAR_STENCIL, 1.0f, 0xFF);
 		}
 
@@ -5100,16 +5098,21 @@ void Upscaling::UpscaleDepth()
 		// kSAO_CAMERAZ is at quarter-stereo resolution in VR; the full-stereo viewport would
 		// corrupt only the top-left quarter. The engine's ISSAOCameraZ pass populates it correctly.
 		ID3D11RenderTargetView* rtvs[] = { refractionNormals.RTV,
-			globals::game::isVR ? nullptr : saoCameraZ.RTV };
+			isVR ? nullptr : saoCameraZ.RTV };
 		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
 		context->Draw(3, 0);
 
 		// Depth copy is also used on VR.
-		if (globals::game::isVR) {
+		if (isVR) {
 			copyIfNonAliased(depthCopy.texture, depth.texture);
 		}
+	} else {
+		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Full Resolution Underwater Mask Depth Copy");
+
+		// Full-resolution paths only need to refresh the underwater mask depth source.
+		copyIfNonAliased(depthCopy.texture, depth.texture);
 	}
 
 	{
@@ -5199,11 +5202,14 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (upscaling.d3d12SwapChainActive && upscaling.settings.frameGenerationMode)
+	if (upscaling.ShouldUseFrameGenerationThisFrame())
 		upscaling.CopySharedD3D12Resources();
 
-	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
+	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		upscaling.PerformUpscaling();
+	} else if (globals::game::isVR) {
+		upscaling.UpscaleDepth();
+	}
 
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		upscaling.ApplySharpening();

@@ -529,7 +529,6 @@ PS_OUTPUT main(PS_INPUT input)
 		float shadowVisibility = 0;
 
 		float3 positionLS = mul(transpose(lightProjectionMatrix), float4(positionMS.xyz, 1)).xyz;
-		// Rasterizer bias moves shadow casters; this receiver bias keeps mesh self-shadow compares stable.
 		float shadowMapCompareDepth = positionLS.z - shadowMapThreshold;
 
 #			if SHADOWFILTER == 0

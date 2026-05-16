@@ -193,7 +193,8 @@ public:
 		EffectShadows = 1 << 3,
 		IsTree = 1 << 4,
 		GrassSphereNormal = 1 << 5,
-		IsFemale = 1 << 6
+		IsFemale = 1 << 6,
+		SuppressExternalEmittance = 1 << 7
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -217,6 +218,12 @@ public:
 	bool isMainMenuOpen = false;
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
+	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
+	bool IsMainOrLoadingMenuOpen(RE::UI* ui) const
+	{
+		return IsMainOrLoadingMenuOpen() ||
+		       (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)));
+	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 
@@ -360,10 +367,6 @@ public:
 		});
 	}
 
-	// Features that are more special then others
-	std::unordered_map<std::string, bool> specialFeatures = {
-		{ "TruePBR", false }
-	};
 	std::unordered_map<std::string, bool> disabledFeatures;
 	std::mutex m_mutex;
 

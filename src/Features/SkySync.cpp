@@ -1,5 +1,8 @@
 #include "SkySync.h"
 
+#include <algorithm>
+#include <cmath>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkySync::Settings,
 	Enabled,
@@ -85,6 +88,9 @@ void SkySync::LoadSettings(json& o_json)
 	settings.SunsetBeginOffset = std::clamp(settings.SunsetBeginOffset, -5.0f, 5.0f);
 	settings.SunsetEndOffset = std::clamp(settings.SunsetEndOffset, -5.0f, 5.0f);
 	settings.MinShadowElevation = std::clamp(settings.MinShadowElevation, 0.0f, 45.0f);
+	if (!settings.Enabled) {
+		ResetRuntimeState();
+	}
 	SetSunAngle();
 }
 
@@ -96,7 +102,16 @@ void SkySync::SaveSettings(json& o_json)
 void SkySync::RestoreDefaultSettings()
 {
 	settings = {};
+	ResetRuntimeState();
 	SetSunAngle();
+}
+
+float SkySync::GetVolumetricLightingIntensityFactor() const
+{
+	if (!loaded || !settings.Enabled)
+		return DefaultVolumetricLightingIntensityFactor;
+
+	return SkySync::NormalizeVolumetricLightingIntensity(volumetricLightingIntensityFactor);
 }
 
 void SkySync::PostPostLoad()
@@ -134,7 +149,21 @@ void SkySync::DisableOnConflict(std::string_view conflictName)
 	failedLoadedMessage = fmt::format("Disabled as {} has been detected, both cannot be used together", conflictName);
 	loaded = false;
 	settings.Enabled = false;
+	ResetRuntimeState();
 	logger::warn("[Sky Sync] {}", failedLoadedMessage);
+}
+
+void SkySync::ResetRuntimeState()
+{
+	shadowFader.Reset();
+	volumetricLightingIntensityFactor = DefaultVolumetricLightingIntensityFactor;
+}
+
+float SkySync::NormalizeVolumetricLightingIntensity(float intensity)
+{
+	if (!std::isfinite(intensity))
+		intensity = DefaultVolumetricLightingIntensityFactor;
+	return std::clamp(intensity, 0.0f, 1.0f);
 }
 
 void SkySync::Sky_Update::thunk(RE::Sky* sky)
@@ -145,14 +174,23 @@ void SkySync::Sky_Update::thunk(RE::Sky* sky)
 
 void SkySync::Update(const RE::Sky* sky)
 {
-	if (!settings.Enabled)
+	if (!settings.Enabled) {
+		ResetRuntimeState();
 		return;
+	}
+
+	if (!sky) {
+		ResetRuntimeState();
+		return;
+	}
 
 	const auto sun = sky->sun;
 	const auto climate = sky->currentClimate;
 	const auto player = RE::PlayerCharacter::GetSingleton();
-	if (!sun || !climate || !player)
+	if (!sun || !sun->light || !sun->root || !sun->sunBase || !sun->sunGlareNode || !sky->root || !climate || !player || !gSunPosition || !gSunGlareSize || !gMasserSize || !gSecundaSize) {
+		ResetRuntimeState();
 		return;
+	}
 
 	const auto cell = player->GetParentCell();
 
@@ -166,6 +204,7 @@ void SkySync::Update(const RE::Sky* sky)
 
 	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
 	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows))) {
+		ResetRuntimeState();
 		return;
 	}
 
@@ -179,7 +218,7 @@ void SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky->masser, time, Caster::Masser, altitude, isDayTime);
 	ProcessMoon(sky->secunda, time, Caster::Secunda, altitude, isDayTime);
 
-	shadowFader.Update(sun, directions, intensities, isDayTime);
+	volumetricLightingIntensityFactor = shadowFader.Update(sun, directions, intensities, isDayTime);
 }
 void SkySync::SetSunAngle()
 {
@@ -368,9 +407,10 @@ void SkySync::ShadowFader::Reset()
 	current = Caster::None;
 	target = Caster::None;
 	fadeTimer = 0.0f;
+	previousHoursPassed = globals::game::calendar ? globals::game::calendar->GetHoursPassed() : 0.0f;
 }
 
-void SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], float intensities[3], const bool isDayTime)
+float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], float intensities[3], const bool isDayTime)
 {
 	const float masserIntensity = intensities[static_cast<int>(Caster::Masser)];
 	const float secundaIntensity = intensities[static_cast<int>(Caster::Secunda)];
@@ -408,23 +448,22 @@ void SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], floa
 
 	if (current == Caster::None) {
 		fadePhase = Phase::None;
-		SetLighting(sun, { 0.0f, 0.0f, 1.0f }, 0.0f);
-		return;
+		return SetLighting(sun, { 0.0f, 0.0f, 1.0f }, 0.0f);
 	}
 
 	const auto& dir = dirs[static_cast<int>(current)];
 	const auto intensity = intensities[static_cast<int>(current)];
 
 	if (fadePhase == Phase::None) {
-		SetLighting(sun, dir, intensity);
-		return;
+		return SetLighting(sun, dir, intensity);
 	}
 
-	fadeTimer = std::min(fadeTimer + *globals::game::deltaTime * timeScale, FadeTime);
+	const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 0.0f;
+	fadeTimer = std::min(fadeTimer + deltaTime * timeScale, FadeTime);
 
 	const float t = fadeTimer / FadeTime;
 	const float fade = fadePhase == Phase::FadeIn ? t : 1.0f - t;
-	SetLighting(sun, dir, intensity * fade);
+	const float lightingIntensity = SetLighting(sun, dir, intensity * fade);
 
 	if (fadePhase == Phase::FadeOut) {
 		if (t >= 1.0f || intensity <= 0.0f) {
@@ -436,9 +475,11 @@ void SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], floa
 		if (t >= 1.0f)
 			fadePhase = Phase::None;
 	}
+
+	return lightingIntensity;
 }
 
-void SkySync::ShadowFader::SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity)
+float SkySync::ShadowFader::SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity)
 {
 	ClampDirection(dir);
 
@@ -450,7 +491,8 @@ void SkySync::ShadowFader::SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, flo
 	RE::NiUpdateData updateData;
 	sun->light->Update(updateData);
 
-	intensity = std::clamp(intensity, 0.0f, 1.0f);
+	intensity = SkySync::NormalizeVolumetricLightingIntensity(intensity);
+	return intensity;
 }
 
 inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)

@@ -136,9 +136,8 @@ PS_OUTPUT main(PS_INPUT input)
 	srgbColor = lerp(srgbColor, Fade.xyz, Fade.w);
 #		endif
 
-	if (SharedData::linearLightingSettings.enableLinearLighting && SharedData::linearLightingSettings.enableGammaCorrection) {
-		srgbColor = Color::LinearToSrgb(srgbColor);
-	}
+	if (ENABLE_LL)
+		srgbColor = Color::LinearToGammaSafe(srgbColor);
 	srgbColor = FrameBuffer::ToSRGBColor(srgbColor);
 
 	psout.Color = float4(srgbColor, 1.0);

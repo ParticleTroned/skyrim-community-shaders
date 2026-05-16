@@ -5,6 +5,7 @@
 #include "LinearLighting.h"
 
 #include "Menu/ThemeManager.h"
+#include "Utils/ExternalEmittance.h"
 #include "Shadercache.h"
 #include "State.h"
 #include "Util.h"
@@ -17,11 +18,20 @@
 #include <limits>
 
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
+static constexpr uint CONTACT_SHADOW_MAX_LIGHTS = 8;
 static constexpr uint MAX_LIGHTS = 1024;
 
 namespace
 {
+	constexpr uint kContactShadowFlagPoint = 1u << 0;
+	constexpr uint kContactShadowFlagParticle = 1u << 1;
 	constexpr uint kLightsVisualisationModeMax = 3;
+	constexpr uint kContactShadowQualityMax = 2;
+	constexpr int kContactShadowQualityOptionCount = static_cast<int>(kContactShadowQualityMax) + 1;
+	constexpr uint kContactShadowClusterBudgetMin = 0;
+	constexpr uint kContactShadowClusterBudgetMax = CONTACT_SHADOW_MAX_LIGHTS;
+	constexpr uint kParticleContactShadowBudgetMax = 4;
+	constexpr uint kStrictContactShadowBudgetMax = CONTACT_SHADOW_MAX_LIGHTS;
 
 	constexpr float kParticleLightsSaturationMin = 1.0f;
 	constexpr float kParticleLightsSaturationMax = 2.0f;
@@ -53,6 +63,10 @@ namespace
 	void SanitizeSettings(LightLimitFix::Settings& a_settings)
 	{
 		a_settings.LightsVisualisationMode = std::min(a_settings.LightsVisualisationMode, kLightsVisualisationModeMax);
+		a_settings.ContactShadowQuality = std::min(a_settings.ContactShadowQuality, kContactShadowQualityMax);
+		a_settings.ContactShadowClusterBudget = std::clamp(a_settings.ContactShadowClusterBudget, kContactShadowClusterBudgetMin, kContactShadowClusterBudgetMax);
+		a_settings.ParticleContactShadowBudget = std::min(a_settings.ParticleContactShadowBudget, kParticleContactShadowBudgetMax);
+		a_settings.StrictContactShadowBudget = std::min(a_settings.StrictContactShadowBudget, kStrictContactShadowBudgetMax);
 		a_settings.ParticleLightsSaturation =
 			ClampFiniteOrDefault(a_settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, 1.0f);
 		a_settings.ParticleBrightness =
@@ -70,6 +84,39 @@ namespace
 			ClampFiniteOrDefault(a_settings.MaxParticleDistance, kMaxParticleDistanceMin, kMaxParticleDistanceMax, 6000.0f);
 		a_settings.JsonPlacedLightIntensity =
 			ClampFiniteOrDefault(a_settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, 1.0f);
+	}
+
+	uint PackContactShadowFlags(const LightLimitFix::Settings& a_settings)
+	{
+		if (a_settings.ContactShadowsInteriorsOnly && !Util::IsInterior()) {
+			return 0;
+		}
+
+		const uint clusterBudget = std::clamp(a_settings.ContactShadowClusterBudget, kContactShadowClusterBudgetMin, kContactShadowClusterBudgetMax);
+		const uint particleBudget = std::min(a_settings.ParticleContactShadowBudget, kParticleContactShadowBudgetMax);
+		const uint strictBudget = std::min(a_settings.StrictContactShadowBudget, kStrictContactShadowBudgetMax);
+
+		uint flags = 0;
+		if (a_settings.EnableContactShadows && (clusterBudget > 0 || strictBudget > 0)) {
+			flags |= kContactShadowFlagPoint;
+		}
+		if (a_settings.EnableParticleContactShadows && clusterBudget > 0 && particleBudget > 0) {
+			flags |= kContactShadowFlagParticle;
+		}
+		return flags;
+	}
+
+	uint PackContactShadowParams(const LightLimitFix::Settings& a_settings)
+	{
+		const uint quality = std::min(a_settings.ContactShadowQuality, kContactShadowQualityMax);
+		const uint particleBudget = std::min(a_settings.ParticleContactShadowBudget, kParticleContactShadowBudgetMax);
+		const uint clusterBudget = std::clamp(a_settings.ContactShadowClusterBudget, kContactShadowClusterBudgetMin, kContactShadowClusterBudgetMax);
+		const uint strictBudget = std::min(a_settings.StrictContactShadowBudget, kStrictContactShadowBudgetMax);
+
+		return (quality & 0xFFu) |
+		       ((particleBudget & 0xFFu) << 8) |
+		       ((clusterBudget & 0xFFu) << 16) |
+		       ((strictBudget & 0xFFu) << 24);
 	}
 
 	char ToLowerAscii(char a_char)
@@ -301,6 +348,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	JsonPlacedLightIntensity,
 	JsonPlacedLightsInteriorsOnly,
 	JsonPlacedLightsPortalStrictOnly,
+	EnableContactShadows,
+	ContactShadowsInteriorsOnly,
+	EnableParticleContactShadows,
+	ContactShadowQuality,
+	ContactShadowClusterBudget,
+	ParticleContactShadowBudget,
+	StrictContactShadowBudget,
 	EnableLightsVisualisation,
 	LightsVisualisationMode)
 void LightLimitFix::DrawSettings()
@@ -427,6 +481,54 @@ void LightLimitFix::DrawSettings()
 			ImGui::Spacing();
 			ImGui::TreePop();
 		}
+
+		if (ImGui::TreeNodeEx("Contact Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"Adds short screen-space contact shadows to LLF point lights.\n"
+					"Uses a cached per-cluster candidate list to limit the number of ray marches.");
+			}
+
+			ImGui::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Only run LLF contact shadows in interior cells.");
+			}
+
+			const char* qualityOptions[] = { "Low", "Medium", "High" };
+			int contactShadowQuality = static_cast<int>(settings.ContactShadowQuality);
+			if (ImGui::Combo("Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
+				settings.ContactShadowQuality = static_cast<uint>(std::clamp(contactShadowQuality, 0, static_cast<int>(kContactShadowQualityMax)));
+			}
+
+			int contactShadowClusterBudget = static_cast<int>(settings.ContactShadowClusterBudget);
+			if (ImGui::SliderInt("Cached Lights per Cluster", &contactShadowClusterBudget, static_cast<int>(kContactShadowClusterBudgetMin), static_cast<int>(kContactShadowClusterBudgetMax))) {
+				settings.ContactShadowClusterBudget = static_cast<uint>(contactShadowClusterBudget);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Maximum cached point and particle lights per cluster that can cast contact shadows. Set to 0 to disable clustered contact shadows.");
+			}
+
+			int strictContactShadowBudget = static_cast<int>(settings.StrictContactShadowBudget);
+			if (ImGui::SliderInt("Strict Light Budget", &strictContactShadowBudget, 0, static_cast<int>(kStrictContactShadowBudgetMax))) {
+				settings.StrictContactShadowBudget = static_cast<uint>(strictContactShadowBudget);
+			}
+
+			ImGui::Checkbox("Enable Particle Contact Shadows", &settings.EnableParticleContactShadows);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"Adds cheaper contact shadows for particle lights.\n"
+					"Keep the particle budget low for fire, smoke, and magic-heavy scenes.");
+			}
+
+			int particleContactShadowBudget = static_cast<int>(settings.ParticleContactShadowBudget);
+			if (ImGui::SliderInt("Particle Budget per Cluster", &particleContactShadowBudget, 0, static_cast<int>(kParticleContactShadowBudgetMax))) {
+				settings.ParticleContactShadowBudget = static_cast<uint>(particleContactShadowBudget);
+			}
+
+			ImGui::Spacing();
+			ImGui::TreePop();
+		}
 		ImGui::PopStyleColor(4);
 	}
 	auto shaderCache = globals::shaderCache;
@@ -494,6 +596,8 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	PerFrame perFrame{};
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
+	perFrame.ContactShadowFlags = PackContactShadowFlags(settings);
+	perFrame.ContactShadowParams = PackContactShadowParams(settings);
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
 }
@@ -576,6 +680,33 @@ void LightLimitFix::SetupResources()
 		lightGrid->CreateSRV(srvDesc);
 		uavDesc.Buffer.NumElements = numElements;
 		lightGrid->CreateUAV(uavDesc);
+
+		numElements = 1;
+		sbDesc.StructureByteStride = sizeof(uint32_t);
+		sbDesc.ByteWidth = sizeof(uint32_t) * numElements;
+		contactShadowIndexCounter = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::ContactShadowIndexCounter");
+		srvDesc.Buffer.NumElements = numElements;
+		contactShadowIndexCounter->CreateSRV(srvDesc);
+		uavDesc.Buffer.NumElements = numElements;
+		contactShadowIndexCounter->CreateUAV(uavDesc);
+
+		numElements = clusterCount * CONTACT_SHADOW_MAX_LIGHTS;
+		sbDesc.StructureByteStride = sizeof(uint32_t);
+		sbDesc.ByteWidth = sizeof(uint32_t) * numElements;
+		contactShadowIndexList = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::ContactShadowIndexList");
+		srvDesc.Buffer.NumElements = numElements;
+		contactShadowIndexList->CreateSRV(srvDesc);
+		uavDesc.Buffer.NumElements = numElements;
+		contactShadowIndexList->CreateUAV(uavDesc);
+
+		numElements = clusterCount;
+		sbDesc.StructureByteStride = sizeof(LightGrid);
+		sbDesc.ByteWidth = sizeof(LightGrid) * numElements;
+		contactShadowGrid = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::ContactShadowGrid");
+		srvDesc.Buffer.NumElements = numElements;
+		contactShadowGrid->CreateSRV(srvDesc);
+		uavDesc.Buffer.NumElements = numElements;
+		contactShadowGrid->CreateUAV(uavDesc);
 	}
 
 	{
@@ -936,7 +1067,9 @@ void LightLimitFix::Prepass()
 	auto context = globals::d3d::context;
 	auto state = globals::state;
 	if (!context || !state || !lights || !lightIndexList || !lightGrid ||
-		!lights->srv || !lightIndexList->srv || !lightGrid->srv) {
+		!contactShadowIndexList || !contactShadowGrid ||
+		!lights->srv || !lightIndexList->srv || !lightGrid->srv ||
+		!contactShadowIndexList->srv || !contactShadowGrid->srv) {
 		return;
 	}
 
@@ -945,10 +1078,12 @@ void LightLimitFix::Prepass()
 	state->BeginPerfEvent("LightLimitFix Prepass");
 	UpdateLights();
 
-	ID3D11ShaderResourceView* views[3]{};
+	ID3D11ShaderResourceView* views[5]{};
 	views[0] = lights->srv.get();
 	views[1] = lightIndexList->srv.get();
 	views[2] = lightGrid->srv.get();
+	views[3] = contactShadowIndexList->srv.get();
+	views[4] = contactShadowGrid->srv.get();
 	context->PSSetShaderResources(35, ARRAYSIZE(views), views);
 
 	state->EndPerfEvent();
@@ -1696,7 +1831,9 @@ void LightLimitFix::UpdateStructure()
 {
 	auto context = globals::d3d::context;
 	if (!context || !lightBuildingCB || !lightCullingCB || !clusters || !lights ||
-		!lightIndexCounter || !lightIndexList || !lightGrid || !clusterBuildingCS || !clusterCullingCS) {
+		!lightIndexCounter || !lightIndexList || !lightGrid ||
+		!contactShadowIndexCounter || !contactShadowIndexList || !contactShadowGrid ||
+		!clusterBuildingCS || !clusterCullingCS) {
 		return;
 	}
 
@@ -1738,12 +1875,15 @@ void LightLimitFix::UpdateStructure()
 	{
 		LightCullingCB updateData{};
 		updateData.LightCount = lightCount;
+		updateData.ContactShadowFlags = PackContactShadowFlags(settings);
+		updateData.ContactShadowParams = PackContactShadowParams(settings);
 		std::copy(clusterSize, clusterSize + 3, updateData.ClusterSize);
 
 		lightCullingCB->Update(updateData);
 
 		UINT counterReset[4] = { 0, 0, 0, 0 };
 		context->ClearUnorderedAccessViewUint(lightIndexCounter->uav.get(), counterReset);
+		context->ClearUnorderedAccessViewUint(contactShadowIndexCounter->uav.get(), counterReset);
 
 		ID3D11Buffer* buffer = lightCullingCB->CB();
 		context->CSSetConstantBuffers(0, 1, &buffer);
@@ -1751,7 +1891,14 @@ void LightLimitFix::UpdateStructure()
 		ID3D11ShaderResourceView* srvs[] = { clusters->srv.get(), lights->srv.get() };
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		ID3D11UnorderedAccessView* uavs[] = { lightIndexCounter->uav.get(), lightIndexList->uav.get(), lightGrid->uav.get() };
+		ID3D11UnorderedAccessView* uavs[] = {
+			lightIndexCounter->uav.get(),
+			lightIndexList->uav.get(),
+			lightGrid->uav.get(),
+			contactShadowIndexCounter->uav.get(),
+			contactShadowIndexList->uav.get(),
+			contactShadowGrid->uav.get()
+		};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(clusterCullingCS, nullptr, 0);
@@ -1766,8 +1913,8 @@ void LightLimitFix::UpdateStructure()
 	ID3D11ShaderResourceView* null_srvs[2] = { nullptr };
 	context->CSSetShaderResources(0, 2, null_srvs);
 
-	ID3D11UnorderedAccessView* null_uavs[3] = { nullptr };
-	context->CSSetUnorderedAccessViews(0, 3, null_uavs, nullptr);
+	ID3D11UnorderedAccessView* null_uavs[6] = { nullptr };
+	context->CSSetUnorderedAccessViews(0, 6, null_uavs, nullptr);
 }
 
 void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
@@ -1781,6 +1928,7 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	func(This, Pass, RenderFlags);
+	ExternalEmittance::UpdatePermutation(Pass);
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);

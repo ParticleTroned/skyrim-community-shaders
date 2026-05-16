@@ -40,6 +40,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	specularLevel,
 	glintParameters);
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TruePBR::Settings,
+	VertexAOStrength);
+
 #define CHECK_PBR_TEXTURE(textureName)                                                                         \
 	if (!(pbrMaterial->textureName)) {                                                                         \
 		logger::warn("[TruePBR] {} missing {}; treating as nonPBR", pbrMaterial->inputFilePath, #textureName); \
@@ -109,6 +113,10 @@ void TruePBR::DrawSettings()
 	if (ImGui::CollapsingHeader("PBR", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		{
 			Util::BlueFrameStyleWrapper blueFrameStyle;
+			ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("Controls how strongly TruePBR uses vertex color as ambient occlusion.\n1.0 = full current AO behavior. 0.0 normalizes vertex color brightness while preserving tint.");
+			}
 			ImGui::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
 			if (ImGui::IsItemHovered()) {
 				ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
@@ -314,14 +322,31 @@ void TruePBR::DrawSettings()
 	}
 }
 
+void TruePBR::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void TruePBR::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void TruePBR::RestoreDefaultSettings()
+{
+	settings = {};
+}
+
 void TruePBR::SetupResources()
 {
 	SetupTextureSetData();
 	SetupMaterialObjectData();
 }
 
-void TruePBR::PrePass()
+void TruePBR::Prepass()
 {
+	SetupDefaultPBRLandTextureSet();
+
 	auto context = globals::d3d::context;
 	if (!glintsNoiseTexture)
 		SetupGlintsTexture();
@@ -405,11 +430,6 @@ void TruePBR::SetupGlintsTexture()
 	}
 
 	noiseGenProgram->Release();
-}
-
-void TruePBR::SetupFrame()
-{
-	SetupDefaultPBRLandTextureSet();
 }
 
 void TruePBR::SetupTextureSetData()
@@ -969,7 +989,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 				PBRProjectedUVParams1[0] = pbrMaterial->GetProjectedMaterialBaseColorScale()[0];
 				PBRProjectedUVParams1[1] = pbrMaterial->GetProjectedMaterialBaseColorScale()[1];
 				PBRProjectedUVParams1[2] = pbrMaterial->GetProjectedMaterialBaseColorScale()[2];
-				shadowState->SetPSConstant(PBRProjectedUVParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.EnvmapData);
+				shadowState->SetPSConstant(PBRProjectedUVParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MaterialObjectRGBScale);
 
 				std::array<float, 4> PBRProjectedUVParams2;
 				PBRProjectedUVParams2[0] = pbrMaterial->GetProjectedMaterialRoughness();
@@ -1119,7 +1139,7 @@ void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::T
 		return;
 	}
 
-	auto truePBR = globals::truePBR;
+	auto truePBR = &globals::features::truePBR;
 	auto* textureSetData = truePBR->GetPBRTextureSetData(textureSet);
 	const bool isPbr = textureSetData != nullptr;
 
@@ -1152,7 +1172,7 @@ bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		return false;
 	}
 
-	auto singleton = globals::truePBR;
+	auto singleton = &globals::features::truePBR;
 
 	bool isPbr = false;
 	if (land->loadedData != nullptr) {
@@ -1256,7 +1276,7 @@ struct TESForm_GetFormEditorID
 {
 	static const char* thunk(const RE::TESForm* form)
 	{
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 		auto it = singleton->editorIDs.find(form->GetFormID());
 		if (it == singleton->editorIDs.cend()) {
 			return "";
@@ -1270,7 +1290,7 @@ struct TESForm_SetFormEditorID
 {
 	static bool thunk(RE::TESForm* form, const char* editorId)
 	{
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 		singleton->editorIDs[form->GetFormID()] = editorId;
 		return true;
 	}
@@ -1282,7 +1302,7 @@ struct BSTempEffectSimpleDecal_SetupGeometry
 	static void thunk(RE::BSTempEffectSimpleDecal* decal, RE::BSGeometry* geometry, RE::BGSTextureSet* textureSet, bool blended)
 	{
 		func(decal, geometry, textureSet, blended);
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 		auto unknownProperty = geometry->GetGeometryRuntimeData().shaderProperty.get();
 		if (auto shaderProperty = unknownProperty->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(unknownProperty) : nullptr;
 			shaderProperty != nullptr && singleton->IsPBRTextureSet(textureSet)) {
@@ -1319,7 +1339,7 @@ struct BSTempEffectGeometryDecal_Initialize
 	static void thunk(RE::BSTempEffectGeometryDecal* decal)
 	{
 		func(decal);
-		auto* singleton = globals::truePBR;
+		auto* singleton = &globals::features::truePBR;
 
 		if (decal->decal != nullptr && singleton->IsPBRTextureSet(decal->texSet)) {
 			auto shaderProperty = static_cast<RE::BSLightingShaderProperty*>(RE::MemoryManager::GetSingleton()->Allocate(sizeof(RE::BSLightingShaderProperty), 0, false));
@@ -1364,54 +1384,59 @@ struct TESBoundObject_Clone3D
 {
 	static RE::NiAVObject* thunk(RE::TESBoundObject* object, RE::TESObjectREFR* ref, bool arg3)
 	{
-		auto truePBR = globals::truePBR;
+		auto truePBR = &globals::features::truePBR;
 		auto* result = func(object, ref, arg3);
 		if (result != nullptr && ref != nullptr && ref->data.objectReference != nullptr && ref->data.objectReference->formType == RE::FormType::Static) {
 			auto* stat = static_cast<RE::TESObjectSTAT*>(ref->data.objectReference);
 			RE::BGSMaterialObject* currentMato = stat->data.materialObj;
 
-			if (currentMato != nullptr && currentMato->directionalData.singlePass) {
-				auto* pbrData = truePBR->GetPBRMaterialObjectData(currentMato);
-				if (pbrData != nullptr) {
-					RE::BSVisit::TraverseScenegraphGeometries(result, [pbrData, ref](RE::BSGeometry* geometry) {
-						if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get())) {
-							if (shaderProperty->GetMaterialType() == RE::BSShaderMaterial::Type::kLighting &&
-								shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting)) {
-								if (auto* material = static_cast<BSLightingShaderMaterialPBR*>(shaderProperty->material)) {
-									auto& ext = BSLightingShaderMaterialPBR::All[material];
-									const auto prevOwnerRefID = ext.lastOwnerRefFormID;
-									const auto prevColorScale = material->GetProjectedMaterialBaseColorScale();
+			// Resolve PBR MATO data: non-null applies MATO to geometries with
+			// fork-before-write protection; null means no PBR config and is a no-op.
+			auto* pbrData = (currentMato != nullptr && currentMato->directionalData.singlePass) ? truePBR->GetPBRMaterialObjectData(currentMato) : nullptr;
 
-									// Fork-before-write: if this material instance is already owned
-									// by a different ref with a different MATO, clone it so we don't
-									// contaminate the previous owner's geometry.
-									const bool wouldContaminate =
-										(prevOwnerRefID != 0) &&
-										(prevOwnerRefID != ref->GetFormID()) &&
-										(prevColorScale != pbrData->baseColorScale);
+			if (pbrData != nullptr) {
+				RE::BSVisit::TraverseScenegraphGeometries(result, [pbrData, ref](RE::BSGeometry* geometry) {
+					if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get())) {
+						if (shaderProperty->GetMaterialType() == RE::BSShaderMaterial::Type::kLighting &&
+							shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting)) {
+							if (auto* material = static_cast<BSLightingShaderMaterialPBR*>(shaderProperty->material)) {
+								auto& ext = BSLightingShaderMaterialPBR::All[material];
+								const auto prevOwnerRefID = ext.lastOwnerRefFormID;
 
-									BSLightingShaderMaterialPBR* targetMat = material;
+								// Fork-before-write: if this material instance is already owned
+								// by a different ref whose MATO payload differs from the incoming
+								// one, clone it so we don't contaminate the previous owner's
+								// geometry. GetPBRMaterialObjectData returns stable addresses into
+								// pbrMaterialObjects, so pointer identity detects different MATOs.
+								const bool wouldContaminate =
+									(prevOwnerRefID != 0) &&
+									(prevOwnerRefID != ref->GetFormID()) &&
+									(ext.materialObjectData != pbrData);
 
-									if (wouldContaminate) {
-										auto* freshMat = BSLightingShaderMaterialPBR::Make();
-										if (freshMat) {
-											freshMat->CopyMembers(material);
-											shaderProperty->material = freshMat;
-											targetMat = freshMat;
-										}
+								BSLightingShaderMaterialPBR* targetMat = material;
+
+								if (wouldContaminate) {
+									auto* freshMat = BSLightingShaderMaterialPBR::Make();
+									if (freshMat) {
+										freshMat->CopyMembers(material);
+										shaderProperty->material = freshMat;
+										targetMat = freshMat;
+									} else {
+										logger::warn("[TruePBR] failed to clone PBR material for ref {:08X}; skipping to avoid contamination", ref->GetFormID());
+										return RE::BSVisit::BSVisitControl::kContinue;
 									}
-
-									targetMat->ApplyMaterialObjectData(*pbrData);
-									auto& targetExt              = BSLightingShaderMaterialPBR::All[targetMat];
-									targetExt.materialObjectData = pbrData;
-									targetExt.lastOwnerRefFormID = ref->GetFormID();
 								}
+
+								targetMat->ApplyMaterialObjectData(*pbrData);
+								auto& targetExt = BSLightingShaderMaterialPBR::All[targetMat];
+								targetExt.materialObjectData = pbrData;
+								targetExt.lastOwnerRefFormID = ref->GetFormID();
 							}
 						}
+					}
 
-						return RE::BSVisit::BSVisitControl::kContinue;
-					});
-				}
+					return RE::BSVisit::BSVisitControl::kContinue;
+				});
 			}
 		}
 		return result;
@@ -1423,7 +1448,7 @@ struct BGSTextureSet_ToShaderTextureSet
 {
 	static RE::BSShaderTextureSet* thunk(RE::BGSTextureSet* textureSet)
 	{
-		auto truePBR = globals::truePBR;
+		auto truePBR = &globals::features::truePBR;
 		truePBR->currentTextureSet = textureSet;
 
 		return func(textureSet);
@@ -1437,7 +1462,7 @@ struct BSLightingShaderProperty_OnLoadTextureSet
 	{
 		func(property, a2);
 
-		auto truePBR = globals::truePBR;
+		auto truePBR = &globals::features::truePBR;
 		truePBR->currentTextureSet = nullptr;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;

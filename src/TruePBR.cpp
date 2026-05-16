@@ -40,6 +40,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	specularLevel,
 	glintParameters);
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TruePBR::Settings,
+	VertexAOStrength);
+
 #define CHECK_PBR_TEXTURE(textureName)                                                                         \
 	if (!(pbrMaterial->textureName)) {                                                                         \
 		logger::warn("[TruePBR] {} missing {}; treating as nonPBR", pbrMaterial->inputFilePath, #textureName); \
@@ -109,6 +113,10 @@ void TruePBR::DrawSettings()
 	if (ImGui::CollapsingHeader("PBR", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick)) {
 		{
 			Util::BlueFrameStyleWrapper blueFrameStyle;
+			ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("Controls how strongly TruePBR uses vertex color as ambient occlusion.\n1.0 = full current AO behavior. 0.0 normalizes vertex color brightness while preserving tint.");
+			}
 			ImGui::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
 			if (ImGui::IsItemHovered()) {
 				ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
@@ -312,6 +320,21 @@ void TruePBR::DrawSettings()
 			ImGui::TreePop();
 		}
 	}
+}
+
+void TruePBR::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void TruePBR::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void TruePBR::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 void TruePBR::SetupResources()

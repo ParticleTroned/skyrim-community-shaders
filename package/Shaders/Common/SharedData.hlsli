@@ -333,6 +333,12 @@ namespace SharedData
 		float pad0;
 	};
 
+	struct TruePBRSettings
+	{
+		float VertexAOStrength;
+		uint3 pad;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -351,6 +357,7 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
+		TruePBRSettings truePBRSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

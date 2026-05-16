@@ -58,9 +58,7 @@ Now update all remaining Community Shaders features that are still checked/activ
 
 Not every feature shown in your MGO/modlist setup is required. Community Shaders is modular, so many features are optional. The game will work without them, but most of them improve visuals.
 
-### Note about Unified Water
 
-**Unified Water** may appear as unloaded. This is currently only a placeholder for an upcoming feature. Once it is available on Nexus, you can install it like any other Community Shaders feature and it will load normally.
 
 ---
 
@@ -261,7 +259,7 @@ Approximate cost is heavy dependent on rain and thunder intensity. - none if dry
 ```text
 ~0.5-1.5 ms
 ```
-
+--> Use the 3 presets to adjust Wetterness to your performance needs.
 
 Wetterness makes rain, puddles, and wet surfaces feel much more natural. In heavy rain, it can feel much closer to standing outside in a real thunderstorm.
 
@@ -276,6 +274,7 @@ Approximate cost:
 SSGI adds a lot of depth, especially in interiors, but it has a higher performance cost. Use the foveated modes if needed.
 
 You are usually less FPS-limited inside interiors, so using SSGI indoors only is a good compromise.
+--> use foveated only when you have already Foveated Upscaling in Upscaler activated for performance savings
 
 ---
 
@@ -345,6 +344,34 @@ Sharpness: 0.1
 
 Read the tooltips in the CS menu by hovering your mouse over each setting. They explain which options are best for different GPUs and performance targets.
 
+How-to setup up Foveated Upscaling (Highly recommended - biggest performance saver!) 
+
+1) activate FOV in Upscaling UI: 
+
+
+![Community Shaders feature toggle location](Images-Fork-Installation/upscaling1.png)
+
+
+2) Toggle FOV Mask Visualization
+
+
+![Community Shaders feature toggle location](Images-Fork-Installation/upscaling2.png)
+
+
+3) Precisely define your foveated area in the center of your view.to precisely setup up your foveated area in the center of your view.
+
+
+![Community Shaders feature toggle location](Images-Fork-Installation/FOV-setup.png)
+
+
+4) For even more performance savings activate  DLSS FOV + TAA. This means you can minimize the cetral expesnive high quality view to 0.25-0.3 and fill in the periphery with TAA. I usually use 0.3 + 0.7 TAA for best performance with a minimal visual trade off at the periphery
+
+
+![Community Shaders feature toggle location](Images-Fork-Installation/upscaling3.png)
+
+
+
+5) If needed re-adjust FOV postion for  DLSS FOV + TAA, save your settings and toggle off FOV Mask Visualization
 
 ---
 

@@ -3276,6 +3276,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(DEFERRED)
 	uint contactShadowOffset = 0;
 	uint contactShadowCount = 0;
+	float contactShadowNoise = 0.0;
+	bool hasContactShadowNoise = false;
+	float2 contactShadowScreenDim = LightLimitFix::GetContactShadowScreenDim();
 #		endif
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
@@ -3397,7 +3400,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			shadowComponent != 0.0 &&
 			intensityMultiplier > 1e-5)
 		{
-			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenUV, light.positionWS[eyeIndex].xyz, screenNoise, isParticleLight, eyeIndex);
+			if (!hasContactShadowNoise) {
+				contactShadowNoise = Random::InterleavedGradientNoise(
+					LightLimitFix::GetContactShadowNoiseCoord(input.Position.xy, screenUV, contactShadowScreenDim),
+					SharedData::FrameCount);
+				hasContactShadowNoise = true;
+			}
+
+			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenUV, light.positionWS[eyeIndex].xyz, contactShadowNoise, contactShadowScreenDim, isParticleLight, eyeIndex);
 		}
 #			endif
 

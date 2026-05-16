@@ -1,4 +1,3 @@
-
 namespace LightLimitFix
 {
 
@@ -124,7 +123,25 @@ namespace LightLimitFix
 		return isParticle ? 512.0 : 1024.0;
 	}
 
-	float ContactShadows(float3 viewPosition, float2 screenUV, float3 lightPositionWS, float screenNoise, bool isParticle, uint eyeIndex)
+	float2 GetContactShadowScreenDim()
+	{
+		float2 screenDim = SharedData::BufferDim.xy;
+#if defined(VR)
+		screenDim.x *= 0.5;
+#endif
+		return screenDim;
+	}
+
+	float2 GetContactShadowNoiseCoord(float2 screenPosition, float2 screenUV, float2 screenDim)
+	{
+#if defined(VR)
+		return screenUV * screenDim;
+#else
+		return screenPosition;
+#endif
+	}
+
+	float ContactShadows(float3 viewPosition, float2 screenUV, float3 lightPositionWS, float screenNoise, float2 screenDim, bool isParticle, uint eyeIndex)
 	{
 		const float fadeDistance = GetContactShadowFadeDistance(isParticle);
 		const float viewDistance = abs(viewPosition.z);
@@ -150,7 +167,7 @@ namespace LightLimitFix
 
 		float2 endUV = FrameBuffer::ViewToUV(endVS, true, eyeIndex);
 
-		float2 rayPixels = (endUV - screenUV) * SharedData::BufferDim.xy;
+		float2 rayPixels = (endUV - screenUV) * screenDim;
 		float rayPixelsLength = length(rayPixels);
 		uint sampleCount = min(GetContactShadowMaxSamples(isParticle, quality), max(1u, (uint)ceil(rayPixelsLength / 18.0)));
 

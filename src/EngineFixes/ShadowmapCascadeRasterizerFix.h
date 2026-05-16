@@ -7,7 +7,7 @@
 #include <limits>
 
 // Applies shadowmap caster bias. Flat keeps the v1.5.2 rasterizer table behavior;
-// VR uses scoped draw-call state to avoid HMD flicker.
+// VR keeps caster bias off by default and exposes only a tiny optional outer-cascade bias.
 struct ShadowmapRasterizerFix : EngineFix
 {
 	std::string GetName() override { return "Shadowmap Cascade Rasterizer Fix"; }
@@ -30,6 +30,7 @@ struct ShadowmapRasterizerFix : EngineFix
 	static void ReleaseClonedRasterStates();
 	static void RebuildBiasedRasterStateLookup();
 	static ID3D11RasterizerState* GetBiasedRasterState(ID3D11RasterizerState* state);
+	static bool IsVRCasterBiasEnabled();
 
 	static inline std::uint32_t numCascades = 0;
 	static inline std::uint32_t currentCascade = 0;
@@ -66,24 +67,16 @@ struct ShadowmapRasterizerFix : EngineFix
 	static constexpr float vrNearCascadeDepthBiasClamp = 0.0f;
 	static constexpr float vrNearCascadeSlopeScaleBias = 0.0f;
 
-	// Keep a small scoped caster offset on outer cascades for the PR1690/1888 behavior without global table mutation.
-	static constexpr int vrOuterCascadeDepthBias = 32;
-	static constexpr float vrOuterCascadeDepthBiasClamp = 0.00075f;
-	static constexpr float vrOuterCascadeSlopeScaleBias = 0.35f;
+	// Optional only: a tiny outer-cascade caster offset for VR users who still see distant shadow acne.
+	static constexpr int vrOuterCascadeDepthBias = 8;
+	static constexpr float vrOuterCascadeDepthBiasClamp = 0.0001f;
+	static constexpr float vrOuterCascadeSlopeScaleBias = 0.05f;
 
 	static constexpr std::array<ShadowMapRasterizerDescriptor, maxCascades> vrCascadeDescriptors = {
 		ShadowMapRasterizerDescriptor{ vrNearCascadeDepthBias, vrNearCascadeDepthBiasClamp, vrNearCascadeSlopeScaleBias },
 		ShadowMapRasterizerDescriptor{ vrOuterCascadeDepthBias, vrOuterCascadeDepthBiasClamp, vrOuterCascadeSlopeScaleBias },
 		ShadowMapRasterizerDescriptor{ vrOuterCascadeDepthBias, vrOuterCascadeDepthBiasClamp, vrOuterCascadeSlopeScaleBias }
 	};
-
-	static constexpr bool vrCasterBiasEnabled =
-		vrNearCascadeDepthBias != 0 ||
-		vrNearCascadeDepthBiasClamp != 0.0f ||
-		vrNearCascadeSlopeScaleBias != 0.0f ||
-		vrOuterCascadeDepthBias != 0 ||
-		vrOuterCascadeDepthBiasClamp != 0.0f ||
-		vrOuterCascadeSlopeScaleBias != 0.0f;
 
 	struct ScopedCascadeBias
 	{

@@ -1,13 +1,58 @@
 #include "ShadowmapCascadeRasterizerFix.h"
 
+#include "Features/VR.h"
 #include "Globals.h"
 
+#include <algorithm>
+#include <memory>
 #include <unordered_map>
 
 namespace
 {
 	std::unordered_map<ID3D11RasterizerState*, std::array<ID3D11RasterizerState*, ShadowmapRasterizerFix::maxCascades>> biasedRasterStateLookup;
 	std::unordered_map<ID3D11RasterizerState*, ID3D11RasterizerState*> originalRasterStateLookup;
+
+	bool MatchDescriptorCandidate(void* candidate, const RE::BSShadowLight::ShadowmapDescriptorVR& descriptor)
+	{
+		if (!candidate)
+			return false;
+
+		return candidate == std::addressof(descriptor) ||
+		       candidate == descriptor.camera[0].get() ||
+		       candidate == descriptor.camera[1].get() ||
+		       candidate == descriptor.shaderAccumulator[0].get() ||
+		       candidate == descriptor.shaderAccumulator[1].get() ||
+		       candidate == descriptor.cullingProcess;
+	}
+
+	bool MatchDescriptorArguments(void* arg1, void* arg2, const RE::BSShadowLight::ShadowmapDescriptorVR& descriptor)
+	{
+		return MatchDescriptorCandidate(arg1, descriptor) || MatchDescriptorCandidate(arg2, descriptor);
+	}
+
+	std::uint32_t ResolveNativeCascadeIndex(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2)
+	{
+		if (!light)
+			return ShadowmapRasterizerFix::invalidCascade;
+
+		auto& runtimeData = light->GetVRRuntimeData();
+		const auto descriptorCount = std::min<std::uint32_t>(
+			static_cast<std::uint32_t>(runtimeData.shadowmapDescriptors.size()),
+			std::min(light->shadowMapCount, ShadowmapRasterizerFix::maxCascades));
+
+		for (std::uint32_t descriptorIndex = 0; descriptorIndex < descriptorCount; descriptorIndex++) {
+			const auto& descriptor = runtimeData.shadowmapDescriptors[descriptorIndex];
+			if (!MatchDescriptorArguments(arg1, arg2, descriptor))
+				continue;
+
+			if (descriptor.shadowmapIndex < ShadowmapRasterizerFix::maxCascades)
+				return descriptor.shadowmapIndex;
+
+			return descriptorIndex;
+		}
+
+		return ShadowmapRasterizerFix::invalidCascade;
+	}
 
 	template <class Fn>
 	void ForEachRasterStateSlot(Fn&& fn)
@@ -62,7 +107,7 @@ void ShadowmapRasterizerFix::InstallD3DHooks(ID3D11DeviceContext* context)
 	if (!REL::Module::IsVR())
 		return;
 
-	if constexpr (!vrCasterBiasEnabled)
+	if (!IsVRCasterBiasEnabled())
 		return;
 
 	if (!context || d3dHooksInstalled)
@@ -71,6 +116,12 @@ void ShadowmapRasterizerFix::InstallD3DHooks(ID3D11DeviceContext* context)
 	stl::detour_vfunc<43, ID3D11DeviceContext_RSSetState>(context);
 
 	d3dHooksInstalled = true;
+}
+
+bool ShadowmapRasterizerFix::IsVRCasterBiasEnabled()
+{
+	return REL::Module::IsVR() &&
+	       globals::features::vr.settings.EnableOuterCascadeCasterBias;
 }
 
 void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCascade::thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, std::uint32_t flags)
@@ -109,18 +160,25 @@ void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCas
 		return;
 	}
 
+	if (!IsVRCasterBiasEnabled()) {
+		func(light, arg1, arg2, flags);
+		return;
+	}
+
 	if (!initialized)
 		InitializeRasterStates();
 
-	const auto cascade = currentCascade % numCascades;
+	const auto cascade = ResolveNativeCascadeIndex(light, arg1, arg2);
+	if (cascade >= numCascades) {
+		func(light, arg1, arg2, flags);
+		return;
+	}
 
 	{
 		ScopedCascadeBias scopedCascadeBias(cascade);
 		func(light, arg1, arg2, flags);
 		RestoreOriginalRasterState(globals::d3d::context);
 	}
-
-	currentCascade = (cascade + 1) % numCascades;
 }
 
 void ShadowmapRasterizerFix::InitializeRasterStates()
@@ -128,7 +186,7 @@ void ShadowmapRasterizerFix::InitializeRasterStates()
 	ReleaseClonedRasterStates();
 	std::memcpy(backupGameRasterStates, *gRasterStates, sizeof(RasterStateArray));
 
-	if constexpr (vrCasterBiasEnabled) {
+	if (REL::Module::IsVR()) {
 		for (std::uint32_t cascade = 0; cascade < numCascades; cascade++)
 			CloneRasterStates(backupGameRasterStates, cascade, vrCascadeDescriptors);
 		RebuildBiasedRasterStateLookup();
@@ -188,9 +246,6 @@ void ShadowmapRasterizerFix::RebuildBiasedRasterStateLookup()
 	if (!REL::Module::IsVR())
 		return;
 
-	if constexpr (!vrCasterBiasEnabled)
-		return;
-
 	ForEachRasterStateSlot([&](int fill, int cull, int depth, int scissor) {
 		auto* gameRaster = backupGameRasterStates[fill][cull][depth][scissor];
 		if (!gameRaster)
@@ -211,7 +266,7 @@ ID3D11RasterizerState* ShadowmapRasterizerFix::GetBiasedRasterState(ID3D11Raster
 	if (!REL::Module::IsVR())
 		return nullptr;
 
-	if constexpr (!vrCasterBiasEnabled)
+	if (!IsVRCasterBiasEnabled())
 		return nullptr;
 
 	if (!state || !initialized || activeCascade >= numCascades)

@@ -172,6 +172,9 @@ public:
 		float StereoBlendMaxFactor = Config::kDefaultStereoBlendMaxFactor;
 		float StereoBlendColorThreshold = Config::kDefaultStereoBlendColorThreshold;
 
+		// Optional caster-side bias for distant directional shadow acne.
+		bool EnableOuterCascadeCasterBias = false;
+
 		// VR Menu Overlay positioning settings
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)
 		int VRMenuPositioningMethod = 1;                ///< 0 = HMD relative, 1 = Fixed world position

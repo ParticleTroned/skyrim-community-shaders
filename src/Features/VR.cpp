@@ -439,7 +439,9 @@ namespace
 	void DrawMenuSettings();
 	void DrawMouseSettings();
 	void DrawDragSettings();
-	void DrawStereoBlendingSettings();
+	void DrawStereoSettings();
+	void DrawStereoSyncSettings();
+	void DrawStereoBlendSettings();
 	void DrawShadowmapRasterizerSettings();
 	void DrawKeyBindings();
 	void DrawDebugSection();
@@ -475,9 +477,9 @@ void VR::DrawSettings()
 			}
 		}
 
-		if (BeginTabItemWithFont("Stereo Blending", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRStereoBlendingFrame", { 0, 0 }, true)) {
-				DrawStereoBlendingSettings();
+		if (BeginTabItemWithFont("Stereo", Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##VRStereoFrame", { 0, 0 }, true)) {
+				DrawStereoSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
@@ -974,7 +976,64 @@ namespace
 		}
 	}
 
-	void DrawStereoBlendingSettings()
+	void DrawStereoSyncSettings()
+	{
+		const bool isVR = REL::Module::IsVR();
+		auto& screenSpaceShadows = globals::features::screenSpaceShadows;
+		auto& screenSpaceGI = globals::features::screenSpaceGI;
+		const bool screenSpaceShadowsEnabled = isVR && screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
+		const bool screenSpaceGIEnabled = isVR && screenSpaceGI.loaded && screenSpaceGI.settings.Enabled;
+
+		if (ImGui::CollapsingHeader("Screen Space Sync", ImGuiTreeNodeFlags_DefaultOpen)) {
+			auto drawSyncToggle =
+				[](const char* a_label,
+					bool& a_enabled,
+					bool a_available,
+					const char* a_summary,
+					const char* a_benefit,
+					const char* a_cost,
+					const char* a_requirement) {
+				auto guard = Util::DisableGuard(!a_available);
+				ImGui::Checkbox(a_label, &a_enabled);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(a_summary);
+					ImGui::TextUnformatted(a_benefit);
+					ImGui::TextUnformatted(a_cost);
+					if (!a_available)
+						ImGui::TextUnformatted(a_requirement);
+				}
+			};
+
+			drawSyncToggle(
+				"Sync Screen Space Shadows",
+				screenSpaceShadows.enableStereoSync,
+				screenSpaceShadowsEnabled,
+				"Matches screen-space shadow results between VR eyes.",
+				"Reduces left/right shadow mismatch and per-eye noise.",
+				"Costs one extra VR compute pass when Screen Space Shadows is active.",
+				"Requires VR and active Screen Space Shadows.");
+			drawSyncToggle(
+				"Sync SSGI",
+				screenSpaceGI.settings.EnableStereoSync,
+				screenSpaceGIEnabled,
+				"Matches SSGI AO/GI results between VR eyes.",
+				"Reduces left/right AO and indirect-light mismatch.",
+				"Costs one extra compute pass, plus a center pass when foveated SSGI is active.",
+				"Requires VR and active SSGI.");
+
+			if (!isVR)
+				ImGui::TextDisabled("VR-only.");
+		}
+	}
+
+	void DrawStereoSettings()
+	{
+		DrawStereoSyncSettings();
+		ImGui::Spacing();
+		DrawStereoBlendSettings();
+	}
+
+	void DrawStereoBlendSettings()
 	{
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
@@ -982,12 +1041,14 @@ namespace
 		const bool blendCanRun = settings.EnableStereoBlend && settings.StereoBlendMaxFactor > VR::Config::kMinStereoBlendMaxFactor && screenSpaceEffectActive;
 
 		if (ImGui::CollapsingHeader("Stereo Blending", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::TextWrapped("Advanced post-composite safety net for VR screen-space effect mismatches. It is default-off and only runs when a supported screen-space effect is active.");
+			ImGui::TextWrapped("Advanced fallback for VR screen-space mismatches. It is default-off and only runs when a supported screen-space effect is active.");
 			ImGui::Spacing();
 
-			ImGui::Checkbox("Enable Stereo Blending", &settings.EnableStereoBlend);
+			ImGui::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Depth-aware bilateral blend between eyes after deferred composite. Keep the maximum blend low to preserve stereo parallax.");
+				ImGui::TextUnformatted("Depth-aware blend between eyes after deferred composite.");
+				ImGui::TextUnformatted("Can hide residual screen-space mismatches.");
+				ImGui::TextUnformatted("Costs one full-screen compute pass when active.");
 			}
 
 			ImGui::Text("Runtime gate: %s", screenSpaceEffectActive ? "screen-space effect active" : "inactive - no supported screen-space effect");
@@ -996,22 +1057,24 @@ namespace
 
 			ImGui::BeginDisabled(!settings.EnableStereoBlend);
 
-			ImGui::SliderFloat("Maximum Blend", &settings.StereoBlendMaxFactor, VR::Config::kMinStereoBlendMaxFactor, VR::Config::kMaxStereoBlendMaxFactor, "%.3f");
+			ImGui::SliderFloat("Max Blend Strength", &settings.StereoBlendMaxFactor, VR::Config::kMinStereoBlendMaxFactor, VR::Config::kMaxStereoBlendMaxFactor, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Upper limit for cross-eye color contribution. Lower values are safer; default is %.3f.", VR::Config::kDefaultStereoBlendMaxFactor);
+				ImGui::Text("Limits cross-eye color contribution. Lower is safer; default is %.3f.", VR::Config::kDefaultStereoBlendMaxFactor);
 			}
 
-			ImGui::SliderFloat("Depth Match Sigma", &settings.StereoBlendDepthSigma, VR::Config::kMinStereoBlendDepthSigma, VR::Config::kMaxStereoBlendDepthSigma, "%.3f");
+			ImGui::SliderFloat("Depth Match Tolerance", &settings.StereoBlendDepthSigma, VR::Config::kMinStereoBlendDepthSigma, VR::Config::kMaxStereoBlendDepthSigma, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Depth tolerance for accepting a cross-eye match. Lower values are stricter and reduce halo risk.");
+				ImGui::TextUnformatted("Depth tolerance for cross-eye matches.");
+				ImGui::TextUnformatted("Lower values are stricter and reduce halo risk.");
 			}
 
-			ImGui::SliderFloat("Color Difference Threshold", &settings.StereoBlendColorThreshold, VR::Config::kMinStereoBlendColorThreshold, VR::Config::kMaxStereoBlendColorThreshold, "%.3f");
+			ImGui::SliderFloat("Color Mismatch Threshold", &settings.StereoBlendColorThreshold, VR::Config::kMinStereoBlendColorThreshold, VR::Config::kMaxStereoBlendColorThreshold, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Minimum luminance mismatch before blending is allowed. Higher values avoid unnecessary blend on already-matching pixels.");
+				ImGui::TextUnformatted("Minimum luminance mismatch before blending.");
+				ImGui::TextUnformatted("Higher values skip already-matching pixels.");
 			}
 
-			if (ImGui::Button("Reset Stereo Blending Defaults")) {
+			if (ImGui::Button("Reset Blending Defaults")) {
 				settings.StereoBlendDepthSigma = VR::Config::kDefaultStereoBlendDepthSigma;
 				settings.StereoBlendMaxFactor = VR::Config::kDefaultStereoBlendMaxFactor;
 				settings.StereoBlendColorThreshold = VR::Config::kDefaultStereoBlendColorThreshold;
@@ -1019,8 +1082,9 @@ namespace
 
 			ImGui::EndDisabled();
 
+			ImGui::TextDisabled("Performance: runs one full-screen compute pass while enabled.");
 			ImGui::Spacing();
-			ImGui::TextWrapped("Per-feature toggles are intentionally not exposed: this pass operates on final composite color and cannot reliably attribute pixels to individual screen-space producers.");
+			ImGui::TextWrapped("This pass operates on final composite color and cannot reliably attribute pixels to individual screen-space producers.");
 		}
 	}
 

@@ -170,15 +170,6 @@ void ScreenSpaceShadows::DrawSettings()
 					ImGui::TextUnformatted("Requires active foveated upscaling.");
 			}
 
-			{
-				Util::BlueFrameStyleWrapper blueFrameStyle(true);
-				ImGui::Checkbox("VR Stereo Sync", &enableStereoSync);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Synchronizes screen-space shadow results between both VR eyes.");
-				ImGui::TextUnformatted("Reduces left/right shadow mismatch and per-eye noise with bilateral reprojection plus a small depth-weighted blur.");
-				ImGui::TextUnformatted("Adds one extra VR compute pass; disable this if you need the performance or are troubleshooting shadow artifacts.");
-			}
 		}
 
 		ImGui::Spacing();

@@ -589,19 +589,6 @@ void ScreenSpaceGI::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Reduces AO sample count in far distance and low-variance regions to improve performance.");
 		}
-		if (isVR) {
-			ImGui::SameLine();
-			{
-				Util::BlueFrameStyleWrapper blueFrameStyle(true);
-				ImGui::Checkbox("VR Stereo Sync", &settings.EnableStereoSync);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Synchronizes SSGI AO/GI results between both VR eyes.");
-				ImGui::TextUnformatted("Reduces left/right mismatch with bilateral reprojection after the main SSGI pass.");
-				ImGui::TextUnformatted("Adds one extra compute pass, plus a center pass when foveated SSGI is active.");
-				ImGui::TextUnformatted("Disable this if you need the performance or are troubleshooting SSGI artifacts.");
-			}
-		}
 
 		const int previousResolutionMode = settings.ResolutionMode;
 		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);

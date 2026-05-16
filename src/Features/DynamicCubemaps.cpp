@@ -3,10 +3,13 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
+#include "FoveatedCommon.h"
 #include "Wetterness.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Upscaling.h"
 #include "Utils/D3D.h"
+#include "VR.h"
 
 constexpr auto MIPLEVELS = 8;
 
@@ -17,6 +20,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	constexpr uint32_t kHighPriorityCubemapTaskBudget = 8;
+	constexpr uint32_t kWetnessCubemapCadence = 2;
+	constexpr uint32_t kFakeReflectionCubemapCadence = 4;
+	constexpr uint32_t kInteriorCubemapCadence = 6;
+	constexpr uint32_t kLowVisibilityCubemapCadence = 8;
+	constexpr float kFoveatedProfileFullCoverageThreshold = 0.999f;
+
 	const Wetterness* GetActiveWetterness()
 	{
 		auto& wetterness = globals::features::wetterness;
@@ -48,6 +58,37 @@ namespace
 		}
 
 		return DynamicCubemaps::kCaptureFlagDisableForwardGate | DynamicCubemaps::kCaptureFlagSuppressSkyAndFrameEdge;
+	}
+
+	bool IsActiveVRFoveatedProfileAvailable()
+	{
+		if (!REL::Module::IsVR()) {
+			return false;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		if (!upscaling.loaded) {
+			return false;
+		}
+
+		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
+		return profile.available && FoveatedCommon::ClampCenterArea(profile.coverageArea) < kFoveatedProfileFullCoverageThreshold;
+	}
+
+	bool IsDynamicCubemapCadenceFoveationEnabled()
+	{
+		auto& vr = globals::features::vr;
+		return vr.loaded &&
+			vr.settings.EnableDynamicCubemapFoveation &&
+			IsActiveVRFoveatedProfileAvailable();
+	}
+
+	bool IsDynamicCubemapVisibilityThrottleEnabled()
+	{
+		auto& vr = globals::features::vr;
+		return vr.loaded &&
+			vr.settings.EnableDynamicCubemapVisibilityThrottle &&
+			IsActiveVRFoveatedProfileAvailable();
 	}
 }
 
@@ -229,6 +270,7 @@ RE::BSEventNotifyControl MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuO
 			auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 			dynamicCubemaps.resetCapture[0] = true;
 			dynamicCubemaps.resetCapture[1] = true;
+			dynamicCubemaps.MarkCubemapRefreshHighPriority();
 		}
 	}
 	return RE::BSEventNotifyControl::kContinue;
@@ -580,6 +622,88 @@ void DynamicCubemaps::CompressToBC6H(bool a_reflections)
 	context->CopyResource(dst->resource.get(), bc6hScratchTexture->resource.get());
 }
 
+void DynamicCubemaps::MarkCubemapRefreshHighPriority()
+{
+	highPriorityCadenceTasksRemaining = kHighPriorityCubemapTaskBudget;
+	nextCadenceTaskFrame = cadenceFrameCounter;
+}
+
+bool DynamicCubemaps::IsReflectionTask(NextTask a_task) const
+{
+	switch (a_task) {
+	case NextTask::kCapture2:
+	case NextTask::kInferrence2:
+	case NextTask::kIrradiance2:
+	case NextTask::kBC6HCompress2:
+		return true;
+	default:
+		return false;
+	}
+}
+
+uint32_t DynamicCubemaps::GetCurrentCubemapCadence() const
+{
+	if (realActiveReflections) {
+		return 1;
+	}
+
+	if (GetActiveWetterness()) {
+		return kWetnessCubemapCadence;
+	}
+
+	if (fakeReflections) {
+		return kFakeReflectionCubemapCadence;
+	}
+
+	if (Util::IsInterior()) {
+		return kInteriorCubemapCadence;
+	}
+
+	return kLowVisibilityCubemapCadence;
+}
+
+bool DynamicCubemaps::ShouldRunCurrentCubemapTask()
+{
+	++cadenceFrameCounter;
+
+	const bool cadenceEnabled = IsDynamicCubemapCadenceFoveationEnabled();
+	const bool visibilityThrottleEnabled = IsDynamicCubemapVisibilityThrottleEnabled();
+	if (!cadenceEnabled && !visibilityThrottleEnabled) {
+		return true;
+	}
+
+	const bool reflectionTask = IsReflectionTask(nextTask);
+	if (visibilityThrottleEnabled && reflectionTask && !realActiveReflections && !fakeReflections) {
+		nextTask = NextTask::kCapture;
+		return false;
+	}
+
+	if (!cadenceEnabled) {
+		return true;
+	}
+
+	if (highPriorityCadenceTasksRemaining > 0) {
+		return true;
+	}
+
+	return cadenceFrameCounter >= nextCadenceTaskFrame;
+}
+
+void DynamicCubemaps::FinishCurrentCubemapTask()
+{
+	if (!IsDynamicCubemapCadenceFoveationEnabled()) {
+		return;
+	}
+
+	if (highPriorityCadenceTasksRemaining > 0) {
+		--highPriorityCadenceTasksRemaining;
+		nextCadenceTaskFrame = cadenceFrameCounter + 1;
+		return;
+	}
+
+	nextCadenceTaskFrame = cadenceFrameCounter + GetCurrentCubemapCadence();
+}
+
 void DynamicCubemaps::UpdateCubemap()
 {
 	ZoneScoped;
@@ -594,6 +718,7 @@ void DynamicCubemaps::UpdateCubemap()
 		if (hoursPassedDiff >= 0.01f) {  // ~36 seconds game time
 			resetCapture[0] = true;
 			resetCapture[1] = true;
+			MarkCubemapRefreshHighPriority();
 		}
 	}
 
@@ -604,6 +729,11 @@ void DynamicCubemaps::UpdateCubemap()
 			// if can't find specific hlsl file cache, clear all image space files
 			shaderCache->Clear(RE::BSShader::Types::ImageSpace);
 		recompileFlag = false;
+		MarkCubemapRefreshHighPriority();
+	}
+
+	if (!ShouldRunCurrentCubemapTask()) {
+		return;
 	}
 
 	switch (nextTask) {
@@ -650,6 +780,8 @@ void DynamicCubemaps::UpdateCubemap()
 		CompressToBC6H(true);
 		break;
 	}
+
+	FinishCurrentCubemapTask();
 }
 
 void DynamicCubemaps::PostDeferred()
@@ -868,15 +1000,25 @@ void DynamicCubemaps::SetupResources()
 
 void DynamicCubemaps::Reset()
 {
-	activeReflections = globals::state->activeReflections;
+	realActiveReflections = globals::state->activeReflections;
+	activeReflections = realActiveReflections;
 
 	if (globals::game::sky)
 		fakeReflections = activeReflections && globals::game::sky->flags.any(RE::Sky::Flags::kHideSky);
 	else
 		fakeReflections = false;
 
-	if (!activeReflections && !Util::IsInterior()) {
+	if (!activeReflections && !Util::IsInterior() && !IsDynamicCubemapVisibilityThrottleEnabled()) {
 		activeReflections = true;
 		fakeReflections = true;
+	}
+
+	if (!cadenceReflectionStateInitialized ||
+		lastRealActiveReflections != realActiveReflections ||
+		lastFakeReflections != fakeReflections) {
+		MarkCubemapRefreshHighPriority();
+		lastRealActiveReflections = realActiveReflections;
+		lastFakeReflections = fakeReflections;
+		cadenceReflectionStateInitialized = true;
 	}
 }

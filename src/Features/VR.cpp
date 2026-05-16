@@ -80,6 +80,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableLightingFoveationHardCutoff,
 	EnableUtilityFoveation,
 	EnableUtilityFoveationHardCutoff,
+	EnableDynamicCubemapFoveation,
+	EnableDynamicCubemapVisibilityThrottle,
 	menuOverlayPath)
 
 //=============================================================================
@@ -1105,14 +1107,27 @@ namespace
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
 		auto& upscaling = globals::features::upscaling;
+		auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 		const bool isVR = REL::Module::IsVR();
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
-		const bool lightingActive = isVR && settings.EnableLightingFoveation && profile.available && profile.coverageArea < 0.999f;
-		const bool utilityActive = isVR && settings.EnableUtilityFoveation && profile.available && profile.coverageArea < 0.999f;
+		constexpr float foveatedProfileFullCoverageThreshold = 0.999f;
+		const bool foveatedProfileActive = isVR && profile.available && profile.coverageArea < foveatedProfileFullCoverageThreshold;
+		const bool lightingActive = settings.EnableLightingFoveation && foveatedProfileActive;
+		const bool utilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
+		const bool cubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
+		const bool cubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
 		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" : "feathered";
 		const char* utilityMode = !settings.EnableUtilityFoveation ? "disabled" : settings.EnableUtilityFoveationHardCutoff ? "hard cutoff" : "feathered";
+		const bool anyFoveationEnabled =
+			settings.EnableLightingFoveation ||
+			settings.EnableUtilityFoveation ||
+			settings.EnableDynamicCubemapFoveation ||
+			settings.EnableDynamicCubemapVisibilityThrottle;
+		const bool anyCubemapFoveationEnabled =
+			settings.EnableDynamicCubemapFoveation ||
+			settings.EnableDynamicCubemapVisibilityThrottle;
 
-		if (ImGui::CollapsingHeader("Shader Detail Foveation", ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (ImGui::CollapsingHeader("Foveated Detail Budgets", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Checkbox("FOV Lighting Detail", &settings.EnableLightingFoveation);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive auxiliary detail in the Lighting shader.");
@@ -1147,18 +1162,43 @@ namespace
 			}
 			ImGui::EndDisabled();
 
+			ImGui::Separator();
+
+			ImGui::Checkbox("FOV Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses the active Upscaling FOV profile as the VR-only foveation gate for Dynamic Cubemap update cadence.");
+				ImGui::TextUnformatted("When active, cubemap capture, inference, irradiance, and BC6H compression are spread across more frames when reflections are low priority.");
+				ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a Lighting/Utility-style feathered vs hard-cutoff pair.");
+			}
+
+			ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Adds visibility-based reduction for Dynamic Cubemaps when the secondary reflection path is not currently useful.");
+				ImGui::TextUnformatted("When no real reflection pass is active, exterior fake-reflection cubemap work is not forced and any pending secondary reflection task is skipped.");
+				ImGui::TextUnformatted("It can be enabled independently, but enabling both cubemap toggles applies both cadence throttling and eligible low-value reflection-task skipping.");
+				ImGui::TextUnformatted("Additive with FOV Dynamic Cubemap Cadence; it is not a replacement mode or a hard-cutoff option.");
+			}
+
 			ImGui::Spacing();
 			ImGui::Text("Lighting detail foveation: %s", lightingActive ? "active" : "inactive");
 			ImGui::Text("Lighting detail mode: %s", lightingMode);
 			ImGui::Text("Utility shadowmask foveation: %s", utilityActive ? "active" : "inactive");
 			ImGui::Text("Utility shadowmask mode: %s", utilityMode);
+			ImGui::Text("Dynamic cubemap cadence: %s", cubemapCadenceActive ? "active" : "inactive");
+			ImGui::Text("Dynamic cubemap visibility throttle: %s", cubemapVisibilityActive ? "active" : "inactive");
 			ImGui::Text("FOV profile: %s", profile.available ? "available" : "unavailable");
 			if (profile.available) {
 				ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "DLSS/FOV center");
 				ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
 				ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
-			} else if (settings.EnableLightingFoveation || settings.EnableUtilityFoveation) {
+				if (anyFoveationEnabled && profile.coverageArea >= foveatedProfileFullCoverageThreshold) {
+					ImGui::TextDisabled("Requires FOV area below 1.00.");
+				}
+			} else if (anyFoveationEnabled) {
 				ImGui::TextDisabled("Requires active foveated upscaling.");
+			}
+			if (anyCubemapFoveationEnabled && !dynamicCubemaps.loaded) {
+				ImGui::TextDisabled("Requires Dynamic Cubemaps.");
 			}
 		}
 	}

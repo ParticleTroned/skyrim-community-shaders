@@ -69,12 +69,19 @@ public:
 
 	ID3D11ShaderResourceView* defaultCubemap = nullptr;
 
+	bool realActiveReflections = false;
 	bool activeReflections = false;
 	bool fakeReflections = false;
 
 	bool resetCapture[2] = { true, true };
 	bool recompileFlag = false;
 	float previousHoursPassed = 0.0f;
+	uint32_t cadenceFrameCounter = 0;
+	uint32_t nextCadenceTaskFrame = 0;
+	uint32_t highPriorityCadenceTasksRemaining = 0;
+	bool cadenceReflectionStateInitialized = false;
+	bool lastRealActiveReflections = false;
+	bool lastFakeReflections = false;
 
 	enum class NextTask
 	{
@@ -89,6 +96,12 @@ public:
 	};
 
 	NextTask nextTask = NextTask::kCapture;
+
+	void MarkCubemapRefreshHighPriority();
+	bool IsReflectionTask(NextTask a_task) const;
+	bool ShouldRunCurrentCubemapTask();
+	void FinishCurrentCubemapTask();
+	uint32_t GetCurrentCubemapCadence() const;
 
 	// BC6H compression
 	struct alignas(16) BC6HEncodeCB

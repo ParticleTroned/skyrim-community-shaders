@@ -175,11 +175,13 @@ public:
 		// Optional caster-side bias for distant directional shadow acne.
 		bool EnableOuterCascadeCasterBias = false;
 
-		// Foveated shader detail budgets. These use the active Upscaling FOV profile.
+		// Foveated detail budgets. These use the active Upscaling FOV profile.
 		bool EnableLightingFoveation = false;
 		bool EnableLightingFoveationHardCutoff = false;
 		bool EnableUtilityFoveation = false;
 		bool EnableUtilityFoveationHardCutoff = false;
+		bool EnableDynamicCubemapFoveation = false;
+		bool EnableDynamicCubemapVisibilityThrottle = false;
 
 		// VR Menu Overlay positioning settings
 		float VRMenuScale = Config::kDefaultMenuScale;  ///< Scale factor for overlay UI (0.5-2.0)

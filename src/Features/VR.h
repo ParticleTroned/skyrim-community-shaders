@@ -310,7 +310,7 @@ public:
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();
-	void RecreateOverlayTexturesIfNeeded();
+	void RecreateOverlayTexturesIfNeeded(bool needsControllerTexture = true);
 	void SubmitOverlayFrame();
 	void HideOverlaysIfPresent();
 

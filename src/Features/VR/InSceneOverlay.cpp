@@ -233,6 +233,10 @@ void VR::InitInSceneResources()
 void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds)
 {
 	auto context = globals::d3d::context;
+	if (!context || !globals::d3d::device || !targetTexture) {
+		return;
+	}
+
 	winrt::com_ptr<ID3DUserDefinedAnnotation> perf;
 	context->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), perf.put_void());
 
@@ -284,7 +288,17 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		inSceneResources.cachedPoseFrame != currentFrame;
 
 	if (shouldRefreshPoses) {
-		auto compositorError = RE::BSOpenVR::GetIVRCompositor()->GetLastPoses(
+		auto* compositor = RE::BSOpenVR::GetIVRCompositor();
+		if (!compositor) {
+			compositor = openvr->vrContext.vrCompositor;
+		}
+		if (!compositor) {
+			if (perf)
+				perf->EndEvent();
+			return;
+		}
+
+		auto compositorError = compositor->GetLastPoses(
 			inSceneResources.cachedRenderPoses,
 			vr::k_unMaxTrackedDeviceCount,
 			nullptr,
@@ -580,13 +594,19 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 void VR::InstallSubmitHook()
 {
 	static bool installed = false;
+	static bool warnedUnavailable = false;
 	if (installed) {
 		inSceneResources.submitHookInstalled = true;
 		return;
 	}
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
-	if (openvr && RE::BSOpenVR::GetIVRCompositor()) {
+	auto* compositor = openvr ? RE::BSOpenVR::GetIVRCompositor() : nullptr;
+	if (!compositor && openvr) {
+		compositor = openvr->vrContext.vrCompositor;
+	}
+
+	if (openvr && compositor) {
 		logger::info("VR: Installing IVRCompositor::Submit hook for in-scene overlay rendering");
 
 		// Log comprehensive VR system parameters (debug only)
@@ -638,12 +658,13 @@ void VR::InstallSubmitHook()
 		logger::debug("================================");
 
 		// IVRCompositor::Submit is index 5
-		stl::detour_vfunc<5, IVRCompositor_Submit>(RE::BSOpenVR::GetIVRCompositor());
+		stl::detour_vfunc<5, IVRCompositor_Submit>(compositor);
 		installed = true;
 		inSceneResources.submitHookInstalled = true;
 
 		logger::info("VR: In-scene overlay initialized");
-	} else {
+	} else if (!warnedUnavailable) {
 		logger::warn("VR: Failed to install IVRCompositor::Submit hook - Interface not available");
+		warnedUnavailable = true;
 	}
 }

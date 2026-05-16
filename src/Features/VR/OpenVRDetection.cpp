@@ -35,7 +35,7 @@ namespace VRDetection
 		result.hasSystemInterface = IsValid(vr::IVRSystem_Version);
 		result.hasCompositorInterface = IsValid(vr::IVRCompositor_Version);
 
-		result.probingSucceeded = result.hasOverlayInterface && result.hasSystemInterface && result.hasCompositorInterface;
+		result.probingSucceeded = result.hasSystemInterface && result.hasCompositorInterface;
 		return result.probingSucceeded;
 	}
 

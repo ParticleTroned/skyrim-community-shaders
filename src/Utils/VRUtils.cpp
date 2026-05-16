@@ -144,13 +144,28 @@ namespace Util
 	// using GetDeviceToAbsoluteTrackingPose and instead use VRCompositor interfaces
 	// obtained through BSOpenVR to avoid static linking issues on non-VR systems.
 
-	OpenVRContext::OpenVRContext()
+	OpenVRContext::OpenVRContext(bool requireOverlay)
 	{
 		openvr = RE::BSOpenVR::GetSingleton();
 		if (openvr) {
 			system = openvr->vrSystem;
+			overlay = openvr->vrContext.vrOverlay;
+			if (requireOverlay) {
+				EnsureOverlay();
+			}
+		}
+	}
+
+	bool OpenVRContext::EnsureOverlay()
+	{
+		if (!IsValid()) {
+			return false;
+		}
+
+		if (!overlay) {
 			overlay = RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext);
 		}
+		return overlay != nullptr;
 	}
 
 	vr::TrackedDeviceIndex_t GetControllerIndexForDevice(InputDeviceType device, bool isLeftHanded)

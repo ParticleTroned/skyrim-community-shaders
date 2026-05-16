@@ -98,12 +98,13 @@ namespace Util
 		vr::IVROverlay* overlay = nullptr;  ///< OpenVR overlay interface
 
 		/**
-		 * @brief Constructor that initializes all OpenVR interfaces
+		 * @brief Constructor that initializes basic OpenVR interfaces
 		 *
-		 * Automatically retrieves the BSOpenVR singleton and extracts
-		 * the system and overlay interfaces for immediate use.
+		 * Automatically retrieves the BSOpenVR singleton and basic system interface.
+		 * Overlay access is lazy so pose/controller helpers do not touch IVROverlay
+		 * unless the caller explicitly needs compositor overlays.
 		 */
-		OpenVRContext();
+		explicit OpenVRContext(bool requireOverlay = false);
 
 		/**
 		 * @brief Check if basic VR system is available
@@ -111,9 +112,11 @@ namespace Util
 		 */
 		bool IsValid() const { return openvr && system; }
 
+		bool EnsureOverlay();
+
 		/**
 		 * @brief Check if overlay functionality is available
-		 * @return true if all interfaces (including overlay) are valid
+		 * @return true if all interfaces (including a previously requested overlay) are valid
 		 */
 		bool HasOverlay() const { return IsValid() && overlay; }
 	};

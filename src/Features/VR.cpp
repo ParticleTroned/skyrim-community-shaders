@@ -39,6 +39,10 @@ namespace
 
 constexpr int kOverlayWidth = 1920;
 constexpr int kOverlayHeight = 1080;
+constexpr const char* kMenuOverlayKey = "communityshaders.menu";
+constexpr const char* kMenuOverlayName = "Community Shaders Menu";
+constexpr const char* kControllerOverlayKey = "communityshaders.menu.controller";
+constexpr const char* kControllerOverlayName = "Community Shaders Menu (Controller)";
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
@@ -119,7 +123,7 @@ void VR::SetupResources()
 		logger::info("  Compatible: {}", openVRInfo.isCompatible ? "Yes" : "No");
 
 		if (!openVRInfo.isCompatible) {
-			logger::info("OpenVR version is incompatible.");
+			logger::info("Required OpenVR system/compositor interfaces are unavailable.");
 			logger::info("Community Shaders VR menus will be disabled for stability");
 		}
 	} else {
@@ -343,6 +347,7 @@ void VR::EarlyPrepass()
 bool VR::ShouldShowAutoHideOverlay() const
 {
 	return settings.kAutoHideSeconds > 0 &&
+	       globals::state &&
 	       globals::state->isMainMenuOpen &&
 	       globals::menu &&
 	       !globals::menu->IsEnabled;
@@ -361,14 +366,7 @@ bool VR::ShouldUseInSceneOverlay() const
 		return true;
 	case Settings::MenuOverlayPath::Auto:
 	default:
-		// Prefer compositor overlays whenever runtime support exists, as this keeps
-		// VR-only menu presentation separate from desktop UI rendering.
-		if (openVRInfo.hasOverlayInterface) {
-			return false;
-		}
-		// Fall back to in-scene only when overlay interface support is unavailable.
-		return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
-		       openVRInfo.runtimeType == VRDetection::RuntimeType::Unknown;
+		return true;
 	}
 }
 
@@ -880,7 +878,8 @@ namespace
 				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Auto prefers IVROverlay when available; falls back to in-scene only when runtime overlay support is missing.");
+				ImGui::Text("Auto uses the in-scene submit-hook path.");
+				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
 			}
 
@@ -1252,8 +1251,7 @@ namespace
 			if (info.isAvailable) {
 				ImGui::Text("OpenVR System: %s", info.isCompatible ? "Active & Compatible" : "Active but INCOMPATIBLE");
 				if (!info.isCompatible) {
-					std::string reason = std::format("{} {}", "OpenVR version is incompatible.", "VR menus disabled.");
-					ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Reason: %s", reason.c_str());
+					ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Reason: Required OpenVR system/compositor interfaces are unavailable. VR menus disabled.");
 				}
 				ImGui::Text("DLL Path: %s", info.dllPath.c_str());
 				ImGui::Text("DLL Version: %s", info.version.c_str());
@@ -1612,7 +1610,7 @@ namespace
 		// Debugging addresses for copy/paste
 		if (ImGui::CollapsingHeader("OpenVR Addresses")) {
 			auto openvr = RE::BSOpenVR::GetSingleton();
-			auto overlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
+			auto overlay = openvr && vr.openVRInfo.hasOverlayInterface ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
 			auto vrSystem = openvr ? openvr->vrSystem : nullptr;
 			ADDRESS_NODE(openvr)
 			ADDRESS_NODE(overlay)
@@ -1627,7 +1625,7 @@ namespace
 
 void VR::UpdateVROverlayPosition()
 {
-	Util::OpenVRContext ctx;
+	Util::OpenVRContext ctx(true);
 	if (!ctx.HasOverlay())
 		return;
 
@@ -1790,7 +1788,7 @@ void VR::UpdateVROverlayPosition()
 
 void VR::UpdateVROverlayControllerPosition()
 {
-	Util::OpenVRContext ctx;
+	Util::OpenVRContext ctx(true);
 	if (!ctx.HasOverlay())
 		return;
 
@@ -1835,57 +1833,77 @@ void VR::EnsureOverlayInitialized()
 {
 	// Check OpenVR compatibility first
 	if (!openVRInfo.isCompatible) {
-		logger::warn("OpenVR version is incompatible.");
+		logger::warn("Required OpenVR system/compositor interfaces are unavailable.");
 		return;
 	}
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
-	logger::debug("BSOpenVR: 0x{:X}", reinterpret_cast<uintptr_t>(openvr));
+	static bool loggedOpenVRContext = false;
+	if (!loggedOpenVRContext) {
+		logger::debug("BSOpenVR: 0x{:X}", reinterpret_cast<uintptr_t>(openvr));
+	}
 	if (!openvr) {
 		logger::error("BSOpenVR::GetSingleton() returned nullptr");
 		return;
 	}
 	auto* vrSystem = openvr->vrSystem;
-	auto* overlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
-	logger::debug("openVR->vrSystem: 0x{:X}", reinterpret_cast<uintptr_t>(vrSystem));
-	logger::debug("openVR->vrContext: 0x{:X}", reinterpret_cast<uintptr_t>(&openvr->vrContext));
-	logger::debug("openVR->vrContext.vrOverlay: 0x{:X}", reinterpret_cast<uintptr_t>(openvr->vrContext.vrOverlay));
-	logger::debug("openVR->hmdDeviceType: {} ({})", static_cast<int>(openvr->hmdDeviceType), magic_enum::enum_name(openvr->hmdDeviceType));
-	for (int i = 0; i < RE::BSVRInterface::Hand::kTotal; ++i) {
-		logger::debug("openVR->controllerNodes[{}]: 0x{:X}", i, reinterpret_cast<uintptr_t>(openvr->controllerNodes[i].get()));
-		if (openvr->controllerNodes[i] && reinterpret_cast<uintptr_t>(openvr->controllerNodes[i].get()) < 0x1000) {
-			logger::warn("controllerNodes[{}] is suspiciously low (0x{:X})", i, reinterpret_cast<uintptr_t>(openvr->controllerNodes[i].get()));
+	const bool wantsControllerOverlay =
+		settings.attachMode == Settings::OverlayAttachMode::ControllerOnly ||
+		settings.attachMode == Settings::OverlayAttachMode::Both;
+	RecreateOverlayTexturesIfNeeded(wantsControllerOverlay);
+
+	auto* overlay = openVRInfo.hasOverlayInterface ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
+	if (!loggedOpenVRContext) {
+		logger::debug("openVR->vrSystem: 0x{:X}", reinterpret_cast<uintptr_t>(vrSystem));
+		logger::debug("openVR->vrContext: 0x{:X}", reinterpret_cast<uintptr_t>(&openvr->vrContext));
+		logger::debug("openVR->vrContext.vrOverlay: 0x{:X}", reinterpret_cast<uintptr_t>(openvr->vrContext.vrOverlay));
+		logger::debug("openVR->hmdDeviceType: {} ({})", static_cast<int>(openvr->hmdDeviceType), magic_enum::enum_name(openvr->hmdDeviceType));
+		for (int i = 0; i < RE::BSVRInterface::Hand::kTotal; ++i) {
+			logger::debug("openVR->controllerNodes[{}]: 0x{:X}", i, reinterpret_cast<uintptr_t>(openvr->controllerNodes[i].get()));
+			if (openvr->controllerNodes[i] && reinterpret_cast<uintptr_t>(openvr->controllerNodes[i].get()) < 0x1000) {
+				logger::warn("controllerNodes[{}] is suspiciously low (0x{:X})", i, reinterpret_cast<uintptr_t>(openvr->controllerNodes[i].get()));
+			}
 		}
+		loggedOpenVRContext = true;
 	}
 	logger::debug("menuOverlayHandle: 0x{:X}", menuOverlayHandle);
 	logger::debug("menuControllerOverlayHandle: 0x{:X}", menuControllerOverlayHandle);
 	if (!overlay) {
-		logger::error("IVROverlay is nullptr after GetIVROverlay");
+		if (settings.menuOverlayPath == Settings::MenuOverlayPath::IVROverlay) {
+			logger::error("IVROverlay is unavailable for forced IVROverlay menu path");
+		} else {
+			logger::debug("IVROverlay is unavailable; using in-scene menu path");
+		}
 		return;
 	}
-	Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuTexture.put(), menuRTV.put());
-	std::string key = "communityshaders.menu";
-	std::string name = "Community Shaders Menu";
-	vr::EVROverlayError err = overlay->CreateOverlay(key.c_str(), name.c_str(), &menuOverlayHandle);
-	if (err == vr::VROverlayError_None) {
-		logger::debug("CreateOverlay succeeded for menuOverlayHandle: 0x{:X}", menuOverlayHandle);
-		Util::SetOverlayInputFlags(overlay, menuOverlayHandle);
-		overlay->SetOverlayWidthInMeters(menuOverlayHandle, 1.0f);
-	} else {
-		logger::error("CreateOverlay failed: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
-	}
-	// Controller overlay
-	std::string controllerKey = "communityshaders.menu.controller";
-	std::string controllerName = "Community Shaders Menu (Controller)";
-	err = overlay->CreateOverlay(controllerKey.c_str(), controllerName.c_str(), &menuControllerOverlayHandle);
-	if (err == vr::VROverlayError_None) {
-		logger::debug("CreateOverlay succeeded for menuControllerOverlayHandle: 0x{:X}", menuControllerOverlayHandle);
-		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuControllerTexture.put(), menuControllerRTV.put());
-		Util::SetOverlayInputFlags(overlay, menuControllerOverlayHandle);
-		overlay->SetOverlayWidthInMeters(menuControllerOverlayHandle, 1.0f);
-	} else {
-		logger::error("CreateOverlay failed: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
-	}
+
+	auto ensureOverlayHandle = [&](const char* key, const char* name, vr::VROverlayHandle_t& handle) {
+		if (handle != vr::k_ulOverlayHandleInvalid) {
+			return;
+		}
+
+		vr::EVROverlayError err = overlay->FindOverlay(key, &handle);
+		if (err == vr::VROverlayError_None) {
+			logger::debug("FindOverlay succeeded for {}: 0x{:X}", key, handle);
+			Util::SetOverlayInputFlags(overlay, handle);
+			overlay->SetOverlayWidthInMeters(handle, 1.0f);
+			return;
+		}
+
+		err = overlay->CreateOverlay(key, name, &handle);
+		if (err == vr::VROverlayError_None) {
+			logger::debug("CreateOverlay succeeded for {}: 0x{:X}", key, handle);
+			Util::SetOverlayInputFlags(overlay, handle);
+			overlay->SetOverlayWidthInMeters(handle, 1.0f);
+			return;
+		}
+
+		handle = vr::k_ulOverlayHandleInvalid;
+		logger::error("CreateOverlay failed for {}: {} ({})", key, static_cast<int>(err), magic_enum::enum_name(err));
+	};
+
+	ensureOverlayHandle(kMenuOverlayKey, kMenuOverlayName, menuOverlayHandle);
+	ensureOverlayHandle(kControllerOverlayKey, kControllerOverlayName, menuControllerOverlayHandle);
 }
 
 //=============================================================================
@@ -1894,10 +1912,18 @@ void VR::EnsureOverlayInitialized()
 
 void VR::DestroyOverlay()
 {
+	if (!openVRInfo.hasOverlayInterface) {
+		menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
+		menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
+		return;
+	}
+
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
 	auto* overlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
 	if (!overlay) {
-		logger::error("DestroyOverlay: IVROverlay is nullptr");
+		logger::debug("DestroyOverlay: IVROverlay is unavailable");
+		menuOverlayHandle = vr::k_ulOverlayHandleInvalid;
+		menuControllerOverlayHandle = vr::k_ulOverlayHandleInvalid;
 		return;
 	}
 	if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid) {
@@ -1910,8 +1936,17 @@ void VR::DestroyOverlay()
 	}
 }
 
-void VR::RecreateOverlayTexturesIfNeeded()
+void VR::RecreateOverlayTexturesIfNeeded(bool needsControllerTexture)
 {
+	if (!globals::d3d::device) {
+		static bool warnedMissingDevice = false;
+		if (!warnedMissingDevice) {
+			logger::warn("RecreateOverlayTexturesIfNeeded: D3D11 device is unavailable");
+			warnedMissingDevice = true;
+		}
+		return;
+	}
+
 	auto isTextureValid = [](ID3D11Texture2D* texture, ID3D11RenderTargetView* rtv) {
 		if (!texture || !rtv) {
 			return false;
@@ -1929,7 +1964,7 @@ void VR::RecreateOverlayTexturesIfNeeded()
 		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuTexture.put(), menuRTV.put());
 	}
 
-	if (!isTextureValid(menuControllerTexture.get(), menuControllerRTV.get())) {
+	if (needsControllerTexture && !isTextureValid(menuControllerTexture.get(), menuControllerRTV.get())) {
 		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuControllerTexture.put(), menuControllerRTV.put());
 	}
 }
@@ -1950,7 +1985,7 @@ void VR::HideAllOverlays(vr::IVROverlay* gameOverlay)
 
 void VR::HideOverlaysIfPresent()
 {
-	if (!openVRInfo.isCompatible) {
+	if (!openVRInfo.isCompatible || !openVRInfo.hasOverlayInterface) {
 		return;
 	}
 
@@ -1966,18 +2001,42 @@ void VR::SubmitOverlayFrame()
 		return;
 	}
 
+	if (!globals::menu || !globals::d3d::context) {
+		return;
+	}
+
 	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
 	if (shouldUseInSceneOverlay) {
 		InstallSubmitHook();
 	}
 	const bool useInSceneOverlay = shouldUseInSceneOverlay && inSceneResources.submitHookInstalled;
+	const bool useIVROverlay = !shouldUseInSceneOverlay;
+
+	if (useIVROverlay && !openVRInfo.hasOverlayInterface) {
+		static bool loggedMissingOverlayInterface = false;
+		if (!loggedMissingOverlayInterface) {
+			logger::error("VR: IVROverlay menu path is forced, but the runtime does not expose IVROverlay");
+			loggedMissingOverlayInterface = true;
+		}
+		return;
+	}
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
-	auto* gameOverlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
-	auto* cleanOverlay = RE::BSOpenVR::GetCleanIVROverlay();
+	if (!openvr || !openvr->vrSystem) {
+		logger::error("SubmitOverlayFrame: BSOpenVR or vrSystem is nullptr");
+		return;
+	}
+
+	const bool hasOverlayHandles =
+		menuOverlayHandle != vr::k_ulOverlayHandleInvalid ||
+		menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid;
+	auto* gameOverlay = openVRInfo.hasOverlayInterface && (useIVROverlay || hasOverlayHandles) ?
+	                         RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) :
+	                         nullptr;
+	auto* cleanOverlay = useIVROverlay ? RE::BSOpenVR::GetCleanIVROverlay() : nullptr;
 
 	static bool cleanOverlayLogged = false;
-	if (!cleanOverlayLogged) {
+	if (useIVROverlay && !cleanOverlayLogged) {
 		if (cleanOverlay) {
 			logger::debug("VR: Successfully acquired clean IVROverlay interface via CommonLib: 0x{:X}", reinterpret_cast<uintptr_t>(cleanOverlay));
 		} else {
@@ -1986,12 +2045,7 @@ void VR::SubmitOverlayFrame()
 		cleanOverlayLogged = true;
 	}
 
-	if (!gameOverlay || !cleanOverlay) {
-		return;
-	}
-
-	if (!openvr || !openvr->vrSystem) {
-		logger::error("SubmitOverlayFrame: BSOpenVR or vrSystem is nullptr");
+	if (useIVROverlay && (!gameOverlay || !cleanOverlay)) {
 		return;
 	}
 
@@ -1999,6 +2053,7 @@ void VR::SubmitOverlayFrame()
 	auto& enabled = globals::menu->IsEnabled;
 	auto& overlayVisible = globals::menu->overlayVisible;
 	const bool shouldShowAutoHide = ShouldShowAutoHideOverlay();
+	const bool shouldRenderOverlay = enabled || overlayVisible || shouldShowAutoHide;
 	static bool wasMenuEnabled = false;
 	const bool menuJustOpened = enabled && !wasMenuEnabled;
 	wasMenuEnabled = enabled;
@@ -2014,7 +2069,32 @@ void VR::SubmitOverlayFrame()
 		}
 	}
 
-	if ((enabled || overlayVisible || shouldShowAutoHide) && menuOverlayHandle != vr::k_ulOverlayHandleInvalid && menuTexture.get() && menuRTV.get()) {
+	const bool wantsHMDOverlay = settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both;
+	const bool wantsControllerOverlay = settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both;
+	const bool wantsAnyVROverlay = wantsHMDOverlay || wantsControllerOverlay;
+
+	if (shouldRenderOverlay && wantsAnyVROverlay) {
+		RecreateOverlayTexturesIfNeeded(useIVROverlay && wantsControllerOverlay);
+	}
+
+	if (shouldRenderOverlay && useIVROverlay && openVRInfo.hasOverlayInterface) {
+		const bool missingRequiredHandles =
+			(wantsHMDOverlay && menuOverlayHandle == vr::k_ulOverlayHandleInvalid) ||
+			(wantsControllerOverlay && menuControllerOverlayHandle == vr::k_ulOverlayHandleInvalid);
+		if (missingRequiredHandles) {
+			EnsureOverlayInitialized();
+		}
+	}
+
+	const bool hasMenuTexture = menuTexture.get() && menuRTV.get();
+	const bool hasControllerTexture = menuControllerTexture.get() && menuControllerRTV.get();
+	const bool hasRequiredTextures = hasMenuTexture && (!useIVROverlay || !wantsControllerOverlay || hasControllerTexture);
+	const bool hasRequiredOverlayHandles =
+		(!wantsHMDOverlay || menuOverlayHandle != vr::k_ulOverlayHandleInvalid) &&
+		(!wantsControllerOverlay || menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid);
+	const bool canUseIVROverlay = useIVROverlay && gameOverlay && cleanOverlay && hasRequiredOverlayHandles;
+
+	if (shouldRenderOverlay && wantsAnyVROverlay && (useInSceneOverlay || canUseIVROverlay) && hasRequiredTextures) {
 		// Update drag logic only when overlay is active
 		UpdateOverlayDrag();
 		// Copy ImGui output to overlay texture

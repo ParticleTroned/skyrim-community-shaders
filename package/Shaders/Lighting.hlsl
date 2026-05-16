@@ -1426,7 +1426,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 landNormal1;
 		[branch] if (useTerrainVariation)
 		{
-			landNormal1 = StochasticEffect(TexNormalSampler, SampNormalSampler, uv, sharedOffset, dx, dy);
+			landNormal1 = StochasticEffectNormal(TexNormalSampler, SampNormalSampler, uv, sharedOffset, dx, dy);
 		}
 		else
 		{
@@ -1449,7 +1449,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TERRAIN_VARIATION)
 			[branch] if (useTerrainVariation)
 			{
-				landRMAOS1 = StochasticEffect(TexRMAOSSampler, SampRMAOSSampler, uv, sharedOffset, dx, dy) * float4(PBRParams1.x, 1, 1, PBRParams1.z);
+				landRMAOS1 = StochasticEffectMaterialData(TexRMAOSSampler, SampRMAOSSampler, uv, sharedOffset, dx, dy) * float4(PBRParams1.x, 1, 1, PBRParams1.z);
 			}
 			else
 			{
@@ -1507,7 +1507,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 landNormal2;
 		[branch] if (useTerrainVariation)
 		{
-			landNormal2 = StochasticEffect(TexLandNormal2Sampler, SampLandNormal2Sampler, uv, sharedOffset, dx, dy);
+			landNormal2 = StochasticEffectNormal(TexLandNormal2Sampler, SampLandNormal2Sampler, uv, sharedOffset, dx, dy);
 		}
 		else
 		{
@@ -1530,7 +1530,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TERRAIN_VARIATION)
 			[branch] if (useTerrainVariation)
 			{
-				landRMAOS2 = StochasticEffect(TexLandRMAOS2Sampler, SampLandRMAOS2Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture2PBRParams.x, 1, 1, LandscapeTexture2PBRParams.z);
+				landRMAOS2 = StochasticEffectMaterialData(TexLandRMAOS2Sampler, SampLandRMAOS2Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture2PBRParams.x, 1, 1, LandscapeTexture2PBRParams.z);
 			}
 			else
 			{
@@ -1587,7 +1587,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 landNormal3;
 		[branch] if (useTerrainVariation)
 		{
-			landNormal3 = StochasticEffect(TexLandNormal3Sampler, SampLandNormal3Sampler, uv, sharedOffset, dx, dy);
+			landNormal3 = StochasticEffectNormal(TexLandNormal3Sampler, SampLandNormal3Sampler, uv, sharedOffset, dx, dy);
 		}
 		else
 		{
@@ -1610,7 +1610,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TERRAIN_VARIATION)
 			[branch] if (useTerrainVariation)
 			{
-				landRMAOS3 = StochasticEffect(TexLandRMAOS3Sampler, SampLandRMAOS3Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture3PBRParams.x, 1, 1, LandscapeTexture3PBRParams.z);
+				landRMAOS3 = StochasticEffectMaterialData(TexLandRMAOS3Sampler, SampLandRMAOS3Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture3PBRParams.x, 1, 1, LandscapeTexture3PBRParams.z);
 			}
 			else
 			{
@@ -1667,7 +1667,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 landNormal4;
 		[branch] if (useTerrainVariation)
 		{
-			landNormal4 = StochasticEffect(TexLandNormal4Sampler, SampLandNormal4Sampler, uv, sharedOffset, dx, dy);
+			landNormal4 = StochasticEffectNormal(TexLandNormal4Sampler, SampLandNormal4Sampler, uv, sharedOffset, dx, dy);
 		}
 		else
 		{
@@ -1690,7 +1690,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TERRAIN_VARIATION)
 			[branch] if (useTerrainVariation)
 			{
-				landRMAOS4 = StochasticEffect(TexLandRMAOS4Sampler, SampLandRMAOS4Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture4PBRParams.x, 1, 1, LandscapeTexture4PBRParams.z);
+				landRMAOS4 = StochasticEffectMaterialData(TexLandRMAOS4Sampler, SampLandRMAOS4Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture4PBRParams.x, 1, 1, LandscapeTexture4PBRParams.z);
 			}
 			else
 			{
@@ -1747,7 +1747,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 landNormal5;
 		[branch] if (useTerrainVariation)
 		{
-			landNormal5 = StochasticEffect(TexLandNormal5Sampler, SampLandNormal5Sampler, uv, sharedOffset, dx, dy);
+			landNormal5 = StochasticEffectNormal(TexLandNormal5Sampler, SampLandNormal5Sampler, uv, sharedOffset, dx, dy);
 		}
 		else
 		{
@@ -1771,7 +1771,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TERRAIN_VARIATION)
 			[branch] if (useTerrainVariation)
 			{
-				landRMAOS5 = StochasticEffect(TexLandRMAOS5Sampler, SampLandRMAOS5Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture5PBRParams.x, 1, 1, LandscapeTexture5PBRParams.z);
+				landRMAOS5 = StochasticEffectMaterialData(TexLandRMAOS5Sampler, SampLandRMAOS5Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture5PBRParams.x, 1, 1, LandscapeTexture5PBRParams.z);
 			}
 			else
 			{
@@ -1828,7 +1828,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 landNormal6;
 		[branch] if (useTerrainVariation)
 		{
-			landNormal6 = StochasticEffect(TexLandNormal6Sampler, SampLandNormal6Sampler, uv, sharedOffset, dx, dy);
+			landNormal6 = StochasticEffectNormal(TexLandNormal6Sampler, SampLandNormal6Sampler, uv, sharedOffset, dx, dy);
 		}
 		else
 		{
@@ -1851,7 +1851,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TERRAIN_VARIATION)
 			[branch] if (useTerrainVariation)
 			{
-				landRMAOS6 = StochasticEffect(TexLandRMAOS6Sampler, SampLandRMAOS6Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture6PBRParams.x, 1, 1, LandscapeTexture6PBRParams.z);
+				landRMAOS6 = StochasticEffectMaterialData(TexLandRMAOS6Sampler, SampLandRMAOS6Sampler, uv, sharedOffset, dx, dy) * float4(LandscapeTexture6PBRParams.x, 1, 1, LandscapeTexture6PBRParams.z);
 			}
 			else
 			{
@@ -2446,6 +2446,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float wetDirectSpecularScale = 1.0;
 		float wetRainCubemapSuppression = 0.0;
 		float wetPuddleSkyReflectionScale = 1.0;
+		float terrainWetIndirectNormalStability = 0.0;
 		float rainDarkeningAbsorption = 1.0;
 		float shoreDarkeningAbsorption = 1.0;
 		const bool wetnessEnabled = (CS_WETNESS_SETTINGS.EnableWetnessEffects != 0);
@@ -2848,6 +2849,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	wetnessGlossinessSpecular = max(wetPuddleSpecular, max(wetFilmSpecularNonPuddle, shoreWetnessSpecularNonPuddle));
 	float wetFilmNonPuddleSpecular = max(wetFilmSpecularNonPuddle, shoreWetnessSpecularNonPuddle);
+#		if defined(TERRAIN_VARIATION) && defined(LANDSCAPE)
+	if (useTerrainVariation) {
+		terrainWetIndirectNormalStability = 0.18 * smoothstep(0.03, 0.22, wetFilmNonPuddleSpecular) * (1.0 - deepPuddleMask);
+	}
+#		endif
 	float wetFilmDominance = saturate(wetFilmNonPuddleSpecular / max(wetnessGlossinessSpecular, 1e-3));
 	// Keep wet-film looking like clear wetness (env reflection / darker surface) rather
 	// than milky white direct-light glare when puddle coverage is low.
@@ -3128,6 +3134,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 lodLandDiffuseColor = 0;
 
 #	if defined(WETTERNESS)
+	float3 wetIndirectNormal = wetnessNormal;
+#		if defined(TERRAIN_VARIATION) && defined(LANDSCAPE)
+	if (terrainWetIndirectNormalStability > 1e-4) {
+		wetIndirectNormal = SafeNormalize3(lerp(wetIndirectNormal, vertexNormal, terrainWetIndirectNormalStability), wetnessNormal);
+	}
+#		endif
 	float3 wetReflectionModeConfig = 0.0.xxx;
 	float3 wetReflectionModeConfigDirect = 0.0.xxx;
 	WetnessDirectLightingParams wetDirectLightingParams = (WetnessDirectLightingParams)0;
@@ -3669,11 +3681,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	bool wetCubemapReflectanceVisible = false;
 	float3 wetCubemapSampleDirection = 0.0;
 	if (wetIndirectLightingVisible) {
-		wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext, wetReflectionModeConfig);
+		wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetIndirectNormal, waterRoughnessSpecular, indirectContext, wetReflectionModeConfig);
 		wetnessReflectance *= wetHighlightReflectanceScale * wetPuddleSkyReflectionScale;
 		wetCubemapReflectanceVisible = any(wetnessReflectance > 0.0);
 		if (wetCubemapReflectanceVisible) {
-			wetCubemapSampleDirection = reflect(-viewDirection, wetnessNormal);
+			wetCubemapSampleDirection = reflect(-viewDirection, wetIndirectNormal);
 		}
 	}
 #		else
@@ -3793,7 +3805,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				if defined(WETTERNESS)
 		if (wetCubemapReflectanceVisible)
 		{
-			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetCubemapSampleDirection, skylightingSH));
+			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetIndirectNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetCubemapSampleDirection, skylightingSH));
 			float wetCubemapClarityAmount = saturate(postRainBlend * postRainCubemapGlareReductionFromClarity);
 			if (wetCubemapClarityAmount > 1e-4) {
 				float wetCubemapClarityT = sqrt(smoothstep(0.0, 1.0, wetCubemapClarityAmount));
@@ -3816,7 +3828,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				if defined(WETTERNESS)
 		if (wetCubemapReflectanceVisible)
 		{
-			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetCubemapSampleDirection));
+			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetIndirectNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetCubemapSampleDirection));
 			float wetCubemapClarityAmount = saturate(postRainBlend * postRainCubemapGlareReductionFromClarity);
 			if (wetCubemapClarityAmount > 1e-4) {
 				float wetCubemapClarityT = sqrt(smoothstep(0.0, 1.0, wetCubemapClarityAmount));
@@ -4050,7 +4062,8 @@ if (alpha - AlphaTestRefRS < 0) {
 	indirectLobeWeights.specular *= lerp(1.0, wetDeferredCubemapScale, saturate(wetnessGlossinessSpecular));
 	indirectLobeWeights.specular += wetnessReflectance;
 	if (waterRoughnessSpecular < 1) {
-		screenSpaceNormal = lerp(screenSpaceNormal, normalize(FrameBuffer::WorldToView(wetnessNormal, false, eyeIndex)), wetDeferredBlend);
+		float3 wetScreenSpaceNormal = SafeNormalize3(FrameBuffer::WorldToView(wetIndirectNormal, false, eyeIndex), screenSpaceNormal);
+		screenSpaceNormal = lerp(screenSpaceNormal, wetScreenSpaceNormal, wetDeferredBlend);
 		material.Roughness = lerp(material.Roughness, waterRoughnessSpecular, wetDeferredBlend);
 	}
 #		elif defined(WETNESS_EFFECTS)

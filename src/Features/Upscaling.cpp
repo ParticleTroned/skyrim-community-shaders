@@ -10,10 +10,14 @@
 #include "Utils/UI.h"
 #include <Windows.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cfloat>
+#include <cwctype>
 #include <directx/d3dx12.h>
+#include <filesystem>
 #include <format>
+#include <string_view>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -126,6 +130,228 @@ namespace
 		texture->resource = nullptr;
 		delete texture;
 		texture = nullptr;
+	}
+
+	struct OpenCompositeSettingValue
+	{
+		bool value = false;
+		std::string configPath;
+	};
+
+	struct OpenCompositeUpscalingSettings
+	{
+		OpenCompositeSettingValue dlssEnabled;
+		OpenCompositeSettingValue fsrEnabled;
+		OpenCompositeSettingValue dlaaEnabled;
+		OpenCompositeSettingValue fsrNativeAA;
+		OpenCompositeSettingValue fsr3PostAAEnabled;
+	};
+
+	struct DetectedOpenCompositeUpscalingBlocker
+	{
+		bool active = false;
+		std::string settingName;
+		std::string configPath;
+	};
+
+	std::string_view TrimAsciiWhitespace(std::string_view value)
+	{
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
+			value.remove_prefix(1);
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
+			value.remove_suffix(1);
+		return value;
+	}
+
+	std::string ToLowerAscii(std::string_view value)
+	{
+		std::string result(value);
+		std::ranges::transform(result, result.begin(), [](unsigned char c) {
+			return static_cast<char>(std::tolower(c));
+		});
+		return result;
+	}
+
+	bool TryParseOpenCompositeBool(std::string value, bool& outValue)
+	{
+		value = ToLowerAscii(TrimAsciiWhitespace(value));
+		if (value == "true" || value == "on" || value == "enabled" || value == "1") {
+			outValue = true;
+			return true;
+		}
+		if (value == "false" || value == "off" || value == "disabled" || value == "0") {
+			outValue = false;
+			return true;
+		}
+		return false;
+	}
+
+	std::string PathToDisplayString(const std::filesystem::path& path)
+	{
+		return path.string();
+	}
+
+	void AddUniquePath(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path)
+	{
+		if (path.empty())
+			return;
+
+		auto normalized = path.lexically_normal().wstring();
+		std::ranges::transform(normalized, normalized.begin(), [](wchar_t c) {
+			return static_cast<wchar_t>(std::towlower(c));
+		});
+
+		const bool alreadyAdded = std::ranges::any_of(paths, [&](const std::filesystem::path& existing) {
+			auto existingNormalized = existing.lexically_normal().wstring();
+			std::ranges::transform(existingNormalized, existingNormalized.begin(), [](wchar_t c) {
+				return static_cast<wchar_t>(std::towlower(c));
+			});
+			return existingNormalized == normalized;
+		});
+		if (!alreadyAdded)
+			paths.push_back(path);
+	}
+
+	std::filesystem::path GetCurrentDirectoryPath()
+	{
+		std::wstring buffer(MAX_PATH, L'\0');
+		const DWORD length = GetCurrentDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
+		if (length == 0)
+			return {};
+
+		if (length >= buffer.size()) {
+			buffer.resize(length + 1);
+			const DWORD retryLength = GetCurrentDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
+			if (retryLength == 0 || retryLength >= buffer.size())
+				return {};
+			buffer.resize(retryLength);
+		} else {
+			buffer.resize(length);
+		}
+
+		return std::filesystem::path(buffer);
+	}
+
+	std::filesystem::path GetLoadedOpenVRDirectory()
+	{
+		HMODULE openVRModule = GetModuleHandleW(L"openvr_api.dll");
+		if (!openVRModule)
+			return {};
+
+		std::wstring buffer(MAX_PATH, L'\0');
+		const DWORD length = GetModuleFileNameW(openVRModule, buffer.data(), static_cast<DWORD>(buffer.size()));
+		if (length == 0 || length >= buffer.size())
+			return {};
+
+		buffer.resize(length);
+		return std::filesystem::path(buffer).parent_path();
+	}
+
+	bool ShouldProbeOpenCompositeConfig()
+	{
+		return globals::game::isVR;
+	}
+
+	std::vector<std::filesystem::path> GetOpenCompositeConfigCandidates()
+	{
+		std::vector<std::filesystem::path> candidates;
+
+		const auto loadedOpenVRDirectory = GetLoadedOpenVRDirectory();
+		if (!loadedOpenVRDirectory.empty())
+			AddUniquePath(candidates, loadedOpenVRDirectory / L"opencomposite.ini");
+
+		const auto currentDirectory = GetCurrentDirectoryPath();
+		if (!currentDirectory.empty()) {
+			AddUniquePath(candidates, currentDirectory / L"opencomposite.ini");
+			AddUniquePath(candidates, currentDirectory / L"opencomposite_ext.ini");
+		}
+
+		return candidates;
+	}
+
+	bool TryReadIniBoolSetting(const CSimpleIniA& ini, const char* key, bool& outValue)
+	{
+		auto tryReadSection = [&](const char* section) {
+			const char* rawValue = ini.GetValue(section, key, nullptr);
+			return rawValue && TryParseOpenCompositeBool(rawValue, outValue);
+		};
+
+		if (tryReadSection(""))
+			return true;
+
+		CSimpleIniA::TNamesDepend sections;
+		ini.GetAllSections(sections);
+		for (const auto& section : sections) {
+			if (section.pItem && tryReadSection(section.pItem))
+				return true;
+		}
+
+		return false;
+	}
+
+	void UpdateOpenCompositeSettingValue(OpenCompositeSettingValue& setting, const CSimpleIniA& ini, const char* key, const std::filesystem::path& path)
+	{
+		bool parsedValue = false;
+		if (!TryReadIniBoolSetting(ini, key, parsedValue))
+			return;
+
+		setting.value = parsedValue;
+		setting.configPath = PathToDisplayString(path);
+	}
+
+	OpenCompositeUpscalingSettings ReadOpenCompositeUpscalingSettings()
+	{
+		OpenCompositeUpscalingSettings settings;
+
+		std::error_code ec;
+		for (const auto& path : GetOpenCompositeConfigCandidates()) {
+			if (!std::filesystem::exists(path, ec))
+				continue;
+			ec.clear();
+
+			CSimpleIniA ini;
+			ini.SetUnicode();
+			const SI_Error rc = ini.LoadFile(path.c_str());
+			if (rc < 0) {
+				logger::warn("[Upscaling] Failed to read Open Composite config '{}': {}", PathToDisplayString(path), rc);
+				continue;
+			}
+
+			UpdateOpenCompositeSettingValue(settings.dlssEnabled, ini, "dlssEnabled", path);
+			UpdateOpenCompositeSettingValue(settings.fsrEnabled, ini, "fsrEnabled", path);
+			UpdateOpenCompositeSettingValue(settings.dlaaEnabled, ini, "dlaaEnabled", path);
+			UpdateOpenCompositeSettingValue(settings.fsrNativeAA, ini, "fsrNativeAA", path);
+			UpdateOpenCompositeSettingValue(settings.fsr3PostAAEnabled, ini, "fsr3PostAAEnabled", path);
+		}
+
+		return settings;
+	}
+
+	DetectedOpenCompositeUpscalingBlocker FindOpenCompositeUpscalingBlocker()
+	{
+		DetectedOpenCompositeUpscalingBlocker blocker;
+		if (!ShouldProbeOpenCompositeConfig())
+			return blocker;
+
+		const auto settings = ReadOpenCompositeUpscalingSettings();
+		auto setBlocker = [&](const char* settingName, const OpenCompositeSettingValue& setting) {
+			blocker.active = true;
+			blocker.settingName = settingName;
+			blocker.configPath = setting.configPath;
+		};
+
+		if (settings.dlaaEnabled.value)
+			setBlocker("dlaaEnabled", settings.dlaaEnabled);
+		else if (settings.fsrNativeAA.value)
+			setBlocker("fsrNativeAA", settings.fsrNativeAA);
+		else if (settings.fsr3PostAAEnabled.value)
+			setBlocker("fsr3PostAAEnabled", settings.fsr3PostAAEnabled);
+		else if (settings.dlssEnabled.value)
+			setBlocker("dlssEnabled", settings.dlssEnabled);
+		else if (settings.fsrEnabled.value)
+			setBlocker("fsrEnabled", settings.fsrEnabled);
+
+		return blocker;
 	}
 
 	float ClampPeripheryTAACenterBlendFeather(float value)
@@ -624,6 +850,9 @@ void Upscaling::DrawSettings()
 	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeUpscalerAutoEligible();
 	const bool runtimeFsr4Available = fidelityFX.IsRuntimeUpscalerAvailable();
 	const bool featureDLSS = streamline.featureDLSS;
+	ApplyOpenCompositeUpscalingBlocker();
+	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
+	const bool openCompositeBlocksUpscaling = openCompositeBlocker.active;
 
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
@@ -633,18 +862,21 @@ void Upscaling::DrawSettings()
 		settings.fsr4RuntimeEnable;
 
 	std::vector<UpscaleUiChoice> upscaleChoices = {
-		{ UpscaleMethod::kNONE, false, "None" },
-		{ UpscaleMethod::kTAA, false, "TAA" },
-		{ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" }
+		{ UpscaleMethod::kNONE, false, "None" }
 	};
 
-	if (runtimeFsr4Available)
-		upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4" });
-	else if (requestedRuntimeFsr4BeforeMethodSelection)
-		upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4 (Unavailable)" });
+	if (!openCompositeBlocksUpscaling) {
+		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
+		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" });
 
-	if (featureDLSS)
-		upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
+		if (runtimeFsr4Available)
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4" });
+		else if (requestedRuntimeFsr4BeforeMethodSelection)
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4 (Unavailable)" });
+
+		if (featureDLSS)
+			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
+	}
 
 	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
 		if (static_cast<uint32_t>(choice.method) != *currentUpscaleMode)
@@ -671,10 +903,18 @@ void Upscaling::DrawSettings()
 	}
 
 	const char* currentMethodLabel = upscaleChoices[methodUiIndex].label;
+	if (openCompositeBlocksUpscaling)
+		ImGui::BeginDisabled();
 	const bool methodChanged = ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
+	if (openCompositeBlocksUpscaling)
+		ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Selects the upscaling backend.");
-		ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
+		if (openCompositeBlocksUpscaling) {
+			ImGui::Text("Locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
+		} else {
+			ImGui::TextUnformatted("Selects the upscaling backend.");
+			ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
+		}
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
@@ -683,6 +923,21 @@ void Upscaling::DrawSettings()
 		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
 		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
 			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+	}
+	if (openCompositeBlocksUpscaling) {
+		ApplyOpenCompositeUpscalingBlocker();
+		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
+		if (openCompositeBlocker.configPath.empty()) {
+			ImGui::TextWrapped(
+				"Community Shaders Upscaling is locked to None because Open Composite has %s=true.",
+				openCompositeBlocker.settingName.c_str());
+		} else {
+			ImGui::TextWrapped(
+				"Community Shaders Upscaling is locked to None because Open Composite has %s=true in %s.",
+				openCompositeBlocker.settingName.c_str(),
+				openCompositeBlocker.configPath.c_str());
+		}
+		ImGui::PopStyleColor();
 	}
 
 	// Check the current upscale method
@@ -1281,8 +1536,51 @@ void Upscaling::DrawSettings()
 	}
 }
 
+const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
+{
+	const ULONGLONG now = GetTickCount64();
+
+	if (!a_forceRefresh && openCompositeUpscalingBlockerCacheValid) {
+		return openCompositeUpscalingBlocker;
+	}
+
+	const auto detectedBlocker = FindOpenCompositeUpscalingBlocker();
+	openCompositeUpscalingBlocker.active = detectedBlocker.active;
+	openCompositeUpscalingBlocker.settingName = detectedBlocker.settingName;
+	openCompositeUpscalingBlocker.configPath = detectedBlocker.configPath;
+	openCompositeUpscalingBlockerCacheValid = true;
+	openCompositeUpscalingBlockerLastRefresh = now;
+
+	return openCompositeUpscalingBlocker;
+}
+
+void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
+{
+	const auto& blocker = GetOpenCompositeUpscalingBlocker(a_forceRefresh);
+	if (!blocker.active)
+		return;
+
+	if (settings.upscaleMethod != static_cast<uint>(UpscaleMethod::kNONE) ||
+	    settings.upscaleMethodNoDLSS != static_cast<uint>(UpscaleMethod::kNONE)) {
+		if (blocker.configPath.empty()) {
+			logger::warn(
+				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true.",
+				blocker.settingName);
+		} else {
+			logger::warn(
+				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true in {}.",
+				blocker.settingName,
+				blocker.configPath);
+		}
+	}
+
+	settings.upscaleMethod = static_cast<uint>(UpscaleMethod::kNONE);
+	settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
+}
+
 void Upscaling::SaveSettings(json& o_json)
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
 	SanitizeUpscalingSettings(settings);
 	o_json = settings;
 	if (!IsVRRuntimeActive()) {
@@ -1311,6 +1609,7 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, static_cast<uint>(UpscaleMethod::kFSR));
 	}
 	SanitizeUpscalingSettings(settings);
+	ApplyOpenCompositeUpscalingBlocker(true);
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
 		settings.reflexFPSLimit = 60.0f;
@@ -1344,10 +1643,18 @@ void Upscaling::RestoreDefaultSettings()
 	settings.reflexLowLatencyBoost = false;
 	settings.reflexUseFPSLimit = false;
 	SanitizeUpscalingSettings(settings);
+	ApplyOpenCompositeUpscalingBlocker(true);
 }
 
 void Upscaling::DataLoaded()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping data-loaded upscaling adjustments because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	// Fix screenshots fix from Engine Fixes
 	RE::GetINISetting("bUseTAA:Display")->data.b = false;
 
@@ -1396,6 +1703,13 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 
 void Upscaling::Load()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping D3D11 device hook because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainUpscaling, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
 }
 
@@ -1413,6 +1727,13 @@ struct BSImageSpace_Init_FXAA
 };
 void Upscaling::PostPostLoad()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping upscaling render hooks because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");
 	stl::detour_thunk<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084));
 
@@ -1444,6 +1765,9 @@ void Upscaling::PostPostLoad()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
+	if (GetOpenCompositeUpscalingBlocker().active)
+		return UpscaleMethod::kNONE;
+
 	if (streamline.featureDLSS)
 		return (UpscaleMethod)settings.upscaleMethod;
 	return (UpscaleMethod)settings.upscaleMethodNoDLSS;
@@ -3714,6 +4038,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 void Upscaling::SetupResources()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping upscaling resource setup because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	QueryPerformanceFrequency(&qpf);
 
 	auto renderer = globals::game::renderer;
@@ -4198,6 +4529,25 @@ float Upscaling::GetFrameGenerationFrameTime() const
 // Unified interface methods
 void Upscaling::LoadUpscalingSDKs()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		if (!openCompositeUpscalingBackendSkipLogged) {
+			if (blocker.configPath.empty()) {
+				logger::warn(
+					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true.",
+					blocker.settingName);
+			} else {
+				logger::warn(
+					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true in {}.",
+					blocker.settingName,
+					blocker.configPath);
+			}
+			openCompositeUpscalingBackendSkipLogged = true;
+		}
+		return;
+	}
+
 	// Initialize upscaling SDK components during plugin startup
 	// This ensures all SDKs are available before any D3D device creation
 	streamline.LoadInterposer();

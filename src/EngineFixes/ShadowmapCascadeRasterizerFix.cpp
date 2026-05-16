@@ -1,7 +1,46 @@
 #include "ShadowmapCascadeRasterizerFix.h"
 
 #include "Globals.h"
-#include "Utils/Game.h"
+
+#include <unordered_map>
+
+namespace
+{
+	std::unordered_map<ID3D11RasterizerState*, std::array<ID3D11RasterizerState*, ShadowmapRasterizerFix::maxCascades>> biasedRasterStateLookup;
+	std::unordered_map<ID3D11RasterizerState*, ID3D11RasterizerState*> originalRasterStateLookup;
+
+	template <class Fn>
+	void ForEachRasterStateSlot(Fn&& fn)
+	{
+		for (int fill = 0; fill < 2; fill++) {
+			for (int cull = 0; cull < 3; cull++) {
+				for (int depth = 0; depth < 12; depth++) {
+					for (int scissor = 0; scissor < 2; scissor++) {
+						fn(fill, cull, depth, scissor);
+					}
+				}
+			}
+		}
+	}
+
+	void RestoreOriginalRasterState(ID3D11DeviceContext* context)
+	{
+		if (!context || !ShadowmapRasterizerFix::d3dHooksInstalled)
+			return;
+
+		ID3D11RasterizerState* currentState = nullptr;
+		context->RSGetState(&currentState);
+		if (!currentState)
+			return;
+
+		const auto iter = originalRasterStateLookup.find(currentState);
+		if (iter != originalRasterStateLookup.end()) {
+			ShadowmapRasterizerFix::ID3D11DeviceContext_RSSetState::func(context, iter->second);
+		}
+
+		currentState->Release();
+	}
+}
 
 void ShadowmapRasterizerFix::Install()
 {
@@ -13,6 +52,8 @@ void ShadowmapRasterizerFix::Install()
 	auto configuredCascades = Util::GetGameSettingValue<std::int32_t>("iNumSplits:Display", Settings.at("iNumSplits:Display"));
 	numCascades = static_cast<std::uint32_t>(std::clamp(configuredCascades, 1, static_cast<std::int32_t>(maxCascades)));
 	currentCascade = 0;
+	activeCascade = invalidCascade;
+	ReleaseClonedRasterStates();
 	initialized = false;
 }
 
@@ -27,10 +68,7 @@ void ShadowmapRasterizerFix::InstallD3DHooks(ID3D11DeviceContext* context)
 	if (!context || d3dHooksInstalled)
 		return;
 
-	stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(context);
-	stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(context);
-	stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(context);
-	stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(context);
+	stl::detour_vfunc<43, ID3D11DeviceContext_RSSetState>(context);
 
 	d3dHooksInstalled = true;
 }
@@ -79,6 +117,7 @@ void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCas
 	{
 		ScopedCascadeBias scopedCascadeBias(cascade);
 		func(light, arg1, arg2, flags);
+		RestoreOriginalRasterState(globals::d3d::context);
 	}
 
 	currentCascade = (cascade + 1) % numCascades;
@@ -86,11 +125,13 @@ void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCas
 
 void ShadowmapRasterizerFix::InitializeRasterStates()
 {
+	ReleaseClonedRasterStates();
 	std::memcpy(backupGameRasterStates, *gRasterStates, sizeof(RasterStateArray));
 
 	if constexpr (vrCasterBiasEnabled) {
 		for (std::uint32_t cascade = 0; cascade < numCascades; cascade++)
 			CloneRasterStates(backupGameRasterStates, cascade, vrCascadeDescriptors);
+		RebuildBiasedRasterStateLookup();
 	}
 
 	initialized = true;
@@ -105,25 +146,67 @@ void ShadowmapRasterizerFix::GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputD
 
 void ShadowmapRasterizerFix::CloneRasterStates(const RasterStateArray& inputArray, std::uint32_t cascade, const std::array<ShadowMapRasterizerDescriptor, maxCascades>& descriptors)
 {
-	for (int fill = 0; fill < 2; fill++) {
-		for (int cull = 0; cull < 3; cull++) {
-			for (int depth = 0; depth < 12; depth++) {
-				for (int scissor = 0; scissor < 2; scissor++) {
-					if (auto* gRasterizer = inputArray[fill][cull][depth][scissor]) {
-						D3D11_RASTERIZER_DESC desc{};
-						gRasterizer->GetDesc(&desc);
-
-						GetUpdatedRasterDesc(desc, descriptors[cascade]);
-
-						DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&desc, &shadowmapRasterStates[cascade][fill][cull][depth][scissor]));
-					}
-				}
-			}
+	ForEachRasterStateSlot([&](int fill, int cull, int depth, int scissor) {
+		auto*& clonedRaster = shadowmapRasterStates[cascade][fill][cull][depth][scissor];
+		if (clonedRaster) {
+			clonedRaster->Release();
+			clonedRaster = nullptr;
 		}
-	}
+
+		if (auto* gRasterizer = inputArray[fill][cull][depth][scissor]) {
+			D3D11_RASTERIZER_DESC desc{};
+			gRasterizer->GetDesc(&desc);
+
+			GetUpdatedRasterDesc(desc, descriptors[cascade]);
+
+			DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&desc, &clonedRaster));
+		}
+	});
 }
 
-ID3D11RasterizerState* ShadowmapRasterizerFix::GetBiasedRasterState()
+void ShadowmapRasterizerFix::ReleaseClonedRasterStates()
+{
+	ForEachRasterStateSlot([&](int fill, int cull, int depth, int scissor) {
+		for (std::uint32_t cascade = 0; cascade < maxCascades; cascade++) {
+			auto*& clonedRaster = shadowmapRasterStates[cascade][fill][cull][depth][scissor];
+			if (clonedRaster) {
+				clonedRaster->Release();
+				clonedRaster = nullptr;
+			}
+		}
+	});
+
+	biasedRasterStateLookup.clear();
+	originalRasterStateLookup.clear();
+}
+
+void ShadowmapRasterizerFix::RebuildBiasedRasterStateLookup()
+{
+	biasedRasterStateLookup.clear();
+	originalRasterStateLookup.clear();
+
+	if (!REL::Module::IsVR())
+		return;
+
+	if constexpr (!vrCasterBiasEnabled)
+		return;
+
+	ForEachRasterStateSlot([&](int fill, int cull, int depth, int scissor) {
+		auto* gameRaster = backupGameRasterStates[fill][cull][depth][scissor];
+		if (!gameRaster)
+			return;
+
+		auto& cascadedStates = biasedRasterStateLookup[gameRaster];
+		for (std::uint32_t cascade = 0; cascade < numCascades; cascade++) {
+			auto* biasedRaster = shadowmapRasterStates[cascade][fill][cull][depth][scissor];
+			cascadedStates[cascade] = biasedRaster;
+			if (biasedRaster)
+				originalRasterStateLookup[biasedRaster] = gameRaster;
+		}
+	});
+}
+
+ID3D11RasterizerState* ShadowmapRasterizerFix::GetBiasedRasterState(ID3D11RasterizerState* state)
 {
 	if (!REL::Module::IsVR())
 		return nullptr;
@@ -131,23 +214,18 @@ ID3D11RasterizerState* ShadowmapRasterizerFix::GetBiasedRasterState()
 	if constexpr (!vrCasterBiasEnabled)
 		return nullptr;
 
-	if (!initialized || activeCascade >= numCascades || !globals::game::shadowState)
+	if (!state || !initialized || activeCascade >= numCascades)
 		return nullptr;
 
 	const auto desc = vrCascadeDescriptors[activeCascade];
 	if (desc.rasterDepthBias == 0 && desc.rasterDepthBiasClamp == 0.0f && desc.rasterSlopeScaleBias == 0.0f)
 		return nullptr;
 
-	auto shadowState = globals::game::shadowState;
-	GET_INSTANCE_MEMBER(rasterStateFillMode, shadowState)
-	GET_INSTANCE_MEMBER(rasterStateCullMode, shadowState)
-	GET_INSTANCE_MEMBER(rasterStateDepthBiasMode, shadowState)
-	GET_INSTANCE_MEMBER(rasterStateScissorMode, shadowState)
-
-	if (rasterStateFillMode >= 2 || rasterStateCullMode >= 3 || rasterStateDepthBiasMode >= 12 || rasterStateScissorMode >= 2)
+	const auto iter = biasedRasterStateLookup.find(state);
+	if (iter == biasedRasterStateLookup.end())
 		return nullptr;
 
-	return shadowmapRasterStates[activeCascade][rasterStateFillMode][rasterStateCullMode][rasterStateDepthBiasMode][rasterStateScissorMode];
+	return iter->second[activeCascade];
 }
 
 ShadowmapRasterizerFix::ScopedCascadeBias::ScopedCascadeBias(std::uint32_t cascade) :
@@ -161,60 +239,10 @@ ShadowmapRasterizerFix::ScopedCascadeBias::~ScopedCascadeBias()
 	activeCascade = previousCascade;
 }
 
-ShadowmapRasterizerFix::ScopedBiasedRasterState::ScopedBiasedRasterState(ID3D11DeviceContext* a_context) :
-	context(a_context)
+void ShadowmapRasterizerFix::ID3D11DeviceContext_RSSetState::thunk(ID3D11DeviceContext* context, ID3D11RasterizerState* state)
 {
-	auto* biasedState = GetBiasedRasterState();
-	if (!context || !biasedState)
-		return;
-
-	context->RSGetState(&previousState);
-	if (previousState != biasedState) {
-		context->RSSetState(biasedState);
-		applied = true;
+	if (auto* biasedState = GetBiasedRasterState(state)) {
+		state = biasedState;
 	}
-}
-
-ShadowmapRasterizerFix::ScopedBiasedRasterState::~ScopedBiasedRasterState()
-{
-	if (applied)
-		context->RSSetState(previousState);
-
-	if (previousState)
-		previousState->Release();
-}
-
-void ShadowmapRasterizerFix::ID3D11DeviceContext_DrawIndexed::thunk(ID3D11DeviceContext* context, UINT indexCount, UINT startIndexLocation, INT baseVertexLocation)
-{
-	ScopedBiasedRasterState scopedRasterState(context);
-	func(context, indexCount, startIndexLocation, baseVertexLocation);
-}
-
-void ShadowmapRasterizerFix::ID3D11DeviceContext_Draw::thunk(ID3D11DeviceContext* context, UINT vertexCount, UINT startVertexLocation)
-{
-	ScopedBiasedRasterState scopedRasterState(context);
-	func(context, vertexCount, startVertexLocation);
-}
-
-void ShadowmapRasterizerFix::ID3D11DeviceContext_DrawIndexedInstanced::thunk(
-	ID3D11DeviceContext* context,
-	UINT indexCountPerInstance,
-	UINT instanceCount,
-	UINT startIndexLocation,
-	INT baseVertexLocation,
-	UINT startInstanceLocation)
-{
-	ScopedBiasedRasterState scopedRasterState(context);
-	func(context, indexCountPerInstance, instanceCount, startIndexLocation, baseVertexLocation, startInstanceLocation);
-}
-
-void ShadowmapRasterizerFix::ID3D11DeviceContext_DrawInstanced::thunk(
-	ID3D11DeviceContext* context,
-	UINT vertexCountPerInstance,
-	UINT instanceCount,
-	UINT startVertexLocation,
-	UINT startInstanceLocation)
-{
-	ScopedBiasedRasterState scopedRasterState(context);
-	func(context, vertexCountPerInstance, instanceCount, startVertexLocation, startInstanceLocation);
+	func(context, state);
 }

@@ -27,7 +27,9 @@ struct ShadowmapRasterizerFix : EngineFix
 	static void InstallD3DHooks(ID3D11DeviceContext* context);
 	static void InitializeRasterStates();
 	static void CloneRasterStates(const RasterStateArray& inputArray, std::uint32_t cascade, const std::array<ShadowMapRasterizerDescriptor, maxCascades>& descriptors);
-	static ID3D11RasterizerState* GetBiasedRasterState();
+	static void ReleaseClonedRasterStates();
+	static void RebuildBiasedRasterStateLookup();
+	static ID3D11RasterizerState* GetBiasedRasterState(ID3D11RasterizerState* state);
 
 	static inline std::uint32_t numCascades = 0;
 	static inline std::uint32_t currentCascade = 0;
@@ -91,54 +93,15 @@ struct ShadowmapRasterizerFix : EngineFix
 		std::uint32_t previousCascade;
 	};
 
-	struct ScopedBiasedRasterState
-	{
-		explicit ScopedBiasedRasterState(ID3D11DeviceContext* context);
-		~ScopedBiasedRasterState();
-
-		ID3D11DeviceContext* context = nullptr;
-		ID3D11RasterizerState* previousState = nullptr;
-		bool applied = false;
-	};
-
 	struct BSShadowDirectionalLight_RenderShadowmaps_RenderCascade
 	{
 		static void thunk(RE::BSShadowDirectionalLight* light, void* arg1, void* arg2, std::uint32_t flags);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct ID3D11DeviceContext_DrawIndexed
+	struct ID3D11DeviceContext_RSSetState
 	{
-		static void thunk(ID3D11DeviceContext* context, UINT indexCount, UINT startIndexLocation, INT baseVertexLocation);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct ID3D11DeviceContext_Draw
-	{
-		static void thunk(ID3D11DeviceContext* context, UINT vertexCount, UINT startVertexLocation);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct ID3D11DeviceContext_DrawIndexedInstanced
-	{
-		static void thunk(
-			ID3D11DeviceContext* context,
-			UINT indexCountPerInstance,
-			UINT instanceCount,
-			UINT startIndexLocation,
-			INT baseVertexLocation,
-			UINT startInstanceLocation);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct ID3D11DeviceContext_DrawInstanced
-	{
-		static void thunk(
-			ID3D11DeviceContext* context,
-			UINT vertexCountPerInstance,
-			UINT instanceCount,
-			UINT startVertexLocation,
-			UINT startInstanceLocation);
+		static void thunk(ID3D11DeviceContext* context, ID3D11RasterizerState* state);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

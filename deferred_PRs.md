@@ -185,6 +185,18 @@ If revisited:
 - Revisit together with `#1907` as one UI/font package.
 - Validate readability and sizing consistency in both VR and non-VR menus.
 
+## #1960 - Feature description text wrapping
+
+Status: already picked on this branch.
+
+Reason:
+- This branch already contains commit `47669a76`
+  (`fix(UI): feature description text wrapping (#1960)`), cherry-picked from
+  upstream commit `b409a879`.
+- The PR only changes `src/Menu/FeatureListRenderer.cpp` so feature
+  descriptions use wrapped text instead of a single truncated line.
+- No additional deferred action is needed unless this UI area is rewritten.
+
 ## #1961 - VR exponential height fog stereo mismatch
 
 Status: deferred as not applicable on this branch right now.
@@ -256,7 +268,8 @@ If revisited:
 
 ## #2002 - VR stereo reprojection
 
-Status: deferred as-is.
+Status: deferred because this branch does not include the
+`VRStereoOptimizations` feature line.
 
 Reason:
 - Adds a large experimental VR stereo reprojection/stencil-culling path, not a
@@ -376,14 +389,30 @@ If revisited:
 - Prefer picking the later dev-integrated form instead of this side-branch
   merge commit.
 
+## #2055 - Update in-game links
+
+Status: intentionally skipped; not picked because it does not apply cleanly to this fork.
+
+Reason:
+- Upstream `#2055` changes the upstream HomePage quick-link labels, wiki URL,
+  and FAQ copy in `src/Menu/HomePageRenderer.cpp`.
+- This fork has branch-specific HomePage/menu text and release-branch guidance,
+  so taking the upstream wording directly would replace local UI intent rather
+  than just bringing over an optimization.
+- The PR is documentation/UI copy only; it is not required for runtime behavior.
+
+If revisited:
+- Manually compare the current fork HomePage links with upstream and only copy
+  the external URL changes that still make sense for this fork.
+
 ## #2059 - Home page quick-links overflow
 
-Status: intentionally skipped (empty pick on this branch).
+Status: intentionally skipped; not picked because it does not apply to this fork.
 
 Reason:
 - Upstream `#2059` targets quick-link/FAQ layout behavior in the upstream
   HomePage implementation.
-- This branch uses a customized HomePage path where that upstream hunk does not
+- This fork uses a customized HomePage path where that upstream hunk does not
   apply, so cherry-pick resolved to no effective code change.
 - The temporary empty marker commit was removed from history.
 
@@ -466,6 +495,21 @@ Reason:
 If revisited:
 - Revisit as part of the full HDR package (`#1692`) together with related
   `ISTemporalAA`/HDR VR follow-ups (`#2084`, `#2098`, `#2126`, and later fixes).
+
+## #2090 - HDR sun rewrite
+
+Status: deferred as not applicable without HDR.
+
+Reason:
+- `#2090` adds the HDR sun shader include and rewires sky/HDRDisplay sun output
+  behavior.
+- This branch intentionally does not include the HDR base integration (`#1692`),
+  so the target `HDRDisplay` path is absent/out of scope.
+- Taking the sky hunk alone would mix HDR-specific shader behavior into the
+  non-HDR branch without the matching HDR pipeline.
+
+If revisited:
+- Revisit only as part of a full HDR package (`#1692` and follow-ups).
 
 ## #2098 - VR desktop-window HDR fix
 
@@ -636,7 +680,9 @@ Expected result:
 
 ## #2150 - DeferredComposite optimization
 
-Status: deferred; linked to deferred `#2002` line and not kept as a stable target.
+Status: deferred because this branch does not include
+`VRStereoOptimizations`; linked to deferred `#2002` line and not kept as a
+stable target.
 
 Reason:
 - `#2150` rewires DeferredComposite and directly touches
@@ -886,6 +932,26 @@ Intentionally not implemented:
 - Branch keeps current VR scaling/tuning path (`VRBaseSamplesAtReference` and
   existing dynamic sample logic) to avoid changing SSS performance envelope.
 
+## #2229 - Exponential Height Fog vanilla fade toggle
+
+Status: deferred as not applicable without Exponential Height Fog.
+
+Reason:
+- `#2229` adds an Exponential Height Fog setting and weather variable for
+  respecting vanilla fog fade, extends the EHF shared settings buffer, and
+  threads that behavior through the EHF shader.
+- It also changes EHF integration points in `ISSAOComposite.hlsl` and
+  `Water.hlsl`, so the PR is not an isolated UI toggle.
+- This branch intentionally does not include Exponential Height Fog yet, so
+  taking this PR would import feature-specific shader and buffer layout changes
+  outside the current branch scope.
+
+If revisited:
+- Revisit only as part of a deliberate Exponential Height Fog integration.
+- Apply together with the later EHF follow-ups, including `#2301`, so the
+  shared buffer layout, water fog behavior, and vanilla-fade behavior are
+  reviewed as one package.
+
 ## #2235 - Typed UAV loads and logging
 
 Status: picked in this branch (adapted conflict resolution).
@@ -894,3 +960,235 @@ Validation note:
 - Terrain Blending must be checked in-game after this pick to confirm depth
   blending still behaves correctly in interior/exterior scenes (no depth
   mismatch, flicker, or blend regression).
+
+## #2244 - FidelityFX optiscaler / FSR 3.1.4 vendor update
+
+Status: deferred; do not pick as-is.
+
+Reason:
+- Upstream `#2244` changes the FidelityFX submodule to
+  `alandtse/FidelityFX-SDK-DX11` on `optiscaler-build`, updates packaged
+  FidelityFX DLLs, deletes packaged PDBs, and switches host FSR creation to
+  `ffxGetDeviceDX11_Fsr31`.
+- This branch already uses a fork-specific FidelityFX submodule:
+  `ParticleTroned/FidelityFX-SDK-DX11` on `fsr-3.1.5-dx11`.
+- The branch also has later local FSR work for host FSR 3.1.5, runtime FSR4
+  provider loading, runtime upscaler fallback/validation, and VR-safe
+  per-eye handling.
+- Picking `#2244` directly would risk downgrading/replacing that fork-specific
+  FSR 3.1.5/runtime-FSR4 stack and would churn binary vendor files without a
+  clear branch benefit.
+
+If revisited:
+- Reconcile the FidelityFX vendor strategy explicitly instead of cherry-picking
+  this PR: compare the optiscaler-build changes against the current
+  `fsr-3.1.5-dx11` branch and only port missing build/runtime fixes that still
+  apply.
+
+## #2271 - Restore UAV bind on vanilla normals targets
+
+Status: not picked because the regression it fixes is not present on this
+branch.
+
+Reason:
+- Upstream `#2271` restores `CreateRenderTarget_Normals` and
+  `CreateRenderTarget_NormalsSwap` after `#2178` removed those hooks.
+- This branch did not pick `#2178`, so the two normal-target hooks were never
+  removed here.
+- The branch also did not pick `#2150`, the DeferredComposite optimization that
+  made the `#2178` hook removal look valid on upstream's temporary path.
+- Current branch code still uses `DeferredCompositeCS`, still binds
+  `normals.UAV`, and still installs both normal-target hooks, so the intended
+  `#2271` fix is already covered by existing branch state.
+
+If revisited:
+- Only reconsider if a future DeferredComposite integration imports the
+  `#2178`/`#2150` texture path or otherwise removes the normal-target UAV bind
+  hooks.
+
+## #2274 - HDR background blur fix
+
+Status: deferred as not applicable without HDR/background blur integration.
+
+Reason:
+- `#2274` patches HDRDisplay, Upscaling/DX12 swapchain, BackgroundBlur, and
+  shared state around HDR + background blur composition.
+- This branch intentionally does not include the HDR base integration (`#1692`)
+  and keeps background blur out of current VR scope.
+- Taking this PR without HDR would either be a no-op or pull in HDR/blur
+  plumbing that is intentionally excluded from this branch.
+
+If revisited:
+- Revisit only as part of a full HDR integration package, together with any
+  deliberate decision to enable or validate background blur on this branch.
+
+## #2286 - TruePBR aggressive MATO clearing fix
+
+Status: already implemented in this branch.
+
+Reason:
+- `#2286` removes the fallback path that aggressively cleared PBR MATO data
+  from geometries when no matching PBR config was found.
+- This branch already has equivalent behavior in `src/TruePBR.cpp`; attempting
+  to cherry-pick upstream `#2286` produced an empty pick.
+- No marker commit was made because there was no remaining code delta to apply.
+
+If revisited:
+- Re-check only if TruePBR MATO ownership or fallback clearing behavior changes.
+
+## #2287 - HDR Display Nexus metadata
+
+Status: deferred as not applicable without HDR.
+
+Reason:
+- `#2287` only updates HDR Display feature metadata/config.
+- This branch intentionally does not include the HDR Display feature, so there
+  is no active feature package for the metadata to describe.
+
+If revisited:
+- Revisit only if HDR Display is integrated as a branch feature.
+
+## #2289 - HDR peak nits slider maximum
+
+Status: deferred as not applicable without HDR.
+
+Reason:
+- `#2289` only changes HDRDisplay UI behavior by increasing the maximum peak
+  nits slider value to 10000.
+- This branch intentionally does not include the HDR Display feature, so there
+  is no active HDR UI for this change to apply to.
+
+If revisited:
+- Revisit only if HDR Display is integrated as a branch feature.
+
+## #2291 - Upscaling slider toggle replacement
+
+Status: intentionally skipped.
+
+Reason:
+- `#2291` changes the Upscaling UI toggle controls from sliders to replacement
+  controls.
+- This branch's current Upscaling UI is clearer/better for the branch's
+  combined VR, foveated rendering, frame generation, Reflex, and runtime FSR
+  settings.
+- Taking the PR would churn UI behavior without improving the current branch
+  goal of preserving stable VR-focused upscaling controls.
+
+If revisited:
+- Re-evaluate only as part of a deliberate Upscaling UI redesign, not as a
+  mechanical cherry-pick.
+
+## #2297 - ISHDR bloom gate for legacy weather mods
+
+Status: deferred as not applicable to this branch's current ISHDR path.
+
+Reason:
+- `#2297` gates the newer upstream ISHDR bloom expression so SDR keeps the
+  legacy hard cutoff (`Param.x - blendedColor`) while HDR keeps the newer
+  soft-saturation form.
+- This branch does not include the HDR Display/ISHDR path that introduced the
+  soft-saturation expression.
+- The current active branch code in `package/Shaders/ISHDR.hlsl` already uses
+  the legacy SDR cutoff:
+  `blendedColor += saturate(Param.x - blendedColor) * bloomColor;`.
+- Directly picking `#2297` would target missing HDR-era context rather than
+  add a useful branch delta.
+
+If revisited:
+- Revisit only if the newer HDR/ISHDR pipeline is integrated.
+- Preserve the legacy SDR cutoff for non-HDR weather compatibility when that
+  path is added.
+
+## #2301 - Exponential Height Fog inscattering color settings
+
+Status: deferred as not applicable without Exponential Height Fog.
+
+Reason:
+- `#2301` is an Exponential Height Fog feature update: it separates fog
+  inscattering color from vanilla fog color, replaces the directional
+  inscattering exponent with Henyey-Greenstein anisotropy, and adds sunlight
+  attenuation plus a disable-vanilla-fog control.
+- It also changes shared shader data and EHF integration points in
+  `Effect.hlsl`, `ISSAOComposite.hlsl`, `Lighting.hlsl`, and `Water.hlsl`.
+- This branch intentionally does not include Exponential Height Fog yet, so
+  picking this PR would import feature plumbing and shader behavior outside the
+  current branch scope.
+
+If revisited:
+- Revisit only as part of a deliberate Exponential Height Fog integration.
+- Audit the shared buffer layout plus water/fog interactions against this
+  branch's VR and water changes instead of applying it as a mechanical
+  cherry-pick.
+
+## #2309 - Upscaling depth copy condition revert
+
+Status: intentionally not picked; branch already reversed this path.
+
+Reason:
+- Upstream `#2309` reverts the depth-copy condition in
+  `Upscaling::UpscaleDepth()` so `kMAIN -> kMAIN_COPY` is refreshed
+  unconditionally before the depth upscale pass.
+- This branch already tried the equivalent unconditional refresh in local
+  commit `912ea27a` (`fix(upscaling): refresh scene depth before upscale pass`)
+  and then intentionally reversed it with `2a95b1d0`
+  (`Revert "fix(upscaling): refresh scene depth before upscale pass"`).
+- Current branch code keeps the branch-preserving behavior: during active depth
+  upscaling it only refreshes `depthCopy` in menu/non-3D contexts where the
+  engine may skip the normal copy, while the full-resolution underwater-mask
+  path still refreshes the depth source when that path is active.
+- Picking `#2309` would undo that local reversal and restore the unconditional
+  copy behavior this branch already backed out.
+
+If revisited:
+- Re-test map menu depth, pause/main/loading menus, underwater mask behavior,
+  and VR depth/stencil propagation before changing this copy policy again.
+
+## #2313 - duplicate/unmerged TruePBR MATO cbuffer PR head
+
+Status: not picked because it is not merged into `upstream/dev`.
+
+Reason:
+- Current `upstream/dev` has no merged commit carrying `#2313`.
+- The PR head exists at `upstream/pr/2313`, but its head commit is another
+  `fix(truepbr): apply MATO rbg scalars through cbuffer (#2310)` revision and
+  is not contained in `upstream/dev`.
+- Per branch rule, only PRs merged into `dev` are eligible for picking.
+
+If revisited:
+- Re-check only if `#2313` is later merged into `dev`; otherwise use the
+  actual merged `#2310` commit for the MATO cbuffer fix.
+
+## #2319 - Interior Sun volumetric shadows compatibility
+
+Status: deferred as not applicable without Volumetric Shadows.
+
+Reason:
+- `#2319` is explicitly a Volumetric Shadows compatibility fix for Interior Sun.
+- It changes `VolumetricShadows.cpp/.h`, Volumetric Shadows feature metadata,
+  shared shader data, `ShadowSampling.hlsli`, `Effect.hlsl`, `Lighting.hlsl`,
+  and state plumbing for volumetric-shadow parameters.
+- This branch intentionally does not include Volumetric Shadows yet, so picking
+  this PR would import feature integration code outside the current branch
+  scope.
+
+If revisited:
+- Revisit only as part of a deliberate Volumetric Shadows integration.
+- Re-audit Interior Sun and shadow-sampling interactions against this branch's
+  existing water, VR, and lighting changes when that feature is added.
+
+## #2326 - unmerged duplicate Volumetric Shadows compatibility PR head
+
+Status: not picked because it is not merged into `upstream/dev`.
+
+Reason:
+- Current `upstream/dev` has no merged commit carrying `#2326`, and upstream
+  exposes only `refs/pull/2326/head`, not a merge ref.
+- The PR head currently points at `fix(interior sun): volumetric shadows
+  compatibility (#2319)`.
+- That underlying change is already deferred above because this branch does not
+  include Volumetric Shadows yet.
+
+If revisited:
+- Re-check only if `#2326` is later merged into `dev`.
+- Otherwise treat it together with `#2319` as part of a deliberate Volumetric
+  Shadows integration.

@@ -115,6 +115,16 @@ namespace Color
 		return pow(abs(color), 1.0 / 2.2);
 	}
 
+	float3 GammaToLinearSafe(float3 color)
+	{
+		return sign(color) * pow(abs(color), 2.2);
+	}
+
+	float3 LinearToGammaSafe(float3 color)
+	{
+		return sign(color) * pow(abs(color), 1.0 / 2.2);
+	}
+
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	// Attempt to match vanilla materials that are darker than PBR
 	const static float PBRLightingScale = ENABLE_LL ? 1.0 : 0.65;

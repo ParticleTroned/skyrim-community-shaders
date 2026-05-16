@@ -76,6 +76,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	StereoBlendMaxFactor,
 	StereoBlendColorThreshold,
 	EnableOuterCascadeCasterBias,
+	EnableLightingFoveation,
+	EnableLightingFoveationHardCutoff,
 	menuOverlayPath)
 
 //=============================================================================
@@ -440,6 +442,7 @@ namespace
 	void DrawStereoSettings();
 	void DrawStereoSyncSettings();
 	void DrawStereoBlendSettings();
+	void DrawFoveationSettings();
 	void DrawShadowmapRasterizerSettings();
 	void DrawKeyBindings();
 	void DrawDebugSection();
@@ -459,6 +462,14 @@ void VR::DrawSettings()
 				DrawMenuSettings();
 				DrawMouseSettings();
 				DrawDragSettings();
+			}
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+
+		if (BeginTabItemWithFont("Foveation", Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##VRFoveationFrame", { 0, 0 }, true)) {
+				DrawFoveationSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
@@ -1084,6 +1095,47 @@ namespace
 			ImGui::TextDisabled("Performance: runs one full-screen compute pass while enabled.");
 			ImGui::Spacing();
 			ImGui::TextWrapped("This pass operates on final composite color and cannot reliably attribute pixels to individual screen-space producers.");
+		}
+	}
+
+	void DrawFoveationSettings()
+	{
+		auto& vr = globals::features::vr;
+		auto& settings = vr.settings;
+		auto& upscaling = globals::features::upscaling;
+		const bool isVR = REL::Module::IsVR();
+		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
+		const bool lightingActive = isVR && settings.EnableLightingFoveation && profile.available && profile.coverageArea < 0.999f;
+		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" : "feathered";
+
+		if (ImGui::CollapsingHeader("Shader Detail Foveation", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::Checkbox("FOV Lighting Detail", &settings.EnableLightingFoveation);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive auxiliary detail in the Lighting shader.");
+				ImGui::TextUnformatted("The full visible FOV uses the normal DLSS/FOV mask, or the outside edge of Peripheral TAA when DLSS/FOV + Peripheral TAA is enabled.");
+				ImGui::TextUnformatted("Base diffuse lighting, albedo, normal, and shadowmask sampling remain unchanged.");
+			}
+
+			ImGui::BeginDisabled(!settings.EnableLightingFoveation);
+			ImGui::Checkbox("Hard Cutoff Outside FOV", &settings.EnableLightingFoveationHardCutoff);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses a binary mask for Lighting shader auxiliary detail.");
+				ImGui::TextUnformatted("Inside the FOV mask gets full auxiliary detail; outside the mask skips those optional paths instead of feathering quality.");
+				ImGui::TextUnformatted("This can save more work, but can make detail transitions more visible near the mask edge.");
+			}
+			ImGui::EndDisabled();
+
+			ImGui::Spacing();
+			ImGui::Text("Lighting detail foveation: %s", lightingActive ? "active" : "inactive");
+			ImGui::Text("Lighting detail mode: %s", lightingMode);
+			ImGui::Text("FOV profile: %s", profile.available ? "available" : "unavailable");
+			if (profile.available) {
+				ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "DLSS/FOV center");
+				ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
+				ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
+			} else if (settings.EnableLightingFoveation) {
+				ImGui::TextDisabled("Requires active foveated upscaling.");
+			}
 		}
 	}
 

@@ -40,6 +40,8 @@ namespace SharedData
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
+		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
+		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
 	};
 
 	struct GrassLightingSettings

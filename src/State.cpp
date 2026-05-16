@@ -9,12 +9,14 @@
 #include "Deferred.h"
 #include "FeatureIssues.h"
 #include "Features/CloudShadows.h"
+#include "Features/FoveatedCommon.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
+#include "Features/VR.h"
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
@@ -36,6 +38,10 @@ namespace
 	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
 		"UnifiedWater"
 	};
+
+	constexpr float kVRLightingFoveationModeOff = 0.0f;
+	constexpr float kVRLightingFoveationModeFeathered = 1.0f;
+	constexpr float kVRLightingFoveationModeHardCutoff = 2.0f;
 
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
@@ -1068,6 +1074,34 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHR = { dalcSH.r.c0, dalcSH.r.c1[0], dalcSH.r.c1[1], dalcSH.r.c1[2] };
 		data.AmbientSHG = { dalcSH.g.c0, dalcSH.g.c1[0], dalcSH.g.c1[1], dalcSH.g.c1[2] };
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
+
+		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, kVRLightingFoveationModeOff };
+		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
+		const auto& vr = globals::features::vr;
+		if (globals::game::isVR &&
+			vr.loaded &&
+			vr.settings.EnableLightingFoveation &&
+			upscaling.loaded) {
+			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
+			if (profile.available) {
+				const float centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
+				const float lightingFoveationMode = vr.settings.EnableLightingFoveationHardCutoff ?
+					kVRLightingFoveationModeHardCutoff :
+					kVRLightingFoveationModeFeathered;
+				data.VRFoveationData0 = {
+					centerScale,
+					FoveatedCommon::kCenterFeather,
+					FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale),
+					centerScale < 0.999f ? lightingFoveationMode : kVRLightingFoveationModeOff
+				};
+				data.VRFoveationCenterOffsets = {
+					profile.centerOffsets[0].x,
+					profile.centerOffsets[0].y,
+					profile.centerOffsets[1].x,
+					profile.centerOffsets[1].y
+				};
+			}
+		}
 
 		sharedDataCB->Update(data);
 	}

@@ -968,6 +968,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skylighting/Skylighting.hlsli"
 #	endif
 
+#	if defined(VR)
+#		include "Common/FoveatedMask.hlsli"
+#	endif
+
 #	if defined(HAIR) && defined(CS_HAIR)
 #		include "Hair/Hair.hlsli"
 #	endif
@@ -1018,6 +1022,60 @@ float3 SafeNormalize3(float3 v, float3 fallback)
 	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
 }
 
+static const float VR_LIGHTING_FOVEATION_MODE_FEATHERED = 1.0;
+static const float VR_LIGHTING_FOVEATION_MODE_HARD_CUTOFF = 2.0;
+
+float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
+{
+#if defined(VR)
+	float lightingFoveationMode = SharedData::VRFoveationData0.w;
+	if (lightingFoveationMode < VR_LIGHTING_FOVEATION_MODE_FEATHERED)
+		return 1.0;
+
+	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
+	float centerScale = SharedData::VRFoveationData0.x;
+	float centerHorizontalScale = SharedData::VRFoveationData0.z;
+	if (lightingFoveationMode >= VR_LIGHTING_FOVEATION_MODE_HARD_CUTOFF) {
+		float maskDistance = FoveatedComputeMaskDistance(eyeUv, centerScale, centerHorizontalScale, centerOffset);
+		return maskDistance <= 1.0 ? 1.0 : 0.0;
+	}
+
+	return FoveatedComputeCenterBlendWeight(
+		eyeUv,
+		centerScale,
+		SharedData::VRFoveationData0.y,
+		centerHorizontalScale,
+		centerOffset);
+#else
+	return 1.0;
+#endif
+}
+
+bool ShouldEvaluateVRLightingAuxiliaryDetail(float detailWeight)
+{
+	return detailWeight > 1e-4;
+}
+
+float ApplyVRLightingAuxiliaryShadowWeight(float shadow, float detailWeight)
+{
+	return lerp(1.0, shadow, detailWeight);
+}
+
+float GetVRLightingAuxiliaryQuality(float fullQuality, float detailWeight)
+{
+	return fullQuality * detailWeight;
+}
+
+void ApplyVRLightingAuxiliaryOutputWeight(inout DirectLightingOutput lightingOutput, DirectLightingOutput baseOutput, float detailWeight)
+{
+	lightingOutput.diffuse = lerp(baseOutput.diffuse, lightingOutput.diffuse, detailWeight);
+	lightingOutput.specular = lerp(baseOutput.specular, lightingOutput.specular, detailWeight);
+	lightingOutput.transmission = lerp(baseOutput.transmission, lightingOutput.transmission, detailWeight);
+#if defined(TRUE_PBR)
+	lightingOutput.coatDiffuse = lerp(baseOutput.coatDiffuse, lightingOutput.coatDiffuse, detailWeight);
+#endif
+}
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
@@ -1028,6 +1086,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+	float vrAuxDetailWeight = GetVRLightingAuxiliaryDetailWeight(screenUV, eyeIndex);
+	bool vrAuxDetailEnabled = ShouldEvaluateVRLightingAuxiliaryDetail(vrAuxDetailWeight);
 
 #	if defined(DEFERRED)
 	const bool inWorld = true;
@@ -1090,7 +1150,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float2 uvOriginal_ddy = ddy(uvOriginal);
 
 #	if defined(EMAT)
-	float parallaxShadowQuality = sqrt(1.0 - saturate(viewPosition.z / 2048.0));
+	float parallaxShadowQualityBase = sqrt(1.0 - saturate(viewPosition.z / 2048.0));
+	float parallaxShadowQuality = GetVRLightingAuxiliaryQuality(parallaxShadowQualityBase, vrAuxDetailWeight);
+	float parallaxShadowQualityExtended = GetVRLightingAuxiliaryQuality(
+		lerp(parallaxShadowQualityBase, 1.0, SharedData::extendedMaterialSettings.ExtendShadows),
+		vrAuxDetailWeight);
 #	endif
 
 #	if defined(LANDSCAPE)
@@ -1157,7 +1221,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
+		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQualityExtended > 0.0f)
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
 #		endif  // defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
@@ -1190,7 +1254,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);
-				if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
+				if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQualityExtended > 0.0f)
 					sh0 = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 			} else {
@@ -1237,7 +1301,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, pixelOffset);
-		if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows))
+		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQualityExtended > 0.0f)
 			sh0 = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 	}
 #			endif  // !FACEGEN
@@ -1343,12 +1407,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		if (SharedData::extendedMaterialSettings.EnableShadows && (parallaxShadowQuality > 0.0f || SharedData::extendedMaterialSettings.ExtendShadows)) {
+		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQualityExtended > 0.0f) {
 #			if defined(TERRAIN_VARIATION)
-			sh0 = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, parallaxShadowQuality, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weights);
-			float shadowMultiplier = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, DirLightDirection, sh0, parallaxShadowQuality, screenNoise, displacementParams, sharedOffset, dx, dy);
+			sh0 = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, parallaxShadowQualityExtended, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weights);
+			float shadowMultiplier = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, DirLightDirection, sh0, parallaxShadowQualityExtended, screenNoise, displacementParams, sharedOffset, dx, dy);
 #			else
-			sh0 = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, parallaxShadowQuality, input.LandBlendWeights1, input.LandBlendWeights2.xy, weights);
+			sh0 = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, parallaxShadowQualityExtended, input.LandBlendWeights1, input.LandBlendWeights2.xy, weights);
 #			endif
 		}
 	}
@@ -3076,7 +3140,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
-	[branch] if (inWorld && SharedData::extendedMaterialSettings.EnableShadows)
+	[branch] if (inWorld && SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQualityExtended > 0.0)
 	{
 		float3 dirLightDirectionTS = mul(refractedDirLightDirection, tbn).xyz;
 #		if defined(LANDSCAPE)
@@ -3090,23 +3154,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// Initialize weights array
 			weights[0] = weights[1] = weights[2] = weights[3] = weights[4] = weights[5] = 0.0;
 
-			float sh0 = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, parallaxShadowQuality, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weights);
+			float sh0 = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, parallaxShadowQualityExtended, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weights);
 
-			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, dirLightDirectionTS, sh0, parallaxShadowQuality, screenNoise, displacementParams, sharedOffset, dx, dy);
+			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, dirLightDirectionTS, sh0, parallaxShadowQualityExtended, screenNoise, displacementParams, sharedOffset, dx, dy);
 #			else
 			// Standard terrain parallax shadow without stochastic sampling
-			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, dirLightDirectionTS, sh0, parallaxShadowQuality, screenNoise, displacementParams);
+			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplierTerrain(input, uv, mipLevels, dirLightDirectionTS, sh0, parallaxShadowQualityExtended, screenNoise, displacementParams);
 #			endif
 		}
 #		elif defined(PARALLAX)
 		[branch] if (SharedData::extendedMaterialSettings.EnableParallax)
-			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
+			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQualityExtended, screenNoise, displacementParams);
 #		elif defined(EMAT_ENVMAP)
 		[branch] if (complexMaterialParallax)
-			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
+			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexEnvMaskSampler, SampEnvMaskSampler, 3, parallaxShadowQualityExtended, screenNoise, displacementParams);
 #		elif defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(FACEGEN)
 		[branch] if (PBRParallax)
-			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, lerp(parallaxShadowQuality, 1.0, SharedData::extendedMaterialSettings.ExtendShadows), screenNoise, displacementParams);
+			parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, dirLightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQualityExtended, screenNoise, displacementParams);
 #		endif  // LANDSCAPE
 	}
 #	endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
@@ -3158,7 +3222,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		wetReflectionModeConfigDirect = wetReflectionModeConfig;
 		wetReflectionModeConfigDirect.z *= wetDirectSpecularScale;
-		wetDirectLightingVisible = wetReflectionModeConfigDirect.z > 1e-4;
+		wetDirectLightingVisible = wetReflectionModeConfigDirect.z > 1e-4 && vrAuxDetailEnabled;
 		wetIndirectLightingVisible = wetReflectionModeConfig.z > 1e-4 && wetHighlightReflectanceScale > 1e-4;
 	}
 #	endif
@@ -3172,8 +3236,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, DirLightDirection, dirLightColor * dirLightColorMultiplier, dirDetailShadow, parallaxShadow);
 #		if defined(HAIR) && defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled) {
-		float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, DirLightDirection, screenNoise, eyeIndex);
-		dirLightContext.hairShadow = hairShadow;
+		dirLightContext.hairShadow = 1.0;
+		if (vrAuxDetailEnabled) {
+			float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, DirLightDirection, screenNoise, eyeIndex);
+			dirLightContext.hairShadow = ApplyVRLightingAuxiliaryShadowWeight(hairShadow, vrAuxDetailWeight);
+		}
 	}
 #		endif
 #	endif
@@ -3193,11 +3260,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirLightOutput.coatDiffuse = SanitizeFloat3(dirLightOutput.coatDiffuse);
 #	endif
 #	if defined(WETTERNESS)
-		if (wetDirectLightingVisible)
+	if (wetDirectLightingVisible) {
+		DirectLightingOutput baseDirLightOutput = dirLightOutput;
 		EvaluateWetnessLighting(wetnessNormal, dirLightContext, waterRoughnessSpecular, wetDirectLightingParams, dirLightOutput);
+		ApplyVRLightingAuxiliaryOutputWeight(dirLightOutput, baseDirLightOutput, vrAuxDetailWeight);
+	}
 #	elif defined(WETNESS_EFFECTS)
-	if (waterRoughnessSpecular < 1)
+	if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
+		DirectLightingOutput baseDirLightOutput = dirLightOutput;
 		CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, dirLightContext, waterRoughnessSpecular, dirLightOutput);
+		ApplyVRLightingAuxiliaryOutputWeight(dirLightOutput, baseDirLightOutput, vrAuxDetailWeight);
+	}
 #	endif
 
 	lightsDiffuseColor += dirLightOutput.diffuse;
@@ -3252,8 +3325,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, lightShadow, 1);
 #				if defined(HAIR) && defined(CS_HAIR)
 		if (SharedData::hairSpecularSettings.Enabled) {
-			float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, normalizedLightDirection, screenNoise, eyeIndex);
-			pointLightContext.hairShadow = hairShadow;
+			pointLightContext.hairShadow = 1.0;
+			if (vrAuxDetailEnabled) {
+				float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, normalizedLightDirection, screenNoise, eyeIndex);
+				pointLightContext.hairShadow = ApplyVRLightingAuxiliaryShadowWeight(hairShadow, vrAuxDetailWeight);
+			}
 		}
 #				endif
 #			endif
@@ -3265,11 +3341,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
 #			endif
 #			if defined(WETTERNESS)
-			if (wetDirectLightingVisible)
+		if (wetDirectLightingVisible) {
+			DirectLightingOutput basePointLightOutput = pointLightOutput;
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
+			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+		}
 #			elif defined(WETNESS_EFFECTS)
-		if (waterRoughnessSpecular < 1)
+		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
+			DirectLightingOutput basePointLightOutput = pointLightOutput;
 			CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
+			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+		}
 #			endif
 		lightsDiffuseColor += pointLightOutput.diffuse;
 		lightsSpecularColor += pointLightOutput.specular;
@@ -3377,7 +3459,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			SharedData::extendedMaterialSettings.EnableShadows &&
 			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
 			lightAngle > 0.0 &&
-			shadowComponent != 0.0)
+			shadowComponent != 0.0 &&
+			parallaxShadowQuality > 0.0)
 		{
 			float3 lightDirectionTS = normalize(mul(refractedLightDirection, tbn).xyz);
 #				if defined(PARALLAX)
@@ -3410,7 +3493,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			isContactShadowCandidate &&
 			lightAngle > 0.0 &&
 			shadowComponent != 0.0 &&
-			intensityMultiplier > 1e-5)
+			intensityMultiplier > 1e-5 &&
+			vrAuxDetailEnabled)
 		{
 			if (!hasContactShadowNoise) {
 				contactShadowNoise = Random::InterleavedGradientNoise(
@@ -3420,6 +3504,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 
 			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenUV, light.positionWS[eyeIndex].xyz, contactShadowNoise, contactShadowScreenDim, isParticleLight, eyeIndex);
+			contactShadow = ApplyVRLightingAuxiliaryShadowWeight(contactShadow, vrAuxDetailWeight);
 		}
 #			endif
 
@@ -3431,8 +3516,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, lightShadow * contactShadow, parallaxShadow);
 #				if defined(HAIR) && defined(CS_HAIR)
 		if (SharedData::hairSpecularSettings.Enabled) {
-			float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, normalizedLightDirection, screenNoise, eyeIndex);
-			pointLightContext.hairShadow = hairShadow;
+			pointLightContext.hairShadow = 1.0;
+			if (vrAuxDetailEnabled) {
+				float hairShadow = Hair::HairSelfShadow(input.WorldPosition.xyz, normalizedLightDirection, screenNoise, eyeIndex);
+				pointLightContext.hairShadow = ApplyVRLightingAuxiliaryShadowWeight(hairShadow, vrAuxDetailWeight);
+			}
 		}
 #				endif
 #			endif
@@ -3444,11 +3532,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
 #			endif
 #			if defined(WETTERNESS)
-			if (wetDirectLightingVisible)
+		if (wetDirectLightingVisible) {
+			DirectLightingOutput basePointLightOutput = pointLightOutput;
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
+			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+		}
 #			elif defined(WETNESS_EFFECTS)
-		if (waterRoughnessSpecular < 1)
+		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
+			DirectLightingOutput basePointLightOutput = pointLightOutput;
 			CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
+			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+		}
 #			endif
 
 		lightsDiffuseColor += pointLightOutput.diffuse;

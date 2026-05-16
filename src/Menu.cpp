@@ -36,7 +36,6 @@
 #include "Menu/ThemeManager.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "TruePBR.h"
 #include "Util.h"
 #include "Utils/UI.h"
 
@@ -780,7 +779,6 @@ void Menu::DrawAdvancedSettings()
 {
 	// Render advanced settings using extracted component
 	AdvancedSettingsRenderer::RenderAdvancedSettings(
-		[this]() { globals::features::truePBR.DrawSettings(); },
 		[this]() { DrawDisableAtBootSettings(); });
 }
 

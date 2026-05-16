@@ -99,8 +99,8 @@ public:
 
 	void MarkCubemapRefreshHighPriority();
 	bool IsReflectionTask(NextTask a_task) const;
-	bool ShouldRunCurrentCubemapTask();
-	void FinishCurrentCubemapTask();
+	bool ShouldRunCurrentCubemapTask(bool a_cadenceEnabled, bool a_visibilityThrottleEnabled);
+	void FinishCurrentCubemapTask(bool a_cadenceEnabled);
 	uint32_t GetCurrentCubemapCadence() const;
 
 	// BC6H compression

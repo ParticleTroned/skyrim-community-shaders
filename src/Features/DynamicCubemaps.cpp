@@ -27,6 +27,12 @@ namespace
 	constexpr uint32_t kLowVisibilityCubemapCadence = 8;
 	constexpr float kFoveatedProfileFullCoverageThreshold = 0.999f;
 
+	struct CubemapFoveationState
+	{
+		bool cadenceEnabled = false;
+		bool visibilityThrottleEnabled = false;
+	};
+
 	const Wetterness* GetActiveWetterness()
 	{
 		auto& wetterness = globals::features::wetterness;
@@ -75,20 +81,25 @@ namespace
 		return profile.available && FoveatedCommon::ClampCenterArea(profile.coverageArea) < kFoveatedProfileFullCoverageThreshold;
 	}
 
-	bool IsDynamicCubemapCadenceFoveationEnabled()
+	CubemapFoveationState GetDynamicCubemapFoveationState()
 	{
+		CubemapFoveationState state{};
 		auto& vr = globals::features::vr;
-		return vr.loaded &&
-			vr.settings.EnableDynamicCubemapFoveation &&
-			IsActiveVRFoveatedProfileAvailable();
-	}
+		if (!vr.loaded) {
+			return state;
+		}
 
-	bool IsDynamicCubemapVisibilityThrottleEnabled()
-	{
-		auto& vr = globals::features::vr;
-		return vr.loaded &&
-			vr.settings.EnableDynamicCubemapVisibilityThrottle &&
-			IsActiveVRFoveatedProfileAvailable();
+		if (!(vr.settings.EnableDynamicCubemapFoveation || vr.settings.EnableDynamicCubemapVisibilityThrottle)) {
+			return state;
+		}
+
+		if (!IsActiveVRFoveatedProfileAvailable()) {
+			return state;
+		}
+
+		state.cadenceEnabled = vr.settings.EnableDynamicCubemapFoveation;
+		state.visibilityThrottleEnabled = vr.settings.EnableDynamicCubemapVisibilityThrottle;
+		return state;
 	}
 }
 
@@ -662,23 +673,21 @@ uint32_t DynamicCubemaps::GetCurrentCubemapCadence() const
 	return kLowVisibilityCubemapCadence;
 }
 
-bool DynamicCubemaps::ShouldRunCurrentCubemapTask()
+bool DynamicCubemaps::ShouldRunCurrentCubemapTask(bool a_cadenceEnabled, bool a_visibilityThrottleEnabled)
 {
 	++cadenceFrameCounter;
 
-	const bool cadenceEnabled = IsDynamicCubemapCadenceFoveationEnabled();
-	const bool visibilityThrottleEnabled = IsDynamicCubemapVisibilityThrottleEnabled();
-	if (!cadenceEnabled && !visibilityThrottleEnabled) {
+	if (!a_cadenceEnabled && !a_visibilityThrottleEnabled) {
 		return true;
 	}
 
 	const bool reflectionTask = IsReflectionTask(nextTask);
-	if (visibilityThrottleEnabled && reflectionTask && !realActiveReflections && !fakeReflections) {
+	if (a_visibilityThrottleEnabled && reflectionTask && !realActiveReflections && !fakeReflections) {
 		nextTask = NextTask::kCapture;
 		return false;
 	}
 
-	if (!cadenceEnabled) {
+	if (!a_cadenceEnabled) {
 		return true;
 	}
 
@@ -689,9 +698,9 @@ bool DynamicCubemaps::ShouldRunCurrentCubemapTask()
 	return cadenceFrameCounter >= nextCadenceTaskFrame;
 }
 
-void DynamicCubemaps::FinishCurrentCubemapTask()
+void DynamicCubemaps::FinishCurrentCubemapTask(bool a_cadenceEnabled)
 {
-	if (!IsDynamicCubemapCadenceFoveationEnabled()) {
+	if (!a_cadenceEnabled) {
 		return;
 	}
 
@@ -732,7 +741,8 @@ void DynamicCubemaps::UpdateCubemap()
 		MarkCubemapRefreshHighPriority();
 	}
 
-	if (!ShouldRunCurrentCubemapTask()) {
+	const auto foveationState = GetDynamicCubemapFoveationState();
+	if (!ShouldRunCurrentCubemapTask(foveationState.cadenceEnabled, foveationState.visibilityThrottleEnabled)) {
 		return;
 	}
 
@@ -781,7 +791,7 @@ void DynamicCubemaps::UpdateCubemap()
 		break;
 	}
 
-	FinishCurrentCubemapTask();
+	FinishCurrentCubemapTask(foveationState.cadenceEnabled);
 }
 
 void DynamicCubemaps::PostDeferred()
@@ -1000,6 +1010,7 @@ void DynamicCubemaps::SetupResources()
 
 void DynamicCubemaps::Reset()
 {
+	const auto foveationState = GetDynamicCubemapFoveationState();
 	realActiveReflections = globals::state->activeReflections;
 	activeReflections = realActiveReflections;
 
@@ -1008,7 +1019,7 @@ void DynamicCubemaps::Reset()
 	else
 		fakeReflections = false;
 
-	if (!activeReflections && !Util::IsInterior() && !IsDynamicCubemapVisibilityThrottleEnabled()) {
+	if (!activeReflections && !Util::IsInterior() && !foveationState.visibilityThrottleEnabled) {
 		activeReflections = true;
 		fakeReflections = true;
 	}

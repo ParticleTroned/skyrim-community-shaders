@@ -24,6 +24,7 @@ struct Feature
 	// Nexus Mods base URL for Skyrim Special Edition
 	static constexpr std::string_view NEXUS_BASE_URL = "https://www.nexusmods.com/skyrimspecialedition/mods/";
 	bool loaded = false;
+	bool cacheInstalled = false;
 	std::string version;
 	std::string failedLoadedMessage;
 

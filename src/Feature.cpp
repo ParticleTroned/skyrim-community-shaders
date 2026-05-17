@@ -47,6 +47,11 @@
 
 void Feature::Load(json& o_json)
 {
+	loaded = false;
+	cacheInstalled = false;
+	version.clear();
+	failedLoadedMessage.clear();
+
 	// Convert string to wstring
 	auto ini_filename = std::format("{}.ini", GetShortName());
 	std::wstring ini_filename_w;
@@ -91,6 +96,7 @@ void Feature::Load(json& o_json)
 
 				if (!oldFeature && !majorVersionMismatch) {
 					loaded = true;
+					cacheInstalled = true;
 					logger::info("{} {} successfully loaded", ini_filename, value);
 				} else {
 					hasError = true;
@@ -177,17 +183,21 @@ bool Feature::ValidateCache(CSimpleIniA& a_ini)
 	logger::info("Validating {}", name);
 
 	auto enabledInCache = a_ini.GetBoolValue(ini_name.c_str(), "Enabled", false);
-	if (enabledInCache && !loaded) {
+	if (enabledInCache && !cacheInstalled) {
 		logger::info("Feature was uninstalled");
 		return false;
 	}
-	if (!enabledInCache && loaded) {
+	if (!enabledInCache && cacheInstalled) {
 		logger::info("Feature was installed");
 		return false;
 	}
 
-	if (loaded) {
+	if (cacheInstalled) {
 		auto versionInCache = a_ini.GetValue(ini_name.c_str(), "Version");
+		if (!versionInCache) {
+			logger::info("Cached feature version is missing.");
+			return false;
+		}
 		if (strcmp(versionInCache, version.c_str()) != 0) {
 			logger::info("Change in version detected. Installed {} but {} in Disk Cache", version, versionInCache);
 			return false;
@@ -203,7 +213,7 @@ bool Feature::ValidateCache(CSimpleIniA& a_ini)
 void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
 	auto ini_name = GetShortName();
-	a_ini.SetBoolValue(ini_name.c_str(), "Enabled", loaded);
+	a_ini.SetBoolValue(ini_name.c_str(), "Enabled", cacheInstalled);
 	a_ini.SetValue(ini_name.c_str(), "Version", version.c_str());
 }
 

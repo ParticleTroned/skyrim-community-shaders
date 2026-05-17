@@ -3302,6 +3302,9 @@ namespace SIE
 		// Log completion outside the lock
 		if (shouldLogCompletion) {
 			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
+			if (cache.menuLoaded && cache.IsDiskCache()) {
+				cache.WriteDiskCacheInfo();
+			}
 		}
 
 		conditionVariable.notify_one();

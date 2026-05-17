@@ -152,8 +152,6 @@ void ScreenSpaceShadows::DrawSettings()
 				ImGui::Text("0 disables. Lower values improve performance but remove distant shadows.");
 			}
 			bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
-
-			ImGui::TextDisabled("FOV Screen Space Shadows is configured in VR > Foveation.");
 		}
 
 		ImGui::Spacing();
@@ -184,7 +182,7 @@ void ScreenSpaceShadows::DrawSettings()
 void ScreenSpaceShadows::DrawFoveationSettings()
 {
 	if (!globals::game::isVR) {
-		ImGui::TextDisabled("FOV Screen Space Shadows is available only in VR.");
+		ImGui::TextDisabled("Screen Space Shadows foveation is available only in VR.");
 		return;
 	}
 
@@ -195,14 +193,13 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
 		Util::BlueFrameStyleWrapper blueFrameStyle(true);
-		if (ImGui::Checkbox("FOV Screen Space Shadows", &foveatedEnabled))
+		if (ImGui::Checkbox("Screen Space Shadows Foveation", &foveatedEnabled))
 			bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Uses the active shared FOV mask for Screen Space Shadows.");
-		ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the FOV mask and fades to no SSS outside it.");
-		ImGui::TextUnformatted("Uses the Upscaling FOV center mask normally, or the outside edge of the Peripheral TAA mask when Upscaling FOV + Peripheral TAA is enabled.");
-		ImGui::TextUnformatted("The mask area, horizontal scale, offsets, and Peripheral TAA profile are taken from the shared VR FOV mask; SSS has no separate FOV size.");
+		ImGui::TextUnformatted("Uses the active shared VR foveation mask for Screen Space Shadows.");
+		ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the mask and fades to no SSS outside it.");
+		ImGui::TextUnformatted("The mask area, horizontal scale, offsets, and Peripheral TAA profile come from the shared VR foveation setup.");
 		if (!loaded)
 			ImGui::TextUnformatted("Requires Screen Space Shadows.");
 		else if (bendSettings.Enable == 0)

@@ -24,7 +24,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ResolutionMode,
 	ResourceProfile,
 	VRCullDistance,
-	FoveatedPresetMode,
+	EnableFoveated,
 	EnableStereoSync,
 	MinScreenRadius,
 	AORadius,
@@ -49,9 +49,6 @@ namespace
 	constexpr float kVRCullDistanceMax = 20480.0f;
 	constexpr int kResolutionModeMin = 0;
 	constexpr int kResolutionModeMax = 2;
-	constexpr int kFoveatedPresetModeOff = 0;
-	constexpr int kFoveatedPresetModeStrict = 1;
-	constexpr int kFoveatedPresetModeFoveated = 2;
 
 	float ClampVRCullDistance(float a_distance)
 	{
@@ -63,24 +60,12 @@ namespace
 		return std::clamp(a_resolutionMode, kResolutionModeMin, kResolutionModeMax);
 	}
 
-	int ClampFoveatedPresetMode(int a_mode)
-	{
-		return std::clamp(a_mode, kFoveatedPresetModeOff, kFoveatedPresetModeFoveated);
-	}
-
 	int ClampResourceProfile(int a_profile)
 	{
 		return std::clamp(a_profile, ScreenSpaceGI::kResourceProfileFullGI, ScreenSpaceGI::kResourceProfileAOOnly);
 	}
 
-	int GetConfiguredFoveatedPresetMode(const ScreenSpaceGI::Settings& a_settings)
-	{
-		if (!REL::Module::IsVR())
-			return kFoveatedPresetModeOff;
-		return ClampFoveatedPresetMode(a_settings.FoveatedPresetMode);
-	}
-
-	bool IsSharedFovMaskActive()
+	bool IsSharedFoveatedMaskActive()
 	{
 		if (!REL::Module::IsVR())
 			return false;
@@ -93,22 +78,14 @@ namespace
 		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
 	}
 
-	int ResolveRuntimeFoveatedPresetMode(const ScreenSpaceGI::Settings& a_settings)
+	bool IsRuntimeFoveatedActive(const ScreenSpaceGI::Settings& a_settings)
 	{
-		if (!IsSharedFovMaskActive())
-			return kFoveatedPresetModeOff;
-
-		return GetConfiguredFoveatedPresetMode(a_settings);
+		return REL::Module::IsVR() && a_settings.EnableFoveated && IsSharedFoveatedMaskActive();
 	}
 
 	uint32_t QuantizeCenterOffset(float a_value)
 	{
 		return static_cast<uint32_t>(std::lround((a_value + 1.0f) * 10000.0f));
-	}
-
-	bool IsRuntimeFoveatedPresetActive(const ScreenSpaceGI::Settings& a_settings)
-	{
-		return ResolveRuntimeFoveatedPresetMode(a_settings) != kFoveatedPresetModeOff;
 	}
 
 	float GetUpscalingActiveCenterMaskScale()
@@ -123,7 +100,7 @@ namespace
 
 	float ResolveFoveatedCenterMaskScale(const ScreenSpaceGI::Settings& a_settings)
 	{
-		if (!IsRuntimeFoveatedPresetActive(a_settings))
+		if (!IsRuntimeFoveatedActive(a_settings))
 			return 0.0f;
 
 		return GetUpscalingActiveCenterMaskScale();
@@ -144,7 +121,7 @@ namespace
 		const ScreenSpaceGI::Settings defaults{};
 		a_settings.VRCullDistance = defaults.VRCullDistance;
 		a_settings.CenterFullResMaskScale = defaults.CenterFullResMaskScale;
-		a_settings.FoveatedPresetMode = defaults.FoveatedPresetMode;
+		a_settings.EnableFoveated = defaults.EnableFoveated;
 		a_settings.EnableStereoSync = defaults.EnableStereoSync;
 	}
 
@@ -152,7 +129,7 @@ namespace
 	{
 		o_json.erase("VRCullDistance");
 		o_json.erase("CenterFullResMaskScale");
-		o_json.erase("FoveatedPresetMode");
+		o_json.erase("EnableFoveated");
 		o_json.erase("EnableStereoSync");
 	}
 
@@ -162,58 +139,103 @@ namespace
 		a_settings.EnableExperimentalSpecularGI = false;
 	}
 
-	void ApplyFoveatedPresetMode(ScreenSpaceGI::Settings& a_settings, int a_mode)
+	bool ApproximatelyEqual(float a_lhs, float a_rhs)
 	{
-		if (!REL::Module::IsVR())
-			a_mode = kFoveatedPresetModeOff;
-		a_mode = ClampFoveatedPresetMode(a_mode);
-		if (a_mode == kFoveatedPresetModeOff) {
-			a_settings.FoveatedPresetMode = kFoveatedPresetModeOff;
-			a_settings.CenterFullResMaskScale = 0.0f;
-			return;
-		}
+		return std::abs(a_lhs - a_rhs) <= 0.001f;
+	}
 
+	void ApplyAOOnlyPreset(ScreenSpaceGI::Settings& a_settings)
+	{
 		a_settings.NumSlices = 3;
 		a_settings.NumSteps = 6;
-		a_settings.ResolutionMode = 2;
-		a_settings.FoveatedPresetMode = a_mode;
-		a_settings.CenterFullResMaskScale = GetUpscalingActiveCenterMaskScale();
+		a_settings.ResolutionMode = 0;
+		a_settings.CenterFullResMaskScale = 0.0f;
 		a_settings.VRCullDistance = 1500.0f;
 		a_settings.AOPower = 1.8f;
+		a_settings.EnableBlur = false;
+		a_settings.EnableTemporalDenoiser = false;
 		a_settings.ResourceProfile = ScreenSpaceGI::kResourceProfileAOOnly;
 		DisableGIEffects(a_settings);
-		if (a_mode == kFoveatedPresetModeStrict) {
-			a_settings.EnableBlur = false;
-			a_settings.EnableTemporalDenoiser = false;
-		}
+	}
+
+	void ApplyAOGIPreset(ScreenSpaceGI::Settings& a_settings)
+	{
+		a_settings.NumSlices = 4;
+		a_settings.NumSteps = 6;
+		a_settings.ResolutionMode = 0;
+		a_settings.CenterFullResMaskScale = 0.0f;
+		a_settings.VRCullDistance = 1500.0f;
+		a_settings.AOPower = 1.8f;
+		a_settings.ResourceProfile = ScreenSpaceGI::kResourceProfileFullGI;
+		a_settings.EnableGI = true;
+		a_settings.EnableExperimentalSpecularGI = false;
+		a_settings.EnableBlur = true;
+		a_settings.EnableTemporalDenoiser = false;
+	}
+
+	void ApplyReferencePreset(ScreenSpaceGI::Settings& a_settings)
+	{
+		a_settings.NumSlices = 8;
+		a_settings.NumSteps = 10;
+		a_settings.ResolutionMode = 0;
+		a_settings.CenterFullResMaskScale = 0.0f;
+		a_settings.EnableBlur = true;
+		a_settings.ResourceProfile = ScreenSpaceGI::kResourceProfileFullGI;
+		a_settings.EnableGI = true;
+	}
+
+	bool IsAOOnlyPreset(const ScreenSpaceGI::Settings& a_settings, bool a_isVR)
+	{
+		return a_settings.ResolutionMode == 0 &&
+		       a_settings.NumSlices == 3 &&
+		       a_settings.NumSteps == 6 &&
+		       a_settings.ResourceProfile == ScreenSpaceGI::kResourceProfileAOOnly &&
+		       !a_settings.EnableGI &&
+		       !a_settings.EnableBlur &&
+		       !a_settings.EnableTemporalDenoiser &&
+		       ApproximatelyEqual(a_settings.AOPower, 1.8f) &&
+		       (!a_isVR || ApproximatelyEqual(a_settings.VRCullDistance, 1500.0f));
+	}
+
+	bool IsAOGIPreset(const ScreenSpaceGI::Settings& a_settings, bool a_isVR)
+	{
+		return a_settings.ResolutionMode == 0 &&
+		       a_settings.NumSlices == 4 &&
+		       a_settings.NumSteps == 6 &&
+		       a_settings.ResourceProfile == ScreenSpaceGI::kResourceProfileFullGI &&
+		       a_settings.EnableGI &&
+		       !a_settings.EnableExperimentalSpecularGI &&
+		       a_settings.EnableBlur &&
+		       !a_settings.EnableTemporalDenoiser &&
+		       ApproximatelyEqual(a_settings.AOPower, 1.8f) &&
+		       (!a_isVR || ApproximatelyEqual(a_settings.VRCullDistance, 1500.0f));
+	}
+
+	bool IsReferencePreset(const ScreenSpaceGI::Settings& a_settings)
+	{
+		return a_settings.ResolutionMode == 0 &&
+		       a_settings.NumSlices == 8 &&
+		       a_settings.NumSteps == 10 &&
+		       a_settings.ResourceProfile == ScreenSpaceGI::kResourceProfileFullGI &&
+		       a_settings.EnableGI &&
+		       a_settings.EnableBlur;
 	}
 
 	void ApplyPlatformSettingOverrides(ScreenSpaceGI::Settings& a_settings)
 	{
-		a_settings.FoveatedPresetMode = GetConfiguredFoveatedPresetMode(a_settings);
 		a_settings.ResolutionMode = ClampResolutionMode(a_settings.ResolutionMode);
 		a_settings.ResourceProfile = ClampResourceProfile(a_settings.ResourceProfile);
 		a_settings.VRCullDistance = ClampVRCullDistance(a_settings.VRCullDistance);
 		if (!REL::Module::IsVR()) {
+			a_settings.EnableFoveated = false;
 			a_settings.CenterFullResMaskScale = 0.0f;
 		} else {
 			a_settings.EnableVanillaSSAO = false;
 		}
-		const int runtimeFoveatedPresetMode = ResolveRuntimeFoveatedPresetMode(a_settings);
-		if (runtimeFoveatedPresetMode != kFoveatedPresetModeOff) {
-			// Foveated presets run through the quarter-res base path; "Foveated" mode later suppresses periphery AO.
-			a_settings.ResolutionMode = 2;
-			a_settings.ResourceProfile = ScreenSpaceGI::kResourceProfileAOOnly;
+		if (IsRuntimeFoveatedActive(a_settings)) {
 			a_settings.CenterFullResMaskScale = GetUpscalingActiveCenterMaskScale();
-			// Foveated presets are AO-only by design; IL must stay off while active.
-			DisableGIEffects(a_settings);
-			if (runtimeFoveatedPresetMode == kFoveatedPresetModeStrict) {
-				// Strict mode hard-disables denoiser passes for stability/perf consistency.
-				a_settings.EnableTemporalDenoiser = false;
-				a_settings.EnableBlur = false;
-			}
 		} else {
-			a_settings.CenterFullResMaskScale = 0.0f;  // no manual foveation path; foveation is preset-toggle only
+			a_settings.CenterFullResMaskScale = 0.0f;
 		}
 		if (a_settings.ResourceProfile == ScreenSpaceGI::kResourceProfileAOOnly)
 			DisableGIEffects(a_settings);
@@ -317,17 +339,11 @@ void ScreenSpaceGI::DrawSettings()
 	///////////////////////////////
 	drawCenteredSeparatorText("Presets");
 	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
-	if (isVR)
-		ImGui::TextWrapped("Foveated SSGI modes are configured in VR > Foveation. These presets keep non-foveated SSGI baselines close to the regular quality and resource controls.");
-	else
-		ImGui::TextWrapped("These presets keep SSGI baselines close to the regular quality and resource controls.");
+	ImGui::TextWrapped("These presets keep SSGI baselines close to the regular quality and resource controls.");
 	ImGui::PopStyleColor();
 
 	{
 		auto presetsAndQualityGuard = Util::DisableGuard(!settings.Enabled);
-		auto approximatelyEqual = [](float a_lhs, float a_rhs) {
-			return std::abs(a_lhs - a_rhs) <= 0.001f;
-		};
 		auto drawPresetButton = [](const char* a_label, const ImVec2& a_size, const ImVec4& a_normal, const ImVec4& a_hovered, const ImVec4& a_active) {
 			Util::StyledButtonWrapper style(a_normal, a_hovered, a_active);
 			return ImGui::Button(a_label, a_size);
@@ -339,81 +355,62 @@ void ScreenSpaceGI::DrawSettings()
 			return drawPresetButton(a_label, a_size, normal, hovered, pressed);
 		};
 
-		if (ImGui::BeginTable("Presets", 2, ImGuiTableFlags_SizingStretchProp)) {
+		if (ImGui::BeginTable("Presets", 4, ImGuiTableFlags_SizingStretchProp)) {
 			ImGui::TableSetupColumn("PresetAO", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("PresetAOGI", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 			ImGui::TableSetupColumn("PresetReference", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("PresetUser", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 
 			ImGui::TableNextColumn();
-			const bool aoOnlyActive =
-				settings.FoveatedPresetMode == kFoveatedPresetModeOff &&
-				settings.ResolutionMode == 0 &&
-				settings.NumSlices == 3 &&
-				settings.NumSteps == 6 &&
-				settings.ResourceProfile == kResourceProfileAOOnly &&
-				!settings.EnableGI &&
-				!settings.EnableBlur &&
-				!settings.EnableTemporalDenoiser &&
-				approximatelyEqual(settings.AOPower, 1.8f) &&
-				(!isVR || approximatelyEqual(settings.VRCullDistance, 1500.0f));
+			const bool aoOnlyActive = IsAOOnlyPreset(settings, isVR);
+			const bool aoGiActive = IsAOGIPreset(settings, isVR);
+			const bool referenceActive = IsReferencePreset(settings);
+			const bool userActive = !aoOnlyActive && !aoGiActive && !referenceActive;
 			if (drawThemePresetButton("AO only", aoOnlyActive, { -1, 0 })) {
-				settings.NumSlices = 3;
-				settings.NumSteps = 6;
-				settings.ResolutionMode = 0;
-				settings.CenterFullResMaskScale = 0.0f;
-				settings.FoveatedPresetMode = kFoveatedPresetModeOff;
-				settings.VRCullDistance = 1500.0f;
-				settings.AOPower = 1.8f;
-				settings.EnableBlur = false;
-				settings.EnableTemporalDenoiser = false;
-				settings.ResourceProfile = kResourceProfileAOOnly;
-				DisableGIEffects(settings);
+				ApplyAOOnlyPreset(settings);
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Full Res, no GI, no SSGI foveation. Upscaling foveation remains independent and can stay enabled.");
+				ImGui::Text("Full Res, no GI.");
 
 			ImGui::TableNextColumn();
-			const bool referenceActive =
-				settings.FoveatedPresetMode == kFoveatedPresetModeOff &&
-				settings.ResolutionMode == 0 &&
-				settings.NumSlices == 8 &&
-				settings.NumSteps == 10 &&
-				settings.ResourceProfile == kResourceProfileFullGI &&
-				settings.EnableGI &&
-				settings.EnableBlur;
+			if (drawThemePresetButton("AO + GI", aoGiActive, { -1, 0 })) {
+				ApplyAOGIPreset(settings);
+				recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Lighter AO + GI baseline: Full Res, GI resources, 4 slices and 6 steps.");
+
+			ImGui::TableNextColumn();
 			if (drawThemePresetButton("Reference", referenceActive, { -1, 0 })) {
-				settings.NumSlices = 8;
-				settings.NumSteps = 10;
-				settings.ResolutionMode = 0;
-				settings.FoveatedPresetMode = kFoveatedPresetModeOff;
-				settings.CenterFullResMaskScale = 0.0f;
-				settings.EnableBlur = true;
-				settings.ResourceProfile = kResourceProfileFullGI;
-				settings.EnableGI = true;
+				ApplyReferencePreset(settings);
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("High-quality baseline: Full Res with GI and blur enabled, 8 slices and 10 steps.");
 
+			ImGui::TableNextColumn();
+			if (drawThemePresetButton("User", userActive, { -1, 0 })) {
+				ApplyAOGIPreset(settings);
+				recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Copies the AO + GI preset as a starting point.");
+				ImGui::TextUnformatted("Custom settings are shown as User and remain unrestricted.");
+			}
+
 			ImGui::EndTable();
-		}
-		if (isVR && IsRuntimeFoveatedPresetActive(settings)) {
-			const float centerArea = ResolveFoveatedCenterMaskScale(settings);
-			ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.45f, 1.0f), "Current foveated SSGI area from VR > Foveation: %.2f", centerArea);
-		} else if (isVR && settings.FoveatedPresetMode != kFoveatedPresetModeOff) {
-			ImGui::TextDisabled("Foveated SSGI requires an active shared FOV mask.");
 		}
 
 		///////////////////////////////
 		drawCenteredSeparatorText("SSGI Effects & Resources");
 
-		const bool foveatedPresetActive = IsRuntimeFoveatedPresetActive(settings);
 		const int previousResourceProfile = settings.ResourceProfile;
 		if (ImGui::BeginTable("SSGIEffectsResources", 3, ImGuiTableFlags_SizingFixedFit)) {
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
 			{
-				auto effectModeGuard = Util::DisableGuard(!settings.Enabled || foveatedPresetActive);
+				auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
 				if (ImGui::RadioButton("AO-only", !settings.EnableGI)) {
 					DisableGIEffects(settings);
 					recompileFlag = true;
@@ -425,7 +422,7 @@ void ScreenSpaceGI::DrawSettings()
 
 			ImGui::TableNextColumn();
 			{
-				auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled || foveatedPresetActive);
+				auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
 				if (ImGui::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly))
 					settings.ResourceProfile = kResourceProfileAOOnly;
 			}
@@ -445,7 +442,7 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
 			{
-				auto effectModeGuard = Util::DisableGuard(!settings.Enabled || foveatedPresetActive);
+				auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
 				if (ImGui::RadioButton("AO + GI", settings.EnableGI)) {
 					settings.ResourceProfile = kResourceProfileFullGI;
 					settings.EnableGI = true;
@@ -458,7 +455,7 @@ void ScreenSpaceGI::DrawSettings()
 
 			ImGui::TableNextColumn();
 			{
-				auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled || foveatedPresetActive);
+				auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
 				if (ImGui::RadioButton("AO + GI Resources", settings.ResourceProfile == kResourceProfileFullGI))
 					settings.ResourceProfile = kResourceProfileFullGI;
 			}
@@ -468,7 +465,7 @@ void ScreenSpaceGI::DrawSettings()
 
 			ImGui::TableNextColumn();
 			{
-				auto ilInteriorsGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI || foveatedPresetActive);
+				auto ilInteriorsGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
 				ImGui::Checkbox("GI Interiors Only", &settings.ILInteriorsOnly);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -479,7 +476,7 @@ void ScreenSpaceGI::DrawSettings()
 		}
 
 		if (showAdvanced) {
-			auto hqSpecGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI || foveatedPresetActive);
+			auto hqSpecGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
 			recompileFlag |= ImGui::Checkbox("(Experimental) HQ Specular IL", &settings.EnableExperimentalSpecularGI);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("An experimental specular GI that is more accurate but requires more samples. Won't be blurred.");
@@ -491,17 +488,10 @@ void ScreenSpaceGI::DrawSettings()
 				DisableGIEffects(settings);
 			recompileFlag = true;
 		}
-		if (foveatedPresetActive)
-			ImGui::TextDisabled("Foveated SSGI modes are AO-only; IL is disabled while foveated mode is active.");
 		if (settings.EnableGI && !HasGIResources())
-			ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated in this session. Restart required.");
+			ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
 		if (IsResourceProfileRestartPending()) {
-			ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Resource profile changes require restart to change allocated VRAM.");
-		}
-
-		if (isVR) {
-			drawCenteredSeparatorText("Foveated SSGI");
-			ImGui::TextDisabled("Foveated SSGI modes and FOV area are configured in VR > Foveation.");
+			ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
 		}
 
 		drawCenteredSeparatorText("Quality/Performance");
@@ -535,43 +525,26 @@ void ScreenSpaceGI::DrawSettings()
 
 		const int previousResolutionMode = settings.ResolutionMode;
 		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
-		settings.FoveatedPresetMode = GetConfiguredFoveatedPresetMode(settings);
-		const bool foveatedPresetActiveInPerfSection = IsRuntimeFoveatedPresetActive(settings);
 
 		bool clickedFullRes = false;
 		bool clickedHalfRes = false;
 		bool clickedQuarterRes = false;
-		{
-			auto resolutionGuard = Util::DisableGuard(foveatedPresetActiveInPerfSection);
-			clickedFullRes = ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
-		}
+		clickedFullRes = ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
 		constexpr float kSecondPresetColumnStartRatio = 0.5f;
 		const float groupStartX = ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x * kSecondPresetColumnStartRatio);
 		ImGui::SameLine(groupStartX);
 
 		ImGui::BeginGroup();
-		{
-			auto resolutionGuard = Util::DisableGuard(foveatedPresetActiveInPerfSection);
-			clickedHalfRes = ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
-		}
+		clickedHalfRes = ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
 		ImGui::SameLine(0.0f, 14.0f);
-		{
-			auto resolutionGuard = Util::DisableGuard(foveatedPresetActiveInPerfSection);
-			clickedQuarterRes = ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
-		}
+		clickedQuarterRes = ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
 		ImGui::EndGroup();
 
 		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 		if (clickedFullRes || clickedHalfRes || clickedQuarterRes) {
-			settings.FoveatedPresetMode = kFoveatedPresetModeOff;
 			settings.CenterFullResMaskScale = 0.0f;  // Pure Full/Half/Quarter.
 		}
 		recompileFlag |= (settings.ResolutionMode != previousResolutionMode);
-		if (foveatedPresetActiveInPerfSection) {
-			settings.ResolutionMode = 2;
-			const float centerArea = ResolveFoveatedCenterMaskScale(settings);
-			settings.CenterFullResMaskScale = centerArea;
-		}
 	}
 
 	///////////////////////////////
@@ -663,8 +636,7 @@ void ScreenSpaceGI::DrawSettings()
 	drawCenteredSeparatorText("Denoising");
 
 	{
-		const bool strictFoveatedActive = ResolveRuntimeFoveatedPresetMode(settings) == kFoveatedPresetModeStrict;
-		auto denoiseGuard = Util::DisableGuard(!settings.Enabled || strictFoveatedActive);
+		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
 		if (ImGui::BeginTable("denoisers", 2)) {
 			ImGui::TableNextColumn();
@@ -674,9 +646,6 @@ void ScreenSpaceGI::DrawSettings()
 			ImGui::Checkbox("Blur", &settings.EnableBlur);
 
 			ImGui::EndTable();
-		}
-		if (strictFoveatedActive) {
-			ImGui::TextDisabled("Foveated/QRes is active: denoising is disabled.");
 		}
 
 		if (showAdvanced) {
@@ -740,107 +709,64 @@ void ScreenSpaceGI::DrawSettings()
 void ScreenSpaceGI::DrawFoveationSettings()
 {
 	if (!REL::Module::IsVR()) {
-		ImGui::TextDisabled("Foveated SSGI is available only in VR.");
+		ImGui::TextDisabled("FOV SSGI is available only in VR.");
 		return;
 	}
 
-	auto& upscaling = globals::features::upscaling;
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedCenterMaskScale(settings);
 	const bool featureRuntimeActive = loaded && settings.Enabled;
-
-	auto applyMode = [&](int a_mode) {
-		a_mode = ClampFoveatedPresetMode(a_mode);
-		if (settings.FoveatedPresetMode == a_mode)
-			return;
-
-		ApplyFoveatedPresetMode(settings, a_mode);
-		recompileFlag = true;
-	};
-
-	ImGui::TextUnformatted("SSGI Mode");
+	const auto profile = globals::features::upscaling.GetActiveUpscalingFoveatedProfile();
+	const bool foveatedAvailable = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+	bool foveatedEnabled = settings.EnableFoveated;
 	{
-		auto modeGuard = Util::DisableGuard(!featureRuntimeActive);
-		if (ImGui::RadioButton("Off##SSGIFoveation", settings.FoveatedPresetMode == kFoveatedPresetModeOff))
-			applyMode(kFoveatedPresetModeOff);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("No SSGI foveation. Regular SSGI resolution controls apply.");
-
-		ImGui::SameLine();
-		if (ImGui::RadioButton("Foveated/QRes", settings.FoveatedPresetMode == kFoveatedPresetModeStrict))
-			applyMode(kFoveatedPresetModeStrict);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Quarter-res AO outside with full-res AO in the FOV center.");
-			ImGui::TextUnformatted("Denoisers are disabled while active.");
-			ImGui::TextUnformatted("AO-only mode; IL/GI is disabled.");
-		}
-
-		ImGui::SameLine();
-		if (ImGui::RadioButton("Foveated/Only", settings.FoveatedPresetMode == kFoveatedPresetModeFoveated))
-			applyMode(kFoveatedPresetModeFoveated);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Full-res AO in the FOV center only; AO is disabled outside the center.");
-			ImGui::TextUnformatted("AO-only mode; IL/GI is disabled.");
+		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
+		Util::BlueFrameStyleWrapper blueFrameStyle(true);
+		if (ImGui::Checkbox("FOV SSGI", &foveatedEnabled)) {
+			settings.EnableFoveated = foveatedEnabled;
+			if (settings.EnableFoveated) {
+				settings.CenterFullResMaskScale = GetUpscalingActiveCenterMaskScale();
+			} else {
+				settings.CenterFullResMaskScale = 0.0f;
+			}
+			recompileFlag = true;
 		}
 	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Uses the active upscaling FOV mask for Screen Space GI.");
+		ImGui::TextUnformatted("When enabled, SSGI is computed only inside the mask; outside receives no SSGI.");
+		ImGui::TextUnformatted("AO-only mode; IL/GI and denoisers are disabled while active.");
+		if (!loaded)
+			ImGui::TextUnformatted("Requires Screen Space GI.");
+		else if (!settings.Enabled)
+			ImGui::TextUnformatted("Requires Screen Space GI to be enabled.");
+		else if (!foveatedAvailable)
+			ImGui::TextUnformatted("Requires active foveated upscaling.");
+	}
 	if (!loaded)
-		ImGui::TextDisabled("Foveated SSGI requires Screen Space GI.");
+		ImGui::TextDisabled("FOV SSGI requires Screen Space GI.");
 	else if (!settings.Enabled)
-		ImGui::TextDisabled("Enable Screen Space GI to use foveated SSGI modes.");
+		ImGui::TextDisabled("Enable Screen Space GI to use FOV SSGI.");
 
 	ImGui::Spacing();
 
-	const bool canLinkSsgiToUpscaling = featureRuntimeActive && upscaling.IsSsgiUpscalingFovLinkAvailable();
-	{
-		auto linkGuard = Util::DisableGuard(!featureRuntimeActive);
-		if (canLinkSsgiToUpscaling) {
-			Util::BlueFrameStyleWrapper linkStyle(true);
-			ImGui::Checkbox("Link SSGI FOV to Shared FOV Mask", &upscaling.settings.ssgiUseUpscalingFovProfile);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("When enabled, SSGI inherits the active shared FOV mask.");
-				ImGui::TextUnformatted("If Peripheral TAA is enabled, SSGI inherits the Peripheral TAA range instead.");
-				ImGui::TextUnformatted("Disable this to use the SSGI-only FOV area below.");
-			}
-		} else {
-			ImGui::TextDisabled("SSGI can link to the shared FOV mask when foveated upscaling is active.");
-		}
-	}
-
-	const bool ssgiFovLinkedToUpscaling = canLinkSsgiToUpscaling && upscaling.IsSsgiUsingUpscalingFovProfile();
-	if (ssgiFovLinkedToUpscaling) {
-		if (upscaling.settings.periphery_taa_enable)
-			ImGui::TextDisabled("SSGI FOV area is linked to the Peripheral TAA range.");
-		else
-			ImGui::TextDisabled("SSGI FOV area is linked to the active shared FOV mask.");
-	} else {
-		auto areaGuard = Util::DisableGuard(!featureRuntimeActive);
-		Util::BlueFrameStyleWrapper ssgiAreaStyle;
-		ImGui::SliderFloat("SSGI Standalone FOV Area", &upscaling.settings.ssgiFovCenterArea, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the SSGI foveated center area when it is not linked to the shared FOV mask.");
-			ImGui::TextUnformatted("Lower values shrink the full-res SSGI center for more performance.");
-			ImGui::TextUnformatted("Higher values widen full-res SSGI coverage.");
-		}
-		upscaling.settings.ssgiFovCenterArea = FoveatedCommon::ClampCenterArea(upscaling.settings.ssgiFovCenterArea);
-	}
-
 	SyncResolvedCenterMaskScale(settings);
-	if (IsRuntimeFoveatedPresetActive(settings)) {
-		ImGui::Text("Selected SSGI FOV area: %.2f", ResolveFoveatedCenterMaskScale(settings));
-		ImGui::TextDisabled("Foveated SSGI modes are AO-only; IL is disabled while foveated mode is active.");
-	} else if (settings.FoveatedPresetMode != kFoveatedPresetModeOff) {
-		ImGui::TextDisabled("Selected SSGI mode is inactive until the shared FOV mask is active.");
-	}
+	ImGui::Text("FOV SSGI: %s", settings.EnableFoveated && featureRuntimeActive && IsRuntimeFoveatedActive(settings) ? "active" : "inactive");
 	if (settings.EnableGI && !HasGIResources())
-		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated in this session. Restart required.");
+		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
 	if (IsResourceProfileRestartPending())
-		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Resource profile changes require restart to change allocated VRAM.");
+		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
 }
 
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
+	if (!o_json.contains("EnableFoveated") && o_json.contains("FoveatedPresetMode")) {
+		// Backward compatibility: legacy foveated preset modes map to the new single toggle.
+		const int legacyFoveatedMode = std::clamp(o_json.value("FoveatedPresetMode", 0), 0, 2);
+		settings.EnableFoveated = legacyFoveatedMode != 0;
+	}
 	if (!o_json.contains("ResourceProfile")) {
 		// Existing VR configs that already run GI keep full resources; AO-only VR configs move to the lean profile.
 		settings.ResourceProfile = (REL::Module::IsVR() && !settings.EnableGI) ? kResourceProfileAOOnly : kResourceProfileFullGI;
@@ -1263,7 +1189,10 @@ bool ScreenSpaceGI::ShadersOK()
 	                           upsampleAOOnlyCompute &&
 	                           (!REL::Module::IsVR() || stereoSyncAOOnlyCompute);
 
-	const bool fullGIShadersOK = !IsGIActive() ||
+	const float centerScale = ResolveFoveatedCenterMaskScale(settings);
+	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
+	const bool runtimeGIActive = !foveatedSsgiActive && IsGIActive();
+	const bool fullGIShadersOK = !runtimeGIActive ||
 	                             (texRadiance &&
 	                              texRadianceTemp &&
 	                              texIlY[0] &&
@@ -1283,18 +1212,16 @@ bool ScreenSpaceGI::ShadersOK()
 	                               centerGIMaskedAOOnlyCompute &&
 	                               centerBlendAOOnlyCompute &&
 	                               (!REL::Module::IsVR() || centerStereoSyncAOOnlyCompute);
-	const bool centerGIShadersOK = !IsGIActive() ||
+	const bool centerGIShadersOK = !runtimeGIActive ||
 	                               (texCenterIlY &&
 	                                texCenterIlCoCg &&
 	                                texCenterGiSpecular &&
 	                                centerGIMaskedCompute &&
 	                                centerBlendCompute &&
 	                                (!REL::Module::IsVR() || centerStereoSyncCompute));
-	const float centerScale = ResolveFoveatedCenterMaskScale(settings);
-	const bool centerMaskActive = centerScale > 0.0f;
+	const bool centerMaskActive = foveatedSsgiActive && centerScale > 0.0f;
 
-	// Keep legacy SSGI path fully functional when center mask is off.
-	if (ClampResolutionMode(settings.ResolutionMode) == 0 || !centerMaskActive)
+	if (!centerMaskActive)
 		return baseShadersOK && fullGIShadersOK;
 
 	return baseShadersOK && fullGIShadersOK && centerAOShadersOK && centerGIShadersOK;
@@ -1395,9 +1322,8 @@ void ScreenSpaceGI::DrawSSGI()
 		return;
 	const bool isVR = REL::Module::IsVR();
 	const int resolutionMode = ClampResolutionMode(settings.ResolutionMode);
-	const int foveatedPresetMode = ResolveRuntimeFoveatedPresetMode(settings);
 	const float centerScale = ResolveFoveatedCenterMaskScale(settings);
-	const bool foveatedCenterOnlyMode = isVR && foveatedPresetMode == kFoveatedPresetModeFoveated;
+	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
@@ -1409,14 +1335,14 @@ void ScreenSpaceGI::DrawSSGI()
 	const bool isInterior = Util::IsInterior();
 	const bool allowAOSpace = !settings.AOInteriorsOnly || isInterior;
 	const bool allowILSpace = !settings.ILInteriorsOnly || isInterior;
-	const bool runILPath = IsGIActive() && allowILSpace;
-	const bool temporalEnabled = settings.EnableTemporalDenoiser;
-	const bool runRadianceDisoccPass = !foveatedCenterOnlyMode && (runILPath || temporalEnabled);
+	const bool runILPath = !foveatedSsgiActive && IsGIActive() && allowILSpace;
+	const bool temporalEnabled = !foveatedSsgiActive && settings.EnableTemporalDenoiser;
+	const bool runRadianceDisoccPass = !foveatedSsgiActive && (runILPath || temporalEnabled);
 	const bool runPrefilterRadiancePass = runILPath;
-	const bool blurEnabled = !foveatedCenterOnlyMode && settings.EnableBlur && runILPath;
+	const bool blurEnabled = !foveatedSsgiActive && settings.EnableBlur && runILPath;
 	const bool ssgiOutputNeeded = allowAOSpace || runILPath;
 	const bool vrStereoSyncEnabled = isVR && settings.EnableStereoSync;
-	const bool stereoSyncBaseEnabled = vrStereoSyncEnabled && !foveatedCenterOnlyMode && ssgiOutputNeeded;
+	const bool stereoSyncBaseEnabled = vrStereoSyncEnabled && !foveatedSsgiActive && ssgiOutputNeeded;
 	ID3D11ComputeShader* activeRadianceDisoccCompute = nullptr;
 	ID3D11ComputeShader* activeGICompute = nullptr;
 	ID3D11ComputeShader* activeCenterGICompute = nullptr;
@@ -1492,7 +1418,7 @@ void ScreenSpaceGI::DrawSSGI()
 		modeSignature ^= a_value + 0x9e3779b97f4a7c15ull + (modeSignature << 6) + (modeSignature >> 2);
 	};
 	hashCombine(static_cast<uint64_t>(resolutionMode));
-	hashCombine(static_cast<uint64_t>(foveatedPresetMode));
+	hashCombine(static_cast<uint64_t>(foveatedSsgiActive));
 	hashCombine(static_cast<uint64_t>(modeCenterScaleMilli));
 	if (modeCenterScaleMilli > 0) {
 		hashCombine(static_cast<uint64_t>(modeCenterHorizontalScaleMilli));
@@ -1548,7 +1474,7 @@ void ScreenSpaceGI::DrawSSGI()
 	                                   centerBlendCompute);
 	const bool centerShadersReady = centerAOShadersReady && centerGIShadersReady;
 	const bool centerMaskEnabled = centerShadersReady &&
-	                               (resolutionMode != 0) &&
+	                               foveatedSsgiActive &&
 	                               (centerScale > 0.0f);
 	const bool stereoSyncCenterEnabled = vrStereoSyncEnabled && centerMaskEnabled && ssgiOutputNeeded;
 	const bool centerBlendNeeded = centerMaskEnabled && (centerScale < 0.99f);
@@ -1564,10 +1490,10 @@ void ScreenSpaceGI::DrawSSGI()
 		return false;
 	};
 	if (!requireActiveShader(runRadianceDisoccPass, activeRadianceDisoccCompute, "radianceDisocc(active)") ||
-	    !requireActiveShader(!foveatedCenterOnlyMode, activeGICompute, "gi(active)") ||
+	    !requireActiveShader(!foveatedSsgiActive, activeGICompute, "gi(active)") ||
 	    !requireActiveShader(blurEnabled, blurCompute.get(), "blur") ||
 	    !requireActiveShader(stereoSyncBaseEnabled, activeStereoSyncCompute, "stereoSync(active)") ||
-	    !requireActiveShader((resolutionMode != 0) && !centerDirectWrite && !foveatedCenterOnlyMode, activeUpsampleCompute, "upsample(active)") ||
+	    !requireActiveShader((resolutionMode != 0) && !centerDirectWrite && !foveatedSsgiActive, activeUpsampleCompute, "upsample(active)") ||
 	    !requireActiveShader(centerMaskEnabled, activeCenterGICompute, "centerGI(active)") ||
 	    !requireActiveShader(stereoSyncCenterEnabled, activeCenterStereoSyncCompute, "centerStereoSync(active)") ||
 	    !requireActiveShader(centerBlendNeeded, activeCenterBlendCompute, "centerBlend(active)")) {
@@ -1842,7 +1768,7 @@ void ScreenSpaceGI::DrawSSGI()
 	}
 
 	// Prefilter normals for the regular AO/GI path.
-	if (!foveatedCenterOnlyMode) {
+	if (!foveatedSsgiActive) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Normals");
 
 		resetViews();
@@ -1860,7 +1786,7 @@ void ScreenSpaceGI::DrawSSGI()
 	}
 
 	// GI
-	if (!foveatedCenterOnlyMode) {
+	if (!foveatedSsgiActive) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - GI");
 
 		resetViews();
@@ -1937,7 +1863,7 @@ void ScreenSpaceGI::DrawSSGI()
 	}
 
 	// upsample
-	if (resolutionMode != 0 && !centerDirectWrite && !foveatedCenterOnlyMode) {
+	if (resolutionMode != 0 && !centerDirectWrite && !foveatedSsgiActive) {
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
 		srvs.at(1) = texAo[inputAoTexIdx]->srv.get();
@@ -1963,9 +1889,9 @@ void ScreenSpaceGI::DrawSSGI()
 		inputGITexIdx = !inputGITexIdx;
 	}
 
-	// full-res center refinement (half/quarter modes), then smooth blend into current output
+	// FOV-only center pass, optionally feathered into a cleared output.
 	if (centerMaskEnabled) {
-		if (foveatedCenterOnlyMode) {
+		if (foveatedSsgiActive) {
 			FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
 			const uint clearAoIdx = centerBlendNeeded ? inputAoTexIdx : !inputAoTexIdx;
 			if (clearAoIdx < 2 && texAo[clearAoIdx] && texAo[clearAoIdx]->uav)

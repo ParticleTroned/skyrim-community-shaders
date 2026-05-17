@@ -74,8 +74,6 @@ public:
 		float foveatedRightEyeMaskOffsetX = 0.0f;
 		float foveatedRightEyeMaskOffsetY = 0.0f;
 		float periphery_taa_center_area = 0.6f;
-		float ssgiFovCenterArea = 0.7f;
-		bool ssgiUseUpscalingFovProfile = true;
 		bool foveatedPeripheryMaskVisualization = false;
 		bool periphery_taa_enable = false;
 		float periphery_taa_outer_scale = 0.70f;
@@ -272,8 +270,6 @@ public:
 	float GetActiveFoveatedCenterArea() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;
-	bool IsSsgiUpscalingFovLinkAvailable() const;
-	bool IsSsgiUsingUpscalingFovProfile() const;
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
@@ -417,7 +413,6 @@ public:
 	bool IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const;
 	float2 GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const;
-	std::array<float2, 2> GetDefaultFoveatedMaskCenterOffsets() const;
 	float2 GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile = false) const;
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);

@@ -22,7 +22,7 @@ public:
 			"Screen Space Global Illumination adds realistic indirect lighting and ambient occlusion.";
 		if (REL::Module::IsVR()) {
 			desc +=
-				"\nIn VR, use AO preset with Full Res for best quality at a cost of speed. For more performance use Foveated or Half/Quarter Res setting. Foveated is not compatible with IL.";
+				"\nIn VR, use AO only for lowest cost, AO + GI for a lighter GI baseline, or Reference for highest quality. Half/Quarter Res can reduce cost further.";
 		}
 		return std::make_pair(
 			desc,
@@ -92,8 +92,8 @@ public:
 		int ResolutionMode = 0;  // Full Res default (VR and flat)
 		int ResourceProfile = REL::Module::IsVR() ? kResourceProfileAOOnly : kResourceProfileFullGI;
 		float VRCullDistance = 1500.0f;                  // 0 disables VR distance culling
-		float CenterFullResMaskScale = 0.0f;             // runtime cache; foveated presets derive this from the active Upscaling FOV profile
-		int FoveatedPresetMode = 0;                      // 0=off, 1=strict foveated, 2=foveated
+		float CenterFullResMaskScale = 0.0f;             // runtime cache; FOV SSGI derives this from the shared VR foveation profile
+		bool EnableFoveated = false;
 		bool EnableStereoSync = true;                    // VR-only bilateral cross-eye stabilization pass
 		// visual
 		float MinScreenRadius = 0.01f;

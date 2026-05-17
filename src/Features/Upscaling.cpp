@@ -43,8 +43,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	foveatedRightEyeMaskOffsetX,
 	foveatedRightEyeMaskOffsetY,
 	periphery_taa_center_area,
-	ssgiFovCenterArea,
-	ssgiUseUpscalingFovProfile,
 	foveatedPeripheryMaskVisualization,
 	periphery_taa_enable,
 	periphery_taa_outer_scale,
@@ -72,7 +70,7 @@ namespace
 
 - Upscaling FOV + Peripheral TAA adds a yellow TAA ring around the green center to reduce shimmer. It costs more than Upscaling FOV alone, but can let you keep the green center smaller and thereby increase performance wins compared to Upscaling FOV alone.
 
-- SSGI FOV is separate and only affects Screen Space GI. The principle is the same - high quality where you can actually see it, and lower quality at the outside or periphery of your view to save performance. It uses the shared FOV mask when linked. Otherwise, the FOV area is defined by its own slider in the SSGI section of the VR Foveation tab; smaller SSGI FOV saves AO cost but can reduce peripheral AO quality.)";
+- Shader foveation features reuse this shared mask; they do not have separate area sliders.)";
 	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Activate FOV Mask Visualization
 2) Use the blue Upscaling FOV Area slider to decrease FOV Area to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
 3) Expand Upscaling FOV Area until the green mask touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
@@ -576,7 +574,6 @@ namespace
 		settings.foveatedRightEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetX);
 		settings.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetY);
 		settings.periphery_taa_center_area = ClampFoveatedCenterArea(settings.periphery_taa_center_area);
-		settings.ssgiFovCenterArea = ClampFoveatedCenterArea(settings.ssgiFovCenterArea);
 	}
 
 	bool IsDefaultFoveatedMaskGeometry(const Upscaling::Settings& settings)
@@ -628,8 +625,6 @@ namespace
 		settings.foveatedRightEyeMaskOffsetX = 0.0f;
 		settings.foveatedRightEyeMaskOffsetY = 0.0f;
 		settings.periphery_taa_center_area = 0.6f;
-		settings.ssgiFovCenterArea = 0.7f;
-		settings.ssgiUseUpscalingFovProfile = true;
 		settings.foveatedPeripheryMaskVisualization = false;
 		settings.periphery_taa_enable = false;
 		settings.periphery_taa_outer_scale = 0.70f;
@@ -646,8 +641,6 @@ namespace
 		o_json.erase("foveatedRightEyeMaskOffsetX");
 		o_json.erase("foveatedRightEyeMaskOffsetY");
 		o_json.erase("periphery_taa_center_area");
-		o_json.erase("ssgiFovCenterArea");
-		o_json.erase("ssgiUseUpscalingFovProfile");
 		o_json.erase("foveatedPeripheryMaskVisualization");
 		o_json.erase("periphery_taa_enable");
 		o_json.erase("periphery_taa_outer_scale");
@@ -677,11 +670,6 @@ namespace
 	bool IsFoveatedVendorDispatchRequested(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		return SupportsFoveatedVendorDispatch(settings, a_upscaleMethod) && settings.foveatedVendorDispatch;
-	}
-
-	bool UsesUpscalingFovProfileForSsgi(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
-	{
-		return IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod) && settings.ssgiUseUpscalingFovProfile;
 	}
 
 	bool IsVRRuntimeActive()
@@ -2362,11 +2350,6 @@ Upscaling::ActiveUpscalingFoveatedProfile Upscaling::GetActiveUpscalingFoveatedP
 
 float Upscaling::GetActiveFoveatedCenterArea() const
 {
-	const auto upscaleMethod = GetUpscaleMethod();
-	const bool useUpscalingFovForSsgi = UsesUpscalingFovProfileForSsgi(settings, upscaleMethod);
-	if (globals::game::isVR && !useUpscalingFovForSsgi)
-		return ClampFoveatedCenterArea(settings.ssgiFovCenterArea);
-
 	if (UseActiveFoveatedPeripheryTAAProfile()) {
 		return ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
@@ -2380,9 +2363,7 @@ float Upscaling::GetActiveFoveatedCenterArea() const
 
 float Upscaling::GetActiveFoveatedCenterHorizontalScale() const
 {
-	const auto upscaleMethod = GetUpscaleMethod();
-	const bool useUpscalingFovForSsgi = UsesUpscalingFovProfileForSsgi(settings, upscaleMethod);
-	if (!globals::game::isVR || !useUpscalingFovForSsgi)
+	if (!globals::game::isVR)
 		return 1.0f;
 
 	return GetFoveatedMaskProfileParams(settings, UseActiveFoveatedPeripheryTAAProfile()).centerHorizontalScale;
@@ -2392,11 +2373,6 @@ float2 Upscaling::GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const
 {
 	(void)eyeIndex;
 	return { 0.0f, 0.0f };
-}
-
-std::array<float2, 2> Upscaling::GetDefaultFoveatedMaskCenterOffsets() const
-{
-	return { GetDefaultFoveatedMaskCenterOffset(0), GetDefaultFoveatedMaskCenterOffset(1) };
 }
 
 float2 Upscaling::GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile) const
@@ -2428,27 +2404,10 @@ std::array<float2, 2> Upscaling::GetResolvedFoveatedMaskCenterOffsets(bool usePe
 
 std::array<float2, 2> Upscaling::GetActiveResolvedFoveatedMaskCenterOffsets() const
 {
-	const auto upscaleMethod = GetUpscaleMethod();
-	const bool useUpscalingFovForSsgi = UsesUpscalingFovProfileForSsgi(settings, upscaleMethod);
-	if (globals::game::isVR && !useUpscalingFovForSsgi)
-		return GetDefaultFoveatedMaskCenterOffsets();
-
 	auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(UseActiveFoveatedPeripheryTAAProfile());
 	if (!globals::game::isVR)
 		centerOffsets[1] = { 0.0f, 0.0f };
 	return centerOffsets;
-}
-
-bool Upscaling::IsSsgiUpscalingFovLinkAvailable() const
-{
-	const auto upscaleMethod = GetUpscaleMethod();
-	return IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
-}
-
-bool Upscaling::IsSsgiUsingUpscalingFovProfile() const
-{
-	const auto upscaleMethod = GetUpscaleMethod();
-	return UsesUpscalingFovProfileForSsgi(settings, upscaleMethod);
 }
 
 bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile)

@@ -10,7 +10,7 @@ This is a static code analysis, not a profiler capture. The expected savings bel
 
 - The branch already contains VR-specific foveated infrastructure.
 - The branch already contains foveated upscaling/periphery TAA paths.
-- The branch already contains SSGI/AO foveated modes.
+- The branch already contains a single FOV SSGI toggle that reuses the shared upscaling FOV mask.
 - The branch already contains targeted stereo blending/sync for SSGI and screen-space shadows.
 - The branch does not contain the broad upstream #2002 global stereo reprojection path.
 - The previous conclusion was to avoid #2002-style global stereo reprojection as the primary optimization path because it had a fixed cost around 0.6 ms and was fragile.
@@ -84,8 +84,6 @@ Current settings include:
 - `periphery_taa_outer_scale`
 - `periphery_taa_center_area`
 - `periphery_taa_center_blend_feather`
-- `ssgiFovCenterArea`
-- `ssgiUseUpscalingFovProfile`
 - `foveatedPeripheryMaskVisualization`
 
 Important implementation details:
@@ -97,7 +95,7 @@ Important implementation details:
 
 Do not reorder this path lightly. For new feature work, prefer consuming its mask settings rather than moving the upscaler earlier in the pipeline.
 
-## Existing SSGI/AO Foveated Modes
+## Existing SSGI/AO FOV SSGI
 
 Files:
 
@@ -115,25 +113,19 @@ Current VR defaults in `ScreenSpaceGI.h`:
 - `AOInteriorsOnly = true` in VR.
 - `ILInteriorsOnly = true` in VR.
 - `VRCullDistance = 1500`.
-- `FoveatedPresetMode = 0`.
+- `EnableFoveated = false`.
 
-Foveated preset meanings:
+FOV SSGI behavior:
 
-- `0 = off`
-- `1 = Foveated/QRes`
-- `2 = Foveated/Only`
-
-Mode behavior:
-
-- `Foveated/QRes` keeps full-res AO in the FOV center and quarter-res AO outside.
-- `Foveated/Only` disables AO outside the FOV center.
-- Foveated SSGI modes are AO-only by design.
-- IL is disabled while a foveated SSGI preset is active.
-- SSGI foveated area can be linked to upscaling/periphery TAA FOV settings.
+- `EnableFoveated` is a single VR foveation-tab toggle.
+- FOV SSGI runs SSGI only inside the active upscaling FOV mask; outside the mask receives no SSGI.
+- FOV SSGI is AO-only at runtime.
+- IL/GI and denoisers are bypassed while FOV SSGI is active, without overwriting the normal SSGI preset/resource settings.
+- SSGI has no separate FOV area or link toggle; it consumes the shared upscaling/periphery TAA FOV mask.
 
 Known remaining opportunity:
 
-- In foveated-only mode, some full-frame support work can still run before the center-only work. Investigate depth prefilter/history work and skip it when the output will be discarded.
+- In FOV SSGI mode, some full-frame support work can still run before the center-only work. Investigate depth prefilter/history work and skip it when the output will be discarded.
 - Existing gating already skips some later work, but not necessarily all earlier prefilter paths.
 
 ## Existing Stereo Blending / Stereo Sync
@@ -552,7 +544,7 @@ Before changing code, collect baseline captures in at least these scenes:
 - Water-heavy scene.
 - Wet/rain scene with Wetterness active.
 - Reflective scene with SSR/dynamic cubemaps active.
-- SSGI/AO enabled with both foveated modes.
+- SSGI/AO enabled with FOV SSGI on and off.
 
 Measure:
 
@@ -617,7 +609,7 @@ Mitigations:
 - Do not globally cull main game geometry behind the HMD from this plugin.
 - Do not start with complex depth-occlusion culling.
 - Do not foveate Extended Materials first unless profiling proves it is dominant.
-- Do not add independent foveated masks per feature if they can share the existing upscaling/SSGI mask model.
+- Do not add independent foveated masks per feature if they can share the existing upscaling FOV mask.
 
 ## Quick File Reference
 
@@ -634,7 +626,7 @@ Upscaling foveation:
 - `features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl`
 - `features/Upscaling/Shaders/Upscaling/PeripheryTAACS.hlsl`
 
-SSGI foveation and stereo sync:
+FOV SSGI and stereo sync:
 
 - `src/Features/ScreenSpaceGI.h`
 - `src/Features/ScreenSpaceGI.cpp`

@@ -1049,7 +1049,7 @@ namespace
 				screenSpaceGIEnabled,
 				"Matches SSGI AO/GI results between VR eyes.",
 				"Reduces left/right AO and indirect-light mismatch.",
-				"Costs one extra compute pass, plus a center pass when foveated SSGI is active.",
+				"Costs one extra compute pass, plus a center pass when FOV SSGI is active.",
 				"Requires VR and active SSGI.");
 
 			if (!isVR)
@@ -1182,7 +1182,7 @@ namespace
 		const bool dynamicCubemapCadenceEnabled = settings.EnableDynamicCubemapFoveation && dynamicCubemapsRuntimeActive;
 		const bool dynamicCubemapVisibilityEnabled = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemapsRuntimeActive;
 		const bool screenSpaceShadowsEnabled = screenSpaceShadowsRuntimeActive && screenSpaceShadows.bendSettings.EnableFoveated != 0;
-		const bool screenSpaceGIEnabled = screenSpaceGIRuntimeActive && screenSpaceGI.settings.FoveatedPresetMode != 0;
+		const bool screenSpaceGIEnabled = screenSpaceGIRuntimeActive && screenSpaceGI.settings.EnableFoveated;
 		const bool anySharedMaskConsumerEnabled =
 			settings.EnableLightingFoveation ||
 			settings.EnableUtilityFoveation ||
@@ -1219,9 +1219,9 @@ namespace
 		if (!foveatedProfileActive)
 			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with FOV area below 1.00.");
 		if (!screenSpaceGIFeatureAvailable)
-			ImGui::TextDisabled("Foveated SSGI requires Screen Space GI.");
+			ImGui::TextDisabled("FOV SSGI requires Screen Space GI.");
 		else if (!screenSpaceGI.settings.Enabled)
-			ImGui::TextDisabled("Foveated SSGI requires Screen Space GI to be enabled.");
+			ImGui::TextDisabled("FOV SSGI requires Screen Space GI to be enabled.");
 
 		drawSection("Shader Detail Budgets");
 		if (!foveatedProfileActive)
@@ -1375,8 +1375,8 @@ namespace
 				ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
 			if (screenSpaceShadows.bendSettings.EnableFoveated != 0 && !screenSpaceShadowsRuntimeActive)
 				ImGui::TextDisabled("Screen Space Shadows foveation requires active Screen Space Shadows.");
-			if (screenSpaceGI.settings.FoveatedPresetMode != 0 && !screenSpaceGIRuntimeActive)
-				ImGui::TextDisabled("Foveated SSGI requires active Screen Space GI.");
+			if (screenSpaceGI.settings.EnableFoveated && !screenSpaceGIRuntimeActive)
+				ImGui::TextDisabled("FOV SSGI requires active Screen Space GI.");
 			if (settings.EnableWetternessFoveation && wetnessEffectsLoaded)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
 			else if (settings.EnableWetternessFoveation && !wetternessFeatureAvailable)

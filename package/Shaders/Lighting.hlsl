@@ -3478,7 +3478,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float parallaxShadow = 1;
 
-#			if defined(EMAT)
+#			if defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 		[branch] if (
 			SharedData::extendedMaterialSettings.EnableShadows &&
 			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
@@ -3509,7 +3509,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				parallaxShadow = ExtendedMaterials::GetParallaxSoftShadowMultiplier(uv, mipLevel, lightDirectionTS, sh0, TexParallaxSampler, SampParallaxSampler, 0, parallaxShadowQuality, screenNoise, displacementParams);
 #				endif
 		}
-#			endif
+#			endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 
 		float contactShadow = 1.0;
 #			if defined(DEFERRED)

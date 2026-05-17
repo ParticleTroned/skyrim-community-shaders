@@ -355,7 +355,10 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	// World-space VP (for controller attach and fixed world position modes)
 	if (hmdPose.bPoseIsValid) {
 		hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
-		Matrix eyeToWorld = hmdWorld * eyeToHead;
+		// SimpleMath uses row-vector transforms, so compose local-to-world as
+		// eye -> head -> tracking world. Reversing this leaves the eye offset in
+		// tracking axes and breaks stereo when the HMD is rotated.
+		Matrix eyeToWorld = eyeToHead * hmdWorld;
 		vpWorldSpace = eyeToWorld.Invert() * proj;
 	}
 
@@ -551,7 +554,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 				Matrix overlayTransform = offset * controllerWorld;
 				Vector3 overlayNormal(overlayTransform._31, overlayTransform._32, overlayTransform._33);
 				overlayNormal.Normalize();
-				Matrix eyeWorld = hmdWorld * eyeToHead;
+				Matrix eyeWorld = eyeToHead * hmdWorld;
 				Vector3 eyePos = eyeWorld.Translation();
 				Vector3 overlayPos = overlayTransform.Translation();
 				Vector3 toEye = eyePos - overlayPos;

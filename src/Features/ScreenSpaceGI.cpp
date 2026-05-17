@@ -747,6 +747,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	auto& upscaling = globals::features::upscaling;
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedCenterMaskScale(settings);
+	const bool featureRuntimeActive = loaded && settings.Enabled;
 
 	auto applyMode = [&](int a_mode) {
 		a_mode = ClampFoveatedPresetMode(a_mode);
@@ -759,7 +760,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 
 	ImGui::TextUnformatted("SSGI Mode");
 	{
-		auto modeGuard = Util::DisableGuard(!settings.Enabled);
+		auto modeGuard = Util::DisableGuard(!featureRuntimeActive);
 		if (ImGui::RadioButton("Off##SSGIFoveation", settings.FoveatedPresetMode == kFoveatedPresetModeOff))
 			applyMode(kFoveatedPresetModeOff);
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -782,22 +783,27 @@ void ScreenSpaceGI::DrawFoveationSettings()
 			ImGui::TextUnformatted("AO-only mode; IL/GI is disabled.");
 		}
 	}
-	if (!settings.Enabled)
+	if (!loaded)
+		ImGui::TextDisabled("Foveated SSGI requires Screen Space GI.");
+	else if (!settings.Enabled)
 		ImGui::TextDisabled("Enable Screen Space GI to use foveated SSGI modes.");
 
 	ImGui::Spacing();
 
-	const bool canLinkSsgiToUpscaling = upscaling.IsSsgiUpscalingFovLinkAvailable();
-	if (canLinkSsgiToUpscaling) {
-		Util::BlueFrameStyleWrapper linkStyle(true);
-		ImGui::Checkbox("Link SSGI FOV to Shared FOV Mask", &upscaling.settings.ssgiUseUpscalingFovProfile);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("When enabled, SSGI inherits the active shared FOV mask.");
-			ImGui::TextUnformatted("If Peripheral TAA is enabled, SSGI inherits the Peripheral TAA range instead.");
-			ImGui::TextUnformatted("Disable this to use the SSGI-only FOV area below.");
+	const bool canLinkSsgiToUpscaling = featureRuntimeActive && upscaling.IsSsgiUpscalingFovLinkAvailable();
+	{
+		auto linkGuard = Util::DisableGuard(!featureRuntimeActive);
+		if (canLinkSsgiToUpscaling) {
+			Util::BlueFrameStyleWrapper linkStyle(true);
+			ImGui::Checkbox("Link SSGI FOV to Shared FOV Mask", &upscaling.settings.ssgiUseUpscalingFovProfile);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("When enabled, SSGI inherits the active shared FOV mask.");
+				ImGui::TextUnformatted("If Peripheral TAA is enabled, SSGI inherits the Peripheral TAA range instead.");
+				ImGui::TextUnformatted("Disable this to use the SSGI-only FOV area below.");
+			}
+		} else {
+			ImGui::TextDisabled("SSGI can link to the shared FOV mask when foveated upscaling is active.");
 		}
-	} else {
-		ImGui::TextDisabled("SSGI can link to the shared FOV mask when foveated upscaling is active.");
 	}
 
 	const bool ssgiFovLinkedToUpscaling = canLinkSsgiToUpscaling && upscaling.IsSsgiUsingUpscalingFovProfile();
@@ -807,6 +813,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 		else
 			ImGui::TextDisabled("SSGI FOV area is linked to the active shared FOV mask.");
 	} else {
+		auto areaGuard = Util::DisableGuard(!featureRuntimeActive);
 		Util::BlueFrameStyleWrapper ssgiAreaStyle;
 		ImGui::SliderFloat("SSGI Standalone FOV Area", &upscaling.settings.ssgiFovCenterArea, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {

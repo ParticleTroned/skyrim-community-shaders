@@ -1408,6 +1408,10 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextDisabled("VR FOV mask setup is available only in VR.");
 		return;
 	}
+	if (!loaded) {
+		ImGui::TextDisabled("VR FOV mask setup requires Upscaling.");
+		return;
+	}
 
 	SanitizeFoveatedSettings(settings);
 	const UpscaleMethod upscaleMethod = GetUpscaleMethod();

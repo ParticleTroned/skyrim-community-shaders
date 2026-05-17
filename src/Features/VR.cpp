@@ -1172,17 +1172,25 @@ namespace
 		const bool wetnessEffectsLoaded = wetnessEffects.loaded;
 		const bool wetternessFeatureAvailable = wetterness.loaded && !wetnessEffectsLoaded;
 		const bool wetternessRuntimeActive = wetterness.IsRuntimeActive() && !wetnessEffectsLoaded;
+		const bool screenSpaceShadowsRuntimeActive = screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
+		const bool screenSpaceGIFeatureAvailable = screenSpaceGI.loaded;
+		const bool screenSpaceGIRuntimeActive = screenSpaceGIFeatureAvailable && screenSpaceGI.settings.Enabled;
+		const bool dynamicCubemapsRuntimeActive = dynamicCubemaps.loaded;
+		const bool ssrFoveationEnabled = settings.EnableSSRFoveation && ssrAvailable;
+		const bool waterParallaxFoveationEnabled = settings.EnableWaterParallaxFoveation && waterParallaxAvailable;
 		const bool wetternessFoveationEnabled = settings.EnableWetternessFoveation && wetternessRuntimeActive;
-		const bool screenSpaceShadowsEnabled = screenSpaceShadows.bendSettings.Enable != 0 && screenSpaceShadows.bendSettings.EnableFoveated != 0;
-		const bool screenSpaceGIEnabled = screenSpaceGI.settings.Enabled && screenSpaceGI.settings.FoveatedPresetMode != 0;
+		const bool dynamicCubemapCadenceEnabled = settings.EnableDynamicCubemapFoveation && dynamicCubemapsRuntimeActive;
+		const bool dynamicCubemapVisibilityEnabled = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemapsRuntimeActive;
+		const bool screenSpaceShadowsEnabled = screenSpaceShadowsRuntimeActive && screenSpaceShadows.bendSettings.EnableFoveated != 0;
+		const bool screenSpaceGIEnabled = screenSpaceGIRuntimeActive && screenSpaceGI.settings.FoveatedPresetMode != 0;
 		const bool anySharedMaskConsumerEnabled =
 			settings.EnableLightingFoveation ||
 			settings.EnableUtilityFoveation ||
-			settings.EnableSSRFoveation ||
-			settings.EnableWaterParallaxFoveation ||
+			ssrFoveationEnabled ||
+			waterParallaxFoveationEnabled ||
 			wetternessFoveationEnabled ||
-			settings.EnableDynamicCubemapFoveation ||
-			settings.EnableDynamicCubemapVisibilityThrottle ||
+			dynamicCubemapCadenceEnabled ||
+			dynamicCubemapVisibilityEnabled ||
 			screenSpaceShadowsEnabled ||
 			screenSpaceGIEnabled;
 
@@ -1197,13 +1205,23 @@ namespace
 		}
 
 		drawSection("Screen-Space Effects");
-		ImGui::BeginDisabled(!foveatedProfileActive);
+		ImGui::BeginDisabled(!foveatedProfileActive || !screenSpaceShadowsRuntimeActive);
 		screenSpaceShadows.DrawFoveationSettings();
+		ImGui::EndDisabled();
+		if (!screenSpaceShadows.loaded)
+			ImGui::TextDisabled("Screen Space Shadows foveation requires Screen Space Shadows.");
+		else if (screenSpaceShadows.bendSettings.Enable == 0)
+			ImGui::TextDisabled("Screen Space Shadows foveation requires Screen Space Shadows to be enabled.");
 		ImGui::Separator();
+		ImGui::BeginDisabled(!foveatedProfileActive || !screenSpaceGIRuntimeActive);
 		screenSpaceGI.DrawFoveationSettings();
 		ImGui::EndDisabled();
 		if (!foveatedProfileActive)
 			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with FOV area below 1.00.");
+		if (!screenSpaceGIFeatureAvailable)
+			ImGui::TextDisabled("Foveated SSGI requires Screen Space GI.");
+		else if (!screenSpaceGI.settings.Enabled)
+			ImGui::TextDisabled("Foveated SSGI requires Screen Space GI to be enabled.");
 
 		drawSection("Shader Detail Budgets");
 		if (!foveatedProfileActive)
@@ -1236,6 +1254,7 @@ namespace
 			"This can save more work, but can make shadow filter transitions more visible near the mask edge.");
 		ImGui::Separator();
 
+		ImGui::BeginDisabled(!ssrAvailable);
 		drawDetailBudget(
 			"SSR Raymarch",
 			settings.EnableSSRFoveation,
@@ -1247,8 +1266,15 @@ namespace
 			"Uses a binary mask for SSR raymarching.",
 			"Inside the FOV mask keeps full SSR; outside the mask skips SSR raymarching completely and relies on fallback reflections.",
 			"This assumes only the foveated area is visibly important and can make reflective water transitions more visible near the mask edge.");
+		ImGui::EndDisabled();
+		if (!ssrAvailable) {
+			ImGui::TextDisabled("SSR foveation requires Dynamic Cubemaps SSR.");
+			if (dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0 && !dynamicCubemaps.enabledAtBoot)
+				ImGui::TextDisabled("VR SSR must be enabled before startup.");
+		}
 		ImGui::Separator();
 
+		ImGui::BeginDisabled(!waterParallaxAvailable);
 		drawDetailBudget(
 			"Water Parallax Detail",
 			settings.EnableWaterParallaxFoveation,
@@ -1260,6 +1286,9 @@ namespace
 			"Uses a binary mask for Water Effects parallax detail.",
 			"Inside the FOV mask keeps full parallax; outside the mask skips parallax offsets and uses base water normal UVs.",
 			"This assumes only the foveated area is visibly important and can make water microdetail transitions more visible near the mask edge.");
+		ImGui::EndDisabled();
+		if (!waterParallaxAvailable)
+			ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
 		ImGui::Separator();
 
 		ImGui::BeginDisabled(!wetternessRuntimeActive);
@@ -1284,7 +1313,7 @@ namespace
 		ImGui::EndDisabled();
 
 		drawSection("Dynamic Cubemaps");
-		ImGui::BeginDisabled(!foveatedProfileActive);
+		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive);
 		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Uses the active shared FOV mask as the VR-only foveation gate for Dynamic Cubemap update cadence.");
@@ -1302,23 +1331,25 @@ namespace
 		ImGui::EndDisabled();
 		if (!foveatedProfileActive)
 			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with FOV area below 1.00.");
+		if (!dynamicCubemapsRuntimeActive)
+			ImGui::TextDisabled("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
 
 		ImGui::Spacing();
 		ImGui::SetNextItemOpen(false, ImGuiCond_Once);
 		if (ImGui::CollapsingHeader("Status##VRFoveationStatus")) {
 			const bool statusLightingActive = settings.EnableLightingFoveation && foveatedProfileActive;
 			const bool statusUtilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
-			const bool statusSSRActive = settings.EnableSSRFoveation && ssrAvailable && foveatedProfileActive;
-			const bool statusWaterParallaxActive = settings.EnableWaterParallaxFoveation && waterParallaxAvailable && foveatedProfileActive;
+			const bool statusSSRActive = ssrFoveationEnabled && foveatedProfileActive;
+			const bool statusWaterParallaxActive = waterParallaxFoveationEnabled && foveatedProfileActive;
 			const bool statusWetternessActive = wetternessFoveationEnabled && foveatedProfileActive;
-			const bool statusCubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
-			const bool statusCubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
-			const bool statusScreenSpaceShadowsEnabled = screenSpaceShadows.bendSettings.Enable != 0 && screenSpaceShadows.bendSettings.EnableFoveated != 0;
-			const bool statusSsgiFoveatedEnabled = screenSpaceGI.settings.Enabled && screenSpaceGI.settings.FoveatedPresetMode != 0;
+			const bool statusCubemapCadenceActive = dynamicCubemapCadenceEnabled && foveatedProfileActive;
+			const bool statusCubemapVisibilityActive = dynamicCubemapVisibilityEnabled && foveatedProfileActive;
+			const bool statusScreenSpaceShadowsEnabled = screenSpaceShadowsEnabled;
+			const bool statusSsgiFoveatedEnabled = screenSpaceGIEnabled;
 			const auto statusLightingMode = FoveatedCommon::GetDetailMode(settings.EnableLightingFoveation, settings.EnableLightingFoveationHardCutoff);
 			const auto statusUtilityMode = FoveatedCommon::GetDetailMode(settings.EnableUtilityFoveation, settings.EnableUtilityFoveationHardCutoff);
-			const auto statusSSRMode = FoveatedCommon::GetDetailMode(settings.EnableSSRFoveation, settings.EnableSSRFoveationHardCutoff);
-			const auto statusWaterParallaxMode = FoveatedCommon::GetDetailMode(settings.EnableWaterParallaxFoveation, settings.EnableWaterParallaxFoveationHardCutoff);
+			const auto statusSSRMode = FoveatedCommon::GetDetailMode(ssrFoveationEnabled, settings.EnableSSRFoveationHardCutoff);
+			const auto statusWaterParallaxMode = FoveatedCommon::GetDetailMode(waterParallaxFoveationEnabled, settings.EnableWaterParallaxFoveationHardCutoff);
 			const auto statusWetternessMode = FoveatedCommon::GetDetailMode(wetternessFoveationEnabled, settings.EnableWetternessFoveationHardCutoff);
 			const bool statusAnyCubemapFoveationEnabled =
 				settings.EnableDynamicCubemapFoveation ||
@@ -1342,6 +1373,10 @@ namespace
 			}
 			if (settings.EnableWaterParallaxFoveation && !waterParallaxAvailable)
 				ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
+			if (screenSpaceShadows.bendSettings.EnableFoveated != 0 && !screenSpaceShadowsRuntimeActive)
+				ImGui::TextDisabled("Screen Space Shadows foveation requires active Screen Space Shadows.");
+			if (screenSpaceGI.settings.FoveatedPresetMode != 0 && !screenSpaceGIRuntimeActive)
+				ImGui::TextDisabled("Foveated SSGI requires active Screen Space GI.");
 			if (settings.EnableWetternessFoveation && wetnessEffectsLoaded)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
 			else if (settings.EnableWetternessFoveation && !wetternessFeatureAvailable)

@@ -80,11 +80,11 @@ namespace
 		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
 	}
 
-	CubemapFoveationState GetDynamicCubemapFoveationState()
+	CubemapFoveationState GetDynamicCubemapFoveationState(const DynamicCubemaps& a_dynamicCubemaps)
 	{
 		CubemapFoveationState state{};
 		auto& vr = globals::features::vr;
-		if (!vr.loaded) {
+		if (!vr.loaded || !a_dynamicCubemaps.loaded) {
 			return state;
 		}
 
@@ -747,7 +747,7 @@ void DynamicCubemaps::UpdateCubemap()
 		MarkCubemapRefreshHighPriority();
 	}
 
-	const auto foveationState = GetDynamicCubemapFoveationState();
+	const auto foveationState = GetDynamicCubemapFoveationState(*this);
 	if (!ShouldRunCurrentCubemapTask(foveationState.cadenceEnabled, foveationState.visibilityThrottleEnabled)) {
 		return;
 	}
@@ -1016,7 +1016,7 @@ void DynamicCubemaps::SetupResources()
 
 void DynamicCubemaps::Reset()
 {
-	const auto foveationState = GetDynamicCubemapFoveationState();
+	const auto foveationState = GetDynamicCubemapFoveationState(*this);
 	realActiveReflections = globals::state->activeReflections;
 	activeReflections = realActiveReflections;
 

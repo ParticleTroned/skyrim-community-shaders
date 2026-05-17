@@ -67,20 +67,20 @@ namespace
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.25f;
 	constexpr float kFoveatedMaskOffsetResolvedMax = 0.25f;
 	const ImVec4 kFovControlTextColor(0.80f, 0.88f, 1.00f, 1.0f);
-	constexpr const char* kDlssFovSetupIntro = R"(- DLSS FOV renders the green center with DLSS/DLAA and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
+	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR Native AA and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
 
-- DLSS FOV + Peripheral TAA adds a yellow TAA ring around the green center to reduce shimmer. It costs more than DLSS FOV alone, but can let you keep the green center smaller and thereby increase performance wins compared to DLSS FOV alone.
+- Upscaling FOV + Peripheral TAA adds a yellow TAA ring around the green center to reduce shimmer. It costs more than Upscaling FOV alone, but can let you keep the green center smaller and thereby increase performance wins compared to Upscaling FOV alone.
 
-- SSGI FOV is separate and only affects Screen Space GI. The principle is the same - high quality where you can actually see it, and lower quality at the outside or periphery of your view to save performance. It uses DLSS FOV settings when Foveated Upscaling is active. Otherwise, the FOV area is defined by its own slider in the SSGI UI; smaller SSGI FOV saves AO cost but can reduce peripheral AO quality.)";
-	constexpr const char* kDlssFovSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Use the blue DLSS FOV Area slider to decrease FOV Area to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
-3) Expand DLSS FOV Area until the green mask touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
-4) Use the blue DLSS Expand FOV Area R/L slider to horizontally expand the mask until the green part just touches the field of view.
+- SSGI FOV is separate and only affects Screen Space GI. The principle is the same - high quality where you can actually see it, and lower quality at the outside or periphery of your view to save performance. It uses Upscaling FOV settings when Foveated Upscaling is active. Otherwise, the FOV area is defined by its own slider in the SSGI UI; smaller SSGI FOV saves AO cost but can reduce peripheral AO quality.)";
+	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Activate FOV Mask Visualization
+2) Use the blue Upscaling FOV Area slider to decrease FOV Area to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
+3) Expand Upscaling FOV Area until the green mask touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
+4) Use the blue Expand FOV Area R/L slider to horizontally expand the mask until the green part just touches the field of view.
 5) Ideally, you do not see the blue outer mask anymore, except in the corners, or only a tiny bit.
 6) The larger the green center area, the less performance savings you have.
 7) Test in game that you do not have strong peripheral shimmer. If yes, increase the green mask area. If not, reduce it to just before shimmer appears for best performance.)";
-	constexpr const char* kDlssFovPeripheralTaaSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Lower the yellow DLSS FOV Area slider to 0.30. You can later try 0.25 if these settings work for you for even more performance wins.
+	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Activate FOV Mask Visualization
+2) Lower the yellow Upscaling FOV Area slider to 0.30. You can later try 0.25 if these settings work for you for even more performance wins.
 3) Use the yellow TAA Peripheral Range slider until the yellow ring touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
 4) Ideally, you do not see the blue outer ring anymore, except in the corners, or only a tiny bit.
 5) The larger the green center area, the less performance savings you have.
@@ -520,6 +520,15 @@ namespace
 		return std::pow(std::max(pNorm, 0.0f), 1.0f / FoveatedCommon::kMaskShapePower);
 	}
 
+	float ScaleVerticalFovForViewport(float fullVerticalFov, uint32_t viewportHeight, uint32_t fullHeight)
+	{
+		if (!std::isfinite(fullVerticalFov) || fullVerticalFov <= 0.0f || !viewportHeight || !fullHeight)
+			return fullVerticalFov;
+
+		const float viewportScaleY = std::clamp(static_cast<float>(viewportHeight) / static_cast<float>(fullHeight), 1e-4f, 1.0f);
+		return 2.0f * std::atan(viewportScaleY * std::tan(fullVerticalFov * 0.5f));
+	}
+
 	float FoveatedMaskDistancePixelCenter(uint32_t x, uint32_t y, uint32_t width, uint32_t height, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY)
 	{
 		const float invWidth = width > 0 ? 1.0f / static_cast<float>(width) : 0.0f;
@@ -626,15 +635,29 @@ namespace
 		o_json.erase("periphery_taa_center_blend_feather");
 	}
 
-	bool SupportsFoveatedVendorDispatch(Upscaling::UpscaleMethod a_upscaleMethod)
+	bool IsFSRNativeQualityMode(const Upscaling::Settings& settings)
 	{
-		// Foveated vendor dispatch is VR-only and currently DLSS-only.
-		return globals::game::isVR && a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
+		return ClampQualityModeUInt(settings.qualityMode) == 0;
+	}
+
+	bool SupportsFoveatedVendorDispatch(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		switch (a_upscaleMethod) {
+		case Upscaling::UpscaleMethod::kDLSS:
+			return true;
+		case Upscaling::UpscaleMethod::kFSR:
+			return IsFSRNativeQualityMode(settings);
+		default:
+			return false;
+		}
 	}
 
 	bool IsFoveatedVendorDispatchRequested(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
-		return SupportsFoveatedVendorDispatch(a_upscaleMethod) && settings.foveatedVendorDispatch;
+		return SupportsFoveatedVendorDispatch(settings, a_upscaleMethod) && settings.foveatedVendorDispatch;
 	}
 
 	bool UsesUpscalingFovProfileForSsgi(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
@@ -1081,18 +1104,22 @@ void Upscaling::DrawSettings()
 		drawFsr4OverrideControls();
 
 		if (globals::game::isVR) {
-			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 			SanitizeFoveatedSettings(settings);
+			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(settings, upscaleMethod);
 			if (foveatedDispatchSupportedForMethod) {
 				{
 					Util::BlueFrameStyleWrapper foveatedStyle(true);
-					ImGui::Checkbox("Foveated Upscaling (DLSS FOV)", &settings.foveatedVendorDispatch);
+					ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted("Master switch for VR FOV-mask upscaling.");
+					if (upscaleMethod == UpscaleMethod::kFSR)
+						ImGui::TextUnformatted("FSR foveation is currently limited to Native AA.");
 					ImGui::TextUnformatted("On: enables foveated upscaling controls.");
 					ImGui::TextUnformatted("SSGI FOV slider is in the SSGI UI.");
 				}
+			} else if (upscaleMethod == UpscaleMethod::kFSR && !IsFSRNativeQualityMode(settings)) {
+				ImGui::TextDisabled("Foveated FSR is currently available only in Native AA mode.");
 			}
 			const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
 			if (foveatedDispatchRequestedForMethod) {
@@ -1106,30 +1133,30 @@ void Upscaling::DrawSettings()
 					if (settings.periphery_taa_enable)
 						ImGui::TextUnformatted("Gold = TAA ring, blue = outer lightweight ring.");
 					else
-						ImGui::TextUnformatted("Dark = outside the DLSS FOV mask.");
+						ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
 				}
 
 				ImGui::Dummy(ImVec2(0.0f, 4.0f));
 				ImGui::PushStyleColor(ImGuiCol_Text, kFovControlTextColor);
-				const bool showFovSetupInstructions = ImGui::CollapsingHeader("DLSS FOV Setup Instructions");
+				const bool showFovSetupInstructions = ImGui::CollapsingHeader("Upscaling FOV Setup Instructions");
 				ImGui::PopStyleColor();
 				if (showFovSetupInstructions) {
 					const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
 					const float availableHeight = ImGui::GetContentRegionAvail().y;
 					const float instructionHeight = std::clamp(availableHeight - (lineHeight * 2.0f), lineHeight * 5.0f, lineHeight * 14.0f);
-					ImGui::BeginChild("##DLSSFOVSetupInstructions", ImVec2(0.0f, instructionHeight), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+					ImGui::BeginChild("##UpscalingFOVSetupInstructions", ImVec2(0.0f, instructionHeight), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 					ImGui::PushTextWrapPos(0.0f);
 					auto drawInstructionHeadline = [](const char* a_label) {
 						MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
 						ImGui::SeparatorText(a_label);
 					};
-					ImGui::TextUnformatted(kDlssFovSetupIntro);
+					ImGui::TextUnformatted(kFoveatedUpscalingSetupIntro);
 					ImGui::Spacing();
-					drawInstructionHeadline("DLSS FOV setup");
-					ImGui::TextUnformatted(kDlssFovSetupInstructions);
+					drawInstructionHeadline("Upscaling FOV setup");
+					ImGui::TextUnformatted(kFoveatedUpscalingSetupInstructions);
 					ImGui::Spacing();
-					drawInstructionHeadline("DLSS FOV + Peripheral TAA setup");
-					ImGui::TextUnformatted(kDlssFovPeripheralTaaSetupInstructions);
+					drawInstructionHeadline("Upscaling FOV + Peripheral TAA setup");
+					ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
 					ImGui::PopTextWrapPos();
 					ImGui::EndChild();
 				}
@@ -1137,12 +1164,12 @@ void Upscaling::DrawSettings()
 				ImGui::Dummy(ImVec2(0.0f, 6.0f));
 				ImGui::Separator();
 				ImGui::Dummy(ImVec2(0.0f, 4.0f));
-				ImGui::TextColored(kFovControlTextColor, "DLSS FOV Controls");
+				ImGui::TextColored(kFovControlTextColor, "Upscaling FOV Controls");
 
 				{
 					Util::BlueFrameStyleWrapper areaStyle;
 					auto areaGuard = Util::DisableGuard(settings.periphery_taa_enable);
-					ImGui::SliderFloat("DLSS FOV Area", &settings.foveatedCenterArea, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
+					ImGui::SliderFloat("Upscaling FOV Area", &settings.foveatedCenterArea, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					if (settings.periphery_taa_enable) {
@@ -1157,7 +1184,7 @@ void Upscaling::DrawSettings()
 
 				{
 					Util::BlueFrameStyleWrapper baseExpandStyle;
-					ImGui::SliderFloat("DLSS Expand FOV Area R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
+					ImGui::SliderFloat("Expand FOV Area R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted("Widens the upscaling center mask horizontally.");
@@ -1177,13 +1204,13 @@ void Upscaling::DrawSettings()
 				};
 				{
 					Util::BlueFrameStyleWrapper baseOffsetStyle;
-					ImGui::SliderFloat("DLSS Left Eye Offset X", &settings.foveatedLeftEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+					ImGui::SliderFloat("FOV Left Eye Offset X", &settings.foveatedLeftEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 					drawEyeOffsetTooltip("Left", "horizontal", "+X moves right, -X moves left.");
-					ImGui::SliderFloat("DLSS Left Eye Offset Y", &settings.foveatedLeftEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+					ImGui::SliderFloat("FOV Left Eye Offset Y", &settings.foveatedLeftEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 					drawEyeOffsetTooltip("Left", "vertical", "+Y moves down, -Y moves up.");
-					ImGui::SliderFloat("DLSS Right Eye Offset X", &settings.foveatedRightEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+					ImGui::SliderFloat("FOV Right Eye Offset X", &settings.foveatedRightEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 					drawEyeOffsetTooltip("Right", "horizontal", "+X moves right, -X moves left.");
-					ImGui::SliderFloat("DLSS Right Eye Offset Y", &settings.foveatedRightEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+					ImGui::SliderFloat("FOV Right Eye Offset Y", &settings.foveatedRightEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 					drawEyeOffsetTooltip("Right", "vertical", "+Y moves down, -Y moves up.");
 				}
 
@@ -1195,10 +1222,10 @@ void Upscaling::DrawSettings()
 
 				ImGui::Dummy(ImVec2(0.0f, 4.0f));
 				ImGui::Separator();
-				ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.40f, 1.0f), "DLSS FOV + Peripheral TAA Settings");
+				ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.40f, 1.0f), "Upscaling FOV + Peripheral TAA Settings");
 				{
 					Util::YellowFrameStyleWrapper taaStyle(true);
-					ImGui::Checkbox("DLSS FOV + Peripheral TAA", &settings.periphery_taa_enable);
+					ImGui::Checkbox("FOV + Peripheral TAA", &settings.periphery_taa_enable);
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted("Enables periphery-only TAA outside the upscaling center region.");
@@ -1210,7 +1237,7 @@ void Upscaling::DrawSettings()
 					ImGui::TextDisabled("Enable Peripheral TAA to edit the reduced FOV area, transition, and range.");
 				{
 					Util::YellowFrameStyleWrapper taaAreaStyle;
-					ImGui::SliderFloat("DLSS FOV Area##PeripheralTAA", &settings.periphery_taa_center_area, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
+					ImGui::SliderFloat("Upscaling FOV Area##PeripheralTAA", &settings.periphery_taa_center_area, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
 				}
 				if (settings.periphery_taa_enable) {
 					if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2254,7 +2281,7 @@ bool Upscaling::UseActiveFoveatedPeripheryTAAProfile() const
 
 bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable() const
 {
-	return fidelityFX.IsNvidiaAdapterDetected() && IsFoveatedVendorDispatchEnabled(GetUpscaleMethod());
+	return IsFoveatedVendorDispatchEnabled(GetUpscaleMethod());
 }
 
 Upscaling::ActiveUpscalingFoveatedProfile Upscaling::GetActiveUpscalingFoveatedProfile() const
@@ -2265,7 +2292,7 @@ Upscaling::ActiveUpscalingFoveatedProfile Upscaling::GetActiveUpscalingFoveatedP
 	profile.usesPeripheryTAAOuterMask = profile.available && IsPeripheryTAAEnabled(upscaleMethod);
 
 	if (profile.usesPeripheryTAAOuterMask) {
-		// For DLSS/FOV + Peripheral TAA, consumers that need the full visible
+		// For Upscaling FOV + Peripheral TAA, consumers that need the full visible
 		// foveated region should use the outside edge of the TAA mask.
 		profile.coverageArea = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
@@ -2365,7 +2392,7 @@ std::array<float2, 2> Upscaling::GetActiveResolvedFoveatedMaskCenterOffsets() co
 bool Upscaling::IsSsgiUpscalingFovLinkAvailable() const
 {
 	const auto upscaleMethod = GetUpscaleMethod();
-	return fidelityFX.IsNvidiaAdapterDetected() && IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
+	return IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
 }
 
 bool Upscaling::IsSsgiUsingUpscalingFovProfile() const
@@ -3113,10 +3140,13 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
-bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX)
+bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX)
 {
-	if (a_upscaleMethod != UpscaleMethod::kDLSS)
+	if (!SupportsFoveatedVendorDispatch(settings, a_upscaleMethod))
 		return false;
+
+	const bool useDLSS = a_upscaleMethod == UpscaleMethod::kDLSS;
+	const bool useFSR = a_upscaleMethod == UpscaleMethod::kFSR;
 
 	if (eyeIndex > 1)
 		return false;
@@ -3126,18 +3156,19 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 		return false;
 
 	const std::string suffix = eyeIndex == 0 ? "Left" : "Right";
+	const bool createFsrViews = useFSR;
 
-	if (!EnsureFoveatedTexture(foveatedCenterColorIn[eyeIndex], colorIn, rect.inputWidth, rect.inputHeight, false, false, false, false, ("Upscale_FoveatedCenter_ColorIn_" + suffix).c_str()))
+	if (!EnsureFoveatedTexture(foveatedCenterColorIn[eyeIndex], colorIn, rect.inputWidth, rect.inputHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_ColorIn_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, false, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
+	if (!EnsureFoveatedTexture(foveatedCenterColorOut[eyeIndex], colorIn, rect.outputWidth, rect.outputHeight, false, true, createFsrViews, false, ("Upscale_FoveatedCenter_ColorOut_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn, rect.inputWidth, rect.inputHeight, true, false, false, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str()))
+	if (!EnsureFoveatedTexture(foveatedCenterDepth[eyeIndex], depthIn, rect.inputWidth, rect.inputHeight, true, createFsrViews, false, false, ("Upscale_FoveatedCenter_Depth_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, rect.inputWidth, rect.inputHeight, false, false, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
+	if (!EnsureFoveatedTexture(foveatedCenterMotionVectors[eyeIndex], motionVectorsIn, rect.inputWidth, rect.inputHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_MVec_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterReactiveMask[eyeIndex], reactiveMaskIn, rect.inputWidth, rect.inputHeight, false, false, false, false, ("Upscale_FoveatedCenter_Reactive_" + suffix).c_str()))
+	if (!EnsureFoveatedTexture(foveatedCenterReactiveMask[eyeIndex], reactiveMaskIn, rect.inputWidth, rect.inputHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Reactive_" + suffix).c_str()))
 		return false;
-	if (!EnsureFoveatedTexture(foveatedCenterTransparencyMask[eyeIndex], transparencyMaskIn, rect.inputWidth, rect.inputHeight, false, false, false, false, ("Upscale_FoveatedCenter_Transparency_" + suffix).c_str()))
+	if (!EnsureFoveatedTexture(foveatedCenterTransparencyMask[eyeIndex], transparencyMaskIn, rect.inputWidth, rect.inputHeight, false, createFsrViews, false, false, ("Upscale_FoveatedCenter_Transparency_" + suffix).c_str()))
 		return false;
 
 	auto context = globals::d3d::context;
@@ -3183,20 +3214,40 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	// Texture-space Y grows downward, while clip-space Y grows upward.
 	const float pinholeOffsetY = std::clamp((0.5f - rectCenterY) * 2.0f, -1.0f, 1.0f);
 
-	const bool dispatchOK = streamline.UpscaleRegion(
-		eyeIndex,
-		foveatedCenterColorIn[eyeIndex]->resource.get(),
-		foveatedCenterColorOut[eyeIndex]->resource.get(),
-		foveatedCenterDepth[eyeIndex]->resource.get(),
-		foveatedCenterMotionVectors[eyeIndex]->resource.get(),
-		foveatedCenterReactiveMask[eyeIndex]->resource.get(),
-		foveatedCenterTransparencyMask[eyeIndex]->resource.get(),
-		rect.inputWidth,
-		rect.inputHeight,
-		rect.outputWidth,
-		rect.outputHeight,
-		pinholeOffsetX,
-		pinholeOffsetY);
+	bool dispatchOK = false;
+	if (useDLSS) {
+		dispatchOK = streamline.UpscaleRegion(
+			eyeIndex,
+			foveatedCenterColorIn[eyeIndex]->resource.get(),
+			foveatedCenterColorOut[eyeIndex]->resource.get(),
+			foveatedCenterDepth[eyeIndex]->resource.get(),
+			foveatedCenterMotionVectors[eyeIndex]->resource.get(),
+			foveatedCenterReactiveMask[eyeIndex]->resource.get(),
+			foveatedCenterTransparencyMask[eyeIndex]->resource.get(),
+			rect.inputWidth,
+			rect.inputHeight,
+			rect.outputWidth,
+			rect.outputHeight,
+			pinholeOffsetX,
+			pinholeOffsetY);
+	} else if (useFSR) {
+		dispatchOK = fidelityFX.UpscaleRegion(
+			eyeIndex,
+			foveatedCenterColorIn[eyeIndex]->resource.get(),
+			foveatedCenterDepth[eyeIndex]->resource.get(),
+			foveatedCenterMotionVectors[eyeIndex]->resource.get(),
+			foveatedCenterReactiveMask[eyeIndex]->resource.get(),
+			foveatedCenterTransparencyMask[eyeIndex]->resource.get(),
+			foveatedCenterColorOut[eyeIndex]->resource.get(),
+			rect.inputWidth,
+			rect.inputHeight,
+			rect.outputWidth,
+			rect.outputHeight,
+			static_cast<float>(std::max(inputWidthPerEye, 1u)),
+			static_cast<float>(std::max(inputHeight, 1u)),
+			settings.sharpnessFSR,
+			ScaleVerticalFovForViewport(Util::GetVerticalFOVRad(), rect.outputHeight, outputHeight));
+	}
 	if (!dispatchOK)
 		return false;
 
@@ -3237,7 +3288,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 {
 	if (!globals::game::isVR)
 		return false;
-	if (a_upscaleMethod != UpscaleMethod::kDLSS)
+	if (!SupportsFoveatedVendorDispatch(settings, a_upscaleMethod))
 		return false;
 
 	if (!colorTexture || !depthTexture || !motionVectors || !reactiveMask || !transparencyMask)
@@ -3537,7 +3588,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 				}
 
 				// Fill outside the Peripheral TAA range so every visible per-eye
-				// output pixel is initialized before the DLSS center blend.
+				// output pixel is initialized before the vendor center blend.
 				dispatchRectMinusHole(
 					0,
 					0,
@@ -3574,7 +3625,11 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 			continue;
 
 		ID3D11Resource* centerColorInput = vrIntermediateColorIn[eye]->resource.get();
-		ID3D11Resource* centerDepthInput = vrIntermediateDepth[eye]->resource.get();
+		ID3D11Resource* centerDepthInput = a_upscaleMethod == UpscaleMethod::kFSR ?
+			(vrIntermediateLinearDepth[eye] ? vrIntermediateLinearDepth[eye]->resource.get() : nullptr) :
+			(vrIntermediateDepth[eye] ? vrIntermediateDepth[eye]->resource.get() : nullptr);
+		if (!centerDepthInput)
+			return false;
 
 		if (!DispatchSingleFoveatedVendorEye(
 				a_upscaleMethod,
@@ -3586,6 +3641,8 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 				vrIntermediateTransparencyMask[eye]->resource.get(),
 				outputWidthPerEye,
 				outputHeight,
+				inputWidthPerEye,
+				inputHeight,
 				centerScale,
 				centerHorizontalScale,
 				centerOffset,

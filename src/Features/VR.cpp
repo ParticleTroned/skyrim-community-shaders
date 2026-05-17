@@ -1131,7 +1131,7 @@ namespace
 			ImGui::Checkbox("FOV Lighting Detail", &settings.EnableLightingFoveation);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive auxiliary detail in the Lighting shader.");
-				ImGui::TextUnformatted("The full visible FOV uses the normal DLSS/FOV mask, or the outside edge of Peripheral TAA when DLSS/FOV + Peripheral TAA is enabled.");
+				ImGui::TextUnformatted("The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when Upscaling FOV + Peripheral TAA is enabled.");
 				ImGui::TextUnformatted("Base diffuse lighting, albedo, normal, and shadowmask sampling remain unchanged.");
 			}
 
@@ -1149,7 +1149,7 @@ namespace
 			ImGui::Checkbox("FOV Utility Shadowmask Filtering", &settings.EnableUtilityFoveation);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive Utility shader shadowmask filtering.");
-				ImGui::TextUnformatted("The full visible FOV uses the normal DLSS/FOV mask, or the outside edge of Peripheral TAA when DLSS/FOV + Peripheral TAA is enabled.");
+				ImGui::TextUnformatted("The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when Upscaling FOV + Peripheral TAA is enabled.");
 				ImGui::TextUnformatted("Outside the mask, high-cost PCF filtering fades toward a single shadow comparison while keeping valid shadowmask output.");
 			}
 
@@ -1188,7 +1188,7 @@ namespace
 			ImGui::Text("Dynamic cubemap visibility throttle: %s", cubemapVisibilityActive ? "active" : "inactive");
 			ImGui::Text("FOV profile: %s", profile.available ? "available" : "unavailable");
 			if (profile.available) {
-				ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "DLSS/FOV center");
+				ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "Upscaling FOV center");
 				ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
 				ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
 				if (anyFoveationEnabled && profile.coverageArea >= foveatedProfileFullCoverageThreshold) {

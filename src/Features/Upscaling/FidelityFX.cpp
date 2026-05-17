@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <directx/d3dx12.h>
 #include <filesystem>
@@ -123,6 +124,13 @@ namespace
 		const uint32_t minor = (a_version >> 12) & 0x3FFu;
 		const uint32_t patch = a_version & 0xFFFu;
 		return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
+	}
+
+	float ResolveCameraFovAngleVertical(float a_cameraFovAngleVertical)
+	{
+		return std::isfinite(a_cameraFovAngleVertical) && a_cameraFovAngleVertical > 0.0f ?
+			a_cameraFovAngleVertical :
+			Util::GetVerticalFOVRad();
 	}
 
 	void RuntimeFfxMessage(uint32_t a_type, const wchar_t* a_message)
@@ -1202,7 +1210,7 @@ bool FidelityFX::EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, u
 bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness)
+	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, float a_cameraFovAngleVertical)
 {
 	if (a_contextIndex >= runtimeUpscalerContextCount || !runtimeUpscalerContexts[a_contextIndex])
 		return false;
@@ -1345,7 +1353,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			dispatchParameters.reset = upscaling.ShouldResetHistoryThisFrame();
 			dispatchParameters.cameraNear = *globals::game::cameraNear;
 			dispatchParameters.cameraFar = *globals::game::cameraFar;
-			dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+			dispatchParameters.cameraFovAngleVertical = ResolveCameraFovAngleVertical(a_cameraFovAngleVertical);
 			dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 			dispatchParameters.flags = 0;
 
@@ -1407,7 +1415,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness)
+	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, float a_cameraFovAngleVertical)
 {
 	if (!a_color || !a_depth || !a_motionVectors || !a_reactiveMask || !a_transparencyCompositionMask || !a_output ||
 		!a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight) {
@@ -1448,7 +1456,8 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 						a_displayHeight,
 						a_motionVectorScaleX,
 						a_motionVectorScaleY,
-						a_sharpness)) {
+						a_sharpness,
+						a_cameraFovAngleVertical)) {
 					RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath::kRuntimeFsr4);
 					return true;
 				}
@@ -1512,7 +1521,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	dispatchParameters.cameraNear = *globals::game::cameraNear;
 	dispatchParameters.enableSharpening = true;
 	dispatchParameters.sharpness = a_sharpness;
-	dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+	dispatchParameters.cameraFovAngleVertical = ResolveCameraFovAngleVertical(a_cameraFovAngleVertical);
 	dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 	const bool runtimeFallbackReset = runtimeRequested && runtimeFallbackResetDispatchesRemaining > 0;
 	if (runtimeFallbackReset)

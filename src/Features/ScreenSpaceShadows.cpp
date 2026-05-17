@@ -164,7 +164,7 @@ void ScreenSpaceShadows::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Uses the active Upscaling FOV mask for Screen Space Shadows.");
 				ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the FOV mask and fades to no SSS outside it.");
-				ImGui::TextUnformatted("Uses the DLSS/FOV center mask normally, or the outside edge of the Peripheral TAA mask when DLSS/FOV + Peripheral TAA is enabled.");
+				ImGui::TextUnformatted("Uses the Upscaling FOV center mask normally, or the outside edge of the Peripheral TAA mask when Upscaling FOV + Peripheral TAA is enabled.");
 				ImGui::TextUnformatted("The mask area, horizontal scale, offsets, and Peripheral TAA profile are taken from Upscaling; SSS has no separate FOV size.");
 				if (!foveatedAvailable)
 					ImGui::TextUnformatted("Requires active foveated upscaling.");

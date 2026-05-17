@@ -536,7 +536,7 @@ void ScreenSpaceGI::DrawSettings()
 				Util::BlueFrameStyleWrapper linkStyle(true);
 				ImGui::Checkbox("Link Foveated SSGI to Foveated Upscaling", &upscaling.settings.ssgiUseUpscalingFovProfile);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("When enabled, SSGI inherits the active DLSS FOV area.");
+					ImGui::TextUnformatted("When enabled, SSGI inherits the active Upscaling FOV area.");
 					ImGui::TextUnformatted("If Peripheral TAA is enabled, SSGI inherits the Peripheral TAA range instead.");
 					ImGui::TextUnformatted("Disable this to use the SSGI-only FOV area below.");
 				}
@@ -547,12 +547,12 @@ void ScreenSpaceGI::DrawSettings()
 				if (upscaling.settings.periphery_taa_enable)
 					ImGui::TextDisabled("SSGI Foveated Area is linked to the Peripheral TAA range.");
 				else
-					ImGui::TextDisabled("SSGI Foveated Area is linked to the active DLSS FOV area.");
+					ImGui::TextDisabled("SSGI Foveated Area is linked to the active Upscaling FOV area.");
 			} else {
 				Util::BlueFrameStyleWrapper ssgiAreaStyle;
 				ImGui::SliderFloat("SSGI Foveated Area", &upscaling.settings.ssgiFovCenterArea, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Controls the SSGI foveated center area when it is not linked to DLSS FOV controls.");
+					ImGui::TextUnformatted("Controls the SSGI foveated center area when it is not linked to Upscaling FOV controls.");
 					ImGui::TextUnformatted("Used by the foveated presets in this SSGI UI.");
 					ImGui::TextUnformatted("Lower values shrink the full-res SSGI center for more performance.");
 					ImGui::TextUnformatted("Higher values widen full-res SSGI coverage.");

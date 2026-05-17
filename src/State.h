@@ -6,6 +6,7 @@
 
 #include <Buffer.h>
 #include <atomic>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -210,6 +211,7 @@ public:
 	};
 
 	bool inWorld = false;
+	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	bool pendingPostLoadRuntimeReset = false;
 	bool activeReflections = false;
 

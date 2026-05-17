@@ -1,3 +1,4 @@
+#include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -28,10 +29,19 @@ namespace
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
 		{
 			auto& vr = globals::features::vr;
+			auto& upscaling = globals::features::upscaling;
+
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
-				vr.RenderInSceneOverlay(eEye, (ID3D11Texture2D*)pTexture->handle, pBounds);
+				vr::Texture_t upscaledTexture{};
+				vr::VRTextureBounds_t upscaledBounds{};
+				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
+					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
+				}
+
+				vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(pTexture->handle), pBounds);
 			}
+
 			return func(_this, eEye, pTexture, pBounds, nSubmitFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -232,6 +242,10 @@ void VR::InitInSceneResources()
 
 void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds)
 {
+	if (globals::features::upscaling.IsSubmitStageUpscalingActive()) {
+		return;
+	}
+
 	auto context = globals::d3d::context;
 	if (!context || !globals::d3d::device || !targetTexture) {
 		return;
@@ -253,7 +267,9 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Only render if overlay should be visible
-	if (!ShouldUseInSceneOverlay() || !globals::menu || !(globals::menu->IsEnabled || globals::menu->overlayVisible || ShouldShowAutoHideOverlay())) {
+	if (!ShouldUseInSceneOverlay() ||
+		!globals::menu ||
+		!(globals::menu->IsEnabled || globals::menu->overlayVisible || ShouldShowAutoHideOverlay())) {
 		if (perf)
 			perf->EndEvent();
 		return;

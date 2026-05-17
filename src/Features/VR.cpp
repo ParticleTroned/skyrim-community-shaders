@@ -1,11 +1,11 @@
 #include "VR.h"
+#include "DynamicCubemaps.h"
+#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
-#include "DynamicCubemaps.h"
-#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
 #include "SubsurfaceScattering.h"
@@ -254,7 +254,8 @@ void VR::DrawStereoBlend()
 	if (!main.texture || !main.UAV || !depthSRV)
 		return;
 
-	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize);
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize, submitStageSceneDomain);
 	if (resolution.x <= 0.0f || resolution.y <= 0.0f)
 		return;
 
@@ -282,7 +283,7 @@ void VR::DrawStereoBlend()
 
 	Util::BindGlobalConstantBuffersForCS(context);
 
-	auto dispatchCount = Util::GetScreenDispatchCount(true);
+	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 	auto* cbPtr = stereoBlendCB->CB();
 	ID3D11ShaderResourceView* srvs[2]{ stereoBlendCopyTex->srv.get(), depthSRV };
 	ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
@@ -853,9 +854,9 @@ namespace
 				ImGui::Text("Improves performance in interiors, recommended ON.");
 			}
 
-		if (exteriorChanged || interiorChanged) {
-			vr.UpdateDepthBufferCulling();
-		}
+			if (exteriorChanged || interiorChanged) {
+				vr.UpdateDepthBufferCulling();
+			}
 
 			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
 				if (vr.gMinOccludeeBoxExtent) {
@@ -865,7 +866,6 @@ namespace
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
 			}
-
 		}
 	}
 
@@ -1007,16 +1007,16 @@ namespace
 					const char* a_benefit,
 					const char* a_cost,
 					const char* a_requirement) {
-				auto guard = Util::DisableGuard(!a_available);
-				ImGui::Checkbox(a_label, &a_enabled);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(a_summary);
-					ImGui::TextUnformatted(a_benefit);
-					ImGui::TextUnformatted(a_cost);
-					if (!a_available)
-						ImGui::TextUnformatted(a_requirement);
-				}
-			};
+					auto guard = Util::DisableGuard(!a_available);
+					ImGui::Checkbox(a_label, &a_enabled);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted(a_summary);
+						ImGui::TextUnformatted(a_benefit);
+						ImGui::TextUnformatted(a_cost);
+						if (!a_available)
+							ImGui::TextUnformatted(a_requirement);
+					}
+				};
 
 			drawSyncToggle(
 				"Sync Screen Space Shadows",
@@ -1116,8 +1116,10 @@ namespace
 		const bool utilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
 		const bool cubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
 		const bool cubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
-		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" : "feathered";
-		const char* utilityMode = !settings.EnableUtilityFoveation ? "disabled" : settings.EnableUtilityFoveationHardCutoff ? "hard cutoff" : "feathered";
+		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" :
+		                                                                                                                         "feathered";
+		const char* utilityMode = !settings.EnableUtilityFoveation ? "disabled" : settings.EnableUtilityFoveationHardCutoff ? "hard cutoff" :
+		                                                                                                                      "feathered";
 		const bool anyFoveationEnabled =
 			settings.EnableLightingFoveation ||
 			settings.EnableUtilityFoveation ||
@@ -2122,11 +2124,15 @@ void VR::SubmitOverlayFrame()
 	}
 
 	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
-	if (shouldUseInSceneOverlay) {
+	const bool submitStageUpscalingActive = globals::features::upscaling.IsSubmitStageUpscalingActive();
+	if (shouldUseInSceneOverlay || submitStageUpscalingActive) {
 		InstallSubmitHook();
 	}
-	const bool useInSceneOverlay = shouldUseInSceneOverlay && inSceneResources.submitHookInstalled;
-	const bool useIVROverlay = !shouldUseInSceneOverlay;
+	const bool useInSceneOverlay =
+		shouldUseInSceneOverlay &&
+		!submitStageUpscalingActive &&
+		inSceneResources.submitHookInstalled;
+	const bool useIVROverlay = !useInSceneOverlay;
 
 	if (useIVROverlay && !openVRInfo.hasOverlayInterface) {
 		static bool loggedMissingOverlayInterface = false;
@@ -2147,8 +2153,8 @@ void VR::SubmitOverlayFrame()
 		menuOverlayHandle != vr::k_ulOverlayHandleInvalid ||
 		menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid;
 	auto* gameOverlay = openVRInfo.hasOverlayInterface && (useIVROverlay || hasOverlayHandles) ?
-	                         RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) :
-	                         nullptr;
+	                        RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) :
+	                        nullptr;
 	auto* cleanOverlay = useIVROverlay ? RE::BSOpenVR::GetCleanIVROverlay() : nullptr;
 
 	static bool cleanOverlayLogged = false;
@@ -2177,8 +2183,8 @@ void VR::SubmitOverlayFrame()
 	// In fixed-world mode, recenter once on menu open using current HMD pose,
 	// then keep it world-locked for the rest of the session.
 	if (menuJustOpened &&
-	    settings.VRMenuPositioningMethod == 1 &&
-	    (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both)) {
+		settings.VRMenuPositioningMethod == 1 &&
+		(settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both)) {
 		SetFixedOverlayToCurrentHMD();
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 			savedPlayerWorldPos = player->GetPosition();
@@ -2231,7 +2237,7 @@ void VR::SubmitOverlayFrame()
 			const bool overlayBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging;
 			Util::ApplyHighlightTintToTexture(menuTexture.get(), overlayBeingDragged, settings.dragHighlightColor);
 			UpdateFixedWorldPositioning();
-			HideAllOverlays(gameOverlay);
+			HideAllOverlays(cleanOverlay);
 		} else {
 			// Apply highlight tint to HMD overlay if it's being dragged
 			bool hmdBeingDragged = settings.EnableDragToReposition && overlayDragState.dragging &&
@@ -2243,17 +2249,17 @@ void VR::SubmitOverlayFrame()
 			UpdateVROverlayPosition();
 			vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
 			if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
-				Util::SetOverlayInputFlags(gameOverlay, menuOverlayHandle);
+				Util::SetOverlayInputFlags(cleanOverlay, menuOverlayHandle);
 				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
 				if (err != vr::VROverlayError_None) {
 					logger::error("SetOverlayTexture failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
-				err = gameOverlay->ShowOverlay(menuOverlayHandle);
+				err = cleanOverlay->ShowOverlay(menuOverlayHandle);
 				if (err != vr::VROverlayError_None) {
 					logger::error("ShowOverlay failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
 			} else if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid) {
-				gameOverlay->HideOverlay(menuOverlayHandle);
+				cleanOverlay->HideOverlay(menuOverlayHandle);
 			}
 			// Controller overlay
 			if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
@@ -2275,17 +2281,17 @@ void VR::SubmitOverlayFrame()
 				UpdateVROverlayControllerPosition();
 
 				vr::Texture_t controllerTex = { menuControllerTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-				Util::SetOverlayInputFlags(gameOverlay, menuControllerOverlayHandle);
+				Util::SetOverlayInputFlags(cleanOverlay, menuControllerOverlayHandle);
 				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuControllerOverlayHandle, &controllerTex);
 				if (err != vr::VROverlayError_None) {
 					logger::error("SetOverlayTexture failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
-				err = gameOverlay->ShowOverlay(menuControllerOverlayHandle);
+				err = cleanOverlay->ShowOverlay(menuControllerOverlayHandle);
 				if (err != vr::VROverlayError_None) {
 					logger::error("ShowOverlay failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
 			} else if (menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid) {
-				gameOverlay->HideOverlay(menuControllerOverlayHandle);
+				cleanOverlay->HideOverlay(menuControllerOverlayHandle);
 			}
 		}
 
@@ -2293,7 +2299,7 @@ void VR::SubmitOverlayFrame()
 		if (oldRTV)
 			oldRTV->Release();
 	} else {
-		HideAllOverlays(gameOverlay);
+		HideAllOverlays(cleanOverlay);
 	}
 }
 

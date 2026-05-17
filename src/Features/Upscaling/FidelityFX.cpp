@@ -637,8 +637,10 @@ void FidelityFX::CreateFSRResources()
 
 	const uint32_t displayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2 : screenSize.x);
 	const uint32_t displayHeight = static_cast<uint32_t>(screenSize.y);
-	const uint32_t renderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2 : renderSize.x);
-	const uint32_t renderHeight = static_cast<uint32_t>(renderSize.y);
+	const uint32_t requestedRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2 : renderSize.x);
+	const uint32_t requestedRenderHeight = static_cast<uint32_t>(renderSize.y);
+	const uint32_t renderWidth = splitPerEyeContexts ? displayWidth : requestedRenderWidth;
+	const uint32_t renderHeight = splitPerEyeContexts ? displayHeight : requestedRenderHeight;
 
 	for (uint32_t i = 0; i < numContexts; ++i) {
 		FfxFsr3ContextDescription contextDescription{};
@@ -663,8 +665,8 @@ void FidelityFX::CreateFSRResources()
 	}
 
 	fsrContextCount = numContexts;
-	logger::info("[FidelityFX] Created {} FSR3 contexts (Display: {}x{}, Render: {}x{}, SplitPerEye={})",
-		numContexts, displayWidth, displayHeight, renderWidth, renderHeight, splitPerEyeContexts);
+	logger::info("[FidelityFX] Created {} FSR3 contexts (Display: {}x{}, MaxRender: {}x{}, RequestedRender: {}x{}, SplitPerEye={})",
+		numContexts, displayWidth, displayHeight, renderWidth, renderHeight, requestedRenderWidth, requestedRenderHeight, splitPerEyeContexts);
 }
 
 void FidelityFX::DestroyRuntimeUpscalerContexts(bool a_waitForIdle)

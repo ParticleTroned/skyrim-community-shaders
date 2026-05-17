@@ -6,6 +6,7 @@
 
 #include <Buffer.h>
 #include <atomic>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -210,6 +211,7 @@ public:
 	};
 
 	bool inWorld = false;
+	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	bool pendingPostLoadRuntimeReset = false;
 	bool activeReflections = false;
 
@@ -285,7 +287,7 @@ public:
 		float4 AmbientSHG;
 		float4 AmbientSHB;
 		float4 VRFoveationData0;           // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
-		float4 VRFoveationData1;           // x=utility shadowmask filtering mode, y=SSR raymarch mode, z=water parallax mode, w=Wetterness dynamic detail mode: 0 off, 1 feathered, 2 hard cutoff
+		float4 VRFoveationData1;           // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationCenterOffsets;   // xy=left eye offset, zw=right eye offset
 	};
 #ifdef _MSC_VER

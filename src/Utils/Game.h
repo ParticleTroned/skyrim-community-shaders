@@ -119,7 +119,7 @@ namespace Util
 		uint x;
 		uint y;
 	};
-	DispatchCount GetScreenDispatchCount(bool a_dynamic = true);
+	DispatchCount GetScreenDispatchCount(bool a_dynamic = true, bool a_ignoreDynamicResolutionLock = false);
 
 	/**
 	 * @brief Checks if dynamic resolution is currently enabled.

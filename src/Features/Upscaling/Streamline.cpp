@@ -6,7 +6,6 @@
 #include <dxgi1_3.h>
 
 #include "../../Deferred.h"
-#include "../../Hooks.h"
 #include "../../State.h"
 #include "../../Util.h"
 #include "../Upscaling.h"
@@ -15,6 +14,44 @@
 namespace
 {
 	constexpr UINT NVIDIA_VENDOR_ID = 0x10DE;
+
+	bool IsHDRDLSSInputFormat(DXGI_FORMAT a_format)
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+			return false;
+		default:
+			return true;
+		}
+	}
+
+	bool TryGetTexture2DDesc(ID3D11Resource* a_resource, D3D11_TEXTURE2D_DESC& a_desc)
+	{
+		if (!a_resource)
+			return false;
+
+		ID3D11Texture2D* texture = nullptr;
+		if (FAILED(a_resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) || !texture)
+			return false;
+
+		texture->GetDesc(&a_desc);
+		texture->Release();
+		return true;
+	}
+
+	bool GetDLSSColorBuffersHDR(ID3D11Resource* a_colorIn)
+	{
+		D3D11_TEXTURE2D_DESC desc{};
+		if (!TryGetTexture2DDesc(a_colorIn, desc))
+			return true;
+
+		return IsHDRDLSSInputFormat(desc.Format);
+	}
 }
 
 void LoggingCallback(sl::LogType type, const char* msg)
@@ -135,7 +172,7 @@ void Streamline::LoadInterposer()
 	pref.projectId = "f8776929-c969-43bd-ac2b-294b4de58aac";
 
 	pref.renderAPI = sl::RenderAPI::eD3D11;
-	pref.flags = sl::PreferenceFlags::eUseManualHooking;
+	pref.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
 
 	// Hook up all of the functions exported by the SL Interposer Library
 	slInit = (PFun_slInit*)GetProcAddress(interposer, "slInit");
@@ -146,7 +183,6 @@ void Streamline::LoadInterposer()
 	slEvaluateFeature = (PFun_slEvaluateFeature*)GetProcAddress(interposer, "slEvaluateFeature");
 	slAllocateResources = (PFun_slAllocateResources*)GetProcAddress(interposer, "slAllocateResources");
 	slFreeResources = (PFun_slFreeResources*)GetProcAddress(interposer, "slFreeResources");
-	slSetTag = (PFun_slSetTag*)GetProcAddress(interposer, "slSetTag");
 	slGetFeatureRequirements = (PFun_slGetFeatureRequirements*)GetProcAddress(interposer, "slGetFeatureRequirements");
 	slGetFeatureVersion = (PFun_slGetFeatureVersion*)GetProcAddress(interposer, "slGetFeatureVersion");
 	slUpgradeInterface = (PFun_slUpgradeInterface*)GetProcAddress(interposer, "slUpgradeInterface");
@@ -478,33 +514,28 @@ bool Streamline::IsRTXAndBelow40Series(IDXGIAdapter* a_adapter)
 	return false;
 }
 
-void Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height)
+bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR)
 {
+	if (!slDLSSSetOptions)
+		return false;
+
 	// Map custom render-scale presets to the nearest supported DLSS mode.
 	uint32_t qualityMode = std::min(globals::features::upscaling.settings.qualityMode, Upscaling::kQualityModeMaxIndex);
 	uint32_t dlssPreset = std::min(globals::features::upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
 
-	// Detect HDR from kMAIN format at runtime -- VR kMAIN may be 8-bit while SE is FP16
-	bool isHDR = false;
-	{
-		auto renderer = globals::game::renderer;
-		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		D3D11_TEXTURE2D_DESC mainDesc;
-		static_cast<ID3D11Texture2D*>(main.texture)->GetDesc(&mainDesc);
-		isHDR = mainDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM;
-	}
-
 	uint32_t cacheIndex = globals::game::isVR ? (eyeIndex > 0 ? 1u : 0u) : 0u;
 	bool useLegacyProfile = isRTXBelow40series;
 	auto& cache = dlssOptionsCache[cacheIndex];
+	const uint32_t viewportKey = static_cast<uint32_t>(p_viewport);
 	if (cache.valid &&
+		cache.viewport == viewportKey &&
 		cache.outputWidth == width &&
 		cache.outputHeight == height &&
 		cache.qualityMode == qualityMode &&
 		cache.dlssPreset == dlssPreset &&
-		cache.isHDR == isHDR &&
+		cache.isHDR == colorBuffersHDR &&
 		cache.useLegacyProfile == useLegacyProfile) {
-		return;
+		return true;
 	}
 
 	sl::DLSSOptions dlssOptions{};
@@ -530,7 +561,7 @@ void Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 
 	dlssOptions.outputWidth = width;
 	dlssOptions.outputHeight = height;
-	dlssOptions.colorBuffersHDR = isHDR ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+	dlssOptions.colorBuffersHDR = colorBuffersHDR ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	dlssOptions.useAutoExposure = sl::Boolean::eTrue;
 
 	sl::DLSSPreset selectedPreset = sl::DLSSPreset::ePresetK;
@@ -566,24 +597,35 @@ void Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 	dlssOptions.sharpness = 0.0f;
 
 	if (SL_FAILED(result, slDLSSSetOptions(p_viewport, dlssOptions))) {
-		logger::critical("[Streamline] Could not enable DLSS");
+		logger::critical("[Streamline] Could not enable DLSS for viewport {} eye {}: {}",
+			static_cast<uint32_t>(p_viewport),
+			eyeIndex,
+			magic_enum::enum_name(result));
 		cache.valid = false;
-		return;
+		return false;
 	}
 
 	cache.valid = true;
+	cache.viewport = viewportKey;
 	cache.outputWidth = width;
 	cache.outputHeight = height;
 	cache.qualityMode = qualityMode;
 	cache.dlssPreset = dlssPreset;
-	cache.isHDR = isHDR;
+	cache.isHDR = colorBuffersHDR;
 	cache.useLegacyProfile = useLegacyProfile;
+	return true;
 }
 
 void Streamline::InvalidateDLSSOptionsCache()
 {
 	dlssOptionsCache[0] = {};
 	dlssOptionsCache[1] = {};
+}
+
+void Streamline::ResetFrameTracking()
+{
+	frameToken = nullptr;
+	frameChecker = {};
 }
 
 bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
@@ -593,6 +635,11 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	float pinholeOffsetX, float pinholeOffsetY)
 {
 	auto context = globals::d3d::context;
+	if (!initialized || !featureDLSS || !slEvaluateFeature || !context ||
+		!colorIn || !colorOut || !depth || !mvec || !reactiveMask || !transparencyMask)
+		return false;
+	if (globals::game::isVR && eyeIndex > 1)
+		return false;
 
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, 0 };
 	sl::Resource colorOutRes = { sl::ResourceType::eTex2d, colorOut, 0 };
@@ -612,11 +659,18 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
+	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
+
 	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY))
 		return false;
-	SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height);
+	if (!SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR))
+		return false;
 
+	const bool submitStageVRDLSS =
+		globals::game::isVR &&
+		globals::features::upscaling.IsSubmitStageUpscalingActive();
 	const bool emitPCLMarkers =
+		!submitStageVRDLSS &&
 		globals::features::upscaling.settings.reflexUseMarkersToOptimize &&
 		reflexOptionsCache.useMarkersToOptimize &&
 		featurePCL;
@@ -640,21 +694,27 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	};
 
 	sl::ResourceTag tags[] = {
-		{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentIn },
-		{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentOut },
-		{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
-		{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
-		{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
-		{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn }
+		{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
+		{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &extentOut },
+		{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
+		{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
+		{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
+		{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn }
 	};
 
-	slSetTag(vp, tags, _countof(tags), context);
-
 	sl::ViewportHandle view(vp);
-	const sl::BaseStructure* inputs[] = { &view };
+	const sl::BaseStructure* inputs[] = {
+		&view,
+		&tags[0],
+		&tags[1],
+		&tags[2],
+		&tags[3],
+		&tags[4],
+		&tags[5]
+	};
 
 	auto state = globals::state;
-	if (state->frameAnnotations) {
+	if (state && state->frameAnnotations) {
 		if (globals::game::isVR) {
 			char buf[32];
 			snprintf(buf, sizeof(buf), "DLSS Evaluate Eye %u", eyeIndex);
@@ -668,15 +728,35 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
 
-	if (state->frameAnnotations)
+	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
 	if (evalResult != sl::Result::eOk) {
-		static bool evalErrorLogged[2] = { false, false };
-		uint32_t logIdx = globals::game::isVR ? eyeIndex : 0;
-		if (!evalErrorLogged[logIdx]) {
-			evalErrorLogged[logIdx] = true;
-			logger::error("[Streamline] slEvaluateFeature failed{} result={}", globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "", (int)evalResult);
+		static sl::ViewportHandle lastLoggedEvalErrorViewport[2] = {};
+		static sl::Result lastLoggedEvalErrorResult[2] = {};
+		uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0;
+		if (lastLoggedEvalErrorViewport[logIdx] != vp || lastLoggedEvalErrorResult[logIdx] != evalResult) {
+			lastLoggedEvalErrorViewport[logIdx] = vp;
+			lastLoggedEvalErrorResult[logIdx] = evalResult;
+			D3D11_TEXTURE2D_DESC colorInDesc{};
+			D3D11_TEXTURE2D_DESC colorOutDesc{};
+			TryGetTexture2DDesc(colorIn, colorInDesc);
+			TryGetTexture2DDesc(colorOut, colorOutDesc);
+			logger::error(
+				"[Streamline] slEvaluateFeature failed{} result={} viewport={} colorIn={}x{} fmt={} colorOut={}x{} fmt={} extentIn={}x{} extentOut={}x{}",
+				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
+				static_cast<int>(evalResult),
+				static_cast<uint32_t>(vp),
+				colorInDesc.Width,
+				colorInDesc.Height,
+				static_cast<uint32_t>(colorInDesc.Format),
+				colorOutDesc.Width,
+				colorOutDesc.Height,
+				static_cast<uint32_t>(colorOutDesc.Format),
+				extentIn.width,
+				extentIn.height,
+				extentOut.width,
+				extentOut.height);
 		}
 	}
 
@@ -735,7 +815,12 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		sl::Extent extentIn{ 0, 0, eyeWidthIn, eyeHeightIn };
 		sl::Extent extentOut{ 0, 0, eyeWidthOut, eyeHeightOut };
 
+		// DLAA uses the full per-eye extent. Keep it on the isolated per-eye
+		// output path so hidden-area cleanup and stereo copyback are identical
+		// for both eyes, avoiding stale content in the combined VR target.
+		const bool forcePerEyeOutput = upscaling.settings.qualityMode == 0;
 		const bool canUseDirectEye0 =
+			!forcePerEyeOutput &&
 			upscaling.vrIntermediateColorIn[0] && upscaling.vrIntermediateColorIn[0]->resource &&
 			upscaling.vrIntermediateColorIn[1] && upscaling.vrIntermediateColorIn[1]->resource &&
 			upscaling.vrIntermediateColorOut[0] && upscaling.vrIntermediateColorOut[0]->resource &&
@@ -760,7 +845,15 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					extentIn, extentOut, eyeWidthOut);
 			}
 
-			upscaling.FinalizePerEyeOutputs(colorOut);
+			if (allEvaluated) {
+				upscaling.FinalizePerEyeOutputs(colorOut);
+			} else {
+				static bool loggedVREvaluateFailure = false;
+				if (!loggedVREvaluateFailure) {
+					logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; keeping the current scene texture instead of copying stale output.");
+					loggedVREvaluateFailure = true;
+				}
+			}
 			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && allEvaluated;
 			return;
 		}
@@ -807,18 +900,41 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  */
 void Streamline::DestroyDLSSResources()
 {
+	if (!slDLSSSetOptions || !slFreeResources) {
+		InvalidateDLSSOptionsCache();
+		ResetFrameTracking();
+		return;
+	}
+
 	sl::DLSSOptions dlssOptions{};
 	dlssOptions.mode = sl::DLSSMode::eOff;
 
-	slDLSSSetOptions(viewport, dlssOptions);
-	slFreeResources(sl::kFeatureDLSS, viewport);
+	const auto freeViewport = [&](sl::ViewportHandle a_viewport, uint32_t a_eyeIndex) {
+		const sl::Result optionsResult = slDLSSSetOptions(a_viewport, dlssOptions);
+		if (optionsResult != sl::Result::eOk) {
+			logger::debug("[Streamline] DLSS off failed for viewport {} eye {}: {}",
+				static_cast<uint32_t>(a_viewport),
+				a_eyeIndex,
+				magic_enum::enum_name(optionsResult));
+		}
+
+		const sl::Result freeResult = slFreeResources(sl::kFeatureDLSS, a_viewport);
+		if (freeResult != sl::Result::eOk) {
+			logger::debug("[Streamline] DLSS resource free failed for viewport {} eye {}: {}",
+				static_cast<uint32_t>(a_viewport),
+				a_eyeIndex,
+				magic_enum::enum_name(freeResult));
+		}
+	};
+
+	freeViewport(viewport, 0);
 
 	if (globals::game::isVR) {
-		slDLSSSetOptions(viewportRight, dlssOptions);
-		slFreeResources(sl::kFeatureDLSS, viewportRight);
+		freeViewport(viewportRight, 1);
 	}
 
 	InvalidateDLSSOptionsCache();
+	ResetFrameTracking();
 }
 
 void Streamline::UpdateReflex()

@@ -1048,7 +1048,7 @@ float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
 #	if defined(WETTERNESS)
 float GetVRWetternessDynamicDetailWeight(float2 eyeUv, uint eyeIndex)
 {
-	return GetVRFoveatedDetailWeight(SharedData::VRFoveationData1.w, eyeUv, eyeIndex);
+	return GetVRFoveatedDetailWeight(SharedData::VRFoveationData1.z, eyeUv, eyeIndex);
 }
 #	endif
 #endif

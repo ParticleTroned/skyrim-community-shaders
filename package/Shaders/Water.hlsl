@@ -695,7 +695,7 @@ struct WaterNormalData
 #			if defined(VR) && defined(WATER_PARALLAX)
 float GetVRWaterParallaxDetailWeight(float2 eyeUv, uint eyeIndex)
 {
-	float waterParallaxFoveationMode = SharedData::VRFoveationData1.z;
+	float waterParallaxFoveationMode = SharedData::VRFoveationData1.y;
 	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
 	return FoveatedComputeDetailWeight(
 		waterParallaxFoveationMode,
@@ -1204,7 +1204,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float waterParallaxDetailWeight = 1.0;
 #			if defined(VR) && defined(WATER_PARALLAX)
-	float waterParallaxFoveationMode = SharedData::VRFoveationData1.z;
+	float waterParallaxFoveationMode = SharedData::VRFoveationData1.y;
 	[branch] if (waterParallaxFoveationMode >= FOVEATED_DETAIL_MODE_FEATHERED)
 	{
 		waterParallaxDetailWeight = GetVRWaterParallaxDetailWeight(saturate(screenUV), eyeIndex);

@@ -1,7 +1,17 @@
 #include "State.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#	define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#	define NOMINMAX
+#endif
+#include <Windows.h>
+
 #include <algorithm>
+#include <cmath>
 #include <codecvt>
+#include <cstring>
 #include <thread>
 
 #include <pystring/pystring.h>
@@ -41,6 +51,131 @@ namespace
 	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
 		"UnifiedWater"
 	};
+
+	static constexpr wchar_t kOpenCompositeUnleashedUpscalingStateName[] = L"Local\\OpenCompositeUnleashedUpscalingState";
+	static constexpr uint32_t kOpenCompositeUnleashedUpscalingStateMagic = 0x4F435553;
+	static constexpr uint32_t kOpenCompositeUnleashedUpscalingStateVersion = 1;
+
+	struct OCUExternalUpscalerState
+	{
+		uint32_t magic;
+		uint32_t version;
+		uint32_t byteSize;
+		uint32_t updateCounter;
+
+		uint32_t active;
+		uint32_t method;
+		uint32_t dlssPreset;
+		uint32_t flags;
+
+		float renderScale;
+		float mipBias;
+		float mipBiasOffset;
+		float reservedFloat0;
+
+		uint32_t reserved[8];
+	};
+
+	static_assert(sizeof(OCUExternalUpscalerState) == 80);
+
+	struct OCUExternalMipBiasState
+	{
+		float mipBias = 0.0f;
+	};
+
+	uint32_t ReadVolatileUInt32(const uint32_t* a_value)
+	{
+		return *reinterpret_cast<volatile const uint32_t*>(a_value);
+	}
+
+	class OCUExternalUpscalerStateMapping
+	{
+	public:
+		~OCUExternalUpscalerStateMapping()
+		{
+			if (view) {
+				UnmapViewOfFile(view);
+				view = nullptr;
+			}
+			if (mapping) {
+				CloseHandle(mapping);
+				mapping = nullptr;
+			}
+		}
+
+		const OCUExternalUpscalerState* GetView()
+		{
+			if (view)
+				return view;
+
+			const ULONGLONG now = GetTickCount64();
+			if (now < nextOpenAttempt)
+				return nullptr;
+
+			mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, kOpenCompositeUnleashedUpscalingStateName);
+			if (!mapping) {
+				nextOpenAttempt = now + 1000;
+				return nullptr;
+			}
+
+			view = static_cast<const OCUExternalUpscalerState*>(
+				MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(OCUExternalUpscalerState)));
+			if (!view) {
+				CloseHandle(mapping);
+				mapping = nullptr;
+				nextOpenAttempt = now + 1000;
+				return nullptr;
+			}
+
+			return view;
+		}
+
+	private:
+		HANDLE mapping = nullptr;
+		const OCUExternalUpscalerState* view = nullptr;
+		ULONGLONG nextOpenAttempt = 0;
+	};
+
+	OCUExternalUpscalerStateMapping& GetOCUExternalUpscalerStateMapping()
+	{
+		static OCUExternalUpscalerStateMapping mapping;
+		return mapping;
+	}
+
+	bool TryReadOCUExternalMipBiasState(OCUExternalMipBiasState& a_state)
+	{
+		const auto* view = GetOCUExternalUpscalerStateMapping().GetView();
+		if (!view)
+			return false;
+
+		for (uint32_t attempt = 0; attempt < 8; ++attempt) {
+			const uint32_t beforeCounter = ReadVolatileUInt32(&view->updateCounter);
+			if ((beforeCounter & 1u) != 0)
+				continue;
+
+			OCUExternalUpscalerState snapshot{};
+			MemoryBarrier();
+			std::memcpy(&snapshot, view, sizeof(snapshot));
+			MemoryBarrier();
+
+			const uint32_t afterCounter = ReadVolatileUInt32(&view->updateCounter);
+			if (beforeCounter != afterCounter || (afterCounter & 1u) != 0)
+				continue;
+
+			if (snapshot.magic != kOpenCompositeUnleashedUpscalingStateMagic ||
+				snapshot.version != kOpenCompositeUnleashedUpscalingStateVersion ||
+				snapshot.byteSize < sizeof(OCUExternalUpscalerState) ||
+				snapshot.active == 0 ||
+				!std::isfinite(snapshot.mipBias)) {
+				return false;
+			}
+
+			a_state.mipBias = snapshot.mipBias;
+			return true;
+		}
+
+		return false;
+	}
 
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
@@ -1033,18 +1168,23 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.InMapMenu = isMapMenuOpen;
 
 		auto& upscaling = globals::features::upscaling;
+		const bool upscalingLoaded = upscaling.loaded;
+		const auto upscaleMethod = upscalingLoaded ? upscaling.GetUpscaleMethod() : Upscaling::UpscaleMethod::kNONE;
+		const auto renderSize = Util::ConvertToDynamic(screenSize, true);
 
-		if (upscaling.loaded) {
-			auto upscaleMethod = upscaling.GetUpscaleMethod();
-			if (temporal && upscaleMethod != Upscaling::UpscaleMethod::kTAA) {
-				auto renderSize = Util::ConvertToDynamic(screenSize, true);
-				data.MipBias = std::log2f(renderSize.x / screenSize.x) - 1.0f;
-			} else {
-				data.MipBias = 0;
-			}
-		} else {
-			data.MipBias = 0;
+		float computedMipBias = 0.0f;
+		if (upscalingLoaded && temporal && upscaleMethod != Upscaling::UpscaleMethod::kTAA && screenSize.x > 0.0f && renderSize.x > 0.0f) {
+			computedMipBias = std::log2f(renderSize.x / screenSize.x) - 1.0f;
 		}
+
+		OCUExternalMipBiasState externalMipBiasState{};
+		const bool externalOpenCompositeMipBias =
+			globals::game::isVR &&
+			upscalingLoaded &&
+			upscaling.IsOpenCompositeUpscalingBlocked() &&
+			TryReadOCUExternalMipBiasState(externalMipBiasState);
+
+		data.MipBias = externalOpenCompositeMipBias ? externalMipBiasState.mipBias : computedMipBias;
 		data.RefractionScale = refractionScale;
 		data.PBRMetalReflectionScale = pbrMetalReflectionScale;
 		data.PBRMetalHighlightScale = pbrMetalHighlightScale;
@@ -1087,7 +1227,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const bool wetternessActive = vr.settings.EnableWetternessFoveation && wetterness.IsRuntimeActive() && !wetnessEffects.loaded;
 		const bool anyShaderFoveationEnabled =
 			vr.settings.EnableLightingFoveation ||
-			vr.settings.EnableUtilityFoveation ||
 			(vr.settings.EnableSSRFoveation && dynamicSSRActive) ||
 			waterParallaxActive ||
 			wetternessActive;
@@ -1103,9 +1242,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableLightingFoveation,
 					vr.settings.EnableLightingFoveationHardCutoff));
-				const float utilityFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
-					vr.settings.EnableUtilityFoveation,
-					vr.settings.EnableUtilityFoveationHardCutoff));
 				const float ssrFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableSSRFoveation && dynamicSSRActive,
 					vr.settings.EnableSSRFoveationHardCutoff));
@@ -1122,10 +1258,10 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 					foveationActive ? lightingFoveationMode : disabledFoveationMode
 				};
 				data.VRFoveationData1 = {
-					foveationActive ? utilityFoveationMode : disabledFoveationMode,
 					foveationActive ? ssrFoveationMode : disabledFoveationMode,
 					foveationActive ? waterParallaxFoveationMode : disabledFoveationMode,
-					foveationActive ? wetternessFoveationMode : disabledFoveationMode
+					foveationActive ? wetternessFoveationMode : disabledFoveationMode,
+					disabledFoveationMode
 				};
 				data.VRFoveationCenterOffsets = {
 					profile.centerOffsets[0].x,

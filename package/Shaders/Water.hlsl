@@ -677,6 +677,9 @@ FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 #				define WATER_PARALLAX
 #				include "WaterEffects/WaterParallax.hlsli"
 #			endif
+#			if defined(VR) && defined(WATER_PARALLAX)
+#				include "Common/FoveatedMask.hlsli"
+#			endif
 
 #			if defined(DYNAMIC_CUBEMAPS)
 #				include "DynamicCubemaps/DynamicCubemaps.hlsli"
@@ -689,14 +692,29 @@ struct WaterNormalData
 	float4 rippleInfo;  // xyz = scaled ripple normal (normalized normal * intensity), w = splash effect intensity
 };
 
-WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFactor, float3 viewDirection, float depth, uint eyeIndex)
+#			if defined(VR) && defined(WATER_PARALLAX)
+float GetVRWaterParallaxDetailWeight(float2 eyeUv, uint eyeIndex)
+{
+	float waterParallaxFoveationMode = SharedData::VRFoveationData1.z;
+	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
+	return FoveatedComputeDetailWeight(
+		waterParallaxFoveationMode,
+		eyeUv,
+		SharedData::VRFoveationData0.x,
+		SharedData::VRFoveationData0.y,
+		SharedData::VRFoveationData0.z,
+		centerOffset);
+}
+#			endif
+
+WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float normalsDepthFactor, float3 viewDirection, float depth, uint eyeIndex, float waterParallaxDetailWeight)
 {
 	WaterNormalData result;
 	result.rippleInfo = float4(0, 0, 0, 0);
 	float3 normalScalesRcp = rcp(input.NormalsScale.xyz);
 
 #			if defined(WATER_PARALLAX)
-	float2 parallaxOffset = WaterEffects::GetParallaxOffset(input, normalScalesRcp);
+	float2 parallaxOffset = WaterEffects::GetParallaxOffset(input, normalScalesRcp, waterParallaxDetailWeight);
 #			endif
 
 #			if defined(FLOWMAP)
@@ -711,13 +729,13 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	PS_INPUT flowmapInput = input;
 	float2 flowmapParallaxOffset = float2(0, 0);
 #				if defined(WATER_PARALLAX) && !defined(LOD)
-	float parallaxAmount = WaterEffects::GetFlowmapParallaxAmount(input, flowmapDimensions, viewDirection);
+	float parallaxAmount = WaterEffects::GetFlowmapParallaxAmount(input, flowmapDimensions, viewDirection, waterParallaxDetailWeight);
 	float2 parallaxDir = viewDirection.xy / -viewDirection.z;
 	parallaxDir.y = -parallaxDir.y;
 	float viewDotUp = -viewDirection.z;
 	parallaxDir *= 0.008 * saturate(viewDotUp * 2.0);
 	flowmapInput.TexCoord3.xy = input.TexCoord3.xy + parallaxAmount * parallaxDir;
-	flowmapParallaxOffset = WaterEffects::GetFlowmapParallaxOffset(input, flowmapDimensions, viewDirection, normalScalesRcp);
+	flowmapParallaxOffset = WaterEffects::GetFlowmapParallaxOffset(input, flowmapDimensions, viewDirection, normalScalesRcp, waterParallaxDetailWeight);
 #				endif
 
 	// Calculate cell blend weights using parallaxed input
@@ -1184,7 +1202,16 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WPosition.xyz, 1)).xyz;
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 
-	WaterNormalData waterData = GetWaterNormal(input, distanceBlendFactor, depthControl.z, viewDirection, depth, eyeIndex);
+	float waterParallaxDetailWeight = 1.0;
+#			if defined(VR) && defined(WATER_PARALLAX)
+	float waterParallaxFoveationMode = SharedData::VRFoveationData1.z;
+	[branch] if (waterParallaxFoveationMode >= FOVEATED_DETAIL_MODE_FEATHERED)
+	{
+		waterParallaxDetailWeight = GetVRWaterParallaxDetailWeight(saturate(screenUV), eyeIndex);
+	}
+#			endif
+
+	WaterNormalData waterData = GetWaterNormal(input, distanceBlendFactor, depthControl.z, viewDirection, depth, eyeIndex, waterParallaxDetailWeight);
 	float3 normal = waterData.normal;
 
 	float fresnel = GetFresnelValue(normal, viewDirection);

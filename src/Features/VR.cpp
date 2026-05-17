@@ -10,6 +10,7 @@
 #include "ScreenSpaceShadows.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "WaterEffects.h"
 #include <openvr.h>
 
 #include "Globals.h"
@@ -82,6 +83,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableUtilityFoveationHardCutoff,
 	EnableSSRFoveation,
 	EnableSSRFoveationHardCutoff,
+	EnableWaterParallaxFoveation,
+	EnableWaterParallaxFoveationHardCutoff,
 	EnableDynamicCubemapFoveation,
 	EnableDynamicCubemapVisibilityThrottle,
 	menuOverlayPath)
@@ -1110,23 +1113,28 @@ namespace
 		auto& settings = vr.settings;
 		auto& upscaling = globals::features::upscaling;
 		auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+		auto& waterEffects = globals::features::waterEffects;
 		const bool isVR = REL::Module::IsVR();
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
 		constexpr float foveatedProfileFullCoverageThreshold = 0.999f;
 		const bool foveatedProfileActive = isVR && profile.available && profile.coverageArea < foveatedProfileFullCoverageThreshold;
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
+		const bool waterParallaxAvailable = waterEffects.loaded;
 		const bool lightingActive = settings.EnableLightingFoveation && foveatedProfileActive;
 		const bool utilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
 		const bool ssrActive = settings.EnableSSRFoveation && ssrAvailable && foveatedProfileActive;
+		const bool waterParallaxActive = settings.EnableWaterParallaxFoveation && waterParallaxAvailable && foveatedProfileActive;
 		const bool cubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
 		const bool cubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
 		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" : "feathered";
 		const char* utilityMode = !settings.EnableUtilityFoveation ? "disabled" : settings.EnableUtilityFoveationHardCutoff ? "hard cutoff" : "feathered";
 		const char* ssrMode = !settings.EnableSSRFoveation ? "disabled" : settings.EnableSSRFoveationHardCutoff ? "hard cutoff" : "feathered";
+		const char* waterParallaxMode = !settings.EnableWaterParallaxFoveation ? "disabled" : settings.EnableWaterParallaxFoveationHardCutoff ? "hard cutoff" : "feathered";
 		const bool anyFoveationEnabled =
 			settings.EnableLightingFoveation ||
 			settings.EnableUtilityFoveation ||
 			settings.EnableSSRFoveation ||
+			settings.EnableWaterParallaxFoveation ||
 			settings.EnableDynamicCubemapFoveation ||
 			settings.EnableDynamicCubemapVisibilityThrottle;
 		const bool anyCubemapFoveationEnabled =
@@ -1188,6 +1196,24 @@ namespace
 
 			ImGui::Separator();
 
+			ImGui::Checkbox("FOV Water Parallax Detail", &settings.EnableWaterParallaxFoveation);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive Water Effects parallax loops in VR.");
+				ImGui::TextUnformatted("Inside the FOV mask keeps full water parallax. The feather band uses fewer parallax steps and fades offsets toward base water normals.");
+				ImGui::TextUnformatted("Base water color, normal sampling, reflection, refraction, and Wetterness ripple paths remain active.");
+			}
+
+			ImGui::BeginDisabled(!settings.EnableWaterParallaxFoveation);
+			ImGui::Checkbox("Hard Cutoff Outside FOV##WaterParallax", &settings.EnableWaterParallaxFoveationHardCutoff);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses a binary mask for Water Effects parallax detail.");
+				ImGui::TextUnformatted("Inside the FOV mask keeps full parallax; outside the mask skips parallax offsets and uses base water normal UVs.");
+				ImGui::TextUnformatted("This assumes only the foveated area is visibly important and can make water microdetail transitions more visible near the mask edge.");
+			}
+			ImGui::EndDisabled();
+
+			ImGui::Separator();
+
 			ImGui::Checkbox("FOV Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Uses the active Upscaling FOV profile as the VR-only foveation gate for Dynamic Cubemap update cadence.");
@@ -1210,6 +1236,8 @@ namespace
 			ImGui::Text("Utility shadowmask mode: %s", utilityMode);
 			ImGui::Text("SSR raymarch foveation: %s", ssrActive ? "active" : "inactive");
 			ImGui::Text("SSR raymarch mode: %s", ssrMode);
+			ImGui::Text("Water parallax foveation: %s", waterParallaxActive ? "active" : "inactive");
+			ImGui::Text("Water parallax mode: %s", waterParallaxMode);
 			ImGui::Text("Dynamic cubemap cadence: %s", cubemapCadenceActive ? "active" : "inactive");
 			ImGui::Text("Dynamic cubemap visibility throttle: %s", cubemapVisibilityActive ? "active" : "inactive");
 			ImGui::Text("FOV profile: %s", profile.available ? "available" : "unavailable");
@@ -1231,6 +1259,9 @@ namespace
 				if (isVR && dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0 && !dynamicCubemaps.enabledAtBoot) {
 					ImGui::TextDisabled("VR SSR must be enabled before startup.");
 				}
+			}
+			if (settings.EnableWaterParallaxFoveation && !waterParallaxAvailable) {
+				ImGui::TextDisabled("Requires Water Effects.");
 			}
 		}
 	}

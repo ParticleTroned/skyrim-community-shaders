@@ -182,6 +182,8 @@ public:
 		bool EnableUtilityFoveationHardCutoff = false;
 		bool EnableSSRFoveation = false;
 		bool EnableSSRFoveationHardCutoff = false;
+		bool EnableWaterParallaxFoveation = false;
+		bool EnableWaterParallaxFoveationHardCutoff = false;
 		bool EnableDynamicCubemapFoveation = false;
 		bool EnableDynamicCubemapVisibilityThrottle = false;
 

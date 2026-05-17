@@ -18,6 +18,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/WaterEffects.h"
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
@@ -1089,11 +1090,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
 		const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+		const auto& waterEffects = globals::features::waterEffects;
 		const bool dynamicSSRActive = dynamicCubemaps.IsSSRRuntimeActive();
+		const bool waterParallaxActive = vr.settings.EnableWaterParallaxFoveation && waterEffects.loaded;
 		const bool anyShaderFoveationEnabled =
 			vr.settings.EnableLightingFoveation ||
 			vr.settings.EnableUtilityFoveation ||
-			(vr.settings.EnableSSRFoveation && dynamicSSRActive);
+			(vr.settings.EnableSSRFoveation && dynamicSSRActive) ||
+			waterParallaxActive;
 		if (globals::game::isVR &&
 			vr.loaded &&
 			anyShaderFoveationEnabled &&
@@ -1111,6 +1115,9 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				const float ssrFoveationMode = GetVRFoveationMode(
 					vr.settings.EnableSSRFoveation && dynamicSSRActive,
 					vr.settings.EnableSSRFoveationHardCutoff);
+				const float waterParallaxFoveationMode = GetVRFoveationMode(
+					waterParallaxActive,
+					vr.settings.EnableWaterParallaxFoveationHardCutoff);
 				data.VRFoveationData0 = {
 					centerScale,
 					FoveatedCommon::kCenterFeather,
@@ -1120,7 +1127,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				data.VRFoveationData1 = {
 					foveationActive ? utilityFoveationMode : kVRFoveationModeOff,
 					foveationActive ? ssrFoveationMode : kVRFoveationModeOff,
-					0.0f,
+					foveationActive ? waterParallaxFoveationMode : kVRFoveationModeOff,
 					0.0f
 				};
 				data.VRFoveationCenterOffsets = {

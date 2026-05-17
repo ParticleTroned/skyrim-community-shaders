@@ -519,15 +519,6 @@ namespace
 		return std::pow(std::max(pNorm, 0.0f), 1.0f / FoveatedCommon::kMaskShapePower);
 	}
 
-	float ScaleVerticalFovForViewport(float fullVerticalFov, uint32_t viewportHeight, uint32_t fullHeight)
-	{
-		if (!std::isfinite(fullVerticalFov) || fullVerticalFov <= 0.0f || !viewportHeight || !fullHeight)
-			return fullVerticalFov;
-
-		const float viewportScaleY = std::clamp(static_cast<float>(viewportHeight) / static_cast<float>(fullHeight), 1e-4f, 1.0f);
-		return 2.0f * std::atan(viewportScaleY * std::tan(fullVerticalFov * 0.5f));
-	}
-
 	float FoveatedMaskDistancePixelCenter(uint32_t x, uint32_t y, uint32_t width, uint32_t height, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY)
 	{
 		const float invWidth = width > 0 ? 1.0f / static_cast<float>(width) : 0.0f;
@@ -3254,8 +3245,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 			rect.outputHeight,
 			static_cast<float>(std::max(inputWidthPerEye, 1u)),
 			static_cast<float>(std::max(inputHeight, 1u)),
-			settings.sharpnessFSR,
-			ScaleVerticalFovForViewport(Util::GetVerticalFOVRad(), rect.outputHeight, outputHeight));
+			settings.sharpnessFSR);
 	}
 	if (!dispatchOK)
 		return false;

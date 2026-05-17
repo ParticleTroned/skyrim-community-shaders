@@ -16,7 +16,7 @@ namespace FeatureVersions
         {"ExtendedMaterials"sv,    {1,1,0}},
         {"ExtendedTranslucency"sv, {1,0,0}},
         {"GrassCollision"sv,       {3,0,2}}, 
-        {"GrassLighting"sv,        {2,0,0}},
+        {"GrassLighting"sv,        {2,0,6}},
         {"HairSpecular"sv,         {1,0,3}},  
         {"ImageBasedLighting"sv,   {1,0,1}},
         {"InteriorSun"sv,          {1,0,0}},

@@ -50,8 +50,9 @@ public:
 		kDLSS
 	};
 
-	// 0=Native/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality, 4=Balanced,
-	// 5=Performance, 6=Ultra Performance
+	// Shared DLSS/FSR/FSR4 render-scale presets:
+	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
+	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
 	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
 
@@ -79,7 +80,7 @@ public:
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 0;  // Default to DLAA / Native AA
+		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 1;

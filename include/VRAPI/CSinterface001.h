@@ -25,10 +25,13 @@ namespace CSPluginAPI
 	struct ICSInterface001;
 	ICSInterface001* GetCSInterface001();
 
+	// Legacy name kept for source/binary compatibility. These values are shared
+	// upscaler render-scale presets for DLSS, FSR 3.1.5, and runtime FSR4.
 	enum class DLSSMode : uint32_t
 	{
 		// Values 0-4 are kept stable for existing compiled API users.
-		kDLAA = 0,
+		kDLAA = 0,  // Native render scale: DLAA for DLSS, Native AA for FSR/FSR4.
+		kNativeAA = kDLAA,
 		kQuality = 1,
 		kBalanced = 2,
 		kPerformance = 3,
@@ -36,6 +39,8 @@ namespace CSPluginAPI
 		kHoshipa = 5,
 		kUltraQuality = 6
 	};
+
+	using UpscalePreset = DLSSMode;
 
 	enum class DLSSProfile : uint32_t
 	{
@@ -61,13 +66,18 @@ namespace CSPluginAPI
 		virtual bool GetVolumetricLightingExteriorEnabled() = 0;
 		virtual void SetVolumetricLightingExteriorEnabled(bool enabled) = 0;
 
-		// DLSS quality mode only (does not expose reflex controls).
+		// Legacy names retained for compatibility. These control the shared
+		// DLSS/FSR/FSR4 upscaler preset, not only DLSS.
 		virtual DLSSMode GetDLSSMode() = 0;
 		virtual void SetDLSSMode(DLSSMode mode) = 0;
+
+		UpscalePreset GetUpscalePreset() { return GetDLSSMode(); }
+		void SetUpscalePreset(UpscalePreset preset) { SetDLSSMode(preset); }
 
 		virtual bool GetLightLimitFixContactShadowsEnabled() = 0;
 		virtual void SetLightLimitFixContactShadowsEnabled(bool enabled) = 0;
 
+		// DLSS profile selection only. This does not affect FSR 3.1.5 or FSR4.
 		virtual DLSSProfile GetDLSSProfile() = 0;
 		virtual void SetDLSSProfile(DLSSProfile profile) = 0;
 	};

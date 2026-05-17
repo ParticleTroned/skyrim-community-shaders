@@ -16,9 +16,10 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 - Screen Space Shadows toggle (`SSS` in method names)
 - Screen Space GI toggle
 - Volumetric Lighting Exterior toggle
-- DLSS quality mode control (`DLAA`, `Hoshipa`, `Ultra Quality`, `Quality`, `Balanced`, `Performance`, `Ultra Performance`)
+- Shared upscaler preset control for DLSS, FSR 3.1.5, and runtime FSR4 (`DLAA`/`Native AA`, `Hoshipa`, `Ultra Quality`, `Quality`, `Balanced`, `Performance`, `Ultra Performance`)
+- DLSS profile control (`J`, `K`, `L`, `M`, `F`)
 
-The first three are runtime toggles. DLSS exposure is limited to quality mode only.
+The first three are runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. The legacy API names still say `DLSSMode` for compatibility. DLSS profile control is DLSS-only.
 
 ## Files You Need In The Consumer Mod
 
@@ -91,26 +92,32 @@ void SetShadowsEnabled(bool enabled)
 - `void SetSSGIEnabled(bool enabled)`
 - `bool GetVolumetricLightingExteriorEnabled()`
 - `void SetVolumetricLightingExteriorEnabled(bool enabled)`
-- `DLSSMode GetDLSSMode()`
-- `void SetDLSSMode(DLSSMode mode)`
+- `DLSSMode GetDLSSMode()` / `void SetDLSSMode(DLSSMode mode)` (legacy names for the shared upscaler preset)
+- `UpscalePreset GetUpscalePreset()` / `void SetUpscalePreset(UpscalePreset preset)` (header convenience wrappers)
+- `DLSSProfile GetDLSSProfile()`
+- `void SetDLSSProfile(DLSSProfile profile)`
 
-`DLSSMode` values:
+`DLSSMode` / `UpscalePreset` values:
 
-- `DLSSMode::kDLAA` (1.00x)
-- `DLSSMode::kHoshipa` (0.85x)
-- `DLSSMode::kUltraQuality` (0.77x)
-- `DLSSMode::kQuality` (0.67x)
-- `DLSSMode::kBalanced` (0.59x)
-- `DLSSMode::kPerformance` (0.50x)
-- `DLSSMode::kUltraPerformance` (0.33x)
+- `DLSSMode::kDLAA` / `UpscalePreset::kNativeAA` (1.00x; shown as `DLAA` for DLSS and `Native AA` for FSR/FSR4)
+- `DLSSMode::kHoshipa` / `UpscalePreset::kHoshipa` (0.85x)
+- `DLSSMode::kUltraQuality` / `UpscalePreset::kUltraQuality` (0.77x)
+- `DLSSMode::kQuality` / `UpscalePreset::kQuality` (0.67x)
+- `DLSSMode::kBalanced` / `UpscalePreset::kBalanced` (0.59x)
+- `DLSSMode::kPerformance` / `UpscalePreset::kPerformance` (0.50x)
+- `DLSSMode::kUltraPerformance` / `UpscalePreset::kUltraPerformance` (0.33x)
 
-Numeric enum values keep backwards compatibility for the original five modes; they are not the same as the in-menu order for the two newer modes.
+Numeric enum values keep backwards compatibility for the original five modes; they are not the same as the in-menu order for the two newer modes. `UpscalePreset::kNativeAA` is an alias for `DLSSMode::kDLAA`.
 
 ## Behavior Notes
 
 - `SSS` means **Screen Space Shadows**, not Subsurface Scattering.
 - Setters change runtime state in Community Shaders.
-- DLSS API controls only the quality mode; it does **not** expose DLSS profile or Reflex settings.
+- `DLSSMode` and `GetDLSSMode`/`SetDLSSMode` are legacy API names. They control the shared upscaler preset for DLSS, FSR 3.1.5, and runtime FSR4.
+- `UpscalePreset` is an alias for `DLSSMode`; new integrations should prefer the `UpscalePreset` wording.
+- These presets are Community Shaders render-scale presets, not AMD FSR quality enum values. `Hoshipa` and `Ultra Quality` are valid for both DLSS and FSR/FSR4 because the backend receives explicit render and display sizes.
+- DLSS profile control is DLSS-only and does **not** affect FSR 3.1.5 or FSR4.
+- Reflex settings are not exposed by this API.
 - If the API pointer is null, Community Shaders is missing, too old, or not ready yet.
 - Call from the main/game thread, or queue via SKSE task interface.
 
@@ -118,6 +125,7 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 
 - Always null-check the API pointer.
 - Prefer checking `getBuildNumber()` before relying on behavior.
-- `GetDLSSMode`/`SetDLSSMode` require `getBuildNumber() >= 2`.
-- `DLSSMode::kHoshipa` and `DLSSMode::kUltraQuality` require `getBuildNumber() >= 4`.
+- `GetDLSSMode`/`SetDLSSMode` require `getBuildNumber() >= 2`; `GetUpscalePreset`/`SetUpscalePreset` are header wrappers over those methods.
+- `GetDLSSProfile`/`SetDLSSProfile` require `getBuildNumber() >= 3`.
+- `DLSSMode::kHoshipa` / `UpscalePreset::kHoshipa` and `DLSSMode::kUltraQuality` / `UpscalePreset::kUltraQuality` require `getBuildNumber() >= 4`.
 - Treat missing API as optional integration and continue without hard failure.

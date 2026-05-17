@@ -58,9 +58,9 @@ namespace CSPluginAPI
 			return enabled ? static_cast<TFlag>(1) : static_cast<TFlag>(0);
 		}
 
-		inline bool IsValidDLSSMode(DLSSMode mode)
+		inline bool IsValidUpscalePreset(UpscalePreset preset)
 		{
-			switch (mode) {
+			switch (preset) {
 			case DLSSMode::kDLAA:
 			case DLSSMode::kQuality:
 			case DLSSMode::kBalanced:
@@ -74,9 +74,9 @@ namespace CSPluginAPI
 			}
 		}
 
-		inline uint32_t DLSSModeToQualityMode(DLSSMode mode)
+		inline uint32_t UpscalePresetToQualityMode(UpscalePreset preset)
 		{
-			switch (mode) {
+			switch (preset) {
 			case DLSSMode::kDLAA:
 				return 0u;
 			case DLSSMode::kHoshipa:
@@ -96,7 +96,7 @@ namespace CSPluginAPI
 			}
 		}
 
-		inline DLSSMode QualityModeToDLSSMode(uint32_t mode)
+		inline UpscalePreset QualityModeToUpscalePreset(uint32_t mode)
 		{
 			switch (mode) {
 			case 1:
@@ -196,17 +196,17 @@ namespace CSPluginAPI
 	inline DLSSMode CSInterface001::GetDLSSMode()
 	{
 		const uint32_t clampedMode = std::min(globals::features::upscaling.settings.qualityMode, Upscaling::kQualityModeMaxIndex);
-		return detail::QualityModeToDLSSMode(clampedMode);
+		return detail::QualityModeToUpscalePreset(clampedMode);
 	}
 
 	inline void CSInterface001::SetDLSSMode(DLSSMode mode)
 	{
-		if (!detail::IsValidDLSSMode(mode)) {
-			logger::warn("[CS API] Ignoring invalid DLSS mode value {}", static_cast<uint32_t>(mode));
+		if (!detail::IsValidUpscalePreset(mode)) {
+			logger::warn("[CS API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(mode));
 			return;
 		}
 
-		globals::features::upscaling.settings.qualityMode = detail::DLSSModeToQualityMode(mode);
+		globals::features::upscaling.settings.qualityMode = detail::UpscalePresetToQualityMode(mode);
 	}
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()

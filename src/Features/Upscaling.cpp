@@ -1063,7 +1063,7 @@ void Upscaling::DrawSettings()
 			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls internal render scale / quality level.");
+			ImGui::TextUnformatted("Controls the shared DLSS/FSR/FSR4 internal render scale / quality level.");
 			ImGui::TextUnformatted(
 				"Range: low 0 (highest quality, lowest performance gain) to high 6 (highest performance gain, lowest quality).");
 		}

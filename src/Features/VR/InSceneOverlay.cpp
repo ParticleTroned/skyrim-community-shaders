@@ -24,6 +24,30 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+	bool ShouldRenderInSceneMenu(const VR& vr)
+	{
+		return vr.ShouldUseInSceneOverlay() &&
+		       globals::menu &&
+		       (globals::menu->IsEnabled || globals::menu->overlayVisible || vr.ShouldShowAutoHideOverlay()) &&
+		       vr.menuTexture &&
+		       vr.settings.attachMode != AttachMode::None;
+	}
+
+	bool MatchesSubmitCopyDesc(const D3D11_TEXTURE2D_DESC& lhs, const D3D11_TEXTURE2D_DESC& rhs)
+	{
+		return lhs.Width == rhs.Width &&
+		       lhs.Height == rhs.Height &&
+		       lhs.MipLevels == rhs.MipLevels &&
+		       lhs.ArraySize == rhs.ArraySize &&
+		       lhs.Format == rhs.Format &&
+		       lhs.SampleDesc.Count == rhs.SampleDesc.Count &&
+		       lhs.SampleDesc.Quality == rhs.SampleDesc.Quality &&
+		       lhs.Usage == rhs.Usage &&
+		       lhs.BindFlags == rhs.BindFlags &&
+		       lhs.CPUAccessFlags == rhs.CPUAccessFlags &&
+		       lhs.MiscFlags == rhs.MiscFlags;
+	}
+
 	struct IVRCompositor_Submit
 	{
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
@@ -41,7 +65,9 @@ namespace
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
 
-				vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(pTexture->handle), pBounds);
+				vr::Texture_t overlayTexture{};
+				if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture))
+					return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
 			}
 			return func(_this, eEye, pTexture, pBounds, nSubmitFlags);
 		}
@@ -264,19 +290,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Only render if overlay should be visible
-	if (!ShouldUseInSceneOverlay() || !globals::menu || !(globals::menu->IsEnabled || globals::menu->overlayVisible || ShouldShowAutoHideOverlay())) {
-		if (perf)
-			perf->EndEvent();
-		return;
-	}
-	if (!menuTexture) {
-		if (perf)
-			perf->EndEvent();
-		return;
-	}
-
-	// Skip rendering when attach mode is None (disabled)
-	if (settings.attachMode == AttachMode::None) {
+	if (!ShouldRenderInSceneMenu(*this)) {
 		if (perf)
 			perf->EndEvent();
 		return;
@@ -603,6 +617,52 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 
 	if (perf)
 		perf->EndEvent();
+}
+
+bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture)
+{
+	if (!inputTexture || !inputTexture->handle || inputTexture->eType != vr::TextureType_DirectX || !ShouldRenderInSceneMenu(*this)) {
+		return false;
+	}
+
+	auto* sourceTexture = static_cast<ID3D11Texture2D*>(inputTexture->handle);
+	auto* device = globals::d3d::device;
+	auto* context = globals::d3d::context;
+	if (!sourceTexture || !device || !context) {
+		return false;
+	}
+
+	const int eyeIdx = static_cast<int>(eye);
+	if (eyeIdx < 0 || eyeIdx >= 2) {
+		return false;
+	}
+
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+
+	auto& submitCopy = inSceneResources.submitCopies[eyeIdx];
+	if (!submitCopy.texture || !MatchesSubmitCopyDesc(submitCopy.sourceDesc, sourceDesc)) {
+		D3D11_TEXTURE2D_DESC copyDesc = sourceDesc;
+		copyDesc.Usage = D3D11_USAGE_DEFAULT;
+		copyDesc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+		copyDesc.CPUAccessFlags = 0;
+		copyDesc.MiscFlags = 0;
+
+		submitCopy.texture = nullptr;
+		if (FAILED(device->CreateTexture2D(&copyDesc, nullptr, submitCopy.texture.put()))) {
+			logger::error("VR: Failed to create in-scene overlay submit copy for eye {}", eyeIdx);
+			return false;
+		}
+		submitCopy.sourceDesc = sourceDesc;
+		Util::SetResourceName(submitCopy.texture.get(), eyeIdx == 0 ? "VR::InSceneOverlaySubmitCopyLeft" : "VR::InSceneOverlaySubmitCopyRight");
+	}
+
+	context->CopyResource(submitCopy.texture.get(), sourceTexture);
+	RenderInSceneOverlay(eye, submitCopy.texture.get(), bounds);
+
+	outputTexture = *inputTexture;
+	outputTexture.handle = submitCopy.texture.get();
+	return true;
 }
 
 void VR::InstallSubmitHook()

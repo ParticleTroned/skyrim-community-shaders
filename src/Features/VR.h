@@ -525,7 +525,13 @@ public:
 			ID3D11Texture2D* texture = nullptr;
 			winrt::com_ptr<ID3D11RenderTargetView> rtv;
 		};
+		struct SubmitCopy
+		{
+			D3D11_TEXTURE2D_DESC sourceDesc{};
+			winrt::com_ptr<ID3D11Texture2D> texture;
+		};
 		CachedRTV cachedEyeRTVs[2];
+		SubmitCopy submitCopies[2];
 		vr::TrackedDevicePose_t cachedRenderPoses[vr::k_unMaxTrackedDeviceCount]{};
 		uint32_t cachedPoseFrame = 0;
 		bool cachedPosesValid = false;
@@ -548,6 +554,7 @@ public:
 	bool IsOpenVRCompatible() const;
 	void InitInSceneResources();
 	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds);
+	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	void InstallSubmitHook();
 	bool GetGripPressed(bool isLeft, bool isRight) const;
 };

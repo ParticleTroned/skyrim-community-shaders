@@ -389,7 +389,8 @@ bool VR::ShouldUseInSceneOverlay() const
 		return true;
 	case Settings::MenuOverlayPath::Auto:
 	default:
-		return true;
+		return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
+		       !openVRInfo.hasOverlayInterface;
 	}
 }
 
@@ -910,7 +911,7 @@ namespace
 				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Auto uses the in-scene submit-hook path.");
+				ImGui::Text("Auto uses in-scene for OpenComposite, IVROverlay for SteamVR when available.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
 			}

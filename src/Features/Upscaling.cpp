@@ -66,7 +66,8 @@ namespace
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.25f;
 	constexpr float kFoveatedMaskOffsetResolvedMax = 0.25f;
 	const ImVec4 kFovControlTextColor(0.80f, 0.88f, 1.00f, 1.0f);
-	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR Native AA and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
+	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
+	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
 
 - Upscaling FOV + Peripheral TAA adds a yellow TAA ring around the green center to reduce shimmer. It costs more than Upscaling FOV alone, but can let you keep the green center smaller and thereby increase performance wins compared to Upscaling FOV alone.
 
@@ -681,12 +682,7 @@ namespace
 		o_json.erase("periphery_taa_center_blend_feather");
 	}
 
-	bool IsFSRNativeQualityMode(const Upscaling::Settings& settings)
-	{
-		return ClampQualityModeUInt(settings.qualityMode) == 0;
-	}
-
-	bool SupportsFoveatedVendorDispatch(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
+	bool SupportsFoveatedVendorDispatch(Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		if (!globals::game::isVR)
 			return false;
@@ -695,7 +691,7 @@ namespace
 		case Upscaling::UpscaleMethod::kDLSS:
 			return true;
 		case Upscaling::UpscaleMethod::kFSR:
-			return IsFSRNativeQualityMode(settings);
+			return true;
 		default:
 			return false;
 		}
@@ -703,7 +699,7 @@ namespace
 
 	bool IsFoveatedVendorDispatchRequested(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
-		return SupportsFoveatedVendorDispatch(settings, a_upscaleMethod) && settings.foveatedVendorDispatch;
+		return SupportsFoveatedVendorDispatch(a_upscaleMethod) && settings.foveatedVendorDispatch;
 	}
 
 	bool IsVRRuntimeActive()
@@ -1138,13 +1134,11 @@ void Upscaling::DrawSettings()
 
 		if (globals::game::isVR) {
 			SanitizeFoveatedSettings(settings);
-			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(settings, upscaleMethod);
+			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 			if (foveatedDispatchSupportedForMethod) {
 				ImGui::TextDisabled("VR FOV mask setup is configured in VR > Foveation.");
-			} else if (upscaleMethod == UpscaleMethod::kFSR && !IsFSRNativeQualityMode(settings)) {
-				ImGui::TextDisabled("Foveated FSR is currently available only in Native AA mode.");
 			} else {
-				ImGui::TextDisabled("VR FOV mask setup is available only with DLSS or FSR Native AA.");
+				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 			}
 
 			if (streamline.reflexSupportedOnCurrentAdapter)
@@ -1429,7 +1423,7 @@ void Upscaling::DrawFoveatedSettings()
 
 	SanitizeFoveatedSettings(settings);
 	const UpscaleMethod upscaleMethod = GetUpscaleMethod();
-	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(settings, upscaleMethod);
+	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 
 	if (foveatedDispatchSupportedForMethod) {
 		{
@@ -1438,14 +1432,10 @@ void Upscaling::DrawFoveatedSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Master switch for VR FOV-mask upscaling.");
-			if (upscaleMethod == UpscaleMethod::kFSR)
-				ImGui::TextUnformatted("FSR foveation is currently limited to Native AA.");
 			ImGui::TextUnformatted("On: enables foveated upscaling controls and the shared FOV mask used by VR foveated effects.");
 		}
-	} else if (upscaleMethod == UpscaleMethod::kFSR && !IsFSRNativeQualityMode(settings)) {
-		ImGui::TextDisabled("Foveated FSR is currently available only in Native AA mode.");
 	} else {
-		ImGui::TextDisabled("VR FOV mask setup is available only with DLSS or FSR Native AA.");
+		ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 	}
 
 	const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
@@ -3182,7 +3172,7 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 
 bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX)
 {
-	if (!SupportsFoveatedVendorDispatch(settings, a_upscaleMethod))
+	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
 
 	const bool useDLSS = a_upscaleMethod == UpscaleMethod::kDLSS;
@@ -3327,7 +3317,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 {
 	if (!globals::game::isVR)
 		return false;
-	if (!SupportsFoveatedVendorDispatch(settings, a_upscaleMethod))
+	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
 
 	if (!colorTexture || !depthTexture || !motionVectors || !reactiveMask || !transparencyMask)

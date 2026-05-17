@@ -1075,7 +1075,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
 		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
-		data.VRFoveationData1 = { FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off), 0.0f, 0.0f, 0.0f };
+		data.VRFoveationModes = { 0.0f, 0.0f, 0.0f, 0.0f };
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
 		const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
@@ -1085,27 +1085,22 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const bool dynamicSSRActive = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxActive = vr.settings.EnableWaterParallaxFoveation && waterEffects.loaded;
 		const bool wetternessActive = vr.settings.EnableWetternessFoveation && wetterness.IsRuntimeActive() && !wetnessEffects.loaded;
-		const bool anyShaderFoveationEnabled =
+		const bool anyFoveatedShaderDetailEnabled =
 			vr.settings.EnableLightingFoveation ||
-			vr.settings.EnableUtilityFoveation ||
 			(vr.settings.EnableSSRFoveation && dynamicSSRActive) ||
 			waterParallaxActive ||
 			wetternessActive;
 		if (globals::game::isVR &&
 			vr.loaded &&
-			anyShaderFoveationEnabled &&
+			anyFoveatedShaderDetailEnabled &&
 			upscaling.loaded) {
 			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 			if (profile.available) {
 				const float centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
 				const bool foveationActive = FoveatedCommon::IsActiveCoverage(centerScale);
 				const float disabledFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off);
-				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
-					vr.settings.EnableLightingFoveation,
-					vr.settings.EnableLightingFoveationHardCutoff));
-				const float utilityFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
-					vr.settings.EnableUtilityFoveation,
-					vr.settings.EnableUtilityFoveationHardCutoff));
+				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(
+					FoveatedCommon::GetDetailMode(vr.settings.EnableLightingFoveation, vr.settings.EnableLightingFoveationHardCutoff));
 				const float ssrFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableSSRFoveation && dynamicSSRActive,
 					vr.settings.EnableSSRFoveationHardCutoff));
@@ -1115,17 +1110,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				const float wetternessFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					wetternessActive,
 					vr.settings.EnableWetternessFoveationHardCutoff));
-				data.VRFoveationData0 = {
-					centerScale,
-					FoveatedCommon::kCenterFeather,
-					FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale),
-					foveationActive ? lightingFoveationMode : disabledFoveationMode
-				};
-				data.VRFoveationData1 = {
-					foveationActive ? utilityFoveationMode : disabledFoveationMode,
+				const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
+				const float activeLightingMode = foveationActive ? lightingFoveationMode : disabledFoveationMode;
+				data.VRFoveationData0 = { centerScale, FoveatedCommon::kCenterFeather, centerHorizontalScale, activeLightingMode };
+				data.VRFoveationModes = {
 					foveationActive ? ssrFoveationMode : disabledFoveationMode,
 					foveationActive ? waterParallaxFoveationMode : disabledFoveationMode,
-					foveationActive ? wetternessFoveationMode : disabledFoveationMode
+					foveationActive ? wetternessFoveationMode : disabledFoveationMode,
+					disabledFoveationMode
 				};
 				data.VRFoveationCenterOffsets = {
 					profile.centerOffsets[0].x,

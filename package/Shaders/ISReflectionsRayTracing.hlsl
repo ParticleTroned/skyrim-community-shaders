@@ -13,7 +13,7 @@ struct PS_OUTPUT
 
 #if defined(PSHADER)
 #	if defined(VR)
-#		include "Common/FoveatedMask.hlsli"
+#		include "Common/FoveatedShaderDetail.hlsli"
 #	endif
 
 SamplerState NormalSampler : register(s0);
@@ -43,7 +43,7 @@ static const int minFoveatedIterations = 16;
 float GetVRSSRFoveationWeight(float ssrFoveationMode, float2 eyeUv, uint eyeIndex)
 {
 	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
-	return FoveatedComputeDetailWeight(
+	return FoveatedEvaluateShaderDetailWeight(
 		ssrFoveationMode,
 		eyeUv,
 		SharedData::VRFoveationData0.x,
@@ -54,7 +54,7 @@ float GetVRSSRFoveationWeight(float ssrFoveationMode, float2 eyeUv, uint eyeInde
 
 bool ShouldEvaluateVRSSR(float detailWeight)
 {
-	return FoveatedShouldEvaluateDetail(detailWeight);
+	return FoveatedIsShaderDetailActive(detailWeight);
 }
 
 int GetSSRRaymarchIterations(float foveationWeight)
@@ -226,8 +226,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float ssrFoveationWeight = 1.0;
 #	if defined(VR)
-	float ssrFoveationMode = SharedData::VRFoveationData1.y;
-	[branch] if (ssrFoveationMode >= FOVEATED_DETAIL_MODE_FEATHERED)
+	float ssrFoveationMode = SharedData::VRFoveationModes.x;
+	[branch] if (ssrFoveationMode >= FOVEATED_SHADER_DETAIL_MODE_FEATHERED)
 	{
 		ssrFoveationWeight = GetVRSSRFoveationWeight(ssrFoveationMode, uv, eyeIndex);
 		[branch] if (!ShouldEvaluateVRSSR(ssrFoveationWeight))

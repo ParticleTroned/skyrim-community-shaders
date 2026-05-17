@@ -2211,6 +2211,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 	}
 
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
+	submitStageHandoffTexture = nullptr;
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
@@ -2273,6 +2274,7 @@ void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
+	submitStageHandoffTexture = nullptr;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -5404,11 +5406,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 
 	const uint32_t currentFrame = state->frameCount;
-	if (submitStageHandoffFrame != currentFrame) {
+	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+	if (submitStageHandoffFrame != currentFrame || submitStageHandoffTexture != sourceTexture) {
 		static bool loggedMissingHandoff = false;
 		if (!loggedMissingHandoff) {
 			logger::warn(
-				"[Upscaling] Submit-stage {} skipped because the dynamic-resolution handoff has not completed for frame {}.",
+				"[Upscaling] Submit-stage {} skipped because the submitted texture does not match the dynamic-resolution handoff for frame {}.",
 				upscaleMethodName,
 				currentFrame);
 			loggedMissingHandoff = true;
@@ -5416,7 +5419,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 
-	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	sourceTexture->GetDesc(&sourceDesc);
 	if (sourceDesc.SampleDesc.Count != 1) {
@@ -6707,6 +6709,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 
 			if (copiedToOutput) {
 				submitStageHandoffFrame = state->frameCount;
+				submitStageHandoffTexture = outputTexture;
 				releaseRefs();
 				if (globals::game::stateUpdateFlags)
 					globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);

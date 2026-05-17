@@ -25,6 +25,7 @@
 #include "Utils/VRUtils.h"
 #include <DirectXMath.h>
 #include <SimpleMath.h>
+#include <array>
 #include <cmath>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
@@ -1176,23 +1177,22 @@ namespace
 		const bool screenSpaceGIFeatureAvailable = screenSpaceGI.loaded;
 		const bool screenSpaceGIRuntimeActive = screenSpaceGIFeatureAvailable && screenSpaceGI.settings.Enabled;
 		const bool dynamicCubemapsRuntimeActive = dynamicCubemaps.loaded;
-		const bool ssrFoveationEnabled = settings.EnableSSRFoveation && ssrAvailable;
-		const bool waterParallaxFoveationEnabled = settings.EnableWaterParallaxFoveation && waterParallaxAvailable;
-		const bool wetternessFoveationEnabled = settings.EnableWetternessFoveation && wetternessRuntimeActive;
-		const bool dynamicCubemapCadenceEnabled = settings.EnableDynamicCubemapFoveation && dynamicCubemapsRuntimeActive;
-		const bool dynamicCubemapVisibilityEnabled = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemapsRuntimeActive;
-		const bool screenSpaceShadowsEnabled = screenSpaceShadowsRuntimeActive && screenSpaceShadows.bendSettings.EnableFoveated != 0;
-		const bool screenSpaceGIEnabled = screenSpaceGIRuntimeActive && screenSpaceGI.settings.EnableFoveated;
+		const bool lightingFoveationAvailable = foveatedProfileActive;
+		const bool utilityFoveationAvailable = foveatedProfileActive;
+		const bool ssrFoveationAvailable = foveatedProfileActive && ssrAvailable;
+		const bool waterParallaxFoveationAvailable = foveatedProfileActive && waterParallaxAvailable;
+		const bool wetternessFoveationAvailable = foveatedProfileActive && wetternessRuntimeActive;
+		const bool dynamicCubemapFoveationAvailable = foveatedProfileActive && dynamicCubemapsRuntimeActive;
 		const bool anySharedMaskConsumerEnabled =
 			settings.EnableLightingFoveation ||
 			settings.EnableUtilityFoveation ||
-			ssrFoveationEnabled ||
-			waterParallaxFoveationEnabled ||
-			wetternessFoveationEnabled ||
-			dynamicCubemapCadenceEnabled ||
-			dynamicCubemapVisibilityEnabled ||
-			screenSpaceShadowsEnabled ||
-			screenSpaceGIEnabled;
+			(settings.EnableSSRFoveation && ssrAvailable) ||
+			(settings.EnableWaterParallaxFoveation && waterParallaxAvailable) ||
+			(settings.EnableWetternessFoveation && wetternessRuntimeActive) ||
+			(settings.EnableDynamicCubemapFoveation && dynamicCubemapsRuntimeActive) ||
+			(settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemapsRuntimeActive) ||
+			(screenSpaceShadowsRuntimeActive && screenSpaceShadows.bendSettings.EnableFoveated != 0) ||
+			(screenSpaceGIRuntimeActive && screenSpaceGI.settings.EnableFoveated);
 
 		if (profile.available) {
 			ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "Upscaling FOV center");
@@ -1203,6 +1203,14 @@ namespace
 		} else if (anySharedMaskConsumerEnabled) {
 			ImGui::TextDisabled("Shared-mask consumers require active foveated upscaling.");
 		}
+
+		const bool ssrFoveationEnabled = settings.EnableSSRFoveation && ssrAvailable;
+		const bool waterParallaxFoveationEnabled = settings.EnableWaterParallaxFoveation && waterParallaxAvailable;
+		const bool wetternessFoveationEnabled = settings.EnableWetternessFoveation && wetternessRuntimeActive;
+		const bool dynamicCubemapCadenceEnabled = settings.EnableDynamicCubemapFoveation && dynamicCubemapsRuntimeActive;
+		const bool dynamicCubemapVisibilityEnabled = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemapsRuntimeActive;
+		const bool screenSpaceShadowsEnabled = screenSpaceShadowsRuntimeActive && screenSpaceShadows.bendSettings.EnableFoveated != 0;
+		const bool screenSpaceGIEnabled = screenSpaceGIRuntimeActive && screenSpaceGI.settings.EnableFoveated;
 
 		drawSection("Screen-Space Effects");
 		ImGui::BeginDisabled(!foveatedProfileActive || !screenSpaceShadowsRuntimeActive);
@@ -1224,6 +1232,88 @@ namespace
 			ImGui::TextDisabled("FOV SSGI requires Screen Space GI to be enabled.");
 
 		drawSection("Shader Detail Budgets");
+		{
+			struct FoveationToggleRef
+			{
+				bool available = false;
+				bool* enabled = nullptr;
+			};
+
+			struct FoveationFeatureCounts
+			{
+				int available = 0;
+				int enabled = 0;
+			};
+
+			const std::array<FoveationToggleRef, 7> boolFoveationToggles{
+				FoveationToggleRef{ lightingFoveationAvailable, &settings.EnableLightingFoveation },
+				FoveationToggleRef{ utilityFoveationAvailable, &settings.EnableUtilityFoveation },
+				FoveationToggleRef{ ssrFoveationAvailable, &settings.EnableSSRFoveation },
+				FoveationToggleRef{ waterParallaxFoveationAvailable, &settings.EnableWaterParallaxFoveation },
+				FoveationToggleRef{ wetternessFoveationAvailable, &settings.EnableWetternessFoveation },
+				FoveationToggleRef{ dynamicCubemapFoveationAvailable, &settings.EnableDynamicCubemapFoveation },
+				FoveationToggleRef{ dynamicCubemapFoveationAvailable, &settings.EnableDynamicCubemapVisibilityThrottle },
+			};
+
+			auto getFoveationFeatureCounts = [&]() {
+				FoveationFeatureCounts counts{};
+				auto countFoveationFeature = [&](bool a_available, bool a_enabled) {
+					if (!a_available)
+						return;
+					++counts.available;
+					if (a_enabled)
+						++counts.enabled;
+				};
+
+				for (const auto& toggle : boolFoveationToggles) {
+					countFoveationFeature(toggle.available, toggle.enabled && *toggle.enabled);
+				}
+				return counts;
+			};
+
+			FoveationFeatureCounts foveationFeatureCounts = getFoveationFeatureCounts();
+
+			const bool anyFoveationFeatureAvailable = foveationFeatureCounts.available > 0;
+			bool allAvailableFoveationFeaturesEnabled =
+				anyFoveationFeatureAvailable &&
+				foveationFeatureCounts.enabled == foveationFeatureCounts.available;
+
+			{
+				auto masterGuard = Util::DisableGuard(!foveatedProfileActive || !anyFoveationFeatureAvailable);
+				Util::BlueFrameStyleWrapper blueFrameStyle(true);
+				if (ImGui::Checkbox("Shader FOV", &allAvailableFoveationFeaturesEnabled)) {
+					const bool enableFoveationFeatures = allAvailableFoveationFeaturesEnabled;
+					auto applyMasterToggle = [&](const FoveationToggleRef& a_toggle) {
+						if (!a_toggle.enabled)
+							return;
+						if (enableFoveationFeatures) {
+							if (a_toggle.available)
+								*a_toggle.enabled = true;
+						} else {
+							*a_toggle.enabled = false;
+						}
+					};
+
+					for (const auto& toggle : boolFoveationToggles) {
+						applyMasterToggle(toggle);
+					}
+
+					foveationFeatureCounts = getFoveationFeatureCounts();
+				}
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Master switch for eligible shader/detail FOV features and Dynamic Cubemap FOV throttles.");
+				ImGui::TextUnformatted("Screen Space Shadows and FOV SSGI stay controlled separately.");
+				ImGui::TextUnformatted("Does not change Upscaling FOV, mask visualization, mask geometry, Peripheral TAA, or hard-cutoff sub-modes.");
+				ImGui::TextUnformatted("Turning on enables only available features; turning off clears those toggles.");
+			}
+			ImGui::SameLine();
+			if (anyFoveationFeatureAvailable)
+				ImGui::TextDisabled("%d/%d available enabled", foveationFeatureCounts.enabled, foveationFeatureCounts.available);
+			else
+				ImGui::TextDisabled("No Shader FOV features available");
+		}
+		ImGui::Separator();
 		if (!foveatedProfileActive)
 			ImGui::TextDisabled("Lighting, Utility, SSR, Water, and Wetterness shader budgets require active foveated upscaling with FOV area below 1.00.");
 

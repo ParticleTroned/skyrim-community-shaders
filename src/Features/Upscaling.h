@@ -92,6 +92,10 @@ public:
 		float sharpnessDLSS = 0.1f;
 		bool fsr4RuntimeEnable = true;
 		bool fsr4AllowNonRx90Amd = false;
+		bool vrSubmitStageUseOpenVRTargetExtent = true;
+		bool vrSubmitStageScaleInputToOutputTarget = false;
+		bool vrSubmitStageDLSSForceFullEye = false;
+		bool vrSubmitStageLogDiagnostics = false;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;
 		float foveatedCenterHorizontalScale = 1.0f;

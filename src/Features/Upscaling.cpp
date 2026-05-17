@@ -37,6 +37,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sharpnessDLSS,
 	fsr4RuntimeEnable,
 	fsr4AllowNonRx90Amd,
+	vrSubmitStageUseOpenVRTargetExtent,
+	vrSubmitStageScaleInputToOutputTarget,
+	vrSubmitStageDLSSForceFullEye,
+	vrSubmitStageLogDiagnostics,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
@@ -107,6 +111,11 @@ namespace
 		return Upscaling::GetQualityModeResolutionScale(qualityMode);
 	}
 
+	bool IsSubmitStageRequestedUpscalingActive()
+	{
+		return GetSubmitStageRequestedQualityScale() < kDynamicResolutionUpscalingScaleThreshold;
+	}
+
 	bool IsSubmitStageDynamicResolutionActive()
 	{
 		if (!REL::Module::IsVR())
@@ -116,7 +125,7 @@ namespace
 		if (!IsVendorUpscalingMethod(upscaleMethod))
 			return false;
 
-		return GetSubmitStageRequestedQualityScale() < kDynamicResolutionUpscalingScaleThreshold;
+		return IsSubmitStageRequestedUpscalingActive();
 	}
 
 	bool ShouldUseStableSubmitStageDLSSInputs()
@@ -142,9 +151,135 @@ namespace
 		return std::clamp(GetSubmitStageRequestedQualityScale(), 0.1f, 1.0f);
 	}
 
-	float GetSubmitStageInternalDynamicResolutionScale()
+	uint32_t GetSubmitStageOutputEyeWidth(const float2& a_screenSize)
 	{
-		return GetSubmitStageRequestedRenderScale();
+		const auto& settings = globals::features::upscaling.settings;
+		if (settings.vrSubmitStageUseOpenVRTargetExtent && g_submitStageTargetSizeKnown && g_submitStageOutputEyeWidth > 0)
+			return g_submitStageOutputEyeWidth;
+
+		return static_cast<uint32_t>(std::max(1.0f, a_screenSize.x * 0.5f));
+	}
+
+	uint32_t GetSubmitStageOutputEyeHeight(const float2& a_screenSize)
+	{
+		const auto& settings = globals::features::upscaling.settings;
+		if (settings.vrSubmitStageUseOpenVRTargetExtent && g_submitStageTargetSizeKnown && g_submitStageOutputEyeHeight > 0)
+			return g_submitStageOutputEyeHeight;
+
+		return static_cast<uint32_t>(std::max(1.0f, a_screenSize.y));
+	}
+
+	float2 GetSubmitStageOutputFullSize(const float2& a_screenSize)
+	{
+		return {
+			static_cast<float>(GetSubmitStageOutputEyeWidth(a_screenSize) * 2u),
+			static_cast<float>(GetSubmitStageOutputEyeHeight(a_screenSize))
+		};
+	}
+
+	float2 GetSubmitStageInternalDynamicResolutionScale(const float2& a_screenSize)
+	{
+		const float requestedScale = GetSubmitStageRequestedRenderScale();
+		float2 internalScale = { requestedScale, requestedScale };
+		const auto& settings = globals::features::upscaling.settings;
+		if (settings.vrSubmitStageScaleInputToOutputTarget &&
+			g_submitStageTargetSizeKnown &&
+			a_screenSize.x > 0.0f &&
+			a_screenSize.y > 0.0f) {
+			const float2 outputFullSize = GetSubmitStageOutputFullSize(a_screenSize);
+			internalScale.x = std::clamp((outputFullSize.x * requestedScale) / a_screenSize.x, 0.1f, 1.0f);
+			internalScale.y = std::clamp((outputFullSize.y * requestedScale) / a_screenSize.y, 0.1f, 1.0f);
+		}
+
+		return internalScale;
+	}
+
+	bool ShouldUseInternalSubmitStageDynamicResolution(const float2& a_internalScale)
+	{
+		return a_internalScale.x < kDynamicResolutionUpscalingScaleThreshold ||
+		       a_internalScale.y < kDynamicResolutionUpscalingScaleThreshold;
+	}
+
+	void LogSubmitStageVariantChange(bool a_useOpenVRExtent, bool a_scaleInputToOutputTarget, bool a_forceFullEyeDLSS)
+	{
+		logger::debug(
+			"[Upscaling] VR submit-stage A/B variant changed: openVROutput={} scaleInputToOutput={} forceFullEyeDLSS={}",
+			a_useOpenVRExtent,
+			a_scaleInputToOutputTarget,
+			a_forceFullEyeDLSS);
+	}
+
+	void LogSubmitStageDiagnosticsIfChanged(
+		Upscaling::UpscaleMethod a_upscaleMethod,
+		uint32_t a_eyeIndex,
+		const float2& a_screenSize,
+		const float2& a_renderSize,
+		const D3D11_TEXTURE2D_DESC& a_sourceDesc,
+		uint32_t a_eyeWidthIn,
+		uint32_t a_eyeHeightIn,
+		uint32_t a_eyeWidthOut,
+		uint32_t a_eyeHeightOut,
+		bool a_foveatedSubmitRequested)
+	{
+		const auto& settings = globals::features::upscaling.settings;
+		if (!settings.vrSubmitStageLogDiagnostics || a_eyeIndex != 0)
+			return;
+
+		const uint32_t qualityMode = std::min<uint32_t>(settings.qualityMode, Upscaling::kQualityModeMaxIndex);
+		const float requestedScale = GetSubmitStageRequestedRenderScale();
+		const float effectiveScaleX = a_eyeWidthOut > 0 ? static_cast<float>(a_eyeWidthIn) / static_cast<float>(a_eyeWidthOut) : 0.0f;
+		const float effectiveScaleY = a_eyeHeightOut > 0 ? static_cast<float>(a_eyeHeightIn) / static_cast<float>(a_eyeHeightOut) : 0.0f;
+		const float sceneScaleX = a_screenSize.x > 0.0f ? a_renderSize.x / a_screenSize.x : 0.0f;
+		const float sceneScaleY = a_screenSize.y > 0.0f ? a_renderSize.y / a_screenSize.y : 0.0f;
+
+		const std::string key = std::format(
+			"{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+			static_cast<uint32_t>(a_upscaleMethod),
+			qualityMode,
+			static_cast<uint32_t>(std::lround(a_screenSize.x)),
+			static_cast<uint32_t>(std::lround(a_screenSize.y)),
+			static_cast<uint32_t>(std::lround(a_renderSize.x)),
+			static_cast<uint32_t>(std::lround(a_renderSize.y)),
+			a_sourceDesc.Width,
+			a_sourceDesc.Height,
+			a_eyeWidthIn,
+			a_eyeHeightIn,
+			a_eyeWidthOut,
+			a_eyeHeightOut,
+			settings.vrSubmitStageUseOpenVRTargetExtent ? 1u : 0u,
+			settings.vrSubmitStageScaleInputToOutputTarget ? 1u : 0u,
+			settings.vrSubmitStageDLSSForceFullEye ? 1u : 0u,
+			a_foveatedSubmitRequested ? 1u : 0u);
+
+		static std::string lastKey;
+		if (key == lastKey)
+			return;
+		lastKey = key;
+
+		logger::info(
+			"[Upscaling] Submit-stage diagnostics: method={} qualityMode={} requestedScale={:.3f} screen={:.0f}x{:.0f} render={:.0f}x{:.0f} sceneScale={:.3f}x{:.3f} source={}x{} outputEye={}x{} inputEye={}x{} effectiveScale={:.3f}x{:.3f} targetKnown={} openVROutput={} scaleInputToOutput={} forceFullEyeDLSS={} foveatedRequested={}",
+			magic_enum::enum_name(a_upscaleMethod),
+			qualityMode,
+			requestedScale,
+			a_screenSize.x,
+			a_screenSize.y,
+			a_renderSize.x,
+			a_renderSize.y,
+			sceneScaleX,
+			sceneScaleY,
+			a_sourceDesc.Width,
+			a_sourceDesc.Height,
+			a_eyeWidthOut,
+			a_eyeHeightOut,
+			a_eyeWidthIn,
+			a_eyeHeightIn,
+			effectiveScaleX,
+			effectiveScaleY,
+			g_submitStageTargetSizeKnown,
+			settings.vrSubmitStageUseOpenVRTargetExtent,
+			settings.vrSubmitStageScaleInputToOutputTarget,
+			settings.vrSubmitStageDLSSForceFullEye,
+			a_foveatedSubmitRequested);
 	}
 
 	float ClampFoveatedCenterArea(float value)
@@ -756,6 +891,10 @@ namespace
 
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
 	{
+		settings.vrSubmitStageUseOpenVRTargetExtent = true;
+		settings.vrSubmitStageScaleInputToOutputTarget = false;
+		settings.vrSubmitStageDLSSForceFullEye = false;
+		settings.vrSubmitStageLogDiagnostics = false;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
@@ -772,6 +911,10 @@ namespace
 
 	void StripVRSpecificUpscalingSettings(json& o_json)
 	{
+		o_json.erase("vrSubmitStageUseOpenVRTargetExtent");
+		o_json.erase("vrSubmitStageScaleInputToOutputTarget");
+		o_json.erase("vrSubmitStageDLSSForceFullEye");
+		o_json.erase("vrSubmitStageLogDiagnostics");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
@@ -1302,6 +1445,36 @@ void Upscaling::DrawSettings()
 				ImGui::TextDisabled("VR FOV mask setup is configured in VR > Foveation.");
 			} else {
 				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
+			}
+
+			if (ImGui::TreeNode("VR Submit-stage A/B Tests")) {
+				ImGui::Checkbox("Use OpenVR Submit Extent", &settings.vrSubmitStageUseOpenVRTargetExtent);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("On: current PR2 behavior, DLSS/FSR output extent follows OpenVR's recommended eye target.");
+					ImGui::TextUnformatted("Off: output extent follows the scene render target size.");
+				}
+
+				ImGui::Checkbox("Scale Input Against Submit Extent", &settings.vrSubmitStageScaleInputToOutputTarget);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("On: adjusts dynamic-resolution input size so the effective input/output ratio targets the selected preset.");
+					ImGui::TextUnformatted("Useful when OpenVR's submit target is larger than the scene render target.");
+				}
+
+				if (upscaleMethod == UpscaleMethod::kDLSS) {
+					ImGui::Checkbox("Force Full-eye DLSS Submit", &settings.vrSubmitStageDLSSForceFullEye);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted("Bypasses the foveated DLSS center dispatch for comparison only.");
+						ImGui::TextUnformatted("If this improves quality, the issue is likely in the foveated DLSS submit path.");
+					}
+				}
+
+				ImGui::Checkbox("Log Submit-stage Extents", &settings.vrSubmitStageLogDiagnostics);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Logs screen, input, output, and effective scale whenever the submit-stage diagnostic state changes.");
+					ImGui::TextUnformatted("Hoshipa should report an effective scale near 0.85.");
+				}
+
+				ImGui::TreePop();
 			}
 
 			if (streamline.reflexSupportedOnCurrentAdapter)
@@ -2353,6 +2526,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFoveatedDispatch = false;
 	static bool previousPeripheryTAA = false;
 	static bool previousFSRRuntimePathActive = false;
+	static bool previousVRSubmitStageUseOpenVRTargetExtent = settings.vrSubmitStageUseOpenVRTargetExtent;
+	static bool previousVRSubmitStageScaleInputToOutputTarget = settings.vrSubmitStageScaleInputToOutputTarget;
+	static bool previousVRSubmitStageDLSSForceFullEye = settings.vrSubmitStageDLSSForceFullEye;
 	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
 	static uint32_t previousFoveatedCenterAreaMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerArea * 1000.0f));
 	static uint32_t previousFoveatedCenterHorizontalScaleMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerHorizontalScale * 1000.0f));
@@ -2376,8 +2552,13 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	const bool peripheryTAAChanged = previousPeripheryTAA != peripheryTAACurrent;
 	const bool compareFSRRuntimePath = a_upscalemethod == UpscaleMethod::kFSR || previousUpscaleMode == UpscaleMethod::kFSR;
 	const bool fsrRuntimePathChanged = compareFSRRuntimePath && previousFSRRuntimePathActive != fsrRuntimePathCurrent;
+	const bool vrSubmitStageVariantChanged =
+		globals::game::isVR &&
+		(previousVRSubmitStageUseOpenVRTargetExtent != settings.vrSubmitStageUseOpenVRTargetExtent ||
+			previousVRSubmitStageScaleInputToOutputTarget != settings.vrSubmitStageScaleInputToOutputTarget ||
+			previousVRSubmitStageDLSSForceFullEye != settings.vrSubmitStageDLSSForceFullEye);
 
-	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || qualityModeChanged) {
+	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || qualityModeChanged || vrSubmitStageVariantChanged) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
 			previousQualityMode, qualityModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
@@ -2385,6 +2566,28 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		const bool requiresFullPipelineUnbind = upscaleModeChanged || frameGenModeChanged || fsrRuntimePathChanged || dlssQualityModeChanged;
 		if (requiresFullPipelineUnbind)
 			UnbindUpscalingResources();
+
+		if (vrSubmitStageVariantChanged) {
+			LogSubmitStageVariantChange(
+				settings.vrSubmitStageUseOpenVRTargetExtent,
+				settings.vrSubmitStageScaleInputToOutputTarget,
+				settings.vrSubmitStageDLSSForceFullEye);
+			UnbindUpscalingResources();
+			DestroyVRIntermediateTextures();
+			DestroyFoveatedResources();
+			streamline.InvalidateDLSSOptionsCache();
+			streamline.ResetFrameTracking();
+			submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
+			submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
+			submitStageMirrorEyeReady = {};
+			submitStageMirrorSourceTexture = nullptr;
+			submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
+			submitStageFoveatedPeripheryTAAEyeReady = {};
+			historyResetTrackingInitialized = false;
+			historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
+			historyResetThisFrame = false;
+			RequestHistoryReset();
+		}
 
 		if (qualityModeChanged) {
 			RequestHistoryReset();
@@ -2444,10 +2647,15 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousFoveatedDispatch = foveatedDispatchCurrent;
 		previousPeripheryTAA = peripheryTAACurrent;
 		previousFSRRuntimePathActive = fsrRuntimePathCurrent;
+		previousVRSubmitStageUseOpenVRTargetExtent = settings.vrSubmitStageUseOpenVRTargetExtent;
+		previousVRSubmitStageScaleInputToOutputTarget = settings.vrSubmitStageScaleInputToOutputTarget;
+		previousVRSubmitStageDLSSForceFullEye = settings.vrSubmitStageDLSSForceFullEye;
 		previousQualityMode = qualityModeCurrent;
 		previousFoveatedCenterAreaMilli = foveatedCenterAreaMilli;
 		previousFoveatedCenterHorizontalScaleMilli = foveatedCenterHorizontalScaleMilli;
-		previousUpscalingWasActive = IsUpscalingActive();
+		previousUpscalingWasActive =
+			IsUpscalingActive() ||
+			(globals::game::isVR && IsVendorUpscalingMethod(a_upscalemethod) && IsSubmitStageRequestedUpscalingActive() && g_submitStageTargetSizeKnown);
 	}
 }
 
@@ -4866,13 +5074,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
 	if (vendorUpscalingMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
-		const float renderScale = GetSubmitStageRequestedRenderScale();
-		const float internalScale = GetSubmitStageInternalDynamicResolutionScale();
-		resolutionScale = { renderScale, renderScale };
+		const float2 internalScale = GetSubmitStageInternalDynamicResolutionScale(screenSize);
+		resolutionScale = internalScale;
 
-		const int outputWidth = g_submitStageOutputEyeWidth > 0 ? static_cast<int>(g_submitStageOutputEyeWidth * 2u) : screenWidth;
-		const int renderWidth = std::max(1, static_cast<int>(std::lround(static_cast<float>(screenWidth) * internalScale)));
-		const int renderHeight = std::max(1, static_cast<int>(std::lround(static_cast<float>(screenHeight) * internalScale)));
+		const float2 outputFullSize = GetSubmitStageOutputFullSize(screenSize);
+		const int outputWidth = std::max(1, static_cast<int>(std::lround(outputFullSize.x)));
+		const int renderWidth = std::max(1, static_cast<int>(std::lround(static_cast<float>(screenWidth) * internalScale.x)));
+		const int renderHeight = std::max(1, static_cast<int>(std::lround(static_cast<float>(screenHeight) * internalScale.y)));
 		auto phaseCount = GetJitterPhaseCount(renderWidth, outputWidth);
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 
@@ -4884,16 +5092,16 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
 
 		auto& runtimeData = a_viewport->GetRuntimeData();
-		const bool shouldUseInternalDynamicResolution = internalScale < kDynamicResolutionUpscalingScaleThreshold;
+		const bool shouldUseInternalDynamicResolution = ShouldUseInternalSubmitStageDynamicResolution(internalScale);
 		if (globals::game::isVR)
 			SetDynamicResolutionEnabledForUpscaling(shouldUseInternalDynamicResolution);
 		runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
 		runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-		runtimeData.dynamicResolutionWidthRatio = internalScale;
-		runtimeData.dynamicResolutionHeightRatio = internalScale;
+		runtimeData.dynamicResolutionWidthRatio = internalScale.x;
+		runtimeData.dynamicResolutionHeightRatio = internalScale.y;
 		runtimeData.dynamicResolutionLock = shouldUseInternalDynamicResolution ? 0 : 1;
-		dynamicResolutionWidthRatio = internalScale;
-		dynamicResolutionHeightRatio = internalScale;
+		dynamicResolutionWidthRatio = internalScale.x;
+		dynamicResolutionHeightRatio = internalScale.y;
 		return;
 	}
 
@@ -4966,17 +5174,19 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
 	if (IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
-		const float internalScale = GetSubmitStageInternalDynamicResolutionScale();
-		const bool shouldUseInternalDynamicResolution = internalScale < kDynamicResolutionUpscalingScaleThreshold;
+		const auto state = globals::state;
+		const float2 screenSize = state ? state->screenSize : float2{ 0.0f, 0.0f };
+		const float2 internalScale = GetSubmitStageInternalDynamicResolutionScale(screenSize);
+		const bool shouldUseInternalDynamicResolution = ShouldUseInternalSubmitStageDynamicResolution(internalScale);
 		if (globals::game::isVR)
 			SetDynamicResolutionEnabledForUpscaling(shouldUseInternalDynamicResolution);
 		runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
 		runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-		runtimeData.dynamicResolutionWidthRatio = internalScale;
-		runtimeData.dynamicResolutionHeightRatio = internalScale;
+		runtimeData.dynamicResolutionWidthRatio = internalScale.x;
+		runtimeData.dynamicResolutionHeightRatio = internalScale.y;
 		runtimeData.dynamicResolutionLock = shouldUseInternalDynamicResolution ? 0 : 1;
-		dynamicResolutionWidthRatio = internalScale;
-		dynamicResolutionHeightRatio = internalScale;
+		dynamicResolutionWidthRatio = internalScale.x;
+		dynamicResolutionHeightRatio = internalScale.y;
 		UpdateCameraData();
 		return;
 	}
@@ -5379,9 +5589,8 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	const auto upscaleMethod = GetUpscaleMethod();
 	return globals::game::isVR &&
 	       IsVendorUpscalingMethod(upscaleMethod) &&
-	       IsUpscalingActive() &&
 	       IsSubmitStageDynamicResolutionActive() &&
-	       GetSubmitStageRequestedRenderScale() < kDynamicResolutionUpscalingScaleThreshold &&
+	       IsSubmitStageRequestedUpscalingActive() &&
 	       g_submitStageTargetSizeKnown &&
 	       !IsGameMenuContextActive();
 }
@@ -5433,10 +5642,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const auto screenSize = state->screenSize;
 	const auto renderSize = Util::ConvertToDynamic(screenSize, true);
 	const bool targetScaleMode = IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown;
-	const uint32_t eyeWidthOut =
-		targetScaleMode && g_submitStageOutputEyeWidth > 0 ? g_submitStageOutputEyeWidth : static_cast<uint32_t>(screenSize.x / 2.0f);
-	const uint32_t eyeHeightOut =
-		targetScaleMode && g_submitStageOutputEyeHeight > 0 ? g_submitStageOutputEyeHeight : static_cast<uint32_t>(screenSize.y);
+	const uint32_t eyeWidthOut = targetScaleMode ? GetSubmitStageOutputEyeWidth(screenSize) : static_cast<uint32_t>(screenSize.x / 2.0f);
+	const uint32_t eyeHeightOut = targetScaleMode ? GetSubmitStageOutputEyeHeight(screenSize) : static_cast<uint32_t>(screenSize.y);
 	const uint32_t eyeWidthIn = static_cast<uint32_t>(renderSize.x / 2.0f);
 	const uint32_t eyeHeightIn = static_cast<uint32_t>(renderSize.y);
 	if (!eyeWidthIn || !eyeHeightIn || !eyeWidthOut || !eyeHeightOut)
@@ -5527,8 +5734,22 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (targetScaleMode)
 		(void)GetSubmitStageStretchCS();
 
+	const bool foveatedSubmitRequested = IsFoveatedVendorDispatchEnabled(upscaleMethod);
+	LogSubmitStageDiagnosticsIfChanged(
+		upscaleMethod,
+		eyeIndex,
+		screenSize,
+		renderSize,
+		sourceDesc,
+		eyeWidthIn,
+		eyeHeightIn,
+		eyeWidthOut,
+		eyeHeightOut,
+		foveatedSubmitRequested);
+
 	bool vendorSucceeded = false;
-	if (IsFoveatedVendorDispatchEnabled(upscaleMethod)) {
+	const bool forceFullEyeDLSS = upscaleMethod == UpscaleMethod::kDLSS && settings.vrSubmitStageDLSSForceFullEye;
+	if (foveatedSubmitRequested && !forceFullEyeDLSS) {
 		vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(
 			upscaleMethod,
 			eyeIndex,

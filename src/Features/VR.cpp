@@ -80,6 +80,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableLightingFoveationHardCutoff,
 	EnableUtilityFoveation,
 	EnableUtilityFoveationHardCutoff,
+	EnableSSRFoveation,
+	EnableSSRFoveationHardCutoff,
 	EnableDynamicCubemapFoveation,
 	EnableDynamicCubemapVisibilityThrottle,
 	menuOverlayPath)
@@ -163,7 +165,7 @@ bool VR::AnyScreenSpaceEffectActive()
 	                           sky &&
 	                           sky->mode.get() == RE::Sky::Mode::kFull;
 
-	const bool dynamicSSRActive = dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0;
+	const bool dynamicSSRActive = dynamicCubemaps.IsSSRRuntimeActive();
 
 	return ssgiActive ||
 	       shadowsActive ||
@@ -1112,15 +1114,19 @@ namespace
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
 		constexpr float foveatedProfileFullCoverageThreshold = 0.999f;
 		const bool foveatedProfileActive = isVR && profile.available && profile.coverageArea < foveatedProfileFullCoverageThreshold;
+		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool lightingActive = settings.EnableLightingFoveation && foveatedProfileActive;
 		const bool utilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
+		const bool ssrActive = settings.EnableSSRFoveation && ssrAvailable && foveatedProfileActive;
 		const bool cubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
 		const bool cubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
 		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" : "feathered";
 		const char* utilityMode = !settings.EnableUtilityFoveation ? "disabled" : settings.EnableUtilityFoveationHardCutoff ? "hard cutoff" : "feathered";
+		const char* ssrMode = !settings.EnableSSRFoveation ? "disabled" : settings.EnableSSRFoveationHardCutoff ? "hard cutoff" : "feathered";
 		const bool anyFoveationEnabled =
 			settings.EnableLightingFoveation ||
 			settings.EnableUtilityFoveation ||
+			settings.EnableSSRFoveation ||
 			settings.EnableDynamicCubemapFoveation ||
 			settings.EnableDynamicCubemapVisibilityThrottle;
 		const bool anyCubemapFoveationEnabled =
@@ -1164,6 +1170,24 @@ namespace
 
 			ImGui::Separator();
 
+			ImGui::Checkbox("FOV SSR Raymarch Fallback", &settings.EnableSSRFoveation);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive screen-space reflection raymarching in VR.");
+				ImGui::TextUnformatted("Inside the FOV mask keeps full SSR. The feather band uses fewer raymarch iterations and fades SSR alpha so existing reflection fallback shows through.");
+				ImGui::TextUnformatted("Outside the mask, SSR raymarching is skipped and downstream water/reflection fallback remains responsible for the result.");
+			}
+
+			ImGui::BeginDisabled(!settings.EnableSSRFoveation);
+			ImGui::Checkbox("Hard Cutoff Outside FOV##SSR", &settings.EnableSSRFoveationHardCutoff);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Uses a binary mask for SSR raymarching.");
+				ImGui::TextUnformatted("Inside the FOV mask keeps full SSR; outside the mask skips SSR raymarching completely and relies on fallback reflections.");
+				ImGui::TextUnformatted("This assumes only the foveated area is visibly important and can make reflective water transitions more visible near the mask edge.");
+			}
+			ImGui::EndDisabled();
+
+			ImGui::Separator();
+
 			ImGui::Checkbox("FOV Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Uses the active Upscaling FOV profile as the VR-only foveation gate for Dynamic Cubemap update cadence.");
@@ -1184,6 +1208,8 @@ namespace
 			ImGui::Text("Lighting detail mode: %s", lightingMode);
 			ImGui::Text("Utility shadowmask foveation: %s", utilityActive ? "active" : "inactive");
 			ImGui::Text("Utility shadowmask mode: %s", utilityMode);
+			ImGui::Text("SSR raymarch foveation: %s", ssrActive ? "active" : "inactive");
+			ImGui::Text("SSR raymarch mode: %s", ssrMode);
 			ImGui::Text("Dynamic cubemap cadence: %s", cubemapCadenceActive ? "active" : "inactive");
 			ImGui::Text("Dynamic cubemap visibility throttle: %s", cubemapVisibilityActive ? "active" : "inactive");
 			ImGui::Text("FOV profile: %s", profile.available ? "available" : "unavailable");
@@ -1199,6 +1225,12 @@ namespace
 			}
 			if (anyCubemapFoveationEnabled && !dynamicCubemaps.loaded) {
 				ImGui::TextDisabled("Requires Dynamic Cubemaps.");
+			}
+			if (settings.EnableSSRFoveation && !ssrAvailable) {
+				ImGui::TextDisabled("Requires Dynamic Cubemaps SSR.");
+				if (isVR && dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0 && !dynamicCubemaps.enabledAtBoot) {
+					ImGui::TextDisabled("VR SSR must be enabled before startup.");
+				}
 			}
 		}
 	}

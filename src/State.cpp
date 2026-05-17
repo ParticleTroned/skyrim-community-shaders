@@ -9,6 +9,7 @@
 #include "Deferred.h"
 #include "FeatureIssues.h"
 #include "Features/CloudShadows.h"
+#include "Features/DynamicCubemaps.h"
 #include "Features/FoveatedCommon.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -1087,7 +1088,12 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.VRFoveationData1 = { kVRFoveationModeOff, 0.0f, 0.0f, 0.0f };
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
-		const bool anyShaderFoveationEnabled = vr.settings.EnableLightingFoveation || vr.settings.EnableUtilityFoveation;
+		const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+		const bool dynamicSSRActive = dynamicCubemaps.IsSSRRuntimeActive();
+		const bool anyShaderFoveationEnabled =
+			vr.settings.EnableLightingFoveation ||
+			vr.settings.EnableUtilityFoveation ||
+			(vr.settings.EnableSSRFoveation && dynamicSSRActive);
 		if (globals::game::isVR &&
 			vr.loaded &&
 			anyShaderFoveationEnabled &&
@@ -1102,6 +1108,9 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				const float utilityFoveationMode = GetVRFoveationMode(
 					vr.settings.EnableUtilityFoveation,
 					vr.settings.EnableUtilityFoveationHardCutoff);
+				const float ssrFoveationMode = GetVRFoveationMode(
+					vr.settings.EnableSSRFoveation && dynamicSSRActive,
+					vr.settings.EnableSSRFoveationHardCutoff);
 				data.VRFoveationData0 = {
 					centerScale,
 					FoveatedCommon::kCenterFeather,
@@ -1110,7 +1119,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				};
 				data.VRFoveationData1 = {
 					foveationActive ? utilityFoveationMode : kVRFoveationModeOff,
-					0.0f,
+					foveationActive ? ssrFoveationMode : kVRFoveationModeOff,
 					0.0f,
 					0.0f
 				};

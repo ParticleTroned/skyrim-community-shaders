@@ -154,6 +154,7 @@ public:
 		return data;
 	}
 	bool enabledAtBoot = false;
+	bool IsSSRRuntimeActive() const;
 	void UpdateCubemap();
 
 	void PostDeferred();

@@ -180,6 +180,8 @@ public:
 		bool EnableLightingFoveationHardCutoff = false;
 		bool EnableUtilityFoveation = false;
 		bool EnableUtilityFoveationHardCutoff = false;
+		bool EnableSSRFoveation = false;
+		bool EnableSSRFoveationHardCutoff = false;
 		bool EnableDynamicCubemapFoveation = false;
 		bool EnableDynamicCubemapVisibilityThrottle = false;
 

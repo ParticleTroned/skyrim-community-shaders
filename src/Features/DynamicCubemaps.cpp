@@ -244,6 +244,13 @@ void DynamicCubemaps::RestoreDefaultSettings()
 	recompileFlag = true;
 }
 
+bool DynamicCubemaps::IsSSRRuntimeActive() const
+{
+	return loaded &&
+	       settings.EnabledSSR != 0 &&
+	       (!REL::Module::IsVR() || enabledAtBoot);
+}
+
 void DynamicCubemaps::DataLoaded()
 {
 	if (REL::Module::IsVR()) {

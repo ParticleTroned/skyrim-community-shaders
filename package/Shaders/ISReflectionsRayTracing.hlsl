@@ -12,6 +12,10 @@ struct PS_OUTPUT
 };
 
 #if defined(PSHADER)
+#	if defined(VR)
+#		include "Common/FoveatedMask.hlsli"
+#	endif
+
 SamplerState NormalSampler : register(s0);
 SamplerState ColorSampler : register(s1);
 SamplerState DepthSampler : register(s2);
@@ -28,10 +32,43 @@ cbuffer PerGeometry : register(b2)
 	float3 DefaultNormal : packoffset(c1);
 };
 
-static const int iterations = 64.0;
-static const int binaryIterations = ceil(log2(iterations));
+static const int maxIterations = 64;
+static const int maxBinaryIterations = 6;
 
 static const float rayLength = 1.0;
+
+#if defined(VR)
+static const int minFoveatedIterations = 16;
+
+float GetVRSSRFoveationWeight(float ssrFoveationMode, float2 eyeUv, uint eyeIndex)
+{
+	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
+	return FoveatedComputeDetailWeight(
+		ssrFoveationMode,
+		eyeUv,
+		SharedData::VRFoveationData0.x,
+		SharedData::VRFoveationData0.y,
+		SharedData::VRFoveationData0.z,
+		centerOffset);
+}
+
+bool ShouldEvaluateVRSSR(float detailWeight)
+{
+	return FoveatedShouldEvaluateDetail(detailWeight);
+}
+
+int GetSSRRaymarchIterations(float foveationWeight)
+{
+	int iterationCount = (int)ceil(lerp((float)minFoveatedIterations, (float)maxIterations, saturate(foveationWeight)));
+	return min(max(iterationCount, minFoveatedIterations), maxIterations);
+}
+
+int GetSSRBinaryIterations(int raymarchIterations)
+{
+	int iterationCount = (int)ceil(log2((float)raymarchIterations));
+	return min(max(iterationCount, 1), maxBinaryIterations);
+}
+#endif
 
 float2 ConvertRaySample(float2 raySample, uint eyeIndex)
 {
@@ -46,14 +83,34 @@ float2 ConvertRaySamplePrevious(float2 raySample, uint eyeIndex)
 float4 GetReflectionColor(
 	float3 projReflectionDirection,
 	float3 projPosition,
-	uint eyeIndex)
+	uint eyeIndex
+#if defined(VR)
+	,
+	int raymarchIterations,
+	int binaryIterations,
+	float foveationWeight
+#endif
+	)
 {
 	float3 prevRaySample;
 	float3 raySample = projPosition;
 
-	for (int i = 0; i < iterations; i++) {
+#if defined(VR)
+#	define SSR_RAYMARCH_ITERATIONS raymarchIterations
+#	define SSR_BINARY_ITERATIONS binaryIterations
+#	define SSR_FOVEATION_ALPHA_WEIGHT foveationWeight
+#else
+#	define SSR_RAYMARCH_ITERATIONS maxIterations
+#	define SSR_BINARY_ITERATIONS maxBinaryIterations
+#	define SSR_FOVEATION_ALPHA_WEIGHT 1.0
+#endif
+
+#if defined(VR)
+	[loop]
+#endif
+	for (int i = 0; i < SSR_RAYMARCH_ITERATIONS; i++) {
 		prevRaySample = raySample;
-		raySample = projPosition + (float(i) / float(iterations)) * projReflectionDirection;
+		raySample = projPosition + (float(i) / float(SSR_RAYMARCH_ITERATIONS)) * projReflectionDirection;
 
 		float2 sampleUV;
 		uint sampleEyeIndex;
@@ -71,7 +128,10 @@ float4 GetReflectionColor(
 			float depthThicknessFactor;
 			uint hitEyeIndex = sampleEyeIndex;
 
-			for (int k = 0; k < binaryIterations; k++) {
+#if defined(VR)
+			[loop]
+#endif
+			for (int k = 0; k < SSR_BINARY_ITERATIONS; k++) {
 				binaryRaySample = lerp(binaryMinRaySample, binaryMaxRaySample, 0.5);
 
 				Stereo::ResolveMonoUVForEye(binaryRaySample, eyeIndex, sampleUV, hitEyeIndex);
@@ -134,12 +194,16 @@ float4 GetReflectionColor(
 					alpha = float4(AlphaTex.SampleLevel(AlphaSampler, ConvertRaySamplePrevious(reprojectedRaySample.xy, finalEyeIndex), 0).xyz, 1.0);
 
 				float3 reflectionColor = color + SSRParams.z * alpha.xyz * alpha.w;
-				return float4(reflectionColor, fadeFactor);
+				return float4(reflectionColor, fadeFactor * SSR_FOVEATION_ALPHA_WEIGHT);
 			}
 
 			return 0.0;
 		}
 	}
+
+#undef SSR_RAYMARCH_ITERATIONS
+#undef SSR_BINARY_ITERATIONS
+#undef SSR_FOVEATION_ALPHA_WEIGHT
 
 	return 0.0;
 }
@@ -159,6 +223,19 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
 
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
+
+	float ssrFoveationWeight = 1.0;
+#	if defined(VR)
+	float ssrFoveationMode = SharedData::VRFoveationData1.y;
+	[branch] if (ssrFoveationMode >= FOVEATED_DETAIL_MODE_FEATHERED)
+	{
+		ssrFoveationWeight = GetVRSSRFoveationWeight(ssrFoveationMode, uv, eyeIndex);
+		[branch] if (!ShouldEvaluateVRSSR(ssrFoveationWeight))
+		{
+			return psout;
+		}
+	}
+#	endif
 
 	[branch] if (NormalTex.Sample(NormalSampler, screenPosition).z <= 0)
 	{
@@ -191,7 +268,18 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 projPosition = float3(uv, depth);
 	float3 projReflectionDirection = normalize(projReflectionPosition.xyz - projPosition) * rayLength;
 
+#	if defined(VR)
+	int raymarchIterations = maxIterations;
+	int binaryIterations = maxBinaryIterations;
+	[branch] if (ssrFoveationWeight < 0.9999)
+	{
+		raymarchIterations = GetSSRRaymarchIterations(ssrFoveationWeight);
+		binaryIterations = GetSSRBinaryIterations(raymarchIterations);
+	}
+	psout.Color = GetReflectionColor(projReflectionDirection, projPosition, eyeIndex, raymarchIterations, binaryIterations, ssrFoveationWeight);
+#	else
 	psout.Color = GetReflectionColor(projReflectionDirection, projPosition, eyeIndex);
+#	endif
 
 	return psout;
 }

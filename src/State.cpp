@@ -41,18 +41,6 @@ namespace
 		"UnifiedWater"
 	};
 
-	constexpr float kVRFoveationModeOff = 0.0f;
-	constexpr float kVRFoveationModeFeathered = 1.0f;
-	constexpr float kVRFoveationModeHardCutoff = 2.0f;
-
-	constexpr float GetVRFoveationMode(bool a_enabled, bool a_hardCutoff)
-	{
-		if (!a_enabled)
-			return kVRFoveationModeOff;
-
-		return a_hardCutoff ? kVRFoveationModeHardCutoff : kVRFoveationModeFeathered;
-	}
-
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
 		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
@@ -1085,8 +1073,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHG = { dalcSH.g.c0, dalcSH.g.c1[0], dalcSH.g.c1[1], dalcSH.g.c1[2] };
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
-		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, kVRFoveationModeOff };
-		data.VRFoveationData1 = { kVRFoveationModeOff, 0.0f, 0.0f, 0.0f };
+		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
+		data.VRFoveationData1 = { FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off), 0.0f, 0.0f, 0.0f };
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
 		const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
@@ -1105,29 +1093,30 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 			if (profile.available) {
 				const float centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
-				const bool foveationActive = centerScale < 0.999f;
-				const float lightingFoveationMode = GetVRFoveationMode(
+				const bool foveationActive = FoveatedCommon::IsActiveCoverage(centerScale);
+				const float disabledFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off);
+				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableLightingFoveation,
-					vr.settings.EnableLightingFoveationHardCutoff);
-				const float utilityFoveationMode = GetVRFoveationMode(
+					vr.settings.EnableLightingFoveationHardCutoff));
+				const float utilityFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableUtilityFoveation,
-					vr.settings.EnableUtilityFoveationHardCutoff);
-				const float ssrFoveationMode = GetVRFoveationMode(
+					vr.settings.EnableUtilityFoveationHardCutoff));
+				const float ssrFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableSSRFoveation && dynamicSSRActive,
-					vr.settings.EnableSSRFoveationHardCutoff);
-				const float waterParallaxFoveationMode = GetVRFoveationMode(
+					vr.settings.EnableSSRFoveationHardCutoff));
+				const float waterParallaxFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					waterParallaxActive,
-					vr.settings.EnableWaterParallaxFoveationHardCutoff);
+					vr.settings.EnableWaterParallaxFoveationHardCutoff));
 				data.VRFoveationData0 = {
 					centerScale,
 					FoveatedCommon::kCenterFeather,
 					FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale),
-					foveationActive ? lightingFoveationMode : kVRFoveationModeOff
+					foveationActive ? lightingFoveationMode : disabledFoveationMode
 				};
 				data.VRFoveationData1 = {
-					foveationActive ? utilityFoveationMode : kVRFoveationModeOff,
-					foveationActive ? ssrFoveationMode : kVRFoveationModeOff,
-					foveationActive ? waterParallaxFoveationMode : kVRFoveationModeOff,
+					foveationActive ? utilityFoveationMode : disabledFoveationMode,
+					foveationActive ? ssrFoveationMode : disabledFoveationMode,
+					foveationActive ? waterParallaxFoveationMode : disabledFoveationMode,
 					0.0f
 				};
 				data.VRFoveationCenterOffsets = {

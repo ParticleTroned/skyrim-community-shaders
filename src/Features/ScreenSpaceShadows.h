@@ -104,6 +104,7 @@ public:
 	virtual void SetupResources() override;
 
 	virtual void DrawSettings() override;
+	void DrawFoveationSettings();
 
 	virtual void ClearShaderCache() override;
 	void InvalidateRaymarchShaders();

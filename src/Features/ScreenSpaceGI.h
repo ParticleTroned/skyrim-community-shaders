@@ -36,6 +36,7 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	void DrawFoveationSettings();
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

@@ -25,7 +25,6 @@ namespace
 	constexpr uint32_t kFakeReflectionCubemapCadence = 4;
 	constexpr uint32_t kInteriorCubemapCadence = 6;
 	constexpr uint32_t kLowVisibilityCubemapCadence = 8;
-	constexpr float kFoveatedProfileFullCoverageThreshold = 0.999f;
 
 	struct CubemapFoveationState
 	{
@@ -78,7 +77,7 @@ namespace
 		}
 
 		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
-		return profile.available && FoveatedCommon::ClampCenterArea(profile.coverageArea) < kFoveatedProfileFullCoverageThreshold;
+		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
 	}
 
 	CubemapFoveationState GetDynamicCubemapFoveationState()

@@ -11,8 +11,50 @@ namespace FoveatedCommon
 	constexpr float kCenterFeather = 0.05f;
 	constexpr float kCenterHorizontalScaleMin = 1.0f;
 	constexpr float kCenterHorizontalScaleMax = 2.0f;
+	constexpr float kFullCoverageThreshold = 0.999f;
 	constexpr float kMaskShapePower = 4.0f;
 	constexpr int kThreadGroupSize = 8;
+
+	enum class DetailMode
+	{
+		Off,
+		Feathered,
+		HardCutoff
+	};
+
+	constexpr DetailMode GetDetailMode(bool a_enabled, bool a_hardCutoff)
+	{
+		if (!a_enabled)
+			return DetailMode::Off;
+
+		return a_hardCutoff ? DetailMode::HardCutoff : DetailMode::Feathered;
+	}
+
+	constexpr float GetShaderMode(DetailMode a_mode)
+	{
+		switch (a_mode) {
+		case DetailMode::Feathered:
+			return 1.0f;
+		case DetailMode::HardCutoff:
+			return 2.0f;
+		case DetailMode::Off:
+		default:
+			return 0.0f;
+		}
+	}
+
+	constexpr const char* GetDetailModeName(DetailMode a_mode)
+	{
+		switch (a_mode) {
+		case DetailMode::Feathered:
+			return "feathered";
+		case DetailMode::HardCutoff:
+			return "hard cutoff";
+		case DetailMode::Off:
+		default:
+			return "disabled";
+		}
+	}
 
 	struct DispatchBounds
 	{
@@ -27,6 +69,11 @@ namespace FoveatedCommon
 		if (!std::isfinite(value))
 			return kCenterAreaMax;
 		return std::clamp(value, kCenterAreaMin, kCenterAreaMax);
+	}
+
+	inline bool IsActiveCoverage(float a_centerArea)
+	{
+		return ClampCenterArea(a_centerArea) < kFullCoverageThreshold;
 	}
 
 	inline float ClampCenterHorizontalScale(float value)

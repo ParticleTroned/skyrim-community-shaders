@@ -6,6 +6,7 @@
 #include "RE/P/PlayerCharacter.h"
 #include "DynamicCubemaps.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#include "FoveatedCommon.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
 #include "SubsurfaceScattering.h"
@@ -1113,156 +1114,192 @@ namespace
 		auto& settings = vr.settings;
 		auto& upscaling = globals::features::upscaling;
 		auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+		auto& screenSpaceGI = globals::features::screenSpaceGI;
+		auto& screenSpaceShadows = globals::features::screenSpaceShadows;
 		auto& waterEffects = globals::features::waterEffects;
 		const bool isVR = REL::Module::IsVR();
+		if (!isVR) {
+			ImGui::TextDisabled("VR foveation controls are available only in VR.");
+			return;
+		}
+
+		auto drawSection = [](const char* a_label) {
+			ImGui::Spacing();
+			MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
+			ImGui::SeparatorText(a_label);
+		};
+
+		auto drawDetailBudget = [](const char* a_label, bool& a_enabled, const char* a_hardCutoffLabel, bool& a_hardCutoff,
+								 const char* a_line0, const char* a_line1, const char* a_line2,
+								 const char* a_hardLine0, const char* a_hardLine1, const char* a_hardLine2) {
+			ImGui::Checkbox(a_label, &a_enabled);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(a_line0);
+				ImGui::TextUnformatted(a_line1);
+				ImGui::TextUnformatted(a_line2);
+			}
+
+			ImGui::BeginDisabled(!a_enabled);
+			ImGui::Checkbox(a_hardCutoffLabel, &a_hardCutoff);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(a_hardLine0);
+				ImGui::TextUnformatted(a_hardLine1);
+				ImGui::TextUnformatted(a_hardLine2);
+			}
+			ImGui::EndDisabled();
+		};
+
+		drawSection("Shared FOV Mask");
+		upscaling.DrawFoveatedSettings();
+
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
-		constexpr float foveatedProfileFullCoverageThreshold = 0.999f;
-		const bool foveatedProfileActive = isVR && profile.available && profile.coverageArea < foveatedProfileFullCoverageThreshold;
+		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxAvailable = waterEffects.loaded;
-		const bool lightingActive = settings.EnableLightingFoveation && foveatedProfileActive;
-		const bool utilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
-		const bool ssrActive = settings.EnableSSRFoveation && ssrAvailable && foveatedProfileActive;
-		const bool waterParallaxActive = settings.EnableWaterParallaxFoveation && waterParallaxAvailable && foveatedProfileActive;
-		const bool cubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
-		const bool cubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
-		const char* lightingMode = !settings.EnableLightingFoveation ? "disabled" : settings.EnableLightingFoveationHardCutoff ? "hard cutoff" : "feathered";
-		const char* utilityMode = !settings.EnableUtilityFoveation ? "disabled" : settings.EnableUtilityFoveationHardCutoff ? "hard cutoff" : "feathered";
-		const char* ssrMode = !settings.EnableSSRFoveation ? "disabled" : settings.EnableSSRFoveationHardCutoff ? "hard cutoff" : "feathered";
-		const char* waterParallaxMode = !settings.EnableWaterParallaxFoveation ? "disabled" : settings.EnableWaterParallaxFoveationHardCutoff ? "hard cutoff" : "feathered";
-		const bool anyFoveationEnabled =
+		const bool screenSpaceShadowsEnabled = screenSpaceShadows.bendSettings.Enable != 0 && screenSpaceShadows.bendSettings.EnableFoveated != 0;
+		const bool screenSpaceGIEnabled = screenSpaceGI.settings.Enabled && screenSpaceGI.settings.FoveatedPresetMode != 0;
+		const bool anySharedMaskConsumerEnabled =
 			settings.EnableLightingFoveation ||
 			settings.EnableUtilityFoveation ||
 			settings.EnableSSRFoveation ||
 			settings.EnableWaterParallaxFoveation ||
 			settings.EnableDynamicCubemapFoveation ||
-			settings.EnableDynamicCubemapVisibilityThrottle;
-		const bool anyCubemapFoveationEnabled =
-			settings.EnableDynamicCubemapFoveation ||
-			settings.EnableDynamicCubemapVisibilityThrottle;
+			settings.EnableDynamicCubemapVisibilityThrottle ||
+			screenSpaceShadowsEnabled ||
+			screenSpaceGIEnabled;
 
-		if (ImGui::CollapsingHeader("Foveated Detail Budgets", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Checkbox("FOV Lighting Detail", &settings.EnableLightingFoveation);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive auxiliary detail in the Lighting shader.");
-				ImGui::TextUnformatted("The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when Upscaling FOV + Peripheral TAA is enabled.");
-				ImGui::TextUnformatted("Base diffuse lighting, albedo, normal, and shadowmask sampling remain unchanged.");
-			}
+		if (profile.available) {
+			ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "Upscaling FOV center");
+			ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
+			ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
+			if (anySharedMaskConsumerEnabled && !foveatedProfileActive)
+				ImGui::TextDisabled("Shared-mask consumers require FOV area below 1.00.");
+		} else if (anySharedMaskConsumerEnabled) {
+			ImGui::TextDisabled("Shared-mask consumers require active foveated upscaling.");
+		}
 
-			ImGui::BeginDisabled(!settings.EnableLightingFoveation);
-			ImGui::Checkbox("Hard Cutoff Outside FOV", &settings.EnableLightingFoveationHardCutoff);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses a binary mask for Lighting shader auxiliary detail.");
-				ImGui::TextUnformatted("Inside the FOV mask gets full auxiliary detail; outside the mask skips those optional paths instead of feathering quality.");
-				ImGui::TextUnformatted("This can save more work, but can make detail transitions more visible near the mask edge.");
-			}
-			ImGui::EndDisabled();
+		drawSection("Screen-Space Effects");
+		ImGui::BeginDisabled(!foveatedProfileActive);
+		screenSpaceShadows.DrawFoveationSettings();
+		ImGui::Separator();
+		screenSpaceGI.DrawFoveationSettings();
+		ImGui::EndDisabled();
+		if (!foveatedProfileActive)
+			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with FOV area below 1.00.");
 
-			ImGui::Separator();
+		drawSection("Shader Detail Budgets");
+		if (!foveatedProfileActive)
+			ImGui::TextDisabled("Lighting, Utility, SSR, and Water shader budgets require active foveated upscaling with FOV area below 1.00.");
 
-			ImGui::Checkbox("FOV Utility Shadowmask Filtering", &settings.EnableUtilityFoveation);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive Utility shader shadowmask filtering.");
-				ImGui::TextUnformatted("The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when Upscaling FOV + Peripheral TAA is enabled.");
-				ImGui::TextUnformatted("Outside the mask, high-cost PCF filtering fades toward a single shadow comparison while keeping valid shadowmask output.");
-			}
+		ImGui::BeginDisabled(!foveatedProfileActive);
+		drawDetailBudget(
+			"Lighting Auxiliary Detail",
+			settings.EnableLightingFoveation,
+			"Hard Cutoff Outside FOV##Lighting",
+			settings.EnableLightingFoveationHardCutoff,
+			"Uses the active shared FOV mask to reduce expensive auxiliary detail in the Lighting shader.",
+			"The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when FOV + Peripheral TAA is enabled.",
+			"Base diffuse lighting, albedo, normal, and shadowmask sampling remain unchanged.",
+			"Uses a binary mask for Lighting shader auxiliary detail.",
+			"Inside the FOV mask gets full auxiliary detail; outside the mask skips those optional paths instead of feathering quality.",
+			"This can save more work, but can make detail transitions more visible near the mask edge.");
+		ImGui::Separator();
 
-			ImGui::BeginDisabled(!settings.EnableUtilityFoveation);
-			ImGui::Checkbox("Hard Cutoff Outside FOV##Utility", &settings.EnableUtilityFoveationHardCutoff);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses a binary mask for Utility shader shadowmask filtering.");
-				ImGui::TextUnformatted("Inside the FOV mask keeps full shadowmask filtering; outside the mask skips PCF filtering and uses one shadow comparison.");
-				ImGui::TextUnformatted("This can save more work, but can make shadow filter transitions more visible near the mask edge.");
-			}
-			ImGui::EndDisabled();
+		drawDetailBudget(
+			"Utility Shadowmask Filtering",
+			settings.EnableUtilityFoveation,
+			"Hard Cutoff Outside FOV##Utility",
+			settings.EnableUtilityFoveationHardCutoff,
+			"Uses the active shared FOV mask to reduce expensive Utility shader shadowmask filtering.",
+			"The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when FOV + Peripheral TAA is enabled.",
+			"Outside the mask, high-cost PCF filtering fades toward a single shadow comparison while keeping valid shadowmask output.",
+			"Uses a binary mask for Utility shader shadowmask filtering.",
+			"Inside the FOV mask keeps full shadowmask filtering; outside the mask skips PCF filtering and uses one shadow comparison.",
+			"This can save more work, but can make shadow filter transitions more visible near the mask edge.");
+		ImGui::Separator();
 
-			ImGui::Separator();
+		drawDetailBudget(
+			"SSR Raymarch",
+			settings.EnableSSRFoveation,
+			"Hard Cutoff Outside FOV##SSR",
+			settings.EnableSSRFoveationHardCutoff,
+			"Uses the active shared FOV mask to reduce expensive screen-space reflection raymarching in VR.",
+			"Inside the FOV mask keeps full SSR. The feather band uses fewer raymarch iterations and fades SSR alpha so existing reflection fallback shows through.",
+			"Outside the mask, SSR raymarching is skipped and downstream water/reflection fallback remains responsible for the result.",
+			"Uses a binary mask for SSR raymarching.",
+			"Inside the FOV mask keeps full SSR; outside the mask skips SSR raymarching completely and relies on fallback reflections.",
+			"This assumes only the foveated area is visibly important and can make reflective water transitions more visible near the mask edge.");
+		ImGui::Separator();
 
-			ImGui::Checkbox("FOV SSR Raymarch Fallback", &settings.EnableSSRFoveation);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive screen-space reflection raymarching in VR.");
-				ImGui::TextUnformatted("Inside the FOV mask keeps full SSR. The feather band uses fewer raymarch iterations and fades SSR alpha so existing reflection fallback shows through.");
-				ImGui::TextUnformatted("Outside the mask, SSR raymarching is skipped and downstream water/reflection fallback remains responsible for the result.");
-			}
+		drawDetailBudget(
+			"Water Parallax Detail",
+			settings.EnableWaterParallaxFoveation,
+			"Hard Cutoff Outside FOV##WaterParallax",
+			settings.EnableWaterParallaxFoveationHardCutoff,
+			"Uses the active shared FOV mask to reduce expensive Water Effects parallax loops in VR.",
+			"Inside the FOV mask keeps full water parallax. The feather band uses fewer parallax steps and fades offsets toward base water normals.",
+			"Base water color, normal sampling, reflection, refraction, and Wetterness ripple paths remain active.",
+			"Uses a binary mask for Water Effects parallax detail.",
+			"Inside the FOV mask keeps full parallax; outside the mask skips parallax offsets and uses base water normal UVs.",
+			"This assumes only the foveated area is visibly important and can make water microdetail transitions more visible near the mask edge.");
+		ImGui::EndDisabled();
 
-			ImGui::BeginDisabled(!settings.EnableSSRFoveation);
-			ImGui::Checkbox("Hard Cutoff Outside FOV##SSR", &settings.EnableSSRFoveationHardCutoff);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses a binary mask for SSR raymarching.");
-				ImGui::TextUnformatted("Inside the FOV mask keeps full SSR; outside the mask skips SSR raymarching completely and relies on fallback reflections.");
-				ImGui::TextUnformatted("This assumes only the foveated area is visibly important and can make reflective water transitions more visible near the mask edge.");
-			}
-			ImGui::EndDisabled();
+		drawSection("Dynamic Cubemaps");
+		ImGui::BeginDisabled(!foveatedProfileActive);
+		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Uses the active shared FOV mask as the VR-only foveation gate for Dynamic Cubemap update cadence.");
+			ImGui::TextUnformatted("When active, cubemap capture, inference, irradiance, and BC6H compression are spread across more frames when reflections are low priority.");
+			ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a Lighting/Utility-style feathered vs hard-cutoff pair.");
+		}
 
-			ImGui::Separator();
+		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Adds visibility-based reduction for Dynamic Cubemaps when the secondary reflection path is not currently useful.");
+			ImGui::TextUnformatted("When no real reflection pass is active, exterior fake-reflection cubemap work is not forced and any pending secondary reflection task is skipped.");
+			ImGui::TextUnformatted("It can be enabled independently, but enabling both cubemap toggles applies both cadence throttling and eligible low-value reflection-task skipping.");
+			ImGui::TextUnformatted("Additive with Dynamic Cubemap Cadence; it is not a replacement mode or a hard-cutoff option.");
+		}
+		ImGui::EndDisabled();
+		if (!foveatedProfileActive)
+			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with FOV area below 1.00.");
 
-			ImGui::Checkbox("FOV Water Parallax Detail", &settings.EnableWaterParallaxFoveation);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses the active Upscaling FOV mask to reduce expensive Water Effects parallax loops in VR.");
-				ImGui::TextUnformatted("Inside the FOV mask keeps full water parallax. The feather band uses fewer parallax steps and fades offsets toward base water normals.");
-				ImGui::TextUnformatted("Base water color, normal sampling, reflection, refraction, and Wetterness ripple paths remain active.");
-			}
-
-			ImGui::BeginDisabled(!settings.EnableWaterParallaxFoveation);
-			ImGui::Checkbox("Hard Cutoff Outside FOV##WaterParallax", &settings.EnableWaterParallaxFoveationHardCutoff);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses a binary mask for Water Effects parallax detail.");
-				ImGui::TextUnformatted("Inside the FOV mask keeps full parallax; outside the mask skips parallax offsets and uses base water normal UVs.");
-				ImGui::TextUnformatted("This assumes only the foveated area is visibly important and can make water microdetail transitions more visible near the mask edge.");
-			}
-			ImGui::EndDisabled();
-
-			ImGui::Separator();
-
-			ImGui::Checkbox("FOV Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses the active Upscaling FOV profile as the VR-only foveation gate for Dynamic Cubemap update cadence.");
-				ImGui::TextUnformatted("When active, cubemap capture, inference, irradiance, and BC6H compression are spread across more frames when reflections are low priority.");
-				ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a Lighting/Utility-style feathered vs hard-cutoff pair.");
-			}
-
-			ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Adds visibility-based reduction for Dynamic Cubemaps when the secondary reflection path is not currently useful.");
-				ImGui::TextUnformatted("When no real reflection pass is active, exterior fake-reflection cubemap work is not forced and any pending secondary reflection task is skipped.");
-				ImGui::TextUnformatted("It can be enabled independently, but enabling both cubemap toggles applies both cadence throttling and eligible low-value reflection-task skipping.");
-				ImGui::TextUnformatted("Additive with FOV Dynamic Cubemap Cadence; it is not a replacement mode or a hard-cutoff option.");
-			}
-
-			ImGui::Spacing();
-			ImGui::Text("Lighting detail foveation: %s", lightingActive ? "active" : "inactive");
-			ImGui::Text("Lighting detail mode: %s", lightingMode);
-			ImGui::Text("Utility shadowmask foveation: %s", utilityActive ? "active" : "inactive");
-			ImGui::Text("Utility shadowmask mode: %s", utilityMode);
-			ImGui::Text("SSR raymarch foveation: %s", ssrActive ? "active" : "inactive");
-			ImGui::Text("SSR raymarch mode: %s", ssrMode);
-			ImGui::Text("Water parallax foveation: %s", waterParallaxActive ? "active" : "inactive");
-			ImGui::Text("Water parallax mode: %s", waterParallaxMode);
-			ImGui::Text("Dynamic cubemap cadence: %s", cubemapCadenceActive ? "active" : "inactive");
-			ImGui::Text("Dynamic cubemap visibility throttle: %s", cubemapVisibilityActive ? "active" : "inactive");
-			ImGui::Text("FOV profile: %s", profile.available ? "available" : "unavailable");
-			if (profile.available) {
-				ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "Upscaling FOV center");
-				ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
-				ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
-				if (anyFoveationEnabled && profile.coverageArea >= foveatedProfileFullCoverageThreshold) {
-					ImGui::TextDisabled("Requires FOV area below 1.00.");
-				}
-			} else if (anyFoveationEnabled) {
-				ImGui::TextDisabled("Requires active foveated upscaling.");
-			}
-			if (anyCubemapFoveationEnabled && !dynamicCubemaps.loaded) {
-				ImGui::TextDisabled("Requires Dynamic Cubemaps.");
-			}
+		ImGui::Spacing();
+		ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+		if (ImGui::CollapsingHeader("Status##VRFoveationStatus")) {
+			const bool statusLightingActive = settings.EnableLightingFoveation && foveatedProfileActive;
+			const bool statusUtilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
+			const bool statusSSRActive = settings.EnableSSRFoveation && ssrAvailable && foveatedProfileActive;
+			const bool statusWaterParallaxActive = settings.EnableWaterParallaxFoveation && waterParallaxAvailable && foveatedProfileActive;
+			const bool statusCubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
+			const bool statusCubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
+			const bool statusScreenSpaceShadowsEnabled = screenSpaceShadows.bendSettings.Enable != 0 && screenSpaceShadows.bendSettings.EnableFoveated != 0;
+			const bool statusSsgiFoveatedEnabled = screenSpaceGI.settings.Enabled && screenSpaceGI.settings.FoveatedPresetMode != 0;
+			const auto statusLightingMode = FoveatedCommon::GetDetailMode(settings.EnableLightingFoveation, settings.EnableLightingFoveationHardCutoff);
+			const auto statusUtilityMode = FoveatedCommon::GetDetailMode(settings.EnableUtilityFoveation, settings.EnableUtilityFoveationHardCutoff);
+			const auto statusSSRMode = FoveatedCommon::GetDetailMode(settings.EnableSSRFoveation, settings.EnableSSRFoveationHardCutoff);
+			const auto statusWaterParallaxMode = FoveatedCommon::GetDetailMode(settings.EnableWaterParallaxFoveation, settings.EnableWaterParallaxFoveationHardCutoff);
+			const bool statusAnyCubemapFoveationEnabled =
+				settings.EnableDynamicCubemapFoveation ||
+				settings.EnableDynamicCubemapVisibilityThrottle;
+			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full coverage" : "unavailable");
+			ImGui::Text("Lighting auxiliary detail: %s (%s)", statusLightingActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusLightingMode));
+			ImGui::Text("Utility shadowmask filtering: %s (%s)", statusUtilityActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusUtilityMode));
+			ImGui::Text("SSR raymarch: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
+			ImGui::Text("Water parallax detail: %s (%s)", statusWaterParallaxActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWaterParallaxMode));
+			ImGui::Text("Screen Space Shadows: %s", statusScreenSpaceShadowsEnabled && foveatedProfileActive ? "active" : "inactive");
+			ImGui::Text("Screen Space GI: %s", statusSsgiFoveatedEnabled && foveatedProfileActive ? "active" : "inactive");
+			ImGui::Text("Dynamic cubemap cadence: %s", statusCubemapCadenceActive ? "active" : "inactive");
+			ImGui::Text("Dynamic cubemap visibility throttle: %s", statusCubemapVisibilityActive ? "active" : "inactive");
+			if (statusAnyCubemapFoveationEnabled && !dynamicCubemaps.loaded)
+				ImGui::TextDisabled("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
 			if (settings.EnableSSRFoveation && !ssrAvailable) {
-				ImGui::TextDisabled("Requires Dynamic Cubemaps SSR.");
-				if (isVR && dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0 && !dynamicCubemaps.enabledAtBoot) {
+				ImGui::TextDisabled("SSR foveation requires Dynamic Cubemaps SSR.");
+				if (dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0 && !dynamicCubemaps.enabledAtBoot)
 					ImGui::TextDisabled("VR SSR must be enabled before startup.");
-				}
 			}
-			if (settings.EnableWaterParallaxFoveation && !waterParallaxAvailable) {
-				ImGui::TextDisabled("Requires Water Effects.");
-			}
+			if (settings.EnableWaterParallaxFoveation && !waterParallaxAvailable)
+				ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
 		}
 	}
 

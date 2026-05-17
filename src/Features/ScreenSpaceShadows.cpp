@@ -90,13 +90,14 @@ namespace
 		const auto& upscaling = globals::features::upscaling;
 		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 		state.available = profile.available;
-		if (!state.available || !a_settings.EnableFoveated)
+		if (!state.available)
 			return state;
 
 		state.centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
 		state.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
 		state.centerOffsets = profile.centerOffsets;
-		state.active = state.centerScale < 0.999f;
+		state.available = FoveatedCommon::IsActiveCoverage(state.centerScale);
+		state.active = state.available && a_settings.EnableFoveated != 0;
 		return state;
 	}
 
@@ -152,24 +153,7 @@ void ScreenSpaceShadows::DrawSettings()
 			}
 			bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
 
-			const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
-			const bool foveatedAvailable = foveatedState.available;
-			bool foveatedEnabled = bendSettings.EnableFoveated != 0;
-			{
-				auto foveatedGuard = Util::DisableGuard(!foveatedAvailable);
-				Util::BlueFrameStyleWrapper blueFrameStyle(true);
-				if (ImGui::Checkbox("FOV Screen Space Shadows", &foveatedEnabled))
-					bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses the active Upscaling FOV mask for Screen Space Shadows.");
-				ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the FOV mask and fades to no SSS outside it.");
-				ImGui::TextUnformatted("Uses the Upscaling FOV center mask normally, or the outside edge of the Peripheral TAA mask when Upscaling FOV + Peripheral TAA is enabled.");
-				ImGui::TextUnformatted("The mask area, horizontal scale, offsets, and Peripheral TAA profile are taken from Upscaling; SSS has no separate FOV size.");
-				if (!foveatedAvailable)
-					ImGui::TextUnformatted("Requires active foveated upscaling.");
-			}
-
+			ImGui::TextDisabled("FOV Screen Space Shadows is configured in VR > Foveation.");
 		}
 
 		ImGui::Spacing();
@@ -195,6 +179,34 @@ void ScreenSpaceShadows::DrawSettings()
 		ImGui::Spacing();
 		ImGui::TreePop();
 	}
+}
+
+void ScreenSpaceShadows::DrawFoveationSettings()
+{
+	if (!globals::game::isVR) {
+		ImGui::TextDisabled("FOV Screen Space Shadows is available only in VR.");
+		return;
+	}
+
+	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
+	const bool foveatedAvailable = foveatedState.available;
+	bool foveatedEnabled = bendSettings.EnableFoveated != 0;
+	{
+		auto foveatedGuard = Util::DisableGuard(!foveatedAvailable);
+		Util::BlueFrameStyleWrapper blueFrameStyle(true);
+		if (ImGui::Checkbox("FOV Screen Space Shadows", &foveatedEnabled))
+			bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Uses the active shared FOV mask for Screen Space Shadows.");
+		ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the FOV mask and fades to no SSS outside it.");
+		ImGui::TextUnformatted("Uses the Upscaling FOV center mask normally, or the outside edge of the Peripheral TAA mask when Upscaling FOV + Peripheral TAA is enabled.");
+		ImGui::TextUnformatted("The mask area, horizontal scale, offsets, and Peripheral TAA profile are taken from the shared VR FOV mask; SSS has no separate FOV size.");
+		if (!foveatedAvailable)
+			ImGui::TextUnformatted("Requires active foveated upscaling.");
+	}
+
+	ImGui::Text("Screen Space Shadows foveation: %s", foveatedEnabled && bendSettings.Enable != 0 && foveatedState.active ? "active" : "inactive");
 }
 
 void ScreenSpaceShadows::InvalidateRaymarchShaders()

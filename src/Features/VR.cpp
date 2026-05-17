@@ -497,17 +497,6 @@ void VR::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		// Key Bindings Tab
-		if (openVRInfo.isCompatible) {
-			if (BeginTabItemWithFont("Bindings", Menu::FontRole::Subheading)) {
-				if (ImGui::BeginChild("##VRBindingsFrame", { 0, 0 }, true)) {
-					DrawKeyBindings();
-				}
-				ImGui::EndChild();
-				ImGui::EndTabItem();
-			}
-		}
-
 		if (BeginTabItemWithFont("Stereo", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRStereoFrame", { 0, 0 }, true)) {
 				DrawStereoSettings();
@@ -522,6 +511,17 @@ void VR::DrawSettings()
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
+		}
+
+		// Key Bindings Tab
+		if (openVRInfo.isCompatible) {
+			if (BeginTabItemWithFont("Bindings", Menu::FontRole::Subheading)) {
+				if (ImGui::BeginChild("##VRBindingsFrame", { 0, 0 }, true)) {
+					DrawKeyBindings();
+				}
+				ImGui::EndChild();
+				ImGui::EndTabItem();
+			}
 		}
 
 		// Debug Tab (existing debug functionality)

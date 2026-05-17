@@ -18,6 +18,8 @@ cbuffer PeripheryTAACB : register(b0)
 	float2 InvOutputDim;
 	float2 InputDim;
 	float2 InvInputDim;
+	float2 InputTextureScale;
+	float2 InputTextureOffset;
 	float2 DispatchDim;
 	float2 OutputOffset;
 	float2 Jitter;
@@ -132,6 +134,11 @@ uint2 ToInputPos(float2 uv)
 {
 	float2 clamped = ClampInputUV(uv);
 	return min((uint2)floor(clamped * InputDim), uint2(InputDim) - 1);
+}
+
+float2 ToInputTextureUV(float2 uv)
+{
+	return ClampInputUV(uv) * InputTextureScale + InputTextureOffset;
 }
 
 uint2 ToHistoryPos(float2 uv)
@@ -400,6 +407,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 
 	float2 outputUV = (float2(outputPos) + 0.5) * InvOutputDim;
 	float2 inputUV = ClampInputUV(outputUV - (Jitter * InvInputDim));
+	float2 inputTextureUV = ToInputTextureUV(inputUV);
 	const bool groupFastPath = !historyValid || gTileFastPathMode != kTileFastPathNone;
 
 	const uint groupThreadIndex = groupThreadID.y * 8u + groupThreadID.x;
@@ -420,7 +428,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 		return;
 
 	if (groupFastPath) {
-		float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputUV, 0.0);
+		float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 		float centerWeight = FoveatedComputeCenterBlendWeight(outputUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset);
 		if (centerWeight >= 1.0 || gTileFastPathMode == kTileFastPathCenter) {
 			OutVelocity[outputPos] = 0.0.xx;
@@ -432,7 +440,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 		bool outsideTAA = gTileFastPathMode == kTileFastPathOutsideTAA ||
 			FoveatedComputeMaskDistance(outputUV, taaOuterScale, centerHorizontalScale, CenterOffset) > 1.0;
 		if (!historyValid || outsideTAA) {
-			float2 passthroughVelocity = CurrentMotionVectors.SampleLevel(LinearSampler, inputUV, 0.0);
+			float2 passthroughVelocity = CurrentMotionVectors.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 			OutVelocity[outputPos] = passthroughVelocity;
 			OutLock[outputPos] = 0.0;
 			// Only the history padding outside this rectangle is overwritten by
@@ -447,7 +455,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 
 	float centerWeight = FoveatedComputeCenterBlendWeight(outputUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset);
 	float peripheryWeight = saturate(1.0 - centerWeight);
-	float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputUV, 0.0);
+	float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 	if (peripheryWeight <= 0.0) {
 		OutVelocity[outputPos] = 0.0.xx;
 		OutLock[outputPos] = 0.0;
@@ -456,7 +464,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 	}
 
 	if (FoveatedComputeMaskDistance(outputUV, taaOuterScale, centerHorizontalScale, CenterOffset) > 1.0) {
-		float2 passthroughVelocity = CurrentMotionVectors.SampleLevel(LinearSampler, inputUV, 0.0);
+		float2 passthroughVelocity = CurrentMotionVectors.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 		OutVelocity[outputPos] = passthroughVelocity;
 		OutLock[outputPos] = 0.0;
 		if (IsInsideTAAColorWriteBounds(outputPos))
@@ -476,8 +484,8 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 	float2 rejectionVelocity = currentVelocity;
 	float velocityPixels = length(rejectionVelocity * OutputDim);
 	float2 historyUV = outputUV + historyVelocity;
-	float reactiveMask = CurrentReactiveMask.SampleLevel(LinearSampler, inputUV, 0.0);
-	float transparencyMask = CurrentTransparencyMask.SampleLevel(LinearSampler, inputUV, 0.0);
+	float reactiveMask = CurrentReactiveMask.SampleLevel(LinearSampler, inputTextureUV, 0.0);
+	float transparencyMask = CurrentTransparencyMask.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 	float reactivity = saturate(max(reactiveMask, transparencyMask) * Tuning2.x);
 
 	float3 resolvedColor = currentColor;

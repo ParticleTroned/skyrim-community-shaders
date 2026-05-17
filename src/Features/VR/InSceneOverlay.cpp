@@ -36,6 +36,8 @@ namespace
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
+					if (upscaledTexture.handle && upscaledTexture.eType == vr::TextureType_DirectX)
+						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
 
@@ -241,10 +243,6 @@ void VR::InitInSceneResources()
 
 void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds)
 {
-	if (globals::features::upscaling.IsSubmitStageUpscalingActive()) {
-		return;
-	}
-
 	auto context = globals::d3d::context;
 	if (!context || !globals::d3d::device || !targetTexture) {
 		return;

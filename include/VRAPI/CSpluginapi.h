@@ -9,6 +9,8 @@
 #include "VRAPI/CSinterface001.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 
 inline constexpr unsigned int CSBuildNumber = 4;
 
@@ -206,7 +208,17 @@ namespace CSPluginAPI
 			return;
 		}
 
-		globals::features::upscaling.settings.qualityMode = detail::UpscalePresetToQualityMode(mode);
+		auto& upscaling = globals::features::upscaling;
+		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(mode);
+		if (upscaling.settings.qualityMode == qualityMode)
+			return;
+
+		const bool dlssSelected = upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
+		upscaling.settings.qualityMode = qualityMode;
+		upscaling.RequestHistoryReset();
+		if (globals::game::isVR && dlssSelected) {
+			upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
+		}
 	}
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()

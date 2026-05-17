@@ -909,6 +909,10 @@ void Streamline::DestroyDLSSResources()
 	sl::DLSSOptions dlssOptions{};
 	dlssOptions.mode = sl::DLSSMode::eOff;
 
+	if (auto context = globals::d3d::context) {
+		context->Flush();
+	}
+
 	const auto freeViewport = [&](sl::ViewportHandle a_viewport, uint32_t a_eyeIndex) {
 		const sl::Result optionsResult = slDLSSSetOptions(a_viewport, dlssOptions);
 		if (optionsResult != sl::Result::eOk) {

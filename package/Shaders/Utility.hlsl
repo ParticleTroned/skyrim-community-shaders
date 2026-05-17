@@ -418,32 +418,36 @@ float ApplyVRUtilityShadowmaskFilterWeight(float singleSampleVisibility, float f
 
 float SampleVRUtilityShadowmaskPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius, float detailWeight, bool detailEnabled)
 {
+	float visibility = 0.0;
 	[branch] if (detailWeight >= 0.9999) {
-		return SampleShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius);
+		visibility = SampleShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius);
+	} else {
+		float singleSampleVisibility = tex.SampleCmpLevelZero(samp, float3(baseUV, layerIndex), compareValue).x;
+		visibility = singleSampleVisibility;
+		[branch] if (detailEnabled) {
+			float filteredVisibility = SampleShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius);
+			visibility = ApplyVRUtilityShadowmaskFilterWeight(singleSampleVisibility, filteredVisibility, detailWeight);
+		}
 	}
-
-	float singleSampleVisibility = tex.SampleCmpLevelZero(samp, float3(baseUV, layerIndex), compareValue).x;
-	[branch] if (!detailEnabled)
-		return singleSampleVisibility;
-
-	float filteredVisibility = SampleShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius);
-	return ApplyVRUtilityShadowmaskFilterWeight(singleSampleVisibility, filteredVisibility, detailWeight);
+	return visibility;
 }
 
 float SampleVRUtilityDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius, bool lowerHalf, float detailWeight, bool detailEnabled)
 {
+	float visibility = 0.0;
 	[branch] if (detailWeight >= 0.9999) {
-		return SampleDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf);
+		visibility = SampleDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf);
+	} else {
+		float2 singleSampleUV = baseUV;
+		singleSampleUV.y = lowerHalf ? max(singleSampleUV.y, 0.5) : min(singleSampleUV.y, 0.5);
+		float singleSampleVisibility = tex.SampleCmpLevelZero(samp, float3(singleSampleUV, layerIndex), compareValue).x;
+		visibility = singleSampleVisibility;
+		[branch] if (detailEnabled) {
+			float filteredVisibility = SampleDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf);
+			visibility = ApplyVRUtilityShadowmaskFilterWeight(singleSampleVisibility, filteredVisibility, detailWeight);
+		}
 	}
-
-	float2 singleSampleUV = baseUV;
-	singleSampleUV.y = lowerHalf ? max(singleSampleUV.y, 0.5) : min(singleSampleUV.y, 0.5);
-	float singleSampleVisibility = tex.SampleCmpLevelZero(samp, float3(singleSampleUV, layerIndex), compareValue).x;
-	[branch] if (!detailEnabled)
-		return singleSampleVisibility;
-
-	float filteredVisibility = SampleDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf);
-	return ApplyVRUtilityShadowmaskFilterWeight(singleSampleVisibility, filteredVisibility, detailWeight);
+	return visibility;
 }
 #	endif
 

@@ -95,7 +95,7 @@ namespace ExtendedMaterials
 		[unroll] for (int i = 0; i < 6; i++)
 		{
 			totalHeight += heights[i] * weights[i];
-			weights[i] *= pow(heightBlend, HEIGHT_MULT * heights[i]);
+			weights[i] *= pow(abs(heightBlend), HEIGHT_MULT * heights[i]);
 		}
 
 		[unroll] for (int j = 0; j < 6; j++)
@@ -575,7 +575,7 @@ namespace ExtendedMaterials
 			[branch] if (SharedData::terrainVariationSettings.enableTilingFix)
 			{
 				float shadowIntensity = saturate(dot(max(0, sh - sh0), 1.0)) * quality;
-				shadowIntensity = pow(shadowIntensity, 0.8);  // Slight contrast boost
+				shadowIntensity = pow(abs(shadowIntensity), 0.8);  // Slight contrast boost
 				return pow(1.0 - shadowIntensity, 2.0);
 			}
 			else
@@ -608,7 +608,7 @@ namespace ExtendedMaterials
 			[branch] if (SharedData::terrainVariationSettings.enableTilingFix)
 			{
 				float shadowIntensity = saturate(dot(max(0, sh - sh0), 1.0)) * quality;
-				shadowIntensity = pow(shadowIntensity, 0.8);  // Slight contrast boost
+				shadowIntensity = pow(abs(shadowIntensity), 0.8);  // Slight contrast boost
 				return pow(1.0 - shadowIntensity, 2.0);
 			}
 			else

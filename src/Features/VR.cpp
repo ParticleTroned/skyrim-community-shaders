@@ -11,6 +11,8 @@
 #include "ScreenSpaceShadows.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "WetnessEffects.h"
+#include "Wetterness.h"
 #include "WaterEffects.h"
 #include <openvr.h>
 
@@ -88,6 +90,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableSSRFoveationHardCutoff,
 	EnableWaterParallaxFoveation,
 	EnableWaterParallaxFoveationHardCutoff,
+	EnableWetternessFoveation,
+	EnableWetternessFoveationHardCutoff,
 	EnableDynamicCubemapFoveation,
 	EnableDynamicCubemapVisibilityThrottle,
 	menuOverlayPath)
@@ -1124,6 +1128,8 @@ namespace
 		auto& screenSpaceGI = globals::features::screenSpaceGI;
 		auto& screenSpaceShadows = globals::features::screenSpaceShadows;
 		auto& waterEffects = globals::features::waterEffects;
+		auto& wetnessEffects = globals::features::wetnessEffects;
+		auto& wetterness = globals::features::wetterness;
 		const bool isVR = REL::Module::IsVR();
 		if (!isVR) {
 			ImGui::TextDisabled("VR foveation controls are available only in VR.");
@@ -1163,6 +1169,10 @@ namespace
 		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxAvailable = waterEffects.loaded;
+		const bool wetnessEffectsLoaded = wetnessEffects.loaded;
+		const bool wetternessFeatureAvailable = wetterness.loaded && !wetnessEffectsLoaded;
+		const bool wetternessRuntimeActive = wetterness.IsRuntimeActive() && !wetnessEffectsLoaded;
+		const bool wetternessFoveationEnabled = settings.EnableWetternessFoveation && wetternessRuntimeActive;
 		const bool screenSpaceShadowsEnabled = screenSpaceShadows.bendSettings.Enable != 0 && screenSpaceShadows.bendSettings.EnableFoveated != 0;
 		const bool screenSpaceGIEnabled = screenSpaceGI.settings.Enabled && screenSpaceGI.settings.FoveatedPresetMode != 0;
 		const bool anySharedMaskConsumerEnabled =
@@ -1170,6 +1180,7 @@ namespace
 			settings.EnableUtilityFoveation ||
 			settings.EnableSSRFoveation ||
 			settings.EnableWaterParallaxFoveation ||
+			wetternessFoveationEnabled ||
 			settings.EnableDynamicCubemapFoveation ||
 			settings.EnableDynamicCubemapVisibilityThrottle ||
 			screenSpaceShadowsEnabled ||
@@ -1196,7 +1207,7 @@ namespace
 
 		drawSection("Shader Detail Budgets");
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Lighting, Utility, SSR, and Water shader budgets require active foveated upscaling with FOV area below 1.00.");
+			ImGui::TextDisabled("Lighting, Utility, SSR, Water, and Wetterness shader budgets require active foveated upscaling with FOV area below 1.00.");
 
 		ImGui::BeginDisabled(!foveatedProfileActive);
 		drawDetailBudget(
@@ -1249,6 +1260,27 @@ namespace
 			"Uses a binary mask for Water Effects parallax detail.",
 			"Inside the FOV mask keeps full parallax; outside the mask skips parallax offsets and uses base water normal UVs.",
 			"This assumes only the foveated area is visibly important and can make water microdetail transitions more visible near the mask edge.");
+		ImGui::Separator();
+
+		ImGui::BeginDisabled(!wetternessRuntimeActive);
+		drawDetailBudget(
+			"Wetterness Dynamic Detail",
+			settings.EnableWetternessFoveation,
+			"Hard Cutoff Outside FOV##Wetterness",
+			settings.EnableWetternessFoveationHardCutoff,
+			"Uses the active shared FOV mask to reduce Wetterness raindrop/ripple microdetail and direct wet specular in VR.",
+			"Base wetness, puddles, darkening, shore wetness, broad reflection, and cubemap wet reflectance remain active everywhere.",
+			"This applies only to Wetterness and does not affect legacy Wetness Effects.",
+			"Uses a binary mask for Wetterness dynamic detail.",
+			"Inside the FOV mask keeps full dynamic wet detail; outside the mask skips raindrop/ripple work and direct wet specular contribution.",
+			"This assumes only the foveated area is visibly important and can make wet microdetail transitions more visible near the mask edge.");
+		ImGui::EndDisabled();
+		if (wetnessEffectsLoaded)
+			ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
+		else if (!wetternessFeatureAvailable)
+			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
+		else if (!wetternessRuntimeActive)
+			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
 		ImGui::EndDisabled();
 
 		drawSection("Dynamic Cubemaps");
@@ -1278,6 +1310,7 @@ namespace
 			const bool statusUtilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
 			const bool statusSSRActive = settings.EnableSSRFoveation && ssrAvailable && foveatedProfileActive;
 			const bool statusWaterParallaxActive = settings.EnableWaterParallaxFoveation && waterParallaxAvailable && foveatedProfileActive;
+			const bool statusWetternessActive = wetternessFoveationEnabled && foveatedProfileActive;
 			const bool statusCubemapCadenceActive = settings.EnableDynamicCubemapFoveation && dynamicCubemaps.loaded && foveatedProfileActive;
 			const bool statusCubemapVisibilityActive = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemaps.loaded && foveatedProfileActive;
 			const bool statusScreenSpaceShadowsEnabled = screenSpaceShadows.bendSettings.Enable != 0 && screenSpaceShadows.bendSettings.EnableFoveated != 0;
@@ -1286,6 +1319,7 @@ namespace
 			const auto statusUtilityMode = FoveatedCommon::GetDetailMode(settings.EnableUtilityFoveation, settings.EnableUtilityFoveationHardCutoff);
 			const auto statusSSRMode = FoveatedCommon::GetDetailMode(settings.EnableSSRFoveation, settings.EnableSSRFoveationHardCutoff);
 			const auto statusWaterParallaxMode = FoveatedCommon::GetDetailMode(settings.EnableWaterParallaxFoveation, settings.EnableWaterParallaxFoveationHardCutoff);
+			const auto statusWetternessMode = FoveatedCommon::GetDetailMode(wetternessFoveationEnabled, settings.EnableWetternessFoveationHardCutoff);
 			const bool statusAnyCubemapFoveationEnabled =
 				settings.EnableDynamicCubemapFoveation ||
 				settings.EnableDynamicCubemapVisibilityThrottle;
@@ -1294,6 +1328,7 @@ namespace
 			ImGui::Text("Utility shadowmask filtering: %s (%s)", statusUtilityActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusUtilityMode));
 			ImGui::Text("SSR raymarch: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
 			ImGui::Text("Water parallax detail: %s (%s)", statusWaterParallaxActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWaterParallaxMode));
+			ImGui::Text("Wetterness dynamic detail: %s (%s)", statusWetternessActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWetternessMode));
 			ImGui::Text("Screen Space Shadows: %s", statusScreenSpaceShadowsEnabled && foveatedProfileActive ? "active" : "inactive");
 			ImGui::Text("Screen Space GI: %s", statusSsgiFoveatedEnabled && foveatedProfileActive ? "active" : "inactive");
 			ImGui::Text("Dynamic cubemap cadence: %s", statusCubemapCadenceActive ? "active" : "inactive");
@@ -1307,6 +1342,12 @@ namespace
 			}
 			if (settings.EnableWaterParallaxFoveation && !waterParallaxAvailable)
 				ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
+			if (settings.EnableWetternessFoveation && wetnessEffectsLoaded)
+				ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
+			else if (settings.EnableWetternessFoveation && !wetternessFeatureAvailable)
+				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
+			else if (settings.EnableWetternessFoveation && !wetternessRuntimeActive)
+				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
 		}
 	}
 

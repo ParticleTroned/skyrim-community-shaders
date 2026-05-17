@@ -19,6 +19,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/WaterEffects.h"
+#include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
@@ -1079,13 +1080,17 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const auto& vr = globals::features::vr;
 		const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 		const auto& waterEffects = globals::features::waterEffects;
+		const auto& wetnessEffects = globals::features::wetnessEffects;
+		const auto& wetterness = globals::features::wetterness;
 		const bool dynamicSSRActive = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxActive = vr.settings.EnableWaterParallaxFoveation && waterEffects.loaded;
+		const bool wetternessActive = vr.settings.EnableWetternessFoveation && wetterness.IsRuntimeActive() && !wetnessEffects.loaded;
 		const bool anyShaderFoveationEnabled =
 			vr.settings.EnableLightingFoveation ||
 			vr.settings.EnableUtilityFoveation ||
 			(vr.settings.EnableSSRFoveation && dynamicSSRActive) ||
-			waterParallaxActive;
+			waterParallaxActive ||
+			wetternessActive;
 		if (globals::game::isVR &&
 			vr.loaded &&
 			anyShaderFoveationEnabled &&
@@ -1107,6 +1112,9 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				const float waterParallaxFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					waterParallaxActive,
 					vr.settings.EnableWaterParallaxFoveationHardCutoff));
+				const float wetternessFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
+					wetternessActive,
+					vr.settings.EnableWetternessFoveationHardCutoff));
 				data.VRFoveationData0 = {
 					centerScale,
 					FoveatedCommon::kCenterFeather,
@@ -1117,7 +1125,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 					foveationActive ? utilityFoveationMode : disabledFoveationMode,
 					foveationActive ? ssrFoveationMode : disabledFoveationMode,
 					foveationActive ? waterParallaxFoveationMode : disabledFoveationMode,
-					0.0f
+					foveationActive ? wetternessFoveationMode : disabledFoveationMode
 				};
 				data.VRFoveationCenterOffsets = {
 					profile.centerOffsets[0].x,

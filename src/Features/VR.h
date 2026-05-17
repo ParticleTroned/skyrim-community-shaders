@@ -184,6 +184,8 @@ public:
 		bool EnableSSRFoveationHardCutoff = false;
 		bool EnableWaterParallaxFoveation = false;
 		bool EnableWaterParallaxFoveationHardCutoff = false;
+		bool EnableWetternessFoveation = false;
+		bool EnableWetternessFoveationHardCutoff = false;
 		bool EnableDynamicCubemapFoveation = false;
 		bool EnableDynamicCubemapVisibilityThrottle = false;
 

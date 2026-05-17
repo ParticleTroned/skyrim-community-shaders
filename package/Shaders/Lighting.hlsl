@@ -1023,12 +1023,11 @@ float3 SafeNormalize3(float3 v, float3 fallback)
 }
 
 #if defined(VR)
-float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
+float GetVRFoveatedDetailWeight(float mode, float2 eyeUv, uint eyeIndex)
 {
-	float lightingFoveationMode = SharedData::VRFoveationData0.w;
 	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
 	return FoveatedComputeDetailWeight(
-		lightingFoveationMode,
+		mode,
 		eyeUv,
 		SharedData::VRFoveationData0.x,
 		SharedData::VRFoveationData0.y,
@@ -1036,10 +1035,22 @@ float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
 		centerOffset);
 }
 
-bool ShouldEvaluateVRLightingAuxiliaryDetail(float detailWeight)
+bool ShouldEvaluateVRFoveatedDetail(float detailWeight)
 {
 	return FoveatedShouldEvaluateDetail(detailWeight);
 }
+
+float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
+{
+	return GetVRFoveatedDetailWeight(SharedData::VRFoveationData0.w, eyeUv, eyeIndex);
+}
+
+#	if defined(WETTERNESS)
+float GetVRWetternessDynamicDetailWeight(float2 eyeUv, uint eyeIndex)
+{
+	return GetVRFoveatedDetailWeight(SharedData::VRFoveationData1.w, eyeUv, eyeIndex);
+}
+#	endif
 #endif
 
 float ApplyVRLightingAuxiliaryShadowWeight(float shadow, float detailWeight)
@@ -1084,10 +1095,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 #	if defined(VR)
 	float vrAuxDetailWeight = GetVRLightingAuxiliaryDetailWeight(screenUV, eyeIndex);
-	bool vrAuxDetailEnabled = ShouldEvaluateVRLightingAuxiliaryDetail(vrAuxDetailWeight);
+	bool vrAuxDetailEnabled = ShouldEvaluateVRFoveatedDetail(vrAuxDetailWeight);
+#		if defined(WETTERNESS)
+	float vrWetternessDynamicDetailWeight = GetVRWetternessDynamicDetailWeight(screenUV, eyeIndex);
+	bool vrWetternessDynamicDetailEnabled = ShouldEvaluateVRFoveatedDetail(vrWetternessDynamicDetailWeight);
+	float vrWetnessDirectDetailWeight = min(vrAuxDetailWeight, vrWetternessDynamicDetailWeight);
+	bool vrWetnessDirectDetailEnabled = ShouldEvaluateVRFoveatedDetail(vrWetnessDirectDetailWeight);
+#		endif
 #	else
 	const float vrAuxDetailWeight = 1.0;
 	const bool vrAuxDetailEnabled = true;
+#		if defined(WETTERNESS)
+	const float vrWetternessDynamicDetailWeight = 1.0;
+	const bool vrWetternessDynamicDetailEnabled = true;
+	const float vrWetnessDirectDetailWeight = 1.0;
+	const bool vrWetnessDirectDetailEnabled = true;
+#		endif
 #	endif
 
 #	if defined(DEFERRED)
@@ -2670,7 +2693,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		CS_WETNESS_SETTINGS.Raining > 0.0f &&
 		(CS_WETNESS_SETTINGS.EnableRaindropFx != 0) &&
 		(rainDropDistance < maxRainDropDistance);
-	const bool raindropOcclusionNeeded = raindropFxActive && inRainBlend > 0.0;
+	const bool raindropOcclusionNeeded = raindropFxActive && vrWetternessDynamicDetailEnabled && inRainBlend > 0.0;
 	const bool shelterOcclusionNeeded = puddleOcclusionPhase * roofLikeMask > 1e-3;
 	if ((raindropOcclusionNeeded || shelterOcclusionNeeded) && hasOcclusionViewProj) {
 		float4 precipOcclusionTexCoord = mul(CS_WETNESS_SETTINGS.OcclusionViewProj, float4(input.WorldPosition.xyz, 1));
@@ -2702,8 +2725,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float openSkyMask = openSkyUpness * openSkyAmbient;
 		puddleRainExposure = lerp(puddleRainExposure, 1.0, openSkyMask);
 	}
-	if (raindropFxActive) {
-		float raindropFade = localRainOcclusion * distanceFadeout;
+	if (raindropFxActive && vrWetternessDynamicDetailEnabled) {
+		float raindropFade = localRainOcclusion * distanceFadeout * vrWetternessDynamicDetailWeight;
 
 		if (raindropFade > 0.0)
 #		if defined(SKINNED)
@@ -3223,7 +3246,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		wetReflectionModeConfigDirect = wetReflectionModeConfig;
 		wetReflectionModeConfigDirect.z *= wetDirectSpecularScale;
-		wetDirectLightingVisible = wetReflectionModeConfigDirect.z > 1e-4 && vrAuxDetailEnabled;
+		wetDirectLightingVisible = wetReflectionModeConfigDirect.z > 1e-4 && vrWetnessDirectDetailEnabled;
 		wetIndirectLightingVisible = wetReflectionModeConfig.z > 1e-4 && wetHighlightReflectanceScale > 1e-4;
 	}
 #	endif
@@ -3264,7 +3287,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (wetDirectLightingVisible) {
 		DirectLightingOutput baseDirLightOutput = dirLightOutput;
 		EvaluateWetnessLighting(wetnessNormal, dirLightContext, waterRoughnessSpecular, wetDirectLightingParams, dirLightOutput);
-		ApplyVRLightingAuxiliaryOutputWeight(dirLightOutput, baseDirLightOutput, vrAuxDetailWeight);
+		ApplyVRLightingAuxiliaryOutputWeight(dirLightOutput, baseDirLightOutput, vrWetnessDirectDetailWeight);
 	}
 #	elif defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
@@ -3345,7 +3368,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (wetDirectLightingVisible) {
 			DirectLightingOutput basePointLightOutput = pointLightOutput;
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
-			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrWetnessDirectDetailWeight);
 		}
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
@@ -3536,7 +3559,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (wetDirectLightingVisible) {
 			DirectLightingOutput basePointLightOutput = pointLightOutput;
 			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
-			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrWetnessDirectDetailWeight);
 		}
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {

@@ -27,11 +27,14 @@ namespace CSPluginAPI
 
 	enum class DLSSMode : uint32_t
 	{
+		// Values 0-4 are kept stable for existing compiled API users.
 		kDLAA = 0,
 		kQuality = 1,
 		kBalanced = 2,
 		kPerformance = 3,
-		kUltraPerformance = 4
+		kUltraPerformance = 4,
+		kHoshipa = 5,
+		kUltraQuality = 6
 	};
 
 	enum class DLSSProfile : uint32_t

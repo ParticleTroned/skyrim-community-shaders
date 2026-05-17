@@ -109,7 +109,50 @@ namespace
 
 	uint ClampQualityModeUInt(uint value)
 	{
-		return std::min<uint>(value, 4u);
+		return std::min<uint>(value, Upscaling::kQualityModeMaxIndex);
+	}
+
+	uint MigrateLegacyQualityModeUInt(uint value)
+	{
+		switch (value) {
+		case 0:
+			return 0u;
+		case 1:
+			return 3u;
+		case 2:
+			return 4u;
+		case 3:
+			return 5u;
+		case 4:
+			return 6u;
+		// Preserve values written by transitional builds that introduced 0-6 modes
+		// before `qualityModeSchemaVersion` existed.
+		case 5:
+		case 6:
+			return value;
+		default:
+			return 6u;
+		}
+	}
+
+	const char* GetQualityModeName(uint value, bool isDLSS)
+	{
+		switch (ClampQualityModeUInt(value)) {
+		case 1:
+			return "Hoshipa";
+		case 2:
+			return "Ultra Quality";
+		case 3:
+			return "Quality";
+		case 4:
+			return "Balanced";
+		case 5:
+			return "Performance";
+		case 6:
+			return "Ultra Performance";
+		default:
+			return isDLSS ? "DLAA" : "Native AA";
+		}
 	}
 
 	uint ClampStreamlineLogLevelUInt(uint value)
@@ -1007,34 +1050,26 @@ void Upscaling::DrawSettings()
 
 	// Display upscaling settings if applicable
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		const char* upscalePresetsDLSS[] = { "Ultra Performance", "Performance", "Balanced", "Quality", "DLAA" };
-		const char* upscalePresets[] = { "Ultra Performance", "Performance", "Balanced", "Quality", "Native AA" };
+		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
+		const char* baseLabel = GetQualityModeName(settings.qualityMode, upscaleMethod == UpscaleMethod::kDLSS);
+		std::string labelWithScale = std::format(
+			"{} ( {:.2f}x )",
+			baseLabel,
+			Upscaling::GetQualityModeResolutionScale(settings.qualityMode));
 
-		// Compute a safe preset index (4 - qualityMode) clamped to [0,4] to avoid negative/overflow indexing
-		int presetIndex = 0;
-		if (settings.qualityMode <= 4)
-			presetIndex = 4 - static_cast<int>(settings.qualityMode);
-		presetIndex = std::clamp(presetIndex, 0, 4);
-
-		// Choose preset name set and the corresponding scales once, then show a
-		// single SliderInt to avoid duplicated calls.
-		const char* baseLabel = nullptr;
-
-		if (upscaleMethod == UpscaleMethod::kFSR) {
-			baseLabel = upscalePresets[presetIndex];
-		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-			baseLabel = upscalePresetsDLSS[presetIndex];
+		int qualityMode = static_cast<int>(settings.qualityMode);
+		if (ImGui::SliderInt(
+				"Upscale Preset",
+				&qualityMode,
+				0,
+				static_cast<int>(kQualityModeMaxIndex),
+				labelWithScale.c_str())) {
+			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
 		}
-
-		if (baseLabel) {
-			// Format the label with preset name and resolution scale
-			std::string labelWithScale = std::format("{} ( {:.2f}x )", baseLabel, (resolutionScale.x + resolutionScale.y) * 0.5f);
-
-			ImGui::SliderInt("Upscale Preset", (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str());
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Controls internal render scale / quality level.");
-				ImGui::TextUnformatted("Range: low 0 (highest quality, lowest performance gain) to high 4 (highest performance gain, lowest quality).");
-			}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Controls internal render scale / quality level.");
+			ImGui::TextUnformatted(
+				"Range: low 0 (highest quality, lowest performance gain) to high 6 (highest performance gain, lowest quality).");
 		}
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
@@ -1639,6 +1674,7 @@ void Upscaling::SaveSettings(json& o_json)
 	ApplyOpenCompositeUpscalingBlocker(true);
 	SanitizeUpscalingSettings(settings);
 	o_json = settings;
+	o_json["qualityModeSchemaVersion"] = 2;
 	if (!IsVRRuntimeActive()) {
 		StripVRSpecificUpscalingSettings(o_json);
 	}
@@ -1651,7 +1687,11 @@ void Upscaling::SaveSettings(json& o_json)
 
 void Upscaling::LoadSettings(json& o_json)
 {
+	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
 	settings = o_json;
+	if (!hasQualityModeSchemaVersion) {
+		settings.qualityMode = MigrateLegacyQualityModeUInt(settings.qualityMode);
+	}
 	if (!IsVRRuntimeActive()) {
 		ResetVRSpecificUpscalingSettings(settings);
 	}
@@ -4048,7 +4088,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		float resolutionScaleBase = 1.0f / ffxFsr3GetUpscaleRatioFromQualityMode((FfxFsr3QualityMode)settings.qualityMode);
+		float resolutionScaleBase = GetQualityModeResolutionScale(ClampQualityModeUInt(settings.qualityMode));
 
 		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
 		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);

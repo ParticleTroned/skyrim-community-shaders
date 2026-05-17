@@ -10,7 +10,7 @@
 
 #include <algorithm>
 
-inline constexpr unsigned int CSBuildNumber = 3;
+inline constexpr unsigned int CSBuildNumber = 4;
 
 namespace CSPluginAPI
 {
@@ -66,9 +66,53 @@ namespace CSPluginAPI
 			case DLSSMode::kBalanced:
 			case DLSSMode::kPerformance:
 			case DLSSMode::kUltraPerformance:
+			case DLSSMode::kHoshipa:
+			case DLSSMode::kUltraQuality:
 				return true;
 			default:
 				return false;
+			}
+		}
+
+		inline uint32_t DLSSModeToQualityMode(DLSSMode mode)
+		{
+			switch (mode) {
+			case DLSSMode::kDLAA:
+				return 0u;
+			case DLSSMode::kHoshipa:
+				return 1u;
+			case DLSSMode::kUltraQuality:
+				return 2u;
+			case DLSSMode::kQuality:
+				return 3u;
+			case DLSSMode::kBalanced:
+				return 4u;
+			case DLSSMode::kPerformance:
+				return 5u;
+			case DLSSMode::kUltraPerformance:
+				return 6u;
+			default:
+				return 0u;
+			}
+		}
+
+		inline DLSSMode QualityModeToDLSSMode(uint32_t mode)
+		{
+			switch (mode) {
+			case 1:
+				return DLSSMode::kHoshipa;
+			case 2:
+				return DLSSMode::kUltraQuality;
+			case 3:
+				return DLSSMode::kQuality;
+			case 4:
+				return DLSSMode::kBalanced;
+			case 5:
+				return DLSSMode::kPerformance;
+			case 6:
+				return DLSSMode::kUltraPerformance;
+			default:
+				return DLSSMode::kDLAA;
 			}
 		}
 
@@ -151,8 +195,8 @@ namespace CSPluginAPI
 
 	inline DLSSMode CSInterface001::GetDLSSMode()
 	{
-		const uint32_t clampedMode = std::min(globals::features::upscaling.settings.qualityMode, 4u);
-		return static_cast<DLSSMode>(clampedMode);
+		const uint32_t clampedMode = std::min(globals::features::upscaling.settings.qualityMode, Upscaling::kQualityModeMaxIndex);
+		return detail::QualityModeToDLSSMode(clampedMode);
 	}
 
 	inline void CSInterface001::SetDLSSMode(DLSSMode mode)
@@ -162,7 +206,7 @@ namespace CSPluginAPI
 			return;
 		}
 
-		globals::features::upscaling.settings.qualityMode = static_cast<uint32_t>(mode);
+		globals::features::upscaling.settings.qualityMode = detail::DLSSModeToQualityMode(mode);
 	}
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()

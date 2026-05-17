@@ -480,8 +480,8 @@ bool Streamline::IsRTXAndBelow40Series(IDXGIAdapter* a_adapter)
 
 void Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height)
 {
-	// Map quality mode to DLSS mode
-	uint32_t qualityMode = globals::features::upscaling.settings.qualityMode;
+	// Map custom render-scale presets to the nearest supported DLSS mode.
+	uint32_t qualityMode = std::min(globals::features::upscaling.settings.qualityMode, Upscaling::kQualityModeMaxIndex);
 	uint32_t dlssPreset = std::min(globals::features::upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
 
 	// Detect HDR from kMAIN format at runtime -- VR kMAIN may be 8-bit while SE is FP16
@@ -510,15 +510,17 @@ void Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 	sl::DLSSOptions dlssOptions{};
 	switch (qualityMode) {
 	case 1:
+	case 2:
+	case 3:
 		dlssOptions.mode = sl::DLSSMode::eMaxQuality;
 		break;
-	case 2:
+	case 4:
 		dlssOptions.mode = sl::DLSSMode::eBalanced;
 		break;
-	case 3:
+	case 5:
 		dlssOptions.mode = sl::DLSSMode::eMaxPerformance;
 		break;
-	case 4:
+	case 6:
 		dlssOptions.mode = sl::DLSSMode::eUltraPerformance;
 		break;
 	default:

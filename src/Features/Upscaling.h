@@ -50,12 +50,36 @@ public:
 		kDLSS
 	};
 
+	// 0=Native/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality, 4=Balanced,
+	// 5=Performance, 6=Ultra Performance
+	static constexpr uint32_t kQualityModeMaxIndex = 6;
 	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
+
+	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
+	{
+		switch (a_qualityMode) {
+		case 1:
+			return 0.85f;
+		case 2:
+			return 1.0f / 1.3f;
+		case 3:
+			return 1.0f / 1.5f;
+		case 4:
+			return 1.0f / 1.7f;
+		case 5:
+			return 0.5f;
+		case 6:
+			return 1.0f / 3.0f;
+		default:
+			return 1.0f;
+		}
+	}
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 0;  // Default to DLAA / Native AA (1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance, 0=Native AA)
+		uint qualityMode = 0;  // Default to DLAA / Native AA
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 1;

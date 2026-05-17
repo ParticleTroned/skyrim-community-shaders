@@ -16,7 +16,7 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 - Screen Space Shadows toggle (`SSS` in method names)
 - Screen Space GI toggle
 - Volumetric Lighting Exterior toggle
-- DLSS quality mode control (`DLAA`, `Quality`, `Balanced`, `Performance`, `Ultra Performance`)
+- DLSS quality mode control (`DLAA`, `Hoshipa`, `Ultra Quality`, `Quality`, `Balanced`, `Performance`, `Ultra Performance`)
 
 The first three are runtime toggles. DLSS exposure is limited to quality mode only.
 
@@ -96,11 +96,15 @@ void SetShadowsEnabled(bool enabled)
 
 `DLSSMode` values:
 
-- `DLSSMode::kDLAA`
-- `DLSSMode::kQuality`
-- `DLSSMode::kBalanced`
-- `DLSSMode::kPerformance`
-- `DLSSMode::kUltraPerformance`
+- `DLSSMode::kDLAA` (1.00x)
+- `DLSSMode::kHoshipa` (0.85x)
+- `DLSSMode::kUltraQuality` (0.77x)
+- `DLSSMode::kQuality` (0.67x)
+- `DLSSMode::kBalanced` (0.59x)
+- `DLSSMode::kPerformance` (0.50x)
+- `DLSSMode::kUltraPerformance` (0.33x)
+
+Numeric enum values keep backwards compatibility for the original five modes; they are not the same as the in-menu order for the two newer modes.
 
 ## Behavior Notes
 
@@ -115,4 +119,5 @@ void SetShadowsEnabled(bool enabled)
 - Always null-check the API pointer.
 - Prefer checking `getBuildNumber()` before relying on behavior.
 - `GetDLSSMode`/`SetDLSSMode` require `getBuildNumber() >= 2`.
+- `DLSSMode::kHoshipa` and `DLSSMode::kUltraQuality` require `getBuildNumber() >= 4`.
 - Treat missing API as optional integration and continue without hard failure.

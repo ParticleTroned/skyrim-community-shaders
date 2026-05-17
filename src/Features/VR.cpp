@@ -85,8 +85,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableOuterCascadeCasterBias,
 	EnableLightingFoveation,
 	EnableLightingFoveationHardCutoff,
-	EnableUtilityFoveation,
-	EnableUtilityFoveationHardCutoff,
 	EnableSSRFoveation,
 	EnableSSRFoveationHardCutoff,
 	EnableWaterParallaxFoveation,
@@ -1178,14 +1176,12 @@ namespace
 		const bool screenSpaceGIRuntimeActive = screenSpaceGIFeatureAvailable && screenSpaceGI.settings.Enabled;
 		const bool dynamicCubemapsRuntimeActive = dynamicCubemaps.loaded;
 		const bool lightingFoveationAvailable = foveatedProfileActive;
-		const bool utilityFoveationAvailable = foveatedProfileActive;
 		const bool ssrFoveationAvailable = foveatedProfileActive && ssrAvailable;
 		const bool waterParallaxFoveationAvailable = foveatedProfileActive && waterParallaxAvailable;
 		const bool wetternessFoveationAvailable = foveatedProfileActive && wetternessRuntimeActive;
 		const bool dynamicCubemapFoveationAvailable = foveatedProfileActive && dynamicCubemapsRuntimeActive;
 		const bool anySharedMaskConsumerEnabled =
 			settings.EnableLightingFoveation ||
-			settings.EnableUtilityFoveation ||
 			(settings.EnableSSRFoveation && ssrAvailable) ||
 			(settings.EnableWaterParallaxFoveation && waterParallaxAvailable) ||
 			(settings.EnableWetternessFoveation && wetternessRuntimeActive) ||
@@ -1245,9 +1241,8 @@ namespace
 				int enabled = 0;
 			};
 
-			const std::array<FoveationToggleRef, 7> boolFoveationToggles{
+			const std::array<FoveationToggleRef, 6> boolFoveationToggles{
 				FoveationToggleRef{ lightingFoveationAvailable, &settings.EnableLightingFoveation },
-				FoveationToggleRef{ utilityFoveationAvailable, &settings.EnableUtilityFoveation },
 				FoveationToggleRef{ ssrFoveationAvailable, &settings.EnableSSRFoveation },
 				FoveationToggleRef{ waterParallaxFoveationAvailable, &settings.EnableWaterParallaxFoveation },
 				FoveationToggleRef{ wetternessFoveationAvailable, &settings.EnableWetternessFoveation },
@@ -1315,7 +1310,7 @@ namespace
 		}
 		ImGui::Separator();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Lighting, Utility, SSR, Water, and Wetterness shader budgets require active foveated upscaling with FOV area below 1.00.");
+			ImGui::TextDisabled("Lighting, SSR, Water, and Wetterness shader budgets require active foveated upscaling with FOV area below 1.00.");
 
 		ImGui::BeginDisabled(!foveatedProfileActive);
 		drawDetailBudget(
@@ -1329,19 +1324,6 @@ namespace
 			"Uses a binary mask for Lighting shader auxiliary detail.",
 			"Inside the FOV mask gets full auxiliary detail; outside the mask skips those optional paths instead of feathering quality.",
 			"This can save more work, but can make detail transitions more visible near the mask edge.");
-		ImGui::Separator();
-
-		drawDetailBudget(
-			"Utility Shadowmask Filtering",
-			settings.EnableUtilityFoveation,
-			"Hard Cutoff Outside FOV##Utility",
-			settings.EnableUtilityFoveationHardCutoff,
-			"Uses the active shared FOV mask to reduce expensive Utility shader shadowmask filtering.",
-			"The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when FOV + Peripheral TAA is enabled.",
-			"Outside the mask, high-cost PCF filtering fades toward a single shadow comparison while keeping valid shadowmask output.",
-			"Uses a binary mask for Utility shader shadowmask filtering.",
-			"Inside the FOV mask keeps full shadowmask filtering; outside the mask skips PCF filtering and uses one shadow comparison.",
-			"This can save more work, but can make shadow filter transitions more visible near the mask edge.");
 		ImGui::Separator();
 
 		ImGui::BeginDisabled(!ssrAvailable);
@@ -1408,7 +1390,7 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Uses the active shared FOV mask as the VR-only foveation gate for Dynamic Cubemap update cadence.");
 			ImGui::TextUnformatted("When active, cubemap capture, inference, irradiance, and BC6H compression are spread across more frames when reflections are low priority.");
-			ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a Lighting/Utility-style feathered vs hard-cutoff pair.");
+			ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a shader-detail feathered vs hard-cutoff pair.");
 		}
 
 		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
@@ -1428,7 +1410,6 @@ namespace
 		ImGui::SetNextItemOpen(false, ImGuiCond_Once);
 		if (ImGui::CollapsingHeader("Status##VRFoveationStatus")) {
 			const bool statusLightingActive = settings.EnableLightingFoveation && foveatedProfileActive;
-			const bool statusUtilityActive = settings.EnableUtilityFoveation && foveatedProfileActive;
 			const bool statusSSRActive = ssrFoveationEnabled && foveatedProfileActive;
 			const bool statusWaterParallaxActive = waterParallaxFoveationEnabled && foveatedProfileActive;
 			const bool statusWetternessActive = wetternessFoveationEnabled && foveatedProfileActive;
@@ -1437,7 +1418,6 @@ namespace
 			const bool statusScreenSpaceShadowsEnabled = screenSpaceShadowsEnabled;
 			const bool statusSsgiFoveatedEnabled = screenSpaceGIEnabled;
 			const auto statusLightingMode = FoveatedCommon::GetDetailMode(settings.EnableLightingFoveation, settings.EnableLightingFoveationHardCutoff);
-			const auto statusUtilityMode = FoveatedCommon::GetDetailMode(settings.EnableUtilityFoveation, settings.EnableUtilityFoveationHardCutoff);
 			const auto statusSSRMode = FoveatedCommon::GetDetailMode(ssrFoveationEnabled, settings.EnableSSRFoveationHardCutoff);
 			const auto statusWaterParallaxMode = FoveatedCommon::GetDetailMode(waterParallaxFoveationEnabled, settings.EnableWaterParallaxFoveationHardCutoff);
 			const auto statusWetternessMode = FoveatedCommon::GetDetailMode(wetternessFoveationEnabled, settings.EnableWetternessFoveationHardCutoff);
@@ -1446,7 +1426,6 @@ namespace
 				settings.EnableDynamicCubemapVisibilityThrottle;
 			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full coverage" : "unavailable");
 			ImGui::Text("Lighting auxiliary detail: %s (%s)", statusLightingActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusLightingMode));
-			ImGui::Text("Utility shadowmask filtering: %s (%s)", statusUtilityActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusUtilityMode));
 			ImGui::Text("SSR raymarch: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
 			ImGui::Text("Water parallax detail: %s (%s)", statusWaterParallaxActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWaterParallaxMode));
 			ImGui::Text("Wetterness dynamic detail: %s (%s)", statusWetternessActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWetternessMode));

@@ -45,6 +45,8 @@ constexpr const char* kMenuOverlayKey = "communityshaders.menu";
 constexpr const char* kMenuOverlayName = "Community Shaders Menu";
 constexpr const char* kControllerOverlayKey = "communityshaders.menu.controller";
 constexpr const char* kControllerOverlayName = "Community Shaders Menu (Controller)";
+constexpr float kLegacyDefaultHMDOffsetZ = -0.41f;
+constexpr float kDefaultOffsetEpsilon = 0.0001f;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
@@ -97,6 +99,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void VR::LoadSettings(json& o_json)
 {
 	settings = o_json.get<Settings>();
+	if (o_json.is_object() &&
+	    o_json.contains("VRMenuOffsetZ") &&
+	    std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon) {
+		settings.VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
+	}
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
 

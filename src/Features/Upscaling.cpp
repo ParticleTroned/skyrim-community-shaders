@@ -9,6 +9,8 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/D3D.h"
+#include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
 #include "VR.h"
 #include <Windows.h>
@@ -73,6 +75,7 @@ namespace
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.25f;
 	constexpr float kFoveatedMaskOffsetResolvedMax = 0.25f;
 	const ImVec4 kFovControlTextColor(0.80f, 0.88f, 1.00f, 1.0f);
+	constexpr ULONGLONG kOpenCompositeBlockerRefreshMs = 1000;
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
@@ -531,7 +534,16 @@ namespace
 
 	bool ShouldProbeOpenCompositeConfig()
 	{
-		return globals::game::isVR;
+		if (!globals::game::isVR)
+			return false;
+
+		const auto& cachedInfo = globals::features::vr.openVRInfo;
+		if (cachedInfo.isAvailable)
+			return cachedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
+
+		const auto detectedInfo = VRDetection::Detect();
+		return detectedInfo.isAvailable &&
+		       detectedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 	}
 
 	std::vector<std::filesystem::path> GetOpenCompositeConfigCandidates()
@@ -612,6 +624,17 @@ namespace
 	DetectedOpenCompositeUpscalingBlocker FindOpenCompositeUpscalingBlocker()
 	{
 		DetectedOpenCompositeUpscalingBlocker blocker;
+		if (!globals::game::isVR)
+			return blocker;
+
+		Util::OCUExternalUpscalerState externalState{};
+		if (Util::TryReadOCUExternalUpscalerState(externalState)) {
+			blocker.active = true;
+			blocker.settingName = "OpenCompositeUnleashedSharedState";
+			blocker.configPath = "Local\\OpenCompositeUnleashedUpscalingState";
+			return blocker;
+		}
+
 		if (!ShouldProbeOpenCompositeConfig())
 			return blocker;
 
@@ -2063,7 +2086,9 @@ const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpsca
 {
 	const ULONGLONG now = GetTickCount64();
 
-	if (!a_forceRefresh && openCompositeUpscalingBlockerCacheValid) {
+	if (!a_forceRefresh &&
+		openCompositeUpscalingBlockerCacheValid &&
+		now - openCompositeUpscalingBlockerLastRefresh < kOpenCompositeBlockerRefreshMs) {
 		return openCompositeUpscalingBlocker;
 	}
 
@@ -5810,7 +5835,21 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 
 	const uint32_t currentFrame = state->frameCount;
-	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+	bool resolveCrashed = false;
+	auto sourceTextureRef = Util::ResolveD3D11Texture2DFromHandle(a_inputTexture->handle, resolveCrashed);
+	auto* sourceTexture = sourceTextureRef.get();
+	if (!sourceTexture) {
+		static bool loggedBadSubmitHandle = false;
+		if (!loggedBadSubmitHandle) {
+			if (resolveCrashed) {
+				logger::error("[Upscaling] Submit-stage {} skipped because the OpenVR submit handle caused an exception while resolving the D3D11 texture.", upscaleMethodName);
+			} else {
+				logger::warn("[Upscaling] Submit-stage {} skipped because the OpenVR submit handle is not a D3D11 texture or view.", upscaleMethodName);
+			}
+			loggedBadSubmitHandle = true;
+		}
+		return false;
+	}
 	if (submitStageHandoffFrame != currentFrame || submitStageHandoffTexture != sourceTexture) {
 		static bool loggedMissingHandoff = false;
 		if (!loggedMissingHandoff) {

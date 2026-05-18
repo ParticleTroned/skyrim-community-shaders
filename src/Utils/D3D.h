@@ -15,6 +15,7 @@ namespace Util
 
 	VRDepthLayout DetectVRDepthLayout(uint32_t a_depthWidth, int a_viewportWidthPerEye);
 	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height);
+	winrt::com_ptr<ID3D11Texture2D> ResolveD3D11Texture2DFromHandle(void* a_handle, bool& o_crashed);
 
 	ID3D11ShaderResourceView* GetSRVFromRTV(ID3D11RenderTargetView* a_rtv);
 	ID3D11RenderTargetView* GetRTVFromSRV(ID3D11ShaderResourceView* a_srv);

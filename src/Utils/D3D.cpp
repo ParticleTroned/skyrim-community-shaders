@@ -9,8 +9,135 @@
 #include <d3dcompiler.h>
 #include <mutex>
 
+namespace
+{
+	HRESULT TryQueryInterfaceRaw(IUnknown* a_unknown, REFIID a_iid, void** o_object, bool& o_crashed)
+	{
+		o_crashed = false;
+		if (!a_unknown || !o_object) {
+			return E_POINTER;
+		}
+
+		*o_object = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			return a_unknown->QueryInterface(a_iid, o_object);
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			o_crashed = true;
+			*o_object = nullptr;
+			return E_POINTER;
+		}
+#endif
+	}
+
+	template <class T>
+	bool TryQueryComInterface(IUnknown* a_unknown, winrt::com_ptr<T>& o_object, bool& o_crashed)
+	{
+		o_object = nullptr;
+		bool queryCrashed = false;
+		const HRESULT hr = TryQueryInterfaceRaw(a_unknown, __uuidof(T), o_object.put_void(), queryCrashed);
+		if (queryCrashed) {
+			o_crashed = true;
+		}
+		return SUCCEEDED(hr) && o_object.get() != nullptr;
+	}
+
+	bool TryGetViewResourceRaw(ID3D11View* a_view, ID3D11Resource** o_resource, bool& o_crashed)
+	{
+		o_crashed = false;
+		if (!a_view || !o_resource) {
+			return false;
+		}
+
+		*o_resource = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			a_view->GetResource(o_resource);
+			return *o_resource != nullptr;
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			o_crashed = true;
+			*o_resource = nullptr;
+			return false;
+		}
+#endif
+	}
+
+	bool TryGetViewResource(ID3D11View* a_view, winrt::com_ptr<ID3D11Resource>& o_resource, bool& o_crashed)
+	{
+		o_crashed = false;
+		o_resource = nullptr;
+		ID3D11Resource* resource = nullptr;
+		if (!TryGetViewResourceRaw(a_view, &resource, o_crashed)) {
+			return false;
+		}
+
+		o_resource.attach(resource);
+		return true;
+	}
+
+	bool TryResolveTextureFromView(ID3D11View* a_view, winrt::com_ptr<ID3D11Texture2D>& o_texture, bool& o_crashed)
+	{
+		winrt::com_ptr<ID3D11Resource> resource;
+		bool getResourceCrashed = false;
+		if (!TryGetViewResource(a_view, resource, getResourceCrashed)) {
+			if (getResourceCrashed) {
+				o_crashed = true;
+			}
+			return false;
+		}
+
+		return TryQueryComInterface(resource.get(), o_texture, o_crashed);
+	}
+}
+
 namespace Util
 {
+	winrt::com_ptr<ID3D11Texture2D> ResolveD3D11Texture2DFromHandle(void* a_handle, bool& o_crashed)
+	{
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		o_crashed = false;
+		if (!a_handle) {
+			return texture;
+		}
+
+		auto* unknown = static_cast<IUnknown*>(a_handle);
+		if (TryQueryComInterface(unknown, texture, o_crashed)) {
+			return texture;
+		}
+		if (o_crashed) {
+			return {};
+		}
+
+		winrt::com_ptr<ID3D11Resource> resource;
+		if (TryQueryComInterface(unknown, resource, o_crashed)) {
+			if (TryQueryComInterface(resource.get(), texture, o_crashed)) {
+				return texture;
+			}
+		}
+		if (o_crashed) {
+			return {};
+		}
+
+		winrt::com_ptr<ID3D11View> view;
+		if (TryQueryComInterface(unknown, view, o_crashed)) {
+			if (TryResolveTextureFromView(view.get(), texture, o_crashed)) {
+				return texture;
+			}
+		}
+
+		return texture;
+	}
+
 	VRDepthLayout DetectVRDepthLayout(uint32_t a_depthWidth, int a_viewportWidthPerEye)
 	{
 		if (!a_depthWidth || a_viewportWidthPerEye <= 0)

@@ -533,6 +533,7 @@ public:
 			D3D11_TEXTURE2D_DESC pendingSourceDesc{};
 			winrt::com_ptr<ID3D11Texture2D> texture;
 			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+			bool usesComputeComposite = false;
 			bool pendingCreate = false;
 		};
 		CachedRTV cachedEyeRTVs[2];
@@ -571,7 +572,7 @@ public:
 	bool IsOpenVRCompatible() const;
 	void InitInSceneResources();
 	void EnsureInSceneOverlaySubmitCopyResources();
-	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);
+	bool RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);
 	void CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds);
 	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	void InstallSubmitHook();

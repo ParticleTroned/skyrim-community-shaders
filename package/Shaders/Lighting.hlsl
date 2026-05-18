@@ -969,7 +969,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(VR)
-#		include "Common/FoveatedMask.hlsli"
+#		include "Common/FoveatedShaderDetail.hlsli"
 #	endif
 
 #	if defined(HAIR) && defined(CS_HAIR)
@@ -1022,22 +1022,25 @@ float3 SafeNormalize3(float3 v, float3 fallback)
 	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
 }
 
-#if defined(VR)
+#if defined(VR)  // shader detail foveation
 float GetVRFoveatedDetailWeight(float mode, float2 eyeUv, uint eyeIndex)
 {
 	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
-	return FoveatedComputeDetailWeight(
+	float centerScale = SharedData::VRFoveationData0.x;
+	float centerFeather = SharedData::VRFoveationData0.y;
+	float centerHorizontalScale = SharedData::VRFoveationData0.z;
+	return FoveatedEvaluateShaderDetailWeight(
 		mode,
 		eyeUv,
-		SharedData::VRFoveationData0.x,
-		SharedData::VRFoveationData0.y,
-		SharedData::VRFoveationData0.z,
+		centerScale,
+		centerFeather,
+		centerHorizontalScale,
 		centerOffset);
 }
 
 bool ShouldEvaluateVRFoveatedDetail(float detailWeight)
 {
-	return FoveatedShouldEvaluateDetail(detailWeight);
+	return FoveatedIsShaderDetailActive(detailWeight);
 }
 
 float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
@@ -1048,39 +1051,43 @@ float GetVRLightingAuxiliaryDetailWeight(float2 eyeUv, uint eyeIndex)
 #	if defined(WETTERNESS)
 float GetVRWetternessDynamicDetailWeight(float2 eyeUv, uint eyeIndex)
 {
-	return GetVRFoveatedDetailWeight(SharedData::VRFoveationData1.z, eyeUv, eyeIndex);
+	return GetVRFoveatedDetailWeight(SharedData::VRFoveationModes.z, eyeUv, eyeIndex);
 }
 #	endif
-#endif
+#endif  // defined(VR)
 
 float ApplyVRLightingAuxiliaryShadowWeight(float shadow, float detailWeight)
 {
-#if defined(VR)
-	return lerp(1.0, shadow, detailWeight);
-#else
-	return shadow;
-#endif
+#if defined(VR)  // shader detail foveation
+	const float unshadowed = 1.0f;
+	return lerp(unshadowed, shadow, detailWeight);
+#else  // !defined(VR)
+	float passthroughShadow = shadow;
+	return passthroughShadow;
+#endif  // defined(VR)
 }
 
 float GetVRLightingAuxiliaryQuality(float fullQuality, float detailWeight)
 {
-#if defined(VR)
-	return fullQuality * detailWeight;
-#else
-	return fullQuality;
-#endif
+#if defined(VR)  // shader detail foveation
+	float scaledQuality = fullQuality * detailWeight;
+	return scaledQuality;
+#else  // !defined(VR)
+	float unchangedQuality = fullQuality;
+	return unchangedQuality;
+#endif  // defined(VR)
 }
 
 void ApplyVRLightingAuxiliaryOutputWeight(inout DirectLightingOutput lightingOutput, DirectLightingOutput baseOutput, float detailWeight)
 {
-#if defined(VR)
+#if defined(VR)  // shader detail foveation
 	lightingOutput.diffuse = lerp(baseOutput.diffuse, lightingOutput.diffuse, detailWeight);
 	lightingOutput.specular = lerp(baseOutput.specular, lightingOutput.specular, detailWeight);
 	lightingOutput.transmission = lerp(baseOutput.transmission, lightingOutput.transmission, detailWeight);
 #if defined(TRUE_PBR)
 	lightingOutput.coatDiffuse = lerp(baseOutput.coatDiffuse, lightingOutput.coatDiffuse, detailWeight);
 #endif
-#endif
+#endif  // defined(VR)
 }
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
@@ -1093,7 +1100,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-#	if defined(VR)
+#	if defined(VR)  // shader detail foveation
 	float vrAuxDetailWeight = GetVRLightingAuxiliaryDetailWeight(screenUV, eyeIndex);
 	bool vrAuxDetailEnabled = ShouldEvaluateVRFoveatedDetail(vrAuxDetailWeight);
 #		if defined(WETTERNESS)
@@ -1102,16 +1109,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float vrWetnessDirectDetailWeight = min(vrAuxDetailWeight, vrWetternessDynamicDetailWeight);
 	bool vrWetnessDirectDetailEnabled = ShouldEvaluateVRFoveatedDetail(vrWetnessDirectDetailWeight);
 #		endif
-#	else
-	const float vrAuxDetailWeight = 1.0;
-	const bool vrAuxDetailEnabled = true;
+#	else  // !defined(VR)
+	const float vrAuxDetailWeight = 1.0f;
+	const bool vrAuxDetailEnabled = vrAuxDetailWeight > 0.0f;
 #		if defined(WETTERNESS)
 	const float vrWetternessDynamicDetailWeight = 1.0;
 	const bool vrWetternessDynamicDetailEnabled = true;
 	const float vrWetnessDirectDetailWeight = 1.0;
 	const bool vrWetnessDirectDetailEnabled = true;
 #		endif
-#	endif
+#	endif  // defined(VR)
 
 #	if defined(DEFERRED)
 	const bool inWorld = true;

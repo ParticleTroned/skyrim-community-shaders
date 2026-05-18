@@ -1139,7 +1139,6 @@ namespace
 			ImGui::TextDisabled("VR foveation controls are available only in VR.");
 			return;
 		}
-
 		auto drawSection = [](const char* a_label) {
 			ImGui::Spacing();
 			MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);

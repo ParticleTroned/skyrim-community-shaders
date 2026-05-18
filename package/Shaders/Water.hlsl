@@ -678,7 +678,7 @@ FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 #				include "WaterEffects/WaterParallax.hlsli"
 #			endif
 #			if defined(VR) && defined(WATER_PARALLAX)
-#				include "Common/FoveatedMask.hlsli"
+#				include "Common/FoveatedShaderDetail.hlsli"
 #			endif
 
 #			if defined(DYNAMIC_CUBEMAPS)
@@ -695,9 +695,9 @@ struct WaterNormalData
 #			if defined(VR) && defined(WATER_PARALLAX)
 float GetVRWaterParallaxDetailWeight(float2 eyeUv, uint eyeIndex)
 {
-	float waterParallaxFoveationMode = SharedData::VRFoveationData1.y;
+	float waterParallaxFoveationMode = SharedData::VRFoveationModes.y;
 	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
-	return FoveatedComputeDetailWeight(
+	return FoveatedEvaluateShaderDetailWeight(
 		waterParallaxFoveationMode,
 		eyeUv,
 		SharedData::VRFoveationData0.x,
@@ -1204,8 +1204,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float waterParallaxDetailWeight = 1.0;
 #			if defined(VR) && defined(WATER_PARALLAX)
-	float waterParallaxFoveationMode = SharedData::VRFoveationData1.y;
-	[branch] if (waterParallaxFoveationMode >= FOVEATED_DETAIL_MODE_FEATHERED)
+	float waterParallaxFoveationMode = SharedData::VRFoveationModes.y;
+	[branch] if (waterParallaxFoveationMode >= FOVEATED_SHADER_DETAIL_MODE_FEATHERED)
 	{
 		waterParallaxDetailWeight = GetVRWaterParallaxDetailWeight(saturate(screenUV), eyeIndex);
 	}

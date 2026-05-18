@@ -41,6 +41,7 @@ static bool CanStartAny(vr::ETrackedControllerRole role)
 void VR::UpdateOverlayDrag()
 {
 	if (!CanPerformDrag()) {
+		overlayDragState = {};
 		return;
 	}
 

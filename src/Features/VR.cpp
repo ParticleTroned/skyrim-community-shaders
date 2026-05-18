@@ -25,6 +25,7 @@
 #include "Utils/VRUtils.h"
 #include <DirectXMath.h>
 #include <SimpleMath.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <d3d11.h>
@@ -39,6 +40,89 @@ namespace
 	bool BeginTabItemWithFont(const char* label, Menu::FontRole role, ImGuiTabItemFlags flags = ImGuiTabItemFlags_None)
 	{
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
+	}
+
+	bool IsVRControllerDevice(ControllerDevice device)
+	{
+		return device == ControllerDevice::Primary ||
+		       device == ControllerDevice::Secondary ||
+		       device == ControllerDevice::Both;
+	}
+
+	bool IsKnownVRButtonKey(uint32_t key)
+	{
+		switch (key) {
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kTrigger):
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip):
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGripAlt):
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kTouchpadClick):
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kTouchpadAlt):
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger):
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA):
+		case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY):
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	void NormalizeVRComboList(std::vector<ButtonCombo>& combos, ControllerDevice legacyDevice)
+	{
+		std::vector<ButtonCombo> normalized;
+		normalized.reserve(combos.size());
+		bool changed = false;
+
+		for (const auto& combo : combos) {
+			const uint32_t key = combo.GetKey();
+			if (key == 0) {
+				changed = true;
+				continue;
+			}
+
+			const ControllerDevice device = combo.GetDevice();
+			if (IsVRControllerDevice(device) && IsKnownVRButtonKey(key)) {
+				normalized.push_back(combo);
+				continue;
+			}
+
+			if (IsKnownVRButtonKey(key)) {
+				normalized.push_back(ButtonCombo(legacyDevice, key));
+			}
+			changed = true;
+		}
+
+		if (changed) {
+			combos = std::move(normalized);
+		}
+	}
+
+	void NormalizeVRInputSettings(VR::Settings& settings)
+	{
+		const std::vector<ButtonCombo> legacySecondaryOpen = {
+			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
+			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
+		};
+		const std::vector<ButtonCombo> legacySecondaryOverlayOpen = {
+			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+		};
+		const std::vector<ButtonCombo> legacyPrimaryOverlayClose = {
+			ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+		};
+
+		NormalizeVRComboList(settings.VRMenuOpenKeys, ControllerDevice::Primary);
+		NormalizeVRComboList(settings.VRMenuCloseKeys, ControllerDevice::Both);
+		NormalizeVRComboList(settings.VROverlayOpenKeys, ControllerDevice::Primary);
+		NormalizeVRComboList(settings.VROverlayCloseKeys, ControllerDevice::Secondary);
+
+		if (settings.VRMenuOpenKeys == legacySecondaryOpen) {
+			settings.VRMenuOpenKeys = VR::Settings::DefaultVRMenuOpenKeys();
+		}
+		if (settings.VROverlayOpenKeys == legacySecondaryOverlayOpen) {
+			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
+		}
+		if (settings.VROverlayCloseKeys == legacyPrimaryOverlayClose) {
+			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
+		}
 	}
 }
 
@@ -109,6 +193,7 @@ void VR::LoadSettings(json& o_json)
 	}
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
+	NormalizeVRInputSettings(settings);
 
 	if (settings.EnableOuterCascadeCasterBias) {
 		ShadowmapRasterizerFix::InstallD3DHooks(globals::d3d::context);
@@ -602,13 +687,41 @@ void VR::DrawSettings()
 
 			// Handle button recording
 			// Check for VR controller button presses - record them (any controller allowed during recording)
+			auto IsButtonPressed = [&](const ButtonCombo& combo) {
+				switch (combo.GetDevice()) {
+				case ControllerDevice::Primary:
+					return primaryControllerState[combo.GetKey()].isPressed;
+				case ControllerDevice::Secondary:
+					return secondaryControllerState[combo.GetKey()].isPressed;
+				case ControllerDevice::Both:
+					return primaryControllerState[combo.GetKey()].isPressed ||
+					       secondaryControllerState[combo.GetKey()].isPressed;
+				default:
+					return false;
+				}
+			};
+
+			this->recordingIgnoredButtons.erase(
+				std::remove_if(this->recordingIgnoredButtons.begin(), this->recordingIgnoredButtons.end(),
+					[&](const ButtonCombo& combo) {
+						return !IsButtonPressed(combo);
+					}),
+				this->recordingIgnoredButtons.end());
+
+			auto IsIgnoredRecordingButton = [&](ControllerDevice device, uint32_t key) {
+				return std::any_of(this->recordingIgnoredButtons.begin(), this->recordingIgnoredButtons.end(),
+					[&](const ButtonCombo& combo) {
+						return combo.GetDevice() == device && combo.GetKey() == key;
+					});
+			};
+
 			bool buttonPressed = false;
 			uint32_t pressedKey = 0;
 			ControllerDevice pressedDevice = ControllerDevice::Both;  // Default to Both, will set below
 
 			// Check primary controller buttons
 			for (const auto& [keyCode, buttonState] : primaryControllerState.GetActiveButtons()) {
-				if (buttonState->isPressed) {
+				if (buttonState->isPressed && !IsIgnoredRecordingButton(ControllerDevice::Primary, keyCode)) {
 					pressedKey = keyCode;
 					buttonPressed = true;
 					pressedDevice = ControllerDevice::Primary;
@@ -619,7 +732,7 @@ void VR::DrawSettings()
 			// Check secondary controller buttons if primary didn't have any
 			if (!buttonPressed) {
 				for (const auto& [keyCode, buttonState] : secondaryControllerState.GetActiveButtons()) {
-					if (buttonState->isPressed) {
+					if (buttonState->isPressed && !IsIgnoredRecordingButton(ControllerDevice::Secondary, keyCode)) {
 						pressedKey = keyCode;
 						buttonPressed = true;
 						pressedDevice = ControllerDevice::Secondary;
@@ -648,80 +761,52 @@ void VR::DrawSettings()
 				}
 			}
 
+			auto ApplyRecordedCombo = [&]() {
+				switch (this->currentComboType) {
+				case VR::ComboType::MenuOpen:
+					settings.VRMenuOpenKeys = this->recordedCombo;
+					break;
+				case VR::ComboType::MenuClose:
+					settings.VRMenuCloseKeys = this->recordedCombo;
+					break;
+				case VR::ComboType::OverlayOpen:
+					settings.VROverlayOpenKeys = this->recordedCombo;
+					break;
+				case VR::ComboType::OverlayClose:
+					settings.VROverlayCloseKeys = this->recordedCombo;
+					break;
+				default:
+					break;
+				}
+			};
+
 			// Handle ENTER key to accept combo
 			if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
 				if (!this->recordedCombo.empty()) {
-					// Apply the recorded combo to the correct settings vector
-					switch (this->currentComboType) {
-					case VR::ComboType::MenuOpen:
-						settings.VRMenuOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::MenuClose:
-						settings.VRMenuCloseKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayOpen:
-						settings.VROverlayOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayClose:
-						settings.VROverlayCloseKeys = this->recordedCombo;
-						break;
-					default:
-						break;
-					}
+					ApplyRecordedCombo();
 				}
 
 				// Reset recording state
-				this->isCapturingCombo = false;
-				this->currentComboType = VR::ComboType::None;
-				this->currentComboName = nullptr;
-				this->recordedCombo.clear();
-				this->comboStartTime = 0.0;
-				recordingButtonControllers.clear();
+				ResetComboRecordingState();
 				ImGui::CloseCurrentPopup();
 			}
 
 			// Handle ESC key to cancel
 			if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
 				// Reset recording state
-				this->isCapturingCombo = false;
-				this->currentComboType = VR::ComboType::None;
-				this->currentComboName = nullptr;
-				this->recordedCombo.clear();
-				this->comboStartTime = 0.0;
-				recordingButtonControllers.clear();
+				ResetComboRecordingState();
 				ImGui::CloseCurrentPopup();
 			}
 
 			// Handle timeout - auto-accept if buttons were pressed, auto-cancel if not
 			if (remainingTime <= 0.0) {
 				if (!this->recordedCombo.empty()) {
-					// Auto-accept if buttons were pressed - apply to correct settings vector
-					switch (this->currentComboType) {
-					case VR::ComboType::MenuOpen:
-						settings.VRMenuOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::MenuClose:
-						settings.VRMenuCloseKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayOpen:
-						settings.VROverlayOpenKeys = this->recordedCombo;
-						break;
-					case VR::ComboType::OverlayClose:
-						settings.VROverlayCloseKeys = this->recordedCombo;
-						break;
-					default:
-						break;
-					}
+					ApplyRecordedCombo();
 				}
 				// Auto-cancel if no buttons were pressed (do nothing, just close)
 
 				// Reset recording state
-				this->isCapturingCombo = false;
-				this->currentComboType = VR::ComboType::None;
-				this->currentComboName = nullptr;
-				this->recordedCombo.clear();
-				this->comboStartTime = 0.0;
-				recordingButtonControllers.clear();
+				ResetComboRecordingState();
 				ImGui::CloseCurrentPopup();
 			}
 		}
@@ -1502,18 +1587,26 @@ namespace
 		ImGui::SameLine();
 		if (ImGui::Combo("##ComboSelector", &selectedComboIndex, comboTypes, IM_ARRAYSIZE(comboTypes))) {
 			// Reset recording state when changing selection
-			vr.isCapturingCombo = false;
-			vr.currentComboType = VR::ComboType::None;
-			vr.recordedCombo.clear();
+			vr.ResetComboRecordingState();
 		}
 		if (ImGui::Button("Record Selected Combo")) {
 			// Start recording the selected combo
+			vr.ResetComboRecordingState();
 			vr.isCapturingCombo = true;
 			vr.currentComboType = static_cast<VR::ComboType>(selectedComboIndex + 1);
 			vr.currentComboName = comboTypes[selectedComboIndex];
-			vr.recordedCombo.clear();
 			vr.comboStartTime = Util::GetNowSecs();
-			vr.recordingButtonControllers.clear();
+			for (const auto& [keyCode, buttonState] : vr.primaryControllerState.GetActiveButtons()) {
+				if (buttonState->isPressed) {
+					vr.recordingIgnoredButtons.push_back(ButtonCombo::Primary(keyCode));
+				}
+			}
+			for (const auto& [keyCode, buttonState] : vr.secondaryControllerState.GetActiveButtons()) {
+				if (buttonState->isPressed) {
+					vr.recordingIgnoredButtons.push_back(ButtonCombo::Secondary(keyCode));
+				}
+			}
+			vr.ReleaseMenuImGuiInputState();
 		}
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Clear")) {
@@ -1589,20 +1682,10 @@ namespace
 		ImGui::Spacing();
 		// Reset to defaults button
 		if (ImGui::Button("Reset to Defaults")) {
-			// Use InputCombo structure for cleaner defaults
-			settings.VRMenuOpenKeys = {
-				InputCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
-				InputCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
-			};
-			settings.VRMenuCloseKeys = {
-				InputCombo::Both(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip))
-			};
-			settings.VROverlayOpenKeys = {
-				InputCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
-			};
-			settings.VROverlayCloseKeys = {
-				InputCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
-			};
+			settings.VRMenuOpenKeys = VR::Settings::DefaultVRMenuOpenKeys();
+			settings.VRMenuCloseKeys = VR::Settings::DefaultVRMenuCloseKeys();
+			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
+			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Reset all VR key bindings to their default values.");
@@ -1640,6 +1723,7 @@ namespace
 		// Controller Diagnostics Section
 		if (ImGui::CollapsingHeader("Controller Diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
 			if (ImGui::Checkbox("Test Mode: Disable controller menu input (except scroll controller and triggers)", &settings.VRMenuControllerDiagnosticsTestMode)) {
+				vr.ReleaseMenuImGuiInputState();
 				ImGui::SetScrollHereY(0.0f);  // Scroll to top of the window when toggled
 			}
 			ImGui::SeparatorText("Button State");
@@ -2375,7 +2459,12 @@ void VR::SubmitOverlayFrame()
 	const bool shouldRenderOverlay = enabled || overlayVisible || shouldShowAutoHide;
 	static bool wasMenuEnabled = false;
 	const bool menuJustOpened = enabled && !wasMenuEnabled;
+	const bool menuJustClosed = !enabled && wasMenuEnabled;
 	wasMenuEnabled = enabled;
+
+	if (menuJustOpened || menuJustClosed) {
+		ResetMenuInputRuntimeState();
+	}
 
 	// In fixed-world mode, recenter once on menu open using current HMD pose,
 	// then keep it world-locked for the rest of the session.

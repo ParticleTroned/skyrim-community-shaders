@@ -1023,6 +1023,9 @@ void Menu::ProcessInputEventQueue()
 						{ settings.ToggleKey, [this]() {
 							 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
 								 IsEnabled = !IsEnabled;
+								 if (globals::features::vr.IsOpenVRCompatible()) {
+									 globals::features::vr.ResetMenuInputRuntimeState();
+								 }
 								 if (IsEnabled)
 									 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 							 }
@@ -1066,6 +1069,9 @@ void Menu::ProcessInputEventQueue()
 						editorWindow->open = false;
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
 						IsEnabled = false;
+						if (globals::features::vr.IsOpenVRCompatible()) {
+							globals::features::vr.ResetMenuInputRuntimeState();
+						}
 					}
 				}
 			}

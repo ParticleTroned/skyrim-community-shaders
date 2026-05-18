@@ -4,16 +4,37 @@
 #include "Utils/PerfUtils.h"
 #include "Utils/VRUtils.h"
 
+#include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 using AttachMode = VR::Settings::OverlayAttachMode;
 
+namespace
+{
+	constexpr size_t kNumVRInputMappings = 6;
+	constexpr size_t kNumVRTriggerMappings = 1;
+
+	struct ScrollAccum
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+	};
+
+	bool gPrevPrimaryVRInputStates[kNumVRInputMappings] = {};
+	bool gPrevSecondaryVRInputStates[kNumVRInputMappings] = {};
+	bool gLastVRInputHandedness = false;
+	std::unordered_map<size_t, ScrollAccum> gVRScrollAccums;
+
+	void ResetVRImGuiButtonState()
+	{
+		std::fill_n(gPrevPrimaryVRInputStates, kNumVRInputMappings, false);
+		std::fill_n(gPrevSecondaryVRInputStates, kNumVRInputMappings, false);
+	}
+}
+
 void VR::UpdateOverlayMenuStateFromInput()
 {
-	if (this->isCapturingCombo) {
-		return;
-	}
-
 	if (globals::menu == nullptr)
 		return;
 
@@ -21,9 +42,16 @@ void VR::UpdateOverlayMenuStateFromInput()
 	bool& overlayEnabled = globals::menu->overlayVisible;
 	bool& testMode = settings.VRMenuControllerDiagnosticsTestMode;
 
+	if (this->isCapturingCombo) {
+		if (!isEnabled) {
+			ResetMenuInputRuntimeState();
+		}
+		return;
+	}
+
 	if (testMode) {
 		if (!isEnabled) {
-			settings.VRMenuControllerDiagnosticsTestMode = false;
+			ResetMenuInputRuntimeState();
 			return;
 		}
 		return;
@@ -78,7 +106,10 @@ void VR::UpdateOverlayMenuStateFromInput()
 		{ [&]() {
 			 return CheckCombo(settings.VRMenuOpenKeys) && !isEnabled;
 		 },
-			[&]() { isEnabled = true; } },
+			[&]() {
+				isEnabled = true;
+				ResetMenuInputRuntimeState();
+			} },
 
 		// Close Community Shaders menu when open
 		{ [&]() {
@@ -86,7 +117,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 		 },
 			[&]() {
 				isEnabled = false;
-				overlayDragState.dragging = false;
+				ResetMenuInputRuntimeState();
 			},
 			true },
 
@@ -183,11 +214,9 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 	bool isPrimary = RE::BSOpenVRControllerDevice::IsPrimaryController(event.device);
 	bool isSecondary = RE::BSOpenVRControllerDevice::IsSecondaryController(event.device);
 	bool& testMode = settings.VRMenuControllerDiagnosticsTestMode;
-	constexpr size_t kNumTriggerMappings = 1;
 
 	if (isPrimary || isSecondary) {
-		constexpr size_t kNumMappings = 6;
-		RE::ButtonMapping mappings[kNumMappings] = {
+		RE::ButtonMapping mappings[kNumVRInputMappings] = {
 			{ RE::BSOpenVRControllerDevice::Keys::kTrigger, ImGuiMouseButton_Left, false, ImGuiKey_None, false },
 			{ RE::BSOpenVRControllerDevice::Keys::kGrip, ImGuiMouseButton_Right, false, ImGuiKey_None, false },
 			{ RE::BSOpenVRControllerDevice::Keys::kTouchpadClick, ImGuiMouseButton_Middle, false, ImGuiKey_None, false },
@@ -196,19 +225,15 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 			{ RE::BSOpenVRControllerDevice::Keys::kXA, -1, true, Util::Input::VirtualKeyToImGuiKey(VK_RETURN), false },
 		};
 
-		static bool prevPrimaryStates[kNumMappings] = {};
-		static bool prevSecondaryStates[kNumMappings] = {};
-		static bool lastHandedness = false;
-		if (lastHandedness != lastKnownLeftHandedMode) {
-			memset(prevPrimaryStates, 0, sizeof(prevPrimaryStates));
-			memset(prevSecondaryStates, 0, sizeof(prevSecondaryStates));
-			lastHandedness = lastKnownLeftHandedMode;
+		if (gLastVRInputHandedness != lastKnownLeftHandedMode) {
+			ResetVRImGuiButtonState();
+			gLastVRInputHandedness = lastKnownLeftHandedMode;
 		}
-		bool* prevStates = isPrimary ? prevPrimaryStates : prevSecondaryStates;
+		bool* prevStates = isPrimary ? gPrevPrimaryVRInputStates : gPrevSecondaryVRInputStates;
 
 		RE::InputDeviceState& controllerState = isPrimary ? primaryControllerState : secondaryControllerState;
 
-		size_t limit = testMode ? kNumTriggerMappings : kNumMappings;
+		size_t limit = testMode ? kNumVRTriggerMappings : kNumVRInputMappings;
 
 		for (size_t i = 0; i < limit; ++i) {
 			RE::ButtonState* state = &controllerState[mappings[i].keyCode];
@@ -278,13 +303,7 @@ void VR::ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t 
 	bool usingScrollStickY = (std::abs(controllerState.thumbsticks[thumbstickIndex].y) > deadzone);
 
 	if (usingScrollStickX || usingScrollStickY) {
-		struct ScrollAccum
-		{
-			float x = 0.0f;
-			float y = 0.0f;
-		};
-		static std::unordered_map<size_t, ScrollAccum> scrollAccums;
-		ScrollAccum& accum = scrollAccums[thumbstickIndex];
+		ScrollAccum& accum = gVRScrollAccums[thumbstickIndex];
 
 		accum.x += controllerState.thumbsticks[thumbstickIndex].x * 0.1f;
 		accum.y += controllerState.thumbsticks[thumbstickIndex].y * 0.1f;
@@ -305,6 +324,44 @@ void VR::ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t 
 			io.AddMouseWheelEvent(-scrollEventX, scrollEventY);
 		}
 	}
+}
+
+void VR::ResetComboRecordingState()
+{
+	isCapturingCombo = false;
+	currentComboType = ComboType::None;
+	currentComboName = nullptr;
+	recordedCombo.clear();
+	comboStartTime = 0.0;
+	recordingButtonControllers.clear();
+	recordingIgnoredButtons.clear();
+}
+
+void VR::ReleaseMenuImGuiInputState()
+{
+	ResetVRImGuiButtonState();
+	gLastVRInputHandedness = lastKnownLeftHandedMode;
+	gVRScrollAccums.clear();
+
+	ImGuiIO& io = ImGui::GetIO();
+	io.ClearInputKeys();
+	for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
+		io.AddMouseButtonEvent(button, false);
+	}
+	io.MouseDrawCursor = false;
+	io.WantSetMousePos = false;
+}
+
+void VR::ResetMenuInputRuntimeState()
+{
+	ResetComboRecordingState();
+
+	settings.VRMenuControllerDiagnosticsTestMode = false;
+	overlayDragState = {};
+	wandState = {};
+	primaryControllerState.Clear();
+	secondaryControllerState.Clear();
+	ReleaseMenuImGuiInputState();
 }
 
 void VR::ProcessControllerInputForImGui()

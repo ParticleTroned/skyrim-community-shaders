@@ -226,6 +226,7 @@ public:
 			InScene = 2
 		};
 		MenuOverlayPath menuOverlayPath = MenuOverlayPath::Auto;  ///< Runtime path used to present the menu in the headset
+		bool KeepDesktopWindowFocusedForVRMenu = false;           ///< Keep the game window centered and foregrounded while the VR menu is open
 
 		// Wand pointing settings
 		bool EnableWandPointing = true;  ///< Enable controller wand/ray-cast pointing (modern VR input)
@@ -325,6 +326,8 @@ public:
 	void RecreateOverlayTexturesIfNeeded(bool needsControllerTexture = true);
 	void SubmitOverlayFrame();
 	void HideOverlaysIfPresent();
+	void UpdateMenuDesktopWindowManagement(bool force = false);
+	void ReleaseMenuDesktopWindowManagement();
 
 	/**
 	 * @brief Context for rendering VR overlays with render target management
@@ -489,6 +492,11 @@ public:
 
 	// Button controller recording state for UI settings
 	std::unordered_map<uint32_t, ControllerDevice> recordingButtonControllers;
+
+	bool desktopWindowManagementApplied = false;
+	bool desktopWindowWasTopmost = false;
+	HWND desktopWindowManagedHandle = nullptr;
+	double lastDesktopWindowManagementAttemptSecs = 0.0;
 
 	// OpenVR runtime and compatibility information
 	VRDetection::OpenVRDetectionResult openVRInfo;

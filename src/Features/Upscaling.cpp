@@ -1766,7 +1766,10 @@ void Upscaling::DrawSettings()
 				settings.fsr4RuntimeEnable ||
 				runtimeFsrPathRequested ||
 				fidelityFX.HasRuntimeUpscalerSupportCheckResult();
-			ImGui::Text("AMD FSR Mode: %s", settings.fsr4RuntimeEnable ? "Runtime FSR 4 requested" : "FSR 3.1.5 requested");
+			const char* fsrModeLabel = settings.fsr4RuntimeEnable ?
+				"Runtime FSR 4 requested" :
+				(runtimeFsrPathRequested ? "Runtime FSR 3.1.5 requested" : "Host FSR 3.1.5 requested");
+			ImGui::Text("AMD FSR Mode: %s", fsrModeLabel);
 			ImGui::Text("Current Frame Path: %s", fidelityFX.GetRuntimeUpscalerLastFramePathLabel());
 			if (showRuntimeFsrDiagnostics) {
 				const bool supportKnown = fidelityFX.HasRuntimeUpscalerSupportCheckResult();
@@ -2747,7 +2750,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			frameGenModeChanged ||
 			fsrRuntimePathChanged ||
 			fsrRuntimeVersionChanged ||
-			fsrRuntimeFoveatedLayoutChanged ||
 			dlssQualityModeChanged ||
 			fsrQualityModeChanged;
 		if (requiresFullPipelineUnbind)
@@ -2834,8 +2836,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			fidelityFX.ResetRuntimeUpscalerResources(true);
 			RequestHistoryReset();
 		} else if (!upscaleModeChanged && fsrRuntimeFoveatedLayoutChanged && !fsrResourcesRecreatedForQuality) {
-			// Runtime upscaler state spans full-frame and region dispatches; reset it when the foveated layout changes.
-			fidelityFX.ResetRuntimeUpscalerResources();
+			// Keep runtime contexts alive; the dispatch reset flag is enough for layout-only temporal changes.
 			RequestHistoryReset();
 		}
 

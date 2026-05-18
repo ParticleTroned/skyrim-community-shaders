@@ -423,6 +423,7 @@ public:
 	float previousHistoryPeripheryTAAOuterScale = 0.70f;
 	float previousHistoryPeripheryTAACenterBlendFeather = 0.05f;
 	bool previousHistoryFSRRuntimePathActive = false;
+	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 
@@ -435,6 +436,7 @@ public:
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
 	void LatchHistoryResetForCurrentFrame();
 	bool IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const;
+	bool IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const;
 	bool IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const;

@@ -677,6 +677,11 @@ namespace
 		return std::clamp(value, 0.0f, 1.0f);
 	}
 
+	float GetRCASSharpness(float sharpness)
+	{
+		return exp2((2.0f * sharpness) - 2.0f);
+	}
+
 	int32_t QuantizePeripheryTAATileParam(float value)
 	{
 		if (!std::isfinite(value))
@@ -2463,6 +2468,9 @@ void Upscaling::DestroyVRIntermediateTextures()
 	retireArray(vrIntermediateMotionVectors, retired.motionVectors);
 	retireArray(vrIntermediateReactiveMask, retired.reactiveMask);
 	retireArray(vrIntermediateTransparencyMask, retired.transparencyMask);
+	for (auto& texture : submitStageSharpenerTexture) {
+		texture.reset();
+	}
 
 	if (hasRetiredTextures) {
 		retiredVRIntermediateTextures.push_back(std::move(retired));
@@ -6019,6 +6027,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 
+	if (upscaleMethod == UpscaleMethod::kDLSS && !ApplySubmitStageSharpening(eyeIndex, eyeWidthOut, eyeHeightOut)) {
+		static bool loggedSubmitSharpenFailure[2] = {};
+		if (!loggedSubmitSharpenFailure[eyeIndex]) {
+			logger::warn(
+				"[Upscaling] Submit-stage DLSS sharpening failed for eye {}; using unsharpened submit output.",
+				eyeIndex);
+			loggedSubmitSharpenFailure[eyeIndex] = true;
+		}
+	}
+
 	if (targetScaleMode) {
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&
@@ -6893,8 +6911,7 @@ void Upscaling::ApplySharpening()
 	if (!sharpenerTexture)
 		return;
 
-	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
-	currentSharpness = exp2(-currentSharpness);
+	const float currentSharpness = GetRCASSharpness(settings.sharpnessDLSS);
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -6916,6 +6933,46 @@ void Upscaling::ApplySharpening()
 	}
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+}
+
+bool Upscaling::ApplySubmitStageSharpening(uint32_t eyeIndex, uint32_t outputWidthPerEye, uint32_t outputHeight)
+{
+	if (eyeIndex >= 2 || !outputWidthPerEye || !outputHeight)
+		return false;
+	if (settings.sharpnessDLSS <= 0.0f)
+		return true;
+
+	auto& output = vrIntermediateColorOut[eyeIndex];
+	if (!output || !output->resource || !output->srv || !output->uav)
+		return false;
+
+	auto& scratch = submitStageSharpenerTexture[eyeIndex];
+	const std::string suffix = eyeIndex == 0 ? "Left" : "Right";
+	if (!EnsureFoveatedTexture(
+			scratch,
+			output->resource.get(),
+			outputWidthPerEye,
+			outputHeight,
+			false,
+			true,
+			true,
+			false,
+			("Upscale_SubmitStage_Sharpener_" + suffix).c_str())) {
+		return false;
+	}
+
+	if (!scratch || !scratch->resource || !scratch->srv || !scratch->uav)
+		return false;
+
+	auto context = globals::d3d::context;
+	if (!context)
+		return false;
+
+	const float currentSharpness = GetRCASSharpness(settings.sharpnessDLSS);
+
+	context->CopyResource(scratch->resource.get(), output->resource.get());
+	rcas.ApplySharpen(scratch->srv.get(), output->uav.get(), currentSharpness, outputWidthPerEye, outputHeight);
+	return true;
 }
 
 bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage)

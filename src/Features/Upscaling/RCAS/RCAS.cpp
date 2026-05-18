@@ -32,13 +32,18 @@ void RCAS::CreateComputeShader()
 	rcasComputeShader.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\RCAS\\RCAS.hlsl", defines, "cs_5_0"));
 }
 
-void RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness)
+void RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness, uint32_t width, uint32_t height)
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "RCAS Sharpening");
 
 	auto state = globals::state;
 	auto context = globals::d3d::context;
+
+	if (!state || !context || !inputSRV || !outputUAV || !rcasConfigCB) {
+		logger::warn("[RCAS] Missing resources for sharpening");
+		return;
+	}
 
 	if (!rcasComputeShader) {
 		logger::warn("[RCAS] Compute shader not compiled");
@@ -47,8 +52,8 @@ void RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 
 	state->BeginPerfEvent("RCAS Sharpening");
 
-	uint32_t screenWidth = (uint32_t)state->screenSize.x;
-	uint32_t screenHeight = (uint32_t)state->screenSize.y;
+	const uint32_t dispatchWidth = width ? width : static_cast<uint32_t>(state->screenSize.x);
+	const uint32_t dispatchHeight = height ? height : static_cast<uint32_t>(state->screenSize.y);
 
 	RCASConfig config{};
 	config.sharpness = sharpness;
@@ -65,8 +70,8 @@ void RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 	ID3D11UnorderedAccessView* uavs[] = { outputUAV };
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
-	uint32_t dispatchX = (screenWidth + 7) / 8;
-	uint32_t dispatchY = (screenHeight + 7) / 8;
+	uint32_t dispatchX = (dispatchWidth + 7) / 8;
+	uint32_t dispatchY = (dispatchHeight + 7) / 8;
 	context->Dispatch(dispatchX, dispatchY, 1);
 
 	ID3D11ShaderResourceView* nullSRVs[] = { nullptr };

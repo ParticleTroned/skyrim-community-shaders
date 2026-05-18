@@ -126,6 +126,12 @@ namespace
 		return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
 	}
 
+	bool RuntimeProviderNameMatchesVersion(const std::string& a_providerName, uint32_t a_version)
+	{
+		return !a_providerName.empty() &&
+		       a_providerName.find(UpscalerVersionToString(a_version)) != std::string::npos;
+	}
+
 	void RuntimeFfxMessage(uint32_t a_type, const wchar_t* a_message)
 	{
 		const std::string message = stl::utf16_to_utf8(a_message ? a_message : L"").value_or("unknown FidelityFX runtime message");
@@ -403,6 +409,18 @@ bool FidelityFX::IsRuntimeUpscalerSupportConfirmed() const
 	return runtimeUpscalerSupportCheckKnown && runtimeUpscalerSupportConfirmed;
 }
 
+bool FidelityFX::IsRuntimeUpscalerProviderMatchingRequestedVersion() const
+{
+	if (!runtimeUpscalerSupportCheckKnown || !runtimeUpscalerSupportConfirmed)
+		return false;
+
+	if (runtimeUpscalerProviderMatchedVersionName.empty())
+		return true;
+
+	const uint32_t requestedVersion = runtimeUpscalerRequestedVersion ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
+	return RuntimeProviderNameMatchesVersion(runtimeUpscalerProviderMatchedVersionName, requestedVersion);
+}
+
 bool FidelityFX::IsRuntimeUpscalerFailureLatched() const
 {
 	return runtimeUpscalerFailureLatched;
@@ -463,6 +481,17 @@ void FidelityFX::LatchRuntimeUpscalerFailure()
 
 	runtimeUpscalerFailureLatched = true;
 	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using host FSR 3.1.5 until runtime resources are reset, FSR resources are rebuilt, or the method changes.");
+}
+
+FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const
+{
+	if (RuntimeProviderNameMatchesVersion(runtimeUpscalerProviderMatchedVersionName, FFX_UPSCALER_VERSION))
+		return RuntimeUpscalerFramePath::kRuntimeFsr4;
+
+	if (RuntimeProviderNameMatchesVersion(runtimeUpscalerProviderMatchedVersionName, kRuntimeFsr315Version))
+		return RuntimeUpscalerFramePath::kRuntimeFsr31;
+
+	return a_requestedVersion == FFX_UPSCALER_VERSION ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31;
 }
 
 void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
@@ -1096,6 +1125,14 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	runtimeUpscalerRequestedVersion = a_requestedVersion;
 	recordRuntimeProviderResult(true);
 
+	if (!runtimeUpscalerProviderMatchedVersionName.empty() &&
+	    !RuntimeProviderNameMatchesVersion(runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
+		logger::warn(
+			"[FidelityFX] Runtime upscaler provider '{}' does not match requested FSR version {}; reporting actual provider path.",
+			runtimeUpscalerProviderMatchedVersionName,
+			UpscalerVersionToString(a_requestedVersion));
+	}
+
 	if (createdContextWithGenericVersionOverride) {
 		logger::info("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path.");
 	} else if (createdContextWithUpscalerVersionDescriptor) {
@@ -1479,7 +1516,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 				    a_motionVectorScaleX,
 				    a_motionVectorScaleY,
 				    a_sharpness)) {
-				RecordRuntimeUpscalerFramePath(runtimeFsr4Requested ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31);
+				RecordRuntimeUpscalerFramePath(GetRuntimeUpscalerProviderFramePath(requestedRuntimeVersion));
 				return true;
 			}
 		} catch (const std::exception& e) {

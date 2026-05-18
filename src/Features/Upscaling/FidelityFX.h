@@ -63,6 +63,7 @@ public:
 	bool ShouldUseRuntimeUpscalerForFSR() const;
 	bool HasRuntimeUpscalerSupportCheckResult() const;
 	bool IsRuntimeUpscalerSupportConfirmed() const;
+	bool IsRuntimeUpscalerProviderMatchingRequestedVersion() const;
 	bool IsRuntimeUpscalerFailureLatched() const;
 	const char* GetRuntimeUpscalerLastFramePathLabel() const;
 	std::string GetRuntimeUpscalerProviderName() const;
@@ -136,6 +137,7 @@ private:
 	uint32_t GetPreferredRuntimeUpscalerVersion() const;
 	void ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache);
 	void LatchRuntimeUpscalerFailure();
+	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 	bool EnsureRuntimeUpscalerInterop();
 	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);

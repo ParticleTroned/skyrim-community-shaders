@@ -1746,6 +1746,11 @@ void Upscaling::DrawSettings()
 				const bool runtimeFailureLatched = fidelityFX.IsRuntimeUpscalerFailureLatched();
 				const std::string requestedVersion = fidelityFX.GetRuntimeUpscalerRequestedVersionString();
 				const std::string providerName = fidelityFX.GetRuntimeUpscalerProviderName();
+				const bool providerMismatch =
+					supportKnown &&
+					supportConfirmed &&
+					!providerName.empty() &&
+					!fidelityFX.IsRuntimeUpscalerProviderMatchingRequestedVersion();
 				const auto getRuntimePathSupportLabel = [&]() -> const char* {
 					if (!runtimeUpscalerPresent)
 						return "Unavailable (missing runtime)";
@@ -1755,12 +1760,17 @@ void Upscaling::DrawSettings()
 						return "Unavailable (latched fallback)";
 					if (!supportKnown)
 						return "Pending";
+					if (supportConfirmed && providerMismatch)
+						return "Available (provider fallback)";
 					return supportConfirmed ? "Available" : "Unavailable";
 				};
+				std::string providerDisplay = providerName.empty() ? "(not reported by SDK)" : providerName;
+				if (providerMismatch)
+					providerDisplay += " (requested version unavailable)";
 				ImGui::Text("Runtime Path Support: %s", getRuntimePathSupportLabel());
 				ImGui::Text("Failure Latch: %s", runtimeFailureLatched ? "Active" : "Clear");
 				ImGui::Text("Runtime Requested FSR Version: %s", requestedVersion.c_str());
-				ImGui::Text("Runtime Provider: %s", providerName.empty() ? "(not reported by SDK)" : providerName.c_str());
+				ImGui::Text("Runtime Provider: %s", providerDisplay.c_str());
 			}
 		}
 

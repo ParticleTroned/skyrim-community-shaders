@@ -225,6 +225,7 @@ public:
 	bool isRaceSexMenuOpen = false;
 	bool isTutorialMenuOpen = false;
 	bool hasHUDNotifications = false;
+	bool hasVRActivationRollover = false;
 	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
 	bool IsMainOrLoadingMenuOpen(RE::UI* ui) const
 	{
@@ -237,7 +238,8 @@ public:
 		       isMessageBoxMenuOpen ||
 		       isRaceSexMenuOpen ||
 		       isTutorialMenuOpen ||
-		       hasHUDNotifications;
+		       hasHUDNotifications ||
+		       hasVRActivationRollover;
 	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);

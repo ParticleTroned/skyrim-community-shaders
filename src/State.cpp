@@ -34,12 +34,15 @@
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
+#include "RE/C/CrosshairPickData.h"
 #include "RE/D/DialogueMenu.h"
 #include "RE/H/HUDMenu.h"
 #include "RE/H/HUDNotifications.h"
 #include "RE/M/MessageBoxMenu.h"
+#include "RE/N/NiAVObject.h"
 #include "RE/R/RaceSexMenu.h"
 #include "RE/T/TutorialMenu.h"
+#include "RE/W/WSActivateRollover.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
@@ -243,6 +246,43 @@ namespace
 		return false;
 	}
 
+	bool HasVRActivationPickTarget()
+	{
+#ifdef ENABLE_SKYRIM_VR
+		auto* pickData = RE::CrosshairPickData::GetSingleton();
+		if (!pickData)
+			return false;
+
+		for (uint32_t device = 0; device < RE::VR_DEVICE::kTotal; ++device) {
+			if (pickData->target[device] ||
+			    pickData->targetActor[device] ||
+			    pickData->grabPickRef[device]) {
+				return true;
+			}
+		}
+#endif
+		return false;
+	}
+
+	bool HasVRActivationRollover(RE::UI* a_ui)
+	{
+#ifdef ENABLE_SKYRIM_VR
+		if (!REL::Module::IsVR() || !a_ui)
+			return false;
+
+		auto rollover = a_ui->GetMenu<RE::WSActivateRollover>();
+		if (!rollover || !rollover->uiMovie || !rollover->uiMovie->GetVisible() || !rollover->menuNode)
+			return false;
+
+		if (rollover->menuNode->GetFlags().any(RE::NiAVObject::Flag::kHidden, RE::NiAVObject::Flag::kNotVisible))
+			return false;
+
+		return HasVRActivationPickTarget();
+#else
+		return false;
+#endif
+	}
+
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
 		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
@@ -421,6 +461,7 @@ void State::Reset()
 		isRaceSexMenuOpen = ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
 		isTutorialMenuOpen = ui->IsMenuOpen(RE::TutorialMenu::MENU_NAME);
 		hasHUDNotifications = HasPendingHUDNotifications(ui);
+		hasVRActivationRollover = HasVRActivationRollover(ui);
 	} else {
 		isMainMenuOpen = false;
 		isLoadingMenuOpen = false;
@@ -430,6 +471,7 @@ void State::Reset()
 		isRaceSexMenuOpen = false;
 		isTutorialMenuOpen = false;
 		hasHUDNotifications = false;
+		hasVRActivationRollover = false;
 	}
 
 	lastModifiedPixelDescriptor = 0;

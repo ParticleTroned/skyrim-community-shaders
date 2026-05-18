@@ -980,20 +980,85 @@ namespace
 		changedByUpscaling = a_enabled;
 	}
 
+	void DisableAutoDynamicResolutionSetting()
+	{
+		if (!globals::game::isVR)
+			return;
+
+		constexpr const char* settingNames[] = {
+			"bEnableAutoDynamicResolution:Display",
+			"bEnableAutoDynamicResolution"
+		};
+
+		bool found = false;
+		bool changed = false;
+		auto disableInCollection = [&](auto* a_collection, const char* a_collectionName) {
+			if (!a_collection)
+				return;
+
+			for (const auto* settingName : settingNames) {
+				auto* setting = a_collection->GetSetting(settingName);
+				if (!setting)
+					continue;
+
+				found = true;
+				if (setting->data.b) {
+					setting->data.b = false;
+					changed = true;
+					if (a_collection->WriteSetting(setting)) {
+						logger::info("[Upscaling] Disabled {} in {}.", settingName, a_collectionName);
+					} else {
+						logger::warn("[Upscaling] Disabled {} in memory, but failed to write {}.", settingName, a_collectionName);
+					}
+				}
+				return;
+			}
+		};
+
+		disableInCollection(globals::game::iniSettingCollection, "Skyrim.ini");
+		disableInCollection(globals::game::iniPrefSettingCollection, "SkyrimPrefs.ini");
+
+		for (const auto* settingName : settingNames) {
+			auto* setting = RE::GetINISetting(settingName);
+			if (!setting)
+				continue;
+
+			found = true;
+			if (setting->data.b) {
+				setting->data.b = false;
+				changed = true;
+				logger::info("[Upscaling] Disabled {} in runtime settings.", settingName);
+			}
+			break;
+		}
+
+		if (!found) {
+			logger::debug("[Upscaling] bEnableAutoDynamicResolution setting was not found.");
+		} else if (!changed) {
+			logger::debug("[Upscaling] bEnableAutoDynamicResolution was already disabled.");
+		}
+	}
+
 	bool IsVRRuntimeActive()
 	{
 		return globals::game::isVR;
+	}
+
+	bool IsLoadingMenuContextActive()
+	{
+		auto state = globals::state;
+		auto ui = globals::game::ui;
+		return g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed) ||
+		       (state && state->isLoadingMenuOpen) ||
+		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 	}
 
 	bool IsKnownGameMenuContextActive()
 	{
 		auto state = globals::state;
 		auto ui = globals::game::ui;
-		const bool loadingMenuOpen =
-			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed) ||
-			(state && state->isLoadingMenuOpen);
 		return (state && (state->isMapMenuOpen || state->isMainMenuOpen)) ||
-		       loadingMenuOpen ||
+		       IsLoadingMenuContextActive() ||
 		       (ui && ui->GameIsPaused());
 	}
 
@@ -2086,6 +2151,7 @@ struct BSOpenVR_GetRenderTargetSize
 
 void Upscaling::DataLoaded()
 {
+	DisableAutoDynamicResolutionSetting();
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const auto& blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
@@ -5073,6 +5139,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
+	if (globals::game::isVR && vendorUpscalingMethod && IsLoadingMenuContextActive()) {
+		resolutionScale = { 1.0f, 1.0f };
+		jitter = { 0.0f, 0.0f };
+		PrepareFullResolutionPostProcessing();
+		return;
+	}
+
 	if (vendorUpscalingMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
 		const float2 internalScale = GetSubmitStageInternalDynamicResolutionScale(screenSize);
 		resolutionScale = internalScale;
@@ -5196,9 +5269,13 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	if (globals::game::isVR) {
 		SetDynamicResolutionEnabledForUpscaling(shouldUnlockDynamicResolution);
 		if (shouldUnlockDynamicResolution) {
+			runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
+			runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
+			runtimeData.dynamicResolutionWidthRatio = resolutionScale.x;
+			runtimeData.dynamicResolutionHeightRatio = resolutionScale.y;
 			runtimeData.dynamicResolutionLock = 0;
-			dynamicResolutionWidthRatio = runtimeData.dynamicResolutionWidthRatio;
-			dynamicResolutionHeightRatio = runtimeData.dynamicResolutionHeightRatio;
+			dynamicResolutionWidthRatio = resolutionScale.x;
+			dynamicResolutionHeightRatio = resolutionScale.y;
 		} else {
 			runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
 			runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
@@ -5432,16 +5509,8 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	auto& runtimeData = viewport->GetRuntimeData();
-
-	runtimeData.dynamicResolutionPreviousWidthRatio = 1;
-	runtimeData.dynamicResolutionPreviousHeightRatio = 1;
-	runtimeData.dynamicResolutionWidthRatio = 1;
-	runtimeData.dynamicResolutionHeightRatio = 1;
-	runtimeData.dynamicResolutionLock = 1;
-
-	globals::game::renderer->UpdateViewPort(0, 0, 1);
-	UpdateCameraData();
+	if (globals::game::isVR && IsVendorUpscalingMethod(GetUpscaleMethod()) && IsLoadingMenuContextActive())
+		PrepareFullResolutionPostProcessing();
 
 	if (d3d12SwapChainActive)
 		SetUIBuffer();
@@ -7105,6 +7174,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	const bool vendorMethodSelected = IsVendorUpscalingMethod(upscaleMethod);
 	const bool menuPresentationContext = vendorMethodSelected && globals::game::isVR && IsGameMenuContextActive();
+	const bool loadingPresentationContext = vendorMethodSelected && globals::game::isVR && IsLoadingMenuContextActive();
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
 	if (menuPresentationContext) {
 		if (upscaling.ShouldUseFrameGenerationThisFrame())
@@ -7113,11 +7183,17 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		if (loadingPresentationContext)
+			upscaling.PrepareFullResolutionPostProcessing();
+		else
+			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		if (loadingPresentationContext)
+			upscaling.PrepareFullResolutionPostProcessing();
+		else
+			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		return;
 	}
 

@@ -2382,7 +2382,6 @@ void VR::SubmitOverlayFrame()
 	}
 	const bool useInSceneOverlay =
 		shouldUseInSceneOverlay &&
-		!submitStageUpscalingActive &&
 		inSceneResources.submitHookInstalled;
 	const bool useIVROverlay = !useInSceneOverlay;
 
@@ -2467,6 +2466,12 @@ void VR::SubmitOverlayFrame()
 		(!wantsHMDOverlay || menuOverlayHandle != vr::k_ulOverlayHandleInvalid) &&
 		(!wantsControllerOverlay || menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid);
 	const bool canUseIVROverlay = useIVROverlay && gameOverlay && cleanOverlay && hasRequiredOverlayHandles;
+	if (shouldRenderOverlay && wantsAnyVROverlay && useInSceneOverlay) {
+		if (!inSceneResources.initialized) {
+			InitInSceneResources();
+		}
+		EnsureInSceneOverlaySubmitCopyResources();
+	}
 
 	if (shouldRenderOverlay && wantsAnyVROverlay && (useInSceneOverlay || canUseIVROverlay) && hasRequiredTextures) {
 		// Update drag logic only when overlay is active

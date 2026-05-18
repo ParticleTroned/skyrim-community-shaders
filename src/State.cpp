@@ -12,6 +12,7 @@
 #include <cmath>
 #include <codecvt>
 #include <cstring>
+#include <limits>
 #include <thread>
 
 #include <pystring/pystring.h>
@@ -81,6 +82,9 @@ namespace
 	struct OCUExternalMipBiasState
 	{
 		float mipBias = 0.0f;
+		float renderScale = 1.0f;
+		uint32_t method = 0;
+		uint32_t flags = 0;
 	};
 
 	uint32_t ReadVolatileUInt32(const uint32_t* a_value)
@@ -171,10 +175,45 @@ namespace
 			}
 
 			a_state.mipBias = snapshot.mipBias;
+			a_state.renderScale = snapshot.renderScale;
+			a_state.method = snapshot.method;
+			a_state.flags = snapshot.flags;
 			return true;
 		}
 
 		return false;
+	}
+
+	void TraceOCUExternalMipBiasState(const OCUExternalMipBiasState& a_state)
+	{
+		static bool logged = false;
+		static float previousMipBias = std::numeric_limits<float>::quiet_NaN();
+		static float previousRenderScale = std::numeric_limits<float>::quiet_NaN();
+		static uint32_t previousMethod = std::numeric_limits<uint32_t>::max();
+		static uint32_t previousFlags = std::numeric_limits<uint32_t>::max();
+
+		const bool changed =
+			!logged ||
+			std::abs(previousMipBias - a_state.mipBias) > 0.0005f ||
+			std::abs(previousRenderScale - a_state.renderScale) > 0.0005f ||
+			previousMethod != a_state.method ||
+			previousFlags != a_state.flags;
+
+		if (!changed)
+			return;
+
+		logger::info(
+			"[MipBiasTrace] source=OpenCompositeUnleashedSharedState renderScale={:.3f} mipBias={:.3f} method={} flags=0x{:X}",
+			a_state.renderScale,
+			a_state.mipBias,
+			a_state.method,
+			a_state.flags);
+
+		logged = true;
+		previousMipBias = a_state.mipBias;
+		previousRenderScale = a_state.renderScale;
+		previousMethod = a_state.method;
+		previousFlags = a_state.flags;
 	}
 
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
@@ -1181,10 +1220,11 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const bool externalOpenCompositeMipBias =
 			globals::game::isVR &&
 			upscalingLoaded &&
-			upscaling.IsOpenCompositeUpscalingBlocked() &&
 			TryReadOCUExternalMipBiasState(externalMipBiasState);
 
 		data.MipBias = externalOpenCompositeMipBias ? externalMipBiasState.mipBias : computedMipBias;
+		if (externalOpenCompositeMipBias)
+			TraceOCUExternalMipBiasState(externalMipBiasState);
 		data.RefractionScale = refractionScale;
 		data.PBRMetalReflectionScale = pbrMetalReflectionScale;
 		data.PBRMetalHighlightScale = pbrMetalHighlightScale;

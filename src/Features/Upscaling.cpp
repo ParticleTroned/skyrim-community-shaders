@@ -1044,15 +1044,21 @@ namespace
 		return globals::game::isVR;
 	}
 
+	bool IsLoadingMenuContextActive()
+	{
+		auto state = globals::state;
+		auto ui = globals::game::ui;
+		return g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed) ||
+		       (state && state->isLoadingMenuOpen) ||
+		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	}
+
 	bool IsKnownGameMenuContextActive()
 	{
 		auto state = globals::state;
 		auto ui = globals::game::ui;
-		const bool loadingMenuOpen =
-			g_vrLoadingMenuOpenFromEvent.load(std::memory_order_relaxed) ||
-			(state && state->isLoadingMenuOpen);
 		return (state && (state->isMapMenuOpen || state->isMainMenuOpen)) ||
-		       loadingMenuOpen ||
+		       IsLoadingMenuContextActive() ||
 		       (ui && ui->GameIsPaused());
 	}
 
@@ -5133,6 +5139,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
+	if (globals::game::isVR && vendorUpscalingMethod && IsLoadingMenuContextActive()) {
+		resolutionScale = { 1.0f, 1.0f };
+		jitter = { 0.0f, 0.0f };
+		PrepareFullResolutionPostProcessing();
+		return;
+	}
+
 	if (vendorUpscalingMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
 		const float2 internalScale = GetSubmitStageInternalDynamicResolutionScale(screenSize);
 		resolutionScale = internalScale;
@@ -5495,6 +5508,9 @@ void Upscaling::PostDisplay()
 
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
+
+	if (globals::game::isVR && IsVendorUpscalingMethod(GetUpscaleMethod()) && IsLoadingMenuContextActive())
+		PrepareFullResolutionPostProcessing();
 
 	if (d3d12SwapChainActive)
 		SetUIBuffer();
@@ -7158,6 +7174,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	const bool vendorMethodSelected = IsVendorUpscalingMethod(upscaleMethod);
 	const bool menuPresentationContext = vendorMethodSelected && globals::game::isVR && IsGameMenuContextActive();
+	const bool loadingPresentationContext = vendorMethodSelected && globals::game::isVR && IsLoadingMenuContextActive();
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
 	if (menuPresentationContext) {
 		if (upscaling.ShouldUseFrameGenerationThisFrame())
@@ -7166,11 +7183,17 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		if (loadingPresentationContext)
+			upscaling.PrepareFullResolutionPostProcessing();
+		else
+			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		if (loadingPresentationContext)
+			upscaling.PrepareFullResolutionPostProcessing();
+		else
+			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		return;
 	}
 

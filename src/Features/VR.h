@@ -578,6 +578,7 @@ public:
 
 		bool initialized = false;
 		bool submitHookInstalled = false;
+		bool submitPathDisabled = false;
 	} inSceneResources;
 
 	struct InSceneCB

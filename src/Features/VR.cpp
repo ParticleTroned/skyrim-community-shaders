@@ -522,6 +522,9 @@ bool VR::ShouldUseInSceneOverlay() const
 	if (!openVRInfo.isCompatible) {
 		return false;
 	}
+	if (inSceneResources.submitPathDisabled) {
+		return false;
+	}
 
 	switch (settings.menuOverlayPath) {
 	case Settings::MenuOverlayPath::IVROverlay:

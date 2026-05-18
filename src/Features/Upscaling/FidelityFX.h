@@ -53,6 +53,7 @@ public:
 	void CreateFSRResources();
 
 	void DestroyFSRResources();
+	void ResetRuntimeUpscalerResources();
 
 	bool IsAmdAdapterDetected() const;
 	bool IsNvidiaAdapterDetected() const;

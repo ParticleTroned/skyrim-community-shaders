@@ -2587,6 +2587,34 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 
 void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
+	struct FoveatedLayoutKey
+	{
+		int32_t centerAreaQ = 0;
+		int32_t centerHorizontalScaleQ = 0;
+		int32_t centerFeatherQ = 0;
+		std::array<int32_t, 4> centerOffsetQ{};
+	};
+
+	const auto makeFoveatedLayoutKey = [&](bool usePeripheryTAAProfile, bool usePeripheryTAAPath) {
+		const auto profile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
+		const float centerFeather = usePeripheryTAAPath ?
+			ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) :
+			FoveatedCommon::kCenterFeather;
+		const auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(usePeripheryTAAProfile);
+
+		FoveatedLayoutKey key{};
+		key.centerAreaQ = QuantizePeripheryTAATileParam(profile.centerArea);
+		key.centerHorizontalScaleQ = QuantizePeripheryTAATileParam(profile.centerHorizontalScale);
+		key.centerFeatherQ = QuantizePeripheryTAATileParam(centerFeather);
+		key.centerOffsetQ = {
+			QuantizePeripheryTAATileParam(centerOffsets[0].x),
+			QuantizePeripheryTAATileParam(centerOffsets[0].y),
+			QuantizePeripheryTAATileParam(centerOffsets[1].x),
+			QuantizePeripheryTAATileParam(centerOffsets[1].y)
+		};
+		return key;
+	};
+
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
 	static bool previousFrameGenMode = false;
 	static bool previousFoveatedDispatch = false;
@@ -2596,8 +2624,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousVRSubmitStageScaleInputToOutputTarget = settings.vrSubmitStageScaleInputToOutputTarget;
 	static bool previousVRSubmitStageDLSSForceFullEye = settings.vrSubmitStageDLSSForceFullEye;
 	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
-	static uint32_t previousFoveatedCenterAreaMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerArea * 1000.0f));
-	static uint32_t previousFoveatedCenterHorizontalScaleMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerHorizontalScale * 1000.0f));
+	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
@@ -2607,14 +2634,18 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	const bool dlssQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool foveatedDispatchCurrent = IsFoveatedVendorDispatchEnabled(a_upscalemethod);
 	const bool peripheryTAACurrent = IsPeripheryTAAEnabled(a_upscalemethod);
+	const bool peripheryTAAPathCurrent = IsPeripheryTAAPathActive(a_upscalemethod);
 	const bool fsrRuntimePathCurrent = IsFSRRuntimePathActive(a_upscalemethod);
-	const auto effectiveProfile = GetFoveatedMaskProfileParams(settings, peripheryTAACurrent);
-	const uint32_t foveatedCenterAreaMilli = static_cast<uint32_t>(std::round(effectiveProfile.centerArea * 1000.0f));
-	const uint32_t foveatedCenterHorizontalScaleMilli = static_cast<uint32_t>(std::round(effectiveProfile.centerHorizontalScale * 1000.0f));
+	const FoveatedLayoutKey foveatedLayoutCurrent = makeFoveatedLayoutKey(peripheryTAACurrent, peripheryTAAPathCurrent);
 	const bool compareFoveatedArea = foveatedDispatchCurrent || previousFoveatedDispatch;
-	const bool foveatedDispatchChanged = previousFoveatedDispatch != foveatedDispatchCurrent ||
-	                                     (compareFoveatedArea && (previousFoveatedCenterAreaMilli != foveatedCenterAreaMilli ||
-	                                                              previousFoveatedCenterHorizontalScaleMilli != foveatedCenterHorizontalScaleMilli));
+	const bool foveatedDispatchToggleChanged = previousFoveatedDispatch != foveatedDispatchCurrent;
+	const bool foveatedGeometryChanged =
+		compareFoveatedArea &&
+		(previousFoveatedLayout.centerAreaQ != foveatedLayoutCurrent.centerAreaQ ||
+		 previousFoveatedLayout.centerHorizontalScaleQ != foveatedLayoutCurrent.centerHorizontalScaleQ ||
+		 previousFoveatedLayout.centerFeatherQ != foveatedLayoutCurrent.centerFeatherQ ||
+		 previousFoveatedLayout.centerOffsetQ != foveatedLayoutCurrent.centerOffsetQ);
+	const bool foveatedDispatchChanged = foveatedDispatchToggleChanged || foveatedGeometryChanged;
 	const bool peripheryTAAChanged = previousPeripheryTAA != peripheryTAACurrent;
 	const bool compareFSRRuntimePath = a_upscalemethod == UpscaleMethod::kFSR || previousUpscaleMode == UpscaleMethod::kFSR;
 	const bool fsrRuntimePathChanged = compareFSRRuntimePath && previousFSRRuntimePathActive != fsrRuntimePathCurrent;
@@ -2623,13 +2654,22 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		(previousVRSubmitStageUseOpenVRTargetExtent != settings.vrSubmitStageUseOpenVRTargetExtent ||
 			previousVRSubmitStageScaleInputToOutputTarget != settings.vrSubmitStageScaleInputToOutputTarget ||
 			previousVRSubmitStageDLSSForceFullEye != settings.vrSubmitStageDLSSForceFullEye);
+	const bool fsrRuntimeFoveatedLayoutChanged =
+		a_upscalemethod == UpscaleMethod::kFSR &&
+		fsrRuntimePathCurrent &&
+		foveatedDispatchChanged;
 
 	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || qualityModeChanged || vrSubmitStageVariantChanged) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
 			previousQualityMode, qualityModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 
-		const bool requiresFullPipelineUnbind = upscaleModeChanged || frameGenModeChanged || fsrRuntimePathChanged || dlssQualityModeChanged;
+		const bool requiresFullPipelineUnbind =
+			upscaleModeChanged ||
+			frameGenModeChanged ||
+			fsrRuntimePathChanged ||
+			fsrRuntimeFoveatedLayoutChanged ||
+			dlssQualityModeChanged;
 		if (requiresFullPipelineUnbind)
 			UnbindUpscalingResources();
 
@@ -2696,6 +2736,10 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			fidelityFX.DestroyFSRResources();
 			fidelityFX.CreateFSRResources();
 			RequestHistoryReset();
+		} else if (!upscaleModeChanged && fsrRuntimeFoveatedLayoutChanged) {
+			// FSR4 runtime state spans full-frame and region dispatches; reset it when the foveated layout changes.
+			fidelityFX.ResetRuntimeUpscalerResources();
+			RequestHistoryReset();
 		}
 
 		if (upscaleModeChanged || foveatedDispatchChanged) {
@@ -2717,8 +2761,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousVRSubmitStageScaleInputToOutputTarget = settings.vrSubmitStageScaleInputToOutputTarget;
 		previousVRSubmitStageDLSSForceFullEye = settings.vrSubmitStageDLSSForceFullEye;
 		previousQualityMode = qualityModeCurrent;
-		previousFoveatedCenterAreaMilli = foveatedCenterAreaMilli;
-		previousFoveatedCenterHorizontalScaleMilli = foveatedCenterHorizontalScaleMilli;
+		previousFoveatedLayout = foveatedLayoutCurrent;
 		previousUpscalingWasActive =
 			IsUpscalingActive() ||
 			(globals::game::isVR && IsVendorUpscalingMethod(a_upscalemethod) && IsSubmitStageRequestedUpscalingActive() && g_submitStageTargetSizeKnown);

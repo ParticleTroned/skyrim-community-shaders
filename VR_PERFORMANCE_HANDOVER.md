@@ -256,13 +256,13 @@ Risk:
 - Medium-high because this touches the main lighting shader.
 - Must be guarded by debug masks and toggles.
 
-### 2. Utility shader shadowmask foveated filtering
+### 2. Utility shader shadowmask foveated filtering - removed
 
 File:
 
 - `package/Shaders/Utility.hlsl`
 
-Why it matters:
+Why it was considered:
 
 - Utility shadowmask permutations are heavy.
 - The PCF helper uses 8 taps.
@@ -277,7 +277,13 @@ Hot areas identified:
 - focus-shadow extra sampling
 - spot/paraboloid shadowmask variants
 
-Recommended approach:
+Current status:
+
+- Do not reintroduce this path without a dedicated VR validation pass.
+- The Utility shadowmask foveation implementation caused shadow flicker and has been removed.
+- `Utility.hlsl` should keep direct `SampleShadowPCF` and `SampleDualParaboloidShadowPCF` calls for shadowmask PCF.
+
+Rejected approach:
 
 - Keep shadowmap generation unchanged.
 - Foveate shadowmask filtering only.
@@ -561,15 +567,14 @@ Use existing perf markers where available. Add temporary markers if a hot path i
 
 ## Recommended First Implementation Sequence
 
-1. Add shared VR detail/foveated budget plumbing for `Lighting.hlsl` and `Utility.hlsl`, but initially only expose debug visualization and no behavior change.
-2. Implement foveated Utility shadowmask PCF reduction because it is isolated and easier to validate.
-3. Implement SSR foveated fallback because it has a clear hot loop and fallback path.
-4. Implement screen-space shadow foveated sample scaling.
-5. Implement Wetterness dynamic-detail foveation.
-6. Implement water parallax foveation.
-7. Implement LightLimitFix culling improvements.
-8. Investigate remaining SSGI prefilter/gating skips.
-9. Only then consider SSS and Extended Materials.
+1. Keep Utility shadowmask PCF unfoveated unless a new fix is proven stable in VR.
+2. Implement SSR foveated fallback because it has a clear hot loop and fallback path.
+3. Implement screen-space shadow foveated sample scaling.
+4. Implement Wetterness dynamic-detail foveation.
+5. Implement water parallax foveation.
+6. Implement LightLimitFix culling improvements.
+7. Investigate remaining SSGI prefilter/gating skips.
+8. Only then consider SSS and Extended Materials.
 
 ## Expected Aggregate Savings
 
@@ -667,7 +672,7 @@ Other targets:
 The best next work is not one giant optimization. It is a staged VR detail-budget system:
 
 1. Reuse the existing foveated mask.
-2. Apply it first to Utility shadowmask filtering and SSR.
-3. Then apply it to auxiliary lighting work in `Lighting.hlsl`.
+2. Do not apply it to Utility shadowmask filtering until the previous flicker regression has a proven root-cause fix.
+3. Apply it to SSR and auxiliary lighting work in `Lighting.hlsl`.
 4. Keep stereo blending feature-local.
 5. Avoid global reprojection until profiling proves it is worth its fixed cost and correctness risk.

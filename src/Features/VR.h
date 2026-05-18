@@ -186,8 +186,6 @@ public:
 		// Foveated detail budgets. These use the active Upscaling FOV profile.
 		bool EnableLightingFoveation = false;
 		bool EnableLightingFoveationHardCutoff = false;
-		bool EnableUtilityFoveation = false;
-		bool EnableUtilityFoveationHardCutoff = false;
 		bool EnableSSRFoveation = false;
 		bool EnableSSRFoveationHardCutoff = false;
 		bool EnableWaterParallaxFoveation = false;

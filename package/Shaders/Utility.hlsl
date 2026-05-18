@@ -364,10 +364,6 @@ cbuffer AlphaTestRefCB : register(b11)
 }
 #	endif  // !VR
 
-#	if defined(VR)
-#		include "Common/FoveatedMask.hlsli"
-#	endif
-
 float SampleShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius)
 {
 	float visibility = 0.0;
@@ -391,69 +387,6 @@ float SampleDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerCompariso
 	}
 	return visibility / 8.0;
 }
-
-#	if defined(VR)
-float GetVRUtilityShadowmaskFilterWeight(float2 eyeUv, uint eyeIndex)
-{
-	float utilityFoveationMode = SharedData::VRFoveationData1.x;
-	float2 centerOffset = eyeIndex == 0 ? SharedData::VRFoveationCenterOffsets.xy : SharedData::VRFoveationCenterOffsets.zw;
-	return FoveatedComputeDetailWeight(
-		utilityFoveationMode,
-		eyeUv,
-		SharedData::VRFoveationData0.x,
-		SharedData::VRFoveationData0.y,
-		SharedData::VRFoveationData0.z,
-		centerOffset);
-}
-
-bool ShouldEvaluateVRUtilityShadowmaskFilter(float detailWeight)
-{
-	return FoveatedShouldEvaluateDetail(detailWeight);
-}
-
-float ApplyVRUtilityShadowmaskFilterWeight(float singleSampleVisibility, float filteredVisibility, float detailWeight)
-{
-	return lerp(singleSampleVisibility, filteredVisibility, detailWeight);
-}
-
-float SampleVRUtilityShadowmaskPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius, float detailWeight, bool detailEnabled)
-{
-	[branch] if (detailWeight >= 0.9999) {
-		return SampleShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius);
-	}
-
-	float singleSampleVisibility = tex.SampleCmpLevelZero(samp, float3(baseUV, layerIndex), compareValue).x;
-	[branch] if (!detailEnabled)
-		return singleSampleVisibility;
-
-	float filteredVisibility = SampleShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius);
-	return ApplyVRUtilityShadowmaskFilterWeight(singleSampleVisibility, filteredVisibility, detailWeight);
-}
-
-float SampleVRUtilityDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius, bool lowerHalf, float detailWeight, bool detailEnabled)
-{
-	[branch] if (detailWeight >= 0.9999) {
-		return SampleDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf);
-	}
-
-	float2 singleSampleUV = baseUV;
-	singleSampleUV.y = lowerHalf ? max(singleSampleUV.y, 0.5) : min(singleSampleUV.y, 0.5);
-	float singleSampleVisibility = tex.SampleCmpLevelZero(samp, float3(singleSampleUV, layerIndex), compareValue).x;
-	[branch] if (!detailEnabled)
-		return singleSampleVisibility;
-
-	float filteredVisibility = SampleDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf);
-	return ApplyVRUtilityShadowmaskFilterWeight(singleSampleVisibility, filteredVisibility, detailWeight);
-}
-#	endif
-
-#	if defined(VR)
-#		define SAMPLE_UTILITY_SHADOWMASK_PCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius) SampleVRUtilityShadowmaskPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, utilityShadowmaskDetailWeight, utilityShadowmaskDetailEnabled)
-#		define SAMPLE_UTILITY_DUAL_PARABOLOID_SHADOWMASK_PCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf) SampleVRUtilityDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf, utilityShadowmaskDetailWeight, utilityShadowmaskDetailEnabled)
-#	else
-#		define SAMPLE_UTILITY_SHADOWMASK_PCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius) SampleShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius)
-#		define SAMPLE_UTILITY_DUAL_PARABOLOID_SHADOWMASK_PCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf) SampleDualParaboloidShadowPCF(tex, samp, baseUV, layerIndex, compareValue, rotationMatrix, radius, lowerHalf)
-#	endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -575,13 +508,6 @@ PS_OUTPUT main(PS_INPUT input)
 	sincos(Math::TAU * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
-#		if defined(VR) && SHADOWFILTER == 3
-	float2 utilityFoveationUv = input.PositionCS.xy * SharedData::BufferDim.zw;
-	utilityFoveationUv = Stereo::ConvertFromStereoUV(utilityFoveationUv, eyeIndex);
-	float utilityShadowmaskDetailWeight = GetVRUtilityShadowmaskFilterWeight(saturate(utilityFoveationUv), eyeIndex);
-	bool utilityShadowmaskDetailEnabled = ShouldEvaluateVRUtilityShadowmaskFilter(utilityShadowmaskDetailWeight);
-#		endif
-
 #		if defined(RENDER_SHADOWMASK)
 	if (SharedData::InInterior)
 		shadowColor = float4(0, 0, 0, 0);
@@ -617,7 +543,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			elif SHADOWFILTER == 1
 		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(positionLS.xy, cascadeIndex), shadowMapCompareDepth).x;
 #			elif SHADOWFILTER == 3
-		shadowVisibility = SAMPLE_UTILITY_SHADOWMASK_PCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, positionLS.xy, cascadeIndex, shadowMapCompareDepth, rotationMatrix, ShadowSampleParam.z);
+		shadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, positionLS.xy, cascadeIndex, shadowMapCompareDepth, rotationMatrix, ShadowSampleParam.z);
 #			endif
 
 		if (cascadeIndex < 1 && StartSplitDistances.y < shadowMapDepth) {
@@ -638,7 +564,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			elif SHADOWFILTER == 1
 			cascade1ShadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(cascade1PositionLS.xy, 1), cascade1CompareDepth).x;
 #			elif SHADOWFILTER == 3
-			cascade1ShadowVisibility = SAMPLE_UTILITY_SHADOWMASK_PCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, cascade1PositionLS.xy, 1, cascade1CompareDepth, rotationMatrix, ShadowSampleParam.z);
+			cascade1ShadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, cascade1PositionLS.xy, 1, cascade1CompareDepth, rotationMatrix, ShadowSampleParam.z);
 #			endif
 
 			float cascade1BlendFactor = smoothstep(0, 1, (shadowMapDepth - StartSplitDistances.y) / (EndSplitDistances.x - StartSplitDistances.y));
@@ -653,7 +579,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 focusShadowMapUv = float3(focusShadowMapPosition.xy, StartSplitDistances.w + focusShadowIndex);
 			float focusShadowMapCompareValue = focusShadowMapPosition.z - 3 * shadowMapThreshold;
 #			if SHADOWFILTER == 3
-			float focusShadowVisibility = SAMPLE_UTILITY_SHADOWMASK_PCF(TexFocusShadowMapSamplerComp, SampFocusShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
+			float focusShadowVisibility = SampleShadowPCF(TexFocusShadowMapSamplerComp, SampFocusShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
 #			else
 			float focusShadowVisibility = TexFocusShadowMapSamplerComp.SampleCmpLevelZero(SampFocusShadowMapSamplerComp, focusShadowMapUv, focusShadowMapCompareValue).x;
 #			endif
@@ -676,7 +602,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			elif SHADOWFILTER == 1
 	shadowBaseVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), positionLS.z - AlphaTestRef.y).x;
 #			elif SHADOWFILTER == 3
-	shadowBaseVisibility = SAMPLE_UTILITY_SHADOWMASK_PCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, positionLS.z - AlphaTestRef.y, rotationMatrix, ShadowSampleParam.z);
+	shadowBaseVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, positionLS.z - AlphaTestRef.y, rotationMatrix, ShadowSampleParam.z);
 #			endif
 	float shadowVisibilityFactor = pow(2 * length(0.5 * positionLS.xy), ShadowLightParam.x);
 	float shadowVisibility = shadowBaseVisibility - shadowVisibilityFactor * shadowBaseVisibility;
@@ -695,7 +621,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			elif SHADOWFILTER == 1
 		focusShadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, focusShadowMapUv, focusShadowMapCompareValue).x;
 #			elif SHADOWFILTER == 3
-		focusShadowVisibility = SAMPLE_UTILITY_SHADOWMASK_PCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
+		focusShadowVisibility = SampleShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, focusShadowMapUv.xy, focusShadowMapUv.z, focusShadowMapCompareValue, rotationMatrix, ShadowSampleParam.z);
 #			endif
 		shadowVisibility = min(shadowVisibility, lerp(1, focusShadowVisibility, FocusShadowFadeParam[focusShadowIndex]));
 	}
@@ -719,7 +645,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			elif SHADOWFILTER == 1
 		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
 #			elif SHADOWFILTER == 3
-		shadowVisibility = SAMPLE_UTILITY_DUAL_PARABOLOID_SHADOWMASK_PCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, false);
+		shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, false);
 #			endif
 	} else {
 		shadowVisibility = 1;
@@ -748,7 +674,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			elif SHADOWFILTER == 1
 	shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
 #			elif SHADOWFILTER == 3
-	shadowVisibility = SAMPLE_UTILITY_DUAL_PARABOLOID_SHADOWMASK_PCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, lowerHalf);
+	shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, lowerHalf);
 #			endif
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;

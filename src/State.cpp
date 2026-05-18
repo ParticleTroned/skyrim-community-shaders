@@ -1075,7 +1075,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
 		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
-		data.VRFoveationData1 = { FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off), 0.0f, 0.0f, 0.0f };
+		data.VRFoveationData1 = { 0.0f, 0.0f, 0.0f, 0.0f };
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
 		const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
@@ -1087,7 +1087,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const bool wetternessActive = vr.settings.EnableWetternessFoveation && wetterness.IsRuntimeActive() && !wetnessEffects.loaded;
 		const bool anyShaderFoveationEnabled =
 			vr.settings.EnableLightingFoveation ||
-			vr.settings.EnableUtilityFoveation ||
 			(vr.settings.EnableSSRFoveation && dynamicSSRActive) ||
 			waterParallaxActive ||
 			wetternessActive;
@@ -1103,9 +1102,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableLightingFoveation,
 					vr.settings.EnableLightingFoveationHardCutoff));
-				const float utilityFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
-					vr.settings.EnableUtilityFoveation,
-					vr.settings.EnableUtilityFoveationHardCutoff));
 				const float ssrFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
 					vr.settings.EnableSSRFoveation && dynamicSSRActive,
 					vr.settings.EnableSSRFoveationHardCutoff));
@@ -1122,7 +1118,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 					foveationActive ? lightingFoveationMode : disabledFoveationMode
 				};
 				data.VRFoveationData1 = {
-					foveationActive ? utilityFoveationMode : disabledFoveationMode,
+					0.0f,
 					foveationActive ? ssrFoveationMode : disabledFoveationMode,
 					foveationActive ? waterParallaxFoveationMode : disabledFoveationMode,
 					foveationActive ? wetternessFoveationMode : disabledFoveationMode

@@ -518,6 +518,8 @@ public:
 		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
 		winrt::com_ptr<ID3D11SamplerState> sampler;
 		winrt::com_ptr<ID3D11ShaderResourceView> menuSRV;
+		winrt::com_ptr<ID3D11ComputeShader> submitCompositeCS;
+		winrt::com_ptr<ID3D11Buffer> submitCompositeCB;
 		ID3D11Texture2D* cachedMenuTexture = nullptr;
 
 		struct CachedRTV
@@ -528,7 +530,10 @@ public:
 		struct SubmitCopy
 		{
 			D3D11_TEXTURE2D_DESC sourceDesc{};
+			D3D11_TEXTURE2D_DESC pendingSourceDesc{};
 			winrt::com_ptr<ID3D11Texture2D> texture;
+			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+			bool pendingCreate = false;
 		};
 		CachedRTV cachedEyeRTVs[2];
 		SubmitCopy submitCopies[2];
@@ -545,6 +550,17 @@ public:
 		Matrix wvp;
 	};
 
+	struct alignas(16) SubmitCompositeCB
+	{
+		uint32_t targetSize[2];
+		uint32_t dispatchOrigin[2];
+		uint32_t dispatchSize[2];
+		uint32_t padding[2];
+		float quadPixels[8];
+		float quadInvW[4];
+	};
+	STATIC_ASSERT_ALIGNAS_16(SubmitCompositeCB);
+
 public:
 	//=============================================================================
 	// PRIVATE IMPLEMENTATION
@@ -553,7 +569,9 @@ public:
 	void DetectOpenVRInfo();
 	bool IsOpenVRCompatible() const;
 	void InitInSceneResources();
-	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds);
+	void EnsureInSceneOverlaySubmitCopyResources();
+	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);
+	void CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds);
 	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	void InstallSubmitHook();
 	bool GetGripPressed(bool isLeft, bool isRight) const;

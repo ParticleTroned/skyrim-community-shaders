@@ -8,6 +8,38 @@
 
 namespace VRDetection
 {
+	namespace
+	{
+		bool FileContainsAnyString(const std::string& path, std::initializer_list<std::string_view> needles)
+		{
+			HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (file == INVALID_HANDLE_VALUE)
+				return false;
+
+			LARGE_INTEGER size{};
+			if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 64LL * 1024LL * 1024LL) {
+				CloseHandle(file);
+				return false;
+			}
+
+			std::string bytes(static_cast<size_t>(size.QuadPart), '\0');
+			DWORD bytesRead = 0;
+			const bool readOk = ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &bytesRead, nullptr);
+			CloseHandle(file);
+			if (!readOk) {
+				return false;
+			}
+			bytes.resize(bytesRead);
+
+			for (auto needle : needles) {
+				if (bytes.find(needle) != std::string::npos) {
+					return true;
+				}
+			}
+			return false;
+		}
+	}
+
 	const char* RuntimeTypeToString(RuntimeType type)
 	{
 		switch (type) {
@@ -105,6 +137,9 @@ namespace VRDetection
 			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
 		if (lowerPath.find("opencomposite") != std::string::npos)
+			return RuntimeType::OpenComposite;
+
+		if (FileContainsAnyString(dllPath, { "OpenComposite", "OpenOVR", "OCUnleashedSKSE.log" }))
 			return RuntimeType::OpenComposite;
 
 		// SteamVR DLLs are typically larger and have higher version numbers

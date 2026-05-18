@@ -339,7 +339,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	Matrix hmdWorld = Matrix::Identity;
 	Matrix eyeToHead = Matrix::Identity;
 	Matrix proj = Matrix::Identity;
-	Matrix vpHeadSpace = Matrix::Identity;   // For HMD-relative rendering (head space)
 	Matrix vpWorldSpace = Matrix::Identity;  // For world/controller rendering (world space)
 
 	// Always get Eye and Projection matrices
@@ -365,10 +364,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		projLogged[(int)eye] = true;
 	}
 
-	// Head-space VP (for HMD-relative mode)
-	vpHeadSpace = eyeToHead.Invert() * proj;
-
-	// World-space VP (for controller attach and fixed world position modes)
+	// World-space VP for controller, fixed world, and level HMD-relative modes.
 	if (hmdPose.bPoseIsValid) {
 		hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
 		// SimpleMath uses row-vector transforms, so compose local-to-world as
@@ -546,9 +542,13 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
 			vp = vpWorldSpace;
 		} else {  // HMD Relative
-			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset;
-			vp = vpHeadSpace;
+			vr::HmdMatrix34_t levelTransform = Util::BuildLevelOverlayTransform(
+				hmdPose.mDeviceToAbsoluteTracking,
+				settings.VRMenuOffsetX,
+				settings.VRMenuOffsetY,
+				settings.VRMenuOffsetZ);
+			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * Util::HmdMatrix34ToMatrix(levelTransform);
+			vp = vpWorldSpace;
 		}
 		cbData.wvp = (modelMatrix * vp).Transpose();
 

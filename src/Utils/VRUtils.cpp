@@ -2,10 +2,40 @@
 #include "Features/VR.h"  // For ButtonCombo and ControllerDevice definitions
 #include "RE/B/BSOpenVR.h"
 #include "UI.h"
+#include <cmath>
 #include <imgui.h>
 
 namespace Util
 {
+	namespace
+	{
+		struct OverlayBasisVector
+		{
+			float x;
+			float y;
+			float z;
+		};
+
+		OverlayBasisVector Cross(const OverlayBasisVector& a, const OverlayBasisVector& b)
+		{
+			return {
+				a.y * b.z - a.z * b.y,
+				a.z * b.x - a.x * b.z,
+				a.x * b.y - a.y * b.x
+			};
+		}
+
+		OverlayBasisVector NormalizeOr(const OverlayBasisVector& value, const OverlayBasisVector& fallback)
+		{
+			const float lengthSq = value.x * value.x + value.y * value.y + value.z * value.z;
+			if (lengthSq <= 1.0e-6f)
+				return fallback;
+
+			const float invLength = 1.0f / std::sqrt(lengthSq);
+			return { value.x * invLength, value.y * invLength, value.z * invLength };
+		}
+	}
+
 	void DrawButtonCombo(const std::vector<ButtonCombo>& combo, bool showControllerLabels)
 	{
 		bool anyDrawn = false;
@@ -71,6 +101,57 @@ namespace Util
 		}
 	}
 
+	vr::HmdMatrix34_t BuildLevelOverlayTransform(const vr::HmdMatrix34_t& hmdTransform, float offsetX, float offsetY, float offsetZ)
+	{
+		const OverlayBasisVector worldUp{ 0.0f, 1.0f, 0.0f };
+		const OverlayBasisVector fallbackBack{ 0.0f, 0.0f, 1.0f };
+		const OverlayBasisVector fallbackRight{ 1.0f, 0.0f, 0.0f };
+		const float kMinHorizontalLengthSq = 1.0e-6f;
+
+		OverlayBasisVector projectedBack{ hmdTransform.m[0][2], 0.0f, hmdTransform.m[2][2] };
+		OverlayBasisVector projectedRight{ hmdTransform.m[0][0], 0.0f, hmdTransform.m[2][0] };
+
+		const float projectedBackLenSq = projectedBack.x * projectedBack.x + projectedBack.z * projectedBack.z;
+		const float projectedRightLenSq = projectedRight.x * projectedRight.x + projectedRight.z * projectedRight.z;
+
+		OverlayBasisVector back = fallbackBack;
+		if (projectedBackLenSq > kMinHorizontalLengthSq) {
+			back = NormalizeOr(projectedBack, fallbackBack);
+		} else if (projectedRightLenSq > kMinHorizontalLengthSq) {
+			OverlayBasisVector rightFromHmd = NormalizeOr(projectedRight, fallbackRight);
+			back = NormalizeOr(Cross(rightFromHmd, worldUp), fallbackBack);
+		}
+
+		OverlayBasisVector right = NormalizeOr(Cross(worldUp, back), fallbackRight);
+		OverlayBasisVector up = NormalizeOr(Cross(back, right), worldUp);
+
+		vr::HmdMatrix34_t transform = {};
+		transform.m[0][0] = right.x;
+		transform.m[0][1] = up.x;
+		transform.m[0][2] = back.x;
+		transform.m[0][3] = hmdTransform.m[0][3] + right.x * offsetX + up.x * offsetY + back.x * offsetZ;
+
+		transform.m[1][0] = right.y;
+		transform.m[1][1] = up.y;
+		transform.m[1][2] = back.y;
+		transform.m[1][3] = hmdTransform.m[1][3] + right.y * offsetX + up.y * offsetY + back.y * offsetZ;
+
+		transform.m[2][0] = right.z;
+		transform.m[2][1] = up.z;
+		transform.m[2][2] = back.z;
+		transform.m[2][3] = hmdTransform.m[2][3] + right.z * offsetX + up.z * offsetY + back.z * offsetZ;
+
+		return transform;
+	}
+
+	void ScaleOverlayTransform(vr::HmdMatrix34_t& transform, float width, float height)
+	{
+		for (int row = 0; row < 3; ++row) {
+			transform.m[row][0] *= width;
+			transform.m[row][1] *= height;
+		}
+	}
+
 	vr::HmdMatrix34_t ComputeOverlayTransformFromHMD(float offsetX, float offsetY, float offsetZ)
 	{
 		// Initialize as identity matrix to ensure valid transform on early returns
@@ -95,14 +176,7 @@ namespace Util
 		if (!hmdPose.bPoseIsValid)
 			return transform;
 
-		transform = hmdPose.mDeviceToAbsoluteTracking;
-
-		// Apply HMD overlay offsets (in HMD local space)
-		transform.m[0][3] += transform.m[0][0] * offsetX + transform.m[0][1] * offsetY + transform.m[0][2] * offsetZ;
-		transform.m[1][3] += transform.m[1][0] * offsetX + transform.m[1][1] * offsetY + transform.m[1][2] * offsetZ;
-		transform.m[2][3] += transform.m[2][0] * offsetX + transform.m[2][1] * offsetY + transform.m[2][2] * offsetZ;
-
-		return transform;
+		return BuildLevelOverlayTransform(hmdPose.mDeviceToAbsoluteTracking, offsetX, offsetY, offsetZ);
 	}
 
 	void SetOverlayInputFlags(vr::IVROverlay* overlay, vr::VROverlayHandle_t handle)

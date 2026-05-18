@@ -32,9 +32,12 @@ bool VR::ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDevi
 				return false;
 			if (!hmdPose.bPoseIsValid)
 				return false;
-			Matrix hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
-			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
-			overlayWorld = offset * hmdWorld;
+			vr::HmdMatrix34_t levelTransform = Util::BuildLevelOverlayTransform(
+				hmdPose.mDeviceToAbsoluteTracking,
+				settings.VRMenuOffsetX,
+				settings.VRMenuOffsetY,
+				settings.VRMenuOffsetZ);
+			overlayWorld = Util::HmdMatrix34ToMatrix(levelTransform);
 		}
 	} else {  // Controller Relative
 		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);

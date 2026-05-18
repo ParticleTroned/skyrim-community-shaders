@@ -55,16 +55,34 @@ namespace Util
 	void DrawButtonCombo(const std::vector<ButtonCombo>& combo, bool showControllerLabels);
 
 	/**
-	 * @brief Computes a transformation matrix for positioning an overlay relative to the HMD
+	 * @brief Computes a level transformation matrix for positioning an overlay relative to the HMD
 	 * @param offsetX Horizontal offset from HMD in meters (positive = right)
 	 * @param offsetY Vertical offset from HMD in meters (positive = up)
 	 * @param offsetZ Depth offset from HMD in meters (positive = away from user)
 	 * @return HMD transformation matrix with applied offsets
 	 *
-	 * This function gets the current HMD pose and applies the specified offsets
-	 * in HMD local space to create a transformation matrix suitable for overlay positioning.
+	 * This function gets the current HMD pose, keeps the horizontal facing direction,
+	 * and applies the specified offsets without inheriting HMD roll.
 	 */
 	vr::HmdMatrix34_t ComputeOverlayTransformFromHMD(float offsetX, float offsetY, float offsetZ);
+
+	/**
+	 * @brief Builds a level overlay transform from an HMD pose.
+	 * @param hmdTransform Current HMD tracking transform
+	 * @param offsetX Horizontal offset from HMD in meters (positive = right)
+	 * @param offsetY Vertical offset from HMD in meters (positive = up)
+	 * @param offsetZ Depth offset from HMD in meters (positive = away from user)
+	 * @return Overlay transform that follows HMD yaw while staying aligned to world up
+	 */
+	vr::HmdMatrix34_t BuildLevelOverlayTransform(const vr::HmdMatrix34_t& hmdTransform, float offsetX, float offsetY, float offsetZ);
+
+	/**
+	 * @brief Applies overlay width and height scale to the local right/up basis columns.
+	 * @param transform Overlay transform to modify in place
+	 * @param width Width scale in meters
+	 * @param height Height scale in meters
+	 */
+	void ScaleOverlayTransform(vr::HmdMatrix34_t& transform, float width, float height);
 
 	/**
 	 * @brief Sets input-related flags on an OpenVR overlay.

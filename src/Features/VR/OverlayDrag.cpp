@@ -136,7 +136,8 @@ void VR::UpdateActiveDrag()
 				if (!Util::GetDeviceToAbsoluteTrackingPoseCompatible(vr::TrackingUniverseStanding, 0, &hmdPose, 1))
 					break;
 				if (hmdPose.bPoseIsValid) {
-					Matrix hmdMatrix = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
+					vr::HmdMatrix34_t levelHmdTransform = Util::BuildLevelOverlayTransform(hmdPose.mDeviceToAbsoluteTracking, 0.0f, 0.0f, 0.0f);
+					Matrix hmdMatrix = Util::HmdMatrix34ToMatrix(levelHmdTransform);
 
 					Vector3 worldDelta(
 						controllerMatrix._41 - overlayDragState.initialControllerMatrix._41,

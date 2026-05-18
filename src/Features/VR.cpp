@@ -2028,53 +2028,10 @@ void VR::UpdateVROverlayPosition()
 				return;
 
 			if (hmdPose.bPoseIsValid) {
-				// Calculate position in front of HMD using offsets directly
-				float height = 0.0f;
-
-				// Create transform matrix - start with identity
-				vr::HmdMatrix34_t hmdTransform;
-				hmdTransform.m[0][0] = 1.0f;
-				hmdTransform.m[0][1] = 0.0f;
-				hmdTransform.m[0][2] = 0.0f;
-				hmdTransform.m[0][3] = 0.0f;
-				hmdTransform.m[1][0] = 0.0f;
-				hmdTransform.m[1][1] = 1.0f;
-				hmdTransform.m[1][2] = 0.0f;
-				hmdTransform.m[1][3] = 0.0f;
-				hmdTransform.m[2][0] = 0.0f;
-				hmdTransform.m[2][1] = 0.0f;
-				hmdTransform.m[2][2] = 1.0f;
-				hmdTransform.m[2][3] = 0.0f;
-
-				// Copy HMD position
-				hmdTransform.m[0][3] = hmdPose.mDeviceToAbsoluteTracking.m[0][3];
-				hmdTransform.m[1][3] = hmdPose.mDeviceToAbsoluteTracking.m[1][3];
-				hmdTransform.m[2][3] = hmdPose.mDeviceToAbsoluteTracking.m[2][3];
-
-				// Copy HMD orientation
-				hmdTransform.m[0][0] = hmdPose.mDeviceToAbsoluteTracking.m[0][0];
-				hmdTransform.m[0][1] = hmdPose.mDeviceToAbsoluteTracking.m[0][1];
-				hmdTransform.m[0][2] = hmdPose.mDeviceToAbsoluteTracking.m[0][2];
-				hmdTransform.m[1][0] = hmdPose.mDeviceToAbsoluteTracking.m[1][0];
-				hmdTransform.m[1][1] = hmdPose.mDeviceToAbsoluteTracking.m[1][1];
-				hmdTransform.m[1][2] = hmdPose.mDeviceToAbsoluteTracking.m[1][2];
-				hmdTransform.m[2][0] = hmdPose.mDeviceToAbsoluteTracking.m[2][0];
-				hmdTransform.m[2][1] = hmdPose.mDeviceToAbsoluteTracking.m[2][1];
-				hmdTransform.m[2][2] = hmdPose.mDeviceToAbsoluteTracking.m[2][2];
-
-				// Apply HMD offset positions directly (in HMD local space)
-				hmdTransform.m[0][3] += hmdTransform.m[0][0] * offsetX + hmdTransform.m[0][1] * offsetY + hmdTransform.m[0][2] * offsetZ;
-				hmdTransform.m[1][3] += hmdTransform.m[1][0] * offsetX + hmdTransform.m[1][1] * offsetY + hmdTransform.m[1][2] * offsetZ;
-				hmdTransform.m[2][3] += hmdTransform.m[2][0] * offsetX + hmdTransform.m[2][1] * offsetY + hmdTransform.m[2][2] * offsetZ;
-
-				// Move up by height (Y axis in HMD space)
-				hmdTransform.m[0][3] += hmdTransform.m[0][1] * height;
-				hmdTransform.m[1][3] += hmdTransform.m[1][1] * height;
-				hmdTransform.m[2][3] += hmdTransform.m[2][1] * height;
+				vr::HmdMatrix34_t hmdTransform = Util::BuildLevelOverlayTransform(hmdPose.mDeviceToAbsoluteTracking, offsetX, offsetY, offsetZ);
 
 				// Scale the overlay based on width/height
-				hmdTransform.m[0][0] *= overlayWidth;
-				hmdTransform.m[1][1] *= overlayHeight;
+				Util::ScaleOverlayTransform(hmdTransform, overlayWidth, overlayHeight);
 
 				Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 				ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &hmdTransform);
@@ -2112,8 +2069,7 @@ void VR::UpdateVROverlayPosition()
 
 			// Scale the overlay based on width/height (same as relative HMD mode)
 			vr::HmdMatrix34_t fixedTransform = Util::MatrixToHmdMatrix34(fixedWorldOverlayPosition.m);
-			fixedTransform.m[0][0] *= overlayWidth;
-			fixedTransform.m[1][1] *= overlayHeight;
+			Util::ScaleOverlayTransform(fixedTransform, overlayWidth, overlayHeight);
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 			ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &fixedTransform);
@@ -2145,9 +2101,6 @@ void VR::UpdateVROverlayPosition()
 
 			// Update the overlay width to match the calculated size
 			ctx.overlay->SetOverlayWidthInMeters(menuControllerOverlayHandle, overlayWidth);
-
-			// Update controller overlay flags for input interaction
-			Util::SetOverlayInputFlags(ctx.overlay, menuControllerOverlayHandle);
 		}
 	}
 
@@ -2192,9 +2145,6 @@ void VR::UpdateVROverlayControllerPosition()
 
 	// Update the overlay width to match the calculated size
 	ctx.overlay->SetOverlayWidthInMeters(menuControllerOverlayHandle, overlayWidth);
-
-	// Update controller overlay flags for input interaction
-	Util::SetOverlayInputFlags(ctx.overlay, menuControllerOverlayHandle);
 }
 
 // Add overlay management methods for VR menu overlays

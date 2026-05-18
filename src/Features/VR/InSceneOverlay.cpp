@@ -97,45 +97,254 @@ namespace
 		return (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) != 0;
 	}
 
-	winrt::com_ptr<ID3D11Texture2D> ResolveSubmitTexture2D(void* handle)
+	HRESULT TryQueryInterfaceRaw(IUnknown* unknown, REFIID iid, void** outObject, bool& outCrashed)
+	{
+		outCrashed = false;
+		if (!unknown || !outObject) {
+			return E_POINTER;
+		}
+
+		*outObject = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			return unknown->QueryInterface(iid, outObject);
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outCrashed = true;
+			*outObject = nullptr;
+			return E_POINTER;
+		}
+#endif
+	}
+
+	template <class T>
+	bool TryQueryComInterface(IUnknown* unknown, winrt::com_ptr<T>& outObject, bool& outCrashed)
+	{
+		outObject = nullptr;
+		bool queryCrashed = false;
+		const HRESULT hr = TryQueryInterfaceRaw(unknown, __uuidof(T), outObject.put_void(), queryCrashed);
+		if (queryCrashed) {
+			outCrashed = true;
+		}
+		return SUCCEEDED(hr) && outObject.get() != nullptr;
+	}
+
+	bool TryGetTextureDesc(ID3D11Texture2D* texture, D3D11_TEXTURE2D_DESC& outDesc)
+	{
+		if (!texture) {
+			return false;
+		}
+
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			texture->GetDesc(&outDesc);
+			return true;
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outDesc = {};
+			return false;
+		}
+#endif
+	}
+
+	bool TryGetTextureDeviceRaw(ID3D11Texture2D* texture, ID3D11Device** outDevice, bool& outCrashed)
+	{
+		outCrashed = false;
+		if (!texture || !outDevice) {
+			return false;
+		}
+
+		*outDevice = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			texture->GetDevice(outDevice);
+			return *outDevice != nullptr;
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outCrashed = true;
+			*outDevice = nullptr;
+			return false;
+		}
+#endif
+	}
+
+	bool TryGetTextureDevice(ID3D11Texture2D* texture, winrt::com_ptr<ID3D11Device>& outDevice, bool& outCrashed)
+	{
+		outCrashed = false;
+		outDevice = nullptr;
+		ID3D11Device* device = nullptr;
+		if (!TryGetTextureDeviceRaw(texture, &device, outCrashed)) {
+			return false;
+		}
+
+		outDevice.attach(device);
+		return true;
+	}
+
+	bool IsValidSubmitTextureDesc(const D3D11_TEXTURE2D_DESC& desc)
+	{
+		return desc.Width > 0 &&
+		       desc.Height > 0 &&
+		       desc.MipLevels > 0 &&
+		       desc.ArraySize > 0 &&
+		       desc.Format != DXGI_FORMAT_UNKNOWN &&
+		       desc.SampleDesc.Count > 0 &&
+		       desc.Usage != D3D11_USAGE_STAGING &&
+		       (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) == 0;
+	}
+
+	HRESULT TryCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC* desc, ID3D11RenderTargetView** outRTV, bool& outCrashed)
+	{
+		outCrashed = false;
+		if (!device || !resource || !outRTV) {
+			return E_POINTER;
+		}
+
+		*outRTV = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			return device->CreateRenderTargetView(resource, desc, outRTV);
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outCrashed = true;
+			return E_FAIL;
+		}
+#endif
+	}
+
+	bool TryGetViewResourceRaw(ID3D11View* view, ID3D11Resource** outResource, bool& outCrashed)
+	{
+		outCrashed = false;
+		if (!view || !outResource) {
+			return false;
+		}
+
+		*outResource = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			view->GetResource(outResource);
+			return *outResource != nullptr;
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outCrashed = true;
+			*outResource = nullptr;
+			return false;
+		}
+#endif
+	}
+
+	bool TryGetViewResource(ID3D11View* view, winrt::com_ptr<ID3D11Resource>& outResource, bool& outCrashed)
+	{
+		outCrashed = false;
+		outResource = nullptr;
+		ID3D11Resource* resource = nullptr;
+		if (!TryGetViewResourceRaw(view, &resource, outCrashed)) {
+			return false;
+		}
+
+		outResource.attach(resource);
+		return true;
+	}
+
+	bool TryResolveTextureFromView(ID3D11View* view, winrt::com_ptr<ID3D11Texture2D>& outTexture, bool& outCrashed)
+	{
+		winrt::com_ptr<ID3D11Resource> resource;
+		bool getResourceCrashed = false;
+		if (!TryGetViewResource(view, resource, getResourceCrashed)) {
+			if (getResourceCrashed) {
+				outCrashed = true;
+			}
+			return false;
+		}
+
+		return TryQueryComInterface(resource.get(), outTexture, outCrashed);
+	}
+
+	bool TryCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)
+	{
+		if (!context || !destination || !source) {
+			return false;
+		}
+
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			context->CopyResource(destination, source);
+			return true;
+		}
+#if defined(_MSC_VER)
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+#endif
+	}
+
+	winrt::com_ptr<ID3D11Texture2D> ResolveSubmitTexture2D(void* handle, bool& outCrashed)
 	{
 		winrt::com_ptr<ID3D11Texture2D> texture;
+		outCrashed = false;
 		if (!handle) {
 			return texture;
 		}
 
 		auto* unknown = static_cast<IUnknown*>(handle);
-		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
+		if (TryQueryComInterface(unknown, texture, outCrashed)) {
 			return texture;
+		}
+		if (outCrashed) {
+			return {};
 		}
 
 		winrt::com_ptr<ID3D11Resource> resource;
-		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11Resource), resource.put_void()))) {
-			resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void());
-			if (texture) {
+		if (TryQueryComInterface(unknown, resource, outCrashed)) {
+			if (TryQueryComInterface(resource.get(), texture, outCrashed)) {
 				return texture;
 			}
 		}
+		if (outCrashed) {
+			return {};
+		}
 
 		winrt::com_ptr<ID3D11ShaderResourceView> srv;
-		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11ShaderResourceView), srv.put_void()))) {
-			resource = nullptr;
-			srv->GetResource(resource.put());
-			if (resource) {
-				resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void());
-				if (texture) {
-					return texture;
-				}
+		if (TryQueryComInterface(unknown, srv, outCrashed)) {
+			if (TryResolveTextureFromView(srv.get(), texture, outCrashed)) {
+				return texture;
 			}
+		}
+		if (outCrashed) {
+			return {};
 		}
 
 		winrt::com_ptr<ID3D11RenderTargetView> rtv;
-		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11RenderTargetView), rtv.put_void()))) {
-			resource = nullptr;
-			rtv->GetResource(resource.put());
-			if (resource) {
-				resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void());
+		if (TryQueryComInterface(unknown, rtv, outCrashed)) {
+			if (TryResolveTextureFromView(rtv.get(), texture, outCrashed)) {
+				return texture;
 			}
+		}
+		if (outCrashed) {
+			return {};
 		}
 
 		return texture;
@@ -486,6 +695,14 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	if (!context || !targetTexture) {
 		return;
 	}
+	if (inSceneResources.submitPathDisabled) {
+		return;
+	}
+
+	const int eyeIdx = static_cast<int>(eye);
+	if (eyeIdx < 0 || eyeIdx >= 2) {
+		return;
+	}
 
 	if (!inSceneResources.initialized)
 		InitInSceneResources();
@@ -583,10 +800,15 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 
 	// Get or create cached RTV for the target texture
 	D3D11_TEXTURE2D_DESC texDesc;
-	targetTexture->GetDesc(&texDesc);
-
-	int eyeIdx = (int)eye;
-	if (eyeIdx < 0 || eyeIdx >= 2) {
+	if (!TryGetTextureDesc(targetTexture, texDesc)) {
+		logger::error("VR: Failed to read in-scene overlay target texture description");
+		inSceneResources.submitPathDisabled = true;
+		return;
+	}
+	if (!IsValidSubmitTextureDesc(texDesc)) {
+		logger::error("VR: In-scene overlay target texture is not suitable for rendering ({}x{}, Format: {}, Usage: {}, BindFlags: 0x{:X})",
+			texDesc.Width, texDesc.Height, (uint32_t)texDesc.Format, (uint32_t)texDesc.Usage, texDesc.BindFlags);
+		inSceneResources.submitPathDisabled = true;
 		return;
 	}
 
@@ -598,7 +820,13 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			cachedRTV.texture = nullptr;
 
 			winrt::com_ptr<ID3D11Device> targetDevice;
-			targetTexture->GetDevice(targetDevice.put());
+			bool getTargetDeviceCrashed = false;
+			TryGetTextureDevice(targetTexture, targetDevice, getTargetDeviceCrashed);
+			if (getTargetDeviceCrashed) {
+				logger::error("VR: Failed to read in-scene overlay target texture device; disabling in-scene overlay path");
+				inSceneResources.submitPathDisabled = true;
+				return;
+			}
 			auto* rtvDevice = targetDevice.get() ? targetDevice.get() : globals::d3d::device;
 			if (!rtvDevice) {
 				return;
@@ -614,6 +842,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 					texDesc.ArraySize,
 					texDesc.SampleDesc.Count,
 					texDesc.BindFlags);
+				inSceneResources.submitPathDisabled = true;
 				return;
 			}
 
@@ -621,6 +850,11 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			rtvDesc.Format = rtvFormat;
 
 			if (texDesc.ArraySize > 1) {
+				if (eyeIdx >= static_cast<int>(texDesc.ArraySize)) {
+					logger::error("VR: In-scene overlay eye {} is outside target texture array size {}", eyeIdx, texDesc.ArraySize);
+					inSceneResources.submitPathDisabled = true;
+					return;
+				}
 				if (texDesc.SampleDesc.Count > 1) {
 					rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY;
 					rtvDesc.Texture2DMSArray.FirstArraySlice = (UINT)eye;
@@ -638,9 +872,10 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 				rtvDesc.Texture2D.MipSlice = 0;
 			}
 
-			HRESULT hr = rtvDevice->CreateRenderTargetView(targetTexture, &rtvDesc, cachedRTV.rtv.put());
+			bool createRTVCrashed = false;
+			HRESULT hr = TryCreateRenderTargetView(rtvDevice, targetTexture, &rtvDesc, cachedRTV.rtv.put(), createRTVCrashed);
 			if (FAILED(hr)) {
-				logger::error("VR: Failed to create RTV for eye texture ({}x{}, Format: {}, RTVFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X}). HRESULT: 0x{:08X}",
+				logger::error("VR: Failed to create RTV for eye texture ({}x{}, Format: {}, RTVFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X}). HRESULT: 0x{:08X}{}",
 					texDesc.Width,
 					texDesc.Height,
 					(uint32_t)texDesc.Format,
@@ -648,7 +883,9 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 					texDesc.ArraySize,
 					texDesc.SampleDesc.Count,
 					texDesc.BindFlags,
-					(uint32_t)hr);
+					(uint32_t)hr,
+					createRTVCrashed ? " (protected D3D call caught an exception)" : "");
+				inSceneResources.submitPathDisabled = true;
 				return;
 			}
 			cachedRTV.texture = targetTexture;
@@ -1165,14 +1402,25 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 
 bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture)
 {
-	if (!inputTexture || !inputTexture->handle || inputTexture->eType != vr::TextureType_DirectX || !ShouldRenderInSceneMenu(*this)) {
+	if (inSceneResources.submitPathDisabled ||
+		!inputTexture ||
+		!inputTexture->handle ||
+		inputTexture->eType != vr::TextureType_DirectX ||
+		!ShouldRenderInSceneMenu(*this)) {
 		return false;
 	}
 
-	auto sourceTexture = ResolveSubmitTexture2D(inputTexture->handle);
+	bool resolveCrashed = false;
+	auto sourceTexture = ResolveSubmitTexture2D(inputTexture->handle, resolveCrashed);
+	auto* device = globals::d3d::device;
 	auto* context = globals::d3d::context;
-	if (!sourceTexture || !context) {
-		logger::error("VR: OpenVR submit handle is not a D3D11 texture; skipping in-scene menu compositing");
+	if (!sourceTexture || !device || !context) {
+		if (resolveCrashed) {
+			logger::error("VR: OpenVR submit handle caused an exception while resolving the D3D11 texture; disabling in-scene overlay path");
+			inSceneResources.submitPathDisabled = true;
+		} else {
+			logger::error("VR: OpenVR submit handle is not a D3D11 texture; skipping in-scene menu compositing");
+		}
 		return false;
 	}
 
@@ -1181,8 +1429,31 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 		return false;
 	}
 
+	winrt::com_ptr<ID3D11Device> sourceDevice;
+	bool getSourceDeviceCrashed = false;
+	if (!TryGetTextureDevice(sourceTexture.get(), sourceDevice, getSourceDeviceCrashed)) {
+		logger::error("VR: Failed to read IVRCompositor::Submit texture device; disabling in-scene overlay path");
+		inSceneResources.submitPathDisabled = true;
+		return false;
+	}
+	if (sourceDevice.get() != device) {
+		logger::error("VR: IVRCompositor::Submit texture belongs to a different D3D11 device; disabling in-scene overlay path");
+		inSceneResources.submitPathDisabled = true;
+		return false;
+	}
+
 	D3D11_TEXTURE2D_DESC sourceDesc{};
-	sourceTexture->GetDesc(&sourceDesc);
+	if (!TryGetTextureDesc(sourceTexture.get(), sourceDesc)) {
+		logger::error("VR: Failed to read IVRCompositor::Submit texture description; disabling in-scene overlay path");
+		inSceneResources.submitPathDisabled = true;
+		return false;
+	}
+	if (!IsValidSubmitTextureDesc(sourceDesc)) {
+		logger::error("VR: IVRCompositor::Submit texture is not suitable for in-scene overlay ({}x{}, Format: {}, Usage: {}, BindFlags: 0x{:X}); disabling in-scene overlay path",
+			sourceDesc.Width, sourceDesc.Height, (uint32_t)sourceDesc.Format, (uint32_t)sourceDesc.Usage, sourceDesc.BindFlags);
+		inSceneResources.submitPathDisabled = true;
+		return false;
+	}
 
 	auto& submitCopy = inSceneResources.submitCopies[eyeIdx];
 	if (!submitCopy.texture || !submitCopy.uav || !MatchesSubmitCopyDesc(submitCopy.sourceDesc, sourceDesc)) {
@@ -1193,8 +1464,15 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 		return false;
 	}
 
-	context->CopyResource(submitCopy.texture.get(), sourceTexture.get());
+	if (!TryCopyResource(context, submitCopy.texture.get(), sourceTexture.get())) {
+		logger::error("VR: Failed to copy IVRCompositor::Submit texture; disabling in-scene overlay path");
+		inSceneResources.submitPathDisabled = true;
+		return false;
+	}
 	CompositeInSceneOverlaySubmitTexture(eye, submitCopy.texture.get(), submitCopy.uav.get(), sourceDesc, bounds);
+	if (inSceneResources.submitPathDisabled) {
+		return false;
+	}
 
 	outputTexture = *inputTexture;
 	outputTexture.handle = submitCopy.texture.get();

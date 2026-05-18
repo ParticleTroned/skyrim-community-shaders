@@ -220,11 +220,24 @@ public:
 	bool isMainMenuOpen = false;
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
+	bool isDialogueMenuOpen = false;
+	bool isMessageBoxMenuOpen = false;
+	bool isRaceSexMenuOpen = false;
+	bool isTutorialMenuOpen = false;
+	bool hasHUDNotifications = false;
 	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
 	bool IsMainOrLoadingMenuOpen(RE::UI* ui) const
 	{
 		return IsMainOrLoadingMenuOpen() ||
 		       (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)));
+	}
+	bool HasTransientUIPresentation() const
+	{
+		return isDialogueMenuOpen ||
+		       isMessageBoxMenuOpen ||
+		       isRaceSexMenuOpen ||
+		       isTutorialMenuOpen ||
+		       hasHUDNotifications;
 	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);

@@ -34,6 +34,12 @@
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
+#include "RE/D/DialogueMenu.h"
+#include "RE/H/HUDMenu.h"
+#include "RE/H/HUDNotifications.h"
+#include "RE/M/MessageBoxMenu.h"
+#include "RE/R/RaceSexMenu.h"
+#include "RE/T/TutorialMenu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
@@ -216,6 +222,27 @@ namespace
 		previousFlags = a_state.flags;
 	}
 
+	bool HasPendingHUDNotifications(RE::UI* a_ui)
+	{
+		if (!a_ui)
+			return false;
+
+		auto hudMenu = a_ui->GetMenu<RE::HUDMenu>();
+		if (!hudMenu)
+			return false;
+
+		for (auto* object : hudMenu->GetRuntimeData().objects) {
+			if (!object)
+				continue;
+
+			auto* notifications = skyrim_cast<RE::HUDNotifications*>(object);
+			if (notifications && !notifications->queue.empty())
+				return true;
+		}
+
+		return false;
+	}
+
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
 		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
@@ -389,10 +416,20 @@ void State::Reset()
 		isMainMenuOpen = ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
 		isLoadingMenuOpen = ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
 		isMapMenuOpen = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
+		isDialogueMenuOpen = ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME);
+		isMessageBoxMenuOpen = ui->IsMenuOpen(RE::MessageBoxMenu::MENU_NAME);
+		isRaceSexMenuOpen = ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
+		isTutorialMenuOpen = ui->IsMenuOpen(RE::TutorialMenu::MENU_NAME);
+		hasHUDNotifications = HasPendingHUDNotifications(ui);
 	} else {
 		isMainMenuOpen = false;
 		isLoadingMenuOpen = false;
 		isMapMenuOpen = false;
+		isDialogueMenuOpen = false;
+		isMessageBoxMenuOpen = false;
+		isRaceSexMenuOpen = false;
+		isTutorialMenuOpen = false;
+		hasHUDNotifications = false;
 	}
 
 	lastModifiedPixelDescriptor = 0;

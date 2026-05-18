@@ -1057,7 +1057,12 @@ namespace
 	{
 		auto state = globals::state;
 		auto ui = globals::game::ui;
-		return (state && (state->isMapMenuOpen || state->isMainMenuOpen)) ||
+		const bool cachedMenuContext =
+			state &&
+			(state->isMapMenuOpen ||
+			 state->isMainMenuOpen ||
+			 state->HasTransientUIPresentation());
+		return cachedMenuContext ||
 		       IsLoadingMenuContextActive() ||
 		       (ui && ui->GameIsPaused());
 	}
@@ -6802,12 +6807,7 @@ void Upscaling::UpscaleDepth()
 
 		// Engine copies kMAIN->kMAIN_COPY during 3D scene rendering.
 		// In menu/non-3D contexts the engine path may skip this copy.
-		auto* ui = globals::game::ui;
-		const bool inMenuContext = state->isMapMenuOpen ||
-		                           state->isMainMenuOpen ||
-		                           state->isLoadingMenuOpen ||
-		                           (ui && ui->GameIsPaused());
-		if (inMenuContext) {
+		if (IsKnownGameMenuContextActive()) {
 			copyIfNonAliased(depthCopy.texture, depth.texture);
 		}
 

@@ -807,8 +807,17 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  */
 void Streamline::DestroyDLSSResources()
 {
+	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
+		InvalidateDLSSOptionsCache();
+		return;
+	}
+
 	sl::DLSSOptions dlssOptions{};
 	dlssOptions.mode = sl::DLSSMode::eOff;
+
+	if (auto context = globals::d3d::context) {
+		context->Flush();
+	}
 
 	slDLSSSetOptions(viewport, dlssOptions);
 	slFreeResources(sl::kFeatureDLSS, viewport);

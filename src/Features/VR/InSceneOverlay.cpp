@@ -53,18 +53,9 @@ namespace
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
 		{
 			auto& vr = globals::features::vr;
-			auto& upscaling = globals::features::upscaling;
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
-				vr::Texture_t upscaledTexture{};
-				vr::VRTextureBounds_t upscaledBounds{};
-				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
-					if (upscaledTexture.handle && upscaledTexture.eType == vr::TextureType_DirectX)
-						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
-					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
-				}
-
 				vr::Texture_t overlayTexture{};
 				if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture))
 					return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);

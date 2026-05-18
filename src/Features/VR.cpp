@@ -2090,11 +2090,10 @@ void VR::UpdateVROverlayPosition()
 	bool showOnController = (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both);
 	bool showOnHMD = (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both);
 
-	// Texture size
-	float aspect = static_cast<float>(kOverlayHeight) / kOverlayWidth;
 	float baseWidth = 1.0f;
 	float overlayWidth = baseWidth * settings.VRMenuScale;
-	float overlayHeight = overlayWidth * aspect;
+	float hmdOverlayHeight = overlayWidth * VR::Config::kHMDOverlayAspect;
+	float controllerOverlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 	float offsetX = settings.VRMenuOffsetX;
 	float offsetY = settings.VRMenuOffsetY;
 	float offsetZ = settings.VRMenuOffsetZ;
@@ -2115,7 +2114,7 @@ void VR::UpdateVROverlayPosition()
 				vr::HmdMatrix34_t hmdTransform = Util::BuildLevelOverlayTransform(hmdPose.mDeviceToAbsoluteTracking, offsetX, offsetY, offsetZ);
 
 				// Scale the overlay based on width/height
-				Util::ScaleOverlayTransform(hmdTransform, overlayWidth, overlayHeight);
+				Util::ScaleOverlayTransform(hmdTransform, overlayWidth, hmdOverlayHeight);
 
 				Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 				ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &hmdTransform);
@@ -2153,7 +2152,7 @@ void VR::UpdateVROverlayPosition()
 
 			// Scale the overlay based on width/height (same as relative HMD mode)
 			vr::HmdMatrix34_t fixedTransform = Util::MatrixToHmdMatrix34(fixedWorldOverlayPosition.m);
-			Util::ScaleOverlayTransform(fixedTransform, overlayWidth, overlayHeight);
+			Util::ScaleOverlayTransform(fixedTransform, overlayWidth, hmdOverlayHeight);
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 			ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &fixedTransform);
@@ -2178,7 +2177,7 @@ void VR::UpdateVROverlayPosition()
 				settings.VRMenuControllerOffsetY,
 				settings.VRMenuControllerOffsetZ,
 				overlayWidth,
-				overlayHeight);
+				controllerOverlayHeight);
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuControllerOverlayHandle);
 			ctx.overlay->SetOverlayTransformTrackedDeviceRelative(menuControllerOverlayHandle, controllerIndex, &transform);
@@ -2204,10 +2203,9 @@ void VR::UpdateVROverlayControllerPosition()
 	}
 
 	// Texture size based on preset
-	float aspect = static_cast<float>(kOverlayHeight) / kOverlayWidth;
 	float baseWidth = 1.0f;
 	float overlayWidth = baseWidth * settings.VRMenuScale;
-	float overlayHeight = overlayWidth * aspect;
+	float overlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 
 	// Find the appropriate controller for the controller overlay
 	vr::TrackedDeviceIndex_t controllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);

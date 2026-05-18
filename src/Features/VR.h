@@ -65,10 +65,18 @@ public:
 		static constexpr int kOverlayWidth = 1920;
 		static constexpr int kOverlayHeight = 1080;
 		static constexpr float kOverlayAspect = static_cast<float>(kOverlayHeight) / static_cast<float>(kOverlayWidth);
+		// HMD presentation is intentionally taller than the render texture so the menu does not read as a wide panel in-headset.
+		static constexpr float kHMDOverlayHeightScale = 1.5f;
+		static constexpr float kHMDOverlayAspect = kOverlayAspect * kHMDOverlayHeightScale;
 
-		static inline Matrix CreateOverlayScaleMatrix(float scale)
+		static inline Matrix CreateOverlayScaleMatrix(float scale, float aspect = kOverlayAspect)
 		{
-			return Matrix::CreateScale(scale, scale * kOverlayAspect, scale);
+			return Matrix::CreateScale(scale, scale * aspect, scale);
+		}
+
+		static inline Matrix CreateHMDOverlayScaleMatrix(float scale)
+		{
+			return CreateOverlayScaleMatrix(scale, kHMDOverlayAspect);
 		}
 
 		static constexpr float kDefaultMenuScale = 1.0f;      ///< Default overlay scale factor

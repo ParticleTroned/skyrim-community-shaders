@@ -539,7 +539,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		Matrix modelMatrix;
 		Matrix vp;
 		if (settings.VRMenuPositioningMethod == 1) {  // Fixed World Position
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
 			vp = vpWorldSpace;
 		} else {  // HMD Relative
 			vr::HmdMatrix34_t levelTransform = Util::BuildLevelOverlayTransform(
@@ -547,7 +547,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 				settings.VRMenuOffsetX,
 				settings.VRMenuOffsetY,
 				settings.VRMenuOffsetZ);
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * Util::HmdMatrix34ToMatrix(levelTransform);
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * Util::HmdMatrix34ToMatrix(levelTransform);
 			vp = vpWorldSpace;
 		}
 		cbData.wvp = (modelMatrix * vp).Transpose();

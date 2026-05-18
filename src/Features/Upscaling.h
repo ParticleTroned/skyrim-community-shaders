@@ -447,7 +447,7 @@ public:
 	float dynamicResolutionWidthRatio = 1.0f;
 	float dynamicResolutionHeightRatio = 1.0f;
 
-	bool previousUpscalingWasActive = false;
+	bool previousVendorUpscalerSelected = false;
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;

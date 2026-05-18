@@ -900,7 +900,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  */
 void Streamline::DestroyDLSSResources()
 {
-	if (!slDLSSSetOptions || !slFreeResources) {
+	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
 		InvalidateDLSSOptionsCache();
 		ResetFrameTracking();
 		return;

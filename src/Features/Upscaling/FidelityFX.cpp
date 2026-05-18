@@ -26,6 +26,7 @@ namespace
 	constexpr wchar_t kUpscalerDllName[] = L"amd_fidelityfx_upscaler_dx12.dll";
 	constexpr uint32_t kAmdVendorId = 0x1002u;
 	constexpr uint32_t kNvidiaVendorId = 0x10DEu;
+	constexpr uint32_t kRuntimeFsr315Version = FFX_UPSCALER_MAKE_VERSION(3u, 1u, 5u);
 
 	void* s_fidelityFxDllDirectoryCookie = nullptr;
 
@@ -193,7 +194,7 @@ namespace
 		return nullptr;
 	}
 
-	bool QueryRuntimeUpscalerVersionId(ID3D12Device* a_device, uint64_t& a_versionId, std::string& a_versionName)
+	bool QueryRuntimeUpscalerVersionId(ID3D12Device* a_device, uint32_t a_requestedVersion, uint64_t& a_versionId, std::string& a_versionName)
 	{
 		a_versionId = 0;
 		a_versionName.clear();
@@ -236,7 +237,7 @@ namespace
 			return false;
 		}
 
-		const auto requestedVersion = UpscalerVersionToString(FFX_UPSCALER_VERSION);
+		const auto requestedVersion = UpscalerVersionToString(a_requestedVersion);
 		const auto resultCount = std::min<size_t>(versionIds.size(), returnedVersionCount);
 
 		logger::debug(
@@ -252,7 +253,7 @@ namespace
 				versionName.empty() ? "(unnamed)" : versionName,
 				versionIds[i]);
 
-			if (versionIds[i] == FFX_UPSCALER_VERSION || versionName.find(requestedVersion) != std::string::npos) {
+			if (versionIds[i] == a_requestedVersion || versionName.find(requestedVersion) != std::string::npos) {
 				a_versionId = versionIds[i];
 				a_versionName = versionName;
 				return true;
@@ -358,7 +359,7 @@ void FidelityFX::LoadFFX()
 	}
 
 	featureFSR3FG = frameGenerationModule != nullptr;
-	featureFSR4Upscaler = runtimeUpscalerModule != nullptr;
+	featureRuntimeUpscaler = runtimeUpscalerModule != nullptr;
 
 	FidelityFX::dllVersions = Util::EnumerateDllVersions(pluginDir);
 	for (const auto& [name, versionStr] : FidelityFX::dllVersions)
@@ -382,13 +383,13 @@ void FidelityFX::LoadFFX()
 		logger::warn("[FidelityFX] Frame generation DLL not found - FSR3 frame generation disabled");
 	}
 
-	if (featureFSR4Upscaler) {
+	if (featureRuntimeUpscaler) {
 		logger::info("[FidelityFX] Runtime upscaler DLL loaded; runtime availability will be verified during context creation");
 	} else if (upscalerDllExists) {
-		logger::warn("[FidelityFX] Runtime upscaler DLL found but failed to load (Win32 error {}) - FSR4 runtime path disabled",
+		logger::warn("[FidelityFX] Runtime upscaler DLL found but failed to load (Win32 error {}) - runtime FSR path disabled",
 			upscalerLoadError);
 	} else {
-		logger::warn("[FidelityFX] Runtime upscaler DLL not found - FSR4 runtime path disabled");
+		logger::warn("[FidelityFX] Runtime upscaler DLL not found - runtime FSR path disabled");
 	}
 }
 
@@ -415,8 +416,10 @@ const char* FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
 	switch (runtimeUpscalerLastFramePath) {
 	case RuntimeUpscalerFramePath::kHostFsr31:
 		return "Host FSR 3.1.5";
+	case RuntimeUpscalerFramePath::kRuntimeFsr31:
+		return "Runtime FSR 3.1.5";
 	case RuntimeUpscalerFramePath::kRuntimeFsr4:
-		return "Runtime FSR4";
+		return "Runtime FSR 4";
 	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
 		return "Host FSR 3.1.5 fallback";
 	case RuntimeUpscalerFramePath::kInactive:
@@ -432,7 +435,8 @@ std::string FidelityFX::GetRuntimeUpscalerProviderName() const
 
 std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const
 {
-	return UpscalerVersionToString(FFX_UPSCALER_VERSION);
+	const uint32_t requestedVersion = runtimeUpscalerRequestedVersion ? runtimeUpscalerRequestedVersion : GetPreferredRuntimeUpscalerVersion();
+	return UpscalerVersionToString(requestedVersion);
 }
 
 void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
@@ -458,7 +462,7 @@ void FidelityFX::LatchRuntimeUpscalerFailure()
 		return;
 
 	runtimeUpscalerFailureLatched = true;
-	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using host FSR3.1.5 until FSR resources are rebuilt or the method changes.");
+	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using host FSR 3.1.5 until runtime resources are reset, FSR resources are rebuilt, or the method changes.");
 }
 
 void FidelityFX::RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path)
@@ -685,6 +689,7 @@ void FidelityFX::DestroyRuntimeUpscalerContexts(bool a_waitForIdle)
 	runtimeUpscalerMaxRenderHeight = 0;
 	runtimeUpscalerMaxDisplayWidth = 0;
 	runtimeUpscalerMaxDisplayHeight = 0;
+	runtimeUpscalerRequestedVersion = 0;
 }
 
 void FidelityFX::WaitForRuntimeUpscalerIdle()
@@ -752,12 +757,12 @@ void FidelityFX::DestroyRuntimeUpscalerResources(bool a_waitForIdle)
 	runtimeOutputSharedDesc = {};
 }
 
-void FidelityFX::ResetRuntimeUpscalerResources()
+void FidelityFX::ResetRuntimeUpscalerResources(bool a_invalidateProviderCache)
 {
 	WaitForRuntimeUpscalerIdle();
 	DestroyRuntimeUpscalerContexts(false);
 	DestroyRuntimeUpscalerResources(false);
-	ResetRuntimeUpscalerTracking(false);
+	ResetRuntimeUpscalerTracking(a_invalidateProviderCache);
 }
 
 void FidelityFX::DestroyFSRResources()
@@ -808,7 +813,7 @@ bool FidelityFX::IsNvidiaAdapterDetected() const
 
 bool FidelityFX::IsRuntimeUpscalerPresent() const
 {
-	if (!featureFSR4Upscaler || !runtimeUpscalerModule || !module)
+	if (!featureRuntimeUpscaler || !runtimeUpscalerModule || !module)
 		return false;
 	if (!ffxModule.CreateContext || !ffxModule.DestroyContext || !ffxModule.Dispatch || !ffxModule.Query)
 		return false;
@@ -816,7 +821,7 @@ bool FidelityFX::IsRuntimeUpscalerPresent() const
 	return true;
 }
 
-bool FidelityFX::IsRuntimeUpscalerAutoEligible() const
+bool FidelityFX::IsRuntimeFsr4AutoEligible() const
 {
 	DXGI_ADAPTER_DESC adapterDesc{};
 	if (!TryGetCurrentAdapterDesc(adapterDesc))
@@ -825,7 +830,7 @@ bool FidelityFX::IsRuntimeUpscalerAutoEligible() const
 	return adapterDesc.VendorId == kAmdVendorId && IsLikelyRDNA4Adapter(adapterDesc);
 }
 
-bool FidelityFX::IsRuntimeUpscalerAvailable() const
+bool FidelityFX::IsRuntimeFsr4Available() const
 {
 	if (!IsRuntimeUpscalerPresent())
 		return false;
@@ -845,6 +850,11 @@ bool FidelityFX::IsRuntimeUpscalerAvailable() const
 		return false;
 
 	return false;
+}
+
+bool FidelityFX::ShouldUseRuntimeUpscalerForFSR() const
+{
+	return IsRuntimeUpscalerPresent() && IsAmdAdapterDetected();
 }
 
 FfxResource ffxGetResource(ID3D11Resource* dx11Resource,
@@ -867,11 +877,19 @@ FfxResource ffxGetResource(ID3D11Resource* dx11Resource,
 
 bool FidelityFX::CanUseRuntimeUpscalerPath()
 {
-	if (!globals::features::upscaling.settings.fsr4RuntimeEnable)
-		return false;
 	if (runtimeUpscalerFailureLatched)
 		return false;
 	return true;
+}
+
+bool FidelityFX::ShouldRequestRuntimeFsr4() const
+{
+	return globals::features::upscaling.settings.fsr4RuntimeEnable && IsRuntimeFsr4Available();
+}
+
+uint32_t FidelityFX::GetPreferredRuntimeUpscalerVersion() const
+{
+	return ShouldRequestRuntimeFsr4() ? FFX_UPSCALER_VERSION : kRuntimeFsr315Version;
 }
 
 bool FidelityFX::EnsureRuntimeUpscalerInterop()
@@ -924,7 +942,7 @@ bool FidelityFX::EnsureRuntimeUpscalerInterop()
 	       runtimeD3D12Fence.get();
 }
 
-bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount)
+bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion)
 {
 	auto recordRuntimeProviderResult = [&](bool a_supported) {
 		runtimeUpscalerSupportCheckKnown = true;
@@ -979,7 +997,8 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 		runtimeUpscalerMaxRenderWidth != a_fullRenderWidth ||
 		runtimeUpscalerMaxRenderHeight != a_fullRenderHeight ||
 		runtimeUpscalerMaxDisplayWidth != a_fullDisplayWidth ||
-		runtimeUpscalerMaxDisplayHeight != a_fullDisplayHeight;
+		runtimeUpscalerMaxDisplayHeight != a_fullDisplayHeight ||
+		runtimeUpscalerRequestedVersion != a_requestedVersion;
 
 	if (!needsRecreate && runtimeUpscalerContextCount == a_contextCount)
 		return true;
@@ -993,11 +1012,11 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 
 	uint64_t runtimeVersionId = 0;
 	std::string runtimeVersionName;
-	const bool hasRuntimeVersionOverride = QueryRuntimeUpscalerVersionId(swapChain.d3d12Device.get(), runtimeVersionId, runtimeVersionName);
+	const bool hasRuntimeVersionOverride = QueryRuntimeUpscalerVersionId(swapChain.d3d12Device.get(), a_requestedVersion, runtimeVersionId, runtimeVersionName);
 	if (hasRuntimeVersionOverride) {
 		logger::info(
 			"[FidelityFX] Runtime upscaler will request FSR version {} through generic override '{}' (id 0x{:X})",
-			UpscalerVersionToString(FFX_UPSCALER_VERSION),
+			UpscalerVersionToString(a_requestedVersion),
 			runtimeVersionName.empty() ? "(unnamed)" : runtimeVersionName,
 			runtimeVersionId);
 	}
@@ -1013,7 +1032,7 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 		createDesc.fpMessage = RuntimeFfxMessage;
 
 		ffx::CreateContextDescUpscaleVersion versionDesc{};
-		versionDesc.version = FFX_UPSCALER_VERSION;
+		versionDesc.version = a_requestedVersion;
 
 		ffx::CreateContextDescOverrideVersion overrideVersionDesc{};
 		overrideVersionDesc.versionId = runtimeVersionId;
@@ -1056,7 +1075,7 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 		if (!contextCreated) {
 			logger::error("[FidelityFX] Failed to create runtime upscaler context {} for FSR version {}. Generic override: {}, upscaler version descriptor: {} (Render: {}x{}, Display: {}x{}).",
 				i,
-				UpscalerVersionToString(FFX_UPSCALER_VERSION),
+				UpscalerVersionToString(a_requestedVersion),
 				FfxCreateResultText(attemptedGenericCreate, genericCreateResult),
 				FfxCreateResultText(attemptedUpscalerVersionCreate, upscalerVersionCreateResult),
 				a_fullRenderWidth,
@@ -1074,6 +1093,7 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	runtimeUpscalerMaxRenderHeight = a_fullRenderHeight;
 	runtimeUpscalerMaxDisplayWidth = a_fullDisplayWidth;
 	runtimeUpscalerMaxDisplayHeight = a_fullDisplayHeight;
+	runtimeUpscalerRequestedVersion = a_requestedVersion;
 	recordRuntimeProviderResult(true);
 
 	if (createdContextWithGenericVersionOverride) {
@@ -1085,7 +1105,7 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	if (runtimeUpscalerProviderMatchedVersionName.empty()) {
 		logger::info("[FidelityFX] Created {} runtime upscaler context(s) for FSR version {} (Render: {}x{}, Display: {}x{}).",
 			a_contextCount,
-			UpscalerVersionToString(FFX_UPSCALER_VERSION),
+			UpscalerVersionToString(a_requestedVersion),
 			a_fullRenderWidth,
 			a_fullRenderHeight,
 			a_fullDisplayWidth,
@@ -1095,7 +1115,7 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 			a_contextCount,
 			runtimeUpscalerProviderMatchedVersionName,
 			runtimeUpscalerProviderMatchedVersionId,
-			UpscalerVersionToString(FFX_UPSCALER_VERSION),
+			UpscalerVersionToString(a_requestedVersion),
 			a_fullRenderWidth,
 			a_fullRenderHeight,
 			a_fullDisplayWidth,
@@ -1282,10 +1302,10 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 	if (annotateDispatch) {
 		if (globals::game::isVR) {
 			char buf[32];
-			snprintf(buf, sizeof(buf), "FSR4 Dispatch Eye %u", a_contextIndex);
+			snprintf(buf, sizeof(buf), "FSR Runtime Eye %u", a_contextIndex);
 			state->BeginPerfEvent(buf);
 		} else {
-			state->BeginPerfEvent("FSR4 Dispatch");
+			state->BeginPerfEvent("FSR Runtime Dispatch");
 		}
 	}
 
@@ -1424,9 +1444,9 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		return false;
 	}
 
-	const bool runtimeRequested =
-		globals::features::upscaling.settings.fsr4RuntimeEnable &&
-		IsRuntimeUpscalerAvailable();
+	const bool runtimeFsr4Requested = ShouldRequestRuntimeFsr4();
+	const bool runtimeRequested = runtimeFsr4Requested || ShouldUseRuntimeUpscalerForFSR();
+	const uint32_t requestedRuntimeVersion = runtimeFsr4Requested ? FFX_UPSCALER_VERSION : kRuntimeFsr315Version;
 	const uint32_t runtimeContextCount = UseSplitPerEyeFSRContexts() ? 2u : 1u;
 	const bool runtimeSelected = runtimeRequested && CanUseRuntimeUpscalerPath();
 
@@ -1442,31 +1462,30 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		const uint32_t fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? state->screenSize.x / 2.0f : state->screenSize.x);
 		const uint32_t fullDisplayHeight = static_cast<uint32_t>(state->screenSize.y);
 
-		if (EnsureRuntimeUpscalerContexts(fullRenderWidth, fullRenderHeight, fullDisplayWidth, fullDisplayHeight, runtimeContextCount)) {
-			try {
-				if (DispatchRuntimeUpscalerSingle(
-						a_contextIndex,
-						a_color,
-						a_depth,
-						a_motionVectors,
-						a_reactiveMask,
-						a_transparencyCompositionMask,
-						a_output,
-						a_renderWidth,
-						a_renderHeight,
-						a_displayWidth,
-						a_displayHeight,
-						a_motionVectorScaleX,
-						a_motionVectorScaleY,
-						a_sharpness)) {
-					RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath::kRuntimeFsr4);
-					return true;
-				}
-			} catch (const std::exception& e) {
-				logger::error("[FidelityFX] Runtime upscaler dispatch threw an exception: {}", e.what());
-			} catch (...) {
-				logger::error("[FidelityFX] Runtime upscaler dispatch threw an unknown exception.");
+		try {
+			if (EnsureRuntimeUpscalerContexts(fullRenderWidth, fullRenderHeight, fullDisplayWidth, fullDisplayHeight, runtimeContextCount, requestedRuntimeVersion) &&
+			    DispatchRuntimeUpscalerSingle(
+				    a_contextIndex,
+				    a_color,
+				    a_depth,
+				    a_motionVectors,
+				    a_reactiveMask,
+				    a_transparencyCompositionMask,
+				    a_output,
+				    a_renderWidth,
+				    a_renderHeight,
+				    a_displayWidth,
+				    a_displayHeight,
+				    a_motionVectorScaleX,
+				    a_motionVectorScaleY,
+				    a_sharpness)) {
+				RecordRuntimeUpscalerFramePath(runtimeFsr4Requested ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31);
+				return true;
 			}
+		} catch (const std::exception& e) {
+			logger::error("[FidelityFX] Runtime upscaler setup/dispatch threw an exception: {}", e.what());
+		} catch (...) {
+			logger::error("[FidelityFX] Runtime upscaler setup/dispatch threw an unknown exception.");
 		}
 
 		if (!runtimeUpscalerFailureLatched) {

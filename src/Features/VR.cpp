@@ -124,6 +124,62 @@ namespace
 			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
 		}
 	}
+
+	HWND GetGameWindowHandle()
+	{
+		if (!globals::d3d::swapChain) {
+			return nullptr;
+		}
+
+		DXGI_SWAP_CHAIN_DESC desc{};
+		if (FAILED(globals::d3d::swapChain->GetDesc(&desc))) {
+			return nullptr;
+		}
+
+		return desc.OutputWindow;
+	}
+
+	bool IsWindowTopmost(HWND hwnd)
+	{
+		return hwnd &&
+		       IsWindow(hwnd) &&
+		       (GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+	}
+
+	bool CenterWindowOnCurrentMonitorTopmost(HWND hwnd)
+	{
+		if (!hwnd || !IsWindow(hwnd)) {
+			return false;
+		}
+
+		RECT windowRect{};
+		if (!GetWindowRect(hwnd, &windowRect)) {
+			return false;
+		}
+
+		HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+		MONITORINFO monitorInfo{ sizeof(MONITORINFO) };
+		if (!monitor || !GetMonitorInfo(monitor, &monitorInfo)) {
+			return false;
+		}
+
+		const int windowWidth = windowRect.right - windowRect.left;
+		const int windowHeight = windowRect.bottom - windowRect.top;
+		const RECT& workArea = monitorInfo.rcWork;
+		const int workWidth = workArea.right - workArea.left;
+		const int workHeight = workArea.bottom - workArea.top;
+		const int centeredX = workArea.left + std::max(0, (workWidth - windowWidth) / 2);
+		const int centeredY = workArea.top + std::max(0, (workHeight - windowHeight) / 2);
+
+		return SetWindowPos(
+			hwnd,
+			HWND_TOPMOST,
+			centeredX,
+			centeredY,
+			0,
+			0,
+			SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) != FALSE;
+	}
 }
 
 constexpr int kOverlayWidth = 1920;
@@ -153,6 +209,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	mouseDeadzone,
 	mouseSpeed,
 	dragHighlightColor,
+	KeepDesktopWindowFocusedForVRMenu,
 	VRMenuOpenKeys,
 	VRMenuCloseKeys,
 	VROverlayOpenKeys,
@@ -998,6 +1055,17 @@ namespace
 				ImGui::Text("Auto uses in-scene for OpenComposite, IVROverlay for SteamVR when available.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
+			}
+			if (ImGui::Checkbox("Keep Game Window Focused for HMD Menu", &settings.KeepDesktopWindowFocusedForVRMenu)) {
+				if (settings.KeepDesktopWindowFocusedForVRMenu) {
+					vr.UpdateMenuDesktopWindowManagement(true);
+				} else {
+					vr.ReleaseMenuDesktopWindowManagement();
+				}
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("While the CS menu is open in VR, keep the game window centered, foregrounded, and above other desktop windows.");
+				ImGui::Text("Disable this to move the game window aside or use other desktop applications while the menu stays open.");
 			}
 
 			// Controller-specific settings (only show when controller mode is active)
@@ -2395,14 +2463,105 @@ void VR::HideOverlaysIfPresent()
 	HideAllOverlays(gameOverlay);
 }
 
+void VR::UpdateMenuDesktopWindowManagement(bool force)
+{
+	const bool menuActive = globals::menu && globals::menu->IsEnabled;
+	const bool wantsVROverlay = settings.attachMode != AttachMode::None;
+	const bool shouldManage =
+		settings.KeepDesktopWindowFocusedForVRMenu &&
+		openVRInfo.isCompatible &&
+		menuActive &&
+		wantsVROverlay;
+
+	if (!shouldManage) {
+		ReleaseMenuDesktopWindowManagement();
+		return;
+	}
+
+	HWND hwnd = GetGameWindowHandle();
+	if (!hwnd || !IsWindow(hwnd)) {
+		ReleaseMenuDesktopWindowManagement();
+		return;
+	}
+
+	if (desktopWindowManagementApplied &&
+	    desktopWindowManagedHandle &&
+	    desktopWindowManagedHandle != hwnd) {
+		ReleaseMenuDesktopWindowManagement();
+	}
+
+	const double nowSecs = Util::GetNowSecs();
+	constexpr double kRecenterIntervalSecs = 1.0;
+	constexpr double kFocusRetryIntervalSecs = 0.25;
+	const bool windowIsTopmost = IsWindowTopmost(hwnd);
+	const bool windowIsForeground = GetForegroundWindow() == hwnd;
+	const bool windowStateStable = desktopWindowManagementApplied && windowIsTopmost && windowIsForeground;
+	const double reassertIntervalSecs = windowStateStable ? kRecenterIntervalSecs : kFocusRetryIntervalSecs;
+	const bool recentlyAttempted = nowSecs - lastDesktopWindowManagementAttemptSecs < reassertIntervalSecs;
+
+	if (!force && recentlyAttempted) {
+		return;
+	}
+
+	if (IsIconic(hwnd)) {
+		ShowWindow(hwnd, SW_RESTORE);
+	}
+
+	if (!desktopWindowManagementApplied) {
+		desktopWindowWasTopmost = windowIsTopmost;
+	}
+
+	lastDesktopWindowManagementAttemptSecs = nowSecs;
+
+	if (CenterWindowOnCurrentMonitorTopmost(hwnd)) {
+		BringWindowToTop(hwnd);
+		SetForegroundWindow(hwnd);
+		SetActiveWindow(hwnd);
+		SetFocus(hwnd);
+		desktopWindowManagementApplied = true;
+		desktopWindowManagedHandle = hwnd;
+	}
+}
+
+void VR::ReleaseMenuDesktopWindowManagement()
+{
+	if (!desktopWindowManagementApplied) {
+		desktopWindowWasTopmost = false;
+		desktopWindowManagedHandle = nullptr;
+		lastDesktopWindowManagementAttemptSecs = 0.0;
+		return;
+	}
+
+	HWND hwnd = desktopWindowManagedHandle ? desktopWindowManagedHandle : GetGameWindowHandle();
+	if (hwnd && IsWindow(hwnd)) {
+		if (!desktopWindowWasTopmost) {
+			SetWindowPos(
+				hwnd,
+				HWND_NOTOPMOST,
+				0,
+				0,
+				0,
+				0,
+				SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+		}
+	}
+
+	desktopWindowManagementApplied = false;
+	desktopWindowWasTopmost = false;
+	desktopWindowManagedHandle = nullptr;
+	lastDesktopWindowManagementAttemptSecs = 0.0;
+}
+
 void VR::SubmitOverlayFrame()
 {
 	// Skip overlay operations if OpenVR is incompatible
 	if (!openVRInfo.isCompatible) {
+		ReleaseMenuDesktopWindowManagement();
 		return;
 	}
 
 	if (!globals::menu || !globals::d3d::context) {
+		ReleaseMenuDesktopWindowManagement();
 		return;
 	}
 
@@ -2419,12 +2578,14 @@ void VR::SubmitOverlayFrame()
 			logger::error("VR: IVROverlay menu path is forced, but the runtime does not expose IVROverlay");
 			loggedMissingOverlayInterface = true;
 		}
+		ReleaseMenuDesktopWindowManagement();
 		return;
 	}
 
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
 	if (!openvr || !openvr->vrSystem) {
 		logger::error("SubmitOverlayFrame: BSOpenVR or vrSystem is nullptr");
+		ReleaseMenuDesktopWindowManagement();
 		return;
 	}
 
@@ -2447,6 +2608,7 @@ void VR::SubmitOverlayFrame()
 	}
 
 	if (useIVROverlay && (!gameOverlay || !cleanOverlay)) {
+		ReleaseMenuDesktopWindowManagement();
 		return;
 	}
 
@@ -2463,6 +2625,7 @@ void VR::SubmitOverlayFrame()
 	if (menuJustOpened || menuJustClosed) {
 		ResetMenuInputRuntimeState();
 	}
+	UpdateMenuDesktopWindowManagement(menuJustOpened);
 
 	// In fixed-world mode, recenter once on menu open using current HMD pose,
 	// then keep it world-locked for the rest of the session.

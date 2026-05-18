@@ -362,6 +362,7 @@ void VR::ResetMenuInputRuntimeState()
 	primaryControllerState.Clear();
 	secondaryControllerState.Clear();
 	ReleaseMenuImGuiInputState();
+	ReleaseMenuDesktopWindowManagement();
 }
 
 void VR::ProcessControllerInputForImGui()

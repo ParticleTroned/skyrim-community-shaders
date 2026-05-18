@@ -750,6 +750,14 @@ void FidelityFX::DestroyRuntimeUpscalerResources(bool a_waitForIdle)
 	runtimeOutputSharedDesc = {};
 }
 
+void FidelityFX::ResetRuntimeUpscalerResources()
+{
+	WaitForRuntimeUpscalerIdle();
+	DestroyRuntimeUpscalerContexts(false);
+	DestroyRuntimeUpscalerResources(false);
+	ResetRuntimeUpscalerTracking(false);
+}
+
 void FidelityFX::DestroyFSRResources()
 {
 	const uint32_t numContexts = fsrContextCount;

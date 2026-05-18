@@ -264,6 +264,21 @@ namespace
 		return false;
 	}
 
+#ifdef ENABLE_SKYRIM_VR
+	RE::NiPointer<RE::NiNode> GetWorldSpaceMenuNode(RE::WorldSpaceMenu* a_menu)
+	{
+		if (!a_menu)
+			return nullptr;
+
+		// In ALL builds the C++ layout omits VR-only IMenu runtime data, so direct member access
+		// reads offset 0x30 while SkyrimVR stores WorldSpaceMenu::menuNode at 0x48.
+		static constexpr auto kFlatMenuNodeOffset = 0x30;
+		static constexpr auto kVRMenuNodeOffset = 0x48;
+
+		return REL::RelocateMember<RE::NiPointer<RE::NiNode>>(a_menu, kFlatMenuNodeOffset, kVRMenuNodeOffset);
+	}
+#endif
+
 	bool HasVRActivationRollover(RE::UI* a_ui)
 	{
 #ifdef ENABLE_SKYRIM_VR
@@ -271,10 +286,14 @@ namespace
 			return false;
 
 		auto rollover = a_ui->GetMenu<RE::WSActivateRollover>();
-		if (!rollover || !rollover->uiMovie || !rollover->uiMovie->GetVisible() || !rollover->menuNode)
+		if (!rollover || !rollover->OnStack() || !rollover->uiMovie || !rollover->uiMovie->GetVisible())
 			return false;
 
-		if (rollover->menuNode->GetFlags().any(RE::NiAVObject::Flag::kHidden, RE::NiAVObject::Flag::kNotVisible))
+		auto menuNode = GetWorldSpaceMenuNode(rollover.get());
+		if (!menuNode)
+			return false;
+
+		if (menuNode->GetFlags().any(RE::NiAVObject::Flag::kHidden, RE::NiAVObject::Flag::kNotVisible))
 			return false;
 
 		return HasVRActivationPickTarget();

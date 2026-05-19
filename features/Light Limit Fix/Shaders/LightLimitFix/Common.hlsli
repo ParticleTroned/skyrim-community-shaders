@@ -6,6 +6,13 @@
 #define NUMTHREAD_Z 4
 #define GROUP_SIZE (NUMTHREAD_X * NUMTHREAD_Y * NUMTHREAD_Z)
 #define MAX_CLUSTER_LIGHTS 256
+#define MAX_CONTACT_SHADOW_LIGHTS 8
+
+namespace ContactShadowFlags
+{
+	static const uint Point = (1u << 0);
+	static const uint Particle = (1u << 1);
+}
 
 namespace LightFlags
 {
@@ -17,6 +24,7 @@ namespace LightFlags
 	static const uint Disabled = (1 << 9);
 	static const uint InverseSquare = (1 << 10);
 	static const uint Linear = (1 << 11);
+	static const uint Particle = (1 << 12);
 }
 
 struct ClusterAABB
@@ -31,6 +39,29 @@ struct LightGrid
 	uint lightCount;
 	uint pad0[2];
 };
+
+namespace ContactShadowParams
+{
+	uint Quality(uint params)
+	{
+		return params & 0xFFu;
+	}
+
+	uint ParticleBudget(uint params)
+	{
+		return (params >> 8) & 0xFFu;
+	}
+
+	uint ClusterBudget(uint params)
+	{
+		return (params >> 16) & 0xFFu;
+	}
+
+	uint StrictBudget(uint params)
+	{
+		return (params >> 24) & 0xFFu;
+	}
+}
 
 struct Light
 {

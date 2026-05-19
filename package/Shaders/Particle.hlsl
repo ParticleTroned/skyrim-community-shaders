@@ -5,34 +5,34 @@
 
 struct VS_INPUT
 {
-	float4 Position: POSITION0;
+	float4 Position : POSITION0;
 #if !defined(ENVCUBE)
-	float4 Normal: NORMAL0;
+	float4 Normal : NORMAL0;
 #endif
-	float4 TexCoord0: TEXCOORD0;
+	float4 TexCoord0 : TEXCOORD0;
 #if defined(ENVCUBE)
 	float4
 #else
 	int4
 #endif
-		TexCoord1: TEXCOORD1;
+		TexCoord1 : TEXCOORD1;
 #if defined(VR)
-	uint InstanceID: SV_INSTANCEID;
+	uint InstanceID : SV_INSTANCEID;
 #endif  // VR
 };
 
 struct VS_OUTPUT
 {
-	float4 Position: SV_POSITION0;
-	float4 Color: COLOR0;
-	float2 TexCoord0: TEXCOORD0;
+	float4 Position : SV_POSITION0;
+	float4 Color : COLOR0;
+	float2 TexCoord0 : TEXCOORD0;
 #if defined(ENVCUBE)
-	float4 PrecipitationOcclusionTexCoord: TEXCOORD1;
+	float4 PrecipitationOcclusionTexCoord : TEXCOORD1;
 #endif
 #if defined(VR)
-	float ClipDistance: SV_ClipDistance0;  // o11
-	float CullDistance: SV_CullDistance0;  // p11
-	uint EyeIndex: EYEIDX0;
+	float ClipDistance : SV_ClipDistance0;  // o11
+	float CullDistance : SV_CullDistance0;  // p11
+	uint EyeIndex : EYEIDX0;
 #endif  // VR
 };
 
@@ -209,8 +209,8 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color: SV_Target0;
-	float4 Normal: SV_Target1;
+	float4 Color : SV_Target0;
+	float4 Normal : SV_Target1;
 };
 
 #ifdef PSHADER
@@ -247,6 +247,14 @@ cbuffer PerGeometry : register(b2)
 	float3 TextureSize : packoffset(c1);
 };
 
+#	if defined(TERRAIN_SHADOWS)
+#		include "TerrainShadows/TerrainShadows.hlsli"
+#	endif
+
+#	if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
+#	endif
+
 #	define LinearSampler SampSourceTexture
 #	include "Common/ShadowSampling.hlsli"
 
@@ -275,7 +283,6 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 sourceColor = TexSourceTexture.Sample(SampSourceTexture, input.TexCoord0);
 	float4 baseColor = input.Color * sourceColor;
-	baseColor.xyz = Color::Diffuse(baseColor.xyz);
 #	if defined(GRAYSCALE_TO_COLOR)
 	float3 grayScaleColor =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.y, input.Color.x)).xyz;
@@ -287,6 +294,8 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor.w = grayScaleAlpha;
 #	endif
 
+	baseColor.xyz = Color::Diffuse(baseColor.xyz);
+
 	float3 propertyColor = 0.0;
 
 	float2 uv = Stereo::ConvertFromStereoUV(input.Position.xy * SharedData::BufferDim.zw, eyeIndex);
@@ -295,9 +304,11 @@ PS_OUTPUT main(PS_INPUT input)
 	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
-	float unusedDetailedShadow;
-	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, eyeIndex, unusedDetailedShadow);
-	float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
+	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float dirShadow = ShadowSampling::GetWorldShadow(positionWS.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+	float3 dirLightRaw = SharedData::DirLightColor.xyz * dirShadow;
+	float3 dirLightColor = Color::DirectionalLight(dirLightRaw / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
+	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 1))));
 
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;
@@ -329,7 +340,8 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #		endif
 
-				float3 lightColor = light.color.xyz * intensityMultiplier;
+				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade * 0.5;
 				propertyColor += lightColor;
 			}
 		}

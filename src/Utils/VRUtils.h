@@ -42,9 +42,9 @@ namespace Util
 	 * @param showControllerLabels Whether to show controller device labels (Primary/Secondary/Both)
 	 *
 	 * This function renders button combinations with color-coded text:
-	 * - Green: Primary controller
+	 * - Yellow: Primary controller
 	 * - Blue: Secondary controller
-	 * - Purple: Both controllers
+	 * - Green: Both controllers
 	 *
 	 * @example
 	 * ```cpp

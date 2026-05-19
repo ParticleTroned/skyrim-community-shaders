@@ -663,7 +663,11 @@ void Menu::DrawSettings()
 
 	// Apply theme styling with universal contrast enhancement
 	ThemeManager::SetupImGuiStyle(*this);
+	ImGui::GetIO().ConfigDockingWithShift = settings.RequireShiftToDock;
 
+	const bool useOpenCompositeStableHeader =
+		REL::Module::IsVR() &&
+		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 	ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
@@ -689,8 +693,13 @@ void Menu::DrawSettings()
 	ImGui::Begin(title.c_str(), &IsEnabled, windowFlags);
 	{
 		// Update docking state tracking
-		bool isDocked = ImGui::IsWindowDocked();
-		wasDocked = isDocked;
+		const bool actualDocked = ImGui::IsWindowDocked();
+		const bool isDocked = actualDocked;
+		wasDocked = actualDocked;
+		const bool showSteamVRWindowControls =
+			REL::Module::IsVR() &&
+			globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR &&
+			!isDocked;
 
 		float globalScale = settings.Theme.GlobalScale;
 
@@ -709,7 +718,14 @@ void Menu::DrawSettings()
 		bool showLogo = uiIcons.logo.texture != nullptr;
 
 		// Render header using extracted component
-		MenuHeaderRenderer::RenderHeader(isDocked, showLogo, canShowIcons, uiScale, uiIcons);
+		MenuHeaderRenderer::RenderHeader(
+			isDocked,
+			showLogo,
+			canShowIcons,
+			uiScale,
+			uiIcons,
+			useOpenCompositeStableHeader,
+			showSteamVRWindowControls);
 
 		// Main content starts here - no additional separator needed as it's already handled in the conditions above
 
@@ -740,6 +756,10 @@ void Menu::DrawSettings()
 
 		// Draw global popups (needs to be called once per frame)
 		Util::DrawClearShaderCacheConfirmation();
+
+		if (showSteamVRWindowControls) {
+			MenuHeaderRenderer::RenderSteamVRResizeHandles(uiScale);
+		}
 	}
 	ImGui::End();
 }

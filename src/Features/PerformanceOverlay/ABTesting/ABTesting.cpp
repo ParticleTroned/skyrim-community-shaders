@@ -5,6 +5,7 @@
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
+#include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
 #include <fstream>
@@ -138,8 +139,31 @@ void ABTestingManager::DrawSettingsUI()
 {
 	auto& performanceOverlay = globals::features::performanceOverlay;
 
-	if (ImGui::SliderInt("A/B Test Interval", reinterpret_cast<int*>(&testInterval), 0, 10)) {
+	ImGui::SeparatorText("A/B Testing");
+	ImGui::TextWrapped("Compares the saved USER configuration against the current TEST configuration by switching variants at a fixed interval.");
+	ImGui::Spacing();
+
+	if (abTestingEnabled) {
+		ImGui::Text("%s : %.1fs left",
+			usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)",
+			GetRemainingSeconds());
+
+		auto differences = GetConfigDifferencesForDisplay();
+		if (!differences.empty()) {
+			ImGui::TextDisabled("%zu setting%s changed from USER.",
+				differences.size(),
+				differences.size() == 1 ? "" : "s");
+		}
+		ImGui::Spacing();
+	}
+
+	const float availableWidth = std::max(0.0f, ImGui::GetContentRegionAvail().x);
+	const float minSliderWidth = std::min(160.0f, availableWidth);
+	ImGui::SetNextItemWidth(std::clamp(availableWidth * 0.55f, minSliderWidth, availableWidth));
+	int interval = static_cast<int>(testInterval);
+	if (ImGui::SliderInt("A/B Test Interval", &interval, 0, 10)) {
 		bool overlayWasEnabled = performanceOverlay.settings.ShowInOverlay;
+		testInterval = static_cast<uint32_t>(std::clamp(interval, 0, 10));
 		if (testInterval == 0) {
 			Disable();
 		} else if (!abTestingEnabled) {
@@ -159,6 +183,18 @@ void ABTestingManager::DrawSettingsUI()
 			"Testing starts with Variant B, then swaps every N seconds.\n"
 			"Set to 0 to disable and restore TEST settings.");
 	}
+}
+
+float ABTestingManager::GetRemainingSeconds() const
+{
+	if (!abTestingEnabled || timingFrequency.QuadPart == 0) {
+		return static_cast<float>(testInterval);
+	}
+
+	LARGE_INTEGER currentTime;
+	QueryPerformanceCounter(&currentTime);
+	const float seconds = (currentTime.QuadPart - lastTestSwitch.QuadPart) / static_cast<float>(timingFrequency.QuadPart);
+	return std::max(0.0f, static_cast<float>(testInterval) - seconds);
 }
 
 std::vector<std::string> ABTestingManager::GetConfigDifferencesForDisplay() const
@@ -230,11 +266,8 @@ void ABTestingManager::DrawOverlayUI()
 {
 	if (!abTestingEnabled)
 		return;
-
-	LARGE_INTEGER currentTime;
-	QueryPerformanceCounter(&currentTime);
-	float seconds = (currentTime.QuadPart - lastTestSwitch.QuadPart) / static_cast<float>(timingFrequency.QuadPart);
-	auto remaining = static_cast<float>(testInterval) - seconds;
+	if (globals::menu && globals::menu->IsEnabled)
+		return;
 
 	// Scale position for resolution
 	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale();
@@ -245,11 +278,9 @@ void ABTestingManager::DrawOverlayUI()
 		return;
 	}
 
-	remaining = std::max(0.0f, remaining);
-
 	// Show current variant and time
 	ImGui::Text(fmt::format("{} : {:.1f}s left",
-		usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)", remaining)
+		usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)", GetRemainingSeconds())
 			.c_str());
 
 	// Show what changed (for both variants)

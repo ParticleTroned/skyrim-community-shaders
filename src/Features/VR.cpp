@@ -105,6 +105,31 @@ namespace
 		vr.desktopWindowManagedHandle = nullptr;
 		vr.lastDesktopWindowManagementAttemptSecs = 0.0;
 	}
+
+	void MigrateLegacyBindingDefaults(VR::Settings& settings)
+	{
+		const std::vector<ButtonCombo> legacyMenuOpen = {
+			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
+			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
+		};
+		if (settings.VRMenuOpenKeys == legacyMenuOpen) {
+			settings.VRMenuOpenKeys = VR::Settings::DefaultVRMenuOpenKeys();
+		}
+
+		const std::vector<ButtonCombo> legacyOverlayOpen = {
+			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+		};
+		if (settings.VROverlayOpenKeys == legacyOverlayOpen) {
+			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
+		}
+
+		const std::vector<ButtonCombo> legacyOverlayClose = {
+			ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+		};
+		if (settings.VROverlayCloseKeys == legacyOverlayClose) {
+			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
+		}
+	}
 }
 
 constexpr int kOverlayWidth = 1920;
@@ -173,6 +198,7 @@ void VR::LoadSettings(json& o_json)
 	    std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon) {
 		settings.VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
 	}
+	MigrateLegacyBindingDefaults(settings);
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
 
@@ -1627,13 +1653,12 @@ namespace
 				const char* label;
 				std::vector<InputCombo>& combos;
 				const char* description;
-				const char* controllerRequirement;
 			};
 			std::vector<VRKeyBindingConfig> keyBindingConfigs = {
-				{ "Open Community Shaders Menu", settings.VRMenuOpenKeys, "Button combination to open the Community Shaders menu", "Primary" },
-				{ "Close Community Shaders Menu", settings.VRMenuCloseKeys, "Button combination to close the Community Shaders menu", "Both" },
-				{ "Open VR Overlay", settings.VROverlayOpenKeys, "Button combination to open the VR overlay", "Primary" },
-				{ "Close VR Overlay", settings.VROverlayCloseKeys, "Button combination to close the VR overlay", "Secondary" }
+				{ "Open Community Shaders Menu", settings.VRMenuOpenKeys, "Button combination to open the Community Shaders menu" },
+				{ "Close Community Shaders Menu", settings.VRMenuCloseKeys, "Button combination to close the Community Shaders menu" },
+				{ "Open VR Overlay", settings.VROverlayOpenKeys, "Button combination to open the VR overlay" },
+				{ "Close VR Overlay", settings.VROverlayCloseKeys, "Button combination to close the VR overlay" }
 			};
 			for (size_t row = 0; row < keyBindingConfigs.size(); ++row) {
 				const auto& config = keyBindingConfigs[row];
@@ -1655,7 +1680,7 @@ namespace
 				ImGui::Text("%s", config.label);
 				// Current Binding column
 				ImGui::TableSetColumnIndex(1);
-				Util::DrawButtonCombo(config.combos, false);
+				Util::DrawButtonCombo(config.combos, true);
 				// Description column
 				ImGui::TableSetColumnIndex(2);
 				ImGui::Text("%s", config.description);
@@ -1665,20 +1690,10 @@ namespace
 		ImGui::Spacing();
 		// Reset to defaults button
 		if (ImGui::Button("Reset to Defaults")) {
-			// Use InputCombo structure for cleaner defaults
-			settings.VRMenuOpenKeys = {
-				InputCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
-				InputCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
-			};
-			settings.VRMenuCloseKeys = {
-				InputCombo::Both(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip))
-			};
-			settings.VROverlayOpenKeys = {
-				InputCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
-			};
-			settings.VROverlayCloseKeys = {
-				InputCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
-			};
+			settings.VRMenuOpenKeys = VR::Settings::DefaultVRMenuOpenKeys();
+			settings.VRMenuCloseKeys = VR::Settings::DefaultVRMenuCloseKeys();
+			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
+			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Reset all VR key bindings to their default values.");

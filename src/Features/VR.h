@@ -234,20 +234,40 @@ public:
 		// Visual customization
 		std::array<float, 4> dragHighlightColor = { 1.0f, 1.0f, 0.0f, 0.3f };  ///< RGBA color for drag highlight
 
+		static std::vector<ButtonCombo> DefaultVRMenuOpenKeys()
+		{
+			return {
+				ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
+				ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
+			};
+		}
+
+		static std::vector<ButtonCombo> DefaultVRMenuCloseKeys()
+		{
+			return {
+				ButtonCombo::Both(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip))
+			};
+		}
+
+		static std::vector<ButtonCombo> DefaultVROverlayOpenKeys()
+		{
+			return {
+				ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+			};
+		}
+
+		static std::vector<ButtonCombo> DefaultVROverlayCloseKeys()
+		{
+			return {
+				ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+			};
+		}
+
 		// Key binding configurations
-		std::vector<ButtonCombo> VRMenuOpenKeys = { ///< Button combos to open VR menu
-			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
-			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
-		};
-		std::vector<ButtonCombo> VRMenuCloseKeys = { ///< Button combos to close VR menu
-			ButtonCombo::Both(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip))
-		};
-		std::vector<ButtonCombo> VROverlayOpenKeys = { ///< Button combos to open VR overlay
-			ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
-		};
-		std::vector<ButtonCombo> VROverlayCloseKeys = { ///< Button combos to close VR overlay
-			ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
-		};
+		std::vector<ButtonCombo> VRMenuOpenKeys = DefaultVRMenuOpenKeys();          ///< Button combos to open VR menu
+		std::vector<ButtonCombo> VRMenuCloseKeys = DefaultVRMenuCloseKeys();        ///< Button combos to close VR menu
+		std::vector<ButtonCombo> VROverlayOpenKeys = DefaultVROverlayOpenKeys();    ///< Button combos to open VR overlay
+		std::vector<ButtonCombo> VROverlayCloseKeys = DefaultVROverlayCloseKeys();  ///< Button combos to close VR overlay
 
 		// General interaction settings
 		float comboTimeout = Config::kDefaultComboTimeout;       ///< Timeout for button combo sequences (1.0-10.0 seconds)

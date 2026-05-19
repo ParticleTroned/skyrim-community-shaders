@@ -53,5 +53,6 @@ private:
 	bool hasUserSnapshot = false;
 
 	// Track what changed between USER and TEST configs
+	float GetRemainingSeconds() const;
 	std::vector<std::string> GetConfigDifferences() const;
 };

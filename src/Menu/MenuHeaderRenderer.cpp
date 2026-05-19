@@ -3,6 +3,9 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
+#include <cfloat>
+
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Fonts.h"
@@ -18,7 +21,14 @@ namespace
 	using RoleFontGuard = MenuFonts::FontRoleGuard;
 }
 
-void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShowIcons, float uiScale, const Menu::UIIcons& uiIcons)
+void MenuHeaderRenderer::RenderHeader(
+	bool isDocked,
+	bool showLogo,
+	bool canShowIcons,
+	float uiScale,
+	const Menu::UIIcons& uiIcons,
+	bool forceStableHeader,
+	bool showSteamVRDockHandle)
 {
 	if (!globals::menu) {
 		logger::error("MenuHeaderRenderer::RenderHeader: globals::menu is null, cannot render header");
@@ -29,7 +39,9 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 	auto title = std::format("Community Shaders {} Particle Lights Fork", versionStr);
 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
 
-	if (isDocked) {
+	if (forceStableHeader) {
+		RenderStableHeader(title, showLogo, actionIcons, uiScale, uiIcons);
+	} else if (isDocked) {
 		// When docked, draw logo as a background watermark if available
 		if (showLogo && uiIcons.logo.texture) {
 			RenderWatermarkLogo(uiIcons);
@@ -116,6 +128,12 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 			// Buttons on the right
 			ImGui::TableNextColumn();
 			RenderUndockedIcons(actionIcons, uiScale);
+			if (showSteamVRDockHandle) {
+				if (!actionIcons.empty()) {
+					ImGui::SameLine();
+				}
+				RenderSteamVRDockHandle(uiScale);
+			}
 
 			ImGui::EndTable();
 		} else if (!(showLogo || canShowIcons)) {
@@ -150,7 +168,8 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 	}
 
 	// Add separators - no separator needed for docked mode since icons are in title bar
-	if (!isDocked) {
+	const bool renderedInlineHeader = !isDocked || forceStableHeader;
+	if (renderedInlineHeader) {
 		// First separator - always shown when not docked
 		ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, ThemeManager::Constants::SEPARATOR_THICKNESS);
 		ImGui::Spacing();
@@ -158,7 +177,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 
 	// If icons are disabled or missing, show action buttons as text between separators (only when not docked)
 	auto shaderCache = globals::shaderCache;
-	if (!canShowIcons && !isDocked) {
+	if (!canShowIcons && renderedInlineHeader) {
 		if (ImGui::BeginTable("##ActionButtons", 4, ImGuiTableFlags_SizingStretchSame)) {
 			// Save Settings Button
 			ImGui::TableNextColumn();
@@ -207,12 +226,12 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 		}
 
 		// Second separator - only shown if icons are disabled/missing or if there are failed tasks (and not docked)
-		if (!isDocked) {
+		if (renderedInlineHeader) {
 			ImGui::Spacing();
 			ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal, ThemeManager::Constants::SEPARATOR_THICKNESS);
 			ImGui::Spacing();
 		}
-	} else if (shaderCache->GetFailedTasks() && !isDocked) {
+	} else if (shaderCache->GetFailedTasks() && renderedInlineHeader) {
 		// If icons are enabled but there are failed tasks, show error toggle button
 		// and add the second separator (only when not docked)
 		if (ImGui::Button("Toggle Error Message", { -1, 0 })) {
@@ -410,6 +429,211 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 
 	// Restore default style
 	ImGui::PopStyleVar(2);    // Pop both style variables: ItemSpacing and FrameBorderSize
+}
+
+void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale)
+{
+	ImGuiWindow* window = ImGui::GetCurrentWindow();
+	if (!window)
+		return;
+
+	const float currentFontSize = ImGui::GetFontSize();
+	const float handleSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER * uiScale;
+	const ImVec2 buttonSize(handleSize, handleSize);
+
+	ImGui::InvisibleButton("##SteamVRDockHandle", buttonSize);
+	const bool hovered = ImGui::IsItemHovered();
+	const bool active = ImGui::IsItemActive();
+	if (active) {
+		ImGui::GetIO().ConfigDockingWithShift = false;
+	}
+	if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+		ImGui::StartMouseMovingWindow(window);
+	}
+	if (hovered) {
+		ImGui::SetTooltip("Drag to move or dock");
+	}
+
+	const ImVec2 min = ImGui::GetItemRectMin();
+	const ImVec2 max = ImGui::GetItemRectMax();
+	const ImVec2 center = ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+	const float radius = handleSize * 0.32f;
+
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImU32 bgColor = ImGui::GetColorU32(active ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered :
+	                                                                              ImGuiCol_Button);
+	const ImU32 lineColor = ImGui::GetColorU32(ImGuiCol_Text);
+	if (hovered || active) {
+		drawList->AddRectFilled(min, max, bgColor, handleSize * 0.18f);
+	}
+	drawList->AddRect(ImVec2(center.x - radius, center.y - radius), ImVec2(center.x + radius, center.y + radius), lineColor, 1.0f, 0, 1.5f);
+	drawList->AddLine(ImVec2(center.x - radius * 0.55f, center.y), ImVec2(center.x + radius * 0.55f, center.y), lineColor, 1.2f);
+	drawList->AddLine(ImVec2(center.x, center.y - radius * 0.55f), ImVec2(center.x, center.y + radius * 0.55f), lineColor, 1.2f);
+}
+
+void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
+{
+	ImGuiWindow* window = ImGui::GetCurrentWindow();
+	if (!window || window->DockIsActive)
+		return;
+
+	const ImVec2 savedCursor = ImGui::GetCursorPos();
+	const ImVec2 windowPos = window->Pos;
+	const ImVec2 windowSize = window->Size;
+	const float handleSize = std::max(ImGui::GetFontSize() * 1.15f, 18.0f) * uiScale;
+	const float minWidth = 420.0f * uiScale;
+	const float minHeight = 320.0f * uiScale;
+
+	auto drawResizeHandle = [&](const char* id, const ImVec2& min, bool topLeft) {
+		ImGui::SetCursorScreenPos(min);
+		ImGui::InvisibleButton(id, ImVec2(handleSize, handleSize));
+		const bool hovered = ImGui::IsItemHovered();
+		const bool active = ImGui::IsItemActive();
+		if (hovered || active) {
+			ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+		}
+
+		if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
+			const ImVec2 delta = ImGui::GetIO().MouseDelta;
+			ImVec2 newPos = window->Pos;
+			ImVec2 newSize = window->Size;
+			if (topLeft) {
+				const float maxInwardX = std::max(0.0f, newSize.x - minWidth);
+				const float maxInwardY = std::max(0.0f, newSize.y - minHeight);
+				const float appliedX = std::min(delta.x, maxInwardX);
+				const float appliedY = std::min(delta.y, maxInwardY);
+				newPos.x += appliedX;
+				newPos.y += appliedY;
+				newSize.x -= appliedX;
+				newSize.y -= appliedY;
+				ImGui::SetWindowPos(window, newPos, ImGuiCond_Always);
+			} else {
+				newSize.x = std::max(minWidth, newSize.x + delta.x);
+				newSize.y = std::max(minHeight, newSize.y + delta.y);
+			}
+			ImGui::SetWindowSize(window, newSize, ImGuiCond_Always);
+		}
+
+		const ImU32 color = ImGui::GetColorU32(active ? ImGuiCol_ResizeGripActive : hovered ? ImGuiCol_ResizeGripHovered :
+		                                                                                 ImGuiCol_ResizeGrip);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		if (topLeft) {
+			drawList->AddTriangleFilled(min, ImVec2(min.x + handleSize, min.y), ImVec2(min.x, min.y + handleSize), color);
+		} else {
+			const ImVec2 br = ImVec2(min.x + handleSize, min.y + handleSize);
+			drawList->AddTriangleFilled(br, ImVec2(br.x - handleSize, br.y), ImVec2(br.x, br.y - handleSize), color);
+		}
+	};
+
+	drawResizeHandle("##SteamVRResizeTopLeft", windowPos, true);
+	drawResizeHandle("##SteamVRResizeBottomRight", ImVec2(windowPos.x + windowSize.x - handleSize, windowPos.y + windowSize.y - handleSize), false);
+	ImGui::SetCursorPos(savedCursor);
+}
+
+void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showLogo, const std::vector<ActionIcon>& actionIcons, float uiScale, const Menu::UIIcons& uiIcons)
+{
+	auto* menu = globals::menu;
+	if (!menu)
+		return;
+
+	ImGuiStyle& style = ImGui::GetStyle();
+	const float currentFontSize = ImGui::GetFontSize();
+	const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
+	const float iconSize = baseIconSize * uiScale;
+	const float textScaleFactor = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE * uiScale;
+	const float paddingX = ThemeManager::Constants::CURSOR_POSITION_PADDING * uiScale;
+	const float paddingY = style.FramePadding.y * 2.0f;
+	const float iconSpacing = ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING * uiScale;
+	const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * uiScale;
+
+	ImFont* titleFont = menu->GetFont(Menu::FontRole::Title);
+	if (!titleFont) {
+		titleFont = ImGui::GetFont();
+	}
+	const float titleFontSize = (titleFont ? titleFont->LegacySize : currentFontSize) * textScaleFactor;
+	const ImVec2 titleSize = titleFont ? titleFont->CalcTextSizeA(titleFontSize, FLT_MAX, 0.0f, title.c_str()) :
+	                                     ImGui::CalcTextSize(title.c_str());
+
+	const float logoAspectRatio = showLogo && uiIcons.logo.size.y > 0.0f ? uiIcons.logo.size.x / uiIcons.logo.size.y : 1.0f;
+	const float logoWidth = showLogo ? iconSize * logoAspectRatio : 0.0f;
+	const float titleGroupWidth = logoWidth + (showLogo ? style.ItemSpacing.x : 0.0f) + titleSize.x;
+	const float iconsWidth = actionIcons.empty() ? 0.0f :
+	                         (static_cast<float>(actionIcons.size()) * iconSize) +
+	                             (static_cast<float>(actionIcons.size() - 1) * iconSpacing);
+
+	const float headerHeight = std::max(iconSize, titleFontSize) + paddingY * 2.0f;
+	const ImVec2 cursorStart = ImGui::GetCursorPos();
+	const ImVec2 screenStart = ImGui::GetCursorScreenPos();
+	const float availableWidth = ImGui::GetContentRegionAvail().x;
+	const float rightLimit = screenStart.x + availableWidth;
+	const float iconStartX = rightLimit - paddingX - iconsWidth;
+	const float titleAreaWidth = std::max(0.0f, availableWidth - iconsWidth - paddingX * 3.0f);
+
+	float titleX = screenStart.x + paddingX;
+	if (menu->GetTheme().CenterHeader && titleGroupWidth < titleAreaWidth) {
+		titleX = screenStart.x + paddingX + (titleAreaWidth - titleGroupWidth) * 0.5f;
+	}
+	titleX = std::min(titleX, std::max(screenStart.x + paddingX, iconStartX - style.ItemSpacing.x - titleGroupWidth));
+	const float centerY = screenStart.y + headerHeight * 0.5f;
+
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImU32 logoTint = IM_COL32_WHITE;
+	if (menu->GetSettings().Theme.UseMonochromeLogo) {
+		logoTint = ImGui::GetColorU32(menu->GetSettings().Theme.Palette.Text);
+	}
+
+	if (showLogo && uiIcons.logo.texture) {
+		const ImVec2 logoMin(titleX, centerY - iconSize * 0.5f);
+		const ImVec2 logoMax(logoMin.x + logoWidth, logoMin.y + iconSize);
+		drawList->AddImage(uiIcons.logo.texture, logoMin, logoMax, ImVec2(0, 0), ImVec2(1, 1), logoTint);
+		titleX = logoMax.x + style.ItemSpacing.x;
+	}
+
+	const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+	const float titleClipMaxX = std::max(titleX, iconStartX - style.ItemSpacing.x);
+	drawList->PushClipRect(
+		ImVec2(titleX, screenStart.y),
+		ImVec2(titleClipMaxX, screenStart.y + headerHeight),
+		true);
+	drawList->AddText(titleFont, titleFontSize, ImVec2(titleX, centerY - titleSize.y * 0.5f), textColor, title.c_str());
+	drawList->PopClipRect();
+
+	float iconX = iconStartX;
+	for (size_t i = 0; i < actionIcons.size(); ++i) {
+		const auto& icon = actionIcons[i];
+		if (!icon.texture)
+			continue;
+
+		const ImVec2 buttonMin(iconX, centerY - iconSize * 0.5f);
+		const ImVec2 buttonMax(buttonMin.x + iconSize, buttonMin.y + iconSize);
+		const ImVec2 imageMin(buttonMin.x + paddingReduction * 0.5f, buttonMin.y + paddingReduction * 0.5f);
+		const ImVec2 imageMax(buttonMax.x - paddingReduction * 0.5f, buttonMax.y - paddingReduction * 0.5f);
+
+		ImGui::SetCursorScreenPos(buttonMin);
+		ImGui::PushID(static_cast<int>(i));
+		const bool clicked = ImGui::InvisibleButton("##StableHeaderAction", ImVec2(iconSize, iconSize));
+		const bool hovered = ImGui::IsItemHovered();
+		if (clicked) {
+			icon.callback();
+		}
+		if (hovered) {
+			ImVec4 hoverColor = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+			hoverColor.w = 0.18f;
+			drawList->AddRectFilled(buttonMin, buttonMax, ImGui::GetColorU32(hoverColor));
+			ImGui::SetTooltip("%s", icon.tooltip);
+		}
+
+		ImVec4 tintColor = ImVec4(1, 1, 1, 1);
+		if (menu->GetSettings().Theme.UseMonochromeIcons) {
+			tintColor = menu->GetSettings().Theme.Palette.Text;
+		}
+		drawList->AddImage(icon.texture, imageMin, imageMax, ImVec2(0, 0), ImVec2(1, 1), ImGui::GetColorU32(tintColor));
+		ImGui::PopID();
+
+		iconX += iconSize + iconSpacing;
+	}
+
+	ImGui::SetCursorPos(ImVec2(cursorStart.x, cursorStart.y + headerHeight));
 }
 
 void MenuHeaderRenderer::RenderWatermarkLogo(const Menu::UIIcons& uiIcons)

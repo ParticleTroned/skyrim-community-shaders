@@ -1,18 +1,45 @@
 #include "VRUtils.h"
 #include "Features/VR.h"  // For ButtonCombo and ControllerDevice definitions
 #include "RE/B/BSOpenVR.h"
+#include "RE/B/BSOpenVRControllerDevice.h"
 #include "UI.h"
 #include <imgui.h>
+
+namespace
+{
+	const char* GetButtonNameForCombo(const ButtonCombo& combo)
+	{
+		const auto key = combo.GetKey();
+		const auto device = combo.GetDevice();
+
+		if ((device == InputDeviceType::Primary || device == InputDeviceType::Secondary) &&
+		    (key == RE::BSOpenVRControllerDevice::Keys::kXA || key == RE::BSOpenVRControllerDevice::Keys::kBY)) {
+			const bool leftHanded = RE::BSOpenVRControllerDevice::IsLeftHandedMode();
+			const bool isLogicalPrimary = device == InputDeviceType::Primary;
+			const bool isPhysicalLeft = isLogicalPrimary ? leftHanded : !leftHanded;
+
+			if (key == RE::BSOpenVRControllerDevice::Keys::kXA) {
+				return isPhysicalLeft ? "X" : "A";
+			}
+			return isPhysicalLeft ? "Y" : "B";
+		}
+
+		return RE::GetOpenVRButtonName(key);
+	}
+}
 
 namespace Util
 {
 	void DrawButtonCombo(const std::vector<ButtonCombo>& combo, bool showControllerLabels)
 	{
 		bool anyDrawn = false;
+		bool hasPrimary = false;
+		bool hasSecondary = false;
+		bool hasBoth = false;
 		for (size_t i = 0; i < combo.size(); ++i) {
 			if (combo[i].GetKey() == 0)
 				continue;
-			if (i > 0) {
+			if (anyDrawn) {
 				ImGui::SameLine();
 				ImGui::Text("+");
 				ImGui::SameLine();
@@ -21,44 +48,44 @@ namespace Util
 			switch (combo[i].GetDevice()) {
 			case InputDeviceType::Primary:
 				color = Util::GetControllerPrimaryColor();
+				hasPrimary = true;
 				break;
 			case InputDeviceType::Secondary:
 				color = Util::GetControllerSecondaryColor();
+				hasSecondary = true;
 				break;
 			case InputDeviceType::Both:
 				color = Util::GetControllerBothColor();
+				hasBoth = true;
 				break;
 			default:
 				color = Util::GetControllerDefaultColor();
 				break;
 			}
 			ImGui::PushStyleColor(ImGuiCol_Text, color);
-			ImGui::Text("%s", RE::GetOpenVRButtonName(combo[i].GetKey()));
+			ImGui::Text("%s", GetButtonNameForCombo(combo[i]));
 			ImGui::PopStyleColor();
 			anyDrawn = true;
-			if (showControllerLabels) {
+		}
+		if (showControllerLabels && anyDrawn) {
+			ImVec4 labelColor = Util::GetControllerDefaultColor();
+			const char* label = "";
+			if (hasBoth && !hasPrimary && !hasSecondary) {
+				label = "(Both Controllers)";
+				labelColor = Util::GetControllerBothColor();
+			} else if (hasBoth || (hasPrimary && hasSecondary)) {
+				label = "(Mixed Controllers)";
+				labelColor = Util::GetControllerBothColor();
+			} else if (hasPrimary) {
+				label = "(Primary Controller)";
+				labelColor = Util::GetControllerPrimaryColor();
+			} else if (hasSecondary) {
+				label = "(Secondary Controller)";
+				labelColor = Util::GetControllerSecondaryColor();
+			}
+			if (label[0] != '\0') {
 				ImGui::SameLine();
-				ImVec4 labelColor = Util::GetControllerDefaultColor();
-				const char* label = "";
-				switch (combo[i].GetDevice()) {
-				case InputDeviceType::Primary:
-					label = "(Primary Controller)";
-					labelColor = Util::GetControllerPrimaryColor();
-					break;
-				case InputDeviceType::Secondary:
-					label = "(Secondary Controller)";
-					labelColor = Util::GetControllerSecondaryColor();
-					break;
-				case InputDeviceType::Both:
-					label = "(Both Controllers)";
-					labelColor = Util::GetControllerBothColor();
-					break;
-				default:
-					break;
-				}
 				ImGui::TextColored(labelColor, "%s", label);
-				if (i < combo.size() - 1)
-					ImGui::SameLine();
 			}
 		}
 		if (anyDrawn) {

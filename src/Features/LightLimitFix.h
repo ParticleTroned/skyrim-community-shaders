@@ -3,6 +3,12 @@
 #include "Buffer.h"
 #include "OverlayFeature.h"
 
+#include "Features/LightLimitFix/ParticleLights.h"
+
+#include <mutex>
+#include <shared_mutex>
+
+class ParticleLights;
 struct LightLimitFix : OverlayFeature
 {
 public:
@@ -20,7 +26,7 @@ public:
 				"Unlimited dynamic lights",
 				"Improved lighting quality",
 				"Enhanced visual realism",
-				"Enhanced visual realism" }
+				"Support for particle lights" }
 		};
 	}
 
@@ -36,6 +42,7 @@ public:
 		Disabled = (1 << 9),
 		InverseSquare = (1 << 10),
 		Linear = (1 << 11),
+		Particle = (1 << 12),
 	};
 
 	struct PositionOpt
@@ -60,6 +67,7 @@ public:
 		uint pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightData);
+	static_assert(sizeof(LightData) == 96);
 
 	struct ClusterAABB
 	{
@@ -87,19 +95,24 @@ public:
 	struct alignas(16) LightCullingCB
 	{
 		uint LightCount;
-		uint pad[3];
+		uint ContactShadowFlags;
+		uint ContactShadowParams;
+		uint pad0;
 		uint ClusterSize[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightCullingCB);
+	static_assert(sizeof(LightCullingCB) == 32);
 
 	struct alignas(16) PerFrame
 	{
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float pad0[2];
+		uint ContactShadowFlags;
+		uint ContactShadowParams;
 		uint ClusterSize[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
+	static_assert(sizeof(PerFrame) == 32);
 
 	PerFrame GetCommonBufferData();
 
@@ -115,11 +128,18 @@ public:
 
 	StrictLightDataCB strictLightDataTemp;
 
+	struct CachedParticleLight
+	{
+		float grey;
+		RE::NiPoint3 position;
+		float radius;
+	};
+
 	ConstantBuffer* strictLightDataCB = nullptr;
 
 	int eyeCount = !REL::Module::IsVR() ? 1 : 2;
-	bool previousEnableLightsVisualisation = settings.EnableLightsVisualisation;
-	bool currentEnableLightsVisualisation = settings.EnableLightsVisualisation;
+	bool previousEnableLightsVisualisation = false;
+	bool currentEnableLightsVisualisation = false;
 
 	ID3D11ComputeShader* clusterBuildingCS = nullptr;
 	ID3D11ComputeShader* clusterCullingCS = nullptr;
@@ -132,20 +152,57 @@ public:
 	eastl::unique_ptr<Buffer> lightIndexCounter = nullptr;
 	eastl::unique_ptr<Buffer> lightIndexList = nullptr;
 	eastl::unique_ptr<Buffer> lightGrid = nullptr;
+	eastl::unique_ptr<Buffer> contactShadowIndexCounter = nullptr;
+	eastl::unique_ptr<Buffer> contactShadowIndexList = nullptr;
+	eastl::unique_ptr<Buffer> contactShadowGrid = nullptr;
 
 	std::uint32_t lightCount = 0;
 	float lightsNear = 1;
 	float lightsFar = 16384;
+
+struct ParticleLightInfo
+	{
+		bool billboard;
+		RE::BSGeometry* node;
+		RE::NiColorA color;
+		float radiusMult = 1.0f;
+	};
+
+	struct ParticleLightReference
+	{
+		bool valid = false;
+		bool billboard = false;
+		// True when baseColor should still be multiplied by the billboard effect material/emittance.
+		bool applyEffectMaterialTint = true;
+		ParticleLights::Config config{};
+		bool hasGradientConfig = false;
+		ParticleLights::GradientConfig gradientConfig{};
+		RE::NiColorA baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+		std::uint64_t configVersion = 0;
+	};
+
+	eastl::hash_map<RE::BSGeometry*, ParticleLightReference> particleLightsReferences;
+	eastl::vector<ParticleLightInfo> queuedParticleLights;
+	eastl::vector<ParticleLightInfo> currentParticleLights;
+	std::mutex particleLightsQueueMutex;
+
+	void CleanupParticleLights(RE::NiNode* a_node);
 
 	RE::NiPoint3 eyePositionCached[2]{};
 	bool wasEmpty = false;
 	bool wasWorld = false;
 	int previousRoomIndex = -1;
 	uint previousShadowBitMask = 0;
+	eastl::hash_map<RE::NiLight*, bool> jsonPlacedLightCache;
+	Util::FrameChecker jsonPlacedLightCacheFrameChecker;
 
 	Util::FrameChecker frameChecker;
 
 	virtual void SetupResources() override;
+	virtual void Reset() override;
+
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
 
 	virtual void RestoreDefaultSettings() override;
 
@@ -158,7 +215,16 @@ public:
 	virtual void ClearShaderCache() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
+	void RefreshJsonPlacedLightCacheFrame();
+	bool IsJsonPlacedLight(RE::BSLight* a_bsLight, RE::NiLight* a_niLight);
+	void ApplyJsonPlacedLightIntensityScale(
+		LightData& a_light,
+		RE::BSLight* a_bsLight,
+		RE::NiLight* a_niLight,
+		bool a_isPortalStrict,
+		bool a_isInterior);
 	void UpdateLights();
 	void UpdateStructure();
 	virtual void Prepass() override;
@@ -171,11 +237,37 @@ public:
 	{
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
+		bool EnableParticleLights = true;
+		bool EnableParticleLightsCulling = true;
+		bool EnableParticleLightsDetection = true;
+		float ParticleLightsSaturation = 1.0f;
+		float ParticleBrightness = 1.0f;
+		float ParticleRadius = 1.0f;
+		float BillboardBrightness = 1.0f;
+		float BillboardRadius = 1.0f;
+		float ParticleClusterThreshold = 32.0f;  // default = previous hardcoded value
+		int MaxParticlesPerEmitter = 256;        // max default
+		float MaxParticleDistance = 6000.0f;  // distance cutoff for particle lights (in game units)
+		bool EnableParticleLightsOptimization = true;
+		float JsonPlacedLightIntensity = 1.0f;
+		bool JsonPlacedLightsInteriorsOnly = false;
+		bool JsonPlacedLightsPortalStrictOnly = false;
+		bool EnableContactShadows = false;
+		bool ContactShadowsInteriorsOnly = false;
+		bool EnableParticleContactShadows = false;
+		uint ContactShadowQuality = 1;
+		uint ContactShadowClusterBudget = 4;
+		uint ParticleContactShadowBudget = 1;
+		uint StrictContactShadowBudget = 4;
 	};
 
 	uint clusterSize[3] = { 16 };
 
 	Settings settings;
+
+	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass);
+	bool AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightReference a_reference);
+	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
 
@@ -183,7 +275,13 @@ public:
 
 	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
+	std::shared_mutex cachedParticleLightsMutex;
+	eastl::vector<CachedParticleLight> cachedParticleLights;
+
 	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
+
+	float CalculateLuminance(CachedParticleLight& light, RE::NiPoint3& point);
+	void AddParticleLightLuminance(RE::NiPoint3& targetPosition, int& numHits, float& lightLevel);
 
 	struct Hooks
 	{
@@ -205,12 +303,33 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct AIProcess_CalculateLightValue_GetLuminance
+		{
+			static float thunk(RE::ShadowSceneNode* shadowSceneNode,
+				RE::NiPoint3& targetPosition,
+				int& numHits,
+				float& sunLightLevel,
+				float& lightLevel,
+				RE::NiLight& refLight,
+				int32_t shadowBitMask);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct NiNode_Destroy
+		{
+			static void thunk(RE::NiNode* This);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		template <int N>
 		struct ValidLight
 		{
 			static bool thunk(RE::BSShaderProperty* a_property, RE::BSLight* a_light)
 			{
-				return func(a_property, a_light) && (a_light->portalStrict || !a_light->portalGraph || a_light->IsShadowLight());
+				return a_light &&
+				       a_light->light &&
+				       func(a_property, a_light) &&
+				       (a_light->portalStrict || !a_light->portalGraph || a_light->IsShadowLight());
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -221,10 +340,12 @@ public:
 
 		static void Install()
 		{
+			stl::write_thunk_call<AIProcess_CalculateLightValue_GetLuminance>(
+				REL::RelocationID(38900, 39946).address() + REL::Relocate(0x1C9, 0x1D3));
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			stl::write_vfunc<0x6, BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 			stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
-
+			stl::detour_thunk<NiNode_Destroy>(REL::RelocationID(68937, 70288));
 			stl::write_thunk_call<ValidLight1>(REL::RelocationID(100994, 107781).address() + 0x92);
 			stl::write_thunk_call<ValidLight2>(REL::RelocationID(100997, 107784).address() + REL::Relocate(0x139, 0x12A, 0x133));
 			stl::write_thunk_call<ValidLight3>(REL::RelocationID(101296, 108283).address() + REL::Relocate(0xB7, 0x7E));
@@ -232,6 +353,7 @@ public:
 			logger::info("[LLF] Installed hooks");
 		}
 	};
+
 
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; }

@@ -2672,20 +2672,33 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	uint totalLightCount = LightLimitFix::NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
+#		if defined(DEFERRED)
+	uint contactShadowOffset = 0;
+	uint contactShadowCount = 0;
+	float contactShadowNoise = 0.0;
+	bool hasContactShadowNoise = false;
+	float2 contactShadowScreenDim = LightLimitFix::GetContactShadowScreenDim();
+#		endif
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+#		if defined(DEFERRED)
+		LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
+#		endif
 	}
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
 		LightLimitFix::Light light;
+		uint clusteredLightIndex = 0;
+		bool isClusteredLight = false;
 		if (lightIndex < LightLimitFix::NumStrictLights) {
 			light = LightLimitFix::StrictLights[lightIndex];
 		} else {
-			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + (lightIndex - LightLimitFix::NumStrictLights)];
+			clusteredLightIndex = LightLimitFix::lightList[lightOffset + (lightIndex - LightLimitFix::NumStrictLights)];
 			light = LightLimitFix::lights[clusteredLightIndex];
+			isClusteredLight = true;
 
 			if (LightLimitFix::IsLightIgnored(light))
 				continue;
@@ -2693,6 +2706,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
+		if (lightDist <= EPSILON_DIVISION)
+			continue;
 
 #			if defined(ISL)
 		float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
@@ -2705,7 +2720,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-		const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+		const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
 		float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
 		float lightShadow = 1.0;
 
@@ -2717,8 +2732,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 		}
 
-		float3 normalizedLightDirection = normalize(lightDirection);
+		float3 normalizedLightDirection = lightDirection / lightDist;
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
+#			if defined(DEFERRED)
+		const bool isParticleLight = (light.lightFlags & LightLimitFix::LightFlags::Particle) != 0;
+		const bool canUseContactShadow = LightLimitFix::CanUseContactShadows(light, isParticleLight);
+		bool isContactShadowCandidate = false;
+		[branch] if (canUseContactShadow)
+		{
+			if (isClusteredLight) {
+				isContactShadowCandidate = contactShadowCount > 0 && LightLimitFix::IsContactShadowCandidate(clusteredLightIndex, contactShadowOffset, contactShadowCount);
+			} else {
+				isContactShadowCandidate = !isParticleLight && lightIndex < LightLimitFix::GetStrictContactShadowBudget();
+			}
+		}
+#			endif
 
 		float3 refractedLightDirection = normalizedLightDirection;
 #			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
@@ -2763,9 +2791,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 #			endif
 
+		float contactShadow = 1.0;
+#			if defined(DEFERRED)
+		[branch] if (
+			isContactShadowCandidate &&
+			lightAngle > 0.0 &&
+			shadowComponent != 0.0 &&
+			intensityMultiplier > 1e-5)
+		{
+			if (!hasContactShadowNoise) {
+				contactShadowNoise = Random::InterleavedGradientNoise(
+					LightLimitFix::GetContactShadowNoiseCoord(input.Position.xy, screenUV, contactShadowScreenDim),
+					SharedData::FrameCount);
+				hasContactShadowNoise = true;
+			}
+
+			contactShadow = LightLimitFix::ContactShadows(viewPosition, screenUV, light.positionWS[eyeIndex].xyz, contactShadowNoise, contactShadowScreenDim, isParticleLight, eyeIndex);
+		}
+#			endif
+
 		DirectContext pointLightContext;
 		DirectLightingOutput pointLightOutput;
-		float pointLightShadow = lightShadow * parallaxShadow;
+		float pointLightShadow = lightShadow * parallaxShadow * contactShadow;
 #			if defined(TRUE_PBR)
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
 #			else

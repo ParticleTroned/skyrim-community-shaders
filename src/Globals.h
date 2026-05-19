@@ -11,6 +11,7 @@ struct GrassLighting;
 struct HairSpecular;
 struct IBL;
 struct LightLimitFix;
+class ParticleLights;
 struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
@@ -99,6 +100,7 @@ namespace globals
 
 		namespace llf
 		{
+			extern ParticleLights particleLights;
 		}
 	}
 

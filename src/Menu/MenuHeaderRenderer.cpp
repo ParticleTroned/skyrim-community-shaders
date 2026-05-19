@@ -4,6 +4,7 @@
 #include <imgui_internal.h>
 
 #include "Fonts.h"
+#include "Features/LightLimitFix/ParticleLights.h"
 #include "Globals.h"
 #include "Plugin.h"
 #include "ShaderCache.h"
@@ -170,6 +171,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 			ImGui::TableNextColumn();
 			if (ImGui::Button("Restore Saved Settings", { -1, 0 })) {
 				globals::state->Load();
+				globals::features::llf::particleLights.GetConfigs();
 			}
 
 			// Clear Shader Cache Button
@@ -253,6 +255,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			"Restore Saved Settings",
 			[]() {
 				globals::state->Load();
+				globals::features::llf::particleLights.GetConfigs();
 			} });
 	}
 	if (uiIcons.clearCache.texture) {

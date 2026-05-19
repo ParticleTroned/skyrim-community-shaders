@@ -1977,6 +1977,8 @@ void Upscaling::DestroyVRIntermediateTextures()
 		vrIntermediateReactiveMask[i].reset();
 		vrIntermediateTransparencyMask[i].reset();
 	}
+	peripheryTAAHistoryReadIndex = 0;
+	peripheryTAAHistoryValid = false;
 }
 
 void Upscaling::UnbindUpscalingResources()
@@ -2077,12 +2079,22 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFoveatedDispatch = false;
 	static bool previousPeripheryTAA = false;
 	static bool previousFSRRuntimePathActive = false;
+	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
+	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
 	static uint32_t previousFoveatedCenterAreaMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerArea * 1000.0f));
 	static uint32_t previousFoveatedCenterHorizontalScaleMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerHorizontalScale * 1000.0f));
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
+	const uint32_t qualityModeCurrent = ClampQualityModeUInt(settings.qualityMode);
+	const uint32_t dlssPresetCurrent = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	const bool qualityModeChanged = previousQualityMode != qualityModeCurrent;
+	const bool dlssPresetChanged = previousDLSSPreset != dlssPresetCurrent;
+	const bool dlssQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
+	const bool dlssPresetResourceChanged = dlssPresetChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
+	const bool dlssResourceSettingsChanged = dlssQualityModeChanged || dlssPresetResourceChanged;
+	const bool fsrQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kFSR || a_upscalemethod == UpscaleMethod::kFSR);
 	const bool foveatedDispatchCurrent = IsFoveatedVendorDispatchEnabled(a_upscalemethod);
 	const bool peripheryTAACurrent = IsPeripheryTAAEnabled(a_upscalemethod);
 	const bool fsrRuntimePathCurrent = IsFSRRuntimePathActive(a_upscalemethod);
@@ -2097,31 +2109,63 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	const bool compareFSRRuntimePath = a_upscalemethod == UpscaleMethod::kFSR || previousUpscaleMode == UpscaleMethod::kFSR;
 	const bool fsrRuntimePathChanged = compareFSRRuntimePath && previousFSRRuntimePathActive != fsrRuntimePathCurrent;
 
-	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
-			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod), previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive,
-			previousFSRRuntimePathActive, fsrRuntimePathCurrent);
+	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || qualityModeChanged || dlssPresetResourceChanged) {
+		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
+			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
+			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 
-		const bool requiresFullPipelineUnbind = upscaleModeChanged || frameGenModeChanged || fsrRuntimePathChanged;
+		const bool requiresFullPipelineUnbind =
+			upscaleModeChanged ||
+			frameGenModeChanged ||
+			fsrRuntimePathChanged ||
+			dlssResourceSettingsChanged ||
+			fsrQualityModeChanged;
 		if (requiresFullPipelineUnbind)
 			UnbindUpscalingResources();
 
-		// Destroy previous upscaling method resources (only if they were actually active)
+		bool fsrResourcesDestroyedForQuality = false;
+		bool fsrResourcesRecreatedForQuality = false;
+		if (qualityModeChanged || dlssPresetResourceChanged) {
+			const auto destroyVRQualityResources = [&]() {
+				if (!globals::game::isVR)
+					return;
+				DestroyVRIntermediateTextures();
+				DestroyFoveatedResources();
+			};
+
+			RequestHistoryReset();
+			if (dlssResourceSettingsChanged) {
+				pendingDLSSReset.store(false, std::memory_order_relaxed);
+				streamline.DestroyDLSSResources();
+				if (qualityModeChanged)
+					destroyVRQualityResources();
+			} else if (fsrQualityModeChanged) {
+				fidelityFX.DestroyFSRResources();
+				fsrResourcesDestroyedForQuality = true;
+				destroyVRQualityResources();
+				if (a_upscalemethod == UpscaleMethod::kFSR) {
+					fidelityFX.CreateFSRResources();
+					fsrResourcesRecreatedForQuality = true;
+				}
+			}
+		}
+
+		// Destroy previous vendor resources even for Native AA/DLAA, where the method is selected
+		// but IsUpscalingActive() is false because the render scale is 1:1.
 		if (upscaleModeChanged) {
-			// Only destroy SDK resources if the previous method was actually performing upscaling
-			if (previousUpscalingWasActive) {
-				if (previousUpscaleMode == UpscaleMethod::kDLSS)
+			if (previousVendorUpscalerSelected) {
+				if (previousUpscaleMode == UpscaleMethod::kDLSS && !dlssResourceSettingsChanged)
 					streamline.DestroyDLSSResources();
-				else if (previousUpscaleMode == UpscaleMethod::kFSR)
+				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesDestroyedForQuality)
 					fidelityFX.DestroyFSRResources();
 
-				if (globals::game::isVR) {
+				if (globals::game::isVR && !dlssResourceSettingsChanged && !fsrResourcesDestroyedForQuality) {
 					DestroyVRIntermediateTextures();
 				}
 			}
 			DestroyUpscalingTextureResources(a_upscalemethod);
 
-			if (a_upscalemethod == UpscaleMethod::kFSR)
+			if (a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality)
 				fidelityFX.CreateFSRResources();
 		}
 
@@ -2131,7 +2175,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		}
 
 		// Host FSR3.1.5 and runtime FSR4 keep separate temporal state; rebuild on path changes.
-		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR) {
+		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			fidelityFX.DestroyFSRResources();
 			fidelityFX.CreateFSRResources();
 			RequestHistoryReset();
@@ -2152,9 +2196,11 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousFoveatedDispatch = foveatedDispatchCurrent;
 		previousPeripheryTAA = peripheryTAACurrent;
 		previousFSRRuntimePathActive = fsrRuntimePathCurrent;
+		previousQualityMode = qualityModeCurrent;
+		previousDLSSPreset = dlssPresetCurrent;
 		previousFoveatedCenterAreaMilli = foveatedCenterAreaMilli;
 		previousFoveatedCenterHorizontalScaleMilli = foveatedCenterHorizontalScaleMilli;
-		previousUpscalingWasActive = IsUpscalingActive();
+		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
 }
 
@@ -4063,9 +4109,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
 	auto upscaleMethod = GetUpscaleMethod();
 
-	// Delete or create resources as necessary
-	CheckResources(upscaleMethod);
-
 	// Cache original TAA values for UI
 	projectionPosScaleX = a_viewport->projectionPosScaleX;
 	projectionPosScaleY = a_viewport->projectionPosScaleY;
@@ -4116,6 +4159,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	dynamicResolutionWidthRatio = resolutionScale.x;
 	dynamicResolutionHeightRatio = resolutionScale.y;
+
+	// Resource creation uses the runtime dynamic-resolution ratios via ConvertToDynamic.
+	CheckResources(upscaleMethod);
 
 	// Disable dynamic resolution unless the game explicitly enables it
 	if (!globals::game::isVR)
@@ -4497,6 +4543,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool peripheryTAAEnabled = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool peripheryTAAPathActive = IsPeripheryTAAPathActive(a_upscaleMethod);
 	const bool fsrRuntimePathActive = IsFSRRuntimePathActive(a_upscaleMethod);
+	const uint32_t qualityMode = ClampQualityModeUInt(settings.qualityMode);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, peripheryTAAEnabled);
 	const float foveatedCenterArea = foveatedProfile.centerArea;
 	const float foveatedCenterHorizontalScale = foveatedProfile.centerHorizontalScale;
@@ -4537,6 +4584,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		const bool scaleChanged =
 			std::abs(resolutionScale.x - previousHistoryResolutionScale.x) > 1e-4f ||
 			std::abs(resolutionScale.y - previousHistoryResolutionScale.y) > 1e-4f;
+		const bool qualityModeChanged = qualityMode != previousHistoryQualityMode;
 		const bool worldStateChanged =
 			inWorld != previousHistoryInWorld ||
 			inMapMenu != previousHistoryInMapMenu;
@@ -4566,7 +4614,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 				std::abs(peripheryTAAOuterScale - previousHistoryPeripheryTAAOuterScale) > 1e-4f ||
 				std::abs(peripheryTAACenterBlendFeather - previousHistoryPeripheryTAACenterBlendFeather) > 1e-4f));
 
-		shouldReset = screenSizeChanged || scaleChanged || worldStateChanged || methodChanged || fsrRuntimePathChanged || foveatedChanged || effectivePeripheryTAAChanged || longFrameGap || cameraCut;
+		shouldReset = screenSizeChanged || scaleChanged || qualityModeChanged || worldStateChanged || methodChanged || fsrRuntimePathChanged || foveatedChanged || effectivePeripheryTAAChanged || longFrameGap || cameraCut;
 	}
 
 	if (state->pendingPostLoadRuntimeReset)
@@ -4577,6 +4625,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 
 	previousHistoryScreenSize = screenSize;
 	previousHistoryResolutionScale = resolutionScale;
+	previousHistoryQualityMode = qualityMode;
 	previousHistoryInWorld = inWorld;
 	previousHistoryInMapMenu = inMapMenu;
 	previousHistoryUpscaleMethod = a_upscaleMethod;
@@ -4718,6 +4767,17 @@ void Upscaling::Upscale()
 	ZoneScoped;
 	auto upscaleMethod = GetUpscaleMethod();
 	dlssUpscaleOutputInSharpenerTexture = false;
+
+	// VR-only workaround: loading transitions can leave DLSS in a slower persistent state
+	// until users manually toggle method/preset; force a one-shot feature rebuild before
+	// latching this frame's history state.
+	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
+		logger::debug("[Upscaling] LoadingMenu close detected - rebuilding DLSS feature");
+		UnbindUpscalingResources();
+		streamline.DestroyDLSSResources();
+		RequestHistoryReset();
+	}
+
 	UpdateHistoryResetState(upscaleMethod);
 	LatchHistoryResetForCurrentFrame();
 
@@ -4948,13 +5008,6 @@ void Upscaling::Upscale()
 		bool dispatched = false;
 		static bool loggedFoveatedFallback = false;
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
-
-		// VR-only workaround: loading transitions can leave DLSS in a slower persistent state
-		// until users manually toggle method/preset; force a one-shot feature rebuild instead.
-		if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
-			logger::debug("[Upscaling] LoadingMenu close detected - rebuilding DLSS feature");
-			streamline.DestroyDLSSResources();
-		}
 
 		if (foveatedDispatchRequested) {
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];

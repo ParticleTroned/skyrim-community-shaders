@@ -402,7 +402,7 @@ public:
 	float dynamicResolutionWidthRatio = 1.0f;
 	float dynamicResolutionHeightRatio = 1.0f;
 
-	bool previousUpscalingWasActive = false;
+	bool previousVendorUpscalerSelected = false;
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
@@ -410,6 +410,7 @@ public:
 	bool historyResetTrackingInitialized = false;
 	float2 previousHistoryScreenSize = { 0.0f, 0.0f };
 	float2 previousHistoryResolutionScale = { 1.0f, 1.0f };
+	uint32_t previousHistoryQualityMode = std::numeric_limits<uint32_t>::max();
 	bool previousHistoryInWorld = false;
 	bool previousHistoryInMapMenu = false;
 	UpscaleMethod previousHistoryUpscaleMethod = UpscaleMethod::kNONE;

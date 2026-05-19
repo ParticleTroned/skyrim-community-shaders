@@ -586,6 +586,12 @@ void Streamline::InvalidateDLSSOptionsCache()
 	dlssOptionsCache[1] = {};
 }
 
+void Streamline::ResetFrameTracking()
+{
+	frameToken = nullptr;
+	frameChecker = {};
+}
+
 bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
@@ -807,18 +813,45 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  */
 void Streamline::DestroyDLSSResources()
 {
+	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
+		InvalidateDLSSOptionsCache();
+		ResetFrameTracking();
+		return;
+	}
+
 	sl::DLSSOptions dlssOptions{};
 	dlssOptions.mode = sl::DLSSMode::eOff;
 
-	slDLSSSetOptions(viewport, dlssOptions);
-	slFreeResources(sl::kFeatureDLSS, viewport);
+	if (auto context = globals::d3d::context) {
+		context->Flush();
+	}
+
+	const auto freeViewport = [&](sl::ViewportHandle a_viewport, uint32_t a_eyeIndex) {
+		const sl::Result optionsResult = slDLSSSetOptions(a_viewport, dlssOptions);
+		if (optionsResult != sl::Result::eOk) {
+			logger::debug("[Streamline] DLSS off failed for viewport {} eye {}: {}",
+				static_cast<uint32_t>(a_viewport),
+				a_eyeIndex,
+				magic_enum::enum_name(optionsResult));
+		}
+
+		const sl::Result freeResult = slFreeResources(sl::kFeatureDLSS, a_viewport);
+		if (freeResult != sl::Result::eOk) {
+			logger::debug("[Streamline] DLSS resource free failed for viewport {} eye {}: {}",
+				static_cast<uint32_t>(a_viewport),
+				a_eyeIndex,
+				magic_enum::enum_name(freeResult));
+		}
+	};
+
+	freeViewport(viewport, 0);
 
 	if (globals::game::isVR) {
-		slDLSSSetOptions(viewportRight, dlssOptions);
-		slFreeResources(sl::kFeatureDLSS, viewportRight);
+		freeViewport(viewportRight, 1);
 	}
 
 	InvalidateDLSSOptionsCache();
+	ResetFrameTracking();
 }
 
 void Streamline::UpdateReflex()

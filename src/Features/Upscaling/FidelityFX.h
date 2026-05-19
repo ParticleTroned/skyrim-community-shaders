@@ -38,7 +38,7 @@ public:
 	FfxFsr3Context fsrContext[2];
 
 	bool featureFSR3FG = false;
-	bool featureFSR4Upscaler = false;
+	bool featureRuntimeUpscaler = false;
 
 	// Track if FidelityFX is currently being used for frame generation
 	bool isFrameGenActive = false;
@@ -53,15 +53,20 @@ public:
 	void CreateFSRResources();
 
 	void DestroyFSRResources();
+	void ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
 	bool IsAmdAdapterDetected() const;
 	bool IsNvidiaAdapterDetected() const;
 	bool IsRuntimeUpscalerPresent() const;
-	bool IsRuntimeUpscalerAutoEligible() const;
-	bool IsRuntimeUpscalerAvailable() const;
+	bool IsRuntimeFsr4AutoEligible() const;
+	bool IsRuntimeFsr4Available() const;
+	bool ShouldRequestRuntimeFsr4() const;
+	bool ShouldUseRuntimeUpscalerForFSR() const;
 	bool HasRuntimeUpscalerSupportCheckResult() const;
 	bool IsRuntimeUpscalerSupportConfirmed() const;
+	bool IsRuntimeUpscalerProviderMatchingRequestedVersion() const;
 	bool IsRuntimeUpscalerFailureLatched() const;
+	bool IsRuntimeFsr4FailureLatched() const;
 	const char* GetRuntimeUpscalerLastFramePathLabel() const;
 	std::string GetRuntimeUpscalerProviderName() const;
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
@@ -82,6 +87,7 @@ private:
 	uint32_t runtimeUpscalerMaxRenderHeight = 0;
 	uint32_t runtimeUpscalerMaxDisplayWidth = 0;
 	uint32_t runtimeUpscalerMaxDisplayHeight = 0;
+	uint32_t runtimeUpscalerRequestedVersion = 0;
 	D3D11_TEXTURE2D_DESC runtimeColorSharedDesc{};
 	D3D11_TEXTURE2D_DESC runtimeDepthSharedDesc{};
 	D3D11_TEXTURE2D_DESC runtimeMotionSharedDesc{};
@@ -112,11 +118,13 @@ private:
 	{
 		kInactive = 0,
 		kHostFsr31 = 1,
-		kRuntimeFsr4 = 2,
-		kHostFsr31Fallback = 3
+		kRuntimeFsr31 = 2,
+		kRuntimeFsr4 = 3,
+		kHostFsr31Fallback = 4
 	};
 
 	bool runtimeUpscalerFailureLatched = false;
+	bool runtimeFsr4FailureLatched = false;
 	uint32_t runtimeFallbackResetDispatchesRemaining = 0;
 	bool runtimeUpscalerLastFramePathValid = false;
 	uint32_t runtimeUpscalerLastFrameIndex = 0;
@@ -128,11 +136,14 @@ private:
 	std::string runtimeUpscalerProviderMatchedVersionName;
 
 	bool CanUseRuntimeUpscalerPath();
+	uint32_t GetPreferredRuntimeUpscalerVersion() const;
 	void ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache);
 	void LatchRuntimeUpscalerFailure();
+	void LatchRuntimeFsr4Failure();
+	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 	bool EnsureRuntimeUpscalerInterop();
-	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount);
+	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);
 	void WaitForRuntimeUpscalerIdle();
 	bool EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight,
 		const D3D11_TEXTURE2D_DESC& a_colorDesc,

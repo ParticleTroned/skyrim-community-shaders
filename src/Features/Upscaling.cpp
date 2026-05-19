@@ -906,9 +906,9 @@ void Upscaling::DrawSettings()
 
 	const bool isAmdAdapter = fidelityFX.IsAmdAdapterDetected();
 	const bool isNvidiaAdapter = fidelityFX.IsNvidiaAdapterDetected();
-	const bool runtimeFsr4Present = fidelityFX.IsRuntimeUpscalerPresent();
-	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeUpscalerAutoEligible();
-	const bool runtimeFsr4Available = fidelityFX.IsRuntimeUpscalerAvailable();
+	const bool runtimeUpscalerPresent = fidelityFX.IsRuntimeUpscalerPresent();
+	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
+	const bool runtimeFsr4Available = fidelityFX.IsRuntimeFsr4Available();
 	const bool featureDLSS = streamline.featureDLSS;
 	ApplyOpenCompositeUpscalingBlocker();
 	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
@@ -1007,27 +1007,34 @@ void Upscaling::DrawSettings()
 		settings.fsr4RuntimeEnable;
 
 	auto drawFsr4OverrideControls = [&]() {
-		if (runtimeFsr4Present && isAmdAdapter && !runtimeFsr4AutoEligible) {
+		if (runtimeUpscalerPresent && isAmdAdapter && !runtimeFsr4AutoEligible) {
 			ImGui::Checkbox("Allow FSR4 on Other AMD GPUs (Experimental)", &settings.fsr4AllowNonRx90Amd);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Enables Runtime FSR4 on AMD cards that are not auto-detected as RX 9000-series.");
-				ImGui::TextUnformatted("Keep this off unless your AMD card supports FSR4 and auto-detection failed.");
+				ImGui::TextUnformatted("Enables Runtime FSR 4 on AMD cards that are not auto-detected as RX 9000-series.");
+				ImGui::TextUnformatted("Keep this off unless your AMD card supports FSR 4 and auto-detection failed.");
 			}
 		}
-		if (!runtimeFsr4Present && runtimeFsr4Requested) {
-			ImGui::TextDisabled("Runtime FSR4 unavailable: missing FidelityFX upscaler runtime.");
-		} else if (runtimeFsr4Present && runtimeFsr4Requested && !runtimeFsr4Available && !(isAmdAdapter && !runtimeFsr4AutoEligible)) {
-			ImGui::TextDisabled("Runtime FSR4 unavailable for the detected adapter; using host FSR 3.1.5.");
+		if (!runtimeUpscalerPresent && runtimeFsr4Requested) {
+			ImGui::TextDisabled("Runtime FSR 4 unavailable: missing FidelityFX upscaler runtime.");
+		} else if (runtimeUpscalerPresent && runtimeFsr4Requested && !runtimeFsr4Available && !(isAmdAdapter && !runtimeFsr4AutoEligible)) {
+			ImGui::TextDisabled("Runtime FSR 4 unavailable for the detected adapter; using FSR 3.1.5 instead.");
 		}
 	};
 
-	if (runtimeFsr4Requested) {
+	const bool runtimeFsrPathRequested =
+		upscaleMethod == UpscaleMethod::kFSR &&
+		fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+	const bool showRuntimeFsrFramePath = runtimeFsr4Requested || runtimeFsrPathRequested;
+
+	if (showRuntimeFsrFramePath) {
 		ImGui::TextDisabled("Current frame path: %s", fidelityFX.GetRuntimeUpscalerLastFramePathLabel());
 		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
-			ImGui::TextDisabled("Runtime FSR4 is latched off after a runtime failure; using host FSR 3.1.5 fallback.");
+			ImGui::TextDisabled("Runtime FSR path is latched off after a runtime failure; using host FSR 3.1.5 fallback.");
+		} else if (fidelityFX.IsRuntimeFsr4FailureLatched()) {
+			ImGui::TextDisabled("Runtime FSR 4 is latched off after a runtime failure; using runtime FSR 3.1.5 fallback.");
 		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
 		           !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
-			ImGui::TextDisabled("Runtime FSR4 context creation failed; using host FSR 3.1.5 fallback.");
+			ImGui::TextDisabled("Runtime FSR context creation failed; using host FSR 3.1.5 fallback.");
 		}
 	}
 
@@ -1323,17 +1330,53 @@ void Upscaling::DrawSettings()
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
 			ImGui::Separator();
-			ImGui::Text("AMD FSR Mode: %s", settings.fsr4RuntimeEnable ? "Runtime FSR 4 requested" : "FSR 3.1.5");
+			const bool showRuntimeFsrDiagnostics =
+				settings.fsr4RuntimeEnable ||
+				runtimeFsrPathRequested ||
+				fidelityFX.HasRuntimeUpscalerSupportCheckResult();
+			const bool runtimeFsr4EffectiveRequested =
+				upscaleMethod == UpscaleMethod::kFSR &&
+				fidelityFX.ShouldRequestRuntimeFsr4();
+			const char* fsrModeLabel = settings.fsr4RuntimeEnable ?
+				(runtimeFsr4EffectiveRequested ? "Runtime FSR 4 requested" :
+					(runtimeFsrPathRequested ? "Runtime FSR 3.1.5 fallback requested" : "Host FSR 3.1.5 fallback requested")) :
+				(runtimeFsrPathRequested ? "Runtime FSR 3.1.5 requested" : "Host FSR 3.1.5 requested");
+			ImGui::Text("AMD FSR Mode: %s", fsrModeLabel);
 			ImGui::Text("Current Frame Path: %s", fidelityFX.GetRuntimeUpscalerLastFramePathLabel());
-			if (settings.fsr4RuntimeEnable) {
+			if (showRuntimeFsrDiagnostics) {
 				const bool supportKnown = fidelityFX.HasRuntimeUpscalerSupportCheckResult();
 				const bool supportConfirmed = fidelityFX.IsRuntimeUpscalerSupportConfirmed();
+				const bool runtimeFailureLatched = fidelityFX.IsRuntimeUpscalerFailureLatched();
+				const bool runtimeFsr4FailureLatched = fidelityFX.IsRuntimeFsr4FailureLatched();
 				const std::string requestedVersion = fidelityFX.GetRuntimeUpscalerRequestedVersionString();
 				const std::string providerName = fidelityFX.GetRuntimeUpscalerProviderName();
-				ImGui::Text("Runtime Support: %s", supportKnown ? (supportConfirmed ? "Available" : "Unavailable") : "Pending");
-				ImGui::Text("Failure Latch: %s", fidelityFX.IsRuntimeUpscalerFailureLatched() ? "Active" : "Clear");
-				ImGui::Text("Requested FSR Version: %s", requestedVersion.c_str());
-				ImGui::Text("Runtime Provider: %s", providerName.empty() ? "(not reported by SDK)" : providerName.c_str());
+				const bool providerMismatch =
+					supportKnown &&
+					supportConfirmed &&
+					!providerName.empty() &&
+					!fidelityFX.IsRuntimeUpscalerProviderMatchingRequestedVersion();
+				const auto getRuntimePathSupportLabel = [&]() -> const char* {
+					if (!runtimeUpscalerPresent)
+						return "Unavailable (missing runtime)";
+					if (!runtimeFsrPathRequested && settings.fsr4RuntimeEnable)
+						return "Unavailable for adapter";
+					if (runtimeFailureLatched)
+						return "Unavailable (latched fallback)";
+					if (runtimeFsr4FailureLatched)
+						return "Available (FSR 4 fallback latched)";
+					if (!supportKnown)
+						return "Pending";
+					if (supportConfirmed && providerMismatch)
+						return "Available (provider fallback)";
+					return supportConfirmed ? "Available" : "Unavailable";
+				};
+				std::string providerDisplay = providerName.empty() ? "(not reported by SDK)" : providerName;
+				if (providerMismatch)
+					providerDisplay += " (requested version unavailable)";
+				ImGui::Text("Runtime Path Support: %s", getRuntimePathSupportLabel());
+				ImGui::Text("Failure Latch: %s", runtimeFailureLatched ? "Active" : "Clear");
+				ImGui::Text("Runtime Requested FSR Version: %s", requestedVersion.c_str());
+				ImGui::Text("Runtime Provider: %s", providerDisplay.c_str());
 			}
 		}
 
@@ -2074,15 +2117,44 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 
 void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
+	struct FoveatedLayoutKey
+	{
+		int32_t centerAreaQ = 0;
+		int32_t centerHorizontalScaleQ = 0;
+		int32_t centerFeatherQ = 0;
+		std::array<int32_t, 4> centerOffsetQ{};
+	};
+
+	const auto makeFoveatedLayoutKey = [&](bool usePeripheryTAAProfile, bool usePeripheryTAAPath) {
+		const auto profile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
+		const float centerFeather = usePeripheryTAAPath ?
+			ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) :
+			FoveatedCommon::kCenterFeather;
+		const auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(usePeripheryTAAProfile);
+
+		FoveatedLayoutKey key{};
+		key.centerAreaQ = QuantizePeripheryTAATileParam(profile.centerArea);
+		key.centerHorizontalScaleQ = QuantizePeripheryTAATileParam(profile.centerHorizontalScale);
+		key.centerFeatherQ = QuantizePeripheryTAATileParam(centerFeather);
+		key.centerOffsetQ = {
+			QuantizePeripheryTAATileParam(centerOffsets[0].x),
+			QuantizePeripheryTAATileParam(centerOffsets[0].y),
+			QuantizePeripheryTAATileParam(centerOffsets[1].x),
+			QuantizePeripheryTAATileParam(centerOffsets[1].y)
+		};
+		return key;
+	};
+
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
 	static bool previousFrameGenMode = false;
 	static bool previousFoveatedDispatch = false;
 	static bool previousPeripheryTAA = false;
 	static bool previousFSRRuntimePathActive = false;
+	static bool previousFSRRuntimeFsr4Configured = false;
+	static bool previousFSRRuntimeFsr4Active = false;
 	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
 	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	static uint32_t previousFoveatedCenterAreaMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerArea * 1000.0f));
-	static uint32_t previousFoveatedCenterHorizontalScaleMilli = static_cast<uint32_t>(std::round(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerHorizontalScale * 1000.0f));
+	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
@@ -2097,19 +2169,40 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	const bool fsrQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kFSR || a_upscalemethod == UpscaleMethod::kFSR);
 	const bool foveatedDispatchCurrent = IsFoveatedVendorDispatchEnabled(a_upscalemethod);
 	const bool peripheryTAACurrent = IsPeripheryTAAEnabled(a_upscalemethod);
+	const bool peripheryTAAPathCurrent = IsPeripheryTAAPathActive(a_upscalemethod);
 	const bool fsrRuntimePathCurrent = IsFSRRuntimePathActive(a_upscalemethod);
-	const auto effectiveProfile = GetFoveatedMaskProfileParams(settings, peripheryTAACurrent);
-	const uint32_t foveatedCenterAreaMilli = static_cast<uint32_t>(std::round(effectiveProfile.centerArea * 1000.0f));
-	const uint32_t foveatedCenterHorizontalScaleMilli = static_cast<uint32_t>(std::round(effectiveProfile.centerHorizontalScale * 1000.0f));
+	const bool fsrRuntimeFsr4Configured =
+		a_upscalemethod == UpscaleMethod::kFSR &&
+		settings.fsr4RuntimeEnable &&
+		fidelityFX.IsRuntimeFsr4Available();
+	const bool fsrRuntimeFsr4Current = IsFSRRuntimeFsr4PathActive(a_upscalemethod);
+	const FoveatedLayoutKey foveatedLayoutCurrent = makeFoveatedLayoutKey(peripheryTAACurrent, peripheryTAAPathCurrent);
 	const bool compareFoveatedArea = foveatedDispatchCurrent || previousFoveatedDispatch;
-	const bool foveatedDispatchChanged = previousFoveatedDispatch != foveatedDispatchCurrent ||
-	                                     (compareFoveatedArea && (previousFoveatedCenterAreaMilli != foveatedCenterAreaMilli ||
-	                                                              previousFoveatedCenterHorizontalScaleMilli != foveatedCenterHorizontalScaleMilli));
+	const bool foveatedDispatchToggleChanged = previousFoveatedDispatch != foveatedDispatchCurrent;
+	const bool foveatedGeometryChanged =
+		compareFoveatedArea &&
+		(previousFoveatedLayout.centerAreaQ != foveatedLayoutCurrent.centerAreaQ ||
+		 previousFoveatedLayout.centerHorizontalScaleQ != foveatedLayoutCurrent.centerHorizontalScaleQ ||
+		 previousFoveatedLayout.centerFeatherQ != foveatedLayoutCurrent.centerFeatherQ ||
+		 previousFoveatedLayout.centerOffsetQ != foveatedLayoutCurrent.centerOffsetQ);
+	const bool foveatedDispatchChanged = foveatedDispatchToggleChanged || foveatedGeometryChanged;
 	const bool peripheryTAAChanged = previousPeripheryTAA != peripheryTAACurrent;
 	const bool compareFSRRuntimePath = a_upscalemethod == UpscaleMethod::kFSR || previousUpscaleMode == UpscaleMethod::kFSR;
 	const bool fsrRuntimePathChanged = compareFSRRuntimePath && previousFSRRuntimePathActive != fsrRuntimePathCurrent;
+	const bool fsrRuntimeFsr4ConfiguredChanged =
+		compareFSRRuntimePath &&
+		(fsrRuntimePathCurrent || previousFSRRuntimePathActive) &&
+		previousFSRRuntimeFsr4Configured != fsrRuntimeFsr4Configured;
+	const bool fsrRuntimeVersionChanged =
+		compareFSRRuntimePath &&
+		(fsrRuntimePathCurrent || previousFSRRuntimePathActive) &&
+		previousFSRRuntimeFsr4Active != fsrRuntimeFsr4Current;
+	const bool fsrRuntimeFoveatedLayoutChanged =
+		a_upscalemethod == UpscaleMethod::kFSR &&
+		fsrRuntimePathCurrent &&
+		foveatedDispatchChanged;
 
-	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || qualityModeChanged || dlssPresetResourceChanged) {
+	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged || qualityModeChanged || dlssPresetResourceChanged) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
 			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
@@ -2118,6 +2211,8 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			upscaleModeChanged ||
 			frameGenModeChanged ||
 			fsrRuntimePathChanged ||
+			fsrRuntimeFsr4ConfiguredChanged ||
+			(fsrRuntimeVersionChanged && !fidelityFX.IsRuntimeFsr4FailureLatched()) ||
 			dlssResourceSettingsChanged ||
 			fsrQualityModeChanged;
 		if (requiresFullPipelineUnbind)
@@ -2174,10 +2269,17 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateUpscalingTextureResources(a_upscalemethod);
 		}
 
-		// Host FSR3.1.5 and runtime FSR4 keep separate temporal state; rebuild on path changes.
+		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state; rebuild on path changes.
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			fidelityFX.DestroyFSRResources();
 			fidelityFX.CreateFSRResources();
+			RequestHistoryReset();
+		} else if (!upscaleModeChanged && (fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
+			if (fsrRuntimeFsr4ConfiguredChanged || !fidelityFX.IsRuntimeFsr4FailureLatched())
+				fidelityFX.ResetRuntimeUpscalerResources(true);
+			RequestHistoryReset();
+		} else if (!upscaleModeChanged && fsrRuntimeFoveatedLayoutChanged && !fsrResourcesRecreatedForQuality) {
+			// Keep runtime contexts alive; the dispatch reset flag is enough for layout-only temporal changes.
 			RequestHistoryReset();
 		}
 
@@ -2196,10 +2298,11 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousFoveatedDispatch = foveatedDispatchCurrent;
 		previousPeripheryTAA = peripheryTAACurrent;
 		previousFSRRuntimePathActive = fsrRuntimePathCurrent;
+		previousFSRRuntimeFsr4Configured = fsrRuntimeFsr4Configured;
+		previousFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
 		previousQualityMode = qualityModeCurrent;
 		previousDLSSPreset = dlssPresetCurrent;
-		previousFoveatedCenterAreaMilli = foveatedCenterAreaMilli;
-		previousFoveatedCenterHorizontalScaleMilli = foveatedCenterHorizontalScaleMilli;
+		previousFoveatedLayout = foveatedLayoutCurrent;
 		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
 }
@@ -2364,8 +2467,13 @@ bool Upscaling::IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) c
 bool Upscaling::IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const
 {
 	return a_upscaleMethod == UpscaleMethod::kFSR &&
-	       fidelityFX.IsRuntimeUpscalerAvailable() &&
-	       settings.fsr4RuntimeEnable;
+	       fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+}
+
+bool Upscaling::IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const
+{
+	return a_upscaleMethod == UpscaleMethod::kFSR &&
+	       fidelityFX.ShouldRequestRuntimeFsr4();
 }
 
 bool Upscaling::IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const
@@ -4543,6 +4651,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool peripheryTAAEnabled = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool peripheryTAAPathActive = IsPeripheryTAAPathActive(a_upscaleMethod);
 	const bool fsrRuntimePathActive = IsFSRRuntimePathActive(a_upscaleMethod);
+	const bool fsrRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(a_upscaleMethod);
 	const uint32_t qualityMode = ClampQualityModeUInt(settings.qualityMode);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, peripheryTAAEnabled);
 	const float foveatedCenterArea = foveatedProfile.centerArea;
@@ -4590,6 +4699,9 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 			inMapMenu != previousHistoryInMapMenu;
 		const bool methodChanged = a_upscaleMethod != previousHistoryUpscaleMethod;
 		const bool fsrRuntimePathChanged = fsrRuntimePathActive != previousHistoryFSRRuntimePathActive;
+		const bool fsrRuntimeVersionChanged =
+			(fsrRuntimePathActive || previousHistoryFSRRuntimePathActive) &&
+			fsrRuntimeFsr4Active != previousHistoryFSRRuntimeFsr4Active;
 		const bool compareFoveatedArea = foveatedDispatchEnabled || previousHistoryFoveatedDispatch;
 		const bool foveatedOffsetsChanged =
 			compareFoveatedArea &&
@@ -4614,7 +4726,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 				std::abs(peripheryTAAOuterScale - previousHistoryPeripheryTAAOuterScale) > 1e-4f ||
 				std::abs(peripheryTAACenterBlendFeather - previousHistoryPeripheryTAACenterBlendFeather) > 1e-4f));
 
-		shouldReset = screenSizeChanged || scaleChanged || qualityModeChanged || worldStateChanged || methodChanged || fsrRuntimePathChanged || foveatedChanged || effectivePeripheryTAAChanged || longFrameGap || cameraCut;
+		shouldReset = screenSizeChanged || scaleChanged || qualityModeChanged || worldStateChanged || methodChanged || fsrRuntimePathChanged || fsrRuntimeVersionChanged || foveatedChanged || effectivePeripheryTAAChanged || longFrameGap || cameraCut;
 	}
 
 	if (state->pendingPostLoadRuntimeReset)
@@ -4638,6 +4750,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	previousHistoryPeripheryTAAOuterScale = peripheryTAAOuterScale;
 	previousHistoryPeripheryTAACenterBlendFeather = peripheryTAACenterBlendFeather;
 	previousHistoryFSRRuntimePathActive = fsrRuntimePathActive;
+	previousHistoryFSRRuntimeFsr4Active = fsrRuntimeFsr4Active;
 }
 
 /**

@@ -9,6 +9,7 @@
 #include "Features/CloudShadows.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
+#include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -16,6 +17,7 @@
 #include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WeatherEditor.h"
+#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -60,6 +62,16 @@ void State::Draw()
 	if (shaderCache->IsEnabled()) {
 		// Process deferred cell transitions (interior detection)
 		SceneSettingsManager::GetSingleton()->Update();
+
+		if (pendingPostLoadRuntimeReset) {
+			globals::OnDataLoaded();
+			WeatherManager::GetSingleton()->ClearCache();
+			globals::features::lightLimitFix.Reset();
+			globals::features::interiorSun.isInteriorWithSun = false;
+			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
+			pendingPostLoadRuntimeReset = false;
+			logger::info("Applied deferred post-load runtime reset");
+		}
 
 		if (weatherEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");

@@ -36,6 +36,7 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
+#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/Format.h"
@@ -217,6 +218,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::screenSpaceShadows,
 		&globals::features::extendedMaterials,
 		&globals::features::wetnessEffects,
+		&globals::features::wetterness,
 		&globals::features::lightLimitFix,
 		&globals::features::dynamicCubemaps,
 		&globals::features::cloudShadows,

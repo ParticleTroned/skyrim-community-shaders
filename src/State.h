@@ -197,6 +197,7 @@ public:
 	};
 
 	bool inWorld = false;
+	bool pendingPostLoadRuntimeReset = false;
 	bool activeReflections = false;
 
 	// Cached menu open states, updated once per frame in Reset().

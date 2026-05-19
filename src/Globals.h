@@ -5,6 +5,7 @@
 struct CloudShadows;
 struct DynamicCubemaps;
 struct VolumetricShadows;
+struct Wetterness;
 struct ExtendedMaterials;
 struct GrassCollision;
 struct GrassLighting;
@@ -63,6 +64,7 @@ namespace globals
 		extern CloudShadows cloudShadows;
 		extern DynamicCubemaps dynamicCubemaps;
 		extern VolumetricShadows volumetricShadows;
+		extern Wetterness wetterness;
 		extern ExtendedMaterials extendedMaterials;
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;

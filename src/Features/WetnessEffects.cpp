@@ -1,5 +1,6 @@
 #include "WetnessEffects.h"
 #include "Menu.h"
+#include "Wetterness.h"
 #include "WeatherEditor.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -239,6 +240,16 @@ namespace Ripples
 
 void WetnessEffects::PostPostLoad()
 {
+	if (globals::features::wetterness.loaded) {
+		failedLoadedMessage =
+			"Wetness Effects was automatically disabled because Wetterness is active.\n"
+			"These features cannot run in parallel.";
+		settings.EnableWetnessEffects = false;
+		loaded = false;
+		logger::warn("[{}] {}", GetName(), failedLoadedMessage);
+		return;
+	}
+
 	splashesOfStormsLoaded = static_cast<bool>(GetModuleHandle(L"po3_SplashesOfStorms.dll"));
 	if (splashesOfStormsLoaded) {
 		logger::info("[{}] Splashes of Storms detected, compatibility enabled", GetName());
@@ -705,6 +716,16 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 	data.Raining = 0.0f;
 	data.Wetness = 0.0f;
 	data.PuddleWetness = 0.0f;
+	data.settings = settings;
+
+	if (!loaded || !settings.EnableWetnessEffects) {
+		data.settings.EnableWetnessEffects = false;
+		data.settings.EnableRaindropFx = false;
+		data.settings.EnableSplashes = false;
+		data.settings.EnableRipples = false;
+		data.settings.MaxShoreWetness = 0.0f;
+		return data;
+	}
 
 	if (settings.EnableWetnessEffects) {
 		if (auto sky = globals::game::sky) {

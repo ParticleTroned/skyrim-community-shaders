@@ -36,6 +36,7 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
+#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -56,6 +57,7 @@ namespace globals
 		CloudShadows cloudShadows{};
 		DynamicCubemaps dynamicCubemaps{};
 		VolumetricShadows volumetricShadows{};
+		Wetterness wetterness{};
 		ExtendedMaterials extendedMaterials{};
 		GrassCollision grassCollision{};
 		GrassLighting grassLighting{};

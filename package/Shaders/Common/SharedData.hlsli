@@ -42,8 +42,9 @@ namespace SharedData
 		bool OverrideComplexGrassSettings;
 
 		float BasicGrassBrightness;
+		bool EnableWrappedLighting;
 		float ComplexGrassThreshold;
-		float2 pad0;
+		float pad0;
 	};
 
 	struct CPMSettings
@@ -126,6 +127,71 @@ namespace SharedData
 		float RippleBreadth;
 		float RippleLifetimeRcp;
 		float pad0;
+	};
+
+	struct WetternessSettings
+	{
+		row_major float4x4 OcclusionViewProj;
+
+		float Time;
+		float Raining;
+		float Wetness;
+		float PuddleWetness;
+
+		uint EnableWetnessEffects;
+		float MaxRainWetness;
+		float MaxPuddleWetness;
+		float MaxShoreWetness;
+
+		uint ShoreRange;
+		float PuddleRadius;
+		float PuddleMaxAngle;
+		float PuddleMinWetness;
+
+		float MinRainWetness;
+		float SkinWetness;
+		float PuddleLayout;
+		float StoneDryingMultiplier;
+
+		float DirtDryingMultiplier;
+		float GrassDryingMultiplier;
+		uint EnableRaindropFx;
+		uint EnableSplashes;
+
+		uint EnableRipples;
+		uint EnableModernWetReflection;
+		uint EnableLegacyWetReflection;
+		float WetIndirectSpecularScale;
+
+		float RaindropFxRange;
+		float RaindropGridSizeRcp;
+		float RaindropIntervalRcp;
+		float RaindropChance;
+
+		float SplashesLifetime;
+		float SplashesStrength;
+		float SplashesMinRadius;
+		float SplashesMaxRadius;
+
+		float RippleStrength;
+		float RippleRadius;
+		float RippleBreadth;
+		float RippleLifetimeRcp;
+
+		float PostRainPuddleWaterStrength;
+		float RaindropTransitionFalloff;
+		float WetDarkeningStrength;
+		float WetHighlightReduction;
+
+		uint EnableForwardReflectionBias;
+		uint EnableVanillaReflectionCompensation;
+		float WetFilmSpecularFloorScale;
+		float ShorePersistentDarkeningStrength;
+
+		uint PackedPostRainControl;
+		uint PackedRainReflectionControl;
+		uint WetnessDistanceFadeRangePacked;
+		float RainContactWetnessScale;
 	};
 
 	struct SkylightingSettings
@@ -274,6 +340,7 @@ namespace SharedData
 		TerraOccSettings terraOccSettings;
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
+		WetternessSettings wetternessSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;

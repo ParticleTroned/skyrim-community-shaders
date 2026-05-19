@@ -21,6 +21,7 @@
 #include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
+#include "Features/Wetterness.h"
 #include "WeatherVariableRegistry.h"
 
 namespace
@@ -710,6 +711,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled at boot.");
 		ImGui::Spacing();
 		ImGui::Text("Enable the feature above to access its configuration options.");
+		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
+			ImGui::Spacing();
+			ImGui::TextColored(
+				themeSettings.StatusPalette.Error,
+				"Wetness Effects and Wetterness cannot run together. Wetness Effects will be auto-disabled when Wetterness is active.");
+		}
 	} else {
 		if (isLoaded) {
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();

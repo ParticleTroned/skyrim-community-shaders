@@ -129,6 +129,11 @@ void Feature::Load(json& o_json)
 
 	if (hasError) {
 		loaded = false;
+		if (IsHiddenFromUserView()) {
+			logger::info("Hidden feature '{}' failed to load: {}", GetShortName(), failedLoadedMessage);
+			return;
+		}
+
 		logger::warn("{}", failedLoadedMessage);
 
 		// Guard against empty shortName to prevent bogus filesystem access

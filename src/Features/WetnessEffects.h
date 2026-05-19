@@ -8,11 +8,21 @@ private:
 	static constexpr std::string_view MOD_ID = "112739";
 
 public:
+	static constexpr std::string_view kShortName = "WetnessEffects";
+
+	// AIO policy: Wetterness is the supported wetness path. Keep the legacy implementation
+	// compiled for future use, but do not expose or load it in this build.
+	static constexpr bool kExposeInAIOUserInterface = false;
+	static constexpr bool kForceDisableInAIO = true;
+
 	virtual inline std::string GetName() override { return "Wetness Effects"; }
-	virtual inline std::string GetShortName() override { return "WetnessEffects"; }
+	virtual inline std::string GetShortName() override { return std::string(kShortName); }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "WETNESS_EFFECTS"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kWater; }
+	virtual bool IsInMenu() const override { return kExposeInAIOUserInterface; }
+	virtual bool IsHiddenFromUserView() const override { return !kExposeInAIOUserInterface; }
+	virtual bool DrawFailLoadMessage() const override { return kExposeInAIOUserInterface; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{

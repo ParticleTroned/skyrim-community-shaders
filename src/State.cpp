@@ -46,6 +46,15 @@ namespace
 		"UnifiedWater"
 	};
 
+	void ForceDisableAtBootFeature(json& a_disabledFeaturesJson, std::string_view a_featureName)
+	{
+		const std::string featureKey(a_featureName);
+		if (!a_disabledFeaturesJson.value(featureKey, false)) {
+			logger::info("Feature '{}' is force-disabled at boot by this build", a_featureName);
+		}
+		a_disabledFeaturesJson[featureKey] = true;
+	}
+
 	void TraceOCUExternalMipBiasState(const Util::OCUExternalUpscalerState& a_state)
 	{
 		static bool logged = false;
@@ -81,10 +90,16 @@ namespace
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
 		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
-			{ "WetnessEffects", false }
+			{ WetnessEffects::kShortName, false }
 		};
 
 		for (const auto& [featureName, isDisabled] : defaultDisableAtBootSettings) {
+			if constexpr (WetnessEffects::kForceDisableInAIO) {
+				if (featureName == WetnessEffects::kShortName) {
+					continue;
+				}
+			}
+
 			const std::string featureKey(featureName);
 			if (!a_disabledFeaturesJson.contains(featureKey)) {
 				a_disabledFeaturesJson[featureKey] = isDisabled;
@@ -95,19 +110,23 @@ namespace
 
 	bool IsForcedDisableAtBootFeature(std::string_view a_featureName)
 	{
+		if constexpr (WetnessEffects::kForceDisableInAIO) {
+			if (a_featureName == WetnessEffects::kShortName) {
+				return true;
+			}
+		}
 		return std::ranges::find(kForcedDisableAtBootFeatures, a_featureName) != std::end(kForcedDisableAtBootFeatures);
 	}
 
 	void ApplyForcedDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
-		// Temporary kill switch: keeps Unified Water registered for cache invalidation
+		// Build-level kill switches: keep features registered for cache/config handling
 		// while preventing load, hooks, resources, prepass, and shader defines.
 		for (const auto featureName : kForcedDisableAtBootFeatures) {
-			const std::string featureKey(featureName);
-			if (!a_disabledFeaturesJson.value(featureKey, false)) {
-				logger::info("Feature '{}' is force-disabled at boot by this build", featureName);
-			}
-			a_disabledFeaturesJson[featureKey] = true;
+			ForceDisableAtBootFeature(a_disabledFeaturesJson, featureName);
+		}
+		if constexpr (WetnessEffects::kForceDisableInAIO) {
+			ForceDisableAtBootFeature(a_disabledFeaturesJson, WetnessEffects::kShortName);
 		}
 	}
 }

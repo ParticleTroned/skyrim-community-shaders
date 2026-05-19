@@ -1126,12 +1126,16 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const auto& wetterness = globals::features::wetterness;
 		const bool dynamicSSRActive = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxActive = vr.settings.EnableWaterParallaxFoveation && waterEffects.loaded;
-		const bool wetternessActive = vr.settings.EnableWetternessFoveation && wetterness.IsRuntimeActive() && !wetnessEffects.loaded;
+		const bool wetnessEffectsActive = wetnessEffects.IsRuntimeActive();
+		const bool wetternessFoveationActive =
+			vr.settings.EnableWetternessFoveation &&
+			wetterness.IsRuntimeProcessingActive() &&
+			!wetnessEffectsActive;
 		const bool anyFoveatedShaderDetailEnabled =
 			vr.settings.EnableLightingFoveation ||
 			(vr.settings.EnableSSRFoveation && dynamicSSRActive) ||
 			waterParallaxActive ||
-			wetternessActive;
+			wetternessFoveationActive;
 		if (globals::game::isVR &&
 			vr.loaded &&
 			anyFoveatedShaderDetailEnabled &&
@@ -1150,7 +1154,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 					waterParallaxActive,
 					vr.settings.EnableWaterParallaxFoveationHardCutoff));
 				const float wetternessFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
-					wetternessActive,
+					wetternessFoveationActive,
 					vr.settings.EnableWetternessFoveationHardCutoff));
 				const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
 				const float activeLightingMode = foveationActive ? lightingFoveationMode : disabledFoveationMode;

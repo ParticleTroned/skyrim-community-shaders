@@ -1271,9 +1271,10 @@ namespace
 		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxAvailable = waterEffects.loaded;
-		const bool wetnessEffectsLoaded = wetnessEffects.loaded;
-		const bool wetternessFeatureAvailable = wetterness.loaded && !wetnessEffectsLoaded;
-		const bool wetternessRuntimeActive = wetterness.IsRuntimeActive() && !wetnessEffectsLoaded;
+		const bool wetnessEffectsRuntimeActive = wetnessEffects.IsRuntimeActive();
+		const bool wetternessFeatureAvailable = wetterness.loaded && !wetnessEffectsRuntimeActive;
+		const bool wetternessSettingsAvailable = wetternessFeatureAvailable && wetterness.IsRuntimeActive();
+		const bool wetternessFoveationRuntimeActive = wetterness.IsRuntimeProcessingActive() && !wetnessEffectsRuntimeActive;
 		const bool screenSpaceShadowsRuntimeActive = screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
 		const bool screenSpaceGIFeatureAvailable = screenSpaceGI.loaded;
 		const bool screenSpaceGIRuntimeActive = screenSpaceGIFeatureAvailable && screenSpaceGI.settings.Enabled;
@@ -1281,13 +1282,13 @@ namespace
 		const bool lightingFoveationAvailable = foveatedProfileActive;
 		const bool ssrFoveationAvailable = foveatedProfileActive && ssrAvailable;
 		const bool waterParallaxFoveationAvailable = foveatedProfileActive && waterParallaxAvailable;
-		const bool wetternessFoveationAvailable = foveatedProfileActive && wetternessRuntimeActive;
+		const bool wetternessFoveationAvailable = foveatedProfileActive && wetternessSettingsAvailable;
 		const bool dynamicCubemapFoveationAvailable = foveatedProfileActive && dynamicCubemapsRuntimeActive;
 		const bool anySharedMaskConsumerEnabled =
 			settings.EnableLightingFoveation ||
 			(settings.EnableSSRFoveation && ssrAvailable) ||
 			(settings.EnableWaterParallaxFoveation && waterParallaxAvailable) ||
-			(settings.EnableWetternessFoveation && wetternessRuntimeActive) ||
+			(settings.EnableWetternessFoveation && wetternessFoveationRuntimeActive) ||
 			(settings.EnableDynamicCubemapFoveation && dynamicCubemapsRuntimeActive) ||
 			(settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemapsRuntimeActive) ||
 			(screenSpaceShadowsRuntimeActive && screenSpaceShadows.bendSettings.EnableFoveated != 0) ||
@@ -1305,7 +1306,7 @@ namespace
 
 		const bool ssrFoveationEnabled = settings.EnableSSRFoveation && ssrAvailable;
 		const bool waterParallaxFoveationEnabled = settings.EnableWaterParallaxFoveation && waterParallaxAvailable;
-		const bool wetternessFoveationEnabled = settings.EnableWetternessFoveation && wetternessRuntimeActive;
+		const bool wetternessFoveationEnabled = settings.EnableWetternessFoveation && wetternessFoveationRuntimeActive;
 		const bool dynamicCubemapCadenceEnabled = settings.EnableDynamicCubemapFoveation && dynamicCubemapsRuntimeActive;
 		const bool dynamicCubemapVisibilityEnabled = settings.EnableDynamicCubemapVisibilityThrottle && dynamicCubemapsRuntimeActive;
 		const bool screenSpaceShadowsEnabled = screenSpaceShadowsRuntimeActive && screenSpaceShadows.bendSettings.EnableFoveated != 0;
@@ -1466,7 +1467,7 @@ namespace
 			ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
 		ImGui::Separator();
 
-		ImGui::BeginDisabled(!wetternessRuntimeActive);
+		ImGui::BeginDisabled(!wetternessSettingsAvailable);
 		drawDetailBudget(
 			"Wetterness Dynamic Detail",
 			settings.EnableWetternessFoveation,
@@ -1479,12 +1480,14 @@ namespace
 			"Inside the FOV mask keeps full dynamic wet detail; outside the mask skips raindrop/ripple work and direct wet specular contribution.",
 			"This assumes only the foveated area is visibly important and can make wet microdetail transitions more visible near the mask edge.");
 		ImGui::EndDisabled();
-		if (wetnessEffectsLoaded)
+		if (wetnessEffectsRuntimeActive)
 			ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
 		else if (!wetternessFeatureAvailable)
 			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
-		else if (!wetternessRuntimeActive)
+		else if (!wetternessSettingsAvailable)
 			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
+		else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
+			ImGui::TextDisabled("Wetterness dynamic-detail foveation is idle until rain, wetness, drying, or debug overrides are active.");
 		ImGui::EndDisabled();
 
 		drawSection("Dynamic Cubemaps");
@@ -1549,12 +1552,14 @@ namespace
 				ImGui::TextDisabled("Screen Space Shadows FOV requires active Screen Space Shadows.");
 			if (screenSpaceGI.settings.EnableFoveated && !screenSpaceGIRuntimeActive)
 				ImGui::TextDisabled("SSGI FOV requires active Screen Space GI.");
-			if (settings.EnableWetternessFoveation && wetnessEffectsLoaded)
+			if (settings.EnableWetternessFoveation && wetnessEffectsRuntimeActive)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
 			else if (settings.EnableWetternessFoveation && !wetternessFeatureAvailable)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
-			else if (settings.EnableWetternessFoveation && !wetternessRuntimeActive)
+			else if (settings.EnableWetternessFoveation && !wetternessSettingsAvailable)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
+			else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
+				ImGui::TextDisabled("Wetterness dynamic-detail foveation is idle until rain, wetness, drying, or debug overrides are active.");
 		}
 	}
 

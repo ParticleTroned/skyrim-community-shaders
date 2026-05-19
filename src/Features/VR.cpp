@@ -42,6 +42,17 @@ namespace
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
 	}
 
+	ImVec2 GetTabChildSizeWithRestoreButtonReserve()
+	{
+		const auto& style = ImGui::GetStyle();
+		const float iconDimension = ImGui::GetFrameHeight() * 1.2f;
+		const float restoreButtonHeight = iconDimension + style.FramePadding.y * 2.0f;
+		const float reserveHeight = restoreButtonHeight + style.WindowPadding.y + style.ItemSpacing.y;
+		ImVec2 size = ImGui::GetContentRegionAvail();
+		size.y = size.y > reserveHeight ? size.y - reserveHeight : 1.0f;
+		return size;
+	}
+
 	HWND GetGameWindowHandle()
 	{
 		if (!globals::d3d::swapChain) {
@@ -214,7 +225,24 @@ void VR::SaveSettings(json& o_json)
 
 void VR::RestoreDefaultSettings()
 {
-	settings = {};
+	ReleaseMenuDesktopWindowManagement();
+	settings = Settings{};
+	settings.ClampToValidRanges();
+	UpdateDepthBufferCulling();
+
+	if (gMinOccludeeBoxExtent) {
+		*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+	}
+
+	overlayDragState = OverlayDragState{};
+	fixedWorldOverlayPosition = OverlayWorldPosition{};
+	wandState = WandIntersectionState{};
+	primaryControllerState = {};
+	secondaryControllerState = {};
+	menuOpenCombo = {};
+	menuCloseCombo = {};
+	savedPlayerWorldPos = {};
+	ResetComboRecording();
 }
 
 void VR::SetupResources()
@@ -568,7 +596,7 @@ void VR::DrawSettings()
 	if (ImGui::BeginTabBar("##VRTabs", ImGuiTabBarFlags_None)) {
 		// General Settings Tab
 		if (BeginTabItemWithFont("General", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRGeneralFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRGeneralFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawGeneralVRSettings();
 				DrawControllerInputInstructions();
 				DrawMenuSettings();
@@ -580,7 +608,7 @@ void VR::DrawSettings()
 		}
 
 		if (BeginTabItemWithFont("Foveation", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRFoveationFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRFoveationFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawFoveationSettings();
 			}
 			ImGui::EndChild();
@@ -588,7 +616,7 @@ void VR::DrawSettings()
 		}
 
 		if (BeginTabItemWithFont("Stereo", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRStereoFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRStereoFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawStereoSettings();
 			}
 			ImGui::EndChild();
@@ -596,7 +624,7 @@ void VR::DrawSettings()
 		}
 
 		if (BeginTabItemWithFont("Shadowmap Rasterizer", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRShadowmapRasterizerFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRShadowmapRasterizerFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawShadowmapRasterizerSettings();
 			}
 			ImGui::EndChild();
@@ -606,7 +634,7 @@ void VR::DrawSettings()
 		// Key Bindings Tab
 		if (openVRInfo.isCompatible) {
 			if (BeginTabItemWithFont("Bindings", Menu::FontRole::Subheading)) {
-				if (ImGui::BeginChild("##VRBindingsFrame", { 0, 0 }, true)) {
+				if (ImGui::BeginChild("##VRBindingsFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 					DrawKeyBindings();
 				}
 				ImGui::EndChild();
@@ -616,7 +644,7 @@ void VR::DrawSettings()
 
 		// Debug Tab (existing debug functionality)
 		if (BeginTabItemWithFont("Debug", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRDebugFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRDebugFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawDebugSection();
 			}
 			ImGui::EndChild();

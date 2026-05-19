@@ -38,6 +38,21 @@ struct OverlayFeature : Feature
 	virtual bool RequiresGlobalOverlayToggle() const { return false; }
 
 	/**
+	 * @brief Name of the root ImGui window drawn by this overlay.
+	 *
+	 * Overlays that need renderer-level routing can return their window name here.
+	 */
+	virtual const char* GetOverlayWindowName() const { return nullptr; }
+
+	/**
+	 * @brief Whether the overlay should be hidden from the desktop mirror when routed to VR.
+	 *
+	 * This is used for headset HUDs that are submitted to the VR overlay texture but should
+	 * not also appear in the desktop ImGui frame.
+	 */
+	virtual bool HideFromDesktopWhenSubmittedToVR() const { return false; }
+
+	/**
 	 * @brief Get the category for UI grouping. Overlays default to "Utility".
 	 *
 	 * Subclasses may override this to provide a different category.

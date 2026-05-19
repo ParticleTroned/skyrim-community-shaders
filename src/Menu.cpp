@@ -670,20 +670,56 @@ void Menu::DrawSettings()
 		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 	ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
-	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), layoutCond, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), layoutCond);
-	resetLayout = false;
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
 	auto baseTitle = std::format("Community Shaders {} Particle Lights (Unofficial Fork)", versionStr);
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
 	auto title = std::format("{}###CommunityShaders", baseTitle);
 
-	// Determine window flags based on docking state
-	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
 	// Check if this will be docked (we need to peek at the docking state)
 	static bool wasDocked = false;
 	bool willBeDocked = wasDocked;  // Use previous frame's state as approximation
+
+	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+	const ImVec2 defaultWindowPos = Util::GetNativeViewportSizeScaled(0.5f);
+	const ImVec2 defaultWindowSize = Util::GetNativeViewportSizeScaled(0.8f);
+	const ImVec2 centeredPivot(0.5f, 0.5f);
+	ImVec2 windowPos = defaultWindowPos;
+	ImVec2 windowSizeForOverlap = defaultWindowSize;
+	if (auto* menuWin = ImGui::FindWindowByName(title.c_str())) {
+		if (menuWin->Size.x > 0.0f && menuWin->Size.y > 0.0f) {
+			windowPos = ImVec2(menuWin->Pos.x + menuWin->Size.x * centeredPivot.x, menuWin->Pos.y + menuWin->Size.y * centeredPivot.y);
+			windowSizeForOverlap = menuWin->Size;
+		}
+	}
+
+	static bool menuWasOffsetForShaderCompile = false;
+	static ImVec2 preShaderCompileWindowPos;
+	bool restoreAfterShaderCompile = false;
+	bool autoOffsetForShaderCompile = false;
+	const bool shaderCompilationActive = globals::shaderCache && globals::shaderCache->IsCompiling();
+	if (!willBeDocked) {
+		const ImVec2 originalWindowPos = windowPos;
+		autoOffsetForShaderCompile = shaderCompilationActive &&
+		                             OverlayRenderer::MoveWindowBelowShaderCompilationStatus(windowPos, windowSizeForOverlap, centeredPivot);
+		if (autoOffsetForShaderCompile && !menuWasOffsetForShaderCompile) {
+			preShaderCompileWindowPos = originalWindowPos;
+			menuWasOffsetForShaderCompile = true;
+		} else if (!shaderCompilationActive && menuWasOffsetForShaderCompile) {
+			windowPos = preShaderCompileWindowPos;
+			restoreAfterShaderCompile = true;
+			menuWasOffsetForShaderCompile = false;
+		}
+	} else if (!shaderCompilationActive) {
+		menuWasOffsetForShaderCompile = false;
+	}
+
+	const auto windowPosCond = (autoOffsetForShaderCompile || restoreAfterShaderCompile) ? ImGuiCond_Always : layoutCond;
+	ImGui::SetNextWindowPos(windowPos, windowPosCond, centeredPivot);
+	ImGui::SetNextWindowSize(defaultWindowSize, layoutCond);
+	resetLayout = false;
+
+	// Determine window flags based on docking state
+	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
 
 	// Only hide title bar when not docked
 	if (!willBeDocked) {
@@ -698,7 +734,8 @@ void Menu::DrawSettings()
 		wasDocked = actualDocked;
 		const bool showSteamVRWindowControls =
 			REL::Module::IsVR() &&
-			globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR &&
+			globals::features::vr.openVRInfo.isCompatible &&
+			globals::features::vr.openVRInfo.runtimeType != VRDetection::RuntimeType::OpenComposite &&
 			!isDocked;
 
 		float globalScale = settings.Theme.GlobalScale;

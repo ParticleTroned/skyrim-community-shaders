@@ -6,6 +6,7 @@
 
 class Menu;
 struct OverlayFeature;
+struct ImVec2;
 
 /**
  * @brief Specialized renderer component for overlay and frame management
@@ -45,6 +46,7 @@ public:
 		const std::function<const char*(std::vector<InputCombo>)>& keyIdToString,
 		float& cachedFontSize,
 		float currentFontSize);
+	static bool MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot);
 
 private:
 	static void HandleVRSetup();
@@ -58,5 +60,5 @@ private:
 	static void RenderFirstTimeSetupOverlay();
 	static void RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays);
 	static void HandleABTesting();
-	static void FinalizeImGuiFrame();
+	static void FinalizeImGuiFrame(const std::vector<OverlayFeature*>& overlays);
 };

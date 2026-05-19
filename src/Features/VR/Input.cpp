@@ -32,18 +32,6 @@ void VR::UpdateOverlayMenuStateFromInput()
 	bool uiMenusOpen = globals::state->isMainMenuOpen ||
 	                   (globals::game::ui && globals::game::ui->IsMenuOpen(RE::TweenMenu::MENU_NAME));
 
-	bool inValidMenuState = uiMenusOpen || (globals::game::ui && (isEnabled || overlayEnabled));
-
-	if (!inValidMenuState)
-		return;
-
-	struct MenuStateMapping
-	{
-		std::function<bool()> condition;
-		std::function<void()> action;
-		bool allowWhenUIMenusClosed = false;
-	};
-
 	auto CheckCombo = [&](const std::vector<ButtonCombo>& combos) -> bool {
 		if (combos.empty())
 			return false;
@@ -73,42 +61,53 @@ void VR::UpdateOverlayMenuStateFromInput()
 		return true;
 	};
 
+	const bool menuOpenPressed = CheckCombo(settings.VRMenuOpenKeys);
+	const bool menuClosePressed = CheckCombo(settings.VRMenuCloseKeys);
+	const bool overlayOpenPressed = CheckCombo(settings.VROverlayOpenKeys);
+	const bool overlayClosePressed = CheckCombo(settings.VROverlayCloseKeys);
+	const bool canUseMenuBindings = uiMenusOpen || isEnabled;
+
+	bool inValidMenuState = uiMenusOpen || isEnabled || overlayEnabled || overlayOpenPressed || overlayClosePressed;
+
+	if (!inValidMenuState)
+		return;
+
+	struct MenuStateMapping
+	{
+		std::function<bool()> condition;
+		std::function<void()> action;
+	};
+
 	std::vector<MenuStateMapping> mappings = {
 		// Open Community Shaders menu when closed
 		{ [&]() {
-			 return CheckCombo(settings.VRMenuOpenKeys) && !isEnabled;
+			 return menuOpenPressed && !isEnabled && canUseMenuBindings;
 		 },
 			[&]() { isEnabled = true; } },
 
 		// Close Community Shaders menu when open
 		{ [&]() {
-			 return CheckCombo(settings.VRMenuCloseKeys) && isEnabled;
+			 return menuClosePressed && isEnabled;
 		 },
 			[&]() {
 				isEnabled = false;
 				overlayDragState.dragging = false;
-			},
-			true },
+			} },
 
-		// Open VR overlay when closed (only when CS menu is open)
+		// Open VR overlay when closed
 		{ [&]() {
-			 return CheckCombo(settings.VROverlayOpenKeys) && !overlayEnabled && isEnabled;
+			 return overlayOpenPressed && !overlayEnabled;
 		 },
 			[&]() { overlayEnabled = true; } },
 
-		// Close VR overlay when open (only when CS menu is open)
+		// Close VR overlay when open
 		{ [&]() {
-			 return CheckCombo(settings.VROverlayCloseKeys) && overlayEnabled && isEnabled;
+			 return overlayClosePressed && overlayEnabled;
 		 },
 			[&]() { overlayEnabled = false; } }
 	};
 
-	bool onlyAllowClose = isEnabled && !uiMenusOpen;
-
 	for (const auto& mapping : mappings) {
-		if (onlyAllowClose && !mapping.allowWhenUIMenusClosed)
-			continue;
-
 		if (mapping.condition()) {
 			mapping.action();
 			break;

@@ -116,6 +116,8 @@ public:
 
 struct PerformanceOverlay : OverlayFeature
 {
+	static constexpr const char* kOverlayWindowName = "Performance Overlay";
+
 	// ============================================================================
 	// VIRTUAL OVERRIDES (Feature.h interface)
 	// ============================================================================
@@ -126,6 +128,8 @@ struct PerformanceOverlay : OverlayFeature
 	virtual bool IsInMenu() const override { return true; }
 	bool IsOverlayVisible() const override { return settings.ShowInOverlay; }
 	bool RequiresGlobalOverlayToggle() const override { return true; }
+	const char* GetOverlayWindowName() const override { return kOverlayWindowName; }
+	bool HideFromDesktopWhenSubmittedToVR() const override { return true; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
@@ -261,6 +265,7 @@ struct PerformanceOverlay : OverlayFeature
 		static constexpr float kLabelPadding = 100.0f;               // pixels - Padding for labels
 		static constexpr float kDrawCallsTableWidth = 600.0f;        // pixels - Draw calls table width
 		static constexpr float kVRAMSectionWidth = 300.0f;           // pixels - VRAM section width
+		static constexpr float kMinWindowHeight = 280.0f;            // pixels - Minimum height before filling available space
 		static constexpr float kWindowBorderPadding = 20.0f;         // pixels - Window border padding
 		static constexpr float kDefaultFrameTimeMs = 16.67f;         // ms - Default frame time (60 FPS)
 		static constexpr int kMinFrameHistorySize = 120;             // 2s @ 60fps, 0.5s @ 240fps

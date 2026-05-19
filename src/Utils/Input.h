@@ -1,5 +1,7 @@
 #pragma once
+#include <cstdint>
 #include <format>
+#include <limits>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -350,8 +352,69 @@ public:
 			// Other types (null, string, etc.) leave combos empty
 		}
 
+		static void to_device_json(nlohmann::json& j, const std::vector<InputCombo>& combos)
+		{
+			j = nlohmann::json::array();
+			for (const auto& combo : combos) {
+				if (!combo.IsValid()) {
+					continue;
+				}
+
+				j.push_back(nlohmann::json{
+					{ "Device", ToString(combo.GetDevice()) },
+					{ "Key", combo.GetKey() }
+				});
+			}
+		}
+
+		static void from_device_json(const nlohmann::json& j, std::vector<InputCombo>& combos, InputDeviceType simpleValueDevice)
+		{
+			combos.clear();
+
+			auto parseItem = [&](const nlohmann::json& item) {
+				if (item.is_object()) {
+					InputDeviceType device = InputDeviceType::Keyboard;
+					auto deviceIt = item.find("Device");
+					if (deviceIt == item.end() || !tryParseDevice(*deviceIt, device)) {
+						return;
+					}
+
+					uint32_t key = 0;
+					auto keyIt = item.find("Key");
+					if (keyIt == item.end() || !tryGetUInt32(*keyIt, key)) {
+						return;
+					}
+
+					if (key == 0) {
+						return;
+					}
+
+					combos.emplace_back(device, key);
+					return;
+				}
+
+				uint32_t packedValue = 0;
+				if (tryGetUInt32(item, packedValue)) {
+					parseAndAdd(packedValue, combos, simpleValueDevice);
+				}
+			};
+
+			if (j.is_array()) {
+				for (const auto& item : j) {
+					parseItem(item);
+				}
+			} else {
+				parseItem(j);
+			}
+		}
+
 	private:
 		static void parseAndAdd(uint32_t val, std::vector<InputCombo>& combos)
+		{
+			parseAndAdd(val, combos, InputDeviceType::Keyboard);
+		}
+
+		static void parseAndAdd(uint32_t val, std::vector<InputCombo>& combos, InputDeviceType simpleValueDevice)
 		{
 			if (val == 0) {
 				// 0 means unbound, don't add anything
@@ -359,14 +422,69 @@ public:
 			}
 
 			if (val < 0x10000) {
-				// Simple key code - assume keyboard input
-				combos.push_back(InputCombo::Keyboard(val));
+				combos.emplace_back(simpleValueDevice, val);
 			} else {
 				// Packed InputCombo with device type in upper bits
 				InputCombo c;
 				c.deviceAndKey = val;
 				combos.push_back(c);
 			}
+		}
+
+		static bool tryParseDevice(const std::string& deviceName, InputDeviceType& device)
+		{
+			auto parsedDevice = magic_enum::enum_cast<InputDeviceType>(deviceName);
+			if (!parsedDevice || !IsValidDevice(*parsedDevice)) {
+				return false;
+			}
+
+			device = *parsedDevice;
+			return true;
+		}
+
+		static bool tryParseDevice(const nlohmann::json& deviceValue, InputDeviceType& device)
+		{
+			if (deviceValue.is_string()) {
+				return tryParseDevice(deviceValue.get<std::string>(), device);
+			}
+
+			uint32_t rawDevice = 0;
+			if (!tryGetUInt32(deviceValue, rawDevice)) {
+				return false;
+			}
+
+			const auto parsedDevice = static_cast<InputDeviceType>(rawDevice);
+			if (!IsValidDevice(parsedDevice)) {
+				return false;
+			}
+
+			device = parsedDevice;
+			return true;
+		}
+
+		static bool tryGetUInt32(const nlohmann::json& value, uint32_t& out)
+		{
+			if (!value.is_number_integer()) {
+				return false;
+			}
+
+			if (value.is_number_unsigned()) {
+				const auto raw = value.get<uint64_t>();
+				if (raw > std::numeric_limits<uint32_t>::max()) {
+					return false;
+				}
+
+				out = static_cast<uint32_t>(raw);
+				return true;
+			}
+
+			const auto raw = value.get<int64_t>();
+			if (raw < 0 || raw > std::numeric_limits<uint32_t>::max()) {
+				return false;
+			}
+
+			out = static_cast<uint32_t>(raw);
+			return true;
 		}
 	};
 };

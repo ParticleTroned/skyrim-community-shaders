@@ -25,6 +25,8 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/VR.h"
 
+#include <cstring>
+
 namespace
 {
 	std::unordered_map<ImGuiID, float> s_windowOverlapAlpha;
@@ -50,6 +52,71 @@ namespace
 		if (!win || !win->WasActive || win->Hidden)
 			return false;
 		return !(win->ParentWindow && !win->DockIsActive) && !(win->Flags & SKIP_WINDOW_FLAGS);
+	}
+
+	bool ShouldFilterVROverlaysFromDesktop()
+	{
+		return globals::features::vr.IsOpenVRCompatible() &&
+		       globals::features::vr.ShouldUseInSceneOverlay() &&
+		       globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
+	}
+
+	bool IsHiddenDesktopOverlayDrawList(const ImDrawList* drawList, const std::vector<OverlayFeature*>& overlays)
+	{
+		if (!drawList || !drawList->_OwnerName) {
+			return false;
+		}
+
+		for (const auto* overlay : overlays) {
+			if (!overlay || !overlay->HideFromDesktopWhenSubmittedToVR()) {
+				continue;
+			}
+
+			const char* windowName = overlay->GetOverlayWindowName();
+			if (windowName && strcmp(drawList->_OwnerName, windowName) == 0) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	ImDrawData* BuildDesktopDrawData(
+		ImDrawData* drawData,
+		const std::vector<OverlayFeature*>& overlays,
+		ImDrawData& filteredDrawData)
+	{
+		if (!drawData || !ShouldFilterVROverlaysFromDesktop()) {
+			return drawData;
+		}
+
+		bool removedAny = false;
+		int totalIdxCount = 0;
+		int totalVtxCount = 0;
+
+		filteredDrawData = *drawData;
+		filteredDrawData.CmdLists.clear();
+		filteredDrawData.CmdLists.reserve(drawData->CmdListsCount);
+		for (int i = 0; i < drawData->CmdListsCount; ++i) {
+			auto* cmdList = drawData->CmdLists[i];
+			if (IsHiddenDesktopOverlayDrawList(cmdList, overlays)) {
+				removedAny = true;
+				continue;
+			}
+
+			filteredDrawData.CmdLists.push_back(cmdList);
+			totalIdxCount += cmdList->IdxBuffer.Size;
+			totalVtxCount += cmdList->VtxBuffer.Size;
+		}
+
+		if (!removedAny) {
+			return drawData;
+		}
+
+		filteredDrawData.CmdListsCount = filteredDrawData.CmdLists.Size;
+		filteredDrawData.TotalIdxCount = totalIdxCount;
+		filteredDrawData.TotalVtxCount = totalVtxCount;
+		return &filteredDrawData;
 	}
 
 	// Patches DrawList background vertices for windows involved in overlap.
@@ -176,7 +243,28 @@ void OverlayRenderer::RenderOverlay(
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
 	PatchOverlappingWindowBackgrounds();
-	FinalizeImGuiFrame();
+	FinalizeImGuiFrame(drawableOverlays);
+}
+
+bool OverlayRenderer::MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot)
+{
+	auto* shaderWin = ImGui::FindWindowByName("ShaderCompilationInfo");
+	if (!shaderWin || !shaderWin->Active || shaderWin->Hidden || windowSize.x <= 0.0f || windowSize.y <= 0.0f) {
+		return false;
+	}
+
+	const ImVec2 windowMin(
+		position.x - windowSize.x * pivot.x,
+		position.y - windowSize.y * pivot.y);
+	const ImVec2 windowMax(windowMin.x + windowSize.x, windowMin.y + windowSize.y);
+	const ImRect windowRect(windowMin, windowMax);
+	const ImRect shaderRect(shaderWin->Pos, ImVec2(shaderWin->Pos.x + shaderWin->Size.x, shaderWin->Pos.y + shaderWin->Size.y));
+	if (!windowRect.Overlaps(shaderRect)) {
+		return false;
+	}
+
+	position.y += shaderRect.Max.y + ImGui::GetStyle().ItemSpacing.y - windowRect.Min.y;
+	return true;
 }
 
 void OverlayRenderer::HandleVRSetup()
@@ -394,14 +482,15 @@ void OverlayRenderer::HandleABTesting()
 	abTestingManager->DrawOverlayUI();
 }
 
-void OverlayRenderer::FinalizeImGuiFrame()
+void OverlayRenderer::FinalizeImGuiFrame(const std::vector<OverlayFeature*>& overlays)
 {
 	ImGui::Render();
 
 	// Apply background blur behind ImGui windows before rendering them
 	BackgroundBlur::RenderBackgroundBlur();
 
-	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+	ImDrawData filteredDrawData;
+	ImGui_ImplDX11_RenderDrawData(BuildDesktopDrawData(ImGui::GetDrawData(), overlays, filteredDrawData));
 
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		globals::features::vr.SubmitOverlayFrame();

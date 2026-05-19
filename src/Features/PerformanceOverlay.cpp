@@ -24,6 +24,7 @@
 #include "Features/Upscaling.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/OverlayRenderer.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
@@ -312,58 +313,70 @@ void PerformanceOverlay::DrawOverlay()
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, this->settings.ShowBorder ? ImGui::GetStyle().WindowBorderSize : 0.0f);
 
 	const float scale = Util::GetUIScale();
-
-	// Set initial position if not already set
+	const float defaultPad = Settings::kDefaultWindowPadding * scale;
 	if (!this->settings.PositionSet) {
-		const float defaultPad = Settings::kDefaultWindowPadding * scale;
-		ImGui::SetNextWindowPos(ImVec2(defaultPad, defaultPad));
 		this->settings.Position = ImVec2(defaultPad, defaultPad);
 		this->settings.PositionSet = true;
+	}
+
+	ImVec2 targetPosition = this->settings.Position;
+	bool autoOffsetForShaderCompile = false;
+
+	const float minWindowHeight = Settings::kMinWindowHeight * scale * this->settings.TextSize;
+	ImVec2 sizeGuess = ImVec2(Settings::kDrawCallsTableWidth * scale * this->settings.TextSize, minWindowHeight);
+	if (auto* perfWin = ImGui::FindWindowByName(kOverlayWindowName)) {
+		if (perfWin->Size.x > 0.0f && perfWin->Size.y > 0.0f) {
+			sizeGuess = perfWin->Size;
+		}
+	}
+	autoOffsetForShaderCompile = OverlayRenderer::MoveWindowBelowShaderCompilationStatus(targetPosition, sizeGuess, ImVec2(0.0f, 0.0f));
+
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	const float displayBottom = displaySize.y - defaultPad;
+	if (!autoOffsetForShaderCompile) {
+		const float maxTop = std::max(defaultPad, displayBottom - minWindowHeight);
+		targetPosition.y = std::clamp(targetPosition.y, defaultPad, maxTop);
 	} else {
-		ImGui::SetNextWindowPos(this->settings.Position, ImGuiCond_FirstUseEver);
+		targetPosition.y = std::clamp(targetPosition.y, defaultPad, std::max(defaultPad, displayBottom - 1.0f));
 	}
 
-	// Set window size based on whether graphs are shown, was rapidly changing size based on text
-	bool hasGraphs = this->settings.ShowPreFGFrameTimeGraph ||
-	                 (this->settings.ShowPostFGFrameTimeGraph && this->state.isFrameGenerationActive);
-	if (!hasGraphs) {
-		// Calculate minimum width needed based on actual content
-		float minWidth = 0.0f;
+	ImGui::SetNextWindowPos(targetPosition, autoOffsetForShaderCompile ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
 
-		// Calculate width needed for each enabled section
-		if (this->settings.ShowFPS) {
-			// Measure FPS text width
-			std::string fpsText = std::format("{:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
-			if (this->state.isFrameGenerationActive) {
-				fpsText = std::format("Raw FPS: {:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
-			}
-			float fpsWidth = ImGui::CalcTextSize(fpsText.c_str()).x;
-			minWidth = std::max(minWidth, fpsWidth + Settings::kLabelPadding * scale);
+	// Calculate a default/minimum size so the bottom VRAM row is not clipped on first open.
+	float minWidth = 0.0f;
+	if (this->settings.ShowFPS) {
+		std::string fpsText = std::format("{:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
+		if (this->state.isFrameGenerationActive) {
+			fpsText = std::format("Raw FPS: {:.1f} ({:.2f} ms)", this->state.smoothFps, this->state.smoothFrameTimeMs);
 		}
-		if (this->settings.ShowDrawCalls) {
-			minWidth = std::max(minWidth, Settings::kDrawCallsTableWidth * scale * this->settings.TextSize);
-		}
-		if (this->settings.ShowVRAM && menu->GetDXGIAdapter3()) {
-			minWidth = std::max(minWidth, Settings::kVRAMSectionWidth * scale * this->settings.TextSize);
-		}
-
-		minWidth += Settings::kWindowBorderPadding * scale;
-
-		// Set minimum width, but allow auto-resize for larger content
-		ImGui::SetNextWindowSize(ImVec2(minWidth, 0), ImGuiCond_FirstUseEver);
+		const float fpsWidth = ImGui::CalcTextSize(fpsText.c_str()).x;
+		minWidth = std::max(minWidth, fpsWidth + Settings::kLabelPadding * scale);
 	}
+	if (this->settings.ShowDrawCalls) {
+		minWidth = std::max(minWidth, Settings::kDrawCallsTableWidth * scale * this->settings.TextSize);
+	}
+	const bool hasVRAMSection = this->settings.ShowVRAM && menu->GetDXGIAdapter3();
+	if (hasVRAMSection) {
+		minWidth = std::max(minWidth, Settings::kVRAMSectionWidth * scale * this->settings.TextSize);
+	}
+	minWidth += Settings::kWindowBorderPadding * scale;
+
+	const float availableWindowHeight = std::max(1.0f, displayBottom - targetPosition.y);
+	const float targetWindowWidth = std::max(minWidth, sizeGuess.x);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, availableWindowHeight), ImVec2(FLT_MAX, availableWindowHeight));
+	ImGui::SetNextWindowSize(ImVec2(targetWindowWidth, availableWindowHeight), ImGuiCond_Always);
 
 	// Create the window
-	ImGui::Begin("Performance Overlay", NULL, windowFlags);
+	ImGui::Begin(kOverlayWindowName, NULL, windowFlags);
 
 	// Remember window position for next frame
 	if (ImGui::IsWindowAppearing()) {
-		ImGui::SetWindowPos(this->settings.Position);
+		ImGui::SetWindowPos(targetPosition, ImGuiCond_Always);
 	}
 
 	// Track if window has been moved
 	ImVec2 currentPos = ImGui::GetWindowPos();
-	if (currentPos.x != this->settings.Position.x || currentPos.y != this->settings.Position.y) {
+	if (!autoOffsetForShaderCompile && (currentPos.x != this->settings.Position.x || currentPos.y != this->settings.Position.y)) {
 		this->settings.Position = currentPos;
 	}
 
@@ -384,7 +397,7 @@ void PerformanceOverlay::DrawOverlay()
 	}
 
 	// VRAM & GPU Usage
-	if (this->settings.ShowVRAM && menu->GetDXGIAdapter3()) {
+	if (hasVRAMSection) {
 		DrawVRAM();
 	}
 

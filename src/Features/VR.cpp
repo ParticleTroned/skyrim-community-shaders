@@ -8,6 +8,7 @@
 #include "DynamicCubemaps.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "FoveatedCommon.h"
+#include "ShaderCache.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
 #include "SubsurfaceScattering.h"
@@ -115,6 +116,33 @@ namespace
 		vr.lastDesktopWindowManagementAttemptSecs = 0.0;
 	}
 
+	void LoadVRControllerBinding(const json& source, const char* keyName, std::vector<ButtonCombo>& target)
+	{
+		if (!source.is_object() || !source.contains(keyName)) {
+			return;
+		}
+
+		const auto& bindingJson = source.at(keyName);
+		std::vector<ButtonCombo> parsedBindings = target;
+		InputCombo::ComboList::from_device_json(bindingJson, parsedBindings, InputDeviceType::Primary);
+
+		const bool explicitlyUnbound =
+			(bindingJson.is_number_integer() && bindingJson.get<int64_t>() == 0) ||
+			(bindingJson.is_array() && bindingJson.empty());
+
+		if (!parsedBindings.empty() || explicitlyUnbound) {
+			target = std::move(parsedBindings);
+			return;
+		}
+
+		logger::warn("VR: ignoring invalid '{}' controller binding entry; keeping current/default binding", keyName);
+	}
+
+	void SaveVRControllerBinding(json& target, const char* keyName, const std::vector<ButtonCombo>& binding)
+	{
+		InputCombo::ComboList::to_device_json(target[keyName], binding);
+	}
+
 	void MigrateLegacyBindingDefaults(VR::Settings& settings)
 	{
 		const std::vector<ButtonCombo> legacyMenuOpen = {
@@ -202,6 +230,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void VR::LoadSettings(json& o_json)
 {
 	settings = o_json.get<Settings>();
+	LoadVRControllerBinding(o_json, "VRMenuOpenKeys", settings.VRMenuOpenKeys);
+	LoadVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
+	LoadVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
+	LoadVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
 	if (o_json.is_object() &&
 	    o_json.contains("VRMenuOffsetZ") &&
 	    std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon) {
@@ -219,6 +251,10 @@ void VR::LoadSettings(json& o_json)
 void VR::SaveSettings(json& o_json)
 {
 	o_json = settings;
+	SaveVRControllerBinding(o_json, "VRMenuOpenKeys", settings.VRMenuOpenKeys);
+	SaveVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
+	SaveVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
+	SaveVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
 }
 
 void VR::RestoreDefaultSettings()
@@ -240,7 +276,12 @@ void VR::RestoreDefaultSettings()
 	menuOpenCombo = {};
 	menuCloseCombo = {};
 	savedPlayerWorldPos = {};
-	ResetComboRecording();
+	isCapturingCombo = false;
+	currentComboType = ComboType::None;
+	currentComboName = nullptr;
+	recordedCombo.clear();
+	comboStartTime = 0.0;
+	recordingButtonControllers.clear();
 }
 
 void VR::SetupResources()
@@ -2637,7 +2678,8 @@ void VR::SubmitOverlayFrame()
 	auto& enabled = globals::menu->IsEnabled;
 	auto& overlayVisible = globals::menu->overlayVisible;
 	const bool shouldShowAutoHide = ShouldShowAutoHideOverlay();
-	const bool shouldRenderOverlay = enabled || overlayVisible || shouldShowAutoHide;
+	const bool shouldShowShaderCompilation = globals::shaderCache && globals::shaderCache->IsCompiling();
+	const bool shouldRenderOverlay = enabled || overlayVisible || shouldShowAutoHide || shouldShowShaderCompilation;
 	static bool wasMenuEnabled = false;
 	const bool menuJustOpened = enabled && !wasMenuEnabled;
 	wasMenuEnabled = enabled;

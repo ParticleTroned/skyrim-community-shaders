@@ -1,7 +1,10 @@
 #include "State.h"
 
 #include <algorithm>
+#include <cmath>
 #include <codecvt>
+#include <cstring>
+#include <limits>
 #include <thread>
 
 #include <pystring/pystring.h>
@@ -28,6 +31,7 @@
 #include "ShaderCache.h"
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
+#include "Utils/OpenCompositeInterop.h"
 #include "Utils/SphericalHarmonics.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
@@ -41,6 +45,38 @@ namespace
 	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
 		"UnifiedWater"
 	};
+
+	void TraceOCUExternalMipBiasState(const Util::OCUExternalUpscalerState& a_state)
+	{
+		static bool logged = false;
+		static float previousMipBias = std::numeric_limits<float>::quiet_NaN();
+		static float previousRenderScale = std::numeric_limits<float>::quiet_NaN();
+		static uint32_t previousMethod = std::numeric_limits<uint32_t>::max();
+		static uint32_t previousFlags = std::numeric_limits<uint32_t>::max();
+
+		const bool changed =
+			!logged ||
+			std::abs(previousMipBias - a_state.mipBias) > 0.0005f ||
+			std::abs(previousRenderScale - a_state.renderScale) > 0.0005f ||
+			previousMethod != a_state.method ||
+			previousFlags != a_state.flags;
+
+		if (!changed)
+			return;
+
+		logger::info(
+			"[MipBiasTrace] source=OpenCompositeUnleashedSharedState renderScale={:.3f} mipBias={:.3f} method={} flags=0x{:X}",
+			a_state.renderScale,
+			a_state.mipBias,
+			a_state.method,
+			a_state.flags);
+
+		logged = true;
+		previousMipBias = a_state.mipBias;
+		previousRenderScale = a_state.renderScale;
+		previousMethod = a_state.method;
+		previousFlags = a_state.flags;
+	}
 
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
@@ -1033,18 +1069,24 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.InMapMenu = isMapMenuOpen;
 
 		auto& upscaling = globals::features::upscaling;
+		const bool upscalingLoaded = upscaling.loaded;
+		const auto upscaleMethod = upscalingLoaded ? upscaling.GetUpscaleMethod() : Upscaling::UpscaleMethod::kNONE;
+		const auto renderSize = Util::ConvertToDynamic(screenSize, true);
 
-		if (upscaling.loaded) {
-			auto upscaleMethod = upscaling.GetUpscaleMethod();
-			if (temporal && upscaleMethod != Upscaling::UpscaleMethod::kTAA) {
-				auto renderSize = Util::ConvertToDynamic(screenSize, true);
-				data.MipBias = std::log2f(renderSize.x / screenSize.x) - 1.0f;
-			} else {
-				data.MipBias = 0;
-			}
-		} else {
-			data.MipBias = 0;
+		float computedMipBias = 0.0f;
+		if (upscalingLoaded && temporal && upscaleMethod != Upscaling::UpscaleMethod::kTAA && screenSize.x > 0.0f && renderSize.x > 0.0f) {
+			computedMipBias = std::log2f(renderSize.x / screenSize.x) - 1.0f;
 		}
+
+		Util::OCUExternalUpscalerState externalMipBiasState{};
+		const bool externalOpenCompositeMipBias =
+			globals::game::isVR &&
+			upscalingLoaded &&
+			Util::TryReadOCUExternalUpscalerState(externalMipBiasState);
+
+		data.MipBias = externalOpenCompositeMipBias ? externalMipBiasState.mipBias : computedMipBias;
+		if (externalOpenCompositeMipBias)
+			TraceOCUExternalMipBiasState(externalMipBiasState);
 		data.RefractionScale = refractionScale;
 		data.PBRMetalReflectionScale = pbrMetalReflectionScale;
 		data.PBRMetalHighlightScale = pbrMetalHighlightScale;

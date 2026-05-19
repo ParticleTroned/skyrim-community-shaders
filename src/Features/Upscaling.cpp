@@ -8,7 +8,9 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
+#include "VR.h"
 #include <Windows.h>
 #include <algorithm>
 #include <cctype>
@@ -292,7 +294,16 @@ namespace
 
 	bool ShouldProbeOpenCompositeConfig()
 	{
-		return globals::game::isVR;
+		if (!globals::game::isVR)
+			return false;
+
+		const auto& cachedInfo = globals::features::vr.openVRInfo;
+		if (cachedInfo.isAvailable)
+			return cachedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
+
+		const auto detectedInfo = VRDetection::Detect();
+		return detectedInfo.isAvailable &&
+		       detectedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 	}
 
 	std::vector<std::filesystem::path> GetOpenCompositeConfigCandidates()
@@ -373,6 +384,17 @@ namespace
 	DetectedOpenCompositeUpscalingBlocker FindOpenCompositeUpscalingBlocker()
 	{
 		DetectedOpenCompositeUpscalingBlocker blocker;
+		if (!globals::game::isVR)
+			return blocker;
+
+		Util::OCUExternalUpscalerState externalState{};
+		if (Util::TryReadOCUExternalUpscalerState(externalState)) {
+			blocker.active = true;
+			blocker.settingName = "OpenCompositeUnleashedSharedState";
+			blocker.configPath = "Local\\OpenCompositeUnleashedUpscalingState";
+			return blocker;
+		}
+
 		if (!ShouldProbeOpenCompositeConfig())
 			return blocker;
 

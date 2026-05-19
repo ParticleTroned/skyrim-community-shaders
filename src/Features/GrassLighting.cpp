@@ -1,5 +1,8 @@
 #include "GrassLighting.h"
 
+#include <algorithm>
+#include <cmath>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GrassLighting::Settings,
 	Glossiness,
@@ -7,20 +10,72 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SubsurfaceScatteringAmount,
 	OverrideComplexGrassSettings,
 	BasicGrassBrightness,
+	EnableWrappedLighting,
 	ComplexGrassThreshold)
+
+float GrassLighting::ClampGlossiness(float glossiness, float fallback)
+{
+	if (!std::isfinite(glossiness)) {
+		return fallback;
+	}
+	return std::clamp(glossiness, kGlossinessMin, kGlossinessMax);
+}
+
+float GrassLighting::ClampSpecularStrength(float specularStrength, float fallback)
+{
+	if (!std::isfinite(specularStrength)) {
+		return fallback;
+	}
+	return std::clamp(specularStrength, kSpecularStrengthMin, kSpecularStrengthMax);
+}
+
+float GrassLighting::ClampSubsurfaceScatteringAmount(float subsurfaceScatteringAmount, float fallback)
+{
+	if (!std::isfinite(subsurfaceScatteringAmount)) {
+		return fallback;
+	}
+	return std::clamp(subsurfaceScatteringAmount, kSubsurfaceScatteringAmountMin, kSubsurfaceScatteringAmountMax);
+}
+
+void GrassLighting::SanitizeSettings()
+{
+	settings.Glossiness = ClampGlossiness(settings.Glossiness, Settings{}.Glossiness);
+	settings.SpecularStrength = ClampSpecularStrength(settings.SpecularStrength, Settings{}.SpecularStrength);
+	settings.SubsurfaceScatteringAmount = ClampSubsurfaceScatteringAmount(
+		settings.SubsurfaceScatteringAmount,
+		Settings{}.SubsurfaceScatteringAmount);
+}
 
 void GrassLighting::DrawSettings()
 {
+	SanitizeSettings();
+
 	if (ImGui::TreeNodeEx("Complex Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Specular highlights for complex grass");
-		ImGui::SliderFloat("Glossiness", &settings.Glossiness, 1.0f, 100.0f);
+		ImGui::SliderFloat(
+			"Glossiness",
+			&settings.Glossiness,
+			kGlossinessMin,
+			kGlossinessMax,
+			"%.0f",
+			ImGuiSliderFlags_AlwaysClamp);
+		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Specular highlight glossiness.");
+			ImGui::TextUnformatted(
+				"Specular highlight glossiness. This also defines the dry endpoint for Wetterness grass glossiness after rain and grass drying finish.");
 		}
 
-		ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, 0.0f, 1.0f);
+		ImGui::SliderFloat(
+			"Specular Strength",
+			&settings.SpecularStrength,
+			kSpecularStrengthMin,
+			kSpecularStrengthMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Specular highlight strength.");
+			ImGui::TextUnformatted(
+				"Specular highlight strength. This also defines the dry endpoint for Wetterness grass specular strength after rain and grass drying finish.");
 		}
 
 		ImGui::Spacing();
@@ -37,13 +92,21 @@ void GrassLighting::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::SliderFloat("SSS Amount", &settings.SubsurfaceScatteringAmount, 0.0f, 1.0f);
+		ImGui::SliderFloat(
+			"SSS Amount",
+			&settings.SubsurfaceScatteringAmount,
+			kSubsurfaceScatteringAmountMin,
+			kSubsurfaceScatteringAmountMax,
+			"%.2f",
+			ImGuiSliderFlags_AlwaysClamp);
+		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Subsurface Scattering (SSS) amount. "
 				"Soft lighting controls how evenly lit an object is. "
 				"Back lighting illuminates the back face of an object. "
-				"Combined to model the transport of light through the surface. ");
+				"Combined to model the transport of light through the surface. "
+				"Values above 1.0 are stronger-than-default compatibility tuning for grass that still appears too harsh.");
 		}
 
 		ImGui::Spacing();
@@ -52,6 +115,16 @@ void GrassLighting::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Wrapped Lighting for Vanilla Grass", (bool*)&settings.EnableWrappedLighting);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Restores the legacy wrapped diffuse transition for vanilla/basic grass. "
+				"This softens the boundary between lit and back-facing grass while keeping the newer grass lighting model active. "
+				"Complex grass is unaffected.");
+		}
+		ImGui::Spacing();
+		ImGui::Spacing();
+
 		ImGui::Checkbox("Override Complex Grass Lighting Settings", (bool*)&settings.OverrideComplexGrassSettings);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -76,14 +149,17 @@ void GrassLighting::DrawSettings()
 void GrassLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSettings();
 }
 
 void GrassLighting::SaveSettings(json& o_json)
 {
+	SanitizeSettings();
 	o_json = settings;
 }
 
 void GrassLighting::RestoreDefaultSettings()
 {
 	settings = {};
+	SanitizeSettings();
 }

@@ -17,6 +17,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/WetnessEffects.h"
 #include "TruePBR.h"
+#include "Features/Wetterness.h"
 
 template <class... Ts>
 std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
@@ -36,13 +37,19 @@ std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
 
 std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
+	auto grassLightingSettings = globals::features::grassLighting.settings;
+	const auto wetternessSettings = globals::features::wetterness.GetCommonBufferData();
+	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(grassLightingSettings.Glossiness, wetternessSettings);
+	grassLightingSettings.SpecularStrength = globals::features::wetterness.GetEffectiveGrassSpecularStrength(grassLightingSettings.SpecularStrength, wetternessSettings);
+
 	return _GetFeatureBufferData(
-		globals::features::grassLighting.settings,
+		grassLightingSettings,
 		globals::features::extendedMaterials.settings,
 		globals::features::dynamicCubemaps.settings,
 		globals::features::terrainShadows.GetCommonBufferData(),
 		globals::features::lightLimitFix.GetCommonBufferData(),
 		globals::features::wetnessEffects.GetCommonBufferData(),
+		wetternessSettings,
 		globals::features::skylighting.GetCommonBufferData(a_inWorld),
 		globals::features::cloudShadows.settings,
 		globals::features::lodBlending.settings,

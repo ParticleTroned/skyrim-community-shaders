@@ -1,5 +1,8 @@
 #include "Deferred.h"
+#include "Features/InteriorSun.h"
+#include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
+#include "Features/Wetterness.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -8,6 +11,7 @@
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "WeatherManager.h"
 
 #include "ENB/ENBSeriesAPI.h"
 
@@ -16,6 +20,19 @@
 std::list<std::string> errors;
 
 bool Load();
+
+void ResetRuntimeStateAfterGameLoad()
+{
+	if (globals::state) {
+		globals::state->pendingPostLoadRuntimeReset = true;
+	}
+	globals::game::quitGame.store(false, std::memory_order_release);
+	globals::OnDataLoaded();
+	WeatherManager::GetSingleton()->ClearCache();
+	globals::features::lightLimitFix.Reset();
+	globals::features::interiorSun.isInteriorWithSun = false;
+	globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
+}
 
 void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::level::info)
 {
@@ -131,6 +148,16 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				}
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
+			}
+
+			break;
+		}
+	case SKSE::MessagingInterface::kPostLoadGame:
+	case SKSE::MessagingInterface::kNewGame:
+		{
+			if (errors.empty()) {
+				ResetRuntimeStateAfterGameLoad();
+				logger::info("Handled {}", message->type == SKSE::MessagingInterface::kPostLoadGame ? "kPostLoadGame" : "kNewGame");
 			}
 
 			break;

@@ -475,6 +475,14 @@ float GetSoftLightMultiplier(float angle, float rolloff)
 	return saturate(arg1 - arg2);
 }
 
+float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrappedLighting)
+{
+	if (useWrappedLighting)
+		return saturate(angle + wrapAmount) / (1.0 + wrapAmount);
+
+	return saturate(angle);
+}
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
@@ -629,8 +637,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirLightColor *= dirLightColorMultiplier;
 
 	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
+	float vanillaGrassWrapAmount = saturate(input.VertexNormal.w * 10.0) * 0.5;
+	bool useVanillaGrassWrappedLighting = !complex && SharedData::grassLightingSettings.EnableWrappedLighting;
 
-	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
+	lightsDiffuseColor += dirLightColor * dirDetailedShadow * GetWrappedDiffuseMultiplier(dirLightAngle, vanillaGrassWrapAmount, useVanillaGrassWrappedLighting) * Color::VanillaNormalization();
 
 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
 	vertexColor /= max(max(max(vertexColor.r, vertexColor.g), vertexColor.b), EPSILON_DIVISION);
@@ -709,7 +719,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float lightNoL = dot(normalizedLightDirection.xyz, viewDirection);
 				float3 lightDiffuseColor;
 
-				lightDiffuseColor = lightColor * saturate(lightAngle);
+				lightDiffuseColor = lightColor * GetWrappedDiffuseMultiplier(lightAngle, vanillaGrassWrapAmount, useVanillaGrassWrappedLighting);
 
 				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::VanillaNormalization();
 

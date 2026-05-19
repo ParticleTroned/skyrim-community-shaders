@@ -873,6 +873,76 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	{
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			return globals::features::lightLimitFix.loaded &&
+			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
+		}
+#if defined(_MSC_VER)
+		__except (1)
+		{
+			return false;
+		}
+#endif
+	}
+
+	void BSBatchRenderer_RenderPassImmediately1::thunk(
+		RE::BSRenderPass* a_pass,
+		uint32_t a_technique,
+		bool a_alphaTest,
+		uint32_t a_renderFlags)
+	{
+		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+			return;
+		}
+
+		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	}
+
+	struct BSBatchRenderer_RenderPassImmediately2
+	{
+		static void thunk(
+			RE::BSRenderPass* a_pass,
+			uint32_t a_technique,
+			bool a_alphaTest,
+			uint32_t a_renderFlags)
+		{
+			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				return;
+			}
+
+			if (globals::features::interiorSun.loaded) {
+				globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
+			}
+
+			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSBatchRenderer_RenderPassImmediately3
+	{
+		static void thunk(
+			RE::BSRenderPass* a_pass,
+			uint32_t a_technique,
+			bool a_alphaTest,
+			uint32_t a_renderFlags)
+		{
+			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				return;
+			}
+
+			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct BSImageSpace_Init_IBLF
 	{
 		static void thunk(char* a1,
@@ -962,6 +1032,14 @@ namespace Hooks
 		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
+
+		logger::info("Hooking BSBatchRenderer::RenderPassImmediately");
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately1>(
+			REL::RelocationID(100877, 107673).address() + REL::Relocate(0x1E5, 0x1EE));
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately2>(
+			REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately3>(
+			REL::RelocationID(100871, 107667).address() + REL::Relocate(0xEE, 0xED));
 
 		// Patch render space in BSLightingShader::SetupGeometry to always use world space
 		// The variable updateEyePosition is set to 1 when not skinned. By patching to be 0 it will always use world space

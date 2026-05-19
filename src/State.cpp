@@ -437,6 +437,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
+	advanced["Refraction Scale"] = refractionScale;
 	advanced["Partial Precision"] = enablePartialPrecision.load(std::memory_order_relaxed);
 	settings["Advanced"] = advanced;
 
@@ -512,6 +513,8 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())
 			frameAnnotations = advanced["Frame Annotations"];
+		if (advanced.contains("Refraction Scale") && advanced["Refraction Scale"].is_number())
+			refractionScale = std::clamp(advanced["Refraction Scale"].get<float>(), 0.0f, 2.0f);
 		if (advanced.contains("Partial Precision") && advanced["Partial Precision"].is_boolean())
 			enablePartialPrecision.store(advanced["Partial Precision"].get<bool>(), std::memory_order_relaxed);
 	}
@@ -985,6 +988,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		} else {
 			data.MipBias = 0;
 		}
+		data.RefractionScale = refractionScale;
 
 		// DALC to SH
 		const auto& m = dalcTransform.rotate;

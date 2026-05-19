@@ -18,17 +18,10 @@ namespace WidgetUI
 	constexpr float kSearchBarWidth = 200.0f;
 	constexpr float kSearchDropdownWidth = 300.0f;
 	constexpr size_t kSearchDropdownMaxResults = 5;
-	constexpr float kSearchDropdownBgGray = 0.16f;
 
 	// Search-result highlight pulse
 	constexpr float kHighlightDurationSeconds = 2.0f;
 	constexpr float kHighlightMaxAlpha = 0.3f;
-	constexpr ImVec4 kHighlightFrameBg = ImVec4(0.3f, 0.6f, 1.0f, 1.0f);
-	constexpr ImVec4 kHighlightFrameBgHovered = ImVec4(0.4f, 0.7f, 1.0f, 1.0f);
-
-	// "Force Weather" lock button colors
-	constexpr ImVec4 kLockButtonColor = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
-	constexpr ImVec4 kLockButtonHoverColor = ImVec4(0.3f, 0.9f, 0.3f, 1.0f);
 
 	// Icon button spacing
 	constexpr float kIconButtonSpacing = 4.0f;

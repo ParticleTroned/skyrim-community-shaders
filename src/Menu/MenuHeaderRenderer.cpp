@@ -347,7 +347,9 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 		// Handle interaction
 		if (isHovered) {
 			// Draw subtle background for hovered icon using interaction area
-			fgDrawList->AddRectFilled(interactionMin, interactionMax, IM_COL32(255, 255, 255, 40));
+			ImVec4 hoverColor = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+			hoverColor.w = 0.18f;
+			fgDrawList->AddRectFilled(interactionMin, interactionMax, ImGui::GetColorU32(hoverColor));
 
 			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 				it->callback();
@@ -375,8 +377,7 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 	// Setup button styling for transparent background with hover effects
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING, 0.0f));  // Slightly increased spacing
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);                                                           // Remove button borders
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));                                                         // Transparent button background
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.8f, 0.25f));                                     // Slightly more visible hover effect
+	auto iconButtonStyle = Util::TransparentIconButtonStyle();
 
 	// Get tint color for monochrome icons
 	ImVec4 tintColor = ImVec4(1, 1, 1, 1);
@@ -411,7 +412,6 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 
 	// Restore default style
 	ImGui::PopStyleVar(2);    // Pop both style variables: ItemSpacing and FrameBorderSize
-	ImGui::PopStyleColor(2);  // Pop both style colors: Button and ButtonHovered
 }
 
 void MenuHeaderRenderer::RenderWatermarkLogo(const Menu::UIIcons& uiIcons)

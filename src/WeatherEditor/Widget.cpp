@@ -85,7 +85,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("No saved file - reset {} to vanilla values", GetEditorID()),
-				ImVec4(0.3f, 0.8f, 1.0f, 1.0f),
+				Util::Colors::GetInfo(),
 				3.0f);
 		}
 		return;
@@ -99,7 +99,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Failed to open file for {}", GetEditorID()),
-				ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+				Util::Colors::GetWarning(),
 				3.0f);
 		}
 		return;
@@ -115,7 +115,7 @@ void Widget::Load(bool showNotification)
 			if (showNotification) {
 				EditorWindow::GetSingleton()->ShowNotification(
 					std::format("Invalid file for {} - resetting to vanilla", GetEditorID()),
-					ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+					Util::Colors::GetWarning(),
 					3.0f);
 			}
 			js = json();
@@ -128,7 +128,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Loaded saved settings for {}", GetEditorID()),
-				ImVec4(0.0f, 1.0f, 0.5f, 1.0f),
+				Util::Colors::GetSuccess(),
 				3.0f);
 		}
 
@@ -139,7 +139,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Parse error for {} - resetting to vanilla", GetEditorID()),
-				ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+				Util::Colors::GetError(),
 				3.0f);
 		}
 		js = json();
@@ -151,7 +151,7 @@ void Widget::Load(bool showNotification)
 		if (showNotification) {
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Error loading {} - resetting to vanilla", GetEditorID()),
-				ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+				Util::Colors::GetError(),
 				3.0f);
 		}
 		js = json();
@@ -183,7 +183,7 @@ void Widget::Delete()
 
 		EditorWindow::GetSingleton()->ShowNotification(
 			std::format("Deleted {} - reverted to vanilla values", GetEditorID()),
-			ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+			Util::Colors::GetSuccess(),
 			3.0f);
 	} catch (const std::filesystem::filesystem_error& e) {
 		logger::warn("Error deleting settings file ({}) : {}\n", filePath, e.what());
@@ -341,18 +341,21 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		bool isLocked = editorWindow->IsWeatherLocked() && editorWindow->GetLockedWeather() == weather;
 		const char* lockLabel = isLocked ? "Unlock" : "Force Weather";
 
+		auto drawButton = [&]() {
+			if (ImGui::Button(lockLabel)) {
+				if (isLocked)
+					editorWindow->UnlockWeather();
+				else
+					editorWindow->LockWeather(weather);
+			}
+		};
+
 		if (isLocked) {
-			ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kLockButtonColor);
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, WidgetUI::kLockButtonHoverColor);
+			auto lockedButtonStyle = Util::SuccessButtonStyle();
+			drawButton();
+		} else {
+			drawButton();
 		}
-		if (ImGui::Button(lockLabel)) {
-			if (isLocked)
-				editorWindow->UnlockWeather();
-			else
-				editorWindow->LockWeather(weather);
-		}
-		if (isLocked)
-			ImGui::PopStyleColor(2);
 		Util::AddTooltip(isLocked ? "Unlock Weather" : "Force This Weather");
 	};
 
@@ -375,8 +378,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 		// Transparent icon button style
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.8f, 0.25f));
+		auto iconButtonStyle = Util::TransparentIconButtonStyle();
 
 		auto iconButton = [&](const char* suffix, void* texture, const char* tooltip, auto callback) {
 			if (!texture)
@@ -414,7 +416,6 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		}
 
 		drawUnsavedIndicator();
-		ImGui::PopStyleColor(2);
 		ImGui::PopStyleVar(2);
 	} else {
 		if (!menu) {
@@ -500,7 +501,7 @@ void Widget::DrawSearchDropdown()
 	ImGui::SetNextWindowPos(searchDropdownAnchor, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(WidgetUI::kSearchDropdownWidth * scale, 0));
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
-	const ImVec4 dropdownBg(WidgetUI::kSearchDropdownBgGray, WidgetUI::kSearchDropdownBgGray, WidgetUI::kSearchDropdownBgGray, 1.0f);
+	const ImVec4 dropdownBg = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
 	ImGui::PushStyleColor(ImGuiCol_WindowBg, dropdownBg);
 	const std::string dropdownWindowId = std::format("##SearchDropdown_{}", static_cast<const void*>(this));
 	if (ImGui::Begin(dropdownWindowId.c_str(), nullptr,
@@ -599,12 +600,10 @@ void Widget::PushHighlightStyle(const std::string& settingId)
 	const float normalized = std::clamp(elapsed / WidgetUI::kHighlightDurationSeconds, 0.0f, 1.0f);
 	const float triangularFade = 1.0f - std::abs(normalized * 2.0f - 1.0f);
 	const float alpha = std::clamp(WidgetUI::kHighlightMaxAlpha * triangularFade, 0.0f, WidgetUI::kHighlightMaxAlpha);
-	ImVec4 frameBg = WidgetUI::kHighlightFrameBg;
-	ImVec4 frameBgHovered = WidgetUI::kHighlightFrameBgHovered;
-	frameBg.w = alpha;
-	frameBgHovered.w = alpha;
-	ImGui::PushStyleColor(ImGuiCol_FrameBg, frameBg);
-	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, frameBgHovered);
+	const auto* menu = globals::menu;
+	const ImVec4 highlight = menu ? menu->GetTheme().StatusPalette.InfoColor : ImVec4(0.30f, 0.76f, 0.82f, 1.0f);
+	ImGui::PushStyleColor(ImGuiCol_FrameBg, Util::Color::WithAlpha(highlight, alpha));
+	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Util::Color::WithAlpha(highlight, std::min(alpha * 1.35f, WidgetUI::kHighlightMaxAlpha)));
 }
 
 void Widget::PopHighlightStyle(const std::string& settingId)

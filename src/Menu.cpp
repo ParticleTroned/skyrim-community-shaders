@@ -89,6 +89,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ImGuiStyle,
+	Alpha,
+	DisabledAlpha,
 	WindowPadding,
 	WindowRounding,
 	WindowBorderSize,

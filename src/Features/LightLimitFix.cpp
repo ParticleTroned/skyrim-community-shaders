@@ -361,10 +361,6 @@ void LightLimitFix::DrawSettings()
 {
 	{
 		Util::BlueFrameStyleWrapper lightLimitBlueStyle(true);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.88f, 1.00f, 1.0f));
-		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.10f, 0.20f, 0.45f, 0.85f));
-		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.14f, 0.28f, 0.58f, 0.90f));
-		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.18f, 0.34f, 0.66f, 0.95f));
 
 		// Heat warp / refraction strength (moved from Advanced Settings)
 		ImGui::Text("ImageSpace Refraction");
@@ -529,7 +525,6 @@ void LightLimitFix::DrawSettings()
 			ImGui::Spacing();
 			ImGui::TreePop();
 		}
-		ImGui::PopStyleColor(4);
 	}
 	auto shaderCache = globals::shaderCache;
 
@@ -579,7 +574,7 @@ void LightLimitFix::DrawOverlay()
 	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale();
 	ImGui::SetNextWindowPos(ImVec2(pos, pos), ImGuiCond_Always);
 	ImGui::Begin("##LLFDebug", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-	ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "DEBUG FEATURE - LIGHT LIMIT VISUALISATION ENABLED");
+	ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "DEBUG FEATURE - LIGHT LIMIT VISUALISATION ENABLED");
 
 	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());

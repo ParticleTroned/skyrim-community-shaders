@@ -190,6 +190,14 @@ namespace
 		ImGui::PopStyleColor();
 		ImGui::Spacing();
 	}
+
+	void ColorEditWithTooltip(const char* label, ImVec4& color, const char* tooltip, ImGuiColorEditFlags flags = 0)
+	{
+		ImGui::ColorEdit4(label, (float*)&color, flags);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(tooltip);
+		}
+	}
 }
 
 void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state)
@@ -890,7 +898,7 @@ void SettingsTabRenderer::RenderFontsTab()
 		SeparatorTextWithFont("Font Roles", Menu::FontRole::Subheading);
 
 		if (fontCatalog.families.empty()) {
-			ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/");
+			ImGui::TextColored(themeSettings.StatusPalette.Warning, "No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/");
 		}
 
 		for (size_t roleIndex = 0; roleIndex < Menu::FontRoleDescriptors.size(); ++roleIndex) {
@@ -923,7 +931,7 @@ void SettingsTabRenderer::RenderFontsTab()
 				FontRoleGuard familyComboFont(Menu::FontRole::Body);
 				if (ImGui::BeginCombo(familyLabel.c_str(), familyPreview)) {
 					if (fontCatalog.families.empty()) {
-						ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No font families available");
+						ImGui::TextColored(themeSettings.StatusPalette.Disable, "No font families available");
 					} else {
 						for (int i = 0; i < static_cast<int>(fontCatalog.families.size()); ++i) {
 							bool isSelected = (i == familyIndex);
@@ -957,7 +965,7 @@ void SettingsTabRenderer::RenderFontsTab()
 
 			const Util::Fonts::FamilyInfo* selectedFamily = (fontCatalog.families.empty()) ? nullptr : &fontCatalog.families[familyIndex];
 			if (selectedFamily && selectedFamily->styles.empty()) {
-				ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "No style variants found for this family.");
+				ImGui::TextColored(themeSettings.StatusPalette.Warning, "No style variants found for this family.");
 			} else if (selectedFamily) {
 				int styleIndex = 0;
 				for (size_t s = 0; s < selectedFamily->styles.size(); ++s) {
@@ -1099,7 +1107,7 @@ void SettingsTabRenderer::RenderStylingTab()
 		SeparatorTextWithFont("Widgets", Menu::FontRole::Subheading);
 		{
 			FontRoleGuard comboFont(Menu::FontRole::Body);
-			ImGui::Combo("ColorButtonPosition", (int*)&style.ColorButtonPosition, "Left\0Right\0");
+			ImGui::Combo("Color Button Position", (int*)&style.ColorButtonPosition, "Left\0Right\0");
 		}
 		ImGui::SliderFloat2("Button Text Align", (float*)&style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -1161,52 +1169,56 @@ void SettingsTabRenderer::RenderColorsTab()
 
 		// Background & Text
 		if (colorFilter.PassFilter("Background"))
-			ImGui::ColorEdit4("Background", (float*)&themeSettings.Palette.Background);
+			ColorEditWithTooltip("Background", themeSettings.Palette.Background, "Base window surface color.");
 		if (colorFilter.PassFilter("Text"))
-			ImGui::ColorEdit4("Text", (float*)&themeSettings.Palette.Text);
+			ColorEditWithTooltip("Text", themeSettings.Palette.Text, "Primary text color.");
 
 		if (ImGui::TreeNodeEx("Borders & Separators", ImGuiTreeNodeFlags_DefaultOpen)) {
 			if (colorFilter.PassFilter("Window Border"))
-				ImGui::ColorEdit4("Window Border", (float*)&themeSettings.Palette.WindowBorder);
-			if (colorFilter.PassFilter("Slider & Input Background"))
-				ImGui::ColorEdit4("Slider & Input Background", (float*)&themeSettings.Palette.FrameBorder);
+				ColorEditWithTooltip("Window Border", themeSettings.Palette.WindowBorder, "Outer window border color.");
+			if (colorFilter.PassFilter("Control Background"))
+				ColorEditWithTooltip("Control Background", themeSettings.Palette.FrameBorder, "Base background for sliders, checkboxes, inputs, and other framed controls.");
 			if (colorFilter.PassFilter("Separator Line"))
-				ImGui::ColorEdit4("Separator Line", (float*)&themeSettings.Palette.Separator);
+				ColorEditWithTooltip("Separator Line", themeSettings.Palette.Separator, "Divider and table border color.");
 			if (colorFilter.PassFilter("Resize Grip"))
-				ImGui::ColorEdit4("Resize Grip", (float*)&themeSettings.Palette.ResizeGrip);
+				ColorEditWithTooltip("Resize Grip", themeSettings.Palette.ResizeGrip, "Window resize handle color.");
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNodeEx("Feature Headings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (colorFilter.PassFilter("Default"))
-				ImGui::ColorEdit4("Default", (float*)&themeSettings.FeatureHeading.ColorDefault);
-			if (colorFilter.PassFilter("Hovered"))
-				ImGui::ColorEdit4("Hovered", (float*)&themeSettings.FeatureHeading.ColorHovered);
-			if (colorFilter.PassFilter("Minimized Transparency"))
+			if (colorFilter.PassFilter("Feature Heading"))
+				ColorEditWithTooltip("Feature Heading", themeSettings.FeatureHeading.ColorDefault, "Default section and feature heading color.");
+			if (colorFilter.PassFilter("Feature Heading Hovered"))
+				ColorEditWithTooltip("Feature Heading Hovered", themeSettings.FeatureHeading.ColorHovered, "Heading color while hovered.");
+			if (colorFilter.PassFilter("Minimized Transparency")) {
 				ImGui::SliderFloat("Minimized Transparency", &themeSettings.FeatureHeading.MinimizedFactor, 0.0f, 1.0f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Alpha multiplier used when a heading is minimized.");
+				}
+			}
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNodeEx("Status", ImGuiTreeNodeFlags_DefaultOpen)) {
 			if (colorFilter.PassFilter("Disabled"))
-				ImGui::ColorEdit4("Disabled", (float*)&themeSettings.StatusPalette.Disable);
+				ColorEditWithTooltip("Disabled", themeSettings.StatusPalette.Disable, "Inactive and unavailable controls.");
 			if (colorFilter.PassFilter("Error"))
-				ImGui::ColorEdit4("Error", (float*)&themeSettings.StatusPalette.Error);
+				ColorEditWithTooltip("Error", themeSettings.StatusPalette.Error, "Errors, destructive actions, and failed states.");
 			if (colorFilter.PassFilter("Warning"))
-				ImGui::ColorEdit4("Warning", (float*)&themeSettings.StatusPalette.Warning);
+				ColorEditWithTooltip("Warning", themeSettings.StatusPalette.Warning, "Warnings, cautionary actions, and secondary accents.");
 			if (colorFilter.PassFilter("Restart Needed"))
-				ImGui::ColorEdit4("Restart Needed", (float*)&themeSettings.StatusPalette.RestartNeeded);
+				ColorEditWithTooltip("Restart Needed", themeSettings.StatusPalette.RestartNeeded, "Feature states that require restart or reload.");
 			if (colorFilter.PassFilter("Current Hotkey"))
-				ImGui::ColorEdit4("Current Hotkey", (float*)&themeSettings.StatusPalette.CurrentHotkey);
+				ColorEditWithTooltip("Current Hotkey", themeSettings.StatusPalette.CurrentHotkey, "Currently selected hotkey highlight.");
 			if (colorFilter.PassFilter("Success"))
-				ImGui::ColorEdit4("Success", (float*)&themeSettings.StatusPalette.SuccessColor);
+				ColorEditWithTooltip("Success", themeSettings.StatusPalette.SuccessColor, "Successful and positive actions.");
 			if (colorFilter.PassFilter("Info"))
-				ImGui::ColorEdit4("Info", (float*)&themeSettings.StatusPalette.InfoColor);
+				ColorEditWithTooltip("Info", themeSettings.StatusPalette.InfoColor, "Informational accents and primary UI highlights.");
 			ImGui::TreePop();
 		}
 
 		if (ImGui::TreeNode("Full Palette")) {
-			ImGui::TextWrapped("Advanced color controls for detailed customization of all UI elements.");
+			ImGui::TextWrapped("Advanced fallback colors for ImGui elements that are not driven by the semantic palette above.");
 
 			for (int i = 0; i < ImGuiCol_COUNT; i++) {
 				const char* friendlyName = GetFriendlyColorName(i);

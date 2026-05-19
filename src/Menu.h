@@ -274,119 +274,118 @@ public:
 		} ScrollbarOpacity;
 		struct PaletteColors
 		{
-			ImVec4 Background{ 0.10f, 0.10f, 0.10f, 0.80f };
-			ImVec4 Text{ 1.0f, 1.0f, 1.0f, 1.0f };
+			ImVec4 Background{ 0.045f, 0.055f, 0.065f, 0.92f };
+			ImVec4 Text{ 0.90f, 0.94f, 0.96f, 1.0f };
 			// Separated border controls for better theming granularity
-			ImVec4 WindowBorder{ 0.5f, 0.5f, 0.5f, 0.8f };  // Outer window borders
-			ImVec4 FrameBorder{ 0.4f, 0.4f, 0.4f, 0.7f };   // Button, slider, input field borders
-			ImVec4 Separator{ 0.5f, 0.5f, 0.5f, 0.6f };     // Internal separators and dividers
-			ImVec4 ResizeGrip{ 0.6f, 0.6f, 0.6f, 0.8f };    // Window resize grips
+			ImVec4 WindowBorder{ 0.16f, 0.27f, 0.31f, 0.88f };  // Outer window borders
+			ImVec4 FrameBorder{ 0.075f, 0.105f, 0.115f, 0.86f }; // Button, slider, input field backgrounds
+			ImVec4 Separator{ 0.18f, 0.34f, 0.38f, 0.60f };      // Internal separators and dividers
+			ImVec4 ResizeGrip{ 0.28f, 0.74f, 0.78f, 0.65f };     // Window resize grips
 		} Palette;
 		struct StatusPaletteColors
 		{
-			ImVec4 Disable{ 0.5f, 0.5f, 0.5f, 1.0f };
-			ImVec4 Error{ 1.0f, 0.4f, 0.4f, 1.0f };
-			ImVec4 Warning{ 1.0f, 0.6f, 0.2f, 1.0f };
-			ImVec4 RestartNeeded{ 0.4f, 1.0f, 0.4f, 1.0f };
-			ImVec4 CurrentHotkey{ 1.0f, 1.0f, 0.0f, 1.0f };
-			ImVec4 SuccessColor{ 0.0f, 1.0f, 0.0f, 1.0f };
-			ImVec4 InfoColor{ 0.2f, 0.6f, 1.0f, 1.0f };
+			ImVec4 Disable{ 0.46f, 0.52f, 0.55f, 0.90f };
+			ImVec4 Error{ 0.95f, 0.34f, 0.32f, 1.0f };
+			ImVec4 Warning{ 0.96f, 0.68f, 0.32f, 1.0f };
+			ImVec4 RestartNeeded{ 0.48f, 0.82f, 0.50f, 1.0f };
+			ImVec4 CurrentHotkey{ 0.96f, 0.68f, 0.32f, 1.0f };
+			ImVec4 SuccessColor{ 0.42f, 0.82f, 0.58f, 1.0f };
+			ImVec4 InfoColor{ 0.30f, 0.76f, 0.82f, 1.0f };
 		} StatusPalette;
 		struct FeatureHeadingColors
 		{
-			ImVec4 ColorDefault{ 0.8f, 0.8f, 0.8f, 1.0f };
-			ImVec4 ColorHovered{ 0.6f, 0.6f, 0.6f, 1.0f };
+			ImVec4 ColorDefault{ 0.68f, 0.88f, 0.90f, 1.0f };
+			ImVec4 ColorHovered{ 0.86f, 0.96f, 0.96f, 1.0f };
 			float MinimizedFactor = 0.7f;    // 70% of original alpha for when the header is minimized
 			float FeatureTitleScale = 1.5f;  // Scale multiplier for feature title text in settings tab
 		} FeatureHeading;
 
 		ImGuiStyle Style = []() {
 			ImGuiStyle style = {};
+			style.Alpha = 1.0f;
+			style.DisabledAlpha = 0.55f;
 			style.WindowBorderSize = 2.0f;
 			style.ChildBorderSize = 0.0f;
 			style.FrameBorderSize = 1.0f;
-			style.WindowPadding = { 8.0f, 8.0f };
-			style.WindowRounding = 12.0f;
-			style.IndentSpacing = 8.0f;
-			style.FramePadding = { 8.0f, 4.0f };
-			style.CellPadding = { 8.0f, 2.0f };
-			style.ItemSpacing = { 4.0f, 8.0f };
-			style.FrameRounding = 4.0f;
-			style.TabRounding = 4.0f;
-			style.ScrollbarRounding = 9.0f;
-			style.ScrollbarSize = 12.0f;
-			style.GrabRounding = 3.0f;
+			style.WindowPadding = { 10.0f, 8.0f };
+			style.WindowRounding = 8.0f;
+			style.IndentSpacing = 10.0f;
+			style.FramePadding = { 7.0f, 5.0f };
+			style.CellPadding = { 8.0f, 3.0f };
+			style.ItemSpacing = { 6.0f, 7.0f };
+			style.ItemInnerSpacing = { 6.0f, 4.0f };
+			style.FrameRounding = 5.0f;
+			style.TabRounding = 5.0f;
+			style.ScrollbarRounding = 8.0f;
+			style.ScrollbarSize = 11.0f;
+			style.GrabRounding = 5.0f;
 			style.GrabMinSize = 12.0f;
 			return std::move(style);
 		}();
-		// Theme by @Maksasj, edited by FiveLimbedCat
-		// url: https://github.com/ocornut/imgui/issues/707#issuecomment-1494706165
 		// Entries ordered to match imgui 1.92+ ImGuiCol_ enum (62 entries).
-		// 7 new slots were inserted in the middle of the 1.90 enum; all subsequent
-		// indices shifted — corrected here to prevent colour mismatches.
 		std::array<ImVec4, ImGuiCol_COUNT> FullPalette = {
-			ImVec4(0.9f, 0.9f, 0.9f, 0.9f),      // [0]  Text
-			ImVec4(0.6f, 0.6f, 0.6f, 1.0f),      // [1]  TextDisabled
-			ImVec4(0.1f, 0.1f, 0.15f, 1.0f),     // [2]  WindowBg
-			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),      // [3]  ChildBg
-			ImVec4(0.05f, 0.05f, 0.1f, 0.85f),   // [4]  PopupBg
-			ImVec4(0.7f, 0.7f, 0.7f, 0.65f),     // [5]  Border
+			ImVec4(0.90f, 0.94f, 0.96f, 1.00f),  // [0]  Text
+			ImVec4(0.46f, 0.52f, 0.55f, 0.58f),  // [1]  TextDisabled
+			ImVec4(0.045f, 0.055f, 0.065f, 0.92f), // [2]  WindowBg
+			ImVec4(0.055f, 0.065f, 0.075f, 0.22f), // [3]  ChildBg
+			ImVec4(0.065f, 0.075f, 0.085f, 0.96f), // [4]  PopupBg
+			ImVec4(0.16f, 0.27f, 0.31f, 0.88f),  // [5]  Border
 			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),      // [6]  BorderShadow
-			ImVec4(0.0f, 0.0f, 0.0f, 1.0f),      // [7]  FrameBg
-			ImVec4(0.9f, 0.8f, 0.8f, 0.4f),      // [8]  FrameBgHovered
-			ImVec4(0.9f, 0.65f, 0.65f, 0.45f),   // [9]  FrameBgActive
-			ImVec4(0.0f, 0.0f, 0.0f, 0.83f),     // [10] TitleBg
-			ImVec4(0.0f, 0.0f, 0.0f, 0.87f),     // [11] TitleBgActive
-			ImVec4(0.4f, 0.4f, 0.8f, 0.2f),      // [12] TitleBgCollapsed
-			ImVec4(0.01f, 0.01f, 0.02f, 0.8f),   // [13] MenuBarBg
-			ImVec4(0.2f, 0.25f, 0.3f, 0.6f),     // [14] ScrollbarBg
-			ImVec4(0.55f, 0.53f, 0.55f, 0.51f),  // [15] ScrollbarGrab
-			ImVec4(0.56f, 0.56f, 0.56f, 1.0f),   // [16] ScrollbarGrabHovered
-			ImVec4(0.56f, 0.56f, 0.56f, 0.91f),  // [17] ScrollbarGrabActive
-			ImVec4(0.9f, 0.9f, 0.9f, 0.83f),     // [18] CheckMark
-			ImVec4(0.7f, 0.7f, 0.7f, 0.62f),     // [19] SliderGrab
-			ImVec4(0.3f, 0.3f, 0.3f, 0.84f),     // [20] SliderGrabActive
-			ImVec4(0.48f, 0.72f, 0.89f, 0.49f),  // [21] Button
-			ImVec4(0.5f, 0.69f, 0.99f, 0.68f),   // [22] ButtonHovered
-			ImVec4(0.8f, 0.5f, 0.5f, 1.0f),      // [23] ButtonActive
-			ImVec4(0.3f, 0.69f, 1.0f, 0.53f),    // [24] Header
-			ImVec4(0.44f, 0.61f, 0.86f, 1.0f),   // [25] HeaderHovered
-			ImVec4(0.38f, 0.62f, 0.83f, 1.0f),   // [26] HeaderActive
-			ImVec4(0.5f, 0.5f, 0.5f, 1.0f),      // [27] Separator
-			ImVec4(0.7f, 0.6f, 0.6f, 1.0f),      // [28] SeparatorHovered
-			ImVec4(0.9f, 0.7f, 0.7f, 1.0f),      // [29] SeparatorActive
-			ImVec4(1.0f, 1.0f, 1.0f, 0.85f),     // [30] ResizeGrip
-			ImVec4(1.0f, 1.0f, 1.0f, 0.6f),      // [31] ResizeGripHovered
-			ImVec4(1.0f, 1.0f, 1.0f, 0.9f),      // [32] ResizeGripActive
-			ImVec4(0.9f, 0.9f, 0.9f, 1.0f),      // [33] InputTextCursor        (new in 1.92)
-			ImVec4(0.0f, 0.46f, 1.0f, 0.8f),     // [34] TabHovered
-			ImVec4(0.4f, 0.52f, 0.67f, 0.84f),   // [35] Tab
-			ImVec4(0.2f, 0.41f, 0.68f, 1.0f),    // [36] TabSelected
-			ImVec4(0.38f, 0.62f, 0.83f, 1.0f),   // [37] TabSelectedOverline     (new in 1.91)
-			ImVec4(0.07f, 0.1f, 0.15f, 0.97f),   // [38] TabDimmed
-			ImVec4(0.13f, 0.26f, 0.42f, 1.0f),   // [39] TabDimmedSelected
-			ImVec4(0.5f, 0.5f, 0.5f, 0.0f),      // [40] TabDimmedSelectedOverline (new in 1.91)
-			ImVec4(0.7f, 0.6f, 0.6f, 0.5f),      // [41] DockingPreview
+			ImVec4(0.075f, 0.105f, 0.115f, 0.86f), // [7]  FrameBg
+			ImVec4(0.115f, 0.220f, 0.240f, 0.92f), // [8]  FrameBgHovered
+			ImVec4(0.145f, 0.300f, 0.325f, 0.96f), // [9]  FrameBgActive
+			ImVec4(0.040f, 0.050f, 0.060f, 0.90f), // [10] TitleBg
+			ImVec4(0.070f, 0.105f, 0.115f, 0.96f), // [11] TitleBgActive
+			ImVec4(0.040f, 0.050f, 0.060f, 0.76f), // [12] TitleBgCollapsed
+			ImVec4(0.060f, 0.070f, 0.080f, 0.92f), // [13] MenuBarBg
+			ImVec4(0.055f, 0.065f, 0.075f, 0.00f), // [14] ScrollbarBg
+			ImVec4(0.110f, 0.200f, 0.220f, 0.30f), // [15] ScrollbarGrab
+			ImVec4(0.150f, 0.330f, 0.360f, 0.50f), // [16] ScrollbarGrabHovered
+			ImVec4(0.190f, 0.460f, 0.500f, 0.80f), // [17] ScrollbarGrabActive
+			ImVec4(0.30f, 0.76f, 0.82f, 1.00f),  // [18] CheckMark
+			ImVec4(0.30f, 0.76f, 0.82f, 0.82f),  // [19] SliderGrab
+			ImVec4(0.43f, 0.84f, 0.88f, 1.00f),  // [20] SliderGrabActive
+			ImVec4(0.090f, 0.180f, 0.200f, 0.72f), // [21] Button
+			ImVec4(0.120f, 0.300f, 0.330f, 0.88f), // [22] ButtonHovered
+			ImVec4(0.160f, 0.430f, 0.470f, 0.96f), // [23] ButtonActive
+			ImVec4(0.080f, 0.180f, 0.200f, 0.62f), // [24] Header
+			ImVec4(0.100f, 0.300f, 0.330f, 0.82f), // [25] HeaderHovered
+			ImVec4(0.140f, 0.420f, 0.460f, 0.94f), // [26] HeaderActive
+			ImVec4(0.18f, 0.34f, 0.38f, 0.60f),  // [27] Separator
+			ImVec4(0.30f, 0.76f, 0.82f, 0.74f),  // [28] SeparatorHovered
+			ImVec4(0.30f, 0.76f, 0.82f, 1.00f),  // [29] SeparatorActive
+			ImVec4(0.28f, 0.74f, 0.78f, 0.65f),  // [30] ResizeGrip
+			ImVec4(0.32f, 0.78f, 0.82f, 0.85f),  // [31] ResizeGripHovered
+			ImVec4(0.38f, 0.86f, 0.90f, 0.95f),  // [32] ResizeGripActive
+			ImVec4(0.30f, 0.76f, 0.82f, 1.00f),  // [33] InputTextCursor
+			ImVec4(0.120f, 0.350f, 0.380f, 0.92f), // [34] TabHovered
+			ImVec4(0.055f, 0.083f, 0.092f, 0.92f), // [35] Tab
+			ImVec4(0.085f, 0.220f, 0.240f, 0.96f), // [36] TabSelected
+			ImVec4(0.30f, 0.76f, 0.82f, 1.00f),  // [37] TabSelectedOverline
+			ImVec4(0.040f, 0.050f, 0.060f, 0.86f), // [38] TabDimmed
+			ImVec4(0.055f, 0.120f, 0.135f, 0.92f), // [39] TabDimmedSelected
+			ImVec4(0.30f, 0.76f, 0.82f, 0.45f),  // [40] TabDimmedSelectedOverline
+			ImVec4(0.30f, 0.76f, 0.82f, 0.42f),  // [41] DockingPreview
 			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),      // [42] DockingEmptyBg
-			ImVec4(1.0f, 1.0f, 1.0f, 1.0f),      // [43] PlotLines
-			ImVec4(0.0f, 0.87f, 1.0f, 1.0f),     // [44] PlotLinesHovered
-			ImVec4(0.22f, 0.26f, 0.7f, 1.0f),    // [45] PlotHistogram
-			ImVec4(0.8f, 0.26f, 0.26f, 1.0f),    // [46] PlotHistogramHovered
-			ImVec4(0.48f, 0.72f, 0.89f, 0.49f),  // [47] TableHeaderBg
-			ImVec4(0.3f, 0.3f, 0.35f, 1.0f),     // [48] TableBorderStrong
-			ImVec4(0.23f, 0.23f, 0.25f, 1.0f),   // [49] TableBorderLight
-			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),      // [50] TableRowBg              (transparent)
-			ImVec4(1.0f, 1.0f, 1.0f, 0.06f),     // [51] TableRowBgAlt           (subtle tint)
-			ImVec4(0.38f, 0.62f, 0.83f, 1.0f),   // [52] TextLink                (new in 1.92)
-			ImVec4(0.0f, 0.0f, 1.0f, 0.35f),     // [53] TextSelectedBg
-			ImVec4(0.7f, 0.7f, 0.7f, 0.65f),     // [54] TreeLines               (new in 1.92)
-			ImVec4(0.8f, 0.5f, 0.5f, 1.0f),      // [55] DragDropTarget
-			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),      // [56] DragDropTargetBg        (new in 1.92)
-			ImVec4(1.0f, 1.0f, 1.0f, 1.0f),      // [57] UnsavedMarker           (new in 1.92)
-			ImVec4(0.44f, 0.61f, 0.86f, 1.0f),   // [58] NavCursor
-			ImVec4(0.3f, 0.3f, 0.3f, 0.56f),     // [59] NavWindowingHighlight
-			ImVec4(0.2f, 0.2f, 0.2f, 0.35f),     // [60] NavWindowingDimBg
-			ImVec4(0.2f, 0.2f, 0.2f, 0.35f),     // [61] ModalWindowDimBg
+			ImVec4(0.68f, 0.88f, 0.90f, 1.00f),  // [43] PlotLines
+			ImVec4(0.30f, 0.76f, 0.82f, 1.00f),  // [44] PlotLinesHovered
+			ImVec4(0.96f, 0.68f, 0.32f, 0.90f),  // [45] PlotHistogram
+			ImVec4(1.00f, 0.78f, 0.44f, 1.00f),  // [46] PlotHistogramHovered
+			ImVec4(0.065f, 0.130f, 0.145f, 0.88f), // [47] TableHeaderBg
+			ImVec4(0.18f, 0.34f, 0.38f, 1.00f),  // [48] TableBorderStrong
+			ImVec4(0.18f, 0.34f, 0.38f, 0.70f),  // [49] TableBorderLight
+			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),      // [50] TableRowBg
+			ImVec4(0.30f, 0.76f, 0.82f, 0.055f), // [51] TableRowBgAlt
+			ImVec4(0.30f, 0.76f, 0.82f, 1.00f),  // [52] TextLink
+			ImVec4(0.30f, 0.76f, 0.82f, 0.35f),  // [53] TextSelectedBg
+			ImVec4(0.18f, 0.34f, 0.38f, 0.70f),  // [54] TreeLines
+			ImVec4(0.96f, 0.68f, 0.32f, 1.00f),  // [55] DragDropTarget
+			ImVec4(0.96f, 0.68f, 0.32f, 0.18f),  // [56] DragDropTargetBg
+			ImVec4(0.96f, 0.68f, 0.32f, 1.00f),  // [57] UnsavedMarker
+			ImVec4(0.30f, 0.76f, 0.82f, 1.00f),  // [58] NavCursor
+			ImVec4(0.90f, 0.94f, 0.96f, 0.70f),  // [59] NavWindowingHighlight
+			ImVec4(0.0f, 0.0f, 0.0f, 0.40f),     // [60] NavWindowingDimBg
+			ImVec4(0.0f, 0.0f, 0.0f, 0.45f),     // [61] ModalWindowDimBg
 		};
 	};
 

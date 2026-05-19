@@ -39,11 +39,7 @@ namespace
 	// -------------------------
 	// Disabled text alpha: Makes inactive UI elements visually distinct but still readable
 	// Value calibrated for accessibility - too low = invisible, too high = looks enabled
-	constexpr float DISABLED_TEXT_ALPHA = 0.3f;  // 30% opacity for disabled elements
-
-	// Resize grip hover alpha: Subtle hover effect to avoid visual clutter
-	// Low value maintains minimalist aesthetic while providing hover feedback
-	constexpr float RESIZE_GRIP_HOVER_ALPHA = 0.1f;  // 10% opacity for hover state
+	constexpr float DISABLED_TEXT_ALPHA = 0.58f;  // 58% opacity for disabled elements
 
 	/**
 	 * @brief Gets file modification time
@@ -58,6 +54,91 @@ namespace
 		} catch (...) {
 			return 0;
 		}
+	}
+
+	using Util::Color::Blend;
+	using Util::Color::Lift;
+	using Util::Color::WithAlpha;
+
+	void ApplySemanticPalette(ImVec4* colors, const Menu::ThemeSettings& themeSettings)
+	{
+		const auto& palette = themeSettings.Palette;
+		const auto& status = themeSettings.StatusPalette;
+
+		const ImVec4 background = palette.Background;
+		const ImVec4 controlSurface = palette.FrameBorder;
+		const ImVec4 elevatedSurface = Lift(background, 0.035f, 0.96f);
+		const ImVec4 primary = status.InfoColor;
+		const ImVec4 secondary = status.Warning;
+		const ImVec4 disabled = status.Disable;
+
+		colors[ImGuiCol_WindowBg] = palette.Background;
+		colors[ImGuiCol_ChildBg] = Lift(background, 0.010f, 0.22f);
+		colors[ImGuiCol_PopupBg] = Lift(background, 0.020f, 0.96f);
+		colors[ImGuiCol_Text] = palette.Text;
+		colors[ImGuiCol_TextDisabled] = WithAlpha(disabled, DISABLED_TEXT_ALPHA);
+		colors[ImGuiCol_Border] = palette.WindowBorder;
+		colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+
+		colors[ImGuiCol_FrameBg] = controlSurface;
+		colors[ImGuiCol_FrameBgHovered] = Blend(controlSurface, primary, 0.18f, 0.92f);
+		colors[ImGuiCol_FrameBgActive] = Blend(controlSurface, primary, 0.30f, 0.96f);
+		colors[ImGuiCol_CheckMark] = primary;
+		colors[ImGuiCol_SliderGrab] = WithAlpha(primary, 0.82f);
+		colors[ImGuiCol_SliderGrabActive] = Blend(primary, palette.Text, 0.22f, 1.0f);
+
+		colors[ImGuiCol_Button] = Blend(elevatedSurface, primary, 0.13f, 0.72f);
+		colors[ImGuiCol_ButtonHovered] = Blend(elevatedSurface, primary, 0.24f, 0.88f);
+		colors[ImGuiCol_ButtonActive] = Blend(elevatedSurface, primary, 0.34f, 0.96f);
+
+		colors[ImGuiCol_Header] = Blend(elevatedSurface, primary, 0.12f, 0.62f);
+		colors[ImGuiCol_HeaderHovered] = Blend(elevatedSurface, primary, 0.24f, 0.82f);
+		colors[ImGuiCol_HeaderActive] = Blend(elevatedSurface, primary, 0.34f, 0.94f);
+
+		colors[ImGuiCol_Separator] = palette.Separator;
+		colors[ImGuiCol_SeparatorHovered] = WithAlpha(primary, 0.74f);
+		colors[ImGuiCol_SeparatorActive] = WithAlpha(primary, 1.0f);
+		colors[ImGuiCol_ResizeGrip] = palette.ResizeGrip;
+		colors[ImGuiCol_ResizeGripHovered] = Blend(palette.ResizeGrip, primary, 0.20f, 0.85f);
+		colors[ImGuiCol_ResizeGripActive] = Blend(palette.ResizeGrip, primary, 0.32f, 0.95f);
+
+		colors[ImGuiCol_TitleBg] = Lift(background, -0.005f, 0.90f);
+		colors[ImGuiCol_TitleBgActive] = Blend(elevatedSurface, primary, 0.08f, 0.96f);
+		colors[ImGuiCol_TitleBgCollapsed] = Lift(background, -0.005f, 0.76f);
+		colors[ImGuiCol_MenuBarBg] = Lift(background, 0.020f, 0.92f);
+
+		colors[ImGuiCol_ScrollbarBg] = Lift(background, 0.010f, colors[ImGuiCol_ScrollbarBg].w);
+		colors[ImGuiCol_ScrollbarGrab] = Blend(elevatedSurface, primary, 0.18f, colors[ImGuiCol_ScrollbarGrab].w);
+		colors[ImGuiCol_ScrollbarGrabHovered] = Blend(elevatedSurface, primary, 0.30f, colors[ImGuiCol_ScrollbarGrabHovered].w);
+		colors[ImGuiCol_ScrollbarGrabActive] = Blend(elevatedSurface, primary, 0.42f, colors[ImGuiCol_ScrollbarGrabActive].w);
+
+		colors[ImGuiCol_Tab] = Blend(elevatedSurface, primary, 0.08f, 0.92f);
+		colors[ImGuiCol_TabHovered] = Blend(elevatedSurface, primary, 0.30f, 0.92f);
+		colors[ImGuiCol_TabSelected] = Blend(elevatedSurface, primary, 0.18f, 0.96f);
+		colors[ImGuiCol_TabSelectedOverline] = WithAlpha(primary, 1.0f);
+		colors[ImGuiCol_TabDimmed] = Lift(background, 0.004f, 0.86f);
+		colors[ImGuiCol_TabDimmedSelected] = Blend(elevatedSurface, primary, 0.12f, 0.92f);
+		colors[ImGuiCol_TabDimmedSelectedOverline] = WithAlpha(primary, 0.45f);
+
+		colors[ImGuiCol_TableHeaderBg] = Blend(elevatedSurface, primary, 0.10f, 0.88f);
+		colors[ImGuiCol_TableBorderStrong] = WithAlpha(palette.Separator, 1.0f);
+		colors[ImGuiCol_TableBorderLight] = WithAlpha(palette.Separator, 0.70f);
+		colors[ImGuiCol_TableRowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+		colors[ImGuiCol_TableRowBgAlt] = WithAlpha(primary, 0.055f);
+
+		colors[ImGuiCol_InputTextCursor] = primary;
+		colors[ImGuiCol_TextLink] = primary;
+		colors[ImGuiCol_TextSelectedBg] = WithAlpha(primary, 0.35f);
+		colors[ImGuiCol_TreeLines] = WithAlpha(palette.Separator, 0.70f);
+		colors[ImGuiCol_DockingPreview] = WithAlpha(primary, 0.42f);
+		colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+		colors[ImGuiCol_DragDropTarget] = secondary;
+		colors[ImGuiCol_DragDropTargetBg] = WithAlpha(secondary, 0.18f);
+		colors[ImGuiCol_UnsavedMarker] = secondary;
+		colors[ImGuiCol_NavCursor] = primary;
+		colors[ImGuiCol_NavWindowingHighlight] = WithAlpha(palette.Text, 0.70f);
+		colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.40f);
+		colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.45f);
 	}
 }
 
@@ -131,29 +212,9 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 		colors[i] = themeSettings.FullPalette[i];
 	}
 
-	// Apply simple palette overrides to the FullPalette for key colors
-	// This allows the simple palette controls to work by updating the FullPalette
-	colors[ImGuiCol_WindowBg] = themeSettings.Palette.Background;
-	colors[ImGuiCol_Text] = themeSettings.Palette.Text;
-	colors[ImGuiCol_Border] = themeSettings.Palette.WindowBorder;
-	colors[ImGuiCol_Separator] = themeSettings.Palette.Separator;
-	colors[ImGuiCol_ResizeGrip] = themeSettings.Palette.ResizeGrip;
-
-	// Apply frame border to UI elements with frames/borders
-	colors[ImGuiCol_FrameBg] = themeSettings.Palette.FrameBorder;
-	colors[ImGuiCol_CheckMark] = themeSettings.Palette.Text;
-	colors[ImGuiCol_SliderGrab] = themeSettings.Palette.FrameBorder;
-	colors[ImGuiCol_SliderGrabActive] = themeSettings.Palette.FrameBorder;
-
-	// Apply derived colors based on simple palette
-	ImVec4 textDisabled = themeSettings.Palette.Text;
-	textDisabled.w = DISABLED_TEXT_ALPHA;
-	colors[ImGuiCol_TextDisabled] = textDisabled;
-
-	ImVec4 resizeGripHovered = themeSettings.Palette.ResizeGrip;
-	resizeGripHovered.w = RESIZE_GRIP_HOVER_ALPHA;
-	colors[ImGuiCol_ResizeGripHovered] = resizeGripHovered;
-	colors[ImGuiCol_ResizeGripActive] = resizeGripHovered;
+	// Apply semantic palette overrides to the FullPalette for consistent UI states.
+	// Simple colors define the neutral surface while StatusPalette supplies accents.
+	ApplySemanticPalette(colors, themeSettings);
 
 	// Apply scrollbar opacity settings
 	colors[ImGuiCol_ScrollbarBg].w = themeSettings.ScrollbarOpacity.Background;
@@ -708,16 +769,28 @@ void ThemeManager::CreateDefaultThemeFiles()
 		}
 
 		file << R"({
-	"DisplayName": "Default Theme",
-	"Description": "Default community shaders theme",
-	"Version": "1.0",
-	"Author": "Community Shaders",
+	"DisplayName": "Default Dark",
+	"Description": "Community Shaders dark theme with a modern neutral surface and cyan/amber accents",
+	"Version": "1.1.0",
+	"Author": "Community Shaders Team",
 	"Theme": {
-		"UseSimplePalette": true,
+		"UseSimplePalette": false,
 		"Palette": {
-			"Background": [0.05, 0.05, 0.05, 1.0],
-			"Text": [1.0, 1.0, 1.0, 1.0],
-			"Border": [0.4, 0.4, 0.4, 1.0]
+			"Background": [0.045, 0.055, 0.065, 0.92],
+			"Text": [0.9, 0.94, 0.96, 1.0],
+			"WindowBorder": [0.16, 0.27, 0.31, 0.88],
+			"FrameBorder": [0.075, 0.105, 0.115, 0.86],
+			"Separator": [0.18, 0.34, 0.38, 0.6],
+			"ResizeGrip": [0.28, 0.74, 0.78, 0.65]
+		},
+		"StatusPalette": {
+			"Disable": [0.46, 0.52, 0.55, 0.9],
+			"Error": [0.95, 0.34, 0.32, 1.0],
+			"Warning": [0.96, 0.68, 0.32, 1.0],
+			"RestartNeeded": [0.48, 0.82, 0.5, 1.0],
+			"CurrentHotkey": [0.96, 0.68, 0.32, 1.0],
+			"SuccessColor": [0.42, 0.82, 0.58, 1.0],
+			"InfoColor": [0.3, 0.76, 0.82, 1.0]
 		},
 		"FontSize": 27.0,
 		"GlobalScale": 0.0,

@@ -254,7 +254,7 @@ void VolumetricLighting::DrawGodrayTuningSettings()
 		return changed;
 	};
 
-	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.82f, 0.40f, 1.0f));
+	ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetTheme().StatusPalette.Warning);
 	ImGui::SeparatorText("Godray Tuning");
 	ImGui::PopStyleColor();
 	drawSlider("Godray Intensity", settings.GodrayShaftIntensity, 0.0f, kGodrayShaftIntensityMax, "Scales volumetric godray shaft brightness.");

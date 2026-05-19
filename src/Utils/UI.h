@@ -941,6 +941,16 @@ namespace Util
 	void DrawFeatureSearchBar(std::string& searchString, float availableWidth = 0.0f);
 
 	/**
+	 * Lightweight color math helpers used by UI styling code.
+	 */
+	namespace Color
+	{
+		ImVec4 WithAlpha(ImVec4 color, float alpha);
+		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha);
+		ImVec4 Lift(ImVec4 color, float amount, float alpha);
+	}
+
+	/**
 	 * Provides access to theme-aware UI colors for consistent styling.
 	 * These functions return colors from the active theme's StatusPalette,
 	 * ensuring consistency with the overall application theme.

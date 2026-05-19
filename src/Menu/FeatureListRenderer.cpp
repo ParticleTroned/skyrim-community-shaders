@@ -859,9 +859,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 		windowPos.x + windowSize.x - frameSize.x - style.WindowPadding.x - scrollbarWidth,
 		windowPos.y + windowSize.y - frameSize.y - style.WindowPadding.y));
 
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.3f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
+	auto iconButtonStyle = Util::TransparentIconButtonStyle();
 
 	auto& menu = *globals::menu;
 	if (menu.uiIcons.featureSettingRevert.texture) {
@@ -873,8 +871,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 			feat->RestoreDefaultSettings();
 		}
 	}
-
-	ImGui::PopStyleColor(3);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Restore default settings for this feature");

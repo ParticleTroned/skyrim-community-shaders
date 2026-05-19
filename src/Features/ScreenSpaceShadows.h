@@ -39,7 +39,7 @@ public:
 		uint SampleCount = 1;
 		float VRBaseSamplesAtReference = 44.0f;
 		float VRCullDistance = 0.0f;  // 0 = disabled
-		uint EnableFoveated = 0;
+		uint EnableFoveated = globals::game::isVR ? 1u : 0u;
 	};
 
 	BendSettings bendSettings;

@@ -182,7 +182,7 @@ void ScreenSpaceShadows::DrawSettings()
 void ScreenSpaceShadows::DrawFoveationSettings()
 {
 	if (!globals::game::isVR) {
-		ImGui::TextDisabled("Screen Space Shadows foveation is available only in VR.");
+		ImGui::TextDisabled("Screen Space Shadows FOV is available only in VR.");
 		return;
 	}
 
@@ -193,7 +193,7 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
 		Util::BlueFrameStyleWrapper blueFrameStyle(true);
-		if (ImGui::Checkbox("Screen Space Shadows Foveation", &foveatedEnabled))
+		if (ImGui::Checkbox("Screen Space Shadows FOV", &foveatedEnabled))
 			bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -208,7 +208,7 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 			ImGui::TextUnformatted("Requires active foveated upscaling.");
 	}
 
-	ImGui::Text("Screen Space Shadows foveation: %s", foveatedEnabled && featureRuntimeActive && foveatedState.active ? "active" : "inactive");
+	ImGui::TextDisabled("%s", foveatedEnabled && featureRuntimeActive && foveatedState.active ? "active" : "inactive");
 }
 
 void ScreenSpaceShadows::InvalidateRaymarchShaders()

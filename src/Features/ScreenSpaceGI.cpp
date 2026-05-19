@@ -529,16 +529,19 @@ void ScreenSpaceGI::DrawSettings()
 		bool clickedFullRes = false;
 		bool clickedHalfRes = false;
 		bool clickedQuarterRes = false;
-		clickedFullRes = ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
-		constexpr float kSecondPresetColumnStartRatio = 0.5f;
-		const float groupStartX = ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x * kSecondPresetColumnStartRatio);
-		ImGui::SameLine(groupStartX);
-
-		ImGui::BeginGroup();
-		clickedHalfRes = ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
-		ImGui::SameLine(0.0f, 14.0f);
-		clickedQuarterRes = ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
-		ImGui::EndGroup();
+		if (ImGui::BeginTable("SSGIResolutionMode", 3, ImGuiTableFlags_SizingStretchProp)) {
+			ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			clickedFullRes = ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
+			ImGui::TableNextColumn();
+			clickedHalfRes = ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
+			ImGui::TableNextColumn();
+			clickedQuarterRes = ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
+			ImGui::EndTable();
+		}
 
 		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 		if (clickedFullRes || clickedHalfRes || clickedQuarterRes) {
@@ -709,7 +712,7 @@ void ScreenSpaceGI::DrawSettings()
 void ScreenSpaceGI::DrawFoveationSettings()
 {
 	if (!REL::Module::IsVR()) {
-		ImGui::TextDisabled("FOV SSGI is available only in VR.");
+		ImGui::TextDisabled("SSGI FOV is available only in VR.");
 		return;
 	}
 
@@ -722,7 +725,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
 		Util::BlueFrameStyleWrapper blueFrameStyle(true);
-		if (ImGui::Checkbox("FOV SSGI", &foveatedEnabled)) {
+		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled)) {
 			settings.EnableFoveated = foveatedEnabled;
 			if (settings.EnableFoveated) {
 				settings.CenterFullResMaskScale = GetUpscalingActiveCenterMaskScale();
@@ -744,14 +747,14 @@ void ScreenSpaceGI::DrawFoveationSettings()
 			ImGui::TextUnformatted("Requires active foveated upscaling.");
 	}
 	if (!loaded)
-		ImGui::TextDisabled("FOV SSGI requires Screen Space GI.");
+		ImGui::TextDisabled("SSGI FOV requires Screen Space GI.");
 	else if (!settings.Enabled)
-		ImGui::TextDisabled("Enable Screen Space GI to use FOV SSGI.");
+		ImGui::TextDisabled("Enable Screen Space GI to use SSGI FOV.");
 
 	ImGui::Spacing();
 
 	SyncResolvedCenterMaskScale(settings);
-	ImGui::Text("FOV SSGI: %s", settings.EnableFoveated && featureRuntimeActive && IsRuntimeFoveatedActive(settings) ? "active" : "inactive");
+	ImGui::TextDisabled("%s", settings.EnableFoveated && featureRuntimeActive && IsRuntimeFoveatedActive(settings) ? "active" : "inactive");
 	if (settings.EnableGI && !HasGIResources())
 		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
 	if (IsResourceProfileRestartPending())

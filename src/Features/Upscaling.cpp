@@ -1165,7 +1165,14 @@ void Upscaling::DrawSettings()
 			SanitizeFoveatedSettings(settings);
 			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 			if (foveatedDispatchSupportedForMethod) {
-				ImGui::TextDisabled("VR FOV mask setup is configured in VR > Foveation.");
+				const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
+				const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.coverageArea);
+				ImGui::TextDisabled("Foveation setup is configured in VR > Foveation.");
+				ImGui::SameLine();
+				ImGui::TextColored(
+					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+					"FOV: %s",
+					fovActive ? "active" : "inactive");
 			} else {
 				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 			}

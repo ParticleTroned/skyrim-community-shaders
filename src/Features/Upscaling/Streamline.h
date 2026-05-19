@@ -51,7 +51,6 @@ public:
 	PFun_slEvaluateFeature* slEvaluateFeature{};
 	PFun_slAllocateResources* slAllocateResources{};
 	PFun_slFreeResources* slFreeResources{};
-	PFun_slSetTag* slSetTag{};
 	PFun_slGetFeatureRequirements* slGetFeatureRequirements{};
 	PFun_slGetFeatureVersion* slGetFeatureVersion{};
 	PFun_slUpgradeInterface* slUpgradeInterface{};
@@ -79,6 +78,7 @@ public:
 	struct DLSSOptionsCache
 	{
 		bool valid = false;
+		uint32_t viewport = UINT32_MAX;
 		uint32_t outputWidth = 0;
 		uint32_t outputHeight = 0;
 		uint32_t qualityMode = 0;
@@ -119,7 +119,7 @@ public:
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	void SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height);
+	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR);
 	void InvalidateDLSSOptionsCache();
 	void ResetFrameTracking();
 

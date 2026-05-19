@@ -22,6 +22,17 @@ namespace
 	{
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
 	}
+
+	ImVec2 GetTabChildSizeWithRestoreButtonReserve()
+	{
+		const auto& style = ImGui::GetStyle();
+		const float iconDimension = ImGui::GetFrameHeight() * 1.2f;
+		const float restoreButtonHeight = iconDimension + style.FramePadding.y * 2.0f;
+		const float reserveHeight = restoreButtonHeight + style.WindowPadding.y + style.ItemSpacing.y;
+		ImVec2 size = ImGui::GetContentRegionAvail();
+		size.y = size.y > reserveHeight ? size.y - reserveHeight : 1.0f;
+		return size;
+	}
 }
 
 //=============================================================================
@@ -978,7 +989,7 @@ void VR::DrawSettings()
 		return;
 	if (ImGui::BeginTabBar("##VRTabs", ImGuiTabBarFlags_None)) {
 		if (BeginTabItemWithFont("General", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRGeneralFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRGeneralFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawGeneralVRSettings();
 				DrawControllerInputInstructions();
 				DrawMenuSettings();
@@ -990,7 +1001,7 @@ void VR::DrawSettings()
 		}
 
 		if (BeginTabItemWithFont("Stereo", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRStereoFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRStereoFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawStereoSettings();
 			}
 			ImGui::EndChild();
@@ -999,7 +1010,7 @@ void VR::DrawSettings()
 
 		if (IsOpenVRCompatible()) {
 			if (BeginTabItemWithFont("Bindings", Menu::FontRole::Subheading)) {
-				if (ImGui::BeginChild("##VRBindingsFrame", { 0, 0 }, true)) {
+				if (ImGui::BeginChild("##VRBindingsFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 					DrawKeyBindings();
 				}
 				ImGui::EndChild();
@@ -1008,7 +1019,7 @@ void VR::DrawSettings()
 		}
 
 		if (BeginTabItemWithFont("Debug", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRDebugFrame", { 0, 0 }, true)) {
+			if (ImGui::BeginChild("##VRDebugFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawDebugSection();
 			}
 			ImGui::EndChild();

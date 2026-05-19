@@ -74,8 +74,24 @@ void VR::SaveSettings(json& o_json)
 
 void VR::RestoreDefaultSettings()
 {
-	settings = {};
+	settings = Settings{};
+	settings.ClampToValidRanges();
 	stereoOpt.RestoreDefaultSettings();
+	UpdateDepthBufferCulling();
+
+	if (gMinOccludeeBoxExtent) {
+		*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+	}
+
+	overlayDragState = OverlayDragState{};
+	fixedWorldOverlayPosition = OverlayWorldPosition{};
+	wandState = WandIntersectionState{};
+	primaryControllerState = {};
+	secondaryControllerState = {};
+	menuOpenCombo = {};
+	menuCloseCombo = {};
+	savedPlayerWorldPos = {};
+	ResetComboRecording();
 }
 
 void VR::SetupResources()

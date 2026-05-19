@@ -334,7 +334,7 @@ void EditorWindow::ShowObjectsWindow()
 			auto recentIt = settings.recentWidgets.find(m_selectedCategory);
 			if (recentIt != settings.recentWidgets.end() && !recentIt->second.empty()) {
 				ImGui::Spacing();
-				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "Recent:");
+				ImGui::TextUnformatted("Recent:");
 				ImGui::SameLine();
 				for (size_t i = 0; i < std::min(size_t(5), recentIt->second.size()); ++i) {
 					if (i > 0)
@@ -732,7 +732,7 @@ void EditorWindow::ShowObjectsWindow()
 								};
 
 								// ImageSpace info - use widget cache for proper editor IDs
-								ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "ImageSpace:");
+								ImGui::TextUnformatted("ImageSpace:");
 								for (int tod = 0; tod < 4; tod++) {
 									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), resolveViaWidgets(weatherWidget->weather->imageSpaces[tod], imageSpaceWidgets).c_str());
 								}
@@ -740,7 +740,7 @@ void EditorWindow::ShowObjectsWindow()
 								ImGui::Spacing();
 
 								// VolumetricLighting info - show short local FormID only
-								ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "Volumetric Lighting:");
+								ImGui::TextUnformatted("Volumetric Lighting:");
 								for (int tod = 0; tod < 4; tod++) {
 									auto* f = weatherWidget->weather->volumetricLighting[tod];
 									ImGui::Text("  %s: %s", TOD::GetPeriodName(tod), f ? std::format("0x{:X}", f->GetLocalFormID()).c_str() : "None");
@@ -1017,14 +1017,14 @@ void EditorWindow::RenderUI()
 		if (ImGui::BeginMenu("Help")) {
 			ImGui::Text("Weather Editor");
 			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "Keyboard Shortcuts:");
+			ImGui::TextUnformatted("Keyboard Shortcuts:");
 			ImGui::BulletText("Ctrl+F: Focus search");
 			ImGui::BulletText("Ctrl+S: Save all open widgets");
 			ImGui::BulletText("Ctrl+W: Close focused widget");
 			ImGui::BulletText("Enter: Open selected widget");
 			ImGui::BulletText("Esc: Close editor");
 			ImGui::Separator();
-			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "Quick Tips:");
+			ImGui::TextUnformatted("Quick Tips:");
 			ImGui::BulletText("Double-click to edit");
 			ImGui::BulletText("Right-click to mark status");
 			ImGui::BulletText("Click star icon to favorite");

@@ -261,13 +261,12 @@ void ABTestingManager::DrawOverlayUI()
 
 			constexpr size_t MAX_CHANGES_DISPLAYED = 10;  // Show max 10 individual changes, otherwise show count
 			if (differences.size() <= MAX_CHANGES_DISPLAYED) {
-				ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f), "Changes from USER:");
+				ImGui::TextUnformatted("Changes from USER:");
 				for (const auto& diff : differences) {
 					ImGui::BulletText("%s", diff.c_str());
 				}
 			} else {
-				ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f),
-					"%zu settings changed", differences.size());
+				ImGui::Text("%zu settings changed", differences.size());
 			}
 		}
 	}

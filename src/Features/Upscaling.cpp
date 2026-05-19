@@ -67,7 +67,6 @@ namespace
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.15f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.25f;
 	constexpr float kFoveatedMaskOffsetResolvedMax = 0.25f;
-	const ImVec4 kFovControlTextColor(0.80f, 0.88f, 1.00f, 1.0f);
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
 
@@ -75,15 +74,15 @@ namespace
 
 - Shader foveation features reuse this shared mask; they do not have separate area sliders.)";
 	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Use the blue Upscaling FOV Area slider to decrease FOV Area to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
+2) Use the Upscaling FOV Area slider to decrease FOV Area to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
 3) Expand Upscaling FOV Area until the green mask touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
-4) Use the blue Expand FOV Area R/L slider to horizontally expand the mask until the green part just touches the field of view.
+4) Use the Expand FOV Area R/L slider to horizontally expand the mask until the green part just touches the field of view.
 5) Ideally, you do not see the blue outer mask anymore, except in the corners, or only a tiny bit.
 6) The larger the green center area, the less performance savings you have.
 7) Test in game that you do not have strong peripheral shimmer. If yes, increase the green mask area. If not, reduce it to just before shimmer appears for best performance.)";
 	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Lower the yellow Upscaling FOV Area slider to 0.30. You can later try 0.25 if these settings work for you for even more performance wins.
-3) Use the yellow TAA Peripheral Range slider until the yellow ring touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
+2) Lower the Upscaling FOV Area slider to 0.30. You can later try 0.25 if these settings work for you for even more performance wins.
+3) Use the TAA Peripheral Range slider until the yellow ring touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
 4) Ideally, you do not see the blue outer ring anymore, except in the corners, or only a tiny bit.
 5) The larger the green center area, the less performance savings you have.
 6) Test in game that you do not have strong peripheral shimmer. If yes, increase the yellow mask area. If not, reduce it to just before shimmer appears for best performance.)";
@@ -1532,9 +1531,7 @@ void Upscaling::DrawFoveatedSettings()
 	}
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
-	ImGui::PushStyleColor(ImGuiCol_Text, kFovControlTextColor);
 	const bool showFovSetupInstructions = ImGui::CollapsingHeader("Upscaling FOV Setup Instructions");
-	ImGui::PopStyleColor();
 	if (showFovSetupInstructions) {
 		const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
 		const float availableHeight = ImGui::GetContentRegionAvail().y;
@@ -1559,7 +1556,7 @@ void Upscaling::DrawFoveatedSettings()
 	ImGui::Dummy(ImVec2(0.0f, 6.0f));
 	ImGui::Separator();
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
-	ImGui::TextColored(kFovControlTextColor, "Upscaling FOV Controls");
+	ImGui::TextUnformatted("Upscaling FOV Controls");
 
 	{
 		Util::BlueFrameStyleWrapper areaStyle;
@@ -1617,7 +1614,7 @@ void Upscaling::DrawFoveatedSettings()
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::Separator();
-	ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.40f, 1.0f), "Upscaling FOV + Peripheral TAA Settings");
+	ImGui::TextUnformatted("Upscaling FOV + Peripheral TAA Settings");
 	{
 		Util::YellowFrameStyleWrapper taaStyle(true);
 		ImGui::Checkbox("FOV + Peripheral TAA", &settings.periphery_taa_enable);

@@ -1320,7 +1320,7 @@ void WeatherWidget::DrawProperties(std::string category, std::map<std::string, i
 	if (std::ranges::none_of(properties, [&](const auto& p) { return MatchesSearch(p.first); }))
 		return;
 
-	ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f), "%s", category.c_str());
+	ImGui::TextUnformatted(category.c_str());
 
 	bool changed = false;
 	auto* editorWindow = EditorWindow::GetSingleton();

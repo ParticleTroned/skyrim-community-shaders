@@ -601,7 +601,7 @@ void Widget::PushHighlightStyle(const std::string& settingId)
 	const float triangularFade = 1.0f - std::abs(normalized * 2.0f - 1.0f);
 	const float alpha = std::clamp(WidgetUI::kHighlightMaxAlpha * triangularFade, 0.0f, WidgetUI::kHighlightMaxAlpha);
 	const auto* menu = globals::menu;
-	const ImVec4 highlight = menu ? menu->GetTheme().StatusPalette.InfoColor : ImVec4(0.30f, 0.76f, 0.82f, 1.0f);
+	const ImVec4 highlight = menu ? menu->GetTheme().StatusPalette.InfoColor : ImVec4(0.98f, 0.73f, 0.22f, 1.0f);
 	ImGui::PushStyleColor(ImGuiCol_FrameBg, Util::Color::WithAlpha(highlight, alpha));
 	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Util::Color::WithAlpha(highlight, std::min(alpha * 1.35f, WidgetUI::kHighlightMaxAlpha)));
 }

@@ -770,27 +770,27 @@ void ThemeManager::CreateDefaultThemeFiles()
 
 		file << R"({
 	"DisplayName": "Default Dark",
-	"Description": "Community Shaders dark theme with a modern neutral surface and cyan/amber accents",
+	"Description": "Community Shaders dark theme with graphite, silver, and gold accents",
 	"Version": "1.1.0",
 	"Author": "Community Shaders Team",
 	"Theme": {
 		"UseSimplePalette": false,
 		"Palette": {
-			"Background": [0.045, 0.055, 0.065, 0.92],
-			"Text": [0.9, 0.94, 0.96, 1.0],
-			"WindowBorder": [0.16, 0.27, 0.31, 0.88],
-			"FrameBorder": [0.075, 0.105, 0.115, 0.86],
-			"Separator": [0.18, 0.34, 0.38, 0.6],
-			"ResizeGrip": [0.28, 0.74, 0.78, 0.65]
+			"Background": [0.035, 0.038, 0.04, 0.94],
+			"Text": [0.92, 0.91, 0.86, 1.0],
+			"WindowBorder": [0.42, 0.4, 0.35, 0.8],
+			"FrameBorder": [0.095, 0.1, 0.102, 0.88],
+			"Separator": [0.34, 0.33, 0.3, 0.62],
+			"ResizeGrip": [0.78, 0.74, 0.64, 0.7]
 		},
 		"StatusPalette": {
-			"Disable": [0.46, 0.52, 0.55, 0.9],
+			"Disable": [0.52, 0.51, 0.48, 0.9],
 			"Error": [0.95, 0.34, 0.32, 1.0],
-			"Warning": [0.96, 0.68, 0.32, 1.0],
-			"RestartNeeded": [0.48, 0.82, 0.5, 1.0],
-			"CurrentHotkey": [0.96, 0.68, 0.32, 1.0],
-			"SuccessColor": [0.42, 0.82, 0.58, 1.0],
-			"InfoColor": [0.3, 0.76, 0.82, 1.0]
+			"Warning": [1.0, 0.64, 0.18, 1.0],
+			"RestartNeeded": [0.7, 0.76, 0.8, 1.0],
+			"CurrentHotkey": [1.0, 0.78, 0.28, 1.0],
+			"SuccessColor": [0.76, 0.78, 0.72, 1.0],
+			"InfoColor": [0.98, 0.73, 0.22, 1.0]
 		},
 		"FontSize": 27.0,
 		"GlobalScale": 0.0,

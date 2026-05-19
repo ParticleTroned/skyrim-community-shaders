@@ -517,29 +517,6 @@ namespace Util
 		}
 	}
 
-	namespace ButtonHelpers
-	{
-		ImVec4 AdjustButtonColor(const ImVec4& color, float amount)
-		{
-			const float maxChannel = std::max({ color.x, color.y, color.z });
-			const float minChannel = ThemeManager::Constants::BUTTON_MIN_COLOR_CHANNEL;
-			const float maxColorChannel = ThemeManager::Constants::BUTTON_MAX_COLOR_CHANNEL;
-			const float adjustment = maxChannel <= (maxColorChannel - amount) ? amount : -amount;
-			return ImVec4(
-				std::clamp(color.x + adjustment, minChannel, maxColorChannel),
-				std::clamp(color.y + adjustment, minChannel, maxColorChannel),
-				std::clamp(color.z + adjustment, minChannel, maxColorChannel),
-				color.w);
-		}
-
-		template <typename StyleFn, typename ButtonFn>
-		bool InvokeStyledButton(StyleFn styleProvider, ButtonFn buttonCall)
-		{
-			auto _style = styleProvider();
-			return buttonCall();
-		}
-	}
-
 	namespace Color
 	{
 		ImVec4 WithAlpha(ImVec4 color, float alpha)
@@ -567,6 +544,57 @@ namespace Util
 		}
 	}
 
+	namespace ButtonHelpers
+	{
+		struct ButtonColors
+		{
+			ImVec4 normal;
+			ImVec4 hovered;
+			ImVec4 active;
+		};
+
+		ImVec4 AdjustButtonColor(const ImVec4& color, float amount)
+		{
+			const float maxChannel = std::max({ color.x, color.y, color.z });
+			const float minChannel = ThemeManager::Constants::BUTTON_MIN_COLOR_CHANNEL;
+			const float maxColorChannel = ThemeManager::Constants::BUTTON_MAX_COLOR_CHANNEL;
+			const float adjustment = maxChannel <= (maxColorChannel - amount) ? amount : -amount;
+			return ImVec4(
+				std::clamp(color.x + adjustment, minChannel, maxColorChannel),
+				std::clamp(color.y + adjustment, minChannel, maxColorChannel),
+				std::clamp(color.z + adjustment, minChannel, maxColorChannel),
+				color.w);
+		}
+
+		template <typename StyleFn, typename ButtonFn>
+		bool InvokeStyledButton(StyleFn styleProvider, ButtonFn buttonCall)
+		{
+			auto _style = styleProvider();
+			return buttonCall();
+		}
+
+		ButtonColors BuildPresetButtonColors(bool active)
+		{
+			const auto& theme = Menu::GetSingleton()->GetTheme();
+			const ImVec4 base = theme.Palette.FrameBorder;
+			const ImVec4 accent = theme.StatusPalette.InfoColor;
+
+			if (active) {
+				return {
+					Color::Blend(base, accent, 0.55f, 1.0f),
+					Color::Blend(base, accent, 0.70f, 1.0f),
+					Color::Blend(base, accent, 0.84f, 1.0f)
+				};
+			}
+
+			return {
+				Color::Blend(base, accent, 0.08f, 0.90f),
+				Color::Blend(base, accent, 0.18f, 0.96f),
+				Color::Blend(base, accent, 0.30f, 1.0f)
+			};
+		}
+	}
+
 	namespace AccentFrameHelpers
 	{
 		struct FrameColors
@@ -580,12 +608,12 @@ namespace Util
 		FrameColors BuildFrameColors(const ImVec4& accent)
 		{
 			const auto& theme = Menu::GetSingleton()->GetTheme();
-			const ImVec4 base = Color::Lift(theme.Palette.Background, 0.030f, 0.88f);
+			const ImVec4 base = theme.Palette.FrameBorder;
 
 			return {
-				Color::Blend(base, accent, 0.24f, 0.84f),
-				Color::Blend(base, accent, 0.36f, 0.90f),
-				Color::Blend(base, accent, 0.48f, 0.96f),
+				base,
+				Color::Blend(base, accent, 0.24f, 0.92f),
+				Color::Blend(base, accent, 0.36f, 0.96f),
 				Color::WithAlpha(accent, 1.0f)
 			};
 		}
@@ -651,6 +679,32 @@ namespace Util
 	bool WarningButton(const char* label, const ImVec2& size)
 	{
 		return ButtonHelpers::InvokeStyledButton(WarningButtonStyle, [&] { return ImGui::Button(label, size); });
+	}
+
+	StyledButtonWrapper PresetButtonStyle(bool active)
+	{
+		const auto colors = ButtonHelpers::BuildPresetButtonColors(active);
+		return StyledButtonWrapper(colors.normal, colors.hovered, colors.active);
+	}
+
+	PresetControlStyleWrapper::PresetControlStyleWrapper() :
+		m_pushedStyles(0)
+	{
+		const auto colors = ButtonHelpers::BuildPresetButtonColors(false);
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, colors.normal);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, colors.hovered);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgActive, colors.active);
+		ImGui::PushStyleColor(ImGuiCol_Button, colors.normal);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors.hovered);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors.active);
+		m_pushedStyles = 6;
+	}
+
+	PresetControlStyleWrapper::~PresetControlStyleWrapper()
+	{
+		if (m_pushedStyles > 0) {
+			ImGui::PopStyleColor(m_pushedStyles);
+		}
 	}
 
 	bool ErrorTextButton(const char* label, const ImVec2& size)
@@ -964,6 +1018,7 @@ namespace Util
 		ImVec4 color = useWhiteText ? palette.Text : theme.ColorDefault;
 
 		ImU32 headerColor = ImGui::GetColorU32(color);
+		ImU32 lineColor = ImGui::GetColorU32(palette.Separator);
 
 		if (isCollapsible && isExpanded) {
 			// Use collapsible header similar to DrawCategoryHeader
@@ -998,13 +1053,13 @@ namespace Util
 
 			// Left line
 			if (lineLength > 0) {
-				drawList->AddLine(ImVec2(pos.x, lineY), ImVec2(pos.x + lineLength, lineY), headerColor, 1.0f);
+				drawList->AddLine(ImVec2(pos.x, lineY), ImVec2(pos.x + lineLength, lineY), lineColor, 1.0f);
 			}
 
 			// Right line
 			float rightLineStart = pos.x + lineLength + 10.0f + textSize.x + 10.0f;
 			if (rightLineStart < pos.x + availableWidth) {
-				drawList->AddLine(ImVec2(rightLineStart, lineY), ImVec2(pos.x + availableWidth, lineY), headerColor, 1.0f);
+				drawList->AddLine(ImVec2(rightLineStart, lineY), ImVec2(pos.x + availableWidth, lineY), lineColor, 1.0f);
 			}
 
 			// Center text
@@ -1026,7 +1081,7 @@ namespace Util
 		const auto& theme = globals::menu->GetTheme().StatusPalette;
 		config.thresholds = {
 			{ low, theme.Disable },    // Very low - gray
-			{ med, theme.InfoColor },  // Low - blue
+			{ med, theme.InfoColor },  // Low - accent
 			{ high, theme.Warning },   // Medium - orange
 			{ FLT_MAX, theme.Error }   // High - red (bad)
 		};
@@ -1039,7 +1094,7 @@ namespace Util
 		const auto& theme = globals::menu->GetTheme().StatusPalette;
 		config.thresholds = {
 			{ low, theme.Disable },          // Very low - gray
-			{ med, theme.InfoColor },        // Low - blue
+			{ med, theme.InfoColor },        // Low - accent
 			{ high, theme.Warning },         // Medium - orange
 			{ FLT_MAX, theme.SuccessColor }  // High - green (good)
 		};
@@ -2154,11 +2209,12 @@ namespace Util
 		void PushWeatherControlledFrameStyle(bool includeActive)
 		{
 			const auto accent = Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor;
+			const auto base = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
 
-			ImGui::PushStyleColor(ImGuiCol_FrameBg, Color::WithAlpha(accent, 0.22f));
-			ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Color::WithAlpha(accent, 0.32f));
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, base);
+			ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Color::Blend(base, accent, 0.24f, 0.92f));
 			if (includeActive) {
-				ImGui::PushStyleColor(ImGuiCol_FrameBgActive, Color::WithAlpha(accent, 0.42f));
+				ImGui::PushStyleColor(ImGuiCol_FrameBgActive, Color::Blend(base, accent, 0.36f, 0.96f));
 			}
 		}
 

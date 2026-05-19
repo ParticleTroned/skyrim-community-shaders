@@ -150,9 +150,10 @@ void SetWidgetTypeSizesFromJson(const json& j)
 void PushInheritedStyle()
 {
 	const auto w = Util::Colors::GetWarning();
-	ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(w.x, w.y, w.z, 0.25f));
-	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(w.x, w.y, w.z, 0.35f));
-	ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(w.x, w.y, w.z, 0.45f));
+	const auto base = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+	ImGui::PushStyleColor(ImGuiCol_FrameBg, base);
+	ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Util::Color::Blend(base, w, 0.24f, 0.92f));
+	ImGui::PushStyleColor(ImGuiCol_FrameBgActive, Util::Color::Blend(base, w, 0.36f, 0.96f));
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
 	ImGui::PushStyleColor(ImGuiCol_Border, w);
 }

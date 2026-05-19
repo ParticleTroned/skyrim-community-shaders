@@ -2,6 +2,7 @@
 #include "Menu.h"
 #include "Wetterness.h"
 #include "WeatherEditor.h"
+#include "Utils/UI.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::Settings,
@@ -265,9 +266,6 @@ void WetnessEffects::DrawSettings()
 	// Climate Preset Selection - Always visible at the top
 	Util::DrawSectionHeader("Climate Presets", false, false);
 
-	ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.2f, 0.3f, 0.4f, 0.6f));    // Subtle blue background
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.35f, 0.45f, 0.8f));  // Slightly darker for button
-
 	// Extract names for combo box
 	const char* presetNames[CLIMATE_PRESET_INFO.size()];
 	for (size_t i = 0; i < CLIMATE_PRESET_INFO.size(); ++i) {
@@ -276,20 +274,22 @@ void WetnessEffects::DrawSettings()
 	// Map preset enum to combo index (Custom=0, Legacy=1, Nordic=2, Arctic=3, Coastal=4, Monsoon=5)
 	int currentComboIndex = static_cast<int>(climatePreset);
 
-	if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
-		// Simplified: map combo index directly to enum, with bounds check
-		ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
+	{
+		Util::PresetControlStyleWrapper presetControlStyle;
+		if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
+			// Simplified: map combo index directly to enum, with bounds check
+			ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
 
-		// Update the preset selection
-		climatePreset = newPreset;
+			// Update the preset selection
+			climatePreset = newPreset;
 
-		// Apply preset settings (but not for Custom, which just means user-modified)
-		if (newPreset != ClimatePreset::Custom) {
-			ApplyClimatePreset(newPreset);
+			// Apply preset settings (but not for Custom, which just means user-modified)
+			if (newPreset != ClimatePreset::Custom) {
+				ApplyClimatePreset(newPreset);
+			}
 		}
 	}
 
-	ImGui::PopStyleColor(2);  // Pop both style colors
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) {
 			const auto& info = CLIMATE_PRESET_INFO[currentComboIndex];

@@ -269,6 +269,25 @@ namespace Util
 	/** Draws a theme warning-colored button for cautionary or reversible actions. */
 	bool WarningButton(const char* label, const ImVec2& size = ImVec2(0, 0));
 
+	/** Style for preset buttons with a brighter active state. */
+	StyledButtonWrapper PresetButtonStyle(bool active);
+
+	/** RAII wrapper for preset combo boxes and similar framed preset controls. */
+	class PresetControlStyleWrapper
+	{
+	public:
+		PresetControlStyleWrapper();
+		~PresetControlStyleWrapper();
+
+		PresetControlStyleWrapper(const PresetControlStyleWrapper&) = delete;
+		PresetControlStyleWrapper& operator=(const PresetControlStyleWrapper&) = delete;
+		PresetControlStyleWrapper(PresetControlStyleWrapper&&) = delete;
+		PresetControlStyleWrapper& operator=(PresetControlStyleWrapper&&) = delete;
+
+	private:
+		int m_pushedStyles;
+	};
+
 	/**
 	 * Alpha-based error-color button — use in toolbar rows alongside SuccessButton/WarningButton
 	 * for visual consistency. For standalone destructive actions (delete icons, close buttons),
@@ -302,7 +321,7 @@ namespace Util
 	bool ErrorButtonWithFlash(const char* label, const ImVec2& size = ImVec2(0, 0), int flashDurationMs = 200);
 
 	/**
-	 * RAII wrapper for the standard blue frame style used by highlighted sliders/checkboxes.
+	 * RAII wrapper for the standard accent frame style used by highlighted sliders/checkboxes.
 	 * Optionally includes the checkmark color for checkbox controls.
 	 */
 	class BlueFrameStyleWrapper
@@ -321,7 +340,7 @@ namespace Util
 	};
 
 	/**
-	 * RAII wrapper for a highlighted yellow frame style used by debug/visualization toggles.
+	 * RAII wrapper for a highlighted warning frame style used by debug/visualization toggles.
 	 * Optionally includes the checkmark color for checkbox controls.
 	 */
 	class YellowFrameStyleWrapper

@@ -3,6 +3,7 @@
 #include "Menu.h"
 #include "State.h"
 #include "WeatherEditor.h"
+#include "Utils/UI.h"
 
 #include <array>
 #include <algorithm>
@@ -691,66 +692,35 @@ namespace
 		wetnessDistanceFadeRange = ClampWetnessDistanceFadeRange(wetnessDistanceFadeRange);
 	}
 
-	void ApplyWetternessUiPreset(
-		Wetterness& wetterness,
-		const WetternessUiPresetDefinition& preset)
+	struct WetternessUiPresetState
 	{
-		auto& settings = wetterness.settings;
-		Wetterness::Settings defaultSettings{};
+		Wetterness::Settings settings{};
+		bool enableWeatherDrivenDryingModel = true;
+		float puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
+		float puddleLayout = DEFAULT_PUDDLE_LAYOUT;
+		float modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
+		float legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
+		float rainReflectionBalance = DEFAULT_RAIN_REFLECTION_BALANCE;
+		float puddleSkyReflectionScale = DEFAULT_PUDDLE_SKY_REFLECTION_SCALE;
+		float postRainWaterClarity = DEFAULT_POST_RAIN_WATER_CLARITY;
+		float shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
+		float wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
+		float rainGrassGlossiness = Wetterness::kDefaultRainGrassGlossiness;
+		float rainGrassSpecularStrength = Wetterness::kDefaultRainGrassSpecularStrength;
+	};
 
-		settings.EnableWetterness = defaultSettings.EnableWetterness;
-		settings.MaxRainWetness = defaultSettings.MaxRainWetness;
-		settings.MaxPuddleWetness = defaultSettings.MaxPuddleWetness;
-		settings.MaxShoreWetness = defaultSettings.MaxShoreWetness;
-		settings.ShoreRange = defaultSettings.ShoreRange;
-		settings.PuddleRadiusWorldUnits = defaultSettings.PuddleRadiusWorldUnits;
-		settings.PuddleMaxAngle = defaultSettings.PuddleMaxAngle;
-		settings.PuddleMinWetness = defaultSettings.PuddleMinWetness;
-		settings.MinRainWetness = defaultSettings.MinRainWetness;
-		settings.SkinWetness = defaultSettings.SkinWetness;
-		settings.WeatherTransitionSpeed = defaultSettings.WeatherTransitionSpeed;
-		settings.StoneDryingMultiplier = defaultSettings.StoneDryingMultiplier;
-		settings.DirtDryingMultiplier = defaultSettings.DirtDryingMultiplier;
-		settings.GrassDryingMultiplier = defaultSettings.GrassDryingMultiplier;
-		settings.EnableRaindropFx = defaultSettings.EnableRaindropFx;
-		settings.EnableSplashes = defaultSettings.EnableSplashes;
-		settings.EnableRipples = defaultSettings.EnableRipples;
-		settings.EnableModernWetReflection = defaultSettings.EnableModernWetReflection;
-		settings.EnableLegacyWetReflection = defaultSettings.EnableLegacyWetReflection;
-		settings.WetIndirectSpecularScale = defaultSettings.WetIndirectSpecularScale;
+	WetternessUiPresetState BuildWetternessUiPresetState(const WetternessUiPresetDefinition& preset)
+	{
+		WetternessUiPresetState state{};
+		auto& settings = state.settings;
+
 		settings.RaindropFxRangeWorldUnits = preset.raindropFxRange;
 		settings.RaindropGridSize = preset.raindropGridSize;
 		settings.RaindropInterval = preset.raindropInterval;
 		settings.RaindropChance = preset.raindropChance;
 		settings.SplashesLifetime = preset.splashesLifetime;
-		settings.SplashesStrength = defaultSettings.SplashesStrength;
-		settings.SplashesMinRadius = defaultSettings.SplashesMinRadius;
-		settings.SplashesMaxRadius = defaultSettings.SplashesMaxRadius;
-		settings.RippleStrength = defaultSettings.RippleStrength;
-		settings.RippleRadius = defaultSettings.RippleRadius;
-		settings.RippleBreadth = defaultSettings.RippleBreadth;
 		settings.RippleLifetime = preset.rippleLifetime;
-		settings.PostRainPuddleWaterStrength = defaultSettings.PostRainPuddleWaterStrength;
-		settings.RaindropTransitionFalloff = defaultSettings.RaindropTransitionFalloff;
-		settings.WetDarkeningStrength = defaultSettings.WetDarkeningStrength;
-		settings.WetHighlightReduction = defaultSettings.WetHighlightReduction;
-		settings.EnableForwardReflectionBias = defaultSettings.EnableForwardReflectionBias;
-		settings.EnableVanillaReflectionCompensation = defaultSettings.EnableVanillaReflectionCompensation;
-		settings.WetFilmSpecularFloorScale = defaultSettings.WetFilmSpecularFloorScale;
-		settings.RainContactWetnessScale = defaultSettings.RainContactWetnessScale;
-
-		wetterness.enableWeatherDrivenDryingModel = true;
-		wetterness.puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
-		wetterness.puddleLayout = DEFAULT_PUDDLE_LAYOUT;
-		wetterness.rainReflectionBalance = DEFAULT_RAIN_REFLECTION_BALANCE;
-		wetterness.puddleSkyReflectionScale = DEFAULT_PUDDLE_SKY_REFLECTION_SCALE;
-		wetterness.postRainWaterClarity = DEFAULT_POST_RAIN_WATER_CLARITY;
-		wetterness.shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
-		wetterness.wetnessDistanceFadeRange = preset.wetnessFadeRange;
-		wetterness.rainGrassGlossiness = Wetterness::kDefaultRainGrassGlossiness;
-		wetterness.rainGrassSpecularStrength = Wetterness::kDefaultRainGrassSpecularStrength;
-		wetterness.modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
-		wetterness.legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
+		state.wetnessDistanceFadeRange = preset.wetnessFadeRange;
 
 		if (IsHoshipaWetternessPreset(preset)) {
 			// Hoshipa preset: keep Quality-like baseline while applying the requested
@@ -760,11 +730,104 @@ namespace
 			settings.RippleLifetime = 0.35f;
 			settings.DirtDryingMultiplier = 7.0f;
 			settings.PuddleRadiusWorldUnits = 119.0f;
-			wetterness.enableWeatherDrivenDryingModel = false;
-			wetterness.puddleDryingHours = 12.0f;
-			wetterness.modernWetIndirectSpecularScale = 1.0f;
+			state.enableWeatherDrivenDryingModel = false;
+			state.puddleDryingHours = 12.0f;
+			state.modernWetIndirectSpecularScale = 1.0f;
 		}
-		SanitizePersistentReflectionSettings(settings, wetterness.modernWetIndirectSpecularScale, wetterness.legacyWetIndirectSpecularScale);
+
+		SanitizePersistentReflectionSettings(settings, state.modernWetIndirectSpecularScale, state.legacyWetIndirectSpecularScale);
+		return state;
+	}
+
+	void ApplyWetternessUiPreset(
+		Wetterness& wetterness,
+		const WetternessUiPresetDefinition& preset)
+	{
+		const auto presetState = BuildWetternessUiPresetState(preset);
+		wetterness.settings = presetState.settings;
+		wetterness.enableWeatherDrivenDryingModel = presetState.enableWeatherDrivenDryingModel;
+		wetterness.puddleDryingHours = presetState.puddleDryingHours;
+		wetterness.puddleLayout = presetState.puddleLayout;
+		wetterness.rainReflectionBalance = presetState.rainReflectionBalance;
+		wetterness.puddleSkyReflectionScale = presetState.puddleSkyReflectionScale;
+		wetterness.postRainWaterClarity = presetState.postRainWaterClarity;
+		wetterness.shorePersistentDarkeningStrength = presetState.shorePersistentDarkeningStrength;
+		wetterness.wetnessDistanceFadeRange = presetState.wetnessDistanceFadeRange;
+		wetterness.rainGrassGlossiness = presetState.rainGrassGlossiness;
+		wetterness.rainGrassSpecularStrength = presetState.rainGrassSpecularStrength;
+		wetterness.modernWetIndirectSpecularScale = presetState.modernWetIndirectSpecularScale;
+		wetterness.legacyWetIndirectSpecularScale = presetState.legacyWetIndirectSpecularScale;
+	}
+
+	bool IsNearlyEqual(float a, float b)
+	{
+		return std::abs(a - b) < 0.001f;
+	}
+
+	bool MatchesWetternessSettings(
+		const Wetterness::Settings& actual,
+		const Wetterness::Settings& expected)
+	{
+		return actual.EnableWetterness == expected.EnableWetterness &&
+		       actual.ShoreRange == expected.ShoreRange &&
+		       actual.EnableRaindropFx == expected.EnableRaindropFx &&
+		       actual.EnableSplashes == expected.EnableSplashes &&
+		       actual.EnableRipples == expected.EnableRipples &&
+		       actual.EnableModernWetReflection == expected.EnableModernWetReflection &&
+		       actual.EnableLegacyWetReflection == expected.EnableLegacyWetReflection &&
+		       actual.EnableForwardReflectionBias == expected.EnableForwardReflectionBias &&
+		       actual.EnableVanillaReflectionCompensation == expected.EnableVanillaReflectionCompensation &&
+		       IsNearlyEqual(actual.MaxRainWetness, expected.MaxRainWetness) &&
+		       IsNearlyEqual(actual.MaxPuddleWetness, expected.MaxPuddleWetness) &&
+		       IsNearlyEqual(actual.MaxShoreWetness, expected.MaxShoreWetness) &&
+		       IsNearlyEqual(actual.PuddleRadiusWorldUnits, expected.PuddleRadiusWorldUnits) &&
+		       IsNearlyEqual(actual.PuddleMaxAngle, expected.PuddleMaxAngle) &&
+		       IsNearlyEqual(actual.PuddleMinWetness, expected.PuddleMinWetness) &&
+		       IsNearlyEqual(actual.MinRainWetness, expected.MinRainWetness) &&
+		       IsNearlyEqual(actual.SkinWetness, expected.SkinWetness) &&
+		       IsNearlyEqual(actual.WeatherTransitionSpeed, expected.WeatherTransitionSpeed) &&
+		       IsNearlyEqual(actual.StoneDryingMultiplier, expected.StoneDryingMultiplier) &&
+		       IsNearlyEqual(actual.DirtDryingMultiplier, expected.DirtDryingMultiplier) &&
+		       IsNearlyEqual(actual.GrassDryingMultiplier, expected.GrassDryingMultiplier) &&
+		       IsNearlyEqual(actual.WetIndirectSpecularScale, expected.WetIndirectSpecularScale) &&
+		       IsNearlyEqual(actual.RaindropFxRangeWorldUnits, expected.RaindropFxRangeWorldUnits) &&
+		       IsNearlyEqual(actual.RaindropGridSize, expected.RaindropGridSize) &&
+		       IsNearlyEqual(actual.RaindropInterval, expected.RaindropInterval) &&
+		       IsNearlyEqual(actual.RaindropChance, expected.RaindropChance) &&
+		       IsNearlyEqual(actual.SplashesLifetime, expected.SplashesLifetime) &&
+		       IsNearlyEqual(actual.SplashesStrength, expected.SplashesStrength) &&
+		       IsNearlyEqual(actual.SplashesMinRadius, expected.SplashesMinRadius) &&
+		       IsNearlyEqual(actual.SplashesMaxRadius, expected.SplashesMaxRadius) &&
+		       IsNearlyEqual(actual.RippleStrength, expected.RippleStrength) &&
+		       IsNearlyEqual(actual.RippleRadius, expected.RippleRadius) &&
+		       IsNearlyEqual(actual.RippleBreadth, expected.RippleBreadth) &&
+		       IsNearlyEqual(actual.RippleLifetime, expected.RippleLifetime) &&
+		       IsNearlyEqual(actual.PostRainPuddleWaterStrength, expected.PostRainPuddleWaterStrength) &&
+		       IsNearlyEqual(actual.RaindropTransitionFalloff, expected.RaindropTransitionFalloff) &&
+		       IsNearlyEqual(actual.WetDarkeningStrength, expected.WetDarkeningStrength) &&
+		       IsNearlyEqual(actual.WetHighlightReduction, expected.WetHighlightReduction) &&
+		       IsNearlyEqual(actual.WetFilmSpecularFloorScale, expected.WetFilmSpecularFloorScale) &&
+		       IsNearlyEqual(actual.RainContactWetnessScale, expected.RainContactWetnessScale);
+	}
+
+	bool IsWetternessUiPresetActive(
+		const Wetterness& wetterness,
+		const WetternessUiPresetDefinition& preset)
+	{
+		const auto expected = BuildWetternessUiPresetState(preset);
+		return MatchesWetternessSettings(wetterness.settings, expected.settings) &&
+		       wetterness.enableWeatherDrivenDryingModel == expected.enableWeatherDrivenDryingModel &&
+		       IsNearlyEqual(wetterness.puddleDryingHours, expected.puddleDryingHours) &&
+		       IsNearlyEqual(wetterness.puddleLayout, expected.puddleLayout) &&
+		       IsNearlyEqual(wetterness.rainReflectionBalance, expected.rainReflectionBalance) &&
+		       IsNearlyEqual(wetterness.puddleSkyReflectionScale, expected.puddleSkyReflectionScale) &&
+		       IsNearlyEqual(wetterness.postRainWaterClarity, expected.postRainWaterClarity) &&
+		       IsNearlyEqual(wetterness.shorePersistentDarkeningStrength, expected.shorePersistentDarkeningStrength) &&
+		       IsNearlyEqual(wetterness.wetnessDistanceFadeRange, expected.wetnessDistanceFadeRange) &&
+		       IsNearlyEqual(wetterness.rainGrassGlossiness, expected.rainGrassGlossiness) &&
+		       IsNearlyEqual(wetterness.rainGrassSpecularStrength, expected.rainGrassSpecularStrength) &&
+		       IsNearlyEqual(wetterness.modernWetIndirectSpecularScale, expected.modernWetIndirectSpecularScale) &&
+		       IsNearlyEqual(wetterness.legacyWetIndirectSpecularScale, expected.legacyWetIndirectSpecularScale);
 	}
 
 	constexpr size_t DEFAULT_WETTERNESS_UI_PRESET_INDEX = 2;  // Quality
@@ -1131,9 +1194,6 @@ void Wetterness::DrawSettings()
 	// Climate Preset Selection - Always visible at the top
 	Util::DrawSectionHeader("Climate Presets", false, false);
 
-	ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.2f, 0.3f, 0.4f, 0.6f));    // Subtle blue background
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.35f, 0.45f, 0.8f));  // Slightly darker for button
-
 	// Extract names for combo box
 	const char* presetNames[CLIMATE_PRESET_INFO.size()];
 	for (size_t i = 0; i < CLIMATE_PRESET_INFO.size(); ++i) {
@@ -1142,20 +1202,22 @@ void Wetterness::DrawSettings()
 	// Map preset enum to combo index (Custom=0, Legacy=1, Nordic=2, Arctic=3, Coastal=4, Monsoon=5)
 	int currentComboIndex = static_cast<int>(climatePreset);
 
-	if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
-		// Simplified: map combo index directly to enum, with bounds check
-		ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
+	{
+		Util::PresetControlStyleWrapper presetControlStyle;
+		if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
+			// Simplified: map combo index directly to enum, with bounds check
+			ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
 
-		// Update the preset selection
-		climatePreset = newPreset;
+			// Update the preset selection
+			climatePreset = newPreset;
 
-		// Apply preset settings (but not for Custom, which just means user-modified)
-		if (newPreset != ClimatePreset::Custom) {
-			ApplyClimatePreset(newPreset);
+			// Apply preset settings (but not for Custom, which just means user-modified)
+			if (newPreset != ClimatePreset::Custom) {
+				ApplyClimatePreset(newPreset);
+			}
 		}
 	}
 
-	ImGui::PopStyleColor(2);  // Pop both style colors
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) {
 			const auto& info = CLIMATE_PRESET_INFO[currentComboIndex];
@@ -1199,23 +1261,29 @@ void Wetterness::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Quick profiles for Wetterness performance/quality balance.");
 	}
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.38f, 0.72f, 0.95f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.48f, 0.86f, 0.95f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.30f, 0.60f, 0.95f));
-	for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
-		const auto& preset = WETTERNESS_UI_PRESETS[i];
-		if (ImGui::Button(preset.name)) {
-			ApplyWetternessUiPreset(*this, preset);
-			DetectCurrentPreset();
+
+	if (ImGui::BeginTable("WetternessPresetButtons", static_cast<int>(WETTERNESS_UI_PRESETS.size()), ImGuiTableFlags_SizingStretchProp)) {
+		for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
+			ImGui::TableSetupColumn(WETTERNESS_UI_PRESETS[i].name, ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(preset.description);
+
+		ImGui::TableNextRow();
+		for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
+			ImGui::TableNextColumn();
+			const auto& preset = WETTERNESS_UI_PRESETS[i];
+			const bool presetActive = IsWetternessUiPresetActive(*this, preset);
+			[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
+			if (ImGui::Button(preset.name, ImVec2(-1.0f, 0.0f))) {
+				ApplyWetternessUiPreset(*this, preset);
+				DetectCurrentPreset();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted(preset.description);
+			}
 		}
-		if (i + 1 < WETTERNESS_UI_PRESETS.size()) {
-			ImGui::SameLine();
-		}
+
+		ImGui::EndTable();
 	}
-	ImGui::PopStyleColor(3);
 
 	drawSectionDivider();
 

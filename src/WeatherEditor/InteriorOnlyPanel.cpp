@@ -270,7 +270,7 @@ namespace InteriorOnlyPanel
 		// --- Overwrite Files Section ---
 		if (!overwriteIndices.empty()) {
 			ImGui::Spacing();
-			ImGui::TextColored(theme.StatusPalette.InfoColor, "Overwrite Files");
+			ImGui::TextUnformatted("Overwrite Files");
 			ImGui::SameLine();
 
 			bool allPaused = manager->AreAllOverwritesPaused(kSceneType);
@@ -291,7 +291,7 @@ namespace InteriorOnlyPanel
 		if (!userIndices.empty()) {
 			if (!overwriteIndices.empty()) {
 				ImGui::Spacing();
-				ImGui::TextColored(theme.FeatureHeading.ColorDefault, "User Settings");
+				ImGui::TextUnformatted("User Settings");
 				ImGui::SameLine();
 			}
 

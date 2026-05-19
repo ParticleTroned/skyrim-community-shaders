@@ -671,11 +671,9 @@ void Menu::DrawSettings()
 	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), layoutCond);
 	resetLayout = false;
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto expectedTag = std::format("v{}", versionStr);
 	auto baseTitle = std::format("Community Shaders {} Particle Lights (Unofficial Fork)", versionStr);
-	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? baseTitle : std::format("{} [{}]", baseTitle, Plugin::BUILD_DESCRIBE);
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
-	auto title = std::format("{}###CommunityShaders", displayTitle);
+	auto title = std::format("{}###CommunityShaders", baseTitle);
 
 	// Determine window flags based on docking state
 	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;

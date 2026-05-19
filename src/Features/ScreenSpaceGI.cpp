@@ -9,6 +9,7 @@
 #include "Upscaling.h"
 #include "Util.h"
 #include "Utils/D3D.h"
+#include "Utils/UI.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceGI::Settings,
@@ -344,15 +345,9 @@ void ScreenSpaceGI::DrawSettings()
 
 	{
 		auto presetsAndQualityGuard = Util::DisableGuard(!settings.Enabled);
-		auto drawPresetButton = [](const char* a_label, const ImVec2& a_size, const ImVec4& a_normal, const ImVec4& a_hovered, const ImVec4& a_active) {
-			Util::StyledButtonWrapper style(a_normal, a_hovered, a_active);
-			return ImGui::Button(a_label, a_size);
-		};
 		auto drawThemePresetButton = [&](const char* a_label, bool a_active, const ImVec2& a_size) {
-			const ImVec4 normal = a_active ? ImVec4(0.18f, 0.42f, 0.82f, 1.0f) : ImVec4(0.10f, 0.16f, 0.25f, 0.85f);
-			const ImVec4 hovered = a_active ? ImVec4(0.25f, 0.52f, 0.95f, 1.0f) : ImVec4(0.14f, 0.24f, 0.38f, 0.95f);
-			const ImVec4 pressed = a_active ? ImVec4(0.32f, 0.60f, 1.00f, 1.0f) : ImVec4(0.18f, 0.30f, 0.48f, 1.0f);
-			return drawPresetButton(a_label, a_size, normal, hovered, pressed);
+			[[maybe_unused]] auto style = Util::PresetButtonStyle(a_active);
+			return ImGui::Button(a_label, a_size);
 		};
 
 		if (ImGui::BeginTable("Presets", 4, ImGuiTableFlags_SizingStretchProp)) {
@@ -724,7 +719,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	bool foveatedEnabled = settings.EnableFoveated;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
-		Util::BlueFrameStyleWrapper blueFrameStyle(true);
+		Util::BlueFrameStyleWrapper accentFrameStyle(true);
 		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled)) {
 			settings.EnableFoveated = foveatedEnabled;
 			if (settings.EnableFoveated) {

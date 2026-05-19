@@ -36,7 +36,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	sharpnessFSR,
 	sharpnessDLSS,
 	fsr4RuntimeEnable,
-	fsr4AllowNonRx90Amd,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
@@ -925,11 +924,9 @@ void Upscaling::DrawSettings()
 		const char* label;
 	};
 
-	const bool isAmdAdapter = fidelityFX.IsAmdAdapterDetected();
 	const bool isNvidiaAdapter = fidelityFX.IsNvidiaAdapterDetected();
 	const bool runtimeUpscalerPresent = fidelityFX.IsRuntimeUpscalerPresent();
 	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
-	const bool runtimeFsr4Available = fidelityFX.IsRuntimeFsr4Available();
 	const bool featureDLSS = streamline.featureDLSS;
 	ApplyOpenCompositeUpscalingBlocker();
 	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
@@ -938,9 +935,8 @@ void Upscaling::DrawSettings()
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
-	const bool requestedRuntimeFsr4BeforeMethodSelection =
-		*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) &&
-		settings.fsr4RuntimeEnable;
+	if (*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) && !runtimeFsr4AutoEligible)
+		settings.fsr4RuntimeEnable = false;
 
 	std::vector<UpscaleUiChoice> upscaleChoices = {
 		{ UpscaleMethod::kNONE, false, "None" }
@@ -950,10 +946,8 @@ void Upscaling::DrawSettings()
 		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
 		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" });
 
-		if (runtimeFsr4Available)
+		if (runtimeFsr4AutoEligible)
 			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4" });
-		else if (requestedRuntimeFsr4BeforeMethodSelection)
-			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4 (Unavailable)" });
 
 		if (featureDLSS)
 			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
@@ -994,7 +988,10 @@ void Upscaling::DrawSettings()
 			ImGui::Text("Locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
 		} else {
 			ImGui::TextUnformatted("Selects the upscaling backend.");
-			ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
+			if (runtimeFsr4AutoEligible)
+				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
+			else
+				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, or None.");
 		}
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
@@ -1027,21 +1024,6 @@ void Upscaling::DrawSettings()
 		upscaleMethod == UpscaleMethod::kFSR &&
 		settings.fsr4RuntimeEnable;
 
-	auto drawFsr4OverrideControls = [&]() {
-		if (runtimeUpscalerPresent && isAmdAdapter && !runtimeFsr4AutoEligible) {
-			ImGui::Checkbox("Allow FSR4 on Other AMD GPUs (Experimental)", &settings.fsr4AllowNonRx90Amd);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Enables Runtime FSR 4 on AMD cards that are not auto-detected as RX 9000-series.");
-				ImGui::TextUnformatted("Keep this off unless your AMD card supports FSR 4 and auto-detection failed.");
-			}
-		}
-		if (!runtimeUpscalerPresent && runtimeFsr4Requested) {
-			ImGui::TextDisabled("Runtime FSR 4 unavailable: missing FidelityFX upscaler runtime.");
-		} else if (runtimeUpscalerPresent && runtimeFsr4Requested && !runtimeFsr4Available && !(isAmdAdapter && !runtimeFsr4AutoEligible)) {
-			ImGui::TextDisabled("Runtime FSR 4 unavailable for the detected adapter; using FSR 3.1.5 instead.");
-		}
-	};
-
 	const bool runtimeFsrPathRequested =
 		upscaleMethod == UpscaleMethod::kFSR &&
 		fidelityFX.ShouldUseRuntimeUpscalerForFSR();
@@ -1057,6 +1039,8 @@ void Upscaling::DrawSettings()
 		           !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
 			ImGui::TextDisabled("Runtime FSR context creation failed; using host FSR 3.1.5 fallback.");
 		}
+		if (!runtimeUpscalerPresent && runtimeFsr4Requested)
+			ImGui::TextDisabled("Runtime FSR 4 unavailable: missing FidelityFX upscaler runtime.");
 	}
 
 	// Display warning for DLSS resolution limits (non-VR only; VR handles this automatically)
@@ -1068,9 +1052,6 @@ void Upscaling::DrawSettings()
 			Util::Text::Warning("DLSS will not function. Lower your resolution or select a different upscaling method.");
 		}
 	}
-
-	if (upscaleMethod == UpscaleMethod::kNONE || upscaleMethod == UpscaleMethod::kTAA)
-		drawFsr4OverrideControls();
 
 	// Display upscaling settings if applicable
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
@@ -1157,8 +1138,6 @@ void Upscaling::DrawSettings()
 				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards and F on RTX 3000-series cards.");
 			}
 		}
-
-		drawFsr4OverrideControls();
 
 		if (globals::game::isVR) {
 			SanitizeFoveatedSettings(settings);

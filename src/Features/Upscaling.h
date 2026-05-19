@@ -90,7 +90,6 @@ public:
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.1f;
 		bool fsr4RuntimeEnable = true;
-		bool fsr4AllowNonRx90Amd = false;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;
 		float foveatedCenterHorizontalScale = 1.0f;

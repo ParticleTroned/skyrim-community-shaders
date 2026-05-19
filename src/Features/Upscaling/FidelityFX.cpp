@@ -963,21 +963,7 @@ bool FidelityFX::IsRuntimeFsr4Available() const
 	if (!IsRuntimeUpscalerPresent())
 		return false;
 
-	DXGI_ADAPTER_DESC adapterDesc{};
-	if (!TryGetCurrentAdapterDesc(adapterDesc))
-		return false;
-	if (adapterDesc.VendorId == kAmdVendorId) {
-		const bool autoDetectedFsr4ClassGpu = IsLikelyRDNA4Adapter(adapterDesc);
-		if (!autoDetectedFsr4ClassGpu &&
-		    !globals::features::upscaling.settings.fsr4AllowNonRx90Amd) {
-			return false;
-		}
-		return true;
-	}
-	if (adapterDesc.VendorId == kNvidiaVendorId)
-		return false;
-
-	return false;
+	return IsRuntimeFsr4AutoEligible();
 }
 
 bool FidelityFX::ShouldUseRuntimeUpscalerForFSR() const

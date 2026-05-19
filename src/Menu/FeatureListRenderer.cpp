@@ -28,6 +28,22 @@ namespace
 {
 	// Core built-in menu names that always appear first in the menu list
 	constexpr std::array<const char*, 4> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Display" };
+	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
+
+	ImVec2 GetRestoreDefaultsIconSize()
+	{
+		const float iconDimension = ImGui::GetFrameHeight() * RESTORE_DEFAULTS_ICON_SCALE;
+		return ImVec2(iconDimension, iconDimension);
+	}
+
+	ImVec2 GetRestoreDefaultsFrameSize()
+	{
+		const auto& style = ImGui::GetStyle();
+		const ImVec2 iconSize = GetRestoreDefaultsIconSize();
+		return ImVec2(
+			iconSize.x + style.FramePadding.x * 2.0f,
+			iconSize.y + style.FramePadding.y * 2.0f);
+	}
 
 	bool IsCoreMenu(const std::string& menuName)
 	{
@@ -218,6 +234,12 @@ namespace
 
 	// "Don't show again" checkbox state inside the modal (reset each time popup opens).
 	bool g_dontShowAgainCheckbox = false;
+}
+
+float FeatureListRenderer::GetRestoreDefaultsButtonReserveHeight()
+{
+	const auto& style = ImGui::GetStyle();
+	return GetRestoreDefaultsFrameSize().y + style.WindowPadding.y + style.ItemSpacing.y;
 }
 
 void FeatureListRenderer::RenderFeatureList(
@@ -852,9 +874,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	ImVec2 windowPos = ImGui::GetWindowPos();
 	ImVec2 windowSize = ImGui::GetWindowSize();
 	float scrollbarWidth = ImGui::GetScrollMaxY() > 0 ? style.ScrollbarSize : 0.0f;
-	float iconDimension = ImGui::GetFrameHeight() * 1.2f;
-	ImVec2 iconSize(iconDimension, iconDimension);
-	ImVec2 frameSize(iconSize.x + style.FramePadding.x * 2, iconSize.y + style.FramePadding.y * 2);
+	const ImVec2 iconSize = GetRestoreDefaultsIconSize();
+	const ImVec2 frameSize = GetRestoreDefaultsFrameSize();
 	ImGui::SetCursorScreenPos(ImVec2(
 		windowPos.x + windowSize.x - frameSize.x - style.WindowPadding.x - scrollbarWidth,
 		windowPos.y + windowSize.y - frameSize.y - style.WindowPadding.y));

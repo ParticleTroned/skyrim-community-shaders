@@ -1,5 +1,6 @@
 #include "VR.h"
 #include "Menu.h"
+#include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/N/NiPoint3.h"
@@ -44,10 +45,7 @@ namespace
 
 	ImVec2 GetTabChildSizeWithRestoreButtonReserve()
 	{
-		const auto& style = ImGui::GetStyle();
-		const float iconDimension = ImGui::GetFrameHeight() * 1.2f;
-		const float restoreButtonHeight = iconDimension + style.FramePadding.y * 2.0f;
-		const float reserveHeight = restoreButtonHeight + style.WindowPadding.y + style.ItemSpacing.y;
+		const float reserveHeight = FeatureListRenderer::GetRestoreDefaultsButtonReserveHeight();
 		ImVec2 size = ImGui::GetContentRegionAvail();
 		size.y = size.y > reserveHeight ? size.y - reserveHeight : 1.0f;
 		return size;

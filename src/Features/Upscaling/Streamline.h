@@ -51,7 +51,6 @@ public:
 	PFun_slEvaluateFeature* slEvaluateFeature{};
 	PFun_slAllocateResources* slAllocateResources{};
 	PFun_slFreeResources* slFreeResources{};
-	PFun_slSetTag* slSetTag{};
 	PFun_slGetFeatureRequirements* slGetFeatureRequirements{};
 	PFun_slGetFeatureVersion* slGetFeatureVersion{};
 	PFun_slUpgradeInterface* slUpgradeInterface{};
@@ -76,6 +75,18 @@ public:
 	sl::FrameToken* frameToken = nullptr;
 
 	bool isRTXBelow40series = false;
+	struct DLSSOptionsCache
+	{
+		bool valid = false;
+		uint32_t viewport = UINT32_MAX;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = 0;
+		bool isHDR = false;
+		bool useLegacyProfile = false;
+	};
+	DLSSOptionsCache dlssOptionsCache[2]{};
 
 	struct ReflexOptionsCache
 	{
@@ -88,7 +99,7 @@ public:
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
 
 	// Helper: Execute DLSS for a single viewport with given resources
-	void EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
+	bool EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth);
@@ -107,7 +118,9 @@ public:
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	void SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t width);
+	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR);
+	void InvalidateDLSSOptionsCache();
+	void ResetFrameTracking();
 
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	void UpdateReflex();

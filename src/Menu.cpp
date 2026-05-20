@@ -674,10 +674,14 @@ void Menu::DrawSettings()
 	auto baseTitle = std::format("Community Shaders {} Particle Lights (Unofficial Fork)", versionStr);
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
 	auto title = std::format("{}###CommunityShaders", baseTitle);
+	const bool useSteamVRWindowControls =
+		REL::Module::IsVR() &&
+		globals::features::vr.openVRInfo.isAvailable &&
+		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR;
 
 	// Check if this will be docked (we need to peek at the docking state)
 	static bool wasDocked = false;
-	bool willBeDocked = wasDocked;  // Use previous frame's state as approximation
+	bool willBeDocked = wasDocked;
 
 	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
 	const ImVec2 defaultWindowPos = Util::GetNativeViewportSizeScaled(0.5f);
@@ -686,6 +690,7 @@ void Menu::DrawSettings()
 	ImVec2 windowPos = defaultWindowPos;
 	ImVec2 windowSizeForOverlap = defaultWindowSize;
 	if (auto* menuWin = ImGui::FindWindowByName(title.c_str())) {
+		willBeDocked = menuWin->DockIsActive;
 		if (menuWin->Size.x > 0.0f && menuWin->Size.y > 0.0f) {
 			windowPos = ImVec2(menuWin->Pos.x + menuWin->Size.x * centeredPivot.x, menuWin->Pos.y + menuWin->Size.y * centeredPivot.y);
 			windowSizeForOverlap = menuWin->Size;
@@ -720,10 +725,14 @@ void Menu::DrawSettings()
 
 	// Determine window flags based on docking state
 	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
+	const bool steamVRUndockedWindow = useSteamVRWindowControls && !willBeDocked;
 
 	// Only hide title bar when not docked
 	if (!willBeDocked) {
 		windowFlags |= ImGuiWindowFlags_NoTitleBar;
+	}
+	if (steamVRUndockedWindow) {
+		windowFlags |= ImGuiWindowFlags_NoResize;
 	}
 
 	ImGui::Begin(title.c_str(), &IsEnabled, windowFlags);
@@ -732,11 +741,7 @@ void Menu::DrawSettings()
 		const bool actualDocked = ImGui::IsWindowDocked();
 		const bool isDocked = actualDocked;
 		wasDocked = actualDocked;
-		const bool showSteamVRWindowControls =
-			REL::Module::IsVR() &&
-			globals::features::vr.openVRInfo.isCompatible &&
-			globals::features::vr.openVRInfo.runtimeType != VRDetection::RuntimeType::OpenComposite &&
-			!isDocked;
+		const bool showSteamVRWindowControls = useSteamVRWindowControls && !isDocked;
 
 		float globalScale = settings.Theme.GlobalScale;
 

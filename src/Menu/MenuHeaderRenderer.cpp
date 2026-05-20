@@ -53,19 +53,22 @@ void MenuHeaderRenderer::RenderHeader(
 		// When not docked, show the custom header
 		bool centerHeader = globals::menu->GetTheme().CenterHeader;
 
-		if ((showLogo || canShowIcons) && ImGui::BeginTable("##HeaderLayout", 2, ImGuiTableFlags_SizingStretchProp)) {
+		const float currentFontSize = ImGui::GetFontSize();
+		const float baseTextScale = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE;
+		const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
+		const float textScaleFactor = baseTextScale * uiScale;
+		const float logoSize = baseIconSize * uiScale;
+		const float iconSpacing = ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING;
+		const int headerButtonCount = static_cast<int>(actionIcons.size()) + (showSteamVRDockHandle ? 1 : 0);
+		const float buttonColumnWidth = headerButtonCount > 0 ?
+		                                    logoSize * static_cast<float>(headerButtonCount) +
+		                                        iconSpacing * static_cast<float>(headerButtonCount - 1) :
+		                                    0.0f;
+
+		if ((showLogo || canShowIcons || showSteamVRDockHandle) && ImGui::BeginTable("##HeaderLayout", 2, ImGuiTableFlags_SizingStretchProp)) {
 			ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("Buttons", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Buttons", ImGuiTableColumnFlags_WidthFixed, buttonColumnWidth);
 			ImGui::TableNextColumn();  // Title on the left with logo
-
-			// Determine scaling based on GlobalScale setting and font size
-			const float currentFontSize = ImGui::GetFontSize();
-			const float baseTextScale = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE;
-			const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
-
-			// Apply UI scale to the base scaling factors
-			const float textScaleFactor = baseTextScale * uiScale;
-			const float logoSize = baseIconSize * uiScale;  // Match action icon size
 
 			if (centerHeader) {
 				// Calculate the width of the content
@@ -130,7 +133,7 @@ void MenuHeaderRenderer::RenderHeader(
 			RenderUndockedIcons(actionIcons, uiScale);
 			if (showSteamVRDockHandle) {
 				if (!actionIcons.empty()) {
-					ImGui::SameLine();
+					ImGui::SameLine(0.0f, iconSpacing);
 				}
 				RenderSteamVRDockHandle(uiScale);
 			}
@@ -138,15 +141,14 @@ void MenuHeaderRenderer::RenderHeader(
 			ImGui::EndTable();
 		} else if (!(showLogo || canShowIcons)) {
 			// No icons available - show just the title without the table layout
-			const float baseTextScale = ThemeManager::Constants::HEADER_FALLBACK_TEXT_SCALE;
-			const float textScaleFactor = baseTextScale * uiScale;  // Apply UI scale
+			const float fallbackTextScale = ThemeManager::Constants::HEADER_FALLBACK_TEXT_SCALE * uiScale;
 
 			if (centerHeader) {
 				// Calculate text width for centering
 				float textWidth = 0.0f;
 				{
 					RoleFontGuard titleFont(Menu::FontRole::Title);
-					ImGui::SetWindowFontScale(textScaleFactor);
+					ImGui::SetWindowFontScale(fallbackTextScale);
 					textWidth = ImGui::CalcTextSize(title.c_str()).x;
 					ImGui::SetWindowFontScale(1.0f);
 				}
@@ -158,7 +160,7 @@ void MenuHeaderRenderer::RenderHeader(
 				}
 			}
 
-			ImGui::SetWindowFontScale(textScaleFactor);
+			ImGui::SetWindowFontScale(fallbackTextScale);
 			{
 				RoleFontGuard titleFont(Menu::FontRole::Title);
 				ImGui::TextUnformatted(title.c_str());
@@ -463,9 +465,7 @@ void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale)
 	const ImU32 bgColor = ImGui::GetColorU32(active ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered :
 	                                                                              ImGuiCol_Button);
 	const ImU32 lineColor = ImGui::GetColorU32(ImGuiCol_Text);
-	if (hovered || active) {
-		drawList->AddRectFilled(min, max, bgColor, handleSize * 0.18f);
-	}
+	drawList->AddRectFilled(min, max, bgColor, handleSize * 0.18f);
 	drawList->AddRect(ImVec2(center.x - radius, center.y - radius), ImVec2(center.x + radius, center.y + radius), lineColor, 1.0f, 0, 1.5f);
 	drawList->AddLine(ImVec2(center.x - radius * 0.55f, center.y), ImVec2(center.x + radius * 0.55f, center.y), lineColor, 1.2f);
 	drawList->AddLine(ImVec2(center.x, center.y - radius * 0.55f), ImVec2(center.x, center.y + radius * 0.55f), lineColor, 1.2f);
@@ -481,6 +481,7 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 	const ImVec2 windowPos = window->Pos;
 	const ImVec2 windowSize = window->Size;
 	const float handleSize = std::max(ImGui::GetFontSize() * 1.15f, 18.0f) * uiScale;
+	const float handleInset = std::max(1.0f, uiScale);
 	const float minWidth = 420.0f * uiScale;
 	const float minHeight = 320.0f * uiScale;
 
@@ -514,9 +515,11 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 			ImGui::SetWindowSize(window, newSize, ImGuiCond_Always);
 		}
 
-		const ImU32 color = ImGui::GetColorU32(active ? ImGuiCol_ResizeGripActive : hovered ? ImGuiCol_ResizeGripHovered :
-		                                                                                 ImGuiCol_ResizeGrip);
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		ImVec4 colorVec = ImGui::GetStyleColorVec4(active ? ImGuiCol_ResizeGripActive : hovered ? ImGuiCol_ResizeGripHovered :
+		                                                                                     ImGuiCol_ResizeGrip);
+		colorVec.w = std::max(colorVec.w, hovered || active ? 0.95f : 0.75f);
+		const ImU32 color = ImGui::GetColorU32(colorVec);
+		ImDrawList* drawList = ImGui::GetForegroundDrawList();
 		if (topLeft) {
 			drawList->AddTriangleFilled(min, ImVec2(min.x + handleSize, min.y), ImVec2(min.x, min.y + handleSize), color);
 		} else {
@@ -525,8 +528,8 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 		}
 	};
 
-	drawResizeHandle("##SteamVRResizeTopLeft", windowPos, true);
-	drawResizeHandle("##SteamVRResizeBottomRight", ImVec2(windowPos.x + windowSize.x - handleSize, windowPos.y + windowSize.y - handleSize), false);
+	drawResizeHandle("##SteamVRResizeTopLeft", ImVec2(windowPos.x + handleInset, windowPos.y + handleInset), true);
+	drawResizeHandle("##SteamVRResizeBottomRight", ImVec2(windowPos.x + windowSize.x - handleSize - handleInset, windowPos.y + windowSize.y - handleSize - handleInset), false);
 	ImGui::SetCursorPos(savedCursor);
 }
 

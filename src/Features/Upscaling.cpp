@@ -7,19 +7,26 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
+#include "VR.h"
 #include <Windows.h>
 #include <algorithm>
 #include <cfloat>
+#include <cctype>
 #include <cmath>
+#include <cwctype>
 #include <directx/d3dx12.h>
+#include <filesystem>
 #include <format>
+#include <string_view>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
 	upscaleMethod,
 	upscaleMethodNoDLSS,
 	qualityMode,
+	dlssPreset,
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
@@ -27,7 +34,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
-	presetDLSS,
+	fsr4RuntimeEnable,
 	reflexLowLatencyMode,
 	reflexLowLatencyBoost,
 	reflexUseMarkersToOptimize,
@@ -35,6 +42,343 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	reflexFPSLimit);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
+
+namespace
+{
+	uint ClampToggleUInt(uint value)
+	{
+		return value ? 1u : 0u;
+	}
+
+	uint ClampQualityModeUInt(uint value)
+	{
+		return std::min<uint>(value, Upscaling::kQualityModeMaxIndex);
+	}
+
+	uint MigrateLegacyQualityModeUInt(uint value)
+	{
+		switch (value) {
+		case 0:
+			return 0u;
+		case 1:
+			return 3u;
+		case 2:
+			return 4u;
+		case 3:
+			return 5u;
+		case 4:
+			return 6u;
+		case 5:
+		case 6:
+			return value;
+		default:
+			return 6u;
+		}
+	}
+
+	uint MigrateLegacyDLSSPresetUInt(uint value)
+	{
+		// Legacy values were 0=Default, 1=J, 2=K, 3=L, 4=M.
+		switch (value) {
+		case 1:
+			return 0;
+		case 2:
+			return 1;
+		case 3:
+			return 2;
+		case 4:
+			return 3;
+		default:
+			return 1;
+		}
+	}
+
+	float ClampFiniteUnitRange(float value, float fallback)
+	{
+		if (!std::isfinite(value))
+			return fallback;
+		return std::clamp(value, 0.0f, 1.0f);
+	}
+
+	const char* GetQualityModeName(uint value, bool isDLSS)
+	{
+		switch (ClampQualityModeUInt(value)) {
+		case 1:
+			return "Hoshipa";
+		case 2:
+			return "Ultra Quality";
+		case 3:
+			return "Quality";
+		case 4:
+			return "Balanced";
+		case 5:
+			return "Performance";
+		case 6:
+			return "Ultra Performance";
+		default:
+			return isDLSS ? "DLAA" : "Native AA";
+		}
+	}
+
+	void SanitizeUpscalingSettings(Upscaling::Settings& settings)
+	{
+		settings.upscaleMethod = std::min<uint>(settings.upscaleMethod, static_cast<uint>(Upscaling::UpscaleMethod::kDLSS));
+		settings.upscaleMethodNoDLSS = std::min<uint>(settings.upscaleMethodNoDLSS, static_cast<uint>(Upscaling::UpscaleMethod::kFSR));
+		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
+		settings.dlssPreset = std::min<uint>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
+		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
+		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
+		settings.streamlineLogLevel = std::min<uint>(settings.streamlineLogLevel, 2u);
+		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.0f);
+		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, 0.1f);
+		if (!std::isfinite(settings.reflexFPSLimit))
+			settings.reflexFPSLimit = 60.0f;
+		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
+	}
+
+	struct OpenCompositeSettingValue
+	{
+		bool value = false;
+		std::string configPath;
+	};
+
+	struct OpenCompositeUpscalingSettings
+	{
+		OpenCompositeSettingValue dlssEnabled;
+		OpenCompositeSettingValue fsrEnabled;
+		OpenCompositeSettingValue dlaaEnabled;
+		OpenCompositeSettingValue fsrNativeAA;
+		OpenCompositeSettingValue fsr3PostAAEnabled;
+	};
+
+	struct DetectedOpenCompositeUpscalingBlocker
+	{
+		bool active = false;
+		std::string settingName;
+		std::string configPath;
+	};
+
+	std::string_view TrimAsciiWhitespace(std::string_view value)
+	{
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
+			value.remove_prefix(1);
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
+			value.remove_suffix(1);
+		return value;
+	}
+
+	std::string ToLowerAscii(std::string_view value)
+	{
+		std::string result(value);
+		std::ranges::transform(result, result.begin(), [](unsigned char c) {
+			return static_cast<char>(std::tolower(c));
+		});
+		return result;
+	}
+
+	bool TryParseOpenCompositeBool(std::string value, bool& outValue)
+	{
+		value = ToLowerAscii(TrimAsciiWhitespace(value));
+		if (value == "true" || value == "on" || value == "enabled" || value == "1") {
+			outValue = true;
+			return true;
+		}
+		if (value == "false" || value == "off" || value == "disabled" || value == "0") {
+			outValue = false;
+			return true;
+		}
+		return false;
+	}
+
+	std::string PathToDisplayString(const std::filesystem::path& path)
+	{
+		return path.string();
+	}
+
+	void AddUniquePath(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path)
+	{
+		if (path.empty())
+			return;
+
+		auto normalized = path.lexically_normal().wstring();
+		std::ranges::transform(normalized, normalized.begin(), [](wchar_t c) {
+			return static_cast<wchar_t>(std::towlower(c));
+		});
+
+		const bool alreadyAdded = std::ranges::any_of(paths, [&](const std::filesystem::path& existing) {
+			auto existingNormalized = existing.lexically_normal().wstring();
+			std::ranges::transform(existingNormalized, existingNormalized.begin(), [](wchar_t c) {
+				return static_cast<wchar_t>(std::towlower(c));
+			});
+			return existingNormalized == normalized;
+		});
+		if (!alreadyAdded)
+			paths.push_back(path);
+	}
+
+	std::filesystem::path GetCurrentDirectoryPath()
+	{
+		std::wstring buffer(MAX_PATH, L'\0');
+		const DWORD length = GetCurrentDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
+		if (length == 0)
+			return {};
+
+		if (length >= buffer.size()) {
+			buffer.resize(length + 1);
+			const DWORD retryLength = GetCurrentDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
+			if (retryLength == 0 || retryLength >= buffer.size())
+				return {};
+			buffer.resize(retryLength);
+		} else {
+			buffer.resize(length);
+		}
+
+		return std::filesystem::path(buffer);
+	}
+
+	std::filesystem::path GetLoadedOpenVRDirectory()
+	{
+		HMODULE openVRModule = GetModuleHandleW(L"openvr_api.dll");
+		if (!openVRModule)
+			return {};
+
+		std::wstring buffer(MAX_PATH, L'\0');
+		const DWORD length = GetModuleFileNameW(openVRModule, buffer.data(), static_cast<DWORD>(buffer.size()));
+		if (length == 0 || length >= buffer.size())
+			return {};
+
+		buffer.resize(length);
+		return std::filesystem::path(buffer).parent_path();
+	}
+
+	bool ShouldProbeOpenCompositeConfig()
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		const auto& cachedInfo = globals::features::vr.openVRInfo;
+		if (cachedInfo.isAvailable)
+			return cachedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
+
+		const auto detectedInfo = VRDetection::Detect();
+		return detectedInfo.isAvailable &&
+		       detectedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
+	}
+
+	std::vector<std::filesystem::path> GetOpenCompositeConfigCandidates()
+	{
+		std::vector<std::filesystem::path> candidates;
+
+		const auto loadedOpenVRDirectory = GetLoadedOpenVRDirectory();
+		if (!loadedOpenVRDirectory.empty())
+			AddUniquePath(candidates, loadedOpenVRDirectory / L"opencomposite.ini");
+
+		const auto currentDirectory = GetCurrentDirectoryPath();
+		if (!currentDirectory.empty()) {
+			AddUniquePath(candidates, currentDirectory / L"opencomposite.ini");
+			AddUniquePath(candidates, currentDirectory / L"opencomposite_ext.ini");
+		}
+
+		return candidates;
+	}
+
+	bool TryReadIniBoolSetting(const CSimpleIniA& ini, const char* key, bool& outValue)
+	{
+		auto tryReadSection = [&](const char* section) {
+			const char* rawValue = ini.GetValue(section, key, nullptr);
+			return rawValue && TryParseOpenCompositeBool(rawValue, outValue);
+		};
+
+		if (tryReadSection(""))
+			return true;
+
+		CSimpleIniA::TNamesDepend sections;
+		ini.GetAllSections(sections);
+		for (const auto& section : sections) {
+			if (section.pItem && tryReadSection(section.pItem))
+				return true;
+		}
+
+		return false;
+	}
+
+	void UpdateOpenCompositeSettingValue(OpenCompositeSettingValue& setting, const CSimpleIniA& ini, const char* key, const std::filesystem::path& path)
+	{
+		bool parsedValue = false;
+		if (!TryReadIniBoolSetting(ini, key, parsedValue))
+			return;
+
+		setting.value = parsedValue;
+		setting.configPath = PathToDisplayString(path);
+	}
+
+	OpenCompositeUpscalingSettings ReadOpenCompositeUpscalingSettings()
+	{
+		OpenCompositeUpscalingSettings settings;
+
+		std::error_code ec;
+		for (const auto& path : GetOpenCompositeConfigCandidates()) {
+			if (!std::filesystem::exists(path, ec))
+				continue;
+			ec.clear();
+
+			CSimpleIniA ini;
+			ini.SetUnicode();
+			const SI_Error rc = ini.LoadFile(path.c_str());
+			if (rc < 0) {
+				logger::warn("[Upscaling] Failed to read Open Composite config '{}': {}", PathToDisplayString(path), rc);
+				continue;
+			}
+
+			UpdateOpenCompositeSettingValue(settings.dlssEnabled, ini, "dlssEnabled", path);
+			UpdateOpenCompositeSettingValue(settings.fsrEnabled, ini, "fsrEnabled", path);
+			UpdateOpenCompositeSettingValue(settings.dlaaEnabled, ini, "dlaaEnabled", path);
+			UpdateOpenCompositeSettingValue(settings.fsrNativeAA, ini, "fsrNativeAA", path);
+			UpdateOpenCompositeSettingValue(settings.fsr3PostAAEnabled, ini, "fsr3PostAAEnabled", path);
+		}
+
+		return settings;
+	}
+
+	DetectedOpenCompositeUpscalingBlocker FindOpenCompositeUpscalingBlocker()
+	{
+		DetectedOpenCompositeUpscalingBlocker blocker;
+		if (!globals::game::isVR)
+			return blocker;
+
+		Util::OCUExternalUpscalerState externalState{};
+		if (Util::TryReadOCUExternalUpscalerState(externalState)) {
+			blocker.active = true;
+			blocker.settingName = "OpenCompositeUnleashedSharedState";
+			blocker.configPath = "Local\\OpenCompositeUnleashedUpscalingState";
+			return blocker;
+		}
+
+		if (!ShouldProbeOpenCompositeConfig())
+			return blocker;
+
+		const auto settings = ReadOpenCompositeUpscalingSettings();
+		auto setBlocker = [&](const char* settingName, const OpenCompositeSettingValue& setting) {
+			blocker.active = true;
+			blocker.settingName = settingName;
+			blocker.configPath = setting.configPath;
+		};
+
+		if (settings.dlaaEnabled.value)
+			setBlocker("dlaaEnabled", settings.dlaaEnabled);
+		else if (settings.fsrNativeAA.value)
+			setBlocker("fsrNativeAA", settings.fsrNativeAA);
+		else if (settings.fsr3PostAAEnabled.value)
+			setBlocker("fsr3PostAAEnabled", settings.fsr3PostAAEnabled);
+		else if (settings.dlssEnabled.value)
+			setBlocker("dlssEnabled", settings.dlssEnabled);
+		else if (settings.fsrEnabled.value)
+			setBlocker("fsrEnabled", settings.fsrEnabled);
+
+		return blocker;
+	}
+}
 
 /**
  * @brief Creates a Direct3D 11 device and swap chain, with support for advanced upscaling and frame generation features.
@@ -179,38 +523,126 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
-	// Display upscaling options in the UI
-	std::vector<std::string> upscaleModes = { "None", "TAA" };
+	struct UpscaleUiChoice
+	{
+		UpscaleMethod method;
+		bool useRuntimeFsr4;
+		const char* label;
+	};
 
-	std::string fsrLabel = "AMD FSR 3.1";
-	upscaleModes.push_back(fsrLabel);
-
-	std::string dlssLabel = "NVIDIA DLSS";
-	upscaleModes.push_back(dlssLabel);
-
-	// Determine available modes
-	bool featureDLSS = streamline.featureDLSS;
-	bool featureFSR = true;  // FSR is always available
-
+	const bool isNvidiaAdapter = fidelityFX.IsNvidiaAdapterDetected();
+	const bool runtimeUpscalerPresent = fidelityFX.IsRuntimeUpscalerPresent();
+	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
+	const bool featureDLSS = streamline.featureDLSS;
+	ApplyOpenCompositeUpscalingBlocker();
+	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
+	const bool openCompositeBlocksUpscaling = openCompositeBlocker.active;
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
-	uint32_t availableModes = 1;  // Start with TAA
-	if (featureFSR)
-		availableModes = 2;  // Add FSR
-	if (featureDLSS)
-		availableModes = 3;  // Add DLSS if available
-	else
+	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
 
-	// Dropdown for method selection
-	std::vector<const char*> modeLabels;
-	for (uint32_t i = 0; i <= availableModes; ++i)
-		modeLabels.push_back(upscaleModes[i].c_str());
-	ImGui::Combo("Method", (int*)currentUpscaleMode, modeLabels.data(), (int)modeLabels.size());
+	if (*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) && !runtimeFsr4AutoEligible)
+		settings.fsr4RuntimeEnable = false;
 
-	*currentUpscaleMode = std::min(availableModes, *currentUpscaleMode);
+	std::vector<UpscaleUiChoice> upscaleChoices = {
+		{ UpscaleMethod::kNONE, false, "None" }
+	};
+	if (!openCompositeBlocksUpscaling) {
+		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
+		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" });
+		if (runtimeFsr4AutoEligible)
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4" });
+		if (featureDLSS)
+			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
+	}
+
+	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
+		if (static_cast<uint32_t>(choice.method) != *currentUpscaleMode)
+			return false;
+		if (choice.method == UpscaleMethod::kFSR)
+			return settings.fsr4RuntimeEnable == choice.useRuntimeFsr4;
+		return true;
+	};
+
+	int methodUiIndex = 0;
+	for (int i = 0; i < static_cast<int>(upscaleChoices.size()); ++i) {
+		if (matchesCurrentChoice(upscaleChoices[i])) {
+			methodUiIndex = i;
+			break;
+		}
+	}
+
+	if (methodUiIndex == 0 && !matchesCurrentChoice(upscaleChoices[0])) {
+		for (int i = 0; i < static_cast<int>(upscaleChoices.size()); ++i) {
+			if (static_cast<uint32_t>(upscaleChoices[i].method) == *currentUpscaleMode) {
+				methodUiIndex = i;
+				break;
+			}
+		}
+	}
+
+	const char* currentMethodLabel = upscaleChoices[methodUiIndex].label;
+	if (openCompositeBlocksUpscaling)
+		ImGui::BeginDisabled();
+	const bool methodChanged = ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
+	if (openCompositeBlocksUpscaling)
+		ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		if (openCompositeBlocksUpscaling) {
+			ImGui::Text("Locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
+		} else {
+			ImGui::TextUnformatted("Selects the upscaling backend.");
+			if (runtimeFsr4AutoEligible)
+				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
+			else
+				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, or None.");
+		}
+	}
+	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
+	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
+	const bool shouldApplyMethodSelection = methodChanged || !matchesCurrentChoice(selectedUpscaleChoice);
+	if (shouldApplyMethodSelection) {
+		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
+		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
+			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+	}
+	if (openCompositeBlocksUpscaling) {
+		ApplyOpenCompositeUpscalingBlocker();
+		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
+		if (openCompositeBlocker.configPath.empty()) {
+			ImGui::TextWrapped(
+				"Community Shaders Upscaling is locked to None because Open Composite has %s=true.",
+				openCompositeBlocker.settingName.c_str());
+		} else {
+			ImGui::TextWrapped(
+				"Community Shaders Upscaling is locked to None because Open Composite has %s=true in %s.",
+				openCompositeBlocker.settingName.c_str(),
+				openCompositeBlocker.configPath.c_str());
+		}
+		ImGui::PopStyleColor();
+	}
 
 	// Check the current upscale method
 	auto upscaleMethod = GetUpscaleMethod();
+	const bool runtimeFsr4Requested =
+		upscaleMethod == UpscaleMethod::kFSR &&
+		settings.fsr4RuntimeEnable;
+	const bool runtimeFsrPathRequested =
+		upscaleMethod == UpscaleMethod::kFSR &&
+		fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+	if (runtimeFsr4Requested || runtimeFsrPathRequested) {
+		ImGui::TextDisabled("Current frame path: %s", fidelityFX.GetRuntimeUpscalerLastFramePathLabel());
+		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
+			ImGui::TextDisabled("Runtime FSR path is latched off after a runtime failure; using host FSR 3.1.5 fallback.");
+		} else if (fidelityFX.IsRuntimeFsr4FailureLatched()) {
+			ImGui::TextDisabled("Runtime FSR 4 is latched off after a runtime failure; using runtime FSR 3.1.5 fallback.");
+		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
+		           !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
+			ImGui::TextDisabled("Runtime FSR context creation failed; using host FSR 3.1.5 fallback.");
+		}
+		if (!runtimeUpscalerPresent && runtimeFsr4Requested)
+			ImGui::TextDisabled("Runtime FSR 4 unavailable: missing FidelityFX upscaler runtime.");
+	}
 
 	// Display warning for DLSS resolution limits (non-VR only; VR handles this automatically)
 	if (!globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS) {
@@ -224,44 +656,73 @@ void Upscaling::DrawSettings()
 
 	// Display upscaling settings if applicable
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		const char* upscalePresetsDLSS[] = { "Ultra Performance", "Performance", "Balanced", "Quality", "DLAA" };
-		const char* upscalePresets[] = { "Ultra Performance", "Performance", "Balanced", "Quality", "Native AA" };
-
-		// Compute a safe preset index (4 - qualityMode) clamped to [0,4] to avoid negative/overflow indexing
-		int presetIndex = 0;
-		if (settings.qualityMode <= 4)
-			presetIndex = 4 - static_cast<int>(settings.qualityMode);
-		presetIndex = std::clamp(presetIndex, 0, 4);
-
-		// Choose preset name set and the corresponding scales once, then show a
-		// single SliderInt to avoid duplicated calls.
-		const char* baseLabel = nullptr;
-
-		if (upscaleMethod == UpscaleMethod::kFSR) {
-			baseLabel = upscalePresets[presetIndex];
-		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-			baseLabel = upscalePresetsDLSS[presetIndex];
-		}
-
-		if (baseLabel) {
-			// Format the label with preset name and resolution scale
-			std::string labelWithScale = std::format("{} ( {:.2f}x )", baseLabel, (resolutionScale.x + resolutionScale.y) * 0.5f);
-
-			ImGui::SliderInt("Upscale Preset", (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str());
+		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
+		const char* baseLabel = GetQualityModeName(settings.qualityMode, upscaleMethod == UpscaleMethod::kDLSS);
+		std::string labelWithScale = std::format("{} ( {:.2f}x )", baseLabel, GetQualityModeResolutionScale(settings.qualityMode));
+		int qualityMode = static_cast<int>(settings.qualityMode);
+		if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str()))
+			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Controls the shared DLSS/FSR/FSR4 internal render scale / quality level.");
+			ImGui::TextUnformatted("Range: low 0 (highest quality, lowest performance gain) to high 6 (highest performance gain, lowest quality).");
 		}
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
-		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
-
-			const char* presets[] = { "Default", "Preset J", "Preset K", "Preset L", "Preset M" };
-			ImGui::Combo("DLSS Model Preset", (int*)&settings.presetDLSS, presets, 5);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Choose which DLSS AI model preset to use.");
-				ImGui::Text("Each model offers different visual quality, performance, and motion stability.");
-				ImGui::Text("Set to 'Default' for automatic selection based on your Upscale Preset and hardware.");
-				ImGui::Text("Changing this setting requires a restart to take effect.");
+				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
+				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
+			}
+		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
+			const uint32_t dlssProfileOrder[] = { 4u, 0u, 1u, 2u, 3u };  // F, J, K, L, M
+			const char* dlssProfiles[] = { "F", "J", "K", "L", "M" };
+			settings.dlssPreset = std::min(settings.dlssPreset, kDLSSPresetMaxIndex);
+
+			int dlssProfileUiIndex = 0;
+			for (int i = 0; i < IM_ARRAYSIZE(dlssProfileOrder); ++i) {
+				if (dlssProfileOrder[i] == settings.dlssPreset) {
+					dlssProfileUiIndex = i;
+					break;
+				}
+			}
+
+			ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex), dlssProfiles[dlssProfileUiIndex]);
+			dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex));
+			settings.dlssPreset = dlssProfileOrder[dlssProfileUiIndex];
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				switch (settings.dlssPreset) {
+				case 0:
+					ImGui::TextUnformatted("DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: about K. Use only if K ghosts.");
+					break;
+				case 1:
+					ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+					break;
+				case 2:
+					ImGui::TextUnformatted("Default for Ultra Performance on newer RTX cards. Sharper and more stable, but higher cost than J/K/F.");
+					ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+					break;
+				case 3:
+					ImGui::TextUnformatted("Default for Performance on newer RTX cards. Similar image-quality improvements to L, closer in speed to J/K.");
+					ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+					break;
+				case 4:
+					ImGui::TextUnformatted("Intended for Ultra Performance/DLAA. Default preset for Ultra Performance.");
+					ImGui::TextUnformatted("Best Performance/Ultra Performance choice for RTX 3000-series cards.");
+					break;
+				default:
+					ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+					break;
+				}
+			}
+
+			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
+				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
+			}
+
+			if (isNvidiaAdapter) {
+				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards and F on RTX 3000-series cards.");
 			}
 		}
 	}
@@ -490,9 +951,52 @@ void Upscaling::DrawSettings()
 	}
 }
 
+const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
+{
+	const ULONGLONG now = GetTickCount64();
+	constexpr ULONGLONG kRefreshIntervalMs = 1000;
+	if (!a_forceRefresh && openCompositeUpscalingBlockerCacheValid && now - openCompositeUpscalingBlockerLastRefresh < kRefreshIntervalMs)
+		return openCompositeUpscalingBlocker;
+
+	const auto detectedBlocker = FindOpenCompositeUpscalingBlocker();
+	openCompositeUpscalingBlocker.active = detectedBlocker.active;
+	openCompositeUpscalingBlocker.settingName = detectedBlocker.settingName;
+	openCompositeUpscalingBlocker.configPath = detectedBlocker.configPath;
+	openCompositeUpscalingBlockerCacheValid = true;
+	openCompositeUpscalingBlockerLastRefresh = now;
+	return openCompositeUpscalingBlocker;
+}
+
+void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
+{
+	const auto& blocker = GetOpenCompositeUpscalingBlocker(a_forceRefresh);
+	if (!blocker.active)
+		return;
+
+	if (settings.upscaleMethod != static_cast<uint>(UpscaleMethod::kNONE) ||
+	    settings.upscaleMethodNoDLSS != static_cast<uint>(UpscaleMethod::kNONE)) {
+		if (blocker.configPath.empty()) {
+			logger::warn(
+				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true.",
+				blocker.settingName);
+		} else {
+			logger::warn(
+				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true in {}.",
+				blocker.settingName,
+				blocker.configPath);
+		}
+	}
+
+	settings.upscaleMethod = static_cast<uint>(UpscaleMethod::kNONE);
+	settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
+}
+
 void Upscaling::SaveSettings(json& o_json)
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	SanitizeUpscalingSettings(settings);
 	o_json = settings;
+	o_json["qualityModeSchemaVersion"] = 2;
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		auto setting = iniSettingCollection->GetSetting("bUseTAA:Display");
@@ -504,7 +1008,14 @@ void Upscaling::SaveSettings(json& o_json)
 
 void Upscaling::LoadSettings(json& o_json)
 {
+	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
+	const bool hasDLSSPreset = o_json.contains("dlssPreset");
+	const uint legacyDLSSPreset = o_json.value("presetDLSS", 0u);
 	settings = o_json;
+	if (!hasQualityModeSchemaVersion)
+		settings.qualityMode = MigrateLegacyQualityModeUInt(settings.qualityMode);
+	if (!hasDLSSPreset)
+		settings.dlssPreset = MigrateLegacyDLSSPresetUInt(legacyDLSSPreset);
 
 	// Sanitize loaded settings to ensure enum indices are valid
 	constexpr auto enumCount = 4;  // UpscaleMethod has 4 values: kNONE, kTAA, kFSR, kDLSS
@@ -516,10 +1027,12 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, enumCount ? enumCount - 1 : 0);
 		settings.upscaleMethodNoDLSS = enumCount ? enumCount - 1 : 0;
 	}
-	if (settings.presetDLSS > 4) {
-		logger::warn("[Upscaling] Loaded presetDLSS {} out of range, resetting to 0 (Default)", settings.presetDLSS);
-		settings.presetDLSS = 0;
-	}
+	if (settings.dlssPreset > kDLSSPresetMaxIndex)
+		logger::warn("[Upscaling] Loaded dlssPreset {} out of range, clamping to {}", settings.dlssPreset, kDLSSPresetMaxIndex);
+
+	SanitizeUpscalingSettings(settings);
+	ApplyOpenCompositeUpscalingBlocker(true);
+
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
 		settings.reflexFPSLimit = 60.0f;
@@ -548,10 +1061,19 @@ void Upscaling::LoadSettings(json& o_json)
 void Upscaling::RestoreDefaultSettings()
 {
 	settings = {};
+	SanitizeUpscalingSettings(settings);
+	ApplyOpenCompositeUpscalingBlocker(true);
 }
 
 void Upscaling::DataLoaded()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping data-loaded upscaling adjustments because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	// Fix screenshots fix from Engine Fixes
 	RE::GetINISetting("bUseTAA:Display")->data.b = false;
 
@@ -588,6 +1110,13 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 
 void Upscaling::Load()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping D3D11 device hook because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainUpscaling, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
 }
 
@@ -605,6 +1134,13 @@ struct BSImageSpace_Init_FXAA
 };
 void Upscaling::PostPostLoad()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping upscaling render hooks because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");
 	stl::detour_thunk<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084));
 
@@ -636,6 +1172,9 @@ void Upscaling::PostPostLoad()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
+	if (GetOpenCompositeUpscalingBlocker().active)
+		return UpscaleMethod::kNONE;
+
 	if (streamline.featureDLSS)
 		return (UpscaleMethod)settings.upscaleMethod;
 	return (UpscaleMethod)settings.upscaleMethodNoDLSS;
@@ -766,24 +1305,69 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
 	static bool previousFrameGenMode = false;
+	static bool previousFSRRuntimePathActive = false;
+	static bool previousFSRRuntimeFsr4Configured = false;
+	static bool previousFSRRuntimeFsr4Active = false;
+	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
+	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
+	const uint32_t qualityModeCurrent = ClampQualityModeUInt(settings.qualityMode);
+	const uint32_t dlssPresetCurrent = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	const bool qualityModeChanged = previousQualityMode != qualityModeCurrent;
+	const bool dlssPresetChanged = previousDLSSPreset != dlssPresetCurrent;
+	const bool dlssResourceSettingsChanged =
+		(previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS) &&
+		(qualityModeChanged || dlssPresetChanged);
+	const bool fsrQualityModeChanged =
+		(previousUpscaleMode == UpscaleMethod::kFSR || a_upscalemethod == UpscaleMethod::kFSR) &&
+		qualityModeChanged;
+	const bool fsrRuntimePathCurrent = IsFSRRuntimePathActive(a_upscalemethod);
+	const bool fsrRuntimeFsr4Configured =
+		a_upscalemethod == UpscaleMethod::kFSR &&
+		settings.fsr4RuntimeEnable &&
+		fidelityFX.IsRuntimeFsr4Available();
+	const bool fsrRuntimeFsr4Current = IsFSRRuntimeFsr4PathActive(a_upscalemethod);
+	const bool compareFSRRuntimePath = a_upscalemethod == UpscaleMethod::kFSR || previousUpscaleMode == UpscaleMethod::kFSR;
+	const bool fsrRuntimePathChanged = compareFSRRuntimePath && previousFSRRuntimePathActive != fsrRuntimePathCurrent;
+	const bool fsrRuntimeFsr4ConfiguredChanged =
+		compareFSRRuntimePath &&
+		(fsrRuntimePathCurrent || previousFSRRuntimePathActive) &&
+		previousFSRRuntimeFsr4Configured != fsrRuntimeFsr4Configured;
+	const bool fsrRuntimeVersionChanged =
+		compareFSRRuntimePath &&
+		(fsrRuntimePathCurrent || previousFSRRuntimePathActive) &&
+		previousFSRRuntimeFsr4Active != fsrRuntimeFsr4Current;
 
-	if (upscaleModeChanged || frameGenModeChanged) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), FrameGen: {} -> {} (d3d12Active={})",
-			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod), previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive);
+	if (upscaleModeChanged || frameGenModeChanged || qualityModeChanged || dlssPresetChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) {
+		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
+			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
+			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 
-		// Destroy previous upscaling method resources (only if they were actually active)
+		bool fsrResourcesRecreated = false;
+
+		if (dlssResourceSettingsChanged) {
+			pendingDLSSReset.store(false, std::memory_order_relaxed);
+			streamline.DestroyDLSSResources();
+			RequestHistoryReset();
+		}
+
+		if (fsrQualityModeChanged) {
+			fidelityFX.DestroyFSRResources();
+			if (a_upscalemethod == UpscaleMethod::kFSR) {
+				fidelityFX.CreateFSRResources();
+				fsrResourcesRecreated = true;
+			}
+			RequestHistoryReset();
+		}
+
 		if (upscaleModeChanged) {
-			DestroyUpscalingTextureResources(a_upscalemethod);
-
-			// Only destroy SDK resources if the previous method was actually performing upscaling
-			if (previousUpscalingWasActive) {
-				if (previousUpscaleMode == UpscaleMethod::kDLSS)
+			if (previousVendorUpscalerSelected) {
+				if (previousUpscaleMode == UpscaleMethod::kDLSS && !dlssResourceSettingsChanged)
 					streamline.DestroyDLSSResources();
-				else if (previousUpscaleMode == UpscaleMethod::kFSR)
+				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesRecreated)
 					fidelityFX.DestroyFSRResources();
 
 				if (globals::game::isVR) {
@@ -798,19 +1382,33 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 					vrIntermediateDepth.reset();
 				}
 			}
-			if (a_upscalemethod == UpscaleMethod::kFSR)
+			DestroyUpscalingTextureResources(a_upscalemethod);
+			if (a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated)
 				fidelityFX.CreateFSRResources();
+			RequestHistoryReset();
 		}
 
-		// Create new upscaling method resources
-		if (upscaleModeChanged) {
+		if (upscaleModeChanged)
 			CreateUpscalingTextureResources(a_upscalemethod);
+
+		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
+			fidelityFX.DestroyFSRResources();
+			fidelityFX.CreateFSRResources();
+			RequestHistoryReset();
+		} else if (!upscaleModeChanged && (fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated) {
+			if (fsrRuntimeFsr4ConfiguredChanged || !fidelityFX.IsRuntimeFsr4FailureLatched())
+				fidelityFX.ResetRuntimeUpscalerResources(true);
+			RequestHistoryReset();
 		}
 
-		// Update tracking for next call
 		previousUpscaleMode = a_upscalemethod;
 		previousFrameGenMode = (settings.frameGenerationMode && d3d12SwapChainActive);
-		previousUpscalingWasActive = IsUpscalingActive();
+		previousFSRRuntimePathActive = fsrRuntimePathCurrent;
+		previousFSRRuntimeFsr4Configured = fsrRuntimeFsr4Configured;
+		previousFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
+		previousQualityMode = qualityModeCurrent;
+		previousDLSSPreset = dlssPresetCurrent;
+		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
 }
 
@@ -1203,9 +1801,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
 	auto upscaleMethod = GetUpscaleMethod();
 
-	// Delete or create resources as necessary
-	CheckResources(upscaleMethod);
-
 	// Cache original TAA values for UI
 	projectionPosScaleX = a_viewport->projectionPosScaleX;
 	projectionPosScaleY = a_viewport->projectionPosScaleY;
@@ -1218,7 +1813,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		float resolutionScaleBase = 1.0f / ffxFsr3GetUpscaleRatioFromQualityMode((FfxFsr3QualityMode)settings.qualityMode);
+		float resolutionScaleBase = GetQualityModeResolutionScale(ClampQualityModeUInt(settings.qualityMode));
 
 		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
 		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
@@ -1257,6 +1852,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	dynamicResolutionWidthRatio = resolutionScale.x;
 	dynamicResolutionHeightRatio = resolutionScale.y;
 
+	// Resource creation uses the runtime dynamic-resolution ratios via ConvertToDynamic.
+	CheckResources(upscaleMethod);
+
 	// Disable dynamic resolution unless the game explicitly enables it
 	if (!globals::game::isVR)
 		runtimeData.dynamicResolutionLock = 1;
@@ -1264,6 +1862,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 void Upscaling::SetupResources()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		logger::warn("[Upscaling] Skipping upscaling resource setup because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+
 	QueryPerformanceFrequency(&qpf);
 
 	auto renderer = globals::game::renderer;
@@ -1589,6 +2194,105 @@ bool Upscaling::IsUpscalingActive() const
 	return resolutionScale.x < .99f;
 }
 
+bool Upscaling::IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const
+{
+	return a_upscaleMethod == UpscaleMethod::kFSR &&
+	       fidelityFX.ShouldUseRuntimeUpscalerForFSR();
+}
+
+bool Upscaling::IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const
+{
+	return a_upscaleMethod == UpscaleMethod::kFSR &&
+	       fidelityFX.ShouldRequestRuntimeFsr4();
+}
+
+void Upscaling::RequestHistoryReset()
+{
+	historyResetRequested = true;
+}
+
+bool Upscaling::ShouldResetHistoryThisFrame() const
+{
+	return historyResetThisFrame;
+}
+
+void Upscaling::LatchHistoryResetForCurrentFrame()
+{
+	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+	if (historyResetLatchedFrame == frame)
+		return;
+
+	historyResetLatchedFrame = frame;
+	historyResetThisFrame = historyResetRequested;
+	historyResetRequested = false;
+}
+
+void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
+{
+	auto state = globals::state;
+	if (!state)
+		return;
+
+	const bool inWorld = state->inWorld;
+	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
+	const float2 screenSize = state->screenSize;
+	const uint32_t qualityMode = ClampQualityModeUInt(settings.qualityMode);
+	const bool fsrRuntimePathActive = IsFSRRuntimePathActive(a_upscaleMethod);
+	const bool fsrRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(a_upscaleMethod);
+
+	auto cameraCutDetected = []() {
+		constexpr float kCameraCutDistanceThreshold = 2500.0f;
+		const float cutDistanceSq = kCameraCutDistanceThreshold * kCameraCutDistanceThreshold;
+		const auto& currentPos = globals::game::frameBufferCached.GetCameraPosAdjust();
+		const auto& previousPos = globals::game::frameBufferCached.GetCameraPreviousPosAdjust();
+		const float dx = currentPos.x - previousPos.x;
+		const float dy = currentPos.y - previousPos.y;
+		const float dz = currentPos.z - previousPos.z;
+		return (dx * dx + dy * dy + dz * dz) > cutDistanceSq;
+	};
+
+	bool shouldReset = false;
+	if (!historyResetTrackingInitialized) {
+		shouldReset = true;
+		historyResetTrackingInitialized = true;
+	} else {
+		const bool screenSizeChanged =
+			std::abs(screenSize.x - previousHistoryScreenSize.x) > 0.5f ||
+			std::abs(screenSize.y - previousHistoryScreenSize.y) > 0.5f;
+		const bool scaleChanged =
+			std::abs(resolutionScale.x - previousHistoryResolutionScale.x) > 1e-4f ||
+			std::abs(resolutionScale.y - previousHistoryResolutionScale.y) > 1e-4f;
+		const bool qualityModeChanged = qualityMode != previousHistoryQualityMode;
+		const bool worldStateChanged =
+			inWorld != previousHistoryInWorld ||
+			inMapMenu != previousHistoryInMapMenu;
+		const bool methodChanged = a_upscaleMethod != previousHistoryUpscaleMethod;
+		const bool fsrRuntimePathChanged = fsrRuntimePathActive != previousHistoryFSRRuntimePathActive;
+		const bool fsrRuntimeVersionChanged =
+			(fsrRuntimePathActive || previousHistoryFSRRuntimePathActive) &&
+			fsrRuntimeFsr4Active != previousHistoryFSRRuntimeFsr4Active;
+		const bool longFrameGap = globals::game::deltaTime &&
+		                          std::isfinite(*globals::game::deltaTime) &&
+		                          *globals::game::deltaTime > 0.20f;
+		const bool cameraCut = inWorld && cameraCutDetected();
+
+		shouldReset = screenSizeChanged || scaleChanged || qualityModeChanged || worldStateChanged ||
+		              methodChanged || fsrRuntimePathChanged || fsrRuntimeVersionChanged || longFrameGap || cameraCut;
+	}
+
+	if (shouldReset)
+		RequestHistoryReset();
+
+	previousHistoryScreenSize = screenSize;
+	previousHistoryResolutionScale = resolutionScale;
+	previousHistoryQualityMode = qualityMode;
+	previousHistoryInWorld = inWorld;
+	previousHistoryInMapMenu = inMapMenu;
+	previousHistoryUpscaleMethod = a_upscaleMethod;
+	previousHistoryFSRRuntimePathActive = fsrRuntimePathActive;
+	previousHistoryFSRRuntimeFsr4Active = fsrRuntimeFsr4Active;
+}
+
 /**
  * @brief Retrieves the current frame time for frame generation.
  *
@@ -1613,10 +2317,29 @@ float Upscaling::GetFrameGenerationFrameTime() const
 // Unified interface methods
 void Upscaling::LoadUpscalingSDKs()
 {
+	ApplyOpenCompositeUpscalingBlocker(true);
+	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	if (blocker.active) {
+		if (!openCompositeUpscalingBackendSkipLogged) {
+			if (blocker.configPath.empty()) {
+				logger::warn(
+					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true.",
+					blocker.settingName);
+			} else {
+				logger::warn(
+					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true in {}.",
+					blocker.settingName,
+					blocker.configPath);
+			}
+			openCompositeUpscalingBackendSkipLogged = true;
+		}
+		return;
+	}
+
 	// Initialize upscaling SDK components during plugin startup
 	// This ensures all SDKs are available before any D3D device creation
 	streamline.LoadInterposer();
-	fidelityFX.LoadFFX();  // Only for frame generation now
+	fidelityFX.LoadFFX();
 }
 
 HANDLE Upscaling::GetFrameLatencyWaitableObject() const
@@ -1700,6 +2423,15 @@ void Upscaling::Upscale()
 	ZoneScoped;
 	auto upscaleMethod = GetUpscaleMethod();
 
+	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
+		logger::debug("[Upscaling] LoadingMenu close detected - rebuilding DLSS feature");
+		streamline.DestroyDLSSResources();
+		RequestHistoryReset();
+	}
+
+	UpdateHistoryResetState(upscaleMethod);
+	LatchHistoryResetForCurrentFrame();
+
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -1776,14 +2508,6 @@ void Upscaling::Upscale()
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
-			// VR-only workaround: a worldspace/cell transition causes ~2-3ms persistent GPU-time
-			// regression in the DLSS feature that only clears on a manual mode/preset toggle.
-			// Mirror that toggle by tearing down the DLSS feature on LoadingMenu close — the next
-			// SetDLSSOptions/slEvaluateFeature call below recreates it with current per-eye extents.
-			if (globals::game::isVR && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
-				logger::debug("[Upscaling] LoadingMenu close detected — rebuilding DLSS feature");
-				streamline.DestroyDLSSResources();
-			}
 			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorCopyTexture->resource.get());
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
 			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);

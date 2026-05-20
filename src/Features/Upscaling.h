@@ -5,8 +5,10 @@
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include <atomic>
 #include <d3d11_4.h>
 #include <d3d12.h>
+#include <limits>
 #include <winrt/base.h>
 
 /**
@@ -50,22 +52,49 @@ public:
 		kDLSS
 	};
 
+	// Shared DLSS/FSR/FSR4 render-scale presets:
+	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
+	// 4=Balanced, 5=Performance, 6=Ultra Performance
+	static constexpr uint32_t kQualityModeMaxIndex = 6;
+	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
+
+	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
+	{
+		switch (a_qualityMode) {
+		case 1:
+			return 0.85f;
+		case 2:
+			return 1.0f / 1.3f;
+		case 3:
+			return 1.0f / 1.5f;
+		case 4:
+			return 1.0f / 1.7f;
+		case 5:
+			return 0.5f;
+		case 6:
+			return 1.0f / 3.0f;
+		default:
+			return 1.0f;
+		}
+	}
+
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 1;  // Default to Quality (1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance, 0=Native AA)
+		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
+		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 1;
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
-		float sharpnessDLSS = 0.0f;
-		uint presetDLSS = 0;  // 0=Default, 1=J, 2=K, 3=L, 4=M
-		bool reflexLowLatencyMode = false;
+		float sharpnessDLSS = 0.1f;
+		bool fsr4RuntimeEnable = true;
+		bool reflexLowLatencyMode = true;
 		bool reflexLowLatencyBoost = false;
-		bool reflexUseMarkersToOptimize = false;
+		bool reflexUseMarkersToOptimize = true;
 		bool reflexUseFPSLimit = false;
 		float reflexFPSLimit = 60.0f;
 	};
@@ -209,8 +238,20 @@ public:
 	float dynamicResolutionWidthRatio = 1.0f;
 	float dynamicResolutionHeightRatio = 1.0f;
 
-	bool previousUpscalingWasActive = false;
+	bool previousVendorUpscalerSelected = false;
 	bool depthUpscaleUseWideKernel = false;
+	bool historyResetRequested = true;
+	bool historyResetThisFrame = false;
+	uint32_t historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
+	bool historyResetTrackingInitialized = false;
+	float2 previousHistoryScreenSize = { 0.0f, 0.0f };
+	float2 previousHistoryResolutionScale = { 1.0f, 1.0f };
+	uint32_t previousHistoryQualityMode = std::numeric_limits<uint32_t>::max();
+	bool previousHistoryInWorld = false;
+	bool previousHistoryInMapMenu = false;
+	UpscaleMethod previousHistoryUpscaleMethod = UpscaleMethod::kNONE;
+	bool previousHistoryFSRRuntimePathActive = false;
+	bool previousHistoryFSRRuntimeFsr4Active = false;
 
 	/// Set by MenuOpenCloseEventHandler when LoadingMenu closes (cell/worldspace transitions,
 	/// initial load). Consumed at the start of Upscale() to force a one-frame DLSS feature
@@ -223,6 +264,12 @@ public:
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
+	void RequestHistoryReset();
+	bool ShouldResetHistoryThisFrame() const;
+	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
+	void LatchHistoryResetForCurrentFrame();
+	bool IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const;
+	bool IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const;
 
 	/**
 	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.
@@ -265,6 +312,21 @@ public:
 	BlurResources GetBlurResources() const;
 
 private:
+	struct OpenCompositeUpscalingBlocker
+	{
+		bool active = false;
+		std::string settingName;
+		std::string configPath;
+	};
+
+	const OpenCompositeUpscalingBlocker& GetOpenCompositeUpscalingBlocker(bool a_forceRefresh = false) const;
+	void ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh = false);
+
+	mutable OpenCompositeUpscalingBlocker openCompositeUpscalingBlocker;
+	mutable bool openCompositeUpscalingBlockerCacheValid = false;
+	mutable ULONGLONG openCompositeUpscalingBlockerLastRefresh = 0;
+	bool openCompositeUpscalingBackendSkipLogged = false;
+
 	struct Main_UpdateJitter
 	{
 		static void thunk(RE::BSGraphics::State* a_state);

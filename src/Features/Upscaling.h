@@ -55,6 +55,7 @@ public:
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
 	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
+	static constexpr uint32_t kPendingVRDLSSSettingUnset = std::numeric_limits<uint32_t>::max();
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{
@@ -343,6 +344,22 @@ public:
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];  // per-eye render resolution
 
+	struct VRIntermediateTextureCache
+	{
+		uint32_t inWidth = 0;
+		uint32_t inHeight = 0;
+		uint32_t outWidth = 0;
+		uint32_t outHeight = 0;
+		eastl::unique_ptr<Texture2D> colorIn[2];
+		eastl::unique_ptr<Texture2D> colorOut[2];
+		eastl::unique_ptr<Texture2D> depth[2];
+		eastl::unique_ptr<Texture2D> linearDepth[2];
+		eastl::unique_ptr<Texture2D> motionVectors[2];
+		eastl::unique_ptr<Texture2D> reactiveMask[2];
+		eastl::unique_ptr<Texture2D> transparencyMask[2];
+	};
+	VRIntermediateTextureCache cachedVRIntermediateTextures;
+
 	// Helper to create/resize per-eye buffers matching source formats
 	void CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc);
@@ -424,13 +441,20 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
-	std::atomic<bool> pendingDLSSReset{ false };
+	std::atomic<bool> pendingDLSSHistoryReset{ false };
+	std::atomic<uint32_t> pendingVRDLSSQualityMode{ kPendingVRDLSSSettingUnset };
+	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRDLSSSettingUnset };
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
 	void RequestHistoryReset();
+	uint32_t GetEffectiveDLSSQualityMode() const;
+	uint32_t GetEffectiveDLSSPreset() const;
+	void QueueVRDLSSQualityMode(uint32_t a_qualityMode);
+	void QueueVRDLSSPreset(uint32_t a_dlssPreset);
+	void ApplyPendingVRDLSSSettings(UpscaleMethod a_upscaleMethod);
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
 	void LatchHistoryResetForCurrentFrame();

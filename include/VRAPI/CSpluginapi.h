@@ -197,7 +197,7 @@ namespace CSPluginAPI
 
 	inline DLSSMode CSInterface001::GetDLSSMode()
 	{
-		const uint32_t clampedMode = std::min(globals::features::upscaling.settings.qualityMode, Upscaling::kQualityModeMaxIndex);
+		const uint32_t clampedMode = std::min(globals::features::upscaling.GetEffectiveDLSSQualityMode(), Upscaling::kQualityModeMaxIndex);
 		return detail::QualityModeToUpscalePreset(clampedMode);
 	}
 
@@ -210,15 +210,17 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(mode);
-		if (upscaling.settings.qualityMode == qualityMode)
+		const bool stageVRDLSSChange = globals::game::isVR && upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
+		if ((stageVRDLSSChange ? upscaling.GetEffectiveDLSSQualityMode() : upscaling.settings.qualityMode) == qualityMode)
 			return;
 
-		const bool dlssSelected = upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
+		if (stageVRDLSSChange) {
+			upscaling.QueueVRDLSSQualityMode(qualityMode);
+			return;
+		}
+
 		upscaling.settings.qualityMode = qualityMode;
 		upscaling.RequestHistoryReset();
-		if (globals::game::isVR && dlssSelected) {
-			upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
-		}
 	}
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()
@@ -233,7 +235,7 @@ namespace CSPluginAPI
 
 	inline DLSSProfile CSInterface001::GetDLSSProfile()
 	{
-		const uint32_t clampedProfile = std::min(globals::features::upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+		const uint32_t clampedProfile = std::min(globals::features::upscaling.GetEffectiveDLSSPreset(), Upscaling::kDLSSPresetMaxIndex);
 		return static_cast<DLSSProfile>(clampedProfile);
 	}
 
@@ -246,14 +248,16 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
-		if (upscaling.settings.dlssPreset == dlssPreset)
+		const bool stageVRDLSSChange = globals::game::isVR && upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
+		if ((stageVRDLSSChange ? upscaling.GetEffectiveDLSSPreset() : upscaling.settings.dlssPreset) == dlssPreset)
 			return;
 
-		const bool dlssSelected = upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
+		if (stageVRDLSSChange) {
+			upscaling.QueueVRDLSSPreset(dlssPreset);
+			return;
+		}
+
 		upscaling.settings.dlssPreset = dlssPreset;
 		upscaling.RequestHistoryReset();
-		if (globals::game::isVR && dlssSelected) {
-			upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
-		}
 	}
 }  // namespace CSPluginAPI

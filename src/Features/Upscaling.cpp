@@ -1796,7 +1796,8 @@ void Upscaling::DataLoaded()
 	static auto fDRClampOffset = RE::GetINISetting("fDRClampOffset:Display");
 	fDRClampOffset->data.f = 0.0f;
 
-	// VR + DLSS workaround: trigger a one-shot DLSS feature rebuild after loading-menu close.
+	// VR + DLSS workaround: loading transitions need a temporal reset, but full
+	// DLSS resource rebuilds on every door load can flicker and stress the driver.
 	if (globals::game::isVR)
 		MenuOpenCloseEventHandler::Register();
 }
@@ -1805,7 +1806,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
-		globals::features::upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
+		globals::features::upscaling.pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
 	return RE::BSEventNotifyControl::kContinue;
 }
 
@@ -1819,19 +1820,19 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 
 	auto ui = globals::game::ui;
 	if (!ui) {
-		logger::error("[Upscaling] UI event source not found; DLSS reset-on-load disabled");
+		logger::error("[Upscaling] UI event source not found; DLSS history reset-on-load disabled");
 		return false;
 	}
 
 	auto eventSource = ui->GetEventSource<RE::MenuOpenCloseEvent>();
 	if (!eventSource) {
-		logger::error("[Upscaling] MenuOpenCloseEvent source not found; DLSS reset-on-load disabled");
+		logger::error("[Upscaling] MenuOpenCloseEvent source not found; DLSS history reset-on-load disabled");
 		return false;
 	}
 
 	eventSource->AddEventSink(&singleton);
 	registered.store(true, std::memory_order_release);
-	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for DLSS reset-on-load");
+	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for DLSS history reset-on-load");
 	return true;
 }
 
@@ -2014,6 +2015,52 @@ void Upscaling::DestroyCommonUpscalingTextures()
 	DestroyTexture(sharpenerTexture);
 }
 
+namespace
+{
+	bool HasVRIntermediateTextureCache(const Upscaling::VRIntermediateTextureCache& a_cache)
+	{
+		return a_cache.colorIn[0] && a_cache.colorIn[1] &&
+		       a_cache.colorOut[0] && a_cache.colorOut[1] &&
+		       a_cache.depth[0] && a_cache.depth[1] &&
+		       a_cache.linearDepth[0] && a_cache.linearDepth[1] &&
+		       a_cache.motionVectors[0] && a_cache.motionVectors[1] &&
+		       a_cache.reactiveMask[0] && a_cache.reactiveMask[1] &&
+		       a_cache.transparencyMask[0] && a_cache.transparencyMask[1] &&
+		       a_cache.colorOut[0]->uav && a_cache.colorOut[1]->uav &&
+		       a_cache.linearDepth[0]->uav && a_cache.linearDepth[1]->uav &&
+		       a_cache.motionVectors[0]->uav && a_cache.motionVectors[1]->uav &&
+		       a_cache.reactiveMask[0]->uav && a_cache.reactiveMask[1]->uav &&
+		       a_cache.transparencyMask[0]->uav && a_cache.transparencyMask[1]->uav;
+	}
+
+	bool MatchesVRIntermediateTextureCache(const Upscaling::VRIntermediateTextureCache& a_cache,
+		uint32_t a_inWidth, uint32_t a_inHeight, uint32_t a_outWidth, uint32_t a_outHeight)
+	{
+		return HasVRIntermediateTextureCache(a_cache) &&
+		       a_cache.inWidth == a_inWidth &&
+		       a_cache.inHeight == a_inHeight &&
+		       a_cache.outWidth == a_outWidth &&
+		       a_cache.outHeight == a_outHeight;
+	}
+
+	void ClearVRIntermediateTextureCache(Upscaling::VRIntermediateTextureCache& a_cache)
+	{
+		for (uint32_t i = 0; i < 2; ++i) {
+			a_cache.colorIn[i].reset();
+			a_cache.colorOut[i].reset();
+			a_cache.depth[i].reset();
+			a_cache.linearDepth[i].reset();
+			a_cache.motionVectors[i].reset();
+			a_cache.reactiveMask[i].reset();
+			a_cache.transparencyMask[i].reset();
+		}
+		a_cache.inWidth = 0;
+		a_cache.inHeight = 0;
+		a_cache.outWidth = 0;
+		a_cache.outHeight = 0;
+	}
+}
+
 void Upscaling::DestroyVRIntermediateTextures()
 {
 	for (uint32_t i = 0; i < 2; ++i) {
@@ -2025,6 +2072,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 		vrIntermediateReactiveMask[i].reset();
 		vrIntermediateTransparencyMask[i].reset();
 	}
+	ClearVRIntermediateTextureCache(cachedVRIntermediateTextures);
 	peripheryTAAHistoryReadIndex = 0;
 	peripheryTAAHistoryValid = false;
 }
@@ -2171,6 +2219,10 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	const bool dlssQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool dlssPresetResourceChanged = dlssPresetChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool dlssResourceSettingsChanged = dlssQualityModeChanged || dlssPresetResourceChanged;
+	const bool dlssOptionSettingsChanged =
+		dlssResourceSettingsChanged &&
+		previousUpscaleMode == UpscaleMethod::kDLSS &&
+		a_upscalemethod == UpscaleMethod::kDLSS;
 	const bool fsrQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kFSR || a_upscalemethod == UpscaleMethod::kFSR);
 	const bool foveatedDispatchCurrent = IsFoveatedVendorDispatchEnabled(a_upscalemethod);
 	const bool peripheryTAACurrent = IsPeripheryTAAEnabled(a_upscalemethod);
@@ -2235,9 +2287,11 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 			RequestHistoryReset();
 			if (dlssResourceSettingsChanged) {
-				pendingDLSSReset.store(false, std::memory_order_relaxed);
-				streamline.DestroyDLSSResources();
-				if (qualityModeChanged)
+				if (globals::game::isVR && a_upscalemethod == UpscaleMethod::kDLSS) {
+					pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
+				}
+				streamline.InvalidateDLSSOptionsCache();
+				if (!dlssOptionSettingsChanged && qualityModeChanged && a_upscalemethod != UpscaleMethod::kDLSS)
 					destroyVRQualityResources();
 			} else if (fsrQualityModeChanged) {
 				fidelityFX.DestroyFSRResources();
@@ -2254,12 +2308,12 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		// but IsUpscalingActive() is false because the render scale is 1:1.
 		if (upscaleModeChanged) {
 			if (previousVendorUpscalerSelected) {
-				if (previousUpscaleMode == UpscaleMethod::kDLSS && !dlssResourceSettingsChanged)
+				if (previousUpscaleMode == UpscaleMethod::kDLSS)
 					streamline.DestroyDLSSResources();
 				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesDestroyedForQuality)
 					fidelityFX.DestroyFSRResources();
 
-				if (globals::game::isVR && !dlssResourceSettingsChanged && !fsrResourcesDestroyedForQuality) {
+				if (globals::game::isVR && !fsrResourcesDestroyedForQuality) {
 					DestroyVRIntermediateTextures();
 				}
 			}
@@ -3936,18 +3990,80 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		vrIntermediateTransparencyMask[0] && vrIntermediateTransparencyMask[1];
 
 	bool needsRecreate = !hasAllIntermediates;
+	uint32_t currentInWidth = 0;
+	uint32_t currentInHeight = 0;
+	uint32_t currentOutWidth = 0;
+	uint32_t currentOutHeight = 0;
+	bool currentHasRequiredViews = false;
 	if (!needsRecreate) {
+		currentInWidth = vrIntermediateColorIn[0]->desc.Width;
+		currentInHeight = vrIntermediateColorIn[0]->desc.Height;
+		currentOutWidth = vrIntermediateColorOut[0]->desc.Width;
+		currentOutHeight = vrIntermediateColorOut[0]->desc.Height;
+		currentHasRequiredViews =
+			vrIntermediateColorOut[0]->uav && vrIntermediateColorOut[1]->uav &&
+			vrIntermediateLinearDepth[0]->uav && vrIntermediateLinearDepth[1]->uav &&
+			vrIntermediateMotionVectors[0]->uav && vrIntermediateMotionVectors[1]->uav &&
+			vrIntermediateReactiveMask[0]->uav && vrIntermediateReactiveMask[1]->uav &&
+			vrIntermediateTransparencyMask[0]->uav && vrIntermediateTransparencyMask[1]->uav;
 		needsRecreate =
-			(vrIntermediateColorIn[0]->desc.Width != inWidth || vrIntermediateColorIn[0]->desc.Height != inHeight ||
-				vrIntermediateColorOut[0]->desc.Width != outWidth || vrIntermediateColorOut[0]->desc.Height != outHeight ||
-				!vrIntermediateColorOut[0]->uav || !vrIntermediateColorOut[1]->uav ||
-				!vrIntermediateLinearDepth[0]->uav || !vrIntermediateLinearDepth[1]->uav ||
-				!vrIntermediateMotionVectors[0]->uav || !vrIntermediateMotionVectors[1]->uav ||
-				!vrIntermediateReactiveMask[0]->uav || !vrIntermediateReactiveMask[1]->uav ||
-				!vrIntermediateTransparencyMask[0]->uav || !vrIntermediateTransparencyMask[1]->uav);
+			(currentInWidth != inWidth || currentInHeight != inHeight ||
+				currentOutWidth != outWidth || currentOutHeight != outHeight ||
+				!currentHasRequiredViews);
 	}
 
 	if (needsRecreate) {
+		if (MatchesVRIntermediateTextureCache(cachedVRIntermediateTextures, inWidth, inHeight, outWidth, outHeight)) {
+			logger::info("[Upscaling] Reusing cached VR intermediates: per-eye in {}x{}, out {}x{}",
+				inWidth, inHeight, outWidth, outHeight);
+
+			for (uint32_t i = 0; i < 2; ++i) {
+				if (hasAllIntermediates && currentHasRequiredViews) {
+					std::swap(vrIntermediateColorIn[i], cachedVRIntermediateTextures.colorIn[i]);
+					std::swap(vrIntermediateColorOut[i], cachedVRIntermediateTextures.colorOut[i]);
+					std::swap(vrIntermediateDepth[i], cachedVRIntermediateTextures.depth[i]);
+					std::swap(vrIntermediateLinearDepth[i], cachedVRIntermediateTextures.linearDepth[i]);
+					std::swap(vrIntermediateMotionVectors[i], cachedVRIntermediateTextures.motionVectors[i]);
+					std::swap(vrIntermediateReactiveMask[i], cachedVRIntermediateTextures.reactiveMask[i]);
+					std::swap(vrIntermediateTransparencyMask[i], cachedVRIntermediateTextures.transparencyMask[i]);
+				} else {
+					vrIntermediateColorIn[i] = std::move(cachedVRIntermediateTextures.colorIn[i]);
+					vrIntermediateColorOut[i] = std::move(cachedVRIntermediateTextures.colorOut[i]);
+					vrIntermediateDepth[i] = std::move(cachedVRIntermediateTextures.depth[i]);
+					vrIntermediateLinearDepth[i] = std::move(cachedVRIntermediateTextures.linearDepth[i]);
+					vrIntermediateMotionVectors[i] = std::move(cachedVRIntermediateTextures.motionVectors[i]);
+					vrIntermediateReactiveMask[i] = std::move(cachedVRIntermediateTextures.reactiveMask[i]);
+					vrIntermediateTransparencyMask[i] = std::move(cachedVRIntermediateTextures.transparencyMask[i]);
+				}
+			}
+
+			if (hasAllIntermediates && currentHasRequiredViews) {
+				cachedVRIntermediateTextures.inWidth = currentInWidth;
+				cachedVRIntermediateTextures.inHeight = currentInHeight;
+				cachedVRIntermediateTextures.outWidth = currentOutWidth;
+				cachedVRIntermediateTextures.outHeight = currentOutHeight;
+			} else {
+				ClearVRIntermediateTextureCache(cachedVRIntermediateTextures);
+			}
+			return;
+		}
+
+		if (hasAllIntermediates && currentHasRequiredViews) {
+			for (uint32_t i = 0; i < 2; ++i) {
+				cachedVRIntermediateTextures.colorIn[i] = std::move(vrIntermediateColorIn[i]);
+				cachedVRIntermediateTextures.colorOut[i] = std::move(vrIntermediateColorOut[i]);
+				cachedVRIntermediateTextures.depth[i] = std::move(vrIntermediateDepth[i]);
+				cachedVRIntermediateTextures.linearDepth[i] = std::move(vrIntermediateLinearDepth[i]);
+				cachedVRIntermediateTextures.motionVectors[i] = std::move(vrIntermediateMotionVectors[i]);
+				cachedVRIntermediateTextures.reactiveMask[i] = std::move(vrIntermediateReactiveMask[i]);
+				cachedVRIntermediateTextures.transparencyMask[i] = std::move(vrIntermediateTransparencyMask[i]);
+			}
+			cachedVRIntermediateTextures.inWidth = currentInWidth;
+			cachedVRIntermediateTextures.inHeight = currentInHeight;
+			cachedVRIntermediateTextures.outWidth = currentOutWidth;
+			cachedVRIntermediateTextures.outHeight = currentOutHeight;
+		}
+
 		logger::info("[Upscaling] (Re)creating VR intermediates: per-eye in {}x{}, out {}x{}",
 			inWidth, inHeight, outWidth, outHeight);
 		CreateVRIntermediateTextures(inWidth, inHeight, outWidth, outHeight, colorSrc, mvecSrc, reactiveSrc, transparencySrc);
@@ -4221,6 +4337,7 @@ void Upscaling::ConfigureTAA()
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
 	auto upscaleMethod = GetUpscaleMethod();
+	ApplyPendingVRDLSSSettings(upscaleMethod);
 
 	// Cache original TAA values for UI
 	projectionPosScaleX = a_viewport->projectionPosScaleX;
@@ -4627,6 +4744,53 @@ void Upscaling::RequestHistoryReset()
 	historyResetRequested = true;
 }
 
+uint32_t Upscaling::GetEffectiveDLSSQualityMode() const
+{
+	const uint32_t pendingQualityMode = pendingVRDLSSQualityMode.load(std::memory_order_acquire);
+	return pendingQualityMode != kPendingVRDLSSSettingUnset ? pendingQualityMode : settings.qualityMode;
+}
+
+uint32_t Upscaling::GetEffectiveDLSSPreset() const
+{
+	const uint32_t pendingPreset = pendingVRDLSSPreset.load(std::memory_order_acquire);
+	return pendingPreset != kPendingVRDLSSSettingUnset ? pendingPreset : settings.dlssPreset;
+}
+
+void Upscaling::QueueVRDLSSQualityMode(uint32_t a_qualityMode)
+{
+	pendingVRDLSSQualityMode.store(std::min(a_qualityMode, kQualityModeMaxIndex), std::memory_order_release);
+}
+
+void Upscaling::QueueVRDLSSPreset(uint32_t a_dlssPreset)
+{
+	pendingVRDLSSPreset.store(std::min(a_dlssPreset, kDLSSPresetMaxIndex), std::memory_order_release);
+}
+
+void Upscaling::ApplyPendingVRDLSSSettings(UpscaleMethod a_upscaleMethod)
+{
+	if (!globals::game::isVR || a_upscaleMethod != UpscaleMethod::kDLSS)
+		return;
+
+	const uint32_t pendingQualityMode = pendingVRDLSSQualityMode.exchange(kPendingVRDLSSSettingUnset, std::memory_order_acq_rel);
+	const uint32_t pendingPreset = pendingVRDLSSPreset.exchange(kPendingVRDLSSSettingUnset, std::memory_order_acq_rel);
+	bool changed = false;
+
+	if (pendingQualityMode != kPendingVRDLSSSettingUnset && settings.qualityMode != pendingQualityMode) {
+		settings.qualityMode = pendingQualityMode;
+		changed = true;
+	}
+
+	if (pendingPreset != kPendingVRDLSSSettingUnset && settings.dlssPreset != pendingPreset) {
+		settings.dlssPreset = pendingPreset;
+		changed = true;
+	}
+
+	if (changed) {
+		RequestHistoryReset();
+		pendingDLSSHistoryReset.store(true, std::memory_order_release);
+	}
+}
+
 bool Upscaling::ShouldResetHistoryThisFrame() const
 {
 	return historyResetThisFrame;
@@ -4886,13 +5050,8 @@ void Upscaling::Upscale()
 	auto upscaleMethod = GetUpscaleMethod();
 	dlssUpscaleOutputInSharpenerTexture = false;
 
-	// VR-only workaround: loading transitions can leave DLSS in a slower persistent state
-	// until users manually toggle method/preset; force a one-shot feature rebuild before
-	// latching this frame's history state.
-	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
-		logger::debug("[Upscaling] LoadingMenu close detected - rebuilding DLSS feature");
-		UnbindUpscalingResources();
-		streamline.DestroyDLSSResources();
+	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSHistoryReset.exchange(false, std::memory_order_relaxed)) {
+		logger::debug("[Upscaling] Resetting DLSS history after VR option/load transition");
 		RequestHistoryReset();
 	}
 

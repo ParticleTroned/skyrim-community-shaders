@@ -39,6 +39,9 @@ public:
 
 	sl::ViewportHandle viewport{ 0 };
 	sl::ViewportHandle viewportRight{ 1 };
+	static constexpr uint32_t kVRDLSSViewportSlotCount = 2;
+	static constexpr uint32_t kVRDLSSSlotViewportBase = 0x1000;
+	static constexpr uint32_t kVRDLSSSlotViewportEyeStride = 2;
 	static constexpr uint32_t MAX_RESOLUTION = 8192;
 	HMODULE interposer = NULL;
 
@@ -86,7 +89,20 @@ public:
 		bool isHDR = false;
 		bool useLegacyProfile = false;
 	};
-	DLSSOptionsCache dlssOptionsCache[2]{};
+
+	struct VRDLSSViewportSlot
+	{
+		bool valid = false;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = 0;
+		uint64_t lastUse = 0;
+		sl::ViewportHandle viewport[2] = { sl::ViewportHandle(0), sl::ViewportHandle(1) };
+		DLSSOptionsCache optionsCache[2]{};
+	};
+
+	DLSSOptionsCache nonVRDLSSOptionsCache{};
+	VRDLSSViewportSlot vrDLSSViewportSlots[kVRDLSSViewportSlotCount]{};
+	uint64_t vrDLSSViewportUseCounter = 0;
 
 	struct ReflexOptionsCache
 	{
@@ -119,7 +135,13 @@ public:
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR);
+	sl::ViewportHandle ResolveDLSSViewport(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
+	int FindVRDLSSViewportSlot(uint32_t qualityMode, uint32_t dlssPreset) const;
+	int ChooseVRDLSSViewportSlotForAllocation() const;
+	void FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
+	void FreeVRDLSSViewportSlot(uint32_t slotIndex, bool logFailures);
+	DLSSOptionsCache& GetDLSSOptionsCache(uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
+	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset);
 	void InvalidateDLSSOptionsCache();
 	void ResetFrameTracking();
 

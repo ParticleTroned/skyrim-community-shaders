@@ -2290,7 +2290,8 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				if (globals::game::isVR && a_upscalemethod == UpscaleMethod::kDLSS) {
 					pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
 				}
-				streamline.InvalidateDLSSOptionsCache();
+				if (!(globals::game::isVR && previousUpscaleMode == UpscaleMethod::kDLSS && a_upscalemethod == UpscaleMethod::kDLSS))
+					streamline.InvalidateDLSSOptionsCache();
 				if (!dlssOptionSettingsChanged && qualityModeChanged && a_upscalemethod != UpscaleMethod::kDLSS)
 					destroyVRQualityResources();
 			} else if (fsrQualityModeChanged) {

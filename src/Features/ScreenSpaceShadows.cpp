@@ -123,60 +123,57 @@ namespace
 
 void ScreenSpaceShadows::DrawSettings()
 {
-	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable", (bool*)&bendSettings.Enable);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Turns screen space shadows on or off.");
-		}
-
-		ImGui::Spacing();
-		ImGui::TextUnformatted("Performance");
-		ImGui::Separator();
-
-		ImGui::SliderInt("Sample Count Multiplier", (int*)&bendSettings.SampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax));
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Higher values improve detail but cost more performance. In VR, values >1 are not recommended.");
-		}
-
-		if (globals::game::isVR) {
-			ImGui::SliderFloat("Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Raises or lowers VR shadow quality and GPU cost.");
-			}
-
-			{
-				Util::BlueFrameStyleWrapper blueFrameStyle;
-				ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("0 disables. Lower values improve performance but remove distant shadows.");
-			}
-			bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
-		}
-
-		ImGui::Spacing();
-		ImGui::TextUnformatted("Fine-tuning");
-		ImGui::Separator();
-
-		ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Makes contact shadows thinner or thicker.");
-		}
-
-		ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Balances edge sharpness versus smoothness.");
-		}
-
-		ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, kShadowContrastMin, kShadowContrastMax);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Controls overall shadow darkness.");
-		}
-
-		ImGui::Spacing();
-		ImGui::Spacing();
-		ImGui::TreePop();
+	ImGui::Checkbox("Enable", (bool*)&bendSettings.Enable);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Turns screen space shadows on or off.");
 	}
+
+	ImGui::Spacing();
+	ImGui::TextUnformatted("Performance");
+	ImGui::Separator();
+
+	ImGui::SliderInt("Sample Count Multiplier", (int*)&bendSettings.SampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax));
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Higher values improve detail but cost more performance. In VR, values >1 are not recommended.");
+	}
+
+	if (globals::game::isVR) {
+		ImGui::SliderFloat("Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Raises or lowers VR shadow quality and GPU cost.");
+		}
+
+		{
+			Util::BlueFrameStyleWrapper blueFrameStyle;
+			ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("0 disables. Lower values improve performance but remove distant shadows.");
+		}
+		bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
+	}
+
+	ImGui::Spacing();
+	ImGui::TextUnformatted("Fine-tuning");
+	ImGui::Separator();
+
+	ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Makes contact shadows thinner or thicker.");
+	}
+
+	ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Balances edge sharpness versus smoothness.");
+	}
+
+	ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, kShadowContrastMin, kShadowContrastMax);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Controls overall shadow darkness.");
+	}
+
+	ImGui::Spacing();
+	ImGui::Spacing();
 }
 
 void ScreenSpaceShadows::DrawFoveationSettings()

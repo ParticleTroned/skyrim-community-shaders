@@ -153,6 +153,11 @@ Anything outside the supported current list should not be installed. If you use 
 
 Not every optional feature is required. Install only the feature pages you actually want to use.
 
+> [!NOTE]
+> Good practice when updating CS during an existing playthrough is to make an interior save first, then update. If you experience hang-ups or an indefinite loading screen after a CS update, untick **Enable Async** in **CS UI > General > Shaders**.
+
+![Untick Enable Async if you experience indefinite loading screens after a CS update](Images-Fork-Installation/CS-UI/loaderror.png)
+
 ### 6. Why Old Features Turn Red
 
 Community Shaders used to provide many features as separate downloads. This was useful because it gave individual features more visibility and acknowledged the work of different contributors.
@@ -189,13 +194,15 @@ This is required for many SKSE/CommonLib-based plugins to work correctly.
 
 When starting Skyrim VR through MO2, you may see an error message.
 
-> Insert screenshot of error message here.
-
 This usually means one of the following:
 
 - You forgot to update **SKSE VR Address Library**.
 - You also need to update **Light Placer**.
 - You also need to update **Light Placer VR**.
+- You have an incompatible DLL/mod installed.
+
+Check compatibility on the Particle Lights fork description page:
+https://www.nexusmods.com/skyrimspecialedition/mods/166950?tab=description
 
 Update these two mods if needed:
 
@@ -237,8 +244,6 @@ Deleting the shader cache is 100% sufficient for a new Community Shaders install
 If you accidentally clear the whole Overwrite folder, do not panic. The shader cache folder is regenerated when Skyrim VR starts.
 
 Modlists often integrate their CS user configuration file (`SettingsUser.json`) as a mod. In that case, your Community Shaders configuration file is saved in that dedicated MO2 mod instead of only in Overwrite.
-
-> Insert screenshot of CS configuration mod location here.
 
 The important point is:
 

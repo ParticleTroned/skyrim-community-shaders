@@ -186,10 +186,24 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 			break;
 		}
+	case SKSE::MessagingInterface::kPreLoadGame:
+		{
+			if (errors.empty() && globals::shaderCache) {
+				globals::shaderCache->BeginSynchronousLoadWindow(globals::state ? globals::state->frameCount : 0);
+			}
+
+			break;
+		}
 	case SKSE::MessagingInterface::kPostLoadGame:
 	case SKSE::MessagingInterface::kNewGame:
 		{
 			if (errors.empty()) {
+				if (globals::shaderCache && globals::state &&
+					(message->type == SKSE::MessagingInterface::kPostLoadGame || globals::shaderCache->IsSynchronousLoadWindowActive())) {
+					globals::shaderCache->ExtendSynchronousLoadWindow(
+						globals::state->frameCount,
+						SIE::ShaderCache::kPostLoadSynchronousShaderFrames);
+				}
 				ResetRuntimeStateAfterGameLoad();
 				logger::info("Handled {}", message->type == SKSE::MessagingInterface::kPostLoadGame ? "kPostLoadGame" : "kNewGame");
 			}

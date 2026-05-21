@@ -1870,7 +1870,7 @@ namespace SIE
 			}
 		}
 
-		if (IsAsync()) {
+		if (ShouldUseAsyncCompilation()) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
 		} else {
 			return MakeAndAddVertexShader(shader, descriptor);
@@ -1918,7 +1918,7 @@ namespace SIE
 			}
 		}
 
-		if (IsAsync()) {
+		if (ShouldUseAsyncCompilation()) {
 			compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
 		} else {
 			return MakeAndAddPixelShader(shader, descriptor);
@@ -1962,7 +1962,7 @@ namespace SIE
 			}
 		}
 
-		if (IsAsync()) {
+		if (ShouldUseAsyncCompilation()) {
 			compilationSet.Add({ ShaderClass::Compute, shader, descriptor });
 		} else {
 			return MakeAndAddComputeShader(shader, descriptor);
@@ -2345,6 +2345,81 @@ namespace SIE
 	void ShaderCache::SetAsync(bool value)
 	{
 		isAsync = value;
+	}
+
+	bool ShaderCache::IsSynchronousLoadWindowActive() const
+	{
+		return forceSynchronousShaderLoads.load(std::memory_order_acquire);
+	}
+
+	bool ShaderCache::ShouldUseAsyncCompilation() const
+	{
+		return isAsync && !IsSynchronousLoadWindowActive();
+	}
+
+	void ShaderCache::ArmSynchronousLoadWindow()
+	{
+		if (!forceSynchronousShaderLoads.exchange(true, std::memory_order_acq_rel)) {
+			logger::info("Save-load synchronous shader override armed");
+		}
+	}
+
+	void ShaderCache::BeginSynchronousLoadWindow(uint32_t a_currentFrame)
+	{
+		synchronousShaderLoadStartFrame.store(a_currentFrame != 0 ? a_currentFrame : 1, std::memory_order_release);
+		synchronousShaderLoadEndFrame.store(0, std::memory_order_release);
+		ArmSynchronousLoadWindow();
+	}
+
+	void ShaderCache::ExtendSynchronousLoadWindow(uint32_t a_currentFrame, uint32_t a_frameCount)
+	{
+		const auto endFrame = a_currentFrame + a_frameCount;
+		synchronousShaderLoadStartFrame.store(a_currentFrame, std::memory_order_release);
+		synchronousShaderLoadEndFrame.store(endFrame, std::memory_order_release);
+		ArmSynchronousLoadWindow();
+		logger::info("Save-load synchronous shader override extended until frame {}", endFrame);
+	}
+
+	void ShaderCache::UpdateSynchronousLoadWindow(uint32_t a_currentFrame)
+	{
+		if (!IsSynchronousLoadWindowActive()) {
+			return;
+		}
+
+		const auto endFrame = synchronousShaderLoadEndFrame.load(std::memory_order_acquire);
+		if (endFrame == 0) {
+			const auto startFrame = synchronousShaderLoadStartFrame.load(std::memory_order_acquire);
+			if (startFrame != 0 && a_currentFrame - startFrame >= kPreLoadSynchronousShaderFallbackFrames) {
+				logger::warn("Save-load synchronous shader override released without post-load after {} frames",
+					a_currentFrame - startFrame);
+				EndSynchronousLoadWindow();
+			}
+			return;
+		}
+
+		if (a_currentFrame < endFrame) {
+			return;
+		}
+
+		if (IsCompiling()) {
+			const auto extraFrames = a_currentFrame - endFrame;
+			if (extraFrames < kPostLoadSynchronousShaderExtraFrames) {
+				return;
+			}
+			logger::warn("Save-load synchronous shader override released while shader compilation is still active after {} extra frames",
+				extraFrames);
+		}
+
+		EndSynchronousLoadWindow();
+	}
+
+	void ShaderCache::EndSynchronousLoadWindow()
+	{
+		synchronousShaderLoadStartFrame.store(0, std::memory_order_release);
+		synchronousShaderLoadEndFrame.store(0, std::memory_order_release);
+		if (forceSynchronousShaderLoads.exchange(false, std::memory_order_acq_rel)) {
+			logger::info("Save-load synchronous shader override released");
+		}
 	}
 
 	bool ShaderCache::IsDump() const

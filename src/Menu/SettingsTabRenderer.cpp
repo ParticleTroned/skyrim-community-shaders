@@ -21,6 +21,20 @@ namespace
 {
 	using FontRoleGuard = MenuFonts::FontRoleGuard;  // Convenience alias
 
+	void DrawReadOnlyKeybinding(const char* label, const char* binding, const char* description)
+	{
+		ImGui::TextUnformatted(label);
+		ImGui::TextDisabled("(hardcoded)");
+		ImGui::BeginDisabled();
+		ImGui::Button(binding);
+		ImGui::EndDisabled();
+
+		if (description && description[0] != '\0') {
+			ImGui::TextWrapped("%s", description);
+		}
+		ImGui::Spacing();
+	}
+
 	// Convert ImGui internal color names to user-friendly display names
 	const char* GetFriendlyColorName(int colorIndex)
 	{
@@ -256,16 +270,6 @@ void SettingsTabRenderer::RenderShadersTab()
 			ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
 		}
 
-		// Skip confirmation when clearing shader cache
-		auto& menuSettings = globals::menu->GetSettings();
-		bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;
-		if (ImGui::Checkbox("Skip Clear Cache Dialogue", &skipConfirmation)) {
-			menuSettings.SkipClearCacheConfirmation = skipConfirmation;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("When checked, the shader cache will be cleared immediately without asking for confirmation.");
-		}
-
 		if (shaderCache->GetTotalTasks() > 0) {
 			ImGui::Text("Last shader cache build duration: %s",
 				shaderCache->GetShaderStatsString(true, true).c_str());
@@ -373,16 +377,25 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 			"Change##skip");
 
 		Util::InputComboWidget(
-			"Overlay Toggle Key:",
+			"Performance Overlay:",
 			settings.OverlayToggleKey,
 			state.settingOverlayToggleKey,
 			"Change##OverlayToggle");
+		ImGui::TextWrapped("Opens the performance overlay with runtime diagnostics. Default key: F10. This binding is configurable.");
 
 		Util::InputComboWidget(
 			"Weather Editor Toggle Key:",
 			settings.WeatherEditorToggleKey,
 			state.settingWeatherEditorToggleKey,
 			"Change##WeatherEditorToggle");
+
+		ImGui::Separator();
+		ImGui::TextUnformatted("Hardcoded Bindings");
+		ImGui::TextWrapped("RenderDoc is an external graphics frame debugger used to capture frames for graphics debugging. It is only active when RenderDoc capture support is loaded.");
+		DrawReadOnlyKeybinding(
+			"RenderDoc Capture:",
+			"F12 / Print Screen",
+			"Captures the configured frame count. These capture hotkeys are fixed and cannot be changed here.");
 
 		ImGui::EndTabItem();
 	}
@@ -462,6 +475,16 @@ void SettingsTabRenderer::RenderBehaviorTab()
 		ImGui::SliderFloat("Tooltip Hover Delay", &themeSettings.TooltipHoverDelay, 0.0f, 2.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Time in seconds to wait before a tooltip appears when hovering over an item.");
+		}
+
+		// Skip confirmation when clearing shader cache (UI behavior, not a shader setting).
+		auto& menuSettings = globals::menu->GetSettings();
+		bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;
+		if (ImGui::Checkbox("Skip Clear Cache Confirmation", &skipConfirmation)) {
+			menuSettings.SkipClearCacheConfirmation = skipConfirmation;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("When checked, the shader cache will be cleared immediately without asking for confirmation.");
 		}
 
 		SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);

@@ -256,6 +256,14 @@ void SettingsTabRenderer::RenderShadersTab()
 			ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
 		}
 
+		bool syncSaveLoadShaders = shaderCache->IsSynchronousLoadWindowEnabled();
+		if (ImGui::Checkbox("Sync Shader Loads During Save Load", &syncSaveLoadShaders)) {
+			shaderCache->SetSynchronousLoadWindowEnabled(syncSaveLoadShaders);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Temporarily disables async shader replacement around save and load transitions.");
+		}
+
 		// Skip confirmation when clearing shader cache
 		auto& menuSettings = globals::menu->GetSettings();
 		bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;

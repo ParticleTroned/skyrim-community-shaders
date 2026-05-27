@@ -2347,6 +2347,19 @@ namespace SIE
 		isAsync = value;
 	}
 
+	bool ShaderCache::IsSynchronousLoadWindowEnabled() const
+	{
+		return synchronousLoadWindowEnabled.load(std::memory_order_acquire);
+	}
+
+	void ShaderCache::SetSynchronousLoadWindowEnabled(bool value)
+	{
+		synchronousLoadWindowEnabled.store(value, std::memory_order_release);
+		if (!value) {
+			EndSynchronousLoadWindow();
+		}
+	}
+
 	bool ShaderCache::IsSynchronousLoadWindowActive() const
 	{
 		return forceSynchronousShaderLoads.load(std::memory_order_acquire);
@@ -2359,6 +2372,10 @@ namespace SIE
 
 	void ShaderCache::ArmSynchronousLoadWindow()
 	{
+		if (!IsSynchronousLoadWindowEnabled()) {
+			return;
+		}
+
 		if (!forceSynchronousShaderLoads.exchange(true, std::memory_order_acq_rel)) {
 			logger::info("Save-load synchronous shader override armed");
 		}
@@ -2366,6 +2383,10 @@ namespace SIE
 
 	void ShaderCache::BeginSynchronousLoadWindow(uint32_t a_currentFrame)
 	{
+		if (!IsSynchronousLoadWindowEnabled()) {
+			return;
+		}
+
 		synchronousShaderLoadStartFrame.store(a_currentFrame != 0 ? a_currentFrame : 1, std::memory_order_release);
 		synchronousShaderLoadEndFrame.store(0, std::memory_order_release);
 		ArmSynchronousLoadWindow();
@@ -2373,6 +2394,10 @@ namespace SIE
 
 	void ShaderCache::ExtendSynchronousLoadWindow(uint32_t a_currentFrame, uint32_t a_frameCount)
 	{
+		if (!IsSynchronousLoadWindowEnabled()) {
+			return;
+		}
+
 		const auto endFrame = a_currentFrame + a_frameCount;
 		synchronousShaderLoadStartFrame.store(a_currentFrame, std::memory_order_release);
 		synchronousShaderLoadEndFrame.store(endFrame, std::memory_order_release);
@@ -2382,6 +2407,11 @@ namespace SIE
 
 	void ShaderCache::UpdateSynchronousLoadWindow(uint32_t a_currentFrame)
 	{
+		if (!IsSynchronousLoadWindowEnabled()) {
+			EndSynchronousLoadWindow();
+			return;
+		}
+
 		if (!IsSynchronousLoadWindowActive()) {
 			return;
 		}

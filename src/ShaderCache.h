@@ -410,6 +410,8 @@ namespace SIE
 		void SetEnabled(bool value);
 		bool IsAsync() const;
 		void SetAsync(bool value);
+		bool IsSynchronousLoadWindowEnabled() const;
+		void SetSynchronousLoadWindowEnabled(bool value);
 		bool IsSynchronousLoadWindowActive() const;
 		void BeginSynchronousLoadWindow(uint32_t a_currentFrame);
 		void ExtendSynchronousLoadWindow(uint32_t a_currentFrame, uint32_t a_frameCount);
@@ -834,6 +836,7 @@ namespace SIE
 		bool isDump = false;
 		bool hideError = false;
 		bool useFileWatcher = false;
+		std::atomic_bool synchronousLoadWindowEnabled = false;
 		std::atomic_bool forceSynchronousShaderLoads = false;
 		std::atomic_uint32_t synchronousShaderLoadStartFrame = 0;
 		std::atomic_uint32_t synchronousShaderLoadEndFrame = 0;

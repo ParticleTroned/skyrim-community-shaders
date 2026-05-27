@@ -595,6 +595,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
+	advanced["Enable Save-Load Synchronous Shader Window"] = shaderCache->IsSynchronousLoadWindowEnabled();
 	advanced["Frame Annotations"] = frameAnnotations;
 	advanced["Refraction Scale"] = refractionScale;
 	advanced["PBR Metal Reflection Scale"] = pbrMetalReflectionScale;
@@ -677,6 +678,8 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Use FileWatcher") && advanced["Use FileWatcher"].is_boolean())
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
+		if (advanced.contains("Enable Save-Load Synchronous Shader Window") && advanced["Enable Save-Load Synchronous Shader Window"].is_boolean())
+			shaderCache->SetSynchronousLoadWindowEnabled(advanced["Enable Save-Load Synchronous Shader Window"]);
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())
 			frameAnnotations = advanced["Frame Annotations"];
 		if (advanced.contains("Refraction Scale") && advanced["Refraction Scale"].is_number())

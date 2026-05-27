@@ -16,6 +16,12 @@ static bool IsChildWorldSpace(const RE::TESWorldSpace* ws)
 	       ws->parentUseFlags.all(RE::TESWorldSpace::ParentUseFlag::kUseLODData);
 }
 
+static bool IsInteriorCellActive()
+{
+	const auto tes = RE::TES::GetSingleton();
+	return tes && tes->interiorCell;
+}
+
 // Engine behavior: CellState value 6 is the transition/attached state.
 static constexpr auto kTransitionAttachedCellState = static_cast<RE::TESObjectCELL::CellState>(6);
 
@@ -440,6 +446,19 @@ int32_t UnifiedWater::BSWaterShaderMaterial_ComputeCRC32::thunk(RE::BSWaterShade
 	return func(material, srcHash);
 }
 
+bool UnifiedWater::IsExteriorWorldspaceActive() const
+{
+	// Interior cells may still inherit stale exterior worldspace state during transitions
+	return exteriorWorldspaceActive.load(std::memory_order_acquire) && !IsInteriorCellActive();
+}
+
+void UnifiedWater::UpdateWaterLODCull() const
+{
+	// Only hide UW's generated LOD root, preserving child tile cull flags
+	if (gWaterLOD && *gWaterLOD)
+		(*gWaterLOD)->SetAppCulled(!IsExteriorWorldspaceActive());
+}
+
 void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* worldSpace, bool isExterior)
 {
 	const bool enteringChild = IsChildWorldSpace(worldSpace);
@@ -453,12 +472,16 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 	func(tes, worldSpace, isExterior);
 
+	uw.exteriorWorldspaceActive.store(worldSpace && isExterior, std::memory_order_release);
+
 	if (!uw.waterCache) {
 		uw.pendingChildWsCull.store(false, std::memory_order_release);
+		uw.UpdateWaterLODCull();
 		return;
 	}
 
 	uw.waterCache->SetCurrentWorldSpace(worldSpace);
+	uw.UpdateWaterLODCull();
 
 	if (enteringChild) {
 		// BGSTerrainBlock_Attach calls Enable() on block attach.
@@ -484,10 +507,11 @@ void UnifiedWater::TES_DestroySkyCell::thunk(RE::TES* tes)
 	uw.currentPlayerWorldSpace.store(nullptr, std::memory_order_release);
 	uw.pendingChildWsCull.store(false, std::memory_order_release);
 	uw.cachedTes.store(nullptr, std::memory_order_release);
-	if (!uw.waterCache)
-		return;
+	uw.exteriorWorldspaceActive.store(false, std::memory_order_release);
 
-	uw.waterCache->SetCurrentWorldSpace(nullptr);
+	if (uw.waterCache)
+		uw.waterCache->SetCurrentWorldSpace(nullptr);
+	uw.UpdateWaterLODCull();
 }
 
 void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::BGSTerrainNode* node, RE::BSMultiBoundNode* waterParent)
@@ -593,6 +617,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	}
 
 	(*uw.gWaterLOD)->AttachChild(block->water, true);
+	uw.UpdateWaterLODCull();
 	waterSystem->Enable();
 
 	// BGSTerrainNode_UpdateWaterMeshSubVisibility never fires in child worldspaces.
@@ -627,6 +652,7 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 
 		(*uw.gWaterLOD)->DetachChild(water);
 		block->waterAttached = false;
+		globals::features::unifiedWater.UpdateWaterLODCull();
 	}
 }
 
@@ -638,27 +664,29 @@ void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader,
 	// The plane feeds ReflectPlane in the PerGeometry cbuffer. When corrupted (e.g., plane.constant = 0
 	// or garbage), the shader's refractionPlaneMul calculation produces extreme values causing flickering.
 	// This primarily affects flowmapped water because it uses more complex refraction depth calculations.
-	if (const auto prop = pass->geometry->GetGeometryRuntimeData().shaderProperty.get(); prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
-		const auto waterShaderProp = static_cast<RE::BSWaterShaderProperty*>(prop);
-		const float waterHeight = pass->geometry->world.translate.z;
+	if (pass && pass->geometry) {
+		if (const auto prop = pass->geometry->GetGeometryRuntimeData().shaderProperty.get(); prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
+			const auto waterShaderProp = static_cast<RE::BSWaterShaderProperty*>(prop);
+			const float waterHeight = pass->geometry->world.translate.z;
 
-		// Validate and fix the plane if it's corrupted.
-		// A valid water plane has normal pointing up (0,0,1) and constant = water height.
-		// After interior->exterior transitions, plane.constant can be 0 or stale values.
-		const bool planeNonFinite =
-			!std::isfinite(waterShaderProp->plane.normal.x) ||
-			!std::isfinite(waterShaderProp->plane.normal.y) ||
-			!std::isfinite(waterShaderProp->plane.normal.z) ||
-			!std::isfinite(waterShaderProp->plane.constant);
-		const bool planeNormalBad = std::abs(waterShaderProp->plane.normal.x) > 0.01f || std::abs(waterShaderProp->plane.normal.y) > 0.01f || std::abs(waterShaderProp->plane.normal.z - 1.0f) > 0.01f;
-		const bool planeConstantBad = std::abs(waterShaderProp->plane.constant - waterHeight) > 1.0f;
-		if (planeNonFinite || planeNormalBad || planeConstantBad) {
-			waterShaderProp->plane.normal = { 0.0f, 0.0f, 1.0f };
-			waterShaderProp->plane.constant = waterHeight;
+			// Validate and fix the plane if it's corrupted.
+			// A valid water plane has normal pointing up (0,0,1) and constant = water height.
+			// After interior->exterior transitions, plane.constant can be 0 or stale values.
+			const bool planeNonFinite =
+				!std::isfinite(waterShaderProp->plane.normal.x) ||
+				!std::isfinite(waterShaderProp->plane.normal.y) ||
+				!std::isfinite(waterShaderProp->plane.normal.z) ||
+				!std::isfinite(waterShaderProp->plane.constant);
+			const bool planeNormalBad = std::abs(waterShaderProp->plane.normal.x) > 0.01f || std::abs(waterShaderProp->plane.normal.y) > 0.01f || std::abs(waterShaderProp->plane.normal.z - 1.0f) > 0.01f;
+			const bool planeConstantBad = std::abs(waterShaderProp->plane.constant - waterHeight) > 1.0f;
+			if (planeNonFinite || planeNormalBad || planeConstantBad) {
+				waterShaderProp->plane.normal = { 0.0f, 0.0f, 1.0f };
+				waterShaderProp->plane.constant = waterHeight;
+			}
 		}
 	}
 
-	if (uw.flowmap) {
+	if (uw.IsExteriorWorldspaceActive() && uw.flowmap && pass && pass->geometry) {
 		// ObjectUV.xyz below, xy contains width and height, z contains mesh scale
 		// Previously flowmap size was in x, yz contained flowmap offset for water displacement mesh
 		*uw.gFlowMapSize = uw.flowmap->GetWidth();                                            // ObjectUV.x
@@ -693,8 +721,9 @@ void UnifiedWater::TESWaterSystem_UpdateDisplacementMeshPosition::thunk(RE::TESW
 	// Needed when entering child worldspaces with already-attached LOD blocks,
 	// where BGSTerrainBlock_Attach/UpdateWaterMeshSubVisibility may not run.
 	uw.TryCompleteDeferredChildWorldspaceCull(uw.cachedTes.load(std::memory_order_acquire));
+	uw.UpdateWaterLODCull();
 
-	if (!uw.flowmap)
+	if (!uw.flowmap || !uw.IsExteriorWorldspaceActive())
 		return;
 
 	const float posX = uw.gDisplacementMeshPos->x / 4096.0f;

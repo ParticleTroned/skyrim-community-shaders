@@ -119,9 +119,12 @@ private:
 	std::atomic<bool> pendingChildWsCull{ false };
 	// Game-thread TES snapshot used by deferred child-worldspace cull fallbacks.
 	std::atomic<RE::TES*> cachedTes{ nullptr };
+	std::atomic_bool exteriorWorldspaceActive{ false };
 
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 
 	void SetFlowmapTex() const;
+	bool IsExteriorWorldspaceActive() const;
+	void UpdateWaterLODCull() const;
 	static bool LoadOrderChanged();
 };

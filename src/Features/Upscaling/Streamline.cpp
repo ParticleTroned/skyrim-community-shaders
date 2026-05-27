@@ -858,7 +858,11 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (!SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset))
 		return false;
 
+	const bool submitStageVRDLSS =
+		globals::game::isVR &&
+		globals::features::upscaling.IsSubmitStageUpscalingActive();
 	const bool emitPCLMarkers =
+		!submitStageVRDLSS &&
 		globals::features::upscaling.settings.reflexUseMarkersToOptimize &&
 		reflexOptionsCache.useMarkersToOptimize &&
 		featurePCL;

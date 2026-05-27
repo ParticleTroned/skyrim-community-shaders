@@ -429,7 +429,8 @@ void VR::DrawStereoBlend()
 	if (!main.texture || !main.UAV || !depthSRV)
 		return;
 
-	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize);
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize, submitStageSceneDomain);
 	if (resolution.x <= 0.0f || resolution.y <= 0.0f)
 		return;
 
@@ -457,7 +458,7 @@ void VR::DrawStereoBlend()
 
 	Util::BindGlobalConstantBuffersForCS(context);
 
-	auto dispatchCount = Util::GetScreenDispatchCount(true);
+	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 	auto* cbPtr = stereoBlendCB->CB();
 	ID3D11ShaderResourceView* srvs[2]{ stereoBlendCopyTex->srv.get(), depthSRV };
 	ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
@@ -2628,11 +2629,15 @@ void VR::SubmitOverlayFrame()
 	}
 
 	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
-	if (shouldUseInSceneOverlay) {
+	const bool submitStageUpscalingActive = globals::features::upscaling.IsSubmitStageUpscalingActive();
+	if (shouldUseInSceneOverlay || submitStageUpscalingActive) {
 		InstallSubmitHook();
 	}
-	const bool useInSceneOverlay = shouldUseInSceneOverlay && inSceneResources.submitHookInstalled;
-	const bool useIVROverlay = !shouldUseInSceneOverlay;
+	const bool useInSceneOverlay =
+		shouldUseInSceneOverlay &&
+		!submitStageUpscalingActive &&
+		inSceneResources.submitHookInstalled;
+	const bool useIVROverlay = !useInSceneOverlay;
 
 	if (useIVROverlay && !openVRInfo.hasOverlayInterface) {
 		static bool loggedMissingOverlayInterface = false;
@@ -2755,17 +2760,17 @@ void VR::SubmitOverlayFrame()
 			UpdateVROverlayPosition();
 			vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
 			if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
-				Util::SetOverlayInputFlags(gameOverlay, menuOverlayHandle);
+				Util::SetOverlayInputFlags(cleanOverlay, menuOverlayHandle);
 				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
 				if (err != vr::VROverlayError_None) {
 					logger::error("SetOverlayTexture failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
-				err = gameOverlay->ShowOverlay(menuOverlayHandle);
+				err = cleanOverlay->ShowOverlay(menuOverlayHandle);
 				if (err != vr::VROverlayError_None) {
 					logger::error("ShowOverlay failed for menu overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
 			} else if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid) {
-				gameOverlay->HideOverlay(menuOverlayHandle);
+				cleanOverlay->HideOverlay(menuOverlayHandle);
 			}
 			// Controller overlay
 			if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
@@ -2787,17 +2792,17 @@ void VR::SubmitOverlayFrame()
 				UpdateVROverlayControllerPosition();
 
 				vr::Texture_t controllerTex = { menuControllerTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-				Util::SetOverlayInputFlags(gameOverlay, menuControllerOverlayHandle);
+				Util::SetOverlayInputFlags(cleanOverlay, menuControllerOverlayHandle);
 				vr::EVROverlayError err = cleanOverlay->SetOverlayTexture(menuControllerOverlayHandle, &controllerTex);
 				if (err != vr::VROverlayError_None) {
 					logger::error("SetOverlayTexture failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
-				err = gameOverlay->ShowOverlay(menuControllerOverlayHandle);
+				err = cleanOverlay->ShowOverlay(menuControllerOverlayHandle);
 				if (err != vr::VROverlayError_None) {
 					logger::error("ShowOverlay failed for controller overlay: {} ({})", static_cast<int>(err), magic_enum::enum_name(err));
 				}
 			} else if (menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid) {
-				gameOverlay->HideOverlay(menuControllerOverlayHandle);
+				cleanOverlay->HideOverlay(menuControllerOverlayHandle);
 			}
 		}
 

@@ -3,6 +3,7 @@
 #include <atomic>
 
 #include "Features/TerrainBlending.h"
+#include "Features/Upscaling.h"
 #include "State.h"
 #include "Util.h"
 
@@ -73,6 +74,17 @@ namespace FrameAnnotations
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 		{
+			if constexpr (EffectType == RE::ImageSpaceManager::ISUpsampleDynamicResolution) {
+				if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISUpsampleDynamicResolution", Upscaling::DynamicResolutionUpsampleStage::Render))
+					return;
+			} else if constexpr (EffectType == RE::ImageSpaceManager::ISFullScreenVR) {
+				if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISFullScreenVR", Upscaling::DynamicResolutionUpsampleStage::Render))
+					return;
+			} else if constexpr (EffectType == RE::ImageSpaceManager::ISCopyDynamicFetchDisabled) {
+				if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISCopyDynamicFetchDisabled", Upscaling::DynamicResolutionUpsampleStage::Render))
+					return;
+			}
+
 			std::string eventName = BuildEventName(EffectType) + " Draw";
 			globals::state->BeginPerfEvent(eventName);
 

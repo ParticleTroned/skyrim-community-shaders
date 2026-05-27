@@ -18,6 +18,9 @@
 #include "Hooks.h"
 #include "Utils/D3D.h"
 
+#include <algorithm>
+#include <cmath>
+
 struct DepthStates
 {
 	ID3D11DepthStencilState* a[6][40];
@@ -391,7 +394,8 @@ void Deferred::DeferredPasses()
 	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
 	bool ssgi_hq_spec = ssgi.IsSpecularGIActive();
 
-	auto dispatchCount = Util::GetScreenDispatchCount(true);
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 
 	auto& sss = globals::features::subsurfaceScattering;
 	if (sss.loaded)
@@ -675,6 +679,7 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	auto* const state = globals::state;
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	state->inWorld = true;
+	state->lastWorldRenderFrame = state->frameCount;
 	func(a1);
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
@@ -715,7 +720,35 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
-	context->CopyResource(depthCopy.texture, depth.texture);
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	if (submitStageSceneDomain && depth.texture && depthCopy.texture) {
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		D3D11_TEXTURE2D_DESC destinationDesc{};
+		depth.texture->GetDesc(&sourceDesc);
+		depthCopy.texture->GetDesc(&destinationDesc);
+
+		const auto dynamicSize = Util::ConvertToDynamic(globals::state->screenSize, true);
+		const UINT copyWidth = std::clamp(
+			static_cast<UINT>(std::lround(dynamicSize.x)),
+			1u,
+			std::min(sourceDesc.Width, destinationDesc.Width));
+		const UINT copyHeight = std::clamp(
+			static_cast<UINT>(std::lround(dynamicSize.y)),
+			1u,
+			std::min(sourceDesc.Height, destinationDesc.Height));
+
+		const D3D11_BOX sourceBox{
+			0,
+			0,
+			0,
+			copyWidth,
+			copyHeight,
+			1
+		};
+		context->CopySubresourceRegion(depthCopy.texture, 0, 0, 0, 0, depth.texture, 0, &sourceBox);
+	} else {
+		context->CopyResource(depthCopy.texture, depth.texture);
+	}
 
 	// After this point, water starts rendering
 };

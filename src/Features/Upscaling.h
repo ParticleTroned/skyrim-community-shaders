@@ -10,6 +10,7 @@
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
 #include <limits>
+#include <openvr.h>
 #include <vector>
 #include <winrt/base.h>
 
@@ -133,6 +134,14 @@ public:
 		float2 pad;
 	};
 
+	struct DynamicResolutionStretchCB
+	{
+		float2 inputSize;
+		float2 outputSize;
+		float2 sourceTextureSize;
+		float2 padding;
+	};
+
 	struct FoveatedPeripheryCB
 	{
 		float2 outputDim;
@@ -183,6 +192,7 @@ public:
 
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 288, "PeripheryTAACB layout changed; update HLSL cbuffer.");
@@ -242,6 +252,7 @@ public:
 
 	ConstantBuffer* jitterCB = nullptr;
 	ConstantBuffer* upscalingDataCB = nullptr;
+	ConstantBuffer* dynamicResolutionStretchCB = nullptr;
 	ConstantBuffer* foveatedPeripheryCB = nullptr;
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
@@ -322,6 +333,9 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> peripheryTAACS;
 	ID3D11ComputeShader* GetPeripheryTAACS();
 
+	winrt::com_ptr<ID3D11ComputeShader> submitStageStretchCS;
+	ID3D11ComputeShader* GetSubmitStageStretchCS();
+
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
@@ -343,6 +357,18 @@ public:
 	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];     // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];  // per-eye render resolution
+	struct RetiredVRIntermediateTextures
+	{
+		uint32_t retireFrame = 0;
+		eastl::unique_ptr<Texture2D> colorIn[2];
+		eastl::unique_ptr<Texture2D> colorOut[2];
+		eastl::unique_ptr<Texture2D> depth[2];
+		eastl::unique_ptr<Texture2D> linearDepth[2];
+		eastl::unique_ptr<Texture2D> motionVectors[2];
+		eastl::unique_ptr<Texture2D> reactiveMask[2];
+		eastl::unique_ptr<Texture2D> transparencyMask[2];
+	};
+	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
 
 	struct VRIntermediateTextureCache
 	{
@@ -368,7 +394,7 @@ public:
 
 	// Helper: Create a Texture2D matching source format at a given size
 	static eastl::unique_ptr<Texture2D> CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr);
+		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false);
 
 	// Shared Pipeline Steps
 	void PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
@@ -377,6 +403,19 @@ public:
 
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
+	void ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
+	void PrepareFullResolutionPostProcessing();
+	void ResetVRSubmitStageState(bool a_destroyDLSSResources = true);
+	void RequestVRSubmitStageHistoryReset();
+	bool IsSubmitStageUpscalingActive() const;
+	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
+		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
+	enum class DynamicResolutionUpsampleStage : uint8_t
+	{
+		Render,
+		Dispatch
+	};
+	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
@@ -444,6 +483,12 @@ public:
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	std::atomic<uint32_t> pendingVRDLSSQualityMode{ kPendingVRDLSSSettingUnset };
 	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRDLSSSettingUnset };
+	std::atomic<bool> pendingDLSSReset{ false };
+	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
+	std::array<bool, 2> submitStageMirrorEyeReady = {};
+	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();
@@ -467,6 +512,8 @@ public:
 	float2 GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile = false) const;
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
+	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
+	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroyCommonUpscalingTextures();
 	void DestroyVRIntermediateTextures();
@@ -524,6 +571,7 @@ public:
 	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
+	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 
 private:
 	struct OpenCompositeUpscalingBlocker
@@ -556,6 +604,42 @@ private:
 	struct Main_PostProcessing
 	{
 		static void thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct UpsampleDynamicResolution_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct FullScreenVR_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CopyDynamicFetchDisabled_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct UpsampleDynamicResolution_Dispatch
+	{
+		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct FullScreenVR_Dispatch
+	{
+		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CopyDynamicFetchDisabled_Dispatch
+	{
+		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

@@ -106,6 +106,11 @@ namespace
 		return Upscaling::GetQualityModeResolutionScale(qualityMode);
 	}
 
+	bool IsSubmitStageRequestedUpscalingActive()
+	{
+		return GetSubmitStageRequestedQualityScale() < kDynamicResolutionUpscalingScaleThreshold;
+	}
+
 	bool IsSubmitStageDynamicResolutionActive()
 	{
 		if (!REL::Module::IsVR())
@@ -115,7 +120,7 @@ namespace
 		if (!IsVendorUpscalingMethod(upscaleMethod))
 			return false;
 
-		return GetSubmitStageRequestedQualityScale() < kDynamicResolutionUpscalingScaleThreshold;
+		return IsSubmitStageRequestedUpscalingActive();
 	}
 
 	bool ShouldUseStableSubmitStageDLSSInputs()
@@ -5716,9 +5721,8 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	const auto upscaleMethod = GetUpscaleMethod();
 	return globals::game::isVR &&
 	       IsVendorUpscalingMethod(upscaleMethod) &&
-	       IsUpscalingActive() &&
 	       IsSubmitStageDynamicResolutionActive() &&
-	       GetSubmitStageRequestedRenderScale() < kDynamicResolutionUpscalingScaleThreshold &&
+	       IsSubmitStageRequestedUpscalingActive() &&
 	       g_submitStageTargetSizeKnown &&
 	       !IsGameMenuContextActive();
 }

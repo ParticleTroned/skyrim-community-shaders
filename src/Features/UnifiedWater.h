@@ -86,6 +86,14 @@ struct UnifiedWater : OverlayFeature
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
+
+		static bool Register();
+	};
+
 	virtual void DrawSettings() override;
 
 	virtual void DrawOverlay() override;
@@ -120,6 +128,7 @@ private:
 	// Game-thread TES snapshot used by deferred child-worldspace cull fallbacks.
 	std::atomic<RE::TES*> cachedTes{ nullptr };
 	std::atomic_bool exteriorWorldspaceActive{ false };
+	std::atomic_bool mapMenuOpen{ false };
 
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 

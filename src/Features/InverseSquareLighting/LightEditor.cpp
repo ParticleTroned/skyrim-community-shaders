@@ -287,6 +287,12 @@ void LightEditor::GatherLights()
 	SortLights();
 }
 
+void LightEditor::RestoreDefaultSettings()
+{
+	RestoreOriginal();
+	*this = {};
+}
+
 void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight)
 {
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);

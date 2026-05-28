@@ -119,6 +119,7 @@ public:
 	virtual void SaveSettings(json&) {}
 	virtual void LoadSettings(json&) {}
 
+	virtual bool HasFeatureSettings() const { return true; }
 	virtual void RestoreDefaultSettings() {}
 	virtual bool ToggleAtBootSetting();
 

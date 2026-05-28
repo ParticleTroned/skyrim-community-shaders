@@ -32,6 +32,7 @@ public:
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	virtual void DrawSettings() override;
+	virtual void RestoreDefaultSettings() override;
 
 	virtual void EarlyPrepass() override;
 

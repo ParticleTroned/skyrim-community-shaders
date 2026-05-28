@@ -151,6 +151,13 @@ namespace
 		return GetSubmitStageRequestedRenderScale();
 	}
 
+	void CopyResourceIfNonAliased(ID3D11DeviceContext* a_context, ID3D11Resource* a_dst, ID3D11Resource* a_src)
+	{
+		if (a_context && a_dst && a_src && a_dst != a_src) {
+			a_context->CopyResource(a_dst, a_src);
+		}
+	}
+
 	float ClampFoveatedCenterArea(float value)
 	{
 		return FoveatedCommon::ClampCenterArea(value);
@@ -2768,17 +2775,23 @@ ID3D11PixelShader* Upscaling::GetDepthRefractionUpscalePS()
 	return depthRefractionUpscalePS.get();
 }
 
-ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS()
+ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(bool a_useRawSceneDepth)
 {
-	if (!underwaterMaskUpscalePS) {
+	auto& shader = a_useRawSceneDepth ? underwaterMaskUpscaleRawDepthNoStencilPS : underwaterMaskUpscalePS;
+	if (!shader) {
 		logger::debug("Compiling UnderwaterMaskPS.hlsl");
 		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
-		if (globals::game::isVR)
+		if (globals::game::isVR) {
 			defines.push_back({ "VR", "" });
-		underwaterMaskUpscalePS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines, "ps_5_0"));
+			if (a_useRawSceneDepth) {
+				defines.push_back({ "NO_HMD_STENCIL_MASK", "" });
+				defines.push_back({ "RAW_SCENE_DEPTH", "" });
+			}
+		}
+		shader.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines, "ps_5_0"));
 	}
 
-	return underwaterMaskUpscalePS.get();
+	return shader.get();
 }
 
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
@@ -5487,6 +5500,7 @@ void Upscaling::ClearShaderCache()
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
+	underwaterMaskUpscaleRawDepthNoStencilPS = nullptr;
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 	foveatedPeripheryCS = nullptr;       // com_ptr automatically releases
 	foveatedCenterBlendCS = nullptr;     // com_ptr automatically releases
@@ -6665,6 +6679,29 @@ void Upscaling::PerformUpscaling()
 	UpdateCameraData();
 }
 
+void Upscaling::UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic)
+{
+	if (!a_enableWideKernelLogic)
+		return;
+
+	constexpr float kEnterWideKernelRatio = 1.55f;
+	constexpr float kExitWideKernelRatio = 1.45f;
+	const float minScale = std::max(std::min(resolutionScale.x, resolutionScale.y), FLT_EPSILON);
+	const float upscaleRatio = 1.0f / minScale;
+
+	if (depthUpscaleUseWideKernel) {
+		if (upscaleRatio < kExitWideKernelRatio) {
+			depthUpscaleUseWideKernel = false;
+		}
+	} else {
+		if (upscaleRatio > kEnterWideKernelRatio) {
+			depthUpscaleUseWideKernel = true;
+		}
+	}
+
+	a_jitterData.useWideKernel = depthUpscaleUseWideKernel ? 1.0f : 0.0f;
+}
+
 void Upscaling::UpscaleDepth()
 {
 	ZoneScoped;
@@ -6765,36 +6802,11 @@ void Upscaling::UpscaleDepth()
 	// Set up jitter/depth-kernel constant buffer for upscaling
 	JitterCB jitterData{};
 	jitterData.jitter = jitter;
-	// (2) Wide-kernel hysteresis
-	if (depthUpscaleActive) {
-		constexpr float kEnterWideKernelRatio = 1.55f;
-		constexpr float kExitWideKernelRatio = 1.45f;
-		const float minScale = std::max(std::min(resolutionScale.x, resolutionScale.y), FLT_EPSILON);
-		const float upscaleRatio = 1.0f / minScale;
-
-		if (depthUpscaleUseWideKernel) {
-			if (upscaleRatio < kExitWideKernelRatio) {
-				depthUpscaleUseWideKernel = false;
-			}
-		} else {
-			if (upscaleRatio > kEnterWideKernelRatio) {
-				depthUpscaleUseWideKernel = true;
-			}
-		}
-
-		jitterData.useWideKernel = depthUpscaleUseWideKernel ? 1.0f : 0.0f;
-	}
+	UpdateDepthUpscaleKernelState(jitterData, depthUpscaleActive);
 
 	jitterCB->Update(jitterData);
 	auto bufferArray = jitterCB->CB();
 	context->PSSetConstantBuffers(0, 1, &bufferArray);
-
-	// (3) Skip aliased copies
-	const auto copyIfNonAliased = [&](ID3D11Resource* dst, ID3D11Resource* src) {
-		if (dst && src && dst != src) {
-			context->CopyResource(dst, src);
-		}
-	};
 
 	if (depthUpscaleActive) {
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth Upscale");
@@ -6807,7 +6819,7 @@ void Upscaling::UpscaleDepth()
 		                           state->isLoadingMenuOpen ||
 		                           (ui && ui->GameIsPaused());
 		if (inMenuContext) {
-			copyIfNonAliased(depthCopy.texture, depth.texture);
+			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 		}
 
 		// Clear stencil to be 0xFF
@@ -6818,7 +6830,7 @@ void Upscaling::UpscaleDepth()
 		// Set depth stencil state to write 0x00
 		context->OMSetDepthStencilState(upscaleDepthStencilState.get(), 0x00);
 
-		copyIfNonAliased(refractionNormals.textureCopy, refractionNormals.texture);
+		CopyResourceIfNonAliased(context, refractionNormals.textureCopy, refractionNormals.texture);
 
 		ID3D11ShaderResourceView* srvs[] = { refractionNormals.SRVCopy, depthCopy.depthSRV, depthCopy.stencilSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -6834,13 +6846,13 @@ void Upscaling::UpscaleDepth()
 
 		// Depth copy is also used on VR.
 		if (isVR) {
-			copyIfNonAliased(depthCopy.texture, depth.texture);
+			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 		}
 	} else {
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Full Resolution Underwater Mask Depth Copy");
 
 		// Full-resolution paths only need to refresh the underwater mask depth source.
-		copyIfNonAliased(depthCopy.texture, depth.texture);
+		CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 	}
 
 	{
@@ -6850,7 +6862,7 @@ void Upscaling::UpscaleDepth()
 		viewport.Height = screenSize.y * 0.5f;
 		context->RSSetViewports(1, &viewport);
 
-		copyIfNonAliased(underwaterMask.textureCopy, underwaterMask.texture);
+		CopyResourceIfNonAliased(context, underwaterMask.textureCopy, underwaterMask.texture);
 
 		context->OMSetDepthStencilState(nullptr, 0x00);
 
@@ -6864,6 +6876,91 @@ void Upscaling::UpscaleDepth()
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);
 		context->Draw(3, 0);
 	}
+
+	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
+	context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);
+
+	state->EndPerfEvent();
+}
+
+void Upscaling::RefreshSubmitStageUnderwaterMask()
+{
+	ZoneScoped;
+
+	auto state = globals::state;
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+	auto deferred = globals::deferred;
+	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState) {
+		return;
+	}
+
+	auto screenSize = state->screenSize;
+	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f) {
+		return;
+	}
+	auto renderSize = Util::ConvertToDynamic(screenSize, true);
+	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f) {
+		return;
+	}
+
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+	auto& underwaterMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kUNDERWATER_MASK];
+	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV ||
+		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
+		return;
+	}
+
+	auto* fullscreenVS = GetUpscaleVS();
+	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS(true);
+	if (!fullscreenVS || !underwaterMaskPS) {
+		return;
+	}
+
+	TracyD3D11Zone(state->tracyCtx, "Upscaling - Submit Stage Underwater Mask");
+	state->BeginPerfEvent("Submit Stage Underwater Mask Refresh");
+
+	context->IASetInputLayout(nullptr);
+	context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->VSSetShader(fullscreenVS, nullptr, 0);
+
+	D3D11_VIEWPORT viewport = {};
+	viewport.TopLeftX = 0.0f;
+	viewport.TopLeftY = 0.0f;
+	viewport.Width = renderSize.x * 0.5f;
+	viewport.Height = renderSize.y * 0.5f;
+	viewport.MinDepth = 0.0f;
+	viewport.MaxDepth = 1.0f;
+	context->RSSetViewports(1, &viewport);
+
+	context->RSSetState(upscaleRasterizerState.get());
+	context->OMSetBlendState(upscaleBlendState.get(), nullptr, 0xffffffff);
+
+	ID3D11SamplerState* samplers[] = { deferred->linearSampler };
+	context->PSSetSamplers(0, ARRAYSIZE(samplers), samplers);
+
+	JitterCB jitterData{};
+	jitterData.jitter = jitter;
+	UpdateDepthUpscaleKernelState(jitterData, IsUpscalingActive());
+	jitterCB->Update(jitterData);
+	auto bufferArray = jitterCB->CB();
+	context->PSSetConstantBuffers(0, 1, &bufferArray);
+
+	CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
+	CopyResourceIfNonAliased(context, underwaterMask.textureCopy, underwaterMask.texture);
+
+	ID3D11RenderTargetView* rtvs[] = { underwaterMask.RTV };
+	context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
+	context->OMSetDepthStencilState(nullptr, 0x00);
+
+	ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV };
+	context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+	context->PSSetShader(underwaterMaskPS, nullptr, 0);
+	context->Draw(3, 0);
 
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);
@@ -7313,6 +7410,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
+		upscaling.UpscaleDepth();
+
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
@@ -7332,6 +7431,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+
+		upscaling.RefreshSubmitStageUnderwaterMask();
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);

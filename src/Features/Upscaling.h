@@ -321,7 +321,8 @@ public:
 	ID3D11PixelShader* GetDepthRefractionUpscalePS();
 
 	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscalePS;
-	ID3D11PixelShader* GetUnderwaterMaskUpscalePS();
+	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscaleRawDepthNoStencilPS;
+	ID3D11PixelShader* GetUnderwaterMaskUpscalePS(bool a_useRawSceneDepth = false);
 
 	winrt::com_ptr<ID3D11VertexShader> upscaleVS;
 	ID3D11VertexShader* GetUpscaleVS();
@@ -499,6 +500,7 @@ public:
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
+	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
 	uint32_t GetEffectiveDLSSQualityMode() const;
 	uint32_t GetEffectiveDLSSPreset() const;
@@ -614,6 +616,8 @@ public:
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 
 private:
+	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
+
 	struct OpenCompositeUpscalingBlocker
 	{
 		bool active = false;

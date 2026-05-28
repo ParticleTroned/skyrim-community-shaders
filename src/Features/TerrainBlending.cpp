@@ -5,6 +5,7 @@
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Upscaling.h"
 #include "Utils/D3D.h"
 #include "VR.h"
 
@@ -916,7 +917,8 @@ void TerrainBlending::BlendPrepassDepths()
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	auto dispatchCount = Util::GetScreenDispatchCount();
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 
 	{
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };

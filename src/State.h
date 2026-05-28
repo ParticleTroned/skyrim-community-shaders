@@ -60,8 +60,10 @@ public:
 
 	float timer = 0;
 	float refractionScale = 0.5f;  // Default LLF heat warp strength
-	float pbrMetalReflectionScale = 1.0f;  // Global scale for PBR metal reflections
-	float pbrMetalHighlightScale = 0.25f;  // Global scale for direct PBR metal highlights
+	static constexpr float kDefaultPbrMetalReflectionScale = 1.0f;
+	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
+	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections
+	float pbrMetalHighlightScale = kDefaultPbrMetalHighlightScale;  // Global scale for direct PBR metal highlights
 	// Burley SSS human skin controls.
 	float sssHumanMaleIntensity = 1.0f;
 	float sssHumanMaleSaturation = 1.0f;

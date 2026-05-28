@@ -8,6 +8,11 @@ void InverseSquareLighting::DrawSettings()
 	editor.DrawSettings();
 }
 
+void InverseSquareLighting::RestoreDefaultSettings()
+{
+	editor.RestoreDefaultSettings();
+}
+
 void InverseSquareLighting::EarlyPrepass()
 {
 	editor.GatherLights();

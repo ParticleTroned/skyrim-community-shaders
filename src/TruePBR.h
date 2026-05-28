@@ -21,6 +21,7 @@ public:
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsInMenu() const override { return true; }
 	virtual bool DrawFailLoadMessage() const override { return false; }
+	virtual bool HasFeatureSettings() const override { return false; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -40,6 +41,7 @@ public:
 	virtual void Prepass() override;
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
+	virtual void RestoreDefaultSettings() override;
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);
 

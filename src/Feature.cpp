@@ -155,23 +155,29 @@ void Feature::Load(json& o_json)
 		}
 	} else {
 		// No errors, load settings now
-		if (o_json[GetName()].is_structured()) {
-			logger::info("Loading {} settings", GetName());
-			try {
-				LoadSettings(o_json[GetName()]);
-			} catch (...) {
-				logger::warn("Invalid settings for {}, using default.", GetName());
+		if (HasFeatureSettings()) {
+			if (o_json[GetName()].is_structured()) {
+				logger::info("Loading {} settings", GetName());
+				try {
+					LoadSettings(o_json[GetName()]);
+				} catch (...) {
+					logger::warn("Invalid settings for {}, using default.", GetName());
+					RestoreDefaultSettings();
+				}
+			} else {
+				logger::info("Loading default settings for {}", GetName());
 				RestoreDefaultSettings();
 			}
-		} else {
-			logger::info("Loading default settings for {}", GetName());
-			RestoreDefaultSettings();
 		}
 	}
 }
 
 void Feature::Save(json& o_json)
 {
+	if (!HasFeatureSettings()) {
+		return;
+	}
+
 	SaveSettings(o_json[GetName()]);
 }
 

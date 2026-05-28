@@ -545,6 +545,11 @@ void TerrainBlending::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+void TerrainBlending::RestoreDefaultSettings()
+{
+	settings = {};
+}
+
 void TerrainBlending::OnBeginTechnique(RE::BSShader* a_shader, uint32_t a_pixelDescriptor, uint32_t a_callerRva)
 {
 	engineHookDiagnostics.beginTechniqueCalls++;

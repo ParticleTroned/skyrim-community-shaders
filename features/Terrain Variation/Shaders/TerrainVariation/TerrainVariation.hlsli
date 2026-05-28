@@ -38,6 +38,8 @@ struct StochasticOffsets
 // --------------------- FUNCTION DECLARATIONS --------------------- //
 float4 StochasticSampleLOD(float rnd, Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsetsLOD, float2 dx, float2 dy);
 float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float2 dx, float2 dy);
+float4 StochasticEffectMaterialData(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float2 dx, float2 dy);
+float4 StochasticEffectNormal(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float2 dx, float2 dy);
 float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 uv, float mipLevel, StochasticOffsets offsets, float2 dx, float2 dy);
 
 // --------------------- COMPUTE FUNCTIONS --------------------- //
@@ -65,6 +67,30 @@ inline float3 NormalizeWeights(float3 weights)
 		return weights;
 	float rcpWeightSum = rcp(max(weightSum, EPSILON_DIVISION));
 	return weights * rcpWeightSum;
+}
+
+inline float GetStochasticAdjustedMipLevel(Texture2D tex, SamplerState samp, float2 uv)
+{
+	return tex.CalculateLevelOfDetail(samp, uv) + SharedData::MipBias;
+}
+
+inline float3 GetStableStochasticWeights(StochasticOffsets offsets)
+{
+	float3 weights = saturate(offsets.weights);
+	float weightSum = weights.x + weights.y + weights.z;
+	return weightSum > EPSILON_DIVISION ? weights * rcp(weightSum) : DEFAULT_WEIGHTS;
+}
+
+inline void SampleStochasticTriplet(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float mipLevel, out float4 sample1, out float4 sample2, out float4 sample3)
+{
+	sample1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
+	sample2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+	sample3 = tex.SampleLevel(samp, uv + offsets.offset3, mipLevel);
+}
+
+inline float4 BlendStochasticTriplet(float4 sample1, float4 sample2, float4 sample3, float3 weights)
+{
+	return sample1 * weights.x + sample2 * weights.y + sample3 * weights.z;
 }
 
 // Common barycentric coordinate calculation for stochastic sampling
@@ -143,13 +169,11 @@ inline float4 StochasticSampleLOD(float rnd, Texture2D tex, SamplerState samp, f
 inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float2 dx, float2 dy)
 {
 	// Calculate custom mip level from original UVs.
-	float mipLevel = tex.CalculateLevelOfDetail(samp, uv);
-	float adjustedMipLevel = mipLevel + SharedData::MipBias;
+	float adjustedMipLevel = GetStochasticAdjustedMipLevel(tex, samp, uv);
 
 	// 3 Sample Blend
-	float4 sample1 = tex.SampleLevel(samp, uv + offsets.offset1, adjustedMipLevel);
-	float4 sample2 = tex.SampleLevel(samp, uv + offsets.offset2, adjustedMipLevel);
-	float4 sample3 = tex.SampleLevel(samp, uv + offsets.offset3, adjustedMipLevel);
+	float4 sample1, sample2, sample3;
+	SampleStochasticTriplet(tex, samp, uv, offsets, adjustedMipLevel, sample1, sample2, sample3);
 
 	// Full height-based blending for terrain
 	float contrastFactor = HEIGHT_BLEND_CONTRAST * (1.0 - HEIGHT_INFLUENCE);
@@ -169,7 +193,42 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 	float3 weights = NormalizeWeights(blendWeights * (1.0 + HEIGHT_INFLUENCE * heights));
 
 	// Final blend
-	return sample1 * weights.x + sample2 * weights.y + sample3 * weights.z;
+	return BlendStochasticTriplet(sample1, sample2, sample3, weights);
+}
+
+// Stochastic sampling for non-color material data. Keeps the same stochastic
+// cell field as diffuse sampling, but avoids height/luminance weighting so
+// roughness, AO, metallic, and F0 do not acquire high-contrast cell edges.
+inline float4 StochasticEffectMaterialData(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float2 dx, float2 dy)
+{
+	float adjustedMipLevel = GetStochasticAdjustedMipLevel(tex, samp, uv);
+
+	float4 sample1, sample2, sample3;
+	SampleStochasticTriplet(tex, samp, uv, offsets, adjustedMipLevel, sample1, sample2, sample3);
+
+	float3 weights = GetStableStochasticWeights(offsets);
+	return BlendStochasticTriplet(sample1, sample2, sample3, weights);
+}
+
+// Stochastic normal sampling for specular-sensitive terrain. Blend decoded
+// normals and renormalize before returning the standard encoded texture value.
+inline float4 StochasticEffectNormal(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float2 dx, float2 dy)
+{
+	float adjustedMipLevel = GetStochasticAdjustedMipLevel(tex, samp, uv);
+
+	float4 sample1, sample2, sample3;
+	SampleStochasticTriplet(tex, samp, uv, offsets, adjustedMipLevel, sample1, sample2, sample3);
+
+	float3 weights = GetStableStochasticWeights(offsets);
+	float3 normal1 = sample1.xyz * 2.0 - 1.0;
+	float3 normal2 = sample2.xyz * 2.0 - 1.0;
+	float3 normal3 = sample3.xyz * 2.0 - 1.0;
+	float3 blendedNormal = normal1 * weights.x + normal2 * weights.y + normal3 * weights.z;
+	float normalLengthSq = dot(blendedNormal, blendedNormal);
+	blendedNormal = normalLengthSq > EPSILON_LENGTH_SQ ? blendedNormal * rsqrt(normalLengthSq) : float3(0.0, 0.0, 1.0);
+
+	float alpha = sample1.a * weights.x + sample2.a * weights.y + sample3.a * weights.z;
+	return float4(blendedNormal * 0.5 + 0.5, alpha);
 }
 
 // Stochastic sampling function without height blending for better performance

@@ -318,6 +318,16 @@ void TruePBR::SetupResources()
 	SetupMaterialObjectData();
 }
 
+void TruePBR::RestoreDefaultSettings()
+{
+	if (!globals::state) {
+		return;
+	}
+
+	globals::state->pbrMetalReflectionScale = State::kDefaultPbrMetalReflectionScale;
+	globals::state->pbrMetalHighlightScale = State::kDefaultPbrMetalHighlightScale;
+}
+
 void TruePBR::Prepass()
 {
 	SetupDefaultPBRLandTextureSet();

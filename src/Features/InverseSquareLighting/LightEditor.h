@@ -3,13 +3,14 @@
 
 struct LightEditor
 {
-	bool enabled;
-	bool disableInvSqLights;
-	bool disableRegularLights;
+	bool enabled = false;
+	bool disableInvSqLights = false;
+	bool disableRegularLights = false;
 	bool shadowsOnly = false;
 
 	void DrawSettings();
 	void GatherLights();
+	void RestoreDefaultSettings();
 
 	bool ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const;
 

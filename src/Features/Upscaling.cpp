@@ -7313,6 +7313,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
+		upscaling.UpscaleDepth();
+
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
@@ -7332,6 +7334,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+
+		upscaling.UpscaleDepth();
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);

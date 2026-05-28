@@ -18,7 +18,7 @@ SamplerState depthBufferSampler : register(s3);
 SamplerState waterMaskSampler : register(s4);
 
 Texture2D<float4> sourceTex : register(t0);
-Texture2D<float3> waterHistoryTex : register(t1);
+Texture2D<float4> waterHistoryTex : register(t1);
 Texture2D<float4> motionBufferTex : register(t2);
 Texture2D<float4> depthBufferTex : register(t3);
 Texture2D<float4> waterMaskTex : register(t4);
@@ -27,6 +27,17 @@ cbuffer PerGeometry : register(b2)
 {
 	float4 NearFar_Menu_DistanceFactor : packoffset(c0);
 };
+
+namespace WaterBlend
+{
+	static const float WaterMaskThreshold = 1e-4f;
+	static const float FullWaterCoverageThreshold = 1e-3f;
+
+	float GetWaterCoverage(float waterMask)
+	{
+		return saturate((waterMask - WaterMaskThreshold) / (FullWaterCoverageThreshold - WaterMaskThreshold));
+	}
+}
 
 float3 LogToLinear(float3 logColor)
 {
@@ -50,7 +61,7 @@ PS_OUTPUT main(PS_INPUT input)
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(input.TexCoord);
 	float2 adjustedScreenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 	float waterMask = waterMaskTex.Sample(waterMaskSampler, adjustedScreenPosition).z;
-	if (waterMask < 1e-4) {
+	if (waterMask < WaterBlend::WaterMaskThreshold) {
 		discard;
 	}
 
@@ -59,17 +70,16 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 motionScreenPosition = Stereo::ConvertToStereoUV(Stereo::ConvertFromStereoUV(input.TexCoord, eyeIndex) + motion, eyeIndex);
 	float2 motionAdjustedScreenPosition =
 		FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(motionScreenPosition);
-	float3 waterHistory =
-		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyz;
-	waterHistory = LogToLinear(waterHistory) - LogToLinear(0);
+	float4 waterHistory =
+		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyzw;
+	float3 waterHistoryColor = LogToLinear(waterHistory.xyz) - LogToLinear(0);
 
-	float historyMask = waterMaskTex.Sample(waterMaskSampler, motionAdjustedScreenPosition).z;
 	float3 finalColor = sourceColor;
 	if (
 #	ifndef VR
 		motionScreenPosition.x >= 0 && motionScreenPosition.y >= 0 && motionScreenPosition.x <= 1 &&
 #	endif
-		motionScreenPosition.y <= 1 && historyMask > 0.999) {
+		motionScreenPosition.y <= 1 && waterHistory.w > 0.0) {
 		float historyFactor = 0.95;
 		if (NearFar_Menu_DistanceFactor.z == 0) {
 			float depth = depthBufferTex.Sample(depthBufferSampler, adjustedScreenPosition).x;
@@ -82,10 +92,11 @@ PS_OUTPUT main(PS_INPUT input)
 				0.1, 0.95);
 			historyFactor = NearFar_Menu_DistanceFactor.w * (distanceFactor * (waterMask * -0.85 + 0.95));
 		}
-		finalColor = lerp(sourceColor, waterHistory, historyFactor);
+		historyFactor *= waterHistory.w;
+		finalColor = lerp(sourceColor, waterHistoryColor, historyFactor);
 	}
 
-	psout.Color1 = float4(LinearToLog(finalColor + LogToLinear(0)), 1);
+	psout.Color1 = float4(LinearToLog(finalColor + LogToLinear(0)), WaterBlend::GetWaterCoverage(waterMask));
 	psout.Color = finalColor;
 
 	return psout;

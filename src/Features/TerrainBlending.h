@@ -1,5 +1,9 @@
 #pragma once
 
+#include "Buffer.h"
+
+#include <memory>
+
 struct TerrainBlending : Feature
 {
 public:
@@ -30,6 +34,14 @@ public:
 		float pad0 = 0.0f;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+
+	struct alignas(16) DepthBlendCB
+	{
+		uint32_t blendWidth = 0;
+		uint32_t blendHeight = 0;
+		uint32_t pad[2] = {};
+	};
+	STATIC_ASSERT_ALIGNAS_16(DepthBlendCB);
 
 	Settings settings;
 
@@ -92,6 +104,7 @@ public:
 	ID3D11ShaderResourceView* depthSRVBackup = nullptr;
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;
 
+	std::unique_ptr<ConstantBuffer> depthBlendCB = nullptr;
 	ID3D11ComputeShader* depthBlendShader = nullptr;
 
 	virtual void ClearShaderCache() override;

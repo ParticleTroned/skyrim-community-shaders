@@ -5,10 +5,13 @@
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Upscaling.h"
 #include "Utils/D3D.h"
 #include "VR.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <intrin.h>
 #include <sstream>
@@ -22,6 +25,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	uint32_t GetDepthBlendExtent(float a_sceneExtent, uint32_t a_resourceExtent)
+	{
+		if (!a_resourceExtent)
+			return 0;
+
+		if (!std::isfinite(a_sceneExtent) || a_sceneExtent <= 0.0f)
+			return 0;
+
+		return std::clamp(static_cast<uint32_t>(std::max(1l, std::lround(a_sceneExtent))), 1u, a_resourceExtent);
+	}
+
 	struct TbHookDiagnostics
 	{
 		uint64_t renderDepthCalls = 0;
@@ -876,6 +890,8 @@ void TerrainBlending::SetupResources()
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 		Util::SetResourceName(terrainDepthStencilState, "TerrainBlending::DepthStencilState");
 	}
+
+	depthBlendCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DepthBlendCB>(), "TerrainBlending::DepthBlendCB");
 }
 
 void TerrainBlending::SetupRenderTargetResources()
@@ -942,9 +958,38 @@ void TerrainBlending::BlendPrepassDepths()
 		globals::state->BeginPerfEvent("Terrain Blending - Blend Prepass Depths");
 
 	auto context = globals::d3d::context;
-	context->OMSetRenderTargets(0, nullptr, nullptr);
+	if (!context || !depthBlendCB || !depthSRVBackup || !terrainDepth.texture || !terrainDepth.depthSRV ||
+		!blendedDepthTexture || !blendedDepthTexture->uav ||
+		!blendedDepthTexture16 || !blendedDepthTexture16->uav ||
+		!mainDepthCopy || !mainDepthCopy->uav) {
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
+		return;
+	}
 
-	auto dispatchCount = Util::GetScreenDispatchCount();
+	D3D11_TEXTURE2D_DESC terrainDepthDesc{};
+	terrainDepth.texture->GetDesc(&terrainDepthDesc);
+
+	// Submit-stage upscaling keeps scene passes in the dynamic-resolution domain.
+	// TB depth products are sampled during replay with scene pixel coordinates.
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	const auto blendSize = Util::ConvertToDynamic(globals::state->screenSize, submitStageSceneDomain);
+	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, blendedDepthTexture16->desc.Width, mainDepthCopy->desc.Width });
+	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, blendedDepthTexture16->desc.Height, mainDepthCopy->desc.Height });
+	const uint32_t blendWidth = GetDepthBlendExtent(blendSize.x, maxBlendWidth);
+	const uint32_t blendHeight = GetDepthBlendExtent(blendSize.y, maxBlendHeight);
+	if (!blendWidth || !blendHeight) {
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
+		return;
+	}
+
+	DepthBlendCB depthBlendData{};
+	depthBlendData.blendWidth = blendWidth;
+	depthBlendData.blendHeight = blendHeight;
+	depthBlendCB->Update(depthBlendData);
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	{
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
@@ -953,9 +998,14 @@ void TerrainBlending::BlendPrepassDepths()
 		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get(), mainDepthCopy->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
+		auto buffer = depthBlendCB->CB();
+		context->CSSetConstantBuffers(0, 1, &buffer);
+
 		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
 
-		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		const uint32_t dispatchX = (blendWidth + 7u) >> 3u;
+		const uint32_t dispatchY = (blendHeight + 7u) >> 3u;
+		context->Dispatch(dispatchX, dispatchY, 1);
 	}
 
 	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
@@ -963,6 +1013,9 @@ void TerrainBlending::BlendPrepassDepths()
 
 	ID3D11UnorderedAccessView* uavs[3] = { nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+	ID3D11Buffer* buffer = nullptr;
+	context->CSSetConstantBuffers(0, 1, &buffer);
 
 	ID3D11ComputeShader* shader = nullptr;
 	context->CSSetShader(shader, nullptr, 0);

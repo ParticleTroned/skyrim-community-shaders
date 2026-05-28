@@ -5,7 +5,16 @@ RWTexture2D<float> MainDepthCopy : register(u2);  // R32_FLOAT snapshot replaces
 Texture2D<unorm float> MainDepthTexture : register(t0);
 Texture2D<unorm float> TerrainDepthTexture : register(t1);
 
+cbuffer DepthBlendCB : register(b0)
+{
+	uint2 BlendSize;
+	uint2 pad0;
+};
+
 [numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID) {
+	if (any(DTid.xy >= BlendSize))
+		return;
+
 	float mainDepth = MainDepthTexture[DTid.xy];
 	float mixedDepth = min(mainDepth, TerrainDepthTexture[DTid.xy]);
 	BlendedDepthTexture[DTid.xy] = mixedDepth;

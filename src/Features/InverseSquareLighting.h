@@ -29,6 +29,8 @@ public:
 
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
+	virtual void RestoreDefaultSettings() override;
+
 	virtual bool SupportsVR() override { return true; }
 
 	virtual void PostPostLoad() override;

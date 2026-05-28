@@ -12,6 +12,7 @@ struct LightEditor
 	void DrawSettings();
 	void GatherLights();
 	void ResetOverrides();
+	void RestoreDefaultSettings();
 
 	bool ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const;
 

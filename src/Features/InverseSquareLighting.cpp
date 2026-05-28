@@ -5,6 +5,11 @@
 #include <cmath>
 #include <numbers>
 
+void InverseSquareLighting::RestoreDefaultSettings()
+{
+	EditorWindow::GetSingleton()->lightEditor.RestoreDefaultSettings();
+}
+
 void InverseSquareLighting::PostPostLoad()
 {
 	stl::detour_thunk<CreatePointLight>(REL::RelocationID(17208, 17610));

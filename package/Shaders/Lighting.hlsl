@@ -2189,7 +2189,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.AO = rawRMAOS.z;
 
 	// Apply vertex color to base color so PBR metals use it
-	float3 pbrVertexColor = Color::SrgbToLinear(input.Color.xyz);
+	float3 pbrVertexColor = input.Color.xyz;
+#		if defined(LANDSCAPE)
+	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
+		pbrVertexColor = 1;
+#		endif
+	pbrVertexColor = Color::SrgbToLinear(pbrVertexColor);
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 

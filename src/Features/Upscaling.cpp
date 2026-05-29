@@ -1008,12 +1008,47 @@ namespace
 		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 	}
 
+	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
+	{
+		if (!a_ui)
+			return false;
+
+		static constexpr std::string_view kMenuNames[] = {
+			"Journal Menu",
+			"StatsMenu",
+			"InventoryMenu",
+			"MagicMenu",
+			"TweenMenu",
+			"Book Menu",
+			"ContainerMenu",
+			"BarterMenu",
+			"Sleep/Wait Menu",
+			"Crafting Menu",
+			"Lockpicking Menu",
+			"Training Menu",
+			"LevelUp Menu",
+			"Dialogue Menu",
+			"MessageBoxMenu",
+			"RaceSex Menu",
+			"Tutorial Menu",
+			"Console",
+		};
+
+		for (const auto menuName : kMenuNames) {
+			if (a_ui->IsMenuOpen(menuName))
+				return true;
+		}
+
+		return false;
+	}
+
 	bool IsKnownGameMenuContextActive()
 	{
 		auto state = globals::state;
 		auto ui = globals::game::ui;
 		return (state && (state->isMapMenuOpen || state->isMainMenuOpen)) ||
 		       IsLoadingMenuContextActive() ||
+		       IsSkyrimMenuPresentationContextActive(ui) ||
 		       (ui && ui->GameIsPaused());
 	}
 
@@ -5307,10 +5342,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
-	if (globals::game::isVR && vendorUpscalingMethod && IsLoadingMenuContextActive()) {
+	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive()) {
 		resolutionScale = { 1.0f, 1.0f };
 		jitter = { 0.0f, 0.0f };
+		a_viewport->projectionPosScaleX = 0.0f;
+		a_viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
+		CheckResources(upscaleMethod);
 		return;
 	}
 
@@ -5680,8 +5718,11 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	if (globals::game::isVR && IsVendorUpscalingMethod(GetUpscaleMethod()) && IsLoadingMenuContextActive())
+	if (globals::game::isVR && IsVendorUpscalingMethod(GetUpscaleMethod()) && IsKnownGameMenuContextActive()) {
+		viewport->projectionPosScaleX = 0.0f;
+		viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
+	}
 
 	if (d3d12SwapChainActive)
 		SetUIBuffer();
@@ -6968,12 +7009,7 @@ void Upscaling::UpscaleDepth()
 
 		// Engine copies kMAIN->kMAIN_COPY during 3D scene rendering.
 		// In menu/non-3D contexts the engine path may skip this copy.
-		auto* ui = globals::game::ui;
-		const bool inMenuContext = state->isMapMenuOpen ||
-		                           state->isMainMenuOpen ||
-		                           state->isLoadingMenuOpen ||
-		                           (ui && ui->GameIsPaused());
-		if (inMenuContext) {
+		if (IsKnownGameMenuContextActive()) {
 			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 		}
 
@@ -7566,23 +7602,24 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	const bool menuPresentationContext = vendorMethodSelected && globals::game::isVR && IsGameMenuContextActive();
-	const bool loadingPresentationContext = vendorMethodSelected && globals::game::isVR && IsLoadingMenuContextActive();
+	const bool fullResolutionMenuPresentation = vendorMethodSelected && globals::game::isVR && IsKnownGameMenuContextActive();
+	const bool runNativeVendorAAInMenu = fullResolutionMenuPresentation && ClampQualityModeUInt(upscaling.settings.qualityMode) == 0;
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
-	if (menuPresentationContext) {
+	if (menuPresentationContext && !runNativeVendorAAInMenu) {
 		if (upscaling.ShouldUseFrameGenerationThisFrame())
 			upscaling.CopySharedD3D12Resources();
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
-		if (loadingPresentationContext)
+		if (fullResolutionMenuPresentation)
 			upscaling.PrepareFullResolutionPostProcessing();
 		else
 			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		if (loadingPresentationContext)
+		if (fullResolutionMenuPresentation)
 			upscaling.PrepareFullResolutionPostProcessing();
 		else
 			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);

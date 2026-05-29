@@ -898,7 +898,7 @@ namespace
 				   a_resolutionScale.y < kDynamicResolutionUpscalingScaleThreshold);
 	}
 
-	void SetDynamicResolutionEnabledForUpscaling(bool a_enabled)
+	void SetDynamicResolutionEnabledForUpscaling(bool a_enabled, bool a_forceDisabled = false)
 	{
 		if (!globals::game::isVR)
 			return;
@@ -914,12 +914,12 @@ namespace
 			initialized = true;
 		}
 
-		const bool targetEnabled = a_enabled ? true : (changedByUpscaling ? originalEnabled : *enabled);
+		const bool targetEnabled = a_enabled ? true : (a_forceDisabled ? false : (changedByUpscaling ? originalEnabled : *enabled));
 		if (*enabled != targetEnabled) {
 			*enabled = targetEnabled;
 		}
 
-		changedByUpscaling = a_enabled;
+		changedByUpscaling = a_enabled || a_forceDisabled;
 	}
 
 	void DisableAutoDynamicResolutionSetting()
@@ -5286,17 +5286,11 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
 
-		auto& runtimeData = a_viewport->GetRuntimeData();
-		const bool shouldUseInternalDynamicResolution = ShouldUseSubmitStageDynamicResolution(submitSize);
-		if (globals::game::isVR)
-			SetDynamicResolutionEnabledForUpscaling(shouldUseInternalDynamicResolution);
-		runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
-		runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-		runtimeData.dynamicResolutionWidthRatio = submitSize.widthRatio;
-		runtimeData.dynamicResolutionHeightRatio = submitSize.heightRatio;
-		runtimeData.dynamicResolutionLock = shouldUseInternalDynamicResolution ? 0 : 1;
-		dynamicResolutionWidthRatio = submitSize.widthRatio;
-		dynamicResolutionHeightRatio = submitSize.heightRatio;
+		ApplySubmitStageDynamicResolutionState(
+			a_viewport,
+			submitSize.widthRatio,
+			submitSize.heightRatio,
+			ShouldUseSubmitStageDynamicResolution(submitSize));
 		CheckResources(upscaleMethod);
 		return;
 	}
@@ -5334,6 +5328,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto& runtimeData = a_viewport->GetRuntimeData();
 
 	if (!vendorUpscalingMethod) {
+		ResetSubmitStageDynamicResolutionState();
 		if (dynamicResolutionWidthRatio != 1.0f || dynamicResolutionHeightRatio != 1.0f) {
 			if (globals::game::isVR) {
 				SetDynamicResolutionEnabledForUpscaling(false);
@@ -5383,20 +5378,16 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 			return;
 
 		const auto submitSize = GetSubmitStageSizePlan(state->screenSize);
-		const bool shouldUseInternalDynamicResolution = ShouldUseSubmitStageDynamicResolution(submitSize);
-		if (globals::game::isVR)
-			SetDynamicResolutionEnabledForUpscaling(shouldUseInternalDynamicResolution);
-		runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
-		runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-		runtimeData.dynamicResolutionWidthRatio = submitSize.widthRatio;
-		runtimeData.dynamicResolutionHeightRatio = submitSize.heightRatio;
-		runtimeData.dynamicResolutionLock = shouldUseInternalDynamicResolution ? 0 : 1;
-		dynamicResolutionWidthRatio = submitSize.widthRatio;
-		dynamicResolutionHeightRatio = submitSize.heightRatio;
+		ApplySubmitStageDynamicResolutionState(
+			a_viewport,
+			submitSize.widthRatio,
+			submitSize.heightRatio,
+			ShouldUseSubmitStageDynamicResolution(submitSize));
 		UpdateCameraData();
 		return;
 	}
 
+	ResetSubmitStageDynamicResolutionState();
 	const bool shouldUnlockDynamicResolution = globals::game::isVR && ShouldUnlockDynamicResolutionForUpscaling(upscaleMethod, resolutionScale);
 
 	if (globals::game::isVR) {
@@ -5439,6 +5430,7 @@ void Upscaling::PrepareFullResolutionPostProcessing()
 		return;
 
 	auto& runtimeData = viewport->GetRuntimeData();
+	ResetSubmitStageDynamicResolutionState();
 	if (globals::game::isVR)
 		SetDynamicResolutionEnabledForUpscaling(false);
 	runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
@@ -6113,9 +6105,58 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	return true;
 }
 
+void Upscaling::ApplySubmitStageDynamicResolutionState(RE::BSGraphics::State* a_viewport, float a_widthRatio, float a_heightRatio, bool a_useDynamicResolution)
+{
+	if (!a_viewport)
+		return;
+
+	auto& runtimeData = a_viewport->GetRuntimeData();
+	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0;
+	constexpr float kRatioEpsilon = 1e-6f;
+	const bool ratioChanged =
+		std::abs(submitStageDynamicResolutionCurrentWidthRatio - a_widthRatio) > kRatioEpsilon ||
+		std::abs(submitStageDynamicResolutionCurrentHeightRatio - a_heightRatio) > kRatioEpsilon;
+
+	if (!submitStageDynamicResolutionStateValid || ratioChanged) {
+		submitStageDynamicResolutionPreviousWidthRatio = a_widthRatio;
+		submitStageDynamicResolutionPreviousHeightRatio = a_heightRatio;
+	} else if (submitStageDynamicResolutionStateFrame != currentFrame) {
+		submitStageDynamicResolutionPreviousWidthRatio = submitStageDynamicResolutionCurrentWidthRatio;
+		submitStageDynamicResolutionPreviousHeightRatio = submitStageDynamicResolutionCurrentHeightRatio;
+	}
+
+	submitStageDynamicResolutionCurrentWidthRatio = a_widthRatio;
+	submitStageDynamicResolutionCurrentHeightRatio = a_heightRatio;
+	submitStageDynamicResolutionStateFrame = currentFrame;
+	submitStageDynamicResolutionStateValid = true;
+
+	// Submit-stage owns the ratios; Skyrim's internal DR controller must not mutate them.
+	if (globals::game::isVR)
+		SetDynamicResolutionEnabledForUpscaling(false, true);
+
+	runtimeData.dynamicResolutionPreviousWidthRatio = submitStageDynamicResolutionPreviousWidthRatio;
+	runtimeData.dynamicResolutionPreviousHeightRatio = submitStageDynamicResolutionPreviousHeightRatio;
+	runtimeData.dynamicResolutionWidthRatio = submitStageDynamicResolutionCurrentWidthRatio;
+	runtimeData.dynamicResolutionHeightRatio = submitStageDynamicResolutionCurrentHeightRatio;
+	runtimeData.dynamicResolutionLock = a_useDynamicResolution ? 0 : 1;
+	dynamicResolutionWidthRatio = submitStageDynamicResolutionCurrentWidthRatio;
+	dynamicResolutionHeightRatio = submitStageDynamicResolutionCurrentHeightRatio;
+}
+
+void Upscaling::ResetSubmitStageDynamicResolutionState()
+{
+	submitStageDynamicResolutionStateValid = false;
+	submitStageDynamicResolutionStateFrame = std::numeric_limits<uint32_t>::max();
+	submitStageDynamicResolutionPreviousWidthRatio = 1.0f;
+	submitStageDynamicResolutionPreviousHeightRatio = 1.0f;
+	submitStageDynamicResolutionCurrentWidthRatio = 1.0f;
+	submitStageDynamicResolutionCurrentHeightRatio = 1.0f;
+}
+
 void Upscaling::RequestHistoryReset()
 {
 	historyResetRequested = true;
+	ResetSubmitStageDynamicResolutionState();
 }
 
 uint32_t Upscaling::GetEffectiveDLSSQualityMode() const

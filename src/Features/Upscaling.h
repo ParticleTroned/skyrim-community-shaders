@@ -616,7 +616,16 @@ public:
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 
 private:
+	void ApplySubmitStageDynamicResolutionState(RE::BSGraphics::State* a_viewport, float a_widthRatio, float a_heightRatio, bool a_useDynamicResolution);
+	void ResetSubmitStageDynamicResolutionState();
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
+
+	bool submitStageDynamicResolutionStateValid = false;
+	uint32_t submitStageDynamicResolutionStateFrame = std::numeric_limits<uint32_t>::max();
+	float submitStageDynamicResolutionPreviousWidthRatio = 1.0f;
+	float submitStageDynamicResolutionPreviousHeightRatio = 1.0f;
+	float submitStageDynamicResolutionCurrentWidthRatio = 1.0f;
+	float submitStageDynamicResolutionCurrentHeightRatio = 1.0f;
 
 	struct OpenCompositeUpscalingBlocker
 	{

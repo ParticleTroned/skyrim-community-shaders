@@ -44,6 +44,14 @@ namespace
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
 	}
 
+	void ScaleOverlayTransform(vr::HmdMatrix34_t& transform, float width, float height)
+	{
+		for (int row = 0; row < 3; ++row) {
+			transform.m[row][0] *= width;
+			transform.m[row][1] *= height;
+		}
+	}
+
 	ImVec2 GetTabChildSizeWithRestoreButtonReserve()
 	{
 		const float reserveHeight = FeatureListRenderer::GetRestoreDefaultsButtonReserveHeight();
@@ -169,8 +177,10 @@ namespace
 	}
 }
 
-constexpr int kOverlayWidth = 1920;
-constexpr int kOverlayHeight = 1080;
+constexpr int kOverlayWidth = VR::Config::kOverlayWidth;
+constexpr int kOverlayHeight = VR::Config::kOverlayHeight;
+constexpr int kHMDOverlayWidth = VR::Config::kHMDOverlayWidth;
+constexpr int kHMDOverlayHeight = VR::Config::kHMDOverlayHeight;
 constexpr const char* kMenuOverlayKey = "communityshaders.menu";
 constexpr const char* kMenuOverlayName = "Community Shaders Menu";
 constexpr const char* kControllerOverlayKey = "communityshaders.menu.controller";
@@ -1137,8 +1147,7 @@ namespace
 		if (ImGui::CollapsingHeader("Input Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 			// Wand pointing settings
 			if (ImGui::Checkbox("Enable Wand Pointing", &settings.EnableWandPointing)) {
-				// Reset wand state when toggling
-				vr.wandState.isIntersecting = false;
+				vr.ResetWandPointingRuntimeState();
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Use controller ray-casting to point at UI elements");
@@ -2172,10 +2181,10 @@ void VR::UpdateVROverlayPosition()
 	bool showOnHMD = (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both);
 
 	// Texture size
-	float aspect = static_cast<float>(kOverlayHeight) / kOverlayWidth;
 	float baseWidth = 1.0f;
 	float overlayWidth = baseWidth * settings.VRMenuScale;
-	float overlayHeight = overlayWidth * aspect;
+	float hmdOverlayHeight = overlayWidth * VR::Config::kHMDOverlayAspect;
+	float controllerOverlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 	float offsetX = settings.VRMenuOffsetX;
 	float offsetY = settings.VRMenuOffsetY;
 	float offsetZ = settings.VRMenuOffsetZ;
@@ -2237,9 +2246,8 @@ void VR::UpdateVROverlayPosition()
 				hmdTransform.m[1][3] += hmdTransform.m[1][1] * height;
 				hmdTransform.m[2][3] += hmdTransform.m[2][1] * height;
 
-				// Scale the overlay based on width/height
-				hmdTransform.m[0][0] *= overlayWidth;
-				hmdTransform.m[1][1] *= overlayHeight;
+				// Scale the overlay basis based on width/height.
+				ScaleOverlayTransform(hmdTransform, overlayWidth, hmdOverlayHeight);
 
 				Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 				ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &hmdTransform);
@@ -2277,8 +2285,7 @@ void VR::UpdateVROverlayPosition()
 
 			// Scale the overlay based on width/height (same as relative HMD mode)
 			vr::HmdMatrix34_t fixedTransform = Util::MatrixToHmdMatrix34(fixedWorldOverlayPosition.m);
-			fixedTransform.m[0][0] *= overlayWidth;
-			fixedTransform.m[1][1] *= overlayHeight;
+			ScaleOverlayTransform(fixedTransform, overlayWidth, hmdOverlayHeight);
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
 			ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &fixedTransform);
@@ -2303,7 +2310,7 @@ void VR::UpdateVROverlayPosition()
 				settings.VRMenuControllerOffsetY,
 				settings.VRMenuControllerOffsetZ,
 				overlayWidth,
-				overlayHeight);
+				controllerOverlayHeight);
 
 			Util::SetOverlayInputFlags(ctx.overlay, menuControllerOverlayHandle);
 			ctx.overlay->SetOverlayTransformTrackedDeviceRelative(menuControllerOverlayHandle, controllerIndex, &transform);
@@ -2332,10 +2339,9 @@ void VR::UpdateVROverlayControllerPosition()
 	}
 
 	// Texture size based on preset
-	float aspect = static_cast<float>(kOverlayHeight) / kOverlayWidth;
 	float baseWidth = 1.0f;
 	float overlayWidth = baseWidth * settings.VRMenuScale;
-	float overlayHeight = overlayWidth * aspect;
+	float overlayHeight = overlayWidth * VR::Config::kOverlayAspect;
 
 	// Find the appropriate controller for the controller overlay
 	vr::TrackedDeviceIndex_t controllerIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
@@ -2483,24 +2489,24 @@ void VR::RecreateOverlayTexturesIfNeeded(bool needsControllerTexture)
 		return;
 	}
 
-	auto isTextureValid = [](ID3D11Texture2D* texture, ID3D11RenderTargetView* rtv) {
+	auto isTextureValid = [](ID3D11Texture2D* texture, ID3D11RenderTargetView* rtv, int width, int height) {
 		if (!texture || !rtv) {
 			return false;
 		}
 
 		D3D11_TEXTURE2D_DESC desc{};
 		texture->GetDesc(&desc);
-		return desc.Width == kOverlayWidth &&
-		       desc.Height == kOverlayHeight &&
+		return desc.Width == static_cast<UINT>(width) &&
+		       desc.Height == static_cast<UINT>(height) &&
 		       desc.ArraySize == 1 &&
 		       desc.MipLevels == 1;
 	};
 
-	if (!isTextureValid(menuTexture.get(), menuRTV.get())) {
-		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuTexture.put(), menuRTV.put());
+	if (!isTextureValid(menuTexture.get(), menuRTV.get(), kHMDOverlayWidth, kHMDOverlayHeight)) {
+		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kHMDOverlayWidth, kHMDOverlayHeight, menuTexture.put(), menuRTV.put());
 	}
 
-	if (needsControllerTexture && !isTextureValid(menuControllerTexture.get(), menuControllerRTV.get())) {
+	if (needsControllerTexture && !isTextureValid(menuControllerTexture.get(), menuControllerRTV.get(), kOverlayWidth, kOverlayHeight)) {
 		Util::CreateOverlayTextureAndRTV(globals::d3d::device, kOverlayWidth, kOverlayHeight, menuControllerTexture.put(), menuControllerRTV.put());
 	}
 }
@@ -2687,7 +2693,12 @@ void VR::SubmitOverlayFrame()
 	const bool shouldRenderOverlay = enabled || overlayVisible || shouldShowAutoHide || shouldShowShaderCompilation;
 	static bool wasMenuEnabled = false;
 	const bool menuJustOpened = enabled && !wasMenuEnabled;
+	const bool menuJustClosed = !enabled && wasMenuEnabled;
 	wasMenuEnabled = enabled;
+
+	if (menuJustOpened || menuJustClosed) {
+		ResetMenuInputRuntimeState();
+	}
 
 	UpdateMenuDesktopWindowManagement(menuJustOpened);
 
@@ -2707,7 +2718,7 @@ void VR::SubmitOverlayFrame()
 	const bool wantsAnyVROverlay = wantsHMDOverlay || wantsControllerOverlay;
 
 	if (shouldRenderOverlay && wantsAnyVROverlay) {
-		RecreateOverlayTexturesIfNeeded(useIVROverlay && wantsControllerOverlay);
+		RecreateOverlayTexturesIfNeeded(wantsControllerOverlay);
 	}
 
 	if (shouldRenderOverlay && useIVROverlay && openVRInfo.hasOverlayInterface) {
@@ -2736,17 +2747,39 @@ void VR::SubmitOverlayFrame()
 	if (shouldRenderOverlay && wantsAnyVROverlay && (useInSceneOverlay || canUseIVROverlay) && hasRequiredTextures) {
 		// Update drag logic only when overlay is active
 		UpdateOverlayDrag();
-		// Copy ImGui output to overlay texture
 		ID3D11RenderTargetView* oldRTV = nullptr;
 		globals::d3d::context->OMGetRenderTargets(1, &oldRTV, nullptr);
-		ID3D11RenderTargetView* menuRTVPtr = menuRTV.get();
-		globals::d3d::context->OMSetRenderTargets(1, &menuRTVPtr, nullptr);
 		float clearColor[4] = { 0, 0, 0, 0 };
-		globals::d3d::context->ClearRenderTargetView(menuRTV.get(), clearColor);
-		// Re-render ImGui for HMD overlay
-		ImGui::Render();
-		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-		globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
+
+		auto renderImGuiToTexture = [&](ID3D11RenderTargetView* targetRTV) {
+			if (!targetRTV) {
+				return;
+			}
+
+			ID3D11RenderTargetView* targetRTVPtr = targetRTV;
+			globals::d3d::context->OMSetRenderTargets(1, &targetRTVPtr, nullptr);
+			globals::d3d::context->ClearRenderTargetView(targetRTV, clearColor);
+			ImGui::Render();
+			ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
+		};
+
+		renderImGuiToTexture(menuRTV.get());
+
+		const bool controllerTextureUsedByIVROverlay = useIVROverlay && wantsControllerOverlay;
+		const bool controllerTextureUsedByInScene = useInSceneOverlay && settings.attachMode == AttachMode::ControllerOnly;
+		const bool shouldRenderControllerTexture =
+			menuControllerTexture &&
+			menuControllerRTV &&
+			(controllerTextureUsedByIVROverlay || controllerTextureUsedByInScene);
+		if (shouldRenderControllerTexture) {
+			renderImGuiToTexture(menuControllerRTV.get());
+
+			const bool controllerBeingDragged =
+				overlayDragState.dragging &&
+				overlayDragState.mode == OverlayDragState::DragMode::Controller;
+			Util::ApplyHighlightTintToTexture(menuControllerTexture.get(), controllerBeingDragged, settings.dragHighlightColor);
+		}
 
 		if (useInSceneOverlay) {
 			// The submit hook renders menuTexture into each eye. Keep the legacy
@@ -2780,20 +2813,6 @@ void VR::SubmitOverlayFrame()
 			}
 			// Controller overlay
 			if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
-				// Copy the same ImGui output to controller overlay texture
-				ID3D11RenderTargetView* menuControllerRTVPtr = menuControllerRTV.get();
-				globals::d3d::context->OMSetRenderTargets(1, &menuControllerRTVPtr, nullptr);
-				globals::d3d::context->ClearRenderTargetView(menuControllerRTV.get(), clearColor);
-				// Re-render ImGui for controller overlay
-				ImGui::Render();
-				ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-				globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
-
-				// Apply highlight tint to controller overlay if it's being dragged
-				bool controllerBeingDragged = overlayDragState.dragging &&
-				                              overlayDragState.mode == OverlayDragState::DragMode::Controller;
-				Util::ApplyHighlightTintToTexture(menuControllerTexture.get(), controllerBeingDragged, settings.dragHighlightColor);
-
 				// Position controller overlay and submit
 				UpdateVROverlayControllerPosition();
 

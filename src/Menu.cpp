@@ -179,6 +179,29 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 bool IsEnabled = false;
 std::unordered_map<std::string, int> Menu::categoryCounts;
 
+namespace
+{
+	ImVec2 GetDefaultSettingsWindowSize()
+	{
+		const ImVec2 viewportSize = ImGui::GetMainViewport()->Size;
+		if (REL::Module::IsVR()) {
+			constexpr float kVRWindowWidthRatio = 0.8f;
+			constexpr float kVRWindowMaxHeightRatio = 0.88f;
+			float width = viewportSize.x * kVRWindowWidthRatio;
+			float height = width * VR::Config::kHMDOverlayAspect;
+			const float maxHeight = viewportSize.y * kVRWindowMaxHeightRatio;
+			if (height > maxHeight) {
+				height = maxHeight;
+				width = height / VR::Config::kHMDOverlayAspect;
+			}
+
+			return ImVec2(width, height);
+		}
+
+		return ImVec2(viewportSize.x * 0.8f, viewportSize.y * 0.8f);
+	}
+}
+
 // Pad FontRoles JSON array with defaults if shorter than FontRole::Count.
 // Prevents deserialization failure when loading old settings with fewer font roles.
 static void SanitizeFontRolesJson(json& themeJson)
@@ -668,16 +691,19 @@ void Menu::DrawSettings()
 	const bool useOpenCompositeStableHeader =
 		REL::Module::IsVR() &&
 		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
+	const bool useSteamVRWindowControls =
+		REL::Module::IsVR() &&
+		globals::features::vr.openVRInfo.isAvailable &&
+		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR;
+	if (useSteamVRWindowControls) {
+		ImGui::GetIO().ConfigDockingWithShift = false;
+	}
 	ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
 	auto baseTitle = std::format("Community Shaders {} Particle Lights (Unofficial Fork)", versionStr);
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
 	auto title = std::format("{}###CommunityShaders", baseTitle);
-	const bool useSteamVRWindowControls =
-		REL::Module::IsVR() &&
-		globals::features::vr.openVRInfo.isAvailable &&
-		globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR;
 
 	// Check if this will be docked (we need to peek at the docking state)
 	static bool wasDocked = false;
@@ -685,15 +711,28 @@ void Menu::DrawSettings()
 
 	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
 	const ImVec2 defaultWindowPos = Util::GetNativeViewportSizeScaled(0.5f);
-	const ImVec2 defaultWindowSize = Util::GetNativeViewportSizeScaled(0.8f);
+	const ImVec2 defaultWindowSize = GetDefaultSettingsWindowSize();
 	const ImVec2 centeredPivot(0.5f, 0.5f);
 	ImVec2 windowPos = defaultWindowPos;
 	ImVec2 windowSizeForOverlap = defaultWindowSize;
+	bool repairSteamVRLegacyWindowSize = false;
+	static bool steamVRLegacyWindowSizeRepaired = false;
 	if (auto* menuWin = ImGui::FindWindowByName(title.c_str())) {
 		willBeDocked = menuWin->DockIsActive;
 		if (menuWin->Size.x > 0.0f && menuWin->Size.y > 0.0f) {
 			windowPos = ImVec2(menuWin->Pos.x + menuWin->Size.x * centeredPivot.x, menuWin->Pos.y + menuWin->Size.y * centeredPivot.y);
 			windowSizeForOverlap = menuWin->Size;
+			const float windowAspect = menuWin->Size.y / menuWin->Size.x;
+			constexpr float kLegacyAspectRepairTolerance = 0.25f;
+			repairSteamVRLegacyWindowSize =
+				useSteamVRWindowControls &&
+				!willBeDocked &&
+				!steamVRLegacyWindowSizeRepaired &&
+				(std::abs(windowAspect - VR::Config::kHMDOverlayAspect) > kLegacyAspectRepairTolerance);
+			if (repairSteamVRLegacyWindowSize) {
+				steamVRLegacyWindowSizeRepaired = true;
+				windowSizeForOverlap = defaultWindowSize;
+			}
 		}
 	}
 
@@ -720,7 +759,8 @@ void Menu::DrawSettings()
 
 	const auto windowPosCond = (autoOffsetForShaderCompile || restoreAfterShaderCompile) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowPos(windowPos, windowPosCond, centeredPivot);
-	ImGui::SetNextWindowSize(defaultWindowSize, layoutCond);
+	const auto windowSizeCond = repairSteamVRLegacyWindowSize ? ImGuiCond_Always : layoutCond;
+	ImGui::SetNextWindowSize(defaultWindowSize, windowSizeCond);
 	resetLayout = false;
 
 	// Determine window flags based on docking state
@@ -1085,6 +1125,9 @@ void Menu::ProcessInputEventQueue()
 						{ settings.ToggleKey, [this]() {
 							 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
 								 IsEnabled = !IsEnabled;
+								 if (globals::features::vr.IsOpenVRCompatible()) {
+									 globals::features::vr.ResetMenuInputRuntimeState();
+								 }
 								 if (IsEnabled)
 									 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 							 }
@@ -1128,6 +1171,9 @@ void Menu::ProcessInputEventQueue()
 						editorWindow->open = false;
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
 						IsEnabled = false;
+						if (globals::features::vr.IsOpenVRCompatible()) {
+							globals::features::vr.ResetMenuInputRuntimeState();
+						}
 					}
 				}
 			}

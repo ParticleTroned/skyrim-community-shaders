@@ -97,6 +97,29 @@ namespace
 		return (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) != 0;
 	}
 
+	bool EnsureMenuTextureSRV(
+		ID3D11Texture2D* texture,
+		winrt::com_ptr<ID3D11ShaderResourceView>& srv,
+		ID3D11Texture2D*& cachedTexture,
+		const char* label)
+	{
+		if (!texture || !globals::d3d::device) {
+			return false;
+		}
+
+		if (texture != cachedTexture || !srv) {
+			srv = nullptr;
+			if (FAILED(globals::d3d::device->CreateShaderResourceView(texture, nullptr, srv.put()))) {
+				logger::error("VR: Failed to create {} menu texture SRV", label);
+				cachedTexture = nullptr;
+				return false;
+			}
+			cachedTexture = texture;
+		}
+
+		return true;
+	}
+
 	winrt::com_ptr<ID3D11Texture2D> ResolveSubmitTexture2D(void* handle)
 	{
 		winrt::com_ptr<ID3D11Texture2D> texture;
@@ -730,7 +753,12 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Helper to draw the overlay quad with a given WVP matrix
-	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx, const InSceneCB& cbData) {
+	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx,
+		                       const InSceneCB& cbData,
+		                       ID3D11Texture2D* texture,
+		                       winrt::com_ptr<ID3D11ShaderResourceView>& srv,
+		                       ID3D11Texture2D*& cachedTexture,
+		                       const char* label) {
 		D3D11_MAPPED_SUBRESOURCE mappedResource;
 		if (SUCCEEDED(ctx->Map(inSceneResources.cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
 			memcpy(mappedResource.pData, &cbData, sizeof(InSceneCB));
@@ -759,16 +787,10 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		ctx->OMSetDepthStencilState(inSceneResources.depthState.get(), 0);
 		ctx->RSSetState(inSceneResources.rasterizerState.get());
 
-		// Cache SRV to avoid creating every frame
-		if (menuTexture.get() != inSceneResources.cachedMenuTexture) {
-			inSceneResources.menuSRV = nullptr;
-			if (FAILED(globals::d3d::device->CreateShaderResourceView(menuTexture.get(), nullptr, inSceneResources.menuSRV.put()))) {
-				logger::error("VR: Failed to create menu texture SRV");
-				return;
-			}
-			inSceneResources.cachedMenuTexture = menuTexture.get();
+		if (!EnsureMenuTextureSRV(texture, srv, cachedTexture, label)) {
+			return;
 		}
-		ID3D11ShaderResourceView* srvPtr = inSceneResources.menuSRV.get();
+		ID3D11ShaderResourceView* srvPtr = srv.get();
 		ctx->PSSetShaderResources(0, 1, &srvPtr);
 
 		ID3D11SamplerState* sampler = inSceneResources.sampler.get();
@@ -784,20 +806,26 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		Matrix modelMatrix;
 		Matrix vp;
 		if (settings.VRMenuPositioningMethod == 1) {  // Fixed World Position
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
 			vp = vpWorldSpace;
 		} else {  // HMD Relative
 			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
 			vp = vpHeadSpace;
 		}
 		cbData.wvp = (modelMatrix * vp).Transpose();
 
-		drawOverlayQuad(context, cbData);
+		drawOverlayQuad(
+			context,
+			cbData,
+			menuTexture.get(),
+			inSceneResources.menuSRV,
+			inSceneResources.cachedMenuTexture,
+			"HMD");
 	}
 
 	// --- Render Controller Overlay ---
-	if ((settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) && menuTexture) {
+	if ((settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) && (menuControllerTexture || menuTexture)) {
 		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
 		if (attachIndex != vr::k_unTrackedDeviceIndexInvalid && attachIndex < vr::k_unMaxTrackedDeviceCount) {
 			const vr::TrackedDevicePose_t& controllerPose = inSceneResources.cachedRenderPoses[attachIndex];
@@ -822,7 +850,23 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 				if (dot > 0.0f) {
 					InSceneCB cbData;
 					cbData.wvp = (modelMatrix * vpWorldSpace).Transpose();
-					drawOverlayQuad(context, cbData);
+					if (menuControllerTexture) {
+						drawOverlayQuad(
+							context,
+							cbData,
+							menuControllerTexture.get(),
+							inSceneResources.menuControllerSRV,
+							inSceneResources.cachedMenuControllerTexture,
+							"controller");
+					} else {
+						drawOverlayQuad(
+							context,
+							cbData,
+							menuTexture.get(),
+							inSceneResources.menuSRV,
+							inSceneResources.cachedMenuTexture,
+							"HMD");
+					}
 				}
 			}
 		}
@@ -855,15 +899,6 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	auto* device = globals::d3d::device;
 	if (!context || !device || !targetTexture || !targetUAV || !menuTexture || !inSceneResources.initialized || !inSceneResources.submitCompositeCS || !inSceneResources.submitCompositeCB || !inSceneResources.sampler) {
 		return;
-	}
-
-	if (menuTexture.get() != inSceneResources.cachedMenuTexture || !inSceneResources.menuSRV) {
-		inSceneResources.menuSRV = nullptr;
-		if (FAILED(device->CreateShaderResourceView(menuTexture.get(), nullptr, inSceneResources.menuSRV.put()))) {
-			logger::error("VR: Failed to create menu texture SRV for submit compositing");
-			return;
-		}
-		inSceneResources.cachedMenuTexture = menuTexture.get();
 	}
 
 	const float targetWidth = static_cast<float>(targetDesc.Width);
@@ -936,11 +971,11 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	const bool showOnController = settings.attachMode == AttachMode::ControllerOnly;
 	if (showOnHMD) {
 		if (settings.VRMenuPositioningMethod == 1) {
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
 			viewProjection = vpWorldSpace;
 		} else {
 			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
 			viewProjection = vpHeadSpace;
 		}
 	} else if (showOnController) {
@@ -959,6 +994,30 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 		viewProjection = vpWorldSpace;
 	} else {
 		return;
+	}
+
+	ID3D11ShaderResourceView* overlaySRV = nullptr;
+	if (showOnHMD) {
+		if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture, "HMD")) {
+			return;
+		}
+		overlaySRV = inSceneResources.menuSRV.get();
+	} else if (showOnController) {
+		if (menuControllerTexture) {
+			if (!EnsureMenuTextureSRV(
+					menuControllerTexture.get(),
+					inSceneResources.menuControllerSRV,
+					inSceneResources.cachedMenuControllerTexture,
+					"controller")) {
+				return;
+			}
+			overlaySRV = inSceneResources.menuControllerSRV.get();
+		} else {
+			if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture, "HMD")) {
+				return;
+			}
+			overlaySRV = inSceneResources.menuSRV.get();
+		}
 	}
 
 	const Matrix worldViewProjection = modelMatrix * viewProjection;
@@ -1033,7 +1092,7 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	context->CSGetSamplers(0, 1, &oldSampler);
 	context->CSGetConstantBuffers(0, 1, &oldCB);
 
-	ID3D11ShaderResourceView* srv = inSceneResources.menuSRV.get();
+	ID3D11ShaderResourceView* srv = overlaySRV;
 	ID3D11UnorderedAccessView* uav = targetUAV;
 	ID3D11SamplerState* sampler = inSceneResources.sampler.get();
 	ID3D11Buffer* cb = inSceneResources.submitCompositeCB.get();

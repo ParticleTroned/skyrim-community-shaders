@@ -237,7 +237,7 @@ namespace SharedData
 		float LODTerrainGamma;
 		float LODObjectGamma;
 		float LODObjectSnowGamma;
-		float pad0;
+		float WaterReflectionStrength;
 	};
 
 	struct HairSpecularSettings

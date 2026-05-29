@@ -698,10 +698,10 @@ void Menu::DrawSettings()
 	if (useSteamVRWindowControls) {
 		ImGui::GetIO().ConfigDockingWithShift = false;
 	}
-	ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
+	const ImGuiID mainDockSpaceId = ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto baseTitle = std::format("Community Shaders {} Particle Lights (Unofficial Fork)", versionStr);
+	auto baseTitle = std::format("CS {} Particle Lights (Unofficial Fork)", versionStr);
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
 	auto title = std::format("{}###CommunityShaders", baseTitle);
 
@@ -807,7 +807,8 @@ void Menu::DrawSettings()
 			uiScale,
 			uiIcons,
 			useOpenCompositeStableHeader,
-			showSteamVRWindowControls);
+			showSteamVRWindowControls,
+			mainDockSpaceId);
 
 		// Main content starts here - no additional separator needed as it's already handled in the conditions above
 

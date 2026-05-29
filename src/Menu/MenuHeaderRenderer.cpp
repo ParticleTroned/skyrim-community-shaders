@@ -19,6 +19,61 @@
 namespace
 {
 	using RoleFontGuard = MenuFonts::FontRoleGuard;
+
+	float GetHeaderIconSize(float a_uiScale)
+	{
+		return ImGui::GetFontSize() * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER * a_uiScale;
+	}
+
+	float GetUndockedIconSpacing(float a_uiScale)
+	{
+		return ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING * a_uiScale;
+	}
+
+	float GetUndockedActionButtonSize(float a_uiScale)
+	{
+		const auto& style = ImGui::GetStyle();
+		const float iconSize = GetHeaderIconSize(a_uiScale);
+		const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * a_uiScale;
+		return std::max(0.0f, iconSize - paddingReduction) + style.FramePadding.x * 2.0f;
+	}
+
+	float GetSteamVRHeaderRightInset(float a_uiScale)
+	{
+		const auto& style = ImGui::GetStyle();
+		return std::max(style.WindowBorderSize + style.CellPadding.x + style.FramePadding.x + 8.0f * a_uiScale, 8.0f * a_uiScale);
+	}
+
+	ImGuiDockNode* GetDockSpaceTargetNode(ImGuiID a_dockSpaceId)
+	{
+		if (a_dockSpaceId == 0)
+			return nullptr;
+
+		if (auto* centralNode = ImGui::DockBuilderGetCentralNode(a_dockSpaceId))
+			return centralNode;
+
+		auto* rootNode = ImGui::DockBuilderGetNode(a_dockSpaceId);
+		if (!rootNode) {
+			rootNode = ImGui::DockContextFindNodeByID(ImGui::GetCurrentContext(), a_dockSpaceId);
+		}
+		if (!rootNode)
+			return nullptr;
+
+		return rootNode->CentralNode ? rootNode->CentralNode : rootNode;
+	}
+
+	bool DockWindowToDockSpace(ImGuiWindow* a_window, ImGuiID a_dockSpaceId)
+	{
+		if (!a_window || a_dockSpaceId == 0)
+			return false;
+
+		auto* targetNode = GetDockSpaceTargetNode(a_dockSpaceId);
+		if (!targetNode)
+			return false;
+
+		ImGui::DockContextQueueDock(ImGui::GetCurrentContext(), nullptr, targetNode, a_window, ImGuiDir_None, 0.0f, false);
+		return true;
+	}
 }
 
 void MenuHeaderRenderer::RenderHeader(
@@ -28,7 +83,8 @@ void MenuHeaderRenderer::RenderHeader(
 	float uiScale,
 	const Menu::UIIcons& uiIcons,
 	bool forceStableHeader,
-	bool showSteamVRDockHandle)
+	bool showSteamVRDockHandle,
+	ImGuiID steamVRDockSpaceId)
 {
 	if (!globals::menu) {
 		logger::error("MenuHeaderRenderer::RenderHeader: globals::menu is null, cannot render header");
@@ -36,7 +92,7 @@ void MenuHeaderRenderer::RenderHeader(
 	}
 
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto title = std::format("Community Shaders {} Particle Lights Fork", versionStr);
+	auto title = std::format("CS {} Particle Lights Fork", versionStr);
 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
 
 	if (forceStableHeader) {
@@ -51,19 +107,20 @@ void MenuHeaderRenderer::RenderHeader(
 		RenderDockedIcons(actionIcons, uiScale);
 	} else {
 		// When not docked, show the custom header
-		bool centerHeader = globals::menu->GetTheme().CenterHeader;
+		const bool centerHeader = globals::menu->GetTheme().CenterHeader && !showSteamVRDockHandle;
 
-		const float currentFontSize = ImGui::GetFontSize();
 		const float baseTextScale = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE;
-		const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
 		const float textScaleFactor = baseTextScale * uiScale;
-		const float logoSize = baseIconSize * uiScale;
-		const float iconSpacing = ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING;
-		const int headerButtonCount = static_cast<int>(actionIcons.size()) + (showSteamVRDockHandle ? 1 : 0);
-		const float buttonColumnWidth = headerButtonCount > 0 ?
-		                                    logoSize * static_cast<float>(headerButtonCount) +
-		                                        iconSpacing * static_cast<float>(headerButtonCount - 1) :
-		                                    0.0f;
+		const float logoSize = GetHeaderIconSize(uiScale);
+		const float iconSpacing = GetUndockedIconSpacing(uiScale);
+		const float actionButtonWidth = GetUndockedActionButtonSize(uiScale);
+		const float actionButtonsWidth = actionIcons.empty() ? 0.0f :
+		                                  actionButtonWidth * static_cast<float>(actionIcons.size()) +
+		                                      iconSpacing * static_cast<float>(actionIcons.size() - 1);
+		const float dockHandleWidth = showSteamVRDockHandle ? logoSize : 0.0f;
+		const float dockHandleSpacing = showSteamVRDockHandle && !actionIcons.empty() ? iconSpacing : 0.0f;
+		const float rightControlInset = showSteamVRDockHandle ? GetSteamVRHeaderRightInset(uiScale) : 0.0f;
+		const float buttonColumnWidth = actionButtonsWidth + dockHandleSpacing + dockHandleWidth + rightControlInset;
 
 		if ((showLogo || canShowIcons || showSteamVRDockHandle) && ImGui::BeginTable("##HeaderLayout", 2, ImGuiTableFlags_SizingStretchProp)) {
 			ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_WidthStretch);
@@ -135,7 +192,7 @@ void MenuHeaderRenderer::RenderHeader(
 				if (!actionIcons.empty()) {
 					ImGui::SameLine(0.0f, iconSpacing);
 				}
-				RenderSteamVRDockHandle(uiScale);
+				RenderSteamVRDockHandle(uiScale, steamVRDockSpaceId);
 			}
 
 			ImGui::EndTable();
@@ -386,15 +443,13 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 		return;
 
 	// Undocked: Draw icons as ImageButtons in a table column
-	const float currentFontSize = ImGui::GetFontSize();
-	const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
-	const float iconSize = baseIconSize * uiScale;
+	const float iconSize = GetHeaderIconSize(uiScale);
 	const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * uiScale;
-	const ImVec2 buttonSize(iconSize, iconSize);
-	const ImVec2 imageSize(iconSize - paddingReduction, iconSize - paddingReduction);
+	const float imageExtent = std::max(0.0f, iconSize - paddingReduction);
+	const ImVec2 imageSize(imageExtent, imageExtent);
 
 	// Setup button styling for transparent background with hover effects
-	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING, 0.0f));  // Slightly increased spacing
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(GetUndockedIconSpacing(uiScale), 0.0f));
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);                                                           // Remove button borders
 	auto iconButtonStyle = Util::TransparentIconButtonStyle();
 
@@ -433,27 +488,30 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 	ImGui::PopStyleVar(2);    // Pop both style variables: ItemSpacing and FrameBorderSize
 }
 
-void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale)
+void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpaceId)
 {
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
 	if (!window)
 		return;
 
-	const float currentFontSize = ImGui::GetFontSize();
-	const float handleSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER * uiScale;
+	const float handleSize = GetHeaderIconSize(uiScale);
 	const ImVec2 buttonSize(handleSize, handleSize);
 
 	ImGui::InvisibleButton("##SteamVRDockHandle", buttonSize);
 	const bool hovered = ImGui::IsItemHovered();
 	const bool active = ImGui::IsItemActive();
-	if (active) {
+	const bool activated = ImGui::IsItemActivated();
+	const bool doubleClicked = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+	if (hovered || active || activated) {
 		ImGui::GetIO().ConfigDockingWithShift = false;
 	}
-	if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+	if (doubleClicked) {
+		DockWindowToDockSpace(window, dockSpaceId);
+	} else if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
 		ImGui::StartMouseMovingWindow(window);
 	}
 	if (hovered) {
-		ImGui::SetTooltip("Drag to move or dock");
+		ImGui::SetTooltip("Drag to move or dock\nDouble-click to dock");
 	}
 
 	const ImVec2 min = ImGui::GetItemRectMin();
@@ -481,7 +539,7 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 	const ImVec2 windowPos = window->Pos;
 	const ImVec2 windowSize = window->Size;
 	const float handleSize = std::max(ImGui::GetFontSize() * 1.15f, 18.0f) * uiScale;
-	const float handleInset = std::max(1.0f, uiScale);
+	const float handleInset = std::max(ImGui::GetStyle().WindowBorderSize + 2.0f * uiScale, 2.0f * uiScale);
 	const float minWidth = 420.0f * uiScale;
 	const float minHeight = 320.0f * uiScale;
 

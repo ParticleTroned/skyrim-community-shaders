@@ -21,6 +21,20 @@ namespace
 {
 	using FontRoleGuard = MenuFonts::FontRoleGuard;  // Convenience alias
 
+	void DrawReadOnlyKeybinding(const char* label, const char* binding, const char* description)
+	{
+		ImGui::TextUnformatted(label);
+		ImGui::TextDisabled("(hardcoded)");
+		ImGui::BeginDisabled();
+		ImGui::Button(binding);
+		ImGui::EndDisabled();
+
+		if (description && description[0] != '\0') {
+			ImGui::TextWrapped("%s", description);
+		}
+		ImGui::Spacing();
+	}
+
 	// Convert ImGui internal color names to user-friendly display names
 	const char* GetFriendlyColorName(int colorIndex)
 	{
@@ -381,16 +395,25 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 			"Change##skip");
 
 		Util::InputComboWidget(
-			"Overlay Toggle Key:",
+			"Performance Overlay:",
 			settings.OverlayToggleKey,
 			state.settingOverlayToggleKey,
 			"Change##OverlayToggle");
+		ImGui::TextWrapped("Opens the performance overlay with runtime diagnostics. Default key: F10. This binding is configurable.");
 
 		Util::InputComboWidget(
 			"Weather Editor Toggle Key:",
 			settings.WeatherEditorToggleKey,
 			state.settingWeatherEditorToggleKey,
 			"Change##WeatherEditorToggle");
+
+		ImGui::Separator();
+		ImGui::TextUnformatted("Hardcoded Bindings");
+		ImGui::TextWrapped("RenderDoc is an external graphics frame debugger used to capture frames for graphics debugging. It is only active when RenderDoc capture support is loaded.");
+		DrawReadOnlyKeybinding(
+			"RenderDoc Capture:",
+			"F12 / Print Screen",
+			"Captures the configured frame count. These capture hotkeys are fixed and cannot be changed here.");
 
 		ImGui::EndTabItem();
 	}

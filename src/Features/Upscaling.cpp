@@ -5835,6 +5835,16 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	       !IsGameMenuContextActive();
 }
 
+bool Upscaling::IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const
+{
+	auto state = globals::state;
+	if (!state || !a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX)
+		return false;
+
+	return submitStageHandoffFrame == state->frameCount &&
+	       submitStageHandoffTexture == static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+}
+
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds)
 {

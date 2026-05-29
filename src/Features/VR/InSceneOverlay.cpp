@@ -242,7 +242,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
-					if (upscaledTexture.handle && upscaledTexture.eType == vr::TextureType_DirectX)
+					if (ShouldRenderInSceneMenu(vr) &&
+						upscaledTexture.handle &&
+						upscaledTexture.eType == vr::TextureType_DirectX)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}

@@ -19,7 +19,8 @@ public:
 		float uiScale,
 		const Menu::UIIcons& uiIcons,
 		bool forceStableHeader = false,
-		bool showSteamVRDockHandle = false);
+		bool showSteamVRDockHandle = false,
+		ImGuiID steamVRDockSpaceId = 0);
 	static void RenderSteamVRResizeHandles(float uiScale);
 
 private:
@@ -27,7 +28,7 @@ private:
 	static void RenderActionIcons(const std::vector<ActionIcon>& actionIcons, bool isDocked, float uiScale);
 	static void RenderDockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);
 	static void RenderUndockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);
-	static void RenderSteamVRDockHandle(float uiScale);
+	static void RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpaceId);
 	static void RenderStableHeader(const std::string& title, bool showLogo, const std::vector<ActionIcon>& actionIcons, float uiScale, const Menu::UIIcons& uiIcons);
 	static void RenderWatermarkLogo(const Menu::UIIcons& uiIcons);
 };

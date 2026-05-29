@@ -29,6 +29,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	upscaleMethodNoDLSS,
 	qualityMode,
 	dlssPreset,
+	submitStageUpscaling,
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
@@ -93,9 +94,16 @@ namespace
 	uint32_t g_submitStageOutputEyeHeight = 0;
 	bool g_submitStageTargetSizeKnown = false;
 
+	uint ClampToggleUInt(uint value);
+
 	bool IsVendorUpscalingMethod(Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		return a_upscaleMethod == Upscaling::UpscaleMethod::kFSR || a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
+	}
+
+	bool IsSubmitStagePathEnabled()
+	{
+		return ClampToggleUInt(globals::features::upscaling.settings.submitStageUpscaling) != 0;
 	}
 
 	float GetSubmitStageRequestedQualityScale()
@@ -116,6 +124,9 @@ namespace
 		if (!REL::Module::IsVR())
 			return false;
 
+		if (!IsSubmitStagePathEnabled())
+			return false;
+
 		const auto upscaleMethod = globals::features::upscaling.GetUpscaleMethod();
 		if (!IsVendorUpscalingMethod(upscaleMethod))
 			return false;
@@ -127,6 +138,7 @@ namespace
 	{
 		return globals::game::isVR &&
 		       globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
+		       IsSubmitStageDynamicResolutionActive() &&
 		       g_submitStageTargetSizeKnown;
 	}
 
@@ -824,6 +836,7 @@ namespace
 		settings.upscaleMethodNoDLSS = std::min<uint>(settings.upscaleMethodNoDLSS, static_cast<uint>(Upscaling::UpscaleMethod::kFSR));
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
 		settings.dlssPreset = std::min<uint>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+		settings.submitStageUpscaling = ClampToggleUInt(settings.submitStageUpscaling);
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
@@ -1346,6 +1359,20 @@ void Upscaling::DrawSettings()
 		}
 	}
 
+	auto drawSubmitPathToggle = [&]() {
+		if (!globals::game::isVR)
+			return;
+
+		const char* submitStageModes[] = { "Disabled", "Enabled" };
+		int submitStageUpscaling = static_cast<int>(ClampToggleUInt(settings.submitStageUpscaling));
+		ImGui::SliderInt("Submit Path", &submitStageUpscaling, 0, 1, submitStageModes[submitStageUpscaling]);
+		settings.submitStageUpscaling = static_cast<uint>(std::clamp(submitStageUpscaling, 0, 1));
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Controls the VR submit-stage upscaling path.");
+			ImGui::TextUnformatted("Disable to fall back to the pre-image-space upscaling path for A/B testing.");
+		}
+	};
+
 	// Display upscaling settings if applicable
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
@@ -1376,6 +1403,8 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
 				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 			}
+
+			drawSubmitPathToggle();
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			// Keep persisted preset values stable (0=J,1=K,2=L,3=M,4=F) while
 			// presenting an alphabetical selection list in the UI.
@@ -1420,6 +1449,8 @@ void Upscaling::DrawSettings()
 					break;
 				}
 			}
+
+			drawSubmitPathToggle();
 
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2616,6 +2647,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFSRRuntimeFsr4Active = false;
 	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
 	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	static uint32_t previousSubmitStageUpscaling = ClampToggleUInt(settings.submitStageUpscaling);
 	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
@@ -2623,8 +2655,10 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
 	const uint32_t qualityModeCurrent = ClampQualityModeUInt(settings.qualityMode);
 	const uint32_t dlssPresetCurrent = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	const uint32_t submitStageUpscalingCurrent = ClampToggleUInt(settings.submitStageUpscaling);
 	const bool qualityModeChanged = previousQualityMode != qualityModeCurrent;
 	const bool dlssPresetChanged = previousDLSSPreset != dlssPresetCurrent;
+	const bool submitStageUpscalingChanged = previousSubmitStageUpscaling != submitStageUpscalingCurrent;
 	const bool dlssQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool dlssPresetResourceChanged = dlssPresetChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool dlssResourceSettingsChanged = dlssQualityModeChanged || dlssPresetResourceChanged;
@@ -2668,13 +2702,14 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		fsrRuntimePathCurrent &&
 		foveatedDispatchChanged;
 
-	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged || qualityModeChanged || dlssPresetResourceChanged) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
+	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged || qualityModeChanged || dlssPresetResourceChanged || submitStageUpscalingChanged) {
+		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, SubmitStage: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
-			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
+			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousSubmitStageUpscaling, submitStageUpscalingCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 
 		const bool requiresFullPipelineUnbind =
 			upscaleModeChanged ||
+			submitStageUpscalingChanged ||
 			frameGenModeChanged ||
 			fsrRuntimePathChanged ||
 			fsrRuntimeFsr4ConfiguredChanged ||
@@ -2683,6 +2718,15 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			fsrQualityModeChanged;
 		if (requiresFullPipelineUnbind)
 			UnbindUpscalingResources();
+
+		if (submitStageUpscalingChanged) {
+			if (globals::game::isVR) {
+				ResetVRSubmitStageState(false);
+				DestroyPeripheryTAAResources();
+			} else {
+				RequestHistoryReset();
+			}
+		}
 
 		bool fsrResourcesDestroyedForQuality = false;
 		bool fsrResourcesRecreatedForQuality = false;
@@ -2771,6 +2815,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
 		previousQualityMode = qualityModeCurrent;
 		previousDLSSPreset = dlssPresetCurrent;
+		previousSubmitStageUpscaling = submitStageUpscalingCurrent;
 		previousFoveatedLayout = foveatedLayoutCurrent;
 		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
@@ -7488,6 +7533,28 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	const bool vendorMethodSelected = IsVendorUpscalingMethod(upscaleMethod);
+	const bool submitPathDisabledForVendor =
+		vendorMethodSelected &&
+		globals::game::isVR &&
+		!IsSubmitStagePathEnabled();
+	if (submitPathDisabledForVendor) {
+		if (upscaling.ShouldUseFrameGenerationThisFrame())
+			upscaling.CopySharedD3D12Resources();
+
+		upscaling.PerformUpscaling();
+
+		if (upscaleMethod == UpscaleMethod::kDLSS)
+			upscaling.ApplySharpening();
+
+		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+
+		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+		func(a_this, a3, a_target, a_4, a_5);
+		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+		return;
+	}
+
 	const bool menuPresentationContext = vendorMethodSelected && globals::game::isVR && IsGameMenuContextActive();
 	const bool loadingPresentationContext = vendorMethodSelected && globals::game::isVR && IsLoadingMenuContextActive();
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();

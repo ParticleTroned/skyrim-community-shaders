@@ -146,9 +146,63 @@ namespace
 		return std::clamp(GetSubmitStageRequestedQualityScale(), 0.1f, 1.0f);
 	}
 
-	float GetSubmitStageInternalDynamicResolutionScale()
+	struct SubmitStageSizePlan
 	{
-		return GetSubmitStageRequestedRenderScale();
+		float requestedScale = 1.0f;
+		uint32_t screenWidth = 1;
+		uint32_t screenHeight = 1;
+		uint32_t outputEyeWidth = 1;
+		uint32_t outputHeight = 1;
+		uint32_t outputWidth = 2;
+		uint32_t inputEyeWidth = 1;
+		uint32_t inputWidth = 2;
+		uint32_t inputHeight = 1;
+		float widthRatio = 1.0f;
+		float heightRatio = 1.0f;
+	};
+
+	uint32_t ClampPositiveDimension(float a_dimension)
+	{
+		if (!std::isfinite(a_dimension))
+			return 1u;
+
+		return std::max<uint32_t>(1u, static_cast<uint32_t>(std::floor(std::max(a_dimension, 1.0f))));
+	}
+
+	uint32_t ScaleSubmitStageDimension(uint32_t a_dimension, float a_scale)
+	{
+		const float scaledDimension = static_cast<float>(a_dimension) * std::clamp(a_scale, 0.1f, 1.0f);
+		return std::clamp<uint32_t>(
+			static_cast<uint32_t>(std::floor(scaledDimension)),
+			1u,
+			std::max<uint32_t>(a_dimension, 1u));
+	}
+
+	SubmitStageSizePlan GetSubmitStageSizePlan(float2 a_screenSize)
+	{
+		SubmitStageSizePlan plan{};
+		plan.requestedScale = GetSubmitStageRequestedRenderScale();
+		plan.screenWidth = ClampPositiveDimension(a_screenSize.x);
+		plan.screenHeight = ClampPositiveDimension(a_screenSize.y);
+
+		const uint32_t screenEyeWidth = std::max<uint32_t>(1u, plan.screenWidth / 2u);
+		plan.outputEyeWidth = g_submitStageOutputEyeWidth > 0 ? g_submitStageOutputEyeWidth : screenEyeWidth;
+		plan.outputHeight = g_submitStageOutputEyeHeight > 0 ? g_submitStageOutputEyeHeight : plan.screenHeight;
+		plan.outputWidth = std::max<uint32_t>(2u, plan.outputEyeWidth * 2u);
+
+		plan.inputEyeWidth = ScaleSubmitStageDimension(screenEyeWidth, plan.requestedScale);
+		plan.inputWidth = std::min<uint32_t>(plan.screenWidth, plan.inputEyeWidth * 2u);
+		plan.inputHeight = ScaleSubmitStageDimension(plan.screenHeight, plan.requestedScale);
+
+		plan.widthRatio = static_cast<float>(plan.inputWidth) / static_cast<float>(plan.screenWidth);
+		plan.heightRatio = static_cast<float>(plan.inputHeight) / static_cast<float>(plan.screenHeight);
+		return plan;
+	}
+
+	bool ShouldUseSubmitStageDynamicResolution(const SubmitStageSizePlan& a_plan)
+	{
+		return a_plan.widthRatio < kDynamicResolutionUpscalingScaleThreshold ||
+		       a_plan.heightRatio < kDynamicResolutionUpscalingScaleThreshold;
 	}
 
 	void CopyResourceIfNonAliased(ID3D11DeviceContext* a_context, ID3D11Resource* a_dst, ID3D11Resource* a_src)
@@ -5216,13 +5270,12 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	}
 
 	if (vendorUpscalingMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
-		const float renderScale = GetSubmitStageRequestedRenderScale();
-		const float internalScale = GetSubmitStageInternalDynamicResolutionScale();
-		resolutionScale = { renderScale, renderScale };
+		const auto submitSize = GetSubmitStageSizePlan(screenSize);
+		resolutionScale = { submitSize.widthRatio, submitSize.heightRatio };
 
-		const int outputWidth = g_submitStageOutputEyeWidth > 0 ? static_cast<int>(g_submitStageOutputEyeWidth * 2u) : screenWidth;
-		const int renderWidth = std::max(1, static_cast<int>(std::lround(static_cast<float>(screenWidth) * internalScale)));
-		const int renderHeight = std::max(1, static_cast<int>(std::lround(static_cast<float>(screenHeight) * internalScale)));
+		const int outputWidth = static_cast<int>(submitSize.outputWidth);
+		const int renderWidth = static_cast<int>(submitSize.inputWidth);
+		const int renderHeight = static_cast<int>(submitSize.inputHeight);
 		auto phaseCount = GetJitterPhaseCount(renderWidth, outputWidth);
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 
@@ -5234,16 +5287,16 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
 
 		auto& runtimeData = a_viewport->GetRuntimeData();
-		const bool shouldUseInternalDynamicResolution = internalScale < kDynamicResolutionUpscalingScaleThreshold;
+		const bool shouldUseInternalDynamicResolution = ShouldUseSubmitStageDynamicResolution(submitSize);
 		if (globals::game::isVR)
 			SetDynamicResolutionEnabledForUpscaling(shouldUseInternalDynamicResolution);
 		runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
 		runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-		runtimeData.dynamicResolutionWidthRatio = internalScale;
-		runtimeData.dynamicResolutionHeightRatio = internalScale;
+		runtimeData.dynamicResolutionWidthRatio = submitSize.widthRatio;
+		runtimeData.dynamicResolutionHeightRatio = submitSize.heightRatio;
 		runtimeData.dynamicResolutionLock = shouldUseInternalDynamicResolution ? 0 : 1;
-		dynamicResolutionWidthRatio = internalScale;
-		dynamicResolutionHeightRatio = internalScale;
+		dynamicResolutionWidthRatio = submitSize.widthRatio;
+		dynamicResolutionHeightRatio = submitSize.heightRatio;
 		CheckResources(upscaleMethod);
 		return;
 	}
@@ -5325,17 +5378,21 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
 	if (IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
-		const float internalScale = GetSubmitStageInternalDynamicResolutionScale();
-		const bool shouldUseInternalDynamicResolution = internalScale < kDynamicResolutionUpscalingScaleThreshold;
+		auto state = globals::state;
+		if (!state)
+			return;
+
+		const auto submitSize = GetSubmitStageSizePlan(state->screenSize);
+		const bool shouldUseInternalDynamicResolution = ShouldUseSubmitStageDynamicResolution(submitSize);
 		if (globals::game::isVR)
 			SetDynamicResolutionEnabledForUpscaling(shouldUseInternalDynamicResolution);
 		runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
 		runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-		runtimeData.dynamicResolutionWidthRatio = internalScale;
-		runtimeData.dynamicResolutionHeightRatio = internalScale;
+		runtimeData.dynamicResolutionWidthRatio = submitSize.widthRatio;
+		runtimeData.dynamicResolutionHeightRatio = submitSize.heightRatio;
 		runtimeData.dynamicResolutionLock = shouldUseInternalDynamicResolution ? 0 : 1;
-		dynamicResolutionWidthRatio = internalScale;
-		dynamicResolutionHeightRatio = internalScale;
+		dynamicResolutionWidthRatio = submitSize.widthRatio;
+		dynamicResolutionHeightRatio = submitSize.heightRatio;
 		UpdateCameraData();
 		return;
 	}
@@ -5786,14 +5843,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const auto screenSize = state->screenSize;
-	const auto renderSize = Util::ConvertToDynamic(screenSize, true);
 	const bool targetScaleMode = IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown;
+	const auto submitSize = GetSubmitStageSizePlan(screenSize);
 	const uint32_t eyeWidthOut =
-		targetScaleMode && g_submitStageOutputEyeWidth > 0 ? g_submitStageOutputEyeWidth : static_cast<uint32_t>(screenSize.x / 2.0f);
+		targetScaleMode ? submitSize.outputEyeWidth : static_cast<uint32_t>(screenSize.x / 2.0f);
 	const uint32_t eyeHeightOut =
-		targetScaleMode && g_submitStageOutputEyeHeight > 0 ? g_submitStageOutputEyeHeight : static_cast<uint32_t>(screenSize.y);
-	const uint32_t eyeWidthIn = static_cast<uint32_t>(renderSize.x / 2.0f);
-	const uint32_t eyeHeightIn = static_cast<uint32_t>(renderSize.y);
+		targetScaleMode ? submitSize.outputHeight : static_cast<uint32_t>(screenSize.y);
+	const uint32_t eyeWidthIn =
+		targetScaleMode ? submitSize.inputEyeWidth : static_cast<uint32_t>(Util::ConvertToDynamic(screenSize, true).x / 2.0f);
+	const uint32_t eyeHeightIn =
+		targetScaleMode ? submitSize.inputHeight : static_cast<uint32_t>(Util::ConvertToDynamic(screenSize, true).y);
 	if (!eyeWidthIn || !eyeHeightIn || !eyeWidthOut || !eyeHeightOut)
 		return false;
 
@@ -6899,8 +6958,8 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f) {
 		return;
 	}
-	auto renderSize = Util::ConvertToDynamic(screenSize, true);
-	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f) {
+	const auto submitSize = GetSubmitStageSizePlan(screenSize);
+	if (!submitSize.inputEyeWidth || !submitSize.inputHeight) {
 		return;
 	}
 
@@ -6930,8 +6989,8 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	D3D11_VIEWPORT viewport = {};
 	viewport.TopLeftX = 0.0f;
 	viewport.TopLeftY = 0.0f;
-	viewport.Width = renderSize.x * 0.5f;
-	viewport.Height = renderSize.y * 0.5f;
+	viewport.Width = static_cast<float>(submitSize.inputEyeWidth);
+	viewport.Height = static_cast<float>(submitSize.inputHeight);
 	viewport.MinDepth = 0.0f;
 	viewport.MaxDepth = 1.0f;
 	context->RSSetViewports(1, &viewport);
@@ -7026,9 +7085,18 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			return false;
 
 		const auto screenSize = state->screenSize;
-		const auto renderSize = Util::ConvertToDynamic(screenSize);
-		const uint32_t inputWidth = static_cast<uint32_t>(std::max(1.0f, renderSize.x));
-		const uint32_t inputHeight = static_cast<uint32_t>(std::max(1.0f, renderSize.y));
+		const bool submitStageScaleMode = IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		if (submitStageScaleMode) {
+			const auto submitSize = GetSubmitStageSizePlan(screenSize);
+			inputWidth = submitSize.inputWidth;
+			inputHeight = submitSize.inputHeight;
+		} else {
+			const auto renderSize = Util::ConvertToDynamic(screenSize);
+			inputWidth = static_cast<uint32_t>(std::max(1.0f, renderSize.x));
+			inputHeight = static_cast<uint32_t>(std::max(1.0f, renderSize.y));
+		}
 		const std::string_view passName(a_passName ? a_passName : "");
 
 		ID3D11ShaderResourceView* psSourceSRV = nullptr;

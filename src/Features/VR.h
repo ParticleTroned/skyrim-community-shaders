@@ -65,10 +65,20 @@ public:
 		static constexpr int kOverlayWidth = 1920;
 		static constexpr int kOverlayHeight = 1080;
 		static constexpr float kOverlayAspect = static_cast<float>(kOverlayHeight) / static_cast<float>(kOverlayWidth);
+		// HMD presentation is intentionally taller than the controller texture so the menu does not read as a wide panel in-headset.
+		static constexpr float kHMDOverlayHeightScale = 1.5f;
+		static constexpr int kHMDOverlayWidth = kOverlayWidth;
+		static constexpr int kHMDOverlayHeight = static_cast<int>(kOverlayHeight * kHMDOverlayHeightScale);
+		static constexpr float kHMDOverlayAspect = static_cast<float>(kHMDOverlayHeight) / static_cast<float>(kHMDOverlayWidth);
 
-		static inline Matrix CreateOverlayScaleMatrix(float scale)
+		static inline Matrix CreateOverlayScaleMatrix(float scale, float aspect = kOverlayAspect)
 		{
-			return Matrix::CreateScale(scale, scale * kOverlayAspect, scale);
+			return Matrix::CreateScale(scale, scale * aspect, scale);
+		}
+
+		static inline Matrix CreateHMDOverlayScaleMatrix(float scale)
+		{
+			return CreateOverlayScaleMatrix(scale, kHMDOverlayAspect);
 		}
 
 		static constexpr float kDefaultMenuScale = 1.0f;      ///< Default overlay scale factor
@@ -334,12 +344,16 @@ public:
 	};
 	bool ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
 	bool ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
-	void UpdateCursorFromWandPointing();
+	void UpdateCursorFromWandPointing(bool a_forceCursorUpdate = false);
+	void ResetWandPointingRuntimeState();
 	void UpdateOverlayMenuStateFromInput();
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
 	void UpdateControllerState(const Menu::KeyEvent& event);
 	void ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
 	void ProcessControllerInputForImGui();
+	void ResetComboRecordingState();
+	void ReleaseMenuImGuiInputState();
+	void ResetMenuInputRuntimeState();
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();
@@ -546,9 +560,11 @@ public:
 		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
 		winrt::com_ptr<ID3D11SamplerState> sampler;
 		winrt::com_ptr<ID3D11ShaderResourceView> menuSRV;
+		winrt::com_ptr<ID3D11ShaderResourceView> menuControllerSRV;
 		winrt::com_ptr<ID3D11ComputeShader> submitCompositeCS;
 		winrt::com_ptr<ID3D11Buffer> submitCompositeCB;
 		ID3D11Texture2D* cachedMenuTexture = nullptr;
+		ID3D11Texture2D* cachedMenuControllerTexture = nullptr;
 
 		struct CachedRTV
 		{

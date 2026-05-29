@@ -3,11 +3,66 @@
 #include "Utils/VRUtils.h"
 
 #include <SimpleMath.h>
+#include <algorithm>
 #include <cmath>
 #include <openvr.h>
 
 using namespace DirectX::SimpleMath;
 using AttachMode = VR::Settings::OverlayAttachMode;
+
+namespace
+{
+	constexpr uint32_t kWandCursorActiveFrames = 24;
+	constexpr float kWandPositionMotionThresholdSq = 0.0025f * 0.0025f;
+	constexpr float kWandDirectionMotionThreshold = 0.00001f;
+
+	vr::TrackedDeviceIndex_t g_previousWandController = vr::k_unTrackedDeviceIndexInvalid;
+	Vector3 g_previousWandRayOrigin = Vector3::Zero;
+	Vector3 g_previousWandRayDirection = Vector3::Zero;
+	uint32_t g_wandCursorActiveFramesRemaining = 0;
+	bool g_hasPreviousWandRay = false;
+
+	bool ShouldUpdateCursorFromWandPose(bool a_forceCursorUpdate, vr::TrackedDeviceIndex_t a_controllerIndex, const Vector3& a_rayOrigin, const Vector3& a_rayDirection)
+	{
+		bool moved = true;
+		if (g_hasPreviousWandRay && g_previousWandController == a_controllerIndex) {
+			const float positionDeltaSq = (a_rayOrigin - g_previousWandRayOrigin).LengthSquared();
+			const float directionDot = std::clamp(a_rayDirection.Dot(g_previousWandRayDirection), -1.0f, 1.0f);
+			const float directionDelta = 1.0f - directionDot;
+			moved = positionDeltaSq > kWandPositionMotionThresholdSq ||
+			        directionDelta > kWandDirectionMotionThreshold;
+		}
+
+		if (a_forceCursorUpdate || moved) {
+			g_previousWandController = a_controllerIndex;
+			g_previousWandRayOrigin = a_rayOrigin;
+			g_previousWandRayDirection = a_rayDirection;
+			g_hasPreviousWandRay = true;
+			g_wandCursorActiveFramesRemaining = kWandCursorActiveFrames;
+			return true;
+		}
+
+		if (g_wandCursorActiveFramesRemaining > 0) {
+			--g_wandCursorActiveFramesRemaining;
+			g_previousWandController = a_controllerIndex;
+			g_previousWandRayOrigin = a_rayOrigin;
+			g_previousWandRayDirection = a_rayDirection;
+			g_hasPreviousWandRay = true;
+			return true;
+		}
+
+		return false;
+	}
+
+	void ResetWandPoseTracking()
+	{
+		g_previousWandController = vr::k_unTrackedDeviceIndexInvalid;
+		g_previousWandRayOrigin = Vector3::Zero;
+		g_previousWandRayDirection = Vector3::Zero;
+		g_wandCursorActiveFramesRemaining = 0;
+		g_hasPreviousWandRay = false;
+	}
+}
 
 bool VR::ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV)
 {
@@ -52,7 +107,8 @@ bool VR::ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDevi
 
 	if (settings.VRMenuScale < 1e-4f)
 		return false;
-	overlayWorld = Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * overlayWorld;
+	const float overlayAspect = type == OverlayType::HMD ? Config::kHMDOverlayAspect : Config::kOverlayAspect;
+	overlayWorld = Config::CreateOverlayScaleMatrix(settings.VRMenuScale, overlayAspect) * overlayWorld;
 
 	Matrix worldToOverlay = overlayWorld.Invert();
 	Vector3 localOrigin = Vector3::Transform(rayOrigin, worldToOverlay);
@@ -101,7 +157,7 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec
 	return intersected;
 }
 
-void VR::UpdateCursorFromWandPointing()
+void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 {
 	if (!settings.EnableWandPointing || !globals::menu || !globals::menu->IsEnabled)
 		return;
@@ -126,6 +182,13 @@ void VR::UpdateCursorFromWandPointing()
 
 	ImVec2 uv;
 	bool intersected = ComputeWandIntersection(pointingController, uv);
+	const bool updateCursorFromWand = ShouldUpdateCursorFromWandPose(a_forceCursorUpdate, pointingController, wandState.rayOrigin, wandState.rayDirection);
+	if (!updateCursorFromWand) {
+		wandState.isIntersecting = false;
+		io.MouseDrawCursor = false;
+		io.WantSetMousePos = false;
+		return;
+	}
 
 	if (intersected) {
 		float screenX = uv.x * io.DisplaySize.x;
@@ -143,4 +206,10 @@ void VR::UpdateCursorFromWandPointing()
 		io.MouseDrawCursor = false;
 		io.WantSetMousePos = false;
 	}
+}
+
+void VR::ResetWandPointingRuntimeState()
+{
+	wandState = {};
+	ResetWandPoseTracking();
 }

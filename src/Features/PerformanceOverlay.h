@@ -129,7 +129,7 @@ struct PerformanceOverlay : OverlayFeature
 	bool IsOverlayVisible() const override { return settings.ShowInOverlay; }
 	bool RequiresGlobalOverlayToggle() const override { return true; }
 	const char* GetOverlayWindowName() const override { return kOverlayWindowName; }
-	bool HideFromDesktopWhenSubmittedToVR() const override { return true; }
+	bool HideFromDesktopWhenSubmittedToVR() const override;
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;

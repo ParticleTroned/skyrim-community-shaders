@@ -22,6 +22,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/Upscaling.h"
+#include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/OverlayRenderer.h"
@@ -146,6 +147,14 @@ std::pair<std::string, std::vector<std::string>> PerformanceOverlay::GetFeatureS
 	};
 
 	return { description, keyFeatures };
+}
+
+bool PerformanceOverlay::HideFromDesktopWhenSubmittedToVR() const
+{
+	const auto& vr = globals::features::vr;
+	return vr.IsOpenVRCompatible() &&
+	       vr.ShouldUseInSceneOverlay() &&
+	       vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 }
 
 void PerformanceOverlay::DrawSettings()

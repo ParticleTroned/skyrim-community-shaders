@@ -159,6 +159,7 @@ public:
 	 * The weather system will automatically handle save/load/lerp for all registered variables
 	 */
 	virtual void RegisterWeatherVariables() {}
+	virtual void NormalizeWeatherSettings(json&) {}
 
 	/**
 	 * @brief Returns constraints this feature imposes on other features' settings

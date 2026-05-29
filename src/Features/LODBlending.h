@@ -14,6 +14,7 @@ struct LODBlending : Feature
 				"Enhanced terrain LOD appearance matching",
 				"Snow-specific LOD brightness adjustment",
 				"Optional terrain vertex color modification",
+				"Water reflection strength adjustment",
 				"Seamless transition between detail levels" }
 		};
 	}
@@ -28,7 +29,7 @@ struct LODBlending : Feature
 		float LODTerrainGamma = 1;
 		float LODObjectGamma = 1;
 		float LODObjectSnowGamma = 1;
-		float pad;
+		float WaterReflectionStrength = 1;
 	};
 
 	Settings settings;
@@ -37,6 +38,9 @@ struct LODBlending : Feature
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
+	virtual void RegisterWeatherVariables() override;
+	virtual void NormalizeWeatherSettings(json& o_json) override;
+	Settings GetCommonBufferData() const;
 
 	virtual void RestoreDefaultSettings() override;
 

@@ -1,10 +1,18 @@
 #include "WeatherManager.h"
 
+#include "Feature.h"
 #include "State.h"
 #include "Utils/Form.h"
 
 namespace
 {
+	void NormalizeFeatureWeatherSettings(const std::string& featureName, json& featureSettings)
+	{
+		if (auto* feature = Feature::FindFeatureByShortName(featureName)) {
+			feature->NormalizeWeatherSettings(featureSettings);
+		}
+	}
+
 	void RestoreFeatureUserSettings(WeatherVariables::GlobalWeatherRegistry* registry, const std::string& featureName)
 	{
 		if (!registry) {
@@ -79,6 +87,7 @@ void WeatherManager::LoadPerWeatherSettingsFromDisk()
 			// The structure is expected to be: { "featureSettings": { "FeatureName": { settings }, ... }
 			if (weatherData.is_object() && weatherData.contains("featureSettings") && weatherData["featureSettings"].is_object()) {
 				for (auto& [featureName, featureSettings] : weatherData["featureSettings"].items()) {
+					NormalizeFeatureWeatherSettings(featureName, featureSettings);
 					perWeatherSettingsCache[weatherKey][featureName] = featureSettings;
 				}
 				logger::info("Loaded settings for weather: {}", weatherKey);
@@ -173,9 +182,11 @@ void WeatherManager::SaveSettingsToWeather(RE::TESWeather* weather, const std::s
 	}
 
 	std::string weatherKey = GetWeatherKey(weather);
+	json normalizedSettings = settings;
+	NormalizeFeatureWeatherSettings(featureName, normalizedSettings);
 
 	// Update cache: if settings is empty, remove the feature entry; otherwise set it
-	if (settings.is_object() && settings.empty()) {
+	if (normalizedSettings.is_object() && normalizedSettings.empty()) {
 		auto wkIt = perWeatherSettingsCache.find(weatherKey);
 		if (wkIt != perWeatherSettingsCache.end()) {
 			wkIt->second.erase(featureName);
@@ -184,7 +195,7 @@ void WeatherManager::SaveSettingsToWeather(RE::TESWeather* weather, const std::s
 			}
 		}
 	} else {
-		perWeatherSettingsCache[weatherKey][featureName] = settings;
+		perWeatherSettingsCache[weatherKey][featureName] = normalizedSettings;
 	}
 
 	// Save to disk
@@ -226,11 +237,11 @@ void WeatherManager::SaveSettingsToWeather(RE::TESWeather* weather, const std::s
 	auto& featureSettings = weatherData["featureSettings"];
 
 	// Update with new feature settings or remove feature entry if settings empty
-	if (settings.is_object() && settings.empty()) {
+	if (normalizedSettings.is_object() && normalizedSettings.empty()) {
 		// Remove feature entry from loaded JSON
 		featureSettings.erase(featureName);
 	} else {
-		featureSettings[featureName] = settings;
+		featureSettings[featureName] = normalizedSettings;
 	}
 
 	// Write back to disk
@@ -286,6 +297,7 @@ bool WeatherManager::LoadSettingsFromWeather(RE::TESWeather* weather, const std:
 			}
 
 			o_json = featureJson;
+			NormalizeFeatureWeatherSettings(featureName, o_json);
 			return true;
 		}
 	}

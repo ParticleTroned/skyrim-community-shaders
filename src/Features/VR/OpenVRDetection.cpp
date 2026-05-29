@@ -13,7 +13,7 @@ namespace VRDetection
 {
 	namespace
 	{
-		bool FileContainsAnyString(const std::string& path, std::initializer_list<std::string_view> needles)
+		bool TryReadFileBytes(const std::string& path, std::string& bytes)
 		{
 			HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 			if (file == INVALID_HANDLE_VALUE)
@@ -25,7 +25,7 @@ namespace VRDetection
 				return false;
 			}
 
-			std::string bytes(static_cast<size_t>(size.QuadPart), '\0');
+			bytes.assign(static_cast<size_t>(size.QuadPart), '\0');
 			DWORD bytesRead = 0;
 			const bool readOk = ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &bytesRead, nullptr);
 			CloseHandle(file);
@@ -33,7 +33,11 @@ namespace VRDetection
 				return false;
 			}
 			bytes.resize(bytesRead);
+			return true;
+		}
 
+		bool BytesContainAnyString(const std::string& bytes, std::initializer_list<std::string_view> needles)
+		{
 			for (auto needle : needles) {
 				if (bytes.find(needle) != std::string::npos) {
 					return true;
@@ -130,11 +134,6 @@ namespace VRDetection
 
 	RuntimeType DetectRuntimeType(const std::string& dllPath, const std::string& version, uint64_t fileSize)
 	{
-		// OpenComposite DLLs are typically small (~600KB) with version 1.0.10.0
-		if (version == "1.0.10.0" && fileSize < 700000)
-			return RuntimeType::OpenComposite;
-
-		// Check path for OpenComposite indicators
 		std::string lowerPath = dllPath;
 		for (auto& c : lowerPath)
 			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -142,12 +141,31 @@ namespace VRDetection
 		if (lowerPath.find("opencomposite") != std::string::npos)
 			return RuntimeType::OpenComposite;
 
-		if (FileContainsAnyString(dllPath, { "OpenComposite", "OpenOVR", "OCUnleashedSKSE.log" }))
+		std::string dllBytes;
+		const bool hasDllBytes = TryReadFileBytes(dllPath, dllBytes);
+
+		const bool hasOpenCompositeMarker = hasDllBytes && BytesContainAnyString(dllBytes, {
+			"OpenComposite",
+			"opencomposite",
+			"OpenOVR",
+			"openovr",
+			"OCUnleashed",
+			"ocunleashed",
+			"OCUnleashedSKSE.log"
+		});
+		if (hasOpenCompositeMarker)
 			return RuntimeType::OpenComposite;
 
-		// SteamVR DLLs are typically larger and have higher version numbers
-		if (lowerPath.find("steamvr") != std::string::npos || lowerPath.find("steam") != std::string::npos)
+		const bool hasSteamVRLoaderMarker = hasDllBytes && BytesContainAnyString(dllBytes, { "vrclient_x64.dll" });
+		if (hasSteamVRLoaderMarker)
 			return RuntimeType::SteamVR;
+
+		if (lowerPath.find("steamvr") != std::string::npos)
+			return RuntimeType::SteamVR;
+
+		// Unmarked OpenComposite DLLs commonly mimic the old OpenVR 1.0.10 loader.
+		if (version == "1.0.10.0" && fileSize < 700000)
+			return RuntimeType::OpenComposite;
 
 		// Higher version numbers suggest SteamVR
 		if (!version.empty() && version != "Unknown" && version != "1.0.10.0")

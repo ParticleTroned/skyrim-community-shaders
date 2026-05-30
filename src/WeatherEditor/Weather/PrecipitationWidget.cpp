@@ -281,6 +281,9 @@ void PrecipitationWidget::SaveSettings()
 
 void PrecipitationWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	if (!precipitation)
 		return;
 

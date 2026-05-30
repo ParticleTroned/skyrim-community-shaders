@@ -2,6 +2,7 @@
 #include "Features/InverseSquareLighting.h"
 #include "Features/LightLimitFix.h"
 #include "Menu.h"
+#include "State.h"
 
 #include <array>
 #include <filesystem>
@@ -168,6 +169,17 @@ std::string LightEditor::GetLightName(LightInfo& lightInfo)
 
 void LightEditor::GatherLights()
 {
+	if (State::GetSingleton()->IsPersistentMutationBlocked()) {
+		RestoreOriginal();
+		selected = {};
+		previous = {};
+		lights.clear();
+		lightsAttached.clear();
+		totalLightCount = 0;
+		activeShadowLightCount = 0;
+		return;
+	}
+
 	if (!enabled || !Menu::GetSingleton()->ShouldSwallowInput()) {
 		RestoreOriginal();
 		selected = {};
@@ -289,12 +301,18 @@ void LightEditor::GatherLights()
 
 void LightEditor::RestoreDefaultSettings()
 {
+	if (State::GetSingleton()->IsPersistentMutationBlocked())
+		return;
+
 	RestoreOriginal();
 	*this = {};
 }
 
 void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight)
 {
+	if (State::GetSingleton()->IsPersistentMutationBlocked())
+		return;
+
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
 	auto tesFlags = ligh ? &ligh->data.flags : nullptr;
 
@@ -378,6 +396,9 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 
 bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const
 {
+	if (State::GetSingleton()->IsPersistentMutationBlocked())
+		return false;
+
 	if (!enabled || niLight != activeNiLight.get())
 		return false;
 

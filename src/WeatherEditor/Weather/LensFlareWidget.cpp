@@ -80,6 +80,9 @@ void LensFlareWidget::SaveSettings()
 
 void LensFlareWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	if (!lensFlare)
 		return;
 

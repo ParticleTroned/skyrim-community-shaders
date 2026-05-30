@@ -14,6 +14,14 @@
 
 namespace SIE
 {
+	namespace
+	{
+		bool IsSaveLoadSafeModeActive()
+		{
+			auto* state = globals::state;
+			return state && state->IsSaveLoadSafeModeActive();
+		}
+	}
 
 	// Custom include handler to track all includes during shader compilation
 	class TrackingIncludeHandler : public ID3DInclude
@@ -1369,30 +1377,32 @@ namespace SIE
 			if (useDiskCache && std::filesystem::exists(diskPath)) {
 				// Determine whether the disk-cached shader is still valid.
 				bool diskCacheOutdated = false;
-				if (cache.UseFileWatcher()) {
-					// File watcher tracks runtime changes in memory: compare disk-cache mtime against tracked source mtime.
-					auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath));
-					diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
-					if (diskCacheOutdated)
-						logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
-				} else if (cache.IsSkipUnchangedShaders()) {
-					// No file watcher: compare disk-cache mtime directly against the .hlsl source file mtime.
-					std::error_code ec;
-					const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
-					if (ec) {
-						logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
-					} else {
-						const std::wstring shaderSourcePath = GetShaderPath(
-							shader.shaderType == RE::BSShader::Type::ImageSpace ?
-								static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-								shader.fxpFilename);
-						if (std::filesystem::exists(shaderSourcePath)) {
-							const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shaderSourcePath, ec));
-							if (ec) {
-								logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
-							} else if (sourceTime > diskCacheTime) {
-								diskCacheOutdated = true;
-								logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
+				if (!IsSaveLoadSafeModeActive()) {
+					if (cache.UseFileWatcher()) {
+						// File watcher tracks runtime changes in memory: compare disk-cache mtime against tracked source mtime.
+						auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath));
+						diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
+						if (diskCacheOutdated)
+							logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
+					} else if (cache.IsSkipUnchangedShaders()) {
+						// No file watcher: compare disk-cache mtime directly against the .hlsl source file mtime.
+						std::error_code ec;
+						const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
+						if (ec) {
+							logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
+						} else {
+							const std::wstring shaderSourcePath = GetShaderPath(
+								shader.shaderType == RE::BSShader::Type::ImageSpace ?
+									static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
+									shader.fxpFilename);
+							if (std::filesystem::exists(shaderSourcePath)) {
+								const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shaderSourcePath, ec));
+								if (ec) {
+									logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
+								} else if (sourceTime > diskCacheTime) {
+									diskCacheOutdated = true;
+									logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
+								}
 							}
 						}
 					}
@@ -1509,7 +1519,7 @@ namespace SIE
 			}
 
 			// save shader to disk
-			if (useDiskCache) {
+			if (useDiskCache && !IsSaveLoadSafeModeActive()) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
 				if (!std::filesystem::is_directory(directoryPath)) {
 					try {
@@ -1869,6 +1879,9 @@ namespace SIE
 				return it->second.get();
 			}
 		}
+		if (IsSaveLoadSafeModeActive()) {
+			return nullptr;
+		}
 
 		if (ShouldUseAsyncCompilation()) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
@@ -1917,6 +1930,9 @@ namespace SIE
 				return it->second.get();
 			}
 		}
+		if (IsSaveLoadSafeModeActive()) {
+			return nullptr;
+		}
 
 		if (ShouldUseAsyncCompilation()) {
 			compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
@@ -1960,6 +1976,9 @@ namespace SIE
 			if (it != typeCache.end()) {
 				return it->second.get();
 			}
+		}
+		if (IsSaveLoadSafeModeActive()) {
+			return nullptr;
 		}
 
 		if (ShouldUseAsyncCompilation()) {
@@ -2347,109 +2366,9 @@ namespace SIE
 		isAsync = value;
 	}
 
-	bool ShaderCache::IsSynchronousLoadWindowEnabled() const
-	{
-		return synchronousLoadWindowEnabled.load(std::memory_order_acquire);
-	}
-
-	void ShaderCache::SetSynchronousLoadWindowEnabled(bool value)
-	{
-		synchronousLoadWindowEnabled.store(value, std::memory_order_release);
-		if (!value) {
-			EndSynchronousLoadWindow();
-		}
-	}
-
-	bool ShaderCache::IsSynchronousLoadWindowActive() const
-	{
-		return forceSynchronousShaderLoads.load(std::memory_order_acquire);
-	}
-
 	bool ShaderCache::ShouldUseAsyncCompilation() const
 	{
-		return isAsync && !IsSynchronousLoadWindowActive();
-	}
-
-	void ShaderCache::ArmSynchronousLoadWindow()
-	{
-		if (!IsSynchronousLoadWindowEnabled()) {
-			return;
-		}
-
-		if (!forceSynchronousShaderLoads.exchange(true, std::memory_order_acq_rel)) {
-			logger::info("Save-load synchronous shader override armed");
-		}
-	}
-
-	void ShaderCache::BeginSynchronousLoadWindow(uint32_t a_currentFrame)
-	{
-		if (!IsSynchronousLoadWindowEnabled()) {
-			return;
-		}
-
-		synchronousShaderLoadStartFrame.store(a_currentFrame != 0 ? a_currentFrame : 1, std::memory_order_release);
-		synchronousShaderLoadEndFrame.store(0, std::memory_order_release);
-		ArmSynchronousLoadWindow();
-	}
-
-	void ShaderCache::ExtendSynchronousLoadWindow(uint32_t a_currentFrame, uint32_t a_frameCount)
-	{
-		if (!IsSynchronousLoadWindowEnabled()) {
-			return;
-		}
-
-		const auto endFrame = a_currentFrame + a_frameCount;
-		synchronousShaderLoadStartFrame.store(a_currentFrame, std::memory_order_release);
-		synchronousShaderLoadEndFrame.store(endFrame, std::memory_order_release);
-		ArmSynchronousLoadWindow();
-		logger::info("Save-load synchronous shader override extended until frame {}", endFrame);
-	}
-
-	void ShaderCache::UpdateSynchronousLoadWindow(uint32_t a_currentFrame)
-	{
-		if (!IsSynchronousLoadWindowEnabled()) {
-			EndSynchronousLoadWindow();
-			return;
-		}
-
-		if (!IsSynchronousLoadWindowActive()) {
-			return;
-		}
-
-		const auto endFrame = synchronousShaderLoadEndFrame.load(std::memory_order_acquire);
-		if (endFrame == 0) {
-			const auto startFrame = synchronousShaderLoadStartFrame.load(std::memory_order_acquire);
-			if (startFrame != 0 && a_currentFrame - startFrame >= kPreLoadSynchronousShaderFallbackFrames) {
-				logger::warn("Save-load synchronous shader override released without post-load after {} frames",
-					a_currentFrame - startFrame);
-				EndSynchronousLoadWindow();
-			}
-			return;
-		}
-
-		if (a_currentFrame < endFrame) {
-			return;
-		}
-
-		if (IsCompiling()) {
-			const auto extraFrames = a_currentFrame - endFrame;
-			if (extraFrames < kPostLoadSynchronousShaderExtraFrames) {
-				return;
-			}
-			logger::warn("Save-load synchronous shader override released while shader compilation is still active after {} extra frames",
-				extraFrames);
-		}
-
-		EndSynchronousLoadWindow();
-	}
-
-	void ShaderCache::EndSynchronousLoadWindow()
-	{
-		synchronousShaderLoadStartFrame.store(0, std::memory_order_release);
-		synchronousShaderLoadEndFrame.store(0, std::memory_order_release);
-		if (forceSynchronousShaderLoads.exchange(false, std::memory_order_acq_rel)) {
-			logger::info("Save-load synchronous shader override released");
-		}
+		return isAsync && !IsSaveLoadSafeModeActive();
 	}
 
 	bool ShaderCache::IsDump() const
@@ -3601,6 +3520,12 @@ namespace SIE
 		while (cache->UseFileWatcher()) {
 			lock.lock();
 			if (!queue.empty()) {
+				if (IsSaveLoadSafeModeActive()) {
+					lock.unlock();
+					std::this_thread::sleep_for(std::chrono::milliseconds(100));
+					continue;
+				}
+
 				bool clearCache = false;
 				for (fileAction fAction : queue) {
 					const std::filesystem::path filePath = std::filesystem::path(std::format("{}\\{}", fAction.dir, fAction.filename));

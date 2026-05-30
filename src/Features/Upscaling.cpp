@@ -5589,9 +5589,8 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	auto context = globals::d3d::context;
 	auto device = globals::d3d::device;
 	auto renderer = globals::game::renderer;
-	if (!state || !context || !device || !renderer || !colorSrc ||
-		(copyDepthInput && !depthSrc) ||
-		(copyAuxiliaryInputs && (!mvecSrc || !reactiveSrc || !transparencySrc))) {
+	if (!state || !context || !device || !renderer || !colorSrc || !mvecSrc || !reactiveSrc || !transparencySrc ||
+		(copyDepthInput && !depthSrc)) {
 		return;
 	}
 

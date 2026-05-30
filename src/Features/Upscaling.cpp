@@ -120,6 +120,14 @@ namespace
 4) Ideally, you do not see the blue outer ring anymore, except in the corners, or only a tiny bit.
 5) The larger the green center area, the less performance savings you have.
 6) Test in game that you do not have strong peripheral shimmer. If yes, increase the yellow mask area. If not, reduce it to just before shimmer appears for best performance.)";
+	constexpr const char* kVrsMaskRefinementInstructions = R"(1) Once AA VRS is active, refine the FOV masks in position and size.
+2) Turn off FOV Mask Visualization and turn on VRS Mask Visualization.
+3) Reposition each per-eye FOV mask with FOV Left Eye Offset X/Y and FOV Right Eye Offset X/Y so the visible center area becomes dark with no magenta. Light magenta at the far periphery is acceptable.
+4) Turn off VRS Mask Visualization and check in game for high-frequency flicker anywhere in the periphery.
+5) If flicker is present, reposition the masks and, if needed, enlarge the active mask with Upscaling FOV Area or TAA Peripheral Range until flicker is no longer visible.
+6) If no flicker is visible after positioning, lower the active mask area to the smallest value that still shows no flicker for maximum performance and image quality.
+7) Test whether Foveated Upscaling (FOV) or FOV + Peripheral TAA gives better performance by toggling FOV + Peripheral TAA while watching frame times.
+8) Save your mask settings and enjoy the performance win.)";
 
 	uint32_t g_submitStageOutputEyeWidth = 0;
 	uint32_t g_submitStageOutputEyeHeight = 0;
@@ -1899,11 +1907,10 @@ void Upscaling::DrawFoveatedSettings()
 	{
 		Util::BlueFrameStyleWrapper aaVrsStyle(true);
 		auto disabledGuard = Util::DisableGuard(!aaVrsUiState.canEnable);
-		const char* aaVrsModes[] = { "Disabled", "Enabled" };
-		int aaVrs = aaVrsUiState.requested ? 1 : 0;
-		ImGui::SliderInt("AA VRS", &aaVrs, 0, 1, aaVrsModes[std::clamp(aaVrs, 0, 1)]);
+		bool aaVrs = aaVrsUiState.requested;
+		ImGui::Checkbox("AA VRS", &aaVrs);
 		if (aaVrsUiState.canEnable)
-			settings.aaVrs = aaVrs != 0;
+			settings.aaVrs = aaVrs;
 	}
 	aaVrsUiState = BuildAAVRSUiState(
 		aaVrsMethodEligible,
@@ -1914,7 +1921,7 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextUnformatted("Enables NVAPI VRS during VR scene pixel shading for foveated upscaling.");
 		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes stay VRS-off.");
 		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask.");
-		ImGui::TextUnformatted("Outside the mask, the inner third is 2x2 and the outer two thirds are 4x4.");
+		ImGui::TextUnformatted("Outside the mask, the inner quarter is 2x2 and the outer three quarters are 4x4.");
 		ImGui::TextUnformatted("No zero-rate culling is used.");
 		ImGui::TextUnformatted("Suspended for Terrain Blending and shadow maps; disabled before postprocessing.");
 	}
@@ -1949,7 +1956,7 @@ void Upscaling::DrawFoveatedSettings()
 		const bool aaVrsVisualizationAvailable = aaVrsUiState.requested;
 		if (aaVrsVisualizationAvailable) {
 			ImGui::SameLine();
-			ImGui::Checkbox("AA VRS Visualization", &settings.aaVrsVisualization);
+			ImGui::Checkbox("VRS Mask Visualization", &settings.aaVrsVisualization);
 		} else {
 			settings.aaVrsVisualization = false;
 		}
@@ -1962,7 +1969,7 @@ void Upscaling::DrawFoveatedSettings()
 		else
 			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
 		if (aaVrsUiState.requested) {
-			ImGui::TextUnformatted("AA VRS Visualization replaces the scene with a binary rate mask; dark = 1x1, magenta = coarser than 1x1.");
+			ImGui::TextUnformatted("VRS Mask Visualization replaces the scene with a binary rate mask; dark = 1x1, magenta = coarser than 1x1.");
 			ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
 		}
 	}
@@ -1986,6 +1993,9 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::Spacing();
 		drawInstructionHeadline("Upscaling FOV + Peripheral TAA setup");
 		ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
+		ImGui::Spacing();
+		drawInstructionHeadline("VRS mask refinement");
+		ImGui::TextUnformatted(kVrsMaskRefinementInstructions);
 		ImGui::PopTextWrapPos();
 		ImGui::EndChild();
 	}
@@ -3580,7 +3590,7 @@ void Upscaling::ApplyAAVRSVisualization()
 
 	auto state = globals::state;
 	if (state && state->frameAnnotations)
-		state->BeginPerfEvent("AA VRS Visualization");
+		state->BeginPerfEvent("VRS Mask Visualization");
 	context->Dispatch((aaVrsSettings.renderWidth + 7u) >> 3, (aaVrsSettings.renderHeight + 7u) >> 3, 1);
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();

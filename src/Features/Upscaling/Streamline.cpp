@@ -419,6 +419,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	// In non-VR, this is called once per frame
 	auto state = globals::state;
 	auto& upscaling = globals::features::upscaling;
+	if (!state)
+		return false;
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -434,8 +436,11 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	sl::Constants slConstants = {};
 
 	// Calculate aspect ratio for the SINGLE EYE
-	float eyeWidth = state->screenSize.x * (globals::game::isVR ? 0.5f : 1.0f);
-	float eyeHeight = state->screenSize.y;
+	float2 fullOutputSize = upscaling.GetRuntimeResolutionPlan().finalOutputSize;
+	if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
+		fullOutputSize = state->screenSize;
+	float eyeWidth = fullOutputSize.x * (globals::game::isVR ? 0.5f : 1.0f);
+	float eyeHeight = fullOutputSize.y;
 	slConstants.cameraAspectRatio = (eyeWidth * clampedViewportScaleX) / (eyeHeight * clampedViewportScaleY);
 
 	slConstants.cameraFOV = Util::GetVerticalFOVRad();
@@ -999,9 +1004,12 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		screenSize = state->screenSize;
 	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
 		renderSize = Util::ConvertToDynamic(screenSize);
-	ID3D11Resource* colorOut =
-		(upscaling.settings.sharpnessDLSS > 0.0f && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
-	const bool outputToSharpener = colorOut == (upscaling.sharpenerTexture ? upscaling.sharpenerTexture->resource.get() : nullptr);
+	const bool useSharpenerOutput =
+		upscaling.settings.sharpnessDLSS > 0.0f &&
+		upscaling.sharpenerTexture &&
+		upscaling.sharpenerTexture->resource;
+	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
+	const bool outputToSharpener = useSharpenerOutput;
 
 	// VR: Combined-buffer mode with extent offsets causes temporal ghosting on the right eye
 	// because DLSS's internal history buffers use extent offsets as indices.
@@ -1013,15 +1021,36 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
 
-		// Split color only; DLSS eye 1 uses an explicit per-eye depth copy below.
-		upscaling.PreparePerEyeInputs(
-			a_upscalingTexture,
-			depthTexture.texture,
-			a_motionVectors,
-			a_reactiveMask,
-			a_transparencyCompositionMask,
-			false,
-			false);
+		// Split the combined stereo inputs up front. The direct left-eye path still
+		// uses the native depth buffer, but isolated-output fallback needs valid
+		// per-eye depth for both eyes.
+		if (!upscaling.PreparePerEyeInputs(
+				a_upscalingTexture,
+				depthTexture.texture,
+				a_motionVectors,
+				a_reactiveMask,
+				a_transparencyCompositionMask,
+				false,
+				true)) {
+			static bool loggedPrepareFailure = false;
+			if (!loggedPrepareFailure) {
+				logger::warn("[Streamline] VR DLSS/DLAA skipped because per-eye input preparation failed.");
+				loggedPrepareFailure = true;
+			}
+			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+			return;
+		}
+
+		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(true, false);
+		if (!perEyeResourcesReady) {
+			static bool loggedMissingResource = false;
+			if (!loggedMissingResource) {
+				logger::warn("[Streamline] VR DLSS/DLAA skipped because prepared per-eye resources are incomplete.");
+				loggedMissingResource = true;
+			}
+			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+			return;
+		}
 
 		sl::Extent extentIn{ 0, 0, eyeWidthIn, eyeHeightIn };
 		sl::Extent extentOut{ 0, 0, eyeWidthOut, eyeHeightOut };
@@ -1032,18 +1061,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		const bool forcePerEyeOutput = upscaling.GetRuntimeQualityMode() == 0;
 		const bool canUseDirectEye0 =
 			!forcePerEyeOutput &&
-			upscaling.vrIntermediateColorIn[0] && upscaling.vrIntermediateColorIn[0]->resource &&
-			upscaling.vrIntermediateColorIn[1] && upscaling.vrIntermediateColorIn[1]->resource &&
-			upscaling.vrIntermediateColorOut[0] && upscaling.vrIntermediateColorOut[0]->resource &&
-			upscaling.vrIntermediateColorOut[1] && upscaling.vrIntermediateColorOut[1]->resource &&
-			upscaling.vrIntermediateDepth[0] && upscaling.vrIntermediateDepth[0]->resource &&
-			upscaling.vrIntermediateDepth[1] && upscaling.vrIntermediateDepth[1]->resource &&
-			upscaling.vrIntermediateMotionVectors[0] && upscaling.vrIntermediateMotionVectors[0]->resource &&
-			upscaling.vrIntermediateMotionVectors[1] && upscaling.vrIntermediateMotionVectors[1]->resource &&
-			upscaling.vrIntermediateReactiveMask[0] && upscaling.vrIntermediateReactiveMask[0]->resource &&
-			upscaling.vrIntermediateReactiveMask[1] && upscaling.vrIntermediateReactiveMask[1]->resource &&
-			upscaling.vrIntermediateTransparencyMask[0] && upscaling.vrIntermediateTransparencyMask[0]->resource &&
-			upscaling.vrIntermediateTransparencyMask[1] && upscaling.vrIntermediateTransparencyMask[1]->resource;
+			perEyeResourcesReady;
 
 		if (!canUseDirectEye0) {
 			bool allEvaluated = true;
@@ -1088,8 +1106,14 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			upscaling.vrIntermediateReactiveMask[1]->resource.get(), upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
 			extentIn, extentOut, eyeWidthOut);
 
-		D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-		context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
+		if (leftEvaluated && rightEvaluated) {
+			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
+		}
+
+		if (!leftEvaluated || !rightEvaluated)
+			upscaling.RequestHistoryReset();
+
 		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && leftEvaluated && rightEvaluated;
 
 	} else {

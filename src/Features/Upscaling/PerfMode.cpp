@@ -49,10 +49,10 @@ void Upscaling::PerfModeState::RecordTrueHMDSize(uint32_t a_eyeWidth, uint32_t a
 
 	trueHMDEyeWidth = a_eyeWidth;
 	trueHMDEyeHeight = a_eyeHeight;
-	if (boot.valid && boot.active &&
-		(boot.displayEyeWidth != a_eyeWidth || boot.displayEyeHeight != a_eyeHeight)) {
-		displaySizeChanged = true;
-		restartRequired = true;
+	if (boot.valid && boot.active) {
+		displaySizeChanged = boot.displayEyeWidth != a_eyeWidth || boot.displayEyeHeight != a_eyeHeight;
+		if (displaySizeChanged)
+			restartRequired = true;
 	}
 }
 
@@ -84,13 +84,13 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 
 	if (boot.valid) {
 		restartRequired =
-			requestedNow &&
-			(displaySizeChanged ||
-			 (boot.active &&
-				 (!eligibleNow ||
-				  boot.method != a_method ||
-				  boot.qualityMode != qualityMode)));
-		return boot.active && requestedNow;
+			boot.active &&
+			(!requestedNow ||
+			 displaySizeChanged ||
+			 !eligibleNow ||
+			 boot.method != a_method ||
+			 boot.qualityMode != qualityMode);
+		return boot.active;
 	}
 
 	restartRequired = !a_allowCreate && requestedNow && eligibleNow && trueHMDEyeWidth && trueHMDEyeHeight;
@@ -131,13 +131,14 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 
 bool Upscaling::PerfModeState::IsActive(const Settings& a_settings, UpscaleMethod a_method) const
 {
+	(void)a_settings;
 	(void)a_method;
-	return IsRequested(a_settings) && boot.valid && boot.active;
+	return boot.valid && boot.active;
 }
 
-bool Upscaling::PerfModeState::TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height)
+bool Upscaling::PerfModeState::TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height, bool a_allowCreate)
 {
-	if (!EnsureBootLatch(a_settings, a_method, true))
+	if (!EnsureBootLatch(a_settings, a_method, a_allowCreate))
 		return false;
 
 	if (!boot.renderEyeWidth || !boot.renderEyeHeight)

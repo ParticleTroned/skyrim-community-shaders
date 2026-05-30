@@ -1785,13 +1785,31 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 
 	if (splitPerEyeContexts) {
-		upscaling.PreparePerEyeInputs(a_upscalingTexture, depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false);
+		if (!upscaling.PreparePerEyeInputs(a_upscalingTexture, depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false)) {
+			static bool loggedPrepareFailure = false;
+			if (!loggedPrepareFailure) {
+				logger::warn("[FidelityFX] VR FSR skipped because per-eye input preparation failed.");
+				loggedPrepareFailure = true;
+			}
+			return;
+		}
+
+		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(false, true);
+		if (!perEyeResourcesReady) {
+			static bool loggedMissingResource = false;
+			if (!loggedMissingResource) {
+				logger::warn("[FidelityFX] VR FSR skipped because prepared per-eye resources are incomplete.");
+				loggedMissingResource = true;
+			}
+			return;
+		}
 
 		const uint32_t eyeDisplayWidth = static_cast<uint32_t>(screenSize.x / 2.0f);
 		const uint32_t eyeDisplayHeight = static_cast<uint32_t>(screenSize.y);
 		const uint32_t eyeRenderWidth = static_cast<uint32_t>(renderSize.x / 2.0f);
 		const uint32_t eyeRenderHeight = static_cast<uint32_t>(renderSize.y);
 
+		bool allEvaluated = true;
 		for (uint32_t i = 0; i < 2; ++i) {
 			if (!UpscaleRegion(
 					i,
@@ -1809,10 +1827,19 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					renderSize.y,
 					a_sharpness)) {
 				logger::error("[FidelityFX] Upscale dispatch failed for VR eye {}.", i);
+				allEvaluated = false;
 			}
 		}
 
-		upscaling.FinalizePerEyeOutputs(a_upscalingTexture);
+		if (allEvaluated) {
+			upscaling.FinalizePerEyeOutputs(a_upscalingTexture);
+		} else {
+			static bool loggedVREvaluateFailure = false;
+			if (!loggedVREvaluateFailure) {
+				logger::warn("[FidelityFX] VR FSR evaluate did not complete for both eyes; keeping the current scene texture instead of copying stale output.");
+				loggedVREvaluateFailure = true;
+			}
+		}
 		return;
 	}
 

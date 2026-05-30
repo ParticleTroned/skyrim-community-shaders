@@ -176,7 +176,7 @@ public:
 		bool IsEligible(const Settings& a_settings, UpscaleMethod a_method) const;
 		bool EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate);
 		bool IsActive(const Settings& a_settings, UpscaleMethod a_method) const;
-		bool TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height);
+		bool TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height, bool a_allowCreate);
 		float2 GetDisplayScreenSize() const;
 		float2 GetRenderScreenSize() const;
 		const BootSnapshot& GetBootSnapshot() const { return boot; }
@@ -396,7 +396,7 @@ public:
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
-	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height);
+	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
 	bool AdjustPerfModeRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
@@ -509,8 +509,9 @@ public:
 		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false);
 
 	// Shared Pipeline Steps
-	void PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
+	bool PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
+	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
 
 	void ConfigureTAA();

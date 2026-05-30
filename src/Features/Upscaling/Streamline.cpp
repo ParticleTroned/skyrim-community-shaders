@@ -866,7 +866,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
-		upscaling.IsSubmitStageUpscalingActive();
+		upscaling.IsPresentationUpscalingActive();
 	const bool emitPCLMarkers =
 		!submitStageVRDLSS &&
 		upscaling.settings.reflexUseMarkersToOptimize &&
@@ -981,11 +981,24 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto state = globals::state;
 
 	auto renderer = globals::game::renderer;
+	if (!state || !renderer)
+		return;
+
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	auto screenSize = state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
 	auto& upscaling = globals::features::upscaling;
+	upscaling.RefreshRuntimeResolutionPlan();
+	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive()) {
+		upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+		return;
+	}
+
+	auto screenSize = upscaling.GetRuntimeResolutionPlan().finalOutputSize;
+	auto renderSize = upscaling.GetRuntimeResolutionPlan().engineRenderSize;
+	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f)
+		screenSize = state->screenSize;
+	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
+		renderSize = Util::ConvertToDynamic(screenSize);
 	ID3D11Resource* colorOut =
 		(upscaling.settings.sharpnessDLSS > 0.0f && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
 	const bool outputToSharpener = colorOut == (upscaling.sharpenerTexture ? upscaling.sharpenerTexture->resource.get() : nullptr);

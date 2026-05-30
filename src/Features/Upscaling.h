@@ -66,7 +66,8 @@ public:
 	{
 		Main,
 		Sharpener,
-		SubmitStageIntermediate
+		SubmitStageIntermediate,
+		PerfModeIntermediate
 	};
 
 	// Shared DLSS/FSR/FSR4 render-scale presets:
@@ -391,8 +392,11 @@ public:
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
 	void RefreshRuntimeResolutionPlan();
 	bool IsPerfModeActive() const;
+	bool IsPerfModePresentationActive() const;
+	bool IsPresentationUpscalingActive() const;
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height);
+	bool AdjustPerfModeRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
 	struct ActiveUpscalingFoveatedProfile

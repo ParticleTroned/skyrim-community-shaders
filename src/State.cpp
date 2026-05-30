@@ -894,6 +894,14 @@ bool State::IsDeveloperMode()
 
 void State::ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 {
+	if (globals::features::upscaling.AdjustPerfModeRenderTargetProperties(a_target, a_properties)) {
+		logger::debug(
+			"[PerfMode] Adjusted {} render target properties to {}x{}.",
+			magic_enum::enum_name(a_target),
+			a_properties->width,
+			a_properties->height);
+	}
+
 	a_properties->supportUnorderedAccess = true;
 	logger::debug("Adding UAV access to {}", magic_enum::enum_name(a_target));
 }

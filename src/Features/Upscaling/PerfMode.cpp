@@ -84,13 +84,13 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 
 	if (boot.valid) {
 		restartRequired =
-			displaySizeChanged ||
-			(boot.active &&
-				requestedNow &&
-				(!eligibleNow ||
-				 boot.method != a_method ||
-				 boot.qualityMode != qualityMode));
-		return boot.active;
+			requestedNow &&
+			(displaySizeChanged ||
+			 (boot.active &&
+				 (!eligibleNow ||
+				  boot.method != a_method ||
+				  boot.qualityMode != qualityMode)));
+		return boot.active && requestedNow;
 	}
 
 	restartRequired = !a_allowCreate && requestedNow && eligibleNow && trueHMDEyeWidth && trueHMDEyeHeight;

@@ -261,7 +261,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
-				const bool submitStageActive = upscaling.IsSubmitStageUpscalingActive();
+				const bool submitStageUpscalingActive = upscaling.IsSubmitStageUpscalingActive();
+				const bool perfModePresentationActive = upscaling.IsPerfModePresentationActive();
+				const bool presentationUpscalingActive = submitStageUpscalingActive || perfModePresentationActive;
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
@@ -272,7 +274,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
 
-				if (!submitStageActive || upscaling.IsSubmitStageHandoffTexture(pTexture)) {
+				if (!presentationUpscalingActive || perfModePresentationActive || upscaling.IsSubmitStageHandoffTexture(pTexture)) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture))
 						return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);

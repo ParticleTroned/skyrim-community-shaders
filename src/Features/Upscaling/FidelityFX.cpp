@@ -48,6 +48,27 @@ namespace
 		return true;
 	}
 
+	void GetRuntimeUpscaleSizes(float2& a_displaySize, float2& a_renderSize)
+	{
+		auto state = globals::state;
+		if (!state) {
+			a_displaySize = { 0.0f, 0.0f };
+			a_renderSize = { 0.0f, 0.0f };
+			return;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		upscaling.RefreshRuntimeResolutionPlan();
+		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
+		a_displaySize = resolutionPlan.finalOutputSize;
+		a_renderSize = resolutionPlan.engineRenderSize;
+
+		if (a_displaySize.x <= 0.0f || a_displaySize.y <= 0.0f)
+			a_displaySize = state->screenSize;
+		if (a_renderSize.x <= 0.0f || a_renderSize.y <= 0.0f)
+			a_renderSize = Util::ConvertToDynamic(a_displaySize);
+	}
+
 	bool TryGetCurrentAdapterDesc(DXGI_ADAPTER_DESC& a_outDesc)
 	{
 		if (!globals::d3d::device)
@@ -766,8 +787,9 @@ void FidelityFX::CreateFSRResources()
 		return;
 	}
 
-	auto screenSize = state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
+	float2 screenSize{};
+	float2 renderSize{};
+	GetRuntimeUpscaleSizes(screenSize, renderSize);
 
 	const uint32_t displayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2 : screenSize.x);
 	const uint32_t displayHeight = static_cast<uint32_t>(screenSize.y);
@@ -1606,10 +1628,12 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		if (!state)
 			return false;
 
-		const auto renderSize = Util::ConvertToDynamic(state->screenSize);
+		float2 screenSize{};
+		float2 renderSize{};
+		GetRuntimeUpscaleSizes(screenSize, renderSize);
 		const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
-		const uint32_t fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? state->screenSize.x / 2.0f : state->screenSize.x);
-		const uint32_t fullDisplayHeight = static_cast<uint32_t>(state->screenSize.y);
+		const uint32_t fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2.0f : screenSize.x);
+		const uint32_t fullDisplayHeight = static_cast<uint32_t>(screenSize.y);
 		const uint32_t requestedFullRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2.0f : renderSize.x);
 		const uint32_t requestedFullRenderHeight = static_cast<uint32_t>(renderSize.y);
 		const uint32_t fullRenderWidth = runtimeFsr4Requested ? fullDisplayWidth : requestedFullRenderWidth;
@@ -1750,10 +1774,14 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	const auto screenSize = state->screenSize;
-	const auto renderSize = Util::ConvertToDynamic(screenSize);
+	float2 screenSize{};
+	float2 renderSize{};
+	GetRuntimeUpscaleSizes(screenSize, renderSize);
 
 	auto& upscaling = globals::features::upscaling;
+	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive())
+		return;
+
 	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 
 	if (splitPerEyeContexts) {

@@ -2636,8 +2636,8 @@ void VR::SubmitOverlayFrame()
 	}
 
 	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
-	const bool submitStageUpscalingActive = globals::features::upscaling.IsSubmitStageUpscalingActive();
-	if (shouldUseInSceneOverlay || submitStageUpscalingActive) {
+	const bool presentationUpscalingActive = globals::features::upscaling.IsPresentationUpscalingActive();
+	if (shouldUseInSceneOverlay || presentationUpscalingActive) {
 		InstallSubmitHook();
 	}
 	const bool useInSceneOverlay =

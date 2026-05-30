@@ -2400,7 +2400,7 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 		return requestedMethod;
 
 	const auto& boot = perfMode.GetBootSnapshot();
-	if (perfMode.IsActive(settings, requestedMethod) && IsVendorUpscalingMethod(boot.method))
+	if (IsPerfModeActive() && IsVendorUpscalingMethod(boot.method))
 		return boot.method;
 
 	return requestedMethod;
@@ -2411,9 +2411,8 @@ uint32_t Upscaling::GetRuntimeQualityMode() const
 	if (GetOpenCompositeUpscalingBlocker().active)
 		return ClampQualityModeUInt(settings.qualityMode);
 
-	const auto requestedMethod = GetUpscaleMethod();
 	const auto& boot = perfMode.GetBootSnapshot();
-	if (perfMode.IsActive(settings, requestedMethod))
+	if (IsPerfModeActive())
 		return ClampQualityModeUInt(boot.qualityMode);
 
 	return ClampQualityModeUInt(settings.qualityMode);
@@ -2453,7 +2452,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 			plan.engineRenderSize = renderSize;
 		plan.finalOutputSize = plan.trueHMDDisplaySize;
 		plan.owner = ResolutionOwner::PerfMode;
-		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
+		plan.outputTarget = UpscalingOutputTarget::PerfModeIntermediate;
 	} else if (plan.vendorMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
 		const auto submitSize = GetSubmitStageSizePlan(screenSize);
 		plan.trueHMDDisplaySize = { static_cast<float>(submitSize.outputWidth), static_cast<float>(submitSize.outputHeight) };
@@ -2509,6 +2508,16 @@ bool Upscaling::IsPerfModeActive() const
 	return perfMode.IsActive(settings, GetUpscaleMethod());
 }
 
+bool Upscaling::IsPerfModePresentationActive() const
+{
+	return IsPerfModeActive() && g_submitStageTargetSizeKnown;
+}
+
+bool Upscaling::IsPresentationUpscalingActive() const
+{
+	return IsSubmitStageUpscalingActive() || IsPerfModePresentationActive();
+}
+
 void Upscaling::RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
 {
 	perfMode.RecordTrueHMDSize(a_eyeWidth, a_eyeHeight);
@@ -2520,6 +2529,56 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 		return false;
 
 	return perfMode.TryGetOpenVRRenderTargetSize(settings, GetUpscaleMethod(), a_width, a_height);
+}
+
+bool Upscaling::AdjustPerfModeRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const
+{
+	if (!a_properties || !IsPerfModeActive())
+		return false;
+
+	const auto displaySize = perfMode.GetDisplayScreenSize();
+	const auto renderSize = perfMode.GetRenderScreenSize();
+	if (displaySize.x <= 0.0f || displaySize.y <= 0.0f || renderSize.x <= 0.0f || renderSize.y <= 0.0f)
+		return false;
+
+	auto setSize = [a_properties](float2 a_size) {
+		const uint32_t width = ClampPositiveDimension(a_size.x);
+		const uint32_t height = ClampPositiveDimension(a_size.y);
+		if (a_properties->width == width && a_properties->height == height)
+			return false;
+
+		a_properties->width = width;
+		a_properties->height = height;
+		return true;
+	};
+
+	switch (a_target) {
+	case RE::RENDER_TARGETS::kMENUBG:
+	case RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY:
+	case RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2:
+	case RE::RENDER_TARGETS::kPROJECTEDMENU:
+	case RE::RENDER_TARGETS::kHUDMENU:
+	case RE::RENDER_TARGETS::kFADERUI:
+		return setSize(displaySize);
+	case RE::RENDER_TARGETS::kMAIN:
+	case RE::RENDER_TARGETS::kMAIN_COPY:
+	case RE::RENDER_TARGETS::kMAIN_ONLY_ALPHA:
+	case RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK:
+	case RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP:
+	case RE::RENDER_TARGETS::kMOTION_VECTOR:
+	case RE::RENDER_TARGETS::kUNDERWATER_MASK:
+	case RE::RENDER_TARGETS::kREFRACTION_NORMALS:
+	case RE::RENDER_TARGETS::kTEMPORAL_AA_ACCUMULATION_1:
+	case RE::RENDER_TARGETS::kTEMPORAL_AA_ACCUMULATION_2:
+	case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
+	case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
+	case RE::RENDER_TARGETS::kTEMPORAL_AA_MASK:
+	case RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_1:
+	case RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_2:
+		return setSize(renderSize);
+	default:
+		return false;
+	}
 }
 
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
@@ -5179,11 +5238,11 @@ void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	// dimensions, so every tagged resource must be isolated per-eye at {0,0}.
 	D3D11_TEXTURE2D_DESC colorSrcDesc{};
 	static_cast<ID3D11Texture2D*>(colorSrc)->GetDesc(&colorSrcDesc);
-	const bool submitStageActive = IsSubmitStageUpscalingActive();
-	const DXGI_FORMAT colorOutFormat = submitStageActive ?
+	const bool presentationOutputActive = IsPresentationUpscalingActive();
+	const DXGI_FORMAT colorOutFormat = presentationOutputActive ?
 	                                       DXGI_FORMAT_R8G8B8A8_UNORM :
 	                                       colorSrcDesc.Format;
-	const bool requiresColorOutRTV = submitStageActive;
+	const bool requiresColorOutRTV = presentationOutputActive;
 	const uint32_t allocationInWidth = GetStableSubmitStageInputDimension(inWidth, outWidth);
 	const uint32_t allocationInHeight = GetStableSubmitStageInputDimension(inHeight, outHeight);
 
@@ -5267,11 +5326,11 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	static_cast<ID3D11Texture2D*>(reactiveSrc)->GetDesc(&reactiveSrcDesc);
 	D3D11_TEXTURE2D_DESC transparencySrcDesc{};
 	static_cast<ID3D11Texture2D*>(transparencySrc)->GetDesc(&transparencySrcDesc);
-	const bool submitStageActive = IsSubmitStageUpscalingActive();
-	const DXGI_FORMAT expectedColorOutFormat = submitStageActive ?
+	const bool presentationOutputActive = IsPresentationUpscalingActive();
+	const DXGI_FORMAT expectedColorOutFormat = presentationOutputActive ?
 	                                               DXGI_FORMAT_R8G8B8A8_UNORM :
 	                                               colorSrcDesc.Format;
-	const bool requiresColorOutRTV = submitStageActive;
+	const bool requiresColorOutRTV = presentationOutputActive;
 	const uint32_t allocationInWidth = GetStableSubmitStageInputDimension(inWidth, outWidth);
 	const uint32_t allocationInHeight = GetStableSubmitStageInputDimension(inHeight, outHeight);
 	const auto coversInput = [allocationInWidth, allocationInHeight](const eastl::unique_ptr<Texture2D>& texture, DXGI_FORMAT format, bool requireUAV) {
@@ -5330,7 +5389,13 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	}
 
 	if (needsRecreate) {
-		if (MatchesVRIntermediateTextureCache(cachedVRIntermediateTextures, inWidth, inHeight, outWidth, outHeight)) {
+		const bool cacheMatchesOutputFormat =
+			cachedVRIntermediateTextures.colorOut[0] &&
+			cachedVRIntermediateTextures.colorOut[1] &&
+			cachedVRIntermediateTextures.colorOut[0]->desc.Format == expectedColorOutFormat &&
+			cachedVRIntermediateTextures.colorOut[1]->desc.Format == expectedColorOutFormat &&
+			(!requiresColorOutRTV || (cachedVRIntermediateTextures.colorOut[0]->rtv && cachedVRIntermediateTextures.colorOut[1]->rtv));
+		if (MatchesVRIntermediateTextureCache(cachedVRIntermediateTextures, inWidth, inHeight, outWidth, outHeight) && cacheMatchesOutputFormat) {
 			logger::info("[Upscaling] Reusing cached VR intermediates: per-eye in {}x{}, out {}x{}",
 				inWidth, inHeight, outWidth, outHeight);
 
@@ -5465,8 +5530,12 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		state->BeginPerfEvent("VR Upscaling Prepare");
 
 	auto context = globals::d3d::context;
-	auto screenSize = state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
+	auto screenSize = runtimeResolutionPlan.finalOutputSize;
+	auto renderSize = runtimeResolutionPlan.engineRenderSize;
+	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f)
+		screenSize = state->screenSize;
+	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
+		renderSize = Util::ConvertToDynamic(screenSize);
 
 	uint32_t eyeWidthOut = (uint32_t)(screenSize.x / 2);
 	uint32_t eyeHeightOut = (uint32_t)screenSize.y;
@@ -5563,13 +5632,35 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 		state->BeginPerfEvent("VR Upscaling Finalize");
 
 	auto context = globals::d3d::context;
-	auto screenSize = state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
+	auto screenSize = runtimeResolutionPlan.finalOutputSize;
+	auto renderSize = runtimeResolutionPlan.engineRenderSize;
+	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f)
+		screenSize = state->screenSize;
+	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
+		renderSize = Util::ConvertToDynamic(screenSize);
 
 	uint32_t eyeWidthOut = (uint32_t)(screenSize.x / 2);
 	uint32_t eyeHeightOut = (uint32_t)screenSize.y;
 	uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 	uint32_t eyeHeightIn = (uint32_t)renderSize.y;
+
+	D3D11_TEXTURE2D_DESC dstDesc{};
+	if (TryGetTexture2DDesc(colorDst, dstDesc) &&
+		(dstDesc.Width < eyeWidthOut * 2u || dstDesc.Height < eyeHeightOut)) {
+		static bool loggedPerfModeDstTooSmall = false;
+		if (!loggedPerfModeDstTooSmall) {
+			logger::warn(
+				"[Upscaling] Skipping VR per-eye finalize because destination {}x{} is smaller than runtime output {}x{}.",
+				dstDesc.Width,
+				dstDesc.Height,
+				eyeWidthOut * 2u,
+				eyeHeightOut);
+			loggedPerfModeDstTooSmall = true;
+		}
+		if (state->frameAnnotations)
+			state->EndPerfEvent();
+		return;
+	}
 
 	// Final display-color scrub only. Periphery TAA history, velocity, and lock
 	// resources are left untouched so the temporal path remains active.
@@ -6531,10 +6622,6 @@ bool Upscaling::IsUpscalingActive() const
 
 bool Upscaling::IsSubmitStageUpscalingActive() const
 {
-	if (IsPerfModeActive()) {
-		return g_submitStageTargetSizeKnown;
-	}
-
 	return IsSubmitStageDynamicResolutionActive() &&
 	       g_submitStageTargetSizeKnown &&
 	       !IsGameMenuContextActive();
@@ -6553,8 +6640,10 @@ bool Upscaling::IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture)
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds)
 {
-	if (!IsSubmitStageUpscalingActive() || !a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX)
+	if (!IsPresentationUpscalingActive() ||
+		!a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX) {
 		return false;
+	}
 	if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)
 		return false;
 
@@ -8340,6 +8429,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool fullResolutionMenuPresentation = vendorMethodSelected && globals::game::isVR && IsKnownGameMenuContextActive();
 	const bool runNativeVendorAAInMenu = fullResolutionMenuPresentation && upscaling.GetRuntimeQualityMode() == 0;
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
+	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 	if (menuPresentationContext && !runNativeVendorAAInMenu) {
 		if (upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
@@ -8364,7 +8454,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (vendorDynamicResolutionActive && !upscaling.IsSubmitStageUpscalingActive()) {
+	if (vendorDynamicResolutionActive && !presentationUpscalingActive) {
 		if (upscaling.ShouldUseFrameGenerationThisFrame())
 			upscaling.CopySharedD3D12Resources();
 
@@ -8372,6 +8462,28 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
 		upscaling.UpscaleDepth();
+
+		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+		func(a_this, a3, a_target, a_4, a_5);
+		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+
+		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		return;
+	}
+
+	if (upscaling.IsPerfModePresentationActive()) {
+		globals::features::vr.InstallSubmitHook();
+
+		if (upscaling.ShouldUseFrameGenerationThisFrame())
+			upscaling.CopySharedD3D12Resources();
+
+		upscaling.UpdateHistoryResetState(upscaleMethod);
+		upscaling.LatchHistoryResetForCurrentFrame();
+
+		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+
+		upscaling.RefreshSubmitStageUnderwaterMask();
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);

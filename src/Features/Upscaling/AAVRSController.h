@@ -30,6 +30,7 @@ public:
 		uint32_t renderHeight = 0;
 		float centerArea = kDefaultCenterArea;
 		float centerHorizontalScale = 1.0f;
+		// When coarseOutsideMask is true, outerArea is the filled 1x1 protected mask.
 		float outerArea = kDefaultOuterArea;
 		bool coarseOutsideMask = false;
 		std::array<CenterOffset, 2> centerOffsets{};

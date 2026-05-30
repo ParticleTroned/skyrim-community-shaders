@@ -326,11 +326,17 @@ namespace FrameAnnotations
 	{
 		static void thunk()
 		{
-			globals::state->BeginPerfEvent("Water Effects");
+			// Water effects are sensitive to coarse pixel shading and run while
+			// scene VRS is still active, independent of frame annotation logging.
+			Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, globals::game::isVR);
+			const bool frameAnnotations = globals::state && globals::state->frameAnnotations;
+			if (frameAnnotations)
+				globals::state->BeginPerfEvent("Water Effects");
 
 			func();
 
-			globals::state->EndPerfEvent();
+			if (frameAnnotations)
+				globals::state->EndPerfEvent();
 		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -424,6 +430,7 @@ namespace FrameAnnotations
 				RE::VTABLE_BSShadowFrustumLight[0]);
 			stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
 				RE::VTABLE_BSShadowParabolicLight[0]);
+			stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 		}
 
 		if (!frameAnnotations)
@@ -1090,7 +1097,6 @@ namespace FrameAnnotations
 		stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 		stl::detour_thunk<Main_RenderFirstPersonView>(REL::RelocationID(100411, 107129));
 		stl::detour_thunk<Main_RenderPlayerView>(REL::RelocationID(35560, 36559));
-		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 		stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
 		stl::detour_thunk<BSShaderAccumulator_RenderPersistentPassList>(REL::RelocationID(100840, 107630));
 		stl::detour_thunk<BSShaderAccumulator_RenderEffects>(REL::RelocationID(99940, 106585));

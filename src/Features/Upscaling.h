@@ -275,7 +275,7 @@ public:
 	{
 		float4 renderInfo;     // xy=render dim, zw=1/render dim
 		float4 displayInfo;    // xy=display dim, z=eye count, w=coarseOutsideMask
-		float4 maskInfo;       // x=center area, y=outer area, z=center horizontal scale
+		float4 maskInfo;       // x=center area, y=protected outer area, z=center horizontal scale
 		float4 centerOffsets;  // xy=left eye, zw=right eye
 		float4 coarseColor;
 		float4 centerColor;
@@ -641,6 +641,7 @@ public:
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
+	mutable std::atomic_bool submitStageRuntimeActive{ false };
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();

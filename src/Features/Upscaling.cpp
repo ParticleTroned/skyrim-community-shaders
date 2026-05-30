@@ -96,10 +96,10 @@ namespace
 	constexpr float kPeripheryTAACenterBlendFeatherMin = 0.0f;
 	constexpr float kPeripheryTAACenterBlendFeatherMax = 0.10f;
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
-	constexpr float kFoveatedMaskOffsetAdjustMin = -0.15f;
-	constexpr float kFoveatedMaskOffsetAdjustMax = 0.15f;
-	constexpr float kFoveatedMaskOffsetResolvedMin = -0.25f;
-	constexpr float kFoveatedMaskOffsetResolvedMax = 0.25f;
+	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
+	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
+	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
+	constexpr float kFoveatedMaskOffsetResolvedMax = 0.30f;
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
@@ -230,6 +230,16 @@ namespace
 		return std::max<uint32_t>(1u, static_cast<uint32_t>(std::floor(std::max(a_dimension, 1.0f))));
 	}
 
+	float ComputeAAVRSSafetyAreaPadding(uint32_t a_inputWidthPerEye, uint32_t a_inputHeight, float a_centerHorizontalScale)
+	{
+		const float inputWidth = static_cast<float>(std::max<uint32_t>(a_inputWidthPerEye, 1u));
+		const float inputHeight = static_cast<float>(std::max<uint32_t>(a_inputHeight, 1u));
+		const float horizontalScale = std::max(FoveatedCommon::ClampCenterHorizontalScale(a_centerHorizontalScale), 1e-4f);
+		const float horizontalAreaPadding = (2.0f * static_cast<float>(AAVRSController::kTileWidth)) / (inputWidth * horizontalScale);
+		const float verticalAreaPadding = (2.0f * static_cast<float>(AAVRSController::kTileHeight)) / inputHeight;
+		return std::max(horizontalAreaPadding, verticalAreaPadding);
+	}
+
 	uint32_t ScaleSubmitStageDimension(uint32_t a_dimension, float a_scale)
 	{
 		const float scaledDimension = static_cast<float>(a_dimension) * std::clamp(a_scale, 0.1f, 1.0f);
@@ -276,6 +286,23 @@ namespace
 	float ClampFoveatedCenterArea(float value)
 	{
 		return FoveatedCommon::ClampCenterArea(value);
+	}
+
+	float ResolveActiveFoveatedMaskCoverageArea(
+		const Upscaling::ActiveUpscalingFoveatedProfile& a_profile,
+		const FoveatedRegionPlan& a_regionPlan)
+	{
+		if (!a_regionPlan.IsValid())
+			return ClampFoveatedCenterArea(a_profile.coverageArea);
+
+		if (a_profile.usesPeripheryTAAOuterMask) {
+			const float coverageArea = a_regionPlan.peripheryTAAOuterScale > 0.0f ?
+				a_regionPlan.peripheryTAAOuterScale :
+				a_profile.coverageArea;
+			return ClampFoveatedCenterArea(coverageArea);
+		}
+
+		return ClampFoveatedCenterArea(a_regionPlan.centerScale);
 	}
 
 	float ClampFoveatedCenterHorizontalScale(float value)
@@ -988,26 +1015,42 @@ namespace
 		return IsKnownGameMenuContextActive() || nonWorldPresentation;
 	}
 
-	struct AAVRSUiState
+	struct ScenePausedUiState
 	{
 		bool canEnable = false;
 		bool requested = false;
 		bool active = false;
-		bool knownMenuBlocked = false;
+		bool pausedInMenu = false;
+		bool highlight = false;
 		const char* statusText = "inactive";
 	};
 
-	AAVRSUiState BuildAAVRSUiState(bool a_methodEligible, bool a_adapterEligible, bool a_toggleEnabled, bool a_runtimeActive)
+	ScenePausedUiState BuildScenePausedUiState(
+		bool a_canEnable,
+		bool a_requested,
+		bool a_liveActive,
+		bool a_wasActiveInScene,
+		bool a_menuPaused)
 	{
-		AAVRSUiState state{};
-		state.canEnable = a_methodEligible && a_adapterEligible;
-		state.requested = state.canEnable && a_toggleEnabled;
-		state.active = state.requested && a_runtimeActive;
-		state.knownMenuBlocked = state.requested && !state.active && IsKnownGameMenuContextActive();
+		ScenePausedUiState state{};
+		state.canEnable = a_canEnable;
+		state.requested = state.canEnable && a_requested;
+		state.active = state.requested && a_liveActive;
+		state.pausedInMenu = state.requested && !state.active && a_menuPaused && a_wasActiveInScene;
+		state.highlight = state.active || state.pausedInMenu;
 		state.statusText =
 			state.active ? "active" :
-			(state.requested ? (state.knownMenuBlocked ? "menu inactive" : "pending scene") : "inactive");
+			(state.pausedInMenu ? "paused in menu" :
+				(state.requested ? "pending scene" : "inactive"));
 		return state;
+	}
+
+	ScenePausedUiState BuildAAVRSUiState(bool a_methodEligible, bool a_adapterEligible, bool a_toggleEnabled, bool a_runtimeActive)
+	{
+		const bool canEnable = a_methodEligible && a_adapterEligible;
+		const bool requested = canEnable && a_toggleEnabled;
+		const bool menuPaused = IsKnownGameMenuContextActive();
+		return BuildScenePausedUiState(canEnable, requested, a_runtimeActive && !menuPaused, a_runtimeActive, menuPaused);
 	}
 
 	bool TryGetTexture2DDesc(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& outDesc)
@@ -1344,45 +1387,67 @@ void Upscaling::DrawSettings()
 		}
 	}
 
-	auto drawSubmitPathToggle = [&]() {
+	auto drawRenderPipelineBlock = [&]() {
 		if (!globals::game::isVR)
 			return;
 
 		const bool perfModeActive = IsPerfModeActive();
 		const bool submitPathEligible = IsSubmitStagePathEligible(upscaleMethod);
-		const bool canEdit = submitPathEligible && !perfModeActive;
-		auto disabledGuard = Util::DisableGuard(!submitPathEligible || perfModeActive);
+		const bool submitCanEdit = submitPathEligible && !perfModeActive;
+		const bool submitRequested = perfModeActive || (submitPathEligible && ClampToggleUInt(settings.submitStageUpscaling) != 0);
+		const bool submitLiveActive = perfModeActive || IsSubmitStageUpscalingActive();
+		if (!submitRequested)
+			submitStageRuntimeActive.store(false, std::memory_order_relaxed);
+		const auto submitUiState = BuildScenePausedUiState(
+			submitPathEligible || perfModeActive,
+			submitRequested,
+			submitLiveActive,
+			submitStageRuntimeActive.load(std::memory_order_relaxed) || perfModeActive,
+			IsGameMenuContextActive());
+		const bool perfModeEligible = submitPathEligible;
+		const bool perfModeCanEdit = perfModeEligible || perfModeActive;
+		const bool perfModeRequested = perfModeCanEdit && ClampToggleUInt(settings.perfMode) != 0;
+		const auto activeColor = ImVec4(0.40f, 0.85f, 0.50f, 1.0f);
+		const auto inactiveColor = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+
+		ImGui::Separator();
+		if (!ImGui::TreeNodeEx("Render Pipeline", ImGuiTreeNodeFlags_DefaultOpen))
+			return;
+
+		ImGui::TextColored(
+			(submitUiState.requested || submitUiState.highlight) ? activeColor : inactiveColor,
+			"Submit Path: %s",
+			submitUiState.statusText);
+		ImGui::TextColored(
+			perfModeActive ? activeColor : inactiveColor,
+			"Render at Upscale Res: %s",
+			perfModeActive ? "active" : (perfModeRequested ? "restart pending" : "inactive"));
+		if (submitUiState.pausedInMenu)
+			ImGui::TextDisabled("Submit Path was active in scene and is paused while this menu is open.");
+		if (perfModeActive)
+			ImGui::TextDisabled("Submit Path presents the Render at Upscale Res output; Skyrim render targets stay at the internal size.");
 
 		const char* submitStageModes[] = { "Disabled", "Enabled" };
 		int submitStageUpscaling = perfModeActive ? 1 : (submitPathEligible ? static_cast<int>(ClampToggleUInt(settings.submitStageUpscaling)) : 0);
-		ImGui::SliderInt("Submit Path", &submitStageUpscaling, 0, 1, submitStageModes[std::clamp(submitStageUpscaling, 0, 1)]);
-		if (canEdit)
-			settings.submitStageUpscaling = static_cast<uint>(std::clamp(submitStageUpscaling, 0, 1));
+		{
+			auto disabledGuard = Util::DisableGuard(!submitPathEligible || perfModeActive);
+			ImGui::SliderInt("Submit Path", &submitStageUpscaling, 0, 1, submitStageModes[std::clamp(submitStageUpscaling, 0, 1)]);
+			if (submitCanEdit)
+				settings.submitStageUpscaling = static_cast<uint>(std::clamp(submitStageUpscaling, 0, 1));
+		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Controls the VR submit-stage upscaling path for DLSS/FSR upscaling presets.");
 			ImGui::TextUnformatted("When Render at Upscale Res is active, this path performs the final presentation upscale.");
 			ImGui::TextUnformatted("Disable without Render at Upscale Res to fall back to the pre-image-space upscaling path for A/B testing.");
 		}
 
-		if (perfModeActive)
-			ImGui::TextDisabled("Submit Path presents the Render at Upscale Res output; Skyrim render targets stay at the internal size.");
-		else if (!submitPathEligible)
-			ImGui::TextDisabled("Submit Path is available only with DLSS/FSR upscaling presets in VR.");
-	};
-
-	auto drawPerfModeToggle = [&]() {
-		if (!globals::game::isVR)
-			return;
-
-		const bool perfModeActive = IsPerfModeActive();
-		const bool methodEligible = IsSubmitStagePathEligible(upscaleMethod);
-		const bool canEdit = methodEligible || perfModeActive;
-		auto disabledGuard = Util::DisableGuard(!canEdit);
-
 		const char* perfModes[] = { "Disabled", "Enabled" };
-		int perfModeSetting = canEdit ? static_cast<int>(ClampToggleUInt(settings.perfMode)) : 0;
-		if (ImGui::SliderInt("Render at Upscale Res", &perfModeSetting, 0, 1, perfModes[std::clamp(perfModeSetting, 0, 1)])) {
-			settings.perfMode = static_cast<uint>(std::clamp(perfModeSetting, 0, 1));
+		int perfModeSetting = perfModeCanEdit ? static_cast<int>(ClampToggleUInt(settings.perfMode)) : 0;
+		{
+			auto disabledGuard = Util::DisableGuard(!perfModeCanEdit);
+			if (ImGui::SliderInt("Render at Upscale Res", &perfModeSetting, 0, 1, perfModes[std::clamp(perfModeSetting, 0, 1)])) {
+				settings.perfMode = static_cast<uint>(std::clamp(perfModeSetting, 0, 1));
+			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Makes Skyrim VR allocate engine render targets at the selected upscaler internal resolution.");
@@ -1392,8 +1457,12 @@ void Upscaling::DrawSettings()
 
 		if (perfMode.HasRestartRequiredChange())
 			Util::Text::Warning("Warning: Render at Upscale Res change requires restart");
-		else if (!methodEligible)
+		if (!submitPathEligible)
+			ImGui::TextDisabled("Submit Path is available only with DLSS/FSR upscaling presets in VR.");
+		if (!perfModeEligible)
 			ImGui::TextDisabled("Render at Upscale Res is available only with DLSS/FSR upscaling presets in VR.");
+
+		ImGui::TreePop();
 	};
 
 	// Display upscaling settings if applicable
@@ -1499,25 +1568,14 @@ void Upscaling::DrawSettings()
 					"FOV: %s",
 					fovActive ? "active" : "inactive");
 				ImGui::TextColored(
-					aaVrsUiState.active ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+					aaVrsUiState.highlight ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 					"Variable Rate Shading (VRS): %s",
-					aaVrsUiState.active ? "active" : "inactive");
+					aaVrsUiState.statusText);
 			} else {
 				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 			}
 
-			if (streamline.reflexSupportedOnCurrentAdapter)
-				ImGui::Separator();
 		}
-
-		drawSubmitPathToggle();
-		drawPerfModeToggle();
-	}
-
-	if (upscaleMethod == UpscaleMethod::kTAA) {
-		drawSubmitPathToggle();
-	} else if (upscaleMethod == UpscaleMethod::kNONE) {
-		drawSubmitPathToggle();
 	}
 
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
@@ -1682,6 +1740,8 @@ void Upscaling::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+	drawRenderPipelineBlock();
 
 	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
 		// Streamline log level selection
@@ -1871,9 +1931,9 @@ void Upscaling::DrawFoveatedSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Enables NVIDIA Variable Rate Shading (VRS) during VR scene pixel shading for foveated upscaling.");
 		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes keep Variable Rate Shading disabled.");
-		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask.");
-		ImGui::TextUnformatted("Outside the mask, the inner quarter is 2x2 and the outer three quarters are 4x4.");
-		ImGui::TextUnformatted("No zero-rate culling is used.");
+		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask; without Peripheral TAA, the foveated feather is included.");
+		ImGui::TextUnformatted("Adds one VRS tile of safety padding around the protected mask to avoid coarse-rate flicker at the transition.");
+		ImGui::TextUnformatted("Outside the mask, the inner fifth is 2x2 and the rest stays 4x4 across the full FOV.");
 		ImGui::TextUnformatted("Suspended for Terrain Blending and shadow maps; disabled before postprocessing.");
 	}
 
@@ -1887,9 +1947,11 @@ void Upscaling::DrawFoveatedSettings()
 	}
 
 	ImGui::TextColored(
-		aaVrsUiState.active ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+		aaVrsUiState.highlight ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 		"Foveated Variable Rate Shading (VRS): %s",
 		aaVrsUiState.statusText);
+	if (aaVrsUiState.pausedInMenu)
+		ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) was active in scene and is paused while this menu is open.");
 	if (!aaVrsUiState.requested)
 		settings.aaVrsVisualization = false;
 
@@ -2849,6 +2911,7 @@ void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	submitStageMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
+	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 	historyResetTrackingInitialized = false;
 	historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
 	historyResetThisFrame = false;
@@ -3412,14 +3475,15 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 		return false;
 
 	const bool useRegionPlan = regionPlan.IsValid();
-	const float maskArea =
-		useRegionPlan && activeProfile.usesPeripheryTAAOuterMask && regionPlan.peripheryTAAOuterScale > 0.0f ? regionPlan.peripheryTAAOuterScale :
-		useRegionPlan ? regionPlan.centerScale :
-		activeProfile.coverageArea;
+	const auto activeMaskParams = GetFoveatedMaskProfileParams(settings, activeProfile.usesPeripheryTAAOuterMask);
+	const float centerArea = useRegionPlan ? regionPlan.centerScale : activeMaskParams.centerArea;
+	const float maskCoverageArea = ResolveActiveFoveatedMaskCoverageArea(activeProfile, regionPlan);
 	const float centerHorizontalScale = useRegionPlan ? regionPlan.centerHorizontalScale : activeProfile.centerHorizontalScale;
 	const std::array<float2, 2> foveatedCenterOffsets = useRegionPlan ?
 		std::array<float2, 2>{ regionPlan.eyes[0].centerOffset, regionPlan.eyes[1].centerOffset } :
 		activeProfile.centerOffsets;
+	const float vrsMaskArea = ClampFoveatedCenterArea(
+		maskCoverageArea + ComputeAAVRSSafetyAreaPadding(inputWidthPerEye, inputHeight, centerHorizontalScale));
 
 	AAVRSController::Settings aaVrsSettings{};
 	aaVrsSettings.enabled = true;
@@ -3428,9 +3492,9 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 	aaVrsSettings.displayHeight = displayHeight;
 	aaVrsSettings.renderWidth = renderWidth;
 	aaVrsSettings.renderHeight = renderHeight;
-	aaVrsSettings.centerArea = maskArea;
+	aaVrsSettings.centerArea = centerArea;
 	aaVrsSettings.centerHorizontalScale = centerHorizontalScale;
-	aaVrsSettings.outerArea = maskArea;
+	aaVrsSettings.outerArea = vrsMaskArea;
 	aaVrsSettings.coarseOutsideMask = true;
 	aaVrsSettings.centerOffsets = {
 		AAVRSController::CenterOffset{ foveatedCenterOffsets[0].x, foveatedCenterOffsets[0].y },
@@ -6705,9 +6769,15 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 		IsSubmitStageDynamicResolutionActive() ||
 		IsPerfModePresentationActive();
 
-	return submitStageSceneActive &&
-	       g_submitStageTargetSizeKnown &&
-	       !IsGameMenuContextActive();
+	const bool active = submitStageSceneActive &&
+	                    g_submitStageTargetSizeKnown &&
+	                    !IsGameMenuContextActive();
+	if (active) {
+		submitStageRuntimeActive.store(true, std::memory_order_relaxed);
+	} else if (!submitStageSceneActive || !g_submitStageTargetSizeKnown) {
+		submitStageRuntimeActive.store(false, std::memory_order_relaxed);
+	}
+	return active;
 }
 
 bool Upscaling::IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const
@@ -7998,7 +8068,7 @@ void Upscaling::UpscaleDepth()
 
 		context->OMSetDepthStencilState(nullptr, 0x00);
 
-		// t0: vanilla mask copy, t1: current upscaled depth, t2: current stencil/HAM mask (VR).
+		// t0: vanilla mask copy, t1: current scene depth, t2: current stencil/HAM mask (VR).
 		ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV, depthCopy.stencilSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -8074,9 +8144,8 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	D3D11_VIEWPORT viewport = {};
 	viewport.TopLeftX = 0.0f;
 	viewport.TopLeftY = 0.0f;
-	// Submit input is full per-eye height, but the VR underwater mask target
-	// keeps its own packed mask dimensions. Draw to the actual target extent so
-	// the reconstructed waterline stays aligned with downstream mask sampling.
+	// Draw the full underwater-mask target. Partial submit-sized repair leaves
+	// copied/stale HAM-shaped mask data outside the rewritten region.
 	viewport.Width = static_cast<float>(underwaterMaskDesc.Width);
 	viewport.Height = static_cast<float>(underwaterMaskDesc.Height);
 	viewport.MinDepth = 0.0f;

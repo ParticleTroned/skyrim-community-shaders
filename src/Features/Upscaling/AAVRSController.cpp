@@ -17,12 +17,7 @@ namespace
 	constexpr uint8_t kRateIndex1x2 = 2;
 	constexpr uint8_t kRateIndex2x2 = 3;
 	constexpr uint8_t kRateIndex4x4 = 4;
-	constexpr uint8_t kStereoRateCategory1x1 = 0;
-	constexpr uint8_t kStereoRateCategory2x2 = 1;
-	constexpr uint8_t kStereoRateCategory4x4 = 2;
-	constexpr uint8_t kStereoRateCategoryCount = 3;
-	constexpr float kOutsideMask2x2Fraction = 1.0f / 4.0f;
-	static_assert(kStereoRateCategoryCount * kStereoRateCategoryCount <= NV_MAX_PIXEL_SHADING_RATES);
+	constexpr float kOutsideMask2x2Fraction = 1.0f / 5.0f;
 
 	struct ViewportCountInfo
 	{
@@ -112,56 +107,32 @@ namespace
 		}
 	}
 
-	uint8_t ToStereoRateCategory(uint8_t a_rateIndex)
+	uint8_t ChooseConservativeStereoRate(uint8_t a_leftRate, uint8_t a_rightRate)
 	{
-		switch (a_rateIndex) {
-		case kRateIndex4x4:
-			return kStereoRateCategory4x4;
-		case kRateIndex1x1:
-			return kStereoRateCategory1x1;
-		case kRateIndex2x1:
-		case kRateIndex1x2:
-		case kRateIndex2x2:
-		default:
-			return kStereoRateCategory2x2;
+		if (a_leftRate == a_rightRate)
+			return a_leftRate;
+		if (a_leftRate == kRateIndex1x1 || a_rightRate == kRateIndex1x1)
+			return kRateIndex1x1;
+		if (a_leftRate == kRateIndex4x4)
+			return a_rightRate;
+		if (a_rightRate == kRateIndex4x4)
+			return a_leftRate;
+		if ((a_leftRate == kRateIndex2x1 && a_rightRate == kRateIndex1x2) ||
+			(a_leftRate == kRateIndex1x2 && a_rightRate == kRateIndex2x1)) {
+			return kRateIndex1x1;
 		}
+		if (a_leftRate == kRateIndex2x2)
+			return a_rightRate;
+		if (a_rightRate == kRateIndex2x2)
+			return a_leftRate;
+		return std::min(a_leftRate, a_rightRate);
 	}
 
-	NV_PIXEL_SHADING_RATE StereoCategoryToPixelShadingRate(uint8_t a_category, bool a_enable4x4)
-	{
-		switch (a_category) {
-		case kStereoRateCategory4x4:
-			return a_enable4x4 ? NV_PIXEL_X1_PER_4X4_RASTER_PIXELS : NV_PIXEL_X1_PER_2X2_RASTER_PIXELS;
-		case kStereoRateCategory2x2:
-			return NV_PIXEL_X1_PER_2X2_RASTER_PIXELS;
-		case kStereoRateCategory1x1:
-		default:
-			return NV_PIXEL_X1_PER_RASTER_PIXEL;
-		}
-	}
-
-	uint8_t EncodeStereoRateCategories(uint8_t a_leftCategory, uint8_t a_rightCategory)
-	{
-		return a_leftCategory * kStereoRateCategoryCount + a_rightCategory;
-	}
-
-	void FillRateTable(NV_D3D11_VIEWPORT_SHADING_RATE_DESC& a_desc, bool a_enable4x4, bool a_stereo, uint32_t a_viewportIndex)
+	void FillRateTable(NV_D3D11_VIEWPORT_SHADING_RATE_DESC& a_desc, bool a_enable4x4)
 	{
 		a_desc.enableVariablePixelShadingRate = true;
 		for (auto& rate : a_desc.shadingRateTable) {
 			rate = NV_PIXEL_X1_PER_RASTER_PIXEL;
-		}
-
-		if (a_stereo) {
-			const bool rightEyeViewport = (a_viewportIndex % 2u) == 1u;
-			for (uint8_t leftCategory = 0; leftCategory < kStereoRateCategoryCount; ++leftCategory) {
-				for (uint8_t rightCategory = 0; rightCategory < kStereoRateCategoryCount; ++rightCategory) {
-					const uint8_t tableIndex = EncodeStereoRateCategories(leftCategory, rightCategory);
-					const uint8_t viewportCategory = rightEyeViewport ? rightCategory : leftCategory;
-					a_desc.shadingRateTable[tableIndex] = StereoCategoryToPixelShadingRate(viewportCategory, a_enable4x4);
-				}
-			}
-			return;
 		}
 
 		a_desc.shadingRateTable[kRateIndex1x1] = ToPixelShadingRate(kRateIndex1x1, a_enable4x4);
@@ -180,7 +151,7 @@ namespace
 		UINT viewportCount = 0;
 		a_context->RSGetViewports(&viewportCount, nullptr);
 		info.reported = viewportCount;
-		if (viewportCount == 0 || a_forceMinimum) {
+		if (viewportCount == 0 || a_forceMinimum || viewportCount < a_fallback) {
 			const UINT forcedViewportCount = std::max<UINT>(viewportCount, std::max<UINT>(a_fallback, 1u));
 			info.forcedMinimum = forcedViewportCount != viewportCount;
 			viewportCount = forcedViewportCount;
@@ -479,7 +450,8 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 	const float outerArea = ClampMaskArea(std::max(a_settings.outerArea, centerArea), FoveatedCommon::kCenterAreaMax);
 	const float coarseSplitArea = outerArea + (FoveatedCommon::kCenterAreaMax - outerArea) * kOutsideMask2x2Fraction;
 	const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_settings.centerHorizontalScale);
-	const bool fullRatePattern = centerArea >= FoveatedCommon::kFullCoverageThreshold;
+	const float protectedArea = a_settings.coarseOutsideMask ? outerArea : centerArea;
+	const bool fullRatePattern = protectedArea >= FoveatedCommon::kFullCoverageThreshold;
 
 	auto resolveRateIndex = [&](uint32_t a_eye, float a_tileMinX, float a_tileMinY, float a_tileMaxX, float a_tileMaxY) -> uint8_t {
 		const float displayTileMinX = a_tileMinX / std::max(renderScaleX, 1e-4f);
@@ -520,7 +492,6 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 			centerHorizontalScale,
 			centerOffset,
 			FoveatedCommon::kCenterAreaMax);
-
 		const float tileCenterX = (displayTileMinX + displayTileMaxX) * 0.5f;
 		const float tileCenterY = (displayTileMinY + displayTileMaxY) * 0.5f;
 		const float centerX = (0.5f + centerOffset.x) * eyeDisplayWidth;
@@ -528,8 +499,13 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 
 		if (fullRatePattern)
 			return kRateIndex1x1;
-		if (a_settings.coarseOutsideMask && outerDistance > 1.0f)
+		if (a_settings.coarseOutsideMask) {
+			// In coarse-outside mode, outerArea is the filled protected mask:
+			// active foveated coverage and VRS safety padding stay 1x1.
+			if (outerDistance <= 1.0f)
+				return kRateIndex1x1;
 			return coarseSplitDistance > 1.0f ? kRateIndex4x4 : kRateIndex2x2;
+		}
 		if (centerDistance <= 1.0f)
 			return kRateIndex1x1;
 		return std::abs(tileCenterX - centerX) >= std::abs(tileCenterY - centerY) ? kRateIndex2x1 : kRateIndex1x2;
@@ -549,17 +525,17 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 
 			uint8_t rateIndex = kRateIndex1x1;
 			if (a_settings.stereo) {
+				// Skyrim VR renders eyes as a packed side-by-side surface. Protect
+				// both halves with the binocular union of the local left/right masks;
+				// otherwise a tile that is coarse in either eye can still shimmer.
 				const float tileCenterX = (tileMinX + tileMaxX) * 0.5f;
 				const uint32_t eye = static_cast<uint32_t>(std::clamp(tileCenterX / std::max(eyeRenderWidth, 1.0f), 0.0f, 1.0f));
 				const float eyeOffsetX = eyeRenderWidth * static_cast<float>(eye);
 				const float localTileMinX = std::clamp(tileMinX - eyeOffsetX, 0.0f, eyeRenderWidth);
 				const float localTileMaxX = std::clamp(tileMaxX - eyeOffsetX, 0.0f, eyeRenderWidth);
-				const uint8_t leftCategory = ToStereoRateCategory(resolveRateIndex(0, localTileMinX, tileMinY, localTileMaxX, tileMaxY));
-				const uint8_t rightCategory = ToStereoRateCategory(resolveRateIndex(1, localTileMinX, tileMinY, localTileMaxX, tileMaxY));
-				// Keep stereo VRS binocularly conservative: if either eye needs a finer rate,
-				// both viewport tables decode that finer rate for the same local tile.
-				const uint8_t stereoCategory = std::min(leftCategory, rightCategory);
-				rateIndex = EncodeStereoRateCategories(stereoCategory, stereoCategory);
+				const uint8_t leftRate = resolveRateIndex(0, localTileMinX, tileMinY, localTileMaxX, tileMaxY);
+				const uint8_t rightRate = resolveRateIndex(1, localTileMinX, tileMinY, localTileMaxX, tileMaxY);
+				rateIndex = ChooseConservativeStereoRate(leftRate, rightRate);
 			} else {
 				rateIndex = resolveRateIndex(0, tileMinX, tileMinY, tileMaxX, tileMaxY);
 			}
@@ -597,14 +573,12 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 		return false;
 
 	ViewportCountInfo bindInfo{};
-	bool usedViewportFallback = false;
 	const auto bindWithTable = [&](bool a_enable4x4, uint32_t a_minViewportCount, bool a_forceMinViewportCount, NvAPI_Status& a_outViewportStatus, NvAPI_Status& a_outSurfaceStatus) {
-		const bool stereo = hasLastSettings && lastSettings.stereo;
 		const ViewportCountInfo viewportInfo = QueryViewportCount(a_context, a_minViewportCount, a_forceMinViewportCount);
 		const uint32_t viewportCount = viewportInfo.bound;
 		std::array<NV_D3D11_VIEWPORT_SHADING_RATE_DESC, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> viewportDescs{};
 		for (uint32_t i = 0; i < viewportCount; ++i) {
-			FillRateTable(viewportDescs[i], a_enable4x4, stereo, i);
+			FillRateTable(viewportDescs[i], a_enable4x4);
 		}
 
 		NV_D3D11_VIEWPORTS_SHADING_RATE_DESC shadingRateDesc{};
@@ -619,15 +593,13 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 			bindInfo = viewportInfo;
 		return a_outViewportStatus == NVAPI_OK && a_outSurfaceStatus == NVAPI_OK;
 	};
-	const auto bindWithFallbackViewportCount = [&](bool a_enable4x4, NvAPI_Status& a_outViewportStatus, NvAPI_Status& a_outSurfaceStatus) {
+	const auto bindRateTable = [&](bool a_enable4x4, NvAPI_Status& a_outViewportStatus, NvAPI_Status& a_outSurfaceStatus) {
 		const bool stereo = hasLastSettings && lastSettings.stereo;
-		usedViewportFallback = false;
-		if (bindWithTable(a_enable4x4, stereo ? 2u : 1u, stereo, a_outViewportStatus, a_outSurfaceStatus))
+		// Skyrim VR can report one viewport at this hook point, then render with
+		// per-eye viewport indices. Populate both rate tables for stereo frames.
+		const uint32_t minimumViewportCount = stereo ? 2u : 1u;
+		if (bindWithTable(a_enable4x4, minimumViewportCount, stereo, a_outViewportStatus, a_outSurfaceStatus))
 			return true;
-		if (stereo && a_outViewportStatus != NVAPI_OK) {
-			usedViewportFallback = true;
-			return bindWithTable(a_enable4x4, 1u, false, a_outViewportStatus, a_outSurfaceStatus);
-		}
 		return false;
 	};
 
@@ -638,19 +610,18 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 			return;
 
 		logger::info(
-			"[Upscaling] Foveated Variable Rate Shading (VRS) viewport bind: stereo={}, reported={}, bound={}, forced={}, fallback={}, viewportStatus={}, surfaceStatus={}",
+			"[Upscaling] Foveated Variable Rate Shading (VRS) viewport bind: packedStereo={}, reported={}, bound={}, forced={}, viewportStatus={}, surfaceStatus={}",
 			hasLastSettings && lastSettings.stereo,
 			bindInfo.reported,
 			bindInfo.bound,
 			bindInfo.forcedMinimum,
-			usedViewportFallback,
 			static_cast<int>(viewportResult),
 			static_cast<int>(surfaceResult));
 		loggedViewportBindMode = true;
 	};
 
-	if (!bindWithFallbackViewportCount(allow4x4Rate, viewportResult, surfaceResult)) {
-		if (allow4x4Rate && bindWithFallbackViewportCount(false, viewportResult, surfaceResult)) {
+	if (!bindRateTable(allow4x4Rate, viewportResult, surfaceResult)) {
+		if (allow4x4Rate && bindRateTable(false, viewportResult, surfaceResult)) {
 			allow4x4Rate = false;
 			if (!logged4x4Fallback) {
 				logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS): 4x4 shading rate unavailable, falling back to 2x2");

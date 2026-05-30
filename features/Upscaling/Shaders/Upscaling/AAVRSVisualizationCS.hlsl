@@ -4,7 +4,7 @@ cbuffer AAVRSVisualizationCB : register(b0)
 {
 	float4 RenderInfo;     // xy=render dim, zw=1/render dim
 	float4 DisplayInfo;    // xy=display dim, z=eye count, w=coarseOutsideMask
-	float4 MaskInfo;       // x=center area, y=outer area, z=center horizontal scale
+	float4 MaskInfo;       // x=center area, y=protected outer area, z=center horizontal scale
 	float4 CenterOffsets;  // xy=left eye, zw=right eye
 	float4 CoarseColor;
 	float4 CenterColor;
@@ -49,9 +49,11 @@ float AAVRSTileMinMaskDistance(
 	const float renderScaleX = max(RenderInfo.x / max(DisplayInfo.x, 1.0), 1e-4);
 	const float renderScaleY = max(RenderInfo.y / max(DisplayInfo.y, 1.0), 1e-4);
 	const float centerArea = MaskInfo.x;
+	const float outerArea = max(MaskInfo.y, centerArea);
+	const float protectedArea = DisplayInfo.w > 0.5 ? outerArea : centerArea;
 	const float centerHorizontalScale = MaskInfo.z;
 
-	if (centerArea >= 0.999) {
+	if (protectedArea >= 0.999) {
 		OutColor[dispatchID.xy] = CenterColor;
 		return;
 	}
@@ -62,28 +64,42 @@ float AAVRSTileMinMaskDistance(
 	const float2 localPixel = float2((float)dispatchID.x - eyeOffsetX, (float)dispatchID.y);
 	const float2 tileMin = floor(localPixel / tileSize) * tileSize;
 	const float2 tileMax = min(tileMin + tileSize, float2(eyeRenderWidth, RenderInfo.y));
-	const float leftCenterDistance = AAVRSTileMinMaskDistance(
+	const float2 eyeCenterOffset = eye == 0u ? CenterOffsets.xy : CenterOffsets.zw;
+	float protectedDistance = AAVRSTileMinMaskDistance(
 		tileMin,
 		tileMax,
 		renderScaleX,
 		renderScaleY,
 		eyeDisplayWidth,
 		displayHeight,
-		centerArea,
+		protectedArea,
 		centerHorizontalScale,
-		CenterOffsets.xy);
-	const float rightCenterDistance = AAVRSTileMinMaskDistance(
-		tileMin,
-		tileMax,
-		renderScaleX,
-		renderScaleY,
-		eyeDisplayWidth,
-		displayHeight,
-		centerArea,
-		centerHorizontalScale,
-		CenterOffsets.zw);
+		eyeCenterOffset);
+	if (eyeCount > 1u) {
+		const float leftDistance = AAVRSTileMinMaskDistance(
+			tileMin,
+			tileMax,
+			renderScaleX,
+			renderScaleY,
+			eyeDisplayWidth,
+			displayHeight,
+			protectedArea,
+			centerHorizontalScale,
+			CenterOffsets.xy);
+		const float rightDistance = AAVRSTileMinMaskDistance(
+			tileMin,
+			tileMax,
+			renderScaleX,
+			renderScaleY,
+			eyeDisplayWidth,
+			displayHeight,
+			protectedArea,
+			centerHorizontalScale,
+			CenterOffsets.zw);
+		protectedDistance = min(leftDistance, rightDistance);
+	}
 
-	if (leftCenterDistance <= 1.0 || (eyeCount > 1u && rightCenterDistance <= 1.0)) {
+	if (protectedDistance <= 1.0) {
 		OutColor[dispatchID.xy] = CenterColor;
 		return;
 	}

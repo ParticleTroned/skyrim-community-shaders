@@ -1033,6 +1033,15 @@ namespace
 		return IsKnownGameMenuContextActive() || nonWorldPresentation;
 	}
 
+	bool IsSubmitStageMenuPresentationContextActive()
+	{
+		if (!globals::game::isVR || !g_submitStageTargetSizeKnown || !IsGameMenuContextActive())
+			return false;
+
+		auto& upscaling = globals::features::upscaling;
+		return IsSubmitStageDynamicResolutionActive() || upscaling.IsPerfModePresentationActive();
+	}
+
 	struct ScenePausedUiState
 	{
 		bool canEnable = false;
@@ -2659,8 +2668,7 @@ bool Upscaling::IsPerfModePresentationActive() const
 
 bool Upscaling::IsPresentationUpscalingActive() const
 {
-	return IsSubmitStageUpscalingActive() ||
-	       (IsPerfModePresentationActive() && IsGameMenuContextActive());
+	return IsSubmitStageUpscalingActive();
 }
 
 void Upscaling::RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
@@ -6477,7 +6485,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionPlan();
 		return;
 	}
-	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive()) {
+	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive()) {
 		resolutionScale = { 1.0f, 1.0f };
 		jitter = { 0.0f, 0.0f };
 		a_viewport->projectionPosScaleX = 0.0f;
@@ -7027,9 +7035,12 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 		IsSubmitStageDynamicResolutionActive() ||
 		IsPerfModePresentationActive();
 
+	const bool menuBlocksSubmitStage =
+		IsGameMenuContextActive() &&
+		!IsSubmitStageMenuPresentationContextActive();
 	const bool active = submitStageSceneActive &&
 	                    g_submitStageTargetSizeKnown &&
-	                    !IsGameMenuContextActive();
+	                    !menuBlocksSubmitStage;
 	if (active) {
 		submitStageRuntimeActive.store(true, std::memory_order_relaxed);
 	} else if (!submitStageSceneActive || !g_submitStageTargetSizeKnown) {
@@ -8485,7 +8496,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 	upscaling.DisableAAVRSState();
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
 	if (IsVendorUpscalingMethod(upscaleMethod) && upscaling.IsUpscalingActive()) {
-		if (IsGameMenuContextActive())
+		if (IsGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive())
 			return false;
 
 		auto context = globals::d3d::context;
@@ -8895,7 +8906,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool runNativeVendorAAInMenu = fullResolutionMenuPresentation && upscaling.GetRuntimeQualityMode() == 0;
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
 	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
-	if (menuPresentationContext && !runNativeVendorAAInMenu) {
+	if (menuPresentationContext && !runNativeVendorAAInMenu && !presentationUpscalingActive) {
 		if (upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
 

@@ -9,6 +9,10 @@
 
 struct FoveatedRegionPlan
 {
+	static constexpr uint32_t kDefaultUnderlayHolePadding = 2u;
+	static constexpr uint32_t kDefaultPeripheryHistoryPadding = 2u;
+	static constexpr uint32_t kDefaultPeripheryInputPadding = 2u;
+
 	struct Rect
 	{
 		uint32_t minX = 0;
@@ -32,11 +36,24 @@ struct FoveatedRegionPlan
 		}
 	};
 
+	struct TextureRegion
+	{
+		float2 scale{ 1.0f, 1.0f };
+		float2 offset{ 0.0f, 0.0f };
+	};
+
 	struct Eye
 	{
 		Rect output;
 		Rect input;
+		Rect centerInteriorOutput;
+		Rect centerUnderlayHoleOutput;
+		Rect peripheryTAAOuterOutput;
+		Rect peripheryTAAHistoryOutput;
+		Rect peripheryTAAOuterInput;
+		Rect encodeInput;
 		float2 centerOffset{ 0.0f, 0.0f };
+		float2 pinholeOffset{ 0.0f, 0.0f };
 
 		[[nodiscard]] bool IsValid() const
 		{
@@ -52,6 +69,7 @@ struct FoveatedRegionPlan
 	float centerScale = FoveatedCommon::kCenterAreaMax;
 	float centerFeather = FoveatedCommon::kCenterFeather;
 	float centerHorizontalScale = 1.0f;
+	float peripheryTAAOuterScale = 0.0f;
 	std::array<Eye, 2> eyes{};
 
 	[[nodiscard]] bool IsValid() const
@@ -69,7 +87,11 @@ struct FoveatedRegionPlan
 		float a_centerFeather,
 		float a_centerHorizontalScale,
 		const std::array<float2, 2>& a_centerOffsets,
-		uint32_t a_inputPadding = 0u)
+		uint32_t a_inputPadding = 0u,
+		float a_peripheryTAAOuterScale = 0.0f,
+		uint32_t a_centerUnderlayHolePadding = kDefaultUnderlayHolePadding,
+		uint32_t a_peripheryHistoryPadding = kDefaultPeripheryHistoryPadding,
+		uint32_t a_peripheryInputPadding = kDefaultPeripheryInputPadding)
 	{
 		FoveatedRegionPlan plan{};
 		plan.inputWidthPerEye = a_inputWidthPerEye;
@@ -80,6 +102,9 @@ struct FoveatedRegionPlan
 		plan.centerScale = FoveatedCommon::ClampCenterArea(a_centerScale);
 		plan.centerFeather = std::isfinite(a_centerFeather) ? std::max(0.0f, a_centerFeather) : FoveatedCommon::kCenterFeather;
 		plan.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_centerHorizontalScale);
+		plan.peripheryTAAOuterScale = std::isfinite(a_peripheryTAAOuterScale) && a_peripheryTAAOuterScale > 0.0f ?
+			std::max(plan.centerScale, FoveatedCommon::ClampCenterArea(a_peripheryTAAOuterScale)) :
+			0.0f;
 
 		if (!a_inputWidthPerEye || !a_inputHeight || !a_outputWidthPerEye || !a_outputHeight)
 			return plan;
@@ -89,24 +114,16 @@ struct FoveatedRegionPlan
 			auto& eye = plan.eyes[eyeIndex];
 			eye.centerOffset = a_centerOffsets[eyeIndex];
 
-			const auto bounds = FoveatedCommon::BuildCenteredDispatchBounds(
-				0,
+			eye.output = BuildCenteredOutputRect(
 				a_outputWidthPerEye,
 				a_outputHeight,
 				plan.centerScale,
-				eye.centerOffset.x,
-				eye.centerOffset.y,
 				plan.centerFeather,
-				plan.centerHorizontalScale);
-			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
+				plan.centerHorizontalScale,
+				eye.centerOffset);
+			if (!eye.output.IsValid())
 				continue;
 
-			eye.output = {
-				static_cast<uint32_t>(bounds.minX),
-				static_cast<uint32_t>(bounds.minY),
-				static_cast<uint32_t>(bounds.maxX),
-				static_cast<uint32_t>(bounds.maxY)
-			};
 			eye.input = MapOutputRectToInputRect(
 				eye.output.minX,
 				eye.output.minY,
@@ -117,9 +134,71 @@ struct FoveatedRegionPlan
 				a_inputWidthPerEye,
 				a_inputHeight,
 				a_inputPadding);
+			eye.encodeInput = eye.input;
+			eye.centerInteriorOutput = BuildCenteredInscribedOutputRect(
+				a_outputWidthPerEye,
+				a_outputHeight,
+				plan.centerScale,
+				eye.centerOffset,
+				plan.centerHorizontalScale);
+			eye.centerUnderlayHoleOutput = ShrinkRect(eye.centerInteriorOutput, a_centerUnderlayHolePadding);
+			eye.pinholeOffset = GetPinholeOffset(eye.output, a_outputWidthPerEye, a_outputHeight);
+
+			if (plan.peripheryTAAOuterScale > 0.0f) {
+				eye.peripheryTAAOuterOutput = BuildCenteredOutputRect(
+					a_outputWidthPerEye,
+					a_outputHeight,
+					plan.peripheryTAAOuterScale,
+					0.0f,
+					plan.centerHorizontalScale,
+					eye.centerOffset);
+				eye.peripheryTAAHistoryOutput = ExpandRect(
+					eye.peripheryTAAOuterOutput,
+					a_peripheryHistoryPadding,
+					a_outputWidthPerEye,
+					a_outputHeight);
+				if (eye.peripheryTAAOuterOutput.IsValid()) {
+					eye.peripheryTAAOuterInput = MapOutputRectToInputRect(
+						eye.peripheryTAAOuterOutput.minX,
+						eye.peripheryTAAOuterOutput.minY,
+						eye.peripheryTAAOuterOutput.maxX,
+						eye.peripheryTAAOuterOutput.maxY,
+						a_outputWidthPerEye,
+						a_outputHeight,
+						a_inputWidthPerEye,
+						a_inputHeight,
+						a_peripheryInputPadding);
+					eye.encodeInput = UnionRects(eye.encodeInput, eye.peripheryTAAOuterInput);
+				}
+			}
 		}
 
 		return plan;
+	}
+
+	static TextureRegion ClampNormalizedTextureRegion(float scaleX, float scaleY, float offsetX, float offsetY)
+	{
+		TextureRegion region{};
+		region.offset = {
+			ClampUnitOrDefault(offsetX, 0.0f),
+			ClampUnitOrDefault(offsetY, 0.0f)
+		};
+		region.scale = {
+			ClampUnitOrDefault(scaleX, 1.0f),
+			ClampUnitOrDefault(scaleY, 1.0f)
+		};
+		region.scale.x = std::min(region.scale.x, 1.0f - region.offset.x);
+		region.scale.y = std::min(region.scale.y, 1.0f - region.offset.y);
+		return region;
+	}
+
+	static TextureRegion BuildTopLeftValidTextureRegion(uint32_t validWidth, uint32_t validHeight, uint32_t textureWidth, uint32_t textureHeight)
+	{
+		return ClampNormalizedTextureRegion(
+			ComputeTopLeftValidScale(validWidth, textureWidth),
+			ComputeTopLeftValidScale(validHeight, textureHeight),
+			0.0f,
+			0.0f);
 	}
 
 	static Rect MapOutputRectToInputRect(
@@ -181,5 +260,125 @@ struct FoveatedRegionPlan
 		mapped.maxX = inputMaxX;
 		mapped.maxY = inputMaxY;
 		return mapped;
+	}
+
+	static Rect UnionRects(const Rect& a_lhs, const Rect& a_rhs)
+	{
+		if (!a_lhs.IsValid())
+			return a_rhs;
+		if (!a_rhs.IsValid())
+			return a_lhs;
+
+		return {
+			std::min(a_lhs.minX, a_rhs.minX),
+			std::min(a_lhs.minY, a_rhs.minY),
+			std::max(a_lhs.maxX, a_rhs.maxX),
+			std::max(a_lhs.maxY, a_rhs.maxY)
+		};
+	}
+
+	static Rect ExpandRect(const Rect& a_rect, uint32_t a_padding, uint32_t a_maxWidth, uint32_t a_maxHeight)
+	{
+		if (!a_rect.IsValid())
+			return {};
+
+		return {
+			a_rect.minX > a_padding ? a_rect.minX - a_padding : 0u,
+			a_rect.minY > a_padding ? a_rect.minY - a_padding : 0u,
+			static_cast<uint32_t>(std::min<uint64_t>(a_maxWidth, static_cast<uint64_t>(a_rect.maxX) + a_padding)),
+			static_cast<uint32_t>(std::min<uint64_t>(a_maxHeight, static_cast<uint64_t>(a_rect.maxY) + a_padding))
+		};
+	}
+
+	static Rect ShrinkRect(const Rect& a_rect, uint32_t a_padding)
+	{
+		if (!a_rect.IsValid())
+			return {};
+
+		Rect shrunk{
+			std::min(a_rect.minX + a_padding, a_rect.maxX),
+			std::min(a_rect.minY + a_padding, a_rect.maxY),
+			a_rect.maxX > a_padding ? a_rect.maxX - a_padding : a_rect.minX,
+			a_rect.maxY > a_padding ? a_rect.maxY - a_padding : a_rect.minY
+		};
+		return shrunk.IsValid() ? shrunk : Rect{};
+	}
+
+	static Rect BuildCenteredOutputRect(
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		float a_centerScale,
+		float a_centerFeather,
+		float a_centerHorizontalScale,
+		const float2& a_centerOffset)
+	{
+		const auto bounds = FoveatedCommon::BuildCenteredDispatchBounds(
+			0,
+			a_outputWidth,
+			a_outputHeight,
+			a_centerScale,
+			a_centerOffset.x,
+			a_centerOffset.y,
+			a_centerFeather,
+			a_centerHorizontalScale);
+		return BoundsToRect(bounds);
+	}
+
+	static Rect BuildCenteredInscribedOutputRect(
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		float a_centerScale,
+		const float2& a_centerOffset,
+		float a_centerHorizontalScale)
+	{
+		const auto bounds = FoveatedCommon::BuildCenteredInscribedMaskRect(
+			a_outputWidth,
+			a_outputHeight,
+			a_centerScale,
+			a_centerOffset.x,
+			a_centerOffset.y,
+			a_centerHorizontalScale);
+		return BoundsToRect(bounds);
+	}
+
+	static float2 GetPinholeOffset(const Rect& a_outputRect, uint32_t a_outputWidth, uint32_t a_outputHeight)
+	{
+		if (!a_outputRect.IsValid() || !a_outputWidth || !a_outputHeight)
+			return { 0.0f, 0.0f };
+
+		const float outputWidthF = static_cast<float>(a_outputWidth);
+		const float outputHeightF = static_cast<float>(a_outputHeight);
+		const float rectCenterX = (static_cast<float>(a_outputRect.minX) + static_cast<float>(a_outputRect.Width()) * 0.5f) / outputWidthF;
+		const float rectCenterY = (static_cast<float>(a_outputRect.minY) + static_cast<float>(a_outputRect.Height()) * 0.5f) / outputHeightF;
+		return {
+			std::clamp((rectCenterX - 0.5f) * 2.0f, -1.0f, 1.0f),
+			std::clamp((0.5f - rectCenterY) * 2.0f, -1.0f, 1.0f)
+		};
+	}
+
+private:
+	static Rect BoundsToRect(const FoveatedCommon::DispatchBounds& a_bounds)
+	{
+		if (a_bounds.maxX <= a_bounds.minX || a_bounds.maxY <= a_bounds.minY)
+			return {};
+
+		return {
+			static_cast<uint32_t>(a_bounds.minX),
+			static_cast<uint32_t>(a_bounds.minY),
+			static_cast<uint32_t>(a_bounds.maxX),
+			static_cast<uint32_t>(a_bounds.maxY)
+		};
+	}
+
+	static float ClampUnitOrDefault(float value, float fallback)
+	{
+		return std::clamp(std::isfinite(value) ? value : fallback, 0.0f, 1.0f);
+	}
+
+	static float ComputeTopLeftValidScale(uint32_t validDimension, uint32_t textureDimension)
+	{
+		if (!validDimension || !textureDimension)
+			return 1.0f;
+		return static_cast<float>(validDimension) / static_cast<float>(textureDimension);
 	}
 };

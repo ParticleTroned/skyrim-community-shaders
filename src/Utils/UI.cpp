@@ -2411,8 +2411,7 @@ namespace Util
 		const char* recordingLabel)
 	{
 		bool changed = false;
-		ImGui::Text("%s", label);
-		ImGui::SameLine();
+		ImGui::TextUnformatted(label);
 
 		// Use theme colors for consistent styling
 		auto& theme = globals::menu->GetTheme().StatusPalette;
@@ -2509,6 +2508,8 @@ namespace Util
 				ImGui::TextColored(indicatorColor, "%s", indicatorText);
 			}
 		}
+
+		ImGui::Spacing();
 
 		return changed;
 	}

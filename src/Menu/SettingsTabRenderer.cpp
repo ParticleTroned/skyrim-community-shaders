@@ -24,10 +24,7 @@ namespace
 	void DrawReadOnlyKeybinding(const char* label, const char* binding, const char* description)
 	{
 		ImGui::TextUnformatted(label);
-		ImGui::SameLine();
 		ImGui::TextDisabled("(hardcoded)");
-
-		ImGui::Indent();
 		ImGui::BeginDisabled();
 		ImGui::Button(binding);
 		ImGui::EndDisabled();
@@ -35,7 +32,7 @@ namespace
 		if (description && description[0] != '\0') {
 			ImGui::TextWrapped("%s", description);
 		}
-		ImGui::Unindent();
+		ImGui::Spacing();
 	}
 
 	// Convert ImGui internal color names to user-friendly display names

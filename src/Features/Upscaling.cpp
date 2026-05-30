@@ -963,6 +963,17 @@ namespace
 		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 	}
 
+	bool ShouldDeferHMDClearMask()
+	{
+		auto* state = globals::state;
+		if (!state)
+			return false;
+
+		const bool loadingMenuActive = IsLoadingMenuContextActive();
+		return state->pendingPostLoadRuntimeReset ||
+		       (state->IsSaveLoadSafeModeActive() && !loadingMenuActive);
+	}
+
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
 	{
 		if (!a_ui)
@@ -5676,8 +5687,9 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	// Zero color in the HMD hidden area, including a tiny mask-edge expansion,
 	// in each per-eye buffer before temporal reuse.
 	// Bind CS/SRV/CB once for both eyes to reduce per-frame CPU overhead.
+	const bool deferHMDMaskClear = ShouldDeferHMDClearMask();
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	if (!vrClearHMDMaskCS) {
+	if (!deferHMDMaskClear && !vrClearHMDMaskCS) {
 		vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
 
 		D3D11_BUFFER_DESC cbDesc = {};
@@ -5688,7 +5700,7 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
 	}
 
-	if (depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
+	if (!deferHMDMaskClear && depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
 		auto dispatchX = (eyeWidthIn + 7) / 8;
 		auto dispatchY = (eyeHeightIn + 7) / 8;
 
@@ -6063,6 +6075,10 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 	if (!globals::game::isVR)
 		return;
 	if (!colorUAV || !depthSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
+		return;
+	// During load transitions the depth/stencil feed can be transiently invalid.
+	// Running HAM clear in this window can briefly project the hidden-area mask.
+	if (ShouldDeferHMDClearMask())
 		return;
 
 	auto context = globals::d3d::context;

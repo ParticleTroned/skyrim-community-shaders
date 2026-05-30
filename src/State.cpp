@@ -16,6 +16,7 @@
 #include <thread>
 
 #include <pystring/pystring.h>
+#include <RE/B/BGSSaveLoadGame.h>
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
@@ -54,6 +55,16 @@ namespace
 	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
 		"UnifiedWater"
 	};
+
+	void StoreMax(std::atomic_uint32_t& a_target, uint32_t a_value)
+	{
+		uint32_t current = a_target.load(std::memory_order_acquire);
+		while (current < a_value) {
+			if (a_target.compare_exchange_weak(current, a_value, std::memory_order_acq_rel, std::memory_order_acquire)) {
+				return;
+			}
+		}
+	}
 
 	void ForceDisableAtBootFeature(json& a_disabledFeaturesJson, std::string_view a_featureName)
 	{
@@ -285,6 +296,106 @@ void State::Debug()
 	}
 }
 
+bool State::IsSaveLoadSafeModeActive() const
+{
+	return saveLoadSafeModeActive.load(std::memory_order_acquire);
+}
+
+bool State::IsPersistentMutationBlocked() const
+{
+	return persistentMutationBlocked.load(std::memory_order_acquire);
+}
+
+void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
+{
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
+	saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
+	saveLoadSafeModeActive.store(true, std::memory_order_release);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+}
+
+void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
+	if (saveLoadSafeModeStartFrame.load(std::memory_order_acquire) == 0) {
+		saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
+	}
+	StoreMax(saveLoadSafeModeEndFrame, endFrame);
+	saveLoadSafeModeActive.store(true, std::memory_order_release);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+}
+
+void State::BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
+	StoreMax(persistentMutationBlockEndFrame, endFrame);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+}
+
+void State::ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
+	StoreMax(persistentMutationBlockEndFrame, endFrame);
+	persistentMutationBlocked.store(true, std::memory_order_release);
+}
+
+void State::UpdateSaveLoadSafeMode()
+{
+	const uint32_t currentFrame = std::max(frameCount, 1u);
+	bool safeModeActive = saveLoadSafeModeActive.load(std::memory_order_acquire);
+
+	bool engineSaveLoadActive = false;
+	if (auto* saveLoad = RE::BGSSaveLoadGame::GetSingleton()) {
+		engineSaveLoadActive =
+			saveLoad->GetSaveGameLoading() ||
+			saveLoad->GetSaveGameSaving() ||
+			saveLoad->GetInitingForms() ||
+			saveLoad->GetDeferInitForms() ||
+			saveLoad->GetPositioningPlayerCharacter();
+	}
+
+	if (engineSaveLoadActive) {
+		if (!safeModeActive) {
+			saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
+		}
+		StoreMax(saveLoadSafeModeEndFrame, currentFrame + kSaveLoadSafeModeGraceFrames);
+		safeModeActive = true;
+		saveLoadSafeModeActive.store(true, std::memory_order_release);
+	} else if (safeModeActive) {
+		const uint32_t endFrame = saveLoadSafeModeEndFrame.load(std::memory_order_acquire);
+		if (endFrame != 0) {
+			if (currentFrame >= endFrame) {
+				safeModeActive = false;
+				saveLoadSafeModeActive.store(false, std::memory_order_release);
+				saveLoadSafeModeStartFrame.store(0, std::memory_order_release);
+				saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
+			}
+		} else {
+			const uint32_t startFrame = saveLoadSafeModeStartFrame.load(std::memory_order_acquire);
+			if (startFrame != 0 && currentFrame - startFrame >= kSaveLoadSafeModeFallbackFrames) {
+				logger::warn("Save/load safe mode timed out after {} frames without a completion event", currentFrame - startFrame);
+				safeModeActive = false;
+				saveLoadSafeModeActive.store(false, std::memory_order_release);
+				saveLoadSafeModeStartFrame.store(0, std::memory_order_release);
+				saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
+			}
+		}
+	}
+
+	uint32_t mutationBlockEndFrame = persistentMutationBlockEndFrame.load(std::memory_order_acquire);
+	if (mutationBlockEndFrame != 0 && currentFrame >= mutationBlockEndFrame) {
+		persistentMutationBlockEndFrame.store(0, std::memory_order_release);
+		mutationBlockEndFrame = 0;
+	}
+
+	const bool mutationGraceActive = mutationBlockEndFrame != 0 && currentFrame < mutationBlockEndFrame;
+	persistentMutationBlocked.store(safeModeActive || mutationGraceActive, std::memory_order_release);
+}
+
 void State::Reset()
 {
 	globals::profiler->EndFrame();
@@ -310,9 +421,7 @@ void State::Reset()
 	lastVertexDescriptor = 0;
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
-	if (globals::shaderCache) {
-		globals::shaderCache->UpdateSynchronousLoadWindow(frameCount);
-	}
+	UpdateSaveLoadSafeMode();
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		GET_INSTANCE_MEMBER(BSImagespaceShaderApplyReflections, imageSpaceManager);
@@ -597,7 +706,6 @@ void State::SaveToJson(nlohmann::json& settings)
 	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
-	advanced["Enable Save-Load Synchronous Shader Window"] = shaderCache->IsSynchronousLoadWindowEnabled();
 	advanced["Frame Annotations"] = frameAnnotations;
 	advanced["Refraction Scale"] = refractionScale;
 	advanced["PBR Metal Reflection Scale"] = pbrMetalReflectionScale;
@@ -680,8 +788,6 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Use FileWatcher") && advanced["Use FileWatcher"].is_boolean())
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
-		if (advanced.contains("Enable Save-Load Synchronous Shader Window") && advanced["Enable Save-Load Synchronous Shader Window"].is_boolean())
-			shaderCache->SetSynchronousLoadWindowEnabled(advanced["Enable Save-Load Synchronous Shader Window"]);
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())
 			frameAnnotations = advanced["Frame Annotations"];
 		if (advanced.contains("Refraction Scale") && advanced["Refraction Scale"].is_number())

@@ -291,12 +291,18 @@ void LightEditor::ResetOverrides()
 
 void LightEditor::RestoreDefaultSettings()
 {
+	if (State::GetSingleton()->IsPersistentMutationBlocked())
+		return;
+
 	RestoreOriginal();
 	*this = {};
 }
 
 void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight)
 {
+	if (State::GetSingleton()->IsPersistentMutationBlocked())
+		return;
+
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
 	auto tesFlags = ligh ? &ligh->data.flags : nullptr;
 

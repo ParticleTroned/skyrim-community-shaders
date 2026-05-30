@@ -211,6 +211,9 @@ void LightingTemplateWidget::DrawDALCSettings()
 
 void LightingTemplateWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	SetLightingTemplateValues();
 }
 

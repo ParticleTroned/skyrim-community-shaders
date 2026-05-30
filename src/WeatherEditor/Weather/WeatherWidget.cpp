@@ -1674,6 +1674,9 @@ void WeatherWidget::LoadFeatureSettings()
 
 void WeatherWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	SetWeatherValues();
 	if (pendingReinit) {
 		Widget::ForceWeatherReinit(weather);

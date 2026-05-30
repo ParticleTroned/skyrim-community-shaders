@@ -2159,7 +2159,7 @@ namespace
 		if (!a_state)
 			return false;
 
-		return a_state->pendingPostLoadRuntimeReset;
+		return a_state->pendingPostLoadRuntimeReset || a_state->IsSaveLoadSafeModeActive();
 	}
 
 	bool IsSaveLoadTransitionContextActive()

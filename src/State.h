@@ -102,6 +102,18 @@ public:
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
 	void Save(ConfigMode a_configMode = ConfigMode::USER);
 
+	static constexpr uint32_t kSaveLoadSafeModeGraceFrames = 120;
+	static constexpr uint32_t kSaveLoadSafeModeFallbackFrames = 36000;
+	static constexpr uint32_t kSaveMutationBlockGraceFrames = 60;
+
+	bool IsSaveLoadSafeModeActive() const;
+	bool IsPersistentMutationBlocked() const;
+	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
+	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
+	void BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
+	void ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
+	void UpdateSaveLoadSafeMode();
+
 	// In-memory serialization for A/B testing (avoids disk I/O during swaps)
 	void SaveToJson(nlohmann::json& o_json);
 	void LoadFromJson(nlohmann::json& i_json);
@@ -218,6 +230,11 @@ public:
 	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t lastCompletedWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	bool pendingPostLoadRuntimeReset = false;
+	std::atomic_bool saveLoadSafeModeActive{ false };
+	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
+	std::atomic_uint32_t saveLoadSafeModeEndFrame{ 0 };
+	std::atomic_bool persistentMutationBlocked{ false };
+	std::atomic_uint32_t persistentMutationBlockEndFrame{ 0 };
 	bool activeReflections = false;
 
 	// Cached menu open states, updated once per frame in Reset().

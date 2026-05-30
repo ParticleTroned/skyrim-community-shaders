@@ -135,6 +135,7 @@ namespace
 	uint32_t g_submitStageOutputEyeWidth = 0;
 	uint32_t g_submitStageOutputEyeHeight = 0;
 	bool g_submitStageTargetSizeKnown = false;
+	constexpr uint32_t kSubmitStageMenuHandoffFrameTolerance = 2u;
 
 	uint ClampToggleUInt(uint value);
 
@@ -1031,6 +1032,15 @@ namespace
 		const bool nonWorldPresentation =
 			state && state->lastWorldRenderFrame != state->frameCount;
 		return IsKnownGameMenuContextActive() || nonWorldPresentation;
+	}
+
+	bool IsSubmitStageMenuPresentationContextActive()
+	{
+		if (!globals::game::isVR || !g_submitStageTargetSizeKnown || !IsGameMenuContextActive())
+			return false;
+
+		auto& upscaling = globals::features::upscaling;
+		return IsSubmitStageDynamicResolutionActive() || upscaling.IsPerfModePresentationActive();
 	}
 
 	struct ScenePausedUiState
@@ -2659,8 +2669,7 @@ bool Upscaling::IsPerfModePresentationActive() const
 
 bool Upscaling::IsPresentationUpscalingActive() const
 {
-	return IsSubmitStageUpscalingActive() ||
-	       (IsPerfModePresentationActive() && IsGameMenuContextActive());
+	return IsSubmitStageUpscalingActive();
 }
 
 void Upscaling::RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
@@ -2948,8 +2957,8 @@ void Upscaling::DestroyVRIntermediateTextures()
 	peripheryTAAHistoryReadIndex = 0;
 	peripheryTAAHistoryValid = false;
 
+	ResetSubmitStageHandoffState();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
-	submitStageHandoffTexture = nullptr;
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
@@ -3130,8 +3139,7 @@ void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	}
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
-	submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
-	submitStageHandoffTexture = nullptr;
+	ResetSubmitStageHandoffState();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -6477,7 +6485,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionPlan();
 		return;
 	}
-	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive()) {
+	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive()) {
 		resolutionScale = { 1.0f, 1.0f };
 		jitter = { 0.0f, 0.0f };
 		a_viewport->projectionPosScaleX = 0.0f;
@@ -7027,9 +7035,12 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 		IsSubmitStageDynamicResolutionActive() ||
 		IsPerfModePresentationActive();
 
+	const bool menuBlocksSubmitStage =
+		IsGameMenuContextActive() &&
+		!IsSubmitStageMenuPresentationContextActive();
 	const bool active = submitStageSceneActive &&
 	                    g_submitStageTargetSizeKnown &&
-	                    !IsGameMenuContextActive();
+	                    !menuBlocksSubmitStage;
 	if (active) {
 		submitStageRuntimeActive.store(true, std::memory_order_relaxed);
 	} else if (!submitStageSceneActive || !g_submitStageTargetSizeKnown) {
@@ -7038,14 +7049,77 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	return active;
 }
 
+void Upscaling::ResetSubmitStageHandoffState()
+{
+	submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
+	submitStageHandoffTextures.fill(nullptr);
+	submitStagePreviousHandoffFrame = std::numeric_limits<uint32_t>::max();
+	submitStagePreviousHandoffTextures.fill(nullptr);
+}
+
+void Upscaling::RegisterSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture)
+{
+	if (!a_texture)
+		return;
+
+	if (submitStageHandoffFrame != a_frame) {
+		if (submitStageHandoffFrame != std::numeric_limits<uint32_t>::max()) {
+			submitStagePreviousHandoffFrame = submitStageHandoffFrame;
+			submitStagePreviousHandoffTextures = submitStageHandoffTextures;
+		}
+		submitStageHandoffFrame = a_frame;
+		submitStageHandoffTextures.fill(nullptr);
+	}
+
+	for (auto*& handoffTexture : submitStageHandoffTextures) {
+		if (handoffTexture == a_texture)
+			return;
+		if (!handoffTexture) {
+			handoffTexture = a_texture;
+			return;
+		}
+	}
+
+	// Keep the most recent handoff candidates when more than the tracked
+	// pass outputs are seen in the same frame.
+	for (size_t i = 1; i < submitStageHandoffTextures.size(); ++i)
+		submitStageHandoffTextures[i - 1] = submitStageHandoffTextures[i];
+	submitStageHandoffTextures.back() = a_texture;
+}
+
+bool Upscaling::HasSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture, uint32_t a_maxFrameDelta) const
+{
+	if (!a_texture)
+		return false;
+
+	const auto matchesFrameSet = [&](uint32_t handoffFrame, const auto& handoffTextures) {
+		if (handoffFrame == std::numeric_limits<uint32_t>::max() || a_frame < handoffFrame)
+			return false;
+		if (a_maxFrameDelta != std::numeric_limits<uint32_t>::max() && (a_frame - handoffFrame) > a_maxFrameDelta)
+			return false;
+		for (auto* handoffTexture : handoffTextures) {
+			if (handoffTexture == a_texture)
+				return true;
+		}
+		return false;
+	};
+
+	return matchesFrameSet(submitStageHandoffFrame, submitStageHandoffTextures) ||
+	       matchesFrameSet(submitStagePreviousHandoffFrame, submitStagePreviousHandoffTextures);
+}
+
 bool Upscaling::IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const
 {
 	auto state = globals::state;
 	if (!state || !a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX)
 		return false;
 
-	return submitStageHandoffFrame == state->frameCount &&
-	       submitStageHandoffTexture == static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+	const uint32_t handoffFrameDelta =
+		IsGameMenuContextActive() ? kSubmitStageMenuHandoffFrameTolerance : 1u;
+	return HasSubmitStageHandoffTexture(
+		state->frameCount,
+		static_cast<ID3D11Texture2D*>(a_inputTexture->handle),
+		handoffFrameDelta);
 }
 
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
@@ -7070,20 +7144,29 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!IsVendorUpscalingMethod(upscaleMethod))
 		return false;
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
+	const bool menuPresentationContext = resolutionPlan.knownMenuContextActive || resolutionPlan.loadingMenuActive;
+	const uint32_t handoffFrameDelta =
+		menuPresentationContext ? kSubmitStageMenuHandoffFrameTolerance : 1u;
 
 	const uint32_t currentFrame = state->frameCount;
 	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
 	const bool perfModeActive = IsPerfModeActive();
-	if (!perfModeActive && (submitStageHandoffFrame != currentFrame || submitStageHandoffTexture != sourceTexture)) {
+	const bool handoffMatches =
+		perfModeActive || HasSubmitStageHandoffTexture(currentFrame, sourceTexture, handoffFrameDelta);
+	if (!handoffMatches) {
 		static bool loggedMissingHandoff = false;
 		if (!loggedMissingHandoff) {
 			logger::warn(
-				"[Upscaling] Submit-stage {} skipped because the submitted texture does not match the dynamic-resolution handoff for frame {}.",
+				"[Upscaling] Submit-stage {} received a submitted texture that did not match the dynamic-resolution handoff for frame {}; using fallback presentation path for this frame.",
 				upscaleMethodName,
 				currentFrame);
 			loggedMissingHandoff = true;
 		}
-		return false;
+		// In-world submit-only mismatch usually means a later full-resolution
+		// UI composition pass (e.g., interaction widgets). Fall back to vanilla
+		// submit for this frame so prompts remain visible.
+		if (!menuPresentationContext)
+			return false;
 	}
 
 	D3D11_TEXTURE2D_DESC sourceDesc{};
@@ -7101,7 +7184,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool submitStageScaleMode = IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown;
 	const bool perfModeScaleMode = perfModeActive && resolutionPlan.owner == ResolutionOwner::PerfMode;
 	const bool targetScaleMode = submitStageScaleMode || perfModeScaleMode;
-	const bool perfModePresentationOnly = perfModeScaleMode && (resolutionPlan.menuContextActive || resolutionPlan.loadingMenuActive);
+	const bool perfModePresentationOnly = perfModeScaleMode && menuPresentationContext;
+	const bool submitMenuPresentationOnly = !perfModeScaleMode && menuPresentationContext && !handoffMatches;
+	const bool presentationOnly = perfModePresentationOnly || submitMenuPresentationOnly;
 	const auto submitSize = GetSubmitStageSizePlan(screenSize);
 	const uint32_t eyeWidthOut =
 		perfModeScaleMode ? std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.finalOutputSize.x) / 2u) :
@@ -7122,7 +7207,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	if (!perfModePresentationOnly && (!motionVector.texture || !depth.texture))
+	if (!presentationOnly && (!motionVector.texture || !depth.texture))
 		return false;
 
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
@@ -7132,7 +7217,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		UpdateHistoryResetState(upscaleMethod);
 		LatchHistoryResetForCurrentFrame();
 
-		if (perfModePresentationOnly) {
+		if (presentationOnly) {
 			try {
 				if (!EnsureVRPresentationTextures(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, sourceTexture)) {
 					logger::warn("[PerfMode] Menu/loading presentation failed to create presentation textures.");
@@ -7156,7 +7241,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
 		return false;
 	}
-	if (!perfModePresentationOnly &&
+	if (!presentationOnly &&
 		(!vrIntermediateMotionVectors[eyeIndex] || !vrIntermediateMotionVectors[eyeIndex]->resource ||
 		 !vrIntermediateDepth[eyeIndex] || !vrIntermediateDepth[eyeIndex]->resource ||
 		 (upscaleMethod == UpscaleMethod::kFSR && (!vrIntermediateLinearDepth[eyeIndex] || !vrIntermediateLinearDepth[eyeIndex]->resource)) ||
@@ -7227,7 +7312,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 
-	if (perfModePresentationOnly) {
+	if (presentationOnly) {
 		(void)GetSubmitStageStretchCS();
 		if (!StretchSubmitStageEyeOutput(eyeIndex, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut))
 			return false;
@@ -8485,7 +8570,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 	upscaling.DisableAAVRSState();
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
 	if (IsVendorUpscalingMethod(upscaleMethod) && upscaling.IsUpscalingActive()) {
-		if (IsGameMenuContextActive())
+		if (IsGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive())
 			return false;
 
 		auto context = globals::d3d::context;
@@ -8514,8 +8599,6 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			inputWidth = static_cast<uint32_t>(std::max(1.0f, renderSize.x));
 			inputHeight = static_cast<uint32_t>(std::max(1.0f, renderSize.y));
 		}
-		const std::string_view passName(a_passName ? a_passName : "");
-
 		ID3D11ShaderResourceView* psSourceSRV = nullptr;
 		ID3D11ShaderResourceView* csSourceSRV = nullptr;
 		context->PSGetShaderResources(0, 1, &psSourceSRV);
@@ -8637,9 +8720,34 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		};
 
 		if (upscaling.IsSubmitStageUpscalingActive()) {
-			if (passName == "ISCopyDynamicFetchDisabled" && submitStageHandoffFrame == state->frameCount) {
+			const auto isRenderTargetTexture = [&](ID3D11Texture2D* a_texture, RE::RENDER_TARGETS::RENDER_TARGET a_target) {
+				return a_texture && renderer->GetRuntimeData().renderTargets[a_target].texture == a_texture;
+			};
+			const auto isUiRenderTargetTexture = [&](ID3D11Texture2D* a_texture) {
+				return isRenderTargetTexture(a_texture, RE::RENDER_TARGETS::kMENUBG) ||
+				       isRenderTargetTexture(a_texture, RE::RENDER_TARGETS::kPROJECTEDMENU) ||
+				       isRenderTargetTexture(a_texture, RE::RENDER_TARGETS::kHUDMENU) ||
+				       isRenderTargetTexture(a_texture, RE::RENDER_TARGETS::kFADERUI) ||
+				       isRenderTargetTexture(a_texture, RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1) ||
+				       isRenderTargetTexture(a_texture, RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2);
+			};
+			const auto invalidateSubmitStageHandoff = [&]() {
+				if (submitStageHandoffFrame == state->frameCount)
+					submitStageHandoffTextures.fill(nullptr);
+				submitStagePreviousHandoffFrame = std::numeric_limits<uint32_t>::max();
+				submitStagePreviousHandoffTextures.fill(nullptr);
+			};
+
+			// In-place/UI-target passes can carry late full-resolution HUD/interactions.
+			// Let vanilla execute these and invalidate current-frame handoff to
+			// avoid submitting cropped low-res regions for prompt frames.
+			const bool inPlacePass = outputTexture == sourceTexture;
+			const bool uiRenderTargetPass = isUiRenderTargetTexture(sourceTexture) || isUiRenderTargetTexture(outputTexture);
+			const bool interactionUiContext = !IsKnownGameMenuContextActive();
+			if ((inPlacePass || uiRenderTargetPass) && interactionUiContext) {
+				invalidateSubmitStageHandoff();
 				releaseRefs();
-				return true;
+				return false;
 			}
 
 			unbindSourceSRV();
@@ -8689,8 +8797,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			context->OMSetRenderTargets(1, &outputRTV, outputDSV);
 
 			if (copiedToOutput) {
-				submitStageHandoffFrame = state->frameCount;
-				submitStageHandoffTexture = outputTexture;
+				RegisterSubmitStageHandoffTexture(state->frameCount, outputTexture);
 				releaseRefs();
 				if (globals::game::stateUpdateFlags)
 					globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
@@ -8895,7 +9002,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool runNativeVendorAAInMenu = fullResolutionMenuPresentation && upscaling.GetRuntimeQualityMode() == 0;
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
 	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
-	if (menuPresentationContext && !runNativeVendorAAInMenu) {
+	if (menuPresentationContext && !runNativeVendorAAInMenu && !presentationUpscalingActive) {
 		if (upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
 

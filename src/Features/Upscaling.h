@@ -645,7 +645,9 @@ public:
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
-	ID3D11Texture2D* submitStageHandoffTexture = nullptr;
+	std::array<ID3D11Texture2D*, 8> submitStageHandoffTextures = {};
+	uint32_t submitStagePreviousHandoffFrame = std::numeric_limits<uint32_t>::max();
+	std::array<ID3D11Texture2D*, 8> submitStagePreviousHandoffTextures = {};
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
@@ -776,6 +778,9 @@ public:
 private:
 	void ApplySubmitStageDynamicResolutionState(RE::BSGraphics::State* a_viewport, float a_widthRatio, float a_heightRatio, bool a_useDynamicResolution);
 	void ResetSubmitStageDynamicResolutionState();
+	void ResetSubmitStageHandoffState();
+	void RegisterSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture);
+	bool HasSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture, uint32_t a_maxFrameDelta) const;
 	void ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;

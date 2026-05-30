@@ -658,7 +658,7 @@ void VR::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (BeginTabItemWithFont("Foveated/VRS", Menu::FontRole::Subheading)) {
+		if (BeginTabItemWithFont("Foveated / Variable Rate Shading (VRS)", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRFoveatedVRSFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawFoveationSettings();
 			}

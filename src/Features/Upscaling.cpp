@@ -120,7 +120,9 @@ namespace
 4) Ideally, you do not see the blue outer ring anymore, except in the corners, or only a tiny bit.
 5) The larger the green center area, the less performance savings you have.
 6) Test in game that you do not have strong peripheral shimmer. If yes, increase the yellow mask area. If not, reduce it to just before shimmer appears for best performance.)";
-	constexpr const char* kVrsMaskRefinementInstructions = R"(1) Once AA VRS is active, refine the FOV masks in position and size.
+	constexpr const char* kFoveatedVrsName = "Foveated Variable Rate Shading (VRS)";
+	constexpr const char* kVrsMaskVisualizationName = "VRS Mask Visualization";
+	constexpr const char* kVrsMaskRefinementInstructions = R"(1) Once Foveated Variable Rate Shading (VRS) is active, refine the FOV masks in position and size.
 2) Turn off FOV Mask Visualization and turn on VRS Mask Visualization.
 3) Reposition each per-eye FOV mask with FOV Left Eye Offset X/Y and FOV Right Eye Offset X/Y so the visible center area becomes dark with no magenta. Light magenta at the far periphery is acceptable.
 4) Turn off VRS Mask Visualization and check in game for high-frequency flicker anywhere in the periphery.
@@ -1417,7 +1419,6 @@ void Upscaling::DrawSettings()
 			ImGui::TextUnformatted(
 				"Range: low 0 (highest quality, lowest performance gain) to high 6 (highest performance gain, lowest quality).");
 		}
-		drawPerfModeToggle();
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
@@ -1425,8 +1426,6 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
 				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 			}
-
-			drawSubmitPathToggle();
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			// Keep persisted preset values stable (0=J,1=K,2=L,3=M,4=F) while
 			// presenting an alphabetical selection list in the UI.
@@ -1472,8 +1471,6 @@ void Upscaling::DrawSettings()
 				}
 			}
 
-			drawSubmitPathToggle();
-
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
@@ -1496,14 +1493,14 @@ void Upscaling::DrawSettings()
 					IsAAVRSAdapterEligible(),
 					settings.aaVrs,
 					aaVrsRuntimeActive);
-				ImGui::TextDisabled("Foveated/VRS setup is configured in VR > Foveated/VRS.");
+				ImGui::TextDisabled("Configure foveated upscaling and Variable Rate Shading (VRS) in VR > Foveated / Variable Rate Shading (VRS).");
 				ImGui::TextColored(
 					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 					"FOV: %s",
 					fovActive ? "active" : "inactive");
 				ImGui::TextColored(
 					aaVrsUiState.active ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
-					"VRS: %s",
+					"Variable Rate Shading (VRS): %s",
 					aaVrsUiState.active ? "active" : "inactive");
 			} else {
 				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
@@ -1512,6 +1509,9 @@ void Upscaling::DrawSettings()
 			if (streamline.reflexSupportedOnCurrentAdapter)
 				ImGui::Separator();
 		}
+
+		drawSubmitPathToggle();
+		drawPerfModeToggle();
 	}
 
 	if (upscaleMethod == UpscaleMethod::kTAA) {
@@ -1859,7 +1859,7 @@ void Upscaling::DrawFoveatedSettings()
 		Util::BlueFrameStyleWrapper aaVrsStyle(true);
 		auto disabledGuard = Util::DisableGuard(!aaVrsUiState.canEnable);
 		bool aaVrs = aaVrsUiState.requested;
-		ImGui::Checkbox("AA VRS", &aaVrs);
+		ImGui::Checkbox(kFoveatedVrsName, &aaVrs);
 		if (aaVrsUiState.canEnable)
 			settings.aaVrs = aaVrs;
 	}
@@ -1869,8 +1869,8 @@ void Upscaling::DrawFoveatedSettings()
 		settings.aaVrs,
 		aaVrsRuntimeActive);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables NVAPI VRS during VR scene pixel shading for foveated upscaling.");
-		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes stay VRS-off.");
+		ImGui::TextUnformatted("Enables NVIDIA Variable Rate Shading (VRS) during VR scene pixel shading for foveated upscaling.");
+		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes keep Variable Rate Shading disabled.");
 		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask.");
 		ImGui::TextUnformatted("Outside the mask, the inner quarter is 2x2 and the outer three quarters are 4x4.");
 		ImGui::TextUnformatted("No zero-rate culling is used.");
@@ -1879,16 +1879,16 @@ void Upscaling::DrawFoveatedSettings()
 
 	if (!aaVrsMethodEligible) {
 		if (foveatedDispatchSupportedForMethod)
-			ImGui::TextDisabled("Enable Foveated Upscaling (FOV) with an active mask to use AA VRS.");
+			ImGui::TextDisabled("Enable Foveated Upscaling (FOV) with an active mask to use Foveated Variable Rate Shading (VRS).");
 		else
-			ImGui::TextDisabled("AA VRS is available only with DLSS/FSR Foveated Upscaling in VR.");
+			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) is available only with DLSS/FSR Foveated Upscaling in VR.");
 	} else if (!aaVrsAdapterEligible) {
-		ImGui::TextDisabled("AA VRS requires NVIDIA variable pixel-rate shading support.");
+		ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) requires NVIDIA variable pixel-rate shading support.");
 	}
 
 	ImGui::TextColored(
 		aaVrsUiState.active ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
-		"AA VRS: %s",
+		"Foveated Variable Rate Shading (VRS): %s",
 		aaVrsUiState.statusText);
 	if (!aaVrsUiState.requested)
 		settings.aaVrsVisualization = false;
@@ -1906,8 +1906,7 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
 		const bool aaVrsVisualizationAvailable = aaVrsUiState.requested;
 		if (aaVrsVisualizationAvailable) {
-			ImGui::SameLine();
-			ImGui::Checkbox("VRS Mask Visualization", &settings.aaVrsVisualization);
+			ImGui::Checkbox(kVrsMaskVisualizationName, &settings.aaVrsVisualization);
 		} else {
 			settings.aaVrsVisualization = false;
 		}
@@ -1945,7 +1944,7 @@ void Upscaling::DrawFoveatedSettings()
 		drawInstructionHeadline("Upscaling FOV + Peripheral TAA setup");
 		ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
 		ImGui::Spacing();
-		drawInstructionHeadline("VRS mask refinement");
+		drawInstructionHeadline("Variable Rate Shading (VRS) mask refinement");
 		ImGui::TextUnformatted(kVrsMaskRefinementInstructions);
 		ImGui::PopTextWrapPos();
 		ImGui::EndChild();
@@ -3470,7 +3469,7 @@ void Upscaling::UpdateAAVRSState()
 	}
 
 	if (!IsAAVRSAdapterEligible()) {
-		disableAndReport("NVIDIA VRS unavailable", requested);
+		disableAndReport("NVIDIA Variable Rate Shading (VRS) unavailable", requested);
 		return;
 	}
 
@@ -3561,7 +3560,7 @@ void Upscaling::ApplyAAVRSVisualization()
 
 	auto state = globals::state;
 	if (state && state->frameAnnotations)
-		state->BeginPerfEvent("VRS Mask Visualization");
+		state->BeginPerfEvent(kVrsMaskVisualizationName);
 	context->Dispatch((aaVrsSettings.renderWidth + 7u) >> 3, (aaVrsSettings.renderHeight + 7u) >> 3, 1);
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
@@ -3589,7 +3588,7 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 			aaVrsTelemetryRenderHeight != status.renderHeight;
 		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged) {
 			logger::info(
-				"[Upscaling] AA VRS active: render {}x{}, mask {}x{}",
+				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}",
 				status.renderWidth,
 				status.renderHeight,
 				status.maskWidth,
@@ -3618,7 +3617,7 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 		aaVrsController.GetLastDisableReason();
 	std::string reasonText = reason && reason[0] ? reason : "Inactive";
 	if (aaVrsTelemetryInactiveReason != reasonText) {
-		logger::info("[Upscaling] AA VRS requested but inactive: {}", reasonText);
+		logger::info("[Upscaling] Foveated Variable Rate Shading (VRS) requested but inactive: {}", reasonText);
 		aaVrsTelemetryInactiveReason = reasonText;
 	}
 }
@@ -8052,6 +8051,10 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
 		return;
 	}
+	D3D11_TEXTURE2D_DESC underwaterMaskDesc{};
+	if (!TryGetTexture2DDesc(underwaterMask.texture, underwaterMaskDesc) || !underwaterMaskDesc.Width || !underwaterMaskDesc.Height) {
+		return;
+	}
 
 	auto* fullscreenVS = GetUpscaleVS();
 	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS(true);
@@ -8071,8 +8074,11 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	D3D11_VIEWPORT viewport = {};
 	viewport.TopLeftX = 0.0f;
 	viewport.TopLeftY = 0.0f;
-	viewport.Width = static_cast<float>(inputEyeWidth);
-	viewport.Height = static_cast<float>(inputHeight);
+	// Submit input is full per-eye height, but the VR underwater mask target
+	// keeps its own packed mask dimensions. Draw to the actual target extent so
+	// the reconstructed waterline stays aligned with downstream mask sampling.
+	viewport.Width = static_cast<float>(underwaterMaskDesc.Width);
+	viewport.Height = static_cast<float>(underwaterMaskDesc.Height);
 	viewport.MinDepth = 0.0f;
 	viewport.MaxDepth = 1.0f;
 	context->RSSetViewports(1, &viewport);

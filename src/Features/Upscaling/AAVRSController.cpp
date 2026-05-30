@@ -229,7 +229,7 @@ bool AAVRSController::IsSupported(ID3D11Device* a_device)
 		const NvAPI_Status status = NvAPI_Initialize();
 		nvapiReady = status == NVAPI_OK;
 		if (!nvapiReady && !loggedNvapiFailure) {
-			logger::warn("[Upscaling] AA VRS unavailable: NvAPI_Initialize failed with {}", static_cast<int>(status));
+			logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS) unavailable: NvAPI_Initialize failed with {}", static_cast<int>(status));
 			loggedNvapiFailure = true;
 		}
 	}
@@ -243,10 +243,10 @@ bool AAVRSController::IsSupported(ID3D11Device* a_device)
 	const NvAPI_Status status = NvAPI_D3D1x_GetGraphicsCapabilities(a_device, NV_D3D1x_GRAPHICS_CAPS_VER, &caps);
 	if (status != NVAPI_OK) {
 		if (!loggedSupportFailure) {
-			logger::warn("[Upscaling] AA VRS unavailable: graphics capability query failed with {}", static_cast<int>(status));
+			logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS) unavailable: graphics capability query failed with {}", static_cast<int>(status));
 			loggedSupportFailure = true;
 		}
-		lastDisableReason = "VRS capability query failed";
+		lastDisableReason = "Variable Rate Shading (VRS) capability query failed";
 		return false;
 	}
 
@@ -403,7 +403,7 @@ bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_se
 	const HRESULT textureResult = a_device->CreateTexture2D(&desc, nullptr, shadingRateSurface.put());
 	if (FAILED(textureResult) || !shadingRateSurface) {
 		if (!loggedResourceFailure) {
-			logger::warn("[Upscaling] AA VRS failed to create shading-rate surface: 0x{:08X}", static_cast<uint32_t>(textureResult));
+			logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS) failed to create shading-rate surface: 0x{:08X}", static_cast<uint32_t>(textureResult));
 			loggedResourceFailure = true;
 		}
 		lastDisableReason = "Failed to create shading-rate surface";
@@ -420,7 +420,7 @@ bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_se
 	const NvAPI_Status viewResult = NvAPI_D3D11_CreateShadingRateResourceView(a_device, shadingRateSurface.get(), &viewDesc, &view);
 	if (viewResult != NVAPI_OK || !view) {
 		if (!loggedResourceFailure) {
-			logger::warn("[Upscaling] AA VRS failed to create shading-rate view: {}", static_cast<int>(viewResult));
+			logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS) failed to create shading-rate view: {}", static_cast<int>(viewResult));
 			loggedResourceFailure = true;
 		}
 		shadingRateSurface = nullptr;
@@ -638,7 +638,7 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 			return;
 
 		logger::info(
-			"[Upscaling] AA VRS viewport bind: stereo={}, reported={}, bound={}, forced={}, fallback={}, viewportStatus={}, surfaceStatus={}",
+			"[Upscaling] Foveated Variable Rate Shading (VRS) viewport bind: stereo={}, reported={}, bound={}, forced={}, fallback={}, viewportStatus={}, surfaceStatus={}",
 			hasLastSettings && lastSettings.stereo,
 			bindInfo.reported,
 			bindInfo.bound,
@@ -653,7 +653,7 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 		if (allow4x4Rate && bindWithFallbackViewportCount(false, viewportResult, surfaceResult)) {
 			allow4x4Rate = false;
 			if (!logged4x4Fallback) {
-				logger::warn("[Upscaling] AA VRS: 4x4 shading rate unavailable, falling back to 2x2");
+				logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS): 4x4 shading rate unavailable, falling back to 2x2");
 				logged4x4Fallback = true;
 			}
 			logViewportBindMode();
@@ -663,7 +663,7 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 		}
 		if (!loggedResourceFailure) {
 			logger::warn(
-				"[Upscaling] AA VRS bind failed: viewport={}, surface={}",
+				"[Upscaling] Foveated Variable Rate Shading (VRS) bind failed: viewport={}, surface={}",
 				static_cast<int>(viewportResult),
 				static_cast<int>(surfaceResult));
 			loggedResourceFailure = true;

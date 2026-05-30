@@ -1189,19 +1189,23 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		// Fallback water height for the VR analytical mask when tile 12 returns the sentinel.
-		// Uses player->GetWaterHeight() (reads relevantWaterHeight from LOADED_REF_DATA) gated by
-		// underwaterCount > 0 so it is only set when the player is actually in a water body.
+		// Uses player->GetWaterHeight() (reads relevantWaterHeight from LOADED_REF_DATA,
+		// then falls back to the cell water height) when it is valid.
 		// Covers both interior water (where TES::GetWaterHeight returns -NI_INFINITY) and exterior
-		// partial submersion.  Stored as eye-0 camera-relative Z to match WaterData[].w.
+		// partial submersion. Stored as eye-0 camera-relative Z to match WaterData[].w.
 		data.WaterSystemHeight = -RE::NI_INFINITY;
 		if (globals::game::isVR) {
 			if (auto player = RE::PlayerCharacter::GetSingleton()) {
-				if (player->loadedData && player->loadedData->underwaterCount > 0) {
-					float worldHeight = player->GetWaterHeight();
-					if (worldHeight > -RE::NI_INFINITY) {
-						auto eye0Pos = Util::GetEyePosition(0);
-						data.WaterSystemHeight = worldHeight - eye0Pos.z;
-					}
+				auto waterSystem = globals::game::waterSystem;
+				const bool waterSystemInWater = waterSystem &&
+				                                (waterSystem->playerUnderwater || waterSystem->partiallyUnderwater);
+				float worldHeight = player->GetWaterHeight();
+				if (worldHeight <= -RE::NI_INFINITY && waterSystemInWater) {
+					worldHeight = waterSystem->underwaterHeight;
+				}
+				if (worldHeight > -RE::NI_INFINITY) {
+					auto eye0Pos = Util::GetEyePosition(0);
+					data.WaterSystemHeight = worldHeight - eye0Pos.z;
 				}
 			}
 		}

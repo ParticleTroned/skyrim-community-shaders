@@ -1033,6 +1033,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	const bool tbActive = shaderCache->IsEnabled() && singleton.settings.Enabled;
 	const bool useBlendedDepthSRV = tbActive && ShouldUseBlendedDepthSRV();
 	tbHookDiagnostics.renderDepthCalls++;
+	Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, tbActive && globals::game::isVR);
 
 	if (tbActive) {
 		if (useBlendedDepthSRV) {
@@ -1143,6 +1144,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 {
 	ZoneScoped;
 	tbHookDiagnostics.renderPassInvocationCalls++;
+	Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, settings.Enabled && globals::game::isVR);
 
 	if (!settings.Enabled) {
 		renderDepth = false;

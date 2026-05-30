@@ -150,11 +150,15 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Directional Light Shadowmaps");
+			Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, globals::game::isVR);
+			const bool frameAnnotations = globals::state && globals::state->frameAnnotations;
+			if (frameAnnotations)
+				globals::state->BeginPerfEvent("Directional Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (frameAnnotations)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -164,11 +168,15 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Spot Light Shadowmaps");
+			Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, globals::game::isVR);
+			const bool frameAnnotations = globals::state && globals::state->frameAnnotations;
+			if (frameAnnotations)
+				globals::state->BeginPerfEvent("Spot Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (frameAnnotations)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -178,11 +186,15 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			globals::state->BeginPerfEvent("Omnidirectional Light Shadowmaps");
+			Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, globals::game::isVR);
+			const bool frameAnnotations = globals::state && globals::state->frameAnnotations;
+			if (frameAnnotations)
+				globals::state->BeginPerfEvent("Omnidirectional Light Shadowmaps");
 
 			func(light, a2);
 
-			globals::state->EndPerfEvent();
+			if (frameAnnotations)
+				globals::state->EndPerfEvent();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -404,7 +416,17 @@ namespace FrameAnnotations
 		// Always install shadowmask phase tracking (required by Terrain Blending regardless of annotations).
 		stl::detour_thunk<Main_RenderShadowmasks>(REL::RelocationID(100422, 107140));
 
-		if (!globals::state->frameAnnotations)
+		const bool frameAnnotations = globals::state && globals::state->frameAnnotations;
+		if (globals::game::isVR || frameAnnotations) {
+			stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(
+				RE::VTABLE_BSShadowDirectionalLight[0]);
+			stl::write_vfunc<0xA, BSShadowFrustumLight_RenderShadowmaps>(
+				RE::VTABLE_BSShadowFrustumLight[0]);
+			stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
+				RE::VTABLE_BSShadowParabolicLight[0]);
+		}
+
+		if (!frameAnnotations)
 			return;
 
 		stl::write_vfunc<0x6, BSShader_SetupGeometry<RE::BSShader::Type::Lighting>>(
@@ -1062,13 +1084,6 @@ namespace FrameAnnotations
 			RE::VTABLE_BSShaderAccumulator[0]);
 
 		stl::write_vfunc<0x35, BSCubeMapCamera_RenderCubemap>(RE::VTABLE_BSCubeMapCamera[0]);
-
-		stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowDirectionalLight[0]);
-		stl::write_vfunc<0xA, BSShadowFrustumLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowFrustumLight[0]);
-		stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowParabolicLight[0]);
 
 		stl::detour_thunk<BSBatchRenderer_RenderBatches>(REL::RelocationID(100852, 107642));
 		stl::detour_thunk<Main_RenderDepth>(REL::RelocationID(100421, 107139));

@@ -658,8 +658,8 @@ void VR::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (BeginTabItemWithFont("Foveation", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRFoveationFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
+		if (BeginTabItemWithFont("Foveated/VRS", Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##VRFoveatedVRSFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawFoveationSettings();
 			}
 			ImGui::EndChild();

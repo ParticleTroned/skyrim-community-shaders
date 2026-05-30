@@ -30,6 +30,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	qualityMode,
 	dlssPreset,
 	submitStageUpscaling,
+	aaVrs,
+	aaVrsVisualization,
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
@@ -101,11 +103,6 @@ namespace
 		return a_upscaleMethod == Upscaling::UpscaleMethod::kFSR || a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
 	}
 
-	bool IsSubmitStagePathEnabled()
-	{
-		return ClampToggleUInt(globals::features::upscaling.settings.submitStageUpscaling) != 0;
-	}
-
 	float GetSubmitStageRequestedQualityScale()
 	{
 		const uint32_t qualityMode = std::min<uint32_t>(
@@ -119,19 +116,29 @@ namespace
 		return GetSubmitStageRequestedQualityScale() < kDynamicResolutionUpscalingScaleThreshold;
 	}
 
-	bool IsSubmitStageDynamicResolutionActive()
+	bool IsSubmitStagePathEligible(Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		if (!REL::Module::IsVR())
 			return false;
 
-		if (!IsSubmitStagePathEnabled())
-			return false;
-
-		const auto upscaleMethod = globals::features::upscaling.GetUpscaleMethod();
-		if (!IsVendorUpscalingMethod(upscaleMethod))
+		if (!IsVendorUpscalingMethod(a_upscaleMethod))
 			return false;
 
 		return IsSubmitStageRequestedUpscalingActive();
+	}
+
+	bool IsSubmitStagePathEnabled()
+	{
+		const auto upscaleMethod = globals::features::upscaling.GetUpscaleMethod();
+		if (!IsSubmitStagePathEligible(upscaleMethod))
+			return false;
+
+		return ClampToggleUInt(globals::features::upscaling.settings.submitStageUpscaling) != 0;
+	}
+
+	bool IsSubmitStageDynamicResolutionActive()
+	{
+		return IsSubmitStagePathEnabled();
 	}
 
 	bool ShouldUseStableSubmitStageDLSSInputs()
@@ -837,6 +844,8 @@ namespace
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
 		settings.dlssPreset = std::min<uint>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
 		settings.submitStageUpscaling = ClampToggleUInt(settings.submitStageUpscaling);
+		settings.aaVrs = settings.aaVrs && REL::Module::IsVR();
+		settings.aaVrsVisualization = settings.aaVrsVisualization && settings.aaVrs && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
@@ -854,6 +863,8 @@ namespace
 
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
 	{
+		settings.aaVrs = false;
+		settings.aaVrsVisualization = false;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
@@ -870,6 +881,8 @@ namespace
 
 	void StripVRSpecificUpscalingSettings(json& o_json)
 	{
+		o_json.erase("aaVrs");
+		o_json.erase("aaVrsVisualization");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
@@ -1058,6 +1071,28 @@ namespace
 		const bool nonWorldPresentation =
 			state && state->lastWorldRenderFrame != state->frameCount;
 		return IsKnownGameMenuContextActive() || nonWorldPresentation;
+	}
+
+	struct AAVRSUiState
+	{
+		bool canEnable = false;
+		bool requested = false;
+		bool active = false;
+		bool knownMenuBlocked = false;
+		const char* statusText = "inactive";
+	};
+
+	AAVRSUiState BuildAAVRSUiState(bool a_methodEligible, bool a_adapterEligible, bool a_toggleEnabled, bool a_runtimeActive)
+	{
+		AAVRSUiState state{};
+		state.canEnable = a_methodEligible && a_adapterEligible;
+		state.requested = state.canEnable && a_toggleEnabled;
+		state.active = state.requested && a_runtimeActive;
+		state.knownMenuBlocked = state.requested && !state.active && IsKnownGameMenuContextActive();
+		state.statusText =
+			state.active ? "active" :
+			(state.requested ? (state.knownMenuBlocked ? "menu inactive" : "pending scene") : "inactive");
+		return state;
 	}
 
 	bool TryGetTexture2DDesc(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& outDesc)
@@ -1398,14 +1433,21 @@ void Upscaling::DrawSettings()
 		if (!globals::game::isVR)
 			return;
 
+		const bool canEnable = IsSubmitStagePathEligible(upscaleMethod);
+		auto disabledGuard = Util::DisableGuard(!canEnable);
+
 		const char* submitStageModes[] = { "Disabled", "Enabled" };
-		int submitStageUpscaling = static_cast<int>(ClampToggleUInt(settings.submitStageUpscaling));
-		ImGui::SliderInt("Submit Path", &submitStageUpscaling, 0, 1, submitStageModes[submitStageUpscaling]);
-		settings.submitStageUpscaling = static_cast<uint>(std::clamp(submitStageUpscaling, 0, 1));
+		int submitStageUpscaling = canEnable ? static_cast<int>(ClampToggleUInt(settings.submitStageUpscaling)) : 0;
+		ImGui::SliderInt("Submit Path", &submitStageUpscaling, 0, 1, submitStageModes[std::clamp(submitStageUpscaling, 0, 1)]);
+		if (canEnable)
+			settings.submitStageUpscaling = static_cast<uint>(std::clamp(submitStageUpscaling, 0, 1));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the VR submit-stage upscaling path.");
+			ImGui::TextUnformatted("Controls the VR submit-stage upscaling path for DLSS/FSR upscaling presets.");
 			ImGui::TextUnformatted("Disable to fall back to the pre-image-space upscaling path for A/B testing.");
 		}
+
+		if (!canEnable)
+			ImGui::TextDisabled("Submit Path is available only with DLSS/FSR upscaling presets in VR.");
 	};
 
 	// Display upscaling settings if applicable
@@ -1504,12 +1546,20 @@ void Upscaling::DrawSettings()
 			if (foveatedDispatchSupportedForMethod) {
 				const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
 				const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.coverageArea);
-				ImGui::TextDisabled("Foveation setup is configured in VR > Foveation.");
-				ImGui::SameLine();
+				const auto aaVrsUiState = BuildAAVRSUiState(
+					IsAAVRSEligible(upscaleMethod),
+					IsAAVRSAdapterEligible(),
+					settings.aaVrs,
+					aaVrsRuntimeActive);
+				ImGui::TextDisabled("Foveated/VRS setup is configured in VR > Foveated/VRS.");
 				ImGui::TextColored(
 					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 					"FOV: %s",
 					fovActive ? "active" : "inactive");
+				ImGui::TextColored(
+					aaVrsUiState.active ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+					"VRS: %s",
+					aaVrsUiState.active ? "active" : "inactive");
 			} else {
 				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 			}
@@ -1517,6 +1567,12 @@ void Upscaling::DrawSettings()
 			if (streamline.reflexSupportedOnCurrentAdapter)
 				ImGui::Separator();
 		}
+	}
+
+	if (upscaleMethod == UpscaleMethod::kTAA) {
+		drawSubmitPathToggle();
+	} else if (upscaleMethod == UpscaleMethod::kNONE) {
+		drawSubmitPathToggle();
 	}
 
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
@@ -1833,6 +1889,13 @@ void Upscaling::DrawFoveatedSettings()
 	SanitizeFoveatedSettings(settings);
 	const UpscaleMethod upscaleMethod = GetUpscaleMethod();
 	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
+	const bool aaVrsMethodEligible = IsAAVRSEligible(upscaleMethod);
+	const bool aaVrsAdapterEligible = IsAAVRSAdapterEligible();
+	auto aaVrsUiState = BuildAAVRSUiState(
+		aaVrsMethodEligible,
+		aaVrsAdapterEligible,
+		settings.aaVrs,
+		aaVrsRuntimeActive);
 
 	if (foveatedDispatchSupportedForMethod) {
 		{
@@ -1847,6 +1910,45 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 	}
 
+	{
+		Util::BlueFrameStyleWrapper aaVrsStyle(true);
+		auto disabledGuard = Util::DisableGuard(!aaVrsUiState.canEnable);
+		const char* aaVrsModes[] = { "Disabled", "Enabled" };
+		int aaVrs = aaVrsUiState.requested ? 1 : 0;
+		ImGui::SliderInt("AA VRS", &aaVrs, 0, 1, aaVrsModes[std::clamp(aaVrs, 0, 1)]);
+		if (aaVrsUiState.canEnable)
+			settings.aaVrs = aaVrs != 0;
+	}
+	aaVrsUiState = BuildAAVRSUiState(
+		aaVrsMethodEligible,
+		aaVrsAdapterEligible,
+		settings.aaVrs,
+		aaVrsRuntimeActive);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Enables NVAPI VRS during VR scene pixel shading for foveated upscaling.");
+		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes stay VRS-off.");
+		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask.");
+		ImGui::TextUnformatted("Outside the mask, the inner half is 2x2 and the outer half is 4x4.");
+		ImGui::TextUnformatted("No zero-rate culling is used.");
+		ImGui::TextUnformatted("Suspended for Terrain Blending and shadow maps; disabled before postprocessing.");
+	}
+
+	if (!aaVrsMethodEligible) {
+		if (foveatedDispatchSupportedForMethod)
+			ImGui::TextDisabled("Enable Foveated Upscaling (FOV) with an active mask to use AA VRS.");
+		else
+			ImGui::TextDisabled("AA VRS is available only with DLSS/FSR Foveated Upscaling in VR.");
+	} else if (!aaVrsAdapterEligible) {
+		ImGui::TextDisabled("AA VRS requires NVIDIA variable pixel-rate shading support.");
+	}
+
+	ImGui::TextColored(
+		aaVrsUiState.active ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+		"AA VRS: %s",
+		aaVrsUiState.statusText);
+	if (!aaVrsUiState.requested)
+		settings.aaVrsVisualization = false;
+
 	const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
 	if (!foveatedDispatchRequestedForMethod)
 		return;
@@ -1858,6 +1960,13 @@ void Upscaling::DrawFoveatedSettings()
 	{
 		Util::BlueFrameStyleWrapper maskStyle(true);
 		ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
+		const bool aaVrsVisualizationAvailable = aaVrsUiState.requested;
+		if (aaVrsVisualizationAvailable) {
+			ImGui::SameLine();
+			ImGui::Checkbox("AA VRS Visualization", &settings.aaVrsVisualization);
+		} else {
+			settings.aaVrsVisualization = false;
+		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
@@ -1866,6 +1975,10 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("Gold = TAA ring, blue = outer lightweight ring.");
 		else
 			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
+		if (aaVrsUiState.requested) {
+			ImGui::TextUnformatted("AA VRS Visualization replaces the scene with a binary rate mask; dark = 1x1, magenta = coarser than 1x1.");
+			ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
+		}
 	}
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -2094,6 +2207,7 @@ void Upscaling::LoadSettings(json& o_json)
 	}
 	// Force mask visualization OFF on load for all existing profiles.
 	settings.foveatedPeripheryMaskVisualization = false;
+	settings.aaVrsVisualization = false;
 
 	if (settings.upscaleMethod > static_cast<uint>(UpscaleMethod::kDLSS)) {
 		logger::warn("[Upscaling] Loaded upscaleMethod {} out of range, clamping to {}", settings.upscaleMethod, static_cast<uint>(UpscaleMethod::kDLSS));
@@ -2131,6 +2245,7 @@ void Upscaling::RestoreDefaultSettings()
 	settings = {};
 	settings.foveatedVendorDispatch = false;
 	settings.foveatedPeripheryMaskVisualization = false;
+	settings.aaVrsVisualization = false;
 	settings.reflexLowLatencyMode = true;
 	settings.reflexUseMarkersToOptimize = true;
 	settings.reflexLowLatencyBoost = false;
@@ -2623,6 +2738,9 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		DestroyVRIntermediateTextures();
 		DestroyCommonUpscalingTextures();
 		DestroyFoveatedResources();
+		DisableAAVRSState();
+		aaVrsController.ReleaseResources();
+		ResetAAVRSTelemetry();
 
 		historyResetTrackingInitialized = false;
 		historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
@@ -2975,6 +3093,16 @@ ID3D11ComputeShader* Upscaling::GetPeripheryTAACS()
 	return peripheryTAACS.get();
 }
 
+ID3D11ComputeShader* Upscaling::GetAAVRSVisualizationCS()
+{
+	if (!aaVrsVisualizationCS) {
+		logger::debug("Compiling AAVRSVisualizationCS.hlsl");
+		aaVrsVisualizationCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/AAVRSVisualizationCS.hlsl", {}, "cs_5_0"));
+	}
+
+	return aaVrsVisualizationCS.get();
+}
+
 ID3D11ComputeShader* Upscaling::GetSubmitStageStretchCS()
 {
 	if (!submitStageStretchCS) {
@@ -3065,6 +3193,291 @@ bool Upscaling::IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const
 bool Upscaling::IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const
 {
 	return IsPeripheryTAAEnabled(a_upscaleMethod) && !settings.foveatedPeripheryMaskVisualization;
+}
+
+bool Upscaling::IsAAVRSEligible(UpscaleMethod a_upscaleMethod) const
+{
+	if (!globals::game::isVR)
+		return false;
+
+	return IsFoveatedVendorDispatchEnabled(a_upscaleMethod);
+}
+
+bool Upscaling::IsAAVRSAdapterEligible() const
+{
+	return fidelityFX.IsNvidiaAdapterDetected();
+}
+
+bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) const
+{
+	const auto upscaleMethod = GetUpscaleMethod();
+	const bool foveatedDispatchEnabled = IsFoveatedVendorDispatchEnabled(upscaleMethod);
+	if (!settings.aaVrs || !globals::game::isVR || !foveatedDispatchEnabled || IsKnownGameMenuContextActive())
+		return false;
+
+	auto* state = globals::state;
+	auto* renderer = globals::game::renderer;
+	if (!state || !renderer)
+		return false;
+
+	const uint32_t displayWidth = static_cast<uint32_t>(std::max(1.0f, std::round(state->screenSize.x)));
+	const uint32_t displayHeight = static_cast<uint32_t>(std::max(1.0f, std::round(state->screenSize.y)));
+	uint32_t renderWidth = displayWidth;
+	uint32_t renderHeight = displayHeight;
+	{
+		auto& mainTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		D3D11_TEXTURE2D_DESC mainDesc{};
+		if (TryGetTexture2DDesc(mainTarget.texture, mainDesc)) {
+			renderWidth = std::max(mainDesc.Width, 1u);
+			renderHeight = std::max(mainDesc.Height, 1u);
+		}
+	}
+
+	const auto activeProfile = GetActiveUpscalingFoveatedProfile();
+	if (!activeProfile.available)
+		return false;
+
+	const float maskArea = activeProfile.coverageArea;
+	const float centerHorizontalScale = activeProfile.centerHorizontalScale;
+	const auto& foveatedCenterOffsets = activeProfile.centerOffsets;
+
+	AAVRSController::Settings aaVrsSettings{};
+	aaVrsSettings.enabled = true;
+	aaVrsSettings.stereo = true;
+	aaVrsSettings.displayWidth = displayWidth;
+	aaVrsSettings.displayHeight = displayHeight;
+	aaVrsSettings.renderWidth = renderWidth;
+	aaVrsSettings.renderHeight = renderHeight;
+	aaVrsSettings.centerArea = maskArea;
+	aaVrsSettings.centerHorizontalScale = centerHorizontalScale;
+	aaVrsSettings.outerArea = maskArea;
+	aaVrsSettings.coarseOutsideMask = true;
+	aaVrsSettings.centerOffsets = {
+		AAVRSController::CenterOffset{ foveatedCenterOffsets[0].x, foveatedCenterOffsets[0].y },
+		AAVRSController::CenterOffset{ foveatedCenterOffsets[1].x, foveatedCenterOffsets[1].y },
+	};
+
+	a_outSettings = aaVrsSettings;
+	return true;
+}
+
+void Upscaling::UpdateAAVRSState()
+{
+	const auto upscaleMethod = GetUpscaleMethod();
+	const bool requested = settings.aaVrs && globals::game::isVR;
+	const auto disableAndReport = [&](const char* reason, bool requestedState, bool preserveRuntimeActiveState = false) {
+		DisableAAVRSState(reason);
+		ReportAAVRSTelemetry(requestedState, preserveRuntimeActiveState);
+	};
+
+	if (!settings.aaVrs) {
+		disableAndReport("Disabled", false);
+		return;
+	}
+
+	if (!globals::game::isVR) {
+		disableAndReport("VR only", false);
+		return;
+	}
+
+	if (!IsAAVRSEligible(upscaleMethod)) {
+		disableAndReport(
+			SupportsFoveatedVendorDispatch(upscaleMethod) ? "Foveated inactive" : "Ineligible AA mode",
+			requested);
+		return;
+	}
+
+	if (!IsAAVRSAdapterEligible()) {
+		disableAndReport("NVIDIA VRS unavailable", requested);
+		return;
+	}
+
+	if (IsKnownGameMenuContextActive()) {
+		// UpdateAAVRSState runs before world rendering, so lastWorldRenderFrame
+		// cannot be used here without blocking valid scene frames.
+		disableAndReport("Game menu context active", requested, true);
+		return;
+	}
+
+	auto* device = globals::d3d::device;
+	auto* context = globals::d3d::context;
+	if (!device || !context) {
+		disableAndReport("Missing runtime state", requested);
+		return;
+	}
+
+	AAVRSController::Settings aaVrsSettings{};
+	if (!BuildAAVRSSettings(aaVrsSettings)) {
+		disableAndReport("Missing runtime state", requested);
+		return;
+	}
+
+	(void)aaVrsController.Update(aaVrsSettings, device, context);
+	ReportAAVRSTelemetry(requested);
+}
+
+void Upscaling::ApplyAAVRSVisualization()
+{
+	if (!settings.aaVrsVisualization || !aaVrsController.IsActive())
+		return;
+
+	AAVRSController::Settings aaVrsSettings{};
+	if (!BuildAAVRSSettings(aaVrsSettings))
+		return;
+
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	auto* shader = GetAAVRSVisualizationCS();
+	if (!context || !renderer || !shader || !aaVrsVisualizationCB)
+		return;
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.UAV)
+		return;
+
+	AAVRSVisualizationCB cbData{};
+	cbData.renderInfo = {
+		static_cast<float>(aaVrsSettings.renderWidth),
+		static_cast<float>(aaVrsSettings.renderHeight),
+		aaVrsSettings.renderWidth > 0 ? 1.0f / static_cast<float>(aaVrsSettings.renderWidth) : 0.0f,
+		aaVrsSettings.renderHeight > 0 ? 1.0f / static_cast<float>(aaVrsSettings.renderHeight) : 0.0f
+	};
+	cbData.displayInfo = {
+		static_cast<float>(aaVrsSettings.displayWidth),
+		static_cast<float>(aaVrsSettings.displayHeight),
+		aaVrsSettings.stereo ? 2.0f : 1.0f,
+		aaVrsSettings.coarseOutsideMask ? 1.0f : 0.0f
+	};
+	cbData.maskInfo = {
+		aaVrsSettings.centerArea,
+		aaVrsSettings.outerArea,
+		aaVrsSettings.centerHorizontalScale,
+		0.0f
+	};
+	cbData.centerOffsets = {
+		aaVrsSettings.centerOffsets[0].x,
+		aaVrsSettings.centerOffsets[0].y,
+		aaVrsSettings.centerOffsets[1].x,
+		aaVrsSettings.centerOffsets[1].y
+	};
+	cbData.coarseColor = { 1.00f, 0.00f, 1.00f, 1.0f };
+	cbData.centerColor = { 0.02f, 0.02f, 0.025f, 1.0f };
+	cbData.pad = {
+		static_cast<float>(AAVRSController::kTileWidth),
+		static_cast<float>(AAVRSController::kTileHeight),
+		0.0f,
+		0.0f
+	};
+	aaVrsVisualizationCB->Update(cbData);
+
+	ID3D11Buffer* cb = aaVrsVisualizationCB->CB();
+	ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
+	context->CSSetShader(shader, nullptr, 0);
+	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+	auto state = globals::state;
+	if (state && state->frameAnnotations)
+		state->BeginPerfEvent("AA VRS Visualization");
+	context->Dispatch((aaVrsSettings.renderWidth + 7u) >> 3, (aaVrsSettings.renderHeight + 7u) >> 3, 1);
+	if (state && state->frameAnnotations)
+		state->EndPerfEvent();
+
+	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+	ID3D11Buffer* nullCB[1] = { nullptr };
+	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+	context->CSSetConstantBuffers(0, 1, nullCB);
+	context->CSSetShader(nullptr, nullptr, 0);
+}
+
+void Upscaling::DisableAAVRSState(const char* a_reason)
+{
+	aaVrsController.Disable(globals::d3d::context, a_reason);
+}
+
+void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeActiveState)
+{
+	const auto status = aaVrsController.GetStatus();
+	if (status.active) {
+		const bool dimensionsChanged =
+			aaVrsTelemetryMaskWidth != status.maskWidth ||
+			aaVrsTelemetryMaskHeight != status.maskHeight ||
+			aaVrsTelemetryRenderWidth != status.renderWidth ||
+			aaVrsTelemetryRenderHeight != status.renderHeight;
+		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged) {
+			logger::info(
+				"[Upscaling] AA VRS active: render {}x{}, mask {}x{}",
+				status.renderWidth,
+				status.renderHeight,
+				status.maskWidth,
+				status.maskHeight);
+		}
+
+		aaVrsRuntimeActive = true;
+		aaVrsTelemetryLoggedActive = true;
+		aaVrsTelemetryMaskWidth = status.maskWidth;
+		aaVrsTelemetryMaskHeight = status.maskHeight;
+		aaVrsTelemetryRenderWidth = status.renderWidth;
+		aaVrsTelemetryRenderHeight = status.renderHeight;
+		return;
+	}
+
+	if (!a_preserveRuntimeActiveState)
+		aaVrsRuntimeActive = false;
+
+	if (!a_requested) {
+		aaVrsTelemetryInactiveReason.clear();
+		return;
+	}
+
+	const char* reason = status.lastDisableReason && status.lastDisableReason[0] ?
+		status.lastDisableReason :
+		aaVrsController.GetLastDisableReason();
+	std::string reasonText = reason && reason[0] ? reason : "Inactive";
+	if (aaVrsTelemetryInactiveReason != reasonText) {
+		logger::info("[Upscaling] AA VRS requested but inactive: {}", reasonText);
+		aaVrsTelemetryInactiveReason = reasonText;
+	}
+}
+
+void Upscaling::ResetAAVRSTelemetry()
+{
+	aaVrsRuntimeActive = false;
+	aaVrsTelemetryLoggedActive = false;
+	aaVrsTelemetryMaskWidth = 0;
+	aaVrsTelemetryMaskHeight = 0;
+	aaVrsTelemetryRenderWidth = 0;
+	aaVrsTelemetryRenderHeight = 0;
+	aaVrsTelemetryInactiveReason.clear();
+}
+
+void Upscaling::SuspendAAVRS()
+{
+	if (!globals::game::isVR)
+		return;
+
+	aaVrsController.Suspend(globals::d3d::context);
+}
+
+void Upscaling::ResumeAAVRS()
+{
+	if (!globals::game::isVR)
+		return;
+
+	aaVrsController.Resume(globals::d3d::context);
+}
+
+Upscaling::ScopedAAVRSSuspension::ScopedAAVRSSuspension(Upscaling& a_upscaling, bool a_active) :
+	upscaling(a_active ? &a_upscaling : nullptr)
+{
+	if (upscaling)
+		upscaling->SuspendAAVRS();
+}
+
+Upscaling::ScopedAAVRSSuspension::~ScopedAAVRSSuspension()
+{
+	if (upscaling)
+		upscaling->ResumeAAVRS();
 }
 
 bool Upscaling::UseActiveFoveatedPeripheryTAAProfile() const
@@ -5597,6 +6010,7 @@ void Upscaling::SetupResources()
 	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
 	foveatedCenterBlendCB = new ConstantBuffer(ConstantBufferDesc<FoveatedCenterBlendCB>());
 	peripheryTAACB = new ConstantBuffer(ConstantBufferDesc<PeripheryTAACB>());
+	aaVrsVisualizationCB = new ConstantBuffer(ConstantBufferDesc<AAVRSVisualizationCB>());
 
 	// Create blend state for depth upscaling
 	D3D11_BLEND_DESC blendDesc = {};
@@ -5644,6 +6058,7 @@ void Upscaling::ClearShaderCache()
 	foveatedPeripheryCS = nullptr;       // com_ptr automatically releases
 	foveatedCenterBlendCS = nullptr;     // com_ptr automatically releases
 	peripheryTAACS = nullptr;            // com_ptr automatically releases
+	aaVrsVisualizationCS = nullptr;      // com_ptr automatically releases
 	submitStageStretchCS = nullptr;      // com_ptr automatically releases
 }
 
@@ -5874,11 +6289,7 @@ bool Upscaling::IsUpscalingActive() const
 
 bool Upscaling::IsSubmitStageUpscalingActive() const
 {
-	const auto upscaleMethod = GetUpscaleMethod();
-	return globals::game::isVR &&
-	       IsVendorUpscalingMethod(upscaleMethod) &&
-	       IsSubmitStageDynamicResolutionActive() &&
-	       IsSubmitStageRequestedUpscalingActive() &&
+	return IsSubmitStageDynamicResolutionActive() &&
 	       g_submitStageTargetSizeKnown &&
 	       !IsGameMenuContextActive();
 }
@@ -7205,6 +7616,7 @@ void Upscaling::ApplySharpening()
 bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage)
 {
 	auto& upscaling = globals::features::upscaling;
+	upscaling.DisableAAVRSState();
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 	if (IsVendorUpscalingMethod(upscaleMethod) && upscaling.IsUpscalingActive()) {
 		if (IsGameMenuContextActive())
@@ -7567,6 +7979,7 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 	globals::features::upscaling.ConfigureTAA();
 	func(a_state);
 	globals::features::upscaling.ConfigureUpscaling(a_state);
+	globals::features::upscaling.UpdateAAVRSState();
 }
 
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
@@ -7578,6 +7991,8 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
+	upscaling.ApplyAAVRSVisualization();
+	upscaling.DisableAAVRSState();
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
 	if (!upscaling.ApplyPendingPostLoadRuntimeReset(upscaleMethod)) {

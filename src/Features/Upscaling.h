@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Feature.h"
+#include "Upscaling/AAVRSController.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/RCAS/RCAS.h"
@@ -11,6 +12,7 @@
 #include <directx/d3d12.h>
 #include <limits>
 #include <openvr.h>
+#include <string>
 #include <vector>
 #include <winrt/base.h>
 
@@ -85,6 +87,8 @@ public:
 		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint submitStageUpscaling = 1;
+		bool aaVrs = false;
+		bool aaVrsVisualization = false;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 1;
 		uint frameGenerationForceEnable = 0;
@@ -193,12 +197,24 @@ public:
 		float4 previousCameraPosAdjust;
 	};
 
+	struct AAVRSVisualizationCB
+	{
+		float4 renderInfo;     // xy=render dim, zw=1/render dim
+		float4 displayInfo;    // xy=display dim, z=eye count, w=coarseOutsideMask
+		float4 maskInfo;       // x=center area, y=outer area, z=center horizontal scale
+		float4 centerOffsets;  // xy=left eye, zw=right eye
+		float4 coarseColor;
+		float4 centerColor;
+		float4 pad;
+	};
+
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(AAVRSVisualizationCB) == 112, "AAVRSVisualizationCB layout changed; update HLSL cbuffer.");
 
 	struct FoveatedDispatchRect
 	{
@@ -259,6 +275,7 @@ public:
 	ConstantBuffer* foveatedPeripheryCB = nullptr;
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
+	ConstantBuffer* aaVrsVisualizationCB = nullptr;
 
 	// Runtime state
 	bool isWindowed = false;
@@ -337,6 +354,9 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> peripheryTAACS;
 	ID3D11ComputeShader* GetPeripheryTAACS();
 
+	winrt::com_ptr<ID3D11ComputeShader> aaVrsVisualizationCS;
+	ID3D11ComputeShader* GetAAVRSVisualizationCS();
+
 	winrt::com_ptr<ID3D11ComputeShader> submitStageStretchCS;
 	ID3D11ComputeShader* GetSubmitStageStretchCS();
 
@@ -407,6 +427,30 @@ public:
 
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
+	bool IsAAVRSEligible(UpscaleMethod a_upscaleMethod) const;
+	bool IsAAVRSAdapterEligible() const;
+	bool BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) const;
+	void UpdateAAVRSState();
+	void ApplyAAVRSVisualization();
+	void DisableAAVRSState(const char* a_reason = "Disabled");
+	void SuspendAAVRS();
+	void ResumeAAVRS();
+	void ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeActiveState = false);
+	void ResetAAVRSTelemetry();
+
+	class ScopedAAVRSSuspension
+	{
+	public:
+		ScopedAAVRSSuspension(Upscaling& a_upscaling, bool a_active);
+		~ScopedAAVRSSuspension();
+
+		ScopedAAVRSSuspension(const ScopedAAVRSSuspension&) = delete;
+		ScopedAAVRSSuspension& operator=(const ScopedAAVRSSuspension&) = delete;
+
+	private:
+		Upscaling* upscaling = nullptr;
+	};
+
 	void ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
 	void PrepareFullResolutionPostProcessing();
 	void ResetVRSubmitStageState(bool a_destroyDLSSResources = true);
@@ -445,6 +489,14 @@ public:
 	std::array<PeripheryTAATileCacheState, 2> peripheryTAATileCache{};
 	uint32_t peripheryTAAHistoryReadIndex = 0;
 	bool peripheryTAAHistoryValid = false;
+	AAVRSController aaVrsController;
+	bool aaVrsRuntimeActive = false;
+	bool aaVrsTelemetryLoggedActive = false;
+	uint32_t aaVrsTelemetryMaskWidth = 0;
+	uint32_t aaVrsTelemetryMaskHeight = 0;
+	uint32_t aaVrsTelemetryRenderWidth = 0;
+	uint32_t aaVrsTelemetryRenderHeight = 0;
+	std::string aaVrsTelemetryInactiveReason;
 
 	virtual void ClearShaderCache() override;
 

@@ -646,6 +646,7 @@ public:
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
 	ID3D11Texture2D* submitStageHandoffTexture = nullptr;
+	bool submitStageHandoffPassLockedToCopyDynamicFetchDisabled = false;
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;

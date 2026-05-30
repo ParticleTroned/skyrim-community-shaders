@@ -2956,8 +2956,10 @@ void Upscaling::DestroyVRIntermediateTextures()
 	peripheryTAAHistoryReadIndex = 0;
 	peripheryTAAHistoryValid = false;
 
+	submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageHandoffTexture = nullptr;
+	submitStageHandoffPassLockedToCopyDynamicFetchDisabled = false;
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
@@ -3140,6 +3142,7 @@ void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
 	submitStageHandoffTexture = nullptr;
+	submitStageHandoffPassLockedToCopyDynamicFetchDisabled = false;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -8648,7 +8651,14 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		};
 
 		if (upscaling.IsSubmitStageUpscalingActive()) {
-			if (passName == "ISCopyDynamicFetchDisabled" && submitStageHandoffFrame == state->frameCount) {
+			const bool isCopyDynamicFetchDisabledPass = passName == "ISCopyDynamicFetchDisabled";
+			const bool handoffAlreadySetThisFrame = submitStageHandoffFrame == state->frameCount;
+			// Keep the most UI-complete source once CopyDynamicFetchDisabled has
+			// produced a handoff this frame. Later non-copy passes can otherwise
+			// overwrite interaction prompt text (Talk/Open/Steal) in submit-only mode.
+			if (handoffAlreadySetThisFrame &&
+				submitStageHandoffPassLockedToCopyDynamicFetchDisabled &&
+				!isCopyDynamicFetchDisabledPass) {
 				releaseRefs();
 				return true;
 			}
@@ -8702,6 +8712,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			if (copiedToOutput) {
 				submitStageHandoffFrame = state->frameCount;
 				submitStageHandoffTexture = outputTexture;
+				submitStageHandoffPassLockedToCopyDynamicFetchDisabled = isCopyDynamicFetchDisabledPass;
 				releaseRefs();
 				if (globals::game::stateUpdateFlags)
 					globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);

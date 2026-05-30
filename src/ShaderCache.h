@@ -410,12 +410,6 @@ namespace SIE
 		void SetEnabled(bool value);
 		bool IsAsync() const;
 		void SetAsync(bool value);
-		bool IsSynchronousLoadWindowEnabled() const;
-		void SetSynchronousLoadWindowEnabled(bool value);
-		bool IsSynchronousLoadWindowActive() const;
-		void BeginSynchronousLoadWindow(uint32_t a_currentFrame);
-		void ExtendSynchronousLoadWindow(uint32_t a_currentFrame, uint32_t a_frameCount);
-		void UpdateSynchronousLoadWindow(uint32_t a_currentFrame);
 		bool IsDump() const;
 		void SetDump(bool value);
 		void StopCompilation();
@@ -556,10 +550,6 @@ namespace SIE
 		static constexpr int32_t kLowCoreCompilationThreadThreshold = 8;
 		static constexpr int32_t kLowCoreReservedCompilationThreads = 1;
 		static constexpr int32_t kDefaultReservedCompilationThreads = 2;
-		static constexpr uint32_t kPostLoadSynchronousShaderFrames = 120;
-		static constexpr uint32_t kPostLoadSynchronousShaderExtraFrames = 600;
-		static constexpr uint32_t kPreLoadSynchronousShaderFallbackFrames = 36000;
-
 		static int32_t GetDefaultCompilationThreadCount()
 		{
 			const auto threadCount = static_cast<int32_t>(std::thread::hardware_concurrency());
@@ -836,14 +826,8 @@ namespace SIE
 		bool isDump = false;
 		bool hideError = false;
 		bool useFileWatcher = false;
-		std::atomic_bool synchronousLoadWindowEnabled = false;
-		std::atomic_bool forceSynchronousShaderLoads = false;
-		std::atomic_uint32_t synchronousShaderLoadStartFrame = 0;
-		std::atomic_uint32_t synchronousShaderLoadEndFrame = 0;
 
 		bool ShouldUseAsyncCompilation() const;
-		void ArmSynchronousLoadWindow();
-		void EndSynchronousLoadWindow();
 
 		std::stop_source ssource;
 		std::mutex vertexShadersMutex;

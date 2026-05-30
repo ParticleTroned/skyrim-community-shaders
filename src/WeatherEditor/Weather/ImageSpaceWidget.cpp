@@ -255,6 +255,9 @@ void ImageSpaceWidget::LoadFromGameSettings()
 
 void ImageSpaceWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	SetImageSpaceValues();
 }
 

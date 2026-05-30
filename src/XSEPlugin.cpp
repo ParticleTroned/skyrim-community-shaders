@@ -188,8 +188,20 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
-			if (errors.empty() && globals::shaderCache) {
-				globals::shaderCache->BeginSynchronousLoadWindow(globals::state ? globals::state->frameCount : 0);
+			if (errors.empty() && globals::state) {
+				const uint32_t frame = globals::state->frameCount;
+				globals::state->BeginSaveLoadSafeMode(frame);
+				globals::state->BeginPersistentMutationBlock(frame);
+			}
+
+			break;
+		}
+	case SKSE::MessagingInterface::kSaveGame:
+		{
+			if (errors.empty() && globals::state) {
+				const uint32_t frame = globals::state->frameCount;
+				globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
+				globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
 			}
 
 			break;
@@ -198,11 +210,10 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kNewGame:
 		{
 			if (errors.empty()) {
-				if (globals::shaderCache && globals::state &&
-					(message->type == SKSE::MessagingInterface::kPostLoadGame || globals::shaderCache->IsSynchronousLoadWindowActive())) {
-					globals::shaderCache->ExtendSynchronousLoadWindow(
-						globals::state->frameCount,
-						SIE::ShaderCache::kPostLoadSynchronousShaderFrames);
+				if (globals::state) {
+					const uint32_t frame = globals::state->frameCount;
+					globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
+					globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
 				}
 				ResetRuntimeStateAfterGameLoad();
 				logger::info("Handled {}", message->type == SKSE::MessagingInterface::kPostLoadGame ? "kPostLoadGame" : "kNewGame");

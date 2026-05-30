@@ -2593,6 +2593,13 @@ void Upscaling::RequestVRSubmitStageHistoryReset()
 
 bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 {
+	if (!postLoadRuntimeResetPending.load(std::memory_order_acquire))
+		return true;
+
+	auto* state = globals::state;
+	if (state && state->IsSaveLoadSafeModeActive())
+		return false;
+
 	if (!postLoadRuntimeResetPending.exchange(false, std::memory_order_acq_rel))
 		return true;
 

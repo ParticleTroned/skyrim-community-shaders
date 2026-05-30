@@ -195,6 +195,12 @@ bool Widget::HasSavedFile() const
 	return std::filesystem::exists(GetSaveFilePath());
 }
 
+bool Widget::CanApplyPersistentChanges() const
+{
+	auto* state = State::GetSingleton();
+	return !state || !state->IsPersistentMutationBlocked();
+}
+
 void Widget::DrawMenu()
 {
 	if (ImGui::BeginMenuBar()) {

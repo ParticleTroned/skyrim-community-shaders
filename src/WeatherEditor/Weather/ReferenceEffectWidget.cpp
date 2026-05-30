@@ -136,6 +136,9 @@ void ReferenceEffectWidget::SaveSettings()
 
 void ReferenceEffectWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	if (!referenceEffect)
 		return;
 

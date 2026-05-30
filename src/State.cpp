@@ -166,6 +166,7 @@ void State::Draw()
 	if (shaderCache->IsEnabled()) {
 		// Process deferred cell transitions (interior detection)
 		SceneSettingsManager::GetSingleton()->Update();
+		globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
 
 		if (pendingPostLoadRuntimeReset) {
 			globals::OnDataLoaded();

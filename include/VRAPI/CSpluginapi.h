@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 4;
+inline constexpr unsigned int CSBuildNumber = 6;
 
 namespace CSPluginAPI
 {
@@ -42,6 +42,11 @@ namespace CSPluginAPI
 
 		virtual DLSSProfile GetDLSSProfile() override;
 		virtual void SetDLSSProfile(DLSSProfile profile) override;
+
+		virtual bool GetRenderAtUpscaleResEnabled() override;
+		virtual void SetRenderAtUpscaleResEnabled(bool enabled) override;
+		virtual bool GetRenderAtUpscaleResActive() override;
+		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile) override;
 	};
 
 	namespace detail
@@ -221,6 +226,7 @@ namespace CSPluginAPI
 
 		upscaling.settings.qualityMode = qualityMode;
 		upscaling.RequestHistoryReset();
+		upscaling.RequestPerfModeRenderTargetRecreate("CS API upscaler preset change");
 	}
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()
@@ -259,5 +265,37 @@ namespace CSPluginAPI
 
 		upscaling.settings.dlssPreset = dlssPreset;
 		upscaling.RequestHistoryReset();
+	}
+
+	inline bool CSInterface001::GetRenderAtUpscaleResEnabled()
+	{
+		return globals::features::upscaling.GetPerfModeRequested();
+	}
+
+	inline void CSInterface001::SetRenderAtUpscaleResEnabled(bool enabled)
+	{
+		globals::features::upscaling.SetPerfModeRequested(enabled, "CS API render-at-upscale-res change");
+	}
+
+	inline bool CSInterface001::GetRenderAtUpscaleResActive()
+	{
+		return globals::features::upscaling.IsPerfModeActive();
+	}
+
+	inline void CSInterface001::SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile)
+	{
+		if (!detail::IsValidUpscalePreset(mode)) {
+			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(mode));
+			return;
+		}
+		if (!detail::IsValidDLSSProfile(profile)) {
+			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
+			return;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(mode);
+		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		upscaling.SetVRUpscalingTransitionProfile(renderAtUpscaleResEnabled, qualityMode, dlssPreset, "CS API VR upscaling transition profile");
 	}
 }  // namespace CSPluginAPI

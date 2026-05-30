@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "FoveatedCommon.h"
 #include "Hooks.h"
+#include "Menu.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
 #include "State.h"
@@ -1018,6 +1019,12 @@ namespace
 		       (ui && ui->GameIsPaused());
 	}
 
+	bool IsCommunityShadersMenuOpen()
+	{
+		auto* menu = globals::menu;
+		return menu && menu->initialized && menu->ShouldSwallowInput();
+	}
+
 	bool IsGameMenuContextActive()
 	{
 		auto state = globals::state;
@@ -1346,6 +1353,7 @@ void Upscaling::DrawSettings()
 		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
 		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
 			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+		RequestPerfModeRenderTargetRecreate("upscaling menu method change");
 	}
 	if (openCompositeBlocksUpscaling) {
 		ApplyOpenCompositeUpscalingBlocker();
@@ -1418,6 +1426,7 @@ void Upscaling::DrawSettings()
 		const bool perfModeEligible = submitPathEligible;
 		const bool perfModeCanEdit = perfModeEligible || perfModeActive;
 		const bool perfModeRequested = perfModeCanEdit && ClampToggleUInt(settings.perfMode) != 0;
+		const bool perfModeRelatchPending = pendingPerfModeRenderTargetRecreate.load(std::memory_order_relaxed);
 		const auto activeColor = ImVec4(0.40f, 0.85f, 0.50f, 1.0f);
 		const auto inactiveColor = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
 
@@ -1432,7 +1441,7 @@ void Upscaling::DrawSettings()
 		ImGui::TextColored(
 			perfModeActive ? activeColor : inactiveColor,
 			"Render at Upscale Res: %s",
-			perfModeActive ? "active" : (perfModeRequested ? "restart pending" : "inactive"));
+			perfModeRelatchPending ? "relatch pending" : (perfModeActive ? "active" : (perfModeRequested ? "restart pending" : "inactive")));
 		if (submitUiState.pausedInMenu)
 			ImGui::TextDisabled("Submit Path was active in scene and is paused while this menu is open.");
 		if (perfModeActive)
@@ -1457,17 +1466,17 @@ void Upscaling::DrawSettings()
 		{
 			auto disabledGuard = Util::DisableGuard(!perfModeCanEdit);
 			if (ImGui::SliderInt("Render at Upscale Res", &perfModeSetting, 0, 1, perfModes[std::clamp(perfModeSetting, 0, 1)])) {
-				settings.perfMode = static_cast<uint>(std::clamp(perfModeSetting, 0, 1));
+				SetPerfModeRequested(std::clamp(perfModeSetting, 0, 1) != 0, "upscaling menu render-at-upscale-res change");
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Makes Skyrim VR allocate engine render targets at the selected upscaler internal resolution.");
 			ImGui::TextUnformatted("Submit Path then performs the single final upscale/presentation to the HMD size.");
-			ImGui::TextUnformatted("Enabling after startup, method changes, and Upscale Preset changes require restart.");
+			ImGui::TextUnformatted("Runtime changes are applied by relatching render targets; loading transitions are the safest time to switch.");
 		}
 
 		if (perfMode.HasRestartRequiredChange())
-			Util::Text::Warning("Warning: Render at Upscale Res change requires restart");
+			Util::Text::Warning(perfModeRelatchPending ? "Warning: Render at Upscale Res relatch pending" : "Warning: Render at Upscale Res change requires relatch or restart");
 		if (!submitPathEligible)
 			ImGui::TextDisabled("Submit Path is available only with DLSS/FSR upscaling presets in VR.");
 		if (!perfModeEligible)
@@ -1493,6 +1502,7 @@ void Upscaling::DrawSettings()
 				static_cast<int>(kQualityModeMaxIndex),
 				labelWithScale.c_str())) {
 			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
+			RequestPerfModeRenderTargetRecreate("upscaling menu preset change");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Controls the shared DLSS/FSR/FSR4 internal render scale / quality level.");
@@ -2211,6 +2221,7 @@ void Upscaling::SaveSettings(json& o_json)
 
 void Upscaling::LoadSettings(json& o_json)
 {
+	const Settings previousSettings = settings;
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
 	settings = o_json;
 	if (!hasQualityModeSchemaVersion) {
@@ -2247,6 +2258,21 @@ void Upscaling::LoadSettings(json& o_json)
 			clampedReflexFPSLimit);
 	}
 	settings.reflexFPSLimit = clampedReflexFPSLimit;
+
+	const bool runtimeReady =
+		globals::game::isVR &&
+		globals::d3d::device &&
+		globals::game::renderer &&
+		globals::state;
+	const uint previousUpscaleMethod = streamline.featureDLSS ? previousSettings.upscaleMethod : previousSettings.upscaleMethodNoDLSS;
+	const uint currentUpscaleMethod = streamline.featureDLSS ? settings.upscaleMethod : settings.upscaleMethodNoDLSS;
+	const bool perfModeRelevantSettingChanged =
+		ClampToggleUInt(previousSettings.perfMode) != ClampToggleUInt(settings.perfMode) ||
+		ClampQualityModeUInt(previousSettings.qualityMode) != ClampQualityModeUInt(settings.qualityMode) ||
+		previousUpscaleMethod != currentUpscaleMethod;
+	if (runtimeReady && perfModeRelevantSettingChanged)
+		RequestPerfModeRenderTargetRecreate("upscaling settings reload");
+
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
 		if (auto setting = iniSettingCollection->GetSetting("bUseTAA:Display"))
@@ -2287,14 +2313,13 @@ struct BSOpenVR_GetRenderTargetSize
 		g_submitStageOutputEyeHeight = trueEyeHeight;
 		g_submitStageTargetSizeKnown = true;
 
-		static bool allowPerfModeBootLatchCreate = true;
 		uint32_t perfModeWidth = trueEyeWidth;
 		uint32_t perfModeHeight = trueEyeHeight;
+		const bool allowPerfModeBootLatchCreate = upscaling.ConsumePerfModeBootLatchCreate();
 		if (upscaling.TryGetPerfModeOpenVRRenderTargetSize(perfModeWidth, perfModeHeight, allowPerfModeBootLatchCreate)) {
 			*a_width = perfModeWidth;
 			*a_height = perfModeHeight;
 		}
-		allowPerfModeBootLatchCreate = false;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -2575,6 +2600,58 @@ bool Upscaling::IsPerfModeActive() const
 	return perfMode.IsActive(settings, GetUpscaleMethod());
 }
 
+bool Upscaling::GetPerfModeRequested() const
+{
+	return ClampToggleUInt(settings.perfMode) != 0;
+}
+
+void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason)
+{
+	const uint32_t requested = a_enabled ? 1u : 0u;
+	const bool activeMatchesRequest = IsPerfModeActive() == a_enabled;
+	if (ClampToggleUInt(settings.perfMode) == requested && activeMatchesRequest && !perfMode.HasRestartRequiredChange())
+		return;
+
+	settings.perfMode = requested;
+	RequestHistoryReset();
+	RequestPerfModeRenderTargetRecreate(a_reason);
+}
+
+void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderAtUpscaleResEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
+{
+	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
+	const uint32_t dlssPreset = std::min(a_dlssPreset, kDLSSPresetMaxIndex);
+	const bool stageVRDLSSChange = globals::game::isVR && GetUpscaleMethod() == UpscaleMethod::kDLSS;
+	bool presetChanged = false;
+
+	if (stageVRDLSSChange) {
+		if (GetEffectiveDLSSQualityMode() != qualityMode) {
+			QueueVRDLSSQualityMode(qualityMode);
+			presetChanged = true;
+		}
+		if (GetEffectiveDLSSPreset() != dlssPreset) {
+			QueueVRDLSSPreset(dlssPreset);
+			presetChanged = true;
+		}
+	} else {
+		if (settings.qualityMode != qualityMode) {
+			settings.qualityMode = qualityMode;
+			presetChanged = true;
+		}
+		if (settings.dlssPreset != dlssPreset) {
+			settings.dlssPreset = dlssPreset;
+			presetChanged = true;
+		}
+	}
+
+	if (presetChanged)
+		RequestHistoryReset();
+
+	SetPerfModeRequested(a_renderAtUpscaleResEnabled, a_reason);
+	if (!stageVRDLSSChange && presetChanged)
+		RequestPerfModeRenderTargetRecreate(a_reason);
+}
+
 bool Upscaling::IsPerfModePresentationActive() const
 {
 	return IsPerfModeActive() && g_submitStageTargetSizeKnown;
@@ -2589,6 +2666,11 @@ bool Upscaling::IsPresentationUpscalingActive() const
 void Upscaling::RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
 {
 	perfMode.RecordTrueHMDSize(a_eyeWidth, a_eyeHeight);
+}
+
+bool Upscaling::ConsumePerfModeBootLatchCreate()
+{
+	return perfModeAllowBootLatchCreate.exchange(false, std::memory_order_acq_rel);
 }
 
 bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate)
@@ -2760,6 +2842,21 @@ void Upscaling::DestroyCommonUpscalingTextures()
 	perfMode.ResetResources();
 }
 
+bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const
+{
+	if (!IsVendorUpscalingMethod(a_upscaleMethod))
+		return true;
+
+	const auto textureReady = [](const Texture2D* a_texture) {
+		return a_texture && a_texture->resource && a_texture->srv && a_texture->uav;
+	};
+
+	return textureReady(reactiveMaskTexture) &&
+	       textureReady(transparencyCompositionMaskTexture) &&
+	       textureReady(motionVectorCopyTexture) &&
+	       (a_upscaleMethod != UpscaleMethod::kDLSS || textureReady(sharpenerTexture));
+}
+
 namespace
 {
 	bool HasVRIntermediateTextureCache(const Upscaling::VRIntermediateTextureCache& a_cache)
@@ -2898,6 +2995,124 @@ void Upscaling::RequestPostLoadRuntimeReset()
 	logger::info("[Upscaling] Armed VR post-load runtime reset");
 }
 
+void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
+{
+	if (!globals::game::isVR)
+		return;
+
+	if (GetOpenCompositeUpscalingBlocker().active)
+		return;
+
+	const bool perfModeActive = IsPerfModeActive();
+	const bool perfModeEligible = perfMode.IsEligible(settings, GetUpscaleMethod());
+	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
+		return;
+
+	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
+	RequestHistoryReset();
+	if (wasPending)
+		return;
+
+	if (a_reason && *a_reason) {
+		logger::info("[PerfMode] Queued render-target relatch: {}", a_reason);
+	} else {
+		logger::info("[PerfMode] Queued render-target relatch");
+	}
+}
+
+bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
+{
+	if (!globals::game::isVR)
+		return true;
+
+	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
+		return true;
+
+	if (GetOpenCompositeUpscalingBlocker().active) {
+		pendingPerfModeRenderTargetRecreate.store(false, std::memory_order_release);
+		return true;
+	}
+
+	auto* state = globals::state;
+	if (!state || !globals::game::renderer || !globals::d3d::context)
+		return false;
+
+	const bool loadingMenuOpen = state->isLoadingMenuOpen || IsLoadingMenuContextActive();
+	if ((IsCommunityShadersMenuOpen() || IsKnownGameMenuContextActive()) && !loadingMenuOpen)
+		return false;
+
+	const bool dlssMethodActive = GetUpscaleMethod() == UpscaleMethod::kDLSS;
+	if (dlssMethodActive &&
+		(pendingVRDLSSQualityMode.load(std::memory_order_acquire) != kPendingVRDLSSSettingUnset ||
+		 pendingVRDLSSPreset.load(std::memory_order_acquire) != kPendingVRDLSSSettingUnset)) {
+		return false;
+	}
+
+	if (perfModeRenderTargetRecreateInProgress.exchange(true, std::memory_order_acq_rel))
+		return false;
+
+	ScopeExit guard([&]() {
+		perfModeRenderTargetRecreateInProgress.store(false, std::memory_order_release);
+	});
+
+	if (!pendingPerfModeRenderTargetRecreate.exchange(false, std::memory_order_acq_rel))
+		return true;
+
+	if (state->IsSaveLoadSafeModeActive() && !loadingMenuOpen) {
+		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+		return false;
+	}
+
+	logger::info(
+		"[PerfMode] Applying render-target relatch{}{}",
+		a_caller && *a_caller ? " from " : "",
+		a_caller && *a_caller ? a_caller : "");
+
+	try {
+		const auto relatchUpscaleMethod = GetUpscaleMethod();
+
+		ResetVRVendorRuntimeResources(true, true);
+
+		perfMode.ResetBootLatch();
+		perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
+		perfMode.EnsureBootLatch(settings, relatchUpscaleMethod, true);
+
+		if (!Hooks::RecreateRenderTargets()) {
+			pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+			logger::warn("[PerfMode] Render-target relatch could not run; will retry.");
+			return false;
+		}
+
+		RecreateVendorRuntimeResources(relatchUpscaleMethod, relatchUpscaleMethod != UpscaleMethod::kFSR);
+
+		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
+			pendingDLSSHistoryReset.store(true, std::memory_order_release);
+			pendingDLSSReset.store(true, std::memory_order_release);
+			pendingFSRReset.store(false, std::memory_order_release);
+		} else if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
+			pendingFSRReset.store(true, std::memory_order_release);
+			pendingDLSSReset.store(false, std::memory_order_release);
+			pendingDLSSHistoryReset.store(false, std::memory_order_release);
+		} else {
+			pendingDLSSReset.store(false, std::memory_order_release);
+			pendingDLSSHistoryReset.store(false, std::memory_order_release);
+			pendingFSRReset.store(false, std::memory_order_release);
+		}
+		RefreshRuntimeResolutionPlan();
+	} catch (const std::exception& e) {
+		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+		logger::error("[PerfMode] Render-target relatch failed: {}", e.what());
+		return false;
+	} catch (...) {
+		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+		logger::error("[PerfMode] Render-target relatch failed with an unknown exception");
+		return false;
+	}
+
+	logger::info("[PerfMode] Applied render-target relatch");
+	return true;
+}
+
 void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 {
 	if (!globals::game::isVR)
@@ -2929,6 +3144,51 @@ void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	RequestHistoryReset();
 }
 
+void Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources)
+{
+	if (!globals::game::isVR)
+		return;
+
+	ResetVRSubmitStageState(a_destroyDLSSResources);
+	fidelityFX.DestroyFSRResources();
+	DestroyCommonUpscalingTextures();
+	if (a_destroyPeripheryTAAResources)
+		DestroyPeripheryTAAResources();
+	DisableAAVRSState();
+	aaVrsController.ReleaseResources();
+	ResetAAVRSTelemetry();
+}
+
+void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources)
+{
+	if (!IsVendorUpscalingMethod(a_upscaleMethod))
+		return;
+
+	CreateUpscalingTextureResources(a_upscaleMethod);
+	if (a_recreateTemporalResources && a_upscaleMethod == UpscaleMethod::kFSR)
+		fidelityFX.CreateFSRResources();
+}
+
+void Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context)
+{
+	if (!globals::game::isVR)
+		return;
+
+	const char* context = a_context ? a_context : "";
+	if (a_upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
+		logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
+		UnbindUpscalingResources();
+		streamline.DestroyDLSSResources();
+		RequestHistoryReset();
+	} else if (a_upscaleMethod == UpscaleMethod::kFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed)) {
+		logger::debug("[Upscaling] Rebuilding {}FSR resources after VR reset", context);
+		UnbindUpscalingResources();
+		fidelityFX.DestroyFSRResources();
+		fidelityFX.CreateFSRResources();
+		RequestHistoryReset();
+	}
+}
+
 void Upscaling::RequestVRSubmitStageHistoryReset()
 {
 	if (!globals::game::isVR)
@@ -2956,36 +3216,8 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		magic_enum::enum_name(a_upscaleMethod));
 
 	try {
-		UnbindUpscalingResources();
-
-		if (streamline.initialized && streamline.featureDLSS && streamline.slDLSSSetOptions && streamline.slFreeResources) {
-			streamline.DestroyDLSSResources();
-		} else {
-			streamline.InvalidateDLSSOptionsCache();
-		}
-
-		fidelityFX.DestroyFSRResources();
-
-		DestroyVRIntermediateTextures();
-		DestroyCommonUpscalingTextures();
-		DestroyFoveatedResources();
-		perfMode.ResetResources();
-		DisableAAVRSState();
-		aaVrsController.ReleaseResources();
-		ResetAAVRSTelemetry();
-
-		historyResetTrackingInitialized = false;
-		historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
-		historyResetThisFrame = false;
-		RequestHistoryReset();
-
-		if (a_upscaleMethod == UpscaleMethod::kDLSS || a_upscaleMethod == UpscaleMethod::kFSR) {
-			CreateUpscalingTextureResources(a_upscaleMethod);
-		}
-
-		if (a_upscaleMethod == UpscaleMethod::kFSR) {
-			fidelityFX.CreateFSRResources();
-		}
+		ResetVRVendorRuntimeResources(true, false);
+		RecreateVendorRuntimeResources(a_upscaleMethod, true);
 	} catch (const std::exception& e) {
 		logger::error("[Upscaling] VR post-load runtime reset failed: {}", e.what());
 		postLoadRuntimeResetPending.store(true, std::memory_order_release);
@@ -3225,6 +3457,12 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousPerfMode = perfModeCurrent;
 		previousFoveatedLayout = foveatedLayoutCurrent;
 		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
+	}
+
+	if (!AreCommonVendorTexturesReady(a_upscalemethod)) {
+		logger::debug("[Upscaling] Recreating missing common texture resources for method {}", magic_enum::enum_name(a_upscalemethod));
+		DestroyCommonUpscalingTextures();
+		CreateUpscalingTextureResources(a_upscalemethod);
 	}
 }
 
@@ -6192,6 +6430,10 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
 	const auto requestedUpscaleMethod = GetUpscaleMethod();
 	ApplyPendingVRDLSSSettings(requestedUpscaleMethod);
+	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
+		if (ApplyPendingPerfModeRenderTargetRecreate("ConfigureUpscaling"))
+			return;
+	}
 	auto upscaleMethod = GetRuntimeUpscaleMethod();
 
 	// Cache original TAA values for UI
@@ -6885,12 +7127,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	if (submitStagePreparedFrame != currentFrame) {
-		if (upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
-			logger::debug("[Upscaling] LoadingMenu close detected - rebuilding submit-stage DLSS feature");
-			UnbindUpscalingResources();
-			streamline.DestroyDLSSResources();
-			RequestHistoryReset();
-		}
+		ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ");
 
 		UpdateHistoryResetState(upscaleMethod);
 		LatchHistoryResetForCurrentFrame();
@@ -7278,6 +7515,8 @@ void Upscaling::ApplyPendingVRDLSSSettings(UpscaleMethod a_upscaleMethod)
 	if (changed) {
 		RequestHistoryReset();
 		pendingDLSSHistoryReset.store(true, std::memory_order_release);
+		if (IsPerfModeActive() || GetPerfModeRequested())
+			RequestPerfModeRenderTargetRecreate("VR DLSS preset change");
 	}
 }
 
@@ -7825,14 +8064,8 @@ void Upscaling::Upscale()
 		static bool loggedFoveatedFallback = false;
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
-		// VR-only workaround: loading transitions can leave DLSS in a slower persistent state
-		// until users manually toggle method/preset; force a one-shot feature rebuild instead.
-		if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
-			logger::debug("[Upscaling] LoadingMenu close detected - rebuilding DLSS feature");
-			UnbindUpscalingResources();
-			streamline.DestroyDLSSResources();
-			RequestHistoryReset();
-		}
+		// VR-only resets can leave vendor upscalers with stale viewport state.
+		ApplyPendingVendorRuntimeReset(upscaleMethod, "");
 
 		if (foveatedDispatchRequested) {
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];

@@ -395,8 +395,14 @@ public:
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
+	bool GetPerfModeRequested() const;
+	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr);
+	void SetVRUpscalingTransitionProfile(bool a_renderAtUpscaleResEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr);
+	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr);
+	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
+	bool ConsumePerfModeBootLatchCreate();
 	bool AdjustPerfModeRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
@@ -633,6 +639,10 @@ public:
 	std::atomic<uint32_t> pendingVRDLSSQualityMode{ kPendingVRDLSSSettingUnset };
 	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRDLSSSettingUnset };
 	std::atomic<bool> pendingDLSSReset{ false };
+	std::atomic<bool> pendingFSRReset{ false };
+	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
+	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
+	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
 	ID3D11Texture2D* submitStageHandoffTexture = nullptr;
@@ -766,6 +776,10 @@ public:
 private:
 	void ApplySubmitStageDynamicResolutionState(RE::BSGraphics::State* a_viewport, float a_widthRatio, float a_heightRatio, bool a_useDynamicResolution);
 	void ResetSubmitStageDynamicResolutionState();
+	void ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources);
+	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
+	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
+	void ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
 
 	bool submitStageDynamicResolutionStateValid = false;

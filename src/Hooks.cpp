@@ -617,6 +617,15 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+	bool RecreateRenderTargets()
+	{
+		if (!globals::game::renderer || !globals::state)
+			return false;
+
+		BSShaderRenderTargets_Create::thunk();
+		return true;
+	}
+
 	struct BSGraphics_Renderer_Init_InitD3D
 	{
 		static void thunk()

@@ -80,6 +80,16 @@ namespace CSPluginAPI
 		// DLSS profile selection only. This does not affect FSR 3.1.5 or FSR4.
 		virtual DLSSProfile GetDLSSProfile() = 0;
 		virtual void SetDLSSProfile(DLSSProfile profile) = 0;
+
+		// VR only. Requests Community Shaders' Render at Upscale Res path.
+		// Runtime activation can require a render-target relatch during a loading transition.
+		virtual bool GetRenderAtUpscaleResEnabled() = 0;
+		virtual void SetRenderAtUpscaleResEnabled(bool enabled) = 0;
+		virtual bool GetRenderAtUpscaleResActive() = 0;
+
+		// Convenience for interior/exterior transition controllers. Stages the
+		// render-size path, shared upscaler preset, and DLSS profile together.
+		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI
 

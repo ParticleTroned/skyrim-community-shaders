@@ -18,8 +18,9 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 - Volumetric Lighting Exterior toggle
 - Shared upscaler preset control for DLSS, FSR 3.1.5, and runtime FSR4 (`DLAA`/`Native AA`, `Hoshipa`, `Ultra Quality`, `Quality`, `Balanced`, `Performance`, `Ultra Performance`)
 - DLSS profile control (`J`, `K`, `L`, `M`, `F`)
+- VR Render at Upscale Res control with transition-time render-target relatching
 
-The first three are runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. The legacy API names still say `DLSSMode` for compatibility. DLSS profile control is DLSS-only.
+The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. The legacy API names still say `DLSSMode` for compatibility. DLSS profile control is DLSS-only. In VR, Render at Upscale Res requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch.
 
 ## Files You Need In The Consumer Mod
 
@@ -96,6 +97,10 @@ void SetShadowsEnabled(bool enabled)
 - `UpscalePreset GetUpscalePreset()` / `void SetUpscalePreset(UpscalePreset preset)` (header convenience wrappers)
 - `DLSSProfile GetDLSSProfile()`
 - `void SetDLSSProfile(DLSSProfile profile)`
+- `bool GetRenderAtUpscaleResEnabled()`
+- `void SetRenderAtUpscaleResEnabled(bool enabled)`
+- `bool GetRenderAtUpscaleResActive()`
+- `void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile)`
 
 `DLSSMode` / `UpscalePreset` values:
 
@@ -117,6 +122,10 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - `UpscalePreset` is an alias for `DLSSMode`; new integrations should prefer the `UpscalePreset` wording.
 - These presets are Community Shaders render-scale presets, not AMD FSR quality enum values. `Hoshipa` and `Ultra Quality` are valid for both DLSS and FSR/FSR4 because the backend receives explicit render and display sizes.
 - DLSS profile control is DLSS-only and does **not** affect FSR 3.1.5 or FSR4.
+- `SetRenderAtUpscaleResEnabled` changes the requested VR Render at Upscale Res state. `GetRenderAtUpscaleResActive` reports whether the relatched render targets are actually active.
+- Render at Upscale Res is only eligible in VR with DLSS/FSR upscaling presets below native scale. Unsupported combinations remain requested but inactive.
+- `SetVRUpscalingTransitionProfile` is intended for interior/exterior transition controllers. It stages Render at Upscale Res, the shared upscaler preset, and the DLSS profile together so Community Shaders can apply one relatch.
+- VR DLSS keeps two viewport/resource slots for recent quality/profile combinations. Alternating between an exterior profile and an interior profile can reuse those slots instead of rebuilding DLSS every time.
 - Reflex settings are not exposed by this API.
 - If the API pointer is null, Community Shaders is missing, too old, or not ready yet.
 - Call from the main/game thread, or queue via SKSE task interface.
@@ -128,4 +137,6 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - `GetDLSSMode`/`SetDLSSMode` require `getBuildNumber() >= 2`; `GetUpscalePreset`/`SetUpscalePreset` are header wrappers over those methods.
 - `GetDLSSProfile`/`SetDLSSProfile` require `getBuildNumber() >= 3`.
 - `DLSSMode::kHoshipa` / `UpscalePreset::kHoshipa` and `DLSSMode::kUltraQuality` / `UpscalePreset::kUltraQuality` require `getBuildNumber() >= 4`.
+- `GetRenderAtUpscaleResEnabled`/`SetRenderAtUpscaleResEnabled`/`GetRenderAtUpscaleResActive` require `getBuildNumber() >= 5`.
+- `SetVRUpscalingTransitionProfile` requires `getBuildNumber() >= 6`.
 - Treat missing API as optional integration and continue without hard failure.

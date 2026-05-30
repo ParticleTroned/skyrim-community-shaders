@@ -66,8 +66,7 @@ public:
 	{
 		Main,
 		Sharpener,
-		SubmitStageIntermediate,
-		PerfModeIntermediate
+		SubmitStageIntermediate
 	};
 
 	// Shared DLSS/FSR/FSR4 render-scale presets:
@@ -609,6 +608,9 @@ public:
 	bool historyResetTrackingInitialized = false;
 	float2 previousHistoryScreenSize = { 0.0f, 0.0f };
 	float2 previousHistoryResolutionScale = { 1.0f, 1.0f };
+	float2 previousHistoryEngineRenderSize = { 0.0f, 0.0f };
+	float2 previousHistoryFinalOutputSize = { 0.0f, 0.0f };
+	ResolutionOwner previousHistoryResolutionOwner = ResolutionOwner::Native;
 	uint32_t previousHistoryQualityMode = std::numeric_limits<uint32_t>::max();
 	bool previousHistoryInWorld = false;
 	bool previousHistoryInMapMenu = false;

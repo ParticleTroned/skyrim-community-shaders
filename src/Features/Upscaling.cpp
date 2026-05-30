@@ -63,6 +63,34 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 
 namespace
 {
+	template <class Fn>
+	struct ScopeExit
+	{
+		Fn fn;
+		bool active = true;
+
+		explicit ScopeExit(Fn a_fn) :
+			fn(a_fn)
+		{}
+
+		ScopeExit(const ScopeExit&) = delete;
+		ScopeExit& operator=(const ScopeExit&) = delete;
+
+		~ScopeExit()
+		{
+			if (active)
+				fn();
+		}
+
+		void Release()
+		{
+			active = false;
+		}
+	};
+
+	template <class Fn>
+	ScopeExit(Fn) -> ScopeExit<Fn>;
+
 	constexpr float kPeripheryTAAOuterScaleMin = 0.30f;
 	constexpr float kPeripheryTAAOuterScaleMax = 1.0f;
 	constexpr float kPeripheryTAACenterBlendFeatherMin = 0.0f;
@@ -134,15 +162,15 @@ namespace
 		if (!IsSubmitStagePathEligible(upscaleMethod))
 			return false;
 
-		if (globals::features::upscaling.IsPerfModeActive())
-			return false;
-
 		return ClampToggleUInt(globals::features::upscaling.settings.submitStageUpscaling) != 0;
 	}
 
 	bool IsSubmitStageDynamicResolutionActive()
 	{
-		return IsSubmitStagePathEnabled();
+		// PerfMode boot-latches Skyrim's internal render size; submit-stage may still
+		// present it, but must not also drive dynamic-resolution ratios.
+		return IsSubmitStagePathEnabled() &&
+		       !globals::features::upscaling.IsPerfModeActive();
 	}
 
 	bool ShouldUseStableSubmitStageDLSSInputs()
@@ -1359,23 +1387,25 @@ void Upscaling::DrawSettings()
 		if (!globals::game::isVR)
 			return;
 
-		const bool perfModeOwnsBoundary = IsPerfModeActive();
-		const bool canEnable = IsSubmitStagePathEligible(upscaleMethod) && !perfModeOwnsBoundary;
-		auto disabledGuard = Util::DisableGuard(!canEnable);
+		const bool perfModeActive = IsPerfModeActive();
+		const bool submitPathEligible = IsSubmitStagePathEligible(upscaleMethod);
+		const bool canEdit = submitPathEligible && !perfModeActive;
+		auto disabledGuard = Util::DisableGuard(!submitPathEligible || perfModeActive);
 
 		const char* submitStageModes[] = { "Disabled", "Enabled" };
-		int submitStageUpscaling = canEnable ? static_cast<int>(ClampToggleUInt(settings.submitStageUpscaling)) : 0;
+		int submitStageUpscaling = perfModeActive ? 1 : (submitPathEligible ? static_cast<int>(ClampToggleUInt(settings.submitStageUpscaling)) : 0);
 		ImGui::SliderInt("Submit Path", &submitStageUpscaling, 0, 1, submitStageModes[std::clamp(submitStageUpscaling, 0, 1)]);
-		if (canEnable)
+		if (canEdit)
 			settings.submitStageUpscaling = static_cast<uint>(std::clamp(submitStageUpscaling, 0, 1));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Controls the VR submit-stage upscaling path for DLSS/FSR upscaling presets.");
-			ImGui::TextUnformatted("Disable to fall back to the pre-image-space upscaling path for A/B testing.");
+			ImGui::TextUnformatted("When Render at Upscale Res is active, this path performs the final presentation upscale.");
+			ImGui::TextUnformatted("Disable without Render at Upscale Res to fall back to the pre-image-space upscaling path for A/B testing.");
 		}
 
-		if (perfModeOwnsBoundary)
-			ImGui::TextDisabled("Submit Path is disabled while Render at Upscale Res owns the VR render/display boundary.");
-		else if (!canEnable)
+		if (perfModeActive)
+			ImGui::TextDisabled("Submit Path presents the Render at Upscale Res output; Skyrim render targets stay at the internal size.");
+		else if (!submitPathEligible)
 			ImGui::TextDisabled("Submit Path is available only with DLSS/FSR upscaling presets in VR.");
 	};
 
@@ -1395,7 +1425,7 @@ void Upscaling::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Makes Skyrim VR allocate engine render targets at the selected upscaler internal resolution.");
-			ImGui::TextUnformatted("This owns the same render/display boundary as Submit Path, so the two modes are mutually exclusive.");
+			ImGui::TextUnformatted("Submit Path then performs the single final upscale/presentation to the HMD size.");
 			ImGui::TextUnformatted("Enabling after startup, method changes, and Upscale Preset changes require restart.");
 		}
 
@@ -2452,7 +2482,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 			plan.engineRenderSize = renderSize;
 		plan.finalOutputSize = plan.trueHMDDisplaySize;
 		plan.owner = ResolutionOwner::PerfMode;
-		plan.outputTarget = UpscalingOutputTarget::PerfModeIntermediate;
+		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
 	} else if (plan.vendorMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
 		const auto submitSize = GetSubmitStageSizePlan(screenSize);
 		plan.trueHMDDisplaySize = { static_cast<float>(submitSize.outputWidth), static_cast<float>(submitSize.outputHeight) };
@@ -2515,7 +2545,8 @@ bool Upscaling::IsPerfModePresentationActive() const
 
 bool Upscaling::IsPresentationUpscalingActive() const
 {
-	return IsSubmitStageUpscalingActive() || IsPerfModePresentationActive();
+	return IsSubmitStageUpscalingActive() ||
+	       (IsPerfModePresentationActive() && IsGameMenuContextActive());
 }
 
 void Upscaling::RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
@@ -3053,8 +3084,13 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		}
 
 		if (perfModeChanged) {
-			perfMode.ResetResources();
-			RequestHistoryReset();
+			if (globals::game::isVR) {
+				ResetVRSubmitStageState(false);
+				DestroyPeripheryTAAResources();
+			} else {
+				perfMode.ResetResources();
+				RequestHistoryReset();
+			}
 		}
 
 		bool fsrResourcesDestroyedForQuality = false;
@@ -5166,6 +5202,20 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistoryValid);
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
+	const uint32_t currentFrame = state->frameCount;
+	const bool previousPeripheryFrameMatches = submitStageFoveatedPeripheryTAAFrame == currentFrame;
+	const bool previousPeripheryEyeReady = previousPeripheryFrameMatches && submitStageFoveatedPeripheryTAAEyeReady[eyeIndex];
+	auto peripheryEyeReadyGuard = ScopeExit([&]() {
+		if (!usePeripheryTAA)
+			return;
+
+		if (previousPeripheryFrameMatches) {
+			submitStageFoveatedPeripheryTAAEyeReady[eyeIndex] = previousPeripheryEyeReady;
+		} else if (submitStageFoveatedPeripheryTAAFrame == currentFrame) {
+			submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
+			submitStageFoveatedPeripheryTAAEyeReady = {};
+		}
+	});
 
 	ID3D11Resource* centerDepthInput = nullptr;
 	if (!visualizeMask) {
@@ -5214,7 +5264,6 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	}
 
 	if (usePeripheryTAA) {
-		const uint32_t currentFrame = state->frameCount;
 		if (submitStageFoveatedPeripheryTAAFrame != currentFrame) {
 			submitStageFoveatedPeripheryTAAFrame = currentFrame;
 			submitStageFoveatedPeripheryTAAEyeReady = {};
@@ -5228,6 +5277,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 		}
 	}
 
+	peripheryEyeReadyGuard.Release();
 	return true;
 }
 
@@ -5526,10 +5576,23 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		return;
 
 	auto state = globals::state;
-	if (state->frameAnnotations)
-		state->BeginPerfEvent("VR Upscaling Prepare");
-
 	auto context = globals::d3d::context;
+	auto device = globals::d3d::device;
+	auto renderer = globals::game::renderer;
+	if (!state || !context || !device || !renderer || !colorSrc ||
+		(copyDepthInput && !depthSrc) ||
+		(copyAuxiliaryInputs && (!mvecSrc || !reactiveSrc || !transparencySrc))) {
+		return;
+	}
+
+	const bool frameAnnotations = state->frameAnnotations;
+	if (frameAnnotations)
+		state->BeginPerfEvent("VR Upscaling Prepare");
+	auto perfEventGuard = ScopeExit([&]() {
+		if (frameAnnotations)
+			state->EndPerfEvent();
+	});
+
 	auto screenSize = runtimeResolutionPlan.finalOutputSize;
 	auto renderSize = runtimeResolutionPlan.engineRenderSize;
 	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f)
@@ -5543,6 +5606,19 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	uint32_t eyeHeightIn = (uint32_t)renderSize.y;
 
 	EnsureVRIntermediateTextures(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, colorSrc, mvecSrc, reactiveSrc, transparencySrc);
+	if (!vrIntermediateColorIn[0] || !vrIntermediateColorIn[0]->resource || !vrIntermediateColorIn[0]->uav ||
+		!vrIntermediateColorIn[1] || !vrIntermediateColorIn[1]->resource || !vrIntermediateColorIn[1]->uav ||
+		(copyDepthInput && (!vrIntermediateDepth[0] || !vrIntermediateDepth[0]->resource ||
+		                    !vrIntermediateDepth[1] || !vrIntermediateDepth[1]->resource)) ||
+		(copyAuxiliaryInputs &&
+			(!vrIntermediateMotionVectors[0] || !vrIntermediateMotionVectors[0]->resource ||
+			 !vrIntermediateMotionVectors[1] || !vrIntermediateMotionVectors[1]->resource ||
+			 !vrIntermediateReactiveMask[0] || !vrIntermediateReactiveMask[0]->resource ||
+			 !vrIntermediateReactiveMask[1] || !vrIntermediateReactiveMask[1]->resource ||
+			 !vrIntermediateTransparencyMask[0] || !vrIntermediateTransparencyMask[0]->resource ||
+			 !vrIntermediateTransparencyMask[1] || !vrIntermediateTransparencyMask[1]->resource))) {
+		return;
+	}
 
 	// Extract both eyes' required inputs from combined stereo buffers.
 	// Reactive / transparency / encoded motion vectors can be pre-generated directly per-eye by the encode pass.
@@ -5563,7 +5639,7 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	// Zero color in the HMD hidden area, including a tiny mask-edge expansion,
 	// in each per-eye buffer before temporal reuse.
 	// Bind CS/SRV/CB once for both eyes to reduce per-frame CPU overhead.
-	auto& depthTexture = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	if (!vrClearHMDMaskCS) {
 		vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
 
@@ -5572,10 +5648,10 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		cbDesc.Usage = D3D11_USAGE_DEFAULT;
 		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 		cbDesc.CPUAccessFlags = 0;
-		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
+		DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
 	}
 
-	if (vrClearHMDMaskCS && vrClearHMDMaskCB) {
+	if (depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
 		auto dispatchX = (eyeWidthIn + 7) / 8;
 		auto dispatchY = (eyeHeightIn + 7) / 8;
 
@@ -5614,24 +5690,30 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		context->CSSetConstantBuffers(0, 1, nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
-
-	if (state->frameAnnotations)
-		state->EndPerfEvent();
 }
 
 void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 {
 	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "VR Upscaling - Finalize Per Eye");
 
 	if (!globals::game::isVR)
 		return;
 
 	auto state = globals::state;
-	if (state->frameAnnotations)
-		state->BeginPerfEvent("VR Upscaling Finalize");
-
 	auto context = globals::d3d::context;
+	if (!state || !context || !colorDst)
+		return;
+
+	TracyD3D11Zone(state->tracyCtx, "VR Upscaling - Finalize Per Eye");
+
+	const bool frameAnnotations = state->frameAnnotations;
+	if (frameAnnotations)
+		state->BeginPerfEvent("VR Upscaling Finalize");
+	auto perfEventGuard = ScopeExit([&]() {
+		if (frameAnnotations)
+			state->EndPerfEvent();
+	});
+
 	auto screenSize = runtimeResolutionPlan.finalOutputSize;
 	auto renderSize = runtimeResolutionPlan.engineRenderSize;
 	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f)
@@ -5657,8 +5739,6 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 				eyeHeightOut);
 			loggedPerfModeDstTooSmall = true;
 		}
-		if (state->frameAnnotations)
-			state->EndPerfEvent();
 		return;
 	}
 
@@ -5686,14 +5766,15 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 	}
 
 	// Write upscaled outputs back
+	if (!vrIntermediateColorOut[0] || !vrIntermediateColorOut[0]->resource ||
+		!vrIntermediateColorOut[1] || !vrIntermediateColorOut[1]->resource) {
+		return;
+	}
 	for (uint32_t i = 0; i < 2; ++i) {
 		uint32_t offsetXOut = (i == 1) ? eyeWidthOut : 0;
 		D3D11_BOX outBox = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
 		context->CopySubresourceRegion(colorDst, 0, offsetXOut, 0, 0, vrIntermediateColorOut[i]->resource.get(), 0, &outBox);
 	}
-
-	if (state->frameAnnotations)
-		state->EndPerfEvent();
 }
 
 bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
@@ -6622,7 +6703,11 @@ bool Upscaling::IsUpscalingActive() const
 
 bool Upscaling::IsSubmitStageUpscalingActive() const
 {
-	return IsSubmitStageDynamicResolutionActive() &&
+	const bool submitStageSceneActive =
+		IsSubmitStageDynamicResolutionActive() ||
+		IsPerfModePresentationActive();
+
+	return submitStageSceneActive &&
 	       g_submitStageTargetSizeKnown &&
 	       !IsGameMenuContextActive();
 }
@@ -7137,6 +7222,14 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool inWorld = state->inWorld;
 	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
 	const float2 screenSize = state->screenSize;
+	RefreshRuntimeResolutionPlan();
+	float2 engineRenderSize = runtimeResolutionPlan.engineRenderSize;
+	float2 finalOutputSize = runtimeResolutionPlan.finalOutputSize;
+	if (engineRenderSize.x <= 0.0f || engineRenderSize.y <= 0.0f)
+		engineRenderSize = Util::ConvertToDynamic(screenSize);
+	if (finalOutputSize.x <= 0.0f || finalOutputSize.y <= 0.0f)
+		finalOutputSize = screenSize;
+	const auto resolutionOwner = runtimeResolutionPlan.owner;
 	const bool foveatedDispatchEnabled = IsFoveatedVendorDispatchEnabled(a_upscaleMethod);
 	const bool peripheryTAAEnabled = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool peripheryTAAPathActive = IsPeripheryTAAPathActive(a_upscaleMethod);
@@ -7183,6 +7276,13 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		const bool scaleChanged =
 			std::abs(resolutionScale.x - previousHistoryResolutionScale.x) > 1e-4f ||
 			std::abs(resolutionScale.y - previousHistoryResolutionScale.y) > 1e-4f;
+		const bool engineRenderSizeChanged =
+			std::abs(engineRenderSize.x - previousHistoryEngineRenderSize.x) > 0.5f ||
+			std::abs(engineRenderSize.y - previousHistoryEngineRenderSize.y) > 0.5f;
+		const bool finalOutputSizeChanged =
+			std::abs(finalOutputSize.x - previousHistoryFinalOutputSize.x) > 0.5f ||
+			std::abs(finalOutputSize.y - previousHistoryFinalOutputSize.y) > 0.5f;
+		const bool resolutionOwnerChanged = resolutionOwner != previousHistoryResolutionOwner;
 		const bool qualityModeChanged = qualityMode != previousHistoryQualityMode;
 		const bool worldStateChanged =
 			inWorld != previousHistoryInWorld ||
@@ -7216,7 +7316,21 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 				std::abs(peripheryTAAOuterScale - previousHistoryPeripheryTAAOuterScale) > 1e-4f ||
 				std::abs(peripheryTAACenterBlendFeather - previousHistoryPeripheryTAACenterBlendFeather) > 1e-4f));
 
-		shouldReset = screenSizeChanged || scaleChanged || qualityModeChanged || worldStateChanged || methodChanged || fsrRuntimePathChanged || fsrRuntimeVersionChanged || foveatedChanged || effectivePeripheryTAAChanged || longFrameGap || cameraCut;
+		shouldReset =
+			screenSizeChanged ||
+			scaleChanged ||
+			engineRenderSizeChanged ||
+			finalOutputSizeChanged ||
+			resolutionOwnerChanged ||
+			qualityModeChanged ||
+			worldStateChanged ||
+			methodChanged ||
+			fsrRuntimePathChanged ||
+			fsrRuntimeVersionChanged ||
+			foveatedChanged ||
+			effectivePeripheryTAAChanged ||
+			longFrameGap ||
+			cameraCut;
 	}
 
 	if (state->pendingPostLoadRuntimeReset)
@@ -7227,6 +7341,9 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 
 	previousHistoryScreenSize = screenSize;
 	previousHistoryResolutionScale = resolutionScale;
+	previousHistoryEngineRenderSize = engineRenderSize;
+	previousHistoryFinalOutputSize = finalOutputSize;
+	previousHistoryResolutionOwner = resolutionOwner;
 	previousHistoryQualityMode = qualityMode;
 	previousHistoryInWorld = inWorld;
 	previousHistoryInMapMenu = inMapMenu;
@@ -8471,29 +8588,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (upscaling.IsPerfModePresentationActive()) {
-		globals::features::vr.InstallSubmitHook();
-
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
-
-		upscaling.UpdateHistoryResetState(upscaleMethod);
-		upscaling.LatchHistoryResetForCurrentFrame();
-
-		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
-
-		upscaling.RefreshSubmitStageUnderwaterMask();
-
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
-		return;
-	}
-
-	if (upscaling.IsSubmitStageUpscalingActive()) {
+	if (presentationUpscalingActive) {
 		globals::features::vr.InstallSubmitHook();
 
 		if (upscaling.ShouldUseFrameGenerationThisFrame())

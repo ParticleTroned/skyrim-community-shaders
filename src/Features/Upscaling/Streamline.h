@@ -25,6 +25,7 @@ public:
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\Streamline";
 
 	Streamline() = default;
+	~Streamline();
 
 	inline std::string GetShortName() { return "Streamline"; }
 
@@ -103,6 +104,8 @@ public:
 	DLSSOptionsCache nonVRDLSSOptionsCache{};
 	VRDLSSViewportSlot vrDLSSViewportSlots[kVRDLSSViewportSlotCount]{};
 	uint64_t vrDLSSViewportUseCounter = 0;
+	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;
+	ID3D11Query* pendingVRDLSSSlotRecycleIdleFence = nullptr;
 
 	struct ReflexOptionsCache
 	{
@@ -143,6 +146,7 @@ public:
 	DLSSOptionsCache& GetDLSSOptionsCache(uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
 	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset);
 	void InvalidateDLSSOptionsCache();
+	void ResetDLSSIdleFences();
 	void ResetFrameTracking();
 
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
@@ -152,5 +156,5 @@ public:
 		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
 	void UpdateReflex();
 
-	void DestroyDLSSResources();
+	bool DestroyDLSSResources();
 };

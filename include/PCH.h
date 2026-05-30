@@ -138,6 +138,8 @@ namespace DX
 			return s_str;
 		}
 
+		HRESULT Error() const noexcept { return result; }
+
 	private:
 		HRESULT result;
 	};

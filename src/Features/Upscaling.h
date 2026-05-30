@@ -548,9 +548,10 @@ public:
 
 	void ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
 	void PrepareFullResolutionPostProcessing();
-	void ResetVRSubmitStageState(bool a_destroyDLSSResources = true);
+	bool ResetVRSubmitStageState(bool a_destroyDLSSResources = true);
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
+	bool IsSubmitStageDeviceLost() const;
 	bool IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
@@ -643,6 +644,8 @@ public:
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
+	std::atomic<bool> vrDLSSSettingsRelatched{ false };
+	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
 	std::array<ID3D11Texture2D*, 8> submitStageHandoffTextures = {};
@@ -779,13 +782,18 @@ private:
 	void ApplySubmitStageDynamicResolutionState(RE::BSGraphics::State* a_viewport, float a_widthRatio, float a_heightRatio, bool a_useDynamicResolution);
 	void ResetSubmitStageDynamicResolutionState();
 	void ResetSubmitStageHandoffState();
+	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
+	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
+	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
 	void RegisterSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture);
 	bool HasSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture, uint32_t a_maxFrameDelta) const;
-	void ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources);
+	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
-	void ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
+	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
+	bool EnsureHMDMaskClearResources();
+	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
 
 	bool submitStageDynamicResolutionStateValid = false;
 	uint32_t submitStageDynamicResolutionStateFrame = std::numeric_limits<uint32_t>::max();

@@ -20,9 +20,11 @@
 #include <cfloat>
 #include <cwctype>
 #include <directx/d3dx12.h>
+#include <dxgi.h>
 #include <filesystem>
 #include <format>
 #include <string_view>
+#include <utility>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -170,11 +172,15 @@ namespace
 
 	bool IsSubmitStagePathEnabled()
 	{
-		const auto upscaleMethod = globals::features::upscaling.GetUpscaleMethod();
+		auto& upscaling = globals::features::upscaling;
+		if (upscaling.IsSubmitStageDeviceLost())
+			return false;
+
+		const auto upscaleMethod = upscaling.GetUpscaleMethod();
 		if (!IsSubmitStagePathEligible(upscaleMethod))
 			return false;
 
-		return ClampToggleUInt(globals::features::upscaling.settings.submitStageUpscaling) != 0;
+		return ClampToggleUInt(upscaling.settings.submitStageUpscaling) != 0;
 	}
 
 	bool IsSubmitStageDynamicResolutionActive()
@@ -1040,6 +1046,9 @@ namespace
 			return false;
 
 		auto& upscaling = globals::features::upscaling;
+		if (upscaling.IsSubmitStageDeviceLost())
+			return false;
+
 		return IsSubmitStageDynamicResolutionActive() || upscaling.IsPerfModePresentationActive();
 	}
 
@@ -1092,6 +1101,55 @@ namespace
 
 		texture->GetDesc(&outDesc);
 		return true;
+	}
+
+	bool IsD3DDeviceRemovedResult(HRESULT a_result)
+	{
+		return a_result == DXGI_ERROR_DEVICE_REMOVED ||
+		       a_result == DXGI_ERROR_DEVICE_RESET ||
+		       a_result == DXGI_ERROR_DEVICE_HUNG;
+	}
+
+	HRESULT GetD3DDeviceRemovedReason()
+	{
+		auto* device = globals::d3d::device;
+		return device ? device->GetDeviceRemovedReason() : S_OK;
+	}
+
+	void LogWarnOnce(bool& logged, std::string_view message)
+	{
+		if (logged)
+			return;
+
+		logger::warn("{}", message);
+		logged = true;
+	}
+
+	void LogWarnOnce(bool& logged, std::string_view message, const std::exception& e)
+	{
+		if (logged)
+			return;
+
+		logger::warn("{}: {}", message, e.what());
+		logged = true;
+	}
+
+	template <class... Args>
+	void LogWarnOnceFmt(bool& logged, const char* format, Args&&... args)
+	{
+		if (logged)
+			return;
+
+		try {
+			logger::warn(fmt::runtime(format), std::forward<Args>(args)...);
+		} catch (...) {
+			try {
+				logger::warn("{}", format);
+			} catch (...) {
+				// Do not rethrow from logging paths.
+			}
+		}
+		logged = true;
 	}
 
 	eastl::unique_ptr<Texture2D> CreateNamedTexture2D(uint32_t width, uint32_t height, DXGI_FORMAT format, bool createSRV, bool createUAV, bool createRTV, const char* name)
@@ -3080,7 +3138,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	try {
 		const auto relatchUpscaleMethod = GetUpscaleMethod();
 
-		ResetVRVendorRuntimeResources(true, true);
+		if (!ResetVRVendorRuntimeResources(true, true)) {
+			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch DLSS resource teardown"))
+				return false;
+
+			pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+			pendingDLSSReset.store(relatchUpscaleMethod == UpscaleMethod::kDLSS, std::memory_order_release);
+			logger::warn("[PerfMode] Render-target relatch deferred because DLSS resources are still in use.");
+			return false;
+		}
 
 		perfMode.ResetBootLatch();
 		perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
@@ -3096,24 +3162,29 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
-			pendingDLSSReset.store(true, std::memory_order_release);
+			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingFSRReset.store(false, std::memory_order_release);
+			vrDLSSSettingsRelatched.store(true, std::memory_order_release);
 		} else if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
 			pendingFSRReset.store(true, std::memory_order_release);
 			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
+			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		} else {
 			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
 			pendingFSRReset.store(false, std::memory_order_release);
+			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		}
 		RefreshRuntimeResolutionPlan();
 	} catch (const std::exception& e) {
-		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+		if (!MarkSubmitStageDeviceLostIfNeeded(e, "render-target relatch"))
+			pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
 		logger::error("[PerfMode] Render-target relatch failed: {}", e.what());
 		return false;
 	} catch (...) {
-		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch"))
+			pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
 		logger::error("[PerfMode] Render-target relatch failed with an unknown exception");
 		return false;
 	}
@@ -3122,18 +3193,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	return true;
 }
 
-void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
+bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 {
 	if (!globals::game::isVR)
-		return;
+		return true;
 
 	UnbindUpscalingResources();
 	DestroyVRIntermediateTextures();
 	DestroyFoveatedResources();
 	perfMode.ResetResources();
 
+	bool dlssResourcesDestroyed = true;
 	if (a_destroyDLSSResources && streamline.initialized && streamline.featureDLSS && streamline.slDLSSSetOptions && streamline.slFreeResources) {
-		streamline.DestroyDLSSResources();
+		dlssResourcesDestroyed = streamline.DestroyDLSSResources();
+		if (!dlssResourcesDestroyed)
+			MarkSubmitStageDeviceLostIfDeviceRemoved("VR submit-stage DLSS resource teardown");
 	} else {
 		streamline.InvalidateDLSSOptionsCache();
 	}
@@ -3150,14 +3224,15 @@ void Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
 	historyResetThisFrame = false;
 	RequestHistoryReset();
+	return dlssResourcesDestroyed;
 }
 
-void Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources)
+bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources)
 {
 	if (!globals::game::isVR)
-		return;
+		return true;
 
-	ResetVRSubmitStageState(a_destroyDLSSResources);
+	const bool submitStageReset = ResetVRSubmitStageState(a_destroyDLSSResources);
 	fidelityFX.DestroyFSRResources();
 	DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
@@ -3165,6 +3240,7 @@ void Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	DisableAAVRSState();
 	aaVrsController.ReleaseResources();
 	ResetAAVRSTelemetry();
+	return submitStageReset;
 }
 
 void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources)
@@ -3177,24 +3253,69 @@ void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bo
 		fidelityFX.CreateFSRResources();
 }
 
-void Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context)
+bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context)
 {
 	if (!globals::game::isVR)
-		return;
+		return true;
 
 	const char* context = a_context ? a_context : "";
-	if (a_upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
-		logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
-		UnbindUpscalingResources();
-		streamline.DestroyDLSSResources();
-		RequestHistoryReset();
-	} else if (a_upscaleMethod == UpscaleMethod::kFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed)) {
-		logger::debug("[Upscaling] Rebuilding {}FSR resources after VR reset", context);
-		UnbindUpscalingResources();
-		fidelityFX.DestroyFSRResources();
-		fidelityFX.CreateFSRResources();
-		RequestHistoryReset();
+	const bool rebuildDLSS = a_upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed);
+	const bool rebuildFSR = a_upscaleMethod == UpscaleMethod::kFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed);
+	if (!rebuildDLSS && !rebuildFSR)
+		return true;
+
+	static bool loggedVendorResetFailure = false;
+	static bool loggedVendorResetDeferral = false;
+	try {
+		if (rebuildDLSS) {
+			logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
+			UnbindUpscalingResources();
+			if (!streamline.DestroyDLSSResources()) {
+				if (!MarkSubmitStageDeviceLostIfDeviceRemoved("vendor runtime DLSS resource teardown")) {
+					pendingDLSSReset.store(true, std::memory_order_release);
+					LogWarnOnceFmt(
+						loggedVendorResetDeferral,
+						"[Upscaling] Deferred rebuild of {}DLSS resources after VR reset because Streamline resources are still in use",
+						context);
+				}
+				return false;
+			}
+			RequestHistoryReset();
+		} else if (rebuildFSR) {
+			logger::debug("[Upscaling] Rebuilding {}FSR resources after VR reset", context);
+			UnbindUpscalingResources();
+			fidelityFX.DestroyFSRResources();
+			fidelityFX.CreateFSRResources();
+			RequestHistoryReset();
+		}
+	} catch (const std::exception& e) {
+		if (rebuildDLSS)
+			pendingDLSSReset.store(true, std::memory_order_release);
+		if (rebuildFSR)
+			pendingFSRReset.store(true, std::memory_order_release);
+		MarkSubmitStageDeviceLostIfNeeded(e, "vendor runtime reset");
+		LogWarnOnceFmt(
+			loggedVendorResetFailure,
+			"[Upscaling] Failed to rebuild {}{} resources after VR reset: {}",
+			context,
+			magic_enum::enum_name(a_upscaleMethod),
+			e.what());
+		return false;
+	} catch (...) {
+		if (rebuildDLSS)
+			pendingDLSSReset.store(true, std::memory_order_release);
+		if (rebuildFSR)
+			pendingFSRReset.store(true, std::memory_order_release);
+		MarkSubmitStageDeviceLostIfDeviceRemoved("vendor runtime reset");
+		LogWarnOnceFmt(
+			loggedVendorResetFailure,
+			"[Upscaling] Failed to rebuild {}{} resources after VR reset",
+			context,
+			magic_enum::enum_name(a_upscaleMethod));
+		return false;
 	}
+
+	return true;
 }
 
 void Upscaling::RequestVRSubmitStageHistoryReset()
@@ -3224,15 +3345,21 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		magic_enum::enum_name(a_upscaleMethod));
 
 	try {
-		ResetVRVendorRuntimeResources(true, false);
+		if (!ResetVRVendorRuntimeResources(true, false)) {
+			logger::warn("[Upscaling] VR post-load runtime reset deferred because DLSS resources are still in use");
+			postLoadRuntimeResetPending.store(true, std::memory_order_release);
+			return false;
+		}
 		RecreateVendorRuntimeResources(a_upscaleMethod, true);
 	} catch (const std::exception& e) {
 		logger::error("[Upscaling] VR post-load runtime reset failed: {}", e.what());
-		postLoadRuntimeResetPending.store(true, std::memory_order_release);
+		if (!MarkSubmitStageDeviceLostIfNeeded(e, "VR post-load runtime reset"))
+			postLoadRuntimeResetPending.store(true, std::memory_order_release);
 		return false;
 	} catch (...) {
 		logger::error("[Upscaling] VR post-load runtime reset failed with an unknown exception");
-		postLoadRuntimeResetPending.store(true, std::memory_order_release);
+		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("VR post-load runtime reset"))
+			postLoadRuntimeResetPending.store(true, std::memory_order_release);
 		return false;
 	}
 
@@ -3387,13 +3514,22 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			RequestHistoryReset();
 			if (dlssResourceSettingsChanged) {
 				if (globals::game::isVR && a_upscalemethod == UpscaleMethod::kDLSS) {
+					const bool relatchAlreadyRebuiltDLSS =
+						previousUpscaleMode == UpscaleMethod::kDLSS &&
+						vrDLSSSettingsRelatched.exchange(false, std::memory_order_acq_rel);
 					pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
+					if (!relatchAlreadyRebuiltDLSS) {
+						pendingDLSSReset.store(true, std::memory_order_release);
+						destroyVRQualityResources();
+						DestroyPeripheryTAAResources();
+					}
 				}
 				if (!(globals::game::isVR && previousUpscaleMode == UpscaleMethod::kDLSS && a_upscalemethod == UpscaleMethod::kDLSS))
 					streamline.InvalidateDLSSOptionsCache();
 				if (!dlssOptionSettingsChanged && qualityModeChanged && a_upscalemethod != UpscaleMethod::kDLSS)
 					destroyVRQualityResources();
 			} else if (fsrQualityModeChanged) {
+				vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 				fidelityFX.DestroyFSRResources();
 				fsrResourcesDestroyedForQuality = true;
 				destroyVRQualityResources();
@@ -3401,17 +3537,25 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 					fidelityFX.CreateFSRResources();
 					fsrResourcesRecreatedForQuality = true;
 				}
+			} else {
+				vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 			}
+		} else {
+			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		}
 
 		// Destroy previous vendor resources even for Native AA/DLAA, where the method is selected
 		// but IsUpscalingActive() is false because the render scale is 1:1.
 		if (upscaleModeChanged) {
 			if (previousVendorUpscalerSelected) {
-				if (previousUpscaleMode == UpscaleMethod::kDLSS)
-					streamline.DestroyDLSSResources();
-				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesDestroyedForQuality)
+				if (previousUpscaleMode == UpscaleMethod::kDLSS) {
+					if (!streamline.DestroyDLSSResources() &&
+						!MarkSubmitStageDeviceLostIfDeviceRemoved("upscale method DLSS resource teardown")) {
+						pendingDLSSReset.store(a_upscalemethod == UpscaleMethod::kDLSS, std::memory_order_release);
+					}
+				} else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesDestroyedForQuality) {
 					fidelityFX.DestroyFSRResources();
+				}
 
 				if (globals::game::isVR && !fsrResourcesDestroyedForQuality) {
 					DestroyVRIntermediateTextures();
@@ -4217,37 +4361,108 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	}
 
 	if (recreate) {
-		texture = CreateTextureFromSource(source, width, height, copyBindFlags, createSRV, createUAV, name, createRTV);
+		static bool loggedTextureCreateFailure = false;
+		const auto createFailureMessage = [&]() {
+			return std::format(
+				"[Upscaling] Failed to create foveated texture '{}' ({}x{}); foveated vendor dispatch will fall back this frame",
+				name ? name : "<unnamed>",
+				width,
+				height);
+		};
+		try {
+			texture = CreateTextureFromSource(source, width, height, copyBindFlags, createSRV, createUAV, name, createRTV);
+		} catch (const std::exception& e) {
+			LogWarnOnce(loggedTextureCreateFailure, createFailureMessage(), e);
+			MarkSubmitStageDeviceLostIfNeeded(e, name ? name : "foveated texture creation");
+			texture = nullptr;
+			return false;
+		} catch (...) {
+			LogWarnOnce(loggedTextureCreateFailure, createFailureMessage());
+			MarkSubmitStageDeviceLostIfDeviceRemoved(name ? name : "foveated texture creation");
+			texture = nullptr;
+			return false;
+		}
 		if (!texture)
 			return false;
 	}
 
-	if (createRTV && !texture->rtv) {
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-		rtvDesc.Format = texture->desc.Format;
-		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-		rtvDesc.Texture2D.MipSlice = 0;
-		texture->CreateRTV(rtvDesc);
-	}
+	static bool loggedTextureViewFailure = false;
+	const auto viewFailureMessage = [&]() {
+		return std::format(
+			"[Upscaling] Failed to create foveated texture views for '{}'; foveated vendor dispatch will fall back this frame",
+			name ? name : "<unnamed>");
+	};
+	try {
+		if (createRTV && !texture->rtv) {
+			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+			rtvDesc.Format = texture->desc.Format;
+			rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+			rtvDesc.Texture2D.MipSlice = 0;
+			texture->CreateRTV(rtvDesc);
+		}
 
-	if (createSRV && !texture->srv) {
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = texture->desc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MostDetailedMip = 0;
-		srvDesc.Texture2D.MipLevels = 1;
-		texture->CreateSRV(srvDesc);
-	}
+		if (createSRV && !texture->srv) {
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+			srvDesc.Format = texture->desc.Format;
+			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.MipLevels = 1;
+			texture->CreateSRV(srvDesc);
+		}
 
-	if (createUAV && !texture->uav) {
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = texture->desc.Format;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		uavDesc.Texture2D.MipSlice = 0;
-		texture->CreateUAV(uavDesc);
+		if (createUAV && !texture->uav) {
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+			uavDesc.Format = texture->desc.Format;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			uavDesc.Texture2D.MipSlice = 0;
+			texture->CreateUAV(uavDesc);
+		}
+	} catch (const std::exception& e) {
+		LogWarnOnce(loggedTextureViewFailure, viewFailureMessage(), e);
+		MarkSubmitStageDeviceLostIfNeeded(e, name ? name : "foveated texture view creation");
+		texture = nullptr;
+		return false;
+	} catch (...) {
+		LogWarnOnce(loggedTextureViewFailure, viewFailureMessage());
+		MarkSubmitStageDeviceLostIfDeviceRemoved(name ? name : "foveated texture view creation");
+		texture = nullptr;
+		return false;
 	}
 
 	return true;
+}
+
+bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction)
+{
+	const char* contextText = context ? context : "";
+	const char* fallbackText = fallbackAction ? fallbackAction : "skipping foveated vendor dispatch";
+	static bool loggedFoveatedShaderFailure = false;
+
+	try {
+		auto* peripheryCS = GetFoveatedPeripheryCS();
+		auto* peripheryTAA = usePeripheryTAA ? GetPeripheryTAACS() : nullptr;
+		auto* blendCS = visualizeMask ? nullptr : GetFoveatedCenterBlendCS();
+		return peripheryCS && foveatedPeripheryCB &&
+		       (!usePeripheryTAA || (peripheryTAA && peripheryTAACB)) &&
+		       (visualizeMask || (blendCS && foveatedCenterBlendCB));
+	} catch (const std::exception& e) {
+		LogWarnOnceFmt(
+			loggedFoveatedShaderFailure,
+			"[Upscaling] {}foveated dispatch shader unavailable; {}: {}",
+			contextText,
+			fallbackText,
+			e.what());
+		MarkSubmitStageDeviceLostIfNeeded(e, "foveated dispatch shader creation");
+		return false;
+	} catch (...) {
+		LogWarnOnceFmt(
+			loggedFoveatedShaderFailure,
+			"[Upscaling] {}foveated dispatch shader unavailable; {}",
+			contextText,
+			fallbackText);
+		MarkSubmitStageDeviceLostIfDeviceRemoved("foveated dispatch shader creation");
+		return false;
+	}
 }
 
 bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource)
@@ -4260,71 +4475,90 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 		return false;
 
 	bool recreatedResources = false;
+	static bool loggedPeripheryTAAResourceFailure = false;
 
-	for (uint32_t eye = 0; eye < 2; ++eye) {
-		const std::string suffix = eye == 0 ? "Left" : "Right";
+	try {
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const std::string suffix = eye == 0 ? "Left" : "Right";
 
-		for (uint32_t historySlot = 0; historySlot < 2; ++historySlot) {
-			auto& historyColorTexture = peripheryTAAHistoryColor[eye][historySlot];
-			const bool recreateHistoryColor =
-				!historyColorTexture ||
-				historyColorTexture->desc.Width != outputWidthPerEye ||
-				historyColorTexture->desc.Height != outputHeight ||
-				historyColorTexture->desc.Format != colorDesc.Format ||
-				!historyColorTexture->srv || !historyColorTexture->uav;
-			recreatedResources = recreatedResources || recreateHistoryColor;
+			for (uint32_t historySlot = 0; historySlot < 2; ++historySlot) {
+				auto& historyColorTexture = peripheryTAAHistoryColor[eye][historySlot];
+				const bool recreateHistoryColor =
+					!historyColorTexture ||
+					historyColorTexture->desc.Width != outputWidthPerEye ||
+					historyColorTexture->desc.Height != outputHeight ||
+					historyColorTexture->desc.Format != colorDesc.Format ||
+					!historyColorTexture->srv || !historyColorTexture->uav;
+				recreatedResources = recreatedResources || recreateHistoryColor;
 
-			if (!EnsureFoveatedTexture(
-					historyColorTexture,
-					colorSource,
-					outputWidthPerEye,
-					outputHeight,
-					false,
-					true,
-					true,
-					false,
-					(std::format("Upscale_PeripheryTAA_HistoryColor_{}_{}", suffix, historySlot)).c_str())) {
-				return false;
-			}
+				if (!EnsureFoveatedTexture(
+						historyColorTexture,
+						colorSource,
+						outputWidthPerEye,
+						outputHeight,
+						false,
+						true,
+						true,
+						false,
+						(std::format("Upscale_PeripheryTAA_HistoryColor_{}_{}", suffix, historySlot)).c_str())) {
+					DestroyPeripheryTAAResources();
+					return false;
+				}
 
-			auto& velocityTexture = peripheryTAAVelocityHistory[eye][historySlot];
-			const bool recreateVelocity =
-				!velocityTexture ||
-				velocityTexture->desc.Width != outputWidthPerEye ||
-				velocityTexture->desc.Height != outputHeight ||
-				velocityTexture->desc.Format != DXGI_FORMAT_R16G16_FLOAT ||
-				!velocityTexture->srv || !velocityTexture->uav;
-			if (recreateVelocity) {
-				velocityTexture = CreateNamedTexture2D(
-					outputWidthPerEye,
-					outputHeight,
-					DXGI_FORMAT_R16G16_FLOAT,
-					true,
-					true,
-					false,
-					(std::format("Upscale_PeripheryTAA_Velocity_{}_{}", suffix, historySlot)).c_str());
-				recreatedResources = true;
-			}
+				auto& velocityTexture = peripheryTAAVelocityHistory[eye][historySlot];
+				const bool recreateVelocity =
+					!velocityTexture ||
+					velocityTexture->desc.Width != outputWidthPerEye ||
+					velocityTexture->desc.Height != outputHeight ||
+					velocityTexture->desc.Format != DXGI_FORMAT_R16G16_FLOAT ||
+					!velocityTexture->srv || !velocityTexture->uav;
+				if (recreateVelocity) {
+					velocityTexture = CreateNamedTexture2D(
+						outputWidthPerEye,
+						outputHeight,
+						DXGI_FORMAT_R16G16_FLOAT,
+						true,
+						true,
+						false,
+						(std::format("Upscale_PeripheryTAA_Velocity_{}_{}", suffix, historySlot)).c_str());
+					recreatedResources = true;
+				}
 
-			auto& lockTexture = peripheryTAALockHistory[eye][historySlot];
-			const bool recreateLock =
-				!lockTexture ||
-				lockTexture->desc.Width != outputWidthPerEye ||
-				lockTexture->desc.Height != outputHeight ||
-				lockTexture->desc.Format != DXGI_FORMAT_R16_FLOAT ||
-				!lockTexture->srv || !lockTexture->uav;
-			if (recreateLock) {
-				lockTexture = CreateNamedTexture2D(
-					outputWidthPerEye,
-					outputHeight,
-					DXGI_FORMAT_R16_FLOAT,
-					true,
-					true,
-					false,
-					(std::format("Upscale_PeripheryTAA_Lock_{}_{}", suffix, historySlot)).c_str());
-				recreatedResources = true;
+				auto& lockTexture = peripheryTAALockHistory[eye][historySlot];
+				const bool recreateLock =
+					!lockTexture ||
+					lockTexture->desc.Width != outputWidthPerEye ||
+					lockTexture->desc.Height != outputHeight ||
+					lockTexture->desc.Format != DXGI_FORMAT_R16_FLOAT ||
+					!lockTexture->srv || !lockTexture->uav;
+				if (recreateLock) {
+					lockTexture = CreateNamedTexture2D(
+						outputWidthPerEye,
+						outputHeight,
+						DXGI_FORMAT_R16_FLOAT,
+						true,
+						true,
+						false,
+						(std::format("Upscale_PeripheryTAA_Lock_{}_{}", suffix, historySlot)).c_str());
+					recreatedResources = true;
+				}
 			}
 		}
+	} catch (const std::exception& e) {
+		LogWarnOnce(
+			loggedPeripheryTAAResourceFailure,
+			"[Upscaling] Failed to create Periphery TAA resources; foveated vendor dispatch will fall back this frame",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "Periphery TAA resource creation");
+		DestroyPeripheryTAAResources();
+		return false;
+	} catch (...) {
+		LogWarnOnce(
+			loggedPeripheryTAAResourceFailure,
+			"[Upscaling] Failed to create Periphery TAA resources; foveated vendor dispatch will fall back this frame");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("Periphery TAA resource creation");
+		DestroyPeripheryTAAResources();
+		return false;
 	}
 
 	if (recreatedResources) {
@@ -4358,15 +4592,35 @@ bool Upscaling::EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCap
 	sbDesc.StructureByteStride = sizeof(PeripheryTAATile);
 	sbDesc.ByteWidth = static_cast<uint32_t>(sizeof(PeripheryTAATile) * tileCapacity);
 
-	tileBuffer = eastl::make_unique<Buffer>(sbDesc);
-	tileCapacityCurrent = tileCapacity;
+	static bool loggedTileBufferFailure = false;
+	try {
+		tileBuffer = eastl::make_unique<Buffer>(sbDesc);
+		tileCapacityCurrent = tileCapacity;
 
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-	srvDesc.Buffer.FirstElement = 0;
-	srvDesc.Buffer.NumElements = tileCapacity;
-	tileBuffer->CreateSRV(srvDesc);
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = tileCapacity;
+		tileBuffer->CreateSRV(srvDesc);
+	} catch (const std::exception& e) {
+		LogWarnOnce(
+			loggedTileBufferFailure,
+			"[Upscaling] Failed to create Periphery TAA tile buffer; foveated vendor dispatch will fall back this frame",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "Periphery TAA tile buffer creation");
+		tileBuffer = nullptr;
+		tileCapacityCurrent = 0;
+		return false;
+	} catch (...) {
+		LogWarnOnce(
+			loggedTileBufferFailure,
+			"[Upscaling] Failed to create Periphery TAA tile buffer; foveated vendor dispatch will fall back this frame");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("Periphery TAA tile buffer creation");
+		tileBuffer = nullptr;
+		tileCapacityCurrent = 0;
+		return false;
+	}
 
 	peripheryTAATileCache[eyeIndex].uploaded = false;
 	return tileBuffer->srv != nullptr;
@@ -5343,12 +5597,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, true, centerScale, effectiveCenterBlendFeather, centerHorizontalScale, usePeripheryTAAProfile))
 		return false;
 
-	auto* peripheryCS = GetFoveatedPeripheryCS();
-	auto* peripheryTAA = usePeripheryTAA ? GetPeripheryTAACS() : nullptr;
-	auto* blendCS = visualizeMask ? nullptr : GetFoveatedCenterBlendCS();
-	if (!peripheryCS || !foveatedPeripheryCB ||
-		(usePeripheryTAA && (!peripheryTAA || !peripheryTAACB)) ||
-		(!visualizeMask && (!blendCS || !foveatedCenterBlendCB))) {
+	if (!EnsureFoveatedDispatchShaders(usePeripheryTAA, visualizeMask, "", "skipping foveated vendor dispatch")) {
 		return false;
 	}
 
@@ -5409,8 +5658,26 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		params.centerReactiveMaskInput = vrIntermediateReactiveMask[eye] ? vrIntermediateReactiveMask[eye]->resource.get() : nullptr;
 		params.centerTransparencyMaskInput = vrIntermediateTransparencyMask[eye] ? vrIntermediateTransparencyMask[eye]->resource.get() : nullptr;
 
-		if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eye, params))
+		static bool loggedFoveatedDispatchFailure = false;
+		try {
+			if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eye, params)) {
+				UnbindUpscalingResources();
+				return false;
+			}
+		} catch (const std::exception& e) {
+			UnbindUpscalingResources();
+			LogWarnOnce(
+				loggedFoveatedDispatchFailure,
+				"[Upscaling] Foveated dispatch threw; skipping foveated vendor dispatch",
+				e);
 			return false;
+		} catch (...) {
+			UnbindUpscalingResources();
+			LogWarnOnce(
+				loggedFoveatedDispatchFailure,
+				"[Upscaling] Foveated dispatch threw; skipping foveated vendor dispatch");
+			return false;
+		}
 	}
 
 	if (usePeripheryTAA) {
@@ -5452,12 +5719,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, true, centerScale, effectiveCenterBlendFeather, centerHorizontalScale, usePeripheryTAAProfile))
 		return false;
 
-	auto* peripheryCS = GetFoveatedPeripheryCS();
-	auto* peripheryTAA = usePeripheryTAA ? GetPeripheryTAACS() : nullptr;
-	auto* blendCS = visualizeMask ? nullptr : GetFoveatedCenterBlendCS();
-	if (!peripheryCS || !foveatedPeripheryCB ||
-		(usePeripheryTAA && (!peripheryTAA || !peripheryTAACB)) ||
-		(!visualizeMask && (!blendCS || !foveatedCenterBlendCB))) {
+	if (!EnsureFoveatedDispatchShaders(usePeripheryTAA, visualizeMask, "Submit-stage ", "falling back to full-eye dispatch")) {
 		return false;
 	}
 
@@ -5533,8 +5795,28 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	params.centerReactiveMaskInput = vrIntermediateReactiveMask[eyeIndex] ? vrIntermediateReactiveMask[eyeIndex]->resource.get() : nullptr;
 	params.centerTransparencyMaskInput = vrIntermediateTransparencyMask[eyeIndex] ? vrIntermediateTransparencyMask[eyeIndex]->resource.get() : nullptr;
 
-	if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eyeIndex, params))
+	static bool loggedFoveatedDispatchFailure = false;
+	try {
+		if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eyeIndex, params)) {
+			UnbindUpscalingResources();
+			return false;
+		}
+	} catch (const std::exception& e) {
+		UnbindUpscalingResources();
+		LogWarnOnce(
+			loggedFoveatedDispatchFailure,
+			"[Upscaling] Submit-stage foveated dispatch threw; falling back to full-eye dispatch",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage foveated dispatch");
 		return false;
+	} catch (...) {
+		UnbindUpscalingResources();
+		LogWarnOnce(
+			loggedFoveatedDispatchFailure,
+			"[Upscaling] Submit-stage foveated dispatch threw; falling back to full-eye dispatch");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage foveated dispatch");
+		return false;
+	}
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	if (depthTexture.depthSRV) {
@@ -5935,16 +6217,8 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	// Bind CS/SRV/CB once for both eyes to reduce per-frame CPU overhead.
 	const bool deferHMDMaskClear = ShouldDeferHMDClearMask();
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	if (!deferHMDMaskClear && !vrClearHMDMaskCS) {
-		vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
-
-		D3D11_BUFFER_DESC cbDesc = {};
-		cbDesc.ByteWidth = 32;  // 8 uints
-		cbDesc.Usage = D3D11_USAGE_DEFAULT;
-		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-		cbDesc.CPUAccessFlags = 0;
-		DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
-	}
+	if (!deferHMDMaskClear)
+		(void)EnsureHMDMaskClearResources();
 
 	if (!deferHMDMaskClear && depthTexture.depthSRV && vrClearHMDMaskCS && vrClearHMDMaskCB) {
 		auto dispatchX = (eyeWidthIn + 7) / 8;
@@ -6119,7 +6393,24 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
-	auto* encodeShader = GetEncodeTexturesCS();
+	ID3D11ComputeShader* encodeShader = nullptr;
+	static bool loggedEncodeShaderFailure = false;
+	try {
+		encodeShader = GetEncodeTexturesCS();
+	} catch (const std::exception& e) {
+		LogWarnOnce(
+			loggedEncodeShaderFailure,
+			"[Upscaling] Submit-stage vendor upscaling failed to create encode shader",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage encode shader creation");
+		return false;
+	} catch (...) {
+		LogWarnOnce(
+			loggedEncodeShaderFailure,
+			"[Upscaling] Submit-stage vendor upscaling failed to create encode shader");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage encode shader creation");
+		return false;
+	}
 	if (!temporalAAMask.SRV || !normals.SRV || !sourceMotionVector.SRV || !depth.depthSRV || !encodeShader)
 		return false;
 
@@ -6128,9 +6419,11 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 			colorSource, motionVectors, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get());
 	} catch (const std::exception& e) {
 		logger::warn("[Upscaling] Submit-stage vendor upscaling failed to create intermediates: {}", e.what());
+		MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage intermediate creation");
 		return false;
 	} catch (...) {
 		logger::warn("[Upscaling] Submit-stage vendor upscaling failed to create intermediates.");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage intermediate creation");
 		return false;
 	}
 
@@ -6144,59 +6437,82 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 		}
 	}
 
-	if (state->frameAnnotations)
+	const bool annotateEncode = state->frameAnnotations;
+	if (annotateEncode)
 		state->BeginPerfEvent("Submit Stage Encode Upscaling Inputs");
+	auto encodePerfEvent = ScopeExit([&]() {
+		if (annotateEncode)
+			state->EndPerfEvent();
+	});
 
-	ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, sourceMotionVector.SRV, depth.depthSRV };
-	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+	static bool loggedEncodeDispatchFailure = false;
+	try {
+		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, sourceMotionVector.SRV, depth.depthSRV };
+		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	auto upscalingBuffer = upscalingDataCB->CB();
-	context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
-	context->CSSetShader(encodeShader, nullptr, 0);
+		auto upscalingBuffer = upscalingDataCB->CB();
+		context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
+		context->CSSetShader(encodeShader, nullptr, 0);
 
-	const float2 renderSize = { static_cast<float>(inputWidthPerEye * 2), static_cast<float>(inputHeight) };
-	const uint32_t dispatchX = (inputWidthPerEye + 7u) >> 3;
-	const uint32_t dispatchY = (inputHeight + 7u) >> 3;
+		const float2 renderSize = { static_cast<float>(inputWidthPerEye * 2), static_cast<float>(inputHeight) };
+		const uint32_t dispatchX = (inputWidthPerEye + 7u) >> 3;
+		const uint32_t dispatchY = (inputHeight + 7u) >> 3;
 
-	for (uint32_t eye = 0; eye < 2; ++eye) {
-		UpscalingDataCB upscalingData{};
-		upscalingData.dispatchDim = { static_cast<float>(inputWidthPerEye), static_cast<float>(inputHeight) };
-		upscalingData.trueSamplingDim = renderSize;
-		upscalingData.invTrueSamplingDim = { renderSize.x > 0.0f ? 1.0f / renderSize.x : 0.0f, renderSize.y > 0.0f ? 1.0f / renderSize.y : 0.0f };
-		upscalingData.seamCenterX = renderSize.x * 0.5f;
-		upscalingData.seamHalfWidthPx = 2.0f;
-		upscalingData.maskDepthThreshold = 1e-6f;
-		upscalingData.vrSeamHardening = 1.0f;
-		upscalingData.sourceOffset = { static_cast<float>(eye * inputWidthPerEye), 0.0f };
-		upscalingData.outputOffset = { 0.0f, 0.0f };
-		upscalingDataCB->Update(upscalingData);
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			UpscalingDataCB upscalingData{};
+			upscalingData.dispatchDim = { static_cast<float>(inputWidthPerEye), static_cast<float>(inputHeight) };
+			upscalingData.trueSamplingDim = renderSize;
+			upscalingData.invTrueSamplingDim = { renderSize.x > 0.0f ? 1.0f / renderSize.x : 0.0f, renderSize.y > 0.0f ? 1.0f / renderSize.y : 0.0f };
+			upscalingData.seamCenterX = renderSize.x * 0.5f;
+			upscalingData.seamHalfWidthPx = 2.0f;
+			upscalingData.maskDepthThreshold = 1e-6f;
+			upscalingData.vrSeamHardening = 1.0f;
+			upscalingData.sourceOffset = { static_cast<float>(eye * inputWidthPerEye), 0.0f };
+			upscalingData.outputOffset = { 0.0f, 0.0f };
+			upscalingDataCB->Update(upscalingData);
 
-		ID3D11UnorderedAccessView* uavs[4] = {
-			vrIntermediateReactiveMask[eye]->uav.get(),
-			vrIntermediateTransparencyMask[eye]->uav.get(),
-			vrIntermediateMotionVectors[eye]->uav.get(),
-			upscaleMethod == UpscaleMethod::kFSR ? vrIntermediateLinearDepth[eye]->uav.get() : nullptr
-		};
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-		context->Dispatch(dispatchX, dispatchY, 1);
+			ID3D11UnorderedAccessView* uavs[4] = {
+				vrIntermediateReactiveMask[eye]->uav.get(),
+				vrIntermediateTransparencyMask[eye]->uav.get(),
+				vrIntermediateMotionVectors[eye]->uav.get(),
+				upscaleMethod == UpscaleMethod::kFSR ? vrIntermediateLinearDepth[eye]->uav.get() : nullptr
+			};
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+			context->Dispatch(dispatchX, dispatchY, 1);
 
-		const uint32_t offsetX = eye * inputWidthPerEye;
-		D3D11_BOX srcBox{ offsetX, 0, 0, offsetX + inputWidthPerEye, inputHeight, 1 };
-		context->CopySubresourceRegion(vrIntermediateDepth[eye]->resource.get(), 0, 0, 0, 0, depthSource, 0, &srcBox);
+			const uint32_t offsetX = eye * inputWidthPerEye;
+			D3D11_BOX srcBox{ offsetX, 0, 0, offsetX + inputWidthPerEye, inputHeight, 1 };
+			context->CopySubresourceRegion(vrIntermediateDepth[eye]->resource.get(), 0, 0, 0, 0, depthSource, 0, &srcBox);
+		}
+
+		ID3D11ShaderResourceView* nullSRV[4] = { nullptr, nullptr, nullptr, nullptr };
+		context->CSSetShaderResources(0, ARRAYSIZE(nullSRV), nullSRV);
+
+		ID3D11UnorderedAccessView* nullUAV[4] = { nullptr, nullptr, nullptr, nullptr };
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUAV), nullUAV, nullptr);
+
+		ID3D11Buffer* nullBuffer = nullptr;
+		context->CSSetConstantBuffers(0, 1, &nullBuffer);
+		context->CSSetShader(nullptr, nullptr, 0);
+	} catch (const std::exception& e) {
+		UnbindUpscalingResources();
+		LogWarnOnce(
+			loggedEncodeDispatchFailure,
+			"[Upscaling] Submit-stage vendor input encode threw; using vanilla presentation for this frame",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage input encode");
+		return false;
+	} catch (...) {
+		UnbindUpscalingResources();
+		LogWarnOnce(
+			loggedEncodeDispatchFailure,
+			"[Upscaling] Submit-stage vendor input encode threw; using vanilla presentation for this frame");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage input encode");
+		return false;
 	}
 
-	ID3D11ShaderResourceView* nullSRV[4] = { nullptr, nullptr, nullptr, nullptr };
-	context->CSSetShaderResources(0, ARRAYSIZE(nullSRV), nullSRV);
-
-	ID3D11UnorderedAccessView* nullUAV[4] = { nullptr, nullptr, nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUAV), nullUAV, nullptr);
-
-	ID3D11Buffer* nullBuffer = nullptr;
-	context->CSSetConstantBuffers(0, 1, &nullBuffer);
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	if (state->frameAnnotations)
-		state->EndPerfEvent();
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage input encode"))
+		return false;
 
 	return true;
 }
@@ -6204,6 +6520,8 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight)
 {
 	if (eyeIndex >= 2 || !inputWidth || !inputHeight || !outputWidth || !outputHeight)
+		return false;
+	if (IsSubmitStageDeviceLost())
 		return false;
 
 	auto context = globals::d3d::context;
@@ -6215,7 +6533,24 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 		!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource || !vrIntermediateColorOut[eyeIndex]->uav)
 		return false;
 
-	auto* stretchCS = GetSubmitStageStretchCS();
+	ID3D11ComputeShader* stretchCS = nullptr;
+	static bool loggedStretchShaderFailure = false;
+	try {
+		stretchCS = GetSubmitStageStretchCS();
+	} catch (const std::exception& e) {
+		LogWarnOnce(
+			loggedStretchShaderFailure,
+			"[Upscaling] Submit-stage fallback shader unavailable; using emergency copy fallback",
+			e);
+		if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage stretch shader creation"))
+			return false;
+	} catch (...) {
+		LogWarnOnce(
+			loggedStretchShaderFailure,
+			"[Upscaling] Submit-stage fallback shader unavailable; using emergency copy fallback");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stretch shader creation"))
+			return false;
+	}
 	if (!stretchCS) {
 		float clearColor[4] = {};
 		context->ClearUnorderedAccessViewFloat(vrIntermediateColorOut[eyeIndex]->uav.get(), clearColor);
@@ -6259,60 +6594,133 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 	context->CSGetConstantBuffers(0, 1, &previousCB);
 	context->CSGetSamplers(0, 1, &previousSampler);
 
-	DynamicResolutionStretchCB stretchData{};
-	stretchData.inputSize = { static_cast<float>(inputWidth), static_cast<float>(inputHeight) };
-	stretchData.outputSize = { static_cast<float>(outputWidth), static_cast<float>(outputHeight) };
-	stretchData.sourceTextureSize = {
-		static_cast<float>(vrIntermediateColorIn[eyeIndex]->desc.Width),
-		static_cast<float>(vrIntermediateColorIn[eyeIndex]->desc.Height)
-	};
-	dynamicResolutionStretchCB->Update(stretchData);
+	auto restoreStretchState = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+		ID3D11Buffer* nullCB[1] = { nullptr };
+		ID3D11SamplerState* nullSampler[1] = { nullptr };
+		context->CSSetShaderResources(0, 1, nullSRV);
+		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+		context->CSSetConstantBuffers(0, 1, nullCB);
+		context->CSSetSamplers(0, 1, nullSampler);
 
-	ID3D11ShaderResourceView* sourceSRV = vrIntermediateColorIn[eyeIndex]->srv.get();
-	ID3D11UnorderedAccessView* outputUAV = vrIntermediateColorOut[eyeIndex]->uav.get();
-	ID3D11Buffer* stretchBuffer = dynamicResolutionStretchCB->CB();
-	ID3D11SamplerState* sampler = deferred->linearSampler;
+		context->CSSetShader(previousCS, nullptr, 0);
+		context->CSSetShaderResources(0, 1, &previousSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &previousUAV, nullptr);
+		context->CSSetConstantBuffers(0, 1, &previousCB);
+		context->CSSetSamplers(0, 1, &previousSampler);
 
-	context->CSSetShader(stretchCS, nullptr, 0);
-	context->CSSetShaderResources(0, 1, &sourceSRV);
-	context->CSSetUnorderedAccessViews(0, 1, &outputUAV, nullptr);
-	context->CSSetConstantBuffers(0, 1, &stretchBuffer);
-	context->CSSetSamplers(0, 1, &sampler);
+		if (previousCS)
+			previousCS->Release();
+		if (previousSRV)
+			previousSRV->Release();
+		if (previousUAV)
+			previousUAV->Release();
+		if (previousCB)
+			previousCB->Release();
+		if (previousSampler)
+			previousSampler->Release();
+	});
 
-	auto state = globals::state;
-	if (state && state->frameAnnotations)
-		state->BeginPerfEvent("Submit Stage Stretch Fallback");
-	context->Dispatch((outputWidth + 7u) >> 3, (outputHeight + 7u) >> 3, 1);
-	if (state && state->frameAnnotations)
-		state->EndPerfEvent();
+	static bool loggedStretchDispatchFailure = false;
+	try {
+		DynamicResolutionStretchCB stretchData{};
+		stretchData.inputSize = { static_cast<float>(inputWidth), static_cast<float>(inputHeight) };
+		stretchData.outputSize = { static_cast<float>(outputWidth), static_cast<float>(outputHeight) };
+		stretchData.sourceTextureSize = {
+			static_cast<float>(vrIntermediateColorIn[eyeIndex]->desc.Width),
+			static_cast<float>(vrIntermediateColorIn[eyeIndex]->desc.Height)
+		};
+		dynamicResolutionStretchCB->Update(stretchData);
 
-	ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-	ID3D11Buffer* nullCB[1] = { nullptr };
-	ID3D11SamplerState* nullSampler[1] = { nullptr };
-	context->CSSetShaderResources(0, 1, nullSRV);
-	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-	context->CSSetConstantBuffers(0, 1, nullCB);
-	context->CSSetSamplers(0, 1, nullSampler);
+		ID3D11ShaderResourceView* sourceSRV = vrIntermediateColorIn[eyeIndex]->srv.get();
+		ID3D11UnorderedAccessView* outputUAV = vrIntermediateColorOut[eyeIndex]->uav.get();
+		ID3D11Buffer* stretchBuffer = dynamicResolutionStretchCB->CB();
+		ID3D11SamplerState* sampler = deferred->linearSampler;
 
-	context->CSSetShader(previousCS, nullptr, 0);
-	context->CSSetShaderResources(0, 1, &previousSRV);
-	context->CSSetUnorderedAccessViews(0, 1, &previousUAV, nullptr);
-	context->CSSetConstantBuffers(0, 1, &previousCB);
-	context->CSSetSamplers(0, 1, &previousSampler);
+		context->CSSetShader(stretchCS, nullptr, 0);
+		context->CSSetShaderResources(0, 1, &sourceSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &outputUAV, nullptr);
+		context->CSSetConstantBuffers(0, 1, &stretchBuffer);
+		context->CSSetSamplers(0, 1, &sampler);
 
-	if (previousCS)
-		previousCS->Release();
-	if (previousSRV)
-		previousSRV->Release();
-	if (previousUAV)
-		previousUAV->Release();
-	if (previousCB)
-		previousCB->Release();
-	if (previousSampler)
-		previousSampler->Release();
+		auto state = globals::state;
+		bool perfEventActive = false;
+		if (state && state->frameAnnotations) {
+			state->BeginPerfEvent("Submit Stage Stretch Fallback");
+			perfEventActive = true;
+		}
+		auto perfEventGuard = ScopeExit([&]() {
+			if (perfEventActive && state && state->frameAnnotations)
+				state->EndPerfEvent();
+		});
+		context->Dispatch((outputWidth + 7u) >> 3, (outputHeight + 7u) >> 3, 1);
+		perfEventActive = false;
+		if (state && state->frameAnnotations)
+			state->EndPerfEvent();
+	} catch (const std::exception& e) {
+		LogWarnOnce(
+			loggedStretchDispatchFailure,
+			"[Upscaling] Submit-stage stretch fallback threw; using vanilla presentation for this frame",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage stretch fallback");
+		return false;
+	} catch (...) {
+		LogWarnOnce(
+			loggedStretchDispatchFailure,
+			"[Upscaling] Submit-stage stretch fallback threw; using vanilla presentation for this frame");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stretch fallback");
+		return false;
+	}
 
 	return true;
+}
+
+bool Upscaling::EnsureHMDMaskClearResources()
+{
+	if (!globals::game::isVR)
+		return false;
+	if (vrClearHMDMaskCS && vrClearHMDMaskCB)
+		return true;
+
+	auto device = globals::d3d::device;
+	if (!device)
+		return false;
+
+	static bool loggedHMDMaskClearFailure = false;
+	try {
+		if (!vrClearHMDMaskCS) {
+			vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
+		}
+
+		if (!vrClearHMDMaskCB) {
+			D3D11_BUFFER_DESC cbDesc = {};
+			cbDesc.ByteWidth = 32;  // 8 uints
+			cbDesc.Usage = D3D11_USAGE_DEFAULT;
+			cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			cbDesc.CPUAccessFlags = 0;
+			DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
+		}
+	} catch (const std::exception& e) {
+		LogWarnOnce(
+			loggedHMDMaskClearFailure,
+			"[Upscaling] HMD mask clear resources unavailable; hidden-area clear will be skipped",
+			e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "HMD mask clear resource creation");
+		vrClearHMDMaskCS = nullptr;
+		vrClearHMDMaskCB = nullptr;
+		return false;
+	} catch (...) {
+		LogWarnOnce(
+			loggedHMDMaskClearFailure,
+			"[Upscaling] HMD mask clear resources unavailable; hidden-area clear will be skipped");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("HMD mask clear resource creation");
+		vrClearHMDMaskCS = nullptr;
+		vrClearHMDMaskCB = nullptr;
+		return false;
+	}
+
+	return vrClearHMDMaskCS && vrClearHMDMaskCB;
 }
 
 void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
@@ -6331,16 +6739,8 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 	if (!context)
 		return;
 
-	if (!vrClearHMDMaskCS || !vrClearHMDMaskCB) {
-		vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
-
-		D3D11_BUFFER_DESC cbDesc = {};
-		cbDesc.ByteWidth = 32;  // 8 uints
-		cbDesc.Usage = D3D11_USAGE_DEFAULT;
-		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-		cbDesc.CPUAccessFlags = 0;
-		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
-	}
+	if (!EnsureHMDMaskClearResources())
+		return;
 
 	if (vrClearHMDMaskCS && vrClearHMDMaskCB) {
 		auto dispatchX = (colorWidth + 7) / 8;
@@ -6802,6 +7202,8 @@ void Upscaling::ClearShaderCache()
 	peripheryTAACS = nullptr;            // com_ptr automatically releases
 	aaVrsVisualizationCS = nullptr;      // com_ptr automatically releases
 	submitStageStretchCS = nullptr;      // com_ptr automatically releases
+	vrClearHMDMaskCS = nullptr;          // com_ptr automatically releases
+	vrClearHMDMaskCB = nullptr;          // com_ptr automatically releases
 }
 
 void Upscaling::CopySharedD3D12Resources()
@@ -7031,6 +7433,11 @@ bool Upscaling::IsUpscalingActive() const
 
 bool Upscaling::IsSubmitStageUpscalingActive() const
 {
+	if (IsSubmitStageDeviceLost()) {
+		submitStageRuntimeActive.store(false, std::memory_order_relaxed);
+		return false;
+	}
+
 	const bool submitStageSceneActive =
 		IsSubmitStageDynamicResolutionActive() ||
 		IsPerfModePresentationActive();
@@ -7047,6 +7454,68 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 		submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 	}
 	return active;
+}
+
+bool Upscaling::IsSubmitStageDeviceLost() const
+{
+	return submitStageDeviceLost.load(std::memory_order_acquire);
+}
+
+void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context)
+{
+	const HRESULT deviceReason = GetD3DDeviceRemovedReason();
+	const HRESULT loggedResult = IsD3DDeviceRemovedResult(deviceReason) ? deviceReason : a_result;
+	if (!IsD3DDeviceRemovedResult(loggedResult))
+		return;
+
+	const bool alreadyMarked = submitStageDeviceLost.exchange(true, std::memory_order_acq_rel);
+	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
+	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
+	ResetSubmitStageHandoffState();
+	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
+	submitStageMirrorEyeReady = {};
+	submitStageMirrorSourceTexture = nullptr;
+	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
+	submitStageFoveatedPeripheryTAAEyeReady = {};
+	pendingDLSSReset.store(false, std::memory_order_release);
+	pendingFSRReset.store(false, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreate.store(false, std::memory_order_release);
+	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	streamline.ResetDLSSIdleFences();
+	streamline.InvalidateDLSSOptionsCache();
+	streamline.ResetFrameTracking();
+	RequestHistoryReset();
+
+	if (!alreadyMarked) {
+		logger::error(
+			"[Upscaling] Submit-stage D3D device removal detected during {}; disabling submit-stage upscaling for this device. result=0x{:08X} deviceReason=0x{:08X}",
+			a_context && *a_context ? a_context : "submit-stage work",
+			static_cast<uint32_t>(a_result),
+			static_cast<uint32_t>(deviceReason));
+	}
+}
+
+bool Upscaling::MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context)
+{
+	if (const auto* comException = dynamic_cast<const DX::com_exception*>(&a_exception)) {
+		const HRESULT result = comException->Error();
+		if (IsD3DDeviceRemovedResult(result)) {
+			MarkSubmitStageDeviceLost(result, a_context);
+			return true;
+		}
+	}
+
+	return MarkSubmitStageDeviceLostIfDeviceRemoved(a_context);
+}
+
+bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
+{
+	const HRESULT deviceReason = GetD3DDeviceRemovedReason();
+	if (!IsD3DDeviceRemovedResult(deviceReason))
+		return false;
+
+	MarkSubmitStageDeviceLost(deviceReason, a_context);
+	return true;
 }
 
 void Upscaling::ResetSubmitStageHandoffState()
@@ -7131,6 +7600,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 	if (a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)
 		return false;
+	if (IsSubmitStageDeviceLost())
+		return false;
 
 	auto state = globals::state;
 	auto renderer = globals::game::renderer;
@@ -7204,6 +7675,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 
 	CheckResources(upscaleMethod);
+	if (IsSubmitStageDeviceLost())
+		return false;
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -7212,7 +7685,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	if (submitStagePreparedFrame != currentFrame) {
-		ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ");
+		if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ") || IsSubmitStageDeviceLost())
+			return false;
 
 		UpdateHistoryResetState(upscaleMethod);
 		LatchHistoryResetForCurrentFrame();
@@ -7225,12 +7699,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				}
 			} catch (const std::exception& e) {
 				logger::warn("[PerfMode] Menu/loading presentation failed to create presentation textures: {}", e.what());
+				MarkSubmitStageDeviceLostIfNeeded(e, "menu/loading presentation texture creation");
 				return false;
 			} catch (...) {
 				logger::warn("[PerfMode] Menu/loading presentation failed to create presentation textures.");
+				MarkSubmitStageDeviceLostIfDeviceRemoved("menu/loading presentation texture creation");
 				return false;
 			}
 		} else if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut)) {
+			if (IsSubmitStageDeviceLost())
+				return false;
 			return false;
 		}
 
@@ -7311,13 +7789,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
+		return false;
 
 	if (presentationOnly) {
-		(void)GetSubmitStageStretchCS();
 		if (!StretchSubmitStageEyeOutput(eyeIndex, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut))
+			return false;
+		if (IsSubmitStageDeviceLost())
 			return false;
 
 		clearSubmittedEyeHMDMask();
+		if (IsSubmitStageDeviceLost())
+			return false;
 		a_outputTexture = *a_inputTexture;
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
 		a_outputTexture.eType = vr::TextureType_DirectX;
@@ -7325,18 +7808,41 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return true;
 	}
 
-	if (targetScaleMode)
-		(void)GetSubmitStageStretchCS();
-
 	bool vendorSucceeded = false;
 	if (IsFoveatedVendorDispatchEnabled(upscaleMethod)) {
-		vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(
-			upscaleMethod,
-			eyeIndex,
-			eyeWidthIn,
-			eyeHeightIn,
-			eyeWidthOut,
-			eyeHeightOut);
+		static bool loggedFoveatedSubmitException[2] = {};
+		try {
+			vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(
+				upscaleMethod,
+				eyeIndex,
+				eyeWidthIn,
+				eyeHeightIn,
+				eyeWidthOut,
+				eyeHeightOut);
+		} catch (const std::exception& e) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage foveated vendor dispatch"))
+				return false;
+			LogWarnOnceFmt(
+				loggedFoveatedSubmitException[eyeIndex],
+				"[Upscaling] Submit-stage foveated {} threw for eye {}; falling back to full-eye vendor dispatch: {}",
+				upscaleMethodName,
+				eyeIndex,
+				e.what());
+			vendorSucceeded = false;
+		} catch (...) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage foveated vendor dispatch"))
+				return false;
+			LogWarnOnceFmt(
+				loggedFoveatedSubmitException[eyeIndex],
+				"[Upscaling] Submit-stage foveated {} threw for eye {}; falling back to full-eye vendor dispatch",
+				upscaleMethodName,
+				eyeIndex);
+			vendorSucceeded = false;
+		}
+		if (!vendorSucceeded && MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage foveated vendor dispatch"))
+			return false;
 		if (!vendorSucceeded) {
 			static bool loggedFoveatedSubmitFallback[2] = {};
 			if (!loggedFoveatedSubmitFallback[eyeIndex]) {
@@ -7349,38 +7855,68 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
-	if (!vendorSucceeded && upscaleMethod == UpscaleMethod::kFSR) {
-		vendorSucceeded = fidelityFX.UpscaleRegion(
-			eyeIndex,
-			vrIntermediateColorIn[eyeIndex]->resource.get(),
-			vrIntermediateLinearDepth[eyeIndex]->resource.get(),
-			vrIntermediateMotionVectors[eyeIndex]->resource.get(),
-			vrIntermediateReactiveMask[eyeIndex]->resource.get(),
-			vrIntermediateTransparencyMask[eyeIndex]->resource.get(),
-			vrIntermediateColorOut[eyeIndex]->resource.get(),
-			eyeWidthIn,
-			eyeHeightIn,
-			eyeWidthOut,
-			eyeHeightOut,
-			static_cast<float>(eyeWidthIn),
-			static_cast<float>(eyeHeightIn),
-			settings.sharpnessFSR);
-	} else if (!vendorSucceeded && upscaleMethod == UpscaleMethod::kDLSS) {
-		const sl::Extent extentIn{ 0u, 0u, eyeWidthIn, eyeHeightIn };
-		const sl::Extent extentOut{ 0u, 0u, eyeWidthOut, eyeHeightOut };
-		const sl::ViewportHandle viewport = eyeIndex == 1 ? streamline.viewportRight : streamline.viewport;
-		vendorSucceeded = streamline.EvaluateDLSS(
-			viewport,
-			eyeIndex,
-			vrIntermediateColorIn[eyeIndex]->resource.get(),
-			vrIntermediateColorOut[eyeIndex]->resource.get(),
-			vrIntermediateDepth[eyeIndex]->resource.get(),
-			vrIntermediateMotionVectors[eyeIndex]->resource.get(),
-			vrIntermediateReactiveMask[eyeIndex]->resource.get(),
-			vrIntermediateTransparencyMask[eyeIndex]->resource.get(),
-			extentIn,
-			extentOut,
-			eyeWidthOut);
+	if (!vendorSucceeded) {
+		static bool loggedFullEyeSubmitException[2] = {};
+		try {
+			if (upscaleMethod == UpscaleMethod::kFSR) {
+				vendorSucceeded = fidelityFX.UpscaleRegion(
+					eyeIndex,
+					vrIntermediateColorIn[eyeIndex]->resource.get(),
+					vrIntermediateLinearDepth[eyeIndex]->resource.get(),
+					vrIntermediateMotionVectors[eyeIndex]->resource.get(),
+					vrIntermediateReactiveMask[eyeIndex]->resource.get(),
+					vrIntermediateTransparencyMask[eyeIndex]->resource.get(),
+					vrIntermediateColorOut[eyeIndex]->resource.get(),
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthOut,
+					eyeHeightOut,
+					static_cast<float>(eyeWidthIn),
+					static_cast<float>(eyeHeightIn),
+					settings.sharpnessFSR);
+			} else if (upscaleMethod == UpscaleMethod::kDLSS) {
+				const sl::Extent extentIn{ 0u, 0u, eyeWidthIn, eyeHeightIn };
+				const sl::Extent extentOut{ 0u, 0u, eyeWidthOut, eyeHeightOut };
+				const sl::ViewportHandle viewport = eyeIndex == 1 ? streamline.viewportRight : streamline.viewport;
+				vendorSucceeded = streamline.EvaluateDLSS(
+					viewport,
+					eyeIndex,
+					vrIntermediateColorIn[eyeIndex]->resource.get(),
+					vrIntermediateColorOut[eyeIndex]->resource.get(),
+					vrIntermediateDepth[eyeIndex]->resource.get(),
+					vrIntermediateMotionVectors[eyeIndex]->resource.get(),
+					vrIntermediateReactiveMask[eyeIndex]->resource.get(),
+					vrIntermediateTransparencyMask[eyeIndex]->resource.get(),
+					extentIn,
+					extentOut,
+					eyeWidthOut);
+			}
+		} catch (const std::exception& e) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye vendor dispatch"))
+				return false;
+			LogWarnOnceFmt(
+				loggedFullEyeSubmitException[eyeIndex],
+				"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback: {}",
+				upscaleMethodName,
+				eyeIndex,
+				e.what());
+			vendorSucceeded = false;
+		} catch (...) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
+				return false;
+			LogWarnOnceFmt(
+				loggedFullEyeSubmitException[eyeIndex],
+				"[Upscaling] Submit-stage full-eye {} threw for eye {}; using stretch fallback",
+				upscaleMethodName,
+				eyeIndex);
+			vendorSucceeded = false;
+		}
+		if (!vendorSucceeded && MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye vendor dispatch"))
+			return false;
+		if (!vendorSucceeded)
+			UnbindUpscalingResources();
 	}
 
 	if (!vendorSucceeded) {
@@ -7399,10 +7935,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 		RequestHistoryReset();
 
+		if (IsSubmitStageDeviceLost())
+			return false;
+
 		if (targetScaleMode &&
 			StretchSubmitStageEyeOutput(eyeIndex, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut) &&
 			vrIntermediateColorOut[eyeIndex] && vrIntermediateColorOut[eyeIndex]->resource) {
+			if (IsSubmitStageDeviceLost())
+				return false;
 			clearSubmittedEyeHMDMask();
+			if (IsSubmitStageDeviceLost())
+				return false;
 			a_outputTexture = *a_inputTexture;
 			a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
 			a_outputTexture.eType = vr::TextureType_DirectX;
@@ -7414,6 +7957,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	clearSubmittedEyeHMDMask();
+	if (IsSubmitStageDeviceLost())
+		return false;
 	if (targetScaleMode) {
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&
@@ -7440,6 +7985,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
 				context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
 				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
+				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
+					return false;
 				submitStageMirrorEyeReady = {};
 			}
 		} else {
@@ -7495,6 +8042,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	D3D11_BOX outputBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
 	context->CopySubresourceRegion(sourceTexture, outputSubresource, outputOffsetX, 0, 0, vrIntermediateColorOut[eyeIndex]->resource.get(), 0, &outputBox);
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage output copy"))
+		return false;
 
 	a_outputTexture = *a_inputTexture;
 	a_outputTexture.eType = vr::TextureType_DirectX;
@@ -7848,6 +8397,8 @@ void Upscaling::UpgradeBackendInterface(void** ppInterface)
 
 void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 {
+	submitStageDeviceLost.store(false, std::memory_order_release);
+	streamline.ResetDLSSIdleFences();
 	streamline.slSetD3DDevice(device);
 }
 
@@ -8150,7 +8701,8 @@ void Upscaling::Upscale()
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
 		// VR-only resets can leave vendor upscalers with stale viewport state.
-		ApplyPendingVendorRuntimeReset(upscaleMethod, "");
+		if (!ApplyPendingVendorRuntimeReset(upscaleMethod, ""))
+			return;
 
 		if (foveatedDispatchRequested) {
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -8460,14 +9012,33 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 		return;
 	}
 
-	auto* fullscreenVS = GetUpscaleVS();
-	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS(true);
+	ID3D11VertexShader* fullscreenVS = nullptr;
+	ID3D11PixelShader* underwaterMaskPS = nullptr;
+	static bool loggedSubmitStageUnderwaterShaderFailure = false;
+	try {
+		fullscreenVS = GetUpscaleVS();
+		underwaterMaskPS = GetUnderwaterMaskUpscalePS(true);
+	} catch (const std::exception& e) {
+		LogWarnOnce(
+			loggedSubmitStageUnderwaterShaderFailure,
+			"[Upscaling] Submit-stage underwater mask refresh shader unavailable; skipping mask refresh",
+			e);
+		return;
+	} catch (...) {
+		LogWarnOnce(
+			loggedSubmitStageUnderwaterShaderFailure,
+			"[Upscaling] Submit-stage underwater mask refresh shader unavailable; skipping mask refresh");
+		return;
+	}
 	if (!fullscreenVS || !underwaterMaskPS) {
 		return;
 	}
 
 	TracyD3D11Zone(state->tracyCtx, "Upscaling - Submit Stage Underwater Mask");
 	state->BeginPerfEvent("Submit Stage Underwater Mask Refresh");
+	auto perfEvent = ScopeExit([&]() {
+		state->EndPerfEvent();
+	});
 
 	context->IASetInputLayout(nullptr);
 	context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
@@ -8525,7 +9096,6 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);
 
-	state->EndPerfEvent();
 }
 
 void Upscaling::ApplySharpening()
@@ -9055,13 +9625,31 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
-		upscaling.RefreshSubmitStageUnderwaterMask();
+		static bool loggedSubmitStageUnderwaterRefreshException = false;
+		try {
+			upscaling.RefreshSubmitStageUnderwaterMask();
+		} catch (const std::exception& e) {
+			upscaling.UnbindUpscalingResources();
+			LogWarnOnce(
+				loggedSubmitStageUnderwaterRefreshException,
+				"[Upscaling] Submit-stage underwater mask refresh threw; skipping mask refresh",
+				e);
+		} catch (...) {
+			upscaling.UnbindUpscalingResources();
+			LogWarnOnce(
+				loggedSubmitStageUnderwaterRefreshException,
+				"[Upscaling] Submit-stage underwater mask refresh threw; skipping mask refresh");
+		}
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		if (IsSubmitStageDynamicResolutionActive() && !upscaling.IsPerfModeActive()) {
+			upscaling.PrepareFullResolutionPostProcessing();
+		} else {
+			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		}
 		return;
 	}
 

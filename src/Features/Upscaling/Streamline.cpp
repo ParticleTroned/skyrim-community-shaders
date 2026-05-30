@@ -15,6 +15,22 @@ namespace
 {
 	constexpr UINT NVIDIA_VENDOR_ID = 0x10DE;
 
+	enum class D3D11IdleFenceResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
+	void ReleaseD3D11IdleFence(ID3D11Query*& a_query)
+	{
+		if (!a_query)
+			return;
+
+		a_query->Release();
+		a_query = nullptr;
+	}
+
 	bool IsHDRDLSSInputFormat(DXGI_FORMAT a_format)
 	{
 		switch (a_format) {
@@ -53,55 +69,61 @@ namespace
 		return IsHDRDLSSInputFormat(desc.Format);
 	}
 
-	void FlushAndWaitForD3D11Idle(ID3D11DeviceContext* a_context, const char* a_reason)
+	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
 	{
-		if (!a_context)
-			return;
+		if (!a_context) {
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Ready;
+		}
+
+		const auto pollFence = [&]() {
+			BOOL completed = FALSE;
+			const HRESULT dataResult = a_context->GetData(a_query, &completed, sizeof(completed), 0);
+			if (dataResult == S_OK && completed) {
+				ReleaseD3D11IdleFence(a_query);
+				return D3D11IdleFenceResult::Ready;
+			}
+
+			if (dataResult == S_FALSE || dataResult == S_OK)
+				return D3D11IdleFenceResult::Pending;
+
+			logger::debug("[Streamline] D3D11 idle fence poll failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Failed;
+		};
+
+		if (a_query)
+			return pollFence();
 
 		ID3D11Device* device = nullptr;
 		a_context->GetDevice(&device);
 		if (!device) {
 			a_context->Flush();
-			return;
+			return D3D11IdleFenceResult::Ready;
 		}
 
 		D3D11_QUERY_DESC queryDesc{};
 		queryDesc.Query = D3D11_QUERY_EVENT;
 
-		ID3D11Query* query = nullptr;
-		const HRESULT createResult = device->CreateQuery(&queryDesc, &query);
+		const HRESULT createResult = device->CreateQuery(&queryDesc, &a_query);
 		device->Release();
 
-		if (FAILED(createResult) || !query) {
+		if (FAILED(createResult) || !a_query) {
 			a_context->Flush();
-			return;
+			logger::debug("[Streamline] D3D11 idle fence creation failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(createResult));
+			return D3D11IdleFenceResult::Failed;
 		}
 
-		a_context->End(query);
+		a_context->End(a_query);
 		a_context->Flush();
-
-		const ULONGLONG deadline = GetTickCount64() + 1000;
-		BOOL completed = FALSE;
-		while (true) {
-			const HRESULT dataResult = a_context->GetData(query, &completed, sizeof(completed), 0);
-			if (dataResult == S_OK && completed)
-				break;
-
-			if (FAILED(dataResult)) {
-				logger::debug("[Streamline] D3D11 idle wait failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
-				break;
-			}
-
-			if (GetTickCount64() >= deadline) {
-				logger::debug("[Streamline] D3D11 idle wait timed out before {}", a_reason);
-				break;
-			}
-
-			Sleep(1);
-		}
-
-		query->Release();
+		return pollFence();
 	}
+
+}
+
+Streamline::~Streamline()
+{
+	ResetDLSSIdleFences();
 }
 
 void LoggingCallback(sl::LogType type, const char* msg)
@@ -767,8 +789,19 @@ sl::ViewportHandle Streamline::ResolveDLSSViewport(sl::ViewportHandle p_viewport
 
 		auto& slot = vrDLSSViewportSlots[slotIndex];
 		if (slot.valid) {
-			if (auto context = globals::d3d::context)
-				FlushAndWaitForD3D11Idle(context, "VR DLSS viewport slot recycle");
+			if (auto context = globals::d3d::context) {
+				if (BeginOrPollD3D11IdleFence(context, pendingVRDLSSSlotRecycleIdleFence, "VR DLSS viewport slot recycle") != D3D11IdleFenceResult::Ready) {
+					static bool loggedSlotRecycleTimeout = false;
+					if (!loggedSlotRecycleTimeout) {
+						logger::warn("[Streamline] Skipping VR DLSS viewport slot recycle because the D3D11 queue did not become idle.");
+						loggedSlotRecycleTimeout = true;
+					}
+					nonVRDLSSOptionsCache.valid = false;
+					return p_viewport;
+				}
+			} else {
+				ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
+			}
 			FreeVRDLSSViewportSlot(static_cast<uint32_t>(slotIndex), true);
 		}
 
@@ -814,6 +847,12 @@ void Streamline::InvalidateDLSSOptionsCache()
 		for (auto& optionsCache : slot.optionsCache)
 			optionsCache = {};
 	}
+}
+
+void Streamline::ResetDLSSIdleFences()
+{
+	ReleaseD3D11IdleFence(pendingDLSSResourceFreeIdleFence);
+	ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
 }
 
 void Streamline::ResetFrameTracking()
@@ -1133,16 +1172,27 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  *
  * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
  */
-void Streamline::DestroyDLSSResources()
+bool Streamline::DestroyDLSSResources()
 {
 	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
+		ResetDLSSIdleFences();
 		InvalidateDLSSOptionsCache();
 		ResetFrameTracking();
-		return;
+		return true;
 	}
 
-	if (auto context = globals::d3d::context)
-		FlushAndWaitForD3D11Idle(context, "DLSS resource free");
+	if (auto context = globals::d3d::context) {
+		if (BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence, "DLSS resource free") != D3D11IdleFenceResult::Ready) {
+			static bool loggedDLSSResourceFreeTimeout = false;
+			if (!loggedDLSSResourceFreeTimeout) {
+				logger::warn("[Streamline] Deferring DLSS resource free because the D3D11 queue did not become idle.");
+				loggedDLSSResourceFreeTimeout = true;
+			}
+			return false;
+		}
+	} else {
+		ResetDLSSIdleFences();
+	}
 
 	FreeDLSSViewportResources(viewport, 0, true);
 
@@ -1152,9 +1202,11 @@ void Streamline::DestroyDLSSResources()
 			FreeVRDLSSViewportSlot(slotIndex, false);
 	}
 
+	ResetDLSSIdleFences();
 	InvalidateDLSSOptionsCache();
 	vrDLSSViewportUseCounter = 0;
 	ResetFrameTracking();
+	return true;
 }
 
 void Streamline::UpdateReflex()

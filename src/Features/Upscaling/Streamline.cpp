@@ -837,11 +837,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	sl::Resource reactiveMaskRes = { sl::ResourceType::eTex2d, reactiveMask, 0 };
 	sl::Resource transparencyMaskRes = { sl::ResourceType::eTex2d, transparencyMask, 0 };
 
+	auto& upscaling = globals::features::upscaling;
 	float viewportScaleX = 1.0f;
 	float viewportScaleY = 1.0f;
 	if (auto state = globals::state) {
-		const float fullOutputWidth = globals::game::isVR ? (state->screenSize.x * 0.5f) : state->screenSize.x;
-		const float fullOutputHeight = state->screenSize.y;
+		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
+		auto fullOutputSize = resolutionPlan.finalOutputSize;
+		if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
+			fullOutputSize = state->screenSize;
+
+		const float fullOutputWidth = globals::game::isVR ? (fullOutputSize.x * 0.5f) : fullOutputSize.x;
+		const float fullOutputHeight = fullOutputSize.y;
 		if (fullOutputWidth > 0.0f && fullOutputHeight > 0.0f) {
 			viewportScaleX = std::clamp(static_cast<float>(extentOut.width) / fullOutputWidth, 1e-4f, 1.0f);
 			viewportScaleY = std::clamp(static_cast<float>(extentOut.height) / fullOutputHeight, 1e-4f, 1.0f);
@@ -849,8 +855,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	}
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
-	const uint32_t qualityMode = std::min(globals::features::upscaling.settings.qualityMode, Upscaling::kQualityModeMaxIndex);
-	const uint32_t dlssPreset = std::min(globals::features::upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
+	const uint32_t dlssPreset = std::min(upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
 	vp = ResolveDLSSViewport(vp, eyeIndex, qualityMode, dlssPreset);
 
 	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY))
@@ -860,10 +866,10 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
-		globals::features::upscaling.IsSubmitStageUpscalingActive();
+		upscaling.IsSubmitStageUpscalingActive();
 	const bool emitPCLMarkers =
 		!submitStageVRDLSS &&
-		globals::features::upscaling.settings.reflexUseMarkersToOptimize &&
+		upscaling.settings.reflexUseMarkersToOptimize &&
 		reflexOptionsCache.useMarkersToOptimize &&
 		featurePCL;
 	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
@@ -1010,7 +1016,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// DLAA uses the full per-eye extent. Keep it on the isolated per-eye
 		// output path so hidden-area cleanup and stereo copyback are identical
 		// for both eyes, avoiding stale content in the combined VR target.
-		const bool forcePerEyeOutput = upscaling.settings.qualityMode == 0;
+		const bool forcePerEyeOutput = upscaling.GetRuntimeQualityMode() == 0;
 		const bool canUseDirectEye0 =
 			!forcePerEyeOutput &&
 			upscaling.vrIntermediateColorIn[0] && upscaling.vrIntermediateColorIn[0]->resource &&

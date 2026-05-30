@@ -4,6 +4,7 @@
 #include "Upscaling/AAVRSController.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include <atomic>
@@ -53,6 +54,21 @@ public:
 		kDLSS
 	};
 
+	enum class ResolutionOwner : uint8_t
+	{
+		Native,
+		VendorDynamicResolution,
+		SubmitStage,
+		PerfMode
+	};
+
+	enum class UpscalingOutputTarget : uint8_t
+	{
+		Main,
+		Sharpener,
+		SubmitStageIntermediate
+	};
+
 	// Shared DLSS/FSR/FSR4 render-scale presets:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
@@ -87,6 +103,7 @@ public:
 		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint submitStageUpscaling = 1;
+		uint perfMode = 0;
 		bool aaVrs = false;
 		bool aaVrsVisualization = false;
 		uint frameLimitMode = 1;
@@ -117,6 +134,63 @@ public:
 	};
 
 	Settings settings;
+
+	struct RuntimeResolutionPlan
+	{
+		UpscaleMethod upscaleMethod = UpscaleMethod::kNONE;
+		ResolutionOwner owner = ResolutionOwner::Native;
+		UpscalingOutputTarget outputTarget = UpscalingOutputTarget::Main;
+		uint32_t qualityMode = 0;
+		float2 trueHMDDisplaySize{ 0.0f, 0.0f };
+		float2 engineRenderSize{ 0.0f, 0.0f };
+		float2 finalOutputSize{ 0.0f, 0.0f };
+		bool vendorMethod = false;
+		bool foveatedActive = false;
+		bool peripheryTAAActive = false;
+		bool menuContextActive = false;
+		bool knownMenuContextActive = false;
+		bool loadingMenuActive = false;
+		bool perfModeRestartRequired = false;
+		FoveatedRegionPlan foveatedRegion{};
+	};
+
+	struct PerfModeState
+	{
+		struct BootSnapshot
+		{
+			bool valid = false;
+			bool active = false;
+			UpscaleMethod method = UpscaleMethod::kNONE;
+			uint32_t qualityMode = 0;
+			float renderScale = 1.0f;
+			uint32_t displayEyeWidth = 0;
+			uint32_t displayEyeHeight = 0;
+			uint32_t renderEyeWidth = 0;
+			uint32_t renderEyeHeight = 0;
+		};
+
+		void ResetBootLatch();
+		void ResetResources();
+		void RecordTrueHMDSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
+		bool IsRequested(const Settings& a_settings) const;
+		bool IsEligible(const Settings& a_settings, UpscaleMethod a_method) const;
+		bool EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate);
+		bool IsActive(const Settings& a_settings, UpscaleMethod a_method) const;
+		bool TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height);
+		float2 GetDisplayScreenSize() const;
+		float2 GetRenderScreenSize() const;
+		const BootSnapshot& GetBootSnapshot() const { return boot; }
+		bool HasRestartRequiredChange() const { return restartRequired; }
+
+		uint32_t trueHMDEyeWidth = 0;
+		uint32_t trueHMDEyeHeight = 0;
+		BootSnapshot boot{};
+		bool restartRequired = false;
+		bool displaySizeChanged = false;
+	};
+
+	PerfModeState perfMode;
+	RuntimeResolutionPlan runtimeResolutionPlan;
 
 	struct JitterCB
 	{
@@ -312,6 +386,13 @@ public:
 	virtual void SetupResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
+	UpscaleMethod GetRuntimeUpscaleMethod() const;
+	uint32_t GetRuntimeQualityMode() const;
+	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
+	void RefreshRuntimeResolutionPlan();
+	bool IsPerfModeActive() const;
+	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
+	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height);
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
 	struct ActiveUpscalingFoveatedProfile
@@ -415,6 +496,8 @@ public:
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc);
 	void EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc);
+	bool EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
+		ID3D11Resource* colorSrc);
 
 	// Helper: Create a Texture2D matching source format at a given size
 	static eastl::unique_ptr<Texture2D> CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
@@ -572,6 +655,7 @@ public:
 	float2 GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const;
 	float2 GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile = false) const;
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;
+	bool GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye, uint32_t& a_inputHeight, uint32_t& a_outputWidthPerEye, uint32_t& a_outputHeight) const;
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);

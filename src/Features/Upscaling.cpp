@@ -8144,10 +8144,16 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	D3D11_VIEWPORT viewport = {};
 	viewport.TopLeftX = 0.0f;
 	viewport.TopLeftY = 0.0f;
-	// Draw the full underwater-mask target. Partial submit-sized repair leaves
-	// copied/stale HAM-shaped mask data outside the rewritten region.
-	viewport.Width = static_cast<float>(underwaterMaskDesc.Width);
-	viewport.Height = static_cast<float>(underwaterMaskDesc.Height);
+	// Match the dynamic scene footprint used by the raw depth input. Drawing
+	// the full output-sized mask target under submit-stage scaling makes the
+	// fullscreen triangle UVs diverge from the dynamic depth coordinates and
+	// produces diagonal clear regions at the waterline.
+	const float repairWidth = static_cast<float>(std::min<uint32_t>(underwaterMaskDesc.Width, inputEyeWidth));
+	const float repairHeight = perfModeActive ?
+		static_cast<float>(std::min<uint32_t>(underwaterMaskDesc.Height, inputHeight)) :
+		std::min(static_cast<float>(underwaterMaskDesc.Height), static_cast<float>(inputHeight) * 0.5f);
+	viewport.Width = repairWidth;
+	viewport.Height = repairHeight;
 	viewport.MinDepth = 0.0f;
 	viewport.MaxDepth = 1.0f;
 	context->RSSetViewports(1, &viewport);
@@ -8164,6 +8170,10 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	jitterCB->Update(jitterData);
 	auto bufferArray = jitterCB->CB();
 	context->PSSetConstantBuffers(0, 1, &bufferArray);
+
+	// This repair can run immediately after Skyrim's ISUnderwaterMask pass.
+	// Unbind the vanilla RTV before copying kUNDERWATER_MASK into its SRV copy.
+	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 	CopyResourceIfNonAliased(context, underwaterMask.textureCopy, underwaterMask.texture);

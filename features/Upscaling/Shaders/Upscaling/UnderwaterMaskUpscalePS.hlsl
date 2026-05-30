@@ -190,8 +190,9 @@ PS_OUTPUT main(PS_INPUT input)
 			// When the camera is underwater, expand upward so the near-surface band
 			// remains fogged.
 			static const float kSurfaceBias = 3.5;
+			bool lookingUp = worldPos.z > 0.0;
 			bool cameraUnderwater = waterHeight > 0.0;
-			float threshold = cameraUnderwater ? waterHeight + kSurfaceBias : waterHeight - kSurfaceBias;
+			float threshold = (cameraUnderwater && lookingUp) ? waterHeight + kSurfaceBias : waterHeight - kSurfaceBias;
 			psout.UnderwaterMask = (worldPos.z < threshold) ? 1.0 : 0.0;
 		} else {
 			// depth <= kSkyDepthThreshold: sky / unrendered pixels (reversed-Z depth clear value).

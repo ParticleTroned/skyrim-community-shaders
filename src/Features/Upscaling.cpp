@@ -988,6 +988,19 @@ namespace
 		       (state->IsSaveLoadSafeModeActive() && !loadingMenuActive);
 	}
 
+	bool IsMainMenuContextActive()
+	{
+		auto state = globals::state;
+		auto ui = globals::game::ui;
+		return (state && state->isMainMenuOpen) ||
+		       (ui && ui->IsMenuOpen(RE::MainMenu::MENU_NAME));
+	}
+
+	bool IsMainOrLoadingMenuContextActive()
+	{
+		return IsMainMenuContextActive() || IsLoadingMenuContextActive();
+	}
+
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
 	{
 		if (!a_ui)
@@ -1026,10 +1039,10 @@ namespace
 	{
 		auto state = globals::state;
 		auto ui = globals::game::ui;
-		return (state && (state->isMapMenuOpen || state->isMainMenuOpen)) ||
+		return (state && state->isMapMenuOpen) ||
+		       IsMainMenuContextActive() ||
 		       IsLoadingMenuContextActive() ||
-		       IsSkyrimMenuPresentationContextActive(ui) ||
-		       (ui && ui->GameIsPaused());
+		       IsSkyrimMenuPresentationContextActive(ui);
 	}
 
 	bool IsCommunityShadersMenuOpen()
@@ -1040,15 +1053,16 @@ namespace
 
 	bool IsGameMenuContextActive()
 	{
-		auto state = globals::state;
-		const bool nonWorldPresentation =
-			state && state->lastWorldRenderFrame != state->frameCount;
-		return IsKnownGameMenuContextActive() || nonWorldPresentation;
+		return IsKnownGameMenuContextActive();
 	}
 
 	bool IsSubmitStageMenuPresentationContextActive()
 	{
-		if (!globals::game::isVR || !g_submitStageTargetSizeKnown || !IsGameMenuContextActive())
+		if (!globals::game::isVR || !g_submitStageTargetSizeKnown)
+			return false;
+		if (!IsKnownGameMenuContextActive())
+			return false;
+		if (IsMainOrLoadingMenuContextActive())
 			return false;
 
 		auto& upscaling = globals::features::upscaling;
@@ -7391,10 +7405,14 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	if (globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsKnownGameMenuContextActive()) {
+	const bool vrVendorMenu = globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsGameMenuContextActive();
+	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
+	if (vrVendorMenu && !submitMenuPresentationContext) {
 		viewport->projectionPosScaleX = 0.0f;
 		viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
+	} else if (submitMenuPresentationContext) {
+		ApplyDynamicResolutionState(viewport);
 	}
 
 	if (d3d12SwapChainActive)
@@ -7723,6 +7741,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 	const bool menuPresentationContext = resolutionPlan.knownMenuContextActive || resolutionPlan.loadingMenuActive;
+	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
 	const uint32_t handoffFrameDelta =
 		menuPresentationContext ? kSubmitStageMenuHandoffFrameTolerance : 1u;
 
@@ -7762,9 +7781,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool submitStageScaleMode = IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown;
 	const bool perfModeScaleMode = perfModeActive && resolutionPlan.owner == ResolutionOwner::PerfMode;
 	const bool targetScaleMode = submitStageScaleMode || perfModeScaleMode;
-	const bool perfModePresentationOnly = perfModeScaleMode && menuPresentationContext;
-	const bool submitMenuPresentationOnly = !perfModeScaleMode && menuPresentationContext && !handoffMatches;
-	const bool presentationOnly = perfModePresentationOnly || submitMenuPresentationOnly;
 	const auto submitSize = GetSubmitStageSizePlan(screenSize);
 	const uint32_t eyeWidthOut =
 		perfModeScaleMode ? std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.finalOutputSize.x) / 2u) :
@@ -7780,6 +7796,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		(submitStageScaleMode ? submitSize.inputHeight : static_cast<uint32_t>(Util::ConvertToDynamic(screenSize, true).y));
 	if (!eyeWidthIn || !eyeHeightIn || !eyeWidthOut || !eyeHeightOut)
 		return false;
+	const bool sourceHasPerEyeLayout =
+		sourceDesc.ArraySize > 1 ||
+		(sourceDesc.ArraySize == 1 && sourceDesc.Width >= eyeWidthIn * 2);
+	const bool perfModeMenuCanUseVendor =
+		perfModeScaleMode &&
+		submitMenuPresentationContext &&
+		handoffMatches &&
+		(a_inputBounds || sourceHasPerEyeLayout);
+	const bool perfModePresentationOnly = perfModeScaleMode && menuPresentationContext && !perfModeMenuCanUseVendor;
+	const bool submitMenuPresentationOnly = !perfModeScaleMode && menuPresentationContext && !handoffMatches;
+	const bool presentationOnly = perfModePresentationOnly || submitMenuPresentationOnly;
 
 	CheckResources(upscaleMethod);
 	if (IsSubmitStageDeviceLost())
@@ -7836,6 +7863,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const auto clearSubmittedEyeHMDMask = [&]() {
+		if (perfModeMenuCanUseVendor)
+			return;
 		if (!depth.depthSRV || !vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav)
 			return;
 
@@ -7916,7 +7945,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	bool vendorSucceeded = false;
-	if (IsFoveatedVendorDispatchEnabled(upscaleMethod)) {
+	const bool foveatedRequested = IsFoveatedVendorDispatchEnabled(upscaleMethod) && !perfModeMenuCanUseVendor;
+	if (foveatedRequested) {
 		static bool loggedFoveatedSubmitException[2] = {};
 		try {
 			vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(

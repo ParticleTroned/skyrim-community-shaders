@@ -561,6 +561,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # files do not get their timestamps updated.
     file(
         GLOB_RECURSE _package_shaders
+        CONFIGURE_DEPENDS
         LIST_DIRECTORIES FALSE
         "${CMAKE_SOURCE_DIR}/package/Shaders/*"
     )
@@ -600,6 +601,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         if(EXISTS "${_fpath}/Shaders")
             file(
                 GLOB_RECURSE _feat_shaders
+                CONFIGURE_DEPENDS
                 LIST_DIRECTORIES FALSE
                 "${_fpath}/Shaders/*"
             )

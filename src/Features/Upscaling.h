@@ -797,6 +797,37 @@ private:
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
+	enum class HMDMaskClearPhase : uint8_t
+	{
+		PerEyeInput,
+		PerEyeOutput,
+		SubmitStageOutput,
+		SubmitStageFoveatedOutput
+	};
+	bool ShouldClearHMDMaskInPhase(HMDMaskClearPhase a_phase) const;
+	void ClearHMDMaskForEye(HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
+		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0);
+	struct VendorEyeDispatchParams
+	{
+		uint32_t eyeIndex = 0;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		float motionVectorScaleX = 1.0f;
+		float motionVectorScaleY = 1.0f;
+		float pinholeOffsetX = 0.0f;
+		float pinholeOffsetY = 0.0f;
+		ID3D11Resource* colorIn = nullptr;
+		ID3D11Resource* depth = nullptr;
+		ID3D11Resource* motionVectors = nullptr;
+		ID3D11Resource* reactiveMask = nullptr;
+		ID3D11Resource* transparencyMask = nullptr;
+		ID3D11Resource* colorOut = nullptr;
+		const char* label = "vendor eye dispatch";
+	};
+	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
 

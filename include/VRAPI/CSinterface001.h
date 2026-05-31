@@ -25,13 +25,12 @@ namespace CSPluginAPI
 	struct ICSInterface001;
 	ICSInterface001* GetCSInterface001();
 
-	// Legacy name kept for source/binary compatibility. These values are shared
-	// upscaler render-scale presets for DLSS, FSR 3.1.5, and runtime FSR4.
-	enum class DLSSMode : uint32_t
+	// Shared upscaler render-scale presets for DLSS, FSR 3.1.5, and runtime FSR4.
+	enum class UpscalePreset : uint32_t
 	{
 		// Values 0-4 are kept stable for existing compiled API users.
-		kDLAA = 0,  // Native render scale: DLAA for DLSS, Native AA for FSR/FSR4.
-		kNativeAA = kDLAA,
+		kNativeAA = 0,       // Native render scale: DLAA for DLSS, Native AA for FSR/FSR4.
+		kDLAA = kNativeAA,  // Legacy DLSS-specific name for the native-scale preset.
 		kQuality = 1,
 		kBalanced = 2,
 		kPerformance = 3,
@@ -39,6 +38,9 @@ namespace CSPluginAPI
 		kHoshipa = 5,
 		kUltraQuality = 6
 	};
+
+	// Legacy type name kept for source compatibility. It is the same enum type.
+	using DLSSMode = UpscalePreset;
 
 	enum class DLSSProfile : uint32_t
 	{
@@ -66,10 +68,9 @@ namespace CSPluginAPI
 		virtual bool GetVolumetricLightingExteriorEnabled() = 0;
 		virtual void SetVolumetricLightingExteriorEnabled(bool enabled) = 0;
 
-		// Legacy names retained for compatibility. These control the shared
-		// DLSS/FSR/FSR4 upscaler preset, not only DLSS.
-		virtual DLSSMode GetDLSSMode() = 0;
-		virtual void SetDLSSMode(DLSSMode mode) = 0;
+		// Controls the shared DLSS/FSR/FSR4 upscaler preset.
+		virtual UpscalePreset GetUpscalePreset() = 0;
+		virtual void SetUpscalePreset(UpscalePreset preset) = 0;
 
 		virtual bool GetLightLimitFixContactShadowsEnabled() = 0;
 		virtual void SetLightLimitFixContactShadowsEnabled(bool enabled) = 0;
@@ -86,7 +87,7 @@ namespace CSPluginAPI
 
 		// Convenience for interior/exterior transition controllers. Stages the
 		// render-size path, shared upscaler preset, and DLSS profile together.
-		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile) = 0;
+		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI
 

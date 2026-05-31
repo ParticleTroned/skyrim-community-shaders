@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 7;
+inline constexpr unsigned int CSBuildNumber = 6;
 
 namespace CSPluginAPI
 {
@@ -35,8 +35,8 @@ namespace CSPluginAPI
 		virtual bool GetVolumetricLightingExteriorEnabled() override;
 		virtual void SetVolumetricLightingExteriorEnabled(bool enabled) override;
 
-		virtual DLSSMode GetDLSSMode() override;
-		virtual void SetDLSSMode(DLSSMode mode) override;
+		virtual UpscalePreset GetUpscalePreset() override;
+		virtual void SetUpscalePreset(UpscalePreset preset) override;
 
 		virtual bool GetLightLimitFixContactShadowsEnabled() override;
 		virtual void SetLightLimitFixContactShadowsEnabled(bool enabled) override;
@@ -47,7 +47,7 @@ namespace CSPluginAPI
 		virtual bool GetRenderAtUpscaleResEnabled() override;
 		virtual void SetRenderAtUpscaleResEnabled(bool enabled) override;
 		virtual bool GetRenderAtUpscaleResActive() override;
-		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile) override;
+		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, UpscalePreset preset, DLSSProfile profile) override;
 	};
 
 	namespace detail
@@ -66,61 +66,61 @@ namespace CSPluginAPI
 			return enabled ? static_cast<TFlag>(1) : static_cast<TFlag>(0);
 		}
 
-		inline bool IsValidDLSSMode(DLSSMode mode)
+		inline bool IsValidUpscalePreset(UpscalePreset preset)
 		{
-			switch (mode) {
-			case DLSSMode::kDLAA:
-			case DLSSMode::kQuality:
-			case DLSSMode::kBalanced:
-			case DLSSMode::kPerformance:
-			case DLSSMode::kUltraPerformance:
-			case DLSSMode::kHoshipa:
-			case DLSSMode::kUltraQuality:
+			switch (preset) {
+			case UpscalePreset::kNativeAA:
+			case UpscalePreset::kQuality:
+			case UpscalePreset::kBalanced:
+			case UpscalePreset::kPerformance:
+			case UpscalePreset::kUltraPerformance:
+			case UpscalePreset::kHoshipa:
+			case UpscalePreset::kUltraQuality:
 				return true;
 			default:
 				return false;
 			}
 		}
 
-		inline uint32_t DLSSModeToQualityMode(DLSSMode mode)
+		inline uint32_t UpscalePresetToQualityMode(UpscalePreset preset)
 		{
-			switch (mode) {
-			case DLSSMode::kDLAA:
+			switch (preset) {
+			case UpscalePreset::kNativeAA:
 				return 0u;
-			case DLSSMode::kHoshipa:
+			case UpscalePreset::kHoshipa:
 				return 1u;
-			case DLSSMode::kUltraQuality:
+			case UpscalePreset::kUltraQuality:
 				return 2u;
-			case DLSSMode::kQuality:
+			case UpscalePreset::kQuality:
 				return 3u;
-			case DLSSMode::kBalanced:
+			case UpscalePreset::kBalanced:
 				return 4u;
-			case DLSSMode::kPerformance:
+			case UpscalePreset::kPerformance:
 				return 5u;
-			case DLSSMode::kUltraPerformance:
+			case UpscalePreset::kUltraPerformance:
 				return 6u;
 			default:
 				return 0u;
 			}
 		}
 
-		inline DLSSMode QualityModeToDLSSMode(uint32_t mode)
+		inline UpscalePreset QualityModeToUpscalePreset(uint32_t mode)
 		{
 			switch (mode) {
 			case 1:
-				return DLSSMode::kHoshipa;
+				return UpscalePreset::kHoshipa;
 			case 2:
-				return DLSSMode::kUltraQuality;
+				return UpscalePreset::kUltraQuality;
 			case 3:
-				return DLSSMode::kQuality;
+				return UpscalePreset::kQuality;
 			case 4:
-				return DLSSMode::kBalanced;
+				return UpscalePreset::kBalanced;
 			case 5:
-				return DLSSMode::kPerformance;
+				return UpscalePreset::kPerformance;
 			case 6:
-				return DLSSMode::kUltraPerformance;
+				return UpscalePreset::kUltraPerformance;
 			default:
-				return DLSSMode::kDLAA;
+				return UpscalePreset::kNativeAA;
 			}
 		}
 
@@ -201,21 +201,21 @@ namespace CSPluginAPI
 		globals::features::volumetricLighting.SetExteriorEnabled(enabled);
 	}
 
-	inline DLSSMode CSInterface001::GetDLSSMode()
+	inline UpscalePreset CSInterface001::GetUpscalePreset()
 	{
 		const uint32_t clampedMode = std::min(globals::features::upscaling.GetEffectiveDLSSQualityMode(), Upscaling::kQualityModeMaxIndex);
-		return detail::QualityModeToDLSSMode(clampedMode);
+		return detail::QualityModeToUpscalePreset(clampedMode);
 	}
 
-	inline void CSInterface001::SetDLSSMode(DLSSMode mode)
+	inline void CSInterface001::SetUpscalePreset(UpscalePreset preset)
 	{
-		if (!detail::IsValidDLSSMode(mode)) {
-			logger::warn("[CS API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(mode));
+		if (!detail::IsValidUpscalePreset(preset)) {
+			logger::warn("[CS API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
 		}
 
 		auto& upscaling = globals::features::upscaling;
-		const uint32_t qualityMode = detail::DLSSModeToQualityMode(mode);
+		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const auto upscaleMethod = upscaling.GetUpscaleMethod();
 		const bool stageVRUpscalingChange =
 			globals::game::isVR &&
@@ -294,10 +294,10 @@ namespace CSPluginAPI
 		return globals::features::upscaling.IsPerfModeActive();
 	}
 
-	inline void CSInterface001::SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile)
+	inline void CSInterface001::SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, UpscalePreset preset, DLSSProfile profile)
 	{
-		if (!detail::IsValidDLSSMode(mode)) {
-			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(mode));
+		if (!detail::IsValidUpscalePreset(preset)) {
+			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
 		}
 		if (!detail::IsValidDLSSProfile(profile)) {
@@ -306,7 +306,7 @@ namespace CSPluginAPI
 		}
 
 		auto& upscaling = globals::features::upscaling;
-		const uint32_t qualityMode = detail::DLSSModeToQualityMode(mode);
+		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
 		upscaling.SetVRUpscalingTransitionProfile(renderAtUpscaleResEnabled, qualityMode, dlssPreset, "CS API VR upscaling transition profile");
 	}

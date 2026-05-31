@@ -106,6 +106,8 @@ namespace
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMax = 0.30f;
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
+	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
+	constexpr uint32_t kVRLoadingTransitionTailFrames = 30;
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
 
@@ -998,15 +1000,65 @@ namespace
 		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 	}
 
-	bool ShouldDeferHMDClearMask()
+	bool IsLoadingTransitionTailActive(const State* a_state)
 	{
-		auto* state = globals::state;
-		if (!state)
+		if (!a_state)
 			return false;
 
-		const bool loadingMenuActive = IsLoadingMenuContextActive();
-		return state->pendingPostLoadRuntimeReset ||
-		       (state->IsSaveLoadSafeModeActive() && !loadingMenuActive);
+		const uint32_t endFrame = g_vrLoadingTransitionTailEndFrame.load(std::memory_order_acquire);
+		return endFrame != 0 && a_state->frameCount < endFrame;
+	}
+
+	bool IsSaveLoadTransitionContextActive(const State* a_state)
+	{
+		if (IsLoadingMenuContextActive())
+			return true;
+
+		if (!a_state)
+			return false;
+
+		return a_state->pendingPostLoadRuntimeReset ||
+		       a_state->IsSaveLoadSafeModeActive() ||
+		       IsLoadingTransitionTailActive(a_state);
+	}
+
+	bool IsSaveLoadTransitionContextActive()
+	{
+		return IsSaveLoadTransitionContextActive(globals::state);
+	}
+
+	bool IsUpscalingLoadTransitionContextActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		return a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		       IsSaveLoadTransitionContextActive(a_state);
+	}
+
+	bool IsUpscalingLoadTransitionContextActive(const Upscaling& a_upscaling)
+	{
+		return IsUpscalingLoadTransitionContextActive(a_upscaling, globals::state);
+	}
+
+	bool ShouldDeferHMDClearMask()
+	{
+		return IsSaveLoadTransitionContextActive();
+	}
+
+	void QueueVendorRuntimeResetAfterLoadingMenu(Upscaling& a_upscaling)
+	{
+		const auto upscaleMethod = a_upscaling.GetRuntimeUpscaleMethod();
+		if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS) {
+			a_upscaling.pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
+			a_upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
+			a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
+		} else if (upscaleMethod == Upscaling::UpscaleMethod::kFSR) {
+			a_upscaling.pendingFSRReset.store(true, std::memory_order_relaxed);
+			a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
+			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
+		} else {
+			a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
+			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
+			a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
+		}
 	}
 
 	bool IsMainMenuContextActive()
@@ -2601,9 +2653,15 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 {
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_relaxed);
+		if (a_event->opening) {
+			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
+		} else if (globals::state) {
+			g_vrLoadingTransitionTailEndFrame.store(
+				globals::state->frameCount + kVRLoadingTransitionTailFrames,
+				std::memory_order_release);
+		}
 		if (!a_event->opening) {
-			globals::features::upscaling.pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
-			globals::features::upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
+			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
 		}
 	}
 	return RE::BSEventNotifyControl::kContinue;
@@ -3562,6 +3620,16 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 	if (!globals::game::isVR)
 		return true;
 
+	const bool resetPending =
+		(a_upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.load(std::memory_order_acquire)) ||
+		(a_upscaleMethod == UpscaleMethod::kFSR && pendingFSRReset.load(std::memory_order_acquire));
+	if (!resetPending)
+		return true;
+
+	if (IsUpscalingLoadTransitionContextActive(*this)) {
+		return true;
+	}
+
 	const char* context = a_context ? a_context : "";
 	const bool rebuildDLSS = a_upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed);
 	const bool rebuildFSR = a_upscaleMethod == UpscaleMethod::kFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed);
@@ -3636,8 +3704,9 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		return true;
 
 	auto* state = globals::state;
-	if (state && state->IsSaveLoadSafeModeActive())
-		return false;
+	if (IsSaveLoadTransitionContextActive(state)) {
+		return true;
+	}
 
 	if (!postLoadRuntimeResetPending.exchange(false, std::memory_order_acq_rel))
 		return true;
@@ -8725,16 +8794,11 @@ bool Upscaling::ShouldDeferVRUpscalingTransitionSettings() const
 	if (!globals::game::isVR)
 		return false;
 
-	if (postLoadRuntimeResetPending.load(std::memory_order_acquire))
+	const auto* state = globals::state;
+	if (IsUpscalingLoadTransitionContextActive(*this, state))
 		return true;
 
-	const auto* state = globals::state;
-	if (!state)
-		return false;
-
-	return state->pendingPostLoadRuntimeReset ||
-	       state->IsSaveLoadSafeModeActive() ||
-	       IsCommunityShadersMenuOpen() ||
+	return IsCommunityShadersMenuOpen() ||
 	       IsKnownGameMenuContextActive();
 }
 
@@ -10215,9 +10279,22 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	const bool vendorMethodSelected = IsVendorUpscalingMethod(upscaleMethod);
+	const bool loadingTransitionTailActive = globals::game::isVR && IsLoadingTransitionTailActive(globals::state);
+	const bool menuPresentationContext = vendorMethodSelected && globals::game::isVR && (IsGameMenuContextActive() || loadingTransitionTailActive);
+	const bool fullResolutionMenuPresentation = vendorMethodSelected && globals::game::isVR && (IsKnownGameMenuContextActive() || loadingTransitionTailActive);
+	const bool loadingTransitionMenuPresentation =
+		fullResolutionMenuPresentation &&
+		(IsMainOrLoadingMenuContextActive() || loadingTransitionTailActive);
+	const bool runNativeVendorAAInMenu =
+		fullResolutionMenuPresentation &&
+		upscaling.GetRuntimeQualityMode() == 0 &&
+		!loadingTransitionMenuPresentation;
+	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
+	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 	const bool submitPathDisabledForVendor =
 		vendorMethodSelected &&
 		globals::game::isVR &&
+		!menuPresentationContext &&
 		!upscaling.IsPerfModeActive() &&
 		!IsSubmitStagePathEnabled();
 	if (submitPathDisabledForVendor) {
@@ -10238,11 +10315,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	const bool menuPresentationContext = vendorMethodSelected && globals::game::isVR && IsGameMenuContextActive();
-	const bool fullResolutionMenuPresentation = vendorMethodSelected && globals::game::isVR && IsKnownGameMenuContextActive();
-	const bool runNativeVendorAAInMenu = fullResolutionMenuPresentation && upscaling.GetRuntimeQualityMode() == 0;
-	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
-	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 	if (menuPresentationContext && !runNativeVendorAAInMenu && !presentationUpscalingActive) {
 		if (upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();

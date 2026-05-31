@@ -215,23 +215,22 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(mode);
-		const bool stageVRDLSSChange = globals::game::isVR && upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
-		const bool deferVRDLSSChange = stageVRDLSSChange && upscaling.ShouldDeferVRUpscalingTransitionSettings();
-		const bool renderScaleModeChanged = deferVRDLSSChange ? false : upscaling.SyncRenderScaleModeForQuality(qualityMode, "CS API native upscaler preset change");
+		const auto upscaleMethod = upscaling.GetUpscaleMethod();
+		const bool stageVRUpscalingChange =
+			globals::game::isVR &&
+			(upscaleMethod == Upscaling::UpscaleMethod::kDLSS || upscaleMethod == Upscaling::UpscaleMethod::kFSR);
 
-		if (!deferVRDLSSChange &&
-			(stageVRDLSSChange ? upscaling.GetEffectiveDLSSQualityMode() : upscaling.settings.qualityMode) == qualityMode) {
+		if (stageVRUpscalingChange) {
+			upscaling.SetVRUpscalingTransitionProfile(upscaling.GetPerfModeRequested(), qualityMode, upscaling.GetEffectiveDLSSPreset(), "CS API upscaler preset change");
+			return;
+		}
+
+		const bool renderScaleModeChanged = upscaling.SyncRenderScaleModeForQuality(qualityMode, "CS API native upscaler preset change");
+		if (upscaling.settings.qualityMode == qualityMode) {
 			if (renderScaleModeChanged) {
 				upscaling.RequestHistoryReset();
 				upscaling.RequestPerfModeRenderTargetRecreate("CS API upscaler preset change");
 			}
-			return;
-		}
-
-		if (stageVRDLSSChange) {
-			if (deferVRDLSSChange && qualityMode == 0)
-				upscaling.SetPerfModeRequested(false, "CS API native upscaler preset change", true);
-			upscaling.QueueVRDLSSQualityMode(qualityMode);
 			return;
 		}
 
@@ -265,14 +264,15 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
-		const bool stageVRDLSSChange = globals::game::isVR && upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
-		if ((stageVRDLSSChange ? upscaling.GetEffectiveDLSSPreset() : upscaling.settings.dlssPreset) == dlssPreset)
-			return;
+		const bool stageVRDLSSProfileChange = globals::game::isVR && upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
 
-		if (stageVRDLSSChange) {
-			upscaling.QueueVRDLSSPreset(dlssPreset);
+		if (stageVRDLSSProfileChange) {
+			upscaling.SetVRUpscalingTransitionProfile(upscaling.GetPerfModeRequested(), upscaling.GetEffectiveDLSSQualityMode(), dlssPreset, "CS API DLSS profile change");
 			return;
 		}
+
+		if (upscaling.settings.dlssPreset == dlssPreset)
+			return;
 
 		upscaling.settings.dlssPreset = dlssPreset;
 		upscaling.RequestHistoryReset();

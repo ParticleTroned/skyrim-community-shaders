@@ -74,7 +74,7 @@ public:
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
 	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
-	static constexpr uint32_t kPendingVRDLSSSettingUnset = std::numeric_limits<uint32_t>::max();
+	static constexpr uint32_t kPendingVRUpscalingSettingUnset = std::numeric_limits<uint32_t>::max();
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{
@@ -643,12 +643,14 @@ public:
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
-	std::atomic<uint32_t> pendingVRDLSSQualityMode{ kPendingVRDLSSSettingUnset };
-	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRDLSSSettingUnset };
-	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRDLSSSettingUnset };
+	std::atomic<uint32_t> pendingVRUpscalingQualityMode{ kPendingVRUpscalingSettingUnset };
+	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRUpscalingSettingUnset };
+	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRUpscalingSettingUnset };
+	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
@@ -671,14 +673,22 @@ public:
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
+	uint32_t GetEffectiveUpscalingQualityMode() const;
 	uint32_t GetEffectiveDLSSQualityMode() const;
 	uint32_t GetEffectiveDLSSPreset() const;
-	void QueueVRDLSSQualityMode(uint32_t a_qualityMode);
+	void QueueVRUpscalingQualityMode(uint32_t a_qualityMode);
 	void QueueVRDLSSPreset(uint32_t a_dlssPreset);
 	void QueueVRPerfModeRequest(bool a_enabled);
+	void MarkVRUpscalingTransitionQueued();
+	void ClearPendingVRUpscalingTransition();
 	bool HasPendingVRUpscalingTransition() const;
+	bool HasPendingVRRenderScaleTransition() const;
+	bool ShouldStageVRRenderScaleTransition(bool a_renderAtUpscaleResEnabled, uint32_t a_qualityMode) const;
 	bool ShouldDeferVRUpscalingTransitionSettings() const;
-	void ApplyPendingVRDLSSSettings(UpscaleMethod a_upscaleMethod);
+	bool ShouldWaitForVRUpscalingTransitionDelay() const;
+	void MarkPerfModeRenderTargetRecreateQueued();
+	bool ShouldWaitForPerfModeRenderTargetRecreateDelay() const;
+	void ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod);
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);
 	void LatchHistoryResetForCurrentFrame();

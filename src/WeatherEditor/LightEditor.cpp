@@ -1,4 +1,5 @@
-﻿#include "Features/InverseSquareLighting/LightEditor.h"
+#include "LightEditor.h"
+
 #include "Features/InverseSquareLighting.h"
 #include "Features/LightLimitFix.h"
 #include "Menu.h"
@@ -170,9 +171,7 @@ std::string LightEditor::GetLightName(LightInfo& lightInfo)
 void LightEditor::GatherLights()
 {
 	if (State::GetSingleton()->IsPersistentMutationBlocked()) {
-		RestoreOriginal();
-		selected = {};
-		previous = {};
+		ResetOverrides();
 		lights.clear();
 		lightsAttached.clear();
 		totalLightCount = 0;
@@ -181,9 +180,7 @@ void LightEditor::GatherLights()
 	}
 
 	if (!enabled || !Menu::GetSingleton()->ShouldSwallowInput()) {
-		RestoreOriginal();
-		selected = {};
-		previous = {};
+		ResetOverrides();
 		return;
 	}
 
@@ -297,6 +294,13 @@ void LightEditor::GatherLights()
 	}
 
 	SortLights();
+}
+
+void LightEditor::ResetOverrides()
+{
+	RestoreOriginal();
+	selected = {};
+	previous = {};
 }
 
 void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight)

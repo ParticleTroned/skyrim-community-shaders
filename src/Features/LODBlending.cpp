@@ -10,7 +10,12 @@ namespace
 	// Keep the weather variable key stable so existing per-weather overrides continue to work.
 	constexpr const char* kWaterReflectionStrengthSetting = "WaterLODReflectionStrength";
 	constexpr const char* kWaterReflectionStrengthConfigKey = "WaterReflectionStrength";
+	constexpr const char* kEnableWaterReflectionStrengthConfigKey = "EnableWaterReflectionStrength";
 	constexpr const char* kWaterReflectionStrengthDisplay = "Water Reflection Strength";
+	constexpr const char* kEnableWaterReflectionStrengthDisplay = "Apply Water Reflection Strength";
+	constexpr const char* kEnableWaterReflectionStrengthTooltip =
+		"Toggle the height-faded water reflection strength blend at runtime.\n"
+		"Disable this to compare against the pre-slider water reflection path while leaving the slider value intact.";
 	constexpr const char* kWaterReflectionStrengthTooltip =
 		"Height-faded reflection amount for regular and LOD water.\n"
 		"The same value is applied to all visible water, based on camera height above the current water level.\n"
@@ -66,8 +71,15 @@ void LODBlending::DrawSettings()
 	ImGui::SliderFloat("LOD Terrain Gamma", &settings.LODTerrainGamma, 0.1f, 3.f, "%.2f");
 	ImGui::SliderFloat("LOD Object Gamma", &settings.LODObjectGamma, 0.1f, 3.f, "%.2f");
 	ImGui::SliderFloat("LOD Object Snow Gamma", &settings.LODObjectSnowGamma, 0.1f, 3.f, "%.2f");
+
+	ImGui::Checkbox(kEnableWaterReflectionStrengthDisplay, &EnableWaterReflectionStrength);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", kEnableWaterReflectionStrengthTooltip);
+	}
+
 	const bool waterReflectionWeatherControlled =
 		Util::WeatherUI::IsWeatherControlled(this, kWaterReflectionStrengthSetting);
+	ImGui::BeginDisabled(!EnableWaterReflectionStrength);
 	const bool waterReflectionChanged = Util::WeatherUI::SliderFloat(
 		kWaterReflectionStrengthDisplay,
 		this,
@@ -76,6 +88,7 @@ void LODBlending::DrawSettings()
 		kWaterReflectionStrengthMin,
 		kWaterReflectionStrengthMax,
 		"%.2f");
+	ImGui::EndDisabled();
 	if (!waterReflectionWeatherControlled) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", kWaterReflectionStrengthTooltip);
@@ -95,6 +108,7 @@ void LODBlending::DrawSettings()
 void LODBlending::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	EnableWaterReflectionStrength = o_json.is_object() ? o_json.value(kEnableWaterReflectionStrengthConfigKey, true) : true;
 	if (!o_json.contains(kWaterReflectionStrengthConfigKey) && o_json.contains(kWaterReflectionStrengthSetting)) {
 		try {
 			settings.WaterReflectionStrength = o_json.at(kWaterReflectionStrengthSetting).get<float>();
@@ -108,6 +122,7 @@ void LODBlending::LoadSettings(json& o_json)
 void LODBlending::SaveSettings(json& o_json)
 {
 	o_json = settings;
+	o_json[kEnableWaterReflectionStrengthConfigKey] = EnableWaterReflectionStrength;
 }
 
 void LODBlending::RegisterWeatherVariables()
@@ -150,11 +165,14 @@ void LODBlending::NormalizeWeatherSettings(json& o_json)
 LODBlending::Settings LODBlending::GetCommonBufferData() const
 {
 	auto data = settings;
-	data.WaterReflectionStrength = ClampWaterReflectionStrength(data.WaterReflectionStrength);
+	data.WaterReflectionStrength = EnableWaterReflectionStrength ?
+		ClampWaterReflectionStrength(data.WaterReflectionStrength) :
+		-1.0f;
 	return data;
 }
 
 void LODBlending::RestoreDefaultSettings()
 {
 	settings = {};
+	EnableWaterReflectionStrength = true;
 }

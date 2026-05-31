@@ -33,6 +33,7 @@ struct LODBlending : Feature
 	};
 
 	Settings settings;
+	bool EnableWaterReflectionStrength = true;
 
 	virtual void DrawSettings() override;
 

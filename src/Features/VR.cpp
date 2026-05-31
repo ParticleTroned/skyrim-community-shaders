@@ -30,8 +30,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
+#include <imgui_internal.h>
+#include <limits>
 #include <unordered_map>
 #include <windows.h>
 
@@ -79,6 +82,59 @@ namespace
 		return hwnd &&
 		       IsWindow(hwnd) &&
 		       (GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+	}
+
+	bool HasRenderedWorldFrame()
+	{
+		const auto* state = globals::state;
+		return state && state->lastWorldRenderFrame != std::numeric_limits<uint32_t>::max();
+	}
+
+	bool ShouldShowShaderCompilationInHMD()
+	{
+		return globals::shaderCache &&
+		       globals::shaderCache->IsCompiling() &&
+		       !HasRenderedWorldFrame();
+	}
+
+	bool IsDrawListOwnedByWindow(const ImDrawList* drawList, const char* windowName)
+	{
+		return drawList && drawList->_OwnerName && std::strcmp(drawList->_OwnerName, windowName) == 0;
+	}
+
+	ImDrawData* FilterShaderCompilationWindowFromHMD(ImDrawData* drawData, ImDrawData& filteredDrawData)
+	{
+		if (!drawData || !HasRenderedWorldFrame()) {
+			return drawData;
+		}
+
+		bool removedAny = false;
+		int totalIdxCount = 0;
+		int totalVtxCount = 0;
+
+		filteredDrawData = *drawData;
+		filteredDrawData.CmdLists.clear();
+		filteredDrawData.CmdLists.reserve(drawData->CmdListsCount);
+		for (int i = 0; i < drawData->CmdListsCount; ++i) {
+			auto* cmdList = drawData->CmdLists[i];
+			if (IsDrawListOwnedByWindow(cmdList, "ShaderCompilationInfo")) {
+				removedAny = true;
+				continue;
+			}
+
+			filteredDrawData.CmdLists.push_back(cmdList);
+			totalIdxCount += cmdList->IdxBuffer.Size;
+			totalVtxCount += cmdList->VtxBuffer.Size;
+		}
+
+		if (!removedAny) {
+			return drawData;
+		}
+
+		filteredDrawData.CmdListsCount = filteredDrawData.CmdLists.Size;
+		filteredDrawData.TotalIdxCount = totalIdxCount;
+		filteredDrawData.TotalVtxCount = totalVtxCount;
+		return &filteredDrawData;
 	}
 
 	bool CenterWindowOnCurrentMonitorTopmost(HWND hwnd)
@@ -2689,7 +2745,7 @@ void VR::SubmitOverlayFrame()
 	auto& enabled = globals::menu->IsEnabled;
 	auto& overlayVisible = globals::menu->overlayVisible;
 	const bool shouldShowAutoHide = ShouldShowAutoHideOverlay();
-	const bool shouldShowShaderCompilation = globals::shaderCache && globals::shaderCache->IsCompiling();
+	const bool shouldShowShaderCompilation = ShouldShowShaderCompilationInHMD();
 	const bool shouldRenderOverlay = enabled || overlayVisible || shouldShowAutoHide || shouldShowShaderCompilation;
 	static bool wasMenuEnabled = false;
 	const bool menuJustOpened = enabled && !wasMenuEnabled;
@@ -2760,7 +2816,8 @@ void VR::SubmitOverlayFrame()
 			globals::d3d::context->OMSetRenderTargets(1, &targetRTVPtr, nullptr);
 			globals::d3d::context->ClearRenderTargetView(targetRTV, clearColor);
 			ImGui::Render();
-			ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+			ImDrawData filteredDrawData;
+			ImGui_ImplDX11_RenderDrawData(FilterShaderCompilationWindowFromHMD(ImGui::GetDrawData(), filteredDrawData));
 			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 		};
 

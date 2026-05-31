@@ -79,15 +79,15 @@ namespace CSPluginAPI
 		virtual DLSSProfile GetDLSSProfile() = 0;
 		virtual void SetDLSSProfile(DLSSProfile profile) = 0;
 
-		// VR only. Requests Community Shaders' Render at Upscale Res path.
+		// VR only. Legacy compatibility names for Community Shaders' Render Scale Mode request.
 		// Runtime activation can require a render-target relatch during a loading transition.
 		virtual bool GetRenderAtUpscaleResEnabled() = 0;
 		virtual void SetRenderAtUpscaleResEnabled(bool enabled) = 0;
 		virtual bool GetRenderAtUpscaleResActive() = 0;
 
 		// Convenience for interior/exterior transition controllers. Stages the
-		// render-size path, shared upscaler preset, and DLSS profile together.
-		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
+		// render-scale path, shared upscaler preset, and DLSS profile together.
+		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI
 

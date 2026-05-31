@@ -399,7 +399,7 @@ public:
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false);
-	void SetVRUpscalingTransitionProfile(bool a_renderAtUpscaleResEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr);
+	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr);
 	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
@@ -663,6 +663,9 @@ public:
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
+	uint32_t submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
+	std::array<bool, 2> submitStageDesktopMirrorEyeReady = {};
+	ID3D11Texture2D* submitStageDesktopMirrorSourceTexture = nullptr;
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	mutable std::atomic_bool submitStageRuntimeActive{ false };
@@ -683,7 +686,7 @@ public:
 	void ClearPendingVRUpscalingTransition();
 	bool HasPendingVRUpscalingTransition() const;
 	bool HasPendingVRRenderScaleTransition() const;
-	bool ShouldStageVRRenderScaleTransition(bool a_renderAtUpscaleResEnabled, uint32_t a_qualityMode) const;
+	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;
 	bool ShouldDeferVRUpscalingTransitionSettings() const;
 	bool ShouldWaitForVRUpscalingTransitionDelay() const;
 	void MarkPerfModeRenderTargetRecreateQueued();

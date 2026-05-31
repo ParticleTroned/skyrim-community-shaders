@@ -69,6 +69,9 @@ bool Upscaling::PerfModeState::IsEligible(const Settings& a_settings, UpscaleMet
 	if (!IsRequested(a_settings))
 		return false;
 
+	if (std::min<uint32_t>(a_settings.renderScaleMode, 1u) == 0)
+		return false;
+
 	if (!IsVendorMethod(a_method))
 		return false;
 

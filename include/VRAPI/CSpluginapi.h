@@ -216,8 +216,15 @@ namespace CSPluginAPI
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(mode);
 		const bool stageVRDLSSChange = globals::game::isVR && upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
-		if ((stageVRDLSSChange ? upscaling.GetEffectiveDLSSQualityMode() : upscaling.settings.qualityMode) == qualityMode)
+		const bool renderScaleModeChanged = upscaling.SyncRenderScaleModeForQuality(qualityMode, "CS API native upscaler preset change");
+
+		if ((stageVRDLSSChange ? upscaling.GetEffectiveDLSSQualityMode() : upscaling.settings.qualityMode) == qualityMode) {
+			if (renderScaleModeChanged) {
+				upscaling.RequestHistoryReset();
+				upscaling.RequestPerfModeRenderTargetRecreate("CS API upscaler preset change");
+			}
 			return;
+		}
 
 		if (stageVRDLSSChange) {
 			upscaling.QueueVRDLSSQualityMode(qualityMode);

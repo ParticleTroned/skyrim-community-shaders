@@ -32,7 +32,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	upscaleMethodNoDLSS,
 	qualityMode,
 	dlssPreset,
-	submitStageUpscaling,
+	renderScaleMode,
 	perfMode,
 	aaVrs,
 	aaVrsVisualization,
@@ -99,6 +99,7 @@ namespace
 	constexpr float kPeripheryTAACenterBlendFeatherMin = 0.0f;
 	constexpr float kPeripheryTAACenterBlendFeatherMax = 0.10f;
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
+	constexpr uint32_t kDefaultRenderScaleQualityMode = 3u;  // Quality
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
@@ -154,17 +155,26 @@ namespace
 		return Upscaling::GetQualityModeResolutionScale(qualityMode);
 	}
 
+	bool IsRenderScaleQualityMode(uint32_t a_qualityMode)
+	{
+		return Upscaling::GetQualityModeResolutionScale(
+				   std::min<uint32_t>(a_qualityMode, Upscaling::kQualityModeMaxIndex)) <
+		       kDynamicResolutionUpscalingScaleThreshold;
+	}
+
 	bool IsSubmitStageRequestedUpscalingActive()
 	{
-		return GetSubmitStageRequestedQualityScale() < kDynamicResolutionUpscalingScaleThreshold;
+		return IsRenderScaleQualityMode(globals::features::upscaling.settings.qualityMode);
+	}
+
+	bool IsRenderScaleMethodEligible(Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		return REL::Module::IsVR() && IsVendorUpscalingMethod(a_upscaleMethod);
 	}
 
 	bool IsSubmitStagePathEligible(Upscaling::UpscaleMethod a_upscaleMethod)
 	{
-		if (!REL::Module::IsVR())
-			return false;
-
-		if (!IsVendorUpscalingMethod(a_upscaleMethod))
+		if (!IsRenderScaleMethodEligible(a_upscaleMethod))
 			return false;
 
 		return IsSubmitStageRequestedUpscalingActive();
@@ -177,10 +187,13 @@ namespace
 			return false;
 
 		const auto upscaleMethod = upscaling.GetUpscaleMethod();
+		if (!upscaling.IsRenderScaleModeRequested())
+			return false;
+
 		if (!IsSubmitStagePathEligible(upscaleMethod))
 			return false;
 
-		return ClampToggleUInt(upscaling.settings.submitStageUpscaling) != 0;
+		return true;
 	}
 
 	bool IsSubmitStageDynamicResolutionActive()
@@ -798,8 +811,13 @@ namespace
 		settings.upscaleMethodNoDLSS = std::min<uint>(settings.upscaleMethodNoDLSS, static_cast<uint>(Upscaling::UpscaleMethod::kFSR));
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
 		settings.dlssPreset = std::min<uint>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
-		settings.submitStageUpscaling = ClampToggleUInt(settings.submitStageUpscaling);
+		settings.renderScaleMode = ClampToggleUInt(settings.renderScaleMode);
 		settings.perfMode = ClampToggleUInt(settings.perfMode);
+		if (REL::Module::IsVR() && (!IsRenderScaleQualityMode(settings.qualityMode) || !settings.renderScaleMode)) {
+			settings.renderScaleMode = 0;
+			settings.perfMode = 0;
+			settings.qualityMode = 0;
+		}
 		settings.aaVrs = settings.aaVrs && REL::Module::IsVR();
 		settings.aaVrsVisualization = settings.aaVrsVisualization && settings.aaVrs && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
@@ -819,6 +837,7 @@ namespace
 	{
 		settings.aaVrs = false;
 		settings.aaVrsVisualization = false;
+		settings.renderScaleMode = 0;
 		settings.perfMode = 0;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
@@ -838,6 +857,7 @@ namespace
 	{
 		o_json.erase("aaVrs");
 		o_json.erase("aaVrsVisualization");
+		o_json.erase("renderScaleMode");
 		o_json.erase("perfMode");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
@@ -1529,6 +1549,14 @@ void Upscaling::DrawSettings()
 		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
 		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
 			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+		if (globals::game::isVR) {
+			if (IsRenderScaleMethodEligible(selectedUpscaleChoice.method)) {
+				SyncRenderScaleModeForQuality(settings.qualityMode, "upscaling menu method change");
+			} else {
+				settings.renderScaleMode = 0;
+				SetPerfModeRequested(false, "upscaling menu method change");
+			}
+		}
 		RequestPerfModeRenderTargetRecreate("upscaling menu method change");
 	}
 	if (openCompositeBlocksUpscaling) {
@@ -1587,21 +1615,26 @@ void Upscaling::DrawSettings()
 			return;
 
 		const bool perfModeActive = IsPerfModeActive();
-		const bool submitPathEligible = IsSubmitStagePathEligible(upscaleMethod);
-		const bool submitCanEdit = submitPathEligible && !perfModeActive;
-		const bool submitRequested = perfModeActive || (submitPathEligible && ClampToggleUInt(settings.submitStageUpscaling) != 0);
-		const bool submitLiveActive = perfModeActive || IsSubmitStageUpscalingActive();
-		if (!submitRequested)
+		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
+		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(settings.qualityMode);
+		const bool renderScaleCanEdit = renderScaleMethodEligible;
+		const bool renderScaleRequested =
+			renderScaleMethodEligible &&
+			renderScaleQualitySelected &&
+			IsRenderScaleModeRequested();
+		const bool renderScaleLiveActive = perfModeActive || IsSubmitStageDynamicResolutionActive();
+		if (!renderScaleRequested && !perfModeActive)
 			submitStageRuntimeActive.store(false, std::memory_order_relaxed);
-		const auto submitUiState = BuildScenePausedUiState(
-			submitPathEligible || perfModeActive,
-			submitRequested,
-			submitLiveActive,
+		const auto renderScaleUiState = BuildScenePausedUiState(
+			renderScaleMethodEligible,
+			renderScaleRequested,
+			renderScaleLiveActive,
 			submitStageRuntimeActive.load(std::memory_order_relaxed) || perfModeActive,
 			IsGameMenuContextActive());
-		const bool perfModeEligible = submitPathEligible;
-		const bool perfModeCanEdit = perfModeEligible || perfModeActive;
-		const bool perfModeRequested = perfModeCanEdit && ClampToggleUInt(settings.perfMode) != 0;
+		const bool perfModeEligible = renderScaleMethodEligible && renderScaleQualitySelected && IsRenderScaleModeRequested();
+		const bool perfModeRequestedSetting = GetPerfModeRequested();
+		const bool perfModeCanEdit = perfModeEligible || perfModeActive || perfModeRequestedSetting;
+		const bool perfModeRequested = perfModeCanEdit && perfModeRequestedSetting;
 		const bool perfModeRelatchPending = pendingPerfModeRenderTargetRecreate.load(std::memory_order_relaxed);
 		const auto activeColor = ImVec4(0.40f, 0.85f, 0.50f, 1.0f);
 		const auto inactiveColor = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
@@ -1611,34 +1644,42 @@ void Upscaling::DrawSettings()
 			return;
 
 		ImGui::TextColored(
-			(submitUiState.requested || submitUiState.highlight) ? activeColor : inactiveColor,
-			"Submit Path: %s",
-			submitUiState.statusText);
+			(renderScaleUiState.requested || renderScaleUiState.highlight) ? activeColor : inactiveColor,
+			"Render Scale Mode: %s",
+			renderScaleUiState.statusText);
 		ImGui::TextColored(
 			perfModeActive ? activeColor : inactiveColor,
 			"Render at Upscale Res: %s",
 			perfModeRelatchPending ? "relatch pending" : (perfModeActive ? "active" : (perfModeRequested ? "restart pending" : "inactive")));
-		if (submitUiState.pausedInMenu)
-			ImGui::TextDisabled("Submit Path was active in scene and is paused while this menu is open.");
+		if (renderScaleUiState.pausedInMenu)
+			ImGui::TextDisabled("Render Scale Mode was active in scene and is paused while this menu is open.");
 		if (perfModeActive)
-			ImGui::TextDisabled("Submit Path presents the Render at Upscale Res output; Skyrim render targets stay at the internal size.");
+			ImGui::TextDisabled("Render at Upscale Res uses the submit-stage presentation path internally.");
 
-		const char* submitStageModes[] = { "Disabled", "Enabled" };
-		int submitStageUpscaling = perfModeActive ? 1 : (submitPathEligible ? static_cast<int>(ClampToggleUInt(settings.submitStageUpscaling)) : 0);
+		const char* renderScaleModes[] = { "Disabled", "Enabled" };
+		int renderScaleMode = renderScaleRequested ? 1 : 0;
 		{
-			auto disabledGuard = Util::DisableGuard(!submitPathEligible || perfModeActive);
-			ImGui::SliderInt("Submit Path", &submitStageUpscaling, 0, 1, submitStageModes[std::clamp(submitStageUpscaling, 0, 1)]);
-			if (submitCanEdit)
-				settings.submitStageUpscaling = static_cast<uint>(std::clamp(submitStageUpscaling, 0, 1));
+			auto disabledGuard = Util::DisableGuard(!renderScaleCanEdit);
+			if (ImGui::SliderInt("Render Scale Mode", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
+				settings.renderScaleMode = enableRenderScaleMode ? 1u : 0u;
+				if (enableRenderScaleMode && !renderScaleQualitySelected)
+					settings.qualityMode = kDefaultRenderScaleQualityMode;
+				if (!enableRenderScaleMode) {
+					settings.qualityMode = 0;
+					SetPerfModeRequested(false, "upscaling menu render-scale mode change");
+				}
+				RequestHistoryReset();
+			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the VR submit-stage upscaling path for DLSS/FSR upscaling presets.");
-			ImGui::TextUnformatted("When Render at Upscale Res is active, this path performs the final presentation upscale.");
-			ImGui::TextUnformatted("Disable without Render at Upscale Res to fall back to the pre-image-space upscaling path for A/B testing.");
+			ImGui::TextUnformatted("Controls live VR render-scale changes.");
+			ImGui::TextUnformatted("When enabled, Skyrim renders at the selected preset scale and the submit-stage path presents the upscaled HMD output.");
+			ImGui::TextUnformatted("When disabled, live rendering uses native size; Native AA/DLAA also disables this mode.");
 		}
 
 		const char* perfModes[] = { "Disabled", "Enabled" };
-		int perfModeSetting = perfModeCanEdit ? static_cast<int>(ClampToggleUInt(settings.perfMode)) : 0;
+		int perfModeSetting = perfModeCanEdit && perfModeRequestedSetting ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!perfModeCanEdit);
 			if (ImGui::SliderInt("Render at Upscale Res", &perfModeSetting, 0, 1, perfModes[std::clamp(perfModeSetting, 0, 1)])) {
@@ -1647,16 +1688,16 @@ void Upscaling::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Makes Skyrim VR allocate engine render targets at the selected upscaler internal resolution.");
-			ImGui::TextUnformatted("Submit Path then performs the single final upscale/presentation to the HMD size.");
+			ImGui::TextUnformatted("The submit-stage path then performs the single final upscale/presentation to the HMD size.");
 			ImGui::TextUnformatted("Runtime changes are applied by relatching render targets; loading transitions are the safest time to switch.");
 		}
 
 		if (perfMode.HasRestartRequiredChange())
 			Util::Text::Warning(perfModeRelatchPending ? "Warning: Render at Upscale Res relatch pending" : "Warning: Render at Upscale Res change requires relatch or restart");
-		if (!submitPathEligible)
-			ImGui::TextDisabled("Submit Path is available only with DLSS/FSR upscaling presets in VR.");
+		if (!renderScaleMethodEligible)
+			ImGui::TextDisabled("Render Scale Mode is available only with DLSS/FSR in VR.");
 		if (!perfModeEligible)
-			ImGui::TextDisabled("Render at Upscale Res is available only with DLSS/FSR upscaling presets in VR.");
+			ImGui::TextDisabled("Render at Upscale Res is available only with DLSS/FSR render-scale presets in VR.");
 
 		ImGui::TreePop();
 	};
@@ -1678,6 +1719,8 @@ void Upscaling::DrawSettings()
 				static_cast<int>(kQualityModeMaxIndex),
 				labelWithScale.c_str())) {
 			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
+			if (IsVendorUpscalingMethod(upscaleMethod))
+				SyncRenderScaleModeForQuality(settings.qualityMode, "upscaling menu native preset change");
 			RequestPerfModeRenderTargetRecreate("upscaling menu preset change");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2399,7 +2442,19 @@ void Upscaling::LoadSettings(json& o_json)
 {
 	const Settings previousSettings = settings;
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
+	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
+	const bool hasLegacySubmitStageUpscalingSetting = o_json.contains("submitStageUpscaling");
 	settings = o_json;
+	if (!hasRenderScaleModeSetting && hasLegacySubmitStageUpscalingSetting) {
+		try {
+			settings.renderScaleMode = o_json.at("submitStageUpscaling").get<uint>();
+		} catch (...) {
+			logger::warn("[Upscaling] Loaded legacy submitStageUpscaling setting could not be migrated; using Render Scale Mode default.");
+		}
+	} else if (!hasRenderScaleModeSetting) {
+		// Preserve old behavior for configs that predate both renderScaleMode and submitStageUpscaling.
+		settings.renderScaleMode = IsRenderScaleQualityMode(settings.qualityMode) ? 1u : 0u;
+	}
 	if (!hasQualityModeSchemaVersion) {
 		settings.qualityMode = MigrateLegacyQualityModeUInt(settings.qualityMode);
 	}
@@ -2676,6 +2731,9 @@ uint32_t Upscaling::GetRuntimeQualityMode() const
 	if (IsPerfModeActive())
 		return ClampQualityModeUInt(boot.qualityMode);
 
+	if (REL::Module::IsVR() && !IsRenderScaleModeRequested())
+		return 0;
+
 	return ClampQualityModeUInt(settings.qualityMode);
 }
 
@@ -2769,6 +2827,35 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	LogRuntimeResolutionPlanIfChanged(runtimeResolutionPlan);
 }
 
+bool Upscaling::IsRenderScaleModeRequested() const
+{
+	if (!REL::Module::IsVR())
+		return true;
+
+	return ClampToggleUInt(settings.renderScaleMode) != 0;
+}
+
+bool Upscaling::SyncRenderScaleModeForQuality(uint32_t a_qualityMode, const char* a_nativePerfDisableReason)
+{
+	if (!REL::Module::IsVR())
+		return false;
+
+	if (!IsRenderScaleMethodEligible(GetUpscaleMethod())) {
+		const bool changed = settings.renderScaleMode != 0;
+		settings.renderScaleMode = 0;
+		SetPerfModeRequested(false, a_nativePerfDisableReason);
+		return changed;
+	}
+
+	const uint32_t requestedRenderScaleMode = IsRenderScaleQualityMode(a_qualityMode) ? 1u : 0u;
+	const bool changed = settings.renderScaleMode != requestedRenderScaleMode;
+	settings.renderScaleMode = requestedRenderScaleMode;
+	if (!requestedRenderScaleMode)
+		SetPerfModeRequested(false, a_nativePerfDisableReason);
+
+	return changed;
+}
+
 bool Upscaling::IsPerfModeActive() const
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
@@ -2779,15 +2866,54 @@ bool Upscaling::IsPerfModeActive() const
 
 bool Upscaling::GetPerfModeRequested() const
 {
+	if (REL::Module::IsVR() &&
+		(!IsRenderScaleMethodEligible(GetUpscaleMethod()) ||
+		 !IsRenderScaleModeRequested() ||
+		 !IsRenderScaleQualityMode(settings.qualityMode)))
+		return false;
+
 	return ClampToggleUInt(settings.perfMode) != 0;
 }
 
 void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason)
 {
+	bool renderScaleSettingsChanged = false;
+	if (a_enabled && REL::Module::IsVR()) {
+		if (!IsRenderScaleMethodEligible(GetUpscaleMethod())) {
+			a_enabled = false;
+			if (settings.renderScaleMode != 0) {
+				settings.renderScaleMode = 0;
+				renderScaleSettingsChanged = true;
+			}
+		}
+	}
+
+	if (a_enabled && REL::Module::IsVR()) {
+		if (settings.renderScaleMode != 1) {
+			settings.renderScaleMode = 1;
+			renderScaleSettingsChanged = true;
+		}
+		const UpscaleMethod requestedMethod = GetUpscaleMethod();
+		const uint32_t requestedQualityMode = requestedMethod == UpscaleMethod::kDLSS ?
+			GetEffectiveDLSSQualityMode() :
+			settings.qualityMode;
+		if (!IsRenderScaleQualityMode(requestedQualityMode)) {
+			if (requestedMethod == UpscaleMethod::kDLSS)
+				QueueVRDLSSQualityMode(kDefaultRenderScaleQualityMode);
+			settings.qualityMode = kDefaultRenderScaleQualityMode;
+			renderScaleSettingsChanged = true;
+		}
+	}
+
 	const uint32_t requested = a_enabled ? 1u : 0u;
 	const bool activeMatchesRequest = IsPerfModeActive() == a_enabled;
-	if (ClampToggleUInt(settings.perfMode) == requested && activeMatchesRequest && !perfMode.HasRestartRequiredChange())
+	if (ClampToggleUInt(settings.perfMode) == requested && activeMatchesRequest && !perfMode.HasRestartRequiredChange()) {
+		if (renderScaleSettingsChanged) {
+			RequestHistoryReset();
+			RequestPerfModeRenderTargetRecreate(a_reason);
+		}
 		return;
+	}
 
 	settings.perfMode = requested;
 	RequestHistoryReset();
@@ -2798,8 +2924,10 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderAtUpscaleResEnabled
 {
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
 	const uint32_t dlssPreset = std::min(a_dlssPreset, kDLSSPresetMaxIndex);
+	const bool renderScaleQuality = IsRenderScaleQualityMode(qualityMode);
 	const bool stageVRDLSSChange = globals::game::isVR && GetUpscaleMethod() == UpscaleMethod::kDLSS;
 	bool presetChanged = false;
+	const bool renderScaleModeChanged = SyncRenderScaleModeForQuality(qualityMode, a_reason);
 
 	if (stageVRDLSSChange) {
 		if (GetEffectiveDLSSQualityMode() != qualityMode) {
@@ -2821,10 +2949,10 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderAtUpscaleResEnabled
 		}
 	}
 
-	if (presetChanged)
+	if (presetChanged || renderScaleModeChanged)
 		RequestHistoryReset();
 
-	SetPerfModeRequested(a_renderAtUpscaleResEnabled, a_reason);
+	SetPerfModeRequested(a_renderAtUpscaleResEnabled && renderScaleQuality, a_reason);
 	if (!stageVRDLSSChange && presetChanged)
 		RequestPerfModeRenderTargetRecreate(a_reason);
 }
@@ -3524,7 +3652,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFSRRuntimeFsr4Active = false;
 	static uint32_t previousQualityMode = GetRuntimeQualityMode();
 	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	static uint32_t previousSubmitStageUpscaling = ClampToggleUInt(settings.submitStageUpscaling);
+	static uint32_t previousRenderScaleMode = IsRenderScaleModeRequested() ? 1u : 0u;
 	static uint32_t previousPerfMode = ClampToggleUInt(settings.perfMode);
 	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
 
@@ -3533,11 +3661,11 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
 	const uint32_t qualityModeCurrent = GetRuntimeQualityMode();
 	const uint32_t dlssPresetCurrent = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	const uint32_t submitStageUpscalingCurrent = ClampToggleUInt(settings.submitStageUpscaling);
+	const uint32_t renderScaleModeCurrent = IsRenderScaleModeRequested() ? 1u : 0u;
 	const uint32_t perfModeCurrent = ClampToggleUInt(settings.perfMode);
 	const bool qualityModeChanged = previousQualityMode != qualityModeCurrent;
 	const bool dlssPresetChanged = previousDLSSPreset != dlssPresetCurrent;
-	const bool submitStageUpscalingChanged = previousSubmitStageUpscaling != submitStageUpscalingCurrent;
+	const bool renderScaleModeChanged = previousRenderScaleMode != renderScaleModeCurrent;
 	const bool perfModeChanged = previousPerfMode != perfModeCurrent;
 	const bool dlssQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool dlssPresetResourceChanged = dlssPresetChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
@@ -3582,14 +3710,14 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		fsrRuntimePathCurrent &&
 		foveatedDispatchChanged;
 
-	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged || qualityModeChanged || dlssPresetResourceChanged || submitStageUpscalingChanged || perfModeChanged) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, SubmitStage: {} -> {}, PerfMode: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
+	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged || qualityModeChanged || dlssPresetResourceChanged || renderScaleModeChanged || perfModeChanged) {
+		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, RenderScaleMode: {} -> {}, PerfMode: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
-			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousSubmitStageUpscaling, submitStageUpscalingCurrent, previousPerfMode, perfModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
+			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousRenderScaleMode, renderScaleModeCurrent, previousPerfMode, perfModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 
 		const bool requiresFullPipelineUnbind =
 			upscaleModeChanged ||
-			submitStageUpscalingChanged ||
+			renderScaleModeChanged ||
 			perfModeChanged ||
 			frameGenModeChanged ||
 			fsrRuntimePathChanged ||
@@ -3600,7 +3728,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (requiresFullPipelineUnbind)
 			UnbindUpscalingResources();
 
-		if (submitStageUpscalingChanged) {
+		if (renderScaleModeChanged) {
 			if (globals::game::isVR) {
 				ResetVRSubmitStageState(false);
 				DestroyPeripheryTAAResources();
@@ -3723,7 +3851,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousFSRRuntimeFsr4Active = fsrRuntimeFsr4Current;
 		previousQualityMode = qualityModeCurrent;
 		previousDLSSPreset = dlssPresetCurrent;
-		previousSubmitStageUpscaling = ClampToggleUInt(settings.submitStageUpscaling);
+		previousRenderScaleMode = renderScaleModeCurrent;
 		previousPerfMode = perfModeCurrent;
 		previousFoveatedLayout = foveatedLayoutCurrent;
 		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
@@ -8472,10 +8600,15 @@ void Upscaling::ApplyPendingVRDLSSSettings(UpscaleMethod a_upscaleMethod)
 	const uint32_t pendingQualityMode = pendingVRDLSSQualityMode.exchange(kPendingVRDLSSSettingUnset, std::memory_order_acq_rel);
 	const uint32_t pendingPreset = pendingVRDLSSPreset.exchange(kPendingVRDLSSSettingUnset, std::memory_order_acq_rel);
 	bool changed = false;
+	bool renderScaleModeChanged = false;
 
-	if (pendingQualityMode != kPendingVRDLSSSettingUnset && settings.qualityMode != pendingQualityMode) {
-		settings.qualityMode = pendingQualityMode;
-		changed = true;
+	if (pendingQualityMode != kPendingVRDLSSSettingUnset) {
+		renderScaleModeChanged = SyncRenderScaleModeForQuality(pendingQualityMode, "VR DLSS native preset change");
+
+		if (settings.qualityMode != pendingQualityMode) {
+			settings.qualityMode = pendingQualityMode;
+			changed = true;
+		}
 	}
 
 	if (pendingPreset != kPendingVRDLSSSettingUnset && settings.dlssPreset != pendingPreset) {
@@ -8483,7 +8616,7 @@ void Upscaling::ApplyPendingVRDLSSSettings(UpscaleMethod a_upscaleMethod)
 		changed = true;
 	}
 
-	if (changed) {
+	if (changed || renderScaleModeChanged) {
 		RequestHistoryReset();
 		pendingDLSSHistoryReset.store(true, std::memory_order_release);
 		if (IsPerfModeActive() || GetPerfModeRequested())

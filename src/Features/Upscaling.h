@@ -102,8 +102,8 @@ public:
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
 		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
-		uint submitStageUpscaling = 1;
-		uint perfMode = 1;
+		uint renderScaleMode = 0;
+		uint perfMode = 0;
 		bool aaVrs = false;
 		bool aaVrsVisualization = false;
 		uint frameLimitMode = 1;
@@ -392,6 +392,8 @@ public:
 	uint32_t GetRuntimeQualityMode() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
 	void RefreshRuntimeResolutionPlan();
+	bool IsRenderScaleModeRequested() const;
+	bool SyncRenderScaleModeForQuality(uint32_t a_qualityMode, const char* a_nativePerfDisableReason = nullptr);
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;

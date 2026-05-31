@@ -20,7 +20,7 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 - DLSS profile control (`J`, `K`, `L`, `M`, `F`)
 - VR Render at Upscale Res control with transition-time render-target relatching
 
-The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. The legacy API names still say `DLSSMode` for compatibility. DLSS profile control is DLSS-only. In VR, Render at Upscale Res requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch.
+The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. The legacy API names still say `DLSSMode` for compatibility. DLSS profile control is DLSS-only. In VR, presets below native enable Render Scale Mode and Native AA/DLAA disables it. Render at Upscale Res requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch.
 
 ## Files You Need In The Consumer Mod
 
@@ -122,8 +122,8 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - `UpscalePreset` is an alias for `DLSSMode`; new integrations should prefer the `UpscalePreset` wording.
 - These presets are Community Shaders render-scale presets, not AMD FSR quality enum values. `Hoshipa` and `Ultra Quality` are valid for both DLSS and FSR/FSR4 because the backend receives explicit render and display sizes.
 - DLSS profile control is DLSS-only and does **not** affect FSR 3.1.5 or FSR4.
-- `SetRenderAtUpscaleResEnabled` changes the requested VR Render at Upscale Res state. `GetRenderAtUpscaleResActive` reports whether the relatched render targets are actually active.
-- Render at Upscale Res is only eligible in VR with DLSS/FSR upscaling presets below native scale. Unsupported combinations remain requested but inactive.
+- `SetRenderAtUpscaleResEnabled` changes the requested VR Render at Upscale Res state. Enabling it from Native AA/DLAA promotes the shared preset to `Quality` so the render-scale state stays valid. `GetRenderAtUpscaleResActive` reports whether the relatched render targets are actually active.
+- Render at Upscale Res is only eligible in VR with DLSS/FSR upscaling presets below native scale. Selecting Native AA/DLAA disables Render Scale Mode and clears the Render at Upscale Res request.
 - `SetVRUpscalingTransitionProfile` is intended for interior/exterior transition controllers. It stages Render at Upscale Res, the shared upscaler preset, and the DLSS profile together so Community Shaders can apply one relatch.
 - VR DLSS keeps two viewport/resource slots for recent quality/profile combinations. Alternating between an exterior profile and an interior profile can reuse those slots instead of rebuilding DLSS every time.
 - Reflex settings are not exposed by this API.

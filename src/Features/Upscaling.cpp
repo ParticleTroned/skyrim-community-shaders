@@ -6311,9 +6311,9 @@ void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	D3D11_TEXTURE2D_DESC colorSrcDesc{};
 	static_cast<ID3D11Texture2D*>(colorSrc)->GetDesc(&colorSrcDesc);
 	const bool presentationOutputActive = IsPresentationUpscalingActive();
-	const DXGI_FORMAT colorOutFormat = presentationOutputActive ?
-	                                       DXGI_FORMAT_R8G8B8A8_UNORM :
-	                                       colorSrcDesc.Format;
+	// Keep submit-stage output copy-compatible with the stereo source. The desktop
+	// mirror writeback uses CopySubresourceRegion into that source texture.
+	const DXGI_FORMAT colorOutFormat = colorSrcDesc.Format;
 	const bool requiresColorOutRTV = presentationOutputActive;
 	const uint32_t allocationInWidth = GetStableSubmitStageInputDimension(inWidth, outWidth);
 	const uint32_t allocationInHeight = GetStableSubmitStageInputDimension(inHeight, outHeight);
@@ -6399,9 +6399,9 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	D3D11_TEXTURE2D_DESC transparencySrcDesc{};
 	static_cast<ID3D11Texture2D*>(transparencySrc)->GetDesc(&transparencySrcDesc);
 	const bool presentationOutputActive = IsPresentationUpscalingActive();
-	const DXGI_FORMAT expectedColorOutFormat = presentationOutputActive ?
-	                                               DXGI_FORMAT_R8G8B8A8_UNORM :
-	                                               colorSrcDesc.Format;
+	// Must match CreateVRIntermediateTextures(), otherwise the cached output can
+	// make the desktop mirror writeback fail its format compatibility check.
+	const DXGI_FORMAT expectedColorOutFormat = colorSrcDesc.Format;
 	const bool requiresColorOutRTV = presentationOutputActive;
 	const uint32_t allocationInWidth = GetStableSubmitStageInputDimension(inWidth, outWidth);
 	const uint32_t allocationInHeight = GetStableSubmitStageInputDimension(inHeight, outHeight);

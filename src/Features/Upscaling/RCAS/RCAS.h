@@ -3,6 +3,7 @@
 #include "../../../Buffer.h"
 #include "../../../State.h"
 
+#include <cstdint>
 #include <d3d11_4.h>
 #include <winrt/base.h>
 
@@ -31,8 +32,11 @@ public:
 	 * @param inputTexture SRV of the texture to sharpen (typically kMAIN render target).
 	 * @param outputUAV UAV to write sharpened result to.
 	 * @param sharpness Sharpening strength (0.0 = no sharpening, higher = more sharp).
+	 * @param width Optional dispatch width. Uses current screen width when 0.
+	 * @param height Optional dispatch height. Uses current screen height when 0.
+	 * @return true when the RCAS dispatch is submitted; false when required resources are unavailable.
 	 */
-	void ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
+	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness, uint32_t width = 0, uint32_t height = 0);
 
 private:
 	void CreateComputeShader();

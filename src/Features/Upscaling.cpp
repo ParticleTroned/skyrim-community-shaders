@@ -397,6 +397,12 @@ namespace
 		texture = nullptr;
 	}
 
+	float GetDLSSRCASSharpness(float a_sharpness)
+	{
+		const float clampedSharpness = std::clamp(a_sharpness, 0.0f, 1.0f);
+		return exp2((2.0f * clampedSharpness) - 2.0f);
+	}
+
 	struct OpenCompositeSettingValue
 	{
 		bool value = false;
@@ -2897,7 +2903,14 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	// RCAS sharpener texture is only needed for DLSS.
 	if (a_upscalemethod != UpscaleMethod::kDLSS) {
 		DestroyTexture(sharpenerTexture);
+		DestroySubmitStageDLSSSharpenerTextures();
 	}
+}
+
+void Upscaling::DestroySubmitStageDLSSSharpenerTextures()
+{
+	for (auto& texture : submitStageDLSSSharpenerTexture)
+		texture.reset();
 }
 
 void Upscaling::DestroyCommonUpscalingTextures()
@@ -2906,6 +2919,7 @@ void Upscaling::DestroyCommonUpscalingTextures()
 	DestroyTexture(transparencyCompositionMaskTexture);
 	DestroyTexture(motionVectorCopyTexture);
 	DestroyTexture(sharpenerTexture);
+	DestroySubmitStageDLSSSharpenerTextures();
 	perfMode.ResetResources();
 }
 
@@ -2990,6 +3004,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 	retireArray(vrIntermediateMotionVectors, retired.motionVectors);
 	retireArray(vrIntermediateReactiveMask, retired.reactiveMask);
 	retireArray(vrIntermediateTransparencyMask, retired.transparencyMask);
+	retireArray(submitStageDLSSSharpenerTexture, retired.submitStageDLSSSharpener);
 
 	if (hasRetiredTextures) {
 		retiredVRIntermediateTextures.push_back(std::move(retired));
@@ -6137,6 +6152,98 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 	return true;
 }
 
+bool Upscaling::EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput)
+{
+	if (eyeIndex >= 2 || !colorOutput.resource || !colorOutput.srv || !colorOutput.uav ||
+		!colorOutput.desc.Width || !colorOutput.desc.Height) {
+		return false;
+	}
+
+	auto& texture = submitStageDLSSSharpenerTexture[eyeIndex];
+	const auto matchesOutput = [&]() {
+		return texture &&
+		       texture->resource &&
+		       texture->srv &&
+		       texture->uav &&
+		       texture->desc.Width == colorOutput.desc.Width &&
+		       texture->desc.Height == colorOutput.desc.Height &&
+		       texture->desc.Format == colorOutput.desc.Format;
+	};
+	if (matchesOutput())
+		return true;
+
+	const std::string suffix = eyeIndex == 0 ? "Left" : "Right";
+	texture = CreateNamedTexture2D(
+		colorOutput.desc.Width,
+		colorOutput.desc.Height,
+		colorOutput.desc.Format,
+		true,
+		true,
+		false,
+		("SubmitStageDLSSSharpener_" + suffix).c_str());
+
+	return matchesOutput();
+}
+
+void Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex)
+{
+	if (settings.sharpnessDLSS <= 0.0f)
+		return;
+	if (eyeIndex >= 2)
+		return;
+
+	auto context = globals::d3d::context;
+	if (!context)
+		return;
+
+	auto& colorOutput = vrIntermediateColorOut[eyeIndex];
+	if (!colorOutput || !colorOutput->resource || !colorOutput->srv || !colorOutput->uav ||
+		!colorOutput->desc.Width || !colorOutput->desc.Height) {
+		return;
+	}
+
+	static bool loggedSharpenerFailure[2] = {};
+	try {
+		if (!EnsureSubmitStageDLSSSharpenerTexture(eyeIndex, *colorOutput)) {
+			LogWarnOnceFmt(
+				loggedSharpenerFailure[eyeIndex],
+				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because sharpener resources are unavailable.",
+				eyeIndex);
+			return;
+		}
+
+		auto& sharpener = submitStageDLSSSharpenerTexture[eyeIndex];
+		const uint32_t dispatchWidth = colorOutput->desc.Width;
+		const uint32_t dispatchHeight = colorOutput->desc.Height;
+
+		UnbindUpscalingResources();
+		if (!rcas.ApplySharpen(colorOutput->srv.get(), sharpener->uav.get(), GetDLSSRCASSharpness(settings.sharpnessDLSS), dispatchWidth, dispatchHeight)) {
+			LogWarnOnceFmt(
+				loggedSharpenerFailure[eyeIndex],
+				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because RCAS dispatch failed.",
+				eyeIndex);
+			return;
+		}
+		context->CopyResource(colorOutput->resource.get(), sharpener->resource.get());
+		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening");
+	} catch (const std::exception& e) {
+		if (!MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage DLSS sharpening")) {
+			LogWarnOnceFmt(
+				loggedSharpenerFailure[eyeIndex],
+				"[Upscaling] Submit-stage DLSS sharpening threw for eye {}; submitting unsharpened output: {}",
+				eyeIndex,
+				e.what());
+		}
+	} catch (...) {
+		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening")) {
+			LogWarnOnceFmt(
+				loggedSharpenerFailure[eyeIndex],
+				"[Upscaling] Submit-stage DLSS sharpening threw for eye {}; submitting unsharpened output",
+				eyeIndex);
+		}
+	}
+}
+
 bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
 	ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs, bool copyDepthInput)
 {
@@ -7956,6 +8063,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 
+	if (upscaleMethod == UpscaleMethod::kDLSS) {
+		ApplySubmitStageDLSSSharpening(eyeIndex);
+		if (IsSubmitStageDeviceLost())
+			return false;
+	}
+
 	clearSubmittedEyeHMDMask();
 	if (IsSubmitStageDeviceLost())
 		return false;
@@ -9109,8 +9222,7 @@ void Upscaling::ApplySharpening()
 	if (!sharpenerTexture)
 		return;
 
-	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
-	currentSharpness = exp2(-currentSharpness);
+	const float currentSharpness = GetDLSSRCASSharpness(settings.sharpnessDLSS);
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -9119,15 +9231,17 @@ void Upscaling::ApplySharpening()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	if (dlssUpscaleOutputInSharpenerTexture) {
-		if (!main.UAV || !sharpenerTexture->srv)
+		if (!main.texture || !sharpenerTexture->resource)
 			return;
 
-		rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+		if (!main.UAV || !sharpenerTexture->srv || !rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness))
+			context->CopyResource(main.texture, sharpenerTexture->resource.get());
 	} else {
-		if (!main.SRV || !main.texture || !sharpenerTexture->uav)
+		if (!main.SRV || !main.texture || !sharpenerTexture->resource || !sharpenerTexture->uav)
 			return;
 
-		rcas.ApplySharpen(main.SRV, sharpenerTexture->uav.get(), currentSharpness);
+		if (!rcas.ApplySharpen(main.SRV, sharpenerTexture->uav.get(), currentSharpness))
+			return;
 		context->CopyResource(main.texture, sharpenerTexture->resource.get());
 	}
 

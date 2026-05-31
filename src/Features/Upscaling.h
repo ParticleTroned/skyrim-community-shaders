@@ -405,7 +405,7 @@ public:
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
 	bool ConsumePerfModeBootLatchCreate();
-	bool AdjustPerfModeRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
+	bool AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
 	struct ActiveUpscalingFoveatedProfile
@@ -644,18 +644,23 @@ public:
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	std::atomic<uint32_t> pendingVRUpscalingQualityMode{ kPendingVRUpscalingSettingUnset };
+	std::atomic<uint32_t> pendingVRRenderScaleMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
+	std::atomic<bool> pendingVRUpscalingTransitionLongRelatchDelay{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateSafetyEndFrame{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
+	bool submitStagePreparedFramePresentationOnly = false;
 	uint32_t submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
 	std::array<ID3D11Texture2D*, 8> submitStageHandoffTextures = {};
 	uint32_t submitStagePreviousHandoffFrame = std::numeric_limits<uint32_t>::max();
@@ -680,6 +685,7 @@ public:
 	uint32_t GetEffectiveDLSSQualityMode() const;
 	uint32_t GetEffectiveDLSSPreset() const;
 	void QueueVRUpscalingQualityMode(uint32_t a_qualityMode);
+	void QueueVRRenderScaleModeRequest(bool a_enabled);
 	void QueueVRDLSSPreset(uint32_t a_dlssPreset);
 	void QueueVRPerfModeRequest(bool a_enabled);
 	void MarkVRUpscalingTransitionQueued();
@@ -689,7 +695,7 @@ public:
 	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;
 	bool ShouldDeferVRUpscalingTransitionSettings() const;
 	bool ShouldWaitForVRUpscalingTransitionDelay() const;
-	void MarkPerfModeRenderTargetRecreateQueued();
+	void MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames = 0, bool a_extendFoveatedSafety = true);
 	bool ShouldWaitForPerfModeRenderTargetRecreateDelay() const;
 	void ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod);
 	bool ShouldResetHistoryThisFrame() const;

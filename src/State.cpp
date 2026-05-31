@@ -895,9 +895,9 @@ bool State::IsDeveloperMode()
 
 void State::ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 {
-	if (globals::features::upscaling.AdjustPerfModeRenderTargetProperties(a_target, a_properties)) {
+	if (globals::features::upscaling.AdjustVRRenderScaleRenderTargetProperties(a_target, a_properties)) {
 		logger::debug(
-			"[PerfMode] Adjusted {} render target properties to {}x{}.",
+			"[Upscaling] Adjusted {} render target properties to {}x{} for VR render scale.",
 			magic_enum::enum_name(a_target),
 			a_properties->width,
 			a_properties->height);

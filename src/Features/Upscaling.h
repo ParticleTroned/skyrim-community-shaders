@@ -398,7 +398,7 @@ public:
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
-	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr);
+	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false);
 	void SetVRUpscalingTransitionProfile(bool a_renderAtUpscaleResEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr);
 	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
@@ -645,6 +645,7 @@ public:
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	std::atomic<uint32_t> pendingVRDLSSQualityMode{ kPendingVRDLSSSettingUnset };
 	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRDLSSSettingUnset };
+	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRDLSSSettingUnset };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
@@ -674,6 +675,9 @@ public:
 	uint32_t GetEffectiveDLSSPreset() const;
 	void QueueVRDLSSQualityMode(uint32_t a_qualityMode);
 	void QueueVRDLSSPreset(uint32_t a_dlssPreset);
+	void QueueVRPerfModeRequest(bool a_enabled);
+	bool HasPendingVRUpscalingTransition() const;
+	bool ShouldDeferVRUpscalingTransitionSettings() const;
 	void ApplyPendingVRDLSSSettings(UpscaleMethod a_upscaleMethod);
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);

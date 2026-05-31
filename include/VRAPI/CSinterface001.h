@@ -54,6 +54,8 @@ namespace CSPluginAPI
 	// This object provides access to Community Shaders' mod support API.
 	struct ICSInterface001
 	{
+		// ABI note: keep virtual methods append-only. Inserting new virtuals before
+		// existing entries changes vtable slots for already-compiled consumers.
 		virtual unsigned int getBuildNumber() = 0;
 
 		// SSS here means Screen Space Shadows.
@@ -71,9 +73,6 @@ namespace CSPluginAPI
 		virtual DLSSMode GetDLSSMode() = 0;
 		virtual void SetDLSSMode(DLSSMode mode) = 0;
 
-		UpscalePreset GetUpscalePreset() { return GetDLSSMode(); }
-		void SetUpscalePreset(UpscalePreset preset) { SetDLSSMode(preset); }
-
 		virtual bool GetLightLimitFixContactShadowsEnabled() = 0;
 		virtual void SetLightLimitFixContactShadowsEnabled(bool enabled) = 0;
 
@@ -90,6 +89,10 @@ namespace CSPluginAPI
 		// Convenience for interior/exterior transition controllers. Stages the
 		// render-size path, shared upscaler preset, and DLSS profile together.
 		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile) = 0;
+
+		// Non-virtual source convenience wrappers. These do not occupy ABI slots.
+		UpscalePreset GetUpscalePreset() { return GetDLSSMode(); }
+		void SetUpscalePreset(UpscalePreset preset) { SetDLSSMode(preset); }
 	};
 }  // namespace CSPluginAPI
 

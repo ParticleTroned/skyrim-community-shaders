@@ -95,6 +95,8 @@ void SetShadowsEnabled(bool enabled)
 - `void SetVolumetricLightingExteriorEnabled(bool enabled)`
 - `DLSSMode GetDLSSMode()` / `void SetDLSSMode(DLSSMode mode)` (legacy names for the shared upscaler preset)
 - `UpscalePreset GetUpscalePreset()` / `void SetUpscalePreset(UpscalePreset preset)` (header convenience wrappers)
+- `bool GetLightLimitFixContactShadowsEnabled()`
+- `void SetLightLimitFixContactShadowsEnabled(bool enabled)`
 - `DLSSProfile GetDLSSProfile()`
 - `void SetDLSSProfile(DLSSProfile profile)`
 - `bool GetRenderAtUpscaleResEnabled()`
@@ -126,6 +128,7 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - Render at Upscale Res is only eligible in VR with DLSS/FSR upscaling presets below native scale. Selecting Native AA/DLAA disables Render Scale Mode and clears the Render at Upscale Res request.
 - `SetVRUpscalingTransitionProfile` is intended for interior/exterior transition controllers. It stages Render at Upscale Res and shared DLSS/FSR render-scale preset transitions so Community Shaders can apply one relatch. During the VR save/load grace window or while game/CS menus are open, render-scale transitions stay queued until the post-load runtime reset has completed and the transition has settled for a few frames. Native/no-render-scale preset changes and DLSS profile-only changes apply normally.
 - The individual `SetDLSSMode`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately.
+- `GetUpscalePreset`/`SetUpscalePreset` are non-virtual header wrappers over the legacy `GetDLSSMode`/`SetDLSSMode` ABI slots. New virtual methods must only be appended to the interface to preserve binary compatibility.
 - VR DLSS keeps two viewport/resource slots for recent quality/profile combinations. Alternating between an exterior profile and an interior profile can reuse those slots instead of rebuilding DLSS every time.
 - Reflex settings are not exposed by this API.
 - If the API pointer is null, Community Shaders is missing, too old, or not ready yet.
@@ -136,8 +139,9 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - Always null-check the API pointer.
 - Prefer checking `getBuildNumber()` before relying on behavior.
 - `GetDLSSMode`/`SetDLSSMode` require `getBuildNumber() >= 2`; `GetUpscalePreset`/`SetUpscalePreset` are header wrappers over those methods.
-- `GetDLSSProfile`/`SetDLSSProfile` require `getBuildNumber() >= 3`.
+- `GetLightLimitFixContactShadowsEnabled`/`SetLightLimitFixContactShadowsEnabled` and `GetDLSSProfile`/`SetDLSSProfile` require `getBuildNumber() >= 3`.
 - `DLSSMode::kHoshipa` / `UpscalePreset::kHoshipa` and `DLSSMode::kUltraQuality` / `UpscalePreset::kUltraQuality` require `getBuildNumber() >= 4`.
 - `GetRenderAtUpscaleResEnabled`/`SetRenderAtUpscaleResEnabled`/`GetRenderAtUpscaleResActive` require `getBuildNumber() >= 5`.
 - `SetVRUpscalingTransitionProfile` requires `getBuildNumber() >= 6`.
+- Shared DLSS/FSR render-scale transition staging, individual setter staging parity, and the narrowed "render-scale only" deferral behavior require `getBuildNumber() >= 7`.
 - Treat missing API as optional integration and continue without hard failure.

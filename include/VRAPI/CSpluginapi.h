@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 6;
+inline constexpr unsigned int CSBuildNumber = 7;
 
 namespace CSPluginAPI
 {
@@ -23,6 +23,7 @@ namespace CSPluginAPI
 	// This object provides access to Community Shaders' mod support API version 1.
 	struct CSInterface001 : ICSInterface001
 	{
+		// Must mirror ICSInterface001 virtual order exactly.
 		virtual unsigned int getBuildNumber() override;
 
 		virtual bool GetSSSEnabled() override;

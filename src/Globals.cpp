@@ -159,6 +159,9 @@ namespace globals
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
 
+	static Profiler profilerInstance;
+	Profiler* profiler = &profilerInstance;
+
 	void OnInit()
 	{
 		shaderCache = &SIE::ShaderCache::Instance();

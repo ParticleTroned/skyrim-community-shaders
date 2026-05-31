@@ -103,7 +103,7 @@ public:
 		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint submitStageUpscaling = 1;
-		uint perfMode = 0;
+		uint perfMode = 1;
 		bool aaVrs = false;
 		bool aaVrsVisualization = false;
 		uint frameLimitMode = 1;

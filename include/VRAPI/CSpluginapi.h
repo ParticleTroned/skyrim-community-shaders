@@ -66,9 +66,9 @@ namespace CSPluginAPI
 			return enabled ? static_cast<TFlag>(1) : static_cast<TFlag>(0);
 		}
 
-		inline bool IsValidUpscalePreset(UpscalePreset preset)
+		inline bool IsValidDLSSMode(DLSSMode mode)
 		{
-			switch (preset) {
+			switch (mode) {
 			case DLSSMode::kDLAA:
 			case DLSSMode::kQuality:
 			case DLSSMode::kBalanced:
@@ -82,9 +82,9 @@ namespace CSPluginAPI
 			}
 		}
 
-		inline uint32_t UpscalePresetToQualityMode(UpscalePreset preset)
+		inline uint32_t DLSSModeToQualityMode(DLSSMode mode)
 		{
-			switch (preset) {
+			switch (mode) {
 			case DLSSMode::kDLAA:
 				return 0u;
 			case DLSSMode::kHoshipa:
@@ -104,7 +104,7 @@ namespace CSPluginAPI
 			}
 		}
 
-		inline UpscalePreset QualityModeToUpscalePreset(uint32_t mode)
+		inline DLSSMode QualityModeToDLSSMode(uint32_t mode)
 		{
 			switch (mode) {
 			case 1:
@@ -204,18 +204,18 @@ namespace CSPluginAPI
 	inline DLSSMode CSInterface001::GetDLSSMode()
 	{
 		const uint32_t clampedMode = std::min(globals::features::upscaling.GetEffectiveDLSSQualityMode(), Upscaling::kQualityModeMaxIndex);
-		return detail::QualityModeToUpscalePreset(clampedMode);
+		return detail::QualityModeToDLSSMode(clampedMode);
 	}
 
 	inline void CSInterface001::SetDLSSMode(DLSSMode mode)
 	{
-		if (!detail::IsValidUpscalePreset(mode)) {
+		if (!detail::IsValidDLSSMode(mode)) {
 			logger::warn("[CS API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(mode));
 			return;
 		}
 
 		auto& upscaling = globals::features::upscaling;
-		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(mode);
+		const uint32_t qualityMode = detail::DLSSModeToQualityMode(mode);
 		const auto upscaleMethod = upscaling.GetUpscaleMethod();
 		const bool stageVRUpscalingChange =
 			globals::game::isVR &&
@@ -296,7 +296,7 @@ namespace CSPluginAPI
 
 	inline void CSInterface001::SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile)
 	{
-		if (!detail::IsValidUpscalePreset(mode)) {
+		if (!detail::IsValidDLSSMode(mode)) {
 			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(mode));
 			return;
 		}
@@ -306,7 +306,7 @@ namespace CSPluginAPI
 		}
 
 		auto& upscaling = globals::features::upscaling;
-		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(mode);
+		const uint32_t qualityMode = detail::DLSSModeToQualityMode(mode);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
 		upscaling.SetVRUpscalingTransitionProfile(renderAtUpscaleResEnabled, qualityMode, dlssPreset, "CS API VR upscaling transition profile");
 	}

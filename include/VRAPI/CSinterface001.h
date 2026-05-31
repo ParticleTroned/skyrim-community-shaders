@@ -40,8 +40,6 @@ namespace CSPluginAPI
 		kUltraQuality = 6
 	};
 
-	using UpscalePreset = DLSSMode;
-
 	enum class DLSSProfile : uint32_t
 	{
 		kJ = 0,
@@ -89,10 +87,6 @@ namespace CSPluginAPI
 		// Convenience for interior/exterior transition controllers. Stages the
 		// render-size path, shared upscaler preset, and DLSS profile together.
 		virtual void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile) = 0;
-
-		// Non-virtual source convenience wrappers. These do not occupy ABI slots.
-		UpscalePreset GetUpscalePreset() { return GetDLSSMode(); }
-		void SetUpscalePreset(UpscalePreset preset) { SetDLSSMode(preset); }
 	};
 }  // namespace CSPluginAPI
 

@@ -94,7 +94,6 @@ void SetShadowsEnabled(bool enabled)
 - `bool GetVolumetricLightingExteriorEnabled()`
 - `void SetVolumetricLightingExteriorEnabled(bool enabled)`
 - `DLSSMode GetDLSSMode()` / `void SetDLSSMode(DLSSMode mode)` (legacy names for the shared upscaler preset)
-- `UpscalePreset GetUpscalePreset()` / `void SetUpscalePreset(UpscalePreset preset)` (header convenience wrappers)
 - `bool GetLightLimitFixContactShadowsEnabled()`
 - `void SetLightLimitFixContactShadowsEnabled(bool enabled)`
 - `DLSSProfile GetDLSSProfile()`
@@ -104,31 +103,30 @@ void SetShadowsEnabled(bool enabled)
 - `bool GetRenderAtUpscaleResActive()`
 - `void SetVRUpscalingTransitionProfile(bool renderAtUpscaleResEnabled, DLSSMode mode, DLSSProfile profile)`
 
-`DLSSMode` / `UpscalePreset` values:
+`DLSSMode` values:
 
-- `DLSSMode::kDLAA` / `UpscalePreset::kNativeAA` (1.00x; shown as `DLAA` for DLSS and `Native AA` for FSR/FSR4)
-- `DLSSMode::kHoshipa` / `UpscalePreset::kHoshipa` (0.85x)
-- `DLSSMode::kUltraQuality` / `UpscalePreset::kUltraQuality` (0.77x)
-- `DLSSMode::kQuality` / `UpscalePreset::kQuality` (0.67x)
-- `DLSSMode::kBalanced` / `UpscalePreset::kBalanced` (0.59x)
-- `DLSSMode::kPerformance` / `UpscalePreset::kPerformance` (0.50x)
-- `DLSSMode::kUltraPerformance` / `UpscalePreset::kUltraPerformance` (0.33x)
+- `DLSSMode::kDLAA` / `DLSSMode::kNativeAA` (1.00x; shown as `DLAA` for DLSS and `Native AA` for FSR/FSR4)
+- `DLSSMode::kHoshipa` (0.85x)
+- `DLSSMode::kUltraQuality` (0.77x)
+- `DLSSMode::kQuality` (0.67x)
+- `DLSSMode::kBalanced` (0.59x)
+- `DLSSMode::kPerformance` (0.50x)
+- `DLSSMode::kUltraPerformance` (0.33x)
 
-Numeric enum values keep backwards compatibility for the original five modes; they are not the same as the in-menu order for the two newer modes. `UpscalePreset::kNativeAA` is an alias for `DLSSMode::kDLAA`.
+Numeric enum values keep backwards compatibility for the original five modes; they are not the same as the in-menu order for the two newer modes. `DLSSMode::kNativeAA` is an alias for `DLSSMode::kDLAA`.
 
 ## Behavior Notes
 
 - `SSS` means **Screen Space Shadows**, not Subsurface Scattering.
 - Setters change runtime state in Community Shaders.
 - `DLSSMode` and `GetDLSSMode`/`SetDLSSMode` are legacy API names. They control the shared upscaler preset for DLSS, FSR 3.1.5, and runtime FSR4.
-- `UpscalePreset` is an alias for `DLSSMode`; new integrations should prefer the `UpscalePreset` wording.
 - These presets are Community Shaders render-scale presets, not AMD FSR quality enum values. `Hoshipa` and `Ultra Quality` are valid for both DLSS and FSR/FSR4 because the backend receives explicit render and display sizes.
 - DLSS profile control is DLSS-only and does **not** affect FSR 3.1.5 or FSR4.
 - `SetRenderAtUpscaleResEnabled` changes the requested VR Render at Upscale Res state. Enabling it from Native AA/DLAA promotes the shared preset to `Quality` so the render-scale state stays valid. `GetRenderAtUpscaleResActive` reports whether the relatched render targets are actually active.
 - Render at Upscale Res is only eligible in VR with DLSS/FSR upscaling presets below native scale. Selecting Native AA/DLAA disables Render Scale Mode and clears the Render at Upscale Res request.
 - `SetVRUpscalingTransitionProfile` is intended for interior/exterior transition controllers. It stages Render at Upscale Res and shared DLSS/FSR render-scale preset transitions so Community Shaders can apply one relatch. During the VR save/load grace window or while game/CS menus are open, render-scale transitions stay queued until the post-load runtime reset has completed and the transition has settled for a few frames. Native/no-render-scale preset changes and DLSS profile-only changes apply normally.
 - The individual `SetDLSSMode`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately.
-- `GetUpscalePreset`/`SetUpscalePreset` are non-virtual header wrappers over the legacy `GetDLSSMode`/`SetDLSSMode` ABI slots. New virtual methods must only be appended to the interface to preserve binary compatibility.
+- New virtual methods must only be appended to the interface to preserve binary compatibility.
 - VR DLSS keeps two viewport/resource slots for recent quality/profile combinations. Alternating between an exterior profile and an interior profile can reuse those slots instead of rebuilding DLSS every time.
 - Reflex settings are not exposed by this API.
 - If the API pointer is null, Community Shaders is missing, too old, or not ready yet.
@@ -138,9 +136,9 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 
 - Always null-check the API pointer.
 - Prefer checking `getBuildNumber()` before relying on behavior.
-- `GetDLSSMode`/`SetDLSSMode` require `getBuildNumber() >= 2`; `GetUpscalePreset`/`SetUpscalePreset` are header wrappers over those methods.
+- `GetDLSSMode`/`SetDLSSMode` require `getBuildNumber() >= 2`.
 - `GetLightLimitFixContactShadowsEnabled`/`SetLightLimitFixContactShadowsEnabled` and `GetDLSSProfile`/`SetDLSSProfile` require `getBuildNumber() >= 3`.
-- `DLSSMode::kHoshipa` / `UpscalePreset::kHoshipa` and `DLSSMode::kUltraQuality` / `UpscalePreset::kUltraQuality` require `getBuildNumber() >= 4`.
+- `DLSSMode::kHoshipa` and `DLSSMode::kUltraQuality` require `getBuildNumber() >= 4`.
 - `GetRenderAtUpscaleResEnabled`/`SetRenderAtUpscaleResEnabled`/`GetRenderAtUpscaleResActive` require `getBuildNumber() >= 5`.
 - `SetVRUpscalingTransitionProfile` requires `getBuildNumber() >= 6`.
 - Shared DLSS/FSR render-scale transition staging, individual setter staging parity, and the narrowed "render-scale only" deferral behavior require `getBuildNumber() >= 7`.

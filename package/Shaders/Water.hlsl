@@ -1006,6 +1006,10 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 #			endif
 
 		float3 finalReflectionColor = Color::IrradianceToGamma(lerp(Color::IrradianceToLinear(reflectionColor), Color::IrradianceToLinear(finalSsrReflectionColor), ssrFraction));
+		if (SharedData::lodBlendingSettings.WaterReflectionStrength < 0.0) {
+			return finalReflectionColor;
+		}
+
 		float waterReflectionStrength = VarAmounts.y * SharedData::lodBlendingSettings.WaterReflectionStrength;
 		waterReflectionStrength = lerp(1.0, waterReflectionStrength, GetWaterReflectionHeightFade(eyeIndex));
 		waterReflectionStrength = saturate(waterReflectionStrength);

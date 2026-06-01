@@ -217,28 +217,15 @@ namespace CSPluginAPI
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const auto upscaleMethod = upscaling.GetUpscaleMethod();
-		const bool renderScaleModeEnabled = Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
-		const bool stageVRUpscalingChange =
-			globals::game::isVR &&
-			(upscaleMethod == Upscaling::UpscaleMethod::kDLSS || upscaleMethod == Upscaling::UpscaleMethod::kFSR);
-
-		if (stageVRUpscalingChange) {
-			upscaling.SetVRUpscalingTransitionProfile(renderScaleModeEnabled, qualityMode, upscaling.GetEffectiveDLSSPreset(), "CS API upscaler preset change");
-			return;
-		}
-
-		const bool renderScaleModeChanged = upscaling.SyncRenderScaleModeForQuality(qualityMode, "CS API native upscaler preset change");
-		if (upscaling.settings.qualityMode == qualityMode) {
-			if (renderScaleModeChanged) {
-				upscaling.RequestHistoryReset();
-				upscaling.RequestPerfModeRenderTargetRecreate("CS API upscaler preset change");
-			}
-			return;
-		}
-
-		upscaling.settings.qualityMode = qualityMode;
-		upscaling.RequestHistoryReset();
-		upscaling.RequestPerfModeRenderTargetRecreate("CS API upscaler preset change");
+		const bool renderScaleModeEnabled =
+			upscaling.IsRenderScaleModeRequested() &&
+			Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
+		upscaling.ApplyCSMenuUpscalingTransition(
+			upscaleMethod,
+			renderScaleModeEnabled,
+			qualityMode,
+			upscaling.GetEffectiveDLSSPreset(),
+			"CS API upscaler preset change");
 	}
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()

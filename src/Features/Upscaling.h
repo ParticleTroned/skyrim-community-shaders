@@ -393,12 +393,12 @@ public:
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
 	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
-	bool SyncRenderScaleModeForQuality(uint32_t a_qualityMode, const char* a_nativePerfDisableReason = nullptr);
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false);
+	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr);
 	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);

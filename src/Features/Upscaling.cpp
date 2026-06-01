@@ -1946,43 +1946,17 @@ void Upscaling::DrawSettings()
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
 	const bool shouldApplyMethodSelection = methodChanged || !matchesCurrentChoice(selectedUpscaleChoice);
 	if (shouldApplyMethodSelection) {
-		const bool targetPerfMode = GetPerfModeRequested();
+		const bool targetRenderScaleMode = IsRenderScaleModeRequested();
 		const uint32_t targetQualityMode = GetEffectiveUpscalingQualityMode();
 		const uint32_t targetDLSSPreset = GetEffectiveDLSSPreset();
-		const bool deferVRMethodTransition = globals::game::isVR && ShouldDeferVRUpscalingTransitionSettings();
-		const bool renderScaleWasRelevant =
-			globals::game::isVR &&
-			(targetPerfMode || IsRenderScaleModeRequested() || IsPerfModeActive() || perfMode.HasRestartRequiredChange());
-		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
 		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
 			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
-		if (globals::game::isVR) {
-			ClearPendingVRUpscalingTransition();
-			if (IsRenderScaleMethodEligible(selectedUpscaleChoice.method)) {
-				SetVRUpscalingTransitionProfile(targetPerfMode, targetQualityMode, targetDLSSPreset, "upscaling menu method change");
-				const auto& perfModeBoot = perfMode.GetBootSnapshot();
-				if (deferVRMethodTransition &&
-					targetPerfMode &&
-					perfModeBoot.valid &&
-					perfModeBoot.active &&
-					perfModeBoot.method != selectedUpscaleChoice.method) {
-					QueueVRPerfModeRequest(true);
-					pendingVRUpscalingTransitionLongRelatchDelay.store(true, std::memory_order_release);
-					RequestHistoryReset();
-				}
-			} else {
-				if (deferVRMethodTransition && renderScaleWasRelevant) {
-					QueueVRRenderScaleModeRequest(false);
-					QueueVRPerfModeRequest(false);
-					RequestHistoryReset();
-				} else {
-					settings.renderScaleMode = 0;
-					SetPerfModeRequested(false, "upscaling menu method change");
-				}
-			}
-		}
-		if (!deferVRMethodTransition)
-			RequestPerfModeRenderTargetRecreate("upscaling menu method change");
+		ApplyCSMenuUpscalingTransition(
+			selectedUpscaleChoice.method,
+			targetRenderScaleMode,
+			targetQualityMode,
+			targetDLSSPreset,
+			"upscaling menu method change");
 	}
 	if (openCompositeBlocksUpscaling) {
 		ApplyOpenCompositeUpscalingBlocker();
@@ -2074,18 +2048,12 @@ void Upscaling::DrawSettings()
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
 			if (ImGui::SliderInt("Render Scale Mode", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
-				if (renderScaleMethodEligible) {
-					SetVRUpscalingTransitionProfile(enableRenderScaleMode, renderScaleQualityMode, GetEffectiveDLSSPreset(), "upscaling menu render-scale mode change");
-				} else {
-					settings.renderScaleMode = enableRenderScaleMode ? 1u : 0u;
-					if (enableRenderScaleMode && !renderScaleQualitySelected)
-						settings.qualityMode = kDefaultRenderScaleQualityMode;
-					if (!enableRenderScaleMode) {
-						settings.qualityMode = 0;
-						SetPerfModeRequested(false, "upscaling menu render-scale mode change");
-					}
-					RequestHistoryReset();
-				}
+				ApplyCSMenuUpscalingTransition(
+					upscaleMethod,
+					enableRenderScaleMode,
+					renderScaleQualityMode,
+					GetEffectiveDLSSPreset(),
+					"upscaling menu render-scale mode change");
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2133,8 +2101,8 @@ void Upscaling::DrawSettings()
 	// Display upscaling settings if applicable
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
-		const bool stageVRUpscalingMethod = globals::game::isVR && IsRenderScaleMethodEligible(upscaleMethod);
-		const uint32_t effectiveQualityMode = stageVRUpscalingMethod ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
+		const bool usePendingVRUpscalingQuality = globals::game::isVR && IsRenderScaleMethodEligible(upscaleMethod);
+		const uint32_t effectiveQualityMode = usePendingVRUpscalingQuality ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
 		const char* baseLabel = GetQualityModeName(effectiveQualityMode, upscaleMethod == UpscaleMethod::kDLSS);
 		std::string labelWithScale = std::format(
 			"{} ( {:.2f}x )",
@@ -2149,15 +2117,13 @@ void Upscaling::DrawSettings()
 				static_cast<int>(kQualityModeMaxIndex),
 				labelWithScale.c_str())) {
 			const uint32_t requestedQualityMode = static_cast<uint32_t>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
-			if (stageVRUpscalingMethod) {
-				const bool targetRenderScaleMode = IsRenderScaleModeRequested() && IsRenderScaleQualityMode(requestedQualityMode);
-				SetVRUpscalingTransitionProfile(targetRenderScaleMode, requestedQualityMode, GetEffectiveDLSSPreset(), "upscaling menu preset change");
-			} else {
-				settings.qualityMode = requestedQualityMode;
-				if (IsVendorUpscalingMethod(upscaleMethod))
-					SyncRenderScaleModeForQuality(settings.qualityMode, "upscaling menu native preset change");
-				RequestPerfModeRenderTargetRecreate("upscaling menu preset change");
-			}
+			const bool targetRenderScaleMode = IsRenderScaleModeRequested() && IsRenderScaleQualityMode(requestedQualityMode);
+			ApplyCSMenuUpscalingTransition(
+				upscaleMethod,
+				targetRenderScaleMode,
+				requestedQualityMode,
+				GetEffectiveDLSSPreset(),
+				"upscaling menu preset change");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Controls the shared DLSS/FSR/FSR4 internal render scale / quality level.");
@@ -2189,7 +2155,12 @@ void Upscaling::DrawSettings()
 
 			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex), dlssProfiles[dlssProfileUiIndex])) {
 				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex));
-				SetVRUpscalingTransitionProfile(GetPerfModeRequested(), GetEffectiveUpscalingQualityMode(), dlssProfileOrder[dlssProfileUiIndex], "upscaling menu DLSS profile change");
+				ApplyCSMenuUpscalingTransition(
+					upscaleMethod,
+					IsRenderScaleModeRequested(),
+					GetEffectiveUpscalingQualityMode(),
+					dlssProfileOrder[dlssProfileUiIndex],
+					"upscaling menu DLSS profile change");
 			}
 
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -3286,28 +3257,6 @@ bool Upscaling::IsRenderScaleModeRequested() const
 	return ClampToggleUInt(settings.renderScaleMode) != 0;
 }
 
-bool Upscaling::SyncRenderScaleModeForQuality(uint32_t a_qualityMode, const char* a_nativePerfDisableReason)
-{
-	if (!REL::Module::IsVR())
-		return false;
-
-	if (!IsRenderScaleMethodEligible(GetUpscaleMethod())) {
-		const bool changed = settings.renderScaleMode != 0;
-		settings.renderScaleMode = 0;
-		SetPerfModeRequested(false, a_nativePerfDisableReason);
-		return changed;
-	}
-
-	if (!IsRenderScaleQualityMode(a_qualityMode)) {
-		const bool changed = settings.renderScaleMode != 0;
-		settings.renderScaleMode = 0;
-		SetPerfModeRequested(false, a_nativePerfDisableReason);
-		return changed;
-	}
-
-	return false;
-}
-
 bool Upscaling::IsPerfModeActive() const
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
@@ -3385,38 +3334,98 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	RequestPerfModeRenderTargetRecreate(a_reason);
 }
 
-void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
+void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
 {
-	uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
-	const auto upscaleMethod = GetUpscaleMethod();
-	const bool renderScaleTransitionContext = globals::game::isVR && IsRenderScaleMethodEligible(upscaleMethod);
-	if (renderScaleTransitionContext) {
-		if (a_renderScaleModeEnabled && !IsRenderScaleQualityMode(qualityMode))
-			qualityMode = kDefaultRenderScaleQualityMode;
+	const bool isVR = globals::game::isVR;
+	const int maxMethodValue = streamline.featureDLSS ?
+		static_cast<int>(UpscaleMethod::kDLSS) :
+		static_cast<int>(UpscaleMethod::kFSR);
+	const int targetMethodValue = std::clamp(static_cast<int>(a_targetMethod), static_cast<int>(UpscaleMethod::kNONE), maxMethodValue);
+	UpscaleMethod targetMethod = static_cast<UpscaleMethod>(targetMethodValue);
+	if (GetOpenCompositeUpscalingBlocker().active) {
+		targetMethod = UpscaleMethod::kNONE;
+		settings.upscaleMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
+		settings.upscaleMethodNoDLSS = static_cast<uint32_t>(UpscaleMethod::kNONE);
 	}
+	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
 	const uint32_t dlssPreset = std::min(a_dlssPreset, kDLSSPresetMaxIndex);
 	const bool renderScaleQuality = IsRenderScaleQualityMode(qualityMode);
-	const bool targetRenderScaleMode = a_renderScaleModeEnabled && renderScaleQuality;
+	const auto previousMethod = GetUpscaleMethod();
+	const bool previousRenderScaleRelevant =
+		isVR &&
+		(IsRenderScaleModeRequested() ||
+		 GetPerfModeRequested() ||
+		 IsPerfModeActive() ||
+		 perfMode.HasRestartRequiredChange());
+	uint32_t* currentUpscaleMode = streamline.featureDLSS ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
+	*currentUpscaleMode = static_cast<uint32_t>(targetMethod);
+	if (targetMethod != UpscaleMethod::kDLSS)
+		pendingVRDLSSPreset.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
+
+	const bool targetMethodRenderScaleEligible = IsRenderScaleMethodEligible(targetMethod);
+	const bool targetRenderScaleMode = targetMethodRenderScaleEligible && a_renderScaleModeEnabled && renderScaleQuality;
+	const bool methodChanged = previousMethod != targetMethod;
+	const bool methodRelatchRequired =
+		isVR &&
+		methodChanged &&
+		(previousRenderScaleRelevant || targetRenderScaleMode);
+	const bool qualityTargetChanged = GetEffectiveUpscalingQualityMode() != qualityMode;
+	const bool renderScaleTargetChanged = isVR && IsRenderScaleModeRequested() != targetRenderScaleMode;
+	const bool qualityPending = pendingVRUpscalingQualityMode.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset;
+	const bool renderScaleModePending = pendingVRRenderScaleMode.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset;
+	const bool perfModeRequestPending = pendingVRPerfMode.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset;
+	const bool dlssPresetPending = pendingVRDLSSPreset.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset;
+	const bool dlssPresetChanged = targetMethod == UpscaleMethod::kDLSS && (settings.dlssPreset != dlssPreset || dlssPresetPending);
+	auto clearPendingTransitionTimingIfIdle = [&]() {
+		if (HasPendingVRUpscalingTransition())
+			return;
+
+		pendingVRUpscalingTransitionFrame.store(0, std::memory_order_release);
+		pendingVRUpscalingTransitionLongRelatchDelay.store(false, std::memory_order_release);
+	};
+
+	if (!isVR) {
+		bool settingsChanged = false;
+		if (settings.qualityMode != qualityMode || qualityPending) {
+			settingsChanged = settingsChanged || settings.qualityMode != qualityMode;
+			settings.qualityMode = qualityMode;
+		}
+		if (dlssPresetChanged) {
+			settings.dlssPreset = dlssPreset;
+			settingsChanged = true;
+		}
+		ClearPendingVRUpscalingTransition();
+		if (settingsChanged)
+			RequestHistoryReset();
+		return;
+	}
+
+	if (!methodChanged && !qualityTargetChanged && !renderScaleTargetChanged && dlssPresetChanged) {
+		settings.dlssPreset = dlssPreset;
+		pendingVRDLSSPreset.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
+		clearPendingTransitionTimingIfIdle();
+		RequestHistoryReset();
+		return;
+	}
+
 	const bool stageVRUpscalingChange =
-		renderScaleTransitionContext &&
-		ShouldStageVRRenderScaleTransition(targetRenderScaleMode, qualityMode);
+		((targetMethodRenderScaleEligible && ShouldStageVRRenderScaleTransition(targetRenderScaleMode, qualityMode)) ||
+		 methodRelatchRequired);
 	bool qualityChanged = false;
 	bool presetChanged = false;
 
 	if (stageVRUpscalingChange) {
 		bool queuedRenderScaleTransition = false;
-		if (GetEffectiveUpscalingQualityMode() != qualityMode) {
+		if (qualityTargetChanged) {
 			QueueVRUpscalingQualityMode(qualityMode);
 			queuedRenderScaleTransition = true;
-			presetChanged = true;
 		}
-		if (IsRenderScaleModeRequested() != targetRenderScaleMode) {
+		if (renderScaleTargetChanged) {
 			QueueVRRenderScaleModeRequest(targetRenderScaleMode);
 			queuedRenderScaleTransition = true;
 		}
-		if (upscaleMethod == UpscaleMethod::kDLSS && GetEffectiveDLSSPreset() != dlssPreset) {
+		if (targetMethod == UpscaleMethod::kDLSS && GetEffectiveDLSSPreset() != dlssPreset) {
 			QueueVRDLSSPreset(dlssPreset);
-			presetChanged = true;
 		}
 
 		const bool targetPerfMode = targetRenderScaleMode;
@@ -3430,7 +3439,7 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, u
 			(ClampToggleUInt(settings.perfMode) != requestedPerfMode ||
 			 IsPerfModeActive() != targetPerfMode ||
 			 perfMode.HasRestartRequiredChange());
-		if (perfModeNeedsApply) {
+		if (perfModeNeedsApply || methodRelatchRequired) {
 			QueueVRPerfModeRequest(targetPerfMode);
 			queuedRenderScaleTransition = true;
 		}
@@ -3438,7 +3447,7 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, u
 		if (queuedRenderScaleTransition && ShouldUseLongVRRenderScaleRelatchDelay(a_reason))
 			pendingVRUpscalingTransitionLongRelatchDelay.store(true, std::memory_order_release);
 
-		if (presetChanged || perfModeNeedsApply)
+		if (queuedRenderScaleTransition)
 			RequestHistoryReset();
 		return;
 	}
@@ -3446,12 +3455,18 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, u
 	const uint32_t requestedRenderScaleMode = targetRenderScaleMode ? 1u : 0u;
 	const bool renderScaleModeChanged = settings.renderScaleMode != requestedRenderScaleMode;
 	settings.renderScaleMode = requestedRenderScaleMode;
-	if (settings.qualityMode != qualityMode) {
+	if (renderScaleModeChanged || renderScaleModePending)
+		pendingVRRenderScaleMode.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
+
+	const bool qualitySettingChanged = settings.qualityMode != qualityMode;
+	if (qualitySettingChanged || qualityPending) {
 		settings.qualityMode = qualityMode;
-		qualityChanged = true;
-		presetChanged = true;
+		pendingVRUpscalingQualityMode.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
+		if (qualitySettingChanged) {
+			qualityChanged = true;
+			presetChanged = true;
+		}
 	}
-	const bool dlssPresetPending = pendingVRDLSSPreset.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset;
 	if (settings.dlssPreset != dlssPreset || dlssPresetPending) {
 		settings.dlssPreset = dlssPreset;
 		pendingVRDLSSPreset.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
@@ -3462,14 +3477,24 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, u
 		RequestHistoryReset();
 
 	const uint32_t requestedPerfMode = targetRenderScaleMode ? 1u : 0u;
+	if (perfModeRequestPending)
+		pendingVRPerfMode.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
+	clearPendingTransitionTimingIfIdle();
+
 	if (renderScaleModeChanged ||
 		qualityChanged ||
 		ClampToggleUInt(settings.perfMode) != requestedPerfMode ||
-		IsPerfModeActive() != targetRenderScaleMode) {
+		IsPerfModeActive() != targetRenderScaleMode ||
+		perfModeRequestPending) {
 		SetPerfModeRequested(targetRenderScaleMode, a_reason);
 	}
 	if (qualityChanged || renderScaleModeChanged)
 		RequestPerfModeRenderTargetRecreate(a_reason);
+}
+
+void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
+{
+	ApplyCSMenuUpscalingTransition(GetUpscaleMethod(), a_renderScaleModeEnabled, a_qualityMode, a_dlssPreset, a_reason);
 }
 
 bool Upscaling::IsPerfModePresentationActive() const

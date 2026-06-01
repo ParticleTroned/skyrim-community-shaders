@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cmath>
 #include <cfloat>
+#include <cstdint>
 #include <cwctype>
 #include <directx/d3dx12.h>
 #include <dxgi.h>
@@ -68,6 +69,27 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 
 namespace
 {
+	// Keep transition diagnostics behind one switch. They stay at info while the
+	// VR HAM/FOV and vendor-reset transition behavior is being captured; change
+	// VR_TRANSITION_DIAG_LOG_LEVEL to debug later to move all callsites together.
+#ifndef VR_TRANSITION_DIAG_ENABLED
+#define VR_TRANSITION_DIAG_ENABLED 1
+#endif
+#ifndef VR_TRANSITION_DIAG_LOG_LEVEL
+#define VR_TRANSITION_DIAG_LOG_LEVEL info
+#endif
+#if VR_TRANSITION_DIAG_ENABLED
+#define VR_TRANSITION_DIAG_LOG(...)                                      \
+	do {                                                                 \
+		if (globals::game::isVR)                                         \
+			logger::VR_TRANSITION_DIAG_LOG_LEVEL(__VA_ARGS__);           \
+	} while (false)
+#else
+#define VR_TRANSITION_DIAG_LOG(...) \
+	do {                            \
+	} while (false)
+#endif
+
 	template <class Fn>
 	struct ScopeExit
 	{
@@ -1500,6 +1522,557 @@ namespace
 		       IsRecentVRLoadingTransitionClose(state);
 	}
 
+	uint32_t RemainingFrames(uint32_t a_endFrame, uint32_t a_frame)
+	{
+		return a_endFrame > a_frame ? a_endFrame - a_frame : 0u;
+	}
+
+	uint32_t ElapsedFrames(uint32_t a_startFrame, uint32_t a_frame)
+	{
+		return a_startFrame != 0 && a_frame >= a_startFrame ? a_frame - a_startFrame : 0u;
+	}
+
+	const char* BoolText(bool a_value)
+	{
+		return a_value ? "yes" : "no";
+	}
+
+	template <class Fn>
+	bool LogVRTransitionDiagnosticOnce(bool& a_logged, Fn&& a_log)
+	{
+		if (a_logged)
+			return false;
+
+		std::forward<Fn>(a_log)();
+		a_logged = true;
+		return true;
+	}
+
+	enum class VRTransitionDiagnosticFlag : uint64_t
+	{
+		LoadingMenu = 1ull << 0,
+		LoadingTail = 1ull << 1,
+		CellTail = 1ull << 2,
+		SaveLoad = 1ull << 3,
+		RenderScaleRelevant = 1ull << 4,
+		RenderScaleGrace = 1ull << 5,
+		PendingVRTransition = 1ull << 6,
+		PendingVRRenderScaleTransition = 1ull << 7,
+		PendingRelatch = 1ull << 8,
+		RelatchInProgress = 1ull << 9,
+		RelatchDelaySafety = 1ull << 10,
+		RelatchVisualSafety = 1ull << 11,
+		RelatchSettling = 1ull << 12,
+		StretchFallback = 1ull << 13,
+		PendingDLSSReset = 1ull << 14,
+		PendingFSRReset = 1ull << 15,
+		PendingDLSSHistoryReset = 1ull << 16,
+		PostLoadReset = 1ull << 17,
+		HMDMaskDeferred = 1ull << 18,
+		ProjectedMaskDeferred = 1ull << 19,
+		FoveatedBypass = 1ull << 20,
+		FSRRuntimeDeferred = 1ull << 21,
+		VendorResetPending = 1ull << 22,
+		SubmitStageDeviceLost = 1ull << 23,
+		PerfModeActive = 1ull << 24,
+		PerfModeRequested = 1ull << 25,
+		RenderScaleRequested = 1ull << 26,
+		CellContext = 1ull << 27,
+	};
+
+	constexpr uint64_t FlagBit(VRTransitionDiagnosticFlag a_flag)
+	{
+		return static_cast<uint64_t>(a_flag);
+	}
+
+	void SetDiagnosticFlag(uint64_t& a_flags, VRTransitionDiagnosticFlag a_flag, bool a_value)
+	{
+		if (a_value)
+			a_flags |= FlagBit(a_flag);
+	}
+
+	bool HasDiagnosticFlag(uint64_t a_flags, VRTransitionDiagnosticFlag a_flag)
+	{
+		return (a_flags & FlagBit(a_flag)) != 0;
+	}
+
+	struct VRTransitionDiagnosticSnapshot
+	{
+		uint32_t frame = 0;
+		uint64_t flags = 0;
+		Upscaling::UpscaleMethod requestedMethod = Upscaling::UpscaleMethod::kNONE;
+		Upscaling::UpscaleMethod runtimeMethod = Upscaling::UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0;
+		uint32_t closeAge = 0;
+		uint32_t graceRemaining = 0;
+		uint32_t relatchAge = 0;
+		uint32_t relatchDelay = 0;
+		uint32_t safetyRemaining = 0;
+		uint32_t settleRemaining = 0;
+		uint32_t stretchRemaining = 0;
+		uint32_t stableFullEyeFrames = 0;
+		uint32_t screenWidth = 0;
+		uint32_t screenHeight = 0;
+	};
+
+	struct VRTransitionDiagnosticHistory
+	{
+		bool initialized = false;
+		bool interesting = false;
+		VRTransitionDiagnosticSnapshot last{};
+		uint32_t hmdMaskStartFrame = 0;
+		uint32_t projectedMaskStartFrame = 0;
+		uint32_t foveatedBypassStartFrame = 0;
+		uint32_t fsrRuntimeDeferStartFrame = 0;
+		uint32_t graceStartFrame = 0;
+		uint32_t relatchPendingStartFrame = 0;
+		uint32_t vendorResetStartFrame = 0;
+		const char* repeatCategory = nullptr;
+		uint64_t repeatSignature = 0;
+		uint32_t repeatCount = 0;
+		uint32_t repeatStartFrame = 0;
+		uint32_t repeatLastFrame = 0;
+		uint32_t repeatLastSummaryCount = 0;
+		uint32_t repeatLastSummaryFrame = 0;
+		VRTransitionDiagnosticSnapshot repeatLast{};
+	};
+
+	VRTransitionDiagnosticHistory g_vrTransitionDiagnostics;
+	constexpr uint32_t kVRTransitionRepeatSummaryCount = 20u;
+	constexpr uint32_t kVRTransitionRepeatSummaryFrames = 120u;
+
+	bool IsRelatchStretchFallbackDiagnosticActive(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		const uint32_t endFrame = g_vrRenderScaleRelatchStretchFallbackEndFrame.load(std::memory_order_acquire);
+		return endFrame != 0 && a_state->frameCount < endFrame;
+	}
+
+	bool IsRelatchSettlingDiagnosticActive(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		const uint32_t endFrame = g_vrRenderScaleRelatchSettleEndFrame.load(std::memory_order_acquire);
+		if (endFrame == 0)
+			return false;
+		if (IsRelatchStretchFallbackDiagnosticActive(a_state))
+			return true;
+		if (g_vrRenderScaleRelatchStableFullEyeFrameCount.load(std::memory_order_acquire) >= kVRRenderScaleRelatchStableFullEyeFrames)
+			return false;
+
+		return a_state->frameCount < endFrame;
+	}
+
+	VRTransitionDiagnosticSnapshot BuildVRTransitionDiagnosticSnapshot(const Upscaling& a_upscaling)
+	{
+		VRTransitionDiagnosticSnapshot snapshot{};
+		const auto* state = globals::state;
+		snapshot.frame = state ? state->frameCount : 0u;
+		snapshot.requestedMethod = a_upscaling.GetUpscaleMethod();
+		snapshot.runtimeMethod = a_upscaling.GetRuntimeUpscaleMethod();
+		snapshot.qualityMode = a_upscaling.GetRuntimeQualityMode();
+		if (state) {
+			snapshot.screenWidth = static_cast<uint32_t>(std::max(state->screenSize.x, 0.0f));
+			snapshot.screenHeight = static_cast<uint32_t>(std::max(state->screenSize.y, 0.0f));
+		}
+
+		const bool loadingMenu = IsLoadingMenuContextActive();
+		const bool loadingTail = IsLoadingTransitionTailActive(state);
+		const bool cellTail = IsCellTransitionTailActive(state);
+		const bool cellContext = IsCellTransitionContextActive(state);
+		const bool saveLoad = IsSaveLoadTransitionContextActive(state);
+		const bool renderScaleRelevant = IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, snapshot.requestedMethod);
+		const bool renderScaleGrace = IsVRRenderScaleTransitionGraceActive(a_upscaling, snapshot.requestedMethod, state);
+		const bool pendingVRTransition = a_upscaling.HasPendingVRUpscalingTransition();
+		const bool pendingRenderScaleTransition = a_upscaling.HasPendingVRRenderScaleTransition();
+		const bool pendingRelatch = a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
+		const bool relatchInProgress = a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+		const bool relatchDelaySafety = IsVRRenderScaleRelatchDelaySafetyActive(a_upscaling, state);
+		const bool relatchVisualSafety = IsVRRenderScaleRelatchVisualSafetyActive(a_upscaling, state);
+		const bool relatchSettling = IsRelatchSettlingDiagnosticActive(state);
+		const bool stretchFallback = IsRelatchStretchFallbackDiagnosticActive(state);
+		const bool pendingDLSSReset = a_upscaling.pendingDLSSReset.load(std::memory_order_acquire);
+		const bool pendingFSRReset = a_upscaling.pendingFSRReset.load(std::memory_order_acquire);
+		const bool pendingDLSSHistoryReset = a_upscaling.pendingDLSSHistoryReset.load(std::memory_order_acquire);
+		const bool postLoadReset = a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire);
+		const bool foveatedBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(a_upscaling, state);
+		const bool hmdMaskDeferred = ShouldDeferVRTransitionMaskRepair(a_upscaling, state);
+		const bool projectedMaskDeferred = ShouldDeferVRProjectedMaskRepair(a_upscaling, state);
+		const bool fsrRuntimeDeferred = ShouldDeferVRFSRRuntimeForRenderScaleReset(a_upscaling, snapshot.runtimeMethod);
+		const bool vendorResetPending = HasPendingVRVendorRuntimeReset(a_upscaling, snapshot.runtimeMethod);
+
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingMenu, loadingMenu);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingTail, loadingTail);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::CellTail, cellTail);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::CellContext, cellContext);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::SaveLoad, saveLoad);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRelevant, renderScaleRelevant);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleGrace, renderScaleGrace);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingVRTransition, pendingVRTransition);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingVRRenderScaleTransition, pendingRenderScaleTransition);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingRelatch, pendingRelatch);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchInProgress, relatchInProgress);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchDelaySafety, relatchDelaySafety);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchVisualSafety, relatchVisualSafety);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchSettling, relatchSettling);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::StretchFallback, stretchFallback);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingDLSSReset, pendingDLSSReset);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingFSRReset, pendingFSRReset);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingDLSSHistoryReset, pendingDLSSHistoryReset);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PostLoadReset, postLoadReset);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::HMDMaskDeferred, hmdMaskDeferred);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::ProjectedMaskDeferred, projectedMaskDeferred);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::FoveatedBypass, foveatedBypass);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::FSRRuntimeDeferred, fsrRuntimeDeferred);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VendorResetPending, vendorResetPending);
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::SubmitStageDeviceLost, a_upscaling.IsSubmitStageDeviceLost());
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeActive, a_upscaling.IsPerfModeActive());
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeRequested, a_upscaling.GetPerfModeRequested());
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRequested, a_upscaling.IsRenderScaleModeRequested());
+
+		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		snapshot.closeAge = closeFrame != 0 ? ElapsedFrames(closeFrame, snapshot.frame) : 0u;
+		snapshot.graceRemaining = GetVRRenderScaleTransitionGraceDelayFrames(a_upscaling, snapshot.requestedMethod, state);
+		const uint32_t relatchFrame = a_upscaling.pendingPerfModeRenderTargetRecreateFrame.load(std::memory_order_acquire);
+		snapshot.relatchAge = relatchFrame != 0 ? ElapsedFrames(relatchFrame, snapshot.frame) : 0u;
+		snapshot.relatchDelay = a_upscaling.pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
+		snapshot.safetyRemaining = RemainingFrames(a_upscaling.pendingPerfModeRenderTargetRecreateSafetyEndFrame.load(std::memory_order_acquire), snapshot.frame);
+		snapshot.settleRemaining = RemainingFrames(g_vrRenderScaleRelatchSettleEndFrame.load(std::memory_order_acquire), snapshot.frame);
+		snapshot.stretchRemaining = RemainingFrames(g_vrRenderScaleRelatchStretchFallbackEndFrame.load(std::memory_order_acquire), snapshot.frame);
+		snapshot.stableFullEyeFrames = g_vrRenderScaleRelatchStableFullEyeFrameCount.load(std::memory_order_acquire);
+		return snapshot;
+	}
+
+	bool IsVRTransitionSnapshotInteresting(const VRTransitionDiagnosticSnapshot& a_snapshot)
+	{
+		constexpr uint64_t interestingFlags =
+			FlagBit(VRTransitionDiagnosticFlag::LoadingMenu) |
+			FlagBit(VRTransitionDiagnosticFlag::LoadingTail) |
+			FlagBit(VRTransitionDiagnosticFlag::CellTail) |
+			FlagBit(VRTransitionDiagnosticFlag::CellContext) |
+			FlagBit(VRTransitionDiagnosticFlag::SaveLoad) |
+			FlagBit(VRTransitionDiagnosticFlag::RenderScaleGrace) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingVRTransition) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingVRRenderScaleTransition) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingRelatch) |
+			FlagBit(VRTransitionDiagnosticFlag::RelatchInProgress) |
+			FlagBit(VRTransitionDiagnosticFlag::RelatchDelaySafety) |
+			FlagBit(VRTransitionDiagnosticFlag::RelatchVisualSafety) |
+			FlagBit(VRTransitionDiagnosticFlag::RelatchSettling) |
+			FlagBit(VRTransitionDiagnosticFlag::StretchFallback) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingDLSSReset) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingFSRReset) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingDLSSHistoryReset) |
+			FlagBit(VRTransitionDiagnosticFlag::PostLoadReset) |
+			FlagBit(VRTransitionDiagnosticFlag::HMDMaskDeferred) |
+			FlagBit(VRTransitionDiagnosticFlag::ProjectedMaskDeferred) |
+			FlagBit(VRTransitionDiagnosticFlag::FoveatedBypass) |
+			FlagBit(VRTransitionDiagnosticFlag::FSRRuntimeDeferred) |
+			FlagBit(VRTransitionDiagnosticFlag::VendorResetPending) |
+			FlagBit(VRTransitionDiagnosticFlag::SubmitStageDeviceLost);
+
+		return (a_snapshot.flags & interestingFlags) != 0;
+	}
+
+	const char* GetVRTransitionRepeatCategory(const char* a_event)
+	{
+		if (!a_event || !*a_event)
+			return nullptr;
+
+		const std::string_view event(a_event);
+		if (event.find("vendor runtime reset deferred") != std::string_view::npos)
+			return "vendor runtime reset deferred";
+		if (event.find("vendor teardown deferred") != std::string_view::npos)
+			return "vendor teardown deferred";
+		if (event.find("render-target relatch deferred") != std::string_view::npos)
+			return "render-target relatch deferred";
+		if (event.find("vendor runtime reset waiting") != std::string_view::npos)
+			return "vendor runtime reset waiting";
+		if (event.find("skipped FSR full-frame dispatch") != std::string_view::npos)
+			return "skipped FSR full-frame dispatch";
+
+		return nullptr;
+	}
+
+	uint64_t MixVRTransitionDiagnosticValue(uint64_t a_seed, uint64_t a_value)
+	{
+		return a_seed ^ (a_value + 0x9e3779b97f4a7c15ull + (a_seed << 6) + (a_seed >> 2));
+	}
+
+	uint64_t GetVRTransitionRepeatSignature(const VRTransitionDiagnosticSnapshot& a_snapshot)
+	{
+		constexpr uint64_t volatileFlags =
+			FlagBit(VRTransitionDiagnosticFlag::PendingDLSSReset) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingFSRReset) |
+			FlagBit(VRTransitionDiagnosticFlag::PendingDLSSHistoryReset) |
+			FlagBit(VRTransitionDiagnosticFlag::VendorResetPending);
+
+		uint64_t signature = a_snapshot.flags & ~volatileFlags;
+		signature = MixVRTransitionDiagnosticValue(signature, static_cast<uint64_t>(a_snapshot.requestedMethod));
+		signature = MixVRTransitionDiagnosticValue(signature, static_cast<uint64_t>(a_snapshot.runtimeMethod));
+		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.qualityMode);
+		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.screenWidth);
+		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.screenHeight);
+		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.relatchDelay);
+		return signature;
+	}
+
+	void ResetVRTransitionRepeatSummary(VRTransitionDiagnosticHistory& a_history)
+	{
+		a_history.repeatCategory = nullptr;
+		a_history.repeatSignature = 0;
+		a_history.repeatCount = 0;
+		a_history.repeatStartFrame = 0;
+		a_history.repeatLastFrame = 0;
+		a_history.repeatLastSummaryCount = 0;
+		a_history.repeatLastSummaryFrame = 0;
+		a_history.repeatLast = {};
+	}
+
+	void LogVRTransitionRepeatSummary(VRTransitionDiagnosticHistory& a_history, bool a_final)
+	{
+		if (!a_history.repeatCategory || a_history.repeatCount <= a_history.repeatLastSummaryCount)
+			return;
+
+		const uint32_t repeatedSinceSummary = a_history.repeatCount - a_history.repeatLastSummaryCount;
+		if (repeatedSinceSummary == 0)
+			return;
+
+		const auto& snapshot = a_history.repeatLast;
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] {} {}: {} additional occurrences over {} frames (total={}, lastFrame={}, req={}, runtime={}, quality={}, renderScaleRelevant={}, relatchPending={}, relatchInProgress={}, relatchAge={}/{}, graceRemaining={}, settling={}, stretch={}, vendorPending={}, pendingReset(DLSS={},FSR={},DLSSHistory={}), submitDeviceLost={})",
+			a_history.repeatCategory,
+			a_final ? "summary" : "still repeating",
+			repeatedSinceSummary,
+			ElapsedFrames(a_history.repeatStartFrame, a_history.repeatLastFrame),
+			a_history.repeatCount,
+			snapshot.frame,
+			magic_enum::enum_name(snapshot.requestedMethod),
+			magic_enum::enum_name(snapshot.runtimeMethod),
+			snapshot.qualityMode,
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRelevant)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingRelatch)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchInProgress)),
+			snapshot.relatchAge,
+			snapshot.relatchDelay,
+			snapshot.graceRemaining,
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchSettling)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::StretchFallback)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VendorResetPending)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingDLSSReset)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingFSRReset)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingDLSSHistoryReset)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::SubmitStageDeviceLost)));
+		a_history.repeatLastSummaryCount = a_history.repeatCount;
+		a_history.repeatLastSummaryFrame = a_history.repeatLastFrame;
+	}
+
+	bool ShouldSuppressVRTransitionRepeatSnapshot(
+		VRTransitionDiagnosticHistory& a_history,
+		const char* a_repeatCategory,
+		const VRTransitionDiagnosticSnapshot& a_snapshot)
+	{
+		const uint64_t signature = GetVRTransitionRepeatSignature(a_snapshot);
+		if (a_history.repeatCategory != a_repeatCategory || a_history.repeatSignature != signature) {
+			LogVRTransitionRepeatSummary(a_history, true);
+			ResetVRTransitionRepeatSummary(a_history);
+			a_history.repeatCategory = a_repeatCategory;
+			a_history.repeatSignature = signature;
+			a_history.repeatCount = 1;
+			a_history.repeatStartFrame = std::max(a_snapshot.frame, 1u);
+			a_history.repeatLastFrame = a_snapshot.frame;
+			a_history.repeatLastSummaryCount = 1;
+			a_history.repeatLastSummaryFrame = a_snapshot.frame;
+			a_history.repeatLast = a_snapshot;
+			return false;
+		}
+
+		++a_history.repeatCount;
+		a_history.repeatLastFrame = a_snapshot.frame;
+		a_history.repeatLast = a_snapshot;
+		if (a_history.repeatCount - a_history.repeatLastSummaryCount >= kVRTransitionRepeatSummaryCount ||
+			ElapsedFrames(a_history.repeatLastSummaryFrame, a_snapshot.frame) >= kVRTransitionRepeatSummaryFrames) {
+			LogVRTransitionRepeatSummary(a_history, false);
+		}
+		return true;
+	}
+
+	void LogVRTransitionGuardChange(
+		const char* a_name,
+		VRTransitionDiagnosticFlag a_flag,
+		const VRTransitionDiagnosticSnapshot& a_snapshot,
+		bool a_previousActive,
+		uint32_t& a_startFrame)
+	{
+		const bool active = HasDiagnosticFlag(a_snapshot.flags, a_flag);
+		if (active == a_previousActive)
+			return;
+
+		if (active) {
+			a_startFrame = std::max(a_snapshot.frame, 1u);
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] {} entered at frame {} (req={}, runtime={}, closeAge={}, graceRemaining={}, relatchAge={}/{}, settleRemaining={}, stretchRemaining={})",
+				a_name,
+				a_snapshot.frame,
+				magic_enum::enum_name(a_snapshot.requestedMethod),
+				magic_enum::enum_name(a_snapshot.runtimeMethod),
+				a_snapshot.closeAge,
+				a_snapshot.graceRemaining,
+				a_snapshot.relatchAge,
+				a_snapshot.relatchDelay,
+				a_snapshot.settleRemaining,
+				a_snapshot.stretchRemaining);
+			return;
+		}
+
+		const uint32_t duration = a_startFrame != 0 ? ElapsedFrames(a_startFrame, a_snapshot.frame) : 0u;
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] {} exited at frame {} after {} frames (req={}, runtime={}, stableFullEyeFrames={})",
+			a_name,
+			a_snapshot.frame,
+			duration,
+			magic_enum::enum_name(a_snapshot.requestedMethod),
+			magic_enum::enum_name(a_snapshot.runtimeMethod),
+			a_snapshot.stableFullEyeFrames);
+		a_startFrame = 0;
+	}
+
+	void LogVRTransitionDiagnostics(const Upscaling& a_upscaling, const char* a_event = nullptr, bool a_force = false)
+	{
+#if !VR_TRANSITION_DIAG_ENABLED
+		(void)a_upscaling;
+		(void)a_event;
+		(void)a_force;
+		return;
+#else
+		if (!globals::game::isVR)
+			return;
+
+		const auto snapshot = BuildVRTransitionDiagnosticSnapshot(a_upscaling);
+		const bool interesting = IsVRTransitionSnapshotInteresting(snapshot);
+		auto& history = g_vrTransitionDiagnostics;
+		const bool stateChanged =
+			!history.initialized ||
+			history.last.flags != snapshot.flags ||
+			history.last.requestedMethod != snapshot.requestedMethod ||
+			history.last.runtimeMethod != snapshot.runtimeMethod ||
+			history.last.qualityMode != snapshot.qualityMode ||
+			history.last.screenWidth != snapshot.screenWidth ||
+			history.last.screenHeight != snapshot.screenHeight;
+		const bool shouldLog = a_force || stateChanged || (history.interesting && !interesting);
+		const char* repeatCategory = GetVRTransitionRepeatCategory(a_event);
+		if (!shouldLog && !interesting && !repeatCategory)
+			return;
+
+		const auto previousFlags = history.initialized ? history.last.flags : 0u;
+		LogVRTransitionGuardChange(
+			"HAM/HMD mask clear guard",
+			VRTransitionDiagnosticFlag::HMDMaskDeferred,
+			snapshot,
+			HasDiagnosticFlag(previousFlags, VRTransitionDiagnosticFlag::HMDMaskDeferred),
+			history.hmdMaskStartFrame);
+		LogVRTransitionGuardChange(
+			"Projected HAM/FOV mask repair guard",
+			VRTransitionDiagnosticFlag::ProjectedMaskDeferred,
+			snapshot,
+			HasDiagnosticFlag(previousFlags, VRTransitionDiagnosticFlag::ProjectedMaskDeferred),
+			history.projectedMaskStartFrame);
+		LogVRTransitionGuardChange(
+			"FOV foveated vendor bypass",
+			VRTransitionDiagnosticFlag::FoveatedBypass,
+			snapshot,
+			HasDiagnosticFlag(previousFlags, VRTransitionDiagnosticFlag::FoveatedBypass),
+			history.foveatedBypassStartFrame);
+		LogVRTransitionGuardChange(
+			"FSR runtime defer guard",
+			VRTransitionDiagnosticFlag::FSRRuntimeDeferred,
+			snapshot,
+			HasDiagnosticFlag(previousFlags, VRTransitionDiagnosticFlag::FSRRuntimeDeferred),
+			history.fsrRuntimeDeferStartFrame);
+		LogVRTransitionGuardChange(
+			"Render-scale transition grace",
+			VRTransitionDiagnosticFlag::RenderScaleGrace,
+			snapshot,
+			HasDiagnosticFlag(previousFlags, VRTransitionDiagnosticFlag::RenderScaleGrace),
+			history.graceStartFrame);
+		LogVRTransitionGuardChange(
+			"Render-target relatch pending",
+			VRTransitionDiagnosticFlag::PendingRelatch,
+			snapshot,
+			HasDiagnosticFlag(previousFlags, VRTransitionDiagnosticFlag::PendingRelatch),
+			history.relatchPendingStartFrame);
+		LogVRTransitionGuardChange(
+			"Vendor runtime reset pending",
+			VRTransitionDiagnosticFlag::VendorResetPending,
+			snapshot,
+			HasDiagnosticFlag(previousFlags, VRTransitionDiagnosticFlag::VendorResetPending),
+			history.vendorResetStartFrame);
+
+		bool suppressSnapshot = false;
+		bool logSnapshot = shouldLog;
+		if (repeatCategory) {
+			suppressSnapshot = ShouldSuppressVRTransitionRepeatSnapshot(history, repeatCategory, snapshot);
+			logSnapshot = logSnapshot || !suppressSnapshot;
+		} else if (logSnapshot) {
+			LogVRTransitionRepeatSummary(history, true);
+			ResetVRTransitionRepeatSummary(history);
+		}
+
+		if (logSnapshot && !suppressSnapshot) {
+			const char* event = a_event && *a_event ? a_event : (stateChanged ? "state changed" : "state stable");
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] {} frame={} req={} runtime={} quality={} screen={}x{} renderScaleRelevant={} renderScaleRequested={} perfRequested={} perfActive={} loadingMenu={} loadingTail={} cellTail={} cellContext={} saveLoad={} closeAge={} graceRemaining={} pendingVR={} pendingRenderScale={} relatchPending={} relatchInProgress={} relatchAge={}/{} safetyRemaining={} settling={} settleRemaining={} stretch={} stretchRemaining={} hmdDefer={} projectedDefer={} foveatedBypass={} fsrRuntimeDefer={} vendorPending={} pendingReset(DLSS={},FSR={},DLSSHistory={}) postLoadReset={} submitDeviceLost={} stableFullEyeFrames={}",
+				event,
+				snapshot.frame,
+				magic_enum::enum_name(snapshot.requestedMethod),
+				magic_enum::enum_name(snapshot.runtimeMethod),
+				snapshot.qualityMode,
+				snapshot.screenWidth,
+				snapshot.screenHeight,
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRelevant)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRequested)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeRequested)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeActive)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingMenu)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingTail)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::CellTail)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::CellContext)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::SaveLoad)),
+				snapshot.closeAge,
+				snapshot.graceRemaining,
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingVRTransition)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingVRRenderScaleTransition)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingRelatch)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchInProgress)),
+				snapshot.relatchAge,
+				snapshot.relatchDelay,
+				snapshot.safetyRemaining,
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RelatchSettling)),
+				snapshot.settleRemaining,
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::StretchFallback)),
+				snapshot.stretchRemaining,
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::HMDMaskDeferred)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::ProjectedMaskDeferred)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::FoveatedBypass)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::FSRRuntimeDeferred)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VendorResetPending)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingDLSSReset)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingFSRReset)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingDLSSHistoryReset)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PostLoadReset)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::SubmitStageDeviceLost)),
+				snapshot.stableFullEyeFrames);
+		}
+
+		history.last = snapshot;
+		history.interesting = interesting;
+		history.initialized = true;
+#endif
+	}
+
 	void QueueVendorRuntimeResetAfterLoadingMenu(Upscaling& a_upscaling)
 	{
 		const auto upscaleMethod = a_upscaling.GetRuntimeUpscaleMethod();
@@ -1519,6 +2092,7 @@ namespace
 			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
 			a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
 		}
+		LogVRTransitionDiagnostics(a_upscaling, "queued vendor reset after loading menu", true);
 	}
 
 	bool IsMainMenuContextActive()
@@ -3115,6 +3689,10 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				currentFrame + kVRSaveLoadTransitionTailFrames,
 				std::memory_order_release);
 		}
+		LogVRTransitionDiagnostics(
+			globals::features::upscaling,
+			a_event->opening ? "loading menu opened" : "loading menu closed",
+			true);
 		if (!a_event->opening) {
 			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
 		}
@@ -4003,6 +4581,8 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 	if (!wasPending || relatchDelayFrames > previousRelatchDelay)
 		MarkPerfModeRenderTargetRecreateQueued(relatchDelayFrames);
 	RequestHistoryReset();
+	if (!wasPending || relatchDelayFrames > previousRelatchDelay)
+		LogVRTransitionDiagnostics(*this, "queued render-target relatch", true);
 	if (wasPending)
 		return;
 
@@ -4073,39 +4653,74 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		MarkPerfModeRenderTargetRecreateQueued(retryDelayFrames, false);
 	};
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
+	const auto relatchUpscaleMethod = GetUpscaleMethod();
+
+	static bool loggedRelatchApplyDiagnostic = false;
+	static bool loggedRelatchBeginTeardownDiagnostic = false;
+	static bool loggedRelatchVendorDeferDiagnostic = false;
+	static bool loggedRelatchD3DDeferDiagnostic = false;
+	static UpscaleMethod lastRelatchDiagnosticMethod = UpscaleMethod::kNONE;
+	const auto clearRelatchRetryDiagnostics = [&]() {
+		loggedRelatchApplyDiagnostic = false;
+		loggedRelatchBeginTeardownDiagnostic = false;
+		loggedRelatchVendorDeferDiagnostic = false;
+		loggedRelatchD3DDeferDiagnostic = false;
+	};
+	if (lastRelatchDiagnosticMethod != relatchUpscaleMethod) {
+		clearRelatchRetryDiagnostics();
+		lastRelatchDiagnosticMethod = relatchUpscaleMethod;
+	}
 
 	logger::info(
 		"[PerfMode] Applying render-target relatch{}{}",
 		a_caller && *a_caller ? " from " : "",
 		a_caller && *a_caller ? a_caller : "");
+	const bool forceApplyDiagnostic = !loggedRelatchApplyDiagnostic;
+	loggedRelatchApplyDiagnostic = true;
+	LogVRTransitionDiagnostics(*this, "applying render-target relatch", forceApplyDiagnostic);
 
 	try {
-		const auto relatchUpscaleMethod = GetUpscaleMethod();
 		const bool wasRenderScaleActive = IsPerfModeActive();
 
+		LogVRTransitionDiagnosticOnce(loggedRelatchBeginTeardownDiagnostic, [&]() {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: begin vendor teardown before D3D render-target recreate (method={})", magic_enum::enum_name(relatchUpscaleMethod));
+		});
 		if (!ResetVRVendorRuntimeResources(true, true)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
+				clearRelatchRetryDiagnostics();
 				return false;
 			}
 
 			requeueRelatch();
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
 				pendingDLSSReset.store(true, std::memory_order_release);
-			logger::warn("[PerfMode] Render-target relatch deferred because vendor resources are still in use.");
+			const bool loggedVendorDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchVendorDeferDiagnostic, [&]() {
+				logger::warn("[PerfMode] Render-target relatch deferred because vendor resources are still in use.");
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch deferred: vendor resources are still in use");
+			});
+			LogVRTransitionDiagnostics(*this, "render-target relatch deferred: vendor resources still in use", loggedVendorDeferDiagnostic);
 			return false;
 		}
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: vendor teardown complete before D3D render-target recreate");
 
 		perfMode.ResetBootLatch();
 		perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 		perfMode.EnsureBootLatch(settings, relatchUpscaleMethod, true);
 
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: calling D3D render-target recreate");
 		if (!Hooks::RecreateRenderTargets()) {
 			requeueRelatch();
-			logger::warn("[PerfMode] Render-target relatch could not run; will retry.");
+			const bool loggedD3DDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchD3DDeferDiagnostic, [&]() {
+				logger::warn("[PerfMode] Render-target relatch could not run; will retry.");
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch deferred: D3D render-target recreate will retry");
+			});
+			LogVRTransitionDiagnostics(*this, "render-target relatch deferred: D3D recreate retry", loggedD3DDeferDiagnostic);
 			return false;
 		}
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: D3D render-target recreate complete");
 
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: recreating vendor/common resources for {}", magic_enum::enum_name(relatchUpscaleMethod));
 		RecreateVendorRuntimeResources(relatchUpscaleMethod, relatchUpscaleMethod != UpscaleMethod::kFSR);
 
 		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
@@ -4131,6 +4746,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch();
 		} else {
 			clearRelatchDelay();
+			clearRelatchRetryDiagnostics();
 		}
 		logger::error("[PerfMode] Render-target relatch failed: {}", e.what());
 		return false;
@@ -4139,13 +4755,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch();
 		} else {
 			clearRelatchDelay();
+			clearRelatchRetryDiagnostics();
 		}
 		logger::error("[PerfMode] Render-target relatch failed with an unknown exception");
 		return false;
 	}
 
 	clearRelatchDelay();
+	clearRelatchRetryDiagnostics();
 	logger::info("[PerfMode] Applied render-target relatch");
+	LogVRTransitionDiagnostics(*this, "applied render-target relatch", true);
 	return true;
 }
 
@@ -4192,18 +4811,62 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	if (!globals::game::isVR)
 		return true;
 
+	static bool loggedVendorTeardownRequestDiagnostic = false;
+	static bool loggedVendorTeardownFSRWaitDiagnostic = false;
+	static bool loggedVendorTeardownSubmitWaitDiagnostic = false;
+	static bool loggedVendorTeardownSubmitResetDiagnostic = false;
+	static bool hasVendorTeardownRequestSignature = false;
+	static bool lastVendorTeardownDestroyDLSS = false;
+	static bool lastVendorTeardownDestroyPeriphery = false;
+	const auto clearVendorTeardownRetryDiagnostics = [&]() {
+		loggedVendorTeardownRequestDiagnostic = false;
+		loggedVendorTeardownFSRWaitDiagnostic = false;
+		loggedVendorTeardownSubmitWaitDiagnostic = false;
+		loggedVendorTeardownSubmitResetDiagnostic = false;
+	};
+	if (!hasVendorTeardownRequestSignature ||
+		lastVendorTeardownDestroyDLSS != a_destroyDLSSResources ||
+		lastVendorTeardownDestroyPeriphery != a_destroyPeripheryTAAResources) {
+		clearVendorTeardownRetryDiagnostics();
+		hasVendorTeardownRequestSignature = true;
+		lastVendorTeardownDestroyDLSS = a_destroyDLSSResources;
+		lastVendorTeardownDestroyPeriphery = a_destroyPeripheryTAAResources;
+	}
+
+	const bool loggedRequestDiagnostic = LogVRTransitionDiagnosticOnce(loggedVendorTeardownRequestDiagnostic, [&]() {
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] Vendor teardown requested: destroyDLSS={}, destroyPeripheryTAA={}, pendingReset(DLSS={}, FSR={})",
+			BoolText(a_destroyDLSSResources),
+			BoolText(a_destroyPeripheryTAAResources),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)));
+	});
+	LogVRTransitionDiagnostics(*this, "vendor teardown requested", loggedRequestDiagnostic);
+
 	if (!fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
 		pendingFSRReset.store(true, std::memory_order_release);
+		const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedVendorTeardownFSRWaitDiagnostic, [&]() {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown deferred: FSR resources are not idle yet");
+		});
+		LogVRTransitionDiagnostics(*this, "vendor teardown deferred: FSR not idle", loggedDeferralDiagnostic);
 		return false;
 	}
 
+	LogVRTransitionDiagnosticOnce(loggedVendorTeardownSubmitResetDiagnostic, [&]() {
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown step: FSR teardown poll ready; resetting submit-stage state");
+	});
 	const bool submitStageReset = ResetVRSubmitStageState(a_destroyDLSSResources);
 	if (!submitStageReset) {
 		if (a_destroyDLSSResources)
 			pendingDLSSReset.store(true, std::memory_order_release);
+		const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedVendorTeardownSubmitWaitDiagnostic, [&]() {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown deferred: submit-stage DLSS resources are not idle yet");
+		});
+		LogVRTransitionDiagnostics(*this, "vendor teardown deferred: submit-stage reset not ready", loggedDeferralDiagnostic);
 		return false;
 	}
 
+	VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown step: destroying FSR/common/periphery resources after idle poll");
 	fidelityFX.DestroyFSRResources(false);
 	DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
@@ -4211,6 +4874,8 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	DisableAAVRSState();
 	aaVrsController.ReleaseResources();
 	ResetAAVRSTelemetry();
+	VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown complete");
+	clearVendorTeardownRetryDiagnostics();
 	return true;
 }
 
@@ -4219,15 +4884,36 @@ void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bo
 	if (!IsVendorUpscalingMethod(a_upscaleMethod))
 		return;
 
+	VR_TRANSITION_DIAG_LOG(
+		"[VRTransition] Recreating vendor resources: method={}, recreateTemporal={}",
+		magic_enum::enum_name(a_upscaleMethod),
+		BoolText(a_recreateTemporalResources));
 	CreateUpscalingTextureResources(a_upscaleMethod);
 	if (a_recreateTemporalResources && a_upscaleMethod == UpscaleMethod::kFSR)
 		fidelityFX.CreateFSRResources();
+	LogVRTransitionDiagnostics(*this, "recreated vendor resources", true);
 }
 
 bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context)
 {
 	if (!globals::game::isVR)
 		return true;
+
+	static bool loggedVendorResetApplyDiagnostic = false;
+	static bool loggedInactiveFSRResetDeferralDiagnostic = false;
+	static bool loggedInactiveDLSSResetDeferralDiagnostic = false;
+	static bool loggedDLSSRebuildDeferralDiagnostic = false;
+	static bool loggedFSRRebuildDeferralDiagnostic = false;
+	static bool hasVendorResetRequestSignature = false;
+	static UpscaleMethod lastVendorResetMethod = UpscaleMethod::kNONE;
+	static std::string lastVendorResetContext;
+	const auto clearVendorResetRetryDiagnostics = [&]() {
+		loggedVendorResetApplyDiagnostic = false;
+		loggedInactiveFSRResetDeferralDiagnostic = false;
+		loggedInactiveDLSSResetDeferralDiagnostic = false;
+		loggedDLSSRebuildDeferralDiagnostic = false;
+		loggedFSRRebuildDeferralDiagnostic = false;
+	};
 
 	const bool dlssResetPending = pendingDLSSReset.load(std::memory_order_acquire);
 	const bool fsrResetPending = pendingFSRReset.load(std::memory_order_acquire);
@@ -4241,17 +4927,40 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 		includeInactiveVendorReset &&
 		((currentMethodDLSS && fsrResetPending) ||
 		 (currentMethodFSR && dlssResetPending));
-	if (!activeResetPending && !inactiveResetPending)
+	if (!activeResetPending && !inactiveResetPending) {
+		clearVendorResetRetryDiagnostics();
 		return true;
+	}
 
 	if (IsUpscalingLoadTransitionContextActive(*this)) {
+		LogVRTransitionDiagnostics(*this, "vendor runtime reset waiting: load/transition context");
 		return true;
 	}
 	if (IsVRRenderScaleTransitionGraceActive(*this, a_upscaleMethod, globals::state)) {
+		LogVRTransitionDiagnostics(*this, "vendor runtime reset waiting: render-scale grace");
 		return true;
 	}
 
-	const char* context = a_context ? a_context : "";
+	const std::string_view context = a_context ? std::string_view(a_context) : std::string_view{};
+	if (!hasVendorResetRequestSignature ||
+		lastVendorResetMethod != a_upscaleMethod ||
+		lastVendorResetContext != context) {
+		clearVendorResetRetryDiagnostics();
+		hasVendorResetRequestSignature = true;
+		lastVendorResetMethod = a_upscaleMethod;
+		lastVendorResetContext = std::string(context);
+	}
+	const bool loggedApplyDiagnostic = LogVRTransitionDiagnosticOnce(loggedVendorResetApplyDiagnostic, [&]() {
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] Applying {}vendor runtime reset: method={}, activePending={}, inactivePending={}, pendingReset(DLSS={}, FSR={})",
+			context,
+			magic_enum::enum_name(a_upscaleMethod),
+			BoolText(activeResetPending),
+			BoolText(inactiveResetPending),
+			BoolText(dlssResetPending),
+			BoolText(fsrResetPending));
+	});
+	LogVRTransitionDiagnostics(*this, "applying vendor runtime reset", loggedApplyDiagnostic);
 	bool retireDLSS = false;
 	bool retireFSR = false;
 	bool rebuildDLSS = false;
@@ -4262,10 +4971,13 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 	try {
 		retireFSR = includeInactiveVendorReset && !currentMethodFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed);
 		if (retireFSR) {
-			logger::debug("[Upscaling] Retiring {}inactive FSR resources before {} runtime reset", context, magic_enum::enum_name(a_upscaleMethod));
 			if (!fidelityFX.PollFSRResourceTeardownReady("inactive FSR resource teardown before vendor runtime reset")) {
 				pendingFSRReset.store(true, std::memory_order_release);
 				retireFSR = false;
+				const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedInactiveFSRResetDeferralDiagnostic, [&]() {
+					VR_TRANSITION_DIAG_LOG("[VRTransition] Deferred {}runtime reset: inactive FSR resources are still in use", context);
+				});
+				LogVRTransitionDiagnostics(*this, "vendor runtime reset deferred: inactive FSR not idle", loggedDeferralDiagnostic);
 				LogWarnOnceFmt(
 					loggedVendorResetDeferral,
 					"[Upscaling] Deferred {}runtime reset because inactive FidelityFX resources are still in use",
@@ -4275,16 +4987,20 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			UnbindUpscalingResources();
 			fidelityFX.DestroyFSRResources(false);
 			RequestHistoryReset();
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Retired {}inactive FSR resources before runtime reset", context);
 			retireFSR = false;
 		}
 
 		retireDLSS = includeInactiveVendorReset && !currentMethodDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed);
 		if (retireDLSS) {
-			logger::debug("[Upscaling] Retiring {}inactive DLSS resources before {} runtime reset", context, magic_enum::enum_name(a_upscaleMethod));
 			UnbindUpscalingResources();
 			if (!streamline.DestroyDLSSResources()) {
 				if (!MarkSubmitStageDeviceLostIfDeviceRemoved("inactive DLSS resource teardown before vendor runtime reset")) {
 					pendingDLSSReset.store(true, std::memory_order_release);
+					const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedInactiveDLSSResetDeferralDiagnostic, [&]() {
+						VR_TRANSITION_DIAG_LOG("[VRTransition] Deferred {}runtime reset: inactive DLSS resources are still in use", context);
+					});
+					LogVRTransitionDiagnostics(*this, "vendor runtime reset deferred: inactive DLSS not idle", loggedDeferralDiagnostic);
 					LogWarnOnceFmt(
 						loggedVendorResetDeferral,
 						"[Upscaling] Deferred {}runtime reset because inactive Streamline resources are still in use",
@@ -4295,20 +5011,26 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			}
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
 			RequestHistoryReset();
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Retired {}inactive DLSS resources before runtime reset", context);
 			retireDLSS = false;
 		}
 
 		rebuildDLSS = currentMethodDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed);
 		rebuildFSR = currentMethodFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed);
-		if (!rebuildDLSS && !rebuildFSR)
+		if (!rebuildDLSS && !rebuildFSR) {
+			clearVendorResetRetryDiagnostics();
 			return true;
+		}
 
 		if (rebuildDLSS) {
-			logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
 			UnbindUpscalingResources();
 			if (!streamline.DestroyDLSSResources()) {
 				if (!MarkSubmitStageDeviceLostIfDeviceRemoved("vendor runtime DLSS resource teardown")) {
 					pendingDLSSReset.store(true, std::memory_order_release);
+					const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedDLSSRebuildDeferralDiagnostic, [&]() {
+						VR_TRANSITION_DIAG_LOG("[VRTransition] Deferred {}DLSS rebuild: Streamline resources are still in use", context);
+					});
+					LogVRTransitionDiagnostics(*this, "vendor runtime reset deferred: DLSS rebuild not idle", loggedDeferralDiagnostic);
 					LogWarnOnceFmt(
 						loggedVendorResetDeferral,
 						"[Upscaling] Deferred rebuild of {}DLSS resources after VR reset because Streamline resources are still in use",
@@ -4318,11 +5040,15 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 				return false;
 			}
 			RequestHistoryReset();
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Rebuilt {}DLSS feature after VR reset", context);
 			rebuildDLSS = false;
 		} else if (rebuildFSR) {
-			logger::debug("[Upscaling] Rebuilding {}FSR resources after VR reset", context);
 			if (!fidelityFX.PollFSRResourceTeardownReady("vendor runtime FSR resource teardown")) {
 				pendingFSRReset.store(true, std::memory_order_release);
+				const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedFSRRebuildDeferralDiagnostic, [&]() {
+					VR_TRANSITION_DIAG_LOG("[VRTransition] Deferred {}FSR rebuild: FidelityFX resources are still in use", context);
+				});
+				LogVRTransitionDiagnostics(*this, "vendor runtime reset deferred: FSR rebuild not idle", loggedDeferralDiagnostic);
 				LogWarnOnceFmt(
 					loggedVendorResetDeferral,
 					"[Upscaling] Deferred rebuild of {}FSR resources after VR reset because FidelityFX resources are still in use",
@@ -4334,6 +5060,7 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			fidelityFX.DestroyFSRResources(false);
 			fidelityFX.CreateFSRResources();
 			RequestHistoryReset();
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Rebuilt {}FSR resources after VR reset", context);
 			rebuildFSR = false;
 		}
 	} catch (const std::exception& e) {
@@ -4363,6 +5090,7 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 		return false;
 	}
 
+	clearVendorResetRetryDiagnostics();
 	return true;
 }
 
@@ -4518,6 +5246,28 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, RenderScaleMode: {} -> {}, PerfMode: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
 			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousRenderScaleMode, renderScaleModeCurrent, previousPerfMode, perfModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
+		if (globals::game::isVR && (renderScaleTransitionRelevant || previousUpscaleMode == UpscaleMethod::kDLSS || previousUpscaleMode == UpscaleMethod::kFSR || a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR)) {
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Resource change: method {} -> {}, quality {} -> {}, dlssPreset {} -> {}, renderScale {} -> {}, perf {} -> {}, foveatedDispatch {} -> {}, peripheryTAA {} -> {}, fsrRuntimePath {} -> {}, renderScaleRelevant={}",
+				magic_enum::enum_name(previousUpscaleMode),
+				magic_enum::enum_name(a_upscalemethod),
+				previousQualityMode,
+				qualityModeCurrent,
+				previousDLSSPreset,
+				dlssPresetCurrent,
+				previousRenderScaleMode,
+				renderScaleModeCurrent,
+				previousPerfMode,
+				perfModeCurrent,
+				BoolText(previousFoveatedDispatch),
+				BoolText(foveatedDispatchCurrent),
+				BoolText(previousPeripheryTAA),
+				BoolText(peripheryTAACurrent),
+				BoolText(previousFSRRuntimePathActive),
+				BoolText(fsrRuntimePathCurrent),
+				BoolText(renderScaleTransitionRelevant));
+			LogVRTransitionDiagnostics(*this, "resource change detected", true);
+		}
 
 		const bool requiresFullPipelineUnbind =
 			upscaleModeChanged ||
@@ -4554,9 +5304,12 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		const auto createFSRResourcesWhenSafe = [&]() {
 			if (ShouldDeferVRFSRRuntimeForRenderScaleReset(*this, a_upscalemethod)) {
 				pendingFSRReset.store(true, std::memory_order_release);
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Deferred FSR resource creation until render-scale relatch/reset completes");
+				LogVRTransitionDiagnostics(*this, "deferred FSR resource creation", true);
 				return false;
 			}
 
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Creating FSR resources from CheckResources");
 			fidelityFX.CreateFSRResources();
 			return true;
 		};
@@ -4590,6 +5343,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 					destroyVRQualityResources();
 			} else if (fsrQualityModeChanged) {
 				vrDLSSSettingsRelatched.store(false, std::memory_order_release);
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Destroying FSR resources for quality/runtime resource change");
 				fidelityFX.DestroyFSRResources();
 				fsrResourcesDestroyedForQuality = true;
 				destroyVRQualityResources();
@@ -4608,15 +5362,19 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (upscaleModeChanged) {
 			if (previousVendorUpscalerSelected) {
 				if (previousUpscaleMode == UpscaleMethod::kDLSS) {
+					VR_TRANSITION_DIAG_LOG("[VRTransition] Destroying previous DLSS resources for method change to {}", magic_enum::enum_name(a_upscalemethod));
 					if (!streamline.DestroyDLSSResources() &&
 						!MarkSubmitStageDeviceLostIfDeviceRemoved("upscale method DLSS resource teardown")) {
 						pendingDLSSReset.store(renderScaleTransitionRelevant, std::memory_order_release);
+						VR_TRANSITION_DIAG_LOG("[VRTransition] Deferred previous DLSS resource teardown for method change; renderScaleRelevant={}", BoolText(renderScaleTransitionRelevant));
 					}
 				} else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesDestroyedForQuality) {
 					if (renderScaleTransitionRelevant &&
 						!fidelityFX.PollFSRResourceTeardownReady("upscale method FSR resource teardown")) {
 						pendingFSRReset.store(true, std::memory_order_release);
+						VR_TRANSITION_DIAG_LOG("[VRTransition] Deferred previous FSR resource teardown for method change; resources are still in use");
 					} else {
+						VR_TRANSITION_DIAG_LOG("[VRTransition] Destroying previous FSR resources for method change to {} (waitForIdle={})", magic_enum::enum_name(a_upscalemethod), BoolText(!renderScaleTransitionRelevant));
 						fidelityFX.DestroyFSRResources(!renderScaleTransitionRelevant);
 					}
 				}
@@ -4638,6 +5396,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 		// Host FSR 3.1.5 and runtime upscaler providers keep separate temporal state; rebuild on path changes.
 		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Destroying FSR resources for runtime path change");
 			fidelityFX.DestroyFSRResources();
 			fsrResourcesRecreatedForQuality = createFSRResourcesWhenSafe();
 			RequestHistoryReset();
@@ -8131,6 +8890,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	// Get full screen size
 	auto state = globals::state;
+	LogVRTransitionDiagnostics(*this);
 	auto screenSize = state->screenSize;
 
 	auto screenWidth = static_cast<int>(screenSize.x);
@@ -9022,6 +9782,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool foveatedRequested =
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !perfModeMenuCanUseVendor && !foveatedTransitionBypass;
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
+	LogVRTransitionDiagnostics(*this);
 	// ISFullScreenVR can precompute submit-stage output for the desktop mirror.
 	// Reuse that result here so the OpenVR submit does not dispatch DLSS/FSR again.
 	if (targetScaleMode &&
@@ -10394,6 +11155,8 @@ void Upscaling::Upscale()
 			} else if (upscaleMethod == UpscaleMethod::kFSR &&
 			           !ShouldDeferVRFSRRuntimeForRenderScaleReset(*this, upscaleMethod)) {
 				fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
+			} else if (upscaleMethod == UpscaleMethod::kFSR) {
+				LogVRTransitionDiagnostics(*this, "skipped FSR full-frame dispatch during render-scale reset");
 			}
 		}
 

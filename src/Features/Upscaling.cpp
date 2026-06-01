@@ -1333,7 +1333,39 @@ namespace
 			return false;
 
 		const uint32_t startFrame = g_vrRenderScaleRelatchSettleStartFrame.load(std::memory_order_acquire);
-		return startFrame != 0 && a_state->frameCount == startFrame;
+		if (startFrame == 0)
+			return false;
+
+		const uint32_t currentFrame = a_state->frameCount;
+		if (currentFrame == startFrame)
+			return true;
+
+		// If the relatch settled near a frame boundary and the relatch-frame guard
+		// did not run, allow exactly one follow-up frame to carry the same safety.
+		if (currentFrame > startFrame && currentFrame - startFrame == 1u) {
+			const uint32_t suppressedFrame =
+				g_vrRenderScaleRelatchCompositorSuppressLoggedFrame.load(std::memory_order_acquire);
+			const uint32_t skippedFrame =
+				g_vrRenderScaleRelatchSubmitSkipLoggedFrame.load(std::memory_order_acquire);
+			return suppressedFrame != startFrame && skippedFrame != startFrame;
+		}
+
+		return false;
+	}
+
+	void LogVRRenderScaleRelatchSubmitStagePresentationSkip(const State* a_state)
+	{
+		if (!a_state)
+			return;
+
+		const uint32_t currentFrame = a_state->frameCount;
+		const uint32_t previouslyLoggedFrame = g_vrRenderScaleRelatchSubmitSkipLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
+		if (previouslyLoggedFrame != currentFrame) {
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Skipping submit-stage presentation texture recreate during render-target relatch submit guard (frame={}, closeAge={})",
+				currentFrame,
+				GetVRLoadingTransitionCloseElapsedFrames(a_state));
+		}
 	}
 
 	bool MarkVRRenderScaleRelatchFullEyeStableFrame(const State* a_state, uint32_t a_eyeIndex)
@@ -9900,7 +9932,7 @@ bool Upscaling::ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame() con
 		g_vrRenderScaleRelatchCompositorSuppressLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
 	if (previouslyLoggedFrame != currentFrame) {
 		VR_TRANSITION_DIAG_LOG(
-			"[VRTransition] Suppressing OpenVR compositor submit on the render-target relatch frame (frame={}, closeAge={})",
+			"[VRTransition] Suppressing OpenVR compositor submit during render-target relatch submit guard (frame={}, closeAge={})",
 			currentFrame,
 			GetVRLoadingTransitionCloseElapsedFrames(state));
 	}
@@ -9924,6 +9956,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	auto context = globals::d3d::context;
 	if (!state || !renderer || !context)
 		return false;
+
+	if (ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(state)) {
+		LogVRRenderScaleRelatchSubmitStagePresentationSkip(state);
+		return false;
+	}
 
 	RefreshRuntimeResolutionPlan();
 	const auto& resolutionPlan = GetRuntimeResolutionPlan();
@@ -10120,17 +10157,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		 relatchPendingStretchFallback ||
 		 intermediateAllocCooldownFallback) &&
 		!presentationOnly;
-
-	if (stretchOnlyFallback && ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(state)) {
-		const uint32_t previouslyLoggedFrame = g_vrRenderScaleRelatchSubmitSkipLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
-		if (previouslyLoggedFrame != currentFrame) {
-			VR_TRANSITION_DIAG_LOG(
-				"[VRTransition] Skipping submit-stage presentation texture recreate on the render-target relatch frame (frame={}, closeAge={})",
-				currentFrame,
-				GetVRLoadingTransitionCloseElapsedFrames(state));
-		}
-		return false;
-	}
 
 	if (!presentationOnly && !stretchOnlyFallback && (!motionVector.texture || !depth.texture))
 		return false;

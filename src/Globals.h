@@ -39,6 +39,7 @@ struct WeatherEditor;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct ScreenshotFeature;
+struct Skin;
 
 class State;
 class Deferred;
@@ -100,6 +101,7 @@ namespace globals
 		extern WeatherEditor weatherEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
+		extern Skin skin;
 
 		namespace llf
 		{

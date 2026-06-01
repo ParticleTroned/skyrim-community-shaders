@@ -32,6 +32,7 @@ public:
 	bool enabledAtBoot = false;
 	bool initialized = false;
 	bool triedInitialization = false;
+	bool featureCheckComplete = false;
 
 	bool featureDLSS = false;
 	bool featureReflex = false;

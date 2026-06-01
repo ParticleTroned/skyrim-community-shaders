@@ -186,12 +186,18 @@ std::vector<std::pair<std::string, std::string>> Streamline::dllVersions = {};
 void Streamline::LoadInterposer()
 {
 	triedInitialization = true;
+	featureCheckComplete = false;
 
 	std::wstring interposerPath = std::wstring(Streamline::PluginDir) + L"\\sl.interposer.dll";
 	interposer = LoadLibraryW(interposerPath.c_str());
 	if (interposer == nullptr) {
 		DWORD errorCode = GetLastError();
 		logger::info("[Streamline] Failed to load interposer: Error Code {0:x}", errorCode);
+		featureDLSS = false;
+		featureReflex = false;
+		featurePCL = false;
+		reflexSupportedOnCurrentAdapter = false;
+		featureCheckComplete = true;
 		return;
 	} else {
 		logger::info("[Streamline] Interposer loaded at address: {0:p}", static_cast<void*>(interposer));
@@ -266,6 +272,11 @@ void Streamline::LoadInterposer()
 
 	if (SL_FAILED(res, slInit(pref, sl::kSDKVersion))) {
 		logger::critical("[Streamline] Failed to initialize Streamline");
+		featureDLSS = false;
+		featureReflex = false;
+		featurePCL = false;
+		reflexSupportedOnCurrentAdapter = false;
+		featureCheckComplete = true;
 	} else {
 		initialized = true;
 		featureDLSS = false;
@@ -281,6 +292,7 @@ void Streamline::LoadInterposer()
 
 void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
+	featureCheckComplete = false;
 	logger::info("[Streamline] Checking features");
 	DXGI_ADAPTER_DESC adapterDesc;
 	a_adapter->GetDesc(&adapterDesc);
@@ -339,6 +351,7 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
+	featureCheckComplete = true;
 }
 
 void Streamline::PostDevice()

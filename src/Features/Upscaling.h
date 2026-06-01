@@ -388,6 +388,7 @@ public:
 	virtual void SetupResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
+	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
 	uint32_t GetRuntimeQualityMode() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
@@ -650,6 +651,7 @@ public:
 	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
 	std::atomic<bool> pendingVRUpscalingTransitionPostTransitionDelay{ false };
+	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };

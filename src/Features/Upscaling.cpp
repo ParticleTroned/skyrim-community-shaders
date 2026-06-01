@@ -231,10 +231,15 @@ namespace
 		return IsSubmitStageRequestedUpscalingActive();
 	}
 
+	bool ShouldDelayVRRenderScaleForPendingDLSS(const Upscaling& a_upscaling);
+
 	bool IsSubmitStagePathEnabled()
 	{
 		auto& upscaling = globals::features::upscaling;
 		if (upscaling.IsSubmitStageDeviceLost())
+			return false;
+
+		if (ShouldDelayVRRenderScaleForPendingDLSS(upscaling))
 			return false;
 
 		const auto upscaleMethod = upscaling.GetUpscaleMethod();
@@ -245,6 +250,64 @@ namespace
 			return false;
 
 		return true;
+	}
+
+	bool ShouldDelayVRRenderScaleForPendingDLSS(const Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		if (a_upscaling.IsOpenCompositeUpscalingBlocked())
+			return false;
+
+		if (Upscaling::streamline.featureDLSS || Upscaling::streamline.featureCheckComplete)
+			return false;
+
+		if (static_cast<Upscaling::UpscaleMethod>(a_upscaling.settings.upscaleMethod) != Upscaling::UpscaleMethod::kDLSS)
+			return false;
+
+		const uint32_t pendingPerfMode = a_upscaling.pendingVRPerfMode.load(std::memory_order_acquire);
+		const bool perfModeRequested = pendingPerfMode != Upscaling::kPendingVRUpscalingSettingUnset ?
+			pendingPerfMode != 0 :
+			a_upscaling.perfMode.IsRequested(a_upscaling.settings);
+		if (!perfModeRequested)
+			return false;
+
+		const uint32_t pendingRenderScaleMode = a_upscaling.pendingVRRenderScaleMode.load(std::memory_order_acquire);
+		const bool renderScaleModeRequested = pendingRenderScaleMode != Upscaling::kPendingVRUpscalingSettingUnset ?
+			pendingRenderScaleMode != 0 :
+			ClampToggleUInt(a_upscaling.settings.renderScaleMode) != 0;
+		if (!renderScaleModeRequested)
+			return false;
+
+		const uint32_t pendingQualityMode = a_upscaling.pendingVRUpscalingQualityMode.load(std::memory_order_acquire);
+		const uint32_t qualityMode = pendingQualityMode != Upscaling::kPendingVRUpscalingSettingUnset ?
+			pendingQualityMode :
+			a_upscaling.settings.qualityMode;
+		return IsRenderScaleQualityMode(qualityMode);
+	}
+
+	bool DeferVRPerfModeBootLatchForPendingDLSS(Upscaling& a_upscaling)
+	{
+		if (!ShouldDelayVRRenderScaleForPendingDLSS(a_upscaling))
+			return false;
+
+		a_upscaling.perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
+		if (!a_upscaling.delayedVRPerfModeBootLatchForDLSS.exchange(true, std::memory_order_acq_rel)) {
+			logger::info("[PerfMode] Delaying VR render-scale boot latch until Streamline DLSS availability is known.");
+		}
+		return true;
+	}
+
+	void CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(Upscaling& a_upscaling, const char* a_reason)
+	{
+		if (!a_upscaling.delayedVRPerfModeBootLatchForDLSS.exchange(false, std::memory_order_acq_rel))
+			return;
+
+		logger::info(
+			"[PerfMode] Streamline DLSS availability resolved after deferred VR render-scale boot latch (DLSS {}).",
+			Upscaling::streamline.featureDLSS ? "available" : "unavailable");
+		a_upscaling.RequestPerfModeRenderTargetRecreate(a_reason);
 	}
 
 	bool IsSubmitStageDynamicResolutionActive()
@@ -1185,7 +1248,7 @@ namespace
 
 	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling)
 	{
-		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaling.GetUpscaleMethod());
+		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaling.GetConfiguredUpscaleMethodForTransition());
 	}
 
 	bool ShouldIncludeInactiveVRVendorReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
@@ -1447,7 +1510,7 @@ namespace
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
 		return IsSaveLoadTransitionContextActive(a_state) ||
-		       IsVRRenderScaleTransitionGraceActive(a_upscaling, a_upscaling.GetUpscaleMethod(), a_state) ||
+		       IsVRRenderScaleTransitionGraceActive(a_upscaling, a_upscaling.GetConfiguredUpscaleMethodForTransition(), a_state) ||
 		       IsVRRenderScaleRelatchVisualSafetyActive(a_upscaling, a_state) ||
 		       (IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) &&
 		           (IsCellTransitionContextActive(a_state) || IsLoadingTransitionTailActive(a_state))) ||
@@ -1511,7 +1574,7 @@ namespace
 		// Full-eye vendor dispatch is safer during bounded transition windows,
 		// but a relatch retry must not hold DLSS/FSR in full-eye mode indefinitely.
 		return IsSaveLoadTransitionContextActive(a_state) ||
-		       IsVRRenderScaleTransitionGraceActive(a_upscaling, a_upscaling.GetUpscaleMethod(), a_state) ||
+		       IsVRRenderScaleTransitionGraceActive(a_upscaling, a_upscaling.GetConfiguredUpscaleMethodForTransition(), a_state) ||
 		       (IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) &&
 		           (IsCellTransitionContextActive(a_state) || IsLoadingTransitionTailActive(a_state))) ||
 		       IsVRLoadingPresentationContextActive(a_state) ||
@@ -1607,7 +1670,7 @@ namespace
 		return std::max({
 			a_existingDelayFrames,
 			retryDelayFrames,
-			GetVRRenderScaleTransitionGraceDelayFrames(a_upscaling, a_upscaling.GetUpscaleMethod(), a_state) });
+			GetVRRenderScaleTransitionGraceDelayFrames(a_upscaling, a_upscaling.GetConfiguredUpscaleMethodForTransition(), a_state) });
 	}
 
 	uint32_t RemainingFrames(uint32_t a_endFrame, uint32_t a_frame)
@@ -1759,7 +1822,7 @@ namespace
 		VRTransitionDiagnosticSnapshot snapshot{};
 		const auto* state = globals::state;
 		snapshot.frame = state ? state->frameCount : 0u;
-		snapshot.requestedMethod = a_upscaling.GetUpscaleMethod();
+		snapshot.requestedMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
 		snapshot.runtimeMethod = a_upscaling.GetRuntimeUpscaleMethod();
 		snapshot.qualityMode = a_upscaling.GetRuntimeQualityMode();
 		if (state) {
@@ -4012,6 +4075,27 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	return (UpscaleMethod)settings.upscaleMethodNoDLSS;
 }
 
+Upscaling::UpscaleMethod Upscaling::GetConfiguredUpscaleMethodForTransition() const
+{
+	if (GetOpenCompositeUpscalingBlocker().active)
+		return UpscaleMethod::kNONE;
+
+	const auto primaryMethod = static_cast<UpscaleMethod>(std::clamp(
+		static_cast<int>(settings.upscaleMethod),
+		static_cast<int>(UpscaleMethod::kNONE),
+		static_cast<int>(UpscaleMethod::kDLSS)));
+	if (primaryMethod != UpscaleMethod::kDLSS)
+		return primaryMethod;
+
+	if (streamline.featureDLSS || !streamline.featureCheckComplete)
+		return UpscaleMethod::kDLSS;
+
+	return static_cast<UpscaleMethod>(std::clamp(
+		static_cast<int>(settings.upscaleMethodNoDLSS),
+		static_cast<int>(UpscaleMethod::kNONE),
+		static_cast<int>(UpscaleMethod::kFSR)));
+}
+
 Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 {
 	const auto requestedMethod = GetUpscaleMethod();
@@ -4045,7 +4129,7 @@ const Upscaling::RuntimeResolutionPlan& Upscaling::GetRuntimeResolutionPlan() co
 void Upscaling::RefreshRuntimeResolutionPlan()
 {
 	RuntimeResolutionPlan plan{};
-	const auto requestedUpscaleMethod = GetUpscaleMethod();
+	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	perfMode.EnsureBootLatch(settings, requestedUpscaleMethod, false);
 	plan.upscaleMethod = GetRuntimeUpscaleMethod();
 	plan.qualityMode = GetRuntimeQualityMode();
@@ -4132,7 +4216,7 @@ bool Upscaling::IsRenderScaleModeRequested() const
 	if (!REL::Module::IsVR())
 		return true;
 
-	if (!IsRenderScaleMethodEligible(GetUpscaleMethod()))
+	if (!IsRenderScaleMethodEligible(GetConfiguredUpscaleMethodForTransition()))
 		return false;
 
 	const uint32_t pendingRenderScaleMode = pendingVRRenderScaleMode.load(std::memory_order_acquire);
@@ -4152,14 +4236,15 @@ bool Upscaling::IsPerfModeActive() const
 
 bool Upscaling::GetPerfModeRequested() const
 {
-	if (REL::Module::IsVR() && IsRenderScaleMethodEligible(GetUpscaleMethod())) {
+	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
+	if (REL::Module::IsVR() && IsRenderScaleMethodEligible(configuredMethod)) {
 		const uint32_t pendingPerfMode = pendingVRPerfMode.load(std::memory_order_acquire);
 		if (pendingPerfMode != kPendingVRUpscalingSettingUnset)
 			return pendingPerfMode != 0 && IsRenderScaleModeRequested();
 	}
 
 	if (REL::Module::IsVR() &&
-		(!IsRenderScaleMethodEligible(GetUpscaleMethod()) ||
+		(!IsRenderScaleMethodEligible(configuredMethod) ||
 		 !IsRenderScaleModeRequested() ||
 		 !IsRenderScaleQualityMode(GetEffectiveUpscalingQualityMode())))
 		return false;
@@ -4169,9 +4254,10 @@ bool Upscaling::GetPerfModeRequested() const
 
 void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool a_allowDefer)
 {
+	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 	if (a_allowDefer &&
 		globals::game::isVR &&
-		IsRenderScaleMethodEligible(GetUpscaleMethod())) {
+		IsRenderScaleMethodEligible(configuredMethod)) {
 		const uint32_t effectiveQualityMode = GetEffectiveUpscalingQualityMode();
 		const uint32_t qualityMode = a_enabled && !IsRenderScaleQualityMode(effectiveQualityMode) ? kDefaultRenderScaleQualityMode : effectiveQualityMode;
 		SetVRUpscalingTransitionProfile(a_enabled, qualityMode, GetEffectiveDLSSPreset(), a_reason);
@@ -4180,7 +4266,7 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 
 	bool renderScaleSettingsChanged = false;
 	if (a_enabled && REL::Module::IsVR()) {
-		if (!IsRenderScaleMethodEligible(GetUpscaleMethod())) {
+		if (!IsRenderScaleMethodEligible(configuredMethod)) {
 			a_enabled = false;
 			if (settings.renderScaleMode != 0) {
 				settings.renderScaleMode = 0;
@@ -4194,7 +4280,7 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 			settings.renderScaleMode = 1;
 			renderScaleSettingsChanged = true;
 		}
-		const UpscaleMethod requestedMethod = GetUpscaleMethod();
+		const UpscaleMethod requestedMethod = configuredMethod;
 		const uint32_t requestedQualityMode = requestedMethod == UpscaleMethod::kDLSS ?
 			GetEffectiveUpscalingQualityMode() :
 			settings.qualityMode;
@@ -4222,7 +4308,11 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
 {
 	const bool isVR = globals::game::isVR;
-	const int maxMethodValue = streamline.featureDLSS ?
+	const bool allowPendingDLSSSelection =
+		a_targetMethod == UpscaleMethod::kDLSS &&
+		!streamline.featureCheckComplete;
+	const bool allowDLSSSelection = streamline.featureDLSS || allowPendingDLSSSelection;
+	const int maxMethodValue = allowDLSSSelection ?
 		static_cast<int>(UpscaleMethod::kDLSS) :
 		static_cast<int>(UpscaleMethod::kFSR);
 	const int targetMethodValue = std::clamp(static_cast<int>(a_targetMethod), static_cast<int>(UpscaleMethod::kNONE), maxMethodValue);
@@ -4242,7 +4332,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		 GetPerfModeRequested() ||
 		 IsPerfModeActive() ||
 		 perfMode.HasRestartRequiredChange());
-	uint32_t* currentUpscaleMode = streamline.featureDLSS ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
+	uint32_t* currentUpscaleMode = (streamline.featureDLSS || targetMethod == UpscaleMethod::kDLSS) ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
 	*currentUpscaleMode = static_cast<uint32_t>(targetMethod);
 	if (targetMethod != UpscaleMethod::kDLSS)
 		pendingVRDLSSPreset.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
@@ -4352,7 +4442,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			presetChanged = true;
 		}
 	}
-	if (settings.dlssPreset != dlssPreset || dlssPresetPending) {
+	if (dlssPresetChanged) {
 		settings.dlssPreset = dlssPreset;
 		pendingVRDLSSPreset.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
 		presetChanged = true;
@@ -4379,7 +4469,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 
 void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
 {
-	ApplyCSMenuUpscalingTransition(GetUpscaleMethod(), a_renderScaleModeEnabled, a_qualityMode, a_dlssPreset, a_reason);
+	ApplyCSMenuUpscalingTransition(GetConfiguredUpscaleMethodForTransition(), a_renderScaleModeEnabled, a_qualityMode, a_dlssPreset, a_reason);
 }
 
 bool Upscaling::IsPerfModePresentationActive() const
@@ -4405,6 +4495,9 @@ bool Upscaling::ConsumePerfModeBootLatchCreate()
 bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate)
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
+		return false;
+
+	if (a_allowCreate && DeferVRPerfModeBootLatchForPendingDLSS(*this))
 		return false;
 
 	return perfMode.TryGetOpenVRRenderTargetSize(settings, GetUpscaleMethod(), a_width, a_height, a_allowCreate);
@@ -4757,8 +4850,9 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 		return;
 	}
 
+	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 	const bool perfModeActive = IsPerfModeActive();
-	const bool perfModeEligible = perfMode.IsEligible(settings, GetUpscaleMethod());
+	const bool perfModeEligible = perfMode.IsEligible(settings, configuredMethod);
 	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
 		return;
 
@@ -4773,7 +4867,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 		usePostTransitionRelatchDelay ?
 			postTransitionDelayFrames :
 			kVRUpscalingTransitionApplyDelayFrames,
-		GetVRRenderScaleTransitionGraceDelayFrames(*this, GetUpscaleMethod(), globals::state));
+		GetVRRenderScaleTransitionGraceDelayFrames(*this, configuredMethod, globals::state));
 	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
 	const uint32_t previousRelatchDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
 	if (!wasPending || relatchDelayFrames > previousRelatchDelay)
@@ -4811,6 +4905,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	auto* state = globals::state;
 	if (!state || !globals::game::renderer || !globals::d3d::context)
 		return false;
+
+	if (DeferVRPerfModeBootLatchForPendingDLSS(*this)) {
+		MarkPerfModeRenderTargetRecreateQueued();
+		return false;
+	}
 
 	if (ShouldDeferVRUpscalingTransitionSettings()) {
 		MarkPerfModeRenderTargetRecreateQueued();
@@ -9139,7 +9238,7 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
-	const auto requestedUpscaleMethod = GetUpscaleMethod();
+	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	ApplyPendingVRUpscalingTransition(requestedUpscaleMethod);
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
 		if (ApplyPendingPerfModeRenderTargetRecreate("ConfigureUpscaling"))
@@ -10683,7 +10782,7 @@ bool Upscaling::HasPendingVRRenderScaleTransition() const
 
 bool Upscaling::ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const
 {
-	if (!globals::game::isVR || !IsRenderScaleMethodEligible(GetUpscaleMethod()))
+	if (!globals::game::isVR || !IsRenderScaleMethodEligible(GetConfiguredUpscaleMethodForTransition()))
 		return false;
 
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
@@ -10739,7 +10838,7 @@ void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames, b
 	const uint32_t contextDelay = postTransitionRelatchDelayFrames != 0 ?
 		postTransitionRelatchDelayFrames :
 		kVRUpscalingTransitionApplyDelayFrames;
-	const uint32_t transitionGraceDelay = GetVRRenderScaleTransitionGraceDelayFrames(*this, GetUpscaleMethod(), globals::state);
+	const uint32_t transitionGraceDelay = GetVRRenderScaleTransitionGraceDelayFrames(*this, GetConfiguredUpscaleMethodForTransition(), globals::state);
 	const uint32_t requestedDelay = a_delayFrames != 0 ? a_delayFrames : std::max(contextDelay, transitionGraceDelay);
 	const uint32_t delayFrames = std::max({ requestedDelay, contextDelay, transitionGraceDelay });
 	pendingPerfModeRenderTargetRecreateFrame.store(frame, std::memory_order_release);
@@ -11076,6 +11175,8 @@ void Upscaling::LoadUpscalingSDKs()
 	// This ensures all SDKs are available before any D3D device creation
 	streamline.LoadInterposer();
 	fidelityFX.LoadFFX();
+	if (streamline.featureCheckComplete)
+		CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(*this, "Streamline DLSS availability resolved after deferred VR boot latch");
 }
 
 void Upscaling::SetUIBuffer()
@@ -11102,6 +11203,7 @@ bool Upscaling::IsBackendInitialized() const
 void Upscaling::CheckBackendFeatures(IDXGIAdapter* adapter)
 {
 	streamline.CheckFeatures(adapter);
+	CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(*this, "Streamline DLSS availability resolved after deferred VR boot latch");
 }
 
 void Upscaling::UpgradeBackendInterface(void** ppInterface)

@@ -86,7 +86,9 @@ namespace CSPluginAPI
 		virtual bool GetRenderAtUpscaleResActive() = 0;
 
 		// Convenience for interior/exterior transition controllers. Stages the
-		// render-scale path, shared upscaler preset, and DLSS profile together.
+		// configured upscaler method, render-scale path, shared preset, and DLSS
+		// profile together. The profile value is applied only while DLSS is the
+		// selected method; the parameter type name is retained for ABI compatibility.
 		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI

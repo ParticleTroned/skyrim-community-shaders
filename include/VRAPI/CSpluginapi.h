@@ -216,7 +216,7 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
-		const auto upscaleMethod = upscaling.GetUpscaleMethod();
+		const auto upscaleMethod = upscaling.GetConfiguredUpscaleMethodForTransition();
 		const bool renderScaleModeEnabled =
 			upscaling.IsRenderScaleModeRequested() &&
 			Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
@@ -253,7 +253,7 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
-		const bool stageVRDLSSProfileChange = globals::game::isVR && upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS;
+		const bool stageVRDLSSProfileChange = globals::game::isVR && upscaling.GetConfiguredUpscaleMethodForTransition() == Upscaling::UpscaleMethod::kDLSS;
 
 		if (stageVRDLSSProfileChange) {
 			upscaling.SetVRUpscalingTransitionProfile(upscaling.GetPerfModeRequested(), upscaling.GetEffectiveDLSSQualityMode(), dlssPreset, "CS API DLSS profile change");

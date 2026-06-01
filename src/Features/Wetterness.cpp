@@ -3,7 +3,7 @@
 #include "Menu.h"
 #include "State.h"
 #include "Utils/UI.h"
-#include "WeatherEditor.h"
+#include "CSEditor.h"
 
 #include <algorithm>
 #include <array>
@@ -1691,14 +1691,14 @@ void Wetterness::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	auto& weatherEditor = globals::features::weatherEditor;
-	if (weatherEditor.loaded) {
-		if (ImGui::SmallButton(("Open " + weatherEditor.GetName()).c_str())) {
+	auto& csEditor = globals::features::csEditor;
+	if (csEditor.loaded) {
+		if (ImGui::SmallButton(("Open " + csEditor.GetName()).c_str())) {
 			// Navigate to the replacement feature in the menu
-			Menu::GetSingleton()->SelectFeatureMenu(weatherEditor.GetShortName());
+			Menu::GetSingleton()->SelectFeatureMenu(csEditor.GetShortName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Open the installed %s feature", weatherEditor.GetShortName().c_str());
+			ImGui::Text("Open the installed %s feature", csEditor.GetShortName().c_str());
 		}
 	}
 

@@ -36,7 +36,7 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
-#include "Features/WeatherEditor.h"
+#include "Features/CSEditor.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
@@ -90,7 +90,7 @@ namespace globals
 		HDRDisplay hdrDisplay{};
 		RenderDoc renderDoc{};
 		ScreenshotFeature screenshotFeature{};
-		WeatherEditor weatherEditor{};
+		CSEditor csEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
 		Skin skin{};

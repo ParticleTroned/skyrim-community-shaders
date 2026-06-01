@@ -559,6 +559,7 @@ public:
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
 	bool IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const;
+	bool ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame() const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
 	enum class DynamicResolutionUpsampleStage : uint8_t

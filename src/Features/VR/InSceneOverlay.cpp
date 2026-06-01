@@ -273,6 +273,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
+				if (upscaling.ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame())
+					return vr::VRCompositorError_None;
 
 				if (!presentationUpscalingActive || perfModePresentationActive || upscaling.IsSubmitStageHandoffTexture(pTexture)) {
 					vr::Texture_t overlayTexture{};

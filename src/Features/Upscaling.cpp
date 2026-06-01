@@ -128,14 +128,14 @@ namespace
 	// Render-scale transition teardown and mask repair get a mandatory post-close
 	// grace because the first stable-looking frames can still reference old GPU work.
 	constexpr uint32_t kVRRenderScaleTransitionGraceFrames = 20u;
-	// Loading/menu-adjacent relatches are deferred until hard blockers clear, then
-	// applied after the same grace instead of the old fixed multi-second delay.
-	constexpr uint32_t kVRRenderScaleRelatchPostTransitionStableFrames = kVRRenderScaleTransitionGraceFrames;
-	constexpr uint32_t kVRRenderScaleRelatchRecentTransitionFrames = 120u;
-	constexpr uint32_t kVRRenderScaleRelatchStretchFallbackFrames = 600u;
-	constexpr uint32_t kVRRenderScaleRelatchFullEyeRecoveryFrames = 1200u;
-	constexpr uint32_t kVRRenderScaleRelatchExitRecoveryFrames = 180u;
-	constexpr uint32_t kVRRenderScaleRelatchStableFullEyeFrames = 360u;
+	constexpr uint32_t kVRRenderScaleRelatchRecentTransitionFrames = 3u;
+	constexpr uint32_t kVRRenderScaleRelatchMenuStableFrames = kVRRenderScaleTransitionGraceFrames;
+	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
+	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
+	constexpr uint32_t kVRRenderScaleRelatchStretchFallbackFrames = 10u;
+	constexpr uint32_t kVRRenderScaleRelatchFullEyeRecoveryFrames = 20u;
+	constexpr uint32_t kVRRenderScaleRelatchExitRecoveryFrames = 10u;
+	constexpr uint32_t kVRRenderScaleRelatchStableFullEyeFrames = 10u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
@@ -147,7 +147,12 @@ namespace
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 	constexpr uint32_t kVRSaveLoadTransitionTailFrames = 30;
 	std::atomic_uint32_t g_vrRenderScaleRelatchSettleEndFrame{ 0 };
+	std::atomic_uint32_t g_vrRenderScaleRelatchSettleStartFrame{ 0 };
 	std::atomic_uint32_t g_vrRenderScaleRelatchStretchFallbackEndFrame{ 0 };
+	std::atomic_uint32_t g_vrRenderScaleRelatchSubmitSkipLoggedFrame{ 0 };
+	std::atomic_uint32_t g_vrRenderScaleRelatchCompositorSuppressLoggedFrame{ 0 };
+	std::atomic_uint32_t g_vrRenderScaleRelatchPendingStretchLoggedFrame{ 0 };
+	std::atomic_uint32_t g_vrSubmitStageIntermediateAllocCooldownEndFrame{ 0 };
 	std::atomic_uint32_t g_vrRenderScaleRelatchStableFullEyeFrameCount{ 0 };
 	std::atomic_uint32_t g_vrRenderScaleRelatchLastStableFullEyeFrame{ 0 };
 	std::array<std::atomic_uint32_t, 2> g_vrRenderScaleRelatchStableFullEyeReadyFrames{};
@@ -1148,7 +1153,12 @@ namespace
 		if (!globals::game::isVR)
 			return false;
 
-		if (!IsRenderScaleMethodEligible(a_upscaleMethod))
+		const bool perfModeActive = a_upscaling.IsPerfModeActive();
+		const bool requestedMethodEligible = IsRenderScaleMethodEligible(a_upscaleMethod);
+		const bool runtimeMethodEligible =
+			perfModeActive &&
+			IsRenderScaleMethodEligible(a_upscaling.GetRuntimeUpscaleMethod());
+		if (!requestedMethodEligible && !runtimeMethodEligible)
 			return false;
 
 		const auto isRenderScaleModeRequested = [&]() {
@@ -1170,7 +1180,7 @@ namespace
 
 		return isRenderScaleModeRequested() ||
 		       isPerfModeRequested() ||
-		       a_upscaling.IsPerfModeActive();
+		       perfModeActive;
 	}
 
 	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling)
@@ -1245,6 +1255,7 @@ namespace
 
 	void ClearVRRenderScaleRelatchRecovery()
 	{
+		g_vrRenderScaleRelatchSettleStartFrame.store(0, std::memory_order_release);
 		g_vrRenderScaleRelatchSettleEndFrame.store(0, std::memory_order_release);
 		ClearVRRenderScaleRelatchStretchFallback();
 		ClearVRRenderScaleRelatchStableFullEyeFrames();
@@ -1265,6 +1276,7 @@ namespace
 
 		const auto* state = globals::state;
 		const uint32_t currentFrame = state ? state->frameCount : 0u;
+		g_vrRenderScaleRelatchSettleStartFrame.store(currentFrame, std::memory_order_release);
 		g_vrRenderScaleRelatchSettleEndFrame.store(currentFrame + a_frames, std::memory_order_release);
 		g_vrRenderScaleRelatchStretchFallbackEndFrame.store(
 			currentFrame + std::min(a_frames, kVRRenderScaleRelatchStretchFallbackFrames),
@@ -1313,6 +1325,15 @@ namespace
 
 		ClearVRRenderScaleRelatchRecovery();
 		return false;
+	}
+
+	bool ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		const uint32_t startFrame = g_vrRenderScaleRelatchSettleStartFrame.load(std::memory_order_acquire);
+		return startFrame != 0 && a_state->frameCount == startFrame;
 	}
 
 	bool MarkVRRenderScaleRelatchFullEyeStableFrame(const State* a_state, uint32_t a_eyeIndex)
@@ -1418,12 +1439,21 @@ namespace
 
 	bool IsVRRenderScaleRelatchVisualSafetyActive(const Upscaling& a_upscaling, const State* a_state)
 	{
-		if (IsVRRenderScaleRelatchDelaySafetyActive(a_upscaling, a_state))
-			return true;
-		if (!a_state || !a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
 			return false;
 
-		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling);
+		return IsVRRenderScaleRelatchDelaySafetyActive(a_upscaling, a_state) ||
+		       a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+	}
+
+	bool IsVRRenderScaleRelatchFoveatedBypassActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
+			return false;
+
+		return IsVRRenderScaleRelatchDelaySafetyActive(a_upscaling, a_state) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
 	}
 
 	bool ShouldDeferVRFSRRuntimeForRenderScaleReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
@@ -1446,7 +1476,7 @@ namespace
 
 		// Foveated dispatch composites center/periphery regions and can expose
 		// transient engine fade surfaces as a smaller projection during VR loads.
-		// Full-eye vendor dispatch is safer during the bounded transition windows,
+		// Full-eye vendor dispatch is safer during bounded transition windows,
 		// but a relatch retry must not hold DLSS/FSR in full-eye mode indefinitely.
 		return IsSaveLoadTransitionContextActive(a_state) ||
 		       IsVRRenderScaleTransitionGraceActive(a_upscaling, a_upscaling.GetUpscaleMethod(), a_state) ||
@@ -1455,7 +1485,7 @@ namespace
 		       IsVRLoadingPresentationContextActive(a_state) ||
 		       IsLoadingTransitionTailActive(a_state) ||
 		       IsCellTransitionTailActive(a_state, kVRCellTransitionPresentationTailFrames) ||
-		       IsVRRenderScaleRelatchDelaySafetyActive(a_upscaling, a_state) ||
+		       IsVRRenderScaleRelatchFoveatedBypassActive(a_upscaling, a_state) ||
 		       IsVRRenderScaleRelatchSettling(a_state);
 	}
 
@@ -1512,14 +1542,40 @@ namespace
 		return GetVRLoadingTransitionCloseElapsedFrames(a_state) < kVRRenderScaleRelatchRecentTransitionFrames;
 	}
 
+	uint32_t GetPostTransitionVRRenderScaleRelatchDelayFrames(const char* a_reason)
+	{
+		const auto* state = globals::state;
+		if (IsSaveLoadTransitionContextActive(state))
+			return 0;
+		if (IsRecentVRLoadingTransitionClose(state))
+			return kVRRenderScaleRelatchRecentTransitionFrames;
+
+		const std::string_view reason = a_reason ? std::string_view(a_reason) : std::string_view{};
+		if (ReasonContains(reason, "upscaling menu") || IsCommunityShadersMenuOpen() || IsCellTransitionContextActive(state))
+			return kVRRenderScaleRelatchMenuStableFrames;
+
+		return 0;
+	}
+
 	bool ShouldUsePostTransitionVRRenderScaleRelatchDelay(const char* a_reason)
 	{
-		const std::string_view reason = a_reason ? std::string_view(a_reason) : std::string_view{};
-		const auto* state = globals::state;
-		return ReasonContains(reason, "upscaling menu") ||
-		       IsCommunityShadersMenuOpen() ||
-		       IsCellTransitionContextActive(state) ||
-		       IsRecentVRLoadingTransitionClose(state);
+		return GetPostTransitionVRRenderScaleRelatchDelayFrames(a_reason) != 0;
+	}
+
+	uint32_t GetVRRenderScaleRelatchRetryDelayFrames(const Upscaling& a_upscaling, const State* a_state, uint32_t a_existingDelayFrames)
+	{
+		uint32_t retryDelayFrames = GetPostTransitionVRRenderScaleRelatchDelayFrames(nullptr);
+		if (retryDelayFrames == 0)
+			retryDelayFrames = kVRUpscalingTransitionApplyDelayFrames;
+
+		if (IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) && IsVRRenderScaleRelatchSettling(a_state)) {
+			retryDelayFrames = std::max(retryDelayFrames, kVRRenderScaleRelatchRecentTransitionFrames);
+		}
+
+		return std::max({
+			a_existingDelayFrames,
+			retryDelayFrames,
+			GetVRRenderScaleTransitionGraceDelayFrames(a_upscaling, a_upscaling.GetUpscaleMethod(), a_state) });
 	}
 
 	uint32_t RemainingFrames(uint32_t a_endFrame, uint32_t a_frame)
@@ -2071,6 +2127,112 @@ namespace
 		history.interesting = interesting;
 		history.initialized = true;
 #endif
+	}
+
+	bool IsOutOfMemoryResult(HRESULT a_result)
+	{
+		return a_result == E_OUTOFMEMORY ||
+		       a_result == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
+	}
+
+	bool IsOutOfMemoryException(const std::exception& a_exception)
+	{
+		const auto* comException = dynamic_cast<const DX::com_exception*>(&a_exception);
+		return comException && IsOutOfMemoryResult(comException->Error());
+	}
+
+	uint32_t GetVRSubmitStageIntermediateAllocCooldownRemaining(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return 0;
+
+		const uint32_t endFrame = g_vrSubmitStageIntermediateAllocCooldownEndFrame.load(std::memory_order_acquire);
+		if (endFrame == 0)
+			return 0;
+
+		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
+		if (currentFrame < endFrame)
+			return endFrame - currentFrame;
+
+		g_vrSubmitStageIntermediateAllocCooldownEndFrame.store(0, std::memory_order_release);
+		return 0;
+	}
+
+	bool IsVRSubmitStageIntermediateAllocCooldownActive(
+		const Upscaling& a_upscaling,
+		const State* a_state,
+		Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod) &&
+		       GetVRSubmitStageIntermediateAllocCooldownRemaining(a_state) != 0;
+	}
+
+	bool ShouldUseVRRenderScalePendingRelatchStretchFallback(
+		const Upscaling& a_upscaling,
+		const State* a_state,
+		Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod))
+			return false;
+		if (!a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
+			return false;
+
+		const uint32_t currentFrame = a_state ? std::max(a_state->frameCount, 1u) : 0u;
+		const uint32_t previouslyLoggedFrame =
+			g_vrRenderScaleRelatchPendingStretchLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
+		if (currentFrame != 0 &&
+			previouslyLoggedFrame != currentFrame &&
+			(previouslyLoggedFrame == 0 || previouslyLoggedFrame + 1u != currentFrame)) {
+			const uint32_t queuedFrame = a_upscaling.pendingPerfModeRenderTargetRecreateFrame.load(std::memory_order_acquire);
+			const uint32_t delayFrames = a_upscaling.pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
+			const uint32_t retryEndFrame = queuedFrame + delayFrames;
+			const uint32_t remainingRetryFrames = queuedFrame != 0 && retryEndFrame > currentFrame ? retryEndFrame - currentFrame : 0u;
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Using submit-stage stretch fallback while render-target relatch is pending (frame={}, remainingRetryFrames={})",
+				currentFrame,
+				remainingRetryFrames);
+			LogVRTransitionDiagnostics(a_upscaling, "submit-stage stretch fallback: relatch pending", true);
+		}
+
+		return true;
+	}
+
+	bool MarkVRSubmitStageIntermediateAllocCooldown(
+		const Upscaling& a_upscaling,
+		const State* a_state,
+		Upscaling::UpscaleMethod a_upscaleMethod,
+		const std::exception& a_exception)
+	{
+		if (!IsOutOfMemoryException(a_exception))
+			return false;
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod))
+			return false;
+		if (!a_state)
+			return false;
+
+		const bool transitionWorkPending =
+			a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+			a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+			HasPendingVRVendorRuntimeReset(a_upscaling, a_upscaleMethod) ||
+			IsVRRenderScaleRelatchSettling(a_state);
+		if (!transitionWorkPending)
+			return false;
+
+		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
+		const uint32_t cooldownEndFrame = currentFrame + kVRRenderScaleRelatchBusyRetryFrames;
+		const uint32_t previousEndFrame = g_vrSubmitStageIntermediateAllocCooldownEndFrame.load(std::memory_order_acquire);
+		if (previousEndFrame < cooldownEndFrame)
+			g_vrSubmitStageIntermediateAllocCooldownEndFrame.store(cooldownEndFrame, std::memory_order_release);
+
+		if (previousEndFrame <= currentFrame) {
+			logger::warn(
+				"[VRTransition] Submit-stage intermediate allocation hit render-scale memory pressure; using stretch fallback for up to {} frames: {}",
+				kVRRenderScaleRelatchBusyRetryFrames,
+				a_exception.what());
+			LogVRTransitionDiagnostics(a_upscaling, "submit-stage intermediate allocation cooldown", true);
+		}
+
+		return true;
 	}
 
 	void QueueVendorRuntimeResetAfterLoadingMenu(Upscaling& a_upscaling)
@@ -4568,12 +4730,16 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
 		return;
 
+	const uint32_t postTransitionRelatchDelayFrames = GetPostTransitionVRRenderScaleRelatchDelayFrames(a_reason);
 	const bool usePostTransitionRelatchDelay =
-		ShouldUsePostTransitionVRRenderScaleRelatchDelay(a_reason) ||
+		postTransitionRelatchDelayFrames != 0 ||
 		pendingVRUpscalingTransitionPostTransitionDelay.load(std::memory_order_acquire);
+	const uint32_t postTransitionDelayFrames = postTransitionRelatchDelayFrames != 0 ?
+		postTransitionRelatchDelayFrames :
+		kVRRenderScaleRelatchMenuStableFrames;
 	const uint32_t relatchDelayFrames = std::max(
 		usePostTransitionRelatchDelay ?
-			kVRRenderScaleRelatchPostTransitionStableFrames :
+			postTransitionDelayFrames :
 			kVRUpscalingTransitionApplyDelayFrames,
 		GetVRRenderScaleTransitionGraceDelayFrames(*this, GetUpscaleMethod(), globals::state));
 	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
@@ -4622,7 +4788,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	if (ShouldWaitForPerfModeRenderTargetRecreateDelay())
 		return false;
 
-	if (IsRenderScaleMethodEligible(GetUpscaleMethod()) && HasPendingVRUpscalingTransition()) {
+	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRUpscalingTransition()) {
 		return false;
 	}
 
@@ -4635,22 +4801,18 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	if (!pendingPerfModeRenderTargetRecreate.exchange(false, std::memory_order_acq_rel))
 		return true;
-	const uint32_t retryBaseDelayFrames = ShouldUsePostTransitionVRRenderScaleRelatchDelay(nullptr) ?
-		kVRRenderScaleRelatchPostTransitionStableFrames :
-		kVRUpscalingTransitionApplyDelayFrames;
-	const uint32_t retryDelayFrames = std::max(
-		pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire),
-		std::max(
-			retryBaseDelayFrames,
-			GetVRRenderScaleTransitionGraceDelayFrames(*this, GetUpscaleMethod(), globals::state)));
+	const uint32_t retryDelayFrames = GetVRRenderScaleRelatchRetryDelayFrames(
+		*this,
+		state,
+		pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire));
 	auto clearRelatchDelay = [&]() {
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateSafetyEndFrame.store(0, std::memory_order_release);
 	};
-	auto requeueRelatch = [&]() {
+	auto requeueRelatch = [&](uint32_t a_minDelayFrames) {
 		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
-		MarkPerfModeRenderTargetRecreateQueued(retryDelayFrames, false);
+		MarkPerfModeRenderTargetRecreateQueued(std::max(retryDelayFrames, a_minDelayFrames), false);
 	};
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	const auto relatchUpscaleMethod = GetUpscaleMethod();
@@ -4692,12 +4854,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				return false;
 			}
 
-			requeueRelatch();
+			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
 				pendingDLSSReset.store(true, std::memory_order_release);
 			const bool loggedVendorDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchVendorDeferDiagnostic, [&]() {
 				logger::warn("[PerfMode] Render-target relatch deferred because vendor resources are still in use.");
-				VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch deferred: vendor resources are still in use");
+				VR_TRANSITION_DIAG_LOG(
+					"[VRTransition] Relatch deferred: vendor resources are still in use; retrying in at least {} frames",
+					kVRRenderScaleRelatchBusyRetryFrames);
 			});
 			LogVRTransitionDiagnostics(*this, "render-target relatch deferred: vendor resources still in use", loggedVendorDeferDiagnostic);
 			return false;
@@ -4710,10 +4874,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: calling D3D render-target recreate");
 		if (!Hooks::RecreateRenderTargets()) {
-			requeueRelatch();
+			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 			const bool loggedD3DDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchD3DDeferDiagnostic, [&]() {
 				logger::warn("[PerfMode] Render-target relatch could not run; will retry.");
-				VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch deferred: D3D render-target recreate will retry");
+				VR_TRANSITION_DIAG_LOG(
+					"[VRTransition] Relatch deferred: D3D render-target recreate will retry in at least {} frames",
+					kVRRenderScaleRelatchBusyRetryFrames);
 			});
 			LogVRTransitionDiagnostics(*this, "render-target relatch deferred: D3D recreate retry", loggedD3DDeferDiagnostic);
 			return false;
@@ -4743,7 +4909,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		MarkVRRenderScaleRelatchSettling(GetVRRenderScaleRelatchSettleFrames(wasRenderScaleActive, IsPerfModeActive()));
 	} catch (const std::exception& e) {
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "render-target relatch")) {
-			requeueRelatch();
+			const uint32_t retryFrames = IsOutOfMemoryException(e) ?
+				kVRRenderScaleRelatchD3DFailureRetryFrames :
+				kVRRenderScaleRelatchBusyRetryFrames;
+			requeueRelatch(retryFrames);
+			if (retryFrames != kVRRenderScaleRelatchBusyRetryFrames) {
+				VR_TRANSITION_DIAG_LOG(
+					"[VRTransition] Relatch deferred after D3D allocation failure; retrying in at least {} frames",
+					retryFrames);
+			}
 		} else {
 			clearRelatchDelay();
 			clearRelatchRetryDiagnostics();
@@ -4752,7 +4926,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return false;
 	} catch (...) {
 		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch")) {
-			requeueRelatch();
+			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 		} else {
 			clearRelatchDelay();
 			clearRelatchRetryDiagnostics();
@@ -5435,9 +5609,65 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	}
 
 	if (!AreCommonVendorTexturesReady(a_upscalemethod)) {
-		logger::debug("[Upscaling] Recreating missing common texture resources for method {}", magic_enum::enum_name(a_upscalemethod));
-		DestroyCommonUpscalingTextures();
-		CreateUpscalingTextureResources(a_upscalemethod);
+		static bool loggedVRCommonVendorRecreateDefer = false;
+		const bool deferForVRRenderScaleRelatch =
+			globals::game::isVR &&
+			IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod) &&
+			(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+			 perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+			 HasPendingVRVendorRuntimeReset(*this, a_upscalemethod));
+
+		if (deferForVRRenderScaleRelatch) {
+			const bool loggedDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedVRCommonVendorRecreateDefer, [&]() {
+				VR_TRANSITION_DIAG_LOG(
+					"[VRTransition] Deferred missing common texture recreation while render-target relatch/reset is pending");
+			});
+			LogVRTransitionDiagnostics(*this, "deferred missing common texture recreation", loggedDeferDiagnostic);
+			return;
+		}
+		loggedVRCommonVendorRecreateDefer = false;
+
+		const auto requeueMissingCommonRecreate = [&]() {
+			pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+			MarkPerfModeRenderTargetRecreateQueued(kVRRenderScaleRelatchBusyRetryFrames, false);
+			if (a_upscalemethod == UpscaleMethod::kDLSS)
+				pendingDLSSReset.store(true, std::memory_order_release);
+			else if (a_upscalemethod == UpscaleMethod::kFSR)
+				pendingFSRReset.store(true, std::memory_order_release);
+		};
+
+		try {
+			logger::debug("[Upscaling] Recreating missing common texture resources for method {}", magic_enum::enum_name(a_upscalemethod));
+			DestroyCommonUpscalingTextures();
+			CreateUpscalingTextureResources(a_upscalemethod);
+		} catch (const std::exception& e) {
+			if (globals::game::isVR && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
+				if (MarkSubmitStageDeviceLostIfNeeded(e, "missing common texture recreation"))
+					return;
+
+				requeueMissingCommonRecreate();
+				logger::warn(
+					"[VRTransition] Deferred missing common texture recreation for {} after failure: {}",
+					magic_enum::enum_name(a_upscalemethod),
+					e.what());
+				LogVRTransitionDiagnostics(*this, "missing common texture recreation deferred after failure", true);
+				return;
+			}
+			throw;
+		} catch (...) {
+			if (globals::game::isVR && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
+				if (MarkSubmitStageDeviceLostIfDeviceRemoved("missing common texture recreation"))
+					return;
+
+				requeueMissingCommonRecreate();
+				logger::warn(
+					"[VRTransition] Deferred missing common texture recreation for {} after an unknown failure",
+					magic_enum::enum_name(a_upscalemethod));
+				LogVRTransitionDiagnostics(*this, "missing common texture recreation deferred after unknown failure", true);
+				return;
+			}
+			throw;
+		}
 	}
 }
 
@@ -8420,7 +8650,8 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 			colorSource, motionVectors, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get());
 	} catch (const std::exception& e) {
 		logger::warn("[Upscaling] Submit-stage vendor upscaling failed to create intermediates: {}", e.what());
-		MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage intermediate creation");
+		if (!MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage intermediate creation"))
+			MarkVRSubmitStageIntermediateAllocCooldown(*this, state, upscaleMethod, e);
 		return false;
 	} catch (...) {
 		logger::warn("[Upscaling] Submit-stage vendor upscaling failed to create intermediates.");
@@ -9658,6 +9889,24 @@ bool Upscaling::IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture)
 		handoffFrameDelta);
 }
 
+bool Upscaling::ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame() const
+{
+	const auto* state = globals::state;
+	if (!ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(state))
+		return false;
+
+	const uint32_t currentFrame = state->frameCount;
+	const uint32_t previouslyLoggedFrame =
+		g_vrRenderScaleRelatchCompositorSuppressLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
+	if (previouslyLoggedFrame != currentFrame) {
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] Suppressing OpenVR compositor submit on the render-target relatch frame (frame={}, closeAge={})",
+			currentFrame,
+			GetVRLoadingTransitionCloseElapsedFrames(state));
+	}
+	return true;
+}
+
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds)
 {
@@ -9801,20 +10050,34 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return true;
 	}
 
-	CheckResources(upscaleMethod);
-	if (IsSubmitStageDeviceLost())
-		return false;
+	const bool relatchPendingStretchFallback =
+		targetScaleMode && !presentationOnly &&
+		ShouldUseVRRenderScalePendingRelatchStretchFallback(*this, state, upscaleMethod);
+	const bool intermediateAllocCooldownFallback =
+		targetScaleMode && !presentationOnly &&
+		IsVRSubmitStageIntermediateAllocCooldownActive(*this, state, upscaleMethod);
+
+	if (!relatchPendingStretchFallback && !intermediateAllocCooldownFallback) {
+		CheckResources(upscaleMethod);
+		if (IsSubmitStageDeviceLost())
+			return false;
+	}
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
 	bool relatchVendorResetDeferredFallback = false;
+	const bool transitionStretchFallback =
+		relatchPendingStretchFallback ||
+		intermediateAllocCooldownFallback;
 	const auto canUseRelatchVendorResetFallback = [&]() {
 		return targetScaleMode &&
 		       IsVRRenderScaleRelatchSettling(state);
 	};
-	if (!submitStagePreparedThisFrame) {
+	if (transitionStretchFallback) {
+		relatchVendorResetDeferredFallback = true;
+	} else if (!submitStagePreparedThisFrame) {
 		if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
 			if (IsSubmitStageDeviceLost())
 				return false;
@@ -9850,13 +10113,36 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		targetScaleMode && ShouldUseVRRenderScaleRelatchStretchFallback(*this, state, upscaleMethod);
 	const bool fsrRenderScaleResetFallback =
 		targetScaleMode && ShouldUseVRFSRRenderScaleResetStretchFallback(*this, upscaleMethod);
-	const bool stretchOnlyFallback = (relatchStretchFallbackStillActive || relatchVendorResetDeferredFallback || fsrRenderScaleResetFallback) && !presentationOnly;
+	const bool stretchOnlyFallback =
+		(relatchStretchFallbackStillActive ||
+		 relatchVendorResetDeferredFallback ||
+		 fsrRenderScaleResetFallback ||
+		 relatchPendingStretchFallback ||
+		 intermediateAllocCooldownFallback) &&
+		!presentationOnly;
+
+	if (stretchOnlyFallback && ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(state)) {
+		const uint32_t previouslyLoggedFrame = g_vrRenderScaleRelatchSubmitSkipLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
+		if (previouslyLoggedFrame != currentFrame) {
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Skipping submit-stage presentation texture recreate on the render-target relatch frame (frame={}, closeAge={})",
+				currentFrame,
+				GetVRLoadingTransitionCloseElapsedFrames(state));
+		}
+		return false;
+	}
 
 	if (!presentationOnly && !stretchOnlyFallback && (!motionVector.texture || !depth.texture))
 		return false;
 
 	if (presentationOnly || stretchOnlyFallback) {
-		const char* presentationContext = presentationOnly ? "Menu/loading presentation" : "Render-scale recovery stretch fallback";
+		const char* presentationContext = "Render-scale recovery stretch fallback";
+		if (presentationOnly)
+			presentationContext = "Menu/loading presentation";
+		else if (relatchPendingStretchFallback)
+			presentationContext = "Render-scale pending-relatch stretch fallback";
+		else if (intermediateAllocCooldownFallback)
+			presentationContext = "Render-scale allocation cooldown stretch fallback";
 		try {
 			if ((!submitStagePreparedThisFrame || !submitStagePreparedFramePresentationOnly) &&
 				!EnsureVRPresentationTextures(sourceEyeWidthIn, sourceEyeHeightIn, eyeWidthOut, eyeHeightOut, sourceTexture)) {
@@ -10423,8 +10709,9 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames, bool a_extendFoveatedSafety)
 {
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
-	const uint32_t contextDelay = ShouldUsePostTransitionVRRenderScaleRelatchDelay(nullptr) ?
-		kVRRenderScaleRelatchPostTransitionStableFrames :
+	const uint32_t postTransitionRelatchDelayFrames = GetPostTransitionVRRenderScaleRelatchDelayFrames(nullptr);
+	const uint32_t contextDelay = postTransitionRelatchDelayFrames != 0 ?
+		postTransitionRelatchDelayFrames :
 		kVRUpscalingTransitionApplyDelayFrames;
 	const uint32_t transitionGraceDelay = GetVRRenderScaleTransitionGraceDelayFrames(*this, GetUpscaleMethod(), globals::state);
 	const uint32_t requestedDelay = a_delayFrames != 0 ? a_delayFrames : std::max(contextDelay, transitionGraceDelay);

@@ -1271,17 +1271,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		envMaskBase = envMaskSample.x;
 		envMaskBaseSampled = true;
 
-		complexMaterial = envMaskTest < (1.0 - kMaskEpsilon);
+		const float4 mipSample = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15);
+		complexMaterial = mipSample.w < (1.0 - kMaskEpsilon);
 
-		// Detect texture saved in the wrong format
-		if ((abs(envMaskSample.x - envMaskSample.y) < kMaskEpsilon) &&
-			(abs(envMaskSample.x - envMaskSample.z) < kMaskEpsilon) &&
-			(abs(envMaskSample.y - envMaskSample.z) < kMaskEpsilon) &&
-			(abs(envMaskSample.x - envMaskTest) < kMaskEpsilon))
+		const bool grayscaleMask = (abs(mipSample.x - mipSample.y) < kMaskEpsilon) &&
+								   (abs(mipSample.x - mipSample.z) < kMaskEpsilon) &&
+								   (abs(mipSample.y - mipSample.z) < kMaskEpsilon);
+		// Preserve height-only masks while rejecting grayscale environment masks
+		const bool solidBlackHeightMask = all(mipSample.xyz < kMaskEpsilon) &&
+										  mipSample.w > kMaskEpsilon &&
+										  mipSample.w < (1.0 - kMaskEpsilon);
+		if (grayscaleMask && !solidBlackHeightMask)
 			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskTest > kMaskEpsilon) {
+			if (envMaskTest > kMaskEpsilon && envMaskTest < (1.0 - kMaskEpsilon)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);

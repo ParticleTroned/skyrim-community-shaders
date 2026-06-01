@@ -26,7 +26,8 @@ CSPluginAPI::ICSInterface001* CSPluginAPI::GetCSInterface001()
 		return nullptr;
 	}
 
-	// Fetch the API for this version of the CS interface.
+	// Fetch the API for this header revision. Existing revision-1 consumers keep
+	// using their already-compiled helper and remain accepted by the provider.
 	void* api = csMessage.GetApiFunction(CSInterfaceRevision);
 	if (!api) {
 		return nullptr;

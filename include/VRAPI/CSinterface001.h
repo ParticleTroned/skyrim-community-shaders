@@ -10,7 +10,9 @@ namespace CSPluginAPI
 	// This should only be called after SKSE sends kMessage_PostLoad to your plugin.
 	constexpr const auto CSPluginName = "CommunityShaders";
 	inline constexpr uint32_t CSInterfaceMessageType = 0x43534150;  // "CSAP"
-	inline constexpr unsigned int CSInterfaceRevision = 1;
+	inline constexpr unsigned int CSInterfaceRevision001 = 1;
+	inline constexpr unsigned int CSInterfaceRevision002 = 2;
+	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision002;
 
 	// A message used to fetch Community Shaders' interface.
 	struct CSMessage
@@ -51,6 +53,14 @@ namespace CSPluginAPI
 		kF = 4
 	};
 
+	enum class UpscaleMethod : uint32_t
+	{
+		kNone = 0,
+		kTAA = 1,
+		kFSR = 2,
+		kDLSS = 3
+	};
+
 	// This object provides access to Community Shaders' mod support API.
 	struct ICSInterface001
 	{
@@ -85,11 +95,17 @@ namespace CSPluginAPI
 		virtual void SetRenderAtUpscaleResEnabled(bool enabled) = 0;
 		virtual bool GetRenderAtUpscaleResActive() = 0;
 
-		// Convenience for interior/exterior transition controllers. Stages the
-		// configured upscaler method, render-scale path, shared preset, and DLSS
-		// profile together. The profile value is applied only while DLSS is the
-		// selected method; the parameter type name is retained for ABI compatibility.
+		// Legacy convenience for interior/exterior transition controllers. On
+		// DLSS-capable systems this stages DLSS, render-scale path, shared
+		// preset, and DLSS profile together. FSR-specific callers should use
+		// SetVRUpscalingTransitionProfileForMethod in revision 2.
 		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
+
+		// Revision 2. Explicit upscaler method control for callers that must
+		// distinguish DLSS from FSR/FSR4 instead of relying on current CS settings.
+		virtual UpscaleMethod GetUpscaleMethod() = 0;
+		virtual void SetUpscaleMethod(UpscaleMethod method) = 0;
+		virtual void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
 	};
 }  // namespace CSPluginAPI
 

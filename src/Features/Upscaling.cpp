@@ -533,6 +533,14 @@ namespace
 		return std::min<uint>(value, Upscaling::kQualityModeMaxIndex);
 	}
 
+	Upscaling::UpscaleMethod ClampUpscaleMethod(uint value, Upscaling::UpscaleMethod maxMethod)
+	{
+		return static_cast<Upscaling::UpscaleMethod>(std::clamp(
+			static_cast<int>(value),
+			static_cast<int>(Upscaling::UpscaleMethod::kNONE),
+			static_cast<int>(maxMethod)));
+	}
+
 	uint MigrateLegacyQualityModeUInt(uint value)
 	{
 		switch (value) {
@@ -4080,20 +4088,25 @@ Upscaling::UpscaleMethod Upscaling::GetConfiguredUpscaleMethodForTransition() co
 	if (GetOpenCompositeUpscalingBlocker().active)
 		return UpscaleMethod::kNONE;
 
-	const auto primaryMethod = static_cast<UpscaleMethod>(std::clamp(
-		static_cast<int>(settings.upscaleMethod),
-		static_cast<int>(UpscaleMethod::kNONE),
-		static_cast<int>(UpscaleMethod::kDLSS)));
+	const auto primaryMethod = ClampUpscaleMethod(settings.upscaleMethod, UpscaleMethod::kDLSS);
 	if (primaryMethod != UpscaleMethod::kDLSS)
 		return primaryMethod;
 
 	if (streamline.featureDLSS || !streamline.featureCheckComplete)
 		return UpscaleMethod::kDLSS;
 
-	return static_cast<UpscaleMethod>(std::clamp(
-		static_cast<int>(settings.upscaleMethodNoDLSS),
-		static_cast<int>(UpscaleMethod::kNONE),
-		static_cast<int>(UpscaleMethod::kFSR)));
+	return ClampUpscaleMethod(settings.upscaleMethodNoDLSS, UpscaleMethod::kFSR);
+}
+
+Upscaling::UpscaleMethod Upscaling::GetLegacyDLSSPreferredUpscaleMethodForAPI() const
+{
+	if (GetOpenCompositeUpscalingBlocker().active)
+		return UpscaleMethod::kNONE;
+
+	if (streamline.featureDLSS || !streamline.featureCheckComplete)
+		return UpscaleMethod::kDLSS;
+
+	return ClampUpscaleMethod(settings.upscaleMethodNoDLSS, UpscaleMethod::kFSR);
 }
 
 Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
@@ -10020,7 +10033,7 @@ bool Upscaling::IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture)
 		handoffFrameDelta);
 }
 
-bool Upscaling::ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame() const
+bool Upscaling::ShouldBypassVRCompositorUpscalingForRenderScaleRelatchFrame() const
 {
 	const auto* state = globals::state;
 	if (!ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(state))
@@ -10031,7 +10044,7 @@ bool Upscaling::ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame() con
 		g_vrRenderScaleRelatchCompositorSuppressLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
 	if (previouslyLoggedFrame != currentFrame) {
 		VR_TRANSITION_DIAG_LOG(
-			"[VRTransition] Suppressing OpenVR compositor submit during render-target relatch submit guard (frame={}, closeAge={})",
+			"[VRTransition] Bypassing CS upscaled OpenVR submit during render-target relatch guard; forwarding original submit (frame={}, closeAge={})",
 			currentFrame,
 			GetVRLoadingTransitionCloseElapsedFrames(state));
 	}

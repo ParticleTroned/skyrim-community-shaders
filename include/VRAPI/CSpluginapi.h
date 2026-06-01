@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 6;
+inline constexpr unsigned int CSBuildNumber = 7;
 
 namespace CSPluginAPI
 {
@@ -48,6 +48,10 @@ namespace CSPluginAPI
 		virtual void SetRenderAtUpscaleResEnabled(bool enabled) override;
 		virtual bool GetRenderAtUpscaleResActive() override;
 		virtual void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) override;
+
+		virtual UpscaleMethod GetUpscaleMethod() override;
+		virtual void SetUpscaleMethod(UpscaleMethod method) override;
+		virtual void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) override;
 	};
 
 	namespace detail
@@ -137,6 +141,54 @@ namespace CSPluginAPI
 				return false;
 			}
 		}
+
+		inline bool IsValidUpscaleMethod(UpscaleMethod method)
+		{
+			switch (method) {
+			case UpscaleMethod::kNone:
+			case UpscaleMethod::kTAA:
+			case UpscaleMethod::kFSR:
+			case UpscaleMethod::kDLSS:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		inline Upscaling::UpscaleMethod ToInternalUpscaleMethod(UpscaleMethod method)
+		{
+			switch (method) {
+			case UpscaleMethod::kTAA:
+				return Upscaling::UpscaleMethod::kTAA;
+			case UpscaleMethod::kFSR:
+				return Upscaling::UpscaleMethod::kFSR;
+			case UpscaleMethod::kDLSS:
+				return Upscaling::UpscaleMethod::kDLSS;
+			case UpscaleMethod::kNone:
+			default:
+				return Upscaling::UpscaleMethod::kNONE;
+			}
+		}
+
+		inline UpscaleMethod FromInternalUpscaleMethod(Upscaling::UpscaleMethod method)
+		{
+			switch (method) {
+			case Upscaling::UpscaleMethod::kTAA:
+				return UpscaleMethod::kTAA;
+			case Upscaling::UpscaleMethod::kFSR:
+				return UpscaleMethod::kFSR;
+			case Upscaling::UpscaleMethod::kDLSS:
+				return UpscaleMethod::kDLSS;
+			case Upscaling::UpscaleMethod::kNONE:
+			default:
+				return UpscaleMethod::kNone;
+			}
+		}
+
+		inline Upscaling::UpscaleMethod GetLegacyDLSSPreferredUpscaleMethod(const Upscaling& upscaling)
+		{
+			return upscaling.GetLegacyDLSSPreferredUpscaleMethodForAPI();
+		}
 	}
 
 	inline CSInterface001 g_interface001;
@@ -144,8 +196,11 @@ namespace CSPluginAPI
 	// Constructs and returns an API of the revision number requested.
 	inline void* GetApi(unsigned int revisionNumber)
 	{
-		// Accept revision 0 as "latest" in addition to explicit revision 1.
-		if (revisionNumber != 0 && revisionNumber != CSInterfaceRevision) {
+		// Accept revision 0 as "latest" and keep revision 1 available for
+		// already-compiled consumers. Revision 2 only appends vtable entries.
+		if (revisionNumber != 0 &&
+		    revisionNumber != CSInterfaceRevision001 &&
+		    revisionNumber != CSInterfaceRevision) {
 			return nullptr;
 		}
 
@@ -216,7 +271,7 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
-		const auto upscaleMethod = upscaling.GetConfiguredUpscaleMethodForTransition();
+		const auto upscaleMethod = detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling);
 		const bool renderScaleModeEnabled =
 			upscaling.IsRenderScaleModeRequested() &&
 			Upscaling::GetQualityModeResolutionScale(qualityMode) < 0.99f;
@@ -253,10 +308,16 @@ namespace CSPluginAPI
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
-		const bool stageVRDLSSProfileChange = globals::game::isVR && upscaling.GetConfiguredUpscaleMethodForTransition() == Upscaling::UpscaleMethod::kDLSS;
+		const auto upscaleMethod = detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling);
+		const bool stageVRDLSSProfileChange = globals::game::isVR && upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
 
 		if (stageVRDLSSProfileChange) {
-			upscaling.SetVRUpscalingTransitionProfile(upscaling.GetPerfModeRequested(), upscaling.GetEffectiveDLSSQualityMode(), dlssPreset, "CS API DLSS profile change");
+			upscaling.ApplyCSMenuUpscalingTransition(
+				upscaleMethod,
+				upscaling.GetPerfModeRequested(),
+				upscaling.GetEffectiveDLSSQualityMode(),
+				dlssPreset,
+				"CS API legacy DLSS profile change");
 			return;
 		}
 
@@ -296,6 +357,58 @@ namespace CSPluginAPI
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
-		upscaling.SetVRUpscalingTransitionProfile(renderScaleModeEnabled, qualityMode, dlssPreset, "CS API VR upscaling transition profile");
+		upscaling.ApplyCSMenuUpscalingTransition(
+			detail::GetLegacyDLSSPreferredUpscaleMethod(upscaling),
+			renderScaleModeEnabled,
+			qualityMode,
+			dlssPreset,
+			"CS API legacy DLSS-preferred VR upscaling transition profile");
+	}
+
+	inline UpscaleMethod CSInterface001::GetUpscaleMethod()
+	{
+		return detail::FromInternalUpscaleMethod(globals::features::upscaling.GetConfiguredUpscaleMethodForTransition());
+	}
+
+	inline void CSInterface001::SetUpscaleMethod(UpscaleMethod method)
+	{
+		if (!detail::IsValidUpscaleMethod(method)) {
+			logger::warn("[CS API] Ignoring invalid upscaler method value {}", static_cast<uint32_t>(method));
+			return;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		upscaling.ApplyCSMenuUpscalingTransition(
+			detail::ToInternalUpscaleMethod(method),
+			upscaling.IsRenderScaleModeRequested(),
+			upscaling.GetEffectiveDLSSQualityMode(),
+			upscaling.GetEffectiveDLSSPreset(),
+			"CS API upscaler method change");
+	}
+
+	inline void CSInterface001::SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)
+	{
+		if (!detail::IsValidUpscaleMethod(method)) {
+			logger::warn("[CS API] Ignoring invalid transition upscaler method value {}", static_cast<uint32_t>(method));
+			return;
+		}
+		if (!detail::IsValidUpscalePreset(preset)) {
+			logger::warn("[CS API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
+			return;
+		}
+		if (!detail::IsValidDLSSProfile(profile)) {
+			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
+			return;
+		}
+
+		auto& upscaling = globals::features::upscaling;
+		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
+		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
+		upscaling.ApplyCSMenuUpscalingTransition(
+			detail::ToInternalUpscaleMethod(method),
+			renderScaleModeEnabled,
+			qualityMode,
+			dlssPreset,
+			"CS API VR method-specific upscaling transition profile");
 	}
 }  // namespace CSPluginAPI

@@ -389,6 +389,7 @@ public:
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;
+	UpscaleMethod GetLegacyDLSSPreferredUpscaleMethodForAPI() const;
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
 	uint32_t GetRuntimeQualityMode() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
@@ -560,7 +561,7 @@ public:
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
 	bool IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const;
-	bool ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame() const;
+	bool ShouldBypassVRCompositorUpscalingForRenderScaleRelatchFrame() const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
 	enum class DynamicResolutionUpsampleStage : uint8_t

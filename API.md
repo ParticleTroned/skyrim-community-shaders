@@ -8,7 +8,7 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 
 ## API Version
 
-- Interface revision: `1`
+- Interface revision: `2` (`1` remains accepted for existing compiled consumers)
 - Build number: returned by `getBuildNumber()`
 
 ## What This API Exposes
@@ -17,10 +17,11 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 - Screen Space GI toggle
 - Volumetric Lighting Exterior toggle
 - Shared upscaler preset control for DLSS, FSR 3.1.5, and runtime FSR4 (`DLAA`/`Native AA`, `Hoshipa`, `Ultra Quality`, `Quality`, `Balanced`, `Performance`, `Ultra Performance`)
+- Explicit upscaler method control (`None`, `TAA`, `FSR`, `DLSS`)
 - DLSS profile control (`J`, `K`, `L`, `M`, `F`)
 - VR Render Scale Mode control with transition-time render-target relatching
 
-The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. `DLSSMode` remains a type alias for `UpscalePreset` so old enum values keep their numeric layout. DLSS profile control is DLSS-only. In VR, presets below native enable Render Scale Mode and Native AA/DLAA disables it. Render Scale Mode requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch.
+The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. `DLSSMode` remains a type alias for `UpscalePreset` so old enum values keep their numeric layout. DLSS profile control is DLSS-only. In VR, presets below native enable Render Scale Mode and Native AA/DLAA disables it. Render Scale Mode requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch. Legacy revision-1 upscaling calls keep DLSS-first behavior on DLSS-capable systems. Revision 2 adds method-explicit calls for controllers that must select FSR/FSR4 or otherwise distinguish DLSS from FSR/FSR4 instead of relying on legacy DLSS behavior.
 
 ## Files You Need In The Consumer Mod
 
@@ -35,7 +36,7 @@ You do **not** need provider internals like `CSpluginapi.*`.
 
 - Target plugin name: `CommunityShaders`
 - Message type: `0x43534150` (`CSMessage::kMessage_GetInterface`)
-- Requested revision: `1` (provider also accepts `0` as "latest")
+- Requested revision: `2` for method-explicit upscaling calls. Revision `1` remains accepted for existing binaries, and `0` requests "latest". The bundled `GetCSInterface001()` helper requests revision `2` and returns `nullptr` on older providers so new callers do not accidentally use revision-2 methods on a revision-1 vtable.
 
 ## Integration Steps
 
@@ -102,6 +103,9 @@ void SetShadowsEnabled(bool enabled)
 - `void SetRenderAtUpscaleResEnabled(bool enabled)`
 - `bool GetRenderAtUpscaleResActive()`
 - `void SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)`
+- `UpscaleMethod GetUpscaleMethod()`
+- `void SetUpscaleMethod(UpscaleMethod method)`
+- `void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)`
 
 `UpscalePreset` values:
 
@@ -115,6 +119,13 @@ void SetShadowsEnabled(bool enabled)
 
 Numeric enum values keep backwards compatibility for the original five modes; they are not the same as the in-menu order for the two newer modes. `UpscalePreset::kDLAA` is an alias for `UpscalePreset::kNativeAA`. `DLSSMode` is a legacy alias for `UpscalePreset`, so `DLSSMode::kQuality` and `UpscalePreset::kQuality` name the same enum value.
 
+`UpscaleMethod` values:
+
+- `UpscaleMethod::kNone`
+- `UpscaleMethod::kTAA`
+- `UpscaleMethod::kFSR` (covers FSR 3.1.5 and runtime FSR4; runtime FSR4 remains a CS-side runtime path choice)
+- `UpscaleMethod::kDLSS`
+
 ## Behavior Notes
 
 - `SSS` means **Screen Space Shadows**, not Subsurface Scattering.
@@ -124,8 +135,10 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - DLSS profile control is DLSS-only and does **not** affect FSR 3.1.5 or FSR4.
 - `SetRenderAtUpscaleResEnabled` is the legacy API name for changing the requested VR Render Scale Mode state. Enabling it from Native AA/DLAA promotes the shared preset to `Quality` so the render-scale state stays valid. `GetRenderAtUpscaleResActive` reports whether the Render Scale Mode render-target relatch is actually active.
 - Render Scale Mode is only eligible in VR with DLSS/FSR upscaling presets below native scale. Selecting Native AA/DLAA disables Render Scale Mode and clears the relatch request.
-- `SetVRUpscalingTransitionProfile` is intended for interior/exterior transition controllers. It stages the currently configured upscaler method, Render Scale Mode, and shared DLSS/FSR render-scale preset transitions so Community Shaders can apply one relatch. Its `DLSSProfile` parameter type name is kept for ABI compatibility, and the profile value is applied only when the resolved method is DLSS. During the VR save/load grace window or while game/CS menus are open, render-scale transitions stay queued until the post-load runtime reset has completed and the transition has settled for a few frames. Native/no-render-scale preset changes and DLSS profile-only changes apply normally.
-- The individual `SetUpscalePreset`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately.
+- `SetVRUpscalingTransitionProfile` is the legacy transition call. On DLSS-capable systems, it stages DLSS, Render Scale Mode, the shared render-scale preset, and the DLSS profile together so Community Shaders can apply one relatch. If DLSS is known unavailable, it falls back to the configured non-DLSS method. This preserves old `DLSSMode`/`DLSSProfile` caller expectations; FSR-specific callers should use the revision-2 method-specific call. During the VR save/load grace window or while game/CS menus are open, render-scale transitions stay queued until the post-load runtime reset has completed and the transition has settled for a few frames. Native/no-render-scale preset changes and DLSS profile-only changes apply normally.
+- `SetUpscaleMethod` selects the CS upscaler method explicitly while preserving the current preset, DLSS profile, and Render Scale Mode request where valid.
+- `SetVRUpscalingTransitionProfileForMethod` is the preferred revision-2 call for interior/exterior controllers that need deterministic DLSS/FSR behavior. It stages method, Render Scale Mode, shared preset, and DLSS profile together, so `DLSS + NativeAA + K` is unambiguously DLAA/K and `FSR + Hoshipa` is unambiguously FSR render scale.
+- The individual legacy `SetUpscalePreset`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately. `SetUpscalePreset` and `SetDLSSProfile` prefer DLSS on DLSS-capable systems for backwards compatibility with consumers built around the old DLSS naming.
 - New virtual methods must only be appended to the interface to preserve binary compatibility.
 - VR DLSS keeps two viewport/resource slots for recent quality/profile combinations. Alternating between an exterior profile and an interior profile can reuse those slots instead of rebuilding DLSS every time.
 - Reflex settings are not exposed by this API.
@@ -141,4 +154,5 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - `UpscalePreset::kHoshipa` and `UpscalePreset::kUltraQuality` require `getBuildNumber() >= 4`.
 - `GetRenderAtUpscaleResEnabled`/`SetRenderAtUpscaleResEnabled`/`GetRenderAtUpscaleResActive` require `getBuildNumber() >= 5`.
 - `SetVRUpscalingTransitionProfile` and the current VR render-scale transition staging behavior require `getBuildNumber() >= 6`.
+- `GetUpscaleMethod`/`SetUpscaleMethod`/`SetVRUpscalingTransitionProfileForMethod` require interface revision `2` and `getBuildNumber() >= 7`.
 - Treat missing API as optional integration and continue without hard failure.

@@ -264,19 +264,19 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				const bool submitStageUpscalingActive = upscaling.IsSubmitStageUpscalingActive();
 				const bool perfModePresentationActive = upscaling.IsPerfModePresentationActive();
 				const bool presentationUpscalingActive = submitStageUpscalingActive || perfModePresentationActive;
+				const bool bypassUpscaledSubmitForRelatchFrame = upscaling.ShouldBypassVRCompositorUpscalingForRenderScaleRelatchFrame();
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
-				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
+				if (!bypassUpscaledSubmitForRelatchFrame && upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
 					if (ShouldRenderInSceneMenu(vr) &&
 						upscaledTexture.handle &&
 						upscaledTexture.eType == vr::TextureType_DirectX)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
-				if (upscaling.ShouldSuppressVRCompositorSubmitForRenderScaleRelatchFrame())
-					return vr::VRCompositorError_None;
 
-				if (!presentationUpscalingActive || perfModePresentationActive || upscaling.IsSubmitStageHandoffTexture(pTexture)) {
+				if (!bypassUpscaledSubmitForRelatchFrame &&
+					(!presentationUpscalingActive || perfModePresentationActive || upscaling.IsSubmitStageHandoffTexture(pTexture))) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture))
 						return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);

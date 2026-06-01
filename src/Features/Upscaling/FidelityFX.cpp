@@ -30,6 +30,72 @@ namespace
 
 	void* s_fidelityFxDllDirectoryCookie = nullptr;
 
+	enum class D3D11IdleFenceResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
+	void ReleaseD3D11IdleFence(ID3D11Query*& a_query)
+	{
+		if (!a_query)
+			return;
+
+		a_query->Release();
+		a_query = nullptr;
+	}
+
+	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
+	{
+		if (!a_context) {
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Ready;
+		}
+
+		const auto pollFence = [&]() {
+			BOOL completed = FALSE;
+			const HRESULT dataResult = a_context->GetData(a_query, &completed, sizeof(completed), 0);
+			if (dataResult == S_OK && completed) {
+				ReleaseD3D11IdleFence(a_query);
+				return D3D11IdleFenceResult::Ready;
+			}
+
+			if (dataResult == S_FALSE || dataResult == S_OK)
+				return D3D11IdleFenceResult::Pending;
+
+			logger::debug("[FidelityFX] D3D11 idle fence poll failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Failed;
+		};
+
+		if (a_query)
+			return pollFence();
+
+		ID3D11Device* device = nullptr;
+		a_context->GetDevice(&device);
+		if (!device) {
+			a_context->Flush();
+			return D3D11IdleFenceResult::Ready;
+		}
+
+		D3D11_QUERY_DESC queryDesc{};
+		queryDesc.Query = D3D11_QUERY_EVENT;
+
+		const HRESULT createResult = device->CreateQuery(&queryDesc, &a_query);
+		device->Release();
+
+		if (FAILED(createResult) || !a_query) {
+			a_context->Flush();
+			logger::debug("[FidelityFX] D3D11 idle fence creation failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(createResult));
+			return D3D11IdleFenceResult::Failed;
+		}
+
+		a_context->End(a_query);
+		a_context->Flush();
+		return pollFence();
+	}
+
 	bool UseSplitPerEyeFSRContexts()
 	{
 		return globals::game::isVR;
@@ -442,6 +508,11 @@ namespace
 
 		return dispatchOk;
 	}
+}
+
+FidelityFX::~FidelityFX()
+{
+	ResetFSRIdleFence();
 }
 
 void FidelityFX::LoadFFX()
@@ -909,6 +980,120 @@ void FidelityFX::DestroyRuntimeUpscalerResources(bool a_waitForIdle)
 	runtimeOutputSharedDesc = {};
 }
 
+void FidelityFX::ResetFSRIdleFence()
+{
+	ReleaseD3D11IdleFence(pendingFSRResourceFreeIdleFence);
+	pendingRuntimeTeardownD3D11FenceValue = 0;
+	pendingRuntimeTeardownD3D12FenceValue = 0;
+}
+
+bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
+{
+	const char* reason = a_reason && *a_reason ? a_reason : "runtime upscaler teardown";
+	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	if (!runtimeD3D12Fence && !runtimeD3D11Fence) {
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	}
+
+	try {
+		if (pendingRuntimeTeardownD3D11FenceValue != 0 &&
+			(!swapChain.d3d11Context || !runtimeD3D11Fence || !runtimeD3D12Fence)) {
+			pendingRuntimeTeardownD3D11FenceValue = 0;
+		}
+		if (pendingRuntimeTeardownD3D12FenceValue != 0 && (!swapChain.commandQueue || !runtimeD3D12Fence)) {
+			pendingRuntimeTeardownD3D12FenceValue = 0;
+		}
+
+		if (swapChain.d3d11Context && runtimeD3D11Fence && runtimeD3D12Fence) {
+			if (pendingRuntimeTeardownD3D11FenceValue == 0) {
+				pendingRuntimeTeardownD3D11FenceValue = runtimeFenceValue++;
+				DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), pendingRuntimeTeardownD3D11FenceValue));
+				swapChain.d3d11Context->Flush();
+			}
+
+			if (runtimeD3D12Fence->GetCompletedValue() < pendingRuntimeTeardownD3D11FenceValue)
+				return false;
+
+			pendingRuntimeTeardownD3D11FenceValue = 0;
+		} else if (globals::d3d::context) {
+			globals::d3d::context->Flush();
+		}
+
+		if (swapChain.commandQueue && runtimeD3D12Fence) {
+			if (pendingRuntimeTeardownD3D12FenceValue == 0) {
+				pendingRuntimeTeardownD3D12FenceValue = runtimeFenceValue++;
+				DX::ThrowIfFailed(swapChain.commandQueue->Signal(runtimeD3D12Fence.get(), pendingRuntimeTeardownD3D12FenceValue));
+			}
+
+			if (runtimeD3D12Fence->GetCompletedValue() < pendingRuntimeTeardownD3D12FenceValue)
+				return false;
+
+			pendingRuntimeTeardownD3D12FenceValue = 0;
+		}
+	} catch (const std::exception& e) {
+		logger::warn("[FidelityFX] Failed to poll runtime upscaler idle before {}: {}", reason, e.what());
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	} catch (...) {
+		logger::warn("[FidelityFX] Failed to poll runtime upscaler idle before {}.", reason);
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	}
+
+	return true;
+}
+
+bool FidelityFX::PollFSRResourceTeardownReady(const char* a_reason)
+{
+	bool hasRuntimeResources =
+		runtimeUpscalerContextCount != 0 ||
+		runtimeD3D11Fence.get() ||
+		runtimeD3D12Fence.get();
+	for (auto* resource : runtimeColorShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeDepthShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeMotionShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeReactiveShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeTransparencyShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeOutputShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+
+	if (fsrContextCount == 0 && !fsrScratchBuffer && !hasRuntimeResources) {
+		ResetFSRIdleFence();
+		return true;
+	}
+
+	const char* reason = a_reason && *a_reason ? a_reason : "FSR resource teardown";
+	const auto result = BeginOrPollD3D11IdleFence(globals::d3d::context, pendingFSRResourceFreeIdleFence, reason);
+	if (result == D3D11IdleFenceResult::Pending) {
+		static bool loggedFSRResourceFreePending = false;
+		if (!loggedFSRResourceFreePending) {
+			logger::warn("[FidelityFX] Deferring FSR resource teardown because the D3D11 queue did not become idle.");
+			loggedFSRResourceFreePending = true;
+		}
+		return false;
+	}
+
+	if (!PollRuntimeUpscalerTeardownIdle(reason)) {
+		static bool loggedRuntimeUpscalerTeardownPending = false;
+		if (!loggedRuntimeUpscalerTeardownPending) {
+			logger::warn("[FidelityFX] Deferring FSR resource teardown because runtime upscaler GPU work is still in flight.");
+			loggedRuntimeUpscalerTeardownPending = true;
+		}
+		return false;
+	}
+
+	return true;
+}
+
 void FidelityFX::ResetRuntimeUpscalerResources(bool a_invalidateProviderCache)
 {
 	WaitForRuntimeUpscalerIdle();
@@ -917,8 +1102,10 @@ void FidelityFX::ResetRuntimeUpscalerResources(bool a_invalidateProviderCache)
 	ResetRuntimeUpscalerTracking(a_invalidateProviderCache);
 }
 
-void FidelityFX::DestroyFSRResources()
+void FidelityFX::DestroyFSRResources(bool a_waitForIdle)
 {
+	ResetFSRIdleFence();
+
 	const uint32_t numContexts = fsrContextCount;
 	if (numContexts == 0 && fsrScratchBuffer)
 		logger::warn("[FidelityFX] DestroyFSRResources called with unknown context count; skipping context destruction to avoid mismatched teardown.");
@@ -933,7 +1120,8 @@ void FidelityFX::DestroyFSRResources()
 		fsrScratchBuffer = nullptr;
 	}
 
-	WaitForRuntimeUpscalerIdle();
+	if (a_waitForIdle)
+		WaitForRuntimeUpscalerIdle();
 	DestroyRuntimeUpscalerContexts(false);
 	DestroyRuntimeUpscalerResources(false);
 

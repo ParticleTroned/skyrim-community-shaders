@@ -103,7 +103,10 @@ namespace
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
 	constexpr uint32_t kDefaultRenderScaleQualityMode = 3u;  // Quality
 	constexpr uint32_t kVRUpscalingTransitionApplyDelayFrames = 6u;
-	constexpr uint32_t kVRRenderScaleRelatchSafetyDelayFrames = 120u;
+	// Loading/menu-adjacent relatches are deferred until hard blockers clear, then
+	// applied after a short stable tail instead of a fixed multi-second delay.
+	constexpr uint32_t kVRRenderScaleRelatchPostTransitionStableFrames = 3u;
+	constexpr uint32_t kVRRenderScaleRelatchRecentTransitionFrames = 120u;
 	constexpr uint32_t kVRRenderScaleRelatchStretchFallbackFrames = 600u;
 	constexpr uint32_t kVRRenderScaleRelatchFullEyeRecoveryFrames = 1200u;
 	constexpr uint32_t kVRRenderScaleRelatchExitRecoveryFrames = 180u;
@@ -1115,17 +1118,44 @@ namespace
 		       IsCellTransitionTailActive(a_state);
 	}
 
-	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling)
+	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		if (!globals::game::isVR)
 			return false;
 
-		if (!IsRenderScaleMethodEligible(a_upscaling.GetUpscaleMethod()))
+		if (!IsRenderScaleMethodEligible(a_upscaleMethod))
 			return false;
 
-		return a_upscaling.IsRenderScaleModeRequested() ||
-		       a_upscaling.GetPerfModeRequested() ||
+		const auto isRenderScaleModeRequested = [&]() {
+			const uint32_t pendingRenderScaleMode = a_upscaling.pendingVRRenderScaleMode.load(std::memory_order_acquire);
+			if (pendingRenderScaleMode != Upscaling::kPendingVRUpscalingSettingUnset)
+				return pendingRenderScaleMode != 0;
+
+			return ClampToggleUInt(a_upscaling.settings.renderScaleMode) != 0;
+		};
+		const auto isPerfModeRequested = [&]() {
+			const uint32_t pendingPerfMode = a_upscaling.pendingVRPerfMode.load(std::memory_order_acquire);
+			if (pendingPerfMode != Upscaling::kPendingVRUpscalingSettingUnset)
+				return pendingPerfMode != 0 && isRenderScaleModeRequested();
+
+			return isRenderScaleModeRequested() &&
+			       IsRenderScaleQualityMode(a_upscaling.GetEffectiveUpscalingQualityMode()) &&
+			       ClampToggleUInt(a_upscaling.settings.perfMode) != 0;
+		};
+
+		return isRenderScaleModeRequested() ||
+		       isPerfModeRequested() ||
 		       a_upscaling.IsPerfModeActive();
+	}
+
+	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling)
+	{
+		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaling.GetUpscaleMethod());
+	}
+
+	bool ShouldIncludeInactiveVRVendorReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod);
 	}
 
 	uint32_t GetVRRenderScaleRelatchSettleFrames(bool a_wasRenderScaleActive, bool a_isRenderScaleActive)
@@ -1333,11 +1363,14 @@ namespace
 
 	bool HasPendingVRVendorRuntimeReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
+		const bool includeInactiveVendorReset = ShouldIncludeInactiveVRVendorReset(a_upscaling, a_upscaleMethod);
 		switch (a_upscaleMethod) {
 		case Upscaling::UpscaleMethod::kDLSS:
-			return a_upscaling.pendingDLSSReset.load(std::memory_order_acquire);
+			return a_upscaling.pendingDLSSReset.load(std::memory_order_acquire) ||
+			       (includeInactiveVendorReset && a_upscaling.pendingFSRReset.load(std::memory_order_acquire));
 		case Upscaling::UpscaleMethod::kFSR:
-			return a_upscaling.pendingFSRReset.load(std::memory_order_acquire);
+			return a_upscaling.pendingFSRReset.load(std::memory_order_acquire) ||
+			       (includeInactiveVendorReset && a_upscaling.pendingDLSSReset.load(std::memory_order_acquire));
 		default:
 			return false;
 		}
@@ -1377,10 +1410,10 @@ namespace
 		if (closeFrame == 0 || a_state->frameCount < closeFrame)
 			return false;
 
-		return a_state->frameCount - closeFrame < kVRRenderScaleRelatchSafetyDelayFrames;
+		return a_state->frameCount - closeFrame < kVRRenderScaleRelatchRecentTransitionFrames;
 	}
 
-	bool ShouldUseLongVRRenderScaleRelatchDelay(const char* a_reason)
+	bool ShouldUsePostTransitionVRRenderScaleRelatchDelay(const char* a_reason)
 	{
 		const std::string_view reason = a_reason ? std::string_view(a_reason) : std::string_view{};
 		const auto* state = globals::state;
@@ -1393,14 +1426,17 @@ namespace
 	void QueueVendorRuntimeResetAfterLoadingMenu(Upscaling& a_upscaling)
 	{
 		const auto upscaleMethod = a_upscaling.GetRuntimeUpscaleMethod();
+		const bool preserveInactiveVendorReset = ShouldIncludeInactiveVRVendorReset(a_upscaling, upscaleMethod);
 		if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS) {
 			a_upscaling.pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
 			a_upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
-			a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
+			if (!preserveInactiveVendorReset)
+				a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
 		} else if (upscaleMethod == Upscaling::UpscaleMethod::kFSR) {
 			a_upscaling.pendingFSRReset.store(true, std::memory_order_relaxed);
-			a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
 			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
+			if (!preserveInactiveVendorReset)
+				a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
 		} else {
 			a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
 			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
@@ -3381,7 +3417,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			return;
 
 		pendingVRUpscalingTransitionFrame.store(0, std::memory_order_release);
-		pendingVRUpscalingTransitionLongRelatchDelay.store(false, std::memory_order_release);
+		pendingVRUpscalingTransitionPostTransitionDelay.store(false, std::memory_order_release);
 	};
 
 	if (!isVR) {
@@ -3444,8 +3480,8 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			queuedRenderScaleTransition = true;
 		}
 
-		if (queuedRenderScaleTransition && ShouldUseLongVRRenderScaleRelatchDelay(a_reason))
-			pendingVRUpscalingTransitionLongRelatchDelay.store(true, std::memory_order_release);
+		if (queuedRenderScaleTransition && ShouldUsePostTransitionVRRenderScaleRelatchDelay(a_reason))
+			pendingVRUpscalingTransitionPostTransitionDelay.store(true, std::memory_order_release);
 
 		if (queuedRenderScaleTransition)
 			RequestHistoryReset();
@@ -3868,7 +3904,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 		return;
 
 	if (GetOpenCompositeUpscalingBlocker().active) {
-		pendingVRUpscalingTransitionLongRelatchDelay.store(false, std::memory_order_release);
+		pendingVRUpscalingTransitionPostTransitionDelay.store(false, std::memory_order_release);
 		return;
 	}
 
@@ -3877,11 +3913,11 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
 		return;
 
-	const bool useLongRelatchDelay =
-		ShouldUseLongVRRenderScaleRelatchDelay(a_reason) ||
-		pendingVRUpscalingTransitionLongRelatchDelay.load(std::memory_order_acquire);
-	const uint32_t relatchDelayFrames = useLongRelatchDelay ?
-		kVRRenderScaleRelatchSafetyDelayFrames :
+	const bool usePostTransitionRelatchDelay =
+		ShouldUsePostTransitionVRRenderScaleRelatchDelay(a_reason) ||
+		pendingVRUpscalingTransitionPostTransitionDelay.load(std::memory_order_acquire);
+	const uint32_t relatchDelayFrames = usePostTransitionRelatchDelay ?
+		kVRRenderScaleRelatchPostTransitionStableFrames :
 		kVRUpscalingTransitionApplyDelayFrames;
 	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
 	const uint32_t previousRelatchDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
@@ -3911,7 +3947,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateSafetyEndFrame.store(0, std::memory_order_release);
-		pendingVRUpscalingTransitionLongRelatchDelay.store(false, std::memory_order_release);
+		pendingVRUpscalingTransitionPostTransitionDelay.store(false, std::memory_order_release);
 		return true;
 	}
 
@@ -3940,9 +3976,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	if (!pendingPerfModeRenderTargetRecreate.exchange(false, std::memory_order_acq_rel))
 		return true;
+	const uint32_t retryBaseDelayFrames = ShouldUsePostTransitionVRRenderScaleRelatchDelay(nullptr) ?
+		kVRRenderScaleRelatchPostTransitionStableFrames :
+		kVRUpscalingTransitionApplyDelayFrames;
 	const uint32_t retryDelayFrames = std::max(
 		pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire),
-		kVRUpscalingTransitionApplyDelayFrames);
+		retryBaseDelayFrames);
 	auto clearRelatchDelay = [&]() {
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
@@ -3964,14 +4003,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool wasRenderScaleActive = IsPerfModeActive();
 
 		if (!ResetVRVendorRuntimeResources(true, true)) {
-			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch DLSS resource teardown")) {
+			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
 				return false;
 			}
 
 			requeueRelatch();
-			pendingDLSSReset.store(relatchUpscaleMethod == UpscaleMethod::kDLSS, std::memory_order_release);
-			logger::warn("[PerfMode] Render-target relatch deferred because DLSS resources are still in use.");
+			if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
+				pendingDLSSReset.store(true, std::memory_order_release);
+			logger::warn("[PerfMode] Render-target relatch deferred because vendor resources are still in use.");
 			return false;
 		}
 
@@ -4071,15 +4111,26 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	if (!globals::game::isVR)
 		return true;
 
+	if (!fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
+		pendingFSRReset.store(true, std::memory_order_release);
+		return false;
+	}
+
 	const bool submitStageReset = ResetVRSubmitStageState(a_destroyDLSSResources);
-	fidelityFX.DestroyFSRResources();
+	if (!submitStageReset) {
+		if (a_destroyDLSSResources)
+			pendingDLSSReset.store(true, std::memory_order_release);
+		return false;
+	}
+
+	fidelityFX.DestroyFSRResources(false);
 	DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
 		DestroyPeripheryTAAResources();
 	DisableAAVRSState();
 	aaVrsController.ReleaseResources();
 	ResetAAVRSTelemetry();
-	return submitStageReset;
+	return true;
 }
 
 void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources)
@@ -4097,10 +4148,19 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 	if (!globals::game::isVR)
 		return true;
 
-	const bool resetPending =
-		(a_upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.load(std::memory_order_acquire)) ||
-		(a_upscaleMethod == UpscaleMethod::kFSR && pendingFSRReset.load(std::memory_order_acquire));
-	if (!resetPending)
+	const bool dlssResetPending = pendingDLSSReset.load(std::memory_order_acquire);
+	const bool fsrResetPending = pendingFSRReset.load(std::memory_order_acquire);
+	const bool currentMethodDLSS = a_upscaleMethod == UpscaleMethod::kDLSS;
+	const bool currentMethodFSR = a_upscaleMethod == UpscaleMethod::kFSR;
+	const bool includeInactiveVendorReset = ShouldIncludeInactiveVRVendorReset(*this, a_upscaleMethod);
+	const bool activeResetPending =
+		(currentMethodDLSS && dlssResetPending) ||
+		(currentMethodFSR && fsrResetPending);
+	const bool inactiveResetPending =
+		includeInactiveVendorReset &&
+		((currentMethodDLSS && fsrResetPending) ||
+		 (currentMethodFSR && dlssResetPending));
+	if (!activeResetPending && !inactiveResetPending)
 		return true;
 
 	if (IsUpscalingLoadTransitionContextActive(*this)) {
@@ -4108,14 +4168,57 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 	}
 
 	const char* context = a_context ? a_context : "";
-	const bool rebuildDLSS = a_upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed);
-	const bool rebuildFSR = a_upscaleMethod == UpscaleMethod::kFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed);
-	if (!rebuildDLSS && !rebuildFSR)
-		return true;
+	bool retireDLSS = false;
+	bool retireFSR = false;
+	bool rebuildDLSS = false;
+	bool rebuildFSR = false;
 
 	static bool loggedVendorResetFailure = false;
 	static bool loggedVendorResetDeferral = false;
 	try {
+		retireFSR = includeInactiveVendorReset && !currentMethodFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed);
+		if (retireFSR) {
+			logger::debug("[Upscaling] Retiring {}inactive FSR resources before {} runtime reset", context, magic_enum::enum_name(a_upscaleMethod));
+			if (!fidelityFX.PollFSRResourceTeardownReady("inactive FSR resource teardown before vendor runtime reset")) {
+				pendingFSRReset.store(true, std::memory_order_release);
+				retireFSR = false;
+				LogWarnOnceFmt(
+					loggedVendorResetDeferral,
+					"[Upscaling] Deferred {}runtime reset because inactive FidelityFX resources are still in use",
+					context);
+				return false;
+			}
+			UnbindUpscalingResources();
+			fidelityFX.DestroyFSRResources(false);
+			RequestHistoryReset();
+			retireFSR = false;
+		}
+
+		retireDLSS = includeInactiveVendorReset && !currentMethodDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed);
+		if (retireDLSS) {
+			logger::debug("[Upscaling] Retiring {}inactive DLSS resources before {} runtime reset", context, magic_enum::enum_name(a_upscaleMethod));
+			UnbindUpscalingResources();
+			if (!streamline.DestroyDLSSResources()) {
+				if (!MarkSubmitStageDeviceLostIfDeviceRemoved("inactive DLSS resource teardown before vendor runtime reset")) {
+					pendingDLSSReset.store(true, std::memory_order_release);
+					LogWarnOnceFmt(
+						loggedVendorResetDeferral,
+						"[Upscaling] Deferred {}runtime reset because inactive Streamline resources are still in use",
+						context);
+				}
+				retireDLSS = false;
+				return false;
+			}
+			pendingDLSSHistoryReset.store(false, std::memory_order_release);
+			RequestHistoryReset();
+			retireDLSS = false;
+		}
+
+		rebuildDLSS = currentMethodDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed);
+		rebuildFSR = currentMethodFSR && pendingFSRReset.exchange(false, std::memory_order_relaxed);
+		if (!rebuildDLSS && !rebuildFSR)
+			return true;
+
 		if (rebuildDLSS) {
 			logger::debug("[Upscaling] Rebuilding {}DLSS feature after VR reset", context);
 			UnbindUpscalingResources();
@@ -4127,20 +4230,32 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 						"[Upscaling] Deferred rebuild of {}DLSS resources after VR reset because Streamline resources are still in use",
 						context);
 				}
+				rebuildDLSS = false;
 				return false;
 			}
 			RequestHistoryReset();
+			rebuildDLSS = false;
 		} else if (rebuildFSR) {
 			logger::debug("[Upscaling] Rebuilding {}FSR resources after VR reset", context);
+			if (!fidelityFX.PollFSRResourceTeardownReady("vendor runtime FSR resource teardown")) {
+				pendingFSRReset.store(true, std::memory_order_release);
+				LogWarnOnceFmt(
+					loggedVendorResetDeferral,
+					"[Upscaling] Deferred rebuild of {}FSR resources after VR reset because FidelityFX resources are still in use",
+					context);
+				rebuildFSR = false;
+				return false;
+			}
 			UnbindUpscalingResources();
-			fidelityFX.DestroyFSRResources();
+			fidelityFX.DestroyFSRResources(false);
 			fidelityFX.CreateFSRResources();
 			RequestHistoryReset();
+			rebuildFSR = false;
 		}
 	} catch (const std::exception& e) {
-		if (rebuildDLSS)
+		if (rebuildDLSS || retireDLSS)
 			pendingDLSSReset.store(true, std::memory_order_release);
-		if (rebuildFSR)
+		if (rebuildFSR || retireFSR)
 			pendingFSRReset.store(true, std::memory_order_release);
 		MarkSubmitStageDeviceLostIfNeeded(e, "vendor runtime reset");
 		LogWarnOnceFmt(
@@ -4151,9 +4266,9 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 			e.what());
 		return false;
 	} catch (...) {
-		if (rebuildDLSS)
+		if (rebuildDLSS || retireDLSS)
 			pendingDLSSReset.store(true, std::memory_order_release);
-		if (rebuildFSR)
+		if (rebuildFSR || retireFSR)
 			pendingFSRReset.store(true, std::memory_order_release);
 		MarkSubmitStageDeviceLostIfDeviceRemoved("vendor runtime reset");
 		LogWarnOnceFmt(
@@ -4196,7 +4311,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 
 	try {
 		if (!ResetVRVendorRuntimeResources(true, false)) {
-			logger::warn("[Upscaling] VR post-load runtime reset deferred because DLSS resources are still in use");
+			logger::warn("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
 			postLoadRuntimeResetPending.store(true, std::memory_order_release);
 			return false;
 		}
@@ -4313,6 +4428,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		a_upscalemethod == UpscaleMethod::kFSR &&
 		fsrRuntimePathCurrent &&
 		foveatedDispatchChanged;
+	const bool renderScaleTransitionRelevant = ShouldIncludeInactiveVRVendorReset(*this, a_upscalemethod);
 
 	if (upscaleModeChanged || frameGenModeChanged || foveatedDispatchChanged || peripheryTAAChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged || qualityModeChanged || dlssPresetResourceChanged || renderScaleModeChanged || perfModeChanged) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, RenderScaleMode: {} -> {}, PerfMode: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
@@ -4401,10 +4517,15 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				if (previousUpscaleMode == UpscaleMethod::kDLSS) {
 					if (!streamline.DestroyDLSSResources() &&
 						!MarkSubmitStageDeviceLostIfDeviceRemoved("upscale method DLSS resource teardown")) {
-						pendingDLSSReset.store(a_upscalemethod == UpscaleMethod::kDLSS, std::memory_order_release);
+						pendingDLSSReset.store(renderScaleTransitionRelevant, std::memory_order_release);
 					}
 				} else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesDestroyedForQuality) {
-					fidelityFX.DestroyFSRResources();
+					if (renderScaleTransitionRelevant &&
+						!fidelityFX.PollFSRResourceTeardownReady("upscale method FSR resource teardown")) {
+						pendingFSRReset.store(true, std::memory_order_release);
+					} else {
+						fidelityFX.DestroyFSRResources(!renderScaleTransitionRelevant);
+					}
 				}
 
 				if (globals::game::isVR && !fsrResourcesDestroyedForQuality) {
@@ -9353,7 +9474,7 @@ void Upscaling::ClearPendingVRUpscalingTransition()
 	pendingVRDLSSPreset.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
 	pendingVRPerfMode.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
 	pendingVRUpscalingTransitionFrame.store(0, std::memory_order_release);
-	pendingVRUpscalingTransitionLongRelatchDelay.store(false, std::memory_order_release);
+	pendingVRUpscalingTransitionPostTransitionDelay.store(false, std::memory_order_release);
 }
 
 bool Upscaling::HasPendingVRUpscalingTransition() const
@@ -9442,10 +9563,10 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames, bool a_extendFoveatedSafety)
 {
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
-	const uint32_t requestedDelay = a_delayFrames != 0 ? a_delayFrames : kVRUpscalingTransitionApplyDelayFrames;
-	const uint32_t contextDelay = ShouldUseLongVRRenderScaleRelatchDelay(nullptr) ?
-		kVRRenderScaleRelatchSafetyDelayFrames :
+	const uint32_t contextDelay = ShouldUsePostTransitionVRRenderScaleRelatchDelay(nullptr) ?
+		kVRRenderScaleRelatchPostTransitionStableFrames :
 		kVRUpscalingTransitionApplyDelayFrames;
+	const uint32_t requestedDelay = a_delayFrames != 0 ? a_delayFrames : contextDelay;
 	const uint32_t delayFrames = std::max(requestedDelay, contextDelay);
 	pendingPerfModeRenderTargetRecreateFrame.store(frame, std::memory_order_release);
 	const uint32_t previousDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
@@ -9511,7 +9632,7 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 
 		if (renderScaleModeChanged)
 			RequestHistoryReset();
-		pendingVRUpscalingTransitionLongRelatchDelay.store(false, std::memory_order_release);
+		pendingVRUpscalingTransitionPostTransitionDelay.store(false, std::memory_order_release);
 		return;
 	}
 
@@ -9570,7 +9691,7 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 			RequestPerfModeRenderTargetRecreate("VR upscaling preset change");
 	}
 
-	pendingVRUpscalingTransitionLongRelatchDelay.store(false, std::memory_order_release);
+	pendingVRUpscalingTransitionPostTransitionDelay.store(false, std::memory_order_release);
 }
 
 bool Upscaling::ShouldResetHistoryThisFrame() const

@@ -260,6 +260,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			auto& upscaling = globals::features::upscaling;
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
+			bool loggedOriginalSubmit = false;
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				const bool submitStageUpscalingActive = upscaling.IsSubmitStageUpscalingActive();
 				const bool perfModePresentationActive = upscaling.IsPerfModePresentationActive();
@@ -272,16 +273,26 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						upscaledTexture.handle &&
 						upscaledTexture.eType == vr::TextureType_DirectX)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
+					upscaling.LogVRCompositorSubmitPath(eEye, "cs-upscaled-submit", pTexture, pBounds, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
+				}
+
+				if (bypassUpscaledSubmitForRelatchFrame) {
+					upscaling.LogVRCompositorSubmitPath(eEye, "original-submit-relatch-guard", pTexture, pBounds, nullptr, nullptr, nSubmitFlags);
+					loggedOriginalSubmit = true;
 				}
 
 				if (!bypassUpscaledSubmitForRelatchFrame &&
 					(!presentationUpscalingActive || perfModePresentationActive || upscaling.IsSubmitStageHandoffTexture(pTexture))) {
 					vr::Texture_t overlayTexture{};
-					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture))
+					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
+						upscaling.LogVRCompositorSubmitPath(eEye, "overlay-submit", pTexture, pBounds, &overlayTexture, pBounds, nSubmitFlags);
 						return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
+					}
 				}
 			}
+			if (!loggedOriginalSubmit)
+				upscaling.LogVRCompositorSubmitPath(eEye, "original-submit-fallback", pTexture, pBounds, nullptr, nullptr, nSubmitFlags);
 			return func(_this, eEye, pTexture, pBounds, nSubmitFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

@@ -70,8 +70,8 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 namespace
 {
 	// Keep transition diagnostics behind one switch. They stay at info while the
-	// VR HAM/FOV and vendor-reset transition behavior is being captured; change
-	// VR_TRANSITION_DIAG_LOG_LEVEL to debug later to move all callsites together.
+	// VR transition artifact is being captured; change VR_TRANSITION_DIAG_LOG_LEVEL
+	// later to move all callsites together.
 #ifndef VR_TRANSITION_DIAG_ENABLED
 #define VR_TRANSITION_DIAG_ENABLED 1
 #endif
@@ -2230,6 +2230,311 @@ namespace
 		history.interesting = interesting;
 		history.initialized = true;
 #endif
+	}
+
+	const char* VREyeName(vr::EVREye a_eye)
+	{
+		switch (a_eye) {
+		case vr::Eye_Left:
+			return "left";
+		case vr::Eye_Right:
+			return "right";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* DiagnosticText(const char* a_text, const char* a_fallback)
+	{
+		return a_text && *a_text ? a_text : a_fallback;
+	}
+
+	const char* DiagnosticFlagText(const VRTransitionDiagnosticSnapshot& a_snapshot, VRTransitionDiagnosticFlag a_flag)
+	{
+		return BoolText(HasDiagnosticFlag(a_snapshot.flags, a_flag));
+	}
+
+	struct VRBoundsDiagnosticInfo
+	{
+		float uMin = -1.0f;
+		float vMin = -1.0f;
+		float uMax = -1.0f;
+		float vMax = -1.0f;
+	};
+
+	VRBoundsDiagnosticInfo BuildVRBoundsDiagnosticInfo(const vr::VRTextureBounds_t* a_bounds)
+	{
+		VRBoundsDiagnosticInfo info{};
+		if (!a_bounds)
+			return info;
+
+		info.uMin = a_bounds->uMin;
+		info.vMin = a_bounds->vMin;
+		info.uMax = a_bounds->uMax;
+		info.vMax = a_bounds->vMax;
+		return info;
+	}
+
+	bool ShouldLogVRSubmitPathDiagnosticSnapshot(const VRTransitionDiagnosticSnapshot& a_snapshot)
+	{
+		if (IsVRTransitionSnapshotInteresting(a_snapshot))
+			return true;
+
+		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		if (closeFrame != 0 && a_snapshot.frame >= closeFrame && a_snapshot.frame - closeFrame <= 300u)
+			return true;
+
+		return IsCommunityShadersMenuOpen() &&
+		       (IsVendorUpscalingMethod(a_snapshot.requestedMethod) ||
+		           IsVendorUpscalingMethod(a_snapshot.runtimeMethod) ||
+		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::PerfModeActive) ||
+		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::PerfModeRequested) ||
+		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRequested));
+	}
+
+	bool TryBuildVRSubmitPathDiagnosticSnapshot(const Upscaling& a_upscaling, VRTransitionDiagnosticSnapshot& a_snapshot)
+	{
+#if !VR_TRANSITION_DIAG_ENABLED
+		(void)a_upscaling;
+		(void)a_snapshot;
+		return false;
+#else
+		if (!globals::game::isVR || !globals::state)
+			return false;
+
+		a_snapshot = BuildVRTransitionDiagnosticSnapshot(a_upscaling);
+		return ShouldLogVRSubmitPathDiagnosticSnapshot(a_snapshot);
+#endif
+	}
+
+	struct VRTextureDiagnosticInfo
+	{
+		bool valid = false;
+		const void* handle = nullptr;
+		uint32_t type = 0;
+		uint32_t colorSpace = 0;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t arraySize = 0;
+		uint32_t samples = 0;
+		uint32_t format = 0;
+		bool presentationTarget = false;
+		bool handoffTexture = false;
+	};
+
+	VRTextureDiagnosticInfo BuildVRTextureDiagnosticInfo(const Upscaling* a_upscaling, const vr::Texture_t* a_texture)
+	{
+		VRTextureDiagnosticInfo info{};
+		if (!a_texture)
+			return info;
+
+		info.handle = a_texture->handle;
+		info.type = static_cast<uint32_t>(a_texture->eType);
+		info.colorSpace = static_cast<uint32_t>(a_texture->eColorSpace);
+
+		if (!a_texture->handle || a_texture->eType != vr::TextureType_DirectX)
+			return info;
+
+		auto* texture = static_cast<ID3D11Texture2D*>(a_texture->handle);
+		D3D11_TEXTURE2D_DESC desc{};
+		texture->GetDesc(&desc);
+
+		info.valid = true;
+		info.width = desc.Width;
+		info.height = desc.Height;
+		info.arraySize = desc.ArraySize;
+		info.samples = desc.SampleDesc.Count;
+		info.format = static_cast<uint32_t>(desc.Format);
+		info.presentationTarget = IsVRPresentationRenderTargetTexture(texture);
+		info.handoffTexture = a_upscaling && a_upscaling->IsSubmitStageHandoffTexture(a_texture);
+		return info;
+	}
+
+	void LogVRSubmitStagePathDiagnostics(
+		const Upscaling& a_upscaling,
+		const char* a_path,
+		vr::EVREye a_eye,
+		const vr::VRTextureBounds_t* a_inputBounds,
+		const D3D11_TEXTURE2D_DESC& a_sourceDesc,
+		const D3D11_BOX& a_sourceBox,
+		uint32_t a_sourceSubresource,
+		uint32_t a_sourceEyeWidth,
+		uint32_t a_sourceEyeHeight,
+		uint32_t a_outputEyeWidth,
+		uint32_t a_outputEyeHeight,
+		bool a_targetScaleMode,
+		bool a_presentationOnly,
+		bool a_stretchOnlyFallback,
+		bool a_foveatedRequested,
+		bool a_presentationRenderTarget,
+		bool a_handoffMatches)
+	{
+		VRTransitionDiagnosticSnapshot snapshot{};
+		if (!TryBuildVRSubmitPathDiagnosticSnapshot(a_upscaling, snapshot))
+			return;
+
+		const auto inputBounds = BuildVRBoundsDiagnosticInfo(a_inputBounds);
+		VR_TRANSITION_DIAG_LOG(
+			"[VRSubmitStage] {} frame={} eye={} closeAge={} req={} runtime={} quality={} targetScale={} presentationOnly={} stretchOnly={} foveatedRequested={} source={}x{} fmt={} array={} samples={} sourceSubresource={} sourceBox=({},{})->({},{}) expectedIn={}x{} outputEye={}x{} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) presentationRT={} handoffMatches={} relatchPending={} settling={} stretch={} vendorPending={} hmdDefer={} projectedDefer={}",
+			DiagnosticText(a_path, "unknown"),
+			snapshot.frame,
+			VREyeName(a_eye),
+			snapshot.closeAge,
+			magic_enum::enum_name(snapshot.requestedMethod),
+			magic_enum::enum_name(snapshot.runtimeMethod),
+			snapshot.qualityMode,
+			BoolText(a_targetScaleMode),
+			BoolText(a_presentationOnly),
+			BoolText(a_stretchOnlyFallback),
+			BoolText(a_foveatedRequested),
+			a_sourceDesc.Width,
+			a_sourceDesc.Height,
+			static_cast<uint32_t>(a_sourceDesc.Format),
+			a_sourceDesc.ArraySize,
+			a_sourceDesc.SampleDesc.Count,
+			a_sourceSubresource,
+			a_sourceBox.left,
+			a_sourceBox.top,
+			a_sourceBox.right,
+			a_sourceBox.bottom,
+			a_sourceEyeWidth,
+			a_sourceEyeHeight,
+			a_outputEyeWidth,
+			a_outputEyeHeight,
+			inputBounds.uMin,
+			inputBounds.vMin,
+			inputBounds.uMax,
+			inputBounds.vMax,
+			BoolText(a_presentationRenderTarget),
+			BoolText(a_handoffMatches),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::PendingRelatch),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RelatchSettling),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::StretchFallback),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::VendorResetPending),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::HMDMaskDeferred),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::ProjectedMaskDeferred));
+	}
+
+	void LogVRSubmitStageHandoffDiagnostics(
+		const Upscaling& a_upscaling,
+		const char* a_passName,
+		const char* a_result,
+		ID3D11Texture2D* a_sourceTexture,
+		ID3D11Texture2D* a_targetTexture,
+		const D3D11_BOX& a_sourceBox,
+		uint32_t a_inputWidth,
+		uint32_t a_inputHeight,
+		bool a_desktopMirrorPass,
+		bool a_leftReady = false,
+		bool a_rightReady = false)
+	{
+		VRTransitionDiagnosticSnapshot snapshot{};
+		if (!TryBuildVRSubmitPathDiagnosticSnapshot(a_upscaling, snapshot))
+			return;
+
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		D3D11_TEXTURE2D_DESC targetDesc{};
+		if (a_sourceTexture)
+			a_sourceTexture->GetDesc(&sourceDesc);
+		if (a_targetTexture)
+			a_targetTexture->GetDesc(&targetDesc);
+
+		VR_TRANSITION_DIAG_LOG(
+			"[VRHandoff] {} pass={} frame={} closeAge={} req={} runtime={} quality={} input={}x{} source={}x{} fmt={} array={} samples={} target={}x{} fmt={} array={} samples={} sourceBox=({},{})->({},{}) targetOrigin=(0,0) sourceIsPresentationRT={} targetIsPresentationRT={} desktopMirror={} mirrorReady(L={},R={}) relatchPending={} settling={} stretch={} vendorPending={}",
+			DiagnosticText(a_result, "state"),
+			DiagnosticText(a_passName, "<unknown>"),
+			snapshot.frame,
+			snapshot.closeAge,
+			magic_enum::enum_name(snapshot.requestedMethod),
+			magic_enum::enum_name(snapshot.runtimeMethod),
+			snapshot.qualityMode,
+			a_inputWidth,
+			a_inputHeight,
+			sourceDesc.Width,
+			sourceDesc.Height,
+			static_cast<uint32_t>(sourceDesc.Format),
+			sourceDesc.ArraySize,
+			sourceDesc.SampleDesc.Count,
+			targetDesc.Width,
+			targetDesc.Height,
+			static_cast<uint32_t>(targetDesc.Format),
+			targetDesc.ArraySize,
+			targetDesc.SampleDesc.Count,
+			a_sourceBox.left,
+			a_sourceBox.top,
+			a_sourceBox.right,
+			a_sourceBox.bottom,
+			BoolText(IsVRPresentationRenderTargetTexture(a_sourceTexture)),
+			BoolText(IsVRPresentationRenderTargetTexture(a_targetTexture)),
+			BoolText(a_desktopMirrorPass),
+			BoolText(a_leftReady),
+			BoolText(a_rightReady),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::PendingRelatch),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RelatchSettling),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::StretchFallback),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::VendorResetPending));
+	}
+
+	void LogVRHMDMaskClearDispatch(
+		const Upscaling& a_upscaling,
+		const char* a_phase,
+		uint32_t a_depthWidth,
+		uint32_t a_depthHeight,
+		uint32_t a_colorWidth,
+		uint32_t a_colorHeight,
+		uint32_t a_depthOffsetX,
+		uint32_t a_colorOffsetX,
+		uint32_t a_depthOffsetY,
+		uint32_t a_colorOffsetY)
+	{
+		VRTransitionDiagnosticSnapshot snapshot{};
+		if (!TryBuildVRSubmitPathDiagnosticSnapshot(a_upscaling, snapshot))
+			return;
+
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMask] HMD clear dispatch phase={} frame={} closeAge={} req={} runtime={} quality={} depth={}x{} color={}x{} depthOffset=({}, {}) colorOffset=({}, {}) relatchPending={} settling={} stretch={} hmdDefer={} projectedDefer={}",
+			DiagnosticText(a_phase, "<unknown>"),
+			snapshot.frame,
+			snapshot.closeAge,
+			magic_enum::enum_name(snapshot.requestedMethod),
+			magic_enum::enum_name(snapshot.runtimeMethod),
+			snapshot.qualityMode,
+			a_depthWidth,
+			a_depthHeight,
+			a_colorWidth,
+			a_colorHeight,
+			a_depthOffsetX,
+			a_depthOffsetY,
+			a_colorOffsetX,
+			a_colorOffsetY,
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::PendingRelatch),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RelatchSettling),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::StretchFallback),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::HMDMaskDeferred),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::ProjectedMaskDeferred));
+	}
+
+	void LogVRProjectedMaskRepairDispatch(const Upscaling& a_upscaling, const char* a_context, float a_width, float a_height)
+	{
+		VRTransitionDiagnosticSnapshot snapshot{};
+		if (!TryBuildVRSubmitPathDiagnosticSnapshot(a_upscaling, snapshot))
+			return;
+
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMask] Projected/underwater mask repair dispatch context={} frame={} closeAge={} req={} runtime={} quality={} viewport={:.0f}x{:.0f} relatchPending={} settling={} stretch={} hmdDefer={} projectedDefer={}",
+			DiagnosticText(a_context, "<unknown>"),
+			snapshot.frame,
+			snapshot.closeAge,
+			magic_enum::enum_name(snapshot.requestedMethod),
+			magic_enum::enum_name(snapshot.runtimeMethod),
+			snapshot.qualityMode,
+			a_width,
+			a_height,
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::PendingRelatch),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RelatchSettling),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::StretchFallback),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::HMDMaskDeferred),
+			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::ProjectedMaskDeferred));
 	}
 
 	bool IsOutOfMemoryResult(HRESULT a_result)
@@ -8619,6 +8924,17 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 				eyeHeightIn
 			};
 			context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, clearMaskParams, 0, 0);
+			LogVRHMDMaskClearDispatch(
+				*this,
+				i == 0 ? "PerEyeInputLeft" : "PerEyeInputRight",
+				eyeWidthIn,
+				eyeHeightIn,
+				eyeWidthIn,
+				eyeHeightIn,
+				depthOffset,
+				0,
+				0,
+				0);
 
 			ID3D11UnorderedAccessView* uavs[1] = { vrIntermediateColorIn[i]->uav.get() };
 			context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
@@ -9118,7 +9434,8 @@ bool Upscaling::ShouldClearHMDMaskInPhase(Upscaling::HMDMaskClearPhase a_phase) 
 }
 
 void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY)
+	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY,
+	const char* phaseName)
 {
 	if (!globals::game::isVR)
 		return;
@@ -9140,6 +9457,17 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 	if (vrClearHMDMaskCS && vrClearHMDMaskCB) {
 		auto dispatchX = (colorWidth + 7) / 8;
 		auto dispatchY = (colorHeight + 7) / 8;
+		LogVRHMDMaskClearDispatch(
+			*this,
+			phaseName,
+			depthWidth,
+			depthHeight,
+			colorWidth,
+			colorHeight,
+			depthOffsetX,
+			colorOffsetX,
+			depthOffsetY,
+			colorOffsetY);
 
 		context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
 
@@ -9184,6 +9512,21 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11U
 	if (!shouldClear)
 		return;
 
+	const char* phaseName = "Unknown";
+	switch (a_phase) {
+	case HMDMaskClearPhase::PerEyeInput:
+		phaseName = "PerEyeInput";
+		break;
+	case HMDMaskClearPhase::PerEyeOutput:
+		phaseName = "PerEyeOutput";
+		break;
+	case HMDMaskClearPhase::SubmitStageOutput:
+		phaseName = "SubmitStageOutput";
+		break;
+	case HMDMaskClearPhase::SubmitStageFoveatedOutput:
+		phaseName = "SubmitStageFoveatedOutput";
+		break;
+	}
 	ClearHMDMask(
 		colorUAV,
 		depthSRV,
@@ -9194,7 +9537,8 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11U
 		depthOffsetX,
 		colorOffsetX,
 		depthOffsetY,
-		colorOffsetY);
+		colorOffsetY,
+		phaseName);
 }
 
 int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth)
@@ -10051,6 +10395,72 @@ bool Upscaling::ShouldBypassVRCompositorUpscalingForRenderScaleRelatchFrame() co
 	return true;
 }
 
+void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
+	const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture, const vr::VRTextureBounds_t* a_outputBounds, vr::EVRSubmitFlags a_submitFlags) const
+{
+	VRTransitionDiagnosticSnapshot snapshot{};
+	if (!TryBuildVRSubmitPathDiagnosticSnapshot(*this, snapshot))
+		return;
+
+	const auto inputInfo = BuildVRTextureDiagnosticInfo(this, a_inputTexture);
+	const auto outputInfo = BuildVRTextureDiagnosticInfo(this, a_outputTexture);
+	const auto inputBounds = BuildVRBoundsDiagnosticInfo(a_inputBounds);
+	const auto outputBounds = BuildVRBoundsDiagnosticInfo(a_outputBounds);
+	const bool relatchSubmitGuard = ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(globals::state);
+
+	VR_TRANSITION_DIAG_LOG(
+		"[VRSubmit] {} frame={} eye={} flags=0x{:X} closeAge={} req={} runtime={} quality={} relatchGuard={} renderScaleRelevant={} pendingRelatch={} settling={} stretch={} vendorPending={} hmdDefer={} projectedDefer={} input=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} inputPresentationRT={} inputHandoff={} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) output=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} outputPresentationRT={} outputHandoff={} outputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) handoffFrame={} previousHandoffFrame={} desktopMirrorFrame={}",
+		DiagnosticText(a_path, "unknown"),
+		snapshot.frame,
+		VREyeName(a_eye),
+		static_cast<uint32_t>(a_submitFlags),
+		snapshot.closeAge,
+		magic_enum::enum_name(snapshot.requestedMethod),
+		magic_enum::enum_name(snapshot.runtimeMethod),
+		snapshot.qualityMode,
+		BoolText(relatchSubmitGuard),
+		DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RenderScaleRelevant),
+		DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::PendingRelatch),
+		DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RelatchSettling),
+		DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::StretchFallback),
+		DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::VendorResetPending),
+		DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::HMDMaskDeferred),
+		DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::ProjectedMaskDeferred),
+		reinterpret_cast<uintptr_t>(inputInfo.handle),
+		inputInfo.type,
+		inputInfo.colorSpace,
+		BoolText(inputInfo.valid),
+		inputInfo.width,
+		inputInfo.height,
+		inputInfo.format,
+		inputInfo.arraySize,
+		inputInfo.samples,
+		BoolText(inputInfo.presentationTarget),
+		BoolText(inputInfo.handoffTexture),
+		inputBounds.uMin,
+		inputBounds.vMin,
+		inputBounds.uMax,
+		inputBounds.vMax,
+		reinterpret_cast<uintptr_t>(outputInfo.handle),
+		outputInfo.type,
+		outputInfo.colorSpace,
+		BoolText(outputInfo.valid),
+		outputInfo.width,
+		outputInfo.height,
+		outputInfo.format,
+		outputInfo.arraySize,
+		outputInfo.samples,
+		BoolText(outputInfo.presentationTarget),
+		BoolText(outputInfo.handoffTexture),
+		outputBounds.uMin,
+		outputBounds.vMin,
+		outputBounds.uMax,
+		outputBounds.vMax,
+		submitStageHandoffFrame,
+		submitStagePreviousHandoffFrame,
+		submitStageDesktopMirrorFrame);
+}
+
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds)
 {
@@ -10192,6 +10602,25 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		vrIntermediateColorOut[eyeIndex]->resource &&
 		vrIntermediateColorOut[eyeIndex]->desc.Width >= eyeWidthOut &&
 		vrIntermediateColorOut[eyeIndex]->desc.Height >= eyeHeightOut) {
+		const D3D11_BOX reuseBox{ 0, 0, 0, sourceEyeWidthIn, sourceEyeHeightIn, 1 };
+		LogVRSubmitStagePathDiagnostics(
+			*this,
+			"desktop-mirror-reuse",
+			a_eye,
+			a_inputBounds,
+			sourceDesc,
+			reuseBox,
+			0,
+			sourceEyeWidthIn,
+			sourceEyeHeightIn,
+			eyeWidthOut,
+			eyeHeightOut,
+			targetScaleMode,
+			presentationOnly,
+			false,
+			foveatedRequested,
+			presentationRenderTarget,
+			handoffMatches);
 		a_outputTexture = *a_inputTexture;
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
 		a_outputTexture.eType = vr::TextureType_DirectX;
@@ -10393,7 +10822,28 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
 
-	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight) {
+	const auto logSubmitStagePath = [&](const char* path) {
+		LogVRSubmitStagePathDiagnostics(
+			*this,
+			path,
+			a_eye,
+			a_inputBounds,
+			sourceDesc,
+			colorBox,
+			sourceSubresource,
+			sourceEyeWidthIn,
+			sourceEyeHeightIn,
+			eyeWidthOut,
+			eyeHeightOut,
+			targetScaleMode,
+			presentationOnly,
+			stretchOnlyFallback,
+			foveatedRequested,
+			presentationRenderTarget,
+			handoffMatches);
+	};
+
+	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, const char* path) {
 		if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut) ||
 			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
 			return false;
@@ -10409,16 +10859,26 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
 		a_outputTexture.eType = vr::TextureType_DirectX;
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
+		logSubmitStagePath(path);
 		return true;
 	};
 
 	if (stretchOnlyFallback) {
 		ResetVRRenderScaleRelatchStableFullEyeFrames();
-		return presentStretchOutput(sourceEyeWidthIn, sourceEyeHeightIn);
+		const char* stretchPath = "recovery-stretch-output";
+		if (relatchPendingStretchFallback)
+			stretchPath = "pending-relatch-stretch-output";
+		else if (intermediateAllocCooldownFallback)
+			stretchPath = "allocation-cooldown-stretch-output";
+		else if (relatchVendorResetDeferredFallback)
+			stretchPath = "vendor-reset-deferred-stretch-output";
+		else if (fsrRenderScaleResetFallback)
+			stretchPath = "fsr-reset-stretch-output";
+		return presentStretchOutput(sourceEyeWidthIn, sourceEyeHeightIn, stretchPath);
 	}
 
 	if (presentationOnly) {
-		return presentStretchOutput(sourceEyeWidthIn, sourceEyeHeightIn);
+		return presentStretchOutput(sourceEyeWidthIn, sourceEyeHeightIn, "menu-loading-presentation-output");
 	}
 
 	bool vendorSucceeded = false;
@@ -10542,7 +11002,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			return false;
 
 		if (targetScaleMode &&
-			presentStretchOutput(eyeWidthIn, eyeHeightIn)) {
+			presentStretchOutput(eyeWidthIn, eyeHeightIn, "vendor-failed-stretch-output")) {
 			return true;
 		}
 
@@ -10611,6 +11071,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
 		a_outputTexture.eType = vr::TextureType_DirectX;
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
+		logSubmitStagePath(foveatedRequested ? "foveated-vendor-output" : "full-eye-vendor-output");
 		return true;
 	}
 
@@ -10647,6 +11108,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	a_outputTexture = *a_inputTexture;
 	a_outputTexture.eType = vr::TextureType_DirectX;
 	a_outputBounds = a_inputBounds ? *a_inputBounds : vr::VRTextureBounds_t{ 0.0f, 0.0f, 1.0f, 1.0f };
+	logSubmitStagePath("source-texture-output-copy");
 	return true;
 }
 
@@ -11802,6 +12264,7 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);
+		LogVRProjectedMaskRepairDispatch(*this, "UpscaleDepth", viewport.Width, viewport.Height);
 		context->Draw(3, 0);
 	}
 
@@ -11932,6 +12395,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 	context->PSSetShader(underwaterMaskPS, nullptr, 0);
+	LogVRProjectedMaskRepairDispatch(*this, "SubmitStageUnderwaterMask", viewport.Width, viewport.Height);
 	context->Draw(3, 0);
 
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
@@ -12202,11 +12666,22 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 
 			const bool copiedToOutput = copyDynamicRegionToTarget(outputTexture);
 			if (copiedToOutput) {
-				RegisterSubmitStageHandoffTexture(state->frameCount, outputTexture);
-
 				const bool desktopMirrorPass =
 					submitStageScaleMode &&
 					std::string_view(a_passName ? a_passName : "") == "ISFullScreenVR";
+				const D3D11_BOX handoffSourceBox{ 0, 0, 0, inputWidth, inputHeight, 1 };
+				RegisterSubmitStageHandoffTexture(state->frameCount, outputTexture);
+				LogVRSubmitStageHandoffDiagnostics(
+					upscaling,
+					a_passName,
+					"registered",
+					sourceTexture,
+					outputTexture,
+					handoffSourceBox,
+					inputWidth,
+					inputHeight,
+					desktopMirrorPass);
+
 				if (desktopMirrorPass) {
 					// Run the same submit-stage path while the desktop mirror target is still current.
 					// The later OpenVR submit will return these per-eye outputs directly.
@@ -12220,6 +12695,18 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 					vr::VRTextureBounds_t ignoredBounds{};
 					const bool leftReady = SubmitVRUpscaledFrame(vr::Eye_Left, &desktopInput, &desktopBounds, ignoredOutput, ignoredBounds);
 					const bool rightReady = SubmitVRUpscaledFrame(vr::Eye_Right, &desktopInput, &desktopBounds, ignoredOutput, ignoredBounds);
+					LogVRSubmitStageHandoffDiagnostics(
+						upscaling,
+						a_passName,
+						leftReady && rightReady ? "desktop-mirror-ready" : "desktop-mirror-not-ready",
+						sourceTexture,
+						outputTexture,
+						handoffSourceBox,
+						inputWidth,
+						inputHeight,
+						desktopMirrorPass,
+						leftReady,
+						rightReady);
 					if (leftReady && rightReady) {
 						submitStageDesktopMirrorFrame = state->frameCount;
 						submitStageDesktopMirrorSourceTexture = outputTexture;

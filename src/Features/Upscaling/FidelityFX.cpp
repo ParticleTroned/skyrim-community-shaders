@@ -1047,7 +1047,7 @@ bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
 	return true;
 }
 
-bool FidelityFX::PollFSRResourceTeardownReady(const char* a_reason)
+bool FidelityFX::HasFSRResourcesPendingTeardown() const
 {
 	bool hasRuntimeResources =
 		runtimeUpscalerContextCount != 0 ||
@@ -1066,7 +1066,12 @@ bool FidelityFX::PollFSRResourceTeardownReady(const char* a_reason)
 	for (auto* resource : runtimeOutputShared)
 		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
 
-	if (fsrContextCount == 0 && !fsrScratchBuffer && !hasRuntimeResources) {
+	return fsrContextCount != 0 || fsrScratchBuffer || hasRuntimeResources;
+}
+
+bool FidelityFX::PollFSRResourceTeardownReady(const char* a_reason)
+{
+	if (!HasFSRResourcesPendingTeardown()) {
 		ResetFSRIdleFence();
 		return true;
 	}

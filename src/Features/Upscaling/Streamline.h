@@ -149,6 +149,7 @@ public:
 	void InvalidateDLSSOptionsCache();
 	void ResetDLSSIdleFences();
 	void ResetFrameTracking();
+	bool HasDLSSResourcesPendingTeardown() const;
 
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);
 	bool UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

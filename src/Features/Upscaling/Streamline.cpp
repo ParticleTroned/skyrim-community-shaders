@@ -874,6 +874,32 @@ void Streamline::ResetFrameTracking()
 	frameChecker = {};
 }
 
+bool Streamline::HasDLSSResourcesPendingTeardown() const
+{
+	if (pendingDLSSResourceFreeIdleFence || pendingVRDLSSSlotRecycleIdleFence)
+		return true;
+
+	// If DLSS is not active/available in this process, cached slot metadata
+	// should not trigger a teardown cooldown by itself.
+	if (!initialized || !featureDLSS)
+		return false;
+
+	if (nonVRDLSSOptionsCache.valid)
+		return true;
+
+	for (const auto& slot : vrDLSSViewportSlots) {
+		if (slot.valid)
+			return true;
+
+		for (const auto& optionsCache : slot.optionsCache) {
+			if (optionsCache.valid)
+				return true;
+		}
+	}
+
+	return false;
+}
+
 bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,

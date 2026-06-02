@@ -55,6 +55,7 @@ public:
 	void CreateFSRResources();
 
 	void DestroyFSRResources(bool a_waitForIdle = true);
+	bool HasFSRResourcesPendingTeardown() const;
 	bool PollFSRResourceTeardownReady(const char* a_reason = nullptr);
 	void ResetFSRIdleFence();
 	void ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);

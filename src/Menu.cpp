@@ -1214,7 +1214,7 @@ void Menu::DrawWeatherDetailsWindow()
 	// Use Weather core feature for all window management and rendering
 	auto& weather = globals::features::csEditor;
 	bool* p_open = &globals::features::csEditor.WeatherDetailsWindow.Enabled;
-	weather.RenderWeatherDetailsWindow(p_open);
+	weather.RenderWeatherDetailsWindow(p_open, !weather.WeatherDetailsWindow.ShowInOverlay);
 }
 
 /**

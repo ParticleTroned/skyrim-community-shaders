@@ -58,7 +58,6 @@ public:
 	{
 		Native,
 		VendorDynamicResolution,
-		SubmitStage,
 		PerfMode
 	};
 
@@ -527,7 +526,7 @@ public:
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
 	bool EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput);
-	void ApplySubmitStageDLSSSharpening(uint32_t eyeIndex);
+	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput);
 
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
@@ -561,7 +560,6 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
-	bool IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const;
 	bool ShouldBypassVRCompositorUpscalingForRenderScaleRelatchGuard() const;
 	void LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 		const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture = nullptr,
@@ -669,16 +667,9 @@ public:
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	bool submitStagePreparedFramePresentationOnly = false;
-	uint32_t submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
-	std::array<ID3D11Texture2D*, 8> submitStageHandoffTextures = {};
-	uint32_t submitStagePreviousHandoffFrame = std::numeric_limits<uint32_t>::max();
-	std::array<ID3D11Texture2D*, 8> submitStagePreviousHandoffTextures = {};
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
-	uint32_t submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-	std::array<bool, 2> submitStageDesktopMirrorEyeReady = {};
-	ID3D11Texture2D* submitStageDesktopMirrorSourceTexture = nullptr;
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	mutable std::atomic_bool submitStageRuntimeActive{ false };
@@ -732,7 +723,7 @@ public:
 	bool BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidth, uint32_t outputHeight, float centerScale, float taaOuterScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY, uint32_t coveragePadding, uint32_t& outTileCount);
 	void DestroyPeripheryTAAResources();
 	bool DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr);
-	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
+	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr);
 	struct FoveatedEyeDispatchParams
 	{
 		uint32_t inputWidthPerEye = 0;
@@ -760,13 +751,14 @@ public:
 		ID3D11Resource* centerMotionVectorsInput = nullptr;
 		ID3D11Resource* centerReactiveMaskInput = nullptr;
 		ID3D11Resource* centerTransparencyMaskInput = nullptr;
+		ID3D11UnorderedAccessView* outputUAV = nullptr;
 		uint32_t centerColorInputBaseOffsetX = 0;
 		uint32_t centerDepthInputBaseOffsetX = 0;
 		uint32_t centerAuxInputBaseOffsetX = 0;
 	};
 	void ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams& params, const eastl::unique_ptr<Texture2D>& sourceTexture, uint32_t validWidth, uint32_t validHeight) const;
 	bool DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params);
-	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0);
+	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr);
 	void DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f);
 	void DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 		ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,
@@ -817,14 +809,9 @@ public:
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 
 private:
-	void ApplySubmitStageDynamicResolutionState(RE::BSGraphics::State* a_viewport, float a_widthRatio, float a_heightRatio, bool a_useDynamicResolution);
-	void ResetSubmitStageDynamicResolutionState();
-	void ResetSubmitStageHandoffState();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
-	void RegisterSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture);
-	bool HasSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture, uint32_t a_maxFrameDelta) const;
 	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
@@ -863,13 +850,6 @@ private:
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
-
-	bool submitStageDynamicResolutionStateValid = false;
-	uint32_t submitStageDynamicResolutionStateFrame = std::numeric_limits<uint32_t>::max();
-	float submitStageDynamicResolutionPreviousWidthRatio = 1.0f;
-	float submitStageDynamicResolutionPreviousHeightRatio = 1.0f;
-	float submitStageDynamicResolutionCurrentWidthRatio = 1.0f;
-	float submitStageDynamicResolutionCurrentHeightRatio = 1.0f;
 
 	struct OpenCompositeUpscalingBlocker
 	{

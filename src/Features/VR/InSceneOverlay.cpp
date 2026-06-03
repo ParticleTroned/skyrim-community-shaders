@@ -263,9 +263,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			bool loggedOriginalSubmit = false;
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
 				const bool bypassUpscaledSubmitForRelatchGuard = upscaling.ShouldBypassVRCompositorUpscalingForRenderScaleRelatchGuard();
-				const bool submitStageUpscalingActive = upscaling.IsSubmitStageUpscalingActive();
-				const bool perfModePresentationActive = upscaling.IsPerfModePresentationActive();
-				const bool presentationUpscalingActive = submitStageUpscalingActive || perfModePresentationActive;
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (!bypassUpscaledSubmitForRelatchGuard &&
@@ -283,8 +280,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					loggedOriginalSubmit = true;
 				}
 
-				if (!bypassUpscaledSubmitForRelatchGuard &&
-					(!presentationUpscalingActive || perfModePresentationActive || upscaling.IsSubmitStageHandoffTexture(pTexture))) {
+				if (!bypassUpscaledSubmitForRelatchGuard) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
 						upscaling.LogVRCompositorSubmitPath(eEye, "overlay-submit", pTexture, pBounds, &overlayTexture, pBounds, nSubmitFlags);

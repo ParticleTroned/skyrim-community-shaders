@@ -222,10 +222,7 @@ namespace
 7) Test whether Foveated Upscaling (FOV) or FOV + Peripheral TAA gives better performance by toggling FOV + Peripheral TAA while watching frame times.
 8) Save your mask settings and enjoy the performance win.)";
 
-	uint32_t g_submitStageOutputEyeWidth = 0;
-	uint32_t g_submitStageOutputEyeHeight = 0;
 	bool g_submitStageTargetSizeKnown = false;
-	constexpr uint32_t kSubmitStageMenuHandoffFrameTolerance = 2u;
 
 	uint ClampToggleUInt(uint value);
 
@@ -234,24 +231,11 @@ namespace
 		return a_upscaleMethod == Upscaling::UpscaleMethod::kFSR || a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
 	}
 
-	float GetSubmitStageRequestedQualityScale()
-	{
-		const uint32_t qualityMode = std::min<uint32_t>(
-			globals::features::upscaling.settings.qualityMode,
-			Upscaling::kQualityModeMaxIndex);
-		return Upscaling::GetQualityModeResolutionScale(qualityMode);
-	}
-
 	bool IsRenderScaleQualityMode(uint32_t a_qualityMode)
 	{
 		return Upscaling::GetQualityModeResolutionScale(
 				   std::min<uint32_t>(a_qualityMode, Upscaling::kQualityModeMaxIndex)) <
 		       kDynamicResolutionUpscalingScaleThreshold;
-	}
-
-	bool IsSubmitStageRequestedUpscalingActive()
-	{
-		return IsRenderScaleQualityMode(globals::features::upscaling.settings.qualityMode);
 	}
 
 	bool IsRenderScaleMethodEligible(Upscaling::UpscaleMethod a_upscaleMethod)
@@ -264,7 +248,7 @@ namespace
 		if (!IsRenderScaleMethodEligible(a_upscaleMethod))
 			return false;
 
-		return IsSubmitStageRequestedUpscalingActive();
+		return IsRenderScaleQualityMode(globals::features::upscaling.settings.qualityMode);
 	}
 
 	bool ShouldDelayVRRenderScaleForPendingDLSS(const Upscaling& a_upscaling);
@@ -346,22 +330,6 @@ namespace
 		a_upscaling.RequestPerfModeRenderTargetRecreate(a_reason);
 	}
 
-	bool IsSubmitStageDynamicResolutionActive()
-	{
-		// PerfMode boot-latches Skyrim's internal render size; submit-stage may still
-		// present it, but must not also drive dynamic-resolution ratios.
-		return IsSubmitStagePathEnabled() &&
-		       !globals::features::upscaling.IsPerfModeActive();
-	}
-
-	bool ShouldUseStableSubmitStageDLSSInputs()
-	{
-		return globals::game::isVR &&
-		       globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
-		       IsSubmitStageDynamicResolutionActive() &&
-		       g_submitStageTargetSizeKnown;
-	}
-
 	bool UsesFullSizeVRPresentationTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
 		switch (a_target) {
@@ -433,37 +401,6 @@ namespace
 		return IsVRPresentationRenderTargetTexture(texture);
 	}
 
-	uint32_t GetStableSubmitStageInputDimension(uint32_t a_requestedDimension, uint32_t a_outputDimension)
-	{
-		if (!ShouldUseStableSubmitStageDLSSInputs())
-			return a_requestedDimension;
-
-		const float maxUpscalingInputScale = Upscaling::GetQualityModeResolutionScale(1u);
-		const uint32_t maxUpscalingInputDimension =
-			static_cast<uint32_t>(std::ceil(static_cast<float>(a_outputDimension) * maxUpscalingInputScale));
-		return std::max(a_requestedDimension, maxUpscalingInputDimension);
-	}
-
-	float GetSubmitStageRequestedRenderScale()
-	{
-		return std::clamp(GetSubmitStageRequestedQualityScale(), 0.1f, 1.0f);
-	}
-
-	struct SubmitStageSizePlan
-	{
-		float requestedScale = 1.0f;
-		uint32_t screenWidth = 1;
-		uint32_t screenHeight = 1;
-		uint32_t outputEyeWidth = 1;
-		uint32_t outputHeight = 1;
-		uint32_t outputWidth = 2;
-		uint32_t inputEyeWidth = 1;
-		uint32_t inputWidth = 2;
-		uint32_t inputHeight = 1;
-		float widthRatio = 1.0f;
-		float heightRatio = 1.0f;
-	};
-
 	uint32_t ClampPositiveDimension(float a_dimension)
 	{
 		if (!std::isfinite(a_dimension))
@@ -480,42 +417,6 @@ namespace
 		const float horizontalAreaPadding = (2.0f * static_cast<float>(AAVRSController::kTileWidth)) / (inputWidth * horizontalScale);
 		const float verticalAreaPadding = (2.0f * static_cast<float>(AAVRSController::kTileHeight)) / inputHeight;
 		return std::max(horizontalAreaPadding, verticalAreaPadding);
-	}
-
-	uint32_t ScaleSubmitStageDimension(uint32_t a_dimension, float a_scale)
-	{
-		const float scaledDimension = static_cast<float>(a_dimension) * std::clamp(a_scale, 0.1f, 1.0f);
-		return std::clamp<uint32_t>(
-			static_cast<uint32_t>(std::floor(scaledDimension)),
-			1u,
-			std::max<uint32_t>(a_dimension, 1u));
-	}
-
-	SubmitStageSizePlan GetSubmitStageSizePlan(float2 a_screenSize)
-	{
-		SubmitStageSizePlan plan{};
-		plan.requestedScale = GetSubmitStageRequestedRenderScale();
-		plan.screenWidth = ClampPositiveDimension(a_screenSize.x);
-		plan.screenHeight = ClampPositiveDimension(a_screenSize.y);
-
-		const uint32_t screenEyeWidth = std::max<uint32_t>(1u, plan.screenWidth / 2u);
-		plan.outputEyeWidth = g_submitStageOutputEyeWidth > 0 ? g_submitStageOutputEyeWidth : screenEyeWidth;
-		plan.outputHeight = g_submitStageOutputEyeHeight > 0 ? g_submitStageOutputEyeHeight : plan.screenHeight;
-		plan.outputWidth = std::max<uint32_t>(2u, plan.outputEyeWidth * 2u);
-
-		plan.inputEyeWidth = ScaleSubmitStageDimension(screenEyeWidth, plan.requestedScale);
-		plan.inputWidth = std::min<uint32_t>(plan.screenWidth, plan.inputEyeWidth * 2u);
-		plan.inputHeight = ScaleSubmitStageDimension(plan.screenHeight, plan.requestedScale);
-
-		plan.widthRatio = static_cast<float>(plan.inputWidth) / static_cast<float>(plan.screenWidth);
-		plan.heightRatio = static_cast<float>(plan.inputHeight) / static_cast<float>(plan.screenHeight);
-		return plan;
-	}
-
-	bool ShouldUseSubmitStageDynamicResolution(const SubmitStageSizePlan& a_plan)
-	{
-		return a_plan.widthRatio < kDynamicResolutionUpscalingScaleThreshold ||
-		       a_plan.heightRatio < kDynamicResolutionUpscalingScaleThreshold;
 	}
 
 	void CopyResourceIfNonAliased(ID3D11DeviceContext* a_context, ID3D11Resource* a_dst, ID3D11Resource* a_src)
@@ -2547,10 +2448,9 @@ namespace
 		uint32_t samples = 0;
 		uint32_t format = 0;
 		bool presentationTarget = false;
-		bool handoffTexture = false;
 	};
 
-	VRTextureDiagnosticInfo BuildVRTextureDiagnosticInfo(const Upscaling* a_upscaling, const vr::Texture_t* a_texture)
+	VRTextureDiagnosticInfo BuildVRTextureDiagnosticInfo(const vr::Texture_t* a_texture)
 	{
 		VRTextureDiagnosticInfo info{};
 		if (!a_texture)
@@ -2574,7 +2474,6 @@ namespace
 		info.samples = desc.SampleDesc.Count;
 		info.format = static_cast<uint32_t>(desc.Format);
 		info.presentationTarget = IsVRPresentationRenderTargetTexture(texture);
-		info.handoffTexture = a_upscaling && a_upscaling->IsSubmitStageHandoffTexture(a_texture);
 		return info;
 	}
 
@@ -2594,8 +2493,7 @@ namespace
 		bool a_presentationOnly,
 		bool a_stretchOnlyFallback,
 		bool a_foveatedRequested,
-		bool a_presentationRenderTarget,
-		bool a_handoffMatches)
+		bool a_presentationRenderTarget)
 	{
 		VRTransitionDiagnosticSnapshot snapshot{};
 		if (!TryBuildVRSubmitPathDiagnosticSnapshot(a_upscaling, snapshot))
@@ -2603,7 +2501,7 @@ namespace
 
 		const auto inputBounds = BuildVRBoundsDiagnosticInfo(a_inputBounds);
 		VR_TRANSITION_DIAG_LOG(
-			"[VRSubmitStage] {} frame={} eye={} closeAge={} req={} runtime={} quality={} targetScale={} presentationOnly={} stretchOnly={} foveatedRequested={} source={}x{} fmt={} array={} samples={} sourceSubresource={} sourceBox=({},{})->({},{}) expectedIn={}x{} outputEye={}x{} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) presentationRT={} handoffMatches={} relatchPending={} settling={} stretch={} vendorPending={} hmdDefer={} projectedDefer={}",
+			"[VRSubmitStage] {} frame={} eye={} closeAge={} req={} runtime={} quality={} targetScale={} presentationOnly={} stretchOnly={} foveatedRequested={} source={}x{} fmt={} array={} samples={} sourceSubresource={} sourceBox=({},{})->({},{}) expectedIn={}x{} outputEye={}x{} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) presentationRT={} relatchPending={} settling={} stretch={} vendorPending={} hmdDefer={} projectedDefer={}",
 			DiagnosticText(a_path, "unknown"),
 			snapshot.frame,
 			VREyeName(a_eye),
@@ -2634,73 +2532,12 @@ namespace
 			inputBounds.uMax,
 			inputBounds.vMax,
 			BoolText(a_presentationRenderTarget),
-			BoolText(a_handoffMatches),
 			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::PendingRelatch),
 			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RelatchSettling),
 			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::StretchFallback),
 			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::VendorResetPending),
 			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::HMDMaskDeferred),
 			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::ProjectedMaskDeferred));
-	}
-
-	void LogVRSubmitStageHandoffDiagnostics(
-		const Upscaling& a_upscaling,
-		const char* a_passName,
-		const char* a_result,
-		ID3D11Texture2D* a_sourceTexture,
-		ID3D11Texture2D* a_targetTexture,
-		const D3D11_BOX& a_sourceBox,
-		uint32_t a_inputWidth,
-		uint32_t a_inputHeight,
-		bool a_desktopMirrorPass,
-		bool a_leftReady = false,
-		bool a_rightReady = false)
-	{
-		VRTransitionDiagnosticSnapshot snapshot{};
-		if (!TryBuildVRSubmitPathDiagnosticSnapshot(a_upscaling, snapshot))
-			return;
-
-		D3D11_TEXTURE2D_DESC sourceDesc{};
-		D3D11_TEXTURE2D_DESC targetDesc{};
-		if (a_sourceTexture)
-			a_sourceTexture->GetDesc(&sourceDesc);
-		if (a_targetTexture)
-			a_targetTexture->GetDesc(&targetDesc);
-
-		VR_TRANSITION_DIAG_LOG(
-			"[VRHandoff] {} pass={} frame={} closeAge={} req={} runtime={} quality={} input={}x{} source={}x{} fmt={} array={} samples={} target={}x{} fmt={} array={} samples={} sourceBox=({},{})->({},{}) targetOrigin=(0,0) sourceIsPresentationRT={} targetIsPresentationRT={} desktopMirror={} mirrorReady(L={},R={}) relatchPending={} settling={} stretch={} vendorPending={}",
-			DiagnosticText(a_result, "state"),
-			DiagnosticText(a_passName, "<unknown>"),
-			snapshot.frame,
-			snapshot.closeAge,
-			magic_enum::enum_name(snapshot.requestedMethod),
-			magic_enum::enum_name(snapshot.runtimeMethod),
-			snapshot.qualityMode,
-			a_inputWidth,
-			a_inputHeight,
-			sourceDesc.Width,
-			sourceDesc.Height,
-			static_cast<uint32_t>(sourceDesc.Format),
-			sourceDesc.ArraySize,
-			sourceDesc.SampleDesc.Count,
-			targetDesc.Width,
-			targetDesc.Height,
-			static_cast<uint32_t>(targetDesc.Format),
-			targetDesc.ArraySize,
-			targetDesc.SampleDesc.Count,
-			a_sourceBox.left,
-			a_sourceBox.top,
-			a_sourceBox.right,
-			a_sourceBox.bottom,
-			BoolText(IsVRPresentationRenderTargetTexture(a_sourceTexture)),
-			BoolText(IsVRPresentationRenderTargetTexture(a_targetTexture)),
-			BoolText(a_desktopMirrorPass),
-			BoolText(a_leftReady),
-			BoolText(a_rightReady),
-			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::PendingRelatch),
-			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::RelatchSettling),
-			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::StretchFallback),
-			DiagnosticFlagText(snapshot, VRTransitionDiagnosticFlag::VendorResetPending));
 	}
 
 	void LogVRHMDMaskClearDispatch(
@@ -2980,7 +2817,7 @@ namespace
 		if (upscaling.IsSubmitStageDeviceLost())
 			return false;
 
-		return IsSubmitStageDynamicResolutionActive() || upscaling.IsPerfModePresentationActive();
+		return upscaling.IsPerfModePresentationActive();
 	}
 
 	struct ScenePausedUiState
@@ -3512,7 +3349,7 @@ void Upscaling::DrawSettings()
 			renderScaleMethodEligible &&
 			renderScaleQualitySelected &&
 			IsRenderScaleModeRequested();
-		const bool renderScaleLiveActive = perfModeActive || IsSubmitStageDynamicResolutionActive();
+		const bool renderScaleLiveActive = perfModeActive;
 		if (!renderScaleRequested && !perfModeActive)
 			submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 		const auto renderScaleUiState = BuildScenePausedUiState(
@@ -3523,10 +3360,7 @@ void Upscaling::DrawSettings()
 			IsGameMenuContextActive());
 		const bool perfModeRelatchPending = pendingPerfModeRenderTargetRecreate.load(std::memory_order_relaxed);
 		const bool publicRenderScaleCanEdit = renderScaleMethodEligible && renderScaleQualitySelected;
-		const bool publicRenderScaleRequested =
-			renderScaleMethodEligible &&
-			renderScaleQualitySelected &&
-			IsRenderScaleModeRequested();
+		const bool publicRenderScaleRequested = renderScaleRequested && GetPerfModeRequested();
 		const bool showSubmitPathDeveloperToggle = globals::state && globals::state->IsDeveloperMode();
 
 		ImGui::Separator();
@@ -4440,8 +4274,6 @@ struct BSOpenVR_GetRenderTargetSize
 		auto& upscaling = globals::features::upscaling;
 		upscaling.RecordTrueHMDRenderTargetSize(trueEyeWidth, trueEyeHeight);
 
-		g_submitStageOutputEyeWidth = trueEyeWidth;
-		g_submitStageOutputEyeHeight = trueEyeHeight;
 		g_submitStageTargetSizeKnown = true;
 
 		uint32_t perfModeWidth = trueEyeWidth;
@@ -4707,13 +4539,6 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 			plan.engineRenderSize = renderSize;
 		plan.finalOutputSize = plan.trueHMDDisplaySize;
 		plan.owner = ResolutionOwner::PerfMode;
-		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
-	} else if (plan.vendorMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
-		const auto submitSize = GetSubmitStageSizePlan(screenSize);
-		plan.trueHMDDisplaySize = { static_cast<float>(submitSize.outputWidth), static_cast<float>(submitSize.outputHeight) };
-		plan.engineRenderSize = { static_cast<float>(submitSize.inputWidth), static_cast<float>(submitSize.inputHeight) };
-		plan.finalOutputSize = plan.trueHMDDisplaySize;
-		plan.owner = ResolutionOwner::SubmitStage;
 		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
 	} else if (plan.vendorMethod && IsUpscalingActive()) {
 		plan.owner = ResolutionOwner::VendorDynamicResolution;
@@ -5102,15 +4927,6 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 		}
 	}
 
-	if (IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown && UsesFullSizeVRPresentationTarget(a_target)) {
-		auto state = globals::state;
-		if (!state)
-			return false;
-
-		const auto submitSize = GetSubmitStageSizePlan(state->screenSize);
-		return setSize({ static_cast<float>(submitSize.outputWidth), static_cast<float>(submitSize.outputHeight) });
-	}
-
 	return false;
 }
 
@@ -5339,13 +5155,9 @@ void Upscaling::DestroyVRIntermediateTextures()
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
-	ResetSubmitStageHandoffState();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
-	submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-	submitStageDesktopMirrorEyeReady = {};
-	submitStageDesktopMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 }
@@ -5745,13 +5557,9 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
-	ResetSubmitStageHandoffState();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
-	submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-	submitStageDesktopMirrorEyeReady = {};
-	submitStageDesktopMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
@@ -8136,7 +7944,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 	return false;
 }
 
-bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX)
+bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV)
 {
 	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
@@ -8241,7 +8049,8 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	const uint32_t rectMaxX = rect.outputOffsetX + rect.outputWidth;
 	const uint32_t rectMaxY = rect.outputOffsetY + rect.outputHeight;
 
-	ID3D11UnorderedAccessView* outputUAV = vrIntermediateColorOut[eyeIndex]->uav.get();
+	if (!outputUAV)
+		outputUAV = vrIntermediateColorOut[eyeIndex]->uav.get();
 	ID3D11ShaderResourceView* centerSRV = foveatedCenterColorOut[eyeIndex]->srv.get();
 	const float centerBlendFeather = std::isfinite(centerFeather) ?
 		ClampPeripheryTAACenterBlendFeather(centerFeather) :
@@ -8350,7 +8159,7 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		previousCameraPosAdjust = globals::game::frameBufferCached.GetCameraPreviousPosAdjust(eyeIndex);
 	}
 
-	ID3D11UnorderedAccessView* outputColorUAV = vrIntermediateColorOut[eyeIndex]->uav.get();
+	ID3D11UnorderedAccessView* outputColorUAV = params.outputUAV ? params.outputUAV : vrIntermediateColorOut[eyeIndex]->uav.get();
 
 	bool peripheryBindingsBound = false;
 	auto bindPeripheryBindings = [&]() -> bool {
@@ -8577,7 +8386,8 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		params.centerBlendFeather,
 		params.centerColorInputBaseOffsetX,
 		params.centerDepthInputBaseOffsetX,
-		params.centerAuxInputBaseOffsetX);
+		params.centerAuxInputBaseOffsetX,
+		outputColorUAV);
 }
 
 bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput)
@@ -8703,7 +8513,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	return true;
 }
 
-bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight)
+bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV)
 {
 	if (!globals::game::isVR || eyeIndex >= 2)
 		return false;
@@ -8722,6 +8532,12 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 		!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource || !vrIntermediateColorOut[eyeIndex]->uav) {
 		return false;
 	}
+	if (!outputResource)
+		outputResource = vrIntermediateColorOut[eyeIndex]->resource.get();
+	if (!outputUAV)
+		outputUAV = vrIntermediateColorOut[eyeIndex]->uav.get();
+	if (!outputResource || !outputUAV)
+		return false;
 
 	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
 	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
@@ -8757,7 +8573,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 			!vrIntermediateTransparencyMask[eyeIndex] || !vrIntermediateTransparencyMask[eyeIndex]->srv) {
 			return false;
 		}
-		if (!EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, vrIntermediateColorOut[eyeIndex]->resource.get()))
+		if (!EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, outputResource))
 			return false;
 	}
 
@@ -8808,6 +8624,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	params.centerMotionVectorsInput = vrIntermediateMotionVectors[eyeIndex] ? vrIntermediateMotionVectors[eyeIndex]->resource.get() : nullptr;
 	params.centerReactiveMaskInput = vrIntermediateReactiveMask[eyeIndex] ? vrIntermediateReactiveMask[eyeIndex]->resource.get() : nullptr;
 	params.centerTransparencyMaskInput = vrIntermediateTransparencyMask[eyeIndex] ? vrIntermediateTransparencyMask[eyeIndex]->resource.get() : nullptr;
+	params.outputUAV = outputUAV;
 
 	static bool loggedFoveatedDispatchFailure = false;
 	try {
@@ -8836,7 +8653,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	if (depthTexture.depthSRV) {
 		ClearHMDMaskForEye(
 			HMDMaskClearPhase::SubmitStageFoveatedOutput,
-			vrIntermediateColorOut[eyeIndex]->uav.get(),
+			outputUAV,
 			depthTexture.depthSRV,
 			inputWidthPerEye,
 			inputHeight,
@@ -8876,8 +8693,8 @@ void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	// mirror writeback uses CopySubresourceRegion into that source texture.
 	const DXGI_FORMAT colorOutFormat = colorSrcDesc.Format;
 	const bool requiresColorOutRTV = presentationOutputActive;
-	const uint32_t allocationInWidth = GetStableSubmitStageInputDimension(inWidth, outWidth);
-	const uint32_t allocationInHeight = GetStableSubmitStageInputDimension(inHeight, outHeight);
+	const uint32_t allocationInWidth = inWidth;
+	const uint32_t allocationInHeight = inHeight;
 
 	for (int i = 0; i < 2; i++) {
 		std::string suffix = (i == 0) ? "Left" : "Right";
@@ -8964,8 +8781,8 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 	// make the desktop mirror writeback fail its format compatibility check.
 	const DXGI_FORMAT expectedColorOutFormat = colorSrcDesc.Format;
 	const bool requiresColorOutRTV = presentationOutputActive;
-	const uint32_t allocationInWidth = GetStableSubmitStageInputDimension(inWidth, outWidth);
-	const uint32_t allocationInHeight = GetStableSubmitStageInputDimension(inHeight, outHeight);
+	const uint32_t allocationInWidth = inWidth;
+	const uint32_t allocationInHeight = inHeight;
 	const auto coversInput = [allocationInWidth, allocationInHeight](const eastl::unique_ptr<Texture2D>& texture, DXGI_FORMAT format, bool requireUAV) {
 		return texture &&
 		       texture->resource &&
@@ -9185,47 +9002,43 @@ bool Upscaling::EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const T
 	return matchesOutput();
 }
 
-void Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex)
+bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput)
 {
 	if (settings.sharpnessDLSS <= 0.0f)
-		return;
+		return true;
 	if (eyeIndex >= 2)
-		return;
+		return false;
 
 	auto context = globals::d3d::context;
 	if (!context)
-		return;
+		return false;
 
 	auto& colorOutput = vrIntermediateColorOut[eyeIndex];
-	if (!colorOutput || !colorOutput->resource || !colorOutput->srv || !colorOutput->uav ||
-		!colorOutput->desc.Width || !colorOutput->desc.Height) {
-		return;
+	if (!colorOutput || !colorOutput->resource || !colorOutput->uav ||
+		!colorOutput->desc.Width || !colorOutput->desc.Height ||
+		!sharpenInput.resource || !sharpenInput.srv ||
+		sharpenInput.desc.Width != colorOutput->desc.Width ||
+		sharpenInput.desc.Height != colorOutput->desc.Height ||
+		sharpenInput.desc.Format != colorOutput->desc.Format) {
+		return false;
 	}
 
 	static bool loggedSharpenerFailure[2] = {};
 	try {
-		if (!EnsureSubmitStageDLSSSharpenerTexture(eyeIndex, *colorOutput)) {
-			LogWarnOnceFmt(
-				loggedSharpenerFailure[eyeIndex],
-				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because sharpener resources are unavailable.",
-				eyeIndex);
-			return;
-		}
-
-		auto& sharpener = submitStageDLSSSharpenerTexture[eyeIndex];
 		const uint32_t dispatchWidth = colorOutput->desc.Width;
 		const uint32_t dispatchHeight = colorOutput->desc.Height;
 
 		UnbindUpscalingResources();
-		if (!rcas.ApplySharpen(colorOutput->srv.get(), sharpener->uav.get(), GetDLSSRCASSharpness(settings.sharpnessDLSS), dispatchWidth, dispatchHeight)) {
+		if (!rcas.ApplySharpen(sharpenInput.srv.get(), colorOutput->uav.get(), GetDLSSRCASSharpness(settings.sharpnessDLSS), dispatchWidth, dispatchHeight)) {
 			LogWarnOnceFmt(
 				loggedSharpenerFailure[eyeIndex],
 				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because RCAS dispatch failed.",
 				eyeIndex);
-			return;
+			return false;
 		}
-		context->CopyResource(colorOutput->resource.get(), sharpener->resource.get());
-		MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening"))
+			return false;
+		return true;
 	} catch (const std::exception& e) {
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage DLSS sharpening")) {
 			LogWarnOnceFmt(
@@ -9234,6 +9047,7 @@ void Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex)
 				eyeIndex,
 				e.what());
 		}
+		return false;
 	} catch (...) {
 		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening")) {
 			LogWarnOnceFmt(
@@ -9241,6 +9055,7 @@ void Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex)
 				"[Upscaling] Submit-stage DLSS sharpening threw for eye {}; submitting unsharpened output",
 				eyeIndex);
 		}
+		return false;
 	}
 }
 
@@ -10058,7 +9873,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
 
 		auto& runtimeData = a_viewport->GetRuntimeData();
-		ResetSubmitStageDynamicResolutionState();
 		SetDynamicResolutionEnabledForUpscaling(false);
 		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
 		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
@@ -10097,33 +9911,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		return;
 	}
 
-	if (vendorUpscalingMethod && IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
-		const auto submitSize = GetSubmitStageSizePlan(screenSize);
-		resolutionScale = { submitSize.widthRatio, submitSize.heightRatio };
-
-		const int outputWidth = static_cast<int>(submitSize.outputWidth);
-		const int renderWidth = static_cast<int>(submitSize.inputWidth);
-		const int renderHeight = static_cast<int>(submitSize.inputHeight);
-		auto phaseCount = GetJitterPhaseCount(renderWidth, outputWidth);
-		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
-
-		if (globals::game::isVR)
-			a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
-		else
-			a_viewport->projectionPosScaleX = -2.0f * jitter.x / renderWidth;
-
-		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
-
-		ApplySubmitStageDynamicResolutionState(
-			a_viewport,
-			submitSize.widthRatio,
-			submitSize.heightRatio,
-			ShouldUseSubmitStageDynamicResolution(submitSize));
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionPlan();
-		return;
-	}
-
 	if (vendorUpscalingMethod) {
 		float resolutionScaleBase = GetQualityModeResolutionScale(GetRuntimeQualityMode());
 
@@ -10157,7 +9944,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto& runtimeData = a_viewport->GetRuntimeData();
 
 	if (!vendorUpscalingMethod) {
-		ResetSubmitStageDynamicResolutionState();
 		if (dynamicResolutionWidthRatio != 1.0f || dynamicResolutionHeightRatio != 1.0f) {
 			if (globals::game::isVR) {
 				SetDynamicResolutionEnabledForUpscaling(false);
@@ -10200,7 +9986,6 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
 	if (IsPerfModeActive()) {
-		ResetSubmitStageDynamicResolutionState();
 		SetDynamicResolutionEnabledForUpscaling(false);
 		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
 		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
@@ -10217,22 +10002,6 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	if (!IsVendorUpscalingMethod(upscaleMethod))
 		return;
 
-	if (IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown) {
-		auto state = globals::state;
-		if (!state)
-			return;
-
-		const auto submitSize = GetSubmitStageSizePlan(state->screenSize);
-		ApplySubmitStageDynamicResolutionState(
-			a_viewport,
-			submitSize.widthRatio,
-			submitSize.heightRatio,
-			ShouldUseSubmitStageDynamicResolution(submitSize));
-		UpdateCameraData();
-		return;
-	}
-
-	ResetSubmitStageDynamicResolutionState();
 	const bool shouldUnlockDynamicResolution = globals::game::isVR && ShouldUnlockDynamicResolutionForUpscaling(upscaleMethod, resolutionScale);
 
 	if (globals::game::isVR) {
@@ -10275,7 +10044,6 @@ void Upscaling::PrepareFullResolutionPostProcessing()
 		return;
 
 	auto& runtimeData = viewport->GetRuntimeData();
-	ResetSubmitStageDynamicResolutionState();
 	if (globals::game::isVR)
 		SetDynamicResolutionEnabledForUpscaling(false);
 	runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
@@ -10643,21 +10411,13 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 		return false;
 	}
 
-	const bool submitStageSceneActive =
-		IsSubmitStageDynamicResolutionActive() ||
-		IsPerfModePresentationActive();
+	const bool submitStageSceneActive = IsPerfModePresentationActive();
 
 	const bool menuBlocksSubmitStage =
 		IsGameMenuContextActive() &&
 		!IsSubmitStageMenuPresentationContextActive();
-	const bool active = submitStageSceneActive &&
-	                    g_submitStageTargetSizeKnown &&
-	                    !menuBlocksSubmitStage;
-	if (active) {
-		submitStageRuntimeActive.store(true, std::memory_order_relaxed);
-	} else if (!submitStageSceneActive || !g_submitStageTargetSizeKnown) {
-		submitStageRuntimeActive.store(false, std::memory_order_relaxed);
-	}
+	const bool active = submitStageSceneActive && !menuBlocksSubmitStage;
+	submitStageRuntimeActive.store(active, std::memory_order_relaxed);
 	return active;
 }
 
@@ -10677,13 +10437,9 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
-	ResetSubmitStageHandoffState();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
-	submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-	submitStageDesktopMirrorEyeReady = {};
-	submitStageDesktopMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 	pendingDLSSReset.store(false, std::memory_order_release);
@@ -10734,82 +10490,6 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 	return true;
 }
 
-void Upscaling::ResetSubmitStageHandoffState()
-{
-	submitStageHandoffFrame = std::numeric_limits<uint32_t>::max();
-	submitStageHandoffTextures.fill(nullptr);
-	submitStagePreviousHandoffFrame = std::numeric_limits<uint32_t>::max();
-	submitStagePreviousHandoffTextures.fill(nullptr);
-	submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-	submitStageDesktopMirrorEyeReady = {};
-	submitStageDesktopMirrorSourceTexture = nullptr;
-}
-
-void Upscaling::RegisterSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture)
-{
-	if (!a_texture)
-		return;
-
-	if (submitStageHandoffFrame != a_frame) {
-		if (submitStageHandoffFrame != std::numeric_limits<uint32_t>::max()) {
-			submitStagePreviousHandoffFrame = submitStageHandoffFrame;
-			submitStagePreviousHandoffTextures = submitStageHandoffTextures;
-		}
-		submitStageHandoffFrame = a_frame;
-		submitStageHandoffTextures.fill(nullptr);
-	}
-
-	for (auto*& handoffTexture : submitStageHandoffTextures) {
-		if (handoffTexture == a_texture)
-			return;
-		if (!handoffTexture) {
-			handoffTexture = a_texture;
-			return;
-		}
-	}
-
-	// Keep the most recent handoff candidates when more than the tracked
-	// pass outputs are seen in the same frame.
-	for (size_t i = 1; i < submitStageHandoffTextures.size(); ++i)
-		submitStageHandoffTextures[i - 1] = submitStageHandoffTextures[i];
-	submitStageHandoffTextures.back() = a_texture;
-}
-
-bool Upscaling::HasSubmitStageHandoffTexture(uint32_t a_frame, ID3D11Texture2D* a_texture, uint32_t a_maxFrameDelta) const
-{
-	if (!a_texture)
-		return false;
-
-	const auto matchesFrameSet = [&](uint32_t handoffFrame, const auto& handoffTextures) {
-		if (handoffFrame == std::numeric_limits<uint32_t>::max() || a_frame < handoffFrame)
-			return false;
-		if (a_maxFrameDelta != std::numeric_limits<uint32_t>::max() && (a_frame - handoffFrame) > a_maxFrameDelta)
-			return false;
-		for (auto* handoffTexture : handoffTextures) {
-			if (handoffTexture == a_texture)
-				return true;
-		}
-		return false;
-	};
-
-	return matchesFrameSet(submitStageHandoffFrame, submitStageHandoffTextures) ||
-	       matchesFrameSet(submitStagePreviousHandoffFrame, submitStagePreviousHandoffTextures);
-}
-
-bool Upscaling::IsSubmitStageHandoffTexture(const vr::Texture_t* a_inputTexture) const
-{
-	auto state = globals::state;
-	if (!state || !a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX)
-		return false;
-
-	const uint32_t handoffFrameDelta =
-		IsGameMenuContextActive() ? kSubmitStageMenuHandoffFrameTolerance : 1u;
-	return HasSubmitStageHandoffTexture(
-		state->frameCount,
-		static_cast<ID3D11Texture2D*>(a_inputTexture->handle),
-		handoffFrameDelta);
-}
-
 bool Upscaling::ShouldBypassVRCompositorUpscalingForRenderScaleRelatchGuard() const
 {
 	const auto* state = globals::state;
@@ -10838,14 +10518,14 @@ void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, 
 	if (!TryBuildVRSubmitPathDiagnosticSnapshot(*this, snapshot))
 		return;
 
-	const auto inputInfo = BuildVRTextureDiagnosticInfo(this, a_inputTexture);
-	const auto outputInfo = BuildVRTextureDiagnosticInfo(this, a_outputTexture);
+	const auto inputInfo = BuildVRTextureDiagnosticInfo(a_inputTexture);
+	const auto outputInfo = BuildVRTextureDiagnosticInfo(a_outputTexture);
 	const auto inputBounds = BuildVRBoundsDiagnosticInfo(a_inputBounds);
 	const auto outputBounds = BuildVRBoundsDiagnosticInfo(a_outputBounds);
 	const bool relatchSubmitGuard = ShouldBypassVRRenderScaleRelatchSubmitStagePresentation(*this, globals::state);
 
 	VR_TRANSITION_DIAG_LOG(
-		"[VRSubmit] {} frame={} eye={} flags=0x{:X} closeAge={} req={} runtime={} quality={} relatchGuard={} renderScaleRelevant={} pendingRelatch={} settling={} stretch={} vendorPending={} hmdDefer={} projectedDefer={} input=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} inputPresentationRT={} inputHandoff={} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) output=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} outputPresentationRT={} outputHandoff={} outputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) handoffFrame={} previousHandoffFrame={} desktopMirrorFrame={}",
+		"[VRSubmit] {} frame={} eye={} flags=0x{:X} closeAge={} req={} runtime={} quality={} relatchGuard={} renderScaleRelevant={} pendingRelatch={} settling={} stretch={} vendorPending={} hmdDefer={} projectedDefer={} input=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} inputPresentationRT={} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) output=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} outputPresentationRT={} outputBounds=({:.4f},{:.4f})->({:.4f},{:.4f})",
 		DiagnosticText(a_path, "unknown"),
 		snapshot.frame,
 		VREyeName(a_eye),
@@ -10872,7 +10552,6 @@ void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, 
 		inputInfo.arraySize,
 		inputInfo.samples,
 		BoolText(inputInfo.presentationTarget),
-		BoolText(inputInfo.handoffTexture),
 		inputBounds.uMin,
 		inputBounds.vMin,
 		inputBounds.uMax,
@@ -10887,14 +10566,10 @@ void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, 
 		outputInfo.arraySize,
 		outputInfo.samples,
 		BoolText(outputInfo.presentationTarget),
-		BoolText(outputInfo.handoffTexture),
 		outputBounds.uMin,
 		outputBounds.vMin,
 		outputBounds.uMax,
-		outputBounds.vMax,
-		submitStageHandoffFrame,
-		submitStagePreviousHandoffFrame,
-		submitStageDesktopMirrorFrame);
+		outputBounds.vMax);
 }
 
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
@@ -10941,26 +10616,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		loadingPresentationContext ||
 		presentationRenderTarget;
 	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
-	const uint32_t handoffFrameDelta =
-		menuPresentationContext ? kSubmitStageMenuHandoffFrameTolerance : 1u;
-
-	const bool perfModeActive = IsPerfModeActive();
-	const bool handoffMatches = perfModeActive || HasSubmitStageHandoffTexture(currentFrame, sourceTexture, handoffFrameDelta);
-	if (!handoffMatches) {
-		static bool loggedMissingHandoff = false;
-		if (!loggedMissingHandoff) {
-			logger::warn(
-				"[Upscaling] Submit-stage {} received a submitted texture that did not match the dynamic-resolution handoff for frame {}; using fallback presentation path for this frame.",
-				upscaleMethodName,
-				currentFrame);
-			loggedMissingHandoff = true;
-		}
-		// In-world submit-only mismatch usually means a later full-resolution
-		// UI composition pass (e.g., interaction widgets). Fall back to vanilla
-		// submit for this frame so prompts remain visible.
-		if (!menuPresentationContext)
-			return false;
-	}
 
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	sourceTexture->GetDesc(&sourceDesc);
@@ -10974,22 +10629,23 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const auto screenSize = state->screenSize;
-	const bool submitStageScaleMode = IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown;
-	const bool perfModeScaleMode = perfModeActive && resolutionPlan.owner == ResolutionOwner::PerfMode;
-	const bool targetScaleMode = submitStageScaleMode || perfModeScaleMode;
-	const auto submitSize = GetSubmitStageSizePlan(screenSize);
-	const uint32_t eyeWidthOut =
-		perfModeScaleMode ? std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.finalOutputSize.x) / 2u) :
-		(submitStageScaleMode ? submitSize.outputEyeWidth : static_cast<uint32_t>(screenSize.x / 2.0f));
-	const uint32_t eyeHeightOut =
-		perfModeScaleMode ? ClampPositiveDimension(resolutionPlan.finalOutputSize.y) :
-		(submitStageScaleMode ? submitSize.outputHeight : static_cast<uint32_t>(screenSize.y));
-	const uint32_t eyeWidthIn =
-		perfModeScaleMode ? std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.engineRenderSize.x) / 2u) :
-		(submitStageScaleMode ? submitSize.inputEyeWidth : static_cast<uint32_t>(Util::ConvertToDynamic(screenSize, true).x / 2.0f));
-	const uint32_t eyeHeightIn =
-		perfModeScaleMode ? ClampPositiveDimension(resolutionPlan.engineRenderSize.y) :
-		(submitStageScaleMode ? submitSize.inputHeight : static_cast<uint32_t>(Util::ConvertToDynamic(screenSize, true).y));
+	const bool perfModeScaleMode = resolutionPlan.owner == ResolutionOwner::PerfMode;
+	uint32_t eyeWidthOut = 0;
+	uint32_t eyeHeightOut = 0;
+	uint32_t eyeWidthIn = 0;
+	uint32_t eyeHeightIn = 0;
+	if (perfModeScaleMode) {
+		eyeWidthOut = std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.finalOutputSize.x) / 2u);
+		eyeHeightOut = ClampPositiveDimension(resolutionPlan.finalOutputSize.y);
+		eyeWidthIn = std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.engineRenderSize.x) / 2u);
+		eyeHeightIn = ClampPositiveDimension(resolutionPlan.engineRenderSize.y);
+	} else {
+		const auto dynamicRenderSize = Util::ConvertToDynamic(screenSize, true);
+		eyeWidthOut = static_cast<uint32_t>(screenSize.x / 2.0f);
+		eyeHeightOut = static_cast<uint32_t>(screenSize.y);
+		eyeWidthIn = static_cast<uint32_t>(dynamicRenderSize.x / 2.0f);
+		eyeHeightIn = static_cast<uint32_t>(dynamicRenderSize.y);
+	}
 	if (!eyeWidthIn || !eyeHeightIn || !eyeWidthOut || !eyeHeightOut)
 		return false;
 	const bool presentationSourceHasFullArrayEye =
@@ -11023,58 +10679,19 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		perfModeScaleMode &&
 		!presentationRenderTarget &&
 		submitMenuPresentationContext &&
-		handoffMatches &&
 		(a_inputBounds || sourceHasPerEyeLayout);
-	const bool perfModePresentationOnly = perfModeScaleMode && menuPresentationContext && !perfModeMenuCanUseVendor;
-	const bool submitMenuPresentationOnly = !perfModeScaleMode && menuPresentationContext && (!handoffMatches || presentationRenderTarget);
-	const bool presentationOnly = perfModePresentationOnly || submitMenuPresentationOnly;
+	const bool presentationOnly = perfModeScaleMode && menuPresentationContext && !perfModeMenuCanUseVendor;
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedRequested =
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !perfModeMenuCanUseVendor && !foveatedTransitionBypass;
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	LogVRTransitionDiagnostics(*this);
-	// ISFullScreenVR can precompute submit-stage output for the desktop mirror.
-	// Reuse that result here so the OpenVR submit does not dispatch DLSS/FSR again.
-	if (targetScaleMode &&
-		!presentationOnly &&
-		submitStageDesktopMirrorFrame == currentFrame &&
-		submitStageDesktopMirrorSourceTexture == sourceTexture &&
-		submitStageDesktopMirrorEyeReady[eyeIndex] &&
-		vrIntermediateColorOut[eyeIndex] &&
-		vrIntermediateColorOut[eyeIndex]->resource &&
-		vrIntermediateColorOut[eyeIndex]->desc.Width >= eyeWidthOut &&
-		vrIntermediateColorOut[eyeIndex]->desc.Height >= eyeHeightOut) {
-		const D3D11_BOX reuseBox{ 0, 0, 0, sourceEyeWidthIn, sourceEyeHeightIn, 1 };
-		LogVRSubmitStagePathDiagnostics(
-			*this,
-			"desktop-mirror-reuse",
-			a_eye,
-			a_inputBounds,
-			sourceDesc,
-			reuseBox,
-			0,
-			sourceEyeWidthIn,
-			sourceEyeHeightIn,
-			eyeWidthOut,
-			eyeHeightOut,
-			targetScaleMode,
-			presentationOnly,
-			false,
-			foveatedRequested,
-			presentationRenderTarget,
-			handoffMatches);
-		a_outputTexture = *a_inputTexture;
-		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
-		a_outputTexture.eType = vr::TextureType_DirectX;
-		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
-		return true;
-	}
 
 	const bool relatchPendingStretchFallback =
-		targetScaleMode && !presentationOnly &&
+		perfModeScaleMode && !presentationOnly &&
 		ShouldUseVRRenderScalePendingRelatchStretchFallback(*this, state, upscaleMethod);
 	const bool intermediateAllocCooldownFallback =
-		targetScaleMode && !presentationOnly &&
+		perfModeScaleMode && !presentationOnly &&
 		IsVRSubmitStageIntermediateAllocCooldownActive(*this, state, upscaleMethod);
 
 	if (!relatchPendingStretchFallback && !intermediateAllocCooldownFallback) {
@@ -11092,7 +10709,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		relatchPendingStretchFallback ||
 		intermediateAllocCooldownFallback;
 	const auto canUseRelatchVendorResetFallback = [&]() {
-		return targetScaleMode &&
+		return perfModeScaleMode &&
 		       IsVRRenderScaleRelatchSettling(state);
 	};
 	if (transitionStretchFallback) {
@@ -11130,9 +10747,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 	const bool relatchStretchFallbackStillActive =
-		targetScaleMode && ShouldUseVRRenderScaleRelatchStretchFallback(*this, state, upscaleMethod);
+		perfModeScaleMode && ShouldUseVRRenderScaleRelatchStretchFallback(*this, state, upscaleMethod);
 	const bool fsrRenderScaleResetFallback =
-		targetScaleMode && ShouldUseVRFSRRenderScaleResetStretchFallback(*this, upscaleMethod);
+		perfModeScaleMode && ShouldUseVRFSRRenderScaleResetStretchFallback(*this, upscaleMethod);
 	const bool stretchOnlyFallback =
 		(relatchStretchFallbackStillActive ||
 		 relatchVendorResetDeferredFallback ||
@@ -11277,12 +10894,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			sourceEyeHeightIn,
 			eyeWidthOut,
 			eyeHeightOut,
-			targetScaleMode,
+			perfModeScaleMode,
 			presentationOnly,
 			stretchOnlyFallback,
 			foveatedRequested,
-			presentationRenderTarget,
-			handoffMatches);
+			presentationRenderTarget);
 	};
 
 	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, const char* path) {
@@ -11326,6 +10942,23 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			"menu-loading-presentation-output");
 	}
 
+	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;
+	Texture2D* vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
+	if (submitDLSSSharpening) {
+		static bool loggedSharpenerOutputFailure[2] = {};
+		if (!EnsureSubmitStageDLSSSharpenerTexture(eyeIndex, *vrIntermediateColorOut[eyeIndex])) {
+			LogWarnOnceFmt(
+				loggedSharpenerOutputFailure[eyeIndex],
+				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because the intermediate output is unavailable.",
+				eyeIndex);
+			submitDLSSSharpening = false;
+		} else {
+			vendorColorOutput = submitStageDLSSSharpenerTexture[eyeIndex].get();
+		}
+	}
+	if (!vendorColorOutput || !vendorColorOutput->resource || !vendorColorOutput->uav)
+		return false;
+
 	bool vendorSucceeded = false;
 	if (foveatedRequested) {
 		static bool loggedFoveatedSubmitException[2] = {};
@@ -11336,7 +10969,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				eyeWidthIn,
 				eyeHeightIn,
 				eyeWidthOut,
-				eyeHeightOut);
+				eyeHeightOut,
+				vendorColorOutput->resource.get(),
+				vendorColorOutput->uav.get());
 		} catch (const std::exception& e) {
 			UnbindUpscalingResources();
 			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage foveated vendor dispatch"))
@@ -11391,7 +11026,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			vendorParams.motionVectors = vrIntermediateMotionVectors[eyeIndex]->resource.get();
 			vendorParams.reactiveMask = vrIntermediateReactiveMask[eyeIndex]->resource.get();
 			vendorParams.transparencyMask = vrIntermediateTransparencyMask[eyeIndex]->resource.get();
-			vendorParams.colorOut = vrIntermediateColorOut[eyeIndex]->resource.get();
+			vendorParams.colorOut = vendorColorOutput->resource.get();
 			vendorParams.label = "submit-stage full-eye";
 			vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
 		} catch (const std::exception& e) {
@@ -11446,7 +11081,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (IsSubmitStageDeviceLost())
 			return false;
 
-		if (targetScaleMode &&
+		if (perfModeScaleMode &&
 			presentStretchOutput(eyeWidthIn, eyeHeightIn, "vendor-failed-stretch-output")) {
 			return true;
 		}
@@ -11454,8 +11089,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 
-	if (upscaleMethod == UpscaleMethod::kDLSS) {
-		ApplySubmitStageDLSSSharpening(eyeIndex);
+	if (submitDLSSSharpening) {
+		if (!ApplySubmitStageDLSSSharpening(eyeIndex, *vendorColorOutput)) {
+			if (IsSubmitStageDeviceLost())
+				return false;
+			context->CopyResource(vrIntermediateColorOut[eyeIndex]->resource.get(), vendorColorOutput->resource.get());
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening fallback copy"))
+				return false;
+		}
 		if (IsSubmitStageDeviceLost())
 			return false;
 	}
@@ -11463,7 +11104,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	clearSubmittedEyeHMDMask();
 	if (IsSubmitStageDeviceLost())
 		return false;
-	if (targetScaleMode) {
+	if (perfModeScaleMode) {
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&
 			sourceDesc.Width >= eyeWidthOut * 2 &&
@@ -11557,58 +11198,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	return true;
 }
 
-void Upscaling::ApplySubmitStageDynamicResolutionState(RE::BSGraphics::State* a_viewport, float a_widthRatio, float a_heightRatio, bool a_useDynamicResolution)
-{
-	if (!a_viewport)
-		return;
-
-	auto& runtimeData = a_viewport->GetRuntimeData();
-	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0;
-	constexpr float kRatioEpsilon = 1e-6f;
-	const bool ratioChanged =
-		std::abs(submitStageDynamicResolutionCurrentWidthRatio - a_widthRatio) > kRatioEpsilon ||
-		std::abs(submitStageDynamicResolutionCurrentHeightRatio - a_heightRatio) > kRatioEpsilon;
-
-	if (!submitStageDynamicResolutionStateValid || ratioChanged) {
-		submitStageDynamicResolutionPreviousWidthRatio = a_widthRatio;
-		submitStageDynamicResolutionPreviousHeightRatio = a_heightRatio;
-	} else if (submitStageDynamicResolutionStateFrame != currentFrame) {
-		submitStageDynamicResolutionPreviousWidthRatio = submitStageDynamicResolutionCurrentWidthRatio;
-		submitStageDynamicResolutionPreviousHeightRatio = submitStageDynamicResolutionCurrentHeightRatio;
-	}
-
-	submitStageDynamicResolutionCurrentWidthRatio = a_widthRatio;
-	submitStageDynamicResolutionCurrentHeightRatio = a_heightRatio;
-	submitStageDynamicResolutionStateFrame = currentFrame;
-	submitStageDynamicResolutionStateValid = true;
-
-	// Submit-stage owns the ratios; Skyrim's internal DR controller must not mutate them.
-	if (globals::game::isVR)
-		SetDynamicResolutionEnabledForUpscaling(false, true);
-
-	runtimeData.dynamicResolutionPreviousWidthRatio = submitStageDynamicResolutionPreviousWidthRatio;
-	runtimeData.dynamicResolutionPreviousHeightRatio = submitStageDynamicResolutionPreviousHeightRatio;
-	runtimeData.dynamicResolutionWidthRatio = submitStageDynamicResolutionCurrentWidthRatio;
-	runtimeData.dynamicResolutionHeightRatio = submitStageDynamicResolutionCurrentHeightRatio;
-	runtimeData.dynamicResolutionLock = a_useDynamicResolution ? 0 : 1;
-	dynamicResolutionWidthRatio = submitStageDynamicResolutionCurrentWidthRatio;
-	dynamicResolutionHeightRatio = submitStageDynamicResolutionCurrentHeightRatio;
-}
-
-void Upscaling::ResetSubmitStageDynamicResolutionState()
-{
-	submitStageDynamicResolutionStateValid = false;
-	submitStageDynamicResolutionStateFrame = std::numeric_limits<uint32_t>::max();
-	submitStageDynamicResolutionPreviousWidthRatio = 1.0f;
-	submitStageDynamicResolutionPreviousHeightRatio = 1.0f;
-	submitStageDynamicResolutionCurrentWidthRatio = 1.0f;
-	submitStageDynamicResolutionCurrentHeightRatio = 1.0f;
-}
-
 void Upscaling::RequestHistoryReset()
 {
 	historyResetRequested = true;
-	ResetSubmitStageDynamicResolutionState();
 }
 
 uint32_t Upscaling::GetEffectiveUpscalingQualityMode() const
@@ -12737,14 +12329,12 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 		return;
 	}
 	RefreshRuntimeResolutionPlan();
-	const auto submitSize = GetSubmitStageSizePlan(screenSize);
 	const bool perfModeActive = runtimeResolutionPlan.owner == ResolutionOwner::PerfMode;
-	const uint32_t inputEyeWidth = perfModeActive ?
-		std::max<uint32_t>(1u, ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.x) / 2u) :
-		submitSize.inputEyeWidth;
-	const uint32_t inputHeight = perfModeActive ?
-		ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.y) :
-		submitSize.inputHeight;
+	if (!perfModeActive) {
+		return;
+	}
+	const uint32_t inputEyeWidth = std::max<uint32_t>(1u, ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.x) / 2u);
+	const uint32_t inputHeight = ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.y);
 	if (!inputEyeWidth || !inputHeight) {
 		return;
 	}
@@ -12803,9 +12393,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	// fullscreen triangle UVs diverge from the dynamic depth coordinates and
 	// produces diagonal clear regions at the waterline.
 	const float repairWidth = static_cast<float>(std::min<uint32_t>(underwaterMaskDesc.Width, inputEyeWidth));
-	const float repairHeight = perfModeActive ?
-		static_cast<float>(std::min<uint32_t>(underwaterMaskDesc.Height, inputHeight)) :
-		std::min(static_cast<float>(underwaterMaskDesc.Height), static_cast<float>(inputHeight) * 0.5f);
+	const float repairHeight = static_cast<float>(std::min<uint32_t>(underwaterMaskDesc.Height, inputHeight));
 	viewport.Width = repairWidth;
 	viewport.Height = repairHeight;
 	viewport.MinDepth = 0.0f;
@@ -12914,11 +12502,10 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 
 		if (ShouldBypassVRRenderScaleRelatchSubmitStagePresentation(upscaling, state)) {
 			static uint32_t loggedRelatchHandoffBypassFrame = std::numeric_limits<uint32_t>::max();
-			ResetSubmitStageHandoffState();
 			if (loggedRelatchHandoffBypassFrame != state->frameCount) {
 				loggedRelatchHandoffBypassFrame = state->frameCount;
 				VR_TRANSITION_DIAG_LOG(
-					"[VRTransition] Bypassing submit-stage handoff during render-target relatch/recovery guard; letting vanilla pass run (frame={}, closeAge={})",
+					"[VRTransition] Bypassing submit-stage replacement during render-target relatch/recovery guard; letting vanilla pass run (frame={}, closeAge={})",
 					state->frameCount,
 					GetVRLoadingTransitionCloseElapsedFrames(state));
 			}
@@ -12926,18 +12513,9 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		}
 
 		const auto screenSize = state->screenSize;
-		const bool submitStageScaleMode = IsSubmitStageDynamicResolutionActive() && g_submitStageTargetSizeKnown;
-		uint32_t inputWidth = 0;
-		uint32_t inputHeight = 0;
-		if (submitStageScaleMode) {
-			const auto submitSize = GetSubmitStageSizePlan(screenSize);
-			inputWidth = submitSize.inputWidth;
-			inputHeight = submitSize.inputHeight;
-		} else {
-			const auto renderSize = Util::ConvertToDynamic(screenSize);
-			inputWidth = static_cast<uint32_t>(std::max(1.0f, renderSize.x));
-			inputHeight = static_cast<uint32_t>(std::max(1.0f, renderSize.y));
-		}
+		const auto renderSize = Util::ConvertToDynamic(screenSize);
+		const uint32_t inputWidth = static_cast<uint32_t>(std::max(1.0f, renderSize.x));
+		const uint32_t inputHeight = static_cast<uint32_t>(std::max(1.0f, renderSize.y));
 		ID3D11ShaderResourceView* psSourceSRV = nullptr;
 		ID3D11ShaderResourceView* csSourceSRV = nullptr;
 		context->PSGetShaderResources(0, 1, &psSourceSRV);
@@ -13059,24 +12637,13 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		};
 
 		if (upscaling.IsSubmitStageUpscalingActive()) {
-			const auto invalidateSubmitStageHandoff = [&]() {
-				if (submitStageHandoffFrame == state->frameCount)
-					submitStageHandoffTextures.fill(nullptr);
-				submitStagePreviousHandoffFrame = std::numeric_limits<uint32_t>::max();
-				submitStagePreviousHandoffTextures.fill(nullptr);
-				submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-				submitStageDesktopMirrorEyeReady = {};
-				submitStageDesktopMirrorSourceTexture = nullptr;
-			};
-
 			// In-place/UI-target passes can carry late full-resolution HUD/interactions.
-			// Let vanilla execute these and invalidate current-frame handoff to
-			// avoid submitting cropped low-res regions for prompt frames.
+			// Let vanilla execute these to avoid submitting cropped low-res regions
+			// for prompt frames.
 			const bool inPlacePass = outputTexture == sourceTexture;
 			const bool uiRenderTargetPass = IsVRPresentationRenderTargetTexture(sourceTexture) || IsVRPresentationRenderTargetTexture(outputTexture);
 			const bool interactionUiContext = !IsKnownGameMenuContextActive();
 			if ((inPlacePass || uiRenderTargetPass) && interactionUiContext) {
-				invalidateSubmitStageHandoff();
 				releaseRefs();
 				return false;
 			}
@@ -13103,7 +12670,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 					static bool loggedCopyMismatch = false;
 					if (!loggedCopyMismatch) {
 						logger::warn(
-							"[Upscaling] Submit-stage dynamic-resolution handoff could not copy source: input={}x{} source={}x{} fmt={} samples={} target={}x{} fmt={} samples={}",
+							"[Upscaling] Submit-stage replacement could not copy source: input={}x{} source={}x{} fmt={} samples={} target={}x{} fmt={} samples={}",
 							inputWidth,
 							inputHeight,
 							sourceDesc.Width,
@@ -13126,58 +12693,6 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 
 			const bool copiedToOutput = copyDynamicRegionToTarget(outputTexture);
 			if (copiedToOutput) {
-				const bool desktopMirrorPass =
-					submitStageScaleMode &&
-					std::string_view(a_passName ? a_passName : "") == "ISFullScreenVR";
-				const D3D11_BOX handoffSourceBox{ 0, 0, 0, inputWidth, inputHeight, 1 };
-				RegisterSubmitStageHandoffTexture(state->frameCount, outputTexture);
-				LogVRSubmitStageHandoffDiagnostics(
-					upscaling,
-					a_passName,
-					"registered",
-					sourceTexture,
-					outputTexture,
-					handoffSourceBox,
-					inputWidth,
-					inputHeight,
-					desktopMirrorPass);
-
-				if (desktopMirrorPass) {
-					// Run the same submit-stage path while the desktop mirror target is still current.
-					// The later OpenVR submit will return these per-eye outputs directly.
-					submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-					submitStageDesktopMirrorEyeReady = {};
-					submitStageDesktopMirrorSourceTexture = nullptr;
-
-					vr::Texture_t desktopInput{ outputTexture, vr::TextureType_DirectX, vr::ColorSpace_Auto };
-					vr::VRTextureBounds_t desktopBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
-					vr::Texture_t ignoredOutput{};
-					vr::VRTextureBounds_t ignoredBounds{};
-					const bool leftReady = SubmitVRUpscaledFrame(vr::Eye_Left, &desktopInput, &desktopBounds, ignoredOutput, ignoredBounds);
-					const bool rightReady = SubmitVRUpscaledFrame(vr::Eye_Right, &desktopInput, &desktopBounds, ignoredOutput, ignoredBounds);
-					LogVRSubmitStageHandoffDiagnostics(
-						upscaling,
-						a_passName,
-						leftReady && rightReady ? "desktop-mirror-ready" : "desktop-mirror-not-ready",
-						sourceTexture,
-						outputTexture,
-						handoffSourceBox,
-						inputWidth,
-						inputHeight,
-						desktopMirrorPass,
-						leftReady,
-						rightReady);
-					if (leftReady && rightReady) {
-						submitStageDesktopMirrorFrame = state->frameCount;
-						submitStageDesktopMirrorSourceTexture = outputTexture;
-						submitStageDesktopMirrorEyeReady = { true, true };
-					} else {
-						submitStageDesktopMirrorFrame = std::numeric_limits<uint32_t>::max();
-						submitStageDesktopMirrorEyeReady = {};
-						submitStageDesktopMirrorSourceTexture = nullptr;
-					}
-				}
-
 				context->OMSetRenderTargets(1, &outputRTV, outputDSV);
 				releaseRefs();
 				if (globals::game::stateUpdateFlags)
@@ -13467,11 +12982,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
-		if (IsSubmitStageDynamicResolutionActive() && !upscaling.IsPerfModeActive()) {
-			upscaling.PrepareFullResolutionPostProcessing();
-		} else {
-			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
-		}
+		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		return;
 	}
 

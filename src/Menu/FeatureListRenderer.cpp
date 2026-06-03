@@ -725,7 +725,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			feat->DrawSettings();
 
 			if (feat != &globals::features::csEditor) {
-				ImGui::SeparatorText("Profiling");
+				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
 			}
 

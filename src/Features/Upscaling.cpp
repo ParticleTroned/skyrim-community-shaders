@@ -10,6 +10,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/Game.h"
 #include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
 #include "VR.h"
@@ -133,10 +134,12 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DPostTeardownDelayFrames = 6u;
+	constexpr uint32_t kVRRenderScaleRelatchMinimumD3DPostCloseFrames = 120u;
+	constexpr uint32_t kVRRenderScaleRelatchInteriorLoadExteriorD3DPostCloseFrames = 600u;
 	constexpr uint32_t kVRRenderScaleRelatchStretchFallbackFrames = 10u;
-	constexpr uint32_t kVRRenderScaleRelatchFullEyeRecoveryFrames = 20u;
+	constexpr uint32_t kVRRenderScaleRelatchFullEyeRecoveryFrames = 30u;
 	constexpr uint32_t kVRRenderScaleRelatchExitRecoveryFrames = 10u;
-	constexpr uint32_t kVRRenderScaleRelatchStableFullEyeFrames = 10u;
+	constexpr uint32_t kVRRenderScaleRelatchStableFullEyeFrames = 20u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
@@ -144,6 +147,9 @@ namespace
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
+	std::atomic_bool g_vrSaveLoadTransitionWasActive{ false };
+	std::atomic_bool g_vrPostSaveLoadInteriorOrigin{ false };
+	std::atomic_uint32_t g_vrPostSaveLoadOriginFrame{ 0 };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 	constexpr uint32_t kVRSaveLoadTransitionTailFrames = 30;
@@ -151,7 +157,7 @@ namespace
 	std::atomic_uint32_t g_vrRenderScaleRelatchSettleStartFrame{ 0 };
 	std::atomic_uint32_t g_vrRenderScaleRelatchStretchFallbackEndFrame{ 0 };
 	std::atomic_uint32_t g_vrRenderScaleRelatchSubmitSkipLoggedFrame{ 0 };
-	std::atomic_uint32_t g_vrRenderScaleRelatchCompositorSuppressLoggedFrame{ 0 };
+	std::atomic_uint32_t g_vrRenderScaleRelatchCompositorBypassLoggedFrame{ 0 };
 	std::atomic_uint32_t g_vrRenderScaleRelatchPendingStretchLoggedFrame{ 0 };
 	std::atomic_uint32_t g_vrSubmitStageIntermediateAllocCooldownEndFrame{ 0 };
 	std::atomic_bool g_vrRenderScaleRelatchVendorTeardownStarted{ false };
@@ -1330,6 +1336,7 @@ namespace
 	}
 
 	bool IsSaveLoadTransitionContextActive(const State* a_state);
+	uint32_t GetVRRenderScaleRelatchMinimumD3DPostCloseFrames(const State* a_state);
 
 	uint32_t GetVRLoadingTransitionCloseElapsedFrames(const State* a_state)
 	{
@@ -1367,6 +1374,25 @@ namespace
 		const State* a_state)
 	{
 		return GetVRRenderScaleTransitionGraceDelayFrames(a_upscaling, a_upscaleMethod, a_state) != 0;
+	}
+
+	uint32_t GetVRRenderScaleRelatchMinimumD3DPostCloseDelayFrames(
+		const Upscaling& a_upscaling,
+		Upscaling::UpscaleMethod a_upscaleMethod,
+		const State* a_state)
+	{
+		if (IsSaveLoadTransitionContextActive(a_state))
+			return 0;
+
+		if (!IsVRRenderScaleTransitionProtectionActive(a_upscaling, a_upscaleMethod, a_state))
+			return 0;
+
+		const uint32_t requiredFrames = GetVRRenderScaleRelatchMinimumD3DPostCloseFrames(a_state);
+		const uint32_t elapsedFrames = GetVRLoadingTransitionCloseElapsedFrames(a_state);
+		if (elapsedFrames >= requiredFrames)
+			return 0;
+
+		return requiredFrames - elapsedFrames;
 	}
 
 	uint32_t GetVRRenderScaleRelatchSettleFrames(bool a_wasRenderScaleActive, bool a_isRenderScaleActive)
@@ -1479,11 +1505,11 @@ namespace
 		// If the relatch settled near a frame boundary and the relatch-frame guard
 		// did not run, allow exactly one follow-up frame to carry the same safety.
 		if (currentFrame > startFrame && currentFrame - startFrame == 1u) {
-			const uint32_t suppressedFrame =
-				g_vrRenderScaleRelatchCompositorSuppressLoggedFrame.load(std::memory_order_acquire);
+			const uint32_t bypassedFrame =
+				g_vrRenderScaleRelatchCompositorBypassLoggedFrame.load(std::memory_order_acquire);
 			const uint32_t skippedFrame =
 				g_vrRenderScaleRelatchSubmitSkipLoggedFrame.load(std::memory_order_acquire);
-			return suppressedFrame != startFrame && skippedFrame != startFrame;
+			return bypassedFrame != startFrame && skippedFrame != startFrame;
 		}
 
 		return false;
@@ -1503,8 +1529,7 @@ namespace
 		if (a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire))
 			return true;
 
-		return a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
-		       IsVRRenderScaleRelatchVendorTeardownStarted();
+		return a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
 	}
 
 	bool ShouldBypassVRRenderScaleRelatchVendorEvaluation(const Upscaling& a_upscaling, const State* a_state)
@@ -1531,22 +1556,6 @@ namespace
 			"[VRTransition] Skipping VR vendor color upscale during render-scale exit recovery guard (frame={}, closeAge={})",
 			a_state->frameCount,
 			GetVRLoadingTransitionCloseElapsedFrames(a_state));
-	}
-
-	bool CanUseVRRuntimeVendorPathBeforeRenderScaleRelatchTeardown(const Upscaling& a_upscaling, const State* a_state)
-	{
-		if (!globals::game::isVR || !a_state)
-			return false;
-		if (!a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
-			return false;
-		if (a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire))
-			return false;
-		if (IsVRRenderScaleRelatchVendorTeardownStarted())
-			return false;
-		if (ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(a_state))
-			return false;
-
-		return true;
 	}
 
 	void LogVRRenderScaleRelatchSubmitStagePresentationSkip(const State* a_state)
@@ -1613,6 +1622,59 @@ namespace
 		return IsSaveLoadTransitionContextActive(globals::state);
 	}
 
+	void UpdateVRPostSaveLoadOriginTracking(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return;
+
+		const bool saveLoadActive = IsSaveLoadTransitionContextActive(a_state);
+		const bool wasActive = g_vrSaveLoadTransitionWasActive.exchange(saveLoadActive, std::memory_order_acq_rel);
+		if (saveLoadActive || !wasActive)
+			return;
+
+		const bool endedInInterior = Util::IsInterior();
+		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
+		g_vrPostSaveLoadInteriorOrigin.store(endedInInterior, std::memory_order_release);
+		g_vrPostSaveLoadOriginFrame.store(currentFrame, std::memory_order_release);
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] Save/load origin captured after safe-mode exit: location={}, frame={}",
+			endedInInterior ? "interior" : "exterior",
+			currentFrame);
+	}
+
+	bool IsVRPostInteriorLoadExteriorRelatchRiskActive(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+		if (g_vrPostSaveLoadOriginFrame.load(std::memory_order_acquire) == 0)
+			return false;
+		if (!g_vrPostSaveLoadInteriorOrigin.load(std::memory_order_acquire))
+			return false;
+
+		return !Util::IsInterior();
+	}
+
+	uint32_t GetVRRenderScaleRelatchMinimumD3DPostCloseFrames(const State* a_state)
+	{
+		return IsVRPostInteriorLoadExteriorRelatchRiskActive(a_state) ?
+			kVRRenderScaleRelatchInteriorLoadExteriorD3DPostCloseFrames :
+			kVRRenderScaleRelatchMinimumD3DPostCloseFrames;
+	}
+
+	void ConsumeVRPostInteriorLoadExteriorRelatchRiskIfActive(const State* a_state)
+	{
+		if (!IsVRPostInteriorLoadExteriorRelatchRiskActive(a_state))
+			return;
+
+		const uint32_t originFrame = g_vrPostSaveLoadOriginFrame.exchange(0, std::memory_order_acq_rel);
+		g_vrPostSaveLoadInteriorOrigin.store(false, std::memory_order_release);
+		if (originFrame != 0) {
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Consumed post-interior-load exterior relatch guard after successful D3D relatch (originFrame={})",
+				originFrame);
+		}
+	}
+
 	bool IsVRRenderScalePostLoadResetRelevant(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		return a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
@@ -1663,6 +1725,7 @@ namespace
 		return IsSaveLoadTransitionContextActive(a_state) ||
 		       IsVRRenderScaleTransitionGraceActive(a_upscaling, a_upscaling.GetConfiguredUpscaleMethodForTransition(), a_state) ||
 		       IsVRRenderScaleRelatchVisualSafetyActive(a_upscaling, a_state) ||
+		       IsVRRenderScaleRelatchSettling(a_state) ||
 		       (IsVRRenderScaleTransitionProtectionActive(a_upscaling, a_state) &&
 		           (IsCellTransitionContextActive(a_state) || IsLoadingTransitionTailActive(a_state)));
 	}
@@ -1683,6 +1746,21 @@ namespace
 		return endFrame != 0 && a_state->frameCount < endFrame;
 	}
 
+	bool IsVRRenderScaleRelatchD3DWaitOrTeardownActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+		if (!a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
+			return false;
+
+		return GetVRRenderScaleRelatchMinimumD3DPostCloseDelayFrames(
+			       a_upscaling,
+			       a_upscaling.GetConfiguredUpscaleMethodForTransition(),
+			       a_state) != 0 ||
+		       IsVRRenderScaleRelatchVendorTeardownStarted() ||
+		       IsVRRenderScaleRelatchVendorTeardownStaged();
+	}
+
 	bool IsVRRenderScaleRelatchVisualSafetyActive(const Upscaling& a_upscaling, const State* a_state)
 	{
 		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
@@ -1699,14 +1777,13 @@ namespace
 			return false;
 
 		return IsVRRenderScaleRelatchDelaySafetyActive(a_upscaling, a_state) ||
+		       IsVRRenderScaleRelatchD3DWaitOrTeardownActive(a_upscaling, a_state) ||
 		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
 	}
 
 	bool ShouldDeferVRFSRRuntimeForRenderScaleReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		if (!globals::game::isVR || a_upscaleMethod != Upscaling::UpscaleMethod::kFSR)
-			return false;
-		if (CanUseVRRuntimeVendorPathBeforeRenderScaleRelatchTeardown(a_upscaling, globals::state))
 			return false;
 
 		const bool fsrResetOrRelatchActive =
@@ -2734,8 +2811,6 @@ namespace
 		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod))
 			return false;
 		if (!a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
-			return false;
-		if (CanUseVRRuntimeVendorPathBeforeRenderScaleRelatchTeardown(a_upscaling, a_state))
 			return false;
 
 		const uint32_t currentFrame = a_state ? std::max(a_state->frameCount, 1u) : 0u;
@@ -5364,6 +5439,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	if (!globals::game::isVR)
 		return true;
 
+	UpdateVRPostSaveLoadOriginTracking(globals::state);
+
 	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 		return true;
 
@@ -5394,6 +5471,30 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	if (ShouldWaitForPerfModeRenderTargetRecreateDelay())
 		return false;
+
+	const uint32_t d3dPostCloseDelayFrames =
+		GetVRRenderScaleRelatchMinimumD3DPostCloseDelayFrames(*this, GetConfiguredUpscaleMethodForTransition(), state);
+	if (d3dPostCloseDelayFrames != 0) {
+		MarkPerfModeRenderTargetRecreateQueued(d3dPostCloseDelayFrames);
+		static uint32_t loggedD3DPostCloseDelayFrame = 0;
+		static uint32_t loggedD3DPostCloseDelayRequiredFrames = 0;
+		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		const uint32_t requiredFrames = GetVRRenderScaleRelatchMinimumD3DPostCloseFrames(state);
+		const bool logDelay =
+			closeFrame != 0 &&
+			(loggedD3DPostCloseDelayFrame != closeFrame ||
+			 loggedD3DPostCloseDelayRequiredFrames != requiredFrames);
+		if (logDelay) {
+			loggedD3DPostCloseDelayFrame = closeFrame;
+			loggedD3DPostCloseDelayRequiredFrames = requiredFrames;
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Relatch deferred: D3D render-target recreate waits until loading/menu close is at least {} frames old (remaining={})",
+				requiredFrames,
+				d3dPostCloseDelayFrames);
+		}
+		LogVRTransitionDiagnostics(*this, "render-target relatch waiting: loading close D3D grace", logDelay);
+		return false;
+	}
 
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition()) {
 		return false;
@@ -5582,6 +5683,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		RefreshRuntimeResolutionPlan();
 		MarkVRRenderScaleRelatchSettling(GetVRRenderScaleRelatchSettleFrames(wasRenderScaleActive, IsPerfModeActive()));
+		ConsumeVRPostInteriorLoadExteriorRelatchRiskIfActive(state);
 	} catch (const std::exception& e) {
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "render-target relatch")) {
 			const uint32_t retryFrames = IsOutOfMemoryException(e) ?
@@ -9767,7 +9869,7 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		return;
 	if (!colorUAV || !depthSRV || !depthWidth || !depthHeight || !colorWidth || !colorHeight)
 		return;
-	// During save/load, render-scale cell transitions, and active relatch ownership,
+	// During save/load, render-scale cell transitions, and active relatch ownership/recovery,
 	// the depth feed can be transiently mismatched with the current eye target.
 	// Running HAM clear in this window can briefly project a rectangular mask.
 	if (ShouldDeferHMDClearMask())
@@ -10716,7 +10818,7 @@ bool Upscaling::ShouldBypassVRCompositorUpscalingForRenderScaleRelatchGuard() co
 
 	const uint32_t currentFrame = state->frameCount;
 	const uint32_t previouslyLoggedFrame =
-		g_vrRenderScaleRelatchCompositorSuppressLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
+		g_vrRenderScaleRelatchCompositorBypassLoggedFrame.exchange(currentFrame, std::memory_order_acq_rel);
 	if (previouslyLoggedFrame != currentFrame) {
 		VR_TRANSITION_DIAG_LOG(
 			"[VRTransition] Bypassing CS upscaled OpenVR submit during render-target relatch/recovery guard; forwarding original submit (frame={}, closeAge={}, pendingRelatch={}, relatchInProgress={}, teardownStarted={})",
@@ -10986,8 +11088,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
 	bool relatchVendorResetDeferredFallback = false;
-	const bool preTeardownRelatchVendorPathAllowed =
-		CanUseVRRuntimeVendorPathBeforeRenderScaleRelatchTeardown(*this, state);
 	const bool transitionStretchFallback =
 		relatchPendingStretchFallback ||
 		intermediateAllocCooldownFallback;
@@ -11013,7 +11113,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			relatchVendorResetDeferredFallback =
 				relatchVendorResetDeferredFallback ||
 				canUseRelatchVendorResetFallback();
-			if (!relatchVendorResetDeferredFallback && !preTeardownRelatchVendorPathAllowed)
+			if (!relatchVendorResetDeferredFallback)
 				return false;
 		}
 
@@ -11025,7 +11125,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		const bool vendorResetPending = HasPendingVRVendorRuntimeReset(*this, upscaleMethod);
 		if (vendorResetPending) {
 			relatchVendorResetDeferredFallback = canUseRelatchVendorResetFallback();
-			if (!presentationOnly && !relatchVendorResetDeferredFallback && !preTeardownRelatchVendorPathAllowed)
+			if (!presentationOnly && !relatchVendorResetDeferredFallback)
 				return false;
 		}
 	}
@@ -11113,6 +11213,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			eyeHeightOut,
 			eyeIndex == 1 ? sourceEyeWidthIn : 0u,
 			0u);
+	};
+
+	auto clampToTexture = [](int64_t value, uint32_t maxValue) {
+		return static_cast<uint32_t>(std::clamp<int64_t>(value, 0, maxValue));
 	};
 
 	const bool sourceUsesCombinedStereoLayout =

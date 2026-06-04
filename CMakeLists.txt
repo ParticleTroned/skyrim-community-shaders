@@ -639,8 +639,14 @@ endif()
 
 # Automatic deployment to CommunityShaders output directory.
 if(AUTO_PLUGIN_DEPLOYMENT)
-    # Detect git HEAD changes and invalidate stale AIO/deploy state.
-    # BuildRelease.bat reconfigures, so this runs on every build invocation.
+    # Detect git HEAD changes (branch switch or new commit) and invalidate stale
+    # deploy state. BuildRelease.bat reconfigures, so this runs on every build
+    # invocation. When HEAD changes we:
+    #   1. Clear AIO so PREPARE_AIO re-copies everything with fresh timestamps.
+    #   2. Delete deploy stamps so CMake re-runs the robocopy commands.
+    # Per-build incremental deploy relies on robocopy's default
+    # name+size+timestamp detection to copy any file whose size or mtime differs
+    # from the deployed destination.
     execute_process(
         COMMAND git rev-parse --short HEAD
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -696,9 +702,15 @@ if(AUTO_PLUGIN_DEPLOYMENT)
             add_custom_command(
                 OUTPUT ${DEPLOY_TARGET_HASH}_deploy.stamp
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_TARGET}"
+                # No /XO: a previous manual or external deploy can leave dest
+                # files with mtime > source. /XO then skips them even when
+                # source content changed, so build output silently diverges from
+                # what runs in-game. Without /XO, robocopy's default
+                # name+size+timestamp delta catches newer-source and
+                # size-mismatch cases.
                 COMMAND
                     ${ROBOCOPY_WRAPPER} "${AIO_DIR}" "${DEPLOY_TARGET}" "/E"
-                    "/XD" "${AIO_DIR}/Shaders" "/COPY:DAT" "/XO" "/R:1" "/W:1"
+                    "/XD" "${AIO_DIR}/Shaders" "/COPY:DAT" "/R:1" "/W:1"
                     "/NFL" "/NDL" "/NJH" "/NJS"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_deploy.stamp
@@ -739,10 +751,11 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/Shaders"
+                # See /XO rationale above on the main deploy block.
                 COMMAND
                     ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/XO" "/R:1"
-                    "/W:1" "/NFL" "/NDL" "/NJH" "/NJS"
+                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
+                    "/NFL" "/NDL" "/NJH" "/NJS"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_only.stamp
@@ -762,10 +775,11 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/Shaders"
+                # See /XO rationale above on the main deploy block.
                 COMMAND
                     ${ROBOCOPY_WRAPPER} "${AIO_DIR}/Shaders"
-                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/XO" "/R:1"
-                    "/W:1" "/NFL" "/NDL" "/NJH" "/NJS"
+                    "${DEPLOY_TARGET}/Shaders" "/E" "/COPY:DAT" "/R:1" "/W:1"
+                    "/NFL" "/NDL" "/NJH" "/NJS"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders_full.stamp

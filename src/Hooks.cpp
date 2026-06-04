@@ -424,6 +424,32 @@ namespace GrassExtensions
 	};
 }
 
+namespace WaterBlendHistory
+{
+	struct BSImagespaceShader_Render
+	{
+		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
+		{
+			if (const auto shadowState = globals::game::shadowState; shadowState && globals::game::renderer && globals::d3d::context) {
+				GET_INSTANCE_MEMBER(renderTargets, shadowState)
+
+				const auto target = renderTargets[1];
+				if (target != RE::RENDER_TARGET::kNONE) {
+					const auto rtv = globals::game::renderer->GetRuntimeData().renderTargets[target].RTV;
+					if (rtv) {
+						constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
+						globals::d3d::context->ClearRenderTargetView(rtv, clearColor);
+					}
+				}
+			}
+
+			func(imageSpaceShader, shape, param);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
 struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
@@ -1209,6 +1235,7 @@ namespace Hooks
 
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
+		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
 
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);

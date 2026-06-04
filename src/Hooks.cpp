@@ -13,6 +13,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
@@ -841,11 +842,17 @@ namespace Hooks
 				return;
 			}
 
-			if (globals::features::interiorSun.loaded) {
-				globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
+			if (globals::features::terrainBlending.loaded) {
+				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
+					return;
+				}
+				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
+					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				}
 			}
 
-			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -868,6 +875,15 @@ namespace Hooks
 
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	{
+		if (globals::features::interiorSun.loaded) {
+			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
+		}
+
+		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	}
 
 	struct BSImageSpace_Init_IBLF
 	{

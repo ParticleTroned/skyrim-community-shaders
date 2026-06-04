@@ -52,9 +52,9 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct BSBatchRenderer_RenderPassImmediately
+	struct BSShadowDirectionalLight_UpdateCamera
 	{
-		static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
+		static bool thunk(RE::BSShadowDirectionalLight* a_light, const RE::NiCamera* a_camera);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

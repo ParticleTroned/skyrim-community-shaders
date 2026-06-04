@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 
+#include "LightEditor.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
 #include "Weather/LensFlareWidget.h"
@@ -62,6 +63,8 @@ public:
 
 	// Owned by EditorWindow, created on demand in ShowObjectsWindow(), released in destructor
 	std::unique_ptr<CellLightingWidget> currentCellLightingWidget;
+
+	LightEditor lightEditor;
 
 	// Weather locking for editing
 	RE::TESWeather* lockedWeather = nullptr;

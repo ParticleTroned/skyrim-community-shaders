@@ -1,16 +1,17 @@
 ﻿#pragma once
 #include "Features/InverseSquareLighting/Common.h"
 
+#include <nlohmann/json.hpp>
+
 struct LightEditor
 {
-	bool enabled = false;
 	bool disableInvSqLights = false;
 	bool disableRegularLights = false;
 	bool shadowsOnly = false;
 
 	void DrawSettings();
 	void GatherLights();
-	void RestoreDefaultSettings();
+	void ResetOverrides();
 
 	bool ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const;
 
@@ -124,8 +125,8 @@ private:
 	static std::string GetLightName(LightInfo& lightInfo);
 	static LPLightInfo ParseLPLightName(const std::string& name);
 	static std::string UpdateLPFlags(const std::string& existingFlags, bool inverseSquare, bool linear);
-	static bool MatchesLPFilters(const json& lightEntry, RE::TESObjectREFR* refr);
-	static std::array<float, 3> GetJsonVec3(const json& data, const char* key);
+	static bool MatchesLPFilters(const nlohmann::json& lightEntry, RE::TESObjectREFR* refr);
+	static std::array<float, 3> GetJsonVec3(const nlohmann::json& data, const char* key);
 	bool SaveToLightPlacer();
 
 	void UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight);

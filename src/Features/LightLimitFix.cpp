@@ -1261,18 +1261,16 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 						bool hasGradientConfig = false;
 						ParticleLights::GradientConfig gradientConfig{};
 						if (!material->greyscaleTexturePath.empty()) {
-							textureName = ExtractTextureStem(material->greyscaleTexturePath.c_str());
-							if (textureName.size() < 1) {
-								return cacheInvalidReference(node);
+							// Gradient configs are optional overrides; missing entries fall back to the base particle config.
+							const std::string gradientName = ExtractTextureStem(material->greyscaleTexturePath.c_str());
+							if (!gradientName.empty()) {
+								auto& gradientConfigs = particleLights.particleLightGradientConfigs;
+								auto itGradient = gradientConfigs.find(gradientName);
+								if (itGradient != gradientConfigs.end()) {
+									hasGradientConfig = true;
+									gradientConfig = itGradient->second;
+								}
 							}
-
-							auto& gradientConfigs = particleLights.particleLightGradientConfigs;
-							auto itGradient = gradientConfigs.find(textureName);
-							if (itGradient == gradientConfigs.end()) {
-								return cacheInvalidReference(node);
-							}
-							hasGradientConfig = true;
-							gradientConfig = itGradient->second;
 						}
 
 						ParticleLightReference reference{};
@@ -1560,8 +1558,14 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 
 void LightLimitFix::UpdateLights()
 {
+	auto clearCachedParticleLights = [&]() {
+		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
+		cachedParticleLights.clear();
+	};
+
 	auto context = globals::d3d::context;
 	if (!context || !lights || !lights->resource) {
+		clearCachedParticleLights();
 		return;
 	}
 
@@ -1569,6 +1573,7 @@ void LightLimitFix::UpdateLights()
 	auto& isl = globals::features::inverseSquareLighting;
 	auto clearAndUpdate = [&]() {
 		lightCount = 0;
+		clearCachedParticleLights();
 		UpdateStructure();
 	};
 
@@ -1691,7 +1696,6 @@ void LightLimitFix::UpdateLights()
 		LightData clusteredLight{};
 		uint32_t clusteredLights = 0;
 
-		auto eyePositionOffset = eyePositionCached[0] - eyePositionCached[1];
 		auto flushClusteredLight = [&]() {
 			if (!clusteredLights) {
 				return;
@@ -1703,6 +1707,7 @@ void LightLimitFix::UpdateLights()
 			clusteredLight.positionWS[1].data = clusteredLight.positionWS[0].data;
 
 			if (eyeCount == 2) {
+				const auto eyePositionOffset = eyePositionCached[0] - eyePositionCached[1];
 				clusteredLight.positionWS[1].data.x += eyePositionOffset.x;
 				clusteredLight.positionWS[1].data.y += eyePositionOffset.y;
 				clusteredLight.positionWS[1].data.z += eyePositionOffset.z;

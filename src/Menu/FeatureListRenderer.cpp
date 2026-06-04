@@ -128,13 +128,12 @@ namespace
 	}
 
 	/**
-	 * @brief Draws a feature header with the feature name in large text and version in smaller text
+	 * @brief Draws a feature header with the feature name in large text
 	 * @param featureName The display name of the feature
-	 * @param version The version string (can be empty)
 	 * @param description Short description shown below the title (single line, truncated if too long)
 	 * @return The height of just the title line (for button alignment)
 	 */
-	float DrawFeatureHeader(const std::string& featureName, const std::string& version, const std::string& description = "")
+	float DrawFeatureHeader(const std::string& featureName, const std::string& description = "")
 	{
 		auto& themeSettings = globals::menu->GetTheme();
 		auto& palette = themeSettings.Palette;
@@ -146,8 +145,6 @@ namespace
 			titleScale = ThemeManager::Constants::DEFAULT_FEATURE_TITLE_SCALE;
 		}
 		titleScale = std::clamp(titleScale, 1.0f, 3.0f);
-
-		ImVec2 startPos = ImGui::GetCursorScreenPos();
 
 		// Calculate title size and draw feature name with Title font
 		ImVec2 titleSize;
@@ -164,42 +161,6 @@ namespace
 
 		// Store the title-only height for return value
 		float titleOnlyHeight = titleSize.y;
-
-		// Draw version on same line with Body font, bottom-aligned if version exists
-		if (!version.empty()) {
-			// Format version: replace dashes with dots for consistency
-			std::string formattedVersion = version;
-			std::replace(formattedVersion.begin(), formattedVersion.end(), '-', '.');
-
-			// Calculate version text size at scaled size
-			ImVec2 versionSize;
-			{
-				MenuFonts::FontRoleGuard bodyGuard(Menu::FontRole::Body);
-				versionSize = ImGui::CalcTextSize(("v" + formattedVersion).c_str());
-				versionSize.x *= titleScale;
-				versionSize.y *= titleScale;
-			}
-
-			// Position version text: right of title, bottom-aligned
-			float versionX = startPos.x + titleSize.x + ImGui::GetStyle().ItemSpacing.x;
-			float versionY = startPos.y + titleSize.y - versionSize.y;
-
-			ImGui::SetCursorScreenPos(ImVec2(versionX, versionY));
-
-			// Use dimmed text color for version
-			ImVec4 versionColor = palette.Text;
-			versionColor.w *= ThemeManager::Constants::VERSION_TEXT_OPACITY;
-
-			{
-				MenuFonts::FontRoleGuard bodyGuard(Menu::FontRole::Body);
-				ImGui::SetWindowFontScale(titleScale);
-				ImGui::TextColored(versionColor, "v%s", formattedVersion.c_str());
-				ImGui::SetWindowFontScale(1.0f);
-			}
-
-			// Reset cursor to after the title block
-			ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + titleSize.y + ImGui::GetStyle().ItemSpacing.y * 0.25f));
-		}
 
 		// Draw description if provided (wrapped to content width)
 		if (!description.empty()) {
@@ -577,14 +538,6 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	}
 	ImGui::PopStyleColor();
 	ImGui::PopID();
-
-	// Display version if loaded
-	if (isLoaded) {
-		ImGui::SameLine();
-		std::string formattedVersion = feat->version;
-		std::replace(formattedVersion.begin(), formattedVersion.end(), '-', '.');
-		ImGui::TextDisabled(fmt::format("({})", formattedVersion).c_str());
-	}
 }
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
@@ -673,9 +626,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	auto [description, keyFeatures] = feat->GetFeatureSummary();
 	(void)keyFeatures;  // Not used for subtitle display
 
-	// Draw feature title, version, and description on the left
+	// Draw feature title and description on the left
 	// Returns title-only height for button alignment
-	float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), isLoaded ? feat->version : "", description);
+	float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), description);
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
@@ -832,6 +785,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::Spacing();
 				ImGui::SeparatorText("Profiling");
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
+				ImGui::Dummy(ImVec2(0.0f, GetRestoreDefaultsButtonReserveHeight()));
 			}
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {

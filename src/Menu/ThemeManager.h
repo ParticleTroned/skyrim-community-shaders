@@ -169,7 +169,6 @@ public:
 		static constexpr float DOCKED_ICON_SIZE_MULTIPLIER = 1.5f;
 		static constexpr float DOCKED_ICON_SPACING = 8.0f;
 		static constexpr float DOCKED_RIGHT_MARGIN = 45.0f;
-		static constexpr float WATERMARK_HEIGHT_PERCENT = 0.50f;
 		static constexpr float UNDOCKED_ICON_PADDING_REDUCTION = 4.0f;
 		static constexpr float DOCKED_ICON_PADDING_REDUCTION = 2.0f;
 
@@ -185,8 +184,6 @@ public:
 
 		// Feature header constants
 		static constexpr float DEFAULT_FEATURE_TITLE_SCALE = 1.5f;  // Default scale for feature title text
-		static constexpr float VERSION_TEXT_OPACITY = 0.6f;         // Opacity for version text next to feature title
-
 		// Auto-hide feature list constants
 		static constexpr float AUTOHIDE_ACTIVATION_ZONE_WIDTH = 50.0f;  // Width of hover zone at left edge (px)
 		static constexpr float AUTOHIDE_EXPAND_DELAY = 0.25f;           // Delay before expanding panel (seconds)

@@ -2109,26 +2109,32 @@ namespace Util
 		}
 
 		// Get theme colors for better integration
-		auto& style = ImGui::GetStyle();
-		auto& colors = style.Colors;
+		auto& colors = ImGui::GetStyle().Colors;
 
-		// Use theme header colors instead of bright green/red
+		// Use the same accent family as checkboxes/sliders in both states.
+		const ImVec4 baseBg = colors[ImGuiCol_FrameBg];
+		const ImVec4 accent = colors[ImGuiCol_CheckMark];
+		const auto blendTrack = [&](float amount, float alpha) {
+			return Color::Blend(baseBg, accent, amount, alpha);
+		};
 		ImVec4 toggleBg = *enabled ?
-		                      colors[ImGuiCol_Header] :  // Use header color when enabled
-		                      colors[ImGuiCol_FrameBg];  // Use frame background when disabled
+		                      blendTrack(0.68f, 0.92f) :
+		                      blendTrack(0.20f, 0.88f);
 
 		ImVec4 toggleBgHovered = *enabled ?
-		                             colors[ImGuiCol_HeaderHovered] :  // Use header hovered when enabled
-		                             colors[ImGuiCol_FrameBgHovered];  // Use frame hovered when disabled
+		                             blendTrack(0.78f, 0.96f) :
+		                             blendTrack(0.32f, 0.92f);
 
 		ImVec4 toggleBgActive = *enabled ?
-		                            colors[ImGuiCol_HeaderActive] :  // Use header active when enabled
-		                            colors[ImGuiCol_FrameBgActive];  // Use frame active when disabled
+		                            blendTrack(0.88f, 1.0f) :
+		                            blendTrack(0.44f, 0.96f);
+		ImVec4 toggleBorder = Color::WithAlpha(accent, *enabled ? 0.95f : 0.56f);
 
 		// Apply toggle styling with border
 		ImGui::PushStyleColor(ImGuiCol_Button, toggleBg);
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toggleBgHovered);
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, toggleBgActive);
+		ImGui::PushStyleColor(ImGuiCol_Border, toggleBorder);
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, toggleSize.y * 0.5f);  // Round ends
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);               // Larger border
 
@@ -2141,7 +2147,6 @@ namespace Util
 		// Draw the toggle knob
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		ImVec2 buttonMin = ImGui::GetItemRectMin();
-		ImVec2 buttonMax = ImGui::GetItemRectMax();
 
 		// Calculate knob position and size
 		float knobRadius = (toggleSize.y - 4.0f) * 0.5f;
@@ -2158,7 +2163,7 @@ namespace Util
 
 		ImGui::PopID();
 		ImGui::PopStyleVar(2);  // Pop both FrameRounding and FrameBorderSize
-		ImGui::PopStyleColor(3);
+		ImGui::PopStyleColor(4);
 
 		// Handle toggle action
 		if (clicked) {

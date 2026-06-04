@@ -98,11 +98,6 @@ void MenuHeaderRenderer::RenderHeader(
 	if (forceStableHeader) {
 		RenderStableHeader(title, showLogo, actionIcons, uiScale, uiIcons);
 	} else if (isDocked) {
-		// When docked, draw logo as a background watermark if available
-		if (showLogo && uiIcons.logo.texture) {
-			RenderWatermarkLogo(uiIcons);
-		}
-
 		// Draw action icons in the title bar area
 		RenderDockedIcons(actionIcons, uiScale);
 	} else {
@@ -350,15 +345,6 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 	}
 
 	return actionIcons;
-}
-
-void MenuHeaderRenderer::RenderActionIcons(const std::vector<ActionIcon>& actionIcons, bool isDocked, float uiScale)
-{
-	if (isDocked) {
-		RenderDockedIcons(actionIcons, uiScale);
-	} else {
-		RenderUndockedIcons(actionIcons, uiScale);
-	}
 }
 
 void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale)
@@ -695,35 +681,4 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	}
 
 	ImGui::SetCursorPos(ImVec2(cursorStart.x, cursorStart.y + headerHeight));
-}
-
-void MenuHeaderRenderer::RenderWatermarkLogo(const Menu::UIIcons& uiIcons)
-{
-	// Get current window's drawable area (excluding title bar)
-	ImVec2 windowPos = ImGui::GetWindowPos();
-	ImVec2 windowSize = ImGui::GetWindowSize();
-	float titleBarHeight = ImGui::GetFrameHeight();
-
-	// Calculate content area (below title bar)
-	ImVec2 contentPos(windowPos.x, windowPos.y + titleBarHeight);
-	ImVec2 contentSize(windowSize.x, windowSize.y - titleBarHeight);
-
-	// Calculate watermark logo size - base it on height for consistent sizing
-	const float watermarkHeightPercent = ThemeManager::Constants::WATERMARK_HEIGHT_PERCENT;
-	float watermarkHeight = contentSize.y * watermarkHeightPercent;
-	float logoAspectRatio = uiIcons.logo.size.x / uiIcons.logo.size.y;
-	float watermarkWidth = watermarkHeight * logoAspectRatio;
-
-	// Position watermark in the center of the content area
-	float logoX = contentPos.x + (contentSize.x - watermarkWidth) * 0.5f;   // Horizontally centered
-	float logoY = contentPos.y + (contentSize.y - watermarkHeight) * 0.5f;  // Vertically centered
-
-	// Draw watermark logo with transparency and blending
-	ImDrawList* drawList = ImGui::GetWindowDrawList();
-	ImVec2 logoMin(logoX, logoY);
-	ImVec2 logoMax(logoX + watermarkWidth, logoY + watermarkHeight);
-
-	// Use very low alpha for subtle watermark effect
-	ImU32 watermarkColor = IM_COL32(255, 255, 255, 180);
-	drawList->AddImage(uiIcons.logo.texture, logoMin, logoMax, ImVec2(0, 0), ImVec2(1, 1), watermarkColor);
 }

@@ -785,6 +785,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::Spacing();
 				ImGui::SeparatorText("Profiling");
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
+				ImGui::Dummy(ImVec2(0.0f, GetRestoreDefaultsButtonReserveHeight()));
 			}
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {

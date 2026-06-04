@@ -2142,11 +2142,17 @@ namespace Util
 		const bool active = *enabled;
 		const bool hovered = ImGui::IsItemHovered();
 		const bool held = ImGui::IsItemActive();
-		const ImVec4 trackBase = ImGui::GetStyleColorVec4(active ? ImGuiCol_Header : ImGuiCol_FrameBg);
-		const ImVec4 trackHovered = ImGui::GetStyleColorVec4(active ? ImGuiCol_HeaderHovered : ImGuiCol_FrameBgHovered);
-		const ImVec4 trackActive = ImGui::GetStyleColorVec4(active ? ImGuiCol_HeaderActive : ImGuiCol_FrameBgActive);
+		auto& colors = ImGui::GetStyle().Colors;
+		const ImVec4 baseBg = colors[ImGuiCol_FrameBg];
+		const ImVec4 accent = colors[ImGuiCol_CheckMark];
+		const auto blendTrack = [&](float amount, float alpha) {
+			return Color::Blend(baseBg, accent, amount, alpha);
+		};
+		const ImVec4 trackBase = active ? blendTrack(0.68f, 0.92f) : blendTrack(0.20f, 0.88f);
+		const ImVec4 trackHovered = active ? blendTrack(0.78f, 0.96f) : blendTrack(0.32f, 0.92f);
+		const ImVec4 trackActive = active ? blendTrack(0.88f, 1.0f) : blendTrack(0.44f, 0.96f);
 		const ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
-		const ImVec4 borderColor = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+		const ImVec4 borderColor = Color::WithAlpha(accent, active ? 0.95f : 0.56f);
 		const ImVec4 knobColor(1.0f, 1.0f, 1.0f, 1.0f);
 
 		ImDrawList* drawList = ImGui::GetWindowDrawList();

@@ -1267,7 +1267,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::extendedMaterialSettings.EnableComplexMaterial) {
 		const float kMaskEpsilon = (4.0 / 255.0);
 		float4 envMaskSample = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
-		float envMaskTest = envMaskSample.w;
+		float envMaskAlpha = envMaskSample.w;
+		float envMaskTest = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15).w;
 		envMaskBase = envMaskSample.x;
 		envMaskBaseSampled = true;
 
@@ -1277,11 +1278,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if ((abs(envMaskSample.x - envMaskSample.y) < kMaskEpsilon) &&
 			(abs(envMaskSample.x - envMaskSample.z) < kMaskEpsilon) &&
 			(abs(envMaskSample.y - envMaskSample.z) < kMaskEpsilon) &&
-			(abs(envMaskSample.x - envMaskTest) < kMaskEpsilon))
+			(abs(envMaskSample.x - envMaskAlpha) < kMaskEpsilon))
 			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskTest > kMaskEpsilon) {
+			if (envMaskAlpha > kMaskEpsilon && envMaskAlpha < (1.0 - kMaskEpsilon)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);

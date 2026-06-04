@@ -10,6 +10,7 @@
 ### Common Tasks
 
 -   **Fast shader deployment:** `cmake --build build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS`
+-   **Verify shader refactor bytecode:** `pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl`
 -   **Full build with deployment:** `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
 -   **Run tests:** `cmake --build build/ALL --target run_shader_tests`
 -   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`

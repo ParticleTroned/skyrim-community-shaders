@@ -87,6 +87,10 @@ hlslkit-generate-defines --log CommunityShaders.log
 
 # Scan for buffer conflicts across features
 hlslkit-buffer-scan --features-dir features/
+
+# Verify that a shader refactor preserved compiled bytecode
+# Defaults to merge-base(HEAD, current branch upstream); on this branch, origin/cs-1.6-PL-VR
+pwsh tools/verify-shader-refactor.ps1 package/Shaders/ISTemporalAA.hlsl
 ```
 
 ### Custom CMake Targets

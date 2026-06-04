@@ -8,7 +8,30 @@ cmake --build build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS
 
 # Full deployment (DLL + tests + shaders)
 cmake --build build/ALL-WITH-AUTO-DEPLOYMENT --target DEPLOY_ALL
+
+# Prove an HLSL refactor changed no compiled bytecode
+pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl
 ```
+
+## Verifying refactors
+
+`tools/verify-shader-refactor.ps1` (bash wrapper: `tools/verify-shader-refactor.sh`)
+compiles a shader from a base git ref and from the working tree across the `VR`
+x `HDR_OUTPUT` permutations, then compares the compiled DXBC bytecode. The base
+ref's full include tree is materialized with `git archive`, so shared `.hlsli`
+changes are compared against their base-ref versions instead of being masked by
+working-tree headers.
+
+-   **IDENTICAL** SHA-256 of the `.cso` means the compiled GPU program is
+    byte-for-byte identical.
+-   **DIFFERS** dumps `/Fc` assembly differences for review.
+
+Exit codes: `0` all identical, `2` some differ, `1` compile error. By default,
+the base is `merge-base(HEAD, <current branch upstream>)`; on this branch that
+keeps comparisons against `origin/cs-1.6-PL-VR`. Pass `-BaseRef <ref>` to compare
+against another ref. Requires `fxc.exe` from the Windows SDK. The default sweep is
+useful targeted coverage, not the full `.github/configs/shader-validation*.yaml`
+matrix; pass `-Permutations` for feature-specific define combinations.
 
 ## Overview
 

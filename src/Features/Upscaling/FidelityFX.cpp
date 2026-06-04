@@ -620,7 +620,7 @@ const char* FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
 	case RuntimeUpscalerFramePath::kRuntimeFsr31:
 		return "Runtime FSR 3.1.5";
 	case RuntimeUpscalerFramePath::kRuntimeFsr4:
-		return "Runtime FSR 4";
+		return "Runtime FSR 4.1";
 	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
 		return "Host FSR 3.1.5 fallback";
 	case RuntimeUpscalerFramePath::kInactive:

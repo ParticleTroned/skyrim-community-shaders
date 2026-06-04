@@ -218,6 +218,18 @@ void VolumetricLighting::DrawSettings()
 {
 	SanitizeSettings();
 
+	auto drawVRRestartHint = [] {
+		if (!globals::game::isVR) {
+			return;
+		}
+
+		ImGui::SameLine();
+		ImGui::TextDisabled("(VR restart required)");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("VR pre-allocates volumetric lighting targets at boot. Restart the game after changing this toggle.");
+		}
+	};
+
 	if (REL::Module::IsVR()) {
 		{
 			Util::BlueFrameStyleWrapper disableDuringRainStyle(true);
@@ -233,12 +245,14 @@ void VolumetricLighting::DrawSettings()
 
 	if (ImGui::Checkbox("Enable Volumetric Lighting in Exteriors", &settings.ExteriorEnabled))
 		SetupVL();
+	drawVRRestartHint();
 
 	if (settings.ExteriorEnabled)
 		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
 
 	if (ImGui::Checkbox("Enable Volumetric Lighting in Interiors", &settings.InteriorEnabled))
 		SetupVL();
+	drawVRRestartHint();
 
 	if (settings.InteriorEnabled)
 		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);

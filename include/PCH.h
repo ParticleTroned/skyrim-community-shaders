@@ -206,6 +206,7 @@ using float4 = DirectX::SimpleMath::Vector4;
 using float4x4 = DirectX::SimpleMath::Matrix;
 using uint = uint32_t;
 
+#include "Profiler.h"
 #include "Globals.h"
 #include "Util.h"
 #include "Feature.h"

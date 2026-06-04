@@ -24,7 +24,7 @@ namespace FeatureVersions
         {"LODBlending"sv,          {1,0,0}},
         {"LightLimitFix"sv,        {3,1,6}},
         {"LinearLighting"sv,       {1,0,1}},  
-        {"PerformanceOverlay"sv,   {1,0,0}},
+        {"PerformanceOverlay"sv,   {1,2,0}},
         {"RenderDoc"sv,            {1,0,0}},
         {"ScreenSpaceGI"sv,        {4,1,7}},  
         {"ScreenSpaceShadows"sv,   {2,1,5}}, 

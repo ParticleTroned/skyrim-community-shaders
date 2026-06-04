@@ -77,7 +77,10 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 
 	uint32_t dispatchX = (screenWidth + 7) / 8;
 	uint32_t dispatchY = (screenHeight + 7) / 8;
-	context->Dispatch(dispatchX, dispatchY, 1);
+	{
+		CS_PROFILE_SCOPE("Upscaling::RCAS");
+		context->Dispatch(dispatchX, dispatchY, 1);
+	}
 
 	ID3D11ShaderResourceView* nullSRVs[] = { nullptr };
 	context->CSSetShaderResources(0, 1, nullSRVs);

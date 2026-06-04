@@ -35,6 +35,7 @@
 #include "Features/WetnessEffects.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "Menu.h"
+#include "Profiler.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -151,6 +152,8 @@ namespace globals
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
+	static Profiler profilerInstance;
+	Profiler* profiler = &profilerInstance;
 
 	void OnInit()
 	{

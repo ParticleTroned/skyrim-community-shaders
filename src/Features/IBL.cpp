@@ -264,7 +264,10 @@ void IBL::Prepass()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
-		context->Dispatch(1, 1, 1);
+		{
+			CS_PROFILE_SCOPE("ImageBasedLighting::EnvDiffuseIBL");
+			context->Dispatch(1, 1, 1);
+		}
 	} else {
 		// Still need to set sampler and shader for sky IBL dispatch below
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
@@ -280,7 +283,10 @@ void IBL::Prepass()
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->Dispatch(1, 1, 1);
+		{
+			CS_PROFILE_SCOPE("ImageBasedLighting::SkyDiffuseIBL");
+			context->Dispatch(1, 1, 1);
+		}
 	}
 
 	// Reset

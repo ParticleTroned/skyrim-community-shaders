@@ -367,7 +367,10 @@ void SubsurfaceScattering::DrawSSS()
 				auto shader = GetComputeShaderHorizontalBlur();
 				context->CSSetShader(shader, nullptr, 0);
 
-				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				{
+					CS_PROFILE_SCOPE("SubsurfaceScattering::HorizontalBlur");
+					context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				}
 			}
 
 			uav = nullptr;
@@ -386,7 +389,10 @@ void SubsurfaceScattering::DrawSSS()
 				auto shader = GetComputeShaderVerticalBlur();
 				context->CSSetShader(shader, nullptr, 0);
 
-				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				{
+					CS_PROFILE_SCOPE("SubsurfaceScattering::VerticalBlur");
+					context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				}
 			}
 		} else if (settings.SSMode == 1) {
 			// Burley pass to main texture
@@ -396,7 +402,10 @@ void SubsurfaceScattering::DrawSSS()
 				auto shader = GetComputeShaderBurley();
 				context->CSSetShader(shader, nullptr, 0);
 
-				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				{
+					CS_PROFILE_SCOPE("SubsurfaceScattering::Burley");
+					context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+				}
 
 				uav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);

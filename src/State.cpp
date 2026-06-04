@@ -36,6 +36,7 @@
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
+#include "Profiler.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
@@ -395,6 +396,7 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
+	globals::profiler->EndFrame();
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -1022,6 +1024,14 @@ void State::SetupResources()
 
 	screenSize = { (float)texDesc.Width, (float)texDesc.Height };
 	globals::d3d::context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
+	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
+	if (frameAnnotations) {
+		globals::profiler->SetPerfEventCallbacks(
+			[this](std::string_view a_title) { BeginPerfEvent(a_title); },
+			[this](std::string_view) { EndPerfEvent(); });
+	} else {
+		globals::profiler->SetPerfEventCallbacks({}, {});
+	}
 
 	featureLevel = globals::d3d::device->GetFeatureLevel();
 

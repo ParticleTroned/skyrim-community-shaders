@@ -1596,7 +1596,8 @@ void ScreenSpaceGI::DrawSSGI()
 			a_fn(cache.rects[1]);
 	};
 
-	auto dispatchCenterShader = [&](ID3D11ComputeShader* a_shader) {
+	auto dispatchCenterShader = [&](ID3D11ComputeShader* a_shader, std::string_view a_profileName) {
+		CS_PROFILE_SCOPE(a_profileName);
 		forEachCenterRect([&](const DispatchRect& rect) {
 			if (rect.width == 0 || rect.height == 0)
 				return;
@@ -1643,7 +1644,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 	};
 
-	auto runStereoSync = [&](ID3D11ComputeShader* a_shader, bool a_centerOnly) {
+	auto runStereoSync = [&](ID3D11ComputeShader* a_shader, bool a_centerOnly, std::string_view a_profileName) {
 		const uint dstAoIdx = !inputAoTexIdx;
 		const uint dstGITexIdx = !inputGITexIdx;
 
@@ -1664,7 +1665,7 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		if (a_centerOnly) {
-			dispatchCenterShader(a_shader);
+			dispatchCenterShader(a_shader, a_profileName);
 			resetViews();
 			copyTextureRects(texAo[inputAoTexIdx]->resource.get(), texAo[dstAoIdx]->resource.get());
 			if (runILPath) {
@@ -1675,7 +1676,10 @@ void ScreenSpaceGI::DrawSSGI()
 		}
 
 		context->CSSetShader(a_shader, nullptr, 0);
-		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		{
+			CS_PROFILE_SCOPE(a_profileName);
+			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		}
 
 		inputAoTexIdx = dstAoIdx;
 		if (runILPath)
@@ -1699,7 +1703,10 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(prefilterDepthsCompute.get(), nullptr, 0);
-		context->Dispatch((resolution[0] + 15) >> 4, (resolution[1] + 15) >> 4, 1);
+		{
+			CS_PROFILE_SCOPE("ScreenSpaceGI::PrefilterDepths");
+			context->Dispatch((resolution[0] + 15) >> 4, (resolution[1] + 15) >> 4, 1);
+		}
 	}
 
 	// fetch radiance and disocclusion (optional in AO-only + no temporal mode)
@@ -1738,7 +1745,10 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(activeRadianceDisoccCompute, nullptr, 0);
-		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		{
+			CS_PROFILE_SCOPE("ScreenSpaceGI::RadianceDisocc");
+			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		}
 
 		// Prefilter radiance texture only when GI is enabled.
 		if (runPrefilterRadiancePass) {
@@ -1756,7 +1766,10 @@ void ScreenSpaceGI::DrawSSGI()
 			context->CSSetShaderResources(0, 1, srvs.data());
 			context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 			context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
-			context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
+			{
+				CS_PROFILE_SCOPE("ScreenSpaceGI::PrefilterRadiance");
+				context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
+			}
 		}
 
 		inputAoTexIdx = !inputAoTexIdx;
@@ -1780,7 +1793,10 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, 1, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
 		context->CSSetShader(prefilterNormalCompute.get(), nullptr, 0);
-		context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
+		{
+			CS_PROFILE_SCOPE("ScreenSpaceGI::PrefilterNormals");
+			context->Dispatch((internalRes[0] + 15u) >> 4, (internalRes[1] + 15u) >> 4, 1);
+		}
 	}
 
 	// GI
@@ -1814,7 +1830,10 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(activeGICompute, nullptr, 0);
-		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		{
+			CS_PROFILE_SCOPE("ScreenSpaceGI::GI");
+			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		}
 
 		inputAoTexIdx = !inputAoTexIdx;
 		inputGITexIdx = !inputGITexIdx;
@@ -1840,7 +1859,10 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(blurCompute.get(), nullptr, 0);
-		context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		{
+			CS_PROFILE_SCOPE("ScreenSpaceGI::Blur");
+			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		}
 
 		inputGITexIdx = !inputGITexIdx;
 		lastFrameGITexIdx = inputGITexIdx;
@@ -1854,7 +1876,7 @@ void ScreenSpaceGI::DrawSSGI()
 		if (globals::state->frameAnnotations)
 			globals::state->BeginPerfEvent("SSGI - Stereo Sync");
 
-		runStereoSync(activeStereoSyncCompute, false);
+		runStereoSync(activeStereoSyncCompute, false, "ScreenSpaceGI::StereoSync");
 
 		if (globals::state->frameAnnotations)
 			globals::state->EndPerfEvent();
@@ -1881,7 +1903,10 @@ void ScreenSpaceGI::DrawSSGI()
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(activeUpsampleCompute, nullptr, 0);
-		context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
+		{
+			CS_PROFILE_SCOPE("ScreenSpaceGI::Upsample");
+			context->Dispatch((resolution[0] + 7u) >> 3, (resolution[1] + 7u) >> 3, 1);
+		}
 
 		inputAoTexIdx = !inputAoTexIdx;
 		inputGITexIdx = !inputGITexIdx;
@@ -1920,7 +1945,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-			dispatchCenterShader(activeCenterGICompute);
+			dispatchCenterShader(activeCenterGICompute, "ScreenSpaceGI::CenterGI");
 		}
 
 		if (centerBlendNeeded) {
@@ -1945,7 +1970,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-			dispatchCenterShader(activeCenterBlendCompute);
+			dispatchCenterShader(activeCenterBlendCompute, "ScreenSpaceGI::CenterBlend");
 
 			// Blend pass runs center-rect only; copy just those rects back into the full-frame source.
 			resetViews();
@@ -1967,7 +1992,7 @@ void ScreenSpaceGI::DrawSSGI()
 			if (globals::state->frameAnnotations)
 				globals::state->BeginPerfEvent("SSGI - Center Stereo Sync");
 
-			runStereoSync(activeCenterStereoSyncCompute, true);
+			runStereoSync(activeCenterStereoSyncCompute, true, "ScreenSpaceGI::CenterStereoSync");
 
 			if (globals::state->frameAnnotations)
 				globals::state->EndPerfEvent();

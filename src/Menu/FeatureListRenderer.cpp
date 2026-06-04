@@ -17,6 +17,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -27,7 +28,7 @@
 namespace
 {
 	// Core built-in menu names that always appear first in the menu list
-	constexpr std::array<const char*, 4> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Display" };
+	constexpr std::array<const char*, 5> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", "Display" };
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 
 	ImVec2 GetRestoreDefaultsIconSize()
@@ -303,7 +304,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
 		BuiltInMenu{ "General", drawGeneralSettings },
-		BuiltInMenu{ "Advanced", drawAdvancedSettings }
+		BuiltInMenu{ "Advanced", drawAdvancedSettings },
+		BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
@@ -833,6 +835,10 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			if (!cursorMoved) {
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
+
+			ImGui::Spacing();
+			ImGui::SeparatorText("Profiling");
+			ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();

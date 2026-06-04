@@ -978,7 +978,10 @@ void TerrainBlending::BlendPrepassDepths()
 
 		const uint32_t dispatchX = (blendWidth + 7u) >> 3u;
 		const uint32_t dispatchY = (blendHeight + 7u) >> 3u;
-		context->Dispatch(dispatchX, dispatchY, 1);
+		{
+			CS_PROFILE_SCOPE("TerrainBlending::DepthBlend");
+			context->Dispatch(dispatchX, dispatchY, 1);
+		}
 	}
 
 	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };

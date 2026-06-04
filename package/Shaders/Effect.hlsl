@@ -540,6 +540,29 @@ float ComputeShadowVariance(float shadow)
     return (v < epsilon) ? 1.0 : 0.0;
 }
 
+float3 GetEffectAmbientLighting(float skylightingDiffuse)
+{
+	float3 ambientColor = ShadowSampling::GetRawAmbientLighting(ShadowSampling::LightingSampleNormal);
+
+#	if defined(IBL)
+	if (SharedData::iblSettings.EnableIBL) {
+#		if defined(SKYLIGHTING)
+		return ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ShadowSampling::ImageBasedLightingNormal, skylightingDiffuse);
+#		else
+		return ImageBasedLighting::GetDiffuseIBL(ambientColor, ShadowSampling::ImageBasedLightingNormal);
+#		endif
+	}
+#	endif
+
+#	if defined(SKYLIGHTING)
+	ambientColor = Color::IrradianceToLinear(ambientColor);
+	ambientColor *= skylightingDiffuse;
+	ambientColor = Color::IrradianceToGamma(ambientColor);
+#	endif
+
+	return ambientColor;
+}
+
 #	if defined(LIGHTING)
 float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPosition, uint eyeIndex, inout float shadowVariance)
 {
@@ -551,48 +574,29 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 	if (suppressExternalEmittance) {
 		color = ShadowSampling::GetSceneLightingColor();
 	} else if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
-		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-		float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5 * Color::EffectLightingMult();
-		float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
+#		if defined(SKYLIGHTING)
+		float skylightingDiffuse = 1.0;
+		if (!SharedData::InInterior) {
+#			if defined(VR)
+			float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+#			else
+			float3 positionMSSkylight = worldPosition;
+#			endif
 
-#		if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL && SharedData::iblSettings.DALCMode == 2) {
-			ambientColor *= SharedData::iblSettings.DALCAmount;
+			sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
+			skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, ShadowSampling::LightingSampleNormal, Skylighting::GetFadeOutFactor(positionMSSkylight));
 		}
 #		endif
-
-		color = ambientColor;
 
 #		if defined(SKYLIGHTING)
-#			if defined(VR)
-		float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#			else
-		float3 positionMSSkylight = worldPosition;
-#			endif
-
-		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(positionMSSkylight));
-
-		color = Color::IrradianceToLinear(color);
-		color *= skylightingDiffuse;
-		color = Color::IrradianceToGamma(color);
+		color = GetEffectAmbientLighting(skylightingDiffuse);
+#		else
+		color = GetEffectAmbientLighting(1.0);
 #		endif
 
-#		if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
-			if (SharedData::iblSettings.DALCMode == 2) {
-				float3 skyIBLColor = ImageBasedLighting::GetSkyIBLColor(float3(0, 0, -1));
-#			if defined(SKYLIGHTING)
-				skyIBLColor *= skylightingDiffuse;
-#			endif
-				color += Color::IrradianceToGamma(skyIBLColor);
-			} else {
-				color = Color::IrradianceToGamma(ImageBasedLighting::GetIBLColor(float3(0, 0, -1)));
-			}
-		}
-#		endif
+		float3 dirLightColor = ShadowSampling::GetDirectionalLighting() * 0.5 * Color::EffectLightingMult();
 
-		if (!SharedData::InInterior){
+		if (!SharedData::InInterior) {
 			bool isWorldShadow = false;
 			float shadow = ShadowSampling::GetEffectShadow(worldPosition.xyz, normalize(worldPosition.xyz), screenPosition.xy, eyeIndex, isWorldShadow);
 			color += dirLightColor * shadow;
@@ -604,15 +608,14 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float4 screenPo
 		}
 	} else {
 #		if defined(SKYLIGHTING)
+		if (!SharedData::InInterior) {
 #			if defined(VR)
-		float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+			float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
 #			else
-		float3 positionMSSkylight = worldPosition;
+			float3 positionMSSkylight = worldPosition;
 #			endif
 
-		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-
-		if (!SharedData::InInterior) {
+			sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
 			float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(positionMSSkylight));
 
 			color = Color::IrradianceToLinear(color);

@@ -216,9 +216,14 @@ namespace ShadowSampling
 		return worldShadow;
 	}
 
-	float3 GetSceneLightingColor()
+	float3 GetRawAmbientLighting(float3 normal)
 	{
-		float3 ambientColor = max(0, SharedData::GetAmbient(LightingSampleNormal));
+		return max(0, SharedData::GetAmbient(normal));
+	}
+
+	float3 GetAmbientLighting(float3 normal)
+	{
+		float3 ambientColor = GetRawAmbientLighting(normal);
 
 #if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
@@ -226,10 +231,18 @@ namespace ShadowSampling
 		}
 #endif
 
-		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-		float3 directionalColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, MinDirectionalLightMultiplier), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+		return ambientColor;
+	}
 
-		return ambientColor + directionalColor;
+	float3 GetDirectionalLighting()
+	{
+		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+		return Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, MinDirectionalLightMultiplier), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	}
+
+	float3 GetSceneLightingColor()
+	{
+		return GetAmbientLighting(LightingSampleNormal) + GetDirectionalLighting();
 	}
 }
 

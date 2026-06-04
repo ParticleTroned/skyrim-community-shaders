@@ -4,6 +4,7 @@
 
 -   **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
+-   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
 
 ## Quick Links
 
@@ -11,6 +12,7 @@
 
 -   **Fast shader deployment:** `cmake --build build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS`
 -   **Verify shader refactor bytecode:** `pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl`
+-   **Runtime A/B shader check:** `tools/taa-renderdoc-ab.py` via RenderDoc embedded Python
 -   **Full build with deployment:** `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
 -   **Run tests:** `cmake --build build/ALL --target run_shader_tests`
 -   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`

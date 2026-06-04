@@ -12,6 +12,10 @@ cmake --build build/ALL-WITH-AUTO-DEPLOYMENT --target DEPLOY_ALL
 # Prove an HLSL refactor changed no compiled bytecode
 pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl
 
+# Runtime A/B for expected bytecode divergence
+# See docs/development/shader-runtime-ab.md
+exec(open(r"<repo>/tools/taa-renderdoc-ab.py").read())
+
 # Compile only shaders affected by working-tree changes
 cmake --build ./build/ALL --target validate_changed
 ```
@@ -35,6 +39,13 @@ keeps comparisons against `origin/cs-1.6-PL-VR`. Pass `-BaseRef <ref>` to compar
 against another ref. Requires `fxc.exe` from the Windows SDK. The default sweep is
 useful targeted coverage, not the full `.github/configs/shader-validation*.yaml`
 matrix; pass `-Permutations` for feature-specific define combinations.
+
+When a refactor intentionally changes compiled bytecode, validate the behavior
+with the RenderDoc runtime A/B harness in `tools/taa-renderdoc-ab.py`. Capture
+one frame, swap in baseline and candidate DXBC on that same frame, and judge the
+candidate against the baseline noise floor. See
+`docs/development/shader-runtime-ab.md` for the operator runbook and the
+RenderDoc/upscaling caveats on this branch.
 
 ## Incremental Shader Validation
 

@@ -93,6 +93,15 @@ hlslkit-buffer-scan --features-dir features/
 pwsh tools/verify-shader-refactor.ps1 package/Shaders/ISTemporalAA.hlsl
 ```
 
+When refactoring an existing shader, especially decompile-transcription shaders
+such as `ISTemporalAA.hlsl`, use `tools/verify-shader-refactor.ps1` first.
+Identical compiled bytecode is the strongest no-op proof. If the refactor
+legitimately changes bytecode but should preserve behavior, validate it with the
+RenderDoc runtime A/B harness instead: capture one frame, swap baseline and
+candidate DXBC, and diff the output against the baseline noise floor. See
+`docs/development/shader-workflow.md` and
+`docs/development/shader-runtime-ab.md`.
+
 ### Custom CMake Targets
 
 **Package and Deployment Targets**:

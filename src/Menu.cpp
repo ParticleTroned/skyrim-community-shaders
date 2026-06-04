@@ -1153,7 +1153,7 @@ void Menu::ProcessInputEventQueue()
 							 }
 						 } },
 					};
-					if (!RenderDoc::GetSingleton()->HandleCaptureHotkey(key)) {
+					if (!globals::features::renderDoc.HandleCaptureHotkey(key)) {
 						for (const auto& ka : keyActions) {
 							if (InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
 								ka.action();

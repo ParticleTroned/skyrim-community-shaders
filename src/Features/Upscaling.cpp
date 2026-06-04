@@ -3054,7 +3054,8 @@ void Upscaling::DrawSettings()
 	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
 		// Streamline log level selection
 		const char* logLevels[] = { "Off", "Default", "Verbose" };
-		int logLevelIdx = static_cast<int>(settings.streamlineLogLevel);
+		const auto logLevelMax = static_cast<uint>(IM_ARRAYSIZE(logLevels) - 1);
+		int logLevelIdx = static_cast<int>(std::clamp(settings.streamlineLogLevel, 0u, logLevelMax));
 		if (ImGui::Combo("Streamline Logging", &logLevelIdx, logLevels, IM_ARRAYSIZE(logLevels))) {
 			settings.streamlineLogLevel = static_cast<uint>(logLevelIdx);
 		}

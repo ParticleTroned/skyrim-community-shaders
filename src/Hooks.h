@@ -19,6 +19,8 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// Draw through the shared RenderPassImmediately call-site owner without re-entering particle/Terrain Blending routing.
+	void DrawRenderPassImmediately(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t renderFlags);
 	void Install();
 	void InstallEarlyHooks();
 	bool RecreateRenderTargets();

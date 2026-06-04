@@ -80,6 +80,13 @@ public:
 	std::vector<RenderPass> renderPasses;
 	std::vector<RenderPass> terrainRenderPasses;
 
+	enum class RenderPassImmediatelyAction
+	{
+		Draw,
+		Skip,
+		DrawTwice
+	};
+
 	void TerrainShaderHacks();
 
 	void ResetDepth();
@@ -115,18 +122,13 @@ public:
 	void OnUtilitySetupGeometry(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags, uint32_t a_callerRva = 0);
 	void OnShaderPropertySetupGeometry(RE::BSShaderProperty* a_shaderProperty, RE::BSGeometry* a_geometry, bool a_result, uint32_t a_callerRva = 0);
 	void OnSetDirtyStates(bool a_isCompute, uint32_t a_callerRva = 0);
+	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
 
 	struct Hooks
 	{
 		struct Main_RenderDepth
 		{
 			static void thunk(bool a1, bool a2);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct BSBatchRenderer__RenderPassImmediately
-		{
-			static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
@@ -146,9 +148,6 @@ public:
 		{
 			// To know when we are rendering z-prepass depth vs shadows depth
 			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395, 0x2EE));
-
-			// To manipulate the depth buffer write, depth testing, alpha blending
-			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
 
 			// Engine path: late Utility setup hook so slot rebinding survives to draw.
 			stl::write_vfunc<0x6, BSUtilityShader_SetupGeometry>(RE::VTABLE_BSUtilityShader[0]);

@@ -138,6 +138,30 @@ namespace Stereo
 	}
 
 	/**
+	* @brief Applies motion velocity to UV coordinates and reports whether the previous-frame mono UV went out of bounds.
+	*
+	* The returned UV is converted back to stereo space in VR so history reprojection stays inside the current eye.
+	* In flat mode this behaves like a normal `uv + velocity` reprojection.
+	*/
+	float2 ApplyVelocityToUV(float2 uv, float2 velocity, out bool isOutOfBounds)
+	{
+		uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+		float2 prevUVMono = Stereo::ConvertFromStereoUV(uv, eyeIndex) + velocity;
+		float2 clampedMono = prevUVMono;
+
+#ifdef VR
+		// Vanilla VR accepts mono x < 0 by clamping to the eye edge, but rejects
+		// right-edge and vertical OOB history samples.
+		isOutOfBounds = (prevUVMono.x >= 1.0) || (prevUVMono.y <= 0.0) || (prevUVMono.y >= 1.0);
+		clampedMono.x = saturate(prevUVMono.x);
+#else
+		isOutOfBounds = any(prevUVMono >= 1.0) || any(prevUVMono <= 0.0);
+#endif
+
+		return Stereo::ConvertToStereoUV(clampedMono, eyeIndex);
+	}
+
+	/**
 	* @brief Converts UV coordinates from the range [0, 1] to normalized screen space [-1, 1].
 	*
 	* This function takes texture coordinates and transforms them into a normalized

@@ -22,9 +22,7 @@ on:
             - "src/Features/**"
             - "package/Shaders/**"
             - "tests/shaders/**"
-            - ".github/workflows/**"
             - ".github/configs/**"
-            - ".github/actions/**"
 
 # Least-privilege defaults; individual jobs override where needed.
 permissions:
@@ -40,9 +38,10 @@ jobs:
         name: Check for changes in PRs
         runs-on: ubuntu-latest
         outputs:
-            should-build: ${{ steps.changed-files.outputs.build_any_changed == 'true' || steps.changed-files.outputs.cpp_any_changed == 'true' || steps.changed-files.outputs.ci_any_changed == 'true' || steps.changed-files.outcome == 'failure' }}
-            hlsl-should-build: ${{ steps.changed-files.outputs.hlsl_any_changed == 'true' || steps.changed-files.outputs.cmake_any_changed == 'true' || steps.changed-files.outputs.ci_any_changed == 'true' || steps.changed-files.outcome == 'failure' }}
-            shader-tests-should-build: ${{ steps.changed-files.outputs.shader_tests_any_changed == 'true' || steps.changed-files.outputs.hlsl_any_changed == 'true' || steps.changed-files.outputs.cmake_any_changed == 'true' || steps.changed-files.outputs.ci_any_changed == 'true' || steps.changed-files.outcome == 'failure' }}
+            should-build: ${{ steps.changed-files.outputs.build_any_changed == 'true' || steps.changed-files.outputs.cpp_any_changed == 'true' || steps.changed-files.outputs.build_ci_any_changed == 'true' || steps.changed-files.outcome == 'failure' }}
+            hlsl-should-build: ${{ steps.changed-files.outputs.hlsl_any_changed == 'true' || steps.changed-files.outputs.cmake_any_changed == 'true' || steps.changed-files.outputs.build_ci_any_changed == 'true' || steps.changed-files.outcome == 'failure' }}
+            shader-tests-should-build: ${{ steps.changed-files.outputs.shader_tests_any_changed == 'true' || steps.changed-files.outputs.hlsl_any_changed == 'true' || steps.changed-files.outputs.cmake_any_changed == 'true' || steps.changed-files.outputs.build_ci_any_changed == 'true' || steps.changed-files.outcome == 'failure' }}
+            changed-files-json: ${{ steps.changed-files-json.outcome == 'success' && steps.changed-files-json.outputs.all_changed_files || '' }}
         steps:
             - uses: actions/checkout@v6
               with:
@@ -80,10 +79,8 @@ jobs:
                         - 'CMakeLists.txt'
                         - 'CMakePresets.json'
                         - 'cmake/**'
-                      ci:
-                        - '.github/workflows/**'
+                      build_ci:
                         - '.github/configs/**'
-                        - '.github/actions/**'
                       hlsl:
                         - '**.hlsl'
                         - '**.hlsli'
@@ -91,6 +88,19 @@ jobs:
                         - 'features/**/Shaders/**'
                       shader_tests:
                         - 'tests/shaders/**'
+                  base_sha: ${{ github.event.pull_request.base.sha }}
+                  sha: ${{ github.event.pull_request.head.sha }}
+
+            # Separate JSON view of the full changed set for incremental shader
+            # validation. JSON preserves paths with spaces, for example feature
+            # directory names.
+            - name: Get changed files (JSON)
+              id: changed-files-json
+              uses: tj-actions/changed-files@v46
+              continue-on-error: true
+              with:
+                  json: true
+                  escape_json: false
                   base_sha: ${{ github.event.pull_request.base.sha }}
                   sha: ${{ github.event.pull_request.head.sha }}
 
@@ -114,6 +124,7 @@ jobs:
             run-shader-tests: ${{ needs.check-changes.outputs.shader-tests-should-build != 'false' }}
             hlsl-should-build: ${{ needs.check-changes.outputs.hlsl-should-build || 'true' }}
             shader-tests-should-build: ${{ needs.check-changes.outputs.shader-tests-should-build || 'true' }}
+            changed-files-json: ${{ needs.check-changes.outputs.changed-files-json }}
 
     # Security: this job uses GITHUB_TOKEN with write permissions but does NOT execute
     # fork code — it only downloads pre-built artifacts from the build job above.

@@ -86,6 +86,9 @@ namespace DynamicCubemaps
 				skySpecular *= skylightingSpecular;
 #			endif
 			}
+			if (SharedData::InInterior) {
+				skySpecular = 0;
+			}
 
 			finalIrradiance = envSpecular + skySpecular;
 		} else
@@ -217,6 +220,9 @@ namespace DynamicCubemaps
 #			if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
 #			endif
+			}
+			if (SharedData::InInterior) {
+				skySpecular = 0;
 			}
 
 			finalIrradiance = envSpecular + skySpecular;

@@ -17,6 +17,9 @@
 #include <cmath>
 #include <limits>
 
+// Per-cluster visible-light cap. Must match MAX_CLUSTER_LIGHTS in
+// features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli because this
+// sizes the global lightIndexList pool.
 static constexpr uint CLUSTER_MAX_LIGHTS = 256;
 static constexpr uint CONTACT_SHADOW_MAX_LIGHTS = 8;
 static constexpr uint MAX_LIGHTS = 1024;

@@ -1267,25 +1267,27 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::extendedMaterialSettings.EnableComplexMaterial) {
 		const float kMaskEpsilon = (4.0 / 255.0);
 		float4 envMaskSample = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
-		float envMaskTest = envMaskSample.w;
+		float envMaskAlpha = envMaskSample.w;
+		float4 mipSample = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15);
+		float envMaskTest = mipSample.w;
 		envMaskBase = envMaskSample.x;
 		envMaskBaseSampled = true;
 
-		const float4 mipSample = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15);
-		complexMaterial = mipSample.w < (1.0 - kMaskEpsilon);
+		complexMaterial = envMaskTest < (1.0 - kMaskEpsilon);
 
 		const bool grayscaleMask = (abs(mipSample.x - mipSample.y) < kMaskEpsilon) &&
 								   (abs(mipSample.x - mipSample.z) < kMaskEpsilon) &&
 								   (abs(mipSample.y - mipSample.z) < kMaskEpsilon);
-		// Preserve height-only masks while rejecting grayscale environment masks
 		const bool solidBlackHeightMask = all(mipSample.xyz < kMaskEpsilon) &&
 										  mipSample.w > kMaskEpsilon &&
 										  mipSample.w < (1.0 - kMaskEpsilon);
+
+		// Preserve height-only masks while rejecting grayscale environment masks.
 		if (grayscaleMask && !solidBlackHeightMask)
 			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskTest > kMaskEpsilon && envMaskTest < (1.0 - kMaskEpsilon)) {
+			if (envMaskAlpha > kMaskEpsilon && envMaskAlpha < (1.0 - kMaskEpsilon)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, pixelOffset);

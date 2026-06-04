@@ -2,6 +2,7 @@
 
 #include "Utils/StringUtils.h"
 
+#include <algorithm>
 #include <exception>
 #include <numbers>
 
@@ -18,6 +19,7 @@ void ParticleLights::GetConfigs()
 		logger::info("[LLF] Loading particle lights configs");
 
 		auto configs = clib_util::distribution::get_configs("Data\\ParticleLights", "", ".ini");
+		std::sort(configs.begin(), configs.end());
 
 		if (configs.empty()) {
 			logger::warn("[LLF] No .ini files were found within the Data\\ParticleLights folder, aborting...");
@@ -66,6 +68,7 @@ void ParticleLights::GetConfigs()
 		logger::info("[LLF] Loading particle lights gradients configs");
 
 		auto configs = clib_util::distribution::get_configs("Data\\ParticleLights\\Gradients", "", ".ini");
+		std::sort(configs.begin(), configs.end());
 
 		if (configs.empty()) {
 			logger::warn("[LLF] No .ini files were found within the Data\\ParticleLights\\Gradients folder, aborting...");
@@ -104,7 +107,8 @@ void ParticleLights::GetConfigs()
 					str.remove_prefix(prefix2.size());
 				}
 
-				bool matches = std::strspn(str.data(), cset.data()) == str.size();
+				const bool matches = (str.size() == 6 || str.size() == 8) &&
+				                     str.find_first_not_of(cset) == std::string_view::npos;
 
 				if (matches) {
 					try {

@@ -40,6 +40,7 @@ struct WeatherEditor;
 class ParticleLights;
 class State;
 class Deferred;
+class Profiler;
 struct TruePBR;
 class RenderDoc;
 class Menu;
@@ -261,6 +262,7 @@ namespace globals
 	extern Deferred* deferred;
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
+	extern Profiler* profiler;
 
 	void OnInit();
 	void ReInit();

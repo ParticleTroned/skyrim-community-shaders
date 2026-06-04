@@ -683,7 +683,10 @@ void Skylighting::Prepass()
 				context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 				context->CSSetShader(probeUpdateCompute.get(), nullptr, 0);
-				context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
+				{
+					CS_PROFILE_SCOPE("Skylighting::ProbeUpdate");
+					context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
+				}
 
 				if (updatingIncrementalSlices) {
 					probeUpdateCornerMask |= occlusionCornerBit;
@@ -966,8 +969,10 @@ void Skylighting::RenderOcclusion()
 
 				if (auto precipObject = GetActivePrecipitationObject(precip)) {
 					precip->SetupMask();
-					if (auto* rain = GetRainEmitter(precipObject))
+					if (auto* rain = GetRainEmitter(precipObject)) {
+						CS_PROFILE_SCOPE("Skylighting::PrecipMask");
 						precip->RenderMask(rain);
+					}
 				}
 
 				state->EndPerfEvent();
@@ -1049,6 +1054,7 @@ void Skylighting::RenderOcclusion()
 				RainEmitterProjectionCapture rainCapture{};
 				{
 					TracyD3D11Zone(state->tracyCtx, "Skylighting - Render Height Map");
+					CS_PROFILE_SCOPE("Skylighting::OcclusionMask");
 					precip->RenderMask(reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture));
 				}
 				inOcclusion = false;

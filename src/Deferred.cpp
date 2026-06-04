@@ -480,12 +480,15 @@ void Deferred::DeferredPasses()
 
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
+			CS_PROFILE_SCOPE("DeferredComposite");
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 		}
 	}
 
-	if (globals::game::isVR && globals::features::vr.loaded)
+	if (globals::game::isVR && globals::features::vr.loaded) {
+		CS_PROFILE_SCOPE("VR::StereoBlend");
 		globals::features::vr.DrawStereoBlend();
+	}
 
 	// Clear
 	{

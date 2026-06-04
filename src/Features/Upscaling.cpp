@@ -9718,7 +9718,10 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
 		context->CSSetConstantBuffers(0, 1, cbs);
 
-		context->Dispatch(dispatchX, dispatchY, 1);
+		{
+			CS_PROFILE_SCOPE("Upscaling::ClearHMDMask");
+			context->Dispatch(dispatchX, dispatchY, 1);
+		}
 
 		// Unbind
 		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
@@ -10251,7 +10254,10 @@ void Upscaling::CopySharedD3D12Resources()
 
 		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
 
-		context->Draw(3, 0);
+		{
+			CS_PROFILE_SCOPE("Upscaling::CopyDepthD3D12");
+			context->Draw(3, 0);
+		}
 	}
 
 	// Clean up
@@ -11991,6 +11997,7 @@ void Upscaling::Upscale()
 			state->EndPerfEvent();
 		});
 		TracyD3D11Zone(state->tracyCtx, "Encode Upscaling Textures");
+		Profiler::ScopedPass profile(globals::profiler, forceFullVREncode ? "Upscaling::EncodeTexturesFallbackFull" : "Upscaling::EncodeTextures");
 
 		auto& temporalAAMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTEMPORAL_AA_MASK];
 		auto& normals = renderer->GetRuntimeData().renderTargets[deferred->forwardRenderTargets[2]];
@@ -12169,14 +12176,17 @@ void Upscaling::Upscale()
 				sharpenerTexture->srv &&
 				main.UAV;
 			ID3D11Resource* foveatedOutput = foveatedOutputToSharpener ? sharpenerTexture->resource.get() : main.texture;
-			dispatched = DispatchFoveatedVendorUpscaling(
-				upscaleMethod,
-				main.texture,
-				depth.texture,
-				motionVectorResource,
-				reactiveMaskTexture->resource.get(),
-				transparencyCompositionMaskTexture->resource.get(),
-				foveatedOutput);
+			{
+				CS_PROFILE_SCOPE("Upscaling::Upscale");
+				dispatched = DispatchFoveatedVendorUpscaling(
+					upscaleMethod,
+					main.texture,
+					depth.texture,
+					motionVectorResource,
+					reactiveMaskTexture->resource.get(),
+					transparencyCompositionMaskTexture->resource.get(),
+					foveatedOutput);
+			}
 			if (dispatched && upscaleMethod == UpscaleMethod::kDLSS)
 				dlssUpscaleOutputInSharpenerTexture = foveatedOutputToSharpener;
 			if (!dispatched) {
@@ -12201,8 +12211,10 @@ void Upscaling::Upscale()
 			if (!fallbackEncodeOk) {
 				logger::warn("[Upscaling] Full-frame {} fallback skipped because input encoding failed.", magic_enum::enum_name(upscaleMethod));
 			} else if (upscaleMethod == UpscaleMethod::kDLSS) {
+				CS_PROFILE_SCOPE("Upscaling::Upscale");
 				streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 			} else if (upscaleMethod == UpscaleMethod::kFSR) {
+				CS_PROFILE_SCOPE("Upscaling::Upscale");
 				fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
 			}
 		}
@@ -12390,7 +12402,10 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
-		context->Draw(3, 0);
+		{
+			CS_PROFILE_SCOPE("Upscaling::DepthUpscale");
+			context->Draw(3, 0);
+		}
 
 		// Depth copy is also used on VR.
 		if (isVR) {
@@ -12422,7 +12437,10 @@ void Upscaling::UpscaleDepth()
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(underwaterMaskPS, nullptr, 0);
-		context->Draw(3, 0);
+		{
+			CS_PROFILE_SCOPE("Upscaling::UnderwaterMaskUpscale");
+			context->Draw(3, 0);
+		}
 	}
 
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
@@ -12544,7 +12562,10 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 	context->PSSetShader(underwaterMaskPS, nullptr, 0);
-	context->Draw(3, 0);
+	{
+		CS_PROFILE_SCOPE("Upscaling::SubmitStageUnderwaterMask");
+		context->Draw(3, 0);
+	}
 
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);

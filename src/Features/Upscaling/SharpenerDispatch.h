@@ -2,6 +2,7 @@
 
 #include "../../Buffer.h"
 #include "../../Globals.h"
+#include "../../Profiler.h"
 #include "../../State.h"
 
 #include <cstdint>
@@ -43,7 +44,10 @@ namespace UpscalingSharpener
 
 		const uint32_t dispatchX = (width + 7) / 8;
 		const uint32_t dispatchY = (height + 7) / 8;
-		context->Dispatch(dispatchX, dispatchY, 1);
+		{
+			CS_PROFILE_SCOPE(perfEventName);
+			context->Dispatch(dispatchX, dispatchY, 1);
+		}
 
 		ID3D11ShaderResourceView* nullSRVs[] = { nullptr };
 		context->CSSetShaderResources(0, 1, nullSRVs);

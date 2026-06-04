@@ -418,7 +418,10 @@ void GrassCollision::UpdateCollisionTexture()
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(GetCollisionUpdateCS(), nullptr, 0);
-		context->Dispatch(512 / 8, 512 / 8, 1);
+		{
+			CS_PROFILE_SCOPE("GrassCollision::CollisionUpdate");
+			context->Dispatch(512 / 8, 512 / 8, 1);
+		}
 	}
 
 	context->CSSetShader(nullptr, nullptr, 0);

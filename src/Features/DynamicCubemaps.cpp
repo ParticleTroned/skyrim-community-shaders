@@ -474,7 +474,10 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 
 	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderUpdateFakeReflections() : GetComputeShaderUpdateReflections()) : GetComputeShaderUpdate(), nullptr, 0);
 
-	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
+	{
+		CS_PROFILE_SCOPE(a_reflections ? "DynamicCubemaps::CaptureReflections" : "DynamicCubemaps::Capture");
+		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
+	}
 
 	uavs[0] = nullptr;
 	uavs[1] = nullptr;
@@ -515,7 +518,10 @@ void DynamicCubemaps::Inferrence(bool a_reflections)
 
 	context->CSSetShader(a_reflections ? (fakeReflections ? GetComputeShaderInferrenceFakeReflections() : GetComputeShaderInferrenceReflections()) : GetComputeShaderInferrence(), nullptr, 0);
 
-	context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
+	{
+		CS_PROFILE_SCOPE(a_reflections ? "DynamicCubemaps::InferReflections" : "DynamicCubemaps::Infer");
+		context->Dispatch((uint32_t)std::ceil(envCaptureTexture->desc.Width / 8.0f), (uint32_t)std::ceil(envCaptureTexture->desc.Height / 8.0f), 6);
+	}
 
 	srvs[0] = nullptr;
 	srvs[1] = nullptr;
@@ -558,6 +564,7 @@ void DynamicCubemaps::Irradiance(bool a_reflections)
 
 		std::uint32_t size = std::max(envTexture->desc.Width, envTexture->desc.Height) / 2;
 
+		CS_PROFILE_SCOPE(a_reflections ? "DynamicCubemaps::IrradianceReflections" : "DynamicCubemaps::Irradiance");
 		for (std::uint32_t level = 1; level < MIPLEVELS; level++, size /= 2) {
 			const UINT numGroups = (UINT)std::max(1u, size / 8);
 
@@ -603,23 +610,26 @@ void DynamicCubemaps::CompressToBC6H(bool a_reflections)
 
 	std::uint32_t mipDim = std::max(envTexture->desc.Width, envTexture->desc.Height);
 
-	for (std::uint32_t level = 0; level < bc6hMipLevels; ++level) {
-		std::uint32_t srcWidth = std::max(1u, mipDim >> level);
-		std::uint32_t srcHeight = std::max(1u, mipDim >> level);
-		std::uint32_t blocksX = std::max(1u, srcWidth / 4);
-		std::uint32_t blocksY = std::max(1u, srcHeight / 4);
+	{
+		CS_PROFILE_SCOPE(a_reflections ? "DynamicCubemaps::BC6HReflections" : "DynamicCubemaps::BC6H");
+		for (std::uint32_t level = 0; level < bc6hMipLevels; ++level) {
+			std::uint32_t srcWidth = std::max(1u, mipDim >> level);
+			std::uint32_t srcHeight = std::max(1u, mipDim >> level);
+			std::uint32_t blocksX = std::max(1u, srcWidth / 4);
+			std::uint32_t blocksY = std::max(1u, srcHeight / 4);
 
-		BC6HEncodeCB cbData{};
-		cbData.TextureSizeInBlocksX = blocksX;
-		cbData.TextureSizeInBlocksY = blocksY;
-		cbData.MipLevel = level;
-		bc6hEncodeCB->Update(cbData);
+			BC6HEncodeCB cbData{};
+			cbData.TextureSizeInBlocksX = blocksX;
+			cbData.TextureSizeInBlocksY = blocksY;
+			cbData.MipLevel = level;
+			bc6hEncodeCB->Update(cbData);
 
-		context->CSSetUnorderedAccessViews(0, 1, &bc6hScratchUAVs[level], nullptr);
+			context->CSSetUnorderedAccessViews(0, 1, &bc6hScratchUAVs[level], nullptr);
 
-		std::uint32_t dispatchX = std::max(1u, (blocksX + 7) / 8);
-		std::uint32_t dispatchY = std::max(1u, (blocksY + 7) / 8);
-		context->Dispatch(dispatchX, dispatchY, 6);
+			std::uint32_t dispatchX = std::max(1u, (blocksX + 7) / 8);
+			std::uint32_t dispatchY = std::max(1u, (blocksY + 7) / 8);
+			context->Dispatch(dispatchX, dispatchY, 6);
+		}
 	}
 
 	{

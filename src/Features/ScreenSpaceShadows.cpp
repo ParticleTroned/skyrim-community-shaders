@@ -431,6 +431,9 @@ void ScreenSpaceShadows::DrawShadows()
 	// Shared dispatch logic for both VR and non-VR
 	auto DispatchEye = [&](const char* eyeName, ID3D11ComputeShader* shader, uint32_t eyeIndex, const float* lightProj,
 						   float invTexSizeX, float invTexSizeY) {
+		const char* profileName = eyeName ? (eyeIndex == 0 ? "ScreenSpaceShadows::RayMarch(Left Eye)" : "ScreenSpaceShadows::RayMarch(Right Eye)") : "ScreenSpaceShadows::RayMarch";
+		CS_PROFILE_SCOPE(profileName);
+
 		if (globals::state->frameAnnotations && eyeName) {
 			std::string eventName = std::format("SSS - Ray March ({})", eyeName);
 			globals::state->BeginPerfEvent(eventName);
@@ -624,57 +627,60 @@ void ScreenSpaceShadows::DrawStereoSync()
 		});
 	};
 
-	CopyStereoSyncSource();
-
 	// Same 24/32-bit depth path as the raymarch. SrcDepthTexture's HLSL type is
 	// conditional on TERRAIN_BLENDING via the active depth source.
 	auto* depthSRV = Util::GetCurrentSceneDepthSRV(false);
 	ID3D11ShaderResourceView* srvs[2]{ depthSRV, stereoSyncCopyTex->srv.get() };
 	ID3D11UnorderedAccessView* uavs[1]{ screenSpaceShadowsTexture->uav.get() };
 
-	Util::BindGlobalConstantBuffersForCS(context);
-	context->CSSetShaderResources(0, 2, srvs);
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-	context->CSSetShader(stereoSyncCS, nullptr, 0);
+	{
+		CS_PROFILE_SCOPE("ScreenSpaceShadows::StereoSync");
+		CopyStereoSyncSource();
 
-	auto DispatchSyncBounds = [&](const FoveatedCommon::DispatchBounds& bounds, uint32_t eyeIndex) {
-		if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
-			return;
+		Util::BindGlobalConstantBuffersForCS(context);
+		context->CSSetShaderResources(0, 2, srvs);
+		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+		context->CSSetShader(stereoSyncCS, nullptr, 0);
 
-		const uint32_t dispatchWidth = static_cast<uint32_t>(bounds.maxX - bounds.minX);
-		const uint32_t dispatchHeight = static_cast<uint32_t>(bounds.maxY - bounds.minY);
-		if (dispatchWidth == 0 || dispatchHeight == 0)
-			return;
+		auto DispatchSyncBounds = [&](const FoveatedCommon::DispatchBounds& bounds, uint32_t eyeIndex) {
+			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
+				return;
 
-		StereoSyncCB cbData{};
-		cbData.FrameDim[0] = resolution.x;
-		cbData.FrameDim[1] = resolution.y;
-		cbData.RcpFrameDim[0] = 1.0f / resolution.x;
-		cbData.RcpFrameDim[1] = 1.0f / resolution.y;
-		cbData.DispatchBase[0] = static_cast<float>(bounds.minX);
-		cbData.DispatchBase[1] = static_cast<float>(bounds.minY);
-		cbData.DispatchExtent[0] = static_cast<float>(dispatchWidth);
-		cbData.DispatchExtent[1] = static_cast<float>(dispatchHeight);
-		cbData.FoveatedData0[0] = foveatedState.centerScale;
-		cbData.FoveatedData0[1] = FoveatedCommon::kCenterFeather;
-		cbData.FoveatedData0[2] = foveatedState.centerHorizontalScale;
-		cbData.FoveatedData0[3] = foveatedState.active ? 1.0f : 0.0f;
-		const auto centerOffset = foveatedState.centerOffsets[std::min<size_t>(eyeIndex, foveatedState.centerOffsets.size() - 1)];
-		cbData.FoveatedCenterOffset[0] = centerOffset.x;
-		cbData.FoveatedCenterOffset[1] = centerOffset.y;
-		cbData.FoveatedCenterOffset[2] = 0.0f;
-		cbData.FoveatedCenterOffset[3] = 0.0f;
+			const uint32_t dispatchWidth = static_cast<uint32_t>(bounds.maxX - bounds.minX);
+			const uint32_t dispatchHeight = static_cast<uint32_t>(bounds.maxY - bounds.minY);
+			if (dispatchWidth == 0 || dispatchHeight == 0)
+				return;
 
-		stereoSyncCB->Update(cbData);
-		auto cbPtr = stereoSyncCB->CB();
-		context->CSSetConstantBuffers(1, 1, &cbPtr);
+			StereoSyncCB cbData{};
+			cbData.FrameDim[0] = resolution.x;
+			cbData.FrameDim[1] = resolution.y;
+			cbData.RcpFrameDim[0] = 1.0f / resolution.x;
+			cbData.RcpFrameDim[1] = 1.0f / resolution.y;
+			cbData.DispatchBase[0] = static_cast<float>(bounds.minX);
+			cbData.DispatchBase[1] = static_cast<float>(bounds.minY);
+			cbData.DispatchExtent[0] = static_cast<float>(dispatchWidth);
+			cbData.DispatchExtent[1] = static_cast<float>(dispatchHeight);
+			cbData.FoveatedData0[0] = foveatedState.centerScale;
+			cbData.FoveatedData0[1] = FoveatedCommon::kCenterFeather;
+			cbData.FoveatedData0[2] = foveatedState.centerHorizontalScale;
+			cbData.FoveatedData0[3] = foveatedState.active ? 1.0f : 0.0f;
+			const auto centerOffset = foveatedState.centerOffsets[std::min<size_t>(eyeIndex, foveatedState.centerOffsets.size() - 1)];
+			cbData.FoveatedCenterOffset[0] = centerOffset.x;
+			cbData.FoveatedCenterOffset[1] = centerOffset.y;
+			cbData.FoveatedCenterOffset[2] = 0.0f;
+			cbData.FoveatedCenterOffset[3] = 0.0f;
 
-		const uint32_t groupsX = (dispatchWidth + 7u) / 8u;
-		const uint32_t groupsY = (dispatchHeight + 7u) / 8u;
-		context->Dispatch(groupsX, groupsY, 1);
-	};
+			stereoSyncCB->Update(cbData);
+			auto cbPtr = stereoSyncCB->CB();
+			context->CSSetConstantBuffers(1, 1, &cbPtr);
 
-	ForEachSyncBounds(DispatchSyncBounds);
+			const uint32_t groupsX = (dispatchWidth + 7u) / 8u;
+			const uint32_t groupsY = (dispatchHeight + 7u) / 8u;
+			context->Dispatch(groupsX, groupsY, 1);
+		};
+
+		ForEachSyncBounds(DispatchSyncBounds);
+	}
 
 	srvs[0] = nullptr;
 	srvs[1] = nullptr;

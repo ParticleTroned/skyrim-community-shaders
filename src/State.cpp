@@ -34,6 +34,7 @@
 #include "Features/Wetterness.h"
 #include "Features/WeatherEditor.h"
 #include "Menu.h"
+#include "Profiler.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
@@ -286,6 +287,7 @@ void State::Debug()
 
 void State::Reset()
 {
+	globals::profiler->EndFrame();
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -943,6 +945,18 @@ void State::SetupResources()
 			__uuidof(REX::W32::ID3DUserDefinedAnnotation),
 			reinterpret_cast<void**>(pPerf.ReleaseAndGetAddressOf()));
 	}
+
+	if (globals::profiler && globals::d3d::device && globals::d3d::context) {
+		globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
+		if (frameAnnotations) {
+			globals::profiler->SetPerfEventCallbacks(
+				[this](std::string_view a_title) { BeginPerfEvent(a_title); },
+				[this](std::string_view) { EndPerfEvent(); });
+		} else {
+			globals::profiler->SetPerfEventCallbacks({}, {});
+		}
+	}
+
 	featureLevel = globals::d3d::device->GetFeatureLevel();
 	setupResourcesDevice = globals::d3d::device;
 	setupResourcesContext = globals::d3d::context;

@@ -26,6 +26,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/ProfilingRenderer.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
@@ -104,6 +105,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PerformanceOverlay::Settings,
 	ShowInOverlay,
 	ShowDrawCalls,
+	ShowCSPasses,
 	ShowVRAM,
 	ShowFPS,
 	ShowPreFGFrameTimeGraph,
@@ -180,6 +182,7 @@ void PerformanceOverlay::DrawSettings()
 
 		ImGui::Checkbox("Show FPS Counter", &this->settings.ShowFPS);
 		ImGui::Checkbox("Show Draw Calls", &this->settings.ShowDrawCalls);
+		ImGui::Checkbox("Show CS Render Passes", &this->settings.ShowCSPasses);
 		ImGui::Checkbox("Show VRAM Usage", &this->settings.ShowVRAM);
 
 		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
@@ -395,19 +398,32 @@ void PerformanceOverlay::DrawOverlay()
 	// Update graph values
 	this->UpdateGraphValues();
 
-	// Show FPS counter if enabled
+	bool needsSeparator = false;
+
 	if (this->settings.ShowFPS) {
 		DrawFPS();
+		needsSeparator = true;
 	}
 
-	// Show Draw Calls if enabled
 	if (this->settings.ShowDrawCalls) {
+		if (needsSeparator)
+			ImGui::Separator();
 		DrawDrawCallsTable(mainRows, summaryRows);
+		needsSeparator = true;
 	}
 
-	// VRAM & GPU Usage
+	if (this->settings.ShowCSPasses) {
+		if (needsSeparator)
+			ImGui::Separator();
+		ProfilingRenderer::RenderStatistics(false, false);
+		needsSeparator = true;
+	}
+
 	if (hasVRAMSection) {
+		if (needsSeparator)
+			ImGui::Separator();
 		DrawVRAM();
+		needsSeparator = true;
 	}
 
 	ImGui::PopStyleVar();             // ItemSpacing
@@ -757,6 +773,9 @@ void PerformanceOverlay::ConvertABTestResultsToRows(const std::vector<Aggregated
 					break;
 				case SpecialShaderType::Other:
 					row.tooltip = "Frame time not attributed to any measured shader type. This includes UI, post-processing, engine work, and any GPU activity not directly measured by the overlay.";
+					break;
+				case SpecialShaderType::CSPasses:
+					row.tooltip = "GPU time spent in Community Shaders render passes while pass profiling is visible.";
 					break;
 				}
 			}
@@ -1590,6 +1609,12 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 	auto [otherFrameTime, otherPercent, totalCostPerCall] = CalculateSummaryData(smoothedFrameTime, measuredSum);
 	if (std::abs(otherFrameTime) < 1e-4f)
 		otherFrameTime = 0.0f;
+
+	float csPassesTime = this->settings.ShowCSPasses && globals::profiler ? globals::profiler->GetTotalTimeMs() : 0.0f;
+	float csPercent = smoothedFrameTime > 0.0f ? (csPassesTime / smoothedFrameTime) * 100.0f : 0.0f;
+	float remainingOtherTime = this->settings.ShowCSPasses ? std::max(0.0f, otherFrameTime - csPassesTime) : otherFrameTime;
+	float remainingOtherPercent = smoothedFrameTime > 0.0f ? (remainingOtherTime / smoothedFrameTime) * 100.0f : otherPercent;
+
 	std::optional<float> otherTestFrameTime, otherTestCostPerCall, totalTestFrameTime, totalTestCostPerCall;
 	auto itOther = this->testData.find(magic_enum::enum_integer(SpecialShaderType::Other));
 	if (itOther != this->testData.end()) {
@@ -1601,10 +1626,16 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 		totalTestFrameTime = itTotal->second.frameTime;
 		totalTestCostPerCall = itTotal->second.costPerCall;
 	}
-	DrawCallRow otherRow = {
-		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, otherFrameTime, otherPercent,
+	DrawCallRow csPassesRow = {
+		"CS Passes:", magic_enum::enum_integer(SpecialShaderType::CSPasses), kDrawCallsNotApplicable, csPassesTime, csPercent,
 		0.0f,
-		std::string("Frame time not attributed to any measured shader type. This includes UI, post-processing, engine work, and any GPU activity not directly measured by the overlay."),
+		std::string("GPU time spent in Community Shaders render passes while pass profiling is visible."),
+		true, std::nullopt, std::nullopt
+	};
+	DrawCallRow otherRow = {
+		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, remainingOtherTime, remainingOtherPercent,
+		0.0f,
+		std::string("Frame time not attributed to any measured shader type or visible CS render-pass profile. This includes UI, post-processing, engine work, and any GPU activity not directly measured."),
 		true, otherTestFrameTime, otherTestCostPerCall
 	};
 	// Always use the actual total frame time for live data
@@ -1618,6 +1649,9 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 		true, totalTestFrameTime, totalTestCostPerCall
 	};
 	std::vector<DrawCallRow> summaryRows;
+	if (this->settings.ShowCSPasses) {
+		summaryRows.push_back(csPassesRow);
+	}
 	summaryRows.push_back(otherRow);
 	summaryRows.push_back(totalRow);
 	return { mainRows, summaryRows };
@@ -1639,7 +1673,10 @@ std::function<void(int, int, const DrawCallRow&)> PerformanceOverlay::CreateTabl
 	return [&columns, this](int rowIdx, int colIdx, const DrawCallRow& row) {
 		(void)rowIdx;
 		// Special handling for summary rows
-		if ((row.label == "Total:" || row.label == "Other:") && colIdx == 0) {
+		const bool isTotalRow = row.label == "Total:";
+		const bool isOtherRow = row.label == "Other:";
+		const bool isCSPassesRow = row.label == "CS Passes:";
+		if ((isTotalRow || isOtherRow || isCSPassesRow) && colIdx == 0) {
 			if (row.label == "Total:") {
 				if (ImGui::Selectable(row.label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
 					HandleTotalRowToggle();
@@ -1651,7 +1688,7 @@ std::function<void(int, int, const DrawCallRow&)> PerformanceOverlay::CreateTabl
 						ImGui::Text("FPS: %.2f", _fps);
 					}
 				}
-			} else if (row.label == "Other:") {
+			} else if (isOtherRow || isCSPassesRow) {
 				ImGui::TextUnformatted(row.label.c_str());
 				if (!row.tooltip.empty() && ImGui::IsItemHovered()) {
 					if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1659,7 +1696,7 @@ std::function<void(int, int, const DrawCallRow&)> PerformanceOverlay::CreateTabl
 					}
 				}
 			}
-		} else if (row.label == "Total:" || row.label == "Other:") {
+		} else if (isTotalRow || isOtherRow || isCSPassesRow) {
 			// No tooltip for summary rows in non-label columns
 			columns[colIdx].cellRender(row, colIdx);
 		} else {

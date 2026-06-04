@@ -54,12 +54,29 @@ public:
 		float FogAmount = 0.0f;
 		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
 		uint DisableInInteriors = 1;
-		float pad1 = 0.0f;
+		bool CaptureWeatherBaselineOnSliderChange = false;
 	} settings;
+
+	struct CommonBufferData
+	{
+		uint EnableIBL;
+		uint PreserveFogLuminance;
+		uint UseStaticIBL;
+		float DALCAmount;
+		float EnvIBLScale;
+		float SkyIBLScale;
+		float EnvIBLSaturation;
+		float SkyIBLSaturation;
+		float FogAmount;
+		uint DALCMode;
+		uint DisableInInteriors;
+		float pad0;
+	};
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
-	Settings GetCommonBufferData() const;
 	ID3D11ComputeShader* GetDiffuseIBLCS();
+	CommonBufferData GetCommonBufferData() const;
+	bool IsRuntimeEnabled() const;
 };

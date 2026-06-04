@@ -3,6 +3,9 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <initializer_list>
+
 #include "FeatureConstraints.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -10,6 +13,56 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
+
+namespace
+{
+	constexpr float FORK_NOTICE_OFFSET_LINES = 2.0f;
+	constexpr float FORK_NOTICE_ITALIC_SLANT = 0.18f;
+
+	float CenteredTextX(float windowWidth, float textWidth)
+	{
+		return std::max(0.0f, (windowWidth - textWidth) * 0.5f);
+	}
+
+	void DrawCenteredTextColored(const char* text, float windowWidth, const ImVec4& color)
+	{
+		const ImVec2 textSize = ImGui::CalcTextSize(text);
+		ImGui::SetCursorPosX(CenteredTextX(windowWidth, textSize.x));
+		ImGui::TextColored(color, "%s", text);
+	}
+
+	void DrawCenteredItalicTextLine(const char* text, float windowWidth, const ImVec4& color)
+	{
+		const ImVec2 textSize = ImGui::CalcTextSize(text);
+		const float lineHeight = ImGui::GetTextLineHeight();
+		const float lineHeightWithSpacing = ImGui::GetTextLineHeightWithSpacing();
+		const float slantWidth = lineHeight * FORK_NOTICE_ITALIC_SLANT;
+		const float localX = CenteredTextX(windowWidth, textSize.x + slantWidth);
+		const float localY = ImGui::GetCursorPosY();
+
+		ImGui::SetCursorPosX(localX);
+		const ImVec2 textPos = ImGui::GetCursorScreenPos();
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const int vtxStart = drawList->VtxBuffer.Size;
+		drawList->AddText(textPos, ImGui::GetColorU32(color), text);
+		const int vtxEnd = drawList->VtxBuffer.Size;
+
+		const float lineBottom = textPos.y + lineHeight;
+		for (int i = vtxStart; i < vtxEnd; ++i) {
+			ImDrawVert& vtx = drawList->VtxBuffer[i];
+			vtx.pos.x += (lineBottom - vtx.pos.y) * FORK_NOTICE_ITALIC_SLANT;
+		}
+
+		ImGui::SetCursorPosY(localY + lineHeightWithSpacing);
+	}
+
+	void DrawCenteredItalicTextBlock(std::initializer_list<const char*> lines, float windowWidth, const ImVec4& color)
+	{
+		for (const char* line : lines) {
+			DrawCenteredItalicTextLine(line, windowWidth, color);
+		}
+	}
+}
 
 // Static member definitions
 bool HomePageRenderer::isFirstTimeSetupShown = false;
@@ -31,20 +84,25 @@ void HomePageRenderer::RenderHomePage()
 	RenderWelcomeSection();
 	ImGui::Spacing();
 
-	RenderActiveConstraintsSection();
+	// RenderQuickLinksSection();
+	// ImGui::Spacing();
 
-	RenderQuickLinksSection();
-	ImGui::Spacing();
-
-	RenderFAQSection();
+	// RenderFAQSection();
 
 	ImGui::EndChild();
 }
 
 void HomePageRenderer::RenderWelcomeSection()
 {
-	float scale = Util::GetUIScale();
-	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8 * scale, 8 * scale));
+	const float scale = Util::GetUIScale();
+	auto menu = Menu::GetSingleton();
+	const auto& theme = menu->GetTheme();
+	const ImVec4 titleColor = theme.StatusPalette.InfoColor;
+	ImVec4 versionColor = theme.StatusPalette.InfoColor;
+	versionColor.w *= 0.86f;
+	const ImVec4 forkNoticeColor = theme.Palette.Text;
+
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 8.0f * scale));
 
 	// Main title - centered with safe font handling
 	ImGuiIO& io = ImGui::GetIO();
@@ -55,7 +113,6 @@ void HomePageRenderer::RenderWelcomeSection()
 		titleFont = io.Fonts->Fonts[1];
 	}
 
-	// Scale the text to make it larger (2.0x size)
 	ImGui::SetWindowFontScale(TITLE_FONT_SCALE);
 
 	// Only push font if we have a valid one, otherwise use default scaled
@@ -64,12 +121,31 @@ void HomePageRenderer::RenderWelcomeSection()
 	}
 
 	ImVec2 windowSize = ImGui::GetWindowSize();
-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto expectedTag = std::format("v{}", versionStr);
-	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Welcome to Community Shaders {}", versionStr) : std::format("Welcome to Community Shaders {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
-	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
-	ImGui::SetCursorPosX((windowSize.x - titleSize.x) * 0.5f);
-	ImGui::Text("%s", titleWithVersion.c_str());
+	const float titleBlockY = ImGui::GetCursorPosY();
+	const float titleBlockHeight = ImGui::GetTextLineHeightWithSpacing();
+	const float baseLineHeightWithSpacing = titleBlockHeight / TITLE_FONT_SCALE;
+	const char* forkTitle = "CS Particle Lights Fork";
+	const std::string forkVersion = std::format("v{}-PL-SE", Util::GetFormattedVersion(Plugin::VERSION));
+	const float titleLineGap = 2.0f * scale;
+	const float titleAreaBottomY = titleBlockY + titleBlockHeight + ImGui::GetStyle().ItemSpacing.y +
+		baseLineHeightWithSpacing * FORK_NOTICE_OFFSET_LINES;
+
+	ImGui::SetWindowFontScale(TITLE_FORK_FONT_SCALE);
+	const float titleLineHeight = ImGui::GetTextLineHeight();
+
+	ImGui::SetWindowFontScale(TITLE_VERSION_FONT_SCALE);
+	const float versionLineHeight = ImGui::GetTextLineHeight();
+
+	const float titleGroupHeight = titleLineHeight + titleLineGap + versionLineHeight;
+	const float titleGroupY = titleBlockY + std::max(0.0f, (titleAreaBottomY - titleBlockY - titleGroupHeight) * 0.5f);
+
+	ImGui::SetWindowFontScale(TITLE_FORK_FONT_SCALE);
+	ImGui::SetCursorPosY(titleGroupY);
+	DrawCenteredTextColored(forkTitle, windowSize.x, titleColor);
+
+	ImGui::SetWindowFontScale(TITLE_VERSION_FONT_SCALE);
+	ImGui::SetCursorPosY(titleGroupY + titleLineHeight + titleLineGap);
+	DrawCenteredTextColored(forkVersion.c_str(), windowSize.x, versionColor);
 
 	// Only pop font if we pushed one
 	if (titleFont) {
@@ -78,22 +154,18 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	// Reset text scale back to normal
 	ImGui::SetWindowFontScale(1.0f);
+	ImGui::SetCursorPosY(titleAreaBottomY);
+
+	DrawCenteredItalicTextBlock({
+		"This is an unofficial fork of Community Shaders restoring Particle Lights.",
+		"Not affiliated with or endorsed by the Community Shaders team",
+		"- Visit their Discord to get the Original and support their outstanding efforts -",
+	}, windowSize.x, forkNoticeColor);
 
 	ImGui::Spacing();
-
-	// Intro text - centered
-	const char* introText =
-		"Community Shaders provides advanced graphics enhancements for Skyrim.\n"
-		"This comprehensive collection of features brings modern rendering techniques\n"
-		"to enhance your visual experience.";
-	ImVec2 introSize = ImGui::CalcTextSize(introText);
-	ImGui::SetCursorPosX((windowSize.x - introSize.x) * 0.5f);
-	ImGui::TextWrapped("%s", introText);
-
-	ImGui::Spacing();
+	ImGui::Dummy(ImVec2(0.0f, 25.0f * scale));
 
 	// Discord banner - centered with proper error checking
-	auto menu = Menu::GetSingleton();
 	bool discordIconAvailable = false;
 
 	// Check if menu exists, has icons, and Discord icon is loaded
@@ -109,37 +181,19 @@ void HomePageRenderer::RenderWelcomeSection()
 		// Compute width based on window size with constraints and padding (handles very small windows)
 		float ratioWidth = windowSize.x * DISCORD_BANNER_TARGET_WIDTH_RATIO;
 		float aspectRatio = originalSize.y / originalSize.x;
-		float maxAllowed = std::max(1.0f, windowSize.x - DISCORD_BANNER_PADDING_MARGIN);
-		float upperBound = std::min(DISCORD_BANNER_MAX_WIDTH, maxAllowed);
-		float lowerBound = std::min(DISCORD_BANNER_MIN_WIDTH, upperBound);
+		float maxAllowed = std::max(1.0f, windowSize.x - DISCORD_BANNER_PADDING_MARGIN * scale);
+		float upperBound = std::min(DISCORD_BANNER_MAX_WIDTH * scale, maxAllowed);
+		float lowerBound = std::min(DISCORD_BANNER_MIN_WIDTH * scale, upperBound);
 		float targetWidth = std::clamp(ratioWidth, lowerBound, upperBound);
 
 		ImVec2 iconSize = ImVec2(targetWidth, targetWidth * aspectRatio);
 		ImGui::SetCursorPosX((windowSize.x - iconSize.x) * 0.5f);
 
-		// Push style to remove border
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));                     // Transparent background
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.1f, 0.1f, 0.1f, 0.3f));  // Subtle hover
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));   // Subtle click
-
-		if (ImGui::ImageButton("##DiscordButton", menu->uiIcons.discord.texture, iconSize)) {
-			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
-		}
-
-		// Pop the style changes
-		ImGui::PopStyleColor(3);
-		ImGui::PopStyleVar();
-
-		Util::AddTooltip("Join Community Shaders Discord Server");
+		ImGui::Image(menu->uiIcons.discord.texture, iconSize);
 	} else {
-		// Fallback button when Discord icon is not available
-		float buttonWidth = DISCORD_BANNER_MIN_WIDTH * scale;
-		ImGui::SetCursorPosX((windowSize.x - buttonWidth) * 0.5f);
-		if (ImGui::Button("Join Discord Server", ImVec2(buttonWidth, 0))) {
-			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
-		}
-		Util::AddTooltip("Join Community Shaders Discord Server");
+		float dummyWidth = DISCORD_BANNER_MAX_WIDTH * scale;
+		ImGui::SetCursorPosX((windowSize.x - dummyWidth) * 0.5f);
+		ImGui::Dummy(ImVec2(dummyWidth, 0.0f));
 	}
 
 	ImGui::PopStyleVar();
@@ -425,7 +479,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 			textColor.w = 0.24f;  // Low alpha for watermark effect
 			watermarkColor = ImGui::GetColorU32(textColor);
 		} else {
-			watermarkColor = IM_COL32(255, 255, 255, 60);
+			watermarkColor = IM_COL32(255, 255, 255, 180);
 		}
 
 		// Render as subtle watermark background
@@ -444,7 +498,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 
 	// Version text - two lines, both centered (reduced spacing between lines)
 	const char* versionLine1 = "This appears to be a new install, update, or";
-	const char* versionLine2 = "reinstallation of Community Shaders.";
+	const char* versionLine2 = "reinstallation of CS Particle Lights Fork.";
 
 	centerText(versionLine1);
 	ImGui::Text("%s", versionLine1);

@@ -3,6 +3,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
+
 #include "Fonts.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Globals.h"
@@ -11,6 +13,7 @@
 #include "State.h"
 #include "ThemeManager.h"
 #include "Util.h"
+#include "Utils/UI.h"
 
 namespace
 {
@@ -25,8 +28,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 	}
 
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto expectedTag = std::format("v{}", versionStr);
-	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Community Shaders {}", versionStr) : std::format("Community Shaders {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
+	auto title = std::format("CS {} Particle Lights Fork", versionStr);
 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
 
 	if (isDocked) {
@@ -345,7 +347,9 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 		// Handle interaction
 		if (isHovered) {
 			// Draw subtle background for hovered icon using interaction area
-			fgDrawList->AddRectFilled(interactionMin, interactionMax, IM_COL32(255, 255, 255, 40));
+			ImVec4 hoverColor = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+			hoverColor.w = 0.18f;
+			fgDrawList->AddRectFilled(interactionMin, interactionMax, ImGui::GetColorU32(hoverColor));
 
 			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 				it->callback();
@@ -367,14 +371,13 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 	const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
 	const float iconSize = baseIconSize * uiScale;
 	const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * uiScale;
-	const ImVec2 buttonSize(iconSize, iconSize);
-	const ImVec2 imageSize(iconSize - paddingReduction, iconSize - paddingReduction);
+	const float imageExtent = std::max(1.0f, iconSize - paddingReduction);
+	const ImVec2 imageSize(imageExtent, imageExtent);
 
 	// Setup button styling for transparent background with hover effects
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING, 0.0f));  // Slightly increased spacing
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);                                                           // Remove button borders
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));                                                         // Transparent button background
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.8f, 0.8f, 0.25f));                                     // Slightly more visible hover effect
+	[[maybe_unused]] auto iconButtonStyle = Util::TransparentIconButtonStyle();
 
 	// Get tint color for monochrome icons
 	ImVec4 tintColor = ImVec4(1, 1, 1, 1);
@@ -409,7 +412,6 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 
 	// Restore default style
 	ImGui::PopStyleVar(2);    // Pop both style variables: ItemSpacing and FrameBorderSize
-	ImGui::PopStyleColor(2);  // Pop both style colors: Button and ButtonHovered
 }
 
 void MenuHeaderRenderer::RenderWatermarkLogo(const Menu::UIIcons& uiIcons)
@@ -445,7 +447,7 @@ void MenuHeaderRenderer::RenderWatermarkLogo(const Menu::UIIcons& uiIcons)
 		textColor.w = 0.18f;  // Very low alpha for subtle watermark effect
 		watermarkColor = ImGui::GetColorU32(textColor);
 	} else {
-		watermarkColor = IM_COL32(255, 255, 255, 45);
+		watermarkColor = IM_COL32(255, 255, 255, 180);
 	}
 
 	drawList->AddImage(uiIcons.logo.texture, logoMin, logoMax, ImVec2(0, 0), ImVec2(1, 1), watermarkColor);

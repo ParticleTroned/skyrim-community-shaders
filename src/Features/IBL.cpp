@@ -9,6 +9,27 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
+namespace
+{
+	constexpr uint32_t kIblPsSrvSlot = 76u;
+	constexpr uint32_t kIblPsSrvCount = 4u;
+
+	void SetIblPsSrvs(ID3D11DeviceContext* a_context,
+		ID3D11ShaderResourceView* a_env,
+		ID3D11ShaderResourceView* a_sky,
+		ID3D11ShaderResourceView* a_staticDiffuse,
+		ID3D11ShaderResourceView* a_staticSpecular)
+	{
+		ID3D11ShaderResourceView* srvs[kIblPsSrvCount] = { a_env, a_sky, a_staticDiffuse, a_staticSpecular };
+		a_context->PSSetShaderResources(kIblPsSrvSlot, kIblPsSrvCount, srvs);
+	}
+
+	void ClearIblPsSrvs(ID3D11DeviceContext* a_context)
+	{
+		SetIblPsSrvs(a_context, nullptr, nullptr, nullptr, nullptr);
+	}
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	IBL::Settings,
 	EnableIBL,
@@ -21,31 +42,39 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkyIBLSaturation,
 	FogAmount,
 	DALCMode,
-	DisableInInteriors)
+	DisableInInteriors,
+	CaptureWeatherBaselineOnSliderChange)
 
 void IBL::DrawSettings()
 {
-	Util::WeatherUI::Checkbox("Enable IBL", this, "EnableIBL", (bool*)&settings.EnableIBL);
+	bool recaptureWeatherBaseline = false;
+	bool enableIBL = settings.EnableIBL != 0;
+	if (Util::WeatherUI::Checkbox("Enable IBL", this, "EnableIBL", &enableIBL)) {
+		settings.EnableIBL = enableIBL ? 1u : 0u;
+		recaptureWeatherBaseline = true;
+	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");
 	}
-	Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, 0.0f, 10.0f, "%.2f");
+
+	ImGui::BeginDisabled(settings.EnableIBL == 0);
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, 0.0f, 10.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Intensity multiplier for the environment IBL (from Dynamic Cubemaps).\nControls how strongly the surrounding environment contributes to ambient lighting.");
 	}
-	Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, 0.0f, 10.0f, "%.2f");
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, 0.0f, 10.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Intensity multiplier for the sky IBL (from the game's native reflections cubemap).\nControls how strongly the sky contributes to ambient lighting.");
 	}
-	Util::WeatherUI::SliderFloat("Env IBL Saturation", this, "EnvIBLSaturation", &settings.EnvIBLSaturation, 0.0f, 2.0f, "%.2f");
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Env IBL Saturation", this, "EnvIBLSaturation", &settings.EnvIBLSaturation, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Color saturation of the environment IBL.\nLower values produce more neutral ambient light; higher values produce more vivid color.");
 	}
-	Util::WeatherUI::SliderFloat("Sky IBL Saturation", this, "SkyIBLSaturation", &settings.SkyIBLSaturation, 0.0f, 2.0f, "%.2f");
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Sky IBL Saturation", this, "SkyIBLSaturation", &settings.SkyIBLSaturation, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Color saturation of the sky IBL.\nLower values produce more neutral ambient light; higher values produce more vivid color.");
 	}
-	Util::WeatherUI::SliderFloat("DALC Amount", this, "DALCAmount", &settings.DALCAmount, 0.0f, 1.0f, "%.2f");
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("DALC Amount", this, "DALCAmount", &settings.DALCAmount, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Blends the IBL brightness toward the game's vanilla ambient (DALC) level.\n"
@@ -70,7 +99,7 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Uses pre-baked static IBL cubemap textures for objects rendered outside the game world (e.g. inventory items, loading screens).");
 	}
-	Util::WeatherUI::SliderFloat("Fog Mix", this, "FogAmount", &settings.FogAmount, 0.0f, 1.0f, "%.2f");
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Fog Mix", this, "FogAmount", &settings.FogAmount, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Blends the fog color toward the IBL ambient color.\n0 = vanilla fog, 1 = fog fully tinted by IBL.");
 	}
@@ -78,9 +107,21 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("When Fog Mix is active, rescales the IBL-tinted fog to keep the original fog brightness.\nPrevents fog from becoming too bright or too dark.");
 	}
+	ImGui::Checkbox("Sync Slider Edits to Weather Fallback", &settings.CaptureWeatherBaselineOnSliderChange);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Default: OFF.");
+		ImGui::Text("When enabled, manual IBL slider edits update the weather fallback baseline.");
+		ImGui::Text("This prevents values from snapping back after interior/exterior transitions");
+		ImGui::Text("when the active weather has no override for that setting.");
+	}
 	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Disables IBL in interior cells.");
+	}
+	ImGui::EndDisabled();
+
+	if (settings.CaptureWeatherBaselineOnSliderChange && recaptureWeatherBaseline) {
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetShortName());
 	}
 }
 
@@ -169,32 +210,25 @@ void IBL::RegisterWeatherVariables()
 		0.0f, 1.0f));
 }
 
-IBL::Settings IBL::GetCommonBufferData() const
-{
-	Settings data = settings;
-	if (settings.DisableInInteriors && Util::IsInterior())
-		data.EnableIBL = 0;
-	return data;
-}
-
 void IBL::ReflectionsPrepass()
 {
-	if (loaded) {
-		auto context = globals::d3d::context;
+	auto context = globals::d3d::context;
+	if (!context)
+		return;
 
-		bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
-
-		// Set PS shader resource
-		{
-			std::array<ID3D11ShaderResourceView*, 4> srvs = {
-				interiorDisabled ? nullptr : envIBLTexture->srv.get(),
-				interiorDisabled ? nullptr : skyIBLTexture->srv.get(),
-				staticDiffuseIBLTexture->srv.get(),
-				staticSpecularIBLTexture->srv.get()
-			};
-			context->PSSetShaderResources(76, 4, srvs.data());
-		}
+	if (!IsRuntimeEnabled() || !envIBLTexture || !skyIBLTexture) {
+		ClearIblPsSrvs(context);
+		return;
 	}
+
+	const bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
+
+	SetIblPsSrvs(
+		context,
+		interiorDisabled ? nullptr : envIBLTexture->srv.get(),
+		interiorDisabled ? nullptr : skyIBLTexture->srv.get(),
+		staticDiffuseIBLTexture ? staticDiffuseIBLTexture->srv.get() : nullptr,
+		staticSpecularIBLTexture ? staticSpecularIBLTexture->srv.get() : nullptr);
 }
 
 void IBL::Prepass()
@@ -203,16 +237,20 @@ void IBL::Prepass()
 		return;
 
 	auto context = globals::d3d::context;
+	if (!context)
+		return;
 
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 
 	auto& envTexture = dynamicCubemaps.envTexture;
 
-	// Unset PS shader resource
-	{
-		ID3D11ShaderResourceView* views[2]{ nullptr, nullptr };
-		context->PSSetShaderResources(76, 2, views);
-	}
+	ClearIblPsSrvs(context);
+
+	if (!IsRuntimeEnabled())
+		return;
+
+	if (!envIBLTexture || !skyIBLTexture)
+		return;
 
 	std::array<ID3D11ShaderResourceView*, 1> srvs = { (dynamicCubemaps.loaded && envTexture) ? envTexture->srv.get() : nullptr };
 	std::array<ID3D11UnorderedAccessView*, 1> uavs = { envIBLTexture->uav.get() };
@@ -258,10 +296,7 @@ void IBL::Prepass()
 	}
 
 	// Set PS shader resource
-	{
-		ID3D11ShaderResourceView* views[2]{ envIBLTexture->srv.get(), skyIBLTexture->srv.get() };
-		context->PSSetShaderResources(76, 2, views);
-	}
+	SetIblPsSrvs(context, envIBLTexture->srv.get(), skyIBLTexture->srv.get(), nullptr, nullptr);
 }
 
 void IBL::SetupResources()
@@ -392,4 +427,29 @@ ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
 	if (!diffuseIBLCS)
 		diffuseIBLCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\IBL\\DiffuseIBLCS.hlsl", defines, "cs_5_0"));
 	return diffuseIBLCS;
+}
+
+IBL::CommonBufferData IBL::GetCommonBufferData() const
+{
+	const bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
+
+	return {
+		.EnableIBL = (IsRuntimeEnabled() && !interiorDisabled) ? 1u : 0u,
+		.PreserveFogLuminance = settings.PreserveFogLuminance,
+		.UseStaticIBL = settings.UseStaticIBL,
+		.DALCAmount = settings.DALCAmount,
+		.EnvIBLScale = settings.EnvIBLScale,
+		.SkyIBLScale = settings.SkyIBLScale,
+		.EnvIBLSaturation = settings.EnvIBLSaturation,
+		.SkyIBLSaturation = settings.SkyIBLSaturation,
+		.FogAmount = settings.FogAmount,
+		.DALCMode = settings.DALCMode,
+		.DisableInInteriors = settings.DisableInInteriors,
+		.pad0 = 0.0f
+	};
+}
+
+bool IBL::IsRuntimeEnabled() const
+{
+	return loaded && settings.EnableIBL != 0;
 }

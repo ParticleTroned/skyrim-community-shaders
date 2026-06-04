@@ -519,6 +519,35 @@ namespace Util
 		}
 	}
 
+	namespace Color
+	{
+		ImVec4 WithAlpha(ImVec4 color, float alpha)
+		{
+			color.w = std::clamp(alpha, 0.0f, 1.0f);
+			return color;
+		}
+
+		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha)
+		{
+			const float clampedAmount = std::clamp(amount, 0.0f, 1.0f);
+			return ImVec4(
+				from.x + (to.x - from.x) * clampedAmount,
+				from.y + (to.y - from.y) * clampedAmount,
+				from.z + (to.z - from.z) * clampedAmount,
+				std::clamp(alpha, 0.0f, 1.0f));
+		}
+
+		ImVec4 Lift(ImVec4 color, float amount, float alpha)
+		{
+			const float clampedAmount = std::clamp(amount, -1.0f, 1.0f);
+			return ImVec4(
+				std::clamp(color.x + clampedAmount, 0.0f, 1.0f),
+				std::clamp(color.y + clampedAmount, 0.0f, 1.0f),
+				std::clamp(color.z + clampedAmount, 0.0f, 1.0f),
+				std::clamp(alpha, 0.0f, 1.0f));
+		}
+	}
+
 	namespace ButtonHelpers
 	{
 		ImVec4 AdjustButtonColor(const ImVec4& color, float amount)
@@ -572,8 +601,8 @@ namespace Util
 	StyledButtonWrapper StatusTextButtonStyle(const ImVec4& color)
 	{
 		return StyledButtonWrapper(color,
-			ButtonHelpers::WithAlpha(color, ThemeManager::Constants::BUTTON_STATUS_TEXT_HOVER_ALPHA),
-			ButtonHelpers::WithAlpha(color, ThemeManager::Constants::BUTTON_STATUS_TEXT_ACTIVE_ALPHA));
+			Color::WithAlpha(color, ThemeManager::Constants::BUTTON_STATUS_TEXT_HOVER_ALPHA),
+			Color::WithAlpha(color, ThemeManager::Constants::BUTTON_STATUS_TEXT_ACTIVE_ALPHA));
 	}
 
 	StyledButtonWrapper SuccessButtonStyle()
@@ -605,10 +634,12 @@ namespace Util
 
 	StyledButtonWrapper TransparentIconButtonStyle()
 	{
-		constexpr float kHoverAlpha = 0.25f;
-		auto hoverColor = Menu::GetSingleton()->GetTheme().Palette.Text;
-		hoverColor.w = kHoverAlpha;
-		return StyledButtonWrapper(ImVec4(0, 0, 0, 0), hoverColor, hoverColor);
+		constexpr float kHoverAlpha = 0.18f;
+		constexpr float kActiveAlpha = 0.30f;
+		const auto accent = Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor;
+		return StyledButtonWrapper(ImVec4(0, 0, 0, 0),
+			Color::WithAlpha(accent, kHoverAlpha),
+			Color::WithAlpha(accent, kActiveAlpha));
 	}
 
 	ImVec4 GetIconTint()
@@ -876,6 +907,7 @@ namespace Util
 		ImVec4 color = useWhiteText ? palette.Text : theme.ColorDefault;
 
 		ImU32 headerColor = ImGui::GetColorU32(color);
+		ImU32 lineColor = ImGui::GetColorU32(palette.Separator);
 
 		if (isCollapsible && isExpanded) {
 			// Use collapsible header similar to DrawCategoryHeader
@@ -910,13 +942,13 @@ namespace Util
 
 			// Left line
 			if (lineLength > 0) {
-				drawList->AddLine(ImVec2(pos.x, lineY), ImVec2(pos.x + lineLength, lineY), headerColor, 1.0f);
+				drawList->AddLine(ImVec2(pos.x, lineY), ImVec2(pos.x + lineLength, lineY), lineColor, 1.0f);
 			}
 
 			// Right line
 			float rightLineStart = pos.x + lineLength + 10.0f + textSize.x + 10.0f;
 			if (rightLineStart < pos.x + availableWidth) {
-				drawList->AddLine(ImVec2(rightLineStart, lineY), ImVec2(pos.x + availableWidth, lineY), headerColor, 1.0f);
+				drawList->AddLine(ImVec2(rightLineStart, lineY), ImVec2(pos.x + availableWidth, lineY), lineColor, 1.0f);
 			}
 
 			// Center text
@@ -938,7 +970,7 @@ namespace Util
 		const auto& theme = globals::menu->GetTheme().StatusPalette;
 		config.thresholds = {
 			{ low, theme.Disable },    // Very low - gray
-			{ med, theme.InfoColor },  // Low - blue
+			{ med, theme.InfoColor },  // Low - accent
 			{ high, theme.Warning },   // Medium - orange
 			{ FLT_MAX, theme.Error }   // High - red (bad)
 		};
@@ -951,7 +983,7 @@ namespace Util
 		const auto& theme = globals::menu->GetTheme().StatusPalette;
 		config.thresholds = {
 			{ low, theme.Disable },          // Very low - gray
-			{ med, theme.InfoColor },        // Low - blue
+			{ med, theme.InfoColor },        // Low - accent
 			{ high, theme.Warning },         // Medium - orange
 			{ FLT_MAX, theme.SuccessColor }  // High - green (good)
 		};
@@ -2063,18 +2095,39 @@ namespace Util
 			return weatherSettings.contains(settingName) && !weatherSettings[settingName].is_null();
 		}
 
+		void PushWeatherControlledFrameStyle(bool includeActive)
+		{
+			const auto accent = Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor;
+			const auto base = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, base);
+			ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Color::Blend(base, accent, 0.24f, 0.92f));
+			if (includeActive) {
+				ImGui::PushStyleColor(ImGuiCol_FrameBgActive, Color::Blend(base, accent, 0.36f, 0.96f));
+			}
+		}
+
+		void RenderWeatherControlledTooltip(RE::TESWeather* weather)
+		{
+			const auto& theme = Menu::GetSingleton()->GetTheme();
+			ImGui::BeginTooltip();
+			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+			ImGui::TextColored(theme.StatusPalette.Warning, "Weather Override Active");
+			ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
+				weather ? weather->GetFormEditorID() : "Unknown");
+			ImGui::Separator();
+			ImGui::TextColored(theme.StatusPalette.InfoColor, "Click to open Weather Editor");
+			ImGui::PopTextWrapPos();
+			ImGui::EndTooltip();
+		}
+
 		bool SliderFloat(const char* label, Feature* feature, const char* settingName, float* value, float min, float max, const char* format)
 		{
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
-				auto* weatherManager = WeatherManager::GetSingleton();
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
 				// Make it look like a clickable button when weather-controlled
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.3f, 0.3f, 0.4f, 0.8f));
-				ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.4f, 0.4f, 0.5f, 0.9f));
-				ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.5f, 0.5f, 0.6f, 1.0f));
+				PushWeatherControlledFrameStyle(true);
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 			}
 
@@ -2100,17 +2153,9 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
 					auto* weatherManager = WeatherManager::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
+					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}
 
 				return false;  // Prevent changes when weather-controlled
@@ -2124,11 +2169,7 @@ namespace Util
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
-				auto* weatherManager = WeatherManager::GetSingleton();
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.3f, 0.3f, 0.4f, 0.8f));
-				ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.4f, 0.4f, 0.5f, 0.9f));
+				PushWeatherControlledFrameStyle(false);
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
@@ -2154,17 +2195,9 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
 					auto* weatherManager = WeatherManager::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
+					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}
 
 				return false;
@@ -2178,9 +2211,6 @@ namespace Util
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
-				auto* weatherManager = WeatherManager::GetSingleton();
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
@@ -2205,17 +2235,9 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
 					auto* weatherManager = WeatherManager::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
+					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}
 
 				return false;
@@ -2229,9 +2251,6 @@ namespace Util
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
-				auto* weatherManager = WeatherManager::GetSingleton();
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
@@ -2256,17 +2275,9 @@ namespace Util
 				}
 
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
 					auto* weatherManager = WeatherManager::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "Click to open Weather Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
+					RenderWeatherControlledTooltip(currentWeathers.currentWeather);
 				}
 
 				return false;

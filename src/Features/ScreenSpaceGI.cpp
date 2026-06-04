@@ -76,7 +76,7 @@ namespace
 			return false;
 
 		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
-		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageScale);
 	}
 
 	bool IsRuntimeFoveatedActive(const ScreenSpaceGI::Settings& a_settings)
@@ -91,7 +91,7 @@ namespace
 
 	float GetUpscalingActiveCenterMaskScale()
 	{
-		return globals::features::upscaling.GetActiveFoveatedCenterArea();
+		return globals::features::upscaling.GetActiveFoveatedCenterScale();
 	}
 
 	float GetSharedUpscalingCenterMaskHorizontalScale()
@@ -715,7 +715,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	SyncResolvedCenterMaskScale(settings);
 	const bool featureRuntimeActive = loaded && settings.Enabled;
 	const auto profile = globals::features::upscaling.GetActiveUpscalingFoveatedProfile();
-	const bool foveatedAvailable = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+	const bool foveatedAvailable = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageScale);
 	bool foveatedEnabled = settings.EnableFoveated;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);

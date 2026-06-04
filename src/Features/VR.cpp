@@ -1402,7 +1402,7 @@ namespace
 		upscaling.DrawFoveatedSettings();
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
-		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageScale);
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxAvailable = waterEffects.loaded;
 		const bool wetnessEffectsRuntimeActive = wetnessEffects.IsRuntimeActive();
@@ -1430,10 +1430,10 @@ namespace
 
 		if (profile.available) {
 			ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "Upscaling FOV center");
-			ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
+			ImGui::Text("Coverage scale: %.2f", profile.coverageScale);
 			ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
 			if (anySharedMaskConsumerEnabled && !foveatedProfileActive)
-				ImGui::TextDisabled("Shared-mask consumers require FOV area below 1.00.");
+				ImGui::TextDisabled("Shared-mask consumers require FOV scale below 1.00.");
 		} else if (anySharedMaskConsumerEnabled) {
 			ImGui::TextDisabled("Shared-mask consumers require active foveated upscaling.");
 		}
@@ -1459,7 +1459,7 @@ namespace
 		screenSpaceGI.DrawFoveationSettings();
 		ImGui::EndDisabled();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with FOV area below 1.00.");
+			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with FOV scale below 1.00.");
 		if (!screenSpaceGIFeatureAvailable)
 			ImGui::TextDisabled("SSGI FOV requires Screen Space GI.");
 		else if (!screenSpaceGI.settings.Enabled)
@@ -1548,7 +1548,7 @@ namespace
 		}
 		ImGui::Separator();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Lighting, SSR, Water, and Wetterness shader budgets require active foveated upscaling with FOV area below 1.00.");
+			ImGui::TextDisabled("Lighting, SSR, Water, and Wetterness shader budgets require active foveated upscaling with FOV scale below 1.00.");
 
 		ImGui::BeginDisabled(!foveatedProfileActive);
 		drawDetailBudget(
@@ -1642,7 +1642,7 @@ namespace
 		}
 		ImGui::EndDisabled();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with FOV area below 1.00.");
+			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with FOV scale below 1.00.");
 		if (!dynamicCubemapsRuntimeActive)
 			ImGui::TextDisabled("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
 

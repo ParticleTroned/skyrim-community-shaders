@@ -274,7 +274,7 @@ public:
 	{
 		float4 renderInfo;     // xy=render dim, zw=1/render dim
 		float4 displayInfo;    // xy=display dim, z=eye count, w=coarseOutsideMask
-		float4 maskInfo;       // x=center area, y=protected outer area, z=center horizontal scale
+		float4 maskInfo;       // x=center scale, y=protected outer scale, z=center horizontal scale
 		float4 centerOffsets;  // xy=left eye, zw=right eye
 		float4 coarseColor;
 		float4 centerColor;
@@ -413,12 +413,12 @@ public:
 	{
 		bool available = false;
 		bool usesPeripheryTAAOuterMask = false;
-		float coverageArea = 1.0f;
+		float coverageScale = 1.0f;
 		float centerHorizontalScale = 1.0f;
 		std::array<float2, 2> centerOffsets{};
 	};
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
-	float GetActiveFoveatedCenterArea() const;
+	float GetActiveFoveatedCenterScale() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;
 
@@ -636,7 +636,7 @@ public:
 	bool previousHistoryInMapMenu = false;
 	UpscaleMethod previousHistoryUpscaleMethod = UpscaleMethod::kNONE;
 	bool previousHistoryFoveatedDispatch = false;
-	float previousHistoryFoveatedCenterArea = 1.0f;
+	float previousHistoryFoveatedCenterScale = 1.0f;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
 	bool previousHistoryPeripheryTAA = false;

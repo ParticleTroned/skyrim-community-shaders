@@ -36,20 +36,20 @@ namespace
 		return std::isfinite(a_value) ? static_cast<int32_t>(std::lround(a_value * 10000.0f)) : 0;
 	}
 
-	float ClampMaskArea(float a_value, float a_max)
+	float ClampMaskScale(float a_value, float a_max)
 	{
 		if (!std::isfinite(a_value))
-			return FoveatedCommon::kCenterAreaMax;
-		return std::clamp(a_value, FoveatedCommon::kCenterAreaMin, a_max);
+			return FoveatedCommon::kCenterScaleMax;
+		return std::clamp(a_value, FoveatedCommon::kCenterScaleMin, a_max);
 	}
 
-	float MaskDistanceUV(float a_uvX, float a_uvY, float a_centerArea, float a_centerHorizontalScale, float a_centerOffsetX, float a_centerOffsetY, float a_areaMax = FoveatedCommon::kCenterAreaMax)
+	float MaskDistanceUV(float a_uvX, float a_uvY, float a_centerScale, float a_centerHorizontalScale, float a_centerOffsetX, float a_centerOffsetY, float a_scaleMax = FoveatedCommon::kCenterScaleMax)
 	{
-		a_centerArea = ClampMaskArea(a_centerArea, a_areaMax);
+		a_centerScale = ClampMaskScale(a_centerScale, a_scaleMax);
 		a_centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_centerHorizontalScale);
 
-		const float radiusX = std::max(a_centerArea * a_centerHorizontalScale * 0.5f, 1e-4f);
-		const float radiusY = std::max(a_centerArea * 0.5f, 1e-4f);
+		const float radiusX = std::max(a_centerScale * a_centerHorizontalScale * 0.5f, 1e-4f);
+		const float radiusY = std::max(a_centerScale * 0.5f, 1e-4f);
 		const float centerX = std::clamp(0.5f + a_centerOffsetX, 0.0f, 1.0f);
 		const float centerY = std::clamp(0.5f + a_centerOffsetY, 0.0f, 1.0f);
 		const float normalizedX = std::abs((a_uvX - centerX) / radiusX);
@@ -65,10 +65,10 @@ namespace
 		float a_tileMaxY,
 		float a_eyeWidth,
 		float a_eyeHeight,
-		float a_centerArea,
+		float a_centerScale,
 		float a_centerHorizontalScale,
 		const AAVRSController::CenterOffset& a_centerOffset,
-		float a_areaMax = FoveatedCommon::kCenterAreaMax)
+		float a_scaleMax = FoveatedCommon::kCenterScaleMax)
 	{
 		if (a_eyeWidth <= 0.0f || a_eyeHeight <= 0.0f)
 			return 0.0f;
@@ -83,11 +83,11 @@ namespace
 		return MaskDistanceUV(
 			std::clamp(centerUvX, minUvX, maxUvX),
 			std::clamp(centerUvY, minUvY, maxUvY),
-			a_centerArea,
+			a_centerScale,
 			a_centerHorizontalScale,
 			a_centerOffset.x,
 			a_centerOffset.y,
-			a_areaMax);
+			a_scaleMax);
 	}
 
 	NV_PIXEL_SHADING_RATE ToPixelShadingRate(uint8_t a_rateIndex, bool a_enable4x4)
@@ -411,9 +411,9 @@ AAVRSController::PatternKey AAVRSController::MakePatternKey(const Settings& a_se
 	key.displayHeight = a_settings.displayHeight;
 	key.renderWidth = a_settings.renderWidth;
 	key.renderHeight = a_settings.renderHeight;
-	key.centerAreaQ = Quantize(a_settings.centerArea);
+	key.centerScaleQ = Quantize(a_settings.centerScale);
 	key.centerHorizontalScaleQ = Quantize(a_settings.centerHorizontalScale);
-	key.outerAreaQ = Quantize(a_settings.outerArea);
+	key.outerScaleQ = Quantize(a_settings.outerScale);
 	key.coarseOutsideMask = a_settings.coarseOutsideMask;
 	key.centerOffsetQ = {
 		Quantize(a_settings.centerOffsets[0].x),
@@ -446,12 +446,12 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 	const float renderScaleX = eyeDisplayWidth > 0.0f ? eyeRenderWidth / eyeDisplayWidth : 1.0f;
 	const float renderScaleY = displayHeight > 0.0f ? renderHeight / displayHeight : 1.0f;
 
-	const float centerArea = FoveatedCommon::ClampCenterArea(a_settings.centerArea);
-	const float outerArea = ClampMaskArea(std::max(a_settings.outerArea, centerArea), FoveatedCommon::kCenterAreaMax);
-	const float coarseSplitArea = outerArea + (FoveatedCommon::kCenterAreaMax - outerArea) * kOutsideMask2x2Fraction;
+	const float centerScale = FoveatedCommon::ClampCenterScale(a_settings.centerScale);
+	const float outerScale = ClampMaskScale(std::max(a_settings.outerScale, centerScale), FoveatedCommon::kCenterScaleMax);
+	const float coarseSplitScale = outerScale + (FoveatedCommon::kCenterScaleMax - outerScale) * kOutsideMask2x2Fraction;
 	const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_settings.centerHorizontalScale);
-	const float protectedArea = a_settings.coarseOutsideMask ? outerArea : centerArea;
-	const bool fullRatePattern = protectedArea >= FoveatedCommon::kFullCoverageThreshold;
+	const float protectedScale = a_settings.coarseOutsideMask ? outerScale : centerScale;
+	const bool fullRatePattern = protectedScale >= FoveatedCommon::kFullCoverageThreshold;
 
 	auto resolveRateIndex = [&](uint32_t a_eye, float a_tileMinX, float a_tileMinY, float a_tileMaxX, float a_tileMaxY) -> uint8_t {
 		const float displayTileMinX = a_tileMinX / std::max(renderScaleX, 1e-4f);
@@ -466,7 +466,7 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 			displayTileMaxY,
 			eyeDisplayWidth,
 			displayHeight,
-			centerArea,
+			centerScale,
 			centerHorizontalScale,
 			centerOffset);
 
@@ -477,10 +477,10 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 			displayTileMaxY,
 			eyeDisplayWidth,
 			displayHeight,
-			outerArea,
+			outerScale,
 			centerHorizontalScale,
 			centerOffset,
-			FoveatedCommon::kCenterAreaMax);
+			FoveatedCommon::kCenterScaleMax);
 		const float coarseSplitDistance = TileMinMaskDistance(
 			displayTileMinX,
 			displayTileMinY,
@@ -488,10 +488,10 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 			displayTileMaxY,
 			eyeDisplayWidth,
 			displayHeight,
-			coarseSplitArea,
+			coarseSplitScale,
 			centerHorizontalScale,
 			centerOffset,
-			FoveatedCommon::kCenterAreaMax);
+			FoveatedCommon::kCenterScaleMax);
 		const float tileCenterX = (displayTileMinX + displayTileMaxX) * 0.5f;
 		const float tileCenterY = (displayTileMinY + displayTileMaxY) * 0.5f;
 		const float centerX = (0.5f + centerOffset.x) * eyeDisplayWidth;
@@ -500,7 +500,7 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 		if (fullRatePattern)
 			return kRateIndex1x1;
 		if (a_settings.coarseOutsideMask) {
-			// In coarse-outside mode, outerArea is the filled protected mask:
+			// In coarse-outside mode, outerScale is the filled protected mask:
 			// active foveated coverage and VRS safety padding stay 1x1.
 			if (outerDistance <= 1.0f)
 				return kRateIndex1x1;

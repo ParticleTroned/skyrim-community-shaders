@@ -3,6 +3,10 @@
 
 #include "Common/FoveatedMask.hlsli"
 
+// Per-pixel detail weight for foveated effects. mode is 0=off, 1=feathered,
+// 2=hard cutoff, matching FoveatedCommon::GetShaderMode on the CPU side.
+// Disabled mode returns full detail so callers can keep simple fallback paths.
+
 static const float FOVEATED_SHADER_DETAIL_MODE_FEATHERED = 1.0;
 static const float FOVEATED_SHADER_DETAIL_MODE_HARD_CUTOFF = 2.0;
 

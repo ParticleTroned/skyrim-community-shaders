@@ -1,11 +1,16 @@
 #ifndef FOVEATED_MASK_HLSLI
 #define FOVEATED_MASK_HLSLI
 
-#ifndef FOVEATED_CENTER_AREA_MIN
-#	define FOVEATED_CENTER_AREA_MIN 0.25
+// Superellipse (shape power 4 = squircle) foveation mask. centerScale is a
+// linear coverage scale, not an area ratio: radiusY = centerScale / 2 and
+// radiusX additionally uses centerHorizontalScale. CPU-side clamps live in
+// src/Features/FoveatedCommon.h.
+
+#ifndef FOVEATED_CENTER_SCALE_MIN
+#	define FOVEATED_CENTER_SCALE_MIN 0.25
 #endif
-#ifndef FOVEATED_CENTER_AREA_MAX
-#	define FOVEATED_CENTER_AREA_MAX 1.0
+#ifndef FOVEATED_CENTER_SCALE_MAX
+#	define FOVEATED_CENTER_SCALE_MAX 1.0
 #endif
 #ifndef FOVEATED_CENTER_FEATHER_MIN
 #	define FOVEATED_CENTER_FEATHER_MIN 1e-4
@@ -20,9 +25,9 @@
 #	define FOVEATED_MASK_SHAPE_POWER 4
 #endif
 
-float FoveatedClampCenterArea(float centerScale)
+float FoveatedClampCenterScale(float centerScale)
 {
-	return clamp(centerScale, FOVEATED_CENTER_AREA_MIN, FOVEATED_CENTER_AREA_MAX);
+	return clamp(centerScale, FOVEATED_CENTER_SCALE_MIN, FOVEATED_CENTER_SCALE_MAX);
 }
 
 float2 FoveatedComputeCenterUV(float2 centerOffset)
@@ -37,7 +42,7 @@ float FoveatedClampCenterHorizontalScale(float centerHorizontalScale)
 
 float2 FoveatedComputeMaskRadii(float centerScale, float centerHorizontalScale)
 {
-	float clampedCenterScale = FoveatedClampCenterArea(centerScale);
+	float clampedCenterScale = FoveatedClampCenterScale(centerScale);
 	float clampedCenterHorizontalScale = FoveatedClampCenterHorizontalScale(centerHorizontalScale);
 	float2 radii = float2(clampedCenterScale * clampedCenterHorizontalScale * 0.5, clampedCenterScale * 0.5);
 	return max(radii, FOVEATED_CENTER_FEATHER_MIN.xx);

@@ -305,8 +305,8 @@ public:
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
-		float4 VRFoveationData0;           // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
-		float4 VRFoveationModes;           // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
+		float4 VRFoveationData0;           // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode; modes use 0=off, 1=feathered, 2=hard cutoff
+		float4 VRFoveationModes;           // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused; same 0/1/2 mode contract
 		float4 VRFoveationCenterOffsets;   // xy=left eye offset, zw=right eye offset
 	};
 #ifdef _MSC_VER

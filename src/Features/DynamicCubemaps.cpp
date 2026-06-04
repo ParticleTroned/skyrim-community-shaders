@@ -77,7 +77,7 @@ namespace
 		}
 
 		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
-		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageScale);
 	}
 
 	CubemapFoveationState GetDynamicCubemapFoveationState(const DynamicCubemaps& a_dynamicCubemaps)

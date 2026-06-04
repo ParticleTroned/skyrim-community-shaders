@@ -12,6 +12,7 @@
 #include <cmath>
 #include <codecvt>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <thread>
 
@@ -54,6 +55,20 @@ namespace
 	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
 		"UnifiedWater"
 	};
+	static constexpr const char* kSharedDataLayoutCacheSection = "SharedData";
+	static constexpr const char* kSharedDataLayoutCacheKey = "Layout";
+
+	std::string GetSharedDataLayoutCacheValue()
+	{
+		return std::format(
+			"size:{};refraction:{};ambient:{};fov0:{};fovmodes:{};fovoffsets:{}",
+			sizeof(State::SharedDataCB),
+			offsetof(State::SharedDataCB, RefractionScale),
+			offsetof(State::SharedDataCB, AmbientSHR),
+			offsetof(State::SharedDataCB, VRFoveationData0),
+			offsetof(State::SharedDataCB, VRFoveationModes),
+			offsetof(State::SharedDataCB, VRFoveationCenterOffsets));
+	}
 
 	void StoreMax(std::atomic_uint32_t& a_target, uint32_t a_value)
 	{
@@ -818,13 +833,27 @@ void State::Save(ConfigMode a_configMode)
 bool State::ValidateCache(CSimpleIniA& a_ini)
 {
 	bool valid = true;
+	const auto currentSharedDataLayout = GetSharedDataLayoutCacheValue();
+	if (const auto cachedSharedDataLayout = a_ini.GetValue(kSharedDataLayoutCacheSection, kSharedDataLayoutCacheKey)) {
+		if (currentSharedDataLayout != cachedSharedDataLayout) {
+			logger::info("Disk cache outdated: SharedData layout changed (current: {}, cached: {})",
+				currentSharedDataLayout, cachedSharedDataLayout);
+			valid = false;
+		}
+	} else {
+		logger::info("Disk cache outdated: no SharedData layout key found");
+		valid = false;
+	}
+
 	for (auto* feature : Feature::GetFeatureList())
-		valid = valid && feature->ValidateCache(a_ini);
+		valid = feature->ValidateCache(a_ini) && valid;
 	return valid;
 }
 
 void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
+	const auto sharedDataLayout = GetSharedDataLayoutCacheValue();
+	a_ini.SetValue(kSharedDataLayoutCacheSection, kSharedDataLayoutCacheKey, sharedDataLayout.c_str());
 	for (auto* feature : Feature::GetFeatureList())
 		feature->WriteDiskCacheInfo(a_ini);
 }
@@ -1268,7 +1297,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHG = { dalcSH.g.c0, dalcSH.g.c1[0], dalcSH.g.c1[1], dalcSH.g.c1[2] };
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
-		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
+		data.VRFoveationData0 = { FoveatedCommon::kCenterScaleMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
 		data.VRFoveationModes = { 0.0f, 0.0f, 0.0f, 0.0f };
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
@@ -1294,7 +1323,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			upscaling.loaded) {
 			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 			if (profile.available) {
-				const float centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
+				const float centerScale = FoveatedCommon::ClampCenterScale(profile.coverageScale);
 				const bool foveationActive = FoveatedCommon::IsActiveCoverage(centerScale);
 				const float disabledFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off);
 				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(

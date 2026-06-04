@@ -66,7 +66,7 @@ struct FoveatedRegionPlan
 	uint32_t outputWidthPerEye = 0;
 	uint32_t outputHeight = 0;
 	bool isVR = false;
-	float centerScale = FoveatedCommon::kCenterAreaMax;
+	float centerScale = FoveatedCommon::kCenterScaleMax;
 	float centerFeather = FoveatedCommon::kCenterFeather;
 	float centerHorizontalScale = 1.0f;
 	float peripheryTAAOuterScale = 0.0f;
@@ -99,11 +99,11 @@ struct FoveatedRegionPlan
 		plan.outputWidthPerEye = a_outputWidthPerEye;
 		plan.outputHeight = a_outputHeight;
 		plan.isVR = a_isVR;
-		plan.centerScale = FoveatedCommon::ClampCenterArea(a_centerScale);
+		plan.centerScale = FoveatedCommon::ClampCenterScale(a_centerScale);
 		plan.centerFeather = std::isfinite(a_centerFeather) ? std::max(0.0f, a_centerFeather) : FoveatedCommon::kCenterFeather;
 		plan.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_centerHorizontalScale);
 		plan.peripheryTAAOuterScale = std::isfinite(a_peripheryTAAOuterScale) && a_peripheryTAAOuterScale > 0.0f ?
-			std::max(plan.centerScale, FoveatedCommon::ClampCenterArea(a_peripheryTAAOuterScale)) :
+			std::max(plan.centerScale, FoveatedCommon::ClampCenterScale(a_peripheryTAAOuterScale)) :
 			0.0f;
 
 		if (!a_inputWidthPerEye || !a_inputHeight || !a_outputWidthPerEye || !a_outputHeight)

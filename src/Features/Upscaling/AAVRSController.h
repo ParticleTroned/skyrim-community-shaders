@@ -11,8 +11,8 @@ class AAVRSController final
 public:
 	static constexpr uint32_t kTileWidth = 16;
 	static constexpr uint32_t kTileHeight = 16;
-	static constexpr float kDefaultCenterArea = 0.30f;
-	static constexpr float kDefaultOuterArea = 1.0f;
+	static constexpr float kDefaultCenterScale = 0.30f;
+	static constexpr float kDefaultOuterScale = 1.0f;
 
 	struct CenterOffset
 	{
@@ -28,10 +28,10 @@ public:
 		uint32_t displayHeight = 0;
 		uint32_t renderWidth = 0;
 		uint32_t renderHeight = 0;
-		float centerArea = kDefaultCenterArea;
+		float centerScale = kDefaultCenterScale;
 		float centerHorizontalScale = 1.0f;
-		// When coarseOutsideMask is true, outerArea is the filled 1x1 protected mask.
-		float outerArea = kDefaultOuterArea;
+		// When coarseOutsideMask is true, outerScale is the filled 1x1 protected mask.
+		float outerScale = kDefaultOuterScale;
 		bool coarseOutsideMask = false;
 		std::array<CenterOffset, 2> centerOffsets{};
 	};
@@ -68,9 +68,9 @@ private:
 		uint32_t displayHeight = 0;
 		uint32_t renderWidth = 0;
 		uint32_t renderHeight = 0;
-		int32_t centerAreaQ = 0;
+		int32_t centerScaleQ = 0;
 		int32_t centerHorizontalScaleQ = 0;
-		int32_t outerAreaQ = 0;
+		int32_t outerScaleQ = 0;
 		bool coarseOutsideMask = false;
 		std::array<int32_t, 4> centerOffsetQ{};
 

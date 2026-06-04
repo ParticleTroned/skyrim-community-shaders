@@ -18,6 +18,13 @@ public:
 		CPU
 	};
 
+	enum class FeatureTimingMode
+	{
+		Off,
+		GPU,
+		CPU
+	};
+
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
 	static void RenderFeatureTimers(const std::string& featurePrefix);
 
@@ -53,9 +60,29 @@ private:
 
 	struct FeatureGraphState
 	{
-		ImGuiUtils::ProfilerGraph graph{ Profiler::kHistorySize };
+		ImGuiUtils::ProfilerGraph gpuGraph{ Profiler::kHistorySize };
+		ImGuiUtils::ProfilerGraph cpuGraph{ Profiler::kHistorySize };
+	};
+	struct FeatureTimingEntry
+	{
+		std::string label;
+		float timeMs;
+		float avgMs;
+		float p95Ms;
+		float p99Ms;
+	};
+	struct FeatureTimingData
+	{
+		std::vector<FeatureTimingEntry> entries;
+		float totalAvg = 0.0f;
+		float totalP95 = 0.0f;
+		float totalP99 = 0.0f;
+		float maxAvg = 0.0f;
+		float maxP95 = 0.0f;
+		float maxP99 = 0.0f;
 	};
 	static inline std::unordered_map<std::string, FeatureGraphState> featureGraphs;
+	static inline std::unordered_map<std::string, FeatureTimingMode> featureTimingModes;
 
 	static inline std::unordered_map<std::string, ImU32> groupColorMap;
 	static inline size_t nextColorIndex = 0;
@@ -65,4 +92,8 @@ private:
 	static ImVec4 HeatColor(float value, float maxValue);
 	static void TextHeat(const char* fmt, float value, float maxValue);
 	static void RenderGraph();
+	static bool RenderFeatureOverview();
+	static FeatureTimingData CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode);
+	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight);
+	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);
 };

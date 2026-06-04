@@ -74,6 +74,7 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 	framesSinceInit = 0;
 	frameActive = false;
 	initialized = true;
+	userEnabled.store(false, std::memory_order_release);
 	captureRequested.store(false, std::memory_order_release);
 	captureActive.store(false, std::memory_order_release);
 }
@@ -97,8 +98,26 @@ void Profiler::Release()
 	frameActive = false;
 	initialized = false;
 	context = nullptr;
+	userEnabled.store(false, std::memory_order_release);
 	captureRequested.store(false, std::memory_order_release);
 	captureActive.store(false, std::memory_order_release);
+}
+
+void Profiler::SetUserEnabled(bool a_enabled)
+{
+	userEnabled.store(a_enabled, std::memory_order_release);
+	if (!a_enabled) {
+		captureRequested.store(false, std::memory_order_release);
+		captureActive.store(false, std::memory_order_release);
+	}
+}
+
+void Profiler::RequestCapture()
+{
+	if (!IsUserEnabled())
+		return;
+
+	captureRequested.store(true, std::memory_order_release);
 }
 
 void Profiler::ClearTimers()
@@ -260,6 +279,11 @@ void Profiler::EndFrame()
 
 	auto& frame = frames[writeFrame];
 	const bool hasCpuTimers = !completedCpuTimers.empty();
+	if (!IsUserEnabled() && !frameActive && !hasCpuTimers) {
+		captureRequested.store(false, std::memory_order_release);
+		captureActive.store(false, std::memory_order_release);
+		return;
+	}
 	if (!frameActive) {
 		const bool slotAvailable = CollectResults();
 		if (!slotAvailable) {

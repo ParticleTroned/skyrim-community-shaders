@@ -781,9 +781,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
 
-			ImGui::Spacing();
-			ImGui::SeparatorText("Profiling");
-			ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
+			if (globals::profiler) {
+				ImGui::Spacing();
+				ImGui::SeparatorText("Profiling");
+				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
+			}
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();

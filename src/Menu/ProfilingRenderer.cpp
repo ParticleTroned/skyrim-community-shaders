@@ -39,6 +39,11 @@ static ImU32 HslToImU32(float h, float s, float l)
 
 static constexpr float kGoldenRatio = 0.618033988749895f;
 
+static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
+{
+	return cpuMode ? result.hasCpu : result.hasGpu;
+}
+
 ImU32 ProfilingRenderer::GetGroupColor(const std::string& groupName)
 {
 	auto it = groupColorMap.find(groupName);
@@ -101,7 +106,7 @@ void ProfilingRenderer::RenderGraph()
 
 	double accumulated = 0.0;
 	for (const auto& result : results) {
-		if (!result.valid)
+		if (!result.valid || !HasTimingMode(result, cpuMode))
 			continue;
 
 		float timeMs = cpuMode ? result.cpuTimeMs : result.gpuTimeMs;
@@ -178,7 +183,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		std::unordered_map<std::string, size_t> groupIndex;
 
 		for (const auto& result : profiler.GetResults()) {
-			if (!result.valid)
+			if (!result.valid || !HasTimingMode(result, cpuMode))
 				continue;
 
 			float avg = cpuMode ? result.cpuAvgMs : result.avgMs;
@@ -324,7 +329,7 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 
 	std::string prefix = featurePrefix + "::";
 	for (const auto& r : results) {
-		if (!r.valid || !r.name.starts_with(prefix))
+		if (!r.valid || !HasTimingMode(r, cpuMode) || !r.name.starts_with(prefix))
 			continue;
 		std::string label = r.name.substr(prefix.size());
 		float timeMs = cpuMode ? r.cpuTimeMs : r.gpuTimeMs;

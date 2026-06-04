@@ -13,6 +13,12 @@ namespace CSPluginAPI
 	inline constexpr unsigned int CSInterfaceRevision001 = 1;
 	inline constexpr unsigned int CSInterfaceRevision002 = 2;
 	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision002;
+	// Guidance for VR transition controllers that hide render-scale relatches
+	// behind a game fade. These constants are advisory only and do not change
+	// the ABI; Community Shaders does not drive Game.FadeOutGame itself.
+	inline constexpr float CSVRRenderScaleTransitionFadeOutSeconds = 1.0f;
+	inline constexpr float CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 2.0f;
+	inline constexpr float CSVRRenderScaleTransitionFadeInSeconds = 1.0f;
 
 	// A message used to fetch Community Shaders' interface.
 	struct CSMessage

@@ -126,8 +126,9 @@ namespace
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
 	constexpr uint32_t kDefaultRenderScaleQualityMode = 3u;  // Quality
 	constexpr uint32_t kVRUpscalingTransitionApplyDelayFrames = 6u;
-	// Render-scale transition teardown and mask repair get a mandatory post-close
-	// grace because the first stable-looking frames can still reference old GPU work.
+	// Clean-slate diagnostics: keep VR render-scale state rules and logging, but
+	// keep optional transition latches disabled until a new log proves one back in.
+	constexpr bool kVRRenderScaleTransitionSafetyLatchesEnabled = false;
 	constexpr uint32_t kVRRenderScaleTransitionGraceFrames = 20u;
 	constexpr uint32_t kVRRenderScaleRelatchRecentTransitionFrames = 3u;
 	constexpr uint32_t kVRRenderScaleRelatchMenuStableFrames = kVRRenderScaleTransitionGraceFrames;
@@ -1209,6 +1210,8 @@ namespace
 	{
 		if (!globals::game::isVR)
 			return false;
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 
 		return a_upscaling.HasPendingVRRenderScaleTransition() ||
 		       a_upscaling.pendingVRUpscalingTransitionPostTransitionDelay.load(std::memory_order_acquire) ||
@@ -1233,7 +1236,15 @@ namespace
 
 	bool ShouldIncludeInactiveVRVendorReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
-		return IsVRRenderScaleTransitionProtectionActive(a_upscaling, a_upscaleMethod, globals::state);
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod))
+			return false;
+
+		return a_upscaling.HasPendingVRRenderScaleTransition() ||
+		       a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		       a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		       a_upscaling.IsPerfModeActive() ||
+		       a_upscaling.perfMode.HasRestartRequiredChange();
 	}
 
 	bool IsSaveLoadTransitionContextActive(const State* a_state);
@@ -1256,6 +1267,8 @@ namespace
 		Upscaling::UpscaleMethod a_upscaleMethod,
 		const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return 0;
 		if (IsSaveLoadTransitionContextActive(a_state))
 			return 0;
 
@@ -1282,6 +1295,8 @@ namespace
 		Upscaling::UpscaleMethod a_upscaleMethod,
 		const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return 0;
 		if (IsSaveLoadTransitionContextActive(a_state))
 			return 0;
 
@@ -1334,6 +1349,11 @@ namespace
 
 	void MarkVRRenderScaleRelatchSettling(uint32_t a_frames)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled) {
+			ClearVRRenderScaleRelatchRecovery();
+			return;
+		}
+
 		if (!globals::game::isVR || a_frames == 0)
 			return;
 
@@ -1355,6 +1375,8 @@ namespace
 
 	bool IsVRRenderScaleRelatchStretchFallbackActive(const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || !a_state)
 			return false;
 
@@ -1370,6 +1392,8 @@ namespace
 
 	bool IsVRRenderScaleRelatchSettling(const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || !a_state)
 			return false;
 
@@ -1392,6 +1416,8 @@ namespace
 
 	bool ShouldSkipVRRenderScaleRelatchSubmitStagePresentationThisFrame(const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || !a_state)
 			return false;
 
@@ -1418,6 +1444,8 @@ namespace
 
 	bool ShouldBypassVRRenderScaleRelatchSubmitStagePresentation(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || !a_state)
 			return false;
 
@@ -1435,6 +1463,8 @@ namespace
 
 	bool ShouldBypassVRRenderScaleRelatchVendorEvaluation(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || !a_state)
 			return false;
 		if (a_upscaling.IsRenderScaleModeRequested() || a_upscaling.IsPerfModeActive())
@@ -1623,6 +1653,9 @@ namespace
 
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return IsSaveLoadTransitionContextActive(a_state);
+
 		return IsSaveLoadTransitionContextActive(a_state) ||
 		       IsVRRenderScaleTransitionGraceActive(a_upscaling, a_upscaling.GetConfiguredUpscaleMethodForTransition(), a_state) ||
 		       IsVRRenderScaleRelatchVisualSafetyActive(a_upscaling, a_state) ||
@@ -1633,6 +1666,9 @@ namespace
 
 	bool ShouldDeferVRProjectedMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return IsSaveLoadTransitionContextActive(a_state);
+
 		return ShouldDeferVRTransitionMaskRepair(a_upscaling, a_state) ||
 		       (IsVRTransitionPresentationProtectionActive(a_upscaling, a_state) &&
 		           IsVRLoadingPresentationContextActive(a_state));
@@ -1640,6 +1676,8 @@ namespace
 
 	bool IsVRRenderScaleRelatchDelaySafetyActive(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!a_state || !a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 			return false;
 
@@ -1649,6 +1687,8 @@ namespace
 
 	bool IsVRRenderScaleRelatchD3DWaitOrTeardownActive(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || !a_state)
 			return false;
 		if (!a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
@@ -1664,6 +1704,8 @@ namespace
 
 	bool IsVRRenderScaleRelatchVisualSafetyActive(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
 			return false;
 
@@ -1674,6 +1716,8 @@ namespace
 
 	bool IsVRRenderScaleRelatchFoveatedBypassActive(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
 			return false;
 
@@ -1684,6 +1728,8 @@ namespace
 
 	bool ShouldDeferVRFSRRuntimeForRenderScaleReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || a_upscaleMethod != Upscaling::UpscaleMethod::kFSR)
 			return false;
 
@@ -1701,6 +1747,9 @@ namespace
 
 	bool ShouldBypassVRFoveatedVendorDispatchForTransition(const Upscaling& a_upscaling, const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return IsSaveLoadTransitionContextActive(a_state);
+
 		if (!globals::game::isVR)
 			return false;
 
@@ -1744,6 +1793,8 @@ namespace
 		const State* a_state,
 		Upscaling::UpscaleMethod a_upscaleMethod)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!globals::game::isVR || !IsVendorUpscalingMethod(a_upscaleMethod))
 			return false;
 		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
@@ -1771,11 +1822,16 @@ namespace
 
 	bool IsRecentVRLoadingTransitionClose(const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		return GetVRLoadingTransitionCloseElapsedFrames(a_state) < kVRRenderScaleRelatchRecentTransitionFrames;
 	}
 
 	uint32_t GetPostTransitionVRRenderScaleRelatchDelayFrames(const char* a_reason)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return 0;
+
 		const auto* state = globals::state;
 		if (IsSaveLoadTransitionContextActive(state))
 			return 0;
@@ -2616,6 +2672,8 @@ namespace
 
 	uint32_t GetVRSubmitStageIntermediateAllocCooldownRemaining(const State* a_state)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return 0;
 		if (!globals::game::isVR || !a_state)
 			return 0;
 
@@ -2636,6 +2694,9 @@ namespace
 		const State* a_state,
 		Upscaling::UpscaleMethod a_upscaleMethod)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
+
 		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod) &&
 		       GetVRSubmitStageIntermediateAllocCooldownRemaining(a_state) != 0;
 	}
@@ -2645,6 +2706,8 @@ namespace
 		const State* a_state,
 		Upscaling::UpscaleMethod a_upscaleMethod)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod))
 			return false;
 		if (!a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
@@ -2676,6 +2739,8 @@ namespace
 		Upscaling::UpscaleMethod a_upscaleMethod,
 		const std::exception& a_exception)
 	{
+		if (!kVRRenderScaleTransitionSafetyLatchesEnabled)
+			return false;
 		if (!IsOutOfMemoryException(a_exception))
 			return false;
 		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling, a_upscaleMethod))
@@ -5416,7 +5481,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: vendor teardown complete before D3D render-target recreate");
 
-			if (vendorResourcesPendingTeardown) {
+			if (kVRRenderScaleTransitionSafetyLatchesEnabled && vendorResourcesPendingTeardown) {
 				if (globals::d3d::context)
 					globals::d3d::context->Flush();
 
@@ -11353,7 +11418,7 @@ void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames, b
 	if (previousDelay == 0 || delayFrames > previousDelay)
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(delayFrames, std::memory_order_release);
 
-	if (a_extendFoveatedSafety) {
+	if (kVRRenderScaleTransitionSafetyLatchesEnabled && a_extendFoveatedSafety) {
 		const uint32_t safetyEndFrame = frame + delayFrames;
 		const uint32_t previousSafetyEndFrame = pendingPerfModeRenderTargetRecreateSafetyEndFrame.load(std::memory_order_acquire);
 		if (previousSafetyEndFrame == 0 || safetyEndFrame > previousSafetyEndFrame)

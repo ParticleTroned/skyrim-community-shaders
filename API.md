@@ -20,6 +20,7 @@ This is for **consumer plugins** (mods that want to call into Community Shaders)
 - Explicit upscaler method control (`None`, `TAA`, `FSR`, `DLSS`)
 - DLSS profile control (`J`, `K`, `L`, `M`, `F`)
 - VR Render Scale Mode control with transition-time render-target relatching
+- Advisory VR transition fade timing constants for controllers that want to hide render-scale relatches behind a fade-to-black
 
 The first three are direct runtime toggles. Upscaler preset control changes the internal render scale used by DLSS, FSR 3.1.5, and runtime FSR4. `DLSSMode` remains a type alias for `UpscalePreset` so old enum values keep their numeric layout. DLSS profile control is DLSS-only. In VR, presets below native enable Render Scale Mode and Native AA/DLAA disables it. Render Scale Mode requests a render-target relatch; call it during loading/interior-exterior transitions for the cleanest switch. Legacy revision-1 upscaling calls keep DLSS-first behavior on DLSS-capable systems. Revision 2 adds method-explicit calls for controllers that must select FSR/FSR4 or otherwise distinguish DLSS from FSR/FSR4 instead of relying on legacy DLSS behavior.
 
@@ -126,6 +127,14 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - `UpscaleMethod::kFSR` (covers FSR 3.1.5 and runtime FSR4; runtime FSR4 remains a CS-side runtime path choice)
 - `UpscaleMethod::kDLSS`
 
+Advisory VR render-scale transition fade constants:
+
+- `CSVRRenderScaleTransitionFadeOutSeconds = 1.0f`
+- `CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 2.0f`
+- `CSVRRenderScaleTransitionFadeInSeconds = 1.0f`
+
+These constants do not control Community Shaders directly and do not change the ABI. They are timing guidance for transition controllers that call `Game.FadeOutGame` or an equivalent fade system.
+
 ## Behavior Notes
 
 - `SSS` means **Screen Space Shadows**, not Subsurface Scattering.
@@ -139,6 +148,7 @@ Numeric enum values keep backwards compatibility for the original five modes; th
 - `SetUpscaleMethod` selects the CS upscaler method explicitly while preserving the current preset, DLSS profile, and Render Scale Mode request where valid.
 - `SetVRUpscalingTransitionProfileForMethod` is the preferred revision-2 call for interior/exterior controllers that need deterministic DLSS/FSR behavior. It stages method, Render Scale Mode, shared preset, and DLSS profile together, so `DLSS + NativeAA + K` is unambiguously DLAA/K and `FSR + Hoshipa` is unambiguously FSR render scale.
 - The individual legacy `SetUpscalePreset`, `SetDLSSProfile`, and `SetRenderAtUpscaleResEnabled` setters use the same VR transition staging when called separately. `SetUpscalePreset` and `SetDLSSProfile` prefer DLSS on DLSS-capable systems for backwards compatibility with consumers built around the old DLSS naming.
+- `Game.FadeOutGame` does not pause Community Shaders or serialize D3D/vendor resource rebuilds. It only hides the transition visually. For render-scale transitions, fade to black first, call `SetVRUpscalingTransitionProfileForMethod` as soon as the screen is black and the destination profile is known, perform the move/cell transition, then keep the screen black for at least `CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds` after the profile call or move, whichever is later, before fading back in. The clean baseline measured render-target relatches around `1.3` to `1.7` seconds, so the `2.0` second black hold gives margin without reintroducing Community Shaders-side safety latches.
 - New virtual methods must only be appended to the interface to preserve binary compatibility.
 - VR DLSS keeps two viewport/resource slots for recent quality/profile combinations. Alternating between an exterior profile and an interior profile can reuse those slots instead of rebuilding DLSS every time.
 - Reflex settings are not exposed by this API.

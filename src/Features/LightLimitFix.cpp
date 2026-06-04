@@ -1659,14 +1659,18 @@ void LightLimitFix::UpdateLights()
 		}
 	};
 
-	for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
-		addLight(e);
-	}
-	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
-		addLight(e);
+	{
+		CS_PROFILE_CPU_SCOPE("LightLimitFix::SceneLightsCPU");
+		for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
+			addLight(e);
+		}
+		for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+			addLight(e);
+		}
 	}
 
 	{
+		CS_PROFILE_CPU_SCOPE("LightLimitFix::ParticleLightsCPU");
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
 		cachedParticleLights.clear();
 
@@ -1821,13 +1825,16 @@ void LightLimitFix::UpdateLights()
 
 	lightCount = std::min((uint)lightsData.size(), MAX_LIGHTS);
 
-	D3D11_MAPPED_SUBRESOURCE mapped;
-	DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-	size_t bytes = sizeof(LightData) * lightCount;
-	if (bytes > 0) {
-		memcpy_s(mapped.pData, bytes, lightsData.data(), bytes);
+	{
+		CS_PROFILE_CPU_SCOPE("LightLimitFix::UploadLightsCPU");
+		D3D11_MAPPED_SUBRESOURCE mapped;
+		DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+		size_t bytes = sizeof(LightData) * lightCount;
+		if (bytes > 0) {
+			memcpy_s(mapped.pData, bytes, lightsData.data(), bytes);
+		}
+		context->Unmap(lights->resource.get(), 0);
 	}
-	context->Unmap(lights->resource.get(), 0);
 
 	UpdateStructure();
 }

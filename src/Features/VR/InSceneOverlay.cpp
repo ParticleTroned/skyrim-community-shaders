@@ -6,6 +6,7 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/VRUtils.h"
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <DirectXMath.h>
@@ -270,6 +271,23 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
 					upscaling.LogVRCompositorSubmitPath(eEye, "cs-upscaled-submit", pTexture, pBounds, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
+				}
+
+				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsPerfModeActive()) {
+					static std::atomic_bool loggedDeviceLostSuppression{ false };
+					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
+						logger::warn(
+							"[VRSubmit] Suppressing OpenVR submit after submit-stage device loss while render-scale is still active; original texture is not a final HMD submit target.");
+						upscaling.LogVRCompositorSubmitPath(
+							eEye,
+							"device-lost-render-scale-submit-suppressed",
+							pTexture,
+							pBounds,
+							nullptr,
+							nullptr,
+							nSubmitFlags);
+					}
+					return vr::VRCompositorError_None;
 				}
 
 				vr::Texture_t overlayTexture{};

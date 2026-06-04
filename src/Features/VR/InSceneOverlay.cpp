@@ -260,13 +260,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			auto& upscaling = globals::features::upscaling;
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
-			bool loggedOriginalSubmit = false;
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
-				const bool bypassUpscaledSubmitForRelatchGuard = upscaling.ShouldBypassVRCompositorUpscalingForRenderScaleRelatchGuard();
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
-				if (!bypassUpscaledSubmitForRelatchGuard &&
-					upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
+				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
 					if (ShouldRenderInSceneMenu(vr) &&
 						upscaledTexture.handle &&
 						upscaledTexture.eType == vr::TextureType_DirectX)
@@ -275,21 +272,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
 
-				if (bypassUpscaledSubmitForRelatchGuard) {
-					upscaling.LogVRCompositorSubmitPath(eEye, "original-submit-relatch-guard", pTexture, pBounds, nullptr, nullptr, nSubmitFlags);
-					loggedOriginalSubmit = true;
-				}
-
-				if (!bypassUpscaledSubmitForRelatchGuard) {
-					vr::Texture_t overlayTexture{};
-					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
-						upscaling.LogVRCompositorSubmitPath(eEye, "overlay-submit", pTexture, pBounds, &overlayTexture, pBounds, nSubmitFlags);
-						return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
-					}
+				vr::Texture_t overlayTexture{};
+				if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
+					upscaling.LogVRCompositorSubmitPath(eEye, "overlay-submit", pTexture, pBounds, &overlayTexture, pBounds, nSubmitFlags);
+					return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
 				}
 			}
-			if (!loggedOriginalSubmit)
-				upscaling.LogVRCompositorSubmitPath(eEye, "original-submit-fallback", pTexture, pBounds, nullptr, nullptr, nSubmitFlags);
+			upscaling.LogVRCompositorSubmitPath(eEye, "original-submit-fallback", pTexture, pBounds, nullptr, nullptr, nSubmitFlags);
 			return func(_this, eEye, pTexture, pBounds, nSubmitFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

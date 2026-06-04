@@ -560,7 +560,6 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
-	bool ShouldBypassVRCompositorUpscalingForRenderScaleRelatchGuard() const;
 	void LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 		const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture = nullptr,
 		const vr::VRTextureBounds_t* a_outputBounds = nullptr, vr::EVRSubmitFlags a_submitFlags = vr::Submit_Default) const;
@@ -653,14 +652,12 @@ public:
 	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
-	std::atomic<bool> pendingVRUpscalingTransitionPostTransitionDelay{ false };
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
-	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateSafetyEndFrame{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
@@ -694,7 +691,7 @@ public:
 	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;
 	bool ShouldDeferVRUpscalingTransitionSettings() const;
 	bool ShouldWaitForVRUpscalingTransitionDelay() const;
-	void MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames = 0, bool a_extendFoveatedSafety = true);
+	void MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames = 0);
 	bool ShouldWaitForPerfModeRenderTargetRecreateDelay() const;
 	void ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod);
 	bool ShouldResetHistoryThisFrame() const;

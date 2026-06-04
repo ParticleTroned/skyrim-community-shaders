@@ -1455,7 +1455,7 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 
 	float dimmer = 0.0f;
 
-	if (distance < lightFadeStart || lightFadeEnd == 0.0f) {
+	if (distance < lightFadeStart || lightFadeEnd == 0.0f || lightFadeEnd <= lightFadeStart) {
 		dimmer = 1.0f;
 	} else if (distance <= lightFadeEnd) {
 		dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));

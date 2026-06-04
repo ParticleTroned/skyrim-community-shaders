@@ -6,6 +6,7 @@
 
 #include "Menu/ThemeManager.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/StringUtils.h"
 #include "Shadercache.h"
 #include "State.h"
 #include "Util.h"
@@ -13,7 +14,6 @@
 #include "RE/B/BSMultiBoundRoom.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <limits>
 
@@ -117,23 +117,6 @@ namespace
 		       ((particleBudget & 0xFFu) << 8) |
 		       ((clusterBudget & 0xFFu) << 16) |
 		       ((strictBudget & 0xFFu) << 24);
-	}
-
-	char ToLowerAscii(char a_char)
-	{
-		return static_cast<char>(std::tolower(static_cast<unsigned char>(a_char)));
-	}
-
-	bool EndsWithDdsInsensitive(std::string_view a_filename)
-	{
-		if (a_filename.size() < 4) {
-			return false;
-		}
-		const std::string_view ext = a_filename.substr(a_filename.size() - 4);
-		return ToLowerAscii(ext[0]) == '.' &&
-		       ToLowerAscii(ext[1]) == 'd' &&
-		       ToLowerAscii(ext[2]) == 'd' &&
-		       ToLowerAscii(ext[3]) == 's';
 	}
 
 	void ClearStrictLightData(LightLimitFix::StrictLightDataCB& a_data, bool a_resetRoomIndex) noexcept
@@ -1173,31 +1156,6 @@ bool TryGetMaxAlphaVertexColor(const std::uint8_t* a_rawVertexData, std::uint32_
 	return found;
 }
 
-std::string ExtractTextureStem(std::string_view a_path)
-{
-	if (a_path.empty())
-		return {};
-
-	auto lastSeparatorPos = a_path.find_last_of("\\/");
-	std::string_view filename = (lastSeparatorPos == std::string::npos) ? a_path : a_path.substr(lastSeparatorPos + 1);
-	if (filename.empty() || !EndsWithDdsInsensitive(filename)) {
-		return {};
-	}
-
-	filename.remove_suffix(4);  // Remove ".dds"
-	if (filename.empty()) {
-		return {};
-	}
-
-	std::string textureName{};
-	textureName.reserve(filename.size());
-	for (char c : filename) {
-		textureName.push_back(ToLowerAscii(c));
-	}
-
-	return textureName;
-}
-
 LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty) {
@@ -1246,13 +1204,13 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 					// Not scanned, scan now
 
 					if (!material->sourceTexturePath.empty()) {
-						std::string textureName = ExtractTextureStem(material->sourceTexturePath.c_str());
-						if (textureName.size() < 1) {
+						auto textureName = Util::GetLowercaseStem(material->sourceTexturePath.c_str(), ".dds");
+						if (!textureName) {
 							return cacheInvalidReference(node);
 						}
 
 						auto& configs = particleLights.particleLightConfigs;
-						auto it = configs.find(textureName);
+						auto it = configs.find(*textureName);
 						if (it == configs.end()) {
 							return cacheInvalidReference(node);
 						}
@@ -1262,10 +1220,10 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 						ParticleLights::GradientConfig gradientConfig{};
 						if (!material->greyscaleTexturePath.empty()) {
 							// Gradient configs are optional overrides; missing entries fall back to the base particle config.
-							const std::string gradientName = ExtractTextureStem(material->greyscaleTexturePath.c_str());
-							if (!gradientName.empty()) {
+							const auto gradientName = Util::GetLowercaseStem(material->greyscaleTexturePath.c_str(), ".dds");
+							if (gradientName) {
 								auto& gradientConfigs = particleLights.particleLightGradientConfigs;
-								auto itGradient = gradientConfigs.find(gradientName);
+								auto itGradient = gradientConfigs.find(*gradientName);
 								if (itGradient != gradientConfigs.end()) {
 									hasGradientConfig = true;
 									gradientConfig = itGradient->second;

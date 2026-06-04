@@ -77,8 +77,10 @@ public:
 
 	void Initialize(ID3D11Device* device, ID3D11DeviceContext* context);
 	void Release();
-	void RequestCapture() { captureRequested.store(true, std::memory_order_release); }
-	bool IsEnabled() const { return captureActive.load(std::memory_order_acquire); }
+	void SetUserEnabled(bool a_enabled);
+	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
+	void RequestCapture();
+	bool IsEnabled() const { return IsUserEnabled() && captureActive.load(std::memory_order_acquire); }
 
 	void SetPerfEventCallbacks(PerfEventCallback beginCb, PerfEventCallback endCb)
 	{
@@ -191,6 +193,7 @@ private:
 	uint32_t framesSinceInit = 0;
 	bool initialized = false;
 	bool frameActive = false;
+	std::atomic_bool userEnabled{ false };
 	std::atomic_bool captureRequested{ false };
 	std::atomic_bool captureActive{ false };
 	double cpuTicksToMs = 0.0;

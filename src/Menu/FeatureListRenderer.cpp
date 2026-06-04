@@ -548,12 +548,35 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		}
 	}
 
+	ImGui::PushID(featureName.c_str());
+	bool bootEnabled = !isDisabled;
+	if (hasFailedMessage) {
+		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
+	}
+	if (Util::FeatureToggle("##BootToggleList", &bootEnabled)) {
+		bool newState = feat->ToggleAtBootSetting();
+		logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
+	}
+	if (hasFailedMessage) {
+		ImGui::PopStyleColor();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Toggle feature loading at boot.\n"
+			"Current state: %s\n"
+			"Restart required for changes to take effect.\n"
+			"Disabling removes performance impact.",
+			bootEnabled ? "Enabled" : "Disabled");
+	}
+	ImGui::SameLine();
+
 	// Create selectable item with semantic color
 	ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 	if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns)) {
 		selectedMenuRef = listId;
 	}
 	ImGui::PopStyleColor();
+	ImGui::PopID();
 
 	// Display version if loaded
 	if (isLoaded) {
@@ -623,24 +646,21 @@ bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string&
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
 {
-	auto& themeSettings = globals::menu->GetSettings().Theme;
 	const auto featureName = feat->GetShortName();
 
 	// Calculate action button widths
 	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
-	float buttonSpacing = ThemeManager::Constants::BUTTON_SPACING;
 
 	const char* overrideButtonText = "Apply Override";
-	float bootToggleWidth = ImGui::GetFrameHeight() * 1.6f;
 	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
 
 	// Check if override is available for this feature
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
-	float totalButtonWidth = bootToggleWidth;
+	float totalButtonWidth = 0.0f;
 	if (!isDisabled && isLoaded && hasOverrides) {
-		totalButtonWidth += overrideButtonWidth + buttonSpacing;
+		totalButtonWidth = overrideButtonWidth;
 	}
 
 	// Get available content width for positioning
@@ -666,37 +686,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Calculate Y position to middle-align buttons with title text only (not description)
 	float buttonY = titleStartPos.y + (titleOnlyHeight - buttonHeight) * 0.5f;
 
-	ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - totalButtonWidth, buttonY));
-
-	// Enable/Disable at boot toggle
-	bool bootEnabled = !isDisabled;
-
-	// Apply disabled styling if feature has failed to load
-	if (!feat->failedLoadedMessage.empty()) {
-		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
-	}
-
-	if (Util::FeatureToggle("##BootToggle", &bootEnabled)) {
-		bool newState = feat->ToggleAtBootSetting();
-		logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
-	}
-
-	if (!feat->failedLoadedMessage.empty()) {
-		ImGui::PopStyleColor();
-	}
-
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Toggle feature loading at boot.\n"
-			"Current state: %s\n"
-			"Restart required for changes to take effect.\n"
-			"Disabling removes performance impact.",
-			bootEnabled ? "Enabled" : "Disabled");
-	}
-
 	// Apply Override button (when feature has available overrides)
 	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SameLine();
+		ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - totalButtonWidth, buttonY));
 		if (sceneControlled)
 			ImGui::BeginDisabled();
 		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
@@ -734,7 +726,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (isDisabled) {
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled at boot.");
 		ImGui::Spacing();
-		ImGui::Text("Enable the feature above to access its configuration options.");
+		ImGui::Text("Enable the feature in the feature list to access its configuration options.");
 		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
 			ImGui::Spacing();
 			ImGui::TextColored(
@@ -836,9 +828,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
 
-			ImGui::Spacing();
-			ImGui::SeparatorText("Profiling");
-			ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
+			if (globals::profiler) {
+				ImGui::Spacing();
+				ImGui::SeparatorText("Profiling");
+				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
+			}
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();

@@ -945,7 +945,7 @@ void RenderDoc::ApplyAutomaticCommentsToNewCaptures()
 std::string RenderDoc::GetOverlayWarningMessage() const
 {
 	return "WARNING: RenderDoc capture is active, performance will be severely impacted.\n"
-		   "Upscaling and Framegeneration may be incompatible.\n"
+		   "Community Shaders Upscaling and Frame Generation are disabled while capture is active.\n"
 		   "Press F12, Print Screen or press the Capture button in the RenderDoc feature settings.\n"
 		   "Disable RenderDoc capture in the RenderDoc feature settings.";
 }

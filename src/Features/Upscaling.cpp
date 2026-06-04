@@ -6,6 +6,7 @@
 #include "Menu.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
+#include "Features/RenderDoc.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -136,8 +137,39 @@ namespace
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
+	std::atomic_bool g_renderDocDllDetected{ false };
+	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
+
+	bool IsRenderDocDllLoaded(bool a_probeProcess)
+	{
+		if (g_renderDocDllDetected.load(std::memory_order_acquire))
+			return true;
+		if (!a_probeProcess)
+			return false;
+		if (GetModuleHandleW(L"renderdoc.dll") == nullptr)
+			return false;
+
+		g_renderDocDllDetected.store(true, std::memory_order_release);
+		return true;
+	}
+
+	bool IsRenderDocUpscalingBlocked(bool a_probeProcessForDll = false)
+	{
+		const auto& renderDoc = globals::features::renderDoc;
+		return renderDoc.ShouldBlockUpscaling() || IsRenderDocDllLoaded(a_probeProcessForDll);
+	}
+
+	const char* GetRenderDocUpscalingBlockReason()
+	{
+		const auto& renderDoc = globals::features::renderDoc;
+		if (renderDoc.IsAvailable())
+			return "RenderDoc capture is active";
+		if (renderDoc.enableRenderDocCapture)
+			return "RenderDoc capture is enabled";
+		return "renderdoc.dll is loaded";
+	}
 	constexpr uint32_t kVRSaveLoadTransitionTailFrames = 30;
 
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
@@ -2414,6 +2446,26 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	globals::state->SetAdapterDescription(adapterDesc.Description);
 
 	auto& upscaling = globals::features::upscaling;
+	if (IsRenderDocUpscalingBlocked(true)) {
+		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
+			logger::warn(
+				"[Upscaling] Bypassing D3D11 upscaling device hook because {}.",
+				GetRenderDocUpscalingBlockReason());
+		}
+		return ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
+			DriverType,
+			Software,
+			Flags,
+			pFeatureLevels,
+			FeatureLevels,
+			SDKVersion,
+			pSwapChainDesc,
+			ppSwapChain,
+			ppDevice,
+			pFeatureLevel,
+			ppImmediateContext);
+	}
+
 	upscaling.LoadUpscalingSDKs();
 
 	if (upscaling.IsBackendInitialized())
@@ -2541,6 +2593,7 @@ void Upscaling::DrawSettings()
 	ApplyOpenCompositeUpscalingBlocker();
 	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
 	const bool openCompositeBlocksUpscaling = openCompositeBlocker.active;
+	const bool renderDocBlocksUpscaling = IsRenderDocUpscalingBlocked();
 
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
@@ -2602,6 +2655,8 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
 			else
 				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, or None.");
+			if (renderDocBlocksUpscaling)
+				ImGui::Text("Runtime is forced to None while %s.", GetRenderDocUpscalingBlockReason());
 		}
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
@@ -2633,6 +2688,13 @@ void Upscaling::DrawSettings()
 				openCompositeBlocker.settingName.c_str(),
 				openCompositeBlocker.configPath.c_str());
 		}
+		ImGui::PopStyleColor();
+	}
+	if (renderDocBlocksUpscaling) {
+		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
+		ImGui::TextWrapped(
+			"Community Shaders Upscaling runs as None while %s to avoid DLSS/FSR backend startup crashes.",
+			GetRenderDocUpscalingBlockReason());
 		ImGui::PopStyleColor();
 	}
 
@@ -3631,6 +3693,12 @@ void Upscaling::DataLoaded()
 		logger::warn("[Upscaling] Skipping data-loaded upscaling adjustments because Open Composite has {}=true.", blocker.settingName);
 		return;
 	}
+	if (IsRenderDocUpscalingBlocked(true)) {
+		logger::warn(
+			"[Upscaling] Skipping data-loaded upscaling adjustments because {}.",
+			GetRenderDocUpscalingBlockReason());
+		return;
+	}
 
 	// Fix screenshots fix from Engine Fixes
 	RE::GetINISetting("bUseTAA:Display")->data.b = false;
@@ -3706,6 +3774,12 @@ void Upscaling::Load()
 		logger::warn("[Upscaling] Skipping D3D11 device hook because Open Composite has {}=true.", blocker.settingName);
 		return;
 	}
+	if (IsRenderDocUpscalingBlocked(true)) {
+		logger::warn(
+			"[Upscaling] Skipping D3D11 device hook because {}.",
+			GetRenderDocUpscalingBlockReason());
+		return;
+	}
 
 	if (REL::Module::IsVR()) {
 		stl::write_vfunc<0x12, BSOpenVR_GetRenderTargetSize>(RE::VTABLE_BSOpenVR[0]);
@@ -3732,6 +3806,12 @@ void Upscaling::PostPostLoad()
 	const auto& blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
 		logger::warn("[Upscaling] Skipping upscaling render hooks because Open Composite has {}=true.", blocker.settingName);
+		return;
+	}
+	if (IsRenderDocUpscalingBlocked(true)) {
+		logger::warn(
+			"[Upscaling] Skipping upscaling render hooks because {}.",
+			GetRenderDocUpscalingBlockReason());
 		return;
 	}
 
@@ -3783,6 +3863,8 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
 		return UpscaleMethod::kNONE;
+	if (IsRenderDocUpscalingBlocked())
+		return UpscaleMethod::kNONE;
 
 	if (streamline.featureDLSS)
 		return (UpscaleMethod)settings.upscaleMethod;
@@ -3792,6 +3874,8 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 Upscaling::UpscaleMethod Upscaling::GetConfiguredUpscaleMethodForTransition() const
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
+		return UpscaleMethod::kNONE;
+	if (IsRenderDocUpscalingBlocked())
 		return UpscaleMethod::kNONE;
 
 	const auto primaryMethod = ClampUpscaleMethod(settings.upscaleMethod, UpscaleMethod::kDLSS);
@@ -3808,6 +3892,8 @@ Upscaling::UpscaleMethod Upscaling::GetLegacyDLSSPreferredUpscaleMethodForAPI() 
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
 		return UpscaleMethod::kNONE;
+	if (IsRenderDocUpscalingBlocked())
+		return UpscaleMethod::kNONE;
 
 	if (streamline.featureDLSS || !streamline.featureCheckComplete)
 		return UpscaleMethod::kDLSS;
@@ -3820,6 +3906,8 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 	const auto requestedMethod = GetUpscaleMethod();
 	if (GetOpenCompositeUpscalingBlocker().active)
 		return requestedMethod;
+	if (IsRenderDocUpscalingBlocked())
+		return requestedMethod;
 
 	const auto& boot = perfMode.GetBootSnapshot();
 	if (IsPerfModeActive() && IsVendorUpscalingMethod(boot.method))
@@ -3831,6 +3919,8 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 uint32_t Upscaling::GetRuntimeQualityMode() const
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
+		return ClampQualityModeUInt(settings.qualityMode);
+	if (IsRenderDocUpscalingBlocked())
 		return ClampQualityModeUInt(settings.qualityMode);
 
 	const auto& boot = perfMode.GetBootSnapshot();
@@ -3941,6 +4031,8 @@ bool Upscaling::IsRenderScaleModeRequested() const
 bool Upscaling::IsPerfModeActive() const
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
+		return false;
+	if (IsRenderDocUpscalingBlocked())
 		return false;
 
 	return perfMode.IsActive(settings, GetUpscaleMethod());
@@ -4200,6 +4292,8 @@ bool Upscaling::ConsumePerfModeBootLatchCreate()
 bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate)
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
+		return false;
+	if (IsRenderDocUpscalingBlocked())
 		return false;
 
 	if (a_allowCreate && DeferVRPerfModeBootLatchForPendingDLSS(*this))
@@ -9240,6 +9334,12 @@ void Upscaling::SetupResources()
 		logger::warn("[Upscaling] Skipping upscaling resource setup because Open Composite has {}=true.", blocker.settingName);
 		return;
 	}
+	if (IsRenderDocUpscalingBlocked(true)) {
+		logger::warn(
+			"[Upscaling] Skipping upscaling resource setup because {}.",
+			GetRenderDocUpscalingBlockReason());
+		return;
+	}
 
 	QueryPerformanceFrequency(&qpf);
 
@@ -10734,6 +10834,15 @@ void Upscaling::LoadUpscalingSDKs()
 		}
 		return;
 	}
+	if (IsRenderDocUpscalingBlocked(true)) {
+		if (!renderDocUpscalingBackendSkipLogged) {
+			logger::warn(
+				"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because {}.",
+				GetRenderDocUpscalingBlockReason());
+			renderDocUpscalingBackendSkipLogged = true;
+		}
+		return;
+	}
 
 	// Initialize upscaling SDK components during plugin startup
 	// This ensures all SDKs are available before any D3D device creation
@@ -10761,22 +10870,34 @@ float Upscaling::GetFrameTime() const
 // Backend interface methods
 bool Upscaling::IsBackendInitialized() const
 {
+	if (IsRenderDocUpscalingBlocked())
+		return false;
+
 	return streamline.initialized;
 }
 
 void Upscaling::CheckBackendFeatures(IDXGIAdapter* adapter)
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	streamline.CheckFeatures(adapter);
 	CompleteDelayedVRPerfModeBootLatchForDLSSAvailability(*this, "Streamline DLSS availability resolved after deferred VR boot latch");
 }
 
 void Upscaling::UpgradeBackendInterface(void** ppInterface)
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	streamline.slUpgradeInterface(ppInterface);
 }
 
 void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	submitStageDeviceLost.store(false, std::memory_order_release);
 	streamline.ResetDLSSIdleFences();
 	streamline.slSetD3DDevice(device);
@@ -10784,12 +10905,18 @@ void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 
 void Upscaling::PostBackendDevice()
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	streamline.PostDevice();
 }
 
 // Module availability methods
 bool Upscaling::HasFrameGenModule() const
 {
+	if (IsRenderDocUpscalingBlocked())
+		return false;
+
 	return fidelityFX.featureFSR3FG;
 }
 

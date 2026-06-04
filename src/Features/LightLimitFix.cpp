@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 // Per-cluster visible-light cap. Must match MAX_CLUSTER_LIGHTS in
@@ -54,6 +55,49 @@ namespace
 	constexpr float kMaxParticleDistanceMax = 20000.0f;
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
+
+	bool IsPlausibleRenderPointer(const void* a_ptr)
+	{
+		const auto value = reinterpret_cast<std::uintptr_t>(a_ptr);
+		return value >= 0x10000 && value < 0x800000000000ull && (value & 0x7) == 0;
+	}
+
+	bool IsDirectionalSceneLightSafe(RE::BSRenderPass* a_pass, uint32_t& a_outNumLights, RE::BSLight*& a_outLight, RE::NiLight*& a_outNiLight)
+	{
+		a_outNumLights = 0;
+		a_outLight = nullptr;
+		a_outNiLight = nullptr;
+
+		if (!a_pass) {
+			return true;
+		}
+
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			a_outNumLights = a_pass->numLights;
+			if (a_outNumLights == 0 || !a_pass->sceneLights) {
+				return false;
+			}
+
+			a_outLight = a_pass->sceneLights[0];
+			if (!IsPlausibleRenderPointer(a_outLight)) {
+				return false;
+			}
+
+			a_outNiLight = a_outLight->light.get();
+			return IsPlausibleRenderPointer(a_outNiLight);
+		}
+#if defined(_MSC_VER)
+		__except (1)
+		{
+			a_outLight = nullptr;
+			a_outNiLight = nullptr;
+			return false;
+		}
+#endif
+	}
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
@@ -1877,9 +1921,29 @@ void LightLimitFix::UpdateStructure()
 
 void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
+	uint32_t numLights = 0;
+	RE::BSLight* directionalLight = nullptr;
+	RE::NiLight* directionalNiLight = nullptr;
+	// BSLightingShader dereferences sceneLights[0]->light without validation.
+	// Invalid UI 3D scene directional slots are skipped to avoid a CTD.
+	const bool directionalSlotSafe = IsDirectionalSceneLightSafe(Pass, numLights, directionalLight, directionalNiLight);
+	if (!directionalSlotSafe) {
+		static int logged = 0;
+		if (logged++ < 10) {
+			logger::warn(
+				"[LLF] BSLightingShader_SetupGeometry: directional sceneLights[0] unsafe "
+				"(numLights={} BSLight=0x{:x} NiLight=0x{:x}); skipping engine SetupGeometry",
+				numLights,
+				reinterpret_cast<std::uintptr_t>(directionalLight),
+				reinterpret_cast<std::uintptr_t>(directionalNiLight));
+		}
+	}
+
 	auto& singleton = globals::features::lightLimitFix;
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
-	func(This, Pass, RenderFlags);
+	if (directionalSlotSafe) {
+		func(This, Pass, RenderFlags);
+	}
 	singleton.BSLightingShader_SetupGeometry_After(Pass);
 }
 

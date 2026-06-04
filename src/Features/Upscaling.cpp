@@ -11238,10 +11238,7 @@ void Upscaling::UpscaleDepth()
 		(!depth.views[0] || !refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV)) {
 		return;
 	}
-	if (isVR && !depthCopy.stencilSRV) {
-		return;
-	}
-	if (depthUpscaleActive && isVR && !depthCopy.views[0]) {
+	if (depthUpscaleActive && isVR && (!depthCopy.stencilSRV || !depthCopy.views[0])) {
 		return;
 	}
 
@@ -11256,6 +11253,10 @@ void Upscaling::UpscaleDepth()
 	auto perfEvent = ScopeExit([&]() {
 		state->EndPerfEvent();
 	});
+
+	// UpscaleDepth can run without the main upscale pass on VR full-resolution
+	// mask paths. Unbind current outputs before copying depth/depthCopy.
+	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	// Set up Input Assembler for fullscreen triangle (no vertex/index buffers needed)
 	context->IASetInputLayout(nullptr);

@@ -952,13 +952,17 @@ namespace Hooks
 				return;
 			}
 
-			// This is from 1.4.0 but absent in 1.4.6
-			if (globals::features::interiorSun.loaded) {
-				globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
+			if (globals::features::terrainBlending.loaded) {
+				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
+					return;
+				}
+				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
+					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				}
 			}
 
-			// Original call
-			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		}
 
 		// This is from 1.4.0 but absent in 1.4.6
@@ -982,6 +986,15 @@ namespace Hooks
 
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
 	};
+
+	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	{
+		if (globals::features::interiorSun.loaded) {
+			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
+		}
+
+		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	}
 
 #ifdef TRACY_ENABLE
 	struct Main_Update
@@ -1193,7 +1206,7 @@ namespace Hooks
 		logger::info("Hooking BSLightingShader");
 		stl::write_vfunc<0x4, BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 
-		    logger::info("Hooking BSBatchRenderer::RenderPassImmediately");
+		logger::info("Hooking BSBatchRenderer::RenderPassImmediately");
 		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately1>(
 			REL::RelocationID(100877, 107673).address() + REL::Relocate(0x1E5, 0x1EE));
 		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately2>(

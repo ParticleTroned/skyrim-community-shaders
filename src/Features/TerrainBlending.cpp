@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
+#include "Hooks.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -1072,57 +1073,56 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 
 }
 
-void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 {
-	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
 
-	if (shaderCache->IsEnabled() && singleton.settings.Enabled) {
-		if (singleton.renderDepth) {
+	if (shaderCache->IsEnabled() && settings.Enabled) {
+		if (renderDepth) {
 			// Entering or exiting terrain depth section
 			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
 
 			if (inTerrain && a_pass->geometry) {
-				const float cullDistance = singleton.settings.TerrainCullDistance;
+				const float cullDistance = settings.TerrainCullDistance;
 				if (cullDistance > 0.0f) {
-					if ((a_pass->geometry->worldBound.center.GetDistance(singleton.averageEyePosition) - a_pass->geometry->worldBound.radius) > cullDistance) {
+					if ((a_pass->geometry->worldBound.center.GetDistance(averageEyePosition) - a_pass->geometry->worldBound.radius) > cullDistance) {
 						inTerrain = false;
 					}
 				}
 			}
 
-			if (singleton.renderTerrainDepth != inTerrain) {
+			if (renderTerrainDepth != inTerrain) {
 				if (!inTerrain)
-					singleton.ResetTerrainDepth();
-				singleton.renderTerrainDepth = inTerrain;
+					ResetTerrainDepth();
+				renderTerrainDepth = inTerrain;
 			}
 
 			if (inTerrain) {
 				tbHookDiagnostics.terrainDepthDoubleDrawCalls++;
-				func(a_pass, a_technique, a_alphaTest, a_renderFlags);  // Run terrain twice
+				return RenderPassImmediatelyAction::DrawTwice;
 			}
 		} else if (globals::state->inWorld) {
 			if (auto shaderProperty = a_pass->shaderProperty) {
 				if (a_pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
 					if (shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
 						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-						singleton.terrainRenderPasses.push_back(call);
+						terrainRenderPasses.push_back(call);
 						tbHookDiagnostics.queueTerrainCalls++;
-						return;
+						return RenderPassImmediatelyAction::Skip;
 					}
 
 					// Detect meshes which should not get terrain blending using an unused flag (kNoTransparencyMultiSample)
 					if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
 						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-						singleton.renderPasses.push_back(call);
+						renderPasses.push_back(call);
 						tbHookDiagnostics.queueNoBlendCalls++;
-						return;
+						return RenderPassImmediatelyAction::Skip;
 					}
 				}
 			}
 		}
 	}
-	func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	return RenderPassImmediatelyAction::Draw;
 }
 
 void TerrainBlending::Hooks::BSUtilityShader_SetupGeometry::thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
@@ -1193,7 +1193,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
 		for (auto& renderPass : terrainRenderPasses)
-			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+			::Hooks::DrawRenderPassImmediately(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
 
 		// Reset alpha blending
 		alphaBlendMode = 0;
@@ -1204,7 +1204,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 
 		for (auto& renderPass : renderPasses)
-			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+			::Hooks::DrawRenderPassImmediately(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
 
 		terrainRenderPasses.clear();
 		renderPasses.clear();

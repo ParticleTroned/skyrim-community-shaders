@@ -1,23 +1,9 @@
 #include "InverseSquareLighting.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "LightLimitFix.h"
+#include "WeatherEditor/EditorWindow.h"
 #include <cmath>
 #include <numbers>
-
-void InverseSquareLighting::DrawSettings()
-{
-	editor.DrawSettings();
-}
-
-void InverseSquareLighting::RestoreDefaultSettings()
-{
-	editor.RestoreDefaultSettings();
-}
-
-void InverseSquareLighting::EarlyPrepass()
-{
-	editor.GatherLights();
-}
 
 void InverseSquareLighting::PostPostLoad()
 {
@@ -61,13 +47,14 @@ void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BS
 		runtimeData->flags.set(LightLimitFix::LightFlags::Initialised);
 	}
 
-	editor.ApplyOverrides(niLight, runtimeData);
+	const auto& editorRef = EditorWindow::GetSingleton()->lightEditor;
+	editorRef.ApplyOverrides(niLight, runtimeData);
 
 	light.lightFlags = runtimeData->flags;
 	light.color = { runtimeData->diffuse.red, runtimeData->diffuse.green, runtimeData->diffuse.blue };
 
 	const bool isInvSq = light.lightFlags.any(LightLimitFix::LightFlags::InverseSquare);
-	if (bsLight->pointLight && editor.enabled && ((isInvSq && editor.disableInvSqLights) || (!isInvSq && editor.disableRegularLights)))
+	if (bsLight->pointLight && ((isInvSq && editorRef.disableInvSqLights) || (!isInvSq && editorRef.disableRegularLights)))
 		light.lightFlags.set(LightLimitFix::LightFlags::Disabled);
 
 	if (bsLight->pointLight && isInvSq) {

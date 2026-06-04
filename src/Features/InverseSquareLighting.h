@@ -1,5 +1,4 @@
 #pragma once
-#include "Features/InverseSquareLighting/LightEditor.h"
 #include "LightLimitFix.h"
 
 struct InverseSquareLighting : Feature
@@ -24,17 +23,11 @@ public:
 				"Lights smoothly fade out at a configurable cutoff, solving the infinite distance problem",
 				"Does not modify any existing lighting",
 				"Requires the use of mods with lights enabled for inverse square falloff.",
-				"Full integration with Light Placer",
-				"Built in Light Editor for mod authors to preview lighting changes in real-time" }
+				"Full integration with Light Placer" }
 		};
 	}
 
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
-
-	virtual void DrawSettings() override;
-	virtual void RestoreDefaultSettings() override;
-
-	virtual void EarlyPrepass() override;
 
 	virtual bool SupportsVR() override { return true; }
 
@@ -60,8 +53,6 @@ public:
 	virtual bool IsCore() const override { return true; };
 
 private:
-	LightEditor editor = LightEditor();
-
 	static constexpr float DefaultCutoff = 0.05f;
 	static constexpr float DefaultShadowCasterCutoff = 0.022f;
 

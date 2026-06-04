@@ -868,17 +868,17 @@ namespace Hooks
 		{
 			bool vanillaResult = func(land);
 
+			// TerrainHelper must see the vanilla material hash before TruePBR replaces land materials.
+			auto& terrainHelper = globals::features::terrainHelper;
+			if (vanillaResult && terrainHelper.loaded) {
+				terrainHelper.TESObjectLAND_SetupMaterial(land);
+			}
+
 			// setup material for PBR
 			auto& truePBR = globals::features::truePBR;
 			if (truePBR.loaded && truePBR.TESObjectLAND_SetupMaterial(land)) {
 				// if PBR, we are done
 				return true;
-			}
-
-			// setup material for terrain helper
-			auto& terrainHelper = globals::features::terrainHelper;
-			if (vanillaResult && terrainHelper.loaded) {
-				terrainHelper.TESObjectLAND_SetupMaterial(land);
 			}
 
 			return vanillaResult;

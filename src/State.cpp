@@ -1255,8 +1255,15 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const auto renderSize = Util::ConvertToDynamic(screenSize, true);
 
 		float computedMipBias = 0.0f;
-		if (upscalingLoaded && temporal && upscaleMethod != Upscaling::UpscaleMethod::kTAA && screenSize.x > 0.0f && renderSize.x > 0.0f) {
-			computedMipBias = std::log2f(renderSize.x / screenSize.x) - 1.0f;
+		if (upscalingLoaded &&
+		    temporal &&
+		    upscaleMethod != Upscaling::UpscaleMethod::kNONE &&
+		    upscaleMethod != Upscaling::UpscaleMethod::kTAA &&
+		    screenSize.x > 0.0f &&
+		    renderSize.x > 0.0f) {
+			computedMipBias = std::log2f(renderSize.x / screenSize.x);
+			if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
+				computedMipBias -= 1.0f;
 		}
 
 		Util::OCUExternalUpscalerState externalMipBiasState{};

@@ -483,6 +483,10 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     # Copy feature folders (only files, preserve existing files in AIO).
     # Shader files are excluded because copy_shaders.stamp owns Shaders/.
+    #
+    # CORE markers are excluded from the per-feature copy: each marker would
+    # write to the same ${AIO_DIR}/CORE path, and the cleanup below removes it
+    # anyway. Parallel MSBuild copies can otherwise race on that shared file.
     foreach(_fpath IN LISTS FEATURE_PATHS)
         if(EXISTS "${_fpath}")
             file(
@@ -491,11 +495,13 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
                 "${_fpath}/*"
             )
             list(FILTER _feature_files EXCLUDE REGEX "/Shaders/")
+            list(FILTER _feature_files EXCLUDE REGEX "/CORE$")
             append_copy_if_different(_prepare_aio_cmds _feature_files "${_fpath}" "${AIO_DIR}")
         endif()
     endforeach()
 
-    # Remove CORE from AIO if it exists (keep rest intact)
+    # Remove stale CORE markers from older builds that predate the exclusion
+    # above. Cheap, idempotent.
     list(
         APPEND _prepare_aio_cmds
         COMMAND

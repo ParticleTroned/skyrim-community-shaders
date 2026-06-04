@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents, including Codex, when working with code in this repository.
 
 ## Build Commands
 
@@ -440,16 +440,59 @@ Feature versions are automatically extracted from `.ini` files and compiled into
 
 ### Commit Message Standards
 
-Follow conventional commit format for consistency:
+Follow conventional commit format for consistency. When Codex creates commits
+on this branch, use this style and include a body that explains both rationale
+and implementation for non-trivial changes.
 
 -   **Format**: `type(scope): description`
--   **Title Limit**: 50 characters maximum
+-   **Title Limit**: 50 characters maximum when practical
 -   **Body Wrap**: 72 characters per line
--   **Types**: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`
+-   **Commit Scope**: Commit only the files needed for the requested change.
+    Leave unrelated or untracked files unstaged unless explicitly requested.
+-   **Attribution**: If a change is manually ported from another author's PR
+    instead of cherry-picked, acknowledge the original author in the commit
+    body using their GitHub noreply email when available.
 -   **Examples**:
     -   `feat(menu): extract DrawMenuVisitor helper methods`
     -   `fix(imgui): resolve orphaned TableNextColumn calls`
-    -   `refactor(constants): centralize UI constants in ThemeManager`
+    -   `refactor(constants): centralize UI constants`
+    -   `ci(workflows): gate shader tests on changed files`
+    -   `build(aio): avoid CORE marker copy races`
+    -   `test(shaders): cover foveated mask helpers`
+
+**Squash-merge note.** PRs are squash-merged, so the **PR title** becomes the
+commit message that semantic-release reads. Get the PR title's type right before
+merge; branch-local commit titles are useful history, but the squash title is
+what drives release automation.
+
+**Type -> release impact** (accepted by `amannn/action-semantic-pull-request@v5`
+and `@semantic-release/commit-analyzer` defaults):
+
+| Type       | Use for                                                   | Release impact          |
+| ---------- | --------------------------------------------------------- | ----------------------- |
+| `feat`     | New user-facing feature or capability                     | **minor** (1.X.0)       |
+| `fix`      | Bug fix to user-facing behavior                           | **patch** (1.5.X)       |
+| `perf`     | Performance improvement to user-facing behavior           | **patch** (1.5.X)       |
+| `revert`   | Revert of a prior commit                                  | follows reverted commit |
+| `build`    | Build system, packaging, dependencies (CMake, vcpkg, AIO) | none                    |
+| `chore`    | Maintenance, misc tooling, repo hygiene                   | none                    |
+| `ci`       | CI workflows, GitHub Actions, lint configs                | none                    |
+| `docs`     | Documentation, comments, READMEs, agent guidance          | none                    |
+| `refactor` | Code restructuring with no behavior change                | none                    |
+| `style`    | Formatting, whitespace, missing semicolons                | none                    |
+| `test`     | Tests, test fixtures, test infrastructure                 | none                    |
+
+Append `!` to the type, or add a `BREAKING CHANGE:` footer, for **major**
+(X.0.0).
+
+**Pick the type with version impact in mind.** Common traps:
+
+-   A pure build/CI/test change mislabeled `fix:` will burn a patch release on
+    a non-user-visible change. Use `build:`, `ci:`, or `test:` instead.
+-   A refactor mislabeled `feat:` will force a minor bump.
+-   A performance win in internal build or developer tooling is usually
+    `build:`, `ci:`, or `refactor:`, not `perf:`.
+-   `chore:` is a catch-all; prefer the specific type when one fits.
 
 ### Code Organization and Refactoring Patterns
 

@@ -11,6 +11,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
@@ -27,6 +28,7 @@
 #include <dxgi.h>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -39,6 +41,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	qualityMode,
 	dlssPreset,
 	renderScaleMode,
+	vrFpsStabilizerSync,
 	perfMode,
 	aaVrs,
 	aaVrsVisualization,
@@ -529,6 +532,299 @@ namespace
 			static_cast<int>(maxMethod)));
 	}
 
+	std::string_view TrimAsciiWhitespace(std::string_view value);
+	bool TryParseAsciiBoolSetting(std::string value, bool& outValue);
+	void AddUniquePath(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path);
+
+	bool StartsWithAsciiInsensitive(std::string_view value, std::string_view prefix)
+	{
+		if (value.size() < prefix.size())
+			return false;
+
+		for (size_t i = 0; i < prefix.size(); ++i) {
+			const auto lhs = static_cast<unsigned char>(value[i]);
+			const auto rhs = static_cast<unsigned char>(prefix[i]);
+			if (std::tolower(lhs) != std::tolower(rhs))
+				return false;
+		}
+		return true;
+	}
+
+	bool EqualsAsciiInsensitive(std::string_view lhs, std::string_view rhs)
+	{
+		lhs = TrimAsciiWhitespace(lhs);
+		rhs = TrimAsciiWhitespace(rhs);
+		if (lhs.size() != rhs.size())
+			return false;
+
+		for (size_t i = 0; i < lhs.size(); ++i) {
+			const auto lhsChar = static_cast<unsigned char>(lhs[i]);
+			const auto rhsChar = static_cast<unsigned char>(rhs[i]);
+			if (std::tolower(lhsChar) != std::tolower(rhsChar))
+				return false;
+		}
+		return true;
+	}
+
+	bool TryParseUnsigned(std::string_view value, uint32_t& outValue)
+	{
+		value = TrimAsciiWhitespace(value);
+		if (value.empty())
+			return false;
+		if (value.front() == '-')
+			return false;
+
+		try {
+			const std::string text(value);
+			size_t parsedChars = 0;
+			const auto parsedValue = std::stoul(text, &parsedChars, 10);
+			if (parsedChars != text.size())
+				return false;
+
+			outValue = static_cast<uint32_t>(std::min<unsigned long>(parsedValue, std::numeric_limits<uint32_t>::max()));
+			return true;
+		} catch (...) {
+			return false;
+		}
+	}
+
+	bool TryParseToggle(std::string_view value, bool& outValue)
+	{
+		uint32_t parsedValue = 0;
+		if (TryParseUnsigned(value, parsedValue)) {
+			outValue = ClampToggleUInt(parsedValue) != 0;
+			return true;
+		}
+
+		return TryParseAsciiBoolSetting(std::string(value), outValue);
+	}
+
+	struct VRFpsStabilizerUpscalingProfile
+	{
+		bool hasUpscaleMethod = false;
+		Upscaling::UpscaleMethod upscaleMethod = Upscaling::UpscaleMethod::kNONE;
+		bool hasLegacyMethodSelection = false;
+		bool hasQualityMode = false;
+		uint32_t qualityMode = 0;
+		bool hasDLSSPreset = false;
+		uint32_t dlssPreset = 1;
+		bool hasRenderScaleMode = false;
+		bool renderScaleMode = false;
+
+		[[nodiscard]] bool HasAnySetting() const
+		{
+			return hasUpscaleMethod || hasLegacyMethodSelection || hasQualityMode || hasDLSSPreset || hasRenderScaleMode;
+		}
+	};
+
+	struct VRFpsStabilizerUpscalingProfiles
+	{
+		std::filesystem::path path;
+		VRFpsStabilizerUpscalingProfile interior;
+		VRFpsStabilizerUpscalingProfile exterior;
+	};
+
+	struct VRFpsStabilizerTransitionTarget
+	{
+		Upscaling::UpscaleMethod method = Upscaling::UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = 1;
+		bool renderScaleMode = false;
+	};
+
+	std::filesystem::path GetVRFpsStabilizerIniDefaultPath()
+	{
+		return Util::PathHelpers::GetDataPath() / "SKSE" / "Plugins" / "VRFpsStabilizer.ini";
+	}
+
+	std::filesystem::path FindVRFpsStabilizerIniPath()
+	{
+		std::vector<std::filesystem::path> candidatePaths;
+		AddUniquePath(candidatePaths, GetVRFpsStabilizerIniDefaultPath());
+		try {
+			const auto currentDirectory = std::filesystem::current_path();
+			AddUniquePath(candidatePaths, currentDirectory / "Data" / "SKSE" / "Plugins" / "VRFpsStabilizer.ini");
+			AddUniquePath(candidatePaths, currentDirectory / "SKSE" / "Plugins" / "VRFpsStabilizer.ini");
+		} catch (const std::exception& e) {
+			logger::warn("[Upscaling] VR FPS Stabilizer Sync could not inspect current directory: {}", e.what());
+		}
+
+		for (const auto& path : candidatePaths) {
+			std::error_code ec;
+			if (std::filesystem::exists(path, ec) && !ec)
+				return path;
+		}
+
+		return GetVRFpsStabilizerIniDefaultPath();
+	}
+
+	uint32_t VRFpsStabilizerUpscalePresetToQualityMode(uint32_t a_preset)
+	{
+		switch (a_preset) {
+		case 5:
+			return 1u;  // API kHoshipa
+		case 6:
+			return 2u;  // API kUltraQuality
+		case 1:
+			return 3u;  // API kQuality
+		case 2:
+			return 4u;  // API kBalanced
+		case 3:
+			return 5u;  // API kPerformance
+		case 4:
+			return 6u;  // API kUltraPerformance
+		default:
+			return 0u;  // API kNativeAA/kDLAA or invalid
+		}
+	}
+
+	void ApplyVRFpsStabilizerUpscalingSetting(VRFpsStabilizerUpscalingProfile& profile, std::string_view settingName, std::string_view value)
+	{
+		const bool isUpscaleMethod = EqualsAsciiInsensitive(settingName, "UpscaleMethod");
+		const bool isLegacyDLSSMode = EqualsAsciiInsensitive(settingName, "DLSSMode");
+		const bool isUpscalePreset = EqualsAsciiInsensitive(settingName, "UpscalePreset") || isLegacyDLSSMode;
+		const bool isQualityMode = EqualsAsciiInsensitive(settingName, "QualityMode");
+		const bool isLegacyDLSSProfile = EqualsAsciiInsensitive(settingName, "DLSSProfile");
+		const bool isDLSSPreset = isLegacyDLSSProfile || EqualsAsciiInsensitive(settingName, "DLSSPreset");
+		const bool isLegacyRenderScaleMode =
+			EqualsAsciiInsensitive(settingName, "RenderAtUpscaleRes") ||
+			EqualsAsciiInsensitive(settingName, "RenderAtUpscaleResEnabled");
+		const bool isRenderScaleMode = EqualsAsciiInsensitive(settingName, "RenderScaleMode") || isLegacyRenderScaleMode;
+
+		if (isRenderScaleMode) {
+			bool renderScaleMode = false;
+			if (!TryParseToggle(value, renderScaleMode))
+				return;
+
+			profile.renderScaleMode = renderScaleMode;
+			profile.hasRenderScaleMode = true;
+			if (isLegacyRenderScaleMode)
+				profile.hasLegacyMethodSelection = true;
+			return;
+		}
+
+		uint32_t parsedValue = 0;
+		if (!TryParseUnsigned(value, parsedValue))
+			return;
+
+		if (isUpscaleMethod) {
+			profile.upscaleMethod = ClampUpscaleMethod(parsedValue, Upscaling::UpscaleMethod::kDLSS);
+			profile.hasUpscaleMethod = true;
+		} else if (isUpscalePreset) {
+			profile.qualityMode = VRFpsStabilizerUpscalePresetToQualityMode(parsedValue);
+			profile.hasQualityMode = true;
+			if (isLegacyDLSSMode)
+				profile.hasLegacyMethodSelection = true;
+		} else if (isQualityMode) {
+			profile.qualityMode = ClampQualityModeUInt(parsedValue);
+			profile.hasQualityMode = true;
+		} else if (isDLSSPreset) {
+			profile.dlssPreset = std::min<uint32_t>(parsedValue, Upscaling::kDLSSPresetMaxIndex);
+			profile.hasDLSSPreset = true;
+			if (isLegacyDLSSProfile)
+				profile.hasLegacyMethodSelection = true;
+		}
+	}
+
+	bool TryLoadVRFpsStabilizerUpscalingProfiles(VRFpsStabilizerUpscalingProfiles& outProfiles)
+	{
+		outProfiles = {};
+		outProfiles.path = FindVRFpsStabilizerIniPath();
+
+		std::error_code ec;
+		if (!std::filesystem::exists(outProfiles.path, ec) || ec)
+			return false;
+
+		std::ifstream iniFile(outProfiles.path);
+		if (!iniFile.is_open()) {
+			logger::warn("[Upscaling] VR FPS Stabilizer Sync could not open {}.", outProfiles.path.string());
+			return false;
+		}
+
+		bool inConditionalSection = false;
+		std::string line;
+		while (std::getline(iniFile, line)) {
+			const auto hashCommentOffset = line.find('#');
+			const auto semicolonCommentOffset = line.find(';');
+			const auto commentOffset = std::min(
+				hashCommentOffset != std::string::npos ? hashCommentOffset : line.size(),
+				semicolonCommentOffset != std::string::npos ? semicolonCommentOffset : line.size());
+			if (commentOffset != line.size())
+				line.erase(commentOffset);
+
+			std::string_view lineView = TrimAsciiWhitespace(line);
+			if (lineView.empty())
+				continue;
+
+			if (lineView.front() == '[' && lineView.back() == ']') {
+				lineView.remove_prefix(1);
+				lineView.remove_suffix(1);
+				inConditionalSection = EqualsAsciiInsensitive(lineView, "Conditional");
+				continue;
+			}
+
+			if (!inConditionalSection)
+				continue;
+
+			const auto pipeOffset = lineView.find('|');
+			if (pipeOffset == std::string_view::npos)
+				continue;
+
+			const auto condition = TrimAsciiWhitespace(lineView.substr(0, pipeOffset));
+			if (condition.find(',') != std::string_view::npos)
+				continue;
+
+			const bool interiorProfile = EqualsAsciiInsensitive(condition, "Interior");
+			const bool exteriorProfile = EqualsAsciiInsensitive(condition, "Exterior");
+			if (!interiorProfile && !exteriorProfile)
+				continue;
+
+			auto command = TrimAsciiWhitespace(lineView.substr(pipeOffset + 1));
+			if (!StartsWithAsciiInsensitive(command, "CS>"))
+				continue;
+
+			command.remove_prefix(3);
+			command = TrimAsciiWhitespace(command);
+			const auto equalsOffset = command.find('=');
+			if (equalsOffset == std::string_view::npos)
+				continue;
+
+			const auto settingName = TrimAsciiWhitespace(command.substr(0, equalsOffset));
+			const auto settingValue = TrimAsciiWhitespace(command.substr(equalsOffset + 1));
+			auto& profile = interiorProfile ? outProfiles.interior : outProfiles.exterior;
+			ApplyVRFpsStabilizerUpscalingSetting(profile, settingName, settingValue);
+		}
+
+		return outProfiles.interior.HasAnySetting() || outProfiles.exterior.HasAnySetting();
+	}
+
+	VRFpsStabilizerTransitionTarget ResolveVRFpsStabilizerTransitionTarget(
+		const Upscaling& a_upscaling,
+		const VRFpsStabilizerUpscalingProfile& a_profile)
+	{
+		VRFpsStabilizerTransitionTarget target;
+		const auto currentMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
+		target.method = a_profile.hasUpscaleMethod ?
+			a_profile.upscaleMethod :
+			(a_profile.hasLegacyMethodSelection ? a_upscaling.GetLegacyDLSSPreferredUpscaleMethodForAPI() : currentMethod);
+		target.qualityMode = a_profile.hasQualityMode ? a_profile.qualityMode : a_upscaling.GetEffectiveUpscalingQualityMode();
+		target.dlssPreset = a_profile.hasDLSSPreset ? a_profile.dlssPreset : a_upscaling.GetEffectiveDLSSPreset();
+
+		const bool requestedRenderScaleMode = a_profile.hasRenderScaleMode ? a_profile.renderScaleMode : a_upscaling.IsRenderScaleModeRequested();
+		if (requestedRenderScaleMode &&
+		    IsRenderScaleMethodEligible(target.method) &&
+		    !a_profile.hasQualityMode &&
+		    !IsRenderScaleQualityMode(target.qualityMode)) {
+			target.qualityMode = kDefaultRenderScaleQualityMode;
+		}
+
+		target.renderScaleMode =
+			requestedRenderScaleMode &&
+			IsRenderScaleMethodEligible(target.method) &&
+			IsRenderScaleQualityMode(target.qualityMode);
+		return target;
+	}
+
 	uint MigrateLegacyQualityModeUInt(uint value)
 	{
 		switch (value) {
@@ -637,14 +933,14 @@ namespace
 		return result;
 	}
 
-	bool TryParseOpenCompositeBool(std::string value, bool& outValue)
+	bool TryParseAsciiBoolSetting(std::string value, bool& outValue)
 	{
 		value = ToLowerAscii(TrimAsciiWhitespace(value));
-		if (value == "true" || value == "on" || value == "enabled" || value == "1") {
+		if (value == "true" || value == "yes" || value == "on" || value == "enabled" || value == "1") {
 			outValue = true;
 			return true;
 		}
-		if (value == "false" || value == "off" || value == "disabled" || value == "0") {
+		if (value == "false" || value == "no" || value == "off" || value == "disabled" || value == "0") {
 			outValue = false;
 			return true;
 		}
@@ -747,7 +1043,7 @@ namespace
 	{
 		auto tryReadSection = [&](const char* section) {
 			const char* rawValue = ini.GetValue(section, key, nullptr);
-			return rawValue && TryParseOpenCompositeBool(rawValue, outValue);
+			return rawValue && TryParseAsciiBoolSetting(rawValue, outValue);
 		};
 
 		if (tryReadSection(""))
@@ -1002,6 +1298,7 @@ namespace
 		} else if (REL::Module::IsVR()) {
 			settings.perfMode = 0;
 		}
+		settings.vrFpsStabilizerSync = settings.vrFpsStabilizerSync && REL::Module::IsVR();
 		settings.aaVrs = settings.aaVrs && REL::Module::IsVR();
 		settings.aaVrsVisualization = settings.aaVrsVisualization && settings.aaVrs && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
@@ -1022,6 +1319,7 @@ namespace
 		settings.aaVrs = false;
 		settings.aaVrsVisualization = false;
 		settings.renderScaleMode = 0;
+		settings.vrFpsStabilizerSync = false;
 		settings.perfMode = 0;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
@@ -1042,6 +1340,7 @@ namespace
 		o_json.erase("aaVrs");
 		o_json.erase("aaVrsVisualization");
 		o_json.erase("renderScaleMode");
+		o_json.erase("vrFpsStabilizerSync");
 		o_json.erase("perfMode");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
@@ -2697,6 +2996,15 @@ void Upscaling::DrawSettings()
 			GetRenderDocUpscalingBlockReason());
 		ImGui::PopStyleColor();
 	}
+	if (globals::game::isVR) {
+		ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("On save-load, reads VRFpsStabilizer.ini [Conditional] Interior/Exterior CS upscaling rows.");
+			ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and Render Scale Mode to the cell you loaded into.");
+			ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
+			ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
+		}
+	}
 
 	// Check the current upscale method
 	auto upscaleMethod = GetUpscaleMethod();
@@ -3721,6 +4029,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		if (a_event->opening) {
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
+			globals::features::upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		} else if (globals::state) {
 			const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
 			g_vrLoadingTransitionCloseFrame.store(currentFrame, std::memory_order_release);
@@ -3734,6 +4043,8 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			true);
 		if (!a_event->opening) {
 			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
+			if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
+				globals::features::upscaling.QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
 		}
 	}
 	return RE::BSEventNotifyControl::kContinue;
@@ -4112,6 +4423,9 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
 {
 	const bool isVR = globals::game::isVR;
+	if (isVR)
+		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+
 	const bool allowPendingDLSSSelection =
 		a_targetMethod == UpscaleMethod::kDLSS &&
 		!streamline.featureCheckComplete;
@@ -4267,6 +4581,90 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason)
 {
 	ApplyCSMenuUpscalingTransition(GetConfiguredUpscaleMethodForTransition(), a_renderScaleModeEnabled, a_qualityMode, a_dlssPreset, a_reason);
+}
+
+void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
+{
+	if (!globals::game::isVR || !settings.vrFpsStabilizerSync) {
+		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+		return;
+	}
+
+	const uint32_t frame = std::max(a_frame, 1u);
+	pendingVRFpsStabilizerSyncFrame.store(frame, std::memory_order_release);
+	logger::info("[Upscaling] VR FPS Stabilizer Sync queued after save-load menu close at frame {}.", frame);
+}
+
+void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
+{
+	const uint32_t queuedFrame = pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
+	if (queuedFrame == 0)
+		return;
+
+	if (!globals::game::isVR || !settings.vrFpsStabilizerSync) {
+		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+		return;
+	}
+
+	const auto* state = globals::state;
+	if (!state || IsLoadingMenuContextActive() || !state->inWorld)
+		return;
+
+	VRFpsStabilizerUpscalingProfiles profiles;
+	if (!TryLoadVRFpsStabilizerUpscalingProfiles(profiles)) {
+		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+		logger::warn("[Upscaling] VR FPS Stabilizer Sync enabled, but no unconditional Interior/Exterior upscaling profile was found in {}.", profiles.path.string());
+		return;
+	}
+
+	const bool loadedInterior = Util::IsInterior();
+	const auto& profile = loadedInterior ? profiles.interior : profiles.exterior;
+	const char* profileName = loadedInterior ? "Interior" : "Exterior";
+	if (!profile.HasAnySetting()) {
+		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+		logger::warn("[Upscaling] VR FPS Stabilizer Sync found no {} upscaling profile in {}.", profileName, profiles.path.string());
+		return;
+	}
+
+	const auto currentMethod = GetConfiguredUpscaleMethodForTransition();
+	const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, profile);
+
+	const bool methodMatches = currentMethod == target.method;
+	const bool qualityMatches = GetEffectiveUpscalingQualityMode() == target.qualityMode;
+	const bool renderScaleMatches = IsRenderScaleModeRequested() == target.renderScaleMode;
+	const bool dlssPresetMatches = target.method != UpscaleMethod::kDLSS || GetEffectiveDLSSPreset() == target.dlssPreset;
+	pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+
+	if (methodMatches && qualityMatches && renderScaleMatches && dlssPresetMatches) {
+		logger::info(
+			"[Upscaling] VR FPS Stabilizer Sync: {} profile already matched after save-load (method={}, quality={}, dlssProfile={}, renderScale={}).",
+			profileName,
+			magic_enum::enum_name(target.method),
+			target.qualityMode,
+			target.dlssPreset,
+			BoolText(target.renderScaleMode));
+		return;
+	}
+
+	logger::info(
+		"[Upscaling] VR FPS Stabilizer Sync applying {} profile from {}: method {} -> {}, quality {} -> {}, dlssProfile {} -> {}, renderScale {} -> {}.",
+		profileName,
+		profiles.path.string(),
+		magic_enum::enum_name(currentMethod),
+		magic_enum::enum_name(target.method),
+		GetEffectiveUpscalingQualityMode(),
+		target.qualityMode,
+		GetEffectiveDLSSPreset(),
+		target.dlssPreset,
+		BoolText(IsRenderScaleModeRequested()),
+		BoolText(target.renderScaleMode));
+	ApplyCSMenuUpscalingTransition(
+		target.method,
+		target.renderScaleMode,
+		target.qualityMode,
+		target.dlssPreset,
+		"VR FPS Stabilizer save-load sync");
+	LogVRTransitionDiagnostics(*this, "VR FPS Stabilizer Sync applied save-load profile", true);
 }
 
 bool Upscaling::IsPerfModePresentationActive() const
@@ -9112,6 +9510,7 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	ApplyPendingVRFpsStabilizerLoadSync();
 	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	ApplyPendingVRUpscalingTransition(requestedUpscaleMethod);
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {

@@ -102,6 +102,7 @@ public:
 		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint renderScaleMode = 0;
+		bool vrFpsStabilizerSync = false;
 		uint perfMode = 0;
 		bool aaVrs = false;
 		bool aaVrsVisualization = false;
@@ -652,6 +653,7 @@ public:
 	std::atomic<uint32_t> pendingVRDLSSPreset{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
+	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };
@@ -688,6 +690,8 @@ public:
 	void ClearPendingVRUpscalingTransition();
 	bool HasPendingVRUpscalingTransition() const;
 	bool HasPendingVRRenderScaleTransition() const;
+	void QueueVRFpsStabilizerLoadSync(uint32_t a_frame);
+	void ApplyPendingVRFpsStabilizerLoadSync();
 	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;
 	bool ShouldDeferVRUpscalingTransitionSettings() const;
 	bool ShouldWaitForVRUpscalingTransitionDelay() const;

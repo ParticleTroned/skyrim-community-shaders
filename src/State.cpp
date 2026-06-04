@@ -24,6 +24,7 @@
 #include "ShaderCache.h"
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
+#include "Utils/OpenCompositeInterop.h"
 #include "Utils/SphericalHarmonics.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
@@ -988,20 +989,28 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.InMapMenu = isMapMenuOpen;
 
 		auto& upscaling = globals::features::upscaling;
+		const bool upscalingLoaded = upscaling.loaded;
+		const auto upscaleMethod = upscalingLoaded ? upscaling.GetUpscaleMethod() : Upscaling::UpscaleMethod::kNONE;
+		const auto renderSize = Util::ConvertToDynamic(screenSize, true);
 
-		if (upscaling.loaded) {
-			auto upscaleMethod = upscaling.GetUpscaleMethod();
-			if (temporal && upscaleMethod != Upscaling::UpscaleMethod::kTAA) {
-				auto renderSize = Util::ConvertToDynamic(screenSize, true);
-				data.MipBias = std::log2f(renderSize.x / screenSize.x);
-				if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
-					data.MipBias -= 1.0f;
-			} else {
-				data.MipBias = 0;
-			}
-		} else {
-			data.MipBias = 0;
+		float computedMipBias = 0.0f;
+		if (upscalingLoaded &&
+			temporal &&
+			upscaleMethod != Upscaling::UpscaleMethod::kNONE &&
+			upscaleMethod != Upscaling::UpscaleMethod::kTAA &&
+			screenSize.x > 0.0f &&
+			renderSize.x > 0.0f) {
+			computedMipBias = std::log2f(renderSize.x / screenSize.x);
+			if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
+				computedMipBias -= 1.0f;
 		}
+
+		Util::OCUExternalUpscalerState externalMipBiasState{};
+		const bool externalOpenCompositeMipBias =
+			globals::game::isVR &&
+			upscalingLoaded &&
+			Util::TryReadOCUExternalUpscalerState(externalMipBiasState);
+		data.MipBias = externalOpenCompositeMipBias ? externalMipBiasState.mipBias : computedMipBias;
 		data.RefractionScale = refractionScale;
 
 		// DALC to SH

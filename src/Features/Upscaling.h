@@ -221,6 +221,7 @@ public:
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
 	Texture2D* motionVectorCopyTexture = nullptr;
 	Texture2D* sharpenerTexture = nullptr;
+	bool dlssUpscaleOutputInSharpenerTexture = false;
 
 	virtual void ClearShaderCache() override;
 
@@ -326,6 +327,7 @@ private:
 	mutable bool openCompositeUpscalingBlockerCacheValid = false;
 	mutable ULONGLONG openCompositeUpscalingBlockerLastRefresh = 0;
 	bool openCompositeUpscalingBackendSkipLogged = false;
+	bool renderDocUpscalingBackendSkipLogged = false;
 
 	struct Main_UpdateJitter
 	{

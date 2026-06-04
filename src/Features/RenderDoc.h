@@ -35,6 +35,7 @@ public:
 
 	// Core RenderDoc functionality
 	bool IsAvailable() const { return renderDocApi != nullptr; }
+	bool ShouldBlockUpscaling() const { return enableRenderDocCapture || IsAvailable(); }
 	void TriggerCapture();
 	void TriggerMultiFrameCapture(uint32_t a_frameCount);
 	bool HandleCaptureHotkey(uint32_t a_vkKey);

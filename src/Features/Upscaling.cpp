@@ -1,6 +1,7 @@
 #include "Upscaling.h"
 
 #include "Deferred.h"
+#include "Features/RenderDoc.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
@@ -12,6 +13,7 @@
 #include "VR.h"
 #include <Windows.h>
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <cctype>
 #include <cmath>
@@ -45,6 +47,38 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 
 namespace
 {
+	std::atomic_bool g_renderDocDllDetected{ false };
+	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
+
+	bool IsRenderDocDllLoaded(bool a_probeProcess)
+	{
+		if (g_renderDocDllDetected.load(std::memory_order_acquire))
+			return true;
+		if (!a_probeProcess)
+			return false;
+		if (GetModuleHandleW(L"renderdoc.dll") == nullptr)
+			return false;
+
+		g_renderDocDllDetected.store(true, std::memory_order_release);
+		return true;
+	}
+
+	bool IsRenderDocUpscalingBlocked(bool a_probeProcessForDll = false)
+	{
+		const auto& renderDoc = globals::features::renderDoc;
+		return renderDoc.ShouldBlockUpscaling() || IsRenderDocDllLoaded(a_probeProcessForDll);
+	}
+
+	const char* GetRenderDocUpscalingBlockReason()
+	{
+		const auto& renderDoc = globals::features::renderDoc;
+		if (renderDoc.IsAvailable())
+			return "RenderDoc capture is active";
+		if (renderDoc.enableRenderDocCapture)
+			return "RenderDoc capture is enabled";
+		return "renderdoc.dll is loaded";
+	}
+
 	uint ClampToggleUInt(uint value)
 	{
 		return value ? 1u : 0u;
@@ -406,6 +440,26 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	globals::state->SetAdapterDescription(adapterDesc.Description);
 
 	auto& upscaling = globals::features::upscaling;
+	if (IsRenderDocUpscalingBlocked(true)) {
+		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
+			logger::warn(
+				"[Upscaling] Bypassing D3D11 upscaling device hook because {}.",
+				GetRenderDocUpscalingBlockReason());
+		}
+		return ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
+			DriverType,
+			Software,
+			Flags,
+			pFeatureLevels,
+			FeatureLevels,
+			SDKVersion,
+			pSwapChainDesc,
+			ppSwapChain,
+			ppDevice,
+			pFeatureLevel,
+			ppImmediateContext);
+	}
+
 	upscaling.LoadUpscalingSDKs();
 
 	if (upscaling.IsBackendInitialized())
@@ -537,21 +591,24 @@ void Upscaling::DrawSettings()
 	ApplyOpenCompositeUpscalingBlocker();
 	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
 	const bool openCompositeBlocksUpscaling = openCompositeBlocker.active;
+	const bool renderDocBlocksUpscaling = IsRenderDocUpscalingBlocked();
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
 		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
 
-	if (*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) && !runtimeFsr4AutoEligible)
+	if (!renderDocBlocksUpscaling &&
+		*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) &&
+		!runtimeFsr4AutoEligible)
 		settings.fsr4RuntimeEnable = false;
 
 	std::vector<UpscaleUiChoice> upscaleChoices = {
 		{ UpscaleMethod::kNONE, false, "None" }
 	};
-	if (!openCompositeBlocksUpscaling) {
+	if (!openCompositeBlocksUpscaling && !renderDocBlocksUpscaling) {
 		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
 		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" });
 		if (runtimeFsr4AutoEligible)
-			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4" });
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR 4.1" });
 		if (featureDLSS)
 			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
 	}
@@ -582,25 +639,27 @@ void Upscaling::DrawSettings()
 	}
 
 	const char* currentMethodLabel = upscaleChoices[methodUiIndex].label;
-	if (openCompositeBlocksUpscaling)
+	if (openCompositeBlocksUpscaling || renderDocBlocksUpscaling)
 		ImGui::BeginDisabled();
 	const bool methodChanged = ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
-	if (openCompositeBlocksUpscaling)
+	if (openCompositeBlocksUpscaling || renderDocBlocksUpscaling)
 		ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (openCompositeBlocksUpscaling) {
 			ImGui::Text("Locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
+		} else if (renderDocBlocksUpscaling) {
+			ImGui::Text("Runtime is forced to None while %s.", GetRenderDocUpscalingBlockReason());
 		} else {
 			ImGui::TextUnformatted("Selects the upscaling backend.");
 			if (runtimeFsr4AutoEligible)
-				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4, or None.");
+				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, Runtime FSR 4.1, or None.");
 			else
 				ImGui::TextUnformatted("Range: choose between TAA, DLSS, FSR 3.1.5, or None.");
 		}
 	}
 	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
 	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
-	const bool shouldApplyMethodSelection = methodChanged || !matchesCurrentChoice(selectedUpscaleChoice);
+	const bool shouldApplyMethodSelection = !renderDocBlocksUpscaling && (methodChanged || !matchesCurrentChoice(selectedUpscaleChoice));
 	if (shouldApplyMethodSelection) {
 		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
 		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
@@ -621,6 +680,13 @@ void Upscaling::DrawSettings()
 		}
 		ImGui::PopStyleColor();
 	}
+	if (renderDocBlocksUpscaling) {
+		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
+		ImGui::TextWrapped(
+			"Community Shaders Upscaling runs as None while %s to avoid DLSS/FSR backend startup crashes.",
+			GetRenderDocUpscalingBlockReason());
+		ImGui::PopStyleColor();
+	}
 
 	// Check the current upscale method
 	auto upscaleMethod = GetUpscaleMethod();
@@ -635,13 +701,13 @@ void Upscaling::DrawSettings()
 		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
 			ImGui::TextDisabled("Runtime FSR path is latched off after a runtime failure; using host FSR 3.1.5 fallback.");
 		} else if (fidelityFX.IsRuntimeFsr4FailureLatched()) {
-			ImGui::TextDisabled("Runtime FSR 4 is latched off after a runtime failure; using runtime FSR 3.1.5 fallback.");
+			ImGui::TextDisabled("Runtime FSR 4.1 is latched off after a runtime failure; using runtime FSR 3.1.5 fallback.");
 		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
 		           !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
 			ImGui::TextDisabled("Runtime FSR context creation failed; using host FSR 3.1.5 fallback.");
 		}
 		if (!runtimeUpscalerPresent && runtimeFsr4Requested)
-			ImGui::TextDisabled("Runtime FSR 4 unavailable: missing FidelityFX upscaler runtime.");
+			ImGui::TextDisabled("Runtime FSR 4.1 unavailable: missing FidelityFX upscaler runtime.");
 	}
 
 	// Display warning for DLSS resolution limits (non-VR only; VR handles this automatically)
@@ -663,7 +729,7 @@ void Upscaling::DrawSettings()
 		if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str()))
 			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the shared DLSS/FSR/FSR4 internal render scale / quality level.");
+			ImGui::TextUnformatted("Controls the shared DLSS/FSR/FSR4.1 internal render scale / quality level.");
 			ImGui::TextUnformatted("Range: low 0 (highest quality, lowest performance gain) to high 6 (highest performance gain, lowest quality).");
 		}
 
@@ -1173,6 +1239,8 @@ void Upscaling::PostPostLoad()
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
 	if (GetOpenCompositeUpscalingBlocker().active)
+		return UpscaleMethod::kNONE;
+	if (IsRenderDocUpscalingBlocked())
 		return UpscaleMethod::kNONE;
 
 	if (streamline.featureDLSS)
@@ -1868,6 +1936,12 @@ void Upscaling::SetupResources()
 		logger::warn("[Upscaling] Skipping upscaling resource setup because Open Composite has {}=true.", blocker.settingName);
 		return;
 	}
+	if (IsRenderDocUpscalingBlocked(true)) {
+		logger::warn(
+			"[Upscaling] Skipping upscaling resource setup because {}.",
+			GetRenderDocUpscalingBlockReason());
+		return;
+	}
 
 	QueryPerformanceFrequency(&qpf);
 
@@ -2335,6 +2409,15 @@ void Upscaling::LoadUpscalingSDKs()
 		}
 		return;
 	}
+	if (IsRenderDocUpscalingBlocked(true)) {
+		if (!renderDocUpscalingBackendSkipLogged) {
+			logger::warn(
+				"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because {}.",
+				GetRenderDocUpscalingBlockReason());
+			renderDocUpscalingBackendSkipLogged = true;
+		}
+		return;
+	}
 
 	// Initialize upscaling SDK components during plugin startup
 	// This ensures all SDKs are available before any D3D device creation
@@ -2355,32 +2438,50 @@ float Upscaling::GetFrameTime() const
 // Backend interface methods
 bool Upscaling::IsBackendInitialized() const
 {
+	if (IsRenderDocUpscalingBlocked())
+		return false;
+
 	return streamline.initialized;
 }
 
 void Upscaling::CheckBackendFeatures(IDXGIAdapter* adapter)
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	streamline.CheckFeatures(adapter);
 }
 
 void Upscaling::UpgradeBackendInterface(void** ppInterface)
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	streamline.slUpgradeInterface(ppInterface);
 }
 
 void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	streamline.slSetD3DDevice(device);
 }
 
 void Upscaling::PostBackendDevice()
 {
+	if (IsRenderDocUpscalingBlocked())
+		return;
+
 	streamline.PostDevice();
 }
 
 // Module availability methods
 bool Upscaling::HasFrameGenModule() const
 {
+	if (IsRenderDocUpscalingBlocked())
+		return false;
+
 	return fidelityFX.featureFSR3FG;
 }
 
@@ -2719,6 +2820,9 @@ void Upscaling::ApplySharpening()
 		return;
 
 	if (!sharpenerTexture)
+		return;
+
+	if (!dlssUpscaleOutputInSharpenerTexture)
 		return;
 
 	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;

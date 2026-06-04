@@ -755,6 +755,8 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto& upscaling = globals::features::upscaling;
 	ID3D11Resource* colorOut =
 		(upscaling.settings.sharpnessDLSS > 0.0f && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
+	const bool outputToSharpener = colorOut != a_upscalingTexture;
+	upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 
 	// VR stereo DLSS: NGX D3D11 only accepts zero-offset subrects. Non-zero offsets return
 	// FAIL_InvalidParameter because Streamline's dlssEntry.cpp never sets
@@ -796,6 +798,9 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				eyeWidthIn, eyeHeightIn, eyeWidthIn, 0);
 		}
 
+		bool leftEvaluated = false;
+		bool rightEvaluated = false;
+
 		// Eye 0: copy left-eye slice, clear HMD mask, output directly to colorOut at offset 0.
 		if (eye0Ready) {
 			D3D11_BOX leftIn = { 0, 0, 0, eyeWidthIn, eyeHeightIn, 1 };
@@ -803,7 +808,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			upscaling.ClearHMDMask(upscaling.vrIntermediateColorIn[0]->uav.get(), depthTexture.depthSRV,
 				eyeWidthIn, eyeHeightIn, 0, 0);
 
-			EvaluateDLSS(viewport, 0,
+			leftEvaluated = EvaluateDLSS(viewport, 0,
 				upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
 				depthTexture.texture,
 				upscaling.vrIntermediateMotionVectors[0]->resource.get(),
@@ -814,7 +819,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		// Eye 1: evaluate into intermediate, then copy upscaled result to kMAIN right-eye position.
 		if (eye1Ready) {
-			EvaluateDLSS(viewportRight, 1,
+			rightEvaluated = EvaluateDLSS(viewportRight, 1,
 				upscaling.vrIntermediateColorIn[1]->resource.get(),
 				upscaling.vrIntermediateColorOut[1]->resource.get(),
 				upscaling.vrIntermediateDepth->resource.get(),
@@ -822,19 +827,38 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				upscaling.vrIntermediateReactiveMask[1]->resource.get(),
 				upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
 				perEyeIn, perEyeOut, eyeWidthOut);
+		}
 
+		if (leftEvaluated && rightEvaluated) {
 			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
 			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
+			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener;
+		} else {
+			upscaling.RequestHistoryReset();
+			static bool loggedVREvaluateFailure = false;
+			if (!loggedVREvaluateFailure) {
+				logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; skipping stale right-eye copy and DLSS sharpening.");
+				loggedVREvaluateFailure = true;
+			}
 		}
 	} else {
 		// Non-VR: Simple full-texture upscale.
 		sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
 		sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
 
-		EvaluateDLSS(viewport, 0,
+		const bool evaluated = EvaluateDLSS(viewport, 0,
 			a_upscalingTexture, colorOut,
 			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 			extentIn, extentOut, (uint)screenSize.x);
+		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
+		if (!evaluated) {
+			upscaling.RequestHistoryReset();
+			static bool loggedEvaluateFailure = false;
+			if (!loggedEvaluateFailure) {
+				logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");
+				loggedEvaluateFailure = true;
+			}
+		}
 	}
 }
 

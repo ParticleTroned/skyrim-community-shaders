@@ -2996,16 +2996,6 @@ void Upscaling::DrawSettings()
 			GetRenderDocUpscalingBlockReason());
 		ImGui::PopStyleColor();
 	}
-	if (globals::game::isVR) {
-		ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("On save-load, reads VRFpsStabilizer.ini [Conditional] Interior/Exterior CS upscaling rows.");
-			ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and Render Scale Mode to the cell you loaded into.");
-			ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
-			ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
-		}
-	}
-
 	// Check the current upscale method
 	auto upscaleMethod = GetUpscaleMethod();
 	const bool runtimeFsr4Requested =
@@ -3089,6 +3079,14 @@ void Upscaling::DrawSettings()
 			ImGui::TextUnformatted("DLSS/FSR VR only.");
 			ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
 			ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
+		}
+
+		ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("On save-load, reads VRFpsStabilizer.ini [Conditional] Interior/Exterior CS upscaling rows.");
+			ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and Render Scale Mode to the cell you loaded into.");
+			ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
+			ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
 		}
 
 		if (showSubmitPathDeveloperToggle) {
@@ -3634,9 +3632,39 @@ void Upscaling::DrawFoveatedSettings()
 	if (!aaVrsUiState.requested)
 		settings.aaVrsVisualization = false;
 
+	auto drawFovSetupInstructions = []() {
+		ImGui::Dummy(ImVec2(0.0f, 4.0f));
+		const bool showFovSetupInstructions = ImGui::CollapsingHeader("Upscaling FOV Setup Instructions");
+		if (showFovSetupInstructions) {
+			const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+			const float availableHeight = ImGui::GetContentRegionAvail().y;
+			const float instructionHeight = std::clamp(availableHeight - (lineHeight * 2.0f), lineHeight * 5.0f, lineHeight * 14.0f);
+			ImGui::BeginChild("##UpscalingFOVSetupInstructions", ImVec2(0.0f, instructionHeight), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+			ImGui::PushTextWrapPos(0.0f);
+			auto drawInstructionHeadline = [](const char* a_label) {
+				MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
+				ImGui::SeparatorText(a_label);
+			};
+			ImGui::TextUnformatted(kFoveatedUpscalingSetupIntro);
+			ImGui::Spacing();
+			drawInstructionHeadline("Upscaling FOV setup");
+			ImGui::TextUnformatted(kFoveatedUpscalingSetupInstructions);
+			ImGui::Spacing();
+			drawInstructionHeadline("Upscaling FOV + Peripheral TAA setup");
+			ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
+			ImGui::Spacing();
+			drawInstructionHeadline("Variable Rate Shading (VRS) mask refinement");
+			ImGui::TextUnformatted(kVrsMaskRefinementInstructions);
+			ImGui::PopTextWrapPos();
+			ImGui::EndChild();
+		}
+	};
+
 	const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
 	if (!foveatedDispatchRequestedForMethod)
 		return;
+
+	drawFovSetupInstructions();
 
 	if (IsDefaultFoveatedMaskGeometry(settings)) {
 		ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.05f, 1.0f), "Default FOV mask active. Tune it for your HMD for best image and performance.");
@@ -3663,32 +3691,6 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("VRS Mask Visualization replaces the scene with a binary rate mask; dark = 1x1, magenta = coarser than 1x1.");
 			ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
 		}
-	}
-
-	ImGui::Dummy(ImVec2(0.0f, 4.0f));
-	const bool showFovSetupInstructions = ImGui::CollapsingHeader("Upscaling FOV Setup Instructions");
-	if (showFovSetupInstructions) {
-		const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-		const float availableHeight = ImGui::GetContentRegionAvail().y;
-		const float instructionHeight = std::clamp(availableHeight - (lineHeight * 2.0f), lineHeight * 5.0f, lineHeight * 14.0f);
-		ImGui::BeginChild("##UpscalingFOVSetupInstructions", ImVec2(0.0f, instructionHeight), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-		ImGui::PushTextWrapPos(0.0f);
-		auto drawInstructionHeadline = [](const char* a_label) {
-			MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
-			ImGui::SeparatorText(a_label);
-		};
-		ImGui::TextUnformatted(kFoveatedUpscalingSetupIntro);
-		ImGui::Spacing();
-		drawInstructionHeadline("Upscaling FOV setup");
-		ImGui::TextUnformatted(kFoveatedUpscalingSetupInstructions);
-		ImGui::Spacing();
-		drawInstructionHeadline("Upscaling FOV + Peripheral TAA setup");
-		ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
-		ImGui::Spacing();
-		drawInstructionHeadline("Variable Rate Shading (VRS) mask refinement");
-		ImGui::TextUnformatted(kVrsMaskRefinementInstructions);
-		ImGui::PopTextWrapPos();
-		ImGui::EndChild();
 	}
 
 	ImGui::Dummy(ImVec2(0.0f, 6.0f));

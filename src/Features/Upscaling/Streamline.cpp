@@ -1132,6 +1132,14 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		sl::Extent extentIn{ 0, 0, eyeWidthIn, eyeHeightIn };
 		sl::Extent extentOut{ 0, 0, eyeWidthOut, eyeHeightOut };
+		auto presentStretchFallback = [&]() {
+			bool stretched = true;
+			for (uint32_t i = 0; i < 2; ++i)
+				stretched = upscaling.StretchSubmitStageEyeOutput(i, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut) && stretched;
+			if (stretched)
+				upscaling.FinalizePerEyeOutputs(colorOut);
+			return stretched;
+		};
 
 		// DLAA uses the full per-eye extent. Keep it on the isolated per-eye
 		// output path so hidden-area cleanup and stereo copyback are identical
@@ -1152,16 +1160,25 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					extentIn, extentOut, eyeWidthOut);
 			}
 
+			bool fallbackPresented = false;
 			if (allEvaluated) {
 				upscaling.FinalizePerEyeOutputs(colorOut);
 			} else {
+				upscaling.RequestHistoryReset();
+				fallbackPresented = presentStretchFallback();
 				static bool loggedVREvaluateFailure = false;
-				if (!loggedVREvaluateFailure) {
-					logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; keeping the current scene texture instead of copying stale output.");
-					loggedVREvaluateFailure = true;
+				static bool loggedVRStretchFallbackFailure = false;
+				if (fallbackPresented) {
+					if (!loggedVREvaluateFailure) {
+						logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; using full-size stretch fallback for this frame.");
+						loggedVREvaluateFailure = true;
+					}
+				} else if (!loggedVRStretchFallbackFailure) {
+					logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes and stretch fallback failed; keeping the current scene texture.");
+					loggedVRStretchFallbackFailure = true;
 				}
 			}
-			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && allEvaluated;
+			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && (allEvaluated || fallbackPresented);
 			return;
 		}
 
@@ -1189,10 +1206,24 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
 		}
 
-		if (!leftEvaluated || !rightEvaluated)
+		bool fallbackPresented = false;
+		if (!leftEvaluated || !rightEvaluated) {
 			upscaling.RequestHistoryReset();
+			fallbackPresented = presentStretchFallback();
+			static bool loggedVRDirectEvaluateFailure = false;
+			static bool loggedVRDirectStretchFallbackFailure = false;
+			if (fallbackPresented) {
+				if (!loggedVRDirectEvaluateFailure) {
+					logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed; using full-size stretch fallback for this frame.");
+					loggedVRDirectEvaluateFailure = true;
+				}
+			} else if (!loggedVRDirectStretchFallbackFailure) {
+				logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed and stretch fallback failed; keeping the current scene texture.");
+				loggedVRDirectStretchFallbackFailure = true;
+			}
+		}
 
-		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && leftEvaluated && rightEvaluated;
+		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && ((leftEvaluated && rightEvaluated) || fallbackPresented);
 
 	} else {
 		// Non-VR: Simple full-texture upscale

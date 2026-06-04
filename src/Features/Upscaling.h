@@ -924,6 +924,7 @@ private:
 	mutable bool openCompositeUpscalingBlockerCacheValid = false;
 	mutable ULONGLONG openCompositeUpscalingBlockerLastRefresh = 0;
 	bool openCompositeUpscalingBackendSkipLogged = false;
+	bool renderDocUpscalingBackendSkipLogged = false;
 
 	struct Main_UpdateJitter
 	{

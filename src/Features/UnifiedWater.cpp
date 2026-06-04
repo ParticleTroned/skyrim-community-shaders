@@ -50,6 +50,8 @@ static bool ShouldCullAtCell(
 		const bool attached = cell->cellState.any(RE::TESObjectCELL::CellState::kAttached, kTransitionAttachedCellState);
 		if (isAttached)
 			*isAttached = attached;
+
+		// Keep LOD visible when a loaded dry cell has no active water to replace it.
 		return attached && cell->cellFlags.any(RE::TESObjectCELL::Flag::kHasWater);
 	}
 

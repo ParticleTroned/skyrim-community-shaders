@@ -1,5 +1,7 @@
 #include "FeatureBuffer.h"
 
+#include <array>
+
 #include "Features/Wetterness.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
@@ -129,7 +131,7 @@ namespace
 	}
 
 	template <class... Ts>
-	std::pair<unsigned char*, size_t> BuildFeatureBufferData(const Ts&... a_fields)
+	std::pair<const unsigned char*, size_t> BuildFeatureBufferData(const Ts&... a_fields)
 	{
 		using PackedTuple = std::tuple<std::remove_cv_t<std::remove_reference_t<Ts>>...>;
 		static_assert(std::is_same_v<PackedTuple, FeatureDataTuple>, "FeatureData packing order/type mismatch");
@@ -138,19 +140,19 @@ namespace
 		static_assert(totalSize % 16 == 0);
 		static_assert(totalSize == sizeof(FeatureDataLayout));
 
-		auto data = std::make_unique<unsigned char[]>(totalSize);
+		alignas(16) static thread_local std::array<unsigned char, totalSize> data;
 		// Start from a deterministic payload; this avoids stale bytes in any untouched padding.
-		std::memset(data.get(), 0, totalSize);
+		std::memset(data.data(), 0, data.size());
 
 		size_t offset = 0;
-		(PackField(data.get(), offset, a_fields), ...);
+		(PackField(data.data(), offset, a_fields), ...);
 
-		return std::make_pair(data.release(), totalSize);
+		return std::make_pair(data.data(), data.size());
 	}
 }
 
 
-std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
+std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
 	auto grassLightingSettings = globals::features::grassLighting.settings;
 	const auto wetternessSettings = globals::features::wetterness.GetCommonBufferData();

@@ -3,9 +3,6 @@
 
 struct SkySync : Feature
 {
-private:
-	static constexpr std::string_view MOD_ID = "153543";
-
 public:
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
@@ -46,6 +43,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
+	virtual bool IsCore() const override { return true; }
 	virtual bool SupportsVR() override { return true; }
 	float GetVolumetricLightingIntensityFactor() const;
 

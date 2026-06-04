@@ -5,6 +5,9 @@
 #define NUMTHREAD_Y 16
 #define NUMTHREAD_Z 4
 #define GROUP_SIZE (NUMTHREAD_X * NUMTHREAD_Y * NUMTHREAD_Z)
+// Per-cluster visible-light cap. Must match CLUSTER_MAX_LIGHTS in
+// src/Features/LightLimitFix.cpp because the CPU sizes lightIndexList as
+// clusterCount * CLUSTER_MAX_LIGHTS.
 #define MAX_CLUSTER_LIGHTS 256
 #define MAX_CONTACT_SHADOW_LIGHTS 8
 

@@ -27,7 +27,11 @@ public:
 		};
 	}
 
-	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+	bool HasShaderDefine(RE::BSShader::Type type) override
+	{
+		return type == RE::BSShader::Type::Lighting ||
+		       type == RE::BSShader::Type::Water;
+	};
 
 	struct Settings
 	{
@@ -287,5 +291,4 @@ private:
 	mutable RuntimeState runtimeState{};
 	mutable Settings sanitizedSettingsCache{};
 	mutable bool sanitizedSettingsCacheValid = false;
-
 };

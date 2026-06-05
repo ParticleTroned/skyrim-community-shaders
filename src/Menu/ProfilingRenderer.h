@@ -26,6 +26,7 @@ public:
 	};
 
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
+	static bool HasFeatureTimers(const std::string& featurePrefix);
 	static void RenderFeatureTimers(const std::string& featurePrefix);
 
 private:

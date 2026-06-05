@@ -168,7 +168,9 @@ namespace ImGuiUtils
 
 		void RenderGraph(ImDrawList* drawList, ImVec2 graphPos, ImVec2 graphSize, size_t frameIndexOffset, float maxFrameTime)
 		{
-			Rect(drawList, graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), 0xffffffff, false);
+			ImVec4 borderColor = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+			borderColor.w *= 0.85f;
+			Rect(drawList, graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), ImGui::GetColorU32(borderColor), false);
 			float heightThreshold = 1.0f;
 
 			for (size_t frameNumber = 0; frameNumber < frames.size(); frameNumber++) {

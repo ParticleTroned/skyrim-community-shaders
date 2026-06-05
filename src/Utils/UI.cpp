@@ -2099,35 +2099,39 @@ namespace Util
 		if (!enabled)
 			return false;
 
-		// Calculate appropriate size if not specified - make it smaller
+		// Default to label-text height so feature-list toggles align with their labels.
 		ImVec2 toggleSize = size;
-		if (toggleSize.x <= 0) {
-			toggleSize.x = ImGui::GetFrameHeight() * 1.6f;  // Smaller 1.6:1 aspect ratio
-		}
 		if (toggleSize.y <= 0) {
-			toggleSize.y = ImGui::GetFrameHeight() * 0.8f;  // Smaller height
+			toggleSize.y = ImGui::GetTextLineHeight();
+		}
+		if (toggleSize.x <= 0) {
+			toggleSize.x = toggleSize.y * 1.8f;
+		}
+		const float verticalOffset = std::max(0.0f, (ImGui::GetFrameHeight() - toggleSize.y) * 0.5f);
+		if (verticalOffset > 0.0f) {
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
 		}
 
 		// Get theme colors for better integration
 		auto& colors = ImGui::GetStyle().Colors;
 
-		// Use the same accent family as checkboxes/sliders in both states.
+		// Keep the track subdued; the knob and border carry the theme accent.
 		const ImVec4 baseBg = colors[ImGuiCol_FrameBg];
 		const ImVec4 accent = colors[ImGuiCol_CheckMark];
 		const auto blendTrack = [&](float amount, float alpha) {
 			return Color::Blend(baseBg, accent, amount, alpha);
 		};
 		ImVec4 toggleBg = *enabled ?
-		                      blendTrack(0.68f, 0.92f) :
-		                      blendTrack(0.20f, 0.88f);
+		                      blendTrack(0.28f, 0.92f) :
+		                      blendTrack(0.06f, 0.88f);
 
 		ImVec4 toggleBgHovered = *enabled ?
-		                             blendTrack(0.78f, 0.96f) :
-		                             blendTrack(0.32f, 0.92f);
+		                             blendTrack(0.38f, 0.96f) :
+		                             blendTrack(0.14f, 0.92f);
 
 		ImVec4 toggleBgActive = *enabled ?
-		                            blendTrack(0.88f, 1.0f) :
-		                            blendTrack(0.44f, 0.96f);
+		                            blendTrack(0.48f, 1.0f) :
+		                            blendTrack(0.22f, 0.96f);
 		ImVec4 toggleBorder = Color::WithAlpha(accent, *enabled ? 0.95f : 0.56f);
 
 		// Apply toggle styling with border
@@ -2158,7 +2162,7 @@ namespace Util
 		float knobY = buttonMin.y + toggleSize.y * 0.5f;
 
 		// Draw knob
-		ImU32 knobColor = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+		ImU32 knobColor = ImGui::ColorConvertFloat4ToU32(Color::WithAlpha(accent, 1.0f));
 		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, knobColor);
 
 		ImGui::PopID();

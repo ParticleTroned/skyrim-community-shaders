@@ -17,7 +17,7 @@ namespace CSPluginAPI
 	// behind a game fade. These constants are advisory only and do not change
 	// the ABI; Community Shaders does not drive Game.FadeOutGame itself.
 	inline constexpr float CSVRRenderScaleTransitionFadeOutSeconds = 1.0f;
-	inline constexpr float CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 2.0f;
+	inline constexpr float CSVRRenderScaleTransitionBlackHoldAfterProfileSeconds = 6.0f;
 	inline constexpr float CSVRRenderScaleTransitionFadeInSeconds = 1.0f;
 
 	// A message used to fetch Community Shaders' interface.

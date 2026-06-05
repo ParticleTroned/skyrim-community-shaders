@@ -2099,80 +2099,55 @@ namespace Util
 		if (!enabled)
 			return false;
 
-		// Default to label-text height so feature-list toggles align with their labels.
+		const float textLineHeight = ImGui::GetTextLineHeight();
 		ImVec2 toggleSize = size;
 		if (toggleSize.y <= 0) {
-			toggleSize.y = ImGui::GetTextLineHeight();
+			toggleSize.y = std::max(10.0f, std::round(textLineHeight * 0.80f));
 		}
 		if (toggleSize.x <= 0) {
-			toggleSize.x = toggleSize.y * 1.8f;
-		}
-		const float verticalOffset = std::max(0.0f, (ImGui::GetFrameHeight() - toggleSize.y) * 0.5f);
-		if (verticalOffset > 0.0f) {
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
+			toggleSize.x = std::round(toggleSize.y * 1.86f);
 		}
 
-		// Get theme colors for better integration
-		auto& colors = ImGui::GetStyle().Colors;
+		const ImVec2 hitSize(toggleSize.x, std::max(toggleSize.y, textLineHeight));
 
-		// Keep the track subdued; the knob and border carry the theme accent.
-		const ImVec4 baseBg = colors[ImGuiCol_FrameBg];
-		const ImVec4 accent = colors[ImGuiCol_CheckMark];
-		const auto blendTrack = [&](float amount, float alpha) {
-			return Color::Blend(baseBg, accent, amount, alpha);
-		};
-		ImVec4 toggleBg = *enabled ?
-		                      blendTrack(0.28f, 0.92f) :
-		                      blendTrack(0.06f, 0.88f);
-
-		ImVec4 toggleBgHovered = *enabled ?
-		                             blendTrack(0.38f, 0.96f) :
-		                             blendTrack(0.14f, 0.92f);
-
-		ImVec4 toggleBgActive = *enabled ?
-		                            blendTrack(0.48f, 1.0f) :
-		                            blendTrack(0.22f, 0.96f);
-		ImVec4 toggleBorder = Color::WithAlpha(accent, *enabled ? 0.95f : 0.56f);
-
-		// Apply toggle styling with border
-		ImGui::PushStyleColor(ImGuiCol_Button, toggleBg);
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toggleBgHovered);
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, toggleBgActive);
-		ImGui::PushStyleColor(ImGuiCol_Border, toggleBorder);
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, toggleSize.y * 0.5f);  // Round ends
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);               // Larger border
-
-		// Create unique ID for the toggle
 		ImGui::PushID(label);
-
-		// Draw the toggle button
-		bool clicked = ImGui::Button("", toggleSize);
-
-		// Draw the toggle knob
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		ImVec2 buttonMin = ImGui::GetItemRectMin();
-
-		// Calculate knob position and size
-		float knobRadius = (toggleSize.y - 4.0f) * 0.5f;
-		float knobPadding = 2.0f;
-		float knobTravel = toggleSize.x - (knobRadius * 2.0f) - (knobPadding * 2.0f);
-		float knobX = *enabled ?
-		                  buttonMin.x + knobPadding + knobRadius + knobTravel :
-		                  buttonMin.x + knobPadding + knobRadius;
-		float knobY = buttonMin.y + toggleSize.y * 0.5f;
-
-		// Draw knob
-		ImU32 knobColor = ImGui::ColorConvertFloat4ToU32(Color::WithAlpha(accent, 1.0f));
-		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, knobColor);
-
-		ImGui::PopID();
-		ImGui::PopStyleVar(2);  // Pop both FrameRounding and FrameBorderSize
-		ImGui::PopStyleColor(4);
-
-		// Handle toggle action
+		bool clicked = ImGui::InvisibleButton("##FeatureToggleHit", hitSize);
 		if (clicked) {
 			*enabled = !*enabled;
 		}
+
+		const bool active = *enabled;
+		const bool hovered = ImGui::IsItemHovered();
+		const bool held = ImGui::IsItemActive();
+		const auto& theme = Menu::GetSingleton()->GetTheme();
+		const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+		const ImVec4 trackBase = Color::Blend(theme.Palette.Background, theme.Palette.FrameBorder, active ? 0.34f : 0.28f, 1.0f);
+		const ImVec4 trackHovered = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.30f : 0.26f, 1.0f);
+		const ImVec4 trackActive = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.40f : 0.34f, 1.0f);
+		const ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
+		const ImVec4 borderColor = Color::Blend(theme.Palette.FrameBorder, theme.Palette.Background, active ? 0.02f : 0.06f, active ? 1.0f : 0.96f);
+		const ImVec4 knobColor = active ?
+		                             Color::WithAlpha(accent, 1.0f) :
+		                             Color::WithAlpha(Color::Blend(accent, theme.Palette.FrameBorder, 0.52f, 1.0f), 0.68f);
+
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const ImVec2 hitMin = ImGui::GetItemRectMin();
+		const ImVec2 trackMin(hitMin.x, hitMin.y + (hitSize.y - toggleSize.y) * 0.5f);
+		const ImVec2 trackMax(trackMin.x + toggleSize.x, trackMin.y + toggleSize.y);
+		const float rounding = std::min(toggleSize.y * 0.22f, 4.0f);
+		drawList->AddRectFilled(trackMin, trackMax, ImGui::ColorConvertFloat4ToU32(trackColor), rounding);
+		drawList->AddRect(trackMin, trackMax, ImGui::ColorConvertFloat4ToU32(borderColor), rounding, 0, 1.35f);
+
+		const float knobPadding = std::max(1.5f, std::round(toggleSize.y * 0.11f));
+		const float knobRadius = std::max(3.0f, (toggleSize.y - knobPadding * 2.0f) * 0.5f);
+		const float knobTravel = toggleSize.x - (knobRadius * 2.0f) - (knobPadding * 2.0f);
+		const float knobX = active ?
+		                        trackMin.x + knobPadding + knobRadius + knobTravel :
+		                        trackMin.x + knobPadding + knobRadius;
+		const float knobY = trackMin.y + toggleSize.y * 0.5f;
+		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, ImGui::ColorConvertFloat4ToU32(knobColor));
+
+		ImGui::PopID();
 
 		return clicked;
 	}

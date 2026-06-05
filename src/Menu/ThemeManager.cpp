@@ -3,6 +3,7 @@
 #include "ThemePresets.h"
 
 #include "BackgroundBlur.h"
+#include "Features/VR.h"
 #include "Fonts.h"
 
 #include <algorithm>
@@ -26,7 +27,6 @@
 #include "../Util.h"
 #include "../Utils/FileSystem.h"
 #include "../Utils/UI.h"
-#include "Features/VR.h"
 
 using namespace SKSE;
 
@@ -212,6 +212,8 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 		colors[i] = themeSettings.FullPalette[i];
 	}
 
+	// Apply semantic palette overrides to the FullPalette for consistent UI states.
+	// Simple colors define the neutral surface while StatusPalette supplies accents.
 	ApplySemanticPalette(colors, themeSettings);
 
 	// Apply scrollbar opacity settings
@@ -767,16 +769,28 @@ void ThemeManager::CreateDefaultThemeFiles()
 		}
 
 		file << R"({
-	"DisplayName": "Default Theme",
-	"Description": "Default community shaders theme",
-	"Version": "1.0",
-	"Author": "Community Shaders",
+	"DisplayName": "Default Dark",
+	"Description": "Community Shaders dark theme with graphite, silver, and gold accents",
+	"Version": "1.1.0",
+	"Author": "Community Shaders Team",
 	"Theme": {
-		"UseSimplePalette": true,
+		"UseSimplePalette": false,
 		"Palette": {
-			"Background": [0.05, 0.05, 0.05, 1.0],
-			"Text": [1.0, 1.0, 1.0, 1.0],
-			"Border": [0.4, 0.4, 0.4, 1.0]
+			"Background": [0.035, 0.038, 0.04, 0.94],
+			"Text": [0.92, 0.91, 0.86, 1.0],
+			"WindowBorder": [0.42, 0.4, 0.35, 0.8],
+			"FrameBorder": [0.095, 0.1, 0.102, 0.88],
+			"Separator": [0.34, 0.33, 0.3, 0.62],
+			"ResizeGrip": [0.78, 0.74, 0.64, 0.7]
+		},
+		"StatusPalette": {
+			"Disable": [0.52, 0.51, 0.48, 0.9],
+			"Error": [0.95, 0.34, 0.32, 1.0],
+			"Warning": [1.0, 0.64, 0.18, 1.0],
+			"RestartNeeded": [0.7, 0.76, 0.8, 1.0],
+			"CurrentHotkey": [1.0, 0.78, 0.28, 1.0],
+			"SuccessColor": [0.76, 0.78, 0.72, 1.0],
+			"InfoColor": [0.98, 0.73, 0.22, 1.0]
 		},
 		"FontSize": 27.0,
 		"GlobalScale": 0.0,

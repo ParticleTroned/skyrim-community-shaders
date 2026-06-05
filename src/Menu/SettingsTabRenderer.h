@@ -20,7 +20,6 @@ public:
 		bool& settingShaderBlockPrevKey;      // Debug: shader block previous key
 		bool& settingShaderBlockNextKey;      // Debug: shader block next key
 		bool& settingWeatherEditorToggleKey;  // Weather Editor toggle key
-		bool& settingScreenshotKey;           // Screenshot capture key
 	};
 
 	static void RenderGeneralSettings(

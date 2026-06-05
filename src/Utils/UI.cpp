@@ -35,6 +35,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <format>
 #include <functional>
 #include <iomanip>
@@ -121,9 +122,6 @@ namespace Util
 		if (pos.x == -FLT_MAX && pos.y == -FLT_MAX)
 			pos = ImGui::GetMainViewport()->GetCenter();
 		ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
-		// Fix first-frame vertical stretch: AlwaysAutoResize resets width to 0 on the hidden
-		// measurement frame, causing TextWrapped to wrap at 0px and produce an enormous height.
-		// Setting an initial width gives TextWrapped a sensible wrap column on that frame.
 		ImGui::SetNextWindowSize(ImVec2(400.0f * GetUIScale(), 0.0f), ImGuiCond_Appearing);
 		isOpen = ImGui::BeginPopupModal(name, p_open, flags | ImGuiWindowFlags_NoSavedSettings);
 	}
@@ -523,33 +521,38 @@ namespace Util
 	{
 		ImVec4 WithAlpha(ImVec4 color, float alpha)
 		{
-			color.w = std::clamp(alpha, 0.0f, 1.0f);
+			color.w = alpha;
 			return color;
 		}
 
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha)
 		{
-			const float clampedAmount = std::clamp(amount, 0.0f, 1.0f);
 			return ImVec4(
-				from.x + (to.x - from.x) * clampedAmount,
-				from.y + (to.y - from.y) * clampedAmount,
-				from.z + (to.z - from.z) * clampedAmount,
-				std::clamp(alpha, 0.0f, 1.0f));
+				from.x + (to.x - from.x) * amount,
+				from.y + (to.y - from.y) * amount,
+				from.z + (to.z - from.z) * amount,
+				alpha);
 		}
 
 		ImVec4 Lift(ImVec4 color, float amount, float alpha)
 		{
-			const float clampedAmount = std::clamp(amount, -1.0f, 1.0f);
 			return ImVec4(
-				std::clamp(color.x + clampedAmount, 0.0f, 1.0f),
-				std::clamp(color.y + clampedAmount, 0.0f, 1.0f),
-				std::clamp(color.z + clampedAmount, 0.0f, 1.0f),
-				std::clamp(alpha, 0.0f, 1.0f));
+				std::clamp(color.x + amount, 0.0f, 1.0f),
+				std::clamp(color.y + amount, 0.0f, 1.0f),
+				std::clamp(color.z + amount, 0.0f, 1.0f),
+				alpha);
 		}
 	}
 
 	namespace ButtonHelpers
 	{
+		struct ButtonColors
+		{
+			ImVec4 normal;
+			ImVec4 hovered;
+			ImVec4 active;
+		};
+
 		ImVec4 AdjustButtonColor(const ImVec4& color, float amount)
 		{
 			const float maxChannel = std::max({ color.x, color.y, color.z });
@@ -563,16 +566,69 @@ namespace Util
 				color.w);
 		}
 
-		ImVec4 WithAlpha(const ImVec4& color, float alpha)
-		{
-			return ImVec4(color.x, color.y, color.z, alpha);
-		}
-
 		template <typename StyleFn, typename ButtonFn>
 		bool InvokeStyledButton(StyleFn styleProvider, ButtonFn buttonCall)
 		{
 			auto _style = styleProvider();
 			return buttonCall();
+		}
+
+		ButtonColors BuildPresetButtonColors(bool active)
+		{
+			const auto& theme = Menu::GetSingleton()->GetTheme();
+			const ImVec4 base = theme.Palette.FrameBorder;
+			const ImVec4 accent = theme.StatusPalette.InfoColor;
+
+			if (active) {
+				return {
+					Color::Blend(base, accent, 0.55f, 1.0f),
+					Color::Blend(base, accent, 0.70f, 1.0f),
+					Color::Blend(base, accent, 0.84f, 1.0f)
+				};
+			}
+
+			return {
+				Color::Blend(base, accent, 0.08f, 0.90f),
+				Color::Blend(base, accent, 0.18f, 0.96f),
+				Color::Blend(base, accent, 0.30f, 1.0f)
+			};
+		}
+	}
+
+	namespace AccentFrameHelpers
+	{
+		struct FrameColors
+		{
+			ImVec4 background;
+			ImVec4 hovered;
+			ImVec4 active;
+			ImVec4 checkMark;
+		};
+
+		FrameColors BuildFrameColors(const ImVec4& accent)
+		{
+			const auto& theme = Menu::GetSingleton()->GetTheme();
+			const ImVec4 base = theme.Palette.FrameBorder;
+
+			return {
+				base,
+				Color::Blend(base, accent, 0.24f, 0.92f),
+				Color::Blend(base, accent, 0.36f, 0.96f),
+				Color::WithAlpha(accent, 1.0f)
+			};
+		}
+
+		void PushFrameColors(const FrameColors& colors, int& pushedStyles, bool includeCheckMark)
+		{
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, colors.background);
+			ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, colors.hovered);
+			ImGui::PushStyleColor(ImGuiCol_FrameBgActive, colors.active);
+			pushedStyles = 3;
+
+			if (includeCheckMark) {
+				ImGui::PushStyleColor(ImGuiCol_CheckMark, colors.checkMark);
+				pushedStyles++;
+			}
 		}
 	}
 
@@ -625,6 +681,32 @@ namespace Util
 		return ButtonHelpers::InvokeStyledButton(WarningButtonStyle, [&] { return ImGui::Button(label, size); });
 	}
 
+	StyledButtonWrapper PresetButtonStyle(bool active)
+	{
+		const auto colors = ButtonHelpers::BuildPresetButtonColors(active);
+		return StyledButtonWrapper(colors.normal, colors.hovered, colors.active);
+	}
+
+	PresetControlStyleWrapper::PresetControlStyleWrapper() :
+		m_pushedStyles(0)
+	{
+		const auto colors = ButtonHelpers::BuildPresetButtonColors(false);
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, colors.normal);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, colors.hovered);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgActive, colors.active);
+		ImGui::PushStyleColor(ImGuiCol_Button, colors.normal);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors.hovered);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors.active);
+		m_pushedStyles = 6;
+	}
+
+	PresetControlStyleWrapper::~PresetControlStyleWrapper()
+	{
+		if (m_pushedStyles > 0) {
+			ImGui::PopStyleColor(m_pushedStyles);
+		}
+	}
+
 	bool ErrorTextButton(const char* label, const ImVec2& size)
 	{
 		return ButtonHelpers::InvokeStyledButton(
@@ -632,12 +714,41 @@ namespace Util
 			[&] { return ImGui::Button(label, size); });
 	}
 
+	BlueFrameStyleWrapper::BlueFrameStyleWrapper(bool includeCheckMark) :
+		m_pushedStyles(0)
+	{
+		const auto frameColors = AccentFrameHelpers::BuildFrameColors(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor);
+		AccentFrameHelpers::PushFrameColors(frameColors, m_pushedStyles, includeCheckMark);
+	}
+
+	BlueFrameStyleWrapper::~BlueFrameStyleWrapper()
+	{
+		if (m_pushedStyles > 0) {
+			ImGui::PopStyleColor(m_pushedStyles);
+		}
+	}
+
+	YellowFrameStyleWrapper::YellowFrameStyleWrapper(bool includeCheckMark) :
+		m_pushedStyles(0)
+	{
+		const auto frameColors = AccentFrameHelpers::BuildFrameColors(Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
+		AccentFrameHelpers::PushFrameColors(frameColors, m_pushedStyles, includeCheckMark);
+	}
+
+	YellowFrameStyleWrapper::~YellowFrameStyleWrapper()
+	{
+		if (m_pushedStyles > 0) {
+			ImGui::PopStyleColor(m_pushedStyles);
+		}
+	}
+
 	StyledButtonWrapper TransparentIconButtonStyle()
 	{
 		constexpr float kHoverAlpha = 0.18f;
 		constexpr float kActiveAlpha = 0.30f;
 		const auto accent = Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor;
-		return StyledButtonWrapper(ImVec4(0, 0, 0, 0),
+		return StyledButtonWrapper(
+			ImVec4(0, 0, 0, 0),
 			Color::WithAlpha(accent, kHoverAlpha),
 			Color::WithAlpha(accent, kActiveAlpha));
 	}
@@ -1301,7 +1412,7 @@ namespace Util
 
 		// Custom style - always transparent background to avoid click blocking
 		ImVec4 bgColor = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-		ImVec4 bgColorActive = ImVec4(0.3f, 0.3f, 0.3f, 0.9f);
+		ImVec4 bgColorActive = ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive);
 		// Use theme text color instead of hardcoded color
 		auto& palette = globals::menu->GetTheme().Palette;
 		ImVec4 textColor = palette.Text;
@@ -1455,7 +1566,6 @@ namespace Util
 		{
 			return globals::menu->GetTheme().StatusPalette.Disable;
 		}
-
 	}
 
 	namespace Text
@@ -1482,13 +1592,14 @@ namespace Util
 		ColoredTextV(Colors::ColorFn(), fmt, args); \
 		va_end(args);                               \
 	}
-#define UTIL_TEXT_WRAPPED(Name, ColorFn)                   \
-	void Name(const char* fmt, ...)                        \
-	{                                                      \
-		va_list args;                                      \
-		va_start(args, fmt);                               \
-		ColoredTextWrappedV(Colors::ColorFn(), fmt, args); \
-		va_end(args);                                      \
+
+#define UTIL_TEXT_WRAPPED(Name, ColorFn)                    \
+	void Name(const char* fmt, ...)                         \
+	{                                                       \
+		va_list args;                                       \
+		va_start(args, fmt);                                \
+		ColoredTextWrappedV(Colors::ColorFn(), fmt, args);  \
+		va_end(args);                                       \
 	}
 
 		UTIL_TEXT(Warning, GetWarning)
@@ -2211,6 +2322,9 @@ namespace Util
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
+				auto* weatherManager = WeatherManager::GetSingleton();
+				auto currentWeathers = weatherManager->GetCurrentWeathers();
+
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
@@ -2251,6 +2365,9 @@ namespace Util
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
+				auto* weatherManager = WeatherManager::GetSingleton();
+				auto currentWeathers = weatherManager->GetCurrentWeathers();
+
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
@@ -2294,8 +2411,7 @@ namespace Util
 		const char* recordingLabel)
 	{
 		bool changed = false;
-		ImGui::Text("%s", label);
-		ImGui::SameLine();
+		ImGui::TextUnformatted(label);
 
 		// Use theme colors for consistent styling
 		auto& theme = globals::menu->GetTheme().StatusPalette;
@@ -2393,6 +2509,8 @@ namespace Util
 			}
 		}
 
+		ImGui::Spacing();
+
 		return changed;
 	}
 
@@ -2408,7 +2526,8 @@ namespace Util
 
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Setting Constrained");
+				const auto& theme = Menu::GetSingleton()->GetTheme();
+				ImGui::TextColored(theme.StatusPalette.Warning, "Setting Constrained");
 				ImGui::Text("This setting is constrained by:");
 				ImGui::Spacing();
 				for (const auto& src : constraint.sources) {
@@ -2416,7 +2535,7 @@ namespace Util
 					ImGui::Indent();
 					ImGui::TextWrapped("%s", src.reason.c_str());
 					if (src.recommendDisableAtBoot) {
-						ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f),
+						ImGui::TextColored(theme.StatusPalette.Error,
 							"Consider disabling this feature at boot for best compatibility.");
 					}
 					ImGui::Unindent();

@@ -279,6 +279,9 @@ namespace Util
 	/** Draws a theme warning-colored button for cautionary or reversible actions. */
 	bool WarningButton(const char* label, const ImVec2& size = ImVec2(0, 0));
 
+	/** Style for preset buttons with a brighter active state. */
+	StyledButtonWrapper PresetButtonStyle(bool active);
+
 	/**
 	 * Alpha-based error-color button — use in toolbar rows alongside SuccessButton/WarningButton
 	 * for visual consistency. For standalone destructive actions (delete icons, close buttons),

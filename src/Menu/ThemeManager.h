@@ -185,7 +185,6 @@ public:
 
 		// Feature header constants
 		static constexpr float DEFAULT_FEATURE_TITLE_SCALE = 1.5f;  // Default scale for feature title text
-		static constexpr float VERSION_TEXT_OPACITY = 0.6f;         // Opacity for version text next to feature title
 
 		// Auto-hide feature list constants
 		static constexpr float AUTOHIDE_ACTIVATION_ZONE_WIDTH = 50.0f;  // Width of hover zone at left edge (px)

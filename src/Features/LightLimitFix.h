@@ -11,9 +11,13 @@
 class ParticleLights;
 struct LightLimitFix : OverlayFeature
 {
+private:
+	static constexpr std::string_view MOD_ID = "99548";
+
 public:
 	virtual inline std::string GetName() override { return "Light Limit Fix"; }
 	virtual inline std::string GetShortName() override { return "LightLimitFix"; }
+	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
@@ -160,7 +164,7 @@ public:
 	float lightsNear = 1;
 	float lightsFar = 16384;
 
-struct ParticleLightInfo
+	struct ParticleLightInfo
 	{
 		bool billboard;
 		RE::BSGeometry* node;
@@ -247,7 +251,7 @@ struct ParticleLightInfo
 		float BillboardRadius = 1.0f;
 		float ParticleClusterThreshold = 32.0f;  // default = previous hardcoded value
 		int MaxParticlesPerEmitter = 256;        // max default
-		float MaxParticleDistance = 6000.0f;  // distance cutoff for particle lights (in game units)
+		float MaxParticleDistance = 6000.0f;     // distance cutoff for particle lights (in game units)
 		bool EnableParticleLightsOptimization = true;
 		float JsonPlacedLightIntensity = 1.0f;
 		bool JsonPlacedLightsInteriorsOnly = false;
@@ -353,7 +357,6 @@ struct ParticleLightInfo
 			logger::info("[LLF] Installed hooks");
 		}
 	};
-
 
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; }

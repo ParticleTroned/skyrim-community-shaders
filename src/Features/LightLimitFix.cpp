@@ -10,6 +10,7 @@
 #include "Util.h"
 #include "Utils/ExternalEmittance.h"
 #include "Utils/StringUtils.h"
+#include "Utils/UI.h"
 
 #include "RE/B/BSMultiBoundRoom.h"
 
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 
 // Per-cluster visible-light cap. Must match MAX_CLUSTER_LIGHTS in
 // features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli because this
@@ -27,6 +29,38 @@ static constexpr uint MAX_LIGHTS = 1024;
 
 namespace
 {
+	class ScopedPerfEvent
+	{
+	public:
+		explicit ScopedPerfEvent(std::string_view a_name)
+		{
+			if (globals::state) {
+				globals::state->BeginPerfEvent(a_name);
+				active = true;
+			}
+		}
+
+		~ScopedPerfEvent()
+		{
+			if (active && globals::state) {
+				globals::state->EndPerfEvent();
+			}
+		}
+
+		ScopedPerfEvent(const ScopedPerfEvent&) = delete;
+		ScopedPerfEvent& operator=(const ScopedPerfEvent&) = delete;
+
+	private:
+		bool active = false;
+	};
+
+#define CS_CONCAT_IMPL(a, b) a##b
+#define CS_CONCAT(a, b) CS_CONCAT_IMPL(a, b)
+#define CS_PROFILE_SCOPE(name) \
+	ScopedPerfEvent CS_CONCAT(_csProfileScope, __LINE__) { name }
+#define CS_PROFILE_CPU_SCOPE(name) \
+	ScopedPerfEvent CS_CONCAT(_csProfileCpuScope, __LINE__) { name }
+
 	constexpr uint kContactShadowFlagPoint = 1u << 0;
 	constexpr uint kContactShadowFlagParticle = 1u << 1;
 	constexpr uint kLightsVisualisationModeMax = 3;
@@ -400,6 +434,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void LightLimitFix::DrawSettings()
 {
 	{
+		Util::BlueFrameStyleWrapper lightLimitBlueStyle(true);
+
 		ImGui::Text("ImageSpace Refraction");
 		ImGui::SliderFloat(
 			"Heat Warp Strength",

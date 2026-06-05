@@ -5,6 +5,9 @@
 #ifndef TERRAIN_VARIATION_HLSLI
 #define TERRAIN_VARIATION_HLSLI
 
+#define TERRAIN_VARIATION_HAS_STOCHASTIC_NORMAL 1
+#define TERRAIN_VARIATION_HAS_STOCHASTIC_MATERIAL_DATA 1
+
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"

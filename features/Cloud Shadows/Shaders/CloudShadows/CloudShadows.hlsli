@@ -1,3 +1,6 @@
+#ifndef CLOUD_SHADOWS_HLSLI
+#define CLOUD_SHADOWS_HLSLI
+
 #include "Common/Game.hlsli"
 
 namespace CloudShadows
@@ -30,3 +33,5 @@ namespace CloudShadows
 		return lerp(1.0, 1.0 - cloudCubeSample, SharedData::cloudShadowsSettings.Opacity);
 	}
 }
+
+#endif

@@ -371,8 +371,8 @@ public:
 			ImVec4(0.0f, 0.0f, 0.0f, 0.0f),      // [42] DockingEmptyBg
 			ImVec4(1.0f, 1.0f, 1.0f, 1.0f),      // [43] PlotLines
 			ImVec4(0.0f, 0.87f, 1.0f, 1.0f),     // [44] PlotLinesHovered
-			ImVec4(0.22f, 0.26f, 0.7f, 1.0f),    // [45] PlotHistogram
-			ImVec4(0.8f, 0.26f, 0.26f, 1.0f),    // [46] PlotHistogramHovered
+			ImVec4(1.00f, 0.64f, 0.18f, 0.90f),  // [45] PlotHistogram
+			ImVec4(1.00f, 0.80f, 0.34f, 1.00f),  // [46] PlotHistogramHovered
 			ImVec4(0.48f, 0.72f, 0.89f, 0.49f),  // [47] TableHeaderBg
 			ImVec4(0.3f, 0.3f, 0.35f, 1.0f),     // [48] TableBorderStrong
 			ImVec4(0.23f, 0.23f, 0.25f, 1.0f),   // [49] TableBorderLight

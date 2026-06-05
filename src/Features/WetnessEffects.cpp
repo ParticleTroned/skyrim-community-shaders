@@ -1,7 +1,7 @@
 #include "WetnessEffects.h"
 #include "Menu.h"
-#include "Wetterness.h"
 #include "WeatherEditor.h"
+#include "Wetterness.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WetnessEffects::Settings,
@@ -240,11 +240,12 @@ namespace Ripples
 
 void WetnessEffects::PostPostLoad()
 {
-	if (globals::features::wetterness.loaded) {
+	if (IsRuntimeActive() && globals::features::wetterness.IsRuntimeActive()) {
 		failedLoadedMessage =
-			"Wetness Effects was automatically disabled because Wetterness is active.\n"
-			"These features cannot run in parallel.";
+			"Wetness Effects was automatically disabled because both Wetness Effects and Wetterness are enabled.\n"
+			"Only one wetness feature can run at a time. Disable Wetterness if you want to use Wetness Effects instead.";
 		settings.EnableWetnessEffects = false;
+		Ripples::UpdateSettings();
 		loaded = false;
 		logger::warn("[{}] {}", GetName(), failedLoadedMessage);
 		return;

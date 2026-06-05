@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <format>
 
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ParticleLights.h"
@@ -115,8 +116,8 @@ void MenuHeaderRenderer::RenderHeader(
 		const float iconSpacing = GetUndockedIconSpacing(uiScale);
 		const float actionButtonWidth = GetUndockedActionButtonSize(uiScale);
 		const float actionButtonsWidth = actionIcons.empty() ? 0.0f :
-		                                  actionButtonWidth * static_cast<float>(actionIcons.size()) +
-		                                      iconSpacing * static_cast<float>(actionIcons.size() - 1);
+		                                                       actionButtonWidth * static_cast<float>(actionIcons.size()) +
+		                                                           iconSpacing * static_cast<float>(actionIcons.size() - 1);
 		const float dockHandleWidth = showSteamVRDockHandle ? logoSize : 0.0f;
 		const float dockHandleSpacing = showSteamVRDockHandle && !actionIcons.empty() ? iconSpacing : 0.0f;
 		const float rightControlInset = showSteamVRDockHandle ? GetSteamVRHeaderRightInset(uiScale) : 0.0f;
@@ -450,7 +451,7 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 
 	// Setup button styling for transparent background with hover effects
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(GetUndockedIconSpacing(uiScale), 0.0f));
-	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);                                                           // Remove button borders
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);  // Remove button borders
 	auto iconButtonStyle = Util::TransparentIconButtonStyle();
 
 	// Get tint color for monochrome icons
@@ -485,7 +486,7 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 	}
 
 	// Restore default style
-	ImGui::PopStyleVar(2);    // Pop both style variables: ItemSpacing and FrameBorderSize
+	ImGui::PopStyleVar(2);  // Pop both style variables: ItemSpacing and FrameBorderSize
 }
 
 void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpaceId)
@@ -521,7 +522,7 @@ void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpac
 
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	const ImU32 bgColor = ImGui::GetColorU32(active ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered :
-	                                                                              ImGuiCol_Button);
+																						ImGuiCol_Button);
 	const ImU32 lineColor = ImGui::GetColorU32(ImGuiCol_Text);
 	drawList->AddRectFilled(min, max, bgColor, handleSize * 0.18f);
 	drawList->AddRect(ImVec2(center.x - radius, center.y - radius), ImVec2(center.x + radius, center.y + radius), lineColor, 1.0f, 0, 1.5f);
@@ -574,7 +575,7 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 		}
 
 		ImVec4 colorVec = ImGui::GetStyleColorVec4(active ? ImGuiCol_ResizeGripActive : hovered ? ImGuiCol_ResizeGripHovered :
-		                                                                                     ImGuiCol_ResizeGrip);
+																								  ImGuiCol_ResizeGrip);
 		colorVec.w = std::max(colorVec.w, hovered || active ? 0.95f : 0.75f);
 		const ImU32 color = ImGui::GetColorU32(colorVec);
 		ImDrawList* drawList = ImGui::GetForegroundDrawList();
@@ -619,8 +620,8 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	const float logoWidth = showLogo ? iconSize * logoAspectRatio : 0.0f;
 	const float titleGroupWidth = logoWidth + (showLogo ? style.ItemSpacing.x : 0.0f) + titleSize.x;
 	const float iconsWidth = actionIcons.empty() ? 0.0f :
-	                         (static_cast<float>(actionIcons.size()) * iconSize) +
-	                             (static_cast<float>(actionIcons.size() - 1) * iconSpacing);
+	                                               (static_cast<float>(actionIcons.size()) * iconSize) +
+	                                                   (static_cast<float>(actionIcons.size() - 1) * iconSpacing);
 
 	const float headerHeight = std::max(iconSize, titleFontSize) + paddingY * 2.0f;
 	const ImVec2 cursorStart = ImGui::GetCursorPos();

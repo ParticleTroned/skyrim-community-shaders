@@ -521,26 +521,28 @@ namespace Util
 	{
 		ImVec4 WithAlpha(ImVec4 color, float alpha)
 		{
-			color.w = alpha;
+			color.w = std::clamp(alpha, 0.0f, 1.0f);
 			return color;
 		}
 
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha)
 		{
+			const float clampedAmount = std::clamp(amount, 0.0f, 1.0f);
 			return ImVec4(
-				from.x + (to.x - from.x) * amount,
-				from.y + (to.y - from.y) * amount,
-				from.z + (to.z - from.z) * amount,
-				alpha);
+				from.x + (to.x - from.x) * clampedAmount,
+				from.y + (to.y - from.y) * clampedAmount,
+				from.z + (to.z - from.z) * clampedAmount,
+				std::clamp(alpha, 0.0f, 1.0f));
 		}
 
 		ImVec4 Lift(ImVec4 color, float amount, float alpha)
 		{
+			const float clampedAmount = std::clamp(amount, -1.0f, 1.0f);
 			return ImVec4(
-				std::clamp(color.x + amount, 0.0f, 1.0f),
-				std::clamp(color.y + amount, 0.0f, 1.0f),
-				std::clamp(color.z + amount, 0.0f, 1.0f),
-				alpha);
+				std::clamp(color.x + clampedAmount, 0.0f, 1.0f),
+				std::clamp(color.y + clampedAmount, 0.0f, 1.0f),
+				std::clamp(color.z + clampedAmount, 0.0f, 1.0f),
+				std::clamp(alpha, 0.0f, 1.0f));
 		}
 	}
 
@@ -1593,13 +1595,13 @@ namespace Util
 		va_end(args);                               \
 	}
 
-#define UTIL_TEXT_WRAPPED(Name, ColorFn)                    \
-	void Name(const char* fmt, ...)                         \
-	{                                                       \
-		va_list args;                                       \
-		va_start(args, fmt);                                \
-		ColoredTextWrappedV(Colors::ColorFn(), fmt, args);  \
-		va_end(args);                                       \
+#define UTIL_TEXT_WRAPPED(Name, ColorFn)                   \
+	void Name(const char* fmt, ...)                        \
+	{                                                      \
+		va_list args;                                      \
+		va_start(args, fmt);                               \
+		ColoredTextWrappedV(Colors::ColorFn(), fmt, args); \
+		va_end(args);                                      \
 	}
 
 		UTIL_TEXT(Warning, GetWarning)

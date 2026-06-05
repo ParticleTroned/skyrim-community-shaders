@@ -1,6 +1,7 @@
 #include "FeatureListRenderer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <format>

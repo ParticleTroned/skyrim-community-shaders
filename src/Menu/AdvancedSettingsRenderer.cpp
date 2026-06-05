@@ -1,10 +1,15 @@
 #include "AdvancedSettingsRenderer.h"
 
 #include <algorithm>
+#include <atomic>
+#include <filesystem>
 #include <format>
 #include <imgui.h>
 #include <imgui_stdlib.h>
+#include <shellapi.h>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"

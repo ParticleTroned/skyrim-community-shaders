@@ -1,5 +1,9 @@
 #pragma once
 
+#include <functional>
+#include <string>
+#include <vector>
+
 #include "Menu.h"
 
 class MenuHeaderRenderer

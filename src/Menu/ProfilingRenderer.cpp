@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
-#include <unordered_map>
+#include <cstdint>
 #include <imgui.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "Globals.h"
 #include "State.h"
@@ -292,7 +295,6 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			ImGui::EndTable();
 		}
 	}
-
 }
 
 void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)

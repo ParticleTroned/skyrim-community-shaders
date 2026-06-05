@@ -1398,6 +1398,7 @@ namespace
 			ImGui::EndDisabled();
 		};
 
+		upscaling.DrawFoveatedSetupInstructions();
 		drawSection("Shared FOV Mask");
 		upscaling.DrawFoveatedSettings();
 

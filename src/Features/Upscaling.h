@@ -372,6 +372,7 @@ public:
 
 	// Feature interface overrides
 	virtual void DrawSettings() override;
+	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings();
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;

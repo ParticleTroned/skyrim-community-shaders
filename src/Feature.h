@@ -76,6 +76,11 @@ public:
 	virtual bool IsInMenu() const { return true; }
 
 	/**
+	 * Whether the feature should be hidden from user-facing feature lists.
+	 */
+	virtual bool IsHiddenFromUserView() const { return false; }
+
+	/**
 	 * Whether to print the INI version missing message when this feature is unloaded
 	 */
 	virtual bool DrawFailLoadMessage() const { return true; }
@@ -117,6 +122,7 @@ public:
 	virtual void SaveSettings(json&) {}
 	virtual void LoadSettings(json&) {}
 
+	virtual bool HasFeatureSettings() const { return true; }
 	virtual void RestoreDefaultSettings() {}
 	virtual bool ToggleAtBootSetting();
 
@@ -155,6 +161,7 @@ public:
 	 * The weather system will automatically handle save/load/lerp for all registered variables
 	 */
 	virtual void RegisterWeatherVariables() {}
+	virtual void NormalizeWeatherSettings(json&) {}
 
 	/**
 	 * @brief Returns constraints this feature imposes on other features' settings

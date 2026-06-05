@@ -1,15 +1,15 @@
 #include "LightLimitFix.h"
+#include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
 #include "InverseSquareLighting.h"
-#include "Features/InverseSquareLighting/Common.h"
 #include "LinearLighting.h"
 
 #include "Menu/ThemeManager.h"
-#include "Utils/ExternalEmittance.h"
-#include "Utils/StringUtils.h"
 #include "Shadercache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/ExternalEmittance.h"
+#include "Utils/StringUtils.h"
 
 #include "RE/B/BSMultiBoundRoom.h"
 
@@ -90,8 +90,7 @@ namespace
 			return IsPlausibleRenderPointer(a_outNiLight);
 		}
 #if defined(_MSC_VER)
-		__except (1)
-		{
+		__except (1) {
 			a_outLight = nullptr;
 			a_outNiLight = nullptr;
 			return false;
@@ -337,6 +336,8 @@ namespace
 		return true;
 	}
 
+	void ApplyEffectShaderEmittance(RE::NiColorA& a_color, const RE::BSEffectShaderProperty* a_shaderProperty);
+
 	RE::NiColorA BuildEffectMaterialEmissiveTint(RE::BSEffectShaderMaterial* a_material, RE::BSEffectShaderProperty* a_shaderProperty)
 	{
 		RE::NiColorA materialEmissiveTint{
@@ -345,12 +346,21 @@ namespace
 			a_material->baseColor.blue * a_material->baseColorScale,
 			1.0f
 		};
-		if (auto emittance = a_shaderProperty->unk88) {
-			materialEmissiveTint.red *= emittance->red;
-			materialEmissiveTint.green *= emittance->green;
-			materialEmissiveTint.blue *= emittance->blue;
-		}
+		ApplyEffectShaderEmittance(materialEmissiveTint, a_shaderProperty);
 		return materialEmissiveTint;
+	}
+
+	void ApplyEffectShaderEmittance(RE::NiColorA& a_color, const RE::BSEffectShaderProperty* a_shaderProperty)
+	{
+		if (!a_shaderProperty) {
+			return;
+		}
+
+		if (const auto* emittance = a_shaderProperty->emittanceColor) {
+			a_color.red *= emittance->red;
+			a_color.green *= emittance->green;
+			a_color.blue *= emittance->blue;
+		}
 	}
 
 	float GetEmissiveTintLuma(const RE::NiColorA& a_tint)
@@ -611,7 +621,6 @@ void LightLimitFix::DrawOverlay()
 
 	ImGui::End();
 }
-
 
 LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 {
@@ -929,8 +938,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		}
 	}
 #if defined(_MSC_VER)
-	__except (1)
-	{
+	__except (1) {
 		ClearStrictLightData(strictLightDataTemp, false);
 	}
 #endif
@@ -1160,8 +1168,7 @@ bool TryGetMaxAlphaVertexColor(const std::uint8_t* a_rawVertexData, std::uint32_
 		}
 	}
 #if defined(_MSC_VER)
-	__except (1)
-	{
+	__except (1) {
 		return false;
 	}
 #endif
@@ -1354,8 +1361,8 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightRefe
 	}
 
 	auto shaderProperty = a_pass->shaderProperty->GetRTTI() == globals::rtti::BSEffectShaderPropertyRTTI.get() ?
-		                      static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty) :
-		                      nullptr;
+	                          static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty) :
+	                          nullptr;
 	if (!shaderProperty) {
 		return false;
 	}
@@ -1382,11 +1389,7 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightRefe
 		color.green *= material->baseColor.green * material->baseColorScale;
 		color.blue *= material->baseColor.blue * material->baseColorScale;
 
-		if (auto emittance = shaderProperty->unk88) {
-			color.red *= emittance->red;
-			color.green *= emittance->green;
-			color.blue *= emittance->blue;
-		}
+		ApplyEffectShaderEmittance(color, shaderProperty);
 	}
 
 	if (a_reference.hasGradientConfig) {
@@ -1731,7 +1734,6 @@ void LightLimitFix::UpdateLights()
 						numVertices = maxPerEmitter;
 					}
 					for (std::uint32_t p = 0; p < numVertices; p++) {
-
 						float radius = particleRuntimeData.radii[p] * particleRuntimeData.sizes[p];
 
 						auto initialPosition = particleRuntimeData.positions[p];

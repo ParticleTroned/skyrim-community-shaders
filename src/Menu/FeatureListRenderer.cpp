@@ -781,7 +781,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
 
-			if (globals::profiler) {
+			if (globals::profiler && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::Spacing();
 				ImGui::SeparatorText("Profiling");
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());

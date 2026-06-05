@@ -1,6 +1,7 @@
 #include "ProfilingRenderer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_map>
 #include <imgui.h>
@@ -43,6 +44,70 @@ static constexpr float kGoldenRatio = 0.618033988749895f;
 static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
 {
 	return cpuMode ? result.hasCpu : result.hasGpu;
+}
+
+static constexpr uint32_t kDisplayedRollingFrameCount = 60;
+
+struct DisplayTimingStats
+{
+	float timeMs = 0.0f;
+	float avgMs = 0.0f;
+	float p95Ms = 0.0f;
+	float p99Ms = 0.0f;
+};
+
+static float GetSortedPercentile(const std::array<float, kDisplayedRollingFrameCount>& samples, uint32_t sampleCount, float percentile)
+{
+	if (sampleCount == 0)
+		return 0.0f;
+
+	const float idx = (percentile / 100.0f) * static_cast<float>(sampleCount - 1);
+	const uint32_t lo = static_cast<uint32_t>(idx);
+	const uint32_t hi = std::min(lo + 1, sampleCount - 1);
+	const float frac = idx - static_cast<float>(lo);
+	return samples[lo] * (1.0f - frac) + samples[hi] * frac;
+}
+
+static DisplayTimingStats GetDisplayTimingStats(const Profiler::TimerResult& result, bool cpuMode)
+{
+	DisplayTimingStats stats{
+		cpuMode ? result.cpuTimeMs : result.gpuTimeMs,
+		cpuMode ? result.cpuAvgMs : result.avgMs,
+		cpuMode ? result.cpuP95Ms : result.p95Ms,
+		cpuMode ? result.cpuP99Ms : result.p99Ms
+	};
+
+	const uint32_t historyCount = cpuMode ? result.cpuHistoryCount : result.historyCount;
+	const uint32_t sampleCount = std::min(historyCount, kDisplayedRollingFrameCount);
+	if (sampleCount == 0)
+		return stats;
+
+	std::array<float, kDisplayedRollingFrameCount> samples{};
+	float sum = 0.0f;
+	const uint32_t firstSample = historyCount - sampleCount;
+	for (uint32_t i = 0; i < sampleCount; ++i) {
+		const float sample = cpuMode ?
+		                         result.GetCpuHistorySample(firstSample + i) :
+		                         result.GetHistorySample(firstSample + i);
+		samples[i] = sample;
+		sum += sample;
+	}
+
+	stats.avgMs = sum / static_cast<float>(sampleCount);
+	std::sort(samples.begin(), samples.begin() + sampleCount);
+	stats.p95Ms = GetSortedPercentile(samples, sampleCount, 95.0f);
+	stats.p99Ms = GetSortedPercentile(samples, sampleCount, 99.0f);
+	stats.timeMs = stats.avgMs;
+	return stats;
+}
+
+static float GetTextColumnWidth(const char* header, const std::vector<std::string>& labels, float extraWidth = 0.0f)
+{
+	float width = ImGui::CalcTextSize(header).x;
+	for (const auto& label : labels)
+		width = std::max(width, ImGui::CalcTextSize(label.c_str()).x);
+
+	return std::ceil(width + ImGui::GetStyle().CellPadding.x * 2.0f + extraWidth);
 }
 
 ImU32 ProfilingRenderer::GetGroupColor(const std::string& groupName)
@@ -110,7 +175,8 @@ void ProfilingRenderer::RenderGraph()
 		if (!result.valid || !HasTimingMode(result, cpuMode))
 			continue;
 
-		float timeMs = cpuMode ? result.cpuTimeMs : result.gpuTimeMs;
+		const auto stats = GetDisplayTimingStats(result, cpuMode);
+		float timeMs = stats.timeMs;
 
 		std::string groupName;
 		auto pos = result.name.find("::");
@@ -158,10 +224,11 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 			continue;
 
 		std::string label = r.name.substr(prefix.size());
-		float timeMs = cpuMode ? r.cpuTimeMs : r.gpuTimeMs;
-		float avg = cpuMode ? r.cpuAvgMs : r.avgMs;
-		float p95 = cpuMode ? r.cpuP95Ms : r.p95Ms;
-		float p99 = cpuMode ? r.cpuP99Ms : r.p99Ms;
+		const auto stats = GetDisplayTimingStats(r, cpuMode);
+		float timeMs = stats.timeMs;
+		float avg = stats.avgMs;
+		float p95 = stats.p95Ms;
+		float p99 = stats.p99Ms;
 		data.entries.push_back({ label, timeMs, avg, p95, p99 });
 		data.totalAvg += avg;
 		data.totalP95 += p95;
@@ -224,8 +291,13 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 	if (RenderFeatureTimingGraph(featurePrefix, data, graph, 100))
 		ImGui::Spacing();
 
-	if (showTable && ImGui::BeginTable("##FeatureTimers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
-		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+	if (showTable && ImGui::BeginTable("##FeatureTimers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX)) {
+		std::vector<std::string> passLabels;
+		passLabels.reserve(data.entries.size() + 1);
+		for (const auto& e : data.entries)
+			passLabels.push_back(e.label);
+		passLabels.emplace_back("Total");
+		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Pass", passLabels));
 		ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
 		ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
 		ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
@@ -280,7 +352,7 @@ bool ProfilingRenderer::RenderFeatureOverview()
 
 	if (ImGui::BeginTable("##FeatureProfilingOverview", 3,
 			ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_RowBg)) {
-		ImGui::TableSetupColumn("Feature", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+		ImGui::TableSetupColumn("Feature", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Feature", activeFeatures));
 		ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableSetupColumn("CPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableHeadersRow();
@@ -314,6 +386,20 @@ bool ProfilingRenderer::RenderFeatureOverview()
 	return true;
 }
 
+bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
+{
+	if (!globals::profiler)
+		return false;
+
+	const std::string prefix = featurePrefix + "::";
+	for (const auto& result : globals::profiler->GetResults()) {
+		if (result.valid && result.name.starts_with(prefix))
+			return true;
+	}
+
+	return false;
+}
+
 void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 {
 	auto& profiler = (*globals::profiler);
@@ -321,10 +407,9 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 
 	if (fullProfilerPage) {
 		bool profilingEnabled = profiler.IsUserEnabled();
-		const float toggleWidth = ImGui::GetFrameHeight() * 1.6f;
 		ImGui::TextUnformatted("Profiling");
 		ImGui::SameLine();
-		if (Util::FeatureToggle("##ProfilingRuntimeToggle", &profilingEnabled, ImVec2(toggleWidth, 0.0f))) {
+		if (ImGui::Checkbox("Enable", &profilingEnabled)) {
 			profiler.SetUserEnabled(profilingEnabled);
 			timeSinceLastUpdate = 1.0f;
 		}
@@ -379,9 +464,10 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			if (!result.valid || !HasTimingMode(result, cpuMode))
 				continue;
 
-			float avg = cpuMode ? result.cpuAvgMs : result.avgMs;
-			float p95 = cpuMode ? result.cpuP95Ms : result.p95Ms;
-			float p99 = cpuMode ? result.cpuP99Ms : result.p99Ms;
+			const auto stats = GetDisplayTimingStats(result, cpuMode);
+			float avg = stats.avgMs;
+			float p95 = stats.p95Ms;
+			float p99 = stats.p99Ms;
 
 			cachedTotalAvgMs += avg;
 			cachedTotalP95Ms += p95;
@@ -429,12 +515,20 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 
 	if (showTable) {
 		float availHeight = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing();
+		std::vector<std::string> passLabels;
+		passLabels.reserve(cachedGroups.size());
+		for (const auto& group : cachedGroups) {
+			passLabels.push_back(group.name);
+			for (const auto& pass : group.passes)
+				passLabels.push_back(pass.label);
+		}
+		const float passColumnWidth = GetTextColumnWidth("Pass", passLabels, ImGui::GetTreeNodeToLabelSpacing() + ImGui::GetStyle().IndentSpacing);
 
 		if (ImGui::BeginTable("##Profiler", 5,
-				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
+				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
 				ImVec2(0.0f, availHeight))) {
 			ImGui::TableSetupScrollFreeze(0, 1);
-			ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+			ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, passColumnWidth);
 			ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
 			ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
 			ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);

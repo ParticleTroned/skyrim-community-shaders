@@ -133,6 +133,7 @@ namespace
 	constexpr uint32_t kVRUpscalingTransitionApplyDelayFrames = 6u;
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
+	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
@@ -1681,6 +1682,67 @@ namespace
 	const char* BoolText(bool a_value)
 	{
 		return a_value ? "yes" : "no";
+	}
+
+	uint32_t GetCurrentFrameForLog()
+	{
+		const auto* state = globals::state;
+		return state ? std::max(state->frameCount, 1u) : 0u;
+	}
+
+	uint32_t ClearPendingVRFpsStabilizerLoadSync(Upscaling& a_upscaling)
+	{
+		a_upscaling.pendingVRFpsStabilizerSyncLastWaitLogFrame.store(0, std::memory_order_release);
+		return a_upscaling.pendingVRFpsStabilizerSyncFrame.exchange(0, std::memory_order_acq_rel);
+	}
+
+	void CancelPendingVRFpsStabilizerLoadSync(Upscaling& a_upscaling, const char* a_reason)
+	{
+		const uint32_t queuedFrame = ClearPendingVRFpsStabilizerLoadSync(a_upscaling);
+		if (queuedFrame == 0)
+			return;
+
+		logger::info(
+			"[Upscaling] VR FPS Stabilizer Sync cancelled before apply ({}): queuedFrame={}, frame={}.",
+			a_reason && a_reason[0] != '\0' ? a_reason : "unspecified reason",
+			queuedFrame,
+			GetCurrentFrameForLog());
+	}
+
+	void LogPendingVRFpsStabilizerLoadSyncRetained(const Upscaling& a_upscaling, const char* a_reason)
+	{
+		const uint32_t queuedFrame = a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
+		if (queuedFrame == 0)
+			return;
+
+		logger::info(
+			"[Upscaling] VR FPS Stabilizer Sync still pending ({}): queuedFrame={}, frame={}.",
+			a_reason && a_reason[0] != '\0' ? a_reason : "unspecified reason",
+			queuedFrame,
+			GetCurrentFrameForLog());
+	}
+
+	void LogPendingVRFpsStabilizerLoadSyncWait(Upscaling& a_upscaling, const char* a_reason)
+	{
+		const uint32_t queuedFrame = a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
+		if (queuedFrame == 0)
+			return;
+
+		const auto* state = globals::state;
+		const uint32_t currentFrame = GetCurrentFrameForLog();
+		const uint32_t logFrame = currentFrame != 0 ? currentFrame : queuedFrame;
+		const uint32_t lastLogFrame = a_upscaling.pendingVRFpsStabilizerSyncLastWaitLogFrame.load(std::memory_order_acquire);
+		if (lastLogFrame != 0 && logFrame >= lastLogFrame && logFrame - lastLogFrame < kVRFpsStabilizerSyncWaitLogIntervalFrames)
+			return;
+
+		a_upscaling.pendingVRFpsStabilizerSyncLastWaitLogFrame.store(logFrame, std::memory_order_release);
+		logger::info(
+			"[Upscaling] VR FPS Stabilizer Sync waiting for {}: queuedFrame={}, frame={}, loadingMenu={}, inWorld={}.",
+			a_reason && a_reason[0] != '\0' ? a_reason : "world-ready state",
+			queuedFrame,
+			currentFrame,
+			BoolText(IsLoadingMenuContextActive()),
+			BoolText(state && state->inWorld));
 	}
 
 	template <class Fn>
@@ -4031,7 +4093,9 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		if (a_event->opening) {
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
-			globals::features::upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+			LogPendingVRFpsStabilizerLoadSyncRetained(
+				globals::features::upscaling,
+				"loading menu opened before save-load sync could apply");
 		} else if (globals::state) {
 			const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
 			g_vrLoadingTransitionCloseFrame.store(currentFrame, std::memory_order_release);
@@ -4426,7 +4490,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 {
 	const bool isVR = globals::game::isVR;
 	if (isVR)
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+		CancelPendingVRFpsStabilizerLoadSync(*this, a_reason ? a_reason : "explicit upscaling transition");
 
 	const bool allowPendingDLSSSelection =
 		a_targetMethod == UpscaleMethod::kDLSS &&
@@ -4588,11 +4652,12 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, u
 void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 {
 	if (!globals::game::isVR || !settings.vrFpsStabilizerSync) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+		CancelPendingVRFpsStabilizerLoadSync(*this, "sync disabled or non-VR runtime");
 		return;
 	}
 
 	const uint32_t frame = std::max(a_frame, 1u);
+	pendingVRFpsStabilizerSyncLastWaitLogFrame.store(0, std::memory_order_release);
 	pendingVRFpsStabilizerSyncFrame.store(frame, std::memory_order_release);
 	logger::info("[Upscaling] VR FPS Stabilizer Sync queued after save-load menu close at frame {}.", frame);
 }
@@ -4604,18 +4669,23 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		return;
 
 	if (!globals::game::isVR || !settings.vrFpsStabilizerSync) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+		CancelPendingVRFpsStabilizerLoadSync(*this, "sync disabled or non-VR runtime");
 		return;
 	}
 
 	const auto* state = globals::state;
-	if (!state || IsLoadingMenuContextActive() || !state->inWorld)
+	if (!state || IsLoadingMenuContextActive() || !state->inWorld) {
+		LogPendingVRFpsStabilizerLoadSyncWait(*this, "world-ready state");
 		return;
+	}
 
 	VRFpsStabilizerUpscalingProfiles profiles;
 	if (!TryLoadVRFpsStabilizerUpscalingProfiles(profiles)) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-		logger::warn("[Upscaling] VR FPS Stabilizer Sync enabled, but no unconditional Interior/Exterior upscaling profile was found in {}.", profiles.path.string());
+		ClearPendingVRFpsStabilizerLoadSync(*this);
+		logger::warn(
+			"[Upscaling] VR FPS Stabilizer Sync enabled, but no unconditional Interior/Exterior upscaling profile was found in {} (queuedFrame={}).",
+			profiles.path.string(),
+			queuedFrame);
 		return;
 	}
 
@@ -4623,8 +4693,12 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	const auto& profile = loadedInterior ? profiles.interior : profiles.exterior;
 	const char* profileName = loadedInterior ? "Interior" : "Exterior";
 	if (!profile.HasAnySetting()) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-		logger::warn("[Upscaling] VR FPS Stabilizer Sync found no {} upscaling profile in {}.", profileName, profiles.path.string());
+		ClearPendingVRFpsStabilizerLoadSync(*this);
+		logger::warn(
+			"[Upscaling] VR FPS Stabilizer Sync found no {} upscaling profile in {} (queuedFrame={}).",
+			profileName,
+			profiles.path.string(),
+			queuedFrame);
 		return;
 	}
 
@@ -4635,12 +4709,14 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	const bool qualityMatches = GetEffectiveUpscalingQualityMode() == target.qualityMode;
 	const bool renderScaleMatches = IsRenderScaleModeRequested() == target.renderScaleMode;
 	const bool dlssPresetMatches = target.method != UpscaleMethod::kDLSS || GetEffectiveDLSSPreset() == target.dlssPreset;
-	pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+	ClearPendingVRFpsStabilizerLoadSync(*this);
 
 	if (methodMatches && qualityMatches && renderScaleMatches && dlssPresetMatches) {
 		logger::info(
-			"[Upscaling] VR FPS Stabilizer Sync: {} profile already matched after save-load (method={}, quality={}, dlssProfile={}, renderScale={}).",
+			"[Upscaling] VR FPS Stabilizer Sync: {} profile already matched after save-load (queuedFrame={}, appliedFrame={}, method={}, quality={}, dlssProfile={}, renderScale={}).",
 			profileName,
+			queuedFrame,
+			GetCurrentFrameForLog(),
 			magic_enum::enum_name(target.method),
 			target.qualityMode,
 			target.dlssPreset,
@@ -4649,9 +4725,11 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	}
 
 	logger::info(
-		"[Upscaling] VR FPS Stabilizer Sync applying {} profile from {}: method {} -> {}, quality {} -> {}, dlssProfile {} -> {}, renderScale {} -> {}.",
+		"[Upscaling] VR FPS Stabilizer Sync applying {} profile from {}: queuedFrame={}, appliedFrame={}, method {} -> {}, quality {} -> {}, dlssProfile {} -> {}, renderScale {} -> {}.",
 		profileName,
 		profiles.path.string(),
+		queuedFrame,
+		GetCurrentFrameForLog(),
 		magic_enum::enum_name(currentMethod),
 		magic_enum::enum_name(target.method),
 		GetEffectiveUpscalingQualityMode(),

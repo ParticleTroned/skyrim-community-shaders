@@ -654,6 +654,7 @@ public:
 	std::atomic<uint32_t> pendingVRPerfMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
+	std::atomic<uint32_t> pendingVRFpsStabilizerSyncLastWaitLogFrame{ 0 };
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };

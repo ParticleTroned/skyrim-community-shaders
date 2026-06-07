@@ -14,6 +14,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableCharacterLighting,
 	CharacterLightingStrength,
 	SSMode,
+	ScatterMode,
 	BaseProfile,
 	HumanProfile,
 	BurleySamples,
@@ -153,6 +154,25 @@ void SubsurfaceScattering::DrawSettings()
 		ImGui::RadioButton("Separable SSS", &settings.SSMode, 0);
 		ImGui::SameLine();
 		ImGui::RadioButton("Burley", &settings.SSMode, 1);
+
+		if (settings.SSMode == 0) {
+			ImGui::Spacing();
+			ImGui::Text("Albedo Handling");
+			ImGui::RadioButton("Pre-scatter", &settings.ScatterMode, kPreScatter);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Blur the lit color directly. Fastest, but blurs albedo texture detail along with lighting.");
+			}
+			ImGui::SameLine();
+			ImGui::RadioButton("Post-scatter", &settings.ScatterMode, kPostScatter);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Divide out albedo, blur the irradiance, multiply albedo back. Preserves texture detail.");
+			}
+			ImGui::SameLine();
+			ImGui::RadioButton("Pre and Post", &settings.ScatterMode, kPreAndPostScatter);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Split albedo across the blur using sqrt(albedo) on each side. A physically motivated middle ground.");
+			}
+		}
 
 		if (settings.SSMode == 0) {
 			if (ImGui::TreeNodeEx("Base Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -340,6 +360,10 @@ void SubsurfaceScattering::DrawSSS()
 		blurCBData.HumanProfile = { settings.HumanProfile.BlurRadius, settings.HumanProfile.Thickness, 0, 0 };
 
 		blurCBData.BurleySamples = settings.BurleySamples;
+		// Burley always does full albedo removal/reapply; scatter mode only applies to Separable SSS.
+		blurCBData.ScatterMode = (settings.SSMode == 0)
+		                             ? (uint)std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter)
+		                             : (uint)kPostScatter;
 
 		blurCBData.MeanFreePathBase = settings.MeanFreePathBase;
 		blurCBData.MeanFreePathHuman = settings.MeanFreePathHuman;
@@ -353,15 +377,13 @@ void SubsurfaceScattering::DrawSSS()
 	{
 		ID3D11Buffer* buffer[1] = { blurCB->CB() };
 		context->CSSetConstantBuffers(1, 1, buffer);
+		context->CSSetSamplers(0, 1, &globals::deferred->pointSampler);
 
 		auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
 		auto mask = renderer->GetRuntimeData().renderTargets[MASKS];
 		auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
 		auto normal = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
-
-		ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		ID3D11ShaderResourceView* views[5];
 		views[0] = main.SRV;
@@ -372,10 +394,33 @@ void SubsurfaceScattering::DrawSSS()
 
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
+		// Pre-pass: remove albedo from diffuse, write to diffuseNoAlbedoTex
+		{
+			TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Prepass");
+
+			ID3D11UnorderedAccessView* uav = diffuseNoAlbedoTex->uav.get();
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
+			auto shader = GetComputeShaderPrepass();
+			context->CSSetShader(shader, nullptr, 0);
+
+			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+			uav = nullptr;
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		}
+
+		// Swap color input to pre-processed texture
+		views[0] = diffuseNoAlbedoTex->srv.get();
+		context->CSSetShaderResources(0, 1, views);
+
 		if (settings.SSMode == 0) {
-			// Horizontal pass to temporary texture
+			// Horizontal pass: diffuseNoAlbedoTex -> blurHorizontalTemp
 			{
 				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Horizontal");
+
+				ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
+				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 				auto shader = GetComputeShaderHorizontalBlur();
 				context->CSSetShader(shader, nullptr, 0);
@@ -383,12 +428,12 @@ void SubsurfaceScattering::DrawSSS()
 				globals::profiler->BeginPass("SubsurfaceScattering::HorizontalBlur");
 				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 				globals::profiler->EndPass();
+
+				uav = nullptr;
+				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 			}
 
-			uav = nullptr;
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
-			// Vertical pass to main texture
+			// Vertical pass: blurHorizontalTemp -> main
 			{
 				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Vertical");
 
@@ -406,9 +451,12 @@ void SubsurfaceScattering::DrawSSS()
 				globals::profiler->EndPass();
 			}
 		} else if (settings.SSMode == 1) {
-			// Burley pass to main texture
+			// Burley pass: diffuseNoAlbedoTex -> main (SSS pixels only)
 			{
 				TracyD3D11Zone(globals::state->tracyCtx, "Subsurface Scattering - Burley");
+
+				ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
+				context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 				auto shader = GetComputeShaderBurley();
 				context->CSSetShader(shader, nullptr, 0);
@@ -416,14 +464,15 @@ void SubsurfaceScattering::DrawSSS()
 				globals::profiler->BeginPass("SubsurfaceScattering::Burley");
 				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 				globals::profiler->EndPass();
-
-				context->CopyResource(main.texture, blurHorizontalTemp->resource.get());
 			}
 		}
 	}
 
 	ID3D11Buffer* buffer = nullptr;
 	context->CSSetConstantBuffers(1, 1, &buffer);
+
+	ID3D11SamplerState* nullSampler = nullptr;
+	context->CSSetSamplers(0, 1, &nullSampler);
 
 	ID3D11ShaderResourceView* views[5]{ nullptr, nullptr, nullptr, nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
@@ -460,6 +509,10 @@ void SubsurfaceScattering::SetupResources()
 		blurHorizontalTemp = new Texture2D(texDesc);
 		blurHorizontalTemp->CreateSRV(srvDesc);
 		blurHorizontalTemp->CreateUAV(uavDesc);
+
+		diffuseNoAlbedoTex = new Texture2D(texDesc);
+		diffuseNoAlbedoTex->CreateSRV(srvDesc);
+		diffuseNoAlbedoTex->CreateUAV(uavDesc);
 	}
 }
 
@@ -518,6 +571,7 @@ void SubsurfaceScattering::LoadSettings(json& o_json)
 	ApplyLegacyHumanControl(o_json, "HumanSSSBrightness", "HumanMaleSSSBrightness", "HumanFemaleSSSBrightness", settings.HumanMaleSSSBrightness, settings.HumanFemaleSSSBrightness);
 	ApplyLegacyHumanControl(o_json, "HumanSSSBaseSaturation", "HumanMaleSSSBaseSaturation", "HumanFemaleSSSBaseSaturation", settings.HumanMaleSSSBaseSaturation, settings.HumanFemaleSSSBaseSaturation);
 	SanitizeHumanSkinControls(settings);
+	settings.ScatterMode = std::clamp(settings.ScatterMode, (int)kPreScatter, (int)kPreAndPostScatter);
 }
 
 void SubsurfaceScattering::SaveSettings(json& o_json)
@@ -528,6 +582,10 @@ void SubsurfaceScattering::SaveSettings(json& o_json)
 
 void SubsurfaceScattering::ClearShaderCache()
 {
+	if (prepassSS) {
+		prepassSS->Release();
+		prepassSS = nullptr;
+	}
 	if (horizontalSSBlur) {
 		horizontalSSBlur->Release();
 		horizontalSSBlur = nullptr;
@@ -540,6 +598,15 @@ void SubsurfaceScattering::ClearShaderCache()
 		burleySS->Release();
 		burleySS = nullptr;
 	}
+}
+
+ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderPrepass()
+{
+	if (!prepassSS) {
+		logger::debug("Compiling prepassSS");
+		prepassSS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\SubsurfaceScattering\\DiffuseExtractionCS.hlsl", {}, "cs_5_0");
+	}
+	return prepassSS;
 }
 
 ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderHorizontalBlur()

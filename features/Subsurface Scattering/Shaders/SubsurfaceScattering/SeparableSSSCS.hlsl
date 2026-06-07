@@ -6,23 +6,12 @@ Texture2D<float4> MaskTexture : register(t2);
 Texture2D<float4> AlbedoTexture : register(t3);
 Texture2D<float4> NormalTexture : register(t4);
 
-#define SSSS_N_SAMPLES 21
-
-cbuffer PerFrameSSS : register(b1)
-{
-	float4 Kernels[SSSS_N_SAMPLES + SSSS_N_SAMPLES];
-	float4 BaseProfile;
-	float4 HumanProfile;
-	float SSSS_FOVY;
-	uint BurleySamples;
-	uint2 pad;
-	float4 MeanFreePathBase;
-	float4 MeanFreePathHuman;
-};
+SamplerState PointSampler : register(s0);
 
 #include "Common/Color.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+#include "SubsurfaceScattering/SSSCommon.hlsli"
 
 #if defined(BURLEY)
 #	include "SubsurfaceScattering/Burley.hlsli"
@@ -54,7 +43,7 @@ cbuffer PerFrameSSS : register(b1)
 	float humanClass = MaskTexture[DTid.xy].y;
 	bool humanProfile = humanClass > 0.5;
 
-	float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(1.0, 0.0), sssAmount, humanProfile);
+	float4 color = SSSSBlurCS(texCoord, float2(1.0, 0.0), sssAmount, humanProfile);
 	SSSRW[DTid.xy] = max(0, color);
 
 #else
@@ -65,8 +54,9 @@ cbuffer PerFrameSSS : register(b1)
 		float humanClass = MaskTexture[DTid.xy].y;
 		bool humanProfile = humanClass > 0.5;
 
-		float4 color = SSSSBlurCS(DTid.xy, texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
+		float4 color = SSSSBlurCS(texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
 		color.rgb = Color::IrradianceToGamma(color.rgb);
+		color.rgb = SSSApplyAlbedo(color.rgb, AlbedoTexture[DTid.xy].rgb, ScatterMode);
 		SSSRW[DTid.xy] = float4(color.rgb, 1.0);
 	}
 

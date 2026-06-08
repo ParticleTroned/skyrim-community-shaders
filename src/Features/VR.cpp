@@ -42,6 +42,22 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+	bool IsWetternessActiveForDynamicCubemapVisibilityThrottle()
+	{
+		const auto& wetterness = globals::features::wetterness;
+		return wetterness.IsRuntimeActive();
+	}
+
+	void DisableDynamicCubemapVisibilityThrottleForWetterness(VR::Settings& a_settings)
+	{
+		if (!a_settings.EnableDynamicCubemapVisibilityThrottle || !IsWetternessActiveForDynamicCubemapVisibilityThrottle()) {
+			return;
+		}
+
+		logger::info("Disabling Low-Visibility Cubemap Throttle because Wetterness is active.");
+		a_settings.EnableDynamicCubemapVisibilityThrottle = false;
+	}
+
 	bool BeginTabItemWithFont(const char* label, Menu::FontRole role, ImGuiTabItemFlags flags = ImGuiTabItemFlags_None)
 	{
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
@@ -308,6 +324,7 @@ void VR::LoadSettings(json& o_json)
 	MigrateLegacyBindingDefaults(settings);
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 
 	if (settings.EnableOuterCascadeCasterBias) {
 		ShadowmapRasterizerFix::InstallD3DHooks(globals::d3d::context);
@@ -316,6 +333,7 @@ void VR::LoadSettings(json& o_json)
 
 void VR::SaveSettings(json& o_json)
 {
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	o_json = settings;
 	SaveVRControllerBinding(o_json, "VRMenuOpenKeys", settings.VRMenuOpenKeys);
 	SaveVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
@@ -328,6 +346,7 @@ void VR::RestoreDefaultSettings()
 	ReleaseMenuDesktopWindowManagement();
 	settings = Settings{};
 	settings.ClampToValidRanges();
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	UpdateDepthBufferCulling();
 
 	if (gMinOccludeeBoxExtent) {
@@ -1372,6 +1391,8 @@ namespace
 			ImGui::TextDisabled("VR foveation controls are available only in VR.");
 			return;
 		}
+		DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+
 		auto drawSection = [](const char* a_label) {
 			ImGui::Spacing();
 			MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
@@ -1626,6 +1647,11 @@ namespace
 		ImGui::EndDisabled();
 
 		drawSection("Dynamic Cubemaps");
+		const bool dynamicCubemapVisibilityThrottleBlockedByWetterness = IsWetternessActiveForDynamicCubemapVisibilityThrottle();
+		if (dynamicCubemapVisibilityThrottleBlockedByWetterness) {
+			settings.EnableDynamicCubemapVisibilityThrottle = false;
+		}
+
 		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive);
 		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1633,7 +1659,9 @@ namespace
 			ImGui::TextUnformatted("When active, cubemap capture, inference, irradiance, and BC6H compression are spread across more frames when reflections are low priority.");
 			ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a shader-detail feathered vs hard-cutoff pair.");
 		}
+		ImGui::EndDisabled();
 
+		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive || dynamicCubemapVisibilityThrottleBlockedByWetterness);
 		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Adds visibility-based reduction for Dynamic Cubemaps when the secondary reflection path is not currently useful.");
@@ -1642,6 +1670,8 @@ namespace
 			ImGui::TextUnformatted("Additive with Dynamic Cubemap Cadence; it is not a replacement mode or a hard-cutoff option.");
 		}
 		ImGui::EndDisabled();
+		if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
+			ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
 		if (!foveatedProfileActive)
 			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with FOV scale below 1.00.");
 		if (!dynamicCubemapsRuntimeActive)

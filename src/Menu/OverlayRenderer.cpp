@@ -391,7 +391,8 @@ void OverlayRenderer::HandleABTesting()
 
 void OverlayRenderer::FinalizeImGuiFrame()
 {
-	if (auto* menu = Menu::GetSingleton()) {
+	if (auto* menu = Menu::GetSingleton();
+		menu && menu->GetSettings().Theme.UseCustomCursor && Util::CursorLoader::GetLoadedCount() > 0) {
 		Util::CursorLoader::DrawCustomCursor(*menu);
 	}
 

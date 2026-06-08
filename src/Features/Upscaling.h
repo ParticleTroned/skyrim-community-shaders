@@ -674,6 +674,7 @@ public:
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	mutable std::atomic_bool submitStageRuntimeActive{ false };
+	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();

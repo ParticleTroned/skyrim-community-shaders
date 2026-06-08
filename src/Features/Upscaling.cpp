@@ -131,6 +131,8 @@ namespace
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
 	constexpr uint32_t kDefaultRenderScaleQualityMode = 3u;  // Quality
 	constexpr uint32_t kVRUpscalingTransitionApplyDelayFrames = 6u;
+	constexpr uint32_t kVRLoadingMenuRelatchDelayFrames = 1u;
+	constexpr uint32_t kVRSubmitStageVendorRelatchCooldownFrames = 30u;
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
@@ -145,6 +147,8 @@ namespace
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
+
+	bool IsMainMenuContextActive();
 
 	bool IsRenderDocDllLoaded(bool a_probeProcess)
 	{
@@ -1632,6 +1636,14 @@ namespace
 	{
 		return IsLoadingMenuContextActive() ||
 		       IsVRLoadingPresentationTailActive(a_state);
+	}
+
+	bool ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(const Upscaling& a_upscaling, const State* a_state)
+	{
+		return globals::game::isVR &&
+		       IsLoadingMenuContextActive() &&
+		       !IsMainMenuContextActive() &&
+		       !IsUpscalingLoadTransitionContextActive(a_upscaling, a_state);
 	}
 
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
@@ -5117,13 +5129,23 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
 		return;
 
-	const uint32_t relatchDelayFrames = kVRUpscalingTransitionApplyDelayFrames;
+	auto* state = globals::state;
+	const uint32_t relatchDelayFrames = ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, state) ?
+		kVRLoadingMenuRelatchDelayFrames :
+		kVRUpscalingTransitionApplyDelayFrames;
 	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
 	const uint32_t previousRelatchDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
-	if (!wasPending || relatchDelayFrames > previousRelatchDelay)
+	const bool shortenRelatchForLoadingMenu =
+		relatchDelayFrames == kVRLoadingMenuRelatchDelayFrames &&
+		previousRelatchDelay == kVRUpscalingTransitionApplyDelayFrames;
+	const bool updateRelatchDelay =
+		!wasPending ||
+		relatchDelayFrames > previousRelatchDelay ||
+		shortenRelatchForLoadingMenu;
+	if (updateRelatchDelay)
 		MarkPerfModeRenderTargetRecreateQueued(relatchDelayFrames);
 	RequestHistoryReset();
-	if (!wasPending || relatchDelayFrames > previousRelatchDelay)
+	if (updateRelatchDelay)
 		LogVRTransitionDiagnostics(*this, "queued render-target relatch", true);
 	if (wasPending)
 		return;
@@ -5315,6 +5337,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return false;
 	}
 
+	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	submitStageVendorResumeFrame.store(
+		currentFrame + kVRSubmitStageVendorRelatchCooldownFrames,
+		std::memory_order_release);
 	clearRelatchDelay();
 	clearRelatchRetryDiagnostics();
 	logger::info("[PerfMode] Applied render-target relatch");
@@ -5349,6 +5375,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
+	submitStageVendorResumeFrame.store(0, std::memory_order_release);
 	historyResetTrackingInitialized = false;
 	historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
 	historyResetThisFrame = false;
@@ -10209,6 +10236,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	submitStageVendorResumeFrame.store(0, std::memory_order_release);
 	ClearPendingVRUpscalingTransition();
 	streamline.ResetDLSSIdleFences();
 	streamline.InvalidateDLSSOptionsCache();
@@ -10411,10 +10439,23 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		!presentationRenderTarget &&
 		submitMenuPresentationContext &&
 		(a_inputBounds || sourceHasPerEyeLayout);
-	const bool presentationOnly = perfModeScaleMode && menuPresentationContext && !perfModeMenuCanUseVendor;
+	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
+	const bool transitionPresentationCooldown =
+		vendorResumeFrame != 0 &&
+		currentFrame < vendorResumeFrame;
+	if (vendorResumeFrame != 0 && !transitionPresentationCooldown)
+		submitStageVendorResumeFrame.store(0, std::memory_order_release);
+	const bool transitionPresentationOnly = perfModeScaleMode && transitionPresentationCooldown;
+	const bool presentationOnly =
+		perfModeScaleMode &&
+		(menuPresentationContext || transitionPresentationOnly) &&
+		!perfModeMenuCanUseVendor;
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedRequested =
-		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !perfModeMenuCanUseVendor && !foveatedTransitionBypass;
+		!presentationOnly &&
+		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
+		!perfModeMenuCanUseVendor &&
+		!foveatedTransitionBypass;
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	LogVRTransitionDiagnostics(*this);
 
@@ -10605,7 +10646,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return presentStretchOutput(
 			sourceEyeWidthIn,
 			sourceEyeHeightIn,
-			"menu-loading-presentation-output");
+			transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output");
 	}
 
 	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;
@@ -10976,11 +11017,14 @@ bool Upscaling::ShouldDeferVRUpscalingTransitionSettings() const
 		return false;
 
 	const auto* state = globals::state;
+	if (IsCommunityShadersMenuOpen())
+		return true;
 	if (IsUpscalingLoadTransitionContextActive(*this, state))
 		return true;
+	if (ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, state))
+		return false;
 
-	return IsCommunityShadersMenuOpen() ||
-	       IsKnownGameMenuContextActive();
+	return IsKnownGameMenuContextActive();
 }
 
 bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
@@ -10990,6 +11034,9 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 
 	const uint32_t queuedFrame = pendingVRUpscalingTransitionFrame.load(std::memory_order_acquire);
 	if (queuedFrame == 0)
+		return false;
+
+	if (ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, globals::state))
 		return false;
 
 	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : queuedFrame;
@@ -11002,7 +11049,11 @@ void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames)
 	const uint32_t delayFrames = a_delayFrames != 0 ? a_delayFrames : kVRUpscalingTransitionApplyDelayFrames;
 	pendingPerfModeRenderTargetRecreateFrame.store(frame, std::memory_order_release);
 	const uint32_t previousDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
-	if (previousDelay == 0 || delayFrames > previousDelay)
+	const bool shortenRelatchForLoadingMenu =
+		delayFrames == kVRLoadingMenuRelatchDelayFrames &&
+		previousDelay == kVRUpscalingTransitionApplyDelayFrames &&
+		ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, globals::state);
+	if (previousDelay == 0 || delayFrames > previousDelay || shortenRelatchForLoadingMenu)
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(delayFrames, std::memory_order_release);
 }
 

@@ -3732,6 +3732,11 @@ void Upscaling::DrawFoveatedSettings()
 		aaVrsUiState.statusText);
 	if (aaVrsUiState.pausedInMenu)
 		ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) was active in scene and is paused while this menu is open.");
+	else if (aaVrsUiState.requested && !aaVrsUiState.active) {
+		const auto aaVrsStatus = aaVrsController.GetStatus();
+		if (aaVrsStatus.hasSettings && aaVrsStatus.lastDisableReason && aaVrsStatus.lastDisableReason[0])
+			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) runtime inactive: %s", aaVrsStatus.lastDisableReason);
+	}
 	if (!aaVrsUiState.requested)
 		settings.aaVrsVisualization = false;
 
@@ -6436,7 +6441,7 @@ void Upscaling::UpdateAAVRSState()
 
 	if (!IsAAVRSEligible(upscaleMethod)) {
 		disableAndReport(
-			SupportsFoveatedVendorDispatch(upscaleMethod) ? "Foveated inactive" : "Ineligible AA mode",
+			SupportsFoveatedVendorDispatch(upscaleMethod) ? "Foveated inactive" : "Ineligible upscaling method",
 			requested);
 		return;
 	}

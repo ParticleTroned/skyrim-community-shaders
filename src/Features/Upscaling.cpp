@@ -283,6 +283,172 @@ namespace
 		return region.IsValid() && textureWidth >= region.MaxX() && textureHeight >= region.MaxY();
 	}
 
+	struct VRSubmitSourceRegion
+	{
+		D3D11_BOX box{};
+		UINT subresource = 0;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t depthOffsetX = 0;
+		uint32_t depthOffsetY = 0;
+		uint32_t depthWidth = 0;
+		uint32_t depthHeight = 0;
+		bool valid = false;
+		bool matchesExpectedSize = false;
+		bool fromOpenVRBounds = false;
+	};
+
+	uint32_t GetD3DBoxWidth(const D3D11_BOX& box)
+	{
+		return box.right > box.left ? box.right - box.left : 0u;
+	}
+
+	uint32_t GetD3DBoxHeight(const D3D11_BOX& box)
+	{
+		return box.bottom > box.top ? box.bottom - box.top : 0u;
+	}
+
+	uint32_t ResolveVRBoundsPixel(float value, uint32_t maxValue)
+	{
+		const double normalized = std::clamp(static_cast<double>(value), 0.0, 1.0);
+		return static_cast<uint32_t>(std::llround(normalized * static_cast<double>(maxValue)));
+	}
+
+	bool TryGetNormalizedVRBounds(const vr::VRTextureBounds_t* inputBounds, float& minU, float& minV, float& maxU, float& maxV)
+	{
+		if (!inputBounds ||
+			!std::isfinite(inputBounds->uMin) ||
+			!std::isfinite(inputBounds->uMax) ||
+			!std::isfinite(inputBounds->vMin) ||
+			!std::isfinite(inputBounds->vMax)) {
+			return false;
+		}
+
+		minU = std::min(inputBounds->uMin, inputBounds->uMax);
+		maxU = std::max(inputBounds->uMin, inputBounds->uMax);
+		minV = std::min(inputBounds->vMin, inputBounds->vMax);
+		maxV = std::max(inputBounds->vMin, inputBounds->vMax);
+		return true;
+	}
+
+	bool InputBoundsUseCombinedStereoSpace(const vr::VRTextureBounds_t* inputBounds, uint32_t eyeIndex)
+	{
+		float minU = 0.0f;
+		float minV = 0.0f;
+		float maxU = 0.0f;
+		float maxV = 0.0f;
+		if (!TryGetNormalizedVRBounds(inputBounds, minU, minV, maxU, maxV)) {
+			return false;
+		}
+		(void)minV;
+		(void)maxV;
+		constexpr float halfEyeEpsilon = 0.001f;
+		if (eyeIndex == 0u)
+			return maxU <= 0.5f + halfEyeEpsilon;
+
+		return minU >= 0.5f - halfEyeEpsilon;
+	}
+
+	bool InputBoundsCoverFullTexture(const vr::VRTextureBounds_t* inputBounds)
+	{
+		float minU = 0.0f;
+		float minV = 0.0f;
+		float maxU = 0.0f;
+		float maxV = 0.0f;
+		if (!TryGetNormalizedVRBounds(inputBounds, minU, minV, maxU, maxV)) {
+			return false;
+		}
+
+		constexpr float fullBoundsEpsilon = 0.001f;
+		return minU <= fullBoundsEpsilon &&
+		       minV <= fullBoundsEpsilon &&
+		       maxU >= 1.0f - fullBoundsEpsilon &&
+		       maxV >= 1.0f - fullBoundsEpsilon;
+	}
+
+	VRSubmitSourceRegion ResolveVRSubmitSourceRegion(
+		const D3D11_TEXTURE2D_DESC& sourceDesc,
+		uint32_t eyeIndex,
+		uint32_t expectedEyeWidth,
+		uint32_t expectedEyeHeight,
+		const VRStereoLayout& sourceStereoLayout,
+		bool sourceUsesCombinedStereoLayout,
+		bool inputBoundsUseCombinedStereoSpace,
+		const vr::VRTextureBounds_t* inputBounds)
+	{
+		VRSubmitSourceRegion region{};
+		if (!sourceDesc.Width || !sourceDesc.Height || !expectedEyeWidth || !expectedEyeHeight)
+			return region;
+
+		const uint32_t baseDepthOffsetX = sourceStereoLayout.eyes[eyeIndex].minX;
+		region.depthWidth = expectedEyeWidth;
+		region.depthHeight = expectedEyeHeight;
+		region.depthOffsetX = baseDepthOffsetX;
+
+		if (sourceDesc.ArraySize > 1) {
+			const UINT arraySlice = std::min<UINT>(eyeIndex, sourceDesc.ArraySize - 1);
+			region.subresource = D3D11CalcSubresource(0, arraySlice, sourceDesc.MipLevels);
+		}
+
+		const bool ignoreFullCombinedStereoBounds =
+			sourceUsesCombinedStereoLayout &&
+			!inputBoundsUseCombinedStereoSpace &&
+			InputBoundsCoverFullTexture(inputBounds);
+
+		if (inputBounds && !ignoreFullCombinedStereoBounds) {
+			float minU = 0.0f;
+			float minV = 0.0f;
+			float maxU = 0.0f;
+			float maxV = 0.0f;
+			if (!TryGetNormalizedVRBounds(inputBounds, minU, minV, maxU, maxV)) {
+				return region;
+			}
+			const uint32_t left = ResolveVRBoundsPixel(minU, sourceDesc.Width);
+			const uint32_t top = ResolveVRBoundsPixel(minV, sourceDesc.Height);
+			const uint32_t right = ResolveVRBoundsPixel(maxU, sourceDesc.Width);
+			const uint32_t bottom = ResolveVRBoundsPixel(maxV, sourceDesc.Height);
+			region.box = {
+				left,
+				top,
+				0,
+				right,
+				bottom,
+				1
+			};
+			region.fromOpenVRBounds = true;
+			if (inputBoundsUseCombinedStereoSpace) {
+				const uint32_t depthLeft = ResolveVRBoundsPixel(minU, sourceStereoLayout.width);
+				const uint32_t depthTop = ResolveVRBoundsPixel(minV, sourceStereoLayout.height);
+				const uint32_t depthRight = ResolveVRBoundsPixel(maxU, sourceStereoLayout.width);
+				const uint32_t depthBottom = ResolveVRBoundsPixel(maxV, sourceStereoLayout.height);
+				region.depthOffsetX = depthLeft;
+				region.depthOffsetY = depthTop;
+				region.depthWidth = depthRight > depthLeft ? depthRight - depthLeft : 0u;
+				region.depthHeight = depthBottom > depthTop ? depthBottom - depthTop : 0u;
+			} else {
+				const uint32_t depthLeft = ResolveVRBoundsPixel(minU, expectedEyeWidth);
+				const uint32_t depthTop = ResolveVRBoundsPixel(minV, expectedEyeHeight);
+				const uint32_t depthRight = ResolveVRBoundsPixel(maxU, expectedEyeWidth);
+				const uint32_t depthBottom = ResolveVRBoundsPixel(maxV, expectedEyeHeight);
+				region.depthOffsetX = baseDepthOffsetX + depthLeft;
+				region.depthOffsetY = depthTop;
+				region.depthWidth = depthRight > depthLeft ? depthRight - depthLeft : 0u;
+				region.depthHeight = depthBottom > depthTop ? depthBottom - depthTop : 0u;
+			}
+		} else if (sourceUsesCombinedStereoLayout) {
+			region.box = sourceStereoLayout.eyes[eyeIndex].ToClampedD3DBox(sourceDesc.Width, sourceDesc.Height);
+			region.depthOffsetX = sourceStereoLayout.eyes[eyeIndex].minX;
+		} else {
+			region.box = { 0, 0, 0, std::min(expectedEyeWidth, sourceDesc.Width), std::min(expectedEyeHeight, sourceDesc.Height), 1 };
+		}
+
+		region.width = GetD3DBoxWidth(region.box);
+		region.height = GetD3DBoxHeight(region.box);
+		region.valid = region.width != 0 && region.height != 0 && region.depthWidth != 0 && region.depthHeight != 0;
+		region.matchesExpectedSize = region.width == expectedEyeWidth && region.height == expectedEyeHeight;
+		return region;
+	}
+
 	bool IsVendorUpscalingMethod(Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		return a_upscaleMethod == Upscaling::UpscaleMethod::kFSR || a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS;
@@ -2327,8 +2493,8 @@ namespace
 		const D3D11_TEXTURE2D_DESC& a_sourceDesc,
 		const D3D11_BOX& a_sourceBox,
 		uint32_t a_sourceSubresource,
-		uint32_t a_sourceEyeWidth,
-		uint32_t a_sourceEyeHeight,
+		uint32_t a_inputEyeWidth,
+		uint32_t a_inputEyeHeight,
 		uint32_t a_outputEyeWidth,
 		uint32_t a_outputEyeHeight,
 		bool a_targetScaleMode,
@@ -2342,7 +2508,7 @@ namespace
 
 		const auto inputBounds = BuildVRBoundsDiagnosticInfo(a_inputBounds);
 		VR_TRANSITION_DIAG_LOG(
-			"[VRSubmitStage] {} frame={} eye={} closeAge={} req={} runtime={} quality={} targetScale={} presentationOnly={} foveatedRequested={} source={}x{} fmt={} array={} samples={} sourceSubresource={} sourceBox=({},{})->({},{}) expectedIn={}x{} outputEye={}x{} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) presentationRT={} relatchPending={} vendorPending={} hmdDefer={} projectedDefer={}",
+			"[VRSubmitStage] {} frame={} eye={} closeAge={} req={} runtime={} quality={} targetScale={} presentationOnly={} foveatedRequested={} source={}x{} fmt={} array={} samples={} sourceSubresource={} sourceBox=({},{})->({},{}) inputEye={}x{} outputEye={}x{} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) presentationRT={} relatchPending={} vendorPending={} hmdDefer={} projectedDefer={}",
 			DiagnosticText(a_path, "unknown"),
 			snapshot.frame,
 			VREyeName(a_eye),
@@ -2363,8 +2529,8 @@ namespace
 			a_sourceBox.top,
 			a_sourceBox.right,
 			a_sourceBox.bottom,
-			a_sourceEyeWidth,
-			a_sourceEyeHeight,
+			a_inputEyeWidth,
+			a_inputEyeHeight,
 			a_outputEyeWidth,
 			a_outputEyeHeight,
 			inputBounds.uMin,
@@ -10536,13 +10702,51 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const auto sourceStereoLayout = ResolveVRSideBySideStereoLayout(sourceEyeWidthIn, sourceEyeHeightIn);
 	if (!sourceStereoLayout.IsValid())
 		return false;
+	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	const bool sourceHasPerEyeLayout =
 		sourceDesc.ArraySize > 1 ||
 		(sourceDesc.ArraySize == 1 && TextureContainsVREyeRegion(sourceDesc.Width, sourceDesc.Height, sourceStereoLayout.eyes[1]));
+	const bool sourceUsesCombinedStereoLayout =
+		sourceDesc.ArraySize == 1 &&
+		TextureContainsVREyeRegion(sourceDesc.Width, sourceDesc.Height, sourceStereoLayout.eyes[1]);
+	const bool inputBoundsUseCombinedStereoSpace =
+		sourceUsesCombinedStereoLayout &&
+		InputBoundsUseCombinedStereoSpace(a_inputBounds, eyeIndex);
+	const auto sourceRegion = ResolveVRSubmitSourceRegion(
+		sourceDesc,
+		eyeIndex,
+		sourceEyeWidthIn,
+		sourceEyeHeightIn,
+		sourceStereoLayout,
+		sourceUsesCombinedStereoLayout,
+		inputBoundsUseCombinedStereoSpace,
+		a_inputBounds);
+	if (!sourceRegion.valid) {
+		static bool loggedInvalidSourceRegion = false;
+		if (!loggedInvalidSourceRegion) {
+			const auto inputBounds = BuildVRBoundsDiagnosticInfo(a_inputBounds);
+			logger::warn(
+				"[Upscaling] Submit-stage {} skipped because the submit source region is empty or invalid. eye={} source={}x{} bounds=({:.4f},{:.4f})->({:.4f},{:.4f}) expected={}x{}",
+				upscaleMethodName,
+				eyeIndex,
+				sourceDesc.Width,
+				sourceDesc.Height,
+				inputBounds.uMin,
+				inputBounds.vMin,
+				inputBounds.uMax,
+				inputBounds.vMax,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn);
+			loggedInvalidSourceRegion = true;
+		}
+		return false;
+	}
+	const bool submitBoundsPresentationFallback = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
 	const bool vrRenderScaleMenuCanUseVendor =
 		vrRenderScaleMode &&
 		!presentationRenderTarget &&
 		submitMenuPresentationContext &&
+		sourceRegion.matchesExpectedSize &&
 		(a_inputBounds || sourceHasPerEyeLayout);
 	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
 	const bool transitionPresentationCooldown =
@@ -10553,7 +10757,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
 	const bool presentationOnly =
 		vrRenderScaleMode &&
-		(menuPresentationContext || transitionPresentationOnly) &&
+		(menuPresentationContext || transitionPresentationOnly || submitBoundsPresentationFallback) &&
 		!vrRenderScaleMenuCanUseVendor;
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedRequested =
@@ -10561,7 +10765,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass;
-	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	LogVRTransitionDiagnostics(*this);
 
 	CheckResources(upscaleMethod);
@@ -10596,11 +10799,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!presentationOnly && (!motionVector.texture || !depth.texture))
 		return false;
 
+	const uint32_t presentationInputWidth = submitBoundsPresentationFallback ? sourceRegion.width : sourceEyeWidthIn;
+	const uint32_t presentationInputHeight = submitBoundsPresentationFallback ? sourceRegion.height : sourceEyeHeightIn;
+
 	if (presentationOnly) {
-		const char* presentationContext = "Menu/loading presentation";
+		const char* presentationContext = submitBoundsPresentationFallback ? "Submit bounds presentation fallback" : "Menu/loading presentation";
 		try {
-			if ((!submitStagePreparedThisFrame || !submitStagePreparedFramePresentationOnly) &&
-				!EnsureVRPresentationTextures(sourceEyeWidthIn, sourceEyeHeightIn, eyeWidthOut, eyeHeightOut, sourceTexture)) {
+			if (!EnsureVRPresentationTextures(presentationInputWidth, presentationInputHeight, eyeWidthOut, eyeHeightOut, sourceTexture)) {
 				logger::warn("[VRRenderScale] {} failed to create presentation textures.", presentationContext);
 				return false;
 			}
@@ -10652,43 +10857,23 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			HMDMaskClearPhase::SubmitStageOutput,
 			vrIntermediateColorOut[eyeIndex]->uav.get(),
 			depth.depthSRV,
-			sourceEyeWidthIn,
-			sourceEyeHeightIn,
+			sourceRegion.depthWidth,
+			sourceRegion.depthHeight,
 			eyeWidthOut,
 			eyeHeightOut,
-			sourceStereoLayout.eyes[eyeIndex].minX,
-			0u);
+			sourceRegion.depthOffsetX,
+			0u,
+			sourceRegion.depthOffsetY);
 	};
 
-	auto clampToTexture = [](int64_t value, uint32_t maxValue) {
-		return static_cast<uint32_t>(std::clamp<int64_t>(value, 0, maxValue));
-	};
+	const UINT sourceSubresource = sourceRegion.subresource;
+	const D3D11_BOX colorBox = sourceRegion.box;
 
-	const bool sourceUsesCombinedStereoLayout =
-		sourceDesc.ArraySize == 1 &&
-		TextureContainsVREyeRegion(sourceDesc.Width, sourceDesc.Height, sourceStereoLayout.eyes[1]);
-
-	UINT sourceSubresource = 0;
-	D3D11_BOX colorBox{};
-	if (sourceDesc.ArraySize > 1) {
-		const UINT arraySlice = std::min<UINT>(eyeIndex, sourceDesc.ArraySize - 1);
-		sourceSubresource = D3D11CalcSubresource(0, arraySlice, sourceDesc.MipLevels);
-		colorBox = { 0, 0, 0, std::min(sourceEyeWidthIn, sourceDesc.Width), std::min(sourceEyeHeightIn, sourceDesc.Height), 1 };
-	} else if (sourceUsesCombinedStereoLayout) {
-		colorBox = sourceStereoLayout.eyes[eyeIndex].ToClampedD3DBox(sourceDesc.Width, sourceDesc.Height);
-	} else if (a_inputBounds) {
-		const uint32_t left = clampToTexture(std::llround(a_inputBounds->uMin * static_cast<float>(sourceDesc.Width)), sourceDesc.Width);
-		const uint32_t top = clampToTexture(std::llround(a_inputBounds->vMin * static_cast<float>(sourceDesc.Height)), sourceDesc.Height);
-		colorBox = { left, top, 0, std::min(left + sourceEyeWidthIn, sourceDesc.Width), std::min(top + sourceEyeHeightIn, sourceDesc.Height), 1 };
-	} else {
-		colorBox = { 0, 0, 0, std::min(sourceEyeWidthIn, sourceDesc.Width), std::min(sourceEyeHeightIn, sourceDesc.Height), 1 };
-	}
-
-	if (colorBox.right - colorBox.left != sourceEyeWidthIn || colorBox.bottom - colorBox.top != sourceEyeHeightIn) {
+	if (!sourceRegion.matchesExpectedSize && !submitBoundsPresentationFallback) {
 		static bool loggedBadBounds = false;
 		if (!loggedBadBounds) {
 			logger::warn(
-				"[Upscaling] Submit-stage {} skipped because submit bounds do not contain the expected render area. eye={} source={}x{} box=({},{})->({},{}) expected={}x{}",
+				"[Upscaling] Submit-stage {} skipped because submit bounds do not contain the expected render area. eye={} source={}x{} box=({},{})->({},{}) actual={}x{} expected={}x{}",
 				upscaleMethodName,
 				eyeIndex,
 				sourceDesc.Width,
@@ -10697,11 +10882,34 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				colorBox.top,
 				colorBox.right,
 				colorBox.bottom,
+				sourceRegion.width,
+				sourceRegion.height,
 				sourceEyeWidthIn,
 				sourceEyeHeightIn);
 			loggedBadBounds = true;
 		}
 		return false;
+	}
+	if (submitBoundsPresentationFallback) {
+		static bool loggedBoundsStretchFallback = false;
+		if (!loggedBoundsStretchFallback) {
+			logger::warn(
+				"[VRRenderScale] Submit-stage {} using stretch fallback for non-standard submit bounds. eye={} source={}x{} box=({},{})->({},{}) actual={}x{} expected={}x{} openVRBounds={}",
+				upscaleMethodName,
+				eyeIndex,
+				sourceDesc.Width,
+				sourceDesc.Height,
+				colorBox.left,
+				colorBox.top,
+				colorBox.right,
+				colorBox.bottom,
+				sourceRegion.width,
+				sourceRegion.height,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn,
+				BoolText(sourceRegion.fromOpenVRBounds));
+			loggedBoundsStretchFallback = true;
+		}
 	}
 
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
@@ -10709,6 +10917,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 
 	const auto logSubmitStagePath = [&](const char* path) {
+		const uint32_t inputEyeWidth = presentationOnly ? presentationInputWidth : sourceEyeWidthIn;
+		const uint32_t inputEyeHeight = presentationOnly ? presentationInputHeight : sourceEyeHeightIn;
 		LogVRSubmitStagePathDiagnostics(
 			*this,
 			path,
@@ -10717,8 +10927,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			sourceDesc,
 			colorBox,
 			sourceSubresource,
-			sourceEyeWidthIn,
-			sourceEyeHeightIn,
+			inputEyeWidth,
+			inputEyeHeight,
 			eyeWidthOut,
 			eyeHeightOut,
 			vrRenderScaleMode,
@@ -10749,9 +10959,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	if (presentationOnly) {
 		return presentStretchOutput(
-			sourceEyeWidthIn,
-			sourceEyeHeightIn,
-			transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output");
+			presentationInputWidth,
+			presentationInputHeight,
+			submitBoundsPresentationFallback ? "submit-bounds-stretch-output" :
+			                                   (transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output"));
 	}
 
 	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;

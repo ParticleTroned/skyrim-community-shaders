@@ -4149,8 +4149,9 @@ void Upscaling::LoadSettings(json& o_json)
 			logger::warn("[Upscaling] Loaded legacy perfMode setting could not be migrated; using VR Render Scale Mode default.");
 		}
 	} else if (!hasRenderScaleModeSetting) {
-		// Preserve old behavior for configs that predate both renderScaleMode and submitStageUpscaling.
-		settings.renderScaleMode = IsRenderScaleQualityMode(settings.qualityMode) ? 1u : 0u;
+		// Pre-render-scale configs may still carry non-native quality presets for
+		// regular vendor upscaling. Do not infer VR Render Scale Mode from quality alone.
+		settings.renderScaleMode = 0u;
 	}
 	if (!hasQualityModeSchemaVersion) {
 		settings.qualityMode = MigrateLegacyQualityModeUInt(settings.qualityMode);

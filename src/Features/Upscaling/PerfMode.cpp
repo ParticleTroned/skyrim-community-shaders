@@ -38,10 +38,6 @@ void Upscaling::PerfModeState::ResetBootLatch()
 	displaySizeChanged = false;
 }
 
-void Upscaling::PerfModeState::ResetResources()
-{
-}
-
 void Upscaling::PerfModeState::RecordTrueHMDSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
 {
 	if (!a_eyeWidth || !a_eyeHeight)
@@ -79,13 +75,15 @@ bool Upscaling::PerfModeState::IsEligible(const Settings& a_settings, UpscaleMet
 	return Upscaling::GetQualityModeResolutionScale(qualityMode) < kPerfModeScaleThreshold;
 }
 
-bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate)
+void Upscaling::PerfModeState::UpdateRestartRequiredState(const Settings& a_settings, UpscaleMethod a_method)
 {
 	const uint32_t qualityMode = ClampQualityMode(a_settings.qualityMode);
 	const bool requestedNow = IsRequested(a_settings);
 	const bool eligibleNow = IsEligible(a_settings, a_method);
 
 	if (boot.valid) {
+		// Once a boot latch exists, any setting drift that would change that latched RT sizing
+		// means the user now has a restart-required delta.
 		restartRequired =
 			boot.active &&
 			(!requestedNow ||
@@ -93,10 +91,26 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 			 !eligibleNow ||
 			 boot.method != a_method ||
 			 boot.qualityMode != qualityMode);
+		return;
+	}
+
+	restartRequired = requestedNow && eligibleNow && (trueHMDEyeWidth != 0) && (trueHMDEyeHeight != 0);
+}
+
+bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate)
+{
+	if (boot.valid) {
+		UpdateRestartRequiredState(a_settings, a_method);
 		return boot.active;
 	}
 
-	restartRequired = !a_allowCreate && requestedNow && eligibleNow && trueHMDEyeWidth && trueHMDEyeHeight;
+	if (!a_allowCreate)
+		UpdateRestartRequiredState(a_settings, a_method);
+	else
+		restartRequired = false;
+
+	const uint32_t qualityMode = ClampQualityMode(a_settings.qualityMode);
+	const bool eligibleNow = IsEligible(a_settings, a_method);
 	if (!eligibleNow)
 		return false;
 
@@ -119,6 +133,8 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 	boot.displayEyeHeight = trueHMDEyeHeight;
 	boot.renderEyeWidth = ScaleDimension(trueHMDEyeWidth, renderScale);
 	boot.renderEyeHeight = ScaleDimension(trueHMDEyeHeight, renderScale);
+	restartRequired = false;
+	displaySizeChanged = false;
 
 	logger::info(
 		"[VRRenderScale] Boot-latched {} quality {} at display {}x{} per eye -> render {}x{} per eye.",

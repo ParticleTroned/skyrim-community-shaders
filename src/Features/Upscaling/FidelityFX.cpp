@@ -124,7 +124,7 @@ namespace
 		}
 
 		auto& upscaling = globals::features::upscaling;
-		upscaling.RefreshRuntimeResolutionPlan();
+		upscaling.RefreshRuntimeResolutionState();
 		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
 		a_displaySize = resolutionPlan.finalOutputSize;
 		a_renderSize = resolutionPlan.engineRenderSize;

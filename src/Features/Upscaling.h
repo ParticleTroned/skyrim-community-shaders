@@ -183,10 +183,10 @@ public:
 		};
 
 		void ResetBootLatch();
-		void ResetResources();
 		void RecordTrueHMDSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 		bool IsRequested(const Settings& a_settings) const;
 		bool IsEligible(const Settings& a_settings, UpscaleMethod a_method) const;
+		void UpdateRestartRequiredState(const Settings& a_settings, UpscaleMethod a_method);
 		bool EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate);
 		bool IsActive(const Settings& a_settings, UpscaleMethod a_method) const;
 		bool TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height, bool a_allowCreate);
@@ -408,6 +408,9 @@ public:
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
 	uint32_t GetRuntimeQualityMode() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
+	// Refresh both the cached plan and restart-required state derived from the current VR render-scale settings.
+	void RefreshRuntimeResolutionState();
+	// Rebuild only the cached plan from already-latched state. Most callers want RefreshRuntimeResolutionState().
 	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
 	bool GetVRRenderScaleModeRequested() const;

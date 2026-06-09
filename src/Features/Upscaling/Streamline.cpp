@@ -1070,7 +1070,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	auto& upscaling = globals::features::upscaling;
-	upscaling.RefreshRuntimeResolutionPlan();
+	upscaling.RefreshRuntimeResolutionState();
 	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive()) {
 		upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 		return;

@@ -4504,11 +4504,16 @@ const Upscaling::RuntimeResolutionPlan& Upscaling::GetRuntimeResolutionPlan() co
 	return runtimeResolutionPlan;
 }
 
+void Upscaling::RefreshRuntimeResolutionState()
+{
+	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
+	perfMode.UpdateRestartRequiredState(settings, requestedUpscaleMethod);
+	RefreshRuntimeResolutionPlan();
+}
+
 void Upscaling::RefreshRuntimeResolutionPlan()
 {
 	RuntimeResolutionPlan plan{};
-	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
-	perfMode.EnsureBootLatch(settings, requestedUpscaleMethod, false);
 	plan.upscaleMethod = GetRuntimeUpscaleMethod();
 	plan.qualityMode = GetRuntimeQualityMode();
 	plan.vendorMethod = IsVendorUpscalingMethod(plan.upscaleMethod);
@@ -5228,7 +5233,6 @@ void Upscaling::DestroyCommonUpscalingTextures()
 	DestroyTexture(motionVectorCopyTexture);
 	DestroyTexture(sharpenerTexture);
 	DestroySubmitStageDLSSSharpenerTextures();
-	perfMode.ResetResources();
 }
 
 bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const
@@ -5579,7 +5583,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingFSRReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		}
-		RefreshRuntimeResolutionPlan();
+		RefreshRuntimeResolutionState();
 	} catch (const std::exception& e) {
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "render-target relatch")) {
 			const uint32_t retryFrames = IsOutOfMemoryException(e) ?
@@ -5627,7 +5631,6 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	UnbindUpscalingResources();
 	DestroyVRIntermediateTextures();
 	DestroyFoveatedResources();
-	perfMode.ResetResources();
 
 	bool dlssResourcesDestroyed = true;
 	if (a_destroyDLSSResources && streamline.initialized && streamline.featureDLSS && streamline.slDLSSSetOptions && streamline.slFreeResources) {
@@ -6212,7 +6215,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				ResetVRSubmitStageState(false);
 				DestroyPeripheryTAAResources();
 			} else {
-				perfMode.ResetResources();
 				RequestHistoryReset();
 			}
 		}
@@ -6687,7 +6689,7 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 
 void Upscaling::UpdateAAVRSState()
 {
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
 	const bool requested = settings.aaVrs && globals::game::isVR;
 	const auto disableAndReport = [&](const char* reason, bool requestedState, bool preserveRuntimeActiveState = false) {
@@ -6746,7 +6748,7 @@ void Upscaling::ApplyAAVRSVisualization()
 	if (!settings.aaVrsVisualization || !aaVrsController.IsActive())
 		return;
 
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 	AAVRSController::Settings aaVrsSettings{};
 	if (!BuildAAVRSSettings(aaVrsSettings))
 		return;
@@ -9909,7 +9911,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
 		const int renderWidth = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.x));
 		const int renderHeight = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.y));
@@ -9934,7 +9936,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		UpdateCameraData();
 
 		CheckResources(runtimeResolutionPlan.upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		RefreshRuntimeResolutionState();
 		return;
 	}
 	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive()) {
@@ -9944,7 +9946,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		a_viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
 		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		RefreshRuntimeResolutionState();
 		return;
 	}
 	if (globals::game::isVR &&
@@ -9957,7 +9959,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		a_viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
 		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		RefreshRuntimeResolutionState();
 		return;
 	}
 
@@ -10014,7 +10016,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			UpdateCameraData();
 		}
 		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		RefreshRuntimeResolutionState();
 		return;
 	}
 
@@ -10022,7 +10024,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	// Resource creation uses the runtime dynamic-resolution ratios via ConvertToDynamic.
 	CheckResources(upscaleMethod);
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 
 	// Disable dynamic resolution unless the game explicitly enables it.
 	if (!globals::game::isVR)
@@ -10201,7 +10203,7 @@ void Upscaling::SetupResources()
 	DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&rasterizerDesc, upscaleRasterizerState.put()));
 
 	CheckResources(GetRuntimeUpscaleMethod());
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 
 	rcas.Initialize();
 
@@ -10623,7 +10625,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!IsPresentationUpscalingActive())
 		return false;
 
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 	const auto& resolutionPlan = GetRuntimeResolutionPlan();
 	const auto upscaleMethod = resolutionPlan.upscaleMethod;
 	if (!IsVendorUpscalingMethod(upscaleMethod))
@@ -11508,7 +11510,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool inWorld = state->inWorld;
 	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
 	const float2 screenSize = state->screenSize;
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 	float2 engineRenderSize = runtimeResolutionPlan.engineRenderSize;
 	float2 finalOutputSize = runtimeResolutionPlan.finalOutputSize;
 	if (engineRenderSize.x <= 0.0f || engineRenderSize.y <= 0.0f)
@@ -12373,7 +12375,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f) {
 		return;
 	}
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionState();
 	const bool vrRenderScaleActive = runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 	if (!vrRenderScaleActive) {
 		return;

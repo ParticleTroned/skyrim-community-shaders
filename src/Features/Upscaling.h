@@ -948,6 +948,24 @@ private:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct HDRTonemapBlendCinematicFade_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct TemporalAAUI_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct LightingCompositeMenu_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct UpsampleDynamicResolution_Dispatch
 	{
 		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
@@ -961,6 +979,24 @@ private:
 	};
 
 	struct CopyDynamicFetchDisabled_Dispatch
+	{
+		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct HDRTonemapBlendCinematicFade_Dispatch
+	{
+		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct TemporalAAUI_Dispatch
+	{
+		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct LightingCompositeMenu_Dispatch
 	{
 		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
 		static inline REL::Relocation<decltype(thunk)> func;

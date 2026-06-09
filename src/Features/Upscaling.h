@@ -432,18 +432,27 @@ public:
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
 	bool ConsumePerfModeBootLatchCreate();
 	bool AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
-	bool UseActiveFoveatedPeripheryTAAProfile() const;
-	bool IsActiveUpscalingFoveatedProfileAvailable() const;
+	enum class FoveatedUpscalingMode : uint8_t
+	{
+		Disabled,
+		CenterOnly,
+		PeripheralTAA
+	};
 	struct ActiveUpscalingFoveatedProfile
 	{
 		bool available = false;
+		FoveatedUpscalingMode mode = FoveatedUpscalingMode::Disabled;
 		bool usesPeripheryTAAOuterMask = false;
-		float coverageScale = 1.0f;
+		// Actual DLSS/FSR foveated center dispatch scale.
+		float vendorCenterScale = 1.0f;
+		// Shared HMD-visible/protected boundary used by VR foveation consumers.
+		float sharedVisibleScale = 1.0f;
 		float centerHorizontalScale = 1.0f;
 		std::array<float2, 2> centerOffsets{};
 	};
+	static const char* GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode);
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
-	float GetActiveFoveatedCenterScale() const;
+	float GetActiveFoveatedSharedVisibleScale() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;
 

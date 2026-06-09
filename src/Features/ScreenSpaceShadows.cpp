@@ -93,7 +93,7 @@ namespace
 		if (!state.available)
 			return state;
 
-		state.centerScale = FoveatedCommon::ClampCenterScale(profile.coverageScale);
+		state.centerScale = FoveatedCommon::ClampCenterScale(profile.sharedVisibleScale);
 		state.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
 		state.centerOffsets = profile.centerOffsets;
 		state.available = FoveatedCommon::IsActiveCoverage(state.centerScale);
@@ -196,7 +196,7 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Uses the active shared VR foveation mask for Screen Space Shadows.");
 		ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the mask and fades to no SSS outside it.");
-		ImGui::TextUnformatted("The mask scale, horizontal scale, offsets, and Peripheral TAA profile come from the shared VR foveation setup.");
+		ImGui::TextUnformatted("The mask scale, horizontal scale, offsets, and FOV + TAA profile come from the shared VR foveation setup.");
 		if (!loaded)
 			ImGui::TextUnformatted("Requires Screen Space Shadows.");
 		else if (bendSettings.Enable == 0)

@@ -1424,7 +1424,7 @@ namespace
 		upscaling.DrawFoveatedSettings();
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
-		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageScale);
+		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxAvailable = waterEffects.loaded;
 		const bool wetnessEffectsRuntimeActive = wetnessEffects.IsRuntimeActive();
@@ -1451,11 +1451,13 @@ namespace
 			(screenSpaceGIRuntimeActive && screenSpaceGI.settings.EnableFoveated);
 
 		if (profile.available) {
-			ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "Upscaling FOV center");
-			ImGui::Text("Coverage scale: %.2f", profile.coverageScale);
+			ImGui::Text("FOV mode: %s", Upscaling::GetFoveatedUpscalingModeName(profile.mode));
+			if (profile.mode == Upscaling::FoveatedUpscalingMode::PeripheralTAA)
+				ImGui::Text("Vendor center scale: %.2f", profile.vendorCenterScale);
+			ImGui::Text("Shared visible scale: %.2f", profile.sharedVisibleScale);
 			ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
 			if (anySharedMaskConsumerEnabled && !foveatedProfileActive)
-				ImGui::TextDisabled("Shared-mask consumers require FOV scale below 1.00.");
+				ImGui::TextDisabled("Shared-mask consumers require shared visible scale below 1.00.");
 		} else if (anySharedMaskConsumerEnabled) {
 			ImGui::TextDisabled("Shared-mask consumers require active foveated upscaling.");
 		}
@@ -1481,7 +1483,7 @@ namespace
 		screenSpaceGI.DrawFoveationSettings();
 		ImGui::EndDisabled();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with FOV scale below 1.00.");
+			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with shared visible scale below 1.00.");
 		if (!screenSpaceGIFeatureAvailable)
 			ImGui::TextDisabled("SSGI FOV requires Screen Space GI.");
 		else if (!screenSpaceGI.settings.Enabled)
@@ -1559,7 +1561,7 @@ namespace
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Master switch for eligible shader/detail FOV features and Dynamic Cubemap FOV throttles.");
 				ImGui::TextUnformatted("Screen Space Shadows and SSGI FOV stay controlled separately.");
-				ImGui::TextUnformatted("Does not change Upscaling FOV, mask visualization, mask geometry, Peripheral TAA, or hard-cutoff sub-modes.");
+				ImGui::TextUnformatted("Does not change Upscaling FOV, mask visualization, mask geometry, FOV + TAA, or hard-cutoff sub-modes.");
 				ImGui::TextUnformatted("Turning on enables only available features; turning off clears those toggles.");
 			}
 			ImGui::SameLine();
@@ -1570,7 +1572,7 @@ namespace
 		}
 		ImGui::Separator();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Lighting, SSR, Water, and Wetterness shader budgets require active foveated upscaling with FOV scale below 1.00.");
+			ImGui::TextDisabled("Lighting, SSR, Water, and Wetterness shader budgets require active foveated upscaling with shared visible scale below 1.00.");
 
 		ImGui::BeginDisabled(!foveatedProfileActive);
 		drawDetailBudget(
@@ -1579,7 +1581,7 @@ namespace
 			"Hard Cutoff Outside FOV##Lighting",
 			settings.EnableLightingFoveationHardCutoff,
 			"Uses the active shared FOV mask to reduce expensive auxiliary detail in the Lighting shader.",
-			"The full visible FOV uses the normal Upscaling FOV mask, or the outside edge of Peripheral TAA when FOV + Peripheral TAA is enabled.",
+			"The full visible FOV uses the FOV-only visible scale, or the FOV + TAA visible outer scale when FOV + TAA is enabled.",
 			"Base diffuse lighting, albedo, normal, and shadowmask sampling remain unchanged.",
 			"Uses a binary mask for Lighting shader auxiliary detail.",
 			"Inside the FOV mask gets full auxiliary detail; outside the mask skips those optional paths instead of feathering quality.",
@@ -1673,7 +1675,7 @@ namespace
 		if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
 			ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with FOV scale below 1.00.");
+			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with shared visible scale below 1.00.");
 		if (!dynamicCubemapsRuntimeActive)
 			ImGui::TextDisabled("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
 
@@ -1695,7 +1697,7 @@ namespace
 			const bool statusAnyCubemapFoveationEnabled =
 				settings.EnableDynamicCubemapFoveation ||
 				settings.EnableDynamicCubemapVisibilityThrottle;
-			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full coverage" : "unavailable");
+			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full visible coverage" : "unavailable");
 			ImGui::Text("Lighting auxiliary detail: %s (%s)", statusLightingActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusLightingMode));
 			ImGui::Text("SSR raymarch: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
 			ImGui::Text("Water parallax detail: %s (%s)", statusWaterParallaxActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWaterParallaxMode));

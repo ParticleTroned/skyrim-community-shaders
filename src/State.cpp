@@ -1339,7 +1339,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			upscaling.loaded) {
 			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 			if (profile.available) {
-				const float centerScale = FoveatedCommon::ClampCenterScale(profile.coverageScale);
+				const float centerScale = FoveatedCommon::ClampCenterScale(profile.sharedVisibleScale);
 				const bool foveationActive = FoveatedCommon::IsActiveCoverage(centerScale);
 				const float disabledFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off);
 				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(

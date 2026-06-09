@@ -280,7 +280,8 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			upscaling.GetEffectiveDLSSPreset(),
-			"CS API upscaler preset change");
+			"CS API upscaler preset change",
+			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
 	inline bool CSInterface001::GetLightLimitFixContactShadowsEnabled()
@@ -317,7 +318,8 @@ namespace CSPluginAPI
 				upscaling.GetPerfModeRequested(),
 				upscaling.GetEffectiveDLSSQualityMode(),
 				dlssPreset,
-				"CS API legacy DLSS profile change");
+				"CS API legacy DLSS profile change",
+				Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 			return;
 		}
 
@@ -335,7 +337,11 @@ namespace CSPluginAPI
 
 	inline void CSInterface001::SetRenderAtUpscaleResEnabled(bool enabled)
 	{
-		globals::features::upscaling.SetPerfModeRequested(enabled, "CS API render-scale mode change", true);
+		globals::features::upscaling.SetPerfModeRequested(
+			enabled,
+			"CS API render-scale mode change",
+			true,
+			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
 	inline bool CSInterface001::GetRenderAtUpscaleResActive()
@@ -362,7 +368,8 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
-			"CS API legacy DLSS-preferred VR upscaling transition profile");
+			"CS API legacy DLSS-preferred VR upscaling transition profile",
+			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
 	inline UpscaleMethod CSInterface001::GetUpscaleMethod()
@@ -383,7 +390,8 @@ namespace CSPluginAPI
 			upscaling.IsRenderScaleModeRequested(),
 			upscaling.GetEffectiveDLSSQualityMode(),
 			upscaling.GetEffectiveDLSSPreset(),
-			"CS API upscaler method change");
+			"CS API upscaler method change",
+			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
 	inline void CSInterface001::SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)
@@ -409,6 +417,7 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
-			"CS API VR method-specific upscaling transition profile");
+			"CS API VR method-specific upscaling transition profile",
+			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 }  // namespace CSPluginAPI

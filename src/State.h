@@ -226,6 +226,7 @@ public:
 
 	bool inWorld = false;
 	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t lastCompletedWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	bool pendingPostLoadRuntimeReset = false;
 	std::atomic_bool saveLoadSafeModeActive{ false };
 	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };

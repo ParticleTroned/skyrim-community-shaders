@@ -472,7 +472,17 @@ void SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a
 
 void SubsurfaceScattering::SetupResources()
 {
+	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		delete blurHorizontalTemp;
+		blurHorizontalTemp = nullptr;
+		shaderDevice = device;
+	}
+
 	{
+		delete blurCB;
 		blurCB = new ConstantBuffer(ConstantBufferDesc<BlurCB>(), "SubsurfaceScattering::BlurCB");
 	}
 
@@ -483,6 +493,11 @@ void SubsurfaceScattering::SetupResources()
 	main.texture->GetDesc(&texDesc);
 
 	EnsureBlurHorizontalTemp(texDesc.Width, texDesc.Height);
+}
+
+void SubsurfaceScattering::SetupRenderTargetResources()
+{
+	SetupResources();
 }
 
 void SubsurfaceScattering::Reset()

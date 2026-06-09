@@ -5,6 +5,7 @@
 #include <Tracy/TracyD3D11.hpp>
 
 #include <Buffer.h>
+#include <REX/W32/COMPTR.h>
 #include <atomic>
 #include <limits>
 #include <mutex>
@@ -96,6 +97,7 @@ public:
 	void Debug();
 	void Reset();
 	void Setup();
+	void SetupRenderTargetResources();
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
 	void Save(ConfigMode a_configMode = ConfigMode::USER);
@@ -407,6 +409,8 @@ public:
 	}
 
 private:
-	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
+	ID3D11Device* setupResourcesDevice = nullptr;
+	ID3D11DeviceContext* setupResourcesContext = nullptr;
+	REX::W32::ComPtr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };

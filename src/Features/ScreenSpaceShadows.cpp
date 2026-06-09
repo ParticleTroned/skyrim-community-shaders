@@ -738,15 +738,33 @@ bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
 
 void ScreenSpaceShadows::SetupResources()
 {
-	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>());
-
-	if (globals::game::isVR) {
-		stereoSyncCB = new ConstantBuffer(ConstantBufferDesc<StereoSyncCB>());
+	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		shaderDevice = device;
 	}
 
-	{
-		auto device = globals::d3d::device;
+	delete raymarchCB;
+	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>());
 
+	delete stereoSyncCB;
+	if (globals::game::isVR) {
+		stereoSyncCB = new ConstantBuffer(ConstantBufferDesc<StereoSyncCB>());
+	} else {
+		stereoSyncCB = nullptr;
+	}
+
+	if (pointBorderSampler) {
+		pointBorderSampler->Release();
+		pointBorderSampler = nullptr;
+	}
+	delete screenSpaceShadowsTexture;
+	screenSpaceShadowsTexture = nullptr;
+	delete stereoSyncCopyTex;
+	stereoSyncCopyTex = nullptr;
+
+	{
 		D3D11_SAMPLER_DESC samplerDesc = {};
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
 		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_BORDER;
@@ -792,4 +810,9 @@ void ScreenSpaceShadows::SetupResources()
 			stereoSyncCopyTex->CreateUAV(uavDesc);
 		}
 	}
+}
+
+void ScreenSpaceShadows::SetupRenderTargetResources()
+{
+	SetupResources();
 }

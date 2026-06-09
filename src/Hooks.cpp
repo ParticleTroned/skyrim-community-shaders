@@ -570,9 +570,36 @@ struct BSShaderRenderTargets_Create
 	 */
 	static void thunk()
 	{
+		RecreateAndSetupFull();
+	}
+
+	static bool CanSetupRenderingResources()
+	{
+		return globals::game::renderer &&
+		       globals::state &&
+		       globals::deferred &&
+		       globals::d3d::device &&
+		       globals::d3d::context;
+	}
+
+	static bool RecreateAndSetupFull()
+	{
 		func();
 		globals::ReInit();
+		if (!CanSetupRenderingResources())
+			return false;
 		globals::state->Setup();
+		return true;
+	}
+
+	static bool RecreateAndSetupRenderTargetResources()
+	{
+		func();
+		globals::ReInit();
+		if (!CanSetupRenderingResources())
+			return false;
+		globals::state->SetupRenderTargetResources();
+		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -645,11 +672,18 @@ namespace Hooks
 {
 	bool RecreateRenderTargets()
 	{
-		if (!globals::game::renderer || !globals::state)
+		if (!globals::game::renderer || !globals::state || !globals::d3d::device || !globals::d3d::context)
 			return false;
 
-		BSShaderRenderTargets_Create::thunk();
-		return true;
+		return BSShaderRenderTargets_Create::RecreateAndSetupFull();
+	}
+
+	bool RecreateRenderTargetsForVRRenderScale()
+	{
+		if (!globals::game::renderer || !globals::state || !globals::deferred || !globals::d3d::device || !globals::d3d::context)
+			return false;
+
+		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources();
 	}
 
 	struct BSGraphics_Renderer_Init_InitD3D

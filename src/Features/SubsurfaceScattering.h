@@ -100,6 +100,7 @@ public:
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 	virtual void Reset() override;
 	virtual void RestoreDefaultSettings() override;
 

@@ -33,6 +33,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 	virtual void ClearShaderCache() override;
 	void CompileComputeShaders();
 
@@ -85,6 +86,7 @@ public:
 	Texture2D* texOcclusion = nullptr;
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
+	ID3D11Device* resourceDevice = nullptr;
 
 	winrt::com_ptr<ID3D11ComputeShader> probeUpdateCompute = nullptr;
 

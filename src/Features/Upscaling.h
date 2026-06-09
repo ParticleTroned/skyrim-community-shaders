@@ -407,6 +407,7 @@ public:
 	virtual void Load() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;

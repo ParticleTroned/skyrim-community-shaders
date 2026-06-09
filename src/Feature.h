@@ -92,6 +92,8 @@ public:
 	 */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() { return {}; }
 	virtual void SetupResources() {}
+	// Lightweight opt-in for render-target relatches; avoid disk/world discovery here.
+	virtual void SetupRenderTargetResources() {}
 	virtual void Reset() {}
 	virtual void DrawSettings() {}
 	virtual void DrawUnloadedUI();

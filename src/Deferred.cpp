@@ -61,6 +61,32 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 void Deferred::SetupResources()
 {
 	auto renderer = globals::game::renderer;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != globals::d3d::device) {
+		if (mainCompositeCS) {
+			mainCompositeCS->Release();
+			mainCompositeCS = nullptr;
+		}
+		if (mainCompositeInteriorCS) {
+			mainCompositeInteriorCS->Release();
+			mainCompositeInteriorCS = nullptr;
+		}
+		if (linearSampler) {
+			linearSampler->Release();
+			linearSampler = nullptr;
+		}
+		if (pointSampler) {
+			pointSampler->Release();
+			pointSampler = nullptr;
+		}
+		delete perShadow;
+		perShadow = nullptr;
+		if (copyShadowCS) {
+			copyShadowCS->Release();
+			copyShadowCS = nullptr;
+		}
+		shaderDevice = globals::d3d::device;
+	}
 
 	{
 		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -118,18 +144,20 @@ void Deferred::SetupResources()
 	{
 		auto device = globals::d3d::device;
 
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.MaxAnisotropy = 1;
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
+		if (!linearSampler || !pointSampler) {
+			D3D11_SAMPLER_DESC samplerDesc = {};
+			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+			samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.MaxAnisotropy = 1;
+			samplerDesc.MinLOD = 0;
+			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
 
-		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
+			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
+		}
 	}
 
 	{
@@ -154,13 +182,16 @@ void Deferred::SetupResources()
 
 		sbDesc.StructureByteStride = sizeof(PerGeometry);
 		sbDesc.ByteWidth = sizeof(PerGeometry) * numElements;
-		perShadow = new Buffer(sbDesc);
-		srvDesc.Buffer.NumElements = numElements;
-		perShadow->CreateSRV(srvDesc);
-		uavDesc.Buffer.NumElements = numElements;
-		perShadow->CreateUAV(uavDesc);
+		if (!perShadow) {
+			perShadow = new Buffer(sbDesc);
+			srvDesc.Buffer.NumElements = numElements;
+			perShadow->CreateSRV(srvDesc);
+			uavDesc.Buffer.NumElements = numElements;
+			perShadow->CreateUAV(uavDesc);
+		}
 
-		copyShadowCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CopyShadowDataCS.hlsl", {}, "cs_5_0"));
+		if (!copyShadowCS)
+			copyShadowCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CopyShadowDataCS.hlsl", {}, "cs_5_0"));
 	}
 
 	{
@@ -607,6 +638,10 @@ void Deferred::ClearShaderCache()
 	if (mainCompositeInteriorCS) {
 		mainCompositeInteriorCS->Release();
 		mainCompositeInteriorCS = nullptr;
+	}
+	if (copyShadowCS) {
+		copyShadowCS->Release();
+		copyShadowCS = nullptr;
 	}
 }
 

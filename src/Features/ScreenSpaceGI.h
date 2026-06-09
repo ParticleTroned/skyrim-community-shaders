@@ -42,6 +42,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 	virtual void ClearShaderCache() override;
 	void CompileComputeShaders();
 	bool ShadersOK();

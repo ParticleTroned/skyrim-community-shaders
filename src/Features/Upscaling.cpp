@@ -5679,7 +5679,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		perfMode.EnsureBootLatch(settings, relatchUpscaleMethod, true);
 
 		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: calling D3D render-target recreate");
-		if (!Hooks::RecreateRenderTargets()) {
+		if (!Hooks::RecreateRenderTargetsForVRRenderScale()) {
 			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 			const bool loggedD3DDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchD3DDeferDiagnostic, [&]() {
 				logger::warn("[VRRenderScale] Render-target relatch could not run; will retry.");
@@ -10247,6 +10247,12 @@ void Upscaling::SetupResources()
 			GetRenderDocUpscalingBlockReason());
 		return;
 	}
+	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		shaderDevice = device;
+	}
 
 	QueryPerformanceFrequency(&qpf);
 
@@ -10292,17 +10298,24 @@ void Upscaling::SetupResources()
 		depthStencilDesc.StencilEnable = false;  // Disable stencil testing
 	}
 
-	DX::ThrowIfFailed(globals::d3d::device->CreateDepthStencilState(&depthStencilDesc, upscaleDepthStencilState.put()));
+	DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, upscaleDepthStencilState.put()));
 
 	// Create jitter offset constant buffer for depth upscaling
+	delete jitterCB;
 	jitterCB = new ConstantBuffer(ConstantBufferDesc<JitterCB>());
 
 	// Create upscaling data constant buffer for encode textures compute shader
+	delete upscalingDataCB;
 	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
+	delete dynamicResolutionStretchCB;
 	dynamicResolutionStretchCB = new ConstantBuffer(ConstantBufferDesc<DynamicResolutionStretchCB>(), "Upscaling::DynamicResolutionStretchCB");
+	delete foveatedPeripheryCB;
 	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
+	delete foveatedCenterBlendCB;
 	foveatedCenterBlendCB = new ConstantBuffer(ConstantBufferDesc<FoveatedCenterBlendCB>());
+	delete peripheryTAACB;
 	peripheryTAACB = new ConstantBuffer(ConstantBufferDesc<PeripheryTAACB>());
+	delete aaVrsVisualizationCB;
 	aaVrsVisualizationCB = new ConstantBuffer(ConstantBufferDesc<AAVRSVisualizationCB>());
 
 	// Create blend state for depth upscaling
@@ -10311,7 +10324,7 @@ void Upscaling::SetupResources()
 	blendDesc.IndependentBlendEnable = false;
 	blendDesc.RenderTarget[0].BlendEnable = false;
 	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-	DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&blendDesc, upscaleBlendState.put()));
+	DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, upscaleBlendState.put()));
 
 	// Create rasterizer state for fullscreen rendering
 	D3D11_RASTERIZER_DESC rasterizerDesc = {};
@@ -10325,7 +10338,7 @@ void Upscaling::SetupResources()
 	rasterizerDesc.ScissorEnable = false;
 	rasterizerDesc.MultisampleEnable = false;
 	rasterizerDesc.AntialiasedLineEnable = false;
-	DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&rasterizerDesc, upscaleRasterizerState.put()));
+	DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, upscaleRasterizerState.put()));
 
 	CheckResources(GetRuntimeUpscaleMethod());
 	RefreshRuntimeResolutionState();
@@ -10335,7 +10348,13 @@ void Upscaling::SetupResources()
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
 
-	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+	if (!copyDepthToSharedBufferPS)
+		copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+}
+
+void Upscaling::SetupRenderTargetResources()
+{
+	SetupResources();
 }
 
 void Upscaling::ClearShaderCache()
@@ -10356,6 +10375,7 @@ void Upscaling::ClearShaderCache()
 	submitStageStretchCS = nullptr;      // com_ptr automatically releases
 	vrClearHMDMaskCS = nullptr;          // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;          // com_ptr automatically releases
+	copyDepthToSharedBufferPS = nullptr; // com_ptr automatically releases
 }
 
 void Upscaling::CopySharedD3D12Resources()

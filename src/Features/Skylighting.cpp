@@ -409,6 +409,11 @@ void Skylighting::SetupResources()
 
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		probeUpdateCompute = nullptr;
+		shaderDevice = device;
+	}
 
 	{
 		auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
@@ -478,7 +483,64 @@ void Skylighting::SetupResources()
 		Util::SetResourceName(comparisonSampler.get(), "Skylighting::ComparisonSampler");
 	}
 
-	CompileComputeShaders();
+	if (!probeUpdateCompute)
+		CompileComputeShaders();
+	resourceDevice = device;
+}
+
+void Skylighting::SetupRenderTargetResources()
+{
+	auto renderer = globals::game::renderer;
+	auto device = globals::d3d::device;
+	if (resourceDevice != device) {
+		delete texProbeArray;
+		texProbeArray = nullptr;
+		delete texAccumFramesArray;
+		texAccumFramesArray = nullptr;
+		comparisonSampler = nullptr;
+		probeUpdateCompute = nullptr;
+		resourceDevice = device;
+	}
+
+	if (!texProbeArray || !texAccumFramesArray) {
+		SetupResources();
+		return;
+	}
+
+	delete texOcclusion;
+	texOcclusion = nullptr;
+
+	{
+		auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+
+		precipitationOcclusion.texture->GetDesc(&texDesc);
+		precipitationOcclusion.depthSRV->GetDesc(&srvDesc);
+		precipitationOcclusion.views[0]->GetDesc(&dsvDesc);
+
+		texOcclusion = new Texture2D(texDesc, "Skylighting::Occlusion");
+		texOcclusion->CreateSRV(srvDesc);
+		texOcclusion->CreateDSV(dsvDesc);
+	}
+
+	if (!comparisonSampler) {
+		D3D11_SAMPLER_DESC samplerDesc = {};
+		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;
+		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+		samplerDesc.MinLOD = 0;
+		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, comparisonSampler.put()));
+		Util::SetResourceName(comparisonSampler.get(), "Skylighting::ComparisonSampler");
+	}
+
+	if (!probeUpdateCompute)
+		CompileComputeShaders();
 }
 
 void Skylighting::ClearShaderCache()

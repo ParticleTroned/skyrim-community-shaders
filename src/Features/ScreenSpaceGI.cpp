@@ -803,6 +803,14 @@ void ScreenSpaceGI::SetupResources()
 	const int previousActiveResourceProfile = activeResourceProfile;
 	activeResourceProfile = ClampResourceProfile(settings.ResourceProfile);
 	const bool allocateGIResources = HasGIResources();
+	static ID3D11Device* staticResourceDevice = nullptr;
+	if (staticResourceDevice != device) {
+		texNoise = nullptr;
+		linearClampSampler = nullptr;
+		pointClampSampler = nullptr;
+		ClearShaderCache();
+		staticResourceDevice = device;
+	}
 	logger::info("SSGI resource profile: {}", allocateGIResources ? "Full GI resources" : "AO-only resources");
 
 	// SetupResources can run multiple times during runtime/device resets.
@@ -1019,8 +1027,8 @@ void ScreenSpaceGI::SetupResources()
 		}
 	}
 
-	logger::debug("Loading noise texture...");
-	{
+	if (!texNoise || !texNoise->srv.get()) {
+		logger::debug("Loading noise texture...");
 		DirectX::ScratchImage image;
 		try {
 			std::filesystem::path path{ "Data\\Shaders\\ScreenSpaceGI\\fast_2uges.dds" };
@@ -1053,8 +1061,8 @@ void ScreenSpaceGI::SetupResources()
 		texNoise->CreateSRV(srvDesc);
 	}
 
-	logger::debug("Creating samplers...");
-	{
+	if (!linearClampSampler || !pointClampSampler) {
+		logger::debug("Creating samplers...");
 		D3D11_SAMPLER_DESC samplerDesc = {
 			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
 			.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
@@ -1070,7 +1078,13 @@ void ScreenSpaceGI::SetupResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, pointClampSampler.put()));
 	}
 
-	CompileComputeShaders();
+	if (recompileFlag || !ShadersOK())
+		CompileComputeShaders();
+}
+
+void ScreenSpaceGI::SetupRenderTargetResources()
+{
+	SetupResources();
 }
 
 void ScreenSpaceGI::ClearShaderCache()

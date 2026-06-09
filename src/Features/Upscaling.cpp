@@ -144,6 +144,7 @@ namespace
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
+	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
@@ -168,6 +169,7 @@ namespace
 	}
 
 	bool IsMainMenuContextActive();
+	bool IsKnownGameMenuContextActive();
 
 	bool IsRenderDocDllLoaded(bool a_probeProcess)
 	{
@@ -198,6 +200,30 @@ namespace
 		return "renderdoc.dll is loaded";
 	}
 	constexpr uint32_t kVRSaveLoadTransitionTailFrames = 30;
+	// Hold vendor dynamic-resolution rendering at full resolution briefly around
+	// VR menu open/close so fullscreen fades and menu overlays do not inherit a
+	// stale reduced scene footprint.
+	constexpr uint32_t kVRMenuPresentationTailFrames = 30;
+	constexpr std::string_view kSkyrimPresentationMenuNames[] = {
+		"Journal Menu",
+		"StatsMenu",
+		"InventoryMenu",
+		"MagicMenu",
+		"TweenMenu",
+		"Book Menu",
+		"ContainerMenu",
+		"BarterMenu",
+		"Sleep/Wait Menu",
+		"Crafting Menu",
+		"Lockpicking Menu",
+		"Training Menu",
+		"LevelUp Menu",
+		"Dialogue Menu",
+		"MessageBoxMenu",
+		"RaceSex Menu",
+		"Tutorial Menu",
+		"Console",
+	};
 
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green visible area with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller visible scale means more performance, but more risk of peripheral shimmer.
@@ -2712,33 +2738,59 @@ namespace
 		return IsMainMenuContextActive() || IsLoadingMenuContextActive();
 	}
 
+	bool IsSkyrimMenuPresentationMenuName(std::string_view a_menuName)
+	{
+		for (const auto menuName : kSkyrimPresentationMenuNames) {
+			if (a_menuName == menuName)
+				return true;
+		}
+
+		return false;
+	}
+
+	bool IsVRMenuPresentationTailMenuName(std::string_view a_menuName)
+	{
+		return IsSkyrimMenuPresentationMenuName(a_menuName) || a_menuName == RE::MapMenu::MENU_NAME;
+	}
+
+	bool IsVRMenuPresentationTailActive(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		const uint32_t endFrame = g_vrMenuPresentationTailEndFrame.load(std::memory_order_acquire);
+		return endFrame != 0 && a_state->frameCount < endFrame;
+	}
+
+	bool IsVRMenuPresentationContextActive()
+	{
+		return globals::game::isVR &&
+		       (IsKnownGameMenuContextActive() || IsVRMenuPresentationTailActive(globals::state));
+	}
+
+	void ExtendVRMenuPresentationTail()
+	{
+		if (!globals::game::isVR || !globals::state)
+			return;
+
+		const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
+		const uint32_t tailEndFrame = currentFrame + kVRMenuPresentationTailFrames;
+		uint32_t previousEndFrame = g_vrMenuPresentationTailEndFrame.load(std::memory_order_acquire);
+		while (previousEndFrame < tailEndFrame &&
+		       !g_vrMenuPresentationTailEndFrame.compare_exchange_weak(
+			       previousEndFrame,
+			       tailEndFrame,
+			       std::memory_order_acq_rel,
+			       std::memory_order_acquire)) {
+		}
+	}
+
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
 	{
 		if (!a_ui)
 			return false;
 
-		static constexpr std::string_view kMenuNames[] = {
-			"Journal Menu",
-			"StatsMenu",
-			"InventoryMenu",
-			"MagicMenu",
-			"TweenMenu",
-			"Book Menu",
-			"ContainerMenu",
-			"BarterMenu",
-			"Sleep/Wait Menu",
-			"Crafting Menu",
-			"Lockpicking Menu",
-			"Training Menu",
-			"LevelUp Menu",
-			"Dialogue Menu",
-			"MessageBoxMenu",
-			"RaceSex Menu",
-			"Tutorial Menu",
-			"Console",
-		};
-
-		for (const auto menuName : kMenuNames) {
+		for (const auto menuName : kSkyrimPresentationMenuNames) {
 			if (a_ui->IsMenuOpen(menuName))
 				return true;
 		}
@@ -4383,11 +4435,18 @@ void Upscaling::DataLoaded()
 RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
-	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
+	if (!a_event)
+		return RE::BSEventNotifyControl::kContinue;
+
+	if (globals::game::isVR && IsVRMenuPresentationTailMenuName(a_event->menuName))
+		ExtendVRMenuPresentationTail();
+
+	if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_relaxed);
 		if (a_event->opening) {
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
+			g_vrMenuPresentationTailEndFrame.store(0, std::memory_order_release);
 			LogPendingVRFpsStabilizerLoadSyncRetained(
 				globals::features::upscaling,
 				"loading menu opened before save-load sync could apply");
@@ -4421,20 +4480,20 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 
 	auto ui = globals::game::ui;
 	if (!ui) {
-		logger::error("[Upscaling] UI event source not found; DLSS history reset-on-load disabled");
+		logger::error("[Upscaling] UI event source not found; VR upscaling menu/load transition handling disabled");
 		return false;
 	}
 
 	auto eventSource = ui->GetEventSource<RE::MenuOpenCloseEvent>();
 	if (!eventSource) {
-		logger::error("[Upscaling] MenuOpenCloseEvent source not found; DLSS history reset-on-load disabled");
+		logger::error("[Upscaling] MenuOpenCloseEvent source not found; VR upscaling menu/load transition handling disabled");
 		return false;
 	}
 
 	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_relaxed);
 	eventSource->AddEventSink(&singleton);
 	registered.store(true, std::memory_order_release);
-	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for DLSS history reset-on-load");
+	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for VR upscaling menu/load transitions");
 	return true;
 }
 
@@ -6754,7 +6813,8 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 {
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
 	const bool foveatedDispatchEnabled = IsFoveatedVendorDispatchEnabled(upscaleMethod);
-	if (!settings.aaVrs || !globals::game::isVR || !foveatedDispatchEnabled || IsKnownGameMenuContextActive())
+	const bool menuPresentationContext = IsVRMenuPresentationContextActive();
+	if (!settings.aaVrs || !globals::game::isVR || !foveatedDispatchEnabled || menuPresentationContext)
 		return false;
 
 	uint32_t inputWidthPerEye = 0;
@@ -6847,10 +6907,10 @@ void Upscaling::UpdateAAVRSState()
 		return;
 	}
 
-	if (IsKnownGameMenuContextActive()) {
+	if (IsVRMenuPresentationContextActive()) {
 		// UpdateAAVRSState runs before world rendering, so lastWorldRenderFrame
 		// cannot be used here without blocking valid scene frames.
-		disableAndReport("Game menu context active", requested, true);
+		disableAndReport("Game menu/presentation context active", requested, true);
 		return;
 	}
 
@@ -10064,7 +10124,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionState();
 		return;
 	}
-	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive()) {
+	if (globals::game::isVR && vendorUpscalingMethod && IsVRMenuPresentationContextActive() && !IsSubmitStageMenuPresentationContextActive()) {
 		resolutionScale = { 1.0f, 1.0f };
 		jitter = { 0.0f, 0.0f };
 		a_viewport->projectionPosScaleX = 0.0f;
@@ -10459,7 +10519,7 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	const bool vrVendorMenu = globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsGameMenuContextActive();
+	const bool vrVendorMenu = globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsVRMenuPresentationContextActive();
 	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
 	if (vrVendorMenu && !submitMenuPresentationContext) {
 		viewport->projectionPosScaleX = 0.0f;
@@ -12689,7 +12749,8 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			IsVRLoadingPresentationContextActive(globals::state))
 			return false;
 
-		if (IsGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive())
+		const bool menuPresentationContext = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
+		if (menuPresentationContext && !IsSubmitStageMenuPresentationContextActive())
 			return false;
 
 		auto context = globals::d3d::context;
@@ -13067,8 +13128,15 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool loadingTransitionTailActive =
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
-	const bool menuPresentationContext = vendorMethodSelected && globals::game::isVR && (IsGameMenuContextActive() || loadingTransitionTailActive);
-	const bool fullResolutionMenuPresentation = vendorMethodSelected && globals::game::isVR && (IsKnownGameMenuContextActive() || loadingTransitionTailActive);
+	const bool vrMenuPresentationContextActive = IsVRMenuPresentationContextActive();
+	const bool menuPresentationContext =
+		vendorMethodSelected &&
+		globals::game::isVR &&
+		(vrMenuPresentationContextActive || loadingTransitionTailActive);
+	const bool fullResolutionMenuPresentation =
+		vendorMethodSelected &&
+		globals::game::isVR &&
+		(vrMenuPresentationContextActive || loadingTransitionTailActive);
 	const bool loadingTransitionMenuPresentation =
 		fullResolutionMenuPresentation &&
 		(IsMainOrLoadingMenuContextActive() || loadingTransitionTailActive);

@@ -121,7 +121,7 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 	boot.renderEyeHeight = ScaleDimension(trueHMDEyeHeight, renderScale);
 
 	logger::info(
-		"[PerfMode] Boot-latched {} quality {} at display {}x{} per eye -> render {}x{} per eye.",
+		"[VRRenderScale] Boot-latched {} quality {} at display {}x{} per eye -> render {}x{} per eye.",
 		magic_enum::enum_name(a_method),
 		qualityMode,
 		boot.displayEyeWidth,

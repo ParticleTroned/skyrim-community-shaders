@@ -58,7 +58,8 @@ public:
 	{
 		Native,
 		VendorDynamicResolution,
-		PerfMode
+		VRRenderScaleMode,
+		PerfMode = VRRenderScaleMode  // Legacy alias for VRAPI/source compatibility.
 	};
 
 	enum class UpscalingOutputTarget : uint8_t
@@ -66,6 +67,18 @@ public:
 		Main,
 		Sharpener,
 		SubmitStageIntermediate
+	};
+
+	enum class VRRenderScaleStatus : uint8_t
+	{
+		Disabled,
+		IneligibleMethod,
+		NativeQuality,
+		RuntimeBlocked,
+		SubmitStageOnly,
+		PendingRelatch,
+		Active,
+		RestartRequired
 	};
 
 	// Shared DLSS/FSR/FSR4 render-scale presets:
@@ -396,6 +409,12 @@ public:
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
 	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
+	bool GetVRRenderScaleModeRequested() const;
+	bool CanUseVRRenderScaleMode() const;
+	bool IsVRRenderScaleModeActive() const;
+	VRRenderScaleStatus GetVRRenderScaleModeStatus() const;
+	static const char* GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status);
+	void SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false);
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;

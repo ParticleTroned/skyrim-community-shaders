@@ -273,7 +273,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
 
-				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsPerfModeActive()) {
+				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsVRRenderScaleModeActive()) {
 					static std::atomic_bool loggedDeviceLostSuppression{ false };
 					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(

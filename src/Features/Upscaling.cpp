@@ -373,7 +373,7 @@ namespace
 
 		a_upscaling.perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 		if (!a_upscaling.delayedVRPerfModeBootLatchForDLSS.exchange(true, std::memory_order_acq_rel)) {
-			logger::info("[PerfMode] Delaying VR render-scale boot latch until Streamline DLSS availability is known.");
+			logger::info("[VRRenderScale] Delaying VR render-scale boot latch until Streamline DLSS availability is known.");
 		}
 		return true;
 	}
@@ -384,7 +384,7 @@ namespace
 			return;
 
 		logger::info(
-			"[PerfMode] Streamline DLSS availability resolved after deferred VR render-scale boot latch (DLSS {}).",
+			"[VRRenderScale] Streamline DLSS availability resolved after deferred VR render-scale boot latch (DLSS {}).",
 			Upscaling::streamline.featureDLSS ? "available" : "unavailable");
 		a_upscaling.RequestPerfModeRenderTargetRecreate(a_reason);
 	}
@@ -1788,9 +1788,9 @@ namespace
 		FoveatedBypass = 1ull << 15,
 		VendorResetPending = 1ull << 16,
 		SubmitStageDeviceLost = 1ull << 17,
-		PerfModeActive = 1ull << 18,
-		PerfModeRequested = 1ull << 19,
-		RenderScaleRequested = 1ull << 20,
+		VRRenderScaleModeActive = 1ull << 18,
+		VRRenderScaleModeRequested = 1ull << 19,
+		RenderScaleToggleRequested = 1ull << 20,
 		CellContext = 1ull << 21,
 	};
 
@@ -1899,9 +1899,9 @@ namespace
 		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::FoveatedBypass, foveatedBypass);
 		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VendorResetPending, vendorResetPending);
 		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::SubmitStageDeviceLost, a_upscaling.IsSubmitStageDeviceLost());
-		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeActive, a_upscaling.IsPerfModeActive());
-		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeRequested, a_upscaling.GetPerfModeRequested());
-		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRequested, a_upscaling.IsRenderScaleModeRequested());
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeActive, a_upscaling.IsVRRenderScaleModeActive());
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeRequested, a_upscaling.GetPerfModeRequested());
+		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleToggleRequested, a_upscaling.GetVRRenderScaleModeRequested());
 
 		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
 		snapshot.closeAge = closeFrame != 0 ? ElapsedFrames(closeFrame, snapshot.frame) : 0u;
@@ -2164,7 +2164,7 @@ namespace
 		if (logSnapshot && !suppressSnapshot) {
 			const char* event = a_event && *a_event ? a_event : (stateChanged ? "state changed" : "state stable");
 			VR_TRANSITION_DIAG_LOG(
-				"[VRTransition] {} frame={} req={} runtime={} quality={} screen={}x{} renderScaleRelevant={} renderScaleRequested={} perfRequested={} perfActive={} loadingMenu={} loadingTail={} cellTail={} cellContext={} saveLoad={} closeAge={} pendingVR={} pendingRenderScale={} relatchPending={} relatchInProgress={} relatchAge={} relatchDelay={} hmdDefer={} projectedDefer={} foveatedBypass={} vendorPending={} pendingReset(DLSS={},FSR={},DLSSHistory={}) postLoadReset={} submitDeviceLost={}",
+				"[VRTransition] {} frame={} req={} runtime={} quality={} screen={}x{} renderScaleRelevant={} renderScaleToggleRequested={} vrRenderScaleRequested={} vrRenderScaleActive={} loadingMenu={} loadingTail={} cellTail={} cellContext={} saveLoad={} closeAge={} pendingVR={} pendingRenderScale={} relatchPending={} relatchInProgress={} relatchAge={} relatchDelay={} hmdDefer={} projectedDefer={} foveatedBypass={} vendorPending={} pendingReset(DLSS={},FSR={},DLSSHistory={}) postLoadReset={} submitDeviceLost={}",
 				event,
 				snapshot.frame,
 				magic_enum::enum_name(snapshot.requestedMethod),
@@ -2173,9 +2173,9 @@ namespace
 				snapshot.screenWidth,
 				snapshot.screenHeight,
 				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRelevant)),
-				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRequested)),
-				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeRequested)),
-				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PerfModeActive)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleToggleRequested)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeRequested)),
+				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeActive)),
 				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingMenu)),
 				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingTail)),
 				BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::CellTail)),
@@ -2260,9 +2260,9 @@ namespace
 		return IsCommunityShadersMenuOpen() &&
 		       (IsVendorUpscalingMethod(a_snapshot.requestedMethod) ||
 		           IsVendorUpscalingMethod(a_snapshot.runtimeMethod) ||
-		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::PerfModeActive) ||
-		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::PerfModeRequested) ||
-		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRequested));
+		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeActive) ||
+		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeRequested) ||
+		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleToggleRequested));
 	}
 
 	bool TryBuildVRSubmitPathDiagnosticSnapshot(const Upscaling& a_upscaling, VRTransitionDiagnosticSnapshot& a_snapshot)
@@ -3109,26 +3109,26 @@ void Upscaling::DrawSettings()
 		if (!globals::game::isVR)
 			return;
 
-		const bool perfModeActive = IsPerfModeActive();
+		const auto vrRenderScaleStatus = GetVRRenderScaleModeStatus();
+		const bool vrRenderScaleActive = IsVRRenderScaleModeActive();
 		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
 		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
 		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
-		const bool renderScaleRequested =
-			renderScaleMethodEligible &&
-			renderScaleQualitySelected &&
-			IsRenderScaleModeRequested();
-		const bool renderScaleLiveActive = perfModeActive;
-		if (!renderScaleRequested && !perfModeActive)
+		const bool renderScaleToggleRequested = GetVRRenderScaleModeRequested();
+		const bool vrRenderScaleRequested = GetPerfModeRequested();
+		if (!renderScaleToggleRequested && !vrRenderScaleActive)
 			submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 		const auto renderScaleUiState = BuildScenePausedUiState(
 			renderScaleMethodEligible,
-			renderScaleRequested,
-			renderScaleLiveActive,
-			submitStageRuntimeActive.load(std::memory_order_relaxed) || perfModeActive,
+			vrRenderScaleRequested,
+			vrRenderScaleActive,
+			submitStageRuntimeActive.load(std::memory_order_relaxed) || vrRenderScaleActive,
 			IsGameMenuContextActive());
 		const bool perfModeRelatchPending = pendingPerfModeRenderTargetRecreate.load(std::memory_order_relaxed);
-		const bool publicRenderScaleCanEdit = renderScaleMethodEligible && renderScaleQualitySelected;
-		const bool publicRenderScaleRequested = renderScaleRequested && GetPerfModeRequested();
+		const bool publicRenderScaleRequested = vrRenderScaleRequested;
+		const bool publicRenderScaleCanEdit =
+			(renderScaleMethodEligible && renderScaleQualitySelected) ||
+			publicRenderScaleRequested;
 		const bool showSubmitPathDeveloperToggle = globals::state && globals::state->IsDeveloperMode();
 
 		ImGui::Separator();
@@ -3139,7 +3139,7 @@ void Upscaling::DrawSettings()
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			if (ImGui::SliderInt("Render Scale Mode", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+			if (ImGui::SliderInt("VR Render Scale Mode", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,
@@ -3154,23 +3154,27 @@ void Upscaling::DrawSettings()
 			ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
 			ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 		}
+		ImGui::Text("VR Render Scale Status: %s", GetVRRenderScaleModeStatusName(vrRenderScaleStatus));
 
 		ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("On save-load, reads VRFpsStabilizer.ini [Conditional] Interior/Exterior CS upscaling rows.");
-			ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and Render Scale Mode to the cell you loaded into.");
+			ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and VR Render Scale Mode to the cell you loaded into.");
 			ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
 			ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
 		}
 
 		if (showSubmitPathDeveloperToggle) {
-			const bool submitPathCanEdit = renderScaleMethodEligible && !publicRenderScaleRequested && !perfModeRelatchPending;
-			const bool submitPathRequested = renderScaleRequested && !publicRenderScaleRequested;
+			const bool submitPathRequested = renderScaleToggleRequested && !vrRenderScaleRequested;
+			const bool submitPathCanEdit =
+				(renderScaleMethodEligible || submitPathRequested) &&
+				!publicRenderScaleRequested &&
+				!perfModeRelatchPending;
 			const char* submitPathModes[] = { "Disabled", "Enabled" };
 			int submitPathMode = submitPathRequested ? 1 : 0;
 			{
 				auto disabledGuard = Util::DisableGuard(!submitPathCanEdit);
-				if (ImGui::SliderInt("Submit Path", &submitPathMode, 0, 1, submitPathModes[std::clamp(submitPathMode, 0, 1)])) {
+				if (ImGui::SliderInt("Legacy Submit-Stage Only", &submitPathMode, 0, 1, submitPathModes[std::clamp(submitPathMode, 0, 1)])) {
 					const bool enableSubmitPath = std::clamp(submitPathMode, 0, 1) != 0;
 					const uint32_t targetQualityMode = renderScaleQualitySelected ? renderScaleQualityMode : kDefaultRenderScaleQualityMode;
 					if (GetEffectiveUpscalingQualityMode() != targetQualityMode)
@@ -3184,17 +3188,17 @@ void Upscaling::DrawSettings()
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Developer diagnostic only.");
-				ImGui::TextUnformatted("Tests the old submit-only render-scale path without the Render Scale Mode relatch.");
-				ImGui::TextUnformatted("Use Render Scale Mode for the normal user-facing path.");
+				ImGui::TextUnformatted("Tests submit-stage upscaling without the VR Render Scale Mode render-target relatch.");
+				ImGui::TextUnformatted("Use VR Render Scale Mode for the normal path.");
 			}
 			if (renderScaleUiState.pausedInMenu)
-				ImGui::TextDisabled("Submit Path was active in scene and is paused while this menu is open.");
+				ImGui::TextDisabled("Legacy submit-stage upscaling was active in scene and is paused while this menu is open.");
 		}
 
 		if (perfMode.HasRestartRequiredChange())
-			Util::Text::Warning(perfModeRelatchPending ? "Warning: Render Scale Mode relatch pending" : "Warning: Render Scale Mode change requires relatch or restart");
+			Util::Text::Warning(perfModeRelatchPending ? "Warning: VR Render Scale Mode relatch pending" : "Warning: VR Render Scale Mode change requires relatch or restart");
 		if (!renderScaleMethodEligible)
-			ImGui::TextDisabled("Render Scale Mode is available only with DLSS/FSR in VR.");
+			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
 
 		ImGui::TreePop();
 	};
@@ -3947,6 +3951,9 @@ void Upscaling::SaveSettings(json& o_json)
 	SanitizeUpscalingSettings(settings);
 	o_json = settings;
 	o_json["qualityModeSchemaVersion"] = 2;
+	if (IsVRRuntimeActive()) {
+		o_json.erase("perfMode");
+	}
 	if (!IsVRRuntimeActive()) {
 		StripVRSpecificUpscalingSettings(o_json);
 	}
@@ -3963,12 +3970,19 @@ void Upscaling::LoadSettings(json& o_json)
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
 	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
 	const bool hasLegacySubmitStageUpscalingSetting = o_json.contains("submitStageUpscaling");
+	const bool hasLegacyPerfModeSetting = o_json.contains("perfMode");
 	settings = o_json;
 	if (!hasRenderScaleModeSetting && hasLegacySubmitStageUpscalingSetting) {
 		try {
 			settings.renderScaleMode = o_json.at("submitStageUpscaling").get<uint>();
 		} catch (...) {
-			logger::warn("[Upscaling] Loaded legacy submitStageUpscaling setting could not be migrated; using Render Scale Mode default.");
+			logger::warn("[Upscaling] Loaded legacy submitStageUpscaling setting could not be migrated; using VR Render Scale Mode default.");
+		}
+	} else if (!hasRenderScaleModeSetting && hasLegacyPerfModeSetting) {
+		try {
+			settings.renderScaleMode = o_json.at("perfMode").get<uint>();
+		} catch (...) {
+			logger::warn("[Upscaling] Loaded legacy perfMode setting could not be migrated; using VR Render Scale Mode default.");
 		}
 	} else if (!hasRenderScaleModeSetting) {
 		// Preserve old behavior for configs that predate both renderScaleMode and submitStageUpscaling.
@@ -4356,7 +4370,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		if (renderSize.x > 0.0f && renderSize.y > 0.0f)
 			plan.engineRenderSize = renderSize;
 		plan.finalOutputSize = plan.trueHMDDisplaySize;
-		plan.owner = ResolutionOwner::PerfMode;
+		plan.owner = ResolutionOwner::VRRenderScaleMode;
 		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
 	} else if (plan.vendorMethod && IsUpscalingActive()) {
 		plan.owner = ResolutionOwner::VendorDynamicResolution;
@@ -4414,11 +4428,103 @@ bool Upscaling::IsRenderScaleModeRequested() const
 	if (!IsRenderScaleMethodEligible(GetConfiguredUpscaleMethodForTransition()))
 		return false;
 
+	return GetVRRenderScaleModeRequested();
+}
+
+bool Upscaling::GetVRRenderScaleModeRequested() const
+{
+	if (!REL::Module::IsVR())
+		return false;
+
 	const uint32_t pendingRenderScaleMode = pendingVRRenderScaleMode.load(std::memory_order_acquire);
 	if (pendingRenderScaleMode != kPendingVRUpscalingSettingUnset)
 		return pendingRenderScaleMode != 0;
 
 	return ClampToggleUInt(settings.renderScaleMode) != 0;
+}
+
+bool Upscaling::CanUseVRRenderScaleMode() const
+{
+	if (!REL::Module::IsVR())
+		return false;
+
+	if (GetOpenCompositeUpscalingBlocker().active)
+		return false;
+	if (IsRenderDocUpscalingBlocked())
+		return false;
+
+	if (!IsRenderScaleMethodEligible(GetConfiguredUpscaleMethodForTransition()))
+		return false;
+
+	return IsRenderScaleQualityMode(GetEffectiveUpscalingQualityMode());
+}
+
+bool Upscaling::IsVRRenderScaleModeActive() const
+{
+	return IsPerfModeActive();
+}
+
+Upscaling::VRRenderScaleStatus Upscaling::GetVRRenderScaleModeStatus() const
+{
+	if (!REL::Module::IsVR())
+		return VRRenderScaleStatus::Disabled;
+
+	const bool renderScaleToggleRequested = GetVRRenderScaleModeRequested();
+	const bool vrRenderScaleRequested = GetPerfModeRequested();
+	const bool active = IsPerfModeActive();
+	const bool relatchPending =
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		HasPendingVRRenderScaleTransition();
+	if (!renderScaleToggleRequested && !active && !relatchPending && !perfMode.HasRestartRequiredChange())
+		return VRRenderScaleStatus::Disabled;
+
+	if (GetOpenCompositeUpscalingBlocker().active || IsRenderDocUpscalingBlocked())
+		return VRRenderScaleStatus::RuntimeBlocked;
+
+	if (relatchPending)
+		return VRRenderScaleStatus::PendingRelatch;
+
+	if (perfMode.HasRestartRequiredChange())
+		return VRRenderScaleStatus::RestartRequired;
+
+	if (active)
+		return VRRenderScaleStatus::Active;
+
+	if (!IsRenderScaleMethodEligible(GetConfiguredUpscaleMethodForTransition()))
+		return VRRenderScaleStatus::IneligibleMethod;
+
+	if (!IsRenderScaleQualityMode(GetEffectiveUpscalingQualityMode()))
+		return VRRenderScaleStatus::NativeQuality;
+
+	if (!vrRenderScaleRequested)
+		return VRRenderScaleStatus::SubmitStageOnly;
+
+	return VRRenderScaleStatus::PendingRelatch;
+}
+
+const char* Upscaling::GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status)
+{
+	switch (a_status) {
+	case VRRenderScaleStatus::Disabled:
+		return "Disabled";
+	case VRRenderScaleStatus::IneligibleMethod:
+		return "Ineligible method";
+	case VRRenderScaleStatus::NativeQuality:
+		return "Native quality";
+	case VRRenderScaleStatus::RuntimeBlocked:
+		return "Runtime blocked";
+	case VRRenderScaleStatus::SubmitStageOnly:
+		return "Legacy submit-stage only";
+	case VRRenderScaleStatus::PendingRelatch:
+		return "Pending relatch";
+	case VRRenderScaleStatus::Active:
+		return "Active";
+	case VRRenderScaleStatus::RestartRequired:
+		return "Restart required";
+	default:
+		return "Unknown";
+	}
 }
 
 bool Upscaling::IsPerfModeActive() const
@@ -4433,20 +4539,18 @@ bool Upscaling::IsPerfModeActive() const
 
 bool Upscaling::GetPerfModeRequested() const
 {
-	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
-	if (REL::Module::IsVR() && IsRenderScaleMethodEligible(configuredMethod)) {
+	if (REL::Module::IsVR()) {
 		const uint32_t pendingPerfMode = pendingVRPerfMode.load(std::memory_order_acquire);
 		if (pendingPerfMode != kPendingVRUpscalingSettingUnset)
-			return pendingPerfMode != 0 && IsRenderScaleModeRequested();
+			return pendingPerfMode != 0 && GetVRRenderScaleModeRequested();
 	}
 
-	if (REL::Module::IsVR() &&
-		(!IsRenderScaleMethodEligible(configuredMethod) ||
-		 !IsRenderScaleModeRequested() ||
-		 !IsRenderScaleQualityMode(GetEffectiveUpscalingQualityMode())))
-		return false;
+	return GetVRRenderScaleModeRequested() && ClampToggleUInt(settings.perfMode) != 0;
+}
 
-	return ClampToggleUInt(settings.perfMode) != 0;
+void Upscaling::SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason, bool a_allowDefer)
+{
+	SetPerfModeRequested(a_enabled, a_reason, a_allowDefer);
 }
 
 void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool a_allowDefer)
@@ -5156,9 +5260,9 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason)
 		return;
 
 	if (a_reason && *a_reason) {
-		logger::info("[PerfMode] Queued render-target relatch: {}", a_reason);
+		logger::info("[VRRenderScale] Queued render-target relatch: {}", a_reason);
 	} else {
-		logger::info("[PerfMode] Queued render-target relatch");
+		logger::info("[VRRenderScale] Queued render-target relatch");
 	}
 }
 
@@ -5244,7 +5348,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	logger::info(
-		"[PerfMode] Applying render-target relatch{}{}",
+		"[VRRenderScale] Applying render-target relatch{}{}",
 		a_caller && *a_caller ? " from " : "",
 		a_caller && *a_caller ? a_caller : "");
 	const bool forceApplyDiagnostic = !loggedRelatchApplyDiagnostic;
@@ -5266,7 +5370,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
 				pendingDLSSReset.store(true, std::memory_order_release);
 			const bool loggedVendorDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchVendorDeferDiagnostic, [&]() {
-				logger::warn("[PerfMode] Render-target relatch deferred because vendor resources are still in use.");
+				logger::warn("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
 				VR_TRANSITION_DIAG_LOG(
 					"[VRTransition] Relatch deferred: vendor resources are still in use; retrying after {} frames",
 					kVRUpscalingTransitionApplyDelayFrames);
@@ -5284,7 +5388,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (!Hooks::RecreateRenderTargets()) {
 			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 			const bool loggedD3DDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchD3DDeferDiagnostic, [&]() {
-				logger::warn("[PerfMode] Render-target relatch could not run; will retry.");
+				logger::warn("[VRRenderScale] Render-target relatch could not run; will retry.");
 				VR_TRANSITION_DIAG_LOG(
 					"[VRTransition] Relatch deferred: D3D render-target recreate will retry in at least {} frames",
 					kVRRenderScaleRelatchBusyRetryFrames);
@@ -5329,7 +5433,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			clearRelatchDelay();
 			clearRelatchRetryDiagnostics();
 		}
-		logger::error("[PerfMode] Render-target relatch failed: {}", e.what());
+		logger::error("[VRRenderScale] Render-target relatch failed: {}", e.what());
 		return false;
 	} catch (...) {
 		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch")) {
@@ -5338,7 +5442,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			clearRelatchDelay();
 			clearRelatchRetryDiagnostics();
 		}
-		logger::error("[PerfMode] Render-target relatch failed with an unknown exception");
+		logger::error("[VRRenderScale] Render-target relatch failed with an unknown exception");
 		return false;
 	}
 
@@ -5348,7 +5452,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		std::memory_order_release);
 	clearRelatchDelay();
 	clearRelatchRetryDiagnostics();
-	logger::info("[PerfMode] Applied render-target relatch");
+	logger::info("[VRRenderScale] Applied render-target relatch");
 	LogVRTransitionDiagnostics(*this, "applied render-target relatch", true);
 	return true;
 }
@@ -5878,7 +5982,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	if (resourceChangeDetected && vrRenderScaleRelatchOwnsResourceChange) {
 		const bool loggedDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedVRResourceChangeRelatchDefer, [&]() {
 			VR_TRANSITION_DIAG_LOG(
-				"[VRTransition] Deferred generic resource-change handling while render-target relatch owns vendor/D3D resources (method {} -> {}, quality {} -> {}, renderScale {} -> {}, perf {} -> {})",
+				"[VRTransition] Deferred generic resource-change handling while render-target relatch owns vendor/D3D resources (method {} -> {}, quality {} -> {}, submitStage {} -> {}, vrRenderScaleLatch {} -> {})",
 				magic_enum::enum_name(previousUpscaleMode),
 				magic_enum::enum_name(a_upscalemethod),
 				previousQualityMode,
@@ -5893,12 +5997,12 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	}
 
 	if (resourceChangeDetected) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, RenderScaleMode: {} -> {}, PerfMode: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
+		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, SubmitStage: {} -> {}, VRRenderScaleLatch: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
 			previousQualityMode, qualityModeCurrent, previousDLSSPreset, dlssPresetCurrent, previousRenderScaleMode, renderScaleModeCurrent, previousPerfMode, perfModeCurrent, previousFrameGenMode, frameGenModeCurrent, d3d12SwapChainActive, previousFSRRuntimePathActive, fsrRuntimePathCurrent);
 		if (globals::game::isVR && (renderScaleTransitionRelevant || previousUpscaleMode == UpscaleMethod::kDLSS || previousUpscaleMode == UpscaleMethod::kFSR || a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR)) {
 			VR_TRANSITION_DIAG_LOG(
-				"[VRTransition] Resource change: method {} -> {}, quality {} -> {}, dlssPreset {} -> {}, renderScale {} -> {}, perf {} -> {}, foveatedDispatch {} -> {}, peripheryTAA {} -> {}, fsrRuntimePath {} -> {}, renderScaleRelevant={}",
+				"[VRTransition] Resource change: method {} -> {}, quality {} -> {}, dlssPreset {} -> {}, submitStage {} -> {}, vrRenderScaleLatch {} -> {}, foveatedDispatch {} -> {}, peripheryTAA {} -> {}, fsrRuntimePath {} -> {}, renderScaleRelevant={}",
 				magic_enum::enum_name(previousUpscaleMode),
 				magic_enum::enum_name(a_upscalemethod),
 				previousQualityMode,
@@ -8718,7 +8822,7 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 	if (!needsRecreate)
 		return true;
 
-	logger::info("[PerfMode] (Re)creating presentation textures: per-eye in {}x{}, out {}x{}",
+	logger::info("[VRRenderScale] (Re)creating presentation textures: per-eye in {}x{}, out {}x{}",
 		inWidth, inHeight, outWidth, outHeight);
 
 	for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -9155,7 +9259,7 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 
 	const bool annotateEncode = state->frameAnnotations;
 	if (annotateEncode)
-		state->BeginPerfEvent("Render Scale Mode Encode Inputs");
+		state->BeginPerfEvent("VR Render Scale Mode Encode Inputs");
 	auto encodePerfEvent = ScopeExit([&]() {
 		if (annotateEncode)
 			state->EndPerfEvent();
@@ -9363,7 +9467,7 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 		auto state = globals::state;
 		bool perfEventActive = false;
 		if (state && state->frameAnnotations) {
-			state->BeginPerfEvent("Render Scale Mode Stretch Fallback");
+			state->BeginPerfEvent("VR Render Scale Mode Stretch Fallback");
 			perfEventActive = true;
 		}
 		auto perfEventGuard = ScopeExit([&]() {
@@ -9644,7 +9748,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
 	RefreshRuntimeResolutionPlan();
-	if (runtimeResolutionPlan.owner == ResolutionOwner::PerfMode) {
+	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
 		const int renderWidth = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.x));
 		const int renderHeight = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.y));
 		const int outputWidth = std::max(renderWidth, static_cast<int>(runtimeResolutionPlan.finalOutputSize.x));
@@ -10388,12 +10492,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const auto screenSize = state->screenSize;
-	const bool perfModeScaleMode = resolutionPlan.owner == ResolutionOwner::PerfMode;
+	const bool vrRenderScaleMode = resolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 	uint32_t eyeWidthOut = 0;
 	uint32_t eyeHeightOut = 0;
 	uint32_t eyeWidthIn = 0;
 	uint32_t eyeHeightIn = 0;
-	if (perfModeScaleMode) {
+	if (vrRenderScaleMode) {
 		eyeWidthOut = std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.finalOutputSize.x) / 2u);
 		eyeHeightOut = ClampPositiveDimension(resolutionPlan.finalOutputSize.y);
 		eyeWidthIn = std::max<uint32_t>(1u, ClampPositiveDimension(resolutionPlan.engineRenderSize.x) / 2u);
@@ -10439,8 +10543,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool sourceHasPerEyeLayout =
 		sourceDesc.ArraySize > 1 ||
 		(sourceDesc.ArraySize == 1 && TextureContainsVREyeRegion(sourceDesc.Width, sourceDesc.Height, sourceStereoLayout.eyes[1]));
-	const bool perfModeMenuCanUseVendor =
-		perfModeScaleMode &&
+	const bool vrRenderScaleMenuCanUseVendor =
+		vrRenderScaleMode &&
 		!presentationRenderTarget &&
 		submitMenuPresentationContext &&
 		(a_inputBounds || sourceHasPerEyeLayout);
@@ -10450,16 +10554,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		currentFrame < vendorResumeFrame;
 	if (vendorResumeFrame != 0 && !transitionPresentationCooldown)
 		submitStageVendorResumeFrame.store(0, std::memory_order_release);
-	const bool transitionPresentationOnly = perfModeScaleMode && transitionPresentationCooldown;
+	const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
 	const bool presentationOnly =
-		perfModeScaleMode &&
+		vrRenderScaleMode &&
 		(menuPresentationContext || transitionPresentationOnly) &&
-		!perfModeMenuCanUseVendor;
+		!vrRenderScaleMenuCanUseVendor;
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedRequested =
 		!presentationOnly &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
-		!perfModeMenuCanUseVendor &&
+		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass;
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
 	LogVRTransitionDiagnostics(*this);
@@ -10501,15 +10605,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		try {
 			if ((!submitStagePreparedThisFrame || !submitStagePreparedFramePresentationOnly) &&
 				!EnsureVRPresentationTextures(sourceEyeWidthIn, sourceEyeHeightIn, eyeWidthOut, eyeHeightOut, sourceTexture)) {
-				logger::warn("[PerfMode] {} failed to create presentation textures.", presentationContext);
+				logger::warn("[VRRenderScale] {} failed to create presentation textures.", presentationContext);
 				return false;
 			}
 		} catch (const std::exception& e) {
-			logger::warn("[PerfMode] {} failed to create presentation textures: {}", presentationContext, e.what());
+			logger::warn("[VRRenderScale] {} failed to create presentation textures: {}", presentationContext, e.what());
 			MarkSubmitStageDeviceLostIfNeeded(e, presentationContext);
 			return false;
 		} catch (...) {
-			logger::warn("[PerfMode] {} failed to create presentation textures.", presentationContext);
+			logger::warn("[VRRenderScale] {} failed to create presentation textures.", presentationContext);
 			MarkSubmitStageDeviceLostIfDeviceRemoved(presentationContext);
 			return false;
 		}
@@ -10541,7 +10645,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const auto clearSubmittedEyeHMDMask = [&]() {
-		if (perfModeMenuCanUseVendor)
+		if (vrRenderScaleMenuCanUseVendor)
 			return;
 		if (presentationRenderTarget)
 			return;
@@ -10621,7 +10725,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			sourceEyeHeightIn,
 			eyeWidthOut,
 			eyeHeightOut,
-			perfModeScaleMode,
+			vrRenderScaleMode,
 			presentationOnly,
 			foveatedRequested,
 			presentationRenderTarget);
@@ -10788,7 +10892,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (IsSubmitStageDeviceLost())
 			return false;
 
-		if (perfModeScaleMode &&
+		if (vrRenderScaleMode &&
 			presentStretchOutput(eyeWidthIn, eyeHeightIn, "vendor-failed-stretch-output")) {
 			return true;
 		}
@@ -10811,7 +10915,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	clearSubmittedEyeHMDMask();
 	if (IsSubmitStageDeviceLost())
 		return false;
-	if (perfModeScaleMode) {
+	if (vrRenderScaleMode) {
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&
 			sourceDesc.Width >= eyeWidthOut * 2 &&
@@ -12063,8 +12167,8 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 		return;
 	}
 	RefreshRuntimeResolutionPlan();
-	const bool perfModeActive = runtimeResolutionPlan.owner == ResolutionOwner::PerfMode;
-	if (!perfModeActive) {
+	const bool vrRenderScaleActive = runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
+	if (!vrRenderScaleActive) {
 		return;
 	}
 	const uint32_t inputEyeWidth = std::max<uint32_t>(1u, ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.x) / 2u);
@@ -12107,8 +12211,8 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 		return;
 	}
 
-	TracyD3D11Zone(state->tracyCtx, "Upscaling - Render Scale Mode Underwater Mask");
-	state->BeginPerfEvent("Render Scale Mode Underwater Mask Refresh");
+	TracyD3D11Zone(state->tracyCtx, "Upscaling - VR Render Scale Mode Underwater Mask");
+	state->BeginPerfEvent("VR Render Scale Mode Underwater Mask Refresh");
 	auto perfEvent = ScopeExit([&]() {
 		state->EndPerfEvent();
 	});

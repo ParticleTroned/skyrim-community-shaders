@@ -578,15 +578,33 @@ namespace
 		a_upscaling.RequestPerfModeRenderTargetRecreate(a_reason, origin);
 	}
 
+	// These targets feed late menu/HUD presentation, so VR render-scale mode
+	// keeps them display-sized and submit-stage treats them as presentation.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 6> kSubmittedVRPresentationTargets{
+		RE::RENDER_TARGETS::kMENUBG,
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+		RE::RENDER_TARGETS::kHUDMENU,
+		RE::RENDER_TARGETS::kFADERUI,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
+	};
+
+	bool IsSubmittedVRPresentationTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		return std::find(
+			       kSubmittedVRPresentationTargets.begin(),
+			       kSubmittedVRPresentationTargets.end(),
+			       a_target) != kSubmittedVRPresentationTargets.end();
+	}
+
 	bool UsesFullSizeVRPresentationTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
+		if (IsSubmittedVRPresentationTarget(a_target))
+			return true;
+
 		switch (a_target) {
-		case RE::RENDER_TARGETS::kMENUBG:
 		case RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY:
 		case RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2:
-		case RE::RENDER_TARGETS::kPROJECTEDMENU:
-		case RE::RENDER_TARGETS::kHUDMENU:
-		case RE::RENDER_TARGETS::kFADERUI:
 			return true;
 		default:
 			return false;
@@ -600,16 +618,7 @@ namespace
 			return false;
 
 		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
-		static constexpr RE::RENDER_TARGETS::RENDER_TARGET kSubmittedPresentationTargets[] = {
-			RE::RENDER_TARGETS::kMENUBG,
-			RE::RENDER_TARGETS::kPROJECTEDMENU,
-			RE::RENDER_TARGETS::kHUDMENU,
-			RE::RENDER_TARGETS::kFADERUI,
-			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
-			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
-		};
-
-		for (const auto target : kSubmittedPresentationTargets) {
+		for (const auto target : kSubmittedVRPresentationTargets) {
 			if (renderTargets[target].texture == a_texture)
 				return true;
 		}
@@ -5201,8 +5210,6 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 		case RE::RENDER_TARGETS::kREFRACTION_NORMALS:
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_ACCUMULATION_1:
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_ACCUMULATION_2:
-		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
-		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_MASK:
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_1:
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_2:

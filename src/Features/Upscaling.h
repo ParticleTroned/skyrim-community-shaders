@@ -193,6 +193,7 @@ public:
 		float2 GetDisplayScreenSize() const;
 		float2 GetRenderScreenSize() const;
 		const BootSnapshot& GetBootSnapshot() const { return boot; }
+		bool HasKnownHMDSize() const { return trueHMDEyeWidth != 0 && trueHMDEyeHeight != 0; }
 		bool HasRestartRequiredChange() const { return restartRequired; }
 
 		uint32_t trueHMDEyeWidth = 0;

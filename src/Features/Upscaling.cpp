@@ -210,8 +210,6 @@ namespace
 7) Test whether Foveated Upscaling (FOV) or FOV + Peripheral TAA gives better performance by toggling FOV + Peripheral TAA while watching frame times.
 8) Save your mask settings and enjoy the performance win.)";
 
-	bool g_submitStageTargetSizeKnown = false;
-
 	uint ClampToggleUInt(uint value);
 
 	struct VRStereoEyeRegion
@@ -2545,7 +2543,7 @@ namespace
 
 	bool IsSubmitStageMenuPresentationContextActive()
 	{
-		if (!globals::game::isVR || !g_submitStageTargetSizeKnown)
+		if (!globals::game::isVR)
 			return false;
 		if (!IsKnownGameMenuContextActive())
 			return false;
@@ -4073,8 +4071,6 @@ struct BSOpenVR_GetRenderTargetSize
 		auto& upscaling = globals::features::upscaling;
 		upscaling.RecordTrueHMDRenderTargetSize(trueEyeWidth, trueEyeHeight);
 
-		g_submitStageTargetSizeKnown = true;
-
 		uint32_t perfModeWidth = trueEyeWidth;
 		uint32_t perfModeHeight = trueEyeHeight;
 		const bool allowPerfModeBootLatchCreate = upscaling.ConsumePerfModeBootLatchCreate();
@@ -4869,7 +4865,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 
 bool Upscaling::IsPerfModePresentationActive() const
 {
-	return IsPerfModeActive() && g_submitStageTargetSizeKnown;
+	return IsPerfModeActive() && perfMode.HasKnownHMDSize();
 }
 
 bool Upscaling::IsPresentationUpscalingActive() const

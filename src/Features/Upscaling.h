@@ -716,6 +716,10 @@ public:
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	mutable std::atomic_bool submitStageRuntimeActive{ false };
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
+	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
+	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
+	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
+	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();
@@ -854,6 +858,7 @@ public:
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 
 private:
+	void ClearSubmitStageVendorResumeCooldown();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);

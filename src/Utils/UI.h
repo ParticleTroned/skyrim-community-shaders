@@ -282,6 +282,51 @@ namespace Util
 	/** Style for preset buttons with a brighter active state. */
 	StyledButtonWrapper PresetButtonStyle(bool active);
 
+	class PresetControlStyleWrapper
+	{
+	public:
+		PresetControlStyleWrapper();
+		~PresetControlStyleWrapper();
+
+		PresetControlStyleWrapper(const PresetControlStyleWrapper&) = delete;
+		PresetControlStyleWrapper& operator=(const PresetControlStyleWrapper&) = delete;
+		PresetControlStyleWrapper(PresetControlStyleWrapper&&) = delete;
+		PresetControlStyleWrapper& operator=(PresetControlStyleWrapper&&) = delete;
+
+	private:
+		int m_pushedStyles;
+	};
+
+	class BlueFrameStyleWrapper
+	{
+	public:
+		explicit BlueFrameStyleWrapper(bool includeCheckMark = true);
+		~BlueFrameStyleWrapper();
+
+		BlueFrameStyleWrapper(const BlueFrameStyleWrapper&) = delete;
+		BlueFrameStyleWrapper& operator=(const BlueFrameStyleWrapper&) = delete;
+		BlueFrameStyleWrapper(BlueFrameStyleWrapper&&) = delete;
+		BlueFrameStyleWrapper& operator=(BlueFrameStyleWrapper&&) = delete;
+
+	private:
+		int m_pushedStyles;
+	};
+
+	class YellowFrameStyleWrapper
+	{
+	public:
+		explicit YellowFrameStyleWrapper(bool includeCheckMark = true);
+		~YellowFrameStyleWrapper();
+
+		YellowFrameStyleWrapper(const YellowFrameStyleWrapper&) = delete;
+		YellowFrameStyleWrapper& operator=(const YellowFrameStyleWrapper&) = delete;
+		YellowFrameStyleWrapper(YellowFrameStyleWrapper&&) = delete;
+		YellowFrameStyleWrapper& operator=(YellowFrameStyleWrapper&&) = delete;
+
+	private:
+		int m_pushedStyles;
+	};
+
 	/**
 	 * Alpha-based error-color button — use in toolbar rows alongside SuccessButton/WarningButton
 	 * for visual consistency. For standalone destructive actions (delete icons, close buttons),

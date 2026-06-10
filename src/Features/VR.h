@@ -151,6 +151,8 @@ public:
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override { return IsOpenVRCompatible() && settings.kAutoHideSeconds > 0 && globals::menu && !globals::menu->IsEnabled; }
+	bool ShouldUseInSceneOverlay() const;
+	void HideOverlaysIfPresent();
 
 	//=============================================================================
 	// SETTINGS STRUCTURE

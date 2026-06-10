@@ -223,6 +223,27 @@ bool VR::IsWelcomeOverlayVisible() const
 	       !globals::menu->IsEnabled;
 }
 
+bool VR::ShouldUseInSceneOverlay() const
+{
+	return IsOpenVRCompatible() &&
+	       openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite &&
+	       settings.attachMode != AttachMode::None;
+}
+
+void VR::HideOverlaysIfPresent()
+{
+	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
+	if (!openvr || !openvr->vrSystem)
+		return;
+
+	if (auto* overlay = RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext)) {
+		if (menuOverlayHandle != vr::k_ulOverlayHandleInvalid)
+			overlay->HideOverlay(menuOverlayHandle);
+		if (menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid)
+			overlay->HideOverlay(menuControllerOverlayHandle);
+	}
+}
+
 void VR::SubmitOverlayFrame()
 {
 	InstallSubmitHook();

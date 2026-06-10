@@ -1,7 +1,6 @@
 #include "FeatureListRenderer.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <filesystem>
 #include <format>
@@ -13,7 +12,6 @@
 #include "Feature.h"
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
-#include "Features/Wetterness.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -23,6 +21,7 @@
 #include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
+#include "Features/Wetterness.h"
 #include "WeatherVariableRegistry.h"
 
 namespace
@@ -198,12 +197,6 @@ namespace
 	bool g_dontShowAgainCheckbox = false;
 }
 
-float FeatureListRenderer::GetRestoreDefaultsButtonReserveHeight()
-{
-	const auto& style = ImGui::GetStyle();
-	return GetRestoreDefaultsFrameSize().y + style.WindowPadding.y + style.ItemSpacing.y;
-}
-
 void FeatureListRenderer::RenderFeatureList(
 	float footerHeight,
 	size_t& selectedMenu,
@@ -273,7 +266,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
 	for (Feature* feat : sortedFeatureList) {
-		if (!feat->IsHiddenFromUserView() && feat->IsInMenu() && feat->loaded) {
+		if (feat->IsInMenu() && feat->loaded) {
 			std::string category(feat->GetCategory());
 			categorizedFeatures[category].push_back(feat);
 		}
@@ -325,7 +318,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-		return !feat->IsHiddenFromUserView() && !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
+		return !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
 		menuList.push_back("Unloaded Features"s);
@@ -784,8 +777,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();
-			} else if (hasFailedMessage) {
-				// Conflict/version failures are rendered below. Do not present them as pending restart.
 			} else if (IsFeatureInstalled(feat->GetShortName())) {
 				ImGui::Text("This feature will be available after restart.");
 			} else {
@@ -822,13 +813,16 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	ImVec2 windowPos = ImGui::GetWindowPos();
 	ImVec2 windowSize = ImGui::GetWindowSize();
 	float scrollbarWidth = ImGui::GetScrollMaxY() > 0 ? style.ScrollbarSize : 0.0f;
-	const ImVec2 iconSize = GetRestoreDefaultsIconSize();
-	const ImVec2 frameSize = GetRestoreDefaultsFrameSize();
+	float iconDimension = ImGui::GetFrameHeight() * 1.2f;
+	ImVec2 iconSize(iconDimension, iconDimension);
+	ImVec2 frameSize(iconSize.x + style.FramePadding.x * 2, iconSize.y + style.FramePadding.y * 2);
 	ImGui::SetCursorScreenPos(ImVec2(
 		windowPos.x + windowSize.x - frameSize.x - style.WindowPadding.x - scrollbarWidth,
 		windowPos.y + windowSize.y - frameSize.y - style.WindowPadding.y));
 
-	auto iconButtonStyle = Util::TransparentIconButtonStyle();
+	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.3f));
+	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
 
 	auto& menu = *globals::menu;
 	if (menu.uiIcons.featureSettingRevert.texture) {
@@ -840,6 +834,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 			feat->RestoreDefaultSettings();
 		}
 	}
+
+	ImGui::PopStyleColor(3);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Restore default settings for this feature");

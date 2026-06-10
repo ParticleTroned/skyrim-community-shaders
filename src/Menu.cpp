@@ -760,7 +760,8 @@ void Menu::DrawGeneralSettings()
 		.settingOverlayToggleKey = settingOverlayToggleKey,
 		.settingShaderBlockPrevKey = settingShaderBlockPrevKey,
 		.settingShaderBlockNextKey = settingShaderBlockNextKey,
-		.settingWeatherEditorToggleKey = settingWeatherEditorToggleKey
+		.settingWeatherEditorToggleKey = settingWeatherEditorToggleKey,
+		.settingScreenshotKey = settingScreenshotKey
 	};
 
 	// Render settings using extracted component

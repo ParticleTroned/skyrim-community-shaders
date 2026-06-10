@@ -32,7 +32,6 @@ public:
 		std::map<std::string, bool>& categoryExpansionStates,
 		const std::function<void()>& drawGeneralSettings,
 		const std::function<void()>& drawAdvancedSettings);
-	static float GetRestoreDefaultsButtonReserveHeight();
 
 private:
 	struct ListMenuVisitor

@@ -35,7 +35,6 @@
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <cstdarg>
 #include <format>
 #include <functional>
 #include <iomanip>
@@ -122,6 +121,9 @@ namespace Util
 		if (pos.x == -FLT_MAX && pos.y == -FLT_MAX)
 			pos = ImGui::GetMainViewport()->GetCenter();
 		ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+		// Fix first-frame vertical stretch: AlwaysAutoResize resets width to 0 on the hidden
+		// measurement frame, causing TextWrapped to wrap at 0px and produce an enormous height.
+		// Setting an initial width gives TextWrapped a sensible wrap column on that frame.
 		ImGui::SetNextWindowSize(ImVec2(400.0f * GetUIScale(), 0.0f), ImGuiCond_Appearing);
 		isOpen = ImGui::BeginPopupModal(name, p_open, flags | ImGuiWindowFlags_NoSavedSettings);
 	}
@@ -568,6 +570,11 @@ namespace Util
 				color.w);
 		}
 
+		ImVec4 WithAlpha(const ImVec4& color, float alpha)
+		{
+			return ImVec4(color.x, color.y, color.z, alpha);
+		}
+
 		template <typename StyleFn, typename ButtonFn>
 		bool InvokeStyledButton(StyleFn styleProvider, ButtonFn buttonCall)
 		{
@@ -749,8 +756,7 @@ namespace Util
 		constexpr float kHoverAlpha = 0.18f;
 		constexpr float kActiveAlpha = 0.30f;
 		const auto accent = Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor;
-		return StyledButtonWrapper(
-			ImVec4(0, 0, 0, 0),
+		return StyledButtonWrapper(ImVec4(0, 0, 0, 0),
 			Color::WithAlpha(accent, kHoverAlpha),
 			Color::WithAlpha(accent, kActiveAlpha));
 	}
@@ -1414,7 +1420,7 @@ namespace Util
 
 		// Custom style - always transparent background to avoid click blocking
 		ImVec4 bgColor = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-		ImVec4 bgColorActive = ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive);
+		ImVec4 bgColorActive = ImVec4(0.3f, 0.3f, 0.3f, 0.9f);
 		// Use theme text color instead of hardcoded color
 		auto& palette = globals::menu->GetTheme().Palette;
 		ImVec4 textColor = palette.Text;
@@ -1568,6 +1574,7 @@ namespace Util
 		{
 			return globals::menu->GetTheme().StatusPalette.Disable;
 		}
+
 	}
 
 	namespace Text
@@ -1594,7 +1601,6 @@ namespace Util
 		ColoredTextV(Colors::ColorFn(), fmt, args); \
 		va_end(args);                               \
 	}
-
 #define UTIL_TEXT_WRAPPED(Name, ColorFn)                   \
 	void Name(const char* fmt, ...)                        \
 	{                                                      \
@@ -2324,9 +2330,6 @@ namespace Util
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
-				auto* weatherManager = WeatherManager::GetSingleton();
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
@@ -2367,9 +2370,6 @@ namespace Util
 			bool isControlled = IsWeatherControlled(feature, settingName);
 
 			if (isControlled) {
-				auto* weatherManager = WeatherManager::GetSingleton();
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
 				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
@@ -2413,7 +2413,8 @@ namespace Util
 		const char* recordingLabel)
 	{
 		bool changed = false;
-		ImGui::TextUnformatted(label);
+		ImGui::Text("%s", label);
+		ImGui::SameLine();
 
 		// Use theme colors for consistent styling
 		auto& theme = globals::menu->GetTheme().StatusPalette;
@@ -2511,8 +2512,6 @@ namespace Util
 			}
 		}
 
-		ImGui::Spacing();
-
 		return changed;
 	}
 
@@ -2528,8 +2527,7 @@ namespace Util
 
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				const auto& theme = Menu::GetSingleton()->GetTheme();
-				ImGui::TextColored(theme.StatusPalette.Warning, "Setting Constrained");
+				ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Setting Constrained");
 				ImGui::Text("This setting is constrained by:");
 				ImGui::Spacing();
 				for (const auto& src : constraint.sources) {
@@ -2537,7 +2535,7 @@ namespace Util
 					ImGui::Indent();
 					ImGui::TextWrapped("%s", src.reason.c_str());
 					if (src.recommendDisableAtBoot) {
-						ImGui::TextColored(theme.StatusPalette.Error,
+						ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f),
 							"Consider disabling this feature at boot for best compatibility.");
 					}
 					ImGui::Unindent();

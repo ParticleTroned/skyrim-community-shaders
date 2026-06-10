@@ -12,7 +12,6 @@
 
 #include "Feature.h"
 #include "FeatureIssues.h"
-#include "Features/OverlayFeature.h"
 #include "Features/RenderDoc.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -25,16 +24,14 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/VR.h"
 
-#include <cstring>
-
 namespace
 {
 	std::unordered_map<ImGuiID, float> s_windowOverlapAlpha;
 
 	constexpr ImGuiWindowFlags SKIP_WINDOW_FLAGS = ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove;
-	constexpr const char* MAIN_WINDOW_ID = "###CommunityShaders";
+	constexpr const char* MAIN_WINDOW_PREFIX = "Community Shaders";
 
-	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strstr(win->Name, MAIN_WINDOW_ID); }
+	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strncmp(win->Name, MAIN_WINDOW_PREFIX, strlen(MAIN_WINDOW_PREFIX)) == 0; }
 
 	void DrawShaderCompilationFailures(uint64_t failed, const Menu::ThemeSettings& themeSettings)
 	{
@@ -52,71 +49,6 @@ namespace
 		if (!win || !win->WasActive || win->Hidden)
 			return false;
 		return !(win->ParentWindow && !win->DockIsActive) && !(win->Flags & SKIP_WINDOW_FLAGS);
-	}
-
-	bool ShouldFilterVROverlaysFromDesktop()
-	{
-		return globals::features::vr.IsOpenVRCompatible() &&
-		       globals::features::vr.ShouldUseInSceneOverlay() &&
-		       globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
-	}
-
-	bool IsHiddenDesktopOverlayDrawList(const ImDrawList* drawList, const std::vector<OverlayFeature*>& overlays)
-	{
-		if (!drawList || !drawList->_OwnerName) {
-			return false;
-		}
-
-		for (const auto* overlay : overlays) {
-			if (!overlay || !overlay->HideFromDesktopWhenSubmittedToVR()) {
-				continue;
-			}
-
-			const char* windowName = overlay->GetOverlayWindowName();
-			if (windowName && strcmp(drawList->_OwnerName, windowName) == 0) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	ImDrawData* BuildDesktopDrawData(
-		ImDrawData* drawData,
-		const std::vector<OverlayFeature*>& overlays,
-		ImDrawData& filteredDrawData)
-	{
-		if (!drawData || !ShouldFilterVROverlaysFromDesktop()) {
-			return drawData;
-		}
-
-		bool removedAny = false;
-		int totalIdxCount = 0;
-		int totalVtxCount = 0;
-
-		filteredDrawData = *drawData;
-		filteredDrawData.CmdLists.clear();
-		filteredDrawData.CmdLists.reserve(drawData->CmdListsCount);
-		for (int i = 0; i < drawData->CmdListsCount; ++i) {
-			auto* cmdList = drawData->CmdLists[i];
-			if (IsHiddenDesktopOverlayDrawList(cmdList, overlays)) {
-				removedAny = true;
-				continue;
-			}
-
-			filteredDrawData.CmdLists.push_back(cmdList);
-			totalIdxCount += cmdList->IdxBuffer.Size;
-			totalVtxCount += cmdList->VtxBuffer.Size;
-		}
-
-		if (!removedAny) {
-			return drawData;
-		}
-
-		filteredDrawData.CmdListsCount = filteredDrawData.CmdLists.Size;
-		filteredDrawData.TotalIdxCount = totalIdxCount;
-		filteredDrawData.TotalVtxCount = totalVtxCount;
-		return &filteredDrawData;
 	}
 
 	// Patches DrawList background vertices for windows involved in overlap.
@@ -206,13 +138,11 @@ void OverlayRenderer::RenderOverlay(
 		globals::features::vr.ProcessControllerInputForImGui();
 	}
 
-	auto drawableOverlays = CollectDrawableFeatureOverlays(menu);
-	if (ShouldSkipRendering(menu, !drawableOverlays.empty())) {
+	if (ShouldSkipRendering()) {
 		auto& io = ImGui::GetIO();
 		io.ClearInputKeys();
 		io.ClearEventsQueue();
 		s_windowOverlapAlpha.clear();
-		globals::features::vr.HideOverlaysIfPresent();
 		return;
 	}
 
@@ -223,6 +153,12 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderBlockingStatus();
 
 	auto* editorWindow = EditorWindow::GetSingleton();
+	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
+		editorWindow->open = false;
+		if (editorWindow->IsInPreviewMode())
+			editorWindow->ExitPreviewMode();
+	}
+	editorWindow->UpdateOpenState();
 	if (editorWindow->open) {
 		bool flying = editorWindow->IsPreviewFlying();
 		auto& io = ImGui::GetIO();
@@ -239,32 +175,11 @@ void OverlayRenderer::RenderOverlay(
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
 
-	RenderFeatureOverlays(drawableOverlays);
+	RenderFeatureOverlays();
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
 	PatchOverlappingWindowBackgrounds();
-	FinalizeImGuiFrame(drawableOverlays);
-}
-
-bool OverlayRenderer::MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot)
-{
-	auto* shaderWin = ImGui::FindWindowByName("ShaderCompilationInfo");
-	if (!shaderWin || !shaderWin->Active || shaderWin->Hidden || windowSize.x <= 0.0f || windowSize.y <= 0.0f) {
-		return false;
-	}
-
-	const ImVec2 windowMin(
-		position.x - windowSize.x * pivot.x,
-		position.y - windowSize.y * pivot.y);
-	const ImVec2 windowMax(windowMin.x + windowSize.x, windowMin.y + windowSize.y);
-	const ImRect windowRect(windowMin, windowMax);
-	const ImRect shaderRect(shaderWin->Pos, ImVec2(shaderWin->Pos.x + shaderWin->Size.x, shaderWin->Pos.y + shaderWin->Size.y));
-	if (!windowRect.Overlaps(shaderRect)) {
-		return false;
-	}
-
-	position.y += shaderRect.Max.y + ImGui::GetStyle().ItemSpacing.y - windowRect.Min.y;
-	return true;
+	FinalizeImGuiFrame();
 }
 
 void OverlayRenderer::HandleVRSetup()
@@ -274,7 +189,7 @@ void OverlayRenderer::HandleVRSetup()
 	}
 }
 
-bool OverlayRenderer::ShouldSkipRendering(const Menu& menu, bool hasDrawableFeatureOverlay)
+bool OverlayRenderer::ShouldSkipRendering()
 {
 	auto shaderCache = globals::shaderCache;
 	auto failed = shaderCache->GetCurrentFailedCount();
@@ -283,38 +198,12 @@ bool OverlayRenderer::ShouldSkipRendering(const Menu& menu, bool hasDrawableFeat
 	auto* renderDoc = RenderDoc::GetSingleton();
 
 	return !(shaderCache->IsCompiling() ||
-			 menu.IsEnabled ||
+			 Menu::GetSingleton()->IsEnabled ||
 			 EditorWindow::GetSingleton()->open ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||
-			 hasDrawableFeatureOverlay ||
+			 globals::features::performanceOverlay.settings.ShowInOverlay ||
 			 renderDoc->IsAvailable());
-}
-
-std::vector<OverlayFeature*> OverlayRenderer::CollectDrawableFeatureOverlays(const Menu& menu)
-{
-	std::vector<OverlayFeature*> overlays;
-	for (auto* feat : Feature::GetFeatureList()) {
-		if (!feat || !feat->loaded) {
-			continue;
-		}
-
-		auto* overlay = dynamic_cast<OverlayFeature*>(feat);
-		if (overlay && ShouldDrawFeatureOverlay(*overlay, menu)) {
-			overlays.push_back(overlay);
-		}
-	}
-
-	return overlays;
-}
-
-bool OverlayRenderer::ShouldDrawFeatureOverlay(const OverlayFeature& overlay, const Menu& menu)
-{
-	if (!overlay.IsOverlayVisible()) {
-		return false;
-	}
-
-	return !overlay.RequiresGlobalOverlayToggle() || menu.overlayVisible;
 }
 
 void OverlayRenderer::HandleFontReload(Menu& menu, float& cachedFontSize, float currentFontSize)
@@ -451,10 +340,15 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	}
 }
 
-void OverlayRenderer::RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays)
+void OverlayRenderer::RenderFeatureOverlays()
 {
-	for (auto* overlay : overlays) {
-		overlay->DrawOverlay();
+	// load overlays
+	for (Feature* feat : Feature::GetFeatureList()) {
+		if (feat && feat->loaded) {
+			if (auto* overlay = dynamic_cast<OverlayFeature*>(feat)) {
+				overlay->DrawOverlay();
+			}
+		}
 	}
 }
 
@@ -482,15 +376,14 @@ void OverlayRenderer::HandleABTesting()
 	abTestingManager->DrawOverlayUI();
 }
 
-void OverlayRenderer::FinalizeImGuiFrame(const std::vector<OverlayFeature*>& overlays)
+void OverlayRenderer::FinalizeImGuiFrame()
 {
 	ImGui::Render();
 
 	// Apply background blur behind ImGui windows before rendering them
 	BackgroundBlur::RenderBackgroundBlur();
 
-	ImDrawData filteredDrawData;
-	ImGui_ImplDX11_RenderDrawData(BuildDesktopDrawData(ImGui::GetDrawData(), overlays, filteredDrawData));
+	ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		globals::features::vr.SubmitOverlayFrame();

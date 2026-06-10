@@ -58,6 +58,10 @@ public:
 
 	float timer = 0;
 	float refractionScale = 0.5f;
+	static constexpr float kDefaultPbrMetalReflectionScale = 1.0f;
+	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
+	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections
+	float pbrMetalHighlightScale = kDefaultPbrMetalHighlightScale;    // Global scale for direct PBR metal highlights
 	double smoothDrawCalls[RE::BSShader::Type::Total + 1];
 	int drawCalls[RE::BSShader::Type::Total + 1];
 
@@ -272,7 +276,8 @@ public:
 		float MipBias;
 		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
 		float RefractionScale;
-		float2 pad0;
+		float PBRMetalReflectionScale;
+		float PBRMetalHighlightScale;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;

@@ -211,6 +211,8 @@ namespace PBR
 				lightingOutput.specular += coatFr * context.coatLightColor * coatNdotL * material.CoatStrength;
 			}
 #endif
+			const float metalHighlightScale = lerp(1.0, SharedData::PBRMetalHighlightScale, saturate(material.Metallic));
+			lightingOutput.specular *= metalHighlightScale;
 		}
 	}
 
@@ -276,6 +278,9 @@ namespace PBR
 		lobeWeights.diffuse *= MultiBounceAO(material.BaseColor, material.AO);
 		float alpha = material.Roughness * material.Roughness;
 		lobeWeights.specular *= SpecularOcclusion(NdotV, alpha, material.AO);
+
+		const float metalReflectionScale = lerp(1.0, SharedData::PBRMetalReflectionScale, saturate(material.Metallic));
+		lobeWeights.specular *= metalReflectionScale;
 	}
 }
 

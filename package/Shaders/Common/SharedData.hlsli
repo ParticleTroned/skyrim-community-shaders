@@ -27,7 +27,8 @@ namespace SharedData
 		float MipBias;            // Offset to mip level for TAA sharpness
 		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -FLT_MAX when no water body found (VR only)
 		float RefractionScale;    // Global scale for ImageSpace refraction heat warp
-		float2 pad0;
+		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections
+		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;

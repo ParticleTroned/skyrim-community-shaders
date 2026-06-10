@@ -111,6 +111,17 @@ void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& ma
 void TruePBR::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Global Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		{
+			Util::BlueFrameStyleWrapper blueFrameStyle;
+			ImGui::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
+			}
+			ImGui::SliderFloat("PBR Metal Highlight", &globals::state->pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
+			if (ImGui::IsItemHovered()) {
+				ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
+			}
+		}
 		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::TreePop();
 	}

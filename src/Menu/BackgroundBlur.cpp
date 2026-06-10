@@ -11,6 +11,7 @@
 #include "../Util.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -368,22 +369,64 @@ namespace BackgroundBlur
 		D3D11_TEXTURE2D_DESC sourceDesc;
 		sourceTexture->GetDesc(&sourceDesc);
 
+		if (menuMax.x <= menuMin.x ||
+			menuMax.y <= menuMin.y ||
+			menuMax.x <= 0.0f ||
+			menuMax.y <= 0.0f ||
+			menuMin.x >= static_cast<float>(sourceDesc.Width) ||
+			menuMin.y >= static_cast<float>(sourceDesc.Height)) {
+			return;
+		}
+
 		// Save current state
 		ID3D11RenderTargetView* originalRTV = nullptr;
 		ID3D11DepthStencilView* originalDSV = nullptr;
 		context->OMGetRenderTargets(1, &originalRTV, &originalDSV);
 
-		D3D11_VIEWPORT originalViewport;
-		UINT numViewports = 1;
-		context->RSGetViewports(&numViewports, &originalViewport);
+		ID3D11BlendState* originalBlendState = nullptr;
+		FLOAT originalBlendFactor[4] = {};
+		UINT originalSampleMask = 0xFFFFFFFF;
+		context->OMGetBlendState(&originalBlendState, originalBlendFactor, &originalSampleMask);
+
+		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> originalViewports{};
+		UINT numViewports = static_cast<UINT>(originalViewports.size());
+		context->RSGetViewports(&numViewports, originalViewports.data());
 
 		ID3D11RasterizerState* originalRS = nullptr;
 		context->RSGetState(&originalRS);
+
+		std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> originalScissorRects{};
+		UINT numScissorRects = static_cast<UINT>(originalScissorRects.size());
+		context->RSGetScissorRects(&numScissorRects, originalScissorRects.data());
+
+		ID3D11InputLayout* originalInputLayout = nullptr;
+		context->IAGetInputLayout(&originalInputLayout);
+		D3D11_PRIMITIVE_TOPOLOGY originalTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+		context->IAGetPrimitiveTopology(&originalTopology);
+
+		ID3D11VertexShader* originalVS = nullptr;
+		ID3D11PixelShader* originalPS = nullptr;
+		context->VSGetShader(&originalVS, nullptr, nullptr);
+		context->PSGetShader(&originalPS, nullptr, nullptr);
+
+		ID3D11SamplerState* originalPSSampler0 = nullptr;
+		context->PSGetSamplers(0, 1, &originalPSSampler0);
+
+		ID3D11Buffer* originalPSCB0 = nullptr;
+		ID3D11Buffer* originalPSCB1 = nullptr;
+		context->PSGetConstantBuffers(0, 1, &originalPSCB0);
+		context->PSGetConstantBuffers(1, 1, &originalPSCB1);
+
+		ID3D11ShaderResourceView* originalPSSRV0 = nullptr;
+		context->PSGetShaderResources(0, 1, &originalPSSRV0);
 
 		auto constantBufferPtr = constantBuffer.get();
 		auto samplerStatePtr = samplerState.get();
 
 		ID3D11ShaderResourceView* nullSRV = nullptr;
+
+		context->IASetInputLayout(nullptr);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 		// Set up viewport for all blur passes (1/8 resolution for performance)
 		D3D11_VIEWPORT blurViewport = {};
@@ -452,7 +495,9 @@ namespace BackgroundBlur
 		context->PSSetShaderResources(0, 1, &nullSRV);
 
 		// Final composition: upscale from quarter-res with rounded corner mask
-		context->RSSetViewports(1, &originalViewport);
+		if (numViewports > 0) {
+			context->RSSetViewports(numViewports, originalViewports.data());
+		}
 
 		// Expand scissor rect slightly for anti-aliased rounded corner edges
 		D3D11_RECT scissorRect;
@@ -503,18 +548,46 @@ namespace BackgroundBlur
 
 		// Restore state
 		context->OMSetRenderTargets(1, &originalRTV, originalDSV);
-		context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+		context->OMSetBlendState(originalBlendState, originalBlendFactor, originalSampleMask);
 		context->PSSetShaderResources(0, 1, &nullSRV);
 		context->RSSetState(originalRS);
-		context->RSSetScissorRects(0, nullptr);
+		if (numScissorRects > 0) {
+			context->RSSetScissorRects(numScissorRects, originalScissorRects.data());
+		} else {
+			context->RSSetScissorRects(0, nullptr);
+		}
+		context->IASetInputLayout(originalInputLayout);
+		context->IASetPrimitiveTopology(originalTopology);
+		context->VSSetShader(originalVS, nullptr, 0);
+		context->PSSetShader(originalPS, nullptr, 0);
+		context->PSSetSamplers(0, 1, &originalPSSampler0);
+		context->PSSetConstantBuffers(0, 1, &originalPSCB0);
+		context->PSSetConstantBuffers(1, 1, &originalPSCB1);
+		context->PSSetShaderResources(0, 1, &originalPSSRV0);
 
 		// Cleanup
 		if (originalRTV)
 			originalRTV->Release();
 		if (originalDSV)
 			originalDSV->Release();
+		if (originalBlendState)
+			originalBlendState->Release();
 		if (originalRS)
 			originalRS->Release();
+		if (originalInputLayout)
+			originalInputLayout->Release();
+		if (originalVS)
+			originalVS->Release();
+		if (originalPS)
+			originalPS->Release();
+		if (originalPSSampler0)
+			originalPSSampler0->Release();
+		if (originalPSCB0)
+			originalPSCB0->Release();
+		if (originalPSCB1)
+			originalPSCB1->Release();
+		if (originalPSSRV0)
+			originalPSSRV0->Release();
 	}
 
 	void Cleanup()

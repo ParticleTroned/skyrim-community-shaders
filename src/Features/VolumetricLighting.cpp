@@ -87,6 +87,13 @@ namespace
 		       IsRainWeatherActive(sky->lastWeather, lastWeight);
 	}
 
+	bool ShouldSuppressExteriorDuringRain(const VolumetricLighting::Settings& settings, bool inInterior)
+	{
+		return settings.DisableWeatherInteractionDuringRain &&
+		       !inInterior &&
+		       IsRainTransitionActive();
+	}
+
 	RE::NiColor ClampColor01(const RE::NiColor& color)
 	{
 		const auto clampChannel = [](float value) {
@@ -232,7 +239,10 @@ void VolumetricLighting::DrawSettings()
 
 	{
 		Util::BlueFrameStyleWrapper disableDuringRainStyle(true);
-		if (ImGui::Checkbox("Disable Exterior Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
+		const char* rainToggleLabel = globals::game::isVR ?
+		                                  "Disable Weather-Driven Volumetric Lighting During Rain" :
+		                                  "Disable Exterior Volumetric Lighting During Rain";
+		if (ImGui::Checkbox(rainToggleLabel, &settings.DisableWeatherInteractionDuringRain))
 			SetupVL();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -473,7 +483,7 @@ void VolumetricLighting::PostPostLoad()
 	if (REL::Module::IsVR()) {
 		if (settings.ExteriorEnabled || settings.InteriorEnabled) {
 			EnableBooleanSettings(hiddenVREnableSettings, GetName());
-			const bool weatherInteractionEnabled = !(settings.DisableWeatherInteractionDuringRain && IsRainTransitionActive());
+			const bool weatherInteractionEnabled = !ShouldSuppressExteriorDuringRain(settings, false);
 			SetBooleanSettings(hiddenVRWeatherUpdateSettings, GetName(), weatherInteractionEnabled);
 		}
 		auto address = REL::RelocationID(100475, 0).address() + 0x45b;  // AE not needed, VR only hook
@@ -528,10 +538,7 @@ void VolumetricLighting::EarlyPrepass()
 
 	const auto interiorCell = RE::TES::GetSingleton()->interiorCell;
 	const bool currentlyInInterior = interiorCell != nullptr;
-	const bool nextRainSuppressionActive =
-		settings.DisableWeatherInteractionDuringRain &&
-		!currentlyInInterior &&
-		IsRainTransitionActive();
+	const bool nextRainSuppressionActive = ShouldSuppressExteriorDuringRain(settings, currentlyInInterior);
 
 	if (initialised &&
 	    currentlyInInterior == inInterior &&
@@ -554,10 +561,7 @@ void VolumetricLighting::SetupVL()
 	}
 
 	const bool requestedRuntimeEnabled = inInterior ? (settings.InteriorEnabled && inInteriorWithSun) : settings.ExteriorEnabled;
-	rainOnlySuppressionActive =
-		settings.DisableWeatherInteractionDuringRain &&
-		!inInterior &&
-		IsRainTransitionActive();
+	rainOnlySuppressionActive = ShouldSuppressExteriorDuringRain(settings, inInterior);
 	const bool runtimeEnabled = requestedRuntimeEnabled && (!rainOnlySuppressionActive || globals::game::isVR);
 	const int32_t quality = ClampQualityIndex(inInterior ? settings.InteriorQuality : settings.ExteriorQuality);
 	const TextureSize& customSize = inInterior ? settings.InteriorCustomSize : settings.ExteriorCustomSize;

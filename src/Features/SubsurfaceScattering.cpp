@@ -66,19 +66,19 @@ namespace
 		ImGui::PushID(a_sectionTitle);
 		{
 			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("SSS Intensity", &a_intensity, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+			ImGui::SliderFloat("SSS Intensity", &a_intensity, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		}
 		{
 			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("SSS Saturation", &a_saturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+			ImGui::SliderFloat("SSS Saturation", &a_saturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		}
 		{
 			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("Skin Brightness", &a_brightness, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+			ImGui::SliderFloat("Skin Brightness", &a_brightness, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		}
 		{
 			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("Skin Saturation", &a_baseSaturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+			ImGui::SliderFloat("Skin Saturation", &a_baseSaturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		}
 		ImGui::PopID();
 	}
@@ -99,17 +99,42 @@ namespace
 		a_dstBaseSaturation = ClampHumanSkinControl(a_srcBaseSaturation);
 	}
 
+	void SanitizeHumanSkinControls(SubsurfaceScattering::Settings& a_settings)
+	{
+		ApplyClampedHumanSkinControls(
+			a_settings.HumanMaleSSSIntensity,
+			a_settings.HumanMaleSSSSaturation,
+			a_settings.HumanMaleSSSBrightness,
+			a_settings.HumanMaleSSSBaseSaturation,
+			a_settings.HumanMaleSSSIntensity,
+			a_settings.HumanMaleSSSSaturation,
+			a_settings.HumanMaleSSSBrightness,
+			a_settings.HumanMaleSSSBaseSaturation);
+		ApplyClampedHumanSkinControls(
+			a_settings.HumanFemaleSSSIntensity,
+			a_settings.HumanFemaleSSSSaturation,
+			a_settings.HumanFemaleSSSBrightness,
+			a_settings.HumanFemaleSSSBaseSaturation,
+			a_settings.HumanFemaleSSSIntensity,
+			a_settings.HumanFemaleSSSSaturation,
+			a_settings.HumanFemaleSSSBrightness,
+			a_settings.HumanFemaleSSSBaseSaturation);
+	}
+
 	void ApplyLegacyHumanControl(
 		const json& a_json,
 		const char* a_legacyKey,
 		const char* a_maleKey,
+		const char* a_femaleKey,
 		float& a_maleSetting,
 		float& a_femaleSetting)
 	{
-		if (a_json.contains(a_legacyKey) && !a_json.contains(a_maleKey)) {
+		if (a_json.contains(a_legacyKey) && a_json[a_legacyKey].is_number()) {
 			const float value = a_json[a_legacyKey].get<float>();
-			a_maleSetting = value;
-			a_femaleSetting = value;
+			if (!a_json.contains(a_maleKey) || !a_json[a_maleKey].is_number())
+				a_maleSetting = value;
+			if (!a_json.contains(a_femaleKey) || !a_json[a_femaleKey].is_number())
+				a_femaleSetting = value;
 		}
 	}
 }
@@ -482,14 +507,16 @@ void SubsurfaceScattering::LoadSettings(json& o_json)
 	settings = o_json;
 
 	// Backward compatibility: older configs used one Human* control set.
-	ApplyLegacyHumanControl(o_json, "HumanSSSIntensity", "HumanMaleSSSIntensity", settings.HumanMaleSSSIntensity, settings.HumanFemaleSSSIntensity);
-	ApplyLegacyHumanControl(o_json, "HumanSSSSaturation", "HumanMaleSSSSaturation", settings.HumanMaleSSSSaturation, settings.HumanFemaleSSSSaturation);
-	ApplyLegacyHumanControl(o_json, "HumanSSSBrightness", "HumanMaleSSSBrightness", settings.HumanMaleSSSBrightness, settings.HumanFemaleSSSBrightness);
-	ApplyLegacyHumanControl(o_json, "HumanSSSBaseSaturation", "HumanMaleSSSBaseSaturation", settings.HumanMaleSSSBaseSaturation, settings.HumanFemaleSSSBaseSaturation);
+	ApplyLegacyHumanControl(o_json, "HumanSSSIntensity", "HumanMaleSSSIntensity", "HumanFemaleSSSIntensity", settings.HumanMaleSSSIntensity, settings.HumanFemaleSSSIntensity);
+	ApplyLegacyHumanControl(o_json, "HumanSSSSaturation", "HumanMaleSSSSaturation", "HumanFemaleSSSSaturation", settings.HumanMaleSSSSaturation, settings.HumanFemaleSSSSaturation);
+	ApplyLegacyHumanControl(o_json, "HumanSSSBrightness", "HumanMaleSSSBrightness", "HumanFemaleSSSBrightness", settings.HumanMaleSSSBrightness, settings.HumanFemaleSSSBrightness);
+	ApplyLegacyHumanControl(o_json, "HumanSSSBaseSaturation", "HumanMaleSSSBaseSaturation", "HumanFemaleSSSBaseSaturation", settings.HumanMaleSSSBaseSaturation, settings.HumanFemaleSSSBaseSaturation);
+	SanitizeHumanSkinControls(settings);
 }
 
 void SubsurfaceScattering::SaveSettings(json& o_json)
 {
+	SanitizeHumanSkinControls(settings);
 	o_json = settings;
 }
 
@@ -538,7 +565,15 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderBurley()
 
 void SubsurfaceScattering::DataLoaded()
 {
-	isBeastRaceKeyword = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
+	if (auto* form = RE::TESForm::LookupByEditorID("IsBeastRace")) {
+		isBeastRaceKeyword = form->As<RE::BGSKeyword>();
+	} else {
+		isBeastRaceKeyword = nullptr;
+	}
+
+	if (!isBeastRaceKeyword) {
+		logger::warn("[Subsurface Scattering] IsBeastRace keyword was not found; humanoid skin classification may be less accurate.");
+	}
 }
 
 void SubsurfaceScattering::PostPostLoad()
@@ -562,7 +597,7 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			if (geometry) {
 				if (auto userData = geometry->GetUserData()) {
 					if (auto actor = userData->As<RE::Actor>()) {
-						if (auto race = actor->GetRace())
+						if (auto race = actor->GetRace(); race && isBeastRaceKeyword)
 							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
 						if (auto base = actor->GetActorBase())
 							isFemale = GetNPCIsFemale(base);

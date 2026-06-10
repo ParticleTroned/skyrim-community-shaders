@@ -1,6 +1,7 @@
 #include "InverseSquareLighting.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "LightLimitFix.h"
+#include <cmath>
 #include <numbers>
 
 void InverseSquareLighting::DrawSettings()
@@ -86,7 +87,7 @@ float InverseSquareLighting::CalculateRadius(const float intensity, const bool s
 	float cutoff = shadowCaster ? DefaultShadowCasterCutoff : DefaultCutoff;
 	cutoff = cutoffOverride == 1.f ? cutoff : cutoffOverride;
 	const float radius = std::sqrt(ScaledUnitsSq * ((2 * intensity - cutoff * size * size) / (2 * cutoff)));
-	return isnan(radius) ? 1.f : radius;
+	return std::isfinite(radius) && radius > 0.f ? radius : 1.f;
 }
 
 inline float InverseSquareLighting::SmoothStep(const float edge0, const float edge1, const float x)

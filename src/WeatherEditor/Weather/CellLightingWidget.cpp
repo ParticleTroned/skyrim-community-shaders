@@ -491,6 +491,9 @@ void CellLightingWidget::SaveSettings()
 
 void CellLightingWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	if (!cell || !cell->IsInteriorCell())
 		return;
 

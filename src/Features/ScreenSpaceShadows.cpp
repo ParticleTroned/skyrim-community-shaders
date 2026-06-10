@@ -19,6 +19,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BilinearThreshold,
 	ShadowContrast)
 
+namespace
+{
+	bool UseTerrainBlendingDepth()
+	{
+		const auto& terrainBlending = globals::features::terrainBlending;
+		return terrainBlending.loaded &&
+		       terrainBlending.settings.Enabled &&
+		       terrainBlending.blendedDepthTexture &&
+		       terrainBlending.blendedDepthTexture->srv.get();
+	}
+}
+
 void ScreenSpaceShadows::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -67,6 +79,8 @@ void ScreenSpaceShadows::InvalidateRaymarchShaders()
 		raymarchRightCS->Release();
 		raymarchRightCS = nullptr;
 	}
+	raymarchUsesTerrainBlendingDepth = false;
+	raymarchRightUsesTerrainBlendingDepth = false;
 }
 
 void ScreenSpaceShadows::ClearShaderCache()
@@ -76,6 +90,7 @@ void ScreenSpaceShadows::ClearShaderCache()
 		stereoSyncCS->Release();
 		stereoSyncCS = nullptr;
 	}
+	stereoSyncUsesTerrainBlendingDepth = false;
 }
 
 uint ScreenSpaceShadows::GetScaledSampleCount()
@@ -106,8 +121,9 @@ uint ScreenSpaceShadows::GetScaledSampleCount()
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 {
 	uint scaledSampleCount = GetScaledSampleCount();
+	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
 
-	if (scaledSampleCount != lastCompiledSampleCount) {
+	if (scaledSampleCount != lastCompiledSampleCount || raymarchUsesTerrainBlendingDepth != useTerrainBlendingDepth) {
 		lastCompiledSampleCount = scaledSampleCount;
 		InvalidateRaymarchShaders();
 	}
@@ -117,22 +133,33 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 		std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
 		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
 		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
-		if (globals::features::terrainBlending.loaded)
+		if (useTerrainBlendingDepth)
 			defines.push_back({ "TERRAIN_BLENDING", "" });
 		raymarchCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0");
+		if (raymarchCS)
+			raymarchUsesTerrainBlendingDepth = useTerrainBlendingDepth;
 	}
 	return raymarchCS;
 }
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRight()
 {
+	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
+	if (raymarchRightCS && raymarchRightUsesTerrainBlendingDepth != useTerrainBlendingDepth) {
+		raymarchRightCS->Release();
+		raymarchRightCS = nullptr;
+		raymarchRightUsesTerrainBlendingDepth = false;
+	}
+
 	if (!raymarchRightCS) {
 		uint scaledSampleCount = GetScaledSampleCount();
 		auto sampleCount = std::format("{}", scaledSampleCount);
 		std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() }, { "RIGHT", "" } };
-		if (globals::features::terrainBlending.loaded)
+		if (useTerrainBlendingDepth)
 			defines.push_back({ "TERRAIN_BLENDING", "" });
 		raymarchRightCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0");
+		if (raymarchRightCS)
+			raymarchRightUsesTerrainBlendingDepth = useTerrainBlendingDepth;
 	}
 	return raymarchRightCS;
 }
@@ -173,8 +200,8 @@ void ScreenSpaceShadows::DrawShadows()
 
 	// Setup common render state.
 	// SSS always uses 24/32-bit depth, never the R16_UNORM half-precision path.
-	// With TerrainBlending loaded the SRV is R32_FLOAT (blendedDepthTexture);
-	// without it, the game's kPOST_ZPREPASS_COPY (R24_UNORM_X8_TYPELESS).
+	// With active TerrainBlending depth the SRV is R32_FLOAT (blendedDepthTexture);
+	// otherwise, the game's kPOST_ZPREPASS_COPY (R24_UNORM_X8_TYPELESS).
 	// The shader's DepthTexture declaration is conditional on TERRAIN_BLENDING:
 	// `<float>` for the R32_FLOAT path, `<unorm float>` for the R24_UNORM path.
 	auto* depthSRV = Util::GetCurrentSceneDepthSRV(false);
@@ -187,6 +214,22 @@ void ScreenSpaceShadows::DrawShadows()
 
 	auto buffer = raymarchCB->CB();
 	context->CSSetConstantBuffers(1, 1, &buffer);
+
+	auto ClearRaymarchState = [&] {
+		ID3D11ShaderResourceView* views[1]{ nullptr };
+		context->CSSetShaderResources(0, 1, views);
+
+		ID3D11UnorderedAccessView* uavs[1]{ nullptr };
+		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+		context->CSSetShader(nullptr, nullptr, 0);
+
+		ID3D11SamplerState* sampler = nullptr;
+		context->CSSetSamplers(0, 1, &sampler);
+
+		buffer = nullptr;
+		context->CSSetConstantBuffers(1, 1, &buffer);
+	};
 
 	auto viewport = globals::game::graphicsState;
 
@@ -248,35 +291,30 @@ void ScreenSpaceShadows::DrawShadows()
 	float InvTexSizeX = 1.0f / (float)viewportSize[0];
 	float InvTexSizeY = 1.0f / (float)viewportSize[1];
 
+	auto* raymarchLeft = GetComputeRaymarch();
+	ID3D11ComputeShader* raymarchRight = globals::game::isVR ? GetComputeRaymarchRight() : nullptr;
+	if (!raymarchLeft || (globals::game::isVR && !raymarchRight)) {
+		ClearRaymarchState();
+		return;
+	}
+
 	if (!globals::game::isVR) {
-		DispatchEye(nullptr, GetComputeRaymarch(), lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+		DispatchEye(nullptr, raymarchLeft, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 	} else {
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Left Eye");
-			DispatchEye("Left Eye", GetComputeRaymarch(), lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+			DispatchEye("Left Eye", raymarchLeft, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 		}
 
 		// Calculate light projection for right eye
 		auto lightProjectionRightF = CalculateLightProjection(1);
 		{
 			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Right Eye");
-			DispatchEye("Right Eye", GetComputeRaymarchRight(), lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
+			DispatchEye("Right Eye", raymarchRight, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
 		}
 	}
 
-	ID3D11ShaderResourceView* views[1]{ nullptr };
-	context->CSSetShaderResources(0, 1, views);
-
-	ID3D11UnorderedAccessView* uavs[1]{ nullptr };
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	ID3D11SamplerState* sampler = nullptr;
-	context->CSSetSamplers(0, 1, &sampler);
-
-	buffer = nullptr;
-	context->CSSetConstantBuffers(1, 1, &buffer);
+	ClearRaymarchState();
 }
 
 void ScreenSpaceShadows::DrawStereoSync()
@@ -284,11 +322,20 @@ void ScreenSpaceShadows::DrawStereoSync()
 	if (!globals::game::isVR || !enableStereoSync || !stereoSyncCopyTex || !stereoSyncCB)
 		return;
 
+	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
+	if (stereoSyncCS && stereoSyncUsesTerrainBlendingDepth != useTerrainBlendingDepth) {
+		stereoSyncCS->Release();
+		stereoSyncCS = nullptr;
+		stereoSyncUsesTerrainBlendingDepth = false;
+	}
+
 	if (!stereoSyncCS) {
 		std::vector<std::pair<const char*, const char*>> defines{ { "VR", "" }, { "FRAMEBUFFER", "" } };
-		if (globals::features::terrainBlending.loaded)
+		if (useTerrainBlendingDepth)
 			defines.push_back({ "TERRAIN_BLENDING", "" });
 		stereoSyncCS = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\StereoSyncCS.hlsl", defines, "cs_5_0"));
+		if (stereoSyncCS)
+			stereoSyncUsesTerrainBlendingDepth = useTerrainBlendingDepth;
 	}
 	if (!stereoSyncCS)
 		return;
@@ -337,6 +384,8 @@ void ScreenSpaceShadows::DrawStereoSync()
 	context->CSSetShaderResources(0, 2, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	context->CSSetConstantBuffers(1, 1, &cbPtr);
+	sharedDataBuf = nullptr;
+	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	if (globals::state->frameAnnotations)

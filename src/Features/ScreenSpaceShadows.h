@@ -72,6 +72,8 @@ public:
 	ConstantBuffer* raymarchCB = nullptr;
 	ID3D11ComputeShader* raymarchCS = nullptr;
 	ID3D11ComputeShader* raymarchRightCS = nullptr;
+	bool raymarchUsesTerrainBlendingDepth = false;
+	bool raymarchRightUsesTerrainBlendingDepth = false;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
@@ -79,6 +81,7 @@ public:
 	Texture2D* stereoSyncCopyTex = nullptr;
 	ConstantBuffer* stereoSyncCB = nullptr;
 	ID3D11ComputeShader* stereoSyncCS = nullptr;
+	bool stereoSyncUsesTerrainBlendingDepth = false;
 
 	virtual void SetupResources() override;
 

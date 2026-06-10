@@ -371,6 +371,8 @@ namespace ExtendedMaterials
 
 #if defined(LANDSCAPE)
 		if (nearBlendToFar < 1.0) {
+			uint numSteps = uint((max(6, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, max(8, scale * 8));
 #else
 #	if defined(TRUE_PBR)
 		if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0 || nearBlendToFar < 1.0)
@@ -378,13 +380,13 @@ namespace ExtendedMaterials
 		if (nearBlendToFar < 1.0)
 #	endif
 		{
-#endif
 			const float maxSteps = 16;
 			uint numSteps = uint((maxSteps * (1.0 - nearBlendToFar)) + 0.5);
-			numSteps = clamp(numSteps, 4, max(4, uint(scale * maxSteps)));
-			numSteps = (numSteps + 2) & ~3;
+			numSteps = clamp((numSteps + 3) & ~0x03, 4, max(6, scale * maxSteps));
+#endif
 
 			float stepSize = rcp(numSteps);
+			stepSize += (noise * 2.0 - 1.0) * stepSize * stepSize;
 
 			float2 offsetPerStep = viewDirTS.xy * float2(maxHeight, maxHeight) * stepSize.xx;
 			float2 prevOffset = viewDirTS.xy * float2(minHeight, minHeight) + coords.xy;

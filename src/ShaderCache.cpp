@@ -14,6 +14,14 @@
 
 namespace SIE
 {
+	namespace
+	{
+		bool IsSaveLoadSafeModeActive()
+		{
+			auto* state = globals::state;
+			return state && state->IsSaveLoadSafeModeActive();
+		}
+	}
 
 	// Custom include handler to track all includes during shader compilation
 	class TrackingIncludeHandler : public ID3DInclude
@@ -1369,30 +1377,32 @@ namespace SIE
 			if (useDiskCache && std::filesystem::exists(diskPath)) {
 				// Determine whether the disk-cached shader is still valid.
 				bool diskCacheOutdated = false;
-				if (cache.UseFileWatcher()) {
-					// File watcher tracks runtime changes in memory: compare disk-cache mtime against tracked source mtime.
-					auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath));
-					diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
-					if (diskCacheOutdated)
-						logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
-				} else if (cache.IsSkipUnchangedShaders()) {
-					// No file watcher: compare disk-cache mtime directly against the .hlsl source file mtime.
-					std::error_code ec;
-					const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
-					if (ec) {
-						logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
-					} else {
-						const std::wstring shaderSourcePath = GetShaderPath(
-							shader.shaderType == RE::BSShader::Type::ImageSpace ?
-								static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-								shader.fxpFilename);
-						if (std::filesystem::exists(shaderSourcePath)) {
-							const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shaderSourcePath, ec));
-							if (ec) {
-								logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
-							} else if (sourceTime > diskCacheTime) {
-								diskCacheOutdated = true;
-								logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
+				if (!IsSaveLoadSafeModeActive()) {
+					if (cache.UseFileWatcher()) {
+						// File watcher tracks runtime changes in memory: compare disk-cache mtime against tracked source mtime.
+						auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath));
+						diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
+						if (diskCacheOutdated)
+							logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
+					} else if (cache.IsSkipUnchangedShaders()) {
+						// No file watcher: compare disk-cache mtime directly against the .hlsl source file mtime.
+						std::error_code ec;
+						const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
+						if (ec) {
+							logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
+						} else {
+							const std::wstring shaderSourcePath = GetShaderPath(
+								shader.shaderType == RE::BSShader::Type::ImageSpace ?
+									static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
+									shader.fxpFilename);
+							if (std::filesystem::exists(shaderSourcePath)) {
+								const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shaderSourcePath, ec));
+								if (ec) {
+									logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
+								} else if (sourceTime > diskCacheTime) {
+									diskCacheOutdated = true;
+									logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
+								}
 							}
 						}
 					}
@@ -1509,7 +1519,7 @@ namespace SIE
 			}
 
 			// save shader to disk
-			if (useDiskCache) {
+			if (useDiskCache && !IsSaveLoadSafeModeActive()) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
 				if (!std::filesystem::is_directory(directoryPath)) {
 					try {
@@ -1869,6 +1879,9 @@ namespace SIE
 				return it->second.get();
 			}
 		}
+		if (IsSaveLoadSafeModeActive()) {
+			return nullptr;
+		}
 
 		if (IsAsync()) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor });
@@ -1917,6 +1930,9 @@ namespace SIE
 				return it->second.get();
 			}
 		}
+		if (IsSaveLoadSafeModeActive()) {
+			return nullptr;
+		}
 
 		if (IsAsync()) {
 			compilationSet.Add({ ShaderClass::Pixel, shader, descriptor });
@@ -1960,6 +1976,9 @@ namespace SIE
 			if (it != typeCache.end()) {
 				return it->second.get();
 			}
+		}
+		if (IsSaveLoadSafeModeActive()) {
+			return nullptr;
 		}
 
 		if (IsAsync()) {
@@ -3496,6 +3515,12 @@ namespace SIE
 		while (cache->UseFileWatcher()) {
 			lock.lock();
 			if (!queue.empty()) {
+				if (IsSaveLoadSafeModeActive()) {
+					lock.unlock();
+					std::this_thread::sleep_for(std::chrono::milliseconds(100));
+					continue;
+				}
+
 				bool clearCache = false;
 				for (fileAction fAction : queue) {
 					const std::filesystem::path filePath = std::filesystem::path(std::format("{}\\{}", fAction.dir, fAction.filename));

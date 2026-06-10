@@ -8,7 +8,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
 	MaxZenith,
 	MinDiffuseVisibility,
-	MinSpecularVisibility)
+	MinSpecularVisibility,
+	IncludeMarkedRoofOccluders)
 
 void Skylighting::LoadSettings(json& o_json)
 {
@@ -38,6 +39,13 @@ void Skylighting::DrawSettings()
 	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
+	{
+		Util::BlueFrameStyleWrapper markedRoofOccluderStyle(true);
+		if (ImGui::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
+			ResetSkylighting();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Helps skylighting darken under some roofs the game marks specially. May rarely add extra dark patches if hidden helper objects are included.");
 
 	ImGui::Separator();
 
@@ -381,15 +389,19 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 					auto bsxFlags = (RE::BSXFlags*)extraData;
 					auto value = static_cast<int32_t>(bsxFlags->value);
 
-					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kMagicShaderParticles) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kLights) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kBreakable) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kSearchedBreakable))) {
+					int32_t excludedBSXFlags =
+						static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
+						static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
+						static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
+						static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
+						static_cast<int32_t>(RE::BSXFlags::Flag::kMagicShaderParticles) |
+						static_cast<int32_t>(RE::BSXFlags::Flag::kLights) |
+						static_cast<int32_t>(RE::BSXFlags::Flag::kBreakable) |
+						static_cast<int32_t>(RE::BSXFlags::Flag::kSearchedBreakable);
+					if (!skylighting.settings.IncludeMarkedRoofOccluders)
+						excludedBSXFlags |= static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker);
+
+					if (value & excludedBSXFlags) {
 						return precipitationOcclusionMapRenderPassList;
 					}
 				}

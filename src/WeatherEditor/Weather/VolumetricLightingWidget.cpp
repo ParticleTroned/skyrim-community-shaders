@@ -182,6 +182,9 @@ void VolumetricLightingWidget::SaveSettings()
 
 void VolumetricLightingWidget::ApplyChanges()
 {
+	if (!CanApplyPersistentChanges())
+		return;
+
 	if (!volumetricLighting)
 		return;
 

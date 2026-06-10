@@ -1,5 +1,9 @@
 #include "VolumetricLighting.h"
 
+#include <algorithm>
+#include <cmath>
+
+#include "RE/N/NiDirectionalLight.h"
 #include "InteriorSun.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
@@ -7,13 +11,183 @@
 
 namespace
 {
+	constexpr float kWeatherTransitionEpsilon = 0.001f;
+	constexpr float kGodrayIntensityMax = 3.0f;
+	constexpr float kGodrayShaftIntensityMax = 3.0f;
+	constexpr float kGodrayOpacityMax = 2.0f;
+	constexpr float kGodraySaturationMax = 4.0f;
+	constexpr float kColorLumaR = 0.2126f;
+	constexpr float kColorLumaG = 0.7152f;
+	constexpr float kColorLumaB = 0.0722f;
+	constexpr float kDefaultGodrayShaftIntensity = 1.0f;
+	constexpr float kDefaultGodrayOpacity = 1.0f;
+	constexpr float kDefaultGodraySaturation = 1.0f;
+	constexpr float kDefaultCustomContribution = 0.0f;
+	constexpr float kFloatEpsilon = 1e-4f;
+	constexpr int32_t kTextureWidthMin = 32;
+	constexpr int32_t kTextureWidthMax = 640;
+	constexpr int32_t kTextureHeightMin = 32;
+	constexpr int32_t kTextureHeightMax = 640;
+	constexpr int32_t kTextureDepthMin = 10;
+	constexpr int32_t kTextureDepthMax = 640;
+
+	struct GodrayRuntimeParams
+	{
+		float shaftIntensity = 1.0f;
+		float opacity = 1.0f;
+		float saturation = 1.0f;
+		float customContribution = 0.0f;
+		RE::NiColor customColor = { 1.0f, 1.0f, 1.0f };
+	};
+
+	float ClampFinite(float value, float minValue, float maxValue, float fallback)
+	{
+		if (!std::isfinite(value))
+			value = fallback;
+		return std::clamp(value, minValue, maxValue);
+	}
+
+	bool IsNear(float value, float target, float epsilon = kFloatEpsilon)
+	{
+		return std::abs(value - target) <= epsilon;
+	}
+
+	bool IsImageSpaceReplacementEnabled()
+	{
+		auto* state = globals::state;
+		if (!state)
+			return true;
+
+		const int classCount = static_cast<int>(sizeof(state->enabledClasses) / sizeof(state->enabledClasses[0]));
+		const int imageSpaceClassIndex = static_cast<int>(RE::BSShader::Type::ImageSpace) - 1;
+		if (imageSpaceClassIndex >= 0 && imageSpaceClassIndex < classCount && !state->enabledClasses[imageSpaceClassIndex]) {
+			return false;
+		}
+
+		return state->enablePShaders;
+	}
+
+	bool IsRainWeatherActive(const RE::TESWeather* a_weather, float a_weight)
+	{
+		return a_weather &&
+		       a_weather->precipitationData &&
+		       a_weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy) &&
+		       a_weight > kWeatherTransitionEpsilon;
+	}
+
+	bool IsRainTransitionActive()
+	{
+		auto* sky = globals::game::sky;
+		if (!sky || !sky->precip || sky->mode.get() != RE::Sky::Mode::kFull)
+			return false;
+
+		const float currentWeight = std::clamp(sky->currentWeatherPct, 0.0f, 1.0f);
+		const float lastWeight = 1.0f - currentWeight;
+		return IsRainWeatherActive(sky->currentWeather, currentWeight) ||
+		       IsRainWeatherActive(sky->lastWeather, lastWeight);
+	}
+
+	RE::NiColor ClampColor01(const RE::NiColor& color)
+	{
+		const auto clampChannel = [](float value) {
+			return ClampFinite(value, 0.0f, 1.0f, 0.0f);
+		};
+		return {
+			clampChannel(color.red),
+			clampChannel(color.green),
+			clampChannel(color.blue)
+		};
+	}
+
+	float GetLuminance(const RE::NiColor& color)
+	{
+		return color.red * kColorLumaR + color.green * kColorLumaG + color.blue * kColorLumaB;
+	}
+
+	RE::NiColor SaturateColor(const RE::NiColor& color, float saturation)
+	{
+		saturation = ClampFinite(saturation, 0.0f, kGodraySaturationMax, 1.0f);
+		const float luminance = GetLuminance(color);
+		return ClampColor01({
+			luminance + (color.red - luminance) * saturation,
+			luminance + (color.green - luminance) * saturation,
+			luminance + (color.blue - luminance) * saturation
+		});
+	}
+
+	RE::NiColor LerpColor(const RE::NiColor& a, const RE::NiColor& b, float t)
+	{
+		t = ClampFinite(t, 0.0f, 1.0f, 0.0f);
+		return {
+			a.red + (b.red - a.red) * t,
+			a.green + (b.green - a.green) * t,
+			a.blue + (b.blue - a.blue) * t
+		};
+	}
+
+	RE::NiColor GetDescriptorColor(const RE::BSVolumetricLightingRenderData& descriptor)
+	{
+		return ClampColor01({ descriptor.red, descriptor.green, descriptor.blue });
+	}
+
+	void SetDescriptorColor(RE::BSVolumetricLightingRenderData& descriptor, const RE::NiColor& color)
+	{
+		const RE::NiColor clamped = ClampColor01(color);
+		descriptor.red = clamped.red;
+		descriptor.green = clamped.green;
+		descriptor.blue = clamped.blue;
+	}
+
+	void ApplyGodrayOpacity(RE::BSVolumetricLightingRenderData& descriptor, float opacity)
+	{
+		opacity = ClampFinite(opacity, 0.0f, kGodrayOpacityMax, 1.0f);
+		descriptor.intensity *= opacity;
+		descriptor.density.contribution *= opacity;
+	}
+
+	void ApplyGodrayShaftIntensity(RE::BSVolumetricLightingRenderData& descriptor, float intensity)
+	{
+		intensity = ClampFinite(intensity, 0.0f, kGodrayShaftIntensityMax, 1.0f);
+		descriptor.intensity *= intensity;
+	}
+
+	RE::NiColor GetCurrentWeatherSunColor(const RE::NiColor& fallbackColor)
+	{
+		auto* sky = globals::game::sky;
+		if (sky && sky->sun && sky->sun->light) {
+			return ClampColor01(sky->sun->light->GetLightRuntimeData().diffuse);
+		}
+
+		return ClampColor01(fallbackColor);
+	}
+
+	GodrayRuntimeParams BuildGodrayRuntimeParams(const VolumetricLighting::Settings& settings)
+	{
+		GodrayRuntimeParams params{};
+		params.shaftIntensity = ClampFinite(settings.GodrayShaftIntensity, 0.0f, kGodrayShaftIntensityMax, 1.0f);
+		params.opacity = ClampFinite(settings.GodrayOpacity, 0.0f, kGodrayOpacityMax, 1.0f);
+		params.saturation = ClampFinite(settings.GodraySaturation, 0.0f, kGodraySaturationMax, 1.0f);
+		params.customContribution = ClampFinite(settings.CustomColorContribution, 0.0f, 1.0f, 0.0f);
+		params.customColor = ClampColor01({ settings.CustomColorRed, settings.CustomColorGreen, settings.CustomColorBlue });
+		return params;
+	}
+
+	bool HasDescriptorTuning(const GodrayRuntimeParams& params)
+	{
+		return !IsNear(params.shaftIntensity, kDefaultGodrayShaftIntensity) ||
+		       !IsNear(params.opacity, kDefaultGodrayOpacity) ||
+		       !IsNear(params.saturation, kDefaultGodraySaturation) ||
+		       !IsNear(params.customContribution, kDefaultCustomContribution);
+	}
+
 	void ApplySkySyncIntensity(RE::BSVolumetricLightingRenderData& descriptor)
 	{
 		const float intensity = globals::features::skySync.GetVolumetricLightingIntensityFactor();
-		if (intensity != 1.0f) {
+		if (!IsNear(intensity, 1.0f)) {
 			descriptor.intensity *= intensity;
 		}
 	}
+
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -25,6 +199,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VolumetricLighting::Settings,
 	ExteriorEnabled,
+	DisableWeatherInteractionDuringRain,
+	GodrayIntensity,
+	GodrayShaftIntensity,
+	GodrayOpacity,
+	GodraySaturation,
+	CustomColorContribution,
+	CustomColorRed,
+	CustomColorGreen,
+	CustomColorBlue,
 	ExteriorQuality,
 	ExteriorCustomSize,
 	InteriorEnabled,
@@ -33,21 +216,78 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void VolumetricLighting::DrawSettings()
 {
+	SanitizeSettings();
+
+	auto drawVRRestartHint = [] {
+		if (!globals::game::isVR) {
+			return;
+		}
+
+		ImGui::SameLine();
+		ImGui::TextDisabled("(VR restart required)");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("VR pre-allocates volumetric lighting targets at boot. Restart the game after changing this toggle.");
+		}
+	};
+
+	{
+		Util::BlueFrameStyleWrapper disableDuringRainStyle(true);
+		if (ImGui::Checkbox("Disable Exterior Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
+			SetupVL();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		if (globals::game::isVR) {
+			ImGui::TextUnformatted("Suppresses weather-driven volumetric lighting while rain is active and restores it after rain.");
+		} else {
+			ImGui::TextUnformatted("Disables exterior volumetric lighting while rain is active and restores it after rain.");
+		}
+	}
+
+	DrawGodrayTuningSettings();
+	ImGui::Separator();
+
 	if (ImGui::Checkbox("Enable Volumetric Lighting in Exteriors", &settings.ExteriorEnabled))
 		SetupVL();
+	drawVRRestartHint();
 
 	if (settings.ExteriorEnabled)
 		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
 
 	if (ImGui::Checkbox("Enable Volumetric Lighting in Interiors", &settings.InteriorEnabled))
 		SetupVL();
+	drawVRRestartHint();
 
 	if (settings.InteriorEnabled)
 		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
 }
 
+void VolumetricLighting::DrawGodrayTuningSettings()
+{
+	auto drawSlider = [](const char* label, float& value, float minValue, float maxValue, const char* tooltip) {
+		Util::YellowFrameStyleWrapper sliderStyle;
+		const bool changed = ImGui::SliderFloat(label, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(tooltip);
+		return changed;
+	};
+
+	ImGui::SeparatorText("Godray Tuning");
+	drawSlider("Godray Intensity", settings.GodrayShaftIntensity, 0.0f, kGodrayShaftIntensityMax, "Scales volumetric godray shaft brightness.");
+	drawSlider("Godray Opacity", settings.GodrayOpacity, 0.0f, kGodrayOpacityMax, "Controls shaft strength and visibility. 1.0 is default; values above 1.0 boost presence.");
+	drawSlider("Godray Saturation", settings.GodraySaturation, 0.0f, kGodraySaturationMax, "Adjusts weather-driven godray color richness. 1.0 is default.");
+
+	drawSlider("Custom Color Contribution", settings.CustomColorContribution, 0.0f, 1.0f, "Blends your custom color into the weather godray color.");
+	const bool customColorDisabled = settings.CustomColorContribution <= kFloatEpsilon;
+	ImGui::BeginDisabled(customColorDisabled);
+	drawSlider("Custom Color Red", settings.CustomColorRed, 0.0f, 1.0f, "Red channel for custom volumetric color.");
+	drawSlider("Custom Color Green", settings.CustomColorGreen, 0.0f, 1.0f, "Green channel for custom volumetric color.");
+	drawSlider("Custom Color Blue", settings.CustomColorBlue, 0.0f, 1.0f, "Blue channel for custom volumetric color.");
+	ImGui::EndDisabled();
+}
+
 void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior, const bool inLocationType)
 {
+	quality = ClampQualityIndex(quality);
 	auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
 
 	if (ImGui::SliderInt(isInterior ? "Interior Quality" : "Exterior Quality", &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality])) {
@@ -92,7 +332,8 @@ VolumetricLighting::TextureSize& VolumetricLighting::FetchCurrentSizeInUnits(con
 {
 	auto& size = interior ? interiorSizeInUnits : exteriorSizeInUnits;
 	if (interior) {
-		switch (static_cast<Quality>(settings.InteriorQuality)) {
+		const int32_t quality = ClampQualityIndex(settings.InteriorQuality);
+		switch (static_cast<Quality>(quality)) {
 		case Quality::Low:
 			size = *gVolumetricLightingSizeLow;
 			break;
@@ -109,7 +350,8 @@ VolumetricLighting::TextureSize& VolumetricLighting::FetchCurrentSizeInUnits(con
 			break;
 		}
 	} else {
-		switch (static_cast<Quality>(settings.ExteriorQuality)) {
+		const int32_t quality = ClampQualityIndex(settings.ExteriorQuality);
+		switch (static_cast<Quality>(quality)) {
 		case Quality::Low:
 			size = *gVolumetricLightingSizeLow;
 			break;
@@ -139,18 +381,78 @@ void VolumetricLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	settings.ExteriorQuality = std::clamp(settings.ExteriorQuality, 0, static_cast<int32_t>(Quality::Count) - 1);
 	settings.InteriorQuality = std::clamp(settings.InteriorQuality, 0, static_cast<int32_t>(Quality::Count) - 1);
+
+	// Backward-compat migration: older configs only had GodrayIntensity.
+	if (!o_json.contains("GodrayShaftIntensity")) {
+		settings.GodrayShaftIntensity = settings.GodrayIntensity;
+	}
+
+	SanitizeSettings();
 }
 
 void VolumetricLighting::SaveSettings(json& o_json)
 {
+	SanitizeSettings();
+	// Keep legacy value aligned for older config readers.
+	settings.GodrayIntensity = settings.GodrayShaftIntensity;
 	o_json = settings;
 }
 
 void VolumetricLighting::RestoreDefaultSettings()
 {
 	settings = {};
+	SanitizeSettings();
 	if (globals::game::isVR)
-		Util::ResetGameSettingsToDefaults(hiddenVRSettings);
+	{
+		Util::ResetGameSettingsToDefaults(hiddenVREnableSettings);
+		Util::ResetGameSettingsToDefaults(hiddenVRWeatherUpdateSettings);
+	}
+	if (initialised)
+		SetupVL();
+}
+
+int32_t VolumetricLighting::ClampQualityIndex(int32_t quality)
+{
+	return std::clamp(quality, static_cast<int32_t>(Quality::Low), static_cast<int32_t>(Quality::Custom));
+}
+
+VolumetricLighting::TextureSize VolumetricLighting::ClampTextureSize(const TextureSize& size)
+{
+	return {
+		.Width = std::clamp(size.Width, kTextureWidthMin, kTextureWidthMax),
+		.Height = std::clamp(size.Height, kTextureHeightMin, kTextureHeightMax),
+		.Depth = std::clamp(size.Depth, kTextureDepthMin, kTextureDepthMax),
+	};
+}
+
+void VolumetricLighting::SanitizeSettings()
+{
+	settings.GodrayIntensity = ClampFinite(settings.GodrayIntensity, 0.0f, kGodrayIntensityMax, 1.0f);
+	settings.GodrayShaftIntensity = ClampFinite(settings.GodrayShaftIntensity, 0.0f, kGodrayShaftIntensityMax, 1.0f);
+	settings.GodrayOpacity = ClampFinite(settings.GodrayOpacity, 0.0f, kGodrayOpacityMax, 1.0f);
+	settings.GodraySaturation = ClampFinite(settings.GodraySaturation, 0.0f, kGodraySaturationMax, 1.0f);
+	settings.CustomColorContribution = ClampFinite(settings.CustomColorContribution, 0.0f, 1.0f, 0.0f);
+	settings.CustomColorRed = ClampFinite(settings.CustomColorRed, 0.0f, 1.0f, 1.0f);
+	settings.CustomColorGreen = ClampFinite(settings.CustomColorGreen, 0.0f, 1.0f, 1.0f);
+	settings.CustomColorBlue = ClampFinite(settings.CustomColorBlue, 0.0f, 1.0f, 1.0f);
+	settings.ExteriorQuality = ClampQualityIndex(settings.ExteriorQuality);
+	settings.InteriorQuality = ClampQualityIndex(settings.InteriorQuality);
+	settings.ExteriorCustomSize = ClampTextureSize(settings.ExteriorCustomSize);
+	settings.InteriorCustomSize = ClampTextureSize(settings.InteriorCustomSize);
+}
+
+bool VolumetricLighting::IsExteriorEnabled() const
+{
+	return settings.ExteriorEnabled;
+}
+
+void VolumetricLighting::SetExteriorEnabled(bool enabled)
+{
+	settings.ExteriorEnabled = enabled;
+
+	if (initialised && !inInterior && bEnableVolumetricLighting && gVolumetricLightingSizeHigh) {
+		SetupVL();
+	}
 }
 
 void VolumetricLighting::DataLoaded()
@@ -169,8 +471,11 @@ void VolumetricLighting::DataLoaded()
 void VolumetricLighting::PostPostLoad()
 {
 	if (REL::Module::IsVR()) {
-		if (settings.ExteriorEnabled || settings.InteriorEnabled)
-			EnableBooleanSettings(hiddenVRSettings, GetName());
+		if (settings.ExteriorEnabled || settings.InteriorEnabled) {
+			EnableBooleanSettings(hiddenVREnableSettings, GetName());
+			const bool weatherInteractionEnabled = !(settings.DisableWeatherInteractionDuringRain && IsRainTransitionActive());
+			SetBooleanSettings(hiddenVRWeatherUpdateSettings, GetName(), weatherInteractionEnabled);
+		}
 		auto address = REL::RelocationID(100475, 0).address() + 0x45b;  // AE not needed, VR only hook
 		logger::info("[{}] Hooking CopyResource at {:x}", GetName(), address);
 		REL::safe_fill(address, REL::NOP, 7);
@@ -223,33 +528,86 @@ void VolumetricLighting::EarlyPrepass()
 
 	const auto interiorCell = RE::TES::GetSingleton()->interiorCell;
 	const bool currentlyInInterior = interiorCell != nullptr;
+	const bool nextRainSuppressionActive =
+		settings.DisableWeatherInteractionDuringRain &&
+		!currentlyInInterior &&
+		IsRainTransitionActive();
 
-	if (initialised && currentlyInInterior == inInterior)
+	if (initialised &&
+	    currentlyInInterior == inInterior &&
+	    nextRainSuppressionActive == rainOnlySuppressionActive)
 		return;
 
 	initialised = true;
 	inInterior = currentlyInInterior;
 	inInteriorWithSun = InteriorSun::IsInteriorWithSun(interiorCell);
+	rainOnlySuppressionActive = nextRainSuppressionActive;
 	SetupVL();
 }
 
 void VolumetricLighting::SetupVL()
 {
-	if (inInterior) {
-		if (globals::game::isVR)
-			SetBooleanSettings(hiddenVRSettings, GetName(), settings.InteriorEnabled && inInteriorWithSun);
-		else
-			*bEnableVolumetricLighting = settings.InteriorEnabled && inInteriorWithSun;
-		*gVolumetricLightingSizeHigh = static_cast<Quality>(settings.InteriorQuality) == Quality::Custom ? settings.InteriorCustomSize : defaultSizeHigh;
-		SetVLQuality(GetVLDescriptor(), settings.InteriorQuality);
-	} else {
-		if (globals::game::isVR)
-			SetBooleanSettings(hiddenVRSettings, GetName(), settings.ExteriorEnabled);
-		else
-			*bEnableVolumetricLighting = settings.ExteriorEnabled;
-		*gVolumetricLightingSizeHigh = static_cast<Quality>(settings.ExteriorQuality) == Quality::Custom ? settings.ExteriorCustomSize : defaultSizeHigh;
-		SetVLQuality(GetVLDescriptor(), settings.ExteriorQuality);
+	SanitizeSettings();
+
+	if (!gVolumetricLightingSizeHigh || (!globals::game::isVR && !bEnableVolumetricLighting)) {
+		return;
 	}
+
+	const bool requestedRuntimeEnabled = inInterior ? (settings.InteriorEnabled && inInteriorWithSun) : settings.ExteriorEnabled;
+	rainOnlySuppressionActive =
+		settings.DisableWeatherInteractionDuringRain &&
+		!inInterior &&
+		IsRainTransitionActive();
+	const bool runtimeEnabled = requestedRuntimeEnabled && (!rainOnlySuppressionActive || globals::game::isVR);
+	const int32_t quality = ClampQualityIndex(inInterior ? settings.InteriorQuality : settings.ExteriorQuality);
+	const TextureSize& customSize = inInterior ? settings.InteriorCustomSize : settings.ExteriorCustomSize;
+
+	if (globals::game::isVR) {
+		const bool weatherInteractionEnabled = !rainOnlySuppressionActive;
+		const bool effectiveWeatherUpdateEnabled = requestedRuntimeEnabled && weatherInteractionEnabled;
+		SetBooleanSettings(hiddenVREnableSettings, GetName(), runtimeEnabled);
+		SetBooleanSettings(hiddenVRWeatherUpdateSettings, GetName(), effectiveWeatherUpdateEnabled);
+		if (requestedRuntimeEnabled && !effectiveWeatherUpdateEnabled) {
+			// Drop stale volumetric history immediately when weather updates are suppressed.
+			ClearVolumetricLightingTargets();
+		}
+	} else {
+		*bEnableVolumetricLighting = runtimeEnabled;
+	}
+
+	*gVolumetricLightingSizeHigh = static_cast<Quality>(quality) == Quality::Custom ? customSize : defaultSizeHigh;
+	SetVLQuality(GetVLDescriptor(), quality);
+
+	if (!runtimeEnabled)
+		ClearVolumetricLightingTargets();
+}
+
+void VolumetricLighting::ClearVolumetricLightingTargets()
+{
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	if (!context || !renderer) {
+		return;
+	}
+
+	const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	auto clearRT = [&](RE::RENDER_TARGET index) {
+		auto& target = renderer->GetRuntimeData().renderTargets[index];
+		if (target.RTV) {
+			context->ClearRenderTargetView(target.RTV, clearColor);
+		}
+		if (target.UAV) {
+			context->ClearUnorderedAccessViewFloat(target.UAV, clearColor);
+		}
+	};
+
+	clearRT(RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING);
+	clearRT(RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING_PREVIOUS);
+	clearRT(RE::RENDER_TARGETS::kIMAGESPACE_VOLUMETRIC_LIGHTING_COPY);
+	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_HALF_RES);
+	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_BLUR_HALF_RES);
+	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_QUARTER_RES);
+	clearRT(RE::RENDER_TARGETS::kVOLUMETRIC_LIGHTING_BLUR_QUARTER_RES);
 }
 
 VolumetricLighting::VolumetricLightingDescriptor& VolumetricLighting::GetVLDescriptor()
@@ -286,7 +644,36 @@ VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolum
 	if (!descriptor)
 		return nullptr;
 
+	auto& feature = globals::features::volumetricLighting;
+	const bool imageSpaceReplacementEnabled = IsImageSpaceReplacementEnabled();
+	const auto& runtimeSettings = feature.settings;
+	const GodrayRuntimeParams params = BuildGodrayRuntimeParams(runtimeSettings);
+
+	// If image-space replacement is disabled, keep vanilla descriptor behavior untouched.
+	if (!imageSpaceReplacementEnabled) {
+		return descriptor;
+	}
+
 	ApplySkySyncIntensity(*descriptor);
+
+	if (!HasDescriptorTuning(params)) {
+		return descriptor;
+	}
+
+	if (!IsNear(params.shaftIntensity, kDefaultGodrayShaftIntensity))
+		ApplyGodrayShaftIntensity(*descriptor, params.shaftIntensity);
+	if (!IsNear(params.opacity, kDefaultGodrayOpacity))
+		ApplyGodrayOpacity(*descriptor, params.opacity);
+
+	if (!IsNear(params.saturation, kDefaultGodraySaturation) || !IsNear(params.customContribution, kDefaultCustomContribution)) {
+		const RE::NiColor weatherColor = SaturateColor(GetCurrentWeatherSunColor(GetDescriptorColor(*descriptor)), params.saturation);
+		const RE::NiColor finalColor = LerpColor(weatherColor, params.customColor, params.customContribution);
+
+		// Use explicit final color each frame so saturation and custom contribution are independent.
+		descriptor->customColor.contribution = 1.0f;
+		SetDescriptorColor(*descriptor, finalColor);
+	}
+
 	return descriptor;
 }
 

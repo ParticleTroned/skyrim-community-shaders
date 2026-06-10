@@ -15,6 +15,15 @@ public:
 	struct Settings
 	{
 		bool ExteriorEnabled = true;
+		bool DisableWeatherInteractionDuringRain = false;
+		float GodrayIntensity = 1.0f;
+		float GodrayShaftIntensity = 1.0f;
+		float GodrayOpacity = 1.0f;
+		float GodraySaturation = 1.0f;
+		float CustomColorContribution = 0.0f;
+		float CustomColorRed = 1.0f;
+		float CustomColorGreen = 1.0f;
+		float CustomColorBlue = 1.0f;
 		int32_t ExteriorQuality = 2;
 		TextureSize ExteriorCustomSize;
 		bool InteriorEnabled = true;
@@ -47,26 +56,31 @@ public:
 	virtual void LoadSettings(json&) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	bool IsExteriorEnabled() const;
+	void SetExteriorEnabled(bool enabled);
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void EarlyPrepass() override;
 
-	std::map<std::string, Util::GameSetting> hiddenVRSettings{
+	std::map<std::string, Util::GameSetting> hiddenVREnableSettings{
 		{ "bEnableVolumetricLighting:Display", { "Enable VL Shaders (INI) ",
 												   "Enables volumetric lighting effects by creating shaders. "
 												   "Needed at startup. ",
 												   0x1ed63d8, true, false, true } },
 		{ "bVolumetricLightingEnable:Display", { "Enable VL (INI))", "Enables volumetric lighting. ", 0x3485360, true, false, true } },
+		{ "bVolumetricLightingEnabled_143232EF0", { "Enable VL (Papyrus) ",
+													  "Enables volumetric lighting. "
+													  "This is the Papyrus command. ",
+													  REL::Relocate<uintptr_t>(0x3232ef0, 0, 0x3485362), true, false, true } },
+	};
+
+	std::map<std::string, Util::GameSetting> hiddenVRWeatherUpdateSettings{
 		{ "bVolumetricLightingUpdateWeather:Display", { "Enable Volumetric Lighting (Weather) (INI) ",
 														  "Enables volumetric lighting for weather. "
 														  "Only used during startup and used to set bVLWeatherUpdate.",
 														  0x3485361, true, false, true } },
 		{ "bVLWeatherUpdate", { "Enable VL (Weather)", "Enables volumetric lighting for weather.", 0x3485363, true, false, true } },
-		{ "bVolumetricLightingEnabled_143232EF0", { "Enable VL (Papyrus) ",
-													  "Enables volumetric lighting. "
-													  "This is the Papyrus command. ",
-													  REL::Relocate<uintptr_t>(0x3232ef0, 0, 0x3485362), true, false, true } },
 	};
 
 	virtual bool SupportsVR() override { return true; };
@@ -109,9 +123,14 @@ private:
 	static void SetVLQuality(VolumetricLightingDescriptor& descriptor, std::uint32_t quality);
 	static void RenderVolumetricLighting(VolumetricLightingDescriptor* descriptor, RE::NiCamera* camera, bool flag);
 
+	void DrawGodrayTuningSettings();
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
+	void SanitizeSettings();
 	void SetupVL();
+	void ClearVolumetricLightingTargets();
+	static int32_t ClampQualityIndex(int32_t quality);
+	static TextureSize ClampTextureSize(const TextureSize& size);
 
 	enum class Quality : uint8_t
 	{
@@ -136,6 +155,7 @@ private:
 	bool initialised = false;
 	bool inInterior = false;
 	bool inInteriorWithSun = false;
+	bool rainOnlySuppressionActive = false;
 
 	struct VLData
 	{

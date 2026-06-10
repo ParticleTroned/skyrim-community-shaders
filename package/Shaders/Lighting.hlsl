@@ -3990,9 +3990,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 	alpha = saturate(1.05 * alpha);
 #			endif  // DEPTH_WRITE_DECALS
+#			if defined(TREE_ANIM)
+	const float vrsFixedAlphaThreshold = 0.1;
+	if (alpha - vrsFixedAlphaThreshold < 0) {
+		discard;
+	}
+#			else
 	if (alpha - AlphaTestRefRS < 0) {
 		discard;
 	}
+#			endif  // TREE_ANIM
 #		endif      // DO_ALPHA_TEST
 
 #		if defined(ANISOTROPIC_ALPHA)

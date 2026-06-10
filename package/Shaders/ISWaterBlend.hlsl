@@ -1,6 +1,5 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
-#include "Common/Math.hlsli"
 #include "Common/VR.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
@@ -76,16 +75,11 @@ PS_OUTPUT main(PS_INPUT input)
 				0.1, 0.95);
 			historyFactor = NearFar_Menu_DistanceFactor.w * (distanceFactor * (waterMask * -0.85 + 0.95));
 		}
-		// Un-premultiply history so bilinear filtering against cleared pixels does not darken water edges
-		float3 historyColor = waterHistory.xyz / max(waterHistory.w, EPSILON_DIVISION);
-
 		historyFactor *= waterHistory.w;
-		finalColor = lerp(sourceColor, historyColor, historyFactor);
+		finalColor = lerp(sourceColor, waterHistory.xyz, historyFactor);
 	}
 
-	float waterCoverage = WaterBlend::GetWaterCoverage(waterMask);
-	// Store premultiplied history so transparent clears filter without dark outlines
-	psout.Color1 = float4(finalColor * waterCoverage, waterCoverage);
+	psout.Color1 = float4(finalColor, WaterBlend::GetWaterCoverage(waterMask));
 	psout.Color = finalColor;
 
 	return psout;

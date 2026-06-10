@@ -390,7 +390,8 @@ namespace
 			return;
 		}
 
-		if (const auto* emittance = a_shaderProperty->emittanceColor) {
+		// CommonLib v4.18 names this offset unk88; v4.19+ names it emittanceColor.
+		if (const auto* emittance = a_shaderProperty->unk88) {
 			a_color.red *= emittance->red;
 			a_color.green *= emittance->green;
 			a_color.blue *= emittance->blue;

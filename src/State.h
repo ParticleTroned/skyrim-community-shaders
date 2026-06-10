@@ -62,6 +62,15 @@ public:
 	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
 	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections
 	float pbrMetalHighlightScale = kDefaultPbrMetalHighlightScale;    // Global scale for direct PBR metal highlights
+	// Burley SSS human skin controls.
+	float sssHumanMaleIntensity = 1.0f;
+	float sssHumanMaleSaturation = 1.0f;
+	float sssHumanMaleBrightness = 1.0f;
+	float sssHumanMaleBaseSaturation = 1.0f;
+	float sssHumanFemaleIntensity = 1.0f;
+	float sssHumanFemaleSaturation = 1.0f;
+	float sssHumanFemaleBrightness = 1.0f;
+	float sssHumanFemaleBaseSaturation = 1.0f;
 	double smoothDrawCalls[RE::BSShader::Type::Total + 1];
 	int drawCalls[RE::BSShader::Type::Total + 1];
 
@@ -197,7 +206,8 @@ public:
 		IsBeastRace = 1 << 2,
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
-		SuppressExternalEmittance = 1 << 5
+		SuppressExternalEmittance = 1 << 5,
+		IsFemale = 1 << 6
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -278,6 +288,14 @@ public:
 		float RefractionScale;
 		float PBRMetalReflectionScale;
 		float PBRMetalHighlightScale;
+		float SSSHumanMaleIntensity;
+		float SSSHumanMaleSaturation;
+		float SSSHumanMaleBrightness;
+		float SSSHumanMaleBaseSaturation;
+		float SSSHumanFemaleIntensity;
+		float SSSHumanFemaleSaturation;
+		float SSSHumanFemaleBrightness;
+		float SSSHumanFemaleBaseSaturation;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;

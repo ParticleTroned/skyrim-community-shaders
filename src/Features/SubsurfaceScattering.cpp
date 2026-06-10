@@ -4,6 +4,8 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include <algorithm>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
 
@@ -16,7 +18,101 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HumanProfile,
 	BurleySamples,
 	MeanFreePathBase,
-	MeanFreePathHuman)
+	MeanFreePathHuman,
+	HumanMaleSSSIntensity,
+	HumanMaleSSSSaturation,
+	HumanMaleSSSBrightness,
+	HumanMaleSSSBaseSaturation,
+	HumanFemaleSSSIntensity,
+	HumanFemaleSSSSaturation,
+	HumanFemaleSSSBrightness,
+	HumanFemaleSSSBaseSaturation)
+
+namespace
+{
+	constexpr float kHumanSkinControlMin = 0.0f;
+	constexpr float kHumanSkinControlMax = 2.0f;
+
+	template <class TNPC>
+	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
+	{
+		return npc->IsFemale();
+	}
+
+	template <class TNPC>
+	auto IsFemaleImpl(TNPC* npc, long) -> decltype(npc->GetSex(), bool{})
+	{
+		return static_cast<uint32_t>(npc->GetSex()) != 0;
+	}
+
+	inline bool GetNPCIsFemale(RE::TESNPC* npc)
+	{
+		return npc ? IsFemaleImpl(npc, 0) : false;
+	}
+
+	inline float ClampHumanSkinControl(float a_value)
+	{
+		return std::clamp(a_value, kHumanSkinControlMin, kHumanSkinControlMax);
+	}
+
+	void DrawHumanSkinControls(
+		const char* a_sectionTitle,
+		float& a_intensity,
+		float& a_saturation,
+		float& a_brightness,
+		float& a_baseSaturation)
+	{
+		ImGui::SeparatorText(a_sectionTitle);
+		ImGui::PushID(a_sectionTitle);
+		{
+			Util::BlueFrameStyleWrapper blueStyle;
+			ImGui::SliderFloat("SSS Intensity", &a_intensity, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		}
+		{
+			Util::BlueFrameStyleWrapper blueStyle;
+			ImGui::SliderFloat("SSS Saturation", &a_saturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		}
+		{
+			Util::BlueFrameStyleWrapper blueStyle;
+			ImGui::SliderFloat("Skin Brightness", &a_brightness, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		}
+		{
+			Util::BlueFrameStyleWrapper blueStyle;
+			ImGui::SliderFloat("Skin Saturation", &a_baseSaturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		}
+		ImGui::PopID();
+	}
+
+	void ApplyClampedHumanSkinControls(
+		float& a_dstIntensity,
+		float& a_dstSaturation,
+		float& a_dstBrightness,
+		float& a_dstBaseSaturation,
+		float a_srcIntensity,
+		float a_srcSaturation,
+		float a_srcBrightness,
+		float a_srcBaseSaturation)
+	{
+		a_dstIntensity = ClampHumanSkinControl(a_srcIntensity);
+		a_dstSaturation = ClampHumanSkinControl(a_srcSaturation);
+		a_dstBrightness = ClampHumanSkinControl(a_srcBrightness);
+		a_dstBaseSaturation = ClampHumanSkinControl(a_srcBaseSaturation);
+	}
+
+	void ApplyLegacyHumanControl(
+		const json& a_json,
+		const char* a_legacyKey,
+		const char* a_maleKey,
+		float& a_maleSetting,
+		float& a_femaleSetting)
+	{
+		if (a_json.contains(a_legacyKey) && !a_json.contains(a_maleKey)) {
+			const float value = a_json[a_legacyKey].get<float>();
+			a_maleSetting = value;
+			a_femaleSetting = value;
+		}
+	}
+}
 
 void SubsurfaceScattering::DrawSettings()
 {
@@ -51,7 +147,7 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::TreePop();
 			}
 
-			if (ImGui::TreeNodeEx("Human Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (ImGui::TreeNodeEx("Humanoid Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::SliderFloat("Blur Radius", &settings.HumanProfile.BlurRadius, 0, 3, "%.2f");
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Blur radius.");
@@ -81,7 +177,7 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::TreePop();
 			}
 
-			if (ImGui::TreeNodeEx("Human Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (ImGui::TreeNodeEx("Humanoid Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathHuman);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
@@ -90,6 +186,10 @@ void SubsurfaceScattering::DrawSettings()
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Controls the distance that Mean Free Path Color goes into subsurface.");
 				}
+
+				DrawHumanSkinControls("Humanoid Skin (Male)", settings.HumanMaleSSSIntensity, settings.HumanMaleSSSSaturation, settings.HumanMaleSSSBrightness, settings.HumanMaleSSSBaseSaturation);
+				DrawHumanSkinControls("Humanoid Skin (Female)", settings.HumanFemaleSSSIntensity, settings.HumanFemaleSSSSaturation, settings.HumanFemaleSSSBrightness, settings.HumanFemaleSSSBaseSaturation);
+
 				ImGui::TreePop();
 			}
 		}
@@ -334,6 +434,27 @@ void SubsurfaceScattering::SetupResources()
 
 void SubsurfaceScattering::Reset()
 {
+	if (auto state = globals::state) {
+		ApplyClampedHumanSkinControls(
+			state->sssHumanMaleIntensity,
+			state->sssHumanMaleSaturation,
+			state->sssHumanMaleBrightness,
+			state->sssHumanMaleBaseSaturation,
+			settings.HumanMaleSSSIntensity,
+			settings.HumanMaleSSSSaturation,
+			settings.HumanMaleSSSBrightness,
+			settings.HumanMaleSSSBaseSaturation);
+		ApplyClampedHumanSkinControls(
+			state->sssHumanFemaleIntensity,
+			state->sssHumanFemaleSaturation,
+			state->sssHumanFemaleBrightness,
+			state->sssHumanFemaleBaseSaturation,
+			settings.HumanFemaleSSSIntensity,
+			settings.HumanFemaleSSSSaturation,
+			settings.HumanFemaleSSSBrightness,
+			settings.HumanFemaleSSSBaseSaturation);
+	}
+
 	auto shaderManager = globals::game::smState;
 	auto shaderCache = globals::shaderCache;
 	shaderManager->characterLightEnabled = shaderCache->IsEnabled() ? settings.EnableCharacterLighting : true;
@@ -359,6 +480,12 @@ void SubsurfaceScattering::RestoreDefaultSettings()
 void SubsurfaceScattering::LoadSettings(json& o_json)
 {
 	settings = o_json;
+
+	// Backward compatibility: older configs used one Human* control set.
+	ApplyLegacyHumanControl(o_json, "HumanSSSIntensity", "HumanMaleSSSIntensity", settings.HumanMaleSSSIntensity, settings.HumanFemaleSSSIntensity);
+	ApplyLegacyHumanControl(o_json, "HumanSSSSaturation", "HumanMaleSSSSaturation", settings.HumanMaleSSSSaturation, settings.HumanFemaleSSSSaturation);
+	ApplyLegacyHumanControl(o_json, "HumanSSSBrightness", "HumanMaleSSSBrightness", settings.HumanMaleSSSBrightness, settings.HumanFemaleSSSBrightness);
+	ApplyLegacyHumanControl(o_json, "HumanSSSBaseSaturation", "HumanMaleSSSBaseSaturation", settings.HumanMaleSSSBaseSaturation, settings.HumanFemaleSSSBaseSaturation);
 }
 
 void SubsurfaceScattering::SaveSettings(json& o_json)
@@ -425,22 +552,32 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 	auto state = globals::state;
 
 	if (deferred->deferredPass) {
-		if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint)) {
-			bool isBeastRace = true;
+		bool isBeastRace = true;
+		bool isFemale = false;
 
+		if (a_pass && a_pass->shaderProperty &&
+			a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint,
+				RE::BSShaderProperty::EShaderPropertyFlag::kHairTint)) {
 			auto geometry = a_pass->geometry;
-			if (auto userData = geometry->GetUserData())
-				if (auto actor = userData->As<RE::Actor>())
-					if (auto race = actor->GetRace())
-						isBeastRace = race->HasKeyword(isBeastRaceKeyword);
+			if (geometry) {
+				if (auto userData = geometry->GetUserData()) {
+					if (auto actor = userData->As<RE::Actor>()) {
+						if (auto race = actor->GetRace())
+							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
+						if (auto base = actor->GetActorBase())
+							isFemale = GetNPCIsFemale(base);
+					}
+				}
+			}
 
 			validMaterials = true;
-
-			if (isBeastRace)
-				state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::IsBeastRace;
-			else
-				state->permutationData.ExtraShaderDescriptor &= ~(uint)State::ExtraShaderDescriptors::IsBeastRace;
 		}
+
+		state->permutationData.ExtraShaderDescriptor &= ~((uint)State::ExtraShaderDescriptors::IsBeastRace | (uint)State::ExtraShaderDescriptors::IsFemale);
+		if (isBeastRace)
+			state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::IsBeastRace;
+		if (isFemale)
+			state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::IsFemale;
 	}
 }
 

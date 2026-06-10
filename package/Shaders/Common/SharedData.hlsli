@@ -29,6 +29,14 @@ namespace SharedData
 		float RefractionScale;    // Global scale for ImageSpace refraction heat warp
 		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections
 		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights
+		float SSSHumanMaleIntensity;
+		float SSSHumanMaleSaturation;
+		float SSSHumanMaleBrightness;
+		float SSSHumanMaleBaseSaturation;
+		float SSSHumanFemaleIntensity;
+		float SSSHumanFemaleSaturation;
+		float SSSHumanFemaleBrightness;
+		float SSSHumanFemaleBaseSaturation;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;

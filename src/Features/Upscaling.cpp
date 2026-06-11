@@ -623,11 +623,11 @@ namespace
 		logger::debug(
 			"[VRRenderScale] Streamline DLSS availability resolved after deferred VR render-scale boot latch (DLSS {}).",
 			Upscaling::streamline.featureDLSS ? "available" : "unavailable");
-		auto origin = LoadVRUpscalingTransitionOrigin(a_upscaling.pendingVRUpscalingTransitionOrigin);
-		if (!a_upscaling.HasPendingVRUpscalingTransition()) {
-			origin = a_upscaling.pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire) ?
-				Upscaling::VRUpscalingTransitionOrigin::CSMenu :
-				Upscaling::VRUpscalingTransitionOrigin::VRAPI;
+		auto origin = Upscaling::VRUpscalingTransitionOrigin::VRAPI;
+		if (a_upscaling.HasPendingVRUpscalingTransition()) {
+			origin = LoadVRUpscalingTransitionOrigin(a_upscaling.pendingVRUpscalingTransitionOrigin);
+		} else if (a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
+			origin = LoadVRUpscalingTransitionOrigin(a_upscaling.pendingPerfModeRenderTargetRecreateOrigin);
 		}
 		a_upscaling.RequestPerfModeRenderTargetRecreate(a_reason, origin);
 	}
@@ -2113,6 +2113,12 @@ namespace
 		}
 	}
 
+	bool HasPendingVRVendorRuntimeReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_primaryMethod, Upscaling::UpscaleMethod a_secondaryMethod)
+	{
+		return HasPendingVRVendorRuntimeReset(a_upscaling, a_primaryMethod) ||
+		       (a_primaryMethod != a_secondaryMethod && HasPendingVRVendorRuntimeReset(a_upscaling, a_secondaryMethod));
+	}
+
 	bool ShouldDeferHMDClearMask()
 	{
 		return ShouldDeferVRTransitionMaskRepair(globals::features::upscaling, globals::state);
@@ -2338,7 +2344,7 @@ namespace
 		const bool foveatedBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(a_upscaling, state);
 		const bool hmdMaskDeferred = ShouldDeferVRTransitionMaskRepair(a_upscaling, state);
 		const bool projectedMaskDeferred = ShouldDeferVRProjectedMaskRepair(a_upscaling, state);
-		const bool vendorResetPending = HasPendingVRVendorRuntimeReset(a_upscaling, snapshot.runtimeMethod);
+		const bool vendorResetPending = HasPendingVRVendorRuntimeReset(a_upscaling, snapshot.runtimeMethod, snapshot.requestedMethod);
 
 		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingMenu, loadingMenu);
 		SetDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::LoadingTail, loadingTail);
@@ -12146,9 +12152,7 @@ bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
 	const bool transitionRelevant =
 		IsVRRenderScaleTransitionSafetyRelevant(*this, requestedMethod) ||
 		IsVRRenderScaleTransitionSafetyRelevant(*this, runtimeMethod);
-	const bool vendorResetPending =
-		HasPendingVRVendorRuntimeReset(*this, runtimeMethod) ||
-		(requestedMethod != runtimeMethod && HasPendingVRVendorRuntimeReset(*this, requestedMethod));
+	const bool vendorResetPending = HasPendingVRVendorRuntimeReset(*this, runtimeMethod, requestedMethod);
 	if (vendorResetPending ||
 		(postLoadRuntimeResetPending.load(std::memory_order_acquire) && transitionRelevant)) {
 		return true;
@@ -13223,9 +13227,8 @@ void Upscaling::MarkVRUpscalingTransitionQueued(VRUpscalingTransitionOrigin a_or
 {
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	const bool transitionAlreadyQueued = pendingVRUpscalingTransitionFrame.load(std::memory_order_acquire) != 0;
-	if (!transitionAlreadyQueued ||
-	    UsesVRRenderScalePostLoadSettle(a_origin) ||
-	    !UsesVRRenderScalePostLoadSettle(LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin))) {
+	const auto previousOrigin = LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin);
+	if (!transitionAlreadyQueued || ShouldPreferVRRenderScaleRelatchOrigin(a_origin, previousOrigin)) {
 		pendingVRUpscalingTransitionOrigin.store(static_cast<uint32_t>(a_origin), std::memory_order_release);
 	}
 	pendingVRUpscalingTransitionFrame.store(frame, std::memory_order_release);

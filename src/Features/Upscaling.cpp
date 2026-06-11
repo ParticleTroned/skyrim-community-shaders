@@ -6835,7 +6835,9 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	if (!wasPending || requirePostLoadSettle) {
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(requirePostLoadSettle, std::memory_order_release);
 	}
-	if (pendingPerfModeRenderTargetResourceSetupFrame.load(std::memory_order_acquire) != 0) {
+	const bool postD3DResourceSetupAlreadyPending =
+		pendingPerfModeRenderTargetResourceSetupFrame.load(std::memory_order_acquire) != 0;
+	if (postD3DResourceSetupAlreadyPending) {
 		pendingPerfModeRenderTargetResourceSetupSuperseded.store(true, std::memory_order_release);
 	}
 	const uint32_t previousRelatchDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
@@ -6846,10 +6848,16 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 		!wasPending ||
 		relatchDelayFrames > previousRelatchDelay ||
 		shortenRelatchForLoadingMenu;
-	if (updateRelatchDelay)
+	// Repeated transition requests should collapse toward the latest target
+	// instead of immediately consuming the first queued relatch frame.
+	const bool coalescePendingRelatch =
+		wasPending &&
+		!postD3DResourceSetupAlreadyPending &&
+		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+	if (updateRelatchDelay || coalescePendingRelatch)
 		MarkPerfModeRenderTargetRecreateQueued(relatchDelayFrames);
 	RequestHistoryReset();
-	if (updateRelatchDelay)
+	if (updateRelatchDelay || coalescePendingRelatch)
 		LogVRTransitionDiagnostics(*this, "queued render-target relatch", true);
 	if (wasPending)
 		return;
@@ -12120,7 +12128,40 @@ bool Upscaling::IsSubmitStageDeviceLost() const
 
 bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
 {
-	return IsVRRenderScaleD3DRecreateSettleActive() || IsVRRenderScalePostD3DResourceSetupPending();
+	if (!globals::game::isVR)
+		return false;
+
+	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition())
+		return true;
+
+	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		IsVRRenderScaleD3DRecreateSettleActive() ||
+		IsVRRenderScalePostD3DResourceSetupPending()) {
+		return true;
+	}
+
+	const auto requestedMethod = GetConfiguredUpscaleMethodForTransition();
+	const auto runtimeMethod = GetRuntimeUpscaleMethod();
+	const bool transitionRelevant =
+		IsVRRenderScaleTransitionSafetyRelevant(*this, requestedMethod) ||
+		IsVRRenderScaleTransitionSafetyRelevant(*this, runtimeMethod);
+	const bool vendorResetPending =
+		HasPendingVRVendorRuntimeReset(*this, runtimeMethod) ||
+		(requestedMethod != runtimeMethod && HasPendingVRVendorRuntimeReset(*this, requestedMethod));
+	if (vendorResetPending ||
+		(postLoadRuntimeResetPending.load(std::memory_order_acquire) && transitionRelevant)) {
+		return true;
+	}
+
+	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
+	if (vendorResumeFrame != 0 && transitionRelevant) {
+		const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
+		if (currentFrame == 0 || currentFrame < vendorResumeFrame)
+			return true;
+	}
+
+	return false;
 }
 
 void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context)

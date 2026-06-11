@@ -134,6 +134,7 @@ private:
 
 	bool runtimeUpscalerFailureLatched = false;
 	bool runtimeFsr4FailureLatched = false;
+	bool runtimeInteropFailureLogged = false;
 	uint32_t runtimeFallbackResetDispatchesRemaining = 0;
 	bool runtimeUpscalerLastFramePathValid = false;
 	uint32_t runtimeUpscalerLastFrameIndex = 0;

@@ -554,6 +554,7 @@ void FidelityFX::ResetRuntimeUpscalerTracking(bool a_invalidateProviderCache)
 {
 	runtimeUpscalerFailureLatched = false;
 	runtimeFsr4FailureLatched = false;
+	runtimeInteropFailureLogged = false;
 	runtimeFallbackResetDispatchesRemaining = 0;
 	runtimeUpscalerLastFramePathValid = false;
 	runtimeUpscalerLastFrameIndex = 0;
@@ -1048,50 +1049,166 @@ bool FidelityFX::EnsureRuntimeUpscalerInterop()
 {
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
 
-	if (!globals::d3d::device || !globals::d3d::context)
+	auto logFailureOnce = [&](const char* a_step, const std::string& a_detail) {
+		if (runtimeInteropFailureLogged)
+			return;
+
+		runtimeInteropFailureLogged = true;
+		logger::error("[FidelityFX] DX11->DX12 runtime interop failed at {}: {}", a_step, a_detail);
+	};
+
+	auto logHrFailureOnce = [&](const char* a_step, HRESULT a_result) {
+		logFailureOnce(a_step, std::format("HRESULT 0x{:08X}", static_cast<uint32_t>(a_result)));
+	};
+
+	auto checkHr = [&](const char* a_step, HRESULT a_result) {
+		if (SUCCEEDED(a_result))
+			return true;
+
+		logHrFailureOnce(a_step, a_result);
 		return false;
+	};
 
-	try {
-		if (!swapChain.d3d11Device)
-			swapChain.SetD3D11Device(globals::d3d::device);
-		if (!swapChain.d3d11Context)
-			swapChain.SetD3D11DeviceContext(globals::d3d::context);
+	auto clearRuntimeFenceState = [&]() {
+		runtimeD3D11Fence = nullptr;
+		runtimeD3D12Fence = nullptr;
+	};
 
-		if (!swapChain.d3d12Device) {
-			winrt::com_ptr<IDXGIDevice> dxgiDevice;
-			DX::ThrowIfFailed(globals::d3d::device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())));
+	auto clearRuntimeD3D12State = [&]() {
+		swapChain.d3d12Device = nullptr;
+		swapChain.commandQueue = nullptr;
+		swapChain.commandAllocators[0] = nullptr;
+		swapChain.commandAllocators[1] = nullptr;
+		swapChain.commandLists[0] = nullptr;
+		swapChain.commandLists[1] = nullptr;
+	};
 
-			winrt::com_ptr<IDXGIAdapter> adapter;
-			DX::ThrowIfFailed(dxgiDevice->GetAdapter(adapter.put()));
-			swapChain.CreateD3D12Device(adapter.get());
-		}
-
-		if (!runtimeD3D12Fence || !runtimeD3D11Fence) {
-			winrt::handle sharedFenceHandle;
-			DX::ThrowIfFailed(swapChain.d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&runtimeD3D12Fence)));
-			DX::ThrowIfFailed(swapChain.d3d12Device->CreateSharedHandle(runtimeD3D12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
-			DX::ThrowIfFailed(swapChain.d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(&runtimeD3D11Fence)));
-			runtimeFenceValue = 1;
-			runtimeCommandFrameIndex = 0;
-		}
-	} catch (const std::exception& e) {
-		logger::error("[FidelityFX] Failed to initialize DX11->DX12 runtime interop: {}", e.what());
+	if (!globals::d3d::device) {
+		logFailureOnce("validate D3D11 device", "global D3D11 device is unavailable");
 		return false;
-	} catch (...) {
-		logger::error("[FidelityFX] Failed to initialize DX11->DX12 runtime interop.");
+	}
+	if (!globals::d3d::context) {
+		logFailureOnce("validate D3D11 context", "global D3D11 context is unavailable");
 		return false;
 	}
 
-	return swapChain.d3d11Device.get() &&
-	       swapChain.d3d11Context.get() &&
-	       swapChain.d3d12Device.get() &&
-	       swapChain.commandQueue.get() &&
-	       swapChain.commandAllocators[0].get() &&
-	       swapChain.commandAllocators[1].get() &&
-	       swapChain.commandLists[0].get() &&
-	       swapChain.commandLists[1].get() &&
-	       runtimeD3D11Fence.get() &&
-	       runtimeD3D12Fence.get();
+	if (!swapChain.d3d11Device) {
+		if (!checkHr("query ID3D11Device5 from game device", globals::d3d::device->QueryInterface(IID_PPV_ARGS(swapChain.d3d11Device.put()))))
+			return false;
+	}
+	if (!swapChain.d3d11Context) {
+		if (!checkHr("query ID3D11DeviceContext4 from game context", globals::d3d::context->QueryInterface(IID_PPV_ARGS(swapChain.d3d11Context.put()))))
+			return false;
+	}
+
+	if (!swapChain.d3d12Device) {
+		winrt::com_ptr<IDXGIDevice> dxgiDevice;
+		if (!checkHr("query IDXGIDevice from game D3D11 device", globals::d3d::device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()))))
+			return false;
+
+		winrt::com_ptr<IDXGIAdapter> adapter;
+		if (!checkHr("get DXGI adapter for runtime D3D12 device", dxgiDevice->GetAdapter(adapter.put())))
+			return false;
+
+		if (!checkHr("create runtime D3D12 device", D3D12CreateDevice(adapter.get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(swapChain.d3d12Device.put())))) {
+			clearRuntimeD3D12State();
+			return false;
+		}
+
+		D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+		queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+		queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+		queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+		queueDesc.NodeMask = 0;
+
+		if (!checkHr("create runtime D3D12 command queue", swapChain.d3d12Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(swapChain.commandQueue.put())))) {
+			clearRuntimeD3D12State();
+			return false;
+		}
+
+		for (uint32_t i = 0; i < std::size(swapChain.commandAllocators); ++i) {
+			const std::string allocatorStep = std::format("create runtime D3D12 command allocator {}", i);
+			if (!checkHr(allocatorStep.c_str(), swapChain.d3d12Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(swapChain.commandAllocators[i].put())))) {
+				clearRuntimeD3D12State();
+				return false;
+			}
+			const std::string listStep = std::format("create runtime D3D12 command list {}", i);
+			if (!checkHr(listStep.c_str(), swapChain.d3d12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, swapChain.commandAllocators[i].get(), nullptr, IID_PPV_ARGS(swapChain.commandLists[i].put())))) {
+				clearRuntimeD3D12State();
+				return false;
+			}
+			const std::string closeStep = std::format("close initial runtime D3D12 command list {}", i);
+			if (!checkHr(closeStep.c_str(), swapChain.commandLists[i]->Close())) {
+				clearRuntimeD3D12State();
+				return false;
+			}
+		}
+	}
+
+	if (!runtimeD3D12Fence || !runtimeD3D11Fence) {
+		clearRuntimeFenceState();
+
+		winrt::handle sharedFenceHandle;
+		if (!checkHr("create runtime D3D12 shared fence", swapChain.d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(runtimeD3D12Fence.put())))) {
+			clearRuntimeFenceState();
+			return false;
+		}
+		if (!checkHr("create runtime D3D12 shared fence handle", swapChain.d3d12Device->CreateSharedHandle(runtimeD3D12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()))) {
+			clearRuntimeFenceState();
+			return false;
+		}
+		if (!checkHr("open runtime shared fence on D3D11 device", swapChain.d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(runtimeD3D11Fence.put())))) {
+			clearRuntimeFenceState();
+			return false;
+		}
+
+		runtimeFenceValue = 1;
+		runtimeCommandFrameIndex = 0;
+	}
+
+	if (!swapChain.d3d11Device.get() ||
+	    !swapChain.d3d11Context.get() ||
+	    !swapChain.d3d12Device.get() ||
+	    !swapChain.commandQueue.get() ||
+	    !swapChain.commandAllocators[0].get() ||
+	    !swapChain.commandAllocators[1].get() ||
+	    !swapChain.commandLists[0].get() ||
+	    !swapChain.commandLists[1].get() ||
+	    !runtimeD3D11Fence.get() ||
+	    !runtimeD3D12Fence.get()) {
+		std::string missing;
+		auto appendMissing = [&](const char* a_name) {
+			if (!missing.empty())
+				missing += ", ";
+			missing += a_name;
+		};
+
+		if (!swapChain.d3d11Device.get())
+			appendMissing("D3D11 device");
+		if (!swapChain.d3d11Context.get())
+			appendMissing("D3D11 context");
+		if (!swapChain.d3d12Device.get())
+			appendMissing("D3D12 device");
+		if (!swapChain.commandQueue.get())
+			appendMissing("D3D12 command queue");
+		if (!swapChain.commandAllocators[0].get())
+			appendMissing("D3D12 command allocator 0");
+		if (!swapChain.commandAllocators[1].get())
+			appendMissing("D3D12 command allocator 1");
+		if (!swapChain.commandLists[0].get())
+			appendMissing("D3D12 command list 0");
+		if (!swapChain.commandLists[1].get())
+			appendMissing("D3D12 command list 1");
+		if (!runtimeD3D11Fence.get())
+			appendMissing("D3D11 shared fence");
+		if (!runtimeD3D12Fence.get())
+			appendMissing("D3D12 shared fence");
+
+		logFailureOnce("validate runtime interop objects", std::format("missing {}", missing));
+		return false;
+	}
+
+	return true;
 }
 
 bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion)

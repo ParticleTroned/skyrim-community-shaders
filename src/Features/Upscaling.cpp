@@ -632,15 +632,21 @@ namespace
 		a_upscaling.RequestPerfModeRenderTargetRecreate(a_reason, origin);
 	}
 
-	// These targets feed late menu/HUD presentation, so VR render-scale mode
-	// keeps them display-sized and submit-stage treats them as presentation.
-	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 6> kSubmittedVRPresentationTargets{
+	// These targets feed late full-frame menu/HUD presentation, so VR render-scale
+	// mode keeps them display-sized and submit-stage treats them as presentation.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kSubmittedVRPresentationTargets{
 		RE::RENDER_TARGETS::kMENUBG,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
+	};
+
+	// These are fixed-size vanilla menu/fade canvases. They should not be
+	// submitted as full-frame presentation images, but dynamic-resolution scissor
+	// scaling must not shrink their local canvas.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRMenuCanvasTargets{
 		RE::RENDER_TARGETS::kPROJECTEDMENU,
 		RE::RENDER_TARGETS::kHUDMENU,
 		RE::RENDER_TARGETS::kFADERUI,
-		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
-		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
 	};
 
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRRenderScaleExtraFullSizeTargets{
@@ -710,7 +716,28 @@ namespace
 		return false;
 	}
 
-	bool IsCurrentRenderTargetVRPresentationTexture()
+	bool IsVRMenuCanvasRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		auto renderer = globals::game::renderer;
+		if (!a_texture || !renderer)
+			return false;
+
+		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
+		for (const auto target : kVRMenuCanvasTargets) {
+			if (renderTargets[target].texture == a_texture)
+				return true;
+		}
+
+		return false;
+	}
+
+	bool IsVRPresentationOrMenuCanvasRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		return IsVRPresentationRenderTargetTexture(a_texture) ||
+		       IsVRMenuCanvasRenderTargetTexture(a_texture);
+	}
+
+	bool IsCurrentRenderTargetVRPresentationOrMenuCanvasTexture()
 	{
 		auto context = globals::d3d::context;
 		if (!context)
@@ -739,7 +766,7 @@ namespace
 			texture->Release();
 		});
 
-		return IsVRPresentationRenderTargetTexture(texture);
+		return IsVRPresentationOrMenuCanvasRenderTargetTexture(texture);
 	}
 
 	uint32_t ClampPositiveDimension(float a_dimension)
@@ -3621,6 +3648,53 @@ namespace
 			a_passName,
 			a_afterPhase,
 			false);
+	}
+
+	template <class Callback>
+	void RunWithVRVendorFadePresentationGuard(Upscaling& a_upscaling, Callback&& a_callback)
+	{
+		auto viewport = globals::game::graphicsState;
+		auto context = globals::d3d::context;
+		auto state = globals::state;
+		if (!globals::game::isVR || !viewport || !context || !state || !IsVendorUpscalingMethod(a_upscaling.GetRuntimeUpscaleMethod())) {
+			std::forward<Callback>(a_callback)();
+			return;
+		}
+
+		auto& runtimeData = viewport->GetRuntimeData();
+		const auto previousDynamicResolutionLock = runtimeData.dynamicResolutionLock;
+		runtimeData.dynamicResolutionLock = 1;
+		auto restoreDynamicResolutionLock = ScopeExit([&runtimeData, previousDynamicResolutionLock]() {
+			runtimeData.dynamicResolutionLock = previousDynamicResolutionLock;
+		});
+
+		auto width = ClampPositiveDimension(state->screenSize.x);
+		auto height = ClampPositiveDimension(state->screenSize.y);
+		const auto& resolutionPlan = a_upscaling.GetRuntimeResolutionPlan();
+		if (resolutionPlan.finalOutputSize.x > 0.0f && resolutionPlan.finalOutputSize.y > 0.0f) {
+			width = std::max(width, ClampPositiveDimension(resolutionPlan.finalOutputSize.x));
+			height = std::max(height, ClampPositiveDimension(resolutionPlan.finalOutputSize.y));
+		}
+
+		// Fade/menu presentation should expand to the active full-frame output and
+		// stay there for the following presentation passes.
+		D3D11_VIEWPORT fullFrameViewport{};
+		fullFrameViewport.TopLeftX = 0.0f;
+		fullFrameViewport.TopLeftY = 0.0f;
+		fullFrameViewport.Width = static_cast<float>(width);
+		fullFrameViewport.Height = static_cast<float>(height);
+		fullFrameViewport.MinDepth = 0.0f;
+		fullFrameViewport.MaxDepth = 1.0f;
+		context->RSSetViewports(1, &fullFrameViewport);
+
+		D3D11_RECT fullFrameScissor{};
+		fullFrameScissor.left = 0;
+		fullFrameScissor.top = 0;
+		fullFrameScissor.right = static_cast<LONG>(width);
+		fullFrameScissor.bottom = static_cast<LONG>(height);
+		context->RSSetScissorRects(1, &fullFrameScissor);
+
+		std::forward<Callback>(a_callback)();
 	}
 
 	uint64_t BuildVRPresentationDiagnosticSignature(
@@ -11961,10 +12035,13 @@ void Upscaling::PostDisplay()
 
 	const bool vrVendorMenu = globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsVRMenuPresentationContextActive();
 	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
-	if (vrVendorMenu && !submitMenuPresentationContext) {
+	if (vrVendorMenu) {
 		viewport->projectionPosScaleX = 0.0f;
 		viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
+		if (submitMenuPresentationContext)
+			ApplyDynamicResolutionState(viewport);
+		else
+			PrepareFullResolutionPostProcessing();
 	} else if (submitMenuPresentationContext) {
 		ApplyDynamicResolutionState(viewport);
 	}
@@ -14711,14 +14788,25 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		};
 
 		if (upscaling.IsSubmitStageUpscalingActive()) {
-			// In-place/UI-target passes can carry late full-resolution HUD/interactions.
-			// Let vanilla execute these to avoid submitting cropped low-res regions
-			// for prompt frames.
+			// Fixed-size menu canvases cannot safely receive a scene-sized copy.
+			// Other in-place/presentation passes can carry late HUD/interactions;
+			// let vanilla execute those outside known menus to avoid cropped prompts.
 			const bool inPlacePass = outputTexture == sourceTexture;
-			const bool uiRenderTargetPass = IsVRPresentationRenderTargetTexture(sourceTexture) || IsVRPresentationRenderTargetTexture(outputTexture);
+			const bool menuCanvasTargetPass =
+				IsVRMenuCanvasRenderTargetTexture(sourceTexture) ||
+				IsVRMenuCanvasRenderTargetTexture(outputTexture);
+			const bool presentationRenderTargetPass =
+				IsVRPresentationRenderTargetTexture(sourceTexture) ||
+				IsVRPresentationRenderTargetTexture(outputTexture);
 			const bool interactionUiContext = !IsKnownGameMenuContextActive();
-			if ((inPlacePass || uiRenderTargetPass) && interactionUiContext) {
-				logDecision(inPlacePass ? "vanilla-submit-in-place-pass" : "vanilla-submit-ui-target-pass");
+			if (menuCanvasTargetPass ||
+				((inPlacePass || presentationRenderTargetPass) && interactionUiContext)) {
+				const char* decision = "vanilla-submit-ui-target-pass";
+				if (menuCanvasTargetPass)
+					decision = "vanilla-submit-menu-canvas-pass";
+				else if (inPlacePass)
+					decision = "vanilla-submit-in-place-pass";
+				logDecision(decision);
 				releaseRefs();
 				return false;
 			}
@@ -14865,6 +14953,8 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		}
 		context->OMSetRenderTargets(1, &outputRTV, outputDSV);
 
+		if (globals::game::isVR)
+			upscaling.PrepareFullResolutionPostProcessing();
 		logDecision("replaced-vendor-upscale");
 		releaseRefs();
 		if (globals::game::stateUpdateFlags)
@@ -14909,7 +14999,11 @@ void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceSha
 		"Render:before",
 		"Render:after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			RunWithVRVendorFadePresentationGuard(upscaling, [&]() {
+				func(a_imageSpaceShader, a_shape, a_param);
+			});
+		});
 }
 
 void Upscaling::TemporalAAUI_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -14972,7 +15066,11 @@ void Upscaling::HDRTonemapBlendCinematicFade_Dispatch::thunk(void* a_imageSpaceS
 		"Dispatch:before",
 		"Dispatch:after",
 		true,
-		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
+		[&]() {
+			RunWithVRVendorFadePresentationGuard(upscaling, [&]() {
+				func(a_imageSpaceShader, a1, a2, a3);
+			});
+		});
 }
 
 void Upscaling::TemporalAAUI_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
@@ -15070,10 +15168,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		vendorMethodSelected &&
 		globals::game::isVR &&
 		(vrMenuPresentationContextActive || loadingTransitionTailActive);
-	const bool fullResolutionMenuPresentation =
-		vendorMethodSelected &&
-		globals::game::isVR &&
-		(vrMenuPresentationContextActive || loadingTransitionTailActive);
+	const bool fullResolutionMenuPresentation = menuPresentationContext;
 	const bool loadingTransitionMenuPresentation =
 		fullResolutionMenuPresentation &&
 		(IsMainOrLoadingMenuContextActive() || loadingTransitionTailActive);
@@ -15089,6 +15184,18 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		!menuPresentationContext &&
 		!upscaling.IsPerfModeActive() &&
 		!IsSubmitStagePathEnabled();
+	const auto prepareVRMenuProjectionState = [&](bool a_fullResolutionPresentation) {
+		auto viewport = globals::game::graphicsState;
+		if (!viewport)
+			return;
+
+		viewport->projectionPosScaleX = 0.0f;
+		viewport->projectionPosScaleY = 0.0f;
+		if (a_fullResolutionPresentation)
+			upscaling.PrepareFullResolutionPostProcessing();
+		else
+			upscaling.ApplyDynamicResolutionState(viewport);
+	};
 	if (submitPathDisabledForVendor) {
 		if (upscaling.ShouldUseFrameGenerationThisFrame())
 			upscaling.CopySharedD3D12Resources();
@@ -15097,6 +15204,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		if (upscaleMethod == UpscaleMethod::kDLSS)
 			upscaling.ApplySharpening();
+
+		upscaling.PrepareFullResolutionPostProcessing();
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
@@ -15117,17 +15226,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
-		if (fullResolutionMenuPresentation)
-			upscaling.PrepareFullResolutionPostProcessing();
-		else
-			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		prepareVRMenuProjectionState(fullResolutionMenuPresentation);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		if (fullResolutionMenuPresentation)
-			upscaling.PrepareFullResolutionPostProcessing();
-		else
-			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		prepareVRMenuProjectionState(fullResolutionMenuPresentation);
 		return;
 	}
 
@@ -15159,6 +15262,9 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+
+		if (menuPresentationContext)
+			prepareVRMenuProjectionState(false);
 
 		static bool loggedSubmitStageUnderwaterRefreshException = false;
 		try {
@@ -15206,7 +15312,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	const bool restoreDynamicResolution = vendorDynamicResolutionActive;
-	if (restoreDynamicResolution)
+	const bool nativeVendorMenuPresentation = menuPresentationContext;
+	if (nativeVendorMenuPresentation)
+		prepareVRMenuProjectionState(true);
+	else if (restoreDynamicResolution)
 		upscaling.PrepareFullResolutionPostProcessing();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
@@ -15216,6 +15325,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	if (restoreDynamicResolution)
 		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+	else if (nativeVendorMenuPresentation)
+		prepareVRMenuProjectionState(true);
 }
 
 void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)
@@ -15223,8 +15334,8 @@ void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left
 	auto viewport = globals::game::graphicsState;
 	auto& runtimeData = viewport->GetRuntimeData();
 
-	const bool vrPresentationTarget = globals::game::isVR && IsCurrentRenderTargetVRPresentationTexture();
-	if (!runtimeData.dynamicResolutionLock && !vrPresentationTarget) {
+	const bool vrPresentationOrMenuCanvasTarget = globals::game::isVR && IsCurrentRenderTargetVRPresentationOrMenuCanvasTexture();
+	if (!runtimeData.dynamicResolutionLock && !vrPresentationOrMenuCanvasTarget) {
 		a_left = static_cast<int>(a_left * runtimeData.dynamicResolutionWidthRatio);
 		a_right = static_cast<int>(a_right * runtimeData.dynamicResolutionWidthRatio);
 

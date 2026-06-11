@@ -601,6 +601,7 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
+	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	void LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 		const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture = nullptr,
 		const vr::VRTextureBounds_t* a_outputBounds = nullptr, vr::EVRSubmitFlags a_submitFlags = vr::Submit_Default) const;
@@ -703,6 +704,8 @@ public:
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateD3DSettleFrame{ 0 };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
@@ -859,6 +862,8 @@ public:
 
 private:
 	void ClearSubmitStageVendorResumeCooldown();
+	bool IsVRRenderScaleD3DRecreateSettleActive() const;
+	void ClearVRRenderScaleD3DRecreateSettle();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);

@@ -435,6 +435,7 @@ public:
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
+	bool ShouldSkipVRRenderScaleRelatchFrame() const;
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
 	bool ConsumePerfModeBootLatchCreate();
@@ -706,6 +707,8 @@ public:
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateD3DSettleFrame{ 0 };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetResourceSetupFrame{ 0 };
+	std::atomic_bool pendingPerfModeRenderTargetResourceSetupSuperseded{ false };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
@@ -864,6 +867,9 @@ private:
 	void ClearSubmitStageVendorResumeCooldown();
 	bool IsVRRenderScaleD3DRecreateSettleActive() const;
 	void ClearVRRenderScaleD3DRecreateSettle();
+	bool IsVRRenderScalePostD3DResourceSetupPending() const;
+	void ClearVRRenderScalePostD3DResourceSetup();
+	bool ShouldQuiesceVRSubmitStageVendorDispatch() const;
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);

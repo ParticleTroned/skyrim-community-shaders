@@ -1,9 +1,24 @@
 #include "Game.h"
 
+#include "Globals.h"
 #include "State.h"
 
 namespace Util
 {
+	namespace
+	{
+		RE::BSImagespaceShaderISTemporalAA* GetTemporalAAShader()
+		{
+			auto* imageSpaceManager = globals::game::imageSpaceManager ? globals::game::imageSpaceManager : RE::ImageSpaceManager::GetSingleton();
+			if (!imageSpaceManager)
+				return nullptr;
+
+			return REL::Module::IsVR() ?
+				imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA :
+				imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA;
+		}
+	}
+
 	void StoreTransform3x4NoScale(DirectX::XMFLOAT3X4& Dest, const RE::NiTransform& Source)
 	{
 		//
@@ -134,8 +149,20 @@ namespace Util
 
 	bool GetTemporal()
 	{
-		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		return (!REL::Module::IsVR() ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled : imageSpaceManager->GetVRRuntimeData().BSImagespaceShaderISTemporalAA->taaEnabled);
+		auto* taaShader = GetTemporalAAShader();
+		return taaShader && taaShader->taaEnabled;
+	}
+
+	void SetTemporal(bool enabled)
+	{
+		if (auto* taaShader = GetTemporalAAShader())
+			taaShader->taaEnabled = enabled;
+	}
+
+	void DisableVanillaTAA()
+	{
+		if (auto* setting = RE::GetINISetting("bUseTAA:Display"))
+			setting->data.b = false;
 	}
 
 	float GetVerticalFOVRad()

@@ -76,14 +76,13 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 
 namespace
 {
-	// Keep transition diagnostics behind one switch. They stay at info while the
-	// VR transition artifact is being captured; change VR_TRANSITION_DIAG_LOG_LEVEL
-	// later to move all callsites together.
+	// Keep transition diagnostics behind one switch. They default to debug so
+	// normal info logs stay free of render-scale/menu transition trace noise.
 #ifndef VR_TRANSITION_DIAG_ENABLED
 #define VR_TRANSITION_DIAG_ENABLED 1
 #endif
 #ifndef VR_TRANSITION_DIAG_LOG_LEVEL
-#define VR_TRANSITION_DIAG_LOG_LEVEL info
+#define VR_TRANSITION_DIAG_LOG_LEVEL debug
 #endif
 #if VR_TRANSITION_DIAG_ENABLED
 #define VR_TRANSITION_DIAG_LOG(...)                                      \
@@ -585,7 +584,7 @@ namespace
 
 		a_upscaling.perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 		if (!a_upscaling.delayedVRPerfModeBootLatchForDLSS.exchange(true, std::memory_order_acq_rel)) {
-			logger::info("[VRRenderScale] Delaying VR render-scale boot latch until Streamline DLSS availability is known.");
+			logger::debug("[VRRenderScale] Delaying VR render-scale boot latch until Streamline DLSS availability is known.");
 		}
 		return true;
 	}
@@ -595,7 +594,7 @@ namespace
 		if (!a_upscaling.delayedVRPerfModeBootLatchForDLSS.exchange(false, std::memory_order_acq_rel))
 			return;
 
-		logger::info(
+		logger::debug(
 			"[VRRenderScale] Streamline DLSS availability resolved after deferred VR render-scale boot latch (DLSS {}).",
 			Upscaling::streamline.featureDLSS ? "available" : "unavailable");
 		auto origin = LoadVRUpscalingTransitionOrigin(a_upscaling.pendingVRUpscalingTransitionOrigin);
@@ -2149,7 +2148,7 @@ namespace
 		if (queuedFrame == 0)
 			return;
 
-		logger::info(
+		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync cancelled before apply ({}): queuedFrame={}, frame={}.",
 			a_reason && a_reason[0] != '\0' ? a_reason : "unspecified reason",
 			queuedFrame,
@@ -2162,7 +2161,7 @@ namespace
 		if (queuedFrame == 0)
 			return;
 
-		logger::info(
+		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync still pending ({}): queuedFrame={}, frame={}.",
 			a_reason && a_reason[0] != '\0' ? a_reason : "unspecified reason",
 			queuedFrame,
@@ -2183,7 +2182,7 @@ namespace
 			return;
 
 		a_upscaling.pendingVRFpsStabilizerSyncLastWaitLogFrame.store(logFrame, std::memory_order_release);
-		logger::info(
+		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync waiting for {}: queuedFrame={}, frame={}, loadingMenu={}, inWorld={}.",
 			a_reason && a_reason[0] != '\0' ? a_reason : "world-ready state",
 			queuedFrame,
@@ -3546,7 +3545,7 @@ namespace
 			if (!HasMeaningfulDiagnosticView(a_infos[i]))
 				continue;
 
-			logger::info(
+			logger::debug(
 				"[VRMenuDiag] {} {} frame={} {}{} {}",
 				DiagnosticText(a_passName, "unknown"),
 				DiagnosticText(a_phase, "unknown"),
@@ -3558,7 +3557,7 @@ namespace
 		}
 
 		if (!loggedAny) {
-			logger::info(
+			logger::debug(
 				"[VRMenuDiag] {} {} frame={} {} none",
 				DiagnosticText(a_passName, "unknown"),
 				DiagnosticText(a_phase, "unknown"),
@@ -3783,7 +3782,7 @@ namespace
 		if (repeated == 0)
 			return;
 
-		logger::info(
+		logger::debug(
 			"[VRMenuDiag] {} {} {}: repeated {} additional times over {} frames with unchanged D3D/menu state (signature=0x{:X}, lastFrame={})",
 			a_history.passName.empty() ? "unknown" : a_history.passName,
 			a_history.phase.empty() ? "unknown" : a_history.phase,
@@ -3905,7 +3904,7 @@ namespace
 			const bool frameThreshold =
 				ElapsedFrames(g_vrPresentationKnownTargets.lastSummaryFrame, a_frame) >= kVRPresentationRepeatSummaryFrames;
 			if (countThreshold || frameThreshold) {
-				logger::info(
+				logger::debug(
 					"[VRMenuDiag] knownTargets unchanged: repeated {} additional requested dumps over {} frames (signature=0x{:X}, caller={} {}, lastFrame={})",
 					g_vrPresentationKnownTargets.repeatCount - g_vrPresentationKnownTargets.lastSummaryRepeatCount,
 					ElapsedFrames(g_vrPresentationKnownTargets.firstFrame, g_vrPresentationKnownTargets.lastFrame),
@@ -3921,7 +3920,7 @@ namespace
 
 		if (g_vrPresentationKnownTargets.initialized &&
 			g_vrPresentationKnownTargets.repeatCount > g_vrPresentationKnownTargets.lastSummaryRepeatCount) {
-			logger::info(
+			logger::debug(
 				"[VRMenuDiag] knownTargets changed after {} requested dumps over {} frames (previousSignature=0x{:X}, caller={} {}, frame={})",
 				g_vrPresentationKnownTargets.repeatCount,
 				ElapsedFrames(g_vrPresentationKnownTargets.firstFrame, g_vrPresentationKnownTargets.lastFrame),
@@ -3939,7 +3938,7 @@ namespace
 		g_vrPresentationKnownTargets.lastSummaryRepeatCount = 1;
 		g_vrPresentationKnownTargets.lastSummaryFrame = a_frame;
 
-		logger::info(
+		logger::debug(
 			"[VRMenuDiag] {} {} frame={} knownTargets snapshot signature=0x{:X}",
 			DiagnosticText(a_passName, "unknown"),
 			DiagnosticText(a_phase, "unknown"),
@@ -3954,7 +3953,7 @@ namespace
 
 			const auto& renderTarget = renderTargets[targetIndex];
 
-			logger::info(
+			logger::debug(
 				"[VRMenuDiag] {} {} frame={} knownTarget={} reason={} usesFullSize={} submittedPresentation={} texture={} copy={} srv=0x{:X} srvCopy=0x{:X} rtv=0x{:X}",
 				DiagnosticText(a_passName, "unknown"),
 				DiagnosticText(a_phase, "unknown"),
@@ -3986,7 +3985,7 @@ namespace
 
 		const char* role = GetVRPresentationDiagnosticRole(a_slot);
 		const std::string verdict = BuildVRPresentationDiagnosticVerdict(a_slot, snapshot);
-		logger::info(
+		logger::debug(
 			"[VRMenuDiag] {} {} frame={} role={} verdict={} signature=0x{:X} req={} runtime={} quality={} owner={} target={} screen={}x{} engine={}x{} final={}x{} resScale={:.4f},{:.4f} drRuntime={:.4f},{:.4f} drPrev={:.4f},{:.4f} drLock={} knownMenu={} gameMenu={} csMenu={} mainOrLoading={} loading={} saveLoad={} vrMenuPresentation={} submitMenuPresentation={} renderScaleActive={} renderScaleRequested={} perfModeActive={} submitStageActive={} submitDeviceLost={} presentationUpscaling={} currentRTPresentation={} viewports={} scissors={}",
 			DiagnosticText(a_passName, "unknown"),
 			DiagnosticText(a_phase, "unknown"),
@@ -4030,7 +4029,7 @@ namespace
 			snapshot.viewportCount,
 			snapshot.scissorCount);
 
-		logger::info(
+		logger::debug(
 			"[VRMenuDiag] {} {} frame={} viewport0=({:.1f},{:.1f}) {:.1f}x{:.1f} viewport1=({:.1f},{:.1f}) {:.1f}x{:.1f} scissor0=({},{})->({},{}) scissor1=({},{})->({},{})",
 			DiagnosticText(a_passName, "unknown"),
 			DiagnosticText(a_phase, "unknown"),
@@ -4055,7 +4054,7 @@ namespace
 		LogVRPresentationDiagnosticViews(a_passName, a_phase, snapshot.frame, "PS t", snapshot.psSRVs);
 		LogVRPresentationDiagnosticViews(a_passName, a_phase, snapshot.frame, "CS t", snapshot.csSRVs);
 		LogVRPresentationDiagnosticViews(a_passName, a_phase, snapshot.frame, "RTV", snapshot.rtvs);
-		logger::info(
+		logger::debug(
 			"[VRMenuDiag] {} {} frame={} DSV {}",
 			DiagnosticText(a_passName, "unknown"),
 			DiagnosticText(a_phase, "unknown"),
@@ -5724,7 +5723,7 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_relaxed);
 	eventSource->AddEventSink(&singleton);
 	registered.store(true, std::memory_order_release);
-	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for VR upscaling menu/load transitions");
+	logger::debug("[Upscaling] Registered MenuOpenCloseEventHandler for VR upscaling menu/load transitions");
 	return true;
 }
 
@@ -6351,7 +6350,7 @@ void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 	const uint32_t frame = std::max(a_frame, 1u);
 	pendingVRFpsStabilizerSyncLastWaitLogFrame.store(0, std::memory_order_release);
 	pendingVRFpsStabilizerSyncFrame.store(frame, std::memory_order_release);
-	logger::info("[Upscaling] VR FPS Stabilizer Sync queued after save-load menu close at frame {}.", frame);
+	logger::debug("[Upscaling] VR FPS Stabilizer Sync queued after save-load menu close at frame {}.", frame);
 }
 
 void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
@@ -6404,7 +6403,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	ClearPendingVRFpsStabilizerLoadSync(*this);
 
 	if (methodMatches && qualityMatches && renderScaleMatches && dlssPresetMatches) {
-		logger::info(
+		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync: {} profile already matched after save-load (queuedFrame={}, appliedFrame={}, method={}, quality={}, dlssProfile={}, renderScale={}).",
 			profileName,
 			queuedFrame,
@@ -6416,7 +6415,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		return;
 	}
 
-	logger::info(
+	logger::debug(
 		"[Upscaling] VR FPS Stabilizer Sync applying {} profile from {}: queuedFrame={}, appliedFrame={}, method {} -> {}, quality {} -> {}, dlssProfile {} -> {}, renderScale {} -> {}.",
 		profileName,
 		profiles.path.string(),
@@ -6780,7 +6779,7 @@ void Upscaling::RequestPostLoadRuntimeReset()
 		return;
 
 	postLoadRuntimeResetPending.store(true, std::memory_order_release);
-	logger::info("[Upscaling] Armed VR post-load runtime reset");
+	logger::debug("[Upscaling] Armed VR post-load runtime reset");
 }
 
 void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpscalingTransitionOrigin a_origin)
@@ -6823,9 +6822,9 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 		return;
 
 	if (a_reason && *a_reason) {
-		logger::info("[VRRenderScale] Queued render-target relatch: {}", a_reason);
+		logger::debug("[VRRenderScale] Queued render-target relatch: {}", a_reason);
 	} else {
-		logger::info("[VRRenderScale] Queued render-target relatch");
+		logger::debug("[VRRenderScale] Queued render-target relatch");
 	}
 }
 
@@ -6873,7 +6872,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			const uint32_t currentFrame = std::max(state->frameCount, 1u);
 			const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
 			const uint32_t lastCompletedWorldFrame = state->lastCompletedWorldRenderFrame;
-			logger::info("[VRRenderScale] Render-target relatch waiting for post-load world-render settle.");
+			logger::debug("[VRRenderScale] Render-target relatch waiting for post-load world-render settle.");
 			VR_TRANSITION_DIAG_LOG(
 				"[VRTransition] Relatch deferred: waiting for post-load world-render settle (frame={}, closeFrame={}, lastCompletedWorldFrame={}, retryFrames={})",
 				currentFrame,
@@ -6932,7 +6931,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		lastRelatchDiagnosticMethod = relatchUpscaleMethod;
 	}
 
-	logger::info(
+	logger::debug(
 		"[VRRenderScale] Applying render-target relatch{}{}",
 		a_caller && *a_caller ? " from " : "",
 		a_caller && *a_caller ? a_caller : "");
@@ -6979,7 +6978,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchTargetDisplaySize);
 		if (renderTargetsAlreadySized) {
 			state->screenSize = relatchTargetEngineSize;
-			logger::info(
+			logger::debug(
 				"[VRRenderScale] Skipped D3D render-target recreate; existing render targets already match {}x{} -> {}x{}.",
 				ClampPositiveDimension(relatchTargetEngineSize.x),
 				ClampPositiveDimension(relatchTargetEngineSize.y),
@@ -7060,7 +7059,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		std::memory_order_release);
 	clearRelatchDelay();
 	clearRelatchRetryDiagnostics();
-	logger::info("[VRRenderScale] Applied render-target relatch");
+	logger::debug("[VRRenderScale] Applied render-target relatch");
 	LogVRTransitionDiagnostics(*this, "applied render-target relatch", true);
 	return true;
 }
@@ -7436,7 +7435,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	if (!renderScalePostLoadResetRelevant)
 		return true;
 
-	logger::info("[Upscaling] Applying VR post-load runtime reset for method {}",
+	logger::debug("[Upscaling] Applying VR post-load runtime reset for method {}",
 		magic_enum::enum_name(a_upscaleMethod));
 
 	try {
@@ -7458,7 +7457,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		return false;
 	}
 
-	logger::info("[Upscaling] Applied VR post-load runtime reset");
+	logger::debug("[Upscaling] Applied VR post-load runtime reset");
 	return true;
 }
 
@@ -10288,7 +10287,7 @@ void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		vrIntermediateTransparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_Transparency_" + suffix).c_str());
 	}
 
-	logger::info("[Upscaling] Created VR intermediate textures: per-eye in {}x{}, out {}x{}",
+	logger::debug("[Upscaling] Created VR intermediate textures: per-eye in {}x{}, out {}x{}",
 		inWidth, inHeight, outWidth, outHeight);
 }
 
@@ -10373,7 +10372,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			cachedVRIntermediateTextures.colorOut[1]->desc.Format == expectedColorOutFormat &&
 			(!requiresColorOutRTV || (cachedVRIntermediateTextures.colorOut[0]->rtv && cachedVRIntermediateTextures.colorOut[1]->rtv));
 		if (MatchesVRIntermediateTextureCache(cachedVRIntermediateTextures, inWidth, inHeight, outWidth, outHeight) && cacheMatchesOutputFormat) {
-			logger::info("[Upscaling] Reusing cached VR intermediates: per-eye in {}x{}, out {}x{}",
+			logger::debug("[Upscaling] Reusing cached VR intermediates: per-eye in {}x{}, out {}x{}",
 				inWidth, inHeight, outWidth, outHeight);
 
 			for (uint32_t i = 0; i < 2; ++i) {
@@ -10423,7 +10422,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			cachedVRIntermediateTextures.outHeight = currentOutHeight;
 		}
 
-		logger::info("[Upscaling] (Re)creating VR intermediates: per-eye in {}x{}, out {}x{}",
+		logger::debug("[Upscaling] (Re)creating VR intermediates: per-eye in {}x{}, out {}x{}",
 			inWidth, inHeight, outWidth, outHeight);
 		CreateVRIntermediateTextures(inWidth, inHeight, outWidth, outHeight, colorSrc, mvecSrc, reactiveSrc, transparencySrc);
 	}
@@ -10470,7 +10469,7 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 	if (!needsRecreate)
 		return true;
 
-	logger::info("[VRRenderScale] (Re)creating presentation textures: per-eye in {}x{}, out {}x{}",
+	logger::debug("[VRRenderScale] (Re)creating presentation textures: per-eye in {}x{}, out {}x{}",
 		inWidth, inHeight, outWidth, outHeight);
 
 	for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -12054,6 +12053,180 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 	return true;
 }
 
+namespace
+{
+	struct VRSubmitDiagnosticHistory
+	{
+		bool initialized = false;
+		uint64_t key = 0;
+		uint64_t signature = 0;
+		std::string path;
+		vr::EVREye eye = vr::Eye_Left;
+		uint32_t submitFlags = 0;
+		uint32_t firstFrame = 0;
+		uint32_t lastFrame = 0;
+		uint32_t repeatCount = 0;
+		uint32_t lastSummaryRepeatCount = 0;
+		uint32_t lastSummaryFrame = 0;
+		VRTransitionDiagnosticSnapshot snapshot{};
+	};
+
+	constexpr uint32_t kVRSubmitRepeatSummaryCount = 900u;
+	constexpr uint32_t kVRSubmitRepeatSummaryFrames = 1800u;
+	constexpr uint32_t kVRSubmitSignatureReentryFrames = 120u;
+	constexpr size_t kVRSubmitDiagnosticHistoryCapacity = 24u;
+	std::array<VRSubmitDiagnosticHistory, kVRSubmitDiagnosticHistoryCapacity> g_vrSubmitDiagnostics{};
+
+	uint64_t MixVRSubmitTextureDiagnosticSignature(uint64_t a_signature, const VRTextureDiagnosticInfo& a_info)
+	{
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.valid ? 1u : 0u);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.type);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.colorSpace);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.width);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.height);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.format);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.arraySize);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.samples);
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, a_info.presentationTarget ? 1u : 0u);
+		return a_signature;
+	}
+
+	uint64_t MixVRSubmitBoundsDiagnosticSignature(uint64_t a_signature, const VRBoundsDiagnosticInfo& a_info)
+	{
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, QuantizeDiagnosticFloat(a_info.uMin));
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, QuantizeDiagnosticFloat(a_info.vMin));
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, QuantizeDiagnosticFloat(a_info.uMax));
+		a_signature = MixVRTransitionDiagnosticValue(a_signature, QuantizeDiagnosticFloat(a_info.vMax));
+		return a_signature;
+	}
+
+	uint64_t BuildVRSubmitDiagnosticSignature(
+		const char* a_path,
+		vr::EVREye a_eye,
+		vr::EVRSubmitFlags a_submitFlags,
+		const VRTransitionDiagnosticSnapshot& a_snapshot,
+		const VRTextureDiagnosticInfo& a_inputInfo,
+		const VRBoundsDiagnosticInfo& a_inputBounds,
+		const VRTextureDiagnosticInfo& a_outputInfo,
+		const VRBoundsDiagnosticInfo& a_outputBounds)
+	{
+		uint64_t signature = HashDiagnosticText(DiagnosticText(a_path, "unknown"));
+		signature = MixVRTransitionDiagnosticValue(signature, static_cast<uint32_t>(a_eye));
+		signature = MixVRTransitionDiagnosticValue(signature, static_cast<uint32_t>(a_submitFlags));
+		signature = MixVRTransitionDiagnosticValue(signature, GetVRTransitionRepeatSignature(a_snapshot));
+		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.flags);
+		signature = MixVRSubmitTextureDiagnosticSignature(signature, a_inputInfo);
+		signature = MixVRSubmitBoundsDiagnosticSignature(signature, a_inputBounds);
+		signature = MixVRSubmitTextureDiagnosticSignature(signature, a_outputInfo);
+		signature = MixVRSubmitBoundsDiagnosticSignature(signature, a_outputBounds);
+		return signature;
+	}
+
+	void LogVRSubmitRepeatSummary(VRSubmitDiagnosticHistory& a_history, bool a_final)
+	{
+		if (!a_history.initialized || a_history.repeatCount <= a_history.lastSummaryRepeatCount)
+			return;
+
+		const uint32_t repeated = a_history.repeatCount - a_history.lastSummaryRepeatCount;
+		if (repeated == 0)
+			return;
+
+		const auto& snapshot = a_history.snapshot;
+		VR_TRANSITION_DIAG_LOG(
+			"[VRSubmit] {} {} {}: repeated {} additional times over {} frames with unchanged submit path (signature=0x{:X}, lastFrame={}, flags=0x{:X}, req={}, runtime={}, quality={}, renderScaleRelevant={}, pendingRelatch={}, relatchAge={}, relatchDelay={}, closeAge={}, vendorPending={}, hmdDefer={}, projectedDefer={}, submitDeviceLost={})",
+			a_history.path.empty() ? "unknown" : a_history.path.c_str(),
+			VREyeName(a_history.eye),
+			a_final ? "summary" : "still repeating",
+			repeated,
+			ElapsedFrames(a_history.firstFrame, a_history.lastFrame),
+			a_history.signature,
+			a_history.lastFrame,
+			a_history.submitFlags,
+			magic_enum::enum_name(snapshot.requestedMethod),
+			magic_enum::enum_name(snapshot.runtimeMethod),
+			snapshot.qualityMode,
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleRelevant)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::PendingRelatch)),
+			snapshot.relatchAge,
+			snapshot.relatchDelay,
+			snapshot.closeAge,
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::VendorResetPending)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::HMDMaskDeferred)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::ProjectedMaskDeferred)),
+			BoolText(HasDiagnosticFlag(snapshot.flags, VRTransitionDiagnosticFlag::SubmitStageDeviceLost)));
+		a_history.lastSummaryRepeatCount = a_history.repeatCount;
+		a_history.lastSummaryFrame = a_history.lastFrame;
+	}
+
+	VRSubmitDiagnosticHistory& GetVRSubmitDiagnosticHistory(uint64_t a_signature, uint32_t a_frame)
+	{
+		VRSubmitDiagnosticHistory* emptyHistory = nullptr;
+		VRSubmitDiagnosticHistory* oldestHistory = nullptr;
+		for (auto& history : g_vrSubmitDiagnostics) {
+			if (history.initialized && history.key == a_signature)
+				return history;
+			if (!history.initialized && !emptyHistory)
+				emptyHistory = &history;
+			if (history.initialized && (!oldestHistory || history.lastFrame < oldestHistory->lastFrame))
+				oldestHistory = &history;
+		}
+
+		auto* selectedHistory = emptyHistory ? emptyHistory : oldestHistory;
+		if (!selectedHistory)
+			selectedHistory = &g_vrSubmitDiagnostics.front();
+
+		if (selectedHistory->initialized)
+			LogVRSubmitRepeatSummary(*selectedHistory, true);
+
+		*selectedHistory = {};
+		selectedHistory->key = a_signature;
+		selectedHistory->firstFrame = std::max(a_frame, 1u);
+		selectedHistory->lastFrame = a_frame;
+		return *selectedHistory;
+	}
+
+	bool ShouldLogVRSubmitSnapshot(
+		const char* a_path,
+		vr::EVREye a_eye,
+		vr::EVRSubmitFlags a_submitFlags,
+		const VRTransitionDiagnosticSnapshot& a_snapshot,
+		uint64_t a_signature)
+	{
+		auto& history = GetVRSubmitDiagnosticHistory(a_signature, a_snapshot.frame);
+		const bool reenteredAfterGap =
+			history.initialized &&
+			history.lastFrame != 0 &&
+			ElapsedFrames(history.lastFrame, a_snapshot.frame) >= kVRSubmitSignatureReentryFrames;
+		if (!history.initialized || reenteredAfterGap) {
+			LogVRSubmitRepeatSummary(history, true);
+			history.initialized = true;
+			history.signature = a_signature;
+			history.path = DiagnosticText(a_path, "unknown");
+			history.eye = a_eye;
+			history.submitFlags = static_cast<uint32_t>(a_submitFlags);
+			history.firstFrame = std::max(a_snapshot.frame, 1u);
+			history.lastFrame = a_snapshot.frame;
+			history.repeatCount = 1;
+			history.lastSummaryRepeatCount = 1;
+			history.lastSummaryFrame = a_snapshot.frame;
+			history.snapshot = a_snapshot;
+			return true;
+		}
+
+		++history.repeatCount;
+		history.lastFrame = a_snapshot.frame;
+		history.snapshot = a_snapshot;
+		const bool countThreshold =
+			history.repeatCount - history.lastSummaryRepeatCount >= kVRSubmitRepeatSummaryCount;
+		const bool frameThreshold =
+			ElapsedFrames(history.lastSummaryFrame, a_snapshot.frame) >= kVRSubmitRepeatSummaryFrames;
+		if (countThreshold || frameThreshold)
+			LogVRSubmitRepeatSummary(history, false);
+
+		return false;
+	}
+}
+
 void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 	const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture, const vr::VRTextureBounds_t* a_outputBounds, vr::EVRSubmitFlags a_submitFlags) const
 {
@@ -12065,6 +12238,17 @@ void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, 
 	const auto outputInfo = BuildVRTextureDiagnosticInfo(a_outputTexture);
 	const auto inputBounds = BuildVRBoundsDiagnosticInfo(a_inputBounds);
 	const auto outputBounds = BuildVRBoundsDiagnosticInfo(a_outputBounds);
+	const uint64_t signature = BuildVRSubmitDiagnosticSignature(
+		a_path,
+		a_eye,
+		a_submitFlags,
+		snapshot,
+		inputInfo,
+		inputBounds,
+		outputInfo,
+		outputBounds);
+	if (!ShouldLogVRSubmitSnapshot(a_path, a_eye, a_submitFlags, snapshot, signature))
+		return;
 
 	VR_TRANSITION_DIAG_LOG(
 		"[VRSubmit] {} frame={} eye={} flags=0x{:X} closeAge={} req={} runtime={} quality={} renderScaleRelevant={} pendingRelatch={} vendorPending={} hmdDefer={} projectedDefer={} input=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} inputPresentationRT={} inputBounds=({:.4f},{:.4f})->({:.4f},{:.4f}) output=0x{:X} type={} colorSpace={} directX={} {}x{} fmt={} array={} samples={} outputPresentationRT={} outputBounds=({:.4f},{:.4f})->({:.4f},{:.4f})",
@@ -12335,7 +12519,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				ClearSubmitStageVendorResumeCooldown();
 				transitionPresentationCooldown = false;
 				presentationOnly = computePresentationOnly();
-				logger::info(
+				logger::debug(
 					"[VRRenderScale] Cleared submit-stage vendor cooldown early after {} stable frames.",
 					stableFrames);
 				VR_TRANSITION_DIAG_LOG(

@@ -2163,10 +2163,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3x3 tbnTr = ReconstructTBN(input.WorldPosition.xyz, worldNormal, screenUV);
 #	else
 	float3 worldNormal = SafeNormalize3(mul(tbn, normal.xyz), float3(0.0, 0.0, 1.0));
-#		if defined(TREE_ANIM)
+#		if defined(TREE_ANIM) && !defined(VR)
 	float3 viewNormal = SafeNormalize3(FrameBuffer::WorldToView(worldNormal, false, eyeIndex), float3(0.0, 0.0, 1.0));
 	viewNormal = float3(viewNormal.xy, -abs(viewNormal.z));
 	worldNormal = SafeNormalize3(FrameBuffer::ViewToWorld(viewNormal, false, eyeIndex), worldNormal);
+#		elif defined(TREE_ANIM)
+	// VR must keep tree normals eye/view independent. If foliage is too dark,
+	// tune foliage SSS in world/light space instead, e.g. controlled -NdotL/abs(NdotL).
 #		endif
 
 #		if defined(SPARKLE)

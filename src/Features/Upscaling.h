@@ -133,6 +133,7 @@ public:
 		bool aaVrsPerformanceMode = false;
 		uint aaVrsPerformanceAnisotropy = 0;  // 0=auto, 1=2x1, 2=1x2
 		bool aaVrsPassAware = true;
+		bool aaVrsProtectWater = true;
 		bool aaVrsSafeOpaqueOnly = false;
 		uint aaVrsMaxRate = 0;  // 0=2x2, 1=4x4
 		bool aaVrsPassTelemetry = false;

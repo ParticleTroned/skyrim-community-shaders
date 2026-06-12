@@ -1385,6 +1385,8 @@ namespace
 		}
 
 		const bool vrsRequested = a_upscaling.loaded && upscalingSettings.aaVrs && REL::Module::IsVR();
+		const bool deferredPSApplied = a_upscaling.IsDeferredCompositePSRuntimeEnabled();
+		const bool deferredVrsApplied = a_upscaling.IsAAVRSDeferredCompositeRuntimeEnabled();
 		{
 			Util::BlueFrameStyleWrapper deferredPSStyle(true);
 			auto deferredPSGuard = Util::DisableGuard(!vrsRequested);
@@ -1393,8 +1395,16 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Default off. Off keeps the existing deferred composite compute shader path.");
 			ImGui::TextUnformatted("On splits deferred composite metadata into compute and final scene color into a fullscreen pixel shader.");
-			ImGui::TextUnformatted("This is VR/VRS-gated while experimental.");
+			ImGui::TextUnformatted("This is VR/VRS-gated while experimental and applies on the next game load or restart.");
 		}
+		ImGui::TextDisabled(
+			"Deferred Composite PS runtime: %s",
+			deferredPSApplied ? "On" : "Off");
+		const bool deferredPSPending = a_upscaling.IsDeferredCompositePSPending();
+		if (deferredPSPending)
+			ImGui::TextDisabled(
+				"Deferred Composite PS pending: %s on next load/restart.",
+				upscalingSettings.experimentalDeferredCompositePS ? "On" : "Off");
 
 		if (!vrsRequested || !upscalingSettings.experimentalDeferredCompositePS)
 			upscalingSettings.aaVrsDeferredComposite = false;
@@ -1406,7 +1416,16 @@ namespace
 			ImGui::TextUnformatted("Allows VRS on the experimental deferred composite color pixel shader only.");
 			ImGui::TextUnformatted("Normals, TAA mask, and motion-vector metadata stay full-rate in the compute path.");
 			ImGui::TextUnformatted("When off, the color pixel shader is forced to 1x1 even if VRS is active.");
+			ImGui::TextUnformatted("This applies on the next game load or restart with the deferred composite PS path.");
 		}
+		ImGui::TextDisabled(
+			"Deferred Composite Color VRS runtime: %s",
+			deferredVrsApplied ? "On" : "Off");
+		const bool deferredVrsPending = a_upscaling.IsAAVRSDeferredCompositePending();
+		if (deferredVrsPending)
+			ImGui::TextDisabled(
+				"Deferred Composite Color VRS pending: %s on next load/restart.",
+				upscalingSettings.aaVrsDeferredComposite ? "On" : "Off");
 	}
 
 	void DrawFoveationSettings()

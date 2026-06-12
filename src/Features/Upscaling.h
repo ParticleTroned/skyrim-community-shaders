@@ -478,6 +478,10 @@ public:
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
+	bool IsDeferredCompositePSRuntimeEnabled() const;
+	bool IsDeferredCompositePSPending() const;
+	bool IsAAVRSDeferredCompositeRuntimeEnabled() const;
+	bool IsAAVRSDeferredCompositePending() const;
 	bool IsDeferredCompositePSActive() const;
 	bool ShouldUseAAVRSForDeferredComposite() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
@@ -713,6 +717,8 @@ public:
 	uint32_t peripheryTAAHistoryReadIndex = 0;
 	bool peripheryTAAHistoryValid = false;
 	AAVRSController aaVrsController;
+	bool deferredCompositePSRuntimeEnabled = false;
+	bool aaVrsDeferredCompositeRuntimeEnabled = false;
 	bool aaVrsRuntimeActive = false;
 	bool aaVrsRuntimeContentAware = false;
 	bool aaVrsTelemetryLoggedActive = false;
@@ -944,6 +950,9 @@ public:
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
 
 private:
+	bool IsDeferredCompositePSRequested() const;
+	bool IsAAVRSDeferredCompositeRequested() const;
+	void ApplyDeferredCompositeVRSRuntimeSettings(const char* a_reason = nullptr);
 	void ClearSubmitStageVendorResumeCooldown();
 	bool IsVRRenderScaleD3DRecreateSettleActive() const;
 	void ClearVRRenderScaleD3DRecreateSettle();

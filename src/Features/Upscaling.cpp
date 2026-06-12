@@ -727,9 +727,10 @@ namespace
 		a_upscaling.RequestPerfModeRenderTargetRecreate(a_reason, origin);
 	}
 
-	// These targets feed late menu/HUD presentation, so VR render-scale mode
-	// keeps them display-sized and submit-stage treats them as presentation.
-	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 6> kSubmittedVRPresentationTargets{
+	// These targets feed late menu/HUD/fade work and must stay display-sized
+	// under VR render-scale mode. They are not final eye images and must not be
+	// treated as submit-stage presentation sources.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 6> kVRProtectedFullSizeTargets{
 		RE::RENDER_TARGETS::kMENUBG,
 		RE::RENDER_TARGETS::kPROJECTEDMENU,
 		RE::RENDER_TARGETS::kHUDMENU,
@@ -737,6 +738,10 @@ namespace
 		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
 		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
 	};
+
+	// No engine-managed render target is currently a submit-stage eye source.
+	// Submit-stage should only operate on the runtime-submitted eye textures.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 0> kSubmittedVRPresentationTargets{};
 
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRRenderScaleExtraFullSizeTargets{
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
@@ -766,6 +771,14 @@ namespace
 			       a_target) != kSubmittedVRPresentationTargets.end();
 	}
 
+	bool IsVRProtectedFullSizeTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		return std::find(
+			       kVRProtectedFullSizeTargets.begin(),
+			       kVRProtectedFullSizeTargets.end(),
+			       a_target) != kVRProtectedFullSizeTargets.end();
+	}
+
 	bool IsVRRenderScaleExtraFullSizeTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
 		return std::find(
@@ -782,9 +795,9 @@ namespace
 			       a_target) != kVRRenderScaleEngineSizedTargets.end();
 	}
 
-	bool UsesFullSizeVRPresentationTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	bool UsesFullSizeVRProtectedTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
-		if (IsSubmittedVRPresentationTarget(a_target))
+		if (IsVRProtectedFullSizeTarget(a_target))
 			return true;
 
 		return IsVRRenderScaleExtraFullSizeTarget(a_target);
@@ -805,7 +818,22 @@ namespace
 		return false;
 	}
 
-	bool IsCurrentRenderTargetVRPresentationTexture()
+	bool IsVRProtectedFullSizeRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		auto renderer = globals::game::renderer;
+		if (!a_texture || !renderer)
+			return false;
+
+		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
+		for (const auto target : kVRProtectedFullSizeTargets) {
+			if (renderTargets[target].texture == a_texture || renderTargets[target].textureCopy == a_texture)
+				return true;
+		}
+
+		return false;
+	}
+
+	bool IsCurrentRenderTargetVRProtectedFullSizeTexture()
 	{
 		auto context = globals::d3d::context;
 		if (!context)
@@ -834,7 +862,7 @@ namespace
 			texture->Release();
 		});
 
-		return IsVRPresentationRenderTargetTexture(texture);
+		return IsVRProtectedFullSizeRenderTargetTexture(texture);
 	}
 
 	uint32_t ClampPositiveDimension(float a_dimension)
@@ -985,7 +1013,7 @@ namespace
 
 		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
 		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
-		for (const auto target : kSubmittedVRPresentationTargets) {
+		for (const auto target : kVRProtectedFullSizeTargets) {
 			if (!ExistingRenderTargetTextureSizeMatches(target, displayWidth, displayHeight))
 				return false;
 		}
@@ -4112,7 +4140,7 @@ namespace
 				a_frame,
 				magic_enum::enum_name(entry.target),
 				entry.reason,
-				BoolText(UsesFullSizeVRPresentationTarget(entry.target)),
+				BoolText(UsesFullSizeVRProtectedTarget(entry.target)),
 				BoolText(IsSubmittedVRPresentationTarget(entry.target)),
 				FormatD3DViewDiagnosticInfo(textureInfos[i]),
 				FormatD3DViewDiagnosticInfo(copyInfos[i]),
@@ -6739,7 +6767,7 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 		if (displaySize.x <= 0.0f || displaySize.y <= 0.0f || renderSize.x <= 0.0f || renderSize.y <= 0.0f)
 			return false;
 
-		if (UsesFullSizeVRPresentationTarget(a_target))
+		if (UsesFullSizeVRProtectedTarget(a_target))
 			return setSize(displaySize);
 
 		switch (a_target) {
@@ -12773,6 +12801,14 @@ bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
 	return false;
 }
 
+bool Upscaling::IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const
+{
+	if (!globals::game::isVR || !a_texture || !a_texture->handle || a_texture->eType != vr::TextureType_DirectX)
+		return false;
+
+	return IsVRProtectedFullSizeRenderTargetTexture(static_cast<ID3D11Texture2D*>(a_texture->handle));
+}
+
 void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context)
 {
 	const HRESULT deviceReason = GetD3DDeviceRemovedReason();
@@ -13111,6 +13147,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 	const uint32_t currentFrame = state->frameCount;
 	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+	if (IsVRProtectedFullSizeRenderTargetTexture(sourceTexture))
+		return false;
+
 	const bool presentationRenderTarget = IsVRPresentationRenderTargetTexture(sourceTexture);
 	const bool loadingPresentationContext =
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
@@ -15334,14 +15373,17 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		};
 
 		if (upscaling.IsSubmitStageUpscalingActive()) {
-			// In-place/UI-target passes can carry late full-resolution HUD/interactions.
-			// Let vanilla execute these to avoid submitting cropped low-res regions
-			// for prompt frames.
+			// Protected UI/fade targets are not final eye images. Keep them on the
+			// vanilla path so submit-stage upscaling cannot copy or stretch them as
+			// scene presentation sources. In-place interaction passes keep the older
+			// contextual fallback for prompt frames.
 			const bool inPlacePass = outputTexture == sourceTexture;
-			const bool uiRenderTargetPass = IsVRPresentationRenderTargetTexture(sourceTexture) || IsVRPresentationRenderTargetTexture(outputTexture);
+			const bool uiRenderTargetPass =
+				IsVRProtectedFullSizeRenderTargetTexture(sourceTexture) ||
+				IsVRProtectedFullSizeRenderTargetTexture(outputTexture);
 			const bool interactionUiContext = !IsKnownGameMenuContextActive();
-			if ((inPlacePass || uiRenderTargetPass) && interactionUiContext) {
-				logDecision(inPlacePass ? "vanilla-submit-in-place-pass" : "vanilla-submit-ui-target-pass");
+			if (uiRenderTargetPass || (inPlacePass && interactionUiContext)) {
+				logDecision(uiRenderTargetPass ? "vanilla-submit-ui-target-pass" : "vanilla-submit-in-place-pass");
 				releaseRefs();
 				return false;
 			}
@@ -15846,8 +15888,8 @@ void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left
 	auto viewport = globals::game::graphicsState;
 	auto& runtimeData = viewport->GetRuntimeData();
 
-	const bool vrPresentationTarget = globals::game::isVR && IsCurrentRenderTargetVRPresentationTexture();
-	if (!runtimeData.dynamicResolutionLock && !vrPresentationTarget) {
+	const bool vrProtectedFullSizeTarget = globals::game::isVR && IsCurrentRenderTargetVRProtectedFullSizeTexture();
+	if (!runtimeData.dynamicResolutionLock && !vrProtectedFullSizeTarget) {
 		a_left = static_cast<int>(a_left * runtimeData.dynamicResolutionWidthRatio);
 		a_right = static_cast<int>(a_right * runtimeData.dynamicResolutionWidthRatio);
 

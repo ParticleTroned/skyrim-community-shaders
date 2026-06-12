@@ -133,6 +133,7 @@ public:
 		bool aaVrsPerformanceMode = false;
 		uint aaVrsPerformanceAnisotropy = 0;  // 0=auto, 1=2x1, 2=1x2
 		bool aaVrsPassAware = true;
+		bool aaVrsContentAware = true;
 		bool aaVrsProtectWater = true;
 		bool aaVrsSafeOpaqueOnly = false;
 		uint aaVrsMaxRate = 0;  // 0=2x2, 1=4x4
@@ -338,6 +339,13 @@ public:
 		float4 pad;            // xy=VRS tile size, z=performance mode, w=performance anisotropy
 	};
 
+	struct AAVRSRefinementCB
+	{
+		float4 renderInfo;     // xy=render dim, zw=1/render dim
+		float4 rateInfo;       // xy=rate image dim, zw=VRS tile size
+		float4 thresholds;     // x=luma range, y=bright luma, z=motion pixels, w=depth range
+	};
+
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
@@ -345,6 +353,7 @@ public:
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(AAVRSVisualizationCB) == 112, "AAVRSVisualizationCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(AAVRSRefinementCB) == 48, "AAVRSRefinementCB layout changed; update HLSL cbuffer.");
 
 	struct FoveatedDispatchRect
 	{
@@ -408,6 +417,7 @@ public:
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
 	ConstantBuffer* aaVrsVisualizationCB = nullptr;
+	ConstantBuffer* aaVrsRefinementCB = nullptr;
 
 	// Runtime state
 	bool isWindowed = false;
@@ -528,7 +538,9 @@ public:
 	ID3D11ComputeShader* GetPeripheryTAACS();
 
 	winrt::com_ptr<ID3D11ComputeShader> aaVrsVisualizationCS;
+	winrt::com_ptr<ID3D11ComputeShader> aaVrsRefinementCS;
 	ID3D11ComputeShader* GetAAVRSVisualizationCS();
+	ID3D11ComputeShader* GetAAVRSRefinementCS();
 
 	winrt::com_ptr<ID3D11ComputeShader> submitStageStretchCS;
 	ID3D11ComputeShader* GetSubmitStageStretchCS();
@@ -612,6 +624,7 @@ public:
 	bool IsAAVRSAdapterEligible() const;
 	bool BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) const;
 	void UpdateAAVRSState();
+	bool ApplyAAVRSContentAwareRefinement(const AAVRSController::Settings& a_settings);
 	void ApplyAAVRSVisualization();
 	void DisableAAVRSState(const char* a_reason = "Disabled");
 	void SuspendAAVRS();
@@ -696,6 +709,7 @@ public:
 	bool peripheryTAAHistoryValid = false;
 	AAVRSController aaVrsController;
 	bool aaVrsRuntimeActive = false;
+	bool aaVrsRuntimeContentAware = false;
 	bool aaVrsTelemetryLoggedActive = false;
 	uint32_t aaVrsTelemetryMaskWidth = 0;
 	uint32_t aaVrsTelemetryMaskHeight = 0;
@@ -704,6 +718,7 @@ public:
 	uint32_t aaVrsTelemetryMaxRate = 0;
 	bool aaVrsTelemetryPerformanceMode = false;
 	uint32_t aaVrsTelemetryPerformanceAnisotropy = 0;
+	bool aaVrsTelemetryContentAware = false;
 	std::string aaVrsTelemetryInactiveReason;
 	std::array<std::atomic<uint32_t>, kAAVRSPassPolicyReasonCount> aaVrsPassPolicyCounters{};
 

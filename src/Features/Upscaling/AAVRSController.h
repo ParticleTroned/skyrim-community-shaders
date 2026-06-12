@@ -71,6 +71,15 @@ public:
 	const char* GetLastDisableReason() const { return lastDisableReason; }
 	Status GetStatus() const;
 	bool GuardActiveRenderTarget(ID3D11DeviceContext* a_context);
+	void UnbindShadingRateResource(ID3D11DeviceContext* a_context) const;
+	bool RefineContentAware(
+		ID3D11DeviceContext* a_context,
+		ID3D11ComputeShader* a_shader,
+		ID3D11Buffer* a_constantBuffer,
+		ID3D11ShaderResourceView* a_colorSRV,
+		ID3D11ShaderResourceView* a_motionVectorSRV,
+		ID3D11ShaderResourceView* a_depthSRV);
+	ID3D11ShaderResourceView* GetRateImageSRV() const { return shadingRateSRV.get(); }
 
 private:
 	struct PatternKey
@@ -101,6 +110,8 @@ private:
 	void ReleaseView();
 
 	winrt::com_ptr<ID3D11Texture2D> shadingRateSurface;
+	winrt::com_ptr<ID3D11ShaderResourceView> shadingRateSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> shadingRateUAV;
 	IUnknown* shadingRateView = nullptr;
 	uint32_t surfaceWidth = 0;
 	uint32_t surfaceHeight = 0;

@@ -749,7 +749,11 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	// Deferred blended decals
 
-	func(This, RenderFlags);
+	{
+		const bool aaVrsFullRate = globals::features::upscaling.ShouldForceFullRateForAAVRSPhase(Upscaling::AAVRSPassPolicyReason::DecalPhase);
+		Upscaling::ScopedAAVRSFullRateOverride aaVrsFullRateOverride(globals::features::upscaling, aaVrsFullRate);
+		func(This, RenderFlags);
+	}
 
 	deferred->EndDeferred();
 

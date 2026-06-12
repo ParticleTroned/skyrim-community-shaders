@@ -33,6 +33,8 @@ public:
 		// When coarseOutsideMask is true, outerScale is the filled 1x1 protected mask.
 		float outerScale = kDefaultOuterScale;
 		bool coarseOutsideMask = false;
+		// 0=2x2, 1=4x4. 2x2 is the conservative default for artifact triage.
+		uint32_t maxRate = 0;
 		std::array<CenterOffset, 2> centerOffsets{};
 	};
 
@@ -45,13 +47,17 @@ public:
 		uint32_t maskHeight = 0;
 		uint32_t renderWidth = 0;
 		uint32_t renderHeight = 0;
+		uint32_t maxRate = 0;
 		bool hasSettings = false;
+		bool fullRateOverride = false;
 	};
 
 	bool Update(const Settings& a_settings, ID3D11Device* a_device, ID3D11DeviceContext* a_context);
 	void Disable(ID3D11DeviceContext* a_context, const char* a_reason = "Disabled");
 	void Suspend(ID3D11DeviceContext* a_context);
 	void Resume(ID3D11DeviceContext* a_context);
+	void BeginFullRateOverride(ID3D11DeviceContext* a_context);
+	void EndFullRateOverride(ID3D11DeviceContext* a_context);
 	void ReleaseResources();
 
 	bool IsSupported(ID3D11Device* a_device);
@@ -72,6 +78,7 @@ private:
 		int32_t centerHorizontalScaleQ = 0;
 		int32_t outerScaleQ = 0;
 		bool coarseOutsideMask = false;
+		uint32_t maxRate = 0;
 		std::array<int32_t, 4> centerOffsetQ{};
 
 		bool operator==(const PatternKey&) const = default;
@@ -81,7 +88,7 @@ private:
 	static PatternKey MakePatternKey(const Settings& a_settings);
 	bool EnsurePattern(const Settings& a_settings);
 	bool UploadPattern(ID3D11DeviceContext* a_context);
-	bool Bind(ID3D11DeviceContext* a_context);
+	bool Bind(ID3D11DeviceContext* a_context, bool a_forceFullRate = false);
 	void DisableInternal(ID3D11DeviceContext* a_context);
 	void ReleaseView();
 
@@ -109,5 +116,7 @@ private:
 	bool loggedViewportBindMode = false;
 	bool active = false;
 	uint32_t suspendDepth = 0;
+	uint32_t fullRateOverrideDepth = 0;
+	bool fullRateOverrideBound = false;
 	const char* lastDisableReason = "Not initialized";
 };

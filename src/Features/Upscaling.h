@@ -17,6 +17,11 @@
 #include <vector>
 #include <winrt/base.h>
 
+namespace RE
+{
+	class BSRenderPass;
+}
+
 /**
  * @brief Provides upscaling functionality including DLSS, FSR and TAA.
  *
@@ -125,6 +130,10 @@ public:
 		uint perfMode = 0;
 		bool aaVrs = false;
 		bool aaVrsVisualization = false;
+		bool aaVrsPassAware = true;
+		bool aaVrsSafeOpaqueOnly = false;
+		uint aaVrsMaxRate = 0;  // 0=2x2, 1=4x4
+		bool aaVrsPassTelemetry = false;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 1;
 		uint frameGenerationForceEnable = 0;
@@ -153,6 +162,30 @@ public:
 	};
 
 	Settings settings;
+
+	enum class AAVRSPassPolicyReason : uint8_t
+	{
+		None,
+		AlphaTest,
+		ShaderPropertyAlpha,
+		ShaderPropertyDecal,
+		ShaderPropertyEmissive,
+		ShaderPropertyHighFrequency,
+		EffectShader,
+		ParticleShader,
+		WaterShader,
+		GrassShader,
+		DistantTreeShader,
+		BloodSplatterShader,
+		SkyShader,
+		LightingTechnique,
+		LightingDescriptor,
+		UtilityDescriptor,
+		SafeOpaqueOnly,
+		DecalPhase,
+		Count
+	};
+	static constexpr size_t kAAVRSPassPolicyReasonCount = static_cast<size_t>(AAVRSPassPolicyReason::Count);
 
 	struct RuntimeResolutionPlan
 	{
@@ -580,8 +613,27 @@ public:
 	void DisableAAVRSState(const char* a_reason = "Disabled");
 	void SuspendAAVRS();
 	void ResumeAAVRS();
+	bool ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest);
+	bool ShouldForceFullRateForAAVRSPhase(AAVRSPassPolicyReason a_reason);
+	void BeginAAVRSFullRateOverride();
+	void EndAAVRSFullRateOverride();
 	void ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeActiveState = false);
 	void ResetAAVRSTelemetry();
+	void ResetAAVRSPassTelemetry();
+	void DrawAAVRSPassTelemetry();
+
+	class ScopedAAVRSFullRateOverride
+	{
+	public:
+		ScopedAAVRSFullRateOverride(Upscaling& a_upscaling, bool a_active);
+		~ScopedAAVRSFullRateOverride();
+
+		ScopedAAVRSFullRateOverride(const ScopedAAVRSFullRateOverride&) = delete;
+		ScopedAAVRSFullRateOverride& operator=(const ScopedAAVRSFullRateOverride&) = delete;
+
+	private:
+		Upscaling* upscaling = nullptr;
+	};
 
 	class ScopedAAVRSSuspension
 	{
@@ -646,6 +698,7 @@ public:
 	uint32_t aaVrsTelemetryRenderWidth = 0;
 	uint32_t aaVrsTelemetryRenderHeight = 0;
 	std::string aaVrsTelemetryInactiveReason;
+	std::array<std::atomic<uint32_t>, kAAVRSPassPolicyReasonCount> aaVrsPassPolicyCounters{};
 
 	virtual void ClearShaderCache() override;
 

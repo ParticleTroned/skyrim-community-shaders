@@ -5,8 +5,12 @@
 #include "Hooks.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
+#include "RE/B/BSLightingShader.h"
 #include "RE/B/BSOpenVR.h"
+#include "RE/B/BSRenderPass.h"
+#include "RE/B/BSShaderProperty.h"
 #include "Features/RenderDoc.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -46,6 +50,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	perfMode,
 	aaVrs,
 	aaVrsVisualization,
+	aaVrsPassAware,
+	aaVrsSafeOpaqueOnly,
+	aaVrsMaxRate,
+	aaVrsPassTelemetry,
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
@@ -284,6 +292,70 @@ namespace
 8) Save your mask settings and enjoy the performance win.)";
 
 	uint ClampToggleUInt(uint value);
+
+	const char* GetAAVRSPassPolicyReasonName(Upscaling::AAVRSPassPolicyReason a_reason)
+	{
+		switch (a_reason) {
+		case Upscaling::AAVRSPassPolicyReason::AlphaTest:
+			return "Alpha test";
+		case Upscaling::AAVRSPassPolicyReason::ShaderPropertyAlpha:
+			return "Alpha property";
+		case Upscaling::AAVRSPassPolicyReason::ShaderPropertyDecal:
+			return "Decal property";
+		case Upscaling::AAVRSPassPolicyReason::ShaderPropertyEmissive:
+			return "Emissive property";
+		case Upscaling::AAVRSPassPolicyReason::ShaderPropertyHighFrequency:
+			return "High-frequency property";
+		case Upscaling::AAVRSPassPolicyReason::EffectShader:
+			return "Effect shader";
+		case Upscaling::AAVRSPassPolicyReason::ParticleShader:
+			return "Particle shader";
+		case Upscaling::AAVRSPassPolicyReason::WaterShader:
+			return "Water shader";
+		case Upscaling::AAVRSPassPolicyReason::GrassShader:
+			return "Grass shader";
+		case Upscaling::AAVRSPassPolicyReason::DistantTreeShader:
+			return "Distant-tree shader";
+		case Upscaling::AAVRSPassPolicyReason::BloodSplatterShader:
+			return "Blood-splatter shader";
+		case Upscaling::AAVRSPassPolicyReason::SkyShader:
+			return "Sky shader";
+		case Upscaling::AAVRSPassPolicyReason::LightingTechnique:
+			return "Lighting technique";
+		case Upscaling::AAVRSPassPolicyReason::LightingDescriptor:
+			return "Lighting descriptor";
+		case Upscaling::AAVRSPassPolicyReason::UtilityDescriptor:
+			return "Utility descriptor";
+		case Upscaling::AAVRSPassPolicyReason::SafeOpaqueOnly:
+			return "Safe-opaque filter";
+		case Upscaling::AAVRSPassPolicyReason::DecalPhase:
+			return "Blended decals phase";
+		case Upscaling::AAVRSPassPolicyReason::None:
+		case Upscaling::AAVRSPassPolicyReason::Count:
+		default:
+			return "None";
+		}
+	}
+
+	template <class Enum>
+	bool HasShaderFlag(uint64_t a_flags, Enum a_flag)
+	{
+		return (a_flags & static_cast<uint64_t>(a_flag)) != 0;
+	}
+
+	bool TryDecodeLightingDescriptor(const RE::BSRenderPass* a_pass, uint32_t& a_outDescriptor)
+	{
+		if (a_pass &&
+			a_pass->shader &&
+			a_pass->shader->shaderType.get() == RE::BSShader::Type::Lighting &&
+			a_pass->passEnum >= RE::BSLightingShader::kTechniqueIDBase) {
+			a_outDescriptor = a_pass->passEnum - RE::BSLightingShader::kTechniqueIDBase;
+			return true;
+		}
+
+		a_outDescriptor = 0;
+		return false;
+	}
 
 	struct VRStereoEyeRegion
 	{
@@ -1740,6 +1812,10 @@ namespace
 		settings.vrFpsStabilizerSync = settings.vrFpsStabilizerSync && REL::Module::IsVR();
 		settings.aaVrs = settings.aaVrs && REL::Module::IsVR();
 		settings.aaVrsVisualization = settings.aaVrsVisualization && settings.aaVrs && REL::Module::IsVR();
+		settings.aaVrsPassAware = settings.aaVrsPassAware && REL::Module::IsVR();
+		settings.aaVrsSafeOpaqueOnly = settings.aaVrsSafeOpaqueOnly && REL::Module::IsVR();
+		settings.aaVrsMaxRate = std::min<uint>(settings.aaVrsMaxRate, 1u);
+		settings.aaVrsPassTelemetry = settings.aaVrsPassTelemetry && settings.aaVrs && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
@@ -1755,8 +1831,13 @@ namespace
 
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
 	{
+		const Upscaling::Settings defaults{};
 		settings.aaVrs = false;
 		settings.aaVrsVisualization = false;
+		settings.aaVrsPassAware = defaults.aaVrsPassAware;
+		settings.aaVrsSafeOpaqueOnly = defaults.aaVrsSafeOpaqueOnly;
+		settings.aaVrsMaxRate = defaults.aaVrsMaxRate;
+		settings.aaVrsPassTelemetry = defaults.aaVrsPassTelemetry;
 		settings.renderScaleMode = 0;
 		settings.vrFpsStabilizerSync = false;
 		settings.perfMode = 0;
@@ -1778,6 +1859,10 @@ namespace
 	{
 		o_json.erase("aaVrs");
 		o_json.erase("aaVrsVisualization");
+		o_json.erase("aaVrsPassAware");
+		o_json.erase("aaVrsSafeOpaqueOnly");
+		o_json.erase("aaVrsMaxRate");
+		o_json.erase("aaVrsPassTelemetry");
 		o_json.erase("renderScaleMode");
 		o_json.erase("vrFpsStabilizerSync");
 		o_json.erase("perfMode");
@@ -5255,8 +5340,8 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes keep Variable Rate Shading disabled.");
 		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask; without FOV + TAA, the foveated feather is included.");
 		ImGui::TextUnformatted("Adds one VRS tile of safety padding around the protected mask to avoid coarse-rate flicker at the transition.");
-		ImGui::TextUnformatted("Outside the mask, the inner fifth is 2x2 and the rest stays 4x4 across the full FOV.");
-		ImGui::TextUnformatted("Suspended for Terrain Blending and shadow maps; disabled before postprocessing.");
+		ImGui::TextUnformatted("Outside the mask, the inner fifth is 2x2 and the rest uses the configured max coarse rate.");
+		ImGui::TextUnformatted("Pass-aware safety keeps unstable passes at 1x1; shadow maps are suspended and VRS is disabled before postprocessing.");
 	}
 
 	if (!aaVrsMethodEligible) {
@@ -5279,8 +5364,48 @@ void Upscaling::DrawFoveatedSettings()
 		if (aaVrsStatus.hasSettings && aaVrsStatus.lastDisableReason && aaVrsStatus.lastDisableReason[0])
 			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) runtime inactive: %s", aaVrsStatus.lastDisableReason);
 	}
-	if (!aaVrsUiState.requested)
+	if (aaVrsUiState.requested) {
+		ImGui::Dummy(ImVec2(0.0f, 3.0f));
+		{
+			Util::BlueFrameStyleWrapper passAwareStyle(true);
+			ImGui::Checkbox("VRS Pass-Aware Safety", &settings.aaVrsPassAware);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Keeps alpha-tested, emissive, decal, particle, water, sky, grass, distant-tree, and depth/mask utility passes at 1x1.");
+			ImGui::TextUnformatted("Coarse rates are used only for passes that look like stable opaque scene shading.");
+		}
+
+		const char* maxRateItems[] = { "2x2", "4x4" };
+		int maxRate = static_cast<int>(std::clamp<uint>(settings.aaVrsMaxRate, 0u, 1u));
+		if (ImGui::Combo("VRS Max Coarse Rate", &maxRate, maxRateItems, IM_ARRAYSIZE(maxRateItems))) {
+			settings.aaVrsMaxRate = static_cast<uint>(std::clamp(maxRate, 0, 1));
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Caps the coarsest rate used outside the protected FOV mask.");
+			ImGui::TextUnformatted("2x2 is more conservative; 4x4 has more performance risk and more artifact risk.");
+		}
+
+		{
+			auto safeOnlyGuard = Util::DisableGuard(!settings.aaVrsPassAware);
+			ImGui::Checkbox("VRS Safe Opaque Only", &settings.aaVrsSafeOpaqueOnly);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Debug safety mode: only lighting passes that survive the pass-aware filter can use coarse rates.");
+			ImGui::TextUnformatted("Use this when isolating white flicker or shimmer sources.");
+		}
+
+		ImGui::Checkbox("VRS Pass Telemetry", &settings.aaVrsPassTelemetry);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Shows cumulative counts for pass-aware full-rate decisions.");
+		}
+		if (settings.aaVrsPassTelemetry) {
+			if (ImGui::Button("Reset VRS Pass Counters"))
+				ResetAAVRSPassTelemetry();
+			DrawAAVRSPassTelemetry();
+		}
+	} else {
 		settings.aaVrsVisualization = false;
+	}
 
 	const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
 	auto drawInactiveSavedFoveatedProfile = [&](const char* a_reason) {
@@ -8306,6 +8431,7 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 	aaVrsSettings.centerHorizontalScale = centerHorizontalScale;
 	aaVrsSettings.outerScale = vrsMaskScale;
 	aaVrsSettings.coarseOutsideMask = true;
+	aaVrsSettings.maxRate = std::min<uint32_t>(settings.aaVrsMaxRate, 1u);
 	aaVrsSettings.centerOffsets = {
 		AAVRSController::CenterOffset{ foveatedCenterOffsets[0].x, foveatedCenterOffsets[0].y },
 		AAVRSController::CenterOffset{ foveatedCenterOffsets[1].x, foveatedCenterOffsets[1].y },
@@ -8446,6 +8572,187 @@ void Upscaling::ApplyAAVRSVisualization()
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
+bool Upscaling::ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest)
+{
+	if (!settings.aaVrs || !settings.aaVrsPassAware || !globals::game::isVR || !aaVrsController.IsActive())
+		return false;
+
+	(void)a_technique;
+
+	auto record = [this](AAVRSPassPolicyReason a_reason) {
+		const auto index = static_cast<size_t>(a_reason);
+		if (settings.aaVrsPassTelemetry && index < aaVrsPassPolicyCounters.size())
+			aaVrsPassPolicyCounters[index].fetch_add(1, std::memory_order_relaxed);
+		return true;
+	};
+
+	if (a_alphaTest)
+		return record(AAVRSPassPolicyReason::AlphaTest);
+
+	auto* shader = a_pass ? a_pass->shader : nullptr;
+	auto* shaderProperty = a_pass ? a_pass->shaderProperty : nullptr;
+	if (shaderProperty) {
+		using ShaderPropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+		if (shaderProperty->alpha > 0.0f && shaderProperty->alpha < 0.999f)
+			return record(AAVRSPassPolicyReason::ShaderPropertyAlpha);
+		if (shaderProperty->flags.any(ShaderPropertyFlag::kVertexAlpha) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kScreendoorAlphaFade) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kPremultAlpha) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kRefraction) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kTempRefraction) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kSoftEffect)) {
+			return record(AAVRSPassPolicyReason::ShaderPropertyAlpha);
+		}
+		if (shaderProperty->flags.any(ShaderPropertyFlag::kDecal) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kDynamicDecal)) {
+			return record(AAVRSPassPolicyReason::ShaderPropertyDecal);
+		}
+		if (shaderProperty->flags.any(ShaderPropertyFlag::kGlowMap) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kOwnEmit) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kExternalEmittance)) {
+			return record(AAVRSPassPolicyReason::ShaderPropertyEmissive);
+		}
+		if (shaderProperty->flags.any(ShaderPropertyFlag::kTreeAnim) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kLODObjects) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kHDLODObjects) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kHairTint) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kBillboard) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kCloudLOD) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kEyeReflect) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kProjectedUV) ||
+			shaderProperty->flags.any(ShaderPropertyFlag::kParallaxOcclusion)) {
+			return record(AAVRSPassPolicyReason::ShaderPropertyHighFrequency);
+		}
+	}
+
+	if (!shader)
+		return settings.aaVrsSafeOpaqueOnly ? record(AAVRSPassPolicyReason::SafeOpaqueOnly) : false;
+
+	const auto shaderType = shader->shaderType.get();
+	switch (shaderType) {
+	case RE::BSShader::Type::Effect:
+		return record(AAVRSPassPolicyReason::EffectShader);
+	case RE::BSShader::Type::Particle:
+		return record(AAVRSPassPolicyReason::ParticleShader);
+	case RE::BSShader::Type::Water:
+		return record(AAVRSPassPolicyReason::WaterShader);
+	case RE::BSShader::Type::Grass:
+		return record(AAVRSPassPolicyReason::GrassShader);
+	case RE::BSShader::Type::DistantTree:
+		return record(AAVRSPassPolicyReason::DistantTreeShader);
+	case RE::BSShader::Type::BloodSplatter:
+		return record(AAVRSPassPolicyReason::BloodSplatterShader);
+	case RE::BSShader::Type::Sky:
+		return record(AAVRSPassPolicyReason::SkyShader);
+	case RE::BSShader::Type::Lighting:
+	{
+		uint32_t lightingDescriptor = 0;
+		if (TryDecodeLightingDescriptor(a_pass, lightingDescriptor)) {
+			const uint64_t lightingFlags = lightingDescriptor & 0x00FFFFFFu;
+			if (HasShaderFlag(lightingFlags, SIE::ShaderCache::LightingShaderFlags::DoAlphaTest) ||
+				HasShaderFlag(lightingFlags, SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask)) {
+				return record(AAVRSPassPolicyReason::LightingDescriptor);
+			}
+
+			const auto lightingTechnique = static_cast<SIE::ShaderCache::LightingShaderTechniques>((lightingDescriptor >> 24) & 0x3Fu);
+			switch (lightingTechnique) {
+			case SIE::ShaderCache::LightingShaderTechniques::Glowmap:
+			case SIE::ShaderCache::LightingShaderTechniques::Hair:
+			case SIE::ShaderCache::LightingShaderTechniques::TreeAnim:
+			case SIE::ShaderCache::LightingShaderTechniques::LODObjects:
+			case SIE::ShaderCache::LightingShaderTechniques::MultiIndexSparkle:
+			case SIE::ShaderCache::LightingShaderTechniques::LODObjectHD:
+			case SIE::ShaderCache::LightingShaderTechniques::Eye:
+			case SIE::ShaderCache::LightingShaderTechniques::Cloud:
+				return record(AAVRSPassPolicyReason::LightingTechnique);
+			default:
+				break;
+			}
+
+			if (settings.aaVrsSafeOpaqueOnly) {
+				switch (lightingTechnique) {
+				case SIE::ShaderCache::LightingShaderTechniques::None:
+				case SIE::ShaderCache::LightingShaderTechniques::Envmap:
+				case SIE::ShaderCache::LightingShaderTechniques::Parallax:
+				case SIE::ShaderCache::LightingShaderTechniques::Facegen:
+				case SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint:
+				case SIE::ShaderCache::LightingShaderTechniques::MTLand:
+				case SIE::ShaderCache::LightingShaderTechniques::LODLand:
+				case SIE::ShaderCache::LightingShaderTechniques::ParallaxOcc:
+				case SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend:
+					break;
+				default:
+					return record(AAVRSPassPolicyReason::SafeOpaqueOnly);
+				}
+			}
+		} else if (settings.aaVrsSafeOpaqueOnly) {
+			return record(AAVRSPassPolicyReason::SafeOpaqueOnly);
+		}
+		break;
+	}
+	case RE::BSShader::Type::Utility:
+	{
+		const uint64_t utilityDescriptor = a_pass ? a_pass->passEnum : 0u;
+		if (HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::AlphaTest) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::GrayscaleToAlpha) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::AdditionalAlphaMask) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::DepthWriteDecals) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderDepth) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderNormal) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderNormalFalloff) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderNormalClamp) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderNormalClear) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderShadowmap) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapClamped) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderShadowmapPb) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskDpb) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::TreeAnim) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::LodObject) ||
+			HasShaderFlag(utilityDescriptor, SIE::ShaderCache::UtilityShaderFlags::OpaqueEffect)) {
+			return record(AAVRSPassPolicyReason::UtilityDescriptor);
+		}
+		break;
+	}
+	default:
+		break;
+	}
+
+	if (settings.aaVrsSafeOpaqueOnly && shaderType != RE::BSShader::Type::Lighting)
+		return record(AAVRSPassPolicyReason::SafeOpaqueOnly);
+
+	return false;
+}
+
+bool Upscaling::ShouldForceFullRateForAAVRSPhase(AAVRSPassPolicyReason a_reason)
+{
+	if (!settings.aaVrs || !settings.aaVrsPassAware || !globals::game::isVR || !aaVrsController.IsActive())
+		return false;
+
+	const auto index = static_cast<size_t>(a_reason);
+	if (settings.aaVrsPassTelemetry && index < aaVrsPassPolicyCounters.size())
+		aaVrsPassPolicyCounters[index].fetch_add(1, std::memory_order_relaxed);
+	return true;
+}
+
+void Upscaling::BeginAAVRSFullRateOverride()
+{
+	if (!globals::game::isVR)
+		return;
+
+	aaVrsController.BeginFullRateOverride(globals::d3d::context);
+}
+
+void Upscaling::EndAAVRSFullRateOverride()
+{
+	if (!globals::game::isVR)
+		return;
+
+	aaVrsController.EndFullRateOverride(globals::d3d::context);
+}
+
 void Upscaling::DisableAAVRSState(const char* a_reason)
 {
 	aaVrsController.Disable(globals::d3d::context, a_reason);
@@ -8462,11 +8769,13 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 			aaVrsTelemetryRenderHeight != status.renderHeight;
 		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged) {
 			logger::info(
-				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}",
+				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, maxRate={}x{}",
 				status.renderWidth,
 				status.renderHeight,
 				status.maskWidth,
-				status.maskHeight);
+				status.maskHeight,
+				status.maxRate == 0 ? 2 : 4,
+				status.maxRate == 0 ? 2 : 4);
 		}
 
 		aaVrsRuntimeActive = true;
@@ -8505,6 +8814,37 @@ void Upscaling::ResetAAVRSTelemetry()
 	aaVrsTelemetryRenderWidth = 0;
 	aaVrsTelemetryRenderHeight = 0;
 	aaVrsTelemetryInactiveReason.clear();
+	ResetAAVRSPassTelemetry();
+}
+
+void Upscaling::ResetAAVRSPassTelemetry()
+{
+	for (auto& counter : aaVrsPassPolicyCounters) {
+		counter.store(0, std::memory_order_relaxed);
+	}
+}
+
+void Upscaling::DrawAAVRSPassTelemetry()
+{
+	if (!ImGui::BeginTable("##AAVRSPassTelemetry", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+		return;
+
+	ImGui::TableSetupColumn("Reason");
+	ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed);
+	ImGui::TableHeadersRow();
+	for (size_t i = 1; i < static_cast<size_t>(AAVRSPassPolicyReason::Count); ++i) {
+		const auto count = aaVrsPassPolicyCounters[i].load(std::memory_order_relaxed);
+		if (count == 0)
+			continue;
+
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(GetAAVRSPassPolicyReasonName(static_cast<AAVRSPassPolicyReason>(i)));
+		ImGui::TableNextColumn();
+		ImGui::Text("%u", count);
+	}
+
+	ImGui::EndTable();
 }
 
 void Upscaling::SuspendAAVRS()
@@ -8521,6 +8861,19 @@ void Upscaling::ResumeAAVRS()
 		return;
 
 	aaVrsController.Resume(globals::d3d::context);
+}
+
+Upscaling::ScopedAAVRSFullRateOverride::ScopedAAVRSFullRateOverride(Upscaling& a_upscaling, bool a_active) :
+	upscaling(a_active ? &a_upscaling : nullptr)
+{
+	if (upscaling)
+		upscaling->BeginAAVRSFullRateOverride();
+}
+
+Upscaling::ScopedAAVRSFullRateOverride::~ScopedAAVRSFullRateOverride()
+{
+	if (upscaling)
+		upscaling->EndAAVRSFullRateOverride();
 }
 
 Upscaling::ScopedAAVRSSuspension::ScopedAAVRSSuspension(Upscaling& a_upscaling, bool a_active) :

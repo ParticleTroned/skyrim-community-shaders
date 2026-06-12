@@ -53,6 +53,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	aaVrsPerformanceMode,
 	aaVrsPerformanceAnisotropy,
 	aaVrsPassAware,
+	aaVrsContentAware,
 	aaVrsProtectWater,
 	aaVrsSafeOpaqueOnly,
 	aaVrsMaxRate,
@@ -154,6 +155,10 @@ namespace
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMax = 0.30f;
+	constexpr float kAAVRSRefinementLumaRangeThreshold = 0.20f;
+	constexpr float kAAVRSRefinementBrightLumaThreshold = 2.50f;
+	constexpr float kAAVRSRefinementMotionPixelsThreshold = 3.00f;
+	constexpr float kAAVRSRefinementDepthRangeThreshold = 0.02f;
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
@@ -1806,6 +1811,7 @@ namespace
 		settings.aaVrsPerformanceMode = settings.aaVrsPerformanceMode && REL::Module::IsVR();
 		settings.aaVrsPerformanceAnisotropy = std::min<uint>(settings.aaVrsPerformanceAnisotropy, 2u);
 		settings.aaVrsPassAware = settings.aaVrsPassAware && REL::Module::IsVR();
+		settings.aaVrsContentAware = settings.aaVrsContentAware && REL::Module::IsVR();
 		settings.aaVrsProtectWater = settings.aaVrsProtectWater && REL::Module::IsVR();
 		settings.aaVrsSafeOpaqueOnly = settings.aaVrsSafeOpaqueOnly && REL::Module::IsVR();
 		settings.aaVrsMaxRate = std::min<uint>(settings.aaVrsMaxRate, 1u);
@@ -1831,6 +1837,7 @@ namespace
 		settings.aaVrsPerformanceMode = defaults.aaVrsPerformanceMode;
 		settings.aaVrsPerformanceAnisotropy = defaults.aaVrsPerformanceAnisotropy;
 		settings.aaVrsPassAware = defaults.aaVrsPassAware;
+		settings.aaVrsContentAware = defaults.aaVrsContentAware;
 		settings.aaVrsProtectWater = defaults.aaVrsProtectWater;
 		settings.aaVrsSafeOpaqueOnly = defaults.aaVrsSafeOpaqueOnly;
 		settings.aaVrsMaxRate = defaults.aaVrsMaxRate;
@@ -1859,6 +1866,7 @@ namespace
 		o_json.erase("aaVrsPerformanceMode");
 		o_json.erase("aaVrsPerformanceAnisotropy");
 		o_json.erase("aaVrsPassAware");
+		o_json.erase("aaVrsContentAware");
 		o_json.erase("aaVrsProtectWater");
 		o_json.erase("aaVrsSafeOpaqueOnly");
 		o_json.erase("aaVrsMaxRate");
@@ -5335,6 +5343,7 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask; without FOV + TAA, the foveated feather is included.");
 		ImGui::TextUnformatted("Adds one VRS tile of safety padding around the protected mask to avoid coarse-rate flicker at the transition.");
 		ImGui::TextUnformatted("Outside the mask, the inner fifth is 2x2 and the rest uses the configured max coarse rate.");
+		ImGui::TextUnformatted("Content-aware safety can promote high-contrast, bright, moving, or depth-edge tiles back toward 1x1.");
 		ImGui::TextUnformatted("Pass-aware safety keeps unstable passes at 1x1; shadow maps are suspended and VRS is disabled before postprocessing.");
 	}
 
@@ -5368,6 +5377,16 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("Keeps alpha-tested, emissive, decal, particle, sky, grass, distant-tree, and depth/mask utility passes at 1x1.");
 			ImGui::TextUnformatted("Coarse rates are used only for passes that look like stable opaque scene shading.");
 			ImGui::TextUnformatted("Water has its own full-rate protection toggle below.");
+		}
+
+		{
+			Util::BlueFrameStyleWrapper contentAwareStyle(true);
+			ImGui::Checkbox("VRS Content-Aware Safety", &settings.aaVrsContentAware);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Refines the VRS rate image from scene color, motion vectors, and depth before scene rendering.");
+			ImGui::TextUnformatted("High contrast, bright, moving, or depth-edge tiles are promoted back toward 1x1.");
+			ImGui::TextUnformatted("The refinement never makes the base foveated mask coarser.");
 		}
 
 		{
@@ -5502,9 +5521,10 @@ void Upscaling::DrawFoveatedSettings()
 		else
 			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
 		if (aaVrsUiState.requested) {
-			ImGui::TextUnformatted("VRS Mask Visualization replaces the scene with a binary rate mask; dark = 1x1, magenta = coarser than 1x1.");
+			ImGui::TextUnformatted("VRS Mask Visualization replaces the scene with the current binary rate image; dark = 1x1, magenta = coarser than 1x1.");
+			ImGui::TextUnformatted("Content-aware tile promotions are included; per-pass full-rate overrides are applied dynamically during draw calls.");
 			if (settings.aaVrsPerformanceMode)
-				ImGui::TextUnformatted("Performance mode target: dark shows the fixed 0.25 inner band; magenta includes all coarse VRS bands.");
+				ImGui::TextUnformatted("Performance mode target: dark includes the fixed 0.25 inner band and any content-aware full-rate promotions.");
 			else
 				ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
 		}
@@ -8194,6 +8214,16 @@ ID3D11ComputeShader* Upscaling::GetAAVRSVisualizationCS()
 	return aaVrsVisualizationCS.get();
 }
 
+ID3D11ComputeShader* Upscaling::GetAAVRSRefinementCS()
+{
+	if (!aaVrsRefinementCS) {
+		logger::debug("Compiling AAVRSRefinementCS.hlsl");
+		aaVrsRefinementCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/AAVRSRefinementCS.hlsl", {}, "cs_5_0"));
+	}
+
+	return aaVrsRefinementCS.get();
+}
+
 ID3D11ComputeShader* Upscaling::GetSubmitStageStretchCS()
 {
 	if (!submitStageStretchCS) {
@@ -8374,6 +8404,7 @@ void Upscaling::UpdateAAVRSState()
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
 	const bool requested = settings.aaVrs && globals::game::isVR;
 	const auto disableAndReport = [&](const char* reason, bool requestedState, bool preserveRuntimeActiveState = false) {
+		aaVrsRuntimeContentAware = false;
 		DisableAAVRSState(reason);
 		ReportAAVRSTelemetry(requestedState, preserveRuntimeActiveState);
 	};
@@ -8420,8 +8451,83 @@ void Upscaling::UpdateAAVRSState()
 		return;
 	}
 
-	(void)aaVrsController.Update(aaVrsSettings, device, context);
+	const bool updated = aaVrsController.Update(aaVrsSettings, device, context);
+	aaVrsRuntimeContentAware = updated && ApplyAAVRSContentAwareRefinement(aaVrsSettings);
 	ReportAAVRSTelemetry(requested);
+}
+
+bool Upscaling::ApplyAAVRSContentAwareRefinement(const AAVRSController::Settings& a_settings)
+{
+	if (!settings.aaVrsContentAware || !aaVrsController.IsActive())
+		return false;
+
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	auto* shader = GetAAVRSRefinementCS();
+	if (!context || !renderer || !shader || !aaVrsRefinementCB)
+		return false;
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto& motionVectors = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	auto* depthSRV = Util::GetCurrentSceneDepthSRV(false);
+	if (!main.SRV || !motionVectors.SRV || !depthSRV)
+		return false;
+
+	const auto status = aaVrsController.GetStatus();
+	if (!status.maskWidth || !status.maskHeight)
+		return false;
+
+	AAVRSRefinementCB cbData{};
+	cbData.renderInfo = {
+		static_cast<float>(a_settings.renderWidth),
+		static_cast<float>(a_settings.renderHeight),
+		a_settings.renderWidth > 0 ? 1.0f / static_cast<float>(a_settings.renderWidth) : 0.0f,
+		a_settings.renderHeight > 0 ? 1.0f / static_cast<float>(a_settings.renderHeight) : 0.0f
+	};
+	cbData.rateInfo = {
+		static_cast<float>(status.maskWidth),
+		static_cast<float>(status.maskHeight),
+		static_cast<float>(AAVRSController::kTileWidth),
+		static_cast<float>(AAVRSController::kTileHeight)
+	};
+	cbData.thresholds = {
+		kAAVRSRefinementLumaRangeThreshold,
+		kAAVRSRefinementBrightLumaThreshold,
+		kAAVRSRefinementMotionPixelsThreshold,
+		kAAVRSRefinementDepthRangeThreshold
+	};
+	aaVrsRefinementCB->Update(cbData);
+
+	ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+	ID3D11DepthStencilView* dsv = nullptr;
+	context->OMGetRenderTargets(static_cast<UINT>(std::size(rtvs)), rtvs, &dsv);
+
+	ID3D11RenderTargetView* nullRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+	context->OMSetRenderTargets(static_cast<UINT>(std::size(nullRTVs)), nullRTVs, nullptr);
+
+	ID3D11Buffer* cb = aaVrsRefinementCB->CB();
+	auto state = globals::state;
+	if (state && state->frameAnnotations)
+		state->BeginPerfEvent("VRS Content-Aware Refinement");
+	const bool refined = aaVrsController.RefineContentAware(
+		context,
+		shader,
+		cb,
+		main.SRV,
+		motionVectors.SRV,
+		depthSRV);
+	if (state && state->frameAnnotations)
+		state->EndPerfEvent();
+
+	context->OMSetRenderTargets(static_cast<UINT>(std::size(rtvs)), rtvs, dsv);
+	for (auto* rtv : rtvs) {
+		if (rtv)
+			rtv->Release();
+	}
+	if (dsv)
+		dsv->Release();
+
+	return refined;
 }
 
 void Upscaling::ApplyAAVRSVisualization()
@@ -8437,7 +8543,8 @@ void Upscaling::ApplyAAVRSVisualization()
 	auto* context = globals::d3d::context;
 	auto* renderer = globals::game::renderer;
 	auto* shader = GetAAVRSVisualizationCS();
-	if (!context || !renderer || !shader || !aaVrsVisualizationCB)
+	auto* rateSRV = aaVrsController.GetRateImageSRV();
+	if (!context || !renderer || !shader || !aaVrsVisualizationCB || !rateSRV)
 		return;
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -8480,9 +8587,12 @@ void Upscaling::ApplyAAVRSVisualization()
 	aaVrsVisualizationCB->Update(cbData);
 
 	ID3D11Buffer* cb = aaVrsVisualizationCB->CB();
+	ID3D11ShaderResourceView* srvs[1] = { rateSRV };
 	ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
+	aaVrsController.UnbindShadingRateResource(context);
 	context->CSSetShader(shader, nullptr, 0);
 	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetShaderResources(0, 1, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 	auto state = globals::state;
@@ -8493,8 +8603,10 @@ void Upscaling::ApplyAAVRSVisualization()
 		state->EndPerfEvent();
 
 	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+	ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
 	ID3D11Buffer* nullCB[1] = { nullptr };
 	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+	context->CSSetShaderResources(0, 1, nullSRV);
 	context->CSSetConstantBuffers(0, 1, nullCB);
 	context->CSSetShader(nullptr, nullptr, 0);
 }
@@ -8703,6 +8815,7 @@ void Upscaling::EndAAVRSFullRateOverride()
 
 void Upscaling::DisableAAVRSState(const char* a_reason)
 {
+	aaVrsRuntimeContentAware = false;
 	aaVrsController.Disable(globals::d3d::context, a_reason);
 }
 
@@ -8718,16 +8831,18 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 		const bool modeChanged =
 			aaVrsTelemetryMaxRate != status.maxRate ||
 			aaVrsTelemetryPerformanceMode != status.performanceMode ||
-			aaVrsTelemetryPerformanceAnisotropy != status.performanceAnisotropy;
+			aaVrsTelemetryPerformanceAnisotropy != status.performanceAnisotropy ||
+			aaVrsTelemetryContentAware != aaVrsRuntimeContentAware;
 		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged || modeChanged) {
 			logger::info(
-				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, mode={}, orientation={}, maxRate={}x{}",
+				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, mode={}, orientation={}, contentAware={}, maxRate={}x{}",
 				status.renderWidth,
 				status.renderHeight,
 				status.maskWidth,
 				status.maskHeight,
 				status.performanceMode ? "performance" : "mask",
 				status.performanceMode ? GetAAVRSPerformanceAnisotropyName(status.performanceAnisotropy) : "n/a",
+				aaVrsRuntimeContentAware,
 				status.maxRate == 0 ? 2 : 4,
 				status.maxRate == 0 ? 2 : 4);
 		}
@@ -8741,6 +8856,7 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 		aaVrsTelemetryMaxRate = status.maxRate;
 		aaVrsTelemetryPerformanceMode = status.performanceMode;
 		aaVrsTelemetryPerformanceAnisotropy = status.performanceAnisotropy;
+		aaVrsTelemetryContentAware = aaVrsRuntimeContentAware;
 		return;
 	}
 
@@ -8765,6 +8881,7 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 void Upscaling::ResetAAVRSTelemetry()
 {
 	aaVrsRuntimeActive = false;
+	aaVrsRuntimeContentAware = false;
 	aaVrsTelemetryLoggedActive = false;
 	aaVrsTelemetryMaskWidth = 0;
 	aaVrsTelemetryMaskHeight = 0;
@@ -8773,6 +8890,7 @@ void Upscaling::ResetAAVRSTelemetry()
 	aaVrsTelemetryMaxRate = 0;
 	aaVrsTelemetryPerformanceMode = false;
 	aaVrsTelemetryPerformanceAnisotropy = 0;
+	aaVrsTelemetryContentAware = false;
 	aaVrsTelemetryInactiveReason.clear();
 	ResetAAVRSPassTelemetry();
 }
@@ -12130,6 +12248,8 @@ void Upscaling::SetupResources()
 	peripheryTAACB = new ConstantBuffer(ConstantBufferDesc<PeripheryTAACB>());
 	delete aaVrsVisualizationCB;
 	aaVrsVisualizationCB = new ConstantBuffer(ConstantBufferDesc<AAVRSVisualizationCB>());
+	delete aaVrsRefinementCB;
+	aaVrsRefinementCB = new ConstantBuffer(ConstantBufferDesc<AAVRSRefinementCB>());
 
 	// Create blend state for depth upscaling
 	D3D11_BLEND_DESC blendDesc = {};
@@ -12185,6 +12305,7 @@ void Upscaling::ClearShaderCache()
 	foveatedCenterBlendCS = nullptr;     // com_ptr automatically releases
 	peripheryTAACS = nullptr;            // com_ptr automatically releases
 	aaVrsVisualizationCS = nullptr;      // com_ptr automatically releases
+	aaVrsRefinementCS = nullptr;         // com_ptr automatically releases
 	submitStageStretchCS = nullptr;      // com_ptr automatically releases
 	vrClearHMDMaskCS = nullptr;          // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;          // com_ptr automatically releases

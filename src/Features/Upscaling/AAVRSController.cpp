@@ -221,6 +221,8 @@ bool AAVRSController::IsSupported(ID3D11Device* a_device)
 	if (supportDevice && supportDevice != a_device) {
 		ReleaseView();
 		shadingRateSurface = nullptr;
+		shadingRateSRV = nullptr;
+		shadingRateUAV = nullptr;
 		surfaceWidth = 0;
 		surfaceHeight = 0;
 		patternData.clear();
@@ -371,6 +373,8 @@ void AAVRSController::ReleaseResources()
 {
 	ReleaseView();
 	shadingRateSurface = nullptr;
+	shadingRateSRV = nullptr;
+	shadingRateUAV = nullptr;
 	surfaceWidth = 0;
 	surfaceHeight = 0;
 	patternData.clear();
@@ -459,6 +463,12 @@ bool AAVRSController::GuardActiveRenderTarget(ID3D11DeviceContext* a_context)
 	return true;
 }
 
+void AAVRSController::UnbindShadingRateResource(ID3D11DeviceContext* a_context) const
+{
+	if (a_context && nvapiReady)
+		(void)NvAPI_D3D11_RSSetShadingRateResourceView(a_context, nullptr);
+}
+
 bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_settings)
 {
 	const uint32_t desiredWidth = std::max(1u, DivideAndRoundUp(a_settings.renderWidth, AAVRSController::kTileWidth));
@@ -468,6 +478,8 @@ bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_se
 
 	ReleaseView();
 	shadingRateSurface = nullptr;
+	shadingRateSRV = nullptr;
+	shadingRateUAV = nullptr;
 	surfaceWidth = desiredWidth;
 	surfaceHeight = desiredHeight;
 	patternValid = false;
@@ -481,9 +493,18 @@ bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_se
 	desc.Format = DXGI_FORMAT_R8_UINT;
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
-	const HRESULT textureResult = a_device->CreateTexture2D(&desc, nullptr, shadingRateSurface.put());
+	HRESULT textureResult = a_device->CreateTexture2D(&desc, nullptr, shadingRateSurface.put());
+	if (FAILED(textureResult) || !shadingRateSurface) {
+		const HRESULT uavTextureResult = textureResult;
+		shadingRateSurface = nullptr;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		textureResult = a_device->CreateTexture2D(&desc, nullptr, shadingRateSurface.put());
+		if (SUCCEEDED(textureResult) && shadingRateSurface) {
+			logger::debug("[Upscaling] Foveated Variable Rate Shading (VRS) created rate image without UAV support; content-aware refinement unavailable: 0x{:08X}", static_cast<uint32_t>(uavTextureResult));
+		}
+	}
 	if (FAILED(textureResult) || !shadingRateSurface) {
 		if (!loggedResourceFailure) {
 			logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS) failed to create shading-rate surface: 0x{:08X}", static_cast<uint32_t>(textureResult));
@@ -491,6 +512,29 @@ bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_se
 		}
 		lastDisableReason = "Failed to create shading-rate surface";
 		return false;
+	}
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = DXGI_FORMAT_R8_UINT;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MostDetailedMip = 0;
+	srvDesc.Texture2D.MipLevels = 1;
+	const HRESULT srvResult = a_device->CreateShaderResourceView(shadingRateSurface.get(), &srvDesc, shadingRateSRV.put());
+	if (FAILED(srvResult) || !shadingRateSRV) {
+		logger::debug("[Upscaling] Foveated Variable Rate Shading (VRS) failed to create rate-image SRV; visualization unavailable: 0x{:08X}", static_cast<uint32_t>(srvResult));
+		shadingRateSRV = nullptr;
+	}
+
+	if ((desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0) {
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R8_UINT;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		uavDesc.Texture2D.MipSlice = 0;
+		const HRESULT uavResult = a_device->CreateUnorderedAccessView(shadingRateSurface.get(), &uavDesc, shadingRateUAV.put());
+		if (FAILED(uavResult) || !shadingRateUAV) {
+			logger::debug("[Upscaling] Foveated Variable Rate Shading (VRS) failed to create rate-image UAV; content-aware refinement unavailable: 0x{:08X}", static_cast<uint32_t>(uavResult));
+			shadingRateUAV = nullptr;
+		}
 	}
 
 	NV_D3D11_SHADING_RATE_RESOURCE_VIEW_DESC viewDesc{};
@@ -507,6 +551,8 @@ bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_se
 			loggedResourceFailure = true;
 		}
 		shadingRateSurface = nullptr;
+		shadingRateSRV = nullptr;
+		shadingRateUAV = nullptr;
 		lastDisableReason = "Failed to create shading-rate view";
 		return false;
 	}
@@ -674,6 +720,44 @@ bool AAVRSController::UploadPattern(ID3D11DeviceContext* a_context)
 		0);
 	patternUploaded = true;
 	return true;
+}
+
+bool AAVRSController::RefineContentAware(
+	ID3D11DeviceContext* a_context,
+	ID3D11ComputeShader* a_shader,
+	ID3D11Buffer* a_constantBuffer,
+	ID3D11ShaderResourceView* a_colorSRV,
+	ID3D11ShaderResourceView* a_motionVectorSRV,
+	ID3D11ShaderResourceView* a_depthSRV)
+{
+	if (!active || suspendDepth != 0)
+		return false;
+	if (!a_context || !a_shader || !a_constantBuffer || !a_colorSRV || !a_motionVectorSRV || !a_depthSRV || !shadingRateUAV)
+		return false;
+
+	UnbindShadingRateResource(a_context);
+
+	ID3D11ShaderResourceView* srvs[3] = { a_colorSRV, a_motionVectorSRV, a_depthSRV };
+	ID3D11UnorderedAccessView* uavs[1] = { shadingRateUAV.get() };
+	ID3D11Buffer* cbs[1] = { a_constantBuffer };
+
+	a_context->CSSetShader(a_shader, nullptr, 0);
+	a_context->CSSetConstantBuffers(0, 1, cbs);
+	a_context->CSSetShaderResources(0, 3, srvs);
+	a_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+	a_context->Dispatch((surfaceWidth + 7u) >> 3, (surfaceHeight + 7u) >> 3, 1);
+
+	ID3D11ShaderResourceView* nullSRVs[3] = {};
+	ID3D11UnorderedAccessView* nullUAVs[1] = {};
+	ID3D11Buffer* nullCBs[1] = {};
+	a_context->CSSetUnorderedAccessViews(0, 1, nullUAVs, nullptr);
+	a_context->CSSetShaderResources(0, 3, nullSRVs);
+	a_context->CSSetConstantBuffers(0, 1, nullCBs);
+	a_context->CSSetShader(nullptr, nullptr, 0);
+
+	patternUploaded = false;
+	return Bind(a_context);
 }
 
 bool AAVRSController::Bind(ID3D11DeviceContext* a_context, bool a_forceFullRate)

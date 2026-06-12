@@ -11,6 +11,7 @@ cbuffer AAVRSVisualizationCB : register(b0)
 	float4 Pad;            // xy=VRS tile size, z=performance mode, w=performance anisotropy
 };
 
+Texture2D<uint> RateImage : register(t0);
 RWTexture2D<float4> OutColor : register(u0);
 
 static const uint kRateIndex1x1 = 0;
@@ -146,6 +147,17 @@ uint AAVRSPerformanceRateIndex(
 	const float centerHorizontalScale = MaskInfo.z;
 
 	const float2 tileSize = max(Pad.xy, float2(1.0, 1.0));
+	const uint2 tileSizePixels = max((uint2)(tileSize + 0.5), uint2(1u, 1u));
+	uint rateWidth = 0;
+	uint rateHeight = 0;
+	RateImage.GetDimensions(rateWidth, rateHeight);
+	if (rateWidth > 0u && rateHeight > 0u) {
+		const uint2 rateCoord = min(dispatchID.xy / tileSizePixels, uint2(rateWidth - 1u, rateHeight - 1u));
+		const uint rateIndex = RateImage[rateCoord];
+		OutColor[dispatchID.xy] = rateIndex == kRateIndex1x1 ? CenterColor : CoarseColor;
+		return;
+	}
+
 	const uint eye = min((uint)((float)dispatchID.x / eyeRenderWidth), eyeCount - 1u);
 	const float eyeOffsetX = eyeRenderWidth * (float)eye;
 	const float2 localPixel = float2((float)dispatchID.x - eyeOffsetX, (float)dispatchID.y);

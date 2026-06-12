@@ -33,6 +33,7 @@ public:
 		// When coarseOutsideMask is true, outerScale is the filled 1x1 protected mask.
 		float outerScale = kDefaultOuterScale;
 		bool coarseOutsideMask = false;
+		bool performanceMode = false;
 		// 0=2x2, 1=4x4. 2x2 is the conservative default for artifact triage.
 		uint32_t maxRate = 0;
 		std::array<CenterOffset, 2> centerOffsets{};
@@ -48,6 +49,7 @@ public:
 		uint32_t renderWidth = 0;
 		uint32_t renderHeight = 0;
 		uint32_t maxRate = 0;
+		bool performanceMode = false;
 		bool hasSettings = false;
 		bool fullRateOverride = false;
 	};
@@ -78,6 +80,7 @@ private:
 		int32_t centerHorizontalScaleQ = 0;
 		int32_t outerScaleQ = 0;
 		bool coarseOutsideMask = false;
+		bool performanceMode = false;
 		uint32_t maxRate = 0;
 		std::array<int32_t, 4> centerOffsetQ{};
 

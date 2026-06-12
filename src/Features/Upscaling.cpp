@@ -50,6 +50,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	perfMode,
 	aaVrs,
 	aaVrsVisualization,
+	aaVrsPerformanceMode,
 	aaVrsPassAware,
 	aaVrsSafeOpaqueOnly,
 	aaVrsMaxRate,
@@ -256,7 +257,8 @@ namespace
 6) Test in game that you do not have strong peripheral shimmer. If yes, increase the FOV + TAA visible outer scale or, if needed, the center scale. If not, reduce them to just before shimmer appears for best performance.)";
 	constexpr const char* kFoveatedVrsName = "Foveated Variable Rate Shading (VRS)";
 	constexpr const char* kVrsMaskVisualizationName = "VRS Mask Visualization";
-	constexpr const char* kVrsMaskRefinementInstructions = R"(1) Once Foveated Variable Rate Shading (VRS) is active, refine the FOV masks in position and size.
+	constexpr const char* kVrsMaskRefinementInstructions = R"(These steps apply to the default mask-aligned VRS mode. VRS Performance Mode deliberately shows magenta outside its fixed 0.25 inner band.
+1) Once Foveated Variable Rate Shading (VRS) is active, refine the FOV masks in position and size.
 2) Turn off FOV Mask Visualization and turn on VRS Mask Visualization.
 3) Reposition each per-eye FOV mask with FOV Left Eye Offset X/Y and FOV Right Eye Offset X/Y so the visible center becomes dark with no magenta. Light magenta at the far periphery is acceptable.
 4) Turn off VRS Mask Visualization and check in game for high-frequency flicker anywhere in the periphery.
@@ -1786,6 +1788,7 @@ namespace
 		settings.vrFpsStabilizerSync = settings.vrFpsStabilizerSync && REL::Module::IsVR();
 		settings.aaVrs = settings.aaVrs && REL::Module::IsVR();
 		settings.aaVrsVisualization = settings.aaVrsVisualization && settings.aaVrs && REL::Module::IsVR();
+		settings.aaVrsPerformanceMode = settings.aaVrsPerformanceMode && REL::Module::IsVR();
 		settings.aaVrsPassAware = settings.aaVrsPassAware && REL::Module::IsVR();
 		settings.aaVrsSafeOpaqueOnly = settings.aaVrsSafeOpaqueOnly && REL::Module::IsVR();
 		settings.aaVrsMaxRate = std::min<uint>(settings.aaVrsMaxRate, 1u);
@@ -1808,6 +1811,7 @@ namespace
 		const Upscaling::Settings defaults{};
 		settings.aaVrs = false;
 		settings.aaVrsVisualization = false;
+		settings.aaVrsPerformanceMode = defaults.aaVrsPerformanceMode;
 		settings.aaVrsPassAware = defaults.aaVrsPassAware;
 		settings.aaVrsSafeOpaqueOnly = defaults.aaVrsSafeOpaqueOnly;
 		settings.aaVrsMaxRate = defaults.aaVrsMaxRate;
@@ -1833,6 +1837,7 @@ namespace
 	{
 		o_json.erase("aaVrs");
 		o_json.erase("aaVrsVisualization");
+		o_json.erase("aaVrsPerformanceMode");
 		o_json.erase("aaVrsPassAware");
 		o_json.erase("aaVrsSafeOpaqueOnly");
 		o_json.erase("aaVrsMaxRate");
@@ -5343,14 +5348,28 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("Coarse rates are used only for passes that look like stable opaque scene shading.");
 		}
 
+		{
+			Util::BlueFrameStyleWrapper performanceStyle(true);
+			ImGui::Checkbox("VRS Performance Mode", &settings.aaVrsPerformanceMode);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Uses fixed per-eye VRS bands: 0.25=1x1, 0.40=2x1/1x2, 0.70=2x2, outside=4x4.");
+			ImGui::TextUnformatted("Stereo tiles still merge conservatively, so eye disagreements can promote a tile back toward 1x1.");
+			ImGui::TextUnformatted("This ignores the normal protected FOV-mask size for the base VRS pattern; pass-aware safety still forces risky passes to 1x1.");
+		}
+
 		const char* maxRateItems[] = { "2x2", "4x4" };
 		int maxRate = static_cast<int>(std::clamp<uint>(settings.aaVrsMaxRate, 0u, 1u));
-		if (ImGui::Combo("VRS Max Coarse Rate", &maxRate, maxRateItems, IM_ARRAYSIZE(maxRateItems))) {
-			settings.aaVrsMaxRate = static_cast<uint>(std::clamp(maxRate, 0, 1));
+		{
+			auto maxRateGuard = Util::DisableGuard(settings.aaVrsPerformanceMode);
+			if (ImGui::Combo("VRS Max Coarse Rate", &maxRate, maxRateItems, IM_ARRAYSIZE(maxRateItems))) {
+				settings.aaVrsMaxRate = static_cast<uint>(std::clamp(maxRate, 0, 1));
+			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Caps the coarsest rate used outside the protected FOV mask.");
 			ImGui::TextUnformatted("2x2 is more conservative; 4x4 has more performance risk and more artifact risk.");
+			ImGui::TextUnformatted("Performance mode uses 4x4 for its outer band, with NVAPI fallback to 2x2 if 4x4 is unavailable.");
 		}
 
 		{
@@ -5439,7 +5458,10 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
 		if (aaVrsUiState.requested) {
 			ImGui::TextUnformatted("VRS Mask Visualization replaces the scene with a binary rate mask; dark = 1x1, magenta = coarser than 1x1.");
-			ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
+			if (settings.aaVrsPerformanceMode)
+				ImGui::TextUnformatted("Performance mode target: dark shows the fixed 0.25 inner band; magenta includes all coarse VRS bands.");
+			else
+				ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
 		}
 	}
 
@@ -8289,7 +8311,8 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 	aaVrsSettings.centerHorizontalScale = centerHorizontalScale;
 	aaVrsSettings.outerScale = vrsMaskScale;
 	aaVrsSettings.coarseOutsideMask = true;
-	aaVrsSettings.maxRate = std::min<uint32_t>(settings.aaVrsMaxRate, 1u);
+	aaVrsSettings.performanceMode = settings.aaVrsPerformanceMode;
+	aaVrsSettings.maxRate = settings.aaVrsPerformanceMode ? 1u : std::min<uint32_t>(settings.aaVrsMaxRate, 1u);
 	aaVrsSettings.centerOffsets = {
 		AAVRSController::CenterOffset{ foveatedCenterOffsets[0].x, foveatedCenterOffsets[0].y },
 		AAVRSController::CenterOffset{ foveatedCenterOffsets[1].x, foveatedCenterOffsets[1].y },
@@ -8405,7 +8428,7 @@ void Upscaling::ApplyAAVRSVisualization()
 	cbData.pad = {
 		static_cast<float>(AAVRSController::kTileWidth),
 		static_cast<float>(AAVRSController::kTileHeight),
-		0.0f,
+		aaVrsSettings.performanceMode ? 1.0f : 0.0f,
 		0.0f
 	};
 	aaVrsVisualizationCB->Update(cbData);
@@ -8625,13 +8648,17 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 			aaVrsTelemetryMaskHeight != status.maskHeight ||
 			aaVrsTelemetryRenderWidth != status.renderWidth ||
 			aaVrsTelemetryRenderHeight != status.renderHeight;
-		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged) {
+		const bool modeChanged =
+			aaVrsTelemetryMaxRate != status.maxRate ||
+			aaVrsTelemetryPerformanceMode != status.performanceMode;
+		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged || modeChanged) {
 			logger::info(
-				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, maxRate={}x{}",
+				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, mode={}, maxRate={}x{}",
 				status.renderWidth,
 				status.renderHeight,
 				status.maskWidth,
 				status.maskHeight,
+				status.performanceMode ? "performance" : "mask",
 				status.maxRate == 0 ? 2 : 4,
 				status.maxRate == 0 ? 2 : 4);
 		}
@@ -8642,6 +8669,8 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 		aaVrsTelemetryMaskHeight = status.maskHeight;
 		aaVrsTelemetryRenderWidth = status.renderWidth;
 		aaVrsTelemetryRenderHeight = status.renderHeight;
+		aaVrsTelemetryMaxRate = status.maxRate;
+		aaVrsTelemetryPerformanceMode = status.performanceMode;
 		return;
 	}
 
@@ -8671,6 +8700,8 @@ void Upscaling::ResetAAVRSTelemetry()
 	aaVrsTelemetryMaskHeight = 0;
 	aaVrsTelemetryRenderWidth = 0;
 	aaVrsTelemetryRenderHeight = 0;
+	aaVrsTelemetryMaxRate = 0;
+	aaVrsTelemetryPerformanceMode = false;
 	aaVrsTelemetryInactiveReason.clear();
 	ResetAAVRSPassTelemetry();
 }

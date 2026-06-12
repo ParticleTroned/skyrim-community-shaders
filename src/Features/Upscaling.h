@@ -678,6 +678,8 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
+	bool ShouldSuppressVRInSceneOverlaySubmit() const;
+	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	void LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 		const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture = nullptr,
 		const vr::VRTextureBounds_t* a_outputBounds = nullptr, vr::EVRSubmitFlags a_submitFlags = vr::Submit_Default) const;

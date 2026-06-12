@@ -290,10 +290,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return vr::VRCompositorError_None;
 				}
 
-				vr::Texture_t overlayTexture{};
-				if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
-					upscaling.LogVRCompositorSubmitPath(eEye, "overlay-submit", pTexture, pBounds, &overlayTexture, pBounds, nSubmitFlags);
-					return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
+				if (!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
+					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
+					vr::Texture_t overlayTexture{};
+					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
+						upscaling.LogVRCompositorSubmitPath(eEye, "overlay-submit", pTexture, pBounds, &overlayTexture, pBounds, nSubmitFlags);
+						return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
+					}
 				}
 			}
 			upscaling.LogVRCompositorSubmitPath(eEye, "original-submit-fallback", pTexture, pBounds, nullptr, nullptr, nSubmitFlags);

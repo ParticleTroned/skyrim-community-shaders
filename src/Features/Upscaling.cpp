@@ -53,6 +53,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	aaVrsPerformanceMode,
 	aaVrsPerformanceAnisotropy,
 	aaVrsPassAware,
+	aaVrsProtectWater,
 	aaVrsSafeOpaqueOnly,
 	aaVrsMaxRate,
 	aaVrsPassTelemetry,
@@ -1831,6 +1832,7 @@ namespace
 		settings.aaVrsPerformanceMode = settings.aaVrsPerformanceMode && REL::Module::IsVR();
 		settings.aaVrsPerformanceAnisotropy = std::min<uint>(settings.aaVrsPerformanceAnisotropy, 2u);
 		settings.aaVrsPassAware = settings.aaVrsPassAware && REL::Module::IsVR();
+		settings.aaVrsProtectWater = settings.aaVrsProtectWater && REL::Module::IsVR();
 		settings.aaVrsSafeOpaqueOnly = settings.aaVrsSafeOpaqueOnly && REL::Module::IsVR();
 		settings.aaVrsMaxRate = std::min<uint>(settings.aaVrsMaxRate, 1u);
 		settings.aaVrsPassTelemetry = settings.aaVrsPassTelemetry && settings.aaVrs && REL::Module::IsVR();
@@ -1855,6 +1857,7 @@ namespace
 		settings.aaVrsPerformanceMode = defaults.aaVrsPerformanceMode;
 		settings.aaVrsPerformanceAnisotropy = defaults.aaVrsPerformanceAnisotropy;
 		settings.aaVrsPassAware = defaults.aaVrsPassAware;
+		settings.aaVrsProtectWater = defaults.aaVrsProtectWater;
 		settings.aaVrsSafeOpaqueOnly = defaults.aaVrsSafeOpaqueOnly;
 		settings.aaVrsMaxRate = defaults.aaVrsMaxRate;
 		settings.aaVrsPassTelemetry = defaults.aaVrsPassTelemetry;
@@ -1882,6 +1885,7 @@ namespace
 		o_json.erase("aaVrsPerformanceMode");
 		o_json.erase("aaVrsPerformanceAnisotropy");
 		o_json.erase("aaVrsPassAware");
+		o_json.erase("aaVrsProtectWater");
 		o_json.erase("aaVrsSafeOpaqueOnly");
 		o_json.erase("aaVrsMaxRate");
 		o_json.erase("aaVrsPassTelemetry");
@@ -5393,8 +5397,9 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::Checkbox("VRS Pass-Aware Safety", &settings.aaVrsPassAware);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Keeps alpha-tested, emissive, decal, particle, water, sky, grass, distant-tree, and depth/mask utility passes at 1x1.");
+			ImGui::TextUnformatted("Keeps alpha-tested, emissive, decal, particle, sky, grass, distant-tree, and depth/mask utility passes at 1x1.");
 			ImGui::TextUnformatted("Coarse rates are used only for passes that look like stable opaque scene shading.");
+			ImGui::TextUnformatted("Water has its own full-rate protection toggle below.");
 		}
 
 		{
@@ -5441,6 +5446,16 @@ void Upscaling::DrawFoveatedSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Debug safety mode: only lighting passes that survive the pass-aware filter can use coarse rates.");
 			ImGui::TextUnformatted("Use this when isolating white flicker or shimmer sources.");
+		}
+
+		{
+			auto waterGuard = Util::DisableGuard(!settings.aaVrsPassAware || settings.aaVrsSafeOpaqueOnly);
+			ImGui::Checkbox("VRS Full-Rate Water", &settings.aaVrsProtectWater);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Keeps water shader passes at 1x1 while VRS pass-aware safety is active.");
+			ImGui::TextUnformatted("Water uses animated normals, reflection, and refraction, so coarse rates can shimmer or break edges.");
+			ImGui::TextUnformatted("Disabled while VRS Safe Opaque Only is active because that broader debug mode already protects water.");
 		}
 
 		ImGui::Checkbox("VRS Pass Telemetry", &settings.aaVrsPassTelemetry);
@@ -8644,10 +8659,17 @@ bool Upscaling::ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32
 		return true;
 	};
 
+	auto* shader = a_pass ? a_pass->shader : nullptr;
+	// Handle water before generic full-rate guards so the dedicated water toggle stays authoritative.
+	if (shader && shader->shaderType.get() == RE::BSShader::Type::Water) {
+		if (settings.aaVrsProtectWater)
+			return record(AAVRSPassPolicyReason::WaterShader);
+		return settings.aaVrsSafeOpaqueOnly ? record(AAVRSPassPolicyReason::SafeOpaqueOnly) : false;
+	}
+
 	if (a_alphaTest)
 		return record(AAVRSPassPolicyReason::AlphaTest);
 
-	auto* shader = a_pass ? a_pass->shader : nullptr;
 	auto* shaderProperty = a_pass ? a_pass->shaderProperty : nullptr;
 	if (shaderProperty) {
 		using ShaderPropertyFlag = RE::BSShaderProperty::EShaderPropertyFlag;
@@ -8692,8 +8714,6 @@ bool Upscaling::ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32
 		return record(AAVRSPassPolicyReason::EffectShader);
 	case RE::BSShader::Type::Particle:
 		return record(AAVRSPassPolicyReason::ParticleShader);
-	case RE::BSShader::Type::Water:
-		return record(AAVRSPassPolicyReason::WaterShader);
 	case RE::BSShader::Type::Grass:
 		return record(AAVRSPassPolicyReason::GrassShader);
 	case RE::BSShader::Type::DistantTree:

@@ -34,6 +34,12 @@ public:
 
 	ID3D11ComputeShader* GetComputeMainComposite();
 	ID3D11ComputeShader* GetComputeMainCompositeInterior();
+	ID3D11ComputeShader* GetComputeMainCompositeMetadata();
+	ID3D11ComputeShader* GetComputeMainCompositeMetadataInterior();
+	ID3D11PixelShader* GetPixelMainComposite();
+	ID3D11PixelShader* GetPixelMainCompositeInterior();
+	ID3D11VertexShader* GetPixelMainCompositeVS();
+	Texture2D* EnsureDeferredCompositeColorCopy(ID3D11Texture2D* a_source, ID3D11ShaderResourceView* a_sourceSRV);
 
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];
@@ -42,6 +48,15 @@ public:
 
 	ID3D11ComputeShader* mainCompositeCS = nullptr;
 	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
+	ID3D11ComputeShader* mainCompositeMetadataCS = nullptr;
+	ID3D11ComputeShader* mainCompositeMetadataInteriorCS = nullptr;
+	ID3D11PixelShader* mainCompositePS = nullptr;
+	ID3D11PixelShader* mainCompositeInteriorPS = nullptr;
+	ID3D11VertexShader* mainCompositeVS = nullptr;
+	ID3D11BlendState* compositeColorBlendState = nullptr;
+	ID3D11DepthStencilState* compositeColorDepthStencilState = nullptr;
+	ID3D11RasterizerState* compositeColorRasterizerState = nullptr;
+	Texture2D* deferredCompositeColorCopy = nullptr;
 
 	bool deferredPass = false;
 

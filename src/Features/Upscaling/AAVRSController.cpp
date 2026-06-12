@@ -128,12 +128,15 @@ namespace
 		return std::min(a_leftRate, a_rightRate);
 	}
 
-	void FillRateTable(NV_D3D11_VIEWPORT_SHADING_RATE_DESC& a_desc, bool a_enable4x4)
+	void FillRateTable(NV_D3D11_VIEWPORT_SHADING_RATE_DESC& a_desc, bool a_enable4x4, bool a_forceFullRate)
 	{
 		a_desc.enableVariablePixelShadingRate = true;
 		for (auto& rate : a_desc.shadingRateTable) {
 			rate = NV_PIXEL_X1_PER_RASTER_PIXEL;
 		}
+
+		if (a_forceFullRate)
+			return;
 
 		a_desc.shadingRateTable[kRateIndex1x1] = ToPixelShadingRate(kRateIndex1x1, a_enable4x4);
 		a_desc.shadingRateTable[kRateIndex2x1] = ToPixelShadingRate(kRateIndex2x1, a_enable4x4);
@@ -236,6 +239,7 @@ bool AAVRSController::Update(const Settings& a_settings, ID3D11Device* a_device,
 	effectiveSettings.renderHeight = effectiveSettings.renderHeight != 0 ? effectiveSettings.renderHeight : effectiveSettings.displayHeight;
 	effectiveSettings.renderWidth = std::max(effectiveSettings.renderWidth, 1u);
 	effectiveSettings.renderHeight = std::max(effectiveSettings.renderHeight, 1u);
+	effectiveSettings.maxRate = std::min(effectiveSettings.maxRate, 1u);
 
 	lastSettings = effectiveSettings;
 	hasLastSettings = true;
@@ -283,6 +287,8 @@ bool AAVRSController::Update(const Settings& a_settings, ID3D11Device* a_device,
 void AAVRSController::Disable(ID3D11DeviceContext* a_context, const char* a_reason)
 {
 	suspendDepth = 0;
+	fullRateOverrideDepth = 0;
+	fullRateOverrideBound = false;
 	DisableInternal(a_context);
 	hasLastSettings = false;
 	lastDisableReason = a_reason && a_reason[0] ? a_reason : "Disabled";
@@ -294,6 +300,8 @@ void AAVRSController::Suspend(ID3D11DeviceContext* a_context)
 	if (suspendDepth != 1)
 		return;
 
+	fullRateOverrideDepth = 0;
+	fullRateOverrideBound = false;
 	DisableInternal(a_context);
 	lastDisableReason = "Suspended";
 }
@@ -326,6 +334,8 @@ void AAVRSController::ReleaseResources()
 	patternUploaded = false;
 	active = false;
 	suspendDepth = 0;
+	fullRateOverrideDepth = 0;
+	fullRateOverrideBound = false;
 	hasLastSettings = false;
 	loggedViewportBindMode = false;
 	lastDisableReason = "Resources released";
@@ -340,9 +350,11 @@ AAVRSController::Status AAVRSController::GetStatus() const
 	status.maskWidth = surfaceWidth;
 	status.maskHeight = surfaceHeight;
 	status.hasSettings = hasLastSettings;
+	status.fullRateOverride = fullRateOverrideDepth != 0 && fullRateOverrideBound;
 	if (hasLastSettings) {
 		status.renderWidth = lastSettings.renderWidth;
 		status.renderHeight = lastSettings.renderHeight;
+		status.maxRate = lastSettings.maxRate;
 	}
 	return status;
 }
@@ -415,6 +427,7 @@ AAVRSController::PatternKey AAVRSController::MakePatternKey(const Settings& a_se
 	key.centerHorizontalScaleQ = Quantize(a_settings.centerHorizontalScale);
 	key.outerScaleQ = Quantize(a_settings.outerScale);
 	key.coarseOutsideMask = a_settings.coarseOutsideMask;
+	key.maxRate = std::min(a_settings.maxRate, 1u);
 	key.centerOffsetQ = {
 		Quantize(a_settings.centerOffsets[0].x),
 		Quantize(a_settings.centerOffsets[0].y),
@@ -452,6 +465,7 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 	const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_settings.centerHorizontalScale);
 	const float protectedScale = a_settings.coarseOutsideMask ? outerScale : centerScale;
 	const bool fullRatePattern = protectedScale >= FoveatedCommon::kFullCoverageThreshold;
+	const uint8_t maxCoarseRateIndex = a_settings.maxRate == 0 ? kRateIndex2x2 : kRateIndex4x4;
 
 	auto resolveRateIndex = [&](uint32_t a_eye, float a_tileMinX, float a_tileMinY, float a_tileMaxX, float a_tileMaxY) -> uint8_t {
 		const float displayTileMinX = a_tileMinX / std::max(renderScaleX, 1e-4f);
@@ -504,7 +518,7 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 			// active foveated coverage and VRS safety padding stay 1x1.
 			if (outerDistance <= 1.0f)
 				return kRateIndex1x1;
-			return coarseSplitDistance > 1.0f ? kRateIndex4x4 : kRateIndex2x2;
+			return coarseSplitDistance > 1.0f ? maxCoarseRateIndex : kRateIndex2x2;
 		}
 		if (centerDistance <= 1.0f)
 			return kRateIndex1x1;
@@ -567,7 +581,7 @@ bool AAVRSController::UploadPattern(ID3D11DeviceContext* a_context)
 	return true;
 }
 
-bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
+bool AAVRSController::Bind(ID3D11DeviceContext* a_context, bool a_forceFullRate)
 {
 	if (!a_context || !shadingRateView)
 		return false;
@@ -578,7 +592,7 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 		const uint32_t viewportCount = viewportInfo.bound;
 		std::array<NV_D3D11_VIEWPORT_SHADING_RATE_DESC, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> viewportDescs{};
 		for (uint32_t i = 0; i < viewportCount; ++i) {
-			FillRateTable(viewportDescs[i], a_enable4x4);
+			FillRateTable(viewportDescs[i], a_enable4x4, a_forceFullRate);
 		}
 
 		NV_D3D11_VIEWPORTS_SHADING_RATE_DESC shadingRateDesc{};
@@ -593,6 +607,7 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 			bindInfo = viewportInfo;
 		return a_outViewportStatus == NVAPI_OK && a_outSurfaceStatus == NVAPI_OK;
 	};
+	const bool wants4x4Rate = !a_forceFullRate && allow4x4Rate && (!hasLastSettings || lastSettings.maxRate != 0);
 	const auto bindRateTable = [&](bool a_enable4x4, NvAPI_Status& a_outViewportStatus, NvAPI_Status& a_outSurfaceStatus) {
 		const bool stereo = hasLastSettings && lastSettings.stereo;
 		// Skyrim VR can report one viewport at this hook point, then render with
@@ -620,8 +635,8 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 		loggedViewportBindMode = true;
 	};
 
-	if (!bindRateTable(allow4x4Rate, viewportResult, surfaceResult)) {
-		if (allow4x4Rate && bindRateTable(false, viewportResult, surfaceResult)) {
+	if (!bindRateTable(wants4x4Rate, viewportResult, surfaceResult)) {
+		if (wants4x4Rate && bindRateTable(false, viewportResult, surfaceResult)) {
 			allow4x4Rate = false;
 			if (!logged4x4Fallback) {
 				logger::warn("[Upscaling] Foveated Variable Rate Shading (VRS): 4x4 shading rate unavailable, falling back to 2x2");
@@ -640,6 +655,8 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 			loggedResourceFailure = true;
 		}
 		lastDisableReason = "Failed to bind shading-rate state";
+		if (a_forceFullRate)
+			lastDisableReason = "Failed to bind full-rate shading override";
 		DisableInternal(a_context);
 		return false;
 	}
@@ -648,6 +665,40 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context)
 	active = true;
 	lastDisableReason = "";
 	return true;
+}
+
+void AAVRSController::BeginFullRateOverride(ID3D11DeviceContext* a_context)
+{
+	++fullRateOverrideDepth;
+	if (fullRateOverrideDepth != 1)
+		return;
+
+	fullRateOverrideBound = false;
+	if (!a_context || !active || suspendDepth != 0 || !shadingRateView)
+		return;
+
+	if (Bind(a_context, true)) {
+		fullRateOverrideBound = true;
+	} else {
+		fullRateOverrideDepth = 0;
+		fullRateOverrideBound = false;
+	}
+}
+
+void AAVRSController::EndFullRateOverride(ID3D11DeviceContext* a_context)
+{
+	if (fullRateOverrideDepth == 0)
+		return;
+
+	--fullRateOverrideDepth;
+	if (fullRateOverrideDepth != 0)
+		return;
+
+	const bool restoreCoarseRates = fullRateOverrideBound;
+	fullRateOverrideBound = false;
+	if (restoreCoarseRates && active && suspendDepth == 0 && a_context) {
+		(void)Bind(a_context);
+	}
 }
 
 void AAVRSController::DisableInternal(ID3D11DeviceContext* a_context)
@@ -663,6 +714,8 @@ void AAVRSController::DisableInternal(ID3D11DeviceContext* a_context)
 	}
 
 	active = false;
+	fullRateOverrideDepth = 0;
+	fullRateOverrideBound = false;
 }
 
 void AAVRSController::ReleaseView()

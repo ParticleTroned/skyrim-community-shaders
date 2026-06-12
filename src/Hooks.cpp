@@ -986,6 +986,30 @@ namespace Hooks
 #endif
 	}
 
+	bool ShouldForceFullRateForAAVRSPassSafe(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest)
+	{
+#if defined(_MSC_VER)
+		__try
+		{
+			return globals::features::upscaling.ShouldForceFullRateForAAVRSPass(a_pass, a_technique, a_alphaTest);
+		}
+		__except (1)
+		{
+			return false;
+		}
+#else
+		return globals::features::upscaling.ShouldForceFullRateForAAVRSPass(a_pass, a_technique, a_alphaTest);
+#endif
+	}
+
+	template <class Fn>
+	void RunRenderPassWithAAVRSFullRate(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, Fn&& a_fn)
+	{
+		const bool aaVrsFullRate = ShouldForceFullRateForAAVRSPassSafe(a_pass, a_technique, a_alphaTest);
+		Upscaling::ScopedAAVRSFullRateOverride aaVrsFullRateOverride(globals::features::upscaling, aaVrsFullRate);
+		a_fn();
+	}
+
 	// This is from 1.4.0 but absent in 1.4.6
 	void BSBatchRenderer_RenderPassImmediately1::thunk(
 		RE::BSRenderPass* a_pass,
@@ -998,7 +1022,9 @@ namespace Hooks
 		}
 
 		// Original call from 1.4.0
-		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		RunRenderPassWithAAVRSFullRate(a_pass, a_technique, a_alphaTest, [&]() {
+			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		});
 	}
 
 	struct BSBatchRenderer_RenderPassImmediately2  // This is from 1.4.0 but absent in 1.4.6
@@ -1041,7 +1067,9 @@ namespace Hooks
 			}
 
 			// Original call
-			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			RunRenderPassWithAAVRSFullRate(a_pass, a_technique, a_alphaTest, [&]() {
+				func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			});
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
@@ -1053,7 +1081,9 @@ namespace Hooks
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}
 
-		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		RunRenderPassWithAAVRSFullRate(a_pass, a_technique, a_alphaTest, [&]() {
+			BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		});
 	}
 
 #ifdef TRACY_ENABLE

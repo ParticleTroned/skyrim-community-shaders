@@ -8,7 +8,7 @@ cbuffer AAVRSVisualizationCB : register(b0)
 	float4 CenterOffsets;  // xy=left eye, zw=right eye
 	float4 CoarseColor;
 	float4 CenterColor;
-	float4 Pad;            // xy=VRS tile size, z=performance mode
+	float4 Pad;            // xy=VRS tile size, z=performance mode, w=performance anisotropy
 };
 
 RWTexture2D<float4> OutColor : register(u0);
@@ -21,6 +21,8 @@ static const uint kRateIndex4x4 = 4;
 static const float kPerformanceModeFullRateScale = 0.25;
 static const float kPerformanceModeAnisotropicScale = 0.40;
 static const float kPerformanceModeTwoByTwoScale = 0.70;
+static const uint kPerformanceAnisotropy2x1 = 1;
+static const uint kPerformanceAnisotropy1x2 = 2;
 
 float AAVRSTileMinMaskDistance(
 	float2 tileMin,
@@ -61,6 +63,16 @@ uint AAVRSChooseConservativeStereoRate(uint leftRate, uint rightRate)
 	return kRateIndex2x2;
 }
 
+uint AAVRSResolvePerformanceAnisotropicRate(uint performanceAnisotropy, float2 tileCenter, float2 center)
+{
+	if (performanceAnisotropy == kPerformanceAnisotropy2x1)
+		return kRateIndex2x1;
+	if (performanceAnisotropy == kPerformanceAnisotropy1x2)
+		return kRateIndex1x2;
+
+	return abs(tileCenter.x - center.x) >= abs(tileCenter.y - center.y) ? kRateIndex2x1 : kRateIndex1x2;
+}
+
 uint AAVRSPerformanceRateIndex(
 	float2 tileMin,
 	float2 tileMax,
@@ -69,7 +81,8 @@ uint AAVRSPerformanceRateIndex(
 	float eyeDisplayWidth,
 	float displayHeight,
 	float centerHorizontalScale,
-	float2 centerOffset)
+	float2 centerOffset,
+	uint performanceAnisotropy)
 {
 	if (AAVRSTileMinMaskDistance(
 			tileMin,
@@ -95,7 +108,7 @@ uint AAVRSPerformanceRateIndex(
 			centerOffset) <= 1.0) {
 		const float2 tileCenter = ((tileMin + tileMax) * 0.5) / float2(renderScaleX, renderScaleY);
 		const float2 center = FoveatedComputeCenterUV(centerOffset) * float2(eyeDisplayWidth, displayHeight);
-		return abs(tileCenter.x - center.x) >= abs(tileCenter.y - center.y) ? kRateIndex2x1 : kRateIndex1x2;
+		return AAVRSResolvePerformanceAnisotropicRate(performanceAnisotropy, tileCenter, center);
 	}
 
 	if (AAVRSTileMinMaskDistance(
@@ -128,6 +141,7 @@ uint AAVRSPerformanceRateIndex(
 	const float centerArea = MaskInfo.x;
 	const float outerArea = max(MaskInfo.y, centerArea);
 	const bool performanceMode = Pad.z > 0.5;
+	const uint performanceAnisotropy = min((uint)(Pad.w + 0.5), kPerformanceAnisotropy1x2);
 	const float protectedArea = performanceMode ? kPerformanceModeFullRateScale : (DisplayInfo.w > 0.5 ? outerArea : centerArea);
 	const float centerHorizontalScale = MaskInfo.z;
 
@@ -148,7 +162,8 @@ uint AAVRSPerformanceRateIndex(
 			eyeDisplayWidth,
 			displayHeight,
 			centerHorizontalScale,
-			eyeCenterOffset);
+			eyeCenterOffset,
+			performanceAnisotropy);
 		if (eyeCount > 1u) {
 			const uint leftRate = AAVRSPerformanceRateIndex(
 				tileMin,
@@ -158,7 +173,8 @@ uint AAVRSPerformanceRateIndex(
 				eyeDisplayWidth,
 				displayHeight,
 				centerHorizontalScale,
-				CenterOffsets.xy);
+				CenterOffsets.xy,
+				performanceAnisotropy);
 			const uint rightRate = AAVRSPerformanceRateIndex(
 				tileMin,
 				tileMax,
@@ -167,7 +183,8 @@ uint AAVRSPerformanceRateIndex(
 				eyeDisplayWidth,
 				displayHeight,
 				centerHorizontalScale,
-				CenterOffsets.zw);
+				CenterOffsets.zw,
+				performanceAnisotropy);
 			rateIndex = AAVRSChooseConservativeStereoRate(leftRate, rightRate);
 		}
 		OutColor[dispatchID.xy] = rateIndex == kRateIndex1x1 ? CenterColor : CoarseColor;

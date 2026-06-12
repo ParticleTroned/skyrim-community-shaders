@@ -929,6 +929,7 @@ private:
 	void ClearVRRenderScaleD3DRecreateSettle();
 	bool IsVRRenderScalePostD3DResourceSetupPending() const;
 	void ClearVRRenderScalePostD3DResourceSetup();
+	bool ShouldSuppressFSRRenderScaleDeactivationSubmitStage() const;
 	bool ShouldQuiesceVRSubmitStageVendorDispatch() const;
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);

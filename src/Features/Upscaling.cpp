@@ -150,6 +150,7 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
 	constexpr uint32_t kVRRenderScaleD3DRecreateSettleFrames = 2u;
+	constexpr uint32_t kVRRenderScaleFSRDeactivationD3DRecreateSettleFrames = kVRSubmitStageVendorRelatchMinCooldownFrames * 2u;
 	constexpr uint32_t kVRRenderScalePostD3DResourceSetupDelayFrames = 1u;
 	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
@@ -7161,15 +7162,23 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	};
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	const auto relatchUpscaleMethod = GetUpscaleMethod();
+	const auto relatchRuntimeUpscaleMethod = GetRuntimeUpscaleMethod();
 	const auto relatchOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const bool relatchCanUseD3DSettle = ShouldUseVRRenderScaleD3DRecreateSettle(relatchOrigin);
 	const bool relatchDisablesRenderScale =
 		IsVRRenderScaleModeActive() &&
 		!perfMode.IsEligible(settings, relatchUpscaleMethod);
+	const bool relatchDisablesFSRRenderScale =
+		relatchDisablesRenderScale &&
+		(relatchUpscaleMethod == UpscaleMethod::kFSR || relatchRuntimeUpscaleMethod == UpscaleMethod::kFSR);
+	const uint32_t d3dRecreateSettleFrames = relatchDisablesFSRRenderScale ?
+		kVRRenderScaleFSRDeactivationD3DRecreateSettleFrames :
+		kVRRenderScaleD3DRecreateSettleFrames;
 
 	static bool loggedRelatchApplyDiagnostic = false;
 	static bool loggedRelatchBeginTeardownDiagnostic = false;
 	static bool loggedRelatchVendorDeferDiagnostic = false;
+	static bool loggedRelatchFSRSettleDeferDiagnostic = false;
 	static bool loggedRelatchD3DDeferDiagnostic = false;
 	static bool loggedRelatchD3DSettleDiagnostic = false;
 	static bool loggedRelatchResourceSetupDiagnostic = false;
@@ -7178,6 +7187,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		loggedRelatchApplyDiagnostic = false;
 		loggedRelatchBeginTeardownDiagnostic = false;
 		loggedRelatchVendorDeferDiagnostic = false;
+		loggedRelatchFSRSettleDeferDiagnostic = false;
 		loggedRelatchD3DDeferDiagnostic = false;
 		loggedRelatchD3DSettleDiagnostic = false;
 		loggedRelatchResourceSetupDiagnostic = false;
@@ -7225,19 +7235,32 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (!relatchHasPendingResourceSetup && d3dSettleFrame != 0) {
 			const uint32_t currentFrame = std::max(state->frameCount, 1u);
 			const uint32_t elapsedFrames = ElapsedFrames(d3dSettleFrame, currentFrame);
-			if (elapsedFrames < kVRRenderScaleD3DRecreateSettleFrames) {
-				const uint32_t remainingFrames = std::max(1u, kVRRenderScaleD3DRecreateSettleFrames - elapsedFrames);
+			if (elapsedFrames < d3dRecreateSettleFrames) {
+				const uint32_t remainingFrames = std::max(1u, d3dRecreateSettleFrames - elapsedFrames);
 				requeueRelatch(remainingFrames, false);
 				const bool loggedSettleDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchD3DSettleDiagnostic, [&]() {
 					logger::debug(
-						"[VRRenderScale] Render-target relatch waiting {} frame(s) before D3D recreate after RenderScale deactivation.",
-						remainingFrames);
+						"[VRRenderScale] Render-target relatch waiting {} frame(s) before D3D recreate after {}RenderScale deactivation.",
+						remainingFrames,
+						relatchDisablesFSRRenderScale ? "FSR " : "");
 					VR_TRANSITION_DIAG_LOG(
-						"[VRTransition] Relatch deferred: D3D render-target recreate settling after RenderScale deactivation (elapsed={}, remaining={})",
+						"[VRTransition] Relatch deferred: D3D render-target recreate settling after {}RenderScale deactivation (elapsed={}, remaining={})",
+						relatchDisablesFSRRenderScale ? "FSR " : "",
 						elapsedFrames,
 						remainingFrames);
 				});
 				LogVRTransitionDiagnostics(*this, "render-target relatch deferred: D3D recreate settle", loggedSettleDiagnostic);
+				return false;
+			}
+
+			if (relatchDisablesFSRRenderScale &&
+				!fidelityFX.PollFSRResourceTeardownReady("FSR render-scale deactivation D3D recreate settle")) {
+				pendingFSRReset.store(true, std::memory_order_release);
+				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+				const bool loggedFSRSettleDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchFSRSettleDeferDiagnostic, [&]() {
+					VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch deferred: FSR resources are not idle after D3D recreate settle");
+				});
+				LogVRTransitionDiagnostics(*this, "render-target relatch deferred: FSR settle not idle", loggedFSRSettleDiagnostic);
 				return false;
 			}
 
@@ -7273,14 +7296,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			if (relatchDisablesRenderScale && relatchCanUseD3DSettle) {
 				const uint32_t currentFrame = std::max(state->frameCount, 1u);
 				pendingPerfModeRenderTargetRecreateD3DSettleFrame.store(currentFrame, std::memory_order_release);
-				requeueRelatch(kVRRenderScaleD3DRecreateSettleFrames, false);
+				requeueRelatch(d3dRecreateSettleFrames, false);
 				const bool loggedSettleDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchD3DSettleDiagnostic, [&]() {
 					logger::debug(
-						"[VRRenderScale] Render-target relatch delaying D3D recreate for {} frames after RenderScale deactivation teardown.",
-						kVRRenderScaleD3DRecreateSettleFrames);
+						"[VRRenderScale] Render-target relatch delaying D3D recreate for {} frames after {}RenderScale deactivation teardown.",
+						d3dRecreateSettleFrames,
+						relatchDisablesFSRRenderScale ? "FSR " : "");
 					VR_TRANSITION_DIAG_LOG(
-						"[VRTransition] Relatch deferred: vendor teardown complete; waiting {} frames before D3D render-target recreate after RenderScale deactivation",
-						kVRRenderScaleD3DRecreateSettleFrames);
+						"[VRTransition] Relatch deferred: vendor teardown complete; waiting {} frames before D3D render-target recreate after {}RenderScale deactivation",
+						d3dRecreateSettleFrames,
+						relatchDisablesFSRRenderScale ? "FSR " : "");
 				});
 				LogVRTransitionDiagnostics(*this, "render-target relatch deferred: D3D recreate settle", loggedSettleDiagnostic);
 				return false;
@@ -12571,6 +12596,10 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 		submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 		return false;
 	}
+	if (ShouldSuppressFSRRenderScaleDeactivationSubmitStage()) {
+		submitStageRuntimeActive.store(false, std::memory_order_relaxed);
+		return false;
+	}
 
 	const bool submitStageSceneActive = IsPerfModePresentationActive();
 
@@ -13830,6 +13859,24 @@ void Upscaling::ClearVRRenderScalePostD3DResourceSetup()
 {
 	pendingPerfModeRenderTargetResourceSetupFrame.store(0, std::memory_order_release);
 	pendingPerfModeRenderTargetResourceSetupSuperseded.store(false, std::memory_order_release);
+}
+
+bool Upscaling::ShouldSuppressFSRRenderScaleDeactivationSubmitStage() const
+{
+	if (!globals::game::isVR)
+		return false;
+	if (GetRuntimeUpscaleMethod() != UpscaleMethod::kFSR)
+		return false;
+	if (!IsVRRenderScaleModeActive())
+		return false;
+	if (IsRenderScaleModeRequested())
+		return false;
+	if (!ShouldUseVRRenderScaleD3DRecreateSettle(LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin)))
+		return false;
+
+	return pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+	       perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+	       IsVRRenderScaleD3DRecreateSettleActive();
 }
 
 bool Upscaling::ShouldQuiesceVRSubmitStageVendorDispatch() const

@@ -47,6 +47,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
+#	include "Common/Shading.hlsli"
 #	include "Common/Color.hlsli"
 
 #	define WATER
@@ -679,7 +680,7 @@ FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 #				include "WetnessEffects/WetnessEffects.hlsli"
 #				define CS_GET_FLOW_AWARE_RIPPLE_OFFSET(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale) WetnessEffects::GetFlowAwareRippleOffset(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale)
 #				define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) WetnessEffects::GetRainDrops(worldPos, time, normal, strength)
-#				define CS_REORIENT_NORMAL(n1, n2) WetnessEffects::ReorientNormal(n1, n2)
+#				define CS_REORIENT_NORMAL(n1, n2) ReorientNormal(n1, n2)
 #				define CS_GET_DEBUG_WETNESS_COLOR_SPECULAR(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorSpecular(rippleInfo, rippleMultiplier, splashMultiplier)
 #				define CS_GET_DEBUG_WETNESS_COLOR_UNDERWATER(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorUnderwater(rippleInfo, rippleMultiplier, splashMultiplier)
 #				define CS_GET_DEBUG_WETNESS_COLOR_STANDARD(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorStandard(rippleInfo, rippleMultiplier, splashMultiplier)

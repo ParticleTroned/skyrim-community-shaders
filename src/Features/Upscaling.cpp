@@ -58,6 +58,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	aaVrsSafeOpaqueOnly,
 	aaVrsMaxRate,
 	aaVrsPassTelemetry,
+	experimentalDeferredCompositePS,
+	aaVrsDeferredComposite,
 	frameLimitMode,
 	frameGenerationMode,
 	frameGenerationForceEnable,
@@ -1816,6 +1818,8 @@ namespace
 		settings.aaVrsSafeOpaqueOnly = settings.aaVrsSafeOpaqueOnly && REL::Module::IsVR();
 		settings.aaVrsMaxRate = std::min<uint>(settings.aaVrsMaxRate, 1u);
 		settings.aaVrsPassTelemetry = settings.aaVrsPassTelemetry && settings.aaVrs && REL::Module::IsVR();
+		settings.experimentalDeferredCompositePS = settings.experimentalDeferredCompositePS && settings.aaVrs && REL::Module::IsVR();
+		settings.aaVrsDeferredComposite = settings.aaVrsDeferredComposite && settings.experimentalDeferredCompositePS && settings.aaVrs && REL::Module::IsVR();
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
@@ -1842,6 +1846,8 @@ namespace
 		settings.aaVrsSafeOpaqueOnly = defaults.aaVrsSafeOpaqueOnly;
 		settings.aaVrsMaxRate = defaults.aaVrsMaxRate;
 		settings.aaVrsPassTelemetry = defaults.aaVrsPassTelemetry;
+		settings.experimentalDeferredCompositePS = defaults.experimentalDeferredCompositePS;
+		settings.aaVrsDeferredComposite = defaults.aaVrsDeferredComposite;
 		settings.renderScaleMode = 0;
 		settings.vrFpsStabilizerSync = false;
 		settings.perfMode = 0;
@@ -1871,6 +1877,8 @@ namespace
 		o_json.erase("aaVrsSafeOpaqueOnly");
 		o_json.erase("aaVrsMaxRate");
 		o_json.erase("aaVrsPassTelemetry");
+		o_json.erase("experimentalDeferredCompositePS");
+		o_json.erase("aaVrsDeferredComposite");
 		o_json.erase("renderScaleMode");
 		o_json.erase("vrFpsStabilizerSync");
 		o_json.erase("perfMode");
@@ -5367,6 +5375,7 @@ void Upscaling::DrawFoveatedSettings()
 		if (aaVrsStatus.hasSettings && aaVrsStatus.lastDisableReason && aaVrsStatus.lastDisableReason[0])
 			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) runtime inactive: %s", aaVrsStatus.lastDisableReason);
 	}
+
 	if (aaVrsUiState.requested) {
 		ImGui::Dummy(ImVec2(0.0f, 3.0f));
 		{
@@ -6329,6 +6338,16 @@ bool Upscaling::GetPerfModeRequested() const
 	}
 
 	return GetVRRenderScaleModeRequested() && ClampToggleUInt(settings.perfMode) != 0;
+}
+
+bool Upscaling::IsDeferredCompositePSActive() const
+{
+	return globals::game::isVR && settings.aaVrs && settings.experimentalDeferredCompositePS && aaVrsController.IsActive();
+}
+
+bool Upscaling::ShouldUseAAVRSForDeferredComposite() const
+{
+	return IsDeferredCompositePSActive() && settings.aaVrsDeferredComposite;
 }
 
 void Upscaling::SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason, bool a_allowDefer, VRUpscalingTransitionOrigin a_origin)

@@ -709,6 +709,7 @@ namespace
 	void DrawStereoSyncSettings();
 	void DrawStereoBlendSettings();
 	void DrawFoveationSettings();
+	void DrawDeferredCompositeVRSSettings(Upscaling& a_upscaling);
 	void DrawShadowmapRasterizerSettings();
 	void DrawKeyBindings();
 	void DrawDebugSection();
@@ -1375,6 +1376,39 @@ namespace
 		}
 	}
 
+	void DrawDeferredCompositeVRSSettings(Upscaling& a_upscaling)
+	{
+		auto& upscalingSettings = a_upscaling.settings;
+		if (!REL::Module::IsVR() || !a_upscaling.loaded || !upscalingSettings.aaVrs) {
+			upscalingSettings.experimentalDeferredCompositePS = false;
+			upscalingSettings.aaVrsDeferredComposite = false;
+		}
+
+		const bool vrsRequested = a_upscaling.loaded && upscalingSettings.aaVrs && REL::Module::IsVR();
+		{
+			Util::BlueFrameStyleWrapper deferredPSStyle(true);
+			auto deferredPSGuard = Util::DisableGuard(!vrsRequested);
+			ImGui::Checkbox("Experimental VRS Deferred Composite PS", &upscalingSettings.experimentalDeferredCompositePS);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Default off. Off keeps the existing deferred composite compute shader path.");
+			ImGui::TextUnformatted("On splits deferred composite metadata into compute and final scene color into a fullscreen pixel shader.");
+			ImGui::TextUnformatted("This is VR/VRS-gated while experimental.");
+		}
+
+		if (!vrsRequested || !upscalingSettings.experimentalDeferredCompositePS)
+			upscalingSettings.aaVrsDeferredComposite = false;
+		{
+			auto deferredVrsGuard = Util::DisableGuard(!vrsRequested || !upscalingSettings.experimentalDeferredCompositePS);
+			ImGui::Checkbox("VRS Deferred Composite Color", &upscalingSettings.aaVrsDeferredComposite);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Allows VRS on the experimental deferred composite color pixel shader only.");
+			ImGui::TextUnformatted("Normals, TAA mask, and motion-vector metadata stay full-rate in the compute path.");
+			ImGui::TextUnformatted("When off, the color pixel shader is forced to 1x1 even if VRS is active.");
+		}
+	}
+
 	void DrawFoveationSettings()
 	{
 		auto& vr = globals::features::vr;
@@ -1422,6 +1456,8 @@ namespace
 		upscaling.DrawFoveatedSetupInstructions();
 		drawSection("Shared FOV Mask");
 		upscaling.DrawFoveatedSettings();
+		drawSection("Experimental VRS");
+		DrawDeferredCompositeVRSSettings(upscaling);
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
 		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);

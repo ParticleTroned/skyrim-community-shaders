@@ -1,6 +1,10 @@
 #include "Deferred.h"
 
 #include <DDSTextureLoader.h>
+#include <algorithm>
+#include <cmath>
+#include <utility>
+#include <vector>
 
 #include "ShaderCache.h"
 #include "State.h"
@@ -34,6 +38,196 @@ struct BlendStates
 	}
 };
 
+namespace
+{
+	constexpr UINT kDeferredCompositePSSRVCount = 17;
+	constexpr UINT kDeferredCompositeRTVCount = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;
+	constexpr UINT kDeferredCompositeViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+
+	template <class T>
+	void ReleaseCOM(T*& a_resource)
+	{
+		if (a_resource) {
+			a_resource->Release();
+			a_resource = nullptr;
+		}
+	}
+
+	std::vector<std::pair<const char*, const char*>> BuildDeferredCompositeDefines(bool a_interior, bool a_metadataOnly)
+	{
+		std::vector<std::pair<const char*, const char*>> defines;
+
+		if (a_interior)
+			defines.push_back({ "INTERIOR", nullptr });
+
+		if (a_metadataOnly)
+			defines.push_back({ "DEFERRED_METADATA_ONLY", nullptr });
+
+		if (!a_metadataOnly) {
+			if (globals::features::dynamicCubemaps.loaded)
+				defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
+
+			if (!a_interior && globals::features::skylighting.loaded)
+				defines.push_back({ "SKYLIGHTING", nullptr });
+
+			if (globals::features::screenSpaceGI.loaded) {
+				defines.push_back({ "SSGI", nullptr });
+				if (!globals::features::screenSpaceGI.HasGIResources())
+					defines.push_back({ "SSGI_AO_ONLY", nullptr });
+			}
+
+			if (globals::features::ibl.loaded)
+				defines.push_back({ "IBL", nullptr });
+		}
+
+		if (REL::Module::IsVR())
+			defines.push_back({ "FRAMEBUFFER", nullptr });
+
+		if (globals::features::terrainBlending.loaded)
+			defines.push_back({ "TERRAIN_BLENDING", nullptr });
+
+		return defines;
+	}
+
+	void BindGlobalConstantBuffersForPS(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return;
+
+		ID3D11Buffer* sharedBuffers[2] = {
+			globals::state && globals::state->sharedDataCB ? globals::state->sharedDataCB->CB() : nullptr,
+			globals::state && globals::state->featureDataCB ? globals::state->featureDataCB->CB() : nullptr,
+		};
+		a_context->PSSetConstantBuffers(5, ARRAYSIZE(sharedBuffers), sharedBuffers);
+
+		ID3D11Buffer* frameBuffers[2]{};
+		if (auto perFrame = globals::game::perFrame.get(); perFrame && *perFrame)
+			frameBuffers[0] = *perFrame;
+		if (REL::Module::IsVR()) {
+			static REL::Relocation<ID3D11Buffer**> VRValues{ REL::Offset(0x3180688) };
+			if (auto vrValues = VRValues.get())
+				frameBuffers[1] = *vrValues;
+		}
+		a_context->PSSetConstantBuffers(12, ARRAYSIZE(frameBuffers), frameBuffers);
+	}
+
+	struct DeferredCompositePSStateBackup
+	{
+		explicit DeferredCompositePSStateBackup(ID3D11DeviceContext* a_context) :
+			context(a_context)
+		{
+			if (!context)
+				return;
+
+			context->IAGetInputLayout(&inputLayout);
+			context->IAGetPrimitiveTopology(&topology);
+			context->VSGetShader(&vertexShader, nullptr, nullptr);
+			context->HSGetShader(&hullShader, nullptr, nullptr);
+			context->DSGetShader(&domainShader, nullptr, nullptr);
+			context->GSGetShader(&geometryShader, nullptr, nullptr);
+			context->PSGetShader(&pixelShader, nullptr, nullptr);
+			context->PSGetShaderResources(0, kDeferredCompositePSSRVCount, shaderResourceViews);
+			context->PSGetSamplers(0, 1, samplers);
+			context->PSGetConstantBuffers(5, 2, sharedConstantBuffers);
+			context->PSGetConstantBuffers(12, 2, frameConstantBuffers);
+			context->OMGetRenderTargets(kDeferredCompositeRTVCount, renderTargetViews, &depthStencilView);
+			context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
+			context->OMGetDepthStencilState(&depthStencilState, &stencilRef);
+			context->RSGetState(&rasterizerState);
+			context->RSGetViewports(&viewportCount, viewports);
+		}
+
+		~DeferredCompositePSStateBackup()
+		{
+			Restore();
+			Release();
+		}
+
+		DeferredCompositePSStateBackup(const DeferredCompositePSStateBackup&) = delete;
+		DeferredCompositePSStateBackup& operator=(const DeferredCompositePSStateBackup&) = delete;
+
+		void RestoreRasterState()
+		{
+			if (!context)
+				return;
+
+			context->RSSetState(rasterizerState);
+			context->RSSetViewports(viewportCount, viewports);
+		}
+
+		void Restore()
+		{
+			if (!context || restored)
+				return;
+
+			context->OMSetRenderTargets(kDeferredCompositeRTVCount, renderTargetViews, depthStencilView);
+			context->OMSetBlendState(blendState, blendFactor, sampleMask);
+			context->OMSetDepthStencilState(depthStencilState, stencilRef);
+			RestoreRasterState();
+			context->IASetInputLayout(inputLayout);
+			context->IASetPrimitiveTopology(topology);
+			context->VSSetShader(vertexShader, nullptr, 0);
+			context->HSSetShader(hullShader, nullptr, 0);
+			context->DSSetShader(domainShader, nullptr, 0);
+			context->GSSetShader(geometryShader, nullptr, 0);
+			context->PSSetShader(pixelShader, nullptr, 0);
+			context->PSSetShaderResources(0, kDeferredCompositePSSRVCount, shaderResourceViews);
+			context->PSSetSamplers(0, 1, samplers);
+			context->PSSetConstantBuffers(5, 2, sharedConstantBuffers);
+			context->PSSetConstantBuffers(12, 2, frameConstantBuffers);
+			restored = true;
+		}
+
+		void Release()
+		{
+			ReleaseCOM(inputLayout);
+			ReleaseCOM(vertexShader);
+			ReleaseCOM(hullShader);
+			ReleaseCOM(domainShader);
+			ReleaseCOM(geometryShader);
+			ReleaseCOM(pixelShader);
+			for (auto& srv : shaderResourceViews)
+				ReleaseCOM(srv);
+			for (auto& sampler : samplers)
+				ReleaseCOM(sampler);
+			for (auto& buffer : sharedConstantBuffers)
+				ReleaseCOM(buffer);
+			for (auto& buffer : frameConstantBuffers)
+				ReleaseCOM(buffer);
+			for (auto& rtv : renderTargetViews)
+				ReleaseCOM(rtv);
+			ReleaseCOM(depthStencilView);
+			ReleaseCOM(blendState);
+			ReleaseCOM(depthStencilState);
+			ReleaseCOM(rasterizerState);
+		}
+
+		ID3D11DeviceContext* context = nullptr;
+		ID3D11InputLayout* inputLayout = nullptr;
+		D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+		ID3D11VertexShader* vertexShader = nullptr;
+		ID3D11HullShader* hullShader = nullptr;
+		ID3D11DomainShader* domainShader = nullptr;
+		ID3D11GeometryShader* geometryShader = nullptr;
+		ID3D11PixelShader* pixelShader = nullptr;
+		ID3D11ShaderResourceView* shaderResourceViews[kDeferredCompositePSSRVCount]{};
+		ID3D11SamplerState* samplers[1]{};
+		ID3D11Buffer* sharedConstantBuffers[2]{};
+		ID3D11Buffer* frameConstantBuffers[2]{};
+		ID3D11RenderTargetView* renderTargetViews[kDeferredCompositeRTVCount]{};
+		ID3D11DepthStencilView* depthStencilView = nullptr;
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4]{};
+		UINT sampleMask = 0xffffffff;
+		ID3D11DepthStencilState* depthStencilState = nullptr;
+		UINT stencilRef = 0;
+		ID3D11RasterizerState* rasterizerState = nullptr;
+		UINT viewportCount = kDeferredCompositeViewportCount;
+		D3D11_VIEWPORT viewports[kDeferredCompositeViewportCount]{};
+		bool restored = false;
+	};
+}
+
 void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc, D3D11_RENDER_TARGET_VIEW_DESC rtvDesc, D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc, DXGI_FORMAT format, uint bindFlags)
 {
 	auto renderer = globals::game::renderer;
@@ -63,14 +257,18 @@ void Deferred::SetupResources()
 	auto renderer = globals::game::renderer;
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != globals::d3d::device) {
-		if (mainCompositeCS) {
-			mainCompositeCS->Release();
-			mainCompositeCS = nullptr;
-		}
-		if (mainCompositeInteriorCS) {
-			mainCompositeInteriorCS->Release();
-			mainCompositeInteriorCS = nullptr;
-		}
+		ReleaseCOM(mainCompositeCS);
+		ReleaseCOM(mainCompositeInteriorCS);
+		ReleaseCOM(mainCompositeMetadataCS);
+		ReleaseCOM(mainCompositeMetadataInteriorCS);
+		ReleaseCOM(mainCompositePS);
+		ReleaseCOM(mainCompositeInteriorPS);
+		ReleaseCOM(mainCompositeVS);
+		ReleaseCOM(compositeColorBlendState);
+		ReleaseCOM(compositeColorDepthStencilState);
+		ReleaseCOM(compositeColorRasterizerState);
+		delete deferredCompositeColorCopy;
+		deferredCompositeColorCopy = nullptr;
 		if (linearSampler) {
 			linearSampler->Release();
 			linearSampler = nullptr;
@@ -157,6 +355,28 @@ void Deferred::SetupResources()
 
 			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
 			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
+		}
+
+		if (!compositeColorBlendState) {
+			D3D11_BLEND_DESC blendDesc{};
+			blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+			DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, &compositeColorBlendState));
+		}
+
+		if (!compositeColorDepthStencilState) {
+			D3D11_DEPTH_STENCIL_DESC depthStencilDesc{};
+			depthStencilDesc.DepthEnable = false;
+			depthStencilDesc.StencilEnable = false;
+			DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &compositeColorDepthStencilState));
+		}
+
+		if (!compositeColorRasterizerState) {
+			D3D11_RASTERIZER_DESC rasterizerDesc{};
+			rasterizerDesc.FillMode = D3D11_FILL_SOLID;
+			rasterizerDesc.CullMode = D3D11_CULL_NONE;
+			rasterizerDesc.FrontCounterClockwise = false;
+			rasterizerDesc.DepthClipEnable = false;
+			DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, &compositeColorRasterizerState));
 		}
 	}
 
@@ -467,21 +687,151 @@ void Deferred::DeferredPasses()
 			ibl.IsRuntimeEnabled() && ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr,
 		};
 
-		if (dynamicCubemaps.loaded)
-			context->CSSetSamplers(0, 1, &linearSampler);
+		bool deferredCompositePSComplete = false;
+		auto& upscaling = globals::features::upscaling;
+		const bool deferredCompositePSRequested = upscaling.loaded && upscaling.IsDeferredCompositePSActive();
+		if (!deferredCompositePSRequested && deferredCompositeColorCopy) {
+			delete deferredCompositeColorCopy;
+			deferredCompositeColorCopy = nullptr;
+		}
+		if (deferredCompositePSRequested) {
+			auto* colorCopy = EnsureDeferredCompositeColorCopy(main.texture, main.SRV);
+			auto metadataShader = interior ? GetComputeMainCompositeMetadataInterior() : GetComputeMainCompositeMetadata();
+			auto pixelShader = interior ? GetPixelMainCompositeInterior() : GetPixelMainComposite();
+			auto vertexShader = GetPixelMainCompositeVS();
 
-		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+			if (main.texture && main.RTV && colorCopy && colorCopy->resource && colorCopy->srv && normals.UAV && motionVectors.UAV &&
+				metadataShader && pixelShader && vertexShader &&
+				compositeColorBlendState && compositeColorDepthStencilState && compositeColorRasterizerState) {
+				auto renderSize = Util::ConvertToDynamic(globals::state->screenSize, submitStageSceneDomain);
+				UINT renderWidth = renderSize.x > 0.0f ? static_cast<UINT>(std::ceil(renderSize.x)) : 0;
+				UINT renderHeight = renderSize.y > 0.0f ? static_cast<UINT>(std::ceil(renderSize.y)) : 0;
 
-		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+				D3D11_TEXTURE2D_DESC mainDesc{};
+				main.texture->GetDesc(&mainDesc);
+				renderWidth = std::min(renderWidth, mainDesc.Width);
+				renderWidth = std::min(renderWidth, colorCopy->desc.Width);
+				renderHeight = std::min(renderHeight, mainDesc.Height);
+				renderHeight = std::min(renderHeight, colorCopy->desc.Height);
 
-		auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
-		context->CSSetShader(shader, nullptr, 0);
+				if (renderWidth > 0 && renderHeight > 0 && main.texture != colorCopy->resource.get()) {
+					DeferredCompositePSStateBackup psState(context);
 
-		{
-			TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
-			CS_PROFILE_SCOPE("DeferredComposite");
-			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+					ID3D11ShaderResourceView* nullSRVs[kDeferredCompositePSSRVCount]{};
+					context->CSSetShaderResources(0, ARRAYSIZE(nullSRVs), nullSRVs);
+					context->PSSetShaderResources(0, ARRAYSIZE(nullSRVs), nullSRVs);
+					ID3D11UnorderedAccessView* nullUAVs[3]{};
+					context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUAVs), nullUAVs, nullptr);
+					context->OMSetRenderTargets(0, nullptr, nullptr);
+
+					D3D11_BOX sourceBox{
+						.left = 0,
+						.top = 0,
+						.front = 0,
+						.right = renderWidth,
+						.bottom = renderHeight,
+						.back = 1,
+					};
+					context->CopySubresourceRegion(colorCopy->resource.get(), 0, 0, 0, 0, main.texture, 0, &sourceBox);
+
+					if (dynamicCubemaps.loaded)
+						context->CSSetSamplers(0, 1, &linearSampler);
+
+					context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+					ID3D11UnorderedAccessView* metadataUAVs[3]{ nullptr, normals.UAV, motionVectors.UAV };
+					context->CSSetUnorderedAccessViews(0, ARRAYSIZE(metadataUAVs), metadataUAVs, nullptr);
+					context->CSSetShader(metadataShader, nullptr, 0);
+
+					{
+						TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Metadata Dispatch");
+						CS_PROFILE_SCOPE("DeferredCompositeMetadata");
+						context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+					}
+					context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUAVs), nullUAVs, nullptr);
+
+					D3D11_VIEWPORT viewport{};
+					viewport.TopLeftX = 0.0f;
+					viewport.TopLeftY = 0.0f;
+					viewport.Width = static_cast<float>(renderWidth);
+					viewport.Height = static_cast<float>(renderHeight);
+					viewport.MinDepth = 0.0f;
+					viewport.MaxDepth = 1.0f;
+					context->RSSetViewports(1, &viewport);
+
+					context->IASetInputLayout(nullptr);
+					context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+					context->VSSetShader(vertexShader, nullptr, 0);
+					context->HSSetShader(nullptr, nullptr, 0);
+					context->DSSetShader(nullptr, nullptr, 0);
+					context->GSSetShader(nullptr, nullptr, 0);
+					context->PSSetShader(pixelShader, nullptr, 0);
+					context->RSSetState(compositeColorRasterizerState);
+					context->OMSetBlendState(compositeColorBlendState, nullptr, 0xffffffff);
+					context->OMSetDepthStencilState(compositeColorDepthStencilState, 0);
+
+					ID3D11RenderTargetView* rtvs[1]{ main.RTV };
+					context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
+
+					const bool deferredCompositeGuarded = upscaling.GuardAAVRSRenderTarget();
+					const bool deferredCompositeVrsAllowed = deferredCompositeGuarded && upscaling.ShouldUseAAVRSForDeferredComposite();
+					Upscaling::ScopedAAVRSFullRateOverride aaVrsFullRateOverride(
+						upscaling,
+						globals::game::isVR && deferredCompositeGuarded && !deferredCompositeVrsAllowed);
+
+					ID3D11ShaderResourceView* psSrvs[kDeferredCompositePSSRVCount]{
+						srvs[0],
+						srvs[1],
+						srvs[2],
+						srvs[3],
+						srvs[4],
+						srvs[5],
+						srvs[6],
+						srvs[7],
+						srvs[8],
+						srvs[9],
+						srvs[10],
+						srvs[11],
+						srvs[12],
+						srvs[13],
+						srvs[14],
+						srvs[15],
+						colorCopy->srv.get(),
+					};
+					context->PSSetShaderResources(0, ARRAYSIZE(psSrvs), psSrvs);
+					if (linearSampler)
+						context->PSSetSamplers(0, 1, &linearSampler);
+					BindGlobalConstantBuffersForPS(context);
+
+					{
+						TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Color Draw");
+						CS_PROFILE_SCOPE("DeferredCompositePS");
+						context->Draw(3, 0);
+					}
+					psState.RestoreRasterState();
+
+					deferredCompositePSComplete = true;
+				}
+			}
+		}
+
+		if (!deferredCompositePSComplete) {
+			if (dynamicCubemaps.loaded)
+				context->CSSetSamplers(0, 1, &linearSampler);
+
+			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+			ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+			auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
+			context->CSSetShader(shader, nullptr, 0);
+
+			{
+				TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite - Dispatch");
+				CS_PROFILE_SCOPE("DeferredComposite");
+				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+			}
 		}
 	}
 
@@ -631,18 +981,59 @@ void Deferred::ResetBlendStates()
 
 void Deferred::ClearShaderCache()
 {
-	if (mainCompositeCS) {
-		mainCompositeCS->Release();
-		mainCompositeCS = nullptr;
+	ReleaseCOM(mainCompositeCS);
+	ReleaseCOM(mainCompositeInteriorCS);
+	ReleaseCOM(mainCompositeMetadataCS);
+	ReleaseCOM(mainCompositeMetadataInteriorCS);
+	ReleaseCOM(mainCompositePS);
+	ReleaseCOM(mainCompositeInteriorPS);
+	ReleaseCOM(mainCompositeVS);
+	ReleaseCOM(copyShadowCS);
+	delete deferredCompositeColorCopy;
+	deferredCompositeColorCopy = nullptr;
+}
+
+Texture2D* Deferred::EnsureDeferredCompositeColorCopy(ID3D11Texture2D* a_source, ID3D11ShaderResourceView* a_sourceSRV)
+{
+	if (!a_source || !a_sourceSRV)
+		return nullptr;
+
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	a_source->GetDesc(&sourceDesc);
+	if (sourceDesc.SampleDesc.Count != 1) {
+		delete deferredCompositeColorCopy;
+		deferredCompositeColorCopy = nullptr;
+		return nullptr;
 	}
-	if (mainCompositeInteriorCS) {
-		mainCompositeInteriorCS->Release();
-		mainCompositeInteriorCS = nullptr;
+
+	const bool recreate =
+		!deferredCompositeColorCopy ||
+		deferredCompositeColorCopy->desc.Width != sourceDesc.Width ||
+		deferredCompositeColorCopy->desc.Height != sourceDesc.Height ||
+		deferredCompositeColorCopy->desc.MipLevels != sourceDesc.MipLevels ||
+		deferredCompositeColorCopy->desc.ArraySize != sourceDesc.ArraySize ||
+		deferredCompositeColorCopy->desc.Format != sourceDesc.Format ||
+		deferredCompositeColorCopy->desc.SampleDesc.Count != sourceDesc.SampleDesc.Count ||
+		deferredCompositeColorCopy->desc.SampleDesc.Quality != sourceDesc.SampleDesc.Quality;
+
+	if (recreate) {
+		delete deferredCompositeColorCopy;
+		deferredCompositeColorCopy = nullptr;
+
+		D3D11_TEXTURE2D_DESC copyDesc = sourceDesc;
+		copyDesc.Usage = D3D11_USAGE_DEFAULT;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		copyDesc.CPUAccessFlags = 0;
+		copyDesc.MiscFlags = 0;
+
+		deferredCompositeColorCopy = new Texture2D(copyDesc, "Deferred::CompositeColorCopy");
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		a_sourceSRV->GetDesc(&srvDesc);
+		deferredCompositeColorCopy->CreateSRV(srvDesc);
 	}
-	if (copyShadowCS) {
-		copyShadowCS->Release();
-		copyShadowCS = nullptr;
-	}
+
+	return deferredCompositeColorCopy;
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
@@ -650,28 +1041,7 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 	if (!mainCompositeCS) {
 		logger::debug("Compiling DeferredCompositeCS");
 
-		std::vector<std::pair<const char*, const char*>> defines;
-
-		if (globals::features::dynamicCubemaps.loaded)
-			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
-
-		if (globals::features::skylighting.loaded)
-			defines.push_back({ "SKYLIGHTING", nullptr });
-
-		if (globals::features::screenSpaceGI.loaded) {
-			defines.push_back({ "SSGI", nullptr });
-			if (!globals::features::screenSpaceGI.HasGIResources())
-				defines.push_back({ "SSGI_AO_ONLY", nullptr });
-		}
-
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
-
-		if (REL::Module::IsVR())
-			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", nullptr });
+		auto defines = BuildDeferredCompositeDefines(false, false);
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeCS;
@@ -682,29 +1052,64 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 	if (!mainCompositeInteriorCS) {
 		logger::debug("Compiling DeferredCompositeCS INTERIOR");
 
-		std::vector<std::pair<const char*, const char*>> defines;
-		defines.push_back({ "INTERIOR", nullptr });
-
-		if (globals::features::dynamicCubemaps.loaded)
-			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
-
-		if (globals::features::screenSpaceGI.loaded) {
-			defines.push_back({ "SSGI", nullptr });
-			if (!globals::features::screenSpaceGI.HasGIResources())
-				defines.push_back({ "SSGI_AO_ONLY", nullptr });
-		}
-
-		if (globals::features::ibl.loaded)
-			defines.push_back({ "IBL", nullptr });
-
-		if (REL::Module::IsVR())
-			defines.push_back({ "FRAMEBUFFER", nullptr });
-
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", nullptr });
+		auto defines = BuildDeferredCompositeDefines(true, false);
 		mainCompositeInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeInteriorCS;
+}
+
+ID3D11ComputeShader* Deferred::GetComputeMainCompositeMetadata()
+{
+	if (!mainCompositeMetadataCS) {
+		logger::debug("Compiling DeferredCompositeCS METADATA");
+
+		auto defines = BuildDeferredCompositeDefines(false, true);
+		mainCompositeMetadataCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
+	}
+	return mainCompositeMetadataCS;
+}
+
+ID3D11ComputeShader* Deferred::GetComputeMainCompositeMetadataInterior()
+{
+	if (!mainCompositeMetadataInteriorCS) {
+		logger::debug("Compiling DeferredCompositeCS INTERIOR METADATA");
+
+		auto defines = BuildDeferredCompositeDefines(true, true);
+		mainCompositeMetadataInteriorCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
+	}
+	return mainCompositeMetadataInteriorCS;
+}
+
+ID3D11PixelShader* Deferred::GetPixelMainComposite()
+{
+	if (!mainCompositePS) {
+		logger::debug("Compiling DeferredCompositePS");
+
+		auto defines = BuildDeferredCompositeDefines(false, false);
+		mainCompositePS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositePS.hlsl", defines, "ps_5_0"));
+	}
+	return mainCompositePS;
+}
+
+ID3D11PixelShader* Deferred::GetPixelMainCompositeInterior()
+{
+	if (!mainCompositeInteriorPS) {
+		logger::debug("Compiling DeferredCompositePS INTERIOR");
+
+		auto defines = BuildDeferredCompositeDefines(true, false);
+		mainCompositeInteriorPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositePS.hlsl", defines, "ps_5_0"));
+	}
+	return mainCompositeInteriorPS;
+}
+
+ID3D11VertexShader* Deferred::GetPixelMainCompositeVS()
+{
+	if (!mainCompositeVS) {
+		logger::debug("Compiling DeferredCompositeVS");
+
+		mainCompositeVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeVS.hlsl", {}, "vs_5_0"));
+	}
+	return mainCompositeVS;
 }
 
 void Deferred::Hooks::Main_RenderShadowMaps::thunk()

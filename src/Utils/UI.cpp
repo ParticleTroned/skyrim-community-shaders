@@ -2321,14 +2321,13 @@ namespace Util
 
 		void RenderWeatherControlledTooltip(RE::TESWeather* weather)
 		{
-			const auto& theme = Menu::GetSingleton()->GetTheme();
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-			ImGui::TextColored(theme.StatusPalette.Warning, "Weather Override Active");
+			Util::Text::Warning("Weather Override Active");
 			ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
 				weather ? weather->GetFormEditorID() : "Unknown");
 			ImGui::Separator();
-			ImGui::TextColored(theme.StatusPalette.InfoColor, "Click to open CS Editor");
+			Util::Text::Success("Click to open CS Editor");
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}
@@ -2620,7 +2619,7 @@ namespace Util
 
 				ImGui::BeginTooltip();
 				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Setting Constrained");
+				Util::Text::Warning("Setting Constrained");
 				ImGui::Text("This setting is constrained by:");
 				ImGui::Spacing();
 				for (const auto& src : constraint.sources) {
@@ -2628,8 +2627,7 @@ namespace Util
 					ImGui::Indent();
 					ImGui::TextWrapped("%s", src.reason.c_str());
 					if (src.recommendDisableAtBoot) {
-						ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f),
-							"Consider disabling this feature at boot for best compatibility.");
+						Util::Text::WrappedError("Consider disabling this feature at boot for best compatibility.");
 					}
 					ImGui::Unindent();
 				}

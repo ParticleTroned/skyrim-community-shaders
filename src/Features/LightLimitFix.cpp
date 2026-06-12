@@ -665,7 +665,7 @@ void LightLimitFix::DrawOverlay()
 	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale();
 	ImGui::SetNextWindowPos(ImVec2(pos, pos), ImGuiCond_Always);
 	ImGui::Begin("##LLFDebug", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-	ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "DEBUG FEATURE - LIGHT LIMIT VISUALISATION ENABLED");
+	Util::Text::Error("DEBUG FEATURE - LIGHT LIMIT VISUALISATION ENABLED");
 
 	if (ImGui::TreeNodeEx("Statistics", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());

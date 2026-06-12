@@ -11,7 +11,6 @@
 #include "Menu.h"
 #include "Plugin.h"
 #include "State.h"
-#include "Util.h"
 #include "Utils/UI.h"
 
 namespace
@@ -318,11 +317,8 @@ void HomePageRenderer::RenderActiveConstraintsSection()
 	ImGui::Spacing();
 
 	// Use warning color for the header to draw attention
-	auto menu = Menu::GetSingleton();
-	ImVec4 warningColor = menu ? menu->GetTheme().StatusPalette.Warning : ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
-
-	ImGui::PushStyleColor(ImGuiCol_Text, warningColor);
-	bool headerOpen = ImGui::CollapsingHeader("Active Setting Constraints", ImGuiTreeNodeFlags_None);
+	ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
+	bool headerOpen = ImGui::CollapsingHeader(T("menu.home.active_constraints", "Active Setting Constraints"), ImGuiTreeNodeFlags_None);
 	ImGui::PopStyleColor();
 
 	if (headerOpen) {
@@ -378,9 +374,9 @@ void HomePageRenderer::RenderActiveConstraintsSection()
 
 		// Cell render -- column 2 ("Constrained By") is clickable to navigate
 		// to the first source feature's settings page.
-		auto cellRender = [warningColor](int rowIdx, int colIdx, const ConstraintRow& row) {
+		auto cellRender = [](int rowIdx, int colIdx, const ConstraintRow& row) {
 			if (colIdx == 0) {
-				Util::RenderTableCell(row.setting, "", "", nullptr, ImVec4(1, 1, 1, 1), true, warningColor);
+				Util::RenderTableCell(row.setting, "", "", nullptr, ImVec4(1, 1, 1, 1), true, Util::Colors::GetWarning());
 			} else if (colIdx == 1) {
 				Util::RenderTableCell(row.forcedTo, "", "", nullptr, ImVec4(1, 1, 1, 1), true);
 			} else if (colIdx == 2) {
@@ -583,7 +579,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		if (weatherKey.empty()) {
 			const char* warnText = "CS Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift";
 			centerText(warnText);
-			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.0f, 1.0f), "%s", warnText);
+			Util::Text::Warning("%s", warnText);
 		} else {
 			std::string infoStr = "CS Editor hotkey will be: " + Util::Input::KeyIdToString(weatherKey);
 			centerText(infoStr.c_str());

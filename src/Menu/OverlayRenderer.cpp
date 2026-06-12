@@ -33,6 +33,12 @@ namespace
 
 	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strncmp(win->Name, MAIN_WINDOW_PREFIX, strlen(MAIN_WINDOW_PREFIX)) == 0; }
 
+	bool ShouldShowShaderCompilationProgress()
+	{
+		auto* menu = Menu::GetSingleton();
+		return REL::Module::IsVR() || (menu && menu->IsEnabled);
+	}
+
 	void DrawShaderCompilationFailures(uint64_t failed, const Menu::ThemeSettings& themeSettings)
 	{
 		ImGui::TextColored(themeSettings.StatusPalette.Error,
@@ -196,8 +202,9 @@ bool OverlayRenderer::ShouldSkipRendering()
 	auto hide = shaderCache->IsHideErrors();
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	auto* renderDoc = RenderDoc::GetSingleton();
+	const bool showShaderCompilationProgress = shaderCache->IsCompiling() && ShouldShowShaderCompilationProgress();
 
-	return !(shaderCache->IsCompiling() ||
+	return !(showShaderCompilationProgress ||
 			 Menu::GetSingleton()->IsEnabled ||
 			 EditorWindow::GetSingleton()->open ||
 			 abTestingManager->IsEnabled() ||
@@ -272,6 +279,10 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
 
 	if (shaderCache->IsCompiling()) {
+		if (!ShouldShowShaderCompilationProgress()) {
+			return;
+		}
+
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();

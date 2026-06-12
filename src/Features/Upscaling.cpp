@@ -5858,6 +5858,7 @@ void Upscaling::DataLoaded()
 {
 	DisableAutoDynamicResolutionSetting();
 	ApplyOpenCompositeUpscalingBlocker(true);
+	ApplyDeferredCompositeVRSRuntimeSettings("data load");
 	const auto& blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
 		logger::warn("[Upscaling] Skipping data-loaded upscaling adjustments because Open Composite has {}=true.", blocker.settingName);
@@ -6340,14 +6341,111 @@ bool Upscaling::GetPerfModeRequested() const
 	return GetVRRenderScaleModeRequested() && ClampToggleUInt(settings.perfMode) != 0;
 }
 
+bool Upscaling::IsDeferredCompositePSRequested() const
+{
+	return globals::game::isVR && settings.aaVrs && settings.experimentalDeferredCompositePS;
+}
+
+bool Upscaling::IsDeferredCompositePSRuntimeEnabled() const
+{
+	return deferredCompositePSRuntimeEnabled;
+}
+
+bool Upscaling::IsDeferredCompositePSPending() const
+{
+	return deferredCompositePSRuntimeEnabled != IsDeferredCompositePSRequested();
+}
+
+bool Upscaling::IsAAVRSDeferredCompositeRequested() const
+{
+	return IsDeferredCompositePSRequested() && settings.aaVrsDeferredComposite;
+}
+
+bool Upscaling::IsAAVRSDeferredCompositeRuntimeEnabled() const
+{
+	return aaVrsDeferredCompositeRuntimeEnabled;
+}
+
+bool Upscaling::IsAAVRSDeferredCompositePending() const
+{
+	return aaVrsDeferredCompositeRuntimeEnabled != IsAAVRSDeferredCompositeRequested();
+}
+
 bool Upscaling::IsDeferredCompositePSActive() const
 {
-	return globals::game::isVR && settings.aaVrs && settings.experimentalDeferredCompositePS && aaVrsController.IsActive();
+	return globals::game::isVR && settings.aaVrs && deferredCompositePSRuntimeEnabled && aaVrsController.IsActive();
 }
 
 bool Upscaling::ShouldUseAAVRSForDeferredComposite() const
 {
-	return IsDeferredCompositePSActive() && settings.aaVrsDeferredComposite;
+	return IsDeferredCompositePSActive() && aaVrsDeferredCompositeRuntimeEnabled;
+}
+
+void Upscaling::ApplyDeferredCompositeVRSRuntimeSettings(const char* a_reason)
+{
+	const char* reasonPrefix = a_reason && a_reason[0] ? " for " : "";
+	const char* reasonText = a_reason && a_reason[0] ? a_reason : "";
+	const bool runtimeBlocked = GetOpenCompositeUpscalingBlocker().active || IsRenderDocUpscalingBlocked(false);
+	bool nextDeferredCompositePS = IsDeferredCompositePSRequested() && !runtimeBlocked;
+	bool nextDeferredCompositeVRS = IsAAVRSDeferredCompositeRequested() && !runtimeBlocked;
+
+	const bool shouldPrewarmDeferredCompositeShaders =
+		nextDeferredCompositePS &&
+		globals::deferred &&
+		globals::d3d::device &&
+		globals::state &&
+		globals::shaderCache &&
+		globals::shaderCache->IsEnabled();
+
+	if (shouldPrewarmDeferredCompositeShaders) {
+		auto* deferred = globals::deferred;
+		try {
+			auto* metadataShader = deferred->GetComputeMainCompositeMetadata();
+			auto* metadataShaderInterior = deferred->GetComputeMainCompositeMetadataInterior();
+			auto* pixelShader = deferred->GetPixelMainComposite();
+			auto* pixelShaderInterior = deferred->GetPixelMainCompositeInterior();
+			auto* vertexShader = deferred->GetPixelMainCompositeVS();
+			if (!metadataShader || !metadataShaderInterior || !pixelShader || !pixelShaderInterior || !vertexShader) {
+				logger::warn(
+					"[Upscaling] Deferred composite PS prewarm{}{} did not produce a complete shader set; leaving runtime disabled until the next load/restart.",
+					reasonPrefix,
+					reasonText);
+				nextDeferredCompositePS = false;
+				nextDeferredCompositeVRS = false;
+			}
+		} catch (const std::exception& e) {
+			logger::warn(
+				"[Upscaling] Deferred composite PS prewarm{}{} failed: {}; leaving runtime disabled until the next load/restart.",
+				reasonPrefix,
+				reasonText,
+				e.what());
+			nextDeferredCompositePS = false;
+			nextDeferredCompositeVRS = false;
+		} catch (...) {
+			logger::warn(
+				"[Upscaling] Deferred composite PS prewarm{}{} failed with an unknown exception; leaving runtime disabled until the next load/restart.",
+				reasonPrefix,
+				reasonText);
+			nextDeferredCompositePS = false;
+			nextDeferredCompositeVRS = false;
+		}
+	}
+
+	const bool changed =
+		deferredCompositePSRuntimeEnabled != nextDeferredCompositePS ||
+		aaVrsDeferredCompositeRuntimeEnabled != nextDeferredCompositeVRS;
+
+	deferredCompositePSRuntimeEnabled = nextDeferredCompositePS;
+	aaVrsDeferredCompositeRuntimeEnabled = nextDeferredCompositeVRS;
+
+	if (changed) {
+		logger::info(
+			"[Upscaling] Applied deferred composite VRS runtime settings{}{}: pixelShader={}, colorVRS={}",
+			reasonPrefix,
+			reasonText,
+			BoolText(deferredCompositePSRuntimeEnabled),
+			BoolText(aaVrsDeferredCompositeRuntimeEnabled));
+	}
 }
 
 void Upscaling::SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason, bool a_allowDefer, VRUpscalingTransitionOrigin a_origin)
@@ -7662,6 +7760,8 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 
 	if (!globals::game::isVR)
 		return true;
+
+	ApplyDeferredCompositeVRSRuntimeSettings("post-load");
 
 	if (!renderScalePostLoadResetRelevant)
 		return true;

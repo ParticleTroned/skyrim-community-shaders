@@ -1282,8 +1282,8 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
-	// Motion vector copy texture is only needed for DLSS
-	if (a_upscalemethod == UpscaleMethod::kDLSS) {
+	// Encoded motion vectors are used by DLSS and by FSR's non-VR full-frame path.
+	if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
 		if (!motionVectorCopyTexture) {
 			auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
@@ -1298,7 +1298,9 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
+	}
 
+	if (a_upscalemethod == UpscaleMethod::kDLSS) {
 		// RCAS sharpener texture - matches kMAIN format for HDR sharpening
 		if (!sharpenerTexture) {
 			main.texture->GetDesc(&texDesc);
@@ -1348,8 +1350,8 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
-	// Motion vector copy texture is only needed for DLSS - destroy when switching away from DLSS
-	if (a_upscalemethod != UpscaleMethod::kDLSS) {
+	// Encoded motion vectors are used by DLSS and by FSR's non-VR full-frame path.
+	if (a_upscalemethod != UpscaleMethod::kDLSS && a_upscalemethod != UpscaleMethod::kFSR) {
 		if (motionVectorCopyTexture) {
 			motionVectorCopyTexture->srv = nullptr;
 			motionVectorCopyTexture->uav = nullptr;
@@ -1358,6 +1360,9 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			delete motionVectorCopyTexture;
 			motionVectorCopyTexture = nullptr;
 		}
+	}
+
+	if (a_upscalemethod != UpscaleMethod::kDLSS) {
 		if (sharpenerTexture) {
 			sharpenerTexture->srv = nullptr;
 			sharpenerTexture->uav = nullptr;
@@ -1717,19 +1722,17 @@ void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc)
 	uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 	uint32_t eyeHeightIn = (uint32_t)renderSize.y;
 
-	// Textures guaranteed to exist: EnsureVRIntermediateTextures() was called in Upscale()
-	// Read the original game depth SRV for ClearHMDMask — the combined stereo buffer is
+	// Textures guaranteed to exist: EnsureVRIntermediateTextures() was called in Upscale().
+	// Per-eye motion vectors are already written by EncodeTexturesCS before this helper runs.
+	// Read the original game depth SRV for ClearHMDMask; the combined stereo buffer is
 	// definitively valid here, whereas the per-eye copy may silently produce zeros on some
 	// depth-stencil format / driver combinations.
 	auto& depthTexture = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	auto& motionVectorRT = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-
 	for (uint32_t i = 0; i < 2; ++i) {
 		uint32_t offsetXIn = (i == 1) ? eyeWidthIn : 0;
 		D3D11_BOX srcBox = { offsetXIn, 0, 0, offsetXIn + eyeWidthIn, eyeHeightIn, 1 };
 
 		context->CopySubresourceRegion(vrIntermediateColorIn[i]->resource.get(), 0, 0, 0, 0, colorSrc, 0, &srcBox);
-		context->CopySubresourceRegion(vrIntermediateMotionVectors[i]->resource.get(), 0, 0, 0, 0, motionVectorRT.texture, 0, &srcBox);
 
 		uint32_t depthOffset = (i == 1) ? eyeWidthIn : 0;
 		ClearHMDMask(vrIntermediateColorIn[i]->uav.get(), depthTexture.depthSRV,
@@ -2550,6 +2553,12 @@ void Upscaling::Upscale()
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	const bool requiresEncodedMotionVectors = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
+	const bool requiresCombinedEncodedMotionVectors = requiresEncodedMotionVectors && !globals::game::isVR;
+	if (requiresCombinedEncodedMotionVectors && (!motionVectorCopyTexture || !motionVectorCopyTexture->uav || !motionVectorCopyTexture->resource)) {
+		logger::error("[Upscaling] Missing encoded motion-vector resources for method {}", magic_enum::enum_name(upscaleMethod));
+		return;
+	}
 
 	{
 		state->BeginPerfEvent("Encode Upscaling Textures");
@@ -2569,7 +2578,7 @@ void Upscaling::Upscale()
 		uint32_t eyeRenderHeight = (uint32_t)renderSize.y;
 
 		// Sources are the same combined stereo buffers for both VR and non-VR.
-		// The shader applies EyeOffsetX to sample the correct half.
+		// The shader applies SourceOffset to sample the correct eye region.
 		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 		context->CSSetShader(GetEncodeTexturesCS(), nullptr, 0);
@@ -2577,20 +2586,28 @@ void Upscaling::Upscale()
 		for (uint32_t i = 0; i < numEyes; ++i) {
 			uint32_t offsetX = i * eyeRenderWidth;
 
-			UpscalingDataCB upscalingData;
-			upscalingData.trueSamplingDim = float2((float)eyeRenderWidth, (float)eyeRenderHeight);
-			upscalingData.eyeOffsetX = offsetX;
+			UpscalingDataCB upscalingData{};
+			upscalingData.dispatchDim = float2((float)eyeRenderWidth, (float)eyeRenderHeight);
+			upscalingData.trueSamplingDim = renderSize;
+			upscalingData.invTrueSamplingDim = float2(
+				renderSize.x > 0.0f ? 1.0f / renderSize.x : 0.0f,
+				renderSize.y > 0.0f ? 1.0f / renderSize.y : 0.0f);
+			upscalingData.seamCenterX = renderSize.x * 0.5f;
+			upscalingData.seamHalfWidthPx = 2.0f;
+			upscalingData.maskDepthThreshold = 1e-6f;
+			upscalingData.vrSeamHardening = globals::game::isVR ? 1.0f : 0.0f;
+			upscalingData.sourceOffset = float2((float)offsetX, 0.0f);
 			upscalingDataCB->Update(upscalingData);
 			auto upscalingBuffer = upscalingDataCB->CB();
 			context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
 
-			// u2 (MotionVectorOutput): DLSS only — 5x5 dilated MVec for ghosting reduction.
-			// u3 (DepthOutput): VR FSR only — converts R24G8_TYPELESS to R32_FLOAT so
+			// u2 (MotionVectorOutput): encoded MVec for DLSS and FSR.
+			// u3 (DepthOutput): VR FSR only; converts R24G8_TYPELESS to R32_FLOAT so
 			//   GetFfxResourceDescriptionDX11() returns a valid format. DLSS depth is copied in Streamline.cpp.
 			ID3D11UnorderedAccessView* uavs[4] = {
 				globals::game::isVR ? vrIntermediateReactiveMask[i]->uav.get() : reactiveMaskTexture->uav.get(),
 				globals::game::isVR ? vrIntermediateTransparencyMask[i]->uav.get() : transparencyCompositionMaskTexture->uav.get(),
-				(upscaleMethod == UpscaleMethod::kDLSS) ? (globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get()) : nullptr,
+				requiresEncodedMotionVectors ? (globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get()) : nullptr,
 				(upscaleMethod == UpscaleMethod::kFSR && globals::game::isVR) ? vrIntermediateLinearDepth[i]->uav.get() : nullptr
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -2616,11 +2633,14 @@ void Upscaling::Upscale()
 	{
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
+		ID3D11Resource* motionVectorResource = requiresEncodedMotionVectors ?
+			(globals::game::isVR ? motionVector.texture : motionVectorCopyTexture->resource.get()) :
+			nullptr;
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
-			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorCopyTexture->resource.get());
+			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
-			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
+			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
 		}
 
 		state->EndPerfEvent();

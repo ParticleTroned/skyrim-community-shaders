@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Buffer.h"
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -7,7 +8,7 @@
 #include "Upscaling/Streamline.h"
 #include <atomic>
 #include <d3d11_4.h>
-#include <d3d12.h>
+#include <directx/d3d12.h>
 #include <limits>
 #include <winrt/base.h>
 
@@ -107,13 +108,20 @@ public:
 		float useWideKernel;
 		float pad0;
 	};
+	STATIC_ASSERT_ALIGNAS_16(JitterCB);
 
 	struct UpscalingDataCB
 	{
-		float2 trueSamplingDim;  // per-eye render dim in VR, full render dim otherwise
-		uint eyeOffsetX;         // X offset into stereo source buffers; 0 for non-VR / left eye
-		uint pad0;
+		float2 dispatchDim;          // per-eye dispatch dim in VR, full render dim otherwise
+		float2 trueSamplingDim;      // full source render dim, combined stereo in VR
+		float2 invTrueSamplingDim;
+		float seamCenterX;
+		float seamHalfWidthPx;
+		float maskDepthThreshold;
+		float vrSeamHardening;
+		float2 sourceOffset;         // X/Y offset into the source buffers
 	};
+	STATIC_ASSERT_ALIGNAS_16(UpscalingDataCB);
 
 	ConstantBuffer* jitterCB = nullptr;
 	ConstantBuffer* upscalingDataCB = nullptr;

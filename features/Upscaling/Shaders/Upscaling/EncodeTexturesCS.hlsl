@@ -2,9 +2,14 @@
 
 cbuffer UpscalingData : register(b0)
 {
-	float2 TrueSamplingDim;  // per-eye render dim in VR, full render dim otherwise
-	uint EyeOffsetX;         // X offset into stereo source buffers; 0 for non-VR / left eye
-	uint pad0;
+	float2 DispatchDim;
+	float2 TrueSamplingDim;  // full source render dim, combined stereo in VR
+	float2 InvTrueSamplingDim;
+	float SeamCenterX;
+	float SeamHalfWidthPx;
+	float MaskDepthThreshold;
+	float VRSeamHardening;
+	float2 SourceOffset;
 };
 
 Texture2D<float2> TAAMask : register(t0);
@@ -19,46 +24,82 @@ RWTexture2D<float2> MotionVectorOutput : register(u2);
 RWTexture2D<float> DepthOutput : register(u3);
 #endif
 
-[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
-	// Bounds check in per-eye space; EyeOffsetX=0 makes this identical to the old path for non-VR
-	if (any(dispatchID.xy >= uint2(TrueSamplingDim)))
+float IsMaskedDepth(float depth)
+{
+	return depth <= MaskDepthThreshold ? 1.0 : 0.0;
+}
+
+float ComputeMaskEdgeFactor(uint2 sourcePos)
+{
+	static const int2 offsets[4] = {
+		int2(1, 0),
+		int2(-1, 0),
+		int2(0, 1),
+		int2(0, -1)
+	};
+
+	float centerMasked = IsMaskedDepth(DepthMask[sourcePos]);
+	float edge = 0.0;
+
+	[unroll]
+	for (uint i = 0; i < 4; ++i) {
+		int2 samplePos = int2(sourcePos) + offsets[i];
+		if (any(samplePos < 0) || any(samplePos >= int2(TrueSamplingDim)))
+			continue;
+
+		float neighborMasked = IsMaskedDepth(DepthMask[samplePos]);
+		edge = max(edge, abs(neighborMasked - centerMasked));
+	}
+
+	return edge;
+}
+
+float ComputeSeamFactor(uint2 sourcePos)
+{
+	float seamHalfWidth = max(SeamHalfWidthPx, 0.0001);
+	float seamCenterUv = SeamCenterX * InvTrueSamplingDim.x;
+	float pixelUv = (float(sourcePos.x) + 0.5) * InvTrueSamplingDim.x;
+	float seamDistance = abs(pixelUv - seamCenterUv) * TrueSamplingDim.x;
+	return saturate((seamHalfWidth - seamDistance) / seamHalfWidth);
+}
+
+[numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
+{
+	uint2 localPos = dispatchID.xy;
+	if (any(localPos >= uint2(DispatchDim)))
 		return;
 
-	// All source reads are in full stereo space; outputs are 0-based (per-eye or full-frame)
-	uint2 srcCoord = dispatchID.xy + uint2(EyeOffsetX, 0);
+	uint2 sourceOffset = uint2(SourceOffset + 0.5);
+	uint2 srcCoord = localPos + sourceOffset;
 
 	float2 taaMask = TAAMask[srcCoord];
 	float transparencyCompositionMask = NormalsWaterMask[srcCoord].z;
+	float reactiveMask = taaMask.x * 0.1 + taaMask.y;
+
+#if defined(DLSS) || defined(FSR)
+	float2 motionVector = MotionVectorMask[srcCoord];
+	float2 outputMotionVector = motionVector;
+#endif
 
 #if defined(DLSS)
 	float depth = DepthMask[srcCoord];
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, SharedData::GetScreenDepth(depth));
 
-	// Find longest motion vector in 5x5 neighborhood
-	float2 motionVector = MotionVectorMask[srcCoord];
+	// Find longest motion vector in 5x5 neighborhood.
 	float2 longestMotionVector = motionVector;
 	float maxMotionLengthSq = dot(motionVector, motionVector);
 
-	[unroll] for (int y = -2; y <= 2; y++)
-	{
-		[unroll] for (int x = -2; x <= 2; x++)
-		{
-			int2 samplePos = int2(dispatchID.xy) + int2(x, y);
-
-			// Bounds check stays in per-eye space — prevents cross-eye contamination in VR
-			// and out-of-bounds reads in non-VR (EyeOffsetX=0 makes these equivalent)
+	[unroll]
+	for (int y = -2; y <= 2; y++) {
+		[unroll]
+		for (int x = -2; x <= 2; x++) {
+			int2 samplePos = int2(srcCoord) + int2(x, y);
 			if (any(samplePos < 0) || any(samplePos >= int2(TrueSamplingDim)))
 				continue;
 
-			// Source read uses full stereo offset
-			int2 srcPos = samplePos + int2(EyeOffsetX, 0);
-			float neighborDepth = DepthMask[srcPos];
-
-			// Take neighbor if it's longer AND closer
+			float neighborDepth = DepthMask[samplePos];
 			if (neighborDepth < depth) {
-				float2 neighborMotionVector = MotionVectorMask[srcPos];
-
-				// Square motion vector for length
+				float2 neighborMotionVector = MotionVectorMask[samplePos];
 				float motionLengthSq = dot(neighborMotionVector, neighborMotionVector);
 
 				if (motionLengthSq > maxMotionLengthSq) {
@@ -69,17 +110,34 @@ RWTexture2D<float> DepthOutput : register(u3);
 		}
 	}
 
-	MotionVectorOutput[dispatchID.xy] = lerp(longestMotionVector, motionVector, nearFactor);
+	outputMotionVector = lerp(longestMotionVector, motionVector, nearFactor);
+#endif
+
+	if (VRSeamHardening > 0.5) {
+		float seamFactor = ComputeSeamFactor(srcCoord);
+		float maskEdgeFactor = ComputeMaskEdgeFactor(srcCoord);
+
+#if defined(DLSS) || defined(FSR)
+		float seamScale = lerp(1.0, 0.25, seamFactor);
+		float maskScale = lerp(1.0, 0.0, maskEdgeFactor);
+		outputMotionVector *= min(seamScale, maskScale);
+#endif
+
+		float hardeningMask = max(seamFactor * 0.6, maskEdgeFactor);
+		reactiveMask = max(reactiveMask, hardeningMask);
+		transparencyCompositionMask = max(transparencyCompositionMask, hardeningMask);
+	}
+
+#if defined(DLSS) || defined(FSR)
+	MotionVectorOutput[localPos] = outputMotionVector;
 #endif
 
 #if defined(DEPTH_OUTPUT)
 	// Copy depth as R32_FLOAT so FSR DX11 backend receives a typed format.
 	// The raw depth resource is R24G8_TYPELESS in VR which maps to FFX_SURFACE_FORMAT_UNKNOWN.
-	DepthOutput[dispatchID.xy] = DepthMask[srcCoord];
+	DepthOutput[localPos] = DepthMask[srcCoord];
 #endif
 
-	float reactiveMask = taaMask.x * 0.1 + taaMask.y;
-	ReactiveMask[dispatchID.xy] = reactiveMask;
-
-	TransparencyCompositionMask[dispatchID.xy] = transparencyCompositionMask;
+	ReactiveMask[localPos] = reactiveMask;
+	TransparencyCompositionMask[localPos] = transparencyCompositionMask;
 }

@@ -256,6 +256,19 @@ void VR::SubmitOverlayFrame()
 	auto& enabled = globals::menu->IsEnabled;
 	auto& overlayVisible = globals::menu->overlayVisible;
 
+	static bool wasMenuEnabled = false;
+	const bool menuJustOpened = enabled && !wasMenuEnabled;
+	wasMenuEnabled = enabled;
+
+	if (menuJustOpened &&
+	    settings.VRMenuPositioningMethod == 1 &&
+	    (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both)) {
+		SetFixedOverlayToCurrentHMD();
+		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+			savedPlayerWorldPos = player->GetPosition();
+		}
+	}
+
 	if ((enabled || overlayVisible || IsWelcomeOverlayVisible()) && menuTexture.get() && menuRTV.get()) {
 		UpdateFixedWorldPositioning();
 		UpdateOverlayDrag();

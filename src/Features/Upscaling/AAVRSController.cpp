@@ -18,6 +18,9 @@ namespace
 	constexpr uint8_t kRateIndex2x2 = 3;
 	constexpr uint8_t kRateIndex4x4 = 4;
 	constexpr float kOutsideMask2x2Fraction = 1.0f / 5.0f;
+	constexpr float kPerformanceModeFullRateScale = 0.25f;
+	constexpr float kPerformanceModeAnisotropicScale = 0.40f;
+	constexpr float kPerformanceModeTwoByTwoScale = 0.70f;
 
 	struct ViewportCountInfo
 	{
@@ -354,7 +357,8 @@ AAVRSController::Status AAVRSController::GetStatus() const
 	if (hasLastSettings) {
 		status.renderWidth = lastSettings.renderWidth;
 		status.renderHeight = lastSettings.renderHeight;
-		status.maxRate = lastSettings.maxRate;
+		status.maxRate = lastSettings.maxRate != 0 && allow4x4Rate ? 1u : 0u;
+		status.performanceMode = lastSettings.performanceMode;
 	}
 	return status;
 }
@@ -418,16 +422,18 @@ bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_se
 AAVRSController::PatternKey AAVRSController::MakePatternKey(const Settings& a_settings)
 {
 	PatternKey key{};
+	const bool performanceMode = a_settings.performanceMode;
 	key.stereo = a_settings.stereo;
 	key.displayWidth = a_settings.displayWidth;
 	key.displayHeight = a_settings.displayHeight;
 	key.renderWidth = a_settings.renderWidth;
 	key.renderHeight = a_settings.renderHeight;
-	key.centerScaleQ = Quantize(a_settings.centerScale);
+	key.centerScaleQ = performanceMode ? 0 : Quantize(a_settings.centerScale);
 	key.centerHorizontalScaleQ = Quantize(a_settings.centerHorizontalScale);
-	key.outerScaleQ = Quantize(a_settings.outerScale);
-	key.coarseOutsideMask = a_settings.coarseOutsideMask;
-	key.maxRate = std::min(a_settings.maxRate, 1u);
+	key.outerScaleQ = performanceMode ? 0 : Quantize(a_settings.outerScale);
+	key.coarseOutsideMask = performanceMode ? false : a_settings.coarseOutsideMask;
+	key.performanceMode = performanceMode;
+	key.maxRate = performanceMode ? 0u : std::min(a_settings.maxRate, 1u);
 	key.centerOffsetQ = {
 		Quantize(a_settings.centerOffsets[0].x),
 		Quantize(a_settings.centerOffsets[0].y),
@@ -458,13 +464,13 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 	const float eyeDisplayWidth = a_settings.stereo ? std::max(displayWidth / static_cast<float>(eyeCount), 1.0f) : displayWidth;
 	const float renderScaleX = eyeDisplayWidth > 0.0f ? eyeRenderWidth / eyeDisplayWidth : 1.0f;
 	const float renderScaleY = displayHeight > 0.0f ? renderHeight / displayHeight : 1.0f;
-
-	const float centerScale = FoveatedCommon::ClampCenterScale(a_settings.centerScale);
-	const float outerScale = ClampMaskScale(std::max(a_settings.outerScale, centerScale), FoveatedCommon::kCenterScaleMax);
-	const float coarseSplitScale = outerScale + (FoveatedCommon::kCenterScaleMax - outerScale) * kOutsideMask2x2Fraction;
+	const bool performanceMode = a_settings.performanceMode;
 	const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_settings.centerHorizontalScale);
-	const float protectedScale = a_settings.coarseOutsideMask ? outerScale : centerScale;
-	const bool fullRatePattern = protectedScale >= FoveatedCommon::kFullCoverageThreshold;
+	const float centerScale = performanceMode ? 0.0f : FoveatedCommon::ClampCenterScale(a_settings.centerScale);
+	const float outerScale = performanceMode ? 0.0f : ClampMaskScale(std::max(a_settings.outerScale, centerScale), FoveatedCommon::kCenterScaleMax);
+	const float coarseSplitScale = performanceMode ? 0.0f : outerScale + (FoveatedCommon::kCenterScaleMax - outerScale) * kOutsideMask2x2Fraction;
+	const float protectedScale = performanceMode ? 0.0f : (a_settings.coarseOutsideMask ? outerScale : centerScale);
+	const bool fullRatePattern = !performanceMode && protectedScale >= FoveatedCommon::kFullCoverageThreshold;
 	const uint8_t maxCoarseRateIndex = a_settings.maxRate == 0 ? kRateIndex2x2 : kRateIndex4x4;
 
 	auto resolveRateIndex = [&](uint32_t a_eye, float a_tileMinX, float a_tileMinY, float a_tileMaxX, float a_tileMaxY) -> uint8_t {
@@ -473,54 +479,45 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 		const float displayTileMinY = a_tileMinY / std::max(renderScaleY, 1e-4f);
 		const float displayTileMaxY = a_tileMaxY / std::max(renderScaleY, 1e-4f);
 		const auto& centerOffset = a_settings.centerOffsets[std::min<uint32_t>(a_eye, 1u)];
-		const float centerDistance = TileMinMaskDistance(
-			displayTileMinX,
-			displayTileMinY,
-			displayTileMaxX,
-			displayTileMaxY,
-			eyeDisplayWidth,
-			displayHeight,
-			centerScale,
-			centerHorizontalScale,
-			centerOffset);
-
-		const float outerDistance = TileMinMaskDistance(
-			displayTileMinX,
-			displayTileMinY,
-			displayTileMaxX,
-			displayTileMaxY,
-			eyeDisplayWidth,
-			displayHeight,
-			outerScale,
-			centerHorizontalScale,
-			centerOffset,
-			FoveatedCommon::kCenterScaleMax);
-		const float coarseSplitDistance = TileMinMaskDistance(
-			displayTileMinX,
-			displayTileMinY,
-			displayTileMaxX,
-			displayTileMaxY,
-			eyeDisplayWidth,
-			displayHeight,
-			coarseSplitScale,
-			centerHorizontalScale,
-			centerOffset,
-			FoveatedCommon::kCenterScaleMax);
+		const auto maskDistance = [&](float a_scale, float a_scaleMax = FoveatedCommon::kCenterScaleMax) {
+			return TileMinMaskDistance(
+				displayTileMinX,
+				displayTileMinY,
+				displayTileMaxX,
+				displayTileMaxY,
+				eyeDisplayWidth,
+				displayHeight,
+				a_scale,
+				centerHorizontalScale,
+				centerOffset,
+				a_scaleMax);
+		};
 		const float tileCenterX = (displayTileMinX + displayTileMaxX) * 0.5f;
 		const float tileCenterY = (displayTileMinY + displayTileMaxY) * 0.5f;
 		const float centerX = (0.5f + centerOffset.x) * eyeDisplayWidth;
 		const float centerY = (0.5f + centerOffset.y) * displayHeight;
+
+		if (performanceMode) {
+			if (maskDistance(kPerformanceModeFullRateScale) <= 1.0f)
+				return kRateIndex1x1;
+
+			if (maskDistance(kPerformanceModeAnisotropicScale) <= 1.0f)
+				return std::abs(tileCenterX - centerX) >= std::abs(tileCenterY - centerY) ? kRateIndex2x1 : kRateIndex1x2;
+
+			return maskDistance(kPerformanceModeTwoByTwoScale) <= 1.0f ? kRateIndex2x2 : kRateIndex4x4;
+		}
 
 		if (fullRatePattern)
 			return kRateIndex1x1;
 		if (a_settings.coarseOutsideMask) {
 			// In coarse-outside mode, outerScale is the filled protected mask:
 			// active foveated coverage and VRS safety padding stay 1x1.
-			if (outerDistance <= 1.0f)
+			if (maskDistance(outerScale) <= 1.0f)
 				return kRateIndex1x1;
-			return coarseSplitDistance > 1.0f ? maxCoarseRateIndex : kRateIndex2x2;
+
+			return maskDistance(coarseSplitScale) > 1.0f ? maxCoarseRateIndex : kRateIndex2x2;
 		}
-		if (centerDistance <= 1.0f)
+		if (maskDistance(centerScale) <= 1.0f)
 			return kRateIndex1x1;
 		return std::abs(tileCenterX - centerX) >= std::abs(tileCenterY - centerY) ? kRateIndex2x1 : kRateIndex1x2;
 	};
@@ -607,7 +604,7 @@ bool AAVRSController::Bind(ID3D11DeviceContext* a_context, bool a_forceFullRate)
 			bindInfo = viewportInfo;
 		return a_outViewportStatus == NVAPI_OK && a_outSurfaceStatus == NVAPI_OK;
 	};
-	const bool wants4x4Rate = !a_forceFullRate && allow4x4Rate && (!hasLastSettings || lastSettings.maxRate != 0);
+	const bool wants4x4Rate = !a_forceFullRate && allow4x4Rate && (!hasLastSettings || lastSettings.performanceMode || lastSettings.maxRate != 0);
 	const auto bindRateTable = [&](bool a_enable4x4, NvAPI_Status& a_outViewportStatus, NvAPI_Status& a_outSurfaceStatus) {
 		const bool stereo = hasLastSettings && lastSettings.stereo;
 		// Skyrim VR can report one viewport at this hook point, then render with

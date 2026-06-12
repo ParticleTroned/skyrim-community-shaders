@@ -130,6 +130,7 @@ public:
 		uint perfMode = 0;
 		bool aaVrs = false;
 		bool aaVrsVisualization = false;
+		bool aaVrsPerformanceMode = false;
 		bool aaVrsPassAware = true;
 		bool aaVrsSafeOpaqueOnly = false;
 		uint aaVrsMaxRate = 0;  // 0=2x2, 1=4x4
@@ -332,7 +333,7 @@ public:
 		float4 centerOffsets;  // xy=left eye, zw=right eye
 		float4 coarseColor;
 		float4 centerColor;
-		float4 pad;
+		float4 pad;            // xy=VRS tile size, z=performance mode
 	};
 
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
@@ -697,6 +698,8 @@ public:
 	uint32_t aaVrsTelemetryMaskHeight = 0;
 	uint32_t aaVrsTelemetryRenderWidth = 0;
 	uint32_t aaVrsTelemetryRenderHeight = 0;
+	uint32_t aaVrsTelemetryMaxRate = 0;
+	bool aaVrsTelemetryPerformanceMode = false;
 	std::string aaVrsTelemetryInactiveReason;
 	std::array<std::atomic<uint32_t>, kAAVRSPassPolicyReasonCount> aaVrsPassPolicyCounters{};
 

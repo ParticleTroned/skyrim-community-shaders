@@ -21,6 +21,9 @@ namespace
 	constexpr float kPerformanceModeFullRateScale = 0.25f;
 	constexpr float kPerformanceModeAnisotropicScale = 0.40f;
 	constexpr float kPerformanceModeTwoByTwoScale = 0.70f;
+	constexpr uint32_t kPerformanceAnisotropyAuto = 0;
+	constexpr uint32_t kPerformanceAnisotropy2x1 = 1;
+	constexpr uint32_t kPerformanceAnisotropy1x2 = 2;
 
 	struct ViewportCountInfo
 	{
@@ -37,6 +40,30 @@ namespace
 	int32_t Quantize(float a_value)
 	{
 		return std::isfinite(a_value) ? static_cast<int32_t>(std::lround(a_value * 10000.0f)) : 0;
+	}
+
+	uint32_t ClampPerformanceAnisotropy(uint32_t a_value)
+	{
+		return std::min<uint32_t>(a_value, kPerformanceAnisotropy1x2);
+	}
+
+	bool DimensionMatches(uint32_t a_actual, uint32_t a_expected)
+	{
+		const uint32_t minExpected = a_expected > 2u ? a_expected - 2u : 1u;
+		return a_actual >= minExpected && a_actual <= a_expected + 2u;
+	}
+
+	bool IsTexture2DRenderTargetView(D3D11_RTV_DIMENSION a_dimension)
+	{
+		switch (a_dimension) {
+		case D3D11_RTV_DIMENSION_TEXTURE2D:
+		case D3D11_RTV_DIMENSION_TEXTURE2DARRAY:
+		case D3D11_RTV_DIMENSION_TEXTURE2DMS:
+		case D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY:
+			return true;
+		default:
+			return false;
+		}
 	}
 
 	float ClampMaskScale(float a_value, float a_max)
@@ -129,6 +156,19 @@ namespace
 		if (a_rightRate == kRateIndex2x2)
 			return a_leftRate;
 		return std::min(a_leftRate, a_rightRate);
+	}
+
+	uint8_t ResolvePerformanceAnisotropicRate(uint32_t a_anisotropy, float a_tileCenterX, float a_tileCenterY, float a_centerX, float a_centerY)
+	{
+		switch (ClampPerformanceAnisotropy(a_anisotropy)) {
+		case kPerformanceAnisotropy2x1:
+			return kRateIndex2x1;
+		case kPerformanceAnisotropy1x2:
+			return kRateIndex1x2;
+		case kPerformanceAnisotropyAuto:
+		default:
+			return std::abs(a_tileCenterX - a_centerX) >= std::abs(a_tileCenterY - a_centerY) ? kRateIndex2x1 : kRateIndex1x2;
+		}
 	}
 
 	void FillRateTable(NV_D3D11_VIEWPORT_SHADING_RATE_DESC& a_desc, bool a_enable4x4, bool a_forceFullRate)
@@ -243,6 +283,7 @@ bool AAVRSController::Update(const Settings& a_settings, ID3D11Device* a_device,
 	effectiveSettings.renderWidth = std::max(effectiveSettings.renderWidth, 1u);
 	effectiveSettings.renderHeight = std::max(effectiveSettings.renderHeight, 1u);
 	effectiveSettings.maxRate = std::min(effectiveSettings.maxRate, 1u);
+	effectiveSettings.performanceAnisotropy = ClampPerformanceAnisotropy(effectiveSettings.performanceAnisotropy);
 
 	lastSettings = effectiveSettings;
 	hasLastSettings = true;
@@ -359,8 +400,63 @@ AAVRSController::Status AAVRSController::GetStatus() const
 		status.renderHeight = lastSettings.renderHeight;
 		status.maxRate = lastSettings.maxRate != 0 && allow4x4Rate ? 1u : 0u;
 		status.performanceMode = lastSettings.performanceMode;
+		status.performanceAnisotropy = lastSettings.performanceMode ? lastSettings.performanceAnisotropy : kPerformanceAnisotropyAuto;
 	}
 	return status;
+}
+
+bool AAVRSController::GuardActiveRenderTarget(ID3D11DeviceContext* a_context)
+{
+	if (!active || suspendDepth != 0)
+		return true;
+	if (!a_context || !hasLastSettings)
+		return true;
+
+	auto disable = [&](const char* a_reason) {
+		lastDisableReason = a_reason;
+		DisableInternal(a_context);
+		return false;
+	};
+
+	ID3D11RenderTargetView* rawRTV = nullptr;
+	a_context->OMGetRenderTargets(1, &rawRTV, nullptr);
+
+	winrt::com_ptr<ID3D11RenderTargetView> rtv;
+	rtv.attach(rawRTV);
+	if (!rtv) {
+		return disable("Unexpected missing render target");
+	}
+
+	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+	rtv->GetDesc(&rtvDesc);
+	if (!IsTexture2DRenderTargetView(rtvDesc.ViewDimension)) {
+		return disable("Unexpected render target view");
+	}
+
+	winrt::com_ptr<ID3D11Resource> resource;
+	rtv->GetResource(resource.put());
+	if (!resource) {
+		return disable("Missing render target resource");
+	}
+
+	ID3D11Texture2D* rawTexture = nullptr;
+	const HRESULT textureQuery = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&rawTexture));
+
+	winrt::com_ptr<ID3D11Texture2D> texture;
+	texture.attach(rawTexture);
+	if (FAILED(textureQuery) || !texture) {
+		return disable("Unexpected render target resource");
+	}
+
+	D3D11_TEXTURE2D_DESC textureDesc{};
+	texture->GetDesc(&textureDesc);
+
+	if (!DimensionMatches(textureDesc.Width, lastSettings.renderWidth) ||
+		!DimensionMatches(textureDesc.Height, lastSettings.renderHeight)) {
+		return disable("Unexpected render target size");
+	}
+
+	return true;
 }
 
 bool AAVRSController::EnsureSurface(ID3D11Device* a_device, const Settings& a_settings)
@@ -433,6 +529,7 @@ AAVRSController::PatternKey AAVRSController::MakePatternKey(const Settings& a_se
 	key.outerScaleQ = performanceMode ? 0 : Quantize(a_settings.outerScale);
 	key.coarseOutsideMask = performanceMode ? false : a_settings.coarseOutsideMask;
 	key.performanceMode = performanceMode;
+	key.performanceAnisotropy = performanceMode ? ClampPerformanceAnisotropy(a_settings.performanceAnisotropy) : kPerformanceAnisotropyAuto;
 	key.maxRate = performanceMode ? 0u : std::min(a_settings.maxRate, 1u);
 	key.centerOffsetQ = {
 		Quantize(a_settings.centerOffsets[0].x),
@@ -465,6 +562,7 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 	const float renderScaleX = eyeDisplayWidth > 0.0f ? eyeRenderWidth / eyeDisplayWidth : 1.0f;
 	const float renderScaleY = displayHeight > 0.0f ? renderHeight / displayHeight : 1.0f;
 	const bool performanceMode = a_settings.performanceMode;
+	const uint32_t performanceAnisotropy = ClampPerformanceAnisotropy(a_settings.performanceAnisotropy);
 	const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_settings.centerHorizontalScale);
 	const float centerScale = performanceMode ? 0.0f : FoveatedCommon::ClampCenterScale(a_settings.centerScale);
 	const float outerScale = performanceMode ? 0.0f : ClampMaskScale(std::max(a_settings.outerScale, centerScale), FoveatedCommon::kCenterScaleMax);
@@ -502,7 +600,7 @@ bool AAVRSController::EnsurePattern(const Settings& a_settings)
 				return kRateIndex1x1;
 
 			if (maskDistance(kPerformanceModeAnisotropicScale) <= 1.0f)
-				return std::abs(tileCenterX - centerX) >= std::abs(tileCenterY - centerY) ? kRateIndex2x1 : kRateIndex1x2;
+				return ResolvePerformanceAnisotropicRate(performanceAnisotropy, tileCenterX, tileCenterY, centerX, centerY);
 
 			return maskDistance(kPerformanceModeTwoByTwoScale) <= 1.0f ? kRateIndex2x2 : kRateIndex4x4;
 		}
@@ -671,8 +769,15 @@ void AAVRSController::BeginFullRateOverride(ID3D11DeviceContext* a_context)
 		return;
 
 	fullRateOverrideBound = false;
-	if (!a_context || !active || suspendDepth != 0 || !shadingRateView)
+	if (!a_context || !active || suspendDepth != 0 || !shadingRateView) {
+		fullRateOverrideDepth = 0;
 		return;
+	}
+	if (!GuardActiveRenderTarget(a_context)) {
+		fullRateOverrideDepth = 0;
+		fullRateOverrideBound = false;
+		return;
+	}
 
 	if (Bind(a_context, true)) {
 		fullRateOverrideBound = true;
@@ -694,6 +799,8 @@ void AAVRSController::EndFullRateOverride(ID3D11DeviceContext* a_context)
 	const bool restoreCoarseRates = fullRateOverrideBound;
 	fullRateOverrideBound = false;
 	if (restoreCoarseRates && active && suspendDepth == 0 && a_context) {
+		if (!GuardActiveRenderTarget(a_context))
+			return;
 		(void)Bind(a_context);
 	}
 }

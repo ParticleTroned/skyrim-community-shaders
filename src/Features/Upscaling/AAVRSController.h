@@ -34,6 +34,8 @@ public:
 		float outerScale = kDefaultOuterScale;
 		bool coarseOutsideMask = false;
 		bool performanceMode = false;
+		// 0=auto radial, 1=force 2x1, 2=force 1x2.
+		uint32_t performanceAnisotropy = 0;
 		// 0=2x2, 1=4x4. 2x2 is the conservative default for artifact triage.
 		uint32_t maxRate = 0;
 		std::array<CenterOffset, 2> centerOffsets{};
@@ -50,6 +52,7 @@ public:
 		uint32_t renderHeight = 0;
 		uint32_t maxRate = 0;
 		bool performanceMode = false;
+		uint32_t performanceAnisotropy = 0;
 		bool hasSettings = false;
 		bool fullRateOverride = false;
 	};
@@ -67,6 +70,7 @@ public:
 	bool IsSuspended() const { return suspendDepth != 0; }
 	const char* GetLastDisableReason() const { return lastDisableReason; }
 	Status GetStatus() const;
+	bool GuardActiveRenderTarget(ID3D11DeviceContext* a_context);
 
 private:
 	struct PatternKey
@@ -81,6 +85,7 @@ private:
 		int32_t outerScaleQ = 0;
 		bool coarseOutsideMask = false;
 		bool performanceMode = false;
+		uint32_t performanceAnisotropy = 0;
 		uint32_t maxRate = 0;
 		std::array<int32_t, 4> centerOffsetQ{};
 

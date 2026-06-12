@@ -51,6 +51,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	aaVrs,
 	aaVrsVisualization,
 	aaVrsPerformanceMode,
+	aaVrsPerformanceAnisotropy,
 	aaVrsPassAware,
 	aaVrsSafeOpaqueOnly,
 	aaVrsMaxRate,
@@ -336,6 +337,19 @@ namespace
 		case Upscaling::AAVRSPassPolicyReason::Count:
 		default:
 			return "None";
+		}
+	}
+
+	const char* GetAAVRSPerformanceAnisotropyName(uint a_value)
+	{
+		switch (std::min<uint>(a_value, 2u)) {
+		case 1:
+			return "2x1";
+		case 2:
+			return "1x2";
+		case 0:
+		default:
+			return "Auto";
 		}
 	}
 
@@ -1815,6 +1829,7 @@ namespace
 		settings.aaVrs = settings.aaVrs && REL::Module::IsVR();
 		settings.aaVrsVisualization = settings.aaVrsVisualization && settings.aaVrs && REL::Module::IsVR();
 		settings.aaVrsPerformanceMode = settings.aaVrsPerformanceMode && REL::Module::IsVR();
+		settings.aaVrsPerformanceAnisotropy = std::min<uint>(settings.aaVrsPerformanceAnisotropy, 2u);
 		settings.aaVrsPassAware = settings.aaVrsPassAware && REL::Module::IsVR();
 		settings.aaVrsSafeOpaqueOnly = settings.aaVrsSafeOpaqueOnly && REL::Module::IsVR();
 		settings.aaVrsMaxRate = std::min<uint>(settings.aaVrsMaxRate, 1u);
@@ -1838,6 +1853,7 @@ namespace
 		settings.aaVrs = false;
 		settings.aaVrsVisualization = false;
 		settings.aaVrsPerformanceMode = defaults.aaVrsPerformanceMode;
+		settings.aaVrsPerformanceAnisotropy = defaults.aaVrsPerformanceAnisotropy;
 		settings.aaVrsPassAware = defaults.aaVrsPassAware;
 		settings.aaVrsSafeOpaqueOnly = defaults.aaVrsSafeOpaqueOnly;
 		settings.aaVrsMaxRate = defaults.aaVrsMaxRate;
@@ -1864,6 +1880,7 @@ namespace
 		o_json.erase("aaVrs");
 		o_json.erase("aaVrsVisualization");
 		o_json.erase("aaVrsPerformanceMode");
+		o_json.erase("aaVrsPerformanceAnisotropy");
 		o_json.erase("aaVrsPassAware");
 		o_json.erase("aaVrsSafeOpaqueOnly");
 		o_json.erase("aaVrsMaxRate");
@@ -5390,6 +5407,19 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("This ignores the normal protected FOV-mask size for the base VRS pattern; pass-aware safety still forces risky passes to 1x1.");
 		}
 
+		const char* anisotropyItems[] = { "Auto", "2x1", "1x2" };
+		int anisotropy = static_cast<int>(std::clamp<uint>(settings.aaVrsPerformanceAnisotropy, 0u, 2u));
+		{
+			auto anisotropyGuard = Util::DisableGuard(!settings.aaVrsPerformanceMode);
+			if (ImGui::Combo("VRS Performance Orientation", &anisotropy, anisotropyItems, IM_ARRAYSIZE(anisotropyItems))) {
+				settings.aaVrsPerformanceAnisotropy = static_cast<uint>(std::clamp(anisotropy, 0, 2));
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Controls the half-rate band in VRS Performance Mode.");
+			ImGui::TextUnformatted("Auto chooses 2x1 or 1x2 radially per tile; fixed modes force one anisotropic orientation to reduce stereo disagreements.");
+		}
+
 		const char* maxRateItems[] = { "2x2", "4x4" };
 		int maxRate = static_cast<int>(std::clamp<uint>(settings.aaVrsMaxRate, 0u, 1u));
 		{
@@ -8454,6 +8484,7 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 	aaVrsSettings.outerScale = vrsMaskScale;
 	aaVrsSettings.coarseOutsideMask = true;
 	aaVrsSettings.performanceMode = settings.aaVrsPerformanceMode;
+	aaVrsSettings.performanceAnisotropy = std::min<uint32_t>(settings.aaVrsPerformanceAnisotropy, 2u);
 	aaVrsSettings.maxRate = settings.aaVrsPerformanceMode ? 1u : std::min<uint32_t>(settings.aaVrsMaxRate, 1u);
 	aaVrsSettings.centerOffsets = {
 		AAVRSController::CenterOffset{ foveatedCenterOffsets[0].x, foveatedCenterOffsets[0].y },
@@ -8571,7 +8602,7 @@ void Upscaling::ApplyAAVRSVisualization()
 		static_cast<float>(AAVRSController::kTileWidth),
 		static_cast<float>(AAVRSController::kTileHeight),
 		aaVrsSettings.performanceMode ? 1.0f : 0.0f,
-		0.0f
+		static_cast<float>(aaVrsSettings.performanceAnisotropy)
 	};
 	aaVrsVisualizationCB->Update(cbData);
 
@@ -8597,7 +8628,11 @@ void Upscaling::ApplyAAVRSVisualization()
 
 bool Upscaling::ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest)
 {
-	if (!settings.aaVrs || !settings.aaVrsPassAware || !globals::game::isVR || !aaVrsController.IsActive())
+	if (!settings.aaVrs || !globals::game::isVR || !aaVrsController.IsActive())
+		return false;
+	if (!GuardAAVRSRenderTarget())
+		return false;
+	if (!settings.aaVrsPassAware)
 		return false;
 
 	(void)a_technique;
@@ -8751,13 +8786,25 @@ bool Upscaling::ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32
 
 bool Upscaling::ShouldForceFullRateForAAVRSPhase(AAVRSPassPolicyReason a_reason)
 {
-	if (!settings.aaVrs || !settings.aaVrsPassAware || !globals::game::isVR || !aaVrsController.IsActive())
+	if (!settings.aaVrs || !globals::game::isVR || !aaVrsController.IsActive())
+		return false;
+	if (!GuardAAVRSRenderTarget())
+		return false;
+	if (!settings.aaVrsPassAware)
 		return false;
 
 	const auto index = static_cast<size_t>(a_reason);
 	if (settings.aaVrsPassTelemetry && index < aaVrsPassPolicyCounters.size())
 		aaVrsPassPolicyCounters[index].fetch_add(1, std::memory_order_relaxed);
 	return true;
+}
+
+bool Upscaling::GuardAAVRSRenderTarget()
+{
+	if (!aaVrsController.IsActive())
+		return true;
+
+	return aaVrsController.GuardActiveRenderTarget(globals::d3d::context);
 }
 
 void Upscaling::BeginAAVRSFullRateOverride()
@@ -8792,15 +8839,17 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 			aaVrsTelemetryRenderHeight != status.renderHeight;
 		const bool modeChanged =
 			aaVrsTelemetryMaxRate != status.maxRate ||
-			aaVrsTelemetryPerformanceMode != status.performanceMode;
+			aaVrsTelemetryPerformanceMode != status.performanceMode ||
+			aaVrsTelemetryPerformanceAnisotropy != status.performanceAnisotropy;
 		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged || modeChanged) {
 			logger::info(
-				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, mode={}, maxRate={}x{}",
+				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, mode={}, orientation={}, maxRate={}x{}",
 				status.renderWidth,
 				status.renderHeight,
 				status.maskWidth,
 				status.maskHeight,
 				status.performanceMode ? "performance" : "mask",
+				status.performanceMode ? GetAAVRSPerformanceAnisotropyName(status.performanceAnisotropy) : "n/a",
 				status.maxRate == 0 ? 2 : 4,
 				status.maxRate == 0 ? 2 : 4);
 		}
@@ -8813,6 +8862,7 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 		aaVrsTelemetryRenderHeight = status.renderHeight;
 		aaVrsTelemetryMaxRate = status.maxRate;
 		aaVrsTelemetryPerformanceMode = status.performanceMode;
+		aaVrsTelemetryPerformanceAnisotropy = status.performanceAnisotropy;
 		return;
 	}
 
@@ -8844,6 +8894,7 @@ void Upscaling::ResetAAVRSTelemetry()
 	aaVrsTelemetryRenderHeight = 0;
 	aaVrsTelemetryMaxRate = 0;
 	aaVrsTelemetryPerformanceMode = false;
+	aaVrsTelemetryPerformanceAnisotropy = 0;
 	aaVrsTelemetryInactiveReason.clear();
 	ResetAAVRSPassTelemetry();
 }

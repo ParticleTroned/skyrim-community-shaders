@@ -131,6 +131,7 @@ public:
 		bool aaVrs = false;
 		bool aaVrsVisualization = false;
 		bool aaVrsPerformanceMode = false;
+		uint aaVrsPerformanceAnisotropy = 0;  // 0=auto, 1=2x1, 2=1x2
 		bool aaVrsPassAware = true;
 		bool aaVrsSafeOpaqueOnly = false;
 		uint aaVrsMaxRate = 0;  // 0=2x2, 1=4x4
@@ -333,7 +334,7 @@ public:
 		float4 centerOffsets;  // xy=left eye, zw=right eye
 		float4 coarseColor;
 		float4 centerColor;
-		float4 pad;            // xy=VRS tile size, z=performance mode
+		float4 pad;            // xy=VRS tile size, z=performance mode, w=performance anisotropy
 	};
 
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
@@ -616,6 +617,7 @@ public:
 	void ResumeAAVRS();
 	bool ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest);
 	bool ShouldForceFullRateForAAVRSPhase(AAVRSPassPolicyReason a_reason);
+	bool GuardAAVRSRenderTarget();
 	void BeginAAVRSFullRateOverride();
 	void EndAAVRSFullRateOverride();
 	void ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeActiveState = false);
@@ -700,6 +702,7 @@ public:
 	uint32_t aaVrsTelemetryRenderHeight = 0;
 	uint32_t aaVrsTelemetryMaxRate = 0;
 	bool aaVrsTelemetryPerformanceMode = false;
+	uint32_t aaVrsTelemetryPerformanceAnisotropy = 0;
 	std::string aaVrsTelemetryInactiveReason;
 	std::array<std::atomic<uint32_t>, kAAVRSPassPolicyReasonCount> aaVrsPassPolicyCounters{};
 

@@ -165,6 +165,7 @@ namespace
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
+	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
@@ -224,6 +225,9 @@ namespace
 	// VR menu open/close so fullscreen fades and menu overlays do not inherit a
 	// stale reduced scene footprint.
 	constexpr uint32_t kVRMenuPresentationTailFrames = 30;
+	// Observed projected-menu frames can briefly extend VR menu presentation
+	// blocking when the menu state graph drops a trailing text pass too early.
+	constexpr uint32_t kVRObservedMenuPresentationTailFrames = 3;
 	constexpr std::string_view kSkyrimPresentationMenuNames[] = {
 		"Journal Menu",
 		"StatsMenu",
@@ -714,6 +718,18 @@ namespace
 		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
 	};
 
+	// Projected-menu is the only strong menu-specific seed we have here. HUDMENU
+	// can also appear during ordinary gameplay, so it is only safe as a short
+	// follow-up signal after a recent projected-menu observation.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 1> kVRObservedMenuPresentationSeedTargets{
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+	};
+
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRObservedMenuPresentationFollowTargets{
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+		RE::RENDER_TARGETS::kHUDMENU,
+	};
+
 	// No engine-managed render target is currently a submit-stage eye source.
 	// Submit-stage should only operate on the runtime-submitted eye textures.
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 0> kSubmittedVRPresentationTargets{};
@@ -793,22 +809,45 @@ namespace
 		return false;
 	}
 
-	bool IsVRProtectedFullSizeRenderTargetTexture(ID3D11Texture2D* a_texture)
+	template <size_t N>
+	bool IsRenderTargetTextureInTargets(
+		ID3D11Texture2D* a_texture,
+		const std::array<RE::RENDER_TARGETS::RENDER_TARGET, N>& a_targets)
 	{
 		auto renderer = globals::game::renderer;
 		if (!a_texture || !renderer)
 			return false;
 
 		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
-		for (const auto target : kVRProtectedFullSizeTargets) {
-			if (renderTargets[target].texture == a_texture || renderTargets[target].textureCopy == a_texture)
+		const int targetCount = Util::GetRenderTargetCount();
+		for (const auto target : a_targets) {
+			const auto targetIndex = static_cast<int>(target);
+			if (targetIndex < 0 || targetIndex >= targetCount)
+				continue;
+			if (renderTargets[targetIndex].texture == a_texture || renderTargets[targetIndex].textureCopy == a_texture)
 				return true;
 		}
 
 		return false;
 	}
 
-	bool IsCurrentRenderTargetVRProtectedFullSizeTexture()
+	bool IsVRProtectedFullSizeRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		return IsRenderTargetTextureInTargets(a_texture, kVRProtectedFullSizeTargets);
+	}
+
+	bool IsVRObservedMenuPresentationSeedRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		return IsRenderTargetTextureInTargets(a_texture, kVRObservedMenuPresentationSeedTargets);
+	}
+
+	bool IsVRObservedMenuPresentationFollowRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		return IsRenderTargetTextureInTargets(a_texture, kVRObservedMenuPresentationFollowTargets);
+	}
+
+	template <class Predicate>
+	bool IsCurrentRenderTargetTextureMatch(Predicate&& a_predicate)
 	{
 		auto context = globals::d3d::context;
 		if (!context)
@@ -837,7 +876,22 @@ namespace
 			texture->Release();
 		});
 
-		return IsVRProtectedFullSizeRenderTargetTexture(texture);
+		return a_predicate(texture);
+	}
+
+	bool IsCurrentRenderTargetVRProtectedFullSizeTexture()
+	{
+		return IsCurrentRenderTargetTextureMatch(IsVRProtectedFullSizeRenderTargetTexture);
+	}
+
+	bool IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture()
+	{
+		return IsCurrentRenderTargetTextureMatch(IsVRObservedMenuPresentationSeedRenderTargetTexture);
+	}
+
+	bool IsCurrentRenderTargetVRObservedMenuPresentationFollowTexture()
+	{
+		return IsCurrentRenderTargetTextureMatch(IsVRObservedMenuPresentationFollowRenderTargetTexture);
 	}
 
 	uint32_t ClampPositiveDimension(float a_dimension)
@@ -3092,13 +3146,40 @@ namespace
 		return IsSkyrimMenuPresentationMenuName(a_menuName) || a_menuName == RE::MapMenu::MENU_NAME;
 	}
 
-	bool IsVRMenuPresentationTailActive(const State* a_state)
+	bool IsFrameTailActive(const State* a_state, const std::atomic_uint32_t& a_endFrame)
 	{
-		if (!globals::game::isVR || !a_state)
+		if (!a_state)
 			return false;
 
-		const uint32_t endFrame = g_vrMenuPresentationTailEndFrame.load(std::memory_order_acquire);
+		const uint32_t endFrame = a_endFrame.load(std::memory_order_acquire);
 		return endFrame != 0 && a_state->frameCount < endFrame;
+	}
+
+	void ExtendFrameTail(std::atomic_uint32_t& a_endFrame, uint32_t a_tailFrames)
+	{
+		if (!globals::state)
+			return;
+
+		const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
+		const uint32_t tailEndFrame = currentFrame + std::max(a_tailFrames, 1u);
+		uint32_t previousEndFrame = a_endFrame.load(std::memory_order_acquire);
+		while (previousEndFrame < tailEndFrame &&
+		       !a_endFrame.compare_exchange_weak(
+			       previousEndFrame,
+			       tailEndFrame,
+			       std::memory_order_acq_rel,
+			       std::memory_order_acquire)) {
+		}
+	}
+
+	bool IsVRMenuPresentationTailActive(const State* a_state)
+	{
+		return globals::game::isVR && IsFrameTailActive(a_state, g_vrMenuPresentationTailEndFrame);
+	}
+
+	bool IsVRObservedProjectedMenuTailActive(const State* a_state)
+	{
+		return globals::game::isVR && IsFrameTailActive(a_state, g_vrObservedProjectedMenuTailEndFrame);
 	}
 
 	bool IsVRMenuPresentationContextActive()
@@ -3107,21 +3188,20 @@ namespace
 		       (IsKnownGameMenuContextActive() || IsVRMenuPresentationTailActive(globals::state));
 	}
 
-	void ExtendVRMenuPresentationTail()
+	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
 	{
 		if (!globals::game::isVR || !globals::state)
 			return;
 
-		const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
-		const uint32_t tailEndFrame = currentFrame + kVRMenuPresentationTailFrames;
-		uint32_t previousEndFrame = g_vrMenuPresentationTailEndFrame.load(std::memory_order_acquire);
-		while (previousEndFrame < tailEndFrame &&
-		       !g_vrMenuPresentationTailEndFrame.compare_exchange_weak(
-			       previousEndFrame,
-			       tailEndFrame,
-			       std::memory_order_acq_rel,
-			       std::memory_order_acquire)) {
-		}
+		ExtendFrameTail(g_vrMenuPresentationTailEndFrame, a_tailFrames);
+	}
+
+	void ExtendVRObservedProjectedMenuTail(uint32_t a_tailFrames = kVRObservedMenuPresentationTailFrames)
+	{
+		if (!globals::game::isVR || !globals::state)
+			return;
+
+		ExtendFrameTail(g_vrObservedProjectedMenuTailEndFrame, a_tailFrames);
 	}
 
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
@@ -3162,16 +3242,11 @@ namespace
 	{
 		if (!globals::game::isVR)
 			return false;
-		if (!IsKnownGameMenuContextActive())
-			return false;
-		if (IsMainOrLoadingMenuContextActive())
-			return false;
 
-		auto& upscaling = globals::features::upscaling;
-		if (upscaling.IsSubmitStageDeviceLost())
-			return false;
-
-		return upscaling.IsPerfModePresentationActive();
+		// Keep VR menus off the submit-stage path entirely. The full-size protected
+		// menu targets already preserve coverage, and allowing final-eye submit-stage
+		// upscaling here makes late glyph/text passes appear head-relative and fuzzy.
+		return false;
 	}
 
 	enum class VRPresentationDiagnosticSlot : uint8_t
@@ -5927,6 +6002,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
 			g_vrMenuPresentationTailEndFrame.store(0, std::memory_order_release);
+			g_vrObservedProjectedMenuTailEndFrame.store(0, std::memory_order_release);
 			LogPendingVRFpsStabilizerLoadSyncRetained(
 				globals::features::upscaling,
 				"loading menu opened before save-load sync could apply");
@@ -12142,7 +12218,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionState();
 		return;
 	}
-	if (globals::game::isVR && vendorUpscalingMethod && IsVRMenuPresentationContextActive() && !IsSubmitStageMenuPresentationContextActive()) {
+	if (globals::game::isVR && vendorUpscalingMethod && IsVRMenuPresentationContextActive()) {
 		resolutionScale = { 1.0f, 1.0f };
 		jitter = { 0.0f, 0.0f };
 		a_viewport->projectionPosScaleX = 0.0f;
@@ -12541,13 +12617,10 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
 	const bool vrVendorMenu = globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsVRMenuPresentationContextActive();
-	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
-	if (vrVendorMenu && !submitMenuPresentationContext) {
+	if (vrVendorMenu) {
 		viewport->projectionPosScaleX = 0.0f;
 		viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
-	} else if (submitMenuPresentationContext) {
-		ApplyDynamicResolutionState(viewport);
 	}
 
 	if (d3d12SwapChainActive)
@@ -12701,8 +12774,7 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	const bool submitStageSceneActive = IsPerfModePresentationActive();
 
 	const bool menuBlocksSubmitStage =
-		IsGameMenuContextActive() &&
-		!IsSubmitStageMenuPresentationContextActive();
+		globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
 	const bool active = submitStageSceneActive && !menuBlocksSubmitStage;
 	submitStageRuntimeActive.store(active, std::memory_order_relaxed);
 	return active;
@@ -15088,7 +15160,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		}
 
 		const bool menuPresentationContext = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
-		if (menuPresentationContext && !IsSubmitStageMenuPresentationContextActive()) {
+		if (menuPresentationContext) {
 			logDecision("vanilla-menu-without-submit-stage");
 			return false;
 		}
@@ -15563,6 +15635,16 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			false);
 	}
 	func(a1);
+	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
+		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();
+		if (observedProjectedMenu) {
+			ExtendVRObservedProjectedMenuTail();
+			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+		} else if (IsVRObservedProjectedMenuTailActive(globals::state) &&
+		           IsCurrentRenderTargetVRObservedMenuPresentationFollowTexture()) {
+			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+		}
+	}
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,

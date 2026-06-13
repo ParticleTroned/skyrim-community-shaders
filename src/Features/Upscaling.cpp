@@ -7161,6 +7161,8 @@ namespace
 	}
 }
 
+void UpdateCameraData();
+
 void Upscaling::DestroyVRIntermediateTextures()
 {
 	RetiredVRIntermediateTextures retired{};
@@ -7424,6 +7426,49 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	const uint32_t d3dRecreateSettleFrames = relatchDisablesFSRRenderScale ?
 		kVRRenderScaleFSRDeactivationD3DRecreateSettleFrames :
 		kVRRenderScaleD3DRecreateSettleFrames;
+	// D3D relatch can recreate kMAIN before the rest of the relatch bookkeeping
+	// catches up. Sync the state-side screen size from the live render target so
+	// same-frame post-processing does not keep using the stale dimensions.
+	const auto getRelatchTargetSizes = [&]() {
+		const bool relatchRenderScaleActive = perfMode.IsActive(settings, relatchUpscaleMethod);
+		const float2 relatchTargetDisplaySize = perfMode.GetDisplayScreenSize();
+		const float2 relatchTargetEngineSize = relatchRenderScaleActive ?
+			perfMode.GetRenderScreenSize() :
+			relatchTargetDisplaySize;
+		return std::pair<float2, float2>{ relatchTargetDisplaySize, relatchTargetEngineSize };
+	};
+	const auto resolveRelatchScreenSize = [&](float2 a_fallbackSize) {
+		auto* renderer = globals::game::renderer;
+		if (!renderer)
+			return a_fallbackSize;
+
+		const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		D3D11_TEXTURE2D_DESC mainDesc{};
+		if (!TryGetTexture2DDesc(main.texture, mainDesc) || !mainDesc.Width || !mainDesc.Height)
+			return a_fallbackSize;
+
+		return float2{ static_cast<float>(mainDesc.Width), static_cast<float>(mainDesc.Height) };
+	};
+	const auto syncRelatchScreenSize = [&](float2 a_targetSize, const char* a_phase) {
+		a_targetSize = resolveRelatchScreenSize(a_targetSize);
+		if (a_targetSize.x <= 0.0f || a_targetSize.y <= 0.0f)
+			return;
+
+		const bool changed =
+			std::abs(state->screenSize.x - a_targetSize.x) > 0.5f ||
+			std::abs(state->screenSize.y - a_targetSize.y) > 0.5f;
+		state->screenSize = a_targetSize;
+		if (!changed)
+			return;
+
+		UpdateCameraData();
+		state->UpdateSharedData(state->inWorld, false);
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] Relatch step: synced screen size for {} to {}x{}",
+			a_phase && *a_phase ? a_phase : "unknown",
+			ClampPositiveDimension(a_targetSize.x),
+			ClampPositiveDimension(a_targetSize.y));
+	};
 
 	static bool loggedRelatchApplyDiagnostic = false;
 	static bool loggedRelatchBeginTeardownDiagnostic = false;
@@ -7570,18 +7615,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			perfMode.EnsureBootLatch(settings, relatchUpscaleMethod, true);
 		}
 
-		const bool relatchRenderScaleActive = perfMode.IsActive(settings, relatchUpscaleMethod);
-		const float2 relatchTargetDisplaySize = perfMode.GetDisplayScreenSize();
-		const float2 relatchTargetEngineSize = relatchRenderScaleActive ?
-			perfMode.GetRenderScreenSize() :
-			relatchTargetDisplaySize;
+		const auto relatchTargetSizes = getRelatchTargetSizes();
+		const float2 relatchTargetDisplaySize = relatchTargetSizes.first;
+		const float2 relatchTargetEngineSize = relatchTargetSizes.second;
 		const bool renderTargetsAlreadySized = AreVRRenderScaleRenderTargetsSizedForDimensions(
 			relatchTargetEngineSize,
 			relatchTargetDisplaySize);
 		if (relatchHasPendingResourceSetup) {
 			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: D3D render-target recreate already complete; continuing after delayed feature resource setup");
 		} else if (renderTargetsAlreadySized) {
-			state->screenSize = relatchTargetEngineSize;
+			syncRelatchScreenSize(relatchTargetEngineSize, "unchanged D3D render-target size");
 			logger::debug(
 				"[VRRenderScale] Skipped D3D render-target recreate; existing render targets already match {}x{} -> {}x{}.",
 				ClampPositiveDimension(relatchTargetEngineSize.x),
@@ -7602,6 +7645,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				LogVRTransitionDiagnostics(*this, "render-target relatch deferred: D3D recreate retry", loggedD3DDeferDiagnostic);
 				return false;
 			}
+			syncRelatchScreenSize(relatchTargetEngineSize, "completed D3D render-target recreate");
 			const uint32_t currentFrame = std::max(state->frameCount, 1u);
 			pendingPerfModeRenderTargetResourceSetupFrame.store(currentFrame, std::memory_order_release);
 			requeueRelatch(kVRRenderScalePostD3DResourceSetupDelayFrames, false);
@@ -12341,8 +12385,6 @@ void GetJitterOffset(float* outX, float* outY, int32_t index, int32_t phaseCount
 	*outX = x;
 	*outY = y;
 }
-
-void UpdateCameraData();
 
 void Upscaling::ConfigureTAA()
 {

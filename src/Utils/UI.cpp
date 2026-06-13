@@ -50,6 +50,25 @@ namespace Util
 {
 	static ImVec2 g_screenScaleRatio = { 1.0f, 1.0f };
 	static ImVec2 g_displaySize = { 0.0f, 0.0f };
+	static POINT g_lastDesktopMouseScreenPos = {};
+	static bool g_hasLastDesktopMouseScreenPos = false;
+	static unsigned int g_lastDesktopMouseButtonMask = 0;
+
+	static unsigned int GetDesktopMouseButtonMask()
+	{
+		unsigned int mask = 0;
+		if (GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+			mask |= 1u << 0;
+		if (GetAsyncKeyState(VK_RBUTTON) & 0x8000)
+			mask |= 1u << 1;
+		if (GetAsyncKeyState(VK_MBUTTON) & 0x8000)
+			mask |= 1u << 2;
+		if (GetAsyncKeyState(VK_XBUTTON1) & 0x8000)
+			mask |= 1u << 3;
+		if (GetAsyncKeyState(VK_XBUTTON2) & 0x8000)
+			mask |= 1u << 4;
+		return mask;
+	}
 
 	bool TryRefreshScreenScale(HWND hwnd, float bufferWidth, float bufferHeight, RECT& outClientRect)
 	{
@@ -64,8 +83,12 @@ namespace Util
 		return true;
 	}
 
-	bool UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight, ImVec2* outMousePos)
+	bool UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight, ImVec2* outMousePos, bool* outMouseActive)
 	{
+		if (outMouseActive) {
+			*outMouseActive = false;
+		}
+
 		RECT clientRect{};
 		const bool hasClientRect = TryRefreshScreenScale(hwnd, bufferWidth, bufferHeight, clientRect);
 
@@ -75,8 +98,25 @@ namespace Util
 			return false;
 		}
 
-		POINT cursorPos{};
-		if (GetCursorPos(&cursorPos) &&
+		POINT screenCursorPos{};
+		const bool hasScreenCursorPos = GetCursorPos(&screenCursorPos);
+		const unsigned int mouseButtonMask = GetDesktopMouseButtonMask();
+		const bool mouseMoved =
+			hasScreenCursorPos &&
+			g_hasLastDesktopMouseScreenPos &&
+			(screenCursorPos.x != g_lastDesktopMouseScreenPos.x ||
+			 screenCursorPos.y != g_lastDesktopMouseScreenPos.y);
+		const bool mouseButtonChanged =
+			g_hasLastDesktopMouseScreenPos &&
+			mouseButtonMask != g_lastDesktopMouseButtonMask;
+		if (hasScreenCursorPos) {
+			g_lastDesktopMouseScreenPos = screenCursorPos;
+			g_hasLastDesktopMouseScreenPos = true;
+		}
+		g_lastDesktopMouseButtonMask = mouseButtonMask;
+
+		POINT cursorPos = screenCursorPos;
+		if (hasScreenCursorPos &&
 			ScreenToClient(hwnd, &cursorPos)) {
 			if (cursorPos.x < clientRect.left || cursorPos.x >= clientRect.right ||
 				cursorPos.y < clientRect.top || cursorPos.y >= clientRect.bottom) {
@@ -88,6 +128,9 @@ namespace Util
 				static_cast<float>(cursorPos.y) * g_screenScaleRatio.y);
 			if (outMousePos) {
 				*outMousePos = mousePos;
+			}
+			if (outMouseActive) {
+				*outMouseActive = mouseMoved || mouseButtonChanged || mouseButtonMask != 0;
 			}
 			io.AddMousePosEvent(mousePos.x, mousePos.y);
 			return true;

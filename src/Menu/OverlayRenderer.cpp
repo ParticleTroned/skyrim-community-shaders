@@ -338,13 +338,14 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 	const float displayW = static_cast<float>(desc.BufferDesc.Width);
 	const float displayH = static_cast<float>(desc.BufferDesc.Height);
 	ImVec2 desktopMousePos{};
-	const bool hasDesktopMousePos = Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH, &desktopMousePos);
+	bool desktopMouseActive = false;
+	const bool hasDesktopMousePos = Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH, &desktopMousePos, &desktopMouseActive);
 
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		if (hasDesktopMousePos) {
 			ImGui::GetIO().MousePos = desktopMousePos;
 		}
-		globals::features::vr.ProcessControllerInputForImGui();
+		globals::features::vr.ProcessControllerInputForImGui(desktopMouseActive);
 	}
 
 	ImGui::NewFrame();

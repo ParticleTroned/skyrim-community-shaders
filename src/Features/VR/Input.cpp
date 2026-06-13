@@ -375,8 +375,11 @@ void VR::SubmitVRMenuCursorPosition(ImGuiIO& io, ImVec2 mousePos)
 	io.MousePos = mousePos;
 	io.AddMousePosEvent(mousePos.x, mousePos.y);
 	io.MouseDrawCursor = true;
-	io.WantSetMousePos = true;
+	// Keep VR cursor ownership inside ImGui only. Warping the OS cursor here makes
+	// the focused desktop window snap back to the last VR position.
+	io.WantSetMousePos = false;
 
+	vrMenuCursorOwnedByVR = true;
 	lastVRMenuCursorPos = mousePos;
 	hasLastVRMenuCursorPos = true;
 }
@@ -394,6 +397,7 @@ bool VR::ReplayLastVRMenuCursorPosition(ImGuiIO& io)
 void VR::ResetVRMenuCursorPosition()
 {
 	vrControllerButtonEventActive = false;
+	vrMenuCursorOwnedByVR = false;
 	hasLastVRMenuCursorPos = false;
 	lastVRMenuCursorPos = ImVec2(0.0f, 0.0f);
 }
@@ -436,10 +440,11 @@ void VR::ResetMenuInputRuntimeState()
 	ReleaseMenuImGuiInputState();
 }
 
-void VR::ProcessControllerInputForImGui()
+void VR::ProcessControllerInputForImGui(bool a_desktopCursorActive)
 {
 	if (!globals::menu || !globals::menu->IsEnabled) {
 		vrControllerButtonEventActive = false;
+		vrMenuCursorOwnedByVR = false;
 		return;
 	}
 	bool testMode = settings.VRMenuControllerDiagnosticsTestMode;
@@ -448,6 +453,9 @@ void VR::ProcessControllerInputForImGui()
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
 	io.WantSetMousePos = false;
+	if (a_desktopCursorActive) {
+		vrMenuCursorOwnedByVR = false;
+	}
 
 	const bool buttonEventActive = vrControllerButtonEventActive;
 	const bool thumbstickActive =
@@ -521,7 +529,12 @@ void VR::ProcessControllerInputForImGui()
 			}
 		}
 
-		if (!wandHandledCursor && !thumbstickHandledCursor && controllerInteractionActive) {
+		const bool shouldReplayVRCursor =
+			!wandHandledCursor &&
+			!thumbstickHandledCursor &&
+			vrMenuCursorOwnedByVR &&
+			(controllerInteractionActive || !a_desktopCursorActive);
+		if (shouldReplayVRCursor) {
 			ReplayLastVRMenuCursorPosition(io);
 		}
 	}

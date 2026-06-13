@@ -350,7 +350,7 @@ public:
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
 	void UpdateControllerState(const Menu::KeyEvent& event);
 	void ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
-	void ProcessControllerInputForImGui();
+	void ProcessControllerInputForImGui(bool a_desktopCursorActive = false);
 	void SubmitVRMenuCursorPosition(ImGuiIO& io, ImVec2 mousePos);
 	bool ReplayLastVRMenuCursorPosition(ImGuiIO& io);
 	void ResetVRMenuCursorPosition();
@@ -532,6 +532,7 @@ public:
 	std::unordered_map<uint32_t, ControllerDevice> recordingButtonControllers;
 
 	bool vrControllerButtonEventActive = false;
+	bool vrMenuCursorOwnedByVR = false;
 	bool hasLastVRMenuCursorPos = false;
 	ImVec2 lastVRMenuCursorPos = ImVec2(0.0f, 0.0f);
 

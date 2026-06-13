@@ -811,6 +811,7 @@ public:
 	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
+	std::atomic<uint32_t> fsrRenderScaleDeactivationQuiesceFrame{ 0 };
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
 
 	void CopySharedD3D12Resources();
@@ -958,6 +959,11 @@ private:
 	void ClearVRRenderScaleD3DRecreateSettle();
 	bool IsVRRenderScalePostD3DResourceSetupPending() const;
 	void ClearVRRenderScalePostD3DResourceSetup();
+	void ArmFSRRenderScaleDeactivationQuiesce(VRUpscalingTransitionOrigin a_origin);
+	void ClearFSRRenderScaleDeactivationQuiesce();
+	bool IsFSRRenderScaleDeactivationQuiescing() const;
+	bool HasFSRRenderScaleDeactivationQuiesceExpired() const;
+	bool ShouldQuiesceFSRRenderScaleDeactivationVendorWork() const;
 	bool ShouldSuppressFSRRenderScaleDeactivationSubmitStage() const;
 	bool ShouldQuiesceVRSubmitStageVendorDispatch() const;
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);

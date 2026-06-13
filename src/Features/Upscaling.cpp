@@ -154,6 +154,8 @@ namespace
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
 	constexpr uint32_t kVRRenderScaleD3DRecreateSettleFrames = 2u;
 	constexpr uint32_t kVRRenderScaleFSRDeactivationD3DRecreateSettleFrames = kVRSubmitStageVendorRelatchMinCooldownFrames * 2u;
+	// FSR deactivation first stops new FSR dispatch; this caps the idle wait if the runtime never reports teardown-ready.
+	constexpr uint32_t kVRRenderScaleFSRDeactivationMaxQuiesceFrames = 90u;
 	constexpr uint32_t kVRRenderScalePostD3DResourceSetupDelayFrames = 1u;
 	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
@@ -6629,6 +6631,10 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	}
 
 	const uint32_t requested = a_enabled ? 1u : 0u;
+	if (a_enabled)
+		ClearFSRRenderScaleDeactivationQuiesce();
+	else
+		ArmFSRRenderScaleDeactivationQuiesce(a_origin);
 	const bool activeMatchesRequest = IsPerfModeActive() == a_enabled;
 	if (ClampToggleUInt(settings.perfMode) == requested && activeMatchesRequest && !perfMode.HasRestartRequiredChange()) {
 		if (renderScaleSettingsChanged) {
@@ -7325,6 +7331,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		ClearVRRenderScaleD3DRecreateSettle();
 		ClearVRRenderScalePostD3DResourceSetup();
+		ClearFSRRenderScaleDeactivationQuiesce();
 		return true;
 	}
 
@@ -7390,6 +7397,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		ClearVRRenderScaleD3DRecreateSettle();
 		ClearVRRenderScalePostD3DResourceSetup();
+		ClearFSRRenderScaleDeactivationQuiesce();
 	};
 	auto requeueRelatch = [&](uint32_t a_minDelayFrames, bool a_includeExistingRetryDelay = true) {
 		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
@@ -7714,6 +7722,7 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 
 	static bool loggedVendorTeardownRequestDiagnostic = false;
 	static bool loggedVendorTeardownFSRWaitDiagnostic = false;
+	static bool loggedVendorTeardownFSRForceDiagnostic = false;
 	static bool loggedVendorTeardownSubmitWaitDiagnostic = false;
 	static bool loggedVendorTeardownSubmitResetDiagnostic = false;
 	static bool hasVendorTeardownRequestSignature = false;
@@ -7722,6 +7731,7 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	const auto clearVendorTeardownRetryDiagnostics = [&]() {
 		loggedVendorTeardownRequestDiagnostic = false;
 		loggedVendorTeardownFSRWaitDiagnostic = false;
+		loggedVendorTeardownFSRForceDiagnostic = false;
 		loggedVendorTeardownSubmitWaitDiagnostic = false;
 		loggedVendorTeardownSubmitResetDiagnostic = false;
 	};
@@ -7744,13 +7754,30 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	});
 	LogVRTransitionDiagnostics(*this, "vendor teardown requested", loggedRequestDiagnostic);
 
+	bool fsrTeardownForcedAfterQuiesce = false;
 	if (!fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
 		pendingFSRReset.store(true, std::memory_order_release);
-		const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedVendorTeardownFSRWaitDiagnostic, [&]() {
-			VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown deferred: FSR resources are not idle yet");
-		});
-		LogVRTransitionDiagnostics(*this, "vendor teardown deferred: FSR not idle", loggedDeferralDiagnostic);
-		return false;
+		if (IsFSRRenderScaleDeactivationQuiescing() && HasFSRRenderScaleDeactivationQuiesceExpired()) {
+			fsrTeardownForcedAfterQuiesce = true;
+			const bool loggedForceDiagnostic = LogVRTransitionDiagnosticOnce(loggedVendorTeardownFSRForceDiagnostic, [&]() {
+				const uint32_t startFrame = fsrRenderScaleDeactivationQuiesceFrame.load(std::memory_order_acquire);
+				const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : startFrame;
+				logger::warn(
+					"[VRRenderScale] Forcing FSR teardown after {} quiesce frame(s) during RenderScale deactivation.",
+					ElapsedFrames(startFrame, currentFrame));
+				VR_TRANSITION_DIAG_LOG(
+					"[VRTransition] Vendor teardown continuing after bounded FSR RenderScale deactivation quiesce (elapsed={}, max={})",
+					ElapsedFrames(startFrame, currentFrame),
+					kVRRenderScaleFSRDeactivationMaxQuiesceFrames);
+			});
+			LogVRTransitionDiagnostics(*this, "vendor teardown continuing: bounded FSR quiesce elapsed", loggedForceDiagnostic);
+		} else {
+			const bool loggedDeferralDiagnostic = LogVRTransitionDiagnosticOnce(loggedVendorTeardownFSRWaitDiagnostic, [&]() {
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown deferred: FSR resources are not idle yet");
+			});
+			LogVRTransitionDiagnostics(*this, "vendor teardown deferred: FSR not idle", loggedDeferralDiagnostic);
+			return false;
+		}
 	}
 
 	LogVRTransitionDiagnosticOnce(loggedVendorTeardownSubmitResetDiagnostic, [&]() {
@@ -7767,7 +7794,10 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 		return false;
 	}
 
-	VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown step: destroying FSR/common/periphery resources after idle poll");
+	if (fsrTeardownForcedAfterQuiesce)
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown step: destroying FSR/common/periphery resources after bounded quiesce");
+	else
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Vendor teardown step: destroying FSR/common/periphery resources after idle poll");
 	fidelityFX.DestroyFSRResources(false);
 	DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
@@ -13132,6 +13162,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 	ClearVRRenderScaleD3DRecreateSettle();
 	ClearVRRenderScalePostD3DResourceSetup();
+	ClearFSRRenderScaleDeactivationQuiesce();
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
 	ClearSubmitStageVendorResumeCooldown();
 	vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
@@ -14149,6 +14180,10 @@ void Upscaling::QueueVRUpscalingQualityMode(uint32_t a_qualityMode, VRUpscalingT
 
 void Upscaling::QueueVRRenderScaleModeRequest(bool a_enabled, VRUpscalingTransitionOrigin a_origin)
 {
+	if (a_enabled)
+		ClearFSRRenderScaleDeactivationQuiesce();
+	else
+		ArmFSRRenderScaleDeactivationQuiesce(a_origin);
 	pendingVRRenderScaleMode.store(a_enabled ? 1u : 0u, std::memory_order_release);
 	MarkVRUpscalingTransitionQueued(a_origin);
 }
@@ -14161,6 +14196,10 @@ void Upscaling::QueueVRDLSSPreset(uint32_t a_dlssPreset, VRUpscalingTransitionOr
 
 void Upscaling::QueueVRPerfModeRequest(bool a_enabled, VRUpscalingTransitionOrigin a_origin)
 {
+	if (a_enabled)
+		ClearFSRRenderScaleDeactivationQuiesce();
+	else
+		ArmFSRRenderScaleDeactivationQuiesce(a_origin);
 	pendingVRPerfMode.store(a_enabled ? 1u : 0u, std::memory_order_release);
 	MarkVRUpscalingTransitionQueued(a_origin);
 }
@@ -14319,6 +14358,71 @@ void Upscaling::ClearVRRenderScalePostD3DResourceSetup()
 	pendingPerfModeRenderTargetResourceSetupSuperseded.store(false, std::memory_order_release);
 }
 
+void Upscaling::ArmFSRRenderScaleDeactivationQuiesce(VRUpscalingTransitionOrigin a_origin)
+{
+	if (!globals::game::isVR)
+		return;
+	if (!ShouldUseVRRenderScaleD3DRecreateSettle(a_origin))
+		return;
+	if (!IsVRRenderScaleModeActive())
+		return;
+	if (GetRuntimeUpscaleMethod() != UpscaleMethod::kFSR)
+		return;
+
+	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+	uint32_t expectedFrame = 0;
+	if (fsrRenderScaleDeactivationQuiesceFrame.compare_exchange_strong(
+			expectedFrame,
+			currentFrame,
+			std::memory_order_acq_rel,
+			std::memory_order_acquire)) {
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] FSR RenderScale deactivation quiesce armed at frame {}",
+			currentFrame);
+	}
+}
+
+void Upscaling::ClearFSRRenderScaleDeactivationQuiesce()
+{
+	const uint32_t previousFrame = fsrRenderScaleDeactivationQuiesceFrame.exchange(0, std::memory_order_acq_rel);
+	if (previousFrame != 0) {
+		const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : previousFrame;
+		VR_TRANSITION_DIAG_LOG(
+			"[VRTransition] FSR RenderScale deactivation quiesce cleared after {} frame(s)",
+			ElapsedFrames(previousFrame, currentFrame));
+	}
+}
+
+bool Upscaling::IsFSRRenderScaleDeactivationQuiescing() const
+{
+	return globals::game::isVR &&
+	       fsrRenderScaleDeactivationQuiesceFrame.load(std::memory_order_acquire) != 0;
+}
+
+bool Upscaling::HasFSRRenderScaleDeactivationQuiesceExpired() const
+{
+	const uint32_t startFrame = fsrRenderScaleDeactivationQuiesceFrame.load(std::memory_order_acquire);
+	if (startFrame == 0)
+		return false;
+
+	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : startFrame;
+	return ElapsedFrames(startFrame, currentFrame) >= kVRRenderScaleFSRDeactivationMaxQuiesceFrames;
+}
+
+bool Upscaling::ShouldQuiesceFSRRenderScaleDeactivationVendorWork() const
+{
+	if (!globals::game::isVR)
+		return false;
+	if (GetRuntimeUpscaleMethod() != UpscaleMethod::kFSR)
+		return false;
+	if (!IsFSRRenderScaleDeactivationQuiescing())
+		return false;
+	if (GetPerfModeRequested())
+		return false;
+
+	return true;
+}
+
 bool Upscaling::ShouldSuppressFSRRenderScaleDeactivationSubmitStage() const
 {
 	if (!globals::game::isVR)
@@ -14332,7 +14436,8 @@ bool Upscaling::ShouldSuppressFSRRenderScaleDeactivationSubmitStage() const
 	if (!ShouldUseVRRenderScaleD3DRecreateSettle(LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin)))
 		return false;
 
-	return pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+	return ShouldQuiesceFSRRenderScaleDeactivationVendorWork() ||
+	       pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 	       perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
 	       IsVRRenderScaleD3DRecreateSettleActive();
 }
@@ -14341,6 +14446,8 @@ bool Upscaling::ShouldQuiesceVRSubmitStageVendorDispatch() const
 {
 	if (!globals::game::isVR)
 		return false;
+	if (ShouldQuiesceFSRRenderScaleDeactivationVendorWork())
+		return true;
 	if (GetPerfModeRequested())
 		return false;
 	if (!IsVRRenderScaleModeActive() && !IsVRRenderScalePostD3DResourceSetupPending())
@@ -14786,6 +14893,17 @@ void Upscaling::Upscale()
 	auto deferred = globals::deferred;
 	if (!state || !context || !renderer || !deferred)
 		return;
+
+	static bool loggedFSRRenderScaleDeactivationQuiesce = false;
+	if (upscaleMethod == UpscaleMethod::kFSR && ShouldQuiesceFSRRenderScaleDeactivationVendorWork()) {
+		pendingFSRReset.store(true, std::memory_order_release);
+		if (!loggedFSRRenderScaleDeactivationQuiesce) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Skipping FSR dispatch while RenderScale deactivation quiesces vendor work");
+			loggedFSRRenderScaleDeactivationQuiesce = true;
+		}
+		return;
+	}
+	loggedFSRRenderScaleDeactivationQuiesce = false;
 
 	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSHistoryReset.exchange(false, std::memory_order_relaxed)) {
 		logger::debug("[Upscaling] Resetting DLSS history after VR option/load transition");

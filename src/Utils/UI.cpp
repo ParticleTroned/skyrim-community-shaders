@@ -51,38 +51,38 @@ namespace Util
 	static ImVec2 g_screenScaleRatio = { 1.0f, 1.0f };
 	static ImVec2 g_displaySize = { 0.0f, 0.0f };
 
-	static int g_lastWindowWidth = 0;
-	static int g_lastWindowHeight = 0;
-
-	void RefreshScreenScale(HWND hwnd, float bufferWidth, float bufferHeight)
+	bool TryRefreshScreenScale(HWND hwnd, float bufferWidth, float bufferHeight, RECT& outClientRect)
 	{
-		RECT rect{};
-		if (!GetClientRect(hwnd, &rect) || rect.right <= 0 || rect.bottom <= 0)
-			return;
-
-		if (rect.right == g_lastWindowWidth && rect.bottom == g_lastWindowHeight)
-			return;
-
 		g_displaySize.x = bufferWidth;
 		g_displaySize.y = bufferHeight;
 
-		g_screenScaleRatio.x = bufferWidth / static_cast<float>(rect.right);
-		g_screenScaleRatio.y = bufferHeight / static_cast<float>(rect.bottom);
+		if (!GetClientRect(hwnd, &outClientRect) || outClientRect.right <= 0 || outClientRect.bottom <= 0)
+			return false;
 
-		g_lastWindowWidth = rect.right;
-		g_lastWindowHeight = rect.bottom;
+		g_screenScaleRatio.x = bufferWidth / static_cast<float>(outClientRect.right);
+		g_screenScaleRatio.y = bufferHeight / static_cast<float>(outClientRect.bottom);
+		return true;
 	}
 
 	bool UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight, ImVec2* outMousePos)
 	{
-		RefreshScreenScale(hwnd, bufferWidth, bufferHeight);
+		RECT clientRect{};
+		const bool hasClientRect = TryRefreshScreenScale(hwnd, bufferWidth, bufferHeight, clientRect);
 
 		auto& io = ImGui::GetIO();
 		io.DisplaySize = g_displaySize;
+		if (!hasClientRect) {
+			return false;
+		}
 
 		POINT cursorPos{};
 		if (GetCursorPos(&cursorPos) &&
 			ScreenToClient(hwnd, &cursorPos)) {
+			if (cursorPos.x < clientRect.left || cursorPos.x >= clientRect.right ||
+				cursorPos.y < clientRect.top || cursorPos.y >= clientRect.bottom) {
+				return false;
+			}
+
 			const ImVec2 mousePos(
 				static_cast<float>(cursorPos.x) * g_screenScaleRatio.x,
 				static_cast<float>(cursorPos.y) * g_screenScaleRatio.y);

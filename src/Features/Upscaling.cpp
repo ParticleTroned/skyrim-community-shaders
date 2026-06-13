@@ -13094,42 +13094,6 @@ bool Upscaling::IsSubmitStageDeviceLost() const
 	return submitStageDeviceLost.load(std::memory_order_acquire);
 }
 
-bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
-{
-	if (!globals::game::isVR)
-		return false;
-
-	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition())
-		return true;
-
-	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
-		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-		IsVRRenderScaleD3DRecreateSettleActive() ||
-		IsVRRenderScalePostD3DResourceSetupPending()) {
-		return true;
-	}
-
-	const auto requestedMethod = GetConfiguredUpscaleMethodForTransition();
-	const auto runtimeMethod = GetRuntimeUpscaleMethod();
-	const bool transitionRelevant =
-		IsVRRenderScaleTransitionSafetyRelevant(*this, requestedMethod) ||
-		IsVRRenderScaleTransitionSafetyRelevant(*this, runtimeMethod);
-	const bool vendorResetPending = HasPendingVRVendorRuntimeReset(*this, runtimeMethod, requestedMethod);
-	if (vendorResetPending ||
-		(postLoadRuntimeResetPending.load(std::memory_order_acquire) && transitionRelevant)) {
-		return true;
-	}
-
-	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
-	if (vendorResumeFrame != 0 && transitionRelevant) {
-		const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 0u;
-		if (currentFrame == 0 || currentFrame < vendorResumeFrame)
-			return true;
-	}
-
-	return false;
-}
-
 bool Upscaling::IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const
 {
 	if (!globals::game::isVR || !a_texture || !a_texture->handle || a_texture->eType != vr::TextureType_DirectX)

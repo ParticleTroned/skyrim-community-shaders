@@ -409,6 +409,7 @@ public:
 	void SubmitControllerOverlay(OverlayRenderContext& context);
 	void HideAllOverlays(vr::IVROverlay* gameOverlay);
 	bool ShouldShowAutoHideOverlay() const;
+	bool ShouldShowShaderCompilationInHMD() const;
 	bool ShouldUseInSceneOverlay() const;
 
 	void UpdateOverlayDrag();

@@ -106,13 +106,6 @@ namespace
 		return state && state->lastWorldRenderFrame != std::numeric_limits<uint32_t>::max();
 	}
 
-	bool ShouldShowShaderCompilationInHMD()
-	{
-		return globals::shaderCache &&
-		       globals::shaderCache->IsCompiling() &&
-		       !HasRenderedWorldFrame();
-	}
-
 	bool IsDrawListOwnedByWindow(const ImDrawList* drawList, const char* windowName)
 	{
 		return drawList && drawList->_OwnerName && std::strcmp(drawList->_OwnerName, windowName) == 0;
@@ -619,6 +612,13 @@ bool VR::ShouldShowAutoHideOverlay() const
 	       globals::state->isMainMenuOpen &&
 	       globals::menu &&
 	       !globals::menu->IsEnabled;
+}
+
+bool VR::ShouldShowShaderCompilationInHMD() const
+{
+	return globals::shaderCache &&
+	       globals::shaderCache->IsCompiling() &&
+	       !HasRenderedWorldFrame();
 }
 
 bool VR::ShouldUseInSceneOverlay() const

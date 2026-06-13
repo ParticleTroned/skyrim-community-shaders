@@ -28,13 +28,19 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
-	bool ShouldRenderInSceneMenu(const VR& vr)
+	bool ShouldRenderInSceneOverlay(const VR& vr)
 	{
-		return vr.ShouldUseInSceneOverlay() &&
-		       globals::menu &&
-		       (globals::menu->IsEnabled || globals::menu->overlayVisible) &&
-		       vr.menuTexture &&
-		       vr.settings.attachMode != AttachMode::None;
+		if (!vr.ShouldUseInSceneOverlay() ||
+		    !globals::menu ||
+		    !vr.menuTexture ||
+		    vr.settings.attachMode == AttachMode::None) {
+			return false;
+		}
+
+		return globals::menu->IsEnabled ||
+		       globals::menu->overlayVisible ||
+		       vr.ShouldShowAutoHideOverlay() ||
+		       vr.ShouldShowShaderCompilationInHMD();
 	}
 
 	bool MatchesSubmitCopyDesc(const D3D11_TEXTURE2D_DESC& lhs, const D3D11_TEXTURE2D_DESC& rhs)
@@ -262,13 +268,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
+				const bool shouldRenderInSceneOverlay = ShouldRenderInSceneOverlay(vr);
 				vr::Texture_t upscaledTexture{};
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
-					if (ShouldRenderInSceneMenu(vr) &&
+					if (shouldRenderInSceneOverlay &&
 						upscaledTexture.handle &&
-						upscaledTexture.eType == vr::TextureType_DirectX)
+						upscaledTexture.eType == vr::TextureType_DirectX) {
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
+					}
 					upscaling.LogVRCompositorSubmitPath(eEye, "cs-upscaled-submit", pTexture, pBounds, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
 				}
@@ -290,8 +298,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return vr::VRCompositorError_None;
 				}
 
-				if (!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
-					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
+				if (shouldRenderInSceneOverlay &&
+					!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture)) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
 						upscaling.LogVRCompositorSubmitPath(eEye, "overlay-submit", pTexture, pBounds, &overlayTexture, pBounds, nSubmitFlags);
@@ -544,7 +552,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Only render if overlay should be visible
-	if (!ShouldRenderInSceneMenu(*this)) {
+	if (!ShouldRenderInSceneOverlay(*this)) {
 		return;
 	}
 
@@ -1251,7 +1259,14 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 
 bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture)
 {
-	if (!inputTexture || !inputTexture->handle || inputTexture->eType != vr::TextureType_DirectX || !ShouldRenderInSceneMenu(*this)) {
+	if (!inputTexture || !inputTexture->handle || inputTexture->eType != vr::TextureType_DirectX || !ShouldRenderInSceneOverlay(*this)) {
+		return false;
+	}
+
+	if (!inSceneResources.initialized) {
+		InitInSceneResources();
+	}
+	if (!inSceneResources.initialized) {
 		return false;
 	}
 
@@ -1276,7 +1291,11 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 		submitCopy.uav = nullptr;
 		submitCopy.pendingSourceDesc = sourceDesc;
 		submitCopy.pendingCreate = true;
-		return false;
+		EnsureInSceneOverlaySubmitCopyResources();
+
+		if (!submitCopy.texture || !submitCopy.uav || !MatchesSubmitCopyDesc(submitCopy.sourceDesc, sourceDesc)) {
+			return false;
+		}
 	}
 
 	context->CopyResource(submitCopy.texture.get(), sourceTexture.get());

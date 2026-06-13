@@ -22,6 +22,7 @@
 #include "Utils/UI.h"
 #include "VR.h"
 #include <Windows.h>
+#include <atomic>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -13710,8 +13711,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass;
+	const bool presentationSourceTooSmall =
+		presentationOnly &&
+		(sourceDesc.Width < sourceEyeWidthIn || sourceDesc.Height < sourceEyeHeightIn);
 	const std::string submitResolvePhase = std::format(
-		"resolve:eye={} menu={} submitMenu={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} quiesce={}",
+		"resolve:eye={} menu={} submitMenu={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} quiesce={} sourceTooSmall={}",
 		VREyeName(a_eye),
 		BoolText(menuPresentationContext),
 		BoolText(submitMenuPresentationContext),
@@ -13721,7 +13725,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		BoolText(vrRenderScaleMenuCanUseVendor),
 		BoolText(foveatedRequested),
 		BoolText(transitionPresentationCooldown),
-		BoolText(transitionVendorQuiesce));
+		BoolText(transitionVendorQuiesce),
+		BoolText(presentationSourceTooSmall));
 	LogVRPresentationPassDiagnostics(
 		*this,
 		VRPresentationDiagnosticSlot::SubmitStage,
@@ -13735,6 +13740,19 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const uint32_t presentationInputWidth = submitBoundsPresentationFallback ? sourceRegion.width : sourceEyeWidthIn;
 	const uint32_t presentationInputHeight = submitBoundsPresentationFallback ? sourceRegion.height : sourceEyeHeightIn;
+
+	if (presentationSourceTooSmall) {
+		static std::atomic_bool loggedSmallPresentationSource{ false };
+		if (!loggedSmallPresentationSource.exchange(true, std::memory_order_acq_rel)) {
+			logger::debug(
+				"[VRRenderScale] Submit-stage presentation fallback skipped because submitted source {}x{} is smaller than expected eye source {}x{}; using original VR submit.",
+				sourceDesc.Width,
+				sourceDesc.Height,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn);
+		}
+		return false;
+	}
 
 	if (presentationOnly) {
 		const char* presentationContext = submitBoundsPresentationFallback ? "Submit bounds presentation fallback" : "Menu/loading presentation";
@@ -16165,10 +16183,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		vendorMethodSelected &&
 		globals::game::isVR &&
 		(vrMenuPresentationContextActive || loadingTransitionTailActive);
-	const bool fullResolutionMenuPresentation =
-		vendorMethodSelected &&
-		globals::game::isVR &&
-		(vrMenuPresentationContextActive || loadingTransitionTailActive);
+	const bool fullResolutionMenuPresentation = menuPresentationContext;
 	const bool loadingTransitionMenuPresentation =
 		fullResolutionMenuPresentation &&
 		(IsMainOrLoadingMenuContextActive() || loadingTransitionTailActive);

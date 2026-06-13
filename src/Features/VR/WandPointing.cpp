@@ -12,14 +12,12 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
-	constexpr uint32_t kWandCursorActiveFrames = 24;
 	constexpr float kWandPositionMotionThresholdSq = 0.0025f * 0.0025f;
 	constexpr float kWandDirectionMotionThreshold = 0.00001f;
 
 	vr::TrackedDeviceIndex_t g_previousWandController = vr::k_unTrackedDeviceIndexInvalid;
 	Vector3 g_previousWandRayOrigin = Vector3::Zero;
 	Vector3 g_previousWandRayDirection = Vector3::Zero;
-	uint32_t g_wandCursorActiveFramesRemaining = 0;
 	bool g_hasPreviousWandRay = false;
 
 	bool ShouldUpdateCursorFromWandPose(bool a_forceCursorUpdate, vr::TrackedDeviceIndex_t a_controllerIndex, const Vector3& a_rayOrigin, const Vector3& a_rayDirection)
@@ -38,16 +36,6 @@ namespace
 			g_previousWandRayOrigin = a_rayOrigin;
 			g_previousWandRayDirection = a_rayDirection;
 			g_hasPreviousWandRay = true;
-			g_wandCursorActiveFramesRemaining = kWandCursorActiveFrames;
-			return true;
-		}
-
-		if (g_wandCursorActiveFramesRemaining > 0) {
-			--g_wandCursorActiveFramesRemaining;
-			g_previousWandController = a_controllerIndex;
-			g_previousWandRayOrigin = a_rayOrigin;
-			g_previousWandRayDirection = a_rayDirection;
-			g_hasPreviousWandRay = true;
 			return true;
 		}
 
@@ -59,7 +47,6 @@ namespace
 		g_previousWandController = vr::k_unTrackedDeviceIndexInvalid;
 		g_previousWandRayOrigin = Vector3::Zero;
 		g_previousWandRayDirection = Vector3::Zero;
-		g_wandCursorActiveFramesRemaining = 0;
 		g_hasPreviousWandRay = false;
 	}
 }
@@ -194,13 +181,7 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 		float screenX = uv.x * io.DisplaySize.x;
 		float screenY = uv.y * io.DisplaySize.y;
 
-		screenX = std::clamp(screenX, 0.0f, io.DisplaySize.x);
-		screenY = std::clamp(screenY, 0.0f, io.DisplaySize.y);
-
-		io.MousePos = ImVec2(screenX, screenY);
-		io.AddMousePosEvent(screenX, screenY);
-		io.MouseDrawCursor = true;
-		io.WantSetMousePos = true;
+		SubmitVRMenuCursorPosition(io, ImVec2(screenX, screenY));
 	} else {
 		wandState.isIntersecting = false;
 		io.MouseDrawCursor = false;

@@ -50,7 +50,7 @@ class Feature;
 
 namespace Util
 {
-	void UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight);
+	bool UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight, ImVec2* outMousePos = nullptr);
 	/**
 	 * Represents a single line and its color for any colored text rendering (tooltips, legends, etc.).
 	 */

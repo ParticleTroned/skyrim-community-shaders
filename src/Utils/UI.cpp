@@ -73,7 +73,7 @@ namespace Util
 		g_lastWindowHeight = rect.bottom;
 	}
 
-	void UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight)
+	bool UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight, ImVec2* outMousePos)
 	{
 		RefreshScreenScale(hwnd, bufferWidth, bufferHeight);
 
@@ -83,10 +83,17 @@ namespace Util
 		POINT cursorPos{};
 		if (GetCursorPos(&cursorPos) &&
 			ScreenToClient(hwnd, &cursorPos)) {
-			io.AddMousePosEvent(
+			const ImVec2 mousePos(
 				static_cast<float>(cursorPos.x) * g_screenScaleRatio.x,
 				static_cast<float>(cursorPos.y) * g_screenScaleRatio.y);
+			if (outMousePos) {
+				*outMousePos = mousePos;
+			}
+			io.AddMousePosEvent(mousePos.x, mousePos.y);
+			return true;
 		}
+
+		return false;
 	}
 
 	HoverTooltipWrapper::HoverTooltipWrapper() :

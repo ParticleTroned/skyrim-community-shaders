@@ -351,6 +351,9 @@ public:
 	void UpdateControllerState(const Menu::KeyEvent& event);
 	void ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
 	void ProcessControllerInputForImGui();
+	void SubmitVRMenuCursorPosition(ImGuiIO& io, ImVec2 mousePos);
+	bool ReplayLastVRMenuCursorPosition(ImGuiIO& io);
+	void ResetVRMenuCursorPosition();
 	void ResetComboRecordingState();
 	void ReleaseMenuImGuiInputState();
 	void ResetMenuInputRuntimeState();
@@ -526,6 +529,10 @@ public:
 
 	// Button controller recording state for UI settings
 	std::unordered_map<uint32_t, ControllerDevice> recordingButtonControllers;
+
+	bool vrControllerButtonEventActive = false;
+	bool hasLastVRMenuCursorPos = false;
+	ImVec2 lastVRMenuCursorPos = ImVec2(0.0f, 0.0f);
 
 	bool desktopWindowManagementApplied = false;
 	bool desktopWindowWasTopmost = false;

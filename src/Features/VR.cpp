@@ -355,9 +355,10 @@ void VR::RestoreDefaultSettings()
 
 	overlayDragState = OverlayDragState{};
 	fixedWorldOverlayPosition = OverlayWorldPosition{};
-	wandState = WandIntersectionState{};
+	ResetWandPointingRuntimeState();
 	primaryControllerState = {};
 	secondaryControllerState = {};
+	ResetVRMenuCursorPosition();
 	menuOpenCombo = {};
 	menuCloseCombo = {};
 	savedPlayerWorldPos = {};

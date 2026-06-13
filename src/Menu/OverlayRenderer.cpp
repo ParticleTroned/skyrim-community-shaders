@@ -202,10 +202,6 @@ void OverlayRenderer::RenderOverlay(
 	HandleVRSetup();
 	processInputEventQueue();
 
-	if (globals::features::vr.IsOpenVRCompatible()) {
-		globals::features::vr.ProcessControllerInputForImGui();
-	}
-
 	auto drawableOverlays = CollectDrawableFeatureOverlays(menu);
 	if (ShouldSkipRendering(menu, !drawableOverlays.empty())) {
 		auto& io = ImGui::GetIO();
@@ -341,7 +337,15 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 
 	const float displayW = static_cast<float>(desc.BufferDesc.Width);
 	const float displayH = static_cast<float>(desc.BufferDesc.Height);
-	Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH);
+	ImVec2 desktopMousePos{};
+	const bool hasDesktopMousePos = Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH, &desktopMousePos);
+
+	if (globals::features::vr.IsOpenVRCompatible()) {
+		if (hasDesktopMousePos) {
+			ImGui::GetIO().MousePos = desktopMousePos;
+		}
+		globals::features::vr.ProcessControllerInputForImGui();
+	}
 
 	ImGui::NewFrame();
 

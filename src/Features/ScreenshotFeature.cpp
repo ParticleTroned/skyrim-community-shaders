@@ -224,13 +224,21 @@ namespace
 
 	// Picks the capture source by where ISHDR wrote the scene this frame:
 	//   VR              -> RE::RENDER_TARGETS::kVR_FRAMEBUFFER (SBS).
+	//   HDR clean menu  -> HDR::CleanSceneCapture (FP16 linear; PrepareBmpImage tonemaps).
 	//   HDR enabled     -> HDR::HdrTexture (FP16 linear; PrepareBmpImage tonemaps).
 	//   otherwise       -> kFRAMEBUFFER (already tonemapped UNORM).
 	//
 	// HDR::OutputTexture is intentionally not used: on HDR10 swap chains it
 	// holds PQ-encoded values regardless of the enableHDR toggle, which save
 	// as washed-out BMPs without a color transform.
-	CaptureSource SelectCaptureSource(winrt::com_ptr<ID3D11Texture2D>& holder)
+	bool IsFlatHdrScreenshotCapture()
+	{
+		return !globals::game::isVR &&
+		       globals::features::hdrDisplay.loaded &&
+		       globals::features::hdrDisplay.settings.enableHDR;
+	}
+
+	CaptureSource SelectCaptureSource(winrt::com_ptr<ID3D11Texture2D>& holder, bool forCapture)
 	{
 		CaptureSource src;
 		auto* renderer = globals::game::renderer;
@@ -247,7 +255,31 @@ namespace
 		}
 
 		auto& hdr = globals::features::hdrDisplay;
-		if (hdr.loaded && hdr.settings.enableHDR && hdr.hdrTexture && hdr.hdrTexture->resource) {
+		if (IsFlatHdrScreenshotCapture() && hdr.hdrTexture && hdr.hdrTexture->resource) {
+			auto* menu = Menu::GetSingleton();
+			const bool menuOpen = menu && menu->IsEnabled;
+
+			if (menuOpen && forCapture && hdr.IsCleanSceneCaptureFresh()) {
+				src.texture = hdr.cleanSceneCapture->resource.get();
+				src.srv = hdr.cleanSceneCapture->srv.get();
+				src.description = "HDR::CleanSceneCapture (FP16 linear, will tonemap)";
+				return src;
+			}
+
+			if (menuOpen && !forCapture && hdr.outputTexture && hdr.outputTexture->srv) {
+				ID3D11ShaderResourceView* sceneSRV = hdr.IsCleanSceneCaptureFresh() ?
+					hdr.cleanSceneCapture->srv.get() :
+					hdr.hdrTexture->srv.get();
+				if (sceneSRV) {
+					if (ID3D11Texture2D* clean = hdr.ComposeCleanCapture(sceneSRV, /*sdrPreview=*/true)) {
+						src.texture = clean;
+						src.srv = hdr.outputTexture->srv.get();
+						src.description = "HDR clean SDR preview (no UI, no menu blur)";
+						return src;
+					}
+				}
+			}
+
 			src.texture = hdr.hdrTexture->resource.get();
 			src.srv = hdr.hdrTexture->srv.get();
 			src.description = "HDR::HdrTexture (FP16 linear, will tonemap)";
@@ -283,22 +315,30 @@ namespace
 	//      alpha blending; writing texture alpha into the menu plate RT
 	//      produces a cutout visible only through the HMD. RGB-only writes
 	//      leave the plate's pre-cleared alpha=1 in place.
+	// Flat HDR menu previews are already recomposited to an opaque SDR texture,
+	// so they may write alpha to avoid leaving stale alpha in the preview target.
 	// Paired with ImDrawCallback_ResetRenderState queued by Subrect::DrawEditor
 	// immediately after the image draw.
 	void OpaquePreviewBlendCallback(const ImDrawList*, const ImDrawCmd*)
 	{
-		static winrt::com_ptr<ID3D11BlendState> opaqueBlend;
-		if (!opaqueBlend) {
+		auto* menu = Menu::GetSingleton();
+		const bool writeAlpha = IsFlatHdrScreenshotCapture() && menu && menu->IsEnabled;
+
+		static winrt::com_ptr<ID3D11BlendState> rgbBlend;
+		static winrt::com_ptr<ID3D11BlendState> rgbaBlend;
+		auto& blend = writeAlpha ? rgbaBlend : rgbBlend;
+		if (!blend) {
 			D3D11_BLEND_DESC desc{};
 			desc.RenderTarget[0].BlendEnable = FALSE;
 			desc.RenderTarget[0].RenderTargetWriteMask =
 				D3D11_COLOR_WRITE_ENABLE_RED |
 				D3D11_COLOR_WRITE_ENABLE_GREEN |
-				D3D11_COLOR_WRITE_ENABLE_BLUE;
-			globals::d3d::device->CreateBlendState(&desc, opaqueBlend.put());
+				D3D11_COLOR_WRITE_ENABLE_BLUE |
+				(writeAlpha ? D3D11_COLOR_WRITE_ENABLE_ALPHA : 0);
+			globals::d3d::device->CreateBlendState(&desc, blend.put());
 		}
-		if (opaqueBlend) {
-			globals::d3d::context->OMSetBlendState(opaqueBlend.get(), nullptr, 0xFFFFFFFF);
+		if (blend) {
+			globals::d3d::context->OMSetBlendState(blend.get(), nullptr, 0xFFFFFFFF);
 		}
 	}
 
@@ -417,7 +457,7 @@ void ScreenshotFeature::DrawSettings()
 	// Preview reflects what Capture() would save. Full source frame so VR users
 	// can drag-crop across the eye boundary if a seeded preset doesn't fit.
 	winrt::com_ptr<ID3D11Texture2D> previewTextureKeepAlive;
-	const auto src = SelectCaptureSource(previewTextureKeepAlive);
+	const auto src = SelectCaptureSource(previewTextureKeepAlive, /*forCapture=*/false);
 
 	ID3D11ShaderResourceView* previewView = src.srv;
 	if (src.texture && (src.needsPreviewCache || !previewView)) {
@@ -594,7 +634,7 @@ void ScreenshotFeature::Capture()
 		return;
 
 	winrt::com_ptr<ID3D11Texture2D> sourceTextureKeepAlive;
-	const auto src = SelectCaptureSource(sourceTextureKeepAlive);
+	const auto src = SelectCaptureSource(sourceTextureKeepAlive, /*forCapture=*/true);
 	logger::debug("Capturing from {}", src.description);
 
 	if (!src.texture) {

@@ -12807,113 +12807,6 @@ void UpdateCameraData()
 	func();
 }
 
-struct DynamicResolutionStateSnapshot
-{
-	float previousWidthRatio = 1.0f;
-	float previousHeightRatio = 1.0f;
-	float widthRatio = 1.0f;
-	float heightRatio = 1.0f;
-	std::int32_t lock = 1;
-	float upscalingWidthRatio = 1.0f;
-	float upscalingHeightRatio = 1.0f;
-	bool valid = false;
-};
-
-DynamicResolutionStateSnapshot CaptureDynamicResolutionState(const Upscaling& a_upscaling)
-{
-	DynamicResolutionStateSnapshot snapshot{};
-	auto viewport = globals::game::graphicsState;
-	if (!viewport)
-		return snapshot;
-
-	const auto& runtimeData = viewport->GetRuntimeData();
-	snapshot.previousWidthRatio = runtimeData.dynamicResolutionPreviousWidthRatio;
-	snapshot.previousHeightRatio = runtimeData.dynamicResolutionPreviousHeightRatio;
-	snapshot.widthRatio = runtimeData.dynamicResolutionWidthRatio;
-	snapshot.heightRatio = runtimeData.dynamicResolutionHeightRatio;
-	snapshot.lock = runtimeData.dynamicResolutionLock;
-	snapshot.upscalingWidthRatio = a_upscaling.dynamicResolutionWidthRatio;
-	snapshot.upscalingHeightRatio = a_upscaling.dynamicResolutionHeightRatio;
-	snapshot.valid = true;
-	return snapshot;
-}
-
-void RefreshPostProcessSharedData()
-{
-	if (globals::state)
-		globals::state->UpdateSharedData(false, false);
-}
-
-void ApplyFullResolutionDynamicResolutionState(Upscaling& a_upscaling)
-{
-	auto viewport = globals::game::graphicsState;
-	if (!viewport)
-		return;
-
-	auto& runtimeData = viewport->GetRuntimeData();
-	runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-	runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-	runtimeData.dynamicResolutionWidthRatio = 1.0f;
-	runtimeData.dynamicResolutionHeightRatio = 1.0f;
-	runtimeData.dynamicResolutionLock = 1;
-	a_upscaling.dynamicResolutionWidthRatio = 1.0f;
-	a_upscaling.dynamicResolutionHeightRatio = 1.0f;
-	UpdateCameraData();
-	RefreshPostProcessSharedData();
-}
-
-void RestoreDynamicResolutionState(Upscaling& a_upscaling, const DynamicResolutionStateSnapshot& a_snapshot)
-{
-	if (!a_snapshot.valid)
-		return;
-
-	auto viewport = globals::game::graphicsState;
-	if (!viewport)
-		return;
-
-	auto& runtimeData = viewport->GetRuntimeData();
-	runtimeData.dynamicResolutionPreviousWidthRatio = a_snapshot.previousWidthRatio;
-	runtimeData.dynamicResolutionPreviousHeightRatio = a_snapshot.previousHeightRatio;
-	runtimeData.dynamicResolutionWidthRatio = a_snapshot.widthRatio;
-	runtimeData.dynamicResolutionHeightRatio = a_snapshot.heightRatio;
-	runtimeData.dynamicResolutionLock = a_snapshot.lock;
-	a_upscaling.dynamicResolutionWidthRatio = a_snapshot.upscalingWidthRatio;
-	a_upscaling.dynamicResolutionHeightRatio = a_snapshot.upscalingHeightRatio;
-	UpdateCameraData();
-	RefreshPostProcessSharedData();
-}
-
-bool ShouldForceFullResolutionVRFadePass(const Upscaling& a_upscaling)
-{
-	if (!globals::game::isVR)
-		return false;
-	if (a_upscaling.IsPerfModeActive())
-		return false;
-
-	return IsVendorUpscalingMethod(a_upscaling.GetRuntimeUpscaleMethod());
-}
-
-template <class Fn>
-void RunVRFadePassWithFullResolutionState(Upscaling& a_upscaling, Fn&& a_fn)
-{
-	if (!ShouldForceFullResolutionVRFadePass(a_upscaling)) {
-		a_fn();
-		return;
-	}
-
-	const auto snapshot = CaptureDynamicResolutionState(a_upscaling);
-	if (!snapshot.valid) {
-		a_fn();
-		return;
-	}
-
-	ApplyFullResolutionDynamicResolutionState(a_upscaling);
-	auto restoreDynamicResolution = ScopeExit([&]() {
-		RestoreDynamicResolutionState(a_upscaling, snapshot);
-	});
-	a_fn();
-}
-
 void Upscaling::PostDisplay()
 {
 	auto viewport = globals::game::graphicsState;
@@ -15965,16 +15858,14 @@ void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader,
 void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
 {
 	auto& upscaling = globals::features::upscaling;
-	RunVRFadePassWithFullResolutionState(upscaling, [&]() {
-		LogVRPresentationAroundCall(
-			upscaling,
-			VRPresentationDiagnosticSlot::FadeRender,
-			"ISHDRTonemapBlendCinematicFade",
-			"Render:before",
-			"Render:after",
-			true,
-			[&]() { func(a_imageSpaceShader, a_shape, a_param); });
-	});
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::FadeRender,
+		"ISHDRTonemapBlendCinematicFade",
+		"Render:before",
+		"Render:after",
+		true,
+		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
 }
 
 void Upscaling::TemporalAAUI_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -16030,16 +15921,14 @@ void Upscaling::CopyDynamicFetchDisabled_Dispatch::thunk(void* a_imageSpaceShade
 void Upscaling::HDRTonemapBlendCinematicFade_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
 {
 	auto& upscaling = globals::features::upscaling;
-	RunVRFadePassWithFullResolutionState(upscaling, [&]() {
-		LogVRPresentationAroundCall(
-			upscaling,
-			VRPresentationDiagnosticSlot::FadeDispatch,
-			"ISHDRTonemapBlendCinematicFade",
-			"Dispatch:before",
-			"Dispatch:after",
-			true,
-			[&]() { func(a_imageSpaceShader, a1, a2, a3); });
-	});
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::FadeDispatch,
+		"ISHDRTonemapBlendCinematicFade",
+		"Dispatch:before",
+		"Dispatch:after",
+		true,
+		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
 }
 
 void Upscaling::TemporalAAUI_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)

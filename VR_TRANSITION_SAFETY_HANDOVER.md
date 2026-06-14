@@ -3997,6 +3997,124 @@ Verification:
 - Build validation passed with `cmake --build build\ALL --target CommunityShaders --config Release`.
 - No runtime validation performed after this fix.
 
+## Log 052 - 2026-06-15 00:17 Pre37 Menu Flicker Persists, CS Menu Regresses, and Submit-Menu Path Never Activates
+
+Source file:
+
+- `C:\Users\Win10\Documents\My Games\Skyrim VR\SKSE\CommunityShaders.log`
+
+Build / tag tracking:
+
+- User-reported test context: `Pre37`.
+- DLL log banner: `CommunityShaders v1-6-1-0`.
+- Runtime: SteamVR.
+- VRAPI usage: none in this run.
+- Log start: `00:14:18.335`.
+- Log end / last write: `2026-06-15 00:17:24`.
+- Log size: `19344005` bytes.
+- Log line count: `107280`.
+
+User result:
+
+- Flicker is not solved when a menu is open.
+- CS menu now also flickers in-world, which is a regression from the earlier state.
+- User believes the lost flicker fix exists in the two recent stashes and was also absent as a visible problem in `Pre33`, even though `Pre33` was unstable for other reasons.
+
+Important log findings:
+
+- The current code still reports menu/render-scale risk frequently:
+  - `risk:menu-ui-rendering-at-renderscale`: `2589`
+  - `risk:menu-ui-viewport-at-renderscale`: `244`
+  - `ok:submit-stage-active`: `290`
+  - `ok:submit-menu-presentation`: `0`
+  - `ok:menu-ui-native-path`: `0`
+  - `vendor resources are still in use`: `11`
+  - `Could not set constants for eye`: `0`
+  - `full-size stretch fallback`: `0`
+  - `Dynamic-resolution upsample replacement could not copy source to main`: `0`
+- The most important signal is that the dedicated submit-menu presentation path never activates in this run:
+  - `ok:submit-menu-presentation = 0`
+  - Every sampled submit-stage menu frame logged `submitMenu=no`.
+- During open/loading-menu frames the log shows the menu is recognized, but presentation upscaling is disabled:
+  - Example at `00:15:29.042`, frame `5939`.
+  - `knownMenu=yes`, `gameMenu=yes`, `mainOrLoading=yes`, `loading=yes`, `saveLoad=yes`, `vrMenuPresentation=yes`.
+  - `submitMenuPresentation=no`, `submitStageActive=no`, `presentationUpscaling=no`.
+  - Runtime plan still reports `owner=VRRenderScaleMode`, `target=SubmitStageIntermediate`, `currentRTPresentation=no`.
+- This means Pre37 is not failing because CS/menu frames are unrecognized. It is failing because the menu-recognized path still drops out of presentation upscaling entirely while render-scale mode remains active.
+- CS menu regression is visible in the log:
+  - Example at `00:15:13.990`, frame `4184`.
+  - `csMenu=yes`, `knownMenu=yes`, `gameMenu=yes`, `loading=no`, `saveLoad=no`.
+  - `submitMenuPresentation=no`, `submitStageActive=no`, `presentationUpscaling=no`.
+  - The log still flags `risk:menu-ui-rendering-at-renderscale`.
+- After loading-menu close, the path flips back into ordinary submit-stage presentation during the save-load tail:
+  - `00:15:38.468`: loading menu closed, frame `7072`.
+  - `00:15:38.468`: vendor reset queued after loading menu.
+  - `00:15:38.484`: state changes to `knownMenu=no`, `loading=no`, `saveLoad=yes`, frame `7073`.
+  - `00:15:39.366`: first sampled left-eye submit-stage menu-related frame at frame `7080`.
+  - Those frames show `submitStageActive=yes`, `presentationUpscaling=yes`, `presentationOnly=yes`, `submitMenu=no`, `vendorMenu=no`.
+- Example save-load tail submit frame:
+  - `00:15:39.366`, frame `7080`.
+  - `SubmitVRUpscaledFrame resolve:eye=left menu=yes submitMenu=no presentationRT=no presentationOnly=yes`.
+  - Source `PS t0` is `kMENUBG`, `3290x1826`, format `28`.
+  - Output `RTV0` is `kTOTAL`, `3290x1826`, format `28`.
+  - `currentRTPresentation=no`, `target=SubmitStageIntermediate`.
+- This split behavior explains the user report:
+  - Open menu frames lose stable presentation upscaling.
+  - Save-load tail frames re-enter ordinary submit-stage presentation while vendor reset is still pending.
+  - Neither path uses a dedicated, stable submit-menu presentation mode.
+
+Transition timing update:
+
+- CS menu / in-game menu risk window:
+  - Example CS menu risk start: `00:15:13.990`, frame `4184`.
+  - Example CS menu risk follow-up: `00:15:14.061`, frame `4193`.
+  - Risk remains while `csMenu=yes`, `submitStageActive=no`, and `presentationUpscaling=no`.
+- Loading/save menu window:
+  - Loading menu opened: `00:15:29.041`, frame `5939`.
+  - Loading menu closed: `00:15:38.468`, frame `7072`.
+  - Vendor reset queued after loading menu: `00:15:38.468`, frame `7072`.
+  - First save-load tail state without known menu: `00:15:38.484`, frame `7073`.
+  - First sampled submit-stage presentation-only menu frame: `00:15:39.366`, frame `7080`.
+- Timing deltas:
+  - Loading menu open to close: about `9.427s`.
+  - Loading menu close to first non-menu save-load-tail state: about `0.016s`.
+  - Loading menu close to first sampled submit-stage presentation-only frame: about `0.898s`.
+  - First non-menu save-load-tail state to first sampled submit-stage presentation-only frame: about `0.882s`.
+- These timings show the bad visual state is not a single persistent path:
+  - During menu-open frames, presentation upscaling drops out completely.
+  - Less than a second after close, the system re-enters submit-stage presentation-only handling while the vendor reset remains pending.
+
+Interpretation:
+
+- The Pre37 change that classified CS menu as a VR menu context was directionally correct but not sufficient.
+- The primary remaining bug is not menu detection. The primary bug is that recognized menu frames never enter a stable submit-menu presentation mode.
+- The recent stash comparison shows the likely lost fix is not “recognize menu,” but “allow a dedicated submit-menu presentation path while keeping vendor menu upscaling constrained.”
+- The current implementation has over-corrected toward blocking submit-stage on menus. That likely reduced text jitter, but it also removed the stable presentation path that kept worldspace from flickering.
+
+Implementation implications:
+
+- VR menu frames need a stable presentation path while render-scale mode is active.
+- That path should keep the submit hook alive for menu frames, but it should not blindly re-enable vendor menu upscaling, because that would likely reintroduce fuzzy/jittering late menu text.
+- The most plausible fix direction is:
+  - Re-enable submit-stage activity for menu contexts.
+  - Keep menu submits in presentation-only handling by default.
+  - Continue to avoid vendor menu dispatch unless there is a proven full-size, stable source path that does not reintroduce text instability.
+
+Code change from this log:
+
+- Working-tree code updated in `src\Features\Upscaling.cpp`:
+  - `IsSubmitStageMenuPresentationContextActive()` is now the central scoped switch:
+    it allows submit-menu presentation for loading/save-load protection and for ordinary VR menu/tail contexts outside main/loading menus, but only while performance-mode presentation is active and the submit device is healthy.
+  - `ConfigureUpscaling()` and `PostDisplay()` now only force the full-resolution native menu path when submit-menu presentation is not active.
+  - `IsSubmitStageUpscalingActive()` now blocks submit-stage on menu frames only when the dedicated submit-menu presentation context is inactive.
+  - `TryReplaceVanillaDynamicResolutionUpsample()` now allows menu frames to stay on the submit path when submit-menu presentation is active.
+  - `SubmitVRUpscaledFrame()` currently forces menu submits to stay out of vendor menu upscaling by setting `vrRenderScaleMenuCanUseVendor` false.
+
+Verification:
+
+- Source-level whitespace check passed with `git diff --check`.
+- No build or runtime validation performed after this follow-up fix.
+
 ## Log 050 - 2026-06-14 23:19 Pre35 Menu Jitter, Load Flicker, and FSR/DLSS Reset Churn
 
 Source file:

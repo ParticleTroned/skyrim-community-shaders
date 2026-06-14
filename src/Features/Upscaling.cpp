@@ -3245,10 +3245,31 @@ namespace
 		if (!globals::game::isVR)
 			return false;
 
-		// Keep VR menus off the submit-stage path entirely. The full-size protected
-		// menu targets already preserve coverage, and allowing final-eye submit-stage
-		// upscaling here makes late glyph/text passes appear head-relative and fuzzy.
-		return false;
+		auto* state = globals::state;
+		auto& upscaling = globals::features::upscaling;
+		if (upscaling.IsSubmitStageDeviceLost() || !upscaling.IsPerfModePresentationActive())
+			return false;
+
+		// Loading/save-load protection needs a stable presentation path even when the
+		// normal menu-state graph has already dropped out.
+		if (state &&
+			IsVRTransitionPresentationProtectionActive(upscaling, state) &&
+			IsVRLoadingPresentationContextActive(state)) {
+			return true;
+		}
+
+		// Ordinary VR menus and short menu tails can keep the submit hook alive for
+		// stable presentation, while SubmitVRUpscaledFrame still forces
+		// presentation-only handling for these frames.
+		return IsVRMenuPresentationContextActive() && !IsMainOrLoadingMenuContextActive();
+	}
+
+	bool ShouldUseFullResolutionVRMenuPresentation(Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		return globals::game::isVR &&
+		       IsVendorUpscalingMethod(a_upscaleMethod) &&
+		       IsVRMenuPresentationContextActive() &&
+		       !IsSubmitStageMenuPresentationContextActive();
 	}
 
 	enum class VRPresentationDiagnosticSlot : uint8_t
@@ -12220,7 +12241,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionState();
 		return;
 	}
-	if (globals::game::isVR && vendorUpscalingMethod && IsVRMenuPresentationContextActive()) {
+	if (ShouldUseFullResolutionVRMenuPresentation(upscaleMethod)) {
 		resolutionScale = { 1.0f, 1.0f };
 		jitter = { 0.0f, 0.0f };
 		a_viewport->projectionPosScaleX = 0.0f;
@@ -12618,8 +12639,7 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	const bool vrVendorMenu = globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsVRMenuPresentationContextActive();
-	if (vrVendorMenu) {
+	if (ShouldUseFullResolutionVRMenuPresentation(GetRuntimeUpscaleMethod())) {
 		viewport->projectionPosScaleX = 0.0f;
 		viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
@@ -12776,7 +12796,8 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	const bool submitStageSceneActive = IsPerfModePresentationActive();
 
 	const bool menuBlocksSubmitStage =
-		globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
+		(globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive()) &&
+		!IsSubmitStageMenuPresentationContextActive();
 	const bool active = submitStageSceneActive && !menuBlocksSubmitStage;
 	submitStageRuntimeActive.store(active, std::memory_order_relaxed);
 	return active;
@@ -13280,12 +13301,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 	const bool submitBoundsPresentationFallback = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
-	const bool vrRenderScaleMenuCanUseVendor =
-		vrRenderScaleMode &&
-		!presentationRenderTarget &&
-		submitMenuPresentationContext &&
-		sourceRegion.matchesExpectedSize &&
-		(a_inputBounds || sourceHasPerEyeLayout);
+	// Keep menu submits on the presentation-only path. Earlier revisions showed
+	// vendor dispatch on late menu text could reintroduce fuzzy/head-relative UI.
+	const bool vrRenderScaleMenuCanUseVendor = false;
 	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
 	bool transitionPresentationCooldown =
 		vendorResumeFrame != 0 &&
@@ -15181,7 +15199,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		}
 
 		const bool menuPresentationContext = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
-		if (menuPresentationContext) {
+		if (menuPresentationContext && !IsSubmitStageMenuPresentationContextActive()) {
 			logDecision("vanilla-menu-without-submit-stage");
 			return false;
 		}

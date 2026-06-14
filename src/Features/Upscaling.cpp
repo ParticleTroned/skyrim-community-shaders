@@ -3185,7 +3185,9 @@ namespace
 	bool IsVRMenuPresentationContextActive()
 	{
 		return globals::game::isVR &&
-		       (IsKnownGameMenuContextActive() || IsVRMenuPresentationTailActive(globals::state));
+		       (IsKnownGameMenuContextActive() ||
+		        IsCommunityShadersMenuOpen() ||
+		        IsVRMenuPresentationTailActive(globals::state));
 	}
 
 	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
@@ -4329,7 +4331,7 @@ namespace
 	{
 		const bool canEnable = a_methodEligible && a_adapterEligible;
 		const bool requested = canEnable && a_toggleEnabled;
-		const bool menuPaused = IsKnownGameMenuContextActive();
+		const bool menuPaused = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsKnownGameMenuContextActive();
 		return BuildScenePausedUiState(canEnable, requested, a_runtimeActive && !menuPaused, a_runtimeActive, menuPaused);
 	}
 
@@ -6248,7 +6250,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	plan.qualityMode = GetRuntimeQualityMode();
 	plan.vendorMethod = IsVendorUpscalingMethod(plan.upscaleMethod);
 	plan.knownMenuContextActive = IsKnownGameMenuContextActive();
-	plan.menuContextActive = IsGameMenuContextActive();
+	plan.menuContextActive = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
 	plan.loadingMenuActive = IsLoadingMenuContextActive();
 	plan.perfModeRestartRequired = perfMode.HasRestartRequiredChange();
 
@@ -13170,9 +13172,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool loadingPresentationContext =
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
 		IsVRLoadingPresentationContextActive(state);
+	const bool currentMenuPresentationContext = IsVRMenuPresentationContextActive();
 	const bool menuPresentationContext =
-		resolutionPlan.knownMenuContextActive ||
-		resolutionPlan.loadingMenuActive ||
+		resolutionPlan.menuContextActive ||
+		currentMenuPresentationContext ||
 		loadingPresentationContext ||
 		presentationRenderTarget;
 	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
@@ -15635,6 +15638,9 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
 	const bool logPresentationDiagnostics = globals::game::isVR;
+	if (globals::game::isVR && IsCommunityShadersMenuOpen()) {
+		ExtendVRMenuPresentationTail();
+	}
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,

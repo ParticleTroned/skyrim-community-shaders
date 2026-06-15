@@ -3507,7 +3507,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetIndirectNormal = SafeNormalize3(lerp(wetIndirectNormal, vertexNormal, terrainWetIndirectNormalStability), wetnessNormal);
 	}
 #		endif
-	float wetnessDirectViewDirection = viewDirection;
+	float3 wetnessDirectViewDirection = viewDirection;
 #		if defined(TRUE_PBR)
 	wetnessDirectViewDirection = refractedViewDirection;
 #		endif

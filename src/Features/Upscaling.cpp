@@ -13607,10 +13607,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			                                   (transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output"));
 	}
 
-	if (sceneFeatureMenuPauseContext && vrRenderScaleMode) {
-		return presentStretchOutput(eyeWidthIn, eyeHeightIn, "menu-scene-stretch-output");
-	}
-
 	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;
 	Texture2D* vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
 	if (submitDLSSSharpening) {

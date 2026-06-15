@@ -8937,6 +8937,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePreparedFrameMenuVendorHints = false;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -9293,6 +9294,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePreparedFrameMenuVendorHints = false;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -13420,7 +13422,7 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 }
 
 bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
-	uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight)
+	uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool menuVendorHints)
 {
 	if (!globals::game::isVR || !colorSource || !motionVectors || !depthSource || !inputWidthPerEye || !inputHeight || !outputWidthPerEye || !outputHeight)
 		return false;
@@ -13442,6 +13444,48 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	auto& normals = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[2]];
 	auto& sourceMotionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+
+	ID3D11ShaderResourceView* menuHintSRV = nullptr;
+	D3D11_TEXTURE2D_DESC menuHintDesc{};
+	bool menuHintActive = false;
+	if (menuVendorHints) {
+		auto& menuBg = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMENUBG];
+		if (!menuBg.texture || !menuBg.SRV) {
+			static bool loggedMissingMenuHintSource = false;
+			if (!loggedMissingMenuHintSource) {
+				logger::debug("[VRMenuVendorHints] skipped reason=missing-kMENUBG-srv pass=EncodeSubmitStageVRInputs");
+				loggedMissingMenuHintSource = true;
+			}
+		} else if (!TryGetTexture2DDesc(menuBg.texture, menuHintDesc) ||
+		           menuHintDesc.SampleDesc.Count != 1 ||
+		           menuHintDesc.Width < inputWidthPerEye ||
+		           menuHintDesc.Height < inputHeight) {
+			static bool loggedUnsupportedMenuHintSource = false;
+			if (!loggedUnsupportedMenuHintSource) {
+				logger::debug(
+					"[VRMenuVendorHints] skipped reason=unsupported-kMENUBG-desc pass=EncodeSubmitStageVRInputs source={}x{} fmt={} samples={} requiredEye={}x{}",
+					menuHintDesc.Width,
+					menuHintDesc.Height,
+					static_cast<uint32_t>(menuHintDesc.Format),
+					menuHintDesc.SampleDesc.Count,
+					inputWidthPerEye,
+					inputHeight);
+				loggedUnsupportedMenuHintSource = true;
+			}
+		} else {
+			menuHintSRV = menuBg.SRV;
+			menuHintActive = true;
+			logger::debug(
+				"[VRMenuVendorHints] active frame={} pass=EncodeSubmitStageVRInputs reason=textVendorReconstruct source=kMENUBG sampling=local-eye dst=vrIntermediateMotionVectors+vrIntermediateReactiveMask+vrIntermediateTransparencyMask inputEye={}x{} outputEye={}x{} maskSource={}x{}",
+				state->frameCount,
+				inputWidthPerEye,
+				inputHeight,
+				outputWidthPerEye,
+				outputHeight,
+				menuHintDesc.Width,
+				menuHintDesc.Height);
+		}
+	}
 
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
 	ID3D11ComputeShader* encodeShader = nullptr;
@@ -13498,7 +13542,7 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 
 	static bool loggedEncodeDispatchFailure = false;
 	try {
-		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, sourceMotionVector.SRV, depth.depthSRV };
+		ID3D11ShaderResourceView* views[5] = { temporalAAMask.SRV, normals.SRV, sourceMotionVector.SRV, depth.depthSRV, menuHintSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		auto upscalingBuffer = upscalingDataCB->CB();
@@ -13521,6 +13565,9 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 			upscalingData.vrSeamHardening = 1.0f;
 			upscalingData.sourceOffset = { static_cast<float>(sourceEyeRegion.minX), 0.0f };
 			upscalingData.outputOffset = { 0.0f, 0.0f };
+			upscalingData.menuHintParams = menuHintActive ?
+				float4{ 1.0f, 1.0f / 512.0f, 1.0f, 64.0f } :
+				float4{ 0.0f, 0.0f, 0.0f, 0.0f };
 			upscalingDataCB->Update(upscalingData);
 
 			ID3D11UnorderedAccessView* uavs[4] = {
@@ -13536,7 +13583,7 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 			context->CopySubresourceRegion(vrIntermediateDepth[eye]->resource.get(), 0, 0, 0, 0, depthSource, 0, &srcBox);
 		}
 
-		ID3D11ShaderResourceView* nullSRV[4] = { nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* nullSRV[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSRV), nullSRV);
 
 		ID3D11UnorderedAccessView* nullUAV[4] = { nullptr, nullptr, nullptr, nullptr };
@@ -15256,6 +15303,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePreparedFrameMenuVendorHints = false;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -15894,10 +15942,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		submitStagePreparedFrame = currentFrame;
 		submitStagePreparedFramePresentationOnly = true;
 		submitStagePreparedFrameCleanMenuScene = false;
+		submitStagePreparedFrameMenuVendorHints = false;
 	} else if (!submitStagePreparedThisFrame ||
 	           submitStagePreparedFramePresentationOnly ||
-	           submitStagePreparedFrameCleanMenuScene != usingCleanMenuSceneSource) {
-		if (!EncodeSubmitStageVRInputs(submitColorSourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut)) {
+	           submitStagePreparedFrameCleanMenuScene != usingCleanMenuSceneSource ||
+	           submitStagePreparedFrameMenuVendorHints != menuTextVendorReconstruct) {
+		if (!EncodeSubmitStageVRInputs(submitColorSourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, menuTextVendorReconstruct)) {
 			if (IsSubmitStageDeviceLost())
 				return false;
 			return false;
@@ -15906,6 +15956,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		submitStagePreparedFrame = currentFrame;
 		submitStagePreparedFramePresentationOnly = false;
 		submitStagePreparedFrameCleanMenuScene = usingCleanMenuSceneSource;
+		submitStagePreparedFrameMenuVendorHints = menuTextVendorReconstruct;
 	}
 
 	if (!vrIntermediateColorIn[eyeIndex] || !vrIntermediateColorIn[eyeIndex]->resource ||
@@ -16977,14 +17028,14 @@ void Upscaling::Upscale()
 		if (outputSize.x <= 0.0f || outputSize.y <= 0.0f || renderSize.x <= 0.0f || renderSize.y <= 0.0f)
 			return false;
 
-		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
+		ID3D11ShaderResourceView* views[5] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		auto upscalingBuffer = upscalingDataCB->CB();
 		context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
 		context->CSSetShader(encodeShader, nullptr, 0);
 		auto cleanupEncodeState = ScopeExit([&]() {
-			ID3D11ShaderResourceView* nullSRV[4] = { nullptr, nullptr, nullptr, nullptr };
+			ID3D11ShaderResourceView* nullSRV[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, ARRAYSIZE(nullSRV), nullSRV);
 
 			ID3D11UnorderedAccessView* nullUAV[4] = { nullptr, nullptr, nullptr, nullptr };

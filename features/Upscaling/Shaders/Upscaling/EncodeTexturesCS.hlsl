@@ -11,12 +11,15 @@ cbuffer UpscalingData : register(b0)
 	float VRSeamHardening;
 	float2 SourceOffset;
 	float2 OutputOffset;
+	float2 MenuHintPad;
+	float4 MenuHintParams;  // x=enable, y=luma threshold, z=hint strength, w=mask scale
 };
 
 Texture2D<float2> TAAMask : register(t0);
 Texture2D<float4> NormalsWaterMask : register(t1);
 Texture2D<float2> MotionVectorMask : register(t2);
 Texture2D<float> DepthMask : register(t3);
+Texture2D<float4> MenuHintSource : register(t4);
 
 RWTexture2D<float> ReactiveMask : register(u0);
 RWTexture2D<float> TransparencyCompositionMask : register(u1);
@@ -62,6 +65,16 @@ float ComputeSeamFactor(uint2 sourcePos)
 	float pixelUv = (float(sourcePos.x) + 0.5) * InvTrueSamplingDim.x;
 	float seamDistance = abs(pixelUv - seamCenterUv) * TrueSamplingDim.x;
 	return saturate((seamHalfWidth - seamDistance) / seamHalfWidth);
+}
+
+float ComputeMenuHintMask(uint2 localPos)
+{
+	if (MenuHintParams.x <= 0.5)
+		return 0.0;
+
+	float3 menuColor = abs(MenuHintSource[localPos].rgb);
+	float menuMax = max(menuColor.r, max(menuColor.g, menuColor.b));
+	return saturate((menuMax - MenuHintParams.y) * MenuHintParams.w) * saturate(MenuHintParams.z);
 }
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
@@ -135,6 +148,15 @@ float ComputeSeamFactor(uint2 sourcePos)
 		float hardeningMask = max(seamFactor * 0.6, maskEdgeFactor);
 		reactiveMask = max(reactiveMask, hardeningMask);
 		transparencyCompositionMask = max(transparencyCompositionMask, hardeningMask);
+	}
+
+	float menuHintMask = ComputeMenuHintMask(localPos);
+	if (menuHintMask > 0.0) {
+#if defined(DLSS) || defined(FSR)
+		outputMotionVector = lerp(outputMotionVector, float2(0.0, 0.0), menuHintMask);
+#endif
+		reactiveMask = max(reactiveMask, menuHintMask);
+		transparencyCompositionMask = max(transparencyCompositionMask, menuHintMask);
 	}
 
 #if defined(DLSS) || defined(FSR)

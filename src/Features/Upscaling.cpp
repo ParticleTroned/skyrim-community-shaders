@@ -3200,19 +3200,6 @@ namespace
 		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
 	}
 
-	bool ShouldDrawVRRenderScaleMenuUIAtFullResolution()
-	{
-		if (!globals::game::isVR)
-			return false;
-
-		auto& upscaling = globals::features::upscaling;
-		return upscaling.IsVRRenderScaleModeActive() &&
-		       IsVendorUpscalingMethod(upscaling.GetRuntimeUpscaleMethod()) &&
-		       upscaling.GetRuntimeQualityMode() > 0 &&
-		       IsVRSceneFeatureMenuPauseContextActive() &&
-		       !IsMainOrLoadingMenuContextActive();
-	}
-
 	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
 	{
 		if (!globals::game::isVR || !globals::state)
@@ -3351,6 +3338,8 @@ namespace
 		bool submitStageActive = false;
 		bool submitStageDeviceLost = false;
 		bool presentationUpscalingActive = false;
+		bool fullResolutionMenuUIDraw = false;
+		bool menuTextRasterDiagnosticContext = false;
 		bool currentRTPresentation = false;
 		uint32_t viewportCount = 0;
 		std::array<D3D11_VIEWPORT, 2> viewports{};
@@ -3885,6 +3874,8 @@ namespace
 		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.submitStageActive ? 1u : 0u);
 		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.submitStageDeviceLost ? 1u : 0u);
 		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.presentationUpscalingActive ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.fullResolutionMenuUIDraw ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.menuTextRasterDiagnosticContext ? 1u : 0u);
 		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.currentRTPresentation ? 1u : 0u);
 		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.viewportCount);
 		signature = MixVRTransitionDiagnosticValue(signature, a_snapshot.scissorCount);
@@ -3946,6 +3937,13 @@ namespace
 		a_snapshot.submitStageActive = a_upscaling.IsSubmitStageUpscalingActive();
 		a_snapshot.submitStageDeviceLost = a_upscaling.IsSubmitStageDeviceLost();
 		a_snapshot.presentationUpscalingActive = a_upscaling.IsPresentationUpscalingActive();
+		a_snapshot.fullResolutionMenuUIDraw = false;
+		a_snapshot.menuTextRasterDiagnosticContext =
+			a_snapshot.renderScaleActive &&
+			IsVendorUpscalingMethod(a_snapshot.runtimeMethod) &&
+			a_snapshot.qualityMode > 0 &&
+			(a_snapshot.knownMenu || a_snapshot.vrMenuPresentation || a_snapshot.communityShadersMenu) &&
+			!a_snapshot.mainOrLoadingMenu;
 
 		const auto& plan = a_upscaling.GetRuntimeResolutionPlan();
 		a_snapshot.owner = plan.owner;
@@ -4225,6 +4223,50 @@ namespace
 		}
 	}
 
+	float GetDiagnosticExtentDelta(float a_lhs, float a_rhs)
+	{
+		return a_lhs > a_rhs ? a_lhs - a_rhs : a_rhs - a_lhs;
+	}
+
+	bool DiagnosticExtentMatches(float a_width, float a_height, float a_expectedWidth, float a_expectedHeight)
+	{
+		if (a_expectedWidth <= 0.0f || a_expectedHeight <= 0.0f)
+			return false;
+
+		return GetDiagnosticExtentDelta(a_width, a_expectedWidth) <= 1.0f &&
+		       GetDiagnosticExtentDelta(a_height, a_expectedHeight) <= 1.0f;
+	}
+
+	const char* ClassifyVRMenuRasterExtent(float a_width, float a_height, const VRPresentationDiagnosticSnapshot& a_snapshot)
+	{
+		if (a_width <= 0.0f || a_height <= 0.0f)
+			return "empty";
+
+		if (DiagnosticExtentMatches(a_width, a_height, static_cast<float>(a_snapshot.finalWidth), static_cast<float>(a_snapshot.finalHeight)))
+			return "final";
+		if (DiagnosticExtentMatches(a_width, a_height, static_cast<float>(a_snapshot.screenWidth), static_cast<float>(a_snapshot.screenHeight)))
+			return "screen";
+		if (DiagnosticExtentMatches(a_width, a_height, static_cast<float>(a_snapshot.engineWidth), static_cast<float>(a_snapshot.engineHeight)))
+			return "engine";
+
+		const float dynamicWidth = static_cast<float>(a_snapshot.finalWidth) * a_snapshot.dynamicWidthRatio;
+		const float dynamicHeight = static_cast<float>(a_snapshot.finalHeight) * a_snapshot.dynamicHeightRatio;
+		if (DiagnosticExtentMatches(a_width, a_height, dynamicWidth, dynamicHeight))
+			return "dynamic-final";
+
+		return "other";
+	}
+
+	float GetDiagnosticScissorWidth(const D3D11_RECT& a_scissor)
+	{
+		return static_cast<float>(a_scissor.right - a_scissor.left);
+	}
+
+	float GetDiagnosticScissorHeight(const D3D11_RECT& a_scissor)
+	{
+		return static_cast<float>(a_scissor.bottom - a_scissor.top);
+	}
+
 	void LogVRPresentationPassDiagnostics(
 		const Upscaling& a_upscaling,
 		VRPresentationDiagnosticSlot a_slot,
@@ -4241,7 +4283,7 @@ namespace
 		const char* role = GetVRPresentationDiagnosticRole(a_slot);
 		const std::string verdict = BuildVRPresentationDiagnosticVerdict(a_slot, snapshot);
 		logger::debug(
-			"[VRMenuDiag] {} {} frame={} role={} verdict={} signature=0x{:X} req={} runtime={} quality={} owner={} target={} screen={}x{} engine={}x{} final={}x{} resScale={:.4f},{:.4f} drRuntime={:.4f},{:.4f} drPrev={:.4f},{:.4f} drLock={} knownMenu={} gameMenu={} csMenu={} mainOrLoading={} loading={} saveLoad={} vrMenuPresentation={} submitMenuPresentation={} renderScaleActive={} renderScaleRequested={} perfModeActive={} submitStageActive={} submitDeviceLost={} presentationUpscaling={} currentRTPresentation={} viewports={} scissors={}",
+			"[VRMenuDiag] {} {} frame={} role={} verdict={} signature=0x{:X} req={} runtime={} quality={} owner={} target={} screen={}x{} engine={}x{} final={}x{} resScale={:.4f},{:.4f} drRuntime={:.4f},{:.4f} drPrev={:.4f},{:.4f} drLock={} knownMenu={} gameMenu={} csMenu={} mainOrLoading={} loading={} saveLoad={} vrMenuPresentation={} submitMenuPresentation={} renderScaleActive={} renderScaleRequested={} perfModeActive={} submitStageActive={} submitDeviceLost={} presentationUpscaling={} fullResMenuDraw={} textRasterCtx={} currentRTPresentation={} viewports={} scissors={}",
 			DiagnosticText(a_passName, "unknown"),
 			DiagnosticText(a_phase, "unknown"),
 			snapshot.frame,
@@ -4280,9 +4322,48 @@ namespace
 			BoolText(snapshot.submitStageActive),
 			BoolText(snapshot.submitStageDeviceLost),
 			BoolText(snapshot.presentationUpscalingActive),
+			BoolText(snapshot.fullResolutionMenuUIDraw),
+			BoolText(snapshot.menuTextRasterDiagnosticContext),
 			BoolText(snapshot.currentRTPresentation),
 			snapshot.viewportCount,
 			snapshot.scissorCount);
+
+		const float scissor0Width = GetDiagnosticScissorWidth(snapshot.scissors[0]);
+		const float scissor0Height = GetDiagnosticScissorHeight(snapshot.scissors[0]);
+		const bool viewport0EngineExtent =
+			DiagnosticExtentMatches(
+				snapshot.viewports[0].Width,
+				snapshot.viewports[0].Height,
+				static_cast<float>(snapshot.engineWidth),
+				static_cast<float>(snapshot.engineHeight)) &&
+			!DiagnosticExtentMatches(
+				snapshot.viewports[0].Width,
+				snapshot.viewports[0].Height,
+				static_cast<float>(snapshot.finalWidth),
+				static_cast<float>(snapshot.finalHeight));
+		const bool scissor0EngineExtent =
+			DiagnosticExtentMatches(
+				scissor0Width,
+				scissor0Height,
+				static_cast<float>(snapshot.engineWidth),
+				static_cast<float>(snapshot.engineHeight)) &&
+			!DiagnosticExtentMatches(
+				scissor0Width,
+				scissor0Height,
+				static_cast<float>(snapshot.finalWidth),
+				static_cast<float>(snapshot.finalHeight));
+		logger::debug(
+			"[VRMenuDiag] {} {} frame={} textRaster context={} fullResMenuDraw={} viewport0Class={} scissor0Class={} viewport0EngineExtent={} scissor0EngineExtent={} guardCandidate={}",
+			DiagnosticText(a_passName, "unknown"),
+			DiagnosticText(a_phase, "unknown"),
+			snapshot.frame,
+			BoolText(snapshot.menuTextRasterDiagnosticContext),
+			BoolText(snapshot.fullResolutionMenuUIDraw),
+			ClassifyVRMenuRasterExtent(snapshot.viewports[0].Width, snapshot.viewports[0].Height, snapshot),
+			ClassifyVRMenuRasterExtent(scissor0Width, scissor0Height, snapshot),
+			BoolText(viewport0EngineExtent),
+			BoolText(scissor0EngineExtent),
+			BoolText(snapshot.menuTextRasterDiagnosticContext && (viewport0EngineExtent || scissor0EngineExtent)));
 
 		logger::debug(
 			"[VRMenuDiag] {} {} frame={} viewport0=({:.1f},{:.1f}) {:.1f}x{:.1f} viewport1=({:.1f},{:.1f}) {:.1f}x{:.1f} scissor0=({},{})->({},{}) scissor1=({},{})->({},{})",
@@ -15686,9 +15767,14 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-PostDisplay",
 			false);
 	}
-	const bool fullResolutionMenuUIDraw = ShouldDrawVRRenderScaleMenuUIAtFullResolution();
-	if (fullResolutionMenuUIDraw)
-		upscaling.PrepareFullResolutionPostProcessing();
+	if (logPresentationDiagnostics) {
+		LogVRPresentationPassDiagnostics(
+			upscaling,
+			VRPresentationDiagnosticSlot::MenuDraw,
+			"MenuManagerDrawInterface",
+			"before-menu-draw",
+			false);
+	}
 
 	func(a1);
 
@@ -15710,8 +15796,6 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-menu-draw",
 			false);
 	}
-	if (fullResolutionMenuUIDraw)
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 }
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)

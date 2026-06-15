@@ -1635,6 +1635,16 @@ namespace
 				return "screen";
 			return "other";
 		};
+		const auto looksLikeCombinedEyeExtent = [](uint32_t a_width, uint32_t a_height) {
+			return a_width > 0 && a_height > 0 && a_width >= ((a_height * 3) / 2);
+		};
+		const auto classifyEyeLayout = [&](RE::RENDER_TARGETS::RENDER_TARGET a_target, uint32_t a_width, uint32_t a_height) {
+			if (a_target == RE::RENDER_TARGETS::kPROJECTEDMENU)
+				return "single";
+			if (looksLikeCombinedEyeExtent(a_width, a_height))
+				return "combined-horizontal";
+			return "single";
+		};
 		mixSignature(static_cast<uint64_t>(destination.target));
 		mixSignature(destination.width);
 		mixSignature(destination.height);
@@ -1751,8 +1761,24 @@ namespace
 			mixBakeTextSignature(a_phase);
 
 			if (lastLoggedBakeCandidateSignature.exchange(bakeSignature, std::memory_order_acq_rel) != bakeSignature) {
+				const char* destinationEyeLayout = classifyEyeLayout(destination.target, destination.width, destination.height);
+				const char* sourceEyeLayout = classifyEyeLayout(firstMenuLayerSource.target, firstMenuLayerSource.width, firstMenuLayerSource.height);
+				const char* finalEyeLayout = looksLikeCombinedEyeExtent(a_finalWidth, a_finalHeight) ? "combined-horizontal" : "single";
+				const bool destinationCombinedEyes =
+					destination.target != RE::RENDER_TARGETS::kPROJECTEDMENU &&
+					looksLikeCombinedEyeExtent(destination.width, destination.height);
+				const bool sourceCombinedEyes =
+					firstMenuLayerSource.target != RE::RENDER_TARGETS::kPROJECTEDMENU &&
+					looksLikeCombinedEyeExtent(firstMenuLayerSource.width, firstMenuLayerSource.height);
+				const bool finalCombinedEyes = looksLikeCombinedEyeExtent(a_finalWidth, a_finalHeight);
+				const uint32_t destinationEyeWidth = destinationCombinedEyes ? destination.width / 2 : destination.width;
+				const uint32_t sourceEyeWidth = sourceCombinedEyes ? firstMenuLayerSource.width / 2 : firstMenuLayerSource.width;
+				const uint32_t finalEyeWidth = finalCombinedEyes ? a_finalWidth / 2 : a_finalWidth;
+				const float finalScaleX = destination.width > 0 ? static_cast<float>(a_finalWidth) / static_cast<float>(destination.width) : 0.0f;
+				const float finalScaleY = destination.height > 0 ? static_cast<float>(a_finalHeight) / static_cast<float>(destination.height) : 0.0f;
+
 				logger::debug(
-					"[VRMenuBakeCandidate] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={}) firstMenuSource=t{}:{}({}x{} fmt={} class={}) sources={} menuBg={} projectedMenu={} hudMenu={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} screen={}x{} engine={}x{} final={}x{}",
+					"[VRMenuBakeCandidate] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={} layout={}) firstMenuSource=t{}:{}({}x{} fmt={} class={} layout={}) sources={} menuBg={} projectedMenu={} hudMenu={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} screen={}x{} engine={}x{} final={}x{} finalLayout={} sourceEye={}x{} dstEye={}x{} finalEye={}x{} sourceLeftPx=(0,0)->({},{}) sourceRightPx=({},0)->({},{}) dstLeftPx=(0,0)->({},{}) dstRightPx=({},0)->({},{}) finalLeftPx=(0,0)->({},{}) finalRightPx=({},0)->({},{}) finalScale={:.4f},{:.4f}",
 					frame,
 					a_passName ? a_passName : "-",
 					a_phase ? a_phase : "-",
@@ -1762,12 +1788,14 @@ namespace
 					destination.height,
 					static_cast<uint32_t>(destination.format),
 					classifyExtent(destination.width, destination.height),
+					destinationEyeLayout,
 					firstMenuLayerSourceSlot,
 					firstMenuLayerSource.name,
 					firstMenuLayerSource.width,
 					firstMenuLayerSource.height,
 					static_cast<uint32_t>(firstMenuLayerSource.format),
 					classifyExtent(firstMenuLayerSource.width, firstMenuLayerSource.height),
+					sourceEyeLayout,
 					sources,
 					hasMenuBgSource ? "yes" : "no",
 					hasProjectedMenuSource ? "yes" : "no",
@@ -1781,7 +1809,31 @@ namespace
 					a_engineWidth,
 					a_engineHeight,
 					a_finalWidth,
-					a_finalHeight);
+					a_finalHeight,
+					finalEyeLayout,
+					sourceEyeWidth,
+					firstMenuLayerSource.height,
+					destinationEyeWidth,
+					destination.height,
+					finalEyeWidth,
+					a_finalHeight,
+					sourceEyeWidth,
+					firstMenuLayerSource.height,
+					sourceEyeWidth,
+					sourceEyeWidth * 2,
+					firstMenuLayerSource.height,
+					destinationEyeWidth,
+					destination.height,
+					destinationEyeWidth,
+					destinationEyeWidth * 2,
+					destination.height,
+					finalEyeWidth,
+					a_finalHeight,
+					finalEyeWidth,
+					finalEyeWidth * 2,
+					a_finalHeight,
+					finalScaleX,
+					finalScaleY);
 			}
 		}
 	}
@@ -4852,7 +4904,7 @@ namespace
 
 		static std::atomic_bool loggedSafeMenuBakeDiagnostics{ false };
 		if (!loggedSafeMenuBakeDiagnostics.exchange(true, std::memory_order_acq_rel)) {
-			logger::info("[VRDiagBuild] Pre64 safe menu bake diagnostics active");
+			logger::info("[VRDiagBuild] Pre65 safe menu bake mapping diagnostics active");
 		}
 
 		a_snapshot.frame = state->frameCount;

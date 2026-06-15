@@ -4663,14 +4663,13 @@ namespace
 		const bool vrMenuPresentation = IsVRMenuPresentationContextActive();
 		const bool mainOrLoading = IsMainOrLoadingMenuContextActive();
 		const bool communityShadersMenu = IsCommunityShadersMenuOpen();
+		if (communityShadersMenu || mainOrLoading)
+			return;
+
 		const bool textRasterContext =
 			IsVendorUpscalingMethod(upscaling.GetRuntimeUpscaleMethod()) &&
 			upscaling.GetRuntimeQualityMode() > 0 &&
-			(knownMenu || vrMenuPresentation) &&
-			!communityShadersMenu &&
-			!mainOrLoading;
-		if (!textRasterContext)
-			return;
+			(knownMenu || vrMenuPresentation);
 
 		if (g_vrMenuWriterPathValidationLogCount.load(std::memory_order_acquire) >= kVRMenuWriterPathValidationLogLimit)
 			return;

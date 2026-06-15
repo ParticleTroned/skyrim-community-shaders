@@ -1566,6 +1566,58 @@ namespace
 		return result;
 	}
 
+	const char* ClassifyVRMenuExtent(
+		uint32_t a_width,
+		uint32_t a_height,
+		uint32_t a_screenWidth,
+		uint32_t a_screenHeight,
+		uint32_t a_engineWidth,
+		uint32_t a_engineHeight,
+		uint32_t a_finalWidth,
+		uint32_t a_finalHeight)
+	{
+		if (a_width == 0 || a_height == 0)
+			return "missing";
+		if (a_width == a_finalWidth && a_height == a_finalHeight)
+			return "final";
+		if (a_width == a_screenWidth && a_height == a_screenHeight)
+			return "screen";
+		if (a_width == a_engineWidth && a_height == a_engineHeight)
+			return "engine";
+		return "other";
+	}
+
+	bool IsTrackedVRMenuLayerTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		return a_target == RE::RENDER_TARGETS::kMENUBG ||
+		       a_target == RE::RENDER_TARGETS::kPROJECTEDMENU ||
+		       a_target == RE::RENDER_TARGETS::kHUDMENU;
+	}
+
+	bool IsTrackedVRMenuViewName(std::string_view a_name)
+	{
+		return a_name.find("MENUBG") != std::string_view::npos ||
+		       a_name.find("PROJECTEDMENU") != std::string_view::npos ||
+		       a_name.find("HUDMENU") != std::string_view::npos;
+	}
+
+	bool IsNativeVRMenuExtentClass(std::string_view a_extentClass)
+	{
+		return a_extentClass == "final" || a_extentClass == "screen";
+	}
+
+	bool IsFinalVRMenuExtentClass(std::string_view a_extentClass)
+	{
+		return a_extentClass == "final";
+	}
+
+	bool IsReducedVRMenuExtentClass(std::string_view a_extentClass)
+	{
+		return a_extentClass == "engine" || a_extentClass == "screen";
+	}
+
+	constexpr bool kVRMenuSceneDeltaCompositeRuntimeEnabled = false;
+
 	void LogVRMenuOriginalCompositeCandidateDiagnostics(
 		ID3D11DeviceContext* a_context,
 		const char* a_passName,
@@ -1615,13 +1667,15 @@ namespace
 			signature *= 1099511628211ull;
 		};
 		const auto classifyExtent = [&](uint32_t a_width, uint32_t a_height) {
-			if (a_width == a_engineWidth && a_height == a_engineHeight)
-				return "engine";
-			if (a_width == a_finalWidth && a_height == a_finalHeight)
-				return "final";
-			if (a_width == a_screenWidth && a_height == a_screenHeight)
-				return "screen";
-			return "other";
+			return ClassifyVRMenuExtent(
+				a_width,
+				a_height,
+				a_screenWidth,
+				a_screenHeight,
+				a_engineWidth,
+				a_engineHeight,
+				a_finalWidth,
+				a_finalHeight);
 		};
 		const auto looksLikeCombinedEyeExtent = [](uint32_t a_width, uint32_t a_height) {
 			return a_width > 0 && a_height > 0 && a_width >= ((a_height * 3) / 2);
@@ -1641,6 +1695,10 @@ namespace
 		bool hasMenuBgSource = false;
 		bool hasProjectedMenuSource = false;
 		bool hasHudMenuSource = false;
+		bool hasEngineMenuLayerSource = false;
+		bool hasFinalMenuLayerSource = false;
+		bool hasScreenMenuLayerSource = false;
+		bool hasOtherMenuLayerSource = false;
 		size_t firstMenuLayerSourceSlot = srvs.size();
 		VRMenuCompositionTargetMatch firstMenuLayerSource{};
 		for (size_t slot = 0; slot < srvs.size(); ++slot) {
@@ -1650,6 +1708,8 @@ namespace
 				continue;
 			}
 
+			const char* sourceClass = classifyExtent(source.width, source.height);
+			const char* sourceLayout = classifyEyeLayout(source.target, source.width, source.height);
 			if (!sources.empty())
 				sources += ", ";
 			sources += "t";
@@ -1660,6 +1720,10 @@ namespace
 			sources += std::to_string(source.width);
 			sources += "x";
 			sources += std::to_string(source.height);
+			sources += " class=";
+			sources += sourceClass;
+			sources += " layout=";
+			sources += sourceLayout;
 			sources += ")";
 
 			mixSignature(static_cast<uint64_t>(slot + 1));
@@ -1668,10 +1732,14 @@ namespace
 			mixSignature(source.height);
 			mixSignature(static_cast<uint64_t>(source.format));
 
-			const bool menuLayerSource =
-				source.target == RE::RENDER_TARGETS::kMENUBG ||
-				source.target == RE::RENDER_TARGETS::kPROJECTEDMENU ||
-				source.target == RE::RENDER_TARGETS::kHUDMENU;
+			const bool menuLayerSource = IsTrackedVRMenuLayerTarget(source.target);
+			if (menuLayerSource) {
+				const std::string_view sourceClassView(sourceClass);
+				hasEngineMenuLayerSource = hasEngineMenuLayerSource || sourceClassView == "engine";
+				hasFinalMenuLayerSource = hasFinalMenuLayerSource || sourceClassView == "final";
+				hasScreenMenuLayerSource = hasScreenMenuLayerSource || sourceClassView == "screen";
+				hasOtherMenuLayerSource = hasOtherMenuLayerSource || sourceClassView == "other";
+			}
 			if (menuLayerSource && firstMenuLayerSourceSlot == srvs.size()) {
 				firstMenuLayerSourceSlot = slot;
 				firstMenuLayerSource = source;
@@ -1691,6 +1759,12 @@ namespace
 			menuLayerBakedIntoScene &&
 			a_renderScaleActive &&
 			a_presentationUpscaling;
+		const bool hasNativeMenuLayerSource = hasFinalMenuLayerSource || hasScreenMenuLayerSource;
+		const bool hasReducedMenuLayerSource = hasEngineMenuLayerSource || hasScreenMenuLayerSource;
+		const bool renderScaleOnlyMenuLayerSource =
+			firstMenuLayerSourceSlot != srvs.size() &&
+			hasEngineMenuLayerSource &&
+			!hasNativeMenuLayerSource;
 		const bool allowDiagnostic =
 			!a_communityShadersMenu &&
 			(a_knownMenu || a_vrMenuPresentation || renderScaleMenuCompositeObservation);
@@ -1722,7 +1796,7 @@ namespace
 		const auto frame = globals::state ? globals::state->frameCount : 0;
 		if (lastLoggedSignature.exchange(signature, std::memory_order_acq_rel) != signature) {
 			logger::debug(
-				"[VRMenuOriginalComposite] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} observedRenderScaleComposite={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
+				"[VRMenuOriginalComposite] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} observedRenderScaleComposite={} menuSourceEngine={} menuSourceFinal={} menuSourceScreen={} menuSourceOther={} finalMenuSource={} reducedMenuSource={} nativeMenuSource={} renderScaleOnlyMenuSource={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
 				frame,
 				a_passName ? a_passName : "-",
 				a_phase ? a_phase : "-",
@@ -1737,6 +1811,14 @@ namespace
 				a_renderScaleActive ? "yes" : "no",
 				a_presentationUpscaling ? "yes" : "no",
 				renderScaleMenuCompositeObservation ? "yes" : "no",
+				hasEngineMenuLayerSource ? "yes" : "no",
+				hasFinalMenuLayerSource ? "yes" : "no",
+				hasScreenMenuLayerSource ? "yes" : "no",
+				hasOtherMenuLayerSource ? "yes" : "no",
+				hasFinalMenuLayerSource ? "yes" : "no",
+				hasReducedMenuLayerSource ? "yes" : "no",
+				hasNativeMenuLayerSource ? "yes" : "no",
+				renderScaleOnlyMenuLayerSource ? "yes" : "no",
 				viewports,
 				scissors,
 				shaders,
@@ -1776,7 +1858,7 @@ namespace
 				const float finalScaleY = destination.height > 0 ? static_cast<float>(a_finalHeight) / static_cast<float>(destination.height) : 0.0f;
 
 				logger::debug(
-					"[VRMenuBakeCandidate] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={} layout={}) firstMenuSource=t{}:{}({}x{} fmt={} class={} layout={}) sources={} menuBg={} projectedMenu={} hudMenu={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} observedRenderScaleComposite={} screen={}x{} engine={}x{} final={}x{} finalLayout={} sourceEye={}x{} dstEye={}x{} finalEye={}x{} sourceLeftPx=(0,0)->({},{}) sourceRightPx=({},0)->({},{}) dstLeftPx=(0,0)->({},{}) dstRightPx=({},0)->({},{}) finalLeftPx=(0,0)->({},{}) finalRightPx=({},0)->({},{}) finalScale={:.4f},{:.4f}",
+					"[VRMenuBakeCandidate] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={} layout={}) firstMenuSource=t{}:{}({}x{} fmt={} class={} layout={}) sources={} menuBg={} projectedMenu={} hudMenu={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} observedRenderScaleComposite={} finalMenuSource={} reducedMenuSource={} nativeMenuSource={} renderScaleOnlyMenuSource={} screen={}x{} engine={}x{} final={}x{} finalLayout={} sourceEye={}x{} dstEye={}x{} finalEye={}x{} sourceLeftPx=(0,0)->({},{}) sourceRightPx=({},0)->({},{}) dstLeftPx=(0,0)->({},{}) dstRightPx=({},0)->({},{}) finalLeftPx=(0,0)->({},{}) finalRightPx=({},0)->({},{}) finalScale={:.4f},{:.4f}",
 					frame,
 					a_passName ? a_passName : "-",
 					a_phase ? a_phase : "-",
@@ -1803,6 +1885,10 @@ namespace
 					a_renderScaleActive ? "yes" : "no",
 					a_presentationUpscaling ? "yes" : "no",
 					renderScaleMenuCompositeObservation ? "yes" : "no",
+					hasFinalMenuLayerSource ? "yes" : "no",
+					hasReducedMenuLayerSource ? "yes" : "no",
+					hasNativeMenuLayerSource ? "yes" : "no",
+					renderScaleOnlyMenuLayerSource ? "yes" : "no",
 					a_screenWidth,
 					a_screenHeight,
 					a_engineWidth,
@@ -5440,17 +5526,21 @@ namespace
 		return false;
 	}
 
-	void LogVRPresentationKnownTargets(const char* a_passName, const char* a_phase, uint32_t a_frame)
+	void LogVRPresentationKnownTargets(
+		const char* a_passName,
+		const char* a_phase,
+		const VRPresentationDiagnosticSnapshot& a_snapshot)
 	{
 		auto renderer = globals::game::renderer;
 		if (!renderer)
 			return;
 
+		const uint32_t frame = a_snapshot.frame;
 		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		const int targetCount = Util::GetRenderTargetCount();
 		std::array<D3DViewDiagnosticInfo, kVRPresentationKnownTargetEntries.size()> textureInfos{};
 		std::array<D3DViewDiagnosticInfo, kVRPresentationKnownTargetEntries.size()> copyInfos{};
-		uint64_t signature = HashDiagnosticText("known-targets");
+		uint64_t targetSignature = HashDiagnosticText("known-targets");
 		for (size_t i = 0; i < kVRPresentationKnownTargetEntries.size(); ++i) {
 			const auto& entry = kVRPresentationKnownTargetEntries[i];
 			const auto targetIndex = static_cast<int>(entry.target);
@@ -5462,22 +5552,113 @@ namespace
 			textureInfos[i].engineName = std::string(magic_enum::enum_name(entry.target));
 			PopulateTextureDiagnosticInfo(copyInfos[i], renderTarget.textureCopy);
 			copyInfos[i].engineName = std::string(magic_enum::enum_name(entry.target)) + ".copy";
-			signature = MixVRTransitionDiagnosticValue(signature, static_cast<uint32_t>(entry.target));
-			signature = MixKnownTargetDiagnosticSignature(signature, textureInfos[i]);
-			signature = MixKnownTargetDiagnosticSignature(signature, copyInfos[i]);
-			signature = MixVRTransitionDiagnosticValue(signature, renderTarget.SRV != nullptr ? 1u : 0u);
-			signature = MixVRTransitionDiagnosticValue(signature, renderTarget.SRVCopy != nullptr ? 1u : 0u);
-			signature = MixVRTransitionDiagnosticValue(signature, renderTarget.RTV != nullptr ? 1u : 0u);
+			targetSignature = MixVRTransitionDiagnosticValue(targetSignature, static_cast<uint32_t>(entry.target));
+			targetSignature = MixKnownTargetDiagnosticSignature(targetSignature, textureInfos[i]);
+			targetSignature = MixKnownTargetDiagnosticSignature(targetSignature, copyInfos[i]);
+			targetSignature = MixVRTransitionDiagnosticValue(targetSignature, renderTarget.SRV != nullptr ? 1u : 0u);
+			targetSignature = MixVRTransitionDiagnosticValue(targetSignature, renderTarget.SRVCopy != nullptr ? 1u : 0u);
+			targetSignature = MixVRTransitionDiagnosticValue(targetSignature, renderTarget.RTV != nullptr ? 1u : 0u);
+		}
+
+		uint64_t resolutionSignature = targetSignature;
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.renderScaleActive ? 1u : 0u);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.presentationUpscalingActive ? 1u : 0u);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.knownMenu ? 1u : 0u);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.vrMenuPresentation ? 1u : 0u);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.menuTextRasterDiagnosticContext ? 1u : 0u);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.screenWidth);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.screenHeight);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.engineWidth);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.engineHeight);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.finalWidth);
+		resolutionSignature = MixVRTransitionDiagnosticValue(resolutionSignature, a_snapshot.finalHeight);
+
+		const auto classifyKnownExtent = [&](const D3DViewDiagnosticInfo& a_info) {
+			if (!a_info.valid)
+				return "missing";
+			return ClassifyVRMenuExtent(
+				a_info.width,
+				a_info.height,
+				a_snapshot.screenWidth,
+				a_snapshot.screenHeight,
+				a_snapshot.engineWidth,
+				a_snapshot.engineHeight,
+				a_snapshot.finalWidth,
+				a_snapshot.finalHeight);
+		};
+		const auto formatKnownExtent = [&](const D3DViewDiagnosticInfo& a_info) {
+			if (!a_info.valid)
+				return std::string("missing");
+			return std::format("{}x{}:{}", a_info.width, a_info.height, classifyKnownExtent(a_info));
+		};
+		bool hasAnyMenuTarget = false;
+		bool hasEngineMenuTarget = false;
+		bool hasFinalMenuTarget = false;
+		bool hasReducedMenuTarget = false;
+		bool hasNativeMenuTarget = false;
+		bool hasOtherMenuTarget = false;
+		std::string menuTargetSummary;
+		const auto updateMenuTargetClass = [&](const D3DViewDiagnosticInfo& a_info) {
+			if (!a_info.valid)
+				return;
+			hasAnyMenuTarget = true;
+			const std::string_view extentClass(classifyKnownExtent(a_info));
+			hasEngineMenuTarget = hasEngineMenuTarget || extentClass == "engine";
+			hasFinalMenuTarget = hasFinalMenuTarget || IsFinalVRMenuExtentClass(extentClass);
+			hasReducedMenuTarget = hasReducedMenuTarget || IsReducedVRMenuExtentClass(extentClass);
+			hasNativeMenuTarget = hasNativeMenuTarget || IsNativeVRMenuExtentClass(extentClass);
+			hasOtherMenuTarget = hasOtherMenuTarget || extentClass == "other";
+		};
+		for (size_t i = 0; i < kVRPresentationKnownTargetEntries.size(); ++i) {
+			const auto& entry = kVRPresentationKnownTargetEntries[i];
+			if (!IsTrackedVRMenuLayerTarget(entry.target))
+				continue;
+			if (!menuTargetSummary.empty())
+				menuTargetSummary += " ";
+			menuTargetSummary += std::string(magic_enum::enum_name(entry.target));
+			menuTargetSummary += "=";
+			menuTargetSummary += formatKnownExtent(textureInfos[i]);
+			menuTargetSummary += "/copy=";
+			menuTargetSummary += formatKnownExtent(copyInfos[i]);
+			updateMenuTargetClass(textureInfos[i]);
+			updateMenuTargetClass(copyInfos[i]);
+		}
+		const bool renderScaleOnlyMenuTargets =
+			hasAnyMenuTarget &&
+			hasEngineMenuTarget &&
+			!hasNativeMenuTarget;
+		static std::atomic<uint64_t> lastResolutionSignature{ 0 };
+		if (lastResolutionSignature.exchange(resolutionSignature, std::memory_order_acq_rel) != resolutionSignature) {
+			logger::debug(
+				"[VRMenuResolutionDiag] {} {} frame={} renderScaleActive={} presentationUpscaling={} screen={}x{} engine={}x{} final={}x{} menuTargets={} finalMenuTarget={} reducedMenuTarget={} nativeMenuTarget={} engineMenuTarget={} otherMenuTarget={} renderScaleOnlyMenuTarget={}",
+				DiagnosticText(a_passName, "unknown"),
+				DiagnosticText(a_phase, "unknown"),
+				frame,
+				BoolText(a_snapshot.renderScaleActive),
+				BoolText(a_snapshot.presentationUpscalingActive),
+				a_snapshot.screenWidth,
+				a_snapshot.screenHeight,
+				a_snapshot.engineWidth,
+				a_snapshot.engineHeight,
+				a_snapshot.finalWidth,
+				a_snapshot.finalHeight,
+				menuTargetSummary.empty() ? "-" : menuTargetSummary,
+				BoolText(hasFinalMenuTarget),
+				BoolText(hasReducedMenuTarget),
+				BoolText(hasNativeMenuTarget),
+				BoolText(hasEngineMenuTarget),
+				BoolText(hasOtherMenuTarget),
+				BoolText(renderScaleOnlyMenuTargets));
 		}
 
 		if (g_vrPresentationKnownTargets.initialized &&
-			g_vrPresentationKnownTargets.signature == signature) {
+			g_vrPresentationKnownTargets.signature == targetSignature) {
 			++g_vrPresentationKnownTargets.repeatCount;
-			g_vrPresentationKnownTargets.lastFrame = a_frame;
+			g_vrPresentationKnownTargets.lastFrame = frame;
 			const bool countThreshold =
 				g_vrPresentationKnownTargets.repeatCount - g_vrPresentationKnownTargets.lastSummaryRepeatCount >= kVRPresentationRepeatSummaryCount;
 			const bool frameThreshold =
-				ElapsedFrames(g_vrPresentationKnownTargets.lastSummaryFrame, a_frame) >= kVRPresentationRepeatSummaryFrames;
+				ElapsedFrames(g_vrPresentationKnownTargets.lastSummaryFrame, frame) >= kVRPresentationRepeatSummaryFrames;
 			if (countThreshold || frameThreshold) {
 				logger::debug(
 					"[VRMenuDiag] knownTargets unchanged: repeated {} additional requested dumps over {} frames (signature=0x{:X}, caller={} {}, lastFrame={})",
@@ -5502,23 +5683,23 @@ namespace
 				g_vrPresentationKnownTargets.signature,
 				DiagnosticText(a_passName, "unknown"),
 				DiagnosticText(a_phase, "unknown"),
-				a_frame);
+				frame);
 		}
 
 		g_vrPresentationKnownTargets.initialized = true;
-		g_vrPresentationKnownTargets.signature = signature;
-		g_vrPresentationKnownTargets.firstFrame = std::max(a_frame, 1u);
-		g_vrPresentationKnownTargets.lastFrame = a_frame;
+		g_vrPresentationKnownTargets.signature = targetSignature;
+		g_vrPresentationKnownTargets.firstFrame = std::max(frame, 1u);
+		g_vrPresentationKnownTargets.lastFrame = frame;
 		g_vrPresentationKnownTargets.repeatCount = 1;
 		g_vrPresentationKnownTargets.lastSummaryRepeatCount = 1;
-		g_vrPresentationKnownTargets.lastSummaryFrame = a_frame;
+		g_vrPresentationKnownTargets.lastSummaryFrame = frame;
 
 		logger::debug(
 			"[VRMenuDiag] {} {} frame={} knownTargets snapshot signature=0x{:X}",
 			DiagnosticText(a_passName, "unknown"),
 			DiagnosticText(a_phase, "unknown"),
-			a_frame,
-			signature);
+			frame,
+			targetSignature);
 
 		for (size_t i = 0; i < kVRPresentationKnownTargetEntries.size(); ++i) {
 			const auto& entry = kVRPresentationKnownTargetEntries[i];
@@ -5532,7 +5713,7 @@ namespace
 				"[VRMenuDiag] {} {} frame={} knownTarget={} reason={} submitProtected={} displaySized={} submittedPresentation={} texture={} copy={} srv=0x{:X} srvCopy=0x{:X} rtv=0x{:X}",
 				DiagnosticText(a_passName, "unknown"),
 				DiagnosticText(a_phase, "unknown"),
-				a_frame,
+				frame,
 				magic_enum::enum_name(entry.target),
 				entry.reason,
 				BoolText(IsVRNativeLayoutSubmitProtectedTarget(entry.target)),
@@ -5690,6 +5871,109 @@ namespace
 			BoolText(scissor0EngineExtent),
 			BoolText(snapshot.menuTextRasterDiagnosticContext && (viewport0EngineExtent || scissor0EngineExtent)));
 
+		const auto classifyViewExtent = [&](const D3DViewDiagnosticInfo& a_info) {
+			if (!a_info.valid)
+				return "missing";
+			return ClassifyVRMenuExtent(
+				a_info.width,
+				a_info.height,
+				snapshot.screenWidth,
+				snapshot.screenHeight,
+				snapshot.engineWidth,
+				snapshot.engineHeight,
+				snapshot.finalWidth,
+				snapshot.finalHeight);
+		};
+		const auto isMenuView = [](const D3DViewDiagnosticInfo& a_info) {
+			return IsTrackedVRMenuViewName(std::string_view(a_info.engineName.data(), a_info.engineName.size()));
+		};
+		const auto appendViewSummary = [&](std::string& a_summary, const char* a_prefix, size_t a_index, const D3DViewDiagnosticInfo& a_info) {
+			if (!HasMeaningfulDiagnosticView(a_info))
+				return;
+			if (!a_summary.empty())
+				a_summary += " ";
+			a_summary += a_prefix;
+			a_summary += std::to_string(a_index);
+			a_summary += "=";
+			a_summary += a_info.engineName.empty() ? "UNKNOWN" : a_info.engineName;
+			a_summary += "(";
+			if (a_info.valid) {
+				a_summary += std::to_string(a_info.width);
+				a_summary += "x";
+				a_summary += std::to_string(a_info.height);
+				a_summary += " ";
+				a_summary += classifyViewExtent(a_info);
+			} else {
+				a_summary += "unresolved";
+			}
+			a_summary += ")";
+		};
+		std::string psSrvResolutionSummary;
+		std::string rtvResolutionSummary;
+		bool currentMenuSourceEngine = false;
+		bool currentMenuSourceFinal = false;
+		bool currentMenuSourceReduced = false;
+		bool currentMenuSourceNative = false;
+		bool currentMenuSourceOther = false;
+		bool currentMenuRTVEngine = false;
+		bool currentMenuRTVFinal = false;
+		bool currentMenuRTVReduced = false;
+		bool currentMenuRTVNative = false;
+		bool currentMenuRTVOther = false;
+		for (size_t i = 0; i < snapshot.psSRVs.size(); ++i) {
+			const auto& info = snapshot.psSRVs[i];
+			appendViewSummary(psSrvResolutionSummary, "t", i, info);
+			if (isMenuView(info)) {
+				const std::string_view extentClass(classifyViewExtent(info));
+				currentMenuSourceEngine = currentMenuSourceEngine || extentClass == "engine";
+				currentMenuSourceFinal = currentMenuSourceFinal || IsFinalVRMenuExtentClass(extentClass);
+				currentMenuSourceReduced = currentMenuSourceReduced || IsReducedVRMenuExtentClass(extentClass);
+				currentMenuSourceNative = currentMenuSourceNative || IsNativeVRMenuExtentClass(extentClass);
+				currentMenuSourceOther = currentMenuSourceOther || extentClass == "other";
+			}
+		}
+		for (size_t i = 0; i < snapshot.rtvs.size(); ++i) {
+			const auto& info = snapshot.rtvs[i];
+			appendViewSummary(rtvResolutionSummary, "rtv", i, info);
+			if (isMenuView(info)) {
+				const std::string_view extentClass(classifyViewExtent(info));
+				currentMenuRTVEngine = currentMenuRTVEngine || extentClass == "engine";
+				currentMenuRTVFinal = currentMenuRTVFinal || IsFinalVRMenuExtentClass(extentClass);
+				currentMenuRTVReduced = currentMenuRTVReduced || IsReducedVRMenuExtentClass(extentClass);
+				currentMenuRTVNative = currentMenuRTVNative || IsNativeVRMenuExtentClass(extentClass);
+				currentMenuRTVOther = currentMenuRTVOther || extentClass == "other";
+			}
+		}
+		logger::debug(
+			"[VRMenuResolutionTimeline] {} {} frame={} renderScaleActive={} presentationUpscaling={} textRasterCtx={} fullResMenuDraw={} screen={}x{} engine={}x{} final={}x{} psSRVs={} rtvs={} menuSourceEngine={} menuSourceFinal={} menuSourceReduced={} menuSourceNative={} menuSourceOther={} renderScaleOnlyCurrentMenuSource={} menuRTVEngine={} menuRTVFinal={} menuRTVReduced={} menuRTVNative={} menuRTVOther={} renderScaleOnlyCurrentMenuRTV={}",
+			DiagnosticText(a_passName, "unknown"),
+			DiagnosticText(a_phase, "unknown"),
+			snapshot.frame,
+			BoolText(snapshot.renderScaleActive),
+			BoolText(snapshot.presentationUpscalingActive),
+			BoolText(snapshot.menuTextRasterDiagnosticContext),
+			BoolText(snapshot.fullResolutionMenuUIDraw),
+			snapshot.screenWidth,
+			snapshot.screenHeight,
+			snapshot.engineWidth,
+			snapshot.engineHeight,
+			snapshot.finalWidth,
+			snapshot.finalHeight,
+			psSrvResolutionSummary.empty() ? "-" : psSrvResolutionSummary,
+			rtvResolutionSummary.empty() ? "-" : rtvResolutionSummary,
+			BoolText(currentMenuSourceEngine),
+			BoolText(currentMenuSourceFinal),
+			BoolText(currentMenuSourceReduced),
+			BoolText(currentMenuSourceNative),
+			BoolText(currentMenuSourceOther),
+			BoolText(currentMenuSourceEngine && !currentMenuSourceNative),
+			BoolText(currentMenuRTVEngine),
+			BoolText(currentMenuRTVFinal),
+			BoolText(currentMenuRTVReduced),
+			BoolText(currentMenuRTVNative),
+			BoolText(currentMenuRTVOther),
+			BoolText(currentMenuRTVEngine && !currentMenuRTVNative));
+
 		if (snapshot.menuPlaneDiagnosticContext) {
 			logger::debug(
 				"[VRMenuDiag] {} {} frame={} menuPlane shaders VS={} GS={} PS={}",
@@ -5752,8 +6036,14 @@ namespace
 			snapshot.frame,
 			FormatD3DViewDiagnosticInfo(snapshot.dsv));
 
-		if (a_includeKnownTargets)
-			LogVRPresentationKnownTargets(a_passName, a_phase, snapshot.frame);
+		const bool includeResolutionTargets =
+			a_includeKnownTargets ||
+			snapshot.menuTextRasterDiagnosticContext ||
+			(snapshot.renderScaleActive &&
+				snapshot.presentationUpscalingActive &&
+				(snapshot.knownMenu || snapshot.vrMenuPresentation || snapshot.submitStageActive || snapshot.submitMenuPresentation));
+		if (includeResolutionTargets)
+			LogVRPresentationKnownTargets(a_passName, a_phase, snapshot);
 	}
 
 	struct ScenePausedUiState
@@ -13629,30 +13919,103 @@ void Upscaling::CaptureVRMenuCleanSceneAtMainPostProcessingEntry()
 		vrMenuSceneDeltaFormat = DXGI_FORMAT_UNKNOWN;
 	}
 
-	if (!IsVRRenderScaleModeActive() ||
-		!IsPresentationUpscalingActive() ||
-		!IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) ||
-		IsSubmitStageDeviceLost() ||
-		IsCommunityShadersMenuOpen() ||
-		IsMainOrLoadingMenuContextActive() ||
-		(!IsKnownGameMenuContextActive() && !IsVRMenuPresentationContextActive())) {
+	if (!kVRMenuSceneDeltaCompositeRuntimeEnabled)
+		return;
+
+	const bool renderScaleActive = IsVRRenderScaleModeActive();
+	const bool presentationUpscaling = IsPresentationUpscalingActive();
+	const auto runtimeMethod = GetRuntimeUpscaleMethod();
+	const bool vendorRuntime = IsVendorUpscalingMethod(runtimeMethod);
+	const bool submitDeviceLost = IsSubmitStageDeviceLost();
+	const bool csMenu = IsCommunityShadersMenuOpen();
+	const bool mainOrLoadingMenu = IsMainOrLoadingMenuContextActive();
+	const bool knownMenu = IsKnownGameMenuContextActive();
+	const bool vrMenuPresentation = IsVRMenuPresentationContextActive();
+	const auto logCleanCaptureSkip = [&](const char* a_reason) {
+		if (!a_reason)
+			return;
+
+		static std::atomic<uint64_t> lastSignature{ 0 };
+		static std::atomic<uint32_t> extraBudget{ 64 };
+		uint64_t signature = HashDiagnosticText(a_reason);
+		signature = MixVRTransitionDiagnosticValue(signature, renderScaleActive ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, presentationUpscaling ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, vendorRuntime ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, submitDeviceLost ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, csMenu ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, mainOrLoadingMenu ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, knownMenu ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, vrMenuPresentation ? 1u : 0u);
+
+		bool shouldLog = lastSignature.exchange(signature, std::memory_order_acq_rel) != signature;
+		if (!shouldLog) {
+			uint32_t budget = extraBudget.load(std::memory_order_relaxed);
+			while (budget > 0) {
+				if (extraBudget.compare_exchange_weak(budget, budget - 1, std::memory_order_acq_rel)) {
+					shouldLog = true;
+					break;
+				}
+			}
+		}
+		if (!shouldLog)
+			return;
+
+		logger::debug(
+			"[VRMenuSceneDelta] clean capture skipped reason={} frame={} renderScaleActive={} presentationUpscaling={} runtime={} vendorRuntime={} submitDeviceLost={} csMenu={} mainOrLoading={} knownMenu={} vrMenuPresentation={} cleanReady={}",
+			a_reason,
+			currentFrame,
+			BoolText(renderScaleActive),
+			BoolText(presentationUpscaling),
+			magic_enum::enum_name(runtimeMethod),
+			BoolText(vendorRuntime),
+			BoolText(submitDeviceLost),
+			BoolText(csMenu),
+			BoolText(mainOrLoadingMenu),
+			BoolText(knownMenu),
+			BoolText(vrMenuPresentation),
+			BoolText(vrMenuSceneDeltaCleanReady));
+	};
+
+	const char* skipReason = nullptr;
+	if (!renderScaleActive)
+		skipReason = "render-scale-inactive";
+	else if (!presentationUpscaling)
+		skipReason = "presentation-upscaling-inactive";
+	else if (!vendorRuntime)
+		skipReason = "runtime-not-vendor";
+	else if (submitDeviceLost)
+		skipReason = "submit-device-lost";
+	else if (csMenu)
+		skipReason = "community-shaders-menu";
+	else if (mainOrLoadingMenu)
+		skipReason = "main-or-loading-menu";
+	else if (!knownMenu && !vrMenuPresentation)
+		skipReason = "menu-context-inactive-at-main-post";
+	if (skipReason) {
+		logCleanCaptureSkip(skipReason);
 		return;
 	}
 	if (vrMenuSceneDeltaCleanReady)
 		return;
 
 	auto& totalTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTOTAL];
-	if (!totalTarget.texture)
+	if (!totalTarget.texture) {
+		logCleanCaptureSkip("missing-ktotal");
 		return;
+	}
 
 	D3D11_TEXTURE2D_DESC desc{};
 	totalTarget.texture->GetDesc(&desc);
-	if (desc.Width < 2 || desc.Height < 1 || desc.SampleDesc.Count != 1 || desc.ArraySize != 1)
+	if (desc.Width < 2 || desc.Height < 1 || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) {
+		logCleanCaptureSkip("unsupported-ktotal-desc");
 		return;
+	}
 
 	try {
-		if (!EnsureFoveatedTexture(vrMenuCleanSceneAtMainPost, totalTarget.texture, desc.Width, desc.Height, true, true, false, false, "VRMenuCleanSceneAtMainPost"))
+		if (!EnsureFoveatedTexture(vrMenuCleanSceneAtMainPost, totalTarget.texture, desc.Width, desc.Height, true, true, false, false, "VRMenuCleanSceneAtMainPost")) {
+			logCleanCaptureSkip("ensure-clean-texture-failed");
 			return;
+		}
 
 		context->CopyResource(vrMenuCleanSceneAtMainPost->resource.get(), totalTarget.texture);
 		vrMenuSceneDeltaSourceTexture = totalTarget.texture;
@@ -13693,13 +14056,87 @@ void Upscaling::CaptureVRMenuCleanSceneAtMainPostProcessingEntry()
 bool Upscaling::ResolveVRMenuCleanSceneForSubmit(uint32_t frame, ID3D11Texture2D* sourceTexture, ID3D11Texture2D*& cleanSceneTexture)
 {
 	cleanSceneTexture = nullptr;
-	if (!globals::game::isVR ||
-		!vrMenuSceneDeltaCleanReady ||
-		vrMenuSceneDeltaFrame != frame ||
-		!sourceTexture ||
-		sourceTexture != vrMenuSceneDeltaSourceTexture ||
-		!vrMenuCleanSceneAtMainPost ||
-		!vrMenuCleanSceneAtMainPost->resource) {
+	if (!kVRMenuSceneDeltaCompositeRuntimeEnabled)
+		return false;
+
+	const auto logResolveSkip = [&](const char* a_reason) {
+		if (!a_reason)
+			return;
+
+		static std::atomic<uint64_t> lastSignature{ 0 };
+		static std::atomic<uint32_t> extraBudget{ 128 };
+		uint64_t signature = HashDiagnosticText(a_reason);
+		signature = MixVRTransitionDiagnosticValue(signature, globals::game::isVR ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, vrMenuSceneDeltaCleanReady ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, vrMenuSceneDeltaFrame == frame ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, sourceTexture ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, sourceTexture == vrMenuSceneDeltaSourceTexture ? 1u : 0u);
+		signature = MixVRTransitionDiagnosticValue(signature, vrMenuCleanSceneAtMainPost && vrMenuCleanSceneAtMainPost->resource ? 1u : 0u);
+
+		bool shouldLog = lastSignature.exchange(signature, std::memory_order_acq_rel) != signature;
+		if (!shouldLog) {
+			uint32_t budget = extraBudget.load(std::memory_order_relaxed);
+			while (budget > 0) {
+				if (extraBudget.compare_exchange_weak(budget, budget - 1, std::memory_order_acq_rel)) {
+					shouldLog = true;
+					break;
+				}
+			}
+		}
+		if (!shouldLog)
+			return;
+
+		uint32_t sourceWidth = 0;
+		uint32_t sourceHeight = 0;
+		uint32_t sourceFormat = 0;
+		uint32_t sourceSamples = 0;
+		uint32_t sourceArray = 0;
+		if (sourceTexture) {
+			D3D11_TEXTURE2D_DESC sourceDesc{};
+			sourceTexture->GetDesc(&sourceDesc);
+			sourceWidth = sourceDesc.Width;
+			sourceHeight = sourceDesc.Height;
+			sourceFormat = static_cast<uint32_t>(sourceDesc.Format);
+			sourceSamples = sourceDesc.SampleDesc.Count;
+			sourceArray = sourceDesc.ArraySize;
+		}
+
+		logger::debug(
+			"[VRMenuSceneDelta] submit clean resolve skipped reason={} frame={} cleanFrame={} cleanReady={} bakedReady={} source=0x{:X} capturedSource=0x{:X} sourceMatches={} sourceDesc={}x{} fmt={} samples={} array={} cleanDesc={}x{} fmt={} cleanResource={}",
+			a_reason,
+			frame,
+			vrMenuSceneDeltaFrame,
+			BoolText(vrMenuSceneDeltaCleanReady),
+			BoolText(vrMenuSceneDeltaBakedReady),
+			reinterpret_cast<uintptr_t>(sourceTexture),
+			reinterpret_cast<uintptr_t>(vrMenuSceneDeltaSourceTexture),
+			BoolText(sourceTexture && sourceTexture == vrMenuSceneDeltaSourceTexture),
+			sourceWidth,
+			sourceHeight,
+			sourceFormat,
+			sourceSamples,
+			sourceArray,
+			vrMenuSceneDeltaWidth,
+			vrMenuSceneDeltaHeight,
+			static_cast<uint32_t>(vrMenuSceneDeltaFormat),
+			BoolText(vrMenuCleanSceneAtMainPost && vrMenuCleanSceneAtMainPost->resource));
+	};
+
+	const char* skipReason = nullptr;
+	if (!globals::game::isVR)
+		skipReason = "not-vr";
+	else if (!vrMenuSceneDeltaCleanReady)
+		skipReason = "clean-not-ready";
+	else if (vrMenuSceneDeltaFrame != frame)
+		skipReason = "stale-clean-frame";
+	else if (!sourceTexture)
+		skipReason = "missing-submit-source";
+	else if (sourceTexture != vrMenuSceneDeltaSourceTexture)
+		skipReason = "submit-source-mismatch";
+	else if (!vrMenuCleanSceneAtMainPost || !vrMenuCleanSceneAtMainPost->resource)
+		skipReason = "missing-clean-resource";
+	if (skipReason) {
+		logResolveSkip(skipReason);
 		return false;
 	}
 
@@ -13710,16 +14147,21 @@ bool Upscaling::ResolveVRMenuCleanSceneForSubmit(uint32_t frame, ID3D11Texture2D
 		sourceDesc.Format != vrMenuSceneDeltaFormat ||
 		sourceDesc.SampleDesc.Count != 1 ||
 		sourceDesc.ArraySize != 1) {
+		logResolveSkip("submit-source-desc-mismatch");
 		return false;
 	}
 
 	try {
-		if (!EnsureFoveatedTexture(vrMenuBakedSceneAtSubmit, sourceTexture, sourceDesc.Width, sourceDesc.Height, true, true, false, false, "VRMenuBakedSceneAtSubmit"))
+		if (!EnsureFoveatedTexture(vrMenuBakedSceneAtSubmit, sourceTexture, sourceDesc.Width, sourceDesc.Height, true, true, false, false, "VRMenuBakedSceneAtSubmit")) {
+			logResolveSkip("ensure-baked-texture-failed");
 			return false;
+		}
 
 		auto context = globals::d3d::context;
-		if (!context)
+		if (!context) {
+			logResolveSkip("missing-context");
 			return false;
+		}
 
 		context->CopyResource(vrMenuBakedSceneAtSubmit->resource.get(), sourceTexture);
 		vrMenuSceneDeltaBakedReady = true;
@@ -13742,6 +14184,8 @@ bool Upscaling::ResolveVRMenuCleanSceneForSubmit(uint32_t frame, ID3D11Texture2D
 
 bool Upscaling::CompositeVRMenuSceneDeltaAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthIn, uint32_t eyeHeightIn, uint32_t eyeWidthOut, uint32_t eyeHeightOut)
 {
+	if (!kVRMenuSceneDeltaCompositeRuntimeEnabled)
+		return false;
 	if (!globals::game::isVR || eyeIndex >= 2 || !eyeWidthIn || !eyeHeightIn || !eyeWidthOut || !eyeHeightOut)
 		return false;
 	if (!vrMenuSceneDeltaCleanReady ||
@@ -17522,7 +17966,15 @@ void Upscaling::UpsampleDynamicResolution_Render::thunk(void* a_imageSpaceShader
 	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISUpsampleDynamicResolution", DynamicResolutionUpsampleStage::Render))
 		return;
 
-	func(a_imageSpaceShader, a_shape, a_param);
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
+		"ISUpsampleDynamicResolution",
+		"Render:vanilla-before",
+		"Render:vanilla-after",
+		true,
+		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
 }
 
 void Upscaling::FullScreenVR_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -17530,7 +17982,15 @@ void Upscaling::FullScreenVR_Render::thunk(void* a_imageSpaceShader, void* a_sha
 	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISFullScreenVR", DynamicResolutionUpsampleStage::Render))
 		return;
 
-	func(a_imageSpaceShader, a_shape, a_param);
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
+		"ISFullScreenVR",
+		"Render:vanilla-before",
+		"Render:vanilla-after",
+		true,
+		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
 }
 
 void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -17538,7 +17998,15 @@ void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader,
 	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISCopyDynamicFetchDisabled", DynamicResolutionUpsampleStage::Render))
 		return;
 
-	func(a_imageSpaceShader, a_shape, a_param);
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
+		"ISCopyDynamicFetchDisabled",
+		"Render:vanilla-before",
+		"Render:vanilla-after",
+		true,
+		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
 }
 
 void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -17585,7 +18053,15 @@ void Upscaling::UpsampleDynamicResolution_Dispatch::thunk(void* a_imageSpaceShad
 	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISUpsampleDynamicResolution", DynamicResolutionUpsampleStage::Dispatch))
 		return;
 
-	func(a_imageSpaceShader, a1, a2, a3);
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleDispatch,
+		"ISUpsampleDynamicResolution",
+		"Dispatch:vanilla-before",
+		"Dispatch:vanilla-after",
+		true,
+		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
 }
 
 void Upscaling::FullScreenVR_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
@@ -17593,7 +18069,15 @@ void Upscaling::FullScreenVR_Dispatch::thunk(void* a_imageSpaceShader, uint32_t 
 	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISFullScreenVR", DynamicResolutionUpsampleStage::Dispatch))
 		return;
 
-	func(a_imageSpaceShader, a1, a2, a3);
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleDispatch,
+		"ISFullScreenVR",
+		"Dispatch:vanilla-before",
+		"Dispatch:vanilla-after",
+		true,
+		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
 }
 
 void Upscaling::CopyDynamicFetchDisabled_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
@@ -17601,7 +18085,15 @@ void Upscaling::CopyDynamicFetchDisabled_Dispatch::thunk(void* a_imageSpaceShade
 	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISCopyDynamicFetchDisabled", DynamicResolutionUpsampleStage::Dispatch))
 		return;
 
-	func(a_imageSpaceShader, a1, a2, a3);
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleDispatch,
+		"ISCopyDynamicFetchDisabled",
+		"Dispatch:vanilla-before",
+		"Dispatch:vanilla-after",
+		true,
+		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
 }
 
 void Upscaling::HDRTonemapBlendCinematicFade_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
@@ -17838,6 +18330,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
+		LogVRPresentationPassDiagnostics(
+			upscaling,
+			VRPresentationDiagnosticSlot::MainPostProcessing,
+			"Main_PostProcessing",
+			"after-original:presentation-upscaling",
+			false);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
 		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);

@@ -3559,11 +3559,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 lodLandDiffuseColor = 0;
 
 #	if defined(WETTERNESS)
+#		if defined(DYNAMIC_CUBEMAPS) || defined(DEFERRED)
 	float3 wetIndirectNormal = wetnessNormal;
-#		if defined(TERRAIN_VARIATION) && defined(LANDSCAPE)
+#			if defined(TERRAIN_VARIATION) && defined(LANDSCAPE)
 	if (terrainWetIndirectNormalStability > 1e-4) {
 		wetIndirectNormal = SafeNormalize3(lerp(wetIndirectNormal, vertexNormal, terrainWetIndirectNormalStability), wetnessNormal);
 	}
+#			endif
 #		endif
 	float3 wetnessDirectViewDirection = viewDirection;
 #		if defined(TRUE_PBR)

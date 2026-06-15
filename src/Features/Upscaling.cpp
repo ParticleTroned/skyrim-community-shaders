@@ -3828,7 +3828,26 @@ namespace
 
 	bool IsVRMenuUIFullResolutionContextActive()
 	{
-		return globals::game::isVR && IsVRMenuPresentationContextActive();
+		if (!globals::game::isVR ||
+			!IsVRMenuPresentationContextActive() ||
+			IsCommunityShadersMenuOpen() ||
+			IsMainOrLoadingMenuContextActive() ||
+			IsSaveLoadTransitionContextActive()) {
+			return false;
+		}
+
+		auto state = globals::state;
+		if (state && state->isMapMenuOpen)
+			return false;
+
+		auto ui = globals::game::ui;
+		if (ui &&
+			(ui->IsMenuOpen("MapMenu") ||
+			 ui->IsMenuOpen("StatsMenu"))) {
+			return false;
+		}
+
+		return true;
 	}
 
 	bool IsVRSceneFeatureMenuPauseContextActive()
@@ -16929,11 +16948,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool loadingTransitionTailActive =
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
+	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
 	const bool vrMenuUIFullResolutionContextActive = IsVRMenuUIFullResolutionContextActive();
 	const bool menuPresentationContext =
 		vendorMethodSelected &&
 		globals::game::isVR &&
-		(vrMenuUIFullResolutionContextActive || loadingTransitionTailActive);
+		(vrScenePresentationBlockActive || loadingTransitionTailActive);
 	const bool fullResolutionMenuPresentation = menuPresentationContext;
 	const bool loadingTransitionMenuPresentation =
 		fullResolutionMenuPresentation &&
@@ -17037,11 +17057,17 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				"[Upscaling] Submit-stage underwater mask refresh threw; skipping mask refresh");
 		}
 
+		if (vrMenuUIFullResolutionContextActive)
+			upscaling.PrepareFullResolutionPostProcessing();
+
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		if (vrMenuUIFullResolutionContextActive)
+			upscaling.PrepareFullResolutionPostProcessing();
+		else
+			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		return;
 	}
 

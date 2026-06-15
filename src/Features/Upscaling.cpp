@@ -3826,53 +3826,6 @@ namespace
 		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
 	}
 
-	bool IsVRProjectedMenuDrawFullResolutionContextActive(const Upscaling& a_upscaling)
-	{
-		if (!globals::game::isVR ||
-			!a_upscaling.IsVRRenderScaleModeActive() ||
-			!a_upscaling.IsPresentationUpscalingActive() ||
-			!IsVendorUpscalingMethod(a_upscaling.GetRuntimeUpscaleMethod()) ||
-			a_upscaling.GetRuntimeQualityMode() == 0 ||
-			!IsVRMenuPresentationContextActive() ||
-			!IsKnownGameMenuContextActive() ||
-			IsCommunityShadersMenuOpen() ||
-			IsMainOrLoadingMenuContextActive() ||
-			IsSaveLoadTransitionContextActive()) {
-			return false;
-		}
-
-		auto state = globals::state;
-		if (state && state->isMapMenuOpen)
-			return false;
-
-		auto ui = globals::game::ui;
-		if (ui &&
-			(ui->IsMenuOpen("MapMenu") ||
-			 ui->IsMenuOpen("StatsMenu"))) {
-			return false;
-		}
-
-		return true;
-	}
-
-	bool IsDiagnosticUnitScale(float a_value)
-	{
-		return a_value > 0.9999f && a_value < 1.0001f;
-	}
-
-	void PrepareVRProjectedMenuFullResolutionDrawState(Upscaling& a_upscaling)
-	{
-		a_upscaling.resolutionScale = { 1.0f, 1.0f };
-		a_upscaling.jitter = { 0.0f, 0.0f };
-
-		if (auto viewport = globals::game::graphicsState) {
-			viewport->projectionPosScaleX = 0.0f;
-			viewport->projectionPosScaleY = 0.0f;
-		}
-
-		a_upscaling.PrepareFullResolutionPostProcessing();
-	}
-
 	bool IsVRSceneFeatureMenuPauseContextActive()
 	{
 		return globals::game::isVR &&
@@ -4753,6 +4706,11 @@ namespace
 		       !a_snapshot.mainOrLoadingMenu;
 	}
 
+	bool IsVRDiagnosticUnitScale(float a_value)
+	{
+		return a_value > 0.9999f && a_value < 1.0001f;
+	}
+
 	void CaptureVRMenuPlaneDiagnostics(
 		ID3D11DeviceContext* a_context,
 		const char* a_passName,
@@ -4831,7 +4789,6 @@ namespace
 		a_snapshot.submitStageActive = a_upscaling.IsSubmitStageUpscalingActive();
 		a_snapshot.submitStageDeviceLost = a_upscaling.IsSubmitStageDeviceLost();
 		a_snapshot.presentationUpscalingActive = a_upscaling.IsPresentationUpscalingActive();
-		a_snapshot.fullResolutionMenuUIDraw = false;
 		a_snapshot.menuTextRasterDiagnosticContext =
 			a_snapshot.renderScaleActive &&
 			IsVendorUpscalingMethod(a_snapshot.runtimeMethod) &&
@@ -4873,10 +4830,10 @@ namespace
 			a_snapshot.fullResolutionMenuUIDraw =
 				a_snapshot.menuTextRasterDiagnosticContext &&
 				a_snapshot.dynamicResolutionLock &&
-				IsDiagnosticUnitScale(a_snapshot.dynamicWidthRatio) &&
-				IsDiagnosticUnitScale(a_snapshot.dynamicHeightRatio) &&
-				IsDiagnosticUnitScale(a_snapshot.previousDynamicWidthRatio) &&
-				IsDiagnosticUnitScale(a_snapshot.previousDynamicHeightRatio);
+				IsVRDiagnosticUnitScale(a_snapshot.dynamicWidthRatio) &&
+				IsVRDiagnosticUnitScale(a_snapshot.dynamicHeightRatio) &&
+				IsVRDiagnosticUnitScale(a_snapshot.previousDynamicWidthRatio) &&
+				IsVRDiagnosticUnitScale(a_snapshot.previousDynamicHeightRatio);
 		}
 
 		ID3D11ShaderResourceView* psSRVs[4] = {};
@@ -14642,11 +14599,25 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool presentationSourceTooSmall =
 		presentationOnly &&
 		(sourceDesc.Width < sourceEyeWidthIn || sourceDesc.Height < sourceEyeHeightIn);
+	const bool menuTextSceneEncode =
+		vrRenderScaleMode &&
+		menuTextProtectionContext &&
+		!presentationOnly &&
+		!submitMenuPresentationContext &&
+		!submitPresentationContext &&
+		!presentationRenderTarget;
+	const bool menuTextVendorReconstruct =
+		menuTextSceneEncode &&
+		sourceRegion.matchesExpectedSize &&
+		motionVector.texture &&
+		depth.texture;
 	const std::string submitResolvePhase = std::format(
-		"resolve:eye={} menu={} textMenu={} submitMenu={} submitPresentation={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={}",
+		"resolve:eye={} menu={} textMenu={} textSceneEncode={} textVendorReconstruct={} submitMenu={} submitPresentation={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={} sourceExpected={} sourcePerEye={} sourceCombined={} boundsCombined={}",
 		VREyeName(a_eye),
 		BoolText(menuPresentationContext),
 		BoolText(menuTextProtectionContext),
+		BoolText(menuTextSceneEncode),
+		BoolText(menuTextVendorReconstruct),
 		BoolText(submitMenuPresentationContext),
 		BoolText(submitPresentationContext),
 		BoolText(presentationRenderTarget),
@@ -14655,7 +14626,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		BoolText(vrRenderScaleMenuCanUseVendor),
 		BoolText(foveatedRequested),
 		BoolText(transitionPresentationCooldown),
-		BoolText(presentationSourceTooSmall));
+		BoolText(presentationSourceTooSmall),
+		BoolText(sourceRegion.matchesExpectedSize),
+		BoolText(sourceHasPerEyeLayout),
+		BoolText(sourceUsesCombinedStereoLayout),
+		BoolText(inputBoundsUseCombinedStereoSpace));
 	LogVRPresentationPassDiagnostics(
 		*this,
 		VRPresentationDiagnosticSlot::SubmitStage,
@@ -16923,9 +16898,6 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-PostDisplay",
 			false);
 	}
-	const bool forceFullResolutionMenuDraw = IsVRProjectedMenuDrawFullResolutionContextActive(upscaling);
-	if (forceFullResolutionMenuDraw)
-		PrepareVRProjectedMenuFullResolutionDrawState(upscaling);
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,
@@ -16955,8 +16927,6 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-menu-draw",
 			false);
 	}
-	if (forceFullResolutionMenuDraw)
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 }
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)

@@ -563,21 +563,58 @@ struct ID3D11Device_CreateSamplerState
 
 struct BSShaderRenderTargets_Create
 {
-	static void ApplyVRRenderScaleRenderTargetManagerOverrides()
+	using CreateRTFn = void (*)(RE::BSGraphics::Renderer*, RE::RENDER_TARGETS::RENDER_TARGET, RE::BSGraphics::RenderTargetProperties*);
+
+	static bool IsVRRenderScaleMenuTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
-		if (!globals::game::isVR || !CanSetupRenderingResources())
-			return;
-
-		auto* manager = RE::BSGraphics::RenderTargetManager::GetSingleton();
-		if (!manager)
-			return;
-
-		const size_t targetCount = std::size(manager->renderTargetData);
-		for (size_t i = 0; i < targetCount; ++i) {
-			auto& properties = manager->renderTargetData[i];
-			const auto target = static_cast<RE::RENDER_TARGETS::RENDER_TARGET>(i);
-			globals::features::upscaling.AdjustVRRenderScaleRenderTargetProperties(target, &properties);
+		switch (a_target) {
+		case RE::RENDER_TARGETS::kMENUBG:
+		case RE::RENDER_TARGETS::kPROJECTEDMENU:
+		case RE::RENDER_TARGETS::kHUDMENU:
+		case RE::RENDER_TARGETS::kFADERUI:
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
+			return true;
+		default:
+			return false;
 		}
+	}
+
+	static bool ShouldAdjustVRRenderScaleMenuTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
+	{
+		if (!engineCreateRT || !a_properties || !globals::game::isVR || !CanSetupRenderingResources())
+			return false;
+		if (!IsVRRenderScaleMenuTarget(a_target))
+			return false;
+
+		auto& upscaling = globals::features::upscaling;
+		return upscaling.GetVRRenderScaleModeRequested() || upscaling.IsVRRenderScaleModeActive();
+	}
+
+	static void CreateRenderTarget_MenuProtectedThunk(
+		RE::BSGraphics::Renderer* a_this,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		RE::BSGraphics::RenderTargetProperties* a_properties)
+	{
+		if (!ShouldAdjustVRRenderScaleMenuTarget(a_target, a_properties)) {
+			engineCreateRT(a_this, a_target, a_properties);
+			return;
+		}
+
+		auto properties = *a_properties;
+		const auto originalWidth = properties.width;
+		const auto originalHeight = properties.height;
+		const bool adjusted = globals::features::upscaling.AdjustVRRenderScaleRenderTargetProperties(a_target, &properties);
+		if (adjusted) {
+			logger::debug(
+				"[VRRenderScale] Adjusted unhooked {} render target properties to {}x{} for VR render scale (was {}x{}).",
+				magic_enum::enum_name(a_target),
+				properties.width,
+				properties.height,
+				originalWidth,
+				originalHeight);
+		}
+		engineCreateRT(a_this, a_target, adjusted ? &properties : a_properties);
 	}
 
 	/**
@@ -599,15 +636,9 @@ struct BSShaderRenderTargets_Create
 		       globals::d3d::context;
 	}
 
-	static void CallOriginalWithScopedRenderTargetOverrides()
-	{
-		ApplyVRRenderScaleRenderTargetManagerOverrides();
-		func();
-	}
-
 	static bool RecreateAndSetupFull()
 	{
-		CallOriginalWithScopedRenderTargetOverrides();
+		func();
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
@@ -617,7 +648,7 @@ struct BSShaderRenderTargets_Create
 
 	static bool RecreateAndSetupRenderTargetResources()
 	{
-		CallOriginalWithScopedRenderTargetOverrides();
+		func();
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
@@ -625,6 +656,8 @@ struct BSShaderRenderTargets_Create
 		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
+	static inline CreateRTFn engineCreateRT = nullptr;
+	static inline uint32_t menuCreateRTCallSitesPatched = 0;
 };
 
 struct BSInputDeviceManager_PollInputDevices
@@ -1280,6 +1313,7 @@ namespace Hooks
 
 		logger::info("Hooking BSShaderRenderTargets::Create::CreateRenderTarget(s)");
 		stl::write_thunk_call<CreateRenderTarget_Main>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x3F0, 0x3F3, 0x548));
+		BSShaderRenderTargets_Create::engineCreateRT = reinterpret_cast<BSShaderRenderTargets_Create::CreateRTFn>(CreateRenderTarget_Main::func.address());
 		stl::write_thunk_call<CreateRenderTarget_Normals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x458, 0x45B, 0x5B0));
 		stl::write_thunk_call<CreateRenderTarget_NormalsSwap>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x46B, 0x46E, 0x5C3));
 		stl::write_thunk_call<CreateRenderTarget_MotionVectors>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x4F0, 0x4EF, 0x64E));
@@ -1290,6 +1324,30 @@ namespace Hooks
 		stl::write_thunk_call<CreateDepthStencil_PrecipitationMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x1245, 0x123B, 0x1917));
 		stl::write_thunk_call<CreateCubemapRenderTarget_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA25, 0xA25, 0xCD2));
 		stl::write_thunk_call<CreateDepthStencil_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA59, 0xA59, 0xD13));
+
+		if (BSShaderRenderTargets_Create::engineCreateRT) {
+			const auto createBase = REL::RelocationID(100458, 107175).address();
+			const auto createRTAddr = reinterpret_cast<uintptr_t>(BSShaderRenderTargets_Create::engineCreateRT);
+			auto& trampoline = SKSE::GetTrampoline();
+
+			for (size_t offset = 0; offset < 0x2500; ++offset) {
+				const auto callAddr = createBase + offset;
+				if (*reinterpret_cast<uint8_t*>(callAddr) != 0xE8)
+					continue;
+
+				const auto rel = *reinterpret_cast<int32_t*>(callAddr + 1);
+				const auto target = callAddr + 5 + rel;
+				if (target != createRTAddr)
+					continue;
+
+				trampoline.write_call<5>(callAddr, BSShaderRenderTargets_Create::CreateRenderTarget_MenuProtectedThunk);
+				++BSShaderRenderTargets_Create::menuCreateRTCallSitesPatched;
+			}
+
+			logger::debug(
+				"[VRRenderScale] Hooked {} additional BSShaderRenderTargets::Create render-target call sites for menu target sizing.",
+				BSShaderRenderTargets_Create::menuCreateRTCallSitesPatched);
+		}
 
 #ifdef TRACY_ENABLE
 		stl::write_thunk_call<Main_Update>(REL::RelocationID(35551, 36544).address() + REL::Relocate(0x11F, 0x160));

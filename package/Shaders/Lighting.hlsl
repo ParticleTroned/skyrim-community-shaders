@@ -1787,6 +1787,57 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	return state;
 }
 
+struct WetnessLightingState
+{
+	WetReflectionParams reflectionParams;
+	WetnessDirectLightState directLightState;
+	float indirectEnabled;
+};
+
+WetnessLightingState CreateWetnessLightingState(
+	bool wetLightingVisible,
+	float3 wetnessNormal,
+	float3 worldNormal,
+	float3 directViewDirection,
+	float waterRoughnessSpecular,
+	float wetDirectSpecularScale,
+	float wetHighlightReflectanceScale,
+	float postRainOverridePhase,
+	float postRainPuddleReflectionOverrideScale,
+	float vrWetnessDirectDetailWeight,
+	bool vrWetnessDirectDetailEnabled)
+{
+	WetnessLightingState state = (WetnessLightingState)0;
+	[branch] if (!wetLightingVisible) {
+		return state;
+	}
+
+	state.reflectionParams = CreateWetReflectionParams(CS_WETNESS_SETTINGS.WetIndirectSpecularScale);
+	if (postRainOverridePhase > 1e-4) {
+		// Post-rain puddles keep the general Wet Reflection scale as the baseline.
+		// The post-rain controls only bias that baseline up or down.
+		state.reflectionParams.effectiveScale = lerp(
+			state.reflectionParams.effectiveScale,
+			state.reflectionParams.effectiveScale * postRainPuddleReflectionOverrideScale,
+			postRainOverridePhase);
+	}
+
+	state.indirectEnabled =
+		(HasWetReflectionParams(state.reflectionParams) &&
+		 state.reflectionParams.effectiveScale > 1e-4 &&
+		 wetHighlightReflectanceScale > 1e-4) ? 1.0 : 0.0;
+	state.directLightState = CreateWetnessDirectLightState(
+		wetnessNormal,
+		worldNormal,
+		directViewDirection,
+		waterRoughnessSpecular,
+		state.reflectionParams,
+		wetDirectSpecularScale,
+		vrWetnessDirectDetailWeight,
+		vrWetnessDirectDetailEnabled);
+	return state;
+}
+
 void ApplyWetnessDirectLightingOutput(
 	inout DirectLightingOutput lightingOutput,
 	DirectContext lightContext,
@@ -3511,35 +3562,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TRUE_PBR)
 	wetnessDirectViewDirection = refractedViewDirection;
 #		endif
-	WetReflectionParams wetReflectionParams = (WetReflectionParams)0;
-	WetnessDirectLightState wetDirectLightState = (WetnessDirectLightState)0;
 	const bool wetLightingVisible = wetnessEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
-	bool wetIndirectLightingVisible = false;
-	[branch] if (wetLightingVisible) {
-		wetReflectionParams = CreateWetReflectionParams(CS_WETNESS_SETTINGS.WetIndirectSpecularScale);
-		if (postRainOverridePhase > 1e-4) {
-			// Post-rain puddles keep the general Wet Reflection scale as the baseline.
-			// The post-rain controls only bias that baseline up or down.
-			wetReflectionParams.effectiveScale = lerp(
-				wetReflectionParams.effectiveScale,
-				wetReflectionParams.effectiveScale * postRainPuddleReflectionOverrideScale,
-				postRainOverridePhase);
-		}
-		wetIndirectLightingVisible =
-			HasWetReflectionParams(wetReflectionParams) &&
-			wetReflectionParams.effectiveScale > 1e-4 &&
-			wetHighlightReflectanceScale > 1e-4;
-		wetDirectLightState = CreateWetnessDirectLightState(
-			wetnessNormal,
-			worldNormal.xyz,
-			wetnessDirectViewDirection,
-			waterRoughnessSpecular,
-			wetReflectionParams,
-			wetDirectSpecularScale,
-			vrWetnessDirectDetailWeight,
-			vrWetnessDirectDetailEnabled);
-	}
-	const bool wetDirectLightingVisible = wetDirectLightState.enabled > 0.0;
+	WetnessLightingState wetnessLightingState = CreateWetnessLightingState(
+		wetLightingVisible,
+		wetnessNormal,
+		worldNormal.xyz,
+		wetnessDirectViewDirection,
+		waterRoughnessSpecular,
+		wetDirectSpecularScale,
+		wetHighlightReflectanceScale,
+		postRainOverridePhase,
+		postRainPuddleReflectionOverrideScale,
+		vrWetnessDirectDetailWeight,
+		vrWetnessDirectDetailEnabled);
+	const bool wetDirectLightingVisible = wetnessLightingState.directLightState.enabled > 0.0;
+	const bool wetIndirectLightingVisible = wetnessLightingState.indirectEnabled > 0.0;
 #	endif
 
 	// Directiontal Lighting
@@ -3569,7 +3606,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 #	if defined(WETTERNESS)
 	if (wetDirectLightingVisible) {
-		ApplyWetnessDirectLightingOutput(dirLightOutput, dirLightContext, wetDirectLightState);
+		ApplyWetnessDirectLightingOutput(dirLightOutput, dirLightContext, wetnessLightingState.directLightState);
 	}
 #	elif defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
@@ -3646,7 +3683,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 #			if defined(WETTERNESS)
 		if (wetDirectLightingVisible) {
-			ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetDirectLightState);
+			ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
 		}
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
@@ -3837,7 +3874,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 #			if defined(WETTERNESS)
 		if (wetDirectLightingVisible) {
-			ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetDirectLightState);
+			ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
 		}
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
@@ -4041,7 +4078,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	bool wetCubemapReflectanceVisible = false;
 	float3 wetCubemapSampleDirection = 0.0;
 	if (wetIndirectLightingVisible) {
-		wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetIndirectNormal, waterRoughnessSpecular, indirectContext, wetReflectionParams);
+		wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetIndirectNormal, waterRoughnessSpecular, indirectContext, wetnessLightingState.reflectionParams);
 		wetnessReflectance *= wetHighlightReflectanceScale * wetPuddleSkyReflectionScale;
 		wetCubemapReflectanceVisible = any(wetnessReflectance > 0.0);
 		if (wetCubemapReflectanceVisible) {

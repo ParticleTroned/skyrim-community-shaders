@@ -1942,6 +1942,10 @@ void ApplyWetnessDirectLightingOutput(
 	DirectContext lightContext,
 	WetnessDirectLightState wetDirectLightState)
 {
+	if (wetDirectLightState.enabled <= 0.0) {
+		return;
+	}
+
 	DirectLightingOutput baseLightingOutput = lightingOutput;
 	EvaluateWetnessLighting(wetDirectLightState.normal, lightContext, wetDirectLightState.roughness, wetDirectLightState.params, lightingOutput);
 	ApplyVRLightingAuxiliaryOutputWeight(lightingOutput, baseLightingOutput, wetDirectLightState.detailWeight);
@@ -3678,7 +3682,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		postRainPuddleReflectionOverrideScale,
 		vrWetnessDirectDetailWeight,
 		vrWetnessDirectDetailEnabled);
-	const bool wetDirectLightingVisible = wetnessLightingState.directLightState.enabled > 0.0;
 #		if defined(DYNAMIC_CUBEMAPS)
 	const bool wetIndirectLightingVisible = wetnessLightingState.indirectEnabled > 0.0;
 #		endif
@@ -3710,9 +3713,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirLightOutput.coatDiffuse = SanitizeFloat3(dirLightOutput.coatDiffuse);
 #	endif
 #	if defined(WETTERNESS)
-	if (wetDirectLightingVisible) {
-		ApplyWetnessDirectLightingOutput(dirLightOutput, dirLightContext, wetnessLightingState.directLightState);
-	}
+	ApplyWetnessDirectLightingOutput(dirLightOutput, dirLightContext, wetnessLightingState.directLightState);
 #	elif defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
 		ApplyWetnessDirectLightingOutput(dirLightOutput, wetnessNormal, dirLightContext, waterRoughnessSpecular, vrAuxDetailWeight);
@@ -3787,9 +3788,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
 #			endif
 #			if defined(WETTERNESS)
-		if (wetDirectLightingVisible) {
-			ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
-		}
+		ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
 			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, vrAuxDetailWeight);
@@ -3978,9 +3977,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightOutput.coatDiffuse = SanitizeFloat3(pointLightOutput.coatDiffuse);
 #			endif
 #			if defined(WETTERNESS)
-		if (wetDirectLightingVisible) {
-			ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
-		}
+		ApplyWetnessDirectLightingOutput(pointLightOutput, pointLightContext, wetnessLightingState.directLightState);
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
 			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, vrAuxDetailWeight);

@@ -1792,11 +1792,54 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	return state;
 }
 
+#if defined(DYNAMIC_CUBEMAPS)
+struct WetnessIndirectLightState
+{
+	float enabled;
+	float3 normal;
+	float roughness;
+	float strength;
+	WetReflectionParams reflectionParams;
+	float reflectanceScale;
+};
+
+WetnessIndirectLightState CreateWetnessIndirectLightState(
+	float3 wetIndirectNormal,
+	float waterRoughnessSpecular,
+	WetReflectionParams wetReflectionParams,
+	float wetHighlightReflectanceScale,
+	float wetPuddleSkyReflectionScale)
+{
+	WetnessIndirectLightState state = (WetnessIndirectLightState)0;
+	state.normal = wetIndirectNormal;
+	state.roughness = waterRoughnessSpecular;
+	state.strength = saturate(1 - waterRoughnessSpecular);
+	state.reflectionParams = wetReflectionParams;
+	state.reflectanceScale = wetHighlightReflectanceScale * wetPuddleSkyReflectionScale;
+
+	if (state.strength <= 0.0) {
+		return state;
+	}
+
+	if (!HasWetReflectionParams(wetReflectionParams)) {
+		return state;
+	}
+
+	// Keep the enabled predicate aligned with the previous indirect path. Puddle sky scale
+	// only affects the reflected cubemap intensity; the wet lobe rebalance still applies.
+	if (wetHighlightReflectanceScale <= 1e-4) {
+		return state;
+	}
+
+	state.enabled = 1.0;
+	return state;
+}
+#endif
+
 struct WetnessLightingState
 {
 #if defined(DYNAMIC_CUBEMAPS)
-	WetReflectionParams reflectionParams;
-	float indirectEnabled;
+	WetnessIndirectLightState indirectLightState;
 #endif
 	WetnessDirectLightState directLightState;
 };
@@ -1809,7 +1852,9 @@ WetnessLightingState CreateWetnessLightingState(
 	float waterRoughnessSpecular,
 	float wetDirectSpecularScale,
 #if defined(DYNAMIC_CUBEMAPS)
+	float3 wetIndirectNormal,
 	float wetHighlightReflectanceScale,
+	float wetPuddleSkyReflectionScale,
 #endif
 	float postRainOverridePhase,
 	float postRainPuddleReflectionOverrideScale,
@@ -1832,10 +1877,12 @@ WetnessLightingState CreateWetnessLightingState(
 	}
 
 #if defined(DYNAMIC_CUBEMAPS)
-	state.reflectionParams = wetReflectionParams;
-	state.indirectEnabled =
-		(HasWetReflectionParams(wetReflectionParams) &&
-		 wetHighlightReflectanceScale > 1e-4) ? 1.0 : 0.0;
+	state.indirectLightState = CreateWetnessIndirectLightState(
+		wetIndirectNormal,
+		waterRoughnessSpecular,
+		wetReflectionParams,
+		wetHighlightReflectanceScale,
+		wetPuddleSkyReflectionScale);
 #endif
 	state.directLightState = CreateWetnessDirectLightState(
 		wetnessNormal,
@@ -1852,20 +1899,22 @@ WetnessLightingState CreateWetnessLightingState(
 #if defined(DYNAMIC_CUBEMAPS)
 float3 GetWetnessIndirectReflectance(
 	inout IndirectLobeWeights indirectLobeWeights,
-	bool wetIndirectLightingVisible,
-	float3 wetIndirectNormal,
-	float waterRoughnessSpecular,
 	IndirectContext indirectContext,
-	WetReflectionParams reflectionParams,
-	float wetHighlightReflectanceScale,
-	float wetPuddleSkyReflectionScale)
+	WetnessIndirectLightState wetIndirectLightState)
 {
-	if (wetIndirectLightingVisible) {
-		float3 wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetIndirectNormal, waterRoughnessSpecular, indirectContext, reflectionParams);
-		wetnessReflectance *= wetHighlightReflectanceScale * wetPuddleSkyReflectionScale;
-		return wetnessReflectance;
+	if (wetIndirectLightState.enabled <= 0.0) {
+		return 0.0;
 	}
-	return 0.0;
+
+	float3 wetnessReflectance = GetWetnessIndirectLobeWeights(
+		indirectLobeWeights,
+		wetIndirectLightState.normal,
+		wetIndirectLightState.roughness,
+		wetIndirectLightState.strength,
+		indirectContext,
+		wetIndirectLightState.reflectionParams);
+	wetnessReflectance *= wetIndirectLightState.reflectanceScale;
+	return wetnessReflectance;
 }
 
 #if !defined(DEFERRED)
@@ -3681,15 +3730,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		waterRoughnessSpecular,
 		wetDirectSpecularScale,
 #		if defined(DYNAMIC_CUBEMAPS)
+		wetIndirectNormal,
 		wetHighlightReflectanceScale,
+		wetPuddleSkyReflectionScale,
 #		endif
 		postRainOverridePhase,
 		postRainPuddleReflectionOverrideScale,
 		vrWetnessDirectDetailWeight,
 		vrWetnessDirectDetailEnabled);
-#		if defined(DYNAMIC_CUBEMAPS)
-	const bool wetIndirectLightingVisible = wetnessLightingState.indirectEnabled > 0.0;
-#		endif
 #	endif
 
 	// Directiontal Lighting
@@ -4183,13 +4231,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(DYNAMIC_CUBEMAPS)
 	float3 wetnessReflectance = GetWetnessIndirectReflectance(
 		indirectLobeWeights,
-		wetIndirectLightingVisible,
-		wetIndirectNormal,
-		waterRoughnessSpecular,
 		indirectContext,
-		wetnessLightingState.reflectionParams,
-		wetHighlightReflectanceScale,
-		wetPuddleSkyReflectionScale);
+		wetnessLightingState.indirectLightState);
 #		else
 	float3 wetnessReflectance = 0.0;
 #		endif

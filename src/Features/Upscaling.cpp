@@ -1584,7 +1584,13 @@ namespace
 		bool a_vrMenuPresentation,
 		bool a_communityShadersMenu,
 		bool a_renderScaleActive,
-		bool a_presentationUpscaling)
+		bool a_presentationUpscaling,
+		uint32_t a_screenWidth,
+		uint32_t a_screenHeight,
+		uint32_t a_engineWidth,
+		uint32_t a_engineHeight,
+		uint32_t a_finalWidth,
+		uint32_t a_finalHeight)
 	{
 		if (!globals::game::isVR || !a_context)
 			return;
@@ -1620,11 +1626,25 @@ namespace
 			signature ^= a_value;
 			signature *= 1099511628211ull;
 		};
+		const auto classifyExtent = [&](uint32_t a_width, uint32_t a_height) {
+			if (a_width == a_engineWidth && a_height == a_engineHeight)
+				return "engine";
+			if (a_width == a_finalWidth && a_height == a_finalHeight)
+				return "final";
+			if (a_width == a_screenWidth && a_height == a_screenHeight)
+				return "screen";
+			return "other";
+		};
 		mixSignature(static_cast<uint64_t>(destination.target));
 		mixSignature(destination.width);
 		mixSignature(destination.height);
 		mixSignature(static_cast<uint64_t>(destination.format));
 
+		bool hasMenuBgSource = false;
+		bool hasProjectedMenuSource = false;
+		bool hasHudMenuSource = false;
+		size_t firstMenuLayerSourceSlot = srvs.size();
+		VRMenuCompositionTargetMatch firstMenuLayerSource{};
 		for (size_t slot = 0; slot < srvs.size(); ++slot) {
 			VRMenuCompositionTargetMatch source{};
 			if (!TryResolveVRMenuCompositionView(srvs[slot], source) ||
@@ -1649,12 +1669,28 @@ namespace
 			mixSignature(source.width);
 			mixSignature(source.height);
 			mixSignature(static_cast<uint64_t>(source.format));
+
+			const bool menuLayerSource =
+				source.target == RE::RENDER_TARGETS::kMENUBG ||
+				source.target == RE::RENDER_TARGETS::kPROJECTEDMENU ||
+				source.target == RE::RENDER_TARGETS::kHUDMENU;
+			if (menuLayerSource && firstMenuLayerSourceSlot == srvs.size()) {
+				firstMenuLayerSourceSlot = slot;
+				firstMenuLayerSource = source;
+			}
+			hasMenuBgSource = hasMenuBgSource || source.target == RE::RENDER_TARGETS::kMENUBG;
+			hasProjectedMenuSource = hasProjectedMenuSource || source.target == RE::RENDER_TARGETS::kPROJECTEDMENU;
+			hasHudMenuSource = hasHudMenuSource || source.target == RE::RENDER_TARGETS::kHUDMENU;
 		}
 
 		if (sources.empty())
 			return;
 
+		const bool menuLayerBakedIntoScene =
+			destination.target == RE::RENDER_TARGETS::kTOTAL &&
+			firstMenuLayerSourceSlot != srvs.size();
 		static std::atomic<uint64_t> lastLoggedSignature{ 0 };
+		static std::atomic<uint64_t> lastLoggedBakeCandidateSignature{ 0 };
 		static std::atomic<uint32_t> detailedCaptureCount{ 0 };
 		const bool captureDetail =
 			a_renderScaleActive &&
@@ -1676,31 +1712,78 @@ namespace
 			pipelineState = BuildVRMenuOriginalCompositePipelineStateDiagnostics(a_context, signature);
 		}
 
-		if (lastLoggedSignature.exchange(signature, std::memory_order_acq_rel) == signature)
-			return;
-
 		const auto frame = globals::state ? globals::state->frameCount : 0;
-		logger::debug(
-			"[VRMenuOriginalComposite] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
-			frame,
-			a_passName ? a_passName : "-",
-			a_phase ? a_phase : "-",
-			FormatVRMenuDiagnosticHex(signature),
-			destination.name,
-			destination.width,
-			destination.height,
-			static_cast<uint32_t>(destination.format),
-			sources,
-			a_knownMenu ? "yes" : "no",
-			a_vrMenuPresentation ? "yes" : "no",
-			a_renderScaleActive ? "yes" : "no",
-			a_presentationUpscaling ? "yes" : "no",
-			viewports,
-			scissors,
-			shaders,
-			vsCBs,
-			psCBs,
-			pipelineState);
+		if (lastLoggedSignature.exchange(signature, std::memory_order_acq_rel) != signature) {
+			logger::debug(
+				"[VRMenuOriginalComposite] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
+				frame,
+				a_passName ? a_passName : "-",
+				a_phase ? a_phase : "-",
+				FormatVRMenuDiagnosticHex(signature),
+				destination.name,
+				destination.width,
+				destination.height,
+				static_cast<uint32_t>(destination.format),
+				sources,
+				a_knownMenu ? "yes" : "no",
+				a_vrMenuPresentation ? "yes" : "no",
+				a_renderScaleActive ? "yes" : "no",
+				a_presentationUpscaling ? "yes" : "no",
+				viewports,
+				scissors,
+				shaders,
+				vsCBs,
+				psCBs,
+				pipelineState);
+		}
+
+		if (menuLayerBakedIntoScene) {
+			uint64_t bakeSignature = signature;
+			const auto mixBakeTextSignature = [&](const char* a_text) {
+				if (!a_text)
+					return;
+				for (const char* it = a_text; *it; ++it) {
+					bakeSignature ^= static_cast<uint8_t>(*it);
+					bakeSignature *= 1099511628211ull;
+				}
+			};
+			mixBakeTextSignature(a_passName);
+			mixBakeTextSignature(a_phase);
+
+			if (lastLoggedBakeCandidateSignature.exchange(bakeSignature, std::memory_order_acq_rel) != bakeSignature) {
+				logger::debug(
+					"[VRMenuBakeCandidate] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={}) firstMenuSource=t{}:{}({}x{} fmt={} class={}) sources={} menuBg={} projectedMenu={} hudMenu={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} screen={}x{} engine={}x{} final={}x{}",
+					frame,
+					a_passName ? a_passName : "-",
+					a_phase ? a_phase : "-",
+					FormatVRMenuDiagnosticHex(bakeSignature),
+					destination.name,
+					destination.width,
+					destination.height,
+					static_cast<uint32_t>(destination.format),
+					classifyExtent(destination.width, destination.height),
+					firstMenuLayerSourceSlot,
+					firstMenuLayerSource.name,
+					firstMenuLayerSource.width,
+					firstMenuLayerSource.height,
+					static_cast<uint32_t>(firstMenuLayerSource.format),
+					classifyExtent(firstMenuLayerSource.width, firstMenuLayerSource.height),
+					sources,
+					hasMenuBgSource ? "yes" : "no",
+					hasProjectedMenuSource ? "yes" : "no",
+					hasHudMenuSource ? "yes" : "no",
+					a_knownMenu ? "yes" : "no",
+					a_vrMenuPresentation ? "yes" : "no",
+					a_renderScaleActive ? "yes" : "no",
+					a_presentationUpscaling ? "yes" : "no",
+					a_screenWidth,
+					a_screenHeight,
+					a_engineWidth,
+					a_engineHeight,
+					a_finalWidth,
+					a_finalHeight);
+			}
+		}
 	}
 
 	float ClampFoveatedCenterScale(float value)
@@ -4767,6 +4850,11 @@ namespace
 		if (!state || !context)
 			return false;
 
+		static std::atomic_bool loggedSafeMenuBakeDiagnostics{ false };
+		if (!loggedSafeMenuBakeDiagnostics.exchange(true, std::memory_order_acq_rel)) {
+			logger::info("[VRDiagBuild] Pre64 safe menu bake diagnostics active");
+		}
+
 		a_snapshot.frame = state->frameCount;
 		a_snapshot.requestedMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
 		a_snapshot.runtimeMethod = a_upscaling.GetRuntimeUpscaleMethod();
@@ -4887,7 +4975,13 @@ namespace
 			a_snapshot.vrMenuPresentation,
 			a_snapshot.communityShadersMenu,
 			a_snapshot.renderScaleActive,
-			a_snapshot.presentationUpscalingActive);
+			a_snapshot.presentationUpscalingActive,
+			a_snapshot.screenWidth,
+			a_snapshot.screenHeight,
+			a_snapshot.engineWidth,
+			a_snapshot.engineHeight,
+			a_snapshot.finalWidth,
+			a_snapshot.finalHeight);
 
 		a_snapshot.signature = BuildVRPresentationDiagnosticSignature(a_snapshot, a_passName, a_phase);
 		return true;

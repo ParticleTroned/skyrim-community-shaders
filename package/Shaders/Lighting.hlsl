@@ -1089,7 +1089,6 @@ struct WetnessSurfaceState
 {
 	float enabled;
 	float3 normal;
-	float glossinessAlbedo;
 	float glossinessSpecular;
 	float highlightReflectanceScale;
 	float directSpecularScale;
@@ -1115,10 +1114,12 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float3 viewDirection,
 	float waterHeight,
 	bool inWorld,
-	uint eyeIndex,
-	float3 surfaceBaseColor,
-	float surfaceRoughness,
-	float vrWetternessDynamicDetailWeight,
+	uint eyeIndex
+#	if !defined(SKIN) && !defined(HAIR)
+	, float3 surfaceBaseColor,
+	float surfaceRoughness
+#	endif
+	, float vrWetternessDynamicDetailWeight,
 	bool vrWetternessDynamicDetailEnabled
 #	if defined(SKYLIGHTING)
 	, sh2 skylightingSH
@@ -1129,17 +1130,12 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 )
 {
 	// Initialize wetness parameters
-	float rainWetness = 0.0;
-	float puddleWetness = 0.0;
-	float raindropWetness = 0.0;
-	float rainContactVisible = 0.0;
 	float wetSurfaceDarkeningMask = 0.0;
-	float nonPuddleFilmMask = 1.0;
 	float postRainBlend = 0.0;
 	float postRainOverridePhase = 0.0;
 	float postRainPuddleReflectionOverrideScale = 0.0;
+	float postRainCubemapGlareReductionFromClarity = 0.0;
 	float3 wetnessNormal = worldNormal;
-	float wetnessGlossinessAlbedo = 0.0;
 	float wetnessGlossinessSpecular = 0.0;
 	float wetHighlightReflectanceScale = 1.0;
 	float wetDirectSpecularScale = 1.0;
@@ -1150,27 +1146,6 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float shoreDarkeningAbsorption = 1.0;
 	float waterRoughnessSpecular = 1.0;
 	const bool wetnessEnabled = (CS_WETNESS_SETTINGS.EnableWetnessEffects != 0);
-	float postRainPuddleWaterStrength = max(0.0, CS_WETNESS_SETTINGS.PostRainPuddleWaterStrength);
-	// Packed control lane layout:
-	// - PackedPostRainControl[0..9]: post-rain spec boost (derived from Post-Rain Water Clarity)
-	// - PackedPostRainControl[10..19]: puddle sky/cubemap reflection scale
-	// - PackedPostRainControl[20..29]: faster wet-film rain phase
-	// - PackedRainReflectionControl[0..9]: post-rain cubemap glare reduction (derived from Post-Rain Water Clarity)
-	// - PackedRainReflectionControl[10..19]: in-rain cubemap suppression (derived from Rain Reflection Balance)
-	// - PackedRainReflectionControl[20..29]: in-rain wet-film specular boost (derived from Rain Reflection Balance)
-	// - PackedRainReflectionControl[30]: occlusion projection validity flag
-	uint packedPostRainControl = CS_WETNESS_SETTINGS.PackedPostRainControl;
-	float postRainSpecBoostFromClarity = saturate((float)(packedPostRainControl & 0x3FFu) * (1.0 / 1023.0));
-	float puddleSkyReflectionScale = saturate((float)((packedPostRainControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
-	float wetFilmRainingAmount = saturate((float)((packedPostRainControl >> 20) & 0x3FFu) * (1.0 / 1023.0));
-	uint packedRainReflectionControl = CS_WETNESS_SETTINGS.PackedRainReflectionControl;
-	float postRainCubemapGlareReductionFromClarity = saturate((float)(packedRainReflectionControl & 0x3FFu) * (1.0 / 1023.0));
-	float inRainCubemapSuppressionFromBalance = saturate((float)((packedRainReflectionControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
-	float inRainFilmSpecularBoostFromBalance = saturate((float)((packedRainReflectionControl >> 20) & 0x3FFu) * (1.0 / 1023.0));
-	const bool hasOcclusionViewProj = (packedRainReflectionControl & (1u << 30)) != 0;
-	float wetnessDistanceFadeRange = max(1.0, asfloat(CS_WETNESS_SETTINGS.WetnessDistanceFadeRangePacked));
-	float wetnessDistanceFade = lerp(1.0, 0.0, saturate(viewPosition.z / wetnessDistanceFadeRange));
-	float rainContactWetnessScale = max(0.0, CS_WETNESS_SETTINGS.RainContactWetnessScale);
 	float shoreHeightDelta = input.WorldPosition.z - waterHeight;
 	const bool wetSurfaceAllowed = shoreHeightDelta > 0.5;
 	// Keep puddle spawning farther away from the waterline than generic wet film.
@@ -1187,6 +1162,33 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float shoreWetnessDarkeningMask = shoreWetnessAlbedo * shoreWetnessAlbedo;
 
 	[branch] if (wetnessEnabled) {
+		float rainWetness = 0.0;
+		float puddleWetness = 0.0;
+		float raindropWetness = 0.0;
+		float rainContactVisible = 0.0;
+		float nonPuddleFilmMask = 1.0;
+		float postRainPuddleWaterStrength = max(0.0, CS_WETNESS_SETTINGS.PostRainPuddleWaterStrength);
+		// Packed control lane layout:
+		// - PackedPostRainControl[0..9]: post-rain spec boost (derived from Post-Rain Water Clarity)
+		// - PackedPostRainControl[10..19]: puddle sky/cubemap reflection scale
+		// - PackedPostRainControl[20..29]: faster wet-film rain phase
+		// - PackedRainReflectionControl[0..9]: post-rain cubemap glare reduction (derived from Post-Rain Water Clarity)
+		// - PackedRainReflectionControl[10..19]: in-rain cubemap suppression (derived from Rain Reflection Balance)
+		// - PackedRainReflectionControl[20..29]: in-rain wet-film specular boost (derived from Rain Reflection Balance)
+		// - PackedRainReflectionControl[30]: occlusion projection validity flag
+		uint packedPostRainControl = CS_WETNESS_SETTINGS.PackedPostRainControl;
+		float postRainSpecBoostFromClarity = saturate((float)(packedPostRainControl & 0x3FFu) * (1.0 / 1023.0));
+		float puddleSkyReflectionScale = saturate((float)((packedPostRainControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
+		float wetFilmRainingAmount = saturate((float)((packedPostRainControl >> 20) & 0x3FFu) * (1.0 / 1023.0));
+		uint packedRainReflectionControl = CS_WETNESS_SETTINGS.PackedRainReflectionControl;
+		postRainCubemapGlareReductionFromClarity = saturate((float)(packedRainReflectionControl & 0x3FFu) * (1.0 / 1023.0));
+		float inRainCubemapSuppressionFromBalance = saturate((float)((packedRainReflectionControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
+		float inRainFilmSpecularBoostFromBalance = saturate((float)((packedRainReflectionControl >> 20) & 0x3FFu) * (1.0 / 1023.0));
+		const bool hasOcclusionViewProj = (packedRainReflectionControl & (1u << 30)) != 0;
+		float wetnessDistanceFadeRange = max(1.0, asfloat(CS_WETNESS_SETTINGS.WetnessDistanceFadeRangePacked));
+		float wetnessDistanceFade = lerp(1.0, 0.0, saturate(viewPosition.z / wetnessDistanceFadeRange));
+		float rainContactWetnessScale = max(0.0, CS_WETNESS_SETTINGS.RainContactWetnessScale);
+
 		// Calculate wetness angle and occlusion
 		float minWetnessValue = CS_WETNESS_SETTINGS.MinRainWetness;
 		float minWetnessAngle = saturate(max(minWetnessValue, worldNormal.z));
@@ -1490,8 +1492,6 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		wetPuddleSkyReflectionScale = lerp(1.0, puddleSkyReflectionScale, puddleCoverageMask);
 		float wetFilmSpecularNonPuddle = wetFilmSpecular * nonPuddleFilmMask;
 		float shoreWetnessSpecularNonPuddle = shoreWetnessSpecular * nonPuddleFilmMask;
-		wetnessGlossinessAlbedo = max(puddle, shoreWetnessAlbedo);
-		wetnessGlossinessAlbedo *= wetnessGlossinessAlbedo;
 		float rainPuddlePhase = saturate(inRainBlend * deepPuddleMask);
 		float postRainOverridePhaseCandidate = saturate(postRainBlend * smoothstep(0.36, 0.88, puddleDepthSignal));
 		const bool postRainVisible =
@@ -1641,7 +1641,6 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	WetnessSurfaceState state = (WetnessSurfaceState)0;
 	state.enabled = wetnessEnabled ? 1.0 : 0.0;
 	state.normal = wetnessNormal;
-	state.glossinessAlbedo = wetnessGlossinessAlbedo;
 	state.glossinessSpecular = wetnessGlossinessSpecular;
 	state.highlightReflectanceScale = wetHighlightReflectanceScale;
 	state.directSpecularScale = wetDirectSpecularScale;
@@ -3231,10 +3230,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float waterRoughnessSpecular = 1;
 
 #	if defined(WETTERNESS)
+#		if !defined(SKIN) && !defined(HAIR)
 	float3 wetnessSurfaceBaseColor = saturate(material.BaseColor);
 	float wetnessSurfaceRoughness = material.Roughness;
-#		if !defined(TRUE_PBR)
+#			if !defined(TRUE_PBR)
 	wetnessSurfaceRoughness = 1.0 - saturate(material.Glossiness);
+#			endif
 #		endif
 	WetnessSurfaceState wetnessSurface = CreateWetnessSurfaceState(
 		input,
@@ -3245,8 +3246,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		waterHeight,
 		inWorld,
 		eyeIndex,
+#		if !defined(SKIN) && !defined(HAIR)
 		wetnessSurfaceBaseColor,
 		wetnessSurfaceRoughness,
+#		endif
 		vrWetternessDynamicDetailWeight,
 		vrWetternessDynamicDetailEnabled
 #		if defined(SKYLIGHTING)
@@ -3258,7 +3261,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	);
 
 	float3 wetnessNormal = wetnessSurface.normal;
-	float wetnessGlossinessAlbedo = wetnessSurface.glossinessAlbedo;
 	float wetnessGlossinessSpecular = wetnessSurface.glossinessSpecular;
 	float wetHighlightReflectanceScale = wetnessSurface.highlightReflectanceScale;
 	float wetDirectSpecularScale = wetnessSurface.directSpecularScale;

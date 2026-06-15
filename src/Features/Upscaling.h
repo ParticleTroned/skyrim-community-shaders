@@ -280,6 +280,12 @@ public:
 		float2 padding;
 	};
 
+	struct VRMenuCompositeCB
+	{
+		float2 sourceScale;
+		float2 sourceOffset;
+	};
+
 	struct FoveatedPeripheryCB
 	{
 		float2 outputDim;
@@ -351,6 +357,7 @@ public:
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(VRMenuCompositeCB) == 16, "VRMenuCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
@@ -415,6 +422,7 @@ public:
 	ConstantBuffer* jitterCB = nullptr;
 	ConstantBuffer* upscalingDataCB = nullptr;
 	ConstantBuffer* dynamicResolutionStretchCB = nullptr;
+	ConstantBuffer* vrMenuCompositeCB = nullptr;
 	ConstantBuffer* foveatedPeripheryCB = nullptr;
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
@@ -535,6 +543,9 @@ public:
 	winrt::com_ptr<ID3D11VertexShader> upscaleVS;
 	ID3D11VertexShader* GetUpscaleVS();
 
+	winrt::com_ptr<ID3D11PixelShader> vrMenuCompositePS;
+	ID3D11PixelShader* GetVRMenuCompositePS();
+
 	winrt::com_ptr<ID3D11ComputeShader> foveatedPeripheryCS;
 	ID3D11ComputeShader* GetFoveatedPeripheryCS();
 
@@ -554,6 +565,7 @@ public:
 
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
+	winrt::com_ptr<ID3D11BlendState> vrMenuCompositeBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
 
 	// Shared VR HMD Mask Clearing
@@ -848,6 +860,7 @@ public:
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
+	bool CompositeVRMenuTargetsAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();

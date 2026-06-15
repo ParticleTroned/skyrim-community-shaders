@@ -296,6 +296,7 @@ namespace globals
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+		features::upscaling.InstallD3DContextDiagnostics(a_context);
 		ShadowmapRasterizerFix::InstallD3DHooks(a_context);
 	}
 }

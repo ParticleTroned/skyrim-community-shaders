@@ -709,8 +709,8 @@ namespace
 	}
 
 	// These targets feed native-layout menu/HUD/fade work. They are protected
-	// from submit-stage presentation handling because they are not final eye
-	// images, but they must not be force-resized to final HMD dimensions.
+	// from submit-stage presentation handling because they are not submitted
+	// eye images. Render-scale size policy is handled separately below.
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 6> kVRNativeLayoutSubmitProtectedTargets{
 		RE::RENDER_TARGETS::kMENUBG,
 		RE::RENDER_TARGETS::kPROJECTEDMENU,
@@ -741,7 +741,13 @@ namespace
 	// Submit-stage should only operate on the runtime-submitted eye textures.
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 0> kSubmittedVRPresentationTargets{};
 
-	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRRenderScaleDisplaySizedTargets{
+	// Pre91 proved the in-game menu writer is a draw into kMENUBG, then
+	// kMENUBG is consumed by kTOTAL before submit-stage upscaling. Keep only
+	// that proven plate/composite route at display size; leave HUDMENU and
+	// PROJECTEDMENU at their native menu texture sizes.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 4> kVRRenderScaleDisplaySizedTargets{
+		RE::RENDER_TARGETS::kTOTAL,
+		RE::RENDER_TARGETS::kMENUBG,
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
 	};

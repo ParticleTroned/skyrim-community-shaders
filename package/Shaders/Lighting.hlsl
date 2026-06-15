@@ -1109,7 +1109,6 @@ struct WetnessSurfaceState
 
 WetnessSurfaceState CreateWetnessSurfaceState(
 	PS_INPUT input,
-	MaterialProperties material,
 	float3 worldNormal,
 	float3 vertexNormal,
 	float3 viewPosition,
@@ -1117,6 +1116,8 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float waterHeight,
 	bool inWorld,
 	uint eyeIndex,
+	float3 surfaceBaseColor,
+	float surfaceRoughness,
 	float vrWetternessDynamicDetailWeight,
 	bool vrWetternessDynamicDetailEnabled
 #	if defined(SKYLIGHTING)
@@ -1204,11 +1205,6 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		float stoneFactor = 0.0;
 		float dirtFactor = 1.0;
 #	if !defined(SKIN) && !defined(HAIR)
-		float3 surfaceBaseColor = saturate(material.BaseColor);
-		float surfaceRoughness = material.Roughness;
-#		if !defined(TRUE_PBR)
-		surfaceRoughness = 1.0 - saturate(material.Glossiness);
-#		endif
 		vegetationFactor = smoothstep(0.06, 0.30, surfaceBaseColor.g - max(surfaceBaseColor.r, surfaceBaseColor.b));
 		stoneFactor = saturate((0.62 - surfaceRoughness) * 2.4) * (1.0 - vegetationFactor);
 		dirtFactor = saturate(1.0 - vegetationFactor - stoneFactor);
@@ -3235,9 +3231,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float waterRoughnessSpecular = 1;
 
 #	if defined(WETTERNESS)
+	float3 wetnessSurfaceBaseColor = saturate(material.BaseColor);
+	float wetnessSurfaceRoughness = material.Roughness;
+#		if !defined(TRUE_PBR)
+	wetnessSurfaceRoughness = 1.0 - saturate(material.Glossiness);
+#		endif
 	WetnessSurfaceState wetnessSurface = CreateWetnessSurfaceState(
 		input,
-		material,
 		worldNormal,
 		vertexNormal,
 		viewPosition,
@@ -3245,6 +3245,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		waterHeight,
 		inWorld,
 		eyeIndex,
+		wetnessSurfaceBaseColor,
+		wetnessSurfaceRoughness,
 		vrWetternessDynamicDetailWeight,
 		vrWetternessDynamicDetailEnabled
 #		if defined(SKYLIGHTING)
@@ -3273,7 +3275,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float postRainCubemapGlareReductionFromClarity = wetnessSurface.postRainCubemapGlareReductionFromClarity;
 	waterRoughnessSpecular = wetnessSurface.roughnessSpecular;
 	const bool wetnessEnabled = wetnessSurface.enabled > 0.0;
-	const bool wetSpecularEnabled = wetnessEnabled;
 #	elif defined(WETNESS_EFFECTS)
 	// Initialize wetness parameters
 	float wetness = 0.0;
@@ -3474,7 +3475,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	WetReflectionParams wetReflectionParams = (WetReflectionParams)0;
 	WetReflectionParams wetReflectionParamsDirect = (WetReflectionParams)0;
 	WetnessDirectLightingParams wetDirectLightingParams = (WetnessDirectLightingParams)0;
-	const bool wetLightingVisible = wetSpecularEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
+	const bool wetLightingVisible = wetnessEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
 	bool wetDirectLightingVisible = false;
 	bool wetIndirectLightingVisible = false;
 	[branch] if (wetLightingVisible) {

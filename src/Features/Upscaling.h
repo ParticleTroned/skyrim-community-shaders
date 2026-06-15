@@ -866,8 +866,7 @@ public:
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
-	bool CaptureKnownGameMenuSceneBeforeMenuDraw();
-	bool CaptureKnownGameMenuBackgroundAfterMenuDraw();
+	bool CaptureKnownGameMenuLayerForSubmit(uint32_t a_frame, ID3D11Texture2D* a_submitSource, const D3D11_TEXTURE2D_DESC& a_submitSourceDesc);
 	bool HasKnownGameMenuSceneSnapshotForSubmit(uint32_t a_frame, ID3D11Texture2D* a_submitSource, const D3D11_TEXTURE2D_DESC& a_submitSourceDesc) const;
 	bool CompositeKnownGameMenuAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);

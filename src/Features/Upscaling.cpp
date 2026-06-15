@@ -12982,37 +12982,84 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 	return true;
 }
 
-bool Upscaling::CaptureKnownGameMenuSceneBeforeMenuDraw()
+bool Upscaling::CaptureKnownGameMenuLayerForSubmit(uint32_t a_frame, ID3D11Texture2D* a_submitSource, const D3D11_TEXTURE2D_DESC& a_submitSourceDesc)
 {
-	vrKnownMenuSceneBeforeCompositeFrame = 0;
-	vrKnownMenuBackgroundCompositeFrame = 0;
-
-	if (!IsVRKnownGameMenuLayerSeparationContextActive(*this))
+	if (HasKnownGameMenuSceneSnapshotForSubmit(a_frame, a_submitSource, a_submitSourceDesc))
+		return true;
+	if (!a_frame || !a_submitSource || !IsVRKnownGameMenuLayerSeparationContextActive(*this))
 		return false;
 
-	auto state = globals::state;
-	auto renderer = globals::game::renderer;
+	if (vrKnownMenuSceneBeforeCompositeFrame != a_frame) {
+		vrKnownMenuSceneBeforeCompositeFrame = 0;
+		vrKnownMenuBackgroundCompositeFrame = 0;
+	}
+
 	auto context = globals::d3d::context;
-	if (!state || !renderer || !context)
+	if (!context)
+		return false;
+
+	auto renderer = globals::game::renderer;
+	if (!renderer)
 		return false;
 
 	auto& totalTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTOTAL];
-	if (!totalTarget.texture)
+	if (totalTarget.texture != a_submitSource)
 		return false;
 
-	D3D11_TEXTURE2D_DESC totalDesc{};
-	if (!TryGetTexture2DDesc(totalTarget.texture, totalDesc) ||
-		totalDesc.SampleDesc.Count != 1 ||
-		totalDesc.Width == 0 ||
-		totalDesc.Height == 0) {
+	if (a_submitSourceDesc.SampleDesc.Count != 1 ||
+		a_submitSourceDesc.Width == 0 ||
+		a_submitSourceDesc.Height == 0)
+		return false;
+
+	ID3D11RenderTargetView* currentRTV = nullptr;
+	ID3D11ShaderResourceView* currentMenuSRV = nullptr;
+	context->OMGetRenderTargets(1, &currentRTV, nullptr);
+	context->PSGetShaderResources(0, 1, &currentMenuSRV);
+	auto viewRelease = ScopeExit([&]() {
+		if (currentRTV)
+			currentRTV->Release();
+		if (currentMenuSRV)
+			currentMenuSRV->Release();
+	});
+
+	if (!currentRTV || !currentMenuSRV)
+		return false;
+
+	VRMenuCompositionTargetMatch destination{};
+	VRMenuCompositionTargetMatch source{};
+	if (!TryResolveVRMenuCompositionView(currentRTV, destination) ||
+		destination.target != RE::RENDER_TARGETS::kTOTAL ||
+		destination.width != a_submitSourceDesc.Width ||
+		destination.height != a_submitSourceDesc.Height ||
+		destination.format != a_submitSourceDesc.Format ||
+		!TryResolveVRMenuCompositionView(currentMenuSRV, source) ||
+		source.target != RE::RENDER_TARGETS::kMENUBG ||
+		source.width != a_submitSourceDesc.Width ||
+		source.height != a_submitSourceDesc.Height ||
+		source.format != a_submitSourceDesc.Format) {
 		return false;
 	}
 
+	ID3D11Resource* menuResource = nullptr;
+	currentMenuSRV->GetResource(&menuResource);
+	if (!menuResource)
+		return false;
+	auto menuResourceRelease = ScopeExit([&]() {
+		menuResource->Release();
+	});
+
+	ID3D11Texture2D* menuTexture = nullptr;
+	if (FAILED(menuResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&menuTexture))) || !menuTexture)
+		return false;
+	auto menuTextureRelease = ScopeExit([&]() {
+		menuTexture->Release();
+	});
+
 	if (!EnsureFoveatedTexture(
 			vrKnownMenuSceneBeforeComposite,
-			totalTarget.texture,
-			totalDesc.Width,
-			totalDesc.Height,
+			a_submitSource,
+			a_submitSourceDesc.Width,
+			a_submitSourceDesc.Height,
 			false,
 			false,
 			false,
@@ -13022,55 +13069,11 @@ bool Upscaling::CaptureKnownGameMenuSceneBeforeMenuDraw()
 		!vrKnownMenuSceneBeforeComposite->resource) {
 		return false;
 	}
-
-	context->CopyResource(vrKnownMenuSceneBeforeComposite->resource.get(), totalTarget.texture);
-	if (MarkSubmitStageDeviceLostIfDeviceRemoved("known-menu scene snapshot")) {
-		vrKnownMenuSceneBeforeCompositeFrame = 0;
-		return false;
-	}
-
-	vrKnownMenuSceneBeforeCompositeFrame = state->frameCount;
-	return true;
-}
-
-bool Upscaling::CaptureKnownGameMenuBackgroundAfterMenuDraw()
-{
-	vrKnownMenuBackgroundCompositeFrame = 0;
-
-	if (!IsVRKnownGameMenuLayerSeparationContextActive(*this))
-		return false;
-
-	auto state = globals::state;
-	auto renderer = globals::game::renderer;
-	auto context = globals::d3d::context;
-	if (!state || !renderer || !context)
-		return false;
-	if (vrKnownMenuSceneBeforeCompositeFrame != state->frameCount ||
-		!vrKnownMenuSceneBeforeComposite ||
-		!vrKnownMenuSceneBeforeComposite->resource) {
-		return false;
-	}
-
-	auto& menuBackground = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMENUBG];
-	if (!menuBackground.texture || !menuBackground.SRV)
-		return false;
-
-	D3D11_TEXTURE2D_DESC menuDesc{};
-	if (!TryGetTexture2DDesc(menuBackground.texture, menuDesc) ||
-		menuDesc.SampleDesc.Count != 1 ||
-		menuDesc.Width == 0 ||
-		menuDesc.Height == 0 ||
-		menuDesc.Width != vrKnownMenuSceneBeforeComposite->desc.Width ||
-		menuDesc.Height != vrKnownMenuSceneBeforeComposite->desc.Height ||
-		menuDesc.Format != vrKnownMenuSceneBeforeComposite->desc.Format) {
-		return false;
-	}
-
 	if (!EnsureFoveatedTexture(
 			vrKnownMenuBackgroundComposite,
-			menuBackground.texture,
-			menuDesc.Width,
-			menuDesc.Height,
+			menuTexture,
+			source.width,
+			source.height,
 			false,
 			true,
 			false,
@@ -13082,13 +13085,30 @@ bool Upscaling::CaptureKnownGameMenuBackgroundAfterMenuDraw()
 		return false;
 	}
 
-	context->CopyResource(vrKnownMenuBackgroundComposite->resource.get(), menuBackground.texture);
-	if (MarkSubmitStageDeviceLostIfDeviceRemoved("known-menu background snapshot")) {
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	context->CopyResource(vrKnownMenuSceneBeforeComposite->resource.get(), a_submitSource);
+	context->CopyResource(vrKnownMenuBackgroundComposite->resource.get(), menuTexture);
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("known-menu submit-state snapshots")) {
+		vrKnownMenuSceneBeforeCompositeFrame = 0;
 		vrKnownMenuBackgroundCompositeFrame = 0;
 		return false;
 	}
 
-	vrKnownMenuBackgroundCompositeFrame = state->frameCount;
+	vrKnownMenuSceneBeforeCompositeFrame = a_frame;
+	vrKnownMenuBackgroundCompositeFrame = a_frame;
+
+	static bool loggedSubmitStateCapture = false;
+	if (!loggedSubmitStateCapture) {
+		logger::debug(
+			"[VRMenuComposite] captured submit-state kMENUBG separation source={}x{} fmt={} dst={}x{}",
+			source.width,
+			source.height,
+			static_cast<uint32_t>(source.format),
+			destination.width,
+			destination.height);
+		loggedSubmitStateCapture = true;
+	}
+
 	return true;
 }
 
@@ -14834,7 +14854,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool useKnownGameMenuSceneSnapshot =
 		!presentationOnly &&
-		HasKnownGameMenuSceneSnapshotForSubmit(currentFrame, sourceTexture, sourceDesc);
+		CaptureKnownGameMenuLayerForSubmit(currentFrame, sourceTexture, sourceDesc);
 	ID3D11Resource* submitColorSource = useKnownGameMenuSceneSnapshot ? vrKnownMenuSceneBeforeComposite->resource.get() : sourceTexture;
 	const UINT submitColorSubresource = useKnownGameMenuSceneSnapshot ? 0u : sourceSubresource;
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, submitColorSource, submitColorSubresource, &colorBox);
@@ -16991,10 +17011,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"before-menu-draw",
 			false);
 	}
-	upscaling.CaptureKnownGameMenuSceneBeforeMenuDraw();
-
 	func(a1);
-	upscaling.CaptureKnownGameMenuBackgroundAfterMenuDraw();
 
 	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();

@@ -18195,7 +18195,10 @@ void Upscaling::FullScreenVR_Render::thunk(void* a_imageSpaceShader, void* a_sha
 		"Render:vanilla-before",
 		"Render:vanilla-after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			func(a_imageSpaceShader, a_shape, a_param);
+			TryOverwriteExactVRMenuBakeAfterVanilla("ISCopyDynamicFetchDisabled");
+		});
 }
 
 void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)

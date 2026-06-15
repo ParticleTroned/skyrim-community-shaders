@@ -14852,29 +14852,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
-	const bool useKnownGameMenuSceneSnapshot =
-		!presentationOnly &&
-		CaptureKnownGameMenuLayerForSubmit(currentFrame, sourceTexture, sourceDesc);
-	ID3D11Resource* submitColorSource = useKnownGameMenuSceneSnapshot ? vrKnownMenuSceneBeforeComposite->resource.get() : sourceTexture;
-	const UINT submitColorSubresource = useKnownGameMenuSceneSnapshot ? 0u : sourceSubresource;
-	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, submitColorSource, submitColorSubresource, &colorBox);
+	// Keep known game menus on the normal Pre41/Pre53 submit source path.
+	// Pre54 proved that replacing the vendor input with a captured scene-only
+	// kTOTAL and then drawing kMENUBG as a fullscreen post-upscale overlay blacks
+	// out the world and does not fix the HMD-relative menu jitter. The passive
+	// VRMenuOriginalComposite/VRMenuDiag logging below still identifies the
+	// source-side menu composition path for the next fix.
+	const bool knownGameMenuFinalComposite = false;
+	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
-	if (useKnownGameMenuSceneSnapshot) {
-		static std::array<bool, 2> loggedSceneSnapshotSubmit{};
-		if (!loggedSceneSnapshotSubmit[eyeIndex]) {
-			logger::debug(
-				"[VRMenuComposite] using captured scene-only kTOTAL for submit-stage vendor input eye={} source={}x{} box=({},{})->({},{})",
-				eyeIndex,
-				sourceDesc.Width,
-				sourceDesc.Height,
-				colorBox.left,
-				colorBox.top,
-				colorBox.right,
-				colorBox.bottom);
-			loggedSceneSnapshotSubmit[eyeIndex] = true;
-		}
-	}
 
 	const auto logSubmitStagePath = [&](const char* path) {
 		const uint32_t inputEyeWidth = presentationOnly ? presentationInputWidth : sourceEyeWidthIn;
@@ -15078,15 +15065,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (IsSubmitStageDeviceLost())
 			return false;
 	}
-
-	const bool knownGameMenuFinalComposite =
-		vrRenderScaleMode &&
-		!presentationRenderTarget &&
-		useKnownGameMenuSceneSnapshot &&
-		menuTextProtectionContext &&
-		CompositeKnownGameMenuAfterSubmitStageUpscale(eyeIndex, eyeWidthOut, eyeHeightOut);
-	if (IsSubmitStageDeviceLost())
-		return false;
 
 	clearSubmittedEyeHMDMask();
 	if (IsSubmitStageDeviceLost())

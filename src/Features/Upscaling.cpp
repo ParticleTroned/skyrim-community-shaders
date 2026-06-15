@@ -1077,6 +1077,22 @@ namespace
 		}
 	}
 
+	template <class T>
+	void ReleaseD3D11ContextStatePointer(T*& a_pointer)
+	{
+		if (a_pointer) {
+			a_pointer->Release();
+			a_pointer = nullptr;
+		}
+	}
+
+	template <class T, size_t N>
+	void ReleaseD3D11ContextStateArray(std::array<T*, N>& a_values)
+	{
+		for (auto*& value : a_values)
+			ReleaseD3D11ContextStatePointer(value);
+	}
+
 	float ClampFoveatedCenterScale(float value)
 	{
 		return FoveatedCommon::ClampCenterScale(value);
@@ -12351,6 +12367,207 @@ bool Upscaling::CompositeVRMenuTargetsAfterSubmitStageUpscale(uint32_t eyeIndex,
 	}
 	if (!fullscreenVS || !compositePS)
 		return false;
+
+	struct ScopedD3D11ContextState
+	{
+		enum : UINT
+		{
+			kSRVCount = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT,
+			kCBCount = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT,
+			kSamplerCount = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT,
+			kVBCount = D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
+			kRTVCount = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
+			kViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE,
+			kUAVCount = D3D11_PS_CS_UAV_REGISTER_COUNT
+		};
+
+		explicit ScopedD3D11ContextState(ID3D11DeviceContext* a_context) :
+			context(a_context)
+		{
+			if (!context)
+				return;
+
+			context->IAGetInputLayout(&inputLayout);
+			context->IAGetVertexBuffers(0, kVBCount, vertexBuffers.data(), vertexStrides.data(), vertexOffsets.data());
+			context->IAGetIndexBuffer(&indexBuffer, &indexFormat, &indexOffset);
+			context->IAGetPrimitiveTopology(&primitiveTopology);
+
+			context->VSGetShader(&vertexShader, nullptr, nullptr);
+			context->HSGetShader(&hullShader, nullptr, nullptr);
+			context->DSGetShader(&domainShader, nullptr, nullptr);
+			context->GSGetShader(&geometryShader, nullptr, nullptr);
+			context->PSGetShader(&pixelShader, nullptr, nullptr);
+			context->CSGetShader(&computeShader, nullptr, nullptr);
+
+			context->VSGetShaderResources(0, kSRVCount, vertexSRVs.data());
+			context->HSGetShaderResources(0, kSRVCount, hullSRVs.data());
+			context->DSGetShaderResources(0, kSRVCount, domainSRVs.data());
+			context->GSGetShaderResources(0, kSRVCount, geometrySRVs.data());
+			context->PSGetShaderResources(0, kSRVCount, pixelSRVs.data());
+			context->CSGetShaderResources(0, kSRVCount, computeSRVs.data());
+
+			context->VSGetConstantBuffers(0, kCBCount, vertexCBs.data());
+			context->HSGetConstantBuffers(0, kCBCount, hullCBs.data());
+			context->DSGetConstantBuffers(0, kCBCount, domainCBs.data());
+			context->GSGetConstantBuffers(0, kCBCount, geometryCBs.data());
+			context->PSGetConstantBuffers(0, kCBCount, pixelCBs.data());
+			context->CSGetConstantBuffers(0, kCBCount, computeCBs.data());
+
+			context->VSGetSamplers(0, kSamplerCount, vertexSamplers.data());
+			context->HSGetSamplers(0, kSamplerCount, hullSamplers.data());
+			context->DSGetSamplers(0, kSamplerCount, domainSamplers.data());
+			context->GSGetSamplers(0, kSamplerCount, geometrySamplers.data());
+			context->PSGetSamplers(0, kSamplerCount, pixelSamplers.data());
+			context->CSGetSamplers(0, kSamplerCount, computeSamplers.data());
+
+			context->CSGetUnorderedAccessViews(0, kUAVCount, computeUAVs.data());
+
+			context->RSGetState(&rasterizerState);
+			viewportCount = kViewportCount;
+			context->RSGetViewports(&viewportCount, viewports.data());
+			scissorCount = kViewportCount;
+			context->RSGetScissorRects(&scissorCount, scissors.data());
+
+			context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
+			context->OMGetDepthStencilState(&depthStencilState, &stencilRef);
+			context->OMGetRenderTargets(kRTVCount, renderTargets.data(), &depthStencilView);
+		}
+
+		~ScopedD3D11ContextState()
+		{
+			if (context) {
+				std::array<ID3D11RenderTargetView*, kRTVCount> nullRTVs{};
+				context->OMSetRenderTargets(kRTVCount, nullRTVs.data(), nullptr);
+				std::array<ID3D11UnorderedAccessView*, kUAVCount> nullUAVs{};
+				context->CSSetUnorderedAccessViews(0, kUAVCount, nullUAVs.data(), nullptr);
+
+				context->IASetInputLayout(inputLayout);
+				context->IASetVertexBuffers(0, kVBCount, vertexBuffers.data(), vertexStrides.data(), vertexOffsets.data());
+				context->IASetIndexBuffer(indexBuffer, indexFormat, indexOffset);
+				context->IASetPrimitiveTopology(primitiveTopology);
+
+				context->VSSetShader(vertexShader, nullptr, 0);
+				context->HSSetShader(hullShader, nullptr, 0);
+				context->DSSetShader(domainShader, nullptr, 0);
+				context->GSSetShader(geometryShader, nullptr, 0);
+				context->PSSetShader(pixelShader, nullptr, 0);
+				context->CSSetShader(computeShader, nullptr, 0);
+
+				context->VSSetShaderResources(0, kSRVCount, vertexSRVs.data());
+				context->HSSetShaderResources(0, kSRVCount, hullSRVs.data());
+				context->DSSetShaderResources(0, kSRVCount, domainSRVs.data());
+				context->GSSetShaderResources(0, kSRVCount, geometrySRVs.data());
+				context->PSSetShaderResources(0, kSRVCount, pixelSRVs.data());
+				context->CSSetShaderResources(0, kSRVCount, computeSRVs.data());
+
+				context->VSSetConstantBuffers(0, kCBCount, vertexCBs.data());
+				context->HSSetConstantBuffers(0, kCBCount, hullCBs.data());
+				context->DSSetConstantBuffers(0, kCBCount, domainCBs.data());
+				context->GSSetConstantBuffers(0, kCBCount, geometryCBs.data());
+				context->PSSetConstantBuffers(0, kCBCount, pixelCBs.data());
+				context->CSSetConstantBuffers(0, kCBCount, computeCBs.data());
+
+				context->VSSetSamplers(0, kSamplerCount, vertexSamplers.data());
+				context->HSSetSamplers(0, kSamplerCount, hullSamplers.data());
+				context->DSSetSamplers(0, kSamplerCount, domainSamplers.data());
+				context->GSSetSamplers(0, kSamplerCount, geometrySamplers.data());
+				context->PSSetSamplers(0, kSamplerCount, pixelSamplers.data());
+				context->CSSetSamplers(0, kSamplerCount, computeSamplers.data());
+
+				context->CSSetUnorderedAccessViews(0, kUAVCount, computeUAVs.data(), nullptr);
+
+				context->RSSetState(rasterizerState);
+				context->RSSetViewports(viewportCount, viewports.data());
+				context->RSSetScissorRects(scissorCount, scissors.data());
+				context->OMSetBlendState(blendState, blendFactor, sampleMask);
+				context->OMSetDepthStencilState(depthStencilState, stencilRef);
+				context->OMSetRenderTargets(kRTVCount, renderTargets.data(), depthStencilView);
+			}
+
+			ReleaseD3D11ContextStatePointer(inputLayout);
+			ReleaseD3D11ContextStatePointer(indexBuffer);
+			ReleaseD3D11ContextStatePointer(vertexShader);
+			ReleaseD3D11ContextStatePointer(hullShader);
+			ReleaseD3D11ContextStatePointer(domainShader);
+			ReleaseD3D11ContextStatePointer(geometryShader);
+			ReleaseD3D11ContextStatePointer(pixelShader);
+			ReleaseD3D11ContextStatePointer(computeShader);
+			ReleaseD3D11ContextStatePointer(rasterizerState);
+			ReleaseD3D11ContextStatePointer(blendState);
+			ReleaseD3D11ContextStatePointer(depthStencilState);
+			ReleaseD3D11ContextStatePointer(depthStencilView);
+
+			ReleaseD3D11ContextStateArray(vertexBuffers);
+			ReleaseD3D11ContextStateArray(renderTargets);
+			ReleaseD3D11ContextStateArray(vertexSRVs);
+			ReleaseD3D11ContextStateArray(hullSRVs);
+			ReleaseD3D11ContextStateArray(domainSRVs);
+			ReleaseD3D11ContextStateArray(geometrySRVs);
+			ReleaseD3D11ContextStateArray(pixelSRVs);
+			ReleaseD3D11ContextStateArray(computeSRVs);
+			ReleaseD3D11ContextStateArray(vertexCBs);
+			ReleaseD3D11ContextStateArray(hullCBs);
+			ReleaseD3D11ContextStateArray(domainCBs);
+			ReleaseD3D11ContextStateArray(geometryCBs);
+			ReleaseD3D11ContextStateArray(pixelCBs);
+			ReleaseD3D11ContextStateArray(computeCBs);
+			ReleaseD3D11ContextStateArray(vertexSamplers);
+			ReleaseD3D11ContextStateArray(hullSamplers);
+			ReleaseD3D11ContextStateArray(domainSamplers);
+			ReleaseD3D11ContextStateArray(geometrySamplers);
+			ReleaseD3D11ContextStateArray(pixelSamplers);
+			ReleaseD3D11ContextStateArray(computeSamplers);
+			ReleaseD3D11ContextStateArray(computeUAVs);
+		}
+
+		ID3D11DeviceContext* context = nullptr;
+		ID3D11InputLayout* inputLayout = nullptr;
+		std::array<ID3D11Buffer*, kVBCount> vertexBuffers{};
+		std::array<UINT, kVBCount> vertexStrides{};
+		std::array<UINT, kVBCount> vertexOffsets{};
+		ID3D11Buffer* indexBuffer = nullptr;
+		DXGI_FORMAT indexFormat = DXGI_FORMAT_UNKNOWN;
+		UINT indexOffset = 0;
+		D3D11_PRIMITIVE_TOPOLOGY primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+		ID3D11VertexShader* vertexShader = nullptr;
+		ID3D11HullShader* hullShader = nullptr;
+		ID3D11DomainShader* domainShader = nullptr;
+		ID3D11GeometryShader* geometryShader = nullptr;
+		ID3D11PixelShader* pixelShader = nullptr;
+		ID3D11ComputeShader* computeShader = nullptr;
+		std::array<ID3D11ShaderResourceView*, kSRVCount> vertexSRVs{};
+		std::array<ID3D11ShaderResourceView*, kSRVCount> hullSRVs{};
+		std::array<ID3D11ShaderResourceView*, kSRVCount> domainSRVs{};
+		std::array<ID3D11ShaderResourceView*, kSRVCount> geometrySRVs{};
+		std::array<ID3D11ShaderResourceView*, kSRVCount> pixelSRVs{};
+		std::array<ID3D11ShaderResourceView*, kSRVCount> computeSRVs{};
+		std::array<ID3D11Buffer*, kCBCount> vertexCBs{};
+		std::array<ID3D11Buffer*, kCBCount> hullCBs{};
+		std::array<ID3D11Buffer*, kCBCount> domainCBs{};
+		std::array<ID3D11Buffer*, kCBCount> geometryCBs{};
+		std::array<ID3D11Buffer*, kCBCount> pixelCBs{};
+		std::array<ID3D11Buffer*, kCBCount> computeCBs{};
+		std::array<ID3D11SamplerState*, kSamplerCount> vertexSamplers{};
+		std::array<ID3D11SamplerState*, kSamplerCount> hullSamplers{};
+		std::array<ID3D11SamplerState*, kSamplerCount> domainSamplers{};
+		std::array<ID3D11SamplerState*, kSamplerCount> geometrySamplers{};
+		std::array<ID3D11SamplerState*, kSamplerCount> pixelSamplers{};
+		std::array<ID3D11SamplerState*, kSamplerCount> computeSamplers{};
+		std::array<ID3D11UnorderedAccessView*, kUAVCount> computeUAVs{};
+		ID3D11RasterizerState* rasterizerState = nullptr;
+		UINT viewportCount = 0;
+		std::array<D3D11_VIEWPORT, kViewportCount> viewports{};
+		UINT scissorCount = 0;
+		std::array<D3D11_RECT, kViewportCount> scissors{};
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4] = {};
+		UINT sampleMask = 0xffffffff;
+		ID3D11DepthStencilState* depthStencilState = nullptr;
+		UINT stencilRef = 0;
+		std::array<ID3D11RenderTargetView*, kRTVCount> renderTargets{};
+		ID3D11DepthStencilView* depthStencilView = nullptr;
+	};
+	ScopedD3D11ContextState d3dState(context);
 
 	const auto resolveSourceRegion = [&](const D3D11_TEXTURE2D_DESC& desc, VRMenuCompositeCB& data) {
 		if (desc.SampleDesc.Count != 1 || desc.Width < eyeWidthOut || desc.Height < eyeHeightOut)

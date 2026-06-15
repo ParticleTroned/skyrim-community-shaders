@@ -169,7 +169,6 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 #if defined(WETTERNESS)
 struct WetReflectionParams
 {
-	float enabled;
 	float modernWeight;
 	float legacyWeight;
 	float effectiveScale;
@@ -221,7 +220,6 @@ WetReflectionParams CreateWetReflectionParams(float wetReflectionScale)
 	const float modernScale = wetReflectionScaleClamped;
 	const float legacyScale = min(wetReflectionScaleClamped, legacyReflectionScaleMax);
 
-	params.enabled = 1.0;
 	params.modernWeight = enableModern * invModeCount;
 	params.legacyWeight = enableLegacy * invModeCount;
 	params.effectiveScale = (modernScale * enableModern + legacyScale * enableLegacy) * invModeCount;
@@ -234,8 +232,7 @@ WetReflectionParams CreateWetReflectionParams(float wetReflectionScale)
 
 bool HasWetReflectionParams(WetReflectionParams params)
 {
-	return params.enabled > 0.0 &&
-	       params.effectiveScale > 0.0 &&
+	return params.effectiveScale > 1e-4 &&
 	       (params.modernWeight + params.legacyWeight) > 0.0;
 }
 

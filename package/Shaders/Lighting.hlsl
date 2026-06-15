@@ -1774,7 +1774,7 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 
 	WetReflectionParams wetReflectionParamsDirect = wetReflectionParams;
 	wetReflectionParamsDirect.effectiveScale *= wetDirectSpecularScale;
-	if (!HasWetReflectionParams(wetReflectionParamsDirect) || wetReflectionParamsDirect.effectiveScale <= 1e-4) {
+	if (!HasWetReflectionParams(wetReflectionParamsDirect)) {
 		return state;
 	}
 
@@ -1830,7 +1830,6 @@ WetnessLightingState CreateWetnessLightingState(
 	state.reflectionParams = wetReflectionParams;
 	state.indirectEnabled =
 		(HasWetReflectionParams(wetReflectionParams) &&
-		 wetReflectionParams.effectiveScale > 1e-4 &&
 		 wetHighlightReflectanceScale > 1e-4) ? 1.0 : 0.0;
 #endif
 	state.directLightState = CreateWetnessDirectLightState(

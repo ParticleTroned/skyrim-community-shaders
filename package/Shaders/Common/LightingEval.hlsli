@@ -239,6 +239,15 @@ bool HasWetReflectionParams(WetReflectionParams params)
 	       (params.modernWeight + params.legacyWeight) > 0.0;
 }
 
+float GetWetnessBiasedNdotV(float3 wetnessNormal, float3 viewDir, float forwardBiasEnabled)
+{
+	// Shared by direct and indirect wet reflection so their forward/top-down bias stays matched.
+	float NdotV = saturate(abs(dot(wetnessNormal, viewDir)) + EPSILON_DOT_CLAMP);
+	float forwardBiasAmount = saturate((0.62 - NdotV) / 0.62) * forwardBiasEnabled;
+	float biasedNdotV = max(NdotV, 0.55);
+	return lerp(NdotV, biasedNdotV, forwardBiasAmount);
+}
+
 WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNormal, float3 viewDir, float roughness, WetReflectionParams reflectionParams)
 {
 	WetnessDirectLightingParams params = (WetnessDirectLightingParams)0;
@@ -251,12 +260,7 @@ WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNorm
 		return params;
 	}
 
-	float NdotV = saturate(abs(dot(wetnessNormal, viewDir)) + EPSILON_DOT_CLAMP);
-	// Make forward/top-down wet reflections visibly stronger instead of only
-	// applying a subtle floor that is often imperceptible in gameplay.
-	float forwardBiasAmount = saturate((0.62 - NdotV) / 0.62) * reflectionParams.forwardBiasEnabled;
-	float biasedNdotV = max(NdotV, 0.55);
-	NdotV = lerp(NdotV, biasedNdotV, forwardBiasAmount);
+	float NdotV = GetWetnessBiasedNdotV(wetnessNormal, viewDir, reflectionParams.forwardBiasEnabled);
 
 	params.enabled = 1.0;
 	params.wetnessF0 = 0.02 * reflectionParams.modernWeight + wetnessStrength * reflectionParams.legacyWeight;
@@ -323,10 +327,7 @@ float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, floa
 	const float3 V = context.viewDir;
 	const float3 VN = context.vertexNormal;
 
-	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
-	float forwardBiasAmount = saturate((0.62 - NdotV) / 0.62) * reflectionParams.forwardBiasEnabled;
-	float biasedNdotV = max(NdotV, 0.55);
-	NdotV = lerp(NdotV, biasedNdotV, forwardBiasAmount);
+	float NdotV = GetWetnessBiasedNdotV(N, V, reflectionParams.forwardBiasEnabled);
 	float2 specularBRDF = BRDF::EnvBRDF(roughness, NdotV);
 	float3 modernLobeWeight = 0.02 * specularBRDF.x + specularBRDF.y;
 	float3 legacyLobeWeight = saturate(1.0 - roughness) * specularBRDF.x + specularBRDF.y;

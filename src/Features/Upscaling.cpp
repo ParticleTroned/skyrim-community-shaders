@@ -3186,8 +3186,18 @@ namespace
 	{
 		return globals::game::isVR &&
 		       (IsKnownGameMenuContextActive() ||
-		        IsCommunityShadersMenuOpen() ||
 		        IsVRMenuPresentationTailActive(globals::state));
+	}
+
+	bool IsVRMenuScenePresentationBlockActive()
+	{
+		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
+	}
+
+	bool IsVRSceneFeatureMenuPauseContextActive()
+	{
+		return globals::game::isVR &&
+		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
 	}
 
 	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
@@ -4331,7 +4341,7 @@ namespace
 	{
 		const bool canEnable = a_methodEligible && a_adapterEligible;
 		const bool requested = canEnable && a_toggleEnabled;
-		const bool menuPaused = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsKnownGameMenuContextActive();
+		const bool menuPaused = globals::game::isVR ? IsVRSceneFeatureMenuPauseContextActive() : IsKnownGameMenuContextActive();
 		return BuildScenePausedUiState(canEnable, requested, a_runtimeActive && !menuPaused, a_runtimeActive, menuPaused);
 	}
 
@@ -8558,7 +8568,7 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 {
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
 	const bool foveatedDispatchEnabled = IsFoveatedVendorDispatchEnabled(upscaleMethod);
-	const bool menuPresentationContext = IsVRMenuPresentationContextActive();
+	const bool menuPresentationContext = IsVRSceneFeatureMenuPauseContextActive();
 	if (!settings.aaVrs || !globals::game::isVR || !foveatedDispatchEnabled || menuPresentationContext)
 		return false;
 
@@ -8656,10 +8666,10 @@ void Upscaling::UpdateAAVRSState()
 		return;
 	}
 
-	if (IsVRMenuPresentationContextActive()) {
+	if (IsVRSceneFeatureMenuPauseContextActive()) {
 		// UpdateAAVRSState runs before world rendering, so lastWorldRenderFrame
 		// cannot be used here without blocking valid scene frames.
-		disableAndReport("Game menu/presentation context active", requested, true);
+		disableAndReport("Game/CS menu context active", requested, true);
 		return;
 	}
 
@@ -12776,7 +12786,7 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 	const bool submitStageSceneActive = IsPerfModePresentationActive();
 
 	const bool menuBlocksSubmitStage =
-		globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
+		globals::game::isVR ? IsVRMenuScenePresentationBlockActive() : IsGameMenuContextActive();
 	const bool active = submitStageSceneActive && !menuBlocksSubmitStage;
 	submitStageRuntimeActive.store(active, std::memory_order_relaxed);
 	return active;
@@ -13173,11 +13183,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
 		IsVRLoadingPresentationContextActive(state);
 	const bool currentMenuPresentationContext = IsVRMenuPresentationContextActive();
-	const bool menuPresentationContext =
+	const bool menuTextProtectionContext =
 		resolutionPlan.menuContextActive ||
-		currentMenuPresentationContext ||
+		currentMenuPresentationContext;
+	const bool submitPresentationContext =
 		loadingPresentationContext ||
 		presentationRenderTarget;
+	const bool menuPresentationContext =
+		menuTextProtectionContext ||
+		submitPresentationContext;
 	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
 
 	D3D11_TEXTURE2D_DESC sourceDesc{};
@@ -13296,7 +13310,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	auto computePresentationOnly = [&]() {
 		const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
 		return vrRenderScaleMode &&
-		       (menuPresentationContext || transitionPresentationOnly || submitBoundsPresentationFallback) &&
+		       (submitPresentationContext || transitionPresentationOnly || submitBoundsPresentationFallback) &&
 		       !vrRenderScaleMenuCanUseVendor;
 	};
 	bool presentationOnly =
@@ -13379,8 +13393,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
+	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
 	const bool foveatedRequested =
 		!presentationOnly &&
+		!sceneFeatureMenuPauseContext &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass;
@@ -13388,10 +13404,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		presentationOnly &&
 		(sourceDesc.Width < sourceEyeWidthIn || sourceDesc.Height < sourceEyeHeightIn);
 	const std::string submitResolvePhase = std::format(
-		"resolve:eye={} menu={} submitMenu={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={}",
+		"resolve:eye={} menu={} textMenu={} submitMenu={} submitPresentation={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={}",
 		VREyeName(a_eye),
 		BoolText(menuPresentationContext),
+		BoolText(menuTextProtectionContext),
 		BoolText(submitMenuPresentationContext),
+		BoolText(submitPresentationContext),
 		BoolText(presentationRenderTarget),
 		BoolText(presentationOnly),
 		BoolText(submitBoundsPresentationFallback),
@@ -13587,6 +13605,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			presentationInputHeight,
 			submitBoundsPresentationFallback ? "submit-bounds-stretch-output" :
 			                                   (transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output"));
+	}
+
+	if (sceneFeatureMenuPauseContext && vrRenderScaleMode) {
+		return presentStretchOutput(eyeWidthIn, eyeHeightIn, "menu-scene-stretch-output");
 	}
 
 	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;
@@ -15638,9 +15660,6 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
 	const bool logPresentationDiagnostics = globals::game::isVR;
-	if (globals::game::isVR && IsCommunityShadersMenuOpen()) {
-		ExtendVRMenuPresentationTail();
-	}
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,

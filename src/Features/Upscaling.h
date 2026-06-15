@@ -464,7 +464,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
-	void InstallVRMenuWriterPathValidationHook(ID3D11DeviceContext* a_context);
+	void InstallD3DContextDiagnostics(ID3D11DeviceContext* a_context);
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;
@@ -764,6 +764,7 @@ public:
 	float dynamicResolutionHeightRatio = 1.0f;
 
 	bool previousVendorUpscalerSelected = false;
+	bool d3dContextDiagnosticsInstalled = false;
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
@@ -1044,9 +1045,87 @@ private:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_DrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_startIndexLocation, INT a_baseVertexLocation);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_Draw
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_vertexCount, UINT a_startVertexLocation);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct ID3D11DeviceContext_DrawIndexedInstanced
 	{
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCountPerInstance, UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_vertexCountPerInstance, UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startInstanceLocation);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawAuto
+	{
+		static void thunk(ID3D11DeviceContext* a_context);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawIndexedInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_bufferForArgs, UINT a_alignedByteOffsetForArgs);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstancedIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_bufferForArgs, UINT a_alignedByteOffsetForArgs);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_OMSetRenderTargets
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_numViews, ID3D11RenderTargetView* const* a_renderTargetViews, ID3D11DepthStencilView* a_depthStencilView);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_numRTVs, ID3D11RenderTargetView* const* a_renderTargetViews, ID3D11DepthStencilView* a_depthStencilView, UINT a_uavStartSlot, UINT a_numUAVs, ID3D11UnorderedAccessView* const* a_unorderedAccessViews, const UINT* a_uavInitialCounts);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_CopySubresourceRegion
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_dstResource, UINT a_dstSubresource, UINT a_dstX, UINT a_dstY, UINT a_dstZ, ID3D11Resource* a_srcResource, UINT a_srcSubresource, const D3D11_BOX* a_srcBox);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_CopyResource
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_dstResource, ID3D11Resource* a_srcResource);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_UpdateSubresource
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_dstResource, UINT a_dstSubresource, const D3D11_BOX* a_dstBox, const void* a_srcData, UINT a_srcRowPitch, UINT a_srcDepthPitch);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_ResolveSubresource
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_dstResource, UINT a_dstSubresource, ID3D11Resource* a_srcResource, UINT a_srcSubresource, DXGI_FORMAT a_format);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_ClearRenderTargetView
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_renderTargetView, const FLOAT a_colorRGBA[4]);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

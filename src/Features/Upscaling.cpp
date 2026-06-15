@@ -1616,8 +1616,8 @@ namespace
 		return a_extentClass == "engine" || a_extentClass == "screen";
 	}
 
-	// Runtime use is still gated at submit by menuTextVendorReconstruct=yes.
-	constexpr bool kVRMenuSceneDeltaCompositeRuntimeEnabled = true;
+	// Pre85 proved the clean/baked scene delta path flickers in worldspace and menus.
+	constexpr bool kVRMenuSceneDeltaCompositeRuntimeEnabled = false;
 
 	void LogVRMenuOriginalCompositeCandidateDiagnostics(
 		ID3D11DeviceContext* a_context,

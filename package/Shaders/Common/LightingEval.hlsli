@@ -301,12 +301,6 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 	lightingOutput.specular += wetnessSpecular;
 }
 
-void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, WetReflectionParams reflectionParams, inout DirectLightingOutput lightingOutput)
-{
-	WetnessDirectLightingParams params = CreateWetnessDirectLightingParams(wetnessNormal, context.viewDir, roughness, reflectionParams);
-	EvaluateWetnessLighting(wetnessNormal, context, roughness, params, lightingOutput);
-}
-
 float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, float3 wetnessNormal, float roughness, IndirectContext context, WetReflectionParams reflectionParams)
 {
 	const float wetnessStrength = saturate(1 - roughness);

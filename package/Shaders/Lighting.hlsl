@@ -995,14 +995,9 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	include "Common/LightingEval.hlsli"
 
-#	if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
-#		if defined(WETTERNESS)
-#			define CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, lightContext, wetRoughness, lightOutput) EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, CreateWetReflectionParams(SharedData::wetternessSettings.WetIndirectSpecularScale), lightOutput)
-#			define CS_GET_WETNESS_INDIRECT(lobeWeights, wetnessNormal, wetRoughness, indirectContext) GetWetnessIndirectLobeWeights(lobeWeights, wetnessNormal, wetRoughness, indirectContext, CreateWetReflectionParams(SharedData::wetternessSettings.WetIndirectSpecularScale))
-#		else
-#			define CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, lightContext, wetRoughness, lightOutput) EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, lightOutput)
-#			define CS_GET_WETNESS_INDIRECT(lobeWeights, wetnessNormal, wetRoughness, indirectContext) GetWetnessIndirectLobeWeights(lobeWeights, wetnessNormal, wetRoughness, indirectContext)
-#		endif
+#	if defined(WETNESS_EFFECTS)
+#		define CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, lightContext, wetRoughness, lightOutput) EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, lightOutput)
+#		define CS_GET_WETNESS_INDIRECT(lobeWeights, wetnessNormal, wetRoughness, indirectContext) GetWetnessIndirectLobeWeights(lobeWeights, wetnessNormal, wetRoughness, indirectContext)
 #	endif
 
 bool IsFiniteFloat3(float3 v)

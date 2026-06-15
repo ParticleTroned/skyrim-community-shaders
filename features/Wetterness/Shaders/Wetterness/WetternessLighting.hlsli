@@ -1,6 +1,9 @@
 #ifndef WETTERNESS_LIGHTING_HLSLI
 #define WETTERNESS_LIGHTING_HLSLI
 
+#include "Common/Random.hlsli"
+#include "Common/SharedData.hlsli"
+
 namespace Wetterness
 {
 	Texture2D<float4> TexPrecipOcclusion : register(t70);

@@ -191,6 +191,8 @@ namespace
 
 	bool IsMainMenuContextActive();
 	bool IsKnownGameMenuContextActive();
+	bool IsVRObservedProjectedMenuTailActive(const State* a_state);
+	void ExtendVRObservedProjectedMenuTail(uint32_t a_tailFrames);
 
 	bool IsRenderDocDllLoaded(bool a_probeProcess)
 	{
@@ -1594,8 +1596,6 @@ namespace
 	{
 		if (!globals::game::isVR || !a_context)
 			return;
-		if (a_communityShadersMenu || (!a_knownMenu && !a_vrMenuPresentation))
-			return;
 
 		ID3D11RenderTargetView* rtv = nullptr;
 		a_context->OMGetRenderTargets(1, &rtv, nullptr);
@@ -1699,6 +1699,15 @@ namespace
 		const bool menuLayerBakedIntoScene =
 			destination.target == RE::RENDER_TARGETS::kTOTAL &&
 			firstMenuLayerSourceSlot != srvs.size();
+		const bool renderScaleMenuCompositeObservation =
+			menuLayerBakedIntoScene &&
+			a_renderScaleActive &&
+			a_presentationUpscaling;
+		const bool allowDiagnostic =
+			!a_communityShadersMenu &&
+			(a_knownMenu || a_vrMenuPresentation || renderScaleMenuCompositeObservation);
+		if (!allowDiagnostic)
+			return;
 		static std::atomic<uint64_t> lastLoggedSignature{ 0 };
 		static std::atomic<uint64_t> lastLoggedBakeCandidateSignature{ 0 };
 		static std::atomic<uint32_t> detailedCaptureCount{ 0 };
@@ -1725,7 +1734,7 @@ namespace
 		const auto frame = globals::state ? globals::state->frameCount : 0;
 		if (lastLoggedSignature.exchange(signature, std::memory_order_acq_rel) != signature) {
 			logger::debug(
-				"[VRMenuOriginalComposite] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
+				"[VRMenuOriginalComposite] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} observedRenderScaleComposite={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
 				frame,
 				a_passName ? a_passName : "-",
 				a_phase ? a_phase : "-",
@@ -1739,6 +1748,7 @@ namespace
 				a_vrMenuPresentation ? "yes" : "no",
 				a_renderScaleActive ? "yes" : "no",
 				a_presentationUpscaling ? "yes" : "no",
+				renderScaleMenuCompositeObservation ? "yes" : "no",
 				viewports,
 				scissors,
 				shaders,
@@ -1778,7 +1788,7 @@ namespace
 				const float finalScaleY = destination.height > 0 ? static_cast<float>(a_finalHeight) / static_cast<float>(destination.height) : 0.0f;
 
 				logger::debug(
-					"[VRMenuBakeCandidate] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={} layout={}) firstMenuSource=t{}:{}({}x{} fmt={} class={} layout={}) sources={} menuBg={} projectedMenu={} hudMenu={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} screen={}x{} engine={}x{} final={}x{} finalLayout={} sourceEye={}x{} dstEye={}x{} finalEye={}x{} sourceLeftPx=(0,0)->({},{}) sourceRightPx=({},0)->({},{}) dstLeftPx=(0,0)->({},{}) dstRightPx=({},0)->({},{}) finalLeftPx=(0,0)->({},{}) finalRightPx=({},0)->({},{}) finalScale={:.4f},{:.4f}",
+					"[VRMenuBakeCandidate] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={} layout={}) firstMenuSource=t{}:{}({}x{} fmt={} class={} layout={}) sources={} menuBg={} projectedMenu={} hudMenu={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} observedRenderScaleComposite={} screen={}x{} engine={}x{} final={}x{} finalLayout={} sourceEye={}x{} dstEye={}x{} finalEye={}x{} sourceLeftPx=(0,0)->({},{}) sourceRightPx=({},0)->({},{}) dstLeftPx=(0,0)->({},{}) dstRightPx=({},0)->({},{}) finalLeftPx=(0,0)->({},{}) finalRightPx=({},0)->({},{}) finalScale={:.4f},{:.4f}",
 					frame,
 					a_passName ? a_passName : "-",
 					a_phase ? a_phase : "-",
@@ -1804,6 +1814,7 @@ namespace
 					a_vrMenuPresentation ? "yes" : "no",
 					a_renderScaleActive ? "yes" : "no",
 					a_presentationUpscaling ? "yes" : "no",
+					renderScaleMenuCompositeObservation ? "yes" : "no",
 					a_screenWidth,
 					a_screenHeight,
 					a_engineWidth,
@@ -1834,6 +1845,9 @@ namespace
 					a_finalHeight,
 					finalScaleX,
 					finalScaleY);
+
+				if (renderScaleMenuCompositeObservation)
+					ExtendVRObservedProjectedMenuTail(kVRObservedMenuPresentationTailFrames);
 			}
 		}
 	}
@@ -3971,8 +3985,9 @@ namespace
 			return true;
 
 		// For gameplay menus under render-scale, rely on direct render-target
-		// observation instead of broad UI-name inference. That keeps the
-		// full-resolution preparation path tied to the menu pass we actually saw.
+		// observation instead of broad UI-name inference. The observed tail can
+		// come from projected-menu seed/follow targets or from a direct menu-layer
+		// composite observation in the original scene/menu bake pass.
 		return IsVRObservedProjectedMenuTailActive(a_state);
 	}
 

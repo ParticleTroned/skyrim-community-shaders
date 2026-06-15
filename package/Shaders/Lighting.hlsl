@@ -1846,14 +1846,7 @@ WetnessLightingState CreateWetnessLightingState(
 }
 
 #if defined(DYNAMIC_CUBEMAPS)
-struct WetnessIndirectReflectanceState
-{
-	float3 reflectance;
-	bool cubemapReflectanceVisible;
-	float3 cubemapSampleDirection;
-};
-
-WetnessIndirectReflectanceState CreateWetnessIndirectReflectanceState(
+float3 GetWetnessIndirectReflectance(
 	inout IndirectLobeWeights indirectLobeWeights,
 	bool wetIndirectLightingVisible,
 	float3 wetIndirectNormal,
@@ -1861,21 +1854,17 @@ WetnessIndirectReflectanceState CreateWetnessIndirectReflectanceState(
 	IndirectContext indirectContext,
 	WetReflectionParams reflectionParams,
 	float wetHighlightReflectanceScale,
-	float wetPuddleSkyReflectionScale,
-	float3 viewDirection)
+	float wetPuddleSkyReflectionScale)
 {
-	WetnessIndirectReflectanceState state = (WetnessIndirectReflectanceState)0;
 	if (wetIndirectLightingVisible) {
-		state.reflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetIndirectNormal, waterRoughnessSpecular, indirectContext, reflectionParams);
-		state.reflectance *= wetHighlightReflectanceScale * wetPuddleSkyReflectionScale;
-		state.cubemapReflectanceVisible = any(state.reflectance > 0.0);
-		if (state.cubemapReflectanceVisible) {
-			state.cubemapSampleDirection = reflect(-viewDirection, wetIndirectNormal);
-		}
+		float3 wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetIndirectNormal, waterRoughnessSpecular, indirectContext, reflectionParams);
+		wetnessReflectance *= wetHighlightReflectanceScale * wetPuddleSkyReflectionScale;
+		return wetnessReflectance;
 	}
-	return state;
+	return 0.0;
 }
 
+#if !defined(DEFERRED)
 float3 ApplyWetnessCubemapClarity(float3 wetCubemapIrradiance, float postRainBlend, float postRainCubemapGlareReductionFromClarity)
 {
 	float wetCubemapClarityAmount = saturate(postRainBlend * postRainCubemapGlareReductionFromClarity);
@@ -1890,6 +1879,63 @@ float3 ApplyWetnessCubemapClarity(float3 wetCubemapIrradiance, float postRainBle
 	}
 	return wetCubemapIrradiance;
 }
+
+#if defined(SKYLIGHTING)
+float3 GetWetnessCubemapContribution(
+	float2 screenUV,
+	float3 wetIndirectNormal,
+	float3 vertexNormal,
+	float3 viewDirection,
+	float waterRoughnessSpecular,
+	float3 wetnessReflectance,
+	float postRainBlend,
+	float postRainCubemapGlareReductionFromClarity,
+	sh2 skylightingSH)
+{
+	if (!any(wetnessReflectance > 0.0)) {
+		return 0.0;
+	}
+
+	float3 wetCubemapSampleDirection = reflect(-viewDirection, wetIndirectNormal);
+	float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(
+		screenUV,
+		wetIndirectNormal,
+		vertexNormal,
+		viewDirection,
+		waterRoughnessSpecular,
+		wetCubemapSampleDirection,
+		skylightingSH));
+	wetCubemapIrradiance = ApplyWetnessCubemapClarity(wetCubemapIrradiance, postRainBlend, postRainCubemapGlareReductionFromClarity);
+	return wetnessReflectance * wetCubemapIrradiance;
+}
+#else
+float3 GetWetnessCubemapContribution(
+	float2 screenUV,
+	float3 wetIndirectNormal,
+	float3 vertexNormal,
+	float3 viewDirection,
+	float waterRoughnessSpecular,
+	float3 wetnessReflectance,
+	float postRainBlend,
+	float postRainCubemapGlareReductionFromClarity)
+{
+	if (!any(wetnessReflectance > 0.0)) {
+		return 0.0;
+	}
+
+	float3 wetCubemapSampleDirection = reflect(-viewDirection, wetIndirectNormal);
+	float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(
+		screenUV,
+		wetIndirectNormal,
+		vertexNormal,
+		viewDirection,
+		waterRoughnessSpecular,
+		wetCubemapSampleDirection));
+	wetCubemapIrradiance = ApplyWetnessCubemapClarity(wetCubemapIrradiance, postRainBlend, postRainCubemapGlareReductionFromClarity);
+	return wetnessReflectance * wetCubemapIrradiance;
+}
+#endif
+#endif
 #endif
 
 void ApplyWetnessDirectLightingOutput(
@@ -4134,7 +4180,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(WETTERNESS)
 #		if defined(DYNAMIC_CUBEMAPS)
-	WetnessIndirectReflectanceState wetnessIndirectReflectance = CreateWetnessIndirectReflectanceState(
+	float3 wetnessReflectance = GetWetnessIndirectReflectance(
 		indirectLobeWeights,
 		wetIndirectLightingVisible,
 		wetIndirectNormal,
@@ -4142,9 +4188,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		indirectContext,
 		wetnessLightingState.reflectionParams,
 		wetHighlightReflectanceScale,
-		wetPuddleSkyReflectionScale,
-		viewDirection);
-	float3 wetnessReflectance = wetnessIndirectReflectance.reflectance;
+		wetPuddleSkyReflectionScale);
 #		else
 	float3 wetnessReflectance = 0.0;
 #		endif
@@ -4260,12 +4304,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (any(baseMaterialCubemapSpecular > 0))
 		color.xyz += baseMaterialCubemapSpecular * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness, skylightingSH));
 #				if defined(WETTERNESS)
-		if (wetnessIndirectReflectance.cubemapReflectanceVisible)
-		{
-			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetIndirectNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetnessIndirectReflectance.cubemapSampleDirection, skylightingSH));
-			wetCubemapIrradiance = ApplyWetnessCubemapClarity(wetCubemapIrradiance, postRainBlend, postRainCubemapGlareReductionFromClarity);
-			color.xyz += wetnessReflectance * wetCubemapIrradiance;
-		}
+		color.xyz += GetWetnessCubemapContribution(screenUV, wetIndirectNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetnessReflectance, postRainBlend, postRainCubemapGlareReductionFromClarity, skylightingSH);
 #				elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && any(wetnessReflectance > 0))
 			color.xyz += wetnessReflectance * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular, skylightingSH));
@@ -4274,12 +4313,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (any(baseMaterialCubemapSpecular > 0))
 		color.xyz += baseMaterialCubemapSpecular * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, worldNormal, vertexNormal, viewDirection, material.Roughness));
 #				if defined(WETTERNESS)
-		if (wetnessIndirectReflectance.cubemapReflectanceVisible)
-		{
-			float3 wetCubemapIrradiance = SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradianceBiased(screenUV, wetIndirectNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetnessIndirectReflectance.cubemapSampleDirection));
-			wetCubemapIrradiance = ApplyWetnessCubemapClarity(wetCubemapIrradiance, postRainBlend, postRainCubemapGlareReductionFromClarity);
-			color.xyz += wetnessReflectance * wetCubemapIrradiance;
-		}
+		color.xyz += GetWetnessCubemapContribution(screenUV, wetIndirectNormal, vertexNormal, viewDirection, waterRoughnessSpecular, wetnessReflectance, postRainBlend, postRainCubemapGlareReductionFromClarity);
 #				elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && any(wetnessReflectance > 0))
 			color.xyz += wetnessReflectance * SanitizeFloat3(DynamicCubemaps::GetDynamicCubemapSpecularIrradiance(screenUV, wetnessNormal, vertexNormal, viewDirection, waterRoughnessSpecular));

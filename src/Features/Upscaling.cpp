@@ -1616,7 +1616,8 @@ namespace
 		return a_extentClass == "engine" || a_extentClass == "screen";
 	}
 
-	constexpr bool kVRMenuSceneDeltaCompositeRuntimeEnabled = false;
+	// Runtime use is still gated at submit by menuTextVendorReconstruct=yes.
+	constexpr bool kVRMenuSceneDeltaCompositeRuntimeEnabled = true;
 
 	void LogVRMenuOriginalCompositeCandidateDiagnostics(
 		ID3D11DeviceContext* a_context,
@@ -13989,8 +13990,6 @@ void Upscaling::CaptureVRMenuCleanSceneAtMainPostProcessingEntry()
 		skipReason = "community-shaders-menu";
 	else if (mainOrLoadingMenu)
 		skipReason = "main-or-loading-menu";
-	else if (!knownMenu && !vrMenuPresentation)
-		skipReason = "menu-context-inactive-at-main-post";
 	if (skipReason) {
 		logCleanCaptureSkip(skipReason);
 		return;
@@ -14032,7 +14031,7 @@ void Upscaling::CaptureVRMenuCleanSceneAtMainPostProcessingEntry()
 			static_cast<uint64_t>(desc.Format);
 		if (loggedSignature.exchange(signature, std::memory_order_acq_rel) != signature) {
 			logger::debug(
-				"[VRMenuSceneDelta] captured clean kTOTAL at Main_PostProcessing entry frame={} target={}x{} fmt={}",
+				"[VRMenuSceneDelta] captured clean kTOTAL at Main_PostProcessing entry frame={} source=kTOTAL dst=VRMenuCleanSceneAtMainPost target={}x{} fmt={}",
 				currentFrame,
 				desc.Width,
 				desc.Height,
@@ -14166,6 +14165,19 @@ bool Upscaling::ResolveVRMenuCleanSceneForSubmit(uint32_t frame, ID3D11Texture2D
 		context->CopyResource(vrMenuBakedSceneAtSubmit->resource.get(), sourceTexture);
 		vrMenuSceneDeltaBakedReady = true;
 		cleanSceneTexture = vrMenuCleanSceneAtMainPost->resource.get();
+		static std::atomic<uint64_t> loggedSubmitCaptureSignature{ 0 };
+		const uint64_t submitCaptureSignature =
+			(static_cast<uint64_t>(sourceDesc.Width) << 32) ^
+			(static_cast<uint64_t>(sourceDesc.Height) << 8) ^
+			static_cast<uint64_t>(sourceDesc.Format);
+		if (loggedSubmitCaptureSignature.exchange(submitCaptureSignature, std::memory_order_acq_rel) != submitCaptureSignature) {
+			logger::debug(
+				"[VRMenuSceneDelta] captured baked kTOTAL for submit-stage menu delta frame={} source=kTOTAL dst=VRMenuBakedSceneAtSubmit clean=VRMenuCleanSceneAtMainPost target={}x{} fmt={}",
+				frame,
+				sourceDesc.Width,
+				sourceDesc.Height,
+				static_cast<uint32_t>(sourceDesc.Format));
+		}
 		return cleanSceneTexture != nullptr;
 	} catch (const std::exception& e) {
 		static bool loggedResolveFailure = false;
@@ -14293,7 +14305,7 @@ bool Upscaling::CompositeVRMenuSceneDeltaAfterSubmitStageUpscale(uint32_t eyeInd
 	const uint32_t eyeBit = 1u << eyeIndex;
 	if ((loggedEyeMask.fetch_or(eyeBit, std::memory_order_acq_rel) & eyeBit) == 0) {
 		logger::debug(
-			"[VRMenuSceneDelta] composited baked-clean menu delta after vendor reconstruction eye={} sourceEye={}x{} outputEye={}x{} captured={}x{}",
+			"[VRMenuSceneDelta] composited baked-clean menu delta after vendor reconstruction eye={} pass=SubmitVRUpscaledFrame source=VRMenuSceneDeltaFinalSceneCopy+VRMenuCleanSceneAtMainPost+VRMenuBakedSceneAtSubmit dst=vrIntermediateColorOut sourceEye={}x{} outputEye={}x{} captured={}x{}",
 			eyeIndex,
 			eyeWidthIn,
 			eyeHeightIn,
@@ -15976,7 +15988,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
-	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
+	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, submitColorSourceTexture, sourceSubresource, &colorBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
 
@@ -16161,6 +16173,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		RequestHistoryReset();
 
 		if (IsSubmitStageDeviceLost())
+			return false;
+
+		if (usingCleanMenuSceneSource)
 			return false;
 
 		if (vrRenderScaleMode &&

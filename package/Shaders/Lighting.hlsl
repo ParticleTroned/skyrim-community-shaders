@@ -3267,8 +3267,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		wetReflectionParamsDirect = wetReflectionParams;
 		wetReflectionParamsDirect.effectiveScale *= wetDirectSpecularScale;
-		wetDirectLightingVisible = wetReflectionParamsDirect.effectiveScale > 1e-4 && vrWetnessDirectDetailEnabled;
-		wetIndirectLightingVisible = wetReflectionParams.effectiveScale > 1e-4 && wetHighlightReflectanceScale > 1e-4;
+		wetDirectLightingVisible =
+			HasWetReflectionParams(wetReflectionParamsDirect) &&
+			wetReflectionParamsDirect.effectiveScale > 1e-4 &&
+			vrWetnessDirectDetailEnabled;
+		wetIndirectLightingVisible =
+			HasWetReflectionParams(wetReflectionParams) &&
+			wetReflectionParams.effectiveScale > 1e-4 &&
+			wetHighlightReflectanceScale > 1e-4;
 	}
 #	endif
 

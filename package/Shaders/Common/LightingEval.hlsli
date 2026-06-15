@@ -232,6 +232,13 @@ WetReflectionParams CreateWetReflectionParams(float wetReflectionScale)
 	return params;
 }
 
+bool HasWetReflectionParams(WetReflectionParams params)
+{
+	return params.enabled > 0.0 &&
+	       params.effectiveScale > 0.0 &&
+	       (params.modernWeight + params.legacyWeight) > 0.0;
+}
+
 WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNormal, float3 viewDir, float roughness, WetReflectionParams reflectionParams)
 {
 	WetnessDirectLightingParams params = (WetnessDirectLightingParams)0;
@@ -240,7 +247,7 @@ WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNorm
 		return params;
 	}
 
-	if (reflectionParams.enabled <= 0.0 || reflectionParams.effectiveScale <= 0.0 || (reflectionParams.modernWeight + reflectionParams.legacyWeight) <= 0.0) {
+	if (!HasWetReflectionParams(reflectionParams)) {
 		return params;
 	}
 
@@ -308,7 +315,7 @@ float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, floa
 		return 0.0;
 	}
 
-	if (reflectionParams.enabled <= 0.0 || reflectionParams.effectiveScale <= 0.0 || (reflectionParams.modernWeight + reflectionParams.legacyWeight) <= 0.0) {
+	if (!HasWetReflectionParams(reflectionParams)) {
 		return 0.0;
 	}
 

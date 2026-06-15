@@ -3826,6 +3826,11 @@ namespace
 		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
 	}
 
+	bool IsVRMenuUIFullResolutionContextActive()
+	{
+		return globals::game::isVR && IsVRMenuPresentationContextActive();
+	}
+
 	bool IsVRSceneFeatureMenuPauseContextActive()
 	{
 		return globals::game::isVR &&
@@ -16924,11 +16929,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool loadingTransitionTailActive =
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
-	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
+	const bool vrMenuUIFullResolutionContextActive = IsVRMenuUIFullResolutionContextActive();
 	const bool menuPresentationContext =
 		vendorMethodSelected &&
 		globals::game::isVR &&
-		(vrScenePresentationBlockActive || loadingTransitionTailActive);
+		(vrMenuUIFullResolutionContextActive || loadingTransitionTailActive);
 	const bool fullResolutionMenuPresentation = menuPresentationContext;
 	const bool loadingTransitionMenuPresentation =
 		fullResolutionMenuPresentation &&

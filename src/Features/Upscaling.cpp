@@ -1287,6 +1287,7 @@ namespace
 		uint32_t width = 0;
 		uint32_t height = 0;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+		bool textureCopy = false;
 	};
 
 	bool TryResolveVRMenuCompositionView(ID3D11View* a_view, VRMenuCompositionTargetMatch& a_outMatch)
@@ -1329,7 +1330,9 @@ namespace
 				continue;
 
 			const auto& renderTarget = renderTargets[targetIndex];
-			if (renderTarget.texture != texture && renderTarget.textureCopy != texture)
+			const bool matchesTarget = renderTarget.texture == texture;
+			const bool matchesCopy = renderTarget.textureCopy == texture;
+			if (!matchesTarget && !matchesCopy)
 				continue;
 
 			D3D11_TEXTURE2D_DESC desc{};
@@ -1340,10 +1343,19 @@ namespace
 			a_outMatch.width = desc.Width;
 			a_outMatch.height = desc.Height;
 			a_outMatch.format = desc.Format;
+			a_outMatch.textureCopy = matchesCopy && !matchesTarget;
 			return true;
 		}
 
 		return false;
+	}
+
+	std::string FormatVRMenuCompositionTargetLabel(const VRMenuCompositionTargetMatch& a_match)
+	{
+		std::string label = a_match.name ? a_match.name : "unknown";
+		if (a_match.textureCopy)
+			label += ".copy";
+		return label;
 	}
 
 	void MixVRMenuOriginalCompositeTextSignature(uint64_t& a_signature, const std::string& a_text)
@@ -1587,6 +1599,66 @@ namespace
 		return "other";
 	}
 
+	bool LooksLikeVRMenuCombinedEyeExtent(uint32_t a_width, uint32_t a_height)
+	{
+		return a_width > 0 &&
+		       a_height > 0 &&
+		       static_cast<uint64_t>(a_width) >= ((static_cast<uint64_t>(a_height) * 3ull) / 2ull);
+	}
+
+	const char* ClassifyVRMenuEyeLayout(
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		uint32_t a_width,
+		uint32_t a_height)
+	{
+		if (a_target == RE::RENDER_TARGETS::kPROJECTEDMENU)
+			return "single";
+		if (LooksLikeVRMenuCombinedEyeExtent(a_width, a_height))
+			return "combined-horizontal";
+		return "single";
+	}
+
+	void MixVRMenuCompositionTargetSignature(uint64_t& a_signature, const VRMenuCompositionTargetMatch& a_match)
+	{
+		a_signature ^= static_cast<uint64_t>(a_match.target);
+		a_signature *= 1099511628211ull;
+		a_signature ^= a_match.width;
+		a_signature *= 1099511628211ull;
+		a_signature ^= a_match.height;
+		a_signature *= 1099511628211ull;
+		a_signature ^= static_cast<uint64_t>(a_match.format);
+		a_signature *= 1099511628211ull;
+		a_signature ^= a_match.textureCopy ? 1ull : 0ull;
+		a_signature *= 1099511628211ull;
+	}
+
+	std::string FormatVRMenuCompositionSource(
+		size_t a_slot,
+		const VRMenuCompositionTargetMatch& a_source,
+		const char* a_sourceClass,
+		const char* a_sourceLayout,
+		bool a_includeFormat)
+	{
+		std::string source = "t";
+		source += std::to_string(a_slot);
+		source += "=";
+		source += FormatVRMenuCompositionTargetLabel(a_source);
+		source += "(";
+		source += std::to_string(a_source.width);
+		source += "x";
+		source += std::to_string(a_source.height);
+		if (a_includeFormat) {
+			source += " fmt=";
+			source += std::to_string(static_cast<uint32_t>(a_source.format));
+		}
+		source += " class=";
+		source += (a_sourceClass ? a_sourceClass : "unknown");
+		source += " layout=";
+		source += (a_sourceLayout ? a_sourceLayout : "unknown");
+		source += ")";
+		return source;
+	}
+
 	bool IsTrackedVRMenuLayerTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
 		return a_target == RE::RENDER_TARGETS::kMENUBG ||
@@ -1617,6 +1689,170 @@ namespace
 	}
 
 	constexpr bool kVRMenuSceneDeltaCompositeRuntimeEnabled = false;
+
+	void LogVRMenuBgWriterDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_passName,
+		const char* a_phase,
+		bool a_knownMenu,
+		bool a_vrMenuPresentation,
+		bool a_communityShadersMenu,
+		bool a_renderScaleActive,
+		bool a_presentationUpscaling,
+		bool a_textRasterContext,
+		uint32_t a_screenWidth,
+		uint32_t a_screenHeight,
+		uint32_t a_engineWidth,
+		uint32_t a_engineHeight,
+		uint32_t a_finalWidth,
+		uint32_t a_finalHeight)
+	{
+		if (!globals::game::isVR || !a_context)
+			return;
+
+		const bool targetContext =
+			a_renderScaleActive &&
+			a_presentationUpscaling;
+		const bool allowDiagnostic =
+			!a_communityShadersMenu &&
+			(a_knownMenu || a_vrMenuPresentation || targetContext || a_textRasterContext);
+		if (!allowDiagnostic)
+			return;
+
+		ID3D11RenderTargetView* rtv = nullptr;
+		a_context->OMGetRenderTargets(1, &rtv, nullptr);
+		if (!rtv)
+			return;
+		auto rtvRelease = ScopeExit([&]() {
+			rtv->Release();
+		});
+
+		VRMenuCompositionTargetMatch destination{};
+		if (!TryResolveVRMenuCompositionView(rtv, destination) ||
+			destination.target != RE::RENDER_TARGETS::kMENUBG) {
+			return;
+		}
+
+		std::array<ID3D11ShaderResourceView*, 8> srvs{};
+		a_context->PSGetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
+		auto srvRelease = ScopeExit([&]() {
+			for (auto* srv : srvs) {
+				if (srv)
+					srv->Release();
+			}
+		});
+
+		uint64_t signature = 1469598103934665603ull;
+		const auto mixValue = [&](uint64_t a_value) {
+			signature ^= a_value;
+			signature *= 1099511628211ull;
+		};
+		const auto classifyExtent = [&](uint32_t a_width, uint32_t a_height) {
+			return ClassifyVRMenuExtent(
+				a_width,
+				a_height,
+				a_screenWidth,
+				a_screenHeight,
+				a_engineWidth,
+				a_engineHeight,
+				a_finalWidth,
+				a_finalHeight);
+		};
+
+		const char* passName = a_passName ? a_passName : "-";
+		const char* phaseName = a_phase ? a_phase : "-";
+		MixVRMenuOriginalCompositeTextSignature(signature, passName);
+		MixVRMenuOriginalCompositeTextSignature(signature, phaseName);
+		MixVRMenuCompositionTargetSignature(signature, destination);
+		mixValue(a_knownMenu ? 1ull : 0ull);
+		mixValue(a_vrMenuPresentation ? 1ull : 0ull);
+		mixValue(a_renderScaleActive ? 1ull : 0ull);
+		mixValue(a_presentationUpscaling ? 1ull : 0ull);
+		mixValue(a_textRasterContext ? 1ull : 0ull);
+		mixValue(a_screenWidth);
+		mixValue(a_screenHeight);
+		mixValue(a_engineWidth);
+		mixValue(a_engineHeight);
+		mixValue(a_finalWidth);
+		mixValue(a_finalHeight);
+
+		std::string sources;
+		for (size_t slot = 0; slot < srvs.size(); ++slot) {
+			VRMenuCompositionTargetMatch source{};
+			if (!TryResolveVRMenuCompositionView(srvs[slot], source))
+				continue;
+
+			const char* sourceClass = classifyExtent(source.width, source.height);
+			const char* sourceLayout = ClassifyVRMenuEyeLayout(source.target, source.width, source.height);
+			if (!sources.empty())
+				sources += ", ";
+			sources += FormatVRMenuCompositionSource(slot, source, sourceClass, sourceLayout, true);
+
+			mixValue(static_cast<uint64_t>(slot + 1));
+			MixVRMenuCompositionTargetSignature(signature, source);
+		}
+
+		if (sources.empty())
+			sources = "-";
+		MixVRMenuOriginalCompositeTextSignature(signature, sources);
+
+		static std::atomic<uint64_t> lastLoggedSignature{ 0 };
+		static std::atomic<uint32_t> detailedCaptureCount{ 0 };
+		const bool captureDetail =
+			targetContext &&
+			detailedCaptureCount.load(std::memory_order_acquire) < 128;
+		std::string viewports = "-";
+		std::string scissors = "-";
+		std::string shaders = "-";
+		std::string vsCBs = "-";
+		std::string psCBs = "-";
+		std::string pipelineState = "-";
+		if (captureDetail) {
+			detailedCaptureCount.fetch_add(1, std::memory_order_acq_rel);
+			viewports = BuildVRMenuOriginalCompositeViewportDiagnostics(a_context, signature);
+			scissors = BuildVRMenuOriginalCompositeScissorDiagnostics(a_context, signature);
+			shaders = BuildVRMenuOriginalCompositeShaderDiagnostics(a_context, signature);
+			vsCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, true, signature);
+			psCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, false, signature);
+			pipelineState = BuildVRMenuOriginalCompositePipelineStateDiagnostics(a_context, signature);
+		}
+
+		if (lastLoggedSignature.exchange(signature, std::memory_order_acq_rel) == signature)
+			return;
+
+		const auto frame = globals::state ? globals::state->frameCount : 0;
+		const std::string destinationLabel = FormatVRMenuCompositionTargetLabel(destination);
+		logger::debug(
+			"[VRMenuBgWriter] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={} class={} layout={}) sources={} renderScaleActive={} presentationUpscaling={} knownMenu={} vrMenuPresentation={} textRasterCtx={} screen={}x{} engine={}x{} final={}x{} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
+			frame,
+			passName,
+			phaseName,
+			FormatVRMenuDiagnosticHex(signature),
+			destinationLabel,
+			destination.width,
+			destination.height,
+			static_cast<uint32_t>(destination.format),
+			classifyExtent(destination.width, destination.height),
+			ClassifyVRMenuEyeLayout(destination.target, destination.width, destination.height),
+			sources,
+			a_renderScaleActive ? "yes" : "no",
+			a_presentationUpscaling ? "yes" : "no",
+			a_knownMenu ? "yes" : "no",
+			a_vrMenuPresentation ? "yes" : "no",
+			a_textRasterContext ? "yes" : "no",
+			a_screenWidth,
+			a_screenHeight,
+			a_engineWidth,
+			a_engineHeight,
+			a_finalWidth,
+			a_finalHeight,
+			viewports,
+			scissors,
+			shaders,
+			vsCBs,
+			psCBs,
+			pipelineState);
+	}
 
 	void LogVRMenuOriginalCompositeCandidateDiagnostics(
 		ID3D11DeviceContext* a_context,
@@ -1677,16 +1913,6 @@ namespace
 				a_finalWidth,
 				a_finalHeight);
 		};
-		const auto looksLikeCombinedEyeExtent = [](uint32_t a_width, uint32_t a_height) {
-			return a_width > 0 && a_height > 0 && a_width >= ((a_height * 3) / 2);
-		};
-		const auto classifyEyeLayout = [&](RE::RENDER_TARGETS::RENDER_TARGET a_target, uint32_t a_width, uint32_t a_height) {
-			if (a_target == RE::RENDER_TARGETS::kPROJECTEDMENU)
-				return "single";
-			if (looksLikeCombinedEyeExtent(a_width, a_height))
-				return "combined-horizontal";
-			return "single";
-		};
 		mixSignature(static_cast<uint64_t>(destination.target));
 		mixSignature(destination.width);
 		mixSignature(destination.height);
@@ -1709,22 +1935,10 @@ namespace
 			}
 
 			const char* sourceClass = classifyExtent(source.width, source.height);
-			const char* sourceLayout = classifyEyeLayout(source.target, source.width, source.height);
+			const char* sourceLayout = ClassifyVRMenuEyeLayout(source.target, source.width, source.height);
 			if (!sources.empty())
 				sources += ", ";
-			sources += "t";
-			sources += std::to_string(slot);
-			sources += "=";
-			sources += source.name;
-			sources += "(";
-			sources += std::to_string(source.width);
-			sources += "x";
-			sources += std::to_string(source.height);
-			sources += " class=";
-			sources += sourceClass;
-			sources += " layout=";
-			sources += sourceLayout;
-			sources += ")";
+			sources += FormatVRMenuCompositionSource(slot, source, sourceClass, sourceLayout, false);
 
 			mixSignature(static_cast<uint64_t>(slot + 1));
 			mixSignature(static_cast<uint64_t>(source.target));
@@ -1841,16 +2055,16 @@ namespace
 			mixBakeTextSignature(a_phase);
 
 			if (lastLoggedBakeCandidateSignature.exchange(bakeSignature, std::memory_order_acq_rel) != bakeSignature) {
-				const char* destinationEyeLayout = classifyEyeLayout(destination.target, destination.width, destination.height);
-				const char* sourceEyeLayout = classifyEyeLayout(firstMenuLayerSource.target, firstMenuLayerSource.width, firstMenuLayerSource.height);
-				const char* finalEyeLayout = looksLikeCombinedEyeExtent(a_finalWidth, a_finalHeight) ? "combined-horizontal" : "single";
+				const char* destinationEyeLayout = ClassifyVRMenuEyeLayout(destination.target, destination.width, destination.height);
+				const char* sourceEyeLayout = ClassifyVRMenuEyeLayout(firstMenuLayerSource.target, firstMenuLayerSource.width, firstMenuLayerSource.height);
+				const char* finalEyeLayout = LooksLikeVRMenuCombinedEyeExtent(a_finalWidth, a_finalHeight) ? "combined-horizontal" : "single";
 				const bool destinationCombinedEyes =
 					destination.target != RE::RENDER_TARGETS::kPROJECTEDMENU &&
-					looksLikeCombinedEyeExtent(destination.width, destination.height);
+					LooksLikeVRMenuCombinedEyeExtent(destination.width, destination.height);
 				const bool sourceCombinedEyes =
 					firstMenuLayerSource.target != RE::RENDER_TARGETS::kPROJECTEDMENU &&
-					looksLikeCombinedEyeExtent(firstMenuLayerSource.width, firstMenuLayerSource.height);
-				const bool finalCombinedEyes = looksLikeCombinedEyeExtent(a_finalWidth, a_finalHeight);
+					LooksLikeVRMenuCombinedEyeExtent(firstMenuLayerSource.width, firstMenuLayerSource.height);
+				const bool finalCombinedEyes = LooksLikeVRMenuCombinedEyeExtent(a_finalWidth, a_finalHeight);
 				const uint32_t destinationEyeWidth = destinationCombinedEyes ? destination.width / 2 : destination.width;
 				const uint32_t sourceEyeWidth = sourceCombinedEyes ? firstMenuLayerSource.width / 2 : firstMenuLayerSource.width;
 				const uint32_t finalEyeWidth = finalCombinedEyes ? a_finalWidth / 2 : a_finalWidth;
@@ -5420,6 +5634,22 @@ namespace
 			a_snapshot.communityShadersMenu,
 			a_snapshot.renderScaleActive,
 			a_snapshot.presentationUpscalingActive,
+			a_snapshot.screenWidth,
+			a_snapshot.screenHeight,
+			a_snapshot.engineWidth,
+			a_snapshot.engineHeight,
+			a_snapshot.finalWidth,
+			a_snapshot.finalHeight);
+		LogVRMenuBgWriterDiagnostics(
+			context,
+			a_passName,
+			a_phase,
+			a_snapshot.knownMenu,
+			a_snapshot.vrMenuPresentation,
+			a_snapshot.communityShadersMenu,
+			a_snapshot.renderScaleActive,
+			a_snapshot.presentationUpscalingActive,
+			a_snapshot.menuTextRasterDiagnosticContext,
 			a_snapshot.screenWidth,
 			a_snapshot.screenHeight,
 			a_snapshot.engineWidth,

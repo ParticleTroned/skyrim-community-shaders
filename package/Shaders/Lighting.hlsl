@@ -1756,7 +1756,7 @@ struct WetnessDirectLightState
 WetnessDirectLightState CreateWetnessDirectLightState(
 	float3 wetnessNormal,
 	float3 worldNormal,
-	float3 viewDirection,
+	float3 directViewDirection,
 	float waterRoughnessSpecular,
 	WetReflectionParams wetReflectionParams,
 	float wetDirectSpecularScale,
@@ -1781,7 +1781,7 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	// Match the direct-lighting context normalization so the prepared wet params remain
 	// identical when shared across the directional light and both point-light loops.
 	float3 directViewDirFallback = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
-	float3 directViewDir = SafeNormalizeLighting(viewDirection, directViewDirFallback);
+	float3 directViewDir = SafeNormalizeLighting(directViewDirection, directViewDirFallback);
 	state.params = CreateWetnessDirectLightingParams(wetnessNormal, directViewDir, waterRoughnessSpecular, wetReflectionParamsDirect);
 	state.enabled = state.params.enabled;
 	return state;
@@ -3507,6 +3507,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetIndirectNormal = SafeNormalize3(lerp(wetIndirectNormal, vertexNormal, terrainWetIndirectNormalStability), wetnessNormal);
 	}
 #		endif
+	float wetnessDirectViewDirection = viewDirection;
+#		if defined(TRUE_PBR)
+	wetnessDirectViewDirection = refractedViewDirection;
+#		endif
 	WetReflectionParams wetReflectionParams = (WetReflectionParams)0;
 	WetnessDirectLightState wetDirectLightState = (WetnessDirectLightState)0;
 	const bool wetLightingVisible = wetnessEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
@@ -3528,7 +3532,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetDirectLightState = CreateWetnessDirectLightState(
 			wetnessNormal,
 			worldNormal.xyz,
-			viewDirection,
+			wetnessDirectViewDirection,
 			waterRoughnessSpecular,
 			wetReflectionParams,
 			wetDirectSpecularScale,

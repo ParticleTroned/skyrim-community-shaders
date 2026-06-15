@@ -290,7 +290,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return vr::VRCompositorError_None;
 				}
 
-				if (!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
+				if (!upscaling.IsVRNativeLayoutSubmitProtectedTexture(pTexture) &&
 					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {

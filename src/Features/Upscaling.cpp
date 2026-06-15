@@ -3826,10 +3826,15 @@ namespace
 		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
 	}
 
-	bool IsVRMenuUIFullResolutionContextActive()
+	bool IsVRProjectedMenuDrawFullResolutionContextActive(const Upscaling& a_upscaling)
 	{
 		if (!globals::game::isVR ||
+			!a_upscaling.IsVRRenderScaleModeActive() ||
+			!a_upscaling.IsPresentationUpscalingActive() ||
+			!IsVendorUpscalingMethod(a_upscaling.GetRuntimeUpscaleMethod()) ||
+			a_upscaling.GetRuntimeQualityMode() == 0 ||
 			!IsVRMenuPresentationContextActive() ||
+			!IsKnownGameMenuContextActive() ||
 			IsCommunityShadersMenuOpen() ||
 			IsMainOrLoadingMenuContextActive() ||
 			IsSaveLoadTransitionContextActive()) {
@@ -3848,6 +3853,24 @@ namespace
 		}
 
 		return true;
+	}
+
+	bool IsDiagnosticUnitScale(float a_value)
+	{
+		return a_value > 0.9999f && a_value < 1.0001f;
+	}
+
+	void PrepareVRProjectedMenuFullResolutionDrawState(Upscaling& a_upscaling)
+	{
+		a_upscaling.resolutionScale = { 1.0f, 1.0f };
+		a_upscaling.jitter = { 0.0f, 0.0f };
+
+		if (auto viewport = globals::game::graphicsState) {
+			viewport->projectionPosScaleX = 0.0f;
+			viewport->projectionPosScaleY = 0.0f;
+		}
+
+		a_upscaling.PrepareFullResolutionPostProcessing();
 	}
 
 	bool IsVRSceneFeatureMenuPauseContextActive()
@@ -4847,6 +4870,13 @@ namespace
 			a_snapshot.previousDynamicWidthRatio = runtimeData.dynamicResolutionPreviousWidthRatio;
 			a_snapshot.previousDynamicHeightRatio = runtimeData.dynamicResolutionPreviousHeightRatio;
 			a_snapshot.dynamicResolutionLock = runtimeData.dynamicResolutionLock != 0;
+			a_snapshot.fullResolutionMenuUIDraw =
+				a_snapshot.menuTextRasterDiagnosticContext &&
+				a_snapshot.dynamicResolutionLock &&
+				IsDiagnosticUnitScale(a_snapshot.dynamicWidthRatio) &&
+				IsDiagnosticUnitScale(a_snapshot.dynamicHeightRatio) &&
+				IsDiagnosticUnitScale(a_snapshot.previousDynamicWidthRatio) &&
+				IsDiagnosticUnitScale(a_snapshot.previousDynamicHeightRatio);
 		}
 
 		ID3D11ShaderResourceView* psSRVs[4] = {};
@@ -16893,6 +16923,9 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-PostDisplay",
 			false);
 	}
+	const bool forceFullResolutionMenuDraw = IsVRProjectedMenuDrawFullResolutionContextActive(upscaling);
+	if (forceFullResolutionMenuDraw)
+		PrepareVRProjectedMenuFullResolutionDrawState(upscaling);
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,
@@ -16922,6 +16955,8 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-menu-draw",
 			false);
 	}
+	if (forceFullResolutionMenuDraw)
+		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 }
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
@@ -16949,7 +16984,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
 	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
-	const bool vrMenuUIFullResolutionContextActive = IsVRMenuUIFullResolutionContextActive();
 	const bool menuPresentationContext =
 		vendorMethodSelected &&
 		globals::game::isVR &&
@@ -17057,17 +17091,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				"[Upscaling] Submit-stage underwater mask refresh threw; skipping mask refresh");
 		}
 
-		if (vrMenuUIFullResolutionContextActive)
-			upscaling.PrepareFullResolutionPostProcessing();
-
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
-		if (vrMenuUIFullResolutionContextActive)
-			upscaling.PrepareFullResolutionPostProcessing();
-		else
-			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		return;
 	}
 

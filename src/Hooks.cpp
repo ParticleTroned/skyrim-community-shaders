@@ -569,11 +569,6 @@ struct BSShaderRenderTargets_Create
 	{
 		switch (a_target) {
 		case RE::RENDER_TARGETS::kMENUBG:
-		case RE::RENDER_TARGETS::kPROJECTEDMENU:
-		case RE::RENDER_TARGETS::kHUDMENU:
-		case RE::RENDER_TARGETS::kFADERUI:
-		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
-		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
 			return true;
 		default:
 			return false;

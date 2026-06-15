@@ -996,7 +996,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	include "Common/LightingEval.hlsli"
 
 #	if defined(WETNESS_EFFECTS)
-#		define CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, lightContext, wetRoughness, lightOutput) EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, lightOutput)
 #		define CS_GET_WETNESS_INDIRECT(lobeWeights, wetnessNormal, wetRoughness, indirectContext) GetWetnessIndirectLobeWeights(lobeWeights, wetnessNormal, wetRoughness, indirectContext)
 #	endif
 
@@ -1084,6 +1083,123 @@ void ApplyVRLightingAuxiliaryOutputWeight(inout DirectLightingOutput lightingOut
 #endif
 #endif  // defined(VR)
 }
+
+#if defined(WETTERNESS) && (!(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM))
+void ApplyWetnessDarkening(
+	inout MaterialProperties material,
+	inout float porosity,
+	float3 viewPosition,
+	float envMask,
+	bool wetnessEnabled,
+	float shoreWetnessDarkeningMask,
+	float wetSurfaceDarkeningMask,
+	float rainDarkeningAbsorption,
+	float shoreDarkeningAbsorption)
+{
+	// Persistent dry shoreline darkening uses the same shore wetness/range mask
+	// as legacy Wetness Effects, but remains available when rain runtime is dry.
+	float shorePersistentDarkeningMask = shoreWetnessDarkeningMask;
+	float shorePersistentDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.ShorePersistentDarkeningStrength);
+	shorePersistentDarkeningStrength = (shorePersistentDarkeningStrength < 1e-5) ? 0.0 : shorePersistentDarkeningStrength;
+	const bool shorePersistentDarkeningEnabled = shorePersistentDarkeningStrength > 1e-4 && shorePersistentDarkeningMask > 1e-4;
+	[branch] if (wetnessEnabled || shorePersistentDarkeningEnabled) {
+#	if defined(TRUE_PBR)
+#		if !defined(LANDSCAPE)
+		[branch] if ((PBRFlags & PBR::Flags::TwoLayer) != 0)
+		{
+			porosity = 0;
+		}
+		else
+#		endif
+		{
+			porosity = lerp(porosity, 0.0, saturate(sqrt(material.Metallic)));
+		}
+#	elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
+		porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
+#	endif
+		float wetDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.WetDarkeningStrength);
+		float lodSafeWetDarkeningFade = 1.0;
+		float viewDistance = abs(viewPosition.z);
+		lodSafeWetDarkeningFade = 1.0 - smoothstep(4096.0, 12288.0, viewDistance);
+		wetDarkeningStrength *= lerp(0.65, 1.0, lodSafeWetDarkeningFade);
+		float rainDrivenWetness = wetSurfaceDarkeningMask;
+		float wetnessDarkeningAmount = porosity * rainDarkeningAbsorption * rainDrivenWetness * wetDarkeningStrength;
+		float rainWetVisualMask = smoothstep(0.02, 0.08, rainDrivenWetness);
+		float wetDarkeningBlend = saturate(0.8 * wetDarkeningStrength) * rainWetVisualMask;
+		wetDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
+		if (wetDarkeningBlend > 0.0 && (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
+			float3 wetDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount);
+			material.BaseColor = lerp(material.BaseColor, wetDarkenedBaseColor, wetDarkeningBlend);
+		}
+#	if !defined(SKIN) && !defined(HAIR)
+		[branch] if (shorePersistentDarkeningEnabled) {
+			float shoreDarkeningMask = shorePersistentDarkeningMask;
+			float shoreDarkeningAmount = porosity * shoreDarkeningAbsorption * shoreDarkeningMask * shorePersistentDarkeningStrength;
+			float shoreDarkeningBlend = saturate(0.5 * shorePersistentDarkeningStrength) * shoreDarkeningMask;
+			shoreDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
+			if (shoreDarkeningBlend > 0.0 && (shoreDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
+				float3 shoreDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + shoreDarkeningAmount);
+				material.BaseColor = lerp(material.BaseColor, shoreDarkenedBaseColor, shoreDarkeningBlend);
+			}
+		}
+#	endif
+	}
+}
+#endif
+
+#if defined(WETTERNESS) && defined(DEFERRED)
+void ApplyWetnessDeferredOutput(
+	inout IndirectLobeWeights indirectLobeWeights,
+	inout MaterialProperties material,
+	inout float3 screenSpaceNormal,
+	float wetRainCubemapSuppression,
+	float wetnessGlossinessSpecular,
+	float3 wetnessReflectance,
+	float waterRoughnessSpecular,
+	float3 wetIndirectNormal,
+	uint eyeIndex)
+{
+	// Match rain-time indirect cubemap suppression in the deferred output. Without
+	// this, the flattened wet normal/low roughness can still make the base material
+	// reflect temporal sky cubemaps even after the explicit Wetterness lobe is muted.
+	float wetDeferredCubemapScale = 1.0 - saturate(wetRainCubemapSuppression);
+	float wetDeferredBlend = saturate(wetnessGlossinessSpecular * wetDeferredCubemapScale);
+	indirectLobeWeights.specular *= lerp(1.0, wetDeferredCubemapScale, saturate(wetnessGlossinessSpecular));
+	indirectLobeWeights.specular += wetnessReflectance;
+	if (waterRoughnessSpecular < 1) {
+		float3 wetScreenSpaceNormal = SafeNormalize3(FrameBuffer::WorldToView(wetIndirectNormal, false, eyeIndex), screenSpaceNormal);
+		screenSpaceNormal = lerp(screenSpaceNormal, wetScreenSpaceNormal, wetDeferredBlend);
+		material.Roughness = lerp(material.Roughness, waterRoughnessSpecular, wetDeferredBlend);
+	}
+}
+#endif
+
+#if defined(WETTERNESS)
+void ApplyWetnessDirectLightingOutput(
+	inout DirectLightingOutput lightingOutput,
+	float3 wetnessNormal,
+	DirectContext lightContext,
+	float wetRoughness,
+	WetnessDirectLightingParams wetDirectLightingParams,
+	float detailWeight)
+{
+	DirectLightingOutput baseLightingOutput = lightingOutput;
+	EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, wetDirectLightingParams, lightingOutput);
+	ApplyVRLightingAuxiliaryOutputWeight(lightingOutput, baseLightingOutput, detailWeight);
+}
+#elif defined(WETNESS_EFFECTS)
+void ApplyWetnessDirectLightingOutput(
+	inout DirectLightingOutput lightingOutput,
+	float3 wetnessNormal,
+	DirectContext lightContext,
+	float wetRoughness,
+	float detailWeight)
+{
+	DirectLightingOutput baseLightingOutput = lightingOutput;
+	EvaluateWetnessLighting(wetnessNormal, lightContext, wetRoughness, lightingOutput);
+	ApplyVRLightingAuxiliaryOutputWeight(lightingOutput, baseLightingOutput, detailWeight);
+}
+#endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
@@ -3312,15 +3428,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 #	if defined(WETTERNESS)
 	if (wetDirectLightingVisible) {
-		DirectLightingOutput baseDirLightOutput = dirLightOutput;
-		EvaluateWetnessLighting(wetnessNormal, dirLightContext, waterRoughnessSpecular, wetDirectLightingParams, dirLightOutput);
-		ApplyVRLightingAuxiliaryOutputWeight(dirLightOutput, baseDirLightOutput, vrWetnessDirectDetailWeight);
+		ApplyWetnessDirectLightingOutput(dirLightOutput, wetnessNormal, dirLightContext, waterRoughnessSpecular, wetDirectLightingParams, vrWetnessDirectDetailWeight);
 	}
 #	elif defined(WETNESS_EFFECTS)
 	if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
-		DirectLightingOutput baseDirLightOutput = dirLightOutput;
-		CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, dirLightContext, waterRoughnessSpecular, dirLightOutput);
-		ApplyVRLightingAuxiliaryOutputWeight(dirLightOutput, baseDirLightOutput, vrAuxDetailWeight);
+		ApplyWetnessDirectLightingOutput(dirLightOutput, wetnessNormal, dirLightContext, waterRoughnessSpecular, vrAuxDetailWeight);
 	}
 #	endif
 
@@ -3393,15 +3505,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 #			if defined(WETTERNESS)
 		if (wetDirectLightingVisible) {
-			DirectLightingOutput basePointLightOutput = pointLightOutput;
-			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
-			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrWetnessDirectDetailWeight);
+			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, vrWetnessDirectDetailWeight);
 		}
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
-			DirectLightingOutput basePointLightOutput = pointLightOutput;
-			CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
-			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, vrAuxDetailWeight);
 		}
 #			endif
 		lightsDiffuseColor += pointLightOutput.diffuse;
@@ -3588,15 +3696,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 #			if defined(WETTERNESS)
 		if (wetDirectLightingVisible) {
-			DirectLightingOutput basePointLightOutput = pointLightOutput;
-			EvaluateWetnessLighting(wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, pointLightOutput);
-			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrWetnessDirectDetailWeight);
+			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, wetDirectLightingParams, vrWetnessDirectDetailWeight);
 		}
 #			elif defined(WETNESS_EFFECTS)
 		if (waterRoughnessSpecular < 1 && vrAuxDetailEnabled) {
-			DirectLightingOutput basePointLightOutput = pointLightOutput;
-			CS_EVALUATE_WETNESS_LIGHTING(wetnessNormal, pointLightContext, waterRoughnessSpecular, pointLightOutput);
-			ApplyVRLightingAuxiliaryOutputWeight(pointLightOutput, basePointLightOutput, vrAuxDetailWeight);
+			ApplyWetnessDirectLightingOutput(pointLightOutput, wetnessNormal, pointLightContext, waterRoughnessSpecular, vrAuxDetailWeight);
 		}
 #			endif
 
@@ -3748,54 +3852,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(WETTERNESS)
 #		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
-	// Persistent dry shoreline darkening uses the same shore wetness/range mask
-	// as legacy Wetness Effects, but remains available when rain runtime is dry.
-	float shorePersistentDarkeningMask = shoreWetnessDarkeningMask;
-	float shorePersistentDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.ShorePersistentDarkeningStrength);
-	shorePersistentDarkeningStrength = (shorePersistentDarkeningStrength < 1e-5) ? 0.0 : shorePersistentDarkeningStrength;
-	const bool shorePersistentDarkeningEnabled = shorePersistentDarkeningStrength > 1e-4 && shorePersistentDarkeningMask > 1e-4;
-	[branch] if (wetnessEnabled || shorePersistentDarkeningEnabled) {
-#			if defined(TRUE_PBR)
-#				if !defined(LANDSCAPE)
-	[branch] if ((PBRFlags & PBR::Flags::TwoLayer) != 0)
-	{
-		porosity = 0;
-	}
-	else
-#				endif
-	{
-		porosity = lerp(porosity, 0.0, saturate(sqrt(material.Metallic)));
-	}
-#			elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
-	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
+	float wetDarkeningEnvMask = 0.0;
+#			if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
+	wetDarkeningEnvMask = envMask;
 #			endif
-	float wetDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.WetDarkeningStrength);
-	float lodSafeWetDarkeningFade = 1.0;
-	float viewDistance = abs(viewPosition.z);
-	lodSafeWetDarkeningFade = 1.0 - smoothstep(4096.0, 12288.0, viewDistance);
-	wetDarkeningStrength *= lerp(0.65, 1.0, lodSafeWetDarkeningFade);
-	float rainDrivenWetness = wetSurfaceDarkeningMask;
-	float wetnessDarkeningAmount = porosity * rainDarkeningAbsorption * rainDrivenWetness * wetDarkeningStrength;
-	float rainWetVisualMask = smoothstep(0.02, 0.08, rainDrivenWetness);
-	float wetDarkeningBlend = saturate(0.8 * wetDarkeningStrength) * rainWetVisualMask;
-	wetDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
-	if (wetDarkeningBlend > 0.0 && (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
-		float3 wetDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount);
-		material.BaseColor = lerp(material.BaseColor, wetDarkenedBaseColor, wetDarkeningBlend);
-	}
-#			if !defined(SKIN) && !defined(HAIR)
-	[branch] if (shorePersistentDarkeningEnabled) {
-		float shoreDarkeningMask = shorePersistentDarkeningMask;
-		float shoreDarkeningAmount = porosity * shoreDarkeningAbsorption * shoreDarkeningMask * shorePersistentDarkeningStrength;
-		float shoreDarkeningBlend = saturate(0.5 * shorePersistentDarkeningStrength) * shoreDarkeningMask;
-		shoreDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
-		if (shoreDarkeningBlend > 0.0 && (shoreDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
-			float3 shoreDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + shoreDarkeningAmount);
-			material.BaseColor = lerp(material.BaseColor, shoreDarkenedBaseColor, shoreDarkeningBlend);
-		}
-	}
-#			endif
-	}
+	ApplyWetnessDarkening(
+		material,
+		porosity,
+		viewPosition,
+		wetDarkeningEnvMask,
+		wetnessEnabled,
+		shoreWetnessDarkeningMask,
+		wetSurfaceDarkeningMask,
+		rainDarkeningAbsorption,
+		shoreDarkeningAbsorption);
 #		endif
 #	elif defined(WETNESS_EFFECTS)
 #		if !(defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)) || defined(TREE_ANIM)
@@ -4203,18 +4273,16 @@ if (alpha - AlphaTestRefRS < 0) {
 	psout.Albedo = float4(outputAlbedo, psout.Diffuse.w);
 
 #		if defined(WETTERNESS)
-	// Match rain-time indirect cubemap suppression in the deferred output. Without
-	// this, the flattened wet normal/low roughness can still make the base material
-	// reflect temporal sky cubemaps even after the explicit Wetterness lobe is muted.
-	float wetDeferredCubemapScale = 1.0 - saturate(wetRainCubemapSuppression);
-	float wetDeferredBlend = saturate(wetnessGlossinessSpecular * wetDeferredCubemapScale);
-	indirectLobeWeights.specular *= lerp(1.0, wetDeferredCubemapScale, saturate(wetnessGlossinessSpecular));
-	indirectLobeWeights.specular += wetnessReflectance;
-	if (waterRoughnessSpecular < 1) {
-		float3 wetScreenSpaceNormal = SafeNormalize3(FrameBuffer::WorldToView(wetIndirectNormal, false, eyeIndex), screenSpaceNormal);
-		screenSpaceNormal = lerp(screenSpaceNormal, wetScreenSpaceNormal, wetDeferredBlend);
-		material.Roughness = lerp(material.Roughness, waterRoughnessSpecular, wetDeferredBlend);
-	}
+	ApplyWetnessDeferredOutput(
+		indirectLobeWeights,
+		material,
+		screenSpaceNormal,
+		wetRainCubemapSuppression,
+		wetnessGlossinessSpecular,
+		wetnessReflectance,
+		waterRoughnessSpecular,
+		wetIndirectNormal,
+		eyeIndex);
 #		elif defined(WETNESS_EFFECTS)
 	indirectLobeWeights.specular += wetnessReflectance;
 	if (waterRoughnessSpecular < 1) {

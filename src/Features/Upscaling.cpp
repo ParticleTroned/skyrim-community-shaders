@@ -14598,6 +14598,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		submitMenuPresentationContext &&
 		sourceRegion.matchesExpectedSize &&
 		(a_inputBounds || sourceHasPerEyeLayout);
+	const bool knownGameMenuSpatialPresentationContext =
+		vrRenderScaleMode &&
+		!presentationRenderTarget &&
+		IsVRKnownGameMenuLayerSeparationContextActive(*this) &&
+		sourceRegion.matchesExpectedSize &&
+		(a_inputBounds || sourceHasPerEyeLayout);
 	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
 	bool transitionPresentationCooldown =
 		vendorResumeFrame != 0 &&
@@ -14608,7 +14614,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	auto computePresentationOnly = [&]() {
 		const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
 		return vrRenderScaleMode &&
-		       (submitPresentationContext || transitionPresentationOnly || submitBoundsPresentationFallback) &&
+		       (submitPresentationContext || transitionPresentationOnly || submitBoundsPresentationFallback || knownGameMenuSpatialPresentationContext) &&
 		       !vrRenderScaleMenuCanUseVendor;
 	};
 	bool presentationOnly =
@@ -14702,7 +14708,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		presentationOnly &&
 		(sourceDesc.Width < sourceEyeWidthIn || sourceDesc.Height < sourceEyeHeightIn);
 	const std::string submitResolvePhase = std::format(
-		"resolve:eye={} menu={} textMenu={} submitMenu={} submitPresentation={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={}",
+		"resolve:eye={} menu={} textMenu={} submitMenu={} submitPresentation={} presentationRT={} presentationOnly={} boundsFallback={} spatialMenu={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={}",
 		VREyeName(a_eye),
 		BoolText(menuPresentationContext),
 		BoolText(menuTextProtectionContext),
@@ -14711,6 +14717,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		BoolText(presentationRenderTarget),
 		BoolText(presentationOnly),
 		BoolText(submitBoundsPresentationFallback),
+		BoolText(knownGameMenuSpatialPresentationContext),
 		BoolText(vrRenderScaleMenuCanUseVendor),
 		BoolText(foveatedRequested),
 		BoolText(transitionPresentationCooldown),
@@ -14743,7 +14750,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	if (presentationOnly) {
-		const char* presentationContext = submitBoundsPresentationFallback ? "Submit bounds presentation fallback" : "Menu/loading presentation";
+		const char* presentationContext = submitBoundsPresentationFallback ? "Submit bounds presentation fallback" :
+			(knownGameMenuSpatialPresentationContext ? "Known game menu spatial presentation" : "Menu/loading presentation");
 		try {
 			if (!EnsureVRPresentationTextures(presentationInputWidth, presentationInputHeight, eyeWidthOut, eyeHeightOut, sourceTexture)) {
 				logger::warn("[VRRenderScale] {} failed to create presentation textures.", presentationContext);
@@ -14905,11 +14913,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	};
 
 	if (presentationOnly) {
+		const char* presentationPath =
+			submitBoundsPresentationFallback ? "submit-bounds-stretch-output" :
+			(transitionPresentationOnly ? "transition-presentation-output" :
+				(knownGameMenuSpatialPresentationContext ? "known-menu-spatial-presentation-output" : "menu-loading-presentation-output"));
 		return presentStretchOutput(
 			presentationInputWidth,
 			presentationInputHeight,
-			submitBoundsPresentationFallback ? "submit-bounds-stretch-output" :
-			                                   (transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output"));
+			presentationPath);
 	}
 
 	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;

@@ -1264,6 +1264,31 @@ namespace
 		}
 	}
 
+	std::string GetD3DDebugObjectName(ID3D11DeviceChild* a_object);
+	bool TryHashD3DBufferContents(ID3D11Buffer* a_buffer, const D3D11_BUFFER_DESC& a_desc, uint64_t& a_hash);
+
+	std::string FormatVRMenuDiagnosticHex(uint64_t a_value)
+	{
+		constexpr char kHexDigits[] = "0123456789ABCDEF";
+
+		std::string result = "0x";
+		bool started = false;
+		for (int shift = 60; shift >= 0; shift -= 4) {
+			const auto digit = static_cast<uint8_t>((a_value >> shift) & 0xFull);
+			if (digit != 0 || started || shift == 0) {
+				started = true;
+				result += kHexDigits[digit];
+			}
+		}
+		return result;
+	}
+
+	template <class T>
+	std::string FormatVRMenuDiagnosticPointer(T* a_pointer)
+	{
+		return FormatVRMenuDiagnosticHex(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(a_pointer)));
+	}
+
 	struct VRMenuCompositionTargetMatch
 	{
 		bool matched = false;
@@ -1329,6 +1354,226 @@ namespace
 		}
 
 		return false;
+	}
+
+	void MixVRMenuOriginalCompositeTextSignature(uint64_t& a_signature, const std::string& a_text)
+	{
+		for (const auto ch : a_text) {
+			a_signature ^= static_cast<uint8_t>(ch);
+			a_signature *= 1099511628211ull;
+		}
+	}
+
+	std::string BuildVRMenuOriginalCompositeViewportDiagnostics(ID3D11DeviceContext* a_context, uint64_t& a_signature)
+	{
+		if (!a_context)
+			return "-";
+
+		UINT viewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> viewports{};
+		a_context->RSGetViewports(&viewportCount, viewports.data());
+
+		std::string result = "count=" + std::to_string(viewportCount);
+		const auto loggedCount = std::min<size_t>(viewportCount, 4);
+		for (size_t i = 0; i < loggedCount; ++i) {
+			const auto& viewport = viewports[i];
+			result += " v";
+			result += std::to_string(i);
+			result += "=(";
+			result += std::to_string(viewport.TopLeftX);
+			result += ",";
+			result += std::to_string(viewport.TopLeftY);
+			result += " ";
+			result += std::to_string(viewport.Width);
+			result += "x";
+			result += std::to_string(viewport.Height);
+			result += " z=";
+			result += std::to_string(viewport.MinDepth);
+			result += "->";
+			result += std::to_string(viewport.MaxDepth);
+			result += ")";
+		}
+
+		MixVRMenuOriginalCompositeTextSignature(a_signature, result);
+		return result;
+	}
+
+	std::string BuildVRMenuOriginalCompositeScissorDiagnostics(ID3D11DeviceContext* a_context, uint64_t& a_signature)
+	{
+		if (!a_context)
+			return "-";
+
+		UINT scissorCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+		std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissors{};
+		a_context->RSGetScissorRects(&scissorCount, scissors.data());
+
+		std::string result = "count=" + std::to_string(scissorCount);
+		const auto loggedCount = std::min<size_t>(scissorCount, 4);
+		for (size_t i = 0; i < loggedCount; ++i) {
+			const auto& scissor = scissors[i];
+			result += " s";
+			result += std::to_string(i);
+			result += "=(";
+			result += std::to_string(scissor.left);
+			result += ",";
+			result += std::to_string(scissor.top);
+			result += ")->(";
+			result += std::to_string(scissor.right);
+			result += ",";
+			result += std::to_string(scissor.bottom);
+			result += ")";
+		}
+
+		MixVRMenuOriginalCompositeTextSignature(a_signature, result);
+		return result;
+	}
+
+	std::string BuildVRMenuOriginalCompositeShaderDiagnostics(ID3D11DeviceContext* a_context, uint64_t& a_signature)
+	{
+		if (!a_context)
+			return "-";
+
+		ID3D11VertexShader* vertexShader = nullptr;
+		ID3D11GeometryShader* geometryShader = nullptr;
+		ID3D11PixelShader* pixelShader = nullptr;
+		a_context->VSGetShader(&vertexShader, nullptr, nullptr);
+		a_context->GSGetShader(&geometryShader, nullptr, nullptr);
+		a_context->PSGetShader(&pixelShader, nullptr, nullptr);
+
+		const auto appendShader = [&](std::string& a_result, const char* a_label, ID3D11DeviceChild* a_shader) {
+			if (!a_result.empty())
+				a_result += " ";
+			a_result += a_label;
+			a_result += "=";
+			a_result += FormatVRMenuDiagnosticPointer(a_shader);
+			const auto debugName = GetD3DDebugObjectName(a_shader);
+			if (!debugName.empty()) {
+				a_result += "(";
+				a_result += debugName;
+				a_result += ")";
+			}
+		};
+
+		std::string result;
+		appendShader(result, "vs", vertexShader);
+		appendShader(result, "gs", geometryShader);
+		appendShader(result, "ps", pixelShader);
+
+		MixVRMenuOriginalCompositeTextSignature(a_signature, result);
+
+		if (vertexShader)
+			vertexShader->Release();
+		if (geometryShader)
+			geometryShader->Release();
+		if (pixelShader)
+			pixelShader->Release();
+
+		return result;
+	}
+
+	std::string BuildVRMenuOriginalCompositeCBDiagnostics(ID3D11DeviceContext* a_context, bool a_vertexStage, uint64_t& a_signature)
+	{
+		if (!a_context)
+			return "-";
+
+		std::array<ID3D11Buffer*, 4> buffers{};
+		if (a_vertexStage) {
+			a_context->VSGetConstantBuffers(0, static_cast<UINT>(buffers.size()), buffers.data());
+		} else {
+			a_context->PSGetConstantBuffers(0, static_cast<UINT>(buffers.size()), buffers.data());
+		}
+
+		std::string result;
+		for (size_t i = 0; i < buffers.size(); ++i) {
+			auto* buffer = buffers[i];
+			if (!buffer)
+				continue;
+
+			D3D11_BUFFER_DESC desc{};
+			buffer->GetDesc(&desc);
+
+			uint64_t hash = 0;
+			const bool hashValid = TryHashD3DBufferContents(buffer, desc, hash);
+
+			if (!result.empty())
+				result += " ";
+			result += "b";
+			result += std::to_string(i);
+			result += "=";
+			result += FormatVRMenuDiagnosticPointer(buffer);
+			result += "/";
+			result += std::to_string(desc.ByteWidth);
+			result += "/h=";
+			result += hashValid ? FormatVRMenuDiagnosticHex(hash) : "-";
+
+			a_signature ^= static_cast<uint64_t>(i + 1);
+			a_signature *= 1099511628211ull;
+			a_signature ^= static_cast<uint64_t>(desc.ByteWidth);
+			a_signature *= 1099511628211ull;
+			a_signature ^= hashValid ? hash : 0;
+			a_signature *= 1099511628211ull;
+		}
+
+		for (auto* buffer : buffers) {
+			if (buffer)
+				buffer->Release();
+		}
+
+		return result.empty() ? "-" : result;
+	}
+
+	std::string BuildVRMenuOriginalCompositePipelineStateDiagnostics(ID3D11DeviceContext* a_context, uint64_t& a_signature)
+	{
+		if (!a_context)
+			return "-";
+
+		D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+		a_context->IAGetPrimitiveTopology(&topology);
+
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4]{};
+		UINT sampleMask = 0xffffffffu;
+		a_context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
+
+		ID3D11DepthStencilState* depthStencilState = nullptr;
+		UINT stencilRef = 0;
+		a_context->OMGetDepthStencilState(&depthStencilState, &stencilRef);
+
+		ID3D11RasterizerState* rasterizerState = nullptr;
+		a_context->RSGetState(&rasterizerState);
+
+		std::string result;
+		result += "topology=";
+		result += std::to_string(static_cast<uint32_t>(topology));
+		result += " blend=";
+		result += FormatVRMenuDiagnosticPointer(blendState);
+		result += " blendFactor=(";
+		result += std::to_string(blendFactor[0]);
+		result += ",";
+		result += std::to_string(blendFactor[1]);
+		result += ",";
+		result += std::to_string(blendFactor[2]);
+		result += ",";
+		result += std::to_string(blendFactor[3]);
+		result += ") sampleMask=";
+		result += FormatVRMenuDiagnosticHex(sampleMask);
+		result += " depth=";
+		result += FormatVRMenuDiagnosticPointer(depthStencilState);
+		result += " stencilRef=";
+		result += std::to_string(stencilRef);
+		result += " raster=";
+		result += FormatVRMenuDiagnosticPointer(rasterizerState);
+
+		MixVRMenuOriginalCompositeTextSignature(a_signature, result);
+
+		if (blendState)
+			blendState->Release();
+		if (depthStencilState)
+			depthStencilState->Release();
+		if (rasterizerState)
+			rasterizerState->Release();
+
+		return result;
 	}
 
 	void LogVRMenuOriginalCompositeCandidateDiagnostics(
@@ -1410,21 +1655,52 @@ namespace
 			return;
 
 		static std::atomic<uint64_t> lastLoggedSignature{ 0 };
+		static std::atomic<uint32_t> detailedCaptureCount{ 0 };
+		const bool captureDetail =
+			a_renderScaleActive &&
+			a_presentationUpscaling &&
+			detailedCaptureCount.load(std::memory_order_acquire) < 96;
+		std::string viewports = "-";
+		std::string scissors = "-";
+		std::string shaders = "-";
+		std::string vsCBs = "-";
+		std::string psCBs = "-";
+		std::string pipelineState = "-";
+		if (captureDetail) {
+			detailedCaptureCount.fetch_add(1, std::memory_order_acq_rel);
+			viewports = BuildVRMenuOriginalCompositeViewportDiagnostics(a_context, signature);
+			scissors = BuildVRMenuOriginalCompositeScissorDiagnostics(a_context, signature);
+			shaders = BuildVRMenuOriginalCompositeShaderDiagnostics(a_context, signature);
+			vsCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, true, signature);
+			psCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, false, signature);
+			pipelineState = BuildVRMenuOriginalCompositePipelineStateDiagnostics(a_context, signature);
+		}
+
 		if (lastLoggedSignature.exchange(signature, std::memory_order_acq_rel) == signature)
 			return;
 
+		const auto frame = globals::state ? globals::state->frameCount : 0;
 		logger::debug(
-			"[VRMenuOriginalComposite] pass={} phase={} dst={}({}x{}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={}",
+			"[VRMenuOriginalComposite] frame={} pass={} phase={} signature={} dst={}({}x{} fmt={}) sources={} knownMenu={} vrMenuPresentation={} renderScaleActive={} presentationUpscaling={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={}",
+			frame,
 			a_passName ? a_passName : "-",
 			a_phase ? a_phase : "-",
+			FormatVRMenuDiagnosticHex(signature),
 			destination.name,
 			destination.width,
 			destination.height,
+			static_cast<uint32_t>(destination.format),
 			sources,
 			a_knownMenu ? "yes" : "no",
 			a_vrMenuPresentation ? "yes" : "no",
 			a_renderScaleActive ? "yes" : "no",
-			a_presentationUpscaling ? "yes" : "no");
+			a_presentationUpscaling ? "yes" : "no",
+			viewports,
+			scissors,
+			shaders,
+			vsCBs,
+			psCBs,
+			pipelineState);
 	}
 
 	float ClampFoveatedCenterScale(float value)

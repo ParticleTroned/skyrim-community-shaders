@@ -3200,7 +3200,7 @@ namespace
 		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
 	}
 
-	bool ShouldDrawVRRenderScaleMenuUIAtFullResolution()
+	bool ShouldProtectVRRenderScaleMenuGlyphPass()
 	{
 		if (!globals::game::isVR)
 			return false;
@@ -3211,6 +3211,20 @@ namespace
 		       upscaling.GetRuntimeQualityMode() > 0 &&
 		       IsVRSceneFeatureMenuPauseContextActive() &&
 		       !IsMainOrLoadingMenuContextActive();
+	}
+
+	template <class Fn>
+	void RunVRRenderScaleMenuGlyphPass(Upscaling& a_upscaling, Fn&& a_fn)
+	{
+		const bool protectMenuGlyphs = ShouldProtectVRRenderScaleMenuGlyphPass();
+		if (protectMenuGlyphs)
+			a_upscaling.PrepareFullResolutionPostProcessing();
+		auto restoreDynamicState = ScopeExit([&]() {
+			if (protectMenuGlyphs)
+				a_upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		});
+
+		a_fn();
 	}
 
 	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
@@ -15571,27 +15585,31 @@ void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceSha
 void Upscaling::TemporalAAUI_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
 {
 	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::TemporalAAUIRender,
-		"ISTemporalAA_UI",
-		"Render:before",
-		"Render:after",
-		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+	RunVRRenderScaleMenuGlyphPass(upscaling, [&]() {
+		LogVRPresentationAroundCall(
+			upscaling,
+			VRPresentationDiagnosticSlot::TemporalAAUIRender,
+			"ISTemporalAA_UI",
+			"Render:before",
+			"Render:after",
+			true,
+			[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+	});
 }
 
 void Upscaling::LightingCompositeMenu_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
 {
 	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::LightingCompositeMenuRender,
-		"ISLightingCompositeMenu",
-		"Render:before",
-		"Render:after",
-		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+	RunVRRenderScaleMenuGlyphPass(upscaling, [&]() {
+		LogVRPresentationAroundCall(
+			upscaling,
+			VRPresentationDiagnosticSlot::LightingCompositeMenuRender,
+			"ISLightingCompositeMenu",
+			"Render:before",
+			"Render:after",
+			true,
+			[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+	});
 }
 
 void Upscaling::UpsampleDynamicResolution_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
@@ -15634,27 +15652,31 @@ void Upscaling::HDRTonemapBlendCinematicFade_Dispatch::thunk(void* a_imageSpaceS
 void Upscaling::TemporalAAUI_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
 {
 	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::TemporalAAUIDispatch,
-		"ISTemporalAA_UI",
-		"Dispatch:before",
-		"Dispatch:after",
-		true,
-		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
+	RunVRRenderScaleMenuGlyphPass(upscaling, [&]() {
+		LogVRPresentationAroundCall(
+			upscaling,
+			VRPresentationDiagnosticSlot::TemporalAAUIDispatch,
+			"ISTemporalAA_UI",
+			"Dispatch:before",
+			"Dispatch:after",
+			true,
+			[&]() { func(a_imageSpaceShader, a1, a2, a3); });
+	});
 }
 
 void Upscaling::LightingCompositeMenu_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
 {
 	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::LightingCompositeMenuDispatch,
-		"ISLightingCompositeMenu",
-		"Dispatch:before",
-		"Dispatch:after",
-		true,
-		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
+	RunVRRenderScaleMenuGlyphPass(upscaling, [&]() {
+		LogVRPresentationAroundCall(
+			upscaling,
+			VRPresentationDiagnosticSlot::LightingCompositeMenuDispatch,
+			"ISLightingCompositeMenu",
+			"Dispatch:before",
+			"Dispatch:after",
+			true,
+			[&]() { func(a_imageSpaceShader, a1, a2, a3); });
+	});
 }
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
@@ -15686,10 +15708,6 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-PostDisplay",
 			false);
 	}
-	const bool fullResolutionMenuUIDraw = ShouldDrawVRRenderScaleMenuUIAtFullResolution();
-	if (fullResolutionMenuUIDraw)
-		upscaling.PrepareFullResolutionPostProcessing();
-
 	func(a1);
 
 	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
@@ -15710,8 +15728,6 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-menu-draw",
 			false);
 	}
-	if (fullResolutionMenuUIDraw)
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 }
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)

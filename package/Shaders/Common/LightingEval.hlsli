@@ -179,7 +179,6 @@ struct WetReflectionParams
 
 struct WetnessDirectLightingParams
 {
-	float enabled;
 	float wetnessF0;
 	float wetnessFScale;
 	float lightColorScale;
@@ -245,21 +244,11 @@ float GetWetnessBiasedNdotV(float3 wetnessNormal, float3 viewDir, float forwardB
 	return lerp(NdotV, biasedNdotV, forwardBiasAmount);
 }
 
-WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNormal, float3 viewDir, float roughness, WetReflectionParams reflectionParams)
+WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNormal, float3 viewDir, float wetnessStrength, WetReflectionParams reflectionParams)
 {
 	WetnessDirectLightingParams params = (WetnessDirectLightingParams)0;
-	const float wetnessStrength = saturate(1 - roughness);
-	if (wetnessStrength <= 0.0) {
-		return params;
-	}
-
-	if (!HasWetReflectionParams(reflectionParams)) {
-		return params;
-	}
-
 	float NdotV = GetWetnessBiasedNdotV(wetnessNormal, viewDir, reflectionParams.forwardBiasEnabled);
 
-	params.enabled = 1.0;
 	params.wetnessF0 = 0.02 * reflectionParams.modernWeight + wetnessStrength * reflectionParams.legacyWeight;
 	params.wetnessFScale = wetnessStrength * reflectionParams.effectiveScale;
 	params.lightColorScale = reflectionParams.modernWeight + reflectionParams.legacyWeight * 0.1;
@@ -276,10 +265,6 @@ WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNorm
 
 void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, WetnessDirectLightingParams params, inout DirectLightingOutput lightingOutput)
 {
-	if (params.enabled <= 0.0) {
-		return;
-	}
-
 #	if defined(TRUE_PBR)
 	float3 lightColor = context.coatLightColor;
 #	else

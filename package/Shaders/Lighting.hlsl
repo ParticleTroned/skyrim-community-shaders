@@ -1772,6 +1772,11 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 		return state;
 	}
 
+	const float wetnessStrength = saturate(1 - waterRoughnessSpecular);
+	if (wetnessStrength <= 0.0) {
+		return state;
+	}
+
 	WetReflectionParams wetReflectionParamsDirect = wetReflectionParams;
 	wetReflectionParamsDirect.effectiveScale *= wetDirectSpecularScale;
 	if (!HasWetReflectionParams(wetReflectionParamsDirect)) {
@@ -1782,8 +1787,8 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	// identical when shared across the directional light and both point-light loops.
 	float3 directViewDirFallback = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
 	float3 directViewDir = SafeNormalizeLighting(directViewDirection, directViewDirFallback);
-	state.params = CreateWetnessDirectLightingParams(wetnessNormal, directViewDir, waterRoughnessSpecular, wetReflectionParamsDirect);
-	state.enabled = state.params.enabled;
+	state.params = CreateWetnessDirectLightingParams(wetnessNormal, directViewDir, wetnessStrength, wetReflectionParamsDirect);
+	state.enabled = 1.0;
 	return state;
 }
 

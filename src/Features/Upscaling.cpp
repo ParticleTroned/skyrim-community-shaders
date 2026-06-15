@@ -4944,6 +4944,293 @@ namespace
 		}
 	}
 
+	struct VRKTotalFingerprint
+	{
+		bool valid = false;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+		uint64_t hash = 0;
+		uint32_t samples = 0;
+		ID3D11Texture2D* texture = nullptr;
+	};
+
+	uint32_t GetVRKTotalFingerprintBytesPerPixel(DXGI_FORMAT a_format)
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+			return 4;
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+		case DXGI_FORMAT_R16G16B16A16_SNORM:
+			return 8;
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			return 16;
+		default:
+			return 0;
+		}
+	}
+
+	uint64_t MixVRKTotalFingerprintByte(uint64_t a_hash, uint8_t a_value)
+	{
+		constexpr uint64_t kFnvPrime = 1099511628211ull;
+		return (a_hash ^ static_cast<uint64_t>(a_value)) * kFnvPrime;
+	}
+
+	bool CaptureVRKTotalFingerprint(ID3D11DeviceContext* a_context, VRKTotalFingerprint& a_fingerprint)
+	{
+		a_fingerprint = {};
+		auto renderer = globals::game::renderer;
+		auto device = globals::d3d::device;
+		if (!globals::game::isVR || !renderer || !device || !a_context)
+			return false;
+
+		auto& totalTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTOTAL];
+		if (!totalTarget.texture)
+			return false;
+
+		D3D11_TEXTURE2D_DESC totalDesc{};
+		totalTarget.texture->GetDesc(&totalDesc);
+		const uint32_t bytesPerPixel = GetVRKTotalFingerprintBytesPerPixel(totalDesc.Format);
+		if (bytesPerPixel == 0 || totalDesc.Width < 2 || totalDesc.Height < 2 || totalDesc.SampleDesc.Count != 1 || totalDesc.ArraySize != 1) {
+			static std::atomic_bool loggedUnsupportedFormat{ false };
+			if (!loggedUnsupportedFormat.exchange(true, std::memory_order_acq_rel)) {
+				logger::debug(
+					"[VRKTotalDiag] sparse fingerprint disabled for unsupported kTOTAL desc {}x{} fmt={} samples={} array={}",
+					totalDesc.Width,
+					totalDesc.Height,
+					static_cast<uint32_t>(totalDesc.Format),
+					totalDesc.SampleDesc.Count,
+					totalDesc.ArraySize);
+			}
+			return false;
+		}
+
+		constexpr uint32_t kGridX = 8;
+		constexpr uint32_t kGridY = 8;
+		constexpr uint32_t kBlock = 4;
+		constexpr uint32_t kAtlasWidth = kGridX * kBlock;
+		constexpr uint32_t kAtlasHeight = kGridY * kBlock;
+
+		struct StagingCache
+		{
+			winrt::com_ptr<ID3D11Texture2D> texture;
+			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+		};
+		static StagingCache staging;
+		if (!staging.texture || staging.format != totalDesc.Format) {
+			D3D11_TEXTURE2D_DESC stagingDesc{};
+			stagingDesc.Width = kAtlasWidth;
+			stagingDesc.Height = kAtlasHeight;
+			stagingDesc.MipLevels = 1;
+			stagingDesc.ArraySize = 1;
+			stagingDesc.Format = totalDesc.Format;
+			stagingDesc.SampleDesc.Count = 1;
+			stagingDesc.Usage = D3D11_USAGE_STAGING;
+			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+			winrt::com_ptr<ID3D11Texture2D> stagingTexture;
+			if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, stagingTexture.put())) || !stagingTexture) {
+				static std::atomic_bool loggedCreateFailure{ false };
+				if (!loggedCreateFailure.exchange(true, std::memory_order_acq_rel)) {
+					logger::warn("[VRKTotalDiag] failed to create sparse kTOTAL fingerprint staging texture fmt={}", static_cast<uint32_t>(totalDesc.Format));
+				}
+				return false;
+			}
+
+			staging.texture = std::move(stagingTexture);
+			staging.format = totalDesc.Format;
+		}
+
+		const uint32_t copyBlockWidth = std::min<uint32_t>(kBlock, totalDesc.Width);
+		const uint32_t copyBlockHeight = std::min<uint32_t>(kBlock, totalDesc.Height);
+		for (uint32_t y = 0; y < kGridY; ++y) {
+			const uint32_t srcY = (kGridY <= 1 || totalDesc.Height <= copyBlockHeight) ?
+				0 :
+				static_cast<uint32_t>((static_cast<uint64_t>(totalDesc.Height - copyBlockHeight) * y) / (kGridY - 1));
+			for (uint32_t x = 0; x < kGridX; ++x) {
+				const uint32_t srcX = (kGridX <= 1 || totalDesc.Width <= copyBlockWidth) ?
+					0 :
+					static_cast<uint32_t>((static_cast<uint64_t>(totalDesc.Width - copyBlockWidth) * x) / (kGridX - 1));
+				const D3D11_BOX sourceBox{
+					srcX,
+					srcY,
+					0,
+					srcX + copyBlockWidth,
+					srcY + copyBlockHeight,
+					1
+				};
+				a_context->CopySubresourceRegion(
+					staging.texture.get(),
+					0,
+					x * kBlock,
+					y * kBlock,
+					0,
+					totalTarget.texture,
+					0,
+					&sourceBox);
+			}
+		}
+
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(a_context->Map(staging.texture.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+			static std::atomic_bool loggedMapFailure{ false };
+			if (!loggedMapFailure.exchange(true, std::memory_order_acq_rel))
+				logger::warn("[VRKTotalDiag] failed to map sparse kTOTAL fingerprint staging texture");
+			return false;
+		}
+		auto unmapStaging = ScopeExit([&]() {
+			a_context->Unmap(staging.texture.get(), 0);
+		});
+
+		uint64_t hash = 1469598103934665603ull;
+		const uint32_t rowBytes = kAtlasWidth * bytesPerPixel;
+		for (uint32_t y = 0; y < kAtlasHeight; ++y) {
+			const auto* row = static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(mapped.RowPitch) * y;
+			for (uint32_t x = 0; x < rowBytes; ++x)
+				hash = MixVRKTotalFingerprintByte(hash, row[x]);
+		}
+
+		hash = MixVRTransitionDiagnosticValue(hash, totalDesc.Width);
+		hash = MixVRTransitionDiagnosticValue(hash, totalDesc.Height);
+		hash = MixVRTransitionDiagnosticValue(hash, static_cast<uint32_t>(totalDesc.Format));
+
+		a_fingerprint.valid = true;
+		a_fingerprint.width = totalDesc.Width;
+		a_fingerprint.height = totalDesc.Height;
+		a_fingerprint.format = totalDesc.Format;
+		a_fingerprint.hash = hash;
+		a_fingerprint.samples = kGridX * kGridY * copyBlockWidth * copyBlockHeight;
+		a_fingerprint.texture = totalTarget.texture;
+		return true;
+	}
+
+	void LogVRKTotalMutationDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_passName,
+		const char* a_phase,
+		const VRPresentationDiagnosticSnapshot& a_snapshot)
+	{
+		const bool relevant =
+			a_snapshot.renderScaleActive ||
+			a_snapshot.renderScaleRequested ||
+			a_snapshot.presentationUpscalingActive ||
+			a_snapshot.submitStageActive ||
+			a_snapshot.knownMenu ||
+			a_snapshot.vrMenuPresentation ||
+			a_snapshot.communityShadersMenu ||
+			a_snapshot.mainOrLoadingMenu ||
+			a_snapshot.saveLoad;
+		if (!relevant)
+			return;
+
+		VRKTotalFingerprint fingerprint{};
+		if (!CaptureVRKTotalFingerprint(a_context, fingerprint) || !fingerprint.valid)
+			return;
+
+		struct PreviousFingerprint
+		{
+			bool valid = false;
+			uint32_t frame = 0;
+			uint32_t width = 0;
+			uint32_t height = 0;
+			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+			uint64_t hash = 0;
+			ID3D11Texture2D* texture = nullptr;
+			std::string pass;
+			std::string phase;
+		};
+		static PreviousFingerprint previous;
+		static std::atomic<uint32_t> snapshotLogBudget{ 1200 };
+
+		const char* passName = DiagnosticText(a_passName, "-");
+		const char* phaseName = DiagnosticText(a_phase, "-");
+		const bool sameTarget =
+			previous.valid &&
+			previous.frame == a_snapshot.frame &&
+			previous.texture == fingerprint.texture &&
+			previous.width == fingerprint.width &&
+			previous.height == fingerprint.height &&
+			previous.format == fingerprint.format;
+		const bool changed = sameTarget && previous.hash != fingerprint.hash;
+
+		if (changed) {
+			logger::debug(
+				"[VRKTotalMutation] frame={} changed between {}:{} hash={} and {}:{} hash={} target={}x{} fmt={} samples={} renderScaleActive={} presentationUpscaling={} submitStage={} knownMenu={} vrMenuPresentation={} csMenu={} mainOrLoading={} saveLoad={} textRasterCtx={} fullResMenuDraw={} currentRTPresentation={}",
+				a_snapshot.frame,
+				previous.pass,
+				previous.phase,
+				FormatVRMenuDiagnosticHex(previous.hash),
+				passName,
+				phaseName,
+				FormatVRMenuDiagnosticHex(fingerprint.hash),
+				fingerprint.width,
+				fingerprint.height,
+				static_cast<uint32_t>(fingerprint.format),
+				fingerprint.samples,
+				a_snapshot.renderScaleActive ? "yes" : "no",
+				a_snapshot.presentationUpscalingActive ? "yes" : "no",
+				a_snapshot.submitStageActive ? "yes" : "no",
+				a_snapshot.knownMenu ? "yes" : "no",
+				a_snapshot.vrMenuPresentation ? "yes" : "no",
+				a_snapshot.communityShadersMenu ? "yes" : "no",
+				a_snapshot.mainOrLoadingMenu ? "yes" : "no",
+				a_snapshot.saveLoad ? "yes" : "no",
+				a_snapshot.menuTextRasterDiagnosticContext ? "yes" : "no",
+				a_snapshot.fullResolutionMenuUIDraw ? "yes" : "no",
+				a_snapshot.currentRTPresentation ? "yes" : "no");
+		}
+
+		uint32_t budget = snapshotLogBudget.load(std::memory_order_relaxed);
+		bool logSnapshot = changed || !sameTarget;
+		while (!logSnapshot && budget > 0) {
+			if (snapshotLogBudget.compare_exchange_weak(budget, budget - 1, std::memory_order_acq_rel)) {
+				logSnapshot = true;
+				break;
+			}
+		}
+		if (logSnapshot) {
+			logger::debug(
+				"[VRKTotalSnapshot] frame={} pass={} phase={} hash={} target={}x{} fmt={} samples={} sameTarget={} changed={} renderScaleActive={} presentationUpscaling={} submitStage={} knownMenu={} vrMenuPresentation={} csMenu={} mainOrLoading={} saveLoad={} textRasterCtx={} fullResMenuDraw={} currentRTPresentation={}",
+				a_snapshot.frame,
+				passName,
+				phaseName,
+				FormatVRMenuDiagnosticHex(fingerprint.hash),
+				fingerprint.width,
+				fingerprint.height,
+				static_cast<uint32_t>(fingerprint.format),
+				fingerprint.samples,
+				sameTarget ? "yes" : "no",
+				changed ? "yes" : "no",
+				a_snapshot.renderScaleActive ? "yes" : "no",
+				a_snapshot.presentationUpscalingActive ? "yes" : "no",
+				a_snapshot.submitStageActive ? "yes" : "no",
+				a_snapshot.knownMenu ? "yes" : "no",
+				a_snapshot.vrMenuPresentation ? "yes" : "no",
+				a_snapshot.communityShadersMenu ? "yes" : "no",
+				a_snapshot.mainOrLoadingMenu ? "yes" : "no",
+				a_snapshot.saveLoad ? "yes" : "no",
+				a_snapshot.menuTextRasterDiagnosticContext ? "yes" : "no",
+				a_snapshot.fullResolutionMenuUIDraw ? "yes" : "no",
+				a_snapshot.currentRTPresentation ? "yes" : "no");
+		}
+
+		previous.valid = true;
+		previous.frame = a_snapshot.frame;
+		previous.width = fingerprint.width;
+		previous.height = fingerprint.height;
+		previous.format = fingerprint.format;
+		previous.hash = fingerprint.hash;
+		previous.texture = fingerprint.texture;
+		previous.pass = passName;
+		previous.phase = phaseName;
+	}
+
 	bool BuildVRPresentationDiagnosticSnapshot(
 		const Upscaling& a_upscaling,
 		const char* a_passName,
@@ -5090,6 +5377,7 @@ namespace
 			a_snapshot.engineHeight,
 			a_snapshot.finalWidth,
 			a_snapshot.finalHeight);
+		LogVRKTotalMutationDiagnostics(context, a_passName, a_phase, a_snapshot);
 
 		a_snapshot.signature = BuildVRPresentationDiagnosticSignature(a_snapshot, a_passName, a_phase);
 		return true;

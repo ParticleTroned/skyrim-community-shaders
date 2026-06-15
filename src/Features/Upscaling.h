@@ -545,6 +545,8 @@ public:
 
 	winrt::com_ptr<ID3D11PixelShader> vrMenuCompositePS;
 	ID3D11PixelShader* GetVRMenuCompositePS();
+	winrt::com_ptr<ID3D11PixelShader> vrMenuSceneDeltaCompositePS;
+	ID3D11PixelShader* GetVRMenuSceneDeltaCompositePS();
 
 	winrt::com_ptr<ID3D11ComputeShader> foveatedPeripheryCS;
 	ID3D11ComputeShader* GetFoveatedPeripheryCS();
@@ -808,9 +810,20 @@ public:
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	bool submitStagePreparedFramePresentationOnly = false;
+	bool submitStagePreparedFrameCleanMenuScene = false;
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
+	eastl::unique_ptr<Texture2D> vrMenuCleanSceneAtMainPost;
+	eastl::unique_ptr<Texture2D> vrMenuBakedSceneAtSubmit;
+	std::array<eastl::unique_ptr<Texture2D>, 2> vrMenuSceneDeltaFinalSceneCopy;
+	uint32_t vrMenuSceneDeltaFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t vrMenuSceneDeltaWidth = 0;
+	uint32_t vrMenuSceneDeltaHeight = 0;
+	DXGI_FORMAT vrMenuSceneDeltaFormat = DXGI_FORMAT_UNKNOWN;
+	ID3D11Texture2D* vrMenuSceneDeltaSourceTexture = nullptr;
+	bool vrMenuSceneDeltaCleanReady = false;
+	bool vrMenuSceneDeltaBakedReady = false;
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	mutable std::atomic_bool submitStageRuntimeActive{ false };
@@ -861,6 +874,10 @@ public:
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool CompositeKnownGameMenuAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
+	void CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
+	bool ResolveVRMenuCleanSceneForSubmit(uint32_t frame, ID3D11Texture2D* sourceTexture, ID3D11Texture2D*& cleanSceneTexture);
+	bool CompositeVRMenuSceneDeltaAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthIn, uint32_t eyeHeightIn, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
+	void ResetVRMenuSceneDeltaState();
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();

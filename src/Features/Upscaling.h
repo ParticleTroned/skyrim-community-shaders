@@ -545,6 +545,8 @@ public:
 
 	winrt::com_ptr<ID3D11PixelShader> vrMenuCompositePS;
 	ID3D11PixelShader* GetVRMenuCompositePS();
+	winrt::com_ptr<ID3D11PixelShader> vrMenuBakeDeltaCompositePS;
+	ID3D11PixelShader* GetVRMenuBakeDeltaCompositePS();
 
 	winrt::com_ptr<ID3D11ComputeShader> foveatedPeripheryCS;
 	ID3D11ComputeShader* GetFoveatedPeripheryCS();
@@ -587,6 +589,16 @@ public:
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];  // per-eye render resolution
 	eastl::unique_ptr<Texture2D> submitStageDLSSSharpenerTexture[2]; // per-eye output resolution
+	eastl::unique_ptr<Texture2D> vrMenuBakeCleanScene;               // combined-eye kTOTAL before kMENUBG bake
+	eastl::unique_ptr<Texture2D> vrMenuBakeBakedScene;               // combined-eye kTOTAL after kMENUBG bake
+	eastl::unique_ptr<Texture2D> vrMenuBakeFinalSceneCopy[2];        // per-eye vendor output copy for safe post-composite sampling
+	uint32_t vrMenuBakeFrame = 0;
+	uint32_t vrMenuBakeWidth = 0;
+	uint32_t vrMenuBakeHeight = 0;
+	DXGI_FORMAT vrMenuBakeFormat = DXGI_FORMAT_UNKNOWN;
+	ID3D11Texture2D* vrMenuBakeSourceTexture = nullptr;
+	bool vrMenuBakeArmed = false;
+	bool vrMenuBakeReady = false;
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;
@@ -861,6 +873,11 @@ public:
 	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool CompositeKnownGameMenuAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
+	bool CaptureVRMenuBakeBefore(ID3D11DeviceContext* context);
+	void CaptureVRMenuBakeAfter(ID3D11DeviceContext* context, bool captureArmed);
+	bool ResolveVRMenuBakeCleanSceneSource(uint32_t frame, ID3D11Texture2D* sourceTexture, ID3D11Texture2D*& cleanSceneTexture) const;
+	bool CompositeCapturedVRMenuBakeAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthIn, uint32_t eyeHeightIn, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
+	bool EnsureVRMenuBakeTexture(eastl::unique_ptr<Texture2D>& texture, const D3D11_TEXTURE2D_DESC& sourceDesc, DXGI_FORMAT srvFormat, const char* name);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();
@@ -981,6 +998,7 @@ private:
 	void ClearHMDMaskForEye(HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0);
+	void ResetVRMenuBakeCaptureState();
 	struct VendorEyeDispatchParams
 	{
 		uint32_t eyeIndex = 0;

@@ -9,6 +9,7 @@
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BSRenderPass.h"
 #include "RE/B/BSShaderProperty.h"
+#include "RE/R/RenderTargetManager.h"
 #include "Features/RenderDoc.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -9752,6 +9753,310 @@ namespace
 		a_cache.outWidth = 0;
 		a_cache.outHeight = 0;
 	}
+
+	struct VRRenderScaleMenuTargetRepair
+	{
+		RE::RENDER_TARGETS::RENDER_TARGET target = RE::RENDER_TARGETS::kNONE;
+		const char* reason = "";
+		uint32_t oldWidth = 0;
+		uint32_t oldHeight = 0;
+		uint32_t newWidth = 0;
+		uint32_t newHeight = 0;
+		bool replace = false;
+		bool hasTextureCopy = false;
+		bool hasUAV = false;
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		winrt::com_ptr<ID3D11Texture2D> textureCopy;
+		winrt::com_ptr<ID3D11RenderTargetView> rtv;
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		winrt::com_ptr<ID3D11ShaderResourceView> srvCopy;
+		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+	};
+
+	const char* UpdateVRRenderScaleMenuTargetMetadata(
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		uint32_t a_width,
+		uint32_t a_height)
+	{
+		const auto targetIndex = static_cast<uint32_t>(a_target);
+		if (targetIndex >= static_cast<uint32_t>(RE::RENDER_TARGETS::kTOTAL))
+			return "not-manager-backed";
+
+		auto* manager = RE::BSGraphics::RenderTargetManager::GetSingleton();
+		if (!manager)
+			return "manager-missing";
+
+		auto& properties = manager->renderTargetData[a_target];
+		properties.width = a_width;
+		properties.height = a_height;
+		return "updated";
+	}
+
+	bool TryCreateVRRenderScaleMenuTargetTexture(
+		ID3D11Device* a_device,
+		const D3D11_TEXTURE2D_DESC& a_desc,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		const char* a_label,
+		uint32_t a_oldWidth,
+		uint32_t a_oldHeight,
+		uint32_t a_newWidth,
+		uint32_t a_newHeight,
+		const char* a_reason,
+		winrt::com_ptr<ID3D11Texture2D>& a_outTexture)
+	{
+		const HRESULT hr = a_device->CreateTexture2D(&a_desc, nullptr, a_outTexture.put());
+		if (SUCCEEDED(hr) && a_outTexture)
+			return true;
+
+		logger::warn(
+			"[VRMenuTargetResize] target={} action=create-{} result=failed old={}x{} new={}x{} reason={} hr=0x{:08X}",
+			GetVRMenuCompositionTargetName(a_target),
+			a_label,
+			a_oldWidth,
+			a_oldHeight,
+			a_newWidth,
+			a_newHeight,
+			a_reason,
+			static_cast<uint32_t>(hr));
+		return false;
+	}
+
+	bool TryPrepareVRRenderScaleMenuTargetRepair(
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		uint32_t a_width,
+		uint32_t a_height,
+		const char* a_reason,
+		VRRenderScaleMenuTargetRepair& a_repair)
+	{
+		a_repair = {};
+		a_repair.target = a_target;
+		a_repair.reason = a_reason;
+		a_repair.newWidth = a_width;
+		a_repair.newHeight = a_height;
+
+		auto renderer = globals::game::renderer;
+		auto device = globals::d3d::device;
+		if (!renderer || !device)
+			return false;
+
+		const auto& data = renderer->GetRuntimeData().renderTargets[a_target];
+		if (!data.texture || !data.RTV || !data.SRV) {
+			logger::warn(
+				"[VRMenuTargetResize] target={} action=inspect result=failed reason={} texture={} rtv={} srv={}",
+				GetVRMenuCompositionTargetName(a_target),
+				a_reason,
+				data.texture != nullptr,
+				data.RTV != nullptr,
+				data.SRV != nullptr);
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		data.texture->GetDesc(&textureDesc);
+		a_repair.oldWidth = textureDesc.Width;
+		a_repair.oldHeight = textureDesc.Height;
+
+		D3D11_TEXTURE2D_DESC textureCopyDesc{};
+		a_repair.hasTextureCopy = data.textureCopy != nullptr;
+		if (a_repair.hasTextureCopy) {
+			if (!data.SRVCopy) {
+				logger::warn(
+					"[VRMenuTargetResize] target={} action=inspect-copy result=failed old={}x{} new={}x{} reason={} srvCopy=false",
+					GetVRMenuCompositionTargetName(a_target),
+					a_repair.oldWidth,
+					a_repair.oldHeight,
+					a_width,
+					a_height,
+					a_reason);
+				return false;
+			}
+			data.textureCopy->GetDesc(&textureCopyDesc);
+		}
+
+		const bool primaryMatches = textureDesc.Width == a_width && textureDesc.Height == a_height;
+		const bool copyMatches =
+			!a_repair.hasTextureCopy ||
+			(textureCopyDesc.Width == a_width && textureCopyDesc.Height == a_height);
+		if (primaryMatches && copyMatches) {
+			const char* metadataResult = UpdateVRRenderScaleMenuTargetMetadata(a_target, a_width, a_height);
+			logger::debug(
+				"[VRMenuTargetResize] target={} action=already-sized old={}x{} new={}x{} reason={} metadata={}",
+				GetVRMenuCompositionTargetName(a_target),
+				a_repair.oldWidth,
+				a_repair.oldHeight,
+				a_width,
+				a_height,
+				a_reason,
+				metadataResult);
+			return true;
+		}
+
+		a_repair.replace = true;
+		a_repair.hasUAV = data.UAV != nullptr;
+
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvCopyDesc{};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		data.RTV->GetDesc(&rtvDesc);
+		data.SRV->GetDesc(&srvDesc);
+		if (a_repair.hasTextureCopy)
+			data.SRVCopy->GetDesc(&srvCopyDesc);
+		if (a_repair.hasUAV)
+			data.UAV->GetDesc(&uavDesc);
+
+		textureDesc.Width = a_width;
+		textureDesc.Height = a_height;
+		if (!TryCreateVRRenderScaleMenuTargetTexture(device, textureDesc, a_target, "texture", a_repair.oldWidth, a_repair.oldHeight, a_width, a_height, a_reason, a_repair.texture))
+			return false;
+
+		HRESULT hr = device->CreateRenderTargetView(a_repair.texture.get(), &rtvDesc, a_repair.rtv.put());
+		if (FAILED(hr) || !a_repair.rtv) {
+			logger::warn(
+				"[VRMenuTargetResize] target={} action=create-rtv result=failed old={}x{} new={}x{} reason={} hr=0x{:08X}",
+				GetVRMenuCompositionTargetName(a_target),
+				a_repair.oldWidth,
+				a_repair.oldHeight,
+				a_width,
+				a_height,
+				a_reason,
+				static_cast<uint32_t>(hr));
+			return false;
+		}
+
+		hr = device->CreateShaderResourceView(a_repair.texture.get(), &srvDesc, a_repair.srv.put());
+		if (FAILED(hr) || !a_repair.srv) {
+			logger::warn(
+				"[VRMenuTargetResize] target={} action=create-srv result=failed old={}x{} new={}x{} reason={} hr=0x{:08X}",
+				GetVRMenuCompositionTargetName(a_target),
+				a_repair.oldWidth,
+				a_repair.oldHeight,
+				a_width,
+				a_height,
+				a_reason,
+				static_cast<uint32_t>(hr));
+			return false;
+		}
+
+		if (a_repair.hasUAV) {
+			hr = device->CreateUnorderedAccessView(a_repair.texture.get(), &uavDesc, a_repair.uav.put());
+			if (FAILED(hr) || !a_repair.uav) {
+				logger::warn(
+					"[VRMenuTargetResize] target={} action=create-uav result=failed old={}x{} new={}x{} reason={} hr=0x{:08X}",
+					GetVRMenuCompositionTargetName(a_target),
+					a_repair.oldWidth,
+					a_repair.oldHeight,
+					a_width,
+					a_height,
+					a_reason,
+					static_cast<uint32_t>(hr));
+				return false;
+			}
+		}
+
+		if (a_repair.hasTextureCopy) {
+			textureCopyDesc.Width = a_width;
+			textureCopyDesc.Height = a_height;
+			if (!TryCreateVRRenderScaleMenuTargetTexture(device, textureCopyDesc, a_target, "texture-copy", a_repair.oldWidth, a_repair.oldHeight, a_width, a_height, a_reason, a_repair.textureCopy))
+				return false;
+
+			hr = device->CreateShaderResourceView(a_repair.textureCopy.get(), &srvCopyDesc, a_repair.srvCopy.put());
+			if (FAILED(hr) || !a_repair.srvCopy) {
+				logger::warn(
+					"[VRMenuTargetResize] target={} action=create-srv-copy result=failed old={}x{} new={}x{} reason={} hr=0x{:08X}",
+					GetVRMenuCompositionTargetName(a_target),
+					a_repair.oldWidth,
+					a_repair.oldHeight,
+					a_width,
+					a_height,
+					a_reason,
+					static_cast<uint32_t>(hr));
+				return false;
+			}
+		}
+
+		const auto targetName = std::string(GetVRMenuCompositionTargetName(a_target));
+		Util::SetResourceName(a_repair.texture.get(), "VRRenderScale::%s::Texture", targetName.c_str());
+		if (a_repair.textureCopy)
+			Util::SetResourceName(a_repair.textureCopy.get(), "VRRenderScale::%s::TextureCopy", targetName.c_str());
+		return true;
+	}
+
+	void CommitVRRenderScaleMenuTargetRepair(VRRenderScaleMenuTargetRepair& a_repair)
+	{
+		if (!a_repair.replace)
+			return;
+
+		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return;
+
+		auto& data = renderer->GetRuntimeData().renderTargets[a_repair.target];
+		ReleaseD3D11StatePointer(data.UAV);
+		ReleaseD3D11StatePointer(data.SRVCopy);
+		ReleaseD3D11StatePointer(data.SRV);
+		ReleaseD3D11StatePointer(data.RTV);
+		ReleaseD3D11StatePointer(data.textureCopy);
+		ReleaseD3D11StatePointer(data.texture);
+
+		data.texture = a_repair.texture.detach();
+		data.textureCopy = a_repair.textureCopy.detach();
+		data.RTV = a_repair.rtv.detach();
+		data.SRV = a_repair.srv.detach();
+		data.SRVCopy = a_repair.srvCopy.detach();
+		data.UAV = a_repair.uav.detach();
+		const char* metadataResult = UpdateVRRenderScaleMenuTargetMetadata(a_repair.target, a_repair.newWidth, a_repair.newHeight);
+
+		logger::debug(
+			"[VRMenuTargetResize] target={} action=replace result=success old={}x{} new={}x{} reason={} textureCopy={} uav={} metadata={}",
+			GetVRMenuCompositionTargetName(a_repair.target),
+			a_repair.oldWidth,
+			a_repair.oldHeight,
+			a_repair.newWidth,
+			a_repair.newHeight,
+			a_repair.reason,
+			a_repair.hasTextureCopy,
+			a_repair.hasUAV,
+			metadataResult);
+	}
+
+	bool RepairVRRenderScaleMenuPlateTargets(float2 a_displaySize)
+	{
+		if (!std::isfinite(a_displaySize.x) ||
+			!std::isfinite(a_displaySize.y) ||
+			a_displaySize.x <= 0.0f ||
+			a_displaySize.y <= 0.0f) {
+			logger::warn(
+				"[VRMenuTargetResize] action=skip result=invalid-display-size size=({:.3f},{:.3f})",
+				a_displaySize.x,
+				a_displaySize.y);
+			return false;
+		}
+
+		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
+		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
+		static constexpr std::array<std::pair<RE::RENDER_TARGETS::RENDER_TARGET, const char*>, 2> targets{
+			std::pair{ RE::RENDER_TARGETS::kTOTAL, "render-scale-menu-composite" },
+			std::pair{ RE::RENDER_TARGETS::kMENUBG, "render-scale-menu-plate" },
+		};
+
+		std::array<VRRenderScaleMenuTargetRepair, targets.size()> repairs{};
+		bool anyReplace = false;
+		for (size_t i = 0; i < targets.size(); ++i) {
+			const auto [target, reason] = targets[i];
+			if (!TryPrepareVRRenderScaleMenuTargetRepair(target, displayWidth, displayHeight, reason, repairs[i]))
+				return false;
+			anyReplace = anyReplace || repairs[i].replace;
+		}
+
+		if (!anyReplace)
+			return true;
+
+		globals::features::upscaling.UnbindUpscalingResources();
+		for (auto& repair : repairs)
+			CommitVRRenderScaleMenuTargetRepair(repair);
+		return true;
+	}
 }
 
 void Upscaling::DestroyVRIntermediateTextures()
@@ -10065,6 +10370,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				return false;
 			}
 			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: D3D render-target recreate complete");
+		}
+
+		if (relatchRenderScaleActive) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: repairing display-sized menu plate targets");
+			if (!RepairVRRenderScaleMenuPlateTargets(relatchTargetDisplaySize)) {
+				requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
+				logger::warn("[VRRenderScale] Render-target relatch could not repair display-sized menu plate targets; will retry.");
+				VR_TRANSITION_DIAG_LOG(
+					"[VRTransition] Relatch deferred: display-sized menu plate target repair failed; retrying after at least {} frames",
+					kVRRenderScaleRelatchBusyRetryFrames);
+				return false;
+			}
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: display-sized menu plate target repair complete");
 		}
 
 		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: recreating vendor/common resources for {}", magic_enum::enum_name(relatchUpscaleMethod));

@@ -12498,34 +12498,84 @@ bool Upscaling::CompositeKnownGameMenuAfterSubmitStageUpscale(uint32_t eyeIndex,
 	if (!fullscreenVS || !compositePS)
 		return false;
 
-	const auto resolveSourceRegion = [&](const D3D11_TEXTURE2D_DESC& desc, VRMenuCompositeCB& data) {
-		if (desc.SampleDesc.Count != 1 || desc.Width < eyeWidthOut || desc.Height < eyeHeightOut)
+	struct MenuCompositeRegion
+	{
+		VRMenuCompositeCB data{};
+		D3D11_VIEWPORT viewport{};
+		const char* layout = "unknown";
+	};
+
+	const auto resolveSourceRegion = [&](const D3D11_TEXTURE2D_DESC& desc, MenuCompositeRegion& region) {
+		if (desc.SampleDesc.Count != 1 || desc.Width == 0 || desc.Height == 0)
 			return false;
 
-		if (desc.Width >= eyeWidthOut * 2u) {
-			data.sourceScale = {
+		region.viewport.TopLeftX = 0.0f;
+		region.viewport.TopLeftY = 0.0f;
+		region.viewport.Width = static_cast<float>(eyeWidthOut);
+		region.viewport.Height = static_cast<float>(eyeHeightOut);
+		region.viewport.MinDepth = 0.0f;
+		region.viewport.MaxDepth = 1.0f;
+
+		if (desc.Width >= eyeWidthOut * 2u && desc.Height >= eyeHeightOut) {
+			region.data.sourceScale = {
 				static_cast<float>(eyeWidthOut) / static_cast<float>(desc.Width),
 				static_cast<float>(eyeHeightOut) / static_cast<float>(desc.Height)
 			};
-			data.sourceOffset = {
+			region.data.sourceOffset = {
 				static_cast<float>(eyeIndex * eyeWidthOut) / static_cast<float>(desc.Width),
 				0.0f
 			};
+			region.layout = "stereo-final-eye";
 			return true;
 		}
 
-		data.sourceScale = {
-			static_cast<float>(eyeWidthOut) / static_cast<float>(desc.Width),
-			static_cast<float>(eyeHeightOut) / static_cast<float>(desc.Height)
-		};
-		data.sourceOffset = { 0.0f, 0.0f };
+		if (desc.Width >= eyeWidthOut && desc.Height >= eyeHeightOut) {
+			region.data.sourceScale = {
+				static_cast<float>(eyeWidthOut) / static_cast<float>(desc.Width),
+				static_cast<float>(eyeHeightOut) / static_cast<float>(desc.Height)
+			};
+			region.data.sourceOffset = { 0.0f, 0.0f };
+			region.layout = "mono-final-eye";
+			return true;
+		}
+
+		const float sourceAspect = static_cast<float>(desc.Width) / static_cast<float>(desc.Height);
+		const float eyeAspect = static_cast<float>(eyeWidthOut) / static_cast<float>(eyeHeightOut);
+		float drawWidth = static_cast<float>(eyeWidthOut);
+		float drawHeight = static_cast<float>(eyeHeightOut);
+		if (sourceAspect > eyeAspect) {
+			drawHeight = drawWidth / sourceAspect;
+		} else {
+			drawWidth = drawHeight * sourceAspect;
+		}
+		drawWidth = std::clamp(drawWidth, 1.0f, static_cast<float>(eyeWidthOut));
+		drawHeight = std::clamp(drawHeight, 1.0f, static_cast<float>(eyeHeightOut));
+
+		region.viewport.TopLeftX = (static_cast<float>(eyeWidthOut) - drawWidth) * 0.5f;
+		region.viewport.TopLeftY = (static_cast<float>(eyeHeightOut) - drawHeight) * 0.5f;
+		region.viewport.Width = drawWidth;
+		region.viewport.Height = drawHeight;
+		region.data.sourceScale = { 1.0f, 1.0f };
+		region.data.sourceOffset = { 0.0f, 0.0f };
+		region.layout = "mono-aspect-fit";
 		return true;
+	};
+
+	const auto targetName = [](RE::RENDER_TARGETS::RENDER_TARGET target) {
+		switch (target) {
+		case RE::RENDER_TARGETS::kPROJECTEDMENU:
+			return "kPROJECTEDMENU";
+		case RE::RENDER_TARGETS::kHUDMENU:
+			return "kHUDMENU";
+		default:
+			return "unknown";
+		}
 	};
 
 	ScopedVRMenuCompositeD3D11State scopedState(context);
 
 	ID3D11RenderTargetView* outputRTV = output->rtv.get();
-	ID3D11SamplerState* sampler = deferred->pointSampler ? deferred->pointSampler : deferred->linearSampler;
+	ID3D11SamplerState* sampler = deferred->linearSampler;
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
 
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
@@ -12543,31 +12593,76 @@ bool Upscaling::CompositeKnownGameMenuAfterSubmitStageUpscale(uint32_t eyeIndex,
 	context->PSSetSamplers(0, 1, &sampler);
 	context->OMSetRenderTargets(1, &outputRTV, nullptr);
 
-	D3D11_VIEWPORT viewport{};
-	viewport.TopLeftX = 0.0f;
-	viewport.TopLeftY = 0.0f;
-	viewport.Width = static_cast<float>(eyeWidthOut);
-	viewport.Height = static_cast<float>(eyeHeightOut);
-	viewport.MinDepth = 0.0f;
-	viewport.MaxDepth = 1.0f;
-	context->RSSetViewports(1, &viewport);
-
 	bool composited = false;
 	auto& renderTargets = renderer->GetRuntimeData().renderTargets;
-	for (const auto target : kVRKnownGameMenuFinalCompositeTargets) {
+	static std::array<bool, kVRKnownGameMenuFinalCompositeTargets.size()> loggedMissingTarget{};
+	static std::array<bool, kVRKnownGameMenuFinalCompositeTargets.size()> loggedBadDesc{};
+	static std::array<bool, kVRKnownGameMenuFinalCompositeTargets.size()> loggedUnsupportedSource{};
+	static std::array<bool, kVRKnownGameMenuFinalCompositeTargets.size()> loggedComposite{};
+	for (size_t targetIndex = 0; targetIndex < kVRKnownGameMenuFinalCompositeTargets.size(); ++targetIndex) {
+		const auto target = kVRKnownGameMenuFinalCompositeTargets[targetIndex];
 		auto& menuTarget = renderTargets[target];
-		if (!menuTarget.texture || !menuTarget.SRV)
+		if (!menuTarget.texture || !menuTarget.SRV) {
+			if (!loggedMissingTarget[targetIndex]) {
+				logger::debug(
+					"[VRMenuComposite] skip target={} reason=missing-texture-or-srv finalEye={}x{}",
+					targetName(target),
+					eyeWidthOut,
+					eyeHeightOut);
+				loggedMissingTarget[targetIndex] = true;
+			}
 			continue;
+		}
 
 		D3D11_TEXTURE2D_DESC sourceDesc{};
-		if (!TryGetTexture2DDesc(menuTarget.texture, sourceDesc))
+		if (!TryGetTexture2DDesc(menuTarget.texture, sourceDesc)) {
+			if (!loggedBadDesc[targetIndex]) {
+				logger::debug(
+					"[VRMenuComposite] skip target={} reason=texture-desc-unavailable finalEye={}x{}",
+					targetName(target),
+					eyeWidthOut,
+					eyeHeightOut);
+				loggedBadDesc[targetIndex] = true;
+			}
 			continue;
+		}
 
-		VRMenuCompositeCB compositeData{};
-		if (!resolveSourceRegion(sourceDesc, compositeData))
+		MenuCompositeRegion compositeRegion{};
+		if (!resolveSourceRegion(sourceDesc, compositeRegion)) {
+			if (!loggedUnsupportedSource[targetIndex]) {
+				logger::debug(
+					"[VRMenuComposite] skip target={} reason=unsupported-source source={}x{} fmt={} samples={} finalEye={}x{}",
+					targetName(target),
+					sourceDesc.Width,
+					sourceDesc.Height,
+					static_cast<uint32_t>(sourceDesc.Format),
+					sourceDesc.SampleDesc.Count,
+					eyeWidthOut,
+					eyeHeightOut);
+				loggedUnsupportedSource[targetIndex] = true;
+			}
 			continue;
+		}
 
-		vrMenuCompositeCB->Update(compositeData);
+		if (!loggedComposite[targetIndex]) {
+			logger::debug(
+				"[VRMenuComposite] composite target={} layout={} source={}x{} fmt={} finalEye={}x{} viewport=({:.1f},{:.1f}) {:.1f}x{:.1f}",
+				targetName(target),
+				compositeRegion.layout,
+				sourceDesc.Width,
+				sourceDesc.Height,
+				static_cast<uint32_t>(sourceDesc.Format),
+				eyeWidthOut,
+				eyeHeightOut,
+				compositeRegion.viewport.TopLeftX,
+				compositeRegion.viewport.TopLeftY,
+				compositeRegion.viewport.Width,
+				compositeRegion.viewport.Height);
+			loggedComposite[targetIndex] = true;
+		}
+
+		context->RSSetViewports(1, &compositeRegion.viewport);
+		vrMenuCompositeCB->Update(compositeRegion.data);
 		ID3D11Buffer* compositeBuffer = vrMenuCompositeCB->CB();
 		ID3D11ShaderResourceView* sourceSRV = menuTarget.SRV;
 		context->PSSetConstantBuffers(0, 1, &compositeBuffer);

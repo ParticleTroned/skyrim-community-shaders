@@ -17799,6 +17799,63 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			// stretch them as scene presentation sources. In-place interaction
 			// passes keep the older contextual fallback for prompt frames.
 			const bool inPlacePass = outputTexture == sourceTexture;
+			const auto isRenderTargetTexture = [&](ID3D11Texture2D* a_texture, RE::RENDER_TARGETS::RENDER_TARGET a_target) {
+				if (!a_texture)
+					return false;
+
+				const auto& target = renderer->GetRuntimeData().renderTargets[a_target];
+				return target.texture == a_texture || target.textureCopy == a_texture;
+			};
+			const bool exactReducedMenuBakePass =
+				globals::game::isVR &&
+				a_stage == DynamicResolutionUpsampleStage::Render &&
+				std::string_view(DiagnosticText(a_passName, "")) == "ISCopyDynamicFetchDisabled" &&
+				upscaling.IsVRRenderScaleModeActive() &&
+				upscaling.IsPresentationUpscalingActive() &&
+				isRenderTargetTexture(sourceTexture, RE::RENDER_TARGETS::kMENUBG) &&
+				isRenderTargetTexture(outputTexture, RE::RENDER_TARGETS::kTOTAL);
+			if (exactReducedMenuBakePass) {
+				D3D11_TEXTURE2D_DESC sourceDesc{};
+				D3D11_TEXTURE2D_DESC outputDesc{};
+				sourceTexture->GetDesc(&sourceDesc);
+				outputTexture->GetDesc(&outputDesc);
+
+				const bool canCopyMenuBake =
+					sourceDesc.Width == outputDesc.Width &&
+					sourceDesc.Height == outputDesc.Height &&
+					sourceDesc.Format == outputDesc.Format &&
+					sourceDesc.SampleDesc.Count == outputDesc.SampleDesc.Count &&
+					sourceDesc.SampleDesc.Quality == outputDesc.SampleDesc.Quality;
+				if (canCopyMenuBake) {
+					unbindSourceSRV();
+					context->OMSetRenderTargets(0, nullptr, nullptr);
+					context->CopyResource(outputTexture, sourceTexture);
+					context->OMSetRenderTargets(1, &outputRTV, outputDSV);
+					logDecision("replaced-submit-stage-menu-bake-copy");
+					releaseRefs();
+					if (globals::game::stateUpdateFlags)
+						globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+					return true;
+				}
+
+				static bool loggedExactMenuBakeCopyMismatch = false;
+				if (!loggedExactMenuBakeCopyMismatch) {
+					logger::warn(
+						"[Upscaling] Exact VR menu bake copy replacement skipped because source/output differ: source={}x{} fmt={} samples={}/{} output={}x{} fmt={} samples={}/{}",
+						sourceDesc.Width,
+						sourceDesc.Height,
+						static_cast<uint32_t>(sourceDesc.Format),
+						sourceDesc.SampleDesc.Count,
+						sourceDesc.SampleDesc.Quality,
+						outputDesc.Width,
+						outputDesc.Height,
+						static_cast<uint32_t>(outputDesc.Format),
+						outputDesc.SampleDesc.Count,
+						outputDesc.SampleDesc.Quality);
+					loggedExactMenuBakeCopyMismatch = true;
+				}
+			}
+
 			const bool uiRenderTargetPass =
 				IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture) ||
 				IsVRNativeLayoutSubmitProtectedRenderTargetTexture(outputTexture);

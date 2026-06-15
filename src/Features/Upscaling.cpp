@@ -6260,7 +6260,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	plan.qualityMode = GetRuntimeQualityMode();
 	plan.vendorMethod = IsVendorUpscalingMethod(plan.upscaleMethod);
 	plan.knownMenuContextActive = IsKnownGameMenuContextActive();
-	plan.menuContextActive = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
+	plan.menuContextActive = globals::game::isVR ? IsVRMenuScenePresentationBlockActive() : IsGameMenuContextActive();
 	plan.loadingMenuActive = IsLoadingMenuContextActive();
 	plan.perfModeRestartRequired = perfMode.HasRestartRequiredChange();
 
@@ -15198,7 +15198,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			return false;
 		}
 
-		const bool menuPresentationContext = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
+		const bool menuPresentationContext = globals::game::isVR ? IsVRMenuScenePresentationBlockActive() : IsGameMenuContextActive();
 		if (menuPresentationContext) {
 			logDecision("vanilla-menu-without-submit-stage");
 			return false;
@@ -15718,11 +15718,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool loadingTransitionTailActive =
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
-	const bool vrMenuPresentationContextActive = IsVRMenuPresentationContextActive();
+	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
 	const bool menuPresentationContext =
 		vendorMethodSelected &&
 		globals::game::isVR &&
-		(vrMenuPresentationContextActive || loadingTransitionTailActive);
+		(vrScenePresentationBlockActive || loadingTransitionTailActive);
 	const bool fullResolutionMenuPresentation = menuPresentationContext;
 	const bool loadingTransitionMenuPresentation =
 		fullResolutionMenuPresentation &&

@@ -3200,6 +3200,19 @@ namespace
 		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
 	}
 
+	bool ShouldDrawVRRenderScaleMenuUIAtFullResolution()
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		auto& upscaling = globals::features::upscaling;
+		return upscaling.IsVRRenderScaleModeActive() &&
+		       IsVendorUpscalingMethod(upscaling.GetRuntimeUpscaleMethod()) &&
+		       upscaling.GetRuntimeQualityMode() > 0 &&
+		       IsVRSceneFeatureMenuPauseContextActive() &&
+		       !IsMainOrLoadingMenuContextActive();
+	}
+
 	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
 	{
 		if (!globals::game::isVR || !globals::state)
@@ -15673,7 +15686,12 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-PostDisplay",
 			false);
 	}
+	const bool fullResolutionMenuUIDraw = ShouldDrawVRRenderScaleMenuUIAtFullResolution();
+	if (fullResolutionMenuUIDraw)
+		upscaling.PrepareFullResolutionPostProcessing();
+
 	func(a1);
+
 	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();
 		if (observedProjectedMenu) {
@@ -15692,6 +15710,8 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"after-menu-draw",
 			false);
 	}
+	if (fullResolutionMenuUIDraw)
+		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 }
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)

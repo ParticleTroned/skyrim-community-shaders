@@ -563,6 +563,23 @@ struct ID3D11Device_CreateSamplerState
 
 struct BSShaderRenderTargets_Create
 {
+	static void ApplyVRRenderScaleRenderTargetManagerOverrides()
+	{
+		if (!globals::game::isVR || !CanSetupRenderingResources())
+			return;
+
+		auto* manager = RE::BSGraphics::RenderTargetManager::GetSingleton();
+		if (!manager)
+			return;
+
+		const size_t targetCount = std::size(manager->renderTargetData);
+		for (size_t i = 0; i < targetCount; ++i) {
+			auto& properties = manager->renderTargetData[i];
+			const auto target = static_cast<RE::RENDER_TARGETS::RENDER_TARGET>(i);
+			globals::features::upscaling.AdjustVRRenderScaleRenderTargetProperties(target, &properties);
+		}
+	}
+
 	/**
 	 * @brief Calls the original render target creation function and reinitializes global rendering state.
 	 *
@@ -582,9 +599,15 @@ struct BSShaderRenderTargets_Create
 		       globals::d3d::context;
 	}
 
+	static void CallOriginalWithScopedRenderTargetOverrides()
+	{
+		ApplyVRRenderScaleRenderTargetManagerOverrides();
+		func();
+	}
+
 	static bool RecreateAndSetupFull()
 	{
-		func();
+		CallOriginalWithScopedRenderTargetOverrides();
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
@@ -594,7 +617,7 @@ struct BSShaderRenderTargets_Create
 
 	static bool RecreateAndSetupRenderTargetResources()
 	{
-		func();
+		CallOriginalWithScopedRenderTargetOverrides();
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;

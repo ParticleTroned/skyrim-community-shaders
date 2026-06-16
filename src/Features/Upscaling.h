@@ -1078,6 +1078,12 @@ private:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_Map
+	{
+		static HRESULT thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_resource, UINT a_subresource, D3D11_MAP a_mapType, UINT a_mapFlags, D3D11_MAPPED_SUBRESOURCE* a_mappedResource);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct ID3D11DeviceContext_DrawIndexedInstanced
 	{
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCountPerInstance, UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);

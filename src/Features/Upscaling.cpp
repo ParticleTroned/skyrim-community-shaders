@@ -741,19 +741,20 @@ namespace
 	// Submit-stage should only operate on the runtime-submitted eye textures.
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 0> kSubmittedVRPresentationTargets{};
 
-	// Pre95 proved kTOTAL is the live scene/submit source in render-scale mode:
-	// forcing it to display size can blank HMD output. Only kMENUBG and the
-	// image-space display-copy targets are eligible for display-sized handling.
-	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRRenderScaleDisplaySizedTargets{
-		RE::RENDER_TARGETS::kMENUBG,
+	// Pre95 proved kTOTAL is the live scene/submit source in render-scale mode,
+	// and Pre96 proved kMENUBG still receives engine-sized viewports. Keep both
+	// menu plate/composite targets engine-sized; only image-space display-copy
+	// targets are eligible for display-sized handling.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRRenderScaleDisplaySizedTargets{
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
 	};
 
-	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 12> kVRRenderScaleEngineSizedTargets{
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 13> kVRRenderScaleEngineSizedTargets{
 		RE::RENDER_TARGETS::kMAIN,
 		RE::RENDER_TARGETS::kMAIN_COPY,
 		RE::RENDER_TARGETS::kMAIN_ONLY_ALPHA,
+		RE::RENDER_TARGETS::kMENUBG,
 		RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK,
 		RE::RENDER_TARGETS::kNORMAL_TAAMASK_SSRMASK_SWAP,
 		RE::RENDER_TARGETS::kMOTION_VECTOR,
@@ -10008,39 +10009,38 @@ namespace
 			metadataResult);
 	}
 
-	bool RepairVRRenderScaleMenuPlateTargets(float2 a_displaySize)
+	bool RepairVRRenderScaleMenuPlateTargets(float2 a_targetSize, const char* a_reason)
 	{
-		if (!std::isfinite(a_displaySize.x) ||
-			!std::isfinite(a_displaySize.y) ||
-			a_displaySize.x <= 0.0f ||
-			a_displaySize.y <= 0.0f) {
+		if (!std::isfinite(a_targetSize.x) ||
+			!std::isfinite(a_targetSize.y) ||
+			a_targetSize.x <= 0.0f ||
+			a_targetSize.y <= 0.0f) {
 			logger::warn(
 				"[VRMenuTargetResize] action=skip result=invalid-display-size size=({:.3f},{:.3f})",
-				a_displaySize.x,
-				a_displaySize.y);
+				a_targetSize.x,
+				a_targetSize.y);
 			return false;
 		}
 
-		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
-		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
+		const uint32_t targetWidth = ClampPositiveDimension(a_targetSize.x);
+		const uint32_t targetHeight = ClampPositiveDimension(a_targetSize.y);
 
 		static std::atomic_bool loggedKTotalSkip{ false };
 		if (!loggedKTotalSkip.exchange(true, std::memory_order_acq_rel)) {
 			logger::debug(
-				"[VRMenuTargetResize] target=kTOTAL action=skip reason=submit-source-must-remain-engine-sized final={}x{}",
-				displayWidth,
-				displayHeight);
+				"[VRMenuTargetResize] target=kTOTAL action=skip reason=submit-source-must-remain-engine-sized targetSize={}x{}",
+				targetWidth,
+				targetHeight);
 		}
 
-		static constexpr std::array<std::pair<RE::RENDER_TARGETS::RENDER_TARGET, const char*>, 1> targets{
-			std::pair{ RE::RENDER_TARGETS::kMENUBG, "render-scale-menu-plate" },
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 1> targets{
+			RE::RENDER_TARGETS::kMENUBG,
 		};
 
 		std::array<VRRenderScaleMenuTargetRepair, targets.size()> repairs{};
 		bool anyReplace = false;
 		for (size_t i = 0; i < targets.size(); ++i) {
-			const auto [target, reason] = targets[i];
-			if (!TryPrepareVRRenderScaleMenuTargetRepair(target, displayWidth, displayHeight, reason, repairs[i]))
+			if (!TryPrepareVRRenderScaleMenuTargetRepair(targets[i], targetWidth, targetHeight, a_reason, repairs[i]))
 				return false;
 			anyReplace = anyReplace || repairs[i].replace;
 		}
@@ -10054,18 +10054,18 @@ namespace
 		return true;
 	}
 
-	bool IsVRRenderScaleMenuPlateTargetRepairNeeded(float2 a_displaySize)
+	bool IsVRRenderScaleMenuPlateTargetRepairNeeded(float2 a_targetSize)
 	{
-		if (!std::isfinite(a_displaySize.x) ||
-			!std::isfinite(a_displaySize.y) ||
-			a_displaySize.x <= 0.0f ||
-			a_displaySize.y <= 0.0f) {
+		if (!std::isfinite(a_targetSize.x) ||
+			!std::isfinite(a_targetSize.y) ||
+			a_targetSize.x <= 0.0f ||
+			a_targetSize.y <= 0.0f) {
 			return false;
 		}
 
-		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
-		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
-		return !ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::kMENUBG, displayWidth, displayHeight);
+		const uint32_t targetWidth = ClampPositiveDimension(a_targetSize.x);
+		const uint32_t targetHeight = ClampPositiveDimension(a_targetSize.y);
+		return !ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::kMENUBG, targetWidth, targetHeight);
 	}
 
 	void RepairVRRenderScaleMenuPlateTargetsForActiveRenderScale(
@@ -10102,7 +10102,17 @@ namespace
 		if (displayWidth <= engineWidth && displayHeight <= engineHeight)
 			return;
 
-		if (!IsVRRenderScaleMenuPlateTargetRepairNeeded(a_plan.finalOutputSize))
+		static std::atomic_bool loggedEngineSizedMenuTargetPolicy{ false };
+		if (!loggedEngineSizedMenuTargetPolicy.exchange(true, std::memory_order_acq_rel)) {
+			logger::debug(
+				"[VRMenuTargetResize] action=policy reason=menu-targets-remain-engine-sized engine={}x{} final={}x{} targets=kTOTAL,kMENUBG",
+				engineWidth,
+				engineHeight,
+				displayWidth,
+				displayHeight);
+		}
+
+		if (!IsVRRenderScaleMenuPlateTargetRepairNeeded(a_plan.engineRenderSize))
 			return;
 
 		const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
@@ -10115,16 +10125,16 @@ namespace
 		}
 
 		logger::debug(
-			"[VRMenuTargetResize] action=steady-state-repair reason=render-scale-active-reduced-menu-targets frame={} engine={}x{} final={}x{}",
+			"[VRMenuTargetResize] action=steady-state-repair reason=render-scale-active-menu-target-engine-size-mismatch frame={} engine={}x{} final={}x{}",
 			currentFrame,
 			engineWidth,
 			engineHeight,
 			displayWidth,
 			displayHeight);
-		if (!RepairVRRenderScaleMenuPlateTargets(a_plan.finalOutputSize)) {
+		if (!RepairVRRenderScaleMenuPlateTargets(a_plan.engineRenderSize, "render-scale-menu-plate-engine-size")) {
 			lastFailureFrame.store(currentFrame, std::memory_order_release);
 			logger::warn(
-				"[VRMenuTargetResize] action=steady-state-repair result=failed reason=render-scale-active-reduced-menu-targets frame={} engine={}x{} final={}x{} retryFrames={}",
+				"[VRMenuTargetResize] action=steady-state-repair result=failed reason=render-scale-active-menu-target-engine-size-mismatch frame={} engine={}x{} final={}x{} retryFrames={}",
 				currentFrame,
 				engineWidth,
 				engineHeight,
@@ -10136,7 +10146,7 @@ namespace
 
 		lastFailureFrame.store(0, std::memory_order_release);
 		logger::debug(
-			"[VRMenuTargetResize] action=steady-state-repair result=success reason=render-scale-active-reduced-menu-targets frame={} engine={}x{} final={}x{}",
+			"[VRMenuTargetResize] action=steady-state-repair result=success reason=render-scale-active-menu-target-engine-size-mismatch frame={} engine={}x{} final={}x{}",
 			currentFrame,
 			engineWidth,
 			engineHeight,
@@ -10459,16 +10469,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 
 		if (relatchRenderScaleActive) {
-			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: repairing display-sized menu plate targets");
-			if (!RepairVRRenderScaleMenuPlateTargets(relatchTargetDisplaySize)) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: repairing engine-sized menu plate targets");
+			if (!RepairVRRenderScaleMenuPlateTargets(relatchTargetEngineSize, "render-scale-menu-plate-engine-size")) {
 				requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
-				logger::warn("[VRRenderScale] Render-target relatch could not repair display-sized menu plate targets; will retry.");
+				logger::warn("[VRRenderScale] Render-target relatch could not repair engine-sized menu plate targets; will retry.");
 				VR_TRANSITION_DIAG_LOG(
-					"[VRTransition] Relatch deferred: display-sized menu plate target repair failed; retrying after at least {} frames",
+					"[VRTransition] Relatch deferred: engine-sized menu plate target repair failed; retrying after at least {} frames",
 					kVRRenderScaleRelatchBusyRetryFrames);
 				return false;
 			}
-			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: display-sized menu plate target repair complete");
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: engine-sized menu plate target repair complete");
 		}
 
 		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: recreating vendor/common resources for {}", magic_enum::enum_name(relatchUpscaleMethod));

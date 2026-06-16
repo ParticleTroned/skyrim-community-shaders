@@ -181,24 +181,73 @@ std::unordered_map<std::string, int> Menu::categoryCounts;
 
 namespace
 {
-	ImVec2 GetDefaultSettingsWindowSize()
+	struct SettingsWindowLayout
 	{
-		const ImVec2 viewportSize = ImGui::GetMainViewport()->Size;
-		if (REL::Module::IsVR()) {
-			constexpr float kVRWindowWidthRatio = 0.8f;
-			constexpr float kVRWindowMaxHeightRatio = 0.88f;
-			float width = viewportSize.x * kVRWindowWidthRatio;
-			float height = width * VR::Config::kHMDOverlayAspect;
-			const float maxHeight = viewportSize.y * kVRWindowMaxHeightRatio;
-			if (height > maxHeight) {
-				height = maxHeight;
-				width = height / VR::Config::kHMDOverlayAspect;
-			}
+		ImVec2 center;
+		ImVec2 size;
+	};
 
-			return ImVec2(width, height);
+	void ExcludeShaderCompilationWindowFromTop(ImVec2& a_availableMin, const ImVec2& a_availableMax)
+	{
+		auto* shaderWindow = ImGui::FindWindowByName("ShaderCompilationInfo");
+		if (!shaderWindow || !shaderWindow->Active || shaderWindow->Hidden)
+			return;
+
+		const float shaderBottom = shaderWindow->Pos.y + shaderWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
+		if (shaderBottom > a_availableMin.y && shaderBottom < a_availableMax.y)
+			a_availableMin.y = shaderBottom;
+	}
+
+	ImVec2 FitSizeToAspect(ImVec2 a_availableSize, float a_heightOverWidth)
+	{
+		a_availableSize.x = std::max(a_availableSize.x, 1.0f);
+		a_availableSize.y = std::max(a_availableSize.y, 1.0f);
+		a_heightOverWidth = std::isfinite(a_heightOverWidth) && a_heightOverWidth > 0.0f ? a_heightOverWidth : 1.0f;
+
+		float width = a_availableSize.x;
+		float height = width * a_heightOverWidth;
+		if (height > a_availableSize.y) {
+			height = a_availableSize.y;
+			width = height / a_heightOverWidth;
 		}
 
-		return ImVec2(viewportSize.x * 0.8f, viewportSize.y * 0.8f);
+		return ImVec2(width, height);
+	}
+
+	SettingsWindowLayout GetDefaultSettingsWindowLayout()
+	{
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		if (!viewport) {
+			return {
+				.center = ImVec2(0.0f, 0.0f),
+				.size = ImVec2(1.0f, 1.0f)
+			};
+		}
+
+		const ImVec2 viewportSize = viewport->Size;
+		if (REL::Module::IsVR()) {
+			ImVec2 availableMin = viewport->WorkPos;
+			ImVec2 availableMax(
+				viewport->WorkPos.x + viewport->WorkSize.x,
+				viewport->WorkPos.y + viewport->WorkSize.y);
+			ExcludeShaderCompilationWindowFromTop(availableMin, availableMax);
+
+			const ImVec2 availableSize(
+				std::max(availableMax.x - availableMin.x, 1.0f),
+				std::max(availableMax.y - availableMin.y, 1.0f));
+			const ImVec2 size = FitSizeToAspect(availableSize, VR::Config::kHMDOverlayAspect);
+			return {
+				.center = ImVec2(
+					availableMin.x + availableSize.x * 0.5f,
+					availableMin.y + availableSize.y * 0.5f),
+				.size = size
+			};
+		}
+
+		return {
+			.center = Util::GetNativeViewportSizeScaled(0.5f),
+			.size = ImVec2(viewportSize.x * 0.8f, viewportSize.y * 0.8f)
+		};
 	}
 }
 
@@ -710,8 +759,9 @@ void Menu::DrawSettings()
 	bool willBeDocked = wasDocked;
 
 	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-	const ImVec2 defaultWindowPos = Util::GetNativeViewportSizeScaled(0.5f);
-	const ImVec2 defaultWindowSize = GetDefaultSettingsWindowSize();
+	const SettingsWindowLayout defaultWindowLayout = GetDefaultSettingsWindowLayout();
+	const ImVec2 defaultWindowPos = defaultWindowLayout.center;
+	const ImVec2 defaultWindowSize = defaultWindowLayout.size;
 	const ImVec2 centeredPivot(0.5f, 0.5f);
 	ImVec2 windowPos = defaultWindowPos;
 	ImVec2 windowSizeForOverlap = defaultWindowSize;

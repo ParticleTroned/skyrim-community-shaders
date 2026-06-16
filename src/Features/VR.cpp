@@ -223,6 +223,27 @@ namespace
 		InputCombo::ComboList::to_device_json(target[keyName], binding);
 	}
 
+	void PopulateMissingVRControllerBindingDefaults(const json& source, VR::Settings& settings)
+	{
+		const bool hasSourceObject = source.is_object();
+		auto missingBinding = [&](const char* keyName) {
+			return !hasSourceObject || !source.contains(keyName);
+		};
+
+		if (missingBinding("VRMenuOpenKeys")) {
+			settings.VRMenuOpenKeys = VR::Settings::DefaultVRMenuOpenKeys();
+		}
+		if (missingBinding("VRMenuCloseKeys")) {
+			settings.VRMenuCloseKeys = VR::Settings::DefaultVRMenuCloseKeys();
+		}
+		if (missingBinding("VROverlayOpenKeys")) {
+			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
+		}
+		if (missingBinding("VROverlayCloseKeys")) {
+			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
+		}
+	}
+
 	void MigrateLegacyBindingDefaults(VR::Settings& settings)
 	{
 		const std::vector<ButtonCombo> legacyMenuOpen = {
@@ -312,6 +333,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void VR::LoadSettings(json& o_json)
 {
 	settings = o_json.get<Settings>();
+	PopulateMissingVRControllerBindingDefaults(o_json, settings);
 	LoadVRControllerBinding(o_json, "VRMenuOpenKeys", settings.VRMenuOpenKeys);
 	LoadVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	LoadVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
@@ -734,7 +756,7 @@ void VR::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (BeginTabItemWithFont("Foveated / Variable Rate Shading (VRS)", Menu::FontRole::Subheading)) {
+		if (BeginTabItemWithFont("FOV/VRS", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRFoveatedVRSFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawFoveationSettings();
 			}
@@ -1099,10 +1121,31 @@ namespace
 		}
 	}
 
+	void DrawKeepDesktopWindowFocusedForVRMenuSetting()
+	{
+		auto& vr = globals::features::vr;
+		auto& settings = vr.settings;
+		if (ImGui::Checkbox("Keep Game Window Focused for VR Menu", &settings.KeepDesktopWindowFocusedForVRMenu)) {
+			if (settings.KeepDesktopWindowFocusedForVRMenu) {
+				vr.UpdateMenuDesktopWindowManagement(true);
+			} else {
+				vr.ReleaseMenuDesktopWindowManagement();
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("While the CS menu is open in VR, keep the game window centered, foregrounded, and above other desktop windows.");
+			ImGui::Text("Only applies when Attach Mode presents the menu in VR.");
+			ImGui::Text("Disable this to move the game window aside or use other desktop applications while the menu stays open.");
+		}
+	}
+
 	void DrawGeneralVRSettings()
 	{
 		auto& vr = globals::features::vr;
 		VR::Settings& settings = vr.settings;
+		DrawKeepDesktopWindowFocusedForVRMenuSetting();
+		ImGui::Separator();
+
 		if (ImGui::CollapsingHeader("General Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 			// Exteriors
 			bool exteriorChanged = ImGui::Checkbox("Enable Depth Buffer Culling in Exteriors", &settings.EnableDepthBufferCullingExterior);
@@ -1116,9 +1159,9 @@ namespace
 				ImGui::Text("Improves performance in interiors, recommended ON.");
 			}
 
-		if (exteriorChanged || interiorChanged) {
-			vr.UpdateDepthBufferCulling();
-		}
+			if (exteriorChanged || interiorChanged) {
+				vr.UpdateDepthBufferCulling();
+			}
 
 			if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
 				if (vr.gMinOccludeeBoxExtent) {
@@ -1159,18 +1202,6 @@ namespace
 				ImGui::Text("Auto uses in-scene for OpenComposite, IVROverlay for SteamVR when available.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
-			}
-			if (ImGui::Checkbox("Keep Game Window Focused for VR Menu", &settings.KeepDesktopWindowFocusedForVRMenu)) {
-				if (settings.KeepDesktopWindowFocusedForVRMenu) {
-					vr.UpdateMenuDesktopWindowManagement(true);
-				} else {
-					vr.ReleaseMenuDesktopWindowManagement();
-				}
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("While the CS menu is open in VR, keep the game window centered, foregrounded, and above other desktop windows.");
-				ImGui::Text("Only applies when Attach Mode presents the menu in VR.");
-				ImGui::Text("Disable this to move the game window aside or use other desktop applications while the menu stays open.");
 			}
 
 			// Controller-specific settings (only show when controller mode is active)

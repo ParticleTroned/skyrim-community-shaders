@@ -2119,16 +2119,12 @@ namespace Util
 		const bool active = *enabled;
 		const bool hovered = ImGui::IsItemHovered();
 		const bool held = ImGui::IsItemActive();
-		const auto& theme = Menu::GetSingleton()->GetTheme();
-		const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
-		const ImVec4 trackBase = Color::Blend(theme.Palette.Background, theme.Palette.FrameBorder, active ? 0.34f : 0.28f, 1.0f);
-		const ImVec4 trackHovered = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.30f : 0.26f, 1.0f);
-		const ImVec4 trackActive = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.40f : 0.34f, 1.0f);
+		const ImVec4 trackBase = ImGui::GetStyleColorVec4(active ? ImGuiCol_Header : ImGuiCol_FrameBg);
+		const ImVec4 trackHovered = ImGui::GetStyleColorVec4(active ? ImGuiCol_HeaderHovered : ImGuiCol_FrameBgHovered);
+		const ImVec4 trackActive = ImGui::GetStyleColorVec4(active ? ImGuiCol_HeaderActive : ImGuiCol_FrameBgActive);
 		const ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
-		const ImVec4 borderColor = Color::Blend(theme.Palette.FrameBorder, theme.Palette.Background, active ? 0.02f : 0.06f, active ? 1.0f : 0.96f);
-		const ImVec4 knobColor = active ?
-		                             Color::WithAlpha(accent, 1.0f) :
-		                             Color::WithAlpha(Color::Blend(accent, theme.Palette.FrameBorder, 0.52f, 1.0f), 0.68f);
+		const ImVec4 borderColor = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+		const ImVec4 knobColor(1.0f, 1.0f, 1.0f, 1.0f);
 
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 hitMin = ImGui::GetItemRectMin();

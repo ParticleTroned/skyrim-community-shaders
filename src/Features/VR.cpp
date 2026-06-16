@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
+#include "LocationContext.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
@@ -433,9 +434,9 @@ bool VR::AnyScreenSpaceEffectActive()
 
 	bool ssgiActive = false;
 	if (ssgi.loaded && ssgi.settings.Enabled) {
-		const bool isInterior = Util::IsInterior();
-		const bool ssgiAOActive = !ssgi.settings.AOInteriorsOnly || isInterior;
-		const bool ssgiGIActive = ssgi.IsGIActive() && (!ssgi.settings.ILInteriorsOnly || isInterior);
+		const auto location = LocationContext::Get();
+		const bool ssgiAOActive = LocationContext::AllowsInteriorOnly(ssgi.settings.AOInteriorsOnly, location);
+		const bool ssgiGIActive = ssgi.IsGIActive() && LocationContext::AllowsInteriorOnly(ssgi.settings.ILInteriorsOnly, location);
 		ssgiActive = ssgiAOActive || ssgiGIActive;
 	}
 
@@ -2966,9 +2967,10 @@ void VR::UpdateDepthBufferCulling()
 		return;
 	}
 
-	const auto* tes = globals::game::tes;
-	const bool inInterior = tes && tes->interiorCell != nullptr;
-	const bool desired = inInterior ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
+	const bool desired = LocationContext::SelectInteriorExterior(
+		LocationContext::HasInteriorCell(),
+		settings.EnableDepthBufferCullingInterior,
+		settings.EnableDepthBufferCullingExterior);
 
 	const bool previous = *gDepthBufferCulling;
 	*gDepthBufferCulling = desired;

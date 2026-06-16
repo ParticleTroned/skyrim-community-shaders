@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <string_view>
 #include <unordered_map>
 #include <imgui.h>
 
@@ -39,7 +41,59 @@ static ImU32 HslToImU32(float h, float s, float l)
 		255);
 }
 
-static constexpr float kGoldenRatio = 0.618033988749895f;
+static uint32_t FinalizeHash(uint32_t hash)
+{
+	hash ^= hash >> 16;
+	hash *= 0x7feb352du;
+	hash ^= hash >> 15;
+	hash *= 0x846ca68bu;
+	hash ^= hash >> 16;
+	return hash;
+}
+
+static uint32_t StableHash(std::string_view value)
+{
+	uint32_t hash = 2166136261u;
+	for (const unsigned char c : value) {
+		hash ^= c;
+		hash *= 16777619u;
+	}
+
+	return FinalizeHash(hash);
+}
+
+static uint32_t MixHash(uint32_t hash, uint32_t salt)
+{
+	hash ^= salt + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+	return FinalizeHash(hash);
+}
+
+static float HashToUnitFloat(uint32_t hash)
+{
+	return static_cast<float>(static_cast<double>(hash) / 4294967296.0);
+}
+
+static float GetColorMarkerExtraWidth()
+{
+	return std::ceil(std::max(6.0f, ImGui::GetTextLineHeight() * 0.65f) + ImGui::GetStyle().ItemInnerSpacing.x);
+}
+
+static void RenderColorMarker(ImU32 color)
+{
+	const float lineHeight = ImGui::GetTextLineHeight();
+	const float markerSize = std::max(6.0f, std::floor(lineHeight * 0.65f));
+	const ImVec2 cursor = ImGui::GetCursorScreenPos();
+	const float markerY = cursor.y + (lineHeight - markerSize) * 0.5f;
+	const ImVec2 markerMin(cursor.x, markerY);
+	const ImVec2 markerMax(cursor.x + markerSize, markerY + markerSize);
+
+	auto* drawList = ImGui::GetWindowDrawList();
+	drawList->AddRectFilled(markerMin, markerMax, color, 2.0f);
+	drawList->AddRect(markerMin, markerMax, ImGui::GetColorU32(ImGuiCol_Border), 2.0f);
+
+	ImGui::Dummy(ImVec2(markerSize, lineHeight));
+	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+}
 
 static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
 {
@@ -110,17 +164,13 @@ static float GetTextColumnWidth(const char* header, const std::vector<std::strin
 	return std::ceil(width + ImGui::GetStyle().CellPadding.x * 2.0f + extraWidth);
 }
 
-ImU32 ProfilingRenderer::GetGroupColor(const std::string& groupName)
+ImU32 ProfilingRenderer::GetGroupColor(std::string_view groupName)
 {
-	auto it = groupColorMap.find(groupName);
-	if (it != groupColorMap.end())
-		return it->second;
-
-	float hue = std::fmod(nextColorIndex * kGoldenRatio, 1.0f);
-	ImU32 color = HslToImU32(hue, 0.7f, 0.55f);
-	groupColorMap[groupName] = color;
-	nextColorIndex++;
-	return color;
+	const uint32_t hash = StableHash(groupName);
+	const float hue = HashToUnitFloat(hash);
+	const float saturation = 0.68f + HashToUnitFloat(MixHash(hash, 0xA511E9B3u)) * 0.12f;
+	const float lightness = 0.50f + HashToUnitFloat(MixHash(hash, 0x63D83595u)) * 0.10f;
+	return HslToImU32(hue, saturation, lightness);
 }
 
 uint32_t ProfilingRenderer::ToLegitColor(ImU32 imColor)
@@ -229,7 +279,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 		float avg = stats.avgMs;
 		float p95 = stats.p95Ms;
 		float p99 = stats.p99Ms;
-		data.entries.push_back({ label, timeMs, avg, p95, p99 });
+		data.entries.push_back({ label, r.name, timeMs, avg, p95, p99 });
 		data.totalAvg += avg;
 		data.totalP95 += p95;
 		data.totalP99 += p99;
@@ -253,7 +303,7 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 		task.startTime = accumulated / 1000.0;
 		task.endTime = (accumulated + e.timeMs) / 1000.0;
 		task.name = e.label;
-		task.color = ToLegitColor(GetGroupColor(featurePrefix + "::" + e.label));
+		task.color = ToLegitColor(GetGroupColor(e.colorKey));
 		tasks.push_back(task);
 		accumulated += e.timeMs;
 	}
@@ -297,7 +347,7 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 		for (const auto& e : data.entries)
 			passLabels.push_back(e.label);
 		passLabels.emplace_back("Total");
-		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Pass", passLabels));
+		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Pass", passLabels, GetColorMarkerExtraWidth()));
 		ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
 		ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
 		ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
@@ -306,7 +356,8 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 		for (const auto& e : data.entries) {
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
-			ImGui::Text("%s", e.label.c_str());
+			RenderColorMarker(GetGroupColor(e.colorKey));
+			ImGui::TextUnformatted(e.label.c_str());
 			ImGui::TableNextColumn();
 			TextHeat("%.3f", e.avgMs, data.maxAvg);
 			ImGui::TableNextColumn();
@@ -522,7 +573,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			for (const auto& pass : group.passes)
 				passLabels.push_back(pass.label);
 		}
-		const float passColumnWidth = GetTextColumnWidth("Pass", passLabels, ImGui::GetTreeNodeToLabelSpacing() + ImGui::GetStyle().IndentSpacing);
+		const float passColumnWidth = GetTextColumnWidth("Pass", passLabels, GetColorMarkerExtraWidth() + ImGui::GetTreeNodeToLabelSpacing() + ImGui::GetStyle().IndentSpacing);
 
 		if (ImGui::BeginTable("##Profiler", 5,
 				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
@@ -540,6 +591,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 				ImGui::TableNextColumn();
 
 				if (group.passes.empty()) {
+					RenderColorMarker(GetGroupColor(group.name));
 					ImGui::TreeNodeEx(group.name.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen);
 					ImGui::TableNextColumn();
 					TextHeat("%.3f", group.totalAvgMs, cachedMaxAvgMs);
@@ -551,6 +603,8 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 					if (cachedTotalAvgMs > 0.0f)
 						TextHeat("%5.1f", (group.totalAvgMs / cachedTotalAvgMs) * 100.0f, 100.0f);
 				} else {
+					const ImU32 groupColor = GetGroupColor(group.name);
+					RenderColorMarker(groupColor);
 					bool open = ImGui::TreeNodeEx(group.name.c_str(), 0);
 					ImGui::TableNextColumn();
 					TextHeat("%.3f", group.totalAvgMs, cachedMaxAvgMs);
@@ -565,6 +619,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 						for (const auto& pass : group.passes) {
 							ImGui::TableNextRow();
 							ImGui::TableNextColumn();
+							RenderColorMarker(groupColor);
 							ImGui::TreeNodeEx(pass.label.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen);
 							ImGui::TableNextColumn();
 							TextHeat("%.3f", pass.avgMs, cachedMaxAvgMs);

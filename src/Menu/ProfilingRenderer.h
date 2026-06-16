@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -67,6 +68,7 @@ private:
 	struct FeatureTimingEntry
 	{
 		std::string label;
+		std::string colorKey;
 		float timeMs;
 		float avgMs;
 		float p95Ms;
@@ -85,10 +87,7 @@ private:
 	static inline std::unordered_map<std::string, FeatureGraphState> featureGraphs;
 	static inline std::unordered_map<std::string, FeatureTimingMode> featureTimingModes;
 
-	static inline std::unordered_map<std::string, ImU32> groupColorMap;
-	static inline size_t nextColorIndex = 0;
-
-	static ImU32 GetGroupColor(const std::string& groupName);
+	static ImU32 GetGroupColor(std::string_view groupName);
 	static uint32_t ToLegitColor(ImU32 imColor);
 	static ImVec4 HeatColor(float value, float maxValue);
 	static void TextHeat(const char* fmt, float value, float maxValue);

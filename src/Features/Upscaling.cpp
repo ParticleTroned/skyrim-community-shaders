@@ -6439,6 +6439,7 @@ namespace
 	constexpr uint32_t kVRMenuD3DContextDiagnosticLogLimit = 4096;
 	constexpr uint32_t kVRMenuTrackedSourceCandidateLogLimit = 512;
 	constexpr uint32_t kVRMenuTrackedSourceWriterLogLimit = 4096;
+	constexpr uint32_t kVRMenuSourceCreationLogLimit = 8192;
 	constexpr size_t kVRMenuTrackedSourceCandidateCapacity = 32;
 	constexpr size_t kVRMenuTrackedSourceWriterCapacity = 128;
 
@@ -6487,8 +6488,10 @@ namespace
 	std::atomic<uint64_t> g_vrMenuHiResTextWriteOrder{ 0 };
 	std::atomic<uint32_t> g_vrMenuTrackedSourceCandidateLogCount{ 0 };
 	std::atomic<uint32_t> g_vrMenuTrackedSourceWriterLogCount{ 0 };
+	std::atomic<uint32_t> g_vrMenuSourceCreationLogCount{ 0 };
 	std::atomic<uint64_t> g_vrMenuTrackedSourceCandidateOrder{ 0 };
 	std::atomic<uint64_t> g_vrMenuTrackedSourceWriteOrder{ 0 };
+	std::atomic<uint64_t> g_vrMenuSourceCreationOrder{ 0 };
 
 	struct VRMenuD3DContextDiagnosticState
 	{
@@ -6997,6 +7000,228 @@ namespace
 			" samples=" + std::to_string(a_info.samples) +
 			" bind=" + FormatVRMenuDiagnosticHex(a_info.bindFlags);
 		return text;
+	}
+
+	bool ShouldLogVRMenuSourceCreationDiagnostics()
+	{
+#if !VR_TRANSITION_DIAG_ENABLED
+		return false;
+#else
+		return REL::Module::IsVR();
+#endif
+	}
+
+	bool TryConsumeVRMenuSourceCreationLogBudget()
+	{
+		const uint32_t previous = g_vrMenuSourceCreationLogCount.fetch_add(1, std::memory_order_acq_rel);
+		return previous < kVRMenuSourceCreationLogLimit;
+	}
+
+	bool IsVRMenuSourceCreationNameCandidate(std::string_view a_name)
+	{
+		return a_name.find("MENUBG") != std::string_view::npos ||
+		       a_name.find("PROJECTEDMENU") != std::string_view::npos ||
+		       a_name.find("HUDMENU") != std::string_view::npos ||
+		       a_name.find("WORLDUI0") != std::string_view::npos;
+	}
+
+	bool IsVRMenuSourceCreationTargetLikeDesc(
+		const D3D11_TEXTURE2D_DESC& a_desc,
+		const VRMenuD3DContextDiagnosticState& a_state)
+	{
+		if (static_cast<uint32_t>(a_desc.Format) != 28)
+			return false;
+		if ((a_desc.BindFlags & (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET)) !=
+			(D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET)) {
+			return false;
+		}
+
+		if (a_desc.Width == 2048 && a_desc.Height == 2048)
+			return true;
+
+		const std::string_view extentClass = ClassifyVRMenuD3DContextExtent(a_state, a_desc.Width, a_desc.Height);
+		return extentClass == "engine" || extentClass == "screen" || extentClass == "final";
+	}
+
+	bool IsVRMenuSourceCreationDescCandidate(
+		const D3D11_TEXTURE2D_DESC& a_desc,
+		const VRMenuD3DContextDiagnosticState& a_state)
+	{
+		D3DViewDiagnosticInfo info{};
+		info.valid = true;
+		info.width = a_desc.Width;
+		info.height = a_desc.Height;
+		info.arraySize = a_desc.ArraySize;
+		info.mipLevels = a_desc.MipLevels;
+		info.format = static_cast<uint32_t>(a_desc.Format);
+		info.samples = a_desc.SampleDesc.Count;
+		info.bindFlags = a_desc.BindFlags;
+
+		return IsVRMenuTrackedSourceCandidateKind(ClassifyVRMenuTrackedSourceWriterShape(info)) ||
+		       IsVRMenuSourceCreationTargetLikeDesc(a_desc, a_state);
+	}
+
+	bool IsVRMenuSourceCreationInfoCandidate(
+		const D3DViewDiagnosticInfo& a_info,
+		const VRMenuD3DContextDiagnosticState& a_state)
+	{
+		if (!a_info.valid)
+			return false;
+
+		if (IsVRMenuTrackedSourceCandidateKind(ClassifyVRMenuTrackedSourceWriterShape(a_info)))
+			return true;
+		if (IsVRMenuSourceCreationNameCandidate(a_info.engineName) ||
+			IsVRMenuSourceCreationNameCandidate(a_info.debugName)) {
+			return true;
+		}
+
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = a_info.width;
+		desc.Height = a_info.height;
+		desc.ArraySize = a_info.arraySize;
+		desc.MipLevels = a_info.mipLevels;
+		desc.Format = static_cast<DXGI_FORMAT>(a_info.format);
+		desc.SampleDesc.Count = a_info.samples;
+		desc.BindFlags = a_info.bindFlags;
+		return IsVRMenuSourceCreationTargetLikeDesc(desc, a_state);
+	}
+
+	std::string ClassifyVRMenuSourceCreationCandidate(
+		const D3DViewDiagnosticInfo& a_info,
+		const VRMenuD3DContextDiagnosticState& a_state)
+	{
+		if (IsVRMenuSourceCreationNameCandidate(a_info.engineName) && a_info.engineName != "UNKNOWN" && a_info.engineName != "NONE")
+			return a_info.engineName;
+
+		const auto trackedKind = ClassifyVRMenuTrackedSourceWriterShape(a_info);
+		if (IsVRMenuTrackedSourceCandidateKind(trackedKind))
+			return GetVRMenuTrackedSourceCandidateName(trackedKind);
+
+		const std::string_view extentClass = ClassifyVRMenuD3DContextExtent(a_state, a_info.width, a_info.height);
+		if (extentClass == "final")
+			return "menu-target-final-fmt28";
+		if (extentClass == "screen")
+			return "menu-target-screen-fmt28";
+		if (extentClass == "engine")
+			return "menu-target-engine-fmt28";
+		if (a_info.width == 2048 && a_info.height == 2048 && a_info.format == 28)
+			return "menu-target-2048x2048-fmt28";
+		return "menu-source-candidate";
+	}
+
+	std::string FormatVRMenuTextureCreationDesc(
+		const D3D11_TEXTURE2D_DESC* a_desc,
+		const VRMenuD3DContextDiagnosticState& a_state)
+	{
+		if (!a_desc)
+			return "desc=null";
+
+		std::string text =
+			"desc=" + std::to_string(a_desc->Width) +
+			"x" + std::to_string(a_desc->Height) +
+			" fmt=" + std::to_string(static_cast<uint32_t>(a_desc->Format)) +
+			" class=" + ClassifyVRMenuD3DContextExtent(a_state, a_desc->Width, a_desc->Height) +
+			" mip=" + std::to_string(a_desc->MipLevels) +
+			" array=" + std::to_string(a_desc->ArraySize) +
+			" samples=" + std::to_string(a_desc->SampleDesc.Count) +
+			" quality=" + std::to_string(a_desc->SampleDesc.Quality) +
+			" usage=" + std::to_string(static_cast<uint32_t>(a_desc->Usage)) +
+			" bind=" + FormatVRMenuDiagnosticHex(a_desc->BindFlags) +
+			" cpu=" + FormatVRMenuDiagnosticHex(a_desc->CPUAccessFlags) +
+			" misc=" + FormatVRMenuDiagnosticHex(a_desc->MiscFlags);
+		return text;
+	}
+
+	std::string FormatVRMenuTextureInitialData(const D3D11_SUBRESOURCE_DATA* a_initialData)
+	{
+		if (!a_initialData)
+			return "initialData=no";
+
+		return "initialData=yes ptr=" + FormatVRMenuDiagnosticPointer(a_initialData->pSysMem) +
+		       " rowPitch=" + std::to_string(a_initialData->SysMemPitch) +
+		       " depthPitch=" + std::to_string(a_initialData->SysMemSlicePitch);
+	}
+
+	std::string FormatVRMenuShaderResourceViewCreationDesc(const D3D11_SHADER_RESOURCE_VIEW_DESC* a_desc)
+	{
+		if (!a_desc)
+			return "viewDesc=default";
+
+		std::string text =
+			"viewDesc=fmt=" + std::to_string(static_cast<uint32_t>(a_desc->Format)) +
+			" dim=" + std::to_string(static_cast<uint32_t>(a_desc->ViewDimension));
+		if (a_desc->ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D) {
+			text += " mostMip=" + std::to_string(a_desc->Texture2D.MostDetailedMip);
+			text += " mipLevels=" + std::to_string(a_desc->Texture2D.MipLevels);
+		}
+		return text;
+	}
+
+	std::string FormatVRMenuRenderTargetViewCreationDesc(const D3D11_RENDER_TARGET_VIEW_DESC* a_desc)
+	{
+		if (!a_desc)
+			return "viewDesc=default";
+
+		std::string text =
+			"viewDesc=fmt=" + std::to_string(static_cast<uint32_t>(a_desc->Format)) +
+			" dim=" + std::to_string(static_cast<uint32_t>(a_desc->ViewDimension));
+		if (a_desc->ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D)
+			text += " mipSlice=" + std::to_string(a_desc->Texture2D.MipSlice);
+		return text;
+	}
+
+	void LogVRMenuSourceCreationDiagnostic(
+		const char* a_hook,
+		const char* a_phase,
+		const D3DViewDiagnosticInfo& a_info,
+		const D3D11_TEXTURE2D_DESC* a_desc,
+		const char* a_viewDesc,
+		const D3D11_SUBRESOURCE_DATA* a_initialData,
+		HRESULT a_result)
+	{
+		if (!ShouldLogVRMenuSourceCreationDiagnostics())
+			return;
+
+		const auto state = CaptureVRMenuD3DContextDiagnosticState();
+		const bool descCandidate = a_desc && IsVRMenuSourceCreationDescCandidate(*a_desc, state);
+		const bool infoCandidate = IsVRMenuSourceCreationInfoCandidate(a_info, state);
+		if (!descCandidate && !infoCandidate)
+			return;
+		if (!TryConsumeVRMenuSourceCreationLogBudget())
+			return;
+
+		const uint64_t order = g_vrMenuSourceCreationOrder.fetch_add(1, std::memory_order_acq_rel) + 1;
+		const auto frame = globals::state ? globals::state->frameCount : 0;
+		const std::string candidate = ClassifyVRMenuSourceCreationCandidate(a_info, state);
+		const std::string resource = FormatVRMenuTrackedSourceResourceInfo(a_info, state);
+		const std::string desc = FormatVRMenuTextureCreationDesc(a_desc, state);
+		const std::string initialData = FormatVRMenuTextureInitialData(a_initialData);
+
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMenuHiResText] action=identify-menu-source-creation frame={} order={} sourceCandidate={} resourceId={} hook={} phase={} resultHr=0x{:08X} resource={} {} {} {} renderScaleActive={} presentationUpscaling={} knownMenu={} vrMenuPresentation={} mainOrLoading={} textRasterCtx={} screen={}x{} engine={}x{} final={}x{} result=observed",
+			frame,
+			order,
+			candidate,
+			FormatVRMenuDiagnosticHex(static_cast<uint64_t>(a_info.resource)),
+			DiagnosticText(a_hook, "-"),
+			DiagnosticText(a_phase, "-"),
+			static_cast<uint32_t>(a_result),
+			resource,
+			desc,
+			DiagnosticText(a_viewDesc, "viewDesc=-"),
+			initialData,
+			BoolText(state.renderScaleActive),
+			BoolText(state.presentationUpscaling),
+			BoolText(state.knownMenu),
+			BoolText(state.vrMenuPresentation),
+			BoolText(state.mainOrLoading),
+			BoolText(state.textRasterContext),
+			state.screenWidth,
+			state.screenHeight,
+			state.engineWidth,
+			state.engineHeight,
+			state.finalWidth,
+			state.finalHeight);
 	}
 
 	const char* GetVRMenuTrackedSourceUsedByName(RE::RENDER_TARGETS::RENDER_TARGET a_target)
@@ -8548,6 +8773,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				upscaling.PostBackendDevice();
 			}
 
+			upscaling.InstallD3DDeviceDiagnostics(*ppDevice);
 			return S_OK;
 		} else {
 			logger::warn("[Frame Generation] FidelityFX DLLs are not loaded, skipping proxy");
@@ -8575,6 +8801,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		upscaling.CheckBackendFeatures(pAdapter);
 		upscaling.PostBackendDevice();
 	}
+
+	if (SUCCEEDED(ret) && ppDevice && *ppDevice)
+		upscaling.InstallD3DDeviceDiagnostics(*ppDevice);
 
 	return ret;
 }
@@ -10049,6 +10278,28 @@ void Upscaling::PostPostLoad()
 	stl::detour_thunk<BSImageSpace_Init_FXAA>(REL::RelocationID(98974, 105626));
 
 	logger::info("[Upscaling] Installed hooks");
+}
+
+void Upscaling::InstallD3DDeviceDiagnostics(ID3D11Device* a_device)
+{
+#if !VR_TRANSITION_DIAG_ENABLED
+	(void)a_device;
+	return;
+#else
+	if (!REL::Module::IsVR())
+		return;
+	if (!a_device || d3dDeviceDiagnosticsInstalled)
+		return;
+
+	stl::detour_vfunc<5, ID3D11Device_CreateTexture2D>(a_device);
+	stl::detour_vfunc<7, ID3D11Device_CreateShaderResourceView>(a_device);
+	stl::detour_vfunc<9, ID3D11Device_CreateRenderTargetView>(a_device);
+
+	d3dDeviceDiagnosticsInstalled = true;
+	VR_TRANSITION_DIAG_LOG(
+		"[VRMenuD3DDevice] menu source creation diagnostics installed marker=VRMenuHiResText action=identify-menu-source-creation hooks=createTexture2D,createSRV,createRTV totalLimit={} sourceCandidates=kWORLDUI0,menu-target-2048x2048-fmt28,menu-target-engine-fmt28,menu-target-screen-fmt28,menu-target-final-fmt28,unresolved-1024x1024-fmt65,unresolved-256x1-fmt28",
+		kVRMenuSourceCreationLogLimit);
+#endif
 }
 
 void Upscaling::InstallD3DContextDiagnostics(ID3D11DeviceContext* a_context)
@@ -21311,6 +21562,77 @@ void Upscaling::LightingCompositeMenu_Dispatch::thunk(void* a_imageSpaceShader, 
 		"Dispatch:after",
 		true,
 		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
+}
+
+HRESULT Upscaling::ID3D11Device_CreateTexture2D::thunk(
+	ID3D11Device* a_device,
+	const D3D11_TEXTURE2D_DESC* a_desc,
+	const D3D11_SUBRESOURCE_DATA* a_initialData,
+	ID3D11Texture2D** a_texture)
+{
+	const HRESULT result = func(a_device, a_desc, a_initialData, a_texture);
+	D3DViewDiagnosticInfo info{};
+	if (SUCCEEDED(result) && a_texture && *a_texture)
+		info = BuildResourceDiagnosticInfo(static_cast<ID3D11Resource*>(*a_texture));
+	LogVRMenuSourceCreationDiagnostic(
+		"CreateTexture2D",
+		"after-create",
+		info,
+		a_desc,
+		"viewDesc=-",
+		a_initialData,
+		result);
+	return result;
+}
+
+HRESULT Upscaling::ID3D11Device_CreateShaderResourceView::thunk(
+	ID3D11Device* a_device,
+	ID3D11Resource* a_resource,
+	const D3D11_SHADER_RESOURCE_VIEW_DESC* a_desc,
+	ID3D11ShaderResourceView** a_srv)
+{
+	const HRESULT result = func(a_device, a_resource, a_desc, a_srv);
+	D3DViewDiagnosticInfo info{};
+	if (SUCCEEDED(result) && a_srv && *a_srv) {
+		info = BuildSRVDiagnosticInfo(*a_srv, true);
+	} else {
+		info = BuildResourceDiagnosticInfo(a_resource);
+	}
+	const std::string viewDesc = FormatVRMenuShaderResourceViewCreationDesc(a_desc);
+	LogVRMenuSourceCreationDiagnostic(
+		"CreateShaderResourceView",
+		"after-create",
+		info,
+		nullptr,
+		viewDesc.c_str(),
+		nullptr,
+		result);
+	return result;
+}
+
+HRESULT Upscaling::ID3D11Device_CreateRenderTargetView::thunk(
+	ID3D11Device* a_device,
+	ID3D11Resource* a_resource,
+	const D3D11_RENDER_TARGET_VIEW_DESC* a_desc,
+	ID3D11RenderTargetView** a_rtv)
+{
+	const HRESULT result = func(a_device, a_resource, a_desc, a_rtv);
+	D3DViewDiagnosticInfo info{};
+	if (SUCCEEDED(result) && a_rtv && *a_rtv) {
+		info = BuildRTVDiagnosticInfo(*a_rtv);
+	} else {
+		info = BuildResourceDiagnosticInfo(a_resource);
+	}
+	const std::string viewDesc = FormatVRMenuRenderTargetViewCreationDesc(a_desc);
+	LogVRMenuSourceCreationDiagnostic(
+		"CreateRenderTargetView",
+		"after-create",
+		info,
+		nullptr,
+		viewDesc.c_str(),
+		nullptr,
+		result);
+	return result;
 }
 
 HRESULT Upscaling::ID3D11DeviceContext_Map::thunk(

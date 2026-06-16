@@ -465,6 +465,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
+	void InstallD3DDeviceDiagnostics(ID3D11Device* a_device);
 	void InstallD3DContextDiagnostics(ID3D11DeviceContext* a_context);
 
 	UpscaleMethod GetUpscaleMethod() const;
@@ -765,6 +766,7 @@ public:
 	float dynamicResolutionHeightRatio = 1.0f;
 
 	bool previousVendorUpscalerSelected = false;
+	bool d3dDeviceDiagnosticsInstalled = false;
 	bool d3dContextDiagnosticsInstalled = false;
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
@@ -1059,10 +1061,27 @@ private:
 	mutable ULONGLONG openCompositeUpscalingBlockerLastRefresh = 0;
 	bool openCompositeUpscalingBackendSkipLogged = false;
 	bool renderDocUpscalingBackendSkipLogged = false;
-
 	struct Main_UpdateJitter
 	{
 		static void thunk(RE::BSGraphics::State* a_state);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11Device_CreateTexture2D
+	{
+		static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* a_device, const D3D11_TEXTURE2D_DESC* a_desc, const D3D11_SUBRESOURCE_DATA* a_initialData, ID3D11Texture2D** a_texture);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11Device_CreateShaderResourceView
+	{
+		static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* a_device, ID3D11Resource* a_resource, const D3D11_SHADER_RESOURCE_VIEW_DESC* a_desc, ID3D11ShaderResourceView** a_srv);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11Device_CreateRenderTargetView
+	{
+		static HRESULT STDMETHODCALLTYPE thunk(ID3D11Device* a_device, ID3D11Resource* a_resource, const D3D11_RENDER_TARGET_VIEW_DESC* a_desc, ID3D11RenderTargetView** a_rtv);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

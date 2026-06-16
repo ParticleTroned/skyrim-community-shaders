@@ -11,6 +11,7 @@
 #include <array>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <functional>
 #include <limits>
 #include <openvr.h>
 #include <string>
@@ -826,6 +827,20 @@ public:
 	ID3D11Texture2D* vrMenuSceneDeltaSourceTexture = nullptr;
 	bool vrMenuSceneDeltaCleanReady = false;
 	bool vrMenuSceneDeltaBakedReady = false;
+	eastl::unique_ptr<Texture2D> vrMenuHiResCleanScene;
+	eastl::unique_ptr<Texture2D> vrMenuHiResLayer;
+	uint32_t vrMenuHiResFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t vrMenuHiResCleanWidth = 0;
+	uint32_t vrMenuHiResCleanHeight = 0;
+	uint32_t vrMenuHiResLayerWidth = 0;
+	uint32_t vrMenuHiResLayerHeight = 0;
+	DXGI_FORMAT vrMenuHiResCleanFormat = DXGI_FORMAT_UNKNOWN;
+	DXGI_FORMAT vrMenuHiResLayerFormat = DXGI_FORMAT_UNKNOWN;
+	ID3D11Texture2D* vrMenuHiResCleanSourceTexture = nullptr;
+	bool vrMenuHiResCleanReady = false;
+	bool vrMenuHiResLayerCleared = false;
+	bool vrMenuHiResLayerReady = false;
+	bool vrMenuHiResUsingCleanSceneThisFrame = false;
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	mutable std::atomic_bool submitStageRuntimeActive{ false };
@@ -880,6 +895,12 @@ public:
 	bool ResolveVRMenuCleanSceneForSubmit(uint32_t frame, ID3D11Texture2D* sourceTexture, ID3D11Texture2D*& cleanSceneTexture);
 	bool CompositeVRMenuSceneDeltaAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthIn, uint32_t eyeHeightIn, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
 	void ResetVRMenuSceneDeltaState();
+	void CaptureVRMenuHiResCleanSceneAtMainPostProcessingEntry();
+	bool TryDuplicateVRMenuHiResBgDraw(ID3D11DeviceContext* context, const char* hook, const std::string& args, const std::function<void()>& drawFunc);
+	bool ResolveVRMenuHiResCleanSceneForSubmit(uint32_t frame, ID3D11Texture2D* sourceTexture, ID3D11Texture2D*& cleanSceneTexture);
+	bool CompositeVRMenuHiResBgAfterSubmitStageUpscale(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
+	void ResetVRMenuHiResBgFrame(uint32_t frame);
+	void ResetVRMenuHiResBgState();
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();

@@ -739,6 +739,14 @@ namespace
 		RE::RENDER_TARGETS::kHUDMENU,
 	};
 
+	constexpr uint32_t kVRRenderScaleMenuSourceBaseSize = 2048u;
+	constexpr uint32_t kVRRenderScaleHiResMenuSourceSize = 4096u;
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRRenderScaleHiResMenuSourceTargets{
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+		RE::RENDER_TARGETS::kHUDMENU,
+		RE::RENDER_TARGETS::kWORLDUI0,
+	};
+
 	// No engine-managed render target is currently a submit-stage eye source.
 	// Submit-stage should only operate on the runtime-submitted eye textures.
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 0> kSubmittedVRPresentationTargets{};
@@ -798,6 +806,20 @@ namespace
 			       kVRRenderScaleEngineSizedTargets.begin(),
 			       kVRRenderScaleEngineSizedTargets.end(),
 			       a_target) != kVRRenderScaleEngineSizedTargets.end();
+	}
+
+	bool IsVRRenderScaleHiResMenuSourceTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		return std::find(
+			       kVRRenderScaleHiResMenuSourceTargets.begin(),
+			       kVRRenderScaleHiResMenuSourceTargets.end(),
+			       a_target) != kVRRenderScaleHiResMenuSourceTargets.end();
+	}
+
+	bool IsVRRenderScaleMenuSourceExtent(uint32_t a_width, uint32_t a_height)
+	{
+		return (a_width == kVRRenderScaleMenuSourceBaseSize && a_height == kVRRenderScaleMenuSourceBaseSize) ||
+		       (a_width == kVRRenderScaleHiResMenuSourceSize && a_height == kVRRenderScaleHiResMenuSourceSize);
 	}
 
 	bool IsVRPresentationRenderTargetTexture(ID3D11Texture2D* a_texture)
@@ -1016,7 +1038,7 @@ namespace
 		return DepthStencilDataSizeMatches(depthStencil, a_width, a_height, a_requireStencilSRV);
 	}
 
-	bool AreVRRenderScaleRenderTargetsSizedForDimensions(float2 a_engineSize, float2 a_displaySize)
+	bool AreVRRenderScaleRenderTargetsSizedForDimensions(float2 a_engineSize, float2 a_displaySize, bool a_renderScaleActive)
 	{
 		if (!globals::game::isVR || !globals::game::renderer)
 			return false;
@@ -1051,6 +1073,17 @@ namespace
 		for (const auto target : kVRRenderScaleDisplaySizedTargets) {
 			if (!ExistingRenderTargetTextureSizeMatches(target, displayWidth, displayHeight))
 				return false;
+		}
+
+		if (a_renderScaleActive) {
+			for (const auto target : kVRRenderScaleHiResMenuSourceTargets) {
+				if (!RequiredRenderTargetTextureSizeMatches(
+						target,
+						kVRRenderScaleHiResMenuSourceSize,
+						kVRRenderScaleHiResMenuSourceSize)) {
+					return false;
+				}
+			}
 		}
 
 		return true;
@@ -1289,6 +1322,8 @@ namespace
 			return "kHUDMENU";
 		case RE::RENDER_TARGETS::kFADERUI:
 			return "kFADERUI";
+		case RE::RENDER_TARGETS::kWORLDUI0:
+			return "kWORLDUI0";
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
 			return "kTEMPORAL_AA_UI_ACCUMULATION_1";
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
@@ -6923,8 +6958,7 @@ namespace
 			return VRMenuTrackedSourceCandidateKind::None;
 
 		if (a_info.engineName == "kWORLDUI0" &&
-			a_info.width == 2048 &&
-			a_info.height == 2048 &&
+			IsVRRenderScaleMenuSourceExtent(a_info.width, a_info.height) &&
 			a_info.format == 28 &&
 			HasD3DBindFlags(a_info, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET)) {
 			return VRMenuTrackedSourceCandidateKind::WorldUI0;
@@ -6952,8 +6986,8 @@ namespace
 		if (!a_info.valid || a_info.resource == 0)
 			return VRMenuTrackedSourceCandidateKind::None;
 
-		if (a_info.width == 2048 &&
-			a_info.height == 2048 &&
+		if (((a_info.engineName == "kWORLDUI0" && IsVRRenderScaleMenuSourceExtent(a_info.width, a_info.height)) ||
+				(a_info.width == kVRRenderScaleMenuSourceBaseSize && a_info.height == kVRRenderScaleMenuSourceBaseSize)) &&
 			a_info.format == 28 &&
 			HasD3DBindFlags(a_info, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET)) {
 			return VRMenuTrackedSourceCandidateKind::WorldUI0;
@@ -7036,7 +7070,7 @@ namespace
 			return false;
 		}
 
-		if (a_desc.Width == 2048 && a_desc.Height == 2048)
+		if (IsVRRenderScaleMenuSourceExtent(a_desc.Width, a_desc.Height))
 			return true;
 
 		const std::string_view extentClass = ClassifyVRMenuD3DContextExtent(a_state, a_desc.Width, a_desc.Height);
@@ -7104,8 +7138,16 @@ namespace
 			return "menu-target-screen-fmt28";
 		if (extentClass == "engine")
 			return "menu-target-engine-fmt28";
-		if (a_info.width == 2048 && a_info.height == 2048 && a_info.format == 28)
+		if (a_info.width == kVRRenderScaleHiResMenuSourceSize &&
+			a_info.height == kVRRenderScaleHiResMenuSourceSize &&
+			a_info.format == 28) {
+			return "menu-target-4096x4096-fmt28";
+		}
+		if (a_info.width == kVRRenderScaleMenuSourceBaseSize &&
+			a_info.height == kVRRenderScaleMenuSourceBaseSize &&
+			a_info.format == 28) {
 			return "menu-target-2048x2048-fmt28";
+		}
 		return "menu-source-candidate";
 	}
 
@@ -10297,7 +10339,7 @@ void Upscaling::InstallD3DDeviceDiagnostics(ID3D11Device* a_device)
 
 	d3dDeviceDiagnosticsInstalled = true;
 	VR_TRANSITION_DIAG_LOG(
-		"[VRMenuD3DDevice] menu source creation diagnostics installed marker=VRMenuHiResText action=identify-menu-source-creation hooks=createTexture2D,createSRV,createRTV totalLimit={} sourceCandidates=kWORLDUI0,menu-target-2048x2048-fmt28,menu-target-engine-fmt28,menu-target-screen-fmt28,menu-target-final-fmt28,unresolved-1024x1024-fmt65,unresolved-256x1-fmt28",
+		"[VRMenuD3DDevice] menu source creation diagnostics installed marker=VRMenuHiResText action=identify-menu-source-creation hooks=createTexture2D,createSRV,createRTV totalLimit={} sourceCandidates=kWORLDUI0,menu-target-2048x2048-fmt28,menu-target-4096x4096-fmt28,menu-target-engine-fmt28,menu-target-screen-fmt28,menu-target-final-fmt28,unresolved-1024x1024-fmt65,unresolved-256x1-fmt28",
 		kVRMenuSourceCreationLogLimit);
 #endif
 }
@@ -11090,6 +11132,83 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 	if (!a_properties || !globals::game::isVR)
 		return false;
 
+	const bool renderScaleActive = IsPerfModeActive();
+	const bool hiResMenuSourceTarget = IsVRRenderScaleHiResMenuSourceTarget(a_target);
+	const uint32_t originalWidth = a_properties->width;
+	const uint32_t originalHeight = a_properties->height;
+	if (hiResMenuSourceTarget) {
+		const char* targetName = GetVRMenuCompositionTargetName(a_target);
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMenuHiResText] action=inspect-menu-target-properties target={} original={}x{} renderScaleActive={} result=observed",
+			targetName,
+			originalWidth,
+			originalHeight,
+			BoolText(renderScaleActive));
+
+		auto logOverride = [&](uint32_t a_replacementWidth, uint32_t a_replacementHeight, const char* a_reason, const char* a_result) {
+			VR_TRANSITION_DIAG_LOG(
+				"[VRMenuHiResText] action=override-menu-target-size target={} original={}x{} replacement={}x{} renderScaleActive={} reason={} result={}",
+				targetName,
+				originalWidth,
+				originalHeight,
+				a_replacementWidth,
+				a_replacementHeight,
+				BoolText(renderScaleActive),
+				a_reason,
+				a_result);
+		};
+
+		if (!renderScaleActive) {
+			if (originalWidth == kVRRenderScaleHiResMenuSourceSize &&
+				originalHeight == kVRRenderScaleHiResMenuSourceSize) {
+				a_properties->width = kVRRenderScaleMenuSourceBaseSize;
+				a_properties->height = kVRRenderScaleMenuSourceBaseSize;
+				logOverride(
+					kVRRenderScaleMenuSourceBaseSize,
+					kVRRenderScaleMenuSourceBaseSize,
+					"render-scale-inactive-restore-base-menu-source",
+					"applied");
+				return true;
+			}
+
+			logOverride(
+				kVRRenderScaleHiResMenuSourceSize,
+				kVRRenderScaleHiResMenuSourceSize,
+				"render-scale-inactive",
+				"skipped");
+			return false;
+		}
+
+		if (originalWidth == kVRRenderScaleHiResMenuSourceSize &&
+			originalHeight == kVRRenderScaleHiResMenuSourceSize) {
+			logOverride(
+				kVRRenderScaleHiResMenuSourceSize,
+				kVRRenderScaleHiResMenuSourceSize,
+				"already-hires-menu-source",
+				"skipped");
+			return false;
+		}
+
+		if (originalWidth == kVRRenderScaleMenuSourceBaseSize &&
+			originalHeight == kVRRenderScaleMenuSourceBaseSize) {
+			a_properties->width = kVRRenderScaleHiResMenuSourceSize;
+			a_properties->height = kVRRenderScaleHiResMenuSourceSize;
+			logOverride(
+				kVRRenderScaleHiResMenuSourceSize,
+				kVRRenderScaleHiResMenuSourceSize,
+				"render-scale-hires-menu-source",
+				"applied");
+			return true;
+		}
+
+		logOverride(
+			kVRRenderScaleHiResMenuSourceSize,
+			kVRRenderScaleHiResMenuSourceSize,
+			"unexpected-original-size",
+			"skipped");
+		return false;
+	}
+
 	auto setSize = [a_properties](float2 a_size) {
 		const uint32_t width = ClampPositiveDimension(a_size.x);
 		const uint32_t height = ClampPositiveDimension(a_size.y);
@@ -11101,7 +11220,7 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 		return true;
 	};
 
-	if (IsPerfModeActive()) {
+	if (renderScaleActive) {
 		const auto displaySize = perfMode.GetDisplayScreenSize();
 		const auto renderSize = perfMode.GetRenderScreenSize();
 		if (displaySize.x <= 0.0f || displaySize.y <= 0.0f || renderSize.x <= 0.0f || renderSize.y <= 0.0f)
@@ -12038,7 +12157,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchTargetDisplaySize;
 		const bool renderTargetsAlreadySized = AreVRRenderScaleRenderTargetsSizedForDimensions(
 			relatchTargetEngineSize,
-			relatchTargetDisplaySize);
+			relatchTargetDisplaySize,
+			relatchRenderScaleActive);
 		if (renderTargetsAlreadySized) {
 			state->screenSize = relatchTargetEngineSize;
 			logger::debug(

@@ -304,7 +304,7 @@ PS_OUTPUT main(PS_INPUT input)
 	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
-	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float dirShadow = ShadowSampling::GetWorldShadow(positionWS.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 	float3 dirLightRaw = SharedData::DirLightColor.xyz * dirShadow;
 	float3 dirLightColor = Color::DirectionalLight(dirLightRaw / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;

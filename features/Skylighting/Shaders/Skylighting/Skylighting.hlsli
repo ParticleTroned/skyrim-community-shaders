@@ -15,21 +15,26 @@ namespace Skylighting
 #endif
 
 	const static sh2 UNIT_SH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
-	const static float3 ARRAY_SIZE = 4096.f * 2.5f * float3(1, 1, 0.5);
+	const static float DEFAULT_PROBE_FIELD_SIZE = 4096.f * 2.5f;
 
 	uint3 GetArrayDims(SharedData::SkylightingSettings params)
 	{
 		return max(params.ArrayDims.xyz, uint3(1, 1, 1));
 	}
 
+	float3 GetArraySize(SharedData::SkylightingSettings params)
+	{
+		return max(params.ProbeFieldSize, DEFAULT_PROBE_FIELD_SIZE) * float3(1, 1, 0.5);
+	}
+
 	float3 GetCellSize(SharedData::SkylightingSettings params)
 	{
-		return ARRAY_SIZE / float3(GetArrayDims(params));
+		return GetArraySize(params) / float3(GetArrayDims(params));
 	}
 
 	float GetFadeOutFactor(float3 positionMS)
 	{
-		float3 uvw = saturate(positionMS / ARRAY_SIZE + .5);
+		float3 uvw = saturate(positionMS / GetArraySize(SharedData::skylightingSettings) + .5);
 		float3 dists = min(uvw, 1 - uvw);
 		float edgeDist = min(dists.x, min(dists.y, dists.z));
 		return saturate(edgeDist * 20);
@@ -86,6 +91,7 @@ namespace Skylighting
 	{
 		const SharedData::SkylightingSettings params = SharedData::skylightingSettings;
 		const uint3 arrayDims = GetArrayDims(params);
+		const float3 arraySize = GetArraySize(params);
 		const float3 cellSize = GetCellSize(params);
 		sh2 scaledUnitSH = UNIT_SH / 1e-10;
 
@@ -95,7 +101,7 @@ namespace Skylighting
 		positionMS.xyz += normalWS * cellSize * 0.5;  // Receiver normal bias
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
-		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;
+		float3 uvw = positionMSAdjusted / arraySize + .5;
 
 		if (any(uvw < 0) || any(uvw > 1))
 			return scaledUnitSH;
@@ -161,13 +167,14 @@ namespace Skylighting
 	{
 		const SharedData::SkylightingSettings params = SharedData::skylightingSettings;
 		const uint3 arrayDims = GetArrayDims(params);
+		const float3 arraySize = GetArraySize(params);
 		sh2 scaledUnitSH = UNIT_SH / 1e-10;
 
 		if (SharedData::InInterior)
 			return scaledUnitSH;
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
-		float3 uvw = positionMSAdjusted / ARRAY_SIZE + .5;
+		float3 uvw = positionMSAdjusted / arraySize + .5;
 
 		if (any(uvw < 0) || any(uvw > 1))
 			return scaledUnitSH;

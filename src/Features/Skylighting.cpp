@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include "ShaderCache.h"
 #include "State.h"
@@ -59,6 +60,17 @@ namespace
 	uint ClampUpdateInterval(uint a_interval)
 	{
 		return std::clamp(a_interval, 1u, 32u);
+	}
+
+	float ClampProbeFieldSize(float a_size)
+	{
+		constexpr float minSize = Skylighting::Settings::kWorldCellSize * Skylighting::Settings::kMinProbeFieldSizeCells;
+		constexpr float maxSize = Skylighting::Settings::kWorldCellSize * Skylighting::Settings::kMaxProbeFieldSizeCells;
+
+		if (!std::isfinite(a_size))
+			return Skylighting::Settings::kDefaultProbeFieldSize;
+
+		return std::clamp(a_size, minSize, maxSize);
 	}
 
 	uint GetOcclusionUpdateInterval(const Skylighting::Settings& a_settings)
@@ -129,6 +141,7 @@ namespace
 
 	void NormalizeSettingsForRuntime(Skylighting::Settings& a_settings)
 	{
+		a_settings.ProbeFieldSize = ClampProbeFieldSize(a_settings.ProbeFieldSize);
 		a_settings.ProbeGridQuality = ClampProbeGridQuality(a_settings.ProbeGridQuality);
 		a_settings.OcclusionUpdateInterval = ClampUpdateInterval(a_settings.OcclusionUpdateInterval);
 		a_settings.ProbeUpdateInterval = ClampUpdateInterval(a_settings.ProbeUpdateInterval);
@@ -171,6 +184,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MaxZenith,
 	MinDiffuseVisibility,
 	MinSpecularVisibility,
+	ProbeFieldSize,
 	ProbeGridQuality,
 	EnableIncrementalProbeUpdates,
 	StableSliceCount,
@@ -187,6 +201,7 @@ void Skylighting::LoadSettings(json& o_json)
 	LoadIfPresent(o_json, "MaxZenith", settings.MaxZenith);
 	LoadIfPresent(o_json, "MinDiffuseVisibility", settings.MinDiffuseVisibility);
 	LoadIfPresent(o_json, "MinSpecularVisibility", settings.MinSpecularVisibility);
+	LoadIfPresent(o_json, "ProbeFieldSize", settings.ProbeFieldSize);
 	LoadIfPresent(o_json, "ProbeGridQuality", settings.ProbeGridQuality);
 	LoadIfPresent(o_json, "EnableIncrementalProbeUpdates", settings.EnableIncrementalProbeUpdates);
 	LoadIfPresent(o_json, "StableSliceCount", settings.StableSliceCount);
@@ -390,6 +405,21 @@ void Skylighting::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Uses a lighter sampling mode. Usually faster, with slightly softer lighting detail.");
 
+	float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
+	{
+		Util::BlueFrameStyleWrapper probeDistanceStyle(true);
+		if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
+			settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
+			ResetSkylighting();
+		}
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Sets the total camera-centered skylighting probe field width. 2.5 cells matches the current default.");
+		ImGui::Text("Effective reach is about half this value from the camera.");
+		ImGui::Text("Higher values reach farther, but with the same probe grid each probe covers more space and local detail gets softer.");
+		ImGui::Text("Raise Probe Grid Quality too if you want more reach without losing as much detail.");
+	}
+
 	ImGui::Separator();
 	ImGui::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -586,11 +616,12 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 
 	auto eyePosNI = Util::GetEyePosition(0);
 	auto eyePos = float3{ eyePosNI.x, eyePosNI.y, eyePosNI.z };
+	const float probeFieldSize = ClampProbeFieldSize(settings.ProbeFieldSize);
 
 	float3 cellSize = {
-		occlusionDistance / probeArrayDims[0],
-		occlusionDistance / probeArrayDims[1],
-		occlusionDistance * .5f / probeArrayDims[2]
+		probeFieldSize / probeArrayDims[0],
+		probeFieldSize / probeArrayDims[1],
+		probeFieldSize * .5f / probeArrayDims[2]
 	};
 	auto cellID = eyePos / cellSize;
 	cellID = { round(cellID.x), round(cellID.y), round(cellID.z) };
@@ -632,6 +663,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 			WrapIndex(static_cast<int>(cellID.z) - static_cast<int>(probeArrayDims[2] / 2), probeArrayDims[2]) },
 		.ValidMargin = { cellIDDiffI.x, cellIDDiffI.y, cellIDDiffI.z },
 		.ArrayDims = { probeArrayDims[0], probeArrayDims[1], probeArrayDims[2] },
+		.ProbeFieldSize = probeFieldSize,
 		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
 		.MinSpecularVisibility = settings.MinSpecularVisibility,
 		.ProbeUpdateSliceStart = probeUpdateSliceStart,
@@ -1010,7 +1042,7 @@ void Skylighting::RenderOcclusion()
 				RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
 
 				inOcclusion = true;
-				PrecipitationShaderCubeSize = occlusionDistance;
+				PrecipitationShaderCubeSize = ClampProbeFieldSize(settings.ProbeFieldSize);
 
 				float originaLastCubeSize = precip->lastCubeSize;
 				precip->lastCubeSize = PrecipitationShaderCubeSize;

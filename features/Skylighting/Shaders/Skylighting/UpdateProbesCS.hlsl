@@ -27,7 +27,7 @@ SamplerComparisonState comparisonSampler : register(s0);
 	int3 validMax = int3(arrayDims) - 1 + min(0, settings.ValidMargin.xyz);
 	bool isValid = all(cellIDInt >= validMin) && all(cellIDInt <= validMax);  // check if the cell is newly added
 	float3 cellCentreMS = float3(cellID) + 0.5 - arrayDimsF * 0.5;
-	cellCentreMS = cellCentreMS / arrayDimsF * Skylighting::ARRAY_SIZE + settings.PosOffset.xyz;
+	cellCentreMS = cellCentreMS / arrayDimsF * Skylighting::GetArraySize(settings) + settings.PosOffset.xyz;
 
 	float3 cellCentreOS = mul(settings.OcclusionViewProj, float4(cellCentreMS, 1)).xyz;
 	cellCentreOS.y = -cellCentreOS.y;

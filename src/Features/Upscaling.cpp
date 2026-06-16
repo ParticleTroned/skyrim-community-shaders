@@ -9,7 +9,6 @@
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BSRenderPass.h"
 #include "RE/B/BSShaderProperty.h"
-#include "RE/R/RenderTargetManager.h"
 #include "Features/RenderDoc.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -9773,23 +9772,14 @@ namespace
 		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
 	};
 
-	const char* UpdateVRRenderScaleMenuTargetMetadata(
-		RE::RENDER_TARGETS::RENDER_TARGET a_target,
-		uint32_t a_width,
-		uint32_t a_height)
+	const char* GetVRRenderScaleMenuTargetMetadataStatus(RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
 		const auto targetIndex = static_cast<uint32_t>(a_target);
 		if (targetIndex >= static_cast<uint32_t>(RE::RENDER_TARGETS::kTOTAL))
 			return "not-manager-backed";
 
-		auto* manager = RE::BSGraphics::RenderTargetManager::GetSingleton();
-		if (!manager)
-			return "manager-missing";
-
-		auto& properties = manager->renderTargetData[a_target];
-		properties.width = a_width;
-		properties.height = a_height;
-		return "updated";
+		// Startup-active render scale can reach this before RenderTargetManager metadata is safe to write.
+		return "skipped-unsafe";
 	}
 
 	bool TryCreateVRRenderScaleMenuTargetTexture(
@@ -9878,7 +9868,7 @@ namespace
 			!a_repair.hasTextureCopy ||
 			(textureCopyDesc.Width == a_width && textureCopyDesc.Height == a_height);
 		if (primaryMatches && copyMatches) {
-			const char* metadataResult = UpdateVRRenderScaleMenuTargetMetadata(a_target, a_width, a_height);
+			const char* metadataResult = GetVRRenderScaleMenuTargetMetadataStatus(a_target);
 			logger::debug(
 				"[VRMenuTargetResize] target={} action=already-sized old={}x{} new={}x{} reason={} metadata={}",
 				GetVRMenuCompositionTargetName(a_target),
@@ -10005,7 +9995,7 @@ namespace
 		data.SRV = a_repair.srv.detach();
 		data.SRVCopy = a_repair.srvCopy.detach();
 		data.UAV = a_repair.uav.detach();
-		const char* metadataResult = UpdateVRRenderScaleMenuTargetMetadata(a_repair.target, a_repair.newWidth, a_repair.newHeight);
+		const char* metadataResult = GetVRRenderScaleMenuTargetMetadataStatus(a_repair.target);
 
 		logger::debug(
 			"[VRMenuTargetResize] target={} action=replace result=success old={}x{} new={}x{} reason={} textureCopy={} uav={} metadata={}",

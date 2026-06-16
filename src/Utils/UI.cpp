@@ -54,6 +54,12 @@ namespace Util
 	static int g_lastWindowWidth = 0;
 	static int g_lastWindowHeight = 0;
 
+	namespace
+	{
+		std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_buttonFlashTimers;
+		std::mutex g_buttonFlashTimersMutex;
+	}
+
 	void RefreshScreenScale(HWND hwnd, float bufferWidth, float bufferHeight)
 	{
 		RECT rect{};
@@ -1955,42 +1961,60 @@ namespace Util
 		}
 	}  // namespace Input
 
-	bool ButtonWithFlash(const char* label, const ImVec2& size, int flashDurationMs)
+	bool IsButtonFlashActive(const char* id, int flashDurationMs)
 	{
-		static std::unordered_map<std::string, std::chrono::steady_clock::time_point> flashTimers;
-		static std::mutex flashTimersMutex;
+		if (!id) {
+			return false;
+		}
 
-		std::string buttonId = std::string(label);
+		const std::string buttonId = std::string(id);
 		auto now = std::chrono::steady_clock::now();
 
-		// Check if this button has active flash (thread-safe)
-		bool hasActiveFlash = false;
-		{
-			std::lock_guard<std::mutex> lock(flashTimersMutex);
-			auto it = flashTimers.find(buttonId);
-			if (it != flashTimers.end()) {
-				auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second);
-				if (elapsed.count() < flashDurationMs) {
-					hasActiveFlash = true;
-				} else {
-					// Flash expired, remove it
-					flashTimers.erase(it);
-				}
-			}
+		std::lock_guard<std::mutex> lock(g_buttonFlashTimersMutex);
+		auto it = g_buttonFlashTimers.find(buttonId);
+		if (it == g_buttonFlashTimers.end()) {
+			return false;
 		}
+
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second);
+		if (elapsed.count() < flashDurationMs) {
+			return true;
+		}
+
+		g_buttonFlashTimers.erase(it);
+		return false;
+	}
+
+	void TriggerButtonFlash(const char* id)
+	{
+		if (!id) {
+			return;
+		}
+
+		std::lock_guard<std::mutex> lock(g_buttonFlashTimersMutex);
+		g_buttonFlashTimers[std::string(id)] = std::chrono::steady_clock::now();
+	}
+
+	ImVec4 GetButtonFlashColor(const ImVec4& normalButton)
+	{
+		return ImVec4(
+			std::min(normalButton.x + 0.2f, 1.0f),
+			std::min(normalButton.y + 0.2f, 1.0f),
+			std::min(normalButton.z + 0.2f, 1.0f),
+			normalButton.w);
+	}
+
+	bool ButtonWithFlash(const char* label, const ImVec2& size, int flashDurationMs)
+	{
+		const bool hasActiveFlash = IsButtonFlashActive(label, flashDurationMs);
 
 		// Style the button with flash effect if active.
 		bool styleChanged = false;
 		if (hasActiveFlash) {
 			// Use subtle white overlay similar to action icon hover effect
-			ImVec4 normalButton = ImGui::GetStyleColorVec4(ImGuiCol_Button);
-			ImVec4 flashColor = ImVec4(
-				normalButton.x + 0.2f,  // Brighten slightly
-				normalButton.y + 0.2f,
-				normalButton.z + 0.2f,
-				normalButton.w);
-			ImVec4 flashHovered = ImVec4(flashColor.x * 1.1f, flashColor.y * 1.1f, flashColor.z * 1.1f, flashColor.w);
-			ImVec4 flashActive = ImVec4(flashColor.x * 0.9f, flashColor.y * 0.9f, flashColor.z * 0.9f, flashColor.w);
+			const ImVec4 flashColor = GetButtonFlashColor(ImGui::GetStyleColorVec4(ImGuiCol_Button));
+			const ImVec4 flashHovered = ImVec4(flashColor.x * 1.1f, flashColor.y * 1.1f, flashColor.z * 1.1f, flashColor.w);
+			const ImVec4 flashActive = ImVec4(flashColor.x * 0.9f, flashColor.y * 0.9f, flashColor.z * 0.9f, flashColor.w);
 
 			ImGui::PushStyleColor(ImGuiCol_Button, flashColor);
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, flashHovered);
@@ -2006,8 +2030,7 @@ namespace Util
 
 		// If clicked, start the flash timer (thread-safe)
 		if (clicked) {
-			std::lock_guard<std::mutex> lock(flashTimersMutex);
-			flashTimers[buttonId] = now;
+			TriggerButtonFlash(label);
 		}
 
 		return clicked;

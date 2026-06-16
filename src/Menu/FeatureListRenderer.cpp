@@ -838,11 +838,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 
 	auto& menu = *globals::menu;
 	if (menu.uiIcons.featureSettingRevert.texture) {
-		if (ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize)) {
+		if (Util::ImageButtonWithFlash("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize)) {
 			feat->RestoreDefaultSettings();
 		}
 	} else {
-		if (ImGui::Button("R##RestoreDefaults", iconSize)) {
+		if (Util::ButtonWithFlash("R##RestoreDefaults", iconSize)) {
 			feat->RestoreDefaultSettings();
 		}
 	}

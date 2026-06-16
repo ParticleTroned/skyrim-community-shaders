@@ -7,6 +7,7 @@ class MenuHeaderRenderer
 public:
 	struct ActionIcon
 	{
+		const char* id;
 		ID3D11ShaderResourceView* texture;
 		const char* tooltip;
 		std::function<void()> callback;

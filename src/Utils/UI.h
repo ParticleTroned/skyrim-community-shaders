@@ -378,6 +378,43 @@ namespace Util
 	 */
 	bool ButtonWithFlash(const char* label, const ImVec2& size = ImVec2(0, 0), int flashDurationMs = 200);
 
+	bool IsButtonFlashActive(const char* id, int flashDurationMs = 200);
+	void TriggerButtonFlash(const char* id);
+	ImVec4 GetButtonFlashColor(const ImVec4& normalButton);
+
+	template <class TextureID>
+	bool ImageButtonWithFlash(
+		const char* id,
+		TextureID textureId,
+		const ImVec2& imageSize,
+		const ImVec2& uv0 = ImVec2(0, 0),
+		const ImVec2& uv1 = ImVec2(1, 1),
+		const ImVec4& bgCol = ImVec4(0, 0, 0, 0),
+		const ImVec4& tintCol = ImVec4(1, 1, 1, 1),
+		int flashDurationMs = 200)
+	{
+		const bool hasActiveFlash = IsButtonFlashActive(id, flashDurationMs);
+		if (hasActiveFlash) {
+			const ImVec4 flashColor = GetButtonFlashColor(ImGui::GetStyleColorVec4(ImGuiCol_Button));
+			const ImVec4 flashHovered(flashColor.x * 1.1f, flashColor.y * 1.1f, flashColor.z * 1.1f, flashColor.w);
+			const ImVec4 flashActive(flashColor.x * 0.9f, flashColor.y * 0.9f, flashColor.z * 0.9f, flashColor.w);
+			ImGui::PushStyleColor(ImGuiCol_Button, flashColor);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, flashHovered);
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, flashActive);
+		}
+
+		const bool clicked = ImGui::ImageButton(id, textureId, imageSize, uv0, uv1, bgCol, tintCol);
+
+		if (hasActiveFlash) {
+			ImGui::PopStyleColor(3);
+		}
+		if (clicked) {
+			TriggerButtonFlash(id);
+		}
+
+		return clicked;
+	}
+
 	/**
 	 * Clean, minimalist toggle switch for feature enable/disable state
 	 * @param label Label text to display next to the toggle

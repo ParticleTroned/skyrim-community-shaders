@@ -187,6 +187,16 @@ namespace
 		ImVec2 size;
 	};
 
+	float GetVRSettingsWindowAspect()
+	{
+		switch (globals::features::vr.settings.attachMode) {
+		case VR::Settings::OverlayAttachMode::ControllerOnly:
+			return VR::Config::kOverlayAspect;
+		default:
+			return VR::Config::kHMDOverlayAspect;
+		}
+	}
+
 	void ExcludeShaderCompilationWindowFromTop(ImVec2& a_availableMin, const ImVec2& a_availableMax)
 	{
 		auto* shaderWindow = ImGui::FindWindowByName("ShaderCompilationInfo");
@@ -194,8 +204,8 @@ namespace
 			return;
 
 		const float shaderBottom = shaderWindow->Pos.y + shaderWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
-		if (shaderBottom > a_availableMin.y && shaderBottom < a_availableMax.y)
-			a_availableMin.y = shaderBottom;
+		if (shaderBottom > a_availableMin.y)
+			a_availableMin.y = std::min(shaderBottom, a_availableMax.y);
 	}
 
 	ImVec2 FitSizeToAspect(ImVec2 a_availableSize, float a_heightOverWidth)
@@ -231,15 +241,16 @@ namespace
 				viewport->WorkPos.x + viewport->WorkSize.x,
 				viewport->WorkPos.y + viewport->WorkSize.y);
 			ExcludeShaderCompilationWindowFromTop(availableMin, availableMax);
+			availableMin.y = std::min(availableMin.y, availableMax.y);
 
-			const ImVec2 availableSize(
-				std::max(availableMax.x - availableMin.x, 1.0f),
-				std::max(availableMax.y - availableMin.y, 1.0f));
-			const ImVec2 size = FitSizeToAspect(availableSize, VR::Config::kHMDOverlayAspect);
+			const ImVec2 availableSpan(
+				std::max(availableMax.x - availableMin.x, 0.0f),
+				std::max(availableMax.y - availableMin.y, 0.0f));
+			const ImVec2 size = FitSizeToAspect(availableSpan, GetVRSettingsWindowAspect());
 			return {
 				.center = ImVec2(
-					availableMin.x + availableSize.x * 0.5f,
-					availableMin.y + availableSize.y * 0.5f),
+					(availableMin.x + availableMax.x) * 0.5f,
+					(availableMin.y + availableMax.y) * 0.5f),
 				.size = size
 			};
 		}
@@ -778,7 +789,7 @@ void Menu::DrawSettings()
 				useSteamVRWindowControls &&
 				!willBeDocked &&
 				!steamVRLegacyWindowSizeRepaired &&
-				(std::abs(windowAspect - VR::Config::kHMDOverlayAspect) > kLegacyAspectRepairTolerance);
+				(std::abs(windowAspect - GetVRSettingsWindowAspect()) > kLegacyAspectRepairTolerance);
 			if (repairSteamVRLegacyWindowSize) {
 				steamVRLegacyWindowSizeRepaired = true;
 				windowSizeForOverlap = defaultWindowSize;

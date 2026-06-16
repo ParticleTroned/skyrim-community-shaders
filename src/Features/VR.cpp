@@ -2912,7 +2912,7 @@ void VR::SubmitOverlayFrame()
 		renderImGuiToTexture(menuRTV.get());
 
 		const bool controllerTextureUsedByIVROverlay = useIVROverlay && wantsControllerOverlay;
-		const bool controllerTextureUsedByInScene = useInSceneOverlay && settings.attachMode == AttachMode::ControllerOnly;
+		const bool controllerTextureUsedByInScene = useInSceneOverlay && wantsControllerOverlay;
 		const bool shouldRenderControllerTexture =
 			menuControllerTexture &&
 			menuControllerRTV &&

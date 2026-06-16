@@ -4,7 +4,7 @@
 #include <cmath>
 
 #include "RE/N/NiDirectionalLight.h"
-#include "InteriorSun.h"
+#include "LocationContext.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
@@ -529,8 +529,7 @@ void VolumetricLighting::EarlyPrepass()
 	vlData.screenYMin1 = height - 1;
 	vlDataCB->Update(vlData);
 
-	const auto interiorCell = RE::TES::GetSingleton()->interiorCell;
-	const bool currentlyInInterior = interiorCell != nullptr;
+	const bool currentlyInInterior = LocationContext::HasInteriorCell();
 	const bool nextRainSuppressionActive =
 		globals::game::isVR &&
 		settings.DisableWeatherInteractionDuringRain &&
@@ -544,7 +543,7 @@ void VolumetricLighting::EarlyPrepass()
 
 	initialised = true;
 	inInterior = currentlyInInterior;
-	inInteriorWithSun = InteriorSun::IsInteriorWithSun(interiorCell);
+	inInteriorWithSun = LocationContext::IsInteriorWithSun();
 	rainOnlySuppressionActive = nextRainSuppressionActive;
 	SetupVL();
 }
@@ -557,9 +556,9 @@ void VolumetricLighting::SetupVL()
 		return;
 	}
 
-	const bool runtimeEnabled = inInterior ? (settings.InteriorEnabled && inInteriorWithSun) : settings.ExteriorEnabled;
-	const int32_t quality = ClampQualityIndex(inInterior ? settings.InteriorQuality : settings.ExteriorQuality);
-	const TextureSize& customSize = inInterior ? settings.InteriorCustomSize : settings.ExteriorCustomSize;
+	const bool runtimeEnabled = LocationContext::AllowsEnabledLocations(settings.InteriorEnabled && inInteriorWithSun, settings.ExteriorEnabled, inInterior);
+	const int32_t quality = ClampQualityIndex(LocationContext::SelectInteriorExterior(inInterior, settings.InteriorQuality, settings.ExteriorQuality));
+	const TextureSize customSize = LocationContext::SelectInteriorExterior(inInterior, settings.InteriorCustomSize, settings.ExteriorCustomSize);
 
 	if (globals::game::isVR) {
 		rainOnlySuppressionActive =

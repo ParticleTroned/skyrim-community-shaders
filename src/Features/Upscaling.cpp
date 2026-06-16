@@ -15182,10 +15182,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (vendorResumeFrame != 0 && !transitionPresentationCooldown)
 		ClearSubmitStageVendorResumeCooldown();
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
+	const bool loadingTransitionPresentationOnly =
+		vrRenderScaleMode &&
+		!menuPresentationContext &&
+		!submitMenuPresentationContext &&
+		!presentationRenderTarget &&
+		!submitBoundsPresentationFallback &&
+		sourceRegion.matchesExpectedSize &&
+		IsVRLoadingPresentationContextActive(state);
 	auto computePresentationOnly = [&]() {
-		const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
+		const bool cooldownPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
 		return vrRenderScaleMode &&
-		       (submitPresentationContext || transitionPresentationOnly || submitBoundsPresentationFallback) &&
+		       (submitPresentationContext || cooldownPresentationOnly || loadingTransitionPresentationOnly || submitBoundsPresentationFallback) &&
 		       !vrRenderScaleMenuCanUseVendor;
 	};
 	bool presentationOnly =
@@ -15269,7 +15277,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
-	const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
+	const bool transitionPresentationOnly = vrRenderScaleMode && (transitionPresentationCooldown || loadingTransitionPresentationOnly);
+	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
 	const bool foveatedRequested =
 		!presentationOnly &&
 		!sceneFeatureMenuPauseContext &&

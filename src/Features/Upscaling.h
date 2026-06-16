@@ -679,6 +679,7 @@ public:
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
+	bool ShouldSkipVRRenderScaleRelatchFrame() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	void LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 		const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture = nullptr,
@@ -790,6 +791,10 @@ public:
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateD3DSettleFrame{ 0 };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetResourceSetupFrame{ 0 };
+	std::atomic_bool pendingPerfModeRenderTargetResourceSetupSuperseded{ false };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
@@ -949,6 +954,11 @@ private:
 	bool IsAAVRSDeferredCompositeRequested() const;
 	void ApplyDeferredCompositeVRSRuntimeSettings(const char* a_reason = nullptr);
 	void ClearSubmitStageVendorResumeCooldown();
+	bool IsVRRenderScaleD3DRecreateSettleActive() const;
+	void ClearVRRenderScaleD3DRecreateSettle();
+	bool IsVRRenderScalePostD3DResourceSetupPending() const;
+	void ClearVRRenderScalePostD3DResourceSetup();
+	bool ShouldQuiesceVRSubmitStageVendorDispatch() const;
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);

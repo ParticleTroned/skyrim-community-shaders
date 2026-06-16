@@ -592,14 +592,11 @@ struct BSShaderRenderTargets_Create
 		return true;
 	}
 
-	static bool RecreateAndSetupRenderTargetResources()
+	static bool RecreateRenderTargetsOnly()
 	{
 		func();
 		globals::ReInit();
-		if (!CanSetupRenderingResources())
-			return false;
-		globals::state->SetupRenderTargetResources();
-		return true;
+		return CanSetupRenderingResources();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -683,7 +680,7 @@ namespace Hooks
 		if (!globals::game::renderer || !globals::state || !globals::deferred || !globals::d3d::device || !globals::d3d::context)
 			return false;
 
-		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources();
+		return BSShaderRenderTargets_Create::RecreateRenderTargetsOnly();
 	}
 
 	struct BSGraphics_Renderer_Init_InitD3D

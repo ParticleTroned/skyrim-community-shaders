@@ -8970,7 +8970,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return false;
 	}
 
-	if (ShouldDeferVRUpscalingTransitionSettings()) {
+	const bool hasPendingTransitionSettings = HasPendingVRUpscalingTransition();
+	const bool deferForPendingTransitionSettings =
+		hasPendingTransitionSettings &&
+		ShouldDeferVRUpscalingTransitionSettings();
+	const bool deferForRelatchPresentationContext =
+		!hasPendingTransitionSettings &&
+		(IsUpscalingLoadTransitionContextActive(*this, state) ||
+			(!ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, state) && IsKnownGameMenuContextActive()));
+	if (deferForPendingTransitionSettings || deferForRelatchPresentationContext) {
 		MarkPerfModeRenderTargetRecreateQueued();
 		return false;
 	}
@@ -9354,7 +9362,7 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 
 	if (IsUpscalingLoadTransitionContextActive(*this)) {
 		LogVRTransitionDiagnostics(*this, "vendor runtime reset waiting: load/transition context");
-		return true;
+		return !activeResetPending;
 	}
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {

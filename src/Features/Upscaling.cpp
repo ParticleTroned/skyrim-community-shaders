@@ -3023,6 +3023,32 @@ namespace
 		       IsVRLoadingPresentationTailActive(a_state);
 	}
 
+	bool IsVRRenderScaleRelatchSubmitProtectionTailActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		if (!IsLoadingTransitionTailActive(a_state))
+			return false;
+
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
+			return false;
+
+		return a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+	}
+
+	bool IsVRLoadingSubmitProtectionContextActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		// Preserve the existing loading-presentation guard and extend it only while a relatch is still in flight.
+		return (IsVRTransitionPresentationProtectionActive(a_upscaling, a_state) &&
+		        IsVRLoadingPresentationContextActive(a_state)) ||
+		       IsVRRenderScaleRelatchSubmitProtectionTailActive(a_upscaling, a_state);
+	}
+
 	bool ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(const Upscaling& a_upscaling, const State* a_state)
 	{
 		return globals::game::isVR &&
@@ -3045,9 +3071,8 @@ namespace
 
 	bool ShouldBypassVRFoveatedVendorDispatchForTransition(const Upscaling& a_upscaling, const State* a_state)
 	{
-		(void)a_upscaling;
 		return IsSaveLoadTransitionContextActive(a_state) ||
-		       IsVRLoadingPresentationContextActive(a_state);
+		       IsVRLoadingSubmitProtectionContextActive(a_upscaling, a_state);
 	}
 
 	bool HasPendingVRVendorRuntimeReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
@@ -14743,17 +14768,9 @@ bool Upscaling::ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Text
 	if (!state)
 		return false;
 
-	const bool loadingPresentationContext =
-		IsVRTransitionPresentationProtectionActive(*this, state) &&
-		IsVRLoadingPresentationContextActive(state);
-	const bool relatchDuringLoadingPresentation =
-		IsVRLoadingPresentationContextActive(state) &&
-		(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
-		 perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire));
-	const bool shouldSuppressReducedSubmit =
-		loadingPresentationContext ||
-		relatchDuringLoadingPresentation;
-	if (!shouldSuppressReducedSubmit)
+	const bool loadingSubmitProtectionContext =
+		IsVRLoadingSubmitProtectionContextActive(*this, state);
+	if (!loadingSubmitProtectionContext)
 		return false;
 
 	const uint32_t finalWidth = ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.x);
@@ -15106,12 +15123,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const uint32_t currentFrame = state->frameCount;
 	const bool presentationUpscalingActive = IsPresentationUpscalingActive();
 	const bool vrRenderScaleMode = resolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
-	const bool loadingPresentationContext =
-		IsVRTransitionPresentationProtectionActive(*this, state) &&
-		IsVRLoadingPresentationContextActive(state);
+	const bool loadingSubmitProtectionContext =
+		IsVRLoadingSubmitProtectionContextActive(*this, state);
 	const bool loadingPresentationFallbackActive =
 		vrRenderScaleMode &&
-		loadingPresentationContext;
+		loadingSubmitProtectionContext;
 	if (!presentationUpscalingActive && !loadingPresentationFallbackActive)
 		return false;
 
@@ -15125,7 +15141,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		resolutionPlan.menuContextActive ||
 		currentMenuPresentationContext;
 	const bool submitPresentationContext =
-		loadingPresentationContext ||
+		loadingSubmitProtectionContext ||
 		presentationRenderTarget;
 	const bool menuPresentationContext =
 		menuTextProtectionContext ||

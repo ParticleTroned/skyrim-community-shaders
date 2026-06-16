@@ -46,9 +46,16 @@ public:
 
 	struct Settings
 	{
+		static constexpr float kWorldCellSize = 4096.0f;
+		static constexpr float kDefaultProbeFieldSizeCells = 2.5f;
+		static constexpr float kMinProbeFieldSizeCells = 2.5f;
+		static constexpr float kMaxProbeFieldSizeCells = 8.0f;
+		static constexpr float kDefaultProbeFieldSize = kWorldCellSize * kDefaultProbeFieldSizeCells;
+
 		float MaxZenith = 3.1415926f / 2.f;  // 90 deg
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
+		float ProbeFieldSize = kDefaultProbeFieldSize;  // XY probe field size in world units
 		uint ProbeGridQuality = 1;  // 0: performance, 1: balanced, 2: quality
 		bool EnableIncrementalProbeUpdates = true;
 		uint StableSliceCount = 8;
@@ -70,7 +77,7 @@ public:
 		uint _pad0;
 		int ValidMargin[4];
 		uint ArrayDims[3];
-		uint _pad1;
+		float ProbeFieldSize;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
@@ -92,7 +99,6 @@ public:
 
 	// misc parameters
 	uint probeArrayDims[3] = { 256, 256, 128 };
-	float occlusionDistance = 4096.f * 2.5f;  // 5 ugrids
 
 	// cached variables
 	bool queuedResetSkylighting = true;

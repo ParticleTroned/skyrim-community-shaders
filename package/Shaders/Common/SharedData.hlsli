@@ -214,7 +214,7 @@ namespace SharedData
 		uint _pad0;
 		int4 ValidMargin;
 		uint3 ArrayDims;
-		uint _pad1;
+		float ProbeFieldSize;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;

@@ -3075,6 +3075,27 @@ namespace
 		       (a_primaryMethod != a_secondaryMethod && HasPendingVRVendorRuntimeReset(a_upscaling, a_secondaryMethod));
 	}
 
+	bool HasActiveVRRenderScaleVendorTransitionBlocker(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		if (!globals::game::isVR)
+			return false;
+		if (!IsVendorUpscalingMethod(a_upscaleMethod))
+			return false;
+
+		const auto configuredMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
+		if (HasPendingVRVendorRuntimeReset(a_upscaling, a_upscaleMethod, configuredMethod))
+			return true;
+		if (IsVRRenderScalePostLoadResetRelevant(a_upscaling, a_upscaleMethod) ||
+			IsVRRenderScalePostLoadResetRelevant(a_upscaling, configuredMethod)) {
+			return true;
+		}
+
+		return a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		       a_upscaling.pendingPerfModeRenderTargetRecreateD3DSettleFrame.load(std::memory_order_acquire) != 0 ||
+		       a_upscaling.pendingPerfModeRenderTargetResourceSetupFrame.load(std::memory_order_acquire) != 0;
+	}
+
 	bool ShouldDeferHMDClearMask()
 	{
 		return ShouldDeferVRTransitionMaskRepair(globals::features::upscaling, globals::state);
@@ -14770,6 +14791,11 @@ bool Upscaling::IsSubmitStageUpscalingActive() const
 		return false;
 	}
 
+	if (HasActiveVRRenderScaleVendorTransitionBlocker(*this, GetRuntimeUpscaleMethod())) {
+		submitStageRuntimeActive.store(false, std::memory_order_relaxed);
+		return false;
+	}
+
 	const bool submitStageSceneActive = IsPerfModePresentationActive();
 
 	const bool menuBlocksSubmitStage =
@@ -17269,6 +17295,11 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			return false;
 		}
 
+		if (HasActiveVRRenderScaleVendorTransitionBlocker(upscaling, upscaleMethod)) {
+			logDecision("vanilla-vendor-transition-pending");
+			return false;
+		}
+
 		auto context = globals::d3d::context;
 		auto renderer = globals::game::renderer;
 		if (!context || !renderer) {
@@ -17491,12 +17522,42 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 			return false;
 		}
 
+		const bool outputNeedsCopy = outputTexture != main.texture;
+		D3D11_TEXTURE2D_DESC outputDesc{};
+		D3D11_TEXTURE2D_DESC mainDesc{};
+		main.texture->GetDesc(&mainDesc);
+		if (outputNeedsCopy) {
+			outputTexture->GetDesc(&outputDesc);
+			const bool outputCompatible =
+				outputDesc.SampleDesc.Count == mainDesc.SampleDesc.Count &&
+				outputDesc.Format == mainDesc.Format &&
+				outputDesc.Width >= mainDesc.Width &&
+				outputDesc.Height >= mainDesc.Height;
+			if (!outputCompatible) {
+				static bool loggedCopyMismatch = false;
+				if (!loggedCopyMismatch) {
+					logger::warn(
+						"[Upscaling] Dynamic-resolution upsample replacement could not copy output: main={}x{} fmt={} samples={} target={}x{} fmt={} samples={}",
+						mainDesc.Width,
+						mainDesc.Height,
+						static_cast<uint32_t>(mainDesc.Format),
+						mainDesc.SampleDesc.Count,
+						outputDesc.Width,
+						outputDesc.Height,
+						static_cast<uint32_t>(outputDesc.Format),
+						outputDesc.SampleDesc.Count);
+					loggedCopyMismatch = true;
+				}
+				logDecision("vanilla-output-not-ready");
+				releaseRefs();
+				return false;
+			}
+		}
+
 		bool sourceReady = sourceTexture == main.texture;
 		if (sourceTexture != main.texture) {
 			D3D11_TEXTURE2D_DESC sourceDesc{};
-			D3D11_TEXTURE2D_DESC mainDesc{};
 			sourceTexture->GetDesc(&sourceDesc);
-			main.texture->GetDesc(&mainDesc);
 
 			if (sourceDesc.SampleDesc.Count == mainDesc.SampleDesc.Count &&
 				sourceDesc.Format == mainDesc.Format &&
@@ -17540,36 +17601,11 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 		if (upscaleMethod == UpscaleMethod::kDLSS)
 			upscaling.ApplySharpening();
 
-		if (outputTexture != main.texture) {
-			D3D11_TEXTURE2D_DESC outputDesc{};
-			D3D11_TEXTURE2D_DESC mainDesc{};
-			outputTexture->GetDesc(&outputDesc);
-			main.texture->GetDesc(&mainDesc);
-
-			if (outputDesc.SampleDesc.Count == mainDesc.SampleDesc.Count &&
-				outputDesc.Format == mainDesc.Format &&
-				outputDesc.Width >= mainDesc.Width &&
-				outputDesc.Height >= mainDesc.Height) {
-				context->OMSetRenderTargets(0, nullptr, nullptr);
-				D3D11_BOX sourceBox{ 0, 0, 0, mainDesc.Width, mainDesc.Height, 1 };
-				context->CopySubresourceRegion(outputTexture, 0, 0, 0, 0, main.texture, 0, &sourceBox);
-				context->OMSetRenderTargets(1, &outputRTV, outputDSV);
-			} else {
-				static bool loggedCopyMismatch = false;
-				if (!loggedCopyMismatch) {
-					logger::warn(
-						"[Upscaling] Dynamic-resolution upsample replacement could not copy output: main={}x{} fmt={} samples={} target={}x{} fmt={} samples={}",
-						mainDesc.Width,
-						mainDesc.Height,
-						static_cast<uint32_t>(mainDesc.Format),
-						mainDesc.SampleDesc.Count,
-						outputDesc.Width,
-						outputDesc.Height,
-						static_cast<uint32_t>(outputDesc.Format),
-						outputDesc.SampleDesc.Count);
-					loggedCopyMismatch = true;
-				}
-			}
+		if (outputNeedsCopy) {
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			D3D11_BOX sourceBox{ 0, 0, 0, mainDesc.Width, mainDesc.Height, 1 };
+			context->CopySubresourceRegion(outputTexture, 0, 0, 0, 0, main.texture, 0, &sourceBox);
+			context->OMSetRenderTargets(1, &outputRTV, outputDSV);
 		}
 		context->OMSetRenderTargets(1, &outputRTV, outputDSV);
 

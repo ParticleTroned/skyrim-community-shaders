@@ -8,6 +8,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	DisableInInteriors,
+	DisableInExteriors,
 	lightGamma,
 	colorGamma,
 	emitColorGamma,
@@ -37,6 +38,7 @@ void LinearLighting::DrawSettings()
 {
 	ImGui::Checkbox("Enable Linear Lighting", (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
+	ImGui::Checkbox("Disable in exteriors", (bool*)&settings.DisableInExteriors);
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("General")) {
@@ -188,13 +190,19 @@ bool LinearLighting::IsRuntimeEnabled() const
 		return false;
 
 	auto state = globals::state;
-	if (state && (state->isMainMenuOpen || state->isLoadingMenuOpen))
+	if (state && state->IsMainOrLoadingMenuOpen())
 		return false;
 
-	if (settings.DisableInInteriors && Util::IsInterior())
+	if (IsDisabledForCurrentCell())
 		return false;
 
 	return true;
+}
+
+bool LinearLighting::IsDisabledForCurrentCell() const
+{
+	const bool isInterior = Util::IsInterior();
+	return (settings.DisableInInteriors && isInterior) || (settings.DisableInExteriors && !isInterior);
 }
 
 RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)

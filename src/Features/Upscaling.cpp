@@ -4063,6 +4063,57 @@ namespace
 		return menu && menu->initialized && menu->ShouldSwallowInput();
 	}
 
+	struct VRFoveatedSetupVisualizationState
+	{
+		bool fovMask = false;
+		bool vrsMask = false;
+
+		bool Active() const { return fovMask || vrsMask; }
+	};
+
+	VRFoveatedSetupVisualizationState GetVRFoveatedSetupVisualizationState(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		VRFoveatedSetupVisualizationState setupState{};
+		const bool baseContext =
+			globals::game::isVR &&
+			IsCommunityShadersMenuOpen() &&
+			!IsVRMenuPresentationContextActive() &&
+			a_upscaling.IsFoveatedVendorDispatchEnabled(a_upscaleMethod);
+		if (baseContext) {
+			setupState.fovMask = a_upscaling.settings.foveatedPeripheryMaskVisualization;
+			setupState.vrsMask = a_upscaling.settings.aaVrs && a_upscaling.settings.aaVrsVisualization;
+		}
+
+		return setupState;
+	}
+
+	void LogVRFoveatedSetupVisualizationAllowedOnce(Upscaling::UpscaleMethod a_upscaleMethod, const VRFoveatedSetupVisualizationState& a_setupState, const char* a_hook)
+	{
+		if (!a_setupState.Active())
+			return;
+
+		const uint32_t hookKey =
+			a_hook && std::string_view(a_hook) == "SubmitVRUpscaledFrame" ? 4u :
+			(a_hook && std::string_view(a_hook) == "BuildAAVRSSettings" ? 8u : 16u);
+		const uint32_t markerKey =
+			(a_setupState.fovMask ? 1u : 0u) |
+			(a_setupState.vrsMask ? 2u : 0u) |
+			hookKey;
+		const uint32_t markerBit = 1u << markerKey;
+		static std::atomic_uint32_t loggedMarkerBits{ 0 };
+		const uint32_t previousMarkerBits = loggedMarkerBits.fetch_or(markerBit, std::memory_order_relaxed);
+		if ((previousMarkerBits & markerBit) == 0) {
+			const auto* state = globals::state;
+			logger::info(
+				"[VRFOVSetup] action=allow-foveated-visualization-in-cs-menu hook={} frame={} method={} fovMask={} vrsMask={} result=allowed",
+				a_hook ? a_hook : "unknown",
+				state ? state->frameCount : 0,
+				magic_enum::enum_name(a_upscaleMethod),
+				BoolText(a_setupState.fovMask),
+				BoolText(a_setupState.vrsMask));
+		}
+	}
+
 	bool IsGameMenuContextActive()
 	{
 		return IsKnownGameMenuContextActive();
@@ -6031,11 +6082,16 @@ namespace
 		return state;
 	}
 
-	ScenePausedUiState BuildAAVRSUiState(bool a_methodEligible, bool a_adapterEligible, bool a_toggleEnabled, bool a_runtimeActive)
+	ScenePausedUiState BuildAAVRSUiState(const Upscaling& a_upscaling, bool a_methodEligible, bool a_adapterEligible, bool a_toggleEnabled, bool a_runtimeActive)
 	{
 		const bool canEnable = a_methodEligible && a_adapterEligible;
 		const bool requested = canEnable && a_toggleEnabled;
-		const bool menuPaused = globals::game::isVR ? IsVRSceneFeatureMenuPauseContextActive() : IsKnownGameMenuContextActive();
+		const bool vrsSetupVisualizationContext =
+			globals::game::isVR &&
+			GetVRFoveatedSetupVisualizationState(a_upscaling, a_upscaling.GetRuntimeUpscaleMethod()).vrsMask;
+		const bool menuPaused =
+			(globals::game::isVR ? IsVRSceneFeatureMenuPauseContextActive() : IsKnownGameMenuContextActive()) &&
+			!vrsSetupVisualizationContext;
 		return BuildScenePausedUiState(canEnable, requested, a_runtimeActive && !menuPaused, a_runtimeActive, menuPaused);
 	}
 
@@ -6754,6 +6810,7 @@ void Upscaling::DrawSettings()
 				const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
 				const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.sharedVisibleScale);
 				const auto aaVrsUiState = BuildAAVRSUiState(
+					*this,
 					IsAAVRSEligible(upscaleMethod),
 					IsAAVRSAdapterEligible(),
 					settings.aaVrs,
@@ -7123,6 +7180,7 @@ void Upscaling::DrawFoveatedSettings()
 	const bool aaVrsMethodEligible = IsAAVRSEligible(upscaleMethod);
 	const bool aaVrsAdapterEligible = IsAAVRSAdapterEligible();
 	auto aaVrsUiState = BuildAAVRSUiState(
+		*this,
 		aaVrsMethodEligible,
 		aaVrsAdapterEligible,
 		settings.aaVrs,
@@ -7150,6 +7208,7 @@ void Upscaling::DrawFoveatedSettings()
 			settings.aaVrs = aaVrs;
 	}
 	aaVrsUiState = BuildAAVRSUiState(
+		*this,
 		aaVrsMethodEligible,
 		aaVrsAdapterEligible,
 		settings.aaVrs,
@@ -10293,8 +10352,12 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
 	const bool foveatedDispatchEnabled = IsFoveatedVendorDispatchEnabled(upscaleMethod);
 	const bool menuPresentationContext = IsVRSceneFeatureMenuPauseContextActive();
-	if (!settings.aaVrs || !globals::game::isVR || !foveatedDispatchEnabled || menuPresentationContext)
+	const auto setupVisualizationState = GetVRFoveatedSetupVisualizationState(*this, upscaleMethod);
+	const bool vrsSetupVisualizationContext = setupVisualizationState.vrsMask;
+	if (!settings.aaVrs || !globals::game::isVR || !foveatedDispatchEnabled || (menuPresentationContext && !vrsSetupVisualizationContext))
 		return false;
+	if (menuPresentationContext && vrsSetupVisualizationContext)
+		LogVRFoveatedSetupVisualizationAllowedOnce(upscaleMethod, setupVisualizationState, "BuildAAVRSSettings");
 
 	uint32_t inputWidthPerEye = 0;
 	uint32_t inputHeight = 0;
@@ -10390,12 +10453,17 @@ void Upscaling::UpdateAAVRSState()
 		return;
 	}
 
-	if (IsVRSceneFeatureMenuPauseContextActive()) {
+	const auto setupVisualizationState = GetVRFoveatedSetupVisualizationState(*this, upscaleMethod);
+	const bool vrsSetupVisualizationContext = setupVisualizationState.vrsMask;
+	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
+	if (sceneFeatureMenuPauseContext && !vrsSetupVisualizationContext) {
 		// UpdateAAVRSState runs before world rendering, so lastWorldRenderFrame
 		// cannot be used here without blocking valid scene frames.
 		disableAndReport("Game/CS menu context active", requested, true);
 		return;
 	}
+	if (sceneFeatureMenuPauseContext && vrsSetupVisualizationContext)
+		LogVRFoveatedSetupVisualizationAllowedOnce(upscaleMethod, setupVisualizationState, "UpdateAAVRSState");
 
 	auto* device = globals::d3d::device;
 	auto* context = globals::d3d::context;
@@ -15349,12 +15417,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool transitionPresentationOnly = vrRenderScaleMode && (transitionPresentationCooldown || loadingTransitionPresentationOnly);
 	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
+	const auto setupVisualizationState = GetVRFoveatedSetupVisualizationState(*this, upscaleMethod);
+	const bool foveatedSetupVisualizationContext = setupVisualizationState.Active();
 	const bool foveatedRequested =
 		!presentationOnly &&
-		!sceneFeatureMenuPauseContext &&
+		(!sceneFeatureMenuPauseContext || foveatedSetupVisualizationContext) &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass;
+	if (sceneFeatureMenuPauseContext && foveatedSetupVisualizationContext && foveatedRequested)
+		LogVRFoveatedSetupVisualizationAllowedOnce(upscaleMethod, setupVisualizationState, "SubmitVRUpscaledFrame");
 	const bool presentationSourceTooSmall =
 		presentationOnly &&
 		(sourceDesc.Width < sourceEyeWidthIn || sourceDesc.Height < sourceEyeHeightIn);

@@ -101,7 +101,7 @@ namespace
 #if VR_TRANSITION_DIAG_ENABLED
 #define VR_TRANSITION_DIAG_LOG(...)                                      \
 	do {                                                                 \
-		if (globals::game::isVR)                                         \
+		if (ShouldRunVRTransitionDiagnostics())                          \
 			logger::VR_TRANSITION_DIAG_LOG_LEVEL(__VA_ARGS__);           \
 	} while (false)
 #else
@@ -109,6 +109,26 @@ namespace
 	do {                            \
 	} while (false)
 #endif
+
+	bool ShouldRunVRTransitionDiagnostics()
+	{
+#if VR_TRANSITION_DIAG_ENABLED
+		return globals::game::isVR &&
+		       globals::state &&
+		       globals::state->IsDeveloperMode();
+#else
+		return false;
+#endif
+	}
+
+	bool ShouldRunVRPresentationDiagnostics()
+	{
+#if VR_TRANSITION_DIAG_ENABLED
+		return ShouldRunVRTransitionDiagnostics();
+#else
+		return false;
+#endif
+	}
 
 	template <class Fn>
 	struct ScopeExit
@@ -1527,7 +1547,7 @@ namespace
 		uint32_t a_finalWidth,
 		uint32_t a_finalHeight)
 	{
-		if (!globals::game::isVR || !a_context)
+		if (!ShouldRunVRPresentationDiagnostics() || !a_context)
 			return;
 
 		ID3D11RenderTargetView* rtv = nullptr;
@@ -3168,6 +3188,9 @@ namespace
 	template <class Fn>
 	bool LogVRTransitionDiagnosticOnce(bool& a_logged, Fn&& a_log)
 	{
+		if (!ShouldRunVRTransitionDiagnostics())
+			return false;
+
 		if (a_logged)
 			return false;
 
@@ -3508,7 +3531,7 @@ namespace
 		(void)a_force;
 		return;
 #else
-		if (!globals::game::isVR)
+		if (!ShouldRunVRTransitionDiagnostics())
 			return;
 
 		const auto snapshot = BuildVRTransitionDiagnosticSnapshot(a_upscaling);
@@ -3680,7 +3703,7 @@ namespace
 		(void)a_snapshot;
 		return false;
 #else
-		if (!globals::game::isVR || !globals::state)
+		if (!ShouldRunVRTransitionDiagnostics())
 			return false;
 
 		a_snapshot = BuildVRTransitionDiagnosticSnapshot(a_upscaling);
@@ -4755,6 +4778,11 @@ namespace
 		bool a_includeKnownTargetsBefore,
 		Callback&& a_callback)
 	{
+		if (!ShouldRunVRPresentationDiagnostics()) {
+			std::forward<Callback>(a_callback)();
+			return;
+		}
+
 		LogVRPresentationPassDiagnostics(
 			a_upscaling,
 			a_slot,
@@ -4997,7 +5025,7 @@ namespace
 			if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, stagingTexture.put())) || !stagingTexture) {
 				static std::atomic_bool loggedCreateFailure{ false };
 				if (!loggedCreateFailure.exchange(true, std::memory_order_acq_rel)) {
-					logger::warn("[VRKTotalDiag] failed to create sparse kTOTAL fingerprint staging texture fmt={}", static_cast<uint32_t>(totalDesc.Format));
+					logger::debug("[VRKTotalDiag] failed to create sparse kTOTAL fingerprint staging texture fmt={}", static_cast<uint32_t>(totalDesc.Format));
 				}
 				return false;
 			}
@@ -5040,7 +5068,7 @@ namespace
 		if (FAILED(a_context->Map(staging.texture.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
 			static std::atomic_bool loggedMapFailure{ false };
 			if (!loggedMapFailure.exchange(true, std::memory_order_acq_rel))
-				logger::warn("[VRKTotalDiag] failed to map sparse kTOTAL fingerprint staging texture");
+				logger::debug("[VRKTotalDiag] failed to map sparse kTOTAL fingerprint staging texture");
 			return false;
 		}
 		auto unmapStaging = ScopeExit([&]() {
@@ -5206,7 +5234,7 @@ namespace
 
 		static std::atomic_bool loggedSafeMenuBakeDiagnostics{ false };
 		if (!loggedSafeMenuBakeDiagnostics.exchange(true, std::memory_order_acq_rel)) {
-			logger::info("[VRDiagBuild] Pre65 safe menu bake mapping diagnostics active");
+			logger::debug("[VRDiagBuild] Pre65 safe menu bake mapping diagnostics active");
 		}
 
 		a_snapshot.frame = state->frameCount;
@@ -5688,6 +5716,9 @@ namespace
 		const char* a_phase,
 		bool a_includeKnownTargets = false)
 	{
+		if (!ShouldRunVRPresentationDiagnostics())
+			return;
+
 		VRPresentationDiagnosticSnapshot snapshot{};
 		if (!BuildVRPresentationDiagnosticSnapshot(a_upscaling, a_passName, a_phase, snapshot))
 			return;
@@ -9063,7 +9094,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
 				pendingDLSSReset.store(true, std::memory_order_release);
 			const bool loggedVendorDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchVendorDeferDiagnostic, [&]() {
-				logger::warn("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
+				logger::debug("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
 				VR_TRANSITION_DIAG_LOG(
 					"[VRTransition] Relatch deferred: vendor resources are still in use; retrying after {} frames",
 					kVRUpscalingTransitionApplyDelayFrames);
@@ -9099,7 +9130,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			if (!Hooks::RecreateRenderTargetsForVRRenderScale()) {
 				requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 				const bool loggedD3DDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchD3DDeferDiagnostic, [&]() {
-					logger::warn("[VRRenderScale] Render-target relatch could not run; will retry.");
+					logger::debug("[VRRenderScale] Render-target relatch could not run; will retry.");
 					VR_TRANSITION_DIAG_LOG(
 						"[VRTransition] Relatch deferred: D3D render-target recreate will retry in at least {} frames",
 						kVRRenderScaleRelatchBusyRetryFrames);
@@ -9551,7 +9582,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 
 	try {
 		if (!ResetVRVendorRuntimeResources(true, false)) {
-			logger::warn("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
+			logger::debug("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
 			postLoadRuntimeResetPending.store(true, std::memory_order_release);
 			return false;
 		}
@@ -14923,6 +14954,9 @@ namespace
 void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 	const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture, const vr::VRTextureBounds_t* a_outputBounds, vr::EVRSubmitFlags a_submitFlags) const
 {
+	if (!ShouldRunVRPresentationDiagnostics())
+		return;
+
 	VRTransitionDiagnosticSnapshot snapshot{};
 	if (!TryBuildVRSubmitPathDiagnosticSnapshot(*this, snapshot))
 		return;
@@ -15166,20 +15200,22 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
 	if (!submitStagePreparedThisFrame) {
-		if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
+		if (!submitStageSetupMaskVisualization) {
+			if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
+				if (IsSubmitStageDeviceLost())
+					return false;
+
+				return false;
+			}
 			if (IsSubmitStageDeviceLost())
 				return false;
 
-			return false;
+			if (!presentationOnly && HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
+				return false;
+
+			UpdateHistoryResetState(upscaleMethod);
+			LatchHistoryResetForCurrentFrame();
 		}
-		if (IsSubmitStageDeviceLost())
-			return false;
-
-		if (!presentationOnly && HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
-			return false;
-
-		UpdateHistoryResetState(upscaleMethod);
-		LatchHistoryResetForCurrentFrame();
 	} else {
 		const bool vendorResetPending = HasPendingVRVendorRuntimeReset(*this, upscaleMethod);
 		if (vendorResetPending && !presentationOnly)
@@ -15234,7 +15270,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const bool transitionPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
-	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
 	const bool foveatedRequested =
 		!presentationOnly &&
 		!sceneFeatureMenuPauseContext &&
@@ -17568,7 +17603,7 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
-	const bool logPresentationDiagnostics = globals::game::isVR;
+	const bool logPresentationDiagnostics = ShouldRunVRPresentationDiagnostics();
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,
@@ -17620,7 +17655,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
-	if (globals::game::isVR) {
+	if (ShouldRunVRPresentationDiagnostics()) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,
 			VRPresentationDiagnosticSlot::MainPostProcessing,

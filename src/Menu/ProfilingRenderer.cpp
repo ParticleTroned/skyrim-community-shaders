@@ -291,7 +291,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	return data;
 }
 
-bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight)
+bool ProfilingRenderer::RenderFeatureTimingGraph([[maybe_unused]] const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight)
 {
 	if (data.entries.empty())
 		return false;

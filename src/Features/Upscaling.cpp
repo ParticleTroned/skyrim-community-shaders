@@ -110,6 +110,17 @@ namespace
 	} while (false)
 #endif
 
+	bool ShouldRunVRPresentationDiagnostics()
+	{
+#if VR_TRANSITION_DIAG_ENABLED
+		return globals::game::isVR &&
+		       globals::state &&
+		       globals::state->IsDeveloperMode();
+#else
+		return false;
+#endif
+	}
+
 	template <class Fn>
 	struct ScopeExit
 	{
@@ -1527,7 +1538,7 @@ namespace
 		uint32_t a_finalWidth,
 		uint32_t a_finalHeight)
 	{
-		if (!globals::game::isVR || !a_context)
+		if (!ShouldRunVRPresentationDiagnostics() || !a_context)
 			return;
 
 		ID3D11RenderTargetView* rtv = nullptr;
@@ -4755,6 +4766,11 @@ namespace
 		bool a_includeKnownTargetsBefore,
 		Callback&& a_callback)
 	{
+		if (!ShouldRunVRPresentationDiagnostics()) {
+			std::forward<Callback>(a_callback)();
+			return;
+		}
+
 		LogVRPresentationPassDiagnostics(
 			a_upscaling,
 			a_slot,
@@ -5688,6 +5704,9 @@ namespace
 		const char* a_phase,
 		bool a_includeKnownTargets = false)
 	{
+		if (!ShouldRunVRPresentationDiagnostics())
+			return;
+
 		VRPresentationDiagnosticSnapshot snapshot{};
 		if (!BuildVRPresentationDiagnosticSnapshot(a_upscaling, a_passName, a_phase, snapshot))
 			return;
@@ -14923,6 +14942,9 @@ namespace
 void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 	const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture, const vr::VRTextureBounds_t* a_outputBounds, vr::EVRSubmitFlags a_submitFlags) const
 {
+	if (!ShouldRunVRPresentationDiagnostics())
+		return;
+
 	VRTransitionDiagnosticSnapshot snapshot{};
 	if (!TryBuildVRSubmitPathDiagnosticSnapshot(*this, snapshot))
 		return;
@@ -17568,7 +17590,7 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
-	const bool logPresentationDiagnostics = globals::game::isVR;
+	const bool logPresentationDiagnostics = ShouldRunVRPresentationDiagnostics();
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,
@@ -17620,7 +17642,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
-	if (globals::game::isVR) {
+	if (ShouldRunVRPresentationDiagnostics()) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,
 			VRPresentationDiagnosticSlot::MainPostProcessing,

@@ -1108,6 +1108,18 @@ private:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_Dispatch
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_threadGroupCountX, UINT a_threadGroupCountY, UINT a_threadGroupCountZ);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DispatchIndirect
+	{
+		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_bufferForArgs, UINT a_alignedByteOffsetForArgs);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct ID3D11DeviceContext_OMSetRenderTargets
 	{
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_numViews, ID3D11RenderTargetView* const* a_renderTargetViews, ID3D11DepthStencilView* a_depthStencilView);

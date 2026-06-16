@@ -6402,12 +6402,29 @@ namespace
 		std::atomic<uint32_t>,
 		static_cast<size_t>(VRMenuD3DContextDiagnosticBucket::Count)>;
 
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRMenuUpstreamWriteTargets{
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+		RE::RENDER_TARGETS::kHUDMENU,
+		RE::RENDER_TARGETS::kMENUBG,
+	};
+
+	using VRMenuD3DContextDiagnosticTargetCounters = std::array<
+		VRMenuD3DContextDiagnosticCounters,
+		kVRMenuUpstreamWriteTargets.size()>;
+
 	VRMenuD3DContextDiagnosticCounters g_vrMenuRtvBindLogCount{};
 	VRMenuD3DContextDiagnosticCounters g_vrMenuDrawToMenuBgLogCount{};
 	VRMenuD3DContextDiagnosticCounters g_vrMenuCopyToMenuBgLogCount{};
 	VRMenuD3DContextDiagnosticCounters g_vrMenuUpdateToMenuBgLogCount{};
 	VRMenuD3DContextDiagnosticCounters g_vrMenuResolveToMenuBgLogCount{};
 	VRMenuD3DContextDiagnosticCounters g_vrMenuClearMenuBgLogCount{};
+	VRMenuD3DContextDiagnosticTargetCounters g_vrMenuHiResTextDrawLogCount{};
+	VRMenuD3DContextDiagnosticTargetCounters g_vrMenuHiResTextCopyLogCount{};
+	VRMenuD3DContextDiagnosticTargetCounters g_vrMenuHiResTextUpdateLogCount{};
+	VRMenuD3DContextDiagnosticTargetCounters g_vrMenuHiResTextResolveLogCount{};
+	VRMenuD3DContextDiagnosticTargetCounters g_vrMenuHiResTextClearLogCount{};
+	VRMenuD3DContextDiagnosticTargetCounters g_vrMenuHiResTextDispatchLogCount{};
+	std::atomic<uint64_t> g_vrMenuHiResTextWriteOrder{ 0 };
 
 	struct VRMenuD3DContextDiagnosticState
 	{
@@ -6522,16 +6539,23 @@ namespace
 
 			D3D11_TEXTURE2D_DESC desc{};
 			texture->GetDesc(&desc);
+			const std::string debugName = GetD3DDebugObjectName(texture);
+			const char* sourceClass = ClassifyVRMenuD3DContextExtent(a_state, desc.Width, desc.Height);
 			a_signature ^= desc.Width;
 			a_signature *= 1099511628211ull;
 			a_signature ^= desc.Height;
 			a_signature *= 1099511628211ull;
 			a_signature ^= static_cast<uint64_t>(desc.Format);
 			a_signature *= 1099511628211ull;
-			return "unresolved(" + std::to_string(desc.Width) +
+			std::string result = "unresolved(" + std::to_string(desc.Width) +
 			       "x" + std::to_string(desc.Height) +
 			       " fmt=" + std::to_string(static_cast<uint32_t>(desc.Format)) +
-			       " bind=" + FormatVRMenuDiagnosticHex(desc.BindFlags) + ")";
+			       " class=" + sourceClass +
+			       " bind=" + FormatVRMenuDiagnosticHex(desc.BindFlags);
+			if (!debugName.empty())
+				result += " debug=" + debugName;
+			result += ")";
+			return result;
 		}
 
 		return "unresolved(" + FormatVRMenuDiagnosticPointer(a_resource) + ")";
@@ -6592,6 +6616,120 @@ namespace
 		return sources;
 	}
 
+	std::string FormatVRMenuHiResTextUnresolvedSource(
+		size_t a_slot,
+		const D3DViewDiagnosticInfo& a_info,
+		const VRMenuD3DContextDiagnosticState& a_state)
+	{
+		std::string source = "t";
+		source += std::to_string(a_slot);
+		source += "=unresolved(";
+		if (!a_info.valid) {
+			if (a_info.view != 0)
+				source += "view=" + FormatVRMenuDiagnosticHex(static_cast<uint64_t>(a_info.view));
+			else
+				source += "null";
+			source += ")";
+			return source;
+		}
+
+		source += "name=" + (a_info.engineName.empty() ? std::string("UNKNOWN") : a_info.engineName);
+		source += " debug=" + (a_info.debugName.empty() ? std::string("-") : a_info.debugName);
+		source += " " + std::to_string(a_info.width) + "x" + std::to_string(a_info.height);
+		source += " fmt=" + std::to_string(a_info.format);
+		source += " class=" + std::string(ClassifyVRMenuD3DContextExtent(a_state, a_info.width, a_info.height));
+		source += " viewFmt=" + std::to_string(a_info.viewFormat);
+		source += " dim=" + std::to_string(a_info.viewDimension);
+		source += " bind=" + FormatVRMenuDiagnosticHex(a_info.bindFlags);
+		source += ")";
+		return source;
+	}
+
+	std::string BuildVRMenuD3DContextAllShaderStageResourceDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const VRMenuD3DContextDiagnosticState& a_state,
+		bool a_pixelShaderStage,
+		uint64_t& a_signature)
+	{
+		if (!a_context)
+			return "-";
+
+		std::array<ID3D11ShaderResourceView*, 8> srvs{};
+		if (a_pixelShaderStage)
+			a_context->PSGetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
+		else
+			a_context->CSGetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
+		auto srvRelease = ScopeExit([&]() {
+			for (auto* srv : srvs) {
+				if (srv)
+					srv->Release();
+			}
+		});
+
+		std::string sources;
+		for (size_t slot = 0; slot < srvs.size(); ++slot) {
+			if (!srvs[slot])
+				continue;
+
+			std::string sourceText;
+			VRMenuCompositionTargetMatch source{};
+			if (TryResolveVRMenuCompositionView(srvs[slot], source)) {
+				const char* sourceClass = ClassifyVRMenuD3DContextExtent(a_state, source.width, source.height);
+				const char* sourceLayout = ClassifyVRMenuEyeLayout(source.target, source.width, source.height);
+				sourceText = FormatVRMenuCompositionSource(slot, source, sourceClass, sourceLayout, true);
+				MixVRMenuCompositionTargetSignature(a_signature, source);
+			} else {
+				const auto info = BuildSRVDiagnosticInfo(srvs[slot], a_pixelShaderStage);
+				sourceText = FormatVRMenuHiResTextUnresolvedSource(slot, info, a_state);
+				a_signature = MixViewDiagnosticSignature(a_signature, info);
+			}
+
+			if (!sources.empty())
+				sources += ", ";
+			sources += sourceText;
+
+			a_signature ^= static_cast<uint64_t>(slot + 1);
+			a_signature *= 1099511628211ull;
+		}
+
+		if (sources.empty())
+			sources = "-";
+		MixVRMenuOriginalCompositeTextSignature(a_signature, sources);
+		return sources;
+	}
+
+	std::string BuildVRMenuD3DContextAllPSResourceDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const VRMenuD3DContextDiagnosticState& a_state,
+		uint64_t& a_signature)
+	{
+		return BuildVRMenuD3DContextAllShaderStageResourceDiagnostics(a_context, a_state, true, a_signature);
+	}
+
+	std::string BuildVRMenuD3DContextAllCSResourceDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const VRMenuD3DContextDiagnosticState& a_state,
+		uint64_t& a_signature)
+	{
+		return BuildVRMenuD3DContextAllShaderStageResourceDiagnostics(a_context, a_state, false, a_signature);
+	}
+
+	std::string BuildVRMenuD3DContextAllShaderResourceDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const VRMenuD3DContextDiagnosticState& a_state,
+		uint64_t& a_signature)
+	{
+		const std::string psSources = BuildVRMenuD3DContextAllPSResourceDiagnostics(a_context, a_state, a_signature);
+		const std::string csSources = BuildVRMenuD3DContextAllCSResourceDiagnostics(a_context, a_state, a_signature);
+		std::string sources = "ps=[";
+		sources += psSources;
+		sources += "] cs=[";
+		sources += csSources;
+		sources += "]";
+		MixVRMenuOriginalCompositeTextSignature(a_signature, sources);
+		return sources;
+	}
+
 	VRMenuD3DContextDiagnosticBucket GetVRMenuD3DContextDiagnosticBucket(const char* a_destinationClass)
 	{
 		const std::string_view destinationClass = DiagnosticText(a_destinationClass, "other");
@@ -6645,6 +6783,153 @@ namespace
 	{
 		return ShouldLogResolvedVRMenuD3DContextDiagnostics() &&
 		       TryConsumeVRMenuD3DContextLogBudget(a_counters, a_bucket);
+	}
+
+	bool TryGetVRMenuUpstreamWriteTargetIndex(RE::RENDER_TARGETS::RENDER_TARGET a_target, size_t& a_outIndex)
+	{
+		for (size_t i = 0; i < kVRMenuUpstreamWriteTargets.size(); ++i) {
+			if (kVRMenuUpstreamWriteTargets[i] == a_target) {
+				a_outIndex = i;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool IsVRMenuUpstreamWriteTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		size_t targetIndex = 0;
+		return TryGetVRMenuUpstreamWriteTargetIndex(a_target, targetIndex);
+	}
+
+	bool HasVRMenuTargetD3DContextLogBudget(
+		const VRMenuD3DContextDiagnosticTargetCounters& a_counters,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		VRMenuD3DContextDiagnosticBucket a_bucket)
+	{
+		size_t targetIndex = 0;
+		if (!TryGetVRMenuUpstreamWriteTargetIndex(a_target, targetIndex))
+			return false;
+		return HasVRMenuD3DContextLogBudget(a_counters[targetIndex], a_bucket);
+	}
+
+	bool TryBeginVRMenuTargetD3DContextDiagnostic(
+		VRMenuD3DContextDiagnosticTargetCounters& a_counters,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		VRMenuD3DContextDiagnosticBucket a_bucket)
+	{
+		size_t targetIndex = 0;
+		if (!TryGetVRMenuUpstreamWriteTargetIndex(a_target, targetIndex))
+			return false;
+		return TryBeginVRMenuD3DContextDiagnostic(a_counters[targetIndex], a_bucket);
+	}
+
+	bool TryConsumeVRMenuTargetD3DContextLogBudget(
+		VRMenuD3DContextDiagnosticTargetCounters& a_counters,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		VRMenuD3DContextDiagnosticBucket a_bucket)
+	{
+		size_t targetIndex = 0;
+		if (!TryGetVRMenuUpstreamWriteTargetIndex(a_target, targetIndex))
+			return false;
+		return TryConsumeVRMenuD3DContextLogBudget(a_counters[targetIndex], a_bucket);
+	}
+
+	bool ShouldProbeVRMenuHiResTextWriterContext(const VRMenuD3DContextDiagnosticState& a_state)
+	{
+#if !VR_TRANSITION_DIAG_ENABLED
+		(void)a_state;
+		return false;
+#else
+		return a_state.renderScaleActive &&
+		       a_state.presentationUpscaling &&
+		       !a_state.mainOrLoading &&
+		       !IsCommunityShadersMenuOpen() &&
+		       (a_state.knownMenu || a_state.vrMenuPresentation || a_state.textRasterContext || IsVRMenuD3DContextDiagnosticScopeActive());
+#endif
+	}
+
+	void LogVRMenuHiResTextWriterDiagnostic(
+		const char* a_hook,
+		const char* a_phase,
+		ID3D11DeviceContext* a_context,
+		const VRMenuD3DContextDiagnosticState& a_contextState,
+		const VRMenuCompositionTargetMatch& a_destination,
+		const char* a_args,
+		const char* a_sourceLabel,
+		const std::string& a_sources)
+	{
+		if (!a_context || !ShouldLogResolvedVRMenuD3DContextDiagnostics())
+			return;
+
+		const char* destinationClass = ClassifyVRMenuD3DContextExtent(a_contextState, a_destination.width, a_destination.height);
+		const auto destinationBucket = GetVRMenuD3DContextDiagnosticBucket(destinationClass);
+		const char* destinationLayout = ClassifyVRMenuEyeLayout(a_destination.target, a_destination.width, a_destination.height);
+		uint64_t signature = 1469598103934665603ull;
+		MixVRMenuOriginalCompositeTextSignature(signature, "VRMenuHiResText");
+		MixVRMenuOriginalCompositeTextSignature(signature, DiagnosticText(a_hook, "-"));
+		MixVRMenuOriginalCompositeTextSignature(signature, DiagnosticText(a_phase, "-"));
+		MixVRMenuOriginalCompositeTextSignature(signature, DiagnosticText(a_args, "-"));
+		MixVRMenuOriginalCompositeTextSignature(signature, g_vrMenuD3DContextDiagnosticScope.pass);
+		MixVRMenuOriginalCompositeTextSignature(signature, g_vrMenuD3DContextDiagnosticScope.phase);
+		MixVRMenuCompositionTargetSignature(signature, a_destination);
+		MixVRMenuOriginalCompositeTextSignature(signature, a_sources);
+		signature ^= a_contextState.knownMenu ? 1ull : 0ull;
+		signature *= 1099511628211ull;
+		signature ^= a_contextState.vrMenuPresentation ? 1ull : 0ull;
+		signature *= 1099511628211ull;
+		signature ^= a_contextState.renderScaleActive ? 1ull : 0ull;
+		signature *= 1099511628211ull;
+		signature ^= a_contextState.presentationUpscaling ? 1ull : 0ull;
+		signature *= 1099511628211ull;
+
+		const std::string viewports = BuildVRMenuOriginalCompositeViewportDiagnostics(a_context, signature);
+		const std::string scissors = BuildVRMenuOriginalCompositeScissorDiagnostics(a_context, signature);
+		const std::string shaders = BuildVRMenuOriginalCompositeShaderDiagnostics(a_context, signature);
+		const std::string vsCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, true, signature);
+		const std::string psCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, false, signature);
+		const std::string pipelineState = BuildVRMenuOriginalCompositePipelineStateDiagnostics(a_context, signature);
+		const auto frame = globals::state ? globals::state->frameCount : 0;
+		const uint64_t writeOrder = g_vrMenuHiResTextWriteOrder.fetch_add(1, std::memory_order_acq_rel) + 1;
+		const std::string destinationLabel = FormatVRMenuCompositionTargetLabel(a_destination);
+
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMenuHiResText] action=identify-upstream-menu-writer frame={} order={} scope={}:{} hook={} phase={} signature={} dst={}({}x{} fmt={} class={} layout={} bucket={}) sourceKind={} sources={} args={} renderScaleActive={} presentationUpscaling={} knownMenu={} vrMenuPresentation={} mainOrLoading={} textRasterCtx={} screen={}x{} engine={}x{} final={}x{} viewports={} scissors={} shaders={} vsCBs={} psCBs={} state={} result=observed",
+			frame,
+			writeOrder,
+			g_vrMenuD3DContextDiagnosticScope.pass,
+			g_vrMenuD3DContextDiagnosticScope.phase,
+			DiagnosticText(a_hook, "-"),
+			DiagnosticText(a_phase, "-"),
+			FormatVRMenuDiagnosticHex(signature),
+			destinationLabel,
+			a_destination.width,
+			a_destination.height,
+			static_cast<uint32_t>(a_destination.format),
+			destinationClass,
+			destinationLayout,
+			GetVRMenuD3DContextDiagnosticBucketName(destinationBucket),
+			DiagnosticText(a_sourceLabel, "source"),
+			a_sources,
+			DiagnosticText(a_args, "-"),
+			BoolText(a_contextState.renderScaleActive),
+			BoolText(a_contextState.presentationUpscaling),
+			BoolText(a_contextState.knownMenu),
+			BoolText(a_contextState.vrMenuPresentation),
+			BoolText(a_contextState.mainOrLoading),
+			BoolText(a_contextState.textRasterContext),
+			a_contextState.screenWidth,
+			a_contextState.screenHeight,
+			a_contextState.engineWidth,
+			a_contextState.engineHeight,
+			a_contextState.finalWidth,
+			a_contextState.finalHeight,
+			viewports,
+			scissors,
+			shaders,
+			vsCBs,
+			psCBs,
+			pipelineState);
 	}
 
 	void LogVRMenuD3DContextDiagnostic(
@@ -6802,6 +7087,95 @@ namespace
 			sources);
 	}
 
+	void LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(ID3D11DeviceContext* a_context, const char* a_hook, const std::string& a_args)
+	{
+		if (!a_context)
+			return;
+		const auto contextState = CaptureVRMenuD3DContextDiagnosticState();
+		if (!ShouldProbeVRMenuHiResTextWriterContext(contextState))
+			return;
+
+		ID3D11RenderTargetView* rtv = nullptr;
+		a_context->OMGetRenderTargets(1, &rtv, nullptr);
+		if (!rtv)
+			return;
+		auto rtvRelease = ScopeExit([&]() {
+			rtv->Release();
+		});
+
+		VRMenuCompositionTargetMatch destination{};
+		if (!TryResolveVRMenuCompositionView(rtv, destination) ||
+			!IsVRMenuUpstreamWriteTarget(destination.target)) {
+			return;
+		}
+
+		const char* destinationClass = ClassifyVRMenuD3DContextExtent(contextState, destination.width, destination.height);
+		const auto destinationBucket = GetVRMenuD3DContextDiagnosticBucket(destinationClass);
+		if (!HasVRMenuTargetD3DContextLogBudget(g_vrMenuHiResTextDrawLogCount, destination.target, destinationBucket))
+			return;
+
+		uint64_t sourceSignature = 1469598103934665603ull;
+		const std::string sources = BuildVRMenuD3DContextAllShaderResourceDiagnostics(a_context, contextState, sourceSignature);
+		if (!TryConsumeVRMenuTargetD3DContextLogBudget(g_vrMenuHiResTextDrawLogCount, destination.target, destinationBucket))
+			return;
+		LogVRMenuHiResTextWriterDiagnostic(
+			a_hook,
+			"before-draw",
+			a_context,
+			contextState,
+			destination,
+			a_args.c_str(),
+			"shaderSources",
+			sources);
+	}
+
+	void LogVRMenuCurrentDispatchToUpstreamMenuDiagnostic(ID3D11DeviceContext* a_context, const char* a_hook, const std::string& a_args)
+	{
+		if (!a_context)
+			return;
+		const auto contextState = CaptureVRMenuD3DContextDiagnosticState();
+		if (!ShouldProbeVRMenuHiResTextWriterContext(contextState))
+			return;
+
+		std::array<ID3D11UnorderedAccessView*, D3D11_PS_CS_UAV_REGISTER_COUNT> uavs{};
+		a_context->CSGetUnorderedAccessViews(0, static_cast<UINT>(uavs.size()), uavs.data());
+		auto uavRelease = ScopeExit([&]() {
+			for (auto* uav : uavs) {
+				if (uav)
+					uav->Release();
+			}
+		});
+
+		for (size_t slot = 0; slot < uavs.size(); ++slot) {
+			VRMenuCompositionTargetMatch destination{};
+			if (!TryResolveVRMenuCompositionView(uavs[slot], destination) ||
+				!IsVRMenuUpstreamWriteTarget(destination.target)) {
+				continue;
+			}
+
+			const char* destinationClass = ClassifyVRMenuD3DContextExtent(contextState, destination.width, destination.height);
+			const auto destinationBucket = GetVRMenuD3DContextDiagnosticBucket(destinationClass);
+			if (!HasVRMenuTargetD3DContextLogBudget(g_vrMenuHiResTextDispatchLogCount, destination.target, destinationBucket))
+				continue;
+
+			uint64_t sourceSignature = 1469598103934665603ull;
+			std::string sources = "uavSlot=" + std::to_string(slot) + " ";
+			sources += BuildVRMenuD3DContextAllShaderResourceDiagnostics(a_context, contextState, sourceSignature);
+			if (!TryConsumeVRMenuTargetD3DContextLogBudget(g_vrMenuHiResTextDispatchLogCount, destination.target, destinationBucket))
+				continue;
+			const std::string args = a_args + " uavSlot=" + std::to_string(slot);
+			LogVRMenuHiResTextWriterDiagnostic(
+				a_hook,
+				"before-dispatch",
+				a_context,
+				contextState,
+				destination,
+				args.c_str(),
+				"shaderSources",
+				sources);
+		}
+	}
+
 	void LogVRMenuCopyToMenuBgDiagnostic(
 		ID3D11DeviceContext* a_context,
 		const char* a_hook,
@@ -6824,6 +7198,41 @@ namespace
 		const std::string source = FormatVRMenuD3DContextResource(a_src, contextState, sourceSignature);
 		LogVRMenuD3DContextDiagnostic(
 			"VRMenuCopyToMenuBg",
+			a_hook,
+			"before-copy",
+			a_context,
+			contextState,
+			destination,
+			a_args.c_str(),
+			"copySource",
+			source);
+	}
+
+	void LogVRMenuCopyToUpstreamMenuDiagnostic(
+		ID3D11DeviceContext* a_context,
+		const char* a_hook,
+		ID3D11Resource* a_dst,
+		ID3D11Resource* a_src,
+		const std::string& a_args)
+	{
+		VRMenuCompositionTargetMatch destination{};
+		if (!TryResolveVRMenuCompositionResource(a_dst, destination) ||
+			!IsVRMenuUpstreamWriteTarget(destination.target)) {
+			return;
+		}
+
+		const auto contextState = CaptureVRMenuD3DContextDiagnosticState();
+		if (!ShouldProbeVRMenuHiResTextWriterContext(contextState))
+			return;
+
+		uint64_t sourceSignature = 1469598103934665603ull;
+		const char* destinationClass = ClassifyVRMenuD3DContextExtent(contextState, destination.width, destination.height);
+		const auto destinationBucket = GetVRMenuD3DContextDiagnosticBucket(destinationClass);
+		if (!TryBeginVRMenuTargetD3DContextDiagnostic(g_vrMenuHiResTextCopyLogCount, destination.target, destinationBucket))
+			return;
+		std::string source = "copy=" + FormatVRMenuD3DContextResource(a_src, contextState, sourceSignature);
+		source += " shaderSources=" + BuildVRMenuD3DContextAllShaderResourceDiagnostics(a_context, contextState, sourceSignature);
+		LogVRMenuHiResTextWriterDiagnostic(
 			a_hook,
 			"before-copy",
 			a_context,
@@ -6874,6 +7283,50 @@ namespace
 			source);
 	}
 
+	void LogVRMenuUpdateToUpstreamMenuDiagnostic(
+		ID3D11DeviceContext* a_context,
+		ID3D11Resource* a_dst,
+		UINT a_dstSubresource,
+		const D3D11_BOX* a_dstBox,
+		const void* a_srcData,
+		UINT a_srcRowPitch,
+		UINT a_srcDepthPitch)
+	{
+		VRMenuCompositionTargetMatch destination{};
+		if (!TryResolveVRMenuCompositionResource(a_dst, destination) ||
+			!IsVRMenuUpstreamWriteTarget(destination.target)) {
+			return;
+		}
+
+		const auto contextState = CaptureVRMenuD3DContextDiagnosticState();
+		if (!ShouldProbeVRMenuHiResTextWriterContext(contextState))
+			return;
+
+		const char* destinationClass = ClassifyVRMenuD3DContextExtent(contextState, destination.width, destination.height);
+		const auto destinationBucket = GetVRMenuD3DContextDiagnosticBucket(destinationClass);
+		if (!TryBeginVRMenuTargetD3DContextDiagnostic(g_vrMenuHiResTextUpdateLogCount, destination.target, destinationBucket))
+			return;
+
+		std::string source =
+			"cpu=ptr(" + FormatVRMenuDiagnosticPointer(a_srcData) +
+			" rowPitch=" + std::to_string(a_srcRowPitch) +
+			" depthPitch=" + std::to_string(a_srcDepthPitch) + ")";
+		uint64_t sourceSignature = 1469598103934665603ull;
+		source += " shaderSources=" + BuildVRMenuD3DContextAllShaderResourceDiagnostics(a_context, contextState, sourceSignature);
+		const std::string args =
+			"dstSub=" + std::to_string(a_dstSubresource) +
+			" " + FormatVRMenuD3DContextBox("dstBox", a_dstBox);
+		LogVRMenuHiResTextWriterDiagnostic(
+			"UpdateSubresource",
+			"before-update",
+			a_context,
+			contextState,
+			destination,
+			args.c_str(),
+			"cpuUpdate",
+			source);
+	}
+
 	void LogVRMenuResolveToMenuBgDiagnostic(
 		ID3D11DeviceContext* a_context,
 		ID3D11Resource* a_dst,
@@ -6911,6 +7364,46 @@ namespace
 			source);
 	}
 
+	void LogVRMenuResolveToUpstreamMenuDiagnostic(
+		ID3D11DeviceContext* a_context,
+		ID3D11Resource* a_dst,
+		UINT a_dstSubresource,
+		ID3D11Resource* a_src,
+		UINT a_srcSubresource,
+		DXGI_FORMAT a_format)
+	{
+		VRMenuCompositionTargetMatch destination{};
+		if (!TryResolveVRMenuCompositionResource(a_dst, destination) ||
+			!IsVRMenuUpstreamWriteTarget(destination.target)) {
+			return;
+		}
+
+		const auto contextState = CaptureVRMenuD3DContextDiagnosticState();
+		if (!ShouldProbeVRMenuHiResTextWriterContext(contextState))
+			return;
+
+		uint64_t sourceSignature = 1469598103934665603ull;
+		const char* destinationClass = ClassifyVRMenuD3DContextExtent(contextState, destination.width, destination.height);
+		const auto destinationBucket = GetVRMenuD3DContextDiagnosticBucket(destinationClass);
+		if (!TryBeginVRMenuTargetD3DContextDiagnostic(g_vrMenuHiResTextResolveLogCount, destination.target, destinationBucket))
+			return;
+		std::string source = "resolve=" + FormatVRMenuD3DContextResource(a_src, contextState, sourceSignature);
+		source += " shaderSources=" + BuildVRMenuD3DContextAllShaderResourceDiagnostics(a_context, contextState, sourceSignature);
+		const std::string args =
+			"dstSub=" + std::to_string(a_dstSubresource) +
+			" srcSub=" + std::to_string(a_srcSubresource) +
+			" resolveFmt=" + std::to_string(static_cast<uint32_t>(a_format));
+		LogVRMenuHiResTextWriterDiagnostic(
+			"ResolveSubresource",
+			"before-resolve",
+			a_context,
+			contextState,
+			destination,
+			args.c_str(),
+			"resolveSource",
+			source);
+	}
+
 	void LogVRMenuClearMenuBgDiagnostic(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_rtv)
 	{
 		VRMenuCompositionTargetMatch destination{};
@@ -6934,6 +7427,36 @@ namespace
 			"-",
 			"source",
 			"-");
+	}
+
+	void LogVRMenuClearUpstreamMenuDiagnostic(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_rtv)
+	{
+		VRMenuCompositionTargetMatch destination{};
+		if (!TryResolveVRMenuCompositionView(a_rtv, destination) ||
+			!IsVRMenuUpstreamWriteTarget(destination.target)) {
+			return;
+		}
+
+		const auto contextState = CaptureVRMenuD3DContextDiagnosticState();
+		if (!ShouldProbeVRMenuHiResTextWriterContext(contextState))
+			return;
+
+		const char* destinationClass = ClassifyVRMenuD3DContextExtent(contextState, destination.width, destination.height);
+		const auto destinationBucket = GetVRMenuD3DContextDiagnosticBucket(destinationClass);
+		if (!TryBeginVRMenuTargetD3DContextDiagnostic(g_vrMenuHiResTextClearLogCount, destination.target, destinationBucket))
+			return;
+
+		uint64_t sourceSignature = 1469598103934665603ull;
+		const std::string sources = "shaderSources=" + BuildVRMenuD3DContextAllShaderResourceDiagnostics(a_context, contextState, sourceSignature);
+		LogVRMenuHiResTextWriterDiagnostic(
+			"ClearRenderTargetView",
+			"before-clear",
+			a_context,
+			contextState,
+			destination,
+			"-",
+			"clear",
+			sources);
 	}
 
 	struct ScenePausedUiState
@@ -8819,6 +9342,8 @@ void Upscaling::InstallD3DContextDiagnostics(ID3D11DeviceContext* a_context)
 	stl::detour_vfunc<38, ID3D11DeviceContext_DrawAuto>(a_context);
 	stl::detour_vfunc<39, ID3D11DeviceContext_DrawIndexedInstancedIndirect>(a_context);
 	stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
+	stl::detour_vfunc<41, ID3D11DeviceContext_Dispatch>(a_context);
+	stl::detour_vfunc<42, ID3D11DeviceContext_DispatchIndirect>(a_context);
 	stl::detour_vfunc<46, ID3D11DeviceContext_CopySubresourceRegion>(a_context);
 	stl::detour_vfunc<47, ID3D11DeviceContext_CopyResource>(a_context);
 	stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);
@@ -8827,7 +9352,7 @@ void Upscaling::InstallD3DContextDiagnostics(ID3D11DeviceContext* a_context)
 
 	d3dContextDiagnosticsInstalled = true;
 	VR_TRANSITION_DIAG_LOG(
-		"[VRMenuD3DContext] Pre88 kMENUBG low-level D3D diagnostics installed bucketedCaps=yes perBucketLimit={}",
+		"[VRMenuD3DContext] menu upstream low-level D3D diagnostics installed targets=kPROJECTEDMENU,kHUDMENU,kMENUBG markers=VRMenuDrawToMenuBg,VRMenuHiResText hooks=draw,copy,update,resolve,clear,dispatch bucketedCaps=yes perTargetPerBucketLimit={}",
 		kVRMenuD3DContextDiagnosticLogLimit);
 #endif
 }
@@ -20064,6 +20589,7 @@ void Upscaling::ID3D11DeviceContext_DrawIndexed::thunk(ID3D11DeviceContext* a_co
 		"indexCount=" + std::to_string(a_indexCount) +
 		" startIndex=" + std::to_string(a_startIndexLocation) +
 		" baseVertex=" + std::to_string(a_baseVertexLocation);
+	LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(a_context, "DrawIndexed", args);
 	LogVRMenuCurrentDrawToMenuBgDiagnostic(a_context, "DrawIndexed", args);
 	globals::features::upscaling.TryDuplicateVRMenuHiResBgDraw(
 		a_context,
@@ -20078,6 +20604,7 @@ void Upscaling::ID3D11DeviceContext_Draw::thunk(ID3D11DeviceContext* a_context, 
 	const std::string args =
 		"vertexCount=" + std::to_string(a_vertexCount) +
 		" startVertex=" + std::to_string(a_startVertexLocation);
+	LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(a_context, "Draw", args);
 	LogVRMenuCurrentDrawToMenuBgDiagnostic(a_context, "Draw", args);
 	globals::features::upscaling.TryDuplicateVRMenuHiResBgDraw(
 		a_context,
@@ -20101,6 +20628,7 @@ void Upscaling::ID3D11DeviceContext_DrawIndexedInstanced::thunk(
 		" startIndex=" + std::to_string(a_startIndexLocation) +
 		" baseVertex=" + std::to_string(a_baseVertexLocation) +
 		" startInstance=" + std::to_string(a_startInstanceLocation);
+	LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(a_context, "DrawIndexedInstanced", args);
 	LogVRMenuCurrentDrawToMenuBgDiagnostic(a_context, "DrawIndexedInstanced", args);
 	globals::features::upscaling.TryDuplicateVRMenuHiResBgDraw(
 		a_context,
@@ -20122,6 +20650,7 @@ void Upscaling::ID3D11DeviceContext_DrawInstanced::thunk(
 		" instanceCount=" + std::to_string(a_instanceCount) +
 		" startVertex=" + std::to_string(a_startVertexLocation) +
 		" startInstance=" + std::to_string(a_startInstanceLocation);
+	LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(a_context, "DrawInstanced", args);
 	LogVRMenuCurrentDrawToMenuBgDiagnostic(a_context, "DrawInstanced", args);
 	globals::features::upscaling.TryDuplicateVRMenuHiResBgDraw(
 		a_context,
@@ -20133,6 +20662,7 @@ void Upscaling::ID3D11DeviceContext_DrawInstanced::thunk(
 
 void Upscaling::ID3D11DeviceContext_DrawAuto::thunk(ID3D11DeviceContext* a_context)
 {
+	LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(a_context, "DrawAuto", "-");
 	LogVRMenuCurrentDrawToMenuBgDiagnostic(a_context, "DrawAuto", "-");
 	globals::features::upscaling.TryDuplicateVRMenuHiResBgDraw(
 		a_context,
@@ -20150,6 +20680,7 @@ void Upscaling::ID3D11DeviceContext_DrawIndexedInstancedIndirect::thunk(
 	const std::string args =
 		"argsBuffer=" + FormatVRMenuDiagnosticPointer(a_bufferForArgs) +
 		" alignedByteOffset=" + std::to_string(a_alignedByteOffsetForArgs);
+	LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(a_context, "DrawIndexedInstancedIndirect", args);
 	LogVRMenuCurrentDrawToMenuBgDiagnostic(a_context, "DrawIndexedInstancedIndirect", args);
 	globals::features::upscaling.TryDuplicateVRMenuHiResBgDraw(
 		a_context,
@@ -20167,12 +20698,39 @@ void Upscaling::ID3D11DeviceContext_DrawInstancedIndirect::thunk(
 	const std::string args =
 		"argsBuffer=" + FormatVRMenuDiagnosticPointer(a_bufferForArgs) +
 		" alignedByteOffset=" + std::to_string(a_alignedByteOffsetForArgs);
+	LogVRMenuCurrentDrawToUpstreamMenuDiagnostic(a_context, "DrawInstancedIndirect", args);
 	LogVRMenuCurrentDrawToMenuBgDiagnostic(a_context, "DrawInstancedIndirect", args);
 	globals::features::upscaling.TryDuplicateVRMenuHiResBgDraw(
 		a_context,
 		"DrawInstancedIndirect",
 		args,
-		[&]() { func(a_context, a_bufferForArgs, a_alignedByteOffsetForArgs); });
+	[&]() { func(a_context, a_bufferForArgs, a_alignedByteOffsetForArgs); });
+	func(a_context, a_bufferForArgs, a_alignedByteOffsetForArgs);
+}
+
+void Upscaling::ID3D11DeviceContext_Dispatch::thunk(
+	ID3D11DeviceContext* a_context,
+	UINT a_threadGroupCountX,
+	UINT a_threadGroupCountY,
+	UINT a_threadGroupCountZ)
+{
+	const std::string args =
+		"groups=" + std::to_string(a_threadGroupCountX) +
+		"x" + std::to_string(a_threadGroupCountY) +
+		"x" + std::to_string(a_threadGroupCountZ);
+	LogVRMenuCurrentDispatchToUpstreamMenuDiagnostic(a_context, "Dispatch", args);
+	func(a_context, a_threadGroupCountX, a_threadGroupCountY, a_threadGroupCountZ);
+}
+
+void Upscaling::ID3D11DeviceContext_DispatchIndirect::thunk(
+	ID3D11DeviceContext* a_context,
+	ID3D11Buffer* a_bufferForArgs,
+	UINT a_alignedByteOffsetForArgs)
+{
+	const std::string args =
+		"argsBuffer=" + FormatVRMenuDiagnosticPointer(a_bufferForArgs) +
+		" alignedByteOffset=" + std::to_string(a_alignedByteOffsetForArgs);
+	LogVRMenuCurrentDispatchToUpstreamMenuDiagnostic(a_context, "DispatchIndirect", args);
 	func(a_context, a_bufferForArgs, a_alignedByteOffsetForArgs);
 }
 
@@ -20223,12 +20781,14 @@ void Upscaling::ID3D11DeviceContext_CopySubresourceRegion::thunk(
 		"," + std::to_string(a_dstZ) +
 		") srcSub=" + std::to_string(a_srcSubresource) +
 		" " + FormatVRMenuD3DContextBox("srcBox", a_srcBox);
+	LogVRMenuCopyToUpstreamMenuDiagnostic(a_context, "CopySubresourceRegion", a_dstResource, a_srcResource, args);
 	LogVRMenuCopyToMenuBgDiagnostic(a_context, "CopySubresourceRegion", a_dstResource, a_srcResource, args);
 	func(a_context, a_dstResource, a_dstSubresource, a_dstX, a_dstY, a_dstZ, a_srcResource, a_srcSubresource, a_srcBox);
 }
 
 void Upscaling::ID3D11DeviceContext_CopyResource::thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_dstResource, ID3D11Resource* a_srcResource)
 {
+	LogVRMenuCopyToUpstreamMenuDiagnostic(a_context, "CopyResource", a_dstResource, a_srcResource, "-");
 	LogVRMenuCopyToMenuBgDiagnostic(a_context, "CopyResource", a_dstResource, a_srcResource, "-");
 	func(a_context, a_dstResource, a_srcResource);
 }
@@ -20242,6 +20802,7 @@ void Upscaling::ID3D11DeviceContext_UpdateSubresource::thunk(
 	UINT a_srcRowPitch,
 	UINT a_srcDepthPitch)
 {
+	LogVRMenuUpdateToUpstreamMenuDiagnostic(a_context, a_dstResource, a_dstSubresource, a_dstBox, a_srcData, a_srcRowPitch, a_srcDepthPitch);
 	LogVRMenuUpdateToMenuBgDiagnostic(a_context, a_dstResource, a_dstSubresource, a_dstBox, a_srcData, a_srcRowPitch, a_srcDepthPitch);
 	func(a_context, a_dstResource, a_dstSubresource, a_dstBox, a_srcData, a_srcRowPitch, a_srcDepthPitch);
 }
@@ -20254,12 +20815,14 @@ void Upscaling::ID3D11DeviceContext_ResolveSubresource::thunk(
 	UINT a_srcSubresource,
 	DXGI_FORMAT a_format)
 {
+	LogVRMenuResolveToUpstreamMenuDiagnostic(a_context, a_dstResource, a_dstSubresource, a_srcResource, a_srcSubresource, a_format);
 	LogVRMenuResolveToMenuBgDiagnostic(a_context, a_dstResource, a_dstSubresource, a_srcResource, a_srcSubresource, a_format);
 	func(a_context, a_dstResource, a_dstSubresource, a_srcResource, a_srcSubresource, a_format);
 }
 
 void Upscaling::ID3D11DeviceContext_ClearRenderTargetView::thunk(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_renderTargetView, const FLOAT a_colorRGBA[4])
 {
+	LogVRMenuClearUpstreamMenuDiagnostic(a_context, a_renderTargetView);
 	LogVRMenuClearMenuBgDiagnostic(a_context, a_renderTargetView);
 	func(a_context, a_renderTargetView, a_colorRGBA);
 }

@@ -395,7 +395,12 @@ namespace Util
 	{
 		const bool hasActiveFlash = IsButtonFlashActive(id, flashDurationMs);
 		if (hasActiveFlash) {
-			const ImVec4 flashColor = GetButtonFlashColor(ImGui::GetStyleColorVec4(ImGuiCol_Button));
+			ImVec4 flashBaseColor = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+			if (flashBaseColor.w <= 0.001f) {
+				flashBaseColor = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+			}
+			ImVec4 flashColor = GetButtonFlashColor(flashBaseColor);
+			flashColor.w = std::max(flashColor.w, 0.34f);
 			const ImVec4 flashHovered(flashColor.x * 1.1f, flashColor.y * 1.1f, flashColor.z * 1.1f, flashColor.w);
 			const ImVec4 flashActive(flashColor.x * 0.9f, flashColor.y * 0.9f, flashColor.z * 0.9f, flashColor.w);
 			ImGui::PushStyleColor(ImGuiCol_Button, flashColor);

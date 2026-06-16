@@ -3194,6 +3194,21 @@ namespace
 		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
 	}
 
+	bool IsVRRenderScaleMenuPreparationContextActive(const State* a_state)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		// Main/loading menus already have explicit scene-presentation ownership.
+		if (IsMainOrLoadingMenuContextActive())
+			return true;
+
+		// For gameplay menus under render-scale, rely on direct render-target
+		// observation instead of broad UI-name inference. That keeps the
+		// full-resolution preparation path tied to the menu pass we actually saw.
+		return IsVRObservedProjectedMenuTailActive(a_state);
+	}
+
 	bool IsVRSceneFeatureMenuPauseContextActive()
 	{
 		return globals::game::isVR &&
@@ -12202,8 +12217,23 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
+	const bool vrRenderScaleMenuPreparationContext =
+		vendorUpscalingMethod &&
+		IsVRRenderScaleMenuPreparationContextActive(state);
 	RefreshRuntimeResolutionState();
 	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
+		if (vrRenderScaleMenuPreparationContext) {
+			resolutionScale = { 1.0f, 1.0f };
+			jitter = { 0.0f, 0.0f };
+			a_viewport->projectionPosScaleX = 0.0f;
+			a_viewport->projectionPosScaleY = 0.0f;
+
+			PrepareFullResolutionPostProcessing();
+			CheckResources(upscaleMethod);
+			RefreshRuntimeResolutionState();
+			return;
+		}
+
 		const int renderWidth = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.x));
 		const int renderHeight = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.y));
 		const int outputWidth = std::max(renderWidth, static_cast<int>(runtimeResolutionPlan.finalOutputSize.x));

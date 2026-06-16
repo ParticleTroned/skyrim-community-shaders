@@ -3665,12 +3665,7 @@ namespace
 		if (closeFrame != 0 && a_snapshot.frame >= closeFrame && a_snapshot.frame - closeFrame <= 300u)
 			return true;
 
-		return IsCommunityShadersMenuOpen() &&
-		       (IsVendorUpscalingMethod(a_snapshot.requestedMethod) ||
-		           IsVendorUpscalingMethod(a_snapshot.runtimeMethod) ||
-		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeActive) ||
-		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::VRRenderScaleModeRequested) ||
-		           HasDiagnosticFlag(a_snapshot.flags, VRTransitionDiagnosticFlag::RenderScaleToggleRequested));
+		return false;
 	}
 
 	bool TryBuildVRSubmitPathDiagnosticSnapshot(const Upscaling& a_upscaling, VRTransitionDiagnosticSnapshot& a_snapshot)
@@ -3858,6 +3853,30 @@ namespace
 		return comException && IsOutOfMemoryResult(comException->Error());
 	}
 
+	void QueueVRVendorRuntimeResetForMethod(
+		Upscaling& a_upscaling,
+		Upscaling::UpscaleMethod a_upscaleMethod,
+		bool a_preserveInactiveVendorReset,
+		const char* a_diagnosticContext)
+	{
+		if (a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS) {
+			a_upscaling.pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
+			a_upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
+			if (!a_preserveInactiveVendorReset)
+				a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
+		} else if (a_upscaleMethod == Upscaling::UpscaleMethod::kFSR) {
+			a_upscaling.pendingFSRReset.store(true, std::memory_order_relaxed);
+			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
+			if (!a_preserveInactiveVendorReset)
+				a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
+		} else {
+			a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
+			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
+			a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
+		}
+		LogVRTransitionDiagnostics(a_upscaling, a_diagnosticContext, true);
+	}
+
 	void QueueVendorRuntimeResetAfterLoadingMenu(Upscaling& a_upscaling)
 	{
 		if (!IsVRRenderScalePostLoadResetRelevant(a_upscaling))
@@ -3865,22 +3884,11 @@ namespace
 
 		const auto upscaleMethod = a_upscaling.GetRuntimeUpscaleMethod();
 		const bool preserveInactiveVendorReset = ShouldIncludeInactiveVRVendorReset(a_upscaling, upscaleMethod);
-		if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS) {
-			a_upscaling.pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
-			a_upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
-			if (!preserveInactiveVendorReset)
-				a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
-		} else if (upscaleMethod == Upscaling::UpscaleMethod::kFSR) {
-			a_upscaling.pendingFSRReset.store(true, std::memory_order_relaxed);
-			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
-			if (!preserveInactiveVendorReset)
-				a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
-		} else {
-			a_upscaling.pendingDLSSReset.store(false, std::memory_order_relaxed);
-			a_upscaling.pendingDLSSHistoryReset.store(false, std::memory_order_relaxed);
-			a_upscaling.pendingFSRReset.store(false, std::memory_order_relaxed);
-		}
-		LogVRTransitionDiagnostics(a_upscaling, "queued vendor reset after loading menu", true);
+		QueueVRVendorRuntimeResetForMethod(
+			a_upscaling,
+			upscaleMethod,
+			preserveInactiveVendorReset,
+			"queued vendor reset after loading menu");
 	}
 
 	bool IsMainMenuContextActive()
@@ -3978,7 +3986,7 @@ namespace
 	bool IsVRSceneFeatureMenuPauseContextActive()
 	{
 		return globals::game::isVR &&
-		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
+		       IsVRMenuPresentationContextActive();
 	}
 
 	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
@@ -9352,15 +9360,17 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
 		const bool loggedRelatchDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchDeferralDiagnostic, [&]() {
 			VR_TRANSITION_DIAG_LOG(
-				"[VRTransition] Deferred vendor runtime reset while render-target relatch owns runtime resources (method={}, pendingReset(DLSS={}, FSR={}), pendingRelatch={}, relatchInProgress={})",
+				"[VRTransition] Deferred vendor runtime reset while render-target relatch owns runtime resources (method={}, activePending={}, inactivePending={}, pendingReset(DLSS={}, FSR={}), pendingRelatch={}, relatchInProgress={})",
 				magic_enum::enum_name(a_upscaleMethod),
+				BoolText(activeResetPending),
+				BoolText(inactiveResetPending),
 				BoolText(dlssResetPending),
 				BoolText(fsrResetPending),
 				BoolText(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)),
 				BoolText(perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)));
 		});
 		LogVRTransitionDiagnostics(*this, "vendor runtime reset waiting: render-target relatch", loggedRelatchDiagnostic);
-		return true;
+		return !activeResetPending;
 	}
 
 	const std::string_view context = a_context ? std::string_view(a_context) : std::string_view{};
@@ -9535,6 +9545,7 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	}
 
 	const bool renderScalePostLoadResetRelevant = IsVRRenderScalePostLoadResetRelevant(*this, a_upscaleMethod);
+	const bool preserveInactiveVendorReset = ShouldIncludeInactiveVRVendorReset(*this, a_upscaleMethod);
 	if (!postLoadRuntimeResetPending.exchange(false, std::memory_order_acq_rel))
 		return true;
 
@@ -9546,29 +9557,15 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	if (!renderScalePostLoadResetRelevant)
 		return true;
 
-	logger::debug("[Upscaling] Applying VR post-load runtime reset for method {}",
+	QueueVRVendorRuntimeResetForMethod(
+		*this,
+		a_upscaleMethod,
+		preserveInactiveVendorReset,
+		"queued post-load vendor reset for render-target relatch");
+	RequestPerfModeRenderTargetRecreate("VR post-load runtime reset", VRUpscalingTransitionOrigin::PostLoadSync);
+	logger::debug(
+		"[Upscaling] Queued VR post-load runtime reset behind render-target relatch for method {}",
 		magic_enum::enum_name(a_upscaleMethod));
-
-	try {
-		if (!ResetVRVendorRuntimeResources(true, false)) {
-			logger::warn("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
-			postLoadRuntimeResetPending.store(true, std::memory_order_release);
-			return false;
-		}
-		RecreateVendorRuntimeResources(a_upscaleMethod, true);
-	} catch (const std::exception& e) {
-		logger::error("[Upscaling] VR post-load runtime reset failed: {}", e.what());
-		if (!MarkSubmitStageDeviceLostIfNeeded(e, "VR post-load runtime reset"))
-			postLoadRuntimeResetPending.store(true, std::memory_order_release);
-		return false;
-	} catch (...) {
-		logger::error("[Upscaling] VR post-load runtime reset failed with an unknown exception");
-		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("VR post-load runtime reset"))
-			postLoadRuntimeResetPending.store(true, std::memory_order_release);
-		return false;
-	}
-
-	logger::debug("[Upscaling] Applied VR post-load runtime reset");
 	return true;
 }
 

@@ -1,8 +1,8 @@
 #include "LinearLighting.h"
 
 #include "AdaptiveBrightness.h"
+#include "LocationContext.h"
 #include "State.h"
-#include "Utils/Game.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
@@ -201,8 +201,7 @@ bool LinearLighting::IsRuntimeEnabled() const
 
 bool LinearLighting::IsDisabledForCurrentCell() const
 {
-	const bool isInterior = Util::IsInterior();
-	return (settings.DisableInInteriors && isInterior) || (settings.DisableInExteriors && !isInterior);
+	return LocationContext::IsDisabledByLocation(settings.DisableInInteriors, settings.DisableInExteriors);
 }
 
 RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)

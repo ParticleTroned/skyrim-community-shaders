@@ -9026,6 +9026,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	loggedRelatchPostLoadSettleDiagnostic = false;
 
+	static bool loggedRelatchLoadingPresentationDiagnostic = false;
+	if (IsVRLoadingPresentationContextActive(state)) {
+		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		const bool loggedLoadingPresentationDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchLoadingPresentationDiagnostic, [&]() {
+			const uint32_t currentFrame = std::max(state->frameCount, 1u);
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Relatch deferred: loading presentation context is still active (frame={}, retryFrames={})",
+				currentFrame,
+				kVRRenderScalePostLoadSettleRetryFrames);
+		});
+		LogVRTransitionDiagnostics(*this, "render-target relatch deferred: loading presentation active", loggedLoadingPresentationDiagnostic);
+		return false;
+	}
+	loggedRelatchLoadingPresentationDiagnostic = false;
+
 	if (perfModeRenderTargetRecreateInProgress.exchange(true, std::memory_order_acq_rel))
 		return false;
 
@@ -14715,6 +14730,48 @@ bool Upscaling::IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_textur
 	return IsVRNativeLayoutSubmitProtectedRenderTargetTexture(static_cast<ID3D11Texture2D*>(a_texture->handle));
 }
 
+bool Upscaling::ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const
+{
+	if (!globals::game::isVR || !a_texture || !a_texture->handle || a_texture->eType != vr::TextureType_DirectX)
+		return false;
+	if (!IsVRRenderScaleModeActive())
+		return false;
+	if (IsVRProtectedFullSizeSubmitTexture(a_texture))
+		return false;
+
+	const auto* state = globals::state;
+	if (!state)
+		return false;
+
+	const bool loadingPresentationContext =
+		IsVRTransitionPresentationProtectionActive(*this, state) &&
+		IsVRLoadingPresentationContextActive(state);
+	const bool relatchDuringLoadingPresentation =
+		IsVRLoadingPresentationContextActive(state) &&
+		(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		 perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire));
+	const bool shouldSuppressReducedSubmit =
+		loadingPresentationContext ||
+		relatchDuringLoadingPresentation;
+	if (!shouldSuppressReducedSubmit)
+		return false;
+
+	const uint32_t finalWidth = ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.x);
+	const uint32_t finalHeight = ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.y);
+	if (!finalWidth || !finalHeight)
+		return false;
+
+	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_texture->handle);
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+	if (sourceDesc.SampleDesc.Count != 1)
+		return false;
+
+	const uint32_t requiredWidth = sourceDesc.ArraySize > 1 ? std::max<uint32_t>(1u, finalWidth / 2u) : finalWidth;
+	const uint32_t requiredHeight = finalHeight;
+	return sourceDesc.Width < requiredWidth || sourceDesc.Height < requiredHeight;
+}
+
 void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context)
 {
 	const HRESULT deviceReason = GetD3DDeviceRemovedReason();
@@ -15040,9 +15097,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!state || !renderer || !context)
 		return false;
 
-	if (!IsPresentationUpscalingActive())
-		return false;
-
 	RefreshRuntimeResolutionState();
 	const auto& resolutionPlan = GetRuntimeResolutionPlan();
 	const auto upscaleMethod = resolutionPlan.upscaleMethod;
@@ -15050,14 +15104,22 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 	const uint32_t currentFrame = state->frameCount;
+	const bool presentationUpscalingActive = IsPresentationUpscalingActive();
+	const bool vrRenderScaleMode = resolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
+	const bool loadingPresentationContext =
+		IsVRTransitionPresentationProtectionActive(*this, state) &&
+		IsVRLoadingPresentationContextActive(state);
+	const bool loadingPresentationFallbackActive =
+		vrRenderScaleMode &&
+		loadingPresentationContext;
+	if (!presentationUpscalingActive && !loadingPresentationFallbackActive)
+		return false;
+
 	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
 	if (IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture))
 		return false;
 
 	const bool presentationRenderTarget = IsVRPresentationRenderTargetTexture(sourceTexture);
-	const bool loadingPresentationContext =
-		IsVRTransitionPresentationProtectionActive(*this, state) &&
-		IsVRLoadingPresentationContextActive(state);
 	const bool currentMenuPresentationContext = IsVRMenuPresentationContextActive();
 	const bool menuTextProtectionContext =
 		resolutionPlan.menuContextActive ||
@@ -15082,7 +15144,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const auto screenSize = state->screenSize;
-	const bool vrRenderScaleMode = resolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 	uint32_t eyeWidthOut = 0;
 	uint32_t eyeHeightOut = 0;
 	uint32_t eyeWidthIn = 0;
@@ -15200,7 +15261,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	bool presentationOnly =
 		computePresentationOnly();
 
-	CheckResources(upscaleMethod);
+	const bool shouldCheckVendorResources =
+		presentationUpscalingActive ||
+		!presentationOnly;
+	if (shouldCheckVendorResources)
+		CheckResources(upscaleMethod);
 	if (IsSubmitStageDeviceLost())
 		return false;
 
@@ -15209,7 +15274,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
 	if (!submitStagePreparedThisFrame) {
-		if (!submitStageSetupMaskVisualization) {
+		if (!presentationOnly) {
 			if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
 				if (IsSubmitStageDeviceLost())
 					return false;
@@ -15219,7 +15284,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			if (IsSubmitStageDeviceLost())
 				return false;
 
-			if (!presentationOnly && HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
+			if (HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
 				return false;
 
 			UpdateHistoryResetState(upscaleMethod);

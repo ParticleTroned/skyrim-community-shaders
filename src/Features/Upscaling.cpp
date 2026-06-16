@@ -10057,6 +10057,97 @@ namespace
 			CommitVRRenderScaleMenuTargetRepair(repair);
 		return true;
 	}
+
+	bool IsVRRenderScaleMenuPlateTargetRepairNeeded(float2 a_displaySize)
+	{
+		if (!std::isfinite(a_displaySize.x) ||
+			!std::isfinite(a_displaySize.y) ||
+			a_displaySize.x <= 0.0f ||
+			a_displaySize.y <= 0.0f) {
+			return false;
+		}
+
+		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
+		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
+		return !ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::kTOTAL, displayWidth, displayHeight) ||
+		       !ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::kMENUBG, displayWidth, displayHeight);
+	}
+
+	void RepairVRRenderScaleMenuPlateTargetsForActiveRenderScale(
+		Upscaling& a_upscaling,
+		const Upscaling::RuntimeResolutionPlan& a_plan)
+	{
+		if (!globals::game::isVR ||
+			a_plan.owner != Upscaling::ResolutionOwner::VRRenderScaleMode ||
+			a_upscaling.IsSubmitStageDeviceLost()) {
+			return;
+		}
+
+		if (a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+			a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+			a_upscaling.HasPendingVRRenderScaleTransition()) {
+			return;
+		}
+
+		if (!std::isfinite(a_plan.engineRenderSize.x) ||
+			!std::isfinite(a_plan.engineRenderSize.y) ||
+			!std::isfinite(a_plan.finalOutputSize.x) ||
+			!std::isfinite(a_plan.finalOutputSize.y) ||
+			a_plan.engineRenderSize.x <= 0.0f ||
+			a_plan.engineRenderSize.y <= 0.0f ||
+			a_plan.finalOutputSize.x <= 0.0f ||
+			a_plan.finalOutputSize.y <= 0.0f) {
+			return;
+		}
+
+		const uint32_t engineWidth = ClampPositiveDimension(a_plan.engineRenderSize.x);
+		const uint32_t engineHeight = ClampPositiveDimension(a_plan.engineRenderSize.y);
+		const uint32_t displayWidth = ClampPositiveDimension(a_plan.finalOutputSize.x);
+		const uint32_t displayHeight = ClampPositiveDimension(a_plan.finalOutputSize.y);
+		if (displayWidth <= engineWidth && displayHeight <= engineHeight)
+			return;
+
+		if (!IsVRRenderScaleMenuPlateTargetRepairNeeded(a_plan.finalOutputSize))
+			return;
+
+		const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+		static std::atomic<uint32_t> lastFailureFrame{ 0 };
+		const uint32_t previousFailureFrame = lastFailureFrame.load(std::memory_order_acquire);
+		if (previousFailureFrame != 0 &&
+			currentFrame >= previousFailureFrame &&
+			currentFrame - previousFailureFrame < kVRRenderScaleRelatchBusyRetryFrames) {
+			return;
+		}
+
+		logger::debug(
+			"[VRMenuTargetResize] action=steady-state-repair reason=render-scale-active-reduced-menu-targets frame={} engine={}x{} final={}x{}",
+			currentFrame,
+			engineWidth,
+			engineHeight,
+			displayWidth,
+			displayHeight);
+		if (!RepairVRRenderScaleMenuPlateTargets(a_plan.finalOutputSize)) {
+			lastFailureFrame.store(currentFrame, std::memory_order_release);
+			logger::warn(
+				"[VRMenuTargetResize] action=steady-state-repair result=failed reason=render-scale-active-reduced-menu-targets frame={} engine={}x{} final={}x{} retryFrames={}",
+				currentFrame,
+				engineWidth,
+				engineHeight,
+				displayWidth,
+				displayHeight,
+				kVRRenderScaleRelatchBusyRetryFrames);
+			return;
+		}
+
+		lastFailureFrame.store(0, std::memory_order_release);
+		logger::debug(
+			"[VRMenuTargetResize] action=steady-state-repair result=success reason=render-scale-active-reduced-menu-targets frame={} engine={}x{} final={}x{}",
+			currentFrame,
+			engineWidth,
+			engineHeight,
+			displayWidth,
+			displayHeight);
+	}
 }
 
 void Upscaling::DestroyVRIntermediateTextures()
@@ -15746,6 +15837,8 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		IsVRRenderScaleMenuPreparationContextActive(state);
 	RefreshRuntimeResolutionState();
 	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
+		RepairVRRenderScaleMenuPlateTargetsForActiveRenderScale(*this, runtimeResolutionPlan);
+
 		// Keep this before the normal VR render-scale return path. Otherwise
 		// menu preparation under VRRenderScaleMode cannot reach the full-res
 		// dynamic-resolution/projection guard below.

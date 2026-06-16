@@ -1,10 +1,12 @@
 #include "LinearLighting.h"
 
 #include "State.h"
+#include "Utils/Game.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
+	DisableInInteriors,
 	lightGamma,
 	colorGamma,
 	emitColorGamma,
@@ -33,6 +35,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void LinearLighting::DrawSettings()
 {
 	ImGui::Checkbox("Enable Linear Lighting", (bool*)&settings.enableLinearLighting);
+	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("General")) {
@@ -105,9 +108,8 @@ void LinearLighting::SetupResources()
 
 void LinearLighting::Prepass()
 {
-	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	dirLightMult = 1.0f;
-	if (!settings.enableLinearLighting || isMainLoadingMenu)
+	if (!IsRuntimeEnabled())
 		return;
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
@@ -143,14 +145,8 @@ void LinearLighting::PostPostLoad()
 
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
-	if (!loaded) {
-		auto data = PerFrameData{};
-		data.enableLinearLighting = false;
-		return data;
-	}
-	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	auto data = PerFrameData{};
-	data.enableLinearLighting = settings.enableLinearLighting && !isMainLoadingMenu;
+	data.enableLinearLighting = IsRuntimeEnabled();
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
 	data.lightGamma = settings.lightGamma;
@@ -177,7 +173,23 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = settings.projectedEffectMult;
 	data.deferredEffectMult = settings.deferredEffectMult;
 	data.otherEffectMult = settings.otherEffectMult;
+	data.DisableInInteriors = settings.DisableInInteriors;
 	return data;
+}
+
+bool LinearLighting::IsRuntimeEnabled() const
+{
+	if (!loaded || !settings.enableLinearLighting)
+		return false;
+
+	auto state = globals::state;
+	if (state && (state->isMainMenuOpen || state->isLoadingMenuOpen))
+		return false;
+
+	if (settings.DisableInInteriors && Util::IsInterior())
+		return false;
+
+	return true;
 }
 
 RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
@@ -196,7 +208,7 @@ void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	if (lightProperty != nullptr) {
 		float emissiveMult = 1.0f;
-		if (settings.enableLinearLighting) {
+		if (IsRuntimeEnabled()) {
 			emissiveMult = lightProperty->emissiveMult;
 			PerGeometryData perGeometryData{};
 			perGeometryData.emissiveMult = emissiveMult;

@@ -741,12 +741,10 @@ namespace
 	// Submit-stage should only operate on the runtime-submitted eye textures.
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 0> kSubmittedVRPresentationTargets{};
 
-	// Pre91 proved the in-game menu writer is a draw into kMENUBG, then
-	// kMENUBG is consumed by kTOTAL before submit-stage upscaling. Keep only
-	// that proven plate/composite route at display size; leave HUDMENU and
-	// PROJECTEDMENU at their native menu texture sizes.
-	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 4> kVRRenderScaleDisplaySizedTargets{
-		RE::RENDER_TARGETS::kTOTAL,
+	// Pre95 proved kTOTAL is the live scene/submit source in render-scale mode:
+	// forcing it to display size can blank HMD output. Only kMENUBG and the
+	// image-space display-copy targets are eligible for display-sized handling.
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRRenderScaleDisplaySizedTargets{
 		RE::RENDER_TARGETS::kMENUBG,
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
 		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
@@ -10025,8 +10023,16 @@ namespace
 
 		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
 		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
-		static constexpr std::array<std::pair<RE::RENDER_TARGETS::RENDER_TARGET, const char*>, 2> targets{
-			std::pair{ RE::RENDER_TARGETS::kTOTAL, "render-scale-menu-composite" },
+
+		static std::atomic_bool loggedKTotalSkip{ false };
+		if (!loggedKTotalSkip.exchange(true, std::memory_order_acq_rel)) {
+			logger::debug(
+				"[VRMenuTargetResize] target=kTOTAL action=skip reason=submit-source-must-remain-engine-sized final={}x{}",
+				displayWidth,
+				displayHeight);
+		}
+
+		static constexpr std::array<std::pair<RE::RENDER_TARGETS::RENDER_TARGET, const char*>, 1> targets{
 			std::pair{ RE::RENDER_TARGETS::kMENUBG, "render-scale-menu-plate" },
 		};
 
@@ -10059,8 +10065,7 @@ namespace
 
 		const uint32_t displayWidth = ClampPositiveDimension(a_displaySize.x);
 		const uint32_t displayHeight = ClampPositiveDimension(a_displaySize.y);
-		return !ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::kTOTAL, displayWidth, displayHeight) ||
-		       !ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::kMENUBG, displayWidth, displayHeight);
+		return !ExistingRenderTargetTextureSizeMatches(RE::RENDER_TARGETS::kMENUBG, displayWidth, displayHeight);
 	}
 
 	void RepairVRRenderScaleMenuPlateTargetsForActiveRenderScale(

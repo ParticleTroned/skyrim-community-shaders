@@ -17998,7 +17998,53 @@ void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceSha
 		"Render:before",
 		"Render:after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			auto context = globals::d3d::context;
+			const auto& plan = upscaling.GetRuntimeResolutionPlan();
+
+			UINT scissorCount = 0;
+			std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissors{};
+			bool overrideFadeScissor = false;
+
+			if (context &&
+				globals::game::isVR &&
+				plan.owner == Upscaling::ResolutionOwner::Native &&
+				plan.vendorMethod &&
+				plan.qualityMode == 0 &&
+				!upscaling.IsPresentationUpscalingActive()) {
+				scissorCount = static_cast<UINT>(scissors.size());
+				context->RSGetScissorRects(&scissorCount, scissors.data());
+
+				if (scissorCount > 0) {
+					const LONG finalWidth = std::max<LONG>(1, static_cast<LONG>(std::lround(plan.finalOutputSize.x)));
+					const LONG finalHeight = std::max<LONG>(1, static_cast<LONG>(std::lround(plan.finalOutputSize.y)));
+					const LONG scissorWidth = std::max<LONG>(0, scissors[0].right - scissors[0].left);
+					const LONG scissorHeight = std::max<LONG>(0, scissors[0].bottom - scissors[0].top);
+
+					overrideFadeScissor =
+						DiagnosticDimensionBelow(static_cast<uint32_t>(scissorWidth), static_cast<uint32_t>(finalWidth)) ||
+						DiagnosticDimensionBelow(static_cast<uint32_t>(scissorHeight), static_cast<uint32_t>(finalHeight));
+
+					if (overrideFadeScissor) {
+						const D3D11_RECT fullscreenScissor{
+							0,
+							0,
+							finalWidth,
+							finalHeight
+						};
+						context->RSSetScissorRects(1, &fullscreenScissor);
+					}
+				}
+			}
+
+			auto restoreScissor = ScopeExit([&]() {
+				if (overrideFadeScissor) {
+					context->RSSetScissorRects(scissorCount, scissorCount > 0 ? scissors.data() : nullptr);
+				}
+			});
+
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
 }
 
 void Upscaling::TemporalAAUI_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)

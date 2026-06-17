@@ -5,6 +5,7 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/FoveatedRegionPlan.h"
+#include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include <atomic>
@@ -92,11 +93,19 @@ public:
 		PostLoadSync
 	};
 
+	enum class DLSSSharpenerMode : uint8_t
+	{
+		Off,
+		RCAS,
+		LumaUnsharp
+	};
+
 	// Shared DLSS/FSR/FSR4 render-scale presets:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
 	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
+	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	static constexpr uint32_t kPendingVRUpscalingSettingUnset = std::numeric_limits<uint32_t>::max();
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
@@ -147,6 +156,7 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.1f;
+		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;
@@ -464,6 +474,8 @@ public:
 	UpscaleMethod GetLegacyDLSSPreferredUpscaleMethodForAPI() const;
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
 	uint32_t GetRuntimeQualityMode() const;
+	DLSSSharpenerMode GetDLSSSharpenerMode() const;
+	bool ShouldApplyDLSSSharpening() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
 	// Refresh both the cached plan and restart-required state derived from the current VR render-scale settings.
 	void RefreshRuntimeResolutionState();
@@ -748,6 +760,7 @@ public:
 	static inline FidelityFX fidelityFX;  ///< AMD FidelityFX runtime for FSR upscaling and frame generation
 	static inline DX12SwapChain dx12SwapChain;
 	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
+	static inline LumaSharpen lumaSharpen;  ///< Luma-only adaptive unsharp mask for DLSS
 
 	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
 
@@ -919,9 +932,9 @@ public:
 	void DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, uint32_t dispatchOffsetX, uint32_t dispatchOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather);
 
 	/**
-	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.
+	 * @brief Applies the selected DLSS sharpening pass to the main render target after upscaling.
 	 *
-	 * Runs in HDR space before tonemapping. Only called when DLSS is active and sharpness > 0.
+	 * Runs in HDR space before tonemapping. Only called when DLSS sharpening is enabled.
 	 */
 	void ApplySharpening();
 

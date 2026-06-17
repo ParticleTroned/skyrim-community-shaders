@@ -1083,7 +1083,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
 		renderSize = Util::ConvertToDynamic(screenSize);
 	const bool useSharpenerOutput =
-		upscaling.settings.sharpnessDLSS > 0.0f &&
+		upscaling.ShouldApplyDLSSSharpening() &&
 		upscaling.sharpenerTexture &&
 		upscaling.sharpenerTexture->resource;
 	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;

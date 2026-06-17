@@ -9211,13 +9211,30 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	if (ShouldWaitForPerfModeRenderTargetRecreateDelay())
 		return false;
 
+	const auto pendingRelatchUpscaleMethod = GetUpscaleMethod();
+	const bool fsrRelatchMethod = pendingRelatchUpscaleMethod == UpscaleMethod::kFSR;
+	auto ensureRelatchQueuedWithoutDelayReset = [&](uint32_t a_delayFrames) {
+		pendingPerfModeRenderTargetRecreate.store(true, std::memory_order_release);
+		if (pendingPerfModeRenderTargetRecreateFrame.load(std::memory_order_acquire) == 0) {
+			const uint32_t currentFrame = std::max(state->frameCount, 1u);
+			pendingPerfModeRenderTargetRecreateFrame.store(currentFrame, std::memory_order_release);
+		}
+		const uint32_t previousDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
+		if (previousDelay == 0 || a_delayFrames > previousDelay)
+			pendingPerfModeRenderTargetRecreateDelayFrames.store(a_delayFrames, std::memory_order_release);
+	};
+
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition()) {
 		return false;
 	}
 
 	static bool loggedRelatchPostLoadSettleDiagnostic = false;
 	if (ShouldDeferVRRenderScaleRelatchForPostLoadSettle(*this, state)) {
-		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		if (fsrRelatchMethod) {
+			ensureRelatchQueuedWithoutDelayReset(kVRRenderScalePostLoadSettleRetryFrames);
+		} else {
+			MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		}
 		const bool loggedPostLoadSettleDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchPostLoadSettleDiagnostic, [&]() {
 			const uint32_t currentFrame = std::max(state->frameCount, 1u);
 			const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
@@ -9235,14 +9252,24 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	loggedRelatchPostLoadSettleDiagnostic = false;
 
+	const bool fsrLoadingTailActive =
+		fsrRelatchMethod &&
+		IsLoadingTransitionTailActive(state);
+
 	static bool loggedRelatchLoadingPresentationDiagnostic = false;
-	if (IsVRLoadingPresentationContextActive(state)) {
-		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+	if (IsVRLoadingPresentationContextActive(state) || fsrLoadingTailActive) {
+		if (fsrRelatchMethod) {
+			ensureRelatchQueuedWithoutDelayReset(kVRRenderScalePostLoadSettleRetryFrames);
+		} else {
+			MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		}
 		const bool loggedLoadingPresentationDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchLoadingPresentationDiagnostic, [&]() {
 			const uint32_t currentFrame = std::max(state->frameCount, 1u);
 			VR_TRANSITION_DIAG_LOG(
-				"[VRTransition] Relatch deferred: loading presentation context is still active (frame={}, retryFrames={})",
+				"[VRTransition] Relatch deferred: loading presentation context is still active (frame={}, method={}, fsrLoadingTail={}, retryFrames={})",
 				currentFrame,
+				magic_enum::enum_name(pendingRelatchUpscaleMethod),
+				BoolText(fsrLoadingTailActive),
 				kVRRenderScalePostLoadSettleRetryFrames);
 		});
 		LogVRTransitionDiagnostics(*this, "render-target relatch deferred: loading presentation active", loggedLoadingPresentationDiagnostic);
@@ -9278,7 +9305,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		MarkPerfModeRenderTargetRecreateQueued(delayFrames);
 	};
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
-	const auto relatchUpscaleMethod = GetUpscaleMethod();
+	const auto relatchUpscaleMethod = pendingRelatchUpscaleMethod;
 
 	static bool loggedRelatchApplyDiagnostic = false;
 	static bool loggedRelatchBeginTeardownDiagnostic = false;
@@ -9318,6 +9345,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
 				pendingDLSSReset.store(true, std::memory_order_release);
+			else if (relatchUpscaleMethod == UpscaleMethod::kFSR)
+				pendingFSRReset.store(true, std::memory_order_release);
 			const bool loggedVendorDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchVendorDeferDiagnostic, [&]() {
 				logger::debug("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
 				VR_TRANSITION_DIAG_LOG(

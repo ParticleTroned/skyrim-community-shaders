@@ -330,15 +330,17 @@ namespace
 6) Test in game that you do not have strong peripheral shimmer. If yes, increase the FOV + TAA visible outer scale or, if needed, the center scale. If not, reduce them to just before shimmer appears for best performance.)";
 	constexpr const char* kFoveatedVrsName = "Foveated Variable Rate Shading (VRS)";
 	constexpr const char* kVrsMaskVisualizationName = "VRS Mask Visualization";
-	constexpr const char* kVrsMaskRefinementInstructions = R"(These steps apply to the default mask-aligned VRS mode. VRS Performance Mode deliberately shows magenta outside its fixed 0.25 inner band.
-1) Once Foveated Variable Rate Shading (VRS) is active, refine the FOV masks in position and size.
-2) Turn off FOV Mask Visualization and turn on VRS Mask Visualization.
-3) Reposition each per-eye FOV mask with FOV Left Eye Offset X/Y and FOV Right Eye Offset X/Y so the visible center becomes dark with no magenta. Light magenta at the far periphery is acceptable.
-4) Turn off VRS Mask Visualization and check in game for high-frequency flicker anywhere in the periphery.
-5) If flicker is present, reposition the masks and, if needed, enlarge the active mask with FOV Only Visible Scale or FOV + TAA Visible Outer Scale until flicker is no longer visible.
-6) If no flicker is visible after positioning, lower the active mask scale to the smallest value that still shows no flicker for maximum performance and image quality.
-7) Test whether Foveated Upscaling (FOV) or FOV + TAA gives better performance by toggling FOV + TAA while watching frame times.
-8) Save your mask settings and enjoy the performance win.)";
+	constexpr const char* kVrsSetupInstructions = R"(1) Finish the FOV setup first. VRS uses the active FOV mask, so Foveated Upscaling (FOV) must be enabled and the visible mask should already fit your HMD.
+2) Enable Foveated Variable Rate Shading (VRS). Keep VRS Pass-Aware Safety and VRS Content-Aware Safety on for the first test.
+3) Turn off FOV Mask Visualization and turn on VRS Mask Visualization. Dark means full 1x1 shading; magenta means a coarser VRS rate.
+4) Start with quality-first settings: VRS Performance Mode off, VRS Max Coarse Rate set to 2x2, VRS Full-Rate Water on.
+5) While VRS Mask Visualization is visible, adjust the FOV mask offsets and visible scale until the whole visible HMD area is dark. Light magenta at the far hidden edge is acceptable; magenta in readable or high-detail areas means the protected mask is too small or misplaced.
+6) Turn off VRS Mask Visualization and test in game. If you see flicker, shimmer, white speckling, water artifacts, or stereo discomfort, increase the FOV visible scale, keep max coarse rate at 2x2, and keep safety options enabled.
+7) If the image is stable and you want more performance, try VRS Max Coarse Rate 4x4. This can save more work but has higher artifact risk, especially on thin geometry, alpha, water, particles, and high-contrast edges.
+8) For maximum performance testing, enable VRS Performance Mode. This deliberately uses fixed coarse bands, so magenta outside the inner band is expected. Start with VRS Performance Orientation Auto; try 2x1 or 1x2 only if one orientation reduces visible shimmer or stereo disagreement.
+9) If artifacts appear only with VRS Performance Mode or 4x4, step back to Performance Mode off or Max Coarse Rate 2x2. If artifacts remain, enable VRS Safe Opaque Only to isolate whether the pass-aware filter is still letting a risky pass use coarse VRS.
+10) For the experimental deferred composite path, first enable Experimental VRS Deferred Composite PS with VRS Deferred Composite Color off. If that is stable, enable VRS Deferred Composite Color to test the intended performance path.
+11) Final check: turn off all mask visualizations, play normally, and verify that readability, water, particles, shadows, and high-frequency details are stable before saving the settings.)";
 
 	uint ClampToggleUInt(uint value);
 
@@ -4089,7 +4091,7 @@ namespace
 		const bool baseContext =
 			globals::game::isVR &&
 			IsCommunityShadersMenuOpen() &&
-			!IsVRMenuPresentationContextActive() &&
+			!IsKnownGameMenuContextActive() &&
 			a_upscaling.IsFoveatedVendorDispatchEnabled(a_upscaleMethod);
 		if (baseContext) {
 			setupState.fovMask = a_upscaling.settings.foveatedPeripheryMaskVisualization;
@@ -6906,7 +6908,7 @@ void Upscaling::DrawSettings()
 					IsAAVRSAdapterEligible(),
 					settings.aaVrs,
 					aaVrsRuntimeActive);
-				ImGui::TextDisabled("Configure foveated upscaling and Variable Rate Shading (VRS) in VR > Foveated / Variable Rate Shading (VRS).");
+				ImGui::TextDisabled("Configure foveated upscaling and Variable Rate Shading (VRS) in VR > FOV/VRS.");
 				ImGui::TextColored(
 					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 					"FOV: %s",
@@ -7225,16 +7227,33 @@ void Upscaling::DrawSettings()
 	}
 }
 
+namespace
+{
+	template <class Fn>
+	void DrawSetupInstructionBlock(const char* a_header, const char* a_childId, float a_minLines, float a_maxLines, Fn&& a_drawContents)
+	{
+		const bool showInstructions = ImGui::CollapsingHeader(a_header);
+		if (!showInstructions)
+			return;
+
+		const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+		const float availableHeight = ImGui::GetContentRegionAvail().y;
+		const float instructionHeight = std::clamp(
+			availableHeight - (lineHeight * 2.0f),
+			lineHeight * a_minLines,
+			lineHeight * a_maxLines);
+		ImGui::BeginChild(a_childId, ImVec2(0.0f, instructionHeight), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+		ImGui::PushTextWrapPos(0.0f);
+		a_drawContents();
+		ImGui::PopTextWrapPos();
+		ImGui::EndChild();
+	}
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
-	const bool showFovSetupInstructions = ImGui::CollapsingHeader("Upscaling FOV Setup Instructions");
-	if (showFovSetupInstructions) {
-		const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-		const float availableHeight = ImGui::GetContentRegionAvail().y;
-		const float instructionHeight = std::clamp(availableHeight - (lineHeight * 2.0f), lineHeight * 5.0f, lineHeight * 14.0f);
-		ImGui::BeginChild("##UpscalingFOVSetupInstructions", ImVec2(0.0f, instructionHeight), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-		ImGui::PushTextWrapPos(0.0f);
+	DrawSetupInstructionBlock("Upscaling FOV Setup Instructions", "##UpscalingFOVSetupInstructions", 5.0f, 14.0f, [&]() {
 		auto drawInstructionHeadline = [](const char* a_label) {
 			MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
 			ImGui::SeparatorText(a_label);
@@ -7246,12 +7265,14 @@ void Upscaling::DrawFoveatedSetupInstructions()
 		ImGui::Spacing();
 		drawInstructionHeadline("Upscaling FOV + TAA setup");
 		ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
-		ImGui::Spacing();
-		drawInstructionHeadline("Variable Rate Shading (VRS) mask refinement");
-		ImGui::TextUnformatted(kVrsMaskRefinementInstructions);
-		ImGui::PopTextWrapPos();
-		ImGui::EndChild();
-	}
+	});
+}
+
+void Upscaling::DrawAAVRSSetupInstructions()
+{
+	DrawSetupInstructionBlock("VRS Setup Instructions", "##VRSSetupInstructions", 6.0f, 16.0f, [&]() {
+		ImGui::TextUnformatted(kVrsSetupInstructions);
+	});
 }
 
 void Upscaling::DrawFoveatedSettings()
@@ -7268,14 +7289,6 @@ void Upscaling::DrawFoveatedSettings()
 	SanitizeFoveatedSettings(settings);
 	const UpscaleMethod upscaleMethod = GetUpscaleMethod();
 	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
-	const bool aaVrsMethodEligible = IsAAVRSEligible(upscaleMethod);
-	const bool aaVrsAdapterEligible = IsAAVRSAdapterEligible();
-	auto aaVrsUiState = BuildAAVRSUiState(
-		*this,
-		aaVrsMethodEligible,
-		aaVrsAdapterEligible,
-		settings.aaVrs,
-		aaVrsRuntimeActive);
 
 	if (foveatedDispatchSupportedForMethod) {
 		{
@@ -7288,142 +7301,6 @@ void Upscaling::DrawFoveatedSettings()
 		}
 	} else {
 		ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
-	}
-
-	{
-		Util::BlueFrameStyleWrapper aaVrsStyle(true);
-		auto disabledGuard = Util::DisableGuard(!aaVrsUiState.canEnable);
-		bool aaVrs = aaVrsUiState.requested;
-		ImGui::Checkbox(kFoveatedVrsName, &aaVrs);
-		if (aaVrsUiState.canEnable)
-			settings.aaVrs = aaVrs;
-	}
-	aaVrsUiState = BuildAAVRSUiState(
-		*this,
-		aaVrsMethodEligible,
-		aaVrsAdapterEligible,
-		settings.aaVrs,
-		aaVrsRuntimeActive);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables NVIDIA Variable Rate Shading (VRS) during VR scene pixel shading for foveated upscaling.");
-		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes keep Variable Rate Shading disabled.");
-		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask; without FOV + TAA, the foveated feather is included.");
-		ImGui::TextUnformatted("Adds one VRS tile of safety padding around the protected mask to avoid coarse-rate flicker at the transition.");
-		ImGui::TextUnformatted("Outside the mask, the inner fifth is 2x2 and the rest uses the configured max coarse rate.");
-		ImGui::TextUnformatted("Content-aware safety can promote high-contrast, bright, moving, or depth-edge tiles back toward 1x1.");
-		ImGui::TextUnformatted("Pass-aware safety keeps unstable passes at 1x1; shadow maps are suspended and VRS is disabled before postprocessing.");
-	}
-
-	if (!aaVrsMethodEligible) {
-		if (foveatedDispatchSupportedForMethod)
-			ImGui::TextDisabled("Enable Foveated Upscaling (FOV) with an active mask to use Foveated Variable Rate Shading (VRS).");
-		else
-			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) is available only with DLSS/FSR Foveated Upscaling in VR.");
-	} else if (!aaVrsAdapterEligible) {
-		ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) requires NVIDIA variable pixel-rate shading support.");
-	}
-
-	ImGui::TextColored(
-		aaVrsUiState.highlight ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
-		"Foveated Variable Rate Shading (VRS): %s",
-		aaVrsUiState.statusText);
-	if (aaVrsUiState.pausedInMenu)
-		ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) was active in scene and is paused while this menu is open.");
-	else if (aaVrsUiState.requested && !aaVrsUiState.active) {
-		const auto aaVrsStatus = aaVrsController.GetStatus();
-		if (aaVrsStatus.hasSettings && aaVrsStatus.lastDisableReason && aaVrsStatus.lastDisableReason[0])
-			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) runtime inactive: %s", aaVrsStatus.lastDisableReason);
-	}
-
-	if (aaVrsUiState.requested) {
-		ImGui::Dummy(ImVec2(0.0f, 3.0f));
-		{
-			Util::BlueFrameStyleWrapper passAwareStyle(true);
-			ImGui::Checkbox("VRS Pass-Aware Safety", &settings.aaVrsPassAware);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Keeps alpha-tested, emissive, decal, particle, sky, grass, distant-tree, and depth/mask utility passes at 1x1.");
-			ImGui::TextUnformatted("Coarse rates are used only for passes that look like stable opaque scene shading.");
-			ImGui::TextUnformatted("Water has its own full-rate protection toggle below.");
-		}
-
-		{
-			Util::BlueFrameStyleWrapper contentAwareStyle(true);
-			ImGui::Checkbox("VRS Content-Aware Safety", &settings.aaVrsContentAware);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Refines the VRS rate image from scene color, motion vectors, and depth before scene rendering.");
-			ImGui::TextUnformatted("High contrast, bright, moving, or depth-edge tiles are promoted back toward 1x1.");
-			ImGui::TextUnformatted("The refinement never makes the base foveated mask coarser.");
-		}
-
-		{
-			Util::BlueFrameStyleWrapper performanceStyle(true);
-			ImGui::Checkbox("VRS Performance Mode", &settings.aaVrsPerformanceMode);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Uses fixed per-eye VRS bands: 0.25=1x1, 0.40=2x1/1x2, 0.70=2x2, outside=4x4.");
-			ImGui::TextUnformatted("Stereo tiles still merge conservatively, so eye disagreements can promote a tile back toward 1x1.");
-			ImGui::TextUnformatted("This ignores the normal protected FOV-mask size for the base VRS pattern; pass-aware safety still forces risky passes to 1x1.");
-		}
-
-		const char* anisotropyItems[] = { "Auto", "2x1", "1x2" };
-		int anisotropy = static_cast<int>(std::clamp<uint>(settings.aaVrsPerformanceAnisotropy, 0u, 2u));
-		{
-			auto anisotropyGuard = Util::DisableGuard(!settings.aaVrsPerformanceMode);
-			if (ImGui::Combo("VRS Performance Orientation", &anisotropy, anisotropyItems, IM_ARRAYSIZE(anisotropyItems))) {
-				settings.aaVrsPerformanceAnisotropy = static_cast<uint>(std::clamp(anisotropy, 0, 2));
-			}
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls the half-rate band in VRS Performance Mode.");
-			ImGui::TextUnformatted("Auto chooses 2x1 or 1x2 radially per tile; fixed modes force one anisotropic orientation to reduce stereo disagreements.");
-		}
-
-		const char* maxRateItems[] = { "2x2", "4x4" };
-		int maxRate = static_cast<int>(std::clamp<uint>(settings.aaVrsMaxRate, 0u, 1u));
-		{
-			auto maxRateGuard = Util::DisableGuard(settings.aaVrsPerformanceMode);
-			if (ImGui::Combo("VRS Max Coarse Rate", &maxRate, maxRateItems, IM_ARRAYSIZE(maxRateItems))) {
-				settings.aaVrsMaxRate = static_cast<uint>(std::clamp(maxRate, 0, 1));
-			}
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Caps the coarsest rate used outside the protected FOV mask.");
-			ImGui::TextUnformatted("2x2 is more conservative; 4x4 has more performance risk and more artifact risk.");
-			ImGui::TextUnformatted("Performance mode uses 4x4 for its outer band, with NVAPI fallback to 2x2 if 4x4 is unavailable.");
-		}
-
-		{
-			auto safeOnlyGuard = Util::DisableGuard(!settings.aaVrsPassAware);
-			ImGui::Checkbox("VRS Safe Opaque Only", &settings.aaVrsSafeOpaqueOnly);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Debug safety mode: only lighting passes that survive the pass-aware filter can use coarse rates.");
-			ImGui::TextUnformatted("Use this when isolating white flicker or shimmer sources.");
-		}
-
-		{
-			auto waterGuard = Util::DisableGuard(!settings.aaVrsPassAware || settings.aaVrsSafeOpaqueOnly);
-			ImGui::Checkbox("VRS Full-Rate Water", &settings.aaVrsProtectWater);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Keeps water shader passes at 1x1 while VRS pass-aware safety is active.");
-			ImGui::TextUnformatted("Water uses animated normals, reflection, and refraction, so coarse rates can shimmer or break edges.");
-			ImGui::TextUnformatted("Disabled while VRS Safe Opaque Only is active because that broader debug mode already protects water.");
-		}
-
-		ImGui::Checkbox("VRS Pass Telemetry", &settings.aaVrsPassTelemetry);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Shows cumulative counts for pass-aware full-rate decisions.");
-		}
-		if (settings.aaVrsPassTelemetry) {
-			if (ImGui::Button("Reset VRS Pass Counters"))
-				ResetAAVRSPassTelemetry();
-			DrawAAVRSPassTelemetry();
-		}
-	} else {
-		settings.aaVrsVisualization = false;
 	}
 
 	const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
@@ -7474,12 +7351,6 @@ void Upscaling::DrawFoveatedSettings()
 	{
 		Util::BlueFrameStyleWrapper maskStyle(true);
 		ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
-		const bool aaVrsVisualizationAvailable = aaVrsUiState.requested;
-		if (aaVrsVisualizationAvailable) {
-			ImGui::Checkbox(kVrsMaskVisualizationName, &settings.aaVrsVisualization);
-		} else {
-			settings.aaVrsVisualization = false;
-		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
@@ -7488,14 +7359,6 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("Gold = TAA ring, blue = outer lightweight ring.");
 		else
 			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
-		if (aaVrsUiState.requested) {
-			ImGui::TextUnformatted("VRS Mask Visualization replaces the scene with the current binary rate image; dark = 1x1, magenta = coarser than 1x1.");
-			ImGui::TextUnformatted("Content-aware tile promotions are included; per-pass full-rate overrides are applied dynamically during draw calls.");
-			if (settings.aaVrsPerformanceMode)
-				ImGui::TextUnformatted("Performance mode target: dark includes the fixed 0.25 inner band and any content-aware full-rate promotions.");
-			else
-				ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
-		}
 	}
 
 	ImGui::Dummy(ImVec2(0.0f, 6.0f));
@@ -7629,6 +7492,179 @@ void Upscaling::DrawFoveatedSettings()
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	drawActiveFoveatedProfileStatus();
+}
+
+void Upscaling::DrawAAVRSSettings()
+{
+	if (!globals::game::isVR) {
+		ImGui::TextDisabled("VR VRS controls are available only in VR.");
+		return;
+	}
+	if (!loaded) {
+		ImGui::TextDisabled("VR VRS controls require Upscaling.");
+		return;
+	}
+
+	SanitizeFoveatedSettings(settings);
+	const UpscaleMethod upscaleMethod = GetUpscaleMethod();
+	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
+	const bool aaVrsMethodEligible = IsAAVRSEligible(upscaleMethod);
+	const bool aaVrsAdapterEligible = IsAAVRSAdapterEligible();
+	auto aaVrsUiState = BuildAAVRSUiState(
+		*this,
+		aaVrsMethodEligible,
+		aaVrsAdapterEligible,
+		settings.aaVrs,
+		aaVrsRuntimeActive);
+
+	{
+		Util::BlueFrameStyleWrapper aaVrsStyle(true);
+		auto disabledGuard = Util::DisableGuard(!aaVrsUiState.canEnable);
+		bool aaVrs = aaVrsUiState.requested;
+		ImGui::Checkbox(kFoveatedVrsName, &aaVrs);
+		if (aaVrsUiState.canEnable)
+			settings.aaVrs = aaVrs;
+	}
+	aaVrsUiState = BuildAAVRSUiState(
+		*this,
+		aaVrsMethodEligible,
+		aaVrsAdapterEligible,
+		settings.aaVrs,
+		aaVrsRuntimeActive);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Enables NVIDIA Variable Rate Shading (VRS) during VR scene pixel shading for foveated upscaling.");
+		ImGui::TextUnformatted("Requires active Foveated Upscaling (FOV); non-foveated modes keep Variable Rate Shading disabled.");
+		ImGui::TextUnformatted("Uses 1x1 through the active foveated/TAA mask; without FOV + TAA, the foveated feather is included.");
+		ImGui::TextUnformatted("Adds one VRS tile of safety padding around the protected mask to avoid coarse-rate flicker at the transition.");
+		ImGui::TextUnformatted("Outside the mask, the inner fifth is 2x2 and the rest uses the configured max coarse rate.");
+		ImGui::TextUnformatted("Content-aware safety can promote high-contrast, bright, moving, or depth-edge tiles back toward 1x1.");
+		ImGui::TextUnformatted("Pass-aware safety keeps unstable passes at 1x1; shadow maps are suspended and VRS is disabled before postprocessing.");
+	}
+
+	if (!aaVrsMethodEligible) {
+		if (foveatedDispatchSupportedForMethod)
+			ImGui::TextDisabled("Enable Foveated Upscaling (FOV) with an active mask to use Foveated Variable Rate Shading (VRS).");
+		else
+			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) is available only with DLSS/FSR Foveated Upscaling in VR.");
+	} else if (!aaVrsAdapterEligible) {
+		ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) requires NVIDIA variable pixel-rate shading support.");
+	}
+
+	ImGui::TextColored(
+		aaVrsUiState.highlight ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+		"Foveated Variable Rate Shading (VRS): %s",
+		aaVrsUiState.statusText);
+	if (aaVrsUiState.pausedInMenu)
+		ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) was active in scene and is paused while this menu is open.");
+	else if (aaVrsUiState.requested && !aaVrsUiState.active) {
+		const auto aaVrsStatus = aaVrsController.GetStatus();
+		if (aaVrsStatus.hasSettings && aaVrsStatus.lastDisableReason && aaVrsStatus.lastDisableReason[0])
+			ImGui::TextDisabled("Foveated Variable Rate Shading (VRS) runtime inactive: %s", aaVrsStatus.lastDisableReason);
+	}
+
+	if (aaVrsUiState.requested) {
+		ImGui::Dummy(ImVec2(0.0f, 3.0f));
+		{
+			Util::BlueFrameStyleWrapper visualizationStyle(true);
+			ImGui::Checkbox(kVrsMaskVisualizationName, &settings.aaVrsVisualization);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Replaces the scene with the current VRS mask; dark = 1x1, magenta = coarser than 1x1.");
+			ImGui::TextUnformatted("Content-aware tile promotions are included; per-pass full-rate overrides are applied dynamically during draw calls.");
+			if (settings.aaVrsPerformanceMode)
+				ImGui::TextUnformatted("Performance mode target: dark includes the fixed 0.25 inner band and any content-aware full-rate promotions.");
+			else
+				ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
+		}
+
+		{
+			Util::BlueFrameStyleWrapper passAwareStyle(true);
+			ImGui::Checkbox("VRS Pass-Aware Safety", &settings.aaVrsPassAware);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Keeps alpha-tested, emissive, decal, particle, sky, grass, distant-tree, and depth/mask utility passes at 1x1.");
+			ImGui::TextUnformatted("Coarse rates are used only for passes that look like stable opaque scene shading.");
+			ImGui::TextUnformatted("Water has its own full-rate protection toggle below.");
+		}
+
+		{
+			Util::BlueFrameStyleWrapper contentAwareStyle(true);
+			ImGui::Checkbox("VRS Content-Aware Safety", &settings.aaVrsContentAware);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Refines the VRS rate image from scene color, motion vectors, and depth before scene rendering.");
+			ImGui::TextUnformatted("High contrast, bright, moving, or depth-edge tiles are promoted back toward 1x1.");
+			ImGui::TextUnformatted("The refinement never makes the base foveated mask coarser.");
+		}
+
+		{
+			Util::BlueFrameStyleWrapper performanceStyle(true);
+			ImGui::Checkbox("VRS Performance Mode", &settings.aaVrsPerformanceMode);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Uses fixed per-eye VRS bands: 0.25=1x1, 0.40=2x1/1x2, 0.70=2x2, outside=4x4.");
+			ImGui::TextUnformatted("Stereo tiles still merge conservatively, so eye disagreements can promote a tile back toward 1x1.");
+			ImGui::TextUnformatted("This ignores the normal protected FOV-mask size for the base VRS pattern; pass-aware safety still forces risky passes to 1x1.");
+		}
+
+		const char* anisotropyItems[] = { "Auto", "2x1", "1x2" };
+		int anisotropy = static_cast<int>(std::clamp<uint>(settings.aaVrsPerformanceAnisotropy, 0u, 2u));
+		{
+			auto anisotropyGuard = Util::DisableGuard(!settings.aaVrsPerformanceMode);
+			if (ImGui::Combo("VRS Performance Orientation", &anisotropy, anisotropyItems, IM_ARRAYSIZE(anisotropyItems))) {
+				settings.aaVrsPerformanceAnisotropy = static_cast<uint>(std::clamp(anisotropy, 0, 2));
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Controls the half-rate band in VRS Performance Mode.");
+			ImGui::TextUnformatted("Auto chooses 2x1 or 1x2 radially per tile; fixed modes force one anisotropic orientation to reduce stereo disagreements.");
+		}
+
+		const char* maxRateItems[] = { "2x2", "4x4" };
+		int maxRate = static_cast<int>(std::clamp<uint>(settings.aaVrsMaxRate, 0u, 1u));
+		{
+			auto maxRateGuard = Util::DisableGuard(settings.aaVrsPerformanceMode);
+			if (ImGui::Combo("VRS Max Coarse Rate", &maxRate, maxRateItems, IM_ARRAYSIZE(maxRateItems))) {
+				settings.aaVrsMaxRate = static_cast<uint>(std::clamp(maxRate, 0, 1));
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Caps the coarsest rate used outside the protected FOV mask.");
+			ImGui::TextUnformatted("2x2 is more conservative; 4x4 has more performance risk and more artifact risk.");
+			ImGui::TextUnformatted("Performance mode uses 4x4 for its outer band, with NVAPI fallback to 2x2 if 4x4 is unavailable.");
+		}
+
+		{
+			auto safeOnlyGuard = Util::DisableGuard(!settings.aaVrsPassAware);
+			ImGui::Checkbox("VRS Safe Opaque Only", &settings.aaVrsSafeOpaqueOnly);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Debug safety mode: only lighting passes that survive the pass-aware filter can use coarse rates.");
+			ImGui::TextUnformatted("Use this when isolating white flicker or shimmer sources.");
+		}
+
+		{
+			auto waterGuard = Util::DisableGuard(!settings.aaVrsPassAware || settings.aaVrsSafeOpaqueOnly);
+			ImGui::Checkbox("VRS Full-Rate Water", &settings.aaVrsProtectWater);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Keeps water shader passes at 1x1 while VRS pass-aware safety is active.");
+			ImGui::TextUnformatted("Water uses animated normals, reflection, and refraction, so coarse rates can shimmer or break edges.");
+			ImGui::TextUnformatted("Disabled while VRS Safe Opaque Only is active because that broader debug mode already protects water.");
+		}
+
+		ImGui::Checkbox("VRS Pass Telemetry", &settings.aaVrsPassTelemetry);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Shows cumulative counts for pass-aware full-rate decisions.");
+		}
+		if (settings.aaVrsPassTelemetry) {
+			if (ImGui::Button("Reset VRS Pass Counters"))
+				ResetAAVRSPassTelemetry();
+			DrawAAVRSPassTelemetry();
+		}
+	} else {
+		settings.aaVrsVisualization = false;
+	}
 }
 
 const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
@@ -8301,9 +8337,19 @@ bool Upscaling::GetPerfModeRequested() const
 	return GetVRRenderScaleModeRequested() && ClampToggleUInt(settings.perfMode) != 0;
 }
 
+bool Upscaling::IsDeferredCompositePSAvailable() const
+{
+	const auto upscaleMethod = GetUpscaleMethod();
+	return loaded &&
+	       globals::game::isVR &&
+	       settings.aaVrs &&
+	       IsAAVRSEligible(upscaleMethod) &&
+	       IsAAVRSAdapterEligible();
+}
+
 bool Upscaling::IsDeferredCompositePSRequested() const
 {
-	return globals::game::isVR && settings.aaVrs && settings.experimentalDeferredCompositePS;
+	return IsDeferredCompositePSAvailable() && settings.experimentalDeferredCompositePS;
 }
 
 bool Upscaling::IsDeferredCompositePSRuntimeEnabled() const

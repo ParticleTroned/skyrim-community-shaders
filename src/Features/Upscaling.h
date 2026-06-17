@@ -648,6 +648,13 @@ public:
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
+	struct VRPerEyeOutputSeedResult
+	{
+		bool baseOutputSeeded = false;
+		bool requestedOutputSeeded = false;
+	};
+	VRPerEyeOutputSeedResult SeedVRPerEyeOutputFromCurrentEye(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight,
+		ID3D11Resource* extraOutputResource = nullptr);
 	bool EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput);
 	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput);
 

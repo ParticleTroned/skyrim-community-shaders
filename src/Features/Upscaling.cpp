@@ -13938,6 +13938,46 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 	return true;
 }
 
+Upscaling::VRPerEyeOutputSeedResult Upscaling::SeedVRPerEyeOutputFromCurrentEye(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight,
+	ID3D11Resource* extraOutputResource)
+{
+	if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, outputWidth, outputHeight))
+		return {};
+
+	VRPerEyeOutputSeedResult result{};
+	result.baseOutputSeeded = true;
+
+	if (eyeIndex >= 2 ||
+		!extraOutputResource ||
+		!vrIntermediateColorOut[eyeIndex] ||
+		!vrIntermediateColorOut[eyeIndex]->resource ||
+		extraOutputResource == vrIntermediateColorOut[eyeIndex]->resource.get()) {
+		result.requestedOutputSeeded = true;
+		return result;
+	}
+
+	auto context = globals::d3d::context;
+	if (!context)
+		return result;
+
+	D3D11_TEXTURE2D_DESC seedDesc{};
+	D3D11_TEXTURE2D_DESC extraDesc{};
+	if (!TryGetTexture2DDesc(vrIntermediateColorOut[eyeIndex]->resource.get(), seedDesc) ||
+		!TryGetTexture2DDesc(extraOutputResource, extraDesc) ||
+		seedDesc.Width != extraDesc.Width ||
+		seedDesc.Height != extraDesc.Height ||
+		seedDesc.Format != extraDesc.Format) {
+		return result;
+	}
+
+	context->CopyResource(extraOutputResource, vrIntermediateColorOut[eyeIndex]->resource.get());
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR reset output seed"))
+		return result;
+
+	result.requestedOutputSeeded = true;
+	return result;
+}
+
 static void LogKnownGameMenuFinalCompositeDiagnostics(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut)
 {
 	if (!globals::game::isVR || eyeIndex >= 2 || !eyeWidthOut || !eyeHeightOut)
@@ -16382,6 +16422,25 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 	if (!vendorColorOutput || !vendorColorOutput->resource || !vendorColorOutput->uav)
 		return false;
+
+	if (ShouldResetHistoryThisFrame()) {
+		// Foveated presentation layers can expose stale edge/periphery pixels if
+		// the vendor reset frame leaves any output texels untouched. Seed the
+		// output with the current eye before DLSS/FSR evaluates so any uncovered
+		// samples are current-frame stretch fallback instead of previous menu or
+		// scene content.
+		const auto seedResult =
+			SeedVRPerEyeOutputFromCurrentEye(eyeIndex, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, vendorColorOutput->resource.get());
+		if (!seedResult.requestedOutputSeeded &&
+			submitDLSSSharpening &&
+			seedResult.baseOutputSeeded &&
+			vendorColorOutput != vrIntermediateColorOut[eyeIndex].get()) {
+			submitDLSSSharpening = false;
+			vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
+		}
+		if (IsSubmitStageDeviceLost())
+			return false;
+	}
 
 	bool vendorSucceeded = false;
 	if (foveatedRequested) {

@@ -1141,15 +1141,24 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			return stretched;
 		};
 
-		// DLAA uses the full per-eye extent. Keep it on the isolated per-eye
-		// output path so hidden-area cleanup and stereo copyback are identical
-		// for both eyes, avoiding stale content in the combined VR target.
-		const bool forcePerEyeOutput = upscaling.GetRuntimeQualityMode() == 0;
+		const bool historyResetFrame = upscaling.ShouldResetHistoryThisFrame();
+
+		// DLAA uses the full per-eye extent. DLSS reset frames also use the
+		// isolated path so both eyes get symmetric output cleanup/copyback before
+		// a foveated presentation layer can sample stale periphery pixels.
+		const bool forcePerEyeOutput =
+			upscaling.GetRuntimeQualityMode() == 0 ||
+			historyResetFrame;
 		const bool canUseDirectEye0 =
 			!forcePerEyeOutput &&
 			perEyeResourcesReady;
 
 		if (!canUseDirectEye0) {
+			if (historyResetFrame) {
+				for (uint32_t i = 0; i < 2; ++i)
+					(void)upscaling.SeedVRPerEyeOutputFromCurrentEye(i, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+			}
+
 			bool allEvaluated = true;
 			for (uint32_t i = 0; i < 2; ++i) {
 				sl::ViewportHandle vp = (i == 1) ? viewportRight : viewport;

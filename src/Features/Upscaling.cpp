@@ -176,6 +176,7 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
+	constexpr uint32_t kVRPostLoadFadeUISanitizeFrames = 4u;
 	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
@@ -194,6 +195,135 @@ namespace
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
+	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRPostLoadFadeUISanitizeTargets{
+		RE::RENDER_TARGETS::kFADERUI,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2
+	};
+
+	bool IsSaveLoadTransitionContextActive(const State* a_state);
+	bool IsVRLoadingPresentationContextActive(const State* a_state);
+	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling);
+
+	bool IsVRPostLoadFadeUISanitizeRelevant(const Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		const auto* state = globals::state;
+		return a_upscaling.IsVRRenderScaleModeActive() ||
+		       a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		       a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		       IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) ||
+		       IsSaveLoadTransitionContextActive(state) ||
+		       IsVRLoadingPresentationContextActive(state);
+	}
+
+	void DisarmVRPostLoadFadeUISanitize(Upscaling& a_upscaling)
+	{
+		a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.store(0, std::memory_order_release);
+		a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(0, std::memory_order_release);
+	}
+
+	void ArmVRPostLoadFadeUISanitize(Upscaling& a_upscaling, std::string_view a_reason)
+	{
+		if (!IsVRPostLoadFadeUISanitizeRelevant(a_upscaling))
+			return;
+
+		const auto* state = globals::state;
+		const uint32_t currentFrame = state ? std::max(state->frameCount, 1u) : 0u;
+
+		const auto previous = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.exchange(kVRPostLoadFadeUISanitizeFrames, std::memory_order_acq_rel);
+		a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(0, std::memory_order_release);
+		logger::debug(
+			"[VRTransition] Armed post-load fade/UI sanitize: reason={} frames={} previous={} armFrame={}",
+			a_reason,
+			kVRPostLoadFadeUISanitizeFrames,
+			previous,
+			currentFrame);
+	}
+
+	bool TryClearPendingVRPostLoadFadeUITargets(Upscaling& a_upscaling, std::string_view a_passName)
+	{
+		const auto remaining = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.load(std::memory_order_acquire);
+		if (remaining == 0)
+			return false;
+
+		if (!globals::game::isVR || !globals::d3d::context || !globals::game::renderer) {
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+			return false;
+		}
+
+		const auto* state = globals::state;
+		if (!state) {
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+			return false;
+		}
+
+		if (IsVRLoadingPresentationContextActive(state))
+			return false;
+
+		uint32_t endFrame = a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.load(std::memory_order_acquire);
+		if (endFrame == 0) {
+			endFrame = state->frameCount + kVRPostLoadFadeUISanitizeFrames;
+			a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(endFrame, std::memory_order_release);
+			logger::debug(
+				"[VRTransition] Started post-load fade/UI sanitize window: pass={} frame={} endFrame={}",
+				a_passName,
+				state->frameCount,
+				endFrame);
+		} else if (state->frameCount >= endFrame) {
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+			logger::debug(
+				"[VRTransition] Expired post-load fade/UI sanitize window: pass={} frame={} endFrame={}",
+				a_passName,
+				state->frameCount,
+				endFrame);
+			return false;
+		}
+
+		constexpr float kClearColor[4] = {};
+		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
+		uint32_t cleared = 0;
+		uint32_t missing = 0;
+
+		for (const auto target : kVRPostLoadFadeUISanitizeTargets) {
+			auto& renderTarget = renderTargets[target];
+			if (!renderTarget.RTV) {
+				++missing;
+				continue;
+			}
+
+			globals::d3d::context->ClearRenderTargetView(renderTarget.RTV, kClearColor);
+			++cleared;
+		}
+
+		if (cleared == 0) {
+			logger::debug(
+				"[VRTransition] Skipped post-load fade/UI sanitize clear: pass={} frame={} remaining={} missing={}",
+				a_passName,
+				state->frameCount,
+				remaining,
+				missing);
+			return false;
+		}
+
+		const auto previous = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.fetch_sub(1, std::memory_order_acq_rel);
+		const auto next = previous > 0 ? previous - 1 : 0;
+		if (next == 0)
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+
+		logger::debug(
+			"[VRTransition] Cleared post-load fade/UI targets: pass={} frame={} remaining={} cleared={} missing={}",
+			a_passName,
+			state->frameCount,
+			next,
+			cleared,
+			missing);
+
+		return cleared != 0;
+	}
 
 	bool IsExplicitVRUpscalingTransitionOrigin(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -7966,6 +8096,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			true);
 		if (!a_event->opening) {
 			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
+			ArmVRPostLoadFadeUISanitize(globals::features::upscaling, "loading menu close");
 			if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
 				globals::features::upscaling.QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
 		}
@@ -17752,6 +17883,9 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 {
 	auto& upscaling = globals::features::upscaling;
 	upscaling.DisableAAVRSState();
+	if (a_stage == DynamicResolutionUpsampleStage::Render && a_passName && std::string_view(a_passName) == "ISCopyDynamicFetchDisabled") {
+		TryClearPendingVRPostLoadFadeUITargets(upscaling, a_passName);
+	}
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
 	if (IsVendorUpscalingMethod(upscaleMethod) && upscaling.IsUpscalingActive()) {
 		const char* stageName = a_stage == DynamicResolutionUpsampleStage::Dispatch ? "Dispatch" : "Render";

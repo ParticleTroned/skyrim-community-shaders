@@ -290,6 +290,23 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					return vr::VRCompositorError_None;
 				}
 
+				if (upscaling.ShouldSuppressVRRenderScaleOriginalSubmitFallback(pTexture)) {
+					static std::atomic_bool loggedRenderScaleFallbackSuppression{ false };
+					if (!loggedRenderScaleFallbackSuppression.exchange(true, std::memory_order_relaxed)) {
+						logger::warn(
+							"[VRSubmit] Suppressing OpenVR submit for reduced render-scale texture during loading/relatch; waiting for final-sized presentation output.");
+						upscaling.LogVRCompositorSubmitPath(
+							eEye,
+							"loading-render-scale-original-submit-suppressed",
+							pTexture,
+							pBounds,
+							nullptr,
+							nullptr,
+							nSubmitFlags);
+					}
+					return vr::VRCompositorError_None;
+				}
+
 				if (!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
 					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
 					vr::Texture_t overlayTexture{};

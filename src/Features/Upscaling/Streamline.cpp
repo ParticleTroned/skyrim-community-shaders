@@ -1083,7 +1083,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
 		renderSize = Util::ConvertToDynamic(screenSize);
 	const bool useSharpenerOutput =
-		upscaling.settings.sharpnessDLSS > 0.0f &&
+		upscaling.ShouldApplyDLSSSharpening() &&
 		upscaling.sharpenerTexture &&
 		upscaling.sharpenerTexture->resource;
 	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
@@ -1288,9 +1288,9 @@ void Streamline::UpdateReflex()
 	const bool reflexBlockedByFrameGeneration = upscaling.IsFrameGenerationDx12PathActive();
 	if (reflexBlockedByFrameGeneration) {
 		const bool reflexAlreadyOff = reflexOptionsCache.valid &&
-			reflexOptionsCache.mode == sl::ReflexMode::eOff &&
-			reflexOptionsCache.frameLimitUs == 0 &&
-			!reflexOptionsCache.useMarkersToOptimize;
+		                              reflexOptionsCache.mode == sl::ReflexMode::eOff &&
+		                              reflexOptionsCache.frameLimitUs == 0 &&
+		                              !reflexOptionsCache.useMarkersToOptimize;
 		if (!reflexAlreadyOff) {
 			sl::ReflexOptions disableOptions{};
 			disableOptions.mode = sl::ReflexMode::eOff;

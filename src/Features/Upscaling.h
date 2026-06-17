@@ -796,6 +796,8 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
+	std::atomic<uint32_t> pendingVRPostLoadFadeUISanitizeFrames{ 0 };
+	std::atomic<uint32_t> pendingVRPostLoadFadeUISanitizeEndFrame{ 0 };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	std::atomic<uint32_t> pendingVRUpscalingQualityMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRRenderScaleMode{ kPendingVRUpscalingSettingUnset };

@@ -9084,6 +9084,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePresentationResumeSeedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -9486,6 +9487,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePresentationResumeSeedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -13951,6 +13953,49 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 	return true;
 }
 
+Upscaling::SubmitStageOutputSeedResult Upscaling::SeedSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight,
+	ID3D11Resource* requestedOutputResource)
+{
+	SubmitStageOutputSeedResult result{};
+	if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, outputWidth, outputHeight))
+		return result;
+
+	result.baseOutputSeeded = true;
+	if (eyeIndex >= 2 ||
+		!vrIntermediateColorOut[eyeIndex] ||
+		!vrIntermediateColorOut[eyeIndex]->resource ||
+		!requestedOutputResource ||
+		requestedOutputResource == vrIntermediateColorOut[eyeIndex]->resource.get()) {
+		result.requestedOutputSeeded = true;
+		return result;
+	}
+
+	auto context = globals::d3d::context;
+	if (!context)
+		return result;
+
+	D3D11_TEXTURE2D_DESC seedDesc{};
+	D3D11_TEXTURE2D_DESC requestedDesc{};
+	if (!TryGetTexture2DDesc(vrIntermediateColorOut[eyeIndex]->resource.get(), seedDesc) ||
+		!TryGetTexture2DDesc(requestedOutputResource, requestedDesc) ||
+		seedDesc.Width != requestedDesc.Width ||
+		seedDesc.Height != requestedDesc.Height ||
+		seedDesc.MipLevels != requestedDesc.MipLevels ||
+		seedDesc.ArraySize != requestedDesc.ArraySize ||
+		seedDesc.Format != requestedDesc.Format ||
+		seedDesc.SampleDesc.Count != requestedDesc.SampleDesc.Count ||
+		seedDesc.SampleDesc.Quality != requestedDesc.SampleDesc.Quality) {
+		return result;
+	}
+
+	context->CopyResource(requestedOutputResource, vrIntermediateColorOut[eyeIndex]->resource.get());
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage vendor output seed"))
+		return result;
+
+	result.requestedOutputSeeded = true;
+	return result;
+}
+
 static void LogKnownGameMenuFinalCompositeDiagnostics(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut)
 {
 	if (!globals::game::isVR || eyeIndex >= 2 || !eyeWidthOut || !eyeHeightOut)
@@ -15064,6 +15109,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePresentationResumeSeedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -15560,6 +15606,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
+	const bool resumeFromPresentationOnlyCandidate =
+		!presentationOnly &&
+		submitStagePreparedFramePresentationOnly &&
+		ElapsedFrames(submitStagePreparedFrame, currentFrame) == 1u;
+	if (resumeFromPresentationOnlyCandidate)
+		submitStagePresentationResumeSeedFrame = currentFrame;
+	const bool resumeFromPresentationOnly =
+		submitStagePresentationResumeSeedFrame != std::numeric_limits<uint32_t>::max() &&
+		submitStagePresentationResumeSeedFrame == currentFrame;
 	if (!submitStagePreparedThisFrame) {
 		if (!presentationOnly) {
 			if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
@@ -15583,6 +15638,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			return false;
 	}
 
+	const bool transitionProtectionActive = IsVRTransitionPresentationProtectionActive(*this, state);
+	const bool hmdClearDeferred = ShouldDeferHMDClearMask();
+	const bool projectedMaskDeferred = ShouldDeferVRProjectedMaskRepair(*this, state);
 	if (transitionPresentationCooldown) {
 		const bool cooldownStableCandidate =
 			vrRenderScaleMode &&
@@ -15594,9 +15652,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
 			!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 			!HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
-			!IsVRTransitionPresentationProtectionActive(*this, state) &&
-			!ShouldDeferHMDClearMask() &&
-			!ShouldDeferVRProjectedMaskRepair(*this, state) &&
+			!transitionProtectionActive &&
+			!hmdClearDeferred &&
+			!projectedMaskDeferred &&
 			!foveatedTransitionBypass &&
 			motionVector.texture &&
 			depth.texture;
@@ -16040,6 +16098,34 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 	if (!vendorColorOutput || !vendorColorOutput->resource || !vendorColorOutput->uav)
 		return false;
+
+	// Seed high-risk submit frames before vendor dispatch so any texels the
+	// upscaler leaves untouched cannot preserve stale transition/menu content.
+	const bool seedSubmitStageVendorOutput =
+		vrRenderScaleMode &&
+		!presentationRenderTarget &&
+		sourceRegion.matchesExpectedSize &&
+		(ShouldResetHistoryThisFrame() ||
+		 resumeFromPresentationOnly ||
+		 menuPresentationContext ||
+		 submitMenuPresentationContext ||
+		 transitionProtectionActive ||
+		 hmdClearDeferred ||
+		 projectedMaskDeferred ||
+		 foveatedTransitionBypass ||
+		 transitionPresentationCooldown);
+	if (seedSubmitStageVendorOutput) {
+		const auto seedResult = SeedSubmitStageEyeOutput(eyeIndex, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, vendorColorOutput->resource.get());
+		if (!seedResult.requestedOutputSeeded &&
+			submitDLSSSharpening &&
+			seedResult.baseOutputSeeded &&
+			vendorColorOutput != vrIntermediateColorOut[eyeIndex].get()) {
+			submitDLSSSharpening = false;
+			vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
+		}
+		if (IsSubmitStageDeviceLost())
+			return false;
+	}
 
 	bool vendorSucceeded = false;
 	if (foveatedRequested) {

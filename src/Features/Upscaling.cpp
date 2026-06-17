@@ -4099,7 +4099,7 @@ namespace
 		return setupState;
 	}
 
-	void LogVRFoveatedSetupVisualizationAllowedOnce(Upscaling::UpscaleMethod a_upscaleMethod, const VRFoveatedSetupVisualizationState& a_setupState, const char* a_hook)
+	void LogVRSetupMaskVisualizationAllowedOnce(Upscaling::UpscaleMethod a_upscaleMethod, const VRFoveatedSetupVisualizationState& a_setupState, const char* a_hook)
 	{
 		if (!a_setupState.Active())
 			return;
@@ -4120,7 +4120,7 @@ namespace
 		if ((previousMarkerBits & markerBit) == 0) {
 			const auto* state = globals::state;
 			logger::debug(
-				"[VRFOVSetup] action=allow-foveated-visualization-in-cs-menu hook={} frame={} method={} fovMask={} vrsMask={} result=allowed",
+				"[VRFOVSetup] action=allow-setup-mask-visualization-in-cs-menu hook={} frame={} method={} requestedFov={} requestedVrs={} result=allowed",
 				a_hook ? a_hook : "unknown",
 				state ? state->frameCount : 0,
 				magic_enum::enum_name(a_upscaleMethod),
@@ -4129,30 +4129,79 @@ namespace
 		}
 	}
 
-	void LogVRFoveatedSetupVisualizationBlockedOnce(Upscaling::UpscaleMethod a_upscaleMethod, const VRFoveatedSetupVisualizationState& a_setupState, const char* a_hook, const char* a_reason)
+	void LogVRSetupMaskVisualizationResultOnce(
+		Upscaling::UpscaleMethod a_upscaleMethod,
+		const VRFoveatedSetupVisualizationState& a_setupState,
+		bool a_appliedFovMask,
+		bool a_appliedVrsMask,
+		const char* a_hook,
+		const char* a_path,
+		uint32_t a_eyeIndex,
+		uint32_t a_inputWidth,
+		uint32_t a_inputHeight,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
+		const char* a_reason = nullptr)
 	{
 		if (!a_setupState.Active())
 			return;
 
-		const uint32_t hookKey =
-			a_hook && std::string_view(a_hook) == "SubmitVRUpscaledFrame" ? 4u : 8u;
-		const uint32_t markerKey =
-			(a_setupState.fovMask ? 1u : 0u) |
-			(a_setupState.vrsMask ? 2u : 0u) |
-			hookKey;
-		const uint32_t markerBit = 1u << markerKey;
-		static std::atomic_uint32_t loggedMarkerBits{ 0 };
-		const uint32_t previousMarkerBits = loggedMarkerBits.fetch_or(markerBit, std::memory_order_relaxed);
+		const bool skipped = !a_appliedFovMask && !a_appliedVrsMask;
+		const bool fullyApplied =
+			a_appliedFovMask == a_setupState.fovMask &&
+			a_appliedVrsMask == a_setupState.vrsMask;
+		const uint64_t markerKey =
+			(a_setupState.fovMask ? 1ull : 0ull) |
+			(a_setupState.vrsMask ? 2ull : 0ull) |
+			(a_appliedFovMask ? 4ull : 0ull) |
+			(a_appliedVrsMask ? 8ull : 0ull) |
+			((static_cast<uint64_t>(a_eyeIndex & 1u)) << 4u) |
+			(skipped ? (1ull << 5u) : 0ull);
+		const uint64_t markerBit = 1ull << markerKey;
+		static std::atomic<uint64_t> loggedMarkerBits{ 0 };
+		const uint64_t previousMarkerBits = loggedMarkerBits.fetch_or(markerBit, std::memory_order_relaxed);
 		if ((previousMarkerBits & markerBit) == 0) {
 			const auto* state = globals::state;
-			logger::info(
-				"[VRFOVSetup] action=block-foveated-visualization-in-cs-menu hook={} frame={} method={} fovMask={} vrsMask={} reason={} result=blocked",
-				a_hook ? a_hook : "unknown",
-				state ? state->frameCount : 0,
-				magic_enum::enum_name(a_upscaleMethod),
-				BoolText(a_setupState.fovMask),
-				BoolText(a_setupState.vrsMask),
-				a_reason ? a_reason : "unknown");
+			const char* action = skipped ? "skip-setup-mask-visualization" : "apply-setup-mask-visualization";
+			const char* result = skipped ? "skipped" : (fullyApplied ? "applied" : "partial");
+			if (a_reason && *a_reason) {
+				logger::info(
+					"[VRFOVSetup] action={} hook={} frame={} eye={} method={} requestedFov={} requestedVrs={} appliedFov={} appliedVrs={} input={}x{} output={}x{} path={} reason={} result={}",
+					action,
+					a_hook ? a_hook : "unknown",
+					state ? state->frameCount : 0,
+					a_eyeIndex,
+					magic_enum::enum_name(a_upscaleMethod),
+					BoolText(a_setupState.fovMask),
+					BoolText(a_setupState.vrsMask),
+					BoolText(a_appliedFovMask),
+					BoolText(a_appliedVrsMask),
+					a_inputWidth,
+					a_inputHeight,
+					a_outputWidth,
+					a_outputHeight,
+					a_path ? a_path : "unknown",
+					a_reason,
+					result);
+			} else {
+				logger::info(
+					"[VRFOVSetup] action={} hook={} frame={} eye={} method={} requestedFov={} requestedVrs={} appliedFov={} appliedVrs={} input={}x{} output={}x{} path={} result={}",
+					action,
+					a_hook ? a_hook : "unknown",
+					state ? state->frameCount : 0,
+					a_eyeIndex,
+					magic_enum::enum_name(a_upscaleMethod),
+					BoolText(a_setupState.fovMask),
+					BoolText(a_setupState.vrsMask),
+					BoolText(a_appliedFovMask),
+					BoolText(a_appliedVrsMask),
+					a_inputWidth,
+					a_inputHeight,
+					a_outputWidth,
+					a_outputHeight,
+					a_path ? a_path : "unknown",
+					result);
+			}
 		}
 	}
 
@@ -10399,7 +10448,7 @@ bool Upscaling::BuildAAVRSSettings(AAVRSController::Settings& a_outSettings) con
 	if (!settings.aaVrs || !globals::game::isVR || !foveatedDispatchEnabled || (menuPresentationContext && !vrsSetupVisualizationContext))
 		return false;
 	if (menuPresentationContext && vrsSetupVisualizationContext)
-		LogVRFoveatedSetupVisualizationAllowedOnce(upscaleMethod, setupVisualizationState, "BuildAAVRSSettings");
+		LogVRSetupMaskVisualizationAllowedOnce(upscaleMethod, setupVisualizationState, "BuildAAVRSSettings");
 
 	uint32_t inputWidthPerEye = 0;
 	uint32_t inputHeight = 0;
@@ -10505,7 +10554,7 @@ void Upscaling::UpdateAAVRSState()
 		return;
 	}
 	if (sceneFeatureMenuPauseContext && vrsSetupVisualizationContext)
-		LogVRFoveatedSetupVisualizationAllowedOnce(upscaleMethod, setupVisualizationState, "UpdateAAVRSState");
+		LogVRSetupMaskVisualizationAllowedOnce(upscaleMethod, setupVisualizationState, "UpdateAAVRSState");
 
 	auto* device = globals::d3d::device;
 	auto* context = globals::d3d::context;
@@ -10523,6 +10572,91 @@ void Upscaling::UpdateAAVRSState()
 	const bool updated = aaVrsController.Update(aaVrsSettings, device, context);
 	aaVrsRuntimeContentAware = updated && ApplyAAVRSContentAwareRefinement(aaVrsSettings);
 	ReportAAVRSTelemetry(requested);
+}
+
+namespace
+{
+	bool DispatchAAVRSVisualizationPass(
+		AAVRSController& a_controller,
+		ConstantBuffer* a_constantBuffer,
+		ID3D11DeviceContext* a_context,
+		ID3D11ComputeShader* a_shader,
+		ID3D11ShaderResourceView* a_rateSRV,
+		ID3D11UnorderedAccessView* a_outputUAV,
+		const AAVRSController::Settings& a_settings,
+		uint32_t a_renderWidth,
+		uint32_t a_renderHeight,
+		uint32_t a_displayWidth,
+		uint32_t a_displayHeight,
+		const std::array<AAVRSController::CenterOffset, 2>& a_centerOffsets,
+		float a_eyeCount,
+		bool a_forceAnalyticMask)
+	{
+		if (!a_constantBuffer || !a_context || !a_shader || !a_outputUAV || !a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight)
+			return false;
+		if (!a_forceAnalyticMask && !a_rateSRV)
+			return false;
+
+		Upscaling::AAVRSVisualizationCB cbData{};
+		cbData.renderInfo = {
+			static_cast<float>(a_renderWidth),
+			static_cast<float>(a_renderHeight),
+			1.0f / static_cast<float>(a_renderWidth),
+			1.0f / static_cast<float>(a_renderHeight)
+		};
+		cbData.displayInfo = {
+			static_cast<float>(a_displayWidth),
+			static_cast<float>(a_displayHeight),
+			std::max(a_eyeCount, 1.0f),
+			a_settings.coarseOutsideMask ? 1.0f : 0.0f
+		};
+		cbData.maskInfo = {
+			a_settings.centerScale,
+			a_settings.outerScale,
+			a_settings.centerHorizontalScale,
+			a_forceAnalyticMask ? 1.0f : 0.0f
+		};
+		cbData.centerOffsets = {
+			a_centerOffsets[0].x,
+			a_centerOffsets[0].y,
+			a_centerOffsets[1].x,
+			a_centerOffsets[1].y
+		};
+		cbData.coarseColor = { 1.00f, 0.00f, 1.00f, 1.0f };
+		cbData.centerColor = { 0.02f, 0.02f, 0.025f, 1.0f };
+		cbData.pad = {
+			static_cast<float>(AAVRSController::kTileWidth),
+			static_cast<float>(AAVRSController::kTileHeight),
+			a_settings.performanceMode ? 1.0f : 0.0f,
+			static_cast<float>(a_settings.performanceAnisotropy)
+		};
+		a_constantBuffer->Update(cbData);
+
+		ID3D11Buffer* cb = a_constantBuffer->CB();
+		ID3D11ShaderResourceView* srvs[1] = { a_rateSRV };
+		ID3D11UnorderedAccessView* uavs[1] = { a_outputUAV };
+		a_controller.UnbindShadingRateResource(a_context);
+		a_context->CSSetShader(a_shader, nullptr, 0);
+		a_context->CSSetConstantBuffers(0, 1, &cb);
+		a_context->CSSetShaderResources(0, 1, srvs);
+		a_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+		auto state = globals::state;
+		if (state && state->frameAnnotations)
+			state->BeginPerfEvent(kVrsMaskVisualizationName);
+		a_context->Dispatch((a_renderWidth + 7u) >> 3, (a_renderHeight + 7u) >> 3, 1);
+		if (state && state->frameAnnotations)
+			state->EndPerfEvent();
+
+		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+		ID3D11Buffer* nullCB[1] = { nullptr };
+		a_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+		a_context->CSSetShaderResources(0, 1, nullSRV);
+		a_context->CSSetConstantBuffers(0, 1, nullCB);
+		a_context->CSSetShader(nullptr, nullptr, 0);
+		return true;
+	}
 }
 
 bool Upscaling::ApplyAAVRSContentAwareRefinement(const AAVRSController::Settings& a_settings)
@@ -10620,64 +10754,21 @@ void Upscaling::ApplyAAVRSVisualization()
 	if (!main.UAV)
 		return;
 
-	AAVRSVisualizationCB cbData{};
-	cbData.renderInfo = {
-		static_cast<float>(aaVrsSettings.renderWidth),
-		static_cast<float>(aaVrsSettings.renderHeight),
-		aaVrsSettings.renderWidth > 0 ? 1.0f / static_cast<float>(aaVrsSettings.renderWidth) : 0.0f,
-		aaVrsSettings.renderHeight > 0 ? 1.0f / static_cast<float>(aaVrsSettings.renderHeight) : 0.0f
-	};
-	cbData.displayInfo = {
-		static_cast<float>(aaVrsSettings.displayWidth),
-		static_cast<float>(aaVrsSettings.displayHeight),
+	DispatchAAVRSVisualizationPass(
+		aaVrsController,
+		aaVrsVisualizationCB,
+		context,
+		shader,
+		rateSRV,
+		main.UAV,
+		aaVrsSettings,
+		aaVrsSettings.renderWidth,
+		aaVrsSettings.renderHeight,
+		aaVrsSettings.displayWidth,
+		aaVrsSettings.displayHeight,
+		aaVrsSettings.centerOffsets,
 		aaVrsSettings.stereo ? 2.0f : 1.0f,
-		aaVrsSettings.coarseOutsideMask ? 1.0f : 0.0f
-	};
-	cbData.maskInfo = {
-		aaVrsSettings.centerScale,
-		aaVrsSettings.outerScale,
-		aaVrsSettings.centerHorizontalScale,
-		0.0f
-	};
-	cbData.centerOffsets = {
-		aaVrsSettings.centerOffsets[0].x,
-		aaVrsSettings.centerOffsets[0].y,
-		aaVrsSettings.centerOffsets[1].x,
-		aaVrsSettings.centerOffsets[1].y
-	};
-	cbData.coarseColor = { 1.00f, 0.00f, 1.00f, 1.0f };
-	cbData.centerColor = { 0.02f, 0.02f, 0.025f, 1.0f };
-	cbData.pad = {
-		static_cast<float>(AAVRSController::kTileWidth),
-		static_cast<float>(AAVRSController::kTileHeight),
-		aaVrsSettings.performanceMode ? 1.0f : 0.0f,
-		static_cast<float>(aaVrsSettings.performanceAnisotropy)
-	};
-	aaVrsVisualizationCB->Update(cbData);
-
-	ID3D11Buffer* cb = aaVrsVisualizationCB->CB();
-	ID3D11ShaderResourceView* srvs[1] = { rateSRV };
-	ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
-	aaVrsController.UnbindShadingRateResource(context);
-	context->CSSetShader(shader, nullptr, 0);
-	context->CSSetConstantBuffers(0, 1, &cb);
-	context->CSSetShaderResources(0, 1, srvs);
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-	auto state = globals::state;
-	if (state && state->frameAnnotations)
-		state->BeginPerfEvent(kVrsMaskVisualizationName);
-	context->Dispatch((aaVrsSettings.renderWidth + 7u) >> 3, (aaVrsSettings.renderHeight + 7u) >> 3, 1);
-	if (state && state->frameAnnotations)
-		state->EndPerfEvent();
-
-	ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-	ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-	ID3D11Buffer* nullCB[1] = { nullptr };
-	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-	context->CSSetShaderResources(0, 1, nullSRV);
-	context->CSSetConstantBuffers(0, 1, nullCB);
-	context->CSSetShader(nullptr, nullptr, 0);
+		false);
 }
 
 bool Upscaling::ShouldForceFullRateForAAVRSPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest)
@@ -15366,10 +15457,17 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		!submitBoundsPresentationFallback &&
 		sourceRegion.matchesExpectedSize &&
 		IsVRLoadingPresentationContextActive(state);
+	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
+	const auto setupVisualizationState = GetVRFoveatedSetupVisualizationState(*this, upscaleMethod);
+	const bool submitStageSetupMaskVisualization =
+		vrRenderScaleMode &&
+		sceneFeatureMenuPauseContext &&
+		setupVisualizationState.Active() &&
+		!foveatedTransitionBypass;
 	auto computePresentationOnly = [&]() {
 		const bool cooldownPresentationOnly = vrRenderScaleMode && transitionPresentationCooldown;
 		return vrRenderScaleMode &&
-		       (submitPresentationContext || cooldownPresentationOnly || loadingTransitionPresentationOnly || submitBoundsPresentationFallback) &&
+		       (submitPresentationContext || cooldownPresentationOnly || loadingTransitionPresentationOnly || submitBoundsPresentationFallback || submitStageSetupMaskVisualization) &&
 		       !vrRenderScaleMenuCanUseVendor;
 	};
 	bool presentationOnly =
@@ -15458,10 +15556,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const bool transitionPresentationOnly = vrRenderScaleMode && (transitionPresentationCooldown || loadingTransitionPresentationOnly);
-	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
-	const auto setupVisualizationState = GetVRFoveatedSetupVisualizationState(*this, upscaleMethod);
-	if (sceneFeatureMenuPauseContext && setupVisualizationState.fovMask)
-		LogVRFoveatedSetupVisualizationBlockedOnce(upscaleMethod, setupVisualizationState, "SubmitVRUpscaledFrame", "submit-stage-fov-unsafe");
 	const bool foveatedRequested =
 		!presentationOnly &&
 		!sceneFeatureMenuPauseContext &&
@@ -15666,11 +15760,171 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			presentationRenderTarget);
 	};
 
+	const auto applyFovSetupMaskVisualization = [&](uint32_t inputWidth, uint32_t inputHeight, bool& applied, const char*& reason) {
+		if (!setupVisualizationState.fovMask)
+			return true;
+		if (!EnsureFoveatedDispatchShaders(false, true, "Submit-stage setup ", "skipping FOV mask visualization")) {
+			reason = reason ? reason : "fov-shader-unavailable";
+			return !IsSubmitStageDeviceLost();
+		}
+		if (!vrIntermediateColorIn[eyeIndex] || !vrIntermediateColorIn[eyeIndex]->srv ||
+			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav) {
+			reason = reason ? reason : "fov-intermediate-missing";
+			return true;
+		}
+		auto deferred = globals::deferred;
+		if (!globals::d3d::context || !deferred || !deferred->linearSampler) {
+			reason = reason ? reason : "fov-dispatch-state-missing";
+			return true;
+		}
+
+		const auto& sourceTexture = vrIntermediateColorIn[eyeIndex];
+		const auto& outputTexture = vrIntermediateColorOut[eyeIndex];
+		const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(upscaleMethod);
+		const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
+		const auto sourceTextureRegion = FoveatedRegionPlan::BuildTopLeftValidTextureRegion(
+			inputWidth,
+			inputHeight,
+			sourceTexture->desc.Width,
+			sourceTexture->desc.Height);
+		const auto centerOffset = GetResolvedFoveatedMaskCenterOffset(eyeIndex, usePeripheryTAAProfile);
+
+		DispatchFoveatedPeripheryPass(
+			sourceTexture->srv.get(),
+			outputTexture->uav.get(),
+			sourceTexture->desc.Width,
+			sourceTexture->desc.Height,
+			eyeWidthOut,
+			eyeHeightOut,
+			0,
+			0,
+			eyeWidthOut,
+			eyeHeightOut,
+			foveatedProfile.centerScale,
+			foveatedProfile.centerHorizontalScale,
+			false,
+			sourceTextureRegion.scale.x,
+			sourceTextureRegion.scale.y,
+			sourceTextureRegion.offset.x,
+			sourceTextureRegion.offset.y,
+			centerOffset.x,
+			centerOffset.y);
+		applied = true;
+
+		return !MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage FOV setup mask visualization");
+	};
+
+	const auto applyVrsSetupMaskVisualization = [&](bool& applied, const char*& reason) {
+		if (!setupVisualizationState.vrsMask)
+			return true;
+
+		auto context = globals::d3d::context;
+		if (!context || !aaVrsVisualizationCB ||
+			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav) {
+			reason = reason ? reason : "vrs-dispatch-state-missing";
+			return true;
+		}
+
+		auto* shader = GetAAVRSVisualizationCS();
+		if (!shader) {
+			reason = reason ? reason : "vrs-visualization-shader-missing";
+			return true;
+		}
+
+		AAVRSController::Settings aaVrsSettings{};
+		if (!BuildAAVRSSettings(aaVrsSettings)) {
+			reason = reason ? reason : "vrs-settings-unavailable";
+			return true;
+		}
+
+		const auto centerOffset = aaVrsSettings.centerOffsets[std::min<uint32_t>(eyeIndex, 1u)];
+		const std::array<AAVRSController::CenterOffset, 2> centerOffsets = {
+			AAVRSController::CenterOffset{ centerOffset.x, centerOffset.y },
+			AAVRSController::CenterOffset{ centerOffset.x, centerOffset.y }
+		};
+		if (!DispatchAAVRSVisualizationPass(
+				aaVrsController,
+				aaVrsVisualizationCB,
+				context,
+				shader,
+				aaVrsController.GetRateImageSRV(),
+				vrIntermediateColorOut[eyeIndex]->uav.get(),
+				aaVrsSettings,
+				eyeWidthOut,
+				eyeHeightOut,
+				eyeWidthOut,
+				eyeHeightOut,
+				centerOffsets,
+				1.0f,
+				true)) {
+			reason = reason ? reason : "vrs-dispatch-skipped";
+			return true;
+		}
+		applied = true;
+
+		return !MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage VRS setup mask visualization");
+	};
+
+	const auto applySetupMaskVisualizations = [&](uint32_t inputWidth, uint32_t inputHeight, const char* path) {
+		if (!submitStageSetupMaskVisualization)
+			return true;
+
+		static bool loggedSetupVisualizationException[2] = {};
+		bool appliedFovMask = false;
+		bool appliedVrsMask = false;
+		const char* reason = nullptr;
+		try {
+			if (!applyFovSetupMaskVisualization(inputWidth, inputHeight, appliedFovMask, reason))
+				return false;
+			if (!applyVrsSetupMaskVisualization(appliedVrsMask, reason))
+				return false;
+		} catch (const std::exception& e) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage setup mask visualization"))
+				return false;
+			LogWarnOnceFmt(
+				loggedSetupVisualizationException[eyeIndex],
+				"[Upscaling] Submit-stage setup mask visualization threw for eye {}; using stretch output without setup mask: {}",
+				eyeIndex,
+				e.what());
+			return true;
+		} catch (...) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage setup mask visualization"))
+				return false;
+			LogWarnOnceFmt(
+				loggedSetupVisualizationException[eyeIndex],
+				"[Upscaling] Submit-stage setup mask visualization threw for eye {}; using stretch output without setup mask",
+				eyeIndex);
+			return true;
+		}
+
+		LogVRSetupMaskVisualizationResultOnce(
+			upscaleMethod,
+			setupVisualizationState,
+			appliedFovMask,
+			appliedVrsMask,
+			"SubmitVRUpscaledFrame",
+			path,
+			eyeIndex,
+			inputWidth,
+			inputHeight,
+			eyeWidthOut,
+			eyeHeightOut,
+			reason);
+		return true;
+	};
+
 	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, const char* path) {
 		if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut) ||
 			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
 			return false;
 		}
+		if (IsSubmitStageDeviceLost())
+			return false;
+
+		if (!applySetupMaskVisualizations(inputWidth, inputHeight, path))
+			return false;
 		if (IsSubmitStageDeviceLost())
 			return false;
 
@@ -15690,8 +15944,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return presentStretchOutput(
 			presentationInputWidth,
 			presentationInputHeight,
-			submitBoundsPresentationFallback ? "submit-bounds-stretch-output" :
-			                                   (transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output"));
+			submitStageSetupMaskVisualization ? "setup-mask-stretch-output" :
+				(submitBoundsPresentationFallback ? "submit-bounds-stretch-output" :
+			                                   (transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output")));
 	}
 
 	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;

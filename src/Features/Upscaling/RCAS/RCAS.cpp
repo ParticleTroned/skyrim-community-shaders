@@ -1,7 +1,6 @@
 #include "RCAS.h"
 
-#include "../../../Deferred.h"
-#include "../../../State.h"
+#include "../SharpenerDispatch.h"
 #include "../../../Util.h"
 
 struct RCASConfig
@@ -18,12 +17,19 @@ RCAS::~RCAS()
 
 void RCAS::Initialize()
 {
-	if (rcasConfigCB)
+	if (rcasConfigCB && rcasComputeShader)
 		return;
 
 	logger::info("[RCAS] Creating resources");
-	CreateComputeShader();
-	rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<RCASConfig>());
+	if (!rcasComputeShader)
+		CreateComputeShader();
+	if (!rcasConfigCB)
+		rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<RCASConfig>());
+}
+
+void RCAS::ClearShaderCache()
+{
+	rcasComputeShader = nullptr;
 }
 
 void RCAS::CreateComputeShader()
@@ -35,12 +41,14 @@ void RCAS::CreateComputeShader()
 bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAccessView* outputUAV, float sharpness, uint32_t width, uint32_t height)
 {
 	auto state = globals::state;
-	auto context = globals::d3d::context;
-	if (!state || !context || !inputSRV || !outputUAV)
+	if (!state || !inputSRV || !outputUAV)
 		return false;
 
 	ZoneScoped;
 	TracyD3D11Zone(state->tracyCtx, "RCAS Sharpening");
+
+	if (!rcasComputeShader || !rcasConfigCB)
+		Initialize();
 
 	if (!rcasComputeShader) {
 		logger::warn("[RCAS] Compute shader not compiled");
@@ -51,45 +59,22 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 		return false;
 	}
 
-	state->BeginPerfEvent("RCAS Sharpening");
-
 	uint32_t screenWidth = width ? width : static_cast<uint32_t>(state->screenSize.x);
 	uint32_t screenHeight = height ? height : static_cast<uint32_t>(state->screenSize.y);
-	if (!screenWidth || !screenHeight) {
-		state->EndPerfEvent();
+	if (!screenWidth || !screenHeight)
 		return false;
-	}
 
 	RCASConfig config{};
 	config.sharpness = sharpness;
 
-	rcasConfigCB->Update(config);
-	auto bufferArray = rcasConfigCB->CB();
-
-	context->CSSetShader(rcasComputeShader.get(), nullptr, 0);
-	context->CSSetConstantBuffers(0, 1, &bufferArray);
-
-	ID3D11ShaderResourceView* srvs[] = { inputSRV };
-	context->CSSetShaderResources(0, 1, srvs);
-
-	ID3D11UnorderedAccessView* uavs[] = { outputUAV };
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-	uint32_t dispatchX = (screenWidth + 7) / 8;
-	uint32_t dispatchY = (screenHeight + 7) / 8;
-	{
-		CS_PROFILE_SCOPE("Upscaling::RCAS");
-		context->Dispatch(dispatchX, dispatchY, 1);
-	}
-
-	ID3D11ShaderResourceView* nullSRVs[] = { nullptr };
-	context->CSSetShaderResources(0, 1, nullSRVs);
-
-	ID3D11UnorderedAccessView* nullUAVs[] = { nullptr };
-	context->CSSetUnorderedAccessViews(0, 1, nullUAVs, nullptr);
-
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	state->EndPerfEvent();
-	return true;
+	return UpscalingSharpener::DispatchComputePass(
+		rcasComputeShader.get(),
+		rcasConfigCB,
+		config,
+		inputSRV,
+		outputUAV,
+		screenWidth,
+		screenHeight,
+		"RCAS Sharpening",
+		"Upscaling::RCAS");
 }

@@ -172,6 +172,7 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
+	constexpr uint32_t kVRPostLoadFadeUISanitizeFrames = 4u;
 	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
@@ -190,6 +191,135 @@ namespace
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
+	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRPostLoadFadeUISanitizeTargets{
+		RE::RENDER_TARGETS::kFADERUI,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2
+	};
+
+	bool IsSaveLoadTransitionContextActive(const State* a_state);
+	bool IsVRLoadingPresentationContextActive(const State* a_state);
+	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling);
+
+	bool IsVRPostLoadFadeUISanitizeRelevant(const Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		const auto* state = globals::state;
+		return a_upscaling.IsVRRenderScaleModeActive() ||
+		       a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		       a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		       IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) ||
+		       IsSaveLoadTransitionContextActive(state) ||
+		       IsVRLoadingPresentationContextActive(state);
+	}
+
+	void DisarmVRPostLoadFadeUISanitize(Upscaling& a_upscaling)
+	{
+		a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.store(0, std::memory_order_release);
+		a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(0, std::memory_order_release);
+	}
+
+	void ArmVRPostLoadFadeUISanitize(Upscaling& a_upscaling, std::string_view a_reason)
+	{
+		if (!IsVRPostLoadFadeUISanitizeRelevant(a_upscaling))
+			return;
+
+		const auto* state = globals::state;
+		const uint32_t currentFrame = state ? std::max(state->frameCount, 1u) : 0u;
+
+		const auto previous = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.exchange(kVRPostLoadFadeUISanitizeFrames, std::memory_order_acq_rel);
+		a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(0, std::memory_order_release);
+		logger::debug(
+			"[VRTransition] Armed post-load fade/UI sanitize: reason={} frames={} previous={} armFrame={}",
+			a_reason,
+			kVRPostLoadFadeUISanitizeFrames,
+			previous,
+			currentFrame);
+	}
+
+	bool TryClearPendingVRPostLoadFadeUITargets(Upscaling& a_upscaling, std::string_view a_passName)
+	{
+		const auto remaining = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.load(std::memory_order_acquire);
+		if (remaining == 0)
+			return false;
+
+		if (!globals::game::isVR || !globals::d3d::context || !globals::game::renderer) {
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+			return false;
+		}
+
+		const auto* state = globals::state;
+		if (!state) {
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+			return false;
+		}
+
+		if (IsVRLoadingPresentationContextActive(state))
+			return false;
+
+		uint32_t endFrame = a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.load(std::memory_order_acquire);
+		if (endFrame == 0) {
+			endFrame = state->frameCount + kVRPostLoadFadeUISanitizeFrames;
+			a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(endFrame, std::memory_order_release);
+			logger::debug(
+				"[VRTransition] Started post-load fade/UI sanitize window: pass={} frame={} endFrame={}",
+				a_passName,
+				state->frameCount,
+				endFrame);
+		} else if (state->frameCount >= endFrame) {
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+			logger::debug(
+				"[VRTransition] Expired post-load fade/UI sanitize window: pass={} frame={} endFrame={}",
+				a_passName,
+				state->frameCount,
+				endFrame);
+			return false;
+		}
+
+		constexpr float kClearColor[4] = {};
+		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
+		uint32_t cleared = 0;
+		uint32_t missing = 0;
+
+		for (const auto target : kVRPostLoadFadeUISanitizeTargets) {
+			auto& renderTarget = renderTargets[target];
+			if (!renderTarget.RTV) {
+				++missing;
+				continue;
+			}
+
+			globals::d3d::context->ClearRenderTargetView(renderTarget.RTV, kClearColor);
+			++cleared;
+		}
+
+		if (cleared == 0) {
+			logger::debug(
+				"[VRTransition] Skipped post-load fade/UI sanitize clear: pass={} frame={} remaining={} missing={}",
+				a_passName,
+				state->frameCount,
+				remaining,
+				missing);
+			return false;
+		}
+
+		const auto previous = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.fetch_sub(1, std::memory_order_acq_rel);
+		const auto next = previous > 0 ? previous - 1 : 0;
+		if (next == 0)
+			DisarmVRPostLoadFadeUISanitize(a_upscaling);
+
+		logger::debug(
+			"[VRTransition] Cleared post-load fade/UI targets: pass={} frame={} remaining={} cleared={} missing={}",
+			a_passName,
+			state->frameCount,
+			next,
+			cleared,
+			missing);
+
+		return cleared != 0;
+	}
 
 	bool IsExplicitVRUpscalingTransitionOrigin(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -7911,6 +8041,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			true);
 		if (!a_event->opening) {
 			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
+			ArmVRPostLoadFadeUISanitize(globals::features::upscaling, "loading menu close");
 			if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
 				globals::features::upscaling.QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
 		}
@@ -9084,6 +9215,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePresentationResumeSeedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -9486,6 +9618,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePresentationResumeSeedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -13951,6 +14084,49 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 	return true;
 }
 
+Upscaling::SubmitStageOutputSeedResult Upscaling::SeedSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight,
+	ID3D11Resource* requestedOutputResource)
+{
+	SubmitStageOutputSeedResult result{};
+	if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, outputWidth, outputHeight))
+		return result;
+
+	result.baseOutputSeeded = true;
+	if (eyeIndex >= 2 ||
+		!vrIntermediateColorOut[eyeIndex] ||
+		!vrIntermediateColorOut[eyeIndex]->resource ||
+		!requestedOutputResource ||
+		requestedOutputResource == vrIntermediateColorOut[eyeIndex]->resource.get()) {
+		result.requestedOutputSeeded = true;
+		return result;
+	}
+
+	auto context = globals::d3d::context;
+	if (!context)
+		return result;
+
+	D3D11_TEXTURE2D_DESC seedDesc{};
+	D3D11_TEXTURE2D_DESC requestedDesc{};
+	if (!TryGetTexture2DDesc(vrIntermediateColorOut[eyeIndex]->resource.get(), seedDesc) ||
+		!TryGetTexture2DDesc(requestedOutputResource, requestedDesc) ||
+		seedDesc.Width != requestedDesc.Width ||
+		seedDesc.Height != requestedDesc.Height ||
+		seedDesc.MipLevels != requestedDesc.MipLevels ||
+		seedDesc.ArraySize != requestedDesc.ArraySize ||
+		seedDesc.Format != requestedDesc.Format ||
+		seedDesc.SampleDesc.Count != requestedDesc.SampleDesc.Count ||
+		seedDesc.SampleDesc.Quality != requestedDesc.SampleDesc.Quality) {
+		return result;
+	}
+
+	context->CopyResource(requestedOutputResource, vrIntermediateColorOut[eyeIndex]->resource.get());
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage vendor output seed"))
+		return result;
+
+	result.requestedOutputSeeded = true;
+	return result;
+}
+
 static void LogKnownGameMenuFinalCompositeDiagnostics(uint32_t eyeIndex, uint32_t eyeWidthOut, uint32_t eyeHeightOut)
 {
 	if (!globals::game::isVR || eyeIndex >= 2 || !eyeWidthOut || !eyeHeightOut)
@@ -15064,6 +15240,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePresentationResumeSeedFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -15560,6 +15737,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
+	const bool resumeFromPresentationOnlyCandidate =
+		!presentationOnly &&
+		submitStagePreparedFramePresentationOnly &&
+		ElapsedFrames(submitStagePreparedFrame, currentFrame) == 1u;
+	if (resumeFromPresentationOnlyCandidate)
+		submitStagePresentationResumeSeedFrame = currentFrame;
+	const bool resumeFromPresentationOnly =
+		submitStagePresentationResumeSeedFrame != std::numeric_limits<uint32_t>::max() &&
+		submitStagePresentationResumeSeedFrame == currentFrame;
 	if (!submitStagePreparedThisFrame) {
 		if (!presentationOnly) {
 			if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
@@ -15583,6 +15769,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			return false;
 	}
 
+	const bool transitionProtectionActive = IsVRTransitionPresentationProtectionActive(*this, state);
+	const bool hmdClearDeferred = ShouldDeferHMDClearMask();
+	const bool projectedMaskDeferred = ShouldDeferVRProjectedMaskRepair(*this, state);
 	if (transitionPresentationCooldown) {
 		const bool cooldownStableCandidate =
 			vrRenderScaleMode &&
@@ -15594,9 +15783,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
 			!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 			!HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
-			!IsVRTransitionPresentationProtectionActive(*this, state) &&
-			!ShouldDeferHMDClearMask() &&
-			!ShouldDeferVRProjectedMaskRepair(*this, state) &&
+			!transitionProtectionActive &&
+			!hmdClearDeferred &&
+			!projectedMaskDeferred &&
 			!foveatedTransitionBypass &&
 			motionVector.texture &&
 			depth.texture;
@@ -16040,6 +16229,34 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 	if (!vendorColorOutput || !vendorColorOutput->resource || !vendorColorOutput->uav)
 		return false;
+
+	// Seed high-risk submit frames before vendor dispatch so any texels the
+	// upscaler leaves untouched cannot preserve stale transition/menu content.
+	const bool seedSubmitStageVendorOutput =
+		vrRenderScaleMode &&
+		!presentationRenderTarget &&
+		sourceRegion.matchesExpectedSize &&
+		(ShouldResetHistoryThisFrame() ||
+		 resumeFromPresentationOnly ||
+		 menuPresentationContext ||
+		 submitMenuPresentationContext ||
+		 transitionProtectionActive ||
+		 hmdClearDeferred ||
+		 projectedMaskDeferred ||
+		 foveatedTransitionBypass ||
+		 transitionPresentationCooldown);
+	if (seedSubmitStageVendorOutput) {
+		const auto seedResult = SeedSubmitStageEyeOutput(eyeIndex, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, vendorColorOutput->resource.get());
+		if (!seedResult.requestedOutputSeeded &&
+			submitDLSSSharpening &&
+			seedResult.baseOutputSeeded &&
+			vendorColorOutput != vrIntermediateColorOut[eyeIndex].get()) {
+			submitDLSSSharpening = false;
+			vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
+		}
+		if (IsSubmitStageDeviceLost())
+			return false;
+	}
 
 	bool vendorSucceeded = false;
 	if (foveatedRequested) {
@@ -17598,6 +17815,9 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 {
 	auto& upscaling = globals::features::upscaling;
 	upscaling.DisableAAVRSState();
+	if (a_stage == DynamicResolutionUpsampleStage::Render && a_passName && std::string_view(a_passName) == "ISCopyDynamicFetchDisabled") {
+		TryClearPendingVRPostLoadFadeUITargets(upscaling, a_passName);
+	}
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
 	if (IsVendorUpscalingMethod(upscaleMethod) && upscaling.IsUpscalingActive()) {
 		const char* stageName = a_stage == DynamicResolutionUpsampleStage::Dispatch ? "Dispatch" : "Render";
@@ -17998,7 +18218,53 @@ void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceSha
 		"Render:before",
 		"Render:after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			auto context = globals::d3d::context;
+			const auto& plan = upscaling.GetRuntimeResolutionPlan();
+
+			UINT scissorCount = 0;
+			std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissors{};
+			bool overrideFadeScissor = false;
+
+			if (context &&
+				globals::game::isVR &&
+				plan.owner == Upscaling::ResolutionOwner::Native &&
+				plan.vendorMethod &&
+				plan.qualityMode == 0 &&
+				!upscaling.IsPresentationUpscalingActive()) {
+				scissorCount = static_cast<UINT>(scissors.size());
+				context->RSGetScissorRects(&scissorCount, scissors.data());
+
+				if (scissorCount > 0) {
+					const LONG finalWidth = std::max<LONG>(1, static_cast<LONG>(std::lround(plan.finalOutputSize.x)));
+					const LONG finalHeight = std::max<LONG>(1, static_cast<LONG>(std::lround(plan.finalOutputSize.y)));
+					const LONG scissorWidth = std::max<LONG>(0, scissors[0].right - scissors[0].left);
+					const LONG scissorHeight = std::max<LONG>(0, scissors[0].bottom - scissors[0].top);
+
+					overrideFadeScissor =
+						DiagnosticDimensionBelow(static_cast<uint32_t>(scissorWidth), static_cast<uint32_t>(finalWidth)) ||
+						DiagnosticDimensionBelow(static_cast<uint32_t>(scissorHeight), static_cast<uint32_t>(finalHeight));
+
+					if (overrideFadeScissor) {
+						const D3D11_RECT fullscreenScissor{
+							0,
+							0,
+							finalWidth,
+							finalHeight
+						};
+						context->RSSetScissorRects(1, &fullscreenScissor);
+					}
+				}
+			}
+
+			auto restoreScissor = ScopeExit([&]() {
+				if (overrideFadeScissor) {
+					context->RSSetScissorRects(scissorCount, scissorCount > 0 ? scissors.data() : nullptr);
+				}
+			});
+
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
 }
 
 void Upscaling::TemporalAAUI_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)

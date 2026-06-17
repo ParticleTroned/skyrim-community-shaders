@@ -1417,18 +1417,31 @@ namespace
 		}
 
 		const bool vrsRequested = a_upscaling.loaded && upscalingSettings.aaVrs && REL::Module::IsVR();
+		const auto upscaleMethod = a_upscaling.GetUpscaleMethod();
+		const bool aaVrsMethodEligible = a_upscaling.IsAAVRSEligible(upscaleMethod);
+		const bool aaVrsAdapterEligible = a_upscaling.IsAAVRSAdapterEligible();
+		const bool deferredCompositeControlsAvailable = a_upscaling.IsDeferredCompositePSAvailable();
 		const bool deferredPSApplied = a_upscaling.IsDeferredCompositePSRuntimeEnabled();
 		const bool deferredVrsApplied = a_upscaling.IsAAVRSDeferredCompositeRuntimeEnabled();
 		{
 			Util::BlueFrameStyleWrapper deferredPSStyle(true);
-			auto deferredPSGuard = Util::DisableGuard(!vrsRequested);
-			ImGui::Checkbox("Experimental VRS Deferred Composite PS", &upscalingSettings.experimentalDeferredCompositePS);
+			auto deferredPSGuard = Util::DisableGuard(!deferredCompositeControlsAvailable);
+			bool experimentalDeferredCompositePS = deferredCompositeControlsAvailable && upscalingSettings.experimentalDeferredCompositePS;
+			if (ImGui::Checkbox("Experimental VRS Deferred Composite PS", &experimentalDeferredCompositePS) && deferredCompositeControlsAvailable)
+				upscalingSettings.experimentalDeferredCompositePS = experimentalDeferredCompositePS;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Default off. Off keeps the existing deferred composite compute shader path.");
-			ImGui::TextUnformatted("On splits deferred composite metadata into compute and final scene color into a fullscreen pixel shader.");
+			ImGui::TextUnformatted("Master switch for the experimental deferred composite pixel-shader path.");
+			ImGui::TextUnformatted("Off: use the existing deferred composite compute shader path.");
+			ImGui::TextUnformatted("On: keep metadata in compute, then draw final scene color with a fullscreen pixel shader.");
+			ImGui::TextUnformatted("First test with this on and VRS Deferred Composite Color off; that validates the new PS path at 1x1 full rate.");
+			ImGui::TextUnformatted("If that is stable and clean, turn VRS Deferred Composite Color on to test the intended VRS performance path.");
 			ImGui::TextUnformatted("This is VR/VRS-gated while experimental and applies on the next game load or restart.");
 		}
+		if (vrsRequested && !aaVrsMethodEligible)
+			ImGui::TextDisabled("Deferred composite VRS testing requires active Foveated Upscaling (FOV) with an active mask.");
+		else if (vrsRequested && !aaVrsAdapterEligible)
+			ImGui::TextDisabled("Deferred composite VRS testing requires NVIDIA variable pixel-rate shading support.");
 		ImGui::TextDisabled(
 			"Deferred Composite PS runtime: %s",
 			deferredPSApplied ? "On" : "Off");
@@ -1441,13 +1454,19 @@ namespace
 		if (!vrsRequested || !upscalingSettings.experimentalDeferredCompositePS)
 			upscalingSettings.aaVrsDeferredComposite = false;
 		{
-			auto deferredVrsGuard = Util::DisableGuard(!vrsRequested || !upscalingSettings.experimentalDeferredCompositePS);
-			ImGui::Checkbox("VRS Deferred Composite Color", &upscalingSettings.aaVrsDeferredComposite);
+			const bool deferredCompositeVrsControlsAvailable = deferredCompositeControlsAvailable && upscalingSettings.experimentalDeferredCompositePS;
+			auto deferredVrsGuard = Util::DisableGuard(!deferredCompositeVrsControlsAvailable);
+			bool aaVrsDeferredComposite = deferredCompositeVrsControlsAvailable && upscalingSettings.aaVrsDeferredComposite;
+			if (ImGui::Checkbox("VRS Deferred Composite Color", &aaVrsDeferredComposite) && deferredCompositeVrsControlsAvailable)
+				upscalingSettings.aaVrsDeferredComposite = aaVrsDeferredComposite;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Allows VRS on the experimental deferred composite color pixel shader only.");
+			ImGui::TextUnformatted("Allows coarse VRS on the experimental deferred composite color pixel shader.");
+			ImGui::TextUnformatted("Off: the new pixel-shader path can still run, but this color draw is forced to 1x1 full rate.");
+			ImGui::TextUnformatted("Use off for safety/debug testing after enabling Experimental VRS Deferred Composite PS.");
+			ImGui::TextUnformatted("On: use both experimental toggles together for the intended performance test.");
+			ImGui::TextUnformatted("If artifacts appear only with this on, the issue is coarse VRS on the color pass, not the PS path itself.");
 			ImGui::TextUnformatted("Normals, TAA mask, and motion-vector metadata stay full-rate in the compute path.");
-			ImGui::TextUnformatted("When off, the color pixel shader is forced to 1x1 even if VRS is active.");
 			ImGui::TextUnformatted("This applies on the next game load or restart with the deferred composite PS path.");
 		}
 		ImGui::TextDisabled(
@@ -1507,7 +1526,9 @@ namespace
 		upscaling.DrawFoveatedSetupInstructions();
 		drawSection("Shared FOV Mask");
 		upscaling.DrawFoveatedSettings();
-		drawSection("Experimental VRS");
+		drawSection("Variable Rate Shading (VRS)");
+		upscaling.DrawAAVRSSetupInstructions();
+		upscaling.DrawAAVRSSettings();
 		DrawDeferredCompositeVRSSettings(upscaling);
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};

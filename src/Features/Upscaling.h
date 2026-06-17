@@ -441,7 +441,9 @@ public:
 	// Feature interface overrides
 	virtual void DrawSettings() override;
 	void DrawFoveatedSetupInstructions();
+	void DrawAAVRSSetupInstructions();
 	void DrawFoveatedSettings();
+	void DrawAAVRSSettings();
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
@@ -478,6 +480,7 @@ public:
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
+	bool IsDeferredCompositePSAvailable() const;
 	bool IsDeferredCompositePSRuntimeEnabled() const;
 	bool IsDeferredCompositePSPending() const;
 	bool IsAAVRSDeferredCompositeRuntimeEnabled() const;

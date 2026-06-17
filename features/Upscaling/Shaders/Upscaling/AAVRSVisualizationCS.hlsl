@@ -4,7 +4,7 @@ cbuffer AAVRSVisualizationCB : register(b0)
 {
 	float4 RenderInfo;     // xy=render dim, zw=1/render dim
 	float4 DisplayInfo;    // xy=display dim, z=eye count, w=coarseOutsideMask
-	float4 MaskInfo;       // x=center area, y=protected outer area, z=center horizontal scale
+	float4 MaskInfo;       // x=center area, y=protected outer area, z=center horizontal scale, w=force analytic mask
 	float4 CenterOffsets;  // xy=left eye, zw=right eye
 	float4 CoarseColor;
 	float4 CenterColor;
@@ -141,6 +141,7 @@ uint AAVRSPerformanceRateIndex(
 	const float renderScaleY = max(RenderInfo.y / max(DisplayInfo.y, 1.0), 1e-4);
 	const float centerArea = MaskInfo.x;
 	const float outerArea = max(MaskInfo.y, centerArea);
+	const bool forceAnalyticMask = MaskInfo.w > 0.5;
 	const bool performanceMode = Pad.z > 0.5;
 	const uint performanceAnisotropy = min((uint)(Pad.w + 0.5), kPerformanceAnisotropy1x2);
 	const float protectedArea = performanceMode ? kPerformanceModeFullRateScale : (DisplayInfo.w > 0.5 ? outerArea : centerArea);
@@ -148,14 +149,16 @@ uint AAVRSPerformanceRateIndex(
 
 	const float2 tileSize = max(Pad.xy, float2(1.0, 1.0));
 	const uint2 tileSizePixels = max((uint2)(tileSize + 0.5), uint2(1u, 1u));
-	uint rateWidth = 0;
-	uint rateHeight = 0;
-	RateImage.GetDimensions(rateWidth, rateHeight);
-	if (rateWidth > 0u && rateHeight > 0u) {
-		const uint2 rateCoord = min(dispatchID.xy / tileSizePixels, uint2(rateWidth - 1u, rateHeight - 1u));
-		const uint rateIndex = RateImage[rateCoord];
-		OutColor[dispatchID.xy] = rateIndex == kRateIndex1x1 ? CenterColor : CoarseColor;
-		return;
+	if (!forceAnalyticMask) {
+		uint rateWidth = 0;
+		uint rateHeight = 0;
+		RateImage.GetDimensions(rateWidth, rateHeight);
+		if (rateWidth > 0u && rateHeight > 0u) {
+			const uint2 rateCoord = min(dispatchID.xy / tileSizePixels, uint2(rateWidth - 1u, rateHeight - 1u));
+			const uint rateIndex = RateImage[rateCoord];
+			OutColor[dispatchID.xy] = rateIndex == kRateIndex1x1 ? CenterColor : CoarseColor;
+			return;
+		}
 	}
 
 	const uint eye = min((uint)((float)dispatchID.x / eyeRenderWidth), eyeCount - 1u);

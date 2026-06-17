@@ -25,6 +25,7 @@ public:
 	 * Safe to call multiple times - will early-out if already initialized.
 	 */
 	void Initialize();
+	void ClearShaderCache();
 
 	/**
 	 * @brief Applies RCAS sharpening to the input texture.

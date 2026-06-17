@@ -67,6 +67,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	streamlineLogLevel,
 	sharpnessFSR,
 	sharpnessDLSS,
+	dlssSharpener,
 	fsr4RuntimeEnable,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
@@ -90,6 +91,9 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 
 namespace
 {
+	constexpr float kDLSSRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
+	constexpr float kDLSSLumaSharpnessOverdrive = 2.5f;
+
 	// Keep transition diagnostics behind one switch. They default to debug so
 	// normal info logs stay free of render-scale/menu transition trace noise.
 #ifndef VR_TRANSITION_DIAG_ENABLED
@@ -2015,6 +2019,11 @@ namespace
 		return std::min<uint>(value, Upscaling::kQualityModeMaxIndex);
 	}
 
+	uint ClampDLSSSharpenerModeUInt(uint value)
+	{
+		return std::min<uint>(value, Upscaling::kDLSSSharpenerModeMaxIndex);
+	}
+
 	Upscaling::UpscaleMethod ClampUpscaleMethod(uint value, Upscaling::UpscaleMethod maxMethod)
 	{
 		return static_cast<Upscaling::UpscaleMethod>(std::clamp(
@@ -2381,7 +2390,40 @@ namespace
 	float GetDLSSRCASSharpness(float a_sharpness)
 	{
 		const float clampedSharpness = std::clamp(a_sharpness, 0.0f, 1.0f);
-		return exp2((2.0f * clampedSharpness) - 2.0f);
+		return exp2((2.0f * clampedSharpness) - 2.0f) * kDLSSRCASSharpnessOverdrive;
+	}
+
+	float GetDLSSLumaSharpness(float a_sharpness)
+	{
+		const float clampedSharpness = std::clamp(a_sharpness, 0.0f, 1.0f);
+		return exp2((2.0f * clampedSharpness) - 2.0f) * kDLSSLumaSharpnessOverdrive;
+	}
+
+	constexpr std::array<const char*, Upscaling::kDLSSSharpenerModeMaxIndex + 1> kDLSSSharpenerModeNames = {
+		"Off",
+		"RCAS",
+		"Luma Unsharp"
+	};
+
+	const char* GetDLSSSharpenerModeName(Upscaling::DLSSSharpenerMode a_mode)
+	{
+		const uint index = static_cast<uint>(a_mode);
+		if (index >= kDLSSSharpenerModeNames.size())
+			return "RCAS";
+		return kDLSSSharpenerModeNames[index];
+	}
+
+	bool DispatchDLSSSharpener(Upscaling& a_upscaling, ID3D11ShaderResourceView* a_inputSRV, ID3D11UnorderedAccessView* a_outputUAV, uint32_t a_width = 0, uint32_t a_height = 0)
+	{
+		switch (a_upscaling.GetDLSSSharpenerMode()) {
+		case Upscaling::DLSSSharpenerMode::RCAS:
+			return Upscaling::rcas.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS), a_width, a_height);
+		case Upscaling::DLSSSharpenerMode::LumaUnsharp:
+			return Upscaling::lumaSharpen.ApplySharpen(a_inputSRV, a_outputUAV, GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS), a_width, a_height);
+		case Upscaling::DLSSSharpenerMode::Off:
+		default:
+			return true;
+		}
 	}
 
 	struct OpenCompositeSettingValue
@@ -2808,6 +2850,7 @@ namespace
 		settings.streamlineLogLevel = ClampStreamlineLogLevelUInt(settings.streamlineLogLevel);
 		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.0f);
 		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, 0.1f);
+		settings.dlssSharpener = ClampDLSSSharpenerModeUInt(settings.dlssSharpener);
 		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 		SanitizeFoveatedSettings(settings);
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
@@ -7015,10 +7058,22 @@ void Upscaling::DrawSettings()
 				}
 			}
 
-			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+			int dlssSharpenerMode = static_cast<int>(ClampDLSSSharpenerModeUInt(settings.dlssSharpener));
+			if (ImGui::Combo("Sharpener", &dlssSharpenerMode, kDLSSSharpenerModeNames.data(), static_cast<int>(kDLSSSharpenerModeNames.size()))) {
+				settings.dlssSharpener = ClampDLSSSharpenerModeUInt(static_cast<uint>(std::max(dlssSharpenerMode, 0)));
+			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
-				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
+				ImGui::TextUnformatted("Selects the post-DLSS sharpening pass.");
+				ImGui::TextUnformatted("RCAS is punchier and more obvious, but can add shimmer or harsher edge contrast.");
+				ImGui::TextUnformatted("Luma Unsharp is cleaner and more natural, preserving color while sharpening luminance.");
+			}
+
+			if (GetDLSSSharpenerMode() != DLSSSharpenerMode::Off) {
+				ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
+					ImGui::TextUnformatted("Range: 0.0 off/softest to 1.0 strongest.");
+				}
 			}
 
 			if (isNvidiaAdapter) {
@@ -8252,6 +8307,16 @@ uint32_t Upscaling::GetRuntimeQualityMode() const
 	return ClampQualityModeUInt(settings.qualityMode);
 }
 
+Upscaling::DLSSSharpenerMode Upscaling::GetDLSSSharpenerMode() const
+{
+	return static_cast<DLSSSharpenerMode>(ClampDLSSSharpenerModeUInt(settings.dlssSharpener));
+}
+
+bool Upscaling::ShouldApplyDLSSSharpening() const
+{
+	return settings.sharpnessDLSS > 0.0f && GetDLSSSharpenerMode() != DLSSSharpenerMode::Off;
+}
+
 const Upscaling::RuntimeResolutionPlan& Upscaling::GetRuntimeResolutionPlan() const
 {
 	return runtimeResolutionPlan;
@@ -8294,7 +8359,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
 	} else if (plan.vendorMethod && IsUpscalingActive()) {
 		plan.owner = ResolutionOwner::VendorDynamicResolution;
-		plan.outputTarget = plan.upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f ?
+		plan.outputTarget = plan.upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening() ?
 			UpscalingOutputTarget::Sharpener :
 			UpscalingOutputTarget::Main;
 	}
@@ -9044,7 +9109,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 	}
 
-	// RCAS sharpener texture - matches kMAIN format for HDR sharpening
+	// Shared DLSS sharpener texture - matches kMAIN format for HDR sharpening
 	if (a_upscalemethod == UpscaleMethod::kDLSS) {
 		if (!sharpenerTexture) {
 			main.texture->GetDesc(&texDesc);
@@ -9084,7 +9149,7 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		DestroyTexture(motionVectorCopyTexture);
 	}
 
-	// RCAS sharpener texture is only needed for DLSS.
+	// Shared DLSS sharpener texture is only needed for DLSS.
 	if (a_upscalemethod != UpscaleMethod::kDLSS) {
 		DestroyTexture(sharpenerTexture);
 		DestroySubmitStageDLSSSharpenerTextures();
@@ -13471,7 +13536,7 @@ bool Upscaling::EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const T
 
 bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput)
 {
-	if (settings.sharpnessDLSS <= 0.0f)
+	if (!ShouldApplyDLSSSharpening())
 		return true;
 	if (eyeIndex >= 2)
 		return false;
@@ -13496,11 +13561,12 @@ bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2
 		const uint32_t dispatchHeight = colorOutput->desc.Height;
 
 		UnbindUpscalingResources();
-		if (!rcas.ApplySharpen(sharpenInput.srv.get(), colorOutput->uav.get(), GetDLSSRCASSharpness(settings.sharpnessDLSS), dispatchWidth, dispatchHeight)) {
+		if (!DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get(), dispatchWidth, dispatchHeight)) {
 			LogWarnOnceFmt(
 				loggedSharpenerFailure[eyeIndex],
-				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because RCAS dispatch failed.",
-				eyeIndex);
+				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because {} dispatch failed.",
+				eyeIndex,
+				GetDLSSSharpenerModeName(GetDLSSSharpenerMode()));
 			return false;
 		}
 		if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening"))
@@ -14865,6 +14931,8 @@ void Upscaling::SetupResources()
 	RefreshRuntimeResolutionState();
 
 	rcas.Initialize();
+	if (GetDLSSSharpenerMode() == DLSSSharpenerMode::LumaUnsharp)
+		lumaSharpen.Initialize();
 
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
@@ -14898,6 +14966,8 @@ void Upscaling::ClearShaderCache()
 	vrClearHMDMaskCS = nullptr;          // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;          // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr; // com_ptr automatically releases
+	rcas.ClearShaderCache();
+	lumaSharpen.ClearShaderCache();
 }
 
 void Upscaling::CopySharedD3D12Resources()
@@ -16213,7 +16283,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			                                   (transitionPresentationOnly ? "transition-presentation-output" : "menu-loading-presentation-output")));
 	}
 
-	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && settings.sharpnessDLSS > 0.0f;
+	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening();
 	Texture2D* vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
 	if (submitDLSSSharpening) {
 		static bool loggedSharpenerOutputFailure[2] = {};
@@ -17367,7 +17437,7 @@ void Upscaling::Upscale()
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 			const bool foveatedOutputToSharpener =
 				upscaleMethod == UpscaleMethod::kDLSS &&
-				settings.sharpnessDLSS > 0.0f &&
+				ShouldApplyDLSSSharpening() &&
 				sharpenerTexture &&
 				sharpenerTexture->resource &&
 				sharpenerTexture->srv &&
@@ -17779,13 +17849,11 @@ void Upscaling::ApplySharpening()
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
 
-	if (settings.sharpnessDLSS <= 0.0f)
+	if (!ShouldApplyDLSSSharpening())
 		return;
 
 	if (!sharpenerTexture)
 		return;
-
-	const float currentSharpness = GetDLSSRCASSharpness(settings.sharpnessDLSS);
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
@@ -17797,13 +17865,13 @@ void Upscaling::ApplySharpening()
 		if (!main.texture || !sharpenerTexture->resource)
 			return;
 
-		if (!main.UAV || !sharpenerTexture->srv || !rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness))
+		if (!main.UAV || !sharpenerTexture->srv || !DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV))
 			context->CopyResource(main.texture, sharpenerTexture->resource.get());
 	} else {
 		if (!main.SRV || !main.texture || !sharpenerTexture->resource || !sharpenerTexture->uav)
 			return;
 
-		if (!rcas.ApplySharpen(main.SRV, sharpenerTexture->uav.get(), currentSharpness))
+		if (!DispatchDLSSSharpener(*this, main.SRV, sharpenerTexture->uav.get()))
 			return;
 		context->CopyResource(main.texture, sharpenerTexture->resource.get());
 	}

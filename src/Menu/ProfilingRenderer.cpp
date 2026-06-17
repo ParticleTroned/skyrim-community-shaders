@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <imgui.h>
@@ -93,6 +94,57 @@ static void RenderColorMarker(ImU32 color)
 
 	ImGui::Dummy(ImVec2(markerSize, lineHeight));
 	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+}
+
+static void ReplaceAll(std::string& value, std::string_view from, std::string_view to)
+{
+	if (from.empty())
+		return;
+
+	size_t pos = 0;
+	while ((pos = value.find(from.data(), pos, from.size())) != std::string::npos) {
+		value.replace(pos, from.size(), to.data(), to.size());
+		pos += to.size();
+	}
+}
+
+static std::string BuildProfilerGraphLabel(std::string_view label)
+{
+	std::string result(label.data(), label.size());
+	ReplaceAll(result, "ScreenSpaceShadows", "SSShadows");
+	ReplaceAll(result, "ScreenSpace", "SS");
+	ReplaceAll(result, "CommunityShaders", "CS");
+	ReplaceAll(result, "SubsurfaceScattering", "SSS");
+	ReplaceAll(result, "DynamicResolution", "DynRes");
+	ReplaceAll(result, "Visualization", "Viz");
+	ReplaceAll(result, "Composite", "Comp");
+	ReplaceAll(result, "Dispatch", "Disp");
+	ReplaceAll(result, "Foveated", "Fov");
+	ReplaceAll(result, "Periphery", "Periph");
+	ReplaceAll(result, "Temporal", "Temp");
+	ReplaceAll(result, "Dynamic", "Dyn");
+	ReplaceAll(result, "Resolution", "Res");
+	ReplaceAll(result, "Upscaling", "Upscale");
+	ReplaceAll(result, "Render", "Rnd");
+	ReplaceAll(result, "Shader", "Shd");
+	ReplaceAll(result, "::", ":");
+
+	constexpr size_t kMaxGraphLabelLength = 34;
+	if (result.size() > kMaxGraphLabelLength)
+		result = result.substr(0, kMaxGraphLabelLength - 2) + "..";
+
+	return result;
+}
+
+static int ComputeGraphLegendWidth(int totalWidth, int minGraphWidth, float widthFraction, int minLegendWidth, int maxLegendWidth)
+{
+	const int reservedGraphWidth = std::min(minGraphWidth, totalWidth);
+	const int availableLegendWidth = std::max(0, totalWidth - reservedGraphWidth);
+	if (availableLegendWidth <= 0)
+		return 0;
+
+	const int desiredLegendWidth = std::clamp(static_cast<int>(totalWidth * widthFraction), minLegendWidth, maxLegendWidth);
+	return std::min(desiredLegendWidth, availableLegendWidth);
 }
 
 static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
@@ -239,6 +291,7 @@ void ProfilingRenderer::RenderGraph()
 		task.startTime = accumulated / 1000.0;
 		task.endTime = (accumulated + timeMs) / 1000.0;
 		task.name = result.name;
+		task.displayName = BuildProfilerGraphLabel(result.name);
 		task.color = ToLegitColor(GetGroupColor(groupName));
 		tasks.push_back(task);
 		accumulated += timeMs;
@@ -253,9 +306,9 @@ void ProfilingRenderer::RenderGraph()
 	if (maxFrameTimeSec < 0.0001f)
 		maxFrameTimeSec = 0.0001f;
 
-	float availWidth = ImGui::GetContentRegionAvail().x;
-	int legendWidth = 260;
-	int graphWidth = std::max(100, static_cast<int>(availWidth) - legendWidth);
+	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
+	const int legendWidth = ComputeGraphLegendWidth(totalWidth, 100, 0.42f, 280, 420);
+	const int graphWidth = std::max(1, totalWidth - legendWidth);
 	int graphHeight = 180;
 
 	gpuGraph.RenderTimings(graphWidth, legendWidth, graphHeight, 0, maxFrameTimeSec);
@@ -302,7 +355,8 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 		legit::ProfilerTask task;
 		task.startTime = accumulated / 1000.0;
 		task.endTime = (accumulated + e.timeMs) / 1000.0;
-		task.name = e.label;
+		task.name = e.colorKey;
+		task.displayName = BuildProfilerGraphLabel(e.label);
 		task.color = ToLegitColor(GetGroupColor(e.colorKey));
 		tasks.push_back(task);
 		accumulated += e.timeMs;
@@ -318,7 +372,7 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 		maxFrameTimeSec = 0.00001f;
 
 	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
-	const int legendWidth = totalWidth >= 140 ? std::clamp(static_cast<int>(totalWidth * 0.36f), 40, 180) : 0;
+	const int legendWidth = totalWidth >= 180 ? ComputeGraphLegendWidth(totalWidth, 80, 0.50f, 140, 300) : 0;
 	const int graphWidth = std::max(1, totalWidth - legendWidth);
 
 	graph.RenderTimings(graphWidth, legendWidth, graphHeight, 0, maxFrameTimeSec);

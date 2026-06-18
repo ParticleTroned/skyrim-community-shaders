@@ -115,6 +115,7 @@ void SkySync::DrawSettings()
 
 		ImGui::Text("Shadow target: %s", CasterNames[static_cast<int>(shadowFader.target)]);
 		ImGui::Text("Shadow dir:    (%.2f, %.2f, %.2f)", shadowFader.currentDir.x, shadowFader.currentDir.y, shadowFader.currentDir.z);
+		ImGui::Text("VL intensity factor: %.3f", shadowFader.vlIntensityFactor);
 		if (shadowFader.transitioning) {
 			const float t = settings.ShadowTransitionDuration > 0.0f ? shadowFader.fadeTimer / settings.ShadowTransitionDuration : 1.0f;
 			ImGui::ProgressBar(t, { -1.0f, 0.0f }, "");
@@ -205,7 +206,7 @@ float SkySync::NormalizeVolumetricLightingIntensity(float intensity)
 
 float SkySync::GetVolumetricLightingIntensityFactor() const
 {
-	return NormalizeVolumetricLightingIntensity(volumetricLightingIntensityFactor);
+	return NormalizeVolumetricLightingIntensity(volumetricLightingIntensityFactor * shadowFader.vlIntensityFactor);
 }
 
 void SkySync::OnSkyUpdateColors(RE::Sky* sky)
@@ -449,6 +450,7 @@ void SkySync::ShadowFader::Reset()
 	sunriseReleased = false;
 	frozenHeading = 0.0f;
 	sunsetHeadingLocked = false;
+	vlIntensityFactor = 1.0f;
 }
 
 void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance)
@@ -464,6 +466,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		if (!masserValid && !secundaValid) {
 			// No valid night caster — default to directly above (shadows point down)
 			currentDir = { 0.0f, 0.0f, 1.0f };
+			vlIntensityFactor = 0.0f;
 			SetLighting(sky, currentDir);
 			return;
 		}
@@ -491,6 +494,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 
 	if (!transitioning) {
 		currentDir = dirs[static_cast<int>(target)];
+		vlIntensityFactor = 1.0f;
 		SetLighting(sky, currentDir);
 		return;
 	}
@@ -511,6 +515,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		transitioning = false;
 	}
 
+	vlIntensityFactor = ComputeVLFactor(currentDir, targetDir);
 	SetLighting(sky, currentDir);
 }
 
@@ -572,6 +577,14 @@ inline void SkySync::ShadowFader::SetDirection(RE::NiPoint3& dir, float headingR
 inline void SkySync::ShadowFader::SetElevation(RE::NiPoint3& dir, float elevRadians)
 {
 	SetDirection(dir, std::atan2(dir.y, dir.x), elevRadians);
+}
+
+float SkySync::ShadowFader::ComputeVLFactor(const RE::NiPoint3& current, const RE::NiPoint3& target)
+{
+	const float dot = std::clamp(current.Dot(target), -1.0f, 1.0f);
+	const float angle = DirectX::XMConvertToDegrees(DirectX::XMScalarACosEst(dot));
+
+	return std::clamp((VLFadeEndAngle - angle) / (VLFadeEndAngle - VLFadeStartAngle), 0.0f, 1.0f);
 }
 
 inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)

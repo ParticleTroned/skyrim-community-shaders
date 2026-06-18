@@ -4,6 +4,7 @@
 
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/CloudShadows.h"
 #include "Features/Wetterness.h"
 #include "Features/DynamicCubemaps.h"
@@ -222,6 +223,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
 		&globals::features::truePBR,
+		&globals::features::adaptiveBrightness,
 		&globals::features::grassLighting,
 		&globals::features::grassCollision,
 		&globals::features::screenSpaceShadows,

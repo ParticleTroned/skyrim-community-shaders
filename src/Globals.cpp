@@ -293,7 +293,7 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 		{
-			Upscaling::TraceVRTrackedDrawOperation(This, "DrawIndexed", 0, IndexCount, 0);
+			Upscaling::TraceVRTrackedDrawOperation(This, "DrawIndexed", 0, IndexCount, 0, 0, StartIndexLocation, BaseVertexLocation, 0);
 			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -303,7 +303,7 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
 		{
-			Upscaling::TraceVRTrackedDrawOperation(This, "Draw", VertexCount, 0, 0);
+			Upscaling::TraceVRTrackedDrawOperation(This, "Draw", VertexCount, 0, 0, StartVertexLocation, 0, 0, 0);
 			func(This, VertexCount, StartVertexLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -319,7 +319,16 @@ namespace globals
 			INT BaseVertexLocation,
 			UINT StartInstanceLocation)
 		{
-			Upscaling::TraceVRTrackedDrawOperation(This, "DrawIndexedInstanced", 0, IndexCountPerInstance, InstanceCount);
+			Upscaling::TraceVRTrackedDrawOperation(
+				This,
+				"DrawIndexedInstanced",
+				0,
+				IndexCountPerInstance,
+				InstanceCount,
+				0,
+				StartIndexLocation,
+				BaseVertexLocation,
+				StartInstanceLocation);
 			func(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -329,7 +338,16 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
 		{
-			Upscaling::TraceVRTrackedDrawOperation(This, "DrawInstanced", VertexCountPerInstance, 0, InstanceCount);
+			Upscaling::TraceVRTrackedDrawOperation(
+				This,
+				"DrawInstanced",
+				VertexCountPerInstance,
+				0,
+				InstanceCount,
+				StartVertexLocation,
+				0,
+				0,
+				StartInstanceLocation);
 			func(This, VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

@@ -500,7 +500,11 @@ public:
 		const char* a_operation,
 		UINT a_vertexCount,
 		UINT a_indexCount,
-		UINT a_instanceCount);
+		UINT a_instanceCount,
+		UINT a_startVertexLocation,
+		UINT a_startIndexLocation,
+		INT a_baseVertexLocation,
+		UINT a_startInstanceLocation);
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;

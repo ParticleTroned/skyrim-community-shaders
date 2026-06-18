@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -52,6 +53,7 @@ namespace globals
 
 	namespace features
 	{
+		AdaptiveBrightness adaptiveBrightness{};
 		CloudShadows cloudShadows{};
 		Wetterness wetterness{};
 		DynamicCubemaps dynamicCubemaps{};

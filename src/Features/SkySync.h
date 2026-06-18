@@ -107,9 +107,15 @@ private:
 		Caster previousTarget = Caster::Sun;
 		float fadeTimer = 0.0f;
 		bool transitioning = false;
+		bool sunriseReleased = false;
+		float frozenHeading = 0.0f;
+		bool sunsetHeadingLocked = false;
 
 		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance);
+		void LockSunElevation(RE::NiPoint3 dirs[]);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
+		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
+		static void SetElevation(RE::NiPoint3& dir, float elevRadians);
 		static void ClampDirection(RE::NiPoint3& dir);
 		void Reset();
 	};
@@ -121,6 +127,7 @@ private:
 	static constexpr float VanillaSunAngle = 90.0f + 5.0f;
 	static constexpr float DefaultVolumetricLightingIntensityFactor = 1.0f;
 	static constexpr float SecondsPerGameHour = 3600.0f;
+	static constexpr float SunsetHeadingLockThreshold = 0.5f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 
@@ -133,6 +140,8 @@ private:
 	float4 colors[3] = {};
 	float currentDim = 1.0f;
 	float volumetricLightingIntensityFactor = DefaultVolumetricLightingIntensityFactor;
+	bool sunSetting = false;
+	bool sunRising = false;
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
@@ -148,9 +157,6 @@ private:
 	void ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[]);
 
 	void ProcessMoon(const RE::Sky* sky, Caster type, RE::NiPoint3 dirs[], float intensities[]);
-
-	static bool IsNight(const RE::Sky* sky);
-	static bool IsDaytime(const RE::Sky* sky);
 
 	static void CalculateSunDirectionAndDistance(const RE::Sun* sun, RE::NiPoint3& outDir, float& outDistance);
 

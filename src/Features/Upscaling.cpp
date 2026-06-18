@@ -1335,8 +1335,11 @@ namespace
 		bool matched = false;
 		RE::RENDER_TARGETS::RENDER_TARGET target = RE::RENDER_TARGETS::kTOTAL;
 		const char* name = "unknown";
+		ID3D11Texture2D* texture = nullptr;
 		uint32_t width = 0;
 		uint32_t height = 0;
+		uint32_t arraySize = 0;
+		uint32_t samples = 0;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 	};
 
@@ -1388,8 +1391,11 @@ namespace
 			a_outMatch.matched = true;
 			a_outMatch.target = target;
 			a_outMatch.name = GetVRMenuCompositionTargetName(target);
+			a_outMatch.texture = texture;
 			a_outMatch.width = desc.Width;
 			a_outMatch.height = desc.Height;
+			a_outMatch.arraySize = desc.ArraySize;
+			a_outMatch.samples = desc.SampleDesc.Count;
 			a_outMatch.format = desc.Format;
 			return true;
 		}
@@ -4232,6 +4238,25 @@ namespace
 		}
 
 		return false;
+	}
+
+	bool IsVRMenuSceneSeparationContextActive()
+	{
+		auto state = globals::state;
+		auto ui = globals::game::ui;
+		if (!IsSkyrimMenuPresentationContextActive(ui))
+			return false;
+
+		// This path is only for projected in-game menu text that is otherwise
+		// reconstructed with the render-scale scene. Fullscreen map/skills
+		// presentation uses different fade/UI ownership and must stay on the
+		// baseline path to avoid reintroducing the 0,0 fade-square regressions.
+		if ((state && state->isMapMenuOpen) ||
+			(ui && ui->IsMenuOpen("StatsMenu"))) {
+			return false;
+		}
+
+		return true;
 	}
 
 	bool IsKnownGameMenuContextActive()
@@ -10616,6 +10641,16 @@ ID3D11ComputeShader* Upscaling::GetSubmitStageStretchCS()
 	return submitStageStretchCS.get();
 }
 
+ID3D11ComputeShader* Upscaling::GetVRMenuSceneDeltaCompositeCS()
+{
+	if (!vrMenuSceneDeltaCompositeCS) {
+		logger::debug("Compiling VRMenuSceneDeltaCompositeCS.hlsl");
+		vrMenuSceneDeltaCompositeCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/VRMenuSceneDeltaCompositeCS.hlsl", {}, "cs_5_0"));
+	}
+
+	return vrMenuSceneDeltaCompositeCS.get();
+}
+
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
 	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV)
 {
@@ -14352,6 +14387,374 @@ static void LogKnownGameMenuFinalCompositeDiagnostics(uint32_t eyeIndex, uint32_
 	}
 }
 
+static bool TryResolveCurrentVRMenuSceneDestination(
+	ID3D11DeviceContext* a_context,
+	VRMenuCompositionTargetMatch& a_destination)
+{
+	if (!a_context)
+		return false;
+
+	ID3D11RenderTargetView* rtv = nullptr;
+	a_context->OMGetRenderTargets(1, &rtv, nullptr);
+	if (!rtv)
+		return false;
+	auto rtvRelease = ScopeExit([&]() {
+		rtv->Release();
+	});
+
+	if (!TryResolveVRMenuCompositionView(rtv, a_destination) ||
+		a_destination.target != RE::RENDER_TARGETS::kTOTAL ||
+		!a_destination.texture ||
+		a_destination.arraySize != 1 ||
+		a_destination.samples != 1 ||
+		a_destination.width == 0 ||
+		a_destination.height == 0) {
+		return false;
+	}
+
+	return true;
+}
+
+static bool TryResolveCurrentVRMenuSceneBake(
+	ID3D11DeviceContext* a_context,
+	VRMenuCompositionTargetMatch& a_destination,
+	VRMenuCompositionTargetMatch& a_source)
+{
+	if (!TryResolveCurrentVRMenuSceneDestination(a_context, a_destination))
+		return false;
+
+	ID3D11ShaderResourceView* menuSRV = nullptr;
+	a_context->PSGetShaderResources(0, 1, &menuSRV);
+	if (!menuSRV)
+		return false;
+	auto srvRelease = ScopeExit([&]() {
+		menuSRV->Release();
+	});
+
+	if (!TryResolveVRMenuCompositionView(menuSRV, a_source) ||
+		a_source.target != RE::RENDER_TARGETS::kMENUBG ||
+		!a_source.texture ||
+		a_source.arraySize != 1 ||
+		a_source.samples != 1 ||
+		a_source.width != a_destination.width ||
+		a_source.height != a_destination.height ||
+		a_source.format != a_destination.format) {
+		return false;
+	}
+
+	return true;
+}
+
+void Upscaling::ResetVRMenuSceneSeparationState()
+{
+	vrMenuSceneSeparationFrame = 0;
+	vrMenuSceneSeparationWidth = 0;
+	vrMenuSceneSeparationHeight = 0;
+	vrMenuSceneSeparationFormat = DXGI_FORMAT_UNKNOWN;
+	vrMenuSceneSeparationKTotalTexture = nullptr;
+	vrMenuSceneSeparationPending = false;
+	vrMenuSceneSeparationReady = false;
+}
+
+bool Upscaling::TryCaptureVRMenuSceneSeparationBefore(const char* a_passName, DynamicResolutionUpsampleStage a_stage)
+{
+	auto state = globals::state;
+	if (vrMenuSceneSeparationReady &&
+		state &&
+		vrMenuSceneSeparationFrame == state->frameCount) {
+		return false;
+	}
+
+	if (!globals::game::isVR ||
+		a_stage != DynamicResolutionUpsampleStage::Render ||
+		!IsVRRenderScaleModeActive() ||
+		!IsPresentationUpscalingActive() ||
+		!IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) ||
+		!IsVRMenuSceneSeparationContextActive() ||
+		IsCommunityShadersMenuOpen() ||
+		IsMainOrLoadingMenuContextActive() ||
+		IsSaveLoadTransitionContextActive()) {
+		ResetVRMenuSceneSeparationState();
+		return false;
+	}
+
+	auto context = globals::d3d::context;
+	if (!context || !state) {
+		ResetVRMenuSceneSeparationState();
+		return false;
+	}
+
+	VRMenuCompositionTargetMatch destination{};
+	if (!TryResolveCurrentVRMenuSceneDestination(context, destination)) {
+		ResetVRMenuSceneSeparationState();
+		return false;
+	}
+
+	const auto& plan = GetRuntimeResolutionPlan();
+	const uint32_t engineWidth = ClampPositiveDimension(plan.engineRenderSize.x);
+	const uint32_t engineHeight = ClampPositiveDimension(plan.engineRenderSize.y);
+	const uint32_t finalWidth = ClampPositiveDimension(plan.finalOutputSize.x);
+	const uint32_t finalHeight = ClampPositiveDimension(plan.finalOutputSize.y);
+	if (destination.width != engineWidth ||
+		destination.height != engineHeight ||
+		finalWidth <= destination.width ||
+		finalHeight <= destination.height) {
+		ResetVRMenuSceneSeparationState();
+		return false;
+	}
+
+	try {
+		const bool recreateSnapshots =
+			!vrMenuSceneCleanKTotalSnapshot ||
+			!vrMenuSceneBakedKTotalSnapshot ||
+			!vrMenuSceneCleanKTotalSnapshot->resource ||
+			!vrMenuSceneBakedKTotalSnapshot->resource ||
+			!vrMenuSceneCleanKTotalSnapshot->srv ||
+			!vrMenuSceneBakedKTotalSnapshot->srv ||
+			vrMenuSceneSeparationWidth != destination.width ||
+			vrMenuSceneSeparationHeight != destination.height ||
+			vrMenuSceneSeparationFormat != destination.format;
+
+		if (recreateSnapshots) {
+			vrMenuSceneCleanKTotalSnapshot = CreateNamedTexture2D(destination.width, destination.height, destination.format, true, false, false, "VRMenuSceneCleanKTotal");
+			vrMenuSceneBakedKTotalSnapshot = CreateNamedTexture2D(destination.width, destination.height, destination.format, true, false, false, "VRMenuSceneBakedKTotal");
+		}
+		if (!vrMenuSceneCleanKTotalSnapshot ||
+			!vrMenuSceneBakedKTotalSnapshot ||
+			!vrMenuSceneCleanKTotalSnapshot->resource ||
+			!vrMenuSceneBakedKTotalSnapshot->resource ||
+			!vrMenuSceneCleanKTotalSnapshot->srv ||
+			!vrMenuSceneBakedKTotalSnapshot->srv) {
+			LogWarnOnceFmt(
+				vrMenuSceneSeparationCaptureLoggedFailure,
+				"[VRMenuComposite] menu scene separation snapshot allocation unavailable before {}; falling back to baseline menu path.",
+				DiagnosticText(a_passName, "unknown"));
+			ResetVRMenuSceneSeparationState();
+			return false;
+		}
+
+		context->CopyResource(vrMenuSceneCleanKTotalSnapshot->resource.get(), destination.texture);
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu clean kTOTAL snapshot")) {
+			ResetVRMenuSceneSeparationState();
+			return false;
+		}
+	} catch (const std::exception& e) {
+		LogWarnOnceFmt(
+			vrMenuSceneSeparationCaptureLoggedFailure,
+			"[VRMenuComposite] menu scene separation snapshot failed before {}: {}; falling back to baseline menu path.",
+			DiagnosticText(a_passName, "unknown"),
+			e.what());
+		ResetVRMenuSceneSeparationState();
+		return false;
+	} catch (...) {
+		LogWarnOnceFmt(
+			vrMenuSceneSeparationCaptureLoggedFailure,
+			"[VRMenuComposite] menu scene separation snapshot failed before {}; falling back to baseline menu path.",
+			DiagnosticText(a_passName, "unknown"));
+		ResetVRMenuSceneSeparationState();
+		return false;
+	}
+
+	vrMenuSceneSeparationFrame = state->frameCount;
+	vrMenuSceneSeparationWidth = destination.width;
+	vrMenuSceneSeparationHeight = destination.height;
+	vrMenuSceneSeparationFormat = destination.format;
+	vrMenuSceneSeparationKTotalTexture = destination.texture;
+	vrMenuSceneSeparationPending = true;
+	vrMenuSceneSeparationReady = false;
+
+	static std::atomic_bool loggedMenuSeparationCapture{ false };
+	if (!loggedMenuSeparationCapture.exchange(true, std::memory_order_acq_rel)) {
+		logger::debug(
+			"[VRMenuComposite] action=capture-clean-scene frame={} pass={} dst={}({}x{} fmt={}) source={} result=armed",
+			vrMenuSceneSeparationFrame,
+			DiagnosticText(a_passName, "unknown"),
+			destination.name,
+			destination.width,
+			destination.height,
+			static_cast<uint32_t>(destination.format),
+			"pending-post-vanilla");
+	}
+
+	return true;
+}
+
+void Upscaling::TryCaptureVRMenuSceneSeparationAfter(const char* a_passName, DynamicResolutionUpsampleStage a_stage)
+{
+	if (!vrMenuSceneSeparationPending ||
+		a_stage != DynamicResolutionUpsampleStage::Render ||
+		!vrMenuSceneSeparationKTotalTexture ||
+		!vrMenuSceneBakedKTotalSnapshot ||
+		!vrMenuSceneBakedKTotalSnapshot->resource) {
+		return;
+	}
+
+	auto context = globals::d3d::context;
+	auto state = globals::state;
+	if (!context || !state || state->frameCount != vrMenuSceneSeparationFrame) {
+		ResetVRMenuSceneSeparationState();
+		return;
+	}
+
+	VRMenuCompositionTargetMatch destination{};
+	VRMenuCompositionTargetMatch source{};
+	if (!TryResolveCurrentVRMenuSceneBake(context, destination, source) ||
+		destination.texture != vrMenuSceneSeparationKTotalTexture) {
+		ResetVRMenuSceneSeparationState();
+		return;
+	}
+
+	D3D11_TEXTURE2D_DESC desc{};
+	vrMenuSceneSeparationKTotalTexture->GetDesc(&desc);
+	if (desc.Width != vrMenuSceneSeparationWidth ||
+		desc.Height != vrMenuSceneSeparationHeight ||
+		desc.Format != vrMenuSceneSeparationFormat ||
+		desc.ArraySize != 1 ||
+		desc.SampleDesc.Count != 1) {
+		ResetVRMenuSceneSeparationState();
+		return;
+	}
+
+	context->CopyResource(vrMenuSceneBakedKTotalSnapshot->resource.get(), vrMenuSceneSeparationKTotalTexture);
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu baked kTOTAL snapshot")) {
+		ResetVRMenuSceneSeparationState();
+		return;
+	}
+
+	vrMenuSceneSeparationPending = false;
+	vrMenuSceneSeparationReady = true;
+
+	static std::atomic_bool loggedMenuSeparationReady{ false };
+	if (!loggedMenuSeparationReady.exchange(true, std::memory_order_acq_rel)) {
+		logger::debug(
+			"[VRMenuComposite] action=capture-baked-menu frame={} pass={} source={}({}x{} fmt={}) result=ready",
+			vrMenuSceneSeparationFrame,
+			DiagnosticText(a_passName, "unknown"),
+			source.name,
+			vrMenuSceneSeparationWidth,
+			vrMenuSceneSeparationHeight,
+			static_cast<uint32_t>(vrMenuSceneSeparationFormat));
+	}
+}
+
+bool Upscaling::CanUseVRMenuSceneSeparationForSubmit(ID3D11Texture2D* a_sourceTexture, const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_frame) const
+{
+	return vrMenuSceneSeparationReady &&
+	       vrMenuSceneSeparationFrame == a_frame &&
+	       vrMenuSceneSeparationKTotalTexture == a_sourceTexture &&
+	       vrMenuSceneCleanKTotalSnapshot &&
+	       vrMenuSceneBakedKTotalSnapshot &&
+	       vrMenuSceneCleanKTotalSnapshot->resource &&
+	       vrMenuSceneBakedKTotalSnapshot->resource &&
+	       vrMenuSceneCleanKTotalSnapshot->srv &&
+	       vrMenuSceneBakedKTotalSnapshot->srv &&
+	       a_sourceDesc.ArraySize == 1 &&
+	       a_sourceDesc.SampleDesc.Count == 1 &&
+	       a_sourceDesc.Width == vrMenuSceneSeparationWidth &&
+	       a_sourceDesc.Height == vrMenuSceneSeparationHeight &&
+	       a_sourceDesc.Format == vrMenuSceneSeparationFormat;
+}
+
+ID3D11Texture2D* Upscaling::GetVRMenuSceneSeparationCleanSource() const
+{
+	return vrMenuSceneCleanKTotalSnapshot && vrMenuSceneCleanKTotalSnapshot->resource ?
+		vrMenuSceneCleanKTotalSnapshot->resource.get() :
+		nullptr;
+}
+
+bool Upscaling::CompositeVRMenuSceneDelta(uint32_t a_eyeIndex, const D3D11_BOX& a_sourceBox, uint32_t a_outputWidth, uint32_t a_outputHeight)
+{
+	if (a_eyeIndex >= 2 ||
+		!a_outputWidth ||
+		!a_outputHeight ||
+		a_sourceBox.right <= a_sourceBox.left ||
+		a_sourceBox.bottom <= a_sourceBox.top ||
+		!vrMenuSceneDeltaCompositeCB ||
+		!vrMenuSceneCleanKTotalSnapshot ||
+		!vrMenuSceneBakedKTotalSnapshot ||
+		!vrMenuSceneCleanKTotalSnapshot->srv ||
+		!vrMenuSceneBakedKTotalSnapshot->srv ||
+		!vrIntermediateColorOut[a_eyeIndex] ||
+		!vrIntermediateColorOut[a_eyeIndex]->uav) {
+		return false;
+	}
+
+	auto context = globals::d3d::context;
+	auto deferred = globals::deferred;
+	if (!context || !deferred || !deferred->linearSampler)
+		return false;
+
+	auto* shader = GetVRMenuSceneDeltaCompositeCS();
+	if (!shader)
+		return false;
+
+	const uint32_t sourceWidth = vrMenuSceneSeparationWidth;
+	const uint32_t sourceHeight = vrMenuSceneSeparationHeight;
+	if (!sourceWidth || !sourceHeight ||
+		a_sourceBox.left >= sourceWidth ||
+		a_sourceBox.top >= sourceHeight ||
+		a_sourceBox.right > sourceWidth ||
+		a_sourceBox.bottom > sourceHeight)
+		return false;
+
+	const float sourceWidthF = static_cast<float>(sourceWidth);
+	const float sourceHeightF = static_cast<float>(sourceHeight);
+	const float sourceBoxWidth = static_cast<float>(a_sourceBox.right - a_sourceBox.left);
+	const float sourceBoxHeight = static_cast<float>(a_sourceBox.bottom - a_sourceBox.top);
+
+	VRMenuSceneDeltaCompositeCB cbData{};
+	cbData.outputSize = { static_cast<float>(a_outputWidth), static_cast<float>(a_outputHeight) };
+	cbData.sourceTextureSize = { sourceWidthF, sourceHeightF };
+	cbData.sourceUVScale = { sourceBoxWidth / sourceWidthF, sourceBoxHeight / sourceHeightF };
+	cbData.sourceUVOffset = {
+		static_cast<float>(a_sourceBox.left) / sourceWidthF,
+		static_cast<float>(a_sourceBox.top) / sourceHeightF
+	};
+	vrMenuSceneDeltaCompositeCB->Update(cbData);
+
+	ID3D11ShaderResourceView* srvs[2] = {
+		vrMenuSceneCleanKTotalSnapshot->srv.get(),
+		vrMenuSceneBakedKTotalSnapshot->srv.get()
+	};
+	ID3D11UnorderedAccessView* outputUAV = vrIntermediateColorOut[a_eyeIndex]->uav.get();
+	ID3D11Buffer* cb = vrMenuSceneDeltaCompositeCB->CB();
+	ID3D11SamplerState* sampler = deferred->linearSampler;
+
+	context->CSSetShader(shader, nullptr, 0);
+	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+	context->CSSetUnorderedAccessViews(0, 1, &outputUAV, nullptr);
+	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetSamplers(0, 1, &sampler);
+	context->Dispatch((a_outputWidth + 7u) >> 3, (a_outputHeight + 7u) >> 3, 1);
+
+	ID3D11ShaderResourceView* nullSRVs[2] = {};
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	ID3D11Buffer* nullCB = nullptr;
+	ID3D11SamplerState* nullSampler = nullptr;
+	context->CSSetShaderResources(0, ARRAYSIZE(nullSRVs), nullSRVs);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetConstantBuffers(0, 1, &nullCB);
+	context->CSSetSamplers(0, 1, &nullSampler);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu scene delta composite"))
+		return false;
+
+	static std::atomic_bool loggedMenuDeltaComposite{ false };
+	if (!loggedMenuDeltaComposite.exchange(true, std::memory_order_acq_rel)) {
+		logger::debug(
+			"[VRMenuComposite] action=apply-menu-delta-occlusion frame={} eye={} source={}x{} output={}x{} result=applied",
+			vrMenuSceneSeparationFrame,
+			a_eyeIndex,
+			static_cast<uint32_t>(sourceBoxWidth),
+			static_cast<uint32_t>(sourceBoxHeight),
+			a_outputWidth,
+			a_outputHeight);
+	}
+
+	return true;
+}
+
 bool Upscaling::EnsureHMDMaskClearResources()
 {
 	if (!globals::game::isVR)
@@ -14894,6 +15297,8 @@ void Upscaling::SetupResources()
 	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
 	delete dynamicResolutionStretchCB;
 	dynamicResolutionStretchCB = new ConstantBuffer(ConstantBufferDesc<DynamicResolutionStretchCB>(), "Upscaling::DynamicResolutionStretchCB");
+	delete vrMenuSceneDeltaCompositeCB;
+	vrMenuSceneDeltaCompositeCB = new ConstantBuffer(ConstantBufferDesc<VRMenuSceneDeltaCompositeCB>(), "Upscaling::VRMenuSceneDeltaCompositeCB");
 	delete foveatedPeripheryCB;
 	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
 	delete foveatedCenterBlendCB;
@@ -14963,6 +15368,7 @@ void Upscaling::ClearShaderCache()
 	aaVrsVisualizationCS = nullptr;      // com_ptr automatically releases
 	aaVrsRefinementCS = nullptr;         // com_ptr automatically releases
 	submitStageStretchCS = nullptr;      // com_ptr automatically releases
+	vrMenuSceneDeltaCompositeCS = nullptr; // com_ptr automatically releases
 	vrClearHMDMaskCS = nullptr;          // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;          // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr; // com_ptr automatically releases
@@ -15911,13 +16317,20 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		sourceRegion.matchesExpectedSize &&
 		motionVector.texture &&
 		depth.texture;
+	const bool useMenuSceneSeparation =
+		menuTextVendorReconstruct &&
+		CanUseVRMenuSceneSeparationForSubmit(sourceTexture, sourceDesc, currentFrame);
+	ID3D11Texture2D* vendorInputTexture = useMenuSceneSeparation ? GetVRMenuSceneSeparationCleanSource() : sourceTexture;
+	if (useMenuSceneSeparation && !vendorInputTexture)
+		return false;
 	const std::string submitResolvePhase = std::format(
-		"resolve:eye={} menu={} textMenu={} textSceneEncode={} textVendorReconstruct={} submitMenu={} submitPresentation={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={} sourceExpected={} sourcePerEye={} sourceCombined={} boundsCombined={}",
+		"resolve:eye={} menu={} textMenu={} textSceneEncode={} textVendorReconstruct={} separatedMenu={} submitMenu={} submitPresentation={} presentationRT={} presentationOnly={} boundsFallback={} vendorMenu={} foveated={} cooldown={} sourceTooSmall={} sourceExpected={} sourcePerEye={} sourceCombined={} boundsCombined={}",
 		VREyeName(a_eye),
 		BoolText(menuPresentationContext),
 		BoolText(menuTextProtectionContext),
 		BoolText(menuTextSceneEncode),
 		BoolText(menuTextVendorReconstruct),
+		BoolText(useMenuSceneSeparation),
 		BoolText(submitMenuPresentationContext),
 		BoolText(submitPresentationContext),
 		BoolText(presentationRenderTarget),
@@ -15979,7 +16392,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		submitStagePreparedFramePresentationOnly = true;
 	} else if (!submitStagePreparedThisFrame ||
 	           submitStagePreparedFramePresentationOnly) {
-		if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut)) {
+		if (!EncodeSubmitStageVRInputs(vendorInputTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut)) {
 			if (IsSubmitStageDeviceLost())
 				return false;
 			return false;
@@ -16024,6 +16437,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	};
 
 	const UINT sourceSubresource = sourceRegion.subresource;
+	const UINT vendorInputSubresource = useMenuSceneSeparation ? 0u : sourceSubresource;
 	const D3D11_BOX colorBox = sourceRegion.box;
 
 	if (!sourceRegion.matchesExpectedSize && !submitBoundsPresentationFallback) {
@@ -16069,7 +16483,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
-	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
+	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, vendorInputTexture, vendorInputSubresource, &colorBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
 
@@ -16469,6 +16883,37 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		!presentationRenderTarget &&
 		menuTextProtectionContext) {
 		LogKnownGameMenuFinalCompositeDiagnostics(eyeIndex, eyeWidthOut, eyeHeightOut);
+	}
+
+	if (useMenuSceneSeparation) {
+		try {
+			if (!CompositeVRMenuSceneDelta(eyeIndex, colorBox, eyeWidthOut, eyeHeightOut)) {
+				static bool loggedMenuCompositeSkip[2] = {};
+				LogWarnOnceFmt(
+					loggedMenuCompositeSkip[eyeIndex],
+					"[VRMenuComposite] scene-delta composite skipped for eye {}; using scene-only vendor output for this frame.",
+					eyeIndex);
+			}
+		} catch (const std::exception& e) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfNeeded(e, "VR menu scene delta composite"))
+				return false;
+			static bool loggedMenuCompositeException[2] = {};
+			LogWarnOnceFmt(
+				loggedMenuCompositeException[eyeIndex],
+				"[VRMenuComposite] scene-delta composite threw for eye {}; using scene-only vendor output for this frame: {}",
+				eyeIndex,
+				e.what());
+		} catch (...) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu scene delta composite"))
+				return false;
+			static bool loggedMenuCompositeException[2] = {};
+			LogWarnOnceFmt(
+				loggedMenuCompositeException[eyeIndex],
+				"[VRMenuComposite] scene-delta composite threw for eye {}; using scene-only vendor output for this frame.",
+				eyeIndex);
+		}
 	}
 
 	clearSubmittedEyeHMDMask();
@@ -18266,6 +18711,8 @@ void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader,
 		return;
 
 	auto& upscaling = globals::features::upscaling;
+	const bool captureMenuSceneSeparation =
+		upscaling.TryCaptureVRMenuSceneSeparationBefore("ISCopyDynamicFetchDisabled", DynamicResolutionUpsampleStage::Render);
 	LogVRPresentationAroundCall(
 		upscaling,
 		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
@@ -18274,6 +18721,8 @@ void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader,
 		"Render:vanilla-after",
 		true,
 		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+	if (captureMenuSceneSeparation)
+		upscaling.TryCaptureVRMenuSceneSeparationAfter("ISCopyDynamicFetchDisabled", DynamicResolutionUpsampleStage::Render);
 }
 
 void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)

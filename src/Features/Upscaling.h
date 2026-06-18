@@ -290,6 +290,14 @@ public:
 		float2 padding;
 	};
 
+	struct VRMenuSceneDeltaCompositeCB
+	{
+		float2 outputSize;
+		float2 sourceTextureSize;
+		float2 sourceUVScale;
+		float2 sourceUVOffset;
+	};
+
 	struct FoveatedPeripheryCB
 	{
 		float2 outputDim;
@@ -361,6 +369,7 @@ public:
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(VRMenuSceneDeltaCompositeCB) == 32, "VRMenuSceneDeltaCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
@@ -425,6 +434,7 @@ public:
 	ConstantBuffer* jitterCB = nullptr;
 	ConstantBuffer* upscalingDataCB = nullptr;
 	ConstantBuffer* dynamicResolutionStretchCB = nullptr;
+	ConstantBuffer* vrMenuSceneDeltaCompositeCB = nullptr;
 	ConstantBuffer* foveatedPeripheryCB = nullptr;
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
@@ -567,6 +577,9 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> submitStageStretchCS;
 	ID3D11ComputeShader* GetSubmitStageStretchCS();
 
+	winrt::com_ptr<ID3D11ComputeShader> vrMenuSceneDeltaCompositeCS;
+	ID3D11ComputeShader* GetVRMenuSceneDeltaCompositeCS();
+
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
@@ -590,6 +603,16 @@ public:
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];  // per-eye render resolution
 	eastl::unique_ptr<Texture2D> submitStageDLSSSharpenerTexture[2]; // per-eye output resolution
+	eastl::unique_ptr<Texture2D> vrMenuSceneCleanKTotalSnapshot;     // combined-eye render-scale scene before menu bake
+	eastl::unique_ptr<Texture2D> vrMenuSceneBakedKTotalSnapshot;     // combined-eye render-scale scene after menu bake
+	uint32_t vrMenuSceneSeparationFrame = 0;
+	uint32_t vrMenuSceneSeparationWidth = 0;
+	uint32_t vrMenuSceneSeparationHeight = 0;
+	DXGI_FORMAT vrMenuSceneSeparationFormat = DXGI_FORMAT_UNKNOWN;
+	ID3D11Texture2D* vrMenuSceneSeparationKTotalTexture = nullptr;
+	bool vrMenuSceneSeparationPending = false;
+	bool vrMenuSceneSeparationReady = false;
+	bool vrMenuSceneSeparationCaptureLoggedFailure = false;
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;
@@ -698,6 +721,17 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
+	enum class DynamicResolutionUpsampleStage : uint8_t
+	{
+		Render,
+		Dispatch
+	};
+	bool TryCaptureVRMenuSceneSeparationBefore(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
+	void TryCaptureVRMenuSceneSeparationAfter(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
+	bool CanUseVRMenuSceneSeparationForSubmit(ID3D11Texture2D* a_sourceTexture, const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_frame) const;
+	ID3D11Texture2D* GetVRMenuSceneSeparationCleanSource() const;
+	bool CompositeVRMenuSceneDelta(uint32_t a_eyeIndex, const D3D11_BOX& a_sourceBox, uint32_t a_outputWidth, uint32_t a_outputHeight);
+	void ResetVRMenuSceneSeparationState();
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
@@ -706,11 +740,6 @@ public:
 		const vr::VRTextureBounds_t* a_outputBounds = nullptr, vr::EVRSubmitFlags a_submitFlags = vr::Submit_Default) const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
-	enum class DynamicResolutionUpsampleStage : uint8_t
-	{
-		Render,
-		Dispatch
-	};
 	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
 	void RequestPostLoadRuntimeReset();

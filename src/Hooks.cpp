@@ -42,6 +42,35 @@ const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Sha
 
 namespace
 {
+	constexpr std::uintptr_t kBSShaderRenderTargetsCreateDiscoveryCallerWindow = 0x2000;
+	constexpr uint32_t kNearCallInstructionSize = 5;
+	constexpr size_t kVRMenuBgCreateDiscoveryMaxCallOffsets = 16;
+
+	std::mutex g_vrMenuBgCreateDiscoveryLock;
+	std::array<uint32_t, kVRMenuBgCreateDiscoveryMaxCallOffsets> g_vrMenuBgCreateDiscoveryCallOffsets{};
+	size_t g_vrMenuBgCreateDiscoveryCallOffsetCount = 0;
+	bool g_vrMenuBgCreateDiscoveryHookInstalled = false;
+
+	bool RecordVRMenuBgCreateDiscoveryCallOffset(uint32_t a_callOffset)
+	{
+		std::scoped_lock lock(g_vrMenuBgCreateDiscoveryLock);
+		const auto storedOffsetsBegin = g_vrMenuBgCreateDiscoveryCallOffsets.begin();
+		const auto storedOffsetsEnd = storedOffsetsBegin + g_vrMenuBgCreateDiscoveryCallOffsetCount;
+		if (std::find(
+				storedOffsetsBegin,
+				storedOffsetsEnd,
+				a_callOffset) != storedOffsetsEnd) {
+			return false;
+		}
+
+		if (g_vrMenuBgCreateDiscoveryCallOffsetCount >= g_vrMenuBgCreateDiscoveryCallOffsets.size()) {
+			return false;
+		}
+
+		g_vrMenuBgCreateDiscoveryCallOffsets[g_vrMenuBgCreateDiscoveryCallOffsetCount++] = a_callOffset;
+		return true;
+	}
+
 	enum class InputHookSafeguardReason : uint32_t
 	{
 		kSwallow = 1u << 0,
@@ -753,6 +782,85 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct CreateRenderTarget_Discovery
+	{
+		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
+		{
+			if (REL::Module::IsVR() &&
+				a_target == RE::RENDER_TARGETS::kMENUBG &&
+				a_properties) {
+				const auto createBase = REL::RelocationID(100458, 107175).address();
+				const auto callerReturnAddress = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+				if (callerReturnAddress >= createBase &&
+					callerReturnAddress < createBase + kBSShaderRenderTargetsCreateDiscoveryCallerWindow) {
+					const auto callerReturnOffset = static_cast<uint32_t>(callerReturnAddress - createBase);
+					// `write_thunk_call` needs the CALL instruction address, not the post-call return address.
+					const auto callerCallOffset =
+						callerReturnOffset >= kNearCallInstructionSize ?
+							callerReturnOffset - kNearCallInstructionSize :
+							callerReturnOffset;
+
+					if (RecordVRMenuBgCreateDiscoveryCallOffset(callerCallOffset)) {
+						logger::info(
+							"[VRMenuBgCreateDiscovery] target={} size={}x{} callerCallOff=0x{:X} callerRetOff=0x{:X}",
+							magic_enum::enum_name(a_target),
+							a_properties->width,
+							a_properties->height,
+							callerCallOffset,
+							callerReturnOffset);
+					}
+				}
+			}
+
+			func(This, a_target, a_properties);
+		}
+
+		static inline decltype(&thunk) func;
+	};
+
+	void InstallVRMenuBgCreateDiscoveryHook()
+	{
+		if (!REL::Module::IsVR() || g_vrMenuBgCreateDiscoveryHookInstalled) {
+			return;
+		}
+
+		const auto targetAddress = CreateRenderTarget_Main::func.address();
+		if (targetAddress == 0) {
+			logger::warn("[VRMenuBgCreateDiscovery] Shared CreateRenderTarget address unavailable; discovery hook not installed.");
+			return;
+		}
+
+		CreateRenderTarget_Discovery::func = reinterpret_cast<decltype(CreateRenderTarget_Discovery::func)>(targetAddress);
+
+		auto status = DetourTransactionBegin();
+		if (status != NO_ERROR) {
+			logger::warn("[VRMenuBgCreateDiscovery] Failed to begin shared CreateRenderTarget discovery hook transaction: {}", status);
+			return;
+		}
+
+		status = DetourUpdateThread(GetCurrentThread());
+		if (status != NO_ERROR) {
+			DetourTransactionAbort();
+			logger::warn("[VRMenuBgCreateDiscovery] Failed to update thread for shared CreateRenderTarget discovery hook: {}", status);
+			return;
+		}
+
+		status = DetourAttach(reinterpret_cast<PVOID*>(&CreateRenderTarget_Discovery::func), reinterpret_cast<PVOID>(CreateRenderTarget_Discovery::thunk));
+		if (status != NO_ERROR) {
+			DetourTransactionAbort();
+			logger::warn("[VRMenuBgCreateDiscovery] Failed to attach shared CreateRenderTarget discovery hook: {}", status);
+			return;
+		}
+
+		status = DetourTransactionCommit();
+		if (status == NO_ERROR) {
+			g_vrMenuBgCreateDiscoveryHookInstalled = true;
+			logger::info("[VRMenuBgCreateDiscovery] Installed shared CreateRenderTarget discovery hook.");
+		} else {
+			logger::warn("[VRMenuBgCreateDiscovery] Failed to install shared CreateRenderTarget discovery hook: {}", status);
+		}
+	}
+
 	struct CreateRenderTarget_Normals
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
@@ -1263,6 +1371,7 @@ namespace Hooks
 
 		stl::write_thunk_call<CreateRenderTarget_RefractionNormals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x503, 0x502, 0x661));
 		stl::write_thunk_call<CreateRenderTarget_UnderwaterMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xB19, 0xB19, 0xE06));
+		InstallVRMenuBgCreateDiscoveryHook();
 
 		stl::write_thunk_call<CreateDepthStencil_PrecipitationMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x1245, 0x123B, 0x1917));
 		stl::write_thunk_call<CreateCubemapRenderTarget_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA25, 0xA25, 0xCD2));

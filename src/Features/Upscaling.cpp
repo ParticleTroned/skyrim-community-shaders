@@ -9775,6 +9775,14 @@ void Upscaling::PostPostLoad()
 	stl::write_vfunc<0xC, CopyDynamicFetchDisabled_Dispatch>(
 		RE::VTABLE_BSImagespaceShaderCopyDynamicFetchDisabled[0]);
 	if (globals::game::isVR) {
+		stl::write_vfunc<0x1, Copy_Render>(
+			RE::VTABLE_BSImagespaceShaderCopy[3]);
+		stl::write_vfunc<0x1, BasicCopy_Render>(
+			RE::VTABLE_BSImagespaceShaderISBasicCopy[3]);
+		stl::write_vfunc<0x1, CopyScaleBias_Render>(
+			RE::VTABLE_BSImagespaceShaderCopyScaleBias[3]);
+		stl::write_vfunc<0x1, CopyCustomViewport_Render>(
+			RE::VTABLE_BSImagespaceShaderCopyCustomViewport[3]);
 		stl::write_vfunc<0x1, HDRTonemapBlendCinematicFade_Render>(
 			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
 		stl::write_vfunc<0x1, TemporalAAUI_Render>(
@@ -20066,7 +20074,74 @@ void Upscaling::UpsampleDynamicResolution_Render::thunk(void* a_imageSpaceShader
 		"Render:vanilla-before",
 		"Render:vanilla-after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISUpsampleDynamicResolution", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
+}
+
+void Upscaling::Copy_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
+{
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
+		"ISCopy",
+		"Render:before",
+		"Render:after",
+		true,
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISCopy", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
+}
+
+void Upscaling::BasicCopy_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
+{
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
+		"ISBasicCopy",
+		"Render:before",
+		"Render:after",
+		true,
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISBasicCopy", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
+}
+
+void Upscaling::CopyScaleBias_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
+{
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
+		"ISCopyScaleBias",
+		"Render:before",
+		"Render:after",
+		true,
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISCopyScaleBias", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
+}
+
+void Upscaling::CopyCustomViewport_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
+{
+	auto& upscaling = globals::features::upscaling;
+	LogVRPresentationAroundCall(
+		upscaling,
+		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
+		"ISCopyCustomViewport",
+		"Render:before",
+		"Render:after",
+		true,
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISCopyCustomViewport", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
 }
 
 void Upscaling::FullScreenVR_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -20082,7 +20157,10 @@ void Upscaling::FullScreenVR_Render::thunk(void* a_imageSpaceShader, void* a_sha
 		"Render:vanilla-before",
 		"Render:vanilla-after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISFullScreenVR", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
 }
 
 void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -20099,7 +20177,10 @@ void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader,
 		"Render:vanilla-before",
 		"Render:vanilla-after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISCopyDynamicFetchDisabled", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
 }
 
 void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -20113,6 +20194,7 @@ void Upscaling::HDRTonemapBlendCinematicFade_Render::thunk(void* a_imageSpaceSha
 		"Render:after",
 		true,
 		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISHDRTonemapBlendCinematicFade", "original-call");
 			auto context = globals::d3d::context;
 			const auto& plan = upscaling.GetRuntimeResolutionPlan();
 
@@ -20171,7 +20253,10 @@ void Upscaling::TemporalAAUI_Render::thunk(void* a_imageSpaceShader, void* a_sha
 		"Render:before",
 		"Render:after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISTemporalAA_UI", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
 }
 
 void Upscaling::LightingCompositeMenu_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
@@ -20184,7 +20269,10 @@ void Upscaling::LightingCompositeMenu_Render::thunk(void* a_imageSpaceShader, vo
 		"Render:before",
 		"Render:after",
 		true,
-		[&]() { func(a_imageSpaceShader, a_shape, a_param); });
+		[&]() {
+			const ScopedVRTrackedResourceOperationContext operationContext("ISLightingCompositeMenu", "original-call");
+			func(a_imageSpaceShader, a_shape, a_param);
+		});
 }
 
 void Upscaling::UpsampleDynamicResolution_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
@@ -20294,7 +20382,10 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			"before-PostDisplay",
 			true);
 	}
-	upscaling.PostDisplay();
+	{
+		const ScopedVRTrackedResourceOperationContext operationContext("MenuManagerDrawInterface", "PostDisplay");
+		upscaling.PostDisplay();
+	}
 	if (logPresentationDiagnostics) {
 		LogVRPresentationPassDiagnostics(
 			upscaling,
@@ -20313,7 +20404,10 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			false);
 	}
 
-	func(a1);
+	{
+		const ScopedVRTrackedResourceOperationContext operationContext("MenuManagerDrawInterface", "original-draw");
+		func(a1);
+	}
 	ArmVRMenuUiWriterDiagnosticsForMenuDraw();
 
 	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {

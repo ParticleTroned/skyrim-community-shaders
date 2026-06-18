@@ -1096,6 +1096,30 @@ private:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct Copy_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BasicCopy_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CopyScaleBias_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct CopyCustomViewport_Render
+	{
+		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct FullScreenVR_Render
 	{
 		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);

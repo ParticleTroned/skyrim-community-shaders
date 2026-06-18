@@ -4,7 +4,28 @@
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
+#if defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
+#	include "Common/Permutation.hlsli"
+#endif
+
 #define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
+#define ENABLE_ADAPTIVE_BRIGHTNESS SharedData::linearLightingSettings.enableAdaptiveBrightness
+
+// Object shaders opt into this so LL material/effect adjustments skip menu and
+// out-of-world draws while image-space scene passes keep the global LL state.
+#if defined(PSHADER) && defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
+#	define ENABLE_LL_COLOR_ADJUSTMENTS \
+		(ENABLE_LL && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
+#	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS \
+		(ENABLE_ADAPTIVE_BRIGHTNESS && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
+#else
+#	define ENABLE_LL_COLOR_ADJUSTMENTS ENABLE_LL
+#	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ENABLE_ADAPTIVE_BRIGHTNESS
+#endif
+
+// Adaptive Brightness shares Linear Lighting's settings payload, but it must
+// not enable Linear Lighting's color-space conversion path.
+#define ENABLE_BRIGHTNESS_ADJUSTMENTS (ENABLE_LL_COLOR_ADJUSTMENTS || ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS)
 
 #if defined(PSHADER) && defined(LIGHTING)
 cbuffer LLPerGeometry : register(b8)
@@ -125,38 +146,47 @@ namespace Color
 		return sign(color) * pow(abs(color), 1.0 / 2.2);
 	}
 
+	bool UseLinearLightingColorAdjustments()
+	{
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
+		return ENABLE_LL_COLOR_ADJUSTMENTS;
+#else
+		return false;
+#endif
+	}
+
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	// Attempt to match vanilla materials that are darker than PBR
-	const static float PBRLightingScale = ENABLE_LL ? 1.0 : 0.65;
+	const static float PBRLightingScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 0.65;
 
 	// Attempt to normalise reflection brightness against DALC
-	const static float ReflectionNormalisationScale = ENABLE_LL ? 1.0 : 1.0;
+	const static float ReflectionNormalisationScale = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : 1.0;
 
-	const static float PBRLightingCompensation = ENABLE_LL ? 1.0 : Math::PI;
+	const static float PBRLightingCompensation = ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 : Math::PI;
 
 	// Linear Lighting Functions
 	float3 LLGammaToLinear(float3 color)
 	{
-		return ENABLE_LL ? SkyrimGammaToLinear(color) : color;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? SkyrimGammaToLinear(color) : color;
 	}
 
 	float3 LLLinearToGamma(float3 color)
 	{
-		return ENABLE_LL ? LinearToSkyrimGamma(color) : color;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? LinearToSkyrimGamma(color) : color;
 	}
 
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? color : LinearToSrgb(color);
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
 #	else
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
 #	endif
 	}
 
 	float3 Light(float3 color, bool isLinear = false)
 	{
-		color = (ENABLE_LL && !isLinear) ? pow(abs(color), SharedData::linearLightingSettings.lightGamma) : color;
+		color = (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? pow(abs(color), SharedData::linearLightingSettings.lightGamma) : color;
 #	if defined(TRUE_PBR)
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
@@ -166,54 +196,67 @@ namespace Color
 
 	float3 DirectionalLight(float3 color, bool isLinear = false)
 	{
-		return Light(color, isLinear) *
-		       ((ENABLE_LL && !isLinear) ? Math::PI * SharedData::linearLightingSettings.directionalLightMult : 1.0f);
+		float multiplier = 1.0f;
+		if (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) {
+			multiplier = Math::PI * SharedData::linearLightingSettings.directionalLightMult;
+		} else if (ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS) {
+			multiplier = SharedData::linearLightingSettings.directionalLightMult;
+		}
+
+		return Light(color, isLinear) * multiplier;
 	}
 
 	float3 PointLight(float3 color, bool isLinear = false)
 	{
-		return Light(color, isLinear) *
-		       ((ENABLE_LL && !isLinear) ? Math::PI * SharedData::linearLightingSettings.pointLightMult : 1.0f);
+		float multiplier = 1.0f;
+		if (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) {
+			multiplier = Math::PI * SharedData::linearLightingSettings.pointLightMult;
+		} else if (ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS) {
+			multiplier = SharedData::linearLightingSettings.pointLightMult;
+		}
+
+		return Light(color, isLinear) * multiplier;
 	}
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
-		return ENABLE_LL ? (pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? (pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult) : color;
 	}
 #	endif
 
 	float3 Glowmap(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? color * SharedData::linearLightingSettings.glowmapMult : LinearToSrgb(color);
+		color = ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.glowmapMult : color;
 #	else
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.glowmapGamma) * SharedData::linearLightingSettings.glowmapMult : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.glowmapGamma) * SharedData::linearLightingSettings.glowmapMult : color;
 #	endif
 	}
 
 	float3 Ambient(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
 	}
 
 	float3 Fog(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.fogGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.fogGamma) : color;
 	}
 
 	float FogAlpha(float alpha)
 	{
-		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
 	}
 
 	float3 Effect(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.effectGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.effectGamma) : color;
 	}
 
 	float3 EffectMult(float3 color)
 	{
-		if (ENABLE_LL) {
+		if (ENABLE_BRIGHTNESS_ADJUSTMENTS) {
 #	if defined(MEMBRANE)
 			color *= SharedData::linearLightingSettings.membraneEffectMult;
 #	elif defined(BLOOD)
@@ -231,67 +274,67 @@ namespace Color
 
 	float EffectLightingMult()
 	{
-		return ENABLE_LL ? SharedData::linearLightingSettings.effectLightingMult : 1.0f;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? SharedData::linearLightingSettings.effectLightingMult : 1.0f;
 	}
 
 	float EffectAlpha(float alpha)
 	{
-		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.effectAlphaGamma) : alpha;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(alpha), SharedData::linearLightingSettings.effectAlphaGamma) : alpha;
 	}
 
 	float3 Sky(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.skyGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.skyGamma) : color;
 	}
 
 	float3 Water(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.waterGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.waterGamma) : color;
 	}
 
 	float3 VolumetricLighting(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.vlGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.vlGamma) : color;
 	}
 
 	float3 ColorToLinear(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) : color;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) : color;
 	}
 
 	float3 RadianceToLinear(float3 color)
 	{
-		return ENABLE_LL ? color : SkyrimGammaToLinear(color);
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : SkyrimGammaToLinear(color);
 	}
 
 	float IrradianceToLinear(float color)
 	{
-		return ENABLE_LL ? color : SkyrimGammaToLinear(color);
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : SkyrimGammaToLinear(color);
 	}
 
 	float IrradianceToGamma(float color)
 	{
-		return ENABLE_LL ? color : LinearToSkyrimGamma(color);
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSkyrimGamma(color);
 	}
 
 	float3 IrradianceToLinear(float3 color)
 	{
-		return ENABLE_LL ? color : SkyrimGammaToLinear(color);
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : SkyrimGammaToLinear(color);
 	}
 
 	float3 IrradianceToGamma(float3 color)
 	{
-		return ENABLE_LL ? color : LinearToSkyrimGamma(color);
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSkyrimGamma(color);
 	}
 
 	float VanillaNormalization()
 	{
-		return ENABLE_LL ? 1.0 / Math::PI : 1.0f;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 / Math::PI : 1.0f;
 	}
 
 	float VanillaDiffuseColorMult()
 	{
-		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0f;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0f;
 	}
 #else
 	const static float PBRLightingScale = 1.0;

@@ -1,5 +1,6 @@
 #include "LinearLighting.h"
 
+#include "AdaptiveBrightness.h"
 #include "State.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -143,40 +144,40 @@ void LinearLighting::PostPostLoad()
 
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
-	if (!loaded) {
-		auto data = PerFrameData{};
-		data.enableLinearLighting = false;
-		return data;
-	}
-	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
+	const bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
+	const bool linearLightingEnabled = loaded && settings.enableLinearLighting && !isMainLoadingMenu;
+	const bool adaptiveBrightnessEnabled = globals::features::adaptiveBrightness.IsRuntimeEnabled();
+	const auto effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
+
 	auto data = PerFrameData{};
-	data.enableLinearLighting = settings.enableLinearLighting && !isMainLoadingMenu;
+	data.enableLinearLighting = linearLightingEnabled;
 	data.isDirLightLinear = isDirLightLinear;
 	data.dirLightMult = dirLightMult;
-	data.lightGamma = settings.lightGamma;
-	data.colorGamma = settings.colorGamma;
-	data.emitColorGamma = settings.emitColorGamma;
-	data.glowmapGamma = settings.glowmapGamma;
-	data.ambientGamma = settings.ambientGamma;
-	data.fogGamma = settings.fogGamma;
-	data.fogAlphaGamma = settings.fogAlphaGamma;
-	data.effectGamma = settings.effectGamma;
-	data.effectAlphaGamma = settings.effectAlphaGamma;
-	data.skyGamma = settings.skyGamma;
-	data.waterGamma = settings.waterGamma;
-	data.vlGamma = settings.vlGamma;
-	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
-	data.directionalLightMult = settings.directionalLightMult;
-	data.pointLightMult = settings.pointLightMult;
-	data.ambientMult = settings.ambientMult;
-	data.emitColorMult = settings.emitColorMult;
-	data.glowmapMult = settings.glowmapMult;
-	data.effectLightingMult = settings.effectLightingMult;
-	data.membraneEffectMult = settings.membraneEffectMult;
-	data.bloodEffectMult = settings.bloodEffectMult;
-	data.projectedEffectMult = settings.projectedEffectMult;
-	data.deferredEffectMult = settings.deferredEffectMult;
-	data.otherEffectMult = settings.otherEffectMult;
+	data.lightGamma = effectiveSettings.lightGamma;
+	data.colorGamma = effectiveSettings.colorGamma;
+	data.emitColorGamma = effectiveSettings.emitColorGamma;
+	data.glowmapGamma = effectiveSettings.glowmapGamma;
+	data.ambientGamma = effectiveSettings.ambientGamma;
+	data.fogGamma = effectiveSettings.fogGamma;
+	data.fogAlphaGamma = effectiveSettings.fogAlphaGamma;
+	data.effectGamma = effectiveSettings.effectGamma;
+	data.effectAlphaGamma = effectiveSettings.effectAlphaGamma;
+	data.skyGamma = effectiveSettings.skyGamma;
+	data.waterGamma = effectiveSettings.waterGamma;
+	data.vlGamma = effectiveSettings.vlGamma;
+	data.vanillaDiffuseColorMult = effectiveSettings.vanillaDiffuseColorMult;
+	data.directionalLightMult = effectiveSettings.directionalLightMult;
+	data.pointLightMult = effectiveSettings.pointLightMult;
+	data.ambientMult = effectiveSettings.ambientMult;
+	data.emitColorMult = effectiveSettings.emitColorMult;
+	data.glowmapMult = effectiveSettings.glowmapMult;
+	data.effectLightingMult = effectiveSettings.effectLightingMult;
+	data.membraneEffectMult = effectiveSettings.membraneEffectMult;
+	data.bloodEffectMult = effectiveSettings.bloodEffectMult;
+	data.projectedEffectMult = effectiveSettings.projectedEffectMult;
+	data.deferredEffectMult = effectiveSettings.deferredEffectMult;
+	data.otherEffectMult = effectiveSettings.otherEffectMult;
+	data.enableAdaptiveBrightness = adaptiveBrightnessEnabled;
 	return data;
 }
 
@@ -191,20 +192,21 @@ RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
 
 void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
+	if (!PerGeometryCB)
+		return;
+
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
-	if (lightProperty != nullptr) {
-		float emissiveMult = 1.0f;
-		if (settings.enableLinearLighting) {
-			emissiveMult = lightProperty->emissiveMult;
-			PerGeometryData perGeometryData{};
-			perGeometryData.emissiveMult = emissiveMult;
-			PerGeometryCB->Update(perGeometryData);
+	const bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
+	const bool linearLightingEnabled = loaded && settings.enableLinearLighting && !isMainLoadingMenu;
+	if (lightProperty != nullptr && (linearLightingEnabled || globals::features::adaptiveBrightness.IsRuntimeEnabled())) {
+		PerGeometryData perGeometryData{};
+		perGeometryData.emissiveMult = lightProperty->emissiveMult;
+		PerGeometryCB->Update(perGeometryData);
 
-			ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-			auto context = globals::d3d::context;
-			context->PSSetConstantBuffers(8, 1, &buffer);
-		}
+		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
+		auto context = globals::d3d::context;
+		context->PSSetConstantBuffers(8, 1, &buffer);
 	}
 }

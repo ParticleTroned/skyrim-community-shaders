@@ -86,7 +86,8 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint pad0;
+		// Reuses the former tail padding slot in SharedData.hlsli::LinearLightingSettings.
+		uint enableAdaptiveBrightness;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 

@@ -1759,10 +1759,14 @@ namespace
 
 	std::atomic<uint64_t> g_vrMenuUiWriterDiagnosticArmId{ 0 };
 	std::atomic<uint32_t> g_vrMenuUiWriterDiagnosticArmedFrame{ 0 };
-	std::array<std::atomic<uint64_t>, 8> g_vrMenuUiWriterDiagnosticLoggedArmIds{};
-	std::array<std::atomic<uint32_t>, 8> g_vrMenuUiWriterDiagnosticLoggedFrames{};
+	constexpr size_t kVRMenuUiWriterDiagnosticTargetCount = 6;
+	constexpr size_t kVRMenuUiWriterDiagnosticWritePathCount = 2;
+	constexpr size_t kVRMenuUiWriterDiagnosticLogSlotCount =
+		kVRMenuUiWriterDiagnosticTargetCount * kVRMenuUiWriterDiagnosticWritePathCount;
+	std::array<std::atomic<uint64_t>, kVRMenuUiWriterDiagnosticLogSlotCount> g_vrMenuUiWriterDiagnosticLoggedArmIds{};
+	std::array<std::atomic<uint32_t>, kVRMenuUiWriterDiagnosticLogSlotCount> g_vrMenuUiWriterDiagnosticLoggedFrames{};
 
-	void ArmVRMenuUiWriterDiagnosticsAfterMenuDraw()
+	void ArmVRMenuUiWriterDiagnosticsForMenuDraw()
 	{
 		if (!ShouldRunVRPresentationDiagnostics() || !globals::game::isVR || !globals::state)
 			return;
@@ -1780,12 +1784,16 @@ namespace
 		switch (a_target) {
 		case RE::RENDER_TARGETS::kMENUBG:
 			return 0;
-		case RE::RENDER_TARGETS::kFADERUI:
+		case RE::RENDER_TARGETS::kPROJECTEDMENU:
 			return 1;
-		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
+		case RE::RENDER_TARGETS::kHUDMENU:
 			return 2;
-		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
+		case RE::RENDER_TARGETS::kFADERUI:
 			return 3;
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
+			return 4;
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
+			return 5;
 		default:
 			return std::numeric_limits<size_t>::max();
 		}
@@ -5449,7 +5457,7 @@ namespace
 		const auto targetIndex = GetVRMenuUiWriterDiagnosticTargetIndex(destination.target);
 		if (targetIndex == std::numeric_limits<size_t>::max())
 			return;
-		const auto logIndex = targetIndex * 2u + (writeViaRTV ? 0u : 1u);
+		const auto logIndex = targetIndex * kVRMenuUiWriterDiagnosticWritePathCount + (writeViaRTV ? 0u : 1u);
 		if (logIndex >= g_vrMenuUiWriterDiagnosticLoggedFrames.size())
 			return;
 
@@ -19960,6 +19968,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 			false);
 	}
 	if (logPresentationDiagnostics) {
+		ArmVRMenuUiWriterDiagnosticsForMenuDraw();
 		LogVRPresentationPassDiagnostics(
 			upscaling,
 			VRPresentationDiagnosticSlot::MenuDraw,
@@ -19969,7 +19978,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 	}
 
 	func(a1);
-	ArmVRMenuUiWriterDiagnosticsAfterMenuDraw();
+	ArmVRMenuUiWriterDiagnosticsForMenuDraw();
 
 	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();

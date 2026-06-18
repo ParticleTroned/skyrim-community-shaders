@@ -1,6 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/Wetterness.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
@@ -53,6 +54,7 @@ namespace globals
 
 	namespace features
 	{
+		AdaptiveBrightness adaptiveBrightness{};
 		CloudShadows cloudShadows{};
 		Wetterness wetterness{};
 		DynamicCubemaps dynamicCubemaps{};

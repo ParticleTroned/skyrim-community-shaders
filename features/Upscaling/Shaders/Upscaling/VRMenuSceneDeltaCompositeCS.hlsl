@@ -28,20 +28,22 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
 	const float menuDeltaThreshold = 1.0 / 1024.0;
 	const float menuCoverageGain = 16.0;
-	const float maxSceneSuppression = 0.35;
+	const float maxBackgroundSceneSuppression = 0.85;
+	const float highContrastDeltaThreshold = 0.08;
+	const float highContrastPreserveGain = 16.0;
 
 	float deltaMagnitude = max(max(abs(delta.r), abs(delta.g)), abs(delta.b));
 	if (deltaMagnitude <= menuDeltaThreshold)
 		return;
 
-	// Keep the menu contribution out of vendor temporal reconstruction by
-	// applying only the real baked-vs-clean delta. A full baked replacement
-	// reintroduces the raw render-scale scene/menu source and makes text flicker
-	// again. Derive coverage from RGB only, then damp the reconstructed scene
-	// under visible menu coverage so translucent menu backgrounds leak less
-	// world detail without alpha noise creating halos or rerouting the frame.
+	// Start from the proven text-friendly delta path, then suppress only part of
+	// the reconstructed scene residual under low/mid-strength menu background.
+	// High-contrast glyphs and borders should not be pushed back toward the raw
+	// baked source, because that path made text flicker again.
 	float menuCoverage = saturate((deltaMagnitude - menuDeltaThreshold) * menuCoverageGain);
-	float sceneKeep = 1.0 - (menuCoverage * maxSceneSuppression);
+	float highContrastPreserve = saturate((deltaMagnitude - highContrastDeltaThreshold) * highContrastPreserveGain);
+	float residualSuppression = menuCoverage * (1.0 - highContrastPreserve) * maxBackgroundSceneSuppression;
 	float4 current = Output[dispatchThreadID.xy];
-	Output[dispatchThreadID.xy] = float4((current.rgb * sceneKeep) + delta, current.a);
+	float3 reconstructedResidual = current.rgb - clean.rgb;
+	Output[dispatchThreadID.xy] = float4(current.rgb + delta - (reconstructedResidual * residualSuppression), current.a);
 }

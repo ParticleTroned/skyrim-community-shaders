@@ -4244,15 +4244,18 @@ namespace
 	{
 		auto state = globals::state;
 		auto ui = globals::game::ui;
-		if (!IsSkyrimMenuPresentationContextActive(ui))
+		const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
+		const bool skyrimMenuOpen = IsSkyrimMenuPresentationContextActive(ui);
+		if (!communityShadersMenuOpen && !skyrimMenuOpen)
 			return false;
 
-		// This path is only for projected in-game menu text that is otherwise
-		// reconstructed with the render-scale scene. Fullscreen map/skills
+		// This path is for menu text baked into the render-scale scene before
+		// submit-stage vendor reconstruction. Fullscreen map/skills
 		// presentation uses different fade/UI ownership and must stay on the
 		// baseline path to avoid reintroducing the 0,0 fade-square regressions.
-		if ((state && state->isMapMenuOpen) ||
-			(ui && ui->IsMenuOpen("StatsMenu"))) {
+		if (skyrimMenuOpen &&
+			((state && state->isMapMenuOpen) ||
+			 (ui && ui->IsMenuOpen("StatsMenu")))) {
 			return false;
 		}
 
@@ -5590,7 +5593,7 @@ namespace
 
 		static std::atomic_bool loggedSafeMenuBakeDiagnostics{ false };
 		if (!loggedSafeMenuBakeDiagnostics.exchange(true, std::memory_order_acq_rel)) {
-			logger::debug("[VRDiagBuild] Pre65 safe menu bake mapping diagnostics active");
+			logger::debug("[VRDiagBuild] safe menu bake mapping diagnostics active");
 		}
 
 		a_snapshot.frame = state->frameCount;
@@ -14481,7 +14484,6 @@ bool Upscaling::TryCaptureVRMenuSceneSeparationBefore(const char* a_passName, Dy
 		!IsPresentationUpscalingActive() ||
 		!IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) ||
 		!IsVRMenuSceneSeparationContextActive() ||
-		IsCommunityShadersMenuOpen() ||
 		IsMainOrLoadingMenuContextActive() ||
 		IsSaveLoadTransitionContextActive()) {
 		ResetVRMenuSceneSeparationState();
@@ -16267,9 +16269,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool presentationRenderTarget = IsVRPresentationRenderTargetTexture(sourceTexture);
 	const bool currentMenuPresentationContext = IsVRMenuPresentationContextActive();
+	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
 	const bool menuTextProtectionContext =
 		resolutionPlan.menuContextActive ||
-		currentMenuPresentationContext;
+		currentMenuPresentationContext ||
+		sceneFeatureMenuPauseContext;
 	const bool submitPresentationContext =
 		loadingSubmitProtectionContext ||
 		presentationRenderTarget;
@@ -16398,7 +16402,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		!submitBoundsPresentationFallback &&
 		sourceRegion.matchesExpectedSize &&
 		IsVRLoadingPresentationContextActive(state);
-	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
 	const auto setupVisualizationState = GetVRFoveatedSetupVisualizationState(*this, upscaleMethod);
 	const bool submitStageSetupMaskVisualization =
 		vrRenderScaleMode &&

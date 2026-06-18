@@ -307,7 +307,7 @@ namespace
 		SYSTEMTIME st;
 		GetLocalTime(&st);
 		char buf[80];
-		snprintf(buf, sizeof(buf), "CS_%04d-%02d-%02d_%02d-%02d-%02d_%03d.bmp",
+		snprintf(buf, sizeof(buf), "CS_%04d-%02d-%02d_%02d-%02d-%02d_%03d.png",
 			st.wYear, st.wMonth, st.wDay,
 			st.wHour, st.wMinute, st.wSecond,
 			st.wMilliseconds);
@@ -362,7 +362,7 @@ void ScreenshotFeature::DrawSettings()
 {
 	Util::Text::Disabled("Capture and save run asynchronously - no frame stall.");
 	Util::Text::Disabled(
-		"Saves SDR .bmp files. HDR scenes are tonemapped (Reinhard) so the saved\n"
+		"Saves SDR .png files. HDR scenes are tonemapped (Reinhard) so the saved\n"
 		"image matches what's on screen. For true HDR files with HDR10 metadata,\n"
 		"use Xbox Game Bar (Win+G) or your GPU vendor's overlay (saves .jxr).");
 
@@ -550,7 +550,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 		DirectX::ScratchImage convertedImage;
 		const DirectX::Image* saveImage = PrepareBmpImage(image, convertedImage);
 		if (!saveImage) {
-			logger::error("Failed to prepare screenshot image for BMP output.");
+			logger::error("Failed to prepare screenshot image for PNG output.");
 			continue;
 		}
 
@@ -559,7 +559,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 		HRESULT hr = DirectX::SaveToWICFile(
 			*saveImage,
 			DirectX::WIC_FLAGS_NONE,
-			DirectX::GetWICCodec(DirectX::WIC_CODEC_BMP),
+			DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG),
 			screenshot.outputPath.c_str());
 
 		if (FAILED(hr)) {

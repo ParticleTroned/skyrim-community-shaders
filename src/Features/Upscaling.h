@@ -495,6 +495,12 @@ public:
 		ID3D11Resource* a_source,
 		UINT a_sourceSubresource,
 		DXGI_FORMAT a_format);
+	static void TraceVRTrackedDrawOperation(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		UINT a_vertexCount,
+		UINT a_indexCount,
+		UINT a_instanceCount);
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;

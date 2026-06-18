@@ -289,6 +289,52 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_DrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
+		{
+			Upscaling::TraceVRTrackedDrawOperation(This, "DrawIndexed", 0, IndexCount, 0);
+			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_Draw
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
+		{
+			Upscaling::TraceVRTrackedDrawOperation(This, "Draw", VertexCount, 0, 0);
+			func(This, VertexCount, StartVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawIndexedInstanced
+	{
+		static void thunk(
+			ID3D11DeviceContext* This,
+			UINT IndexCountPerInstance,
+			UINT InstanceCount,
+			UINT StartIndexLocation,
+			INT BaseVertexLocation,
+			UINT StartInstanceLocation)
+		{
+			Upscaling::TraceVRTrackedDrawOperation(This, "DrawIndexedInstanced", 0, IndexCountPerInstance, InstanceCount);
+			func(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
+		{
+			Upscaling::TraceVRTrackedDrawOperation(This, "DrawInstanced", VertexCountPerInstance, 0, InstanceCount);
+			func(This, VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct ID3D11DeviceContext_CopySubresourceRegion
 	{
 		static void thunk(
@@ -450,12 +496,16 @@ namespace globals
 	/**
  * @brief Installs D3D11 device-context hooks used by diagnostic and rendering features.
  *
- * This enables interception of resource mapping, copies, resolves, updates, and clear operations.
+ * This enables interception of resource mapping, draw calls, copies, resolves, updates, and clear operations.
  */
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
+		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
+		stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(a_context);
 		stl::detour_vfunc<46, ID3D11DeviceContext_CopySubresourceRegion>(a_context);
 		stl::detour_vfunc<47, ID3D11DeviceContext_CopyResource>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);

@@ -1483,9 +1483,11 @@ namespace
 		ID3D11VertexShader* vertexShader = nullptr;
 		ID3D11GeometryShader* geometryShader = nullptr;
 		ID3D11PixelShader* pixelShader = nullptr;
+		ID3D11ComputeShader* computeShader = nullptr;
 		a_context->VSGetShader(&vertexShader, nullptr, nullptr);
 		a_context->GSGetShader(&geometryShader, nullptr, nullptr);
 		a_context->PSGetShader(&pixelShader, nullptr, nullptr);
+		a_context->CSGetShader(&computeShader, nullptr, nullptr);
 
 		const auto appendShader = [&](std::string& a_result, const char* a_label, ID3D11DeviceChild* a_shader) {
 			if (!a_result.empty())
@@ -1505,6 +1507,7 @@ namespace
 		appendShader(result, "vs", vertexShader);
 		appendShader(result, "gs", geometryShader);
 		appendShader(result, "ps", pixelShader);
+		appendShader(result, "cs", computeShader);
 
 		MixVRMenuOriginalCompositeTextSignature(a_signature, result);
 
@@ -1514,20 +1517,35 @@ namespace
 			geometryShader->Release();
 		if (pixelShader)
 			pixelShader->Release();
+		if (computeShader)
+			computeShader->Release();
 
 		return result;
 	}
 
-	std::string BuildVRMenuOriginalCompositeCBDiagnostics(ID3D11DeviceContext* a_context, bool a_vertexStage, uint64_t& a_signature)
+	enum class VRMenuConstantBufferStage : uint8_t
+	{
+		Vertex,
+		Pixel,
+		Compute
+	};
+
+	std::string BuildVRMenuOriginalCompositeCBDiagnostics(ID3D11DeviceContext* a_context, VRMenuConstantBufferStage a_stage, uint64_t& a_signature)
 	{
 		if (!a_context)
 			return "-";
 
 		std::array<ID3D11Buffer*, 4> buffers{};
-		if (a_vertexStage) {
+		switch (a_stage) {
+		case VRMenuConstantBufferStage::Vertex:
 			a_context->VSGetConstantBuffers(0, static_cast<UINT>(buffers.size()), buffers.data());
-		} else {
+			break;
+		case VRMenuConstantBufferStage::Pixel:
 			a_context->PSGetConstantBuffers(0, static_cast<UINT>(buffers.size()), buffers.data());
+			break;
+		case VRMenuConstantBufferStage::Compute:
+			a_context->CSGetConstantBuffers(0, static_cast<UINT>(buffers.size()), buffers.data());
+			break;
 		}
 
 		std::string result;
@@ -1567,6 +1585,14 @@ namespace
 		}
 
 		return result.empty() ? "-" : result;
+	}
+
+	std::string BuildVRMenuOriginalCompositeCBDiagnostics(ID3D11DeviceContext* a_context, bool a_vertexStage, uint64_t& a_signature)
+	{
+		return BuildVRMenuOriginalCompositeCBDiagnostics(
+			a_context,
+			a_vertexStage ? VRMenuConstantBufferStage::Vertex : VRMenuConstantBufferStage::Pixel,
+			a_signature);
 	}
 
 	std::string BuildVRMenuOriginalCompositePipelineStateDiagnostics(ID3D11DeviceContext* a_context, uint64_t& a_signature)
@@ -1671,6 +1697,40 @@ namespace
 	bool IsReducedVRMenuExtentClass(std::string_view a_extentClass)
 	{
 		return a_extentClass == "engine" || a_extentClass == "screen";
+	}
+
+	std::atomic<uint64_t> g_vrMenuUiWriterDiagnosticArmId{ 0 };
+	std::atomic<uint32_t> g_vrMenuUiWriterDiagnosticArmedFrame{ 0 };
+	std::array<std::atomic<uint64_t>, 8> g_vrMenuUiWriterDiagnosticLoggedArmIds{};
+	std::array<std::atomic<uint32_t>, 8> g_vrMenuUiWriterDiagnosticLoggedFrames{};
+
+	void ArmVRMenuUiWriterDiagnosticsAfterMenuDraw()
+	{
+		if (!ShouldRunVRPresentationDiagnostics() || !globals::game::isVR || !globals::state)
+			return;
+
+		const auto frame = globals::state->frameCount;
+		if (g_vrMenuUiWriterDiagnosticArmedFrame.load(std::memory_order_acquire) == frame)
+			return;
+
+		g_vrMenuUiWriterDiagnosticArmId.fetch_add(1, std::memory_order_acq_rel);
+		g_vrMenuUiWriterDiagnosticArmedFrame.store(frame, std::memory_order_release);
+	}
+
+	size_t GetVRMenuUiWriterDiagnosticTargetIndex(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		switch (a_target) {
+		case RE::RENDER_TARGETS::kMENUBG:
+			return 0;
+		case RE::RENDER_TARGETS::kFADERUI:
+			return 1;
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
+			return 2;
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
+			return 3;
+		default:
+			return std::numeric_limits<size_t>::max();
+		}
 	}
 
 	void LogVRMenuOriginalCompositeCandidateDiagnostics(
@@ -4326,6 +4386,8 @@ namespace
 	{
 		if (!a_setupState.Active())
 			return;
+		if (!ShouldRunVRTransitionDiagnostics())
+			return;
 
 		const bool skipped = !a_appliedFovMask && !a_appliedVrsMask;
 		const bool fullyApplied =
@@ -4346,7 +4408,7 @@ namespace
 			const char* action = skipped ? "skip-setup-mask-visualization" : "apply-setup-mask-visualization";
 			const char* result = skipped ? "skipped" : (fullyApplied ? "applied" : "partial");
 			if (a_reason && *a_reason) {
-				logger::info(
+				logger::debug(
 					"[VRFOVSetup] action={} hook={} frame={} eye={} method={} requestedFov={} requestedVrs={} appliedFov={} appliedVrs={} input={}x{} output={}x{} path={} reason={} result={}",
 					action,
 					a_hook ? a_hook : "unknown",
@@ -4365,7 +4427,7 @@ namespace
 					a_reason,
 					result);
 			} else {
-				logger::info(
+				logger::debug(
 					"[VRFOVSetup] action={} hook={} frame={} eye={} method={} requestedFov={} requestedVrs={} appliedFov={} appliedVrs={} input={}x{} output={}x{} path={} result={}",
 					action,
 					a_hook ? a_hook : "unknown",
@@ -4995,6 +5057,535 @@ namespace
 	bool HasMeaningfulDiagnosticView(const D3DViewDiagnosticInfo& a_info)
 	{
 		return a_info.valid || a_info.view != 0 || a_info.resource != 0;
+	}
+
+	enum class VRMenuFormatAlphaSupport : uint8_t
+	{
+		No,
+		Yes,
+		Unknown
+	};
+
+	VRMenuFormatAlphaSupport GetVRMenuFormatAlphaSupport(DXGI_FORMAT a_format)
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+		case DXGI_FORMAT_R32G32B32A32_UINT:
+		case DXGI_FORMAT_R32G32B32A32_SINT:
+		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+		case DXGI_FORMAT_R16G16B16A16_UINT:
+		case DXGI_FORMAT_R16G16B16A16_SNORM:
+		case DXGI_FORMAT_R16G16B16A16_SINT:
+		case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+		case DXGI_FORMAT_R10G10B10A2_UINT:
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_R8G8B8A8_UINT:
+		case DXGI_FORMAT_R8G8B8A8_SNORM:
+		case DXGI_FORMAT_R8G8B8A8_SINT:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B5G5R5A1_UNORM:
+		case DXGI_FORMAT_B4G4R4A4_UNORM:
+		case DXGI_FORMAT_A8_UNORM:
+		case DXGI_FORMAT_BC2_TYPELESS:
+		case DXGI_FORMAT_BC2_UNORM:
+		case DXGI_FORMAT_BC2_UNORM_SRGB:
+		case DXGI_FORMAT_BC3_TYPELESS:
+		case DXGI_FORMAT_BC3_UNORM:
+		case DXGI_FORMAT_BC3_UNORM_SRGB:
+		case DXGI_FORMAT_BC7_TYPELESS:
+		case DXGI_FORMAT_BC7_UNORM:
+		case DXGI_FORMAT_BC7_UNORM_SRGB:
+			return VRMenuFormatAlphaSupport::Yes;
+		case DXGI_FORMAT_R32G32B32_TYPELESS:
+		case DXGI_FORMAT_R32G32B32_FLOAT:
+		case DXGI_FORMAT_R32G32B32_UINT:
+		case DXGI_FORMAT_R32G32B32_SINT:
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+		case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:
+		case DXGI_FORMAT_R32G32_TYPELESS:
+		case DXGI_FORMAT_R32G32_FLOAT:
+		case DXGI_FORMAT_R32G32_UINT:
+		case DXGI_FORMAT_R32G32_SINT:
+		case DXGI_FORMAT_R16G16_TYPELESS:
+		case DXGI_FORMAT_R16G16_FLOAT:
+		case DXGI_FORMAT_R16G16_UNORM:
+		case DXGI_FORMAT_R16G16_UINT:
+		case DXGI_FORMAT_R16G16_SNORM:
+		case DXGI_FORMAT_R16G16_SINT:
+		case DXGI_FORMAT_R32_TYPELESS:
+		case DXGI_FORMAT_R32_FLOAT:
+		case DXGI_FORMAT_R32_UINT:
+		case DXGI_FORMAT_R32_SINT:
+		case DXGI_FORMAT_R8G8_TYPELESS:
+		case DXGI_FORMAT_R8G8_UNORM:
+		case DXGI_FORMAT_R8G8_UINT:
+		case DXGI_FORMAT_R8G8_SNORM:
+		case DXGI_FORMAT_R8G8_SINT:
+		case DXGI_FORMAT_R16_TYPELESS:
+		case DXGI_FORMAT_R16_FLOAT:
+		case DXGI_FORMAT_R16_UNORM:
+		case DXGI_FORMAT_R16_UINT:
+		case DXGI_FORMAT_R16_SNORM:
+		case DXGI_FORMAT_R16_SINT:
+		case DXGI_FORMAT_R8_TYPELESS:
+		case DXGI_FORMAT_R8_UNORM:
+		case DXGI_FORMAT_R8_UINT:
+		case DXGI_FORMAT_R8_SNORM:
+		case DXGI_FORMAT_R8_SINT:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+		case DXGI_FORMAT_B5G6R5_UNORM:
+		case DXGI_FORMAT_BC4_TYPELESS:
+		case DXGI_FORMAT_BC4_UNORM:
+		case DXGI_FORMAT_BC4_SNORM:
+		case DXGI_FORMAT_BC5_TYPELESS:
+		case DXGI_FORMAT_BC5_UNORM:
+		case DXGI_FORMAT_BC5_SNORM:
+		case DXGI_FORMAT_BC6H_TYPELESS:
+		case DXGI_FORMAT_BC6H_UF16:
+		case DXGI_FORMAT_BC6H_SF16:
+			return VRMenuFormatAlphaSupport::No;
+		default:
+			return VRMenuFormatAlphaSupport::Unknown;
+		}
+	}
+
+	const char* GetVRMenuFormatAlphaSupportText(VRMenuFormatAlphaSupport a_support)
+	{
+		switch (a_support) {
+		case VRMenuFormatAlphaSupport::No:
+			return "no";
+		case VRMenuFormatAlphaSupport::Yes:
+			return "yes";
+		default:
+			return "unknown";
+		}
+	}
+
+	bool IsD3DBlendUsingSourceAlpha(D3D11_BLEND a_blend)
+	{
+		switch (a_blend) {
+		case D3D11_BLEND_SRC_ALPHA:
+		case D3D11_BLEND_INV_SRC_ALPHA:
+		case D3D11_BLEND_SRC1_ALPHA:
+		case D3D11_BLEND_INV_SRC1_ALPHA:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	const char* GetD3DBlendName(D3D11_BLEND a_blend)
+	{
+		switch (a_blend) {
+		case D3D11_BLEND_ZERO:
+			return "ZERO";
+		case D3D11_BLEND_ONE:
+			return "ONE";
+		case D3D11_BLEND_SRC_COLOR:
+			return "SRC_COLOR";
+		case D3D11_BLEND_INV_SRC_COLOR:
+			return "INV_SRC_COLOR";
+		case D3D11_BLEND_SRC_ALPHA:
+			return "SRC_ALPHA";
+		case D3D11_BLEND_INV_SRC_ALPHA:
+			return "INV_SRC_ALPHA";
+		case D3D11_BLEND_DEST_ALPHA:
+			return "DEST_ALPHA";
+		case D3D11_BLEND_INV_DEST_ALPHA:
+			return "INV_DEST_ALPHA";
+		case D3D11_BLEND_DEST_COLOR:
+			return "DEST_COLOR";
+		case D3D11_BLEND_INV_DEST_COLOR:
+			return "INV_DEST_COLOR";
+		case D3D11_BLEND_SRC_ALPHA_SAT:
+			return "SRC_ALPHA_SAT";
+		case D3D11_BLEND_BLEND_FACTOR:
+			return "BLEND_FACTOR";
+		case D3D11_BLEND_INV_BLEND_FACTOR:
+			return "INV_BLEND_FACTOR";
+		case D3D11_BLEND_SRC1_COLOR:
+			return "SRC1_COLOR";
+		case D3D11_BLEND_INV_SRC1_COLOR:
+			return "INV_SRC1_COLOR";
+		case D3D11_BLEND_SRC1_ALPHA:
+			return "SRC1_ALPHA";
+		case D3D11_BLEND_INV_SRC1_ALPHA:
+			return "INV_SRC1_ALPHA";
+		default:
+			return "UNKNOWN";
+		}
+	}
+
+	const char* GetD3DBlendOpName(D3D11_BLEND_OP a_op)
+	{
+		switch (a_op) {
+		case D3D11_BLEND_OP_ADD:
+			return "ADD";
+		case D3D11_BLEND_OP_SUBTRACT:
+			return "SUBTRACT";
+		case D3D11_BLEND_OP_REV_SUBTRACT:
+			return "REV_SUBTRACT";
+		case D3D11_BLEND_OP_MIN:
+			return "MIN";
+		case D3D11_BLEND_OP_MAX:
+			return "MAX";
+		default:
+			return "UNKNOWN";
+		}
+	}
+
+	std::string BuildVRMenuUiWriterBlendDiagnostics(
+		ID3D11DeviceContext* a_context,
+		bool& a_sourceAlphaReferenced,
+		uint64_t& a_signature)
+	{
+		a_sourceAlphaReferenced = false;
+		if (!a_context)
+			return "-";
+
+		ID3D11BlendState* blendState = nullptr;
+		FLOAT blendFactor[4]{};
+		UINT sampleMask = 0xffffffffu;
+		a_context->OMGetBlendState(&blendState, blendFactor, &sampleMask);
+		auto blendRelease = ScopeExit([&]() {
+			if (blendState)
+				blendState->Release();
+		});
+
+		std::string result;
+		result += "state=";
+		result += FormatVRMenuDiagnosticPointer(blendState);
+		result += " factor=(";
+		result += std::to_string(blendFactor[0]);
+		result += ",";
+		result += std::to_string(blendFactor[1]);
+		result += ",";
+		result += std::to_string(blendFactor[2]);
+		result += ",";
+		result += std::to_string(blendFactor[3]);
+		result += ") sampleMask=";
+		result += FormatVRMenuDiagnosticHex(sampleMask);
+
+		if (blendState) {
+			D3D11_BLEND_DESC desc{};
+			blendState->GetDesc(&desc);
+			const auto& rt0 = desc.RenderTarget[0];
+			a_sourceAlphaReferenced =
+				rt0.BlendEnable &&
+				(IsD3DBlendUsingSourceAlpha(rt0.SrcBlend) ||
+				 IsD3DBlendUsingSourceAlpha(rt0.DestBlend) ||
+				 IsD3DBlendUsingSourceAlpha(rt0.SrcBlendAlpha) ||
+				 IsD3DBlendUsingSourceAlpha(rt0.DestBlendAlpha));
+
+			result += " atc=";
+			result += BoolText(desc.AlphaToCoverageEnable);
+			result += " independent=";
+			result += BoolText(desc.IndependentBlendEnable);
+			result += " rt0={enable=";
+			result += BoolText(rt0.BlendEnable);
+			result += " src=";
+			result += GetD3DBlendName(rt0.SrcBlend);
+			result += " dst=";
+			result += GetD3DBlendName(rt0.DestBlend);
+			result += " op=";
+			result += GetD3DBlendOpName(rt0.BlendOp);
+			result += " srcA=";
+			result += GetD3DBlendName(rt0.SrcBlendAlpha);
+			result += " dstA=";
+			result += GetD3DBlendName(rt0.DestBlendAlpha);
+			result += " opA=";
+			result += GetD3DBlendOpName(rt0.BlendOpAlpha);
+			result += " mask=";
+			result += FormatVRMenuDiagnosticHex(rt0.RenderTargetWriteMask);
+			result += "}";
+		} else {
+			result += " defaultBlend=disabled";
+		}
+
+		MixVRMenuOriginalCompositeTextSignature(a_signature, result);
+		return result;
+	}
+
+	void LogVRMenuUiWriterDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_passName,
+		const char* a_phase,
+		const VRPresentationDiagnosticSnapshot& a_snapshot)
+	{
+		if (!ShouldRunVRPresentationDiagnostics() || !a_context)
+			return;
+
+		if (!a_snapshot.knownMenu &&
+			!a_snapshot.communityShadersMenu &&
+			!a_snapshot.vrMenuPresentation &&
+			!a_snapshot.mainOrLoadingMenu &&
+			!a_snapshot.loadingMenu &&
+			!a_snapshot.saveLoad &&
+			!a_snapshot.menuTextRasterDiagnosticContext) {
+			return;
+		}
+
+		VRMenuCompositionTargetMatch destination{};
+		bool writeViaRTV = false;
+		int writeSlot = -1;
+
+		ID3D11RenderTargetView* rtv = nullptr;
+		a_context->OMGetRenderTargets(1, &rtv, nullptr);
+		auto rtvRelease = ScopeExit([&]() {
+			if (rtv)
+				rtv->Release();
+		});
+		if (rtv) {
+			VRMenuCompositionTargetMatch rtvDestination{};
+			if (TryResolveVRMenuCompositionView(rtv, rtvDestination)) {
+				const auto rtvTargetIndex = GetVRMenuUiWriterDiagnosticTargetIndex(rtvDestination.target);
+				if (rtvTargetIndex < g_vrMenuUiWriterDiagnosticLoggedFrames.size()) {
+					destination = rtvDestination;
+					writeViaRTV = true;
+					writeSlot = 0;
+				}
+			}
+		}
+
+		std::array<ID3D11UnorderedAccessView*, 8> csUAVs{};
+		a_context->CSGetUnorderedAccessViews(0, static_cast<UINT>(csUAVs.size()), csUAVs.data());
+		auto uavRelease = ScopeExit([&]() {
+			for (auto* uav : csUAVs) {
+				if (uav)
+					uav->Release();
+			}
+		});
+		if (writeSlot < 0) {
+			for (size_t slot = 0; slot < csUAVs.size(); ++slot) {
+				auto* uav = csUAVs[slot];
+				if (!uav)
+					continue;
+
+				VRMenuCompositionTargetMatch uavDestination{};
+				if (!TryResolveVRMenuCompositionView(uav, uavDestination))
+					continue;
+
+				const auto uavTargetIndex = GetVRMenuUiWriterDiagnosticTargetIndex(uavDestination.target);
+				if (uavTargetIndex >= g_vrMenuUiWriterDiagnosticLoggedFrames.size())
+					continue;
+
+				destination = uavDestination;
+				writeViaRTV = false;
+				writeSlot = static_cast<int>(slot);
+				break;
+			}
+		}
+		if (writeSlot < 0)
+			return;
+
+		const auto targetIndex = GetVRMenuUiWriterDiagnosticTargetIndex(destination.target);
+		if (targetIndex == std::numeric_limits<size_t>::max())
+			return;
+		const auto logIndex = targetIndex * 2u + (writeViaRTV ? 0u : 1u);
+		if (logIndex >= g_vrMenuUiWriterDiagnosticLoggedFrames.size())
+			return;
+
+		const auto armId = g_vrMenuUiWriterDiagnosticArmId.load(std::memory_order_acquire);
+		const auto armedFrame = g_vrMenuUiWriterDiagnosticArmedFrame.load(std::memory_order_acquire);
+		const bool armFrameActive = armId != 0 && armedFrame != 0 && a_snapshot.frame <= armedFrame + 4u;
+		bool armMatched = false;
+		if (armFrameActive) {
+			auto expectedLoggedArmId = g_vrMenuUiWriterDiagnosticLoggedArmIds[logIndex].load(std::memory_order_acquire);
+			if (expectedLoggedArmId != armId &&
+				g_vrMenuUiWriterDiagnosticLoggedArmIds[logIndex].compare_exchange_strong(
+					expectedLoggedArmId,
+					armId,
+					std::memory_order_acq_rel)) {
+				armMatched = true;
+				g_vrMenuUiWriterDiagnosticLoggedFrames[logIndex].store(a_snapshot.frame, std::memory_order_release);
+			}
+		}
+		if (!armMatched) {
+			auto expectedLoggedFrame = g_vrMenuUiWriterDiagnosticLoggedFrames[logIndex].load(std::memory_order_acquire);
+			if (expectedLoggedFrame == a_snapshot.frame ||
+				!g_vrMenuUiWriterDiagnosticLoggedFrames[logIndex].compare_exchange_strong(
+					expectedLoggedFrame,
+					a_snapshot.frame,
+					std::memory_order_acq_rel)) {
+				return;
+			}
+		}
+
+		std::array<ID3D11ShaderResourceView*, 8> psSRVs{};
+		std::array<ID3D11ShaderResourceView*, 8> csSRVs{};
+		a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+		a_context->CSGetShaderResources(0, static_cast<UINT>(csSRVs.size()), csSRVs.data());
+		auto srvRelease = ScopeExit([&]() {
+			for (auto* srv : psSRVs) {
+				if (srv)
+					srv->Release();
+			}
+			for (auto* srv : csSRVs) {
+				if (srv)
+					srv->Release();
+			}
+		});
+
+		uint64_t signature = 1469598103934665603ull;
+		const auto mixSignature = [&](uint64_t a_value) {
+			signature ^= a_value;
+			signature *= 1099511628211ull;
+		};
+		const auto classifyExtent = [&](uint32_t a_width, uint32_t a_height) {
+			return ClassifyVRMenuExtent(
+				a_width,
+				a_height,
+				a_snapshot.screenWidth,
+				a_snapshot.screenHeight,
+				a_snapshot.engineWidth,
+				a_snapshot.engineHeight,
+				a_snapshot.finalWidth,
+				a_snapshot.finalHeight);
+		};
+		const auto classifyEyeLayout = [](uint32_t a_width, uint32_t a_height) {
+			if (a_width > 0 && a_height > 0 && a_width >= ((a_height * 3u) / 2u))
+				return "combined-horizontal";
+			return "single";
+		};
+
+		bool sourceAlphaAny = false;
+		bool sourceAlphaUnknown = false;
+		const auto buildSources = [&](const auto& a_srvs, bool a_pixelShaderStage, const char* a_stageLabel) {
+			std::string result;
+			for (size_t slot = 0; slot < a_srvs.size(); ++slot) {
+				auto* srv = a_srvs[slot];
+				if (!srv)
+					continue;
+
+				const auto info = BuildSRVDiagnosticInfo(srv, a_pixelShaderStage);
+				VRMenuCompositionTargetMatch source{};
+				const bool knownSource = TryResolveVRMenuCompositionView(srv, source);
+				const auto viewAlpha = GetVRMenuFormatAlphaSupport(static_cast<DXGI_FORMAT>(info.viewFormat));
+				const auto textureAlpha = GetVRMenuFormatAlphaSupport(static_cast<DXGI_FORMAT>(info.format));
+				sourceAlphaAny =
+					sourceAlphaAny ||
+					viewAlpha == VRMenuFormatAlphaSupport::Yes ||
+					textureAlpha == VRMenuFormatAlphaSupport::Yes;
+				sourceAlphaUnknown =
+					sourceAlphaUnknown ||
+					viewAlpha == VRMenuFormatAlphaSupport::Unknown ||
+					textureAlpha == VRMenuFormatAlphaSupport::Unknown;
+
+				if (!result.empty())
+					result += ", ";
+				result += a_stageLabel;
+				result += std::to_string(slot);
+				result += "=";
+				result += knownSource ? source.name : (info.engineName.empty() ? "UNKNOWN" : info.engineName);
+				result += "(";
+				result += std::to_string(info.width);
+				result += "x";
+				result += std::to_string(info.height);
+				result += " class=";
+				result += classifyExtent(info.width, info.height);
+				result += " layout=";
+				result += classifyEyeLayout(info.width, info.height);
+				result += " fmt=";
+				result += std::to_string(info.format);
+				result += " viewFmt=";
+				result += std::to_string(info.viewFormat);
+				result += " alpha=view:";
+				result += GetVRMenuFormatAlphaSupportText(viewAlpha);
+				result += "/tex:";
+				result += GetVRMenuFormatAlphaSupportText(textureAlpha);
+				result += " bind=";
+				result += FormatVRMenuDiagnosticHex(info.bindFlags);
+				result += " presentation=";
+				result += BoolText(info.presentationTarget);
+				result += ")";
+
+				mixSignature(HashDiagnosticText(a_stageLabel));
+				mixSignature(static_cast<uint64_t>(slot + 1u));
+				mixSignature(info.width);
+				mixSignature(info.height);
+				mixSignature(info.format);
+				mixSignature(info.viewFormat);
+				mixSignature(info.bindFlags);
+				mixSignature(knownSource ? static_cast<uint64_t>(source.target) : 0ull);
+			}
+
+			return result.empty() ? "none" : result;
+		};
+		const auto psSources = buildSources(psSRVs, true, "ps");
+		const auto csSources = buildSources(csSRVs, false, "cs");
+		const auto destinationAlpha = GetVRMenuFormatAlphaSupport(destination.format);
+
+		mixSignature(static_cast<uint64_t>(destination.target));
+		mixSignature(destination.width);
+		mixSignature(destination.height);
+		mixSignature(static_cast<uint64_t>(destination.format));
+		mixSignature(armId);
+		mixSignature(static_cast<uint64_t>(targetIndex));
+		mixSignature(static_cast<uint64_t>(logIndex));
+		mixSignature(HashDiagnosticText(writeViaRTV ? "om-rtv" : "cs-uav"));
+		mixSignature(static_cast<uint64_t>(writeSlot + 1));
+
+		bool blendReferencesSourceAlpha = false;
+		const auto blendState =
+			writeViaRTV ?
+				BuildVRMenuUiWriterBlendDiagnostics(a_context, blendReferencesSourceAlpha, signature) :
+				std::string("n/a(cs-uav)");
+		const auto viewports = BuildVRMenuOriginalCompositeViewportDiagnostics(a_context, signature);
+		const auto scissors = BuildVRMenuOriginalCompositeScissorDiagnostics(a_context, signature);
+		const auto shaders = BuildVRMenuOriginalCompositeShaderDiagnostics(a_context, signature);
+		const auto vsCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, VRMenuConstantBufferStage::Vertex, signature);
+		const auto psCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, VRMenuConstantBufferStage::Pixel, signature);
+		const auto csCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, VRMenuConstantBufferStage::Compute, signature);
+
+		logger::debug(
+			"[VRMenuUiWriter] frame={} armedFrame={} arm={} armMatched={} armWindowActive={} pass={} phase={} signature={} writePath={} writeSlot={} dst={}({}x{} fmt={} class={} alpha=tex:{}) psSources={} csSources={} sourceAlphaAny={} sourceAlphaUnknown={} blendUsesSourceAlpha={} blend={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} csCBs={} knownMenu={} csMenu={} vrMenuPresentation={} mainOrLoading={} loading={} saveLoad={} renderScaleActive={} presentationUpscaling={} textRasterCtx={}",
+			a_snapshot.frame,
+			armedFrame,
+			armId,
+			BoolText(armMatched),
+			BoolText(armFrameActive),
+			DiagnosticText(a_passName, "unknown"),
+			DiagnosticText(a_phase, "unknown"),
+			FormatVRMenuDiagnosticHex(signature),
+			writeViaRTV ? "om-rtv" : "cs-uav",
+			writeSlot,
+			destination.name,
+			destination.width,
+			destination.height,
+			static_cast<uint32_t>(destination.format),
+			classifyExtent(destination.width, destination.height),
+			GetVRMenuFormatAlphaSupportText(destinationAlpha),
+			psSources,
+			csSources,
+			BoolText(sourceAlphaAny),
+			BoolText(sourceAlphaUnknown),
+			BoolText(blendReferencesSourceAlpha),
+			blendState,
+			viewports,
+			scissors,
+			shaders,
+			vsCBs,
+			psCBs,
+			csCBs,
+			BoolText(a_snapshot.knownMenu),
+			BoolText(a_snapshot.communityShadersMenu),
+			BoolText(a_snapshot.vrMenuPresentation),
+			BoolText(a_snapshot.mainOrLoadingMenu),
+			BoolText(a_snapshot.loadingMenu),
+			BoolText(a_snapshot.saveLoad),
+			BoolText(a_snapshot.renderScaleActive),
+			BoolText(a_snapshot.presentationUpscalingActive),
+			BoolText(a_snapshot.menuTextRasterDiagnosticContext));
 	}
 
 	bool AnyDiagnosticViewBelow(
@@ -5686,6 +6277,7 @@ namespace
 			a_snapshot.scissors[i] = scissors[i];
 
 		CaptureVRMenuPlaneDiagnostics(context, a_passName, a_snapshot);
+		LogVRMenuUiWriterDiagnostics(context, a_passName, a_phase, a_snapshot);
 		LogVRMenuOriginalCompositeCandidateDiagnostics(
 			context,
 			a_passName,
@@ -8686,8 +9278,8 @@ void Upscaling::ApplyDeferredCompositeVRSRuntimeSettings(const char* a_reason)
 	deferredCompositePSRuntimeEnabled = nextDeferredCompositePS;
 	aaVrsDeferredCompositeRuntimeEnabled = nextDeferredCompositeVRS;
 
-	if (changed) {
-		logger::info(
+	if (changed && ShouldRunVRTransitionDiagnostics()) {
+		logger::debug(
 			"[Upscaling] Applied deferred composite VRS runtime settings{}{}: pixelShader={}, colorVRS={}",
 			reasonPrefix,
 			reasonText,
@@ -11322,8 +11914,9 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 			aaVrsTelemetryPerformanceMode != status.performanceMode ||
 			aaVrsTelemetryPerformanceAnisotropy != status.performanceAnisotropy ||
 			aaVrsTelemetryContentAware != aaVrsRuntimeContentAware;
-		if (!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged || modeChanged) {
-			logger::info(
+		if ((!aaVrsTelemetryLoggedActive || !aaVrsRuntimeActive || dimensionsChanged || modeChanged) &&
+			ShouldRunVRTransitionDiagnostics()) {
+			logger::debug(
 				"[Upscaling] Foveated Variable Rate Shading (VRS) active: render {}x{}, mask {}x{}, mode={}, orientation={}, contentAware={}, maxRate={}x{}",
 				status.renderWidth,
 				status.renderHeight,
@@ -11362,7 +11955,8 @@ void Upscaling::ReportAAVRSTelemetry(bool a_requested, bool a_preserveRuntimeAct
 		aaVrsController.GetLastDisableReason();
 	std::string reasonText = reason && reason[0] ? reason : "Inactive";
 	if (aaVrsTelemetryInactiveReason != reasonText) {
-		logger::info("[Upscaling] Foveated Variable Rate Shading (VRS) requested but inactive: {}", reasonText);
+		if (ShouldRunVRTransitionDiagnostics())
+			logger::debug("[Upscaling] Foveated Variable Rate Shading (VRS) requested but inactive: {}", reasonText);
 		aaVrsTelemetryInactiveReason = reasonText;
 	}
 }
@@ -18779,6 +19373,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 	}
 
 	func(a1);
+	ArmVRMenuUiWriterDiagnosticsAfterMenuDraw();
 
 	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();

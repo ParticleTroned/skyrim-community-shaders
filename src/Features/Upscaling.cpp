@@ -1841,9 +1841,9 @@ namespace
 	constexpr uint32_t kVRMenuBakeDrawDiagnosticMaxLogsPerFrame = 12u;
 	std::atomic<uint32_t> g_vrMenuBakeDrawDiagnosticFrame{ 0 };
 	std::atomic<uint32_t> g_vrMenuBakeDrawDiagnosticCount{ 0 };
-	constexpr uint32_t kVRMenuBridgeSuppressDiagnosticMaxLogsPerFrame = 12u;
-	std::atomic<uint32_t> g_vrMenuBridgeSuppressDiagnosticFrame{ 0 };
-	std::atomic<uint32_t> g_vrMenuBridgeSuppressDiagnosticCount{ 0 };
+	constexpr uint32_t kVRMenuBridgeReplayDiagnosticMaxLogsPerFrame = 12u;
+	std::atomic<uint32_t> g_vrMenuBridgeReplayDiagnosticFrame{ 0 };
+	std::atomic<uint32_t> g_vrMenuBridgeReplayDiagnosticCount{ 0 };
 	constexpr uint32_t kVRTrackedDrawDiagnosticMaxLogsPerFrame = 24u;
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticFrame{ 0 };
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticCount{ 0 };
@@ -6118,19 +6118,19 @@ namespace
 		return g_vrMenuBakeDrawDiagnosticCount.fetch_add(1, std::memory_order_acq_rel) < kVRMenuBakeDrawDiagnosticMaxLogsPerFrame;
 	}
 
-	bool ClaimVRMenuBridgeSuppressDiagnosticSlot(uint32_t a_frame)
+	bool ClaimVRMenuBridgeReplayDiagnosticSlot(uint32_t a_frame)
 	{
-		auto frame = g_vrMenuBridgeSuppressDiagnosticFrame.load(std::memory_order_acquire);
+		auto frame = g_vrMenuBridgeReplayDiagnosticFrame.load(std::memory_order_acquire);
 		if (frame != a_frame) {
-			if (g_vrMenuBridgeSuppressDiagnosticFrame.compare_exchange_strong(
+			if (g_vrMenuBridgeReplayDiagnosticFrame.compare_exchange_strong(
 					frame,
 					a_frame,
 					std::memory_order_acq_rel)) {
-				g_vrMenuBridgeSuppressDiagnosticCount.store(0, std::memory_order_release);
+				g_vrMenuBridgeReplayDiagnosticCount.store(0, std::memory_order_release);
 			}
 		}
 
-		return g_vrMenuBridgeSuppressDiagnosticCount.fetch_add(1, std::memory_order_acq_rel) < kVRMenuBridgeSuppressDiagnosticMaxLogsPerFrame;
+		return g_vrMenuBridgeReplayDiagnosticCount.fetch_add(1, std::memory_order_acq_rel) < kVRMenuBridgeReplayDiagnosticMaxLogsPerFrame;
 	}
 
 	std::string BuildVRTrackedDrawEyeMapping(
@@ -8204,16 +8204,6 @@ static void AttachD3DGetResult(winrt::com_ptr<T>& a_out, T* a_value)
 		a_out.attach(a_value);
 }
 
-template <class T>
-static void CopyD3DReference(winrt::com_ptr<T>& a_out, T* a_value)
-{
-	a_out = nullptr;
-	if (a_value) {
-		a_value->AddRef();
-		a_out.attach(a_value);
-	}
-}
-
 void Upscaling::ResetVRMenuBakeCapturedDrawState(VRMenuBakeCapturedDrawState& a_draw)
 {
 	a_draw = VRMenuBakeCapturedDrawState{};
@@ -8225,10 +8215,6 @@ void Upscaling::BeginVRMenuBakePrototypeFrame(uint32_t a_frame)
 		return;
 
 	vrMenuBakePrototypeFrame = a_frame;
-	vrMenuBakeCleanTotalValid = false;
-	vrMenuBakeCleanTotalRestored = false;
-	vrMenuBakeCleanTotalSource = nullptr;
-	vrMenuBakeCleanTotalDesc = {};
 	vrMenuBakeReplayDrawCount = 0;
 	for (auto& draw : vrMenuBakeReplayDraws)
 		ResetVRMenuBakeCapturedDrawState(draw);
@@ -8366,7 +8352,7 @@ bool Upscaling::CaptureVRMenuBakeDrawState(
 	return a_draw.valid;
 }
 
-bool Upscaling::TrySuppressVRMenuBridgeDrawPrototype(
+bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDrawPrototype(
 	ID3D11DeviceContext* a_context,
 	const char* a_operation,
 	UINT a_vertexCount,
@@ -8387,15 +8373,6 @@ bool Upscaling::TrySuppressVRMenuBridgeDrawPrototype(
 	if (!IsVRRenderScaleModeActive() || !IsPresentationUpscalingActive())
 		return false;
 	if (IsCommunityShadersMenuOpen())
-		return false;
-
-	const bool menuContext =
-		IsKnownGameMenuContextActive() ||
-		IsGameMenuContextActive() ||
-		IsLoadingMenuContextActive() ||
-		IsSaveLoadTransitionContextActive(state) ||
-		IsVRMenuPresentationContextActive();
-	if (!menuContext)
 		return false;
 
 	if (std::string_view(DiagnosticText(a_operation, "Draw")) != "DrawIndexedInstanced" ||
@@ -8421,6 +8398,13 @@ bool Upscaling::TrySuppressVRMenuBridgeDrawPrototype(
 	const uint32_t renderHeight = ClampDiagnosticDimension(plan.engineRenderSize.y);
 	const uint32_t finalWidth = ClampDiagnosticDimension(plan.finalOutputSize.x);
 	const uint32_t finalHeight = ClampDiagnosticDimension(plan.finalOutputSize.y);
+	const bool menuTextProtectionContext =
+		plan.menuContextActive ||
+		IsVRMenuPresentationContextActive() ||
+		IsVRSceneFeatureMenuPauseContextActive();
+	if (!menuTextProtectionContext)
+		return false;
+
 	if (!renderWidth || !renderHeight || !finalWidth || !finalHeight ||
 		finalWidth <= renderWidth || finalHeight <= renderHeight) {
 		return false;
@@ -8476,10 +8460,39 @@ bool Upscaling::TrySuppressVRMenuBridgeDrawPrototype(
 	if (menuSourceSlot == psSRVs.size())
 		return false;
 
-	if (ClaimVRMenuBridgeSuppressDiagnosticSlot(state->frameCount)) {
-		VR_TRANSITION_DIAG_LOG(
-			"[VRMenuBridgeSuppress] frame={} source={} slot={} dst=kMENUBG({}x{}) draw=indices:{} instances:{} final={}x{} reason=layer-attribution",
+	if (vrMenuBakeReplayDrawCount >= vrMenuBakeReplayDraws.size()) {
+		static bool loggedReplayDrawOverflow = false;
+		LogWarnOnce(loggedReplayDrawOverflow, "[VRMenuBridgeReplay] Skipping suppression because the bridge replay draw buffer is full");
+		return false;
+	}
+
+	auto& draw = vrMenuBakeReplayDraws[vrMenuBakeReplayDrawCount];
+	if (!CaptureVRMenuBakeDrawState(
+			a_context,
+			draw,
+			VRMenuBakeReplayDrawKind::DrawIndexedInstanced,
+			a_vertexCount,
+			a_indexCount,
+			a_instanceCount,
+			a_startVertexLocation,
+			a_startIndexLocation,
+			a_baseVertexLocation,
+			a_startInstanceLocation,
 			state->frameCount,
+			renderWidth,
+			renderHeight,
+			finalWidth,
+			finalHeight)) {
+		return false;
+	}
+
+	++vrMenuBakeReplayDrawCount;
+
+	if (ClaimVRMenuBridgeReplayDiagnosticSlot(state->frameCount)) {
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMenuBridgeReplay] captured suppressed bridge draw frame={} drawIndex={} source={} slot={} dst=kMENUBG({}x{}) draw=indices:{} instances:{} final={}x{}",
+			state->frameCount,
+			vrMenuBakeReplayDrawCount - 1u,
 			GetVRMenuCompositionTargetName(menuSourceTarget),
 			menuSourceSlot,
 			renderWidth,
@@ -8491,54 +8504,6 @@ bool Upscaling::TrySuppressVRMenuBridgeDrawPrototype(
 	}
 
 	return true;
-}
-
-bool Upscaling::RestoreVRMenuBakeCleanSceneForSubmit(ID3D11Texture2D* a_sourceTexture, const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_frame)
-{
-	BeginVRMenuBakePrototypeFrame(a_frame);
-	if (!a_sourceTexture ||
-		!vrMenuBakeCleanTotalValid ||
-		vrMenuBakeCleanTotalRestored ||
-		!vrMenuBakeCleanTotalSource ||
-		!vrMenuBakeCleanTotalCopy ||
-		!vrMenuBakeCleanTotalCopy->resource ||
-		vrMenuBakeReplayDrawCount == 0 ||
-		a_sourceTexture != vrMenuBakeCleanTotalSource.get() ||
-		a_sourceDesc.Width != vrMenuBakeCleanTotalDesc.Width ||
-		a_sourceDesc.Height != vrMenuBakeCleanTotalDesc.Height ||
-		a_sourceDesc.Format != vrMenuBakeCleanTotalDesc.Format ||
-		a_sourceDesc.SampleDesc.Count != vrMenuBakeCleanTotalDesc.SampleDesc.Count ||
-		a_sourceDesc.ArraySize != vrMenuBakeCleanTotalDesc.ArraySize) {
-		return false;
-	}
-
-	auto* context = globals::d3d::context;
-	if (!context)
-		return false;
-
-	try {
-		context->CopyResource(a_sourceTexture, vrMenuBakeCleanTotalCopy->resource.get());
-		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake clean scene restore"))
-			return false;
-		vrMenuBakeCleanTotalRestored = true;
-		VR_TRANSITION_DIAG_LOG(
-			"[VRMenuBakeReplay] restored clean kTOTAL before vendor frame={} size={}x{} drawCount={}",
-			a_frame,
-			a_sourceDesc.Width,
-			a_sourceDesc.Height,
-			vrMenuBakeReplayDrawCount);
-		return true;
-	} catch (const std::exception& e) {
-		static bool loggedRestoreFailure = false;
-		LogWarnOnce(loggedRestoreFailure, "[VRMenuBakeReplay] Failed to restore clean kTOTAL before vendor", e);
-		MarkSubmitStageDeviceLostIfNeeded(e, "VR menu bake clean scene restore");
-	} catch (...) {
-		static bool loggedRestoreFailure = false;
-		LogWarnOnce(loggedRestoreFailure, "[VRMenuBakeReplay] Failed to restore clean kTOTAL before vendor");
-		MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake clean scene restore");
-	}
-
-	return false;
 }
 
 bool Upscaling::EnsureVRMenuBakeReplayCombinedTexture(uint32_t a_combinedWidth, uint32_t a_combinedHeight, DXGI_FORMAT a_format)
@@ -8583,7 +8548,6 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 		!a_eyeWidth ||
 		!a_eyeHeight ||
 		vrMenuBakePrototypeFrame != a_frame ||
-		!vrMenuBakeCleanTotalRestored ||
 		vrMenuBakeReplayDrawCount == 0) {
 		return false;
 	}
@@ -8889,7 +8853,7 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 			return false;
 
 		VR_TRANSITION_DIAG_LOG(
-			"[VRMenuBakeReplay] replayed menu after vendor frame={} eye={} draws={} eye={}x{} combined={}x{}",
+			"[VRMenuBridgeReplay] replayed suppressed bridge draws after vendor frame={} eye={} draws={} eye={}x{} combined={}x{}",
 			a_frame,
 			a_eyeIndex,
 			vrMenuBakeReplayDrawCount,
@@ -8915,7 +8879,6 @@ bool Upscaling::QueueVRMenuBakeReplayAfterVendor(uint32_t a_eyeIndex, ID3D11Text
 {
 	BeginVRMenuBakePrototypeFrame(a_frame);
 	if (vrMenuBakePrototypeFrame != a_frame ||
-		!vrMenuBakeCleanTotalRestored ||
 		vrMenuBakeReplayDrawCount == 0) {
 		return false;
 	}
@@ -9027,7 +8990,7 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 	INT a_baseVertexLocation,
 	UINT a_startInstanceLocation)
 {
-	const bool suppressDraw = globals::features::upscaling.TrySuppressVRMenuBridgeDrawPrototype(
+	const bool suppressDraw = globals::features::upscaling.TryCaptureAndSuppressVRMenuBridgeDrawPrototype(
 		a_context,
 		a_operation,
 		a_vertexCount,
@@ -9037,6 +9000,9 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 		a_startIndexLocation,
 		a_baseVertexLocation,
 		a_startInstanceLocation);
+	if (suppressDraw)
+		return true;
+
 	LogVRTrackedDrawWriteDiagnostics(
 		a_context,
 		a_operation,
@@ -9047,7 +9013,7 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 		a_startIndexLocation,
 		a_baseVertexLocation,
 		a_startInstanceLocation);
-	return suppressDraw;
+	return false;
 }
 
 /**
@@ -11828,11 +11794,6 @@ void Upscaling::DestroyVRIntermediateTextures()
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 	vrMenuBakePrototypeFrame = std::numeric_limits<uint32_t>::max();
-	vrMenuBakeCleanTotalValid = false;
-	vrMenuBakeCleanTotalRestored = false;
-	vrMenuBakeCleanTotalSource = nullptr;
-	vrMenuBakeCleanTotalDesc = {};
-	vrMenuBakeCleanTotalCopy.reset();
 	vrMenuBakeReplayDrawCount = 0;
 	for (auto& draw : vrMenuBakeReplayDraws)
 		ResetVRMenuBakeCapturedDrawState(draw);
@@ -18841,9 +18802,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			loggedBoundsStretchFallback = true;
 		}
 	}
-
-	if (menuBakeReplayReadyForEye)
-		RestoreVRMenuBakeCleanSceneForSubmit(sourceTexture, sourceDesc, currentFrame);
 
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))

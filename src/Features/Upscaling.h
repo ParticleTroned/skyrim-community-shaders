@@ -1059,11 +1059,10 @@ private:
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
-	bool TrySuppressVRMenuBridgeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
+	bool TryCaptureAndSuppressVRMenuBridgeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
-	bool RestoreVRMenuBakeCleanSceneForSubmit(ID3D11Texture2D* a_sourceTexture, const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_frame);
 	bool QueueVRMenuBakeReplayAfterVendor(uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);
-	static constexpr uint32_t kVRMenuBakeReplayMaxDraws = 4;
+	static constexpr uint32_t kVRMenuBakeReplayMaxDraws = 32;
 	static constexpr uint32_t kVRMenuBakeReplayVBSlots = 8;
 	static constexpr uint32_t kVRMenuBakeReplaySRVSlots = 8;
 	static constexpr uint32_t kVRMenuBakeReplaySamplerSlots = 8;
@@ -1129,11 +1128,6 @@ private:
 	bool EnsureVRMenuBakeReplayCombinedTexture(uint32_t a_combinedWidth, uint32_t a_combinedHeight, DXGI_FORMAT a_format);
 	bool ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	uint32_t vrMenuBakePrototypeFrame = std::numeric_limits<uint32_t>::max();
-	bool vrMenuBakeCleanTotalValid = false;
-	bool vrMenuBakeCleanTotalRestored = false;
-	winrt::com_ptr<ID3D11Texture2D> vrMenuBakeCleanTotalSource;
-	D3D11_TEXTURE2D_DESC vrMenuBakeCleanTotalDesc{};
-	eastl::unique_ptr<Texture2D> vrMenuBakeCleanTotalCopy;
 	std::array<VRMenuBakeCapturedDrawState, kVRMenuBakeReplayMaxDraws> vrMenuBakeReplayDraws;
 	uint32_t vrMenuBakeReplayDrawCount = 0;
 	eastl::unique_ptr<Texture2D> vrMenuBakeReplayCombined;

@@ -1,14 +1,14 @@
 #include "ProfilingRenderer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_map>
 #include <imgui.h>
 
 #include "Globals.h"
-#include "I18n/I18n.h"
-#include "Menu.h"
 #include "State.h"
+#include "Util.h"
 
 static ImU32 HslToImU32(float h, float s, float l)
 {
@@ -40,42 +40,74 @@ static ImU32 HslToImU32(float h, float s, float l)
 }
 
 static constexpr float kGoldenRatio = 0.618033988749895f;
-static constexpr float kGraphHeadroomScale = 1.2f;
-static constexpr float kMainGraphLegendWidth = 260.0f;
-static constexpr float kFeatureGraphLegendWidth = 200.0f;
-static constexpr float kMinGraphWidth = 100.0f;
-static constexpr float kMainGraphHeight = 180.0f;
-static constexpr float kFeatureGraphHeight = 100.0f;
-static constexpr float kMainGraphMinFrameTimeSec = 0.0001f;
-static constexpr float kFeatureGraphMinFrameTimeSec = 0.00001f;
-static constexpr float kTimingTableMetricColumnWidth = 55.0f;
-static constexpr float kTimingTablePercentColumnWidth = 45.0f;
-static constexpr float kStatsRefreshSeconds = 1.0f;
 
-struct GraphLayout
+static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
 {
-	float graphWidth;
-	float legendWidth;
-	float height;
-	float uiScale;
+	return cpuMode ? result.hasCpu : result.hasGpu;
+}
+
+static constexpr uint32_t kDisplayedRollingFrameCount = 60;
+
+struct DisplayTimingStats
+{
+	float timeMs = 0.0f;
+	float avgMs = 0.0f;
+	float p95Ms = 0.0f;
+	float p99Ms = 0.0f;
 };
 
-static GraphLayout GetGraphLayout(float availableWidth, float baseLegendWidth, float baseHeight)
+static float GetSortedPercentile(const std::array<float, kDisplayedRollingFrameCount>& samples, uint32_t sampleCount, float percentile)
 {
-	const float uiScale = Util::GetUIScale();
-	const float contentWidth = std::max(0.0f, availableWidth);
-	const float minGraphWidth = kMinGraphWidth * uiScale;
-	const float desiredLegendWidth = baseLegendWidth * uiScale;
-	const float legendWidth = contentWidth > minGraphWidth ?
-	                              std::min(desiredLegendWidth, contentWidth - minGraphWidth) :
-	                              0.0f;
+	if (sampleCount == 0)
+		return 0.0f;
 
-	return {
-		contentWidth - legendWidth,
-		legendWidth,
-		baseHeight * uiScale,
-		uiScale
+	const float idx = (percentile / 100.0f) * static_cast<float>(sampleCount - 1);
+	const uint32_t lo = static_cast<uint32_t>(idx);
+	const uint32_t hi = std::min(lo + 1, sampleCount - 1);
+	const float frac = idx - static_cast<float>(lo);
+	return samples[lo] * (1.0f - frac) + samples[hi] * frac;
+}
+
+static DisplayTimingStats GetDisplayTimingStats(const Profiler::TimerResult& result, bool cpuMode)
+{
+	DisplayTimingStats stats{
+		cpuMode ? result.cpuTimeMs : result.gpuTimeMs,
+		cpuMode ? result.cpuAvgMs : result.avgMs,
+		cpuMode ? result.cpuP95Ms : result.p95Ms,
+		cpuMode ? result.cpuP99Ms : result.p99Ms
 	};
+
+	const uint32_t historyCount = cpuMode ? result.cpuHistoryCount : result.historyCount;
+	const uint32_t sampleCount = std::min(historyCount, kDisplayedRollingFrameCount);
+	if (sampleCount == 0)
+		return stats;
+
+	std::array<float, kDisplayedRollingFrameCount> samples{};
+	float sum = 0.0f;
+	const uint32_t firstSample = historyCount - sampleCount;
+	for (uint32_t i = 0; i < sampleCount; ++i) {
+		const float sample = cpuMode ?
+		                         result.GetCpuHistorySample(firstSample + i) :
+		                         result.GetHistorySample(firstSample + i);
+		samples[i] = sample;
+		sum += sample;
+	}
+
+	stats.avgMs = sum / static_cast<float>(sampleCount);
+	std::sort(samples.begin(), samples.begin() + sampleCount);
+	stats.p95Ms = GetSortedPercentile(samples, sampleCount, 95.0f);
+	stats.p99Ms = GetSortedPercentile(samples, sampleCount, 99.0f);
+	stats.timeMs = stats.avgMs;
+	return stats;
+}
+
+static float GetTextColumnWidth(const char* header, const std::vector<std::string>& labels, float extraWidth = 0.0f)
+{
+	float width = ImGui::CalcTextSize(header).x;
+	for (const auto& label : labels)
+		width = std::max(width, ImGui::CalcTextSize(label.c_str()).x);
+
+	return std::ceil(width + ImGui::GetStyle().CellPadding.x * 2.0f + extraWidth);
 }
 
 ImU32 ProfilingRenderer::GetGroupColor(const std::string& groupName)
@@ -102,7 +134,7 @@ uint32_t ProfilingRenderer::ToLegitColor(ImU32 imColor)
 ImVec4 ProfilingRenderer::HeatColor(float value, float maxValue)
 {
 	if (maxValue <= 0.0f)
-		return Util::Colors::GetDefault();
+		return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
 	float x = std::clamp(value / maxValue, 0.0f, 1.0f);
 
@@ -124,35 +156,7 @@ void ProfilingRenderer::TextHeat(const char* fmt, float value, float maxValue)
 {
 	ImVec4 bg = HeatColor(value, maxValue);
 	ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, ImGui::GetColorU32(bg));
-	ImGui::TextColored(Util::Colors::GetDefault(), fmt, value);
-}
-
-void ProfilingRenderer::RenderTimingModeToggle()
-{
-	int mode = static_cast<int>(timingMode);
-
-	ImGui::PushID("ProfilingTimingMode");
-	ImGui::RadioButton(T("menu.profiling.gpu", "GPU"), &mode, static_cast<int>(TimingMode::GPU));
-	ImGui::SameLine();
-	ImGui::RadioButton(T("menu.profiling.cpu", "CPU"), &mode, static_cast<int>(TimingMode::CPU));
-	ImGui::PopID();
-
-	const auto newMode = static_cast<TimingMode>(mode);
-	if (newMode != timingMode) {
-		timingMode = newMode;
-		timeSinceLastUpdate = kStatsRefreshSeconds;
-	}
-}
-
-void ProfilingRenderer::SetupTimingTableColumns(bool includePercentColumn)
-{
-	const float scale = Util::GetUIScale();
-	ImGui::TableSetupColumn(T("menu.profiling.pass", "Pass"), ImGuiTableColumnFlags_WidthStretch, 3.0f);
-	ImGui::TableSetupColumn(T("menu.profiling.avg", "Avg"), ImGuiTableColumnFlags_WidthFixed, kTimingTableMetricColumnWidth * scale);
-	ImGui::TableSetupColumn(T("menu.profiling.p95", "P95"), ImGuiTableColumnFlags_WidthFixed, kTimingTableMetricColumnWidth * scale);
-	ImGui::TableSetupColumn(T("menu.profiling.p99", "P99"), ImGuiTableColumnFlags_WidthFixed, kTimingTableMetricColumnWidth * scale);
-	if (includePercentColumn)
-		ImGui::TableSetupColumn(T("menu.profiling.percent", "%"), ImGuiTableColumnFlags_WidthFixed, kTimingTablePercentColumnWidth * scale);
+	ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), fmt, value);
 }
 
 void ProfilingRenderer::RenderGraph()
@@ -168,10 +172,11 @@ void ProfilingRenderer::RenderGraph()
 
 	double accumulated = 0.0;
 	for (const auto& result : results) {
-		if (!result.valid)
+		if (!result.valid || !HasTimingMode(result, cpuMode))
 			continue;
 
-		float timeMs = cpuMode ? result.cpuTimeMs : result.gpuTimeMs;
+		const auto stats = GetDisplayTimingStats(result, cpuMode);
+		float timeMs = stats.timeMs;
 
 		std::string groupName;
 		auto pos = result.name.find("::");
@@ -194,24 +199,246 @@ void ProfilingRenderer::RenderGraph()
 
 	gpuGraph.LoadFrameData(tasks.data(), tasks.size());
 
-	float maxFrameTimeSec = gpuGraph.GetPeakFrameTime() * kGraphHeadroomScale;
-	if (maxFrameTimeSec < kMainGraphMinFrameTimeSec)
-		maxFrameTimeSec = kMainGraphMinFrameTimeSec;
+	float maxFrameTimeSec = gpuGraph.GetPeakFrameTime() * 1.2f;
+	if (maxFrameTimeSec < 0.0001f)
+		maxFrameTimeSec = 0.0001f;
 
-	const auto layout = GetGraphLayout(ImGui::GetContentRegionAvail().x, kMainGraphLegendWidth, kMainGraphHeight);
+	float availWidth = ImGui::GetContentRegionAvail().x;
+	int legendWidth = 260;
+	int graphWidth = std::max(100, static_cast<int>(availWidth) - legendWidth);
+	int graphHeight = 180;
 
-	gpuGraph.RenderTimings(layout.graphWidth, layout.legendWidth, layout.height, 0, maxFrameTimeSec, layout.uiScale);
+	gpuGraph.RenderTimings(graphWidth, legendWidth, graphHeight, 0, maxFrameTimeSec);
 
 	ImGui::Spacing();
+}
+
+ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode)
+{
+	const auto& results = globals::profiler->GetResults();
+
+	FeatureTimingData data;
+	std::string prefix = featurePrefix + "::";
+	for (const auto& r : results) {
+		if (!r.valid || !HasTimingMode(r, cpuMode) || !r.name.starts_with(prefix))
+			continue;
+
+		std::string label = r.name.substr(prefix.size());
+		const auto stats = GetDisplayTimingStats(r, cpuMode);
+		float timeMs = stats.timeMs;
+		float avg = stats.avgMs;
+		float p95 = stats.p95Ms;
+		float p99 = stats.p99Ms;
+		data.entries.push_back({ label, timeMs, avg, p95, p99 });
+		data.totalAvg += avg;
+		data.totalP95 += p95;
+		data.totalP99 += p99;
+		data.maxAvg = std::max(data.maxAvg, avg);
+		data.maxP95 = std::max(data.maxP95, p95);
+		data.maxP99 = std::max(data.maxP99, p99);
+	}
+
+	return data;
+}
+
+bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight)
+{
+	if (data.entries.empty())
+		return false;
+
+	std::vector<legit::ProfilerTask> tasks;
+	double accumulated = 0.0;
+	for (const auto& e : data.entries) {
+		legit::ProfilerTask task;
+		task.startTime = accumulated / 1000.0;
+		task.endTime = (accumulated + e.timeMs) / 1000.0;
+		task.name = e.label;
+		task.color = ToLegitColor(GetGroupColor(featurePrefix + "::" + e.label));
+		tasks.push_back(task);
+		accumulated += e.timeMs;
+	}
+
+	if (tasks.empty())
+		return false;
+
+	graph.LoadFrameData(tasks.data(), tasks.size());
+
+	float maxFrameTimeSec = graph.GetPeakFrameTime() * 1.2f;
+	if (maxFrameTimeSec < 0.00001f)
+		maxFrameTimeSec = 0.00001f;
+
+	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
+	const int legendWidth = totalWidth >= 140 ? std::clamp(static_cast<int>(totalWidth * 0.36f), 40, 180) : 0;
+	const int graphWidth = std::max(1, totalWidth - legendWidth);
+
+	graph.RenderTimings(graphWidth, legendWidth, graphHeight, 0, maxFrameTimeSec);
+	return true;
+}
+
+bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable)
+{
+	bool cpuMode = featureMode == FeatureTimingMode::CPU;
+	const auto data = CollectFeatureTimingData(featurePrefix, cpuMode);
+
+	if (data.entries.empty()) {
+		ImGui::TextDisabled("No timing data");
+		return false;
+	}
+
+	ImGui::PushID(featurePrefix.c_str());
+	auto& state = featureGraphs[featurePrefix];
+	auto& graph = cpuMode ? state.cpuGraph : state.gpuGraph;
+	if (RenderFeatureTimingGraph(featurePrefix, data, graph, 100))
+		ImGui::Spacing();
+
+	if (showTable && ImGui::BeginTable("##FeatureTimers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX)) {
+		std::vector<std::string> passLabels;
+		passLabels.reserve(data.entries.size() + 1);
+		for (const auto& e : data.entries)
+			passLabels.push_back(e.label);
+		passLabels.emplace_back("Total");
+		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Pass", passLabels));
+		ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+		ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+		ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+		ImGui::TableHeadersRow();
+
+		for (const auto& e : data.entries) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Text("%s", e.label.c_str());
+			ImGui::TableNextColumn();
+			TextHeat("%.3f", e.avgMs, data.maxAvg);
+			ImGui::TableNextColumn();
+			TextHeat("%.3f", e.p95Ms, data.maxP95);
+			ImGui::TableNextColumn();
+			TextHeat("%.3f", e.p99Ms, data.maxP99);
+		}
+
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Total");
+		ImGui::TableNextColumn();
+		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
+		ImGui::TableNextColumn();
+		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP95);
+		ImGui::TableNextColumn();
+		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP99);
+
+		ImGui::EndTable();
+	}
+
+	ImGui::PopID();
+	return true;
+}
+
+bool ProfilingRenderer::RenderFeatureOverview()
+{
+	std::vector<std::string> activeFeatures;
+	activeFeatures.reserve(featureTimingModes.size());
+	for (const auto& [featurePrefix, featureMode] : featureTimingModes) {
+		if (featureMode != FeatureTimingMode::Off)
+			activeFeatures.push_back(featurePrefix);
+	}
+
+	if (activeFeatures.empty())
+		return false;
+
+	std::sort(activeFeatures.begin(), activeFeatures.end(), [](const auto& lhs, const auto& rhs) {
+		return lhs < rhs;
+	});
+
+	ImGui::SeparatorText("Feature Profiling Overview");
+
+	if (ImGui::BeginTable("##FeatureProfilingOverview", 3,
+			ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_RowBg)) {
+		ImGui::TableSetupColumn("Feature", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Feature", activeFeatures));
+		ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn("CPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableHeadersRow();
+
+		for (const auto& featurePrefix : activeFeatures) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(featurePrefix.c_str());
+
+			const auto gpuData = CollectFeatureTimingData(featurePrefix, false);
+			const auto cpuData = CollectFeatureTimingData(featurePrefix, true);
+			auto& state = featureGraphs[featurePrefix];
+
+			ImGui::TableNextColumn();
+			ImGui::PushID((featurePrefix + "::GPU").c_str());
+			if (!RenderFeatureTimingGraph(featurePrefix, gpuData, state.gpuGraph, 85))
+				ImGui::TextDisabled("No GPU timing data");
+			ImGui::PopID();
+
+			ImGui::TableNextColumn();
+			ImGui::PushID((featurePrefix + "::CPU").c_str());
+			if (!RenderFeatureTimingGraph(featurePrefix, cpuData, state.cpuGraph, 85))
+				ImGui::TextDisabled("No CPU timing data");
+			ImGui::PopID();
+		}
+
+		ImGui::EndTable();
+	}
+
+	ImGui::Spacing();
+	return true;
+}
+
+bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
+{
+	if (!globals::profiler)
+		return false;
+
+	const std::string prefix = featurePrefix + "::";
+	for (const auto& result : globals::profiler->GetResults()) {
+		if (result.valid && result.name.starts_with(prefix))
+			return true;
+	}
+
+	return false;
 }
 
 void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 {
 	auto& profiler = (*globals::profiler);
+	const bool fullProfilerPage = showTable || showModeToggle;
+
+	if (fullProfilerPage) {
+		bool profilingEnabled = profiler.IsUserEnabled();
+		ImGui::TextUnformatted("Profiling");
+		ImGui::SameLine();
+		if (ImGui::Checkbox("Enable", &profilingEnabled)) {
+			profiler.SetUserEnabled(profilingEnabled);
+			timeSinceLastUpdate = 1.0f;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Runtime profiling capture. No restart required.");
+			ImGui::TextUnformatted("When off, profiling capture requests are ignored and no timestamp/query timing scopes are recorded.");
+		}
+		ImGui::Separator();
+
+		if (!profilingEnabled) {
+			ImGui::TextDisabled("Profiling is off.");
+			return;
+		}
+	} else if (!profiler.IsUserEnabled()) {
+		profiler.SetUserEnabled(true);
+	}
+
+	profiler.RequestCapture();
 
 	bool cpuMode = (timingMode == TimingMode::CPU);
 	if (showModeToggle) {
-		RenderTimingModeToggle();
+		int mode = static_cast<int>(timingMode);
+		ImGui::RadioButton("GPU", &mode, 0);
+		ImGui::SameLine();
+		ImGui::RadioButton("CPU", &mode, 1);
+		if (static_cast<TimingMode>(mode) != timingMode) {
+			timingMode = static_cast<TimingMode>(mode);
+			timeSinceLastUpdate = 1.0f;
+		}
 		cpuMode = (timingMode == TimingMode::CPU);
 		ImGui::Separator();
 	}
@@ -221,7 +448,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	lastFrameTime = currentTime;
 	timeSinceLastUpdate += deltaTime;
 
-	if (timeSinceLastUpdate >= kStatsRefreshSeconds) {
+	if (timeSinceLastUpdate >= 1.0f) {
 		timeSinceLastUpdate = 0.0f;
 
 		cachedGroups.clear();
@@ -234,12 +461,13 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		std::unordered_map<std::string, size_t> groupIndex;
 
 		for (const auto& result : profiler.GetResults()) {
-			if (!result.valid)
+			if (!result.valid || !HasTimingMode(result, cpuMode))
 				continue;
 
-			float avg = cpuMode ? result.cpuAvgMs : result.avgMs;
-			float p95 = cpuMode ? result.cpuP95Ms : result.p95Ms;
-			float p99 = cpuMode ? result.cpuP99Ms : result.p99Ms;
+			const auto stats = GetDisplayTimingStats(result, cpuMode);
+			float avg = stats.avgMs;
+			float p95 = stats.p95Ms;
+			float p99 = stats.p99Ms;
 
 			cachedTotalAvgMs += avg;
 			cachedTotalP95Ms += p95;
@@ -274,21 +502,37 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		}
 	}
 
+	const bool renderedFeatureOverview = fullProfilerPage && RenderFeatureOverview();
 	if (cachedGroups.empty()) {
-		ImGui::TextDisabled("%s", T("menu.profiling.no_timing_data_world", "No timing data available (enter game world)"));
+		if (!renderedFeatureOverview)
+			ImGui::TextDisabled("No timing data available (enter game world)");
 		return;
 	}
 
+	if (renderedFeatureOverview)
+		ImGui::SeparatorText("All Timings");
 	RenderGraph();
 
 	if (showTable) {
 		float availHeight = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing();
+		std::vector<std::string> passLabels;
+		passLabels.reserve(cachedGroups.size());
+		for (const auto& group : cachedGroups) {
+			passLabels.push_back(group.name);
+			for (const auto& pass : group.passes)
+				passLabels.push_back(pass.label);
+		}
+		const float passColumnWidth = GetTextColumnWidth("Pass", passLabels, ImGui::GetTreeNodeToLabelSpacing() + ImGui::GetStyle().IndentSpacing);
 
 		if (ImGui::BeginTable("##Profiler", 5,
-				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
+				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
 				ImVec2(0.0f, availHeight))) {
 			ImGui::TableSetupScrollFreeze(0, 1);
-			SetupTimingTableColumns(true);
+			ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, passColumnWidth);
+			ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+			ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+			ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+			ImGui::TableSetupColumn("%%", ImGuiTableColumnFlags_WidthFixed, 45.0f);
 			ImGui::TableHeadersRow();
 
 			for (const auto& group : cachedGroups) {
@@ -345,128 +589,39 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 {
 	auto& profiler = (*globals::profiler);
-	const auto& results = profiler.GetResults();
+	auto& featureMode = featureTimingModes[featurePrefix];
 
-	RenderTimingModeToggle();
+	int mode = static_cast<int>(featureMode);
+	const int previousMode = mode;
+	ImGui::RadioButton("Off", &mode, static_cast<int>(FeatureTimingMode::Off));
+	ImGui::SameLine();
+	ImGui::RadioButton("GPU", &mode, static_cast<int>(FeatureTimingMode::GPU));
+	ImGui::SameLine();
+	ImGui::RadioButton("CPU", &mode, static_cast<int>(FeatureTimingMode::CPU));
 
-	bool cpuMode = (timingMode == TimingMode::CPU);
-
-	struct Entry
-	{
-		std::string label;
-		float timeMs;
-		float avgMs;
-		float p95Ms;
-		float p99Ms;
-	};
-
-	std::vector<Entry> entries;
-	float totalTimeMs = 0.0f;
-	float totalAvg = 0.0f;
-	float totalP95 = 0.0f;
-	float totalP99 = 0.0f;
-	float maxAvg = 0.0f;
-	float maxP95 = 0.0f;
-	float maxP99 = 0.0f;
-
-	const auto prefix = GetFeatureTimerPrefix(featurePrefix);
-	for (const auto& r : results) {
-		if (!IsFeatureTimerResult(r, prefix))
-			continue;
-		std::string label = r.name.substr(prefix.size());
-		float timeMs = cpuMode ? r.cpuTimeMs : r.gpuTimeMs;
-		float avg = cpuMode ? r.cpuAvgMs : r.avgMs;
-		float p95 = cpuMode ? r.cpuP95Ms : r.p95Ms;
-		float p99 = cpuMode ? r.cpuP99Ms : r.p99Ms;
-		entries.push_back({ label, timeMs, avg, p95, p99 });
-		totalTimeMs += timeMs;
-		totalAvg += avg;
-		totalP95 += p95;
-		totalP99 += p99;
-		maxAvg = std::max(maxAvg, avg);
-		maxP95 = std::max(maxP95, p95);
-		maxP99 = std::max(maxP99, p99);
+	mode = std::clamp(mode, static_cast<int>(FeatureTimingMode::Off), static_cast<int>(FeatureTimingMode::CPU));
+	if (mode != previousMode) {
+		featureMode = static_cast<FeatureTimingMode>(mode);
+		if (featureMode != FeatureTimingMode::Off)
+			profiler.SetUserEnabled(true);
 	}
 
-	if (entries.empty()) {
-		ImGui::TextDisabled("%s", T("menu.profiling.no_timing_data", "No timing data"));
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Off: do not request profiling capture for this feature.");
+		ImGui::TextUnformatted("GPU/CPU: enable runtime profiling and show this feature's timing in the selected mode.");
+		ImGui::TextUnformatted("No restart required.");
+	}
+
+	if (featureMode == FeatureTimingMode::Off) {
+		ImGui::TextDisabled("Feature profiling is off.");
 		return;
 	}
 
-	auto& state = featureGraphs[featurePrefix];
-
-	std::vector<legit::ProfilerTask> tasks;
-	double accumulated = 0.0;
-	for (const auto& e : entries) {
-		legit::ProfilerTask task;
-		task.startTime = accumulated / 1000.0;
-		task.endTime = (accumulated + e.timeMs) / 1000.0;
-		task.name = e.label;
-		task.color = ToLegitColor(GetGroupColor(featurePrefix + "::" + e.label));
-		tasks.push_back(task);
-		accumulated += e.timeMs;
+	if (!profiler.IsUserEnabled()) {
+		ImGui::TextDisabled("Runtime profiling is off.");
+		return;
 	}
 
-	if (!tasks.empty()) {
-		state.graph.LoadFrameData(tasks.data(), tasks.size());
-
-		float maxFrameTimeSec = state.graph.GetPeakFrameTime() * kGraphHeadroomScale;
-		if (maxFrameTimeSec < kFeatureGraphMinFrameTimeSec)
-			maxFrameTimeSec = kFeatureGraphMinFrameTimeSec;
-
-		const auto layout = GetGraphLayout(ImGui::GetContentRegionAvail().x, kFeatureGraphLegendWidth, kFeatureGraphHeight);
-
-		state.graph.RenderTimings(layout.graphWidth, layout.legendWidth, layout.height, 0, maxFrameTimeSec, layout.uiScale);
-		ImGui::Spacing();
-	}
-
-	if (ImGui::BeginTable("##FeatureTimers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
-		SetupTimingTableColumns(false);
-		ImGui::TableHeadersRow();
-
-		for (const auto& e : entries) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::Text("%s", e.label.c_str());
-			ImGui::TableNextColumn();
-			TextHeat("%.3f", e.avgMs, maxAvg);
-			ImGui::TableNextColumn();
-			TextHeat("%.3f", e.p95Ms, maxP95);
-			ImGui::TableNextColumn();
-			TextHeat("%.3f", e.p99Ms, maxP99);
-		}
-
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		const auto totalColor = globals::menu->GetTheme().StatusPalette.InfoColor;
-		ImGui::TextColored(totalColor, "%s", T("menu.profiling.total", "Total"));
-		ImGui::TableNextColumn();
-		ImGui::TextColored(totalColor, "%.3f", totalAvg);
-		ImGui::TableNextColumn();
-		ImGui::TextColored(totalColor, "%.3f", totalP95);
-		ImGui::TableNextColumn();
-		ImGui::TextColored(totalColor, "%.3f", totalP99);
-
-		ImGui::EndTable();
-	}
-}
-
-bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
-{
-	const auto prefix = GetFeatureTimerPrefix(featurePrefix);
-	const auto& results = globals::profiler->GetResults();
-
-	return std::ranges::any_of(results, [&prefix](const auto& result) {
-		return IsFeatureTimerResult(result, prefix);
-	});
-}
-
-std::string ProfilingRenderer::GetFeatureTimerPrefix(const std::string& featurePrefix)
-{
-	return featurePrefix + "::";
-}
-
-bool ProfilingRenderer::IsFeatureTimerResult(const Profiler::TimerResult& result, std::string_view prefix)
-{
-	return result.valid && result.name.starts_with(prefix);
+	profiler.RequestCapture();
+	RenderFeatureTimingData(featurePrefix, featureMode, true);
 }

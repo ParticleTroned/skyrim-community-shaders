@@ -121,14 +121,14 @@ namespace ImGuiUtils
 
 		float GetPeakFrameTime() const { return peakFrameTime; }
 
-		void RenderTimings(float graphWidth, float legendWidth, float height, int frameIndexOffset, float maxFrameTime, float uiScale = 1.0f)
+		void RenderTimings(int graphWidth, int legendWidth, int height, int frameIndexOffset, float maxFrameTime)
 		{
 			ImDrawList* drawList = ImGui::GetWindowDrawList();
 			const ImVec2 widgetPos = ImGui::GetCursorScreenPos();
-			RenderGraph(drawList, widgetPos, ImVec2(graphWidth, height), frameIndexOffset, maxFrameTime, uiScale);
-			if (legendWidth > 0.0f)
-				RenderLegend(drawList, ImVec2(widgetPos.x + graphWidth, widgetPos.y), ImVec2(legendWidth, height), frameIndexOffset, maxFrameTime, uiScale);
-			ImGui::Dummy(ImVec2(graphWidth + legendWidth, height));
+			RenderGraph(drawList, widgetPos, ImVec2(float(graphWidth), float(height)), frameIndexOffset, maxFrameTime);
+			if (legendWidth > 0)
+				RenderLegend(drawList, ImVec2(widgetPos.x + graphWidth, widgetPos.y), ImVec2(float(legendWidth), float(height)), frameIndexOffset, maxFrameTime);
+			ImGui::Dummy(ImVec2(float(graphWidth + legendWidth), float(height)));
 		}
 
 	private:
@@ -166,18 +166,18 @@ namespace ImGuiUtils
 			}
 		}
 
-		void RenderGraph(ImDrawList* drawList, ImVec2 graphPos, ImVec2 graphSize, size_t frameIndexOffset, float maxFrameTime, float uiScale)
+		void RenderGraph(ImDrawList* drawList, ImVec2 graphPos, ImVec2 graphSize, size_t frameIndexOffset, float maxFrameTime)
 		{
-			Rect(drawList, graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), 0xffffffff, false);
-			const float scaledFrameWidth = std::max(1.0f, static_cast<float>(frameWidth) * uiScale);
-			const float scaledFrameSpacing = std::max(1.0f, static_cast<float>(frameSpacing) * uiScale);
-			const float heightThreshold = uiScale;
+			ImVec4 borderColor = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+			borderColor.w *= 0.85f;
+			Rect(drawList, graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), ImGui::GetColorU32(borderColor), false);
+			float heightThreshold = 1.0f;
 
 			for (size_t frameNumber = 0; frameNumber < frames.size(); frameNumber++) {
 				size_t frameIndex = GetCurrFrameIndex(frameIndexOffset + frameNumber);
 
-				ImVec2 framePos = ImVec2(graphPos.x + graphSize.x - uiScale - scaledFrameWidth - (scaledFrameWidth + scaledFrameSpacing) * float(frameNumber), graphPos.y + graphSize.y - uiScale);
-				if (framePos.x < graphPos.x + uiScale)
+				ImVec2 framePos = ImVec2(graphPos.x + graphSize.x - 1 - frameWidth - (frameWidth + frameSpacing) * float(frameNumber), graphPos.y + graphSize.y - 1);
+				if (framePos.x < graphPos.x + 1)
 					break;
 				ImVec2 taskPos = framePos;
 				auto& frame = frames[frameIndex];
@@ -185,22 +185,26 @@ namespace ImGuiUtils
 					float taskStartHeight = (float(task.startTime) / maxFrameTime) * graphSize.y;
 					float taskEndHeight = (float(task.endTime) / maxFrameTime) * graphSize.y;
 					if (std::abs(taskEndHeight - taskStartHeight) > heightThreshold)
-						Rect(drawList, ImVec2(taskPos.x, taskPos.y - taskStartHeight), ImVec2(taskPos.x + scaledFrameWidth, taskPos.y - taskEndHeight), task.color, true);
+						Rect(drawList, ImVec2(taskPos.x, taskPos.y - taskStartHeight), ImVec2(taskPos.x + frameWidth, taskPos.y - taskEndHeight), task.color, true);
 				}
 			}
 		}
 
-		void RenderLegend(ImDrawList* drawList, ImVec2 legendPos, ImVec2 legendSize, size_t frameIndexOffset, float maxFrameTime, float uiScale)
+		void RenderLegend(ImDrawList* drawList, ImVec2 legendPos, ImVec2 legendSize, size_t frameIndexOffset, float maxFrameTime)
 		{
-			float markerLeftRectMargin = 3.0f * uiScale;
-			float markerLeftRectWidth = 5.0f * uiScale;
-			float markerMidWidth = 30.0f * uiScale;
-			float markerRightRectWidth = 10.0f * uiScale;
-			float markerRigthRectMargin = 3.0f * uiScale;
-			float markerRightRectHeight = 10.0f * uiScale;
-			float markerRightRectSpacing = 4.0f * uiScale;
-			float nameOffset = 30.0f * uiScale;
-			ImVec2 textMargin = ImVec2(5.0f * uiScale, -3.0f * uiScale);
+			float markerLeftRectMargin = 3.0f;
+			float markerLeftRectWidth = 5.0f;
+			float markerMidWidth = 30.0f;
+			float markerRightRectWidth = 10.0f;
+			float markerRigthRectMargin = 3.0f;
+			float markerRightRectHeight = 10.0f;
+			float markerRightRectSpacing = 4.0f;
+			float nameOffset = 30.0f;
+			ImVec2 textMargin = ImVec2(5.0f, -2.0f);
+			constexpr float legendTextScale = 0.86f;
+			ImVec4 legendTextColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			legendTextColor.w *= 0.78f;
+			const ImU32 mutedTextColor = ImGui::GetColorU32(legendTextColor);
 
 			auto& currFrame = frames[GetCurrFrameIndex(frameIndexOffset)];
 			size_t maxTasksCount = size_t(legendSize.y / (markerRightRectHeight + markerRightRectSpacing));
@@ -234,15 +238,15 @@ namespace ImGuiUtils
 				ImVec2 markerRightRectMax = ImVec2(markerRightRectMin.x + markerRightRectWidth, markerRightRectMin.y - markerRightRectHeight);
 				RenderTaskMarker(drawList, markerLeftRectMin, markerLeftRectMax, markerRightRectMin, markerRightRectMax, task.color);
 
-				uint32_t textColor = useColoredLegendText ? task.color : legit::Colors::imguiText;
+				uint32_t textColor = useColoredLegendText ? task.color : mutedTextColor;
 
 				float taskTimeMs = float(task.endTime - task.startTime);
 				std::ostringstream timeText;
 				timeText.precision(2);
 				timeText << std::fixed << std::string("[") << (taskTimeMs * 1000.0f);
 
-				Text(drawList, ImVec2(markerRightRectMax.x + textMargin.x, markerRightRectMax.y + textMargin.y), textColor, timeText.str().c_str());
-				Text(drawList, ImVec2(markerRightRectMax.x + textMargin.x + nameOffset, markerRightRectMax.y + textMargin.y), textColor, (std::string("ms] ") + task.name).c_str());
+				Text(drawList, ImVec2(markerRightRectMax.x + textMargin.x, markerRightRectMax.y + textMargin.y), textColor, timeText.str().c_str(), legendTextScale);
+				Text(drawList, ImVec2(markerRightRectMax.x + textMargin.x + nameOffset, markerRightRectMax.y + textMargin.y), textColor, (std::string("ms] ") + task.name).c_str(), legendTextScale);
 			}
 		}
 
@@ -254,9 +258,11 @@ namespace ImGuiUtils
 				drawList->AddRect(minPoint, maxPoint, col);
 		}
 
-		static void Text(ImDrawList* drawList, ImVec2 point, uint32_t col, const char* text)
+		static void Text(ImDrawList* drawList, ImVec2 point, uint32_t col, const char* text, float scale = 1.0f)
 		{
-			drawList->AddText(point, col, text);
+			ImFont* font = ImGui::GetFont();
+			const float fontSize = ImGui::GetFontSize() * scale;
+			drawList->AddText(font, fontSize, point, col, text);
 		}
 
 		static void RenderTaskMarker(ImDrawList* drawList, ImVec2 leftMinPoint, ImVec2 leftMaxPoint, ImVec2 rightMinPoint, ImVec2 rightMaxPoint, uint32_t col)

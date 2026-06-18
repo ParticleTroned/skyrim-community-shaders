@@ -8178,6 +8178,806 @@ namespace
 	}
 }
 
+template <class T>
+static void AttachD3DGetResult(winrt::com_ptr<T>& a_out, T* a_value)
+{
+	a_out = nullptr;
+	if (a_value)
+		a_out.attach(a_value);
+}
+
+template <class T>
+static void CopyD3DReference(winrt::com_ptr<T>& a_out, T* a_value)
+{
+	a_out = nullptr;
+	if (a_value) {
+		a_value->AddRef();
+		a_out.attach(a_value);
+	}
+}
+
+void Upscaling::ResetVRMenuBakeCapturedDrawState(VRMenuBakeCapturedDrawState& a_draw)
+{
+	a_draw = VRMenuBakeCapturedDrawState{};
+}
+
+void Upscaling::BeginVRMenuBakePrototypeFrame(uint32_t a_frame)
+{
+	if (vrMenuBakePrototypeFrame == a_frame)
+		return;
+
+	vrMenuBakePrototypeFrame = a_frame;
+	vrMenuBakeCleanTotalValid = false;
+	vrMenuBakeCleanTotalRestored = false;
+	vrMenuBakeCleanTotalSource = nullptr;
+	vrMenuBakeCleanTotalDesc = {};
+	vrMenuBakeReplayDrawCount = 0;
+	for (auto& draw : vrMenuBakeReplayDraws)
+		ResetVRMenuBakeCapturedDrawState(draw);
+}
+
+bool Upscaling::CaptureVRMenuBakeDrawState(
+	ID3D11DeviceContext* a_context,
+	VRMenuBakeCapturedDrawState& a_draw,
+	VRMenuBakeReplayDrawKind a_drawKind,
+	UINT a_vertexCount,
+	UINT a_indexCount,
+	UINT a_instanceCount,
+	UINT a_startVertexLocation,
+	UINT a_startIndexLocation,
+	INT a_baseVertexLocation,
+	UINT a_startInstanceLocation,
+	uint32_t a_frame,
+	uint32_t a_renderWidth,
+	uint32_t a_renderHeight,
+	uint32_t a_finalWidth,
+	uint32_t a_finalHeight)
+{
+	if (!a_context)
+		return false;
+
+	ResetVRMenuBakeCapturedDrawState(a_draw);
+	a_draw.valid = true;
+	a_draw.drawKind = a_drawKind;
+	a_draw.frame = a_frame;
+	a_draw.renderWidth = a_renderWidth;
+	a_draw.renderHeight = a_renderHeight;
+	a_draw.finalWidth = a_finalWidth;
+	a_draw.finalHeight = a_finalHeight;
+	a_draw.vertexCount = a_vertexCount;
+	a_draw.indexCount = a_indexCount;
+	a_draw.instanceCount = a_instanceCount;
+	a_draw.startVertexLocation = a_startVertexLocation;
+	a_draw.startIndexLocation = a_startIndexLocation;
+	a_draw.baseVertexLocation = a_baseVertexLocation;
+	a_draw.startInstanceLocation = a_startInstanceLocation;
+
+	a_context->IAGetPrimitiveTopology(&a_draw.primitiveTopology);
+
+	ID3D11InputLayout* inputLayout = nullptr;
+	a_context->IAGetInputLayout(&inputLayout);
+	AttachD3DGetResult(a_draw.inputLayout, inputLayout);
+
+	ID3D11Buffer* indexBuffer = nullptr;
+	a_context->IAGetIndexBuffer(&indexBuffer, &a_draw.indexFormat, &a_draw.indexOffset);
+	AttachD3DGetResult(a_draw.indexBuffer, indexBuffer);
+
+	std::array<ID3D11Buffer*, kVRMenuBakeReplayVBSlots> vertexBuffers{};
+	a_context->IAGetVertexBuffers(
+		0,
+		static_cast<UINT>(vertexBuffers.size()),
+		vertexBuffers.data(),
+		a_draw.vertexStrides.data(),
+		a_draw.vertexOffsets.data());
+	for (size_t i = 0; i < vertexBuffers.size(); ++i)
+		AttachD3DGetResult(a_draw.vertexBuffers[i], vertexBuffers[i]);
+
+	ID3D11VertexShader* vertexShader = nullptr;
+	ID3D11HullShader* hullShader = nullptr;
+	ID3D11DomainShader* domainShader = nullptr;
+	ID3D11GeometryShader* geometryShader = nullptr;
+	ID3D11PixelShader* pixelShader = nullptr;
+	a_context->VSGetShader(&vertexShader, nullptr, nullptr);
+	a_context->HSGetShader(&hullShader, nullptr, nullptr);
+	a_context->DSGetShader(&domainShader, nullptr, nullptr);
+	a_context->GSGetShader(&geometryShader, nullptr, nullptr);
+	a_context->PSGetShader(&pixelShader, nullptr, nullptr);
+	AttachD3DGetResult(a_draw.vertexShader, vertexShader);
+	AttachD3DGetResult(a_draw.hullShader, hullShader);
+	AttachD3DGetResult(a_draw.domainShader, domainShader);
+	AttachD3DGetResult(a_draw.geometryShader, geometryShader);
+	AttachD3DGetResult(a_draw.pixelShader, pixelShader);
+
+	std::array<ID3D11ShaderResourceView*, kVRMenuBakeReplaySRVSlots> psSRVs{};
+	a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+	for (size_t i = 0; i < psSRVs.size(); ++i)
+		AttachD3DGetResult(a_draw.psSRVs[i], psSRVs[i]);
+
+	std::array<ID3D11SamplerState*, kVRMenuBakeReplaySamplerSlots> psSamplers{};
+	a_context->PSGetSamplers(0, static_cast<UINT>(psSamplers.size()), psSamplers.data());
+	for (size_t i = 0; i < psSamplers.size(); ++i)
+		AttachD3DGetResult(a_draw.psSamplers[i], psSamplers[i]);
+
+	std::array<ID3D11Buffer*, kVRMenuBakeReplayCBSlots> vsCBs{};
+	std::array<ID3D11Buffer*, kVRMenuBakeReplayCBSlots> psCBs{};
+	a_context->VSGetConstantBuffers(0, static_cast<UINT>(vsCBs.size()), vsCBs.data());
+	a_context->PSGetConstantBuffers(0, static_cast<UINT>(psCBs.size()), psCBs.data());
+	for (size_t i = 0; i < vsCBs.size(); ++i) {
+		AttachD3DGetResult(a_draw.vsCBs[i], vsCBs[i]);
+		AttachD3DGetResult(a_draw.psCBs[i], psCBs[i]);
+	}
+
+	ID3D11BlendState* blendState = nullptr;
+	a_context->OMGetBlendState(&blendState, a_draw.blendFactor, &a_draw.sampleMask);
+	AttachD3DGetResult(a_draw.blendState, blendState);
+
+	ID3D11DepthStencilState* depthStencilState = nullptr;
+	a_context->OMGetDepthStencilState(&depthStencilState, &a_draw.stencilRef);
+	AttachD3DGetResult(a_draw.depthStencilState, depthStencilState);
+
+	ID3D11RasterizerState* rasterizerState = nullptr;
+	a_context->RSGetState(&rasterizerState);
+	AttachD3DGetResult(a_draw.rasterizerState, rasterizerState);
+
+	a_draw.viewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	a_context->RSGetViewports(&a_draw.viewportCount, a_draw.viewports.data());
+	a_draw.scissorCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	a_context->RSGetScissorRects(&a_draw.scissorCount, a_draw.scissors.data());
+
+	if (a_draw.hullShader || a_draw.domainShader || a_draw.geometryShader) {
+		static bool loggedUnsupportedShaderStages = false;
+		LogWarnOnce(loggedUnsupportedShaderStages, "[VRMenuBakeReplay] Skipping capture because menu bake uses unsupported HS/DS/GS stages");
+		ResetVRMenuBakeCapturedDrawState(a_draw);
+		return false;
+	}
+
+	if ((a_drawKind == VRMenuBakeReplayDrawKind::DrawIndexed ||
+		    a_drawKind == VRMenuBakeReplayDrawKind::DrawIndexedInstanced) &&
+		!a_draw.indexBuffer) {
+		static bool loggedMissingIndexBuffer = false;
+		LogWarnOnce(loggedMissingIndexBuffer, "[VRMenuBakeReplay] Skipping capture because indexed menu bake has no bound index buffer");
+		ResetVRMenuBakeCapturedDrawState(a_draw);
+		return false;
+	}
+
+	if (!a_draw.pixelShader || !a_draw.vertexShader) {
+		ResetVRMenuBakeCapturedDrawState(a_draw);
+		return false;
+	}
+
+	return a_draw.valid;
+}
+
+void Upscaling::TryCaptureVRMenuBakeDrawPrototype(
+	ID3D11DeviceContext* a_context,
+	const char* a_operation,
+	UINT a_vertexCount,
+	UINT a_indexCount,
+	UINT a_instanceCount,
+	UINT a_startVertexLocation,
+	UINT a_startIndexLocation,
+	INT a_baseVertexLocation,
+	UINT a_startInstanceLocation)
+{
+	if (!globals::game::isVR || !a_context)
+		return;
+
+	auto* state = globals::state;
+	if (!state)
+		return;
+
+	if (!IsVRRenderScaleModeActive() || !IsPresentationUpscalingActive())
+		return;
+	if (IsCommunityShadersMenuOpen())
+		return;
+
+	if (std::string_view(DiagnosticText(a_operation, "Draw")) != "DrawIndexed" ||
+		a_vertexCount != 0 ||
+		a_indexCount != 6 ||
+		a_instanceCount != 0 ||
+		a_startVertexLocation != 0 ||
+		a_startIndexLocation != 0 ||
+		a_baseVertexLocation != 0 ||
+		a_startInstanceLocation != 0) {
+		return;
+	}
+
+	const char* passName = ResolveVRTrackedResourceOperationPassName("ID3D11DeviceContext");
+	const char* phaseName = ResolveVRTrackedResourceOperationPhase("draw-before");
+	if (std::string_view(DiagnosticText(passName, "")) != "ISCopyDynamicFetchDisabled" ||
+		std::string_view(DiagnosticText(phaseName, "")) != "original-call") {
+		return;
+	}
+
+	const auto& plan = GetRuntimeResolutionPlan();
+	const uint32_t renderWidth = ClampDiagnosticDimension(plan.engineRenderSize.x);
+	const uint32_t renderHeight = ClampDiagnosticDimension(plan.engineRenderSize.y);
+	const uint32_t finalWidth = ClampDiagnosticDimension(plan.finalOutputSize.x);
+	const uint32_t finalHeight = ClampDiagnosticDimension(plan.finalOutputSize.y);
+	if (!renderWidth || !renderHeight || !finalWidth || !finalHeight ||
+		finalWidth <= renderWidth || finalHeight <= renderHeight) {
+		return;
+	}
+
+	BeginVRMenuBakePrototypeFrame(state->frameCount);
+	if (vrMenuBakeReplayDrawCount >= vrMenuBakeReplayDraws.size())
+		return;
+
+	ID3D11RenderTargetView* rtv = nullptr;
+	a_context->OMGetRenderTargets(1, &rtv, nullptr);
+	auto rtvRelease = ScopeExit([&]() {
+		if (rtv)
+			rtv->Release();
+	});
+	if (!rtv)
+		return;
+
+	VRMenuCompositionTargetMatch destination{};
+	if (!TryResolveVRMenuCompositionView(rtv, destination) ||
+		destination.target != RE::RENDER_TARGETS::kTOTAL ||
+		destination.width != renderWidth ||
+		destination.height != renderHeight ||
+		destination.samples != 1) {
+		return;
+	}
+
+	std::array<ID3D11ShaderResourceView*, kVRMenuBakeReplaySRVSlots> psSRVs{};
+	a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+	auto srvRelease = ScopeExit([&]() {
+		for (auto* srv : psSRVs) {
+			if (srv)
+				srv->Release();
+		}
+	});
+
+	uint32_t menuBgPsSlot = static_cast<uint32_t>(psSRVs.size());
+	for (uint32_t slot = 0; slot < psSRVs.size(); ++slot) {
+		VRMenuCompositionTargetMatch source{};
+		if (!TryResolveVRMenuCompositionView(psSRVs[slot], source) ||
+			source.target != RE::RENDER_TARGETS::kMENUBG ||
+			source.width != renderWidth ||
+			source.height != renderHeight ||
+			source.samples != 1) {
+			continue;
+		}
+
+		menuBgPsSlot = slot;
+		break;
+	}
+	if (menuBgPsSlot == psSRVs.size())
+		return;
+
+	try {
+		ID3D11Resource* rtvResource = nullptr;
+		rtv->GetResource(&rtvResource);
+		if (!rtvResource)
+			return;
+		auto resourceRelease = ScopeExit([&]() {
+			rtvResource->Release();
+		});
+
+		winrt::com_ptr<ID3D11Texture2D> totalTexture;
+		if (FAILED(rtvResource->QueryInterface(IID_PPV_ARGS(totalTexture.put()))) || !totalTexture)
+			return;
+
+		D3D11_TEXTURE2D_DESC totalDesc{};
+		totalTexture->GetDesc(&totalDesc);
+		if (totalDesc.Width != renderWidth ||
+			totalDesc.Height != renderHeight ||
+			totalDesc.Format != destination.format ||
+			totalDesc.SampleDesc.Count != 1 ||
+			totalDesc.ArraySize != 1) {
+			return;
+		}
+
+		if (!vrMenuBakeCleanTotalValid) {
+			if (!vrMenuBakeCleanTotalCopy ||
+				vrMenuBakeCleanTotalCopy->desc.Width != totalDesc.Width ||
+				vrMenuBakeCleanTotalCopy->desc.Height != totalDesc.Height ||
+				vrMenuBakeCleanTotalCopy->desc.Format != totalDesc.Format ||
+				vrMenuBakeCleanTotalCopy->desc.SampleDesc.Count != totalDesc.SampleDesc.Count) {
+				vrMenuBakeCleanTotalCopy = CreateNamedTexture2D(
+					totalDesc.Width,
+					totalDesc.Height,
+					totalDesc.Format,
+					false,
+					false,
+					false,
+					"VRMenuBakeCleanTotal");
+			}
+
+			if (!vrMenuBakeCleanTotalCopy || !vrMenuBakeCleanTotalCopy->resource)
+				return;
+
+			a_context->CopyResource(vrMenuBakeCleanTotalCopy->resource.get(), totalTexture.get());
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake clean scene capture"))
+				return;
+
+			CopyD3DReference(vrMenuBakeCleanTotalSource, totalTexture.get());
+			vrMenuBakeCleanTotalDesc = totalDesc;
+			vrMenuBakeCleanTotalValid = true;
+			vrMenuBakeCleanTotalRestored = false;
+			VR_TRANSITION_DIAG_LOG(
+				"[VRMenuBakeReplay] captured clean kTOTAL frame={} size={}x{} fmt={} final={}x{}",
+				state->frameCount,
+				totalDesc.Width,
+				totalDesc.Height,
+				static_cast<uint32_t>(totalDesc.Format),
+				finalWidth,
+				finalHeight);
+		}
+
+		auto& draw = vrMenuBakeReplayDraws[vrMenuBakeReplayDrawCount];
+		if (!CaptureVRMenuBakeDrawState(
+				a_context,
+				draw,
+				VRMenuBakeReplayDrawKind::DrawIndexed,
+				a_vertexCount,
+				a_indexCount,
+				a_instanceCount,
+				a_startVertexLocation,
+				a_startIndexLocation,
+				a_baseVertexLocation,
+				a_startInstanceLocation,
+				state->frameCount,
+				renderWidth,
+				renderHeight,
+				finalWidth,
+				finalHeight)) {
+			return;
+		}
+
+		++vrMenuBakeReplayDrawCount;
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMenuBakeReplay] captured bake draw frame={} drawIndex={} menuBgPsSlot={} render={}x{} final={}x{}",
+			state->frameCount,
+			vrMenuBakeReplayDrawCount - 1u,
+			menuBgPsSlot,
+			renderWidth,
+			renderHeight,
+			finalWidth,
+			finalHeight);
+	} catch (const std::exception& e) {
+		static bool loggedCaptureFailure = false;
+		LogWarnOnce(loggedCaptureFailure, "[VRMenuBakeReplay] Failed to capture menu bake draw state", e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "VR menu bake capture");
+	} catch (...) {
+		static bool loggedCaptureFailure = false;
+		LogWarnOnce(loggedCaptureFailure, "[VRMenuBakeReplay] Failed to capture menu bake draw state");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake capture");
+	}
+}
+
+bool Upscaling::RestoreVRMenuBakeCleanSceneForSubmit(ID3D11Texture2D* a_sourceTexture, const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_frame)
+{
+	BeginVRMenuBakePrototypeFrame(a_frame);
+	if (!a_sourceTexture ||
+		!vrMenuBakeCleanTotalValid ||
+		vrMenuBakeCleanTotalRestored ||
+		!vrMenuBakeCleanTotalSource ||
+		!vrMenuBakeCleanTotalCopy ||
+		!vrMenuBakeCleanTotalCopy->resource ||
+		vrMenuBakeReplayDrawCount == 0 ||
+		a_sourceTexture != vrMenuBakeCleanTotalSource.get() ||
+		a_sourceDesc.Width != vrMenuBakeCleanTotalDesc.Width ||
+		a_sourceDesc.Height != vrMenuBakeCleanTotalDesc.Height ||
+		a_sourceDesc.Format != vrMenuBakeCleanTotalDesc.Format ||
+		a_sourceDesc.SampleDesc.Count != vrMenuBakeCleanTotalDesc.SampleDesc.Count ||
+		a_sourceDesc.ArraySize != vrMenuBakeCleanTotalDesc.ArraySize) {
+		return false;
+	}
+
+	auto* context = globals::d3d::context;
+	if (!context)
+		return false;
+
+	try {
+		context->CopyResource(a_sourceTexture, vrMenuBakeCleanTotalCopy->resource.get());
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake clean scene restore"))
+			return false;
+		vrMenuBakeCleanTotalRestored = true;
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMenuBakeReplay] restored clean kTOTAL before vendor frame={} size={}x{} drawCount={}",
+			a_frame,
+			a_sourceDesc.Width,
+			a_sourceDesc.Height,
+			vrMenuBakeReplayDrawCount);
+		return true;
+	} catch (const std::exception& e) {
+		static bool loggedRestoreFailure = false;
+		LogWarnOnce(loggedRestoreFailure, "[VRMenuBakeReplay] Failed to restore clean kTOTAL before vendor", e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "VR menu bake clean scene restore");
+	} catch (...) {
+		static bool loggedRestoreFailure = false;
+		LogWarnOnce(loggedRestoreFailure, "[VRMenuBakeReplay] Failed to restore clean kTOTAL before vendor");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake clean scene restore");
+	}
+
+	return false;
+}
+
+bool Upscaling::EnsureVRMenuBakeReplayCombinedTexture(uint32_t a_combinedWidth, uint32_t a_combinedHeight, DXGI_FORMAT a_format)
+{
+	if (!a_combinedWidth || !a_combinedHeight || a_format == DXGI_FORMAT_UNKNOWN)
+		return false;
+
+	try {
+		if (!vrMenuBakeReplayCombined ||
+			vrMenuBakeReplayCombined->desc.Width != a_combinedWidth ||
+			vrMenuBakeReplayCombined->desc.Height != a_combinedHeight ||
+			vrMenuBakeReplayCombined->desc.Format != a_format ||
+			!vrMenuBakeReplayCombined->rtv) {
+			vrMenuBakeReplayCombined = CreateNamedTexture2D(
+				a_combinedWidth,
+				a_combinedHeight,
+				a_format,
+				false,
+				false,
+				true,
+				"VRMenuBakeReplayCombined");
+		}
+	} catch (const std::exception& e) {
+		static bool loggedReplayTargetFailure = false;
+		LogWarnOnce(loggedReplayTargetFailure, "[VRMenuBakeReplay] Failed to create combined replay target", e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "VR menu bake replay target creation");
+		return false;
+	} catch (...) {
+		static bool loggedReplayTargetFailure = false;
+		LogWarnOnce(loggedReplayTargetFailure, "[VRMenuBakeReplay] Failed to create combined replay target");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake replay target creation");
+		return false;
+	}
+
+	return vrMenuBakeReplayCombined && vrMenuBakeReplayCombined->resource && vrMenuBakeReplayCombined->rtv;
+}
+
+bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight)
+{
+	if (a_eyeIndex >= 2 ||
+		!a_eyeTexture ||
+		!a_eyeWidth ||
+		!a_eyeHeight ||
+		vrMenuBakePrototypeFrame != a_frame ||
+		!vrMenuBakeCleanTotalRestored ||
+		vrMenuBakeReplayDrawCount == 0) {
+		return false;
+	}
+
+	auto* context = globals::d3d::context;
+	if (!context)
+		return false;
+
+	D3D11_TEXTURE2D_DESC eyeDesc{};
+	a_eyeTexture->GetDesc(&eyeDesc);
+	if (eyeDesc.Width < a_eyeWidth ||
+		eyeDesc.Height < a_eyeHeight ||
+		eyeDesc.ArraySize != 1 ||
+		eyeDesc.SampleDesc.Count != 1) {
+		return false;
+	}
+
+	const uint32_t combinedWidth = a_eyeWidth * 2u;
+	const uint32_t combinedHeight = a_eyeHeight;
+	if (!combinedWidth || combinedWidth / 2u != a_eyeWidth)
+		return false;
+
+	try {
+		if (!EnsureVRMenuBakeReplayCombinedTexture(combinedWidth, combinedHeight, eyeDesc.Format))
+			return false;
+
+		D3D11_BOX eyeBox{ 0, 0, 0, a_eyeWidth, a_eyeHeight, 1 };
+		context->CopySubresourceRegion(
+			vrMenuBakeReplayCombined->resource.get(),
+			0,
+			a_eyeIndex == 0 ? 0u : a_eyeWidth,
+			0,
+			0,
+			a_eyeTexture,
+			0,
+			&eyeBox);
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake replay eye seed"))
+			return false;
+
+		ID3D11VertexShader* previousVS = nullptr;
+		ID3D11HullShader* previousHS = nullptr;
+		ID3D11DomainShader* previousDS = nullptr;
+		ID3D11GeometryShader* previousGS = nullptr;
+		ID3D11PixelShader* previousPS = nullptr;
+		ID3D11InputLayout* previousInputLayout = nullptr;
+		D3D11_PRIMITIVE_TOPOLOGY previousTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+		ID3D11Buffer* previousIndexBuffer = nullptr;
+		DXGI_FORMAT previousIndexFormat = DXGI_FORMAT_UNKNOWN;
+		UINT previousIndexOffset = 0;
+		std::array<ID3D11Buffer*, kVRMenuBakeReplayVBSlots> previousVertexBuffers{};
+		std::array<UINT, kVRMenuBakeReplayVBSlots> previousVertexStrides{};
+		std::array<UINT, kVRMenuBakeReplayVBSlots> previousVertexOffsets{};
+		std::array<ID3D11ShaderResourceView*, kVRMenuBakeReplaySRVSlots> previousPSSrvs{};
+		std::array<ID3D11SamplerState*, kVRMenuBakeReplaySamplerSlots> previousPSSamplers{};
+		std::array<ID3D11Buffer*, kVRMenuBakeReplayCBSlots> previousVSCBs{};
+		std::array<ID3D11Buffer*, kVRMenuBakeReplayCBSlots> previousPSCBs{};
+		std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> previousRTVs{};
+		ID3D11DepthStencilView* previousDSV = nullptr;
+		ID3D11BlendState* previousBlendState = nullptr;
+		FLOAT previousBlendFactor[4] = {};
+		UINT previousSampleMask = 0;
+		ID3D11DepthStencilState* previousDepthStencilState = nullptr;
+		UINT previousStencilRef = 0;
+		ID3D11RasterizerState* previousRasterizerState = nullptr;
+		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousViewports{};
+		UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+		std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousScissors{};
+		UINT previousScissorCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+
+		context->VSGetShader(&previousVS, nullptr, nullptr);
+		context->HSGetShader(&previousHS, nullptr, nullptr);
+		context->DSGetShader(&previousDS, nullptr, nullptr);
+		context->GSGetShader(&previousGS, nullptr, nullptr);
+		context->PSGetShader(&previousPS, nullptr, nullptr);
+		context->IAGetInputLayout(&previousInputLayout);
+		context->IAGetPrimitiveTopology(&previousTopology);
+		context->IAGetIndexBuffer(&previousIndexBuffer, &previousIndexFormat, &previousIndexOffset);
+		context->IAGetVertexBuffers(
+			0,
+			static_cast<UINT>(previousVertexBuffers.size()),
+			previousVertexBuffers.data(),
+			previousVertexStrides.data(),
+			previousVertexOffsets.data());
+		context->PSGetShaderResources(0, static_cast<UINT>(previousPSSrvs.size()), previousPSSrvs.data());
+		context->PSGetSamplers(0, static_cast<UINT>(previousPSSamplers.size()), previousPSSamplers.data());
+		context->VSGetConstantBuffers(0, static_cast<UINT>(previousVSCBs.size()), previousVSCBs.data());
+		context->PSGetConstantBuffers(0, static_cast<UINT>(previousPSCBs.size()), previousPSCBs.data());
+		context->OMGetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), &previousDSV);
+		context->OMGetBlendState(&previousBlendState, previousBlendFactor, &previousSampleMask);
+		context->OMGetDepthStencilState(&previousDepthStencilState, &previousStencilRef);
+		context->RSGetState(&previousRasterizerState);
+		context->RSGetViewports(&previousViewportCount, previousViewports.data());
+		context->RSGetScissorRects(&previousScissorCount, previousScissors.data());
+
+		auto restoreState = ScopeExit([&]() {
+			std::array<ID3D11ShaderResourceView*, kVRMenuBakeReplaySRVSlots> nullSRVs{};
+			context->PSSetShaderResources(0, static_cast<UINT>(nullSRVs.size()), nullSRVs.data());
+
+			context->VSSetShader(previousVS, nullptr, 0);
+			context->HSSetShader(previousHS, nullptr, 0);
+			context->DSSetShader(previousDS, nullptr, 0);
+			context->GSSetShader(previousGS, nullptr, 0);
+			context->PSSetShader(previousPS, nullptr, 0);
+			context->IASetInputLayout(previousInputLayout);
+			context->IASetPrimitiveTopology(previousTopology);
+			context->IASetIndexBuffer(previousIndexBuffer, previousIndexFormat, previousIndexOffset);
+			context->IASetVertexBuffers(
+				0,
+				static_cast<UINT>(previousVertexBuffers.size()),
+				previousVertexBuffers.data(),
+				previousVertexStrides.data(),
+				previousVertexOffsets.data());
+			context->PSSetShaderResources(0, static_cast<UINT>(previousPSSrvs.size()), previousPSSrvs.data());
+			context->PSSetSamplers(0, static_cast<UINT>(previousPSSamplers.size()), previousPSSamplers.data());
+			context->VSSetConstantBuffers(0, static_cast<UINT>(previousVSCBs.size()), previousVSCBs.data());
+			context->PSSetConstantBuffers(0, static_cast<UINT>(previousPSCBs.size()), previousPSCBs.data());
+			context->OMSetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), previousDSV);
+			context->OMSetBlendState(previousBlendState, previousBlendFactor, previousSampleMask);
+			context->OMSetDepthStencilState(previousDepthStencilState, previousStencilRef);
+			context->RSSetState(previousRasterizerState);
+			context->RSSetViewports(previousViewportCount, previousViewports.data());
+			context->RSSetScissorRects(previousScissorCount, previousScissors.data());
+
+			if (previousVS)
+				previousVS->Release();
+			if (previousHS)
+				previousHS->Release();
+			if (previousDS)
+				previousDS->Release();
+			if (previousGS)
+				previousGS->Release();
+			if (previousPS)
+				previousPS->Release();
+			if (previousInputLayout)
+				previousInputLayout->Release();
+			if (previousIndexBuffer)
+				previousIndexBuffer->Release();
+			for (auto* buffer : previousVertexBuffers) {
+				if (buffer)
+					buffer->Release();
+			}
+			for (auto* srv : previousPSSrvs) {
+				if (srv)
+					srv->Release();
+			}
+			for (auto* sampler : previousPSSamplers) {
+				if (sampler)
+					sampler->Release();
+			}
+			for (auto* buffer : previousVSCBs) {
+				if (buffer)
+					buffer->Release();
+			}
+			for (auto* buffer : previousPSCBs) {
+				if (buffer)
+					buffer->Release();
+			}
+			for (auto* rtv : previousRTVs) {
+				if (rtv)
+					rtv->Release();
+			}
+			if (previousDSV)
+				previousDSV->Release();
+			if (previousBlendState)
+				previousBlendState->Release();
+			if (previousDepthStencilState)
+				previousDepthStencilState->Release();
+			if (previousRasterizerState)
+				previousRasterizerState->Release();
+		});
+
+		ID3D11RenderTargetView* combinedRTV = vrMenuBakeReplayCombined->rtv.get();
+
+		bool replayedAny = false;
+		for (uint32_t drawIndex = 0; drawIndex < vrMenuBakeReplayDrawCount; ++drawIndex) {
+			const auto& draw = vrMenuBakeReplayDraws[drawIndex];
+			if (!draw.valid ||
+				draw.frame != a_frame ||
+				draw.finalWidth != combinedWidth ||
+				draw.finalHeight != combinedHeight ||
+				draw.drawKind == VRMenuBakeReplayDrawKind::None) {
+				continue;
+			}
+
+			const float viewportScaleX = static_cast<float>(combinedWidth) / static_cast<float>(std::max<uint32_t>(1u, draw.renderWidth));
+			const float viewportScaleY = static_cast<float>(combinedHeight) / static_cast<float>(std::max<uint32_t>(1u, draw.renderHeight));
+			std::array<ID3D11Buffer*, kVRMenuBakeReplayVBSlots> vertexBuffers{};
+			for (size_t i = 0; i < vertexBuffers.size(); ++i)
+				vertexBuffers[i] = draw.vertexBuffers[i].get();
+			std::array<ID3D11ShaderResourceView*, kVRMenuBakeReplaySRVSlots> psSRVs{};
+			for (size_t i = 0; i < psSRVs.size(); ++i)
+				psSRVs[i] = draw.psSRVs[i].get();
+			std::array<ID3D11SamplerState*, kVRMenuBakeReplaySamplerSlots> psSamplers{};
+			for (size_t i = 0; i < psSamplers.size(); ++i)
+				psSamplers[i] = draw.psSamplers[i].get();
+			std::array<ID3D11Buffer*, kVRMenuBakeReplayCBSlots> vsCBs{};
+			std::array<ID3D11Buffer*, kVRMenuBakeReplayCBSlots> psCBs{};
+			for (size_t i = 0; i < vsCBs.size(); ++i) {
+				vsCBs[i] = draw.vsCBs[i].get();
+				psCBs[i] = draw.psCBs[i].get();
+			}
+
+			std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> replayViewports{};
+			UINT replayViewportCount = draw.viewportCount;
+			if (replayViewportCount == 0) {
+				replayViewportCount = 1;
+				replayViewports[0].TopLeftX = 0.0f;
+				replayViewports[0].TopLeftY = 0.0f;
+				replayViewports[0].Width = static_cast<float>(combinedWidth);
+				replayViewports[0].Height = static_cast<float>(combinedHeight);
+				replayViewports[0].MinDepth = 0.0f;
+				replayViewports[0].MaxDepth = 1.0f;
+			} else {
+				replayViewportCount = std::min<UINT>(replayViewportCount, static_cast<UINT>(replayViewports.size()));
+				for (UINT i = 0; i < replayViewportCount; ++i) {
+					replayViewports[i] = draw.viewports[i];
+					replayViewports[i].TopLeftX *= viewportScaleX;
+					replayViewports[i].TopLeftY *= viewportScaleY;
+					replayViewports[i].Width *= viewportScaleX;
+					replayViewports[i].Height *= viewportScaleY;
+				}
+			}
+
+			std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> replayScissors{};
+			UINT replayScissorCount = std::min<UINT>(draw.scissorCount, static_cast<UINT>(replayScissors.size()));
+			for (UINT i = 0; i < replayScissorCount; ++i) {
+				replayScissors[i].left = static_cast<LONG>(std::lround(static_cast<float>(draw.scissors[i].left) * viewportScaleX));
+				replayScissors[i].top = static_cast<LONG>(std::lround(static_cast<float>(draw.scissors[i].top) * viewportScaleY));
+				replayScissors[i].right = static_cast<LONG>(std::lround(static_cast<float>(draw.scissors[i].right) * viewportScaleX));
+				replayScissors[i].bottom = static_cast<LONG>(std::lround(static_cast<float>(draw.scissors[i].bottom) * viewportScaleY));
+			}
+
+			context->OMSetRenderTargets(1, &combinedRTV, nullptr);
+			context->OMSetBlendState(draw.blendState.get(), draw.blendFactor, draw.sampleMask);
+			context->OMSetDepthStencilState(draw.depthStencilState.get(), draw.stencilRef);
+			context->RSSetState(draw.rasterizerState.get());
+			context->RSSetViewports(replayViewportCount, replayViewports.data());
+			context->RSSetScissorRects(replayScissorCount, replayScissors.data());
+			context->IASetInputLayout(draw.inputLayout.get());
+			context->IASetPrimitiveTopology(draw.primitiveTopology);
+			context->IASetIndexBuffer(draw.indexBuffer.get(), draw.indexFormat, draw.indexOffset);
+			context->IASetVertexBuffers(
+				0,
+				static_cast<UINT>(vertexBuffers.size()),
+				vertexBuffers.data(),
+				draw.vertexStrides.data(),
+				draw.vertexOffsets.data());
+			context->VSSetShader(draw.vertexShader.get(), nullptr, 0);
+			context->HSSetShader(draw.hullShader.get(), nullptr, 0);
+			context->DSSetShader(draw.domainShader.get(), nullptr, 0);
+			context->GSSetShader(draw.geometryShader.get(), nullptr, 0);
+			context->PSSetShader(draw.pixelShader.get(), nullptr, 0);
+			context->VSSetConstantBuffers(0, static_cast<UINT>(vsCBs.size()), vsCBs.data());
+			context->PSSetConstantBuffers(0, static_cast<UINT>(psCBs.size()), psCBs.data());
+			context->PSSetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+			context->PSSetSamplers(0, static_cast<UINT>(psSamplers.size()), psSamplers.data());
+
+			switch (draw.drawKind) {
+			case VRMenuBakeReplayDrawKind::Draw:
+				context->Draw(draw.vertexCount, draw.startVertexLocation);
+				replayedAny = true;
+				break;
+			case VRMenuBakeReplayDrawKind::DrawIndexed:
+				if (!draw.indexBuffer)
+					return false;
+				context->DrawIndexed(draw.indexCount, draw.startIndexLocation, draw.baseVertexLocation);
+				replayedAny = true;
+				break;
+			case VRMenuBakeReplayDrawKind::DrawInstanced:
+				context->DrawInstanced(draw.vertexCount, draw.instanceCount, draw.startVertexLocation, draw.startInstanceLocation);
+				replayedAny = true;
+				break;
+			case VRMenuBakeReplayDrawKind::DrawIndexedInstanced:
+				if (!draw.indexBuffer)
+					return false;
+				context->DrawIndexedInstanced(draw.indexCount, draw.instanceCount, draw.startIndexLocation, draw.baseVertexLocation, draw.startInstanceLocation);
+				replayedAny = true;
+				break;
+			default:
+				break;
+			}
+		}
+
+		if (!replayedAny)
+			return false;
+
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake replay draw"))
+			return false;
+
+		std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> nullRTVs{};
+		context->OMSetRenderTargets(static_cast<UINT>(nullRTVs.size()), nullRTVs.data(), nullptr);
+
+		D3D11_BOX replayBox{
+			a_eyeIndex == 0 ? 0u : a_eyeWidth,
+			0,
+			0,
+			a_eyeIndex == 0 ? a_eyeWidth : combinedWidth,
+			a_eyeHeight,
+			1
+		};
+		context->CopySubresourceRegion(a_eyeTexture, 0, 0, 0, 0, vrMenuBakeReplayCombined->resource.get(), 0, &replayBox);
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake replay output copy"))
+			return false;
+
+		VR_TRANSITION_DIAG_LOG(
+			"[VRMenuBakeReplay] replayed menu after vendor frame={} eye={} draws={} eye={}x{} combined={}x{}",
+			a_frame,
+			a_eyeIndex,
+			vrMenuBakeReplayDrawCount,
+			a_eyeWidth,
+			a_eyeHeight,
+			combinedWidth,
+			combinedHeight);
+		return true;
+	} catch (const std::exception& e) {
+		static bool loggedReplayFailure = false;
+		LogWarnOnce(loggedReplayFailure, "[VRMenuBakeReplay] Failed to replay menu bake after vendor", e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "VR menu bake replay");
+	} catch (...) {
+		static bool loggedReplayFailure = false;
+		LogWarnOnce(loggedReplayFailure, "[VRMenuBakeReplay] Failed to replay menu bake after vendor");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake replay");
+	}
+
+	return false;
+}
+
+bool Upscaling::QueueVRMenuBakeReplayAfterVendor(uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame)
+{
+	BeginVRMenuBakePrototypeFrame(a_frame);
+	if (vrMenuBakePrototypeFrame != a_frame ||
+		!vrMenuBakeCleanTotalRestored ||
+		vrMenuBakeReplayDrawCount == 0) {
+		return false;
+	}
+
+	return ReplayVRMenuBakeDrawsToCombinedOutput(a_frame, a_eyeIndex, a_eyeTexture, a_eyeWidth, a_eyeHeight);
+}
+
 void Upscaling::TraceVRTrackedResourceCopyOperation(
 	ID3D11DeviceContext* a_context,
 	const char* a_operation,
@@ -8282,6 +9082,16 @@ void Upscaling::TraceVRTrackedDrawOperation(
 	INT a_baseVertexLocation,
 	UINT a_startInstanceLocation)
 {
+	globals::features::upscaling.TryCaptureVRMenuBakeDrawPrototype(
+		a_context,
+		a_operation,
+		a_vertexCount,
+		a_indexCount,
+		a_instanceCount,
+		a_startVertexLocation,
+		a_startIndexLocation,
+		a_baseVertexLocation,
+		a_startInstanceLocation);
 	LogVRTrackedDrawWriteDiagnostics(
 		a_context,
 		a_operation,
@@ -11071,6 +11881,16 @@ void Upscaling::DestroyVRIntermediateTextures()
 	submitStageMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
+	vrMenuBakePrototypeFrame = std::numeric_limits<uint32_t>::max();
+	vrMenuBakeCleanTotalValid = false;
+	vrMenuBakeCleanTotalRestored = false;
+	vrMenuBakeCleanTotalSource = nullptr;
+	vrMenuBakeCleanTotalDesc = {};
+	vrMenuBakeCleanTotalCopy.reset();
+	vrMenuBakeReplayDrawCount = 0;
+	for (auto& draw : vrMenuBakeReplayDraws)
+		ResetVRMenuBakeCapturedDrawState(draw);
+	vrMenuBakeReplayCombined.reset();
 }
 
 void Upscaling::UnbindUpscalingResources()
@@ -17632,6 +18452,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 	const uint32_t currentFrame = state->frameCount;
+	BeginVRMenuBakePrototypeFrame(currentFrame);
 	const bool presentationUpscalingActive = IsPresentationUpscalingActive();
 	const bool vrRenderScaleMode = resolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 	const bool loadingSubmitProtectionContext =
@@ -18002,6 +18823,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		 !vrIntermediateTransparencyMask[eyeIndex] || !vrIntermediateTransparencyMask[eyeIndex]->resource)) {
 		return false;
 	}
+	const bool menuBakeReplayReadyForEye =
+		menuTextVendorReconstruct &&
+		vrMenuBakeReplayDrawCount != 0 &&
+		vrIntermediateColorOut[eyeIndex] &&
+		EnsureVRMenuBakeReplayCombinedTexture(eyeWidthOut * 2u, eyeHeightOut, vrIntermediateColorOut[eyeIndex]->desc.Format);
 
 	const auto clearSubmittedEyeHMDMask = [&]() {
 		if (vrRenderScaleMenuCanUseVendor)
@@ -18069,6 +18895,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			loggedBoundsStretchFallback = true;
 		}
 	}
+
+	if (menuBakeReplayReadyForEye)
+		RestoreVRMenuBakeCleanSceneForSubmit(sourceTexture, sourceDesc, currentFrame);
 
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
@@ -18469,6 +19298,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (vrRenderScaleMode &&
 		!presentationRenderTarget &&
 		menuTextProtectionContext) {
+		if (menuBakeReplayReadyForEye && vrIntermediateColorOut[eyeIndex] && vrIntermediateColorOut[eyeIndex]->resource)
+			QueueVRMenuBakeReplayAfterVendor(eyeIndex, vrIntermediateColorOut[eyeIndex]->resource.get(), eyeWidthOut, eyeHeightOut, currentFrame);
 		LogKnownGameMenuFinalCompositeDiagnostics(eyeIndex, eyeWidthOut, eyeHeightOut);
 	}
 

@@ -732,6 +732,7 @@ namespace
 	void DrawStereoSyncSettings();
 	void DrawStereoBlendSettings();
 	void DrawFoveationSettings();
+	void DrawVRSSettings();
 	void DrawDeferredCompositeVRSSettings(Upscaling& a_upscaling);
 	void DrawShadowmapRasterizerSettings();
 	void DrawKeyBindings();
@@ -757,9 +758,17 @@ void VR::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (BeginTabItemWithFont("FOV/VRS", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRFoveatedVRSFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
+		if (BeginTabItemWithFont("FOV", Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##VRFoveatedFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawFoveationSettings();
+			}
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+
+		if (BeginTabItemWithFont("VRS", Menu::FontRole::Subheading)) {
+			if (ImGui::BeginChild("##VRVRSFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
+				DrawVRSSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
@@ -1526,10 +1535,6 @@ namespace
 		upscaling.DrawFoveatedSetupInstructions();
 		drawSection("Shared FOV Mask");
 		upscaling.DrawFoveatedSettings();
-		drawSection("Variable Rate Shading (VRS)");
-		upscaling.DrawAAVRSSetupInstructions();
-		upscaling.DrawAAVRSSettings();
-		DrawDeferredCompositeVRSSettings(upscaling);
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
 		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
@@ -1836,6 +1841,19 @@ namespace
 			else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation is idle until rain, wetness, drying, or debug overrides are active.");
 		}
+	}
+
+	void DrawVRSSettings()
+	{
+		auto& upscaling = globals::features::upscaling;
+		if (!REL::Module::IsVR()) {
+			ImGui::TextDisabled("VR VRS controls are available only in VR.");
+			return;
+		}
+
+		upscaling.DrawAAVRSSetupInstructions();
+		upscaling.DrawAAVRSSettings();
+		DrawDeferredCompositeVRSSettings(upscaling);
 	}
 
 	void DrawShadowmapRasterizerSettings()

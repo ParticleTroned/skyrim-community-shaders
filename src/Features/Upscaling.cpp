@@ -7093,7 +7093,7 @@ void Upscaling::DrawSettings()
 					IsAAVRSAdapterEligible(),
 					settings.aaVrs,
 					aaVrsRuntimeActive);
-				ImGui::TextDisabled("Configure foveated upscaling and Variable Rate Shading (VRS) in VR > FOV/VRS.");
+				ImGui::TextDisabled("Configure foveated upscaling in VR > FOV and Variable Rate Shading (VRS) in VR > VRS.");
 				ImGui::TextColored(
 					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 					"FOV: %s",
@@ -7433,6 +7433,58 @@ namespace
 		ImGui::PopTextWrapPos();
 		ImGui::EndChild();
 	}
+
+	void DrawAAVRSMaskVisualizationSetting(Upscaling& a_upscaling, bool a_sameLine = false)
+	{
+		auto& settings = a_upscaling.settings;
+		if (!globals::game::isVR || !a_upscaling.loaded) {
+			settings.aaVrsVisualization = false;
+			return;
+		}
+
+		SanitizeFoveatedSettings(settings);
+		const auto upscaleMethod = a_upscaling.GetUpscaleMethod();
+		const bool aaVrsMethodEligible = a_upscaling.IsAAVRSEligible(upscaleMethod);
+		const bool aaVrsAdapterEligible = a_upscaling.IsAAVRSAdapterEligible();
+		const auto aaVrsUiState = BuildAAVRSUiState(
+			a_upscaling,
+			aaVrsMethodEligible,
+			aaVrsAdapterEligible,
+			settings.aaVrs,
+			a_upscaling.aaVrsRuntimeActive);
+		if (!aaVrsUiState.requested)
+			settings.aaVrsVisualization = false;
+
+		if (a_sameLine)
+			ImGui::SameLine();
+		{
+			auto disabledGuard = Util::DisableGuard(!aaVrsUiState.requested);
+			bool aaVrsVisualization = aaVrsUiState.requested && settings.aaVrsVisualization;
+			Util::BlueFrameStyleWrapper visualizationStyle(true);
+			if (ImGui::Checkbox(kVrsMaskVisualizationName, &aaVrsVisualization) && aaVrsUiState.requested)
+				settings.aaVrsVisualization = aaVrsVisualization;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			if (!aaVrsUiState.requested) {
+				ImGui::TextUnformatted("Enable Foveated Variable Rate Shading (VRS) in the VRS tab to preview the VRS mask here.");
+				if (!aaVrsMethodEligible) {
+					if (SupportsFoveatedVendorDispatch(upscaleMethod))
+						ImGui::TextUnformatted("VRS requires active Foveated Upscaling (FOV) with an active mask.");
+					else
+						ImGui::TextUnformatted("VRS mask visualization is available only with DLSS/FSR Foveated Upscaling in VR.");
+				} else if (!aaVrsAdapterEligible) {
+					ImGui::TextUnformatted("VRS mask visualization requires NVIDIA variable pixel-rate shading support.");
+				}
+			} else {
+				ImGui::TextUnformatted("Replaces the scene with the current VRS mask; dark = 1x1, magenta = coarser than 1x1.");
+				ImGui::TextUnformatted("Content-aware tile promotions are included; per-pass full-rate overrides are applied dynamically during draw calls.");
+				if (settings.aaVrsPerformanceMode)
+					ImGui::TextUnformatted("Performance mode target: dark includes the fixed 0.25 inner band and any content-aware full-rate promotions.");
+				else
+					ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
+			}
+		}
+	}
 }
 
 void Upscaling::DrawFoveatedSetupInstructions()
@@ -7545,6 +7597,7 @@ void Upscaling::DrawFoveatedSettings()
 		else
 			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
 	}
+	DrawAAVRSMaskVisualizationSetting(*this, true);
 
 	ImGui::Dummy(ImVec2(0.0f, 6.0f));
 	ImGui::Separator();
@@ -7749,19 +7802,6 @@ void Upscaling::DrawAAVRSSettings()
 
 	if (aaVrsUiState.requested) {
 		ImGui::Dummy(ImVec2(0.0f, 3.0f));
-		{
-			Util::BlueFrameStyleWrapper visualizationStyle(true);
-			ImGui::Checkbox(kVrsMaskVisualizationName, &settings.aaVrsVisualization);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Replaces the scene with the current VRS mask; dark = 1x1, magenta = coarser than 1x1.");
-			ImGui::TextUnformatted("Content-aware tile promotions are included; per-pass full-rate overrides are applied dynamically during draw calls.");
-			if (settings.aaVrsPerformanceMode)
-				ImGui::TextUnformatted("Performance mode target: dark includes the fixed 0.25 inner band and any content-aware full-rate promotions.");
-			else
-				ImGui::TextUnformatted("Target: no magenta visible in your view, using the smallest possible FOV mask size for maximum performance and image quality.");
-		}
-
 		{
 			Util::BlueFrameStyleWrapper passAwareStyle(true);
 			ImGui::Checkbox("VRS Pass-Aware Safety", &settings.aaVrsPassAware);

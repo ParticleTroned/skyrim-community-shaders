@@ -172,7 +172,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 
 			// Restore Saved Settings Button
 			ImGui::TableNextColumn();
-			if (ImGui::Button(T("menu.restore_settings", "Restore Saved Settings"), { -1, 0 })) {
+			if (Util::ButtonWithFlash(T("menu.restore_settings", "Restore Saved Settings"), { -1, 0 })) {
 				globals::state->Load();
 				globals::features::llf::particleLights.GetConfigs();
 			}
@@ -246,7 +246,8 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 
 	// Build list of available action icons (in display order)
 	if (uiIcons.saveSettings.texture) {
-		actionIcons.push_back({ uiIcons.saveSettings.texture,
+		actionIcons.push_back({ "HeaderSaveSettings",
+			uiIcons.saveSettings.texture,
 			T("menu.save_settings", "Save Settings"),
 			[]() {
 				globals::state->Save();
@@ -254,7 +255,8 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			} });
 	}
 	if (uiIcons.loadSettings.texture) {
-		actionIcons.push_back({ uiIcons.loadSettings.texture,
+		actionIcons.push_back({ "HeaderRestoreSavedSettings",
+			uiIcons.loadSettings.texture,
 			T("menu.restore_settings", "Restore Saved Settings"),
 			[]() {
 				globals::state->Load();
@@ -262,7 +264,8 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			} });
 	}
 	if (uiIcons.clearCache.texture) {
-		actionIcons.push_back({ uiIcons.clearCache.texture,
+		actionIcons.push_back({ "HeaderClearShaderCache",
+			uiIcons.clearCache.texture,
 			T("menu.clear_shader_cache_tooltip",
 				"Clears the shader cache and disk cache (if enabled). "
 				"The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime. "
@@ -322,7 +325,8 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 
 		// Check mouse interaction against full area
 		const bool isHovered = ImGui::IsMouseHoveringRect(interactionRect.Min, interactionRect.Max, false);
-		Util::DrawRoundedButtonHighlight(interactionRect, isHovered, isHovered && ImGui::IsMouseDown(ImGuiMouseButton_Left), fgDrawList);
+		const bool hasActiveFlash = Util::IsButtonFlashActive(it->id);
+		Util::DrawRoundedButtonHighlight(interactionRect, isHovered || hasActiveFlash, (isHovered && ImGui::IsMouseDown(ImGuiMouseButton_Left)) || hasActiveFlash, fgDrawList);
 
 		// Only render if texture is valid
 		if (it->texture) {
@@ -331,21 +335,30 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 			if (globals::menu->GetSettings().Theme.UseMonochromeIcons) {
 				// Use theme text color for monochrome icons
 				ImVec4 textColor = globals::menu->GetSettings().Theme.Palette.Text;
-				if (!isHovered) {
+				if (!isHovered && !hasActiveFlash) {
 					textColor.w *= 0.85f;  // Slightly reduce alpha when not hovered
 				}
 				tintColor = ImGui::GetColorU32(textColor);
 			} else {
 				// Use white/gray tint for colored icons
-				tintColor = isHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(220, 220, 220, 220);
+				tintColor = (isHovered || hasActiveFlash) ? IM_COL32(255, 255, 255, 255) : IM_COL32(220, 220, 220, 220);
 			}
 			fgDrawList->AddImage(it->texture, iconMin, iconMax, ImVec2(0, 0), ImVec2(1, 1), tintColor);
+		}
+
+		if (isHovered || hasActiveFlash) {
+			ImVec4 feedbackColor = hasActiveFlash ?
+			                           Util::GetButtonFlashColor(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered)) :
+			                           ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+			feedbackColor.w = hasActiveFlash ? 0.34f : 0.18f;
+			fgDrawList->AddRectFilled(interactionRect.Min, interactionRect.Max, ImGui::GetColorU32(feedbackColor));
 		}
 
 		// Handle interaction
 		if (isHovered) {
 			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 				it->callback();
+				Util::TriggerButtonFlash(it->id);
 			}
 
 			// Set tooltip manually since we're drawing outside normal ImGui flow
@@ -387,10 +400,10 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 			continue;
 		}
 
-		std::string buttonId = std::format("##ActionBtn{}", i);
+		std::string buttonId = std::format("##{}", icon.id);
 
 		// Use ImageButton with reduced image size to minimize padding
-		if (ImGui::ImageButton(buttonId.c_str(), icon.texture, imageSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tintColor)) {
+		if (Util::ImageButtonWithFlash(buttonId.c_str(), icon.texture, imageSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tintColor)) {
 			icon.callback();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {

@@ -468,6 +468,33 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;
+	static void TraceVRTrackedResourceCopyOperation(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		UINT a_destinationX,
+		UINT a_destinationY,
+		UINT a_destinationZ,
+		ID3D11Resource* a_source,
+		UINT a_sourceSubresource,
+		const D3D11_BOX* a_sourceBox);
+	static void TraceVRTrackedRenderTargetClearOperation(
+		ID3D11DeviceContext* a_context,
+		ID3D11RenderTargetView* a_target,
+		const float* a_color);
+	static void TraceVRTrackedResourceUpdateOperation(
+		ID3D11DeviceContext* a_context,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		const D3D11_BOX* a_destinationBox);
+	static void TraceVRTrackedResourceResolveOperation(
+		ID3D11DeviceContext* a_context,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		ID3D11Resource* a_source,
+		UINT a_sourceSubresource,
+		DXGI_FORMAT a_format);
 
 	UpscaleMethod GetUpscaleMethod() const;
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const;

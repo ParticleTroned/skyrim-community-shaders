@@ -204,6 +204,61 @@ namespace
 	bool IsSaveLoadTransitionContextActive(const State* a_state);
 	bool IsVRLoadingPresentationContextActive(const State* a_state);
 	bool IsVRRenderScaleTransitionSafetyRelevant(const Upscaling& a_upscaling);
+	void LogVRTrackedViewClearDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_passName,
+		const char* a_phase,
+		ID3D11RenderTargetView* a_target,
+		const float* a_color);
+	void LogVRTrackedResourceCopyDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		const char* a_passName,
+		const char* a_phase,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		UINT a_destinationX,
+		UINT a_destinationY,
+		UINT a_destinationZ,
+		ID3D11Resource* a_source,
+		UINT a_sourceSubresource,
+		const D3D11_BOX* a_sourceBox);
+	thread_local const char* g_vrTrackedResourceOperationPassName = nullptr;
+	thread_local const char* g_vrTrackedResourceOperationPhase = nullptr;
+
+	struct ScopedVRTrackedResourceOperationContext
+	{
+		const char* previousPassName = nullptr;
+		const char* previousPhase = nullptr;
+
+		ScopedVRTrackedResourceOperationContext(const char* a_passName, const char* a_phase) :
+			previousPassName(g_vrTrackedResourceOperationPassName),
+			previousPhase(g_vrTrackedResourceOperationPhase)
+		{
+			g_vrTrackedResourceOperationPassName = a_passName;
+			g_vrTrackedResourceOperationPhase = a_phase;
+		}
+
+		~ScopedVRTrackedResourceOperationContext()
+		{
+			g_vrTrackedResourceOperationPassName = previousPassName;
+			g_vrTrackedResourceOperationPhase = previousPhase;
+		}
+	};
+
+	const char* ResolveVRTrackedResourceOperationPassName(const char* a_fallback)
+	{
+		return (g_vrTrackedResourceOperationPassName && *g_vrTrackedResourceOperationPassName) ?
+			g_vrTrackedResourceOperationPassName :
+			a_fallback;
+	}
+
+	const char* ResolveVRTrackedResourceOperationPhase(const char* a_fallback)
+	{
+		return (g_vrTrackedResourceOperationPhase && *g_vrTrackedResourceOperationPhase) ?
+			g_vrTrackedResourceOperationPhase :
+			a_fallback;
+	}
 
 	bool IsVRPostLoadFadeUISanitizeRelevant(const Upscaling& a_upscaling)
 	{
@@ -284,6 +339,7 @@ namespace
 		}
 
 		constexpr float kClearColor[4] = {};
+		const std::string diagnosticPhase{ a_passName };
 		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
 		uint32_t cleared = 0;
 		uint32_t missing = 0;
@@ -295,6 +351,7 @@ namespace
 				continue;
 			}
 
+			const ScopedVRTrackedResourceOperationContext operationContext("VRPostLoadFadeUISanitize", diagnosticPhase.c_str());
 			globals::d3d::context->ClearRenderTargetView(renderTarget.RTV, kClearColor);
 			++cleared;
 		}
@@ -1256,6 +1313,7 @@ namespace
 	void CopyResourceIfNonAliased(ID3D11DeviceContext* a_context, ID3D11Resource* a_dst, ID3D11Resource* a_src)
 	{
 		if (a_context && a_dst && a_src && a_dst != a_src) {
+			const ScopedVRTrackedResourceOperationContext operationContext("CopyResourceIfNonAliased", "before");
 			a_context->CopyResource(a_dst, a_src);
 		}
 	}
@@ -5588,6 +5646,300 @@ namespace
 			BoolText(a_snapshot.menuTextRasterDiagnosticContext));
 	}
 
+	bool IsTrackedVRMenuMutationTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		switch (a_target) {
+		case RE::RENDER_TARGETS::kTOTAL:
+		case RE::RENDER_TARGETS::kMENUBG:
+		case RE::RENDER_TARGETS::kFADERUI:
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
+		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool TryResolveVRMenuCompositionResource(ID3D11Resource* a_resource, VRMenuCompositionTargetMatch& a_outMatch)
+	{
+		auto renderer = globals::game::renderer;
+		if (!renderer || !a_resource)
+			return false;
+
+		ID3D11Texture2D* texture = nullptr;
+		if (FAILED(a_resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) || !texture)
+			return false;
+		auto textureRelease = ScopeExit([&]() {
+			texture->Release();
+		});
+
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 8> targets{
+			RE::RENDER_TARGETS::kTOTAL,
+			RE::RENDER_TARGETS::kMAIN,
+			RE::RENDER_TARGETS::kMENUBG,
+			RE::RENDER_TARGETS::kPROJECTEDMENU,
+			RE::RENDER_TARGETS::kHUDMENU,
+			RE::RENDER_TARGETS::kFADERUI,
+			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
+		};
+
+		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
+		const int targetCount = Util::GetRenderTargetCount();
+		for (const auto target : targets) {
+			const auto targetIndex = static_cast<int>(target);
+			if (targetIndex < 0 || targetIndex >= targetCount)
+				continue;
+
+			const auto& renderTarget = renderTargets[targetIndex];
+			if (renderTarget.texture != texture && renderTarget.textureCopy != texture)
+				continue;
+
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+
+			a_outMatch = {};
+			a_outMatch.matched = true;
+			a_outMatch.target = target;
+			a_outMatch.name = GetVRMenuCompositionTargetName(target);
+			a_outMatch.texture = texture;
+			a_outMatch.width = desc.Width;
+			a_outMatch.height = desc.Height;
+			a_outMatch.arraySize = desc.ArraySize;
+			a_outMatch.samples = desc.SampleDesc.Count;
+			a_outMatch.format = desc.Format;
+			return true;
+		}
+
+		return false;
+	}
+
+	D3DViewDiagnosticInfo BuildResourceDiagnosticInfo(ID3D11Resource* a_resource)
+	{
+		D3DViewDiagnosticInfo info{};
+		if (!a_resource)
+			return info;
+
+		ID3D11Texture2D* texture = nullptr;
+		if (SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) && texture) {
+			info.engineName = GetRenderTargetTextureName(texture);
+			PopulateTextureDiagnosticInfo(info, texture);
+			texture->Release();
+		}
+		return info;
+	}
+
+	std::string FormatVRTrackedResourceMatch(
+		const VRMenuCompositionTargetMatch& a_match,
+		const D3DViewDiagnosticInfo& a_info)
+	{
+		if (a_match.matched) {
+			return std::format(
+				"{}({}x{} fmt={} array={} samples={} tex=0x{:X})",
+				a_match.name,
+				a_match.width,
+				a_match.height,
+				static_cast<uint32_t>(a_match.format),
+				a_match.arraySize,
+				a_match.samples,
+				reinterpret_cast<uintptr_t>(a_match.texture));
+		}
+
+		return FormatD3DViewDiagnosticInfo(a_info);
+	}
+
+	std::string FormatVRTrackedSourceBox(const D3D11_BOX* a_box)
+	{
+		if (!a_box)
+			return "full";
+
+		return std::format(
+			"({}, {}, {}) -> ({}, {}, {}) size={}x{}x{}",
+			a_box->left,
+			a_box->top,
+			a_box->front,
+			a_box->right,
+			a_box->bottom,
+			a_box->back,
+			a_box->right > a_box->left ? a_box->right - a_box->left : 0,
+			a_box->bottom > a_box->top ? a_box->bottom - a_box->top : 0,
+			a_box->back > a_box->front ? a_box->back - a_box->front : 0);
+	}
+
+	std::string BuildVRTrackedResourceStageSourceSummary(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return "none";
+
+		std::array<ID3D11ShaderResourceView*, 4> psSRVs{};
+		std::array<ID3D11ShaderResourceView*, 4> csSRVs{};
+		a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+		a_context->CSGetShaderResources(0, static_cast<UINT>(csSRVs.size()), csSRVs.data());
+		auto releaseSRVs = ScopeExit([&]() {
+			for (auto* srv : psSRVs) {
+				if (srv)
+					srv->Release();
+			}
+			for (auto* srv : csSRVs) {
+				if (srv)
+					srv->Release();
+			}
+		});
+
+		const auto appendSources = [](std::string& a_result, const auto& a_srvs, bool a_pixelStage, const char* a_prefix) {
+			for (size_t slot = 0; slot < a_srvs.size(); ++slot) {
+				auto* srv = a_srvs[slot];
+				if (!srv)
+					continue;
+
+				const auto info = BuildSRVDiagnosticInfo(srv, a_pixelStage);
+				VRMenuCompositionTargetMatch match{};
+				(void)TryResolveVRMenuCompositionView(srv, match);
+
+				if (!a_result.empty())
+					a_result += " ";
+				a_result += a_prefix;
+				a_result += std::to_string(slot);
+				a_result += "=";
+				a_result += match.matched ? match.name : (info.engineName.empty() ? "UNKNOWN" : info.engineName);
+				a_result += "(";
+				a_result += std::to_string(info.width);
+				a_result += "x";
+				a_result += std::to_string(info.height);
+				a_result += " fmt=";
+				a_result += std::to_string(info.format);
+				a_result += " viewFmt=";
+				a_result += std::to_string(info.viewFormat);
+				a_result += ")";
+			}
+		};
+
+		std::string result;
+		appendSources(result, psSRVs, true, "ps");
+		appendSources(result, csSRVs, false, "cs");
+		return result.empty() ? "none" : result;
+	}
+
+	std::string BuildVRTrackedResourceCurrentRTVSummary(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return "none";
+
+		ID3D11RenderTargetView* rtv = nullptr;
+		a_context->OMGetRenderTargets(1, &rtv, nullptr);
+		auto releaseRTV = ScopeExit([&]() {
+			if (rtv)
+				rtv->Release();
+		});
+		if (!rtv)
+			return "none";
+
+		const auto info = BuildRTVDiagnosticInfo(rtv);
+		VRMenuCompositionTargetMatch match{};
+		(void)TryResolveVRMenuCompositionView(rtv, match);
+		return match.matched ? FormatVRTrackedResourceMatch(match, info) : FormatD3DViewDiagnosticInfo(info);
+	}
+
+	void LogVRTrackedResourceCopyDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		const char* a_passName,
+		const char* a_phase,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		UINT a_destinationX,
+		UINT a_destinationY,
+		UINT a_destinationZ,
+		ID3D11Resource* a_source,
+		UINT a_sourceSubresource,
+		const D3D11_BOX* a_sourceBox)
+	{
+		if (!ShouldRunVRPresentationDiagnostics() || !globals::game::isVR || !a_context)
+			return;
+
+		VRMenuCompositionTargetMatch destination{};
+		if (!TryResolveVRMenuCompositionResource(a_destination, destination) ||
+			!IsTrackedVRMenuMutationTarget(destination.target)) {
+			return;
+		}
+
+		VRMenuCompositionTargetMatch source{};
+		const bool sourceKnown = TryResolveVRMenuCompositionResource(a_source, source);
+		const bool destinationTracked = true;
+		const bool sourceTracked = sourceKnown && IsTrackedVRMenuMutationTarget(source.target);
+		const auto destinationInfo = BuildResourceDiagnosticInfo(a_destination);
+		const auto sourceInfo = BuildResourceDiagnosticInfo(a_source);
+		const auto* state = globals::state;
+		const auto& upscaling = globals::features::upscaling;
+		logger::debug(
+			"[VRTrackedResourceOp] frame={} op={} pass={} phase={} dstTracked={} srcTracked={} dstSub={} dstOffset=({}, {}, {}) srcSub={} box={} dst={} src={} currentRTV={} stageSources={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
+			state ? state->frameCount : 0,
+			DiagnosticText(a_operation, "copy"),
+			DiagnosticText(a_passName, "unknown"),
+			DiagnosticText(a_phase, "unknown"),
+			BoolText(destinationTracked),
+			BoolText(sourceTracked),
+			a_destinationSubresource,
+			a_destinationX,
+			a_destinationY,
+			a_destinationZ,
+			a_sourceSubresource,
+			FormatVRTrackedSourceBox(a_sourceBox),
+			FormatVRTrackedResourceMatch(destination, destinationInfo),
+			FormatVRTrackedResourceMatch(source, sourceInfo),
+			BuildVRTrackedResourceCurrentRTVSummary(a_context),
+			BuildVRTrackedResourceStageSourceSummary(a_context),
+			BoolText(upscaling.IsVRRenderScaleModeActive()),
+			BoolText(upscaling.IsPresentationUpscalingActive()),
+			BoolText(IsKnownGameMenuContextActive()),
+			BoolText(IsGameMenuContextActive()),
+			BoolText(IsCommunityShadersMenuOpen()),
+			BoolText(IsLoadingMenuContextActive()),
+			BoolText(IsSaveLoadTransitionContextActive(state)),
+			BoolText(IsVRMenuPresentationContextActive()));
+	}
+
+	void LogVRTrackedViewClearDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_passName,
+		const char* a_phase,
+		ID3D11RenderTargetView* a_target,
+		const float* a_color)
+	{
+		if (!ShouldRunVRPresentationDiagnostics() || !globals::game::isVR || !a_context || !a_target)
+			return;
+
+		VRMenuCompositionTargetMatch target{};
+		if (!TryResolveVRMenuCompositionView(a_target, target) ||
+			!IsTrackedVRMenuMutationTarget(target.target)) {
+			return;
+		}
+
+		const auto info = BuildRTVDiagnosticInfo(a_target);
+		const auto* state = globals::state;
+		const auto& upscaling = globals::features::upscaling;
+		logger::debug(
+			"[VRTrackedResourceOp] frame={} op=ClearRenderTargetView pass={} phase={} target={} color=({:.4f},{:.4f},{:.4f},{:.4f}) currentRTV={} stageSources={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
+			state ? state->frameCount : 0,
+			DiagnosticText(a_passName, "unknown"),
+			DiagnosticText(a_phase, "unknown"),
+			FormatVRTrackedResourceMatch(target, info),
+			a_color ? a_color[0] : 0.0f,
+			a_color ? a_color[1] : 0.0f,
+			a_color ? a_color[2] : 0.0f,
+			a_color ? a_color[3] : 0.0f,
+			BuildVRTrackedResourceCurrentRTVSummary(a_context),
+			BuildVRTrackedResourceStageSourceSummary(a_context),
+			BoolText(upscaling.IsVRRenderScaleModeActive()),
+			BoolText(upscaling.IsPresentationUpscalingActive()),
+			BoolText(IsKnownGameMenuContextActive()),
+			BoolText(IsGameMenuContextActive()),
+			BoolText(IsCommunityShadersMenuOpen()),
+			BoolText(IsLoadingMenuContextActive()),
+			BoolText(IsSaveLoadTransitionContextActive(state)),
+			BoolText(IsVRMenuPresentationContextActive()));
+	}
+
 	bool AnyDiagnosticViewBelow(
 		const std::array<D3DViewDiagnosticInfo, 4>& a_infos,
 		uint32_t a_expectedWidth,
@@ -5897,7 +6249,10 @@ namespace
 		return (a_hash ^ static_cast<uint64_t>(a_value)) * kFnvPrime;
 	}
 
-	bool CaptureVRKTotalFingerprint(ID3D11DeviceContext* a_context, VRKTotalFingerprint& a_fingerprint)
+	bool CaptureVRTrackedTargetFingerprint(
+		ID3D11DeviceContext* a_context,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		VRKTotalFingerprint& a_fingerprint)
 	{
 		a_fingerprint = {};
 		auto renderer = globals::game::renderer;
@@ -5905,7 +6260,11 @@ namespace
 		if (!globals::game::isVR || !renderer || !device || !a_context)
 			return false;
 
-		auto& totalTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTOTAL];
+		const auto targetIndex = static_cast<int>(a_target);
+		if (targetIndex < 0 || targetIndex >= Util::GetRenderTargetCount())
+			return false;
+
+		auto& totalTarget = renderer->GetRuntimeData().renderTargets[targetIndex];
 		if (!totalTarget.texture)
 			return false;
 
@@ -5916,7 +6275,8 @@ namespace
 			static std::atomic_bool loggedUnsupportedFormat{ false };
 			if (!loggedUnsupportedFormat.exchange(true, std::memory_order_acq_rel)) {
 				logger::debug(
-					"[VRKTotalDiag] sparse fingerprint disabled for unsupported kTOTAL desc {}x{} fmt={} samples={} array={}",
+					"[VRTrackedTargetDiag] sparse fingerprint disabled for unsupported {} desc {}x{} fmt={} samples={} array={}",
+					GetVRMenuCompositionTargetName(a_target),
 					totalDesc.Width,
 					totalDesc.Height,
 					static_cast<uint32_t>(totalDesc.Format),
@@ -5953,7 +6313,7 @@ namespace
 			if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, stagingTexture.put())) || !stagingTexture) {
 				static std::atomic_bool loggedCreateFailure{ false };
 				if (!loggedCreateFailure.exchange(true, std::memory_order_acq_rel)) {
-					logger::debug("[VRKTotalDiag] failed to create sparse kTOTAL fingerprint staging texture fmt={}", static_cast<uint32_t>(totalDesc.Format));
+					logger::debug("[VRTrackedTargetDiag] failed to create sparse fingerprint staging texture fmt={}", static_cast<uint32_t>(totalDesc.Format));
 				}
 				return false;
 			}
@@ -5996,7 +6356,7 @@ namespace
 		if (FAILED(a_context->Map(staging.texture.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
 			static std::atomic_bool loggedMapFailure{ false };
 			if (!loggedMapFailure.exchange(true, std::memory_order_acq_rel))
-				logger::debug("[VRKTotalDiag] failed to map sparse kTOTAL fingerprint staging texture");
+				logger::debug("[VRTrackedTargetDiag] failed to map sparse fingerprint staging texture");
 			return false;
 		}
 		auto unmapStaging = ScopeExit([&]() {
@@ -6023,6 +6383,11 @@ namespace
 		a_fingerprint.samples = kGridX * kGridY * copyBlockWidth * copyBlockHeight;
 		a_fingerprint.texture = totalTarget.texture;
 		return true;
+	}
+
+	bool CaptureVRKTotalFingerprint(ID3D11DeviceContext* a_context, VRKTotalFingerprint& a_fingerprint)
+	{
+		return CaptureVRTrackedTargetFingerprint(a_context, RE::RENDER_TARGETS::kTOTAL, a_fingerprint);
 	}
 
 	void LogVRKTotalMutationDiagnostics(
@@ -6144,6 +6509,140 @@ namespace
 		previous.texture = fingerprint.texture;
 		previous.pass = passName;
 		previous.phase = phaseName;
+	}
+
+	void LogVRTrackedTargetMutationDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_passName,
+		const char* a_phase,
+		const VRPresentationDiagnosticSnapshot& a_snapshot)
+	{
+		const bool relevant =
+			a_snapshot.renderScaleActive ||
+			a_snapshot.renderScaleRequested ||
+			a_snapshot.presentationUpscalingActive ||
+			a_snapshot.submitStageActive ||
+			a_snapshot.knownMenu ||
+			a_snapshot.vrMenuPresentation ||
+			a_snapshot.communityShadersMenu ||
+			a_snapshot.mainOrLoadingMenu ||
+			a_snapshot.saveLoad;
+		if (!relevant)
+			return;
+
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 4> targets{
+			RE::RENDER_TARGETS::kMENUBG,
+			RE::RENDER_TARGETS::kFADERUI,
+			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
+		};
+
+		struct PreviousFingerprint
+		{
+			bool valid = false;
+			uint32_t frame = 0;
+			uint32_t width = 0;
+			uint32_t height = 0;
+			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+			uint64_t hash = 0;
+			ID3D11Texture2D* texture = nullptr;
+			std::string pass;
+			std::string phase;
+		};
+		static std::array<PreviousFingerprint, targets.size()> previousByTarget;
+		static std::atomic<uint32_t> snapshotLogBudget{ 1800 };
+
+		const char* passName = DiagnosticText(a_passName, "-");
+		const char* phaseName = DiagnosticText(a_phase, "-");
+		for (size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
+			const auto target = targets[targetIndex];
+			VRKTotalFingerprint fingerprint{};
+			if (!CaptureVRTrackedTargetFingerprint(a_context, target, fingerprint) || !fingerprint.valid)
+				continue;
+
+			auto& previous = previousByTarget[targetIndex];
+			const bool sameTarget =
+				previous.valid &&
+				previous.frame == a_snapshot.frame &&
+				previous.texture == fingerprint.texture &&
+				previous.width == fingerprint.width &&
+				previous.height == fingerprint.height &&
+				previous.format == fingerprint.format;
+			const bool changed = sameTarget && previous.hash != fingerprint.hash;
+
+			if (changed) {
+				logger::debug(
+					"[VRTrackedTargetMutation] frame={} target={} changed between {}:{} hash={} and {}:{} hash={} desc={}x{} fmt={} samples={} renderScaleActive={} presentationUpscaling={} submitStage={} knownMenu={} vrMenuPresentation={} csMenu={} mainOrLoading={} saveLoad={} textRasterCtx={} fullResMenuDraw={} currentRTPresentation={}",
+					a_snapshot.frame,
+					GetVRMenuCompositionTargetName(target),
+					previous.pass,
+					previous.phase,
+					FormatVRMenuDiagnosticHex(previous.hash),
+					passName,
+					phaseName,
+					FormatVRMenuDiagnosticHex(fingerprint.hash),
+					fingerprint.width,
+					fingerprint.height,
+					static_cast<uint32_t>(fingerprint.format),
+					fingerprint.samples,
+					BoolText(a_snapshot.renderScaleActive),
+					BoolText(a_snapshot.presentationUpscalingActive),
+					BoolText(a_snapshot.submitStageActive),
+					BoolText(a_snapshot.knownMenu),
+					BoolText(a_snapshot.vrMenuPresentation),
+					BoolText(a_snapshot.communityShadersMenu),
+					BoolText(a_snapshot.mainOrLoadingMenu),
+					BoolText(a_snapshot.saveLoad),
+					BoolText(a_snapshot.menuTextRasterDiagnosticContext),
+					BoolText(a_snapshot.fullResolutionMenuUIDraw),
+					BoolText(a_snapshot.currentRTPresentation));
+			}
+
+			uint32_t budget = snapshotLogBudget.load(std::memory_order_relaxed);
+			bool logSnapshot = changed || !sameTarget;
+			while (!logSnapshot && budget > 0) {
+				if (snapshotLogBudget.compare_exchange_weak(budget, budget - 1, std::memory_order_acq_rel)) {
+					logSnapshot = true;
+					break;
+				}
+			}
+			if (logSnapshot) {
+				logger::debug(
+					"[VRTrackedTargetSnapshot] frame={} pass={} phase={} target={} hash={} desc={}x{} fmt={} samples={} sameTarget={} changed={} renderScaleActive={} presentationUpscaling={} submitStage={} knownMenu={} vrMenuPresentation={} csMenu={} mainOrLoading={} saveLoad={} textRasterCtx={} fullResMenuDraw={} currentRTPresentation={}",
+					a_snapshot.frame,
+					passName,
+					phaseName,
+					GetVRMenuCompositionTargetName(target),
+					FormatVRMenuDiagnosticHex(fingerprint.hash),
+					fingerprint.width,
+					fingerprint.height,
+					static_cast<uint32_t>(fingerprint.format),
+					fingerprint.samples,
+					BoolText(sameTarget),
+					BoolText(changed),
+					BoolText(a_snapshot.renderScaleActive),
+					BoolText(a_snapshot.presentationUpscalingActive),
+					BoolText(a_snapshot.submitStageActive),
+					BoolText(a_snapshot.knownMenu),
+					BoolText(a_snapshot.vrMenuPresentation),
+					BoolText(a_snapshot.communityShadersMenu),
+					BoolText(a_snapshot.mainOrLoadingMenu),
+					BoolText(a_snapshot.saveLoad),
+					BoolText(a_snapshot.menuTextRasterDiagnosticContext),
+					BoolText(a_snapshot.fullResolutionMenuUIDraw),
+					BoolText(a_snapshot.currentRTPresentation));
+			}
+
+			previous.valid = true;
+			previous.frame = a_snapshot.frame;
+			previous.width = fingerprint.width;
+			previous.height = fingerprint.height;
+			previous.format = fingerprint.format;
+			previous.hash = fingerprint.hash;
+			previous.texture = fingerprint.texture;
+			previous.pass = passName;
+			previous.phase = phaseName;
+		}
 	}
 
 	bool BuildVRPresentationDiagnosticSnapshot(
@@ -6294,6 +6793,7 @@ namespace
 			a_snapshot.finalWidth,
 			a_snapshot.finalHeight);
 		LogVRKTotalMutationDiagnostics(context, a_passName, a_phase, a_snapshot);
+		LogVRTrackedTargetMutationDiagnostics(context, a_passName, a_phase, a_snapshot);
 
 		a_snapshot.signature = BuildVRPresentationDiagnosticSignature(a_snapshot, a_passName, a_phase);
 		return true;
@@ -7153,6 +7653,99 @@ namespace
 
 		return texture;
 	}
+}
+
+void Upscaling::TraceVRTrackedResourceCopyOperation(
+	ID3D11DeviceContext* a_context,
+	const char* a_operation,
+	ID3D11Resource* a_destination,
+	UINT a_destinationSubresource,
+	UINT a_destinationX,
+	UINT a_destinationY,
+	UINT a_destinationZ,
+	ID3D11Resource* a_source,
+	UINT a_sourceSubresource,
+	const D3D11_BOX* a_sourceBox)
+{
+	const char* passName = ResolveVRTrackedResourceOperationPassName("ID3D11DeviceContext");
+	const char* phaseName = ResolveVRTrackedResourceOperationPhase("before");
+	LogVRTrackedResourceCopyDiagnostics(
+		a_context,
+		a_operation,
+		passName,
+		phaseName,
+		a_destination,
+		a_destinationSubresource,
+		a_destinationX,
+		a_destinationY,
+		a_destinationZ,
+		a_source,
+		a_sourceSubresource,
+		a_sourceBox);
+}
+
+void Upscaling::TraceVRTrackedRenderTargetClearOperation(
+	ID3D11DeviceContext* a_context,
+	ID3D11RenderTargetView* a_target,
+	const float* a_color)
+{
+	const char* passName = ResolveVRTrackedResourceOperationPassName("ID3D11DeviceContext");
+	const char* phaseName = ResolveVRTrackedResourceOperationPhase("before");
+	LogVRTrackedViewClearDiagnostics(
+		a_context,
+		passName,
+		phaseName,
+		a_target,
+		a_color);
+}
+
+void Upscaling::TraceVRTrackedResourceUpdateOperation(
+	ID3D11DeviceContext* a_context,
+	ID3D11Resource* a_destination,
+	UINT a_destinationSubresource,
+	const D3D11_BOX* a_destinationBox)
+{
+	const char* passName = ResolveVRTrackedResourceOperationPassName("ID3D11DeviceContext");
+	const char* phaseName = ResolveVRTrackedResourceOperationPhase("before");
+	LogVRTrackedResourceCopyDiagnostics(
+		a_context,
+		"UpdateSubresource",
+		passName,
+		phaseName,
+		a_destination,
+		a_destinationSubresource,
+		a_destinationBox ? a_destinationBox->left : 0,
+		a_destinationBox ? a_destinationBox->top : 0,
+		a_destinationBox ? a_destinationBox->front : 0,
+		nullptr,
+		0,
+		a_destinationBox);
+}
+
+void Upscaling::TraceVRTrackedResourceResolveOperation(
+	ID3D11DeviceContext* a_context,
+	ID3D11Resource* a_destination,
+	UINT a_destinationSubresource,
+	ID3D11Resource* a_source,
+	UINT a_sourceSubresource,
+	DXGI_FORMAT a_format)
+{
+	(void)a_format;
+	const char* passName = ResolveVRTrackedResourceOperationPassName("ID3D11DeviceContext");
+	const char* phaseName = ResolveVRTrackedResourceOperationPhase("before");
+	LogVRTrackedResourceCopyDiagnostics(
+		a_context,
+		"ResolveSubresource",
+		passName,
+		phaseName,
+		a_destination,
+		a_destinationSubresource,
+		0,
+		0,
+		0,
+		a_source,
+		a_sourceSubresource,
+		nullptr);
 }
 
 /**
@@ -19001,6 +19594,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 				}
 
 				D3D11_BOX sourceBox{ 0, 0, 0, inputWidth, inputHeight, 1 };
+				const ScopedVRTrackedResourceOperationContext operationContext(a_passName, "submit-stage-copy-to-output");
 				context->CopySubresourceRegion(targetTexture, 0, 0, 0, 0, sourceTexture, 0, &sourceBox);
 				return true;
 			};
@@ -19038,6 +19632,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 				unbindSourceSRV();
 				context->OMSetRenderTargets(0, nullptr, nullptr);
 				D3D11_BOX sourceBox{ 0, 0, 0, inputWidth, inputHeight, 1 };
+				const ScopedVRTrackedResourceOperationContext operationContext(a_passName, "copy-source-to-main");
 				context->CopySubresourceRegion(main.texture, 0, 0, 0, 0, sourceTexture, 0, &sourceBox);
 				sourceReady = true;
 			} else {
@@ -19083,6 +19678,7 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 				outputDesc.Height >= mainDesc.Height) {
 				context->OMSetRenderTargets(0, nullptr, nullptr);
 				D3D11_BOX sourceBox{ 0, 0, 0, mainDesc.Width, mainDesc.Height, 1 };
+				const ScopedVRTrackedResourceOperationContext operationContext(a_passName, "copy-main-to-output");
 				context->CopySubresourceRegion(outputTexture, 0, 0, 0, 0, main.texture, 0, &sourceBox);
 				context->OMSetRenderTargets(1, &outputRTV, outputDSV);
 			} else {

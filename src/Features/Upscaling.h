@@ -580,6 +580,11 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> vrMenuSceneDeltaCompositeCS;
 	ID3D11ComputeShader* GetVRMenuSceneDeltaCompositeCS();
 
+	winrt::com_ptr<ID3D11PixelShader> vrDesktopMirrorBlitPS;
+	ID3D11PixelShader* GetVRDesktopMirrorBlitPS();
+	winrt::com_ptr<ID3D11RenderTargetView> vrDesktopMirrorBlitRTV;
+	ID3D11Texture2D* vrDesktopMirrorBlitTarget = nullptr;
+
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
@@ -731,6 +736,7 @@ public:
 	bool CanUseVRMenuSceneSeparationForSubmit(ID3D11Texture2D* a_sourceTexture, const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_frame) const;
 	ID3D11Texture2D* GetVRMenuSceneSeparationCleanSource() const;
 	bool CompositeVRMenuSceneDelta(uint32_t a_eyeIndex, const D3D11_BOX& a_sourceBox, uint32_t a_outputWidth, uint32_t a_outputHeight);
+	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	void ResetVRMenuSceneSeparationState();
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;

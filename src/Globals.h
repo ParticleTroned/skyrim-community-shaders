@@ -2,6 +2,7 @@
 
 #include <atomic>
 
+struct AdaptiveBrightness;
 struct CloudShadows;
 struct DynamicCubemaps;
 struct VolumetricShadows;
@@ -64,6 +65,7 @@ namespace globals
 
 	namespace features
 	{
+		extern AdaptiveBrightness adaptiveBrightness;
 		extern CloudShadows cloudShadows;
 		extern DynamicCubemaps dynamicCubemaps;
 		extern VolumetricShadows volumetricShadows;

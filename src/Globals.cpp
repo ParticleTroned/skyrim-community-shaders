@@ -1,6 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -56,6 +57,7 @@ namespace globals
 
 	namespace features
 	{
+		AdaptiveBrightness adaptiveBrightness{};
 		CloudShadows cloudShadows{};
 		DynamicCubemaps dynamicCubemaps{};
 		VolumetricShadows volumetricShadows{};

@@ -495,7 +495,7 @@ public:
 		ID3D11Resource* a_source,
 		UINT a_sourceSubresource,
 		DXGI_FORMAT a_format);
-	static void TraceVRTrackedDrawOperation(
+	static bool TraceVRTrackedDrawOperation(
 		ID3D11DeviceContext* a_context,
 		const char* a_operation,
 		UINT a_vertexCount,
@@ -1059,7 +1059,7 @@ private:
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
-	void TryCaptureVRMenuBakeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
+	bool TrySuppressVRMenuBridgeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
 	bool RestoreVRMenuBakeCleanSceneForSubmit(ID3D11Texture2D* a_sourceTexture, const D3D11_TEXTURE2D_DESC& a_sourceDesc, uint32_t a_frame);
 	bool QueueVRMenuBakeReplayAfterVendor(uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);

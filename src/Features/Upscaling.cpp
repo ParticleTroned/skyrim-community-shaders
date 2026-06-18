@@ -1331,6 +1331,8 @@ namespace
 			return "kPROJECTEDMENU";
 		case RE::RENDER_TARGETS::kHUDMENU:
 			return "kHUDMENU";
+		case RE::RENDER_TARGETS::kWORLDUI0:
+			return "kWORLDUI0";
 		case RE::RENDER_TARGETS::kFADERUI:
 			return "kFADERUI";
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
@@ -1354,6 +1356,7 @@ namespace
 		case RE::RENDER_TARGETS::kMENUBG:
 		case RE::RENDER_TARGETS::kPROJECTEDMENU:
 		case RE::RENDER_TARGETS::kHUDMENU:
+		case RE::RENDER_TARGETS::kWORLDUI0:
 		case RE::RENDER_TARGETS::kFADERUI:
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1:
 		case RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2:
@@ -1422,12 +1425,13 @@ namespace
 			texture->Release();
 		});
 
-		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 8> targets{
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 9> targets{
 			RE::RENDER_TARGETS::kTOTAL,
 			RE::RENDER_TARGETS::kMAIN,
 			RE::RENDER_TARGETS::kMENUBG,
 			RE::RENDER_TARGETS::kPROJECTEDMENU,
 			RE::RENDER_TARGETS::kHUDMENU,
+			RE::RENDER_TARGETS::kWORLDUI0,
 			RE::RENDER_TARGETS::kFADERUI,
 			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
 			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
@@ -8682,8 +8686,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDrawPrototype(
 			continue;
 		}
 
-		if (source.target != RE::RENDER_TARGETS::kHUDMENU &&
-			source.target != RE::RENDER_TARGETS::kPROJECTEDMENU) {
+		if (source.target != RE::RENDER_TARGETS::kWORLDUI0) {
 			continue;
 		}
 
@@ -8694,62 +8697,12 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDrawPrototype(
 	if (menuSourceSlot == psSRVs.size())
 		return false;
 
-	if (vrMenuBakeReplayDrawCount >= vrMenuBakeReplayDraws.size()) {
-		static bool loggedReplayDrawOverflow = false;
-		LogWarnOnce(loggedReplayDrawOverflow, "[VRMenuBridgeReplay] Skipping suppression because the bridge replay draw buffer is full");
-		return false;
-	}
-
-	auto& draw = vrMenuBakeReplayDraws[vrMenuBakeReplayDrawCount];
-	if (!CaptureVRMenuBakeDrawState(
-			a_context,
-			draw,
-			VRMenuBakeReplayDrawKind::DrawIndexedInstanced,
-			a_vertexCount,
-			a_indexCount,
-			a_instanceCount,
-			a_startVertexLocation,
-			a_startIndexLocation,
-			a_baseVertexLocation,
-			a_startInstanceLocation,
-			state->frameCount,
-			renderWidth,
-			renderHeight,
-			finalWidth,
-			finalHeight)) {
-		return false;
-	}
-
-	bool sourceSnapshotReused = false;
-	for (uint32_t priorIndex = 0; priorIndex < vrMenuBakeReplayDrawCount; ++priorIndex) {
-		auto& priorDraw = vrMenuBakeReplayDraws[priorIndex];
-		if (priorDraw.valid &&
-			priorDraw.psSRVs[menuSourceSlot].get() == psSRVs[menuSourceSlot] &&
-			priorDraw.psSRVSnapshots[menuSourceSlot]) {
-			draw.psSRVSnapshots[menuSourceSlot] = priorDraw.psSRVSnapshots[menuSourceSlot];
-			sourceSnapshotReused = true;
-			break;
-		}
-	}
-
-	if (!draw.psSRVSnapshots[menuSourceSlot] &&
-		!SnapshotVRMenuBakeSourceSRV(a_context, psSRVs[menuSourceSlot], draw.psSRVSnapshots[menuSourceSlot])) {
-		ResetVRMenuBakeCapturedDrawState(draw);
-		static bool loggedSnapshotFailure = false;
-		LogWarnOnce(loggedSnapshotFailure, "[VRMenuBridgeReplay] Skipping suppression because source snapshot capture failed");
-		return false;
-	}
-
-	++vrMenuBakeReplayDrawCount;
-
 	if (ClaimVRMenuBridgeReplayDiagnosticSlot(state->frameCount)) {
 		VR_TRANSITION_DIAG_LOG(
-			"[VRMenuBridgeReplay] captured suppressed bridge draw frame={} drawIndex={} source={} slot={} sourceSnapshot={} dst=kMENUBG({}x{}) draw=indices:{} instances:{} final={}x{}",
+			"[VRMenuBridgeSuppress] suppressed bridge draw frame={} source={} slot={} replay=no dst=kMENUBG({}x{}) draw=indices:{} instances:{} final={}x{} reason=world-ui-only-experiment",
 			state->frameCount,
-			vrMenuBakeReplayDrawCount - 1u,
 			GetVRMenuCompositionTargetName(menuSourceTarget),
 			menuSourceSlot,
-			sourceSnapshotReused ? "reused" : "captured",
 			renderWidth,
 			renderHeight,
 			a_indexCount,

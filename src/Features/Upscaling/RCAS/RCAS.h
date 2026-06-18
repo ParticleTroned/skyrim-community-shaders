@@ -3,6 +3,7 @@
 #include "../../../Buffer.h"
 #include "../../../State.h"
 
+#include <cstdint>
 #include <d3d11_4.h>
 #include <winrt/base.h>
 
@@ -24,6 +25,7 @@ public:
 	 * Safe to call multiple times - will early-out if already initialized.
 	 */
 	void Initialize();
+	void ClearShaderCache();
 
 	/**
 	 * @brief Applies RCAS sharpening to the input texture.
@@ -32,7 +34,7 @@ public:
 	 * @param outputUAV UAV to write sharpened result to.
 	 * @param sharpness Sharpening strength (0.0 = no sharpening, higher = more sharp).
 	 */
-	void ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness);
+	bool ApplySharpen(ID3D11ShaderResourceView* inputTexture, ID3D11UnorderedAccessView* outputUAV, float sharpness, uint32_t width = 0, uint32_t height = 0);
 
 private:
 	void CreateComputeShader();

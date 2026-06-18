@@ -4,6 +4,7 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include <atomic>
@@ -52,11 +53,19 @@ public:
 		kDLSS
 	};
 
+	enum class DLSSSharpenerMode : uint
+	{
+		Off,
+		RCAS,
+		LumaUnsharp
+	};
+
 	// Shared DLSS/FSR/FSR4 render-scale presets:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
 	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
+	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{
@@ -91,6 +100,7 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
 		float sharpnessDLSS = 0.1f;
+		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
 		bool reflexLowLatencyMode = true;
 		bool reflexLowLatencyBoost = false;
@@ -160,6 +170,8 @@ public:
 	virtual void SetupResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
+	DLSSSharpenerMode GetDLSSSharpenerMode() const;
+	bool ShouldApplyDLSSSharpening() const;
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
@@ -237,6 +249,7 @@ public:
 	static inline FidelityFX fidelityFX;  ///< Only for frame generation
 	static inline DX12SwapChain dx12SwapChain;
 	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
+	static inline LumaSharpen lumaSharpen;  ///< Luma-only adaptive unsharp mask for DLSS
 
 	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
 
@@ -280,9 +293,9 @@ public:
 	bool IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const;
 
 	/**
-	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.
+	 * @brief Applies the selected DLSS sharpening pass to the main render target after upscaling.
 	 *
-	 * Runs in HDR space before tonemapping. Only called when DLSS is active and sharpness > 0.
+	 * Runs in HDR space before tonemapping. Only called when DLSS sharpening is enabled.
 	 */
 	void ApplySharpening();
 

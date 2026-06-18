@@ -750,11 +750,11 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto screenSize = state->screenSize;
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 
-	// When RCAS sharpening is active, direct DLSS output to sharpenerTexture so RCAS can
-	// sharpen directly into kMAIN.UAV without a CopyResource round-trip.
+	// When DLSS sharpening is active, direct DLSS output to sharpenerTexture so the selected
+	// pass can sharpen directly into kMAIN.UAV without a CopyResource round-trip.
 	auto& upscaling = globals::features::upscaling;
 	ID3D11Resource* colorOut =
-		(upscaling.settings.sharpnessDLSS > 0.0f && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
+		(upscaling.ShouldApplyDLSSSharpening() && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
 	const bool outputToSharpener = colorOut != a_upscalingTexture;
 	upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 

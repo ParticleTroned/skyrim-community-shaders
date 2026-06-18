@@ -10654,6 +10654,16 @@ ID3D11ComputeShader* Upscaling::GetVRMenuSceneDeltaCompositeCS()
 	return vrMenuSceneDeltaCompositeCS.get();
 }
 
+ID3D11PixelShader* Upscaling::GetVRDesktopMirrorBlitPS()
+{
+	if (!vrDesktopMirrorBlitPS) {
+		logger::debug("Compiling VRDesktopMirrorBlitPS.hlsl");
+		vrDesktopMirrorBlitPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/VRDesktopMirrorBlitPS.hlsl", {}, "ps_5_0"));
+	}
+
+	return vrDesktopMirrorBlitPS.get();
+}
+
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
 	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV)
 {
@@ -14757,6 +14767,206 @@ bool Upscaling::CompositeVRMenuSceneDelta(uint32_t a_eyeIndex, const D3D11_BOX& 
 	return true;
 }
 
+bool Upscaling::BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc, uint32_t a_eyeWidth, uint32_t a_eyeHeight)
+{
+	if (!a_targetTexture || a_targetDesc.Width < 2 || a_targetDesc.Height == 0 || !a_eyeWidth || !a_eyeHeight ||
+		a_targetDesc.ArraySize != 1 || a_targetDesc.SampleDesc.Count != 1)
+		return false;
+	if (!vrIntermediateColorOut[0] || !vrIntermediateColorOut[1] ||
+		!vrIntermediateColorOut[0]->srv || !vrIntermediateColorOut[1]->srv)
+		return false;
+	if (vrIntermediateColorOut[0]->desc.Width < a_eyeWidth ||
+		vrIntermediateColorOut[0]->desc.Height < a_eyeHeight ||
+		vrIntermediateColorOut[1]->desc.Width < a_eyeWidth ||
+		vrIntermediateColorOut[1]->desc.Height < a_eyeHeight)
+		return false;
+	if (vrIntermediateColorOut[0]->desc.Format != a_targetDesc.Format ||
+		vrIntermediateColorOut[1]->desc.Format != a_targetDesc.Format)
+		return false;
+	if ((a_targetDesc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0)
+		return false;
+
+	auto* context = globals::d3d::context;
+	auto* device = globals::d3d::device;
+	auto* deferred = globals::deferred;
+	if (!context || !device || !deferred || !deferred->linearSampler || !upscaleRasterizerState || !upscaleBlendState)
+		return false;
+
+	ID3D11PixelShader* pixelShader = nullptr;
+	try {
+		pixelShader = GetVRDesktopMirrorBlitPS();
+	} catch (const std::exception& e) {
+		static bool loggedShaderFailure = false;
+		LogWarnOnce(loggedShaderFailure, "[Upscaling] Desktop mirror fallback shader unavailable; leaving mirror unchanged", e);
+		if (MarkSubmitStageDeviceLostIfNeeded(e, "desktop mirror fallback shader creation"))
+			return false;
+	} catch (...) {
+		static bool loggedShaderFailure = false;
+		LogWarnOnce(loggedShaderFailure, "[Upscaling] Desktop mirror fallback shader unavailable; leaving mirror unchanged");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("desktop mirror fallback shader creation"))
+			return false;
+	}
+	if (!pixelShader)
+		return false;
+
+	if (vrDesktopMirrorBlitTarget != a_targetTexture || !vrDesktopMirrorBlitRTV) {
+		vrDesktopMirrorBlitRTV = nullptr;
+		vrDesktopMirrorBlitTarget = nullptr;
+
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		rtvDesc.Format = a_targetDesc.Format;
+		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+		rtvDesc.Texture2D.MipSlice = 0;
+
+		try {
+			DX::ThrowIfFailed(device->CreateRenderTargetView(a_targetTexture, &rtvDesc, vrDesktopMirrorBlitRTV.put()));
+			vrDesktopMirrorBlitTarget = a_targetTexture;
+		} catch (const std::exception& e) {
+			static bool loggedRTVFailure = false;
+			LogWarnOnce(loggedRTVFailure, "[Upscaling] Desktop mirror fallback RTV creation failed; leaving mirror unchanged", e);
+			if (MarkSubmitStageDeviceLostIfNeeded(e, "desktop mirror fallback RTV creation"))
+				return false;
+		} catch (...) {
+			static bool loggedRTVFailure = false;
+			LogWarnOnce(loggedRTVFailure, "[Upscaling] Desktop mirror fallback RTV creation failed; leaving mirror unchanged");
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("desktop mirror fallback RTV creation"))
+				return false;
+		}
+	}
+	if (!vrDesktopMirrorBlitRTV)
+		return false;
+
+	ID3D11VertexShader* previousVS = nullptr;
+	ID3D11PixelShader* previousPS = nullptr;
+	ID3D11GeometryShader* previousGS = nullptr;
+	ID3D11ShaderResourceView* previousSRV = nullptr;
+	ID3D11SamplerState* previousSampler = nullptr;
+	ID3D11RenderTargetView* previousRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+	ID3D11DepthStencilView* previousDSV = nullptr;
+	ID3D11BlendState* previousBlendState = nullptr;
+	FLOAT previousBlendFactor[4] = {};
+	UINT previousSampleMask = 0;
+	ID3D11DepthStencilState* previousDepthStencilState = nullptr;
+	UINT previousStencilRef = 0;
+	ID3D11RasterizerState* previousRasterizerState = nullptr;
+	D3D11_VIEWPORT previousViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+	UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	D3D11_PRIMITIVE_TOPOLOGY previousTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+	ID3D11InputLayout* previousInputLayout = nullptr;
+
+	context->VSGetShader(&previousVS, nullptr, nullptr);
+	context->PSGetShader(&previousPS, nullptr, nullptr);
+	context->GSGetShader(&previousGS, nullptr, nullptr);
+	context->PSGetShaderResources(0, 1, &previousSRV);
+	context->PSGetSamplers(0, 1, &previousSampler);
+	context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, previousRTVs, &previousDSV);
+	context->OMGetBlendState(&previousBlendState, previousBlendFactor, &previousSampleMask);
+	context->OMGetDepthStencilState(&previousDepthStencilState, &previousStencilRef);
+	context->RSGetState(&previousRasterizerState);
+	context->RSGetViewports(&previousViewportCount, previousViewports);
+	context->IAGetPrimitiveTopology(&previousTopology);
+	context->IAGetInputLayout(&previousInputLayout);
+
+	auto restoreState = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		ID3D11SamplerState* nullSampler = nullptr;
+		context->PSSetShaderResources(0, 1, &nullSRV);
+		context->PSSetSamplers(0, 1, &nullSampler);
+
+		context->VSSetShader(previousVS, nullptr, 0);
+		context->PSSetShader(previousPS, nullptr, 0);
+		context->GSSetShader(previousGS, nullptr, 0);
+		context->PSSetShaderResources(0, 1, &previousSRV);
+		context->PSSetSamplers(0, 1, &previousSampler);
+		context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, previousRTVs, previousDSV);
+		context->OMSetBlendState(previousBlendState, previousBlendFactor, previousSampleMask);
+		context->OMSetDepthStencilState(previousDepthStencilState, previousStencilRef);
+		context->RSSetState(previousRasterizerState);
+		context->RSSetViewports(previousViewportCount, previousViewports);
+		context->IASetPrimitiveTopology(previousTopology);
+		context->IASetInputLayout(previousInputLayout);
+
+		if (previousVS)
+			previousVS->Release();
+		if (previousPS)
+			previousPS->Release();
+		if (previousGS)
+			previousGS->Release();
+		if (previousSRV)
+			previousSRV->Release();
+		if (previousSampler)
+			previousSampler->Release();
+		for (auto*& rtv : previousRTVs) {
+			if (rtv)
+				rtv->Release();
+		}
+		if (previousDSV)
+			previousDSV->Release();
+		if (previousBlendState)
+			previousBlendState->Release();
+		if (previousDepthStencilState)
+			previousDepthStencilState->Release();
+		if (previousRasterizerState)
+			previousRasterizerState->Release();
+		if (previousInputLayout)
+			previousInputLayout->Release();
+	});
+
+	try {
+		ID3D11RenderTargetView* targetRTV = vrDesktopMirrorBlitRTV.get();
+		ID3D11SamplerState* sampler = deferred->linearSampler;
+		float blendFactor[4] = {};
+		context->OMSetRenderTargets(1, &targetRTV, nullptr);
+		context->OMSetBlendState(upscaleBlendState.get(), blendFactor, 0xFFFFFFFF);
+		context->OMSetDepthStencilState(nullptr, 0);
+		context->RSSetState(upscaleRasterizerState.get());
+		context->IASetInputLayout(nullptr);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		context->VSSetShader(GetUpscaleVS(), nullptr, 0);
+		context->PSSetShader(pixelShader, nullptr, 0);
+		context->PSSetSamplers(0, 1, &sampler);
+
+		const uint32_t leftWidth = a_targetDesc.Width / 2;
+		const uint32_t rightWidth = a_targetDesc.Width - leftWidth;
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const uint32_t eyeOffsetX = eye == 0 ? 0 : leftWidth;
+			const uint32_t eyeWidth = eye == 0 ? leftWidth : rightWidth;
+			if (eyeWidth == 0)
+				continue;
+
+			D3D11_VIEWPORT viewport{};
+			viewport.TopLeftX = static_cast<float>(eyeOffsetX);
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = static_cast<float>(eyeWidth);
+			viewport.Height = static_cast<float>(a_targetDesc.Height);
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
+
+			ID3D11ShaderResourceView* sourceSRV = vrIntermediateColorOut[eye]->srv.get();
+			context->RSSetViewports(1, &viewport);
+			context->PSSetShaderResources(0, 1, &sourceSRV);
+			context->Draw(3, 0);
+		}
+	} catch (const std::exception& e) {
+		static bool loggedBlitFailure = false;
+		LogWarnOnce(loggedBlitFailure, "[Upscaling] Desktop mirror fallback blit failed; leaving mirror unchanged", e);
+		if (MarkSubmitStageDeviceLostIfNeeded(e, "desktop mirror fallback blit"))
+			return false;
+		return false;
+	} catch (...) {
+		static bool loggedBlitFailure = false;
+		LogWarnOnce(loggedBlitFailure, "[Upscaling] Desktop mirror fallback blit failed; leaving mirror unchanged");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("desktop mirror fallback blit"))
+			return false;
+		return false;
+	}
+
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("desktop mirror fallback blit"))
+		return false;
+
+	return true;
+}
+
 bool Upscaling::EnsureHMDMaskClearResources()
 {
 	if (!globals::game::isVR)
@@ -15371,6 +15581,9 @@ void Upscaling::ClearShaderCache()
 	aaVrsRefinementCS = nullptr;         // com_ptr automatically releases
 	submitStageStretchCS = nullptr;      // com_ptr automatically releases
 	vrMenuSceneDeltaCompositeCS = nullptr; // com_ptr automatically releases
+	vrDesktopMirrorBlitPS = nullptr;     // com_ptr automatically releases
+	vrDesktopMirrorBlitRTV = nullptr;    // com_ptr automatically releases
+	vrDesktopMirrorBlitTarget = nullptr;
 	vrClearHMDMaskCS = nullptr;          // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;          // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr; // com_ptr automatically releases
@@ -16937,6 +17150,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
 
 		if (canMirrorToSource) {
+			vrDesktopMirrorBlitRTV = nullptr;
+			vrDesktopMirrorBlitTarget = nullptr;
+
 			if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
 				submitStageMirrorFrame = currentFrame;
 				submitStageMirrorSourceTexture = sourceTexture;
@@ -16953,21 +17169,50 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				submitStageMirrorEyeReady = {};
 			}
 		} else {
-			static bool loggedSubmitStageMirrorSkip = false;
-			if (!loggedSubmitStageMirrorSkip) {
-				logger::warn(
-					"[Upscaling] Desktop mirror writeback skipped because the submit texture is not a compatible full stereo target. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
-					sourceDesc.Width,
-					sourceDesc.Height,
-					sourceDesc.ArraySize,
-					static_cast<uint32_t>(sourceDesc.Format),
-					vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Width : 0,
-					vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Height : 0,
-					vrIntermediateColorOut[0] ? static_cast<uint32_t>(vrIntermediateColorOut[0]->desc.Format) : 0,
-					vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Width : 0,
-					vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Height : 0,
-					vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
-				loggedSubmitStageMirrorSkip = true;
+			if (globals::features::vr.settings.StabilizeRenderScaleDesktopMirror) {
+				if (submitStageMirrorFrame != currentFrame || submitStageMirrorSourceTexture != sourceTexture) {
+					submitStageMirrorFrame = currentFrame;
+					submitStageMirrorSourceTexture = sourceTexture;
+					submitStageMirrorEyeReady = {};
+				}
+
+				submitStageMirrorEyeReady[eyeIndex] = true;
+				if (submitStageMirrorEyeReady[0] && submitStageMirrorEyeReady[1]) {
+					static bool loggedSubmitStageMirrorFallbackFailure = false;
+					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
+					if (!mirrorUpdated && IsSubmitStageDeviceLost())
+						return false;
+					if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
+						logger::warn(
+							"[Upscaling] Desktop mirror fallback could not update incompatible submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
+							sourceDesc.Width,
+							sourceDesc.Height,
+							sourceDesc.ArraySize,
+							static_cast<uint32_t>(sourceDesc.Format),
+							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Width : 0,
+							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Height : 0,
+							vrIntermediateColorOut[0] ? static_cast<uint32_t>(vrIntermediateColorOut[0]->desc.Format) : 0,
+							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Width : 0,
+							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Height : 0,
+							vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
+						loggedSubmitStageMirrorFallbackFailure = true;
+					}
+					submitStageMirrorEyeReady = {};
+				}
+			} else {
+				vrDesktopMirrorBlitRTV = nullptr;
+				vrDesktopMirrorBlitTarget = nullptr;
+				submitStageMirrorEyeReady = {};
+				static bool loggedSubmitStageMirrorDisabled = false;
+				if (!loggedSubmitStageMirrorDisabled) {
+					logger::debug(
+						"[Upscaling] Desktop mirror writeback left unchanged because the submit texture is reduced-size and the desktop mirror fallback is disabled. source={}x{} finalEye={}x{}",
+						sourceDesc.Width,
+						sourceDesc.Height,
+						eyeWidthOut,
+						eyeHeightOut);
+					loggedSubmitStageMirrorDisabled = true;
+				}
 			}
 		}
 

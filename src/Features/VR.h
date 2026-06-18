@@ -237,6 +237,7 @@ public:
 		};
 		MenuOverlayPath menuOverlayPath = MenuOverlayPath::Auto;  ///< Runtime path used to present the menu in the headset
 		bool KeepDesktopWindowFocusedForVRMenu = false;           ///< Keep the game window centered and foregrounded while the VR menu is open
+		bool StabilizeRenderScaleDesktopMirror = false;           ///< Blit render-scale submit-stage output back to the desktop mirror when direct copy is incompatible
 
 		// Wand pointing settings
 		bool EnableWandPointing = true;  ///< Enable controller wand/ray-cast pointing (modern VR input)

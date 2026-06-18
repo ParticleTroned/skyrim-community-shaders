@@ -10,6 +10,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	DisableInInteriors,
+	DisableInExteriors,
 	lightGamma,
 	colorGamma,
 	emitColorGamma,
@@ -39,6 +40,7 @@ void LinearLighting::DrawSettings()
 {
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox(T(TKEY("disable_in_interiors"), "Disable in interiors"), (bool*)&settings.DisableInInteriors);
+	ImGui::Checkbox(T(TKEY("disable_in_exteriors"), "Disable in exteriors"), (bool*)&settings.DisableInExteriors);
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
@@ -176,7 +178,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = settings.projectedEffectMult;
 	data.deferredEffectMult = settings.deferredEffectMult;
 	data.otherEffectMult = settings.otherEffectMult;
-	data.DisableInInteriors = settings.DisableInInteriors;
 	return data;
 }
 
@@ -186,13 +187,19 @@ bool LinearLighting::IsRuntimeEnabled() const
 		return false;
 
 	auto state = globals::state;
-	if (state && (state->isMainMenuOpen || state->isLoadingMenuOpen))
+	if (state && state->IsMainOrLoadingMenuOpen())
 		return false;
 
-	if (settings.DisableInInteriors && Util::IsInterior())
+	if (IsDisabledForCurrentCell())
 		return false;
 
 	return true;
+}
+
+bool LinearLighting::IsDisabledForCurrentCell() const
+{
+	const bool isInterior = Util::IsInterior();
+	return (settings.DisableInInteriors && isInterior) || (settings.DisableInExteriors && !isInterior);
 }
 
 RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
@@ -209,18 +216,14 @@ void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
-	if (lightProperty != nullptr) {
-		float emissiveMult = 1.0f;
-		if (IsRuntimeEnabled()) {
-			emissiveMult = lightProperty->emissiveMult;
-			PerGeometryData perGeometryData{};
-			perGeometryData.emissiveMult = emissiveMult;
-			PerGeometryCB->Update(perGeometryData);
+	if (lightProperty != nullptr && IsRuntimeEnabled()) {
+		PerGeometryData perGeometryData{};
+		perGeometryData.emissiveMult = lightProperty->emissiveMult;
+		PerGeometryCB->Update(perGeometryData);
 
-			ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-			auto context = globals::d3d::context;
-			context->PSSetConstantBuffers(8, 1, &buffer);
-		}
+		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
+		auto context = globals::d3d::context;
+		context->PSSetConstantBuffers(8, 1, &buffer);
 	}
 }
 

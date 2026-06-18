@@ -323,7 +323,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint DisableInInteriors;
+		uint pad0;
 	};
 
 	struct TerrainBlendingSettings

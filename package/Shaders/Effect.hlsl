@@ -1,3 +1,5 @@
+#define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
+
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -1012,7 +1014,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if !defined(HDR_OUTPUT)
-	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) && SharedData::linearLightingSettings.enableLinearLighting) {
+	// Reflection captures keep LL color adjustments but still need gamma output.
+	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) &&
+	    Color::UseLinearLightingColorAdjustments()) {
 		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
 	}
 #	endif

@@ -260,10 +260,10 @@ PS_OUTPUT main(PS_INPUT input)
 		TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x * 0.03125 + -0.0078125;
 
 #			ifdef TEX
-	float3 skyVertColor = ENABLE_LL ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
+	float3 skyVertColor = Color::UseLinearLightingColorAdjustments() ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
 	float3 sunGlareColor = Color::Sky(skyVertColor) * baseColor.xyz;
 	// Dither/noise term is the legacy sky path contribution for gradient smoothing.
-	psout.Color.xyz = (sunGlareColor + skyScale) + (ENABLE_LL ? 0.0 : noiseGrad);
+	psout.Color.xyz = (sunGlareColor + skyScale) + (Color::UseLinearLightingColorAdjustments() ? 0.0 : noiseGrad);
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
 	psout.Color.xyz = skyScale + Color::Sky(input.Color.xyz + noiseGrad);

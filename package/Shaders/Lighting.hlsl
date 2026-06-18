@@ -1,4 +1,5 @@
 #define LIGHTING
+#define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
@@ -2034,13 +2035,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // defined (EMAT) && defined(ENVMAP)
 
 #	if defined(FACEGEN)
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+	if (!Color::UseLinearLightingColorAdjustments()) {
 		baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
 	} else {
 		baseColor.xyz = Color::SkyrimGammaToLinear(GetFacegenBaseColor(Color::LinearToSkyrimGamma(baseColor.xyz), uv));
 	}
 #	elif defined(FACEGEN_RGB_TINT)
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+	if (!Color::UseLinearLightingColorAdjustments()) {
 		baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
 	} else {
 		baseColor.xyz = Color::SkyrimGammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToSkyrimGamma(baseColor.xyz), uv));
@@ -2333,7 +2334,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
+	if (!Color::UseLinearLightingColorAdjustments()) {
 		baseColor.xyz = Color::SrgbToLinear(baseColor.xyz) * pbrVertexColor;
 		material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
 		baseColor.xyz = Color::LinearToSrgb(baseColor.xyz);
@@ -2370,7 +2371,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// If LL is off, Diffuse returns sRGB
 			material.SubsurfaceColor *= Color::Diffuse(sampledSubsurfaceProperties.xyz);
 
-			if (!SharedData::linearLightingSettings.enableLinearLighting) {
+			if (!Color::UseLinearLightingColorAdjustments()) {
 				material.SubsurfaceColor = Color::LinearToSrgb(
 					Color::SrgbToLinear(material.SubsurfaceColor) * pbrVertexColor);
 			} else {
@@ -3216,7 +3217,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	waterRoughnessSpecular = max(saturate(1.0 - wetnessGlossinessSpecular), wetnessMinPuddleRoughness);
 #	endif
 
-	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && (inWorld || inReflection) && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float llDirLightMult = Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
 
 #	if defined(EXP_HEIGHT_FOG)
@@ -3669,7 +3670,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 
-		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		if (!Color::UseLinearLightingColorAdjustments()) {
 			emitColor = Color::SrgbToLinear(emitColor);
 			glowColor = Color::SrgbToLinear(glowColor);
 			emitColor *= glowColor;
@@ -3680,7 +3681,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			emitColor *= emitVertexColor;
 		}
 #		else
-		if (!SharedData::linearLightingSettings.enableLinearLighting) {
+		if (!Color::UseLinearLightingColorAdjustments()) {
 			emitColor = Color::LinearToSrgb(Color::SrgbToLinear(emitColor) * Color::SrgbToLinear(glowColor));
 		} else {
 			emitColor *= glowColor;
@@ -4304,12 +4305,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;
-#	endif
-
-#	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
-	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
-		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
-	}
 #	endif
 
 	return psout;

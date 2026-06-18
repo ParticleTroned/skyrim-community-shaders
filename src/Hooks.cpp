@@ -44,30 +44,54 @@ namespace
 {
 	constexpr std::uintptr_t kBSShaderRenderTargetsCreateDiscoveryCallerWindow = 0x2000;
 	constexpr uint32_t kNearCallInstructionSize = 5;
-	constexpr size_t kVRMenuBgCreateDiscoveryMaxCallOffsets = 16;
+	constexpr size_t kVRMenuBgCreateDiscoveryMaxRecords = 64;
 
 	std::mutex g_vrMenuBgCreateDiscoveryLock;
-	std::array<uint32_t, kVRMenuBgCreateDiscoveryMaxCallOffsets> g_vrMenuBgCreateDiscoveryCallOffsets{};
-	size_t g_vrMenuBgCreateDiscoveryCallOffsetCount = 0;
+	struct VRMenuBgCreateDiscoveryRecord
+	{
+		RE::RENDER_TARGETS::RENDER_TARGET target{ RE::RENDER_TARGETS::kNONE };
+		std::uintptr_t callerReturnAddress{ 0 };
+		uint32_t width{ 0 };
+		uint32_t height{ 0 };
+	};
+	std::array<VRMenuBgCreateDiscoveryRecord, kVRMenuBgCreateDiscoveryMaxRecords> g_vrMenuBgCreateDiscoveryRecords{};
+	size_t g_vrMenuBgCreateDiscoveryRecordCount = 0;
 	bool g_vrMenuBgCreateDiscoveryHookInstalled = false;
 
-	bool RecordVRMenuBgCreateDiscoveryCallOffset(uint32_t a_callOffset)
+	constexpr const char* BoolText(bool a_value)
+	{
+		return a_value ? "yes" : "no";
+	}
+
+	bool RecordVRMenuBgCreateDiscoveryRecord(
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		std::uintptr_t a_callerReturnAddress,
+		uint32_t a_width,
+		uint32_t a_height,
+		size_t& a_recordIndex)
 	{
 		std::scoped_lock lock(g_vrMenuBgCreateDiscoveryLock);
-		const auto storedOffsetsBegin = g_vrMenuBgCreateDiscoveryCallOffsets.begin();
-		const auto storedOffsetsEnd = storedOffsetsBegin + g_vrMenuBgCreateDiscoveryCallOffsetCount;
-		if (std::find(
-				storedOffsetsBegin,
-				storedOffsetsEnd,
-				a_callOffset) != storedOffsetsEnd) {
+		for (size_t i = 0; i < g_vrMenuBgCreateDiscoveryRecordCount; ++i) {
+			const auto& record = g_vrMenuBgCreateDiscoveryRecords[i];
+			if (record.target == a_target &&
+				record.callerReturnAddress == a_callerReturnAddress &&
+				record.width == a_width &&
+				record.height == a_height) {
+				return false;
+			}
+		}
+
+		if (g_vrMenuBgCreateDiscoveryRecordCount >= g_vrMenuBgCreateDiscoveryRecords.size()) {
 			return false;
 		}
 
-		if (g_vrMenuBgCreateDiscoveryCallOffsetCount >= g_vrMenuBgCreateDiscoveryCallOffsets.size()) {
-			return false;
-		}
-
-		g_vrMenuBgCreateDiscoveryCallOffsets[g_vrMenuBgCreateDiscoveryCallOffsetCount++] = a_callOffset;
+		g_vrMenuBgCreateDiscoveryRecords[g_vrMenuBgCreateDiscoveryRecordCount++] = {
+			a_target,
+			a_callerReturnAddress,
+			a_width,
+			a_height
+		};
+		a_recordIndex = g_vrMenuBgCreateDiscoveryRecordCount;
 		return true;
 	}
 
@@ -786,29 +810,56 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			if (REL::Module::IsVR() &&
-				a_target == RE::RENDER_TARGETS::kMENUBG &&
-				a_properties) {
+			if (REL::Module::IsVR()) {
+				const auto& upscaling = globals::features::upscaling;
+				const bool relatchPending = upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
+				const bool relatchInProgress = upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+				const bool relatchActive = relatchPending || relatchInProgress;
+
+				if (!relatchActive) {
+					func(This, a_target, a_properties);
+					return;
+				}
+
 				const auto createBase = REL::RelocationID(100458, 107175).address();
 				const auto callerReturnAddress = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-				if (callerReturnAddress >= createBase &&
-					callerReturnAddress < createBase + kBSShaderRenderTargetsCreateDiscoveryCallerWindow) {
-					const auto callerReturnOffset = static_cast<uint32_t>(callerReturnAddress - createBase);
+				const bool callerInsideCreate =
+					callerReturnAddress >= createBase &&
+					callerReturnAddress < createBase + kBSShaderRenderTargetsCreateDiscoveryCallerWindow;
+				uint32_t callerReturnOffset = 0;
+				uint32_t callerCallOffset = 0;
+
+				if (callerInsideCreate) {
+					callerReturnOffset = static_cast<uint32_t>(callerReturnAddress - createBase);
 					// `write_thunk_call` needs the CALL instruction address, not the post-call return address.
-					const auto callerCallOffset =
+					callerCallOffset =
 						callerReturnOffset >= kNearCallInstructionSize ?
 							callerReturnOffset - kNearCallInstructionSize :
 							callerReturnOffset;
+				}
 
-					if (RecordVRMenuBgCreateDiscoveryCallOffset(callerCallOffset)) {
-						logger::info(
-							"[VRMenuBgCreateDiscovery] target={} size={}x{} callerCallOff=0x{:X} callerRetOff=0x{:X}",
-							magic_enum::enum_name(a_target),
-							a_properties->width,
-							a_properties->height,
-							callerCallOffset,
-							callerReturnOffset);
-					}
+				const auto width = a_properties ? a_properties->width : 0;
+				const auto height = a_properties ? a_properties->height : 0;
+				size_t recordIndex = 0;
+				if (RecordVRMenuBgCreateDiscoveryRecord(a_target, callerReturnAddress, width, height, recordIndex)) {
+					const auto frame = globals::state ? globals::state->frameCount : 0;
+
+					logger::info(
+						"[VRMenuBgCreateDiscovery] record={}/{} target={}({}) size={}x{} callerInCreate={} callerCallOff=0x{:X} callerRetOff=0x{:X} callerRet=0x{:X} frame={} relatchPending={} relatchInProgress={} vrRenderScaleActive={}",
+						recordIndex,
+						kVRMenuBgCreateDiscoveryMaxRecords,
+						magic_enum::enum_name(a_target),
+						static_cast<int>(magic_enum::enum_integer(a_target)),
+						width,
+						height,
+						BoolText(callerInsideCreate),
+						callerCallOffset,
+						callerReturnOffset,
+						callerReturnAddress,
+						frame,
+						BoolText(relatchPending),
+						BoolText(relatchInProgress),
+						BoolText(upscaling.IsVRRenderScaleModeActive()));
 				}
 			}
 

@@ -1,8 +1,8 @@
 #include "LinearLighting.h"
 
 #include "../I18n/I18n.h"
+#include "LocationContext.h"
 #include "State.h"
-#include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.linear_lighting."
 
@@ -198,8 +198,7 @@ bool LinearLighting::IsRuntimeEnabled() const
 
 bool LinearLighting::IsDisabledForCurrentCell() const
 {
-	const bool isInterior = Util::IsInterior();
-	return (settings.DisableInInteriors && isInterior) || (settings.DisableInExteriors && !isInterior);
+	return LocationContext::IsDisabledByLocation(settings.DisableInInteriors, settings.DisableInExteriors);
 }
 
 RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)

@@ -2,8 +2,8 @@
 
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
+#include "LocationContext.h"
 #include "Shadercache.h"
-#include "State.h"
 #include "WeatherVariableRegistry.h"
 
 #include <DDSTextureLoader.h>
@@ -221,21 +221,16 @@ void IBL::ReflectionsPrepass()
 		return;
 	}
 
-	const bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
-
 	SetIblPsSrvs(
 		context,
-		interiorDisabled ? nullptr : envIBLTexture->srv.get(),
-		interiorDisabled ? nullptr : skyIBLTexture->srv.get(),
+		envIBLTexture->srv.get(),
+		skyIBLTexture->srv.get(),
 		staticDiffuseIBLTexture ? staticDiffuseIBLTexture->srv.get() : nullptr,
 		staticSpecularIBLTexture ? staticSpecularIBLTexture->srv.get() : nullptr);
 }
 
 void IBL::Prepass()
 {
-	if (settings.DisableInInteriors && Util::IsInterior())
-		return;
-
 	auto context = globals::d3d::context;
 	if (!context)
 		return;
@@ -435,10 +430,8 @@ ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
 
 IBL::CommonBufferData IBL::GetCommonBufferData() const
 {
-	const bool interiorDisabled = settings.DisableInInteriors && Util::IsInterior();
-
 	return {
-		.EnableIBL = (IsRuntimeEnabled() && !interiorDisabled) ? 1u : 0u,
+		.EnableIBL = IsRuntimeEnabled() ? 1u : 0u,
 		.PreserveFogLuminance = settings.PreserveFogLuminance,
 		.UseStaticIBL = settings.UseStaticIBL,
 		.DALCAmount = settings.DALCAmount,
@@ -455,5 +448,5 @@ IBL::CommonBufferData IBL::GetCommonBufferData() const
 
 bool IBL::IsRuntimeEnabled() const
 {
-	return loaded && settings.EnableIBL != 0;
+	return loaded && settings.EnableIBL != 0 && !LocationContext::IsDisabledByLocation(settings.DisableInInteriors, false);
 }

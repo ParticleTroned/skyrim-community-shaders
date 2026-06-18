@@ -3,6 +3,7 @@
 #include "Globals.h"
 #include "InverseSquareLighting.h"
 #include "LinearLighting.h"
+#include "LocationContext.h"
 
 #include "Menu/ThemeManager.h"
 #include "Shadercache.h"
@@ -168,7 +169,7 @@ namespace
 
 	uint PackContactShadowFlags(const LightLimitFix::Settings& a_settings)
 	{
-		if (a_settings.ContactShadowsInteriorsOnly && !Util::IsInterior()) {
+		if (!LocationContext::AllowsInteriorOnly(a_settings.ContactShadowsInteriorsOnly)) {
 			return 0;
 		}
 
@@ -920,7 +921,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 	}
 
 	bool inWorld = accumulator->GetRuntimeData().activeShadowSceneNode == smState->shadowSceneNode[0];
-	const bool isInterior = Util::IsInterior();
+	const bool isInterior = LocationContext::Get().inInterior;
 
 	constexpr uint32_t kStrictLightCapacity = 15;
 	const uint32_t availableSceneLights = a_pass->numLights > 0 ? (a_pass->numLights - 1) : 0;
@@ -1100,7 +1101,7 @@ void LightLimitFix::ApplyJsonPlacedLightIntensityScale(
 	if (std::abs(settings.JsonPlacedLightIntensity - 1.0f) <= 1e-4f) {
 		return;
 	}
-	if (settings.JsonPlacedLightsInteriorsOnly && !a_isInterior) {
+	if (!LocationContext::AllowsInteriorOnly(settings.JsonPlacedLightsInteriorsOnly, a_isInterior)) {
 		return;
 	}
 	if (settings.JsonPlacedLightsPortalStrictOnly && !a_isPortalStrict) {
@@ -1655,7 +1656,7 @@ void LightLimitFix::UpdateLights()
 
 	eastl::vector<LightData> lightsData{};
 	lightsData.reserve(MAX_LIGHTS);
-	const bool isInterior = Util::IsInterior();
+	const bool isInterior = LocationContext::Get().inInterior;
 	RefreshJsonPlacedLightCacheFrame();
 
 	// Process point lights

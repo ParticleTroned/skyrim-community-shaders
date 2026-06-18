@@ -1,4 +1,5 @@
 ﻿#include "VR.h"
+#include "LocationContext.h"
 #include "Menu.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/P/PlayerCharacter.h"
@@ -298,9 +299,10 @@ void VR::UpdateDepthBufferCulling()
 		return;
 	}
 
-	const auto* tes = globals::game::tes;
-	const bool inInterior = tes && tes->interiorCell != nullptr;
-	const bool desired = inInterior ? settings.EnableDepthBufferCullingInterior : settings.EnableDepthBufferCullingExterior;
+	const bool desired = LocationContext::SelectInteriorExterior(
+		LocationContext::HasInteriorCell(),
+		settings.EnableDepthBufferCullingInterior,
+		settings.EnableDepthBufferCullingExterior);
 
 	const bool previous = *gDepthBufferCulling;
 	*gDepthBufferCulling = desired;

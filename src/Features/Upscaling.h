@@ -1061,6 +1061,8 @@ private:
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
 	bool TryCaptureAndSuppressVRMenuBridgeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
+	bool TryCaptureVRMenuBakeCompositeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
+		UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
 	bool QueueVRMenuBakeReplayAfterVendor(uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);
 	static constexpr uint32_t kVRMenuBakeReplayMaxDraws = 32;
 	static constexpr uint32_t kVRMenuBakeReplayVBSlots = 8;
@@ -1118,18 +1120,22 @@ private:
 		UINT viewportCount = 0;
 		std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissors{};
 		UINT scissorCount = 0;
+		UINT menuSourcePsSlot = std::numeric_limits<UINT>::max();
 	};
 	void BeginVRMenuBakePrototypeFrame(uint32_t a_frame);
 	void ResetVRMenuBakeCapturedDrawState(VRMenuBakeCapturedDrawState& a_draw);
 	bool CaptureVRMenuBakeDrawState(ID3D11DeviceContext* a_context, VRMenuBakeCapturedDrawState& a_draw, VRMenuBakeReplayDrawKind a_drawKind,
 		UINT a_vertexCount, UINT a_indexCount, UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation,
 		INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_frame,
-		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight);
-	bool EnsureVRMenuBakeReplayCombinedTexture(uint32_t a_combinedWidth, uint32_t a_combinedHeight, DXGI_FORMAT a_format);
+		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight,
+		UINT a_menuSourcePsSlot = std::numeric_limits<UINT>::max());
+	bool EnsureVRMenuBakeReplayTextures(uint32_t a_combinedWidth, uint32_t a_combinedHeight, DXGI_FORMAT a_format);
 	bool ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	uint32_t vrMenuBakePrototypeFrame = std::numeric_limits<uint32_t>::max();
+	VRMenuBakeCapturedDrawState vrMenuBakeCompositeDraw;
 	std::array<VRMenuBakeCapturedDrawState, kVRMenuBakeReplayMaxDraws> vrMenuBakeReplayDraws;
 	uint32_t vrMenuBakeReplayDrawCount = 0;
+	eastl::unique_ptr<Texture2D> vrMenuBakeReplayLayer;
 	eastl::unique_ptr<Texture2D> vrMenuBakeReplayCombined;
 
 	struct OpenCompositeUpscalingBlocker

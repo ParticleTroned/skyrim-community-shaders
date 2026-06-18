@@ -19,9 +19,8 @@
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 
-#include "ShaderTools/BSShaderHooks.h"
-
 #include <intrin.h>
+#include <array>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
@@ -42,57 +41,84 @@ const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Sha
 
 namespace
 {
-	constexpr std::uintptr_t kBSShaderRenderTargetsCreateDiscoveryCallerWindow = 0x2000;
-	constexpr uint32_t kNearCallInstructionSize = 5;
-	constexpr size_t kVRMenuBgCreateDiscoveryMaxRecords = 64;
-
-	std::mutex g_vrMenuBgCreateDiscoveryLock;
-	struct VRMenuBgCreateDiscoveryRecord
-	{
-		RE::RENDER_TARGETS::RENDER_TARGET target{ RE::RENDER_TARGETS::kNONE };
-		std::uintptr_t callerReturnAddress{ 0 };
-		uint32_t width{ 0 };
-		uint32_t height{ 0 };
+	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 8> kVRRenderScaleRecreateInspectionTargets{
+		RE::RENDER_TARGETS::kMAIN,
+		RE::RENDER_TARGETS::kTOTAL,
+		RE::RENDER_TARGETS::kMENUBG,
+		RE::RENDER_TARGETS::kHUDMENU,
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+		RE::RENDER_TARGETS::kWORLDUI0,
+		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
+		RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
 	};
-	std::array<VRMenuBgCreateDiscoveryRecord, kVRMenuBgCreateDiscoveryMaxRecords> g_vrMenuBgCreateDiscoveryRecords{};
-	size_t g_vrMenuBgCreateDiscoveryRecordCount = 0;
-	bool g_vrMenuBgCreateDiscoveryHookInstalled = false;
 
 	constexpr const char* BoolText(bool a_value)
 	{
 		return a_value ? "yes" : "no";
 	}
 
-	bool RecordVRMenuBgCreateDiscoveryRecord(
-		RE::RENDER_TARGETS::RENDER_TARGET a_target,
-		std::uintptr_t a_callerReturnAddress,
-		uint32_t a_width,
-		uint32_t a_height,
-		size_t& a_recordIndex)
+	void LogVRRenderScaleRecreateInspection(const char* a_phase)
 	{
-		std::scoped_lock lock(g_vrMenuBgCreateDiscoveryLock);
-		for (size_t i = 0; i < g_vrMenuBgCreateDiscoveryRecordCount; ++i) {
-			const auto& record = g_vrMenuBgCreateDiscoveryRecords[i];
-			if (record.target == a_target &&
-				record.callerReturnAddress == a_callerReturnAddress &&
-				record.width == a_width &&
-				record.height == a_height) {
-				return false;
-			}
-		}
+		if (!REL::Module::IsVR() || !globals::state || !globals::state->IsDeveloperMode())
+			return;
 
-		if (g_vrMenuBgCreateDiscoveryRecordCount >= g_vrMenuBgCreateDiscoveryRecords.size()) {
-			return false;
-		}
+		auto& upscaling = globals::features::upscaling;
+		const bool relatchPending = upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
+		const bool relatchInProgress = upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+		if (!relatchPending && !relatchInProgress)
+			return;
 
-		g_vrMenuBgCreateDiscoveryRecords[g_vrMenuBgCreateDiscoveryRecordCount++] = {
-			a_target,
-			a_callerReturnAddress,
-			a_width,
-			a_height
-		};
-		a_recordIndex = g_vrMenuBgCreateDiscoveryRecordCount;
-		return true;
+		auto* renderer = globals::game::renderer;
+		const auto& boot = upscaling.perfMode.GetBootSnapshot();
+		logger::debug(
+			"[VRMenuBgRecreateInspect] phase={} frame={} screen={}x{} vrRenderScaleRequested={} vrRenderScaleActive={} relatchPending={} relatchInProgress={} bootValid={} bootActive={} bootMethod={} bootQuality={} bootDisplayEye={}x{} bootRenderEye={}x{} bootRenderScale={:.4f}",
+			a_phase,
+			globals::state->frameCount,
+			globals::state->screenSize.x,
+			globals::state->screenSize.y,
+			BoolText(upscaling.IsRenderScaleModeRequested()),
+			BoolText(upscaling.IsVRRenderScaleModeActive()),
+			BoolText(relatchPending),
+			BoolText(relatchInProgress),
+			BoolText(boot.valid),
+			BoolText(boot.active),
+			magic_enum::enum_name(boot.method),
+			boot.qualityMode,
+			boot.displayEyeWidth,
+			boot.displayEyeHeight,
+			boot.renderEyeWidth,
+			boot.renderEyeHeight,
+			boot.renderScale);
+
+		if (!renderer)
+			return;
+
+		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
+		for (const auto target : kVRRenderScaleRecreateInspectionTargets) {
+			const auto& renderTarget = renderTargets[target];
+			D3D11_TEXTURE2D_DESC textureDesc{};
+			D3D11_TEXTURE2D_DESC copyDesc{};
+			if (renderTarget.texture)
+				renderTarget.texture->GetDesc(&textureDesc);
+			if (renderTarget.textureCopy)
+				renderTarget.textureCopy->GetDesc(&copyDesc);
+
+			logger::debug(
+				"[VRMenuBgRecreateInspect] phase={} target={} texture={}x{} fmt={} samples={} copy={}x{} copyFmt={} rtv={} srv={} srvCopy={} uav={}",
+				a_phase,
+				magic_enum::enum_name(target),
+				textureDesc.Width,
+				textureDesc.Height,
+				static_cast<uint32_t>(textureDesc.Format),
+				textureDesc.SampleDesc.Count,
+				copyDesc.Width,
+				copyDesc.Height,
+				static_cast<uint32_t>(copyDesc.Format),
+				BoolText(renderTarget.RTV != nullptr),
+				BoolText(renderTarget.SRV != nullptr),
+				BoolText(renderTarget.SRVCopy != nullptr),
+				BoolText(renderTarget.UAV != nullptr));
+		}
 	}
 
 	enum class InputHookSafeguardReason : uint32_t
@@ -647,11 +673,15 @@ struct BSShaderRenderTargets_Create
 
 	static bool RecreateAndSetupRenderTargetResources()
 	{
+		LogVRRenderScaleRecreateInspection("before-original");
 		func();
+		LogVRRenderScaleRecreateInspection("after-original");
 		globals::ReInit();
+		LogVRRenderScaleRecreateInspection("after-reinit");
 		if (!CanSetupRenderingResources())
 			return false;
 		globals::state->SetupRenderTargetResources();
+		LogVRRenderScaleRecreateInspection("after-setup-render-target-resources");
 		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -805,112 +835,6 @@ namespace Hooks
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-
-	struct CreateRenderTarget_Discovery
-	{
-		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
-		{
-			if (REL::Module::IsVR()) {
-				const auto& upscaling = globals::features::upscaling;
-				const bool relatchPending = upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
-				const bool relatchInProgress = upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
-				const bool relatchActive = relatchPending || relatchInProgress;
-
-				if (!relatchActive) {
-					func(This, a_target, a_properties);
-					return;
-				}
-
-				const auto createBase = REL::RelocationID(100458, 107175).address();
-				const auto callerReturnAddress = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-				const bool callerInsideCreate =
-					callerReturnAddress >= createBase &&
-					callerReturnAddress < createBase + kBSShaderRenderTargetsCreateDiscoveryCallerWindow;
-				uint32_t callerReturnOffset = 0;
-				uint32_t callerCallOffset = 0;
-
-				if (callerInsideCreate) {
-					callerReturnOffset = static_cast<uint32_t>(callerReturnAddress - createBase);
-					// `write_thunk_call` needs the CALL instruction address, not the post-call return address.
-					callerCallOffset =
-						callerReturnOffset >= kNearCallInstructionSize ?
-							callerReturnOffset - kNearCallInstructionSize :
-							callerReturnOffset;
-				}
-
-				const auto width = a_properties ? a_properties->width : 0;
-				const auto height = a_properties ? a_properties->height : 0;
-				size_t recordIndex = 0;
-				if (RecordVRMenuBgCreateDiscoveryRecord(a_target, callerReturnAddress, width, height, recordIndex)) {
-					const auto frame = globals::state ? globals::state->frameCount : 0;
-
-					logger::info(
-						"[VRMenuBgCreateDiscovery] record={}/{} target={}({}) size={}x{} callerInCreate={} callerCallOff=0x{:X} callerRetOff=0x{:X} callerRet=0x{:X} frame={} relatchPending={} relatchInProgress={} vrRenderScaleActive={}",
-						recordIndex,
-						kVRMenuBgCreateDiscoveryMaxRecords,
-						magic_enum::enum_name(a_target),
-						static_cast<int>(magic_enum::enum_integer(a_target)),
-						width,
-						height,
-						BoolText(callerInsideCreate),
-						callerCallOffset,
-						callerReturnOffset,
-						callerReturnAddress,
-						frame,
-						BoolText(relatchPending),
-						BoolText(relatchInProgress),
-						BoolText(upscaling.IsVRRenderScaleModeActive()));
-				}
-			}
-
-			func(This, a_target, a_properties);
-		}
-
-		static inline decltype(&thunk) func;
-	};
-
-	void InstallVRMenuBgCreateDiscoveryHook()
-	{
-		if (!REL::Module::IsVR() || g_vrMenuBgCreateDiscoveryHookInstalled) {
-			return;
-		}
-
-		const auto targetAddress = CreateRenderTarget_Main::func.address();
-		if (targetAddress == 0) {
-			logger::warn("[VRMenuBgCreateDiscovery] Shared CreateRenderTarget address unavailable; discovery hook not installed.");
-			return;
-		}
-
-		CreateRenderTarget_Discovery::func = reinterpret_cast<decltype(CreateRenderTarget_Discovery::func)>(targetAddress);
-
-		auto status = DetourTransactionBegin();
-		if (status != NO_ERROR) {
-			logger::warn("[VRMenuBgCreateDiscovery] Failed to begin shared CreateRenderTarget discovery hook transaction: {}", status);
-			return;
-		}
-
-		status = DetourUpdateThread(GetCurrentThread());
-		if (status != NO_ERROR) {
-			DetourTransactionAbort();
-			logger::warn("[VRMenuBgCreateDiscovery] Failed to update thread for shared CreateRenderTarget discovery hook: {}", status);
-			return;
-		}
-
-		status = DetourAttach(reinterpret_cast<PVOID*>(&CreateRenderTarget_Discovery::func), reinterpret_cast<PVOID>(CreateRenderTarget_Discovery::thunk));
-		if (status != NO_ERROR) {
-			DetourTransactionAbort();
-			logger::warn("[VRMenuBgCreateDiscovery] Failed to attach shared CreateRenderTarget discovery hook: {}", status);
-			return;
-		}
-
-		status = DetourTransactionCommit();
-		if (status == NO_ERROR) {
-			g_vrMenuBgCreateDiscoveryHookInstalled = true;
-			logger::info("[VRMenuBgCreateDiscovery] Installed shared CreateRenderTarget discovery hook.");
-		} else {
-			logger::warn("[VRMenuBgCreateDiscovery] Failed to install shared CreateRenderTarget discovery hook: {}", status);
-		}
-	}
 
 	struct CreateRenderTarget_Normals
 	{
@@ -1422,7 +1346,6 @@ namespace Hooks
 
 		stl::write_thunk_call<CreateRenderTarget_RefractionNormals>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x503, 0x502, 0x661));
 		stl::write_thunk_call<CreateRenderTarget_UnderwaterMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xB19, 0xB19, 0xE06));
-		InstallVRMenuBgCreateDiscoveryHook();
 
 		stl::write_thunk_call<CreateDepthStencil_PrecipitationMask>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0x1245, 0x123B, 0x1917));
 		stl::write_thunk_call<CreateCubemapRenderTarget_Reflections>(REL::RelocationID(100458, 107175).address() + REL::Relocate(0xA25, 0xA25, 0xCD2));

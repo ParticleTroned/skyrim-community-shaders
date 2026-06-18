@@ -26,6 +26,7 @@ struct LinearLighting : Feature
 	struct Settings
 	{
 		uint enableLinearLighting = false;
+		uint DisableInInteriors = false;
 		float lightGamma = 1.8f;
 		float colorGamma = 1.8f;
 		float emitColorGamma = 1.8f;
@@ -85,7 +86,7 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint pad0;
+		uint DisableInInteriors;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 
@@ -113,6 +114,7 @@ struct LinearLighting : Feature
 	virtual void SetupResources() override;
 
 	PerFrameData GetCommonBufferData();
+	bool IsRuntimeEnabled() const;
 
 	RE::NiColor ColorToLinear(RE::NiColor inColor, float gamma);
 

@@ -1844,6 +1844,9 @@ namespace
 	constexpr uint32_t kVRMenuBridgeReplayDiagnosticMaxLogsPerFrame = 12u;
 	std::atomic<uint32_t> g_vrMenuBridgeReplayDiagnosticFrame{ 0 };
 	std::atomic<uint32_t> g_vrMenuBridgeReplayDiagnosticCount{ 0 };
+	constexpr uint32_t kVRMenuBridgeReplayProofDiagnosticMaxLogsPerFrame = 2u;
+	std::atomic<uint32_t> g_vrMenuBridgeReplayProofDiagnosticFrame{ 0 };
+	std::atomic<uint32_t> g_vrMenuBridgeReplayProofDiagnosticCount{ 0 };
 	constexpr uint32_t kVRTrackedDrawDiagnosticMaxLogsPerFrame = 24u;
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticFrame{ 0 };
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticCount{ 0 };
@@ -6088,49 +6091,59 @@ namespace
 			BoolText(IsVRMenuPresentationContextActive()));
 	}
 
-	bool ClaimVRTrackedDrawDiagnosticSlot(uint32_t a_frame)
+	bool ClaimFrameDiagnosticSlot(
+		uint32_t a_frame,
+		std::atomic<uint32_t>& a_diagnosticFrame,
+		std::atomic<uint32_t>& a_diagnosticCount,
+		uint32_t a_maxLogsPerFrame)
 	{
-		auto frame = g_vrTrackedDrawDiagnosticFrame.load(std::memory_order_acquire);
+		auto frame = a_diagnosticFrame.load(std::memory_order_acquire);
 		if (frame != a_frame) {
-			if (g_vrTrackedDrawDiagnosticFrame.compare_exchange_strong(
+			if (a_diagnosticFrame.compare_exchange_strong(
 					frame,
 					a_frame,
 					std::memory_order_acq_rel)) {
-				g_vrTrackedDrawDiagnosticCount.store(0, std::memory_order_release);
+				a_diagnosticCount.store(0, std::memory_order_release);
 			}
 		}
 
-		return g_vrTrackedDrawDiagnosticCount.fetch_add(1, std::memory_order_acq_rel) < kVRTrackedDrawDiagnosticMaxLogsPerFrame;
+		return a_diagnosticCount.fetch_add(1, std::memory_order_acq_rel) < a_maxLogsPerFrame;
+	}
+
+	bool ClaimVRTrackedDrawDiagnosticSlot(uint32_t a_frame)
+	{
+		return ClaimFrameDiagnosticSlot(
+			a_frame,
+			g_vrTrackedDrawDiagnosticFrame,
+			g_vrTrackedDrawDiagnosticCount,
+			kVRTrackedDrawDiagnosticMaxLogsPerFrame);
 	}
 
 	bool ClaimVRMenuBakeDrawDiagnosticSlot(uint32_t a_frame)
 	{
-		auto frame = g_vrMenuBakeDrawDiagnosticFrame.load(std::memory_order_acquire);
-		if (frame != a_frame) {
-			if (g_vrMenuBakeDrawDiagnosticFrame.compare_exchange_strong(
-					frame,
-					a_frame,
-					std::memory_order_acq_rel)) {
-				g_vrMenuBakeDrawDiagnosticCount.store(0, std::memory_order_release);
-			}
-		}
-
-		return g_vrMenuBakeDrawDiagnosticCount.fetch_add(1, std::memory_order_acq_rel) < kVRMenuBakeDrawDiagnosticMaxLogsPerFrame;
+		return ClaimFrameDiagnosticSlot(
+			a_frame,
+			g_vrMenuBakeDrawDiagnosticFrame,
+			g_vrMenuBakeDrawDiagnosticCount,
+			kVRMenuBakeDrawDiagnosticMaxLogsPerFrame);
 	}
 
 	bool ClaimVRMenuBridgeReplayDiagnosticSlot(uint32_t a_frame)
 	{
-		auto frame = g_vrMenuBridgeReplayDiagnosticFrame.load(std::memory_order_acquire);
-		if (frame != a_frame) {
-			if (g_vrMenuBridgeReplayDiagnosticFrame.compare_exchange_strong(
-					frame,
-					a_frame,
-					std::memory_order_acq_rel)) {
-				g_vrMenuBridgeReplayDiagnosticCount.store(0, std::memory_order_release);
-			}
-		}
+		return ClaimFrameDiagnosticSlot(
+			a_frame,
+			g_vrMenuBridgeReplayDiagnosticFrame,
+			g_vrMenuBridgeReplayDiagnosticCount,
+			kVRMenuBridgeReplayDiagnosticMaxLogsPerFrame);
+	}
 
-		return g_vrMenuBridgeReplayDiagnosticCount.fetch_add(1, std::memory_order_acq_rel) < kVRMenuBridgeReplayDiagnosticMaxLogsPerFrame;
+	bool ClaimVRMenuBridgeReplayProofDiagnosticSlot(uint32_t a_frame)
+	{
+		return ClaimFrameDiagnosticSlot(
+			a_frame,
+			g_vrMenuBridgeReplayProofDiagnosticFrame,
+			g_vrMenuBridgeReplayProofDiagnosticCount,
+			kVRMenuBridgeReplayProofDiagnosticMaxLogsPerFrame);
 	}
 
 	std::string BuildVRTrackedDrawEyeMapping(
@@ -6790,34 +6803,26 @@ namespace
 		return (a_hash ^ static_cast<uint64_t>(a_value)) * kFnvPrime;
 	}
 
-	bool CaptureVRTrackedTargetFingerprint(
+	bool CaptureVRTextureSparseFingerprint(
 		ID3D11DeviceContext* a_context,
-		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		ID3D11Texture2D* a_texture,
+		const char* a_label,
 		VRKTotalFingerprint& a_fingerprint)
 	{
 		a_fingerprint = {};
-		auto renderer = globals::game::renderer;
 		auto device = globals::d3d::device;
-		if (!globals::game::isVR || !renderer || !device || !a_context)
-			return false;
-
-		const auto targetIndex = static_cast<int>(a_target);
-		if (targetIndex < 0 || targetIndex >= Util::GetRenderTargetCount())
-			return false;
-
-		auto& totalTarget = renderer->GetRuntimeData().renderTargets[targetIndex];
-		if (!totalTarget.texture)
+		if (!globals::game::isVR || !device || !a_context || !a_texture)
 			return false;
 
 		D3D11_TEXTURE2D_DESC totalDesc{};
-		totalTarget.texture->GetDesc(&totalDesc);
+		a_texture->GetDesc(&totalDesc);
 		const uint32_t bytesPerPixel = GetVRKTotalFingerprintBytesPerPixel(totalDesc.Format);
 		if (bytesPerPixel == 0 || totalDesc.Width < 2 || totalDesc.Height < 2 || totalDesc.SampleDesc.Count != 1 || totalDesc.ArraySize != 1) {
 			static std::atomic_bool loggedUnsupportedFormat{ false };
 			if (!loggedUnsupportedFormat.exchange(true, std::memory_order_acq_rel)) {
 				logger::debug(
 					"[VRTrackedTargetDiag] sparse fingerprint disabled for unsupported {} desc {}x{} fmt={} samples={} array={}",
-					GetVRMenuCompositionTargetName(a_target),
+					DiagnosticText(a_label, "texture"),
 					totalDesc.Width,
 					totalDesc.Height,
 					static_cast<uint32_t>(totalDesc.Format),
@@ -6887,7 +6892,7 @@ namespace
 					x * kBlock,
 					y * kBlock,
 					0,
-					totalTarget.texture,
+					a_texture,
 					0,
 					&sourceBox);
 			}
@@ -6922,8 +6927,30 @@ namespace
 		a_fingerprint.format = totalDesc.Format;
 		a_fingerprint.hash = hash;
 		a_fingerprint.samples = kGridX * kGridY * copyBlockWidth * copyBlockHeight;
-		a_fingerprint.texture = totalTarget.texture;
+		a_fingerprint.texture = a_texture;
 		return true;
+	}
+
+	bool CaptureVRTrackedTargetFingerprint(
+		ID3D11DeviceContext* a_context,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		VRKTotalFingerprint& a_fingerprint)
+	{
+		a_fingerprint = {};
+		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return false;
+
+		const auto targetIndex = static_cast<int>(a_target);
+		if (targetIndex < 0 || targetIndex >= Util::GetRenderTargetCount())
+			return false;
+
+		auto& totalTarget = renderer->GetRuntimeData().renderTargets[targetIndex];
+		return CaptureVRTextureSparseFingerprint(
+			a_context,
+			totalTarget.texture,
+			GetVRMenuCompositionTargetName(a_target),
+			a_fingerprint);
 	}
 
 	bool CaptureVRKTotalFingerprint(ID3D11DeviceContext* a_context, VRKTotalFingerprint& a_fingerprint)
@@ -8204,6 +8231,66 @@ static void AttachD3DGetResult(winrt::com_ptr<T>& a_out, T* a_value)
 		a_out.attach(a_value);
 }
 
+static bool SnapshotVRMenuBakeSourceSRV(
+	ID3D11DeviceContext* a_context,
+	ID3D11ShaderResourceView* a_sourceSRV,
+	winrt::com_ptr<ID3D11ShaderResourceView>& a_snapshotSRV)
+{
+	a_snapshotSRV = nullptr;
+
+	auto* device = globals::d3d::device;
+	if (!device || !a_context || !a_sourceSRV)
+		return false;
+
+	ID3D11Resource* sourceResource = nullptr;
+	a_sourceSRV->GetResource(&sourceResource);
+	if (!sourceResource)
+		return false;
+	auto sourceResourceRelease = ScopeExit([&]() {
+		sourceResource->Release();
+	});
+
+	winrt::com_ptr<ID3D11Texture2D> sourceTexture;
+	if (FAILED(sourceResource->QueryInterface(IID_PPV_ARGS(sourceTexture.put()))) || !sourceTexture)
+		return false;
+
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+	if (!sourceDesc.Width ||
+		!sourceDesc.Height ||
+		sourceDesc.MipLevels != 1 ||
+		sourceDesc.ArraySize != 1 ||
+		sourceDesc.SampleDesc.Count != 1 ||
+		sourceDesc.Format == DXGI_FORMAT_UNKNOWN) {
+		return false;
+	}
+
+	D3D11_TEXTURE2D_DESC snapshotDesc = sourceDesc;
+	snapshotDesc.Usage = D3D11_USAGE_DEFAULT;
+	snapshotDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	snapshotDesc.CPUAccessFlags = 0;
+	snapshotDesc.MiscFlags = 0;
+
+	winrt::com_ptr<ID3D11Texture2D> snapshotTexture;
+	if (FAILED(device->CreateTexture2D(&snapshotDesc, nullptr, snapshotTexture.put())) || !snapshotTexture)
+		return false;
+
+	a_context->CopyResource(snapshotTexture.get(), sourceTexture.get());
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC sourceViewDesc{};
+	a_sourceSRV->GetDesc(&sourceViewDesc);
+	D3D11_SHADER_RESOURCE_VIEW_DESC snapshotViewDesc = sourceViewDesc;
+	if (snapshotViewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D) {
+		snapshotViewDesc = {};
+		snapshotViewDesc.Format = sourceDesc.Format;
+		snapshotViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		snapshotViewDesc.Texture2D.MostDetailedMip = 0;
+		snapshotViewDesc.Texture2D.MipLevels = 1;
+	}
+
+	return SUCCEEDED(device->CreateShaderResourceView(snapshotTexture.get(), &snapshotViewDesc, a_snapshotSRV.put())) && a_snapshotSRV;
+}
+
 void Upscaling::ResetVRMenuBakeCapturedDrawState(VRMenuBakeCapturedDrawState& a_draw)
 {
 	a_draw = VRMenuBakeCapturedDrawState{};
@@ -8633,15 +8720,36 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDrawPrototype(
 		return false;
 	}
 
+	bool sourceSnapshotReused = false;
+	for (uint32_t priorIndex = 0; priorIndex < vrMenuBakeReplayDrawCount; ++priorIndex) {
+		auto& priorDraw = vrMenuBakeReplayDraws[priorIndex];
+		if (priorDraw.valid &&
+			priorDraw.psSRVs[menuSourceSlot].get() == psSRVs[menuSourceSlot] &&
+			priorDraw.psSRVSnapshots[menuSourceSlot]) {
+			draw.psSRVSnapshots[menuSourceSlot] = priorDraw.psSRVSnapshots[menuSourceSlot];
+			sourceSnapshotReused = true;
+			break;
+		}
+	}
+
+	if (!draw.psSRVSnapshots[menuSourceSlot] &&
+		!SnapshotVRMenuBakeSourceSRV(a_context, psSRVs[menuSourceSlot], draw.psSRVSnapshots[menuSourceSlot])) {
+		ResetVRMenuBakeCapturedDrawState(draw);
+		static bool loggedSnapshotFailure = false;
+		LogWarnOnce(loggedSnapshotFailure, "[VRMenuBridgeReplay] Skipping suppression because source snapshot capture failed");
+		return false;
+	}
+
 	++vrMenuBakeReplayDrawCount;
 
 	if (ClaimVRMenuBridgeReplayDiagnosticSlot(state->frameCount)) {
 		VR_TRANSITION_DIAG_LOG(
-			"[VRMenuBridgeReplay] captured suppressed bridge draw frame={} drawIndex={} source={} slot={} dst=kMENUBG({}x{}) draw=indices:{} instances:{} final={}x{}",
+			"[VRMenuBridgeReplay] captured suppressed bridge draw frame={} drawIndex={} source={} slot={} sourceSnapshot={} dst=kMENUBG({}x{}) draw=indices:{} instances:{} final={}x{}",
 			state->frameCount,
 			vrMenuBakeReplayDrawCount - 1u,
 			GetVRMenuCompositionTargetName(menuSourceTarget),
 			menuSourceSlot,
+			sourceSnapshotReused ? "reused" : "captured",
 			renderWidth,
 			renderHeight,
 			a_indexCount,
@@ -8739,6 +8847,16 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 	try {
 		if (!EnsureVRMenuBakeReplayTextures(combinedWidth, combinedHeight, eyeDesc.Format))
 			return false;
+
+		const bool shouldLogReplayProof = ClaimVRMenuBridgeReplayProofDiagnosticSlot(a_frame);
+		VRKTotalFingerprint eyeBeforeFingerprint{};
+		VRKTotalFingerprint eyeAfterFingerprint{};
+		VRKTotalFingerprint layerClearFingerprint{};
+		VRKTotalFingerprint layerAfterReplayFingerprint{};
+		VRKTotalFingerprint combinedSeedFingerprint{};
+		VRKTotalFingerprint combinedAfterCompositeFingerprint{};
+		if (shouldLogReplayProof)
+			(void)CaptureVRTextureSparseFingerprint(context, a_eyeTexture, "VRMenuBakeReplayEyeBefore", eyeBeforeFingerprint);
 
 		ID3D11VertexShader* previousVS = nullptr;
 		ID3D11HullShader* previousHS = nullptr;
@@ -8873,6 +8991,7 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 		});
 
 		std::array<ID3D11ShaderResourceView*, kVRMenuBakeReplaySRVSlots> nullSRVs{};
+		std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> nullRTVs{};
 		context->PSSetShaderResources(0, static_cast<UINT>(nullSRVs.size()), nullSRVs.data());
 
 		const FLOAT menuLayerClear[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -8892,6 +9011,11 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 			&eyeBox);
 		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake replay eye seed"))
 			return false;
+
+		if (shouldLogReplayProof) {
+			(void)CaptureVRTextureSparseFingerprint(context, vrMenuBakeReplayLayer->resource.get(), "VRMenuBakeReplayLayerClear", layerClearFingerprint);
+			(void)CaptureVRTextureSparseFingerprint(context, vrMenuBakeReplayCombined->resource.get(), "VRMenuBakeReplayCombinedSeed", combinedSeedFingerprint);
+		}
 
 		ID3D11RenderTargetView* menuLayerRTV = vrMenuBakeReplayLayer->rtv.get();
 		ID3D11RenderTargetView* combinedRTV = vrMenuBakeReplayCombined->rtv.get();
@@ -8913,7 +9037,7 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 				vertexBuffers[i] = draw.vertexBuffers[i].get();
 			std::array<ID3D11ShaderResourceView*, kVRMenuBakeReplaySRVSlots> psSRVs{};
 			for (size_t i = 0; i < psSRVs.size(); ++i)
-				psSRVs[i] = draw.psSRVs[i].get();
+				psSRVs[i] = draw.psSRVSnapshots[i] ? draw.psSRVSnapshots[i].get() : draw.psSRVs[i].get();
 			if (replacementSlot != std::numeric_limits<UINT>::max()) {
 				if (replacementSlot >= static_cast<UINT>(psSRVs.size()) || !replacementSRV)
 					return false;
@@ -9022,6 +9146,12 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu layer replay draw"))
 			return false;
 
+		if (shouldLogReplayProof) {
+			context->OMSetRenderTargets(static_cast<UINT>(nullRTVs.size()), nullRTVs.data(), nullptr);
+			context->PSSetShaderResources(0, static_cast<UINT>(nullSRVs.size()), nullSRVs.data());
+			(void)CaptureVRTextureSparseFingerprint(context, vrMenuBakeReplayLayer->resource.get(), "VRMenuBakeReplayLayerAfterReplay", layerAfterReplayFingerprint);
+		}
+
 		if (!replayCapturedDraw(
 				vrMenuBakeCompositeDraw,
 				combinedRTV,
@@ -9033,9 +9163,11 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu layer composite draw"))
 			return false;
 
-		std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> nullRTVs{};
 		context->OMSetRenderTargets(static_cast<UINT>(nullRTVs.size()), nullRTVs.data(), nullptr);
 		context->PSSetShaderResources(0, static_cast<UINT>(nullSRVs.size()), nullSRVs.data());
+
+		if (shouldLogReplayProof)
+			(void)CaptureVRTextureSparseFingerprint(context, vrMenuBakeReplayCombined->resource.get(), "VRMenuBakeReplayCombinedAfterComposite", combinedAfterCompositeFingerprint);
 
 		D3D11_BOX replayBox{
 			a_eyeIndex == 0 ? 0u : a_eyeWidth,
@@ -9048,6 +9180,32 @@ bool Upscaling::ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t
 		context->CopySubresourceRegion(a_eyeTexture, 0, 0, 0, 0, vrMenuBakeReplayCombined->resource.get(), 0, &replayBox);
 		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu bake replay output copy"))
 			return false;
+
+		if (shouldLogReplayProof) {
+			(void)CaptureVRTextureSparseFingerprint(context, a_eyeTexture, "VRMenuBakeReplayEyeAfter", eyeAfterFingerprint);
+
+			const auto hashText = [](const VRKTotalFingerprint& fingerprint) {
+				return fingerprint.valid ? FormatVRMenuDiagnosticHex(fingerprint.hash) : std::string("-");
+			};
+			const auto changedText = [](const VRKTotalFingerprint& before, const VRKTotalFingerprint& after) {
+				if (!before.valid || !after.valid)
+					return "unavailable";
+				return before.hash != after.hash ? "yes" : "no";
+			};
+			VR_TRANSITION_DIAG_LOG(
+				"[VRMenuBridgeReplayProof] frame={} eye={} layerChanged={} compositeChanged={} outputChanged={} layerHash={}=>{} combinedHash={}=>{} outputHash={}=>{}",
+				a_frame,
+				a_eyeIndex,
+				changedText(layerClearFingerprint, layerAfterReplayFingerprint),
+				changedText(combinedSeedFingerprint, combinedAfterCompositeFingerprint),
+				changedText(eyeBeforeFingerprint, eyeAfterFingerprint),
+				hashText(layerClearFingerprint),
+				hashText(layerAfterReplayFingerprint),
+				hashText(combinedSeedFingerprint),
+				hashText(combinedAfterCompositeFingerprint),
+				hashText(eyeBeforeFingerprint),
+				hashText(eyeAfterFingerprint));
+		}
 
 		VR_TRANSITION_DIAG_LOG(
 			"[VRMenuBridgeReplay] composited final menu layer after vendor frame={} eye={} bridgeDraws={} compositeSlot={} eye={}x{} combined={}x{}",

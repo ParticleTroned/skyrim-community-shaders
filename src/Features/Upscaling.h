@@ -1107,6 +1107,7 @@ private:
 		winrt::com_ptr<ID3D11GeometryShader> geometryShader;
 		winrt::com_ptr<ID3D11PixelShader> pixelShader;
 		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kVRMenuBakeReplaySRVSlots> psSRVs;
+		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kVRMenuBakeReplaySRVSlots> psSRVSnapshots;
 		std::array<winrt::com_ptr<ID3D11SamplerState>, kVRMenuBakeReplaySamplerSlots> psSamplers;
 		std::array<winrt::com_ptr<ID3D11Buffer>, kVRMenuBakeReplayCBSlots> vsCBs;
 		std::array<winrt::com_ptr<ID3D11Buffer>, kVRMenuBakeReplayCBSlots> psCBs;

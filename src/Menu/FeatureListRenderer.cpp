@@ -830,22 +830,20 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 		windowPos.x + windowSize.x - frameSize.x - style.WindowPadding.x - scrollbarWidth,
 		windowPos.y + windowSize.y - frameSize.y - style.WindowPadding.y));
 
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.3f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
+	auto iconButtonStyle = Util::TransparentIconButtonStyle();
+	const std::string restoreDefaultsButtonId = std::format("##RestoreDefaults{}", feat->GetShortName());
+	const std::string restoreDefaultsTextButtonId = std::format("R##RestoreDefaults{}", feat->GetShortName());
 
 	auto& menu = *globals::menu;
 	if (menu.uiIcons.featureSettingRevert.texture) {
-		if (Util::ImageButtonWithFlash("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize)) {
+		if (Util::ImageButtonWithFlash(restoreDefaultsButtonId.c_str(), menu.uiIcons.featureSettingRevert.texture, iconSize)) {
 			feat->RestoreDefaultSettings();
 		}
 	} else {
-		if (Util::ButtonWithFlash("R##RestoreDefaults", iconSize)) {
+		if (Util::ButtonWithFlash(restoreDefaultsTextButtonId.c_str(), iconSize)) {
 			feat->RestoreDefaultSettings();
 		}
 	}
-
-	ImGui::PopStyleColor(3);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Restore default settings for this feature");

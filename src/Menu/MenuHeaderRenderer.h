@@ -8,6 +8,7 @@ public:
 	struct ActionIcon
 	{
 		const char* id;
+		const char* flashId;
 		ID3D11ShaderResourceView* texture;
 		const char* tooltip;
 		std::function<void()> callback;

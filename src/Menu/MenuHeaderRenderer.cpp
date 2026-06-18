@@ -247,6 +247,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 	// Build list of available action icons (in display order)
 	if (uiIcons.saveSettings.texture) {
 		actionIcons.push_back({ "HeaderSaveSettings",
+			"HeaderSaveSettings",
 			uiIcons.saveSettings.texture,
 			T("menu.save_settings", "Save Settings"),
 			[]() {
@@ -256,6 +257,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 	}
 	if (uiIcons.loadSettings.texture) {
 		actionIcons.push_back({ "HeaderRestoreSavedSettings",
+			"HeaderRestoreSavedSettings",
 			uiIcons.loadSettings.texture,
 			T("menu.restore_settings", "Restore Saved Settings"),
 			[]() {
@@ -265,6 +267,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 	}
 	if (uiIcons.clearCache.texture) {
 		actionIcons.push_back({ "HeaderClearShaderCache",
+			nullptr,
 			uiIcons.clearCache.texture,
 			T("menu.clear_shader_cache_tooltip",
 				"Clears the shader cache and disk cache (if enabled). "
@@ -325,7 +328,7 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 
 		// Check mouse interaction against full area
 		const bool isHovered = ImGui::IsMouseHoveringRect(interactionRect.Min, interactionRect.Max, false);
-		const bool hasActiveFlash = Util::IsButtonFlashActive(it->id);
+		const bool hasActiveFlash = it->flashId && Util::IsButtonFlashActive(it->flashId);
 		Util::DrawRoundedButtonHighlight(interactionRect, isHovered || hasActiveFlash, (isHovered && ImGui::IsMouseDown(ImGuiMouseButton_Left)) || hasActiveFlash, fgDrawList);
 
 		// Only render if texture is valid
@@ -358,7 +361,9 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 		if (isHovered) {
 			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 				it->callback();
-				Util::TriggerButtonFlash(it->id);
+				if (it->flashId) {
+					Util::TriggerButtonFlash(it->flashId);
+				}
 			}
 
 			// Set tooltip manually since we're drawing outside normal ImGui flow
@@ -403,7 +408,10 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 		std::string buttonId = std::format("##{}", icon.id);
 
 		// Use ImageButton with reduced image size to minimize padding
-		if (Util::ImageButtonWithFlash(buttonId.c_str(), icon.texture, imageSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tintColor)) {
+		const bool clicked = icon.flashId ?
+		                         Util::ImageButtonWithFlash(icon.flashId, icon.texture, imageSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tintColor) :
+		                         ImGui::ImageButton(buttonId.c_str(), icon.texture, imageSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tintColor);
+		if (clicked) {
 			icon.callback();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {

@@ -10675,7 +10675,8 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	}
 
 	const uint32_t requested = a_enabled ? 1u : 0u;
-	const bool activeMatchesRequest = IsPerfModeActive() == a_enabled;
+	const bool perfModeWasActive = IsPerfModeActive();
+	const bool activeMatchesRequest = perfModeWasActive == a_enabled;
 	if (ClampToggleUInt(settings.perfMode) == requested && activeMatchesRequest && !perfMode.HasRestartRequiredChange()) {
 		if (renderScaleSettingsChanged) {
 			RequestHistoryReset();
@@ -10685,7 +10686,16 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	}
 
 	settings.perfMode = requested;
-	RequestHistoryReset();
+	const bool nativeOffRenderScaleOnlyRequest =
+		globals::game::isVR &&
+		!a_enabled &&
+		perfModeWasActive &&
+		IsVendorUpscalingMethod(configuredMethod);
+	if (!nativeOffRenderScaleOnlyRequest) {
+		RequestHistoryReset();
+	} else {
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 request parity: suppressing render-scale-off history reset");
+	}
 	RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 }
 
@@ -10803,8 +10813,18 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			queuedRenderScaleTransition = true;
 		}
 
-		if (queuedRenderScaleTransition)
+		const bool nativeOffRenderScaleOnlyQueuedTransition =
+			queuedRenderScaleTransition &&
+			renderScaleTargetChanged &&
+			!targetRenderScaleMode &&
+			!qualityTargetChanged &&
+			!dlssPresetChanged &&
+			!methodRelatchRequired;
+		if (queuedRenderScaleTransition && !nativeOffRenderScaleOnlyQueuedTransition) {
 			RequestHistoryReset();
+		} else if (nativeOffRenderScaleOnlyQueuedTransition) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 transition parity: suppressing queued render-scale-off history reset");
+		}
 		return;
 	}
 
@@ -10829,8 +10849,15 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		presetChanged = true;
 	}
 
-	if (presetChanged || renderScaleModeChanged)
+	const bool nativeOffRenderScaleOnlyImmediateTransition =
+		renderScaleModeChanged &&
+		!targetRenderScaleMode &&
+		!presetChanged;
+	if ((presetChanged || renderScaleModeChanged) && !nativeOffRenderScaleOnlyImmediateTransition) {
 		RequestHistoryReset();
+	} else if (nativeOffRenderScaleOnlyImmediateTransition) {
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 transition parity: suppressing immediate render-scale-off history reset");
+	}
 
 	const uint32_t requestedPerfMode = targetRenderScaleMode ? 1u : 0u;
 	if (perfModeRequestPending)
@@ -11340,7 +11367,15 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 		shortenRelatchForLoadingMenu;
 	if (updateRelatchDelay)
 		MarkPerfModeRenderTargetRecreateQueued(relatchDelayFrames);
-	RequestHistoryReset();
+	const bool relatchToNativeOff =
+		globals::game::isVR &&
+		perfModeActive &&
+		!IsRenderScaleModeRequested();
+	if (!relatchToNativeOff) {
+		RequestHistoryReset();
+	} else {
+		VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 relatch parity: suppressing render-scale-off queued history reset");
+	}
 	if (updateRelatchDelay)
 		LogVRTransitionDiagnostics(*this, "queued render-target relatch", true);
 	if (wasPending)
@@ -11574,7 +11609,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		RecreateVendorRuntimeResources(relatchUpscaleMethod, relatchUpscaleMethod != UpscaleMethod::kFSR);
 
 		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
-			pendingDLSSHistoryReset.store(true, std::memory_order_release);
+			pendingDLSSHistoryReset.store(relatchRenderScaleActive, std::memory_order_release);
+			if (!relatchRenderScaleActive) {
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 relatch parity: suppressing render-scale DLSS history reset");
+			}
 			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingFSRReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(true, std::memory_order_release);
@@ -12070,7 +12108,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFSRRuntimePathActive = false;
 	static bool previousFSRRuntimeFsr4Configured = false;
 	static bool previousFSRRuntimeFsr4Active = false;
-	static uint32_t previousQualityMode = GetRuntimeQualityMode();
+	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
 	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
 	static uint32_t previousRenderScaleMode = IsRenderScaleModeRequested() ? 1u : 0u;
 	static uint32_t previousPerfMode = ClampToggleUInt(settings.perfMode);
@@ -12079,14 +12117,27 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
-	const uint32_t qualityModeCurrent = GetRuntimeQualityMode();
+	const bool vrNativeOffPL314ResourceParity =
+		globals::game::isVR &&
+		!IsVRRenderScaleModeActive() &&
+		!IsPresentationUpscalingActive();
+	const uint32_t qualityModeCurrent = vrNativeOffPL314ResourceParity ?
+		ClampQualityModeUInt(settings.qualityMode) :
+		GetRuntimeQualityMode();
 	const uint32_t dlssPresetCurrent = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
 	const uint32_t renderScaleModeCurrent = IsRenderScaleModeRequested() ? 1u : 0u;
 	const uint32_t perfModeCurrent = ClampToggleUInt(settings.perfMode);
 	const bool qualityModeChanged = previousQualityMode != qualityModeCurrent;
 	const bool dlssPresetChanged = previousDLSSPreset != dlssPresetCurrent;
-	const bool renderScaleModeChanged = previousRenderScaleMode != renderScaleModeCurrent;
-	const bool perfModeChanged = previousPerfMode != perfModeCurrent;
+	const bool renderScaleModeChanged =
+		!vrNativeOffPL314ResourceParity &&
+		previousRenderScaleMode != renderScaleModeCurrent;
+	const bool perfModeChanged =
+		!vrNativeOffPL314ResourceParity &&
+		previousPerfMode != perfModeCurrent;
+	const bool nativeOffRenderScaleTrackingChanged =
+		vrNativeOffPL314ResourceParity &&
+		(previousRenderScaleMode != renderScaleModeCurrent || previousPerfMode != perfModeCurrent);
 	const bool dlssQualityModeChanged = qualityModeChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool dlssPresetResourceChanged = dlssPresetChanged && (previousUpscaleMode == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kDLSS);
 	const bool dlssResourceSettingsChanged = dlssQualityModeChanged || dlssPresetResourceChanged;
@@ -12174,6 +12225,18 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousFoveatedLayout = foveatedLayoutCurrent;
 		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	};
+
+	static bool loggedVRNativeOffPL314ResourceParity = false;
+	if (vrNativeOffPL314ResourceParity) {
+		LogVRTransitionDiagnosticOnce(loggedVRNativeOffPL314ResourceParity, [&]() {
+			VR_TRANSITION_DIAG_LOG(
+				"[VRTransition] Native/off PL3.14 resource parity active: ignoring renderScale/perf resource triggers (requested={}, perfToggle={})",
+				renderScaleModeCurrent,
+				perfModeCurrent);
+		});
+	} else {
+		loggedVRNativeOffPL314ResourceParity = false;
+	}
 
 	static bool loggedVRResourceChangeRelatchDefer = false;
 	static bool loggedVRResourceChangeRelatchSync = false;
@@ -12387,6 +12450,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	} else if (vrRenderScaleResourceTrackingSyncPending.load(std::memory_order_acquire)) {
 		vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
+	} else if (nativeOffRenderScaleTrackingChanged) {
+		previousRenderScaleMode = renderScaleModeCurrent;
+		previousPerfMode = perfModeCurrent;
 	}
 
 	if (!AreCommonVendorTexturesReady(a_upscalemethod)) {
@@ -16895,8 +16961,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		IsVRRenderScaleMenuPreparationContextActive(state);
 	RefreshRuntimeResolutionState();
 	const auto configureNativeVRLikePL314 = [&]() {
+		static bool loggedVRNativeConfigureParity = false;
+		LogVRTransitionDiagnosticOnce(loggedVRNativeConfigureParity, [&]() {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 configure parity active");
+		});
+
 		if (vendorUpscalingMethod) {
-			float resolutionScaleBase = GetQualityModeResolutionScale(GetRuntimeQualityMode());
+			float resolutionScaleBase = GetQualityModeResolutionScale(ClampQualityModeUInt(settings.qualityMode));
 
 			auto renderWidth = std::max(1, static_cast<int>(screenWidth * resolutionScaleBase));
 			auto renderHeight = std::max(1, static_cast<int>(screenHeight * resolutionScaleBase));
@@ -19186,9 +19257,21 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 	}
 
 	if (changed || renderScaleModeChanged) {
-		RequestHistoryReset();
-		if (a_upscaleMethod == UpscaleMethod::kDLSS)
+		const bool nativeOffRenderScaleOnlyTransition =
+			globals::game::isVR &&
+			renderScaleModeChanged &&
+			!targetRenderScaleMode &&
+			!changed;
+		if (!nativeOffRenderScaleOnlyTransition) {
+			RequestHistoryReset();
+		} else {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 transition parity: suppressing render-scale-off history reset");
+		}
+		if (a_upscaleMethod == UpscaleMethod::kDLSS && !nativeOffRenderScaleOnlyTransition) {
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
+		} else if (a_upscaleMethod == UpscaleMethod::kDLSS && nativeOffRenderScaleOnlyTransition) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 transition parity: suppressing render-scale-off DLSS history reset");
+		}
 		if ((qualityChanged || renderScaleModeChanged) && !perfModePending && (IsPerfModeActive() || GetPerfModeRequested()))
 			RequestPerfModeRenderTargetRecreate("VR upscaling preset change", transitionOrigin);
 	}
@@ -19219,20 +19302,39 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool inWorld = state->inWorld;
 	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
 	const float2 screenSize = state->screenSize;
-	RefreshRuntimeResolutionState();
-	float2 engineRenderSize = runtimeResolutionPlan.engineRenderSize;
-	float2 finalOutputSize = runtimeResolutionPlan.finalOutputSize;
-	if (engineRenderSize.x <= 0.0f || engineRenderSize.y <= 0.0f)
-		engineRenderSize = Util::ConvertToDynamic(screenSize);
-	if (finalOutputSize.x <= 0.0f || finalOutputSize.y <= 0.0f)
-		finalOutputSize = screenSize;
-	const auto resolutionOwner = runtimeResolutionPlan.owner;
+	const bool vrNativeOffPL314HistoryParity =
+		globals::game::isVR &&
+		!IsVRRenderScaleModeActive() &&
+		!IsPresentationUpscalingActive();
+	static bool loggedVRNativeHistoryParity = false;
+	if (vrNativeOffPL314HistoryParity) {
+		LogVRTransitionDiagnosticOnce(loggedVRNativeHistoryParity, [&]() {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 history parity active");
+		});
+	} else {
+		loggedVRNativeHistoryParity = false;
+	}
+	float2 engineRenderSize = screenSize;
+	float2 finalOutputSize = screenSize;
+	auto resolutionOwner = ResolutionOwner::Native;
+	if (!vrNativeOffPL314HistoryParity) {
+		RefreshRuntimeResolutionState();
+		engineRenderSize = runtimeResolutionPlan.engineRenderSize;
+		finalOutputSize = runtimeResolutionPlan.finalOutputSize;
+		if (engineRenderSize.x <= 0.0f || engineRenderSize.y <= 0.0f)
+			engineRenderSize = Util::ConvertToDynamic(screenSize);
+		if (finalOutputSize.x <= 0.0f || finalOutputSize.y <= 0.0f)
+			finalOutputSize = screenSize;
+		resolutionOwner = runtimeResolutionPlan.owner;
+	}
 	const bool foveatedDispatchEnabled = IsFoveatedVendorDispatchEnabled(a_upscaleMethod);
 	const bool peripheryTAAEnabled = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool peripheryTAAPathActive = IsPeripheryTAAPathActive(a_upscaleMethod);
 	const bool fsrRuntimePathActive = IsFSRRuntimePathActive(a_upscaleMethod);
 	const bool fsrRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(a_upscaleMethod);
-	const uint32_t qualityMode = GetRuntimeQualityMode();
+	const uint32_t qualityMode = vrNativeOffPL314HistoryParity ?
+		ClampQualityModeUInt(settings.qualityMode) :
+		GetRuntimeQualityMode();
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, peripheryTAAEnabled);
 	const float foveatedCenterScale = foveatedProfile.centerScale;
 	const float foveatedCenterHorizontalScale = foveatedProfile.centerHorizontalScale;
@@ -19272,12 +19374,16 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 			std::abs(resolutionScale.x - previousHistoryResolutionScale.x) > 1e-4f ||
 			std::abs(resolutionScale.y - previousHistoryResolutionScale.y) > 1e-4f;
 		const bool engineRenderSizeChanged =
-			std::abs(engineRenderSize.x - previousHistoryEngineRenderSize.x) > 0.5f ||
-			std::abs(engineRenderSize.y - previousHistoryEngineRenderSize.y) > 0.5f;
+			!vrNativeOffPL314HistoryParity &&
+			(std::abs(engineRenderSize.x - previousHistoryEngineRenderSize.x) > 0.5f ||
+			 std::abs(engineRenderSize.y - previousHistoryEngineRenderSize.y) > 0.5f);
 		const bool finalOutputSizeChanged =
-			std::abs(finalOutputSize.x - previousHistoryFinalOutputSize.x) > 0.5f ||
-			std::abs(finalOutputSize.y - previousHistoryFinalOutputSize.y) > 0.5f;
-		const bool resolutionOwnerChanged = resolutionOwner != previousHistoryResolutionOwner;
+			!vrNativeOffPL314HistoryParity &&
+			(std::abs(finalOutputSize.x - previousHistoryFinalOutputSize.x) > 0.5f ||
+			 std::abs(finalOutputSize.y - previousHistoryFinalOutputSize.y) > 0.5f);
+		const bool resolutionOwnerChanged =
+			!vrNativeOffPL314HistoryParity &&
+			resolutionOwner != previousHistoryResolutionOwner;
 		const bool qualityModeChanged = qualityMode != previousHistoryQualityMode;
 		const bool worldStateChanged =
 			inWorld != previousHistoryInWorld ||
@@ -19556,6 +19662,14 @@ void Upscaling::Upscale()
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		(vrNativeUpscaleParity || !foveatedTransitionBypass);
 	bool encodedVRFoveatedRegions = false;
+	static bool loggedVRNativeUpscaleParity = false;
+	if (vrNativeUpscaleParity) {
+		LogVRTransitionDiagnosticOnce(loggedVRNativeUpscaleParity, [&]() {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 upscale parity active");
+		});
+	} else {
+		loggedVRNativeUpscaleParity = false;
+	}
 
 	auto encodeUpscalingTextures = [&](bool forceFullVREncode, const char* eventName) -> bool {
 		encodedVRFoveatedRegions = false;

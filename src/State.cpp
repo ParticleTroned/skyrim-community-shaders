@@ -21,6 +21,7 @@
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/FoveatedCommon.h"
@@ -32,7 +33,6 @@
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/WaterEffects.h"
-#include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
@@ -192,7 +192,7 @@ void State::Draw()
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& weatherEditor = globals::features::weatherEditor;
+	auto& csEditor = globals::features::csEditor;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
 
@@ -211,7 +211,7 @@ void State::Draw()
 			logger::info("Applied deferred post-load runtime reset");
 		}
 
-		if (weatherEditor.loaded) {
+		if (csEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}

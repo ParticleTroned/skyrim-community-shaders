@@ -42,7 +42,7 @@ namespace FeatureVersions
         {"VR"sv,                   {1,1,5}},
         {"VolumetricLighting"sv,   {1,1,5}},
         {"WaterEffects"sv,         {1,1,0}},
-        {"WeatherEditor"sv,        {1,0,0}},
+        {"CSEditor"sv,            {1,0,0}},
         {"WetnessEffects"sv,       {3,0,0}},
         {"Wetterness"sv,           {1,0,0}},
     };
@@ -73,6 +73,6 @@ namespace FeatureVersions
         "VR"sv,
         "VolumetricLighting"sv,
         "WaterEffects"sv,
-        "WeatherEditor"sv
+        "CSEditor"sv
     };
 }

@@ -16879,6 +16879,40 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		vendorUpscalingMethod &&
 		IsVRRenderScaleMenuPreparationContextActive(state);
 	RefreshRuntimeResolutionState();
+	const auto configureNativeVRLikePL314 = [&]() {
+		if (vendorUpscalingMethod) {
+			float resolutionScaleBase = GetQualityModeResolutionScale(GetRuntimeQualityMode());
+
+			auto renderWidth = std::max(1, static_cast<int>(screenWidth * resolutionScaleBase));
+			auto renderHeight = std::max(1, static_cast<int>(screenHeight * resolutionScaleBase));
+
+			resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
+			resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);
+
+			auto phaseCount = GetJitterPhaseCount(renderWidth, screenWidth);
+
+			GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
+
+			a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
+			a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
+		} else {
+			resolutionScale = { 1.0f, 1.0f };
+			jitter.x = -a_viewport->projectionPosScaleX * screenWidth;
+			jitter.y = a_viewport->projectionPosScaleY * screenHeight / 2.0f;
+		}
+
+		auto& runtimeData = a_viewport->GetRuntimeData();
+		runtimeData.dynamicResolutionPreviousWidthRatio = dynamicResolutionWidthRatio;
+		runtimeData.dynamicResolutionPreviousHeightRatio = dynamicResolutionHeightRatio;
+		runtimeData.dynamicResolutionWidthRatio = resolutionScale.x;
+		runtimeData.dynamicResolutionHeightRatio = resolutionScale.y;
+
+		dynamicResolutionWidthRatio = resolutionScale.x;
+		dynamicResolutionHeightRatio = resolutionScale.y;
+
+		CheckResources(upscaleMethod);
+		RefreshRuntimeResolutionState();
+	};
 	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
 		// Keep this before the normal VR render-scale return path. Otherwise
 		// menu preparation under VRRenderScaleMode cannot reach the full-res
@@ -16921,17 +16955,8 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionState();
 		return;
 	}
-	if (globals::game::isVR &&
-		vendorUpscalingMethod &&
-		IsVRTransitionPresentationProtectionActive(*this, state) &&
-		IsVRLoadingPresentationContextActive(state)) {
-		resolutionScale = { 1.0f, 1.0f };
-		jitter = { 0.0f, 0.0f };
-		a_viewport->projectionPosScaleX = 0.0f;
-		a_viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionState();
+	if (globals::game::isVR) {
+		configureNativeVRLikePL314();
 		return;
 	}
 	if (vendorUpscalingMethod) {

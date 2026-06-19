@@ -19549,10 +19549,21 @@ void Upscaling::Upscale()
 		globals::game::isVR &&
 		!IsVRRenderScaleModeActive() &&
 		!IsPresentationUpscalingActive();
+	const bool foveatedDispatchSupported = IsFoveatedVendorDispatchEnabled(upscaleMethod);
+	const bool forceVRNativeFullFrameVendorDispatch = vrNativeUpscaleParity && foveatedDispatchSupported;
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedDispatchRequested =
-		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
-		(vrNativeUpscaleParity || !foveatedTransitionBypass);
+		foveatedDispatchSupported &&
+		!forceVRNativeFullFrameVendorDispatch &&
+		!foveatedTransitionBypass;
+	if (forceVRNativeFullFrameVendorDispatch) {
+		static bool loggedVRNativeFullFrameVendorDispatch = false;
+		if (!loggedVRNativeFullFrameVendorDispatch) {
+			logger::debug("[Upscaling] VR native/off forcing full-frame {} dispatch for foveated-helper A/B",
+				magic_enum::enum_name(upscaleMethod));
+			loggedVRNativeFullFrameVendorDispatch = true;
+		}
+	}
 	bool encodedVRFoveatedRegions = false;
 
 	auto encodeUpscalingTextures = [&](bool forceFullVREncode, const char* eventName) -> bool {

@@ -611,6 +611,7 @@ public:
 
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
+	winrt::com_ptr<ID3D11BlendState> vrMenuCompositeBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
 
 	// Shared VR HMD Mask Clearing
@@ -1061,83 +1062,11 @@ private:
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
 	bool TryCaptureAndSuppressVRMenuBridgeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
-	bool TryCaptureVRMenuBakeCompositeDrawPrototype(ID3D11DeviceContext* a_context, const char* a_operation, UINT a_vertexCount, UINT a_indexCount,
-		UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
-	bool QueueVRMenuBakeReplayAfterVendor(uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);
-	static constexpr uint32_t kVRMenuBakeReplayMaxDraws = 32;
-	static constexpr uint32_t kVRMenuBakeReplayVBSlots = 8;
-	static constexpr uint32_t kVRMenuBakeReplaySRVSlots = 8;
-	static constexpr uint32_t kVRMenuBakeReplaySamplerSlots = 8;
-	static constexpr uint32_t kVRMenuBakeReplayCBSlots = 8;
-	enum class VRMenuBakeReplayDrawKind : uint8_t
-	{
-		None,
-		Draw,
-		DrawIndexed,
-		DrawInstanced,
-		DrawIndexedInstanced
-	};
-	struct VRMenuBakeCapturedDrawState
-	{
-		bool valid = false;
-		VRMenuBakeReplayDrawKind drawKind = VRMenuBakeReplayDrawKind::None;
-		uint32_t frame = 0;
-		uint32_t renderWidth = 0;
-		uint32_t renderHeight = 0;
-		uint32_t finalWidth = 0;
-		uint32_t finalHeight = 0;
-		UINT vertexCount = 0;
-		UINT indexCount = 0;
-		UINT instanceCount = 0;
-		UINT startVertexLocation = 0;
-		UINT startIndexLocation = 0;
-		INT baseVertexLocation = 0;
-		UINT startInstanceLocation = 0;
-		D3D11_PRIMITIVE_TOPOLOGY primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-		winrt::com_ptr<ID3D11InputLayout> inputLayout;
-		winrt::com_ptr<ID3D11Buffer> indexBuffer;
-		DXGI_FORMAT indexFormat = DXGI_FORMAT_UNKNOWN;
-		UINT indexOffset = 0;
-		std::array<winrt::com_ptr<ID3D11Buffer>, kVRMenuBakeReplayVBSlots> vertexBuffers;
-		std::array<UINT, kVRMenuBakeReplayVBSlots> vertexStrides{};
-		std::array<UINT, kVRMenuBakeReplayVBSlots> vertexOffsets{};
-		winrt::com_ptr<ID3D11VertexShader> vertexShader;
-		winrt::com_ptr<ID3D11HullShader> hullShader;
-		winrt::com_ptr<ID3D11DomainShader> domainShader;
-		winrt::com_ptr<ID3D11GeometryShader> geometryShader;
-		winrt::com_ptr<ID3D11PixelShader> pixelShader;
-		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kVRMenuBakeReplaySRVSlots> psSRVs;
-		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, kVRMenuBakeReplaySRVSlots> psSRVSnapshots;
-		std::array<winrt::com_ptr<ID3D11SamplerState>, kVRMenuBakeReplaySamplerSlots> psSamplers;
-		std::array<winrt::com_ptr<ID3D11Buffer>, kVRMenuBakeReplayCBSlots> vsCBs;
-		std::array<winrt::com_ptr<ID3D11Buffer>, kVRMenuBakeReplayCBSlots> psCBs;
-		winrt::com_ptr<ID3D11BlendState> blendState;
-		FLOAT blendFactor[4] = {};
-		UINT sampleMask = 0xFFFFFFFF;
-		winrt::com_ptr<ID3D11DepthStencilState> depthStencilState;
-		UINT stencilRef = 0;
-		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
-		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> viewports{};
-		UINT viewportCount = 0;
-		std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scissors{};
-		UINT scissorCount = 0;
-		UINT menuSourcePsSlot = std::numeric_limits<UINT>::max();
-	};
-	void BeginVRMenuBakePrototypeFrame(uint32_t a_frame);
-	void ResetVRMenuBakeCapturedDrawState(VRMenuBakeCapturedDrawState& a_draw);
-	bool CaptureVRMenuBakeDrawState(ID3D11DeviceContext* a_context, VRMenuBakeCapturedDrawState& a_draw, VRMenuBakeReplayDrawKind a_drawKind,
-		UINT a_vertexCount, UINT a_indexCount, UINT a_instanceCount, UINT a_startVertexLocation, UINT a_startIndexLocation,
-		INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_frame,
-		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight,
-		UINT a_menuSourcePsSlot = std::numeric_limits<UINT>::max());
-	bool EnsureVRMenuBakeReplayTextures(uint32_t a_combinedWidth, uint32_t a_combinedHeight, DXGI_FORMAT a_format);
-	bool ReplayVRMenuBakeDrawsToCombinedOutput(uint32_t a_frame, uint32_t a_eyeIndex, ID3D11Texture2D* a_eyeTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
-	uint32_t vrMenuBakePrototypeFrame = std::numeric_limits<uint32_t>::max();
-	VRMenuBakeCapturedDrawState vrMenuBakeCompositeDraw;
-	std::array<VRMenuBakeCapturedDrawState, kVRMenuBakeReplayMaxDraws> vrMenuBakeReplayDraws;
-	uint32_t vrMenuBakeReplayDrawCount = 0;
-	eastl::unique_ptr<Texture2D> vrMenuBakeReplayLayer;
-	eastl::unique_ptr<Texture2D> vrMenuBakeReplayCombined;
+	bool ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D& a_outputTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);
+	static constexpr uint32_t kVRMenuBridgeSRVSlots = 8;
+	void BeginVRMenuFinalCompositeFrame(uint32_t a_frame);
+	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
+	std::array<bool, 2> vrMenuFinalCompositeSuppressedTargets{};
 
 	struct OpenCompositeUpscalingBlocker
 	{

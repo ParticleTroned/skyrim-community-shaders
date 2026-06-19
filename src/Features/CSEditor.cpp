@@ -720,7 +720,17 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 	ImGui::Checkbox(T(TKEY("accelerate_weather_change"), "Accelerate Weather Change"), &s_accelerateWeatherChange);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("accelerate_weather_change_tooltip"), "When enabled, weather changes instantly"));
-	}  // Reset Weather button
+	}
+	ImGui::BeginDisabled(!s_accelerateWeatherChange);
+	ImGui::Checkbox(T(TKEY("temporary_weather_preview"), "Temporary Weather Preview"), &s_transientAcceleratedWeatherPreview);
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		Util::DrawMultiLineTooltip({ T(TKEY("temporary_weather_preview_tooltip_0"), "Instantly previews the selected weather without setting a persistent weather override."),
+			T(TKEY("temporary_weather_preview_tooltip_1"), "The game's normal climate can replace it quickly, so rain or storms may only last briefly."),
+			T(TKEY("temporary_weather_preview_tooltip_2"), "Weather Lock still holds the selected weather; leave it off to test natural expiry.") });
+	}
+
+	// Reset Weather button
 	if (ImGui::Button(T(TKEY("reset_weather"), "Reset Weather"))) {
 		sky->ResetWeather();
 		// Update the selection box to reflect the reset weather without double-applying
@@ -797,10 +807,11 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 				s_selectedWeatherIdx = i;
 				auto selectedWeather = s_filteredWeathers[i];
 
-				if (s_accelerateWeatherChange)
+				const bool transientPreview = s_accelerateWeatherChange && s_transientAcceleratedWeatherPreview;
+				if (transientPreview)
 					sky->ForceWeather(selectedWeather, false);
 				else
-					sky->SetWeather(selectedWeather, true, false);
+					sky->SetWeather(selectedWeather, true, s_accelerateWeatherChange);
 
 				// Retarget the lock so Prepass() enforces the new choice instead of reverting it.
 				if (editorWindow->IsWeatherLocked())

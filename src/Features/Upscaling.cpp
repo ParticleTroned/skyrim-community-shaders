@@ -11553,8 +11553,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	const bool relatchToNativeOff =
 		globals::game::isVR &&
-		!IsRenderScaleModeRequested() &&
-		!IsPresentationUpscalingActive();
+		!IsRenderScaleModeRequested();
 	bool nativeOffRelatchParityApplied = false;
 
 	try {
@@ -12160,8 +12159,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
 	const bool vrNativeOffRelatchParityTarget =
 		globals::game::isVR &&
-		!IsRenderScaleModeRequested() &&
-		!IsPresentationUpscalingActive();
+		!IsRenderScaleModeRequested();
 	const bool vrRenderScaleRelatchPending =
 		globals::game::isVR &&
 		(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||

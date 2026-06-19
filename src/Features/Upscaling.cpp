@@ -10011,7 +10011,6 @@ struct BSOpenVR_GetRenderTargetSize
 
 void Upscaling::DataLoaded()
 {
-	DisableAutoDynamicResolutionSetting();
 	ApplyOpenCompositeUpscalingBlocker(true);
 	ApplyDeferredCompositeVRSRuntimeSettings("data load");
 	const auto& blocker = GetOpenCompositeUpscalingBlocker();
@@ -10033,6 +10032,9 @@ void Upscaling::DataLoaded()
 	static auto fDRClampOffset = RE::GetINISetting("fDRClampOffset:Display");
 	fDRClampOffset->data.f = 0.0f;
 
+	if (globals::game::isVR && IsVRRenderScaleCurrentOrTargetRelevant(*this))
+		DisableAutoDynamicResolutionSetting();
+
 	// VR + DLSS workaround: loading transitions need a temporal reset, but full
 	// DLSS resource rebuilds on every door load can flicker and stress the driver.
 	if (globals::game::isVR)
@@ -10045,7 +10047,20 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	if (!a_event)
 		return RE::BSEventNotifyControl::kContinue;
 
-	if (globals::game::isVR && IsVRMenuPresentationTailMenuName(a_event->menuName))
+	auto& upscaling = globals::features::upscaling;
+	const bool renderScaleRelevant =
+		globals::game::isVR &&
+		IsVRRenderScaleCurrentOrTargetRelevant(upscaling);
+	if (!renderScaleRelevant) {
+		if (globals::game::isVR &&
+			a_event->menuName == RE::LoadingMenu::MENU_NAME &&
+			!a_event->opening) {
+			upscaling.pendingDLSSHistoryReset.store(true, std::memory_order_relaxed);
+		}
+		return RE::BSEventNotifyControl::kContinue;
+	}
+
+	if (IsVRMenuPresentationTailMenuName(a_event->menuName))
 		ExtendVRMenuPresentationTail();
 
 	if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
@@ -10066,13 +10081,13 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				std::memory_order_release);
 		}
 		LogVRTransitionDiagnostics(
-			globals::features::upscaling,
+			upscaling,
 			a_event->opening ? "loading menu opened" : "loading menu closed",
 			true);
 		if (!a_event->opening) {
-			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
+			QueueVendorRuntimeResetAfterLoadingMenu(upscaling);
 			if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
-				globals::features::upscaling.QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
+				upscaling.QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
 		}
 	}
 	return RE::BSEventNotifyControl::kContinue;
@@ -17347,8 +17362,11 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	const bool vrVendorMenu =
+	const bool vrRenderScaleRelevant =
 		globals::game::isVR &&
+		IsVRRenderScaleCurrentOrTargetRelevant(*this);
+	const bool vrVendorMenu =
+		vrRenderScaleRelevant &&
 		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) &&
 		IsVRMenuPresentationContextActive() &&
 		IsVRRenderScaleTransitionSafetyRelevant(*this);
@@ -17356,22 +17374,6 @@ void Upscaling::PostDisplay()
 		viewport->projectionPosScaleX = 0.0f;
 		viewport->projectionPosScaleY = 0.0f;
 		PrepareFullResolutionPostProcessing();
-	}
-
-	if (globals::game::isVR && !IsVRRenderScaleModeActive() && !IsPresentationUpscalingActive()) {
-		auto& runtimeData = viewport->GetRuntimeData();
-
-		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionLock = 1;
-
-		dynamicResolutionWidthRatio = 1.0f;
-		dynamicResolutionHeightRatio = 1.0f;
-
-		globals::game::renderer->UpdateViewPort(0, 0, 1);
-		UpdateCameraData();
 	}
 
 	if (d3d12SwapChainActive)

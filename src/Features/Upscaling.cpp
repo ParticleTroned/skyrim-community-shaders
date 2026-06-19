@@ -8604,6 +8604,26 @@ void Upscaling::TraceVRTrackedRenderTargetClearOperation(
 		a_color);
 }
 
+bool IsVRMenuOpaqueBlackClearColor(const float* a_color)
+{
+	if (!a_color)
+		return false;
+
+	constexpr float kColorEpsilon = 0.0001f;
+	return std::abs(a_color[0]) <= kColorEpsilon &&
+	       std::abs(a_color[1]) <= kColorEpsilon &&
+	       std::abs(a_color[2]) <= kColorEpsilon &&
+	       std::abs(a_color[3] - 1.0f) <= kColorEpsilon;
+}
+
+void SetVRMenuTransparentClearColor(float (&a_convertedColor)[4])
+{
+	a_convertedColor[0] = 0.0f;
+	a_convertedColor[1] = 0.0f;
+	a_convertedColor[2] = 0.0f;
+	a_convertedColor[3] = 0.0f;
+}
+
 bool Upscaling::TryConvertVRMenuFaderClearColor(
 	ID3D11DeviceContext* a_context,
 	ID3D11RenderTargetView* a_target,
@@ -8613,13 +8633,7 @@ bool Upscaling::TryConvertVRMenuFaderClearColor(
 	if (!globals::game::isVR || !a_context || !a_target || !a_color)
 		return false;
 
-	constexpr float kColorEpsilon = 0.0001f;
-	const bool blackOpaque =
-		std::abs(a_color[0]) <= kColorEpsilon &&
-		std::abs(a_color[1]) <= kColorEpsilon &&
-		std::abs(a_color[2]) <= kColorEpsilon &&
-		std::abs(a_color[3] - 1.0f) <= kColorEpsilon;
-	if (!blackOpaque)
+	if (!IsVRMenuOpaqueBlackClearColor(a_color))
 		return false;
 
 	auto& upscaling = globals::features::upscaling;
@@ -8643,10 +8657,7 @@ bool Upscaling::TryConvertVRMenuFaderClearColor(
 		return false;
 	}
 
-	a_convertedColor[0] = 0.0f;
-	a_convertedColor[1] = 0.0f;
-	a_convertedColor[2] = 0.0f;
-	a_convertedColor[3] = 0.0f;
+	SetVRMenuTransparentClearColor(a_convertedColor);
 
 	VR_TRANSITION_DIAG_LOG(
 		"[VRFaderClearGuard] frame={} action=convert-to-transparent target={} original=({:.4f},{:.4f},{:.4f},{:.4f}) converted=({:.4f},{:.4f},{:.4f},{:.4f}) currentRTV={} stageSources={} owner={} ownerAccepted=yes renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
@@ -8673,6 +8684,97 @@ bool Upscaling::TryConvertVRMenuFaderClearColor(
 		BoolText(vrMenuPresentation));
 
 	return true;
+}
+
+bool TryConvertVRMenuBgBoundaryClearColor(
+	ID3D11DeviceContext* a_context,
+	ID3D11RenderTargetView* a_target,
+	const float* a_color,
+	float (&a_convertedColor)[4])
+{
+	if (!globals::game::isVR || !a_context || !a_target || !a_color)
+		return false;
+
+	if (!IsVRMenuOpaqueBlackClearColor(a_color))
+		return false;
+
+	auto& upscaling = globals::features::upscaling;
+	const auto& plan = upscaling.GetRuntimeResolutionPlan();
+	const bool renderScaleActive = upscaling.IsVRRenderScaleModeActive();
+	const bool presentationUpscaling = upscaling.IsPresentationUpscalingActive();
+	const bool knownMenu = IsKnownGameMenuContextActive();
+	const bool vrMenuPresentation = IsVRMenuPresentationContextActive();
+	const auto* state = globals::state;
+	if (renderScaleActive ||
+		presentationUpscaling ||
+		knownMenu ||
+		!vrMenuPresentation) {
+		return false;
+	}
+
+	VRMenuCompositionTargetMatch target{};
+	if (!TryResolveVRMenuCompositionView(a_target, target) ||
+		target.target != RE::RENDER_TARGETS::kMENUBG ||
+		target.arraySize != 1 ||
+		target.samples != 1) {
+		return false;
+	}
+
+	uint32_t finalWidth = ClampDiagnosticDimension(plan.finalOutputSize.x);
+	uint32_t finalHeight = ClampDiagnosticDimension(plan.finalOutputSize.y);
+	if ((!finalWidth || !finalHeight) && state) {
+		finalWidth = ClampDiagnosticDimension(state->screenSize.x);
+		finalHeight = ClampDiagnosticDimension(state->screenSize.y);
+	}
+
+	if (!finalWidth ||
+		!finalHeight ||
+		target.width != finalWidth ||
+		target.height != finalHeight) {
+		return false;
+	}
+
+	SetVRMenuTransparentClearColor(a_convertedColor);
+
+	VR_TRANSITION_DIAG_LOG(
+		"[VRMenuBgClearGuard] frame={} action=convert-to-transparent target={} original=({:.4f},{:.4f},{:.4f},{:.4f}) converted=({:.4f},{:.4f},{:.4f},{:.4f}) currentRTV={} stageSources={} owner={} final={}x{} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={} reason=render-scale-off-boundary",
+		state ? state->frameCount : 0,
+		FormatVRTrackedResourceMatch(target, BuildRTVDiagnosticInfo(a_target)),
+		a_color[0],
+		a_color[1],
+		a_color[2],
+		a_color[3],
+		a_convertedColor[0],
+		a_convertedColor[1],
+		a_convertedColor[2],
+		a_convertedColor[3],
+		BuildVRTrackedResourceCurrentRTVSummary(a_context),
+		BuildVRTrackedResourceStageSourceSummary(a_context),
+		magic_enum::enum_name(plan.owner),
+		finalWidth,
+		finalHeight,
+		BoolText(renderScaleActive),
+		BoolText(presentationUpscaling),
+		BoolText(knownMenu),
+		BoolText(IsGameMenuContextActive()),
+		BoolText(IsCommunityShadersMenuOpen()),
+		BoolText(IsLoadingMenuContextActive()),
+		BoolText(IsSaveLoadTransitionContextActive(state)),
+		BoolText(vrMenuPresentation));
+
+	return true;
+}
+
+bool Upscaling::TryConvertVRMenuBoundaryClearColor(
+	ID3D11DeviceContext* a_context,
+	ID3D11RenderTargetView* a_target,
+	const float* a_color,
+	float (&a_convertedColor)[4])
+{
+	if (TryConvertVRMenuFaderClearColor(a_context, a_target, a_color, a_convertedColor))
+		return true;
+
+	return TryConvertVRMenuBgBoundaryClearColor(a_context, a_target, a_color, a_convertedColor);
 }
 
 void Upscaling::TraceVRTrackedResourceUpdateOperation(

@@ -750,11 +750,6 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
-	enum class DynamicResolutionUpsampleStage : uint8_t
-	{
-		Render,
-		Dispatch
-	};
 	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
@@ -764,7 +759,6 @@ public:
 		const vr::VRTextureBounds_t* a_outputBounds = nullptr, vr::EVRSubmitFlags a_submitFlags = vr::Submit_Default) const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
-	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
@@ -849,8 +843,6 @@ public:
 	bool previousHistoryFSRRuntimePathActive = false;
 	bool previousHistoryFSRRuntimeFsr4Active = false;
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
-	std::atomic<uint32_t> pendingVRPostLoadFadeUISanitizeFrames{ 0 };
-	std::atomic<uint32_t> pendingVRPostLoadFadeUISanitizeEndFrame{ 0 };
 	std::atomic<bool> pendingDLSSHistoryReset{ false };
 	std::atomic<uint32_t> pendingVRUpscalingQualityMode{ kPendingVRUpscalingSettingUnset };
 	std::atomic<uint32_t> pendingVRRenderScaleMode{ kPendingVRUpscalingSettingUnset };
@@ -1124,12 +1116,6 @@ private:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct UpsampleDynamicResolution_Render
-	{
-		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct Copy_Render
 	{
 		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
@@ -1154,18 +1140,6 @@ private:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct FullScreenVR_Render
-	{
-		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct CopyDynamicFetchDisabled_Render
-	{
-		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct HDRTonemapBlendCinematicFade_Render
 	{
 		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
@@ -1181,24 +1155,6 @@ private:
 	struct LightingCompositeMenu_Render
 	{
 		static void thunk(void* a_imageSpaceShader, void* a_shape, void* a_param);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct UpsampleDynamicResolution_Dispatch
-	{
-		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct FullScreenVR_Dispatch
-	{
-		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct CopyDynamicFetchDisabled_Dispatch
-	{
-		static void thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

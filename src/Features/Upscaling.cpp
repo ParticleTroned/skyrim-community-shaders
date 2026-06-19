@@ -176,7 +176,6 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
-	constexpr uint32_t kVRPostLoadFadeUISanitizeFrames = 4u;
 	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
@@ -195,11 +194,6 @@ namespace
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
-	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> kVRPostLoadFadeUISanitizeTargets{
-		RE::RENDER_TARGETS::kFADERUI,
-		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
-		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2
-	};
 
 	bool IsSaveLoadTransitionContextActive(const State* a_state);
 	bool IsVRLoadingPresentationContextActive(const State* a_state);
@@ -258,130 +252,6 @@ namespace
 		return (g_vrTrackedResourceOperationPhase && *g_vrTrackedResourceOperationPhase) ?
 			g_vrTrackedResourceOperationPhase :
 			a_fallback;
-	}
-
-	bool IsVRPostLoadFadeUISanitizeRelevant(const Upscaling& a_upscaling)
-	{
-		if (!globals::game::isVR)
-			return false;
-
-		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
-			return false;
-
-		const auto* state = globals::state;
-		return a_upscaling.IsVRRenderScaleModeActive() ||
-		       a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
-		       a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
-		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-		       IsSaveLoadTransitionContextActive(state) ||
-		       IsVRLoadingPresentationContextActive(state);
-	}
-
-	void DisarmVRPostLoadFadeUISanitize(Upscaling& a_upscaling)
-	{
-		a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.store(0, std::memory_order_release);
-		a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(0, std::memory_order_release);
-	}
-
-	void ArmVRPostLoadFadeUISanitize(Upscaling& a_upscaling, std::string_view a_reason)
-	{
-		if (!IsVRPostLoadFadeUISanitizeRelevant(a_upscaling))
-			return;
-
-		const auto* state = globals::state;
-		const uint32_t currentFrame = state ? std::max(state->frameCount, 1u) : 0u;
-
-		const auto previous = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.exchange(kVRPostLoadFadeUISanitizeFrames, std::memory_order_acq_rel);
-		a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(0, std::memory_order_release);
-		logger::debug(
-			"[VRTransition] Armed post-load fade/UI sanitize: reason={} frames={} previous={} armFrame={}",
-			a_reason,
-			kVRPostLoadFadeUISanitizeFrames,
-			previous,
-			currentFrame);
-	}
-
-	bool TryClearPendingVRPostLoadFadeUITargets(Upscaling& a_upscaling, std::string_view a_passName)
-	{
-		const auto remaining = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.load(std::memory_order_acquire);
-		if (remaining == 0)
-			return false;
-
-		if (!globals::game::isVR || !globals::d3d::context || !globals::game::renderer) {
-			DisarmVRPostLoadFadeUISanitize(a_upscaling);
-			return false;
-		}
-
-		const auto* state = globals::state;
-		if (!state) {
-			DisarmVRPostLoadFadeUISanitize(a_upscaling);
-			return false;
-		}
-
-		if (IsVRLoadingPresentationContextActive(state))
-			return false;
-
-		uint32_t endFrame = a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.load(std::memory_order_acquire);
-		if (endFrame == 0) {
-			endFrame = state->frameCount + kVRPostLoadFadeUISanitizeFrames;
-			a_upscaling.pendingVRPostLoadFadeUISanitizeEndFrame.store(endFrame, std::memory_order_release);
-			logger::debug(
-				"[VRTransition] Started post-load fade/UI sanitize window: pass={} frame={} endFrame={}",
-				a_passName,
-				state->frameCount,
-				endFrame);
-		} else if (state->frameCount >= endFrame) {
-			DisarmVRPostLoadFadeUISanitize(a_upscaling);
-			logger::debug(
-				"[VRTransition] Expired post-load fade/UI sanitize window: pass={} frame={} endFrame={}",
-				a_passName,
-				state->frameCount,
-				endFrame);
-			return false;
-		}
-
-		constexpr float kClearColor[4] = {};
-		const std::string diagnosticPhase{ a_passName };
-		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
-		uint32_t cleared = 0;
-		uint32_t missing = 0;
-
-		for (const auto target : kVRPostLoadFadeUISanitizeTargets) {
-			auto& renderTarget = renderTargets[target];
-			if (!renderTarget.RTV) {
-				++missing;
-				continue;
-			}
-
-			const ScopedVRTrackedResourceOperationContext operationContext("VRPostLoadFadeUISanitize", diagnosticPhase.c_str());
-			globals::d3d::context->ClearRenderTargetView(renderTarget.RTV, kClearColor);
-			++cleared;
-		}
-
-		if (cleared == 0) {
-			logger::debug(
-				"[VRTransition] Skipped post-load fade/UI sanitize clear: pass={} frame={} remaining={} missing={}",
-				a_passName,
-				state->frameCount,
-				remaining,
-				missing);
-			return false;
-		}
-
-		const auto previous = a_upscaling.pendingVRPostLoadFadeUISanitizeFrames.fetch_sub(1, std::memory_order_acq_rel);
-		const auto next = previous > 0 ? previous - 1 : 0;
-		if (next == 0)
-			DisarmVRPostLoadFadeUISanitize(a_upscaling);
-
-		logger::debug(
-			"[VRTransition] Cleared post-load fade/UI targets: pass={} frame={} remaining={} cleared={} missing={}",
-			a_passName,
-			state->frameCount,
-			next,
-			cleared,
-			missing);
-
-		return cleared != 0;
 	}
 
 	bool IsExplicitVRUpscalingTransitionOrigin(Upscaling::VRUpscalingTransitionOrigin a_origin)
@@ -1856,7 +1726,6 @@ namespace
 	constexpr uint32_t kVRTrackedDrawDiagnosticMaxLogsPerFrame = 24u;
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticFrame{ 0 };
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticCount{ 0 };
-	std::atomic<uint32_t> g_vrCopyDynamicFetchDisabledRenderEntryFrame{ 0 };
 
 	void ArmVRMenuUiWriterDiagnosticsForMenuDraw()
 	{
@@ -1869,14 +1738,6 @@ namespace
 
 		g_vrMenuUiWriterDiagnosticArmId.fetch_add(1, std::memory_order_acq_rel);
 		g_vrMenuUiWriterDiagnosticArmedFrame.store(frame, std::memory_order_release);
-	}
-
-	void MarkVRCopyDynamicFetchDisabledRenderEntry()
-	{
-		if (!ShouldRunVRPresentationDiagnostics() || !globals::game::isVR || !globals::state)
-			return;
-
-		g_vrCopyDynamicFetchDisabledRenderEntryFrame.store(globals::state->frameCount, std::memory_order_release);
 	}
 
 	size_t GetVRMenuUiWriterDiagnosticTargetIndex(RE::RENDER_TARGETS::RENDER_TARGET a_target)
@@ -3173,35 +3034,17 @@ namespace
 		return SupportsFoveatedVendorDispatch(a_upscaleMethod) && settings.foveatedVendorDispatch;
 	}
 
-	bool ShouldUnlockDynamicResolutionForUpscaling(Upscaling::UpscaleMethod a_upscaleMethod, const float2& a_resolutionScale)
-	{
-		return IsVendorUpscalingMethod(a_upscaleMethod) &&
-		       (a_resolutionScale.x < kDynamicResolutionUpscalingScaleThreshold ||
-				   a_resolutionScale.y < kDynamicResolutionUpscalingScaleThreshold);
-	}
-
-	void SetDynamicResolutionEnabledForUpscaling(bool a_enabled, bool a_forceDisabled = false)
+	void SetDynamicResolutionEnabledForUpscaling(bool a_enabled)
 	{
 		if (!globals::game::isVR)
 			return;
 
-		static bool initialized = false;
-		static bool originalEnabled = false;
-		static bool changedByUpscaling = false;
-
 		const static auto address = REL::RelocationID{ 508794, 380760 }.address();
 		auto* enabled = reinterpret_cast<bool*>(address);
-		if (!initialized) {
-			originalEnabled = *enabled;
-			initialized = true;
-		}
 
-		const bool targetEnabled = a_enabled ? true : (a_forceDisabled ? false : (changedByUpscaling ? originalEnabled : *enabled));
-		if (*enabled != targetEnabled) {
-			*enabled = targetEnabled;
+		if (*enabled != a_enabled) {
+			*enabled = a_enabled;
 		}
-
-		changedByUpscaling = a_enabled || a_forceDisabled;
 	}
 
 	void DisableAutoDynamicResolutionSetting()
@@ -6249,10 +6092,11 @@ namespace
 		const char* passName = ResolveVRTrackedResourceOperationPassName("ID3D11DeviceContext");
 		const char* phaseName = ResolveVRTrackedResourceOperationPhase("draw-before");
 		const bool mainPostProcessingScope = std::string_view(DiagnosticText(passName, "")) == "Main_PostProcessing";
-		const bool beforeISCopyDynamicFetchDisabled =
+		const bool nativeMainPostProcessingScope =
 			mainPostProcessingScope &&
 			frame != 0 &&
-			g_vrCopyDynamicFetchDisabledRenderEntryFrame.load(std::memory_order_acquire) != frame;
+			!renderScaleActive &&
+			!presentationUpscaling;
 		const bool menuRelevant =
 			knownMenu ||
 			gameMenu ||
@@ -6266,7 +6110,7 @@ namespace
 		const bool shouldLog =
 			destination.target == RE::RENDER_TARGETS::kMENUBG ?
 				menuRelevant :
-				(!renderScaleActive && !presentationUpscaling && beforeISCopyDynamicFetchDisabled);
+				nativeMainPostProcessingScope;
 
 		const uint32_t screenWidth = state ? ClampDiagnosticDimension(state->screenSize.x) : 0u;
 		const uint32_t screenHeight = state ? ClampDiagnosticDimension(state->screenSize.y) : 0u;
@@ -6406,13 +6250,13 @@ namespace
 			const auto details = buildDiagnosticDetails(bakeSignature, true);
 
 			logger::debug(
-				"[VRMenuBakeDraw] frame={} op={} pass={} phase={} signature={} preISCopy={} dst={}({}x{} fmt={} class={} layout={} alpha=tex:{}) rtv={} menuBgPsSlot={} draw=vertices:{} indices:{} instances:{} startVertex:{} startIndex:{} baseVertex:{} startInstance:{} ia={} psSources={} csSources={} sourceAlphaAny={} sourceAlphaUnknown={} blendUsesSourceAlpha={} blend={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} csCBs={} eyeMap={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} loading={} saveLoad={} vrMenuPresentation={}",
+				"[VRMenuBakeDraw] frame={} op={} pass={} phase={} signature={} nativeMainPost={} dst={}({}x{} fmt={} class={} layout={} alpha=tex:{}) rtv={} menuBgPsSlot={} draw=vertices:{} indices:{} instances:{} startVertex:{} startIndex:{} baseVertex:{} startInstance:{} ia={} psSources={} csSources={} sourceAlphaAny={} sourceAlphaUnknown={} blendUsesSourceAlpha={} blend={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} csCBs={} eyeMap={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} loading={} saveLoad={} vrMenuPresentation={}",
 				frame,
 				DiagnosticText(a_operation, "Draw"),
 				DiagnosticText(passName, "unknown"),
 				DiagnosticText(phaseName, "unknown"),
 				FormatVRMenuDiagnosticHex(bakeSignature),
-				BoolText(beforeISCopyDynamicFetchDisabled),
+				BoolText(nativeMainPostProcessingScope),
 				destination.name,
 				destination.width,
 				destination.height,
@@ -6457,12 +6301,12 @@ namespace
 
 		const auto details = buildDiagnosticDetails(signature, false);
 		logger::debug(
-			"[VRTrackedDrawWrite] frame={} op={} pass={} phase={} preISCopy={} dst={}({}x{} fmt={} class={} layout={} alpha=tex:{}) rtv={} draw=vertices:{} indices:{} instances:{} psSources={} csSources={} sourceAlphaAny={} sourceAlphaUnknown={} blendUsesSourceAlpha={} blend={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} csCBs={} eyeMap={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
+			"[VRTrackedDrawWrite] frame={} op={} pass={} phase={} nativeMainPost={} dst={}({}x{} fmt={} class={} layout={} alpha=tex:{}) rtv={} draw=vertices:{} indices:{} instances:{} psSources={} csSources={} sourceAlphaAny={} sourceAlphaUnknown={} blendUsesSourceAlpha={} blend={} viewports={} scissors={} shaders={} vsCBs={} psCBs={} csCBs={} eyeMap={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
 			frame,
 			DiagnosticText(a_operation, "Draw"),
 			DiagnosticText(passName, "unknown"),
 			DiagnosticText(phaseName, "unknown"),
-			BoolText(beforeISCopyDynamicFetchDisabled),
+			BoolText(nativeMainPostProcessingScope),
 			destination.name,
 			destination.width,
 			destination.height,
@@ -10227,7 +10071,6 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			true);
 		if (!a_event->opening) {
 			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
-			ArmVRPostLoadFadeUISanitize(globals::features::upscaling, "loading menu close");
 			if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
 				globals::features::upscaling.QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
 		}
@@ -10317,20 +10160,13 @@ void Upscaling::PostPostLoad()
 	// Calculates resolution and jitter
 	stl::write_thunk_call<Main_UpdateJitter>(REL::RelocationID(75460, 77245).address() + REL::Relocate(0xE5, isGOG ? 0x133 : 0xE2, 0x104));
 
-	// Keep vanilla/manual dynamic resolution active. Vendor upscaling replaces
-	// the vanilla upsample pass at the image-space hook points below.
+	// Disable vanilla/manual dynamic resolution. VR render-scale mode owns
+	// reduced rendering explicitly instead of replacing vanilla's upsample pass.
+	REL::safe_write(REL::RelocationID(35556, 36555).address() + REL::Relocate(0x2D, 0x2D, 0x25), REL::NOP5, sizeof(REL::NOP5));
 
 	// Performs upscaling in between volumetric lighting and post processing
 	stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7, 0x206));
 
-	stl::write_vfunc<0x1, UpsampleDynamicResolution_Render>(
-		RE::VTABLE_BSImagespaceShaderISUpsampleDynamicResolution[3]);
-	stl::write_vfunc<0x1, CopyDynamicFetchDisabled_Render>(
-		RE::VTABLE_BSImagespaceShaderCopyDynamicFetchDisabled[3]);
-	stl::write_vfunc<0xC, UpsampleDynamicResolution_Dispatch>(
-		RE::VTABLE_BSImagespaceShaderISUpsampleDynamicResolution[0]);
-	stl::write_vfunc<0xC, CopyDynamicFetchDisabled_Dispatch>(
-		RE::VTABLE_BSImagespaceShaderCopyDynamicFetchDisabled[0]);
 	if (globals::game::isVR) {
 		stl::write_vfunc<0x1, Copy_Render>(
 			RE::VTABLE_BSImagespaceShaderCopy[3]);
@@ -10352,10 +10188,6 @@ void Upscaling::PostPostLoad()
 			RE::VTABLE_BSImagespaceShaderISTemporalAA_UI[0]);
 		stl::write_vfunc<0xC, LightingCompositeMenu_Dispatch>(
 			RE::VTABLE_BSImagespaceShaderISLightingCompositeMenu[0]);
-		stl::write_vfunc<0x1, FullScreenVR_Render>(
-			RE::VTABLE_BSImagespaceShaderISFullScreenVR[3]);
-		stl::write_vfunc<0xC, FullScreenVR_Dispatch>(
-			RE::VTABLE_BSImagespaceShaderISFullScreenVR[0]);
 	}
 
 	// Patches RSSetScissorRect calls to use dynamic resolution
@@ -10496,7 +10328,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		plan.finalOutputSize = plan.trueHMDDisplaySize;
 		plan.owner = ResolutionOwner::VRRenderScaleMode;
 		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
-	} else if (plan.vendorMethod && IsUpscalingActive()) {
+	} else if (!globals::game::isVR && plan.vendorMethod && IsUpscalingActive()) {
 		plan.owner = ResolutionOwner::VendorDynamicResolution;
 		plan.outputTarget = plan.upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening() ?
 			UpscalingOutputTarget::Sharpener :
@@ -17108,6 +16940,21 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		return;
 	}
 
+	if (globals::game::isVR && vendorUpscalingMethod) {
+		resolutionScale = { 1.0f, 1.0f };
+
+		auto phaseCount = GetJitterPhaseCount(screenWidth, screenWidth);
+		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
+
+		a_viewport->projectionPosScaleX = -jitter.x / screenWidth;
+		a_viewport->projectionPosScaleY = 2.0f * jitter.y / screenHeight;
+
+		PrepareFullResolutionPostProcessing();
+		CheckResources(upscaleMethod);
+		RefreshRuntimeResolutionState();
+		return;
+	}
+
 	if (vendorUpscalingMethod) {
 		float resolutionScaleBase = GetQualityModeResolutionScale(GetRuntimeQualityMode());
 
@@ -17199,27 +17046,15 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	if (!IsVendorUpscalingMethod(upscaleMethod))
 		return;
 
-	const bool shouldUnlockDynamicResolution = globals::game::isVR && ShouldUnlockDynamicResolutionForUpscaling(upscaleMethod, resolutionScale);
-
 	if (globals::game::isVR) {
-		SetDynamicResolutionEnabledForUpscaling(shouldUnlockDynamicResolution);
-		if (shouldUnlockDynamicResolution) {
-			runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
-			runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-			runtimeData.dynamicResolutionWidthRatio = resolutionScale.x;
-			runtimeData.dynamicResolutionHeightRatio = resolutionScale.y;
-			runtimeData.dynamicResolutionLock = 0;
-			dynamicResolutionWidthRatio = resolutionScale.x;
-			dynamicResolutionHeightRatio = resolutionScale.y;
-		} else {
-			runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-			runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-			runtimeData.dynamicResolutionWidthRatio = 1.0f;
-			runtimeData.dynamicResolutionHeightRatio = 1.0f;
-			runtimeData.dynamicResolutionLock = 1;
-			dynamicResolutionWidthRatio = 1.0f;
-			dynamicResolutionHeightRatio = 1.0f;
-		}
+		SetDynamicResolutionEnabledForUpscaling(false);
+		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
+		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
+		runtimeData.dynamicResolutionWidthRatio = 1.0f;
+		runtimeData.dynamicResolutionHeightRatio = 1.0f;
+		runtimeData.dynamicResolutionLock = 1;
+		dynamicResolutionWidthRatio = 1.0f;
+		dynamicResolutionHeightRatio = 1.0f;
 		UpdateCameraData();
 		return;
 	}
@@ -17654,6 +17489,10 @@ bool Upscaling::IsUpscalingActive() const
 	// selected method actually produces a downscale. If the renderer is
 	// currently running at 1:1 (no downscale), treat upscaling as inactive.
 	if (!IsVendorUpscalingMethod(method)) {
+		return false;
+	}
+
+	if (globals::game::isVR && !IsVRRenderScaleModeActive()) {
 		return false;
 	}
 
@@ -20374,377 +20213,6 @@ void Upscaling::ApplySharpening()
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
-bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage)
-{
-	auto& upscaling = globals::features::upscaling;
-	upscaling.DisableAAVRSState();
-	if (a_stage == DynamicResolutionUpsampleStage::Render && a_passName && std::string_view(a_passName) == "ISCopyDynamicFetchDisabled") {
-		TryClearPendingVRPostLoadFadeUITargets(upscaling, a_passName);
-	}
-	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
-	if (IsVendorUpscalingMethod(upscaleMethod) && upscaling.IsUpscalingActive()) {
-		const char* stageName = a_stage == DynamicResolutionUpsampleStage::Dispatch ? "Dispatch" : "Render";
-		const auto diagnosticSlot = a_stage == DynamicResolutionUpsampleStage::Dispatch ?
-			VRPresentationDiagnosticSlot::DynamicUpsampleDispatch :
-			VRPresentationDiagnosticSlot::DynamicUpsampleRender;
-		const auto logDecision = [&](const char* a_decision, bool a_includeKnownTargets = false) {
-			if (!globals::game::isVR)
-				return;
-
-			const std::string phase = std::format("{}:{}", stageName, DiagnosticText(a_decision, "unknown"));
-			LogVRPresentationPassDiagnostics(upscaling, diagnosticSlot, a_passName, phase.c_str(), a_includeKnownTargets);
-		};
-		logDecision("entry", true);
-
-		if (globals::game::isVR &&
-			IsVRTransitionPresentationProtectionActive(upscaling, globals::state) &&
-			IsVRLoadingPresentationContextActive(globals::state)) {
-			logDecision("vanilla-loading-presentation-protection");
-			return false;
-		}
-
-		const bool menuPresentationContext = globals::game::isVR ? IsVRMenuScenePresentationBlockActive() : IsGameMenuContextActive();
-		if (menuPresentationContext) {
-			logDecision("vanilla-menu-without-submit-stage");
-			return false;
-		}
-
-		auto context = globals::d3d::context;
-		auto renderer = globals::game::renderer;
-		if (!context || !renderer) {
-			logDecision("vanilla-missing-context");
-			return false;
-		}
-
-		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		if (!main.texture) {
-			logDecision("vanilla-missing-main");
-			return false;
-		}
-
-		const auto state = globals::state;
-		if (!state) {
-			logDecision("vanilla-missing-state");
-			return false;
-		}
-
-		const auto screenSize = state->screenSize;
-		const auto renderSize = Util::ConvertToDynamic(screenSize);
-		const uint32_t inputWidth = static_cast<uint32_t>(std::max(1.0f, renderSize.x));
-		const uint32_t inputHeight = static_cast<uint32_t>(std::max(1.0f, renderSize.y));
-		ID3D11ShaderResourceView* psSourceSRV = nullptr;
-		ID3D11ShaderResourceView* csSourceSRV = nullptr;
-		context->PSGetShaderResources(0, 1, &psSourceSRV);
-		context->CSGetShaderResources(0, 1, &csSourceSRV);
-
-		const auto releaseSourceSRVs = [&]() {
-			if (psSourceSRV)
-				psSourceSRV->Release();
-			if (csSourceSRV)
-				csSourceSRV->Release();
-		};
-
-		ID3D11ShaderResourceView* sourceSRV = nullptr;
-		ID3D11Resource* sourceResource = nullptr;
-		ID3D11Texture2D* sourceTexture = nullptr;
-		ID3D11ShaderResourceView* sourceCandidates[2] = {};
-		if (a_stage == DynamicResolutionUpsampleStage::Dispatch) {
-			sourceCandidates[0] = csSourceSRV;
-			sourceCandidates[1] = psSourceSRV;
-		} else {
-			sourceCandidates[0] = psSourceSRV;
-			sourceCandidates[1] = csSourceSRV;
-		}
-
-		const auto tryAcquireSource = [&](ID3D11ShaderResourceView* candidateSRV) {
-			if (!candidateSRV)
-				return false;
-
-			ID3D11Resource* candidateResource = nullptr;
-			candidateSRV->GetResource(&candidateResource);
-			if (!candidateResource)
-				return false;
-
-			ID3D11Texture2D* candidateTexture = nullptr;
-			if (FAILED(candidateResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&candidateTexture))) || !candidateTexture) {
-				candidateResource->Release();
-				return false;
-			}
-
-			D3D11_TEXTURE2D_DESC candidateDesc{};
-			candidateTexture->GetDesc(&candidateDesc);
-			if (candidateDesc.Width < inputWidth || candidateDesc.Height < inputHeight) {
-				candidateTexture->Release();
-				candidateResource->Release();
-				return false;
-			}
-
-			sourceSRV = candidateSRV;
-			sourceResource = candidateResource;
-			sourceTexture = candidateTexture;
-			return true;
-		};
-
-		for (uint32_t i = 0; i < 2 && !sourceTexture; ++i) {
-			if (!sourceCandidates[i])
-				continue;
-			if (i == 1 && sourceCandidates[i] == sourceCandidates[0])
-				continue;
-			(void)tryAcquireSource(sourceCandidates[i]);
-		}
-
-		if (!sourceSRV || !sourceResource || !sourceTexture) {
-			static bool loggedMissingSource = false;
-			if (!loggedMissingSource) {
-				logger::warn(
-					"[Upscaling] {} replacement could not find a suitable source SRV t0 for {}x{}; falling back to vanilla pass.",
-					a_passName,
-					inputWidth,
-					inputHeight);
-				loggedMissingSource = true;
-			}
-			releaseSourceSRVs();
-			logDecision("vanilla-missing-source");
-			return false;
-		}
-
-		ID3D11RenderTargetView* outputRTV = nullptr;
-		ID3D11DepthStencilView* outputDSV = nullptr;
-		context->OMGetRenderTargets(1, &outputRTV, &outputDSV);
-		if (!outputRTV) {
-			sourceTexture->Release();
-			sourceResource->Release();
-			releaseSourceSRVs();
-			logDecision("vanilla-missing-output-rtv");
-			return false;
-		}
-
-		ID3D11Resource* outputResource = nullptr;
-		outputRTV->GetResource(&outputResource);
-		ID3D11Texture2D* outputTexture = nullptr;
-		if (!outputResource || FAILED(outputResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&outputTexture))) || !outputTexture) {
-			if (outputResource)
-				outputResource->Release();
-			outputRTV->Release();
-			if (outputDSV)
-				outputDSV->Release();
-			sourceTexture->Release();
-			sourceResource->Release();
-			releaseSourceSRVs();
-			logDecision("vanilla-invalid-output-texture");
-			return false;
-		}
-
-		const auto releaseRefs = [&]() {
-			outputTexture->Release();
-			outputResource->Release();
-			outputRTV->Release();
-			if (outputDSV)
-				outputDSV->Release();
-			sourceTexture->Release();
-			sourceResource->Release();
-			releaseSourceSRVs();
-		};
-		const auto unbindSourceSRV = [&]() {
-			ID3D11ShaderResourceView* nullSRV = nullptr;
-			context->PSSetShaderResources(0, 1, &nullSRV);
-			context->CSSetShaderResources(0, 1, &nullSRV);
-		};
-		const auto restoreSourceSRVs = [&]() {
-			context->PSSetShaderResources(0, 1, &psSourceSRV);
-			context->CSSetShaderResources(0, 1, &csSourceSRV);
-		};
-
-		if (upscaling.IsSubmitStageUpscalingActive()) {
-			// Native-layout UI/fade targets are not final eye images. Keep them
-			// on the vanilla path so submit-stage upscaling cannot copy or
-			// stretch them as scene presentation sources. In-place interaction
-			// passes keep the older contextual fallback for prompt frames.
-			const bool inPlacePass = outputTexture == sourceTexture;
-			const bool uiRenderTargetPass =
-				IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture) ||
-				IsVRNativeLayoutSubmitProtectedRenderTargetTexture(outputTexture);
-			const bool interactionUiContext = !IsKnownGameMenuContextActive();
-			if (uiRenderTargetPass || (inPlacePass && interactionUiContext)) {
-				logDecision(uiRenderTargetPass ? "vanilla-submit-ui-target-pass" : "vanilla-submit-in-place-pass");
-				releaseRefs();
-				return false;
-			}
-
-			unbindSourceSRV();
-			context->OMSetRenderTargets(0, nullptr, nullptr);
-
-			auto copyDynamicRegionToTarget = [&](ID3D11Texture2D* targetTexture) {
-				if (!targetTexture)
-					return false;
-				if (targetTexture == sourceTexture)
-					return true;
-
-				D3D11_TEXTURE2D_DESC sourceDesc{};
-				D3D11_TEXTURE2D_DESC targetDesc{};
-				sourceTexture->GetDesc(&sourceDesc);
-				targetTexture->GetDesc(&targetDesc);
-				if (sourceDesc.SampleDesc.Count != targetDesc.SampleDesc.Count ||
-					sourceDesc.Format != targetDesc.Format ||
-					inputWidth > sourceDesc.Width ||
-					inputHeight > sourceDesc.Height ||
-					inputWidth > targetDesc.Width ||
-					inputHeight > targetDesc.Height) {
-					static bool loggedCopyMismatch = false;
-					if (!loggedCopyMismatch) {
-						logger::warn(
-							"[Upscaling] Submit-stage replacement could not copy source: input={}x{} source={}x{} fmt={} samples={} target={}x{} fmt={} samples={}",
-							inputWidth,
-							inputHeight,
-							sourceDesc.Width,
-							sourceDesc.Height,
-							static_cast<uint32_t>(sourceDesc.Format),
-							sourceDesc.SampleDesc.Count,
-							targetDesc.Width,
-							targetDesc.Height,
-							static_cast<uint32_t>(targetDesc.Format),
-							targetDesc.SampleDesc.Count);
-						loggedCopyMismatch = true;
-					}
-					return false;
-				}
-
-				D3D11_BOX sourceBox{ 0, 0, 0, inputWidth, inputHeight, 1 };
-				const ScopedVRTrackedResourceOperationContext operationContext(a_passName, "submit-stage-copy-to-output");
-				context->CopySubresourceRegion(targetTexture, 0, 0, 0, 0, sourceTexture, 0, &sourceBox);
-				return true;
-			};
-
-			const bool copiedToOutput = copyDynamicRegionToTarget(outputTexture);
-			if (copiedToOutput) {
-				context->OMSetRenderTargets(1, &outputRTV, outputDSV);
-				logDecision("replaced-submit-stage-copy");
-				releaseRefs();
-				if (globals::game::stateUpdateFlags)
-					globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-				return true;
-			}
-
-			context->OMSetRenderTargets(1, &outputRTV, outputDSV);
-			restoreSourceSRVs();
-			logDecision("vanilla-submit-copy-failed");
-			releaseRefs();
-			return false;
-		}
-
-		bool sourceReady = sourceTexture == main.texture;
-		if (sourceTexture != main.texture) {
-			D3D11_TEXTURE2D_DESC sourceDesc{};
-			D3D11_TEXTURE2D_DESC mainDesc{};
-			sourceTexture->GetDesc(&sourceDesc);
-			main.texture->GetDesc(&mainDesc);
-
-			if (sourceDesc.SampleDesc.Count == mainDesc.SampleDesc.Count &&
-				sourceDesc.Format == mainDesc.Format &&
-				inputWidth <= sourceDesc.Width &&
-				inputHeight <= sourceDesc.Height &&
-				inputWidth <= mainDesc.Width &&
-				inputHeight <= mainDesc.Height) {
-				unbindSourceSRV();
-				context->OMSetRenderTargets(0, nullptr, nullptr);
-				D3D11_BOX sourceBox{ 0, 0, 0, inputWidth, inputHeight, 1 };
-				const ScopedVRTrackedResourceOperationContext operationContext(a_passName, "copy-source-to-main");
-				context->CopySubresourceRegion(main.texture, 0, 0, 0, 0, sourceTexture, 0, &sourceBox);
-				sourceReady = true;
-			} else {
-				static bool loggedSourceMismatch = false;
-				if (!loggedSourceMismatch) {
-					logger::warn(
-						"[Upscaling] Dynamic-resolution upsample replacement could not copy source to main: input={}x{} source={}x{} fmt={} samples={} main={}x{} fmt={} samples={}",
-						inputWidth,
-						inputHeight,
-						sourceDesc.Width,
-						sourceDesc.Height,
-						static_cast<uint32_t>(sourceDesc.Format),
-						sourceDesc.SampleDesc.Count,
-						mainDesc.Width,
-						mainDesc.Height,
-						static_cast<uint32_t>(mainDesc.Format),
-						mainDesc.SampleDesc.Count);
-					loggedSourceMismatch = true;
-				}
-			}
-		}
-
-		if (!sourceReady) {
-			logDecision("vanilla-source-not-ready");
-			releaseRefs();
-			return false;
-		}
-
-		upscaling.Upscale();
-		upscaling.UpscaleDepth();
-		if (upscaleMethod == UpscaleMethod::kDLSS)
-			upscaling.ApplySharpening();
-
-		if (outputTexture != main.texture) {
-			D3D11_TEXTURE2D_DESC outputDesc{};
-			D3D11_TEXTURE2D_DESC mainDesc{};
-			outputTexture->GetDesc(&outputDesc);
-			main.texture->GetDesc(&mainDesc);
-
-			if (outputDesc.SampleDesc.Count == mainDesc.SampleDesc.Count &&
-				outputDesc.Format == mainDesc.Format &&
-				outputDesc.Width >= mainDesc.Width &&
-				outputDesc.Height >= mainDesc.Height) {
-				context->OMSetRenderTargets(0, nullptr, nullptr);
-				D3D11_BOX sourceBox{ 0, 0, 0, mainDesc.Width, mainDesc.Height, 1 };
-				const ScopedVRTrackedResourceOperationContext operationContext(a_passName, "copy-main-to-output");
-				context->CopySubresourceRegion(outputTexture, 0, 0, 0, 0, main.texture, 0, &sourceBox);
-				context->OMSetRenderTargets(1, &outputRTV, outputDSV);
-			} else {
-				static bool loggedCopyMismatch = false;
-				if (!loggedCopyMismatch) {
-					logger::warn(
-						"[Upscaling] Dynamic-resolution upsample replacement could not copy output: main={}x{} fmt={} samples={} target={}x{} fmt={} samples={}",
-						mainDesc.Width,
-						mainDesc.Height,
-						static_cast<uint32_t>(mainDesc.Format),
-						mainDesc.SampleDesc.Count,
-						outputDesc.Width,
-						outputDesc.Height,
-						static_cast<uint32_t>(outputDesc.Format),
-						outputDesc.SampleDesc.Count);
-					loggedCopyMismatch = true;
-				}
-			}
-		}
-		context->OMSetRenderTargets(1, &outputRTV, outputDSV);
-
-		logDecision("replaced-vendor-upscale");
-		releaseRefs();
-		if (globals::game::stateUpdateFlags)
-			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-		return true;
-	}
-
-	return false;
-}
-
-void Upscaling::UpsampleDynamicResolution_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
-{
-	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISUpsampleDynamicResolution", DynamicResolutionUpsampleStage::Render))
-		return;
-
-	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
-		"ISUpsampleDynamicResolution",
-		"Render:vanilla-before",
-		"Render:vanilla-after",
-		true,
-		[&]() {
-			const ScopedVRTrackedResourceOperationContext operationContext("ISUpsampleDynamicResolution", "original-call");
-			func(a_imageSpaceShader, a_shape, a_param);
-		});
-}
-
 void Upscaling::Copy_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
 {
 	auto& upscaling = globals::features::upscaling;
@@ -20805,45 +20273,6 @@ void Upscaling::CopyCustomViewport_Render::thunk(void* a_imageSpaceShader, void*
 		true,
 		[&]() {
 			const ScopedVRTrackedResourceOperationContext operationContext("ISCopyCustomViewport", "original-call");
-			func(a_imageSpaceShader, a_shape, a_param);
-		});
-}
-
-void Upscaling::FullScreenVR_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
-{
-	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISFullScreenVR", DynamicResolutionUpsampleStage::Render))
-		return;
-
-	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
-		"ISFullScreenVR",
-		"Render:vanilla-before",
-		"Render:vanilla-after",
-		true,
-		[&]() {
-			const ScopedVRTrackedResourceOperationContext operationContext("ISFullScreenVR", "original-call");
-			func(a_imageSpaceShader, a_shape, a_param);
-		});
-}
-
-void Upscaling::CopyDynamicFetchDisabled_Render::thunk(void* a_imageSpaceShader, void* a_shape, void* a_param)
-{
-	MarkVRCopyDynamicFetchDisabledRenderEntry();
-	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISCopyDynamicFetchDisabled", DynamicResolutionUpsampleStage::Render))
-		return;
-
-	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::DynamicUpsampleRender,
-		"ISCopyDynamicFetchDisabled",
-		"Render:vanilla-before",
-		"Render:vanilla-after",
-		true,
-		[&]() {
-			const ScopedVRTrackedResourceOperationContext operationContext("ISCopyDynamicFetchDisabled", "original-call");
 			func(a_imageSpaceShader, a_shape, a_param);
 		});
 }
@@ -20938,54 +20367,6 @@ void Upscaling::LightingCompositeMenu_Render::thunk(void* a_imageSpaceShader, vo
 			const ScopedVRTrackedResourceOperationContext operationContext("ISLightingCompositeMenu", "original-call");
 			func(a_imageSpaceShader, a_shape, a_param);
 		});
-}
-
-void Upscaling::UpsampleDynamicResolution_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
-{
-	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISUpsampleDynamicResolution", DynamicResolutionUpsampleStage::Dispatch))
-		return;
-
-	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::DynamicUpsampleDispatch,
-		"ISUpsampleDynamicResolution",
-		"Dispatch:vanilla-before",
-		"Dispatch:vanilla-after",
-		true,
-		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
-}
-
-void Upscaling::FullScreenVR_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
-{
-	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISFullScreenVR", DynamicResolutionUpsampleStage::Dispatch))
-		return;
-
-	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::DynamicUpsampleDispatch,
-		"ISFullScreenVR",
-		"Dispatch:vanilla-before",
-		"Dispatch:vanilla-after",
-		true,
-		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
-}
-
-void Upscaling::CopyDynamicFetchDisabled_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
-{
-	if (globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISCopyDynamicFetchDisabled", DynamicResolutionUpsampleStage::Dispatch))
-		return;
-
-	auto& upscaling = globals::features::upscaling;
-	LogVRPresentationAroundCall(
-		upscaling,
-		VRPresentationDiagnosticSlot::DynamicUpsampleDispatch,
-		"ISCopyDynamicFetchDisabled",
-		"Dispatch:vanilla-before",
-		"Dispatch:vanilla-after",
-		true,
-		[&]() { func(a_imageSpaceShader, a1, a2, a3); });
 }
 
 void Upscaling::HDRTonemapBlendCinematicFade_Dispatch::thunk(void* a_imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
@@ -21142,29 +20523,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		!loadingTransitionMenuPresentation;
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
 	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
-	const bool submitPathDisabledForVendor =
-		vendorMethodSelected &&
-		globals::game::isVR &&
-		!menuPresentationContext &&
-		!upscaling.IsPerfModeActive() &&
-		!IsVRRenderScaleSubmitPathEnabled();
-	if (submitPathDisabledForVendor) {
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
-
-		upscaling.PerformUpscaling();
-
-		if (upscaleMethod == UpscaleMethod::kDLSS)
-			upscaling.ApplySharpening();
-
-		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
-
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		callOriginalMainPostProcessing();
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		return;
-	}
 
 	if (menuPresentationContext && !runNativeVendorAAInMenu && !presentationUpscalingActive) {
 		if (upscaling.IsPerfModeActive())

@@ -4254,6 +4254,14 @@ namespace
 		        IsVRMenuPresentationTailActive(globals::state));
 	}
 
+	bool IsVRNativeOffPL314ParityActive(const Upscaling& a_upscaling)
+	{
+		return globals::game::isVR &&
+		       !IsVRRenderScaleCurrentOrTargetRelevant(a_upscaling) &&
+		       !a_upscaling.IsVRRenderScaleModeActive() &&
+		       !a_upscaling.IsPresentationUpscalingActive();
+	}
+
 	bool IsVRMenuScenePresentationBlockActive()
 	{
 		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
@@ -17433,18 +17441,38 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	const bool vrRenderScaleRelevant =
-		globals::game::isVR &&
-		IsVRRenderScaleCurrentOrTargetRelevant(*this);
-	const bool vrVendorMenu =
-		vrRenderScaleRelevant &&
-		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) &&
-		IsVRMenuPresentationContextActive() &&
-		IsVRRenderScaleTransitionSafetyRelevant(*this);
-	if (vrVendorMenu) {
-		viewport->projectionPosScaleX = 0.0f;
-		viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
+	if (IsVRNativeOffPL314ParityActive(*this)) {
+		static bool loggedNativeOffPostDisplayParity = false;
+		if (!loggedNativeOffPostDisplayParity) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 PostDisplay parity active");
+			loggedNativeOffPostDisplayParity = true;
+		}
+
+		auto& runtimeData = viewport->GetRuntimeData();
+
+		runtimeData.dynamicResolutionPreviousWidthRatio = 1;
+		runtimeData.dynamicResolutionPreviousHeightRatio = 1;
+		runtimeData.dynamicResolutionWidthRatio = 1;
+		runtimeData.dynamicResolutionHeightRatio = 1;
+		runtimeData.dynamicResolutionLock = 1;
+
+		if (auto* renderer = globals::game::renderer)
+			renderer->UpdateViewPort(0, 0, 1);
+		UpdateCameraData();
+	} else {
+		const bool vrRenderScaleRelevant =
+			globals::game::isVR &&
+			IsVRRenderScaleCurrentOrTargetRelevant(*this);
+		const bool vrVendorMenu =
+			vrRenderScaleRelevant &&
+			IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) &&
+			IsVRMenuPresentationContextActive() &&
+			IsVRRenderScaleTransitionSafetyRelevant(*this);
+		if (vrVendorMenu) {
+			viewport->projectionPosScaleX = 0.0f;
+			viewport->projectionPosScaleY = 0.0f;
+			PrepareFullResolutionPostProcessing();
+		}
 	}
 
 	if (d3d12SwapChainActive)
@@ -20015,14 +20043,15 @@ void Upscaling::UpscaleDepth()
 
 	// (1) Early validation exits
 	const bool depthUpscaleActive = IsUpscalingActive();
-	const auto upscaleMethod = GetRuntimeUpscaleMethod();
-	const uint32_t runtimeQualityMode = GetRuntimeQualityMode();
 	const bool isVR = globals::game::isVR;
+	const bool vrNativeOffPL314Parity = IsVRNativeOffPL314ParityActive(*this);
+	const auto upscaleMethod = vrNativeOffPL314Parity ? GetUpscaleMethod() : GetRuntimeUpscaleMethod();
+	const uint32_t qualityMode = vrNativeOffPL314Parity ? settings.qualityMode : GetRuntimeQualityMode();
 	const bool vendorUpscaler = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
 	const bool fullResolutionMaskPath =
 		upscaleMethod == UpscaleMethod::kNONE ||
 		upscaleMethod == UpscaleMethod::kTAA ||
-		(vendorUpscaler && runtimeQualityMode == 0);
+		(vendorUpscaler && qualityMode == 0);
 	const bool repairVRFullResolutionMask =
 		isVR &&
 		fullResolutionMaskPath &&
@@ -20060,7 +20089,10 @@ void Upscaling::UpscaleDepth()
 		(!depth.views[0] || !refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV)) {
 		return;
 	}
-	if (depthUpscaleActive && isVR && (!depthCopy.stencilSRV || !depthCopy.views[0])) {
+	if (isVR && !depthCopy.stencilSRV) {
+		return;
+	}
+	if (depthUpscaleActive && isVR && !depthCopy.views[0]) {
 		return;
 	}
 
@@ -20120,7 +20152,14 @@ void Upscaling::UpscaleDepth()
 
 		// Engine copies kMAIN->kMAIN_COPY during 3D scene rendering.
 		// In menu/non-3D contexts the engine path may skip this copy.
-		if (IsKnownGameMenuContextActive()) {
+		auto* ui = globals::game::ui;
+		const bool inMenuContext = vrNativeOffPL314Parity ?
+			(state->isMapMenuOpen ||
+				state->isMainMenuOpen ||
+				state->isLoadingMenuOpen ||
+				(ui && ui->GameIsPaused())) :
+			IsKnownGameMenuContextActive();
+		if (inMenuContext) {
 			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 		}
 
@@ -20160,7 +20199,19 @@ void Upscaling::UpscaleDepth()
 		CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 	}
 
-	if (!(isVR && ShouldDeferVRProjectedMaskRepair(*this, state))) {
+	const bool repairProjectedMask =
+		!isVR ||
+		vrNativeOffPL314Parity ||
+		!ShouldDeferVRProjectedMaskRepair(*this, state);
+	if (repairProjectedMask) {
+		if (vrNativeOffPL314Parity) {
+			static bool loggedNativeOffDepthParity = false;
+			if (!loggedNativeOffDepthParity) {
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 depth/mask parity active");
+				loggedNativeOffDepthParity = true;
+			}
+		}
+
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Underwater Mask");
 
 		viewport.Width = screenSize.x * 0.5f;

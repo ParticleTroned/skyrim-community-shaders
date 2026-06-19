@@ -11527,12 +11527,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	static bool loggedRelatchApplyDiagnostic = false;
 	static bool loggedRelatchBeginTeardownDiagnostic = false;
+	static bool loggedRelatchNativeOffParityDiagnostic = false;
 	static bool loggedRelatchVendorDeferDiagnostic = false;
 	static bool loggedRelatchD3DDeferDiagnostic = false;
 	static UpscaleMethod lastRelatchDiagnosticMethod = UpscaleMethod::kNONE;
 	const auto clearRelatchRetryDiagnostics = [&]() {
 		loggedRelatchApplyDiagnostic = false;
 		loggedRelatchBeginTeardownDiagnostic = false;
+		loggedRelatchNativeOffParityDiagnostic = false;
 		loggedRelatchVendorDeferDiagnostic = false;
 		loggedRelatchD3DDeferDiagnostic = false;
 	};
@@ -11549,38 +11551,55 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	loggedRelatchApplyDiagnostic = true;
 	LogVRTransitionDiagnostics(*this, "applying render-target relatch", forceApplyDiagnostic);
 
+	const bool relatchToNativeOff =
+		globals::game::isVR &&
+		!IsRenderScaleModeRequested() &&
+		!IsPresentationUpscalingActive();
+	bool nativeOffRelatchParityApplied = false;
+
 	try {
-		LogVRTransitionDiagnosticOnce(loggedRelatchBeginTeardownDiagnostic, [&]() {
-			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: begin vendor teardown before D3D render-target recreate (method={})", magic_enum::enum_name(relatchUpscaleMethod));
-		});
-		if (!ResetVRVendorRuntimeResources(true, true)) {
-			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
-				clearRelatchDelay();
-				clearRelatchRetryDiagnostics();
+		if (relatchToNativeOff) {
+			LogVRTransitionDiagnosticOnce(loggedRelatchNativeOffParityDiagnostic, [&]() {
+				VR_TRANSITION_DIAG_LOG(
+					"[VRTransition] Native/off PL3.14 relatch parity: skipping submit-stage/vendor teardown before D3D render-target recreate (method={})",
+					magic_enum::enum_name(relatchUpscaleMethod));
+			});
+			ResetVRSubmitStageState(false, false);
+			DestroyPeripheryTAAResources();
+		} else {
+			LogVRTransitionDiagnosticOnce(loggedRelatchBeginTeardownDiagnostic, [&]() {
+				VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: begin vendor teardown before D3D render-target recreate (method={})", magic_enum::enum_name(relatchUpscaleMethod));
+			});
+			if (!ResetVRVendorRuntimeResources(true, true)) {
+				if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
+					clearRelatchDelay();
+					clearRelatchRetryDiagnostics();
+					return false;
+				}
+
+				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+				if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
+					pendingDLSSReset.store(true, std::memory_order_release);
+				else if (relatchUpscaleMethod == UpscaleMethod::kFSR)
+					pendingFSRReset.store(true, std::memory_order_release);
+				const bool loggedVendorDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchVendorDeferDiagnostic, [&]() {
+					logger::debug("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
+					VR_TRANSITION_DIAG_LOG(
+						"[VRTransition] Relatch deferred: vendor resources are still in use; retrying after {} frames",
+						kVRUpscalingTransitionApplyDelayFrames);
+				});
+				LogVRTransitionDiagnostics(*this, "render-target relatch deferred: vendor resources still in use", loggedVendorDeferDiagnostic);
 				return false;
 			}
-
-			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
-			if (relatchUpscaleMethod == UpscaleMethod::kDLSS)
-				pendingDLSSReset.store(true, std::memory_order_release);
-			else if (relatchUpscaleMethod == UpscaleMethod::kFSR)
-				pendingFSRReset.store(true, std::memory_order_release);
-			const bool loggedVendorDeferDiagnostic = LogVRTransitionDiagnosticOnce(loggedRelatchVendorDeferDiagnostic, [&]() {
-				logger::debug("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
-				VR_TRANSITION_DIAG_LOG(
-					"[VRTransition] Relatch deferred: vendor resources are still in use; retrying after {} frames",
-					kVRUpscalingTransitionApplyDelayFrames);
-			});
-			LogVRTransitionDiagnostics(*this, "render-target relatch deferred: vendor resources still in use", loggedVendorDeferDiagnostic);
-			return false;
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: vendor teardown complete before D3D render-target recreate");
 		}
-		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: vendor teardown complete before D3D render-target recreate");
 
 		perfMode.ResetBootLatch();
 		perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 		perfMode.EnsureBootLatch(settings, relatchUpscaleMethod, true);
 
 		const bool relatchRenderScaleActive = perfMode.IsActive(settings, relatchUpscaleMethod);
+		nativeOffRelatchParityApplied = relatchToNativeOff && !relatchRenderScaleActive;
 		const float2 relatchTargetDisplaySize = perfMode.GetDisplayScreenSize();
 		const float2 relatchTargetEngineSize = relatchRenderScaleActive ?
 			perfMode.GetRenderScreenSize() :
@@ -11613,27 +11632,35 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: D3D render-target recreate complete");
 		}
 
-		VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: recreating vendor/common resources for {}", magic_enum::enum_name(relatchUpscaleMethod));
-		RecreateVendorRuntimeResources(relatchUpscaleMethod, relatchUpscaleMethod != UpscaleMethod::kFSR);
-
-		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
-			pendingDLSSHistoryReset.store(relatchRenderScaleActive, std::memory_order_release);
-			if (!relatchRenderScaleActive) {
-				VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 relatch parity: suppressing render-scale DLSS history reset");
-			}
-			pendingDLSSReset.store(false, std::memory_order_release);
-			pendingFSRReset.store(false, std::memory_order_release);
-			vrDLSSSettingsRelatched.store(true, std::memory_order_release);
-		} else if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
-			pendingFSRReset.store(true, std::memory_order_release);
+		if (nativeOffRelatchParityApplied) {
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 relatch parity: skipping relatch vendor/common resource recreate for {}", magic_enum::enum_name(relatchUpscaleMethod));
 			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
+			pendingFSRReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		} else {
-			pendingDLSSReset.store(false, std::memory_order_release);
-			pendingDLSSHistoryReset.store(false, std::memory_order_release);
-			pendingFSRReset.store(false, std::memory_order_release);
-			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
+			VR_TRANSITION_DIAG_LOG("[VRTransition] Relatch step: recreating vendor/common resources for {}", magic_enum::enum_name(relatchUpscaleMethod));
+			RecreateVendorRuntimeResources(relatchUpscaleMethod, relatchUpscaleMethod != UpscaleMethod::kFSR);
+
+			if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
+				pendingDLSSHistoryReset.store(relatchRenderScaleActive, std::memory_order_release);
+				if (!relatchRenderScaleActive) {
+					VR_TRANSITION_DIAG_LOG("[VRTransition] Native/off PL3.14 relatch parity: suppressing render-scale DLSS history reset");
+				}
+				pendingDLSSReset.store(false, std::memory_order_release);
+				pendingFSRReset.store(false, std::memory_order_release);
+				vrDLSSSettingsRelatched.store(true, std::memory_order_release);
+			} else if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
+				pendingFSRReset.store(true, std::memory_order_release);
+				pendingDLSSReset.store(false, std::memory_order_release);
+				pendingDLSSHistoryReset.store(false, std::memory_order_release);
+				vrDLSSSettingsRelatched.store(false, std::memory_order_release);
+			} else {
+				pendingDLSSReset.store(false, std::memory_order_release);
+				pendingDLSSHistoryReset.store(false, std::memory_order_release);
+				pendingFSRReset.store(false, std::memory_order_release);
+				vrDLSSSettingsRelatched.store(false, std::memory_order_release);
+			}
 		}
 		RefreshRuntimeResolutionState();
 	} catch (const std::exception& e) {
@@ -11665,13 +11692,18 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	const uint32_t currentFrame = std::max(state->frameCount, 1u);
-	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
-	submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
-	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
-	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
-	submitStageVendorResumeFrame.store(
-		currentFrame + kVRSubmitStageVendorRelatchCooldownFrames,
-		std::memory_order_release);
+	if (nativeOffRelatchParityApplied) {
+		vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
+		ClearSubmitStageVendorResumeCooldown();
+	} else {
+		vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
+		submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
+		submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
+		submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+		submitStageVendorResumeFrame.store(
+			currentFrame + kVRSubmitStageVendorRelatchCooldownFrames,
+			std::memory_order_release);
+	}
 	clearRelatchDelay();
 	clearRelatchRetryDiagnostics();
 	logger::debug("[VRRenderScale] Applied render-target relatch");
@@ -11687,7 +11719,7 @@ void Upscaling::ClearSubmitStageVendorResumeCooldown()
 	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
 }
 
-bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
+bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources, bool a_requestHistoryReset)
 {
 	if (!globals::game::isVR)
 		return true;
@@ -11719,7 +11751,8 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	historyResetTrackingInitialized = false;
 	historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
 	historyResetThisFrame = false;
-	RequestHistoryReset();
+	if (a_requestHistoryReset)
+		RequestHistoryReset();
 	return dlssResourcesDestroyed;
 }
 
@@ -12125,10 +12158,18 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
+	const bool vrNativeOffRelatchParityTarget =
+		globals::game::isVR &&
+		!IsRenderScaleModeRequested() &&
+		!IsPresentationUpscalingActive();
+	const bool vrRenderScaleRelatchPending =
+		globals::game::isVR &&
+		(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		 perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire));
 	const bool vrNativeOffPL314ResourceParity =
 		globals::game::isVR &&
-		!IsVRRenderScaleModeActive() &&
-		!IsPresentationUpscalingActive();
+		vrNativeOffRelatchParityTarget &&
+		(!IsVRRenderScaleModeActive() || vrRenderScaleRelatchPending);
 	const uint32_t qualityModeCurrent = vrNativeOffPL314ResourceParity ?
 		ClampQualityModeUInt(settings.qualityMode) :
 		GetRuntimeQualityMode();
@@ -12203,8 +12244,8 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		perfModeChanged;
 	const bool vrRenderScaleRelatchOwnsResourceChange =
 		globals::game::isVR &&
-		(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
-		 perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire));
+		!vrNativeOffRelatchParityTarget &&
+		vrRenderScaleRelatchPending;
 	const bool resourceChangeOwnedByVRRenderScaleRelatch =
 		!frameGenModeChanged &&
 		!foveatedDispatchChanged &&
@@ -12467,6 +12508,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		static bool loggedVRCommonVendorRecreateDefer = false;
 		const bool deferForVRRenderScaleRelatch =
 			globals::game::isVR &&
+			!vrNativeOffRelatchParityTarget &&
 			IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod) &&
 			(pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 			 perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
@@ -12496,7 +12538,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			DestroyCommonUpscalingTextures();
 			CreateUpscalingTextureResources(a_upscalemethod);
 		} catch (const std::exception& e) {
-			if (globals::game::isVR && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
+			if (globals::game::isVR && !vrNativeOffRelatchParityTarget && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
 				if (MarkSubmitStageDeviceLostIfNeeded(e, "missing common texture recreation"))
 					return;
 
@@ -12510,7 +12552,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			}
 			throw;
 		} catch (...) {
-			if (globals::game::isVR && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
+			if (globals::game::isVR && !vrNativeOffRelatchParityTarget && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
 				if (MarkSubmitStageDeviceLostIfDeviceRemoved("missing common texture recreation"))
 					return;
 

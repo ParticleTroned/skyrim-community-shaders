@@ -744,7 +744,7 @@ public:
 
 	void ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
 	void PrepareFullResolutionPostProcessing();
-	bool ResetVRSubmitStageState(bool a_destroyDLSSResources = true);
+	bool ResetVRSubmitStageState(bool a_destroyDLSSResources = true, bool a_requestHistoryReset = true);
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;

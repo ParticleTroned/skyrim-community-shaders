@@ -434,7 +434,7 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, ID3D11RenderTargetView* pRenderTargetView, const FLOAT ColorRGBA[4])
 		{
 			FLOAT convertedColor[4] = {};
-			if (Upscaling::TryConvertVRMenuBoundaryClearColor(This, pRenderTargetView, ColorRGBA, convertedColor)) {
+			if (Upscaling::TryConvertVRMenuFaderClearColor(This, pRenderTargetView, ColorRGBA, convertedColor)) {
 				Upscaling::TraceVRTrackedRenderTargetClearOperation(This, pRenderTargetView, convertedColor);
 				func(This, pRenderTargetView, convertedColor);
 				return;

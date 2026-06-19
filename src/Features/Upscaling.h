@@ -494,11 +494,6 @@ public:
 		ID3D11RenderTargetView* a_target,
 		const float* a_color,
 		float (&a_convertedColor)[4]);
-	static bool TryConvertVRMenuBoundaryClearColor(
-		ID3D11DeviceContext* a_context,
-		ID3D11RenderTargetView* a_target,
-		const float* a_color,
-		float (&a_convertedColor)[4]);
 	static void TraceVRTrackedResourceUpdateOperation(
 		ID3D11DeviceContext* a_context,
 		ID3D11Resource* a_destination,

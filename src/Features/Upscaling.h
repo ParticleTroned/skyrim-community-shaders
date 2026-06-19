@@ -63,7 +63,6 @@ public:
 	enum class ResolutionOwner : uint8_t
 	{
 		Native,
-		VendorDynamicResolution,
 		VRRenderScaleMode,
 		PerfMode = VRRenderScaleMode  // Legacy alias for VRAPI/source compatibility.
 	};
@@ -71,7 +70,6 @@ public:
 	enum class UpscalingOutputTarget : uint8_t
 	{
 		Main,
-		Sharpener,
 		SubmitStageIntermediate
 	};
 

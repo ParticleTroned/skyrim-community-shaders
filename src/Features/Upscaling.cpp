@@ -10328,11 +10328,6 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		plan.finalOutputSize = plan.trueHMDDisplaySize;
 		plan.owner = ResolutionOwner::VRRenderScaleMode;
 		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
-	} else if (!globals::game::isVR && plan.vendorMethod && IsUpscalingActive()) {
-		plan.owner = ResolutionOwner::VendorDynamicResolution;
-		plan.outputTarget = plan.upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening() ?
-			UpscalingOutputTarget::Sharpener :
-			UpscalingOutputTarget::Main;
 	}
 
 	plan.foveatedActive = IsFoveatedVendorDispatchEnabled(plan.upscaleMethod);
@@ -16876,8 +16871,8 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	LogVRTransitionDiagnostics(*this);
 	auto screenSize = state->screenSize;
 
-	auto screenWidth = static_cast<int>(screenSize.x);
-	auto screenHeight = static_cast<int>(screenSize.y);
+	auto screenWidth = std::max(1, static_cast<int>(screenSize.x));
+	auto screenHeight = std::max(1, static_cast<int>(screenSize.y));
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
 	const bool vrRenderScaleMenuPreparationContext =
@@ -16939,22 +16934,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionState();
 		return;
 	}
-
-	if (globals::game::isVR && vendorUpscalingMethod) {
-		resolutionScale = { 1.0f, 1.0f };
-
-		auto phaseCount = GetJitterPhaseCount(screenWidth, screenWidth);
-		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
-
-		a_viewport->projectionPosScaleX = -jitter.x / screenWidth;
-		a_viewport->projectionPosScaleY = 2.0f * jitter.y / screenHeight;
-
-		PrepareFullResolutionPostProcessing();
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionState();
-		return;
-	}
-
 	if (vendorUpscalingMethod) {
 		float resolutionScaleBase = GetQualityModeResolutionScale(GetRuntimeQualityMode());
 
@@ -17048,14 +17027,13 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 
 	if (globals::game::isVR) {
 		SetDynamicResolutionEnabledForUpscaling(false);
-		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionLock = 1;
-		dynamicResolutionWidthRatio = 1.0f;
-		dynamicResolutionHeightRatio = 1.0f;
-		UpdateCameraData();
+		runtimeData.dynamicResolutionPreviousWidthRatio = dynamicResolutionWidthRatio;
+		runtimeData.dynamicResolutionPreviousHeightRatio = dynamicResolutionHeightRatio;
+		runtimeData.dynamicResolutionWidthRatio = resolutionScale.x;
+		runtimeData.dynamicResolutionHeightRatio = resolutionScale.y;
+		runtimeData.dynamicResolutionLock = 0;
+		dynamicResolutionWidthRatio = resolutionScale.x;
+		dynamicResolutionHeightRatio = resolutionScale.y;
 		return;
 	}
 
@@ -17489,10 +17467,6 @@ bool Upscaling::IsUpscalingActive() const
 	// selected method actually produces a downscale. If the renderer is
 	// currently running at 1:1 (no downscale), treat upscaling as inactive.
 	if (!IsVendorUpscalingMethod(method)) {
-		return false;
-	}
-
-	if (globals::game::isVR && !IsVRRenderScaleModeActive()) {
 		return false;
 	}
 
@@ -20521,7 +20495,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		fullResolutionMenuPresentation &&
 		upscaling.GetRuntimeQualityMode() == 0 &&
 		!loadingTransitionMenuPresentation;
-	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
 	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 
 	if (menuPresentationContext && !runNativeVendorAAInMenu && !presentationUpscalingActive) {
@@ -20545,23 +20518,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			upscaling.PrepareFullResolutionPostProcessing();
 		else
 			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
-		return;
-	}
-
-	if (vendorDynamicResolutionActive && !presentationUpscalingActive) {
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
-
-		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
-
-		upscaling.UpscaleDepth();
-
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		callOriginalMainPostProcessing();
-		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		return;
 	}
 
@@ -20628,17 +20584,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	const bool restoreDynamicResolution = vendorDynamicResolutionActive;
-	if (restoreDynamicResolution)
-		upscaling.PrepareFullResolutionPostProcessing();
-
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
 	callOriginalMainPostProcessing();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;
-
-	if (restoreDynamicResolution)
-		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 }
 
 void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)

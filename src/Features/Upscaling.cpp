@@ -8627,9 +8627,9 @@ bool Upscaling::TryConvertVRMenuFaderClearColor(
 	const bool renderScaleActive = upscaling.IsVRRenderScaleModeActive();
 	const bool presentationUpscaling = upscaling.IsPresentationUpscalingActive();
 	const bool vrMenuPresentation = IsVRMenuPresentationContextActive();
+	const auto* state = globals::state;
 	if (renderScaleActive ||
 		presentationUpscaling ||
-		plan.owner != ResolutionOwner::Native ||
 		!vrMenuPresentation) {
 		return false;
 	}
@@ -8648,9 +8648,8 @@ bool Upscaling::TryConvertVRMenuFaderClearColor(
 	a_convertedColor[2] = 0.0f;
 	a_convertedColor[3] = 0.0f;
 
-	const auto* state = globals::state;
 	VR_TRANSITION_DIAG_LOG(
-		"[VRFaderClearGuard] frame={} action=convert-to-transparent target={} original=({:.4f},{:.4f},{:.4f},{:.4f}) converted=({:.4f},{:.4f},{:.4f},{:.4f}) currentRTV={} stageSources={} owner={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
+		"[VRFaderClearGuard] frame={} action=convert-to-transparent target={} original=({:.4f},{:.4f},{:.4f},{:.4f}) converted=({:.4f},{:.4f},{:.4f},{:.4f}) currentRTV={} stageSources={} owner={} ownerAccepted=yes renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
 		state ? state->frameCount : 0,
 		FormatVRTrackedResourceMatch(target, BuildRTVDiagnosticInfo(a_target)),
 		a_color[0],

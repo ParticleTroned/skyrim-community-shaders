@@ -43,6 +43,9 @@
 #include "Utils/Game.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 
+#include <cstdint>
+#include <intrin.h>
+
 namespace globals
 {
 	namespace d3d
@@ -252,6 +255,13 @@ namespace globals
 		mappedFrameBuffer = nullptr;
 	}
 
+	uint32_t GetD3DHookCallerRva(void* a_returnAddress)
+	{
+		const auto moduleBase = REL::Module::get().base();
+		const auto caller = reinterpret_cast<std::uintptr_t>(a_returnAddress);
+		return caller >= moduleBase ? static_cast<uint32_t>(caller - moduleBase) : 0u;
+	}
+
 	/**
  * @brief Hooks the ID3D11DeviceContext::Map method to track mapping of the per-frame resource.
  *
@@ -293,9 +303,11 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			if (Upscaling::TraceVRTrackedDrawOperation(This, "DrawIndexed", 0, IndexCount, 0, 0, StartIndexLocation, BaseVertexLocation, 0))
 				return;
 			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
+			Upscaling::TraceVRBlackSquareProducerDrawAfterOperation(This, "DrawIndexed", callerRva, 0, IndexCount, 0, 0, StartIndexLocation, BaseVertexLocation, 0);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -304,9 +316,11 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			if (Upscaling::TraceVRTrackedDrawOperation(This, "Draw", VertexCount, 0, 0, StartVertexLocation, 0, 0, 0))
 				return;
 			func(This, VertexCount, StartVertexLocation);
+			Upscaling::TraceVRBlackSquareProducerDrawAfterOperation(This, "Draw", callerRva, VertexCount, 0, 0, StartVertexLocation, 0, 0, 0);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -321,6 +335,7 @@ namespace globals
 			INT BaseVertexLocation,
 			UINT StartInstanceLocation)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			if (Upscaling::TraceVRTrackedDrawOperation(
 				This,
 				"DrawIndexedInstanced",
@@ -334,6 +349,17 @@ namespace globals
 				return;
 			}
 			func(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
+			Upscaling::TraceVRBlackSquareProducerDrawAfterOperation(
+				This,
+				"DrawIndexedInstanced",
+				callerRva,
+				0,
+				IndexCountPerInstance,
+				InstanceCount,
+				0,
+				StartIndexLocation,
+				BaseVertexLocation,
+				StartInstanceLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -342,6 +368,7 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			if (Upscaling::TraceVRTrackedDrawOperation(
 				This,
 				"DrawInstanced",
@@ -355,6 +382,17 @@ namespace globals
 				return;
 			}
 			func(This, VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
+			Upscaling::TraceVRBlackSquareProducerDrawAfterOperation(
+				This,
+				"DrawInstanced",
+				callerRva,
+				VertexCountPerInstance,
+				0,
+				InstanceCount,
+				StartVertexLocation,
+				0,
+				0,
+				StartInstanceLocation);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -372,6 +410,7 @@ namespace globals
 			UINT SrcSubresource,
 			const D3D11_BOX* pSrcBox)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			Upscaling::TraceVRTrackedResourceCopyOperation(
 				This,
 				"CopySubresourceRegion",
@@ -384,6 +423,18 @@ namespace globals
 				SrcSubresource,
 				pSrcBox);
 			func(This, pDstResource, DstSubresource, DstX, DstY, DstZ, pSrcResource, SrcSubresource, pSrcBox);
+			Upscaling::TraceVRBlackSquareProducerCopyAfterOperation(
+				This,
+				"CopySubresourceRegion",
+				callerRva,
+				pDstResource,
+				DstSubresource,
+				DstX,
+				DstY,
+				DstZ,
+				pSrcResource,
+				SrcSubresource,
+				pSrcBox);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -392,6 +443,7 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pDstResource, ID3D11Resource* pSrcResource)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			Upscaling::TraceVRTrackedResourceCopyOperation(
 				This,
 				"CopyResource",
@@ -404,6 +456,18 @@ namespace globals
 				0,
 				nullptr);
 			func(This, pDstResource, pSrcResource);
+			Upscaling::TraceVRBlackSquareProducerCopyAfterOperation(
+				This,
+				"CopyResource",
+				callerRva,
+				pDstResource,
+				0,
+				0,
+				0,
+				0,
+				pSrcResource,
+				0,
+				nullptr);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -419,12 +483,14 @@ namespace globals
 			UINT SrcRowPitch,
 			UINT SrcDepthPitch)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			Upscaling::TraceVRTrackedResourceUpdateOperation(
 				This,
 				pDstResource,
 				DstSubresource,
 				pDstBox);
 			func(This, pDstResource, DstSubresource, pDstBox, pSrcData, SrcRowPitch, SrcDepthPitch);
+			Upscaling::TraceVRBlackSquareProducerUpdateAfterOperation(This, callerRva, pDstResource, DstSubresource, pDstBox);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -433,8 +499,10 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11RenderTargetView* pRenderTargetView, const FLOAT ColorRGBA[4])
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			Upscaling::TraceVRTrackedRenderTargetClearOperation(This, pRenderTargetView, ColorRGBA);
 			func(This, pRenderTargetView, ColorRGBA);
+			Upscaling::TraceVRBlackSquareProducerClearAfterOperation(This, callerRva, pRenderTargetView, ColorRGBA);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -443,6 +511,7 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11UnorderedAccessView* pUnorderedAccessView, const UINT Values[4])
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			ID3D11Resource* resource = nullptr;
 			if (pUnorderedAccessView)
 				pUnorderedAccessView->GetResource(&resource);
@@ -459,10 +528,23 @@ namespace globals
 				0,
 				nullptr);
 
-			if (resource)
-				resource->Release();
-
 			func(This, pUnorderedAccessView, Values);
+
+			if (resource) {
+				Upscaling::TraceVRBlackSquareProducerCopyAfterOperation(
+					This,
+					"ClearUnorderedAccessViewUint",
+					callerRva,
+					resource,
+					0,
+					0,
+					0,
+					0,
+					nullptr,
+					0,
+					nullptr);
+				resource->Release();
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -471,6 +553,7 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11UnorderedAccessView* pUnorderedAccessView, const FLOAT Values[4])
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			ID3D11Resource* resource = nullptr;
 			if (pUnorderedAccessView)
 				pUnorderedAccessView->GetResource(&resource);
@@ -487,10 +570,23 @@ namespace globals
 				0,
 				nullptr);
 
-			if (resource)
-				resource->Release();
-
 			func(This, pUnorderedAccessView, Values);
+
+			if (resource) {
+				Upscaling::TraceVRBlackSquareProducerCopyAfterOperation(
+					This,
+					"ClearUnorderedAccessViewFloat",
+					callerRva,
+					resource,
+					0,
+					0,
+					0,
+					0,
+					nullptr,
+					0,
+					nullptr);
+				resource->Release();
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -505,6 +601,7 @@ namespace globals
 			UINT SrcSubresource,
 			DXGI_FORMAT Format)
 		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
 			Upscaling::TraceVRTrackedResourceResolveOperation(
 				This,
 				pDstResource,
@@ -513,6 +610,14 @@ namespace globals
 				SrcSubresource,
 				Format);
 			func(This, pDstResource, DstSubresource, pSrcResource, SrcSubresource, Format);
+			Upscaling::TraceVRBlackSquareProducerResolveAfterOperation(
+				This,
+				callerRva,
+				pDstResource,
+				DstSubresource,
+				pSrcResource,
+				SrcSubresource,
+				Format);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

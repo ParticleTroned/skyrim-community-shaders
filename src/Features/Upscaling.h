@@ -501,9 +501,51 @@ public:
 		ID3D11Resource* a_source,
 		UINT a_sourceSubresource,
 		DXGI_FORMAT a_format);
+	static void TraceVRBlackSquareProducerCopyAfterOperation(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		uint32_t a_callerRva,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		UINT a_destinationX,
+		UINT a_destinationY,
+		UINT a_destinationZ,
+		ID3D11Resource* a_source,
+		UINT a_sourceSubresource,
+		const D3D11_BOX* a_sourceBox);
+	static void TraceVRBlackSquareProducerClearAfterOperation(
+		ID3D11DeviceContext* a_context,
+		uint32_t a_callerRva,
+		ID3D11RenderTargetView* a_target,
+		const float* a_color);
+	static void TraceVRBlackSquareProducerUpdateAfterOperation(
+		ID3D11DeviceContext* a_context,
+		uint32_t a_callerRva,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		const D3D11_BOX* a_destinationBox);
+	static void TraceVRBlackSquareProducerResolveAfterOperation(
+		ID3D11DeviceContext* a_context,
+		uint32_t a_callerRva,
+		ID3D11Resource* a_destination,
+		UINT a_destinationSubresource,
+		ID3D11Resource* a_source,
+		UINT a_sourceSubresource,
+		DXGI_FORMAT a_format);
 	static bool TraceVRTrackedDrawOperation(
 		ID3D11DeviceContext* a_context,
 		const char* a_operation,
+		UINT a_vertexCount,
+		UINT a_indexCount,
+		UINT a_instanceCount,
+		UINT a_startVertexLocation,
+		UINT a_startIndexLocation,
+		INT a_baseVertexLocation,
+		UINT a_startInstanceLocation);
+	static void TraceVRBlackSquareProducerDrawAfterOperation(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		uint32_t a_callerRva,
 		UINT a_vertexCount,
 		UINT a_indexCount,
 		UINT a_instanceCount,

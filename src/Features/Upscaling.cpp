@@ -1431,13 +1431,15 @@ namespace
 			texture->Release();
 		});
 
-		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 9> targets{
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 11> targets{
 			RE::RENDER_TARGETS::kTOTAL,
 			RE::RENDER_TARGETS::kMAIN,
 			RE::RENDER_TARGETS::kMENUBG,
 			RE::RENDER_TARGETS::kPROJECTEDMENU,
 			RE::RENDER_TARGETS::kHUDMENU,
 			RE::RENDER_TARGETS::kWORLDUI0,
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
 			RE::RENDER_TARGETS::kFADERUI,
 			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
 			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
@@ -1863,6 +1865,9 @@ namespace
 	constexpr uint32_t kVRBlackSquareSplitDiagnosticMaxLogsPerFrame = 32u;
 	std::atomic<uint32_t> g_vrBlackSquareSplitDiagnosticFrame{ 0 };
 	std::atomic<uint32_t> g_vrBlackSquareSplitDiagnosticCount{ 0 };
+	constexpr uint32_t kVRBlackSquareProducerDiagnosticMaxLogsPerFrame = 12u;
+	std::atomic<uint32_t> g_vrBlackSquareProducerDiagnosticFrame{ 0 };
+	std::atomic<uint32_t> g_vrBlackSquareProducerDiagnosticCount{ 0 };
 	std::atomic<uint32_t> g_vrCopyDynamicFetchDisabledRenderEntryFrame{ 0 };
 
 	void ArmVRMenuUiWriterDiagnosticsForMenuDraw()
@@ -5838,12 +5843,14 @@ namespace
 			texture->Release();
 		});
 
-		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 8> targets{
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 10> targets{
 			RE::RENDER_TARGETS::kTOTAL,
 			RE::RENDER_TARGETS::kMAIN,
 			RE::RENDER_TARGETS::kMENUBG,
 			RE::RENDER_TARGETS::kPROJECTEDMENU,
 			RE::RENDER_TARGETS::kHUDMENU,
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
 			RE::RENDER_TARGETS::kFADERUI,
 			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
 			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
@@ -6167,6 +6174,15 @@ namespace
 			g_vrBlackSquareSplitDiagnosticFrame,
 			g_vrBlackSquareSplitDiagnosticCount,
 			kVRBlackSquareSplitDiagnosticMaxLogsPerFrame);
+	}
+
+	bool ClaimVRBlackSquareProducerDiagnosticSlot(uint32_t a_frame)
+	{
+		return ClaimFrameDiagnosticSlot(
+			a_frame,
+			g_vrBlackSquareProducerDiagnosticFrame,
+			g_vrBlackSquareProducerDiagnosticCount,
+			kVRBlackSquareProducerDiagnosticMaxLogsPerFrame);
 	}
 
 	std::string BuildVRTrackedDrawEyeMapping(
@@ -7291,6 +7307,105 @@ namespace
 				a_snapshot.finalWidth,
 				a_snapshot.finalHeight);
 		}
+	}
+
+	bool ShouldRunVRBlackSquareProducerDiagnostics(ID3D11DeviceContext* a_context)
+	{
+		if (!ShouldRunVRPresentationDiagnostics() || !globals::game::isVR || !a_context || !globals::state)
+			return false;
+		if (IsCommunityShadersMenuOpen())
+			return false;
+
+		return IsKnownGameMenuContextActive() ||
+		       IsGameMenuContextActive() ||
+		       IsLoadingMenuContextActive() ||
+		       IsSaveLoadTransitionContextActive(globals::state) ||
+		       IsVRMenuPresentationContextActive();
+	}
+
+	void LogVRBlackSquareProducerAfterWrite(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		uint32_t a_callerRva,
+		const std::string& a_destination,
+		const std::string& a_writeDetail,
+		const std::string& a_blend,
+		const std::string& a_viewports,
+		const std::string& a_scissors)
+	{
+		if (!ShouldRunVRBlackSquareProducerDiagnostics(a_context))
+			return;
+
+		const auto* state = globals::state;
+		const uint32_t frame = state ? state->frameCount : 0;
+
+		VRBlackSquareTargetStats stats{};
+		(void)CaptureVRBlackSquareTargetStats(a_context, RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY, stats);
+		if (!stats.topLeft.valid || stats.topLeft.darkRatio < 0.75f)
+			return;
+		if (!ClaimVRBlackSquareProducerDiagnosticSlot(frame))
+			return;
+
+		const auto& upscaling = globals::features::upscaling;
+		const auto& plan = upscaling.GetRuntimeResolutionPlan();
+		const bool knownMenu = IsKnownGameMenuContextActive();
+		const bool gameMenu = IsGameMenuContextActive();
+		const bool loading = IsLoadingMenuContextActive();
+		const bool saveLoad = IsSaveLoadTransitionContextActive(state);
+		const bool vrMenuPresentation = IsVRMenuPresentationContextActive();
+		const char* passName = ResolveVRTrackedResourceOperationPassName("ID3D11DeviceContext");
+		const char* phaseName = ResolveVRTrackedResourceOperationPhase("after");
+		const auto alphaSupport = GetVRMenuFormatAlphaSupport(stats.format);
+
+		logger::debug(
+			"[VRBlackSquareProducer] frame={} op={} pass={} phase={} callerRva={} dst={} write={} targetDesc={}x{} fmt={} samples={} alpha=tex:{} topLeft={} control={} currentRTV={} stageSources={} blend={} viewports={} scissors={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} loading={} saveLoad={} vrMenuPresentation={} owner={} method={} quality={} screen={}x{} engine={}x{} final={}x{}",
+			frame,
+			DiagnosticText(a_operation, "unknown"),
+			DiagnosticText(passName, "unknown"),
+			DiagnosticText(phaseName, "unknown"),
+			FormatVRMenuDiagnosticHex(a_callerRva),
+			a_destination,
+			a_writeDetail,
+			stats.width,
+			stats.height,
+			static_cast<uint32_t>(stats.format),
+			stats.samples,
+			GetVRMenuFormatAlphaSupportText(alphaSupport),
+			FormatVRBlackSquareRegionStats(stats.topLeft),
+			FormatVRBlackSquareRegionStats(stats.control),
+			BuildVRTrackedResourceCurrentRTVSummary(a_context),
+			BuildVRTrackedResourceStageSourceSummary(a_context),
+			a_blend,
+			a_viewports,
+			a_scissors,
+			BoolText(upscaling.IsVRRenderScaleModeActive()),
+			BoolText(upscaling.IsPresentationUpscalingActive()),
+			BoolText(knownMenu),
+			BoolText(gameMenu),
+			BoolText(loading),
+			BoolText(saveLoad),
+			BoolText(vrMenuPresentation),
+			magic_enum::enum_name(plan.owner),
+			magic_enum::enum_name(upscaling.GetRuntimeUpscaleMethod()),
+			upscaling.GetRuntimeQualityMode(),
+			state ? state->screenSize.x : 0.0f,
+			state ? state->screenSize.y : 0.0f,
+			plan.engineRenderSize.x,
+			plan.engineRenderSize.y,
+			plan.finalOutputSize.x,
+			plan.finalOutputSize.y);
+	}
+
+	bool TryResolveVRBlackSquareProducerResource(ID3D11Resource* a_resource, VRMenuCompositionTargetMatch& a_destination)
+	{
+		return TryResolveVRMenuCompositionResource(a_resource, a_destination) &&
+		       a_destination.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY;
+	}
+
+	bool TryResolveVRBlackSquareProducerView(ID3D11RenderTargetView* a_view, VRMenuCompositionTargetMatch& a_destination)
+	{
+		return TryResolveVRMenuCompositionView(a_view, a_destination) &&
+		       a_destination.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY;
 	}
 
 	bool CaptureVRTrackedTargetFingerprint(
@@ -9011,6 +9126,128 @@ void Upscaling::TraceVRTrackedResourceResolveOperation(
 		nullptr);
 }
 
+void Upscaling::TraceVRBlackSquareProducerCopyAfterOperation(
+	ID3D11DeviceContext* a_context,
+	const char* a_operation,
+	uint32_t a_callerRva,
+	ID3D11Resource* a_destination,
+	UINT a_destinationSubresource,
+	UINT a_destinationX,
+	UINT a_destinationY,
+	UINT a_destinationZ,
+	ID3D11Resource* a_source,
+	UINT a_sourceSubresource,
+	const D3D11_BOX* a_sourceBox)
+{
+	if (!ShouldRunVRBlackSquareProducerDiagnostics(a_context))
+		return;
+
+	VRMenuCompositionTargetMatch destination{};
+	if (!TryResolveVRBlackSquareProducerResource(a_destination, destination))
+		return;
+
+	VRMenuCompositionTargetMatch source{};
+	(void)TryResolveVRMenuCompositionResource(a_source, source);
+	const auto destinationInfo = BuildResourceDiagnosticInfo(a_destination);
+	const auto sourceInfo = BuildResourceDiagnosticInfo(a_source);
+	const auto writeDetail = std::format(
+		"dstSub={} dstOffset=({}, {}, {}) srcSub={} box={} src={}",
+		a_destinationSubresource,
+		a_destinationX,
+		a_destinationY,
+		a_destinationZ,
+		a_sourceSubresource,
+		FormatVRTrackedSourceBox(a_sourceBox),
+		FormatVRTrackedResourceMatch(source, sourceInfo));
+
+	LogVRBlackSquareProducerAfterWrite(
+		a_context,
+		a_operation,
+		a_callerRva,
+		FormatVRTrackedResourceMatch(destination, destinationInfo),
+		writeDetail,
+		"-",
+		"-",
+		"-");
+}
+
+void Upscaling::TraceVRBlackSquareProducerClearAfterOperation(
+	ID3D11DeviceContext* a_context,
+	uint32_t a_callerRva,
+	ID3D11RenderTargetView* a_target,
+	const float* a_color)
+{
+	if (!ShouldRunVRBlackSquareProducerDiagnostics(a_context))
+		return;
+
+	VRMenuCompositionTargetMatch destination{};
+	if (!TryResolveVRBlackSquareProducerView(a_target, destination))
+		return;
+
+	const auto targetInfo = BuildRTVDiagnosticInfo(a_target);
+	const auto writeDetail = std::format(
+		"color=({:.4f},{:.4f},{:.4f},{:.4f})",
+		a_color ? a_color[0] : 0.0f,
+		a_color ? a_color[1] : 0.0f,
+		a_color ? a_color[2] : 0.0f,
+		a_color ? a_color[3] : 0.0f);
+
+	LogVRBlackSquareProducerAfterWrite(
+		a_context,
+		"ClearRenderTargetView",
+		a_callerRva,
+		FormatVRTrackedResourceMatch(destination, targetInfo),
+		writeDetail,
+		"-",
+		"-",
+		"-");
+}
+
+void Upscaling::TraceVRBlackSquareProducerUpdateAfterOperation(
+	ID3D11DeviceContext* a_context,
+	uint32_t a_callerRva,
+	ID3D11Resource* a_destination,
+	UINT a_destinationSubresource,
+	const D3D11_BOX* a_destinationBox)
+{
+	TraceVRBlackSquareProducerCopyAfterOperation(
+		a_context,
+		"UpdateSubresource",
+		a_callerRva,
+		a_destination,
+		a_destinationSubresource,
+		a_destinationBox ? a_destinationBox->left : 0,
+		a_destinationBox ? a_destinationBox->top : 0,
+		a_destinationBox ? a_destinationBox->front : 0,
+		nullptr,
+		0,
+		a_destinationBox);
+}
+
+void Upscaling::TraceVRBlackSquareProducerResolveAfterOperation(
+	ID3D11DeviceContext* a_context,
+	uint32_t a_callerRva,
+	ID3D11Resource* a_destination,
+	UINT a_destinationSubresource,
+	ID3D11Resource* a_source,
+	UINT a_sourceSubresource,
+	DXGI_FORMAT a_format)
+{
+	const auto operation = std::format("ResolveSubresource(fmt={})", static_cast<uint32_t>(a_format));
+	TraceVRBlackSquareProducerCopyAfterOperation(
+		a_context,
+		operation.c_str(),
+		a_callerRva,
+		a_destination,
+		a_destinationSubresource,
+		0,
+		0,
+		0,
+		a_source,
+		a_sourceSubresource,
+		nullptr);
+}
+
 bool Upscaling::TraceVRTrackedDrawOperation(
 	ID3D11DeviceContext* a_context,
 	const char* a_operation,
@@ -9050,6 +9287,62 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 		a_baseVertexLocation,
 		a_startInstanceLocation);
 	return false;
+}
+
+void Upscaling::TraceVRBlackSquareProducerDrawAfterOperation(
+	ID3D11DeviceContext* a_context,
+	const char* a_operation,
+	uint32_t a_callerRva,
+	UINT a_vertexCount,
+	UINT a_indexCount,
+	UINT a_instanceCount,
+	UINT a_startVertexLocation,
+	UINT a_startIndexLocation,
+	INT a_baseVertexLocation,
+	UINT a_startInstanceLocation)
+{
+	if (!ShouldRunVRBlackSquareProducerDiagnostics(a_context))
+		return;
+
+	ID3D11RenderTargetView* rtv = nullptr;
+	a_context->OMGetRenderTargets(1, &rtv, nullptr);
+	auto rtvRelease = ScopeExit([&]() {
+		if (rtv)
+			rtv->Release();
+	});
+	if (!rtv)
+		return;
+
+	VRMenuCompositionTargetMatch destination{};
+	if (!TryResolveVRBlackSquareProducerView(rtv, destination))
+		return;
+
+	const auto targetInfo = BuildRTVDiagnosticInfo(rtv);
+	uint64_t signature = 1469598103934665603ull;
+	bool blendReferencesSourceAlpha = false;
+	const auto blendState = BuildVRMenuUiWriterBlendDiagnostics(a_context, blendReferencesSourceAlpha, signature);
+	const auto blend = std::format("sourceAlpha={} {}", BoolText(blendReferencesSourceAlpha), blendState);
+	const auto viewports = BuildVRMenuOriginalCompositeViewportDiagnostics(a_context, signature);
+	const auto scissors = BuildVRMenuOriginalCompositeScissorDiagnostics(a_context, signature);
+	const auto writeDetail = std::format(
+		"draw=vertices:{} indices:{} instances:{} startVertex:{} startIndex:{} baseVertex:{} startInstance:{}",
+		a_vertexCount,
+		a_indexCount,
+		a_instanceCount,
+		a_startVertexLocation,
+		a_startIndexLocation,
+		a_baseVertexLocation,
+		a_startInstanceLocation);
+
+	LogVRBlackSquareProducerAfterWrite(
+		a_context,
+		a_operation,
+		a_callerRva,
+		FormatVRTrackedResourceMatch(destination, targetInfo),
+		writeDetail,
+		blend,
+		viewports,
+		scissors);
 }
 
 /**

@@ -8324,17 +8324,22 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 
 	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> previousRTVs{};
 	ID3D11DepthStencilView* previousDSV = nullptr;
+	ID3D11BlendState* previousBlendState = nullptr;
+	FLOAT previousBlendFactor[4] = {};
+	UINT previousSampleMask = 0;
 	std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousViewports{};
 	UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 	std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousScissors{};
 	UINT previousScissorCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 
 	a_context->OMGetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), &previousDSV);
+	a_context->OMGetBlendState(&previousBlendState, previousBlendFactor, &previousSampleMask);
 	a_context->RSGetViewports(&previousViewportCount, previousViewports.data());
 	a_context->RSGetScissorRects(&previousScissorCount, previousScissors.data());
 
 	auto restoreState = ScopeExit([&]() {
 		a_context->OMSetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), previousDSV);
+		a_context->OMSetBlendState(previousBlendState, previousBlendFactor, previousSampleMask);
 		a_context->RSSetViewports(previousViewportCount, previousViewportCount ? previousViewports.data() : nullptr);
 		a_context->RSSetScissorRects(previousScissorCount, previousScissorCount ? previousScissors.data() : nullptr);
 
@@ -8344,9 +8349,11 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 		}
 		if (previousDSV)
 			previousDSV->Release();
+		if (previousBlendState)
+			previousBlendState->Release();
 		vrMenuParallelBridgeDrawInProgress = false;
 	});
-	if (!previousViewportCount)
+	if (!previousViewportCount || !vrMenuLayerCaptureBlendState)
 		return false;
 
 	const float scaleX = static_cast<float>(a_finalWidth) / static_cast<float>(a_renderWidth);
@@ -8369,6 +8376,7 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 
 	ID3D11RenderTargetView* layerRTV = vrMenuFinalCompositeLayer->rtv.get();
 	a_context->OMSetRenderTargets(1, &layerRTV, nullptr);
+	a_context->OMSetBlendState(vrMenuLayerCaptureBlendState.get(), previousBlendFactor, previousSampleMask);
 	a_context->RSSetViewports(previousViewportCount, finalViewports.data());
 	a_context->RSSetScissorRects(previousScissorCount, previousScissorCount ? finalScissors.data() : nullptr);
 
@@ -8379,7 +8387,7 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 
 	if (ClaimVRMenuBridgeDiagnosticSlot(a_frame)) {
 		VR_TRANSITION_DIAG_LOG(
-			"[VRMenuBridgeLiveLayer] drew live bridge into final layer frame={} source={} slot={} layer={}x{} fmt={} draw=indices:{} instances:{} viewportScale={:.4f},{:.4f} layerDraws={}",
+			"[VRMenuBridgeLiveLayer] drew live bridge into final layer frame={} source={} slot={} layer={}x{} fmt={} draw=indices:{} instances:{} viewportScale={:.4f},{:.4f} layerDraws={} captureAlpha=preserved",
 			a_frame,
 			GetVRMenuCompositionTargetName(a_sourceTarget),
 			a_sourceSlot,
@@ -17413,6 +17421,10 @@ void Upscaling::SetupResources()
 	menuBlendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	menuBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 	DX::ThrowIfFailed(device->CreateBlendState(&menuBlendDesc, vrMenuCompositeBlendState.put()));
+
+	D3D11_BLEND_DESC menuLayerCaptureBlendDesc = menuBlendDesc;
+	menuLayerCaptureBlendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+	DX::ThrowIfFailed(device->CreateBlendState(&menuLayerCaptureBlendDesc, vrMenuLayerCaptureBlendState.put()));
 
 	// Create rasterizer state for fullscreen rendering
 	D3D11_RASTERIZER_DESC rasterizerDesc = {};

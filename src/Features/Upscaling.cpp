@@ -265,12 +265,14 @@ namespace
 		if (!globals::game::isVR)
 			return false;
 
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
+			return false;
+
 		const auto* state = globals::state;
 		return a_upscaling.IsVRRenderScaleModeActive() ||
 		       a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
 		       a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-		       IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) ||
 		       IsSaveLoadTransitionContextActive(state) ||
 		       IsVRLoadingPresentationContextActive(state);
 	}
@@ -866,17 +868,17 @@ namespace
 		return REL::Module::IsVR() && IsVendorUpscalingMethod(a_upscaleMethod);
 	}
 
-	bool IsSubmitStagePathEligible(Upscaling::UpscaleMethod a_upscaleMethod)
+	bool IsVRRenderScaleSubmitPathEligible(Upscaling::UpscaleMethod a_upscaleMethod)
 	{
 		if (!IsRenderScaleMethodEligible(a_upscaleMethod))
 			return false;
 
-		return IsRenderScaleQualityMode(globals::features::upscaling.settings.qualityMode);
+		return IsRenderScaleQualityMode(globals::features::upscaling.GetEffectiveUpscalingQualityMode());
 	}
 
 	bool ShouldDelayVRRenderScaleForPendingDLSS(const Upscaling& a_upscaling);
 
-	bool IsSubmitStagePathEnabled()
+	bool IsVRRenderScaleSubmitPathEnabled()
 	{
 		auto& upscaling = globals::features::upscaling;
 		if (upscaling.IsSubmitStageDeviceLost())
@@ -889,7 +891,7 @@ namespace
 		if (!upscaling.IsRenderScaleModeRequested())
 			return false;
 
-		if (!IsSubmitStagePathEligible(upscaleMethod))
+		if (!IsVRRenderScaleSubmitPathEligible(upscaleMethod))
 			return false;
 
 		return true;
@@ -3411,8 +3413,9 @@ namespace
 
 	bool IsVRTransitionPresentationProtectionActive(const Upscaling& a_upscaling, const State* a_state)
 	{
-		return IsVRRenderScalePostLoadResetRelevant(a_upscaling) ||
-		       IsSaveLoadTransitionContextActive(a_state);
+		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) &&
+		       (IsVRRenderScalePostLoadResetRelevant(a_upscaling) ||
+		        IsSaveLoadTransitionContextActive(a_state));
 	}
 
 	bool IsVRLoadingPresentationTailActive(const State* a_state)
@@ -9016,19 +9019,11 @@ void Upscaling::DrawSettings()
 		const bool vrRenderScaleRequested = GetPerfModeRequested();
 		if (!renderScaleToggleRequested && !vrRenderScaleActive)
 			submitStageRuntimeActive.store(false, std::memory_order_relaxed);
-		const auto renderScaleUiState = BuildScenePausedUiState(
-			renderScaleMethodEligible,
-			vrRenderScaleRequested,
-			vrRenderScaleActive,
-			submitStageRuntimeActive.load(std::memory_order_relaxed) || vrRenderScaleActive,
-			IsGameMenuContextActive());
 		const bool perfModeRelatchPending = pendingPerfModeRenderTargetRecreate.load(std::memory_order_relaxed);
 		const bool publicRenderScaleRequested = vrRenderScaleRequested;
 		const bool publicRenderScaleCanEdit =
 			(renderScaleMethodEligible && renderScaleQualitySelected) ||
 			publicRenderScaleRequested;
-		const bool showSubmitPathDeveloperToggle = globals::state && globals::state->IsDeveloperMode();
-
 		ImGui::Separator();
 		if (!ImGui::TreeNodeEx("Render Pipeline", ImGuiTreeNodeFlags_DefaultOpen))
 			return;
@@ -9060,37 +9055,6 @@ void Upscaling::DrawSettings()
 			ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and VR Render Scale Mode to the cell you loaded into.");
 			ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
 			ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
-		}
-
-		if (showSubmitPathDeveloperToggle) {
-			const bool submitPathRequested = renderScaleToggleRequested && !vrRenderScaleRequested;
-			const bool submitPathCanEdit =
-				(renderScaleMethodEligible || submitPathRequested) &&
-				!publicRenderScaleRequested &&
-				!perfModeRelatchPending;
-			const char* submitPathModes[] = { "Disabled", "Enabled" };
-			int submitPathMode = submitPathRequested ? 1 : 0;
-			{
-				auto disabledGuard = Util::DisableGuard(!submitPathCanEdit);
-				if (ImGui::SliderInt("Legacy Submit-Stage Only", &submitPathMode, 0, 1, submitPathModes[std::clamp(submitPathMode, 0, 1)])) {
-					const bool enableSubmitPath = std::clamp(submitPathMode, 0, 1) != 0;
-					const uint32_t targetQualityMode = renderScaleQualitySelected ? renderScaleQualityMode : kDefaultRenderScaleQualityMode;
-					if (GetEffectiveUpscalingQualityMode() != targetQualityMode)
-						QueueVRUpscalingQualityMode(targetQualityMode);
-					if (IsRenderScaleModeRequested() != enableSubmitPath)
-						QueueVRRenderScaleModeRequest(enableSubmitPath);
-					if (GetPerfModeRequested())
-						QueueVRPerfModeRequest(false);
-					RequestHistoryReset();
-				}
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Developer diagnostic only.");
-				ImGui::TextUnformatted("Tests submit-stage upscaling without the VR Render Scale Mode render-target relatch.");
-				ImGui::TextUnformatted("Use VR Render Scale Mode for the normal path.");
-			}
-			if (renderScaleUiState.pausedInMenu)
-				ImGui::TextDisabled("Legacy submit-stage upscaling was active in scene and is paused while this menu is open.");
 		}
 
 		if (perfMode.HasRestartRequiredChange())
@@ -10092,16 +10056,9 @@ void Upscaling::LoadSettings(json& o_json)
 	const Settings previousSettings = settings;
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
 	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
-	const bool hasLegacySubmitStageUpscalingSetting = o_json.contains("submitStageUpscaling");
 	const bool hasLegacyPerfModeSetting = o_json.contains("perfMode");
 	settings = o_json;
-	if (!hasRenderScaleModeSetting && hasLegacySubmitStageUpscalingSetting) {
-		try {
-			settings.renderScaleMode = o_json.at("submitStageUpscaling").get<uint>();
-		} catch (...) {
-			logger::warn("[Upscaling] Loaded legacy submitStageUpscaling setting could not be migrated; using VR Render Scale Mode default.");
-		}
-	} else if (!hasRenderScaleModeSetting && hasLegacyPerfModeSetting) {
+	if (!hasRenderScaleModeSetting && hasLegacyPerfModeSetting) {
 		try {
 			settings.renderScaleMode = o_json.at("perfMode").get<uint>();
 		} catch (...) {
@@ -10637,7 +10594,6 @@ Upscaling::VRRenderScaleStatus Upscaling::GetVRRenderScaleModeStatus() const
 		return VRRenderScaleStatus::Disabled;
 
 	const bool renderScaleToggleRequested = GetVRRenderScaleModeRequested();
-	const bool vrRenderScaleRequested = GetPerfModeRequested();
 	const bool active = IsPerfModeActive();
 	const bool relatchPending =
 		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
@@ -10664,9 +10620,6 @@ Upscaling::VRRenderScaleStatus Upscaling::GetVRRenderScaleModeStatus() const
 	if (!IsRenderScaleQualityMode(GetEffectiveUpscalingQualityMode()))
 		return VRRenderScaleStatus::NativeQuality;
 
-	if (!vrRenderScaleRequested)
-		return VRRenderScaleStatus::SubmitStageOnly;
-
 	return VRRenderScaleStatus::PendingRelatch;
 }
 
@@ -10681,8 +10634,6 @@ const char* Upscaling::GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_stat
 		return "Native quality";
 	case VRRenderScaleStatus::RuntimeBlocked:
 		return "Runtime blocked";
-	case VRRenderScaleStatus::SubmitStageOnly:
-		return "Legacy submit-stage only";
 	case VRRenderScaleStatus::PendingRelatch:
 		return "Pending relatch";
 	case VRRenderScaleStatus::Active:
@@ -17143,16 +17094,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		RefreshRuntimeResolutionState();
 		return;
 	}
-	if (globals::game::isVR && vendorUpscalingMethod && IsVRMenuPresentationContextActive()) {
-		resolutionScale = { 1.0f, 1.0f };
-		jitter = { 0.0f, 0.0f };
-		a_viewport->projectionPosScaleX = 0.0f;
-		a_viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionState();
-		return;
-	}
 	if (globals::game::isVR &&
 		vendorUpscalingMethod &&
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
@@ -17568,7 +17509,11 @@ void Upscaling::PostDisplay()
 	viewport->projectionPosScaleX = projectionPosScaleX;
 	viewport->projectionPosScaleY = projectionPosScaleY;
 
-	const bool vrVendorMenu = globals::game::isVR && IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) && IsVRMenuPresentationContextActive();
+	const bool vrVendorMenu =
+		globals::game::isVR &&
+		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) &&
+		IsVRMenuPresentationContextActive() &&
+		IsVRRenderScaleTransitionSafetyRelevant(*this);
 	if (vrVendorMenu) {
 		viewport->projectionPosScaleX = 0.0f;
 		viewport->projectionPosScaleY = 0.0f;
@@ -21179,9 +21124,13 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
 	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
+	const bool renderScalePresentationProtection =
+		globals::game::isVR &&
+		IsVRTransitionPresentationProtectionActive(upscaling, globals::state);
 	const bool menuPresentationContext =
 		vendorMethodSelected &&
 		globals::game::isVR &&
+		(upscaling.IsVRRenderScaleModeActive() || renderScalePresentationProtection) &&
 		(vrScenePresentationBlockActive || loadingTransitionTailActive);
 	const bool fullResolutionMenuPresentation = menuPresentationContext;
 	const bool loadingTransitionMenuPresentation =
@@ -21198,7 +21147,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::game::isVR &&
 		!menuPresentationContext &&
 		!upscaling.IsPerfModeActive() &&
-		!IsSubmitStagePathEnabled();
+		!IsVRRenderScaleSubmitPathEnabled();
 	if (submitPathDisabledForVendor) {
 		if (upscaling.ShouldUseFrameGenerationThisFrame())
 			upscaling.CopySharedD3D12Resources();

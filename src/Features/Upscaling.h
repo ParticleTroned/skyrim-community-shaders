@@ -81,7 +81,6 @@ public:
 		IneligibleMethod,
 		NativeQuality,
 		RuntimeBlocked,
-		SubmitStageOnly,
 		PendingRelatch,
 		Active,
 		RestartRequired

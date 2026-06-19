@@ -397,6 +397,44 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_Dispatch
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT ThreadGroupCountX, UINT ThreadGroupCountY, UINT ThreadGroupCountZ)
+		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
+			func(This, ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ);
+			Upscaling::TraceVRBlackSquareProducerDispatchAfterOperation(
+				This,
+				"Dispatch",
+				callerRva,
+				ThreadGroupCountX,
+				ThreadGroupCountY,
+				ThreadGroupCountZ,
+				nullptr,
+				0);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DispatchIndirect
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* pBufferForArgs, UINT AlignedByteOffsetForArgs)
+		{
+			const auto callerRva = GetD3DHookCallerRva(_ReturnAddress());
+			func(This, pBufferForArgs, AlignedByteOffsetForArgs);
+			Upscaling::TraceVRBlackSquareProducerDispatchAfterOperation(
+				This,
+				"DispatchIndirect",
+				callerRva,
+				0,
+				0,
+				0,
+				pBufferForArgs,
+				AlignedByteOffsetForArgs);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct ID3D11DeviceContext_CopySubresourceRegion
 	{
 		static void thunk(
@@ -635,6 +673,8 @@ namespace globals
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
 		stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(a_context);
+		stl::detour_vfunc<41, ID3D11DeviceContext_Dispatch>(a_context);
+		stl::detour_vfunc<42, ID3D11DeviceContext_DispatchIndirect>(a_context);
 		stl::detour_vfunc<46, ID3D11DeviceContext_CopySubresourceRegion>(a_context);
 		stl::detour_vfunc<47, ID3D11DeviceContext_CopyResource>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);

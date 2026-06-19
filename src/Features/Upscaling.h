@@ -532,6 +532,15 @@ public:
 		ID3D11Resource* a_source,
 		UINT a_sourceSubresource,
 		DXGI_FORMAT a_format);
+	static void TraceVRBlackSquareProducerDispatchAfterOperation(
+		ID3D11DeviceContext* a_context,
+		const char* a_operation,
+		uint32_t a_callerRva,
+		UINT a_threadGroupCountX,
+		UINT a_threadGroupCountY,
+		UINT a_threadGroupCountZ,
+		ID3D11Buffer* a_argsBuffer,
+		UINT a_alignedByteOffsetForArgs);
 	static bool TraceVRTrackedDrawOperation(
 		ID3D11DeviceContext* a_context,
 		const char* a_operation,

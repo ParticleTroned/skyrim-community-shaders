@@ -5045,6 +5045,35 @@ namespace
 		return info;
 	}
 
+	D3DViewDiagnosticInfo BuildUAVDiagnosticInfo(ID3D11UnorderedAccessView* a_uav)
+	{
+		D3DViewDiagnosticInfo info{};
+		if (!a_uav)
+			return info;
+
+		info.view = reinterpret_cast<uintptr_t>(a_uav);
+		info.engineName = "UAV";
+		info.debugName = GetD3DDebugObjectName(a_uav);
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC viewDesc{};
+		a_uav->GetDesc(&viewDesc);
+		info.viewFormat = static_cast<uint32_t>(viewDesc.Format);
+		info.viewDimension = static_cast<uint32_t>(viewDesc.ViewDimension);
+
+		ID3D11Resource* resource = nullptr;
+		a_uav->GetResource(&resource);
+		if (!resource)
+			return info;
+
+		ID3D11Texture2D* texture = nullptr;
+		if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) && texture) {
+			PopulateTextureDiagnosticInfo(info, texture);
+			texture->Release();
+		}
+		resource->Release();
+		return info;
+	}
+
 	D3DViewDiagnosticInfo BuildDSVDiagnosticInfo(ID3D11DepthStencilView* a_dsv)
 	{
 		D3DViewDiagnosticInfo info{};
@@ -7408,6 +7437,54 @@ namespace
 		       a_destination.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY;
 	}
 
+	bool TryResolveVRBlackSquareProducerUAV(ID3D11UnorderedAccessView* a_view, VRMenuCompositionTargetMatch& a_destination)
+	{
+		return TryResolveVRMenuCompositionView(a_view, a_destination) &&
+		       a_destination.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY;
+	}
+
+	std::string BuildVRBlackSquareProducerCSUAVSummary(const std::array<ID3D11UnorderedAccessView*, 8>& a_uavs)
+	{
+		std::string result;
+		for (size_t slot = 0; slot < a_uavs.size(); ++slot) {
+			auto* uav = a_uavs[slot];
+			if (!uav)
+				continue;
+
+			VRMenuCompositionTargetMatch target{};
+			const bool knownTarget = TryResolveVRMenuCompositionView(uav, target);
+			const auto info = BuildUAVDiagnosticInfo(uav);
+
+			if (!result.empty())
+				result += ", ";
+			result += "u";
+			result += std::to_string(slot);
+			result += "=";
+			result += knownTarget ? FormatVRTrackedResourceMatch(target, info) : FormatD3DViewDiagnosticInfo(info);
+		}
+
+		return result.empty() ? "-" : result;
+	}
+
+	std::string BuildVRBlackSquareProducerArgsBufferSummary(ID3D11Buffer* a_argsBuffer)
+	{
+		if (!a_argsBuffer)
+			return "-";
+
+		D3D11_BUFFER_DESC desc{};
+		a_argsBuffer->GetDesc(&desc);
+		const auto debugName = GetD3DDebugObjectName(a_argsBuffer);
+		return std::format(
+			"buffer=0x{:X} bytes={} usage={} bind=0x{:X} cpu=0x{:X} misc=0x{:X} debug={}",
+			reinterpret_cast<uintptr_t>(a_argsBuffer),
+			desc.ByteWidth,
+			static_cast<uint32_t>(desc.Usage),
+			desc.BindFlags,
+			desc.CPUAccessFlags,
+			desc.MiscFlags,
+			debugName.empty() ? "-" : debugName);
+	}
+
 	bool CaptureVRTrackedTargetFingerprint(
 		ID3D11DeviceContext* a_context,
 		RE::RENDER_TARGETS::RENDER_TARGET a_target,
@@ -9246,6 +9323,84 @@ void Upscaling::TraceVRBlackSquareProducerResolveAfterOperation(
 		a_source,
 		a_sourceSubresource,
 		nullptr);
+}
+
+void Upscaling::TraceVRBlackSquareProducerDispatchAfterOperation(
+	ID3D11DeviceContext* a_context,
+	const char* a_operation,
+	uint32_t a_callerRva,
+	UINT a_threadGroupCountX,
+	UINT a_threadGroupCountY,
+	UINT a_threadGroupCountZ,
+	ID3D11Buffer* a_argsBuffer,
+	UINT a_alignedByteOffsetForArgs)
+{
+	if (!ShouldRunVRBlackSquareProducerDiagnostics(a_context))
+		return;
+
+	std::array<ID3D11UnorderedAccessView*, 8> csUAVs{};
+	a_context->CSGetUnorderedAccessViews(0, static_cast<UINT>(csUAVs.size()), csUAVs.data());
+	auto uavRelease = ScopeExit([&]() {
+		for (auto* uav : csUAVs) {
+			if (uav)
+				uav->Release();
+		}
+	});
+
+	ID3D11UnorderedAccessView* destinationView = nullptr;
+	VRMenuCompositionTargetMatch destination{};
+	size_t destinationSlot = std::numeric_limits<size_t>::max();
+	for (size_t slot = 0; slot < csUAVs.size(); ++slot) {
+		auto* uav = csUAVs[slot];
+		if (!uav)
+			continue;
+
+		VRMenuCompositionTargetMatch uavDestination{};
+		if (!TryResolveVRBlackSquareProducerUAV(uav, uavDestination))
+			continue;
+
+		destinationView = uav;
+		destination = uavDestination;
+		destinationSlot = slot;
+		break;
+	}
+	if (!destinationView)
+		return;
+
+	uint64_t signature = 1469598103934665603ull;
+	const auto targetInfo = BuildUAVDiagnosticInfo(destinationView);
+	const auto csUAVSummary = BuildVRBlackSquareProducerCSUAVSummary(csUAVs);
+	const auto shaders = BuildVRMenuOriginalCompositeShaderDiagnostics(a_context, signature);
+	const auto csCBs = BuildVRMenuOriginalCompositeCBDiagnostics(a_context, VRMenuConstantBufferStage::Compute, signature);
+	const auto writeDetail =
+		a_argsBuffer ?
+			std::format(
+				"dispatchIndirect=slot:{} args={} offset={} csUAVs={} shaders={} csCBs={}",
+				destinationSlot,
+				BuildVRBlackSquareProducerArgsBufferSummary(a_argsBuffer),
+				a_alignedByteOffsetForArgs,
+				csUAVSummary,
+				shaders,
+				csCBs) :
+			std::format(
+				"dispatch=slot:{} groups:({},{},{}) csUAVs={} shaders={} csCBs={}",
+				destinationSlot,
+				a_threadGroupCountX,
+				a_threadGroupCountY,
+				a_threadGroupCountZ,
+				csUAVSummary,
+				shaders,
+				csCBs);
+
+	LogVRBlackSquareProducerAfterWrite(
+		a_context,
+		a_operation,
+		a_callerRva,
+		FormatVRTrackedResourceMatch(destination, targetInfo),
+		writeDetail,
+		"n/a(compute)",
+		"-",
+		"-");
 }
 
 bool Upscaling::TraceVRTrackedDrawOperation(

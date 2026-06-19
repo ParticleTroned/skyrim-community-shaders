@@ -29,20 +29,10 @@ cbuffer PerFrame : register(b1)
 								 // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
 	float2 DynamicRes;
-	uint DynamicSampleCount;
-	uint DynamicReadCount;
-	float2 pad0;
-	float4 FoveatedData0;  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
-	float4 FoveatedCenterOffset;
 
 	float SurfaceThickness;
 	float BilinearThreshold;
 	float ShadowContrast;
-	uint Enable;
-	uint SampleCount;
-	float VRBaseSamplesAtReference;
-	float VRCullDistance;
-	uint EnableFoveated;
 };
 
 [numthreads(WAVE_SIZE, 1, 1)] void main(
@@ -53,8 +43,8 @@ cbuffer PerFrame : register(b1)
 
 	parameters.LightCoordinate = LightCoordinate;
 	parameters.WaveOffset = WaveOffset;
-	parameters.FarDepthValue = FarDepthValue;
-	parameters.NearDepthValue = NearDepthValue;
+	parameters.FarDepthValue = 1;
+	parameters.NearDepthValue = 0;
 	parameters.InvDepthTextureSize = InvDepthTextureSize;
 	parameters.DepthTexture = DepthTexture;
 	parameters.OutputTexture = OutputTexture;
@@ -63,23 +53,10 @@ cbuffer PerFrame : register(b1)
 	parameters.SurfaceThickness = SurfaceThickness;
 	parameters.BilinearThreshold = BilinearThreshold;
 	parameters.ShadowContrast = ShadowContrast;
-	parameters.VRCullDistance = VRCullDistance;
 
 	parameters.DynamicRes = DynamicRes;
-	parameters.DynamicSampleCount = DynamicSampleCount;
-	parameters.DynamicReadCount = DynamicReadCount;
-	parameters.FoveatedCenterScale = FoveatedData0.x;
-	parameters.FoveatedCenterFeather = FoveatedData0.y;
-	parameters.FoveatedCenterHorizontalScale = FoveatedData0.z;
-	parameters.FoveatedCenterOffset = FoveatedCenterOffset.xy;
-	parameters.FoveatedEnabled = FoveatedData0.w > 0.5;
 
-#if defined(VR)
-	// Disabled in VR: depth bias causes subtle shadow shifting at stereo seams on camera motion.
-	parameters.UsePrecisionOffset = false;
-#else
 	parameters.UsePrecisionOffset = true;
-#endif
 
 	WriteScreenSpaceShadow(parameters, groupID, groupThreadID);
 }

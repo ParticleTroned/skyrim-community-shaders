@@ -5,9 +5,7 @@
 #include <Tracy/TracyD3D11.hpp>
 
 #include <Buffer.h>
-#include <REX/W32/COMPTR.h>
 #include <atomic>
-#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -34,6 +32,7 @@ public:
 		frameTimingFrequency.QuadPart = 0;
 		frameStartTime.QuadPart = 0;
 	}
+	/** @brief Acquires the stats mutex and returns a scoped lock guard. */
 	std::lock_guard<std::mutex> Lock() { return std::lock_guard<std::mutex>(statsMutex); }
 
 	static State* GetSingleton()
@@ -59,26 +58,12 @@ public:
 	std::vector<std::pair<std::string, std::string>> shaderDefines{};  // data structure to parse string into; needed to avoid dangling pointers
 
 	float timer = 0;
-	float refractionScale = 0.5f;  // Default LLF heat warp strength
-	static constexpr float kDefaultPbrMetalReflectionScale = 1.0f;
-	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
-	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections
-	float pbrMetalHighlightScale = kDefaultPbrMetalHighlightScale;    // Global scale for direct PBR metal highlights
-	// Burley SSS human skin controls.
-	float sssHumanMaleIntensity = 1.0f;
-	float sssHumanMaleSaturation = 1.0f;
-	float sssHumanMaleBrightness = 1.0f;
-	float sssHumanMaleBaseSaturation = 1.0f;
-	float sssHumanFemaleIntensity = 1.0f;
-	float sssHumanFemaleSaturation = 1.0f;
-	float sssHumanFemaleBrightness = 1.0f;
-	float sssHumanFemaleBaseSaturation = 1.0f;
 	double smoothDrawCalls[RE::BSShader::Type::Total + 1];
 	int drawCalls[RE::BSShader::Type::Total + 1];
 
 	// Frame time tracking per shader type (in milliseconds)
-	float frameTimePerType[RE::BSShader::Type::Total + 1];
-	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1];
+	float frameTimePerType[RE::BSShader::Type::Total + 1];        ///< Per-type frame time in milliseconds.
+	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1];  ///< EMA-smoothed per-type frame time in milliseconds.
 
 	// Timing state for per-type frame time tracking using QueryPerformanceCounter
 	LARGE_INTEGER frameTimingFrequency;
@@ -93,87 +78,127 @@ public:
 		THEME
 	};
 
+	/** @brief Per-draw-call hook: updates feature state, constant buffers, and overlay. */
 	void Draw();
+	/** @brief Accumulates per-shader-type draw call counts and frame timing for the performance overlay. */
 	void Debug();
+	/** @brief Per-frame reset: advances timer, caches menu state, resets descriptors and frame counters. */
 	void Reset();
+	/** @brief One-time post-D3D setup: creates resources, probes GPU caps, initializes features. */
 	void Setup();
-	void SetupRenderTargetResources();
 
+	/**
+	 * @brief Loads settings from disk (default, then user, then overrides).
+	 * @param a_configMode Which config file to load.
+	 * @param a_allowReload If true, retries once after a parse error.
+	 */
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
+	/**
+	 * @brief Persists current settings to the config file for the given mode.
+	 * @param a_configMode Which config file to write.
+	 */
 	void Save(ConfigMode a_configMode = ConfigMode::USER);
 
-	static constexpr uint32_t kSaveLoadSafeModeGraceFrames = 120;
-	static constexpr uint32_t kSaveLoadSafeModeFallbackFrames = 36000;
-	static constexpr uint32_t kSaveMutationBlockGraceFrames = 60;
-
-	bool IsSaveLoadSafeModeActive() const;
-	bool IsPersistentMutationBlocked() const;
-	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
-	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
-	void BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
-	void ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
-	void UpdateSaveLoadSafeMode();
-
-	// In-memory serialization for A/B testing (avoids disk I/O during swaps)
+	/**
+	 * @brief Serializes all settings to a JSON object (in-memory, no disk I/O).
+	 * @param o_json Output JSON object to populate.
+	 */
 	void SaveToJson(nlohmann::json& o_json);
+	/**
+	 * @brief Restores settings from a JSON object (in-memory, no disk I/O).
+	 * @param i_json Input JSON object to read from.
+	 */
 	void LoadFromJson(nlohmann::json& i_json);
 
+	/** @brief Loads the active theme preset from the menu settings. */
 	void LoadTheme();
+	/** @brief No-op kept for backward compatibility; theme is now saved with user settings. */
 	void SaveTheme();
 
+	/**
+	 * @brief Validates the disk shader cache against all loaded features.
+	 * @param a_ini The cache INI to validate against.
+	 * @return True if all feature cache entries are still valid.
+	 */
 	bool ValidateCache(CSimpleIniA& a_ini);
+	/**
+	 * @brief Writes each feature's cache metadata into the disk cache INI.
+	 * @param a_ini The cache INI to write into.
+	 */
 	void WriteDiskCacheInfo(CSimpleIniA& a_ini);
 
+	/**
+	 * @brief Sets the global log level and flushes on that level.
+	 * @param a_level The spdlog severity level to apply.
+	 */
 	void SetLogLevel(spdlog::level::level_enum a_level = spdlog::level::info);
 	spdlog::level::level_enum GetLogLevel();
 
+	/**
+	 * @brief Parses a semicolon-delimited "NAME=VALUE" string into shader defines.
+	 * @param defines Semicolon-separated define string (e.g. "FOO=1;BAR=2").
+	 */
 	void SetDefines(std::string defines);
 	std::vector<std::pair<std::string, std::string>>* GetDefines();
 
-	/*
-     * Whether a_type is currently enabled in Community Shaders
-     *
-     * @param a_type The type of shader to check
-     * @return Whether the shader has been enabled.
-     */
+	/**
+	 * @brief Checks whether the given shader type is enabled.
+	 * @param a_type The type of shader to check.
+	 * @return True if the shader type is enabled.
+	 */
 	bool ShaderEnabled(const RE::BSShader::Type a_type);
 
-	/*
-     * Whether a_shader is currently enabled in Community Shaders
-     *
-     * @param a_shader The shader to check
-     * @return Whether the shader has been enabled.
-     */
+	/**
+	 * @brief Checks whether the given shader is enabled.
+	 * @param a_shader The shader to check.
+	 * @return True if the shader is enabled.
+	 */
 	bool IsShaderEnabled(const RE::BSShader& a_shader);
 
-	/*
-     * Whether developer mode is enabled allowing advanced options.
-	 * Use at your own risk! No support provided.
-     *
-	 * <p>
-	 * Developer mode is active when the log level is trace or debug.
-	 * </p>
+	/**
+	 * @brief Checks whether developer mode is active (log level is trace or debug).
 	 *
-     * @return Whether in developer mode.
-     */
+	 * Developer mode enables advanced options. Use at your own risk.
+	 * @return True if in developer mode.
+	 */
 	bool IsDeveloperMode();
 
-	void ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_targetIndex, RE::BSGraphics::RenderTargetProperties* a_properties);
+	/**
+	 * @brief Adds UAV access support to a render target.
+	 * @param a_targetIndex The render target to modify.
+	 * @param a_properties The target's properties (modified in place).
+	 */
+	void ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_targetIndex, RE::BSGraphics::RenderTargetProperties& a_properties);
 
+	/** @brief Allocates constant buffers, Tracy context, and profiler resources. */
 	void SetupResources();
 
-	/// @brief Log per-format support for D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD.
-	///        We perform typed UAV loads on a number of non-guaranteed formats; on GPUs
-	///        that lack TypedUAVLoadAdditionalFormats those reads return undefined data.
-	///        Called once at startup; emits one info line per supported format and one
-	///        warn line per unsupported format with the feature that needs it.
+	/**
+	 * @brief Logs per-format support for D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD.
+	 *
+	 * We perform typed UAV loads on a number of non-guaranteed formats; on GPUs
+	 * that lack TypedUAVLoadAdditionalFormats those reads return undefined data.
+	 * Called once at startup; emits one info line per supported format and one
+	 * warn line per unsupported format with the feature that needs it.
+	 */
 	void CheckTypedUAVLoadSupport();
+	/**
+	 * @brief Strips and rewrites shader descriptor bits for Community Shaders' pipeline.
+	 * @param a_shader The shader being compiled.
+	 * @param a_vertexDescriptor Vertex descriptor flags (modified in place).
+	 * @param a_pixelDescriptor Pixel descriptor flags (modified in place).
+	 * @param a_forceDeferred If true, forces the Deferred flag regardless of current pass.
+	 */
 	void ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred = false);
 
+	/** @brief Opens a named GPU performance event (D3D annotation + Tracy zone). */
 	void BeginPerfEvent(std::string_view title);
+	/** @brief Closes the most recent GPU performance event. */
 	void EndPerfEvent();
+	/** @brief Inserts a single-point GPU performance marker. */
 	void SetPerfMarker(std::string_view title);
 
+	/** @brief Converts and stores the GPU adapter description from wide string. */
 	void SetAdapterDescription(const std::wstring& description);
 
 	bool frameAnnotations = false;
@@ -207,11 +232,9 @@ public:
 		InWorld = 1 << 0,
 		IsReflections = 1 << 1,
 		IsBeastRace = 1 << 2,
-		EffectShadows = 1 << 3,
-		IsTree = 1 << 4,
-		GrassSphereNormal = 1 << 5,
-		IsFemale = 1 << 6,
-		SuppressExternalEmittance = 1 << 7
+		GrassSphereNormal = 1 << 3,
+		IsSun = 1 << 4,
+		SuppressExternalEmittance = 1 << 5
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -227,14 +250,6 @@ public:
 	};
 
 	bool inWorld = false;
-	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();
-	uint32_t lastCompletedWorldRenderFrame = std::numeric_limits<uint32_t>::max();
-	bool pendingPostLoadRuntimeReset = false;
-	std::atomic_bool saveLoadSafeModeActive{ false };
-	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
-	std::atomic_uint32_t saveLoadSafeModeEndFrame{ 0 };
-	std::atomic_bool persistentMutationBlocked{ false };
-	std::atomic_uint32_t persistentMutationBlockEndFrame{ 0 };
 	bool activeReflections = false;
 
 	// Cached menu open states, updated once per frame in Reset().
@@ -242,7 +257,9 @@ public:
 	bool isMainMenuOpen = false;
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
+	/** @brief Returns true if the cached main-menu or loading-menu state is open. */
 	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
+	/** @brief Returns true if main/loading menu is open, with a live fallback query via the UI pointer. */
 	bool IsMainOrLoadingMenuOpen(RE::UI* ui) const
 	{
 		return IsMainOrLoadingMenuOpen() ||
@@ -250,6 +267,8 @@ public:
 	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
+	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
 	{
@@ -258,70 +277,51 @@ public:
 		uint ExtraShaderDescriptor;
 		uint ExtraFeatureDescriptor;
 
+		float EffectRadius;
+		float3 pad0;
+
 		bool operator==(const PermutationCB& other) const
 		{
 			return PixelShaderDescriptor == other.PixelShaderDescriptor &&
 			       ExtraShaderDescriptor == other.ExtraShaderDescriptor &&
-			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor;
+			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor && EffectRadius == other.EffectRadius;
 		}
 	};
 	STATIC_ASSERT_ALIGNAS_16(PermutationCB);
 
 	ConstantBuffer* permutationCB = nullptr;
 
-#ifdef _MSC_VER
-#	pragma warning(push)
-#	pragma warning(disable: 4324)  // SharedDataCB intentionally uses aligned float4 members for shader-compatible math
-#endif
 	struct alignas(16) SharedDataCB
 	{
 		float4 WaterData[25];
 		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
+		float4 SunDirection;
+		float4 SunColor;
+		float4 MasserDirection;
+		float4 MasserColor;
+		float4 SecundaDirection;
+		float4 SecundaColor;
 		float4 CameraData;
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
 		uint FrameCountAlwaysActive;
 		uint InInterior;
+		uint HasDirectionalShadows;
 		uint InMapMenu;
 		uint HideSky;
 		float MipBias;
-		float WaterSystemHeight;        // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
-		float RefractionScale;          // matches HLSL SharedData::RefractionScale
-		float PBRMetalReflectionScale;  // matches HLSL SharedData::PBRMetalReflectionScale
-		float PBRMetalHighlightScale;   // matches HLSL SharedData::PBRMetalHighlightScale
-		float SharedDataPackingPad0;    // HLSL leaves one scalar before the float2 below
-		float PBRMetalReflectionScalePad0;
-		float PBRMetalReflectionScalePad1;
-		float SSSHumanMaleIntensity;
-		float SSSHumanMaleSaturation;
-		float SSSHumanMaleBrightness;
-		float SSSHumanMaleBaseSaturation;
-		float SSSHumanFemaleIntensity;
-		float SSSHumanFemaleSaturation;
-		float SSSHumanFemaleBrightness;
-		float SSSHumanFemaleBaseSaturation;
-		float SharedDataPackingPad1;
-		float SharedDataPackingPad2;
+		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -NI_INFINITY when no water body found
+		float3 pad0;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
-		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode; modes use 0=off, 1=feathered, 2=hard cutoff
-		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused; same 0/1/2 mode contract
-		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
+		float4 HDRData;  // xyz + menu scene encoding in w — see HDRDisplay::GetSharedDataHDR
 	};
-#ifdef _MSC_VER
-#	pragma warning(pop)
-#endif
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
-	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, VRFoveationData0) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, VRFoveationModes) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, VRFoveationCenterOffsets) % 16 == 0);
+
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 
@@ -332,10 +332,12 @@ public:
 	uint frameCount = 0;
 
 	// Skyrim constants
-	float2 screenSize = {};
 	D3D_FEATURE_LEVEL featureLevel;
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
+
+	// Moon and Stars mod detection
+	inline static bool moonAndStarsLoaded = false;
 
 	void ClearDisabledFeatures();
 	bool SetFeatureDisabled(const std::string& featureName, bool isDisabled);
@@ -409,8 +411,6 @@ public:
 	}
 
 private:
-	ID3D11Device* setupResourcesDevice = nullptr;
-	ID3D11DeviceContext* setupResourcesContext = nullptr;
-	REX::W32::ComPtr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
+	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };

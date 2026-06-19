@@ -3,7 +3,6 @@
 
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-#include "Common/VR.hlsli"
 
 namespace SharedData
 {
@@ -15,34 +14,28 @@ namespace SharedData
 		row_major float3x4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
+		float4 SunDirection;
+		float4 SunColor;
+		float4 MasserDirection;
+		float4 MasserColor;
+		float4 SecundaDirection;
+		float4 SecundaColor;
 		float4 CameraData;
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
 		uint FrameCountAlwaysActive;
-		bool InInterior;                // If the area lacks a directional shadow light e.g. the sun or moon
-		bool InMapMenu;                 // If the world/local map is open (note that the renderer is still deferred here)
-		bool HideSky;                   // HideSky flag in WorldSpace, e.g. Blackreach
-		float MipBias;                  // Offset to mip level for TAA sharpness
-		float WaterSystemHeight;        // TES::GetWaterHeight at eye-0 in camera-relative Z; -FLT_MAX when no water body found (VR only)
-		float RefractionScale;          // Global scale for ImageSpace refraction heat warp (1.0 = vanilla CS)
-		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections (1.0 = default)
-		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights (1.0 = default)
-		float2 PBRMetalReflectionScalePad0;
-		float SSSHumanMaleIntensity;
-		float SSSHumanMaleSaturation;
-		float SSSHumanMaleBrightness;
-		float SSSHumanMaleBaseSaturation;
-		float SSSHumanFemaleIntensity;
-		float SSSHumanFemaleSaturation;
-		float SSSHumanFemaleBrightness;
-		float SSSHumanFemaleBaseSaturation;
+		bool InInterior;  // If the current cell is an interior
+		bool HasDirectionalShadows;
+		bool InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
+		bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
+		float MipBias;            // Offset to mip level for TAA sharpness
+		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -FLT_MAX when no water body found
+		float3 pad0;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
-		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode; modes use 0=off, 1=feathered, 2=hard cutoff
-		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused; same 0/1/2 mode contract
-		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
+		float4 HDRData;
 	};
 
 	struct GrassLightingSettings
@@ -53,9 +46,8 @@ namespace SharedData
 		bool OverrideComplexGrassSettings;
 
 		float BasicGrassBrightness;
-		bool EnableWrappedLighting;
 		float ComplexGrassThreshold;
-		float pad0;
+		float2 pad0;
 	};
 
 	struct CPMSettings
@@ -67,7 +59,7 @@ namespace SharedData
 		bool EnableShadows;
 		bool ExtendShadows;
 		bool EnableParallaxWarpingFix;
-		float1 pad0;
+		bool pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -90,8 +82,7 @@ namespace SharedData
 	{
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		uint ContactShadowFlags;
-		uint ContactShadowParams;
+		float2 pad0;
 		uint4 ClusterSize;
 	};
 
@@ -140,86 +131,18 @@ namespace SharedData
 		float pad0;
 	};
 
-	struct WetternessSettings
-	{
-		row_major float4x4 OcclusionViewProj;
-
-		float Time;
-		float Raining;
-		float Wetness;
-		float PuddleWetness;
-
-		uint EnableWetnessEffects;
-		float MaxRainWetness;
-		float MaxPuddleWetness;
-		float MaxShoreWetness;
-
-		uint ShoreRange;
-		float PuddleRadius;
-		float PuddleMaxAngle;
-		float PuddleMinWetness;
-
-		float MinRainWetness;
-		float SkinWetness;
-		float PuddleLayout;
-		float StoneDryingMultiplier;
-		float DirtDryingMultiplier;
-		float GrassDryingMultiplier;
-		uint EnableRaindropFx;
-
-		uint EnableSplashes;
-		uint EnableRipples;
-		uint EnableModernWetReflection;
-		uint EnableLegacyWetReflection;
-		float WetIndirectSpecularScale;
-		float RaindropFxRange;
-
-		float RaindropGridSizeRcp;
-		float RaindropIntervalRcp;
-		float RaindropChance;
-		float SplashesLifetime;
-
-		float SplashesStrength;
-		float SplashesMinRadius;
-		float SplashesMaxRadius;
-		float RippleStrength;
-
-		float RippleRadius;
-		float RippleBreadth;
-		float RippleLifetimeRcp;
-		float PostRainPuddleWaterStrength;
-
-		float RaindropTransitionFalloff;
-		float WetDarkeningStrength;
-		float WetHighlightReduction;
-		uint EnableForwardReflectionBias;
-		uint EnableVanillaReflectionCompensation;
-		float WetFilmSpecularFloorScale;
-		float ShorePersistentDarkeningStrength;
-		uint PackedPostRainControl;
-		uint PackedRainReflectionControl;
-		// View-depth fade/cull range for dev-style wetness distance fading, in game units.
-		uint WetnessDistanceFadeRangePacked;
-		float RainContactWetnessScale;
-	};
-
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionSHBasis4Pi;
+		float4 OcclusionDir;
 
-		float3 PosOffset;  // cell origin in camera model space
-		uint FastSamplingMode;
-		uint3 ArrayOrigin;  // xyz: array origin
-		uint _pad0;
+		float4 PosOffset;   // xyz: cell origin in camera model space
+		uint4 ArrayOrigin;  // xyz: array origin
 		int4 ValidMargin;
-		uint3 ArrayDims;
-		float ProbeFieldSize;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		uint ProbeUpdateSliceStart;
-		uint ProbeUpdateSliceCount;
+		uint2 pad0;
 	};
 
 	struct CloudShadowsSettings
@@ -237,7 +160,7 @@ namespace SharedData
 		float LODTerrainGamma;
 		float LODObjectGamma;
 		float LODObjectSnowGamma;
-		float WaterReflectionStrength;
+		float pad0;
 	};
 
 	struct HairSpecularSettings
@@ -322,15 +245,69 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint enableAdaptiveBrightness;
+		uint pad0;
 	};
 
 	struct TerrainBlendingSettings
 	{
 		uint Enabled;
-		float TerrainCullDistance;
-		float BlendStrength;
-		float pad0;
+		uint3 _padding;
+	};
+
+	struct ExponentialHeightFogSettings
+	{
+		uint enabled;
+		uint useDynamicCubemaps;
+		float startDistance;
+		float fogHeight;
+		float fogHeightFalloff;
+		float fogDensity;
+		float directionalInscatteringMultiplier;
+		float directionalInscatteringAnisotropy;
+		float4 inscatteringTint;
+		float cubemapMipLevel;
+		float sunlightAttenuationAmount;
+		uint respectVanillaFogFade;
+		uint disableVanillaFog;
+		float4 fogInscatteringColor;
+		float originalFogColorAmount;
+		uint volumetricFogEnabled;
+		uint volumetricGridPixelSize;
+		uint volumetricGridSizeZ;
+		float volumetricFogDistance;
+		float volumetricFogStartDistance;
+		float volumetricFogNearFadeInDistance;
+		float volumetricFogExtinctionScale;
+		float4 volumetricFogAlbedo;
+		float4 volumetricFogEmissive;
+		float volumetricDirectionalScatteringIntensity;
+		float volumetricShadowBias;
+		float volumetricDepthDistributionScale;
+		float volumetricSkyLightingIntensity;
+		float volumetricFogScatteringDistribution;
+		float volumetricHistoryWeight;
+		uint volumetricHistoryMissSampleCount;
+		float volumetricSampleJitterMultiplier;
+		float volumetricUpsampleJitterMultiplier;
+		float volumetricLocalLightScatteringIntensity;
+		float2 pad0;
+	};
+
+	struct TruePBRSettings
+	{
+		float VertexAOStrength;
+		uint3 pad;
+	};
+
+	struct SkinData
+	{
+		float4 skinParams;
+		float4 skinParams2;
+		float4 skinDetailParams;
+		float4 sssParams;
+		float4 fuzzParams;
+		float4 physicalParams;
+		float4 wetParams;
 	};
 
 	cbuffer FeatureData : register(b6)
@@ -341,7 +318,6 @@ namespace SharedData
 		TerraOccSettings terraOccSettings;
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
-		WetternessSettings wetternessSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;
@@ -351,22 +327,24 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
+		ExponentialHeightFogSettings exponentialHeightFogSettings;
+		TruePBRSettings truePBRSettings;
+		SkinData skinData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);
 
 	// Get a int3 to be used as texture sample coord. [0,1] in uv space
-	int3 ConvertUVToSampleCoord(float2 uv, uint a_eyeIndex)
+	int3 ConvertUVToSampleCoord(float2 uv)
 	{
-		uv = Stereo::ConvertToStereoUV(uv, a_eyeIndex);
 		uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
 		return int3(uv * BufferDim.xy, 0);
 	}
 
 	// Get a raw depth from the depth buffer. [0,1] in uv space
-	float GetDepth(float2 uv, uint a_eyeIndex = 0)
+	float GetDepth(float2 uv)
 	{
-		return DepthTexture.Load(ConvertUVToSampleCoord(uv, a_eyeIndex)).x;
+		return DepthTexture.Load(ConvertUVToSampleCoord(uv)).x;
 	}
 
 	float GetScreenDepth(float depth)
@@ -379,19 +357,16 @@ namespace SharedData
 		return (CameraData.w / (-depths * CameraData.z + CameraData.x));
 	}
 
-	float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)
+	float GetScreenDepth(float2 uv)
 	{
-		float depth = GetDepth(uv, a_eyeIndex);
+		float depth = GetDepth(uv);
 		return GetScreenDepth(depth);
 	}
 
 	// Returns water data for the tile containing worldPosition (camera-relative XY).
-	// The .w component (water surface height) is stored in C++ as camera-relative Z of
-	// eye 0 (left eye).  Pass eyeIndex to have .w corrected into the current eye's
-	// camera-relative frame; defaults to 0 (no correction, backwards-compatible).
-	float4 GetWaterData(float3 worldPosition, uint eyeIndex = 0)
+	float4 GetWaterData(float3 worldPosition)
 	{
-		float2 cellF = (((worldPosition.xy + FrameBuffer::CameraPosAdjust[0].xy)) / 4096.0) + 64.0;  // always positive
+		float2 cellF = (((worldPosition.xy + FrameBuffer::CameraPosAdjust.xy)) / 4096.0) + 64.0;  // always positive
 		int2 cellInt;
 		float2 cellFrac = modf(cellF, cellInt);
 
@@ -406,12 +381,6 @@ namespace SharedData
 
 		[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 			waterData = WaterData[waterTile];
-
-#	if defined(VR)
-		// Correct .w from eye-0 camera-relative Z to the current eye's camera-relative Z.
-		// No-op when eyeIndex == 0 (both terms are identical).
-		waterData.w += FrameBuffer::CameraPosAdjust[0].z - FrameBuffer::CameraPosAdjust[eyeIndex].z;
-#	endif
 
 		return waterData;
 	}

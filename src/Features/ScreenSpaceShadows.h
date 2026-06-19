@@ -4,42 +4,34 @@
 
 struct ScreenSpaceShadows : Feature
 {
-private:
-	static constexpr std::string_view MOD_ID = "93209";
-
 public:
 	virtual inline std::string GetName() override { return "Screen Space Shadows"; }
+	virtual std::string GetDisplayName() override { return T("feature.screen_space_shadows.name", "Screen Space Shadows"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceShadows"; }
-	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
-	virtual inline bool IsCore() const override { return true; }
 	virtual inline std::string_view GetShaderDefineName() override { return "SCREEN_SPACE_SHADOWS"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
+	/** @brief Returns a localized description and list of key features for the UI summary panel. */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return {
-			"Screen Space Shadows enhances shadow quality by adding detailed contact shadows and improving shadow accuracy.\n"
-			"This technique adds fine-detail shadows that traditional shadow mapping might miss.",
-			{ "Enhanced contact shadows",
-				"Improved shadow detail",
-				"Better shadow accuracy",
-				"Fine-scale shadow effects",
-				"Configurable shadow contrast" }
-		};
+		return { T("feature.screen_space_shadows.description", "Screen Space Shadows enhances shadow quality by adding detailed contact shadows and improving shadow accuracy.\nThis technique adds fine-detail shadows that traditional shadow mapping might miss."),
+			{ T("feature.screen_space_shadows.key_feature_1", "Enhanced contact shadows"),
+				T("feature.screen_space_shadows.key_feature_2", "Improved shadow detail"),
+				T("feature.screen_space_shadows.key_feature_3", "Better shadow accuracy"),
+				T("feature.screen_space_shadows.key_feature_4", "Fine-scale shadow effects"),
+				T("feature.screen_space_shadows.key_feature_5", "Configurable shadow contrast") } };
 	}
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	struct BendSettings
 	{
-		float SurfaceThickness = !globals::game::isVR ? 0.02f : 0.010f;
+		float SurfaceThickness = 0.02f;
 		float BilinearThreshold = 0.02f;
-		float ShadowContrast = !globals::game::isVR ? 1.0f : 4.0f;
+		float ShadowContrast = 1.0f;
 		uint Enable = 1;
 		uint SampleCount = 1;
-		float VRBaseSamplesAtReference = 44.0f;
-		float VRCullDistance = 0.0f;  // 0 = disabled
-		uint EnableFoveated = globals::game::isVR ? 1u : 0u;
+		uint pad0[3];
 	};
 
 	BendSettings bendSettings;
@@ -60,69 +52,45 @@ public:
 									   // The 'USE_HALF_PIXEL_OFFSET' macro might need to be defined if sampling at exact pixel coordinates isn't precise (e.g., if odd patterns appear in the shadow).
 
 		float2 DynamicRes;
-		uint DynamicSampleCount;
-		uint DynamicReadCount;
-		float pad0[2];
-		float FoveatedData0[4];  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
-		float FoveatedCenterOffset[4];
 
 		BendSettings settings;
 	};
 	STATIC_ASSERT_ALIGNAS_16(RaymarchCB);
 
-	bool enableStereoSync = false;
-
-	struct alignas(16) StereoSyncCB
-	{
-		float FrameDim[2];
-		float RcpFrameDim[2];
-		float DispatchBase[2];
-		float DispatchExtent[2];
-		float FoveatedData0[4];  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
-		float FoveatedCenterOffset[4];
-	};
-	STATIC_ASSERT_ALIGNAS_16(StereoSyncCB);
-
 	ID3D11SamplerState* pointBorderSampler = nullptr;
 
 	ConstantBuffer* raymarchCB = nullptr;
 	ID3D11ComputeShader* raymarchCS = nullptr;
-	ID3D11ComputeShader* raymarchRightCS = nullptr;
-	uint compiledSampleCount = 0;
-	uint compiledSampleCountRight = 0;
-	bool raymarchUsesTerrainBlendingDepth = false;
-	bool raymarchRightUsesTerrainBlendingDepth = false;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
 
-	// VR stereo sync resources
-	Texture2D* stereoSyncCopyTex = nullptr;
-	ConstantBuffer* stereoSyncCB = nullptr;
-	ID3D11ComputeShader* stereoSyncCS = nullptr;
-	bool stereoSyncUsesTerrainBlendingDepth = false;
-
+	/** @brief Creates the raymarch constant buffer, point border sampler, and shadow output texture. */
 	virtual void SetupResources() override;
-	virtual void SetupRenderTargetResources() override;
 
+	/** @brief Draws the ImGui settings UI for screen-space shadow configuration. */
 	virtual void DrawSettings() override;
-	void DrawFoveationSettings();
 
+	/** @brief Releases the compiled raymarch compute shader for recompilation. */
 	virtual void ClearShaderCache() override;
+	/** @brief Releases the raymarch compute shader so it is recompiled on next use. */
 	void InvalidateRaymarchShaders();
-	uint GetScaledSampleCount(bool a_dynamic);
-	ID3D11ComputeShader* GetOrCreateRaymarchShader(ID3D11ComputeShader*& a_shader, uint& a_compiledSampleCount, bool& a_compiledUsesTerrainBlendingDepth, bool a_rightEye);
+	/** @brief Calculates the resolution-scaled and quantized sample count for the raymarch shader. */
+	uint GetScaledSampleCount();
+	uint lastCompiledSampleCount = 0;
+	/**
+	 * @brief Returns the compiled raymarch compute shader, recompiling if the sample count changed.
+	 * @return The compiled ID3D11ComputeShader, or nullptr on failure.
+	 */
 	ID3D11ComputeShader* GetComputeRaymarch();
-	ID3D11ComputeShader* GetComputeRaymarchRight();
 
+	/** @brief Clears the shadow texture and dispatches shadow ray marching if conditions are met. */
 	virtual void Prepass() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
+	/** @brief Dispatches the Bend SSS compute shader to generate screen-space contact shadows. */
 	void DrawShadows();
-	void DrawStereoSync();
 
 	virtual void RestoreDefaultSettings() override;
-
-	virtual bool SupportsVR() override { return true; };
 };

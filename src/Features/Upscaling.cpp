@@ -1800,8 +1800,7 @@ bool Upscaling::IsUpscalingActive() const
 		return false;
 	}
 
-	// resolutionScale.x represents renderWidth / displayWidth.
-	return resolutionScale.x < .99f;
+	return resolutionScale.x < .99f || resolutionScale.y < .99f;
 }
 
 bool Upscaling::IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const

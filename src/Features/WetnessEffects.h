@@ -118,7 +118,6 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 
-	virtual bool SupportsVR() override { return true; };
 	bool IsRuntimeActive() const { return loaded && settings.EnableWetnessEffects != 0; }
 
 	// Override to provide weather analysis configuration

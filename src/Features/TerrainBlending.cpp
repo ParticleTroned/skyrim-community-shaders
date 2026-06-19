@@ -8,7 +8,6 @@
 #include "State.h"
 #include "Upscaling.h"
 #include "Utils/D3D.h"
-#include "VR.h"
 
 #include <algorithm>
 #include <array>
@@ -87,7 +86,6 @@ namespace
 	// 1) PS slot 17 override: bind TB-selected depth SRV for OBB depth reads; prevents occlusion instability / mesh popping.
 	// 2) PS slot 2 override: bind TB-selected depth SRV for shadowmask reads; prevents unstable/moving ground shadow imprint, and dark overlay style artifacts.
 	// 3) OM depth override: force DepthFunc=ALWAYS only on descriptor 0x1062002; mitigate shadowmask ground artifacts caused by failed depth testing in 0x1062002.
-	// All override paths below are gated by IsEngineHookFeatureGateSatisfied and all are VR-specific at runtime (isVR, gateSatisfied).
 	// Developer Mode only: logs one hook snapshot per gate-on cycle ([TB Override]/[TB DepthOverride]) and explicit fallback activate/reset events.
 	// Fallbacks: caller fallback is in ShouldAllowCallerWithFallback(...) (2 and 3 widen after 5 rejects and collapse on first allowlisted hit), SRV-source fallback is in Util::GetCurrentSceneDepthSRV(...).
 	// Pixel descriptors:
@@ -161,8 +159,7 @@ namespace
 
 	bool ShouldUseBlendedDepthSRV()
 	{
-		auto& vr = globals::features::vr;
-		return !globals::game::isVR || !vr.gDepthBufferCulling || !*vr.gDepthBufferCulling;
+		return true;
 	}
 
 	bool IsShadowmaskDepthDescriptorWhitelisted(const uint32_t a_descriptor)
@@ -273,11 +270,8 @@ namespace
 
 	bool IsEngineHookFeatureGateSatisfied(const TerrainBlending& a_singleton)
 	{
-		if (!globals::game::isVR || !a_singleton.loaded || !a_singleton.settings.Enabled) {
-			return false;
-		}
-
-		return !ShouldUseBlendedDepthSRV();
+		(void)a_singleton;
+		return false;
 	}
 
 	struct EngineHookPassGateState

@@ -242,7 +242,6 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 
-	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return false; };
 	bool IsRuntimeActive() const { return loaded && settings.EnableWetterness != 0; }
 	bool IsRuntimeProcessingActive() const;

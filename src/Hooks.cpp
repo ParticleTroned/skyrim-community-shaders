@@ -16,7 +16,6 @@
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
-#include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 
 #include "ShaderTools/BSShaderHooks.h"
@@ -620,33 +619,8 @@ struct BSInputDeviceManager_PollInputDevices
 
 			if (*a_events) {
 				if (auto device = (*a_events)->GetDevice()) {
-					if (globals::game::isVR) {
-						// In VR, block mouse/keyboard input when menu is open (like Flatrim)
-						// Allow gamepad input to pass through
-						// Also handle VR controller devices based on OpenVR compatibility
-						bool isVRController = ((device == RE::INPUT_DEVICES::INPUT_DEVICE::kVivePrimary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kViveSecondary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusPrimary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusSecondary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRPrimary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRSecondary));
-
-						// Allow gamepad input to pass through always
-						if (device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) {
-							blockedDevice = false;
-						}
-						// For VR controllers, only block if OpenVR is compatible
-						else if (isVRController) {
-							blockedDevice = globals::features::vr.IsOpenVRCompatible();
-						}
-						// For mouse/keyboard and other devices, block them (like Flatrim)
-						else {
-							blockedDevice = true;
-						}
-					} else {
-						// Block all devices except gamepad when menu is open
-						blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
-					}
+					// Block all devices except gamepad when menu is open.
+					blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
 				}
 			}
 		}
@@ -1189,14 +1163,12 @@ namespace Hooks
 	/**
 	 * @brief Installs hooks, detours, and memory patches for graphics, input, and rendering subsystems.
 	 *
-	 * Sets up function hooks and virtual method overrides for shader management, input polling, rendering pipeline stages, compute shader dispatch, material setup, batch rendering, and window procedure handling. Applies memory patches to adjust render pass cache sizes and offsets. Installs additional update hooks for frame timing and Reflex marker integration when not in VR mode.
+	 * Sets up function hooks and virtual method overrides for shader management, input polling, rendering pipeline stages, compute shader dispatch, material setup, batch rendering, and window procedure handling. Applies memory patches to adjust render pass cache sizes and offsets.
 	 */
 	void Install()
 	{
-		if (!REL::Module::IsVR()) {
-			logger::info("Hooking BSImageSpace::Init::IBLF");
-			stl::detour_thunk<BSImageSpace_Init_IBLF>(REL::RelocationID(100480, 107198));
-		}
+		logger::info("Hooking BSImageSpace::Init::IBLF");
+		stl::detour_thunk<BSImageSpace_Init_IBLF>(REL::RelocationID(100480, 107198));
 
 		logger::info("Hooking BSInputDeviceManager::PollInputDevices");
 		stl::write_thunk_call<BSInputDeviceManager_PollInputDevices>(REL::RelocationID(67315, 68617).address() + REL::Relocate(0x7B, 0x7B, 0x81));
@@ -1282,9 +1254,6 @@ namespace Hooks
 			if (REL::Module::IsAE()) {
 				std::uint8_t patch[] = { 0x41, 0x83, 0xE7, 0x00 };  // and r15d, 0
 				REL::safe_write(setupGeometryUpdateRenderSpace + 0x71, patch, sizeof(patch));
-			} else if (REL::Module::IsVR()) {
-				std::uint8_t patch[] = { 0x41, 0x83, 0xE4, 0x00 };  // and r12d, 0
-				REL::safe_write(setupGeometryUpdateRenderSpace + 0x65, patch, sizeof(patch));
 			} else {
 				std::uint8_t patch1[] = { 0xB8, 0x00, 0x00 };  // mov eax, 0
 				REL::safe_write(setupGeometryUpdateRenderSpace + 0x73, patch1, sizeof(patch1));
@@ -1308,6 +1277,6 @@ namespace Hooks
 		}
 
 		logger::info("Hooking CreateDXGIFactory");
-		*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", !REL::Module::IsVR() ? "CreateDXGIFactory" : "CreateDXGIFactory1");
+		*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", "CreateDXGIFactory");
 	}
 }

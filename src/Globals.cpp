@@ -31,7 +31,6 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
-#include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
@@ -79,7 +78,6 @@ namespace globals
 		TerrainShadows terrainShadows{};
 		UnifiedWater unifiedWater{};
 		VolumetricLighting volumetricLighting{};
-		VR vr{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};
 		WetnessEffects wetnessEffects{};
@@ -103,7 +101,6 @@ namespace globals
 		RE::BSShaderManager::State* smState = nullptr;
 		RE::TES* tes = nullptr;
 		RE::TESWaterSystem* waterSystem = nullptr;
-		bool isVR = false;
 		RE::MemoryManager* memoryManager = nullptr;
 		RE::INISettingCollection* iniSettingCollection = nullptr;
 		RE::INIPrefSettingCollection* iniPrefSettingCollection = nullptr;
@@ -175,7 +172,6 @@ namespace globals
 			graphicsState = RE::BSGraphics::State::GetSingleton();
 			renderer = RE::BSGraphics::Renderer::GetSingleton();
 			smState = &RE::BSShaderManager::State::GetSingleton();
-			isVR = REL::Module::IsVR();
 			iniSettingCollection = RE::INISettingCollection::GetSingleton();
 			iniPrefSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
 			gameSettingCollection = RE::GameSettingCollection::GetSingleton();
@@ -242,13 +238,8 @@ namespace globals
 	void CacheFramebuffer()
 	{
 		using namespace game;
-		if (REL::Module::IsVR()) {
-			auto frameBufferVR = (FrameBufferVR*)mappedFrameBuffer->pData;
-			frameBufferCached.vr = *frameBufferVR;
-		} else {
-			auto frameBuffer = (FrameBuffer*)mappedFrameBuffer->pData;
-			frameBufferCached.nonVR = *frameBuffer;
-		}
+		auto frameBuffer = (FrameBuffer*)mappedFrameBuffer->pData;
+		frameBufferCached.data = *frameBuffer;
 		mappedFrameBuffer = nullptr;
 	}
 

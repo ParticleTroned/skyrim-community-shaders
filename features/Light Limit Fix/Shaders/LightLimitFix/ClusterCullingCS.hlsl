@@ -157,20 +157,11 @@ void InsertContactShadowCandidate(
 		bool isVisible = false;
 		bool reachedVisibleLightLimit = false;
 
-#if defined(VR)
-		float3 positionVSLeft = FrameBuffer::WorldToView(light.positionWS[0].xyz, true, 0);
-		float3 positionVSRight = FrameBuffer::WorldToView(light.positionWS[1].xyz, true, 1);
-
-		[branch] if (LightIntersectsCluster(positionVSLeft, radiusSquared, cluster) || LightIntersectsCluster(positionVSRight, radiusSquared, cluster))
-		{
-			isVisible = true;
-#else
-		float3 positionVS = FrameBuffer::WorldToView(light.positionWS[0].xyz, true, 0);
+		float3 positionVS = FrameBuffer::WorldToView(light.positionWS.xyz, true, 0);
 
 		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
 		{
 			isVisible = true;
-#endif
 			visibleLightIndices[visibleLightCount] = i;
 			visibleLightCount++;
 			if (visibleLightCount >= MAX_CLUSTER_LIGHTS)
@@ -178,11 +169,7 @@ void InsertContactShadowCandidate(
 		}
 
 		if (contactShadowsEnabled && isVisible && IsContactShadowEligible(light, ContactShadowFlagsPacked, contactShadowParticleBudget)) {
-#if defined(VR)
-			float contactShadowScore = max(GetContactShadowScore(light, positionVSLeft, cluster), GetContactShadowScore(light, positionVSRight, cluster));
-#else
 			float contactShadowScore = GetContactShadowScore(light, positionVS, cluster);
-#endif
 			InsertContactShadowCandidate(
 				i,
 				contactShadowScore,

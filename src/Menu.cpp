@@ -44,7 +44,6 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/ScreenshotFeature.h"
-#include "Features/VR.h"
 #include "Features/CSEditor.h"
 #include "CSEditor/EditorWindow.h"
 
@@ -925,7 +924,7 @@ void Menu::DrawFooter()
  * callbacks for input processing, settings rendering, and key mapping. This method
  * serves as the bridge between Menu's state and the extracted overlay rendering logic.
  *
- * Handles VR setup, input event processing, shader compilation status, feature overlays,
+ * Handles input event processing, shader compilation status, feature overlays,
  * A/B testing, and ImGui frame management through the specialized renderer component.
  */
 void Menu::DrawOverlay()
@@ -981,11 +980,10 @@ void Menu::DrawOverlay()
 }
 
 /**
- * @brief Processes queued input events for both VR and non-VR devices
+ * @brief Processes queued input events for keyboard, mouse, and gamepad devices
  *
  * This method handles the complex logic of routing input events to appropriate handlers:
- * - VR controller events are forwarded to the VR system for specialized processing
- * - Non-VR events (keyboard, mouse) are processed directly for ImGui integration
+ * - Keyboard and mouse events are processed directly for ImGui integration
  * - Includes key state normalization and stuck key detection/correction
  *
  * The method maintains thread safety through mutex protection of the input event queue.
@@ -1018,28 +1016,7 @@ void Menu::ProcessInputEventQueue()
 {
 	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
 	ImGuiIO& io = ImGui::GetIO();
-	// Split the queue into VR and non-VR events
-	std::vector<KeyEvent> vrEvents;
-	std::vector<KeyEvent> nonVREvents;
 	for (auto& event : _keyEventQueue) {
-		bool isVRController = ((event.device == RE::INPUT_DEVICE::kVivePrimary || event.device == RE::INPUT_DEVICE::kViveSecondary ||
-								event.device == RE::INPUT_DEVICE::kOculusPrimary || event.device == RE::INPUT_DEVICE::kOculusSecondary ||
-								event.device == RE::INPUT_DEVICE::kWMRPrimary || event.device == RE::INPUT_DEVICE::kWMRSecondary));
-
-		if (globals::features::vr.IsOpenVRCompatible() && isVRController) {
-			vrEvents.push_back(event);
-		} else {
-			nonVREvents.push_back(event);
-		}
-	}
-	// Process VR events in VR
-	if (!vrEvents.empty()) {
-		globals::features::vr.ProcessVREvents(vrEvents);
-		globals::features::vr.UpdateOverlayMenuStateFromInput();
-	}
-
-	// Process non-VR events in Menu
-	for (auto& event : nonVREvents) {
 		if (event.eventType == RE::INPUT_EVENT_TYPE::kChar) {
 			io.AddInputCharacter(event.keyCode);
 			continue;

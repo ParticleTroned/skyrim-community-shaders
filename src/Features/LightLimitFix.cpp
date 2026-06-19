@@ -697,8 +697,6 @@ void LightLimitFix::CleanupParticleLights(RE::NiNode* a_node)
 void LightLimitFix::SetupResources()
 {
 	auto screenSize = globals::state->screenSize;
-	if (REL::Module::IsVR())
-		screenSize.x *= .5;
 	clusterSize[0] = ((uint)screenSize.x + 63) / 64;
 	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
 	clusterSize[2] = 32;
@@ -1040,20 +1038,18 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached)
 {
-	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-		RE::NiPoint3 eyePosition;
+	RE::NiPoint3 eyePosition;
 
-		if (a_cached) {
-			eyePosition = eyePositionCached[eyeIndex];
-		} else {
-			eyePosition = Util::GetEyePosition(eyeIndex);
-		}
-
-		auto worldPos = a_initialPosition - eyePosition;
-		a_light.positionWS[eyeIndex].data.x = worldPos.x;
-		a_light.positionWS[eyeIndex].data.y = worldPos.y;
-		a_light.positionWS[eyeIndex].data.z = worldPos.z;
+	if (a_cached) {
+		eyePosition = eyePositionCached;
+	} else {
+		eyePosition = Util::GetEyePosition();
 	}
+
+	auto worldPos = a_initialPosition - eyePosition;
+	a_light.positionWS.data.x = worldPos.x;
+	a_light.positionWS.data.y = worldPos.y;
+	a_light.positionWS.data.z = worldPos.z;
 }
 
 void LightLimitFix::RefreshJsonPlacedLightCacheFrame()
@@ -1568,7 +1564,7 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		float maxDist = settings.MaxParticleDistance;
 		float maxDistSq = maxDist * maxDist;
 
-		const auto& pos = light.positionWS[0].data;  // camera-relative
+		const auto& pos = light.positionWS.data;  // camera-relative
 		float distSq = (pos.x * pos.x) + (pos.y * pos.y) + (pos.z * pos.z);
 
 		if (distSq > maxDistSq) {
@@ -1577,7 +1573,7 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 		}
 	}
 
-	float distance = CalculateLightDistance(light.positionWS[0].data, light.radius);
+	float distance = CalculateLightDistance(light.positionWS.data, light.radius);
 
 	float dimmer = 0.0f;
 
@@ -1599,7 +1595,7 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 			CachedParticleLight cachedParticleLight{};
 			cachedParticleLight.grey = float3(light.color.x, light.color.y, light.color.z).Dot(luminanceWeights) * luminanceScale;
 			cachedParticleLight.radius = light.radius;
-			cachedParticleLight.position = { light.positionWS[0].data.x + eyePositionCached[0].x, light.positionWS[0].data.y + eyePositionCached[0].y, light.positionWS[0].data.z + eyePositionCached[0].z };
+			cachedParticleLight.position = { light.positionWS.data.x + eyePositionCached.x, light.positionWS.data.y + eyePositionCached.y, light.positionWS.data.z + eyePositionCached.z };
 
 			cachedParticleLights.push_back(cachedParticleLight);
 		}
@@ -1647,12 +1643,9 @@ void LightLimitFix::UpdateLights()
 		return;
 	}
 
-	// Cache data since cameraData can become invalid in first-person
-
-	for (int eyeIndex = 0; eyeIndex < eyeCount; eyeIndex++) {
-		auto eyePosition = globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
-		eyePositionCached[eyeIndex] = { eyePosition.x, eyePosition.y, eyePosition.z };
-	}
+	// Cache data since cameraData can become invalid in first-person.
+	auto eyePosition = globals::game::frameBufferCached.GetCameraPosAdjust();
+	eyePositionCached = { eyePosition.x, eyePosition.y, eyePosition.z };
 
 	eastl::vector<LightData> lightsData{};
 	lightsData.reserve(MAX_LIGHTS);
@@ -1762,15 +1755,7 @@ void LightLimitFix::UpdateLights()
 
 			const float clusterCount = static_cast<float>(clusteredLights);
 			clusteredLight.radius /= clusterCount;
-			clusteredLight.positionWS[0].data /= clusterCount;
-			clusteredLight.positionWS[1].data = clusteredLight.positionWS[0].data;
-
-			if (eyeCount == 2) {
-				const auto eyePositionOffset = eyePositionCached[0] - eyePositionCached[1];
-				clusteredLight.positionWS[1].data.x += eyePositionOffset.x;
-				clusteredLight.positionWS[1].data.y += eyePositionOffset.y;
-				clusteredLight.positionWS[1].data.z += eyePositionOffset.z;
-			}
+			clusteredLight.positionWS.data /= clusterCount;
 
 			clusteredLight.lightFlags.set(LightFlags::Simple);
 			clusteredLight.lightFlags.set(LightFlags::Particle);
@@ -1831,16 +1816,16 @@ void LightLimitFix::UpdateLights()
 						}
 
 						RE::NiPoint3 positionWS{
-							initialPosition.x - eyePositionCached[0].x,
-							initialPosition.y - eyePositionCached[0].y,
-							initialPosition.z - eyePositionCached[0].z
+							initialPosition.x - eyePositionCached.x,
+							initialPosition.y - eyePositionCached.y,
+							initialPosition.z - eyePositionCached.z
 						};
 
 						if (clusteredLights) {
 							auto averageRadius = clusteredLight.radius / (float)clusteredLights;
 							float radiusDiff = abs(averageRadius - radius);
 
-							auto averagePosition = clusteredLight.positionWS[0].data / (float)clusteredLights;
+							auto averagePosition = clusteredLight.positionWS.data / (float)clusteredLights;
 							float positionDiff = positionWS.GetDistance({ averagePosition.x, averagePosition.y, averagePosition.z });
 
 							// NEW: use configurable cluster threshold
@@ -1866,9 +1851,9 @@ void LightLimitFix::UpdateLights()
 
 						clusteredLight.radius += radius * particleLight.radiusMult * settings.ParticleRadius;
 
-						clusteredLight.positionWS[0].data.x += positionWS.x;
-						clusteredLight.positionWS[0].data.y += positionWS.y;
-						clusteredLight.positionWS[0].data.z += positionWS.z;
+						clusteredLight.positionWS.data.x += positionWS.x;
+						clusteredLight.positionWS.data.y += positionWS.y;
+						clusteredLight.positionWS.data.z += positionWS.z;
 
 						clusteredLights++;
 					}
@@ -1931,8 +1916,6 @@ void LightLimitFix::UpdateStructure()
 	}
 
 	auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
-	if (REL::Module::IsVR())
-		renderSize.x *= .5;
 	clusterSize[0] = ((uint)renderSize.x + 63) / 64;
 	clusterSize[1] = ((uint)renderSize.y + 63) / 64;
 	clusterSize[2] = 32;

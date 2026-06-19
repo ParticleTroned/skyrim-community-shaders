@@ -472,15 +472,11 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	if (!EnsureFrameToken())
 		return false;
 
-	// In VR, we need to set constants for each viewport/eye separately
-	// In non-VR, this is called once per frame
 	auto state = globals::state;
 
 	sl::Constants slConstants = {};
 
-	// Calculate aspect ratio for the SINGLE EYE
-	float eyeWidth = state->screenSize.x * (globals::game::isVR ? 0.5f : 1.0f);
-	slConstants.cameraAspectRatio = eyeWidth / state->screenSize.y;
+	slConstants.cameraAspectRatio = state->screenSize.x / state->screenSize.y;
 
 	slConstants.cameraFOV = Util::GetVerticalFOVRad();
 	slConstants.cameraNear = *globals::game::cameraNear;
@@ -498,24 +494,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
-	if (globals::game::isVR) {
-		// VR: compute clipToCameraView / clipToPrevClip / prevClipToClip from Skyrim's per-eye matrices.
-		// recalculateCameraMatrices() uses a single static prev-frame slot -- unusable for two viewports.
-		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
-
-		auto currViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Transpose();
-		auto prevViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex).Transpose();
-
-		sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
-		sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
-
-		sl::float4x4 invCurrViewProj;
-		sl::matrixFullInvert(invCurrViewProj, currViewProjSL);
-		sl::matrixMul(slConstants.clipToPrevClip, invCurrViewProj, prevViewProjSL);
-		sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
-	} else {
-		recalculateCameraMatrices(slConstants);
-	}
+	recalculateCameraMatrices(slConstants);
 
 	auto& upscaling = globals::features::upscaling;
 	auto jitter = upscaling.jitter;
@@ -569,7 +548,7 @@ bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 	auto& settings = globals::features::upscaling.settings;
 	const uint32_t qualityMode = std::min<uint32_t>(settings.qualityMode, Upscaling::kQualityModeMaxIndex);
 	const uint32_t dlssPreset = std::min<uint32_t>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
-	const uint32_t cacheIndex = globals::game::isVR ? (eyeIndex > 0 ? 1u : 0u) : 0u;
+	const uint32_t cacheIndex = 0u;
 	const bool useLegacyProfile = isRTXBelow40series;
 	auto& cache = dlssOptionsCache[cacheIndex];
 	const uint32_t viewportKey = static_cast<uint32_t>(p_viewport);
@@ -684,8 +663,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		!colorIn || !colorOut || !depth || !mvec || !reactiveMask || !transparencyMask) {
 		return false;
 	}
-	if (globals::game::isVR && eyeIndex > 1)
-		return false;
 
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, 0 };
 	sl::Resource colorOutRes = { sl::ResourceType::eTex2d, colorOut, 0 };
@@ -710,16 +687,14 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 			return;
 		const sl::Result markerResult = slPCLSetMarker(marker, *frameToken);
 		if (markerResult != sl::Result::eOk) {
-			static bool markerErrorLogged[2][2] = { { false, false }, { false, false } };
-			const uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0u;
+			static bool markerErrorLogged[2] = { false, false };
 			const uint32_t boundedStageIndex = std::min(stageIndex, 1u);
-			if (markerErrorLogged[logIdx][boundedStageIndex])
+			if (markerErrorLogged[boundedStageIndex])
 				return;
-			markerErrorLogged[logIdx][boundedStageIndex] = true;
+			markerErrorLogged[boundedStageIndex] = true;
 			logger::warn(
-				"[Streamline] slPCLSetMarker({}) failed{}: {}",
+				"[Streamline] slPCLSetMarker({}) failed: {}",
 				stageName,
-				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
 				magic_enum::enum_name(markerResult));
 		}
 	};
@@ -746,13 +721,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	auto state = globals::state;
 	if (state && state->frameAnnotations) {
-		if (globals::game::isVR) {
-			char buf[32];
-			snprintf(buf, sizeof(buf), "DLSS Evaluate Eye %u", eyeIndex);
-			state->BeginPerfEvent(buf);
-		} else {
-			state->BeginPerfEvent("DLSS Evaluate");
-		}
+		state->BeginPerfEvent("DLSS Evaluate");
 	}
 
 	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
@@ -763,19 +732,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		state->EndPerfEvent();
 
 	if (evalResult != sl::Result::eOk) {
-		static sl::ViewportHandle lastLoggedEvalErrorViewport[2] = {};
-		static sl::Result lastLoggedEvalErrorResult[2] = {};
-		uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0;
-		if (lastLoggedEvalErrorViewport[logIdx] != vp || lastLoggedEvalErrorResult[logIdx] != evalResult) {
-			lastLoggedEvalErrorViewport[logIdx] = vp;
-			lastLoggedEvalErrorResult[logIdx] = evalResult;
+		static sl::ViewportHandle lastLoggedEvalErrorViewport{};
+		static sl::Result lastLoggedEvalErrorResult{};
+		if (lastLoggedEvalErrorViewport != vp || lastLoggedEvalErrorResult != evalResult) {
+			lastLoggedEvalErrorViewport = vp;
+			lastLoggedEvalErrorResult = evalResult;
 			D3D11_TEXTURE2D_DESC colorInDesc{};
 			D3D11_TEXTURE2D_DESC colorOutDesc{};
 			TryGetTexture2DDesc(colorIn, colorInDesc);
 			TryGetTexture2DDesc(colorOut, colorOutDesc);
 			logger::error(
-				"[Streamline] slEvaluateFeature failed{} result={} viewport={} colorIn={}x{} fmt={} colorOut={}x{} fmt={} extentIn={}x{} extentOut={}x{}",
-				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
+				"[Streamline] slEvaluateFeature failed result={} viewport={} colorIn={}x{} fmt={} colorOut={}x{} fmt={} extentIn={}x{} extentOut={}x{}",
 				static_cast<int>(evalResult),
 				static_cast<uint32_t>(vp),
 				colorInDesc.Width,
@@ -812,106 +779,21 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	const bool outputToSharpener = colorOut != a_upscalingTexture;
 	upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 
-	// VR stereo DLSS: NGX D3D11 only accepts zero-offset subrects. Non-zero offsets return
-	// FAIL_InvalidParameter because Streamline's dlssEntry.cpp never sets
-	// NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects during context creation.
-	//
-	// Both eyes copy their color slice into per-eye intermediates so ClearHMDMask can zero
-	// outside-mask regions before DLSS sees them (prevents temporal bleed into visible pixels).
-	// Eye 0 outputs directly to colorOut (zero-offset) — no intermediate output buffer needed.
-	// Eye 1 outputs to vrIntermediateColorOut[1] then copies back to kMAIN at eyeWidthOut.
-	//
-	// Eye 1 is pre-copied before eye 0 runs: at non-DLAA scales eye 0's upscaled output
-	// extends past eyeWidthIn into eye 1's input region of kMAIN.
-	if (globals::game::isVR) {
-		auto context = globals::d3d::context;
+	// Simple full-texture upscale.
+	sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
+	sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
 
-		uint32_t eyeWidthOut = (uint32_t)(screenSize.x / 2);
-		uint32_t eyeHeightOut = (uint32_t)screenSize.y;
-		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
-		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
-
-		sl::Extent perEyeIn{ 0, 0, eyeWidthIn, eyeHeightIn };
-		sl::Extent perEyeOut{ 0, 0, eyeWidthOut, eyeHeightOut };
-
-		// Both flags track the same creation pool (EnsureVRIntermediateTextures creates all
-		// intermediates atomically), so in practice eye0Ready == eye1Ready. The separate checks
-		// are kept for null-safety and to document which resources each eye path actually uses.
-		bool eye0Ready = upscaling.vrIntermediateColorIn[0] &&
-		                 upscaling.vrIntermediateMotionVectors[0] && upscaling.vrIntermediateReactiveMask[0] && upscaling.vrIntermediateTransparencyMask[0];
-		bool eye1Ready = upscaling.vrIntermediateColorIn[1] && upscaling.vrIntermediateColorOut[1] &&
-		                 upscaling.vrIntermediateDepth && upscaling.vrIntermediateMotionVectors[1] &&
-		                 upscaling.vrIntermediateReactiveMask[1] && upscaling.vrIntermediateTransparencyMask[1];
-
-		// Pre-copy eye 1 before eye 0 runs (overlap hazard), then clear HMD mask.
-		if (eye1Ready) {
-			D3D11_BOX rightIn = { eyeWidthIn, 0, 0, eyeWidthIn * 2, eyeHeightIn, 1 };
-			context->CopySubresourceRegion(upscaling.vrIntermediateColorIn[1]->resource.get(), 0, 0, 0, 0, a_upscalingTexture, 0, &rightIn);
-			context->CopySubresourceRegion(upscaling.vrIntermediateDepth->resource.get(), 0, 0, 0, 0, depthTexture.texture, 0, &rightIn);
-			upscaling.ClearHMDMask(upscaling.vrIntermediateColorIn[1]->uav.get(), depthTexture.depthSRV,
-				eyeWidthIn, eyeHeightIn, eyeWidthIn, 0);
-		}
-
-		bool leftEvaluated = false;
-		bool rightEvaluated = false;
-
-		// Eye 0: copy left-eye slice, clear HMD mask, output directly to colorOut at offset 0.
-		if (eye0Ready) {
-			D3D11_BOX leftIn = { 0, 0, 0, eyeWidthIn, eyeHeightIn, 1 };
-			context->CopySubresourceRegion(upscaling.vrIntermediateColorIn[0]->resource.get(), 0, 0, 0, 0, a_upscalingTexture, 0, &leftIn);
-			upscaling.ClearHMDMask(upscaling.vrIntermediateColorIn[0]->uav.get(), depthTexture.depthSRV,
-				eyeWidthIn, eyeHeightIn, 0, 0);
-
-			leftEvaluated = EvaluateDLSS(viewport, 0,
-				upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
-				depthTexture.texture,
-				upscaling.vrIntermediateMotionVectors[0]->resource.get(),
-				upscaling.vrIntermediateReactiveMask[0]->resource.get(),
-				upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
-				perEyeIn, perEyeOut, eyeWidthOut);
-		}
-
-		// Eye 1: evaluate into intermediate, then copy upscaled result to kMAIN right-eye position.
-		if (eye1Ready) {
-			rightEvaluated = EvaluateDLSS(viewportRight, 1,
-				upscaling.vrIntermediateColorIn[1]->resource.get(),
-				upscaling.vrIntermediateColorOut[1]->resource.get(),
-				upscaling.vrIntermediateDepth->resource.get(),
-				upscaling.vrIntermediateMotionVectors[1]->resource.get(),
-				upscaling.vrIntermediateReactiveMask[1]->resource.get(),
-				upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
-				perEyeIn, perEyeOut, eyeWidthOut);
-		}
-
-		if (leftEvaluated && rightEvaluated) {
-			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
-			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener;
-		} else {
-			upscaling.RequestHistoryReset();
-			static bool loggedVREvaluateFailure = false;
-			if (!loggedVREvaluateFailure) {
-				logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; skipping stale right-eye copy and DLSS sharpening.");
-				loggedVREvaluateFailure = true;
-			}
-		}
-	} else {
-		// Non-VR: Simple full-texture upscale.
-		sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
-		sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
-
-		const bool evaluated = EvaluateDLSS(viewport, 0,
-			a_upscalingTexture, colorOut,
-			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
-			extentIn, extentOut, (uint)screenSize.x);
-		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
-		if (!evaluated) {
-			upscaling.RequestHistoryReset();
-			static bool loggedEvaluateFailure = false;
-			if (!loggedEvaluateFailure) {
-				logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");
-				loggedEvaluateFailure = true;
-			}
+	const bool evaluated = EvaluateDLSS(viewport, 0,
+		a_upscalingTexture, colorOut,
+		depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
+		extentIn, extentOut, (uint)screenSize.x);
+	upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
+	if (!evaluated) {
+		upscaling.RequestHistoryReset();
+		static bool loggedEvaluateFailure = false;
+		if (!loggedEvaluateFailure) {
+			logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");
+			loggedEvaluateFailure = true;
 		}
 	}
 }
@@ -1032,10 +914,6 @@ void Streamline::DestroyDLSSResources()
 	};
 
 	freeViewport(viewport, 0);
-
-	if (globals::game::isVR) {
-		freeViewport(viewportRight, 1);
-	}
 
 	InvalidateDLSSOptionsCache();
 	ResetFrameTracking();

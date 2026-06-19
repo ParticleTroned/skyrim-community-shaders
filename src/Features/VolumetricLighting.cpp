@@ -225,32 +225,13 @@ void VolumetricLighting::DrawSettings()
 {
 	SanitizeSettings();
 
-	auto drawVRRestartHint = [] {
-		if (!globals::game::isVR) {
-			return;
-		}
-
-		ImGui::SameLine();
-		ImGui::TextDisabled("(VR restart required)");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("VR pre-allocates volumetric lighting targets at boot. Restart the game after changing this toggle.");
-		}
-	};
-
 	{
 		Util::BlueFrameStyleWrapper disableDuringRainStyle(true);
-		const char* rainToggleLabel = globals::game::isVR ?
-		                                  "Disable Weather-Driven Volumetric Lighting During Rain" :
-		                                  "Disable Exterior Volumetric Lighting During Rain";
-		if (ImGui::Checkbox(rainToggleLabel, &settings.DisableWeatherInteractionDuringRain))
+		if (ImGui::Checkbox("Disable Exterior Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
 			SetupVL();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		if (globals::game::isVR) {
-			ImGui::TextUnformatted("Suppresses weather-driven volumetric lighting while rain is active and restores it after rain.");
-		} else {
-			ImGui::TextUnformatted("Disables exterior volumetric lighting while rain is active and restores it after rain.");
-		}
+		ImGui::TextUnformatted("Disables exterior volumetric lighting while rain is active and restores it after rain.");
 	}
 
 	DrawGodrayTuningSettings();
@@ -258,14 +239,12 @@ void VolumetricLighting::DrawSettings()
 
 	if (ImGui::Checkbox("Enable Volumetric Lighting in Exteriors", &settings.ExteriorEnabled))
 		SetupVL();
-	drawVRRestartHint();
 
 	if (settings.ExteriorEnabled)
 		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
 
 	if (ImGui::Checkbox("Enable Volumetric Lighting in Interiors", &settings.InteriorEnabled))
 		SetupVL();
-	drawVRRestartHint();
 
 	if (settings.InteriorEnabled)
 		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
@@ -412,11 +391,6 @@ void VolumetricLighting::RestoreDefaultSettings()
 {
 	settings = {};
 	SanitizeSettings();
-	if (globals::game::isVR)
-	{
-		Util::ResetGameSettingsToDefaults(hiddenVREnableSettings);
-		Util::ResetGameSettingsToDefaults(hiddenVRWeatherUpdateSettings);
-	}
 	if (initialised)
 		SetupVL();
 }
@@ -467,36 +441,10 @@ void VolumetricLighting::SetExteriorEnabled(bool enabled)
 
 void VolumetricLighting::DataLoaded()
 {
-	auto shaderCache = globals::shaderCache;
-	const static auto address = REL::Offset{ 0x1ec6b88 }.address();
-	bool& bDepthBufferCulling = *reinterpret_cast<bool*>(address);
-
-	if (REL::Module::IsVR() && bDepthBufferCulling && shaderCache->IsDiskCache()) {
-		// clear cache to fix bug caused by bDepthBufferCulling
-		logger::info("Force clearing cache due to bDepthBufferCulling");
-		shaderCache->Clear();
-	}
 }
 
 void VolumetricLighting::PostPostLoad()
 {
-	if (REL::Module::IsVR()) {
-		if (settings.ExteriorEnabled || settings.InteriorEnabled) {
-			EnableBooleanSettings(hiddenVREnableSettings, GetName());
-			const bool weatherInteractionEnabled = !ShouldSuppressExteriorDuringRain(settings, false);
-			SetBooleanSettings(hiddenVRWeatherUpdateSettings, GetName(), weatherInteractionEnabled);
-		}
-		auto address = REL::RelocationID(100475, 0).address() + 0x45b;  // AE not needed, VR only hook
-		logger::info("[{}] Hooking CopyResource at {:x}", GetName(), address);
-		REL::safe_fill(address, REL::NOP, 7);
-		stl::write_thunk_call<CopyResource>(address);
-
-		// Skip volumetric lighting rendering
-		REL::safe_write(REL::RelocationID(35560, 0).address() + REL::Relocate(0x254, 0), &REL::JMP8, 1);
-		// Move it to render after depth to ensure camera matches rest of scene
-		stl::write_thunk_call<RenderDepth>(REL::RelocationID(35560, 0).address() + REL::Relocate(0x2EE, 0));
-	}
-
 	stl::write_thunk_call<ApplyVolumetricLighting_VolumetricLightingDescriptor_Get>(REL::RelocationID(100475, 107193).address() + 0x354);
 
 	gVolumetricLightingSizeLow = reinterpret_cast<TextureSize*>(REL::RelocationID(527970, 414916).address());
@@ -555,28 +503,17 @@ void VolumetricLighting::SetupVL()
 	SanitizeSettings();
 
 	auto* bEnableVolumetricLighting = globals::game::bEnableVolumetricLighting;
-	if (!gVolumetricLightingSizeHigh || (!globals::game::isVR && !bEnableVolumetricLighting)) {
+	if (!gVolumetricLightingSizeHigh || !bEnableVolumetricLighting) {
 		return;
 	}
 
 	const bool requestedRuntimeEnabled = LocationContext::AllowsEnabledLocations(settings.InteriorEnabled && inInteriorWithSun, settings.ExteriorEnabled, inInterior);
 	rainOnlySuppressionActive = ShouldSuppressExteriorDuringRain(settings, inInterior);
-	const bool runtimeEnabled = requestedRuntimeEnabled && (!rainOnlySuppressionActive || globals::game::isVR);
+	const bool runtimeEnabled = requestedRuntimeEnabled && !rainOnlySuppressionActive;
 	const int32_t quality = ClampQualityIndex(LocationContext::SelectInteriorExterior(inInterior, settings.InteriorQuality, settings.ExteriorQuality));
 	const TextureSize customSize = LocationContext::SelectInteriorExterior(inInterior, settings.InteriorCustomSize, settings.ExteriorCustomSize);
 
-	if (globals::game::isVR) {
-		const bool weatherInteractionEnabled = !rainOnlySuppressionActive;
-		const bool effectiveWeatherUpdateEnabled = requestedRuntimeEnabled && weatherInteractionEnabled;
-		SetBooleanSettings(hiddenVREnableSettings, GetName(), runtimeEnabled);
-		SetBooleanSettings(hiddenVRWeatherUpdateSettings, GetName(), effectiveWeatherUpdateEnabled);
-		if (requestedRuntimeEnabled && !effectiveWeatherUpdateEnabled) {
-			// Drop stale volumetric history immediately when weather updates are suppressed.
-			ClearVolumetricLightingTargets();
-		}
-	} else {
-		*bEnableVolumetricLighting = runtimeEnabled;
-	}
+	*bEnableVolumetricLighting = runtimeEnabled;
 
 	*gVolumetricLightingSizeHigh = static_cast<Quality>(quality) == Quality::Custom ? customSize : defaultSizeHigh;
 	SetVLQuality(GetVLDescriptor(), quality);
@@ -625,20 +562,6 @@ void VolumetricLighting::SetVLQuality(VolumetricLightingDescriptor& descriptor, 
 	using func_t = decltype(&VolumetricLighting::SetVLQuality);
 	static REL::Relocation<func_t> func{ REL::RelocationID(100299, 107016).address() };
 	func(descriptor, std::clamp<uint32_t>(quality, 0, 2));
-}
-
-void VolumetricLighting::RenderVolumetricLighting(VolumetricLightingDescriptor* descriptor, RE::NiCamera* camera, bool flag)
-{
-	using func_t = decltype(&VolumetricLighting::RenderVolumetricLighting);
-	static REL::Relocation<func_t> func{ REL::RelocationID(100306, 0) };
-	func(descriptor, camera, flag);
-}
-
-void VolumetricLighting::RenderDepth::thunk()
-{
-	func();
-	if (globals::game::bEnableVolumetricLighting && *globals::game::bEnableVolumetricLighting)
-		RenderVolumetricLighting(&GetVLDescriptor(), RE::Main::WorldRootCamera(), false);
 }
 
 VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolumetricLighting_VolumetricLightingDescriptor_Get::thunk()
@@ -734,20 +657,4 @@ void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX) const
 void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountY) const
 {
 	threadGroupCountY = (vlData.screenY + BlurThreadGroupSizeY - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeY - BlurWindow * 2u);
-}
-
-void VolumetricLighting::CopyResource::thunk(ID3D11DeviceContext* a_this, ID3D11Resource* a_renderTarget, ID3D11Resource* a_renderTargetSource)
-{
-	// In VR with dynamic resolution enabled, there's a bug with the depth stencil.
-	// The depth stencil passed to IsFullScreenVR is scaled down incorrectly.
-	// The fix is to stop a CopyResource from replacing kMAIN_COPY with kMAIN after
-	// ISApplyVolumetricLighting because it clobbers a properly scaled kMAIN_COPY.
-	// The kMAIN_COPY does not appear to be used in the remaining frame after
-	// ISApplyVolumetricLighting except for IsFullScreenVR.
-	// But, the copy might have to be done manually later after IsFullScreenVR if
-	// used in the next frame.
-
-	if (!(Util::IsDynamicResolution() && globals::game::bEnableVolumetricLighting && *globals::game::bEnableVolumetricLighting)) {
-		a_this->CopyResource(a_renderTarget, a_renderTargetSource);
-	}
 }

@@ -39,7 +39,6 @@ namespace FeatureVersions
         {"TruePBR"sv,              {1,0,0}},
         {"UnifiedWater"sv,         {1,0,0}},
         {"Upscaling"sv,            {1,3,5}},
-        {"VR"sv,                   {1,1,5}},
         {"VolumetricLighting"sv,   {1,1,5}},
         {"WaterEffects"sv,         {1,1,0}},
         {"CSEditor"sv,            {1,0,0}},
@@ -70,7 +69,6 @@ namespace FeatureVersions
         "TerrainShadows"sv,
         "TruePBR"sv,
         "Upscaling"sv,
-        "VR"sv,
         "VolumetricLighting"sv,
         "WaterEffects"sv,
         "CSEditor"sv

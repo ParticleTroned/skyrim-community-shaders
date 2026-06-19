@@ -24,7 +24,6 @@ public:
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
-	virtual bool SupportsVR() override { return true; }
 
 	struct Settings
 	{
@@ -68,7 +67,7 @@ public:
 	bool renderTerrainDepth = false;
 	bool renderAltTerrain = false;
 
-	RE::NiPoint3 averageEyePosition;
+	RE::NiPoint3 eyePosition;
 
 	struct RenderPass
 	{
@@ -148,7 +147,7 @@ public:
 		static void Install()
 		{
 			// To know when we are rendering z-prepass depth vs shadows depth
-			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395, 0x2EE));
+			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395));
 
 			// Engine path: late Utility setup hook so slot rebinding survives to draw.
 			stl::write_vfunc<0x6, BSUtilityShader_SetupGeometry>(RE::VTABLE_BSUtilityShader[0]);

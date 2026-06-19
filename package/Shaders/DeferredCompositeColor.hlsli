@@ -7,7 +7,6 @@
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
-#include "Common/VR.hlsli"
 
 Texture2D<float3> SpecularTexture : register(t0);
 Texture2D<unorm float3> AlbedoTexture : register(t1);
@@ -118,11 +117,7 @@ namespace DeferredComposite
 			float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 
 #		if defined(SKYLIGHTING)
-#			if defined(VR)
-			float3 positionMS = positionWS.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#			else
 			float3 positionMS = positionWS.xyz;
-#			endif
 			sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
 			float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
 			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse) * albedo;
@@ -187,11 +182,7 @@ namespace DeferredComposite
 			float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(R)))) * Color::ReflectionNormalisationScale;
 
 #	if defined(SKYLIGHTING)
-#		if defined(VR)
-			float3 positionMS = positionWS.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#		else
 			float3 positionMS = positionWS.xyz;
-#		endif
 
 			sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, R);
 			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe);
@@ -284,10 +275,6 @@ namespace DeferredComposite
 		color = Color::IrradianceToGamma(color);
 
 #if defined(DEBUG)
-
-#	if defined(VR)
-		uv.x += (eyeIndex ? 0.1 : -0.1);
-#	endif  // VR
 
 		if (uv.x < 0.5 && uv.y < 0.5) {
 			color = color;

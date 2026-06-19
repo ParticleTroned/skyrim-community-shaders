@@ -18,7 +18,6 @@ struct ScreenshotFeature : public Feature
 	virtual std::string GetShortName() override { return "Screenshot"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 
-	virtual bool SupportsVR() override { return true; }
 	virtual bool IsInMenu() const override;
 
 	virtual void DrawSettings() override;

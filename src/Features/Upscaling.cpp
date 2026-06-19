@@ -9,18 +9,13 @@
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
-#include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
-#include "VR.h"
 #include <Windows.h>
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
-#include <cctype>
 #include <cmath>
-#include <cwctype>
 #include <directx/d3dx12.h>
-#include <filesystem>
 #include <format>
 #include <string_view>
 
@@ -342,247 +337,6 @@ namespace
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
 	}
 
-	struct OpenCompositeSettingValue
-	{
-		bool value = false;
-		std::string configPath;
-	};
-
-	struct OpenCompositeUpscalingSettings
-	{
-		OpenCompositeSettingValue dlssEnabled;
-		OpenCompositeSettingValue fsrEnabled;
-		OpenCompositeSettingValue dlaaEnabled;
-		OpenCompositeSettingValue fsrNativeAA;
-		OpenCompositeSettingValue fsr3PostAAEnabled;
-	};
-
-	struct DetectedOpenCompositeUpscalingBlocker
-	{
-		bool active = false;
-		std::string settingName;
-		std::string configPath;
-	};
-
-	std::string_view TrimAsciiWhitespace(std::string_view value)
-	{
-		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
-			value.remove_prefix(1);
-		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
-			value.remove_suffix(1);
-		return value;
-	}
-
-	std::string ToLowerAscii(std::string_view value)
-	{
-		std::string result(value);
-		std::ranges::transform(result, result.begin(), [](unsigned char c) {
-			return static_cast<char>(std::tolower(c));
-		});
-		return result;
-	}
-
-	bool TryParseOpenCompositeBool(std::string value, bool& outValue)
-	{
-		value = ToLowerAscii(TrimAsciiWhitespace(value));
-		if (value == "true" || value == "on" || value == "enabled" || value == "1") {
-			outValue = true;
-			return true;
-		}
-		if (value == "false" || value == "off" || value == "disabled" || value == "0") {
-			outValue = false;
-			return true;
-		}
-		return false;
-	}
-
-	std::string PathToDisplayString(const std::filesystem::path& path)
-	{
-		return path.string();
-	}
-
-	void AddUniquePath(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path)
-	{
-		if (path.empty())
-			return;
-
-		auto normalized = path.lexically_normal().wstring();
-		std::ranges::transform(normalized, normalized.begin(), [](wchar_t c) {
-			return static_cast<wchar_t>(std::towlower(c));
-		});
-
-		const bool alreadyAdded = std::ranges::any_of(paths, [&](const std::filesystem::path& existing) {
-			auto existingNormalized = existing.lexically_normal().wstring();
-			std::ranges::transform(existingNormalized, existingNormalized.begin(), [](wchar_t c) {
-				return static_cast<wchar_t>(std::towlower(c));
-			});
-			return existingNormalized == normalized;
-		});
-		if (!alreadyAdded)
-			paths.push_back(path);
-	}
-
-	std::filesystem::path GetCurrentDirectoryPath()
-	{
-		std::wstring buffer(MAX_PATH, L'\0');
-		const DWORD length = GetCurrentDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
-		if (length == 0)
-			return {};
-
-		if (length >= buffer.size()) {
-			buffer.resize(length + 1);
-			const DWORD retryLength = GetCurrentDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
-			if (retryLength == 0 || retryLength >= buffer.size())
-				return {};
-			buffer.resize(retryLength);
-		} else {
-			buffer.resize(length);
-		}
-
-		return std::filesystem::path(buffer);
-	}
-
-	std::filesystem::path GetLoadedOpenVRDirectory()
-	{
-		HMODULE openVRModule = GetModuleHandleW(L"openvr_api.dll");
-		if (!openVRModule)
-			return {};
-
-		std::wstring buffer(MAX_PATH, L'\0');
-		const DWORD length = GetModuleFileNameW(openVRModule, buffer.data(), static_cast<DWORD>(buffer.size()));
-		if (length == 0 || length >= buffer.size())
-			return {};
-
-		buffer.resize(length);
-		return std::filesystem::path(buffer).parent_path();
-	}
-
-	bool ShouldProbeOpenCompositeConfig()
-	{
-		if (!globals::game::isVR)
-			return false;
-
-		const auto& cachedInfo = globals::features::vr.openVRInfo;
-		if (cachedInfo.isAvailable)
-			return cachedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
-
-		const auto detectedInfo = VRDetection::Detect();
-		return detectedInfo.isAvailable &&
-		       detectedInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
-	}
-
-	std::vector<std::filesystem::path> GetOpenCompositeConfigCandidates()
-	{
-		std::vector<std::filesystem::path> candidates;
-
-		const auto loadedOpenVRDirectory = GetLoadedOpenVRDirectory();
-		if (!loadedOpenVRDirectory.empty())
-			AddUniquePath(candidates, loadedOpenVRDirectory / L"opencomposite.ini");
-
-		const auto currentDirectory = GetCurrentDirectoryPath();
-		if (!currentDirectory.empty()) {
-			AddUniquePath(candidates, currentDirectory / L"opencomposite.ini");
-			AddUniquePath(candidates, currentDirectory / L"opencomposite_ext.ini");
-		}
-
-		return candidates;
-	}
-
-	bool TryReadIniBoolSetting(const CSimpleIniA& ini, const char* key, bool& outValue)
-	{
-		auto tryReadSection = [&](const char* section) {
-			const char* rawValue = ini.GetValue(section, key, nullptr);
-			return rawValue && TryParseOpenCompositeBool(rawValue, outValue);
-		};
-
-		if (tryReadSection(""))
-			return true;
-
-		CSimpleIniA::TNamesDepend sections;
-		ini.GetAllSections(sections);
-		for (const auto& section : sections) {
-			if (section.pItem && tryReadSection(section.pItem))
-				return true;
-		}
-
-		return false;
-	}
-
-	void UpdateOpenCompositeSettingValue(OpenCompositeSettingValue& setting, const CSimpleIniA& ini, const char* key, const std::filesystem::path& path)
-	{
-		bool parsedValue = false;
-		if (!TryReadIniBoolSetting(ini, key, parsedValue))
-			return;
-
-		setting.value = parsedValue;
-		setting.configPath = PathToDisplayString(path);
-	}
-
-	OpenCompositeUpscalingSettings ReadOpenCompositeUpscalingSettings()
-	{
-		OpenCompositeUpscalingSettings settings;
-
-		std::error_code ec;
-		for (const auto& path : GetOpenCompositeConfigCandidates()) {
-			if (!std::filesystem::exists(path, ec))
-				continue;
-			ec.clear();
-
-			CSimpleIniA ini;
-			ini.SetUnicode();
-			const SI_Error rc = ini.LoadFile(path.c_str());
-			if (rc < 0) {
-				logger::warn("[Upscaling] Failed to read Open Composite config '{}': {}", PathToDisplayString(path), rc);
-				continue;
-			}
-
-			UpdateOpenCompositeSettingValue(settings.dlssEnabled, ini, "dlssEnabled", path);
-			UpdateOpenCompositeSettingValue(settings.fsrEnabled, ini, "fsrEnabled", path);
-			UpdateOpenCompositeSettingValue(settings.dlaaEnabled, ini, "dlaaEnabled", path);
-			UpdateOpenCompositeSettingValue(settings.fsrNativeAA, ini, "fsrNativeAA", path);
-			UpdateOpenCompositeSettingValue(settings.fsr3PostAAEnabled, ini, "fsr3PostAAEnabled", path);
-		}
-
-		return settings;
-	}
-
-	DetectedOpenCompositeUpscalingBlocker FindOpenCompositeUpscalingBlocker()
-	{
-		DetectedOpenCompositeUpscalingBlocker blocker;
-		if (!globals::game::isVR)
-			return blocker;
-
-		Util::OCUExternalUpscalerState externalState{};
-		if (Util::TryReadOCUExternalUpscalerState(externalState)) {
-			blocker.active = true;
-			blocker.settingName = "OpenCompositeUnleashedSharedState";
-			blocker.configPath = "Local\\OpenCompositeUnleashedUpscalingState";
-			return blocker;
-		}
-
-		if (!ShouldProbeOpenCompositeConfig())
-			return blocker;
-
-		const auto settings = ReadOpenCompositeUpscalingSettings();
-		auto setBlocker = [&](const char* settingName, const OpenCompositeSettingValue& setting) {
-			blocker.active = true;
-			blocker.settingName = settingName;
-			blocker.configPath = setting.configPath;
-		};
-
-		if (settings.dlaaEnabled.value)
-			setBlocker("dlaaEnabled", settings.dlaaEnabled);
-		else if (settings.fsrNativeAA.value)
-			setBlocker("fsrNativeAA", settings.fsrNativeAA);
-		else if (settings.fsr3PostAAEnabled.value)
-			setBlocker("fsr3PostAAEnabled", settings.fsr3PostAAEnabled);
-		else if (settings.dlssEnabled.value)
-			setBlocker("dlssEnabled", settings.dlssEnabled);
-		else if (settings.fsrEnabled.value)
-			setBlocker("fsrEnabled", settings.fsrEnabled);
-
-		return blocker;
-	}
 }
 
 /**
@@ -650,7 +404,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		pSwapChainDesc->BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	}
 
-	bool shouldProxy = !globals::game::isVR;
+	bool shouldProxy = true;
 	if (shouldProxy)
 		if (!pSwapChainDesc->Windowed)
 			shouldProxy = false;
@@ -759,9 +513,6 @@ void Upscaling::DrawSettings()
 	const bool runtimeUpscalerPresent = fidelityFX.IsRuntimeUpscalerPresent();
 	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
 	const bool featureDLSS = streamline.featureDLSS;
-	ApplyOpenCompositeUpscalingBlocker();
-	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
-	const bool openCompositeBlocksUpscaling = openCompositeBlocker.active;
 	const bool renderDocBlocksUpscaling = IsRenderDocUpscalingBlocked();
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 	if (!featureDLSS)
@@ -775,7 +526,7 @@ void Upscaling::DrawSettings()
 	std::vector<UpscaleUiChoice> upscaleChoices = {
 		{ UpscaleMethod::kNONE, false, "None" }
 	};
-	if (!openCompositeBlocksUpscaling && !renderDocBlocksUpscaling) {
+	if (!renderDocBlocksUpscaling) {
 		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
 		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR 3.1.5" });
 		if (runtimeFsr4AutoEligible)
@@ -810,15 +561,13 @@ void Upscaling::DrawSettings()
 	}
 
 	const char* currentMethodLabel = upscaleChoices[methodUiIndex].label;
-	if (openCompositeBlocksUpscaling || renderDocBlocksUpscaling)
+	if (renderDocBlocksUpscaling)
 		ImGui::BeginDisabled();
 	const bool methodChanged = ImGui::SliderInt("Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), currentMethodLabel);
-	if (openCompositeBlocksUpscaling || renderDocBlocksUpscaling)
+	if (renderDocBlocksUpscaling)
 		ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		if (openCompositeBlocksUpscaling) {
-			ImGui::Text("Locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
-		} else if (renderDocBlocksUpscaling) {
+		if (renderDocBlocksUpscaling) {
 			ImGui::Text("Runtime is forced to None while %s.", GetRenderDocUpscalingBlockReason());
 		} else {
 			ImGui::TextUnformatted("Selects the upscaling backend.");
@@ -835,21 +584,6 @@ void Upscaling::DrawSettings()
 		*currentUpscaleMode = static_cast<uint32_t>(selectedUpscaleChoice.method);
 		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
 			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
-	}
-	if (openCompositeBlocksUpscaling) {
-		ApplyOpenCompositeUpscalingBlocker();
-		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-		if (openCompositeBlocker.configPath.empty()) {
-			ImGui::TextWrapped(
-				"Community Shaders Upscaling is locked to None because Open Composite has %s=true.",
-				openCompositeBlocker.settingName.c_str());
-		} else {
-			ImGui::TextWrapped(
-				"Community Shaders Upscaling is locked to None because Open Composite has %s=true in %s.",
-				openCompositeBlocker.settingName.c_str(),
-				openCompositeBlocker.configPath.c_str());
-		}
-		ImGui::PopStyleColor();
 	}
 	if (renderDocBlocksUpscaling) {
 		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
@@ -881,8 +615,8 @@ void Upscaling::DrawSettings()
 			ImGui::TextDisabled("Runtime FSR 4.1 unavailable: missing FidelityFX upscaler runtime.");
 	}
 
-	// Display warning for DLSS resolution limits (non-VR only; VR handles this automatically)
-	if (!globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS) {
+	// Display warning for DLSS resolution limits.
+	if (upscaleMethod == UpscaleMethod::kDLSS) {
 		auto screenSize = globals::state->screenSize;
 		if (screenSize.x > streamline.MAX_RESOLUTION || screenSize.y > streamline.MAX_RESOLUTION) {
 			Util::Text::Warning("Warning: Requested resolution %.0f x %.0f exceeds maximum supported resolution %d x %d for DLSS.",
@@ -978,68 +712,66 @@ void Upscaling::DrawSettings()
 
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
 
-	if (!globals::game::isVR) {
-		if (ImGui::TreeNodeEx("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
-			ImGui::Text("Uses AMD FSR Frame Generation technology");
-			if (HasFrameGenModule())
-				ImGui::Text("AMD FSR Frame Generation is available.");
-			ImGui::Text("Requires a D3D11 to D3D12 proxy which can create compatibility issues");
-			ImGui::Text("Toggling this setting requires a restart to work correctly");
+	if (ImGui::TreeNodeEx("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
+		ImGui::Text("Uses AMD FSR Frame Generation technology");
+		if (HasFrameGenModule())
+			ImGui::Text("AMD FSR Frame Generation is available.");
+		ImGui::Text("Requires a D3D11 to D3D12 proxy which can create compatibility issues");
+		ImGui::Text("Toggling this setting requires a restart to work correctly");
 
-			bool onlyRequiresRestart = true;
+		bool onlyRequiresRestart = true;
 
-			if (!isWindowed) {
-				Util::Text::Warning("Warning: Requires windowed mode");
+		if (!isWindowed) {
+			Util::Text::Warning("Warning: Requires windowed mode");
 
-				onlyRequiresRestart = false;
-			}
-
-			if (lowRefreshRate && !settings.frameGenerationForceEnable) {
-				Util::Text::Warning("Warning: Requires a high refresh rate monitor or Force Enable Frame Generation");
-
-				onlyRequiresRestart = false;
-			}
-
-			if (fidelityFXMissing) {
-				Util::Text::Warning("Warning: FidelityFX DLLs are not loaded");
-
-				onlyRequiresRestart = false;
-			}
-
-			if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive)
-				Util::Text::Warning("Warning: Requires restart");
-
-			if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
-				Util::Text::Warning("Warning: Requires restart");
-
-			bool fgEnabled = settings.frameGenerationMode != 0;
-			if (ImGui::Checkbox("Frame Generation", &fgEnabled))
-				settings.frameGenerationMode = fgEnabled ? 1 : 0;
-
-			if (!frameGenerationDx12PathActive)
-				ImGui::BeginDisabled();
-
-			bool flEnabled = settings.frameLimitMode != 0;
-			if (ImGui::Checkbox("Frame Limit (Variable Refresh Rate)", &flEnabled))
-				settings.frameLimitMode = flEnabled ? 1 : 0;
-
-			if (!frameGenerationDx12PathActive)
-				ImGui::EndDisabled();
-
-			ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", refreshRate);
-			bool fgForce = settings.frameGenerationForceEnable != 0;
-			if (ImGui::Checkbox("Force Enable Frame Generation", &fgForce))
-				settings.frameGenerationForceEnable = fgForce ? 1 : 0;
-
-			ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Keeps frame generation active while game menus are open.");
-				ImGui::TextUnformatted("May feel smoother, but increases menu input latency.");
-			}
-
-			ImGui::TreePop();
+			onlyRequiresRestart = false;
 		}
+
+		if (lowRefreshRate && !settings.frameGenerationForceEnable) {
+			Util::Text::Warning("Warning: Requires a high refresh rate monitor or Force Enable Frame Generation");
+
+			onlyRequiresRestart = false;
+		}
+
+		if (fidelityFXMissing) {
+			Util::Text::Warning("Warning: FidelityFX DLLs are not loaded");
+
+			onlyRequiresRestart = false;
+		}
+
+		if (onlyRequiresRestart && settings.frameGenerationMode && !frameGenerationDx12PathActive)
+			Util::Text::Warning("Warning: Requires restart");
+
+		if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
+			Util::Text::Warning("Warning: Requires restart");
+
+		bool fgEnabled = settings.frameGenerationMode != 0;
+		if (ImGui::Checkbox("Frame Generation", &fgEnabled))
+			settings.frameGenerationMode = fgEnabled ? 1 : 0;
+
+		if (!frameGenerationDx12PathActive)
+			ImGui::BeginDisabled();
+
+		bool flEnabled = settings.frameLimitMode != 0;
+		if (ImGui::Checkbox("Frame Limit (Variable Refresh Rate)", &flEnabled))
+			settings.frameLimitMode = flEnabled ? 1 : 0;
+
+		if (!frameGenerationDx12PathActive)
+			ImGui::EndDisabled();
+
+		ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", refreshRate);
+		bool fgForce = settings.frameGenerationForceEnable != 0;
+		if (ImGui::Checkbox("Force Enable Frame Generation", &fgForce))
+			settings.frameGenerationForceEnable = fgForce ? 1 : 0;
+
+		ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Keeps frame generation active while game menus are open.");
+			ImGui::TextUnformatted("May feel smoother, but increases menu input latency.");
+		}
+
+		ImGui::TreePop();
 	}
 
 	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1131,68 +863,6 @@ void Upscaling::DrawSettings()
 			ImGui::Text("Streamline logging controls the verbosity of NVIDIA Streamline backend logs. Useful for debugging issues with DLSS/DLSS-G.");
 		}
 
-		// VR Debug visualization -- per-eye buffers and native inputs
-		if (globals::game::isVR) {
-			ImGui::Separator();
-			static float debugRescale = 0.15f;
-			ImGui::SliderFloat("View Resize", &debugRescale, 0.05f, 1.f);
-
-			if (ImGui::TreeNode("Upscaling Intermediates")) {
-				if (vrIntermediateMotionVectors[0]) {
-					bool isDLSS = GetUpscaleMethod() == UpscaleMethod::kDLSS;
-					if (vrIntermediateColorIn[0] && vrIntermediateColorOut[0]) {
-						BUFFER_VIEWER_NODE_TITLE(vrIntermediateColorIn[0], "Left Eye In", debugRescale)
-						BUFFER_VIEWER_NODE_TITLE(vrIntermediateColorIn[1], "Right Eye In", debugRescale)
-						if (!isDLSS)
-							BUFFER_VIEWER_NODE_TITLE(vrIntermediateColorOut[0], "Left Eye Out", debugRescale)
-						BUFFER_VIEWER_NODE_TITLE(vrIntermediateColorOut[1], "Right Eye Out", debugRescale)
-					}
-					BUFFER_VIEWER_NODE_TITLE(vrIntermediateMotionVectors[0], "Left Eye MVec", debugRescale)
-					BUFFER_VIEWER_NODE_TITLE(vrIntermediateMotionVectors[1], "Right Eye MVec", debugRescale)
-					BUFFER_VIEWER_NODE_TITLE(vrIntermediateReactiveMask[0], "Left Eye Reactive", debugRescale)
-					BUFFER_VIEWER_NODE_TITLE(vrIntermediateReactiveMask[1], "Right Eye Reactive", debugRescale)
-					if (vrIntermediateTransparencyMask[0]) {
-						BUFFER_VIEWER_NODE_TITLE(vrIntermediateTransparencyMask[0], "Left Eye Transparency", debugRescale)
-						BUFFER_VIEWER_NODE_TITLE(vrIntermediateTransparencyMask[1], "Right Eye Transparency", debugRescale)
-					}
-				} else {
-					ImGui::TextDisabled("VR intermediates not yet created (enter game world)");
-				}
-				ImGui::TreePop();
-			}
-
-			if (ImGui::TreeNode("Native Inputs")) {
-				auto renderer = globals::game::renderer;
-				auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-				auto& mvec = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-				auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-
-				auto DisplayRT = [&](const char* label, ID3D11Texture2D* tex, ID3D11ShaderResourceView* srv) {
-					if (srv && tex) {
-						D3D11_TEXTURE2D_DESC desc;
-						tex->GetDesc(&desc);
-						char buf[128];
-						snprintf(buf, sizeof(buf), "%s (%ux%u)", label, desc.Width, desc.Height);
-						if (ImGui::TreeNode(buf)) {
-							ImGui::Image(srv, { desc.Width * debugRescale, desc.Height * debugRescale });
-							ImGui::TreePop();
-						}
-					}
-				};
-
-				DisplayRT("kMAIN (Color Input)", (ID3D11Texture2D*)main.texture, (ID3D11ShaderResourceView*)main.SRV);
-				DisplayRT("Motion Vectors", (ID3D11Texture2D*)mvec.texture, (ID3D11ShaderResourceView*)mvec.SRV);
-				DisplayRT("Depth", depth.texture, depth.depthSRV);
-
-				if (reactiveMaskTexture)
-					BUFFER_VIEWER_NODE_TITLE(reactiveMaskTexture, "Reactive Mask", debugRescale)
-				if (transparencyCompositionMaskTexture)
-					BUFFER_VIEWER_NODE_TITLE(transparencyCompositionMaskTexture, "Transparency Mask", debugRescale)
-
-				ImGui::TreePop();
-			}
-		}
-
 		ImGui::Separator();
 		Util::DrawDllVersionTable("AMD FidelityFX DLLs (click to open folder)", FidelityFX::PluginDir, FidelityFX::dllVersions, "ffx_dll_versions");
 		Util::DrawDllVersionTable("NVIDIA Streamline DLLs (click to open folder)", Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
@@ -1200,49 +870,8 @@ void Upscaling::DrawSettings()
 	}
 }
 
-const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
-{
-	const ULONGLONG now = GetTickCount64();
-	constexpr ULONGLONG kRefreshIntervalMs = 1000;
-	if (!a_forceRefresh && openCompositeUpscalingBlockerCacheValid && now - openCompositeUpscalingBlockerLastRefresh < kRefreshIntervalMs)
-		return openCompositeUpscalingBlocker;
-
-	const auto detectedBlocker = FindOpenCompositeUpscalingBlocker();
-	openCompositeUpscalingBlocker.active = detectedBlocker.active;
-	openCompositeUpscalingBlocker.settingName = detectedBlocker.settingName;
-	openCompositeUpscalingBlocker.configPath = detectedBlocker.configPath;
-	openCompositeUpscalingBlockerCacheValid = true;
-	openCompositeUpscalingBlockerLastRefresh = now;
-	return openCompositeUpscalingBlocker;
-}
-
-void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
-{
-	const auto& blocker = GetOpenCompositeUpscalingBlocker(a_forceRefresh);
-	if (!blocker.active)
-		return;
-
-	if (settings.upscaleMethod != static_cast<uint>(UpscaleMethod::kNONE) ||
-	    settings.upscaleMethodNoDLSS != static_cast<uint>(UpscaleMethod::kNONE)) {
-		if (blocker.configPath.empty()) {
-			logger::warn(
-				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true.",
-				blocker.settingName);
-		} else {
-			logger::warn(
-				"[Upscaling] Forcing Community Shaders Upscaling to None because Open Composite has {}=true in {}.",
-				blocker.settingName,
-				blocker.configPath);
-		}
-	}
-
-	settings.upscaleMethod = static_cast<uint>(UpscaleMethod::kNONE);
-	settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
-}
-
 void Upscaling::SaveSettings(json& o_json)
 {
-	ApplyOpenCompositeUpscalingBlocker(true);
 	SanitizeUpscalingSettings(settings);
 	o_json = settings;
 	o_json["qualityModeSchemaVersion"] = 2;
@@ -1280,7 +909,6 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded dlssPreset {} out of range, clamping to {}", settings.dlssPreset, kDLSSPresetMaxIndex);
 
 	SanitizeUpscalingSettings(settings);
-	ApplyOpenCompositeUpscalingBlocker(true);
 
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
@@ -1311,61 +939,20 @@ void Upscaling::RestoreDefaultSettings()
 {
 	settings = {};
 	SanitizeUpscalingSettings(settings);
-	ApplyOpenCompositeUpscalingBlocker(true);
 }
 
 void Upscaling::DataLoaded()
 {
-	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
-	if (blocker.active) {
-		logger::warn("[Upscaling] Skipping data-loaded upscaling adjustments because Open Composite has {}=true.", blocker.settingName);
-		return;
-	}
-
 	// Fix screenshots fix from Engine Fixes
 	Util::DisableVanillaTAA();
 
 	// The game defaults this to a non-zero value
 	static auto fDRClampOffset = RE::GetINISetting("fDRClampOffset:Display");
 	fDRClampOffset->data.f = 0.0f;
-
-	// VR + DLSS workaround: rebuild the DLSS feature on cell/worldspace transitions to
-	// clear a persistent post-load GPU-time regression (see pendingDLSSReset comment).
-	if (globals::game::isVR)
-		MenuOpenCloseEventHandler::Register();
-}
-
-RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
-	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
-{
-	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
-		globals::features::upscaling.pendingDLSSReset.store(true, std::memory_order_relaxed);
-	return RE::BSEventNotifyControl::kContinue;
-}
-
-bool Upscaling::MenuOpenCloseEventHandler::Register()
-{
-	static MenuOpenCloseEventHandler singleton;
-	auto ui = globals::game::ui;
-	if (!ui) {
-		logger::error("[Upscaling] UI event source not found; DLSS reset-on-load disabled");
-		return false;
-	}
-	ui->GetEventSource<RE::MenuOpenCloseEvent>()->AddEventSink(&singleton);
-	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for DLSS reset-on-load");
-	return true;
 }
 
 void Upscaling::Load()
 {
-	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
-	if (blocker.active) {
-		logger::warn("[Upscaling] Skipping D3D11 device hook because Open Composite has {}=true.", blocker.settingName);
-		return;
-	}
-
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainUpscaling, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
 }
 
@@ -1383,13 +970,6 @@ struct BSImageSpace_Init_FXAA
 };
 void Upscaling::PostPostLoad()
 {
-	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
-	if (blocker.active) {
-		logger::warn("[Upscaling] Skipping upscaling render hooks because Open Composite has {}=true.", blocker.settingName);
-		return;
-	}
-
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");
 	stl::detour_thunk<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084));
 
@@ -1404,8 +984,7 @@ void Upscaling::PostPostLoad()
 
 	// Patches RSSetScissorRect calls to use dynamic resolution
 	// This is a PC-specific function hence it was missing
-	if (!globals::game::isVR)
-		stl::detour_thunk<SetScissorRect>(REL::RelocationID(75564, 77365));
+	stl::detour_thunk<SetScissorRect>(REL::RelocationID(75564, 77365));
 
 	// Patches facegen texture generation to not use dynamic resolution
 	stl::detour_thunk<BSFaceGenManager_UpdatePendingCustomizationTextures>(REL::RelocationID(26455, 27041));
@@ -1421,8 +1000,6 @@ void Upscaling::PostPostLoad()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
-	if (GetOpenCompositeUpscalingBlocker().active)
-		return UpscaleMethod::kNONE;
 	if (IsRenderDocUpscalingBlocked())
 		return UpscaleMethod::kNONE;
 
@@ -1475,7 +1052,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
-	// Encoded motion vectors are used by DLSS and by FSR's non-VR full-frame path.
+	// Encoded motion vectors are used by DLSS and by FSR's full-frame path.
 	if (a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR) {
 		if (!motionVectorCopyTexture) {
 			auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
@@ -1528,7 +1105,7 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		transparencyCompositionMaskTexture.reset();
 	}
 
-	// Encoded motion vectors are used by DLSS and by FSR's non-VR full-frame path.
+	// Encoded motion vectors are used by DLSS and by FSR's full-frame path.
 	if (a_upscalemethod != UpscaleMethod::kDLSS && a_upscalemethod != UpscaleMethod::kFSR) {
 		motionVectorCopyTexture.reset();
 	}
@@ -1612,7 +1189,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		bool fsrResourcesRecreated = false;
 
 		if (dlssResourceSettingsChanged) {
-			pendingDLSSReset.store(false, std::memory_order_relaxed);
 			streamline.DestroyDLSSResources();
 			RequestHistoryReset();
 		}
@@ -1632,18 +1208,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 					streamline.DestroyDLSSResources();
 				else if (previousUpscaleMode == UpscaleMethod::kFSR && !fsrResourcesRecreated)
 					fidelityFX.DestroyFSRResources();
-
-				if (globals::game::isVR) {
-					for (int i = 0; i < 2; i++) {
-						vrIntermediateColorIn[i].reset();
-						vrIntermediateColorOut[i].reset();
-						vrIntermediateLinearDepth[i].reset();
-						vrIntermediateMotionVectors[i].reset();
-						vrIntermediateReactiveMask[i].reset();
-						vrIntermediateTransparencyMask[i].reset();
-					}
-					vrIntermediateDepth.reset();
-				}
 			}
 			DestroyUpscalingTextureResources(a_upscalemethod);
 			if (a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreated)
@@ -1696,7 +1260,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				sourceTextureDescChanged,
 				vendorTextureStateInvalid);
 			if (a_upscalemethod == UpscaleMethod::kDLSS) {
-				pendingDLSSReset.store(false, std::memory_order_relaxed);
 				streamline.DestroyDLSSResources();
 			} else if (a_upscalemethod == UpscaleMethod::kFSR) {
 				fidelityFX.DestroyFSRResources();
@@ -1719,20 +1282,6 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 {
 	auto upscaleMethod = GetUpscaleMethod();
 	uint methodIndex = (uint)upscaleMethod;
-
-	// VR FSR needs a separate variant: DEPTH_OUTPUT converts the R24G8_TYPELESS game depth to
-	// R32_FLOAT so GetFfxResourceDescriptionDX11() returns a valid format instead of UNKNOWN.
-	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kFSR) {
-		if (!encodeTexturesCSDepthOutput) {
-			logger::debug("Compiling EncodeTexturesCS.hlsl for VR FSR (FSR + DEPTH_OUTPUT)");
-			std::vector<std::pair<const char*, const char*>> defines = {
-				{ "FSR", "" },
-				{ "DEPTH_OUTPUT", "" }
-			};
-			encodeTexturesCSDepthOutput.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/EncodeTexturesCS.hlsl", defines, "cs_5_0"));
-		}
-		return encodeTexturesCSDepthOutput.get();
-	}
 
 	if (!encodeTexturesCS[methodIndex]) {
 		logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {}", methodIndex);
@@ -1773,8 +1322,6 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS()
 	if (!underwaterMaskUpscalePS) {
 		logger::debug("Compiling UnderwaterMaskPS.hlsl");
 		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
-		if (globals::game::isVR)
-			defines.push_back({ "VR", "" });
 		underwaterMaskUpscalePS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines, "ps_5_0"));
 	}
 
@@ -1789,306 +1336,6 @@ ID3D11VertexShader* Upscaling::GetUpscaleVS()
 	}
 
 	return upscaleVS.get();
-}
-
-eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-	bool copyBindFlags, bool createSRV, bool createUAV, const char* name)
-{
-	if (!src) {
-		logger::critical("[Upscaling] Cannot create texture {} from a null source resource.", name ? name : "<unnamed>");
-		DX::ThrowIfFailed(E_POINTER);
-		return nullptr;
-	}
-
-	D3D11_TEXTURE2D_DESC srcDesc;
-	winrt::com_ptr<ID3D11Texture2D> srcTexture;
-	DX::ThrowIfFailed(src->QueryInterface(IID_PPV_ARGS(srcTexture.put())));
-	srcTexture->GetDesc(&srcDesc);
-
-	D3D11_TEXTURE2D_DESC desc = {};
-	desc.Width = width;
-	desc.Height = height;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Format = srcDesc.Format;
-	desc.SampleDesc.Count = 1;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = copyBindFlags ? srcDesc.BindFlags : (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
-
-	auto tex = eastl::make_unique<Texture2D>(desc);
-
-	if (name) {
-		Util::SetResourceName(tex->resource.get(), name);
-	}
-
-	if (createSRV) {
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = srcDesc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MostDetailedMip = 0;
-		srvDesc.Texture2D.MipLevels = 1;
-		tex->CreateSRV(srvDesc);
-	}
-	if (createUAV) {
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		uavDesc.Format = srcDesc.Format;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		uavDesc.Texture2D.MipSlice = 0;
-		tex->CreateUAV(uavDesc);
-	}
-	return tex;
-}
-
-void Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-	ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc)
-{
-	// Right-eye-only depth intermediate for DLSS. Streamline.Upscale copies the right-eye depth
-	// slice here before evaluating DLSS eye 1; eye 0 reads the combined stereo depth directly at
-	// zero offset. R24G8_TYPELESS matches the game's D24S8_TYPELESS cast group — R32_TYPELESS is
-	// a different cast group and produces silent zero-copy failures.
-	{
-		D3D11_TEXTURE2D_DESC depthDesc = {};
-		depthDesc.Width = inWidth;
-		depthDesc.Height = inHeight;
-		depthDesc.MipLevels = 1;
-		depthDesc.ArraySize = 1;
-		depthDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
-		depthDesc.SampleDesc.Count = 1;
-		depthDesc.Usage = D3D11_USAGE_DEFAULT;
-		depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		vrIntermediateDepth = eastl::make_unique<Texture2D>(depthDesc);
-
-		Util::SetResourceName(vrIntermediateDepth->resource.get(), "Upscale_Depth_Right");
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MipLevels = 1;
-		vrIntermediateDepth->CreateSRV(srvDesc);
-	}
-
-	// All buffers are per-eye: Streamline validates all extents against the input color texture
-	// dimensions, so every tagged resource must be isolated per-eye at {0,0}.
-	for (int i = 0; i < 2; i++) {
-		std::string suffix = (i == 0) ? "Left" : "Right";
-
-		vrIntermediateColorIn[i] = CreateTextureFromSource(colorSrc, inWidth, inHeight, false, true, true, ("Upscale_ColorIn_" + suffix).c_str());
-		vrIntermediateColorOut[i] = CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, false, ("Upscale_ColorOut_" + suffix).c_str());
-
-		// Linear depth: R32_FLOAT so FSR's GetFfxResourceDescriptionDX11() returns a valid format.
-		// EncodeTexturesCS writes the non-linear depth as R32_FLOAT for FSR. Kept separate from
-		// vrIntermediateDepth (R24G8_TYPELESS) which Streamline copies into for DLSS right eye.
-		{
-			D3D11_TEXTURE2D_DESC ldDesc = {};
-			ldDesc.Width = inWidth;
-			ldDesc.Height = inHeight;
-			ldDesc.MipLevels = 1;
-			ldDesc.ArraySize = 1;
-			ldDesc.Format = DXGI_FORMAT_R32_FLOAT;
-			ldDesc.SampleDesc.Count = 1;
-			ldDesc.Usage = D3D11_USAGE_DEFAULT;
-			ldDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-			vrIntermediateLinearDepth[i] = eastl::make_unique<Texture2D>(ldDesc);
-
-			Util::SetResourceName(vrIntermediateLinearDepth[i]->resource.get(), ("Upscale_LinearDepth_" + suffix).c_str());
-
-			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc2 = {};
-			srvDesc2.Format = DXGI_FORMAT_R32_FLOAT;
-			srvDesc2.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-			srvDesc2.Texture2D.MipLevels = 1;
-			vrIntermediateLinearDepth[i]->CreateSRV(srvDesc2);
-
-			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc2 = {};
-			uavDesc2.Format = DXGI_FORMAT_R32_FLOAT;
-			uavDesc2.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-			uavDesc2.Texture2D.MipSlice = 0;
-			vrIntermediateLinearDepth[i]->CreateUAV(uavDesc2);
-		}
-
-		// UAV required: EncodeTexturesCS writes directly into these per-eye buffers
-		vrIntermediateMotionVectors[i] = CreateTextureFromSource(mvecSrc, inWidth, inHeight, false, true, true, ("Upscale_MVec_" + suffix).c_str());
-		vrIntermediateReactiveMask[i] = CreateTextureFromSource(reactiveSrc, inWidth, inHeight, false, true, true, ("Upscale_Reactive_" + suffix).c_str());
-		vrIntermediateTransparencyMask[i] = CreateTextureFromSource(transparencySrc, inWidth, inHeight, false, true, true, ("Upscale_Transparency_" + suffix).c_str());
-	}
-
-	logger::info("[Upscaling] Created VR intermediate textures: per-eye in {}x{}, out {}x{}",
-		inWidth, inHeight, outWidth, outHeight);
-}
-
-void Upscaling::EnsureVRIntermediateTextures()
-{
-	auto renderer = globals::game::renderer;
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	auto& motionVectorRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-
-	auto screenSize = globals::state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
-
-	uint32_t eyeWidthOut = (uint32_t)(screenSize.x / 2);
-	uint32_t eyeHeightOut = (uint32_t)screenSize.y;
-	uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
-	uint32_t eyeHeightIn = (uint32_t)renderSize.y;
-
-	bool needsRecreate = !vrIntermediateColorIn[0] || !vrIntermediateColorOut[0] || !vrIntermediateLinearDepth[0];
-	if (!needsRecreate) {
-		needsRecreate = (vrIntermediateColorIn[0]->desc.Width != eyeWidthIn ||
-						 vrIntermediateColorIn[0]->desc.Height != eyeHeightIn ||
-						 vrIntermediateColorOut[0]->desc.Width != eyeWidthOut ||
-						 vrIntermediateColorOut[0]->desc.Height != eyeHeightOut);
-	}
-	if (needsRecreate) {
-		logger::info("[Upscaling] (Re)creating VR intermediates: per-eye in {}x{}, out {}x{}",
-			eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
-		CreateVRIntermediateTextures(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut,
-			main.texture, motionVectorRT.texture,
-			reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get());
-	}
-}
-
-void Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc)
-{
-	if (!globals::game::isVR)
-		return;
-
-	auto state = globals::state;
-	if (state->frameAnnotations)
-		state->BeginPerfEvent("VR Upscaling Prepare");
-
-	auto context = globals::d3d::context;
-	auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
-
-	uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
-	uint32_t eyeHeightIn = (uint32_t)renderSize.y;
-
-	// Textures guaranteed to exist: EnsureVRIntermediateTextures() was called in Upscale().
-	// Per-eye motion vectors are already written by EncodeTexturesCS before this helper runs.
-	// Read the original game depth SRV for ClearHMDMask; the combined stereo buffer is
-	// definitively valid here, whereas the per-eye copy may silently produce zeros on some
-	// depth-stencil format / driver combinations.
-	auto& depthTexture = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	for (uint32_t i = 0; i < 2; ++i) {
-		uint32_t offsetXIn = (i == 1) ? eyeWidthIn : 0;
-		D3D11_BOX srcBox = { offsetXIn, 0, 0, offsetXIn + eyeWidthIn, eyeHeightIn, 1 };
-
-		context->CopySubresourceRegion(vrIntermediateColorIn[i]->resource.get(), 0, 0, 0, 0, colorSrc, 0, &srcBox);
-
-		uint32_t depthOffset = (i == 1) ? eyeWidthIn : 0;
-		ClearHMDMask(vrIntermediateColorIn[i]->uav.get(), depthTexture.depthSRV,
-			eyeWidthIn, eyeHeightIn, depthOffset, 0);
-	}
-
-	if (state->frameAnnotations)
-		state->EndPerfEvent();
-}
-
-void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
-{
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "VR Upscaling - Finalize Per Eye");
-
-	if (!globals::game::isVR)
-		return;
-
-	auto state = globals::state;
-	if (state->frameAnnotations)
-		state->BeginPerfEvent("VR Upscaling Finalize");
-
-	auto context = globals::d3d::context;
-	auto screenSize = state->screenSize;
-
-	uint32_t eyeWidthOut = (uint32_t)(screenSize.x / 2);
-	uint32_t eyeHeightOut = (uint32_t)screenSize.y;
-
-	// Write upscaled outputs back
-	for (uint32_t i = 0; i < 2; ++i) {
-		uint32_t offsetXOut = (i == 1) ? eyeWidthOut : 0;
-		D3D11_BOX outBox = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-		context->CopySubresourceRegion(colorDst, 0, offsetXOut, 0, 0, vrIntermediateColorOut[i]->resource.get(), 0, &outBox);
-	}
-
-	if (state->frameAnnotations)
-		state->EndPerfEvent();
-}
-
-void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
-	uint32_t eyeWidth, uint32_t eyeHeight, uint32_t depthOffsetX, uint32_t colorOffsetX)
-{
-	if (!globals::game::isVR)
-		return;
-
-	auto context = globals::d3d::context;
-	auto device = globals::d3d::device;
-	static bool loggedInvalidClearInputs = false;
-
-	if (!context || !device || !colorUAV || !depthSRV || eyeWidth == 0 || eyeHeight == 0) {
-		if (!loggedInvalidClearInputs) {
-			logger::error("[Upscaling] Skipping VR HMD mask clear because required resources are missing.");
-			loggedInvalidClearInputs = true;
-		}
-		return;
-	}
-	loggedInvalidClearInputs = false;
-
-	auto unbindCompute = [&]() {
-		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-		ID3D11Buffer* nullCB[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRV);
-		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-		context->CSSetConstantBuffers(0, 1, nullCB);
-		context->CSSetShader(nullptr, nullptr, 0);
-	};
-
-	if (!vrClearHMDMaskCS) {
-		vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
-	}
-
-	if (!vrClearHMDMaskCB) {
-		D3D11_BUFFER_DESC cbDesc = {};
-		cbDesc.ByteWidth = 16;  // 4 uints
-		cbDesc.Usage = D3D11_USAGE_DYNAMIC;
-		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-		cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
-	}
-
-	if (vrClearHMDMaskCS && vrClearHMDMaskCB) {
-		auto dispatchX = (eyeWidth + 7) / 8;
-		auto dispatchY = (eyeHeight + 7) / 8;
-
-		context->CSSetShader(vrClearHMDMaskCS.get(), nullptr, 0);
-
-		ID3D11ShaderResourceView* srvs[1] = { depthSRV };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11UnorderedAccessView* uavs[1] = { colorUAV };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		D3D11_MAPPED_SUBRESOURCE mapped{};
-		const HRESULT mapResult = context->Map(vrClearHMDMaskCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-		if (FAILED(mapResult)) {
-			logger::error("[Upscaling] Failed to map VR HMD clear constant buffer: 0x{:08X}", static_cast<uint32_t>(mapResult));
-			unbindCompute();
-			return;
-		}
-
-		uint32_t offsets[4] = { depthOffsetX, colorOffsetX, 0, 0 };
-
-		memcpy(mapped.pData, offsets, sizeof(offsets));
-		context->Unmap(vrClearHMDMaskCB.get(), 0);
-
-		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
-		context->CSSetConstantBuffers(0, 1, cbs);
-
-		auto profiler = globals::profiler;
-		if (profiler)
-			profiler->BeginPass("Upscaling::ClearHMDMask");
-		context->Dispatch(dispatchX, dispatchY, 1);
-		if (profiler)
-			profiler->EndPass();
-
-		unbindCompute();
-	}
 }
 
 int32_t GetJitterPhaseCount(int32_t renderWidth, int32_t displayWidth)
@@ -2169,19 +1416,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 
-		if (globals::game::isVR)
-			a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
-		else
-			a_viewport->projectionPosScaleX = -2.0f * jitter.x / renderWidth;
+		a_viewport->projectionPosScaleX = -2.0f * jitter.x / renderWidth;
 
 		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
 	} else {
 		resolutionScale = { 1.0f, 1.0f };
 
-		if (globals::game::isVR)
-			jitter.x = -a_viewport->projectionPosScaleX * screenWidth;
-		else
-			jitter.x = -a_viewport->projectionPosScaleX * screenWidth / 2.0f;
+		jitter.x = -a_viewport->projectionPosScaleX * screenWidth / 2.0f;
 
 		jitter.y = a_viewport->projectionPosScaleY * screenHeight / 2.0f;
 	}
@@ -2200,18 +1441,11 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	CheckResources(upscaleMethod);
 
 	// Disable dynamic resolution unless the game explicitly enables it
-	if (!globals::game::isVR)
-		runtimeData.dynamicResolutionLock = 1;
+	runtimeData.dynamicResolutionLock = 1;
 }
 
 void Upscaling::SetupResources()
 {
-	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
-	if (blocker.active) {
-		logger::warn("[Upscaling] Skipping upscaling resource setup because Open Composite has {}=true.", blocker.settingName);
-		return;
-	}
 	if (IsRenderDocUpscalingBlocked(true)) {
 		logger::warn(
 			"[Upscaling] Skipping upscaling resource setup because {}.",
@@ -2242,26 +1476,7 @@ void Upscaling::SetupResources()
 	depthStencilDesc.DepthEnable = true;                           // Enable depth testing
 	depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;  // Write to all depth bits
 	depthStencilDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;          // Always pass depth test (write all depths)
-
-	if (globals::game::isVR) {
-		depthStencilDesc.StencilEnable = true;     // Enable stencil testing
-		depthStencilDesc.StencilReadMask = 0xFF;   // Read all stencil bits
-		depthStencilDesc.StencilWriteMask = 0xFF;  // Write to all stencil bits
-
-		// Configure front-facing stencil operations
-		depthStencilDesc.FrontFace.StencilFailOp = D3D11_STENCIL_OP_KEEP;       // Replace on stencil fail
-		depthStencilDesc.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;  // Replace on depth fail
-		depthStencilDesc.FrontFace.StencilPassOp = D3D11_STENCIL_OP_REPLACE;    // Replace on pass
-		depthStencilDesc.FrontFace.StencilFunc = D3D11_COMPARISON_ALWAYS;       // Always pass stencil test
-
-		// Configure back-facing stencil operations (same as front)
-		depthStencilDesc.BackFace.StencilFailOp = depthStencilDesc.FrontFace.StencilFailOp;
-		depthStencilDesc.BackFace.StencilDepthFailOp = depthStencilDesc.FrontFace.StencilDepthFailOp;
-		depthStencilDesc.BackFace.StencilPassOp = depthStencilDesc.FrontFace.StencilPassOp;
-		depthStencilDesc.BackFace.StencilFunc = depthStencilDesc.FrontFace.StencilFunc;
-	} else {
-		depthStencilDesc.StencilEnable = false;  // Disable stencil testing
-	}
+	depthStencilDesc.StencilEnable = false;  // Disable stencil testing
 
 	DX::ThrowIfFailed(globals::d3d::device->CreateDepthStencilState(&depthStencilDesc, upscaleDepthStencilState.put()));
 
@@ -2312,15 +1527,13 @@ void Upscaling::SetupResources()
 
 void Upscaling::ClearShaderCache()
 {
-	for (int i = 0; i < 5; ++i) {
+	for (int i = 0; i < 4; ++i) {
 		encodeTexturesCS[i] = nullptr;  // com_ptr automatically releases
 	}
-	encodeTexturesCSDepthOutput = nullptr;
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
 	upscaleVS = nullptr;                 // com_ptr automatically releases
-	vrClearHMDMaskCS = nullptr;
 	copyDepthToSharedBufferPS = nullptr;
 	rcas.ClearShaderCache();
 	lumaSharpen.ClearShaderCache();
@@ -2560,7 +1773,7 @@ double Upscaling::GetRefreshRate(HWND a_window)
 
 bool Upscaling::IsFrameGenerationDx12PathActive() const
 {
-	return d3d12SwapChainActive && !globals::game::isVR;
+	return d3d12SwapChainActive;
 }
 
 bool Upscaling::IsFrameGenerationActive() const
@@ -2714,24 +1927,6 @@ float Upscaling::GetFrameGenerationFrameTime() const
 // Unified interface methods
 void Upscaling::LoadUpscalingSDKs()
 {
-	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
-	if (blocker.active) {
-		if (!openCompositeUpscalingBackendSkipLogged) {
-			if (blocker.configPath.empty()) {
-				logger::warn(
-					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true.",
-					blocker.settingName);
-			} else {
-				logger::warn(
-					"[Upscaling] Skipping Community Shaders Streamline/FidelityFX backend initialization because Open Composite has {}=true in {}.",
-					blocker.settingName,
-					blocker.configPath);
-			}
-			openCompositeUpscalingBackendSkipLogged = true;
-		}
-		return;
-	}
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!renderDocUpscalingBackendSkipLogged) {
 			logger::warn(
@@ -2847,12 +2042,6 @@ void Upscaling::Upscale()
 	ZoneScoped;
 	auto upscaleMethod = GetUpscaleMethod();
 
-	if (globals::game::isVR && upscaleMethod == UpscaleMethod::kDLSS && pendingDLSSReset.exchange(false, std::memory_order_relaxed)) {
-		logger::debug("[Upscaling] LoadingMenu close detected - rebuilding DLSS feature");
-		streamline.DestroyDLSSResources();
-		RequestHistoryReset();
-	}
-
 	UpdateHistoryResetState(upscaleMethod);
 	LatchHistoryResetForCurrentFrame();
 
@@ -2865,8 +2054,7 @@ void Upscaling::Upscale()
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	const bool requiresEncodedMotionVectors = upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR;
-	const bool requiresCombinedEncodedMotionVectors = requiresEncodedMotionVectors && !globals::game::isVR;
-	if (requiresCombinedEncodedMotionVectors && (!motionVectorCopyTexture || !motionVectorCopyTexture->uav || !motionVectorCopyTexture->resource)) {
+	if (requiresEncodedMotionVectors && (!motionVectorCopyTexture || !motionVectorCopyTexture->uav || !motionVectorCopyTexture->resource)) {
 		logger::error("[Upscaling] Missing encoded motion-vector resources for method {}", magic_enum::enum_name(upscaleMethod));
 		return;
 	}
@@ -2880,52 +2068,28 @@ void Upscaling::Upscale()
 		auto& normals = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[2]];
 		auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-		// VR: ensure per-eye intermediate textures exist before the dispatch writes into them
-		if (globals::game::isVR)
-			EnsureVRIntermediateTextures();
-
 		auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
-		uint32_t numEyes = globals::game::isVR ? 2 : 1;
-		uint32_t eyeRenderWidth = (uint32_t)(renderSize.x / numEyes);
-		uint32_t eyeRenderHeight = (uint32_t)renderSize.y;
+		uint32_t renderWidth = static_cast<uint32_t>(renderSize.x);
+		uint32_t renderHeight = static_cast<uint32_t>(renderSize.y);
 
-		// Sources are the same combined stereo buffers for both VR and non-VR.
-		// The shader applies SourceOffset to sample the correct eye region.
 		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 		context->CSSetShader(GetEncodeTexturesCS(), nullptr, 0);
 
-		for (uint32_t i = 0; i < numEyes; ++i) {
-			uint32_t offsetX = i * eyeRenderWidth;
+		UpscalingDataCB upscalingData{};
+		upscalingData.trueSamplingDim = renderSize;
+		upscalingDataCB->Update(upscalingData);
+		auto upscalingBuffer = upscalingDataCB->CB();
+		context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
 
-			UpscalingDataCB upscalingData{};
-			upscalingData.dispatchDim = float2((float)eyeRenderWidth, (float)eyeRenderHeight);
-			upscalingData.trueSamplingDim = renderSize;
-			upscalingData.invTrueSamplingDim = float2(
-				renderSize.x > 0.0f ? 1.0f / renderSize.x : 0.0f,
-				renderSize.y > 0.0f ? 1.0f / renderSize.y : 0.0f);
-			upscalingData.seamCenterX = renderSize.x * 0.5f;
-			upscalingData.seamHalfWidthPx = 2.0f;
-			upscalingData.maskDepthThreshold = 1e-6f;
-			upscalingData.vrSeamHardening = globals::game::isVR ? 1.0f : 0.0f;
-			upscalingData.sourceOffset = float2((float)offsetX, 0.0f);
-			upscalingDataCB->Update(upscalingData);
-			auto upscalingBuffer = upscalingDataCB->CB();
-			context->CSSetConstantBuffers(0, 1, &upscalingBuffer);
+		ID3D11UnorderedAccessView* uavs[3] = {
+			reactiveMaskTexture->uav.get(),
+			transparencyCompositionMaskTexture->uav.get(),
+			requiresEncodedMotionVectors ? motionVectorCopyTexture->uav.get() : nullptr
+		};
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-			// u2 (MotionVectorOutput): encoded MVec for DLSS and FSR.
-			// u3 (DepthOutput): VR FSR only; converts R24G8_TYPELESS to R32_FLOAT so
-			//   GetFfxResourceDescriptionDX11() returns a valid format. DLSS depth is copied in Streamline.cpp.
-			ID3D11UnorderedAccessView* uavs[4] = {
-				globals::game::isVR ? vrIntermediateReactiveMask[i]->uav.get() : reactiveMaskTexture->uav.get(),
-				globals::game::isVR ? vrIntermediateTransparencyMask[i]->uav.get() : transparencyCompositionMaskTexture->uav.get(),
-				requiresEncodedMotionVectors ? (globals::game::isVR ? vrIntermediateMotionVectors[i]->uav.get() : motionVectorCopyTexture->uav.get()) : nullptr,
-				(upscaleMethod == UpscaleMethod::kFSR && globals::game::isVR) ? vrIntermediateLinearDepth[i]->uav.get() : nullptr
-			};
-			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-
-			context->Dispatch((eyeRenderWidth + 7) / 8, (eyeRenderHeight + 7) / 8, 1);
-		}
+		context->Dispatch((renderWidth + 7) / 8, (renderHeight + 7) / 8, 1);
 
 		ID3D11ShaderResourceView* nullViews[4] = { nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(nullViews), nullViews);
@@ -2948,7 +2112,7 @@ void Upscaling::Upscale()
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 		ID3D11Resource* motionVectorResource = requiresEncodedMotionVectors ?
-			(globals::game::isVR ? motionVector.texture : motionVectorCopyTexture->resource.get()) :
+			motionVectorCopyTexture->resource.get() :
 			nullptr;
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
@@ -3014,9 +2178,6 @@ void Upscaling::UpscaleDepth()
 	if (!depth.texture || !depth.views[0] || !depthCopy.texture || !depthCopy.depthSRV ||
 		!refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV ||
 		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
-		return;
-	}
-	if (globals::game::isVR && (!depthCopy.views[0] || !depthCopy.stencilSRV)) {
 		return;
 	}
 
@@ -3097,23 +2258,15 @@ void Upscaling::UpscaleDepth()
 		// Skip alias copies to reduce unnecessary copy churn.
 		copyIfNonAliased(depthCopy.texture, depth.texture);
 
-		// Clear stencil to be 0xFF
-		if (globals::game::isVR) {
-			context->ClearDepthStencilView(depthCopy.views[0], D3D11_CLEAR_STENCIL, 1.0f, 0xFF);
-		}
-
 		// Set depth stencil state to write 0x00
 		context->OMSetDepthStencilState(upscaleDepthStencilState.get(), 0x00);
 
 		copyIfNonAliased(refractionNormals.textureCopy, refractionNormals.texture);
 
-		ID3D11ShaderResourceView* srvs[] = { refractionNormals.SRVCopy, depthCopy.depthSRV, depthCopy.stencilSRV };
+		ID3D11ShaderResourceView* srvs[] = { refractionNormals.SRVCopy, depthCopy.depthSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		// kSAO_CAMERAZ is at quarter-stereo resolution in VR; the full-stereo viewport would
-		// corrupt only the top-left quarter. The engine's ISSAOCameraZ pass populates it correctly.
-		ID3D11RenderTargetView* rtvs[] = { refractionNormals.RTV,
-			globals::game::isVR ? nullptr : saoCameraZ.RTV };
+		ID3D11RenderTargetView* rtvs[] = { refractionNormals.RTV, saoCameraZ.RTV };
 		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
@@ -3133,8 +2286,7 @@ void Upscaling::UpscaleDepth()
 
 		context->OMSetDepthStencilState(nullptr, 0x00);
 
-		// t0: vanilla mask copy, t1: original depth (for VR per-eye analytical mask).
-		// depthCopy still holds the original pre-upscale depth here (VR re-copy deferred).
+		// t0: vanilla mask copy, t1: original depth.
 		ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -3145,12 +2297,6 @@ void Upscaling::UpscaleDepth()
 		globals::profiler->BeginPass("Upscaling::UnderwaterMaskUpscale");
 		context->Draw(3, 0);
 		globals::profiler->EndPass();
-	}
-
-	// Now propagate the upscaled depth to kMAIN_COPY so downstream VR passes see it.
-	if (globals::game::isVR) {
-		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth VR Propagate");
-		copyIfNonAliased(depthCopy.texture, depth.texture);
 	}
 
 	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };

@@ -347,13 +347,11 @@ namespace
 
 	bool IsFlatHdrScreenshotCapture()
 	{
-		return !globals::game::isVR &&
-		       globals::features::hdrDisplay.loaded &&
+		return globals::features::hdrDisplay.loaded &&
 		       globals::features::hdrDisplay.settings.enableHDR;
 	}
 
 	// Picks the capture source:
-	//   VR                 -> RE::RENDER_TARGETS::kVR_FRAMEBUFFER (SBS).
 	//   HDR + CS menu open -> clean HDR composite (no UI, no menu blur).
 	//   HDR enabled        -> swap-chain back buffer after ApplyHDR (PQ HDR10 / PQ float).
 	//   otherwise          -> kFRAMEBUFFER (tonemapped UNORM).
@@ -363,14 +361,6 @@ namespace
 		CaptureSource src;
 		auto* renderer = globals::game::renderer;
 		if (!renderer) {
-			return src;
-		}
-
-		if (globals::game::isVR) {
-			auto& slot = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kVR_FRAMEBUFFER];
-			src.texture = ResolveSlotTexture(slot, holder);
-			src.srv = slot.SRV;
-			src.description = "VR SBS framebuffer";
 			return src;
 		}
 
@@ -592,17 +582,6 @@ bool ScreenshotFeature::IsInMenu() const
 
 void ScreenshotFeature::PostPostLoad()
 {
-	// Seed VR-specific presets here rather than in LoadSettings: Feature::Load
-	// only dispatches to LoadSettings when the JSON already has a settings
-	// block, so a fresh install would skip a seed placed there. Left first so
-	// it's the initial selection (matches vanilla Skyrim VR's left-eye save).
-	if (REL::Module::IsVR()) {
-		subrect.SeedDefaultPresets({
-			{ .name = "Left Eye", .uv = { 0.0f, 0.0f, 0.5f, 1.0f } },
-			{ .name = "Right Eye", .uv = { 0.5f, 0.0f, 0.5f, 1.0f } },
-			{ .name = "Full Frame", .uv = { 0.0f, 0.0f, 1.0f, 1.0f } },
-		});
-	}
 }
 
 void ScreenshotFeature::LoadSettings(json& a_json)

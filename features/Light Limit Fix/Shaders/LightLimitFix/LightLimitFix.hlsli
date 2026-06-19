@@ -125,20 +125,12 @@ namespace LightLimitFix
 
 	float2 GetContactShadowScreenDim()
 	{
-		float2 screenDim = SharedData::BufferDim.xy;
-#if defined(VR)
-		screenDim.x *= 0.5;
-#endif
-		return screenDim;
+		return SharedData::BufferDim.xy;
 	}
 
 	float2 GetContactShadowNoiseCoord(float2 screenPosition, float2 screenUV, float2 screenDim)
 	{
-#if defined(VR)
-		return screenUV * screenDim;
-#else
 		return screenPosition;
-#endif
 	}
 
 	float ContactShadows(float3 viewPosition, float2 screenUV, float3 lightPositionWS, float screenNoise, float2 screenDim, bool isParticle, uint eyeIndex)

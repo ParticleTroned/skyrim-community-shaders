@@ -38,8 +38,6 @@ struct AdaptiveBrightness : Feature
 		};
 	}
 
-	virtual bool SupportsVR() override { return true; };
-
 	enum class Profile : uint32_t
 	{
 		ExteriorDay,

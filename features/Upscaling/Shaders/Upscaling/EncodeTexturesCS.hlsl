@@ -2,14 +2,8 @@
 
 cbuffer UpscalingData : register(b0)
 {
-	float2 DispatchDim;
-	float2 TrueSamplingDim;  // full source render dim, combined stereo in VR
-	float2 InvTrueSamplingDim;
-	float SeamCenterX;
-	float SeamHalfWidthPx;
-	float MaskDepthThreshold;
-	float VRSeamHardening;
-	float2 SourceOffset;
+	float2 TrueSamplingDim;
+	float2 pad0;
 };
 
 Texture2D<float2> TAAMask : register(t0);
@@ -20,57 +14,12 @@ Texture2D<float> DepthMask : register(t3);
 RWTexture2D<float> ReactiveMask : register(u0);
 RWTexture2D<float> TransparencyCompositionMask : register(u1);
 RWTexture2D<float2> MotionVectorOutput : register(u2);
-#if defined(DEPTH_OUTPUT)
-RWTexture2D<float> DepthOutput : register(u3);
-#endif
-
-float IsMaskedDepth(float depth)
-{
-	return depth <= MaskDepthThreshold ? 1.0 : 0.0;
-}
-
-float ComputeMaskEdgeFactor(uint2 sourcePos)
-{
-	static const int2 offsets[4] = {
-		int2(1, 0),
-		int2(-1, 0),
-		int2(0, 1),
-		int2(0, -1)
-	};
-
-	float centerMasked = IsMaskedDepth(DepthMask[sourcePos]);
-	float edge = 0.0;
-
-	[unroll]
-	for (uint i = 0; i < 4; ++i) {
-		int2 samplePos = int2(sourcePos) + offsets[i];
-		if (any(samplePos < 0) || any(samplePos >= int2(TrueSamplingDim)))
-			continue;
-
-		float neighborMasked = IsMaskedDepth(DepthMask[samplePos]);
-		edge = max(edge, abs(neighborMasked - centerMasked));
-	}
-
-	return edge;
-}
-
-float ComputeSeamFactor(uint2 sourcePos)
-{
-	float seamHalfWidth = max(SeamHalfWidthPx, 0.0001);
-	float seamCenterUv = SeamCenterX * InvTrueSamplingDim.x;
-	float pixelUv = (float(sourcePos.x) + 0.5) * InvTrueSamplingDim.x;
-	float seamDistance = abs(pixelUv - seamCenterUv) * TrueSamplingDim.x;
-	return saturate((seamHalfWidth - seamDistance) / seamHalfWidth);
-}
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
-	uint2 localPos = dispatchID.xy;
-	if (any(localPos >= uint2(DispatchDim)))
+	uint2 srcCoord = dispatchID.xy;
+	if (any(srcCoord >= uint2(TrueSamplingDim)))
 		return;
-
-	uint2 sourceOffset = uint2(SourceOffset + 0.5);
-	uint2 srcCoord = localPos + sourceOffset;
 
 	float2 taaMask = TAAMask[srcCoord];
 	float transparencyCompositionMask = NormalsWaterMask[srcCoord].z;
@@ -113,31 +62,10 @@ float ComputeSeamFactor(uint2 sourcePos)
 	outputMotionVector = lerp(longestMotionVector, motionVector, nearFactor);
 #endif
 
-	if (VRSeamHardening > 0.5) {
-		float seamFactor = ComputeSeamFactor(srcCoord);
-		float maskEdgeFactor = ComputeMaskEdgeFactor(srcCoord);
-
 #if defined(DLSS) || defined(FSR)
-		float seamScale = lerp(1.0, 0.25, seamFactor);
-		float maskScale = lerp(1.0, 0.0, maskEdgeFactor);
-		outputMotionVector *= min(seamScale, maskScale);
+	MotionVectorOutput[srcCoord] = outputMotionVector;
 #endif
 
-		float hardeningMask = max(seamFactor * 0.6, maskEdgeFactor);
-		reactiveMask = max(reactiveMask, hardeningMask);
-		transparencyCompositionMask = max(transparencyCompositionMask, hardeningMask);
-	}
-
-#if defined(DLSS) || defined(FSR)
-	MotionVectorOutput[localPos] = outputMotionVector;
-#endif
-
-#if defined(DEPTH_OUTPUT)
-	// Copy depth as R32_FLOAT so FSR DX11 backend receives a typed format.
-	// The raw depth resource is R24G8_TYPELESS in VR which maps to FFX_SURFACE_FORMAT_UNKNOWN.
-	DepthOutput[localPos] = DepthMask[srcCoord];
-#endif
-
-	ReactiveMask[localPos] = reactiveMask;
-	TransparencyCompositionMask[localPos] = transparencyCompositionMask;
+	ReactiveMask[srcCoord] = reactiveMask;
+	TransparencyCompositionMask[srcCoord] = transparencyCompositionMask;
 }

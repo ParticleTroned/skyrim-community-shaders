@@ -6,6 +6,7 @@
 #include <winrt/base.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +32,7 @@ class FidelityFX
 {
 public:
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
+	~FidelityFX();
 
 	HMODULE module = nullptr;
 
@@ -110,12 +112,12 @@ private:
 	uint64_t runtimeFenceValue = 1;
 	uint32_t runtimeCommandFrameIndex = 0;
 
-	WrappedResource* runtimeColorShared[2]{};
-	WrappedResource* runtimeDepthShared[2]{};
-	WrappedResource* runtimeMotionShared[2]{};
-	WrappedResource* runtimeReactiveShared[2]{};
-	WrappedResource* runtimeTransparencyShared[2]{};
-	WrappedResource* runtimeOutputShared[2]{};
+	std::unique_ptr<WrappedResource> runtimeColorShared[2];
+	std::unique_ptr<WrappedResource> runtimeDepthShared[2];
+	std::unique_ptr<WrappedResource> runtimeMotionShared[2];
+	std::unique_ptr<WrappedResource> runtimeReactiveShared[2];
+	std::unique_ptr<WrappedResource> runtimeTransparencyShared[2];
+	std::unique_ptr<WrappedResource> runtimeOutputShared[2];
 
 	HMODULE frameGenerationModule = nullptr;
 	HMODULE runtimeUpscalerModule = nullptr;

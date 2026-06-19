@@ -129,6 +129,136 @@ namespace
 		}
 	}
 
+	bool TryGetTexture2DDesc(ID3D11Resource* a_resource, D3D11_TEXTURE2D_DESC& a_desc)
+	{
+		if (!a_resource)
+			return false;
+
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(a_resource->QueryInterface(IID_PPV_ARGS(texture.put()))) || !texture)
+			return false;
+
+		texture->GetDesc(&a_desc);
+		return true;
+	}
+
+	bool TextureDescMatches(const D3D11_TEXTURE2D_DESC& a_lhs, const D3D11_TEXTURE2D_DESC& a_rhs)
+	{
+		return a_lhs.Width == a_rhs.Width &&
+		       a_lhs.Height == a_rhs.Height &&
+		       a_lhs.MipLevels == a_rhs.MipLevels &&
+		       a_lhs.ArraySize == a_rhs.ArraySize &&
+		       a_lhs.Format == a_rhs.Format &&
+		       a_lhs.SampleDesc.Count == a_rhs.SampleDesc.Count &&
+		       a_lhs.SampleDesc.Quality == a_rhs.SampleDesc.Quality &&
+		       a_lhs.Usage == a_rhs.Usage &&
+		       a_lhs.BindFlags == a_rhs.BindFlags &&
+		       a_lhs.CPUAccessFlags == a_rhs.CPUAccessFlags &&
+		       a_lhs.MiscFlags == a_rhs.MiscFlags;
+	}
+
+	bool TextureMatchesRequirements(const std::unique_ptr<Texture2D>& a_texture, const D3D11_TEXTURE2D_DESC& a_expectedDesc, bool a_requireSRV, bool a_requireUAV)
+	{
+		if (!a_texture || !TextureDescMatches(a_texture->desc, a_expectedDesc))
+			return false;
+		if (a_requireSRV && !a_texture->srv)
+			return false;
+		if (a_requireUAV && !a_texture->uav)
+			return false;
+		return true;
+	}
+
+	struct ScopedCopySharedPipelineState
+	{
+		explicit ScopedCopySharedPipelineState(ID3D11DeviceContext* a_context) :
+			context(a_context)
+		{
+			if (!context)
+				return;
+
+			viewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+			context->RSGetViewports(&viewportCount, viewports);
+
+			context->IAGetInputLayout(inputLayout.put());
+			context->IAGetPrimitiveTopology(&primitiveTopology);
+
+			ID3D11Buffer* rawVertexBuffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT]{};
+			context->IAGetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, rawVertexBuffers, vertexStrides, vertexOffsets);
+			for (UINT i = 0; i < D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT; ++i)
+				vertexBuffers[i].attach(rawVertexBuffers[i]);
+
+			ID3D11Buffer* rawIndexBuffer = nullptr;
+			context->IAGetIndexBuffer(&rawIndexBuffer, &indexFormat, &indexOffset);
+			indexBuffer.attach(rawIndexBuffer);
+
+			context->VSGetShader(vertexShader.put(), nullptr, nullptr);
+			context->PSGetShader(pixelShader.put(), nullptr, nullptr);
+			context->RSGetState(rasterizerState.put());
+			context->OMGetBlendState(blendState.put(), blendFactor, &sampleMask);
+
+			ID3D11RenderTargetView* rawRenderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+			ID3D11DepthStencilView* rawDepthStencilView = nullptr;
+			context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rawRenderTargets, &rawDepthStencilView);
+			for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+				renderTargets[i].attach(rawRenderTargets[i]);
+			depthStencilView.attach(rawDepthStencilView);
+
+			ID3D11ShaderResourceView* rawPixelShaderResources[1]{};
+			context->PSGetShaderResources(0, 1, rawPixelShaderResources);
+			pixelShaderResources[0].attach(rawPixelShaderResources[0]);
+		}
+
+		~ScopedCopySharedPipelineState()
+		{
+			if (!context)
+				return;
+
+			context->RSSetViewports(viewportCount, viewports);
+			context->IASetInputLayout(inputLayout.get());
+			context->IASetPrimitiveTopology(primitiveTopology);
+
+			ID3D11Buffer* rawVertexBuffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT]{};
+			for (UINT i = 0; i < D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT; ++i)
+				rawVertexBuffers[i] = vertexBuffers[i].get();
+			context->IASetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, rawVertexBuffers, vertexStrides, vertexOffsets);
+			context->IASetIndexBuffer(indexBuffer.get(), indexFormat, indexOffset);
+
+			context->VSSetShader(vertexShader.get(), nullptr, 0);
+			context->PSSetShader(pixelShader.get(), nullptr, 0);
+			context->RSSetState(rasterizerState.get());
+			context->OMSetBlendState(blendState.get(), blendFactor, sampleMask);
+
+			ID3D11RenderTargetView* rawRenderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+			for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+				rawRenderTargets[i] = renderTargets[i].get();
+			context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rawRenderTargets, depthStencilView.get());
+
+			ID3D11ShaderResourceView* rawPixelShaderResources[1] = { pixelShaderResources[0].get() };
+			context->PSSetShaderResources(0, 1, rawPixelShaderResources);
+		}
+
+		ID3D11DeviceContext* context = nullptr;
+		UINT viewportCount = 0;
+		D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+		winrt::com_ptr<ID3D11InputLayout> inputLayout;
+		D3D11_PRIMITIVE_TOPOLOGY primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+		winrt::com_ptr<ID3D11Buffer> vertexBuffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+		UINT vertexStrides[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT]{};
+		UINT vertexOffsets[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT]{};
+		winrt::com_ptr<ID3D11Buffer> indexBuffer;
+		DXGI_FORMAT indexFormat = DXGI_FORMAT_UNKNOWN;
+		UINT indexOffset = 0;
+		winrt::com_ptr<ID3D11VertexShader> vertexShader;
+		winrt::com_ptr<ID3D11PixelShader> pixelShader;
+		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
+		winrt::com_ptr<ID3D11BlendState> blendState;
+		FLOAT blendFactor[4]{};
+		UINT sampleMask = 0xffffffff;
+		winrt::com_ptr<ID3D11RenderTargetView> renderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+		winrt::com_ptr<ID3D11DepthStencilView> depthStencilView;
+		winrt::com_ptr<ID3D11ShaderResourceView> pixelShaderResources[1];
+	};
+
 	uint MigrateLegacyQualityModeUInt(uint value)
 	{
 		switch (value) {
@@ -1333,13 +1463,13 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		uavDesc.Format = texDesc.Format;
 
 		if (!reactiveMaskTexture) {
-			reactiveMaskTexture = new Texture2D(texDesc);
+			reactiveMaskTexture = std::make_unique<Texture2D>(texDesc);
 			reactiveMaskTexture->CreateSRV(srvDesc);
 			reactiveMaskTexture->CreateUAV(uavDesc);
 		}
 
 		if (!transparencyCompositionMaskTexture) {
-			transparencyCompositionMaskTexture = new Texture2D(texDesc);
+			transparencyCompositionMaskTexture = std::make_unique<Texture2D>(texDesc);
 			transparencyCompositionMaskTexture->CreateSRV(srvDesc);
 			transparencyCompositionMaskTexture->CreateUAV(uavDesc);
 		}
@@ -1357,7 +1487,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			srvDesc.Format = texDesc.Format;
 			uavDesc.Format = texDesc.Format;
 
-			motionVectorCopyTexture = new Texture2D(motionTexDesc);
+			motionVectorCopyTexture = std::make_unique<Texture2D>(motionTexDesc);
 			motionVectorCopyTexture->CreateSRV(srvDesc);
 			motionVectorCopyTexture->CreateUAV(uavDesc);
 		}
@@ -1380,7 +1510,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			uavDesc.Texture2D.MipSlice = 0;
 
-			sharpenerTexture = new Texture2D(texDesc);
+			sharpenerTexture = std::make_unique<Texture2D>(texDesc);
 			sharpenerTexture->CreateSRV(srvDesc);
 			sharpenerTexture->CreateUAV(uavDesc);
 		}
@@ -1394,47 +1524,25 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	// Clean up D3D11 textures that are no longer needed
 	// Only destroy textures when switching away from methods that use them
 	if (a_upscalemethod != UpscaleMethod::kDLSS && a_upscalemethod != UpscaleMethod::kFSR) {
-		if (reactiveMaskTexture) {
-			reactiveMaskTexture->srv = nullptr;
-			reactiveMaskTexture->uav = nullptr;
-			reactiveMaskTexture->resource = nullptr;
-
-			delete reactiveMaskTexture;
-			reactiveMaskTexture = nullptr;
-		}
-
-		if (transparencyCompositionMaskTexture) {
-			transparencyCompositionMaskTexture->srv = nullptr;
-			transparencyCompositionMaskTexture->uav = nullptr;
-			transparencyCompositionMaskTexture->resource = nullptr;
-
-			delete transparencyCompositionMaskTexture;
-			transparencyCompositionMaskTexture = nullptr;
-		}
+		reactiveMaskTexture.reset();
+		transparencyCompositionMaskTexture.reset();
 	}
 
 	// Encoded motion vectors are used by DLSS and by FSR's non-VR full-frame path.
 	if (a_upscalemethod != UpscaleMethod::kDLSS && a_upscalemethod != UpscaleMethod::kFSR) {
-		if (motionVectorCopyTexture) {
-			motionVectorCopyTexture->srv = nullptr;
-			motionVectorCopyTexture->uav = nullptr;
-			motionVectorCopyTexture->resource = nullptr;
-
-			delete motionVectorCopyTexture;
-			motionVectorCopyTexture = nullptr;
-		}
+		motionVectorCopyTexture.reset();
 	}
 
 	if (a_upscalemethod != UpscaleMethod::kDLSS) {
-		if (sharpenerTexture) {
-			sharpenerTexture->srv = nullptr;
-			sharpenerTexture->uav = nullptr;
-			sharpenerTexture->resource = nullptr;
-
-			delete sharpenerTexture;
-			sharpenerTexture = nullptr;
-		}
+		sharpenerTexture.reset();
+		dlssUpscaleOutputInSharpenerTexture = false;
 	}
+}
+
+void Upscaling::DestroyAllUpscalingTextureResources()
+{
+	DestroyUpscalingTextureResources(UpscaleMethod::kNONE);
+	dlssUpscaleOutputInSharpenerTexture = false;
 }
 
 void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
@@ -1446,6 +1554,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFSRRuntimeFsr4Active = false;
 	static uint32_t previousQualityMode = ClampQualityModeUInt(settings.qualityMode);
 	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	static D3D11_TEXTURE2D_DESC previousMainDesc{};
+	static D3D11_TEXTURE2D_DESC previousMotionVectorDesc{};
+	static bool previousTextureSourceDescsValid = false;
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
@@ -1476,6 +1587,22 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		compareFSRRuntimePath &&
 		(fsrRuntimePathCurrent || previousFSRRuntimePathActive) &&
 		previousFSRRuntimeFsr4Active != fsrRuntimeFsr4Current;
+
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	D3D11_TEXTURE2D_DESC motionVectorDesc{};
+	bool currentTextureSourceDescsValid = false;
+	auto renderer = globals::game::renderer;
+	if (renderer) {
+		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+		currentTextureSourceDescsValid = TryGetTexture2DDesc(main.texture, mainDesc) && TryGetTexture2DDesc(motionVector.texture, motionVectorDesc);
+	}
+
+	const bool vendorUpscalerActive = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
+	const bool sourceTextureDescChanged =
+		currentTextureSourceDescsValid &&
+		previousTextureSourceDescsValid &&
+		(!TextureDescMatches(previousMainDesc, mainDesc) || !TextureDescMatches(previousMotionVectorDesc, motionVectorDesc));
 
 	if (upscaleModeChanged || frameGenModeChanged || qualityModeChanged || dlssPresetChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
@@ -1546,6 +1673,46 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousDLSSPreset = dlssPresetCurrent;
 		previousVendorUpscalerSelected = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
 	}
+
+	if (vendorUpscalerActive && currentTextureSourceDescsValid) {
+		D3D11_TEXTURE2D_DESC expectedMaskDesc = mainDesc;
+		expectedMaskDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		expectedMaskDesc.Format = DXGI_FORMAT_R8_UNORM;
+
+		D3D11_TEXTURE2D_DESC expectedMotionVectorDesc = motionVectorDesc;
+
+		D3D11_TEXTURE2D_DESC expectedSharpenerDesc = mainDesc;
+		expectedSharpenerDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		const bool vendorTextureStateInvalid =
+			!TextureMatchesRequirements(reactiveMaskTexture, expectedMaskDesc, true, true) ||
+			!TextureMatchesRequirements(transparencyCompositionMaskTexture, expectedMaskDesc, true, true) ||
+			!TextureMatchesRequirements(motionVectorCopyTexture, expectedMotionVectorDesc, true, true) ||
+			(a_upscalemethod == UpscaleMethod::kDLSS && !TextureMatchesRequirements(sharpenerTexture, expectedSharpenerDesc, true, true));
+
+		if (sourceTextureDescChanged || vendorTextureStateInvalid) {
+			logger::debug(
+				"[Upscaling] Recreating vendor upscaler textures (sourceDescChanged={}, textureStateInvalid={})",
+				sourceTextureDescChanged,
+				vendorTextureStateInvalid);
+			if (a_upscalemethod == UpscaleMethod::kDLSS) {
+				pendingDLSSReset.store(false, std::memory_order_relaxed);
+				streamline.DestroyDLSSResources();
+			} else if (a_upscalemethod == UpscaleMethod::kFSR) {
+				fidelityFX.DestroyFSRResources();
+				fidelityFX.CreateFSRResources();
+			}
+			DestroyAllUpscalingTextureResources();
+			CreateUpscalingTextureResources(a_upscalemethod);
+			RequestHistoryReset();
+		}
+	}
+
+	if (currentTextureSourceDescsValid) {
+		previousMainDesc = mainDesc;
+		previousMotionVectorDesc = motionVectorDesc;
+	}
+	previousTextureSourceDescsValid = currentTextureSourceDescsValid;
 }
 
 ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
@@ -1627,8 +1794,16 @@ ID3D11VertexShader* Upscaling::GetUpscaleVS()
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
 	bool copyBindFlags, bool createSRV, bool createUAV, const char* name)
 {
+	if (!src) {
+		logger::critical("[Upscaling] Cannot create texture {} from a null source resource.", name ? name : "<unnamed>");
+		DX::ThrowIfFailed(E_POINTER);
+		return nullptr;
+	}
+
 	D3D11_TEXTURE2D_DESC srcDesc;
-	static_cast<ID3D11Texture2D*>(src)->GetDesc(&srcDesc);
+	winrt::com_ptr<ID3D11Texture2D> srcTexture;
+	DX::ThrowIfFailed(src->QueryInterface(IID_PPV_ARGS(srcTexture.put())));
+	srcTexture->GetDesc(&srcDesc);
 
 	D3D11_TEXTURE2D_DESC desc = {};
 	desc.Width = width;
@@ -1842,19 +2017,42 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		return;
 
 	auto context = globals::d3d::context;
+	auto device = globals::d3d::device;
+	static bool loggedInvalidClearInputs = false;
+
+	if (!context || !device || !colorUAV || !depthSRV || eyeWidth == 0 || eyeHeight == 0) {
+		if (!loggedInvalidClearInputs) {
+			logger::error("[Upscaling] Skipping VR HMD mask clear because required resources are missing.");
+			loggedInvalidClearInputs = true;
+		}
+		return;
+	}
+	loggedInvalidClearInputs = false;
+
+	auto unbindCompute = [&]() {
+		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
+		ID3D11Buffer* nullCB[1] = { nullptr };
+		context->CSSetShaderResources(0, 1, nullSRV);
+		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+		context->CSSetConstantBuffers(0, 1, nullCB);
+		context->CSSetShader(nullptr, nullptr, 0);
+	};
 
 	if (!vrClearHMDMaskCS) {
 		vrClearHMDMaskCS.attach((ID3D11ComputeShader*)Util::CompileShader(L"Data/Shaders/Upscaling/ClearHMDMaskCS.hlsl", {}, "cs_5_0"));
+	}
 
+	if (!vrClearHMDMaskCB) {
 		D3D11_BUFFER_DESC cbDesc = {};
 		cbDesc.ByteWidth = 16;  // 4 uints
 		cbDesc.Usage = D3D11_USAGE_DYNAMIC;
 		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 		cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
+		DX::ThrowIfFailed(device->CreateBuffer(&cbDesc, nullptr, vrClearHMDMaskCB.put()));
 	}
 
-	if (vrClearHMDMaskCS) {
+	if (vrClearHMDMaskCS && vrClearHMDMaskCB) {
 		auto dispatchX = (eyeWidth + 7) / 8;
 		auto dispatchY = (eyeHeight + 7) / 8;
 
@@ -1867,7 +2065,12 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 		D3D11_MAPPED_SUBRESOURCE mapped{};
-		context->Map(vrClearHMDMaskCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+		const HRESULT mapResult = context->Map(vrClearHMDMaskCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+		if (FAILED(mapResult)) {
+			logger::error("[Upscaling] Failed to map VR HMD clear constant buffer: 0x{:08X}", static_cast<uint32_t>(mapResult));
+			unbindCompute();
+			return;
+		}
 
 		uint32_t offsets[4] = { depthOffsetX, colorOffsetX, 0, 0 };
 
@@ -1877,18 +2080,14 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
 		context->CSSetConstantBuffers(0, 1, cbs);
 
-		globals::profiler->BeginPass("Upscaling::ClearHMDMask");
+		auto profiler = globals::profiler;
+		if (profiler)
+			profiler->BeginPass("Upscaling::ClearHMDMask");
 		context->Dispatch(dispatchX, dispatchY, 1);
-		globals::profiler->EndPass();
+		if (profiler)
+			profiler->EndPass();
 
-		// Unbind
-		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-		ID3D11UnorderedAccessView* nullUAV[1] = { nullptr };
-		ID3D11Buffer* nullCB[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSRV);
-		context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-		context->CSSetConstantBuffers(0, 1, nullCB);
-		context->CSSetShader(nullptr, nullptr, 0);
+		unbindCompute();
 	}
 }
 
@@ -2067,10 +2266,10 @@ void Upscaling::SetupResources()
 	DX::ThrowIfFailed(globals::d3d::device->CreateDepthStencilState(&depthStencilDesc, upscaleDepthStencilState.put()));
 
 	// Create jitter offset constant buffer for depth upscaling
-	jitterCB = new ConstantBuffer(ConstantBufferDesc<JitterCB>());
+	jitterCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<JitterCB>());
 
 	// Create upscaling data constant buffer for encode textures compute shader
-	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
+	upscalingDataCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<UpscalingDataCB>());
 
 	// Create blend state for depth upscaling
 	D3D11_BLEND_DESC blendDesc = {};
@@ -2121,6 +2320,8 @@ void Upscaling::ClearShaderCache()
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
 	upscaleVS = nullptr;                 // com_ptr automatically releases
+	vrClearHMDMaskCS = nullptr;
+	copyDepthToSharedBufferPS = nullptr;
 	rcas.ClearShaderCache();
 	lumaSharpen.ClearShaderCache();
 }
@@ -2133,11 +2334,45 @@ void Upscaling::CopySharedD3D12Resources()
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	static bool loggedMissingSharedResources = false;
+	static bool loggedMissingCopySources = false;
+
+	if (!copyDepthToSharedBufferPS)
+		copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+
+	const bool hasSharedResources =
+		renderer &&
+		context &&
+		dx12SwapChain.motionVectorBufferShared12 &&
+		dx12SwapChain.motionVectorBufferShared12->resource11 &&
+		dx12SwapChain.depthBufferShared12 &&
+		dx12SwapChain.depthBufferShared12->rtv &&
+		copyDepthToSharedBufferPS;
+	if (!hasSharedResources) {
+		if (!loggedMissingSharedResources) {
+			logger::error("[Upscaling] Skipping D3D12 shared-resource copy because frame-generation interop resources are incomplete.");
+			loggedMissingSharedResources = true;
+		}
+		globals::state->EndPerfEvent();
+		return;
+	}
+	loggedMissingSharedResources = false;
+
+	ScopedCopySharedPipelineState restoreState(context);
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11, motionVector.texture);
-
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	if (!motionVector.texture || !depth.depthSRV) {
+		if (!loggedMissingCopySources) {
+			logger::error("[Upscaling] Skipping D3D12 shared-resource copy because source depth or motion-vector resources are missing.");
+			loggedMissingCopySources = true;
+		}
+		globals::state->EndPerfEvent();
+		return;
+	}
+	loggedMissingCopySources = false;
+
+	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
 
 	{
 		// Set up viewport for fullscreen rendering
@@ -2170,7 +2405,7 @@ void Upscaling::CopySharedD3D12Resources()
 		context->PSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		// Set render target view for pixel shader output
-		ID3D11RenderTargetView* rtvs[1] = { dx12SwapChain.depthBufferShared12->rtv };
+		ID3D11RenderTargetView* rtvs[1] = { dx12SwapChain.depthBufferShared12->rtv.get() };
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
@@ -2183,10 +2418,6 @@ void Upscaling::CopySharedD3D12Resources()
 	// Clean up
 	ID3D11ShaderResourceView* views[1] = { nullptr };
 	context->PSSetShaderResources(0, ARRAYSIZE(views), views);
-
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-	context->PSSetShader(nullptr, nullptr, 0);
-	context->VSSetShader(nullptr, nullptr, 0);
 
 	globals::state->EndPerfEvent();
 }
@@ -2235,9 +2466,18 @@ void Upscaling::FrameLimiter()
 	if (d3d12SwapChainActive) {
 		// Use frame latency waitable object if available for better frame pacing
 		HANDLE waitableObject = GetFrameLatencyWaitableObject();
-
-		// Wait for the next frame presentation slot
-		WaitForSingleObject(waitableObject, INFINITE);
+		static bool loggedMissingWaitableObject = false;
+		static bool loggedWaitFailure = false;
+		if (waitableObject && waitableObject != INVALID_HANDLE_VALUE) {
+			const DWORD waitResult = WaitForSingleObject(waitableObject, INFINITE);
+			if (waitResult != WAIT_OBJECT_0 && !loggedWaitFailure) {
+				logger::warn("[Upscaling] Frame-latency wait failed with result {}", waitResult);
+				loggedWaitFailure = true;
+			}
+		} else if (!loggedMissingWaitableObject) {
+			logger::warn("[Upscaling] Frame-latency waitable object is unavailable; falling back to timer-based pacing.");
+			loggedMissingWaitableObject = true;
+		}
 
 		if (settings.frameLimitMode) {
 			static constexpr int64_t kNanosecondsPerSecond = 1000000000LL;

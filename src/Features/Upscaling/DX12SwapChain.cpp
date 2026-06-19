@@ -8,6 +8,20 @@
 #include "FidelityFX.h"
 #include "Streamline.h"
 
+namespace
+{
+	struct ScopedHandle
+	{
+		~ScopedHandle()
+		{
+			if (handle && handle != INVALID_HANDLE_VALUE)
+				CloseHandle(handle);
+		}
+
+		HANDLE handle = nullptr;
+	};
+}
+
 void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter)
 {
 	DX::ThrowIfFailed(D3D12CreateDevice(a_adapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d12Device)));
@@ -29,10 +43,13 @@ void DX12SwapChain::CreateD3D12Device(IDXGIAdapter* a_adapter)
 
 void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC a_swapChainDesc)
 {
+	if (!adapter)
+		DX::ThrowIfFailed(E_POINTER);
+
 	CreateD3D12Device(adapter);
 
-	IDXGIFactory4* dxgiFactory;
-	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(&dxgiFactory)));
+	dxgiFactory = nullptr;
+	DX::ThrowIfFailed(adapter->GetParent(IID_PPV_ARGS(dxgiFactory.put())));
 
 	// Runtime format negotiation for swap chain
 	DXGI_FORMAT attemptedFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -75,7 +92,7 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 	ffx::CreateContextDescFrameGenerationSwapChainForHwndDX12 ffxSwapChainDesc{};
 
 	ffxSwapChainDesc.desc = &swapChainDesc;
-	ffxSwapChainDesc.dxgiFactory = dxgiFactory;
+	ffxSwapChainDesc.dxgiFactory = dxgiFactory.get();
 	ffxSwapChainDesc.fullscreenDesc = nullptr;
 	ffxSwapChainDesc.gameQueue = commandQueue.get();
 	ffxSwapChainDesc.hwnd = a_swapChainDesc.OutputWindow;
@@ -85,7 +102,10 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 
 	if (ffx::CreateContext(fidelityFX.swapChainContext, nullptr, ffxSwapChainDesc) != ffx::ReturnCode::Ok) {
 		logger::critical("[FidelityFX] Failed to create swap chain context!");
+		DX::ThrowIfFailed(E_FAIL);
 	}
+	if (!swapChain)
+		DX::ThrowIfFailed(E_POINTER);
 
 	DX::ThrowIfFailed(swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainBuffers[0])));
 	DX::ThrowIfFailed(swapChain->GetBuffer(1, IID_PPV_ARGS(&swapChainBuffers[1])));
@@ -103,13 +123,15 @@ void DX12SwapChain::CreateSwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC 
 
 void DX12SwapChain::CreateInterop()
 {
-	HANDLE sharedFenceHandle;
-	DX::ThrowIfFailed(d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&d3d12Fence)));
-	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle));
-	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle, IID_PPV_ARGS(&d3d11Fence)));
-	CloseHandle(sharedFenceHandle);
+	if (!d3d12Device || !d3d11Device || !swapChain)
+		DX::ThrowIfFailed(E_POINTER);
 
-	swapChainProxy = new DXGISwapChainProxy(swapChain);
+	ScopedHandle sharedFenceHandle;
+	DX::ThrowIfFailed(d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&d3d12Fence)));
+	DX::ThrowIfFailed(d3d12Device->CreateSharedHandle(d3d12Fence.get(), nullptr, GENERIC_ALL, nullptr, &sharedFenceHandle.handle));
+	DX::ThrowIfFailed(d3d11Device->OpenSharedFence(sharedFenceHandle.handle, IID_PPV_ARGS(&d3d11Fence)));
+
+	swapChainProxy = std::make_unique<DXGISwapChainProxy>(swapChain);
 
 	D3D11_TEXTURE2D_DESC texDesc11{};
 	texDesc11.Width = swapChainDesc.Width;
@@ -121,37 +143,74 @@ void DX12SwapChain::CreateInterop()
 	texDesc11.SampleDesc.Quality = 0;
 	texDesc11.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
 
-	swapChainBufferWrapped = new WrappedResource(texDesc11, d3d11Device.get(), d3d12Device.get());
+	swapChainBufferWrapped = std::make_unique<WrappedResource>(texDesc11, d3d11Device.get(), d3d12Device.get());
 
 	// UI buffer uses R8G8B8A8_UNORM - vanilla UI is SDR and 8-bit precision
 	texDesc11.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	uiBufferWrapped = new WrappedResource(texDesc11, d3d11Device.get(), d3d12Device.get());
+	uiBufferWrapped = std::make_unique<WrappedResource>(texDesc11, d3d11Device.get(), d3d12Device.get());
 }
 
 DXGISwapChainProxy* DX12SwapChain::GetSwapChainProxy()
 {
-	return swapChainProxy;
+	return swapChainProxy.get();
 }
 
 void DX12SwapChain::SetD3D11Device(ID3D11Device* a_d3d11Device)
 {
+	if (!a_d3d11Device)
+		DX::ThrowIfFailed(E_POINTER);
+
 	DX::ThrowIfFailed(a_d3d11Device->QueryInterface(IID_PPV_ARGS(&d3d11Device)));
 }
 
 void DX12SwapChain::SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context)
 {
+	if (!a_d3d11Context)
+		DX::ThrowIfFailed(E_POINTER);
+
 	DX::ThrowIfFailed(a_d3d11Context->QueryInterface(IID_PPV_ARGS(&d3d11Context)));
 }
 
-HRESULT DX12SwapChain::GetBuffer(void** ppSurface)
+HRESULT DX12SwapChain::GetBuffer(UINT Buffer, REFIID riid, void** ppSurface)
 {
-	*ppSurface = swapChainBufferWrapped->resource11;
-	return S_OK;
+	if (!ppSurface)
+		return E_POINTER;
+
+	*ppSurface = nullptr;
+
+	if (Buffer != 0 || !swapChainBufferWrapped || !swapChainBufferWrapped->resource11)
+		return DXGI_ERROR_INVALID_CALL;
+
+	return swapChainBufferWrapped->resource11->QueryInterface(riid, ppSurface);
 }
 
 HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 {
 	auto& upscaling = globals::features::upscaling;
+	static bool loggedIncompletePresentResources = false;
+
+	const bool hasPresentResources =
+		swapChain &&
+		d3d11Context &&
+		d3d11Fence &&
+		d3d12Fence &&
+		commandQueue &&
+		frameIndex < 2 &&
+		commandAllocators[frameIndex] &&
+		commandLists[frameIndex] &&
+		swapChainBuffers[frameIndex] &&
+		swapChainBufferWrapped &&
+		swapChainBufferWrapped->resource &&
+		uiBufferWrapped &&
+		uiBufferWrapped->rtv;
+	if (!hasPresentResources) {
+		if (!loggedIncompletePresentResources) {
+			logger::error("[DX12SwapChain] Cannot present because D3D12 interop resources are incomplete.");
+			loggedIncompletePresentResources = true;
+		}
+		return DXGI_ERROR_INVALID_CALL;
+	}
+	loggedIncompletePresentResources = false;
 
 	// Scale UI brightness BEFORE fence sync so the D3D11 UIBrightnessCS dispatch
 	// is covered by the D3D11→D3D12 fence. Without this, FidelityFX may read
@@ -212,7 +271,7 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 	frameIndex = swapChain->GetCurrentBackBufferIndex();
 
 	float clearColor[4]{ 0, 0, 0, 0 };
-	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv, clearColor);
+	d3d11Context->ClearRenderTargetView(uiBufferWrapped->rtv.get(), clearColor);
 
 	// If VSync is disabled, use frame limiter to prevent tearing and optimise pacing
 	if (SyncInterval == 0)
@@ -223,16 +282,29 @@ HRESULT DX12SwapChain::Present(UINT SyncInterval, UINT Flags)
 
 HRESULT DX12SwapChain::GetDevice(REFIID uuid, void** ppDevice)
 {
+	if (!ppDevice)
+		return E_POINTER;
+
+	*ppDevice = nullptr;
+
 	if (uuid == __uuidof(ID3D11Device) || uuid == __uuidof(ID3D11Device1) || uuid == __uuidof(ID3D11Device2) || uuid == __uuidof(ID3D11Device3) || uuid == __uuidof(ID3D11Device4) || uuid == __uuidof(ID3D11Device5)) {
-		*ppDevice = d3d11Device.get();
-		return S_OK;
+		if (!d3d11Device)
+			return E_NOINTERFACE;
+
+		return d3d11Device->QueryInterface(uuid, ppDevice);
 	}
+
+	if (!swapChain)
+		return E_NOINTERFACE;
 
 	return swapChain->GetDevice(uuid, ppDevice);
 }
 
 HANDLE DX12SwapChain::GetFrameLatencyWaitableObject()
 {
+	if (!swapChain)
+		return nullptr;
+
 	return swapChain->GetFrameLatencyWaitableObject();
 }
 
@@ -261,19 +333,21 @@ float DX12SwapChain::GetFrameTime() const
 
 WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device)
 {
+	if (!a_d3d11Device || !a_d3d12Device)
+		DX::ThrowIfFailed(E_POINTER);
+
 	// Create D3D11 shared texture directly instead of wrapping D3D12 resource
 	a_texDesc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-	DX::ThrowIfFailed(a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, &resource11));
+	DX::ThrowIfFailed(a_d3d11Device->CreateTexture2D(&a_texDesc, nullptr, resource11.put()));
 
 	// Get shared handle from D3D11 texture to enable D3D12 access
 	winrt::com_ptr<IDXGIResource1> dxgiResource;
 	DX::ThrowIfFailed(resource11->QueryInterface(IID_PPV_ARGS(dxgiResource.put())));
-	HANDLE sharedHandle = nullptr;
-	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &sharedHandle));
+	ScopedHandle sharedHandle;
+	DX::ThrowIfFailed(dxgiResource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &sharedHandle.handle));
 
 	// Open the shared D3D11 texture as D3D12 resource
-	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(sharedHandle, IID_PPV_ARGS(resource.put())));
-	CloseHandle(sharedHandle);
+	DX::ThrowIfFailed(a_d3d12Device->OpenSharedHandle(sharedHandle.handle, IID_PPV_ARGS(resource.put())));
 
 	if (a_texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -282,7 +356,7 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 		srvDesc.Texture2D.MostDetailedMip = 0;
 		srvDesc.Texture2D.MipLevels = 1;
 
-		DX::ThrowIfFailed(a_d3d11Device->CreateShaderResourceView(resource11, &srvDesc, &srv));
+		DX::ThrowIfFailed(a_d3d11Device->CreateShaderResourceView(resource11.get(), &srvDesc, srv.put()));
 	}
 
 	if (a_texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
@@ -293,14 +367,14 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 			uavDesc.Texture2DArray.FirstArraySlice = 0;
 			uavDesc.Texture2DArray.ArraySize = a_texDesc.ArraySize;
 
-			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11, &uavDesc, &uav));
+			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11.get(), &uavDesc, uav.put()));
 		} else {
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 			uavDesc.Format = a_texDesc.Format;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
 			uavDesc.Texture2D.MipSlice = 0;
 
-			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11, &uavDesc, &uav));
+			DX::ThrowIfFailed(a_d3d11Device->CreateUnorderedAccessView(resource11.get(), &uavDesc, uav.put()));
 		}
 	}
 
@@ -309,29 +383,8 @@ WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* 
 		rtvDesc.Format = a_texDesc.Format;
 		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 		rtvDesc.Texture2D.MipSlice = 0;
-		DX::ThrowIfFailed(a_d3d11Device->CreateRenderTargetView(resource11, &rtvDesc, &rtv));
+		DX::ThrowIfFailed(a_d3d11Device->CreateRenderTargetView(resource11.get(), &rtvDesc, rtv.put()));
 	}
-}
-
-WrappedResource::~WrappedResource()
-{
-	if (resource11) {
-		resource11->Release();
-		resource11 = nullptr;
-	}
-	if (srv) {
-		srv->Release();
-		srv = nullptr;
-	}
-	if (uav) {
-		uav->Release();
-		uav = nullptr;
-	}
-	if (rtv) {
-		rtv->Release();
-		rtv = nullptr;
-	}
-	// resource (winrt::com_ptr) will be automatically released
 }
 
 DXGISwapChainProxy::DXGISwapChainProxy(IDXGISwapChain4* a_swapChain)
@@ -342,10 +395,21 @@ DXGISwapChainProxy::DXGISwapChainProxy(IDXGISwapChain4* a_swapChain)
 /****IUknown****/
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::QueryInterface(REFIID riid, void** ppvObj)
 {
-	auto ret = swapChain->QueryInterface(riid, ppvObj);
-	if (*ppvObj)
-		*ppvObj = this;
-	return ret;
+	if (!ppvObj)
+		return E_POINTER;
+
+	*ppvObj = nullptr;
+
+	if (riid == __uuidof(IUnknown) ||
+		riid == __uuidof(IDXGIObject) ||
+		riid == __uuidof(IDXGIDeviceSubObject) ||
+		riid == __uuidof(IDXGISwapChain)) {
+		*ppvObj = static_cast<IDXGISwapChain*>(this);
+		AddRef();
+		return S_OK;
+	}
+
+	return swapChain->QueryInterface(riid, ppvObj);
 }
 
 ULONG STDMETHODCALLTYPE DXGISwapChainProxy::AddRef()
@@ -391,9 +455,9 @@ HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::Present(UINT SyncInterval, UINT Fl
 	return globals::features::upscaling.dx12SwapChain.Present(SyncInterval, Flags);
 }
 
-HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetBuffer(UINT, _In_ REFIID, _COM_Outptr_ void** ppSurface)
+HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::GetBuffer(UINT Buffer, _In_ REFIID riid, _COM_Outptr_ void** ppSurface)
 {
-	return globals::features::upscaling.dx12SwapChain.GetBuffer(ppSurface);
+	return globals::features::upscaling.dx12SwapChain.GetBuffer(Buffer, riid, ppSurface);
 }
 
 HRESULT STDMETHODCALLTYPE DXGISwapChainProxy::SetFullscreenState(BOOL Fullscreen, _In_opt_ IDXGIOutput* pTarget)
@@ -454,13 +518,13 @@ DX12SwapChain::BlurResources DX12SwapChain::GetBlurResources() const
 {
 	BlurResources res;
 	if (swapChainBufferWrapped) {
-		res.backbufferTex = swapChainBufferWrapped->resource11;
-		res.backbufferRTV = swapChainBufferWrapped->rtv;
-		res.backbufferSRV = swapChainBufferWrapped->srv;
+		res.backbufferTex = swapChainBufferWrapped->resource11.get();
+		res.backbufferRTV = swapChainBufferWrapped->rtv.get();
+		res.backbufferSRV = swapChainBufferWrapped->srv.get();
 	}
 	if (uiBufferWrapped) {
-		res.uiBufferSRV = uiBufferWrapped->srv;
-		res.uiBufferRTV = uiBufferWrapped->rtv;
+		res.uiBufferSRV = uiBufferWrapped->srv.get();
+		res.uiBufferRTV = uiBufferWrapped->rtv.get();
 	}
 	return res;
 }
@@ -468,16 +532,29 @@ DX12SwapChain::BlurResources DX12SwapChain::GetBlurResources() const
 void DX12SwapChain::CreateSharedResources()
 {
 	auto renderer = globals::game::renderer;
+	if (!renderer || !d3d11Device || !d3d12Device) {
+		logger::error("[DX12SwapChain] Cannot create shared resources because renderer or device state is incomplete.");
+		depthBufferShared12.reset();
+		motionVectorBufferShared12.reset();
+		return;
+	}
 
 	// Create depth buffer
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	if (!main.texture || !motionVector.texture) {
+		logger::error("[DX12SwapChain] Cannot create shared resources because source textures are missing.");
+		depthBufferShared12.reset();
+		motionVectorBufferShared12.reset();
+		return;
+	}
+
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
-	depthBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
+	depthBufferShared12 = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	// Create motion vector buffer
-	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	motionVector.texture->GetDesc(&texDesc);
-	motionVectorBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
+	motionVectorBufferShared12 = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
 }

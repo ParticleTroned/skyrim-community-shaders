@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include <memory>
 #include <atomic>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
@@ -132,8 +133,8 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(UpscalingDataCB);
 
-	ConstantBuffer* jitterCB = nullptr;
-	ConstantBuffer* upscalingDataCB = nullptr;
+	std::unique_ptr<ConstantBuffer> jitterCB;
+	std::unique_ptr<ConstantBuffer> upscalingDataCB;
 
 	// Runtime state
 	bool isWindowed = false;
@@ -176,6 +177,7 @@ public:
 	void CheckResources(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
+	void DestroyAllUpscalingTextureResources();
 
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];          // One for each UpscaleMethod
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR + VR: converts R24G8_TYPELESS depth to R32_FLOAT
@@ -236,10 +238,10 @@ public:
 	void Upscale();
 
 	// D3D11 textures
-	Texture2D* reactiveMaskTexture = nullptr;
-	Texture2D* transparencyCompositionMaskTexture = nullptr;
-	Texture2D* motionVectorCopyTexture = nullptr;
-	Texture2D* sharpenerTexture = nullptr;
+	std::unique_ptr<Texture2D> reactiveMaskTexture;
+	std::unique_ptr<Texture2D> transparencyCompositionMaskTexture;
+	std::unique_ptr<Texture2D> motionVectorCopyTexture;
+	std::unique_ptr<Texture2D> sharpenerTexture;
 	bool dlssUpscaleOutputInSharpenerTexture = false;
 
 	virtual void ClearShaderCache() override;

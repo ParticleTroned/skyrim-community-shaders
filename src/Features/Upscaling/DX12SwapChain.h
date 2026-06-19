@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.Foundation.h>
+#include <memory>
 #include <stdio.h>
 #include <winrt/base.h>
 #include <wrl\client.h>
@@ -8,6 +9,7 @@
 
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <dxgi1_4.h>
 
 #include <directx/d3dx12.h>
 
@@ -15,12 +17,12 @@ class WrappedResource
 {
 public:
 	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device);
-	~WrappedResource();
+	~WrappedResource() = default;
 
-	ID3D11Texture2D* resource11 = nullptr;
-	ID3D11ShaderResourceView* srv = nullptr;
-	ID3D11UnorderedAccessView* uav = nullptr;
-	ID3D11RenderTargetView* rtv = nullptr;
+	winrt::com_ptr<ID3D11Texture2D> resource11;
+	winrt::com_ptr<ID3D11ShaderResourceView> srv;
+	winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+	winrt::com_ptr<ID3D11RenderTargetView> rtv;
 	winrt::com_ptr<ID3D12Resource> resource;
 };
 
@@ -65,17 +67,18 @@ public:
 	winrt::com_ptr<ID3D12CommandQueue> commandQueue;
 	winrt::com_ptr<ID3D12CommandAllocator> commandAllocators[2];
 	winrt::com_ptr<ID3D12GraphicsCommandList4> commandLists[2];
+	winrt::com_ptr<IDXGIFactory4> dxgiFactory;
 
-	IDXGISwapChain4* swapChain;
+	IDXGISwapChain4* swapChain = nullptr;
 
-	DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
+	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
 
-	WrappedResource* swapChainBufferWrapped;
-	WrappedResource* uiBufferWrapped;
+	std::unique_ptr<WrappedResource> swapChainBufferWrapped;
+	std::unique_ptr<WrappedResource> uiBufferWrapped;
 
 	// D3D12 interop resources for frame generation
-	WrappedResource* depthBufferShared12 = nullptr;
-	WrappedResource* motionVectorBufferShared12 = nullptr;
+	std::unique_ptr<WrappedResource> depthBufferShared12;
+	std::unique_ptr<WrappedResource> motionVectorBufferShared12;
 
 	winrt::com_ptr<ID3D11Device5> d3d11Device;
 	winrt::com_ptr<ID3D11DeviceContext4> d3d11Context;
@@ -92,7 +95,7 @@ public:
 
 	double refreshRate = 0;
 
-	DXGISwapChainProxy* swapChainProxy = nullptr;
+	std::unique_ptr<DXGISwapChainProxy> swapChainProxy;
 
 	// Returns the current frame time (in seconds) for accurate FPS calculation when frame generation is active
 	float GetFrameTime() const;
@@ -106,7 +109,7 @@ public:
 	void SetD3D11Device(ID3D11Device* a_d3d11Device);
 	void SetD3D11DeviceContext(ID3D11DeviceContext* a_d3d11Context);
 
-	HRESULT GetBuffer(void** ppSurface);
+	HRESULT GetBuffer(UINT Buffer, REFIID riid, void** ppSurface);
 	HRESULT Present(UINT SyncInterval, UINT Flags);
 	HRESULT GetDevice(_In_ REFIID riid, _COM_Outptr_ void** ppDevice);
 	HANDLE GetFrameLatencyWaitableObject();

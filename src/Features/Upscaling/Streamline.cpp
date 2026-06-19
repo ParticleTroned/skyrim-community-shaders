@@ -4,6 +4,7 @@
 #include <cmath>
 #include <dxgi.h>
 #include <dxgi1_3.h>
+#include <vector>
 
 #include "../../Deferred.h"
 #include "../../Hooks.h"
@@ -184,7 +185,7 @@ void Streamline::LoadInterposer()
 
 	logger::info("[Streamline] Initializing Streamline");
 
-	sl::Preferences pref;
+	sl::Preferences pref{};
 
 	sl::Feature featuresToLoad[] = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL };
 
@@ -243,6 +244,37 @@ void Streamline::LoadInterposer()
 	slGetNewFrameToken = (PFun_slGetNewFrameToken*)GetProcAddress(interposer, "slGetNewFrameToken");
 	slSetD3DDevice = (PFun_slSetD3DDevice*)GetProcAddress(interposer, "slSetD3DDevice");
 
+	std::vector<const char*> missingExports;
+	auto requireExport = [&](const char* a_name, auto a_export) {
+		if (!a_export)
+			missingExports.push_back(a_name);
+	};
+	requireExport("slInit", slInit);
+	requireExport("slShutdown", slShutdown);
+	requireExport("slIsFeatureSupported", slIsFeatureSupported);
+	requireExport("slIsFeatureLoaded", slIsFeatureLoaded);
+	requireExport("slSetFeatureLoaded", slSetFeatureLoaded);
+	requireExport("slEvaluateFeature", slEvaluateFeature);
+	requireExport("slAllocateResources", slAllocateResources);
+	requireExport("slFreeResources", slFreeResources);
+	requireExport("slGetFeatureRequirements", slGetFeatureRequirements);
+	requireExport("slGetFeatureVersion", slGetFeatureVersion);
+	requireExport("slUpgradeInterface", slUpgradeInterface);
+	requireExport("slSetConstants", slSetConstants);
+	requireExport("slGetNativeInterface", slGetNativeInterface);
+	requireExport("slGetFeatureFunction", slGetFeatureFunction);
+	requireExport("slGetNewFrameToken", slGetNewFrameToken);
+	requireExport("slSetD3DDevice", slSetD3DDevice);
+
+	if (!missingExports.empty()) {
+		logger::critical("[Streamline] Interposer is missing required exports; refusing to initialize.");
+		for (const auto* exportName : missingExports)
+			logger::critical("[Streamline] Missing export {}", exportName);
+		FreeLibrary(interposer);
+		interposer = nullptr;
+		return;
+	}
+
 	if (SL_FAILED(res, slInit(pref, sl::kSDKVersion))) {
 		logger::critical("[Streamline] Failed to initialize Streamline");
 	} else {
@@ -262,11 +294,33 @@ void Streamline::LoadInterposer()
 void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
 	logger::info("[Streamline] Checking features");
-	DXGI_ADAPTER_DESC adapterDesc;
+	auto disableFeatures = [&]() {
+		featureDLSS = false;
+		featureReflex = false;
+		featurePCL = false;
+		reflexSupportedOnCurrentAdapter = false;
+		isRTXBelow40series = false;
+		InvalidateDLSSOptionsCache();
+		reflexOptionsCache = {};
+		lastReflexSleepFrame = UINT32_MAX;
+	};
+
+	if (!a_adapter) {
+		logger::warn("[Streamline] Cannot check features without a DXGI adapter.");
+		disableFeatures();
+		return;
+	}
+	if (!initialized || !slIsFeatureLoaded || !slGetFeatureRequirements || !slIsFeatureSupported) {
+		logger::warn("[Streamline] Cannot check features because Streamline is not initialized.");
+		disableFeatures();
+		return;
+	}
+
+	DXGI_ADAPTER_DESC adapterDesc{};
 	a_adapter->GetDesc(&adapterDesc);
 	reflexSupportedOnCurrentAdapter = adapterDesc.VendorId == NVIDIA_VENDOR_ID;
 
-	sl::AdapterInfo adapterInfo;
+	sl::AdapterInfo adapterInfo{};
 	adapterInfo.deviceLUID = (uint8_t*)&adapterDesc.AdapterLuid;
 	adapterInfo.deviceLUIDSizeInBytes = sizeof(LUID);
 

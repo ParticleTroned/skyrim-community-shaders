@@ -21,6 +21,8 @@ ffxFunctions ffxModule;
 
 std::vector<std::pair<std::string, std::string>> FidelityFX::dllVersions = {};
 
+FidelityFX::~FidelityFX() = default;
+
 namespace
 {
 	constexpr wchar_t kFrameGenerationDllName[] = L"amd_fidelityfx_framegeneration_dx12.dll";
@@ -401,12 +403,10 @@ namespace
 	}
 
 	template <size_t N>
-	void DeleteWrappedResourceArray(WrappedResource* (&a_resources)[N])
+	void ResetWrappedResourceArray(std::unique_ptr<WrappedResource> (&a_resources)[N])
 	{
-		for (auto*& resource : a_resources) {
-			delete resource;
-			resource = nullptr;
-		}
+		for (auto& resource : a_resources)
+			resource.reset();
 	}
 
 	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters, bool& a_crashed)
@@ -633,6 +633,28 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 {
 	auto& upscaling = globals::features::upscaling;
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
+	static bool loggedIncompleteFrameGenResources = false;
+
+	if (a_useFrameGeneration) {
+		const bool hasFrameGenerationResources =
+			swapChain.uiBufferWrapped &&
+			swapChain.uiBufferWrapped->resource.get() &&
+			swapChain.depthBufferShared12 &&
+			swapChain.depthBufferShared12->resource.get() &&
+			swapChain.motionVectorBufferShared12 &&
+			swapChain.motionVectorBufferShared12->resource.get() &&
+			swapChain.frameIndex < 2 &&
+			swapChain.commandLists[swapChain.frameIndex];
+		if (!hasFrameGenerationResources) {
+			if (!loggedIncompleteFrameGenResources) {
+				logger::error("[FidelityFX] Frame generation requested without complete shared interop resources; presenting without frame generation.");
+				loggedIncompleteFrameGenResources = true;
+			}
+			a_useFrameGeneration = false;
+		} else {
+			loggedIncompleteFrameGenResources = false;
+		}
+	}
 
 	auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
 	float peakNits = hdr ? static_cast<float>(hdr->settings.hdrPeakNits) : 1000.0f;
@@ -907,12 +929,12 @@ void FidelityFX::DestroyRuntimeUpscalerResources(bool a_waitForIdle)
 	if (a_waitForIdle)
 		WaitForRuntimeUpscalerIdle();
 
-	DeleteWrappedResourceArray(runtimeColorShared);
-	DeleteWrappedResourceArray(runtimeDepthShared);
-	DeleteWrappedResourceArray(runtimeMotionShared);
-	DeleteWrappedResourceArray(runtimeReactiveShared);
-	DeleteWrappedResourceArray(runtimeTransparencyShared);
-	DeleteWrappedResourceArray(runtimeOutputShared);
+	ResetWrappedResourceArray(runtimeColorShared);
+	ResetWrappedResourceArray(runtimeDepthShared);
+	ResetWrappedResourceArray(runtimeMotionShared);
+	ResetWrappedResourceArray(runtimeReactiveShared);
+	ResetWrappedResourceArray(runtimeTransparencyShared);
+	ResetWrappedResourceArray(runtimeOutputShared);
 
 	runtimeColorSharedDesc = {};
 	runtimeDepthSharedDesc = {};
@@ -1478,18 +1500,12 @@ bool FidelityFX::EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, u
 
 	if (!needsRecreate) {
 		for (uint32_t i = a_contextCount; i < std::size(runtimeColorShared); ++i) {
-			delete runtimeColorShared[i];
-			runtimeColorShared[i] = nullptr;
-			delete runtimeDepthShared[i];
-			runtimeDepthShared[i] = nullptr;
-			delete runtimeMotionShared[i];
-			runtimeMotionShared[i] = nullptr;
-			delete runtimeReactiveShared[i];
-			runtimeReactiveShared[i] = nullptr;
-			delete runtimeTransparencyShared[i];
-			runtimeTransparencyShared[i] = nullptr;
-			delete runtimeOutputShared[i];
-			runtimeOutputShared[i] = nullptr;
+			runtimeColorShared[i].reset();
+			runtimeDepthShared[i].reset();
+			runtimeMotionShared[i].reset();
+			runtimeReactiveShared[i].reset();
+			runtimeTransparencyShared[i].reset();
+			runtimeOutputShared[i].reset();
 		}
 		return true;
 	}
@@ -1500,12 +1516,12 @@ bool FidelityFX::EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, u
 
 	try {
 		for (uint32_t i = 0; i < a_contextCount; ++i) {
-			runtimeColorShared[i] = new WrappedResource(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeDepthShared[i] = new WrappedResource(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeMotionShared[i] = new WrappedResource(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeReactiveShared[i] = new WrappedResource(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeTransparencyShared[i] = new WrappedResource(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			runtimeOutputShared[i] = new WrappedResource(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			runtimeColorShared[i] = std::make_unique<WrappedResource>(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			runtimeDepthShared[i] = std::make_unique<WrappedResource>(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			runtimeMotionShared[i] = std::make_unique<WrappedResource>(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			runtimeReactiveShared[i] = std::make_unique<WrappedResource>(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			runtimeTransparencyShared[i] = std::make_unique<WrappedResource>(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			runtimeOutputShared[i] = std::make_unique<WrappedResource>(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
 		}
 	} catch (const std::exception& e) {
 		logger::error("[FidelityFX] Failed to create runtime shared resources: {}", e.what());
@@ -1576,7 +1592,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 	if (!swapChain.d3d11Context || !swapChain.commandQueue || !runtimeD3D11Fence || !runtimeD3D12Fence)
 		return false;
 
-	auto isValidShared = [](WrappedResource* a_resource) {
+	auto isValidShared = [](const std::unique_ptr<WrappedResource>& a_resource) {
 		return a_resource && a_resource->resource11 && a_resource->resource.get();
 	};
 	if (!isValidShared(runtimeColorShared[a_contextIndex]) ||
@@ -1609,7 +1625,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 
 	bool dispatchOk = false;
 	try {
-		auto copyIntoShared = [&](ID3D11Resource* a_source, WrappedResource* a_destination, uint32_t a_width, uint32_t a_height, uint32_t a_maxWidth, uint32_t a_maxHeight) {
+		auto copyIntoShared = [&](ID3D11Resource* a_source, const std::unique_ptr<WrappedResource>& a_destination, uint32_t a_width, uint32_t a_height, uint32_t a_maxWidth, uint32_t a_maxHeight) {
 			if (!a_source || !a_destination || !a_destination->resource11)
 				return false;
 
@@ -1625,7 +1641,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			sourceBox.right = copyWidth;
 			sourceBox.bottom = copyHeight;
 			sourceBox.back = 1;
-			swapChain.d3d11Context->CopySubresourceRegion(a_destination->resource11, 0, 0, 0, 0, a_source, 0, &sourceBox);
+			swapChain.d3d11Context->CopySubresourceRegion(a_destination->resource11.get(), 0, 0, 0, 0, a_source, 0, &sourceBox);
 			return true;
 		};
 
@@ -1718,7 +1734,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 					outputBox.right = copyWidth;
 					outputBox.bottom = copyHeight;
 					outputBox.back = 1;
-					swapChain.d3d11Context->CopySubresourceRegion(a_output, 0, 0, 0, 0, runtimeOutputShared[a_contextIndex]->resource11, 0, &outputBox);
+					swapChain.d3d11Context->CopySubresourceRegion(a_output, 0, 0, 0, 0, runtimeOutputShared[a_contextIndex]->resource11.get(), 0, &outputBox);
 				}
 			}
 		}

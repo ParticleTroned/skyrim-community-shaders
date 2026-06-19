@@ -288,12 +288,15 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 {
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
+	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 
 	state->updateShader = true;
 	state->currentShader = shader;
 
 	state->currentVertexDescriptor = vertexDescriptor;
 	state->currentPixelDescriptor = pixelDescriptor;
+
+	globals::features::terrainBlending.OnBeginTechnique(shader, pixelDescriptor, callerRva);
 
 	state->permutationData.VertexShaderDescriptor = vertexDescriptor;
 	state->permutationData.PixelShaderDescriptor = pixelDescriptor;
@@ -511,7 +514,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
+	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	func(isCompute);
+	globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 	globals::state->Draw();
 }
 

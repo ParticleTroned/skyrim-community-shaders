@@ -219,7 +219,6 @@ public:
 	};
 	struct ClimateSettings
 	{
-		float wetnessMultiplier;
 		float puddleMultiplier;
 		float transitionSpeed;
 		float raindropChance;

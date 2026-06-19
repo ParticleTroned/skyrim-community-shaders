@@ -417,6 +417,24 @@ namespace
 		return false;
 	}
 
+	void ResetPersistentUiStateToDefaults(Wetterness& wetterness)
+	{
+		wetterness.settings = {};
+		wetterness.puddleLayout = DEFAULT_PUDDLE_LAYOUT;
+		wetterness.rainReflectionBalance = DEFAULT_RAIN_REFLECTION_BALANCE;
+		wetterness.puddleSkyReflectionScale = DEFAULT_PUDDLE_SKY_REFLECTION_SCALE;
+		wetterness.postRainWaterClarity = DEFAULT_POST_RAIN_WATER_CLARITY;
+		wetterness.shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
+		wetterness.wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
+		wetterness.rainGrassGlossiness = Wetterness::kDefaultRainGrassGlossiness;
+		wetterness.rainGrassSpecularStrength = Wetterness::kDefaultRainGrassSpecularStrength;
+		wetterness.modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
+		wetterness.legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
+		wetterness.puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
+		wetterness.enableWeatherDrivenDryingModel = true;
+		wetterness.debugSettings = {};
+	}
+
 	Wetterness::ShaderSettings MakeShaderSettings(const Wetterness::Settings& settings)
 	{
 		Wetterness::ShaderSettings shaderSettings{};
@@ -737,11 +755,18 @@ namespace
 		return state;
 	}
 
-	void ApplyWetternessUiPreset(
-		Wetterness& wetterness,
-		const WetternessUiPresetDefinition& preset)
+	constexpr size_t DEFAULT_WETTERNESS_UI_PRESET_INDEX = 2;  // Quality
+
+	WetternessUiPresetState BuildDefaultWetternessUiPresetState()
 	{
-		const auto presetState = BuildWetternessUiPresetState(preset);
+		static_assert(DEFAULT_WETTERNESS_UI_PRESET_INDEX < WETTERNESS_UI_PRESETS.size(), "Default Wetterness preset index out of range.");
+		return BuildWetternessUiPresetState(WETTERNESS_UI_PRESETS[DEFAULT_WETTERNESS_UI_PRESET_INDEX]);
+	}
+
+	void ApplyWetternessUiPresetState(
+		Wetterness& wetterness,
+		const WetternessUiPresetState& presetState)
+	{
 		wetterness.settings = presetState.settings;
 		wetterness.enableWeatherDrivenDryingModel = presetState.enableWeatherDrivenDryingModel;
 		wetterness.puddleDryingHours = presetState.puddleDryingHours;
@@ -757,9 +782,82 @@ namespace
 		wetterness.legacyWetIndirectSpecularScale = presetState.legacyWetIndirectSpecularScale;
 	}
 
+	void ApplyWetternessUiPreset(
+		Wetterness& wetterness,
+		const WetternessUiPresetDefinition& preset)
+	{
+		ApplyWetternessUiPresetState(wetterness, BuildWetternessUiPresetState(preset));
+	}
+
+	Wetterness::Settings BuildClimatePresetSettings(
+		Wetterness::ClimatePreset preset,
+		const Wetterness::Settings& baseSettings)
+	{
+		Wetterness::Settings climateSettings = baseSettings;
+
+		if (preset == Wetterness::ClimatePreset::Custom) {
+			return climateSettings;
+		}
+
+		const auto& climate = Wetterness::GetClimateSettings(preset);
+		const float baseMaxPuddleWetness = climateSettings.MaxPuddleWetness;
+		const float baseWeatherTransitionSpeed = climateSettings.WeatherTransitionSpeed;
+		climateSettings.MaxPuddleWetness = baseMaxPuddleWetness * climate.puddleMultiplier;
+		climateSettings.WeatherTransitionSpeed = baseWeatherTransitionSpeed * climate.transitionSpeed;
+		climateSettings.RaindropChance = climate.raindropChance;
+		climateSettings.RaindropGridSize = climate.raindropGridSize;
+		climateSettings.RaindropInterval = climate.raindropInterval;
+		return climateSettings;
+	}
+
+	Wetterness::Settings BuildClimatePresetSettings(Wetterness::ClimatePreset preset)
+	{
+		return BuildClimatePresetSettings(preset, BuildDefaultWetternessUiPresetState().settings);
+	}
+
 	bool IsNearlyEqual(float a, float b)
 	{
 		return std::abs(a - b) < 0.001f;
+	}
+
+	float SelectDebugOverrideValue(const float2& values, bool useInteriorValue, float maxValue)
+	{
+		return ClampFiniteOrDefault(useInteriorValue ? values.x : values.y, 0.0f, maxValue, 0.0f);
+	}
+
+	void ApplyDebugOverrides(Wetterness::PerFrame& data, const Wetterness::DebugSettings& debugSettings, bool useInteriorValue)
+	{
+		if (debugSettings.EnableWetnessOverride) {
+			data.Wetness = SelectDebugOverrideValue(debugSettings.WetnessOverride, useInteriorValue, 2.0f);
+		}
+		if (debugSettings.EnablePuddleOverride) {
+			data.PuddleWetness = SelectDebugOverrideValue(debugSettings.PuddleWetnessOverride, useInteriorValue, 2.0f);
+		}
+		if (debugSettings.EnableRainOverride) {
+			data.Raining = SelectDebugOverrideValue(debugSettings.RainOverride, useInteriorValue, 1.0f);
+		}
+	}
+
+	bool ShouldExpireCachedOcclusionProjection(bool canUseFrameCache, uint32_t frameIndex)
+	{
+		if (!g_hasLastValidOcclusionViewProj || !canUseFrameCache) {
+			return false;
+		}
+		if (frameIndex < g_lastValidOcclusionViewProjFrame) {
+			return true;
+		}
+		return (frameIndex - g_lastValidOcclusionViewProjFrame) > MAX_OCCLUSION_VIEW_PROJ_REUSE_FRAMES;
+	}
+
+	bool CanReuseCachedOcclusionProjection(bool needsOcclusionProjection, bool canUseFrameCache, uint32_t frameIndex)
+	{
+		if (!needsOcclusionProjection || !g_hasLastValidOcclusionViewProj || !canUseFrameCache) {
+			return false;
+		}
+		if (frameIndex < g_lastValidOcclusionViewProjFrame) {
+			return false;
+		}
+		return (frameIndex - g_lastValidOcclusionViewProjFrame) <= MAX_OCCLUSION_VIEW_PROJ_REUSE_FRAMES;
 	}
 
 	bool MatchesWetternessSettings(
@@ -826,14 +924,6 @@ namespace
 		       IsNearlyEqual(wetterness.rainGrassSpecularStrength, expected.rainGrassSpecularStrength) &&
 		       IsNearlyEqual(wetterness.modernWetIndirectSpecularScale, expected.modernWetIndirectSpecularScale) &&
 		       IsNearlyEqual(wetterness.legacyWetIndirectSpecularScale, expected.legacyWetIndirectSpecularScale);
-	}
-
-	constexpr size_t DEFAULT_WETTERNESS_UI_PRESET_INDEX = 2;  // Quality
-
-	void ApplyDefaultWetternessUiPreset(Wetterness& wetterness)
-	{
-		static_assert(DEFAULT_WETTERNESS_UI_PRESET_INDEX < WETTERNESS_UI_PRESETS.size(), "Default Wetterness preset index out of range.");
-		ApplyWetternessUiPreset(wetterness, WETTERNESS_UI_PRESETS[DEFAULT_WETTERNESS_UI_PRESET_INDEX]);
 	}
 
 	void SanitizeToggleSettings(Wetterness::Settings& settings)
@@ -1079,42 +1169,42 @@ static constexpr std::array<ClimatePresetInfo, 6> CLIMATE_PRESET_INFO = {
 		  "User-defined custom settings",
 		  nullptr,
 		  nullptr,
-		  { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f } },
+		  { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f } },
 		// Legacy (Original Skyrim)
 		{
 			"Legacy",
 			"Original rain effect values (very light)",
 			LEGACY_DETAILED,
 			LEGACY_EFFECTS,
-			{ 1.0f, 1.0f, 1.0f, 0.3f, 4.0f, 0.5f } },
+			{ 1.0f, 1.0f, 0.3f, 4.0f, 0.5f } },
 		// Nordic Standard
 		{
 			"Nordic (Default)",
 			"Balanced Nordic climate (moderate rain)",
 			NORDIC_DETAILED,
 			NORDIC_EFFECTS,
-			{ 1.0f, 1.0f, 1.0f, 0.8f, 3.0f, 0.5f } },
+			{ 1.0f, 1.0f, 0.8f, 3.0f, 0.5f } },
 		// Arctic Tundra
 		{
 			"Arctic Tundra",
 			"Cold, dry Arctic climate (light rain)",
 			ARCTIC_DETAILED,
 			ARCTIC_EFFECTS,
-			{ 0.5f, 0.3f, 0.5f, 0.3f, 3.5f, 0.4f } },
+			{ 0.3f, 0.5f, 0.3f, 3.5f, 0.4f } },
 		// Temperate Coastal
 		{
 			"Temperate Coastal",
 			"Maritime climate (heavy rain)",
 			COASTAL_DETAILED,
 			COASTAL_EFFECTS,
-			{ 1.5f, 1.7f, 1.7f, 0.8f, 2.5f, 0.25f } },
+			{ 1.7f, 1.7f, 0.8f, 2.5f, 0.25f } },
 		// Monsoon/Extreme
 		{
 			"Monsoon/Extreme",
 			"Extreme monsoon climate (extreme rain)",
 			MONSOON_DETAILED,
 			MONSOON_EFFECTS,
-			{ 2.0f, 2.5f, 2.0f, 1.0f, 2.0f, 0.2f } } }
+			{ 2.5f, 2.0f, 1.0f, 2.0f, 0.2f } } }
 };
 
 // Extract just the settings for the actual climate preset array
@@ -1804,21 +1894,30 @@ static void DrawRainTypeLabel(const char* prefix, float rate)
 float Wetterness::CalculatePrecipitationRate(float raindropChance, float raindropGridSizeGameUnits, float raindropIntervalSeconds, float mlPerDrop) const
 {
 	// Validate inputs to prevent division by zero and invalid calculations
-	if (raindropGridSizeGameUnits <= 0.0f || raindropIntervalSeconds <= 0.0f) {
+	if (!std::isfinite(raindropGridSizeGameUnits) || !std::isfinite(raindropIntervalSeconds) ||
+		raindropGridSizeGameUnits <= 0.0f || raindropIntervalSeconds <= 0.0f) {
 		logger::warn("[Wetterness] Invalid parameters: gridSize={}, interval={}", raindropGridSizeGameUnits, raindropIntervalSeconds);
 		return 0.0f;
 	}
 
-	if (raindropChance < 0.0f || raindropChance > 1.0f) {
+	if (!std::isfinite(raindropChance) || raindropChance < 0.0f || raindropChance > 1.0f) {
 		logger::warn("[Wetterness] Invalid raindrop chance: {}, clamping to [0,1]", raindropChance);
 		raindropChance = std::clamp(raindropChance, 0.0f, 1.0f);
 	}
 	// Use physically realistic default if not specified (10 microliters typical for large raindrop)
-	if (mlPerDrop <= 0.0f)
+	if (!std::isfinite(mlPerDrop) || mlPerDrop <= 0.0f)
 		mlPerDrop = 0.01f;
 	// Convert grid size from game units to meters
 	float gridSizeMeters = Util::Units::GameUnitsToMeters(raindropGridSizeGameUnits);
+	if (!std::isfinite(gridSizeMeters) || gridSizeMeters <= 0.0f) {
+		logger::warn("[Wetterness] Invalid converted grid size: {}", gridSizeMeters);
+		return 0.0f;
+	}
 	float gridAreaSqMeters = gridSizeMeters * gridSizeMeters;
+	if (!std::isfinite(gridAreaSqMeters) || gridAreaSqMeters <= 0.0f) {
+		logger::warn("[Wetterness] Invalid converted grid area: {}", gridAreaSqMeters);
+		return 0.0f;
+	}
 	// Calculate drops per second per grid cell
 	float dropsPerSecond = raindropChance / raindropIntervalSeconds;
 	float dropsPerSqMeterPerSec = dropsPerSecond / gridAreaSqMeters;
@@ -1844,27 +1943,22 @@ const Wetterness::ClimateSettings& Wetterness::GetClimateSettings(ClimatePreset 
 
 void Wetterness::ApplyClimatePreset(ClimatePreset preset)
 {
-	const auto& climate = GetClimateSettings(preset);
+	if (static_cast<size_t>(preset) >= CLIMATE_PRESETS.size()) {
+		preset = defaultPreset;
+	}
 
 	// Update the climate preset
 	climatePreset = preset;
+	if (preset == ClimatePreset::Custom) {
+		InvalidateSanitizedSettingsCache();
+		return;
+	}
 
 	// Start every concrete climate preset from the branch default wetness profile,
 	// then apply only the climate-specific density and timing differences.
-	ApplyDefaultWetternessUiPreset(*this);
-
-	Settings defaultSettings{};  // Get branch default values
-
-	settings.MaxRainWetness = defaultSettings.MaxRainWetness;
-	settings.MaxPuddleWetness = defaultSettings.MaxPuddleWetness * climate.puddleMultiplier;
-	settings.WeatherTransitionSpeed = defaultSettings.WeatherTransitionSpeed * climate.transitionSpeed;
-
-	// Use the preset's raindrop chance, grid size, and interval as the base values
-	settings.RaindropChance = climate.raindropChance;
-	settings.RaindropGridSize = climate.raindropGridSize;
-	settings.RaindropInterval = climate.raindropInterval;
-
-	// Removed clamping for all settings to allow full preset range
+	auto presetState = BuildDefaultWetternessUiPresetState();
+	presetState.settings = BuildClimatePresetSettings(preset, presetState.settings);
+	ApplyWetternessUiPresetState(*this, presetState);
 	InvalidateSanitizedSettingsCache();
 }
 
@@ -1984,15 +2078,13 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 				runtimeState.puddleDepth > RUNTIME_DRY_EPSILON ||
 				runtimeState.wetnessDepth > RUNTIME_DRY_EPSILON;
 
-			if (g_hasLastValidOcclusionViewProj &&
-				canUseFrameCache &&
-				frameIndex - g_lastValidOcclusionViewProjFrame > MAX_OCCLUSION_VIEW_PROJ_REUSE_FRAMES) {
+			if (ShouldExpireCachedOcclusionProjection(canUseFrameCache, frameIndex)) {
 				g_lastValidOcclusionViewProj = {};
 				g_hasLastValidOcclusionViewProj = false;
 				g_lastValidOcclusionViewProjFrame = 0;
 			}
 
-			if (g_hasLastValidOcclusionViewProj && needsOcclusionProjection) {
+			if (CanReuseCachedOcclusionProjection(needsOcclusionProjection, canUseFrameCache, frameIndex)) {
 				data.OcclusionViewProj = g_lastValidOcclusionViewProj;
 				hasValidOcclusionProjection = true;
 			}
@@ -2216,25 +2308,9 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 			data.Raining = blendedRainingVisualSnapped;
 			data.Wetness = std::min(runtimeState.wetnessDepth, MAX_OUTPUT_WETNESS);
 			data.PuddleWetness = std::min(runtimeState.puddleDepth, MAX_OUTPUT_PUDDLE_WETNESS);
-			if (debugSettings.EnableWetnessOverride) {
-				data.Wetness = debugSettings.WetnessOverride.y;
-			}
-			if (debugSettings.EnablePuddleOverride) {
-				data.PuddleWetness = debugSettings.PuddleWetnessOverride.y;
-			}
-			if (debugSettings.EnableRainOverride) {
-				data.Raining = debugSettings.RainOverride.y;
-			}
+			ApplyDebugOverrides(data, debugSettings, false);
 		} else {
-			if (debugSettings.EnableWetnessOverride) {
-				data.Wetness = debugSettings.EnableIntExOverride ? debugSettings.WetnessOverride.x : debugSettings.WetnessOverride.y;
-			}
-			if (debugSettings.EnablePuddleOverride) {
-				data.PuddleWetness = debugSettings.EnableIntExOverride ? debugSettings.PuddleWetnessOverride.x : debugSettings.PuddleWetnessOverride.y;
-			}
-			if (debugSettings.EnableRainOverride) {
-				data.Raining = debugSettings.EnableIntExOverride ? debugSettings.RainOverride.x : debugSettings.RainOverride.y;
-			}
+			ApplyDebugOverrides(data, debugSettings, debugSettings.EnableIntExOverride);
 		}
 	}
 
@@ -2409,19 +2485,28 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 
 void Wetterness::Prepass()
 {
-	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
-	if (!renderer || !context) {
+	if (!context) {
 		return;
 	}
 
-	if (g_hasLastFrameData && g_lastFrameData.settings.EnableWetterness == 0u) {
+	ID3D11ShaderResourceView* precipOcclusionSrv = nullptr;
+	const bool wetnessActiveThisFrame =
+		g_hasLastFrameData &&
+		g_lastFrameData.settings.EnableWetterness != 0u &&
+		(g_lastFrameData.PackedRainReflectionControl & RAIN_REFLECTION_CONTROL_OCCLUSION_VALID_BIT) != 0u;
+	if (!wetnessActiveThisFrame) {
 		ID3D11ShaderResourceView* nullSrv = nullptr;
 		context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 1, &nullSrv);
 		return;
 	}
 
-	ID3D11ShaderResourceView* precipOcclusionSrv = nullptr;
+	auto renderer = globals::game::renderer;
+	if (!renderer) {
+		context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 1, &precipOcclusionSrv);
+		return;
+	}
+
 	auto& precipOcclusionTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
 	if (precipOcclusionTexture.depthSRV) {
 		precipOcclusionSrv = precipOcclusionTexture.depthSRV;
@@ -2434,20 +2519,7 @@ void Wetterness::LoadSettings(json& o_json)
 {
 	const bool isObject = o_json.is_object();
 	const bool hasExplicitWetternessSettings = JsonHasAnyNonDebugKey(o_json);
-	settings = {};
-	puddleLayout = DEFAULT_PUDDLE_LAYOUT;
-	rainReflectionBalance = DEFAULT_RAIN_REFLECTION_BALANCE;
-	puddleSkyReflectionScale = DEFAULT_PUDDLE_SKY_REFLECTION_SCALE;
-	postRainWaterClarity = DEFAULT_POST_RAIN_WATER_CLARITY;
-	shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
-	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
-	rainGrassGlossiness = kDefaultRainGrassGlossiness;
-	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
-	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
-	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
-	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
-	enableWeatherDrivenDryingModel = true;
-	debugSettings = {};
+	ResetPersistentUiStateToDefaults(*this);
 	if (isObject) {
 		try {
 			settings = o_json.get<Settings>();
@@ -2551,19 +2623,7 @@ void Wetterness::SaveSettings(json& o_json)
 
 void Wetterness::RestoreDefaultSettings()
 {
-	settings = {};
-	enableWeatherDrivenDryingModel = true;
-	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
-	puddleLayout = DEFAULT_PUDDLE_LAYOUT;
-	rainReflectionBalance = DEFAULT_RAIN_REFLECTION_BALANCE;
-	puddleSkyReflectionScale = DEFAULT_PUDDLE_SKY_REFLECTION_SCALE;
-	postRainWaterClarity = DEFAULT_POST_RAIN_WATER_CLARITY;
-	shorePersistentDarkeningStrength = SHORE_PERSISTENT_DARKENING_DEFAULT;
-	wetnessDistanceFadeRange = DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
-	rainGrassGlossiness = kDefaultRainGrassGlossiness;
-	rainGrassSpecularStrength = kDefaultRainGrassSpecularStrength;
-	modernWetIndirectSpecularScale = DEFAULT_MODERN_WET_REFLECTION_UI;
-	legacyWetIndirectSpecularScale = DEFAULT_LEGACY_WET_REFLECTION_UI;
+	ResetPersistentUiStateToDefaults(*this);
 	climatePreset = defaultPreset;
 	ApplyClimatePreset(climatePreset);
 	ResetRuntimeState();
@@ -2705,22 +2765,13 @@ bool Wetterness::DoesCurrentSettingsMatchPreset(ClimatePreset preset) const
 		return false;
 	}
 
-	const auto& climate = GetClimateSettings(preset);
-	Settings defaultSettings{};  // Get default values
-
-	// Calculate what the settings should be for this preset
-	float expectedMaxRainWetness = defaultSettings.MaxRainWetness;
-	float expectedMaxPuddleWetness = defaultSettings.MaxPuddleWetness * climate.puddleMultiplier;
-	float expectedWeatherTransitionSpeed = defaultSettings.WeatherTransitionSpeed * climate.transitionSpeed;
-	float expectedRaindropChance = climate.raindropChance;
-	float expectedRaindropGridSize = climate.raindropGridSize;
-	float expectedRaindropInterval = climate.raindropInterval;
+	const Settings expectedSettings = BuildClimatePresetSettings(preset);
 
 	const float tolerance = 0.001f;
-	return (std::abs(settings.MaxRainWetness - expectedMaxRainWetness) < tolerance &&
-			std::abs(settings.MaxPuddleWetness - expectedMaxPuddleWetness) < tolerance &&
-			std::abs(settings.WeatherTransitionSpeed - expectedWeatherTransitionSpeed) < tolerance &&
-			std::abs(settings.RaindropChance - expectedRaindropChance) < tolerance &&
-			std::abs(settings.RaindropGridSize - expectedRaindropGridSize) < tolerance &&
-			std::abs(settings.RaindropInterval - expectedRaindropInterval) < tolerance);
+	return (std::abs(settings.MaxRainWetness - expectedSettings.MaxRainWetness) < tolerance &&
+			std::abs(settings.MaxPuddleWetness - expectedSettings.MaxPuddleWetness) < tolerance &&
+			std::abs(settings.WeatherTransitionSpeed - expectedSettings.WeatherTransitionSpeed) < tolerance &&
+			std::abs(settings.RaindropChance - expectedSettings.RaindropChance) < tolerance &&
+			std::abs(settings.RaindropGridSize - expectedSettings.RaindropGridSize) < tolerance &&
+			std::abs(settings.RaindropInterval - expectedSettings.RaindropInterval) < tolerance);
 }

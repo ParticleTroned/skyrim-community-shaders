@@ -773,12 +773,6 @@ void Deferred::DeferredPasses()
 					ID3D11RenderTargetView* rtvs[1]{ main.RTV };
 					context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
-					const bool deferredCompositeGuarded = upscaling.GuardAAVRSRenderTarget();
-					const bool deferredCompositeVrsAllowed = deferredCompositeGuarded && upscaling.ShouldUseAAVRSForDeferredComposite();
-					Upscaling::ScopedAAVRSFullRateOverride aaVrsFullRateOverride(
-						upscaling,
-						globals::game::isVR && deferredCompositeGuarded && !deferredCompositeVrsAllowed);
-
 					ID3D11ShaderResourceView* psSrvs[kDeferredCompositePSSRVCount]{
 						srvs[0],
 						srvs[1],
@@ -1154,11 +1148,7 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	// Deferred blended decals
 
-	{
-		const bool aaVrsFullRate = globals::features::upscaling.ShouldForceFullRateForAAVRSPhase(Upscaling::AAVRSPassPolicyReason::DecalPhase);
-		Upscaling::ScopedAAVRSFullRateOverride aaVrsFullRateOverride(globals::features::upscaling, aaVrsFullRate);
-		func(This, RenderFlags);
-	}
+	func(This, RenderFlags);
 
 	deferred->EndDeferred();
 

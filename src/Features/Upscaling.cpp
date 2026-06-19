@@ -17333,6 +17333,22 @@ void Upscaling::PostDisplay()
 		PrepareFullResolutionPostProcessing();
 	}
 
+	if (globals::game::isVR && !IsVRRenderScaleModeActive() && !IsPresentationUpscalingActive()) {
+		auto& runtimeData = viewport->GetRuntimeData();
+
+		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
+		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
+		runtimeData.dynamicResolutionWidthRatio = 1.0f;
+		runtimeData.dynamicResolutionHeightRatio = 1.0f;
+		runtimeData.dynamicResolutionLock = 1;
+
+		dynamicResolutionWidthRatio = 1.0f;
+		dynamicResolutionHeightRatio = 1.0f;
+
+		globals::game::renderer->UpdateViewPort(0, 0, 1);
+		UpdateCameraData();
+	}
+
 	if (d3d12SwapChainActive)
 		SetUIBuffer();
 

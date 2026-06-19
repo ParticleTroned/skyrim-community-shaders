@@ -19,12 +19,10 @@ static bool IsChildWorldSpace(const RE::TESWorldSpace* ws)
 // Engine behavior: CellState value 6 is the transition/attached state.
 static constexpr auto kTransitionAttachedCellState = static_cast<RE::TESObjectCELL::CellState>(6);
 
-static bool ShouldCullAtCell(const RE::TES* tes, int32_t cellX, int32_t cellY, bool* isInGrid = nullptr, bool* isAttached = nullptr)
+static bool ShouldCullAtCell(const RE::TES* tes, int32_t cellX, int32_t cellY, bool* isInGrid = nullptr)
 {
 	if (isInGrid)
 		*isInGrid = false;
-	if (isAttached)
-		*isAttached = false;
 	if (!tes || !tes->gridCells)
 		return false;
 
@@ -42,12 +40,7 @@ static bool ShouldCullAtCell(const RE::TES* tes, int32_t cellX, int32_t cellY, b
 		*isInGrid = true;
 
 	if (const auto cell = gridCells->GetCell(x, y)) {
-		const bool attached = cell->cellState.any(RE::TESObjectCELL::CellState::kAttached, kTransitionAttachedCellState);
-		if (isAttached)
-			*isAttached = attached;
-
-		// Keep LOD visible when a loaded dry cell has no active water to replace it.
-		return attached && cell->cellFlags.any(RE::TESObjectCELL::Flag::kHasWater);
+		return cell->cellState.any(RE::TESObjectCELL::CellState::kAttached, kTransitionAttachedCellState);
 	}
 
 	return false;
@@ -81,9 +74,8 @@ static CullCompletionState CullWaterParentByGridCells(RE::NiNode* waterParent, R
 		int32_t x, y;
 		Util::WorldToCell(child->world.translate, x, y);
 		bool isInGrid = false;
-		bool isAttached = false;
-		const bool cull = ShouldCullAtCell(tes, x, y, &isInGrid, &isAttached);
-		if (isAttached)
+		const bool cull = ShouldCullAtCell(tes, x, y, &isInGrid);
+		if (cull)
 			state.foundAttachedCell = true;
 		else if (isInGrid)
 			state.hasPotentiallyAttachableChild = true;

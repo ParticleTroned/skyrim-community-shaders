@@ -19,8 +19,8 @@
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 
-#include <intrin.h>
 #include <array>
+#include <intrin.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
@@ -499,32 +499,6 @@ namespace GrassExtensions
 				}
 			}
 		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-}
-
-namespace WaterBlendHistory
-{
-	struct BSImagespaceShader_Render
-	{
-		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
-		{
-			if (const auto shadowState = globals::game::shadowState; shadowState && globals::game::renderer && globals::d3d::context) {
-				GET_INSTANCE_MEMBER(renderTargets, shadowState)
-
-				const auto target = renderTargets[1];
-				if (target != RE::RENDER_TARGET::kNONE) {
-					const auto rtv = globals::game::renderer->GetRuntimeData().renderTargets[target].RTV;
-					if (rtv) {
-						constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
-						globals::d3d::context->ClearRenderTargetView(rtv, clearColor);
-					}
-				}
-			}
-
-			func(imageSpaceShader, shape, param);
-		}
-
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 }
@@ -1061,8 +1035,7 @@ namespace Hooks
 			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
 		}
 #if defined(_MSC_VER)
-		__except (1)
-		{
+		__except (1) {
 			// Fail open on transient invalid render-pass data to avoid crashing render-thread hooks.
 			return false;
 		}
@@ -1072,12 +1045,9 @@ namespace Hooks
 	bool ShouldForceFullRateForAAVRSPassSafe(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest)
 	{
 #if defined(_MSC_VER)
-		__try
-		{
+		__try {
 			return globals::features::upscaling.ShouldForceFullRateForAAVRSPass(a_pass, a_technique, a_alphaTest);
-		}
-		__except (1)
-		{
+		} __except (1) {
 			return false;
 		}
 #else
@@ -1357,7 +1327,6 @@ namespace Hooks
 
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
-		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
 
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);

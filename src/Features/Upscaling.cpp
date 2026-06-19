@@ -20477,16 +20477,56 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			"entry",
 			false);
 	}
-	upscaling.ApplyAAVRSVisualization();
-	upscaling.DisableAAVRSState();
-	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
 	const auto callOriginalMainPostProcessing = [&]() {
 		const ScopedVRTrackedResourceOperationContext operationContext("Main_PostProcessing", "original-call");
 		func(a_this, a3, a_target, a_4, a_5);
 	};
+	const bool vrNativeMainPostProcessing =
+		globals::game::isVR &&
+		!upscaling.IsVRRenderScaleModeActive() &&
+		!upscaling.IsPresentationUpscalingActive();
+
+	if (!vrNativeMainPostProcessing) {
+		upscaling.ApplyAAVRSVisualization();
+		upscaling.DisableAAVRSState();
+	}
+
+	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
+	const auto runNativeMainPostProcessing = [&]() {
+		if (upscaling.ShouldUseFrameGenerationThisFrame())
+			upscaling.CopySharedD3D12Resources();
+
+		if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
+			upscaling.PerformUpscaling();
+		} else if (globals::game::isVR) {
+			upscaling.UpscaleDepth();
+		}
+
+		if (upscaleMethod == UpscaleMethod::kDLSS)
+			upscaling.ApplySharpening();
+
+		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+
+		if (upscaleMethod == UpscaleMethod::kNONE) {
+			// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
+			callOriginalMainPostProcessing();
+			return;
+		}
+
+		BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
+		callOriginalMainPostProcessing();
+
+		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+	};
 
 	if (!upscaling.ApplyPendingPostLoadRuntimeReset(upscaleMethod)) {
 		callOriginalMainPostProcessing();
+		return;
+	}
+
+	if (vrNativeMainPostProcessing) {
+		runNativeMainPostProcessing();
 		return;
 	}
 
@@ -20579,31 +20619,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (upscaling.ShouldUseFrameGenerationThisFrame())
-		upscaling.CopySharedD3D12Resources();
-
-	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
-		upscaling.PerformUpscaling();
-	} else if (globals::game::isVR) {
-		upscaling.UpscaleDepth();
-	}
-
-	if (upscaleMethod == UpscaleMethod::kDLSS)
-		upscaling.ApplySharpening();
-
-	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
-
-	if (upscaleMethod == UpscaleMethod::kNONE) {
-		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
-		callOriginalMainPostProcessing();
-		return;
-	}
-
-	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
-	callOriginalMainPostProcessing();
-
-	BSImagespaceShaderISTemporalAA->taaEnabled = false;
+	runNativeMainPostProcessing();
 }
 
 void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)

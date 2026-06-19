@@ -860,6 +860,7 @@ public:
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
+	std::atomic<uint32_t> vrNativeImageSpaceTempCopySeedUntilFrame{ 0 };
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	bool submitStagePreparedFramePresentationOnly = false;
@@ -1025,6 +1026,8 @@ private:
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
+	void ArmVRNativeImageSpaceTempCopySeed(uint32_t a_startFrame);
+	bool SeedVRNativeImageSpaceTempCopies();
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
 	enum class HMDMaskClearPhase : uint8_t
 	{

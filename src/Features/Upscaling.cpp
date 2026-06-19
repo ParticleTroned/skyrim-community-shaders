@@ -176,6 +176,7 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
+	constexpr uint32_t kVRNativeTempCopySeedFrames = 8u;
 	constexpr uint32_t kVRFpsStabilizerSyncWaitLogIntervalFrames = 120u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
@@ -11466,6 +11467,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	};
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	const auto relatchUpscaleMethod = pendingRelatchUpscaleMethod;
+	bool armNativeTempCopySeedAfterRelatch = false;
 
 	static bool loggedRelatchApplyDiagnostic = false;
 	static bool loggedRelatchBeginTeardownDiagnostic = false;
@@ -11575,6 +11577,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		}
 		RefreshRuntimeResolutionState();
+		armNativeTempCopySeedAfterRelatch = globals::game::isVR && !relatchRenderScaleActive;
 	} catch (const std::exception& e) {
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "render-target relatch")) {
 			const uint32_t retryFrames = IsOutOfMemoryException(e) ?
@@ -11604,6 +11607,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	if (armNativeTempCopySeedAfterRelatch)
+		ArmVRNativeImageSpaceTempCopySeed(currentFrame);
 	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
 	submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
 	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
@@ -16624,6 +16629,246 @@ bool Upscaling::BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture,
 	return true;
 }
 
+void Upscaling::ArmVRNativeImageSpaceTempCopySeed(uint32_t a_startFrame)
+{
+	if (!globals::game::isVR)
+		return;
+
+	const uint32_t startFrame = std::max(a_startFrame, 1u);
+	const uint32_t untilFrame = startFrame + kVRNativeTempCopySeedFrames;
+	vrNativeImageSpaceTempCopySeedUntilFrame.store(untilFrame, std::memory_order_release);
+	logger::debug(
+		"[VRNativeTempCopySeed] armed after render-scale-off relatch frame={} until={}",
+		startFrame,
+		untilFrame);
+}
+
+bool Upscaling::SeedVRNativeImageSpaceTempCopies()
+{
+	if (!globals::game::isVR ||
+		IsVRRenderScaleModeActive() ||
+		IsPresentationUpscalingActive()) {
+		return false;
+	}
+
+	auto* state = globals::state;
+	auto* renderer = globals::game::renderer;
+	auto* context = globals::d3d::context;
+	auto* deferred = globals::deferred;
+	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !upscaleRasterizerState || !upscaleBlendState)
+		return false;
+
+	const uint32_t untilFrame = vrNativeImageSpaceTempCopySeedUntilFrame.load(std::memory_order_acquire);
+	if (untilFrame == 0)
+		return false;
+
+	const uint32_t frame = std::max(state->frameCount, 1u);
+	if (frame > untilFrame) {
+		vrNativeImageSpaceTempCopySeedUntilFrame.store(0, std::memory_order_release);
+		return false;
+	}
+
+	auto& runtimeData = renderer->GetRuntimeData();
+	auto& main = runtimeData.renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.SRV)
+		return false;
+
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	if (!TryGetTexture2DDesc(main.texture, sourceDesc) || !sourceDesc.Width || !sourceDesc.Height)
+		return false;
+
+	ID3D11PixelShader* pixelShader = nullptr;
+	ID3D11VertexShader* vertexShader = nullptr;
+	try {
+		pixelShader = GetVRDesktopMirrorBlitPS();
+		vertexShader = GetUpscaleVS();
+	} catch (const std::exception& e) {
+		static bool loggedShaderFailure = false;
+		LogWarnOnce(loggedShaderFailure, "[VRNativeTempCopySeed] temp-copy seed shader unavailable", e);
+		if (MarkSubmitStageDeviceLostIfNeeded(e, "VR native temp-copy seed shader creation"))
+			return false;
+		return false;
+	} catch (...) {
+		static bool loggedShaderFailure = false;
+		LogWarnOnce(loggedShaderFailure, "[VRNativeTempCopySeed] temp-copy seed shader unavailable");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR native temp-copy seed shader creation"))
+			return false;
+		return false;
+	}
+	if (!pixelShader || !vertexShader)
+		return false;
+
+	ID3D11VertexShader* previousVS = nullptr;
+	ID3D11PixelShader* previousPS = nullptr;
+	ID3D11HullShader* previousHS = nullptr;
+	ID3D11DomainShader* previousDS = nullptr;
+	ID3D11GeometryShader* previousGS = nullptr;
+	ID3D11ShaderResourceView* previousSRV = nullptr;
+	ID3D11SamplerState* previousSampler = nullptr;
+	ID3D11RenderTargetView* previousRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+	ID3D11DepthStencilView* previousDSV = nullptr;
+	ID3D11BlendState* previousBlendState = nullptr;
+	FLOAT previousBlendFactor[4] = {};
+	UINT previousSampleMask = 0;
+	ID3D11DepthStencilState* previousDepthStencilState = nullptr;
+	UINT previousStencilRef = 0;
+	ID3D11RasterizerState* previousRasterizerState = nullptr;
+	D3D11_VIEWPORT previousViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+	UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	D3D11_PRIMITIVE_TOPOLOGY previousTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+	ID3D11InputLayout* previousInputLayout = nullptr;
+
+	context->VSGetShader(&previousVS, nullptr, nullptr);
+	context->PSGetShader(&previousPS, nullptr, nullptr);
+	context->HSGetShader(&previousHS, nullptr, nullptr);
+	context->DSGetShader(&previousDS, nullptr, nullptr);
+	context->GSGetShader(&previousGS, nullptr, nullptr);
+	context->PSGetShaderResources(0, 1, &previousSRV);
+	context->PSGetSamplers(0, 1, &previousSampler);
+	context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, previousRTVs, &previousDSV);
+	context->OMGetBlendState(&previousBlendState, previousBlendFactor, &previousSampleMask);
+	context->OMGetDepthStencilState(&previousDepthStencilState, &previousStencilRef);
+	context->RSGetState(&previousRasterizerState);
+	context->RSGetViewports(&previousViewportCount, previousViewports);
+	context->IAGetPrimitiveTopology(&previousTopology);
+	context->IAGetInputLayout(&previousInputLayout);
+
+	auto restoreState = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		ID3D11SamplerState* nullSampler = nullptr;
+		context->PSSetShaderResources(0, 1, &nullSRV);
+		context->PSSetSamplers(0, 1, &nullSampler);
+
+		context->VSSetShader(previousVS, nullptr, 0);
+		context->PSSetShader(previousPS, nullptr, 0);
+		context->HSSetShader(previousHS, nullptr, 0);
+		context->DSSetShader(previousDS, nullptr, 0);
+		context->GSSetShader(previousGS, nullptr, 0);
+		context->PSSetShaderResources(0, 1, &previousSRV);
+		context->PSSetSamplers(0, 1, &previousSampler);
+		context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, previousRTVs, previousDSV);
+		context->OMSetBlendState(previousBlendState, previousBlendFactor, previousSampleMask);
+		context->OMSetDepthStencilState(previousDepthStencilState, previousStencilRef);
+		context->RSSetState(previousRasterizerState);
+		context->RSSetViewports(previousViewportCount, previousViewports);
+		context->IASetPrimitiveTopology(previousTopology);
+		context->IASetInputLayout(previousInputLayout);
+
+		if (previousVS)
+			previousVS->Release();
+		if (previousPS)
+			previousPS->Release();
+		if (previousHS)
+			previousHS->Release();
+		if (previousDS)
+			previousDS->Release();
+		if (previousGS)
+			previousGS->Release();
+		if (previousSRV)
+			previousSRV->Release();
+		if (previousSampler)
+			previousSampler->Release();
+		for (auto*& rtv : previousRTVs) {
+			if (rtv)
+				rtv->Release();
+		}
+		if (previousDSV)
+			previousDSV->Release();
+		if (previousBlendState)
+			previousBlendState->Release();
+		if (previousDepthStencilState)
+			previousDepthStencilState->Release();
+		if (previousRasterizerState)
+			previousRasterizerState->Release();
+		if (previousInputLayout)
+			previousInputLayout->Release();
+	});
+
+	bool seededTempCopy = false;
+	bool seededTempCopy2 = false;
+	try {
+		ID3D11SamplerState* sampler = deferred->linearSampler;
+		float blendFactor[4] = {};
+		context->OMSetBlendState(upscaleBlendState.get(), blendFactor, 0xFFFFFFFF);
+		context->OMSetDepthStencilState(nullptr, 0);
+		context->RSSetState(upscaleRasterizerState.get());
+		context->IASetInputLayout(nullptr);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		context->VSSetShader(vertexShader, nullptr, 0);
+		context->HSSetShader(nullptr, nullptr, 0);
+		context->DSSetShader(nullptr, nullptr, 0);
+		context->GSSetShader(nullptr, nullptr, 0);
+		context->PSSetShader(pixelShader, nullptr, 0);
+		context->PSSetSamplers(0, 1, &sampler);
+
+		const auto seedTarget = [&](RE::RENDER_TARGETS::RENDER_TARGET a_target) {
+			auto& target = runtimeData.renderTargets[a_target];
+			if (!target.texture || !target.RTV)
+				return false;
+
+			D3D11_TEXTURE2D_DESC targetDesc{};
+			if (!TryGetTexture2DDesc(target.texture, targetDesc) ||
+				targetDesc.Width != sourceDesc.Width ||
+				targetDesc.Height != sourceDesc.Height ||
+				(targetDesc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0) {
+				return false;
+			}
+
+			D3D11_VIEWPORT viewport{};
+			viewport.TopLeftX = 0.0f;
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = static_cast<float>(targetDesc.Width);
+			viewport.Height = static_cast<float>(targetDesc.Height);
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
+
+			ID3D11RenderTargetView* targetRTV = target.RTV;
+			ID3D11ShaderResourceView* sourceSRV = main.SRV;
+			context->OMSetRenderTargets(1, &targetRTV, nullptr);
+			context->RSSetViewports(1, &viewport);
+			context->PSSetShaderResources(0, 1, &sourceSRV);
+			context->Draw(3, 0);
+			return true;
+		};
+
+		seededTempCopy = seedTarget(RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY);
+		seededTempCopy2 = seedTarget(RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2);
+
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		context->PSSetShaderResources(0, 1, &nullSRV);
+	} catch (const std::exception& e) {
+		static bool loggedSeedFailure = false;
+		LogWarnOnce(loggedSeedFailure, "[VRNativeTempCopySeed] temp-copy seed draw failed", e);
+		if (MarkSubmitStageDeviceLostIfNeeded(e, "VR native temp-copy seed draw"))
+			return false;
+		return false;
+	} catch (...) {
+		static bool loggedSeedFailure = false;
+		LogWarnOnce(loggedSeedFailure, "[VRNativeTempCopySeed] temp-copy seed draw failed");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR native temp-copy seed draw"))
+			return false;
+		return false;
+	}
+
+	if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR native temp-copy seed draw"))
+		return false;
+
+	const bool seededAny = seededTempCopy || seededTempCopy2;
+	if (seededAny) {
+		logger::debug(
+			"[VRNativeTempCopySeed] seeded frame={} until={} tempCopy={} tempCopy2={} source=kMAIN({}x{} fmt={})",
+			frame,
+			untilFrame,
+			BoolText(seededTempCopy),
+			BoolText(seededTempCopy2),
+			sourceDesc.Width,
+			sourceDesc.Height,
+			static_cast<uint32_t>(sourceDesc.Format));
+	}
+
+	return seededAny;
+}
+
 bool Upscaling::EnsureHMDMaskClearResources()
 {
 	if (!globals::game::isVR)
@@ -20551,6 +20796,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		if (upscaleMethod == UpscaleMethod::kDLSS)
 			upscaling.ApplySharpening();
+
+		upscaling.SeedVRNativeImageSpaceTempCopies();
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);

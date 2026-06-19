@@ -4237,14 +4237,28 @@ namespace
 		}
 	}
 
+	bool ShouldSuppressVRMenuPresentationTailsForNativeOff()
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		const auto& upscaling = globals::features::upscaling;
+		return !upscaling.IsVRRenderScaleModeActive() &&
+		       !upscaling.IsPresentationUpscalingActive();
+	}
+
 	bool IsVRMenuPresentationTailActive(const State* a_state)
 	{
-		return globals::game::isVR && IsFrameTailActive(a_state, g_vrMenuPresentationTailEndFrame);
+		return globals::game::isVR &&
+		       !ShouldSuppressVRMenuPresentationTailsForNativeOff() &&
+		       IsFrameTailActive(a_state, g_vrMenuPresentationTailEndFrame);
 	}
 
 	bool IsVRObservedProjectedMenuTailActive(const State* a_state)
 	{
-		return globals::game::isVR && IsFrameTailActive(a_state, g_vrObservedProjectedMenuTailEndFrame);
+		return globals::game::isVR &&
+		       !ShouldSuppressVRMenuPresentationTailsForNativeOff() &&
+		       IsFrameTailActive(a_state, g_vrObservedProjectedMenuTailEndFrame);
 	}
 
 	bool IsVRMenuPresentationContextActive()

@@ -1327,6 +1327,10 @@ namespace
 			return "kTOTAL";
 		case RE::RENDER_TARGETS::kMAIN:
 			return "kMAIN";
+		case RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY:
+			return "kIMAGESPACE_TEMP_COPY";
+		case RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2:
+			return "kIMAGESPACE_TEMP_COPY2";
 		case RE::RENDER_TARGETS::kMENUBG:
 			return "kMENUBG";
 		case RE::RENDER_TARGETS::kPROJECTEDMENU:
@@ -1856,6 +1860,9 @@ namespace
 	constexpr uint32_t kVRTrackedDrawDiagnosticMaxLogsPerFrame = 24u;
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticFrame{ 0 };
 	std::atomic<uint32_t> g_vrTrackedDrawDiagnosticCount{ 0 };
+	constexpr uint32_t kVRBlackSquareSplitDiagnosticMaxLogsPerFrame = 32u;
+	std::atomic<uint32_t> g_vrBlackSquareSplitDiagnosticFrame{ 0 };
+	std::atomic<uint32_t> g_vrBlackSquareSplitDiagnosticCount{ 0 };
 	std::atomic<uint32_t> g_vrCopyDynamicFetchDisabledRenderEntryFrame{ 0 };
 
 	void ArmVRMenuUiWriterDiagnosticsForMenuDraw()
@@ -6153,6 +6160,15 @@ namespace
 			kVRMenuBridgeProofDiagnosticMaxLogsPerFrame);
 	}
 
+	bool ClaimVRBlackSquareSplitDiagnosticSlot(uint32_t a_frame)
+	{
+		return ClaimFrameDiagnosticSlot(
+			a_frame,
+			g_vrBlackSquareSplitDiagnosticFrame,
+			g_vrBlackSquareSplitDiagnosticCount,
+			kVRBlackSquareSplitDiagnosticMaxLogsPerFrame);
+	}
+
 	std::string BuildVRTrackedDrawEyeMapping(
 		const VRMenuCompositionTargetMatch& a_destination,
 		uint32_t a_screenWidth,
@@ -6938,6 +6954,345 @@ namespace
 		return true;
 	}
 
+	struct VRBlackSquareRegionStats
+	{
+		bool valid = false;
+		uint32_t x = 0;
+		uint32_t y = 0;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t pixels = 0;
+		uint64_t hash = 0;
+		float avgR = 0.0f;
+		float avgG = 0.0f;
+		float avgB = 0.0f;
+		float avgA = 0.0f;
+		float darkRatio = 0.0f;
+		float opaqueDarkRatio = 0.0f;
+		float transparentDarkRatio = 0.0f;
+	};
+
+	struct VRBlackSquareTargetStats
+	{
+		bool valid = false;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+		uint32_t samples = 0;
+		VRBlackSquareRegionStats topLeft{};
+		VRBlackSquareRegionStats control{};
+	};
+
+	bool GetVRBlackSquareSplitChannelOffsets(DXGI_FORMAT a_format, uint32_t& a_red, uint32_t& a_green, uint32_t& a_blue, uint32_t& a_alpha)
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+			a_red = 0;
+			a_green = 1;
+			a_blue = 2;
+			a_alpha = 3;
+			return true;
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+			a_red = 2;
+			a_green = 1;
+			a_blue = 0;
+			a_alpha = 3;
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool CaptureVRBlackSquareRegionStats(
+		ID3D11DeviceContext* a_context,
+		ID3D11Texture2D* a_texture,
+		uint32_t a_originX,
+		uint32_t a_originY,
+		uint32_t a_regionSize,
+		VRBlackSquareRegionStats& a_stats)
+	{
+		a_stats = {};
+		auto device = globals::d3d::device;
+		if (!globals::game::isVR || !device || !a_context || !a_texture || a_regionSize == 0)
+			return false;
+
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		a_texture->GetDesc(&sourceDesc);
+
+		uint32_t redOffset = 0;
+		uint32_t greenOffset = 0;
+		uint32_t blueOffset = 0;
+		uint32_t alphaOffset = 0;
+		if (!GetVRBlackSquareSplitChannelOffsets(sourceDesc.Format, redOffset, greenOffset, blueOffset, alphaOffset) ||
+			sourceDesc.Width == 0 ||
+			sourceDesc.Height == 0 ||
+			sourceDesc.SampleDesc.Count != 1 ||
+			sourceDesc.ArraySize != 1) {
+			return false;
+		}
+
+		const uint32_t originX = std::min(a_originX, sourceDesc.Width - 1u);
+		const uint32_t originY = std::min(a_originY, sourceDesc.Height - 1u);
+		const uint32_t regionWidth = std::min(a_regionSize, sourceDesc.Width - originX);
+		const uint32_t regionHeight = std::min(a_regionSize, sourceDesc.Height - originY);
+		if (regionWidth == 0 || regionHeight == 0)
+			return false;
+
+		struct StagingCache
+		{
+			winrt::com_ptr<ID3D11Texture2D> texture;
+			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+			uint32_t width = 0;
+			uint32_t height = 0;
+		};
+		static StagingCache staging;
+		if (!staging.texture || staging.format != sourceDesc.Format || staging.width < regionWidth || staging.height < regionHeight) {
+			D3D11_TEXTURE2D_DESC stagingDesc{};
+			stagingDesc.Width = std::max<uint32_t>(regionWidth, a_regionSize);
+			stagingDesc.Height = std::max<uint32_t>(regionHeight, a_regionSize);
+			stagingDesc.MipLevels = 1;
+			stagingDesc.ArraySize = 1;
+			stagingDesc.Format = sourceDesc.Format;
+			stagingDesc.SampleDesc.Count = 1;
+			stagingDesc.Usage = D3D11_USAGE_STAGING;
+			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+			winrt::com_ptr<ID3D11Texture2D> stagingTexture;
+			if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, stagingTexture.put())) || !stagingTexture)
+				return false;
+
+			staging.texture = std::move(stagingTexture);
+			staging.format = sourceDesc.Format;
+			staging.width = stagingDesc.Width;
+			staging.height = stagingDesc.Height;
+		}
+
+		const D3D11_BOX sourceBox{
+			originX,
+			originY,
+			0,
+			originX + regionWidth,
+			originY + regionHeight,
+			1
+		};
+		a_context->CopySubresourceRegion(
+			staging.texture.get(),
+			0,
+			0,
+			0,
+			0,
+			a_texture,
+			0,
+			&sourceBox);
+
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(a_context->Map(staging.texture.get(), 0, D3D11_MAP_READ, 0, &mapped)))
+			return false;
+		auto unmapStaging = ScopeExit([&]() {
+			a_context->Unmap(staging.texture.get(), 0);
+		});
+
+		uint64_t hash = 1469598103934665603ull;
+		uint64_t sumR = 0;
+		uint64_t sumG = 0;
+		uint64_t sumB = 0;
+		uint64_t sumA = 0;
+		uint32_t dark = 0;
+		uint32_t opaqueDark = 0;
+		uint32_t transparentDark = 0;
+		const uint32_t bytesPerPixel = 4;
+		const uint32_t pixels = regionWidth * regionHeight;
+		for (uint32_t y = 0; y < regionHeight; ++y) {
+			const auto* row = static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(mapped.RowPitch) * y;
+			for (uint32_t x = 0; x < regionWidth; ++x) {
+				const auto* pixel = row + static_cast<size_t>(x) * bytesPerPixel;
+				for (uint32_t byteIndex = 0; byteIndex < bytesPerPixel; ++byteIndex)
+					hash = MixVRKTotalFingerprintByte(hash, pixel[byteIndex]);
+
+				const uint8_t r = pixel[redOffset];
+				const uint8_t g = pixel[greenOffset];
+				const uint8_t b = pixel[blueOffset];
+				const uint8_t a = pixel[alphaOffset];
+				sumR += r;
+				sumG += g;
+				sumB += b;
+				sumA += a;
+
+				const bool isDark = r <= 16 && g <= 16 && b <= 16;
+				if (isDark) {
+					++dark;
+					if (a >= 192)
+						++opaqueDark;
+					if (a <= 32)
+						++transparentDark;
+				}
+			}
+		}
+
+		a_stats.valid = true;
+		a_stats.x = originX;
+		a_stats.y = originY;
+		a_stats.width = regionWidth;
+		a_stats.height = regionHeight;
+		a_stats.pixels = pixels;
+		a_stats.hash = hash;
+		const float denom = pixels > 0 ? static_cast<float>(pixels * 255u) : 1.0f;
+		const float ratioDenom = pixels > 0 ? static_cast<float>(pixels) : 1.0f;
+		a_stats.avgR = static_cast<float>(sumR) / denom;
+		a_stats.avgG = static_cast<float>(sumG) / denom;
+		a_stats.avgB = static_cast<float>(sumB) / denom;
+		a_stats.avgA = static_cast<float>(sumA) / denom;
+		a_stats.darkRatio = static_cast<float>(dark) / ratioDenom;
+		a_stats.opaqueDarkRatio = static_cast<float>(opaqueDark) / ratioDenom;
+		a_stats.transparentDarkRatio = static_cast<float>(transparentDark) / ratioDenom;
+		return true;
+	}
+
+	std::string FormatVRBlackSquareRegionStats(const VRBlackSquareRegionStats& a_stats)
+	{
+		if (!a_stats.valid)
+			return "invalid";
+
+		return std::format(
+			"xy=({},{} {}x{}) hash={} avg=({:.3f},{:.3f},{:.3f},{:.3f}) dark={:.3f} opaqueDark={:.3f} transparentDark={:.3f}",
+			a_stats.x,
+			a_stats.y,
+			a_stats.width,
+			a_stats.height,
+			FormatVRMenuDiagnosticHex(a_stats.hash),
+			a_stats.avgR,
+			a_stats.avgG,
+			a_stats.avgB,
+			a_stats.avgA,
+			a_stats.darkRatio,
+			a_stats.opaqueDarkRatio,
+			a_stats.transparentDarkRatio);
+	}
+
+	bool CaptureVRBlackSquareTargetStats(
+		ID3D11DeviceContext* a_context,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target,
+		VRBlackSquareTargetStats& a_stats)
+	{
+		a_stats = {};
+		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return false;
+
+		const auto targetIndex = static_cast<int>(a_target);
+		if (targetIndex < 0 || targetIndex >= Util::GetRenderTargetCount())
+			return false;
+
+		auto& renderTarget = renderer->GetRuntimeData().renderTargets[targetIndex];
+		if (!renderTarget.texture)
+			return false;
+
+		D3D11_TEXTURE2D_DESC desc{};
+		renderTarget.texture->GetDesc(&desc);
+		if (desc.Width == 0 || desc.Height == 0)
+			return false;
+
+		a_stats.valid = true;
+		a_stats.width = desc.Width;
+		a_stats.height = desc.Height;
+		a_stats.format = desc.Format;
+		a_stats.samples = desc.SampleDesc.Count;
+
+		constexpr uint32_t kRegionSize = 64;
+		const uint32_t controlX = desc.Width > kRegionSize ? std::min(desc.Width - kRegionSize, desc.Width / 4u) : 0u;
+		const uint32_t controlY = desc.Height > kRegionSize ? std::min(desc.Height - kRegionSize, desc.Height / 2u) : 0u;
+		const bool topLeftValid = CaptureVRBlackSquareRegionStats(a_context, renderTarget.texture, 0, 0, kRegionSize, a_stats.topLeft);
+		const bool controlValid = CaptureVRBlackSquareRegionStats(a_context, renderTarget.texture, controlX, controlY, kRegionSize, a_stats.control);
+		return topLeftValid || controlValid;
+	}
+
+	bool IsVRBlackSquareSplitDiagnosticPhase(const char* a_passName, const char* a_phase)
+	{
+		const std::string_view passName = DiagnosticText(a_passName, "");
+		const std::string_view phase = DiagnosticText(a_phase, "");
+		if (passName == "Main_PostProcessing" && phase == "entry")
+			return true;
+
+		return passName == "ISCopyDynamicFetchDisabled" &&
+		       (phase == "Render:vanilla-before" || phase == "Render:vanilla-after");
+	}
+
+	void LogVRBlackSquareSplitDiagnostics(
+		ID3D11DeviceContext* a_context,
+		const char* a_passName,
+		const char* a_phase,
+		const VRPresentationDiagnosticSnapshot& a_snapshot)
+	{
+		if (!a_context || !globals::game::isVR || !IsVRBlackSquareSplitDiagnosticPhase(a_passName, a_phase))
+			return;
+
+		if (a_snapshot.renderScaleActive)
+			return;
+
+		const bool relevant =
+			a_snapshot.knownMenu ||
+			a_snapshot.gameMenu ||
+			a_snapshot.vrMenuPresentation ||
+			a_snapshot.mainOrLoadingMenu ||
+			a_snapshot.loadingMenu ||
+			a_snapshot.saveLoad;
+		if (!relevant)
+			return;
+
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 7> targets{
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
+			RE::RENDER_TARGETS::kMENUBG,
+			RE::RENDER_TARGETS::kFADERUI,
+			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
+			RE::RENDER_TARGETS::kTOTAL,
+		};
+
+		const char* passName = DiagnosticText(a_passName, "unknown");
+		const char* phase = DiagnosticText(a_phase, "unknown");
+		for (const auto target : targets) {
+			if (!ClaimVRBlackSquareSplitDiagnosticSlot(a_snapshot.frame))
+				break;
+
+			VRBlackSquareTargetStats stats{};
+			(void)CaptureVRBlackSquareTargetStats(a_context, target, stats);
+
+			logger::debug(
+				"[VRBlackSquareSplit] frame={} pass={} phase={} target={} desc={}x{} fmt={} samples={} topLeft={} control={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} loading={} saveLoad={} vrMenuPresentation={} owner={} method={} quality={} screen={}x{} engine={}x{} final={}x{}",
+				a_snapshot.frame,
+				passName,
+				phase,
+				GetVRMenuCompositionTargetName(target),
+				stats.width,
+				stats.height,
+				static_cast<uint32_t>(stats.format),
+				stats.samples,
+				FormatVRBlackSquareRegionStats(stats.topLeft),
+				FormatVRBlackSquareRegionStats(stats.control),
+				BoolText(a_snapshot.renderScaleActive),
+				BoolText(a_snapshot.presentationUpscalingActive),
+				BoolText(a_snapshot.knownMenu),
+				BoolText(a_snapshot.gameMenu),
+				BoolText(a_snapshot.loadingMenu),
+				BoolText(a_snapshot.saveLoad),
+				BoolText(a_snapshot.vrMenuPresentation),
+				magic_enum::enum_name(a_snapshot.owner),
+				magic_enum::enum_name(a_snapshot.runtimeMethod),
+				a_snapshot.qualityMode,
+				a_snapshot.screenWidth,
+				a_snapshot.screenHeight,
+				a_snapshot.engineWidth,
+				a_snapshot.engineHeight,
+				a_snapshot.finalWidth,
+				a_snapshot.finalHeight);
+		}
+	}
+
 	bool CaptureVRTrackedTargetFingerprint(
 		ID3D11DeviceContext* a_context,
 		RE::RENDER_TARGETS::RENDER_TARGET a_target,
@@ -7105,7 +7460,9 @@ namespace
 		if (!relevant)
 			return;
 
-		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 4> targets{
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 6> targets{
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY,
+			RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2,
 			RE::RENDER_TARGETS::kMENUBG,
 			RE::RENDER_TARGETS::kFADERUI,
 			RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
@@ -7369,6 +7726,7 @@ namespace
 			a_snapshot.finalHeight);
 		LogVRKTotalMutationDiagnostics(context, a_passName, a_phase, a_snapshot);
 		LogVRTrackedTargetMutationDiagnostics(context, a_passName, a_phase, a_snapshot);
+		LogVRBlackSquareSplitDiagnostics(context, a_passName, a_phase, a_snapshot);
 
 		a_snapshot.signature = BuildVRPresentationDiagnosticSignature(a_snapshot, a_passName, a_phase);
 		return true;

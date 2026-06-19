@@ -8604,6 +8604,78 @@ void Upscaling::TraceVRTrackedRenderTargetClearOperation(
 		a_color);
 }
 
+bool Upscaling::TryConvertVRMenuFaderClearColor(
+	ID3D11DeviceContext* a_context,
+	ID3D11RenderTargetView* a_target,
+	const float* a_color,
+	float (&a_convertedColor)[4])
+{
+	if (!globals::game::isVR || !a_context || !a_target || !a_color)
+		return false;
+
+	constexpr float kColorEpsilon = 0.0001f;
+	const bool blackOpaque =
+		std::abs(a_color[0]) <= kColorEpsilon &&
+		std::abs(a_color[1]) <= kColorEpsilon &&
+		std::abs(a_color[2]) <= kColorEpsilon &&
+		std::abs(a_color[3] - 1.0f) <= kColorEpsilon;
+	if (!blackOpaque)
+		return false;
+
+	auto& upscaling = globals::features::upscaling;
+	const auto& plan = upscaling.GetRuntimeResolutionPlan();
+	const bool renderScaleActive = upscaling.IsVRRenderScaleModeActive();
+	const bool presentationUpscaling = upscaling.IsPresentationUpscalingActive();
+	const bool vrMenuPresentation = IsVRMenuPresentationContextActive();
+	if (renderScaleActive ||
+		presentationUpscaling ||
+		plan.owner != ResolutionOwner::Native ||
+		!vrMenuPresentation) {
+		return false;
+	}
+
+	VRMenuCompositionTargetMatch target{};
+	if (!TryResolveVRMenuCompositionView(a_target, target) ||
+		target.target != RE::RENDER_TARGETS::kFADERUI ||
+		target.width != 16 ||
+		target.height != 16 ||
+		target.samples != 1) {
+		return false;
+	}
+
+	a_convertedColor[0] = 0.0f;
+	a_convertedColor[1] = 0.0f;
+	a_convertedColor[2] = 0.0f;
+	a_convertedColor[3] = 0.0f;
+
+	const auto* state = globals::state;
+	VR_TRANSITION_DIAG_LOG(
+		"[VRFaderClearGuard] frame={} action=convert-to-transparent target={} original=({:.4f},{:.4f},{:.4f},{:.4f}) converted=({:.4f},{:.4f},{:.4f},{:.4f}) currentRTV={} stageSources={} owner={} renderScaleActive={} presentationUpscaling={} knownMenu={} gameMenu={} csMenu={} loading={} saveLoad={} vrMenuPresentation={}",
+		state ? state->frameCount : 0,
+		FormatVRTrackedResourceMatch(target, BuildRTVDiagnosticInfo(a_target)),
+		a_color[0],
+		a_color[1],
+		a_color[2],
+		a_color[3],
+		a_convertedColor[0],
+		a_convertedColor[1],
+		a_convertedColor[2],
+		a_convertedColor[3],
+		BuildVRTrackedResourceCurrentRTVSummary(a_context),
+		BuildVRTrackedResourceStageSourceSummary(a_context),
+		magic_enum::enum_name(plan.owner),
+		BoolText(renderScaleActive),
+		BoolText(presentationUpscaling),
+		BoolText(IsKnownGameMenuContextActive()),
+		BoolText(IsGameMenuContextActive()),
+		BoolText(IsCommunityShadersMenuOpen()),
+		BoolText(IsLoadingMenuContextActive()),
+		BoolText(IsSaveLoadTransitionContextActive(state)),
+		BoolText(vrMenuPresentation));
+
+	return true;
+}
+
 void Upscaling::TraceVRTrackedResourceUpdateOperation(
 	ID3D11DeviceContext* a_context,
 	ID3D11Resource* a_destination,

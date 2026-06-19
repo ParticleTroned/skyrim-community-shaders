@@ -19545,9 +19545,14 @@ void Upscaling::Upscale()
 	}
 
 	auto dispatchCount = Util::GetScreenDispatchCount(true);
+	const bool vrNativeUpscaleParity =
+		globals::game::isVR &&
+		!IsVRRenderScaleModeActive() &&
+		!IsPresentationUpscalingActive();
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedDispatchRequested =
-		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !foveatedTransitionBypass;
+		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
+		(vrNativeUpscaleParity || !foveatedTransitionBypass);
 	bool encodedVRFoveatedRegions = false;
 
 	auto encodeUpscalingTextures = [&](bool forceFullVREncode, const char* eventName) -> bool {
@@ -19568,8 +19573,8 @@ void Upscaling::Upscale()
 			!transparencyCompositionMaskTexture || !transparencyCompositionMaskTexture->resource || !transparencyCompositionMaskTexture->uav)
 			return false;
 
-		auto outputSize = runtimeResolutionPlan.finalOutputSize;
-		auto renderSize = runtimeResolutionPlan.engineRenderSize;
+		auto outputSize = vrNativeUpscaleParity ? state->screenSize : runtimeResolutionPlan.finalOutputSize;
+		auto renderSize = vrNativeUpscaleParity ? Util::ConvertToDynamic(state->screenSize) : runtimeResolutionPlan.engineRenderSize;
 		if (outputSize.x <= 0.0f || outputSize.y <= 0.0f)
 			outputSize = state->screenSize;
 		if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
@@ -19648,7 +19653,10 @@ void Upscaling::Upscale()
 				upscalingData.seamHalfWidthPx = 2.0f;
 				upscalingData.maskDepthThreshold = 1e-6f;
 				upscalingData.vrSeamHardening = 1.0f;
-				upscalingData.sourceOffset = { static_cast<float>(sourceEyeRegion.minX + inputMinX), static_cast<float>(inputMinY) };
+				upscalingData.sourceOffset = {
+					vrNativeUpscaleParity ? static_cast<float>(eye * eyeWidthIn + inputMinX) : static_cast<float>(sourceEyeRegion.minX + inputMinX),
+					static_cast<float>(inputMinY)
+				};
 				upscalingData.outputOffset = { static_cast<float>(inputMinX), static_cast<float>(inputMinY) };
 				upscalingDataCB->Update(upscalingData);
 
@@ -19699,7 +19707,10 @@ void Upscaling::Upscale()
 				}
 			};
 
-			const bool useRegionEncode = !forceFullVREncode && foveatedDispatchRequested;
+			const bool useRegionEncode =
+				!forceFullVREncode &&
+				foveatedDispatchRequested &&
+				(!vrNativeUpscaleParity || IsPeripheryTAAPathActive(upscaleMethod));
 			bool dispatchedRegionEncode = false;
 			if (useRegionEncode) {
 				const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(upscaleMethod);
@@ -19779,7 +19790,7 @@ void Upscaling::Upscale()
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
 		// VR-only resets can leave vendor upscalers with stale viewport state.
-		if (!ApplyPendingVendorRuntimeReset(upscaleMethod, ""))
+		if (!vrNativeUpscaleParity && !ApplyPendingVendorRuntimeReset(upscaleMethod, ""))
 			return;
 
 		if (foveatedDispatchRequested) {

@@ -28,7 +28,6 @@ struct OverlayFeature : Feature
 	virtual bool IsOverlayVisible() const = 0;
 
 	virtual bool RequiresGlobalOverlayToggle() const { return true; }
-	virtual bool HideFromDesktopWhenSubmittedToVR() const { return false; }
 	virtual const char* GetOverlayWindowName() const { return nullptr; }
 
 	/**

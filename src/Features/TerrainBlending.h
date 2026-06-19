@@ -117,11 +117,6 @@ public:
 	virtual void ClearShaderCache() override;
 
 	void RenderTerrainBlendingPasses();
-	void OnBeginTechnique(RE::BSShader* a_shader, uint32_t a_pixelDescriptor, uint32_t a_callerRva = 0);
-	void OnShadowmaskPhaseEnd();
-	void OnUtilitySetupGeometry(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags, uint32_t a_callerRva = 0);
-	void OnShaderPropertySetupGeometry(RE::BSShaderProperty* a_shaderProperty, RE::BSGeometry* a_geometry, bool a_result, uint32_t a_callerRva = 0);
-	void OnSetDirtyStates(bool a_isCompute, uint32_t a_callerRva = 0);
 	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
 
 	struct Hooks
@@ -132,28 +127,10 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct BSUtilityShader_SetupGeometry
-		{
-			static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		struct BSShaderProperty_SetupGeometry
-		{
-			static bool thunk(RE::BSShaderProperty* a_shaderProperty, RE::BSGeometry* a_geometry);
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
 		static void Install()
 		{
 			// To know when we are rendering z-prepass depth vs shadows depth
 			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395));
-
-			// Engine path: late Utility setup hook so slot rebinding survives to draw.
-			stl::write_vfunc<0x6, BSUtilityShader_SetupGeometry>(RE::VTABLE_BSUtilityShader[0]);
-
-			// Engine path: even later material/property setup hook for final slot correction.
-			stl::write_vfunc<0x27, BSShaderProperty_SetupGeometry>(RE::VTABLE_BSShaderProperty[0]);
 
 			logger::info("[Terrain Blending] Installed hooks");
 		}

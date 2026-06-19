@@ -2,18 +2,18 @@
 
 #include <atomic>
 
-struct AdaptiveBrightness;
+class ParticleLights;
+
 struct CloudShadows;
-struct DynamicCubemaps;
-struct VolumetricShadows;
+struct AdaptiveBrightness;
 struct Wetterness;
+struct DynamicCubemaps;
 struct ExtendedMaterials;
 struct GrassCollision;
 struct GrassLighting;
 struct HairSpecular;
 struct IBL;
 struct LightLimitFix;
-class ParticleLights;
 struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
@@ -35,15 +35,12 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
-class Profiler;
-struct CSEditor;
-struct ExponentialHeightFog;
-struct HDRDisplay;
-struct ScreenshotFeature;
-struct Skin;
+struct WeatherEditor;
 
+class ParticleLights;
 class State;
 class Deferred;
+class Profiler;
 struct TruePBR;
 class RenderDoc;
 class Menu;
@@ -67,9 +64,8 @@ namespace globals
 	{
 		extern AdaptiveBrightness adaptiveBrightness;
 		extern CloudShadows cloudShadows;
-		extern DynamicCubemaps dynamicCubemaps;
-		extern VolumetricShadows volumetricShadows;
 		extern Wetterness wetterness;
+		extern DynamicCubemaps dynamicCubemaps;
 		extern ExtendedMaterials extendedMaterials;
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;
@@ -97,13 +93,9 @@ namespace globals
 		extern WetnessEffects wetnessEffects;
 		extern ExtendedTranslucency extendedTranslucency;
 		extern Upscaling upscaling;
-		extern HDRDisplay hdrDisplay;
 		extern RenderDoc renderDoc;
-		extern ScreenshotFeature screenshotFeature;
-		extern CSEditor csEditor;
-		extern ExponentialHeightFog exponentialHeightFog;
+		extern WeatherEditor weatherEditor;
 		extern TruePBR truePBR;
-		extern Skin skin;
 
 		namespace llf
 		{
@@ -225,6 +217,7 @@ namespace globals
 		extern RE::BSGraphics::Renderer* renderer;
 		extern RE::BSShaderManager::State* smState;
 		extern RE::TES* tes;
+		extern RE::TESWaterSystem* waterSystem;
 		extern bool isVR;
 		extern RE::MemoryManager* memoryManager;
 		extern RE::INISettingCollection* iniSettingCollection;
@@ -234,12 +227,9 @@ namespace globals
 		extern float* cameraFar;
 		extern float* deltaTime;
 		extern RE::BSUtilityShader* utilityShader;
-		extern RE::PlayerCharacter* player;
 		extern RE::Sky* sky;
 		extern RE::UI* ui;
 		extern RE::Calendar* calendar;
-		extern RE::ImageSpaceManager* imageSpaceManager;
-		extern bool* bEnableVolumetricLighting;
 		extern std::atomic<bool> quitGame;
 
 		extern RE::BSGraphics::PixelShader** currentPixelShader;

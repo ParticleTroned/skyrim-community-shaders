@@ -1,29 +1,73 @@
 #include "TerrainBlending.h"
 
 #include "Deferred.h"
+#include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Upscaling.h"
 #include "Utils/D3D.h"
 #include "VR.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
 #include <intrin.h>
 #include <sstream>
 #include <unordered_set>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
-	Enabled)
+	Enabled,
+	TerrainCullDistance,
+	BlendStrength)
 
 namespace
 {
-	std::atomic_uint32_t renderShadowmasksPhaseDepth{ 0 };
-
-	bool IsInRenderShadowmasksPhase()
+	uint32_t GetDepthBlendExtent(float a_sceneExtent, uint32_t a_resourceExtent)
 	{
-		return renderShadowmasksPhaseDepth.load(std::memory_order_relaxed) != 0;
+		if (!a_resourceExtent)
+			return 0;
+
+		if (!std::isfinite(a_sceneExtent) || a_sceneExtent <= 0.0f)
+			return 0;
+
+		return std::clamp(static_cast<uint32_t>(std::max(1l, std::lround(a_sceneExtent))), 1u, a_resourceExtent);
 	}
+
+	struct TbHookDiagnostics
+	{
+		uint64_t renderDepthCalls = 0;
+		uint64_t queueTerrainCalls = 0;
+		uint64_t queueNoBlendCalls = 0;
+		uint64_t terrainDepthDoubleDrawCalls = 0;
+		uint64_t renderPassInvocationCalls = 0;
+		uint64_t renderPassExecutedCalls = 0;
+		uint64_t renderPassTerrainCount = 0;
+		uint64_t renderPassNoBlendCount = 0;
+	};
+
+	TbHookDiagnostics tbHookDiagnostics{};
+
+	struct EngineHookDiagnostics
+	{
+		uint64_t beginTechniqueCalls = 0;
+		uint64_t gateSatisfiedCalls = 0;
+		uint64_t inShadowmaskPhaseCalls = 0;
+		uint64_t utilityCalls = 0;
+		uint64_t whitelistedCalls = 0;
+		uint64_t shouldApplyCalls = 0;
+		uint64_t obbApplied = 0;
+		uint64_t obbAlreadyBound = 0;
+		uint64_t obbMissingSrv = 0;
+		uint64_t shadowmaskApplied = 0;
+		uint64_t shadowmaskAlreadyBound = 0;
+		uint64_t shadowmaskMissingSrv = 0;
+		uint64_t slot2CallerRejected = 0;
+		uint64_t slot2FallbackApplied = 0;
+	};
 
 	struct EngineHookTechniqueOverrideState
 	{
@@ -36,6 +80,7 @@ namespace
 		UINT previousStencilRef = 0;
 	};
 
+	EngineHookDiagnostics engineHookDiagnostics{};
 	EngineHookTechniqueOverrideState engineHookTechniqueState{};
 
 	// Engine-hook override map for Utility shadowmask passes:
@@ -43,7 +88,7 @@ namespace
 	// 2) PS slot 2 override: bind TB-selected depth SRV for shadowmask reads; prevents unstable/moving ground shadow imprint, and dark overlay style artifacts.
 	// 3) OM depth override: force DepthFunc=ALWAYS only on descriptor 0x1062002; mitigate shadowmask ground artifacts caused by failed depth testing in 0x1062002.
 	// All override paths below are gated by IsEngineHookFeatureGateSatisfied and all are VR-specific at runtime (isVR, gateSatisfied).
-	// Developer Mode only: logs one hook snapshot per session ([TB Override]/[TB DepthOverride]) and explicit fallback activate/reset events.
+	// Developer Mode only: logs one hook snapshot per gate-on cycle ([TB Override]/[TB DepthOverride]) and explicit fallback activate/reset events.
 	// Fallbacks: caller fallback is in ShouldAllowCallerWithFallback(...) (2 and 3 widen after 5 rejects and collapse on first allowlisted hit), SRV-source fallback is in Util::GetCurrentSceneDepthSRV(...).
 	// Pixel descriptors:
 	// - 0x262002 -> apply (1) + (2)
@@ -248,7 +293,7 @@ namespace
 	{
 		EngineHookPassGateState state{};
 		state.gateSatisfied = IsEngineHookFeatureGateSatisfied(a_singleton);
-		state.inShadowmaskPhase = IsInRenderShadowmasksPhase();
+		state.inShadowmaskPhase = FrameAnnotations::IsInRenderShadowmasksPhase();
 		state.isUtility = a_shader && a_shader->shaderType.get() == RE::BSShader::Type::Utility;
 		state.isWhitelistedDescriptor = IsShadowmaskDepthDescriptorWhitelisted(a_descriptor);
 		state.shouldApply = state.gateSatisfied && state.inShadowmaskPhase && state.isUtility && state.isWhitelistedDescriptor;
@@ -268,23 +313,30 @@ namespace
 		ID3D11DeviceContext* a_context,
 		const uint32_t a_slot,
 		ID3D11ShaderResourceView* a_overrideSrv,
+		uint64_t& a_appliedCounter,
+		uint64_t& a_alreadyBoundCounter,
+		uint64_t& a_missingCounter,
 		SlotRewriteGate a_rewriteGate,
 		const uint32_t a_callerRva)
 	{
 		SlotOverrideResult result{};
 		result.hasSrv = a_overrideSrv != nullptr;
 		if (!result.hasSrv) {
+			a_missingCounter++;
 			return result;
 		}
 
 		ID3D11ShaderResourceView* currentSrv = nullptr;
 		a_context->PSGetShaderResources(a_slot, 1, &currentSrv);
 		result.alreadyBound = currentSrv == a_overrideSrv;
-		if (!result.alreadyBound) {
+		if (result.alreadyBound) {
+			a_alreadyBoundCounter++;
+		} else {
 			const bool canRewrite = a_rewriteGate ? a_rewriteGate(a_callerRva) : true;
 			if (canRewrite) {
 				a_context->PSSetShaderResources(a_slot, 1, &a_overrideSrv);
 				result.applied = true;
+				a_appliedCounter++;
 			}
 		}
 
@@ -456,10 +508,30 @@ namespace
 
 void TerrainBlending::DrawSettings()
 {
-	ImGui::Checkbox("Enable Terrain Blending", (bool*)&settings.Enabled);
+	bool enabled = settings.Enabled != 0;
+	if (ImGui::Checkbox("Enable Terrain Blending", &enabled)) {
+		settings.Enabled = enabled ? 1u : 0u;
+	}
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable seamless blending between terrain and objects.");
+	}
+
+	{
+		Util::BlueFrameStyleWrapper blueFrameStyle;
+		ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Scales blending strength. Lower values make blending tighter.");
+	}
+
+	ImGui::Spacing();
+	if (ImGui::TreeNodeEx("Performance Options")) {
+		ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Terrain farther than this distance skips TB depth rendering. Set to 0 to disable culling.");
+		}
+		ImGui::TreePop();
 	}
 }
 
@@ -473,13 +545,32 @@ void TerrainBlending::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+void TerrainBlending::RestoreDefaultSettings()
+{
+	settings = {};
+}
+
 void TerrainBlending::OnBeginTechnique(RE::BSShader* a_shader, uint32_t a_pixelDescriptor, uint32_t a_callerRva)
 {
+	engineHookDiagnostics.beginTechniqueCalls++;
+
 	const auto gateState = EvaluateEngineHookPassGate(*this, a_shader, a_pixelDescriptor);
 	// Keep fallback state bounded to the same TB gate lifecycle as slot2 rewrite.
 	MaybeResetCallerFallbackOnGateTransition(slot2FallbackState, gateState.gateSatisfied, "[TB Override] slot2 fallback reset on TB/depth-culling off->on");
 	MaybeResetCallerFallbackOnGateTransition(depthOverrideFallbackState, gateState.gateSatisfied, "[TB DepthOverride] fallback reset on TB/depth-culling off->on");
 
+	if (gateState.gateSatisfied) {
+		engineHookDiagnostics.gateSatisfiedCalls++;
+	}
+	if (gateState.inShadowmaskPhase) {
+		engineHookDiagnostics.inShadowmaskPhaseCalls++;
+	}
+	if (gateState.isUtility) {
+		engineHookDiagnostics.utilityCalls++;
+	}
+	if (gateState.isWhitelistedDescriptor) {
+		engineHookDiagnostics.whitelistedCalls++;
+	}
 	if (gateState.shouldApply) {
 		MaybeLogAllowlistHookActiveOnce(
 			slot2FallbackState,
@@ -524,8 +615,24 @@ void TerrainBlending::OnBeginTechnique(RE::BSShader* a_shader, uint32_t a_pixelD
 	// Use R32 depth for shadowmask slot2 override to reduce edge instability during motion.
 	auto* shadowmaskOverrideSrv = Util::GetCurrentSceneDepthSRV(false);
 	// Override map items (1) and (2).
-	ApplyPixelShaderSlotOverride(context, 17u, obbOverrideSrv, nullptr, 0u);
-	ApplyPixelShaderSlotOverride(context, 2u, shadowmaskOverrideSrv, &ShouldApplySlot2Rewrite, a_callerRva);
+	ApplyPixelShaderSlotOverride(
+		context,
+		17u,
+		obbOverrideSrv,
+		engineHookDiagnostics.obbApplied,
+		engineHookDiagnostics.obbAlreadyBound,
+		engineHookDiagnostics.obbMissingSrv,
+		nullptr,
+		0u);
+	ApplyPixelShaderSlotOverride(
+		context,
+		2u,
+		shadowmaskOverrideSrv,
+		engineHookDiagnostics.shadowmaskApplied,
+		engineHookDiagnostics.shadowmaskAlreadyBound,
+		engineHookDiagnostics.shadowmaskMissingSrv,
+		&ShouldApplySlot2Rewrite,
+		a_callerRva);
 }
 
 void TerrainBlending::OnShadowmaskPhaseEnd()
@@ -556,8 +663,24 @@ void TerrainBlending::OnUtilitySetupGeometry(RE::BSShader* a_shader, RE::BSRende
 
 	auto* obbOverrideSrv = Util::GetCurrentSceneDepthSRV(false);
 	auto* shadowmaskOverrideSrv = Util::GetCurrentSceneDepthSRV(false);
-	ApplyPixelShaderSlotOverride(context, 17u, obbOverrideSrv, nullptr, 0u);
-	ApplyPixelShaderSlotOverride(context, 2u, shadowmaskOverrideSrv, &ShouldApplySlot2Rewrite, a_callerRva);
+	ApplyPixelShaderSlotOverride(
+		context,
+		17u,
+		obbOverrideSrv,
+		engineHookDiagnostics.obbApplied,
+		engineHookDiagnostics.obbAlreadyBound,
+		engineHookDiagnostics.obbMissingSrv,
+		nullptr,
+		0u);
+	ApplyPixelShaderSlotOverride(
+		context,
+		2u,
+		shadowmaskOverrideSrv,
+		engineHookDiagnostics.shadowmaskApplied,
+		engineHookDiagnostics.shadowmaskAlreadyBound,
+		engineHookDiagnostics.shadowmaskMissingSrv,
+		&ShouldApplySlot2Rewrite,
+		a_callerRva);
 }
 
 void TerrainBlending::OnShaderPropertySetupGeometry(RE::BSShaderProperty* a_shaderProperty, RE::BSGeometry* a_geometry, bool a_result, uint32_t a_callerRva)
@@ -584,7 +707,15 @@ void TerrainBlending::OnShaderPropertySetupGeometry(RE::BSShaderProperty* a_shad
 	EnsureEngineHookDepthOverride(descriptor, a_callerRva);
 
 	auto* shadowmaskOverrideSrv = Util::GetCurrentSceneDepthSRV(false);
-	ApplyPixelShaderSlotOverride(context, 2u, shadowmaskOverrideSrv, &ShouldApplySlot2Rewrite, a_callerRva);
+	ApplyPixelShaderSlotOverride(
+		context,
+		2u,
+		shadowmaskOverrideSrv,
+		engineHookDiagnostics.shadowmaskApplied,
+		engineHookDiagnostics.shadowmaskAlreadyBound,
+		engineHookDiagnostics.shadowmaskMissingSrv,
+		&ShouldApplySlot2Rewrite,
+		a_callerRva);
 }
 
 void TerrainBlending::OnSetDirtyStates(bool a_isCompute, uint32_t a_callerRva)
@@ -614,8 +745,24 @@ void TerrainBlending::OnSetDirtyStates(bool a_isCompute, uint32_t a_callerRva)
 
 	auto* obbOverrideSrv = Util::GetCurrentSceneDepthSRV(false);
 	auto* shadowmaskOverrideSrv = Util::GetCurrentSceneDepthSRV(false);
-	ApplyPixelShaderSlotOverride(context, 17u, obbOverrideSrv, nullptr, 0u);
-	ApplyPixelShaderSlotOverride(context, 2u, shadowmaskOverrideSrv, &ShouldApplySlot2Rewrite, a_callerRva);
+	ApplyPixelShaderSlotOverride(
+		context,
+		17u,
+		obbOverrideSrv,
+		engineHookDiagnostics.obbApplied,
+		engineHookDiagnostics.obbAlreadyBound,
+		engineHookDiagnostics.obbMissingSrv,
+		nullptr,
+		0u);
+	ApplyPixelShaderSlotOverride(
+		context,
+		2u,
+		shadowmaskOverrideSrv,
+		engineHookDiagnostics.shadowmaskApplied,
+		engineHookDiagnostics.shadowmaskAlreadyBound,
+		engineHookDiagnostics.shadowmaskMissingSrv,
+		&ShouldApplySlot2Rewrite,
+		a_callerRva);
 }
 
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
@@ -649,6 +796,34 @@ void TerrainBlending::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		shaderDevice = device;
+	}
+
+	if (terrainDepth.texture) {
+		terrainDepth.texture->Release();
+		terrainDepth.texture = nullptr;
+	}
+	if (terrainDepth.depthSRV) {
+		terrainDepth.depthSRV->Release();
+		terrainDepth.depthSRV = nullptr;
+	}
+	if (terrainDepth.views[0]) {
+		terrainDepth.views[0]->Release();
+		terrainDepth.views[0] = nullptr;
+	}
+	delete blendedDepthTexture;
+	blendedDepthTexture = nullptr;
+	delete blendedDepthTexture16;
+	blendedDepthTexture16 = nullptr;
+	delete mainDepthCopy;
+	mainDepthCopy = nullptr;
+	if (terrainDepthStencilState) {
+		terrainDepthStencilState->Release();
+		terrainDepthStencilState = nullptr;
+	}
 
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -697,8 +872,6 @@ void TerrainBlending::SetupResources()
 		blendedDepthTexture16->CreateSRV(srvDesc);
 		blendedDepthTexture16->CreateUAV(uavDesc);
 
-		// R32_FLOAT snapshot of main depth written by DepthBlend CS; replaces the per-frame
-		// CopyResource(terrainDepth <- mainDepth) that was needed for terrain shader slot 55.
 		texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		srvDesc.Format = texDesc.Format;
 		uavDesc.Format = texDesc.Format;
@@ -723,6 +896,13 @@ void TerrainBlending::SetupResources()
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 		Util::SetResourceName(terrainDepthStencilState, "TerrainBlending::DepthStencilState");
 	}
+
+	depthBlendCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DepthBlendCB>(), "TerrainBlending::DepthBlendCB");
+}
+
+void TerrainBlending::SetupRenderTargetResources()
+{
+	SetupResources();
 }
 
 void TerrainBlending::PostPostLoad()
@@ -767,10 +947,6 @@ void TerrainBlending::ResetDepth()
 
 void TerrainBlending::ResetTerrainDepth()
 {
-	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Reset Terrain Depth");
-	if (globals::state->frameAnnotations)
-		globals::state->BeginPerfEvent("Terrain Blending - Reset Terrain Depth");
-
 	auto context = globals::d3d::context;
 
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
@@ -778,9 +954,6 @@ void TerrainBlending::ResetTerrainDepth()
 
 	auto currentVertexShader = *globals::game::currentVertexShader;
 	context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
-
-	if (globals::state->frameAnnotations)
-		globals::state->EndPerfEvent();
 }
 
 void TerrainBlending::BlendPrepassDepths()
@@ -791,25 +964,57 @@ void TerrainBlending::BlendPrepassDepths()
 		globals::state->BeginPerfEvent("Terrain Blending - Blend Prepass Depths");
 
 	auto context = globals::d3d::context;
+	if (!context || !depthBlendCB || !depthSRVBackup || !terrainDepth.texture || !terrainDepth.depthSRV ||
+		!blendedDepthTexture || !blendedDepthTexture->uav ||
+		!blendedDepthTexture16 || !blendedDepthTexture16->uav ||
+		!mainDepthCopy || !mainDepthCopy->uav) {
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
+		return;
+	}
+
+	D3D11_TEXTURE2D_DESC terrainDepthDesc{};
+	terrainDepth.texture->GetDesc(&terrainDepthDesc);
+
+	// Submit-stage upscaling keeps scene passes in the dynamic-resolution domain.
+	// TB depth products are sampled during replay with scene pixel coordinates.
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	const auto blendSize = Util::ConvertToDynamic(globals::state->screenSize, submitStageSceneDomain);
+	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, blendedDepthTexture16->desc.Width, mainDepthCopy->desc.Width });
+	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, blendedDepthTexture16->desc.Height, mainDepthCopy->desc.Height });
+	const uint32_t blendWidth = GetDepthBlendExtent(blendSize.x, maxBlendWidth);
+	const uint32_t blendHeight = GetDepthBlendExtent(blendSize.y, maxBlendHeight);
+	if (!blendWidth || !blendHeight) {
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
+		return;
+	}
+
+	DepthBlendCB depthBlendData{};
+	depthBlendData.blendWidth = blendWidth;
+	depthBlendData.blendHeight = blendHeight;
+	depthBlendCB->Update(depthBlendData);
+
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	auto dispatchCount = Util::GetScreenDispatchCount();
-
 	{
-		TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Depth Blend CS");
-
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		// u0=blendedDepth(R32), u1=blendedDepth16(R16), u2=mainDepthCopy(R32) written inline
 		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get(), mainDepthCopy->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
+		auto buffer = depthBlendCB->CB();
+		context->CSSetConstantBuffers(0, 1, &buffer);
+
 		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
 
-		globals::profiler->BeginPass("TerrainBlending::DepthBlend");
-		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-		globals::profiler->EndPass();
+		const uint32_t dispatchX = (blendWidth + 7u) >> 3u;
+		const uint32_t dispatchY = (blendHeight + 7u) >> 3u;
+		{
+			CS_PROFILE_SCOPE("TerrainBlending::DepthBlend");
+			context->Dispatch(dispatchX, dispatchY, 1);
+		}
 	}
 
 	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
@@ -818,13 +1023,14 @@ void TerrainBlending::BlendPrepassDepths()
 	ID3D11UnorderedAccessView* uavs[3] = { nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
+	ID3D11Buffer* buffer = nullptr;
+	context->CSSetConstantBuffers(0, 1, &buffer);
+
 	ID3D11ComputeShader* shader = nullptr;
 	context->CSSetShader(shader, nullptr, 0);
 
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 	stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-	// CopyResource(terrainDepth <- mainDepth) eliminated: main depth is now written
-	// directly into mainDepthCopy (u2) by the CS above, saving a full-stereo D24S8 copy.
 
 	if (globals::state->frameAnnotations)
 		globals::state->EndPerfEvent();
@@ -863,6 +1069,8 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 
 	const bool tbActive = shaderCache->IsEnabled() && singleton.settings.Enabled;
 	const bool useBlendedDepthSRV = tbActive && ShouldUseBlendedDepthSRV();
+	tbHookDiagnostics.renderDepthCalls++;
+	Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, tbActive && globals::game::isVR);
 
 	if (tbActive) {
 		if (useBlendedDepthSRV) {
@@ -910,8 +1118,11 @@ TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmedi
 			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
 
 			if (inTerrain && a_pass->geometry) {
-				if ((a_pass->geometry->worldBound.center.GetDistance(averageEyePosition) - a_pass->geometry->worldBound.radius) > 1024.0f) {
-					inTerrain = false;
+				const float cullDistance = settings.TerrainCullDistance;
+				if (cullDistance > 0.0f) {
+					if ((a_pass->geometry->worldBound.center.GetDistance(averageEyePosition) - a_pass->geometry->worldBound.radius) > cullDistance) {
+						inTerrain = false;
+					}
 				}
 			}
 
@@ -922,6 +1133,7 @@ TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmedi
 			}
 
 			if (inTerrain) {
+				tbHookDiagnostics.terrainDepthDoubleDrawCalls++;
 				return RenderPassImmediatelyAction::DrawTwice;
 			}
 		} else if (globals::state->inWorld) {
@@ -930,6 +1142,7 @@ TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmedi
 					if (shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
 						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
 						terrainRenderPasses.push_back(call);
+						tbHookDiagnostics.queueTerrainCalls++;
 						return RenderPassImmediatelyAction::Skip;
 					}
 
@@ -937,6 +1150,7 @@ TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmedi
 					if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
 						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
 						renderPasses.push_back(call);
+						tbHookDiagnostics.queueNoBlendCalls++;
 						return RenderPassImmediatelyAction::Skip;
 					}
 				}
@@ -961,33 +1175,11 @@ bool TerrainBlending::Hooks::BSShaderProperty_SetupGeometry::thunk(RE::BSShaderP
 	return result;
 }
 
-void TerrainBlending::Hooks::Main_RenderShadowmasks::thunk(bool a1)
-{
-	renderShadowmasksPhaseDepth.fetch_add(1, std::memory_order_relaxed);
-	func(a1);
-	if (renderShadowmasksPhaseDepth.fetch_sub(1, std::memory_order_relaxed) == 1) {
-		globals::features::terrainBlending.OnShadowmaskPhaseEnd();
-	}
-}
-
-bool TerrainBlending::Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertexDescriptor, uint32_t pixelDescriptor, bool skipPixelShader)
-{
-	const auto callerRva = ToModuleRva(_ReturnAddress());
-	bool result = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
-	globals::features::terrainBlending.OnBeginTechnique(shader, pixelDescriptor, callerRva);
-	return result;
-}
-
-void TerrainBlending::Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
-{
-	const auto callerRva = ToModuleRva(_ReturnAddress());
-	func(isCompute);
-	globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
-}
-
 void TerrainBlending::RenderTerrainBlendingPasses()
 {
 	ZoneScoped;
+	tbHookDiagnostics.renderPassInvocationCalls++;
+	Upscaling::ScopedAAVRSSuspension aaVrsSuspension(globals::features::upscaling, settings.Enabled && globals::game::isVR);
 
 	if (!settings.Enabled) {
 		renderDepth = false;
@@ -1008,16 +1200,17 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 
-	// Slot 55: main depth snapshot used to measure surface-to-lowest-depth distance.
-	// R32_FLOAT copy written inline by DepthBlend CS; safe to read here because
-	// mainDepthCopy is not written during the main rendering pass.
-	auto mainDepthSRV = mainDepthCopy->srv.get();
+	// Used to get the distance of the surface to the lowest depth.
+	ID3D11ShaderResourceView* mainDepthSRV = mainDepthCopy ? mainDepthCopy->srv.get() : terrainDepth.depthSRV;
 	context->PSSetShaderResources(55, 1, &mainDepthSRV);
 
 	const uint64_t terrainPassCount = static_cast<uint64_t>(terrainRenderPasses.size());
 	const uint64_t noBlendPassCount = static_cast<uint64_t>(renderPasses.size());
+	tbHookDiagnostics.renderPassTerrainCount += terrainPassCount;
+	tbHookDiagnostics.renderPassNoBlendCount += noBlendPassCount;
 
 	if (terrainPassCount != 0 || noBlendPassCount != 0) {
+		tbHookDiagnostics.renderPassExecutedCalls++;
 		TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Render Passes");
 		if (globals::state->frameAnnotations)
 			globals::state->BeginPerfEvent("Terrain Blending - Render Passes");

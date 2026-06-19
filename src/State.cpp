@@ -1,28 +1,42 @@
 #include "State.h"
 
-#include <codecvt>
+#ifndef WIN32_LEAN_AND_MEAN
+#	define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#	define NOMINMAX
+#endif
+#include <Windows.h>
 
-#include <pystring/pystring.h>
+#include <algorithm>
+#include <cmath>
+#include <codecvt>
+#include <cstring>
+#include <format>
+#include <limits>
+#include <thread>
+
 #include <RE/B/BGSSaveLoadGame.h>
+#include <pystring/pystring.h>
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
-#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
-#include "Features/ExponentialHeightFog.h"
-#include "Features/HDRDisplay.h"
+#include "Features/DynamicCubemaps.h"
+#include "Features/FoveatedCommon.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
-#include "Features/Skin.h"
-#include "Features/SkySync.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
-#include "Features/VRStereoOptimizations.h"
-#include "Features/VolumetricShadows.h"
+#include "Features/VR.h"
+#include "Features/WaterEffects.h"
+#include "Features/WeatherEditor.h"
+#include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
+#include "Profiler.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
@@ -39,6 +53,24 @@ static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 
 namespace
 {
+	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
+		"UnifiedWater"
+	};
+	static constexpr const char* kSharedDataLayoutCacheSection = "SharedData";
+	static constexpr const char* kSharedDataLayoutCacheKey = "Layout";
+
+	std::string GetSharedDataLayoutCacheValue()
+	{
+		return std::format(
+			"size:{};refraction:{};ambient:{};fov0:{};fovmodes:{};fovoffsets:{}",
+			sizeof(State::SharedDataCB),
+			offsetof(State::SharedDataCB, RefractionScale),
+			offsetof(State::SharedDataCB, AmbientSHR),
+			offsetof(State::SharedDataCB, VRFoveationData0),
+			offsetof(State::SharedDataCB, VRFoveationModes),
+			offsetof(State::SharedDataCB, VRFoveationCenterOffsets));
+	}
+
 	void StoreMax(std::atomic_uint32_t& a_target, uint32_t a_value)
 	{
 		uint32_t current = a_target.load(std::memory_order_acquire);
@@ -48,19 +80,106 @@ namespace
 			}
 		}
 	}
-}
 
-void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
-{
-	permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
+	void ForceDisableAtBootFeature(json& a_disabledFeaturesJson, std::string_view a_featureName)
+	{
+		const std::string featureKey(a_featureName);
+		if (!a_disabledFeaturesJson.value(featureKey, false)) {
+			logger::info("Feature '{}' is force-disabled at boot by this build", a_featureName);
+		}
+		a_disabledFeaturesJson[featureKey] = true;
+	}
 
-	if (!a_pass || !a_pass->shaderProperty)
-		return;
+	void TraceOCUExternalMipBiasState(const Util::OCUExternalUpscalerState& a_state)
+	{
+		static bool logged = false;
+		static float previousMipBias = std::numeric_limits<float>::quiet_NaN();
+		static float previousRenderScale = std::numeric_limits<float>::quiet_NaN();
+		static uint32_t previousMethod = std::numeric_limits<uint32_t>::max();
+		static uint32_t previousFlags = std::numeric_limits<uint32_t>::max();
 
-	auto* skyProperty = static_cast<const RE::BSSkyShaderProperty*>(a_pass->shaderProperty);
-	if (skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN ||
-		skyProperty->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_SUN_GLARE) {
-		permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsSun);
+		const bool changed =
+			!logged ||
+			std::abs(previousMipBias - a_state.mipBias) > 0.0005f ||
+			std::abs(previousRenderScale - a_state.renderScale) > 0.0005f ||
+			previousMethod != a_state.method ||
+			previousFlags != a_state.flags;
+
+		if (!changed)
+			return;
+
+		logger::info(
+			"[MipBiasTrace] source=OpenCompositeUnleashedSharedState renderScale={:.3f} mipBias={:.3f} method={} flags=0x{:X}",
+			a_state.renderScale,
+			a_state.mipBias,
+			a_state.method,
+			a_state.flags);
+
+		logged = true;
+		previousMipBias = a_state.mipBias;
+		previousRenderScale = a_state.renderScale;
+		previousMethod = a_state.method;
+		previousFlags = a_state.flags;
+	}
+
+	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
+	{
+		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
+			{ WetnessEffects::kShortName, false }
+		};
+
+		for (const auto& [featureName, isDisabled] : defaultDisableAtBootSettings) {
+			if constexpr (WetnessEffects::kForceDisableInAIO) {
+				if (featureName == WetnessEffects::kShortName) {
+					continue;
+				}
+			}
+
+			const std::string featureKey(featureName);
+			if (!a_disabledFeaturesJson.contains(featureKey)) {
+				a_disabledFeaturesJson[featureKey] = isDisabled;
+				logger::info("Default boot state for '{}' set to {}", featureName, isDisabled ? "Disabled" : "Enabled");
+			}
+		}
+	}
+
+	bool IsForcedDisableAtBootFeature(std::string_view a_featureName)
+	{
+		if constexpr (WetnessEffects::kForceDisableInAIO) {
+			if (a_featureName == WetnessEffects::kShortName) {
+				return true;
+			}
+		}
+		return std::ranges::find(kForcedDisableAtBootFeatures, a_featureName) != std::end(kForcedDisableAtBootFeatures);
+	}
+
+	void ApplyForcedDisableAtBootSettings(json& a_disabledFeaturesJson)
+	{
+		// Build-level kill switches: keep features registered for cache/config handling
+		// while preventing load, hooks, resources, prepass, and shader defines.
+		for (const auto featureName : kForcedDisableAtBootFeatures) {
+			ForceDisableAtBootFeature(a_disabledFeaturesJson, featureName);
+		}
+		if constexpr (WetnessEffects::kForceDisableInAIO) {
+			ForceDisableAtBootFeature(a_disabledFeaturesJson, WetnessEffects::kShortName);
+		}
+	}
+
+	float2 GetMainRenderTargetSize()
+	{
+		auto* renderer = globals::game::renderer;
+		if (!renderer) {
+			return {};
+		}
+
+		const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		if (!main.texture) {
+			return {};
+		}
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		main.texture->GetDesc(&texDesc);
+		return { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
 	}
 }
 
@@ -69,20 +188,20 @@ void State::Draw()
 	ZoneScoped;
 
 	auto shaderCache = globals::shaderCache;
+	auto deferred = globals::deferred;
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& csEditor = globals::features::csEditor;
-	auto& skin = globals::features::skin;
+	auto& weatherEditor = globals::features::weatherEditor;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
-	auto& volumetricShadows = globals::features::volumetricShadows;
 
 	if (shaderCache->IsEnabled()) {
 		// Process deferred cell transitions (interior detection)
 		SceneSettingsManager::GetSingleton()->Update();
+		globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
 
-		if (pendingPostLoadRuntimeReset && !IsSaveLoadSafeModeActive()) {
+		if (pendingPostLoadRuntimeReset) {
 			globals::OnDataLoaded();
 			WeatherManager::GetSingleton()->ClearCache();
 			globals::features::lightLimitFix.Reset();
@@ -92,7 +211,7 @@ void State::Draw()
 			logger::info("Applied deferred post-load runtime reset");
 		}
 
-		if (csEditor.loaded) {
+		if (weatherEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}
@@ -108,18 +227,13 @@ void State::Draw()
 		}
 
 		if (terrainHelper.loaded) {
-			ZoneScopedN("TerrainHelper::SetShaderResources");
-			terrainHelper.SetShaderResources(context);
-		}
-
-		if (skin.loaded) {
-			ZoneScopedN("Skin::SetShaderResources");
-			skin.SetShaderResources(context);
+			ZoneScopedN("TerrainHelper::SetShaderResouces");
+			terrainHelper.SetShaderResouces(context);
 		}
 
 		if (truePBR.loaded) {
-			ZoneScopedN("TruePBR::SetShaderResources");
-			truePBR.SetShaderResources(context);
+			ZoneScopedN("TruePBR::SetShaderResouces");
+			truePBR.SetShaderResouces(context);
 		}
 
 		if (permutationData != permutationDataPrevious) {
@@ -130,10 +244,7 @@ void State::Draw()
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
-					if (volumetricShadows.loaded)
-						volumetricShadows.CopyShadowLightData();
-					if (globals::features::exponentialHeightFog.loaded)
-						globals::features::exponentialHeightFog.CaptureDirectionalShadowMap();
+					deferred->CopyShadowData();
 				}
 			}
 		}
@@ -303,7 +414,6 @@ void State::UpdateSaveLoadSafeMode()
 void State::Reset()
 {
 	globals::profiler->EndFrame();
-
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -347,11 +457,6 @@ void State::Reset()
 
 void State::Setup()
 {
-	// Detect Moon and Stars mod for compatibility adjustments
-	moonAndStarsLoaded = GetModuleHandle(L"po3_MoonMod.dll") != nullptr;
-	if (moonAndStarsLoaded)
-		logger::info("Moon and Stars detected, compatibility enabled");
-
 	SetupResources();
 
 	// Probe typed UAV load support before features set up their resources, so any
@@ -366,6 +471,33 @@ void State::Setup()
 
 	// Load scene-specific settings (Interior Only, etc.)
 	SceneSettingsManager::GetSingleton()->LoadAll();
+}
+
+void State::SetupRenderTargetResources()
+{
+	const bool stateResourcesMissing =
+		!permutationCB ||
+		!sharedDataCB ||
+		!featureDataCB;
+	const bool d3dDeviceChanged =
+		setupResourcesDevice != globals::d3d::device ||
+		setupResourcesContext != globals::d3d::context;
+
+	if (stateResourcesMissing || d3dDeviceChanged) {
+		Setup();
+		return;
+	}
+
+	const auto mainRenderTargetSize = GetMainRenderTargetSize();
+	if (mainRenderTargetSize.x > 0.0f && mainRenderTargetSize.y > 0.0f) {
+		screenSize = mainRenderTargetSize;
+	}
+	featureLevel = globals::d3d::device->GetFeatureLevel();
+
+	// VR render-scale relatch only needs resources tied to recreated render targets.
+	// Keep disk/world discovery and full feature setup on State::Setup().
+	Feature::ForEachLoadedFeature("SetupRenderTargetResources", [](Feature* feature) { feature->SetupRenderTargetResources(); });
+	globals::deferred->SetupResources();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)
@@ -488,8 +620,11 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		}
 
 		json& disabledFeaturesJson = settings["Disable at Boot"];
+		ApplyDefaultDisableAtBootSettings(disabledFeaturesJson);
+		ApplyForcedDisableAtBootSettings(disabledFeaturesJson);
 		logger::info("Loading 'Disable at Boot' settings");
 
+		disabledFeatures.clear();
 		for (auto& [featureName, featureStatus] : disabledFeaturesJson.items()) {
 			if (featureStatus.is_boolean()) {
 				disabledFeatures[featureName] = featureStatus.get<bool>();
@@ -500,16 +635,16 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		for (auto* feature : Feature::GetFeatureList()) {
 			try {
 				const std::string featureName = feature->GetShortName();
-				if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
-					disabledFeatures[featureName] = true;
-					logger::info("Feature '{}' is disabled by default", featureName);
-				}
 				bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 				if (!isDisabled) {
 					logger::info("Loading Feature: '{}'", featureName);
 
 					// Load base feature settings from merged config (default + user)
 					feature->Load(settings);
+					if (!feature->loaded) {
+						logger::info("Feature '{}' did not finish loading; skipping post-load initialization.", featureName);
+						continue;
+					}
 
 					// Register weather variables (features opt-in by implementing this)
 					feature->RegisterWeatherVariables();
@@ -598,7 +733,6 @@ void State::SaveToJson(nlohmann::json& settings)
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
-	general["Language"] = I18n::GetSingleton()->GetCurrentLocale();
 
 	settings["General"] = general;
 
@@ -614,8 +748,12 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	json disabledFeaturesJson;
 	for (const auto& [featureName, isDisabled] : disabledFeatures) {
+		if (IsForcedDisableAtBootFeature(featureName))
+			continue;
+
 		disabledFeaturesJson[featureName] = isDisabled;
 	}
+	ApplyDefaultDisableAtBootSettings(disabledFeaturesJson);
 	settings["Disable at Boot"] = disabledFeaturesJson;
 
 	settings["Version"] = Plugin::VERSION.string();
@@ -652,6 +790,7 @@ void State::LoadFromJson(nlohmann::json& settings)
 
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
+		const auto maxCompilerThreads = std::max(1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 		if (advanced.contains("Dump Shaders") && advanced["Dump Shaders"].is_boolean())
 			shaderCache->SetDump(advanced["Dump Shaders"]);
 		if (advanced.contains("Log Level") && advanced["Log Level"].is_number_integer())
@@ -659,9 +798,9 @@ void State::LoadFromJson(nlohmann::json& settings)
 		if (advanced.contains("Shader Defines") && advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
 		if (advanced.contains("Compiler Threads") && advanced["Compiler Threads"].is_number_integer())
-			shaderCache->compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			shaderCache->compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Background Compiler Threads") && advanced["Background Compiler Threads"].is_number_integer())
-			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Use FileWatcher") && advanced["Use FileWatcher"].is_boolean())
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())
@@ -686,23 +825,6 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
-
-		// Load i18n locale preference
-		if (general.contains("Language") && general["Language"].is_string()) {
-			auto locale = general["Language"].get<std::string>();
-			auto* i18n = I18n::GetSingleton();
-			if (locale != i18n->GetCurrentLocale()) {
-				i18n->SetLocale(locale);
-			}
-		} else {
-			// No saved language preference — auto-detect from system locale on first launch
-			auto* i18n = I18n::GetSingleton();
-			auto detected = i18n->DetectSystemLocale();
-			if (detected != "en" && detected != i18n->GetCurrentLocale()) {
-				i18n->SetLocale(detected);
-				logger::info("[I18n] Auto-detected system locale: '{}'", detected);
-			}
-		}
 	}
 
 	if (settings.contains("Replace Original Shaders") && settings["Replace Original Shaders"].is_object()) {
@@ -757,13 +879,27 @@ void State::Save(ConfigMode a_configMode)
 bool State::ValidateCache(CSimpleIniA& a_ini)
 {
 	bool valid = true;
+	const auto currentSharedDataLayout = GetSharedDataLayoutCacheValue();
+	if (const auto cachedSharedDataLayout = a_ini.GetValue(kSharedDataLayoutCacheSection, kSharedDataLayoutCacheKey)) {
+		if (currentSharedDataLayout != cachedSharedDataLayout) {
+			logger::info("Disk cache outdated: SharedData layout changed (current: {}, cached: {})",
+				currentSharedDataLayout, cachedSharedDataLayout);
+			valid = false;
+		}
+	} else {
+		logger::info("Disk cache outdated: no SharedData layout key found");
+		valid = false;
+	}
+
 	for (auto* feature : Feature::GetFeatureList())
-		valid = valid && feature->ValidateCache(a_ini);
+		valid = feature->ValidateCache(a_ini) && valid;
 	return valid;
 }
 
 void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 {
+	const auto sharedDataLayout = GetSharedDataLayoutCacheValue();
+	a_ini.SetValue(kSharedDataLayoutCacheSection, kSharedDataLayoutCacheKey, sharedDataLayout.c_str());
 	for (auto* feature : Feature::GetFeatureList())
 		feature->WriteDiskCacheInfo(a_ini);
 }
@@ -832,9 +968,17 @@ bool State::IsDeveloperMode()
 	return GetLogLevel() <= spdlog::level::debug;
 }
 
-void State::ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties& a_properties)
+void State::ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 {
-	a_properties.supportUnorderedAccess = true;
+	if (globals::features::upscaling.AdjustVRRenderScaleRenderTargetProperties(a_target, a_properties)) {
+		logger::debug(
+			"[Upscaling] Adjusted {} render target properties to {}x{} for VR render scale.",
+			magic_enum::enum_name(a_target),
+			a_properties->width,
+			a_properties->height);
+	}
+
+	a_properties->supportUnorderedAccess = true;
 	logger::debug("Adding UAV access to {}", magic_enum::enum_name(a_target));
 }
 
@@ -859,8 +1003,7 @@ void State::CheckTypedUAVLoadSupport()
 	};
 	static const FormatEntry kFormats[] = {
 		{ DXGI_FORMAT_R11G11B10_FLOAT, "R11G11B10_FLOAT", "Dynamic Cubemaps (envCapture/Raw/Position) — non-HDR" },
-		{ DXGI_FORMAT_R16G16B16A16_FLOAT, "R16G16B16A16_FLOAT", "Dynamic Cubemaps (HDR), Skylighting outProbeArray" },
-		{ DXGI_FORMAT_R16G16B16A16_UNORM, "R16G16B16A16_UNORM", "Grass Collision (collisionTexture)" },
+		{ DXGI_FORMAT_R16G16B16A16_FLOAT, "R16G16B16A16_FLOAT", "Dynamic Cubemaps (HDR), Skylighting outProbeArray, Grass Collision (collisionTexture)" },
 		{ DXGI_FORMAT_R16G16_UNORM, "R16G16_UNORM", "Terrain Shadows (RWTexShadowHeights)" },
 		{ DXGI_FORMAT_R16G16_FLOAT, "R16G16_FLOAT", "VR Stereo Blend (kMOTION_VECTOR reprojection)" },
 		{ DXGI_FORMAT_R8G8B8A8_UNORM, "R8G8B8A8_UNORM", "HDR Display UI brightness (uiTexture)" },
@@ -909,7 +1052,19 @@ void State::SetupResources()
 
 	frameTimingActive = false;
 
-	auto renderer = globals::game::renderer;
+	delete permutationCB;
+	permutationCB = nullptr;
+	delete sharedDataCB;
+	sharedDataCB = nullptr;
+	delete featureDataCB;
+	featureDataCB = nullptr;
+	pPerf = nullptr;
+#ifdef TRACY_ENABLE
+	if (tracyCtx) {
+		TracyD3D11Destroy(tracyCtx);
+		tracyCtx = nullptr;
+	}
+#endif
 
 	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
 	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
@@ -919,28 +1074,29 @@ void State::SetupResources()
 
 	// Grab main texture to get resolution
 	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
-	D3D11_TEXTURE2D_DESC texDesc{};
-	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture->GetDesc(&texDesc);
-
-	screenSize = { (float)texDesc.Width, (float)texDesc.Height };
-	globals::d3d::context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
+	screenSize = GetMainRenderTargetSize();
+	if (globals::d3d::context) {
+		globals::d3d::context->QueryInterface(
+			__uuidof(REX::W32::ID3DUserDefinedAnnotation),
+			reinterpret_cast<void**>(pPerf.ReleaseAndGetAddressOf()));
+	}
+	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
+	if (frameAnnotations) {
+		globals::profiler->SetPerfEventCallbacks(
+			[this](std::string_view a_title) { BeginPerfEvent(a_title); },
+			[this](std::string_view) { EndPerfEvent(); });
+	} else {
+		globals::profiler->SetPerfEventCallbacks({}, {});
+	}
 
 	featureLevel = globals::d3d::device->GetFeatureLevel();
+	setupResourcesDevice = globals::d3d::device;
+	setupResourcesContext = globals::d3d::context;
 
 	tracyCtx = TracyD3D11Context(globals::d3d::device, globals::d3d::context);
 #ifdef TRACY_ENABLE
 	Feature::SetTracyCtx(tracyCtx);
 #endif
-
-	globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
-
-	if (frameAnnotations) {
-		globals::profiler->SetPerfEventCallbacks(
-			[this](std::string_view name) { BeginPerfEvent(name); },
-			[this](std::string_view) { EndPerfEvent(); });
-	} else {
-		globals::profiler->SetPerfEventCallbacks({}, {});
-	}
 }
 
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
@@ -1062,7 +1218,8 @@ void State::BeginPerfEvent(std::string_view title)
 	const TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(srcloc, true);
 	s_tracyPerfZones.push_back(ctx);
 #endif
-	pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get())
+		pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
 }
 
 void State::EndPerfEvent()
@@ -1075,12 +1232,14 @@ void State::EndPerfEvent()
 		logger::warn("EndPerfEvent called without a matching BeginPerfEvent");
 	}
 #endif
-	pPerf->EndEvent();
+	if (pPerf.Get())
+		pPerf->EndEvent();
 }
 
 void State::SetPerfMarker(std::string_view title)
 {
-	pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get())
+		pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
 }
 
 void State::SetAdapterDescription(const std::wstring& description)
@@ -1131,25 +1290,28 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		// Fallback water height for the VR analytical mask when tile 12 returns the sentinel.
-		// Uses player->GetWaterHeight() (reads relevantWaterHeight from LOADED_REF_DATA) gated by
-		// underwaterCount > 0 so it is only set when the player is actually in a water body.
+		// Uses player->GetWaterHeight() (reads relevantWaterHeight from LOADED_REF_DATA,
+		// then falls back to the cell water height) when it is valid.
 		// Covers both interior water (where TES::GetWaterHeight returns -NI_INFINITY) and exterior
-		// partial submersion.  Stored as eye-0 camera-relative Z to match WaterData[].w.
+		// partial submersion. Stored as eye-0 camera-relative Z to match WaterData[].w.
 		data.WaterSystemHeight = -RE::NI_INFINITY;
 		if (globals::game::isVR) {
-			if (auto player = globals::game::player) {
-				if (player->loadedData && player->loadedData->underwaterCount > 0) {
-					float worldHeight = player->GetWaterHeight();
-					if (worldHeight > -RE::NI_INFINITY) {
-						auto eye0Pos = Util::GetEyePosition(0);
-						data.WaterSystemHeight = worldHeight - eye0Pos.z;
-					}
+			if (auto player = RE::PlayerCharacter::GetSingleton()) {
+				auto waterSystem = globals::game::waterSystem;
+				const bool waterSystemInWater = waterSystem &&
+				                                (waterSystem->playerUnderwater || waterSystem->partiallyUnderwater);
+				float worldHeight = player->GetWaterHeight();
+				if (worldHeight <= -RE::NI_INFINITY && waterSystemInWater) {
+					worldHeight = waterSystem->underwaterHeight;
+				}
+				if (worldHeight > -RE::NI_INFINITY) {
+					auto eye0Pos = Util::GetEyePosition(0);
+					data.WaterSystemHeight = worldHeight - eye0Pos.z;
 				}
 			}
 		}
 
 		data.InInterior = Util::IsInterior();
-		data.HasDirectionalShadows = HasDirectionalShadows();
 
 		if (globals::game::sky)
 			data.HideSky = globals::game::sky->flags.any(RE::Sky::Flags::kHideSky);
@@ -1180,10 +1342,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			globals::game::isVR &&
 			upscalingLoaded &&
 			Util::TryReadOCUExternalUpscalerState(externalMipBiasState);
+
 		data.MipBias = externalOpenCompositeMipBias ? externalMipBiasState.mipBias : computedMipBias;
+		if (externalOpenCompositeMipBias)
+			TraceOCUExternalMipBiasState(externalMipBiasState);
 		data.RefractionScale = refractionScale;
 		data.PBRMetalReflectionScale = pbrMetalReflectionScale;
 		data.PBRMetalHighlightScale = pbrMetalHighlightScale;
+
 		data.SSSHumanMaleIntensity = sssHumanMaleIntensity;
 		data.SSSHumanMaleSaturation = sssHumanMaleSaturation;
 		data.SSSHumanMaleBrightness = sssHumanMaleBrightness;
@@ -1192,34 +1358,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.SSSHumanFemaleSaturation = sssHumanFemaleSaturation;
 		data.SSSHumanFemaleBrightness = sssHumanFemaleBrightness;
 		data.SSSHumanFemaleBaseSaturation = sssHumanFemaleBaseSaturation;
-
-		if (auto sky = globals::game::sky) {
-			// Process sun
-			if (auto sun = sky->sun; sun && sun->root && sky->root) {
-				const auto& sunPos = sun->root->world.translate;
-				const auto& skyPos = sky->root->world.translate;
-				float3 sunDirection = { sunPos.x - skyPos.x, sunPos.y - skyPos.y, sunPos.z - skyPos.z };
-				sunDirection.Normalize();
-				data.SunDirection = { sunDirection.x, sunDirection.y, sunDirection.z, 0.0f };
-
-				if (sun->sunBase) {
-					if (const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get()))
-						data.SunColor = { prop->kBlendColor.red * prop->kBlendColor.alpha, prop->kBlendColor.green * prop->kBlendColor.alpha, prop->kBlendColor.blue * prop->kBlendColor.alpha, prop->kBlendColor.alpha };
-				}
-			}
-
-			if (auto masser = sky->masser) {
-				auto dir = Util::Moon::GetDirection(masser, moonAndStarsLoaded);
-				data.MasserDirection = { dir.x, dir.y, dir.z, 0.0f };
-				data.MasserColor = Util::Moon::GetBlendColor(masser, Util::Moon::MasserBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
-			}
-
-			if (auto secunda = sky->secunda) {
-				auto dir = Util::Moon::GetDirection(secunda, moonAndStarsLoaded);
-				data.SecundaDirection = { dir.x, dir.y, dir.z, 0.0f };
-				data.SecundaColor = Util::Moon::GetBlendColor(secunda, Util::Moon::SecundaBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
-			}
-		}
 
 		// DALC to SH
 		const auto& m = dalcTransform.rotate;
@@ -1237,7 +1375,63 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHG = { dalcSH.g.c0, dalcSH.g.c1[0], dalcSH.g.c1[1], dalcSH.g.c1[2] };
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
-		data.HDRData = globals::features::hdrDisplay.GetSharedDataHDR();
+		data.VRFoveationData0 = { FoveatedCommon::kCenterScaleMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
+		data.VRFoveationModes = { 0.0f, 0.0f, 0.0f, 0.0f };
+		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
+		const auto& vr = globals::features::vr;
+		const auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+		const auto& waterEffects = globals::features::waterEffects;
+		const auto& wetnessEffects = globals::features::wetnessEffects;
+		const auto& wetterness = globals::features::wetterness;
+		const bool dynamicSSRActive = dynamicCubemaps.IsSSRRuntimeActive();
+		const bool waterParallaxActive = vr.settings.EnableWaterParallaxFoveation && waterEffects.loaded;
+		const bool wetnessEffectsActive = wetnessEffects.IsRuntimeActive();
+		const bool wetternessFoveationActive =
+			vr.settings.EnableWetternessFoveation &&
+			wetterness.IsRuntimeProcessingActive() &&
+			!wetnessEffectsActive;
+		const bool anyFoveatedShaderDetailEnabled =
+			vr.settings.EnableLightingFoveation ||
+			(vr.settings.EnableSSRFoveation && dynamicSSRActive) ||
+			waterParallaxActive ||
+			wetternessFoveationActive;
+		if (globals::game::isVR &&
+			vr.loaded &&
+			anyFoveatedShaderDetailEnabled &&
+			upscaling.loaded) {
+			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
+			if (profile.available) {
+				const float centerScale = FoveatedCommon::ClampCenterScale(profile.sharedVisibleScale);
+				const bool foveationActive = FoveatedCommon::IsActiveCoverage(centerScale);
+				const float disabledFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off);
+				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(
+					FoveatedCommon::GetDetailMode(vr.settings.EnableLightingFoveation, vr.settings.EnableLightingFoveationHardCutoff));
+				const float ssrFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
+					vr.settings.EnableSSRFoveation && dynamicSSRActive,
+					vr.settings.EnableSSRFoveationHardCutoff));
+				const float waterParallaxFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
+					waterParallaxActive,
+					vr.settings.EnableWaterParallaxFoveationHardCutoff));
+				const float wetternessFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::GetDetailMode(
+					wetternessFoveationActive,
+					vr.settings.EnableWetternessFoveationHardCutoff));
+				const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
+				const float activeLightingMode = foveationActive ? lightingFoveationMode : disabledFoveationMode;
+				data.VRFoveationData0 = { centerScale, FoveatedCommon::kCenterFeather, centerHorizontalScale, activeLightingMode };
+				data.VRFoveationModes = {
+					foveationActive ? ssrFoveationMode : disabledFoveationMode,
+					foveationActive ? waterParallaxFoveationMode : disabledFoveationMode,
+					foveationActive ? wetternessFoveationMode : disabledFoveationMode,
+					disabledFoveationMode
+				};
+				data.VRFoveationCenterOffsets = {
+					profile.centerOffsets[0].x,
+					profile.centerOffsets[0].y,
+					profile.centerOffsets[1].x,
+					profile.centerOffsets[1].y
+				};
+			}
+		}
 
 		sharedDataCB->Update(data);
 	}
@@ -1315,11 +1509,6 @@ void State::LoadTheme()
 			logger::warn("Fallback to 'Default' theme failed");
 		}
 	}
-}
-
-bool State::HasDirectionalShadows() const
-{
-	return !Util::IsInterior() || globals::features::interiorSun.IsActiveInteriorSun();
 }
 
 void State::SaveTheme()

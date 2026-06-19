@@ -28,13 +28,13 @@ VS_OUTPUT VS_Main(uint vertexID : SV_VertexID)
 // Precomputed normalized Gaussian weights (sigma = 2.0)
 static const float WEIGHTS[8] = {
 	0.1760327f,  // offset 0 (center)
-	0.1658591f,  // offset +/-1
-	0.1403215f,  // offset +/-2
-	0.1069852f,  // offset +/-3
-	0.0732894f,  // offset +/-4
-	0.0451904f,  // offset +/-5
-	0.0248657f,  // offset +/-6
-	0.0122423f   // offset +/-7
+	0.1658591f,  // offset ±1
+	0.1403215f,  // offset ±2
+	0.1069852f,  // offset ±3
+	0.0732894f,  // offset ±4
+	0.0451904f,  // offset ±5
+	0.0248657f,  // offset ±6
+	0.0122423f   // offset ±7
 };
 
 float4 PS_Main(VS_OUTPUT input) :

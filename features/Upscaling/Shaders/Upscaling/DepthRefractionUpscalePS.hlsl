@@ -35,19 +35,49 @@ float SampleMinDepth2x2(float2 uv)
 	return min(min(depthQuad.x, depthQuad.y), min(depthQuad.z, depthQuad.w));
 }
 
-float Min4(float4 v)
+float SampleDepthClamped(int2 coord, int2 maxCoord)
 {
-	return min(min(v.x, v.y), min(v.z, v.w));
+	int2 c = clamp(coord, int2(0, 0), maxCoord);
+	return DepthTex.Load(int3(c, 0));
 }
 
-float SampleMinDepthWideGather(float2 uv)
+float SampleMinDepth3x3(float2 uv)
 {
-	// Gather-only wide footprint (4 offset 2x2 GatherRed calls) to save performance.
-	float d0 = Min4(DepthTex.GatherRed(LinearSampler, uv, int2(-1, -1)));
-	float d1 = Min4(DepthTex.GatherRed(LinearSampler, uv, int2(1, -1)));
-	float d2 = Min4(DepthTex.GatherRed(LinearSampler, uv, int2(-1, 1)));
-	float d3 = Min4(DepthTex.GatherRed(LinearSampler, uv, int2(1, 1)));
-	return min(min(d0, d1), min(d2, d3));
+	// Use cached frame buffer dimensions to avoid per-pixel texture-dimension queries.
+	int2 texSize = int2(SharedData::BufferDim.xy);
+	int2 maxCoord = texSize - 1;
+	int2 centerCoord = int2(uv * SharedData::BufferDim.xy);
+
+	float row0 = min(
+		SampleDepthClamped(centerCoord + int2(-1, -1), maxCoord),
+		min(
+			SampleDepthClamped(centerCoord + int2(0, -1), maxCoord),
+			SampleDepthClamped(centerCoord + int2(1, -1), maxCoord)));
+
+	float row1 = min(
+		SampleDepthClamped(centerCoord + int2(-1, 0), maxCoord),
+		min(
+			SampleDepthClamped(centerCoord + int2(0, 0), maxCoord),
+			SampleDepthClamped(centerCoord + int2(1, 0), maxCoord)));
+
+	float row2 = min(
+		SampleDepthClamped(centerCoord + int2(-1, 1), maxCoord),
+		min(
+			SampleDepthClamped(centerCoord + int2(0, 1), maxCoord),
+			SampleDepthClamped(centerCoord + int2(1, 1), maxCoord)));
+
+	return min(row0, min(row1, row2));
+}
+
+int2 GetClampedTexelCoord(float2 uv)
+{
+	uint width;
+	uint height;
+	DepthTex.GetDimensions(width, height);
+
+	float2 texelPos = uv * float2(width, height);
+	int2 texelCoord = int2(floor(texelPos));
+	return clamp(texelCoord, int2(0, 0), int2(width - 1, height - 1));
 }
 
 PS_OUTPUT main(PS_INPUT input)
@@ -79,11 +109,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(VR)
 	float bilinearDepth = psout.Depth;
-	if (useWideKernel > 0.5f) {
-		psout.Depth = SampleMinDepthWideGather(uv);
-	} else {
-		psout.Depth = SampleMinDepth2x2(uv);
-	}
+	psout.Depth = (useWideKernel > 0.5f) ? SampleMinDepth3x3(uv) : SampleMinDepth2x2(uv);
 	// Keep SAO camera Z smooth to avoid over-occlusion; depth culling uses SV_Depth.
 	psout.SAOCameraZ = bilinearDepth;
 #	else

@@ -8,20 +8,20 @@
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "TruePBR.h"
 #include "Util.h"
 
-#include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
-#include "Features/ScreenshotFeature.h"
-#include "Features/Skin.h"
-#include "Features/SkySync.h"
 #include "Features/TerrainBlending.h"
+#include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+
+#include <intrin.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
@@ -38,6 +38,175 @@ const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Sha
 {
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
 	return ShaderBytecodeMap.at(Shader);
+}
+
+namespace
+{
+	enum class InputHookSafeguardReason : uint32_t
+	{
+		kSwallow = 1u << 0,
+		kInvalidHead = 1u << 1,
+		kProcessInputEventsException = 1u << 2,
+		kGetDeviceException = 1u << 3
+	};
+
+	const char* ToString(InputHookSafeguardReason a_reason)
+	{
+		switch (a_reason) {
+		case InputHookSafeguardReason::kSwallow:
+			return "swallow";
+		case InputHookSafeguardReason::kInvalidHead:
+			return "invalid_head";
+		case InputHookSafeguardReason::kProcessInputEventsException:
+			return "process_input_events_exception";
+		case InputHookSafeguardReason::kGetDeviceException:
+			return "get_device_exception";
+		default:
+			return "unknown";
+		}
+	}
+
+	HMODULE GetModuleHandleFromAddress(const void* a_address)
+	{
+		if (!a_address) {
+			return nullptr;
+		}
+
+		HMODULE moduleHandle = nullptr;
+		if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCSTR>(a_address),
+				&moduleHandle) ||
+			!moduleHandle) {
+			MEMORY_BASIC_INFORMATION memoryInfo{};
+			if (VirtualQuery(a_address, &memoryInfo, sizeof(memoryInfo)) == 0 || !memoryInfo.AllocationBase) {
+				return nullptr;
+			}
+			moduleHandle = static_cast<HMODULE>(memoryInfo.AllocationBase);
+		}
+
+		return moduleHandle;
+	}
+
+	std::string GetModuleName(HMODULE a_moduleHandle)
+	{
+		if (!a_moduleHandle) {
+			return {};
+		}
+
+		char modulePath[MAX_PATH]{};
+		const auto length = GetModuleFileNameA(a_moduleHandle, modulePath, static_cast<DWORD>(std::size(modulePath)));
+		if (length == 0) {
+			return {};
+		}
+
+		return std::filesystem::path(std::string_view(modulePath, length)).filename().string();
+	}
+
+	const void* TryGetObjectVtable(const void* a_object)
+	{
+		if (!a_object) {
+			return nullptr;
+		}
+
+		__try {
+			return *reinterpret_cast<const void* const*>(a_object);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return nullptr;
+		}
+	}
+
+	std::vector<std::string> CollectExternalInputSinkModules(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher)
+	{
+		std::vector<std::string> modules;
+		if (!a_dispatcher) {
+			return modules;
+		}
+
+		const auto selfModule = GetModuleHandleFromAddress(&CollectExternalInputSinkModules);
+
+		std::vector<const void*> sinkVtables;
+		{
+			RE::BSSpinLockGuard locker(a_dispatcher->lock);
+			sinkVtables.reserve(a_dispatcher->sinks.size());
+			for (auto* sink : a_dispatcher->sinks) {
+				if (!sink) {
+					continue;
+				}
+
+				const auto vtable = TryGetObjectVtable(sink);
+				if (vtable) {
+					sinkVtables.push_back(vtable);
+				}
+			}
+		}
+
+		std::unordered_set<HMODULE> seenModules;
+		seenModules.reserve(sinkVtables.size());
+		for (const auto* sinkVtable : sinkVtables) {
+			const auto moduleHandle = GetModuleHandleFromAddress(sinkVtable);
+			if (!moduleHandle || moduleHandle == selfModule || !seenModules.emplace(moduleHandle).second) {
+				continue;
+			}
+
+			auto moduleName = GetModuleName(moduleHandle);
+			if (moduleName.empty()) {
+				continue;
+			}
+
+			std::string moduleNameLower = moduleName;
+			std::ranges::transform(moduleNameLower, moduleNameLower.begin(), [](unsigned char c) {
+				return static_cast<char>(std::tolower(c));
+			});
+
+			if (moduleNameLower.ends_with(".exe")) {
+				continue;
+			}
+
+			modules.push_back(std::move(moduleName));
+		}
+
+		std::ranges::sort(modules);
+		return modules;
+	}
+
+	std::string JoinModules(const std::vector<std::string>& a_modules)
+	{
+		if (a_modules.empty()) {
+			return "<none>";
+		}
+
+		std::string result;
+		for (size_t i = 0; i < a_modules.size(); ++i) {
+			if (i != 0) {
+				result += ", ";
+			}
+			result += a_modules[i];
+		}
+		return result;
+	}
+
+	void LogInputHookSafeguardOnce(
+		InputHookSafeguardReason a_reason,
+		RE::BSTEventSource<RE::InputEvent*>* a_dispatcher,
+		const RE::InputEvent* a_originalHead,
+		bool a_substitutedEmptyList)
+	{
+		static std::atomic<uint32_t> loggedReasons = 0;
+		const auto reasonBit = static_cast<uint32_t>(a_reason);
+		if ((loggedReasons.load(std::memory_order_relaxed) & reasonBit) != 0) {
+			return;
+		}
+		if ((loggedReasons.fetch_or(reasonBit, std::memory_order_relaxed) & reasonBit) != 0) {
+			return;
+		}
+
+		const auto externalModules = CollectExternalInputSinkModules(a_dispatcher);
+		logger::warn("[InputHook] safeguard engaged: reason={} original_head=0x{:X} substituted_empty_list={} external_sinks=[{}]",
+			ToString(a_reason),
+			reinterpret_cast<std::uintptr_t>(a_originalHead),
+			a_substitutedEmptyList ? "yes" : "no",
+			JoinModules(externalModules));
+	}
 }
 
 template <class ShaderType>
@@ -80,6 +249,7 @@ struct BSShader_LoadShaders
 
 		auto state = globals::state;
 		auto shaderCache = globals::shaderCache;
+
 		if (shaderCache->IsDiskCache() || shaderCache->IsDump()) {
 			if (shaderCache->IsDiskCache()) {
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
@@ -119,12 +289,15 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 {
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
+	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 
 	state->updateShader = true;
 	state->currentShader = shader;
 
 	state->currentVertexDescriptor = vertexDescriptor;
 	state->currentPixelDescriptor = pixelDescriptor;
+
+	globals::features::terrainBlending.OnBeginTechnique(shader, pixelDescriptor, callerRva);
 
 	state->permutationData.VertexShaderDescriptor = vertexDescriptor;
 	state->permutationData.PixelShaderDescriptor = pixelDescriptor;
@@ -173,21 +346,38 @@ namespace EffectExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
+
+			auto state = globals::state;
 			ExternalEmittance::UpdatePermutation(pass);
-			globals::state->permutationData.EffectRadius = pass->geometry->worldBound.radius;
+
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
+
+			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().shaderProperty.get())) {
+				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
+					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
+				}
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 }
 
-namespace SkyExtensions
+namespace LightingExtensions
 {
-	struct BSSkyShader_SetupGeometry
+	struct BSLightingShader_SetupGeometry
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
-			globals::state->UpdateSkyShaderPermutation(pass);
 			func(shader, pass, renderFlags);
+
+			auto state = globals::state;
+
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
+
+			if (auto userData = pass->geometry->GetUserData())
+				if (auto baseObject = userData->GetBaseObject())
+					if (baseObject->As<RE::TESObjectTREE>())
+						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -240,14 +430,18 @@ namespace WaterBlendHistory
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 		{
-			GET_INSTANCE_MEMBER(renderTargets, globals::game::shadowState)
+			if (const auto shadowState = globals::game::shadowState; shadowState && globals::game::renderer && globals::d3d::context) {
+				GET_INSTANCE_MEMBER(renderTargets, shadowState)
 
-			// Clear stale coverage left by discarded non-water pixels
-			const float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
-			const auto target = renderTargets[1];
-			globals::d3d::context->ClearRenderTargetView(
-				globals::game::renderer->GetRuntimeData().renderTargets[target].RTV,
-				clearColor);
+				const auto target = renderTargets[1];
+				if (target != RE::RENDER_TARGET::kNONE) {
+					const auto rtv = globals::game::renderer->GetRuntimeData().renderTargets[target].RTV;
+					if (rtv) {
+						constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
+						globals::d3d::context->ClearRenderTargetView(rtv, clearColor);
+					}
+				}
+			}
 
 			func(imageSpaceShader, shape, param);
 		}
@@ -260,19 +454,14 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
-		globals::state->Reset();
+		auto state = globals::state;
+		auto menu = globals::menu;
+		state->Reset();
+		menu->DrawOverlay();
 
-		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
-			This,
-			SyncInterval,
-			Flags,
-			[&](IDXGISwapChain* swapChain, UINT syncInterval, UINT presentFlags) {
-				return func(swapChain, syncInterval, presentFlags);
-			});
+		HRESULT retval = func(This, SyncInterval, Flags);
 
-		globals::features::screenshotFeature.ProcessCaptureRequest();
-
-		TracyD3D11Collect(globals::state->tracyCtx);
+		TracyD3D11Collect(state->tracyCtx);
 
 		return retval;
 	}
@@ -308,19 +497,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
-	DXGI_SWAP_CHAIN_DESC modifiedDesc = *pSwapChainDesc;
-
-	if (globals::features::hdrDisplay.loaded) {
-		modifiedDesc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-		modifiedDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-		if (modifiedDesc.BufferCount < 2)
-			modifiedDesc.BufferCount = 2;
-
-		HDRDisplay::wasExclusiveFullscreen = !modifiedDesc.Windowed;
-
-		logger::info("[HDR] Upgraded swap chain: R10G10B10A2_UNORM + FLIP_DISCARD");
-	}
-
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,
@@ -328,7 +504,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		&featureLevel,
 		1,
 		SDKVersion,
-		&modifiedDesc,
+		pSwapChainDesc,
 		ppSwapChain,
 		ppDevice,
 		pFeatureLevel,
@@ -339,7 +515,9 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
+	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	func(isCompute);
+	globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 	globals::state->Draw();
 }
 
@@ -390,16 +568,38 @@ struct BSShaderRenderTargets_Create
 	 *
 	 * Invokes the original function, then reinitializes global state and performs necessary setup for rendering targets.
 	 */
-	static inline Util::GameSetting iNumFocusShadow{ "Number of Focus Shadows (INI)",
-		"Controls the number of focus shadows.",
-		REL::Relocate<uintptr_t>(0, 0, 0x1ed6368), 4, 0, 4 };
-
 	static void thunk()
 	{
-		Util::SetGameSettingValue<std::int32_t>("iNumFocusShadow:Display", iNumFocusShadow, 0);
+		RecreateAndSetupFull();
+	}
+
+	static bool CanSetupRenderingResources()
+	{
+		return globals::game::renderer &&
+		       globals::state &&
+		       globals::deferred &&
+		       globals::d3d::device &&
+		       globals::d3d::context;
+	}
+
+	static bool RecreateAndSetupFull()
+	{
 		func();
 		globals::ReInit();
+		if (!CanSetupRenderingResources())
+			return false;
 		globals::state->Setup();
+		return true;
+	}
+
+	static bool RecreateAndSetupRenderTargetResources()
+	{
+		func();
+		globals::ReInit();
+		if (!CanSetupRenderingResources())
+			return false;
+		globals::state->SetupRenderTargetResources();
+		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -408,8 +608,7 @@ struct BSInputDeviceManager_PollInputDevices
 {
 	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
 	{
-		// Reflex sleep/cap runs here by design: this executes before rendering work for the frame.
-		// UpdateReflex() enforces "once per frame" internally in case this hook is hit multiple times.
+		// Run Reflex frame pacing as early as possible in the frame loop.
 		globals::features::upscaling.streamline.UpdateReflex();
 
 		bool blockedDevice = true;
@@ -453,11 +652,12 @@ struct BSInputDeviceManager_PollInputDevices
 		}
 
 		if (blockedDevice && menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
-			// During active flying preview, let input reach the game for movement/camera
+			// During active flying preview, let input reach the game for movement/camera.
 			if (menu->IsPreviewFlying()) {
 				func(a_dispatcher, a_events);
 				return;
 			}
+			LogInputHookSafeguardOnce(InputHookSafeguardReason::kSwallow, a_dispatcher, a_events ? *a_events : nullptr, true);
 			constexpr RE::InputEvent* const dummy[] = { nullptr };
 			func(a_dispatcher, dummy);
 			return;
@@ -470,6 +670,22 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+	bool RecreateRenderTargets()
+	{
+		if (!globals::game::renderer || !globals::state || !globals::d3d::device || !globals::d3d::context)
+			return false;
+
+		return BSShaderRenderTargets_Create::RecreateAndSetupFull();
+	}
+
+	bool RecreateRenderTargetsForVRRenderScale()
+	{
+		if (!globals::game::renderer || !globals::state || !globals::deferred || !globals::d3d::device || !globals::d3d::context)
+			return false;
+
+		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources();
+	}
+
 	struct BSGraphics_Renderer_Init_InitD3D
 	{
 		static void thunk()
@@ -482,9 +698,6 @@ namespace Hooks
 			globals::ReInit();
 
 			logger::info("Detouring virtual function tables");
-			// InstallSwapChainPresentHooks installs SwapChainPresentBottom (suppression) and OMSetBlendState first.
-			// IDXGISwapChain_Present is installed last so it sits at the top of the Detours chain and fires first.
-			HDRDisplay::InstallSwapChainPresentHooks(globals::d3d::swapChain);
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);
 
 			auto shaderCache = globals::shaderCache;
@@ -530,45 +743,22 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// Disable scene TAA for the duration of the menu interface render, then restore it.
-	struct MenuManagerDrawInterfaceStart
-	{
-		static void thunk(int64_t a1)
-		{
-			const bool temporal = Util::GetTemporal();
-			Util::SetTemporal(false);
-			func(a1);
-			Util::SetTemporal(temporal);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct CreateRenderTarget_Main
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			// Modify in place and restore so chained hooks keep a stable pointer.
-			const auto saved = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, *a_properties);
+			globals::state->ModifyRenderTarget(a_target, a_properties);
 			func(This, a_target, a_properties);
-			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	// kNORMAL_TAAMASK_SSRMASK and its swap need UAV bind because DeferredCompositeCS
-	// writes vanilla-encoded normals through UAV1 (`normals.UAV` in Deferred::DeferredPasses),
-	// which feeds the post-pass vanilla SSAO chain (ISSAORawAO -> ISSAOComposite). Without
-	// these hooks the UAV is null, the CS write is silently dropped, and vanilla SSAO reads
-	// uninitialized data and produces hard wedge-shaped shadow artifacts.
 	struct CreateRenderTarget_Normals
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			const auto saved = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, *a_properties);
+			globals::state->ModifyRenderTarget(a_target, a_properties);
 			func(This, a_target, a_properties);
-			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -577,10 +767,8 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			const auto saved = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, *a_properties);
+			globals::state->ModifyRenderTarget(a_target, a_properties);
 			func(This, a_target, a_properties);
-			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -589,10 +777,8 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			const auto saved = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, *a_properties);
+			globals::state->ModifyRenderTarget(a_target, a_properties);
 			func(This, a_target, a_properties);
-			*a_properties = saved;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -601,10 +787,10 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			const auto saved = *a_properties;
-			a_properties->copyable = true;
-			func(This, a_target, a_properties);
-			*a_properties = saved;
+			auto properties = *a_properties;
+			globals::state->ModifyRenderTarget(a_target, &properties);
+			properties.copyable = true;
+			func(This, a_target, &properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -613,10 +799,10 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			const auto saved = *a_properties;
-			a_properties->copyable = true;
-			func(This, a_target, a_properties);
-			*a_properties = saved;
+			auto properties = *a_properties;
+			globals::state->ModifyRenderTarget(a_target, &properties);
+			properties.copyable = true;
+			func(This, a_target, &properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -736,6 +922,166 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct TESObjectLAND_SetupMaterial
+	{
+		static bool thunk(RE::TESObjectLAND* land)
+		{
+			bool vanillaResult = func(land);
+
+			// TerrainHelper must see the vanilla material hash before TruePBR replaces land materials.
+			auto& terrainHelper = globals::features::terrainHelper;
+			if (vanillaResult && terrainHelper.loaded) {
+				terrainHelper.TESObjectLAND_SetupMaterial(land);
+			}
+
+			// setup material for PBR
+			auto& truePBR = globals::features::truePBR;
+			if (truePBR.loaded && truePBR.TESObjectLAND_SetupMaterial(land)) {
+				// if PBR, we are done
+				return true;
+			}
+
+			return vanillaResult;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSLightingShader_SetupMaterial
+	{
+		static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
+		{
+			// setup material for PBR
+			auto& truePBR = globals::features::truePBR;
+			if (truePBR.loaded && truePBR.BSLightingShader_SetupMaterial(shader, material)) {
+				// if PBR, we are done
+				return;
+			}
+
+			// vanilla
+			func(shader, material);
+
+			// terrain helper
+			auto& terrainHelper = globals::features::terrainHelper;
+			if (terrainHelper.loaded) {
+				terrainHelper.BSLightingShader_SetupMaterial(material);
+			}
+		};
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	{
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			return globals::features::lightLimitFix.loaded &&
+			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
+		}
+#if defined(_MSC_VER)
+		__except (1) {
+			// Fail open on transient invalid render-pass data to avoid crashing render-thread hooks.
+			return false;
+		}
+#endif
+	}
+
+	bool ShouldForceFullRateForAAVRSPassSafe(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest)
+	{
+#if defined(_MSC_VER)
+		__try {
+			return globals::features::upscaling.ShouldForceFullRateForAAVRSPass(a_pass, a_technique, a_alphaTest);
+		} __except (1) {
+			return false;
+		}
+#else
+		return globals::features::upscaling.ShouldForceFullRateForAAVRSPass(a_pass, a_technique, a_alphaTest);
+#endif
+	}
+
+	template <class Fn>
+	void RunRenderPassWithAAVRSFullRate(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, Fn&& a_fn)
+	{
+		const bool aaVrsFullRate = ShouldForceFullRateForAAVRSPassSafe(a_pass, a_technique, a_alphaTest);
+		Upscaling::ScopedAAVRSFullRateOverride aaVrsFullRateOverride(globals::features::upscaling, aaVrsFullRate);
+		a_fn();
+	}
+
+	// This is from 1.4.0 but absent in 1.4.6
+	void BSBatchRenderer_RenderPassImmediately1::thunk(
+		RE::BSRenderPass* a_pass,
+		uint32_t a_technique,
+		bool a_alphaTest,
+		uint32_t a_renderFlags)
+	{
+		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+			return;
+		}
+
+		// Original call from 1.4.0
+		RunRenderPassWithAAVRSFullRate(a_pass, a_technique, a_alphaTest, [&]() {
+			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		});
+	}
+
+	struct BSBatchRenderer_RenderPassImmediately2  // This is from 1.4.0 but absent in 1.4.6
+	{
+		static void thunk(RE::BSRenderPass* a_pass,
+			uint32_t a_technique,
+			bool a_alphaTest,
+			uint32_t a_renderFlags)
+		{
+			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				return;
+			}
+
+			if (globals::features::terrainBlending.loaded) {
+				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
+					return;
+				}
+				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
+					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				}
+			}
+
+			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		}
+
+		// This is from 1.4.0 but absent in 1.4.6
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSBatchRenderer_RenderPassImmediately3  // This is from 1.4.0 but absent in 1.4.6
+	{
+		static void thunk(RE::BSRenderPass* a_pass,
+			uint32_t a_technique,
+			bool a_alphaTest,
+			uint32_t a_renderFlags)
+		{
+			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				return;
+			}
+
+			// Original call
+			RunRenderPassWithAAVRSFullRate(a_pass, a_technique, a_alphaTest, [&]() {
+				func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			});
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
+	};
+
+	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	{
+		if (globals::features::interiorSun.loaded) {
+			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
+		}
+
+		RunRenderPassWithAAVRSFullRate(a_pass, a_technique, a_alphaTest, [&]() {
+			BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+		});
+	}
+
 #ifdef TRACY_ENABLE
 	struct Main_Update
 	{
@@ -851,91 +1197,6 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
-	{
-#if defined(_MSC_VER)
-		__try
-#endif
-		{
-			return globals::features::lightLimitFix.loaded &&
-			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
-		}
-#if defined(_MSC_VER)
-		__except (1)
-		{
-			return false;
-		}
-#endif
-	}
-
-	void BSBatchRenderer_RenderPassImmediately1::thunk(
-		RE::BSRenderPass* a_pass,
-		uint32_t a_technique,
-		bool a_alphaTest,
-		uint32_t a_renderFlags)
-	{
-		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
-			return;
-		}
-
-		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-	}
-
-	struct BSBatchRenderer_RenderPassImmediately2
-	{
-		static void thunk(
-			RE::BSRenderPass* a_pass,
-			uint32_t a_technique,
-			bool a_alphaTest,
-			uint32_t a_renderFlags)
-		{
-			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
-				return;
-			}
-
-			if (globals::features::terrainBlending.loaded) {
-				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
-					return;
-				}
-				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
-					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-				}
-			}
-
-			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-		}
-
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSBatchRenderer_RenderPassImmediately3
-	{
-		static void thunk(
-			RE::BSRenderPass* a_pass,
-			uint32_t a_technique,
-			bool a_alphaTest,
-			uint32_t a_renderFlags)
-		{
-			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
-				return;
-			}
-
-			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-		}
-
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
-	{
-		if (globals::features::interiorSun.loaded) {
-			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
-		}
-
-		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-	}
-
 	struct BSImageSpace_Init_IBLF
 	{
 		static void thunk(char* a1,
@@ -954,16 +1215,10 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	void Sky_UpdateColors::thunk(RE::Sky* sky, float a_delta)
-	{
-		func(sky, a_delta);
-		globals::features::skySync.OnSkyUpdateColors(sky);
-	}
-
 	/**
 	 * @brief Installs hooks, detours, and memory patches for graphics, input, and rendering subsystems.
 	 *
-	 * Sets up function hooks and virtual method overrides for shader management, input polling, rendering pipeline stages, compute shader dispatch, material setup, batch rendering, and window procedure handling. Applies memory patches to adjust render pass cache sizes and offsets. Installs additional update hooks for frame timing and Reflex frame pacing where applicable.
+	 * Sets up function hooks and virtual method overrides for shader management, input polling, rendering pipeline stages, compute shader dispatch, material setup, batch rendering, and window procedure handling. Applies memory patches to adjust render pass cache sizes and offsets. Installs additional update hooks for frame timing and Reflex marker integration when not in VR mode.
 	 */
 	void Install()
 	{
@@ -972,7 +1227,6 @@ namespace Hooks
 			stl::detour_thunk<BSImageSpace_Init_IBLF>(REL::RelocationID(100480, 107198));
 		}
 
-		// This input hook also drives per-frame Reflex update (see BSInputDeviceManager_PollInputDevices::thunk).
 		logger::info("Hooking BSInputDeviceManager::PollInputDevices");
 		stl::write_thunk_call<BSInputDeviceManager_PollInputDevices>(REL::RelocationID(67315, 68617).address() + REL::Relocate(0x7B, 0x7B, 0x81));
 
@@ -1027,17 +1281,17 @@ namespace Hooks
 		logger::info("Hooking TESWaterReflections::Update_Actor::GetLOSPosition for Sky Reflection Fix");
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
 
-		logger::info("Hooking Sky::UpdateColors");
-		stl::detour_thunk<Sky_UpdateColors>(REL::RelocationID(25686, 26233));
-
-		logger::info("Hooking MenuManager::DrawInterfaceStart for menu TAA");
-		stl::detour_thunk<MenuManagerDrawInterfaceStart>(REL::RelocationID(79947, 82084));
-
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
-		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
+		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
+
+		logger::info("Hooking TESObjectLAND");
+		stl::detour_thunk<TESObjectLAND_SetupMaterial>(REL::RelocationID(18368, 18791));
+
+		logger::info("Hooking BSLightingShader");
+		stl::write_vfunc<0x4, BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 
 		logger::info("Hooking BSBatchRenderer::RenderPassImmediately");
 		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately1>(

@@ -85,15 +85,6 @@ namespace FrameBuffer
 		return clamp(screenPositionDR, minValue, maxValue);
 	}
 
-	// Projects a world-space (camera-relative) point into NDC using the eye's CameraViewProj
-	// and returns the post-perspective z (NDC depth). Combine with SharedData::GetScreenDepth
-	// to get a linear view-space distance suitable for cascade-split comparisons.
-	float GetShadowDepth(float3 positionWS, uint eyeIndex)
-	{
-		float4 positionCS = mul(FrameBuffer::CameraViewProj[eyeIndex], float4(positionWS, 1));
-		return positionCS.z / positionCS.w;
-	}
-
 	/**
 	 * @brief Converts normalized screen UVs to dynamic-resolution UVs and clamps them.
 	 *
@@ -178,6 +169,14 @@ namespace FrameBuffer
 		float4 newPosition = float4(x, (float)is_position);
 		float4 uv = mul(CameraProj[a_eyeIndex], newPosition);
 		return (uv.xy / uv.w) * float2(0.5f, -0.5f) + 0.5f;
+	}
+
+	// Projects a world-space (camera-relative) point into NDC using the eye's
+	// CameraViewProj and returns post-perspective z.
+	float GetShadowDepth(float3 positionWS, uint eyeIndex)
+	{
+		float4 positionCS = mul(CameraViewProj[eyeIndex], float4(positionWS, 1));
+		return positionCS.z / positionCS.w;
 	}
 
 	/**

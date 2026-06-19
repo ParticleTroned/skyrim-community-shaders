@@ -1,9 +1,6 @@
 #pragma once
 
-#include <DirectXMath.h>
-
 #include "Buffer.h"
-#include "RE/B/BSShadowDirectionalLight.h"
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
@@ -21,16 +18,8 @@ public:
 		return &singleton;
 	}
 
-	struct alignas(16) DirectionalShadowLightData
-	{
-		float4x4 ShadowProj[2];
-		float4x4 InvShadowProj[2];
-		float2 EndSplitDistances;
-		float2 StartSplitDistances;
-	};
-	STATIC_ASSERT_ALIGNAS_16(DirectionalShadowLightData);
-
 	void SetupResources();
+	void CopyShadowData();
 	void ReflectionsPrepasses();
 	void EarlyPrepasses();
 	void StartDeferred();
@@ -45,13 +34,12 @@ public:
 
 	ID3D11ComputeShader* GetComputeMainComposite();
 	ID3D11ComputeShader* GetComputeMainCompositeInterior();
-
-	// Reads directional shadow parameters from BSShadowDirectionalLight and uploads
-	// to the structured buffer at t98 (DirectionalShadowLightData — cascade splits +
-	// world-to-shadow projections). Called during EarlyPrepasses once shadow maps
-	// have been rendered. Replaces the previous compute-shader dispatch that copied
-	// constant-buffer fields into a UAV.
-	void CopyShadowLightData();
+	ID3D11ComputeShader* GetComputeMainCompositeMetadata();
+	ID3D11ComputeShader* GetComputeMainCompositeMetadataInterior();
+	ID3D11PixelShader* GetPixelMainComposite();
+	ID3D11PixelShader* GetPixelMainCompositeInterior();
+	ID3D11VertexShader* GetPixelMainCompositeVS();
+	Texture2D* EnsureDeferredCompositeColorCopy(ID3D11Texture2D* a_source, ID3D11ShaderResourceView* a_sourceSRV);
 
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];
@@ -60,20 +48,43 @@ public:
 
 	ID3D11ComputeShader* mainCompositeCS = nullptr;
 	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
-
-	// Directional shadow structured buffer (t98): cascade splits and projections.
-	Buffer* directionalShadowLights = nullptr;
+	ID3D11ComputeShader* mainCompositeMetadataCS = nullptr;
+	ID3D11ComputeShader* mainCompositeMetadataInteriorCS = nullptr;
+	ID3D11PixelShader* mainCompositePS = nullptr;
+	ID3D11PixelShader* mainCompositeInteriorPS = nullptr;
+	ID3D11VertexShader* mainCompositeVS = nullptr;
+	ID3D11BlendState* compositeColorBlendState = nullptr;
+	ID3D11DepthStencilState* compositeColorDepthStencilState = nullptr;
+	ID3D11RasterizerState* compositeColorRasterizerState = nullptr;
+	Texture2D* deferredCompositeColorCopy = nullptr;
 
 	bool deferredPass = false;
 
 	ID3D11SamplerState* linearSampler = nullptr;
 	ID3D11SamplerState* pointSampler = nullptr;
 
-private:
-	template <typename T>
-	void SetShadowCascadeParameters(T& lightData, DirectionalShadowLightData& dd);
+	struct alignas(16) PerGeometry
+	{
+		float4 VPOSOffset;
+		float4 ShadowSampleParam;    // fPoissonRadiusScale / iShadowMapResolution in z and w
+		float4 EndSplitDistances;    // cascade end distances int xyz, cascade count int z
+		float4 StartSplitDistances;  // cascade start ditances int xyz, 4 int z
+		float4 FocusShadowFadeParam;
+		float4 DebugColor;
+		float4 PropertyColor;
+		float4 AlphaTestRef;
+		float4 ShadowLightParam;  // Falloff in x, ShadowDistance squared in z
+		DirectX::XMFLOAT4X3 FocusShadowMapProj[4];
+		// Since PerGeometry is passed between c++ and hlsl, can't have different defines due to strong typing
+		DirectX::XMFLOAT4X3 ShadowMapProj[2][3];
+		DirectX::XMFLOAT4X3 CameraViewProjInverse[2];
+	};
+	STATIC_ASSERT_ALIGNAS_16(PerGeometry);
 
-public:
+	ID3D11ComputeShader* copyShadowCS = nullptr;
+	Buffer* perShadow = nullptr;
+	ID3D11ShaderResourceView* shadowView = nullptr;
+
 	struct Hooks
 	{
 		struct Main_RenderShadowMaps

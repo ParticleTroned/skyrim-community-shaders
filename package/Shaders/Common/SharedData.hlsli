@@ -15,26 +15,20 @@ namespace SharedData
 		row_major float3x4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
-		float4 SunDirection;
-		float4 SunColor;
-		float4 MasserDirection;
-		float4 MasserColor;
-		float4 SecundaDirection;
-		float4 SecundaColor;
 		float4 CameraData;
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
 		uint FrameCountAlwaysActive;
-		bool InInterior;  // If the current cell is an interior
-		bool HasDirectionalShadows;
-		bool InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
-		bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
-		float MipBias;            // Offset to mip level for TAA sharpness
-		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -FLT_MAX when no water body found (VR only)
-		float RefractionScale;    // Global scale for ImageSpace refraction heat warp
-		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections
-		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights
+		bool InInterior;                // If the area lacks a directional shadow light e.g. the sun or moon
+		bool InMapMenu;                 // If the world/local map is open (note that the renderer is still deferred here)
+		bool HideSky;                   // HideSky flag in WorldSpace, e.g. Blackreach
+		float MipBias;                  // Offset to mip level for TAA sharpness
+		float WaterSystemHeight;        // TES::GetWaterHeight at eye-0 in camera-relative Z; -FLT_MAX when no water body found (VR only)
+		float RefractionScale;          // Global scale for ImageSpace refraction heat warp (1.0 = vanilla CS)
+		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections (1.0 = default)
+		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights (1.0 = default)
+		float2 PBRMetalReflectionScalePad0;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;
@@ -46,7 +40,9 @@ namespace SharedData
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
-		float4 HDRData;
+		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode; modes use 0=off, 1=feathered, 2=hard cutoff
+		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused; same 0/1/2 mode contract
+		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
 	};
 
 	struct GrassLightingSettings
@@ -71,7 +67,7 @@ namespace SharedData
 		bool EnableShadows;
 		bool ExtendShadows;
 		bool EnableParallaxWarpingFix;
-		bool pad0;
+		float1 pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -167,44 +163,42 @@ namespace SharedData
 		float SkinWetness;
 		float PuddleLayout;
 		float StoneDryingMultiplier;
-
 		float DirtDryingMultiplier;
 		float GrassDryingMultiplier;
 		uint EnableRaindropFx;
-		uint EnableSplashes;
 
+		uint EnableSplashes;
 		uint EnableRipples;
 		uint EnableModernWetReflection;
 		uint EnableLegacyWetReflection;
 		float WetIndirectSpecularScale;
-
 		float RaindropFxRange;
+
 		float RaindropGridSizeRcp;
 		float RaindropIntervalRcp;
 		float RaindropChance;
-
 		float SplashesLifetime;
+
 		float SplashesStrength;
 		float SplashesMinRadius;
 		float SplashesMaxRadius;
-
 		float RippleStrength;
+
 		float RippleRadius;
 		float RippleBreadth;
 		float RippleLifetimeRcp;
-
 		float PostRainPuddleWaterStrength;
+
 		float RaindropTransitionFalloff;
 		float WetDarkeningStrength;
 		float WetHighlightReduction;
-
 		uint EnableForwardReflectionBias;
 		uint EnableVanillaReflectionCompensation;
 		float WetFilmSpecularFloorScale;
 		float ShorePersistentDarkeningStrength;
-
 		uint PackedPostRainControl;
 		uint PackedRainReflectionControl;
+		// View-depth fade/cull range for dev-style wetness distance fading, in game units.
 		uint WetnessDistanceFadeRangePacked;
 		float RainContactWetnessScale;
 	};
@@ -212,15 +206,20 @@ namespace SharedData
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;
 
-		float4 PosOffset;   // xyz: cell origin in camera model space
-		uint4 ArrayOrigin;  // xyz: array origin
+		float3 PosOffset;  // cell origin in camera model space
+		uint FastSamplingMode;
+		uint3 ArrayOrigin;  // xyz: array origin
+		uint _pad0;
 		int4 ValidMargin;
+		uint3 ArrayDims;
+		float ProbeFieldSize;
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		uint2 pad0;
+		uint ProbeUpdateSliceStart;
+		uint ProbeUpdateSliceCount;
 	};
 
 	struct CloudShadowsSettings
@@ -238,7 +237,7 @@ namespace SharedData
 		float LODTerrainGamma;
 		float LODObjectGamma;
 		float LODObjectSnowGamma;
-		float pad0;
+		float WaterReflectionStrength;
 	};
 
 	struct HairSpecularSettings
@@ -329,63 +328,9 @@ namespace SharedData
 	struct TerrainBlendingSettings
 	{
 		uint Enabled;
-		uint3 _padding;
-	};
-
-	struct ExponentialHeightFogSettings
-	{
-		uint enabled;
-		uint useDynamicCubemaps;
-		float startDistance;
-		float fogHeight;
-		float fogHeightFalloff;
-		float fogDensity;
-		float directionalInscatteringMultiplier;
-		float directionalInscatteringAnisotropy;
-		float4 inscatteringTint;
-		float cubemapMipLevel;
-		float sunlightAttenuationAmount;
-		uint respectVanillaFogFade;
-		uint disableVanillaFog;
-		float4 fogInscatteringColor;
-		float originalFogColorAmount;
-		uint volumetricFogEnabled;
-		uint volumetricGridPixelSize;
-		uint volumetricGridSizeZ;
-		float volumetricFogDistance;
-		float volumetricFogStartDistance;
-		float volumetricFogNearFadeInDistance;
-		float volumetricFogExtinctionScale;
-		float4 volumetricFogAlbedo;
-		float4 volumetricFogEmissive;
-		float volumetricDirectionalScatteringIntensity;
-		float volumetricShadowBias;
-		float volumetricDepthDistributionScale;
-		float volumetricSkyLightingIntensity;
-		float volumetricFogScatteringDistribution;
-		float volumetricHistoryWeight;
-		uint volumetricHistoryMissSampleCount;
-		float volumetricSampleJitterMultiplier;
-		float volumetricUpsampleJitterMultiplier;
-		float volumetricLocalLightScatteringIntensity;
-		float2 pad0;
-	};
-
-	struct TruePBRSettings
-	{
-		float VertexAOStrength;
-		uint3 pad;
-	};
-
-	struct SkinData
-	{
-		float4 skinParams;
-		float4 skinParams2;
-		float4 skinDetailParams;
-		float4 sssParams;
-		float4 fuzzParams;
-		float4 physicalParams;
-		float4 wetParams;
+		float TerrainCullDistance;
+		float BlendStrength;
+		float pad0;
 	};
 
 	cbuffer FeatureData : register(b6)
@@ -406,9 +351,6 @@ namespace SharedData
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
-		ExponentialHeightFogSettings exponentialHeightFogSettings;
-		TruePBRSettings truePBRSettings;
-		SkinData skinData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

@@ -5,7 +5,9 @@
 #include <Tracy/TracyD3D11.hpp>
 
 #include <Buffer.h>
+#include <REX/W32/COMPTR.h>
 #include <atomic>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -57,7 +59,7 @@ public:
 	std::vector<std::pair<std::string, std::string>> shaderDefines{};  // data structure to parse string into; needed to avoid dangling pointers
 
 	float timer = 0;
-	float refractionScale = 0.5f;
+	float refractionScale = 0.5f;  // Default LLF heat warp strength
 	static constexpr float kDefaultPbrMetalReflectionScale = 1.0f;
 	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
 	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections
@@ -95,6 +97,7 @@ public:
 	void Debug();
 	void Reset();
 	void Setup();
+	void SetupRenderTargetResources();
 
 	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
 	void Save(ConfigMode a_configMode = ConfigMode::USER);
@@ -155,7 +158,7 @@ public:
      */
 	bool IsDeveloperMode();
 
-	void ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_targetIndex, RE::BSGraphics::RenderTargetProperties& a_properties);
+	void ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_targetIndex, RE::BSGraphics::RenderTargetProperties* a_properties);
 
 	void SetupResources();
 
@@ -204,10 +207,11 @@ public:
 		InWorld = 1 << 0,
 		IsReflections = 1 << 1,
 		IsBeastRace = 1 << 2,
-		GrassSphereNormal = 1 << 3,
-		IsSun = 1 << 4,
-		SuppressExternalEmittance = 1 << 5,
-		IsFemale = 1 << 6
+		EffectShadows = 1 << 3,
+		IsTree = 1 << 4,
+		GrassSphereNormal = 1 << 5,
+		IsFemale = 1 << 6,
+		SuppressExternalEmittance = 1 << 7
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t
@@ -223,6 +227,8 @@ public:
 	};
 
 	bool inWorld = false;
+	uint32_t lastWorldRenderFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t lastCompletedWorldRenderFrame = std::numeric_limits<uint32_t>::max();
 	bool pendingPostLoadRuntimeReset = false;
 	std::atomic_bool saveLoadSafeModeActive{ false };
 	std::atomic_uint32_t saveLoadSafeModeStartFrame{ 0 };
@@ -244,8 +250,6 @@ public:
 	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
-	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
-	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
 	{
@@ -254,46 +258,43 @@ public:
 		uint ExtraShaderDescriptor;
 		uint ExtraFeatureDescriptor;
 
-		float EffectRadius;
-		float3 pad0;
-
 		bool operator==(const PermutationCB& other) const
 		{
 			return PixelShaderDescriptor == other.PixelShaderDescriptor &&
 			       ExtraShaderDescriptor == other.ExtraShaderDescriptor &&
-			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor && EffectRadius == other.EffectRadius;
+			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor;
 		}
 	};
 	STATIC_ASSERT_ALIGNAS_16(PermutationCB);
 
 	ConstantBuffer* permutationCB = nullptr;
 
+#ifdef _MSC_VER
+#	pragma warning(push)
+#	pragma warning(disable: 4324)  // SharedDataCB intentionally uses aligned float4 members for shader-compatible math
+#endif
 	struct alignas(16) SharedDataCB
 	{
 		float4 WaterData[25];
 		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
-		float4 SunDirection;
-		float4 SunColor;
-		float4 MasserDirection;
-		float4 MasserColor;
-		float4 SecundaDirection;
-		float4 SecundaColor;
 		float4 CameraData;
 		float4 BufferDim;
 		float Timer;
 		uint FrameCount;
 		uint FrameCountAlwaysActive;
 		uint InInterior;
-		uint HasDirectionalShadows;
 		uint InMapMenu;
 		uint HideSky;
 		float MipBias;
-		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
-		float RefractionScale;
-		float PBRMetalReflectionScale;
-		float PBRMetalHighlightScale;
+		float WaterSystemHeight;        // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
+		float RefractionScale;          // matches HLSL SharedData::RefractionScale
+		float PBRMetalReflectionScale;  // matches HLSL SharedData::PBRMetalReflectionScale
+		float PBRMetalHighlightScale;   // matches HLSL SharedData::PBRMetalHighlightScale
+		float SharedDataPackingPad0;    // HLSL leaves one scalar before the float2 below
+		float PBRMetalReflectionScalePad0;
+		float PBRMetalReflectionScalePad1;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;
@@ -302,13 +303,25 @@ public:
 		float SSSHumanFemaleSaturation;
 		float SSSHumanFemaleBrightness;
 		float SSSHumanFemaleBaseSaturation;
+		float SharedDataPackingPad1;
+		float SharedDataPackingPad2;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
-		float4 HDRData;  // xyz + menu scene encoding in w — see HDRDisplay::GetSharedDataHDR
+		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode; modes use 0=off, 1=feathered, 2=hard cutoff
+		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused; same 0/1/2 mode contract
+		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
 	};
+#ifdef _MSC_VER
+#	pragma warning(pop)
+#endif
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
-
+	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VRFoveationData0) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VRFoveationModes) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VRFoveationCenterOffsets) % 16 == 0);
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 
@@ -323,9 +336,6 @@ public:
 	D3D_FEATURE_LEVEL featureLevel;
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
-
-	// Moon and Stars mod detection
-	inline static bool moonAndStarsLoaded = false;
 
 	void ClearDisabledFeatures();
 	bool SetFeatureDisabled(const std::string& featureName, bool isDisabled);
@@ -399,6 +409,8 @@ public:
 	}
 
 private:
-	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
+	ID3D11Device* setupResourcesDevice = nullptr;
+	ID3D11DeviceContext* setupResourcesContext = nullptr;
+	REX::W32::ComPtr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };

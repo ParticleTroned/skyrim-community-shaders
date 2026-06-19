@@ -21,13 +21,8 @@ namespace Hooks
 
 	// Draw through the shared RenderPassImmediately call-site owner without re-entering particle/Terrain Blending routing.
 	void DrawRenderPassImmediately(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t renderFlags);
-
-	struct Sky_UpdateColors
-	{
-		static void thunk(RE::Sky* sky, float a_delta);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	void Install();
 	void InstallEarlyHooks();
+	bool RecreateRenderTargets();
+	bool RecreateRenderTargetsForVRRenderScale();
 }

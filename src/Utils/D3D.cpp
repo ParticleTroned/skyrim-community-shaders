@@ -11,6 +11,60 @@
 
 namespace Util
 {
+	VRDepthLayout DetectVRDepthLayout(uint32_t a_depthWidth, int a_viewportWidthPerEye)
+	{
+		if (!a_depthWidth || a_viewportWidthPerEye <= 0)
+			return VRDepthLayout::Unknown;
+
+		const float ratio = static_cast<float>(a_depthWidth) / static_cast<float>(a_viewportWidthPerEye);
+		constexpr float kPerEyeMin = 0.85f;
+		constexpr float kPerEyeMax = 1.15f;
+		constexpr float kCombinedMin = 1.85f;
+		constexpr float kCombinedMax = 2.15f;
+
+		if (ratio >= kPerEyeMin && ratio <= kPerEyeMax)
+			return VRDepthLayout::PerEye;
+		if (ratio >= kCombinedMin && ratio <= kCombinedMax)
+			return VRDepthLayout::CombinedStereo;
+
+		// Fallback for slight runtime divergence from ideal ratios.
+		if (ratio > 1.5f)
+			return VRDepthLayout::CombinedStereo;
+		if (ratio > 0.5f)
+			return VRDepthLayout::PerEye;
+
+		return VRDepthLayout::Unknown;
+	}
+
+	bool TryGetDepthSrvDimensions(ID3D11ShaderResourceView* a_depthSrv, uint32_t& o_width, uint32_t& o_height)
+	{
+		o_width = 0;
+		o_height = 0;
+		if (!a_depthSrv)
+			return false;
+
+		ID3D11Resource* resource = nullptr;
+		a_depthSrv->GetResource(&resource);
+		if (!resource)
+			return false;
+
+		ID3D11Texture2D* texture = nullptr;
+		const HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+		resource->Release();
+		if (FAILED(hr) || !texture)
+			return false;
+
+		D3D11_TEXTURE2D_DESC desc{};
+		texture->GetDesc(&desc);
+		texture->Release();
+
+		if (desc.Width == 0 || desc.Height == 0)
+			return false;
+
+		o_width = desc.Width;
+		o_height = desc.Height;
+		return true;
+	}
 
 	ID3D11ShaderResourceView* GetCurrentSceneDepthSRV(bool prefer16bit)
 	{
@@ -20,10 +74,51 @@ namespace Util
 			if (srv)
 				return srv;
 		}
+
 		auto renderer = globals::game::renderer;
 		if (renderer)
 			return renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
 		return nullptr;
+	}
+
+	void BindFrameBufferConstantBuffersForCS(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return;
+
+		auto perFrame = globals::game::perFrame.get();
+		if (!perFrame || !*perFrame)
+			return;
+
+		ID3D11Buffer* buffers[1] = { *perFrame };
+		a_context->CSSetConstantBuffers(12, 1, buffers);
+
+		if (REL::Module::IsVR()) {
+			static REL::Relocation<ID3D11Buffer**> VRValues{ REL::Offset(0x3180688) };
+			ID3D11Buffer* vrBuffer = nullptr;
+			if (auto vrValues = VRValues.get())
+				vrBuffer = *vrValues;
+			if (vrBuffer)
+				a_context->CSSetConstantBuffers(13, 1, &vrBuffer);
+		}
+	}
+
+	void BindSharedDataConstantBuffersForCS(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context || !globals::state)
+			return;
+
+		ID3D11Buffer* buffers[2] = {
+			globals::state->sharedDataCB ? globals::state->sharedDataCB->CB() : nullptr,
+			globals::state->featureDataCB ? globals::state->featureDataCB->CB() : nullptr
+		};
+		a_context->CSSetConstantBuffers(5, 2, buffers);
+	}
+
+	void BindGlobalConstantBuffersForCS(ID3D11DeviceContext* a_context)
+	{
+		BindSharedDataConstantBuffersForCS(a_context);
+		BindFrameBufferConstantBuffersForCS(a_context);
 	}
 
 	ID3D11ShaderResourceView* GetSRVFromRTV(const ID3D11RenderTargetView* a_rtv)
@@ -218,29 +313,45 @@ namespace Util
 		}
 		if (shaderErrors)
 			logger::debug("Shader logs:\n{}", static_cast<char*>(shaderErrors->GetBufferPointer()));
+
+		auto nameCompiledShader = [&](ID3D11DeviceChild* shader) {
+			SetResourceName(
+				shader,
+				"Shader::%s::%s::%s",
+				str.c_str(),
+				ProgramType ? ProgramType : "",
+				Program ? Program : "");
+		};
+
 		if (!_stricmp(ProgramType, "ps_5_0")) {
 			ID3D11PixelShader* regShader;
 			DX::ThrowIfFailed(device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			nameCompiledShader(regShader);
 			return regShader;
 		} else if (!_stricmp(ProgramType, "vs_5_0")) {
 			ID3D11VertexShader* regShader;
 			DX::ThrowIfFailed(device->CreateVertexShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			nameCompiledShader(regShader);
 			return regShader;
 		} else if (!_stricmp(ProgramType, "hs_5_0")) {
 			ID3D11HullShader* regShader;
 			DX::ThrowIfFailed(device->CreateHullShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			nameCompiledShader(regShader);
 			return regShader;
 		} else if (!_stricmp(ProgramType, "ds_5_0")) {
 			ID3D11DomainShader* regShader;
 			DX::ThrowIfFailed(device->CreateDomainShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			nameCompiledShader(regShader);
 			return regShader;
 		} else if (!_stricmp(ProgramType, "cs_5_0")) {
 			ID3D11ComputeShader* regShader;
 			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			nameCompiledShader(regShader);
 			return regShader;
 		} else if (!_stricmp(ProgramType, "cs_4_0")) {
 			ID3D11ComputeShader* regShader;
 			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			nameCompiledShader(regShader);
 			return regShader;
 		}
 

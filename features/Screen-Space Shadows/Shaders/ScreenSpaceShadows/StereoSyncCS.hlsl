@@ -6,6 +6,7 @@
 // Based on: Shi, Billeter, Eisemann 2022, "Stereo-consistent screen-space
 // ambient occlusion" https://eprints.whiterose.ac.uk/id/eprint/187713/
 
+#include "Common/FoveatedMask.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
@@ -29,12 +30,18 @@ cbuffer StereoSyncCB : register(b1)
 {
 	float2 FrameDim;
 	float2 RcpFrameDim;
+	float2 DispatchBase;
+	float2 DispatchExtent;
+	float4 FoveatedData0;  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=enabled
+	float4 FoveatedCenterOffset;
 };
 
 static const float kDepthSigma = 0.01;          // Bilateral depth tolerance (NDC): surfaces within this range are considered the same and blended
-static const float kMaxBlend = 1.0;             // Maximum stereo blend weight; reduce below 1.0 to soften the cross-eye contribution
+static const float kMaxBlend = 0.5;             // Keep cross-eye darkening bounded; full-strength min() imports are too pop-prone in VR.
+static const float kBackCheckThreshold = 2.0;   // Round-trip reprojection tolerance in pixels. Failed matches are rejected.
 static const float kEdgeDepthThreshold = 0.05;  // NDC depth difference above which a pixel is considered a depth discontinuity and excluded from stereo sync
 static const int kEdgeMargin = 2;               // Neighbor offset (pixels) for destination edge + mask boundary check
+static const bool kUseUnjitteredStereoReprojection = true;
 
 // Depth-weighted 4-sample blur using a rotated Poisson disk.
 // Uses dtid hash for per-pixel rotation to break structured patterns.
@@ -79,7 +86,7 @@ float BlurShadow(int2 dtid, float centerDepth)
 	return weight > 0.0 ? shadow / weight : SrcShadowTexture[dtid];
 }
 
-// Samples four depth neighbors in a cross pattern (±offset pixels) around center,
+// Samples four depth neighbors in a cross pattern (+-offset pixels) around center,
 // clamped to eyeIndex's half of the packed stereo buffer to avoid seam contamination.
 float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 {
@@ -90,13 +97,40 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 		SrcDepthTexture[Stereo::ClampToEyeBounds(center + int2(0, -offset), eyeIndex, FrameDim)]);
 }
 
-[numthreads(8, 8, 1)] void main(uint2 dtid : SV_DispatchThreadID) {
+float ApplyFoveatedOutputFade(float shadow, float centerWeight)
+{
+	return lerp(1.0, shadow, centerWeight);
+}
+
+[numthreads(8, 8, 1)] void main(uint2 localID : SV_DispatchThreadID) {
+	if (any(localID >= uint2(DispatchExtent)))
+		return;
+
+	uint2 dtid = localID + uint2(DispatchBase);
 	if (any(dtid >= uint2(FrameDim)))
 		return;
 
 	float2 uv = (dtid + 0.5) * RcpFrameDim;
 
 	uint eyeIndex = Stereo::GetEyeIndexFromTexCoord(uv);
+
+	float centerWeight = 1.0;
+	if (FoveatedData0.w > 0.5) {
+		const float eyeWidth = max(FrameDim.x * 0.5, 1.0);
+		float2 eyePx = float2(dtid);
+		if (eyeIndex == 1)
+			eyePx.x -= eyeWidth;
+
+		const float2 eyeUV = saturate((eyePx + 0.5) / float2(eyeWidth, FrameDim.y));
+		centerWeight = FoveatedComputeCenterBlendWeight(
+			eyeUV,
+			FoveatedData0.x,
+			FoveatedData0.y,
+			FoveatedData0.z,
+			FoveatedCenterOffset.xy);
+		if (centerWeight <= 0.0)
+			return;
+	}
 
 	float depth = SrcDepthTexture[dtid];
 
@@ -128,10 +162,10 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 	// Only reached by world pixels that will attempt stereo sync.
 	float myShadow = BlurShadow(dtid, depth);
 
-	Stereo::StereoBilateralResult r = Stereo::ReprojectToOtherEye(uv, depth, eyeIndex, FrameDim);
+	Stereo::StereoBilateralResult r = Stereo::ReprojectToOtherEye(uv, depth, eyeIndex, FrameDim, kUseUnjitteredStereoReprojection);
 
 	if (!r.valid) {
-		OutShadowTexture[dtid] = myShadow;
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}
 
@@ -139,7 +173,7 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 
 	// Skip if other eye sees mask, sky, or first-person geometry
 	if (otherDepth < 1e-5 || otherDepth >= 1.0 || SharedData::GetScreenDepth(otherDepth) < VR_FP_Z) {
-		OutShadowTexture[dtid] = myShadow;
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}
 
@@ -151,19 +185,22 @@ float4 SampleCrossDepths(int2 center, int offset, uint eyeIndex)
 	// Reusing the same four neighbor reads covers both purposes at no extra cost.
 	float4 otherNeighbors = SampleCrossDepths(r.otherPx, kEdgeMargin, 1 - eyeIndex);
 	if (any(otherNeighbors < 1e-5) || Stereo::MaxDepthDiff(otherDepth, otherNeighbors) > kEdgeDepthThreshold) {
-		OutShadowTexture[dtid] = myShadow;
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
 		return;
 	}
 
-	// Source + destination edge detection
-	Stereo::FinalizeStereoBlend(r, uv, depth, otherDepth, eyeIndex, FrameDim, kDepthSigma, kMaxBlend, 0.0);
+	Stereo::FinalizeStereoBlend(r, uv, depth, otherDepth, eyeIndex, FrameDim, kDepthSigma, kMaxBlend, kBackCheckThreshold, kUseUnjitteredStereoReprojection);
+	if (!r.backCheckPassed) {
+		OutShadowTexture[dtid] = ApplyFoveatedOutputFade(myShadow, centerWeight);
+		return;
+	}
 
 	float otherShadow = SrcShadowTexture[r.otherPx];
 
 	// Use min (darkest) when depths agree: if either eye detected an
 	// occluder, that shadow should be visible.
 	float combined = min(myShadow, otherShadow);
-	OutShadowTexture[dtid] = lerp(myShadow, combined, r.blendWeight);
+	OutShadowTexture[dtid] = ApplyFoveatedOutputFade(lerp(myShadow, combined, r.blendWeight), centerWeight);
 }
 
 #endif  // VR

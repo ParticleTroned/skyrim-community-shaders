@@ -157,7 +157,7 @@ void InsertContactShadowCandidate(
 		bool isVisible = false;
 		bool reachedVisibleLightLimit = false;
 
-		float3 positionVS = FrameBuffer::WorldToView(light.positionWS.xyz, true, 0);
+		float3 positionVS = FrameBuffer::WorldToView(light.positionWS.xyz, true);
 
 		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
 		{

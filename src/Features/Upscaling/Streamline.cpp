@@ -283,8 +283,7 @@ void Streamline::LoadInterposer()
 		featureReflex = false;
 		featurePCL = false;
 		reflexSupportedOnCurrentAdapter = false;
-		dlssOptionsCache[0] = {};
-		dlssOptionsCache[1] = {};
+		dlssOptionsCache = {};
 		reflexOptionsCache = {};
 		lastReflexSleepFrame = UINT32_MAX;
 		logger::info("[Streamline] Successfully initialized Streamline");
@@ -464,7 +463,7 @@ bool Streamline::EnsureFrameToken()
 	return frameToken != nullptr;
 }
 
-bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex)
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 {
 	if (!globals::features::upscaling.streamline.initialized)
 		return false;
@@ -482,15 +481,15 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.cameraNear = *globals::game::cameraNear;
 	slConstants.cameraFar = *globals::game::cameraFar;
 
-	auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex).Transpose();
-	auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex).Transpose();
+	auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+	auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered().Transpose();
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
 	slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust();
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
@@ -509,7 +508,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.motionVectorsJittered = sl::Boolean::eFalse;
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
-		logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
+		logger::error("[Streamline] Could not set constants");
 		return false;
 	}
 
@@ -540,7 +539,7 @@ bool Streamline::IsRTXAndBelow40Series(IDXGIAdapter* a_adapter)
 	return false;
 }
 
-bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR)
+bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t width, uint32_t height, bool colorBuffersHDR)
 {
 	if (!slDLSSSetOptions)
 		return false;
@@ -548,9 +547,8 @@ bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 	auto& settings = globals::features::upscaling.settings;
 	const uint32_t qualityMode = std::min<uint32_t>(settings.qualityMode, Upscaling::kQualityModeMaxIndex);
 	const uint32_t dlssPreset = std::min<uint32_t>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
-	const uint32_t cacheIndex = 0u;
 	const bool useLegacyProfile = isRTXBelow40series;
-	auto& cache = dlssOptionsCache[cacheIndex];
+	auto& cache = dlssOptionsCache;
 	const uint32_t viewportKey = static_cast<uint32_t>(p_viewport);
 	if (cache.valid &&
 		cache.viewport == viewportKey &&
@@ -622,9 +620,8 @@ bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 	dlssOptions.sharpness = 0.0f;
 
 	if (SL_FAILED(result, slDLSSSetOptions(p_viewport, dlssOptions))) {
-		logger::critical("[Streamline] Could not enable DLSS for viewport {} eye {}: {}",
+		logger::critical("[Streamline] Could not enable DLSS for viewport {}: {}",
 			static_cast<uint32_t>(p_viewport),
-			eyeIndex,
 			magic_enum::enum_name(result));
 		cache.valid = false;
 		return false;
@@ -643,8 +640,7 @@ bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 
 void Streamline::InvalidateDLSSOptionsCache()
 {
-	dlssOptionsCache[0] = {};
-	dlssOptionsCache[1] = {};
+	dlssOptionsCache = {};
 }
 
 void Streamline::ResetFrameTracking()
@@ -653,7 +649,7 @@ void Streamline::ResetFrameTracking()
 	frameChecker = {};
 }
 
-bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
+bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth)
@@ -673,9 +669,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 
-	if (!CheckFrameConstants(vp, eyeIndex))
+	if (!CheckFrameConstants(vp))
 		return false;
-	if (!SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR))
+	if (!SetDLSSOptions(vp, outputWidth, extentOut.height, colorBuffersHDR))
 		return false;
 
 	const bool emitPCLMarkers =
@@ -783,7 +779,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
 	sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
 
-	const bool evaluated = EvaluateDLSS(viewport, 0,
+	const bool evaluated = EvaluateDLSS(viewport,
 		a_upscalingTexture, colorOut,
 		depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 		extentIn, extentOut, (uint)screenSize.x);
@@ -895,25 +891,23 @@ void Streamline::DestroyDLSSResources()
 	if (auto context = globals::d3d::context)
 		FlushAndWaitForD3D11Idle(context, "DLSS resource free");
 
-	const auto freeViewport = [&](sl::ViewportHandle a_viewport, uint32_t a_eyeIndex) {
+	const auto freeViewport = [&](sl::ViewportHandle a_viewport) {
 		const sl::Result optionsResult = slDLSSSetOptions(a_viewport, dlssOptions);
 		if (optionsResult != sl::Result::eOk) {
-			logger::debug("[Streamline] DLSS off failed for viewport {} eye {}: {}",
+			logger::debug("[Streamline] DLSS off failed for viewport {}: {}",
 				static_cast<uint32_t>(a_viewport),
-				a_eyeIndex,
 				magic_enum::enum_name(optionsResult));
 		}
 
 		const sl::Result freeResult = slFreeResources(sl::kFeatureDLSS, a_viewport);
 		if (freeResult != sl::Result::eOk) {
-			logger::debug("[Streamline] DLSS resource free failed for viewport {} eye {}: {}",
+			logger::debug("[Streamline] DLSS resource free failed for viewport {}: {}",
 				static_cast<uint32_t>(a_viewport),
-				a_eyeIndex,
 				magic_enum::enum_name(freeResult));
 		}
 	};
 
-	freeViewport(viewport, 0);
+	freeViewport(viewport);
 
 	InvalidateDLSSOptionsCache();
 	ResetFrameTracking();

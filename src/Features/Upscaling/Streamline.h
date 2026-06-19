@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <vector>
 
 #define NV_WINDOWS
 
@@ -38,7 +39,6 @@ public:
 	bool reflexSupportedOnCurrentAdapter = false;
 
 	sl::ViewportHandle viewport{ 0 };
-	sl::ViewportHandle viewportRight{ 1 };
 	static constexpr uint32_t MAX_RESOLUTION = 8192;
 	HMODULE interposer = NULL;
 
@@ -86,7 +86,7 @@ public:
 		bool isHDR = false;
 		bool useLegacyProfile = false;
 	};
-	DLSSOptionsCache dlssOptionsCache[2]{};
+	DLSSOptionsCache dlssOptionsCache{};
 
 	struct ReflexOptionsCache
 	{
@@ -99,7 +99,7 @@ public:
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
 
 	// Helper: Execute DLSS for a single viewport with given resources
-	bool EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
+	bool EvaluateDLSS(sl::ViewportHandle vp,
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth);
@@ -114,11 +114,11 @@ public:
 	void PostDevice();
 
 	bool EnsureFrameToken();
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0);
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport);
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
 
-	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR);
+	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t width, uint32_t height, bool colorBuffersHDR);
 	void InvalidateDLSSOptionsCache();
 	void ResetFrameTracking();
 

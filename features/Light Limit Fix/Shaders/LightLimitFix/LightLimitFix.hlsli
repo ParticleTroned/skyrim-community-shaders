@@ -133,14 +133,14 @@ namespace LightLimitFix
 		return screenPosition;
 	}
 
-	float ContactShadows(float3 viewPosition, float2 screenUV, float3 lightPositionWS, float screenNoise, float2 screenDim, bool isParticle, uint eyeIndex)
+	float ContactShadows(float3 viewPosition, float2 screenUV, float3 lightPositionWS, float screenNoise, float2 screenDim, bool isParticle)
 	{
 		const float fadeDistance = GetContactShadowFadeDistance(isParticle);
 		const float viewDistance = abs(viewPosition.z);
 		if (viewDistance >= fadeDistance)
 			return 1.0;
 
-		float3 lightPositionVS = FrameBuffer::WorldToView(lightPositionWS, true, eyeIndex);
+		float3 lightPositionVS = FrameBuffer::WorldToView(lightPositionWS, true);
 		float3 rayVS = lightPositionVS - viewPosition;
 		float rayLength = length(rayVS);
 		if (rayLength <= 1e-3)
@@ -157,7 +157,7 @@ namespace LightLimitFix
 		if (endVS.z <= SharedData::CameraData.y)
 			return 1.0;
 
-		float2 endUV = FrameBuffer::ViewToUV(endVS, true, eyeIndex);
+		float2 endUV = FrameBuffer::ViewToUV(endVS, true);
 
 		float2 rayPixels = (endUV - screenUV) * screenDim;
 		float rayPixelsLength = length(rayPixels);
@@ -178,7 +178,7 @@ namespace LightLimitFix
 			if (!IsSaturated(rayUV))
 				break;
 
-			float sceneDepth = SharedData::GetScreenDepth(rayUV, eyeIndex);
+			float sceneDepth = SharedData::GetScreenDepth(rayUV);
 			float depthDelta = raySampleVS.z - sceneDepth;
 			if (sceneDepth > minValidSceneDepth) {
 				contactShadow = max(contactShadow, saturate(depthDelta * depthDeltaMult.x) - saturate(depthDelta * depthDeltaMult.y));

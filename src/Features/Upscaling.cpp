@@ -175,6 +175,7 @@ namespace
 	std::atomic_uint32_t g_vrBFadeCarrierScrubApplyCount{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticFrame{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticCount{ 0 };
+	std::atomic_uint32_t g_vrBFadeCarrierScrubNoConsumerFrame{ 0 };
 	std::atomic_uint32_t g_vrBFadeCleanKTotalFrame{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
@@ -185,6 +186,7 @@ namespace
 	constexpr uint32_t kVRBFadeCarrierScrubWindowFrames = 180;
 	constexpr uint32_t kVRBFadeCarrierScrubMaxSeeds = 8;
 	constexpr uint32_t kVRBFadeCarrierScrubDiagnosticMaxLogsPerFrame = 16;
+	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeCarrierScrubTarget = RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2;
 
 	bool UsesVRRenderScalePostLoadSettle(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -6435,7 +6437,8 @@ namespace
 		const char* a_action,
 		const char* a_source,
 		const char* a_reason,
-		const VRBFadeCarrierRegionStats* a_stats = nullptr)
+		const VRBFadeCarrierRegionStats* a_stats = nullptr,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target = kVRBFadeCarrierScrubTarget)
 	{
 		const auto* state = globals::state;
 		const uint32_t frame = state ? std::max(state->frameCount, 1u) : 0u;
@@ -6452,9 +6455,10 @@ namespace
 			"VRBFadeCarrierScrubGate";
 		if (a_stats && a_stats->valid) {
 			logger::debug(
-				"[{}] frame={} target=kIMAGESPACE_TEMP_COPY action={} source={} reason={} desc={}x{} fmt={} block={} topLeftDark={:.3f} controlDark={:.3f} topHash={} controlHash={} seeds={}/{} windowEnd={}",
+				"[{}] frame={} target={} action={} source={} reason={} desc={}x{} fmt={} block={} topLeftDark={:.3f} controlDark={:.3f} topHash={} controlHash={} seeds={}/{} windowEnd={}",
 				marker,
 				frame,
+				GetVRMenuCompositionTargetName(a_target),
 				DiagnosticText(a_action, "-"),
 				DiagnosticText(a_source, "-"),
 				DiagnosticText(a_reason, "-"),
@@ -6473,9 +6477,10 @@ namespace
 		}
 
 		logger::debug(
-			"[{}] frame={} target=kIMAGESPACE_TEMP_COPY action={} source={} reason={} seeds={}/{} windowEnd={}",
+			"[{}] frame={} target={} action={} source={} reason={} seeds={}/{} windowEnd={}",
 			marker,
 			frame,
+			GetVRMenuCompositionTargetName(a_target),
 			DiagnosticText(a_action, "-"),
 			DiagnosticText(a_source, "-"),
 			DiagnosticText(a_reason, "-"),
@@ -6606,7 +6611,7 @@ namespace
 		return true;
 	}
 
-	void CaptureVRBFadeCleanKTotalForStage1c(Upscaling& a_upscaling, const char* a_reason)
+	void CaptureVRBFadeCleanKTotalForCarrierScrub(Upscaling& a_upscaling, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
 			return;
@@ -6641,7 +6646,7 @@ namespace
 		LogVRBFadeCarrierScrub("capture", "kTOTAL", a_reason);
 	}
 
-	bool IsVRBFadeImageSpaceTempCopyConsumerDraw(ID3D11DeviceContext* a_context)
+	bool IsVRBFadeCarrierScrubTargetConsumerDraw(ID3D11DeviceContext* a_context)
 	{
 		if (!a_context)
 			return false;
@@ -6672,14 +6677,14 @@ namespace
 			VRMenuCompositionTargetMatch source{};
 			if (srv &&
 			    TryResolveVRMenuCompositionView(srv, source) &&
-			    source.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY) {
+			    source.target == kVRBFadeCarrierScrubTarget) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	bool CopyVRBFadeCleanKTotalSnapshotToImageSpaceTempCopy(ID3D11DeviceContext* a_context, ID3D11Texture2D* a_destination)
+	bool CopyVRBFadeCleanKTotalSnapshotToCarrier(ID3D11DeviceContext* a_context, ID3D11Texture2D* a_destination)
 	{
 		if (!a_context || !a_destination || !g_vrBFadeCleanKTotalSnapshot)
 			return false;
@@ -6699,7 +6704,7 @@ namespace
 			VRMenuCompositionTargetMatch source{};
 			if (psSRVs[i] &&
 			    TryResolveVRMenuCompositionView(psSRVs[i], source) &&
-			    source.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY) {
+			    source.target == kVRBFadeCarrierScrubTarget) {
 				unboundSRVs[i] = nullptr;
 				sourceWasBound = true;
 			}
@@ -6713,13 +6718,25 @@ namespace
 		return true;
 	}
 
-	bool ApplyVRBFadeImageSpaceTempCopyScrubStage1cBeforeConsumerDraw(Upscaling& a_upscaling, ID3D11DeviceContext* a_context, const char* a_reason)
+	void LogVRBFadeCarrierNoConsumerOncePerFrame(const char* a_reason)
+	{
+		const auto* state = globals::state;
+		const uint32_t frame = state ? std::max(state->frameCount, 1u) : 0u;
+		if (g_vrBFadeCarrierScrubNoConsumerFrame.exchange(frame, std::memory_order_acq_rel) == frame)
+			return;
+
+		LogVRBFadeCarrierScrub("skip", "none", a_reason);
+	}
+
+	bool ApplyVRBFadeCarrierScrubStage2BeforeConsumerDraw(Upscaling& a_upscaling, ID3D11DeviceContext* a_context, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
 			return false;
 
-		if (!IsVRBFadeImageSpaceTempCopyConsumerDraw(a_context))
+		if (!IsVRBFadeCarrierScrubTargetConsumerDraw(a_context)) {
+			LogVRBFadeCarrierNoConsumerOncePerFrame("no-copy2-consumer");
 			return false;
+		}
 
 		auto* state = globals::state;
 		auto* renderer = globals::game::renderer;
@@ -6734,9 +6751,9 @@ namespace
 		}
 
 		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
-		auto& destination = renderTargets[RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY];
+		auto& destination = renderTargets[kVRBFadeCarrierScrubTarget];
 		if (!destination.texture) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "missing-temp-copy");
+			LogVRBFadeCarrierScrub("skip", "kTOTAL", "missing-carrier");
 			return false;
 		}
 		if (destination.texture == g_vrBFadeCleanKTotalSnapshot.get()) {
@@ -6761,7 +6778,7 @@ namespace
 			return false;
 		}
 
-		if (!CopyVRBFadeCleanKTotalSnapshotToImageSpaceTempCopy(a_context, destination.texture)) {
+		if (!CopyVRBFadeCleanKTotalSnapshotToCarrier(a_context, destination.texture)) {
 			LogVRBFadeCarrierScrub("skip", "kTOTAL", "source-unbind-failed");
 			return false;
 		}
@@ -18586,7 +18603,7 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 		a_startIndexLocation,
 		a_baseVertexLocation,
 		a_startInstanceLocation);
-	ApplyVRBFadeImageSpaceTempCopyScrubStage1cBeforeConsumerDraw(
+	ApplyVRBFadeCarrierScrubStage2BeforeConsumerDraw(
 		globals::features::upscaling,
 		a_context,
 		a_operation);
@@ -19929,7 +19946,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			false);
 		upscaling.CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
 		ObserveVRBFadeRenderScaleLoadState(upscaling, "main-post-entry");
-		CaptureVRBFadeCleanKTotalForStage1c(upscaling, "main-post-entry");
+		CaptureVRBFadeCleanKTotalForCarrierScrub(upscaling, "main-post-entry");
 	}
 	upscaling.ApplyAAVRSVisualization();
 	upscaling.DisableAAVRSState();

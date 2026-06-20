@@ -1599,13 +1599,13 @@ namespace Util
 		va_end(args);                               \
 	}
 
-#define UTIL_TEXT_WRAPPED(Name, ColorFn)                    \
-	void Name(const char* fmt, ...)                         \
-	{                                                       \
-		va_list args;                                       \
-		va_start(args, fmt);                                \
-		ColoredTextWrappedV(Colors::ColorFn(), fmt, args);  \
-		va_end(args);                                       \
+#define UTIL_TEXT_WRAPPED(Name, ColorFn)                   \
+	void Name(const char* fmt, ...)                        \
+	{                                                      \
+		va_list args;                                      \
+		va_start(args, fmt);                               \
+		ColoredTextWrappedV(Colors::ColorFn(), fmt, args); \
+		va_end(args);                                      \
 	}
 
 		UTIL_TEXT(Warning, GetWarning)

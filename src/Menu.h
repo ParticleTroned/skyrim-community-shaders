@@ -211,6 +211,7 @@ public:
 		UIIcon playMode;              // Play mode preview icon (CS editor)
 
 		// Social media/external link icons
+		UIIcon faultier;
 		UIIcon discord;
 
 		// Category icons

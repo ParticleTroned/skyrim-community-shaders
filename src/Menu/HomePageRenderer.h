@@ -4,6 +4,10 @@
 class HomePageRenderer
 {
 public:
+	// Social links
+	static constexpr const char* DISCORD_URL = "https://discord.gg/utSWStYTx2";
+	static constexpr const char* GITHUB_URL = "https://github.com/ParticleTroned/skyrim-community-shaders/tree/cs-1.7-PL-SE";
+
 	// Font scales
 	static constexpr float TITLE_FONT_SCALE = 2.0f;
 	static constexpr float TITLE_FORK_FONT_SCALE = 1.85f;
@@ -20,11 +24,17 @@ public:
 	// Logo watermark height (in pixels)
 	static constexpr float LOGO_WATERMARK_HEIGHT = 260.0f;
 
-	// Banner scaling constants.
-	static constexpr float DISCORD_BANNER_TARGET_WIDTH_RATIO = 0.85f;  // 85% of window width
-	static constexpr float DISCORD_BANNER_MIN_WIDTH = 150.0f;
-	static constexpr float DISCORD_BANNER_MAX_WIDTH = 200.0f;
-	static constexpr float DISCORD_BANNER_PADDING_MARGIN = 40.0f;
+	// Home-page artwork and link widget layout.
+	static constexpr float FAULTIER_TARGET_WIDTH_RATIO = 0.24f;
+	static constexpr float FAULTIER_MIN_WIDTH = 96.0f;
+	static constexpr float FAULTIER_MAX_WIDTH = 180.0f;
+	static constexpr float FAULTIER_MAX_HEIGHT = 320.0f;
+	static constexpr float HOME_LINK_BUTTON_HEIGHT = 42.0f;
+	static constexpr float HOME_LINK_BUTTON_SPACING = 16.0f;
+	static constexpr float HOME_LINK_GITHUB_BUTTON_WIDTH = 140.0f;
+	static constexpr float HOME_LINK_DISCORD_BUTTON_MIN_WIDTH = 120.0f;
+	static constexpr float HOME_LINK_DISCORD_BUTTON_MAX_WIDTH = 220.0f;
+	static constexpr float HOME_LINK_ROW_PADDING_MARGIN = 40.0f;
 
 	static void RenderHomePage();
 

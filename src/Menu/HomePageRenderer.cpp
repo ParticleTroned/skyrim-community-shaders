@@ -172,41 +172,82 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	ImGui::Spacing();
 
-	// Vertical padding between intro text and the Discord banner.
+	// Vertical padding between intro text and the social artwork.
 	ImGui::Dummy(ImVec2(0.0f, 25.0f * scale));
 
-	// Discord banner - centered with proper error checking
-	bool discordIconAvailable = false;
+	// Faultier artwork - centered with proper error checking.
+	bool faultierAvailable = false;
+	if (menu && menu->uiIcons.faultier.texture != nullptr &&
+		menu->uiIcons.faultier.size.x > 0 && menu->uiIcons.faultier.size.y > 0) {
+		faultierAvailable = true;
+	}
 
-	// Check if menu exists, has icons, and Discord icon is loaded
+	if (faultierAvailable) {
+		const ImVec2 originalSize(menu->uiIcons.faultier.size.x, menu->uiIcons.faultier.size.y);
+		const float aspectRatio = originalSize.y / originalSize.x;
+		const float maxAllowedWidth = std::max(1.0f, windowSize.x - HOME_LINK_ROW_PADDING_MARGIN * scale);
+		const float upperWidth = std::min(FAULTIER_MAX_WIDTH * scale, maxAllowedWidth);
+		const float lowerWidth = std::min(FAULTIER_MIN_WIDTH * scale, upperWidth);
+		float targetWidth = std::clamp(windowSize.x * FAULTIER_TARGET_WIDTH_RATIO, lowerWidth, upperWidth);
+		float targetHeight = targetWidth * aspectRatio;
+		const float maxHeight = FAULTIER_MAX_HEIGHT * scale;
+		if (targetHeight > maxHeight) {
+			targetHeight = maxHeight;
+			targetWidth = targetHeight / aspectRatio;
+		}
+
+		const ImVec2 imageSize(targetWidth, targetHeight);
+		ImGui::SetCursorPosX(CenteredTextX(windowSize.x, imageSize.x));
+		ImGui::Image(menu->uiIcons.faultier.texture, imageSize);
+	} else {
+		const float dummyWidth = FAULTIER_MAX_WIDTH * scale;
+		const float dummyHeight = FAULTIER_MAX_HEIGHT * scale;
+		ImGui::SetCursorPosX(CenteredTextX(windowSize.x, dummyWidth));
+		ImGui::Dummy(ImVec2(dummyWidth, dummyHeight));
+	}
+
+	ImGui::Spacing();
+
+	// Discord + GitHub actions - centered beneath Faultier.
+	bool discordIconAvailable = false;
 	if (menu && menu->uiIcons.discord.texture != nullptr &&
 		menu->uiIcons.discord.size.x > 0 && menu->uiIcons.discord.size.y > 0) {
 		discordIconAvailable = true;
 	}
 
+	const float linkButtonHeight = HOME_LINK_BUTTON_HEIGHT * scale;
+	const float linkButtonSpacing = HOME_LINK_BUTTON_SPACING * scale;
+	const float githubButtonWidth = HOME_LINK_GITHUB_BUTTON_WIDTH * scale;
+	ImVec2 discordButtonSize(githubButtonWidth, linkButtonHeight);
 	if (discordIconAvailable) {
-		// Calculate scaled icon size based on window width, with min/max constraints
-		ImVec2 originalSize = ImVec2(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
+		const ImVec2 originalSize(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
+		const float aspectRatio = originalSize.x / originalSize.y;
+		discordButtonSize.x = std::clamp(
+			linkButtonHeight * aspectRatio,
+			HOME_LINK_DISCORD_BUTTON_MIN_WIDTH * scale,
+			HOME_LINK_DISCORD_BUTTON_MAX_WIDTH * scale);
+	}
 
-		// Compute width based on window size with constraints and padding (handles very small windows)
-		float ratioWidth = windowSize.x * DISCORD_BANNER_TARGET_WIDTH_RATIO;
-		float aspectRatio = originalSize.y / originalSize.x;
-		float maxAllowed = std::max(1.0f, windowSize.x - DISCORD_BANNER_PADDING_MARGIN * scale);
-		float upperBound = std::min(DISCORD_BANNER_MAX_WIDTH * scale, maxAllowed);
-		float lowerBound = std::min(DISCORD_BANNER_MIN_WIDTH * scale, upperBound);
-		float targetWidth = std::clamp(ratioWidth, lowerBound, upperBound);
+	const float linkRowWidth = discordButtonSize.x + linkButtonSpacing + githubButtonWidth;
+	ImGui::SetCursorPosX(CenteredTextX(windowSize.x, linkRowWidth));
 
-		ImVec2 iconSize = ImVec2(targetWidth, targetWidth * aspectRatio);
-		ImGui::SetCursorPosX((windowSize.x - iconSize.x) * 0.5f);
+	if (discordIconAvailable) {
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+		[[maybe_unused]] auto discordButtonStyle = Util::TransparentIconButtonStyle();
+		if (Util::ImageButtonWithFlash("##HomeDiscordButton", menu->uiIcons.discord.texture, discordButtonSize)) {
+			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+		}
+		ImGui::PopStyleVar();
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Open MGO Discord");
+		}
+	} else if (Util::ButtonWithFlash("Discord##HomeDiscordButton", discordButtonSize)) {
+		ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+	}
 
-		// Purely decorative: draw the banner image only (no button, no click, no tooltip)
-		ImGui::Image(menu->uiIcons.discord.texture, iconSize);
-	} else {
-		// No Discord icon available: keep layout roughly consistent with a dummy spacer,
-		// but do not show a clickable button or link.
-		float dummyWidth = 200.0f * scale;
-		ImGui::SetCursorPosX((windowSize.x - dummyWidth) * 0.5f);
-		ImGui::Dummy(ImVec2(dummyWidth, 0.0f));
+	ImGui::SameLine(0.0f, linkButtonSpacing);
+	if (Util::ButtonWithFlash("GitHub##HomeGitHubButton", ImVec2(githubButtonWidth, linkButtonHeight))) {
+		ShellExecuteA(NULL, "open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL);
 	}
 
 	// Pop the style var we pushed at the start

@@ -31,6 +31,8 @@ class FidelityFX
 public:
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
 
+	~FidelityFX();
+
 	HMODULE module = nullptr;
 
 	ffx::Context swapChainContext{};
@@ -52,7 +54,10 @@ public:
 
 	void CreateFSRResources();
 
-	void DestroyFSRResources();
+	void DestroyFSRResources(bool a_waitForIdle = true);
+	bool HasFSRResourcesPendingTeardown() const;
+	bool PollFSRResourceTeardownReady(const char* a_reason = nullptr);
+	void ResetFSRIdleFence();
 	void ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
 	bool IsAmdAdapterDetected() const;
@@ -98,6 +103,9 @@ private:
 
 	winrt::com_ptr<ID3D11Fence> runtimeD3D11Fence;
 	winrt::com_ptr<ID3D12Fence> runtimeD3D12Fence;
+	ID3D11Query* pendingFSRResourceFreeIdleFence = nullptr;
+	uint64_t pendingRuntimeTeardownD3D11FenceValue = 0;
+	uint64_t pendingRuntimeTeardownD3D12FenceValue = 0;
 	uint64_t runtimeFenceValue = 1;
 	uint32_t runtimeCommandFrameIndex = 0;
 
@@ -145,6 +153,7 @@ private:
 	bool EnsureRuntimeUpscalerInterop();
 	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);
 	void WaitForRuntimeUpscalerIdle();
+	bool PollRuntimeUpscalerTeardownIdle(const char* a_reason);
 	bool EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight,
 		const D3D11_TEXTURE2D_DESC& a_colorDesc,
 		const D3D11_TEXTURE2D_DESC& a_depthDesc,

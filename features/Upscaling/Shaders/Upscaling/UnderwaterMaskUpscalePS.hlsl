@@ -17,7 +17,9 @@ SamplerState LinearSampler : register(s0);
 Texture2D<float> UnderwaterMask : register(t0);
 #	if defined(VR)
 Texture2D<float> SceneDepth : register(t1);
+#		if !defined(NO_HMD_STENCIL_MASK)
 Texture2D<uint> StencilTex : register(t2);
+#		endif
 #	endif
 
 cbuffer JitterCB : register(b0)
@@ -30,6 +32,50 @@ cbuffer JitterCB : register(b0)
 #if defined(VR)
 static const float kSkyDepthThreshold = 1e-6;
 
+#	if defined(RAW_SCENE_DEPTH)
+float SampleRawDepthClamped(int2 coord, int2 maxCoord)
+{
+	int2 c = clamp(coord, int2(0, 0), maxCoord);
+	return SceneDepth.Load(int3(c, 0));
+}
+
+float SampleRawMinDepth2x2(float2 uv)
+{
+	float4 depthQuad = SceneDepth.GatherRed(LinearSampler, uv);
+	return min(min(depthQuad.x, depthQuad.y), min(depthQuad.z, depthQuad.w));
+}
+
+float SampleRawMinDepth3x3(float2 uv)
+{
+	uint width;
+	uint height;
+	SceneDepth.GetDimensions(width, height);
+	int2 maxCoord = int2(width, height) - 1;
+	int2 centerCoord = int2(uv * float2(width, height));
+
+	float row0 = min(
+		SampleRawDepthClamped(centerCoord + int2(-1, -1), maxCoord),
+		min(
+			SampleRawDepthClamped(centerCoord + int2(0, -1), maxCoord),
+			SampleRawDepthClamped(centerCoord + int2(1, -1), maxCoord)));
+
+	float row1 = min(
+		SampleRawDepthClamped(centerCoord + int2(-1, 0), maxCoord),
+		min(
+			SampleRawDepthClamped(centerCoord + int2(0, 0), maxCoord),
+			SampleRawDepthClamped(centerCoord + int2(1, 0), maxCoord)));
+
+	float row2 = min(
+		SampleRawDepthClamped(centerCoord + int2(-1, 1), maxCoord),
+		min(
+			SampleRawDepthClamped(centerCoord + int2(0, 1), maxCoord),
+			SampleRawDepthClamped(centerCoord + int2(1, 1), maxCoord)));
+
+	return min(row0, min(row1, row2));
+}
+#	endif
+
+#	if !defined(NO_HMD_STENCIL_MASK)
 bool IsHiddenStencil(uint2 coord)
 {
 	uint width;
@@ -51,6 +97,7 @@ bool IsHiddenStencil(uint2 coord)
 
 	return false;
 }
+#	endif
 #endif
 
 PS_OUTPUT main(PS_INPUT input)
@@ -63,7 +110,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 uv = originalUV - (jitter * SharedData::BufferDim.zw);
 
 	// Clamp within bounds
+#	if defined(RAW_SCENE_DEPTH)
+	uv = FrameBuffer::ClampDynamicResolutionAdjustedScreenPosition(uv, input.TexCoord);
+#	else
 	uv = clamp(uv, 0.0, FrameBuffer::DynamicResolutionParams1.xy);
+#	endif
 
 #	if defined(VR)
 	// In VR the vanilla waterline draw (DrawIndexedInstanced, 2 instances) emits
@@ -85,11 +136,18 @@ PS_OUTPUT main(PS_INPUT input)
 	uint depthWidth;
 	uint depthHeight;
 	SceneDepth.GetDimensions(depthWidth, depthHeight);
-	uint2 depthCoord = min(uint2(input.TexCoord * float2(depthWidth, depthHeight)), uint2(depthWidth, depthHeight) - 1);
+#		if defined(RAW_SCENE_DEPTH)
+	float2 depthUV = uv;
+#		else
+	float2 depthUV = input.TexCoord;
+#		endif
+	uint2 depthCoord = min(uint2(depthUV * float2(depthWidth, depthHeight)), uint2(depthWidth, depthHeight) - 1);
+#		if !defined(NO_HMD_STENCIL_MASK)
 	if (IsHiddenStencil(depthCoord)) {
 		psout.UnderwaterMask = 0.0;
 		return psout;
 	}
+#		endif
 
 	// WaterData is a 5×5 grid centered on the camera; tile 12 (row 2, col 2) is
 	// always the camera's own tile.  Pass eyeIndex so GetWaterData corrects the .w
@@ -115,9 +173,13 @@ PS_OUTPUT main(PS_INPUT input)
 		// Convert to NDC [-1, 1].  UV y=0 is the top of the screen; NDC y=+1 is the top.
 		float2 ndc = float2(eyeUV.x * 2.0 - 1.0, 1.0 - eyeUV.y * 2.0);
 
-		// Sample the current full-resolution upscaled depth. The vanilla mask copy
-		// still uses dynamic-resolution uv, but this depth is already in output space.
+		// Sample either the current full-resolution upscaled depth or, in submit-stage,
+		// the raw dynamic-resolution scene depth with dynamic-resolution UVs.
+#		if defined(RAW_SCENE_DEPTH)
+		float depth = (useWideKernel > 0.5f) ? SampleRawMinDepth3x3(depthUV) : SampleRawMinDepth2x2(depthUV);
+#		else
 		float depth = SceneDepth.Load(int3(depthCoord, 0)).x;
+#		endif
 
 		if (depth > kSkyDepthThreshold) {
 			// Geometry pixel: reconstruct world position from depth.

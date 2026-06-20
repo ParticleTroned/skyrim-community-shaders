@@ -65,10 +65,20 @@ public:
 		static constexpr int kOverlayWidth = 1920;
 		static constexpr int kOverlayHeight = 1080;
 		static constexpr float kOverlayAspect = static_cast<float>(kOverlayHeight) / static_cast<float>(kOverlayWidth);
+		// HMD presentation is intentionally taller than the controller texture so the menu does not read as a wide panel in-headset.
+		static constexpr float kHMDOverlayHeightScale = 1.5f;
+		static constexpr int kHMDOverlayWidth = kOverlayWidth;
+		static constexpr int kHMDOverlayHeight = static_cast<int>(kOverlayHeight * kHMDOverlayHeightScale);
+		static constexpr float kHMDOverlayAspect = static_cast<float>(kHMDOverlayHeight) / static_cast<float>(kHMDOverlayWidth);
 
-		static inline Matrix CreateOverlayScaleMatrix(float scale)
+		static inline Matrix CreateOverlayScaleMatrix(float scale, float aspect = kOverlayAspect)
 		{
-			return Matrix::CreateScale(scale, scale * kOverlayAspect, scale);
+			return Matrix::CreateScale(scale, scale * aspect, scale);
+		}
+
+		static inline Matrix CreateHMDOverlayScaleMatrix(float scale)
+		{
+			return CreateOverlayScaleMatrix(scale, kHMDOverlayAspect);
 		}
 
 		static constexpr float kDefaultMenuScale = 1.0f;      ///< Default overlay scale factor
@@ -334,12 +344,16 @@ public:
 	};
 	bool ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
 	bool ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
-	void UpdateCursorFromWandPointing();
+	void UpdateCursorFromWandPointing(bool a_forceCursorUpdate = false);
+	void ResetWandPointingRuntimeState();
 	void UpdateOverlayMenuStateFromInput();
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
 	void UpdateControllerState(const Menu::KeyEvent& event);
 	void ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
 	void ProcessControllerInputForImGui();
+	void ResetComboRecordingState();
+	void ReleaseMenuImGuiInputState();
+	void ResetMenuInputRuntimeState();
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();
@@ -546,14 +560,27 @@ public:
 		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
 		winrt::com_ptr<ID3D11SamplerState> sampler;
 		winrt::com_ptr<ID3D11ShaderResourceView> menuSRV;
+		winrt::com_ptr<ID3D11ShaderResourceView> menuControllerSRV;
+		winrt::com_ptr<ID3D11ComputeShader> submitCompositeCS;
+		winrt::com_ptr<ID3D11Buffer> submitCompositeCB;
 		ID3D11Texture2D* cachedMenuTexture = nullptr;
+		ID3D11Texture2D* cachedMenuControllerTexture = nullptr;
 
 		struct CachedRTV
 		{
 			ID3D11Texture2D* texture = nullptr;
 			winrt::com_ptr<ID3D11RenderTargetView> rtv;
 		};
+		struct SubmitCopy
+		{
+			D3D11_TEXTURE2D_DESC sourceDesc{};
+			D3D11_TEXTURE2D_DESC pendingSourceDesc{};
+			winrt::com_ptr<ID3D11Texture2D> texture;
+			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+			bool pendingCreate = false;
+		};
 		CachedRTV cachedEyeRTVs[2];
+		SubmitCopy submitCopies[2];
 		vr::TrackedDevicePose_t cachedRenderPoses[vr::k_unMaxTrackedDeviceCount]{};
 		uint32_t cachedPoseFrame = 0;
 		bool cachedPosesValid = false;
@@ -567,6 +594,17 @@ public:
 		Matrix wvp;
 	};
 
+	struct alignas(16) SubmitCompositeCB
+	{
+		uint32_t targetSize[2];
+		uint32_t dispatchOrigin[2];
+		uint32_t dispatchSize[2];
+		uint32_t padding[2];
+		float quadPixels[8];
+		float quadInvW[4];
+	};
+	STATIC_ASSERT_ALIGNAS_16(SubmitCompositeCB);
+
 public:
 	//=============================================================================
 	// PRIVATE IMPLEMENTATION
@@ -575,7 +613,10 @@ public:
 	void DetectOpenVRInfo();
 	bool IsOpenVRCompatible() const;
 	void InitInSceneResources();
-	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds);
+	void EnsureInSceneOverlaySubmitCopyResources();
+	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);
+	void CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds);
+	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	void InstallSubmitHook();
 	bool GetGripPressed(bool isLeft, bool isRight) const;
 };

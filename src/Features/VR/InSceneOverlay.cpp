@@ -1,3 +1,4 @@
+#include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -5,7 +6,11 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/VRUtils.h"
+#include <atomic>
+#include <cmath>
+#include <cstring>
 #include <DirectXMath.h>
+#include <limits>
 #include <SimpleMath.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
@@ -23,14 +28,266 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+	bool ShouldRenderInSceneMenu(const VR& vr)
+	{
+		return vr.ShouldUseInSceneOverlay() &&
+		       globals::menu &&
+		       (globals::menu->IsEnabled || globals::menu->overlayVisible) &&
+		       vr.menuTexture &&
+		       vr.settings.attachMode != AttachMode::None;
+	}
+
+	bool MatchesSubmitCopyDesc(const D3D11_TEXTURE2D_DESC& lhs, const D3D11_TEXTURE2D_DESC& rhs)
+	{
+		return lhs.Width == rhs.Width &&
+		       lhs.Height == rhs.Height &&
+		       lhs.MipLevels == rhs.MipLevels &&
+		       lhs.ArraySize == rhs.ArraySize &&
+		       lhs.Format == rhs.Format &&
+		       lhs.SampleDesc.Count == rhs.SampleDesc.Count &&
+		       lhs.SampleDesc.Quality == rhs.SampleDesc.Quality &&
+		       lhs.Usage == rhs.Usage &&
+		       lhs.BindFlags == rhs.BindFlags &&
+		       lhs.CPUAccessFlags == rhs.CPUAccessFlags &&
+		       lhs.MiscFlags == rhs.MiscFlags;
+	}
+
+	DXGI_FORMAT GetRenderTargetViewFormat(DXGI_FORMAT format)
+	{
+		switch (format) {
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+			return DXGI_FORMAT_R8G8B8A8_UNORM;
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+			return DXGI_FORMAT_B8G8R8A8_UNORM;
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+			return DXGI_FORMAT_B8G8R8X8_UNORM;
+		case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+			return DXGI_FORMAT_R10G10B10A2_UNORM;
+		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+			return DXGI_FORMAT_R16G16B16A16_FLOAT;
+		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+			return DXGI_FORMAT_R32G32B32A32_FLOAT;
+		default:
+			return format;
+		}
+	}
+
+	bool SupportsRenderTargetView(ID3D11Device* device, DXGI_FORMAT format)
+	{
+		if (!device || format == DXGI_FORMAT_UNKNOWN) {
+			return false;
+		}
+
+		UINT support = 0;
+		if (FAILED(device->CheckFormatSupport(format, &support))) {
+			return false;
+		}
+		return (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET) != 0;
+	}
+
+	bool SupportsUnorderedAccessView(ID3D11Device* device, DXGI_FORMAT format)
+	{
+		if (!device || format == DXGI_FORMAT_UNKNOWN) {
+			return false;
+		}
+
+		UINT support = 0;
+		if (FAILED(device->CheckFormatSupport(format, &support))) {
+			return false;
+		}
+		return (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) != 0;
+	}
+
+	bool EnsureMenuTextureSRV(
+		ID3D11Texture2D* texture,
+		winrt::com_ptr<ID3D11ShaderResourceView>& srv,
+		ID3D11Texture2D*& cachedTexture,
+		const char* label)
+	{
+		if (!texture || !globals::d3d::device) {
+			return false;
+		}
+
+		if (texture != cachedTexture || !srv) {
+			srv = nullptr;
+			if (FAILED(globals::d3d::device->CreateShaderResourceView(texture, nullptr, srv.put()))) {
+				logger::error("VR: Failed to create {} menu texture SRV", label);
+				cachedTexture = nullptr;
+				return false;
+			}
+			cachedTexture = texture;
+		}
+
+		return true;
+	}
+
+	winrt::com_ptr<ID3D11Texture2D> ResolveSubmitTexture2D(void* handle)
+	{
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (!handle) {
+			return texture;
+		}
+
+		auto* unknown = static_cast<IUnknown*>(handle);
+		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
+			return texture;
+		}
+
+		winrt::com_ptr<ID3D11Resource> resource;
+		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11Resource), resource.put_void()))) {
+			resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void());
+			if (texture) {
+				return texture;
+			}
+		}
+
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11ShaderResourceView), srv.put_void()))) {
+			resource = nullptr;
+			srv->GetResource(resource.put());
+			if (resource) {
+				resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void());
+				if (texture) {
+					return texture;
+				}
+			}
+		}
+
+		winrt::com_ptr<ID3D11RenderTargetView> rtv;
+		if (SUCCEEDED(unknown->QueryInterface(__uuidof(ID3D11RenderTargetView), rtv.put_void()))) {
+			resource = nullptr;
+			rtv->GetResource(resource.put());
+			if (resource) {
+				resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void());
+			}
+		}
+
+		return texture;
+	}
+
+	constexpr char kSubmitCompositeCS[] = R"(
+cbuffer OverlayCompositeCB : register(b0)
+{
+	uint2 TargetSize;
+	uint2 DispatchOrigin;
+	uint2 DispatchSize;
+	uint2 Padding;
+	float4 QuadPixels01;
+	float4 QuadPixels23;
+	float4 QuadInvW;
+};
+
+Texture2D<float4> MenuTexture : register(t0);
+SamplerState MenuSampler : register(s0);
+RWTexture2D<float4> Target : register(u0);
+
+bool Barycentric(float2 p, float2 a, float2 b, float2 c, out float3 bary)
+{
+	float2 v0 = b - a;
+	float2 v1 = c - a;
+	float2 v2 = p - a;
+	float denom = v0.x * v1.y - v1.x * v0.y;
+	if (abs(denom) < 1e-5f) {
+		bary = 0.0f;
+		return false;
+	}
+
+	float invDenom = rcp(denom);
+	float u = (v2.x * v1.y - v1.x * v2.y) * invDenom;
+	float v = (v0.x * v2.y - v2.x * v0.y) * invDenom;
+	float w = 1.0f - u - v;
+	bary = float3(w, u, v);
+	return u >= 0.0f && v >= 0.0f && w >= 0.0f;
+}
+
+[numthreads(8, 8, 1)]
+void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+	if (dispatchThreadID.x >= DispatchSize.x || dispatchThreadID.y >= DispatchSize.y) {
+		return;
+	}
+
+	uint2 targetPixel = DispatchOrigin + dispatchThreadID.xy;
+	if (targetPixel.x >= TargetSize.x || targetPixel.y >= TargetSize.y) {
+		return;
+	}
+
+	float2 p = float2(targetPixel) + 0.5f;
+	float2 q0 = QuadPixels01.xy;
+	float2 q1 = QuadPixels01.zw;
+	float2 q2 = QuadPixels23.xy;
+	float2 q3 = QuadPixels23.zw;
+
+	float3 bary = 0.0f;
+	float2 uv = 0.0f;
+	if (Barycentric(p, q0, q1, q2, bary)) {
+		float invW = bary.x * QuadInvW.x + bary.y * QuadInvW.y + bary.z * QuadInvW.z;
+		if (abs(invW) < 1e-6f) {
+			return;
+		}
+		uv = (bary.x * float2(0.0f, 1.0f) * QuadInvW.x +
+		      bary.y * float2(0.0f, 0.0f) * QuadInvW.y +
+		      bary.z * float2(1.0f, 0.0f) * QuadInvW.z) / invW;
+	} else if (Barycentric(p, q0, q2, q3, bary)) {
+		float invW = bary.x * QuadInvW.x + bary.y * QuadInvW.z + bary.z * QuadInvW.w;
+		if (abs(invW) < 1e-6f) {
+			return;
+		}
+		uv = (bary.x * float2(0.0f, 1.0f) * QuadInvW.x +
+		      bary.y * float2(1.0f, 0.0f) * QuadInvW.z +
+		      bary.z * float2(1.0f, 1.0f) * QuadInvW.w) / invW;
+	} else {
+		return;
+	}
+
+	uv = saturate(uv);
+
+	float4 menuColor = MenuTexture.SampleLevel(MenuSampler, uv, 0.0f);
+	menuColor.a = saturate(menuColor.a);
+	if (menuColor.a <= 0.001f) {
+		return;
+	}
+
+	float4 sceneColor = Target[targetPixel];
+	Target[targetPixel] = float4(lerp(sceneColor.rgb, menuColor.rgb, menuColor.a), sceneColor.a);
+}
+)";
+
 	struct IVRCompositor_Submit
 	{
 		static vr::EVRCompositorError thunk(vr::IVRCompositor* _this, vr::EVREye eEye, const vr::Texture_t* pTexture, const vr::VRTextureBounds_t* pBounds, vr::EVRSubmitFlags nSubmitFlags)
 		{
 			auto& vr = globals::features::vr;
+			auto& upscaling = globals::features::upscaling;
+
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
-				vr.RenderInSceneOverlay(eEye, (ID3D11Texture2D*)pTexture->handle, pBounds);
+				vr::Texture_t upscaledTexture{};
+				vr::VRTextureBounds_t upscaledBounds{};
+				if (upscaling.SubmitVRUpscaledFrame(eEye, pTexture, pBounds, upscaledTexture, upscaledBounds)) {
+					if (ShouldRenderInSceneMenu(vr) &&
+						upscaledTexture.handle &&
+						upscaledTexture.eType == vr::TextureType_DirectX)
+						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
+					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
+				}
+
+				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsVRRenderScaleModeActive()) {
+					static std::atomic_bool loggedDeviceLostSuppression{ false };
+					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
+						logger::warn(
+							"[VRRenderScale] Suppressing OpenVR submit after submit-stage device loss while render-scale is still active; original texture is not a final HMD submit target.");
+					}
+					return vr::VRCompositorError_None;
+				}
+
+				if (!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
+					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
+					vr::Texture_t overlayTexture{};
+					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
+						return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
+					}
+				}
 			}
 			return func(_this, eEye, pTexture, pBounds, nSubmitFlags);
 		}
@@ -225,57 +482,64 @@ void VR::InitInSceneResources()
 	}
 	Util::SetResourceName(temp.sampler.get(), "VR::InSceneOverlaySampler");
 
+	ID3DBlob* csBlob = nullptr;
+	if (FAILED(D3DCompile(kSubmitCompositeCS, sizeof(kSubmitCompositeCS) - 1, "VRSubmitMenuCompositeCS", nullptr, nullptr,
+			"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &csBlob, &errorBlob))) {
+		if (errorBlob) {
+			logger::error("VR submit menu composite CS compile error: {}", static_cast<char*>(errorBlob->GetBufferPointer()));
+			errorBlob->Release();
+		}
+		return;
+	}
+	if (errorBlob) {
+		errorBlob->Release();
+		errorBlob = nullptr;
+	}
+	if (FAILED(device->CreateComputeShader(csBlob->GetBufferPointer(), csBlob->GetBufferSize(), nullptr, temp.submitCompositeCS.put()))) {
+		logger::error("VR: Failed to create submit menu composite compute shader");
+		csBlob->Release();
+		return;
+	}
+	csBlob->Release();
+	Util::SetResourceName(temp.submitCompositeCS.get(), "VR::SubmitMenuCompositeCS");
+
+	D3D11_BUFFER_DESC submitCompositeCBDesc = {};
+	submitCompositeCBDesc.Usage = D3D11_USAGE_DYNAMIC;
+	submitCompositeCBDesc.ByteWidth = sizeof(SubmitCompositeCB);
+	submitCompositeCBDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	submitCompositeCBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+	if (FAILED(device->CreateBuffer(&submitCompositeCBDesc, nullptr, temp.submitCompositeCB.put()))) {
+		logger::error("VR: Failed to create submit menu composite constant buffer");
+		return;
+	}
+	Util::SetResourceName(temp.submitCompositeCB.get(), "VR::SubmitMenuCompositeCB");
+
 	inSceneResources = std::move(temp);
 	inSceneResources.initialized = true;
 	logger::debug("VR: In-Scene Overlay resources initialized.");
 }
 
-void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds)
+void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV)
 {
 	auto context = globals::d3d::context;
-	if (!context || !globals::d3d::device || !targetTexture) {
+	if (!context || !targetTexture) {
 		return;
 	}
-
-	winrt::com_ptr<ID3DUserDefinedAnnotation> perf;
-	context->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), perf.put_void());
-
-	static const wchar_t* eventNames[] = { L"VR In-Scene Overlay (Eye 0)", L"VR In-Scene Overlay (Eye 1)" };
-	if (perf)
-		perf->BeginEvent(eventNames[(int)eye]);
 
 	if (!inSceneResources.initialized)
 		InitInSceneResources();
 	if (!inSceneResources.initialized) {
-		if (perf)
-			perf->EndEvent();
 		return;
 	}
 
 	// Only render if overlay should be visible
-	if (!ShouldUseInSceneOverlay() || !globals::menu || !(globals::menu->IsEnabled || globals::menu->overlayVisible || ShouldShowAutoHideOverlay())) {
-		if (perf)
-			perf->EndEvent();
-		return;
-	}
-	if (!menuTexture) {
-		if (perf)
-			perf->EndEvent();
-		return;
-	}
-
-	// Skip rendering when attach mode is None (disabled)
-	if (settings.attachMode == AttachMode::None) {
-		if (perf)
-			perf->EndEvent();
+	if (!ShouldRenderInSceneMenu(*this)) {
 		return;
 	}
 
 	// We can't render if we don't have HMD pose
 	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
 	if (!openvr || !openvr->vrSystem) {
-		if (perf)
-			perf->EndEvent();
 		return;
 	}
 
@@ -293,8 +557,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			compositor = openvr->vrContext.vrCompositor;
 		}
 		if (!compositor) {
-			if (perf)
-				perf->EndEvent();
 			return;
 		}
 
@@ -304,8 +566,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			nullptr,
 			0);
 		if (compositorError != vr::VRCompositorError_None) {
-			if (perf)
-				perf->EndEvent();
 			return;
 		}
 
@@ -315,8 +575,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 
 	const vr::TrackedDevicePose_t& hmdPose = inSceneResources.cachedRenderPoses[vr::k_unTrackedDeviceIndex_Hmd];
 	if (!hmdPose.bPoseIsValid) {
-		if (perf)
-			perf->EndEvent();
 		return;
 	}
 
@@ -367,44 +625,78 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	targetTexture->GetDesc(&texDesc);
 
 	int eyeIdx = (int)eye;
-	auto& cachedRTV = inSceneResources.cachedEyeRTVs[eyeIdx];
-	if (cachedRTV.texture != targetTexture) {
-		cachedRTV.rtv = nullptr;
-		cachedRTV.texture = nullptr;
-
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-		rtvDesc.Format = texDesc.Format;
-
-		if (texDesc.ArraySize > 1) {
-			if (texDesc.SampleDesc.Count > 1) {
-				rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY;
-				rtvDesc.Texture2DMSArray.FirstArraySlice = (UINT)eye;
-				rtvDesc.Texture2DMSArray.ArraySize = 1;
-			} else {
-				rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
-				rtvDesc.Texture2DArray.FirstArraySlice = (UINT)eye;
-				rtvDesc.Texture2DArray.ArraySize = 1;
-				rtvDesc.Texture2DArray.MipSlice = 0;
-			}
-		} else if (texDesc.SampleDesc.Count > 1) {
-			rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMS;
-		} else {
-			rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-			rtvDesc.Texture2D.MipSlice = 0;
-		}
-
-		HRESULT hr = globals::d3d::device->CreateRenderTargetView(targetTexture, &rtvDesc, cachedRTV.rtv.put());
-		if (FAILED(hr)) {
-			logger::error("VR: Failed to create RTV for eye texture (Format: {}, Samples: {}). HRESULT: {:x}",
-				(uint32_t)texDesc.Format, texDesc.SampleDesc.Count, (uint32_t)hr);
-			if (perf)
-				perf->EndEvent();
-			return;
-		}
-		cachedRTV.texture = targetTexture;
+	if (eyeIdx < 0 || eyeIdx >= 2) {
+		return;
 	}
 
-	auto& rtv = cachedRTV.rtv;
+	ID3D11RenderTargetView* rtvPtr = targetRTV;
+	if (!rtvPtr) {
+		auto& cachedRTV = inSceneResources.cachedEyeRTVs[eyeIdx];
+		if (cachedRTV.texture != targetTexture) {
+			cachedRTV.rtv = nullptr;
+			cachedRTV.texture = nullptr;
+
+			winrt::com_ptr<ID3D11Device> targetDevice;
+			targetTexture->GetDevice(targetDevice.put());
+			auto* rtvDevice = targetDevice.get() ? targetDevice.get() : globals::d3d::device;
+			if (!rtvDevice) {
+				return;
+			}
+
+			const DXGI_FORMAT rtvFormat = GetRenderTargetViewFormat(texDesc.Format);
+			if (!SupportsRenderTargetView(rtvDevice, rtvFormat)) {
+				logger::error("VR: Eye texture format cannot be used as an RTV ({}x{}, Format: {}, RTVFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X})",
+					texDesc.Width,
+					texDesc.Height,
+					(uint32_t)texDesc.Format,
+					(uint32_t)rtvFormat,
+					texDesc.ArraySize,
+					texDesc.SampleDesc.Count,
+					texDesc.BindFlags);
+				return;
+			}
+
+			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
+			rtvDesc.Format = rtvFormat;
+
+			if (texDesc.ArraySize > 1) {
+				if (texDesc.SampleDesc.Count > 1) {
+					rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY;
+					rtvDesc.Texture2DMSArray.FirstArraySlice = (UINT)eye;
+					rtvDesc.Texture2DMSArray.ArraySize = 1;
+				} else {
+					rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+					rtvDesc.Texture2DArray.FirstArraySlice = (UINT)eye;
+					rtvDesc.Texture2DArray.ArraySize = 1;
+					rtvDesc.Texture2DArray.MipSlice = 0;
+				}
+			} else if (texDesc.SampleDesc.Count > 1) {
+				rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMS;
+			} else {
+				rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+				rtvDesc.Texture2D.MipSlice = 0;
+			}
+
+			HRESULT hr = rtvDevice->CreateRenderTargetView(targetTexture, &rtvDesc, cachedRTV.rtv.put());
+			if (FAILED(hr)) {
+				logger::error("VR: Failed to create RTV for eye texture ({}x{}, Format: {}, RTVFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X}). HRESULT: 0x{:08X}",
+					texDesc.Width,
+					texDesc.Height,
+					(uint32_t)texDesc.Format,
+					(uint32_t)rtvFormat,
+					texDesc.ArraySize,
+					texDesc.SampleDesc.Count,
+					texDesc.BindFlags,
+					(uint32_t)hr);
+				return;
+			}
+			cachedRTV.texture = targetTexture;
+		}
+		rtvPtr = cachedRTV.rtv.get();
+	}
+	if (!rtvPtr) {
+		return;
+	}
 
 	// Save State
 	ID3D11RenderTargetView* oldRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
@@ -428,7 +720,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	context->OMGetDepthStencilState(&oldDepth, &oldStencilRef);
 
 	// Setup Render
-	ID3D11RenderTargetView* rtvPtr = rtv.get();
 	context->OMSetRenderTargets(1, &rtvPtr, nullptr);  // No DSV
 
 	// Viewport: Use bounds if provided (for SBS textures), otherwise use full texture
@@ -473,7 +764,12 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	}
 
 	// Helper to draw the overlay quad with a given WVP matrix
-	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx, const InSceneCB& cbData) {
+	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx,
+		                       const InSceneCB& cbData,
+		                       ID3D11Texture2D* texture,
+		                       winrt::com_ptr<ID3D11ShaderResourceView>& srv,
+		                       ID3D11Texture2D*& cachedTexture,
+		                       const char* label) {
 		D3D11_MAPPED_SUBRESOURCE mappedResource;
 		if (SUCCEEDED(ctx->Map(inSceneResources.cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
 			memcpy(mappedResource.pData, &cbData, sizeof(InSceneCB));
@@ -502,16 +798,10 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		ctx->OMSetDepthStencilState(inSceneResources.depthState.get(), 0);
 		ctx->RSSetState(inSceneResources.rasterizerState.get());
 
-		// Cache SRV to avoid creating every frame
-		if (menuTexture.get() != inSceneResources.cachedMenuTexture) {
-			inSceneResources.menuSRV = nullptr;
-			if (FAILED(globals::d3d::device->CreateShaderResourceView(menuTexture.get(), nullptr, inSceneResources.menuSRV.put()))) {
-				logger::error("VR: Failed to create menu texture SRV");
-				return;
-			}
-			inSceneResources.cachedMenuTexture = menuTexture.get();
+		if (!EnsureMenuTextureSRV(texture, srv, cachedTexture, label)) {
+			return;
 		}
-		ID3D11ShaderResourceView* srvPtr = inSceneResources.menuSRV.get();
+		ID3D11ShaderResourceView* srvPtr = srv.get();
 		ctx->PSSetShaderResources(0, 1, &srvPtr);
 
 		ID3D11SamplerState* sampler = inSceneResources.sampler.get();
@@ -527,20 +817,26 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		Matrix modelMatrix;
 		Matrix vp;
 		if (settings.VRMenuPositioningMethod == 1) {  // Fixed World Position
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
 			vp = vpWorldSpace;
 		} else {  // HMD Relative
 			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
-			modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
 			vp = vpHeadSpace;
 		}
 		cbData.wvp = (modelMatrix * vp).Transpose();
 
-		drawOverlayQuad(context, cbData);
+		drawOverlayQuad(
+			context,
+			cbData,
+			menuTexture.get(),
+			inSceneResources.menuSRV,
+			inSceneResources.cachedMenuTexture,
+			"HMD");
 	}
 
 	// --- Render Controller Overlay ---
-	if ((settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) && menuTexture) {
+	if ((settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) && (menuControllerTexture || menuTexture)) {
 		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
 		if (attachIndex != vr::k_unTrackedDeviceIndexInvalid && attachIndex < vr::k_unMaxTrackedDeviceCount) {
 			const vr::TrackedDevicePose_t& controllerPose = inSceneResources.cachedRenderPoses[attachIndex];
@@ -565,7 +861,23 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 				if (dot > 0.0f) {
 					InSceneCB cbData;
 					cbData.wvp = (modelMatrix * vpWorldSpace).Transpose();
-					drawOverlayQuad(context, cbData);
+					if (menuControllerTexture) {
+						drawOverlayQuad(
+							context,
+							cbData,
+							menuControllerTexture.get(),
+							inSceneResources.menuControllerSRV,
+							inSceneResources.cachedMenuControllerTexture,
+							"controller");
+					} else {
+						drawOverlayQuad(
+							context,
+							cbData,
+							menuTexture.get(),
+							inSceneResources.menuSRV,
+							inSceneResources.cachedMenuTexture,
+							"HMD");
+					}
 				}
 			}
 		}
@@ -590,8 +902,378 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	if (oldDSV)
 		oldDSV->Release();
 
-	if (perf)
-		perf->EndEvent();
+}
+
+void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds)
+{
+	auto* context = globals::d3d::context;
+	auto* device = globals::d3d::device;
+	if (!context || !device || !targetTexture || !targetUAV || !menuTexture || !inSceneResources.initialized || !inSceneResources.submitCompositeCS || !inSceneResources.submitCompositeCB || !inSceneResources.sampler) {
+		return;
+	}
+
+	const float targetWidth = static_cast<float>(targetDesc.Width);
+	const float targetHeight = static_cast<float>(targetDesc.Height);
+	float viewX = 0.0f;
+	float viewY = 0.0f;
+	float viewW = targetWidth;
+	float viewH = targetHeight;
+	if (bounds) {
+		viewX = std::clamp(bounds->uMin, 0.0f, 1.0f) * targetWidth;
+		viewY = std::clamp(bounds->vMin, 0.0f, 1.0f) * targetHeight;
+		viewW = std::max(1.0f, (std::clamp(bounds->uMax, 0.0f, 1.0f) - std::clamp(bounds->uMin, 0.0f, 1.0f)) * targetWidth);
+		viewH = std::max(1.0f, (std::clamp(bounds->vMax, 0.0f, 1.0f) - std::clamp(bounds->vMin, 0.0f, 1.0f)) * targetHeight);
+	}
+
+	RE::BSOpenVR* openvr = RE::BSOpenVR::GetSingleton();
+	if (!openvr || !openvr->vrSystem) {
+		return;
+	}
+
+	const bool hasState = globals::state != nullptr;
+	const uint32_t currentFrame = hasState ? globals::state->frameCount : 0;
+	const bool shouldRefreshPoses =
+		!hasState ||
+		!inSceneResources.cachedPosesValid ||
+		inSceneResources.cachedPoseFrame != currentFrame;
+
+	if (shouldRefreshPoses) {
+		auto* compositor = RE::BSOpenVR::GetIVRCompositor();
+		if (!compositor) {
+			compositor = openvr->vrContext.vrCompositor;
+		}
+		if (!compositor) {
+			return;
+		}
+
+		auto compositorError = compositor->GetLastPoses(
+			inSceneResources.cachedRenderPoses,
+			vr::k_unMaxTrackedDeviceCount,
+			nullptr,
+			0);
+		if (compositorError != vr::VRCompositorError_None) {
+			return;
+		}
+
+		inSceneResources.cachedPoseFrame = currentFrame;
+		inSceneResources.cachedPosesValid = true;
+	}
+
+	const vr::TrackedDevicePose_t& hmdPose = inSceneResources.cachedRenderPoses[vr::k_unTrackedDeviceIndex_Hmd];
+	if (!hmdPose.bPoseIsValid) {
+		return;
+	}
+
+	Matrix hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
+	Matrix eyeToHead = Util::HmdMatrix34ToMatrix(openvr->vrSystem->GetEyeToHeadTransform(eye));
+
+	float left, right, bottom, top;
+	openvr->vrSystem->GetProjectionRaw(eye, &left, &right, &bottom, &top);
+	const float nearZ = 0.1f;
+	const float farZ = 1000.0f;
+	Matrix proj = DirectX::XMMatrixPerspectiveOffCenterRH(left * nearZ, right * nearZ, bottom * nearZ, top * nearZ, nearZ, farZ);
+	Matrix vpHeadSpace = eyeToHead.Invert() * proj;
+	Matrix eyeToWorld = eyeToHead * hmdWorld;
+	Matrix vpWorldSpace = eyeToWorld.Invert() * proj;
+
+	Matrix modelMatrix = Matrix::Identity;
+	Matrix viewProjection = vpHeadSpace;
+	const bool showOnHMD = settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both;
+	const bool showOnController = settings.attachMode == AttachMode::ControllerOnly;
+	if (showOnHMD) {
+		if (settings.VRMenuPositioningMethod == 1) {
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * fixedWorldOverlayPosition.m;
+			viewProjection = vpWorldSpace;
+		} else {
+			Matrix offset = Matrix::CreateTranslation(settings.VRMenuOffsetX, settings.VRMenuOffsetY, settings.VRMenuOffsetZ);
+			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(settings.VRMenuScale) * offset;
+			viewProjection = vpHeadSpace;
+		}
+	} else if (showOnController) {
+		vr::TrackedDeviceIndex_t attachIndex = Util::GetControllerIndexForDevice(settings.VRMenuAttachController, lastKnownLeftHandedMode);
+		if (attachIndex == vr::k_unTrackedDeviceIndexInvalid || attachIndex >= vr::k_unMaxTrackedDeviceCount) {
+			return;
+		}
+		const vr::TrackedDevicePose_t& controllerPose = inSceneResources.cachedRenderPoses[attachIndex];
+		if (!controllerPose.bPoseIsValid) {
+			return;
+		}
+
+		Matrix controllerWorld = Util::HmdMatrix34ToMatrix(controllerPose.mDeviceToAbsoluteTracking);
+		Matrix offset = Matrix::CreateTranslation(settings.VRMenuControllerOffsetX, settings.VRMenuControllerOffsetY, settings.VRMenuControllerOffsetZ);
+		modelMatrix = VR::Config::CreateOverlayScaleMatrix(settings.VRMenuScale) * offset * controllerWorld;
+		viewProjection = vpWorldSpace;
+	} else {
+		return;
+	}
+
+	ID3D11ShaderResourceView* overlaySRV = nullptr;
+	if (showOnHMD) {
+		if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture, "HMD")) {
+			return;
+		}
+		overlaySRV = inSceneResources.menuSRV.get();
+	} else if (showOnController) {
+		if (menuControllerTexture) {
+			if (!EnsureMenuTextureSRV(
+					menuControllerTexture.get(),
+					inSceneResources.menuControllerSRV,
+					inSceneResources.cachedMenuControllerTexture,
+					"controller")) {
+				return;
+			}
+			overlaySRV = inSceneResources.menuControllerSRV.get();
+		} else {
+			if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture, "HMD")) {
+				return;
+			}
+			overlaySRV = inSceneResources.menuSRV.get();
+		}
+	}
+
+	const Matrix worldViewProjection = modelMatrix * viewProjection;
+	const XMFLOAT3 vertices[4] = {
+		XMFLOAT3(-0.5f, -0.5f, 0.0f),
+		XMFLOAT3(-0.5f, 0.5f, 0.0f),
+		XMFLOAT3(0.5f, 0.5f, 0.0f),
+		XMFLOAT3(0.5f, -0.5f, 0.0f)
+	};
+
+	SubmitCompositeCB cbData{};
+	cbData.targetSize[0] = targetDesc.Width;
+	cbData.targetSize[1] = targetDesc.Height;
+
+	float minX = std::numeric_limits<float>::max();
+	float minY = std::numeric_limits<float>::max();
+	float maxX = std::numeric_limits<float>::lowest();
+	float maxY = std::numeric_limits<float>::lowest();
+	for (size_t i = 0; i < 4; ++i) {
+		const XMVECTOR local = XMVectorSet(vertices[i].x, vertices[i].y, vertices[i].z, 1.0f);
+		const XMVECTOR clip = XMVector4Transform(local, worldViewProjection);
+		const float w = XMVectorGetW(clip);
+		if (std::abs(w) < 1e-5f) {
+			return;
+		}
+		cbData.quadInvW[i] = 1.0f / w;
+
+		const float ndcX = XMVectorGetX(clip) / w;
+		const float ndcY = XMVectorGetY(clip) / w;
+		if (!std::isfinite(ndcX) || !std::isfinite(ndcY)) {
+			return;
+		}
+
+		const float pixelX = viewX + (ndcX * 0.5f + 0.5f) * viewW;
+		const float pixelY = viewY + (0.5f - ndcY * 0.5f) * viewH;
+		cbData.quadPixels[i * 2] = pixelX;
+		cbData.quadPixels[i * 2 + 1] = pixelY;
+		minX = std::min(minX, pixelX);
+		minY = std::min(minY, pixelY);
+		maxX = std::max(maxX, pixelX);
+		maxY = std::max(maxY, pixelY);
+	}
+
+	const int dispatchLeft = std::clamp(static_cast<int>(std::floor(minX)) - 1, 0, static_cast<int>(targetDesc.Width));
+	const int dispatchTop = std::clamp(static_cast<int>(std::floor(minY)) - 1, 0, static_cast<int>(targetDesc.Height));
+	const int dispatchRight = std::clamp(static_cast<int>(std::ceil(maxX)) + 1, 0, static_cast<int>(targetDesc.Width));
+	const int dispatchBottom = std::clamp(static_cast<int>(std::ceil(maxY)) + 1, 0, static_cast<int>(targetDesc.Height));
+	if (dispatchRight <= dispatchLeft || dispatchBottom <= dispatchTop) {
+		return;
+	}
+
+	cbData.dispatchOrigin[0] = static_cast<uint32_t>(dispatchLeft);
+	cbData.dispatchOrigin[1] = static_cast<uint32_t>(dispatchTop);
+	cbData.dispatchSize[0] = static_cast<uint32_t>(dispatchRight - dispatchLeft);
+	cbData.dispatchSize[1] = static_cast<uint32_t>(dispatchBottom - dispatchTop);
+
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	if (FAILED(context->Map(inSceneResources.submitCompositeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+		return;
+	}
+	std::memcpy(mapped.pData, &cbData, sizeof(cbData));
+	context->Unmap(inSceneResources.submitCompositeCB.get(), 0);
+
+	ID3D11ComputeShader* oldCS = nullptr;
+	ID3D11ShaderResourceView* oldSRV = nullptr;
+	ID3D11UnorderedAccessView* oldUAV = nullptr;
+	ID3D11SamplerState* oldSampler = nullptr;
+	ID3D11Buffer* oldCB = nullptr;
+	context->CSGetShader(&oldCS, nullptr, nullptr);
+	context->CSGetShaderResources(0, 1, &oldSRV);
+	context->CSGetUnorderedAccessViews(0, 1, &oldUAV);
+	context->CSGetSamplers(0, 1, &oldSampler);
+	context->CSGetConstantBuffers(0, 1, &oldCB);
+
+	ID3D11ShaderResourceView* srv = overlaySRV;
+	ID3D11UnorderedAccessView* uav = targetUAV;
+	ID3D11SamplerState* sampler = inSceneResources.sampler.get();
+	ID3D11Buffer* cb = inSceneResources.submitCompositeCB.get();
+	context->CSSetShader(inSceneResources.submitCompositeCS.get(), nullptr, 0);
+	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetShaderResources(0, 1, &srv);
+	context->CSSetSamplers(0, 1, &sampler);
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->Dispatch((cbData.dispatchSize[0] + 7) / 8, (cbData.dispatchSize[1] + 7) / 8, 1);
+
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	context->CSSetShaderResources(0, 1, &nullSRV);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetShader(oldCS, nullptr, 0);
+	context->CSSetConstantBuffers(0, 1, &oldCB);
+	context->CSSetShaderResources(0, 1, &oldSRV);
+	context->CSSetSamplers(0, 1, &oldSampler);
+	context->CSSetUnorderedAccessViews(0, 1, &oldUAV, nullptr);
+
+	if (oldCS)
+		oldCS->Release();
+	if (oldSRV)
+		oldSRV->Release();
+	if (oldUAV)
+		oldUAV->Release();
+	if (oldSampler)
+		oldSampler->Release();
+	if (oldCB)
+		oldCB->Release();
+}
+
+void VR::EnsureInSceneOverlaySubmitCopyResources()
+{
+	auto* device = globals::d3d::device;
+	if (!device) {
+		return;
+	}
+
+	for (int eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
+		auto& submitCopy = inSceneResources.submitCopies[eyeIdx];
+		if (!submitCopy.pendingCreate) {
+			continue;
+		}
+
+		const auto sourceDesc = submitCopy.pendingSourceDesc;
+		if (sourceDesc.ArraySize != 1 || sourceDesc.SampleDesc.Count != 1) {
+			logger::error("VR: Cannot composite in-scene menu into submit texture with array={} samples={}", sourceDesc.ArraySize, sourceDesc.SampleDesc.Count);
+			submitCopy.pendingCreate = false;
+			continue;
+		}
+
+		const DXGI_FORMAT viewFormat = GetRenderTargetViewFormat(sourceDesc.Format);
+		if (!SupportsUnorderedAccessView(device, viewFormat)) {
+			logger::error("VR: Cannot create in-scene menu submit copy UAV (eye={}, {}x{}, Format: {}, ViewFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X})",
+				eyeIdx,
+				sourceDesc.Width,
+				sourceDesc.Height,
+				(uint32_t)sourceDesc.Format,
+				(uint32_t)viewFormat,
+				sourceDesc.ArraySize,
+				sourceDesc.SampleDesc.Count,
+				sourceDesc.BindFlags);
+			submitCopy.pendingCreate = false;
+			continue;
+		}
+
+		D3D11_TEXTURE2D_DESC copyDesc = sourceDesc;
+		copyDesc.Usage = D3D11_USAGE_DEFAULT;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		copyDesc.CPUAccessFlags = 0;
+		copyDesc.MiscFlags = 0;
+
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		HRESULT hr = device->CreateTexture2D(&copyDesc, nullptr, texture.put());
+		if (FAILED(hr)) {
+			logger::error("VR: Failed to create in-scene menu submit copy texture (eye={}, {}x{}, Format: {}, ArraySize: {}, Samples: {}, HRESULT: 0x{:08X})",
+				eyeIdx,
+				copyDesc.Width,
+				copyDesc.Height,
+				(uint32_t)copyDesc.Format,
+				copyDesc.ArraySize,
+				copyDesc.SampleDesc.Count,
+				(uint32_t)hr);
+			submitCopy.pendingCreate = false;
+			continue;
+		}
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = viewFormat;
+		if (copyDesc.ArraySize > 1) {
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+			uavDesc.Texture2DArray.FirstArraySlice = (UINT)eyeIdx;
+			uavDesc.Texture2DArray.ArraySize = 1;
+			uavDesc.Texture2DArray.MipSlice = 0;
+		} else {
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			uavDesc.Texture2D.MipSlice = 0;
+		}
+
+		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+		hr = device->CreateUnorderedAccessView(texture.get(), &uavDesc, uav.put());
+		if (FAILED(hr)) {
+			logger::error("VR: Failed to create in-scene menu submit copy UAV (eye={}, {}x{}, Format: {}, ViewFormat: {}, ArraySize: {}, Samples: {}, HRESULT: 0x{:08X})",
+				eyeIdx,
+				copyDesc.Width,
+				copyDesc.Height,
+				(uint32_t)copyDesc.Format,
+				(uint32_t)viewFormat,
+				copyDesc.ArraySize,
+				copyDesc.SampleDesc.Count,
+				(uint32_t)hr);
+			submitCopy.pendingCreate = false;
+			continue;
+		}
+
+		submitCopy.texture = std::move(texture);
+		submitCopy.uav = std::move(uav);
+		submitCopy.sourceDesc = sourceDesc;
+		submitCopy.pendingCreate = false;
+		inSceneResources.cachedEyeRTVs[eyeIdx].texture = nullptr;
+		inSceneResources.cachedEyeRTVs[eyeIdx].rtv = nullptr;
+		Util::SetResourceName(submitCopy.texture.get(), eyeIdx == 0 ? "VR::InSceneOverlaySubmitCopyLeft" : "VR::InSceneOverlaySubmitCopyRight");
+		Util::SetResourceName(submitCopy.uav.get(), eyeIdx == 0 ? "VR::InSceneOverlaySubmitCopyLeft UAV" : "VR::InSceneOverlaySubmitCopyRight UAV");
+		logger::debug("VR: Created in-scene menu submit copy for eye {} ({}x{}, format={}, array={}, samples={})",
+			eyeIdx,
+			copyDesc.Width,
+			copyDesc.Height,
+			(uint32_t)copyDesc.Format,
+			copyDesc.ArraySize,
+			copyDesc.SampleDesc.Count);
+	}
+}
+
+bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture)
+{
+	if (!inputTexture || !inputTexture->handle || inputTexture->eType != vr::TextureType_DirectX || !ShouldRenderInSceneMenu(*this)) {
+		return false;
+	}
+
+	auto sourceTexture = ResolveSubmitTexture2D(inputTexture->handle);
+	auto* context = globals::d3d::context;
+	if (!sourceTexture || !context) {
+		logger::error("VR: OpenVR submit handle is not a D3D11 texture; skipping in-scene menu compositing");
+		return false;
+	}
+
+	const int eyeIdx = static_cast<int>(eye);
+	if (eyeIdx < 0 || eyeIdx >= 2) {
+		return false;
+	}
+
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	sourceTexture->GetDesc(&sourceDesc);
+
+	auto& submitCopy = inSceneResources.submitCopies[eyeIdx];
+	if (!submitCopy.texture || !submitCopy.uav || !MatchesSubmitCopyDesc(submitCopy.sourceDesc, sourceDesc)) {
+		submitCopy.texture = nullptr;
+		submitCopy.uav = nullptr;
+		submitCopy.pendingSourceDesc = sourceDesc;
+		submitCopy.pendingCreate = true;
+		return false;
+	}
+
+	context->CopyResource(submitCopy.texture.get(), sourceTexture.get());
+	CompositeInSceneOverlaySubmitTexture(eye, submitCopy.texture.get(), submitCopy.uav.get(), sourceDesc, bounds);
+
+	outputTexture = *inputTexture;
+	outputTexture.handle = submitCopy.texture.get();
+	return true;
 }
 
 void VR::InstallSubmitHook()

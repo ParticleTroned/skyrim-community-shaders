@@ -1,5 +1,13 @@
 #include "State.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#	define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#	define NOMINMAX
+#endif
+#include <Windows.h>
+
 #include <algorithm>
 #include <cmath>
 #include <codecvt>
@@ -129,6 +137,23 @@ namespace
 			ForceDisableAtBootFeature(a_disabledFeaturesJson, WetnessEffects::kShortName);
 		}
 	}
+
+	float2 GetMainRenderTargetSize()
+	{
+		auto* renderer = globals::game::renderer;
+		if (!renderer) {
+			return {};
+		}
+
+		const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		if (!main.texture) {
+			return {};
+		}
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		main.texture->GetDesc(&texDesc);
+		return { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
+	}
 }
 
 void State::Draw()
@@ -147,6 +172,7 @@ void State::Draw()
 	if (shaderCache->IsEnabled()) {
 		// Process deferred cell transitions (interior detection)
 		SceneSettingsManager::GetSingleton()->Update();
+		globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
 
 		if (pendingPostLoadRuntimeReset) {
 			globals::OnDataLoaded();
@@ -316,6 +342,33 @@ void State::Setup()
 
 	// Load scene-specific settings (Interior Only, etc.)
 	SceneSettingsManager::GetSingleton()->LoadAll();
+}
+
+void State::SetupRenderTargetResources()
+{
+	const bool stateResourcesMissing =
+		!permutationCB ||
+		!sharedDataCB ||
+		!featureDataCB;
+	const bool d3dDeviceChanged =
+		setupResourcesDevice != globals::d3d::device ||
+		setupResourcesContext != globals::d3d::context;
+
+	if (stateResourcesMissing || d3dDeviceChanged) {
+		Setup();
+		return;
+	}
+
+	const auto mainRenderTargetSize = GetMainRenderTargetSize();
+	if (mainRenderTargetSize.x > 0.0f && mainRenderTargetSize.y > 0.0f) {
+		screenSize = mainRenderTargetSize;
+	}
+	featureLevel = globals::d3d::device->GetFeatureLevel();
+
+	// VR render-scale relatch only needs resources tied to recreated render targets.
+	// Keep disk/world discovery and full feature setup on State::Setup().
+	Feature::ForEachLoadedFeature("SetupRenderTargetResources", [](Feature* feature) { feature->SetupRenderTargetResources(); });
+	globals::deferred->SetupResources();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)
@@ -774,6 +827,14 @@ bool State::IsDeveloperMode()
 
 void State::ModifyRenderTarget(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 {
+	if (globals::features::upscaling.AdjustVRRenderScaleRenderTargetProperties(a_target, a_properties)) {
+		logger::debug(
+			"[Upscaling] Adjusted {} render target properties to {}x{} for VR render scale.",
+			magic_enum::enum_name(a_target),
+			a_properties->width,
+			a_properties->height);
+	}
+
 	a_properties->supportUnorderedAccess = true;
 	logger::debug("Adding UAV access to {}", magic_enum::enum_name(a_target));
 }
@@ -848,7 +909,19 @@ void State::SetupResources()
 
 	frameTimingActive = false;
 
-	auto renderer = globals::game::renderer;
+	delete permutationCB;
+	permutationCB = nullptr;
+	delete sharedDataCB;
+	sharedDataCB = nullptr;
+	delete featureDataCB;
+	featureDataCB = nullptr;
+	pPerf = nullptr;
+#ifdef TRACY_ENABLE
+	if (tracyCtx) {
+		TracyD3D11Destroy(tracyCtx);
+		tracyCtx = nullptr;
+	}
+#endif
 
 	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
 	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
@@ -859,13 +932,15 @@ void State::SetupResources()
 
 	// Grab main texture to get resolution
 	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
-	D3D11_TEXTURE2D_DESC texDesc{};
-	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture->GetDesc(&texDesc);
-
-	screenSize = { (float)texDesc.Width, (float)texDesc.Height };
-	globals::d3d::context->QueryInterface(__uuidof(pPerf), reinterpret_cast<void**>(&pPerf));
-
+	screenSize = GetMainRenderTargetSize();
+	if (globals::d3d::context) {
+		globals::d3d::context->QueryInterface(
+			__uuidof(REX::W32::ID3DUserDefinedAnnotation),
+			reinterpret_cast<void**>(pPerf.ReleaseAndGetAddressOf()));
+	}
 	featureLevel = globals::d3d::device->GetFeatureLevel();
+	setupResourcesDevice = globals::d3d::device;
+	setupResourcesContext = globals::d3d::context;
 
 	tracyCtx = TracyD3D11Context(globals::d3d::device, globals::d3d::context);
 #ifdef TRACY_ENABLE
@@ -992,7 +1067,8 @@ void State::BeginPerfEvent(std::string_view title)
 	const TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(srcloc, true);
 	s_tracyPerfZones.push_back(ctx);
 #endif
-	pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get())
+		pPerf->BeginEvent(std::wstring(title.begin(), title.end()).c_str());
 }
 
 void State::EndPerfEvent()
@@ -1005,12 +1081,14 @@ void State::EndPerfEvent()
 		logger::warn("EndPerfEvent called without a matching BeginPerfEvent");
 	}
 #endif
-	pPerf->EndEvent();
+	if (pPerf.Get())
+		pPerf->EndEvent();
 }
 
 void State::SetPerfMarker(std::string_view title)
 {
-	pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
+	if (pPerf.Get())
+		pPerf->SetMarker(std::wstring(title.begin(), title.end()).c_str());
 }
 
 void State::SetAdapterDescription(const std::wstring& description)

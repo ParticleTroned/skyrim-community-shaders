@@ -7,6 +7,8 @@ class MenuHeaderRenderer
 public:
 	struct ActionIcon
 	{
+		const char* id;
+		const char* flashId;
 		ID3D11ShaderResourceView* texture;
 		const char* tooltip;
 		std::function<void()> callback;
@@ -19,15 +21,14 @@ public:
 		float uiScale,
 		const Menu::UIIcons& uiIcons,
 		bool forceStableHeader = false,
-		bool showSteamVRDockHandle = false);
+		bool showSteamVRDockHandle = false,
+		ImGuiID steamVRDockSpaceId = 0);
 	static void RenderSteamVRResizeHandles(float uiScale);
 
 private:
 	static std::vector<ActionIcon> BuildActionIcons(bool canShowIcons, const Menu::UIIcons& uiIcons);
-	static void RenderActionIcons(const std::vector<ActionIcon>& actionIcons, bool isDocked, float uiScale);
 	static void RenderDockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);
 	static void RenderUndockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);
-	static void RenderSteamVRDockHandle(float uiScale);
+	static void RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpaceId);
 	static void RenderStableHeader(const std::string& title, bool showLogo, const std::vector<ActionIcon>& actionIcons, float uiScale, const Menu::UIIcons& uiIcons);
-	static void RenderWatermarkLogo(const Menu::UIIcons& uiIcons);
 };

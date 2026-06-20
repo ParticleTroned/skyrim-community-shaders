@@ -15,6 +15,22 @@ namespace
 {
 	constexpr UINT NVIDIA_VENDOR_ID = 0x10DE;
 
+	enum class D3D11IdleFenceResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
+	void ReleaseD3D11IdleFence(ID3D11Query*& a_query)
+	{
+		if (!a_query)
+			return;
+
+		a_query->Release();
+		a_query = nullptr;
+	}
+
 	bool IsHDRDLSSInputFormat(DXGI_FORMAT a_format)
 	{
 		switch (a_format) {
@@ -53,55 +69,61 @@ namespace
 		return IsHDRDLSSInputFormat(desc.Format);
 	}
 
-	void FlushAndWaitForD3D11Idle(ID3D11DeviceContext* a_context, const char* a_reason)
+	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
 	{
-		if (!a_context)
-			return;
+		if (!a_context) {
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Ready;
+		}
+
+		const auto pollFence = [&]() {
+			BOOL completed = FALSE;
+			const HRESULT dataResult = a_context->GetData(a_query, &completed, sizeof(completed), 0);
+			if (dataResult == S_OK && completed) {
+				ReleaseD3D11IdleFence(a_query);
+				return D3D11IdleFenceResult::Ready;
+			}
+
+			if (dataResult == S_FALSE || dataResult == S_OK)
+				return D3D11IdleFenceResult::Pending;
+
+			logger::debug("[Streamline] D3D11 idle fence poll failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
+			ReleaseD3D11IdleFence(a_query);
+			return D3D11IdleFenceResult::Failed;
+		};
+
+		if (a_query)
+			return pollFence();
 
 		ID3D11Device* device = nullptr;
 		a_context->GetDevice(&device);
 		if (!device) {
 			a_context->Flush();
-			return;
+			return D3D11IdleFenceResult::Ready;
 		}
 
 		D3D11_QUERY_DESC queryDesc{};
 		queryDesc.Query = D3D11_QUERY_EVENT;
 
-		ID3D11Query* query = nullptr;
-		const HRESULT createResult = device->CreateQuery(&queryDesc, &query);
+		const HRESULT createResult = device->CreateQuery(&queryDesc, &a_query);
 		device->Release();
 
-		if (FAILED(createResult) || !query) {
+		if (FAILED(createResult) || !a_query) {
 			a_context->Flush();
-			return;
+			logger::debug("[Streamline] D3D11 idle fence creation failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(createResult));
+			return D3D11IdleFenceResult::Failed;
 		}
 
-		a_context->End(query);
+		a_context->End(a_query);
 		a_context->Flush();
-
-		const ULONGLONG deadline = GetTickCount64() + 1000;
-		BOOL completed = FALSE;
-		while (true) {
-			const HRESULT dataResult = a_context->GetData(query, &completed, sizeof(completed), 0);
-			if (dataResult == S_OK && completed)
-				break;
-
-			if (FAILED(dataResult)) {
-				logger::debug("[Streamline] D3D11 idle wait failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
-				break;
-			}
-
-			if (GetTickCount64() >= deadline) {
-				logger::debug("[Streamline] D3D11 idle wait timed out before {}", a_reason);
-				break;
-			}
-
-			Sleep(1);
-		}
-
-		query->Release();
+		return pollFence();
 	}
+
+}
+
+Streamline::~Streamline()
+{
+	ResetDLSSIdleFences();
 }
 
 void LoggingCallback(sl::LogType type, const char* msg)
@@ -164,12 +186,18 @@ std::vector<std::pair<std::string, std::string>> Streamline::dllVersions = {};
 void Streamline::LoadInterposer()
 {
 	triedInitialization = true;
+	featureCheckComplete = false;
 
 	std::wstring interposerPath = std::wstring(Streamline::PluginDir) + L"\\sl.interposer.dll";
 	interposer = LoadLibraryW(interposerPath.c_str());
 	if (interposer == nullptr) {
 		DWORD errorCode = GetLastError();
 		logger::info("[Streamline] Failed to load interposer: Error Code {0:x}", errorCode);
+		featureDLSS = false;
+		featureReflex = false;
+		featurePCL = false;
+		reflexSupportedOnCurrentAdapter = false;
+		featureCheckComplete = true;
 		return;
 	} else {
 		logger::info("[Streamline] Interposer loaded at address: {0:p}", static_cast<void*>(interposer));
@@ -244,6 +272,11 @@ void Streamline::LoadInterposer()
 
 	if (SL_FAILED(res, slInit(pref, sl::kSDKVersion))) {
 		logger::critical("[Streamline] Failed to initialize Streamline");
+		featureDLSS = false;
+		featureReflex = false;
+		featurePCL = false;
+		reflexSupportedOnCurrentAdapter = false;
+		featureCheckComplete = true;
 	} else {
 		initialized = true;
 		featureDLSS = false;
@@ -259,6 +292,7 @@ void Streamline::LoadInterposer()
 
 void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
+	featureCheckComplete = false;
 	logger::info("[Streamline] Checking features");
 	DXGI_ADAPTER_DESC adapterDesc;
 	a_adapter->GetDesc(&adapterDesc);
@@ -317,6 +351,7 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
+	featureCheckComplete = true;
 }
 
 void Streamline::PostDevice()
@@ -419,6 +454,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	// In non-VR, this is called once per frame
 	auto state = globals::state;
 	auto& upscaling = globals::features::upscaling;
+	if (!state)
+		return false;
 	bool applyCroppedConstantsCorrection = false;
 	float clampedViewportScaleX = std::clamp(viewportScaleX, 1e-4f, 1.0f);
 	float clampedViewportScaleY = std::clamp(viewportScaleY, 1e-4f, 1.0f);
@@ -434,8 +471,11 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	sl::Constants slConstants = {};
 
 	// Calculate aspect ratio for the SINGLE EYE
-	float eyeWidth = state->screenSize.x * (globals::game::isVR ? 0.5f : 1.0f);
-	float eyeHeight = state->screenSize.y;
+	float2 fullOutputSize = upscaling.GetRuntimeResolutionPlan().finalOutputSize;
+	if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
+		fullOutputSize = state->screenSize;
+	float eyeWidth = fullOutputSize.x * (globals::game::isVR ? 0.5f : 1.0f);
+	float eyeHeight = fullOutputSize.y;
 	slConstants.cameraAspectRatio = (eyeWidth * clampedViewportScaleX) / (eyeHeight * clampedViewportScaleY);
 
 	slConstants.cameraFOV = Util::GetVerticalFOVRad();
@@ -762,8 +802,19 @@ sl::ViewportHandle Streamline::ResolveDLSSViewport(sl::ViewportHandle p_viewport
 
 		auto& slot = vrDLSSViewportSlots[slotIndex];
 		if (slot.valid) {
-			if (auto context = globals::d3d::context)
-				FlushAndWaitForD3D11Idle(context, "VR DLSS viewport slot recycle");
+			if (auto context = globals::d3d::context) {
+				if (BeginOrPollD3D11IdleFence(context, pendingVRDLSSSlotRecycleIdleFence, "VR DLSS viewport slot recycle") != D3D11IdleFenceResult::Ready) {
+					static bool loggedSlotRecycleTimeout = false;
+					if (!loggedSlotRecycleTimeout) {
+						logger::warn("[Streamline] Skipping VR DLSS viewport slot recycle because the D3D11 queue did not become idle.");
+						loggedSlotRecycleTimeout = true;
+					}
+					nonVRDLSSOptionsCache.valid = false;
+					return p_viewport;
+				}
+			} else {
+				ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
+			}
 			FreeVRDLSSViewportSlot(static_cast<uint32_t>(slotIndex), true);
 		}
 
@@ -811,10 +862,42 @@ void Streamline::InvalidateDLSSOptionsCache()
 	}
 }
 
+void Streamline::ResetDLSSIdleFences()
+{
+	ReleaseD3D11IdleFence(pendingDLSSResourceFreeIdleFence);
+	ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
+}
+
 void Streamline::ResetFrameTracking()
 {
 	frameToken = nullptr;
 	frameChecker = {};
+}
+
+bool Streamline::HasDLSSResourcesPendingTeardown() const
+{
+	if (pendingDLSSResourceFreeIdleFence || pendingVRDLSSSlotRecycleIdleFence)
+		return true;
+
+	// If DLSS is not active/available in this process, cached slot metadata
+	// should not trigger a teardown cooldown by itself.
+	if (!initialized || !featureDLSS)
+		return false;
+
+	if (nonVRDLSSOptionsCache.valid)
+		return true;
+
+	for (const auto& slot : vrDLSSViewportSlots) {
+		if (slot.valid)
+			return true;
+
+		for (const auto& optionsCache : slot.optionsCache) {
+			if (optionsCache.valid)
+				return true;
+		}
+	}
+
+	return false;
 }
 
 bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
@@ -837,11 +920,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	sl::Resource reactiveMaskRes = { sl::ResourceType::eTex2d, reactiveMask, 0 };
 	sl::Resource transparencyMaskRes = { sl::ResourceType::eTex2d, transparencyMask, 0 };
 
+	auto& upscaling = globals::features::upscaling;
 	float viewportScaleX = 1.0f;
 	float viewportScaleY = 1.0f;
 	if (auto state = globals::state) {
-		const float fullOutputWidth = globals::game::isVR ? (state->screenSize.x * 0.5f) : state->screenSize.x;
-		const float fullOutputHeight = state->screenSize.y;
+		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
+		auto fullOutputSize = resolutionPlan.finalOutputSize;
+		if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
+			fullOutputSize = state->screenSize;
+
+		const float fullOutputWidth = globals::game::isVR ? (fullOutputSize.x * 0.5f) : fullOutputSize.x;
+		const float fullOutputHeight = fullOutputSize.y;
 		if (fullOutputWidth > 0.0f && fullOutputHeight > 0.0f) {
 			viewportScaleX = std::clamp(static_cast<float>(extentOut.width) / fullOutputWidth, 1e-4f, 1.0f);
 			viewportScaleY = std::clamp(static_cast<float>(extentOut.height) / fullOutputHeight, 1e-4f, 1.0f);
@@ -849,8 +938,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	}
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
-	const uint32_t qualityMode = std::min(globals::features::upscaling.settings.qualityMode, Upscaling::kQualityModeMaxIndex);
-	const uint32_t dlssPreset = std::min(globals::features::upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
+	const uint32_t dlssPreset = std::min(upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
 	vp = ResolveDLSSViewport(vp, eyeIndex, qualityMode, dlssPreset);
 
 	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY))
@@ -858,8 +947,12 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (!SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset))
 		return false;
 
+	const bool submitStageVRDLSS =
+		globals::game::isVR &&
+		upscaling.IsPresentationUpscalingActive();
 	const bool emitPCLMarkers =
-		globals::features::upscaling.settings.reflexUseMarkersToOptimize &&
+		!submitStageVRDLSS &&
+		upscaling.settings.reflexUseMarkersToOptimize &&
 		reflexOptionsCache.useMarkersToOptimize &&
 		featurePCL;
 	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
@@ -971,14 +1064,30 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto state = globals::state;
 
 	auto renderer = globals::game::renderer;
+	if (!state || !renderer)
+		return;
+
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	auto screenSize = state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
 	auto& upscaling = globals::features::upscaling;
-	ID3D11Resource* colorOut =
-		(upscaling.settings.sharpnessDLSS > 0.0f && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
-	const bool outputToSharpener = colorOut == (upscaling.sharpenerTexture ? upscaling.sharpenerTexture->resource.get() : nullptr);
+	upscaling.RefreshRuntimeResolutionState();
+	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive()) {
+		upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+		return;
+	}
+
+	auto screenSize = upscaling.GetRuntimeResolutionPlan().finalOutputSize;
+	auto renderSize = upscaling.GetRuntimeResolutionPlan().engineRenderSize;
+	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f)
+		screenSize = state->screenSize;
+	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
+		renderSize = Util::ConvertToDynamic(screenSize);
+	const bool useSharpenerOutput =
+		upscaling.settings.sharpnessDLSS > 0.0f &&
+		upscaling.sharpenerTexture &&
+		upscaling.sharpenerTexture->resource;
+	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
+	const bool outputToSharpener = useSharpenerOutput;
 
 	// VR: Combined-buffer mode with extent offsets causes temporal ghosting on the right eye
 	// because DLSS's internal history buffers use extent offsets as indices.
@@ -990,37 +1099,55 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		uint32_t eyeWidthIn = (uint32_t)(renderSize.x / 2);
 		uint32_t eyeHeightIn = (uint32_t)renderSize.y;
 
-		// Split color only; DLSS eye 1 uses an explicit per-eye depth copy below.
-		upscaling.PreparePerEyeInputs(
-			a_upscalingTexture,
-			depthTexture.texture,
-			a_motionVectors,
-			a_reactiveMask,
-			a_transparencyCompositionMask,
-			false,
-			false);
+		// Split the combined stereo inputs up front. The direct left-eye path still
+		// uses the native depth buffer, but isolated-output fallback needs valid
+		// per-eye depth for both eyes.
+		if (!upscaling.PreparePerEyeInputs(
+				a_upscalingTexture,
+				depthTexture.texture,
+				a_motionVectors,
+				a_reactiveMask,
+				a_transparencyCompositionMask,
+				false,
+				true)) {
+			static bool loggedPrepareFailure = false;
+			if (!loggedPrepareFailure) {
+				logger::warn("[Streamline] VR DLSS/DLAA skipped because per-eye input preparation failed.");
+				loggedPrepareFailure = true;
+			}
+			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+			return;
+		}
+
+		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(true, false);
+		if (!perEyeResourcesReady) {
+			static bool loggedMissingResource = false;
+			if (!loggedMissingResource) {
+				logger::warn("[Streamline] VR DLSS/DLAA skipped because prepared per-eye resources are incomplete.");
+				loggedMissingResource = true;
+			}
+			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+			return;
+		}
 
 		sl::Extent extentIn{ 0, 0, eyeWidthIn, eyeHeightIn };
 		sl::Extent extentOut{ 0, 0, eyeWidthOut, eyeHeightOut };
+		auto presentStretchFallback = [&]() {
+			bool stretched = true;
+			for (uint32_t i = 0; i < 2; ++i)
+				stretched = upscaling.StretchSubmitStageEyeOutput(i, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut) && stretched;
+			if (stretched)
+				upscaling.FinalizePerEyeOutputs(colorOut);
+			return stretched;
+		};
 
 		// DLAA uses the full per-eye extent. Keep it on the isolated per-eye
 		// output path so hidden-area cleanup and stereo copyback are identical
 		// for both eyes, avoiding stale content in the combined VR target.
-		const bool forcePerEyeOutput = upscaling.settings.qualityMode == 0;
+		const bool forcePerEyeOutput = upscaling.GetRuntimeQualityMode() == 0;
 		const bool canUseDirectEye0 =
 			!forcePerEyeOutput &&
-			upscaling.vrIntermediateColorIn[0] && upscaling.vrIntermediateColorIn[0]->resource &&
-			upscaling.vrIntermediateColorIn[1] && upscaling.vrIntermediateColorIn[1]->resource &&
-			upscaling.vrIntermediateColorOut[0] && upscaling.vrIntermediateColorOut[0]->resource &&
-			upscaling.vrIntermediateColorOut[1] && upscaling.vrIntermediateColorOut[1]->resource &&
-			upscaling.vrIntermediateDepth[0] && upscaling.vrIntermediateDepth[0]->resource &&
-			upscaling.vrIntermediateDepth[1] && upscaling.vrIntermediateDepth[1]->resource &&
-			upscaling.vrIntermediateMotionVectors[0] && upscaling.vrIntermediateMotionVectors[0]->resource &&
-			upscaling.vrIntermediateMotionVectors[1] && upscaling.vrIntermediateMotionVectors[1]->resource &&
-			upscaling.vrIntermediateReactiveMask[0] && upscaling.vrIntermediateReactiveMask[0]->resource &&
-			upscaling.vrIntermediateReactiveMask[1] && upscaling.vrIntermediateReactiveMask[1]->resource &&
-			upscaling.vrIntermediateTransparencyMask[0] && upscaling.vrIntermediateTransparencyMask[0]->resource &&
-			upscaling.vrIntermediateTransparencyMask[1] && upscaling.vrIntermediateTransparencyMask[1]->resource;
+			perEyeResourcesReady;
 
 		if (!canUseDirectEye0) {
 			bool allEvaluated = true;
@@ -1033,16 +1160,25 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					extentIn, extentOut, eyeWidthOut);
 			}
 
+			bool fallbackPresented = false;
 			if (allEvaluated) {
 				upscaling.FinalizePerEyeOutputs(colorOut);
 			} else {
+				upscaling.RequestHistoryReset();
+				fallbackPresented = presentStretchFallback();
 				static bool loggedVREvaluateFailure = false;
-				if (!loggedVREvaluateFailure) {
-					logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; keeping the current scene texture instead of copying stale output.");
-					loggedVREvaluateFailure = true;
+				static bool loggedVRStretchFallbackFailure = false;
+				if (fallbackPresented) {
+					if (!loggedVREvaluateFailure) {
+						logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; using full-size stretch fallback for this frame.");
+						loggedVREvaluateFailure = true;
+					}
+				} else if (!loggedVRStretchFallbackFailure) {
+					logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes and stretch fallback failed; keeping the current scene texture.");
+					loggedVRStretchFallbackFailure = true;
 				}
 			}
-			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && allEvaluated;
+			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && (allEvaluated || fallbackPresented);
 			return;
 		}
 
@@ -1065,9 +1201,29 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			upscaling.vrIntermediateReactiveMask[1]->resource.get(), upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
 			extentIn, extentOut, eyeWidthOut);
 
-		D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-		context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
-		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && leftEvaluated && rightEvaluated;
+		if (leftEvaluated && rightEvaluated) {
+			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
+		}
+
+		bool fallbackPresented = false;
+		if (!leftEvaluated || !rightEvaluated) {
+			upscaling.RequestHistoryReset();
+			fallbackPresented = presentStretchFallback();
+			static bool loggedVRDirectEvaluateFailure = false;
+			static bool loggedVRDirectStretchFallbackFailure = false;
+			if (fallbackPresented) {
+				if (!loggedVRDirectEvaluateFailure) {
+					logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed; using full-size stretch fallback for this frame.");
+					loggedVRDirectEvaluateFailure = true;
+				}
+			} else if (!loggedVRDirectStretchFallbackFailure) {
+				logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed and stretch fallback failed; keeping the current scene texture.");
+				loggedVRDirectStretchFallbackFailure = true;
+			}
+		}
+
+		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && ((leftEvaluated && rightEvaluated) || fallbackPresented);
 
 	} else {
 		// Non-VR: Simple full-texture upscale
@@ -1086,16 +1242,27 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
  *
  * Sets the DLSS mode to off and frees all DLSS-related resources associated with the viewport.
  */
-void Streamline::DestroyDLSSResources()
+bool Streamline::DestroyDLSSResources()
 {
 	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
+		ResetDLSSIdleFences();
 		InvalidateDLSSOptionsCache();
 		ResetFrameTracking();
-		return;
+		return true;
 	}
 
-	if (auto context = globals::d3d::context)
-		FlushAndWaitForD3D11Idle(context, "DLSS resource free");
+	if (auto context = globals::d3d::context) {
+		if (BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence, "DLSS resource free") != D3D11IdleFenceResult::Ready) {
+			static bool loggedDLSSResourceFreeTimeout = false;
+			if (!loggedDLSSResourceFreeTimeout) {
+				logger::warn("[Streamline] Deferring DLSS resource free because the D3D11 queue did not become idle.");
+				loggedDLSSResourceFreeTimeout = true;
+			}
+			return false;
+		}
+	} else {
+		ResetDLSSIdleFences();
+	}
 
 	FreeDLSSViewportResources(viewport, 0, true);
 
@@ -1105,9 +1272,11 @@ void Streamline::DestroyDLSSResources()
 			FreeVRDLSSViewportSlot(slotIndex, false);
 	}
 
+	ResetDLSSIdleFences();
 	InvalidateDLSSOptionsCache();
 	vrDLSSViewportUseCounter = 0;
 	ResetFrameTracking();
+	return true;
 }
 
 void Streamline::UpdateReflex()

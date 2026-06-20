@@ -100,6 +100,7 @@ public:
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 	virtual void Reset() override;
 	virtual void RestoreDefaultSettings() override;
 
@@ -108,6 +109,7 @@ public:
 	float3 Gaussian(DiffusionProfile& a_profile, float variance, float r);
 	float3 Profile(DiffusionProfile& a_profile, float r);
 	void CalculateKernel(DiffusionProfile& a_profile, Kernel& kernel);
+	void EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height);
 
 	void DrawSSS();
 

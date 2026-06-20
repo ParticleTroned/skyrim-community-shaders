@@ -203,6 +203,7 @@ struct ParticleLightInfo
 	Util::FrameChecker frameChecker;
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 	virtual void Reset() override;
 
 	virtual void LoadSettings(json& o_json) override;

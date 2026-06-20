@@ -18,6 +18,9 @@
 #include "Hooks.h"
 #include "Utils/D3D.h"
 
+#include <algorithm>
+#include <cmath>
+
 struct DepthStates
 {
 	ID3D11DepthStencilState* a[6][40];
@@ -61,6 +64,32 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 void Deferred::SetupResources()
 {
 	auto renderer = globals::game::renderer;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != globals::d3d::device) {
+		if (mainCompositeCS) {
+			mainCompositeCS->Release();
+			mainCompositeCS = nullptr;
+		}
+		if (mainCompositeInteriorCS) {
+			mainCompositeInteriorCS->Release();
+			mainCompositeInteriorCS = nullptr;
+		}
+		if (linearSampler) {
+			linearSampler->Release();
+			linearSampler = nullptr;
+		}
+		if (pointSampler) {
+			pointSampler->Release();
+			pointSampler = nullptr;
+		}
+		delete perShadow;
+		perShadow = nullptr;
+		if (copyShadowCS) {
+			copyShadowCS->Release();
+			copyShadowCS = nullptr;
+		}
+		shaderDevice = globals::d3d::device;
+	}
 
 	{
 		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -114,18 +143,20 @@ void Deferred::SetupResources()
 	{
 		auto device = globals::d3d::device;
 
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.MaxAnisotropy = 1;
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
+		if (!linearSampler || !pointSampler) {
+			D3D11_SAMPLER_DESC samplerDesc = {};
+			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+			samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.MaxAnisotropy = 1;
+			samplerDesc.MinLOD = 0;
+			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
 
-		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
+			samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
+		}
 	}
 
 	{
@@ -150,13 +181,16 @@ void Deferred::SetupResources()
 
 		sbDesc.StructureByteStride = sizeof(PerGeometry);
 		sbDesc.ByteWidth = sizeof(PerGeometry) * numElements;
-		perShadow = new Buffer(sbDesc);
-		srvDesc.Buffer.NumElements = numElements;
-		perShadow->CreateSRV(srvDesc);
-		uavDesc.Buffer.NumElements = numElements;
-		perShadow->CreateUAV(uavDesc);
+		if (!perShadow) {
+			perShadow = new Buffer(sbDesc);
+			srvDesc.Buffer.NumElements = numElements;
+			perShadow->CreateSRV(srvDesc);
+			uavDesc.Buffer.NumElements = numElements;
+			perShadow->CreateUAV(uavDesc);
+		}
 
-		copyShadowCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CopyShadowDataCS.hlsl", {}, "cs_5_0"));
+		if (!copyShadowCS)
+			copyShadowCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\CopyShadowDataCS.hlsl", {}, "cs_5_0"));
 	}
 
 	{
@@ -391,7 +425,8 @@ void Deferred::DeferredPasses()
 	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
 	bool ssgi_hq_spec = ssgi.IsSpecularGIActive();
 
-	auto dispatchCount = Util::GetScreenDispatchCount(true);
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 
 	auto& sss = globals::features::subsurfaceScattering;
 	if (sss.loaded)
@@ -600,6 +635,10 @@ void Deferred::ClearShaderCache()
 		mainCompositeInteriorCS->Release();
 		mainCompositeInteriorCS = nullptr;
 	}
+	if (copyShadowCS) {
+		copyShadowCS->Release();
+		copyShadowCS = nullptr;
+	}
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
@@ -675,7 +714,9 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	auto* const state = globals::state;
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	state->inWorld = true;
+	state->lastWorldRenderFrame = state->frameCount;
 	func(a1);
+	state->lastCompletedWorldRenderFrame = state->frameCount;
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 };
@@ -715,7 +756,35 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
-	context->CopyResource(depthCopy.texture, depth.texture);
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	if (submitStageSceneDomain && depth.texture && depthCopy.texture) {
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		D3D11_TEXTURE2D_DESC destinationDesc{};
+		depth.texture->GetDesc(&sourceDesc);
+		depthCopy.texture->GetDesc(&destinationDesc);
+
+		const auto dynamicSize = Util::ConvertToDynamic(globals::state->screenSize, true);
+		const UINT copyWidth = std::clamp(
+			static_cast<UINT>(std::lround(dynamicSize.x)),
+			1u,
+			std::min(sourceDesc.Width, destinationDesc.Width));
+		const UINT copyHeight = std::clamp(
+			static_cast<UINT>(std::lround(dynamicSize.y)),
+			1u,
+			std::min(sourceDesc.Height, destinationDesc.Height));
+
+		const D3D11_BOX sourceBox{
+			0,
+			0,
+			0,
+			copyWidth,
+			copyHeight,
+			1
+		};
+		context->CopySubresourceRegion(depthCopy.texture, 0, 0, 0, 0, depth.texture, 0, &sourceBox);
+	} else {
+		context->CopyResource(depthCopy.texture, depth.texture);
+	}
 
 	// After this point, water starts rendering
 };

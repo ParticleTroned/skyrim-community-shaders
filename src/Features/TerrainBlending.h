@@ -38,6 +38,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 
 	ID3D11VertexShader* GetTerrainVertexShader();
 	ID3D11VertexShader* GetTerrainOffsetVertexShader();

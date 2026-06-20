@@ -1,0 +1,51 @@
+PL3.15-VR render-scale port notes
+
+Rationale
+---------
+This branch ports the useful VR render-scale pipeline from the Pre84/Pre145 line onto
+the 7940f114 PL3.14 base without carrying forward unrelated churn. The goal is a
+clean render-scale path that is stable during VRAPI transitions, keeps CS menu text
+sharp, and leaves the normal PL3.14 submit path untouched when render scale is off.
+
+Render scale and final submit are intentionally one pipeline. When presentation
+render-scale is inactive, the OpenVR submit hook falls through to the original
+compositor submit as before. There is no separate legacy submit replacement path.
+
+The CS UI behavior follows the Pre145 menu state: SteamVR and in-scene menu layout,
+controller interaction, HMD/controller overlay sizing, dock controls, and menu input
+reset behavior are kept. The Pre144/Pre145 menu text jitter fix is included through
+the final overlay dimension split and stable menu submit behavior, without carrying
+older unsuccessful menu readability experiments.
+
+Implementation
+--------------
+The render-scale state is latched through the VR perf-mode/runtime plan code and is
+protected across VRAPI, settings, save-load, and D3D reset transitions. The runtime
+plan tracks display, render, and final-submit dimensions and recreates resources only
+when the active plan changes.
+
+Submitted DirectX textures enter the render-scale path only while presentation
+render-scale is active. The final submit stage owns the upscale/stretch decision and
+submits one final texture to the VR compositor. Loading/menu-sized presentation uses
+the lightweight stretch stage where needed instead of introducing a second submit
+path.
+
+The HMD menu overlay uses its own taller render target while the controller overlay
+keeps the original controller aspect. Separate SRVs are used for HMD and controller
+in-scene presentation so menu text remains stable and sharp when render scale is on.
+
+The underwater mask upscale and projected/worldspace mask repair path are included so
+underwater visuals and worldspace mask rendering remain stable when a menu is open
+with render scale enabled.
+
+Logging is deliberately small. Normal builds only report whether render scale is
+active and the important dimensions. Developer/debug paths may report relatch timing
+or D3D reset/resource failure details, but the old transition diagnostic logging
+helpers and submit-path trace spam are not part of this branch.
+
+Explicit exclusions
+-------------------
+No VRS UI or runtime path is included.
+No black-square, fade, BootExit, or FADERUI cleanup experiments are included.
+No dynamic-resolution legacy submit replacement path is included.
+No old VR transition diagnostic helper symbols are retained.

@@ -544,9 +544,36 @@ struct BSShaderRenderTargets_Create
 	 */
 	static void thunk()
 	{
+		RecreateAndSetupFull();
+	}
+
+	static bool CanSetupRenderingResources()
+	{
+		return globals::game::renderer &&
+		       globals::state &&
+		       globals::deferred &&
+		       globals::d3d::device &&
+		       globals::d3d::context;
+	}
+
+	static bool RecreateAndSetupFull()
+	{
 		func();
 		globals::ReInit();
+		if (!CanSetupRenderingResources())
+			return false;
 		globals::state->Setup();
+		return true;
+	}
+
+	static bool RecreateAndSetupRenderTargetResources()
+	{
+		func();
+		globals::ReInit();
+		if (!CanSetupRenderingResources())
+			return false;
+		globals::state->SetupRenderTargetResources();
+		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -617,6 +644,22 @@ struct BSInputDeviceManager_PollInputDevices
 
 namespace Hooks
 {
+	bool RecreateRenderTargets()
+	{
+		if (!globals::game::renderer || !globals::state || !globals::d3d::device || !globals::d3d::context)
+			return false;
+
+		return BSShaderRenderTargets_Create::RecreateAndSetupFull();
+	}
+
+	bool RecreateRenderTargetsForVRRenderScale()
+	{
+		if (!globals::game::renderer || !globals::state || !globals::deferred || !globals::d3d::device || !globals::d3d::context)
+			return false;
+
+		return BSShaderRenderTargets_Create::RecreateAndSetupRenderTargetResources();
+	}
+
 	struct BSGraphics_Renderer_Init_InitD3D
 	{
 		static void thunk()
@@ -719,6 +762,7 @@ namespace Hooks
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
 			auto properties = *a_properties;
+			globals::state->ModifyRenderTarget(a_target, &properties);
 			properties.copyable = true;
 			func(This, a_target, &properties);
 		}
@@ -730,6 +774,7 @@ namespace Hooks
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
 			auto properties = *a_properties;
+			globals::state->ModifyRenderTarget(a_target, &properties);
 			properties.copyable = true;
 			func(This, a_target, &properties);
 		}

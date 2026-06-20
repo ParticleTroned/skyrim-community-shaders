@@ -21,4 +21,6 @@ namespace Hooks
 
 	void Install();
 	void InstallEarlyHooks();
+	bool RecreateRenderTargets();
+	bool RecreateRenderTargetsForVRRenderScale();
 }

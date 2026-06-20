@@ -102,6 +102,7 @@ public:
 	bool stereoSyncUsesTerrainBlendingDepth = false;
 
 	virtual void SetupResources() override;
+	virtual void SetupRenderTargetResources() override;
 
 	virtual void DrawSettings() override;
 	void DrawFoveationSettings();

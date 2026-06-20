@@ -161,12 +161,12 @@ namespace Util
 			a_size.y * runtimeData.dynamicResolutionHeightRatio);
 	}
 
-	DispatchCount GetScreenDispatchCount(bool a_dynamic)
+	DispatchCount GetScreenDispatchCount(bool a_dynamic, bool a_ignoreDynamicResolutionLock)
 	{
 		float2 resolution = globals::state->screenSize;
 
 		if (a_dynamic)
-			resolution = ConvertToDynamic(resolution);
+			resolution = ConvertToDynamic(resolution, a_ignoreDynamicResolutionLock);
 
 		uint dispatchX = (uint)std::ceil(resolution.x / 8.0f);
 		uint dispatchY = (uint)std::ceil(resolution.y / 8.0f);

@@ -1,9 +1,13 @@
 #include "SubsurfaceScattering.h"
 
 #include "Deferred.h"
+#include "Features/Upscaling.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+
+#include <algorithm>
+#include <cmath>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
@@ -303,7 +307,13 @@ void SubsurfaceScattering::DrawSSS()
 
 	validMaterials = false;
 
-	auto dispatchCount = Util::GetScreenDispatchCount();
+	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
+	const auto sssSize = submitStageSceneDomain ? Util::ConvertToDynamic(globals::state->screenSize, true) : globals::state->screenSize;
+	const auto sssWidth = static_cast<uint32_t>(std::max(1l, std::lround(sssSize.x)));
+	const auto sssHeight = static_cast<uint32_t>(std::max(1l, std::lround(sssSize.y)));
+	EnsureBlurHorizontalTemp(sssWidth, sssHeight);
+
+	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 
 	{
 		auto cameraData = Util::GetCameraData(0);
@@ -330,6 +340,8 @@ void SubsurfaceScattering::DrawSSS()
 		context->CSSetConstantBuffers(1, 1, buffer);
 
 		auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		D3D11_TEXTURE2D_DESC mainDesc{};
+		main.texture->GetDesc(&mainDesc);
 
 		auto mask = renderer->GetRuntimeData().renderTargets[MASKS];
 		auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
@@ -386,7 +398,22 @@ void SubsurfaceScattering::DrawSSS()
 
 				context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 
-				context->CopyResource(main.texture, blurHorizontalTemp->resource.get());
+				uav = nullptr;
+				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
+				if (submitStageSceneDomain && (blurHorizontalTemp->desc.Width != mainDesc.Width || blurHorizontalTemp->desc.Height != mainDesc.Height)) {
+					const D3D11_BOX sourceBox{
+						0,
+						0,
+						0,
+						std::min(blurHorizontalTemp->desc.Width, mainDesc.Width),
+						std::min(blurHorizontalTemp->desc.Height, mainDesc.Height),
+						1
+					};
+					context->CopySubresourceRegion(main.texture, 0, 0, 0, 0, blurHorizontalTemp->resource.get(), 0, &sourceBox);
+				} else {
+					context->CopyResource(main.texture, blurHorizontalTemp->resource.get());
+				}
 			}
 		}
 	}
@@ -404,32 +431,64 @@ void SubsurfaceScattering::DrawSSS()
 	context->CSSetShader(shader, nullptr, 0);
 }
 
+void SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height)
+{
+	auto renderer = globals::game::renderer;
+	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+
+	D3D11_TEXTURE2D_DESC texDesc{};
+	main.texture->GetDesc(&texDesc);
+
+	a_width = std::clamp(a_width, 1u, texDesc.Width);
+	a_height = std::clamp(a_height, 1u, texDesc.Height);
+
+	if (blurHorizontalTemp && blurHorizontalTemp->desc.Width == a_width && blurHorizontalTemp->desc.Height == a_height)
+		return;
+
+	texDesc.Width = a_width;
+	texDesc.Height = a_height;
+	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	main.SRV->GetDesc(&srvDesc);
+
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+	main.UAV->GetDesc(&uavDesc);
+
+	delete blurHorizontalTemp;
+	blurHorizontalTemp = new Texture2D(texDesc, "SubsurfaceScattering::BlurHorizontalTemp");
+	blurHorizontalTemp->CreateSRV(srvDesc);
+	blurHorizontalTemp->CreateUAV(uavDesc);
+}
+
 void SubsurfaceScattering::SetupResources()
 {
+	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		delete blurHorizontalTemp;
+		blurHorizontalTemp = nullptr;
+		shaderDevice = device;
+	}
+
 	{
-		blurCB = new ConstantBuffer(ConstantBufferDesc<BlurCB>());
+		delete blurCB;
+		blurCB = new ConstantBuffer(ConstantBufferDesc<BlurCB>(), "SubsurfaceScattering::BlurCB");
 	}
 
 	auto renderer = globals::game::renderer;
+	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	{
-		auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	D3D11_TEXTURE2D_DESC texDesc{};
+	main.texture->GetDesc(&texDesc);
 
-		D3D11_TEXTURE2D_DESC texDesc{};
-		main.texture->GetDesc(&texDesc);
+	EnsureBlurHorizontalTemp(texDesc.Width, texDesc.Height);
+}
 
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		main.SRV->GetDesc(&srvDesc);
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		main.UAV->GetDesc(&uavDesc);
-
-		blurHorizontalTemp = new Texture2D(texDesc);
-		blurHorizontalTemp->CreateSRV(srvDesc);
-		blurHorizontalTemp->CreateUAV(uavDesc);
-	}
+void SubsurfaceScattering::SetupRenderTargetResources()
+{
+	SetupResources();
 }
 
 void SubsurfaceScattering::Reset()

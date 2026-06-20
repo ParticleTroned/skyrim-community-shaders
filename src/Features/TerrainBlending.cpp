@@ -776,6 +776,34 @@ void TerrainBlending::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		shaderDevice = device;
+	}
+
+	if (terrainDepth.texture) {
+		terrainDepth.texture->Release();
+		terrainDepth.texture = nullptr;
+	}
+	if (terrainDepth.depthSRV) {
+		terrainDepth.depthSRV->Release();
+		terrainDepth.depthSRV = nullptr;
+	}
+	if (terrainDepth.views[0]) {
+		terrainDepth.views[0]->Release();
+		terrainDepth.views[0] = nullptr;
+	}
+	delete blendedDepthTexture;
+	blendedDepthTexture = nullptr;
+	delete blendedDepthTexture16;
+	blendedDepthTexture16 = nullptr;
+	delete mainDepthCopy;
+	mainDepthCopy = nullptr;
+	if (terrainDepthStencilState) {
+		terrainDepthStencilState->Release();
+		terrainDepthStencilState = nullptr;
+	}
 
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -848,6 +876,11 @@ void TerrainBlending::SetupResources()
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 		Util::SetResourceName(terrainDepthStencilState, "TerrainBlending::DepthStencilState");
 	}
+}
+
+void TerrainBlending::SetupRenderTargetResources()
+{
+	SetupResources();
 }
 
 void TerrainBlending::PostPostLoad()

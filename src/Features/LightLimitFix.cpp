@@ -612,13 +612,35 @@ void LightLimitFix::SetupResources()
 	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
 	clusterSize[2] = 32;
 	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != globals::d3d::device) {
+		delete lightBuildingCB;
+		lightBuildingCB = nullptr;
+		delete lightCullingCB;
+		lightCullingCB = nullptr;
+		delete strictLightDataCB;
+		strictLightDataCB = nullptr;
+		if (clusterBuildingCS) {
+			clusterBuildingCS->Release();
+			clusterBuildingCS = nullptr;
+		}
+		if (clusterCullingCS) {
+			clusterCullingCS->Release();
+			clusterCullingCS = nullptr;
+		}
+		shaderDevice = globals::d3d::device;
+	}
 
 	{
-		clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
-		clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
+		if (!clusterBuildingCS)
+			clusterBuildingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0");
+		if (!clusterCullingCS)
+			clusterCullingCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0");
 
-		lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>());
-		lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>());
+		if (!lightBuildingCB)
+			lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>());
+		if (!lightCullingCB)
+			lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>());
 	}
 
 	{
@@ -723,8 +745,14 @@ void LightLimitFix::SetupResources()
 	}
 
 	{
-		strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>());
+		if (!strictLightDataCB)
+			strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>());
 	}
+}
+
+void LightLimitFix::SetupRenderTargetResources()
+{
+	SetupResources();
 }
 
 void LightLimitFix::Reset()

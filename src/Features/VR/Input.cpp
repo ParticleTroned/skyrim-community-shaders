@@ -4,13 +4,58 @@
 #include "Utils/PerfUtils.h"
 #include "Utils/VRUtils.h"
 
+#include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 using AttachMode = VR::Settings::OverlayAttachMode;
+
+namespace
+{
+	constexpr size_t kNumVRInputMappings = 6;
+	constexpr size_t kNumVRTriggerMappings = 1;
+
+	struct ScrollAccum
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+	};
+
+	bool gPrevPrimaryVRInputStates[kNumVRInputMappings] = {};
+	bool gPrevSecondaryVRInputStates[kNumVRInputMappings] = {};
+	bool gLastVRInputHandedness = false;
+	std::unordered_map<size_t, ScrollAccum> gVRScrollAccums;
+
+	void ResetVRImGuiButtonState()
+	{
+		std::fill_n(gPrevPrimaryVRInputStates, kNumVRInputMappings, false);
+		std::fill_n(gPrevSecondaryVRInputStates, kNumVRInputMappings, false);
+	}
+
+	bool HasPressedButton(RE::VRControllerState& controllerState)
+	{
+		for (const auto& [keyCode, buttonState] : controllerState.GetActiveButtons()) {
+			if (buttonState && buttonState->isPressed) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool IsThumbstickActive(const RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone)
+	{
+		return std::abs(controllerState.thumbsticks[thumbstickIndex].x) > deadzone ||
+		       std::abs(controllerState.thumbsticks[thumbstickIndex].y) > deadzone;
+	}
+}
 
 void VR::UpdateOverlayMenuStateFromInput()
 {
 	if (this->isCapturingCombo) {
+		if (globals::menu && !globals::menu->IsEnabled) {
+			ResetMenuInputRuntimeState();
+		}
 		return;
 	}
 
@@ -23,7 +68,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 
 	if (testMode) {
 		if (!isEnabled) {
-			settings.VRMenuControllerDiagnosticsTestMode = false;
+			ResetMenuInputRuntimeState();
 			return;
 		}
 		return;
@@ -65,9 +110,19 @@ void VR::UpdateOverlayMenuStateFromInput()
 	const bool menuClosePressed = CheckCombo(settings.VRMenuCloseKeys);
 	const bool overlayOpenPressed = CheckCombo(settings.VROverlayOpenKeys);
 	const bool overlayClosePressed = CheckCombo(settings.VROverlayCloseKeys);
-	const bool canUseMenuBindings = uiMenusOpen || isEnabled;
+	const bool canOpenMenuFromWorld =
+		!ShouldUseInSceneOverlay() &&
+		openVRInfo.hasOverlayInterface &&
+		settings.attachMode != AttachMode::None;
+	const bool canUseMenuBindings = uiMenusOpen || isEnabled || canOpenMenuFromWorld;
 
-	bool inValidMenuState = uiMenusOpen || isEnabled || overlayEnabled || overlayOpenPressed || overlayClosePressed;
+	bool inValidMenuState =
+		uiMenusOpen ||
+		isEnabled ||
+		overlayEnabled ||
+		(canUseMenuBindings && (menuOpenPressed || menuClosePressed)) ||
+		overlayOpenPressed ||
+		overlayClosePressed;
 
 	if (!inValidMenuState)
 		return;
@@ -83,7 +138,10 @@ void VR::UpdateOverlayMenuStateFromInput()
 		{ [&]() {
 			 return menuOpenPressed && !isEnabled && canUseMenuBindings;
 		 },
-			[&]() { isEnabled = true; } },
+			[&]() {
+				isEnabled = true;
+				ResetMenuInputRuntimeState();
+			} },
 
 		// Close Community Shaders menu when open
 		{ [&]() {
@@ -91,7 +149,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 		 },
 			[&]() {
 				isEnabled = false;
-				overlayDragState.dragging = false;
+				ResetMenuInputRuntimeState();
 			} },
 
 		// Open VR overlay when closed
@@ -178,15 +236,13 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 		return;
 	}
 
-	ImGuiIO& io = ImGui::GetIO();
 	bool isPrimary = RE::BSOpenVRControllerDevice::IsPrimaryController(event.device);
 	bool isSecondary = RE::BSOpenVRControllerDevice::IsSecondaryController(event.device);
-	bool& testMode = settings.VRMenuControllerDiagnosticsTestMode;
-	constexpr size_t kNumTriggerMappings = 1;
 
-	if (isPrimary || isSecondary) {
-		constexpr size_t kNumMappings = 6;
-		RE::ButtonMapping mappings[kNumMappings] = {
+	if (globals::menu && globals::menu->IsEnabled && (isPrimary || isSecondary)) {
+		ImGuiIO& io = ImGui::GetIO();
+		bool& testMode = settings.VRMenuControllerDiagnosticsTestMode;
+		RE::ButtonMapping mappings[kNumVRInputMappings] = {
 			{ RE::BSOpenVRControllerDevice::Keys::kTrigger, ImGuiMouseButton_Left, false, ImGuiKey_None, false },
 			{ RE::BSOpenVRControllerDevice::Keys::kGrip, ImGuiMouseButton_Right, false, ImGuiKey_None, false },
 			{ RE::BSOpenVRControllerDevice::Keys::kTouchpadClick, ImGuiMouseButton_Middle, false, ImGuiKey_None, false },
@@ -195,19 +251,15 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 			{ RE::BSOpenVRControllerDevice::Keys::kXA, -1, true, Util::Input::VirtualKeyToImGuiKey(VK_RETURN), false },
 		};
 
-		static bool prevPrimaryStates[kNumMappings] = {};
-		static bool prevSecondaryStates[kNumMappings] = {};
-		static bool lastHandedness = false;
-		if (lastHandedness != lastKnownLeftHandedMode) {
-			memset(prevPrimaryStates, 0, sizeof(prevPrimaryStates));
-			memset(prevSecondaryStates, 0, sizeof(prevSecondaryStates));
-			lastHandedness = lastKnownLeftHandedMode;
+		if (gLastVRInputHandedness != lastKnownLeftHandedMode) {
+			ResetVRImGuiButtonState();
+			gLastVRInputHandedness = lastKnownLeftHandedMode;
 		}
-		bool* prevStates = isPrimary ? prevPrimaryStates : prevSecondaryStates;
+		bool* prevStates = isPrimary ? gPrevPrimaryVRInputStates : gPrevSecondaryVRInputStates;
 
 		RE::InputDeviceState& controllerState = isPrimary ? primaryControllerState : secondaryControllerState;
 
-		size_t limit = testMode ? kNumTriggerMappings : kNumMappings;
+		size_t limit = testMode ? kNumVRTriggerMappings : kNumVRInputMappings;
 
 		for (size_t i = 0; i < limit; ++i) {
 			RE::ButtonState* state = &controllerState[mappings[i].keyCode];
@@ -277,13 +329,7 @@ void VR::ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t 
 	bool usingScrollStickY = (std::abs(controllerState.thumbsticks[thumbstickIndex].y) > deadzone);
 
 	if (usingScrollStickX || usingScrollStickY) {
-		struct ScrollAccum
-		{
-			float x = 0.0f;
-			float y = 0.0f;
-		};
-		static std::unordered_map<size_t, ScrollAccum> scrollAccums;
-		ScrollAccum& accum = scrollAccums[thumbstickIndex];
+		ScrollAccum& accum = gVRScrollAccums[thumbstickIndex];
 
 		accum.x += controllerState.thumbsticks[thumbstickIndex].x * 0.1f;
 		accum.y += controllerState.thumbsticks[thumbstickIndex].y * 0.1f;
@@ -306,6 +352,43 @@ void VR::ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t 
 	}
 }
 
+void VR::ResetComboRecordingState()
+{
+	isCapturingCombo = false;
+	currentComboType = ComboType::None;
+	currentComboName = nullptr;
+	recordedCombo.clear();
+	comboStartTime = 0.0;
+	recordingButtonControllers.clear();
+}
+
+void VR::ReleaseMenuImGuiInputState()
+{
+	ResetVRImGuiButtonState();
+	gLastVRInputHandedness = lastKnownLeftHandedMode;
+	gVRScrollAccums.clear();
+
+	ImGuiIO& io = ImGui::GetIO();
+	io.ClearInputKeys();
+	for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
+		io.AddMouseButtonEvent(button, false);
+	}
+	io.MouseDrawCursor = false;
+	io.WantSetMousePos = false;
+}
+
+void VR::ResetMenuInputRuntimeState()
+{
+	ResetComboRecordingState();
+
+	settings.VRMenuControllerDiagnosticsTestMode = false;
+	overlayDragState = {};
+	ResetWandPointingRuntimeState();
+	primaryControllerState = {};
+	secondaryControllerState = {};
+	ReleaseMenuImGuiInputState();
+}
+
 void VR::ProcessControllerInputForImGui()
 {
 	if (!globals::menu || !globals::menu->IsEnabled)
@@ -317,10 +400,19 @@ void VR::ProcessControllerInputForImGui()
 	io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
 	io.WantSetMousePos = false;
 
+	const bool controllerInteractionActive =
+		overlayDragState.dragging ||
+		HasPressedButton(primaryControllerState) ||
+		HasPressedButton(secondaryControllerState) ||
+		IsThumbstickActive(primaryControllerState, static_cast<size_t>(RE::ControllerRole::Primary), mouseDeadzone) ||
+		IsThumbstickActive(secondaryControllerState, static_cast<size_t>(RE::ControllerRole::Secondary), mouseDeadzone);
+
 	bool wandHandledCursor = false;
 	if (!testMode && settings.EnableWandPointing) {
-		UpdateCursorFromWandPointing();
+		UpdateCursorFromWandPointing(controllerInteractionActive);
 		wandHandledCursor = wandState.isIntersecting;
+	} else {
+		wandState.isIntersecting = false;
 	}
 
 	if (!testMode) {

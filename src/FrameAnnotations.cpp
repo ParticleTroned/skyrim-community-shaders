@@ -3,6 +3,7 @@
 #include <atomic>
 
 #include "Features/TerrainBlending.h"
+#include "Features/Upscaling.h"
 #include "State.h"
 #include "Util.h"
 

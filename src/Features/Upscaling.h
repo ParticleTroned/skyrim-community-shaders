@@ -246,6 +246,12 @@ public:
 		float2 padding;
 	};
 
+	struct VRMenuLayerCompositeCB
+	{
+		float2 sourceScale;
+		float2 sourceOffset;
+	};
+
 	struct FoveatedPeripheryCB
 	{
 		float2 outputDim;
@@ -299,6 +305,7 @@ public:
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(VRMenuLayerCompositeCB) == 16, "VRMenuLayerCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
@@ -361,6 +368,7 @@ public:
 	ConstantBuffer* jitterCB = nullptr;
 	ConstantBuffer* upscalingDataCB = nullptr;
 	ConstantBuffer* dynamicResolutionStretchCB = nullptr;
+	ConstantBuffer* vrMenuLayerCompositeCB = nullptr;
 	ConstantBuffer* foveatedPeripheryCB = nullptr;
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
@@ -489,8 +497,13 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> submitStageStretchCS;
 	ID3D11ComputeShader* GetSubmitStageStretchCS();
 
+	winrt::com_ptr<ID3D11PixelShader> vrMenuLayerCompositePS;
+	ID3D11PixelShader* GetVRMenuLayerCompositePS();
+
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
+	winrt::com_ptr<ID3D11BlendState> vrMenuCompositeBlendState;
+	winrt::com_ptr<ID3D11BlendState> vrMenuLayerCaptureBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
 
 	// Shared VR HMD Mask Clearing
@@ -573,6 +586,8 @@ public:
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
+	static bool TraceVRMenuBridgeDrawOperation(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
 	void Upscale();
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
@@ -848,6 +863,25 @@ private:
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();
 	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
+	void BeginVRMenuFinalCompositeFrame(uint32_t a_frame);
+	void ResetVRMenuFinalCompositeLayer();
+	bool EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_height, DXGI_FORMAT a_format);
+	bool DrawVRMenuBridgeIntoFinalCompositeLayer(ID3D11DeviceContext* a_context, DXGI_FORMAT a_format, UINT a_indexCount,
+		UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
+		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight);
+	bool TryCaptureAndSuppressVRMenuBridgeDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
+	bool ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D& a_outputTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);
+	static constexpr uint32_t kVRMenuBridgeSRVSlots = 8;
+	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
+	std::array<bool, 2> vrMenuFinalCompositeSuppressedTargets{};
+	eastl::unique_ptr<Texture2D> vrMenuFinalCompositeLayer;
+	uint32_t vrMenuFinalCompositeLayerWidth = 0;
+	uint32_t vrMenuFinalCompositeLayerHeight = 0;
+	DXGI_FORMAT vrMenuFinalCompositeLayerFormat = DXGI_FORMAT_UNKNOWN;
+	uint32_t vrMenuFinalCompositeLayerClearedFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t vrMenuFinalCompositeLayerDrawCount = 0;
+	bool vrMenuParallelBridgeDrawInProgress = false;
 
 	struct OpenCompositeUpscalingBlocker
 	{

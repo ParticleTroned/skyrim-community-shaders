@@ -1,7 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
-#include "Features/Wetterness.h"
+#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -14,6 +14,7 @@
 #include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
@@ -33,13 +34,12 @@
 #include "Features/WaterEffects.h"
 #include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
-#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
-#include "Features/LightLimitFix/ParticleLights.h"
 
 namespace globals
 {
@@ -284,6 +284,31 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_DrawIndexedInstanced
+	{
+		static void thunk(
+			ID3D11DeviceContext* This,
+			UINT IndexCountPerInstance,
+			UINT InstanceCount,
+			UINT StartIndexLocation,
+			INT BaseVertexLocation,
+			UINT StartInstanceLocation)
+		{
+			if (Upscaling::TraceVRMenuBridgeDrawOperation(
+					This,
+					IndexCountPerInstance,
+					InstanceCount,
+					StartIndexLocation,
+					BaseVertexLocation,
+					StartInstanceLocation)) {
+				return;
+			}
+
+			func(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	/**
  * @brief Installs hooks on the Map and Unmap methods of the provided D3D11 device context.
  *
@@ -293,6 +318,7 @@ namespace globals
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
 		ShadowmapRasterizerFix::InstallD3DHooks(a_context);
 	}
 }

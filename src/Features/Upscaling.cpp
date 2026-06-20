@@ -122,6 +122,7 @@ namespace
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
+	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
@@ -177,6 +178,7 @@ namespace
 	}
 	constexpr uint32_t kVRSaveLoadTransitionTailFrames = 30;
 	constexpr uint32_t kVRMenuPresentationTailFrames = 30;
+	constexpr uint32_t kVRObservedMenuPresentationTailFrames = 3;
 	constexpr std::string_view kSkyrimPresentationMenuNames[] = {
 		"Journal Menu",
 		"StatsMenu",
@@ -579,6 +581,20 @@ namespace
 		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2,
 	};
 
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 1> kVRObservedMenuPresentationSeedTargets{
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+	};
+
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRObservedMenuPresentationFollowTargets{
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+		RE::RENDER_TARGETS::kHUDMENU,
+	};
+
+	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRKnownGameMenuFinalCompositeTargets{
+		RE::RENDER_TARGETS::kPROJECTEDMENU,
+		RE::RENDER_TARGETS::kHUDMENU,
+	};
+
 	// Submit-stage should only operate on runtime-submitted eye textures.
 	static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 0> kSubmittedVRPresentationTargets{};
 
@@ -649,22 +665,46 @@ namespace
 		return false;
 	}
 
-	bool IsVRNativeLayoutSubmitProtectedRenderTargetTexture(ID3D11Texture2D* a_texture)
+	template <size_t N>
+	bool IsRenderTargetTextureInTargets(
+		ID3D11Texture2D* a_texture,
+		const std::array<RE::RENDER_TARGETS::RENDER_TARGET, N>& a_targets)
 	{
 		auto renderer = globals::game::renderer;
 		if (!a_texture || !renderer)
 			return false;
 
 		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
-		for (const auto target : kVRNativeLayoutSubmitProtectedTargets) {
-			if (renderTargets[target].texture == a_texture || renderTargets[target].textureCopy == a_texture)
+		const int targetCount = Util::GetRenderTargetCount();
+		for (const auto target : a_targets) {
+			const auto targetIndex = static_cast<int>(target);
+			if (targetIndex < 0 || targetIndex >= targetCount)
+				continue;
+
+			if (renderTargets[targetIndex].texture == a_texture || renderTargets[targetIndex].textureCopy == a_texture)
 				return true;
 		}
 
 		return false;
 	}
 
-	bool IsCurrentRenderTargetVRNativeLayoutSubmitProtectedTexture()
+	bool IsVRNativeLayoutSubmitProtectedRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		return IsRenderTargetTextureInTargets(a_texture, kVRNativeLayoutSubmitProtectedTargets);
+	}
+
+	bool IsVRObservedMenuPresentationSeedRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		return IsRenderTargetTextureInTargets(a_texture, kVRObservedMenuPresentationSeedTargets);
+	}
+
+	bool IsVRObservedMenuPresentationFollowRenderTargetTexture(ID3D11Texture2D* a_texture)
+	{
+		return IsRenderTargetTextureInTargets(a_texture, kVRObservedMenuPresentationFollowTargets);
+	}
+
+	template <class Predicate>
+	bool IsCurrentRenderTargetTextureMatch(Predicate&& a_predicate)
 	{
 		auto context = globals::d3d::context;
 		if (!context)
@@ -693,7 +733,100 @@ namespace
 			texture->Release();
 		});
 
-		return IsVRNativeLayoutSubmitProtectedRenderTargetTexture(texture);
+		return a_predicate(texture);
+	}
+
+	bool IsCurrentRenderTargetVRNativeLayoutSubmitProtectedTexture()
+	{
+		return IsCurrentRenderTargetTextureMatch(IsVRNativeLayoutSubmitProtectedRenderTargetTexture);
+	}
+
+	bool IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture()
+	{
+		return IsCurrentRenderTargetTextureMatch(IsVRObservedMenuPresentationSeedRenderTargetTexture);
+	}
+
+	bool IsCurrentRenderTargetVRObservedMenuPresentationFollowTexture()
+	{
+		return IsCurrentRenderTargetTextureMatch(IsVRObservedMenuPresentationFollowRenderTargetTexture);
+	}
+
+	const char* GetVRMenuCompositionTargetName(RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	{
+		switch (a_target) {
+		case RE::RENDER_TARGETS::kMENUBG:
+			return "kMENUBG";
+		case RE::RENDER_TARGETS::kPROJECTEDMENU:
+			return "kPROJECTEDMENU";
+		case RE::RENDER_TARGETS::kHUDMENU:
+			return "kHUDMENU";
+		default:
+			return "unknown";
+		}
+	}
+
+	struct VRMenuCompositionTargetMatch
+	{
+		bool matched = false;
+		RE::RENDER_TARGETS::RENDER_TARGET target = RE::RENDER_TARGETS::kMENUBG;
+		const char* name = "unknown";
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t samples = 0;
+		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+	};
+
+	bool TryResolveVRMenuCompositionView(ID3D11View* a_view, VRMenuCompositionTargetMatch& a_outMatch)
+	{
+		auto renderer = globals::game::renderer;
+		if (!renderer || !a_view)
+			return false;
+
+		ID3D11Resource* resource = nullptr;
+		a_view->GetResource(&resource);
+		if (!resource)
+			return false;
+		auto resourceRelease = ScopeExit([&]() {
+			resource->Release();
+		});
+
+		ID3D11Texture2D* texture = nullptr;
+		if (FAILED(resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) || !texture)
+			return false;
+		auto textureRelease = ScopeExit([&]() {
+			texture->Release();
+		});
+
+		static constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 3> targets{
+			RE::RENDER_TARGETS::kMENUBG,
+			RE::RENDER_TARGETS::kPROJECTEDMENU,
+			RE::RENDER_TARGETS::kHUDMENU,
+		};
+
+		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
+		const int targetCount = Util::GetRenderTargetCount();
+		for (const auto target : targets) {
+			const auto targetIndex = static_cast<int>(target);
+			if (targetIndex < 0 || targetIndex >= targetCount)
+				continue;
+
+			const auto& renderTarget = renderTargets[targetIndex];
+			if (renderTarget.texture != texture && renderTarget.textureCopy != texture)
+				continue;
+
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+			a_outMatch.matched = true;
+			a_outMatch.target = target;
+			a_outMatch.name = GetVRMenuCompositionTargetName(target);
+			a_outMatch.width = desc.Width;
+			a_outMatch.height = desc.Height;
+			a_outMatch.samples = desc.SampleDesc.Count;
+			a_outMatch.format = desc.Format;
+			return true;
+		}
+
+		return false;
 	}
 
 	uint32_t ClampPositiveDimension(float a_dimension)
@@ -2219,6 +2352,11 @@ namespace
 		return globals::game::isVR && IsFrameTailActive(a_state, g_vrMenuPresentationTailEndFrame);
 	}
 
+	bool IsVRObservedProjectedMenuTailActive(const State* a_state)
+	{
+		return globals::game::isVR && IsFrameTailActive(a_state, g_vrObservedProjectedMenuTailEndFrame);
+	}
+
 	bool IsVRMenuPresentationContextActive()
 	{
 		return globals::game::isVR &&
@@ -2230,12 +2368,31 @@ namespace
 		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
 	}
 
+	bool IsVRRenderScaleMenuPreparationContextActive(const State* a_state)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		if (IsMainOrLoadingMenuContextActive())
+			return true;
+
+		return IsVRObservedProjectedMenuTailActive(a_state);
+	}
+
 	void ExtendVRMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
 	{
 		if (!globals::game::isVR || !globals::state)
 			return;
 
 		ExtendFrameTail(g_vrMenuPresentationTailEndFrame, a_tailFrames);
+	}
+
+	void ExtendVRObservedProjectedMenuTail(uint32_t a_tailFrames = kVRObservedMenuPresentationTailFrames)
+	{
+		if (!globals::game::isVR || !globals::state)
+			return;
+
+		ExtendFrameTail(g_vrObservedProjectedMenuTailEndFrame, a_tailFrames);
 	}
 
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
@@ -2265,6 +2422,12 @@ namespace
 	{
 		auto* menu = globals::menu;
 		return menu && menu->initialized && menu->ShouldSwallowInput();
+	}
+
+	bool IsVRSceneFeatureMenuPauseContextActive()
+	{
+		return globals::game::isVR &&
+		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
 	}
 
 	bool IsGameMenuContextActive()
@@ -2452,6 +2615,505 @@ namespace
 
 		return texture;
 	}
+}
+
+void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
+{
+	if (vrMenuFinalCompositeFrame == a_frame)
+		return;
+
+	vrMenuFinalCompositeFrame = a_frame;
+	vrMenuFinalCompositeSuppressedTargets = {};
+	vrMenuFinalCompositeLayerDrawCount = 0;
+}
+
+void Upscaling::ResetVRMenuFinalCompositeLayer()
+{
+	vrMenuFinalCompositeLayer.reset();
+	vrMenuFinalCompositeLayerWidth = 0;
+	vrMenuFinalCompositeLayerHeight = 0;
+	vrMenuFinalCompositeLayerFormat = DXGI_FORMAT_UNKNOWN;
+	vrMenuFinalCompositeLayerClearedFrame = std::numeric_limits<uint32_t>::max();
+	vrMenuFinalCompositeLayerDrawCount = 0;
+	vrMenuParallelBridgeDrawInProgress = false;
+}
+
+bool Upscaling::EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_height, DXGI_FORMAT a_format)
+{
+	if (!a_width || !a_height || a_format == DXGI_FORMAT_UNKNOWN)
+		return false;
+
+	if (vrMenuFinalCompositeLayer &&
+		vrMenuFinalCompositeLayer->resource &&
+		vrMenuFinalCompositeLayer->srv &&
+		vrMenuFinalCompositeLayer->rtv &&
+		vrMenuFinalCompositeLayerWidth == a_width &&
+		vrMenuFinalCompositeLayerHeight == a_height &&
+		vrMenuFinalCompositeLayerFormat == a_format) {
+		return true;
+	}
+
+	try {
+		auto layer = CreateNamedTexture2D(a_width, a_height, a_format, true, false, true, "VRMenuFinalCompositeLayer");
+		if (!layer || !layer->resource || !layer->srv || !layer->rtv) {
+			ResetVRMenuFinalCompositeLayer();
+			return false;
+		}
+
+		vrMenuFinalCompositeLayer = std::move(layer);
+		vrMenuFinalCompositeLayerWidth = a_width;
+		vrMenuFinalCompositeLayerHeight = a_height;
+		vrMenuFinalCompositeLayerFormat = a_format;
+		vrMenuFinalCompositeLayerClearedFrame = std::numeric_limits<uint32_t>::max();
+		return true;
+	} catch (const std::exception& e) {
+		static bool loggedCreateFailure = false;
+		LogWarnOnce(loggedCreateFailure, "[VRMenuComposite] Final menu layer allocation failed", e);
+	} catch (...) {
+		static bool loggedCreateFailure = false;
+		LogWarnOnce(loggedCreateFailure, "[VRMenuComposite] Final menu layer allocation failed");
+	}
+
+	ResetVRMenuFinalCompositeLayer();
+	return false;
+}
+
+bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
+	ID3D11DeviceContext* a_context,
+	DXGI_FORMAT a_format,
+	UINT a_indexCount,
+	UINT a_instanceCount,
+	UINT a_startIndexLocation,
+	INT a_baseVertexLocation,
+	UINT a_startInstanceLocation,
+	uint32_t a_renderWidth,
+	uint32_t a_renderHeight,
+	uint32_t a_finalWidth,
+	uint32_t a_finalHeight)
+{
+	if (!a_context ||
+		!a_indexCount ||
+		a_instanceCount != 2 ||
+		!a_renderWidth ||
+		!a_renderHeight ||
+		!a_finalWidth ||
+		!a_finalHeight ||
+		!vrMenuLayerCaptureBlendState ||
+		!EnsureVRMenuFinalCompositeLayer(a_finalWidth, a_finalHeight, a_format)) {
+		return false;
+	}
+
+	const auto* state = globals::state;
+	const uint32_t frame = state ? state->frameCount : 0;
+	static constexpr float kTransparent[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	if (vrMenuFinalCompositeLayerClearedFrame != frame) {
+		a_context->ClearRenderTargetView(vrMenuFinalCompositeLayer->rtv.get(), kTransparent);
+		vrMenuFinalCompositeLayerClearedFrame = frame;
+		vrMenuFinalCompositeLayerDrawCount = 0;
+	}
+
+	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> previousRTVs{};
+	ID3D11DepthStencilView* previousDSV = nullptr;
+	ID3D11BlendState* previousBlendState = nullptr;
+	FLOAT previousBlendFactor[4] = {};
+	UINT previousSampleMask = 0;
+	std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousViewports{};
+	UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousScissors{};
+	UINT previousScissorCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+
+	a_context->OMGetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), &previousDSV);
+	a_context->OMGetBlendState(&previousBlendState, previousBlendFactor, &previousSampleMask);
+	a_context->RSGetViewports(&previousViewportCount, previousViewports.data());
+	a_context->RSGetScissorRects(&previousScissorCount, previousScissors.data());
+
+	auto restoreState = ScopeExit([&]() {
+		a_context->OMSetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), previousDSV);
+		a_context->OMSetBlendState(previousBlendState, previousBlendFactor, previousSampleMask);
+		a_context->RSSetViewports(previousViewportCount, previousViewportCount ? previousViewports.data() : nullptr);
+		a_context->RSSetScissorRects(previousScissorCount, previousScissorCount ? previousScissors.data() : nullptr);
+
+		for (auto* rtv : previousRTVs) {
+			if (rtv)
+				rtv->Release();
+		}
+		if (previousDSV)
+			previousDSV->Release();
+		if (previousBlendState)
+			previousBlendState->Release();
+		vrMenuParallelBridgeDrawInProgress = false;
+	});
+	if (!previousViewportCount)
+		return false;
+
+	const float scaleX = static_cast<float>(a_finalWidth) / static_cast<float>(a_renderWidth);
+	const float scaleY = static_cast<float>(a_finalHeight) / static_cast<float>(a_renderHeight);
+	auto finalViewports = previousViewports;
+	for (UINT index = 0; index < previousViewportCount; ++index) {
+		finalViewports[index].TopLeftX *= scaleX;
+		finalViewports[index].TopLeftY *= scaleY;
+		finalViewports[index].Width *= scaleX;
+		finalViewports[index].Height *= scaleY;
+	}
+
+	auto finalScissors = previousScissors;
+	for (UINT index = 0; index < previousScissorCount; ++index) {
+		finalScissors[index].left = static_cast<LONG>(std::lround(static_cast<double>(previousScissors[index].left) * scaleX));
+		finalScissors[index].right = static_cast<LONG>(std::lround(static_cast<double>(previousScissors[index].right) * scaleX));
+		finalScissors[index].top = static_cast<LONG>(std::lround(static_cast<double>(previousScissors[index].top) * scaleY));
+		finalScissors[index].bottom = static_cast<LONG>(std::lround(static_cast<double>(previousScissors[index].bottom) * scaleY));
+	}
+
+	ID3D11RenderTargetView* layerRTV = vrMenuFinalCompositeLayer->rtv.get();
+	a_context->OMSetRenderTargets(1, &layerRTV, nullptr);
+	a_context->OMSetBlendState(vrMenuLayerCaptureBlendState.get(), previousBlendFactor, previousSampleMask);
+	a_context->RSSetViewports(previousViewportCount, finalViewports.data());
+	a_context->RSSetScissorRects(previousScissorCount, previousScissorCount ? finalScissors.data() : nullptr);
+
+	vrMenuParallelBridgeDrawInProgress = true;
+	a_context->DrawIndexedInstanced(a_indexCount, a_instanceCount, a_startIndexLocation, a_baseVertexLocation, a_startInstanceLocation);
+	vrMenuParallelBridgeDrawInProgress = false;
+	++vrMenuFinalCompositeLayerDrawCount;
+
+	return true;
+}
+
+bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
+	ID3D11DeviceContext* a_context,
+	UINT a_indexCount,
+	UINT a_instanceCount,
+	UINT a_startIndexLocation,
+	INT a_baseVertexLocation,
+	UINT a_startInstanceLocation)
+{
+	if (!globals::game::isVR || !a_context || vrMenuParallelBridgeDrawInProgress)
+		return false;
+
+	auto* state = globals::state;
+	if (!state)
+		return false;
+
+	if (!IsVRRenderScaleModeActive() || !IsPresentationUpscalingActive())
+		return false;
+	if (IsCommunityShadersMenuOpen())
+		return false;
+	if (!a_indexCount ||
+		a_instanceCount != 2 ||
+		a_startIndexLocation != 0 ||
+		a_baseVertexLocation != 0 ||
+		a_startInstanceLocation != 0) {
+		return false;
+	}
+
+	const auto& plan = GetRuntimeResolutionPlan();
+	const uint32_t renderWidth = ClampPositiveDimension(plan.engineRenderSize.x);
+	const uint32_t renderHeight = ClampPositiveDimension(plan.engineRenderSize.y);
+	const uint32_t finalWidth = ClampPositiveDimension(plan.finalOutputSize.x);
+	const uint32_t finalHeight = ClampPositiveDimension(plan.finalOutputSize.y);
+	if (!renderWidth || !renderHeight || !finalWidth || !finalHeight ||
+		finalWidth <= renderWidth || finalHeight <= renderHeight) {
+		return false;
+	}
+
+	BeginVRMenuFinalCompositeFrame(state->frameCount);
+
+	ID3D11RenderTargetView* rtv = nullptr;
+	a_context->OMGetRenderTargets(1, &rtv, nullptr);
+	auto rtvRelease = ScopeExit([&]() {
+		if (rtv)
+			rtv->Release();
+	});
+	if (!rtv)
+		return false;
+
+	VRMenuCompositionTargetMatch destination{};
+	if (!TryResolveVRMenuCompositionView(rtv, destination) ||
+		destination.target != RE::RENDER_TARGETS::kMENUBG ||
+		destination.width != renderWidth ||
+		destination.height != renderHeight ||
+		destination.samples != 1) {
+		return false;
+	}
+
+	std::array<ID3D11ShaderResourceView*, kVRMenuBridgeSRVSlots> psSRVs{};
+	a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+	auto srvRelease = ScopeExit([&]() {
+		for (auto* srv : psSRVs) {
+			if (srv)
+				srv->Release();
+		}
+	});
+
+	size_t menuSourceTargetIndex = kVRKnownGameMenuFinalCompositeTargets.size();
+	for (uint32_t slot = 0; slot < psSRVs.size(); ++slot) {
+		VRMenuCompositionTargetMatch source{};
+		if (!TryResolveVRMenuCompositionView(psSRVs[slot], source) || source.samples != 1)
+			continue;
+
+		for (size_t targetIndex = 0; targetIndex < kVRKnownGameMenuFinalCompositeTargets.size(); ++targetIndex) {
+			if (source.target == kVRKnownGameMenuFinalCompositeTargets[targetIndex]) {
+				menuSourceTargetIndex = targetIndex;
+				break;
+			}
+		}
+		if (menuSourceTargetIndex != kVRKnownGameMenuFinalCompositeTargets.size())
+			break;
+	}
+	if (menuSourceTargetIndex == kVRKnownGameMenuFinalCompositeTargets.size())
+		return false;
+
+	// The exact reduced menu bridge is a direct menu-text signal. Arm the short
+	// observed tail without reintroducing the old diagnostic observer.
+	ExtendVRObservedProjectedMenuTail(kVRObservedMenuPresentationTailFrames);
+	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+
+	const bool menuTextProtectionContext =
+		plan.knownMenuContextActive ||
+		plan.menuContextActive ||
+		IsVRMenuPresentationContextActive() ||
+		IsVRSceneFeatureMenuPauseContextActive();
+	if (!menuTextProtectionContext)
+		return false;
+
+	const bool liveLayerDrawn = DrawVRMenuBridgeIntoFinalCompositeLayer(
+		a_context,
+		destination.format,
+		a_indexCount,
+		a_instanceCount,
+		a_startIndexLocation,
+		a_baseVertexLocation,
+		a_startInstanceLocation,
+		renderWidth,
+		renderHeight,
+		finalWidth,
+		finalHeight);
+	if (!liveLayerDrawn)
+		return false;
+
+	vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
+	return true;
+}
+
+bool Upscaling::TraceVRMenuBridgeDrawOperation(
+	ID3D11DeviceContext* a_context,
+	UINT a_indexCount,
+	UINT a_instanceCount,
+	UINT a_startIndexLocation,
+	INT a_baseVertexLocation,
+	UINT a_startInstanceLocation)
+{
+	auto& upscaling = globals::features::upscaling;
+	return upscaling.TryCaptureAndSuppressVRMenuBridgeDraw(
+		a_context,
+		a_indexCount,
+		a_instanceCount,
+		a_startIndexLocation,
+		a_baseVertexLocation,
+		a_startInstanceLocation);
+}
+
+bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D& a_outputTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame)
+{
+	if (!globals::game::isVR ||
+		a_eyeIndex >= 2 ||
+		!a_eyeWidth ||
+		!a_eyeHeight ||
+		!a_outputTexture.resource ||
+		!a_outputTexture.rtv ||
+		vrMenuFinalCompositeFrame != a_frame ||
+		!vrMenuFinalCompositeLayer ||
+		!vrMenuFinalCompositeLayer->resource ||
+		!vrMenuFinalCompositeLayer->srv ||
+		vrMenuFinalCompositeLayerDrawCount == 0 ||
+		std::none_of(vrMenuFinalCompositeSuppressedTargets.begin(), vrMenuFinalCompositeSuppressedTargets.end(), [](bool suppressed) { return suppressed; })) {
+		return false;
+	}
+	if (!IsKnownGameMenuContextActive() ||
+		IsCommunityShadersMenuOpen() ||
+		IsMainOrLoadingMenuContextActive() ||
+		IsSaveLoadTransitionContextActive()) {
+		return false;
+	}
+
+	auto* context = globals::d3d::context;
+	auto* deferred = globals::deferred;
+	if (!context || !deferred || !deferred->linearSampler || !upscaleRasterizerState || !vrMenuCompositeBlendState || !vrMenuLayerCompositeCB)
+		return false;
+
+	ID3D11PixelShader* pixelShader = nullptr;
+	try {
+		pixelShader = GetVRMenuLayerCompositePS();
+	} catch (const std::exception& e) {
+		static bool loggedShaderFailure = false;
+		LogWarnOnce(loggedShaderFailure, "[VRMenuComposite] Final menu composite shader unavailable", e);
+		if (MarkSubmitStageDeviceLostIfNeeded(e, "VR menu final composite shader creation"))
+			return false;
+	} catch (...) {
+		static bool loggedShaderFailure = false;
+		LogWarnOnce(loggedShaderFailure, "[VRMenuComposite] Final menu composite shader unavailable");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu final composite shader creation"))
+			return false;
+	}
+	if (!pixelShader)
+		return false;
+
+	ID3D11VertexShader* previousVS = nullptr;
+	ID3D11PixelShader* previousPS = nullptr;
+	ID3D11HullShader* previousHS = nullptr;
+	ID3D11DomainShader* previousDS = nullptr;
+	ID3D11GeometryShader* previousGS = nullptr;
+	ID3D11ShaderResourceView* previousSRV = nullptr;
+	ID3D11SamplerState* previousSampler = nullptr;
+	ID3D11Buffer* previousPSCB0 = nullptr;
+	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> previousRTVs{};
+	ID3D11DepthStencilView* previousDSV = nullptr;
+	ID3D11BlendState* previousBlendState = nullptr;
+	FLOAT previousBlendFactor[4] = {};
+	UINT previousSampleMask = 0;
+	ID3D11DepthStencilState* previousDepthStencilState = nullptr;
+	UINT previousStencilRef = 0;
+	ID3D11RasterizerState* previousRasterizerState = nullptr;
+	std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousViewports{};
+	UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	D3D11_PRIMITIVE_TOPOLOGY previousTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+	ID3D11InputLayout* previousInputLayout = nullptr;
+
+	context->VSGetShader(&previousVS, nullptr, nullptr);
+	context->PSGetShader(&previousPS, nullptr, nullptr);
+	context->HSGetShader(&previousHS, nullptr, nullptr);
+	context->DSGetShader(&previousDS, nullptr, nullptr);
+	context->GSGetShader(&previousGS, nullptr, nullptr);
+	context->PSGetShaderResources(0, 1, &previousSRV);
+	context->PSGetSamplers(0, 1, &previousSampler);
+	context->PSGetConstantBuffers(0, 1, &previousPSCB0);
+	context->OMGetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), &previousDSV);
+	context->OMGetBlendState(&previousBlendState, previousBlendFactor, &previousSampleMask);
+	context->OMGetDepthStencilState(&previousDepthStencilState, &previousStencilRef);
+	context->RSGetState(&previousRasterizerState);
+	context->RSGetViewports(&previousViewportCount, previousViewports.data());
+	context->IAGetPrimitiveTopology(&previousTopology);
+	context->IAGetInputLayout(&previousInputLayout);
+
+	auto restoreState = ScopeExit([&]() {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		ID3D11SamplerState* nullSampler = nullptr;
+		context->PSSetShaderResources(0, 1, &nullSRV);
+		context->PSSetSamplers(0, 1, &nullSampler);
+
+		context->VSSetShader(previousVS, nullptr, 0);
+		context->PSSetShader(previousPS, nullptr, 0);
+		context->HSSetShader(previousHS, nullptr, 0);
+		context->DSSetShader(previousDS, nullptr, 0);
+		context->GSSetShader(previousGS, nullptr, 0);
+		context->PSSetShaderResources(0, 1, &previousSRV);
+		context->PSSetSamplers(0, 1, &previousSampler);
+		context->PSSetConstantBuffers(0, 1, &previousPSCB0);
+		context->OMSetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), previousDSV);
+		context->OMSetBlendState(previousBlendState, previousBlendFactor, previousSampleMask);
+		context->OMSetDepthStencilState(previousDepthStencilState, previousStencilRef);
+		context->RSSetState(previousRasterizerState);
+		context->RSSetViewports(previousViewportCount, previousViewportCount ? previousViewports.data() : nullptr);
+		context->IASetPrimitiveTopology(previousTopology);
+		context->IASetInputLayout(previousInputLayout);
+
+		if (previousVS)
+			previousVS->Release();
+		if (previousPS)
+			previousPS->Release();
+		if (previousHS)
+			previousHS->Release();
+		if (previousDS)
+			previousDS->Release();
+		if (previousGS)
+			previousGS->Release();
+		if (previousSRV)
+			previousSRV->Release();
+		if (previousSampler)
+			previousSampler->Release();
+		if (previousPSCB0)
+			previousPSCB0->Release();
+		for (auto* rtv : previousRTVs) {
+			if (rtv)
+				rtv->Release();
+		}
+		if (previousDSV)
+			previousDSV->Release();
+		if (previousBlendState)
+			previousBlendState->Release();
+		if (previousDepthStencilState)
+			previousDepthStencilState->Release();
+		if (previousRasterizerState)
+			previousRasterizerState->Release();
+		if (previousInputLayout)
+			previousInputLayout->Release();
+	});
+
+	try {
+		D3D11_TEXTURE2D_DESC layerDesc{};
+		if (!TryGetTexture2DDesc(vrMenuFinalCompositeLayer->resource.get(), layerDesc) ||
+			layerDesc.Width != vrMenuFinalCompositeLayerWidth ||
+			layerDesc.Height != vrMenuFinalCompositeLayerHeight ||
+			layerDesc.Width != a_eyeWidth * 2u ||
+			layerDesc.Height != a_eyeHeight) {
+			return false;
+		}
+
+		VRMenuLayerCompositeCB compositeData{};
+		compositeData.sourceScale = { 0.5f, 1.0f };
+		compositeData.sourceOffset = { a_eyeIndex == 0 ? 0.0f : 0.5f, 0.0f };
+		vrMenuLayerCompositeCB->Update(compositeData);
+		auto* compositeBuffer = vrMenuLayerCompositeCB->CB();
+		auto* vertexShader = GetUpscaleVS();
+		if (!compositeBuffer || !vertexShader)
+			return false;
+
+		ID3D11RenderTargetView* targetRTV = a_outputTexture.rtv.get();
+		ID3D11SamplerState* sampler = deferred->linearSampler;
+		ID3D11Buffer* constantBuffer = compositeBuffer;
+		D3D11_VIEWPORT viewport{};
+		viewport.TopLeftX = 0.0f;
+		viewport.TopLeftY = 0.0f;
+		viewport.Width = static_cast<float>(a_eyeWidth);
+		viewport.Height = static_cast<float>(a_eyeHeight);
+		viewport.MinDepth = 0.0f;
+		viewport.MaxDepth = 1.0f;
+		const float blendFactor[4] = {};
+
+		context->OMSetRenderTargets(1, &targetRTV, nullptr);
+		context->OMSetBlendState(vrMenuCompositeBlendState.get(), blendFactor, 0xFFFFFFFF);
+		context->OMSetDepthStencilState(nullptr, 0);
+		context->RSSetState(upscaleRasterizerState.get());
+		context->RSSetViewports(1, &viewport);
+		context->IASetInputLayout(nullptr);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		context->VSSetShader(vertexShader, nullptr, 0);
+		context->HSSetShader(nullptr, nullptr, 0);
+		context->DSSetShader(nullptr, nullptr, 0);
+		context->GSSetShader(nullptr, nullptr, 0);
+		context->PSSetShader(pixelShader, nullptr, 0);
+		context->PSSetSamplers(0, 1, &sampler);
+		context->PSSetConstantBuffers(0, 1, &constantBuffer);
+
+		ID3D11ShaderResourceView* sourceSRV = vrMenuFinalCompositeLayer->srv.get();
+		context->PSSetShaderResources(0, 1, &sourceSRV);
+		context->Draw(3, 0);
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		context->PSSetShaderResources(0, 1, &nullSRV);
+	} catch (const std::exception& e) {
+		static bool loggedCompositeFailure = false;
+		LogWarnOnce(loggedCompositeFailure, "[VRMenuComposite] Final menu composite failed", e);
+		if (MarkSubmitStageDeviceLostIfNeeded(e, "VR menu final composite"))
+			return false;
+		return false;
+	} catch (...) {
+		static bool loggedCompositeFailure = false;
+		LogWarnOnce(loggedCompositeFailure, "[VRMenuComposite] Final menu composite failed");
+		if (MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu final composite"))
+			return false;
+		return false;
+	}
+
+	return true;
 }
 
 /**
@@ -3692,6 +4354,8 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 		if (a_event->opening) {
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
+			g_vrMenuPresentationTailEndFrame.store(0, std::memory_order_release);
+			g_vrObservedProjectedMenuTailEndFrame.store(0, std::memory_order_release);
 			globals::features::upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		} else if (globals::state) {
 			const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
@@ -3889,7 +4553,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	plan.qualityMode = GetRuntimeQualityMode();
 	plan.vendorMethod = IsVendorUpscalingMethod(plan.upscaleMethod);
 	plan.knownMenuContextActive = IsKnownGameMenuContextActive();
-	plan.menuContextActive = globals::game::isVR ? IsVRMenuPresentationContextActive() : IsGameMenuContextActive();
+	plan.menuContextActive = globals::game::isVR ? IsVRMenuScenePresentationBlockActive() : IsGameMenuContextActive();
 	plan.loadingMenuActive = IsLoadingMenuContextActive();
 	plan.perfModeRestartRequired = perfMode.HasRestartRequiredChange();
 
@@ -3936,10 +4600,10 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		const uint32_t outputWidthPerEye = std::max<uint32_t>(1u, ClampPositiveDimension(plan.finalOutputSize.x) / eyeDivisor);
 		const uint32_t outputHeight = ClampPositiveDimension(plan.finalOutputSize.y);
 		const float peripheryTAAOuterScale = plan.peripheryTAAActive ?
-			ClampPeripheryTAAOuterScaleForCenter(
-				settings.periphery_taa_outer_scale,
-				profile.centerScale) :
-			0.0f;
+		                                         ClampPeripheryTAAOuterScaleForCenter(
+													 settings.periphery_taa_outer_scale,
+													 profile.centerScale) :
+		                                         0.0f;
 		plan.foveatedRegion = FoveatedRegionPlan::Build(
 			inputWidthPerEye,
 			inputHeight,
@@ -4958,6 +5622,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	UnbindUpscalingResources();
 	DestroyVRIntermediateTextures();
 	DestroyFoveatedResources();
+	ResetVRMenuFinalCompositeLayer();
 
 	bool dlssResourcesDestroyed = true;
 	if (a_destroyDLSSResources && streamline.initialized && streamline.featureDLSS && streamline.slDLSSSetOptions && streamline.slFreeResources) {
@@ -5685,6 +6350,16 @@ ID3D11ComputeShader* Upscaling::GetSubmitStageStretchCS()
 	return submitStageStretchCS.get();
 }
 
+ID3D11PixelShader* Upscaling::GetVRMenuLayerCompositePS()
+{
+	if (!vrMenuLayerCompositePS) {
+		logger::debug("Compiling VRMenuLayerCompositePS.hlsl");
+		vrMenuLayerCompositePS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/VRMenuLayerCompositePS.hlsl", {}, "ps_5_0"));
+	}
+
+	return vrMenuLayerCompositePS.get();
+}
+
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
 	bool copyBindFlags, bool createSRV, bool createUAV, const char* name, bool createRTV)
 {
@@ -5911,10 +6586,10 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 	centerFeather = std::isfinite(centerFeather) ? std::max(0.0f, centerFeather) : FoveatedCommon::kCenterFeather;
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	const float taaOuterScale = usePeripheryTAAProfile ?
-		ClampPeripheryTAAOuterScaleForCenter(
-			settings.periphery_taa_outer_scale,
-			centerScale) :
-		0.0f;
+	                                ClampPeripheryTAAOuterScaleForCenter(
+										settings.periphery_taa_outer_scale,
+										centerScale) :
+	                                0.0f;
 
 	auto& cache = foveatedRectCache;
 	auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(usePeripheryTAAProfile);
@@ -7052,8 +7727,8 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 	const auto& taaOuter = eyePlan.peripheryTAAOuterOutput;
 	const bool hasTaaOuterRegion = params.usePeripheryTAA && taaOuter.IsValid();
 	const auto& taaDispatch = eyePlan.peripheryTAAHistoryOutput.IsValid() ?
-		eyePlan.peripheryTAAHistoryOutput :
-		eyePlan.peripheryTAAOuterOutput;
+	                              eyePlan.peripheryTAAHistoryOutput :
+	                              eyePlan.peripheryTAAOuterOutput;
 
 	float4x4 currentViewProjInverse{};
 	float4x4 previousViewProj{};
@@ -8739,8 +9414,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	const bool vrRenderScaleMenuPresentationContext =
 		globals::game::isVR &&
 		vendorUpscalingMethod &&
-		IsVRMenuPresentationContextActive() &&
-		IsVRRenderScaleTransitionSafetyRelevant(*this);
+		IsVRRenderScaleMenuPreparationContextActive(state);
 	RefreshRuntimeResolutionState();
 	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
 		if (vrRenderScaleMenuPresentationContext) {
@@ -8957,6 +9631,7 @@ void Upscaling::SetupResources()
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != device) {
 		ClearShaderCache();
+		ResetVRMenuFinalCompositeLayer();
 		shaderDevice = device;
 	}
 
@@ -9015,6 +9690,8 @@ void Upscaling::SetupResources()
 	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
 	delete dynamicResolutionStretchCB;
 	dynamicResolutionStretchCB = new ConstantBuffer(ConstantBufferDesc<DynamicResolutionStretchCB>(), "Upscaling::DynamicResolutionStretchCB");
+	delete vrMenuLayerCompositeCB;
+	vrMenuLayerCompositeCB = new ConstantBuffer(ConstantBufferDesc<VRMenuLayerCompositeCB>(), "Upscaling::VRMenuLayerCompositeCB");
 	delete foveatedPeripheryCB;
 	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
 	delete foveatedCenterBlendCB;
@@ -9029,6 +9706,23 @@ void Upscaling::SetupResources()
 	blendDesc.RenderTarget[0].BlendEnable = false;
 	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 	DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, upscaleBlendState.put()));
+
+	D3D11_BLEND_DESC menuBlendDesc = {};
+	menuBlendDesc.AlphaToCoverageEnable = false;
+	menuBlendDesc.IndependentBlendEnable = false;
+	menuBlendDesc.RenderTarget[0].BlendEnable = true;
+	menuBlendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+	menuBlendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+	menuBlendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	menuBlendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+	menuBlendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+	menuBlendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	menuBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+	DX::ThrowIfFailed(device->CreateBlendState(&menuBlendDesc, vrMenuCompositeBlendState.put()));
+
+	D3D11_BLEND_DESC menuLayerCaptureBlendDesc = menuBlendDesc;
+	menuLayerCaptureBlendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+	DX::ThrowIfFailed(device->CreateBlendState(&menuLayerCaptureBlendDesc, vrMenuLayerCaptureBlendState.put()));
 
 	// Create rasterizer state for fullscreen rendering
 	D3D11_RASTERIZER_DESC rasterizerDesc = {};
@@ -9078,6 +9772,7 @@ void Upscaling::ClearShaderCache()
 	foveatedCenterBlendCS = nullptr;      // com_ptr automatically releases
 	peripheryTAACS = nullptr;             // com_ptr automatically releases
 	submitStageStretchCS = nullptr;       // com_ptr automatically releases
+	vrMenuLayerCompositePS = nullptr;     // com_ptr automatically releases
 	vrClearHMDMaskCS = nullptr;           // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;           // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr;  // com_ptr automatically releases
@@ -9388,6 +10083,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
+	ResetVRMenuFinalCompositeLayer();
 	pendingDLSSReset.store(false, std::memory_order_release);
 	pendingFSRReset.store(false, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreate.store(false, std::memory_order_release);
@@ -9461,16 +10157,25 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	const auto upscaleMethodName = magic_enum::enum_name(upscaleMethod);
 	const uint32_t currentFrame = state->frameCount;
+	BeginVRMenuFinalCompositeFrame(currentFrame);
 	auto* sourceTexture = static_cast<ID3D11Texture2D*>(a_inputTexture->handle);
+	if (IsVRNativeLayoutSubmitProtectedRenderTargetTexture(sourceTexture))
+		return false;
+
 	const bool presentationRenderTarget = IsVRPresentationRenderTargetTexture(sourceTexture);
+	const bool currentMenuPresentationContext = IsVRMenuPresentationContextActive();
 	const bool loadingPresentationContext =
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
 		IsVRLoadingPresentationContextActive(state);
-	const bool menuPresentationContext =
-		resolutionPlan.knownMenuContextActive ||
-		resolutionPlan.loadingMenuActive ||
+	const bool submitPresentationContext =
 		loadingPresentationContext ||
 		presentationRenderTarget;
+	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
+	const bool menuTextProtectionContext =
+		resolutionPlan.knownMenuContextActive ||
+		resolutionPlan.menuContextActive ||
+		currentMenuPresentationContext ||
+		sceneFeatureMenuPauseContext;
 	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
 
 	D3D11_TEXTURE2D_DESC sourceDesc{};
@@ -9581,11 +10286,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		(a_inputBounds || sourceHasPerEyeLayout);
 	const bool presentationOnly =
 		vrRenderScaleMode &&
-		(menuPresentationContext || submitBoundsPresentationFallback) &&
+		(submitPresentationContext || submitBoundsPresentationFallback) &&
 		!vrRenderScaleMenuCanUseVendor;
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedRequested =
 		!presentationOnly &&
+		!sceneFeatureMenuPauseContext &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass;
@@ -9917,6 +10623,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 		if (IsSubmitStageDeviceLost())
 			return false;
+	}
+
+	if (vrRenderScaleMode &&
+		!presentationRenderTarget &&
+		menuTextProtectionContext) {
+		ApplyKnownGameMenuFinalComposite(eyeIndex, *vrIntermediateColorOut[eyeIndex], eyeWidthOut, eyeHeightOut, currentFrame);
 	}
 
 	clearSubmittedEyeHMDMask();
@@ -10397,8 +11109,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		const bool effectivePeripheryTAAChanged =
 			peripheryTAAEnabled != previousHistoryPeripheryTAA ||
 			peripheryTAAPathActive != previousHistoryPeripheryTAAPathActive ||
-			(peripheryTAAPathActive && (
-				std::abs(peripheryTAAOuterScale - previousHistoryPeripheryTAAOuterScale) > 1e-4f ||
+			(peripheryTAAPathActive && (std::abs(peripheryTAAOuterScale - previousHistoryPeripheryTAAOuterScale) > 1e-4f ||
 										   std::abs(peripheryTAACenterBlendFeather - previousHistoryPeripheryTAACenterBlendFeather) > 1e-4f));
 
 		shouldReset =
@@ -11280,8 +11991,20 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
-	globals::features::upscaling.PostDisplay();
+	auto& upscaling = globals::features::upscaling;
+	upscaling.PostDisplay();
 	func(a1);
+
+	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
+		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();
+		if (observedProjectedMenu) {
+			ExtendVRObservedProjectedMenuTail();
+			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+		} else if (IsVRObservedProjectedMenuTailActive(globals::state) &&
+				   IsCurrentRenderTargetVRObservedMenuPresentationFollowTexture()) {
+			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+		}
+	}
 }
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
@@ -11298,9 +12021,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool loadingTransitionTailActive =
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
-	const bool vrMenuPresentationContextActive =
-		globals::game::isVR &&
-		IsVRMenuPresentationContextActive();
+	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
 	const bool renderScalePresentationProtection =
 		globals::game::isVR &&
 		IsVRTransitionPresentationProtectionActive(upscaling, globals::state);
@@ -11308,8 +12029,15 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		vendorMethodSelected &&
 		globals::game::isVR &&
 		(upscaling.IsVRRenderScaleModeActive() || renderScalePresentationProtection) &&
-		(vrMenuPresentationContextActive || loadingTransitionTailActive);
+		(vrScenePresentationBlockActive || loadingTransitionTailActive);
 	const bool fullResolutionMenuPresentation = menuPresentationContext;
+	const bool loadingTransitionMenuPresentation =
+		fullResolutionMenuPresentation &&
+		(IsMainOrLoadingMenuContextActive() || loadingTransitionTailActive);
+	const bool runNativeVendorAAInMenu =
+		fullResolutionMenuPresentation &&
+		upscaling.GetRuntimeQualityMode() == 0 &&
+		!loadingTransitionMenuPresentation;
 	const bool vendorDynamicResolutionActive = vendorMethodSelected && upscaling.IsUpscalingActive();
 	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 	const bool submitPathDisabledForVendor =
@@ -11336,7 +12064,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (menuPresentationContext && !presentationUpscalingActive) {
+	if (menuPresentationContext && !runNativeVendorAAInMenu && !presentationUpscalingActive) {
 		if (upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
 

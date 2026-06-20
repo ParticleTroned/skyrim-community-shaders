@@ -241,14 +241,8 @@ namespace Ripples
 
 void WetnessEffects::PostPostLoad()
 {
-	if (IsRuntimeActive() && globals::features::wetterness.IsRuntimeActive()) {
-		failedLoadedMessage =
-			"Wetness Effects was automatically disabled because both Wetness Effects and Wetterness are enabled.\n"
-			"Only one wetness feature can run at a time. Disable Wetterness if you want to use Wetness Effects instead.";
-		settings.EnableWetnessEffects = false;
-		Ripples::UpdateSettings();
-		loaded = false;
-		logger::warn("[{}] {}", GetName(), failedLoadedMessage);
+	if (globals::features::wetterness.loaded) {
+		DisableForWetternessConflict();
 		return;
 	}
 
@@ -260,6 +254,16 @@ void WetnessEffects::PostPostLoad()
 
 	// Only hook if SoS is not loaded
 	Ripples::Install();
+}
+
+void WetnessEffects::DisableForWetternessConflict()
+{
+	failedLoadedMessage =
+		"Wetness Effects was automatically disabled because Wetterness is active.\n"
+		"These features cannot run in parallel.";
+	settings.EnableWetnessEffects = false;
+	loaded = false;
+	logger::warn("[{}] {}", GetName(), failedLoadedMessage);
 }
 
 void WetnessEffects::DrawSettings()

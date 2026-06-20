@@ -117,6 +117,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void RestoreDefaultSettings() override;
+	void DisableForWetternessConflict();
 
 	bool IsRuntimeActive() const { return loaded && settings.EnableWetnessEffects != 0; }
 

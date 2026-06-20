@@ -18,6 +18,8 @@
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
+#include "Features/WetnessEffects.h"
+#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -366,6 +368,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				logger::warn("Invalid entry for feature '{}' in 'Disable at Boot', expected boolean.", featureName);
 			}
 		}
+
 		for (auto* feature : Feature::GetFeatureList()) {
 			try {
 				const std::string featureName = feature->GetShortName();
@@ -418,6 +421,11 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				                                   (feature->failedLoadedMessage + "\n" + feature->GetName() + " failed to load. Check CommunityShaders.log");
 				logger::warn("Error loading setting for feature '{}': {}", feature->GetShortName(), e.what());
 			}
+		}
+
+		auto& wetnessEffects = globals::features::wetnessEffects;
+		if (wetnessEffects.loaded && globals::features::wetterness.loaded) {
+			wetnessEffects.DisableForWetternessConflict();
 		}
 
 		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {

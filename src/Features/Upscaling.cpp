@@ -175,18 +175,19 @@ namespace
 	std::atomic_uint32_t g_vrBFadeCarrierScrubApplyCount{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticFrame{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticCount{ 0 };
-	std::atomic_uint32_t g_vrBFadeCarrierScrubNoConsumerFrame{ 0 };
-	std::atomic_uint32_t g_vrBFadeCleanKTotalFrame{ 0 };
+	std::atomic_uint32_t g_vrBFadeUiTAAHistoryScrubFrame{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
-	winrt::com_ptr<ID3D11Texture2D> g_vrBFadeCleanKTotalSnapshot;
-	D3D11_TEXTURE2D_DESC g_vrBFadeCleanKTotalDesc{};
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 	constexpr uint32_t kVRBFadeCarrierScrubWindowFrames = 180;
 	constexpr uint32_t kVRBFadeCarrierScrubMaxSeeds = 8;
 	constexpr uint32_t kVRBFadeCarrierScrubDiagnosticMaxLogsPerFrame = 16;
-	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeCarrierScrubTarget = RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY2;
+	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeUiTAAHistoryPrimaryTarget = RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1;
+	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRBFadeUiTAAHistoryTargets{
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
+		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2
+	};
 
 	bool UsesVRRenderScalePostLoadSettle(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -6438,7 +6439,7 @@ namespace
 		const char* a_source,
 		const char* a_reason,
 		const VRBFadeCarrierRegionStats* a_stats = nullptr,
-		RE::RENDER_TARGETS::RENDER_TARGET a_target = kVRBFadeCarrierScrubTarget)
+		RE::RENDER_TARGETS::RENDER_TARGET a_target = kVRBFadeUiTAAHistoryPrimaryTarget)
 	{
 		const auto* state = globals::state;
 		const uint32_t frame = state ? std::max(state->frameCount, 1u) : 0u;
@@ -6521,17 +6522,6 @@ namespace
 		MarkVRBFadeRenderScaleLoadObserved(a_reason);
 	}
 
-	bool TextureDescMatchesForVRBFadeSeed(const D3D11_TEXTURE2D_DESC& a_destination, const D3D11_TEXTURE2D_DESC& a_source)
-	{
-		return a_destination.Width == a_source.Width &&
-		       a_destination.Height == a_source.Height &&
-		       a_destination.MipLevels == a_source.MipLevels &&
-		       a_destination.ArraySize == a_source.ArraySize &&
-		       a_destination.Format == a_source.Format &&
-		       a_destination.SampleDesc.Count == a_source.SampleDesc.Count &&
-		       a_destination.SampleDesc.Quality == a_source.SampleDesc.Quality;
-	}
-
 	bool IsVRBFadeCarrierScrubWindowActive(Upscaling& a_upscaling, const char* a_reason)
 	{
 		if (!globals::game::isVR)
@@ -6580,211 +6570,69 @@ namespace
 		return true;
 	}
 
-	bool EnsureVRBFadeCleanKTotalSnapshot(ID3D11Device* a_device, ID3D11Texture2D* a_source, const D3D11_TEXTURE2D_DESC& a_desc)
+	bool ClearVRBFadeUiTAAHistoryTarget(
+		ID3D11DeviceContext* a_context,
+		RE::RENDER_TARGETS::RENDER_TARGET a_target)
 	{
-		if (!a_device || !a_source)
+		auto* renderer = globals::game::renderer;
+		if (!a_context || !renderer)
 			return false;
 
-		if (g_vrBFadeCleanKTotalSnapshot &&
-		    g_vrBFadeCleanKTotalDesc.Width == a_desc.Width &&
-		    g_vrBFadeCleanKTotalDesc.Height == a_desc.Height &&
-		    g_vrBFadeCleanKTotalDesc.MipLevels == a_desc.MipLevels &&
-		    g_vrBFadeCleanKTotalDesc.ArraySize == a_desc.ArraySize &&
-		    g_vrBFadeCleanKTotalDesc.Format == a_desc.Format &&
-		    g_vrBFadeCleanKTotalDesc.SampleDesc.Count == a_desc.SampleDesc.Count &&
-		    g_vrBFadeCleanKTotalDesc.SampleDesc.Quality == a_desc.SampleDesc.Quality) {
-			return true;
+		auto& target = renderer->GetRuntimeData().renderTargets[a_target];
+		if (!target.texture || !target.RTV) {
+			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "missing-ui-taa-history", nullptr, a_target);
+			return false;
 		}
 
-		D3D11_TEXTURE2D_DESC snapshotDesc = a_desc;
-		snapshotDesc.Usage = D3D11_USAGE_DEFAULT;
-		snapshotDesc.BindFlags = 0;
-		snapshotDesc.CPUAccessFlags = 0;
-		snapshotDesc.MiscFlags = 0;
-
-		winrt::com_ptr<ID3D11Texture2D> snapshot;
-		if (FAILED(a_device->CreateTexture2D(&snapshotDesc, nullptr, snapshot.put())) || !snapshot)
+		D3D11_TEXTURE2D_DESC desc{};
+		target.texture->GetDesc(&desc);
+		if (desc.Width < 2 || desc.Height < 1 || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) {
+			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "unsupported-ui-taa-history", nullptr, a_target);
 			return false;
+		}
 
-		g_vrBFadeCleanKTotalSnapshot = std::move(snapshot);
-		g_vrBFadeCleanKTotalDesc = snapshotDesc;
+		constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
+		a_context->ClearRenderTargetView(target.RTV, clearColor);
 		return true;
 	}
 
-	void CaptureVRBFadeCleanKTotalForCarrierScrub(Upscaling& a_upscaling, const char* a_reason)
+	void ApplyVRBFadeUiTAAHistoryScrubStage3(Upscaling& a_upscaling, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
 			return;
 
 		auto* state = globals::state;
 		auto* context = globals::d3d::context;
-		auto* device = globals::d3d::device;
-		auto* renderer = globals::game::renderer;
-		if (!state || !context || !device || !renderer)
+		if (!state || !context)
 			return;
-
-		auto& total = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kTOTAL];
-		if (!total.texture) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "capture-missing-ktotal");
-			return;
-		}
-
-		D3D11_TEXTURE2D_DESC desc{};
-		total.texture->GetDesc(&desc);
-		if (desc.Width < 2 || desc.Height < 1 || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "capture-unsupported-ktotal");
-			return;
-		}
-
-		if (!EnsureVRBFadeCleanKTotalSnapshot(device, total.texture, desc)) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "capture-create-failed");
-			return;
-		}
-
-		context->CopyResource(g_vrBFadeCleanKTotalSnapshot.get(), total.texture);
-		g_vrBFadeCleanKTotalFrame.store(std::max(state->frameCount, 1u), std::memory_order_release);
-		LogVRBFadeCarrierScrub("capture", "kTOTAL", a_reason);
-	}
-
-	bool IsVRBFadeCarrierScrubTargetConsumerDraw(ID3D11DeviceContext* a_context)
-	{
-		if (!a_context)
-			return false;
-
-		ID3D11RenderTargetView* rtv = nullptr;
-		a_context->OMGetRenderTargets(1, &rtv, nullptr);
-		auto rtvRelease = ScopeExit([&]() {
-			if (rtv)
-				rtv->Release();
-		});
-		VRMenuCompositionTargetMatch destination{};
-		if (!rtv ||
-		    !TryResolveVRMenuCompositionView(rtv, destination) ||
-		    destination.target != RE::RENDER_TARGETS::kTOTAL) {
-			return false;
-		}
-
-		std::array<ID3D11ShaderResourceView*, 4> psSRVs{};
-		a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
-		auto releaseSRVs = ScopeExit([&]() {
-			for (auto* srv : psSRVs) {
-				if (srv)
-					srv->Release();
-			}
-		});
-
-		for (auto* srv : psSRVs) {
-			VRMenuCompositionTargetMatch source{};
-			if (srv &&
-			    TryResolveVRMenuCompositionView(srv, source) &&
-			    source.target == kVRBFadeCarrierScrubTarget) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	bool CopyVRBFadeCleanKTotalSnapshotToCarrier(ID3D11DeviceContext* a_context, ID3D11Texture2D* a_destination)
-	{
-		if (!a_context || !a_destination || !g_vrBFadeCleanKTotalSnapshot)
-			return false;
-
-		std::array<ID3D11ShaderResourceView*, 4> psSRVs{};
-		a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
-		auto releaseSRVs = ScopeExit([&]() {
-			for (auto* srv : psSRVs) {
-				if (srv)
-					srv->Release();
-			}
-		});
-
-		std::array<ID3D11ShaderResourceView*, 4> unboundSRVs = psSRVs;
-		bool sourceWasBound = false;
-		for (size_t i = 0; i < psSRVs.size(); ++i) {
-			VRMenuCompositionTargetMatch source{};
-			if (psSRVs[i] &&
-			    TryResolveVRMenuCompositionView(psSRVs[i], source) &&
-			    source.target == kVRBFadeCarrierScrubTarget) {
-				unboundSRVs[i] = nullptr;
-				sourceWasBound = true;
-			}
-		}
-		if (!sourceWasBound)
-			return false;
-
-		a_context->PSSetShaderResources(0, static_cast<UINT>(unboundSRVs.size()), unboundSRVs.data());
-		a_context->CopyResource(a_destination, g_vrBFadeCleanKTotalSnapshot.get());
-		a_context->PSSetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
-		return true;
-	}
-
-	void LogVRBFadeCarrierNoConsumerOncePerFrame(const char* a_reason)
-	{
-		const auto* state = globals::state;
-		const uint32_t frame = state ? std::max(state->frameCount, 1u) : 0u;
-		if (g_vrBFadeCarrierScrubNoConsumerFrame.exchange(frame, std::memory_order_acq_rel) == frame)
-			return;
-
-		LogVRBFadeCarrierScrub("skip", "none", a_reason);
-	}
-
-	bool ApplyVRBFadeCarrierScrubStage2BeforeConsumerDraw(Upscaling& a_upscaling, ID3D11DeviceContext* a_context, const char* a_reason)
-	{
-		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
-			return false;
-
-		if (!IsVRBFadeCarrierScrubTargetConsumerDraw(a_context)) {
-			LogVRBFadeCarrierNoConsumerOncePerFrame("no-copy2-consumer");
-			return false;
-		}
-
-		auto* state = globals::state;
-		auto* renderer = globals::game::renderer;
-		if (!state || !renderer || !a_context)
-			return false;
 
 		const uint32_t frame = std::max(state->frameCount, 1u);
-		if (!g_vrBFadeCleanKTotalSnapshot ||
-		    g_vrBFadeCleanKTotalFrame.load(std::memory_order_acquire) != frame) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "missing-current-clean-ktotal");
-			return false;
+		if (g_vrBFadeUiTAAHistoryScrubFrame.exchange(frame, std::memory_order_acq_rel) == frame)
+			return;
+
+		std::array<bool, kVRBFadeUiTAAHistoryTargets.size()> clearedTargets{};
+		bool clearedAny = false;
+		for (size_t i = 0; i < kVRBFadeUiTAAHistoryTargets.size(); ++i) {
+			clearedTargets[i] = ClearVRBFadeUiTAAHistoryTarget(context, kVRBFadeUiTAAHistoryTargets[i]);
+			clearedAny = clearedAny || clearedTargets[i];
 		}
 
-		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
-		auto& destination = renderTargets[kVRBFadeCarrierScrubTarget];
-		if (!destination.texture) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "missing-carrier");
-			return false;
-		}
-		if (destination.texture == g_vrBFadeCleanKTotalSnapshot.get()) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "same-texture");
-			return false;
+		if (!clearedAny) {
+			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "no-ui-taa-history-targets");
+			return;
 		}
 
-		D3D11_TEXTURE2D_DESC destinationDesc{};
-		destination.texture->GetDesc(&destinationDesc);
-		if (!TextureDescMatchesForVRBFadeSeed(destinationDesc, g_vrBFadeCleanKTotalDesc)) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "desc-mismatch");
-			return false;
-		}
-
-		VRBFadeCarrierRegionStats stats{};
-		if (!CaptureVRBFadeCarrierRegionStats(a_context, destination.texture, stats)) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", stats.reason, &stats);
-			return false;
-		}
-		if (!stats.suspicious) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", stats.reason, &stats);
-			return false;
-		}
-
-		if (!CopyVRBFadeCleanKTotalSnapshotToCarrier(a_context, destination.texture)) {
-			LogVRBFadeCarrierScrub("skip", "kTOTAL", "source-unbind-failed");
-			return false;
-		}
 		g_vrBFadeCarrierScrubApplyCount.fetch_add(1, std::memory_order_acq_rel);
-		LogVRBFadeCarrierScrub("seed", "kTOTAL", stats.reason, &stats);
-		return true;
+		for (size_t i = 0; i < kVRBFadeUiTAAHistoryTargets.size(); ++i) {
+			if (clearedTargets[i]) {
+				LogVRBFadeCarrierScrub(
+					"seed",
+					"ClearRenderTargetView",
+					"ui-taa-history-reset",
+					nullptr,
+					kVRBFadeUiTAAHistoryTargets[i]);
+			}
+		}
 	}
 
 	void LogVRKTotalMutationDiagnostics(
@@ -18603,10 +18451,6 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 		a_startIndexLocation,
 		a_baseVertexLocation,
 		a_startInstanceLocation);
-	ApplyVRBFadeCarrierScrubStage2BeforeConsumerDraw(
-		globals::features::upscaling,
-		a_context,
-		a_operation);
 	return false;
 }
 
@@ -19946,7 +19790,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			false);
 		upscaling.CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
 		ObserveVRBFadeRenderScaleLoadState(upscaling, "main-post-entry");
-		CaptureVRBFadeCleanKTotalForCarrierScrub(upscaling, "main-post-entry");
+		ApplyVRBFadeUiTAAHistoryScrubStage3(upscaling, "main-post-entry");
 	}
 	upscaling.ApplyAAVRSVisualization();
 	upscaling.DisableAAVRSState();

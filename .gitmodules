@@ -8,3 +8,7 @@
 	path = extern/FidelityFX-SDK
 	url = https://github.com/ParticleTroned/FidelityFX-SDK-DX11.git
 	branch = fsr-3.1.5-dx11
+[submodule "extern/nvapi"]
+	path = extern/nvapi
+	url = https://github.com/NVIDIA/nvapi.git
+	branch = main

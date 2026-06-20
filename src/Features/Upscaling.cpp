@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cfloat>
 #include <cstdint>
+#include <cstring>
 #include <cwctype>
 #include <directx/d3dx12.h>
 #include <dxgi.h>
@@ -169,10 +170,18 @@ namespace
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
+	std::atomic_bool g_vrBFadeRenderScaleLoadObserved{ false };
+	std::atomic_uint32_t g_vrBFadeCarrierScrubWindowEndFrame{ 0 };
+	std::atomic_uint32_t g_vrBFadeCarrierScrubApplyCount{ 0 };
+	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticFrame{ 0 };
+	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticCount{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
+	constexpr uint32_t kVRBFadeCarrierScrubWindowFrames = 180;
+	constexpr uint32_t kVRBFadeCarrierScrubMaxSeeds = 8;
+	constexpr uint32_t kVRBFadeCarrierScrubDiagnosticMaxLogsPerFrame = 16;
 
 	bool UsesVRRenderScalePostLoadSettle(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -6216,6 +6225,380 @@ namespace
 		return CaptureVRTrackedTargetFingerprint(a_context, RE::RENDER_TARGETS::kTOTAL, a_fingerprint);
 	}
 
+	template <class T>
+	T ReadVRBFadePixelValue(const uint8_t* a_data)
+	{
+		T value{};
+		std::memcpy(&value, a_data, sizeof(T));
+		return value;
+	}
+
+	bool IsVRBFadePixelDark(DXGI_FORMAT a_format, const uint8_t* a_pixel)
+	{
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+			return static_cast<uint32_t>(a_pixel[0]) +
+			           static_cast<uint32_t>(a_pixel[1]) +
+			           static_cast<uint32_t>(a_pixel[2]) <=
+			       24u;
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+		{
+			const auto value = ReadVRBFadePixelValue<uint32_t>(a_pixel);
+			const auto r = value & 0x3FFu;
+			const auto g = (value >> 10) & 0x3FFu;
+			const auto b = (value >> 20) & 0x3FFu;
+			return r <= 32u && g <= 32u && b <= 32u;
+		}
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+		{
+			const auto value = ReadVRBFadePixelValue<uint32_t>(a_pixel);
+			return value == 0u;
+		}
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+		case DXGI_FORMAT_R16G16B16A16_SNORM:
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		{
+			const auto r = ReadVRBFadePixelValue<uint16_t>(a_pixel + 0);
+			const auto g = ReadVRBFadePixelValue<uint16_t>(a_pixel + 2);
+			const auto b = ReadVRBFadePixelValue<uint16_t>(a_pixel + 4);
+			return (r & 0x7FFFu) <= 0x2800u &&
+			       (g & 0x7FFFu) <= 0x2800u &&
+			       (b & 0x7FFFu) <= 0x2800u;
+		}
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+		{
+			const auto r = ReadVRBFadePixelValue<float>(a_pixel + 0);
+			const auto g = ReadVRBFadePixelValue<float>(a_pixel + 4);
+			const auto b = ReadVRBFadePixelValue<float>(a_pixel + 8);
+			return std::abs(r) <= 0.03f &&
+			       std::abs(g) <= 0.03f &&
+			       std::abs(b) <= 0.03f;
+		}
+		default:
+			return false;
+		}
+	}
+
+	struct VRBFadeCarrierRegionStats
+	{
+		bool valid = false;
+		bool suspicious = false;
+		const char* reason = "unset";
+		uint32_t width = 0;
+		uint32_t height = 0;
+		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+		uint32_t blockSize = 0;
+		float topLeftDarkRatio = 0.0f;
+		float controlDarkRatio = 0.0f;
+		uint64_t topLeftHash = 0;
+		uint64_t controlHash = 0;
+	};
+
+	bool CaptureVRBFadeCarrierRegionStats(
+		ID3D11DeviceContext* a_context,
+		ID3D11Texture2D* a_texture,
+		VRBFadeCarrierRegionStats& a_stats)
+	{
+		a_stats = {};
+		auto device = globals::d3d::device;
+		if (!globals::game::isVR || !device || !a_context || !a_texture) {
+			a_stats.reason = "missing-context";
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC targetDesc{};
+		a_texture->GetDesc(&targetDesc);
+		a_stats.width = targetDesc.Width;
+		a_stats.height = targetDesc.Height;
+		a_stats.format = targetDesc.Format;
+
+		const uint32_t bytesPerPixel = GetVRKTotalFingerprintBytesPerPixel(targetDesc.Format);
+		if (bytesPerPixel == 0 || targetDesc.SampleDesc.Count != 1 || targetDesc.ArraySize != 1) {
+			a_stats.reason = "unsupported-desc";
+			return false;
+		}
+
+		const uint32_t blockSize = std::min(32u, std::min(targetDesc.Width, targetDesc.Height));
+		if (blockSize < 4u) {
+			a_stats.reason = "too-small";
+			return false;
+		}
+		a_stats.blockSize = blockSize;
+
+		struct StagingCache
+		{
+			winrt::com_ptr<ID3D11Texture2D> texture;
+			ID3D11Device* device = nullptr;
+			DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+			uint32_t width = 0;
+			uint32_t height = 0;
+		};
+		static StagingCache staging;
+
+		const uint32_t stagingWidth = blockSize * 2u;
+		const uint32_t stagingHeight = blockSize;
+		if (!staging.texture ||
+		    staging.device != device ||
+		    staging.format != targetDesc.Format ||
+		    staging.width != stagingWidth ||
+		    staging.height != stagingHeight) {
+			D3D11_TEXTURE2D_DESC stagingDesc{};
+			stagingDesc.Width = stagingWidth;
+			stagingDesc.Height = stagingHeight;
+			stagingDesc.MipLevels = 1;
+			stagingDesc.ArraySize = 1;
+			stagingDesc.Format = targetDesc.Format;
+			stagingDesc.SampleDesc.Count = 1;
+			stagingDesc.Usage = D3D11_USAGE_STAGING;
+			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+			winrt::com_ptr<ID3D11Texture2D> stagingTexture;
+			if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, stagingTexture.put())) || !stagingTexture) {
+				a_stats.reason = "staging-create-failed";
+				return false;
+			}
+
+			staging.texture = std::move(stagingTexture);
+			staging.device = device;
+			staging.format = targetDesc.Format;
+			staging.width = stagingWidth;
+			staging.height = stagingHeight;
+		}
+
+		const uint32_t controlX = targetDesc.Width > blockSize ?
+			std::min(targetDesc.Width - blockSize, std::max(blockSize, targetDesc.Width / 2u)) :
+			0u;
+		const uint32_t controlY = targetDesc.Height > blockSize ?
+			std::min(targetDesc.Height - blockSize, std::max(blockSize, targetDesc.Height / 2u)) :
+			0u;
+
+		const D3D11_BOX topLeftBox{ 0, 0, 0, blockSize, blockSize, 1 };
+		const D3D11_BOX controlBox{ controlX, controlY, 0, controlX + blockSize, controlY + blockSize, 1 };
+		a_context->CopySubresourceRegion(staging.texture.get(), 0, 0, 0, 0, a_texture, 0, &topLeftBox);
+		a_context->CopySubresourceRegion(staging.texture.get(), 0, blockSize, 0, 0, a_texture, 0, &controlBox);
+
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(a_context->Map(staging.texture.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+			a_stats.reason = "staging-map-failed";
+			return false;
+		}
+		auto unmapStaging = ScopeExit([&]() {
+			a_context->Unmap(staging.texture.get(), 0);
+		});
+
+		auto measureRegion = [&](uint32_t a_xOffset, uint32_t& a_darkPixels, uint64_t& a_hash) {
+			a_darkPixels = 0;
+			a_hash = 1469598103934665603ull;
+			for (uint32_t y = 0; y < blockSize; ++y) {
+				const auto* row = static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(mapped.RowPitch) * y;
+				for (uint32_t x = 0; x < blockSize; ++x) {
+					const auto* pixel = row + static_cast<size_t>(a_xOffset + x) * bytesPerPixel;
+					if (IsVRBFadePixelDark(targetDesc.Format, pixel))
+						++a_darkPixels;
+					for (uint32_t byte = 0; byte < bytesPerPixel; ++byte)
+						a_hash = MixVRKTotalFingerprintByte(a_hash, pixel[byte]);
+				}
+			}
+		};
+
+		uint32_t topLeftDarkPixels = 0;
+		uint32_t controlDarkPixels = 0;
+		measureRegion(0, topLeftDarkPixels, a_stats.topLeftHash);
+		measureRegion(blockSize, controlDarkPixels, a_stats.controlHash);
+
+		const float totalPixels = static_cast<float>(blockSize * blockSize);
+		a_stats.topLeftDarkRatio = static_cast<float>(topLeftDarkPixels) / totalPixels;
+		a_stats.controlDarkRatio = static_cast<float>(controlDarkPixels) / totalPixels;
+		a_stats.valid = true;
+		a_stats.suspicious =
+			a_stats.topLeftDarkRatio >= 0.92f &&
+			a_stats.controlDarkRatio <= 0.80f &&
+			(a_stats.topLeftDarkRatio - a_stats.controlDarkRatio) >= 0.20f;
+		a_stats.reason = a_stats.suspicious ? "suspicious-top-left" : "region-not-suspicious";
+		return true;
+	}
+
+	void LogVRBFadeCarrierScrub(
+		const char* a_action,
+		const char* a_source,
+		const char* a_reason,
+		const VRBFadeCarrierRegionStats* a_stats = nullptr)
+	{
+		const auto* state = globals::state;
+		const uint32_t frame = state ? std::max(state->frameCount, 1u) : 0u;
+		if (!ClaimVRFrameDiagnosticSlot(
+				frame,
+				g_vrBFadeCarrierScrubDiagnosticFrame,
+				g_vrBFadeCarrierScrubDiagnosticCount,
+				kVRBFadeCarrierScrubDiagnosticMaxLogsPerFrame)) {
+			return;
+		}
+
+		const char* marker = std::strcmp(DiagnosticText(a_action, "-"), "seed") == 0 ?
+			"VRBFadeCarrierScrub" :
+			"VRBFadeCarrierScrubGate";
+		if (a_stats && a_stats->valid) {
+			logger::debug(
+				"[{}] frame={} target=kIMAGESPACE_TEMP_COPY action={} source={} reason={} desc={}x{} fmt={} block={} topLeftDark={:.3f} controlDark={:.3f} topHash={} controlHash={} seeds={}/{} windowEnd={}",
+				marker,
+				frame,
+				DiagnosticText(a_action, "-"),
+				DiagnosticText(a_source, "-"),
+				DiagnosticText(a_reason, "-"),
+				a_stats->width,
+				a_stats->height,
+				static_cast<uint32_t>(a_stats->format),
+				a_stats->blockSize,
+				a_stats->topLeftDarkRatio,
+				a_stats->controlDarkRatio,
+				FormatVRMenuDiagnosticHex(a_stats->topLeftHash),
+				FormatVRMenuDiagnosticHex(a_stats->controlHash),
+				g_vrBFadeCarrierScrubApplyCount.load(std::memory_order_acquire),
+				kVRBFadeCarrierScrubMaxSeeds,
+				g_vrBFadeCarrierScrubWindowEndFrame.load(std::memory_order_acquire));
+			return;
+		}
+
+		logger::debug(
+			"[{}] frame={} target=kIMAGESPACE_TEMP_COPY action={} source={} reason={} seeds={}/{} windowEnd={}",
+			marker,
+			frame,
+			DiagnosticText(a_action, "-"),
+			DiagnosticText(a_source, "-"),
+			DiagnosticText(a_reason, "-"),
+			g_vrBFadeCarrierScrubApplyCount.load(std::memory_order_acquire),
+			kVRBFadeCarrierScrubMaxSeeds,
+			g_vrBFadeCarrierScrubWindowEndFrame.load(std::memory_order_acquire));
+	}
+
+	void MarkVRBFadeRenderScaleLoadObserved(const char* a_reason)
+	{
+		if (!globals::game::isVR)
+			return;
+
+		if (g_vrBFadeRenderScaleLoadObserved.exchange(true, std::memory_order_acq_rel))
+			return;
+
+		LogVRBFadeCarrierScrub("mark", "none", a_reason);
+	}
+
+	void ObserveVRBFadeRenderScaleLoadState(const Upscaling& a_upscaling, const char* a_reason)
+	{
+		if (!globals::game::isVR)
+			return;
+
+		const auto* state = globals::state;
+		if (!state)
+			return;
+
+		if (!a_upscaling.IsVRRenderScaleModeActive())
+			return;
+
+		if (!IsLoadingMenuContextActive() &&
+		    !IsVRLoadingPresentationTailActive(state) &&
+		    !IsCellTransitionTailActive(state)) {
+			return;
+		}
+
+		MarkVRBFadeRenderScaleLoadObserved(a_reason);
+	}
+
+	bool TextureDescMatchesForVRBFadeSeed(const D3D11_TEXTURE2D_DESC& a_destination, const D3D11_TEXTURE2D_DESC& a_source)
+	{
+		return a_destination.Width == a_source.Width &&
+		       a_destination.Height == a_source.Height &&
+		       a_destination.MipLevels == a_source.MipLevels &&
+		       a_destination.ArraySize == a_source.ArraySize &&
+		       a_destination.Format == a_source.Format &&
+		       a_destination.SampleDesc.Count == a_source.SampleDesc.Count &&
+		       a_destination.SampleDesc.Quality == a_source.SampleDesc.Quality;
+	}
+
+	bool ApplyVRBFadeImageSpaceTempCopyScrubStage1(Upscaling& a_upscaling, const char* a_reason)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		ObserveVRBFadeRenderScaleLoadState(a_upscaling, a_reason);
+		if (!g_vrBFadeRenderScaleLoadObserved.load(std::memory_order_acquire))
+			return false;
+
+		auto* state = globals::state;
+		auto* context = globals::d3d::context;
+		auto* renderer = globals::game::renderer;
+		if (!state || !context || !renderer)
+			return false;
+
+		const auto frame = std::max(state->frameCount, 1u);
+		const auto& plan = a_upscaling.GetRuntimeResolutionPlan();
+		if (a_upscaling.IsVRRenderScaleModeActive() ||
+		    a_upscaling.IsPerfModeActive() ||
+		    a_upscaling.IsPresentationUpscalingActive() ||
+		    plan.owner != Upscaling::ResolutionOwner::Native) {
+			return false;
+		}
+
+		const bool menuFadeContext =
+			IsKnownGameMenuContextActive() ||
+			IsVRMenuPresentationContextActive() ||
+			IsVRLoadingPresentationContextActive(state) ||
+			IsSaveLoadTransitionContextActive(state);
+		if (!menuFadeContext)
+			return false;
+
+		uint32_t windowEnd = g_vrBFadeCarrierScrubWindowEndFrame.load(std::memory_order_acquire);
+		if (windowEnd == 0) {
+			windowEnd = frame + kVRBFadeCarrierScrubWindowFrames;
+			g_vrBFadeCarrierScrubWindowEndFrame.store(windowEnd, std::memory_order_release);
+			g_vrBFadeCarrierScrubApplyCount.store(0, std::memory_order_release);
+			LogVRBFadeCarrierScrub("arm", "none", a_reason);
+		}
+		if (frame > windowEnd)
+			return false;
+
+		if (g_vrBFadeCarrierScrubApplyCount.load(std::memory_order_acquire) >= kVRBFadeCarrierScrubMaxSeeds)
+			return false;
+
+		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
+		auto& destination = renderTargets[RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY];
+		auto& source = renderTargets[RE::RENDER_TARGETS::kMAIN];
+		if (!destination.texture || !source.texture) {
+			LogVRBFadeCarrierScrub("skip", "kMAIN", "missing-texture");
+			return false;
+		}
+		if (destination.texture == source.texture) {
+			LogVRBFadeCarrierScrub("skip", "kMAIN", "same-texture");
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC destinationDesc{};
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		destination.texture->GetDesc(&destinationDesc);
+		source.texture->GetDesc(&sourceDesc);
+		if (!TextureDescMatchesForVRBFadeSeed(destinationDesc, sourceDesc)) {
+			LogVRBFadeCarrierScrub("skip", "kMAIN", "desc-mismatch");
+			return false;
+		}
+
+		VRBFadeCarrierRegionStats stats{};
+		if (!CaptureVRBFadeCarrierRegionStats(context, destination.texture, stats)) {
+			LogVRBFadeCarrierScrub("skip", "kMAIN", stats.reason, &stats);
+			return false;
+		}
+		if (!stats.suspicious) {
+			LogVRBFadeCarrierScrub("skip", "kMAIN", stats.reason, &stats);
+			return false;
+		}
+
+		context->CopyResource(destination.texture, source.texture);
+		g_vrBFadeCarrierScrubApplyCount.fetch_add(1, std::memory_order_acq_rel);
+		LogVRBFadeCarrierScrub("seed", "kMAIN", a_reason, &stats);
+		return true;
+	}
+
 	void LogVRKTotalMutationDiagnostics(
 		ID3D11DeviceContext* a_context,
 		const char* a_passName,
@@ -9712,6 +10095,11 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 		return false;
 
 	const bool result = perfMode.TryGetOpenVRRenderTargetSize(settings, GetUpscaleMethod(), a_width, a_height, a_allowCreate);
+	if (result && a_allowCreate) {
+		const auto& boot = perfMode.GetBootSnapshot();
+		if (boot.valid && boot.active)
+			MarkVRBFadeRenderScaleLoadObserved("boot-render-scale-latched");
+	}
 	return result;
 }
 
@@ -19365,6 +19753,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			"entry",
 			false);
 		upscaling.CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
+		ObserveVRBFadeRenderScaleLoadState(upscaling, "main-post-entry");
 	}
 	upscaling.ApplyAAVRSVisualization();
 	upscaling.DisableAAVRSState();
@@ -19413,6 +19802,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+		ApplyVRBFadeImageSpaceTempCopyScrubStage1(upscaling, "submit-disabled-vendor-before-original");
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		return;
@@ -19433,6 +19823,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		else
 			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+		ApplyVRBFadeImageSpaceTempCopyScrubStage1(upscaling, "menu-presentation-before-original");
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		if (fullResolutionMenuPresentation)
@@ -19452,6 +19843,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		upscaling.UpscaleDepth();
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+		ApplyVRBFadeImageSpaceTempCopyScrubStage1(upscaling, "vendor-dynamic-before-original");
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
@@ -19488,6 +19880,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		}
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
+		ApplyVRBFadeImageSpaceTempCopyScrubStage1(upscaling, "presentation-upscaling-before-original");
 		func(a_this, a3, a_target, a_4, a_5);
 		LogVRPresentationPassDiagnostics(
 			upscaling,
@@ -19518,6 +19911,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	if (upscaleMethod == UpscaleMethod::kNONE) {
 		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
+		ApplyVRBFadeImageSpaceTempCopyScrubStage1(upscaling, "none-before-original");
 		func(a_this, a3, a_target, a_4, a_5);
 		return;
 	}
@@ -19527,6 +19921,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		upscaling.PrepareFullResolutionPostProcessing();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
+	ApplyVRBFadeImageSpaceTempCopyScrubStage1(upscaling, "native-before-original");
 	func(a_this, a3, a_target, a_4, a_5);
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;

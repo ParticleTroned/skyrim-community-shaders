@@ -548,6 +548,9 @@ public:
 	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
+	void MarkVRRenderScaleBootSessionActive(const char* a_reason = nullptr);
+	void ArmVRRenderScaleBootExitCleanup(const char* a_reason = nullptr);
+	bool ApplyVRRenderScaleBootExitCleanupIfPending(const char* a_reason = nullptr);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
 	bool ConsumePerfModeBootLatchCreate();
 	bool AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
@@ -869,6 +872,9 @@ public:
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
+	std::atomic<bool> vrRenderScaleInitialOpenVRSizeObserved{ false };
+	std::atomic<bool> vrRenderScaleBootSessionActive{ false };
+	std::atomic<bool> pendingVRRenderScaleBootExitCleanup{ false };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();

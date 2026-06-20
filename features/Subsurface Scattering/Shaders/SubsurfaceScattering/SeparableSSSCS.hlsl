@@ -27,13 +27,18 @@ SamplerState PointSampler : register(s0);
 	float2 texCoord = (DTid.xy + 0.5) * SharedData::BufferDim.zw;
 #if defined(BURLEY)
 
-	float sssAmount = MaskTexture[DTid.xy].x;
-	float humanClass = MaskTexture[DTid.xy].y;
-	bool humanProfile = humanClass > 0.5;
-	bool isFemale = humanClass > 1.5;
+	float sssAmount = saturate(MaskTexture[DTid.xy].x);
 
-	float4 color = BurleyNormalizedSS(DTid.xy, texCoord, sssAmount, humanProfile, isFemale);
-	SSSRW[DTid.xy] = max(0, color);
+	// Burley reads the albedo-free pre-pass texture; leave non-SSS pixels untouched so
+	// they keep the original main target contents instead of the extracted irradiance.
+	if (sssAmount > 0.0) {
+		float humanClass = MaskTexture[DTid.xy].y;
+		bool humanProfile = humanClass > 0.5;
+		bool isFemale = humanClass > 1.5;
+
+		float4 color = BurleyNormalizedSS(DTid.xy, texCoord, sssAmount, humanProfile, isFemale);
+		SSSRW[DTid.xy] = max(0, color);
+	}
 
 #elif defined(HORIZONTAL)
 

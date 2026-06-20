@@ -134,7 +134,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, float sssAmount, bool hum
 	float3 albedo = AlbedoTexture[DTid.xy].xyz;
 	float3 color = SSSApplyAlbedo(Color::IrradianceToGamma(colorSum), albedo, SSS_SCATTER_MODE_POST);
 	float3 centerColorRestored = SSSApplyAlbedo(Color::IrradianceToGamma(originalColor), albedo, SSS_SCATTER_MODE_POST);
-	color = lerp(centerColorRestored, color, saturate(sssAmount > 0.0));
+	color = lerp(centerColorRestored, color, saturate(sssAmount));
 
 	if (humanProfile) {
 		float3 base0 = centerColor.xyz;

@@ -6416,11 +6416,18 @@ namespace
 		a_stats.topLeftDarkRatio = static_cast<float>(topLeftDarkPixels) / totalPixels;
 		a_stats.controlDarkRatio = static_cast<float>(controlDarkPixels) / totalPixels;
 		a_stats.valid = true;
-		a_stats.suspicious =
+		const bool suspiciousTopLeft =
 			a_stats.topLeftDarkRatio >= 0.92f &&
 			a_stats.controlDarkRatio <= 0.80f &&
 			(a_stats.topLeftDarkRatio - a_stats.controlDarkRatio) >= 0.20f;
-		a_stats.reason = a_stats.suspicious ? "suspicious-top-left" : "region-not-suspicious";
+		const bool uniformBlackCarrier =
+			a_stats.topLeftDarkRatio >= 0.98f &&
+			a_stats.controlDarkRatio >= 0.98f &&
+			a_stats.topLeftHash == a_stats.controlHash;
+		a_stats.suspicious = suspiciousTopLeft || uniformBlackCarrier;
+		a_stats.reason = uniformBlackCarrier ?
+			"uniform-black-carrier" :
+			(suspiciousTopLeft ? "suspicious-top-left" : "region-not-suspicious");
 		return true;
 	}
 
@@ -6599,7 +6606,7 @@ namespace
 		return true;
 	}
 
-	void CaptureVRBFadeCleanKTotalForStage1b(Upscaling& a_upscaling, const char* a_reason)
+	void CaptureVRBFadeCleanKTotalForStage1c(Upscaling& a_upscaling, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
 			return;
@@ -6706,7 +6713,7 @@ namespace
 		return true;
 	}
 
-	bool ApplyVRBFadeImageSpaceTempCopyScrubStage1bBeforeConsumerDraw(Upscaling& a_upscaling, ID3D11DeviceContext* a_context, const char* a_reason)
+	bool ApplyVRBFadeImageSpaceTempCopyScrubStage1cBeforeConsumerDraw(Upscaling& a_upscaling, ID3D11DeviceContext* a_context, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
 			return false;
@@ -6759,7 +6766,7 @@ namespace
 			return false;
 		}
 		g_vrBFadeCarrierScrubApplyCount.fetch_add(1, std::memory_order_acq_rel);
-		LogVRBFadeCarrierScrub("seed", "kTOTAL", a_reason, &stats);
+		LogVRBFadeCarrierScrub("seed", "kTOTAL", stats.reason, &stats);
 		return true;
 	}
 
@@ -18579,7 +18586,7 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 		a_startIndexLocation,
 		a_baseVertexLocation,
 		a_startInstanceLocation);
-	ApplyVRBFadeImageSpaceTempCopyScrubStage1bBeforeConsumerDraw(
+	ApplyVRBFadeImageSpaceTempCopyScrubStage1cBeforeConsumerDraw(
 		globals::features::upscaling,
 		a_context,
 		a_operation);
@@ -19922,7 +19929,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			false);
 		upscaling.CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
 		ObserveVRBFadeRenderScaleLoadState(upscaling, "main-post-entry");
-		CaptureVRBFadeCleanKTotalForStage1b(upscaling, "main-post-entry");
+		CaptureVRBFadeCleanKTotalForStage1c(upscaling, "main-post-entry");
 	}
 	upscaling.ApplyAAVRSVisualization();
 	upscaling.DisableAAVRSState();

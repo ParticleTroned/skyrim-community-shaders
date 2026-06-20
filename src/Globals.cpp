@@ -287,15 +287,250 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_DrawIndexed
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
+		{
+			if (Upscaling::TraceVRTrackedDrawOperation(This, "DrawIndexed", 0, IndexCount, 0, 0, StartIndexLocation, BaseVertexLocation, 0))
+				return;
+			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_Draw
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT VertexCount, UINT StartVertexLocation)
+		{
+			if (Upscaling::TraceVRTrackedDrawOperation(This, "Draw", VertexCount, 0, 0, StartVertexLocation, 0, 0, 0))
+				return;
+			func(This, VertexCount, StartVertexLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawIndexedInstanced
+	{
+		static void thunk(
+			ID3D11DeviceContext* This,
+			UINT IndexCountPerInstance,
+			UINT InstanceCount,
+			UINT StartIndexLocation,
+			INT BaseVertexLocation,
+			UINT StartInstanceLocation)
+		{
+			if (Upscaling::TraceVRTrackedDrawOperation(
+					This,
+					"DrawIndexedInstanced",
+					0,
+					IndexCountPerInstance,
+					InstanceCount,
+					0,
+					StartIndexLocation,
+					BaseVertexLocation,
+					StartInstanceLocation)) {
+				return;
+			}
+			func(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_DrawInstanced
+	{
+		static void thunk(ID3D11DeviceContext* This, UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
+		{
+			if (Upscaling::TraceVRTrackedDrawOperation(
+					This,
+					"DrawInstanced",
+					VertexCountPerInstance,
+					0,
+					InstanceCount,
+					StartVertexLocation,
+					0,
+					0,
+					StartInstanceLocation)) {
+				return;
+			}
+			func(This, VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_CopySubresourceRegion
+	{
+		static void thunk(
+			ID3D11DeviceContext* This,
+			ID3D11Resource* pDstResource,
+			UINT DstSubresource,
+			UINT DstX,
+			UINT DstY,
+			UINT DstZ,
+			ID3D11Resource* pSrcResource,
+			UINT SrcSubresource,
+			const D3D11_BOX* pSrcBox)
+		{
+			Upscaling::TraceVRTrackedResourceCopyOperation(
+				This,
+				"CopySubresourceRegion",
+				pDstResource,
+				DstSubresource,
+				DstX,
+				DstY,
+				DstZ,
+				pSrcResource,
+				SrcSubresource,
+				pSrcBox);
+			func(This, pDstResource, DstSubresource, DstX, DstY, DstZ, pSrcResource, SrcSubresource, pSrcBox);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_CopyResource
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pDstResource, ID3D11Resource* pSrcResource)
+		{
+			Upscaling::TraceVRTrackedResourceCopyOperation(
+				This,
+				"CopyResource",
+				pDstResource,
+				0,
+				0,
+				0,
+				0,
+				pSrcResource,
+				0,
+				nullptr);
+			func(This, pDstResource, pSrcResource);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_UpdateSubresource
+	{
+		static void thunk(
+			ID3D11DeviceContext* This,
+			ID3D11Resource* pDstResource,
+			UINT DstSubresource,
+			const D3D11_BOX* pDstBox,
+			const void* pSrcData,
+			UINT SrcRowPitch,
+			UINT SrcDepthPitch)
+		{
+			Upscaling::TraceVRTrackedResourceUpdateOperation(This, pDstResource, DstSubresource, pDstBox);
+			func(This, pDstResource, DstSubresource, pDstBox, pSrcData, SrcRowPitch, SrcDepthPitch);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_ClearRenderTargetView
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11RenderTargetView* pRenderTargetView, const FLOAT ColorRGBA[4])
+		{
+			Upscaling::TraceVRTrackedRenderTargetClearOperation(This, pRenderTargetView, ColorRGBA);
+			func(This, pRenderTargetView, ColorRGBA);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_ClearUnorderedAccessViewUint
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11UnorderedAccessView* pUnorderedAccessView, const UINT Values[4])
+		{
+			ID3D11Resource* resource = nullptr;
+			if (pUnorderedAccessView)
+				pUnorderedAccessView->GetResource(&resource);
+
+			Upscaling::TraceVRTrackedResourceCopyOperation(
+				This,
+				"ClearUnorderedAccessViewUint",
+				resource,
+				0,
+				0,
+				0,
+				0,
+				nullptr,
+				0,
+				nullptr);
+
+			if (resource)
+				resource->Release();
+
+			func(This, pUnorderedAccessView, Values);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_ClearUnorderedAccessViewFloat
+	{
+		static void thunk(ID3D11DeviceContext* This, ID3D11UnorderedAccessView* pUnorderedAccessView, const FLOAT Values[4])
+		{
+			ID3D11Resource* resource = nullptr;
+			if (pUnorderedAccessView)
+				pUnorderedAccessView->GetResource(&resource);
+
+			Upscaling::TraceVRTrackedResourceCopyOperation(
+				This,
+				"ClearUnorderedAccessViewFloat",
+				resource,
+				0,
+				0,
+				0,
+				0,
+				nullptr,
+				0,
+				nullptr);
+
+			if (resource)
+				resource->Release();
+
+			func(This, pUnorderedAccessView, Values);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ID3D11DeviceContext_ResolveSubresource
+	{
+		static void thunk(
+			ID3D11DeviceContext* This,
+			ID3D11Resource* pDstResource,
+			UINT DstSubresource,
+			ID3D11Resource* pSrcResource,
+			UINT SrcSubresource,
+			DXGI_FORMAT Format)
+		{
+			Upscaling::TraceVRTrackedResourceResolveOperation(
+				This,
+				pDstResource,
+				DstSubresource,
+				pSrcResource,
+				SrcSubresource,
+				Format);
+			func(This, pDstResource, DstSubresource, pSrcResource, SrcSubresource, Format);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	/**
- * @brief Installs hooks on the Map and Unmap methods of the provided D3D11 device context.
+ * @brief Installs D3D11 device-context hooks used by diagnostic and rendering features.
  *
- * This enables interception of resource mapping and unmapping operations for frame buffer caching.
+ * This enables interception of resource mapping, draw calls, copies, resolves, updates, and clear operations.
  */
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		stl::detour_vfunc<12, ID3D11DeviceContext_DrawIndexed>(a_context);
+		stl::detour_vfunc<13, ID3D11DeviceContext_Draw>(a_context);
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
+		stl::detour_vfunc<21, ID3D11DeviceContext_DrawInstanced>(a_context);
+		stl::detour_vfunc<46, ID3D11DeviceContext_CopySubresourceRegion>(a_context);
+		stl::detour_vfunc<47, ID3D11DeviceContext_CopyResource>(a_context);
+		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);
+		stl::detour_vfunc<50, ID3D11DeviceContext_ClearRenderTargetView>(a_context);
+		stl::detour_vfunc<51, ID3D11DeviceContext_ClearUnorderedAccessViewUint>(a_context);
+		stl::detour_vfunc<52, ID3D11DeviceContext_ClearUnorderedAccessViewFloat>(a_context);
+		stl::detour_vfunc<57, ID3D11DeviceContext_ResolveSubresource>(a_context);
 		ShadowmapRasterizerFix::InstallD3DHooks(a_context);
 	}
 }

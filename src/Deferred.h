@@ -1,5 +1,6 @@
 #pragma once
 
+#include <DirectXMath.h>
 #include "Buffer.h"
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
@@ -12,6 +13,15 @@
 class Deferred
 {
 public:
+	struct alignas(16) DirectionalShadowLightData
+	{
+		float4x4 ShadowProj[2];
+		float4x4 InvShadowProj[2];
+		float2 EndSplitDistances;
+		float2 StartSplitDistances;
+	};
+	STATIC_ASSERT_ALIGNAS_16(DirectionalShadowLightData);
+
 	static Deferred* GetSingleton()
 	{
 		static Deferred singleton;
@@ -20,6 +30,7 @@ public:
 
 	void SetupResources();
 	void CopyShadowData();
+	void CopyShadowLightData();
 	void ReflectionsPrepasses();
 	void EarlyPrepasses();
 	void StartDeferred();
@@ -31,6 +42,9 @@ public:
 	void PrepassPasses();
 
 	void ClearShaderCache();
+
+	template <typename T>
+	void SetShadowCascadeParameters(T& lightData, DirectionalShadowLightData& dd);
 
 	ID3D11ComputeShader* GetComputeMainComposite();
 	ID3D11ComputeShader* GetComputeMainCompositeInterior();
@@ -56,6 +70,7 @@ public:
 	ID3D11BlendState* compositeColorBlendState = nullptr;
 	ID3D11DepthStencilState* compositeColorDepthStencilState = nullptr;
 	ID3D11RasterizerState* compositeColorRasterizerState = nullptr;
+	Buffer* directionalShadowLights = nullptr;
 	Texture2D* deferredCompositeColorCopy = nullptr;
 
 	bool deferredPass = false;

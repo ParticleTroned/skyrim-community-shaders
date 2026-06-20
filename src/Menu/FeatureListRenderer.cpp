@@ -468,7 +468,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const CategoryHeader& head
 	{
 		MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Heading);
 		int count = Menu::categoryCounts[std::string(header.name)];
-		Util::DrawCategoryHeader(header.name.c_str(), isExpanded, count);
+		Util::DrawCategoryHeader(header.name.c_str(), header.name.c_str(), isExpanded, count);
 	}
 
 	// Update expansion state

@@ -42,7 +42,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TruePBR::Settings,
-	VertexAOStrength);
+	VertexAOStrength,
+	pbrMetalReflectionScale,
+	pbrMetalHighlightScale);
 
 #define CHECK_PBR_TEXTURE(textureName)                                                                         \
 	if (!(pbrMaterial->textureName)) {                                                                         \
@@ -113,11 +115,11 @@ void TruePBR::DrawSettings()
 	if (ImGui::TreeNodeEx("Global Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 		{
 			Util::BlueFrameStyleWrapper blueFrameStyle;
-			ImGui::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
+			ImGui::SliderFloat("PBR Metal Reflection", &settings.pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
 			if (ImGui::IsItemHovered()) {
 				ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
 			}
-			ImGui::SliderFloat("PBR Metal Highlight", &globals::state->pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
+			ImGui::SliderFloat("PBR Metal Highlight", &settings.pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
 			if (ImGui::IsItemHovered()) {
 				ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
 			}

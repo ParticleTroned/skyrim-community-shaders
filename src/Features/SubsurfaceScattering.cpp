@@ -34,23 +34,6 @@ namespace
 	constexpr float kHumanSkinControlMin = 0.0f;
 	constexpr float kHumanSkinControlMax = 2.0f;
 
-	template <class TNPC>
-	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
-	{
-		return npc->IsFemale();
-	}
-
-	template <class TNPC>
-	auto IsFemaleImpl(TNPC* npc, long) -> decltype(npc->GetSex(), bool{})
-	{
-		return static_cast<uint32_t>(npc->GetSex()) != 0;
-	}
-
-	inline bool GetNPCIsFemale(RE::TESNPC* npc)
-	{
-		return npc ? IsFemaleImpl(npc, 0) : false;
-	}
-
 	inline float ClampHumanSkinControl(float a_value)
 	{
 		return std::clamp(a_value, kHumanSkinControlMin, kHumanSkinControlMax);
@@ -518,26 +501,24 @@ void SubsurfaceScattering::SetupResources()
 
 void SubsurfaceScattering::Reset()
 {
-	if (auto state = globals::state) {
-		ApplyClampedHumanSkinControls(
-			state->sssHumanMaleIntensity,
-			state->sssHumanMaleSaturation,
-			state->sssHumanMaleBrightness,
-			state->sssHumanMaleBaseSaturation,
-			settings.HumanMaleSSSIntensity,
-			settings.HumanMaleSSSSaturation,
-			settings.HumanMaleSSSBrightness,
-			settings.HumanMaleSSSBaseSaturation);
-		ApplyClampedHumanSkinControls(
-			state->sssHumanFemaleIntensity,
-			state->sssHumanFemaleSaturation,
-			state->sssHumanFemaleBrightness,
-			state->sssHumanFemaleBaseSaturation,
-			settings.HumanFemaleSSSIntensity,
-			settings.HumanFemaleSSSSaturation,
-			settings.HumanFemaleSSSBrightness,
-			settings.HumanFemaleSSSBaseSaturation);
-	}
+	ApplyClampedHumanSkinControls(
+		settings.HumanMaleSSSIntensity,
+		settings.HumanMaleSSSSaturation,
+		settings.HumanMaleSSSBrightness,
+		settings.HumanMaleSSSBaseSaturation,
+		settings.HumanMaleSSSIntensity,
+		settings.HumanMaleSSSSaturation,
+		settings.HumanMaleSSSBrightness,
+		settings.HumanMaleSSSBaseSaturation);
+	ApplyClampedHumanSkinControls(
+		settings.HumanFemaleSSSIntensity,
+		settings.HumanFemaleSSSSaturation,
+		settings.HumanFemaleSSSBrightness,
+		settings.HumanFemaleSSSBaseSaturation,
+		settings.HumanFemaleSSSIntensity,
+		settings.HumanFemaleSSSSaturation,
+		settings.HumanFemaleSSSBrightness,
+		settings.HumanFemaleSSSBaseSaturation);
 
 	auto shaderManager = globals::game::smState;
 	auto shaderCache = globals::shaderCache;
@@ -661,7 +642,6 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 
 	if (deferred->deferredPass) {
 		bool isBeastRace = true;
-		bool isFemale = false;
 
 		if (a_pass && a_pass->shaderProperty &&
 			a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kFace, RE::BSShaderProperty::EShaderPropertyFlag::kFaceGenRGBTint,
@@ -672,8 +652,6 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 					if (auto actor = userData->As<RE::Actor>()) {
 						if (auto race = actor->GetRace(); race && isBeastRaceKeyword)
 							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
-						if (auto base = actor->GetActorBase())
-							isFemale = GetNPCIsFemale(base);
 					}
 				}
 			}
@@ -681,11 +659,9 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			validMaterials = true;
 		}
 
-		state->permutationData.ExtraShaderDescriptor &= ~((uint)State::ExtraShaderDescriptors::IsBeastRace | (uint)State::ExtraShaderDescriptors::IsFemale);
+		state->permutationData.ExtraShaderDescriptor &= ~((uint)State::ExtraShaderDescriptors::IsBeastRace);
 		if (isBeastRace)
 			state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::IsBeastRace;
-		if (isFemale)
-			state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::IsFemale;
 	}
 }
 

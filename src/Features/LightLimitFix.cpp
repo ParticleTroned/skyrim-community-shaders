@@ -408,8 +408,8 @@ namespace
 			return;
 		}
 
-		// CommonLib v4.18 names this offset unk88; v4.19+ names it emittanceColor.
-		if (const auto* emittance = a_shaderProperty->unk88) {
+		// CommonLib v4.18 used the legacy alias `unk88`; v4.19+ exposes `emittanceColor`.
+		if (const auto* emittance = a_shaderProperty->emittanceColor) {
 			a_color.red *= emittance->red;
 			a_color.green *= emittance->green;
 			a_color.blue *= emittance->blue;
@@ -454,22 +454,6 @@ void LightLimitFix::DrawSettings()
 {
 	{
 		Util::BlueFrameStyleWrapper lightLimitBlueStyle(true);
-
-		ImGui::Text("ImageSpace Refraction");
-		ImGui::SliderFloat(
-			"Heat Warp Strength",
-			&globals::state->refractionScale,
-			0.0f,
-			2.0f,
-			"%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Scales ImageSpace refraction (heat shimmer around fire/heat sources).\n"
-				"Lower values reduce warping; 0 disables it.");
-		}
-
-		ImGui::Separator();
-		ImGui::Spacing();
 
 		if (ImGui::TreeNodeEx("Particle Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
 			ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
@@ -696,9 +680,10 @@ void LightLimitFix::CleanupParticleLights(RE::NiNode* a_node)
 
 void LightLimitFix::SetupResources()
 {
-	auto screenSize = globals::state->screenSize;
-	clusterSize[0] = ((uint)screenSize.x + 63) / 64;
-	clusterSize[1] = ((uint)screenSize.y + 63) / 64;
+	const uint32_t screenWidth = globals::game::graphicsState ? globals::game::graphicsState->screenWidth : 1u;
+	const uint32_t screenHeight = globals::game::graphicsState ? globals::game::graphicsState->screenHeight : 1u;
+	clusterSize[0] = ((screenWidth + 63) / 64);
+	clusterSize[1] = ((screenHeight + 63) / 64);
 	clusterSize[2] = 32;
 	uint clusterCount = clusterSize[0] * clusterSize[1] * clusterSize[2];
 
@@ -967,7 +952,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 			if (i < shadowLightCount && bsLight->IsShadowLight()) {
 				auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-				GET_INSTANCE_MEMBER(maskIndex, shadowLight);
+				const auto maskIndex = shadowLight->GetRuntimeData().maskIndex;
 				if (maskIndex < 32) {
 					light.shadowMaskIndex = maskIndex;
 					light.lightFlags.set(LightFlags::Shadow);
@@ -984,7 +969,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 				continue;
 			}
 			auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-			GET_INSTANCE_MEMBER(maskIndex, shadowLight);
+			const auto maskIndex = shadowLight->GetRuntimeData().maskIndex;
 			if (maskIndex < 32) {
 				strictLightDataTemp.ShadowBitMask |= (1u << maskIndex);
 			}
@@ -1715,7 +1700,7 @@ void LightLimitFix::UpdateLights()
 
 					if (bsLight->IsShadowLight()) {
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-						GET_INSTANCE_MEMBER(maskIndex, shadowLight);
+						const auto maskIndex = shadowLight->GetRuntimeData().maskIndex;
 						light.shadowMaskIndex = maskIndex;
 						light.lightFlags.set(LightFlags::Shadow);
 					}
@@ -1915,7 +1900,11 @@ void LightLimitFix::UpdateStructure()
 		lightsFar = *globals::game::cameraFar;
 	}
 
-	auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
+	const auto screenWidth = std::max(1u, globals::game::graphicsState ? globals::game::graphicsState->screenWidth : 1u);
+	const auto screenHeight = std::max(1u, globals::game::graphicsState ? globals::game::graphicsState->screenHeight : 1u);
+	const uint32_t renderWidth = screenWidth;
+	const uint32_t renderHeight = screenHeight;
+	const float2 renderSize = Util::ConvertToDynamic(float2{ static_cast<float>(renderWidth), static_cast<float>(renderHeight) });
 	clusterSize[0] = ((uint)renderSize.x + 63) / 64;
 	clusterSize[1] = ((uint)renderSize.y + 63) / 64;
 	clusterSize[2] = 32;

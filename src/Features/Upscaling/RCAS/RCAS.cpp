@@ -59,8 +59,12 @@ bool RCAS::ApplySharpen(ID3D11ShaderResourceView* inputSRV, ID3D11UnorderedAcces
 		return false;
 	}
 
-	uint32_t screenWidth = width ? width : static_cast<uint32_t>(state->screenSize.x);
-	uint32_t screenHeight = height ? height : static_cast<uint32_t>(state->screenSize.y);
+	const auto* viewport = globals::game::graphicsState;
+	const uint32_t screenWidthFallback = viewport ? viewport->screenWidth : 0u;
+	const uint32_t screenHeightFallback = viewport ? viewport->screenHeight : 0u;
+
+	const uint32_t screenWidth = width ? width : screenWidthFallback;
+	const uint32_t screenHeight = height ? height : screenHeightFallback;
 	if (!screenWidth || !screenHeight)
 		return false;
 

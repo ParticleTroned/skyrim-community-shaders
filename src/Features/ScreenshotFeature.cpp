@@ -329,7 +329,7 @@ namespace
 		if (upscaling.d3d12SwapChainActive &&
 			upscaling.dx12SwapChain.swapChainBufferWrapped &&
 			upscaling.dx12SwapChain.swapChainBufferWrapped->resource11) {
-			holder.copy_from(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11);
+			holder.copy_from(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11.get());
 			return holder.get();
 		}
 

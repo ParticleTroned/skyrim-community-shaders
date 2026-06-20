@@ -7,7 +7,7 @@ namespace Util
 {
 	namespace
 	{
-		RE::BSImagespaceShaderISTemporalAA* GetTemporalAAShader()
+		RE::ImageSpaceManager::UNK_BSImagespaceShaderISTemporalAA* GetTemporalAAShader()
 		{
 			auto* imageSpaceManager = globals::game::imageSpaceManager ? globals::game::imageSpaceManager : RE::ImageSpaceManager::GetSingleton();
 			if (!imageSpaceManager)
@@ -147,9 +147,14 @@ namespace Util
 	float GetVerticalFOVRad()
 	{
 		static float& cameraFOVDeg = (*(float*)(REL::RelocationID(513786, 388785).address()));  // FOV degrees
+		auto viewport = globals::game::graphicsState;
+		if (!viewport || viewport->screenWidth <= 0 || viewport->screenHeight <= 0) {
+			return 0.0f;
+		}
+
 		float hFOVRad = cameraFOVDeg * (3.14159265359f / 180.0f);
 		float unitHalfWidth = tan(hFOVRad / 2);                                                                // This is same as camera frustum RL
-		float unitHalfHeight = unitHalfWidth / (globals::state->screenSize.x / globals::state->screenSize.y);  // frustum TB
+		float unitHalfHeight = unitHalfWidth / (static_cast<float>(viewport->screenWidth) / static_cast<float>(viewport->screenHeight));  // frustum TB
 		float vFOVRad = 2.0f * atan(unitHalfHeight);
 		return vFOVRad;
 	}
@@ -169,10 +174,22 @@ namespace Util
 
 	DispatchCount GetScreenDispatchCount(bool a_dynamic)
 	{
-		float2 resolution = globals::state->screenSize;
+		auto viewport = globals::game::graphicsState;
+		if (!viewport) {
+			return { 0, 0 };
+		}
+
+		float2 resolution{
+			static_cast<float>(viewport->screenWidth),
+			static_cast<float>(viewport->screenHeight)
+		};
 
 		if (a_dynamic)
-			ConvertToDynamic(resolution);
+			resolution = ConvertToDynamic(resolution);
+
+		if (resolution.x <= 0.0f || resolution.y <= 0.0f) {
+			return { 0, 0 };
+		}
 
 		uint dispatchX = (uint)std::ceil(resolution.x / 8.0f);
 		uint dispatchY = (uint)std::ceil(resolution.y / 8.0f);

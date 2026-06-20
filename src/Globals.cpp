@@ -8,8 +8,10 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/HDRDisplay.h"
 #include "Features/HairSpecular.h"
 #include "Features/IBL.h"
 #include "Features/InteriorSun.h"
@@ -22,6 +24,8 @@
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/ScreenshotFeature.h"
+#include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -32,6 +36,7 @@
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
+#include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
@@ -84,8 +89,13 @@ namespace globals
 		ExtendedTranslucency extendedTranslucency{};
 		Upscaling upscaling{};
 		RenderDoc renderDoc{};
+		VolumetricShadows volumetricShadows{};
 		CSEditor csEditor{};
 		TruePBR truePBR{};
+		HDRDisplay hdrDisplay{};
+		ScreenshotFeature screenshotFeature{};
+		ExponentialHeightFog exponentialHeightFog{};
+		Skin skin{};
 
 		namespace llf
 		{
@@ -109,9 +119,12 @@ namespace globals
 		float* cameraFar = nullptr;
 		float* deltaTime = nullptr;
 		RE::BSUtilityShader* utilityShader = nullptr;
+		RE::PlayerCharacter* player = nullptr;
 		RE::Sky* sky = nullptr;
 		RE::UI* ui = nullptr;
 		RE::Calendar* calendar = nullptr;
+		RE::ImageSpaceManager* imageSpaceManager = nullptr;
+		bool* bEnableVolumetricLighting = nullptr;
 		std::atomic<bool> quitGame{ false };
 
 		RE::BSGraphics::PixelShader** currentPixelShader = nullptr;
@@ -181,9 +194,11 @@ namespace globals
 			cameraFar = (float*)(REL::RelocationID(517032, 403540).address() + 0x44);
 			deltaTime = (float*)REL::RelocationID(523660, 410199).address();
 
-			currentPixelShader = GET_INSTANCE_MEMBER_PTR(currentPixelShader, shadowState);
-			currentVertexShader = GET_INSTANCE_MEMBER_PTR(currentVertexShader, shadowState);
-			stateUpdateFlags = GET_INSTANCE_MEMBER_PTR(stateUpdateFlags, shadowState);
+			if (shadowState) {
+				currentPixelShader = &shadowState->GetRuntimeData().currentPixelShader;
+				currentVertexShader = &shadowState->GetRuntimeData().currentVertexShader;
+				stateUpdateFlags = &shadowState->GetRuntimeData().stateUpdateFlags;
+			}
 
 			ui = RE::UI::GetSingleton();
 			calendar = RE::Calendar::GetSingleton();
@@ -213,9 +228,12 @@ namespace globals
 	{
 		using namespace game;
 		RefreshTES();
+		player = RE::PlayerCharacter::GetSingleton();
 		sky = RE::Sky::GetSingleton();
 		utilityShader = RE::BSUtilityShader::GetSingleton();
 		waterSystem = RE::TESWaterSystem::GetSingleton();
+		imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+		bEnableVolumetricLighting = reinterpret_cast<bool*>(REL::RelocationID(527940, 414913).address());
 
 		bEnableLandFade = iniSettingCollection->GetSetting("bEnableLandFade:Display");
 
@@ -289,6 +307,5 @@ namespace globals
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
-		ShadowmapRasterizerFix::InstallD3DHooks(a_context);
 	}
 }

@@ -617,10 +617,13 @@ void Upscaling::DrawSettings()
 
 	// Display warning for DLSS resolution limits.
 	if (upscaleMethod == UpscaleMethod::kDLSS) {
-		auto screenSize = globals::state->screenSize;
-		if (screenSize.x > streamline.MAX_RESOLUTION || screenSize.y > streamline.MAX_RESOLUTION) {
+		auto viewport = globals::game::graphicsState;
+		const float screenWidth = static_cast<float>(viewport ? viewport->screenWidth : 0);
+		const float screenHeight = static_cast<float>(viewport ? viewport->screenHeight : 0);
+
+		if (screenWidth > streamline.MAX_RESOLUTION || screenHeight > streamline.MAX_RESOLUTION) {
 			Util::Text::Warning("Warning: Requested resolution %.0f x %.0f exceeds maximum supported resolution %d x %d for DLSS.",
-				screenSize.x, screenSize.y, streamline.MAX_RESOLUTION, streamline.MAX_RESOLUTION);
+				screenWidth, screenHeight, streamline.MAX_RESOLUTION, streamline.MAX_RESOLUTION);
 			Util::Text::Warning("DLSS will not function. Lower your resolution or select a different upscaling method.");
 		}
 	}
@@ -1371,21 +1374,7 @@ void GetJitterOffset(float* outX, float* outY, int32_t index, int32_t phaseCount
 void Upscaling::ConfigureTAA()
 {
 	auto upscaleMethod = GetUpscaleMethod();
-
-	// When no upscaling method is active, preserve vanilla TAA state.
-	// UpdateJitter (called immediately after this hook) owns the non-upscaling path.
-	if (upscaleMethod == UpscaleMethod::kNONE)
-		return;
-
-	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
-
-	// CS TAA replaces vanilla TAA, so disable water TAA there.
-	// FSR/DLSS keep water TAA enabled.
-	bool* enableWaterTAA = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISTemporalAA) + 0x38LL);
-	*enableWaterTAA = upscaleMethod != UpscaleMethod::kTAA;
-
-	Util::SetTemporal(true);
+	Util::SetTemporal(upscaleMethod != UpscaleMethod::kNONE);
 }
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
@@ -1398,10 +1387,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	// Get full screen size
 	auto state = globals::state;
-	auto screenSize = state->screenSize;
+	auto graphicsState = globals::game::graphicsState;
+	if (!state || !graphicsState) {
+		return;
+	}
 
-	auto screenWidth = static_cast<int>(screenSize.x);
-	auto screenHeight = static_cast<int>(screenSize.y);
+	const int screenWidth = static_cast<int>(graphicsState->screenWidth);
+	const int screenHeight = static_cast<int>(graphicsState->screenHeight);
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
 		float resolutionScaleBase = GetQualityModeResolutionScale(ClampQualityModeUInt(settings.qualityMode));
@@ -1589,13 +1581,15 @@ void Upscaling::CopySharedD3D12Resources()
 
 	{
 		// Set up viewport for fullscreen rendering
-		auto screenSize = globals::state->screenSize;
+		auto viewportState = globals::game::graphicsState;
+		const float screenWidth = static_cast<float>(viewportState ? viewportState->screenWidth : 0);
+		const float screenHeight = static_cast<float>(viewportState ? viewportState->screenHeight : 0);
 
 		D3D11_VIEWPORT viewport = {};
 		viewport.TopLeftX = 0.0f;
 		viewport.TopLeftY = 0.0f;
-		viewport.Width = screenSize.x;
-		viewport.Height = screenSize.y;
+		viewport.Width = screenWidth;
+		viewport.Height = screenHeight;
 		viewport.MinDepth = 0.0f;
 		viewport.MaxDepth = 1.0f;
 		context->RSSetViewports(1, &viewport);
@@ -1843,8 +1837,12 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		return;
 
 	const bool inWorld = state->inWorld;
+	const auto* viewport = globals::game::graphicsState;
 	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
-	const float2 screenSize = state->screenSize;
+	const float2 screenSize{
+		static_cast<float>(viewport ? viewport->screenWidth : 0),
+		static_cast<float>(viewport ? viewport->screenHeight : 0)
+	};
 	const uint32_t qualityMode = ClampQualityModeUInt(settings.qualityMode);
 	const bool fsrRuntimePathActive = IsFSRRuntimePathActive(a_upscaleMethod);
 	const bool fsrRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(a_upscaleMethod);
@@ -2067,7 +2065,12 @@ void Upscaling::Upscale()
 		auto& normals = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[2]];
 		auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-		auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
+		const auto* viewport = globals::game::graphicsState;
+		const float2 displaySize{
+			static_cast<float>(viewport ? viewport->screenWidth : 0),
+			static_cast<float>(viewport ? viewport->screenHeight : 0)
+		};
+		auto renderSize = Util::ConvertToDynamic(displaySize);
 		uint32_t renderWidth = static_cast<uint32_t>(renderSize.x);
 		uint32_t renderHeight = static_cast<uint32_t>(renderSize.y);
 
@@ -2163,8 +2166,10 @@ void Upscaling::UpscaleDepth()
 		return;
 	}
 
-	auto screenSize = state->screenSize;
-	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f) {
+	auto* viewportState = globals::game::graphicsState;
+	const float screenWidth = viewportState ? static_cast<float>(viewportState->screenWidth) : 0.0f;
+	const float screenHeight = viewportState ? static_cast<float>(viewportState->screenHeight) : 0.0f;
+	if (screenWidth <= 0.0f || screenHeight <= 0.0f) {
 		return;
 	}
 
@@ -2202,8 +2207,8 @@ void Upscaling::UpscaleDepth()
 	D3D11_VIEWPORT viewport = {};
 	viewport.TopLeftX = 0.0f;
 	viewport.TopLeftY = 0.0f;
-	viewport.Width = screenSize.x;
-	viewport.Height = screenSize.y;
+	viewport.Width = screenWidth;
+	viewport.Height = screenHeight;
 	viewport.MinDepth = 0.0f;
 	viewport.MaxDepth = 1.0f;
 	context->RSSetViewports(1, &viewport);
@@ -2277,8 +2282,8 @@ void Upscaling::UpscaleDepth()
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Underwater Mask");
 
-		viewport.Width = screenSize.x * 0.5f;
-		viewport.Height = screenSize.y * 0.5f;
+		viewport.Width = screenWidth * 0.5f;
+		viewport.Height = screenHeight * 0.5f;
 		context->RSSetViewports(1, &viewport);
 
 		copyIfNonAliased(underwaterMask.textureCopy, underwaterMask.texture);

@@ -867,9 +867,9 @@ void HDRDisplay::SetUIBuffer()
 			return;
 
 		ID3D11RenderTargetView* targetRTV = uiBufferMode.useUIBuffer ?
-		                                        upscaling.dx12SwapChain.uiBufferWrapped->rtv :
+		                                        upscaling.dx12SwapChain.uiBufferWrapped->rtv.get() :
 		                                    uiBufferMode.useFallbackCopy ? fb.RTV :
-		                                                                   upscaling.dx12SwapChain.swapChainBufferWrapped->rtv;
+		                                                                   upscaling.dx12SwapChain.swapChainBufferWrapped->rtv.get();
 
 		if (uiBufferMode.useUIBuffer) {
 			float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -1176,17 +1176,17 @@ void HDRDisplay::ApplyHDR()
 		// Choose the correct UI buffer based on which path is active.
 		ID3D11ShaderResourceView* uiSRV = nullptr;
 		if (upscaling.d3d12SwapChainActive && upscaling.dx12SwapChain.uiBufferWrapped) {
-			uiSRV = upscaling.dx12SwapChain.uiBufferWrapped->srv;
+			uiSRV = upscaling.dx12SwapChain.uiBufferWrapped->srv.get();
 		} else if (uiTexture && uiTexture->srv) {
 			uiSRV = uiTexture->srv.get();
 		}
 
 		if (!GetHDROutputCS()) {
 			// Fallback: HDR shader files not present - copy kFRAMEBUFFER directly to output
-			if (upscaling.d3d12SwapChainActive) {
-				// SetUIBuffer keeps non-FG fallback UI in kFRAMEBUFFER; FG keeps using
-				// uiBufferWrapped for FidelityFX UI composition.
-				context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11, framebufferRT.texture);
+				if (upscaling.d3d12SwapChainActive) {
+					// SetUIBuffer keeps non-FG fallback UI in kFRAMEBUFFER; FG keeps using
+					// uiBufferWrapped for FidelityFX UI composition.
+					context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11.get(), framebufferRT.texture);
 			} else {
 				// Normal path: copy directly to swap chain back buffer
 				ID3D11Texture2D* backBuffer = nullptr;
@@ -1212,7 +1212,7 @@ void HDRDisplay::ApplyHDR()
 		if (upscaling.dx12SwapChain.swapChainBufferWrapped &&
 			upscaling.dx12SwapChain.swapChainBufferWrapped->resource11 &&
 			outputTexture && outputTexture->resource) {
-			context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11, outputTexture->resource.get());
+			context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11.get(), outputTexture->resource.get());
 		}
 	} else {
 		// Normal path: copy directly to swap chain back buffer
@@ -1548,7 +1548,7 @@ void HDRDisplay::ScaleUIBrightnessForFG()
 
 	auto dispatchCount = Util::GetScreenDispatchCount(false);
 
-	ID3D11UnorderedAccessView* uavs[1] = { upscaling.dx12SwapChain.uiBufferWrapped->uav };
+	ID3D11UnorderedAccessView* uavs[1] = { upscaling.dx12SwapChain.uiBufferWrapped->uav.get() };
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 	ID3D11Buffer* cbs[1] = { hdrDataCB->CB() };

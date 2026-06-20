@@ -32,6 +32,7 @@ struct LODBlending : Feature
 	};
 
 	Settings settings;
+	Settings GetCommonBufferData() const { return settings; }
 
 	virtual void DrawSettings() override;
 

@@ -196,12 +196,13 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 
 	return {
 		.OcclusionViewProj = OcclusionTransform,
-		.OcclusionDir = OcclusionDir,
-		.PosOffset = cellOrigin - eyePos,
+		.OcclusionSHBasis4Pi = OcclusionDir,
+		.PosOffset = float4{ cellOrigin.x - eyePos.x, cellOrigin.y - eyePos.y, cellOrigin.z - eyePos.z, 0.0f },
 		.ArrayOrigin = {
 			((int)cellID.x - probeArrayDims[0] / 2) % probeArrayDims[0],
 			((int)cellID.y - probeArrayDims[1] / 2) % probeArrayDims[1],
-			((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2] },
+			((int)cellID.z - probeArrayDims[2] / 2) % probeArrayDims[2],
+			0 },
 		.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
 		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
 		.MinSpecularVisibility = settings.MinSpecularVisibility

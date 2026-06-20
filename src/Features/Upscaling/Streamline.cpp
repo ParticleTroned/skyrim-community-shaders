@@ -471,11 +471,12 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 	if (!EnsureFrameToken())
 		return false;
 
-	auto state = globals::state;
-
 	sl::Constants slConstants = {};
 
-	slConstants.cameraAspectRatio = state->screenSize.x / state->screenSize.y;
+	const auto* gameViewport = globals::game::graphicsState;
+	const float screenWidth = gameViewport ? static_cast<float>(gameViewport->screenWidth) : 0.0f;
+	const float screenHeight = gameViewport ? static_cast<float>(gameViewport->screenHeight) : 0.0f;
+	slConstants.cameraAspectRatio = screenHeight > 0.0f ? (screenWidth / screenHeight) : 1.0f;
 
 	slConstants.cameraFOV = Util::GetVerticalFOVRad();
 	slConstants.cameraNear = *globals::game::cameraNear;
@@ -759,13 +760,15 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 
 void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
 {
-	auto state = globals::state;
-
 	auto renderer = globals::game::renderer;
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	auto screenSize = state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
+	const auto* gameViewport = globals::game::graphicsState;
+	const float2 baseSize{
+		static_cast<float>(gameViewport ? gameViewport->screenWidth : 0),
+		static_cast<float>(gameViewport ? gameViewport->screenHeight : 0)
+	};
+	const auto renderSize = Util::ConvertToDynamic(baseSize);
 
 	// When DLSS sharpening is active, direct DLSS output to sharpenerTexture so the selected
 	// pass can sharpen directly into kMAIN.UAV without a CopyResource round-trip.
@@ -776,13 +779,13 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 
 	// Simple full-texture upscale.
-	sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
-	sl::Extent extentOut{ 0, 0, (uint)screenSize.x, (uint)screenSize.y };
+	const sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
+	const sl::Extent extentOut{ 0, 0, (uint)baseSize.x, (uint)baseSize.y };
 
-	const bool evaluated = EvaluateDLSS(viewport,
+	const bool evaluated = EvaluateDLSS(this->viewport,
 		a_upscalingTexture, colorOut,
 		depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
-		extentIn, extentOut, (uint)screenSize.x);
+		extentIn, extentOut, (uint)baseSize.x);
 	upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
 	if (!evaluated) {
 		upscaling.RequestHistoryReset();

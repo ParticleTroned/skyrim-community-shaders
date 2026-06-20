@@ -52,17 +52,15 @@ public:
 	struct SkylightingCB
 	{
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;
 
-		float3 PosOffset;  // cell origin in camera model space
-		uint _pad0;
-		uint ArrayOrigin[3];  // xyz: array origin, w: max accum frames
-		uint _pad1;
+		float4 PosOffset;  // cell origin in camera model space
+		uint ArrayOrigin[4];  // xyz: array origin, w: max accum frames
 		int ValidMargin[4];
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		uint _pad2[2];
+		float2 _pad0;
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 

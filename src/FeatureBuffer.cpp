@@ -90,7 +90,7 @@ namespace
 	static_assert(sizeof(LightLimitFixSettingsCB) == 32);
 	static_assert(sizeof(WetnessEffectsSettingsCB) == 192);
 	static_assert(sizeof(WetternessSettingsCB) == 256);
-	static_assert(sizeof(SkylightingSettingsCB) == 160);
+	static_assert(sizeof(SkylightingSettingsCB) == 144);
 	static_assert(sizeof(CloudShadowsSettingsCB) == 16);
 	static_assert(sizeof(LODBlendingSettingsCB) == 32);
 	static_assert(sizeof(HairSpecularSettingsCB) == 80);

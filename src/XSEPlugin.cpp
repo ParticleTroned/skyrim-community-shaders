@@ -24,9 +24,6 @@ bool Load();
 
 void ResetRuntimeStateAfterGameLoad()
 {
-	if (globals::state) {
-		globals::state->pendingPostLoadRuntimeReset = true;
-	}
 	globals::game::quitGame.store(false, std::memory_order_release);
 	globals::OnDataLoaded();
 	WeatherManager::GetSingleton()->ClearCache();

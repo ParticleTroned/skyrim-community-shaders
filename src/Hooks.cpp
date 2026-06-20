@@ -343,16 +343,7 @@ namespace EffectExtensions
 		{
 			func(shader, pass, renderFlags);
 
-			auto state = globals::state;
 			ExternalEmittance::UpdatePermutation(pass);
-
-			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
-
-			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().shaderProperty.get())) {
-				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kUniformScale)) {
-					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::EffectShadows);
-				}
-			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -365,15 +356,6 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
-
-			auto state = globals::state;
-
-			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
-
-			if (auto userData = pass->geometry->GetUserData())
-				if (auto baseObject = userData->GetBaseObject())
-					if (baseObject->As<RE::TESObjectTREE>())
-						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -427,7 +409,7 @@ namespace WaterBlendHistory
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 		{
 			if (const auto shadowState = globals::game::shadowState; shadowState && globals::game::renderer && globals::d3d::context) {
-				GET_INSTANCE_MEMBER(renderTargets, shadowState)
+				const auto& renderTargets = shadowState->GetRuntimeData().renderTargets;
 
 				const auto target = renderTargets[1];
 				if (target != RE::RENDER_TARGET::kNONE) {
@@ -592,7 +574,7 @@ struct BSShaderRenderTargets_Create
 		globals::ReInit();
 		if (!CanSetupRenderingResources())
 			return false;
-		globals::state->SetupRenderTargetResources();
+		globals::state->Setup();
 		return true;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -708,7 +690,7 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			globals::state->ModifyRenderTarget(a_target, a_properties);
+			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -718,7 +700,7 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			globals::state->ModifyRenderTarget(a_target, a_properties);
+			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -728,7 +710,7 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			globals::state->ModifyRenderTarget(a_target, a_properties);
+			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -738,7 +720,7 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
-			globals::state->ModifyRenderTarget(a_target, a_properties);
+			globals::state->ModifyRenderTarget(a_target, *a_properties);
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -749,7 +731,7 @@ namespace Hooks
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
 			auto properties = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, &properties);
+			globals::state->ModifyRenderTarget(a_target, properties);
 			properties.copyable = true;
 			func(This, a_target, &properties);
 		}
@@ -761,7 +743,7 @@ namespace Hooks
 		static void thunk(RE::BSGraphics::Renderer* This, RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties)
 		{
 			auto properties = *a_properties;
-			globals::state->ModifyRenderTarget(a_target, &properties);
+			globals::state->ModifyRenderTarget(a_target, properties);
 			properties.copyable = true;
 			func(This, a_target, &properties);
 		}

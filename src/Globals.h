@@ -34,6 +34,11 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
+struct VolumetricShadows;
+struct ExponentialHeightFog;
+struct HDRDisplay;
+struct ScreenshotFeature;
+struct Skin;
 struct CSEditor;
 
 class ParticleLights;
@@ -94,6 +99,11 @@ namespace globals
 		extern RenderDoc renderDoc;
 		extern CSEditor csEditor;
 		extern TruePBR truePBR;
+		extern VolumetricShadows volumetricShadows;
+		extern HDRDisplay hdrDisplay;
+		extern ScreenshotFeature screenshotFeature;
+		extern ExponentialHeightFog exponentialHeightFog;
+		extern Skin skin;
 
 		namespace llf
 		{
@@ -157,9 +167,12 @@ namespace globals
 		extern float* cameraFar;
 		extern float* deltaTime;
 		extern RE::BSUtilityShader* utilityShader;
+		extern RE::PlayerCharacter* player;
 		extern RE::Sky* sky;
 		extern RE::UI* ui;
 		extern RE::Calendar* calendar;
+		extern RE::ImageSpaceManager* imageSpaceManager;
+		extern bool* bEnableVolumetricLighting;
 		extern std::atomic<bool> quitGame;
 
 		extern RE::BSGraphics::PixelShader** currentPixelShader;

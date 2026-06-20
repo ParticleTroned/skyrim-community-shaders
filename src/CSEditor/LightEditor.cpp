@@ -175,7 +175,7 @@ std::string LightEditor::GetLightName(LightInfo& lightInfo)
 
 void LightEditor::GatherLights()
 {
-	if (State::GetSingleton()->IsPersistentMutationBlocked()) {
+	if (State::GetSingleton()->IsPersistentMutationBlockActive()) {
 		ResetOverrides();
 		lights.clear();
 		lightsAttached.clear();
@@ -310,7 +310,7 @@ void LightEditor::ResetOverrides()
 
 void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight)
 {
-	if (State::GetSingleton()->IsPersistentMutationBlocked())
+	if (State::GetSingleton()->IsPersistentMutationBlockActive())
 		return;
 
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
@@ -396,7 +396,7 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 
 bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const
 {
-	if (State::GetSingleton()->IsPersistentMutationBlocked())
+	if (State::GetSingleton()->IsPersistentMutationBlockActive())
 		return false;
 
 	if (!enabled || niLight != activeNiLight.get())

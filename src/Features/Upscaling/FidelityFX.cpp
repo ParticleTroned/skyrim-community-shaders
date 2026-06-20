@@ -706,8 +706,12 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 	configParameters.flags = 0;
 	configParameters.allowAsyncWorkloads = true;
 
-	auto state = globals::state;
-	auto renderSize = state->screenSize * upscaling.resolutionScale;
+	const auto* viewport = globals::game::graphicsState;
+	const float2 displaySize{
+		static_cast<float>(viewport ? viewport->screenWidth : 0),
+		static_cast<float>(viewport ? viewport->screenHeight : 0)
+	};
+	const auto renderSize = displaySize * upscaling.resolutionScale;
 
 	configParameters.generationRect.left = 0;
 	configParameters.generationRect.top = 0;
@@ -818,11 +822,15 @@ void FidelityFX::CreateFSRResources()
 		return;
 	}
 
-	auto screenSize = state->screenSize;
-	auto renderSize = Util::ConvertToDynamic(screenSize);
+	const auto* viewport = globals::game::graphicsState;
+	const float2 displaySize{
+		static_cast<float>(viewport ? viewport->screenWidth : 0),
+		static_cast<float>(viewport ? viewport->screenHeight : 0)
+	};
+	const auto renderSize = Util::ConvertToDynamic(displaySize);
 
-	const uint32_t displayWidth = static_cast<uint32_t>(screenSize.x);
-	const uint32_t displayHeight = static_cast<uint32_t>(screenSize.y);
+	const uint32_t displayWidth = static_cast<uint32_t>(displaySize.x);
+	const uint32_t displayHeight = static_cast<uint32_t>(displaySize.y);
 	const uint32_t renderWidth = static_cast<uint32_t>(renderSize.x);
 	const uint32_t renderHeight = static_cast<uint32_t>(renderSize.y);
 
@@ -1756,13 +1764,17 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	const bool runtimeSelected = runtimeRequested && CanUseRuntimeUpscalerPath();
 
 	if (runtimeSelected) {
-		auto state = globals::state;
-		if (!state)
+		const auto* viewport = globals::game::graphicsState;
+		if (!viewport)
 			return false;
 
-		const auto renderSize = Util::ConvertToDynamic(state->screenSize);
-		const uint32_t fullDisplayWidth = static_cast<uint32_t>(state->screenSize.x);
-		const uint32_t fullDisplayHeight = static_cast<uint32_t>(state->screenSize.y);
+		const float2 fullScreenSize{
+			static_cast<float>(viewport->screenWidth),
+			static_cast<float>(viewport->screenHeight)
+		};
+		const auto renderSize = Util::ConvertToDynamic(fullScreenSize);
+		const uint32_t fullDisplayWidth = static_cast<uint32_t>(fullScreenSize.x);
+		const uint32_t fullDisplayHeight = static_cast<uint32_t>(fullScreenSize.y);
 		const uint32_t requestedFullRenderWidth = static_cast<uint32_t>(renderSize.x);
 		const uint32_t requestedFullRenderHeight = static_cast<uint32_t>(renderSize.y);
 		const uint32_t fullRenderWidth = runtimeFsr4Requested ? fullDisplayWidth : requestedFullRenderWidth;
@@ -1897,7 +1909,11 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
-	const auto screenSize = state->screenSize;
+	const auto* viewport = globals::game::graphicsState;
+	const float2 screenSize{
+		static_cast<float>(viewport ? viewport->screenWidth : 0),
+		static_cast<float>(viewport ? viewport->screenHeight : 0)
+	};
 	const auto renderSize = Util::ConvertToDynamic(screenSize);
 
 	if (!UpscaleRegion(

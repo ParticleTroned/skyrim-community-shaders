@@ -50,7 +50,9 @@ public:
 	struct alignas(16) Settings
 	{
 		float VertexAOStrength = 1.0f;
-		uint pad[3];
+		float pbrMetalReflectionScale = 1.0f;
+		float pbrMetalHighlightScale = 1.0f;
+		uint pad[1];
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 

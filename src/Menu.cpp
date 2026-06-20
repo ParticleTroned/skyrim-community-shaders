@@ -213,6 +213,16 @@ namespace
 		{ "Hand", ImGuiMouseCursor_Hand },
 		{ "NotAllowed", ImGuiMouseCursor_NotAllowed },
 	};
+
+	bool HasFeatureIni(const Feature* feature)
+	{
+		if (!feature) {
+			return false;
+		}
+
+		std::error_code ec;
+		return std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feature->GetShortName()), ec);
+	}
 }
 
 void Menu::CursorFromJson(const json& cursorJson, ThemeSettings::CursorSettings& cursor)
@@ -371,6 +381,7 @@ Menu::~Menu()
 	uiIcons.applyToGame.Release();
 	uiIcons.pauseTime.Release();
 	uiIcons.undo.Release();
+	uiIcons.faultier.Release();
 	uiIcons.discord.Release();
 	uiIcons.characters.Release();
 	uiIcons.display.Release();
@@ -897,6 +908,10 @@ void Menu::DrawDisableAtBootSettings()
 
 		// Display sorted features
 		for (auto* feature : featureList) {
+			if (!HasFeatureIni(feature)) {
+				continue;
+			}
+
 			const std::string featureName = feature->GetShortName();
 			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 

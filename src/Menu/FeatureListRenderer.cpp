@@ -34,6 +34,16 @@ namespace
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 	constexpr float FEATURE_VERSION_TEXT_OPACITY = 0.6f;
 
+	bool HasFeatureIni(const Feature* feature)
+	{
+		if (!feature) {
+			return false;
+		}
+
+		std::error_code ec;
+		return std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feature->GetShortName()), ec);
+	}
+
 	ImVec2 GetRestoreDefaultsIconSize()
 	{
 		const float iconDimension = ImGui::GetFrameHeight() * RESTORE_DEFAULTS_ICON_SCALE;
@@ -355,7 +365,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-		return !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
+		return !feat->loaded && feat->IsInMenu() && HasFeatureIni(feat) &&
+		       (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
 		menuList.push_back("Unloaded Features"s);

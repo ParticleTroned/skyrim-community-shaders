@@ -91,10 +91,10 @@ public:
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 0;  // Shared upscaler preset; defaults to DLAA / Native AA
+		uint qualityMode = 3;  // Shared upscaler preset; defaults to Quality
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
 		uint frameLimitMode = 1;
-		uint frameGenerationMode = 1;
+		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose

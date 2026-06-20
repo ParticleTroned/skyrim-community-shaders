@@ -123,11 +123,11 @@ void HomePageRenderer::RenderWelcomeSection()
 	const float titleBlockY = ImGui::GetCursorPosY();
 	const float titleBlockHeight = ImGui::GetTextLineHeightWithSpacing();
 	const float baseLineHeightWithSpacing = titleBlockHeight / TITLE_FONT_SCALE;
-	const char* forkTitle = "CS Particle Lights Fork";
-	const char* forkVersion = "PL3.14-AIO-VR";
+	const char* forkTitle = "CS 1.7.1 Particle Lights Fork";
+	const char* forkVersion = "PL3.15-VR";
 	const float titleLineGap = 2.0f * scale;
 	const float titleAreaBottomY = titleBlockY + titleBlockHeight + ImGui::GetStyle().ItemSpacing.y +
-		baseLineHeightWithSpacing * FORK_NOTICE_OFFSET_LINES;
+	                               baseLineHeightWithSpacing * FORK_NOTICE_OFFSET_LINES;
 
 	ImGui::SetWindowFontScale(TITLE_FORK_FONT_SCALE);
 	const float titleLineHeight = ImGui::GetTextLineHeight();
@@ -159,10 +159,11 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	// Intro text - centered line-by-line so the fork notice remains visually aligned.
 	DrawCenteredItalicTextBlock({
-		"This is an unofficial fork of Community Shaders restoring Particle Lights.",
-		"Not affiliated with or endorsed by the Community Shaders team",
-		"- Visit their Discord to get the Original and support their outstanding efforts -",
-	}, windowSize.x, forkNoticeColor);
+									"This is an unofficial fork of Community Shaders restoring Particle Lights.",
+									"Not affiliated with or endorsed by the Community Shaders team",
+									"- Visit their Discord to get the Original and support their outstanding efforts -",
+								},
+		windowSize.x, forkNoticeColor);
 
 	ImGui::Spacing();
 

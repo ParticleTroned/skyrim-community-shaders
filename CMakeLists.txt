@@ -5,7 +5,7 @@ set(CMAKE_POLICY_WARNING_CMP0116 OFF)
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 1.5.2
+    VERSION 1.7.1
     LANGUAGES CXX
 )
 
@@ -982,7 +982,9 @@ endforeach()
 # prefix first, which guarantees a fresh AIO folder each run.
 add_custom_target(
     "AIO"
-    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR} --config $<CONFIG>
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+        --config $<CONFIG>
     DEPENDS ${PROJECT_NAME}
     COMMENT "Installing fresh AIO folder"
     VERBATIM
@@ -994,7 +996,9 @@ add_custom_command(
     OUTPUT ${AIO_PACKAGE}
     DEPENDS ${CORE_SOURCES}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
-    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR} --config $<CONFIG>
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+        --config $<CONFIG>
     COMMAND
         ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
         ${AIO_PACKAGE} --format=7zip -- .

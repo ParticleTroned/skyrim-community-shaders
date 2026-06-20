@@ -84,7 +84,7 @@ public:
 		PostLoadSync
 	};
 
-	// Shared DLSS/FSR/FSR4 render-scale presets:
+	// Shared DLSS/FSR/FSR4.1 render-scale presets:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;

@@ -172,9 +172,9 @@ namespace
 		const std::string description = ToUpperAscii(stl::utf16_to_utf8(wideDescription).value_or(""));
 
 		if (description.find("RDNA4") != std::string::npos ||
-		    description.find("RDNA 4") != std::string::npos ||
-		    description.find("NAVI4") != std::string::npos ||
-		    description.find("NAVI 4") != std::string::npos) {
+			description.find("RDNA 4") != std::string::npos ||
+			description.find("NAVI4") != std::string::npos ||
+			description.find("NAVI 4") != std::string::npos) {
 			return true;
 		}
 
@@ -366,8 +366,8 @@ namespace
 				versionIds[i]);
 
 			if (versionIds[i] == a_requestedVersion ||
-			    RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
-			    RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
+				RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
+				RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
 				a_versionId = versionIds[i];
 				a_versionName = versionName;
 				return true;
@@ -620,7 +620,7 @@ const char* FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
 	case RuntimeUpscalerFramePath::kRuntimeFsr31:
 		return "Runtime FSR 3.1.5";
 	case RuntimeUpscalerFramePath::kRuntimeFsr4:
-		return "Runtime FSR 4";
+		return "Runtime FSR 4.1";
 	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
 		return "Host FSR 3.1.5 fallback";
 	case RuntimeUpscalerFramePath::kInactive:
@@ -673,7 +673,7 @@ void FidelityFX::LatchRuntimeFsr4Failure()
 		return;
 
 	runtimeFsr4FailureLatched = true;
-	logger::warn("[FidelityFX] Runtime FSR4 path failed; falling back to runtime FSR 3.1.5 until runtime resources are reset, FSR resources are rebuilt, or the method changes.");
+	logger::warn("[FidelityFX] Runtime FSR 4.1 path failed; falling back to runtime FSR 3.1.5 until runtime resources are reset, FSR resources are rebuilt, or the method changes.");
 }
 
 FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const
@@ -1444,7 +1444,7 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	recordRuntimeProviderResult(true);
 
 	if ((runtimeUpscalerProviderMatchedVersionId != 0 || !runtimeUpscalerProviderMatchedVersionName.empty()) &&
-	    !RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
+		!RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
 		logger::warn(
 			"[FidelityFX] Runtime upscaler provider '{}' does not match requested FSR version {}; reporting actual provider path.",
 			RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName),
@@ -1835,21 +1835,21 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		auto tryRuntimeUpscaler = [&](uint32_t a_requestedVersion, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight) {
 			try {
 				if (EnsureRuntimeUpscalerContexts(a_fullRenderWidth, a_fullRenderHeight, fullDisplayWidth, fullDisplayHeight, runtimeContextCount, a_requestedVersion) &&
-				    DispatchRuntimeUpscalerSingle(
-					    a_contextIndex,
-					    a_color,
-					    a_depth,
-					    a_motionVectors,
-					    a_reactiveMask,
-					    a_transparencyCompositionMask,
-					    a_output,
-					    a_renderWidth,
-					    a_renderHeight,
-					    a_displayWidth,
-					    a_displayHeight,
-					    a_motionVectorScaleX,
-					    a_motionVectorScaleY,
-					    a_sharpness)) {
+					DispatchRuntimeUpscalerSingle(
+						a_contextIndex,
+						a_color,
+						a_depth,
+						a_motionVectors,
+						a_reactiveMask,
+						a_transparencyCompositionMask,
+						a_output,
+						a_renderWidth,
+						a_renderHeight,
+						a_displayWidth,
+						a_displayHeight,
+						a_motionVectorScaleX,
+						a_motionVectorScaleY,
+						a_sharpness)) {
 					RecordRuntimeUpscalerFramePath(GetRuntimeUpscalerProviderFramePath(a_requestedVersion));
 					return true;
 				}

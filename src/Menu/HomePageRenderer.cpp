@@ -123,7 +123,7 @@ void HomePageRenderer::RenderWelcomeSection()
 	const float titleBlockY = ImGui::GetCursorPosY();
 	const float titleBlockHeight = ImGui::GetTextLineHeightWithSpacing();
 	const float baseLineHeightWithSpacing = titleBlockHeight / TITLE_FONT_SCALE;
-	const char* forkTitle = "CS 1.7.1 Particle Lights Fork";
+	const char* forkTitle = "CS Particle Lights Fork";
 	const char* forkVersion = "PL3.15-VR";
 	const float titleLineGap = 2.0f * scale;
 	const float titleAreaBottomY = titleBlockY + titleBlockHeight + ImGui::GetStyle().ItemSpacing.y +

@@ -127,9 +127,14 @@ namespace
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 
+	bool IsExplicitVRUpscalingTransitionOrigin(Upscaling::VRUpscalingTransitionOrigin a_origin)
+	{
+		return a_origin != Upscaling::VRUpscalingTransitionOrigin::PostLoadSync;
+	}
+
 	bool UsesVRRenderScalePostLoadSettle(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
-		return a_origin != Upscaling::VRUpscalingTransitionOrigin::VRAPI;
+		return !IsExplicitVRUpscalingTransitionOrigin(a_origin);
 	}
 
 	Upscaling::VRUpscalingTransitionOrigin LoadVRUpscalingTransitionOrigin(const std::atomic<uint32_t>& a_origin)
@@ -143,6 +148,29 @@ namespace
 		default:
 			return Upscaling::VRUpscalingTransitionOrigin::CSMenu;
 		}
+	}
+
+	bool ShouldStoreVRUpscalingTransitionOrigin(
+		Upscaling::VRUpscalingTransitionOrigin a_current,
+		Upscaling::VRUpscalingTransitionOrigin a_next,
+		bool a_transitionAlreadyQueued)
+	{
+		if (!a_transitionAlreadyQueued)
+			return true;
+
+		return IsExplicitVRUpscalingTransitionOrigin(a_next) ||
+		       !IsExplicitVRUpscalingTransitionOrigin(a_current);
+	}
+
+	bool ShouldStoreVRRenderScalePostLoadSettle(
+		bool a_currentRequiresPostLoadSettle,
+		bool a_nextRequiresPostLoadSettle,
+		bool a_recreateAlreadyQueued)
+	{
+		if (!a_recreateAlreadyQueued)
+			return true;
+
+		return !a_nextRequiresPostLoadSettle || a_currentRequiresPostLoadSettle;
 	}
 
 	bool IsMainMenuContextActive();
@@ -5403,8 +5431,10 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 
 	const uint32_t relatchDelayFrames = kVRUpscalingTransitionApplyDelayFrames;
 	const bool requirePostLoadSettle = UsesVRRenderScalePostLoadSettle(a_origin);
+	const bool currentRequirePostLoadSettle =
+		pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire);
 	const bool wasPending = pendingPerfModeRenderTargetRecreate.exchange(true, std::memory_order_acq_rel);
-	if (!wasPending || requirePostLoadSettle) {
+	if (ShouldStoreVRRenderScalePostLoadSettle(currentRequirePostLoadSettle, requirePostLoadSettle, wasPending)) {
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(requirePostLoadSettle, std::memory_order_release);
 	}
 	const uint32_t previousRelatchDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
@@ -5468,6 +5498,17 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return false;
 	}
 	loggedRelatchPostLoadSettle = false;
+
+	static bool loggedRelatchLoadingPresentation = false;
+	if (IsVRLoadingPresentationContextActive(state)) {
+		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		if (!loggedRelatchLoadingPresentation) {
+			logger::debug("[VRRenderScale] Render-target relatch waiting for loading presentation context to clear.");
+			loggedRelatchLoadingPresentation = true;
+		}
+		return false;
+	}
+	loggedRelatchLoadingPresentation = false;
 
 	if (perfModeRenderTargetRecreateInProgress.exchange(true, std::memory_order_acq_rel))
 		return false;
@@ -10290,15 +10331,25 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 	const bool submitBoundsPresentationFallback = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
+	const bool transitionProtectionActive = IsVRTransitionPresentationProtectionActive(*this, state);
+	const bool vrRenderScaleMenuVendorSafetyBlocked =
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		HasPendingVRVendorRuntimeReset(*this, upscaleMethod) ||
+		transitionProtectionActive;
 	const bool vrRenderScaleMenuCanUseVendor =
 		vrRenderScaleMode &&
 		!presentationRenderTarget &&
 		submitMenuPresentationContext &&
 		sourceRegion.matchesExpectedSize &&
-		(a_inputBounds || sourceHasPerEyeLayout);
+		(a_inputBounds || sourceHasPerEyeLayout) &&
+		!vrRenderScaleMenuVendorSafetyBlocked;
+	const bool submitMenuPresentationFallback =
+		submitMenuPresentationContext &&
+		vrRenderScaleMenuVendorSafetyBlocked;
 	const bool presentationOnly =
 		vrRenderScaleMode &&
-		(submitPresentationContext || submitBoundsPresentationFallback) &&
+		(submitPresentationContext || submitBoundsPresentationFallback || submitMenuPresentationFallback) &&
 		!vrRenderScaleMenuCanUseVendor;
 	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedRequested =
@@ -10788,9 +10839,8 @@ void Upscaling::MarkVRUpscalingTransitionQueued(VRUpscalingTransitionOrigin a_or
 {
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	const bool transitionAlreadyQueued = pendingVRUpscalingTransitionFrame.load(std::memory_order_acquire) != 0;
-	if (!transitionAlreadyQueued ||
-		UsesVRRenderScalePostLoadSettle(a_origin) ||
-		!UsesVRRenderScalePostLoadSettle(LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin))) {
+	const auto currentOrigin = LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin);
+	if (ShouldStoreVRUpscalingTransitionOrigin(currentOrigin, a_origin, transitionAlreadyQueued)) {
 		pendingVRUpscalingTransitionOrigin.store(static_cast<uint32_t>(a_origin), std::memory_order_release);
 	}
 	pendingVRUpscalingTransitionFrame.store(frame, std::memory_order_release);

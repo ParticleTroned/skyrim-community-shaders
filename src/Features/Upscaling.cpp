@@ -5452,7 +5452,7 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 
 	return textureReady(reactiveMaskTexture) &&
 	       textureReady(transparencyCompositionMaskTexture) &&
-	       textureReady(motionVectorCopyTexture) &&
+	       (globals::game::isVR || textureReady(motionVectorCopyTexture)) &&
 	       (a_upscaleMethod != UpscaleMethod::kDLSS || textureReady(sharpenerTexture));
 }
 
@@ -5550,6 +5550,11 @@ void Upscaling::DestroyVRIntermediateTextures()
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePreparedFrameFoveatedRegionEncode = false;
+	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	submitStageVendorOutputSourceTexture = nullptr;
+	submitStageVendorEyeState = {};
+	submitStageForceFullEyeVendorFallback = false;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -5857,6 +5862,11 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePreparedFrameFoveatedRegionEncode = false;
+	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	submitStageVendorOutputSourceTexture = nullptr;
+	submitStageVendorEyeState = {};
+	submitStageForceFullEyeVendorFallback = false;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -6645,12 +6655,14 @@ bool Upscaling::IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) c
 bool Upscaling::IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const
 {
 	return a_upscaleMethod == UpscaleMethod::kFSR &&
+	       !fidelityFX.IsRuntimeUpscalerFailureLatched() &&
 	       fidelityFX.ShouldUseRuntimeUpscalerForFSR();
 }
 
 bool Upscaling::IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const
 {
 	return a_upscaleMethod == UpscaleMethod::kFSR &&
+	       !fidelityFX.IsRuntimeUpscalerFailureLatched() &&
 	       fidelityFX.ShouldRequestRuntimeFsr4();
 }
 
@@ -6880,6 +6892,52 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 	copyEyeRect(0);
 	if (isVR)
 		copyEyeRect(1);
+
+	return true;
+}
+
+bool Upscaling::GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions)
+{
+	outRegions = {};
+
+	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
+	const float centerFeather = usePeripheryTAAPath ?
+	                                ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) :
+	                                FoveatedCommon::kCenterFeather;
+	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, true, foveatedProfile.centerScale, centerFeather, foveatedProfile.centerHorizontalScale, usePeripheryTAAProfile))
+		return false;
+
+	auto includeInputRect = [&](FoveatedEncodeRegion& region, uint32_t minX, uint32_t minY, uint32_t maxX, uint32_t maxY) {
+		minX = std::min(minX, inputWidthPerEye);
+		minY = std::min(minY, inputHeight);
+		maxX = std::min(maxX, inputWidthPerEye);
+		maxY = std::min(maxY, inputHeight);
+		if (maxX <= minX || maxY <= minY)
+			return;
+
+		if (!region.valid) {
+			region.minX = minX;
+			region.minY = minY;
+			region.maxX = maxX;
+			region.maxY = maxY;
+			region.valid = true;
+		} else {
+			region.minX = std::min(region.minX, minX);
+			region.minY = std::min(region.minY, minY);
+			region.maxX = std::max(region.maxX, maxX);
+			region.maxY = std::max(region.maxY, maxY);
+		}
+	};
+
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		const auto& eyePlan = foveatedRectCache.plan.eyes[eye];
+		if (!eyePlan.encodeInput.IsValid())
+			return false;
+
+		includeInputRect(outRegions[eye], eyePlan.encodeInput.minX, eyePlan.encodeInput.minY, eyePlan.encodeInput.maxX, eyePlan.encodeInput.maxY);
+		if (!outRegions[eye].valid)
+			return false;
+	}
 
 	return true;
 }
@@ -8241,7 +8299,8 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	// Keep copyAuxiliaryInputs=false here: Encode Upscaling Textures has already
 	// written the per-eye motion/reactive/transparency resources used by
 	// Periphery TAA, and this pass must not overwrite them.
-	if (!PreparePerEyeInputs(colorTexture, depthTexture, motionVectors, reactiveMask, transparencyMask, false, true))
+	const bool copyDepthInput = !visualizeMask && (a_upscaleMethod == UpscaleMethod::kDLSS || usePeripheryTAA);
+	if (!PreparePerEyeInputs(colorTexture, depthTexture, motionVectors, reactiveMask, transparencyMask, false, copyDepthInput))
 		return false;
 	if (usePeripheryTAA && !EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, colorTexture))
 		return false;
@@ -8249,6 +8308,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistoryValid);
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
+	bool anyEyeDispatched = false;
 
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if (!vrIntermediateColorIn[eye] || !vrIntermediateColorIn[eye]->srv || !vrIntermediateColorIn[eye]->resource ||
@@ -8290,10 +8350,15 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 		try {
 			if (!DispatchFoveatedVendorEyeComposite(a_upscaleMethod, eye, params)) {
 				UnbindUpscalingResources();
+				if (anyEyeDispatched)
+					RequestHistoryReset();
 				return false;
 			}
+			anyEyeDispatched = true;
 		} catch (const std::exception& e) {
 			UnbindUpscalingResources();
+			if (anyEyeDispatched)
+				RequestHistoryReset();
 			LogWarnOnce(
 				loggedFoveatedDispatchFailure,
 				"[Upscaling] Foveated dispatch threw; skipping foveated vendor dispatch",
@@ -8301,6 +8366,8 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 			return false;
 		} catch (...) {
 			UnbindUpscalingResources();
+			if (anyEyeDispatched)
+				RequestHistoryReset();
 			LogWarnOnce(
 				loggedFoveatedDispatchFailure,
 				"[Upscaling] Foveated dispatch threw; skipping foveated vendor dispatch");
@@ -8361,13 +8428,14 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	}
 
 	if (!visualizeMask) {
-		if (!vrIntermediateDepth[eyeIndex] || !vrIntermediateDepth[eyeIndex]->resource || !vrIntermediateDepth[eyeIndex]->srv ||
+		const bool centerUsesFSRDepth = a_upscaleMethod == UpscaleMethod::kFSR;
+		if ((!centerUsesFSRDepth && (!vrIntermediateDepth[eyeIndex] || !vrIntermediateDepth[eyeIndex]->resource || !vrIntermediateDepth[eyeIndex]->srv)) ||
 			!vrIntermediateMotionVectors[eyeIndex] || !vrIntermediateMotionVectors[eyeIndex]->resource ||
 			!vrIntermediateReactiveMask[eyeIndex] || !vrIntermediateReactiveMask[eyeIndex]->resource ||
 			!vrIntermediateTransparencyMask[eyeIndex] || !vrIntermediateTransparencyMask[eyeIndex]->resource) {
 			return false;
 		}
-		if (a_upscaleMethod == UpscaleMethod::kFSR &&
+		if (centerUsesFSRDepth &&
 			(!vrIntermediateLinearDepth[eyeIndex] || !vrIntermediateLinearDepth[eyeIndex]->resource)) {
 			return false;
 		}
@@ -9106,9 +9174,31 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 	}
 }
 
-bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
-	uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight)
+void Upscaling::ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+	uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX)
 {
+	if (!globals::game::isVR || eyeIndex >= 2 || !colorUAV || !depthSRV)
+		return;
+	if (!depthWidthPerEye || !depthHeight || !colorWidthPerEye || !colorHeight)
+		return;
+
+	ClearHMDMaskForEye(
+		HMDMaskClearPhase::PerEyeOutput,
+		colorUAV,
+		depthSRV,
+		depthWidthPerEye,
+		depthHeight,
+		colorWidthPerEye,
+		colorHeight,
+		eyeIndex * depthWidthPerEye,
+		colorOffsetX);
+}
+
+bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource,
+	uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput, bool allowFoveatedRegionEncode, bool* encodedFoveatedRegions)
+{
+	if (encodedFoveatedRegions)
+		*encodedFoveatedRegions = false;
 	if (!globals::game::isVR || !colorSource || !motionVectors || !depthSource || !inputWidthPerEye || !inputHeight || !outputWidthPerEye || !outputHeight)
 		return false;
 	const auto inputStereoLayout = ResolveVRSideBySideStereoLayout(inputWidthPerEye, inputHeight);
@@ -9166,7 +9256,7 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	}
 
 	for (uint32_t eye = 0; eye < 2; ++eye) {
-		if (!vrIntermediateDepth[eye] || !vrIntermediateDepth[eye]->resource ||
+		if ((copyDepthInput && (!vrIntermediateDepth[eye] || !vrIntermediateDepth[eye]->resource)) ||
 			(upscaleMethod == UpscaleMethod::kFSR && (!vrIntermediateLinearDepth[eye] || !vrIntermediateLinearDepth[eye]->resource || !vrIntermediateLinearDepth[eye]->uav)) ||
 			!vrIntermediateMotionVectors[eye] || !vrIntermediateMotionVectors[eye]->uav ||
 			!vrIntermediateReactiveMask[eye] || !vrIntermediateReactiveMask[eye]->uav ||
@@ -9193,21 +9283,31 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 		context->CSSetShader(encodeShader, nullptr, 0);
 
 		const float2 renderSize = { static_cast<float>(inputStereoLayout.width), static_cast<float>(inputStereoLayout.height) };
-		const uint32_t dispatchX = (inputWidthPerEye + 7u) >> 3;
-		const uint32_t dispatchY = (inputHeight + 7u) >> 3;
 
-		for (uint32_t eye = 0; eye < 2; ++eye) {
+		auto dispatchEyeEncode = [&](uint32_t eye, uint32_t inputMinX, uint32_t inputMinY, uint32_t inputMaxX, uint32_t inputMaxY) -> bool {
+			if (eye >= 2 || inputMaxX <= inputMinX || inputMaxY <= inputMinY)
+				return false;
 			const auto& sourceEyeRegion = inputStereoLayout.eyes[eye];
+
+			inputMinX = std::min(inputMinX, inputWidthPerEye);
+			inputMinY = std::min(inputMinY, inputHeight);
+			inputMaxX = std::min(inputMaxX, inputWidthPerEye);
+			inputMaxY = std::min(inputMaxY, inputHeight);
+			if (inputMaxX <= inputMinX || inputMaxY <= inputMinY)
+				return false;
+
+			const uint32_t dispatchWidth = inputMaxX - inputMinX;
+			const uint32_t dispatchHeight = inputMaxY - inputMinY;
 			UpscalingDataCB upscalingData{};
-			upscalingData.dispatchDim = { static_cast<float>(inputWidthPerEye), static_cast<float>(inputHeight) };
+			upscalingData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 			upscalingData.trueSamplingDim = renderSize;
 			upscalingData.invTrueSamplingDim = { renderSize.x > 0.0f ? 1.0f / renderSize.x : 0.0f, renderSize.y > 0.0f ? 1.0f / renderSize.y : 0.0f };
 			upscalingData.seamCenterX = renderSize.x * 0.5f;
 			upscalingData.seamHalfWidthPx = 2.0f;
 			upscalingData.maskDepthThreshold = 1e-6f;
 			upscalingData.vrSeamHardening = 1.0f;
-			upscalingData.sourceOffset = { static_cast<float>(sourceEyeRegion.minX), 0.0f };
-			upscalingData.outputOffset = { 0.0f, 0.0f };
+			upscalingData.sourceOffset = { static_cast<float>(sourceEyeRegion.minX + inputMinX), static_cast<float>(inputMinY) };
+			upscalingData.outputOffset = { static_cast<float>(inputMinX), static_cast<float>(inputMinY) };
 			upscalingDataCB->Update(upscalingData);
 
 			ID3D11UnorderedAccessView* uavs[4] = {
@@ -9217,11 +9317,46 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 				upscaleMethod == UpscaleMethod::kFSR ? vrIntermediateLinearDepth[eye]->uav.get() : nullptr
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-			context->Dispatch(dispatchX, dispatchY, 1);
+			context->Dispatch((dispatchWidth + 7u) >> 3, (dispatchHeight + 7u) >> 3, 1);
 
-			D3D11_BOX srcBox{ sourceEyeRegion.minX, sourceEyeRegion.minY, 0, sourceEyeRegion.MaxX(), sourceEyeRegion.MaxY(), 1 };
-			context->CopySubresourceRegion(vrIntermediateDepth[eye]->resource.get(), 0, 0, 0, 0, depthSource, 0, &srcBox);
+			if (copyDepthInput) {
+				D3D11_BOX srcBox{
+					sourceEyeRegion.minX + inputMinX,
+					sourceEyeRegion.minY + inputMinY,
+					0,
+					sourceEyeRegion.minX + inputMaxX,
+					sourceEyeRegion.minY + inputMaxY,
+					1
+				};
+				context->CopySubresourceRegion(vrIntermediateDepth[eye]->resource.get(), 0, inputMinX, inputMinY, 0, depthSource, 0, &srcBox);
+			}
+			return true;
+		};
+
+		auto dispatchFullEyes = [&]() -> bool {
+			bool allDispatched = true;
+			for (uint32_t eye = 0; eye < 2; ++eye)
+				allDispatched = dispatchEyeEncode(eye, 0, 0, inputWidthPerEye, inputHeight) && allDispatched;
+			return allDispatched;
+		};
+
+		bool dispatchedRegionEncode = false;
+		if (allowFoveatedRegionEncode) {
+			const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(upscaleMethod);
+			const bool usePeripheryTAAPath = IsPeripheryTAAPathActive(upscaleMethod);
+			std::array<FoveatedEncodeRegion, 2> regions{};
+			if (GetFoveatedEncodeRegions(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, usePeripheryTAAProfile, usePeripheryTAAPath, regions)) {
+				bool allDispatched = true;
+				for (uint32_t eye = 0; eye < 2; ++eye) {
+					allDispatched = dispatchEyeEncode(eye, regions[eye].minX, regions[eye].minY, regions[eye].maxX, regions[eye].maxY) && allDispatched;
+				}
+				dispatchedRegionEncode = allDispatched;
+				if (encodedFoveatedRegions)
+					*encodedFoveatedRegions = dispatchedRegionEncode;
+			}
 		}
+
+		const bool encodeSucceeded = dispatchedRegionEncode || dispatchFullEyes();
 
 		ID3D11ShaderResourceView* nullSRV[4] = { nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSRV), nullSRV);
@@ -9232,6 +9367,9 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 		ID3D11Buffer* nullBuffer = nullptr;
 		context->CSSetConstantBuffers(0, 1, &nullBuffer);
 		context->CSSetShader(nullptr, nullptr, 0);
+
+		if (!encodeSucceeded)
+			return false;
 	} catch (const std::exception& e) {
 		UnbindUpscalingResources();
 		LogWarnOnce(
@@ -10306,6 +10444,11 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageRuntimeActive.store(false, std::memory_order_relaxed);
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
+	submitStagePreparedFrameFoveatedRegionEncode = false;
+	submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	submitStageVendorOutputSourceTexture = nullptr;
+	submitStageVendorEyeState = {};
+	submitStageForceFullEyeVendorFallback = false;
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -10533,12 +10676,24 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass;
+	const bool submitStageFoveatedPeripheryTAAPathActive =
+		foveatedRequested &&
+		IsPeripheryTAAPathActive(upscaleMethod);
+	const bool submitStageNeedsRawDepthInput =
+		upscaleMethod == UpscaleMethod::kDLSS ||
+		submitStageFoveatedPeripheryTAAPathActive;
 	CheckResources(upscaleMethod);
 	if (IsSubmitStageDeviceLost())
 		return false;
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	if (submitStageVendorOutputFrame != currentFrame || submitStageVendorOutputSourceTexture != sourceTexture) {
+		submitStageVendorOutputFrame = currentFrame;
+		submitStageVendorOutputSourceTexture = sourceTexture;
+		submitStageVendorEyeState = {};
+		submitStageForceFullEyeVendorFallback = false;
+	}
 
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
 	if (!submitStagePreparedThisFrame) {
@@ -10565,6 +10720,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!presentationOnly && (!motionVector.texture || !depth.texture))
 		return false;
 
+	const bool shouldUseFoveatedVendorThisEye =
+		foveatedRequested &&
+		!submitStageForceFullEyeVendorFallback;
+
 	const uint32_t presentationInputWidth = submitBoundsPresentationFallback ? sourceRegion.width : sourceEyeWidthIn;
 	const uint32_t presentationInputHeight = submitBoundsPresentationFallback ? sourceRegion.height : sourceEyeHeightIn;
 
@@ -10587,8 +10746,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 		submitStagePreparedFrame = currentFrame;
 		submitStagePreparedFramePresentationOnly = true;
+		submitStagePreparedFrameFoveatedRegionEncode = false;
 	} else if (!submitStagePreparedThisFrame || submitStagePreparedFramePresentationOnly) {
-		if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut)) {
+		bool encodedFoveatedRegions = false;
+		if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, submitStageNeedsRawDepthInput, foveatedRequested, &encodedFoveatedRegions)) {
 			if (IsSubmitStageDeviceLost())
 				return false;
 			return false;
@@ -10596,6 +10757,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 		submitStagePreparedFrame = currentFrame;
 		submitStagePreparedFramePresentationOnly = false;
+		submitStagePreparedFrameFoveatedRegionEncode = encodedFoveatedRegions;
 	}
 
 	if (!vrIntermediateColorIn[eyeIndex] || !vrIntermediateColorIn[eyeIndex]->resource ||
@@ -10702,6 +10864,143 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return true;
 	};
 
+	auto finalizeSubmitStageEyeOutput = [&](uint32_t targetEyeIndex, Texture2D& targetVendorColorOutput, bool targetSubmitDLSSSharpening,
+		uint32_t clearDepthWidth, uint32_t clearDepthHeight, uint32_t clearDepthOffsetX, uint32_t clearDepthOffsetY) -> bool {
+		if (targetSubmitDLSSSharpening) {
+			if (!ApplySubmitStageDLSSSharpening(targetEyeIndex, targetVendorColorOutput)) {
+				if (IsSubmitStageDeviceLost())
+					return false;
+				context->CopyResource(vrIntermediateColorOut[targetEyeIndex]->resource.get(), targetVendorColorOutput.resource.get());
+				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening fallback copy"))
+					return false;
+			}
+			if (IsSubmitStageDeviceLost())
+				return false;
+		}
+
+		if (vrRenderScaleMode &&
+			!presentationRenderTarget &&
+			menuTextProtectionContext) {
+			ApplyKnownGameMenuFinalComposite(targetEyeIndex, *vrIntermediateColorOut[targetEyeIndex], eyeWidthOut, eyeHeightOut, currentFrame);
+		}
+
+		if (!vrRenderScaleMenuCanUseVendor &&
+			!presentationRenderTarget &&
+			depth.depthSRV &&
+			clearDepthWidth &&
+			clearDepthHeight &&
+			vrIntermediateColorOut[targetEyeIndex] &&
+			vrIntermediateColorOut[targetEyeIndex]->uav) {
+			ClearHMDMaskForEye(
+				HMDMaskClearPhase::SubmitStageOutput,
+				vrIntermediateColorOut[targetEyeIndex]->uav.get(),
+				depth.depthSRV,
+				clearDepthWidth,
+				clearDepthHeight,
+				eyeWidthOut,
+				eyeHeightOut,
+				clearDepthOffsetX,
+				0u,
+				clearDepthOffsetY);
+			if (IsSubmitStageDeviceLost())
+				return false;
+		}
+
+		return true;
+	};
+
+	auto replayStoredFullEyeVendorOutput = [&](uint32_t targetEyeIndex, bool preferDLSSSharpening) -> bool {
+		const auto& targetEyeState = submitStageVendorEyeState[targetEyeIndex];
+		if (!targetEyeState.ready || !targetEyeState.usedFoveatedVendorPath)
+			return true;
+		if (!vrIntermediateColorIn[targetEyeIndex] || !vrIntermediateColorIn[targetEyeIndex]->resource ||
+			!vrIntermediateColorOut[targetEyeIndex] || !vrIntermediateColorOut[targetEyeIndex]->resource ||
+			!vrIntermediateColorOut[targetEyeIndex]->uav ||
+			!vrIntermediateDepth[targetEyeIndex] || !vrIntermediateDepth[targetEyeIndex]->resource ||
+			!vrIntermediateMotionVectors[targetEyeIndex] || !vrIntermediateMotionVectors[targetEyeIndex]->resource ||
+			!vrIntermediateReactiveMask[targetEyeIndex] || !vrIntermediateReactiveMask[targetEyeIndex]->resource ||
+			!vrIntermediateTransparencyMask[targetEyeIndex] || !vrIntermediateTransparencyMask[targetEyeIndex]->resource ||
+			(upscaleMethod == UpscaleMethod::kFSR &&
+				(!vrIntermediateLinearDepth[targetEyeIndex] || !vrIntermediateLinearDepth[targetEyeIndex]->resource))) {
+			return false;
+		}
+
+		Texture2D* replayVendorColorOutput = vrIntermediateColorOut[targetEyeIndex].get();
+		bool replaySubmitDLSSSharpening = preferDLSSSharpening;
+		static bool loggedReplaySharpenerOutputFailure[2] = {};
+		if (replaySubmitDLSSSharpening) {
+			if (!EnsureSubmitStageDLSSSharpenerTexture(targetEyeIndex, *vrIntermediateColorOut[targetEyeIndex])) {
+				LogWarnOnceFmt(
+					loggedReplaySharpenerOutputFailure[targetEyeIndex],
+					"[Upscaling] Submit-stage DLSS replay sharpening skipped for eye {} because the intermediate output is unavailable.",
+					targetEyeIndex);
+				replaySubmitDLSSSharpening = false;
+			} else {
+				replayVendorColorOutput = submitStageDLSSSharpenerTexture[targetEyeIndex].get();
+			}
+		}
+		if (!replayVendorColorOutput || !replayVendorColorOutput->resource || !replayVendorColorOutput->uav)
+			return false;
+
+		static bool loggedReplayFullEyeSubmitException[2] = {};
+		try {
+			VendorEyeDispatchParams vendorParams{};
+			vendorParams.eyeIndex = targetEyeIndex;
+			vendorParams.inputWidth = eyeWidthIn;
+			vendorParams.inputHeight = eyeHeightIn;
+			vendorParams.outputWidth = eyeWidthOut;
+			vendorParams.outputHeight = eyeHeightOut;
+			vendorParams.motionVectorScaleX = static_cast<float>(eyeWidthIn);
+			vendorParams.motionVectorScaleY = static_cast<float>(eyeHeightIn);
+			vendorParams.colorIn = vrIntermediateColorIn[targetEyeIndex]->resource.get();
+			vendorParams.depth = upscaleMethod == UpscaleMethod::kFSR ?
+			                         vrIntermediateLinearDepth[targetEyeIndex]->resource.get() :
+			                         vrIntermediateDepth[targetEyeIndex]->resource.get();
+			vendorParams.motionVectors = vrIntermediateMotionVectors[targetEyeIndex]->resource.get();
+			vendorParams.reactiveMask = vrIntermediateReactiveMask[targetEyeIndex]->resource.get();
+			vendorParams.transparencyMask = vrIntermediateTransparencyMask[targetEyeIndex]->resource.get();
+			vendorParams.colorOut = replayVendorColorOutput->resource.get();
+			vendorParams.label = "submit-stage full-eye replay";
+			if (!DispatchVendorEyeRegion(upscaleMethod, vendorParams))
+				return false;
+		} catch (const std::exception& e) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye replay"))
+				return false;
+			LogWarnOnceFmt(
+				loggedReplayFullEyeSubmitException[targetEyeIndex],
+				"[Upscaling] Submit-stage full-eye {} replay threw for eye {}; keeping the earlier eye output for this frame: {}",
+				upscaleMethodName,
+				targetEyeIndex,
+				e.what());
+			return false;
+		} catch (...) {
+			UnbindUpscalingResources();
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage full-eye replay"))
+				return false;
+			LogWarnOnceFmt(
+				loggedReplayFullEyeSubmitException[targetEyeIndex],
+				"[Upscaling] Submit-stage full-eye {} replay threw for eye {}; keeping the earlier eye output for this frame",
+				upscaleMethodName,
+				targetEyeIndex);
+			return false;
+		}
+
+		if (!finalizeSubmitStageEyeOutput(
+				targetEyeIndex,
+				*replayVendorColorOutput,
+				replaySubmitDLSSSharpening,
+				targetEyeState.depthWidth,
+				targetEyeState.depthHeight,
+				targetEyeState.depthOffsetX,
+				targetEyeState.depthOffsetY)) {
+			return false;
+		}
+
+		submitStageVendorEyeState[targetEyeIndex].usedFoveatedVendorPath = false;
+		return true;
+	};
+
 	if (presentationOnly) {
 		return presentStretchOutput(
 			presentationInputWidth,
@@ -10727,7 +11026,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 
 	bool vendorSucceeded = false;
-	if (foveatedRequested) {
+	if (shouldUseFoveatedVendorThisEye) {
 		static bool loggedFoveatedSubmitException[2] = {};
 		try {
 			vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(
@@ -10764,6 +11063,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (!vendorSucceeded && MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage foveated vendor dispatch"))
 			return false;
 		if (!vendorSucceeded) {
+			submitStageForceFullEyeVendorFallback = true;
+			RequestHistoryReset();
 			static bool loggedFoveatedSubmitFallback[2] = {};
 			if (!loggedFoveatedSubmitFallback[eyeIndex]) {
 				logger::warn(
@@ -10775,7 +11076,47 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
-	if (!vendorSucceeded) {
+	bool fullEyeVendorFallbackAvailable = true;
+	if (!vendorSucceeded && submitStagePreparedFrameFoveatedRegionEncode) {
+		bool encodedFoveatedRegions = false;
+		fullEyeVendorFallbackAvailable = EncodeSubmitStageVRInputs(
+			sourceTexture,
+			motionVector.texture,
+			depth.texture,
+			eyeWidthIn,
+			eyeHeightIn,
+			eyeWidthOut,
+			eyeHeightOut,
+			submitStageNeedsRawDepthInput,
+			false,
+			&encodedFoveatedRegions);
+		if (IsSubmitStageDeviceLost())
+			return false;
+
+		if (fullEyeVendorFallbackAvailable) {
+			submitStagePreparedFrame = currentFrame;
+			submitStagePreparedFramePresentationOnly = false;
+			submitStagePreparedFrameFoveatedRegionEncode = false;
+		} else {
+			static bool loggedFullEyeEncodeFailure[2] = {};
+			if (!loggedFullEyeEncodeFailure[eyeIndex]) {
+				logger::warn(
+					"[Upscaling] Submit-stage full-eye {} fallback skipped for eye {} because full input encode failed after foveated dispatch fallback.",
+					upscaleMethodName,
+					eyeIndex);
+				loggedFullEyeEncodeFailure[eyeIndex] = true;
+			}
+		}
+	}
+
+	if (!vendorSucceeded && fullEyeVendorFallbackAvailable) {
+		const uint32_t otherEyeIndex = eyeIndex ^ 1u;
+		const bool replayOtherEyeFromFoveated =
+			submitStageVendorEyeState[otherEyeIndex].ready &&
+			submitStageVendorEyeState[otherEyeIndex].usedFoveatedVendorPath;
+		if (replayOtherEyeFromFoveated && !replayStoredFullEyeVendorOutput(otherEyeIndex, submitDLSSSharpening) && IsSubmitStageDeviceLost())
+			return false;
+
 		static bool loggedFullEyeSubmitException[2] = {};
 		try {
 			VendorEyeDispatchParams vendorParams{};
@@ -10851,27 +11192,23 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 
-	if (submitDLSSSharpening) {
-		if (!ApplySubmitStageDLSSSharpening(eyeIndex, *vendorColorOutput)) {
-			if (IsSubmitStageDeviceLost())
-				return false;
-			context->CopyResource(vrIntermediateColorOut[eyeIndex]->resource.get(), vendorColorOutput->resource.get());
-			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage DLSS sharpening fallback copy"))
-				return false;
-		}
-		if (IsSubmitStageDeviceLost())
-			return false;
-	}
-
-	if (vrRenderScaleMode &&
-		!presentationRenderTarget &&
-		menuTextProtectionContext) {
-		ApplyKnownGameMenuFinalComposite(eyeIndex, *vrIntermediateColorOut[eyeIndex], eyeWidthOut, eyeHeightOut, currentFrame);
-	}
-
-	clearSubmittedEyeHMDMask();
-	if (IsSubmitStageDeviceLost())
+	if (!finalizeSubmitStageEyeOutput(
+			eyeIndex,
+			*vendorColorOutput,
+			submitDLSSSharpening,
+			sourceRegion.depthWidth,
+			sourceRegion.depthHeight,
+			sourceRegion.depthOffsetX,
+			sourceRegion.depthOffsetY)) {
 		return false;
+	}
+
+	submitStageVendorEyeState[eyeIndex].ready = true;
+	submitStageVendorEyeState[eyeIndex].usedFoveatedVendorPath = shouldUseFoveatedVendorThisEye && !submitStageForceFullEyeVendorFallback;
+	submitStageVendorEyeState[eyeIndex].depthWidth = sourceRegion.depthWidth;
+	submitStageVendorEyeState[eyeIndex].depthHeight = sourceRegion.depthHeight;
+	submitStageVendorEyeState[eyeIndex].depthOffsetX = sourceRegion.depthOffsetX;
+	submitStageVendorEyeState[eyeIndex].depthOffsetY = sourceRegion.depthOffsetY;
 	if (vrRenderScaleMode) {
 		const bool canMirrorToSource =
 			sourceDesc.ArraySize == 1 &&
@@ -10967,6 +11304,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 void Upscaling::RequestHistoryReset()
 {
 	historyResetRequested = true;
+	if (auto* state = globals::state; state && historyResetLatchedFrame == state->frameCount)
+		historyResetThisFrame = true;
 }
 
 uint32_t Upscaling::GetEffectiveUpscalingQualityMode() const
@@ -11680,74 +12019,18 @@ void Upscaling::Upscale()
 				}
 			};
 
-			struct EncodeRegion
-			{
-				uint32_t minX = 0;
-				uint32_t minY = 0;
-				uint32_t maxX = 0;
-				uint32_t maxY = 0;
-				bool valid = false;
-			};
-
-			auto includeInputRect = [&](EncodeRegion& region, uint32_t minX, uint32_t minY, uint32_t maxX, uint32_t maxY) {
-				minX = std::min(minX, eyeWidthIn);
-				minY = std::min(minY, eyeHeightIn);
-				maxX = std::min(maxX, eyeWidthIn);
-				maxY = std::min(maxY, eyeHeightIn);
-				if (maxX <= minX || maxY <= minY)
-					return;
-
-				if (!region.valid) {
-					region.minX = minX;
-					region.minY = minY;
-					region.maxX = maxX;
-					region.maxY = maxY;
-					region.valid = true;
-				} else {
-					region.minX = std::min(region.minX, minX);
-					region.minY = std::min(region.minY, minY);
-					region.maxX = std::max(region.maxX, maxX);
-					region.maxY = std::max(region.maxY, maxY);
-				}
-			};
-
 			const bool useRegionEncode = !forceFullVREncode && foveatedDispatchRequested;
 			bool dispatchedRegionEncode = false;
 			if (useRegionEncode) {
 				const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(upscaleMethod);
 				const bool usePeripheryTAAPath = IsPeripheryTAAPathActive(upscaleMethod);
-				const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
-				const float centerScale = foveatedProfile.centerScale;
-				const float centerHorizontalScale = foveatedProfile.centerHorizontalScale;
-				const float centerFeather = usePeripheryTAAPath ?
-				                                ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) :
-				                                FoveatedCommon::kCenterFeather;
-
-				if (BuildFoveatedDispatchRects(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, true, centerScale, centerFeather, centerHorizontalScale, usePeripheryTAAProfile)) {
-					std::array<EncodeRegion, 2> regions{};
-					bool allRegionsValid = true;
+				std::array<FoveatedEncodeRegion, 2> regions{};
+				if (GetFoveatedEncodeRegions(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, usePeripheryTAAProfile, usePeripheryTAAPath, regions)) {
 					for (uint32_t eye = 0; eye < 2; ++eye) {
-						const auto& eyePlan = foveatedRectCache.plan.eyes[eye];
-						if (!eyePlan.encodeInput.IsValid()) {
-							allRegionsValid = false;
-							break;
-						}
-
-						includeInputRect(regions[eye], eyePlan.encodeInput.minX, eyePlan.encodeInput.minY, eyePlan.encodeInput.maxX, eyePlan.encodeInput.maxY);
-
-						if (!regions[eye].valid) {
-							allRegionsValid = false;
-							break;
-						}
+						dispatchEyeEncode(eye, regions[eye].minX, regions[eye].minY, regions[eye].maxX, regions[eye].maxY);
 					}
-
-					if (allRegionsValid) {
-						for (uint32_t eye = 0; eye < 2; ++eye) {
-							dispatchEyeEncode(eye, regions[eye].minX, regions[eye].minY, regions[eye].maxX, regions[eye].maxY);
-						}
-						dispatchedRegionEncode = true;
-						encodedVRFoveatedRegions = true;
-					}
+					dispatchedRegionEncode = true;
+					encodedVRFoveatedRegions = true;
 				}
 			}
 
@@ -11815,6 +12098,7 @@ void Upscaling::Upscale()
 			if (dispatched && upscaleMethod == UpscaleMethod::kDLSS)
 				dlssUpscaleOutputInSharpenerTexture = foveatedOutputToSharpener;
 			if (!dispatched) {
+				RequestHistoryReset();
 				if (!loggedFoveatedFallback) {
 					logger::warn("[Upscaling] Foveated vendor dispatch failed; falling back to full-frame {} dispatch.",
 						magic_enum::enum_name(upscaleMethod));

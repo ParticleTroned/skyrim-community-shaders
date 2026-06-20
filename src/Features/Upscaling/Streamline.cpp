@@ -785,10 +785,11 @@ void Streamline::FreeVRDLSSViewportSlot(uint32_t slotIndex, bool logFailures)
 	slot.lastUse = 0;
 }
 
-sl::ViewportHandle Streamline::ResolveDLSSViewport(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset)
+bool Streamline::ResolveDLSSViewport(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport)
 {
+	outViewport = p_viewport;
 	if (!globals::game::isVR)
-		return p_viewport;
+		return true;
 
 	const uint32_t eye = eyeIndex > 0 ? 1u : 0u;
 	const uint32_t clampedQualityMode = std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
@@ -806,11 +807,11 @@ sl::ViewportHandle Streamline::ResolveDLSSViewport(sl::ViewportHandle p_viewport
 				if (BeginOrPollD3D11IdleFence(context, pendingVRDLSSSlotRecycleIdleFence, "VR DLSS viewport slot recycle") != D3D11IdleFenceResult::Ready) {
 					static bool loggedSlotRecycleTimeout = false;
 					if (!loggedSlotRecycleTimeout) {
-						logger::warn("[Streamline] Skipping VR DLSS viewport slot recycle because the D3D11 queue did not become idle.");
+						logger::warn("[Streamline] Deferring VR DLSS evaluate because the viewport slot recycle did not become idle.");
 						loggedSlotRecycleTimeout = true;
 					}
 					nonVRDLSSOptionsCache.valid = false;
-					return p_viewport;
+					return false;
 				}
 			} else {
 				ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
@@ -832,7 +833,8 @@ sl::ViewportHandle Streamline::ResolveDLSSViewport(sl::ViewportHandle p_viewport
 
 	auto& activeSlot = vrDLSSViewportSlots[slotIndex];
 	activeSlot.lastUse = ++vrDLSSViewportUseCounter;
-	return activeSlot.viewport[eye];
+	outViewport = activeSlot.viewport[eye];
+	return true;
 }
 
 Streamline::DLSSOptionsCache& Streamline::GetDLSSOptionsCache(uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset)
@@ -940,7 +942,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
 	const uint32_t dlssPreset = std::min(upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
-	vp = ResolveDLSSViewport(vp, eyeIndex, qualityMode, dlssPreset);
+	if (!ResolveDLSSViewport(vp, eyeIndex, qualityMode, dlssPreset, vp))
+		return false;
 
 	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY))
 		return false;
@@ -1070,7 +1073,6 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
 	auto& upscaling = globals::features::upscaling;
-	upscaling.RefreshRuntimeResolutionState();
 	if (globals::game::isVR && upscaling.IsPresentationUpscalingActive()) {
 		upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 		return;
@@ -1082,11 +1084,14 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		screenSize = state->screenSize;
 	if (renderSize.x <= 0.0f || renderSize.y <= 0.0f)
 		renderSize = Util::ConvertToDynamic(screenSize);
+	auto& mainTarget = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	const bool useSharpenerOutput =
 		upscaling.ShouldApplyDLSSSharpening() &&
 		upscaling.sharpenerTexture &&
-		upscaling.sharpenerTexture->resource;
+		upscaling.sharpenerTexture->resource &&
+		upscaling.sharpenerTexture->uav;
 	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
+	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : mainTarget.UAV;
 	const bool outputToSharpener = useSharpenerOutput;
 
 	// VR: Combined-buffer mode with extent offsets causes temporal ghosting on the right eye
@@ -1181,6 +1186,14 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// in the combined target at non-DLAA scales.
 		D3D11_BOX rightIn = { eyeWidthIn, 0, 0, eyeWidthIn * 2, eyeHeightIn, 1 };
 		context->CopySubresourceRegion(upscaling.vrIntermediateDepth[1]->resource.get(), 0, 0, 0, 0, depthTexture.texture, 0, &rightIn);
+		const bool canRestoreDirectEye0Output =
+			!outputToSharpener &&
+			upscaling.vrIntermediateColorOut[0] &&
+			upscaling.vrIntermediateColorOut[0]->resource;
+		if (canRestoreDirectEye0Output) {
+			D3D11_BOX leftOutBackup = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+			context->CopySubresourceRegion(upscaling.vrIntermediateColorOut[0]->resource.get(), 0, 0, 0, 0, colorOut, 0, &leftOutBackup);
+		}
 
 		// Eye 0 writes directly to combined output.
 		const bool leftEvaluated = EvaluateDLSS(viewport, 0,
@@ -1197,6 +1210,11 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			extentIn, extentOut, eyeWidthOut);
 
 		if (leftEvaluated && rightEvaluated) {
+			if (depthTexture.depthSRV) {
+				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+			}
+
 			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
 			context->CopySubresourceRegion(colorOut, 0, eyeWidthOut, 0, 0, upscaling.vrIntermediateColorOut[1]->resource.get(), 0, &rightOut);
 		}
@@ -1216,6 +1234,10 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed and stretch fallback failed; keeping the current scene texture.");
 				loggedVRDirectStretchFallbackFailure = true;
 			}
+			if (!fallbackPresented && canRestoreDirectEye0Output) {
+				D3D11_BOX leftOutBackup = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+				context->CopySubresourceRegion(colorOut, 0, 0, 0, 0, upscaling.vrIntermediateColorOut[0]->resource.get(), 0, &leftOutBackup);
+			}
 		}
 
 		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && ((leftEvaluated && rightEvaluated) || fallbackPresented);
@@ -1230,6 +1252,14 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 			extentIn, extentOut, (uint)screenSize.x);
 		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
+		if (!evaluated) {
+			upscaling.RequestHistoryReset();
+			static bool loggedEvaluateFailure = false;
+			if (!loggedEvaluateFailure) {
+				logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");
+				loggedEvaluateFailure = true;
+			}
+		}
 	}
 }
 /**

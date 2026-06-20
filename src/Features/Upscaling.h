@@ -365,6 +365,15 @@ public:
 		FoveatedRegionPlan plan{};
 	} foveatedRectCache;
 
+	struct FoveatedEncodeRegion
+	{
+		uint32_t minX = 0;
+		uint32_t minY = 0;
+		uint32_t maxX = 0;
+		uint32_t maxY = 0;
+		bool valid = false;
+	};
+
 	ConstantBuffer* jitterCB = nullptr;
 	ConstantBuffer* upscalingDataCB = nullptr;
 	ConstantBuffer* dynamicResolutionStretchCB = nullptr;
@@ -417,9 +426,9 @@ public:
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
-	// Refresh both the cached plan and restart-required state derived from the current VR render-scale settings.
+	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.
 	void RefreshRuntimeResolutionState();
-	// Rebuild only the cached plan from already-latched state. Most callers want RefreshRuntimeResolutionState().
+	// Rebuild only the cached plan from already-latched state; backend dispatch code must only read the cached plan.
 	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
 	bool GetVRRenderScaleModeRequested() const;
@@ -678,6 +687,20 @@ public:
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	bool submitStagePreparedFramePresentationOnly = false;
+	bool submitStagePreparedFrameFoveatedRegionEncode = false;
+	struct SubmitStageVendorEyeState
+	{
+		bool ready = false;
+		bool usedFoveatedVendorPath = false;
+		uint32_t depthWidth = 0;
+		uint32_t depthHeight = 0;
+		uint32_t depthOffsetX = 0;
+		uint32_t depthOffsetY = 0;
+	};
+	uint32_t submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
+	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
+	bool submitStageForceFullEyeVendorFallback = false;
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
@@ -724,7 +747,8 @@ public:
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;
 	bool GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye, uint32_t& a_inputHeight, uint32_t& a_outputWidthPerEye, uint32_t& a_outputHeight) const;
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
-	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight);
+	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
+	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
@@ -821,6 +845,8 @@ public:
 	void CreateProxyInterop();
 	IDXGISwapChain* GetProxySwapChain();
 	bool IsOpenCompositeUpscalingBlocked(bool a_forceRefresh = false) const;
+	void ClearVRDirectUpscaledEyeOutput(uint32_t eyeIndex, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);

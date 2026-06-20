@@ -4,6 +4,7 @@
 #include <directx/d3d12.h>
 #include <winrt/base.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -107,7 +108,16 @@ private:
 	uint64_t pendingRuntimeTeardownD3D11FenceValue = 0;
 	uint64_t pendingRuntimeTeardownD3D12FenceValue = 0;
 	uint64_t runtimeFenceValue = 1;
-	uint32_t runtimeCommandFrameIndex = 0;
+
+	static constexpr uint32_t kRuntimeCommandContextCount = 8;
+	struct RuntimeCommandContext
+	{
+		winrt::com_ptr<ID3D12CommandAllocator> commandAllocator;
+		winrt::com_ptr<ID3D12GraphicsCommandList4> commandList;
+		uint64_t fenceValue = 0;
+	};
+	std::array<RuntimeCommandContext, kRuntimeCommandContextCount> runtimeCommandContexts;
+	uint32_t runtimeCommandContextCursor = 0;
 
 	WrappedResource* runtimeColorShared[2]{};
 	WrappedResource* runtimeDepthShared[2]{};
@@ -151,6 +161,10 @@ private:
 	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 	bool EnsureRuntimeUpscalerInterop();
+	bool EnsureRuntimeCommandContexts();
+	RuntimeCommandContext* AcquireRuntimeCommandContext();
+	void ResetRuntimeCommandContexts();
+	bool WaitForRuntimeD3D12Fence(uint64_t a_value);
 	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);
 	void WaitForRuntimeUpscalerIdle();
 	bool PollRuntimeUpscalerTeardownIdle(const char* a_reason);

@@ -765,7 +765,7 @@ void Menu::DrawSettings()
 	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), layoutCond);
 	resetLayout = false;
 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto baseTitle = std::format("CS {}", versionStr);
+	auto baseTitle = std::format("CS {} Particle Lights Fork", versionStr);
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
 	auto title = std::format("{}###CommunityShaders", baseTitle);
 

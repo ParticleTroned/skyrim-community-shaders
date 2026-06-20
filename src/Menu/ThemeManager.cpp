@@ -64,34 +64,52 @@ namespace
 		const auto& status = themeSettings.StatusPalette;
 
 		const ImVec4 background = palette.Background;
-		const ImVec4 controlSurface = palette.FrameBorder;
-		const ImVec4 elevatedSurface = Lift(background, 0.035f, 0.96f);
+		const float backgroundAlpha = background.w;
+		const float frameAlpha = palette.FrameBorder.w;
+		const float childAlpha = std::clamp(backgroundAlpha - 0.08f, 0.18f, 0.34f);
+		const float controlAlpha = std::clamp(frameAlpha, backgroundAlpha + 0.12f, 0.72f);
+		const float elevatedAlpha = std::clamp(frameAlpha + 0.06f, backgroundAlpha + 0.18f, 0.78f);
+		const float popupAlpha = std::clamp(frameAlpha + 0.16f, backgroundAlpha + 0.28f, 0.84f);
+		const float titleAlpha = std::clamp(backgroundAlpha + 0.06f, backgroundAlpha, 0.52f);
+		const float menuBarAlpha = std::clamp(backgroundAlpha + 0.12f, backgroundAlpha + 0.04f, 0.58f);
+		const float tabAlpha = std::clamp(frameAlpha + 0.02f, backgroundAlpha + 0.16f, 0.72f);
+		const float dimmedTabAlpha = std::clamp(frameAlpha - 0.06f, backgroundAlpha + 0.10f, 0.62f);
+		const auto layeredSurface = [&](float blendAmount, float liftAmount, float alpha) {
+			return Lift(Blend(background, palette.FrameBorder, blendAmount, alpha), liftAmount, alpha);
+		};
+		const ImVec4 controlSurface = layeredSurface(0.55f, -0.010f, controlAlpha);
+		const ImVec4 elevatedSurface = layeredSurface(0.60f, 0.006f, elevatedAlpha);
+		const ImVec4 popupSurface = layeredSurface(0.58f, -0.004f, popupAlpha);
+		const ImVec4 titleSurface = Lift(background, -0.004f, titleAlpha);
+		const ImVec4 menuBarSurface = layeredSurface(0.52f, -0.006f, menuBarAlpha);
+		const ImVec4 tabSurface = layeredSurface(0.56f, -0.006f, tabAlpha);
+		const ImVec4 dimmedTabSurface = layeredSurface(0.50f, -0.010f, dimmedTabAlpha);
 		const ImVec4 primary = status.InfoColor;
 		const ImVec4 secondary = status.Warning;
 		const ImVec4 disabled = status.Disable;
 
 		colors[ImGuiCol_WindowBg] = palette.Background;
-		colors[ImGuiCol_ChildBg] = Lift(background, 0.010f, 0.22f);
-		colors[ImGuiCol_PopupBg] = Lift(background, 0.020f, 0.96f);
+		colors[ImGuiCol_ChildBg] = Lift(background, 0.006f, childAlpha);
+		colors[ImGuiCol_PopupBg] = popupSurface;
 		colors[ImGuiCol_Text] = palette.Text;
 		colors[ImGuiCol_TextDisabled] = WithAlpha(disabled, DISABLED_TEXT_ALPHA);
 		colors[ImGuiCol_Border] = palette.WindowBorder;
 		colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 
 		colors[ImGuiCol_FrameBg] = controlSurface;
-		colors[ImGuiCol_FrameBgHovered] = Blend(controlSurface, primary, 0.18f, 0.92f);
-		colors[ImGuiCol_FrameBgActive] = Blend(controlSurface, primary, 0.30f, 0.96f);
+		colors[ImGuiCol_FrameBgHovered] = Blend(controlSurface, primary, 0.18f, std::clamp(controlAlpha + 0.08f, 0.0f, 0.80f));
+		colors[ImGuiCol_FrameBgActive] = Blend(controlSurface, primary, 0.30f, std::clamp(controlAlpha + 0.16f, 0.0f, 0.88f));
 		colors[ImGuiCol_CheckMark] = primary;
 		colors[ImGuiCol_SliderGrab] = WithAlpha(primary, 0.82f);
 		colors[ImGuiCol_SliderGrabActive] = Blend(primary, palette.Text, 0.22f, 1.0f);
 
-		colors[ImGuiCol_Button] = Blend(elevatedSurface, primary, 0.13f, 0.72f);
-		colors[ImGuiCol_ButtonHovered] = Blend(elevatedSurface, primary, 0.24f, 0.88f);
-		colors[ImGuiCol_ButtonActive] = Blend(elevatedSurface, primary, 0.34f, 0.96f);
+		colors[ImGuiCol_Button] = Blend(elevatedSurface, primary, 0.13f, std::clamp(elevatedAlpha - 0.04f, 0.54f, 0.74f));
+		colors[ImGuiCol_ButtonHovered] = Blend(elevatedSurface, primary, 0.24f, std::clamp(elevatedAlpha + 0.04f, 0.62f, 0.80f));
+		colors[ImGuiCol_ButtonActive] = Blend(elevatedSurface, primary, 0.34f, std::clamp(elevatedAlpha + 0.12f, 0.70f, 0.88f));
 
-		colors[ImGuiCol_Header] = Blend(elevatedSurface, primary, 0.12f, 0.62f);
-		colors[ImGuiCol_HeaderHovered] = Blend(elevatedSurface, primary, 0.24f, 0.82f);
-		colors[ImGuiCol_HeaderActive] = Blend(elevatedSurface, primary, 0.34f, 0.94f);
+		colors[ImGuiCol_Header] = Blend(controlSurface, primary, 0.12f, std::clamp(controlAlpha, 0.56f, 0.72f));
+		colors[ImGuiCol_HeaderHovered] = Blend(controlSurface, primary, 0.24f, std::clamp(controlAlpha + 0.10f, 0.64f, 0.82f));
+		colors[ImGuiCol_HeaderActive] = Blend(controlSurface, primary, 0.34f, std::clamp(controlAlpha + 0.18f, 0.72f, 0.90f));
 
 		colors[ImGuiCol_Separator] = palette.Separator;
 		colors[ImGuiCol_SeparatorHovered] = WithAlpha(primary, 0.74f);
@@ -100,25 +118,25 @@ namespace
 		colors[ImGuiCol_ResizeGripHovered] = Blend(palette.ResizeGrip, primary, 0.20f, 0.85f);
 		colors[ImGuiCol_ResizeGripActive] = Blend(palette.ResizeGrip, primary, 0.32f, 0.95f);
 
-		colors[ImGuiCol_TitleBg] = Lift(background, -0.005f, 0.90f);
-		colors[ImGuiCol_TitleBgActive] = Blend(elevatedSurface, primary, 0.08f, 0.96f);
-		colors[ImGuiCol_TitleBgCollapsed] = Lift(background, -0.005f, 0.76f);
-		colors[ImGuiCol_MenuBarBg] = Lift(background, 0.020f, 0.92f);
+		colors[ImGuiCol_TitleBg] = titleSurface;
+		colors[ImGuiCol_TitleBgActive] = Blend(titleSurface, primary, 0.08f, std::clamp(titleAlpha + 0.08f, 0.0f, 0.60f));
+		colors[ImGuiCol_TitleBgCollapsed] = Lift(background, -0.004f, std::clamp(backgroundAlpha - 0.06f, 0.24f, 0.40f));
+		colors[ImGuiCol_MenuBarBg] = menuBarSurface;
 
 		colors[ImGuiCol_ScrollbarBg] = Lift(background, 0.010f, colors[ImGuiCol_ScrollbarBg].w);
 		colors[ImGuiCol_ScrollbarGrab] = Blend(elevatedSurface, primary, 0.18f, colors[ImGuiCol_ScrollbarGrab].w);
 		colors[ImGuiCol_ScrollbarGrabHovered] = Blend(elevatedSurface, primary, 0.30f, colors[ImGuiCol_ScrollbarGrabHovered].w);
 		colors[ImGuiCol_ScrollbarGrabActive] = Blend(elevatedSurface, primary, 0.42f, colors[ImGuiCol_ScrollbarGrabActive].w);
 
-		colors[ImGuiCol_Tab] = Blend(elevatedSurface, primary, 0.08f, 0.92f);
-		colors[ImGuiCol_TabHovered] = Blend(elevatedSurface, primary, 0.30f, 0.92f);
-		colors[ImGuiCol_TabSelected] = Blend(elevatedSurface, primary, 0.18f, 0.96f);
+		colors[ImGuiCol_Tab] = Blend(tabSurface, primary, 0.08f, tabAlpha);
+		colors[ImGuiCol_TabHovered] = Blend(tabSurface, primary, 0.30f, std::clamp(tabAlpha + 0.08f, 0.0f, 0.82f));
+		colors[ImGuiCol_TabSelected] = Blend(elevatedSurface, primary, 0.18f, std::clamp(elevatedAlpha + 0.12f, 0.0f, 0.88f));
 		colors[ImGuiCol_TabSelectedOverline] = WithAlpha(primary, 1.0f);
-		colors[ImGuiCol_TabDimmed] = Lift(background, 0.004f, 0.86f);
-		colors[ImGuiCol_TabDimmedSelected] = Blend(elevatedSurface, primary, 0.12f, 0.92f);
+		colors[ImGuiCol_TabDimmed] = dimmedTabSurface;
+		colors[ImGuiCol_TabDimmedSelected] = Blend(dimmedTabSurface, primary, 0.12f, std::clamp(dimmedTabAlpha + 0.14f, 0.0f, 0.80f));
 		colors[ImGuiCol_TabDimmedSelectedOverline] = WithAlpha(primary, 0.45f);
 
-		colors[ImGuiCol_TableHeaderBg] = Blend(elevatedSurface, primary, 0.10f, 0.88f);
+		colors[ImGuiCol_TableHeaderBg] = Blend(elevatedSurface, primary, 0.10f, std::clamp(elevatedAlpha, 0.60f, 0.78f));
 		colors[ImGuiCol_TableBorderStrong] = WithAlpha(palette.Separator, 1.0f);
 		colors[ImGuiCol_TableBorderLight] = WithAlpha(palette.Separator, 0.70f);
 		colors[ImGuiCol_TableRowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);

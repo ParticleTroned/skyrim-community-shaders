@@ -6,8 +6,8 @@
 #include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
 #include <limits>
@@ -372,6 +372,7 @@ public:
 
 	// Feature interface overrides
 	virtual void DrawSettings() override;
+	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings();
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
@@ -437,7 +438,7 @@ public:
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];  // One for each UpscaleMethod
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[5];          // One for each UpscaleMethod
 	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCSDepthOutput;  // FSR + VR: converts copied per-eye depth to R32_FLOAT for FidelityFX
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
@@ -477,14 +478,14 @@ public:
 
 	// Shared VR Per-Eye Intermediate Buffers
 	// Owned here so both Streamline (DLSS) and FidelityFX (FSR) can use them.
-	eastl::unique_ptr<Texture2D> vrIntermediateColorIn[2];           // per-eye render resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateColorOut[2];          // per-eye output resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];             // per-eye render resolution (R24G8_TYPELESS, shared depth copy)
-	eastl::unique_ptr<Texture2D> vrIntermediateLinearDepth[2];       // per-eye render resolution (R32_FLOAT, FSR input)
-	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];     // per-eye render resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];      // per-eye render resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];  // per-eye render resolution
-	eastl::unique_ptr<Texture2D> submitStageDLSSSharpenerTexture[2]; // per-eye output resolution
+	eastl::unique_ptr<Texture2D> vrIntermediateColorIn[2];            // per-eye render resolution
+	eastl::unique_ptr<Texture2D> vrIntermediateColorOut[2];           // per-eye output resolution
+	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye render resolution (R24G8_TYPELESS, shared depth copy)
+	eastl::unique_ptr<Texture2D> vrIntermediateLinearDepth[2];        // per-eye render resolution (R32_FLOAT, FSR input)
+	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];      // per-eye render resolution
+	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];       // per-eye render resolution
+	eastl::unique_ptr<Texture2D> vrIntermediateTransparencyMask[2];   // per-eye render resolution
+	eastl::unique_ptr<Texture2D> submitStageDLSSSharpenerTexture[2];  // per-eye output resolution
 	struct RetiredVRIntermediateTextures
 	{
 		uint32_t retireFrame = 0;

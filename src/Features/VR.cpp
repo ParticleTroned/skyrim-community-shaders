@@ -1,21 +1,21 @@
 #include "VR.h"
+#include "DynamicCubemaps.h"
+#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#include "FoveatedCommon.h"
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
-#include "DynamicCubemaps.h"
-#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
-#include "FoveatedCommon.h"
-#include "ShaderCache.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
+#include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "WaterEffects.h"
 #include "WetnessEffects.h"
 #include "Wetterness.h"
-#include "WaterEffects.h"
 #include <openvr.h>
 
 #include "Globals.h"
@@ -42,6 +42,22 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+	bool IsWetternessActiveForDynamicCubemapVisibilityThrottle()
+	{
+		const auto& wetterness = globals::features::wetterness;
+		return wetterness.IsRuntimeActive();
+	}
+
+	void DisableDynamicCubemapVisibilityThrottleForWetterness(VR::Settings& a_settings)
+	{
+		if (!a_settings.EnableDynamicCubemapVisibilityThrottle || !IsWetternessActiveForDynamicCubemapVisibilityThrottle()) {
+			return;
+		}
+
+		logger::info("Disabling Low-Visibility Cubemap Throttle because Wetterness is active.");
+		a_settings.EnableDynamicCubemapVisibilityThrottle = false;
+	}
+
 	bool BeginTabItemWithFont(const char* label, Menu::FontRole role, ImGuiTabItemFlags flags = ImGuiTabItemFlags_None)
 	{
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
@@ -163,13 +179,13 @@ namespace
 		const int centeredY = workArea.top + std::max(0, (workHeight - windowHeight) / 2);
 
 		return SetWindowPos(
-			hwnd,
-			HWND_TOPMOST,
-			centeredX,
-			centeredY,
-			0,
-			0,
-			SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) != FALSE;
+				   hwnd,
+				   HWND_TOPMOST,
+				   centeredX,
+				   centeredY,
+				   0,
+				   0,
+				   SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) != FALSE;
 	}
 
 	void ResetDesktopWindowManagementState(VR& vr)
@@ -323,13 +339,14 @@ void VR::LoadSettings(json& o_json)
 	LoadVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
 	LoadVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
 	if (o_json.is_object() &&
-	    o_json.contains("VRMenuOffsetZ") &&
-	    std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon) {
+		o_json.contains("VRMenuOffsetZ") &&
+		std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon) {
 		settings.VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
 	}
 	MigrateLegacyBindingDefaults(settings);
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 
 	if (settings.EnableOuterCascadeCasterBias) {
 		ShadowmapRasterizerFix::InstallD3DHooks(globals::d3d::context);
@@ -338,6 +355,7 @@ void VR::LoadSettings(json& o_json)
 
 void VR::SaveSettings(json& o_json)
 {
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	o_json = settings;
 	SaveVRControllerBinding(o_json, "VRMenuOpenKeys", settings.VRMenuOpenKeys);
 	SaveVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
@@ -350,6 +368,7 @@ void VR::RestoreDefaultSettings()
 	ReleaseMenuDesktopWindowManagement();
 	settings = Settings{};
 	settings.ClampToValidRanges();
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	UpdateDepthBufferCulling();
 
 	if (gMinOccludeeBoxExtent) {
@@ -1150,7 +1169,6 @@ namespace
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Minimum bounding box dimensions for object occlusion culling. Lower values improve performance but may result in visual artifacts.");
 			}
-
 		}
 	}
 
@@ -1291,16 +1309,16 @@ namespace
 					const char* a_benefit,
 					const char* a_cost,
 					const char* a_requirement) {
-				auto guard = Util::DisableGuard(!a_available);
-				ImGui::Checkbox(a_label, &a_enabled);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(a_summary);
-					ImGui::TextUnformatted(a_benefit);
-					ImGui::TextUnformatted(a_cost);
-					if (!a_available)
-						ImGui::TextUnformatted(a_requirement);
-				}
-			};
+					auto guard = Util::DisableGuard(!a_available);
+					ImGui::Checkbox(a_label, &a_enabled);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted(a_summary);
+						ImGui::TextUnformatted(a_benefit);
+						ImGui::TextUnformatted(a_cost);
+						if (!a_available)
+							ImGui::TextUnformatted(a_requirement);
+					}
+				};
 
 			drawSyncToggle(
 				"Sync Screen Space Shadows",
@@ -1402,6 +1420,8 @@ namespace
 			ImGui::TextDisabled("VR foveation controls are available only in VR.");
 			return;
 		}
+		DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+
 		auto drawSection = [](const char* a_label) {
 			ImGui::Spacing();
 			MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
@@ -1409,8 +1429,8 @@ namespace
 		};
 
 		auto drawDetailBudget = [](const char* a_label, bool& a_enabled, const char* a_hardCutoffLabel, bool& a_hardCutoff,
-								 const char* a_line0, const char* a_line1, const char* a_line2,
-								 const char* a_hardLine0, const char* a_hardLine1, const char* a_hardLine2) {
+									const char* a_line0, const char* a_line1, const char* a_line2,
+									const char* a_hardLine0, const char* a_hardLine1, const char* a_hardLine2) {
 			ImGui::Checkbox(a_label, &a_enabled);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted(a_line0);
@@ -1428,6 +1448,7 @@ namespace
 			ImGui::EndDisabled();
 		};
 
+		upscaling.DrawFoveatedSetupInstructions();
 		drawSection("Shared FOV Mask");
 		upscaling.DrawFoveatedSettings();
 
@@ -1655,6 +1676,11 @@ namespace
 		ImGui::EndDisabled();
 
 		drawSection("Dynamic Cubemaps");
+		const bool dynamicCubemapVisibilityThrottleBlockedByWetterness = IsWetternessActiveForDynamicCubemapVisibilityThrottle();
+		if (dynamicCubemapVisibilityThrottleBlockedByWetterness) {
+			settings.EnableDynamicCubemapVisibilityThrottle = false;
+		}
+
 		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive);
 		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1662,7 +1688,9 @@ namespace
 			ImGui::TextUnformatted("When active, cubemap capture, inference, irradiance, and BC6H compression are spread across more frames when reflections are low priority.");
 			ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a shader-detail feathered vs hard-cutoff pair.");
 		}
+		ImGui::EndDisabled();
 
+		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive || dynamicCubemapVisibilityThrottleBlockedByWetterness);
 		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Adds visibility-based reduction for Dynamic Cubemaps when the secondary reflection path is not currently useful.");
@@ -1671,6 +1699,8 @@ namespace
 			ImGui::TextUnformatted("Additive with Dynamic Cubemap Cadence; it is not a replacement mode or a hard-cutoff option.");
 		}
 		ImGui::EndDisabled();
+		if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
+			ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
 		if (!foveatedProfileActive)
 			ImGui::TextDisabled("Dynamic Cubemap foveation requires active foveated upscaling with FOV area below 1.00.");
 		if (!dynamicCubemapsRuntimeActive)
@@ -1694,7 +1724,8 @@ namespace
 			const bool statusAnyCubemapFoveationEnabled =
 				settings.EnableDynamicCubemapFoveation ||
 				settings.EnableDynamicCubemapVisibilityThrottle;
-			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full coverage" : "unavailable");
+			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full coverage" :
+																									  "unavailable");
 			ImGui::Text("Lighting auxiliary detail: %s (%s)", statusLightingActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusLightingMode));
 			ImGui::Text("SSR raymarch: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
 			ImGui::Text("Water parallax detail: %s (%s)", statusWaterParallaxActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWaterParallaxMode));
@@ -2646,8 +2677,8 @@ void VR::UpdateMenuDesktopWindowManagement(bool force)
 	}
 
 	if (desktopWindowManagementApplied &&
-	    desktopWindowManagedHandle &&
-	    desktopWindowManagedHandle != hwnd) {
+		desktopWindowManagedHandle &&
+		desktopWindowManagedHandle != hwnd) {
 		ReleaseMenuDesktopWindowManagement();
 	}
 
@@ -2752,8 +2783,8 @@ void VR::SubmitOverlayFrame()
 		menuOverlayHandle != vr::k_ulOverlayHandleInvalid ||
 		menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid;
 	auto* gameOverlay = openVRInfo.hasOverlayInterface && (useIVROverlay || hasOverlayHandles) ?
-	                         RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) :
-	                         nullptr;
+	                        RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) :
+	                        nullptr;
 	auto* cleanOverlay = useIVROverlay ? RE::BSOpenVR::GetCleanIVROverlay() : nullptr;
 
 	static bool cleanOverlayLogged = false;
@@ -2791,8 +2822,8 @@ void VR::SubmitOverlayFrame()
 	// In fixed-world mode, recenter once on menu open using current HMD pose,
 	// then keep it world-locked for the rest of the session.
 	if (menuJustOpened &&
-	    settings.VRMenuPositioningMethod == 1 &&
-	    (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both)) {
+		settings.VRMenuPositioningMethod == 1 &&
+		(settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both)) {
 		SetFixedOverlayToCurrentHMD();
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 			savedPlayerWorldPos = player->GetPosition();

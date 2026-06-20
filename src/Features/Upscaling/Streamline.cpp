@@ -1141,12 +1141,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			return stretched;
 		};
 
-		// DLAA uses the full per-eye extent. Keep it on the isolated per-eye
-		// output path so hidden-area cleanup and stereo copyback are identical
-		// for both eyes, avoiding stale content in the combined VR target.
-		const bool forcePerEyeOutput = upscaling.GetRuntimeQualityMode() == 0;
 		const bool canUseDirectEye0 =
-			!forcePerEyeOutput &&
 			perEyeResourcesReady;
 
 		if (!canUseDirectEye0) {

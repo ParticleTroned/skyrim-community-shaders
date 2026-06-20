@@ -175,7 +175,7 @@ namespace
 	std::atomic_uint32_t g_vrBFadeCarrierScrubApplyCount{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticFrame{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticCount{ 0 };
-	std::atomic_uint32_t g_vrBFadeFaderUiScrubFrame{ 0 };
+	std::atomic_uint32_t g_vrBFadeMenuBgScrubFrame{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
@@ -183,7 +183,7 @@ namespace
 	constexpr uint32_t kVRBFadeCarrierScrubWindowFrames = 180;
 	constexpr uint32_t kVRBFadeCarrierScrubMaxSeeds = 8;
 	constexpr uint32_t kVRBFadeCarrierScrubDiagnosticMaxLogsPerFrame = 16;
-	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeCarrierScrubTarget = RE::RENDER_TARGETS::kFADERUI;
+	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeCarrierScrubTarget = RE::RENDER_TARGETS::kMENUBG;
 
 	bool UsesVRRenderScalePostLoadSettle(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -6566,7 +6566,7 @@ namespace
 		return true;
 	}
 
-	bool ClearVRBFadeFaderUiTarget(ID3D11DeviceContext* a_context)
+	bool ClearVRBFadeMenuBgTarget(ID3D11DeviceContext* a_context, const Upscaling& a_upscaling)
 	{
 		auto* renderer = globals::game::renderer;
 		if (!a_context || !renderer)
@@ -6575,23 +6575,30 @@ namespace
 		constexpr auto targetId = kVRBFadeCarrierScrubTarget;
 		auto& target = renderer->GetRuntimeData().renderTargets[targetId];
 		if (!target.texture || !target.RTV) {
-			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "missing-fader-ui");
+			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "missing-menu-bg");
 			return false;
 		}
 
 		D3D11_TEXTURE2D_DESC desc{};
 		target.texture->GetDesc(&desc);
-		if (desc.Width != 16 || desc.Height != 16 || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) {
-			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "unsupported-fader-ui");
+		const auto& plan = a_upscaling.GetRuntimeResolutionPlan();
+		const uint32_t finalWidth = ClampDiagnosticDimension(plan.finalOutputSize.x);
+		const uint32_t finalHeight = ClampDiagnosticDimension(plan.finalOutputSize.y);
+		const bool finalSized = finalWidth != 0 &&
+		                        finalHeight != 0 &&
+		                        desc.Width == finalWidth &&
+		                        desc.Height == finalHeight;
+		if (!finalSized || desc.SampleDesc.Count != 1 || desc.ArraySize != 1 || desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM) {
+			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "unsupported-menu-bg");
 			return false;
 		}
 
-		constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
+		constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 1.f };
 		a_context->ClearRenderTargetView(target.RTV, clearColor);
 		return true;
 	}
 
-	void ApplyVRBFadeFaderUiScrubStage4(Upscaling& a_upscaling, const char* a_reason)
+	void ApplyVRBFadeMenuBgScrubStage5(Upscaling& a_upscaling, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
 			return;
@@ -6602,14 +6609,14 @@ namespace
 			return;
 
 		const uint32_t frame = std::max(state->frameCount, 1u);
-		if (g_vrBFadeFaderUiScrubFrame.exchange(frame, std::memory_order_acq_rel) == frame)
+		if (g_vrBFadeMenuBgScrubFrame.exchange(frame, std::memory_order_acq_rel) == frame)
 			return;
 
-		if (!ClearVRBFadeFaderUiTarget(context))
+		if (!ClearVRBFadeMenuBgTarget(context, a_upscaling))
 			return;
 
 		g_vrBFadeCarrierScrubApplyCount.fetch_add(1, std::memory_order_acq_rel);
-		LogVRBFadeCarrierScrub("seed", "ClearRenderTargetView", "fader-ui-reset");
+		LogVRBFadeCarrierScrub("seed", "ClearRenderTargetView", "menu-bg-reset");
 	}
 
 	void LogVRKTotalMutationDiagnostics(
@@ -19767,7 +19774,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			false);
 		upscaling.CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
 		ObserveVRBFadeRenderScaleLoadState(upscaling, "main-post-entry");
-		ApplyVRBFadeFaderUiScrubStage4(upscaling, "main-post-entry");
+		ApplyVRBFadeMenuBgScrubStage5(upscaling, "main-post-entry");
 	}
 	upscaling.ApplyAAVRSVisualization();
 	upscaling.DisableAAVRSState();

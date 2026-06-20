@@ -32,6 +32,7 @@ namespace
 	// Core built-in menu names that always appear first in the menu list
 	constexpr std::array<const char*, 5> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", "Display" };
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
+	constexpr float FEATURE_VERSION_TEXT_OPACITY = 0.6f;
 
 	ImVec2 GetRestoreDefaultsIconSize()
 	{
@@ -130,12 +131,13 @@ namespace
 	}
 
 	/**
-	 * @brief Draws a feature header with the feature name in large text
+	 * @brief Draws a feature header with the feature name in large text and version in smaller text
 	 * @param featureName The display name of the feature
+	 * @param version The version string (can be empty)
 	 * @param description Short description shown below the title (single line, truncated if too long)
 	 * @return The height of just the title line (for button alignment)
 	 */
-	float DrawFeatureHeader(const std::string& featureName, const std::string& description = "")
+	float DrawFeatureHeader(const std::string& featureName, const std::string& version, const std::string& description = "")
 	{
 		auto& themeSettings = globals::menu->GetTheme();
 		auto& palette = themeSettings.Palette;
@@ -147,6 +149,8 @@ namespace
 			titleScale = ThemeManager::Constants::DEFAULT_FEATURE_TITLE_SCALE;
 		}
 		titleScale = std::clamp(titleScale, 1.0f, 3.0f);
+
+		ImVec2 startPos = ImGui::GetCursorScreenPos();
 
 		// Calculate title size and draw feature name with Title font
 		ImVec2 titleSize;
@@ -163,6 +167,35 @@ namespace
 
 		// Store the title-only height for return value
 		float titleOnlyHeight = titleSize.y;
+
+		if (!version.empty()) {
+			std::string formattedVersion = version;
+			std::replace(formattedVersion.begin(), formattedVersion.end(), '-', '.');
+
+			ImVec2 versionSize;
+			{
+				MenuFonts::FontRoleGuard bodyGuard(Menu::FontRole::Body);
+				versionSize = ImGui::CalcTextSize(("v" + formattedVersion).c_str());
+				versionSize.x *= titleScale;
+				versionSize.y *= titleScale;
+			}
+
+			const float versionX = startPos.x + titleSize.x + ImGui::GetStyle().ItemSpacing.x;
+			const float versionY = startPos.y + titleSize.y - versionSize.y;
+			ImGui::SetCursorScreenPos(ImVec2(versionX, versionY));
+
+			ImVec4 versionColor = palette.Text;
+			versionColor.w *= FEATURE_VERSION_TEXT_OPACITY;
+
+			{
+				MenuFonts::FontRoleGuard bodyGuard(Menu::FontRole::Body);
+				ImGui::SetWindowFontScale(titleScale);
+				ImGui::TextColored(versionColor, "v%s", formattedVersion.c_str());
+				ImGui::SetWindowFontScale(1.0f);
+			}
+
+			ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + titleSize.y + ImGui::GetStyle().ItemSpacing.y * 0.25f));
+		}
 
 		// Draw description if provided (wrapped to content width)
 		if (!description.empty()) {
@@ -624,7 +657,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	// Draw feature title and description on the left
 	// Returns title-only height for button alignment
-	float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), description);
+	float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), isLoaded ? feat->version : "", description);
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();

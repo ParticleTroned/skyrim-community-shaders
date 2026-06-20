@@ -43,11 +43,12 @@ namespace SharedData
 		float Glossiness;
 		float SpecularStrength;
 		float SubsurfaceScatteringAmount;
-		bool OverrideComplexGrassSettings;
+		uint OverrideComplexGrassSettings;
 
 		float BasicGrassBrightness;
+		uint EnableWrappedLighting;
 		float ComplexGrassThreshold;
-		float2 pad0;
+		float pad0;
 	};
 
 	struct CPMSettings
@@ -82,7 +83,8 @@ namespace SharedData
 	{
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
-		float2 pad0;
+		uint ContactShadowFlags;
+		uint ContactShadowParams;
 		uint4 ClusterSize;
 	};
 
@@ -129,6 +131,69 @@ namespace SharedData
 		float RippleBreadth;
 		float RippleLifetimeRcp;
 		float pad0;
+	};
+
+	// Preserved to keep the SE branch wetterness payload aligned even where the
+	// current shared shaders still read the legacy WetnessEffects block directly.
+	struct WetternessShaderSettings
+	{
+		uint EnableWetterness;
+		float MaxRainWetness;
+		float MaxPuddleWetness;
+		float MaxShoreWetness;
+		uint ShoreRange;
+		float PuddleRadius;
+		float PuddleMaxAngle;
+		float PuddleMinWetness;
+		float MinRainWetness;
+		float SkinWetness;
+		float PuddleLayout;
+		float StoneDryingMultiplier;
+		float DirtDryingMultiplier;
+		float GrassDryingMultiplier;
+		uint EnableRaindropFx;
+		uint EnableSplashes;
+		uint EnableRipples;
+		uint EnableModernWetReflection;
+		uint EnableLegacyWetReflection;
+		float WetIndirectSpecularScale;
+		float RaindropFxRange;
+		float RaindropGridSize;
+		float RaindropInterval;
+		float RaindropChance;
+		float SplashesLifetime;
+		float SplashesStrength;
+		float SplashesMinRadius;
+		float SplashesMaxRadius;
+		float RippleStrength;
+		float RippleRadius;
+		float RippleBreadth;
+		float RippleLifetime;
+		float PostRainPuddleWaterStrength;
+		float RaindropTransitionFalloff;
+		float WetDarkeningStrength;
+		float WetHighlightReduction;
+		uint EnableForwardReflectionBias;
+		uint EnableVanillaReflectionCompensation;
+		float WetFilmSpecularFloorScale;
+		float ShorePersistentDarkeningStrength;
+	};
+
+	struct WetternessSettings
+	{
+		row_major float4x4 OcclusionViewProj;
+
+		float Time;
+		float Raining;
+		float Wetness;
+		float PuddleWetness;
+
+		WetternessShaderSettings settings;
+
+		uint PackedPostRainControl;
+		uint PackedRainReflectionControl;
+		uint WetnessDistanceFadeRangePacked;
+		float RainContactWetnessScale;
 	};
 
 	struct SkylightingSettings
@@ -245,7 +310,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint pad0;
+		uint enableAdaptiveBrightness;
 	};
 
 	struct TerrainBlendingSettings
@@ -298,7 +363,9 @@ namespace SharedData
 	struct TruePBRSettings
 	{
 		float VertexAOStrength;
-		uint3 pad;
+		float PBRMetalReflectionScale;
+		float PBRMetalHighlightScale;
+		uint pad0;
 	};
 
 	struct SkinData
@@ -320,6 +387,7 @@ namespace SharedData
 		TerraOccSettings terraOccSettings;
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
+		WetternessSettings wetternessSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;

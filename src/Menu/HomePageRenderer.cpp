@@ -123,7 +123,7 @@ void HomePageRenderer::RenderWelcomeSection()
 	const float titleBlockY = ImGui::GetCursorPosY();
 	const float titleBlockHeight = ImGui::GetTextLineHeightWithSpacing();
 	const float baseLineHeightWithSpacing = titleBlockHeight / TITLE_FONT_SCALE;
-	const char* forkTitle = "CS Particle Lights Fork";
+	const char* forkTitle = "Particle Lights Fork";
 	const std::string forkVersion = "PL3.15-SE";
 	const float titleLineGap = 2.0f * scale;
 	const float titleAreaBottomY = titleBlockY + titleBlockHeight + ImGui::GetStyle().ItemSpacing.y +
@@ -494,7 +494,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 
 	// Version text - two lines, both centered (reduced spacing between lines)
 	const char* versionLine1 = "This appears to be a new install, update, or";
-	const char* versionLine2 = "reinstallation of CS Particle Lights Fork.";
+	const char* versionLine2 = "reinstallation of Particle Lights Fork.";
 
 	centerText(versionLine1);
 	ImGui::Text("%s", versionLine1);

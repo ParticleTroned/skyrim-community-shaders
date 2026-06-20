@@ -175,7 +175,7 @@ namespace
 	std::atomic_uint32_t g_vrBFadeCarrierScrubApplyCount{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticFrame{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticCount{ 0 };
-	std::atomic_uint32_t g_vrBFadeUiTAAHistoryScrubFrame{ 0 };
+	std::atomic_uint32_t g_vrBFadeFaderUiScrubFrame{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
@@ -183,11 +183,7 @@ namespace
 	constexpr uint32_t kVRBFadeCarrierScrubWindowFrames = 180;
 	constexpr uint32_t kVRBFadeCarrierScrubMaxSeeds = 8;
 	constexpr uint32_t kVRBFadeCarrierScrubDiagnosticMaxLogsPerFrame = 16;
-	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeUiTAAHistoryPrimaryTarget = RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1;
-	constexpr std::array<RE::RENDER_TARGETS::RENDER_TARGET, 2> kVRBFadeUiTAAHistoryTargets{
-		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_1,
-		RE::RENDER_TARGETS::kTEMPORAL_AA_UI_ACCUMULATION_2
-	};
+	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeCarrierScrubTarget = RE::RENDER_TARGETS::kFADERUI;
 
 	bool UsesVRRenderScalePostLoadSettle(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -6439,7 +6435,7 @@ namespace
 		const char* a_source,
 		const char* a_reason,
 		const VRBFadeCarrierRegionStats* a_stats = nullptr,
-		RE::RENDER_TARGETS::RENDER_TARGET a_target = kVRBFadeUiTAAHistoryPrimaryTarget)
+		RE::RENDER_TARGETS::RENDER_TARGET a_target = kVRBFadeCarrierScrubTarget)
 	{
 		const auto* state = globals::state;
 		const uint32_t frame = state ? std::max(state->frameCount, 1u) : 0u;
@@ -6570,24 +6566,23 @@ namespace
 		return true;
 	}
 
-	bool ClearVRBFadeUiTAAHistoryTarget(
-		ID3D11DeviceContext* a_context,
-		RE::RENDER_TARGETS::RENDER_TARGET a_target)
+	bool ClearVRBFadeFaderUiTarget(ID3D11DeviceContext* a_context)
 	{
 		auto* renderer = globals::game::renderer;
 		if (!a_context || !renderer)
 			return false;
 
-		auto& target = renderer->GetRuntimeData().renderTargets[a_target];
+		constexpr auto targetId = kVRBFadeCarrierScrubTarget;
+		auto& target = renderer->GetRuntimeData().renderTargets[targetId];
 		if (!target.texture || !target.RTV) {
-			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "missing-ui-taa-history", nullptr, a_target);
+			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "missing-fader-ui");
 			return false;
 		}
 
 		D3D11_TEXTURE2D_DESC desc{};
 		target.texture->GetDesc(&desc);
-		if (desc.Width < 2 || desc.Height < 1 || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) {
-			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "unsupported-ui-taa-history", nullptr, a_target);
+		if (desc.Width != 16 || desc.Height != 16 || desc.SampleDesc.Count != 1 || desc.ArraySize != 1) {
+			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "unsupported-fader-ui");
 			return false;
 		}
 
@@ -6596,7 +6591,7 @@ namespace
 		return true;
 	}
 
-	void ApplyVRBFadeUiTAAHistoryScrubStage3(Upscaling& a_upscaling, const char* a_reason)
+	void ApplyVRBFadeFaderUiScrubStage4(Upscaling& a_upscaling, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
 			return;
@@ -6607,32 +6602,14 @@ namespace
 			return;
 
 		const uint32_t frame = std::max(state->frameCount, 1u);
-		if (g_vrBFadeUiTAAHistoryScrubFrame.exchange(frame, std::memory_order_acq_rel) == frame)
+		if (g_vrBFadeFaderUiScrubFrame.exchange(frame, std::memory_order_acq_rel) == frame)
 			return;
 
-		std::array<bool, kVRBFadeUiTAAHistoryTargets.size()> clearedTargets{};
-		bool clearedAny = false;
-		for (size_t i = 0; i < kVRBFadeUiTAAHistoryTargets.size(); ++i) {
-			clearedTargets[i] = ClearVRBFadeUiTAAHistoryTarget(context, kVRBFadeUiTAAHistoryTargets[i]);
-			clearedAny = clearedAny || clearedTargets[i];
-		}
-
-		if (!clearedAny) {
-			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "no-ui-taa-history-targets");
+		if (!ClearVRBFadeFaderUiTarget(context))
 			return;
-		}
 
 		g_vrBFadeCarrierScrubApplyCount.fetch_add(1, std::memory_order_acq_rel);
-		for (size_t i = 0; i < kVRBFadeUiTAAHistoryTargets.size(); ++i) {
-			if (clearedTargets[i]) {
-				LogVRBFadeCarrierScrub(
-					"seed",
-					"ClearRenderTargetView",
-					"ui-taa-history-reset",
-					nullptr,
-					kVRBFadeUiTAAHistoryTargets[i]);
-			}
-		}
+		LogVRBFadeCarrierScrub("seed", "ClearRenderTargetView", "fader-ui-reset");
 	}
 
 	void LogVRKTotalMutationDiagnostics(
@@ -19790,7 +19767,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			false);
 		upscaling.CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
 		ObserveVRBFadeRenderScaleLoadState(upscaling, "main-post-entry");
-		ApplyVRBFadeUiTAAHistoryScrubStage3(upscaling, "main-post-entry");
+		ApplyVRBFadeFaderUiScrubStage4(upscaling, "main-post-entry");
 	}
 	upscaling.ApplyAAVRSVisualization();
 	upscaling.DisableAAVRSState();

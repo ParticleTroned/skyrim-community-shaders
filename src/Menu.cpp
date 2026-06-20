@@ -214,7 +214,7 @@ namespace
 		{ "NotAllowed", ImGuiMouseCursor_NotAllowed },
 	};
 
-	bool HasFeatureIni(const Feature* feature)
+	bool HasFeatureIni(Feature* feature)
 	{
 		if (!feature) {
 			return false;

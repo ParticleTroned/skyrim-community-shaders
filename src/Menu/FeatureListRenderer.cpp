@@ -34,7 +34,7 @@ namespace
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 	constexpr float FEATURE_VERSION_TEXT_OPACITY = 0.6f;
 
-	bool HasFeatureIni(const Feature* feature)
+	bool HasFeatureIni(Feature* feature)
 	{
 		if (!feature) {
 			return false;

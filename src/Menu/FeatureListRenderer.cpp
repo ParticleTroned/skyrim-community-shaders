@@ -127,13 +127,12 @@ namespace
 	}
 
 	/**
-	 * @brief Draws a feature header with the feature name in large text and version in smaller text
+	 * @brief Draws a feature header with the feature name in large text
 	 * @param featureName The display name of the feature
-	 * @param version The version string (can be empty)
 	 * @param description Short description shown below the title (single line, truncated if too long)
 	 * @return The height of just the title line (for button alignment)
 	 */
-	float DrawFeatureHeader(const std::string& featureName, const std::string& version, const std::string& description = "")
+	float DrawFeatureHeader(const std::string& featureName, const std::string& description = "")
 	{
 		auto& themeSettings = globals::menu->GetTheme();
 		auto& palette = themeSettings.Palette;
@@ -145,8 +144,6 @@ namespace
 			titleScale = ThemeManager::Constants::DEFAULT_FEATURE_TITLE_SCALE;
 		}
 		titleScale = std::clamp(titleScale, 1.0f, 3.0f);
-
-		ImVec2 startPos = ImGui::GetCursorScreenPos();
 
 		// Calculate title size and draw feature name with Title font
 		ImVec2 titleSize;
@@ -163,42 +160,6 @@ namespace
 
 		// Store the title-only height for return value
 		float titleOnlyHeight = titleSize.y;
-
-		// Draw version on same line with Body font, bottom-aligned if version exists
-		if (!version.empty()) {
-			// Format version: replace dashes with dots for consistency
-			std::string formattedVersion = version;
-			std::replace(formattedVersion.begin(), formattedVersion.end(), '-', '.');
-
-			// Calculate version text size at scaled size
-			ImVec2 versionSize;
-			{
-				MenuFonts::FontRoleGuard bodyGuard(Menu::FontRole::Body);
-				versionSize = ImGui::CalcTextSize(("v" + formattedVersion).c_str());
-				versionSize.x *= titleScale;
-				versionSize.y *= titleScale;
-			}
-
-			// Position version text: right of title, bottom-aligned
-			float versionX = startPos.x + titleSize.x + ImGui::GetStyle().ItemSpacing.x;
-			float versionY = startPos.y + titleSize.y - versionSize.y;
-
-			ImGui::SetCursorScreenPos(ImVec2(versionX, versionY));
-
-			// Use dimmed text color for version
-			ImVec4 versionColor = palette.Text;
-			versionColor.w *= ThemeManager::Constants::VERSION_TEXT_OPACITY;
-
-			{
-				MenuFonts::FontRoleGuard bodyGuard(Menu::FontRole::Body);
-				ImGui::SetWindowFontScale(titleScale);
-				ImGui::TextColored(versionColor, "v%s", formattedVersion.c_str());
-				ImGui::SetWindowFontScale(1.0f);
-			}
-
-			// Reset cursor to after the title block
-			ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + titleSize.y + ImGui::GetStyle().ItemSpacing.y * 0.25f));
-		}
 
 		// Draw description if provided (wrapped to content width)
 		if (!description.empty()) {
@@ -546,20 +507,35 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		}
 	}
 
+	ImGui::PushID(featureName.c_str());
+	bool bootEnabled = !isDisabled;
+	if (hasFailedMessage) {
+		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
+	}
+	if (Util::FeatureToggle("##BootToggleList", &bootEnabled)) {
+		bool newState = feat->ToggleAtBootSetting();
+		logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
+	}
+	if (hasFailedMessage) {
+		ImGui::PopStyleColor();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Toggle feature loading at boot.\n"
+			"Current state: %s\n"
+			"Restart required for changes to take effect.\n"
+			"Disabling removes performance impact.",
+			bootEnabled ? "Enabled" : "Disabled");
+	}
+	ImGui::SameLine();
+
 	// Create selectable item with semantic color
 	ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 	if (ImGui::Selectable(fmt::format(" {} ", feat->GetName()).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns)) {
 		selectedMenuRef = listId;
 	}
 	ImGui::PopStyleColor();
-
-	// Display version if loaded
-	if (isLoaded) {
-		ImGui::SameLine();
-		std::string formattedVersion = feat->version;
-		std::replace(formattedVersion.begin(), formattedVersion.end(), '-', '.');
-		ImGui::TextDisabled(fmt::format("({})", formattedVersion).c_str());
-	}
+	ImGui::PopID();
 }
 
 void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
@@ -621,24 +597,21 @@ bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string&
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
 {
-	auto& themeSettings = globals::menu->GetSettings().Theme;
 	const auto featureName = feat->GetShortName();
 
 	// Calculate action button widths
 	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
-	float buttonSpacing = ThemeManager::Constants::BUTTON_SPACING;
 
 	const char* overrideButtonText = "Apply Override";
-	float bootToggleWidth = ImGui::GetFrameHeight() * 1.6f;
 	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
 
 	// Check if override is available for this feature
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
-	float totalButtonWidth = bootToggleWidth;
+	float totalButtonWidth = 0.0f;
 	if (!isDisabled && isLoaded && hasOverrides) {
-		totalButtonWidth += overrideButtonWidth + buttonSpacing;
+		totalButtonWidth = overrideButtonWidth;
 	}
 
 	// Get available content width for positioning
@@ -651,9 +624,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	auto [description, keyFeatures] = feat->GetFeatureSummary();
 	(void)keyFeatures;  // Not used for subtitle display
 
-	// Draw feature title, version, and description on the left
+	// Draw feature title and description on the left
 	// Returns title-only height for button alignment
-	float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), isLoaded ? feat->version : "", description);
+	float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), description);
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
@@ -664,37 +637,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Calculate Y position to middle-align buttons with title text only (not description)
 	float buttonY = titleStartPos.y + (titleOnlyHeight - buttonHeight) * 0.5f;
 
-	ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - totalButtonWidth, buttonY));
-
-	// Enable/Disable at boot toggle
-	bool bootEnabled = !isDisabled;
-
-	// Apply disabled styling if feature has failed to load
-	if (!feat->failedLoadedMessage.empty()) {
-		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
-	}
-
-	if (Util::FeatureToggle("##BootToggle", &bootEnabled)) {
-		bool newState = feat->ToggleAtBootSetting();
-		logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
-	}
-
-	if (!feat->failedLoadedMessage.empty()) {
-		ImGui::PopStyleColor();
-	}
-
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Toggle feature loading at boot.\n"
-			"Current state: %s\n"
-			"Restart required for changes to take effect.\n"
-			"Disabling removes performance impact.",
-			bootEnabled ? "Enabled" : "Disabled");
-	}
-
 	// Apply Override button (when feature has available overrides)
 	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SameLine();
+		ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - totalButtonWidth, buttonY));
 		if (sceneControlled)
 			ImGui::BeginDisabled();
 		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
@@ -732,7 +677,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (isDisabled) {
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled at boot.");
 		ImGui::Spacing();
-		ImGui::Text("Enable the feature above to access its configuration options.");
+		ImGui::Text("Enable the feature in the feature list to access its configuration options.");
 		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
 			ImGui::Spacing();
 			ImGui::TextColored(
@@ -881,14 +826,16 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 		windowPos.y + windowSize.y - frameSize.y - style.WindowPadding.y));
 
 	auto iconButtonStyle = Util::TransparentIconButtonStyle();
+	const std::string restoreDefaultsButtonId = std::format("##RestoreDefaults{}", feat->GetShortName());
+	const std::string restoreDefaultsTextButtonId = std::format("R##RestoreDefaults{}", feat->GetShortName());
 
 	auto& menu = *globals::menu;
 	if (menu.uiIcons.featureSettingRevert.texture) {
-		if (ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize)) {
+		if (Util::ImageButtonWithFlash(restoreDefaultsButtonId.c_str(), menu.uiIcons.featureSettingRevert.texture, iconSize)) {
 			feat->RestoreDefaultSettings();
 		}
 	} else {
-		if (ImGui::Button("R##RestoreDefaults", iconSize)) {
+		if (Util::ButtonWithFlash(restoreDefaultsTextButtonId.c_str(), iconSize)) {
 			feat->RestoreDefaultSettings();
 		}
 	}

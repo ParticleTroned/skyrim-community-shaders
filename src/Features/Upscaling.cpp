@@ -9456,6 +9456,18 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	}
 	if (globals::game::isVR &&
 		vendorUpscalingMethod &&
+		(IsMainOrLoadingMenuContextActive() || IsVRLoadingPresentationTailActive(state))) {
+		resolutionScale = { 1.0f, 1.0f };
+		jitter = { 0.0f, 0.0f };
+		a_viewport->projectionPosScaleX = 0.0f;
+		a_viewport->projectionPosScaleY = 0.0f;
+		PrepareFullResolutionPostProcessing();
+		CheckResources(upscaleMethod);
+		RefreshRuntimeResolutionState();
+		return;
+	}
+	if (globals::game::isVR &&
+		vendorUpscalingMethod &&
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
 		IsVRLoadingPresentationContextActive(state)) {
 		resolutionScale = { 1.0f, 1.0f };

@@ -5,6 +5,7 @@
 
 #include "Deferred.h"
 #include "FoveatedCommon.h"
+#include "LocationContext.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
@@ -1344,9 +1345,9 @@ void ScreenSpaceGI::DrawSSGI()
 	static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
 	*enableSSAO = settings.EnableVanillaSSAO;
 
-	const bool isInterior = Util::IsInterior();
-	const bool allowAOSpace = !settings.AOInteriorsOnly || isInterior;
-	const bool allowILSpace = !settings.ILInteriorsOnly || isInterior;
+	const auto location = LocationContext::Get();
+	const bool allowAOSpace = LocationContext::AllowsInteriorOnly(settings.AOInteriorsOnly, location);
+	const bool allowILSpace = LocationContext::AllowsInteriorOnly(settings.ILInteriorsOnly, location);
 	const bool runILPath = !foveatedSsgiActive && IsGIActive() && allowILSpace;
 	const bool temporalEnabled = !foveatedSsgiActive && settings.EnableTemporalDenoiser;
 	const bool runRadianceDisoccPass = !foveatedSsgiActive && (runILPath || temporalEnabled);

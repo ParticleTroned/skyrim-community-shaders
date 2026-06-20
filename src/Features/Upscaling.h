@@ -872,7 +872,6 @@ public:
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
-	std::atomic<bool> vrRenderScaleInitialOpenVRSizeObserved{ false };
 	std::atomic<bool> vrRenderScaleBootSessionActive{ false };
 	std::atomic<bool> pendingVRRenderScaleBootExitCleanup{ false };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };

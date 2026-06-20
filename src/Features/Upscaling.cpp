@@ -10213,17 +10213,7 @@ struct BSOpenVR_GetRenderTargetSize
 		uint32_t perfModeWidth = trueEyeWidth;
 		uint32_t perfModeHeight = trueEyeHeight;
 		const bool allowPerfModeBootLatchCreate = upscaling.ConsumePerfModeBootLatchCreate();
-		const bool initialOpenVRSize = !upscaling.vrRenderScaleInitialOpenVRSizeObserved.exchange(true, std::memory_order_acq_rel);
-		if (initialOpenVRSize &&
-			allowPerfModeBootLatchCreate &&
-			ClampToggleUInt(upscaling.settings.renderScaleMode) != 0 &&
-			ClampToggleUInt(upscaling.settings.perfMode) != 0 &&
-			IsRenderScaleQualityMode(ClampQualityModeUInt(upscaling.settings.qualityMode))) {
-			upscaling.MarkVRRenderScaleBootSessionActive("initial OpenVR render-target size requested render scale");
-		}
 		if (upscaling.TryGetPerfModeOpenVRRenderTargetSize(perfModeWidth, perfModeHeight, allowPerfModeBootLatchCreate)) {
-			if (initialOpenVRSize && allowPerfModeBootLatchCreate)
-				upscaling.MarkVRRenderScaleBootSessionActive("initial OpenVR render-target size latched render scale");
 			*a_width = perfModeWidth;
 			*a_height = perfModeHeight;
 		}
@@ -11350,7 +11340,10 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 	if (a_allowCreate && DeferVRPerfModeBootLatchForPendingDLSS(*this))
 		return false;
 
-	return perfMode.TryGetOpenVRRenderTargetSize(settings, GetUpscaleMethod(), a_width, a_height, a_allowCreate);
+	const bool latched = perfMode.TryGetOpenVRRenderTargetSize(settings, GetUpscaleMethod(), a_width, a_height, a_allowCreate);
+	if (latched && a_allowCreate)
+		MarkVRRenderScaleBootSessionActive("successful boot render-target size latch");
+	return latched;
 }
 
 bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const

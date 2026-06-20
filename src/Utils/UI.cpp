@@ -572,6 +572,29 @@ namespace Util
 				color.w);
 		}
 
+		ButtonColors BuildAccentButtonColors(
+			const ImVec4& accent,
+			float normalBlend,
+			float hoveredBlend,
+			float activeBlend,
+			float normalAlphaOffset,
+			float hoveredAlphaOffset,
+			float activeAlphaOffset)
+		{
+			const auto& theme = Menu::GetSingleton()->GetTheme();
+			const ImVec4 base = theme.Palette.FrameBorder;
+			const float baseAlpha = base.w;
+			const auto adjustedAlpha = [baseAlpha](float offset, float minAlpha, float maxAlpha) {
+				return std::clamp(baseAlpha + offset, minAlpha, maxAlpha);
+			};
+
+			return {
+				Color::Blend(base, accent, normalBlend, adjustedAlpha(normalAlphaOffset, 0.52f, 0.78f)),
+				Color::Blend(base, accent, hoveredBlend, adjustedAlpha(hoveredAlphaOffset, 0.60f, 0.86f)),
+				Color::Blend(base, accent, activeBlend, adjustedAlpha(activeAlphaOffset, 0.68f, 0.92f))
+			};
+		}
+
 		template <typename StyleFn, typename ButtonFn>
 		bool InvokeStyledButton(StyleFn styleProvider, ButtonFn buttonCall)
 		{
@@ -581,23 +604,13 @@ namespace Util
 
 		ButtonColors BuildPresetButtonColors(bool active)
 		{
-			const auto& theme = Menu::GetSingleton()->GetTheme();
-			const ImVec4 base = theme.Palette.FrameBorder;
-			const ImVec4 accent = theme.StatusPalette.InfoColor;
+			const ImVec4 accent = Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor;
 
 			if (active) {
-				return {
-					Color::Blend(base, accent, 0.55f, 1.0f),
-					Color::Blend(base, accent, 0.70f, 1.0f),
-					Color::Blend(base, accent, 0.84f, 1.0f)
-				};
+				return BuildAccentButtonColors(accent, 0.34f, 0.46f, 0.58f, 0.06f, 0.14f, 0.22f);
 			}
 
-			return {
-				Color::Blend(base, accent, 0.08f, 0.90f),
-				Color::Blend(base, accent, 0.18f, 0.96f),
-				Color::Blend(base, accent, 0.30f, 1.0f)
-			};
+			return BuildAccentButtonColors(accent, 0.12f, 0.22f, 0.34f, 0.00f, 0.08f, 0.16f);
 		}
 	}
 
@@ -615,12 +628,13 @@ namespace Util
 		{
 			const auto& theme = Menu::GetSingleton()->GetTheme();
 			const ImVec4 base = theme.Palette.FrameBorder;
+			const float baseAlpha = base.w;
 
 			return {
 				base,
-				Color::Blend(base, accent, 0.24f, 0.92f),
-				Color::Blend(base, accent, 0.36f, 0.96f),
-				Color::WithAlpha(accent, 1.0f)
+				Color::Blend(base, accent, 0.22f, std::clamp(baseAlpha + 0.06f, 0.62f, 0.84f)),
+				Color::Blend(base, accent, 0.34f, std::clamp(baseAlpha + 0.14f, 0.70f, 0.90f)),
+				Color::WithAlpha(accent, 0.92f)
 			};
 		}
 
@@ -640,9 +654,8 @@ namespace Util
 
 	StyledButtonWrapper StatusButtonStyle(const ImVec4& color)
 	{
-		auto hover = ButtonHelpers::AdjustButtonColor(color, ThemeManager::Constants::BUTTON_HOVER_BRIGHTEN);
-		auto active = ButtonHelpers::AdjustButtonColor(color, ThemeManager::Constants::BUTTON_ACTIVE_BRIGHTEN);
-		return StyledButtonWrapper(color, hover, active);
+		const auto colors = ButtonHelpers::BuildAccentButtonColors(color, 0.22f, 0.34f, 0.46f, 0.02f, 0.10f, 0.18f);
+		return StyledButtonWrapper(colors.normal, colors.hovered, colors.active);
 	}
 
 	StyledButtonWrapper DestructiveButtonStyle()
@@ -662,9 +675,8 @@ namespace Util
 
 	StyledButtonWrapper StatusTextButtonStyle(const ImVec4& color)
 	{
-		return StyledButtonWrapper(color,
-			Color::WithAlpha(color, ThemeManager::Constants::BUTTON_STATUS_TEXT_HOVER_ALPHA),
-			Color::WithAlpha(color, ThemeManager::Constants::BUTTON_STATUS_TEXT_ACTIVE_ALPHA));
+		const auto colors = ButtonHelpers::BuildAccentButtonColors(color, 0.14f, 0.24f, 0.34f, -0.02f, 0.06f, 0.14f);
+		return StyledButtonWrapper(colors.normal, colors.hovered, colors.active);
 	}
 
 	StyledButtonWrapper SuccessButtonStyle()
@@ -2150,8 +2162,8 @@ namespace Util
 		const ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
 		const ImVec4 borderColor = Color::Blend(theme.Palette.FrameBorder, theme.Palette.Background, active ? 0.02f : 0.06f, active ? 1.0f : 0.96f);
 		const ImVec4 knobColor = active ?
-		                             Color::WithAlpha(accent, 1.0f) :
-		                             Color::WithAlpha(Color::Blend(accent, theme.Palette.FrameBorder, 0.52f, 1.0f), 0.68f);
+		                             Color::Blend(theme.Palette.Text, trackColor, 0.08f, 0.96f) :
+		                             Color::Blend(theme.Palette.Text, trackColor, 0.18f, 0.88f);
 
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 hitMin = ImGui::GetItemRectMin();

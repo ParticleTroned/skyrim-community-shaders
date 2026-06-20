@@ -48,10 +48,10 @@
         "TooltipHoverDelay": 0.5,
         "BackgroundBlurEnabled": false,
         "Palette": {
-            "Background": [0.035, 0.038, 0.04, 0.94],
+            "Background": [0.035, 0.038, 0.04, 0.4],
             "Text": [0.92, 0.91, 0.86, 1.0],
             "WindowBorder": [0.42, 0.4, 0.35, 0.8],
-            "FrameBorder": [0.095, 0.1, 0.102, 0.88],
+            "FrameBorder": [0.082, 0.086, 0.089, 0.62],
             "Separator": [0.34, 0.33, 0.3, 0.62],
             "ResizeGrip": [0.78, 0.74, 0.64, 0.7]
         },

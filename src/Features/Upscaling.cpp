@@ -39,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
@@ -175,7 +176,10 @@ namespace
 	std::atomic_uint32_t g_vrBFadeCarrierScrubApplyCount{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticFrame{ 0 };
 	std::atomic_uint32_t g_vrBFadeCarrierScrubDiagnosticCount{ 0 };
-	std::atomic_uint32_t g_vrBFadeMenuBgScrubFrame{ 0 };
+	std::atomic_uint32_t g_vrBFadeTempCopyPatchFrame{ 0 };
+	winrt::com_ptr<ID3D11Texture2D> g_vrBFadeTempCopyPatchScratch;
+	ID3D11Device* g_vrBFadeTempCopyPatchScratchDevice = nullptr;
+	D3D11_TEXTURE2D_DESC g_vrBFadeTempCopyPatchScratchDesc{};
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
@@ -183,7 +187,7 @@ namespace
 	constexpr uint32_t kVRBFadeCarrierScrubWindowFrames = 180;
 	constexpr uint32_t kVRBFadeCarrierScrubMaxSeeds = 8;
 	constexpr uint32_t kVRBFadeCarrierScrubDiagnosticMaxLogsPerFrame = 16;
-	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeCarrierScrubTarget = RE::RENDER_TARGETS::kMENUBG;
+	constexpr RE::RENDER_TARGETS::RENDER_TARGET kVRBFadeCarrierScrubTarget = RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY;
 
 	bool UsesVRRenderScalePostLoadSettle(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
@@ -6293,6 +6297,8 @@ namespace
 		uint32_t height = 0;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 		uint32_t blockSize = 0;
+		uint32_t controlX = 0;
+		uint32_t controlY = 0;
 		float topLeftDarkRatio = 0.0f;
 		float controlDarkRatio = 0.0f;
 		uint64_t topLeftHash = 0;
@@ -6376,6 +6382,8 @@ namespace
 		const uint32_t controlY = targetDesc.Height > blockSize ?
 			std::min(targetDesc.Height - blockSize, std::max(blockSize, targetDesc.Height / 2u)) :
 			0u;
+		a_stats.controlX = controlX;
+		a_stats.controlY = controlY;
 
 		const D3D11_BOX topLeftBox{ 0, 0, 0, blockSize, blockSize, 1 };
 		const D3D11_BOX controlBox{ controlX, controlY, 0, controlX + blockSize, controlY + blockSize, 1 };
@@ -6566,57 +6574,324 @@ namespace
 		return true;
 	}
 
-	bool ClearVRBFadeMenuBgTarget(ID3D11DeviceContext* a_context, const Upscaling& a_upscaling)
+	bool IsVRBFadeImageSpaceTempCopyConsumerDraw(ID3D11DeviceContext* a_context)
 	{
-		auto* renderer = globals::game::renderer;
-		if (!a_context || !renderer)
+		if (!a_context)
 			return false;
 
-		constexpr auto targetId = kVRBFadeCarrierScrubTarget;
-		auto& target = renderer->GetRuntimeData().renderTargets[targetId];
-		if (!target.texture || !target.RTV) {
-			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "missing-menu-bg");
-			return false;
-		}
-
-		D3D11_TEXTURE2D_DESC desc{};
-		target.texture->GetDesc(&desc);
-		const auto& plan = a_upscaling.GetRuntimeResolutionPlan();
-		const uint32_t finalWidth = ClampDiagnosticDimension(plan.finalOutputSize.x);
-		const uint32_t finalHeight = ClampDiagnosticDimension(plan.finalOutputSize.y);
-		const bool finalSized = finalWidth != 0 &&
-		                        finalHeight != 0 &&
-		                        desc.Width == finalWidth &&
-		                        desc.Height == finalHeight;
-		if (!finalSized || desc.SampleDesc.Count != 1 || desc.ArraySize != 1 || desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM) {
-			LogVRBFadeCarrierScrub("skip", "ClearRenderTargetView", "unsupported-menu-bg");
+		ID3D11RenderTargetView* rtv = nullptr;
+		a_context->OMGetRenderTargets(1, &rtv, nullptr);
+		auto rtvRelease = ScopeExit([&]() {
+			if (rtv)
+				rtv->Release();
+		});
+		VRMenuCompositionTargetMatch destination{};
+		if (!rtv ||
+		    !TryResolveVRMenuCompositionView(rtv, destination) ||
+		    destination.target != RE::RENDER_TARGETS::kTOTAL) {
 			return false;
 		}
 
-		constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 1.f };
-		a_context->ClearRenderTargetView(target.RTV, clearColor);
+		std::array<ID3D11ShaderResourceView*, 4> psSRVs{};
+		a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+		auto releaseSRVs = ScopeExit([&]() {
+			for (auto* srv : psSRVs) {
+				if (srv)
+					srv->Release();
+			}
+		});
+
+		for (auto* srv : psSRVs) {
+			VRMenuCompositionTargetMatch source{};
+			if (srv &&
+			    TryResolveVRMenuCompositionView(srv, source) &&
+			    source.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool EnsureVRBFadeTempCopyPatchScratch(ID3D11Device* a_device, const D3D11_TEXTURE2D_DESC& a_desc, uint32_t a_blockSize)
+	{
+		if (!a_device || a_blockSize == 0)
+			return false;
+
+		const bool scratchMatches =
+			g_vrBFadeTempCopyPatchScratch &&
+			g_vrBFadeTempCopyPatchScratchDevice == a_device &&
+			g_vrBFadeTempCopyPatchScratchDesc.Width == a_blockSize &&
+			g_vrBFadeTempCopyPatchScratchDesc.Height == a_blockSize &&
+			g_vrBFadeTempCopyPatchScratchDesc.Format == a_desc.Format &&
+			g_vrBFadeTempCopyPatchScratchDesc.SampleDesc.Count == a_desc.SampleDesc.Count &&
+			g_vrBFadeTempCopyPatchScratchDesc.SampleDesc.Quality == a_desc.SampleDesc.Quality;
+		if (scratchMatches)
+			return true;
+
+		D3D11_TEXTURE2D_DESC scratchDesc{};
+		scratchDesc.Width = a_blockSize;
+		scratchDesc.Height = a_blockSize;
+		scratchDesc.MipLevels = 1;
+		scratchDesc.ArraySize = 1;
+		scratchDesc.Format = a_desc.Format;
+		scratchDesc.SampleDesc = a_desc.SampleDesc;
+		scratchDesc.Usage = D3D11_USAGE_DEFAULT;
+
+		winrt::com_ptr<ID3D11Texture2D> scratch;
+		if (FAILED(a_device->CreateTexture2D(&scratchDesc, nullptr, scratch.put())) || !scratch)
+			return false;
+
+		g_vrBFadeTempCopyPatchScratch = std::move(scratch);
+		g_vrBFadeTempCopyPatchScratchDevice = a_device;
+		g_vrBFadeTempCopyPatchScratchDesc = scratchDesc;
 		return true;
 	}
 
-	void ApplyVRBFadeMenuBgScrubStage5(Upscaling& a_upscaling, const char* a_reason)
+	bool WriteVRBFadeNeutralPixel(DXGI_FORMAT a_format, uint8_t* a_pixel)
+	{
+		if (!a_pixel)
+			return false;
+
+		switch (a_format) {
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+			a_pixel[0] = 0x80u;
+			a_pixel[1] = 0x80u;
+			a_pixel[2] = 0x80u;
+			a_pixel[3] = 0xFFu;
+			return true;
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+			a_pixel[0] = 0x80u;
+			a_pixel[1] = 0x80u;
+			a_pixel[2] = 0x80u;
+			a_pixel[3] = 0xFFu;
+			return true;
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		{
+			const std::array<uint16_t, 4> halfValues{ 0x3800u, 0x3800u, 0x3800u, 0x3C00u };
+			std::memcpy(a_pixel, halfValues.data(), sizeof(halfValues));
+			return true;
+		}
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+		{
+			const std::array<float, 4> values{ 0.5f, 0.5f, 0.5f, 1.0f };
+			std::memcpy(a_pixel, values.data(), sizeof(values));
+			return true;
+		}
+		default:
+			return false;
+		}
+	}
+
+	bool UploadVRBFadeNeutralPatchBlock(ID3D11DeviceContext* a_context, ID3D11Texture2D* a_scratch, DXGI_FORMAT a_format, uint32_t a_blockSize)
+	{
+		if (!a_context || !a_scratch || a_blockSize == 0)
+			return false;
+
+		const uint32_t bytesPerPixel = GetVRKTotalFingerprintBytesPerPixel(a_format);
+		if (bytesPerPixel == 0)
+			return false;
+
+		const uint32_t rowPitch = a_blockSize * bytesPerPixel;
+		std::vector<uint8_t> pixels(static_cast<size_t>(rowPitch) * a_blockSize);
+		for (uint32_t y = 0; y < a_blockSize; ++y) {
+			auto* row = pixels.data() + static_cast<size_t>(rowPitch) * y;
+			for (uint32_t x = 0; x < a_blockSize; ++x) {
+				if (!WriteVRBFadeNeutralPixel(a_format, row + static_cast<size_t>(bytesPerPixel) * x))
+					return false;
+			}
+		}
+
+		a_context->UpdateSubresource(a_scratch, 0, nullptr, pixels.data(), rowPitch, 0);
+		return true;
+	}
+
+	bool UnbindVRBFadeTempCopyConsumerSRVs(
+		ID3D11DeviceContext* a_context,
+		std::array<ID3D11ShaderResourceView*, 4>& a_originalSRVs)
+	{
+		if (!a_context)
+			return false;
+
+		a_context->PSGetShaderResources(0, static_cast<UINT>(a_originalSRVs.size()), a_originalSRVs.data());
+		std::array<ID3D11ShaderResourceView*, 4> unboundSRVs = a_originalSRVs;
+		bool sourceWasBound = false;
+		for (size_t slot = 0; slot < a_originalSRVs.size(); ++slot) {
+			VRMenuCompositionTargetMatch source{};
+			if (a_originalSRVs[slot] &&
+			    TryResolveVRMenuCompositionView(a_originalSRVs[slot], source) &&
+			    source.target == RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY) {
+				unboundSRVs[slot] = nullptr;
+				sourceWasBound = true;
+			}
+		}
+		if (!sourceWasBound)
+			return false;
+
+		a_context->PSSetShaderResources(0, static_cast<UINT>(unboundSRVs.size()), unboundSRVs.data());
+		return true;
+	}
+
+	void RestoreVRBFadeConsumerSRVs(
+		ID3D11DeviceContext* a_context,
+		const std::array<ID3D11ShaderResourceView*, 4>& a_originalSRVs)
+	{
+		if (!a_context)
+			return;
+
+		a_context->PSSetShaderResources(0, static_cast<UINT>(a_originalSRVs.size()), a_originalSRVs.data());
+		for (auto* srv : a_originalSRVs) {
+			if (srv)
+				srv->Release();
+		}
+	}
+
+	bool PatchVRBFadeImageSpaceTempCopyTopLeft(
+		ID3D11DeviceContext* a_context,
+		ID3D11Texture2D* a_destination,
+		const D3D11_TEXTURE2D_DESC& a_desc,
+		const VRBFadeCarrierRegionStats& a_stats,
+		const char*& a_patchSource,
+		const char*& a_failureReason)
+	{
+		a_patchSource = "none";
+		a_failureReason = "unset";
+		auto* device = globals::d3d::device;
+		if (!device || !a_context || !a_destination || !a_stats.valid || a_stats.blockSize == 0) {
+			a_failureReason = "missing-context";
+			return false;
+		}
+		if (a_desc.SampleDesc.Count != 1 || a_desc.ArraySize != 1) {
+			a_failureReason = "unsupported-desc";
+			return false;
+		}
+		const uint32_t patchBlockSize = std::min(256u, std::min(a_desc.Width, a_desc.Height));
+		if (patchBlockSize < a_stats.blockSize) {
+			a_failureReason = "too-small";
+			return false;
+		}
+		if (!EnsureVRBFadeTempCopyPatchScratch(device, a_desc, patchBlockSize)) {
+			a_failureReason = "scratch-create-failed";
+			return false;
+		}
+
+		std::array<ID3D11ShaderResourceView*, 4> originalSRVs{};
+		if (!UnbindVRBFadeTempCopyConsumerSRVs(a_context, originalSRVs)) {
+			a_failureReason = "source-unbind-failed";
+			RestoreVRBFadeConsumerSRVs(a_context, originalSRVs);
+			return false;
+		}
+		auto restoreSRVs = ScopeExit([&]() {
+			RestoreVRBFadeConsumerSRVs(a_context, originalSRVs);
+		});
+
+		const bool controlRegionUsable =
+			a_stats.controlDarkRatio <= 0.80f &&
+			a_desc.Width >= patchBlockSize &&
+			a_desc.Height >= patchBlockSize;
+		if (controlRegionUsable) {
+			const uint32_t controlX = a_desc.Width > patchBlockSize ?
+				std::min(a_desc.Width - patchBlockSize, std::max(patchBlockSize, a_desc.Width / 2u)) :
+				0u;
+			const uint32_t controlY = a_desc.Height > patchBlockSize ?
+				std::min(a_desc.Height - patchBlockSize, std::max(patchBlockSize, a_desc.Height / 2u)) :
+				0u;
+			const D3D11_BOX controlBox{
+				controlX,
+				controlY,
+				0,
+				controlX + patchBlockSize,
+				controlY + patchBlockSize,
+				1
+			};
+			a_context->CopySubresourceRegion(
+				g_vrBFadeTempCopyPatchScratch.get(),
+				0,
+				0,
+				0,
+				0,
+				a_destination,
+				0,
+				&controlBox);
+			a_patchSource = "control-region";
+		} else {
+			if (!UploadVRBFadeNeutralPatchBlock(
+					a_context,
+					g_vrBFadeTempCopyPatchScratch.get(),
+					a_desc.Format,
+					patchBlockSize)) {
+				a_failureReason = "neutral-upload-failed";
+				return false;
+			}
+			a_patchSource = "neutral-block";
+		}
+
+		const D3D11_BOX scratchBox{ 0, 0, 0, patchBlockSize, patchBlockSize, 1 };
+		a_context->CopySubresourceRegion(
+			a_destination,
+			0,
+			0,
+			0,
+			0,
+			g_vrBFadeTempCopyPatchScratch.get(),
+			0,
+			&scratchBox);
+		return true;
+	}
+
+	bool ApplyVRBFadeImageSpaceTempCopyPatchBeforeConsumerDraw(Upscaling& a_upscaling, ID3D11DeviceContext* a_context, const char* a_reason)
 	{
 		if (!IsVRBFadeCarrierScrubWindowActive(a_upscaling, a_reason))
-			return;
+			return false;
+
+		if (!IsVRBFadeImageSpaceTempCopyConsumerDraw(a_context))
+			return false;
 
 		auto* state = globals::state;
-		auto* context = globals::d3d::context;
-		if (!state || !context)
-			return;
+		auto* renderer = globals::game::renderer;
+		if (!state || !renderer || !a_context)
+			return false;
+
+		auto& destination = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kIMAGESPACE_TEMP_COPY];
+		if (!destination.texture) {
+			LogVRBFadeCarrierScrub("skip", "patch-block", "missing-temp-copy");
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC destinationDesc{};
+		destination.texture->GetDesc(&destinationDesc);
+
+		VRBFadeCarrierRegionStats stats{};
+		if (!CaptureVRBFadeCarrierRegionStats(a_context, destination.texture, stats)) {
+			LogVRBFadeCarrierScrub("skip", "patch-block", stats.reason, &stats);
+			return false;
+		}
+		if (!stats.suspicious) {
+			LogVRBFadeCarrierScrub("skip", "patch-block", stats.reason, &stats);
+			return false;
+		}
 
 		const uint32_t frame = std::max(state->frameCount, 1u);
-		if (g_vrBFadeMenuBgScrubFrame.exchange(frame, std::memory_order_acq_rel) == frame)
-			return;
+		if (g_vrBFadeTempCopyPatchFrame.exchange(frame, std::memory_order_acq_rel) == frame)
+			return false;
 
-		if (!ClearVRBFadeMenuBgTarget(context, a_upscaling))
-			return;
+		const char* patchSource = "none";
+		const char* failureReason = "unset";
+		if (!PatchVRBFadeImageSpaceTempCopyTopLeft(
+				a_context,
+				destination.texture,
+				destinationDesc,
+				stats,
+				patchSource,
+				failureReason)) {
+			LogVRBFadeCarrierScrub("skip", patchSource, failureReason, &stats);
+			return false;
+		}
 
 		g_vrBFadeCarrierScrubApplyCount.fetch_add(1, std::memory_order_acq_rel);
-		LogVRBFadeCarrierScrub("seed", "ClearRenderTargetView", "menu-bg-reset");
+		LogVRBFadeCarrierScrub("seed", patchSource, stats.reason, &stats);
+		return true;
 	}
 
 	void LogVRKTotalMutationDiagnostics(
@@ -18435,6 +18710,10 @@ bool Upscaling::TraceVRTrackedDrawOperation(
 		a_startIndexLocation,
 		a_baseVertexLocation,
 		a_startInstanceLocation);
+	ApplyVRBFadeImageSpaceTempCopyPatchBeforeConsumerDraw(
+		globals::features::upscaling,
+		a_context,
+		a_operation);
 	return false;
 }
 
@@ -19774,7 +20053,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			false);
 		upscaling.CaptureVRMenuCleanSceneAtMainPostProcessingEntry();
 		ObserveVRBFadeRenderScaleLoadState(upscaling, "main-post-entry");
-		ApplyVRBFadeMenuBgScrubStage5(upscaling, "main-post-entry");
 	}
 	upscaling.ApplyAAVRSVisualization();
 	upscaling.DisableAAVRSState();

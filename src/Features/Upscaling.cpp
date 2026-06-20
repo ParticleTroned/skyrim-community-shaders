@@ -199,24 +199,24 @@ namespace
 	};
 
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
-	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green center with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller green area means more performance, but more risk of peripheral shimmer.
+	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green visible area with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller visible scale means more performance, but more risk of peripheral shimmer.
 
-- Upscaling FOV + Peripheral TAA adds a yellow TAA ring around the green center to reduce shimmer. It costs more than Upscaling FOV alone, but can let you keep the green center smaller and thereby increase performance wins compared to Upscaling FOV alone.
+- Upscaling FOV + TAA adds a yellow TAA ring around a smaller green center to reduce shimmer. It costs more than Upscaling FOV alone, but can let you keep the vendor center scale smaller while the visible scale still covers the HMD view.
 
-- Shader foveation features reuse this shared mask; they do not have separate area sliders.)";
+- Shader foveation features reuse this shared mask; they do not have separate scale sliders.)";
 	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Use the Upscaling FOV Area slider to decrease FOV Area to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
-3) Expand Upscaling FOV Area until the green mask touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
-4) Use the Expand FOV Area R/L slider to horizontally expand the mask until the green part just touches the field of view.
+2) Use the FOV Only Visible Scale slider to decrease FOV scale to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
+3) Expand FOV Only Visible Scale until the green mask touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
+4) Use the Expand FOV Scale R/L slider to horizontally expand the mask until the green part just touches the field of view.
 5) Ideally, you do not see the blue outer mask anymore, except in the corners, or only a tiny bit.
-6) The larger the green center area, the less performance savings you have.
-7) Test in game that you do not have strong peripheral shimmer. If yes, increase the green mask area. If not, reduce it to just before shimmer appears for best performance.)";
+6) The larger the visible scale, the less performance savings you have.
+7) Test in game that you do not have strong peripheral shimmer. If yes, increase the green mask scale. If not, reduce it to just before shimmer appears for best performance.)";
 	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Lower the Upscaling FOV Area slider to 0.30. You can later try 0.25 if these settings work for you for even more performance wins.
-3) Use the TAA Peripheral Range slider until the yellow ring touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
+2) Lower the FOV + TAA Center Scale slider to 0.30. You can later try 0.25 if these settings work for you for even more performance wins.
+3) Use the FOV + TAA Visible Outer Scale slider until the yellow ring touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
 4) Ideally, you do not see the blue outer ring anymore, except in the corners, or only a tiny bit.
-5) The larger the green center area, the less performance savings you have.
-6) Test in game that you do not have strong peripheral shimmer. If yes, increase the yellow mask area. If not, reduce it to just before shimmer appears for best performance.)";
+5) The larger the FOV + TAA center or visible outer scale, the less performance savings you have.
+6) Test in game that you do not have strong peripheral shimmer. If yes, increase the FOV + TAA visible outer scale or, if needed, the center scale. If not, reduce them to just before shimmer appears for best performance.)";
 
 	uint ClampToggleUInt(uint value);
 
@@ -859,9 +859,9 @@ namespace
 		}
 	}
 
-	float ClampFoveatedCenterArea(float value)
+	float ClampFoveatedCenterScale(float value)
 	{
-		return FoveatedCommon::ClampCenterArea(value);
+		return FoveatedCommon::ClampCenterScale(value);
 	}
 
 	float ClampFoveatedCenterHorizontalScale(float value)
@@ -1592,23 +1592,19 @@ namespace
 		return std::clamp(value, kPeripheryTAAOuterScaleMin, kPeripheryTAAOuterScaleMax);
 	}
 
-	float GetPeripheryTAAOuterScaleFloor(float centerScale, float centerHorizontalScale, float centerFeather)
+	float GetPeripheryTAAOuterScaleFloor(float centerScale)
 	{
-		centerScale = ClampFoveatedCenterArea(centerScale);
-		centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
-		centerFeather = std::max(ClampPeripheryTAACenterBlendFeather(centerFeather), 1e-4f);
+		centerScale = ClampFoveatedCenterScale(centerScale);
 
-		const float radiusX = std::max(centerScale * centerHorizontalScale * 0.5f, 1e-4f);
-		const float radiusY = std::max(centerScale * 0.5f, 1e-4f);
-		const float baseRadius = std::max(std::min(radiusX, radiusY), 1e-4f);
-		const float normalizedFeather = centerFeather / baseRadius;
-		const float minOuterScale = centerScale * (1.0f + normalizedFeather);
+		// Ring circumference is owned by outer scale; center feather only affects
+		// the blend between center and periphery, not the ring radius.
+		const float minOuterScale = centerScale;
 		return std::clamp(minOuterScale, kPeripheryTAAOuterScaleMin, kPeripheryTAAOuterScaleMax);
 	}
 
-	float ClampPeripheryTAAOuterScaleForCenter(float value, float centerScale, float centerHorizontalScale, float centerFeather)
+	float ClampPeripheryTAAOuterScaleForCenter(float value, float centerScale)
 	{
-		const float minOuterScale = GetPeripheryTAAOuterScaleFloor(centerScale, centerHorizontalScale, centerFeather);
+		const float minOuterScale = GetPeripheryTAAOuterScaleFloor(centerScale);
 		return std::clamp(ClampPeripheryTAAOuterScale(value), minOuterScale, kPeripheryTAAOuterScaleMax);
 	}
 
@@ -1628,7 +1624,7 @@ namespace
 
 	struct FoveatedMaskProfileParams
 	{
-		float centerArea = 0.6f;
+		float centerScale = 0.6f;
 		float centerHorizontalScale = 1.0f;
 		float leftOffsetX = 0.0f;
 		float leftOffsetY = 0.0f;
@@ -1639,7 +1635,7 @@ namespace
 	FoveatedMaskProfileParams GetFoveatedMaskProfileParams(const Upscaling::Settings& settings, bool usePeripheryTAAProfile)
 	{
 		FoveatedMaskProfileParams params{};
-		params.centerArea = ClampFoveatedCenterArea(usePeripheryTAAProfile ? settings.periphery_taa_center_area : settings.foveatedCenterArea);
+		params.centerScale = ClampFoveatedCenterScale(usePeripheryTAAProfile ? settings.periphery_taa_center_area : settings.foveatedCenterArea);
 		params.centerHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 		params.leftOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
 		params.leftOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY);
@@ -1650,7 +1646,7 @@ namespace
 
 	float FoveatedMaskDistanceUV(float uvX, float uvY, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY)
 	{
-		centerScale = ClampFoveatedCenterArea(centerScale);
+		centerScale = ClampFoveatedCenterScale(centerScale);
 		centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 
 		const float radiusX = std::max(centerScale * centerHorizontalScale * 0.5f, 1e-4f);
@@ -1701,13 +1697,13 @@ namespace
 
 	void SanitizeFoveatedSettings(Upscaling::Settings& settings)
 	{
-		settings.foveatedCenterArea = ClampFoveatedCenterArea(settings.foveatedCenterArea);
+		settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
 		settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 		settings.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
 		settings.foveatedLeftEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY);
 		settings.foveatedRightEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetX);
 		settings.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetY);
-		settings.periphery_taa_center_area = ClampFoveatedCenterArea(settings.periphery_taa_center_area);
+		settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
 	}
 
 	bool IsDefaultFoveatedMaskGeometry(const Upscaling::Settings& settings)
@@ -1756,9 +1752,7 @@ namespace
 		SanitizeFoveatedSettings(settings);
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
-			settings.periphery_taa_center_area,
-			settings.foveatedCenterHorizontalScale,
-			settings.periphery_taa_center_blend_feather);
+			settings.periphery_taa_center_area);
 	}
 
 	void ResetVRSpecificUpscalingSettings(Upscaling::Settings& settings)
@@ -2974,7 +2968,7 @@ void Upscaling::DrawSettings()
 			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 			if (foveatedDispatchSupportedForMethod) {
 				const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
-				const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.coverageArea);
+				const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.sharedVisibleScale);
 				ImGui::TextDisabled("Configure foveated upscaling in VR > FOV.");
 				ImGui::TextColored(
 					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
@@ -3308,7 +3302,7 @@ void Upscaling::DrawFoveatedSetupInstructions()
 		drawInstructionHeadline("Upscaling FOV setup");
 		ImGui::TextUnformatted(kFoveatedUpscalingSetupInstructions);
 		ImGui::Spacing();
-		drawInstructionHeadline("Upscaling FOV + Peripheral TAA setup");
+		drawInstructionHeadline("Upscaling FOV + TAA setup");
 		ImGui::TextUnformatted(kFoveatedUpscalingPeripheralTaaSetupInstructions);
 		ImGui::PopTextWrapPos();
 		ImGui::EndChild();
@@ -3344,8 +3338,45 @@ void Upscaling::DrawFoveatedSettings()
 	}
 
 	const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
-	if (!foveatedDispatchRequestedForMethod)
+	auto drawInactiveSavedFoveatedProfile = [&](const char* a_reason) {
+		const float savedFovOnlyVisibleScale = ClampFoveatedCenterScale(settings.foveatedCenterArea);
+		const float savedTaaCenterScale = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
+		const float savedTaaVisibleScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, savedTaaCenterScale);
+		if (settings.periphery_taa_enable) {
+			ImGui::TextDisabled(
+				"Saved FOV profile inactive (%s): FOV + TAA center %.2f, visible %.2f.",
+				a_reason,
+				savedTaaCenterScale,
+				savedTaaVisibleScale);
+		} else {
+			ImGui::TextDisabled(
+				"Saved FOV profile inactive (%s): FOV only visible %.2f.",
+				a_reason,
+				savedFovOnlyVisibleScale);
+		}
+	};
+	if (!foveatedDispatchRequestedForMethod) {
+		drawInactiveSavedFoveatedProfile(foveatedDispatchSupportedForMethod ? "enable Foveated Upscaling (FOV)" : "requires DLSS or FSR");
 		return;
+	}
+
+	auto drawActiveFoveatedProfileStatus = [&]() {
+		const auto activeFoveatedProfile = GetActiveUpscalingFoveatedProfile();
+		if (activeFoveatedProfile.available && activeFoveatedProfile.mode == FoveatedUpscalingMode::PeripheralTAA) {
+			ImGui::Text(
+				"Active FOV mode: %s, center %.2f, visible %.2f",
+				GetFoveatedUpscalingModeName(activeFoveatedProfile.mode),
+				activeFoveatedProfile.vendorCenterScale,
+				activeFoveatedProfile.sharedVisibleScale);
+		} else if (activeFoveatedProfile.available) {
+			ImGui::Text(
+				"Active FOV mode: %s, visible %.2f",
+				GetFoveatedUpscalingModeName(activeFoveatedProfile.mode),
+				activeFoveatedProfile.sharedVisibleScale);
+		} else {
+			ImGui::TextDisabled("Active FOV mode: Off (full visible coverage).");
+		}
+	};
 
 	if (IsDefaultFoveatedMaskGeometry(settings)) {
 		ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.05f, 1.0f), "Default FOV mask active. Tune it for your HMD for best image and performance.");
@@ -3372,34 +3403,35 @@ void Upscaling::DrawFoveatedSettings()
 	{
 		Util::BlueFrameStyleWrapper areaStyle;
 		auto areaGuard = Util::DisableGuard(settings.periphery_taa_enable);
-		ImGui::SliderFloat("Upscaling FOV Area", &settings.foveatedCenterArea, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
+		ImGui::SliderFloat("FOV Only Visible Scale", &settings.foveatedCenterArea, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (settings.periphery_taa_enable) {
-			ImGui::TextUnformatted("Inactive while Peripheral TAA is enabled.");
+			ImGui::TextUnformatted("Inactive while FOV + TAA is enabled.");
+			ImGui::TextUnformatted("This saved value is kept for the FOV-only profile.");
 		} else {
-			ImGui::TextUnformatted("Active upscaling center mask size.");
-			ImGui::TextUnformatted("Lower values = smaller center mask and more performance.");
-			ImGui::TextUnformatted("Range: low 0.25 (smallest center) to high 1.00 (largest center).");
+			ImGui::TextUnformatted("Defines the visible/protected HMD area for FOV-only mode.");
+			ImGui::TextUnformatted("Lower values = smaller visible area and more performance.");
+			ImGui::TextUnformatted("Range: low 0.25 (smallest visible area) to high 1.00 (full visible area).");
 		}
 	}
-	settings.foveatedCenterArea = ClampFoveatedCenterArea(settings.foveatedCenterArea);
+	settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
 
 	{
 		Util::BlueFrameStyleWrapper baseExpandStyle;
-		ImGui::SliderFloat("Expand FOV Area R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
+		ImGui::SliderFloat("Expand FOV Scale R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Widens the upscaling center mask horizontally.");
 		if (settings.periphery_taa_enable)
-			ImGui::TextUnformatted("Peripheral TAA uses this shared horizontal expansion.");
+			ImGui::TextUnformatted("FOV + TAA uses this shared horizontal expansion.");
 		ImGui::TextUnformatted("Range: low 1.00 (no extra width) to high 2.00 (maximum extra width).");
 	}
 
 	auto drawEyeOffsetTooltip = [&](const char* eye, const char* axis, const char* direction) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			if (settings.periphery_taa_enable)
-				ImGui::Text("%s-eye %s offset shared by upscaling and Peripheral TAA.", eye, axis);
+				ImGui::Text("%s-eye %s offset shared by upscaling and FOV + TAA.", eye, axis);
 			else
 				ImGui::Text("%s-eye %s offset for the upscaling center mask.", eye, axis);
 			ImGui::TextUnformatted(direction);
@@ -3425,31 +3457,32 @@ void Upscaling::DrawFoveatedSettings()
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::Separator();
-	ImGui::TextUnformatted("Upscaling FOV + Peripheral TAA Settings");
+	ImGui::TextUnformatted("Upscaling FOV + TAA Settings");
 	{
 		Util::YellowFrameStyleWrapper taaStyle(true);
-		ImGui::Checkbox("FOV + Peripheral TAA", &settings.periphery_taa_enable);
+		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables periphery-only TAA outside the upscaling center region.");
-		ImGui::TextUnformatted("When ON, the reduced FOV Area below becomes the active center mask.");
+		ImGui::TextUnformatted("Enables periphery-only TAA outside the smaller vendor center region.");
+		ImGui::TextUnformatted("When ON, the FOV + TAA center scale becomes the active DLSS/FSR dispatch center.");
+		ImGui::TextUnformatted("The visible outer scale defines the shared HMD-visible mask boundary.");
 		ImGui::TextUnformatted("Expand and eye offsets are shared with the upscaling controls above.");
 	}
 	ImGui::BeginDisabled(!settings.periphery_taa_enable);
 	if (!settings.periphery_taa_enable)
-		ImGui::TextDisabled("Enable Peripheral TAA to edit the reduced FOV area, transition, and range.");
+		ImGui::TextDisabled("Enable FOV + TAA to edit the center scale, transition, and visible outer scale.");
 	{
 		Util::YellowFrameStyleWrapper taaAreaStyle;
-		ImGui::SliderFloat("Upscaling FOV Area##PeripheralTAA", &settings.periphery_taa_center_area, FoveatedCommon::kCenterAreaMin, FoveatedCommon::kCenterAreaMax, "%.2f");
+		ImGui::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	}
 	if (settings.periphery_taa_enable) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Reduced upscaling center mask size.");
-			ImGui::TextUnformatted("Lower values = smaller upscaling center and more Peripheral TAA coverage.");
+			ImGui::TextUnformatted("Actual DLSS/FSR center dispatch size for FOV + TAA.");
+			ImGui::TextUnformatted("Lower values = smaller vendor center and more TAA ring coverage.");
 			ImGui::TextUnformatted("Range: low 0.25 (smallest center) to high 1.00 (largest center).");
 		}
 	}
-	settings.periphery_taa_center_area = ClampFoveatedCenterArea(settings.periphery_taa_center_area);
+	settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
 	{
 		Util::YellowFrameStyleWrapper transitionStyle;
 		ImGui::SliderFloat(
@@ -3467,14 +3500,11 @@ void Upscaling::DrawFoveatedSettings()
 		}
 	}
 	settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
-	const float taaOuterRangeMin = GetPeripheryTAAOuterScaleFloor(
-		settings.periphery_taa_center_area,
-		settings.foveatedCenterHorizontalScale,
-		settings.periphery_taa_center_blend_feather);
+	const float taaOuterRangeMin = GetPeripheryTAAOuterScaleFloor(settings.periphery_taa_center_area);
 	{
 		Util::YellowFrameStyleWrapper taaRangeStyle;
 		ImGui::SliderFloat(
-			"TAA Peripheral Range",
+			"FOV + TAA Visible Outer Scale",
 			&settings.periphery_taa_outer_scale,
 			taaOuterRangeMin,
 			kPeripheryTAAOuterScaleMax,
@@ -3482,8 +3512,8 @@ void Upscaling::DrawFoveatedSettings()
 	}
 	if (settings.periphery_taa_enable) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls how far Peripheral TAA extends outside the upscaling center mask.");
-			ImGui::Text("Range: low %.2f (minimum allowed by current FOV Area) to high %.2f (full range).", taaOuterRangeMin, kPeripheryTAAOuterScaleMax);
+			ImGui::TextUnformatted("Controls the shared HMD-visible boundary for FOV + TAA.");
+			ImGui::Text("Range: low %.2f (minimum allowed by current center scale) to high %.2f (full range).", taaOuterRangeMin, kPeripheryTAAOuterScaleMax);
 			ImGui::TextUnformatted("Lower values are faster.");
 			ImGui::TextUnformatted("Increase until the gold ring reaches the edge of your visible field of view.");
 		}
@@ -3492,9 +3522,10 @@ void Upscaling::DrawFoveatedSettings()
 
 	settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 		settings.periphery_taa_outer_scale,
-		settings.periphery_taa_center_area,
-		settings.foveatedCenterHorizontalScale,
-		settings.periphery_taa_center_blend_feather);
+		settings.periphery_taa_center_area);
+
+	ImGui::Dummy(ImVec2(0.0f, 4.0f));
+	drawActiveFoveatedProfileStatus();
 }
 
 const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
@@ -3953,7 +3984,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 			outputWidthPerEye,
 			outputHeight,
 			globals::game::isVR,
-			profile.centerArea,
+			profile.centerScale,
 			centerFeather,
 			profile.centerHorizontalScale,
 			centerOffsets);
@@ -5224,7 +5255,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
 	struct FoveatedLayoutKey
 	{
-		int32_t centerAreaQ = 0;
+		int32_t centerScaleQ = 0;
 		int32_t centerHorizontalScaleQ = 0;
 		int32_t centerFeatherQ = 0;
 		std::array<int32_t, 4> centerOffsetQ{};
@@ -5238,7 +5269,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		const auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(usePeripheryTAAProfile);
 
 		FoveatedLayoutKey key{};
-		key.centerAreaQ = QuantizePeripheryTAATileParam(profile.centerArea);
+		key.centerScaleQ = QuantizePeripheryTAATileParam(profile.centerScale);
 		key.centerHorizontalScaleQ = QuantizePeripheryTAATileParam(profile.centerHorizontalScale);
 		key.centerFeatherQ = QuantizePeripheryTAATileParam(centerFeather);
 		key.centerOffsetQ = {
@@ -5292,11 +5323,11 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		fidelityFX.IsRuntimeFsr4Available();
 	const bool fsrRuntimeFsr4Current = IsFSRRuntimeFsr4PathActive(a_upscalemethod);
 	const FoveatedLayoutKey foveatedLayoutCurrent = makeFoveatedLayoutKey(peripheryTAACurrent, peripheryTAAPathCurrent);
-	const bool compareFoveatedArea = foveatedDispatchCurrent || previousFoveatedDispatch;
+	const bool compareFoveatedScale = foveatedDispatchCurrent || previousFoveatedDispatch;
 	const bool foveatedDispatchToggleChanged = previousFoveatedDispatch != foveatedDispatchCurrent;
 	const bool foveatedGeometryChanged =
-		compareFoveatedArea &&
-		(previousFoveatedLayout.centerAreaQ != foveatedLayoutCurrent.centerAreaQ ||
+		compareFoveatedScale &&
+		(previousFoveatedLayout.centerScaleQ != foveatedLayoutCurrent.centerScaleQ ||
 			previousFoveatedLayout.centerHorizontalScaleQ != foveatedLayoutCurrent.centerHorizontalScaleQ ||
 			previousFoveatedLayout.centerFeatherQ != foveatedLayoutCurrent.centerFeatherQ ||
 			previousFoveatedLayout.centerOffsetQ != foveatedLayoutCurrent.centerOffsetQ);
@@ -5745,9 +5776,9 @@ bool Upscaling::IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) c
 		return false;
 
 	const bool usePeripheryTAAProfile = settings.periphery_taa_enable;
-	const float centerArea = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile).centerArea;
+	const float centerScale = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile).centerScale;
 	// 1.0 is effectively full-frame vendor dispatch, so keep the default path.
-	return FoveatedCommon::IsActiveCoverage(centerArea);
+	return FoveatedCommon::IsActiveCoverage(centerScale);
 }
 
 bool Upscaling::IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const
@@ -5783,43 +5814,51 @@ bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable() const
 	return IsFoveatedVendorDispatchEnabled(GetRuntimeUpscaleMethod());
 }
 
+const char* Upscaling::GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode)
+{
+	switch (a_mode) {
+	case FoveatedUpscalingMode::CenterOnly:
+		return "FOV only";
+	case FoveatedUpscalingMode::PeripheralTAA:
+		return "FOV + TAA";
+	case FoveatedUpscalingMode::Disabled:
+	default:
+		return "Off";
+	}
+}
+
 Upscaling::ActiveUpscalingFoveatedProfile Upscaling::GetActiveUpscalingFoveatedProfile() const
 {
 	ActiveUpscalingFoveatedProfile profile{};
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
-	profile.available = IsActiveUpscalingFoveatedProfileAvailable();
-	profile.usesPeripheryTAAOuterMask = profile.available && IsPeripheryTAAEnabled(upscaleMethod);
+	profile.available = IsFoveatedVendorDispatchEnabled(upscaleMethod);
+	if (!profile.available)
+		return profile;
+
+	profile.usesPeripheryTAAOuterMask = IsPeripheryTAAEnabled(upscaleMethod);
+	profile.mode = profile.usesPeripheryTAAOuterMask ? FoveatedUpscalingMode::PeripheralTAA : FoveatedUpscalingMode::CenterOnly;
+
+	const auto maskParams = GetFoveatedMaskProfileParams(settings, profile.usesPeripheryTAAOuterMask);
+	profile.vendorCenterScale = maskParams.centerScale;
 
 	if (profile.usesPeripheryTAAOuterMask) {
-		// For Upscaling FOV + Peripheral TAA, consumers that need the full visible
-		// foveated region should use the outside edge of the TAA mask.
-		profile.coverageArea = ClampPeripheryTAAOuterScaleForCenter(
+		profile.sharedVisibleScale = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
-			settings.periphery_taa_center_area,
-			settings.foveatedCenterHorizontalScale,
-			settings.periphery_taa_center_blend_feather);
+			settings.periphery_taa_center_area);
 	} else {
-		profile.coverageArea = GetFoveatedMaskProfileParams(settings, false).centerArea;
+		profile.sharedVisibleScale = maskParams.centerScale;
 	}
 
-	profile.centerHorizontalScale = GetFoveatedMaskProfileParams(settings, profile.usesPeripheryTAAOuterMask).centerHorizontalScale;
+	profile.centerHorizontalScale = maskParams.centerHorizontalScale;
 	profile.centerOffsets = GetResolvedFoveatedMaskCenterOffsets(profile.usesPeripheryTAAOuterMask);
 	if (!globals::game::isVR)
 		profile.centerOffsets[1] = { 0.0f, 0.0f };
 	return profile;
 }
 
-float Upscaling::GetActiveFoveatedCenterArea() const
+float Upscaling::GetActiveFoveatedSharedVisibleScale() const
 {
-	if (UseActiveFoveatedPeripheryTAAProfile()) {
-		return ClampPeripheryTAAOuterScaleForCenter(
-			settings.periphery_taa_outer_scale,
-			settings.periphery_taa_center_area,
-			settings.foveatedCenterHorizontalScale,
-			settings.periphery_taa_center_blend_feather);
-	}
-
-	return GetFoveatedMaskProfileParams(settings, false).centerArea;
+	return GetActiveUpscalingFoveatedProfile().sharedVisibleScale;
 }
 
 float Upscaling::GetActiveFoveatedCenterHorizontalScale() const
@@ -5827,7 +5866,7 @@ float Upscaling::GetActiveFoveatedCenterHorizontalScale() const
 	if (!globals::game::isVR)
 		return 1.0f;
 
-	return GetFoveatedMaskProfileParams(settings, UseActiveFoveatedPeripheryTAAProfile()).centerHorizontalScale;
+	return GetActiveUpscalingFoveatedProfile().centerHorizontalScale;
 }
 
 float2 Upscaling::GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const
@@ -5847,7 +5886,7 @@ float2 Upscaling::GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool us
 	resolved.y += ClampFoveatedMaskOffsetAdjustment(userAdjustY);
 
 	if (globals::game::isVR) {
-		const float centerScale = params.centerArea;
+		const float centerScale = params.centerScale;
 		const float centerHorizontalScale = params.centerHorizontalScale;
 		const float outwardExpansion = centerScale * 0.5f * std::max(0.0f, centerHorizontalScale - 1.0f);
 		resolved.x += isLeftEye ? -outwardExpansion : outwardExpansion;
@@ -5907,9 +5946,14 @@ bool Upscaling::GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye,
 
 bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile)
 {
-	centerScale = ClampFoveatedCenterArea(centerScale);
+	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerFeather = std::isfinite(centerFeather) ? std::max(0.0f, centerFeather) : FoveatedCommon::kCenterFeather;
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
+	const float taaOuterScale = usePeripheryTAAProfile ?
+		ClampPeripheryTAAOuterScaleForCenter(
+			settings.periphery_taa_outer_scale,
+			centerScale) :
+		0.0f;
 
 	auto& cache = foveatedRectCache;
 	auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(usePeripheryTAAProfile);
@@ -5924,6 +5968,7 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 		std::abs(cache.centerScale - centerScale) > 1e-6f ||
 		std::abs(cache.centerFeather - centerFeather) > 1e-6f ||
 		std::abs(cache.centerHorizontalScale - centerHorizontalScale) > 1e-6f ||
+		std::abs(cache.peripheryTAAOuterScale - taaOuterScale) > 1e-6f ||
 		std::abs(cache.centerOffsets[0].x - centerOffsets[0].x) > 1e-6f ||
 		std::abs(cache.centerOffsets[0].y - centerOffsets[0].y) > 1e-6f ||
 		(isVR && (std::abs(cache.centerOffsets[1].x - centerOffsets[1].x) > 1e-6f ||
@@ -5940,6 +5985,7 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 	cache.centerScale = centerScale;
 	cache.centerFeather = centerFeather;
 	cache.centerHorizontalScale = centerHorizontalScale;
+	cache.peripheryTAAOuterScale = taaOuterScale;
 	cache.centerOffsets = centerOffsets;
 	cache.rects = {};
 
@@ -5952,7 +5998,10 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 		centerScale,
 		centerFeather,
 		centerHorizontalScale,
-		centerOffsets);
+		centerOffsets,
+		0u,
+		taaOuterScale);
+	cache.plan = plan;
 
 	auto copyEyeRect = [&](uint32_t eyeIndex) {
 		const auto& eye = plan.eyes[eyeIndex];
@@ -6280,13 +6329,11 @@ bool Upscaling::BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidt
 	if (!EnsurePeripheryTAATileBuffer(eyeIndex, maxTileCount))
 		return false;
 
-	centerScale = ClampFoveatedCenterArea(centerScale);
+	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerFeather = ClampPeripheryTAACenterBlendFeather(centerFeather);
 	taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(
 		taaOuterScale,
-		centerScale,
-		centerHorizontalScale,
-		centerFeather);
+		centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 
 	PeripheryTAATileCacheKey cacheKey{};
@@ -6442,12 +6489,12 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	cbData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
 	cbData.jitter = jitter;
-	centerScale = ClampFoveatedCenterArea(centerScale);
+	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
 	const bool showThreeZoneMask = visualizeMask && settings.periphery_taa_enable;
 	const float centerFeather = showThreeZoneMask ? ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) : FoveatedCommon::kCenterFeather;
-	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, centerScale, centerHorizontalScale, centerFeather);
+	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, centerScale);
 	cbData.centerAndMask = {
 		centerOffsetX,
 		centerOffsetY,
@@ -6573,14 +6620,12 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
 	cbData.jitter = jitter;
 	cbData.centerOffset = { centerOffsetX, centerOffsetY };
-	centerScale = ClampFoveatedCenterArea(centerScale);
+	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	const float centerFeather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(
 		settings.periphery_taa_outer_scale,
-		centerScale,
-		centerHorizontalScale,
-		centerFeather);
+		centerScale);
 	const auto taaColorWriteBounds = FoveatedCommon::BuildCenteredDispatchBounds(
 		0,
 		outputWidth,
@@ -6707,7 +6752,7 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 		outputWidthPerEye > 0 ? 1.0f / static_cast<float>(outputWidthPerEye) : 0.0f,
 		outputHeight > 0 ? 1.0f / static_cast<float>(outputHeight) : 0.0f
 	};
-	cbData.centerScale = ClampFoveatedCenterArea(centerScale);
+	cbData.centerScale = ClampFoveatedCenterScale(centerScale);
 	cbData.centerFeather = std::isfinite(centerFeather) ? std::max(0.0f, centerFeather) : FoveatedCommon::kCenterFeather;
 	cbData.centerOffset = centerOffset;
 	cbData.outputOffset = { static_cast<float>(dispatchMinX), static_cast<float>(dispatchMinY) };
@@ -7034,9 +7079,7 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 	const float2 centerOffset = GetResolvedFoveatedMaskCenterOffset(eyeIndex, params.usePeripheryTAAProfile);
 	const float taaOuterScale = params.usePeripheryTAA ? ClampPeripheryTAAOuterScaleForCenter(
 															 settings.periphery_taa_outer_scale,
-															 params.centerScale,
-															 params.centerHorizontalScale,
-															 params.centerBlendFeather) :
+															 params.centerScale) :
 	                                                     0.0f;
 	const auto innerBounds = FoveatedCommon::BuildCenteredInscribedMaskRect(params.outputWidthPerEye, params.outputHeight, params.centerScale, centerOffset.x, centerOffset.y, params.centerHorizontalScale);
 	const uint32_t innerMinX = static_cast<uint32_t>(innerBounds.minX);
@@ -7334,7 +7377,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
-	const float centerScale = foveatedProfile.centerArea;
+	const float centerScale = foveatedProfile.centerScale;
 	const float centerHorizontalScale = foveatedProfile.centerHorizontalScale;
 	const float effectiveCenterBlendFeather = usePeripheryTAA ? ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) : FoveatedCommon::kCenterFeather;
 	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, true, centerScale, effectiveCenterBlendFeather, centerHorizontalScale, usePeripheryTAAProfile))
@@ -7465,7 +7508,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
-	const float centerScale = foveatedProfile.centerArea;
+	const float centerScale = foveatedProfile.centerScale;
 	const float centerHorizontalScale = foveatedProfile.centerHorizontalScale;
 	const float effectiveCenterBlendFeather = usePeripheryTAA ? ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) : FoveatedCommon::kCenterFeather;
 	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight, true, centerScale, effectiveCenterBlendFeather, centerHorizontalScale, usePeripheryTAAProfile))
@@ -10336,14 +10379,12 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool fsrRuntimeFsr4Active = IsFSRRuntimeFsr4PathActive(a_upscaleMethod);
 	const uint32_t qualityMode = GetRuntimeQualityMode();
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, peripheryTAAEnabled);
-	const float foveatedCenterArea = foveatedProfile.centerArea;
+	const float foveatedCenterScale = foveatedProfile.centerScale;
 	const float foveatedCenterHorizontalScale = foveatedProfile.centerHorizontalScale;
 	const float peripheryTAACenterBlendFeather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	const float peripheryTAAOuterScale = ClampPeripheryTAAOuterScaleForCenter(
 		settings.periphery_taa_outer_scale,
-		foveatedCenterArea,
-		foveatedCenterHorizontalScale,
-		peripheryTAACenterBlendFeather);
+		foveatedCenterScale);
 	const auto foveatedCenterOffsets = GetResolvedFoveatedMaskCenterOffsets(peripheryTAAEnabled);
 
 	auto cameraCutDetected = []() {
@@ -10391,17 +10432,17 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		const bool fsrRuntimeVersionChanged =
 			(fsrRuntimePathActive || previousHistoryFSRRuntimePathActive) &&
 			fsrRuntimeFsr4Active != previousHistoryFSRRuntimeFsr4Active;
-		const bool compareFoveatedArea = foveatedDispatchEnabled || previousHistoryFoveatedDispatch;
+		const bool compareFoveatedScale = foveatedDispatchEnabled || previousHistoryFoveatedDispatch;
 		const bool foveatedOffsetsChanged =
-			compareFoveatedArea &&
+			compareFoveatedScale &&
 			(std::abs(foveatedCenterOffsets[0].x - previousHistoryFoveatedCenterOffsets[0].x) > 1e-4f ||
 				std::abs(foveatedCenterOffsets[0].y - previousHistoryFoveatedCenterOffsets[0].y) > 1e-4f ||
 				std::abs(foveatedCenterOffsets[1].x - previousHistoryFoveatedCenterOffsets[1].x) > 1e-4f ||
 				std::abs(foveatedCenterOffsets[1].y - previousHistoryFoveatedCenterOffsets[1].y) > 1e-4f);
 		const bool foveatedChanged =
 			foveatedDispatchEnabled != previousHistoryFoveatedDispatch ||
-			(compareFoveatedArea && std::abs(foveatedCenterArea - previousHistoryFoveatedCenterArea) > 1e-4f) ||
-			(compareFoveatedArea && std::abs(foveatedCenterHorizontalScale - previousHistoryFoveatedCenterHorizontalScale) > 1e-4f) ||
+			(compareFoveatedScale && std::abs(foveatedCenterScale - previousHistoryFoveatedCenterScale) > 1e-4f) ||
+			(compareFoveatedScale && std::abs(foveatedCenterHorizontalScale - previousHistoryFoveatedCenterHorizontalScale) > 1e-4f) ||
 			foveatedOffsetsChanged;
 		const bool longFrameGap = globals::game::deltaTime &&
 		                          std::isfinite(*globals::game::deltaTime) &&
@@ -10447,7 +10488,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	previousHistoryInMapMenu = inMapMenu;
 	previousHistoryUpscaleMethod = a_upscaleMethod;
 	previousHistoryFoveatedDispatch = foveatedDispatchEnabled;
-	previousHistoryFoveatedCenterArea = foveatedCenterArea;
+	previousHistoryFoveatedCenterScale = foveatedCenterScale;
 	previousHistoryFoveatedCenterHorizontalScale = foveatedCenterHorizontalScale;
 	previousHistoryFoveatedCenterOffsets = foveatedCenterOffsets;
 	previousHistoryPeripheryTAA = peripheryTAAEnabled;
@@ -10782,7 +10823,7 @@ void Upscaling::Upscale()
 				const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(upscaleMethod);
 				const bool usePeripheryTAAPath = IsPeripheryTAAPathActive(upscaleMethod);
 				const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
-				const float centerScale = foveatedProfile.centerArea;
+				const float centerScale = foveatedProfile.centerScale;
 				const float centerHorizontalScale = foveatedProfile.centerHorizontalScale;
 				const float centerFeather = usePeripheryTAAPath ?
 				                                ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) :
@@ -10792,37 +10833,13 @@ void Upscaling::Upscale()
 					std::array<EncodeRegion, 2> regions{};
 					bool allRegionsValid = true;
 					for (uint32_t eye = 0; eye < 2; ++eye) {
-						const auto& rect = foveatedRectCache.rects[eye];
-						if (!rect.inputWidth || !rect.inputHeight) {
+						const auto& eyePlan = foveatedRectCache.plan.eyes[eye];
+						if (!eyePlan.encodeInput.IsValid()) {
 							allRegionsValid = false;
 							break;
 						}
 
-						includeInputRect(regions[eye], rect.inputOffsetX, rect.inputOffsetY, rect.inputOffsetX + rect.inputWidth, rect.inputOffsetY + rect.inputHeight);
-
-						const float2 centerOffset = GetResolvedFoveatedMaskCenterOffset(eye, usePeripheryTAAProfile);
-						const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(
-							settings.periphery_taa_outer_scale,
-							centerScale,
-							centerHorizontalScale,
-							centerFeather);
-						const auto taaOuterBounds = FoveatedCommon::BuildCenteredDispatchBounds(0, eyeWidthOut, eyeHeightOut, taaOuterScale, centerOffset.x, centerOffset.y, 0.0f, centerHorizontalScale);
-						if (taaOuterBounds.maxX > taaOuterBounds.minX && taaOuterBounds.maxY > taaOuterBounds.minY) {
-							constexpr uint32_t kCopyPadding = 2u;
-							const auto mappedInputRect = FoveatedRegionPlan::MapOutputRectToInputRect(
-								static_cast<uint32_t>(taaOuterBounds.minX),
-								static_cast<uint32_t>(taaOuterBounds.minY),
-								static_cast<uint32_t>(taaOuterBounds.maxX),
-								static_cast<uint32_t>(taaOuterBounds.maxY),
-								eyeWidthOut,
-								eyeHeightOut,
-								eyeWidthIn,
-								eyeHeightIn,
-								kCopyPadding);
-							if (mappedInputRect.IsValid()) {
-								includeInputRect(regions[eye], mappedInputRect.minX, mappedInputRect.minY, mappedInputRect.maxX, mappedInputRect.maxY);
-							}
-						}
+						includeInputRect(regions[eye], eyePlan.encodeInput.minX, eyePlan.encodeInput.minY, eyePlan.encodeInput.maxX, eyePlan.encodeInput.maxY);
 
 						if (!regions[eye].valid) {
 							allRegionsValid = false;

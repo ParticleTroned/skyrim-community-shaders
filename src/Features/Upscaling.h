@@ -352,8 +352,10 @@ public:
 		float centerScale = -1.0f;
 		float centerFeather = -1.0f;
 		float centerHorizontalScale = 1.0f;
+		float peripheryTAAOuterScale = 0.0f;
 		std::array<float2, 2> centerOffsets{};
 		std::array<FoveatedDispatchRect, 2> rects{};
+		FoveatedRegionPlan plan{};
 	} foveatedRectCache;
 
 	ConstantBuffer* jitterCB = nullptr;
@@ -433,16 +435,27 @@ public:
 	bool AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
+	enum class FoveatedUpscalingMode : uint8_t
+	{
+		Disabled,
+		CenterOnly,
+		PeripheralTAA
+	};
 	struct ActiveUpscalingFoveatedProfile
 	{
 		bool available = false;
+		FoveatedUpscalingMode mode = FoveatedUpscalingMode::Disabled;
 		bool usesPeripheryTAAOuterMask = false;
-		float coverageArea = 1.0f;
+		// Actual DLSS/FSR foveated center dispatch scale.
+		float vendorCenterScale = 1.0f;
+		// Shared HMD-visible/protected boundary used by VR foveation consumers.
+		float sharedVisibleScale = 1.0f;
 		float centerHorizontalScale = 1.0f;
 		std::array<float2, 2> centerOffsets{};
 	};
+	static const char* GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode);
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
-	float GetActiveFoveatedCenterArea() const;
+	float GetActiveFoveatedSharedVisibleScale() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;
 
@@ -618,7 +631,7 @@ public:
 	bool previousHistoryInMapMenu = false;
 	UpscaleMethod previousHistoryUpscaleMethod = UpscaleMethod::kNONE;
 	bool previousHistoryFoveatedDispatch = false;
-	float previousHistoryFoveatedCenterArea = 1.0f;
+	float previousHistoryFoveatedCenterScale = 1.0f;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
 	bool previousHistoryPeripheryTAA = false;

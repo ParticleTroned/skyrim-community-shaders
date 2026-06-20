@@ -1220,7 +1220,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHG = { dalcSH.g.c0, dalcSH.g.c1[0], dalcSH.g.c1[1], dalcSH.g.c1[2] };
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
-		data.VRFoveationData0 = { FoveatedCommon::kCenterAreaMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
+		data.VRFoveationData0 = { FoveatedCommon::kCenterScaleMax, FoveatedCommon::kCenterFeather, 1.0f, FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off) };
 		data.VRFoveationModes = { 0.0f, 0.0f, 0.0f, 0.0f };
 		data.VRFoveationCenterOffsets = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const auto& vr = globals::features::vr;
@@ -1246,7 +1246,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			upscaling.loaded) {
 			const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 			if (profile.available) {
-				const float centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
+				const float centerScale = FoveatedCommon::ClampCenterScale(profile.sharedVisibleScale);
 				const bool foveationActive = FoveatedCommon::IsActiveCoverage(centerScale);
 				const float disabledFoveationMode = FoveatedCommon::GetShaderMode(FoveatedCommon::DetailMode::Off);
 				const float lightingFoveationMode = FoveatedCommon::GetShaderMode(

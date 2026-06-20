@@ -4,10 +4,14 @@
 #include <cmath>
 #include <cstdint>
 
+// Shared CPU-side contract for foveated shader-detail consumers. The linear
+// center scale names intentionally match the HLSL mask helpers: these values
+// are diameters/radii inputs, not area ratios. DetailMode encodes to 0/1/2 and
+// must stay in lock-step with FoveatedShaderDetail.hlsli.
 namespace FoveatedCommon
 {
-	constexpr float kCenterAreaMin = 0.25f;
-	constexpr float kCenterAreaMax = 1.0f;
+	constexpr float kCenterScaleMin = 0.25f;
+	constexpr float kCenterScaleMax = 1.0f;
 	constexpr float kCenterFeather = 0.05f;
 	constexpr float kCenterHorizontalScaleMin = 1.0f;
 	constexpr float kCenterHorizontalScaleMax = 2.0f;
@@ -64,16 +68,16 @@ namespace FoveatedCommon
 		int maxY = 0;
 	};
 
-	inline float ClampCenterArea(float value)
+	inline float ClampCenterScale(float value)
 	{
 		if (!std::isfinite(value))
-			return kCenterAreaMax;
-		return std::clamp(value, kCenterAreaMin, kCenterAreaMax);
+			return kCenterScaleMax;
+		return std::clamp(value, kCenterScaleMin, kCenterScaleMax);
 	}
 
-	inline bool IsActiveCoverage(float a_centerArea)
+	inline bool IsActiveCoverage(float a_centerScale)
 	{
-		return ClampCenterArea(a_centerArea) < kFullCoverageThreshold;
+		return ClampCenterScale(a_centerScale) < kFullCoverageThreshold;
 	}
 
 	inline float ClampCenterHorizontalScale(float value)
@@ -103,7 +107,7 @@ namespace FoveatedCommon
 		if (eyeMaxXInt <= eyeMinXInt || frameHeightInt <= 0)
 			return bounds;
 
-		centerScale = ClampCenterArea(centerScale);
+		centerScale = ClampCenterScale(centerScale);
 		centerHorizontalScale = ClampCenterHorizontalScale(centerHorizontalScale);
 		centerFeather = std::isfinite(centerFeather) ? std::max(0.0f, centerFeather) : kCenterFeather;
 
@@ -160,7 +164,7 @@ namespace FoveatedCommon
 		if (width == 0 || height == 0)
 			return bounds;
 
-		const float clampedCenterScale = ClampCenterArea(centerScale);
+		const float clampedCenterScale = ClampCenterScale(centerScale);
 		const float clampedCenterHorizontalScale = ClampCenterHorizontalScale(centerHorizontalScale);
 		const float inscribedScale = GetInscribedSuperellipseRectScale(kMaskShapePower);
 		const float inscribedHalfScaleX = clampedCenterScale * clampedCenterHorizontalScale * inscribedScale * 0.5f;

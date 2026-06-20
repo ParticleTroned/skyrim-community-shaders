@@ -1453,7 +1453,7 @@ namespace
 		upscaling.DrawFoveatedSettings();
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
-		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxAvailable = waterEffects.loaded;
 		const bool wetnessEffectsRuntimeActive = wetnessEffects.IsRuntimeActive();
@@ -1481,7 +1481,7 @@ namespace
 
 		if (profile.available) {
 			ImGui::Text("Mask source: %s", profile.usesPeripheryTAAOuterMask ? "Peripheral TAA outer edge" : "Upscaling FOV center");
-			ImGui::Text("Coverage scale: %.2f", profile.coverageArea);
+			ImGui::Text("Shared visible scale: %.2f", profile.sharedVisibleScale);
 			ImGui::Text("Horizontal scale: %.2f", profile.centerHorizontalScale);
 			if (anySharedMaskConsumerEnabled && !foveatedProfileActive)
 				ImGui::TextDisabled("Shared-mask consumers require FOV area below 1.00.");

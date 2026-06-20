@@ -76,7 +76,7 @@ namespace
 			return false;
 
 		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
-		return profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+		return profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
 	}
 
 	bool IsRuntimeFoveatedActive(const ScreenSpaceGI::Settings& a_settings)
@@ -89,9 +89,9 @@ namespace
 		return static_cast<uint32_t>(std::lround((a_value + 1.0f) * 10000.0f));
 	}
 
-	float GetUpscalingActiveCenterMaskScale()
+	float GetUpscalingActiveSharedMaskScale()
 	{
-		return globals::features::upscaling.GetActiveFoveatedCenterArea();
+		return globals::features::upscaling.GetActiveFoveatedSharedVisibleScale();
 	}
 
 	float GetSharedUpscalingCenterMaskHorizontalScale()
@@ -99,12 +99,12 @@ namespace
 		return globals::features::upscaling.GetActiveFoveatedCenterHorizontalScale();
 	}
 
-	float ResolveFoveatedCenterMaskScale(const ScreenSpaceGI::Settings& a_settings)
+	float ResolveFoveatedSharedMaskScale(const ScreenSpaceGI::Settings& a_settings)
 	{
 		if (!IsRuntimeFoveatedActive(a_settings))
 			return 0.0f;
 
-		return GetUpscalingActiveCenterMaskScale();
+		return GetUpscalingActiveSharedMaskScale();
 	}
 
 	std::array<float2, 2> GetSharedUpscalingMaskOffsetsForSsgi()
@@ -112,9 +112,9 @@ namespace
 		return globals::features::upscaling.GetActiveResolvedFoveatedMaskCenterOffsets();
 	}
 
-	void SyncResolvedCenterMaskScale(ScreenSpaceGI::Settings& a_settings)
+	void SyncResolvedSharedMaskScale(ScreenSpaceGI::Settings& a_settings)
 	{
-		a_settings.CenterFullResMaskScale = ResolveFoveatedCenterMaskScale(a_settings);
+		a_settings.CenterFullResMaskScale = ResolveFoveatedSharedMaskScale(a_settings);
 	}
 
 	void ResetVRSpecificSettings(ScreenSpaceGI::Settings& a_settings)
@@ -234,7 +234,7 @@ namespace
 			a_settings.EnableVanillaSSAO = false;
 		}
 		if (IsRuntimeFoveatedActive(a_settings)) {
-			a_settings.CenterFullResMaskScale = GetUpscalingActiveCenterMaskScale();
+			a_settings.CenterFullResMaskScale = GetUpscalingActiveSharedMaskScale();
 		} else {
 			a_settings.CenterFullResMaskScale = 0.0f;
 		}
@@ -303,7 +303,7 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 void ScreenSpaceGI::DrawSettings()
 {
 	ApplyPlatformSettingOverrides(settings);
-	SyncResolvedCenterMaskScale(settings);
+	SyncResolvedSharedMaskScale(settings);
 	static bool showAdvanced;
 	const bool isVR = REL::Module::IsVR();
 
@@ -712,10 +712,10 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	}
 
 	ApplyPlatformSettingOverrides(settings);
-	SyncResolvedCenterMaskScale(settings);
+	SyncResolvedSharedMaskScale(settings);
 	const bool featureRuntimeActive = loaded && settings.Enabled;
 	const auto profile = globals::features::upscaling.GetActiveUpscalingFoveatedProfile();
-	const bool foveatedAvailable = profile.available && FoveatedCommon::IsActiveCoverage(profile.coverageArea);
+	const bool foveatedAvailable = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
 	bool foveatedEnabled = settings.EnableFoveated;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
@@ -723,7 +723,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled)) {
 			settings.EnableFoveated = foveatedEnabled;
 			if (settings.EnableFoveated) {
-				settings.CenterFullResMaskScale = GetUpscalingActiveCenterMaskScale();
+				settings.CenterFullResMaskScale = GetUpscalingActiveSharedMaskScale();
 			} else {
 				settings.CenterFullResMaskScale = 0.0f;
 			}
@@ -748,7 +748,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 
 	ImGui::Spacing();
 
-	SyncResolvedCenterMaskScale(settings);
+	SyncResolvedSharedMaskScale(settings);
 	ImGui::TextDisabled("%s", settings.EnableFoveated && featureRuntimeActive && IsRuntimeFoveatedActive(settings) ? "active" : "inactive");
 	if (settings.EnableGI && !HasGIResources())
 		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
@@ -1201,7 +1201,7 @@ bool ScreenSpaceGI::ShadersOK()
 	                           upsampleAOOnlyCompute &&
 	                           (!REL::Module::IsVR() || stereoSyncAOOnlyCompute);
 
-	const float centerScale = ResolveFoveatedCenterMaskScale(settings);
+	const float centerScale = ResolveFoveatedSharedMaskScale(settings);
 	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
 	const bool runtimeGIActive = !foveatedSsgiActive && IsGIActive();
 	const bool fullGIShadersOK = !runtimeGIActive ||
@@ -1244,7 +1244,7 @@ void ScreenSpaceGI::UpdateSB()
 	float2 res = { (float)texWorkingDepth->desc.Width, (float)texWorkingDepth->desc.Height };
 	float2 dynres = GetHardenedSsgiFrameDim(res);
 	const bool isVR = REL::Module::IsVR();
-	const float centerMaskScale = ResolveFoveatedCenterMaskScale(settings);
+	const float centerMaskScale = ResolveFoveatedSharedMaskScale(settings);
 
 	static float4x4 prevInvView[2] = {};
 
@@ -1327,14 +1327,14 @@ void ScreenSpaceGI::UpdateSB()
 void ScreenSpaceGI::DrawSSGI()
 {
 	ApplyPlatformSettingOverrides(settings);
-	SyncResolvedCenterMaskScale(settings);
+	SyncResolvedSharedMaskScale(settings);
 
 	auto context = globals::d3d::context;
 	if (!context)
 		return;
 	const bool isVR = REL::Module::IsVR();
 	const int resolutionMode = ClampResolutionMode(settings.ResolutionMode);
-	const float centerScale = ResolveFoveatedCenterMaskScale(settings);
+	const float centerScale = ResolveFoveatedSharedMaskScale(settings);
 	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();

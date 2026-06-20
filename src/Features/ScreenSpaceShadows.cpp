@@ -48,7 +48,7 @@ namespace
 	{
 		bool available = false;
 		bool active = false;
-		float centerScale = FoveatedCommon::kCenterAreaMax;
+		float centerScale = FoveatedCommon::kCenterScaleMax;
 		float centerHorizontalScale = 1.0f;
 		std::array<float2, 2> centerOffsets{};
 	};
@@ -93,7 +93,7 @@ namespace
 		if (!state.available)
 			return state;
 
-		state.centerScale = FoveatedCommon::ClampCenterArea(profile.coverageArea);
+		state.centerScale = FoveatedCommon::ClampCenterScale(profile.sharedVisibleScale);
 		state.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
 		state.centerOffsets = profile.centerOffsets;
 		state.available = FoveatedCommon::IsActiveCoverage(state.centerScale);

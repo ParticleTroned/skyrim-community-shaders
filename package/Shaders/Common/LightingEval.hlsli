@@ -202,8 +202,8 @@ float3 GetWetReflectionModeConfig(float wetReflectionScale)
 		return 0.0;
 	}
 
-	const bool enableModern = SharedData::wetternessSettings.EnableModernWetReflection != 0;
-	const bool enableLegacy = SharedData::wetternessSettings.EnableLegacyWetReflection != 0;
+	const bool enableModern = SharedData::wetternessSettings.settings.EnableModernWetReflection != 0;
+	const bool enableLegacy = SharedData::wetternessSettings.settings.EnableLegacyWetReflection != 0;
 	const float modeCount = (enableModern ? 1.0 : 0.0) + (enableLegacy ? 1.0 : 0.0);
 	if (modeCount <= 0.0) {
 		return 0.0;
@@ -222,7 +222,7 @@ float3 GetWetReflectionModeConfig(float wetReflectionScale)
 float GetSkinWetnessOverdriveScale()
 {
 #	if defined(SKIN) || defined(HAIR)
-	const float skinWetnessOverdriveT = saturate((SharedData::wetternessSettings.SkinWetness - 1.0) / 0.5);
+	const float skinWetnessOverdriveT = saturate((SharedData::wetternessSettings.settings.SkinWetness - 1.0) / 0.5);
 	return lerp(1.0, 1.8, skinWetnessOverdriveT);
 #	else
 	return 1.0;
@@ -244,8 +244,8 @@ WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNorm
 		return params;
 	}
 
-	const bool forwardReflectionBiasEnabled = SharedData::wetternessSettings.EnableForwardReflectionBias != 0;
-	const bool vanillaReflectionCompensationEnabled = SharedData::wetternessSettings.EnableVanillaReflectionCompensation != 0;
+	const bool forwardReflectionBiasEnabled = SharedData::wetternessSettings.settings.EnableForwardReflectionBias != 0;
+	const bool vanillaReflectionCompensationEnabled = SharedData::wetternessSettings.settings.EnableVanillaReflectionCompensation != 0;
 
 	float NdotV = saturate(abs(dot(wetnessNormal, viewDir)) + EPSILON_DOT_CLAMP);
 	if (forwardReflectionBiasEnabled) {
@@ -331,8 +331,8 @@ float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, floa
 	const float3 N = wetnessNormal;
 	const float3 V = context.viewDir;
 	const float3 VN = context.vertexNormal;
-	const bool forwardReflectionBiasEnabled = SharedData::wetternessSettings.EnableForwardReflectionBias != 0;
-	const bool vanillaReflectionCompensationEnabled = SharedData::wetternessSettings.EnableVanillaReflectionCompensation != 0;
+	const bool forwardReflectionBiasEnabled = SharedData::wetternessSettings.settings.EnableForwardReflectionBias != 0;
+	const bool vanillaReflectionCompensationEnabled = SharedData::wetternessSettings.settings.EnableVanillaReflectionCompensation != 0;
 
 	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
 	if (forwardReflectionBiasEnabled) {

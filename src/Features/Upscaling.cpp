@@ -2210,32 +2210,39 @@ namespace
 		       IsVRLoadingPresentationTailActive(a_state);
 	}
 
-	bool HasReachedVRWorldFrameAfterLatestLoad(const State* a_state)
+	bool HasCompletedVRWorldFrameAfterLatestLoad(const State* a_state)
 	{
 		if (!a_state)
 			return false;
-
-		if (a_state->inWorld)
-			return true;
 
 		const uint32_t lastCompletedWorldFrame = a_state->lastCompletedWorldRenderFrame;
 		if (lastCompletedWorldFrame == std::numeric_limits<uint32_t>::max())
 			return false;
 
 		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
-		return closeFrame == 0 || lastCompletedWorldFrame > closeFrame;
+		if (closeFrame != 0 && lastCompletedWorldFrame <= closeFrame)
+			return false;
+
+		return true;
+	}
+
+	bool IsVRFpsStabilizerLoadSyncReady(const State* a_state)
+	{
+		return a_state &&
+		       !IsMainOrLoadingMenuContextActive() &&
+		       HasCompletedVRWorldFrameAfterLatestLoad(a_state);
 	}
 
 	uint32_t GetVRFpsStabilizerCurrentSyncFrame(const State* a_state)
 	{
-		if (!a_state)
+		if (!IsVRFpsStabilizerLoadSyncReady(a_state))
 			return 0;
 
 		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
 		if (closeFrame != 0)
 			return closeFrame;
 
-		return a_state->inWorld ? 1u : 0u;
+		return 1u;
 	}
 
 	void MarkVRFpsStabilizerSyncResolved(Upscaling& a_upscaling, uint32_t a_syncFrame)
@@ -2255,7 +2262,7 @@ namespace
 			return;
 
 		const auto* state = globals::state;
-		if (!state || IsLoadingMenuContextActive() || !state->inWorld)
+		if (!IsVRFpsStabilizerLoadSyncReady(state))
 			return;
 
 		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(state);
@@ -2276,7 +2283,7 @@ namespace
 			return true;
 
 		const auto* state = globals::state;
-		if (!state || IsLoadingMenuContextActive() || !state->inWorld)
+		if (!IsVRFpsStabilizerLoadSyncReady(state))
 			return false;
 
 		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(state);
@@ -2299,7 +2306,7 @@ namespace
 			return false;
 
 		const auto* state = globals::state;
-		if (!HasReachedVRWorldFrameAfterLatestLoad(state))
+		if (!HasCompletedVRWorldFrameAfterLatestLoad(state))
 			return false;
 
 		if (state->pendingPostLoadRuntimeReset ||
@@ -2409,23 +2416,10 @@ namespace
 		if (!globals::game::isVR || !a_state)
 			return false;
 
-		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
-		if (closeFrame == 0)
-			return false;
-
-		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
-		if (currentFrame < closeFrame)
-			return true;
 		if (IsLoadingMenuContextActive() || IsSaveLoadTransitionContextActive(a_state) || IsCommunityShadersMenuOpen())
 			return true;
 
-		const uint32_t lastCompletedWorldFrame = a_state->lastCompletedWorldRenderFrame;
-		if (lastCompletedWorldFrame == std::numeric_limits<uint32_t>::max())
-			return true;
-		if (lastCompletedWorldFrame <= closeFrame)
-			return true;
-
-		return currentFrame <= lastCompletedWorldFrame;
+		return !HasCompletedVRWorldFrameAfterLatestLoad(a_state);
 	}
 
 	const char* BoolText(bool a_value)
@@ -5341,7 +5335,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	}
 
 	const auto* state = globals::state;
-	if (!state || IsLoadingMenuContextActive() || !state->inWorld)
+	if (!IsVRFpsStabilizerLoadSyncReady(state))
 		return;
 
 	VRFpsStabilizerUpscalingProfiles profiles;

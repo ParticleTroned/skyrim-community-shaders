@@ -2286,6 +2286,9 @@ namespace
 
 	bool CanActivateVRRenderScaleRuntime(const Upscaling& a_upscaling)
 	{
+		if (!a_upscaling.loaded)
+			return false;
+
 		if (!globals::game::isVR)
 			return true;
 

@@ -148,11 +148,14 @@ void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCas
 		}
 
 		std::memcpy(gRasterStates, shadowmapRasterStates[cascade], bytes);
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RASTER_DEPTH_BIAS);
 
 		func(light, arg1, arg2, flags);
 
-		if (cascade == numCascades - 1)
+		if (cascade == numCascades - 1) {
 			std::memcpy(gRasterStates, backupGameRasterStates, bytes);
+			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RASTER_DEPTH_BIAS);
+		}
 
 		currentCascade = (cascade + 1) % numCascades;
 		return;
@@ -179,8 +182,10 @@ void ShadowmapRasterizerFix::BSShadowDirectionalLight_RenderShadowmaps_RenderCas
 
 	{
 		ScopedCascadeBias scopedCascadeBias(cascade);
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RASTER_DEPTH_BIAS);
 		func(light, arg1, arg2, flags);
 		RestoreOriginalRasterState(globals::d3d::context);
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RASTER_DEPTH_BIAS);
 	}
 }
 

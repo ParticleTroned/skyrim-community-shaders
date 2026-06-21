@@ -170,6 +170,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableShaderBlocking,
 	FirstTimeSetupCompleted,
 	SkipClearCacheConfirmation,
+	BackgroundShaderCompilationOnBoot,
 	AutoHideFeatureList,
 	SkipConstraintWarning,
 	RequireShiftToDock,
@@ -497,6 +498,9 @@ void Menu::Load(json& o_json)
 			}
 		}
 	}
+
+	if (settings.BackgroundShaderCompilationOnBoot)
+		globals::shaderCache->backgroundCompilation = true;
 }
 
 void Menu::Save(json& o_json)

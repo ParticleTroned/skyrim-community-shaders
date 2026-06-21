@@ -2454,8 +2454,28 @@ namespace SIE
 		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION.string());
 	}
 
+	static bool IsEnvVarTruthy(const char* a_name)
+	{
+		char buffer[16] = {};
+		const DWORD len = GetEnvironmentVariableA(a_name, buffer, sizeof(buffer));
+		if (len == 0 || len >= sizeof(buffer))
+			return false;
+
+		std::string value(buffer, len);
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+			return static_cast<char>(std::tolower(c));
+		});
+
+		return value == "1" || value == "true";
+	}
+
 	ShaderCache::ShaderCache()
 	{
+		if (IsEnvVarTruthy("OPENSHADERS_BACKGROUND_COMPILE")) {
+			backgroundCompilation = true;
+			logger::info("OPENSHADERS_BACKGROUND_COMPILE set; starting shaders in background compilation mode");
+		}
+
 		dependencyTracker = std::make_unique<ShaderFileDependencyTracker>();
 		logger::debug("ShaderCache initialized: {} startup threads, {} background threads, {} pool threads",
 			(int)compilationThreadCount, (int)backgroundCompilationThreadCount, (int)compilationPool.get_thread_count());
@@ -3174,7 +3194,7 @@ namespace SIE
 			                                    // Dispatch when pool has room. Use < (not <=) so that after
 			                                    // push_task() the total never exceeds the limit.
 			                                    (int)shaderCache->compilationPool.get_tasks_total() <
-			                                        (!shaderCache->backgroundCompilation ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
+			                                        (!shaderCache->backgroundCompilation.load(std::memory_order_relaxed) ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
 			/*Woke up because of a stop request. */
 			return std::nullopt;
 		}

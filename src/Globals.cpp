@@ -1,7 +1,6 @@
 #include "Globals.h"
 
 #include "Deferred.h"
-#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
@@ -328,6 +327,5 @@ namespace globals
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
-		ShadowmapRasterizerFix::InstallD3DHooks(a_context);
 	}
 }

@@ -24,7 +24,6 @@ For **Skyrim VR / MGO** users setting up the Particle Lights fork, Wetterness, U
   - [Measure Performance](#measure-performance)
   - [Optional VR Pages](#optional-vr-pages)
     - [VR Stereo](#vr-stereo)
-    - [VR Shadowmap Rasterizer](#vr-shadowmap-rasterizer)
     - [VR Bindings](#vr-bindings)
   - [Recommended Visual Feature Pages](#recommended-visual-feature-pages)
     - [Light Limit Fix / Particle Lights](#light-limit-fix-particle-lights)
@@ -588,12 +587,6 @@ These pages are useful, but most users do not need to change them immediately.
 The **Stereo** tab contains VR-specific fixes for screen-space effects that can mismatch between eyes. The screen-space sync options reuse shared resources so supported effects line up better in stereo.
 
 The **Stereo Blending** section is an advanced fallback. It blends between eyes after the final composite to hide remaining screen-space mismatches, but it costs a full-screen compute pass while active. Leave it off unless you see a specific stereo artefact and the tooltip suggests it applies to your case.
-
-#### VR: Shadowmap Rasterizer
-
-![VR Shadowmap Rasterizer settings](Images-Fork-Installation/CS-UI/vr-shadowmap-rasterizer.png)
-
-**Apply Outer Cascade Caster Bias** is default-off and should stay off unless distant or outer-cascade surfaces show shadow acne. The tooltip warns that enabling it can cause detached shadows, pulsing, or flicker if your shadows are already stable.
 
 #### VR: Bindings
 

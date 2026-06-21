@@ -182,9 +182,6 @@ public:
 		float StereoBlendMaxFactor = Config::kDefaultStereoBlendMaxFactor;
 		float StereoBlendColorThreshold = Config::kDefaultStereoBlendColorThreshold;
 
-		// Optional caster-side bias for distant directional shadow acne.
-		bool EnableOuterCascadeCasterBias = false;
-
 		// Foveated detail budgets. These use the active Upscaling FOV profile.
 		bool EnableLightingFoveation = false;
 		bool EnableLightingFoveationHardCutoff = false;

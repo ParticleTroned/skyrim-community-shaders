@@ -1,6 +1,5 @@
 #include "VR.h"
 #include "DynamicCubemaps.h"
-#include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "FoveatedCommon.h"
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
@@ -315,7 +314,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	StereoBlendDepthSigma,
 	StereoBlendMaxFactor,
 	StereoBlendColorThreshold,
-	EnableOuterCascadeCasterBias,
 	EnableLightingFoveation,
 	EnableLightingFoveationHardCutoff,
 	EnableSSRFoveation,
@@ -349,10 +347,6 @@ void VR::LoadSettings(json& o_json)
 	// Validate and clamp loaded settings to ensure they're within valid ranges
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
-
-	if (settings.EnableOuterCascadeCasterBias) {
-		ShadowmapRasterizerFix::InstallD3DHooks(globals::d3d::context);
-	}
 }
 
 void VR::SaveSettings(json& o_json)
@@ -733,7 +727,6 @@ namespace
 	void DrawStereoSyncSettings();
 	void DrawStereoBlendSettings();
 	void DrawFoveationSettings();
-	void DrawShadowmapRasterizerSettings();
 	void DrawKeyBindings();
 	void DrawDebugSection();
 }
@@ -768,14 +761,6 @@ void VR::DrawSettings()
 		if (BeginTabItemWithFont("Stereo", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRStereoFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				DrawStereoSettings();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		if (BeginTabItemWithFont("Shadowmap Rasterizer", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRShadowmapRasterizerFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-				DrawShadowmapRasterizerSettings();
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
@@ -1770,27 +1755,6 @@ namespace
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
 			else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
 				ImGui::TextDisabled("Wetterness dynamic-detail foveation is idle until rain, wetness, drying, or debug overrides are active.");
-		}
-	}
-
-	void DrawShadowmapRasterizerSettings()
-	{
-		auto& settings = globals::features::vr.settings;
-
-		if (ImGui::Checkbox("Apply Outer Cascade Caster Bias", &settings.EnableOuterCascadeCasterBias) &&
-			settings.EnableOuterCascadeCasterBias) {
-			ShadowmapRasterizerFix::InstallD3DHooks(globals::d3d::context);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Default off. Turn this on only if distant or outer-cascade surfaces show shadow acne.\n"
-				"It applies a small caster-side rasterizer bias to the outer cascade only.\n"
-				"Leave it off if shadows look stable, or if enabling it causes detached shadows, pulsing, or flicker.");
-			ImGui::Text(
-				"Values: DepthBias %d, Clamp %.4f, SlopeScaledDepthBias %.2f.",
-				ShadowmapRasterizerFix::vrOuterCascadeDepthBias,
-				ShadowmapRasterizerFix::vrOuterCascadeDepthBiasClamp,
-				ShadowmapRasterizerFix::vrOuterCascadeSlopeScaleBias);
 		}
 	}
 

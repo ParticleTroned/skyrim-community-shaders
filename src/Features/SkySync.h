@@ -155,6 +155,7 @@ private:
 	static constexpr float CrescentMoonIntensityFactor = 0.25f;
 	static constexpr float FullMoonIntensityFactor = 1.0f;
 	static constexpr float DefaultVolumetricLightingIntensityFactor = 1.0f;
+	static constexpr float SecondsPerGameHour = 3600.0f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static float* gSunGlareSize = nullptr;

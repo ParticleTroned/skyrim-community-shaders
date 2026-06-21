@@ -434,16 +434,23 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 			fadePhase = Phase::FadeOut;
 	}
 
-	float timeScale = 20.0f;
+	float fadeAdvance = 0.0f;
 	if (const auto calendar = globals::game::calendar) {
 		const float currentHoursPassed = calendar->GetHoursPassed();
-		timeScale = calendar->GetTimescale();
-		const float hoursPassedDiff = std::abs(currentHoursPassed - previousHoursPassed);
-		previousHoursPassed = currentHoursPassed;
-		if (timeScale <= 0.0f || hoursPassedDiff >= 0.01f) {
+		const float timeScale = calendar->GetTimescale();
+		const bool validCurrentHours = std::isfinite(currentHoursPassed);
+		const bool validPreviousHours = std::isfinite(previousHoursPassed);
+		const float hoursPassedDiff = validCurrentHours && validPreviousHours ? std::abs(currentHoursPassed - previousHoursPassed) : FadeTime / SecondsPerGameHour;
+		if (validCurrentHours)
+			previousHoursPassed = currentHoursPassed;
+		if (timeScale <= 0.0f || !validCurrentHours || !validPreviousHours || hoursPassedDiff >= 0.01f) {
 			fadePhase = Phase::None;
 			current = target;
+		} else {
+			fadeAdvance = hoursPassedDiff * SecondsPerGameHour;
 		}
+	} else if (globals::game::deltaTime) {
+		fadeAdvance = *globals::game::deltaTime * 20.0f;
 	}
 
 	if (current == Caster::None) {
@@ -458,8 +465,7 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 		return SetLighting(sun, dir, intensity);
 	}
 
-	const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 0.0f;
-	fadeTimer = std::min(fadeTimer + deltaTime * timeScale, FadeTime);
+	fadeTimer = std::min(fadeTimer + fadeAdvance, FadeTime);
 
 	const float t = fadeTimer / FadeTime;
 	const float fade = fadePhase == Phase::FadeIn ? t : 1.0f - t;

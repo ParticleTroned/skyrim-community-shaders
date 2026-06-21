@@ -13,7 +13,13 @@ struct ShadowmapRasterizerFix : EngineFix
 	std::string GetName() override { return "Shadowmap Cascade Rasterizer Fix"; }
 	void Install() override;
 
-	using RasterStateArray = ID3D11RasterizerState* [2][3][12][2];
+	static constexpr int kFill = 2;
+	static constexpr int kCull = 3;
+	static constexpr int kFlatDepth = 12;
+	static constexpr int kVRDepth = 13;
+	static constexpr int kScissor = 2;
+	static constexpr int kMaxStates = kFill * kCull * kVRDepth * kScissor;
+	using RasterStatePtr = ID3D11RasterizerState*;
 
 	struct ShadowMapRasterizerDescriptor
 	{
@@ -26,21 +32,24 @@ struct ShadowmapRasterizerFix : EngineFix
 	static constexpr std::uint32_t invalidCascade = std::numeric_limits<std::uint32_t>::max();
 	static void InstallD3DHooks(ID3D11DeviceContext* context);
 	static void InitializeRasterStates();
-	static void CloneRasterStates(const RasterStateArray& inputArray, std::uint32_t cascade, const std::array<ShadowMapRasterizerDescriptor, maxCascades>& descriptors);
+	static int StateCount();
+	static int StateIndex(int fill, int cull, int depth, int scissor);
+	static void CloneRasterStates(RasterStatePtr* inputArray, std::uint32_t cascade, const std::array<ShadowMapRasterizerDescriptor, maxCascades>& descriptors);
 	static void ReleaseClonedRasterStates();
 	static void RebuildBiasedRasterStateLookup();
 	static ID3D11RasterizerState* GetBiasedRasterState(ID3D11RasterizerState* state);
 	static bool IsVRCasterBiasEnabled();
 
+	static inline int depthDim = kFlatDepth;
 	static inline std::uint32_t numCascades = 0;
 	static inline std::uint32_t currentCascade = 0;
 	static inline std::uint32_t activeCascade = invalidCascade;
 	static inline bool initialized = false;
 	static inline bool d3dHooksInstalled = false;
 
-	static inline RasterStateArray* gRasterStates = nullptr;
-	static inline RasterStateArray backupGameRasterStates = {};
-	static inline RasterStateArray shadowmapRasterStates[maxCascades] = {};
+	static inline RasterStatePtr* gRasterStates = nullptr;
+	static inline RasterStatePtr backupGameRasterStates[kMaxStates] = {};
+	static inline RasterStatePtr shadowmapRasterStates[maxCascades][kMaxStates] = {};
 
 	static void GetUpdatedRasterDesc(D3D11_RASTERIZER_DESC& outputDesc, ShadowMapRasterizerDescriptor desc);
 

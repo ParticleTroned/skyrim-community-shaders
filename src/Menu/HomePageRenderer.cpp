@@ -5,6 +5,7 @@
 
 #include "Globals.h"
 #include "Menu.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -81,6 +82,8 @@ void HomePageRenderer::RenderHomePage()
 
 	RenderWelcomeSection();
 	ImGui::Spacing();
+
+	RenderCacheMismatchSection();
 
 	// RenderQuickLinksSection();
 	// ImGui::Spacing();
@@ -207,6 +210,44 @@ void HomePageRenderer::RenderWelcomeSection()
 	// Pop the style var we pushed at the start
 	ImGui::PopStyleVar();
 	// Close RenderWelcomeSection()
+}
+
+void HomePageRenderer::RenderCacheMismatchSection()
+{
+	auto* shaderCache = globals::shaderCache;
+	if (!shaderCache || !shaderCache->IsDiskCacheHeld())
+		return;
+
+	auto* menu = Menu::GetSingleton();
+	const ImVec4 warningColor = menu ? menu->GetTheme().StatusPalette.Warning : ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+
+	ImGui::PushStyleColor(ImGuiCol_Text, warningColor);
+	const bool headerOpen = ImGui::CollapsingHeader("Shader Cache Mismatch Detected", ImGuiTreeNodeFlags_DefaultOpen);
+	ImGui::PopStyleColor();
+	if (!headerOpen)
+		return;
+
+	ImGui::TextWrapped("%s",
+		"Your installed feature set no longer matches the shader cache on disk. The cache has been preserved and shaders "
+		"are compiling in memory for this session only. If this change was unintentional, fix your setup and restart to "
+		"reuse the existing cache. If the change was intentional, rebuild the cache.");
+	ImGui::Spacing();
+
+	for (const auto& mismatch : shaderCache->GetCacheMismatches()) {
+		ImGui::BulletText("%s: %s", mismatch.feature.c_str(), mismatch.detail.c_str());
+	}
+	ImGui::Spacing();
+
+	if (ImGui::Button("Rebuild Shader Cache Now")) {
+		shaderCache->AcceptCacheRebuild();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Deletes the old cache and recompiles shaders for your current feature set.");
+	}
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
 }
 
 void HomePageRenderer::RenderFirstTimeSetupDialog()

@@ -5,6 +5,7 @@
 #include <efsw/efsw.hpp>
 #include <vector>
 
+#include "Utils/CacheInvalidation.h"
 #include "Utils/WinApi.h"
 
 using namespace std::chrono;
@@ -419,6 +420,14 @@ namespace SIE
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void WriteDiskCacheInfo();
+
+		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
+
+		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
+		bool IsDiskCacheHeld() const { return diskCacheHeld; }
+		bool IsDiskCacheActive() const { return isDiskCache && !diskCacheHeld; }
+		void AcceptCacheRebuild();
+
 		bool IsSkipUnchangedShaders() const;
 		void SetSkipUnchangedShaders(bool value);
 		bool UseFileWatcher() const;
@@ -821,6 +830,9 @@ namespace SIE
 
 		bool isEnabled = true;
 		bool isDiskCache = true;
+		bool diskCacheHeld = false;
+		std::vector<CacheMismatch> cacheMismatches;
+		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
 		bool isAsync = true;
 		bool isDump = false;

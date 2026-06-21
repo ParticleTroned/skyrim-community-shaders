@@ -35,6 +35,7 @@ public:
 
 private:
 	static void RenderWelcomeSection();
+	static void RenderCacheMismatchSection();
 	static void MarkFirstTimeSetupComplete(uint32_t closingKey);
 
 	// State

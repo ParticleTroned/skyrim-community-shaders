@@ -408,6 +408,7 @@ public:
 		std::vector<InputCombo> CSEditorToggleKey = { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(VK_END) };  // CS Editor toggle key
 		std::vector<InputCombo> ScreenshotKey = { InputCombo::Keyboard(VK_SNAPSHOT) };                                 // Screenshot capture key
 		bool EnableShaderBlocking = false;                                                                             // Enable shader blocking hotkeys for debugging
+		bool ShowInGameShaderCompilationOverlay = false;                                                               // Show top-left compile progress during background/in-game compilation
 		bool FirstTimeSetupCompleted = false;                                                                          // Track if first-time setup has been completed
 		bool SkipClearCacheConfirmation = false;                                                                       // Skip confirmation dialog when clearing shader cache
 		bool BackgroundShaderCompilationOnBoot = false;                                                                // Load the menu immediately and compile shaders in the background on boot

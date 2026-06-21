@@ -271,6 +271,16 @@ void SettingsTabRenderer::RenderShadersTab()
 			ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
 		}
 
+		bool showInGameShaderCompilationOverlay = globals::menu->GetSettings().ShowInGameShaderCompilationOverlay;
+		if (ImGui::Checkbox("Show In-Game Shader Compilation Overlay", &showInGameShaderCompilationOverlay)) {
+			globals::menu->GetSettings().ShowInGameShaderCompilationOverlay = showInGameShaderCompilationOverlay;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Shows the top-left shader compilation progress window during background/in-game compilation.\n"
+				"Startup compilation progress remains visible either way.");
+		}
+
 		if (shaderCache->GetTotalTasks() > 0) {
 			ImGui::Text("Last shader cache build duration: %s",
 				shaderCache->GetShaderStatsString(true, true).c_str());

@@ -56,7 +56,7 @@ public:
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
 		float ProbeFieldSize = kDefaultProbeFieldSize;  // XY probe field size in world units
-		uint ProbeGridQuality = 1;  // 0: performance, 1: balanced, 2: quality
+		uint ProbeGridQuality = 1;  // 0: performance, 1: balanced, 2: quality, 3: ultra quality, 4: hoshipa
 		bool EnableIncrementalProbeUpdates = true;
 		uint StableSliceCount = 8;
 		bool EnableReducedUpdateFrequency = true;

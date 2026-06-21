@@ -21,10 +21,12 @@ namespace
 		const char* Label;
 	};
 
-	constexpr std::array<ProbeGridPreset, 3> kProbeGridPresets = {
+	constexpr std::array<ProbeGridPreset, 5> kProbeGridPresets = {
 		ProbeGridPreset{ 128, 128, 64, "Performance (128 x 128 x 64)" },
 		ProbeGridPreset{ 192, 192, 96, "Balanced (192 x 192 x 96)" },
 		ProbeGridPreset{ 256, 256, 128, "Quality (256 x 256 x 128)" },
+		ProbeGridPreset{ 394, 394, 192, "Ultra Quality (394 x 394 x 192)" },
+		ProbeGridPreset{ 512, 512, 256, "Hoshipa (512 x 512 x 256)" },
 	};
 
 	uint ClampProbeGridQuality(uint a_quality)
@@ -305,7 +307,7 @@ void Skylighting::DrawSettings()
 		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Main quality/performance switch. Performance is fastest, Quality is most detailed.");
+		ImGui::Text("Main quality/performance switch. Performance is fastest; higher tiers increase detail and cost.");
 
 	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
 	if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {

@@ -114,6 +114,7 @@ struct AdaptiveBrightness : Feature
 	std::string locationOverridePresetStatus;
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
+	bool advancedControlsOpen = false;
 	mutable std::unordered_map<std::string, std::size_t> locationOverrideLookup;
 	mutable LocationOverrideCache locationOverrideCache;
 	mutable uint64_t locationOverrideLookupVersion = 0;
@@ -139,6 +140,7 @@ struct AdaptiveBrightness : Feature
 	static const char* GetProfileName(Profile a_profile);
 	void DrawProfile(Profile a_profile);
 	void DrawProfileSettings(ProfileSettings& a_profile);
+	void SetAdvancedControlsOpen(bool a_open);
 	void DrawLocationOverrides();
 	void DrawLocationOverridePresetControls();
 	void SaveCurrentLocationOverride();

@@ -310,6 +310,18 @@ namespace
 		ClampProfileSettings(a_locationOverride.profile);
 	}
 
+	bool HasAdvancedControlsOpen(const AdaptiveBrightness::Settings& a_settings)
+	{
+		const auto profileHasAdvancedControls = [](const AdaptiveBrightness::ProfileSettings& a_profile) {
+			return a_profile.advanced;
+		};
+
+		return std::any_of(a_settings.profiles.begin(), a_settings.profiles.end(), profileHasAdvancedControls) ||
+		       std::any_of(a_settings.locationOverrides.begin(), a_settings.locationOverrides.end(), [&](const AdaptiveBrightness::LocationOverride& a_locationOverride) {
+			       return profileHasAdvancedControls(a_locationOverride.profile);
+		       });
+	}
+
 	const json* FindLocationOverridesJson(const json& a_json)
 	{
 		if (a_json.is_array())
@@ -486,6 +498,7 @@ void AdaptiveBrightness::DrawSettings()
 void AdaptiveBrightness::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SetAdvancedControlsOpen(HasAdvancedControlsOpen(settings));
 	locationOverridePresetStatus.clear();
 	if (locationOverridePresetName.empty())
 		locationOverridePresetName = kDefaultLocationOverridePresetName;
@@ -502,10 +515,12 @@ void AdaptiveBrightness::SaveSettings(json& o_json)
 
 void AdaptiveBrightness::RestoreDefaultSettings()
 {
+	const bool keepAdvancedControlsOpen = advancedControlsOpen;
 	settings = {};
 	locationOverridePresetName = kDefaultLocationOverridePresetName;
 	locationOverridePresetStatus.clear();
 	ClearLocationOverrideSelection();
+	SetAdvancedControlsOpen(keepAdvancedControlsOpen);
 	MarkLocationOverrideLookupDirty();
 }
 
@@ -528,9 +543,13 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile)
 	ClampProfileSettings(a_profile);
 	ImGui::SliderFloat("Brightness", &a_profile.brightness, kBrightnessMin, kBrightnessMax, "%.2f");
 
-	ImGui::Checkbox("Advanced Controls", &a_profile.advanced);
+	bool advancedControls = advancedControlsOpen;
+	if (ImGui::Checkbox("Advanced Controls", &advancedControls))
+		SetAdvancedControlsOpen(advancedControls);
 
-	if (a_profile.advanced) {
+	a_profile.advanced = advancedControlsOpen;
+
+	if (advancedControlsOpen) {
 		ImGui::SeparatorText("Light Balance");
 		ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
@@ -548,6 +567,20 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile)
 	}
 
 	ClampProfileSettings(a_profile);
+}
+
+void AdaptiveBrightness::SetAdvancedControlsOpen(bool a_open)
+{
+	advancedControlsOpen = a_open;
+
+	for (auto& profile : settings.profiles)
+		profile.advanced = advancedControlsOpen;
+
+	for (auto& locationOverride : settings.locationOverrides)
+		locationOverride.profile.advanced = advancedControlsOpen;
+
+	if (locationOverrideEditProfile)
+		locationOverrideEditProfile->advanced = advancedControlsOpen;
 }
 
 void AdaptiveBrightness::DrawLocationOverrides()

@@ -11,6 +11,11 @@ on:
                 options:
                     - rc
                     - stable
+            skip_feature_bumps:
+                description: "Skip automatic feature .ini version bumps and hand-manage feature versions for this release."
+                type: boolean
+                required: false
+                default: false
 
 permissions:
     contents: write
@@ -51,6 +56,7 @@ jobs:
                   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
             - name: Apply feature version bumps
+              if: ${{ !inputs.skip_feature_bumps }}
               run: |
                   python tools/feature_version_audit.py \
                     --apply-bumps \

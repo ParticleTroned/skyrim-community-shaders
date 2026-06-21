@@ -3459,7 +3459,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			if (upscaling.IsBackendInitialized()) {
 				upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
-				upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
+				// Keep the D3D12 proxy swap chain as the outermost layer so
+				// GetDevice(IID_ID3D11Device) stays compatible with other SKSE plugins.
 				upscaling.SetBackendD3DDevice(*ppDevice);
 				// Some Streamline features (notably Reflex/PCL) may not report
 				// load/support status reliably until the D3D device is bound.

@@ -104,7 +104,8 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, uint eyeIndex, float sssA
 		uvOffset.y *= sin(theta);
 
 		float2 sampleUV = texCoord + uvOffset;
-		float2 clampedUV = clamp(sampleUV, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
+		// Keep Burley diffusion samples inside the current eye's SBS half in VR.
+		float2 clampedUV = saturate(Stereo::ClampToEyeUV(sampleUV, eyeIndex));
 		uint2 samplePixcoord = uint2(clampedUV * SharedData::BufferDim.xy);
 		float maskSample = MaskTexture[samplePixcoord].x;
 		bool mask = maskSample > 1e-5f;

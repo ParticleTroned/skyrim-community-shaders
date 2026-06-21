@@ -42,8 +42,8 @@ cbuffer PerFrameSSS : register(b1)
 
 	float sssAmount = saturate(MaskTexture[DTid.xy].x);
 
-	// Burley reads the albedo-free pre-pass texture; leave non-SSS pixels untouched so
-	// they keep the original main target contents instead of the extracted irradiance.
+	// Burley writes through a temporary texture before copying back to main. Preserve
+	// non-SSS pixels explicitly so the temp texture cannot leak stale skin-mask data.
 	if (sssAmount > 0.0) {
 		float humanClass = MaskTexture[DTid.xy].y;
 		bool humanProfile = humanClass > 0.5;
@@ -51,6 +51,8 @@ cbuffer PerFrameSSS : register(b1)
 
 		float4 color = BurleyNormalizedSS(DTid.xy, texCoord, eyeIndex, sssAmount, humanProfile, isFemale);
 		SSSRW[DTid.xy] = max(0, color);
+	} else {
+		SSSRW[DTid.xy] = ColorTexture[DTid.xy];
 	}
 
 #elif defined(HORIZONTAL)

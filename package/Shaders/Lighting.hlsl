@@ -2028,7 +2028,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 viewDirection = -SafeNormalize3(input.WorldPosition.xyz, float3(0.0, 0.0, 1.0));
 
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
-	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
 #	if defined(VR)  // shader detail foveation
 	float vrAuxDetailWeight = GetVRLightingAuxiliaryDetailWeight(screenUV, eyeIndex);
 	bool vrAuxDetailEnabled = ShouldEvaluateVRFoveatedDetail(vrAuxDetailWeight);

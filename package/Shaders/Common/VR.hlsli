@@ -138,6 +138,25 @@ namespace Stereo
 	}
 
 	/**
+	* @brief Returns an eye-stable pixel coordinate for screen-space noise.
+	*
+	* Raw packed stereo pixels hash different values in each eye. Mapping to
+	* the eye-local mono grid keeps stochastic shader work stereo-stable while
+	* flat builds return the input coordinate unchanged.
+	*/
+	float2 EyeStableNoiseCoord(float2 sbsPixel, float2 bufferDim)
+	{
+#ifdef VR
+		float2 stereoUV = sbsPixel / bufferDim;
+		uint eyeIndex = GetEyeIndexFromTexCoord(stereoUV);
+		float2 monoUV = ConvertFromStereoUV(stereoUV, eyeIndex);
+		return monoUV * float2(bufferDim.x * 0.5, bufferDim.y);
+#else
+		return sbsPixel;
+#endif
+	}
+
+	/**
 	* @brief Applies motion velocity to UV coordinates and reports whether the previous-frame mono UV went out of bounds.
 	*
 	* The returned UV is converted back to stereo space in VR so history reprojection stays inside the current eye.

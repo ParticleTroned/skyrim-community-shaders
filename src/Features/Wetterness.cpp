@@ -1,12 +1,12 @@
 #include "Wetterness.h"
+#include "CSEditor.h"
 #include "GrassLighting.h"
 #include "Menu.h"
 #include "State.h"
-#include "WeatherEditor.h"
 #include "Utils/UI.h"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <initializer_list>
@@ -136,16 +136,15 @@ namespace
 		return std::strcmp(preset.name, "Hoshipa") == 0;
 	}
 
-	constexpr std::array<WetternessUiPresetDefinition, 4> WETTERNESS_UI_PRESETS = { {
-		{ "Performance",
-			"Cheapest wetness profile. Keeps the wet-ground look, but uses shorter ranges, sparser raindrops, and shorter splash/ripple lifetimes.",
-			700.0f,
-			5000.0f,
-			3.6f,
-			0.65f,
-			0.60f,
-			4.5f,
-			0.22f },
+	constexpr std::array<WetternessUiPresetDefinition, 4> WETTERNESS_UI_PRESETS = { { { "Performance",
+																						  "Cheapest wetness profile. Keeps the wet-ground look, but uses shorter ranges, sparser raindrops, and shorter splash/ripple lifetimes.",
+																						  700.0f,
+																						  5000.0f,
+																						  3.6f,
+																						  0.65f,
+																						  0.60f,
+																						  4.5f,
+																						  0.22f },
 		{ "Balanced",
 			"Middle wetness profile. Keeps the same core wetness tuning with moderate raindrop density, lifetime, and distance ranges.",
 			1000.0f,
@@ -172,8 +171,7 @@ namespace
 			0.5f,
 			0.80f,
 			6.0f,
-			0.35f }
-	} };
+			0.35f } } };
 
 	// Cached per-frame data for debug/weather analysis UI.
 	// Keep this outside Wetterness object layout to avoid class-level alignment padding warnings.
@@ -300,8 +298,8 @@ namespace
 
 		const auto flags = weather->data.flags;
 		if (flags.any(RE::TESWeather::WeatherDataFlag::kRainy) ||
-		    flags.any(RE::TESWeather::WeatherDataFlag::kSnow) ||
-		    flags.any(RE::TESWeather::WeatherDataFlag::kCloudy)) {
+			flags.any(RE::TESWeather::WeatherDataFlag::kSnow) ||
+			flags.any(RE::TESWeather::WeatherDataFlag::kCloudy)) {
 			return OVERCAST_DRYING_SPEED_MULT;
 		}
 		if (flags.any(RE::TESWeather::WeatherDataFlag::kPleasant)) {
@@ -545,7 +543,7 @@ namespace
 
 		// Extend only the upper range [1..2] linearly so the base response remains unchanged.
 		const float extendedT = (clampedUi - MODERN_WET_REFLECTION_BASE_UI_MAX) /
-			(MAX_MODERN_WET_REFLECTION_UI_SCALE - MODERN_WET_REFLECTION_BASE_UI_MAX);
+		                        (MAX_MODERN_WET_REFLECTION_UI_SCALE - MODERN_WET_REFLECTION_BASE_UI_MAX);
 		return std::lerp(MODERN_WET_REFLECTION_BASE_UI_MAX, MAX_MODERN_WET_REFLECTION_UI_SCALE, extendedT);
 	}
 
@@ -620,8 +618,8 @@ namespace
 	float ClampWetnessDistanceFadeRange(float gameUnits)
 	{
 		return (std::isfinite(gameUnits)) ?
-			std::clamp(gameUnits, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS) :
-			DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
+		           std::clamp(gameUnits, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS) :
+		           DEFAULT_WETNESS_DISTANCE_FADE_RANGE_GAME_UNITS;
 	}
 
 	uint32_t EncodeFloatToUint(float value)
@@ -1128,6 +1126,13 @@ static const std::array<Wetterness::ClimateSettings, 6> CLIMATE_PRESETS = { {
 	CLIMATE_PRESET_INFO[4].settings,  // Temperate Coastal
 	CLIMATE_PRESET_INFO[5].settings   // Monsoon/Extreme
 } };
+
+static void DrawWeatherAnalysisLabel(const char* a_label)
+{
+	const auto& palette = Menu::GetSingleton()->GetTheme().Palette;
+	ImGui::TextColored(palette.Text, "%s", a_label);
+	ImGui::Spacing();
+}
 
 void Wetterness::SetupResources()
 {
@@ -1693,14 +1698,14 @@ void Wetterness::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	auto& weatherEditor = globals::features::weatherEditor;
-	if (weatherEditor.loaded) {
-		if (ImGui::SmallButton(("Open " + weatherEditor.GetName()).c_str())) {
+	auto& csEditor = globals::features::csEditor;
+	if (csEditor.loaded) {
+		if (ImGui::SmallButton("Open Weather Picker")) {
 			// Navigate to the replacement feature in the menu
-			Menu::GetSingleton()->SelectFeatureMenu(weatherEditor.GetShortName());
+			Menu::GetSingleton()->SelectFeatureMenu(csEditor.GetShortName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Open the installed %s feature", weatherEditor.GetShortName().c_str());
+			ImGui::TextUnformatted("Open the Weather Picker in CS Utility");
 		}
 	}
 
@@ -1987,8 +1992,8 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 				runtimeState.wetnessDepth > RUNTIME_DRY_EPSILON;
 
 			if (g_hasLastValidOcclusionViewProj &&
-			    canUseFrameCache &&
-			    frameIndex - g_lastValidOcclusionViewProjFrame > MAX_OCCLUSION_VIEW_PROJ_REUSE_FRAMES) {
+				canUseFrameCache &&
+				frameIndex - g_lastValidOcclusionViewProjFrame > MAX_OCCLUSION_VIEW_PROJ_REUSE_FRAMES) {
 				g_lastValidOcclusionViewProj = {};
 				g_hasLastValidOcclusionViewProj = false;
 				g_lastValidOcclusionViewProjFrame = 0;
@@ -2100,10 +2105,10 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		runtimeState.rainEventExposure <= RUNTIME_DRY_EPSILON &&
 		runtimeState.postRainEventWeight <= RUNTIME_DRY_EPSILON;
 	bool runtimeInactive = settings.EnableWetterness == 0 ||
-		(settings.EnableWetterness != 0 &&
-		!hasDebugOverrides &&
-		!rainingNow &&
-		dryTimelineSettled);
+	                       (settings.EnableWetterness != 0 &&
+							   !hasDebugOverrides &&
+							   !rainingNow &&
+							   dryTimelineSettled);
 
 	if (runtimeInactive) {
 		runtimeState.wetnessDepth = 0.0f;
@@ -2306,19 +2311,19 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	const bool masterWetnessEnabled = settings.EnableWetterness != 0;
 	const float activeShorePersistentDarkeningStrength = masterWetnessEnabled ? clampedShorePersistentDarkeningStrength : 0.0f;
 	const float activeRainReflectionBalance = masterWetnessEnabled ?
-		ClampFiniteOrDefault(
-			rainReflectionBalance,
-			RAIN_REFLECTION_BALANCE_MIN,
-			RAIN_REFLECTION_BALANCE_MAX,
-			DEFAULT_RAIN_REFLECTION_BALANCE) :
-		0.0f;
+	                                              ClampFiniteOrDefault(
+													  rainReflectionBalance,
+													  RAIN_REFLECTION_BALANCE_MIN,
+													  RAIN_REFLECTION_BALANCE_MAX,
+													  DEFAULT_RAIN_REFLECTION_BALANCE) :
+	                                              0.0f;
 	const float activePostRainWaterClarity = masterWetnessEnabled ?
-		ClampFiniteOrDefault(
-			postRainWaterClarity,
-			POST_RAIN_WATER_CLARITY_MIN,
-			POST_RAIN_WATER_CLARITY_MAX,
-			DEFAULT_POST_RAIN_WATER_CLARITY) :
-		0.0f;
+	                                             ClampFiniteOrDefault(
+													 postRainWaterClarity,
+													 POST_RAIN_WATER_CLARITY_MIN,
+													 POST_RAIN_WATER_CLARITY_MAX,
+													 DEFAULT_POST_RAIN_WATER_CLARITY) :
+	                                             0.0f;
 	const float postRainCubemapGlareReductionFromClarity = activePostRainWaterClarity;
 	const float postRainSpecBoostFromClarity = activePostRainWaterClarity;
 	const float inRainCubemapSuppressionFromBalance = activeRainReflectionBalance;
@@ -2345,19 +2350,19 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	}
 	runtimeState.grassLightingWetnessPhase = grassLightingWetnessPhase;
 	const float activePuddleSkyReflectionScale = masterWetnessEnabled ?
-		ClampFiniteOrDefault(
-			puddleSkyReflectionScale,
-			PUDDLE_SKY_REFLECTION_SCALE_MIN,
-			PUDDLE_SKY_REFLECTION_SCALE_MAX,
-			DEFAULT_PUDDLE_SKY_REFLECTION_SCALE) :
-		DEFAULT_PUDDLE_SKY_REFLECTION_SCALE;
+	                                                 ClampFiniteOrDefault(
+														 puddleSkyReflectionScale,
+														 PUDDLE_SKY_REFLECTION_SCALE_MIN,
+														 PUDDLE_SKY_REFLECTION_SCALE_MAX,
+														 DEFAULT_PUDDLE_SKY_REFLECTION_SCALE) :
+	                                                 DEFAULT_PUDDLE_SKY_REFLECTION_SCALE;
 	const float activeRainContactWetnessScale = data.settings.EnableWetterness ?
-		ClampFiniteOrDefault(
-			sanitizedSettings.RainContactWetnessScale,
-			RAIN_CONTACT_WETNESS_SCALE_MIN,
-			RAIN_CONTACT_WETNESS_SCALE_MAX,
-			DEFAULT_RAIN_CONTACT_WETNESS_SCALE) :
-		0.0f;
+	                                                ClampFiniteOrDefault(
+														sanitizedSettings.RainContactWetnessScale,
+														RAIN_CONTACT_WETNESS_SCALE_MIN,
+														RAIN_CONTACT_WETNESS_SCALE_MAX,
+														DEFAULT_RAIN_CONTACT_WETNESS_SCALE) :
+	                                                0.0f;
 	data.settings.ShorePersistentDarkeningStrength = activeShorePersistentDarkeningStrength;
 	// Pack derived [0..1] controls into one uint lane using UNORM10 triplet:
 	// bits  0.. 9 = post-rain spec boost (derived from Post-Rain Water Clarity)
@@ -2573,7 +2578,6 @@ void Wetterness::RestoreDefaultSettings()
 	SanitizeShaderFacingSettings(settings);
 	InvalidateSanitizedSettingsCache();
 	DetectCurrentPreset();
-
 }
 
 void Wetterness::DrawWeatherAnalysis() const
@@ -2602,14 +2606,11 @@ void Wetterness::DrawWeatherAnalysis() const
 	if (weatherMaxParticleDensity <= 0.0f && sky->lastWeather && sky->lastWeather->precipitationData) {
 		weatherMaxParticleDensity = sky->lastWeather->precipitationData->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
 	}
-	// // Consolidated Shader & Weather Analysis
-	static bool rainAnalysisExpanded = true;
-	Util::DrawSectionHeader("Rain Analysis", false, true, &rainAnalysisExpanded);
-
-	if (rainAnalysisExpanded) {
+	// Consolidated Shader & Weather Analysis
+	{
 		// Climate Preset Information Section
-		auto climateSection = Util::SectionWrapper("Current Climate Preset");
-		if (climateSection) {
+		DrawWeatherAnalysisLabel("Current Climate Preset");
+		{
 			const auto& presetInfo = CLIMATE_PRESET_INFO[static_cast<size_t>(climatePreset)];
 
 			ImGui::Text("Active Preset: %s", presetInfo.name);
@@ -2637,8 +2638,9 @@ void Wetterness::DrawWeatherAnalysis() const
 			ImGui::Text("Raindrop Chance: %.1f%% (preset value)", settings.RaindropChance * 100.0f);
 			ImGui::Unindent();
 		}
-		auto section = Util::SectionWrapper("Rain System State");
-		if (section && sky->currentWeather) {
+		ImGui::Spacing();
+		DrawWeatherAnalysisLabel("Rain System State");
+		if (sky->currentWeather) {
 			float gridSizeGameUnits = 1.0f / frameData.settings.RaindropGridSize;
 			float gridSizeMeters = Util::Units::GameUnitsToMeters(gridSizeGameUnits);
 			float intervalSeconds = 1.0f / frameData.settings.RaindropInterval;
@@ -2654,7 +2656,7 @@ void Wetterness::DrawWeatherAnalysis() const
 			float theoreticalMaxRainRate = CalculatePrecipitationRate(
 				maxRateChance, maxRateGridSize, maxRateInterval);
 
-			if (ImGui::BeginTable("RainAnalysis", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersV)) {
+			if (ImGui::BeginTable("RainAnalysis", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders)) {
 				ImGui::TableSetupColumn("Current Shader State", ImGuiTableColumnFlags_WidthStretch, 0.5f);
 				ImGui::TableSetupColumn("Precipitation Analysis", ImGuiTableColumnFlags_WidthStretch, 0.5f);
 				ImGui::TableHeadersRow();

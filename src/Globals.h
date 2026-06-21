@@ -35,7 +35,7 @@ struct PerformanceOverlay;
 struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
-struct WeatherEditor;
+struct CSEditor;
 struct ScreenshotFeature;
 
 class ParticleLights;
@@ -96,7 +96,7 @@ namespace globals
 		extern Upscaling upscaling;
 		extern RenderDoc renderDoc;
 		extern ScreenshotFeature screenshotFeature;
-		extern WeatherEditor weatherEditor;
+		extern CSEditor csEditor;
 		extern TruePBR truePBR;
 
 		namespace llf

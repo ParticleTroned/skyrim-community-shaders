@@ -3,6 +3,7 @@
 #include "Deferred.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "Features/AdaptiveBrightness.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -34,7 +35,6 @@
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/WaterEffects.h"
-#include "Features/WeatherEditor.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
@@ -88,7 +88,7 @@ namespace globals
 		Upscaling upscaling{};
 		RenderDoc renderDoc{};
 		ScreenshotFeature screenshotFeature{};
-		WeatherEditor weatherEditor{};
+		CSEditor csEditor{};
 		TruePBR truePBR{};
 
 		namespace llf

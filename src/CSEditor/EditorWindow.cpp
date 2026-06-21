@@ -1,6 +1,6 @@
 #include "EditorWindow.h"
 
-#include "Features/WeatherEditor.h"
+#include "Features/CSEditor.h"
 #include "InteriorOnlyPanel.h"
 #include "Menu.h"
 #include "PaletteWindow.h"
@@ -179,7 +179,7 @@ std::string EditorWindow::ResolveEditorId(RE::TESForm* form, const WidgetVec& wi
 
 void EditorWindow::ShowObjectsWindow()
 {
-	Util::BeginWithRoundedClose("Weather and Lighting Browser", nullptr);
+	Util::BeginWithRoundedClose("CS Editor Browser", nullptr);
 
 	// Reset filter state when the user switches categories so stale column
 	// selections (e.g. Status) don't hide all items in the new category.
@@ -214,7 +214,7 @@ void EditorWindow::ShowObjectsWindow()
 			// List of categories
 			const char* categories[] = { "Weather", "ImageSpace", "Lighting Template", "Cell Lighting",
 				"Volumetric Lighting", "Shader Particle Geometry", "Lens Flare", "Visual Effect",
-				"Interior Only", "Lighting editor" };
+				"Interior Only", "Light Editor" };
 			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
 				// Highlight the selected category
 				if (ImGui::Selectable(categories[i], m_selectedCategory == categories[i])) {
@@ -239,7 +239,7 @@ void EditorWindow::ShowObjectsWindow()
 				return;
 			}
 
-			if (m_selectedCategory == "Lighting editor") {
+			if (m_selectedCategory == "Light Editor") {
 				BeginScrollableContent("##LightEditorScroll");
 				lightEditor.DrawSettings();
 				EndScrollableContent();
@@ -1040,7 +1040,7 @@ void EditorWindow::RenderUI()
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("Help")) {
-			ImGui::Text("Weather Editor");
+			ImGui::Text("CS Editor");
 			ImGui::Separator();
 			ImGui::TextUnformatted("Keyboard Shortcuts:");
 			ImGui::BulletText("Ctrl+F: Focus search");
@@ -1153,7 +1153,7 @@ void EditorWindow::RenderUI()
 		char previewStatusBuf[128] = {};
 		bool showPreviewStatus = previewMode != PreviewMode::None;
 		if (showPreviewStatus) {
-			std::string hotkey = Util::Input::KeyIdToString(menu->GetSettings().WeatherEditorToggleKey);
+			std::string hotkey = Util::Input::KeyIdToString(menu->GetSettings().CSEditorToggleKey);
 			if (previewMode == PreviewMode::FreeCamera)
 				std::snprintf(previewStatusBuf, sizeof(previewStatusBuf), " [ %s ] FREE CAMERA (Speed: %.0f)", hotkey.c_str(), flySpeed);
 			else if (previewMode == PreviewMode::FreeCameraLocked)
@@ -1265,7 +1265,7 @@ void EditorWindow::RenderUI()
 		ImGui::SetCursorScreenPos(ImVec2(xButtonX, cursorY));
 		if (Util::ErrorButton("X", ImVec2(closeButtonSize, closeButtonSize)))
 			open = false;
-		Util::AddTooltip("Close Weather Editor (Esc)");
+		Util::AddTooltip("Close CS Editor (Esc)");
 
 		ImGui::PopClipRect();  // End bottom-border clip rect
 

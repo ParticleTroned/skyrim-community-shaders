@@ -1,6 +1,6 @@
 #include "UI.h"
 
-#include "../WeatherEditor/EditorWindow.h"
+#include "../CSEditor/EditorWindow.h"
 #include "D3D.h"
 #include "FileSystem.h"
 #include "Menu.h"
@@ -2249,7 +2249,7 @@ namespace Util
 			ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
 				weather ? weather->GetFormEditorID() : "Unknown");
 			ImGui::Separator();
-			ImGui::TextColored(theme.StatusPalette.InfoColor, "Click to open Weather Editor");
+			ImGui::TextColored(theme.StatusPalette.InfoColor, "Click to open CS Editor");
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}

@@ -12,6 +12,7 @@
 #include "Feature.h"
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
+#include "Features/CSEditor.h"
 #include "Features/Wetterness.h"
 #include "Fonts.h"
 #include "Globals.h"
@@ -781,7 +782,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
 
-			if (globals::profiler && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
+			if (feat != &globals::features::csEditor && globals::profiler && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::Spacing();
 				ImGui::SeparatorText("Profiling");
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());

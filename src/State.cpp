@@ -15,11 +15,12 @@
 #include <limits>
 #include <thread>
 
-#include <pystring/pystring.h>
 #include <RE/B/BGSSaveLoadGame.h>
+#include <pystring/pystring.h>
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/FoveatedCommon.h"
@@ -33,7 +34,6 @@
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
-#include "Features/WeatherEditor.h"
 #include "Menu.h"
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
@@ -177,7 +177,7 @@ void State::Draw()
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
-	auto& weatherEditor = globals::features::weatherEditor;
+	auto& csEditor = globals::features::csEditor;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
 
@@ -196,7 +196,7 @@ void State::Draw()
 			logger::info("Applied deferred post-load runtime reset");
 		}
 
-		if (weatherEditor.loaded) {
+		if (csEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}
@@ -1301,11 +1301,11 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 		float computedMipBias = 0.0f;
 		if (upscalingLoaded &&
-		    temporal &&
-		    upscaleMethod != Upscaling::UpscaleMethod::kNONE &&
-		    upscaleMethod != Upscaling::UpscaleMethod::kTAA &&
-		    screenSize.x > 0.0f &&
-		    renderSize.x > 0.0f) {
+			temporal &&
+			upscaleMethod != Upscaling::UpscaleMethod::kNONE &&
+			upscaleMethod != Upscaling::UpscaleMethod::kTAA &&
+			screenSize.x > 0.0f &&
+			renderSize.x > 0.0f) {
 			computedMipBias = std::log2f(renderSize.x / screenSize.x);
 			if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
 				computedMipBias -= 1.0f;

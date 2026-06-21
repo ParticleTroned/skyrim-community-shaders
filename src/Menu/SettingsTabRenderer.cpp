@@ -385,10 +385,10 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 		ImGui::TextWrapped("Opens the performance overlay with runtime diagnostics. Default key: F10. This binding is configurable.");
 
 		Util::InputComboWidget(
-			"Weather Editor Toggle Key:",
-			settings.WeatherEditorToggleKey,
-			state.settingWeatherEditorToggleKey,
-			"Change##WeatherEditorToggle");
+			"CS Editor Toggle Key:",
+			settings.CSEditorToggleKey,
+			state.settingCSEditorToggleKey,
+			"Change##CSEditorToggle");
 
 		Util::InputComboWidget(
 			"Screenshot Key:",

@@ -5,6 +5,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 
+#include "Features/CSEditor.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
 #include "Features/ScreenSpaceGI.h"
@@ -13,7 +14,6 @@
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
-#include "Features/WeatherEditor.h"
 
 #include "Hooks.h"
 #include "Utils/D3D.h"

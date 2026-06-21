@@ -134,8 +134,8 @@ namespace SharedData
 		float pad0;
 	};
 
-	// Preserved to keep the SE branch wetterness payload aligned even where the
-	// current shared shaders still read the legacy WetnessEffects block directly.
+	// Nested wetterness settings block matching Wetterness::ShaderSettings on the CPU side.
+	// A few timing/distribution fields are uploaded in shader-ready form rather than raw UI units.
 	struct WetternessShaderSettings
 	{
 		uint EnableWetterness;
@@ -159,8 +159,8 @@ namespace SharedData
 		uint EnableLegacyWetReflection;
 		float WetIndirectSpecularScale;
 		float RaindropFxRange;
-		float RaindropGridSize;
-		float RaindropInterval;
+		float RaindropGridSize;  // shader-ready grid scale: 1 / user grid size
+		float RaindropInterval;  // shader-ready temporal scale: 1 / user interval seconds
 		float RaindropChance;
 		float SplashesLifetime;
 		float SplashesStrength;
@@ -169,7 +169,7 @@ namespace SharedData
 		float RippleStrength;
 		float RippleRadius;
 		float RippleBreadth;
-		float RippleLifetime;
+		float RippleLifetime;  // shader-ready lifetime scale: interval / ripple lifetime
 		float PostRainPuddleWaterStrength;
 		float RaindropTransitionFalloff;
 		float WetDarkeningStrength;

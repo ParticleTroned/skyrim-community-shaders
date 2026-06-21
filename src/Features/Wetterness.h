@@ -124,8 +124,8 @@ public:
 		float WetIndirectSpecularScale = 0.8f;
 		// Shader/runtime value in game units.
 		float RaindropFxRange = 2000.0f;
-		float RaindropGridSize = 3.f;
-		float RaindropInterval = 0.5f;
+		float RaindropGridSize = 3.f;  // uploaded as 1 / grid size for shader evaluation
+		float RaindropInterval = 0.5f;  // uploaded as 1 / interval seconds for shader evaluation
 		float RaindropChance = 0.8f;
 		float SplashesLifetime = 6.0f;
 		float SplashesStrength = 1.2f;
@@ -134,7 +134,7 @@ public:
 		float RippleStrength = 2.0f;
 		float RippleRadius = .6f;
 		float RippleBreadth = .40f;
-		float RippleLifetime = .30f;
+		float RippleLifetime = .30f;  // uploaded as interval / lifetime for shader evaluation
 
 		float PostRainPuddleWaterStrength = 2.5f;
 		float RaindropTransitionFalloff = 2.0f;

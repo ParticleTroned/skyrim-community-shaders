@@ -586,7 +586,36 @@ FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 
 #			if defined(LOD)
 #				undef WATER_EFFECTS
+#				undef WETTERNESS
 #				undef WETNESS_EFFECTS
+#			endif
+
+#			if defined(WETTERNESS)
+#				define CS_WETNESS_RUNTIME SharedData::wetternessSettings
+#				define CS_WETNESS_SETTINGS SharedData::wetternessSettings.settings
+#				include "Wetterness/Wetterness.hlsli"
+#				define CS_GET_FLOW_AWARE_RIPPLE_OFFSET(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale) Wetterness::GetFlowAwareRippleOffset(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale)
+#				define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) Wetterness::GetRainDrops(worldPos, time, normal, strength)
+#				define CS_REORIENT_NORMAL(n1, n2) Wetterness::ReorientNormal(n1, n2)
+#				define CS_GET_DEBUG_WETNESS_COLOR_SPECULAR(rippleInfo, rippleMultiplier, splashMultiplier) Wetterness::GetDebugWetnessColorSpecular(rippleInfo, rippleMultiplier, splashMultiplier)
+#				define CS_GET_DEBUG_WETNESS_COLOR_UNDERWATER(rippleInfo, rippleMultiplier, splashMultiplier) Wetterness::GetDebugWetnessColorUnderwater(rippleInfo, rippleMultiplier, splashMultiplier)
+#				define CS_GET_DEBUG_WETNESS_COLOR_STANDARD(rippleInfo, rippleMultiplier, splashMultiplier) Wetterness::GetDebugWetnessColorStandard(rippleInfo, rippleMultiplier, splashMultiplier)
+#				if defined(DEBUG_WETTERNESS) || defined(DEBUG_WETNESS_EFFECTS)
+#					define CS_DEBUG_WETNESS
+#				endif
+#			elif defined(WETNESS_EFFECTS)
+#				define CS_WETNESS_RUNTIME SharedData::wetnessEffectsSettings
+#				define CS_WETNESS_SETTINGS SharedData::wetnessEffectsSettings
+#				include "WetnessEffects/WetnessEffects.hlsli"
+#				define CS_GET_FLOW_AWARE_RIPPLE_OFFSET(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale) WetnessEffects::GetFlowAwareRippleOffset(flowVector, flowStrength, timingScale, flowMultiplier, uvWorldScale)
+#				define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) WetnessEffects::GetRainDrops(worldPos, time, normal, strength)
+#				define CS_REORIENT_NORMAL(n1, n2) ReorientNormal(n1, n2)
+#				define CS_GET_DEBUG_WETNESS_COLOR_SPECULAR(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorSpecular(rippleInfo, rippleMultiplier, splashMultiplier)
+#				define CS_GET_DEBUG_WETNESS_COLOR_UNDERWATER(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorUnderwater(rippleInfo, rippleMultiplier, splashMultiplier)
+#				define CS_GET_DEBUG_WETNESS_COLOR_STANDARD(rippleInfo, rippleMultiplier, splashMultiplier) WetnessEffects::GetDebugWetnessColorStandard(rippleInfo, rippleMultiplier, splashMultiplier)
+#				if defined(DEBUG_WETNESS_EFFECTS)
+#					define CS_DEBUG_WETNESS
+#				endif
 #			endif
 
 #			if defined(WATER_EFFECTS) && !defined(VC)
@@ -596,10 +625,6 @@ FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 
 #			if defined(DYNAMIC_CUBEMAPS)
 #				include "DynamicCubemaps/DynamicCubemaps.hlsli"
-#			endif
-
-#			if defined(WETNESS_EFFECTS)
-#				include "WetnessEffects/WetnessEffects.hlsli"
 #			endif
 
 // Structure to return both normal and ripple/splash color information
@@ -724,15 +749,16 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	finalNormal = lerp(displacement, finalNormal, displacement.z);
 #			endif
 
-#			if defined(WETNESS_EFFECTS)
+#			if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
 	// Wetness Effects Debug System:
 	// DEBUG_WETNESS_EFFECTS Color Legend:
 	// - BRIGHT MAGENTA: Ripples, BRIGHT GREEN: Splashes, CYAN: Both effects
 	float4 raindropInfo = float4(0, 0, 1, 0);
-	float maxRainDropDistance = SharedData::wetnessEffectsSettings.RaindropFxRange * SharedData::wetnessEffectsSettings.RaindropFxRange * 3;
+	float raindropFxRange = max(CS_WETNESS_SETTINGS.RaindropFxRange, 1.0);
+	float maxRainDropDistance = raindropFxRange * raindropFxRange * 3;
 	float rainDropDistance = dot(input.WPosition.xyz, input.WPosition.xyz);
 	float distanceFadeout = saturate((1 - saturate(rainDropDistance / maxRainDropDistance)) * 3);
-	if (finalNormal.z > 0 && SharedData::wetnessEffectsSettings.Raining > 0.0f && SharedData::wetnessEffectsSettings.EnableRaindropFx &&
+	if (finalNormal.z > 0 && CS_WETNESS_RUNTIME.Raining > 0.0f && CS_WETNESS_SETTINGS.EnableRaindropFx &&
 		(rainDropDistance < maxRainDropDistance) && wetnessOcclusion > 0.05) {
 		float rippleStrengthModifier = (wetnessOcclusion * wetnessOcclusion) * distanceFadeout;
 		float3 rippleWPosition = input.WPosition.xyz + finalNormal * 16;
@@ -746,7 +772,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 		// Calculate flow-aware ripple offset using centralized timing logic
 		// Parameters: avgFlowmapMultiplier=9.26 (average of GetWaterNormal flowmap normal multipliers: 9.92, 10.64, 8, 8.48)
 		// uvToWorldScale=0.125 (1/8 - relates to 64× texture coordinate scaling factor)
-		float2 flowOffset = WetnessEffects::GetFlowAwareRippleOffset(
+		float2 flowOffset = CS_GET_FLOW_AWARE_RIPPLE_OFFSET(
 			worldFlowData.flowVector,
 			worldFlowData.color.w,      // Flow strength from flowmap alpha
 			0.001 * ReflectionColor.w,  // Reflection timing scale (matches GetFlowmapNormal)
@@ -756,7 +782,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 
 		rippleWPosition.xy += flowOffset;
 #				endif
-		raindropInfo = WetnessEffects::GetRainDrops(rippleWPosition + FrameBuffer::CameraPosAdjust.xyz, SharedData::wetnessEffectsSettings.Time, finalNormal, rippleStrengthModifier);
+		raindropInfo = CS_GET_RAIN_DROPS(rippleWPosition + FrameBuffer::CameraPosAdjust.xyz, CS_WETNESS_RUNTIME.Time, finalNormal, rippleStrengthModifier);
 
 		// Calculate ripple and splash color intensities
 		float rippleIntensity = length(raindropInfo.xy) * rippleStrengthModifier;
@@ -766,8 +792,10 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 		result.rippleInfo.xyz = raindropInfo.xyz * rippleIntensity;
 		result.rippleInfo.w = splashIntensity;
 	}
-	float3 rippleNormal = normalize(raindropInfo.xyz);
-	finalNormal = WetnessEffects::ReorientNormal(rippleNormal, finalNormal);
+	if (any(raindropInfo.xyz != float3(0, 0, 1))) {
+		float3 rippleNormal = normalize(raindropInfo.xyz);
+		finalNormal = CS_REORIENT_NORMAL(rippleNormal, finalNormal);
+	}
 #			endif
 
 	result.normal = finalNormal;
@@ -1053,9 +1081,9 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	finalColor *= fresnel;
-#				if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
+#				if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override specular color with debug visualization
-	float3 debugColor = WetnessEffects::GetDebugWetnessColorSpecular(waterData.rippleInfo, 2.5, 4.0);
+	float3 debugColor = CS_GET_DEBUG_WETNESS_COLOR_SPECULAR(waterData.rippleInfo, 2.5, 4.0);
 	if (any(debugColor)) {
 		finalColor = debugColor;
 	}
@@ -1141,9 +1169,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 finalSpecularColor = lerp(Color::Water(ShallowColor.xyz), specularColor, 0.5);
 	float3 finalColor = saturate(1 - length(input.WPosition.xyz) * 0.002) * ((1 - fresnel) * (diffuseColor - finalSpecularColor)) + finalSpecularColor;
 	// Add ripple and splash color effects for underwater
-#					if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
+#					if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override water color with debug visualization (darker for underwater)
-	float3 debugColor = WetnessEffects::GetDebugWetnessColorUnderwater(waterData.rippleInfo, 1.5, 2.0);
+	float3 debugColor = CS_GET_DEBUG_WETNESS_COLOR_UNDERWATER(waterData.rippleInfo, 1.5, 2.0);
 	if (any(debugColor)) {
 		finalColor = debugColor;
 	}
@@ -1195,9 +1223,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 finalColor = finalColorPreFog;
 
-#						if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
+#						if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override water color with debug visualization
-	float3 debugColor = WetnessEffects::GetDebugWetnessColorStandard(waterData.rippleInfo, 2.0, 3.0);
+	float3 debugColor = CS_GET_DEBUG_WETNESS_COLOR_STANDARD(waterData.rippleInfo, 2.0, 3.0);
 	if (any(debugColor)) {
 		finalColor = debugColor;
 	}
@@ -1262,9 +1290,9 @@ PS_OUTPUT main(PS_INPUT input)
 	refractionColor = lerp(refractionColor, fogColor, Color::FogAlpha(fogFactor));
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
-#						if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
+#						if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override water color with debug visualization
-	float3 debugColor = WetnessEffects::GetDebugWetnessColorStandard(waterData.rippleInfo, 2.0, 3.0);
+	float3 debugColor = CS_GET_DEBUG_WETNESS_COLOR_STANDARD(waterData.rippleInfo, 2.0, 3.0);
 	if (any(debugColor)) {
 		finalColor = debugColor;
 	}

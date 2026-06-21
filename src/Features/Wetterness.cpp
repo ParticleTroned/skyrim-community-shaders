@@ -2468,6 +2468,7 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	const float safeRaindropGridSize = std::max(data.settings.RaindropGridSize, MIN_RAINDROP_GRID_SIZE);
 	const float safeRaindropInterval = std::max(data.settings.RaindropInterval, MIN_RAINDROP_INTERVAL);
 	const float safeRippleLifetime = std::max(data.settings.RippleLifetime, MIN_RIPPLE_LIFETIME);
+	// Upload shader-ready factors so the HLSL side can stay branch-free in the droplet loop.
 	data.settings.RaindropGridSize = 1.0f / safeRaindropGridSize;
 	data.settings.RaindropInterval = 1.0f / safeRaindropInterval;
 	data.settings.RippleLifetime = safeRaindropInterval / safeRippleLifetime;

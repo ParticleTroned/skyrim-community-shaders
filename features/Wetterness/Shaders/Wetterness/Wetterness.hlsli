@@ -51,30 +51,32 @@ namespace Wetterness
 
 		// Precompute constants
 		float uintToFloat = rcp(4294967295.0);
-		float rippleBreadthRcp = rcp(max(SharedData::wetternessSettings.RippleBreadth, 1e-3));
-		float intervalRcp = SharedData::wetternessSettings.RaindropIntervalRcp;
-		float lifetimeRcp = SharedData::wetternessSettings.RippleLifetimeRcp;
-		float raindropChance = saturate(SharedData::wetternessSettings.RaindropChance);
-		bool enableSplashes = SharedData::wetternessSettings.EnableSplashes;
-		bool enableRipples = SharedData::wetternessSettings.EnableRipples;
-		float splashMaxRadius = max(SharedData::wetternessSettings.SplashesMinRadius, SharedData::wetternessSettings.SplashesMaxRadius);
+		float rippleBreadthRcp = rcp(max(CS_WETNESS_SETTINGS.RippleBreadth, 1e-3));
+		// These three fields are uploaded in shader-ready form by Wetterness.cpp:
+		// grid scale = 1 / user grid size, time scale = 1 / user interval, lifetime scale = interval / lifetime.
+		float raindropPhaseScale = CS_WETNESS_SETTINGS.RaindropInterval;
+		float rippleLifetimeScale = CS_WETNESS_SETTINGS.RippleLifetime;
+		float raindropChance = saturate(CS_WETNESS_SETTINGS.RaindropChance);
+		bool enableSplashes = CS_WETNESS_SETTINGS.EnableSplashes;
+		bool enableRipples = CS_WETNESS_SETTINGS.EnableRipples;
+		float splashMaxRadius = max(CS_WETNESS_SETTINGS.SplashesMinRadius, CS_WETNESS_SETTINGS.SplashesMaxRadius);
 		float splashMaxRadiusSqr = splashMaxRadius * splashMaxRadius;
-		float rippleMaxRadius = max(SharedData::wetternessSettings.RippleRadius, 0.0) * 1.3;
+		float rippleMaxRadius = max(CS_WETNESS_SETTINGS.RippleRadius, 0.0) * 1.3;
 		float rippleMaxRadiusSqr = rippleMaxRadius * rippleMaxRadius;
 		float splashTime = 0.0;
 		if (enableSplashes) {
-			splashTime = t * intervalRcp / SharedData::wetternessSettings.SplashesLifetime;
+			splashTime = t * raindropPhaseScale / CS_WETNESS_SETTINGS.SplashesLifetime;
 		}
-		float rippleTime = t * intervalRcp;
+		float rippleTime = t * raindropPhaseScale;
 		float worldPhase = worldPos.z * 0.001;
-		float splashStrength = SharedData::wetternessSettings.SplashesStrength;
-		float rippleStrength = SharedData::wetternessSettings.RippleStrength * rippleStrengthModifier;
+		float splashStrength = CS_WETNESS_SETTINGS.SplashesStrength;
+		float rippleStrength = CS_WETNESS_SETTINGS.RippleStrength * rippleStrengthModifier;
 		bool splashesOnly = enableSplashes && !enableRipples;
 		bool ripplesOnly = enableRipples && !enableSplashes;
 		float activeMaxRadiusSqr = max(enableSplashes ? splashMaxRadiusSqr : 0.0, enableRipples ? rippleMaxRadiusSqr : 0.0);
 
 		// Calculate grid coordinates
-		float2 gridUV = worldPos.xy * SharedData::wetternessSettings.RaindropGridSizeRcp + normal.xy;
+		float2 gridUV = worldPos.xy * CS_WETNESS_SETTINGS.RaindropGridSize + normal.xy;
 		int2 grid = floor(gridUV);
 		gridUV -= grid;
 
@@ -84,7 +86,7 @@ namespace Wetterness
 
 		// Early exit if no effects enabled
 		bool hasEffects = enableSplashes || enableRipples;
-		if (!hasEffects || raindropChance <= 0.0 || intervalRcp <= 0.0 || lifetimeRcp <= 0.0) {
+		if (!hasEffects || raindropChance <= 0.0 || raindropPhaseScale <= 0.0 || rippleLifetimeScale <= 0.0) {
 			return float4(rippleNormal, wetness * splashStrength);
 		}
 
@@ -117,8 +119,8 @@ namespace Wetterness
 						float2 vec2Centre = int2(i, j) + floatHash.xy - gridUV;
 						float distSqr = dot(vec2Centre, vec2Centre);
 						if (distSqr < splashMaxRadiusSqr) {
-							float dropRadius = lerp(SharedData::wetternessSettings.SplashesMinRadius,
-							                      SharedData::wetternessSettings.SplashesMaxRadius,
+							float dropRadius = lerp(CS_WETNESS_SETTINGS.SplashesMinRadius,
+							                      CS_WETNESS_SETTINGS.SplashesMaxRadius,
 							                      float(Random::iqint3(hash.yz)) * uintToFloat);
 							if (distSqr < dropRadius * dropRadius) {
 								wetness = max(wetness, RainFade(residual));
@@ -140,16 +142,16 @@ namespace Wetterness
 					if (floatHash.z < raindropChance) {
 						float2 vec2Centre = int2(i, j) + floatHash.xy - gridUV;
 						float distSqr = dot(vec2Centre, vec2Centre);
-						float rippleT = residual * lifetimeRcp;
+						float rippleT = residual * rippleLifetimeScale;
 
 						if (rippleT < 1.0 && distSqr < rippleMaxRadiusSqr) {
 							// Vary ripple size using high-quality random hash
 							uint sizeHash = Random::iqint3(hash.xy);
 							float sizeVariation = lerp(0.7, 1.3, float(sizeHash) * uintToFloat);
 
-							float rippleRadius = SharedData::wetternessSettings.RippleRadius * sizeVariation;
+							float rippleRadius = CS_WETNESS_SETTINGS.RippleRadius * sizeVariation;
 							float rippleR = lerp(0.0, rippleRadius, rippleT);
-							float rippleInnerRadius = rippleR - SharedData::wetternessSettings.RippleBreadth;
+							float rippleInnerRadius = rippleR - CS_WETNESS_SETTINGS.RippleBreadth;
 
 							bool insideOuterRadius = distSqr < rippleR * rippleR;
 							bool outsideInnerRadius = rippleInnerRadius <= 0.0 || distSqr > rippleInnerRadius * rippleInnerRadius;
@@ -181,8 +183,8 @@ namespace Wetterness
 					float2 vec2Centre = int2(i, j) + splashFloatHash.xy - gridUV;
 					float distSqr = dot(vec2Centre, vec2Centre);
 					if (distSqr < splashMaxRadiusSqr) {
-						float dropRadius = lerp(SharedData::wetternessSettings.SplashesMinRadius,
-						                      SharedData::wetternessSettings.SplashesMaxRadius,
+						float dropRadius = lerp(CS_WETNESS_SETTINGS.SplashesMinRadius,
+						                      CS_WETNESS_SETTINGS.SplashesMaxRadius,
 						                      float(Random::iqint3(splashHash.yz)) * uintToFloat);
 						if (distSqr < dropRadius * dropRadius) {
 							wetness = max(wetness, RainFade(splashResidual));
@@ -198,14 +200,14 @@ namespace Wetterness
 				if (rippleFloatHash.z < raindropChance) {
 					float2 vec2Centre = int2(i, j) + rippleFloatHash.xy - gridUV;
 					float distSqr = dot(vec2Centre, vec2Centre);
-					float rippleT = rippleResidual * lifetimeRcp;
+					float rippleT = rippleResidual * rippleLifetimeScale;
 
 					if (rippleT < 1.0 && distSqr < rippleMaxRadiusSqr) {
 						uint sizeHash = Random::iqint3(rippleHash.xy);
 						float sizeVariation = lerp(0.7, 1.3, float(sizeHash) * uintToFloat);
-						float rippleRadius = SharedData::wetternessSettings.RippleRadius * sizeVariation;
+						float rippleRadius = CS_WETNESS_SETTINGS.RippleRadius * sizeVariation;
 						float rippleR = lerp(0.0, rippleRadius, rippleT);
-						float rippleInnerRadius = rippleR - SharedData::wetternessSettings.RippleBreadth;
+						float rippleInnerRadius = rippleR - CS_WETNESS_SETTINGS.RippleBreadth;
 
 						bool insideOuterRadius = distSqr < rippleR * rippleR;
 						bool outsideInnerRadius = rippleInnerRadius <= 0.0 || distSqr > rippleInnerRadius * rippleInnerRadius;

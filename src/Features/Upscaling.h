@@ -506,6 +506,11 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> submitStageStretchCS;
 	ID3D11ComputeShader* GetSubmitStageStretchCS();
 
+	winrt::com_ptr<ID3D11PixelShader> vrDesktopMirrorBlitPS;
+	ID3D11PixelShader* GetVRDesktopMirrorBlitPS();
+	winrt::com_ptr<ID3D11RenderTargetView> vrDesktopMirrorBlitRTV;
+	ID3D11Texture2D* vrDesktopMirrorBlitTarget = nullptr;
+
 	winrt::com_ptr<ID3D11PixelShader> vrMenuLayerCompositePS;
 	ID3D11PixelShader* GetVRMenuLayerCompositePS();
 
@@ -580,6 +585,7 @@ public:
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
+	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const Texture2D& colorOutput);
 	bool ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2D& sharpenInput);
 

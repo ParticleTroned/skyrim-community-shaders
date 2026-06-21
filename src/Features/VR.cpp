@@ -301,6 +301,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	mouseSpeed,
 	dragHighlightColor,
 	KeepDesktopWindowFocusedForVRMenu,
+	StabilizeRenderScaleDesktopMirror,
 	VRMenuOpenKeys,
 	VRMenuCloseKeys,
 	VROverlayOpenKeys,
@@ -1139,11 +1140,23 @@ namespace
 		}
 	}
 
+	void DrawStabilizeRenderScaleDesktopMirrorSetting()
+	{
+		auto& settings = globals::features::vr.settings;
+		ImGui::Checkbox("Stabilize Render-Scale Desktop Mirror", &settings.StabilizeRenderScaleDesktopMirror);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Desktop-only fallback for VR Render Scale Mode.");
+			ImGui::TextUnformatted("When the submit texture cannot be updated by the fast direct copy, blits the final per-eye render-scale outputs back into the desktop mirror.");
+			ImGui::TextUnformatted("Off by default. HMD presentation is unchanged; enabling it adds a small GPU blit only while render-scale submit is active and the mirror texture needs the fallback.");
+		}
+	}
+
 	void DrawGeneralVRSettings()
 	{
 		auto& vr = globals::features::vr;
 		VR::Settings& settings = vr.settings;
 		DrawKeepDesktopWindowFocusedForVRMenuSetting();
+		DrawStabilizeRenderScaleDesktopMirrorSetting();
 		ImGui::Separator();
 		if (ImGui::CollapsingHeader("General Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 			// Exteriors

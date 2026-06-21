@@ -1126,7 +1126,7 @@ namespace
 	{
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
-		if (ImGui::Checkbox("Keep Game Window Focused for VR Menu", &settings.KeepDesktopWindowFocusedForVRMenu)) {
+		if (ImGui::Checkbox("Keep Desktop Game Window Focused for VR Menu", &settings.KeepDesktopWindowFocusedForVRMenu)) {
 			if (settings.KeepDesktopWindowFocusedForVRMenu) {
 				vr.UpdateMenuDesktopWindowManagement(true);
 			} else {

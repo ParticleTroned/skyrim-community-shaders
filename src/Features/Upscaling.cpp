@@ -7,6 +7,7 @@
 #include "Menu.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
+#include "RE/R/RaceSexMenu.h"
 #include "Features/RenderDoc.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
@@ -197,6 +198,7 @@ namespace
 	bool IsMainMenuContextActive();
 	bool IsMainOrLoadingMenuContextActive();
 	bool IsKnownGameMenuContextActive();
+	bool IsVRMenuScenePresentationBlockActive();
 
 	bool IsRenderDocDllLoaded(bool a_probeProcess)
 	{
@@ -245,7 +247,7 @@ namespace
 		"LevelUp Menu",
 		"Dialogue Menu",
 		"MessageBoxMenu",
-		"RaceSex Menu",
+		RE::RaceSexMenu::MENU_NAME,
 		"Tutorial Menu",
 		"Console",
 	};
@@ -2299,7 +2301,7 @@ namespace
 		if (!globals::game::isVR)
 			return true;
 
-		if (IsMainOrLoadingMenuContextActive())
+		if (IsVRMenuScenePresentationBlockActive())
 			return false;
 
 		if (HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(a_upscaling))
@@ -2416,7 +2418,7 @@ namespace
 		if (!globals::game::isVR || !a_state)
 			return false;
 
-		if (IsLoadingMenuContextActive() || IsSaveLoadTransitionContextActive(a_state) || IsCommunityShadersMenuOpen())
+		if (IsVRMenuScenePresentationBlockActive() || IsSaveLoadTransitionContextActive(a_state) || IsCommunityShadersMenuOpen())
 			return true;
 
 		return !HasCompletedVRWorldFrameAfterLatestLoad(a_state);
@@ -2497,6 +2499,11 @@ namespace
 		return IsMainMenuContextActive() || IsLoadingMenuContextActive();
 	}
 
+	bool IsRaceSexMenuContextActive(RE::UI* a_ui)
+	{
+		return a_ui && a_ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
+	}
+
 	bool IsSkyrimMenuPresentationMenuName(std::string_view a_menuName)
 	{
 		for (const auto menuName : kSkyrimPresentationMenuNames) {
@@ -2556,7 +2563,9 @@ namespace
 
 	bool IsVRMenuScenePresentationBlockActive()
 	{
-		return globals::game::isVR && IsMainOrLoadingMenuContextActive();
+		auto ui = globals::game::ui;
+		return globals::game::isVR &&
+		       (IsMainOrLoadingMenuContextActive() || IsRaceSexMenuContextActive(ui));
 	}
 
 	bool IsVRRenderScaleMenuPreparationContextActive(const State* a_state)
@@ -2564,7 +2573,7 @@ namespace
 		if (!globals::game::isVR)
 			return false;
 
-		if (IsMainOrLoadingMenuContextActive())
+		if (IsVRMenuScenePresentationBlockActive())
 			return true;
 
 		return IsVRObservedProjectedMenuTailActive(a_state);
@@ -3153,7 +3162,7 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 	}
 	if (!IsKnownGameMenuContextActive() ||
 		IsCommunityShadersMenuOpen() ||
-		IsMainOrLoadingMenuContextActive() ||
+		IsVRMenuScenePresentationBlockActive() ||
 		IsSaveLoadTransitionContextActive()) {
 		return false;
 	}
@@ -10234,7 +10243,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	}
 	if (globals::game::isVR &&
 		vendorUpscalingMethod &&
-		(IsMainOrLoadingMenuContextActive() || IsVRLoadingPresentationTailActive(state))) {
+		(IsVRMenuScenePresentationBlockActive() || IsVRLoadingPresentationTailActive(state))) {
 		applyFullResolutionPresentation(upscaleMethod);
 		return;
 	}
@@ -13036,7 +13045,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool fullResolutionMenuPresentation = menuPresentationContext;
 	const bool loadingTransitionMenuPresentation =
 		fullResolutionMenuPresentation &&
-		(IsMainOrLoadingMenuContextActive() || loadingTransitionTailActive);
+		(vrScenePresentationBlockActive || loadingTransitionTailActive);
 	const bool runNativeVendorAAInMenu =
 		fullResolutionMenuPresentation &&
 		upscaling.GetRuntimeQualityMode() == 0 &&

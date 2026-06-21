@@ -218,7 +218,7 @@ void SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky->masser, time, Caster::Masser, altitude, isDayTime);
 	ProcessMoon(sky->secunda, time, Caster::Secunda, altitude, isDayTime);
 
-	volumetricLightingIntensityFactor = shadowFader.Update(sun, directions, intensities, isDayTime);
+	volumetricLightingIntensityFactor = shadowFader.Update(sun, directions, intensities, isDayTime, time);
 }
 void SkySync::SetSunAngle()
 {
@@ -408,9 +408,12 @@ void SkySync::ShadowFader::Reset()
 	target = Caster::None;
 	fadeTimer = 0.0f;
 	previousHoursPassed = globals::game::calendar ? globals::game::calendar->GetHoursPassed() : 0.0f;
+	sunriseReleased = false;
+	frozenHeading = 0.0f;
+	sunsetHeadingLocked = false;
 }
 
-float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], float intensities[3], const bool isDayTime)
+float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], float intensities[3], const bool isDayTime, const float time)
 {
 	const float masserIntensity = intensities[static_cast<int>(Caster::Masser)];
 	const float secundaIntensity = intensities[static_cast<int>(Caster::Secunda)];
@@ -422,6 +425,8 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 		desired = Caster::Masser;
 	else if (secundaIntensity > 0.0f)
 		desired = Caster::Secunda;
+
+	LockSunElevation(dirs, time);
 
 	if (desired != target) {
 		target = desired;
@@ -485,6 +490,44 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 	return lightingIntensity;
 }
 
+void SkySync::ShadowFader::LockSunElevation(RE::NiPoint3 dirs[3], const float time)
+{
+	// Keep the visual sun on its apparent path; only latch the shadow/VL caster near the horizon.
+	const auto& skySync = globals::features::skySync;
+	const auto& timings = skySync.timings;
+	const int sunIdx = static_cast<int>(Caster::Sun);
+	const float minElev = DirectX::XMConvertToRadians(skySync.settings.MinShadowElevation);
+	const float sunriseMiddle = (timings.sunriseBegin + timings.sunriseEnd) * 0.5f;
+	const float sunsetMiddle = (timings.sunsetBegin + timings.sunsetEnd) * 0.5f;
+	const bool sunRising = time >= timings.sunriseBegin && time < sunriseMiddle;
+	const bool sunSetting = time >= sunsetMiddle && time < timings.sunsetEnd;
+
+	if (sunSetting) {
+		const float range = sunsetMiddle < timings.sunsetEnd ? timings.sunsetEnd - sunsetMiddle : 0.0f;
+		const float t = range > FLT_EPSILON ? std::clamp((time - sunsetMiddle) / range, 0.0f, 1.0f) : 1.0f;
+		const float dim = std::sqrt(std::max(0.0f, 1.0f - t));
+		if (dim <= SunsetHeadingLockThreshold) {
+			if (!sunsetHeadingLocked) {
+				frozenHeading = std::atan2(dirs[sunIdx].y, dirs[sunIdx].x);
+				sunsetHeadingLocked = true;
+			}
+			SetDirection(dirs[sunIdx], frozenHeading, minElev);
+		} else {
+			SetElevation(dirs[sunIdx], minElev);
+		}
+	} else if (sunRising) {
+		if (!sunriseReleased) {
+			if (DirectX::XMScalarASinEst(dirs[sunIdx].z) >= minElev)
+				sunriseReleased = true;
+			else
+				SetElevation(dirs[sunIdx], minElev);
+		}
+	} else {
+		sunriseReleased = false;
+		sunsetHeadingLocked = false;
+	}
+}
+
 float SkySync::ShadowFader::SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity)
 {
 	ClampDirection(dir);
@@ -501,6 +544,22 @@ float SkySync::ShadowFader::SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, fl
 	return intensity;
 }
 
+inline void SkySync::ShadowFader::SetDirection(RE::NiPoint3& dir, const float headingRadians, const float elevRadians)
+{
+	float sinElev, cosElev, sinHeading, cosHeading;
+	DirectX::XMScalarSinCosEst(&sinElev, &cosElev, elevRadians);
+	DirectX::XMScalarSinCosEst(&sinHeading, &cosHeading, headingRadians);
+
+	dir.x = cosElev * cosHeading;
+	dir.y = cosElev * sinHeading;
+	dir.z = sinElev;
+}
+
+inline void SkySync::ShadowFader::SetElevation(RE::NiPoint3& dir, const float elevRadians)
+{
+	SetDirection(dir, std::atan2(dir.y, dir.x), elevRadians);
+}
+
 inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
 {
 	const float minDegrees = globals::features::skySync.settings.MinShadowElevation;
@@ -509,14 +568,7 @@ inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
 	if (elev >= minElev)
 		return;
 
-	const float heading = std::atan2(dir.y, dir.x);
-	float sinElev, cosElev, sinHeading, cosHeading;
-	DirectX::XMScalarSinCosEst(&sinElev, &cosElev, minElev);
-	DirectX::XMScalarSinCosEst(&sinHeading, &cosHeading, heading);
-
-	dir.x = cosElev * cosHeading;
-	dir.y = cosElev * sinHeading;
-	dir.z = sinElev;
+	SetElevation(dir, minElev);
 }
 
 void SkySync::ClimateTimings::Update(const RE::TESClimate* climate)

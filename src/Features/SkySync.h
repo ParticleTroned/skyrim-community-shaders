@@ -134,9 +134,15 @@ private:
 		Caster target = Caster::None;
 		float fadeTimer = 0.0f;
 		float previousHoursPassed = 0.0f;
+		bool sunriseReleased = false;
+		float frozenHeading = 0.0f;
+		bool sunsetHeadingLocked = false;
 
-		float Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime);
+		float Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime, float time);
+		void LockSunElevation(RE::NiPoint3 dirs[], float time);
 		static float SetLighting(const RE::Sun* sun, RE::NiPoint3 dir, float intensity);
+		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
+		static void SetElevation(RE::NiPoint3& dir, float elevRadians);
 		static void ClampDirection(RE::NiPoint3& dir);
 		void Reset();
 	};
@@ -156,6 +162,7 @@ private:
 	static constexpr float FullMoonIntensityFactor = 1.0f;
 	static constexpr float DefaultVolumetricLightingIntensityFactor = 1.0f;
 	static constexpr float SecondsPerGameHour = 3600.0f;
+	static constexpr float SunsetHeadingLockThreshold = 0.5f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static float* gSunGlareSize = nullptr;

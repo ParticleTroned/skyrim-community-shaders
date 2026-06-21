@@ -114,6 +114,7 @@ namespace
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
 	constexpr uint32_t kDefaultRenderScaleQualityMode = 3u;  // Quality
 	constexpr uint32_t kVRUpscalingTransitionApplyDelayFrames = 6u;
+	constexpr uint32_t kVRLoadingMenuRelatchDelayFrames = 1u;
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
@@ -2189,7 +2190,7 @@ namespace
 	{
 		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) &&
 		       (IsVRRenderScalePostLoadResetRelevant(a_upscaling) ||
-				   IsSaveLoadTransitionContextActive(a_state));
+		        IsSaveLoadTransitionContextActive(a_state));
 	}
 
 	bool IsVRLoadingPresentationTailActive(const State* a_state)
@@ -2205,20 +2206,44 @@ namespace
 		       IsVRLoadingPresentationTailActive(a_state);
 	}
 
-	bool HasCompletedVRWorldFrameAfterLatestLoad(const State* a_state)
+	bool ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(const Upscaling& a_upscaling, const State* a_state)
+	{
+		return globals::game::isVR &&
+		       IsLoadingMenuContextActive() &&
+		       !IsMainMenuContextActive() &&
+		       !IsUpscalingLoadTransitionContextActive(a_upscaling, a_state);
+	}
+
+	uint32_t GetVRRenderScaleRelatchDelayFrames(const Upscaling& a_upscaling, const State* a_state)
+	{
+		return ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(a_upscaling, a_state) ?
+		           kVRLoadingMenuRelatchDelayFrames :
+		           kVRUpscalingTransitionApplyDelayFrames;
+	}
+
+	bool ShouldReplaceVRRenderScaleRelatchDelay(
+		const Upscaling& a_upscaling,
+		const State* a_state,
+		uint32_t a_requestedDelayFrames,
+		uint32_t a_previousDelayFrames)
+	{
+		if (a_previousDelayFrames == 0 || a_requestedDelayFrames > a_previousDelayFrames)
+			return true;
+
+		return a_requestedDelayFrames < a_previousDelayFrames &&
+		       a_requestedDelayFrames == kVRLoadingMenuRelatchDelayFrames &&
+		       a_previousDelayFrames == kVRUpscalingTransitionApplyDelayFrames &&
+		       ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(a_upscaling, a_state);
+	}
+
+	bool HasCompletedVRWorldFrameAfterFrame(const State* a_state, uint32_t a_frame)
 	{
 		if (!a_state)
 			return false;
 
 		const uint32_t lastCompletedWorldFrame = a_state->lastCompletedWorldRenderFrame;
-		if (lastCompletedWorldFrame == std::numeric_limits<uint32_t>::max())
-			return false;
-
-		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
-		if (closeFrame != 0 && lastCompletedWorldFrame <= closeFrame)
-			return false;
-
-		return true;
+		return lastCompletedWorldFrame != std::numeric_limits<uint32_t>::max() &&
+		       lastCompletedWorldFrame > a_frame;
 	}
 
 	bool IsVRFpsStabilizerLoadSyncReady(const State* a_state, uint32_t a_queuedFrame)
@@ -2226,11 +2251,7 @@ namespace
 		if (!a_state || IsLoadingMenuContextActive())
 			return false;
 
-		const uint32_t lastCompletedWorldFrame = a_state->lastCompletedWorldRenderFrame;
-		if (lastCompletedWorldFrame == std::numeric_limits<uint32_t>::max())
-			return false;
-
-		return lastCompletedWorldFrame > a_queuedFrame;
+		return HasCompletedVRWorldFrameAfterFrame(a_state, a_queuedFrame);
 	}
 
 	uint32_t ClearPendingVRFpsStabilizerLoadSync(Upscaling& a_upscaling)
@@ -2241,70 +2262,6 @@ namespace
 	void CancelPendingVRFpsStabilizerLoadSync(Upscaling& a_upscaling)
 	{
 		ClearPendingVRFpsStabilizerLoadSync(a_upscaling);
-	}
-
-	bool CanActivateVRRenderScaleRuntime(const Upscaling& a_upscaling)
-	{
-		if (!a_upscaling.loaded)
-			return false;
-
-		if (!globals::game::isVR)
-			return true;
-
-		if (IsVRMenuScenePresentationBlockActive())
-			return false;
-
-		const auto* state = globals::state;
-		if (!state || !HasCompletedVRWorldFrameAfterLatestLoad(state))
-			return false;
-
-		if (state->pendingPostLoadRuntimeReset ||
-			a_upscaling.postLoadRuntimeResetPending.load(std::memory_order_acquire)) {
-			return false;
-		}
-
-		return !IsVRLoadingPresentationContextActive(state);
-	}
-
-	bool ShouldQueueDeferredVRRenderScaleActivation(const Upscaling& a_upscaling)
-	{
-		if (!globals::game::isVR)
-			return false;
-
-		if (!CanActivateVRRenderScaleRuntime(a_upscaling))
-			return false;
-
-		if (a_upscaling.IsOpenCompositeUpscalingBlocked())
-			return false;
-
-		if (a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
-			a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-			a_upscaling.HasPendingVRUpscalingTransition()) {
-			return false;
-		}
-
-		const auto& boot = a_upscaling.perfMode.GetBootSnapshot();
-		if (boot.valid && boot.active)
-			return false;
-
-		if (!a_upscaling.GetPerfModeRequested() || !a_upscaling.perfMode.HasKnownHMDSize())
-			return false;
-
-		return a_upscaling.perfMode.IsEligible(
-			a_upscaling.settings,
-			a_upscaling.GetConfiguredUpscaleMethodForTransition());
-	}
-
-	bool QueueDeferredVRRenderScaleActivationIfReady(Upscaling& a_upscaling)
-	{
-		if (a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
-			return false;
-
-		if (!ShouldQueueDeferredVRRenderScaleActivation(a_upscaling))
-			return false;
-
-		a_upscaling.RequestPerfModeRenderTargetRecreate("deferred in-game render-scale activation", Upscaling::VRUpscalingTransitionOrigin::PostLoadSync);
-		return true;
 	}
 
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
@@ -2359,10 +2316,20 @@ namespace
 		if (!globals::game::isVR || !a_state)
 			return false;
 
+		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		if (closeFrame == 0)
+			return !HasCompletedVRWorldFrameAfterFrame(a_state, 0);
+
+		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
+		if (currentFrame < closeFrame)
+			return true;
 		if (IsVRMenuScenePresentationBlockActive() || IsSaveLoadTransitionContextActive(a_state) || IsCommunityShadersMenuOpen())
 			return true;
 
-		return !HasCompletedVRWorldFrameAfterLatestLoad(a_state);
+		if (!HasCompletedVRWorldFrameAfterFrame(a_state, closeFrame))
+			return true;
+
+		return currentFrame <= a_state->lastCompletedWorldRenderFrame;
 	}
 
 	const char* BoolText(bool a_value)
@@ -4506,9 +4473,7 @@ struct BSOpenVR_GetRenderTargetSize
 
 		uint32_t perfModeWidth = trueEyeWidth;
 		uint32_t perfModeHeight = trueEyeHeight;
-		const bool allowPerfModeBootLatchCreate =
-			CanActivateVRRenderScaleRuntime(upscaling) &&
-			upscaling.ConsumePerfModeBootLatchCreate();
+		const bool allowPerfModeBootLatchCreate = upscaling.ConsumePerfModeBootLatchCreate();
 		if (upscaling.TryGetPerfModeOpenVRRenderTargetSize(perfModeWidth, perfModeHeight, allowPerfModeBootLatchCreate)) {
 			*a_width = perfModeWidth;
 			*a_height = perfModeHeight;
@@ -5024,9 +4989,6 @@ bool Upscaling::IsPerfModeActive() const
 	if (IsRenderDocUpscalingBlocked())
 		return false;
 
-	if (!CanActivateVRRenderScaleRuntime(*this))
-		return false;
-
 	return perfMode.IsActive(settings, GetUpscaleMethod());
 }
 
@@ -5383,12 +5345,6 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 	if (IsRenderDocUpscalingBlocked())
 		return false;
 
-	if (!CanActivateVRRenderScaleRuntime(*this)) {
-		if (a_allowCreate)
-			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
-		return false;
-	}
-
 	if (a_allowCreate && DeferVRPerfModeBootLatchForPendingDLSS(*this))
 		return false;
 
@@ -5723,7 +5679,8 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
 		return;
 
-	const uint32_t relatchDelayFrames = kVRUpscalingTransitionApplyDelayFrames;
+	auto* state = globals::state;
+	const uint32_t relatchDelayFrames = GetVRRenderScaleRelatchDelayFrames(*this, state);
 	const bool requirePostLoadSettle = UsesVRRenderScalePostLoadSettle(a_origin);
 	const bool currentRequirePostLoadSettle =
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire);
@@ -5732,7 +5689,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(requirePostLoadSettle, std::memory_order_release);
 	}
 	const uint32_t previousRelatchDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
-	if (!wasPending || relatchDelayFrames > previousRelatchDelay)
+	if (!wasPending || ShouldReplaceVRRenderScaleRelatchDelay(*this, state, relatchDelayFrames, previousRelatchDelay))
 		MarkPerfModeRenderTargetRecreateQueued(relatchDelayFrames);
 	RequestHistoryReset();
 	if (wasPending)
@@ -5794,7 +5751,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	loggedRelatchPostLoadSettle = false;
 
 	static bool loggedRelatchLoadingPresentation = false;
-	if (IsVRLoadingPresentationContextActive(state)) {
+	if (IsVRLoadingPresentationContextActive(state) &&
+		!ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, state)) {
 		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
 		if (!loggedRelatchLoadingPresentation) {
 			logger::debug("[VRRenderScale] Render-target relatch waiting for loading presentation context to clear.");
@@ -10117,7 +10075,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	ApplyPendingVRFpsStabilizerLoadSync();
 	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	ApplyPendingVRUpscalingTransition(requestedUpscaleMethod);
-	QueueDeferredVRRenderScaleActivationIfReady(*this);
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
 		if (ApplyPendingPerfModeRenderTargetRecreate("ConfigureUpscaling"))
 			return;
@@ -11821,6 +11778,8 @@ bool Upscaling::ShouldDeferVRUpscalingTransitionSettings() const
 		return true;
 	if (IsUpscalingLoadTransitionContextActive(*this, state))
 		return true;
+	if (ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, state))
+		return false;
 
 	return IsKnownGameMenuContextActive();
 }
@@ -11834,6 +11793,9 @@ bool Upscaling::ShouldWaitForVRUpscalingTransitionDelay() const
 	if (queuedFrame == 0)
 		return false;
 
+	if (ShouldApplyVRRenderScaleTransitionDuringLoadingMenu(*this, globals::state))
+		return false;
+
 	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : queuedFrame;
 	return currentFrame - queuedFrame < kVRUpscalingTransitionApplyDelayFrames;
 }
@@ -11844,7 +11806,7 @@ void Upscaling::MarkPerfModeRenderTargetRecreateQueued(uint32_t a_delayFrames)
 	const uint32_t delayFrames = a_delayFrames != 0 ? a_delayFrames : kVRUpscalingTransitionApplyDelayFrames;
 	pendingPerfModeRenderTargetRecreateFrame.store(frame, std::memory_order_release);
 	const uint32_t previousDelay = pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire);
-	if (previousDelay == 0 || delayFrames > previousDelay)
+	if (ShouldReplaceVRRenderScaleRelatchDelay(*this, globals::state, delayFrames, previousDelay))
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(delayFrames, std::memory_order_release);
 }
 

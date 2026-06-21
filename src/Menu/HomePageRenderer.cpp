@@ -3,6 +3,7 @@
 
 #include <imgui.h>
 
+#include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <string>
 
 namespace
 {
@@ -228,21 +230,92 @@ void HomePageRenderer::RenderCacheMismatchSection()
 		return;
 
 	ImGui::TextWrapped("%s",
-		"Your installed feature set no longer matches the shader cache on disk. The cache has been preserved and shaders "
-		"are compiling in memory for this session only. If this change was unintentional, fix your setup and restart to "
-		"reuse the existing cache. If the change was intentional, rebuild the cache.");
+		"Your installed features changed, so the saved shader cache no longer matches. Shaders compile in memory this "
+		"session and on every launch until you resolve this. The saved cache is preserved.");
 	ImGui::Spacing();
 
+	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
 	for (const auto& mismatch : shaderCache->GetCacheMismatches()) {
-		ImGui::BulletText("%s: %s", mismatch.feature.c_str(), mismatch.detail.c_str());
+		const char* detail = mismatch.detail.c_str();
+		if (mismatch.kind == MismatchKind::EnabledFlip) {
+			detail = mismatch.nowPresent ?
+			             "in your setup now, but missing from the saved cache" :
+			             "in the saved cache, but missing from your setup now";
+		}
+		ImGui::BulletText("%s: %s", mismatch.feature.c_str(), detail);
 	}
 	ImGui::Spacing();
 
-	if (ImGui::Button("Rebuild Shader Cache Now")) {
+	ImGui::TextWrapped("%s", "Match your features to the saved cache and restart to reuse it, or rebuild for your current setup:");
+
+	const char* blockingFeature = nullptr;
+	for (const auto& mismatch : shaderCache->GetCacheMismatches()) {
+		if (mismatch.kind != MismatchKind::EnabledFlip || mismatch.nowPresent)
+			continue;
+
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->GetShortName() == mismatch.shortName && !feature->failedLoadedMessage.empty()) {
+				blockingFeature = mismatch.feature.c_str();
+				break;
+			}
+		}
+		if (blockingFeature)
+			break;
+	}
+
+	const bool canMatch = blockingFeature == nullptr;
+	static bool s_matchApplied = false;
+	static std::string s_lastMismatchSignature;
+	std::string mismatchSignature;
+	for (const auto& mismatch : shaderCache->GetCacheMismatches()) {
+		mismatchSignature.append(mismatch.shortName);
+		mismatchSignature.push_back(':');
+		mismatchSignature.push_back(mismatch.nowPresent ? '1' : '0');
+		mismatchSignature.push_back(';');
+	}
+	if (mismatchSignature != s_lastMismatchSignature) {
+		s_matchApplied = false;
+		s_lastMismatchSignature = mismatchSignature;
+	}
+
+	if (s_matchApplied) {
+		const ImVec4 restartColor = menu ? menu->GetTheme().StatusPalette.RestartNeeded : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+		ImGui::TextColored(restartColor, "%s", "Boot settings updated - restart to reuse the saved cache.");
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+		return;
+	}
+
+	if (!canMatch)
+		ImGui::BeginDisabled();
+	const bool matchClicked = ImGui::Button("Match Cache & Restart");
+	if (!canMatch)
+		ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		if (canMatch) {
+			ImGui::TextUnformatted("Sets your Disable-at-Boot toggles to match the saved cache so a restart reuses it.");
+		} else {
+			ImGui::Text("Unavailable: '%s' is uninstalled or failed to load, so settings cannot match the cache. Reinstall it or rebuild.", blockingFeature);
+		}
+	}
+	if (matchClicked) {
+		if (auto* state = globals::state) {
+			for (const auto& mismatch : shaderCache->GetCacheMismatches()) {
+				if (mismatch.kind == MismatchKind::EnabledFlip)
+					state->SetFeatureDisabled(mismatch.shortName, mismatch.nowPresent);
+			}
+			state->Save();
+			s_matchApplied = true;
+		}
+	}
+
+	ImGui::SameLine();
+	if (ImGui::Button("Rebuild Cache for Current Features")) {
 		shaderCache->AcceptCacheRebuild();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Deletes the old cache and recompiles shaders for your current feature set.");
+		ImGui::TextUnformatted("Discards the saved cache and recompiles shaders for your current features.");
 	}
 
 	ImGui::Spacing();

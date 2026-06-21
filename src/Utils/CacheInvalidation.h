@@ -30,6 +30,7 @@ namespace Util::CacheInvalidation
 		std::string shortName;
 		std::string feature;
 		std::string detail;
+		bool nowPresent = false;
 	};
 
 	struct FeatureState
@@ -69,7 +70,8 @@ namespace Util::CacheInvalidation
 				mismatches.push_back({ CacheMismatch::Kind::EnabledFlip, feature.shortName, feature.name,
 					feature.loaded ?
 						"installed/enabled now, but the cache was built without it" :
-						"the cache was built with it, but it is now uninstalled or disabled at boot" });
+						"the cache was built with it, but it is now uninstalled or disabled at boot",
+					feature.loaded });
 				continue;
 			}
 

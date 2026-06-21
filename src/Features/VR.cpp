@@ -1,10 +1,10 @@
 #include "VR.h"
 #include "DynamicCubemaps.h"
 #include "FoveatedCommon.h"
+#include "LocationContext.h"
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
-#include "LocationContext.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
@@ -1128,11 +1128,11 @@ namespace
 	void DrawStabilizeRenderScaleDesktopMirrorSetting()
 	{
 		auto& settings = globals::features::vr.settings;
-		ImGui::Checkbox("Stabilize Render-Scale Desktop Mirror", &settings.StabilizeRenderScaleDesktopMirror);
+		ImGui::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Desktop-only fallback for VR Render Scale Mode.");
-			ImGui::TextUnformatted("When the submit texture cannot be updated by the fast direct copy, blits the final per-eye render-scale outputs back into the desktop mirror.");
-			ImGui::TextUnformatted("Off by default. HMD presentation is unchanged; enabling it adds a small GPU blit only while render-scale submit is active and the mirror texture needs the fallback.");
+			ImGui::TextUnformatted("Improves the desktop mirror image when VR Render Scale Mode lowers the source resolution.");
+			ImGui::TextUnformatted("Uses the final per-eye render-scale output for the desktop mirror instead of leaving the mirror at the lower render-scale resolution when the fast direct copy is incompatible.");
+			ImGui::TextUnformatted("HMD presentation is unchanged. Off by default because it adds a small performance cost while render-scale submit is active and the mirror texture needs this fallback.");
 		}
 	}
 
@@ -1725,7 +1725,8 @@ namespace
 			const bool statusAnyCubemapFoveationEnabled =
 				settings.EnableDynamicCubemapFoveation ||
 				settings.EnableDynamicCubemapVisibilityThrottle;
-			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full visible coverage" : "unavailable");
+			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full visible coverage" :
+																									  "unavailable");
 			ImGui::Text("Lighting auxiliary detail: %s (%s)", statusLightingActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusLightingMode));
 			ImGui::Text("SSR raymarch: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
 			ImGui::Text("Water parallax detail: %s (%s)", statusWaterParallaxActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWaterParallaxMode));

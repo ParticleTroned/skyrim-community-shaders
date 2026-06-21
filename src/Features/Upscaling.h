@@ -679,7 +679,6 @@ public:
 	std::atomic<uint32_t> pendingVRUpscalingTransitionFrame{ 0 };
 	std::atomic<uint32_t> pendingVRUpscalingTransitionOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
-	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };

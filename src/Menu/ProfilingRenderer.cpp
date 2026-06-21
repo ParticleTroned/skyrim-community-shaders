@@ -4,14 +4,27 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <imgui.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <imgui.h>
 
 #include "Globals.h"
 #include "State.h"
 #include "Util.h"
+
+static constexpr float kGraphHeadroomScale = 1.2f;
+static constexpr float kMainGraphHeight = 180.0f;
+static constexpr float kMainGraphMinFrameTimeSec = 0.0001f;
+static constexpr float kFeatureGraphMinFrameTimeSec = 0.00001f;
+static constexpr float kTimingTableMetricColumnWidth = 55.0f;
+static constexpr float kTimingTablePercentColumnWidth = 45.0f;
+static constexpr float kStatsRefreshSeconds = 1.0f;
+
+static int ScaleToUiInt(float value)
+{
+	return std::max(1, static_cast<int>(std::round(value * Util::GetUIScale())));
+}
 
 static ImU32 HslToImU32(float h, float s, float l)
 {
@@ -261,6 +274,34 @@ void ProfilingRenderer::TextHeat(const char* fmt, float value, float maxValue)
 	ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), fmt, value);
 }
 
+void ProfilingRenderer::RenderTimingModeToggle()
+{
+	int mode = static_cast<int>(timingMode);
+
+	ImGui::PushID("ProfilingTimingMode");
+	ImGui::RadioButton("GPU", &mode, static_cast<int>(TimingMode::GPU));
+	ImGui::SameLine();
+	ImGui::RadioButton("CPU", &mode, static_cast<int>(TimingMode::CPU));
+	ImGui::PopID();
+
+	const auto newMode = static_cast<TimingMode>(mode);
+	if (newMode != timingMode) {
+		timingMode = newMode;
+		timeSinceLastUpdate = kStatsRefreshSeconds;
+	}
+}
+
+void ProfilingRenderer::SetupTimingTableColumns(float passColumnWidth, bool includePercentColumn)
+{
+	const float scale = Util::GetUIScale();
+	ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, passColumnWidth);
+	ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, kTimingTableMetricColumnWidth * scale);
+	ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, kTimingTableMetricColumnWidth * scale);
+	ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, kTimingTableMetricColumnWidth * scale);
+	if (includePercentColumn)
+		ImGui::TableSetupColumn("%%", ImGuiTableColumnFlags_WidthFixed, kTimingTablePercentColumnWidth * scale);
+}
+
 void ProfilingRenderer::RenderGraph()
 {
 	auto& profiler = (*globals::profiler);
@@ -302,16 +343,17 @@ void ProfilingRenderer::RenderGraph()
 
 	gpuGraph.LoadFrameData(tasks.data(), tasks.size());
 
-	float maxFrameTimeSec = gpuGraph.GetPeakFrameTime() * 1.2f;
-	if (maxFrameTimeSec < 0.0001f)
-		maxFrameTimeSec = 0.0001f;
+	float maxFrameTimeSec = gpuGraph.GetPeakFrameTime() * kGraphHeadroomScale;
+	if (maxFrameTimeSec < kMainGraphMinFrameTimeSec)
+		maxFrameTimeSec = kMainGraphMinFrameTimeSec;
 
+	const float uiScale = Util::GetUIScale();
 	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
-	const int legendWidth = ComputeGraphLegendWidth(totalWidth, 100, 0.42f, 280, 420);
+	const int legendWidth = ComputeGraphLegendWidth(totalWidth, ScaleToUiInt(100.0f), 0.42f, ScaleToUiInt(280.0f), ScaleToUiInt(420.0f));
 	const int graphWidth = std::max(1, totalWidth - legendWidth);
-	int graphHeight = 180;
+	const float graphHeight = kMainGraphHeight * uiScale;
 
-	gpuGraph.RenderTimings(graphWidth, legendWidth, graphHeight, 0, maxFrameTimeSec);
+	gpuGraph.RenderTimings(static_cast<float>(graphWidth), static_cast<float>(legendWidth), graphHeight, 0, maxFrameTimeSec, uiScale);
 
 	ImGui::Spacing();
 }
@@ -367,15 +409,17 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 
 	graph.LoadFrameData(tasks.data(), tasks.size());
 
-	float maxFrameTimeSec = graph.GetPeakFrameTime() * 1.2f;
-	if (maxFrameTimeSec < 0.00001f)
-		maxFrameTimeSec = 0.00001f;
+	float maxFrameTimeSec = graph.GetPeakFrameTime() * kGraphHeadroomScale;
+	if (maxFrameTimeSec < kFeatureGraphMinFrameTimeSec)
+		maxFrameTimeSec = kFeatureGraphMinFrameTimeSec;
 
+	const float uiScale = Util::GetUIScale();
 	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
-	const int legendWidth = totalWidth >= 180 ? ComputeGraphLegendWidth(totalWidth, 80, 0.50f, 140, 300) : 0;
+	const int legendWidth = totalWidth >= ScaleToUiInt(180.0f) ? ComputeGraphLegendWidth(totalWidth, ScaleToUiInt(80.0f), 0.50f, ScaleToUiInt(140.0f), ScaleToUiInt(300.0f)) : 0;
 	const int graphWidth = std::max(1, totalWidth - legendWidth);
+	const float scaledGraphHeight = static_cast<float>(graphHeight) * uiScale;
 
-	graph.RenderTimings(graphWidth, legendWidth, graphHeight, 0, maxFrameTimeSec);
+	graph.RenderTimings(static_cast<float>(graphWidth), static_cast<float>(legendWidth), scaledGraphHeight, 0, maxFrameTimeSec, uiScale);
 	return true;
 }
 
@@ -401,10 +445,7 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 		for (const auto& e : data.entries)
 			passLabels.push_back(e.label);
 		passLabels.emplace_back("Total");
-		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Pass", passLabels, GetColorMarkerExtraWidth()));
-		ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-		ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-		ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+		SetupTimingTableColumns(GetTextColumnWidth("Pass", passLabels, GetColorMarkerExtraWidth()), false);
 		ImGui::TableHeadersRow();
 
 		for (const auto& e : data.entries) {
@@ -516,7 +557,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		ImGui::SameLine();
 		if (ImGui::Checkbox("Enable", &profilingEnabled)) {
 			profiler.SetUserEnabled(profilingEnabled);
-			timeSinceLastUpdate = 1.0f;
+			timeSinceLastUpdate = kStatsRefreshSeconds;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Runtime profiling capture. No restart required.");
@@ -536,14 +577,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 
 	bool cpuMode = (timingMode == TimingMode::CPU);
 	if (showModeToggle) {
-		int mode = static_cast<int>(timingMode);
-		ImGui::RadioButton("GPU", &mode, 0);
-		ImGui::SameLine();
-		ImGui::RadioButton("CPU", &mode, 1);
-		if (static_cast<TimingMode>(mode) != timingMode) {
-			timingMode = static_cast<TimingMode>(mode);
-			timeSinceLastUpdate = 1.0f;
-		}
+		RenderTimingModeToggle();
 		cpuMode = (timingMode == TimingMode::CPU);
 		ImGui::Separator();
 	}
@@ -553,7 +587,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	lastFrameTime = currentTime;
 	timeSinceLastUpdate += deltaTime;
 
-	if (timeSinceLastUpdate >= 1.0f) {
+	if (timeSinceLastUpdate >= kStatsRefreshSeconds) {
 		timeSinceLastUpdate = 0.0f;
 
 		cachedGroups.clear();
@@ -633,11 +667,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 				ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
 				ImVec2(0.0f, availHeight))) {
 			ImGui::TableSetupScrollFreeze(0, 1);
-			ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, passColumnWidth);
-			ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-			ImGui::TableSetupColumn("P95", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-			ImGui::TableSetupColumn("P99", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-			ImGui::TableSetupColumn("%%", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+			SetupTimingTableColumns(passColumnWidth, true);
 			ImGui::TableHeadersRow();
 
 			for (const auto& group : cachedGroups) {
@@ -692,7 +722,6 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			ImGui::EndTable();
 		}
 	}
-
 }
 
 void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)

@@ -91,6 +91,8 @@ private:
 	static uint32_t ToLegitColor(ImU32 imColor);
 	static ImVec4 HeatColor(float value, float maxValue);
 	static void TextHeat(const char* fmt, float value, float maxValue);
+	static void RenderTimingModeToggle();
+	static void SetupTimingTableColumns(float passColumnWidth, bool includePercentColumn);
 	static void RenderGraph();
 	static bool RenderFeatureOverview();
 	static FeatureTimingData CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode);

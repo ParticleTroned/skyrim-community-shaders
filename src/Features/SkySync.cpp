@@ -496,16 +496,16 @@ void SkySync::ShadowFader::LockSunElevation(RE::NiPoint3 dirs[3], const float ti
 {
 	// Keep the visual sun on its apparent path; only latch the shadow/VL caster near the horizon.
 	const auto& skySync = globals::features::skySync;
-	const auto& timings = skySync.timings;
+	const auto& climateTimings = skySync.timings;
 	const int sunIdx = static_cast<int>(Caster::Sun);
 	const float minElev = DirectX::XMConvertToRadians(skySync.settings.MinShadowElevation);
-	const float sunriseMiddle = (timings.sunriseBegin + timings.sunriseEnd) * 0.5f;
-	const float sunsetMiddle = (timings.sunsetBegin + timings.sunsetEnd) * 0.5f;
-	const bool sunRising = time >= timings.sunriseBegin && time < sunriseMiddle;
-	const bool sunSetting = time >= sunsetMiddle && time < timings.sunsetEnd;
+	const float sunriseMiddle = (climateTimings.sunriseBegin + climateTimings.sunriseEnd) * 0.5f;
+	const float sunsetMiddle = (climateTimings.sunsetBegin + climateTimings.sunsetEnd) * 0.5f;
+	const bool sunRising = time >= climateTimings.sunriseBegin && time < sunriseMiddle;
+	const bool sunSetting = time >= sunsetMiddle && time < climateTimings.sunsetEnd;
 
 	if (sunSetting) {
-		const float range = sunsetMiddle < timings.sunsetEnd ? timings.sunsetEnd - sunsetMiddle : 0.0f;
+		const float range = sunsetMiddle < climateTimings.sunsetEnd ? climateTimings.sunsetEnd - sunsetMiddle : 0.0f;
 		const float t = range > FLT_EPSILON ? std::clamp((time - sunsetMiddle) / range, 0.0f, 1.0f) : 1.0f;
 		const float dim = std::sqrt(std::max(0.0f, 1.0f - t));
 		if (dim <= SunsetHeadingLockThreshold) {

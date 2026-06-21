@@ -541,11 +541,11 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		auto& weatherKey = menu->GetSettings().CSEditorToggleKey;
 		if (weatherKey.empty()) {
 			const char* warnText = "CS Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift";
-			centerText(warnText);
+			ImGui::SetCursorPosX(CenteredTextX(windowWidth, ImGui::CalcTextSize(warnText).x));
 			Util::Text::Warning("%s", warnText);
 		} else {
 			std::string infoStr = "CS Editor hotkey will be: " + Util::Input::KeyIdToString(weatherKey);
-			centerText(infoStr.c_str());
+			ImGui::SetCursorPosX(CenteredTextX(windowWidth, ImGui::CalcTextSize(infoStr.c_str()).x));
 			ImGui::TextDisabled("%s", infoStr.c_str());
 		}
 	}

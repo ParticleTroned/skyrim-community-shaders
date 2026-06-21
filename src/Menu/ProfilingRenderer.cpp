@@ -388,6 +388,8 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 
 bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight)
 {
+	(void)featurePrefix;
+
 	if (data.entries.empty())
 		return false;
 

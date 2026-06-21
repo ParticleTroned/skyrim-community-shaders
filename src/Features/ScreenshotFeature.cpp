@@ -4,7 +4,6 @@
 // capture does not stall the frame.
 
 #include "Features/ScreenshotFeature.h"
-#include "Features/HDRDisplay.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "Utils/FileSystem.h"
@@ -143,7 +142,7 @@ namespace
 
 	// Tonemaps an FP16 linear scene-referred ScratchImage in-place: Reinhard
 	// c / (1 + c) for the luminance map, then gamma-2.2 for sRGB encoding.
-	// Approximates HDRDisplay's on-screen tonemap closely enough for SDR save.
+	// This is a local SDR fallback and does not depend on the HDR feature.
 	void TonemapHdrToSrgb(DirectX::ScratchImage& image)
 	{
 		using namespace DirectX;
@@ -214,23 +213,30 @@ namespace
 			return false;
 		}
 
+		struct ClipboardDropFiles
+		{
+			DWORD pFiles = 0;
+			POINT pt{};
+			BOOL fNC = FALSE;
+			BOOL fWide = TRUE;
+		};
+
 		const size_t pathChars = absolutePath.size();
-		const size_t bytes = sizeof(DROPFILES) + (pathChars + 2) * sizeof(wchar_t);
+		const size_t bytes = sizeof(ClipboardDropFiles) + (pathChars + 2) * sizeof(wchar_t);
 		HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
 		if (!hMem) {
 			return false;
 		}
 
-		auto* drop = static_cast<DROPFILES*>(GlobalLock(hMem));
+		auto* drop = static_cast<ClipboardDropFiles*>(GlobalLock(hMem));
 		if (!drop) {
 			GlobalFree(hMem);
 			return false;
 		}
 
-		drop->pFiles = sizeof(DROPFILES);
-		drop->fWide = TRUE;
+		drop->pFiles = sizeof(ClipboardDropFiles);
 
-		auto* files = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
+		auto* files = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(drop) + sizeof(ClipboardDropFiles));
 		memcpy(files, absolutePath.c_str(), (pathChars + 1) * sizeof(wchar_t));
 
 		GlobalUnlock(hMem);
@@ -330,14 +336,11 @@ namespace
 		return resolveFromView(slot.RTV);
 	}
 
-	// Picks the capture source by where ISHDR wrote the scene this frame:
-	//   VR              -> RE::RENDER_TARGETS::kVR_FRAMEBUFFER (SBS).
-	//   HDR enabled     -> HDR::HdrTexture (FP16 linear; PrepareBmpImage tonemaps).
-	//   otherwise       -> kFRAMEBUFFER (already tonemapped UNORM).
-	//
-	// HDR::OutputTexture is intentionally not used: on HDR10 swap chains it
-	// holds PQ-encoded values regardless of the enableHDR toggle, which save
-	// as washed-out BMPs without a color transform.
+	// Picks the capture source for this branch:
+	//   VR        -> kFRAMEBUFFER (SBS).
+	//   flat      -> kFRAMEBUFFER (usually already tonemapped UNORM).
+	// Dedicated HDR capture is intentionally omitted in PL3.15-VR; if a
+	// future source is FP16, the save path still tonemaps before SDR encoding.
 	CaptureSource SelectCaptureSource(winrt::com_ptr<ID3D11Texture2D>& holder)
 	{
 		CaptureSource src;
@@ -347,18 +350,10 @@ namespace
 		}
 
 		if (globals::game::isVR) {
-			auto& slot = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kVR_FRAMEBUFFER];
+			auto& slot = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
 			src.texture = ResolveSlotTexture(slot, holder);
 			src.srv = slot.SRV;
 			src.description = "VR SBS framebuffer";
-			return src;
-		}
-
-		auto& hdr = globals::features::hdrDisplay;
-		if (hdr.loaded && hdr.settings.enableHDR && hdr.hdrTexture && hdr.hdrTexture->resource) {
-			src.texture = hdr.hdrTexture->resource.get();
-			src.srv = hdr.hdrTexture->srv.get();
-			src.description = "HDR::HdrTexture (FP16 linear, will tonemap)";
 			return src;
 		}
 
@@ -478,7 +473,7 @@ void ScreenshotFeature::DrawSettings()
 {
 	ImGui::TextWrapped("Capture and save run asynchronously without stalling the game.");
 	ImGui::TextWrapped(
-		"SDR and VR captures use the selected lossless format. HDR scenes are tonemapped "
+		"SDR and VR captures use the selected lossless format. FP16 sources are tonemapped "
 		"(Reinhard) before SDR save; HDR PNG metadata is intentionally not included in this branch.");
 
 	if (ImGui::Button("Take Screenshot Now")) {

@@ -30,6 +30,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <new>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -4690,6 +4691,68 @@ struct BSImageSpace_Init_FXAA
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
+
+#ifdef TRACY_ENABLE
+namespace
+{
+	constexpr tracy::SourceLocationData kSSRReflectionsRayTracingZone{
+		"SSR ReflectionsRayTracing",
+		"ISReflectionsRayTracing::Render",
+		__FILE__,
+		static_cast<uint32_t>(__LINE__),
+		0
+	};
+
+	alignas(tracy::D3D11ZoneScope) unsigned char g_ssrReflectionsRayTracingZoneStorage[sizeof(tracy::D3D11ZoneScope)];
+	bool g_ssrReflectionsRayTracingZoneOpen = false;
+
+	tracy::D3D11ZoneScope* GetSSRReflectionsRayTracingZone()
+	{
+		return reinterpret_cast<tracy::D3D11ZoneScope*>(&g_ssrReflectionsRayTracingZoneStorage);
+	}
+
+	void CloseSSRReflectionsRayTracingZone()
+	{
+		if (!g_ssrReflectionsRayTracingZoneOpen)
+			return;
+
+		GetSSRReflectionsRayTracingZone()->~D3D11ZoneScope();
+		g_ssrReflectionsRayTracingZoneOpen = false;
+	}
+
+	void OpenSSRReflectionsRayTracingZone()
+	{
+		auto state = globals::state;
+		if (!state || !state->tracyCtx)
+			return;
+
+		CloseSSRReflectionsRayTracingZone();
+		new (GetSSRReflectionsRayTracingZone()) tracy::D3D11ZoneScope(state->tracyCtx, &kSSRReflectionsRayTracingZone, true);
+		g_ssrReflectionsRayTracingZoneOpen = true;
+	}
+}
+
+struct SSRReflectionsRayTracingPreRenderHook
+{
+	static void thunk(void* a_this)
+	{
+		func(a_this);
+		OpenSSRReflectionsRayTracingZone();
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+struct SSRReflectionsRayTracingPostRenderHook
+{
+	static void thunk(void* a_this)
+	{
+		CloseSSRReflectionsRayTracingZone();
+		func(a_this);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+#endif
+
 void Upscaling::PostPostLoad()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
@@ -4727,6 +4790,14 @@ void Upscaling::PostPostLoad()
 
 	// Forces FXAA off
 	stl::detour_thunk<BSImageSpace_Init_FXAA>(REL::RelocationID(98974, 105626));
+
+#ifdef TRACY_ENABLE
+	// ReflectionsRayTracing renders through BSImagespaceShader::Render, so PreRender/PostRender
+	// bracket the SSR draw on SE/AE/VR without per-version callsite addresses.
+	stl::write_vfunc<0x0A, SSRReflectionsRayTracingPreRenderHook>(RE::VTABLE_BSImagespaceShaderReflectionsRayTracing[0]);
+	stl::write_vfunc<0x0B, SSRReflectionsRayTracingPostRenderHook>(RE::VTABLE_BSImagespaceShaderReflectionsRayTracing[0]);
+	logger::info("[Upscaling] Installed SSR ReflectionsRayTracing Tracy zone");
+#endif
 
 	logger::info("[Upscaling] Installed hooks");
 }

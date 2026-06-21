@@ -776,7 +776,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	ID3D11Resource* colorOut =
 		(upscaling.ShouldApplyDLSSSharpening() && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
 	const bool outputToSharpener = colorOut != a_upscalingTexture;
-	upscaling.dlssUpscaleOutputInSharpenerTexture = false;
+	upscaling.vendorUpscaleOutputInSharpenerTexture = false;
 
 	// Simple full-texture upscale.
 	const sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
@@ -786,7 +786,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		a_upscalingTexture, colorOut,
 		depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 		extentIn, extentOut, (uint)baseSize.x);
-	upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
+	upscaling.vendorUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
 	if (!evaluated) {
 		upscaling.RequestHistoryReset();
 		static bool loggedEvaluateFailure = false;

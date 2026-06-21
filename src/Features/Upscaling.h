@@ -53,8 +53,16 @@ public:
 		kDLSS
 	};
 
-	enum class DLSSSharpenerMode : uint
+	enum class ExternalSharpenerMode : uint
 	{
+		Off,
+		RCAS,
+		LumaUnsharp
+	};
+
+	enum class FSRSharpenerMode : uint
+	{
+		BuiltIn,
 		Off,
 		RCAS,
 		LumaUnsharp
@@ -65,7 +73,8 @@ public:
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
 	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
-	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
+	static constexpr uint32_t kExternalSharpenerModeMaxIndex = 2;
+	static constexpr uint32_t kFSRSharpenerModeMaxIndex = 3;
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{
@@ -98,9 +107,10 @@ public:
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
-		float sharpnessFSR = 0.0f;
-		float sharpnessDLSS = 0.1f;
-		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
+		float sharpnessFSR = 0.5f;
+		uint fsrSharpener = static_cast<uint>(FSRSharpenerMode::BuiltIn);
+		float sharpnessDLSS = 0.5f;
+		uint dlssSharpener = static_cast<uint>(ExternalSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
 		bool reflexLowLatencyMode = true;
 		bool reflexLowLatencyBoost = false;
@@ -164,8 +174,11 @@ public:
 	virtual void SetupResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
-	DLSSSharpenerMode GetDLSSSharpenerMode() const;
+	ExternalSharpenerMode GetDLSSSharpenerMode() const;
+	FSRSharpenerMode GetFSRSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
+	bool ShouldApplyFSRSharpening() const;
+	bool ShouldUseFSRBuiltInSharpening() const;
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
@@ -197,7 +210,7 @@ public:
 	std::unique_ptr<Texture2D> transparencyCompositionMaskTexture;
 	std::unique_ptr<Texture2D> motionVectorCopyTexture;
 	std::unique_ptr<Texture2D> sharpenerTexture;
-	bool dlssUpscaleOutputInSharpenerTexture = false;
+	bool vendorUpscaleOutputInSharpenerTexture = false;
 
 	virtual void ClearShaderCache() override;
 
@@ -205,8 +218,8 @@ public:
 	static inline Streamline streamline;
 	static inline FidelityFX fidelityFX;  ///< Only for frame generation
 	static inline DX12SwapChain dx12SwapChain;
-	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
-	static inline LumaSharpen lumaSharpen;  ///< Luma-only adaptive unsharp mask for DLSS
+	static inline RCAS rcas;  ///< Standalone RCAS sharpening pass for vendor upscalers
+	static inline LumaSharpen lumaSharpen;  ///< Luma-only adaptive unsharp mask for vendor upscalers
 
 	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
 
@@ -243,9 +256,9 @@ public:
 	bool IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const;
 
 	/**
-	 * @brief Applies the selected DLSS sharpening pass to the main render target after upscaling.
+	 * @brief Applies the selected vendor-upscaler post-sharpening pass to the main render target after upscaling.
 	 *
-	 * Runs in HDR space before tonemapping. Only called when DLSS sharpening is enabled.
+	 * Runs in HDR space before tonemapping. Only called when an external post-upscale sharpener is enabled.
 	 */
 	void ApplySharpening();
 

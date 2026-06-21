@@ -82,11 +82,11 @@ public:
 	std::string GetRuntimeUpscalerProviderName() const;
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
 
-	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
+	bool Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, ID3D11Resource* a_output, float a_sharpness, bool a_enableSharpening);
 	bool UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness);
+		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool a_enableSharpening);
 
 private:
 	// FSR scratch buffer - needs to be freed in DestroyFSRResources
@@ -167,7 +167,7 @@ private:
 	bool DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness);
+		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool a_enableSharpening);
 	void DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
 	void DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);
 };

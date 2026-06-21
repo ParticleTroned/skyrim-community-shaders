@@ -124,6 +124,8 @@ public:
 
 		bool requiresCtrl = false, requiresShift = false, requiresAlt = false;
 		for (size_t i = 0; i < combo.size() - 1; ++i) {
+			if (combo[i].GetDevice() != InputDeviceType::Keyboard)
+				return false;
 			uint32_t modKey = combo[i].GetKey();
 			if (modKey == VK_CONTROL || modKey == VK_LCONTROL || modKey == VK_RCONTROL)
 				requiresCtrl = true;
@@ -131,6 +133,8 @@ public:
 				requiresShift = true;
 			else if (modKey == VK_MENU || modKey == VK_LMENU || modKey == VK_RMENU)
 				requiresAlt = true;
+			else
+				return false;
 		}
 
 		constexpr uint16_t KEY_PRESSED = 0x8000;

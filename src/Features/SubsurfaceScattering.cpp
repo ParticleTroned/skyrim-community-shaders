@@ -350,6 +350,18 @@ void SubsurfaceScattering::DrawSSS()
 
 		blurCBData.MeanFreePathBase = settings.MeanFreePathBase;
 		blurCBData.MeanFreePathHuman = settings.MeanFreePathHuman;
+		blurCBData.HumanMaleControls = {
+			settings.HumanMaleSSSIntensity,
+			settings.HumanMaleSSSSaturation,
+			settings.HumanMaleSSSBrightness,
+			settings.HumanMaleSSSBaseSaturation
+		};
+		blurCBData.HumanFemaleControls = {
+			settings.HumanFemaleSSSIntensity,
+			settings.HumanFemaleSSSSaturation,
+			settings.HumanFemaleSSSBrightness,
+			settings.HumanFemaleSSSBaseSaturation
+		};
 
 		blurCB->Update(blurCBData);
 	}

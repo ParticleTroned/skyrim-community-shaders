@@ -66,6 +66,8 @@ public:
 		uint pad;
 		float4 MeanFreePathBase;
 		float4 MeanFreePathHuman;
+		float4 HumanMaleControls;
+		float4 HumanFemaleControls;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BlurCB);
 

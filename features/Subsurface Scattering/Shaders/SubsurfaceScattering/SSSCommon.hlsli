@@ -20,6 +20,8 @@ cbuffer PerFrameSSS : register(b1)
 	uint pad;
 	float4 MeanFreePathBase;
 	float4 MeanFreePathHuman;
+	float4 HumanMaleControls;
+	float4 HumanFemaleControls;
 };
 
 float3 SSSRemoveAlbedo(float3 color, float3 albedo, uint mode)

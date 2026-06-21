@@ -138,10 +138,11 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, float sssAmount, bool hum
 
 	if (humanProfile) {
 		float3 base0 = centerColor.xyz;
-		float intensity = clamp(isFemale ? SharedData::SSSHumanFemaleIntensity : SharedData::SSSHumanMaleIntensity, 0.0f, 2.0f);
-		float brightness = clamp(isFemale ? SharedData::SSSHumanFemaleBrightness : SharedData::SSSHumanMaleBrightness, 0.0f, 2.0f);
-		float baseSat = clamp(isFemale ? SharedData::SSSHumanFemaleBaseSaturation : SharedData::SSSHumanMaleBaseSaturation, 0.0f, 2.0f);
-		float finalSat = clamp(isFemale ? SharedData::SSSHumanFemaleSaturation : SharedData::SSSHumanMaleSaturation, 0.0f, 2.0f);
+		float4 humanControls = isFemale ? HumanFemaleControls : HumanMaleControls;
+		float intensity = clamp(humanControls.x, 0.0f, 2.0f);
+		float finalSat = clamp(humanControls.y, 0.0f, 2.0f);
+		float brightness = clamp(humanControls.z, 0.0f, 2.0f);
+		float baseSat = clamp(humanControls.w, 0.0f, 2.0f);
 
 		float luma0 = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 		float3 base = lerp(luma0.xxx, color, baseSat) * brightness;

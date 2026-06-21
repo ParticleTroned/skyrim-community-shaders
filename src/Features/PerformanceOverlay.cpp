@@ -519,7 +519,7 @@ void PerformanceOverlay::DrawFPS()
 
 		if (isFrameGenActive) {
 			// Show note that FSR uses calculated data
-			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Post-FG: Calculated timing (2x Pre-FG)");
+			Util::Text::Warning("Post-FG: Calculated timing (2x Pre-FG)");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("AMD FSR Frame Generation uses calculated timing data (2x Pre-FG).\nNVIDIA DLSS Frame Generation provides measured timing data.");
 			}

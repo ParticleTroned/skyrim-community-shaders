@@ -928,7 +928,7 @@ void SettingsTabRenderer::RenderFontsTab()
 		SeparatorTextWithFont("Font Roles", Menu::FontRole::Subheading);
 
 		if (fontCatalog.families.empty()) {
-			ImGui::TextColored(themeSettings.StatusPalette.Warning, "No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/");
+			Util::Text::Warning("No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/");
 		}
 
 		for (size_t roleIndex = 0; roleIndex < Menu::FontRoleDescriptors.size(); ++roleIndex) {
@@ -961,7 +961,7 @@ void SettingsTabRenderer::RenderFontsTab()
 				FontRoleGuard familyComboFont(Menu::FontRole::Body);
 				if (ImGui::BeginCombo(familyLabel.c_str(), familyPreview)) {
 					if (fontCatalog.families.empty()) {
-						ImGui::TextColored(themeSettings.StatusPalette.Disable, "No font families available");
+						Util::Text::Disabled("No font families available");
 					} else {
 						for (int i = 0; i < static_cast<int>(fontCatalog.families.size()); ++i) {
 							bool isSelected = (i == familyIndex);
@@ -995,7 +995,7 @@ void SettingsTabRenderer::RenderFontsTab()
 
 			const Util::Fonts::FamilyInfo* selectedFamily = (fontCatalog.families.empty()) ? nullptr : &fontCatalog.families[familyIndex];
 			if (selectedFamily && selectedFamily->styles.empty()) {
-				ImGui::TextColored(themeSettings.StatusPalette.Warning, "No style variants found for this family.");
+				Util::Text::Warning("No style variants found for this family.");
 			} else if (selectedFamily) {
 				int styleIndex = 0;
 				for (size_t s = 0; s < selectedFamily->styles.size(); ++s) {

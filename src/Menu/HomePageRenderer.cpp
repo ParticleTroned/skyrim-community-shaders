@@ -387,7 +387,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		if (weatherKey.empty()) {
 			const char* warnText = "CS Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift";
 			centerText(warnText);
-			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.0f, 1.0f), "%s", warnText);
+			Util::Text::Warning("%s", warnText);
 		} else {
 			std::string infoStr = "CS Editor hotkey will be: " + Util::Input::KeyIdToString(weatherKey);
 			centerText(infoStr.c_str());

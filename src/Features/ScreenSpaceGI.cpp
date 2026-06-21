@@ -309,7 +309,7 @@ void ScreenSpaceGI::DrawSettings()
 	const bool isVR = REL::Module::IsVR();
 
 	if (!ShadersOK())
-		ImGui::TextColored({ 1, 0, 0, 1 }, "Compute shaders failed to compile!");
+		Util::Text::Error("Compute shaders failed to compile!");
 
 	auto drawCenteredSeparatorText = [](const char* a_label) {
 		ImGui::PushStyleVar(ImGuiStyleVar_SeparatorTextAlign, ImVec2(0.5f, 0.5f));
@@ -485,9 +485,9 @@ void ScreenSpaceGI::DrawSettings()
 			recompileFlag = true;
 		}
 		if (settings.EnableGI && !HasGIResources())
-			ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
+			Util::Text::Warning("Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
 		if (IsResourceProfileRestartPending()) {
-			ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
+			Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
 		}
 
 		drawCenteredSeparatorText("Quality/Performance");
@@ -752,9 +752,9 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	SyncResolvedSharedMaskScale(settings);
 	ImGui::TextDisabled("%s", settings.EnableFoveated && featureRuntimeActive && IsRuntimeFoveatedActive(settings) ? "active" : "inactive");
 	if (settings.EnableGI && !HasGIResources())
-		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
+		Util::Text::Warning("Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
 	if (IsResourceProfileRestartPending())
-		ImGui::TextColored({ 1.0f, 0.75f, 0.25f, 1.0f }, "Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
+		Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
 }
 
 void ScreenSpaceGI::LoadSettings(json& o_json)

@@ -56,10 +56,16 @@ float FoveatedComputeMaskDistance(float2 eyeUv, float centerScale, float centerH
 	float2 centerUv = FoveatedComputeCenterUV(centerOffset);
 	float2 normalized = (eyeUv - centerUv) / radii;
 	float2 absoluteNormalized = abs(normalized);
+#if FOVEATED_MASK_SHAPE_POWER == 4
+	float2 squared = absoluteNormalized * absoluteNormalized;
+	float pNorm = squared.x * squared.x + squared.y * squared.y;
+	return sqrt(sqrt(max(pNorm, 0.0)));
+#else
 	float shapePower = max((float)FOVEATED_MASK_SHAPE_POWER, 1.0);
 	float invShapePower = 1.0 / shapePower;
 	float pNorm = pow(absoluteNormalized.x, shapePower) + pow(absoluteNormalized.y, shapePower);
 	return pow(max(pNorm, 0.0), invShapePower);
+#endif
 }
 
 float FoveatedComputeCenterBlendWeight(float2 eyeUv, float centerScale, float centerFeather, float centerHorizontalScale, float2 centerOffset)

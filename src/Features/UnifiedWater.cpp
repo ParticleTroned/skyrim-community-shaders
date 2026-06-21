@@ -9,6 +9,9 @@
 #include "RE/P/PlayerCharacter.h"
 
 #include <imgui_internal.h>
+#include <cmath>
+#include <unordered_map>
+#include <vector>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
@@ -64,6 +67,155 @@ static void PatchBranchToUnconditional(const std::uintptr_t address, const char*
 
 // Engine behavior: CellState value 6 is the transition/attached state.
 static constexpr auto kTransitionAttachedCellState = static_cast<RE::TESObjectCELL::CellState>(6);
+
+static void ClearWaterNodeChildren(RE::NiNode* node, RE::TESWaterSystem* waterSystem)
+{
+	if (!node)
+		return;
+
+	auto count = node->GetChildren().size();
+	while (count > 0) {
+		const auto child = node->GetChildren()[count - 1];
+		if (const auto childNode = child ? child->AsNode() : nullptr)
+			ClearWaterNodeChildren(childNode, waterSystem);
+
+		if (child && waterSystem)
+			waterSystem->RemoveWater(child.get());
+
+		node->DetachChildAt(--count);
+	}
+}
+
+static void DetachAllChildOccurrences(RE::NiNode* node, const RE::NiAVObject* childToDetach)
+{
+	if (!node || !childToDetach)
+		return;
+
+	auto count = node->GetChildren().size();
+	while (count > 0) {
+		const auto child = node->GetChildren()[count - 1];
+		if (child.get() == childToDetach) {
+			node->DetachChildAt(--count);
+		} else {
+			count--;
+		}
+	}
+}
+
+struct WaterPositionKey
+{
+	int32_t x = 0;
+	int32_t y = 0;
+	int32_t z = 0;
+	int32_t scale = 0;
+};
+
+static bool operator==(const WaterPositionKey& lhs, const WaterPositionKey& rhs)
+{
+	return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.scale == rhs.scale;
+}
+
+struct WaterPositionKeyHash
+{
+	size_t operator()(const WaterPositionKey& key) const noexcept
+	{
+		size_t hash = std::hash<int32_t>{}(key.x);
+		hash ^= std::hash<int32_t>{}(key.y) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+		hash ^= std::hash<int32_t>{}(key.z) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+		hash ^= std::hash<int32_t>{}(key.scale) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+		return hash;
+	}
+};
+
+static int32_t QuantizeWaterPosition(float value)
+{
+	return static_cast<int32_t>(std::lround(value));
+}
+
+static WaterPositionKey GetWaterPositionKey(const RE::NiAVObject* object)
+{
+	if (!object)
+		return {};
+
+	return {
+		QuantizeWaterPosition(object->world.translate.x),
+		QuantizeWaterPosition(object->world.translate.y),
+		QuantizeWaterPosition(object->world.translate.z),
+		QuantizeWaterPosition(object->world.scale * 1000.0f),
+	};
+}
+
+static bool IsChildOfNode(const RE::NiAVObject* object, const RE::NiNode* root)
+{
+	if (!object || !root)
+		return false;
+
+	for (auto parent = object->parent; parent; parent = parent->parent) {
+		if (parent == root)
+			return true;
+	}
+
+	return object == root;
+}
+
+static RE::BSTriShape* SelectDuplicateWaterSystemShapeToRemove(RE::BSTriShape* existing, RE::BSTriShape* candidate, RE::NiNode* lodRoot)
+{
+	if (!existing)
+		return candidate;
+	if (!candidate)
+		return existing;
+
+	const bool existingIsLOD = IsChildOfNode(existing, lodRoot);
+	const bool candidateIsLOD = IsChildOfNode(candidate, lodRoot);
+	if (existingIsLOD != candidateIsLOD)
+		return existingIsLOD ? existing : candidate;
+
+	return candidate;
+}
+
+static void RemoveDuplicateWaterSystemObjects(RE::TESWaterSystem* waterSystem, RE::NiNode* lodRoot)
+{
+	if (!waterSystem)
+		return;
+
+	static thread_local std::unordered_map<WaterPositionKey, RE::BSTriShape*, WaterPositionKeyHash> shapeByPosition;
+	static thread_local std::vector<RE::BSTriShape*> duplicateShapes;
+
+	shapeByPosition.clear();
+	duplicateShapes.clear();
+
+	const auto objectCount = waterSystem->waterObjects.size();
+	if (shapeByPosition.bucket_count() < objectCount)
+		shapeByPosition.reserve(objectCount);
+	if (duplicateShapes.capacity() < objectCount)
+		duplicateShapes.reserve(objectCount);
+
+	for (const auto& waterObject : waterSystem->waterObjects) {
+		const auto shape = waterObject ? waterObject->shape.get() : nullptr;
+		if (!shape)
+			continue;
+
+		const auto key = GetWaterPositionKey(shape);
+		const auto [it, inserted] = shapeByPosition.try_emplace(key, shape);
+		if (inserted)
+			continue;
+
+		const auto existing = it->second;
+		const auto duplicate = SelectDuplicateWaterSystemShapeToRemove(existing, shape, lodRoot);
+		if (duplicate == existing)
+			it->second = shape;
+
+		duplicateShapes.push_back(duplicate);
+	}
+
+	for (const auto shape : duplicateShapes) {
+		if (!shape)
+			continue;
+
+		shape->SetAppCulled(true);
+		waterSystem->RemoveWater(shape);
+	}
+}
 
 static bool ShouldCullAtCell(
 	const RE::TES* tes,
@@ -672,15 +824,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 			return;
 		}
 
-		// Detach by index because DetachChild mutates the child list
-		auto count = water->GetChildren().size();
-		while (count > 0) {
-			const auto child = water->GetChildren()[count - 1];
-			if (child) {
-				waterSystem->RemoveWater(child.get());
-			}
-			water->DetachChildAt(--count);
-		}
+		ClearWaterNodeChildren(water.get(), waterSystem);
 
 		for (auto& instruction : *instructions) {
 			if (!instruction.form.ptr)
@@ -739,6 +883,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	}
 
 	if (auto waterLOD = uw.gWaterLOD; waterLOD && *waterLOD) {
+		RemoveDuplicateWaterSystemObjects(waterSystem, *waterLOD);
+		DetachAllChildOccurrences(*waterLOD, water.get());
 		(*waterLOD)->AttachChild(water.get(), true);
 		uw.UpdateWaterLODCull();
 	} else if (block->chunk) {
@@ -784,13 +930,10 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 
 	if (wasWaterAttached) {
 		// Drop generated child tiles before parking the reusable water node
-		auto count = water->GetChildren().size();
-		while (count > 0) {
-			water->DetachChildAt(--count);
-		}
+		ClearWaterNodeChildren(water.get(), globals::game::waterSystem);
 
 		if (auto waterLOD = uw.gWaterLOD; waterLOD && *waterLOD)
-			(*waterLOD)->DetachChild(water.get());
+			DetachAllChildOccurrences(*waterLOD, water.get());
 
 		// Park water under the detached chunk so block->water stays valid
 		if (block->chunk) {
@@ -809,29 +952,16 @@ void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader,
 {
 	auto& uw = globals::features::unifiedWater;
 
-	// Fix BSWaterShaderProperty.plane after interior->exterior transitions.
-	// The plane feeds ReflectPlane in the PerGeometry cbuffer. When corrupted (e.g., plane.constant = 0
-	// or garbage), the shader's refractionPlaneMul calculation produces extreme values causing flickering.
-	// This primarily affects flowmapped water because it uses more complex refraction depth calculations.
 	if (pass && pass->geometry) {
+		// Re-stabilize BSWaterShaderProperty.plane every draw. After interior/exterior
+		// transitions the cached plane can be stale for exactly one of two overlapping
+		// water surfaces, which presents as heavy flicker rather than missing water.
 		if (const auto prop = pass->geometry->GetGeometryRuntimeData().shaderProperty.get(); prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
 			const auto waterShaderProp = static_cast<RE::BSWaterShaderProperty*>(prop);
 			const float waterHeight = pass->geometry->world.translate.z;
 
-			// Validate and fix the plane if it's corrupted.
-			// A valid water plane has normal pointing up (0,0,1) and constant = water height.
-			// After interior->exterior transitions, plane.constant can be 0 or stale values.
-			const bool planeNonFinite =
-				!std::isfinite(waterShaderProp->plane.normal.x) ||
-				!std::isfinite(waterShaderProp->plane.normal.y) ||
-				!std::isfinite(waterShaderProp->plane.normal.z) ||
-				!std::isfinite(waterShaderProp->plane.constant);
-			const bool planeNormalBad = std::abs(waterShaderProp->plane.normal.x) > 0.01f || std::abs(waterShaderProp->plane.normal.y) > 0.01f || std::abs(waterShaderProp->plane.normal.z - 1.0f) > 0.01f;
-			const bool planeConstantBad = std::abs(waterShaderProp->plane.constant - waterHeight) > 1.0f;
-			if (planeNonFinite || planeNormalBad || planeConstantBad) {
-				waterShaderProp->plane.normal = { 0.0f, 0.0f, 1.0f };
-				waterShaderProp->plane.constant = waterHeight;
-			}
+			waterShaderProp->plane.normal = { 0.0f, 0.0f, 1.0f };
+			waterShaderProp->plane.constant = waterHeight;
 		}
 	}
 

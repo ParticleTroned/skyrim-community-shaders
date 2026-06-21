@@ -465,6 +465,7 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 
 	const auto& dir = dirs[static_cast<int>(current)];
 	const auto intensity = intensities[static_cast<int>(current)];
+	const auto targetDir = target == Caster::None ? RE::NiPoint3{ 0.0f, 0.0f, 1.0f } : dirs[static_cast<int>(target)];
 
 	if (fadePhase == Phase::None) {
 		return SetLighting(sun, dir, intensity);
@@ -474,7 +475,8 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 
 	const float t = fadeTimer / FadeTime;
 	const float fade = fadePhase == Phase::FadeIn ? t : 1.0f - t;
-	const float lightingIntensity = SetLighting(sun, dir, intensity * fade);
+	const float vlFactor = target == Caster::None ? 1.0f : ComputeVLFactor(dir, targetDir);
+	const float lightingIntensity = SetLighting(sun, dir, intensity * fade * vlFactor);
 
 	if (fadePhase == Phase::FadeOut) {
 		if (t >= 1.0f || intensity <= 0.0f) {
@@ -558,6 +560,13 @@ inline void SkySync::ShadowFader::SetDirection(RE::NiPoint3& dir, const float he
 inline void SkySync::ShadowFader::SetElevation(RE::NiPoint3& dir, const float elevRadians)
 {
 	SetDirection(dir, std::atan2(dir.y, dir.x), elevRadians);
+}
+
+float SkySync::ShadowFader::ComputeVLFactor(const RE::NiPoint3& current, const RE::NiPoint3& target)
+{
+	const float dot = std::clamp(current.Dot(target), -1.0f, 1.0f);
+	const float angle = DirectX::XMConvertToDegrees(DirectX::XMScalarACosEst(dot));
+	return std::clamp((VLFadeEndAngle - angle) / (VLFadeEndAngle - VLFadeStartAngle), 0.0f, 1.0f);
 }
 
 inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)

@@ -144,6 +144,7 @@ private:
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
 		static void SetElevation(RE::NiPoint3& dir, float elevRadians);
 		static void ClampDirection(RE::NiPoint3& dir);
+		static float ComputeVLFactor(const RE::NiPoint3& current, const RE::NiPoint3& target);
 		void Reset();
 	};
 
@@ -163,6 +164,8 @@ private:
 	static constexpr float DefaultVolumetricLightingIntensityFactor = 1.0f;
 	static constexpr float SecondsPerGameHour = 3600.0f;
 	static constexpr float SunsetHeadingLockThreshold = 0.5f;
+	static constexpr float VLFadeStartAngle = 2.0f;
+	static constexpr float VLFadeEndAngle = 10.0f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static float* gSunGlareSize = nullptr;

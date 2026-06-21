@@ -191,6 +191,114 @@ namespace
 		return sourceImage.GetImage(0, 0, 0);
 	}
 
+	// Game-root-relative paths must be absolute for CF_HDROP / Discord.
+	std::filesystem::path ResolveToAbsoluteGamePath(const std::filesystem::path& path)
+	{
+		if (path.is_absolute()) {
+			return path;
+		}
+
+		wchar_t buffer[MAX_PATH]{};
+		const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+		if (length > 0 && length < MAX_PATH) {
+			return std::filesystem::path(buffer).parent_path() / path;
+		}
+
+		std::error_code ec;
+		return std::filesystem::absolute(path, ec);
+	}
+
+	bool CopyFilePathToClipboardHDrop(const std::wstring& absolutePath)
+	{
+		if (absolutePath.empty()) {
+			return false;
+		}
+
+		const size_t pathChars = absolutePath.size();
+		const size_t bytes = sizeof(DROPFILES) + (pathChars + 2) * sizeof(wchar_t);
+		HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
+		if (!hMem) {
+			return false;
+		}
+
+		auto* drop = static_cast<DROPFILES*>(GlobalLock(hMem));
+		if (!drop) {
+			GlobalFree(hMem);
+			return false;
+		}
+
+		drop->pFiles = sizeof(DROPFILES);
+		drop->fWide = TRUE;
+
+		auto* files = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
+		memcpy(files, absolutePath.c_str(), (pathChars + 1) * sizeof(wchar_t));
+
+		GlobalUnlock(hMem);
+
+		for (int attempt = 0; attempt < 8; ++attempt) {
+			if (attempt > 0) {
+				Sleep(1 << (attempt - 1));
+			}
+			if (!OpenClipboard(nullptr)) {
+				continue;
+			}
+
+			EmptyClipboard();
+			const bool placed = SetClipboardData(CF_HDROP, hMem) != nullptr;
+			CloseClipboard();
+			if (placed) {
+				return true;
+			}
+		}
+
+		GlobalFree(hMem);
+		return false;
+	}
+
+	void CopySavedPathToClipboard(bool enabled, const std::filesystem::path& path)
+	{
+		if (!enabled || path.empty()) {
+			return;
+		}
+
+		const auto absolutePath = ResolveToAbsoluteGamePath(path);
+		std::error_code ec;
+		if (!std::filesystem::exists(absolutePath, ec)) {
+			logger::warn("Screenshot not found for clipboard: {}", absolutePath.string());
+			return;
+		}
+		if (std::filesystem::file_size(absolutePath, ec) == 0) {
+			logger::warn("Screenshot file is empty, skipping clipboard: {}", absolutePath.string());
+			return;
+		}
+
+		if (!CopyFilePathToClipboardHDrop(absolutePath.wstring())) {
+			logger::warn("Screenshot saved but clipboard copy failed.");
+		}
+	}
+
+	bool SaveSdrScreenshot(
+		DirectX::ScratchImage& image,
+		const std::filesystem::path& outputPath,
+		bool saveAsPng)
+	{
+		StripAlphaForBmp(image);
+		DirectX::ScratchImage convertedImage;
+		const DirectX::Image* saveImage = PrepareBmpImage(image, convertedImage);
+		if (!saveImage) {
+			return false;
+		}
+
+		const GUID& codec = saveAsPng ?
+		                        DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG) :
+		                        DirectX::GetWICCodec(DirectX::WIC_CODEC_BMP);
+		return SUCCEEDED(DirectX::SaveToWICFile(
+			*saveImage,
+			DirectX::WIC_FLAGS_NONE,
+			codec,
+			outputPath.c_str()));
+	}
+
 	// Resolves the slot's underlying texture, falling back to QueryInterface on
 	// SRV/RTV when slot.texture is null (kFRAMEBUFFER on flat aliases the swap-
 	// chain backbuffer that way). `holder` keeps the QI refcount alive across
@@ -302,16 +410,18 @@ namespace
 		}
 	}
 
-	std::filesystem::path BuildScreenshotPath(const std::string& screenshotPath)
+	std::filesystem::path BuildScreenshotPath(const std::string& screenshotPath, bool usePng)
 	{
 		SYSTEMTIME st;
 		GetLocalTime(&st);
 		char buf[80];
-		snprintf(buf, sizeof(buf), "CS_%04d-%02d-%02d_%02d-%02d-%02d_%03d.png",
+		const char* extension = usePng ? ".png" : ".bmp";
+		snprintf(buf, sizeof(buf), "CS_%04d-%02d-%02d_%02d-%02d-%02d_%03d%s",
 			st.wYear, st.wMonth, st.wDay,
 			st.wHour, st.wMinute, st.wSecond,
-			st.wMilliseconds);
-		return std::filesystem::path(screenshotPath) / buf;
+			st.wMilliseconds,
+			extension);
+		return ResolveToAbsoluteGamePath(std::filesystem::path(screenshotPath) / buf);
 	}
 
 }
@@ -347,6 +457,10 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		screenshotPath = a_json["ScreenshotPath"];
 	if (a_json.contains("ApplyCropToScreenshot"))
 		applyCropToScreenshot = a_json["ApplyCropToScreenshot"];
+	if (a_json.contains("SdrUsePng"))
+		sdrUsePng = a_json["SdrUsePng"];
+	if (a_json.contains("CopyToClipboard"))
+		copyToClipboard = a_json["CopyToClipboard"];
 
 	subrect.LoadSettings(a_json);
 }
@@ -355,16 +469,17 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 {
 	a_json["ScreenshotPath"] = screenshotPath;
 	a_json["ApplyCropToScreenshot"] = applyCropToScreenshot;
+	a_json["SdrUsePng"] = sdrUsePng;
+	a_json["CopyToClipboard"] = copyToClipboard;
 	subrect.SaveSettings(a_json);
 }
 
 void ScreenshotFeature::DrawSettings()
 {
-	Util::Text::Disabled("Capture and save run asynchronously - no frame stall.");
-	Util::Text::Disabled(
-		"Saves SDR .png files. HDR scenes are tonemapped (Reinhard) so the saved\n"
-		"image matches what's on screen. For true HDR files with HDR10 metadata,\n"
-		"use Xbox Game Bar (Win+G) or your GPU vendor's overlay (saves .jxr).");
+	ImGui::TextWrapped("Capture and save run asynchronously without stalling the game.");
+	ImGui::TextWrapped(
+		"SDR and VR captures use the selected lossless format. HDR scenes are tonemapped "
+		"(Reinhard) before SDR save; HDR PNG metadata is intentionally not included in this branch.");
 
 	if (ImGui::Button("Take Screenshot Now")) {
 		Capture();
@@ -373,6 +488,18 @@ void ScreenshotFeature::DrawSettings()
 	ImGui::Checkbox("Apply crop", &applyCropToScreenshot);
 
 	ImGui::SeparatorText("Output");
+
+	ImGui::Checkbox("Copy saved file to clipboard", &copyToClipboard);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Places the saved screenshot on the clipboard as a file.");
+		ImGui::Text("Paste in Explorer or attach in chat apps.");
+	}
+
+	int sdrFormat = sdrUsePng ? 1 : 0;
+	ImGui::RadioButton("BMP (lossless)", &sdrFormat, 0);
+	ImGui::SameLine();
+	ImGui::RadioButton("PNG (lossless)", &sdrFormat, 1);
+	sdrUsePng = sdrFormat != 0;
 
 	char buf[260];
 	strncpy_s(buf, sizeof(buf), screenshotPath.c_str(), _TRUNCATE);
@@ -392,10 +519,9 @@ void ScreenshotFeature::DrawSettings()
 	ImGui::EndDisabled();
 	ImGui::SameLine();
 	ImGui::Text("Folder");
-	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip(
-			"Relative paths resolve against the Skyrim install dir.\n"
-			"Absolute paths (e.g. D:\\Captures) save there directly.");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Relative paths resolve against the Skyrim install dir.");
+		ImGui::Text("Absolute paths (e.g. D:\\Captures) save there directly.");
 	}
 
 	auto& menuSettings = Menu::GetSingleton()->GetSettings();
@@ -406,10 +532,9 @@ void ScreenshotFeature::DrawSettings()
 		"Change##ScreenshotFeature");
 
 	if (HotkeyCollidesWithVanilla()) {
-		Util::Text::Disabled(
-			"This hotkey collides with vanilla PrintScreen; both saves will fire.\n"
-			"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a\n"
-			"different hotkey above.");
+		Util::Text::WrappedWarning(
+			"This hotkey collides with vanilla PrintScreen; both saves will fire. "
+			"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a different hotkey above.");
 	}
 
 	ImGui::SeparatorText("Crop");
@@ -546,26 +671,15 @@ void ScreenshotFeature::ScreenshotWorkerLoop()
 			continue;
 		}
 
-		StripAlphaForBmp(image);
-		DirectX::ScratchImage convertedImage;
-		const DirectX::Image* saveImage = PrepareBmpImage(image, convertedImage);
-		if (!saveImage) {
-			logger::error("Failed to prepare screenshot image for PNG output.");
-			continue;
-		}
-
 		Util::FileHelpers::EnsureDirectoryExists(screenshot.outputPath.parent_path());
 
-		HRESULT hr = DirectX::SaveToWICFile(
-			*saveImage,
-			DirectX::WIC_FLAGS_NONE,
-			DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG),
-			screenshot.outputPath.c_str());
+		const bool saveOk = SaveSdrScreenshot(image, screenshot.outputPath, screenshot.saveAsPng);
 
-		if (FAILED(hr)) {
-			logger::error("Failed to save screenshot: {:x}", static_cast<unsigned int>(hr));
+		if (!saveOk) {
+			logger::error("Failed to save screenshot.");
 			ShowInGameNotification("Screenshot failed - see CommunityShaders.log");
 		} else {
+			CopySavedPathToClipboard(screenshot.copyToClipboard, screenshot.outputPath);
 			logger::info("Saved screenshot to {}", screenshot.outputPath.string());
 			ShowInGameNotification(std::format("Screenshot saved: {}",
 				screenshot.outputPath.filename().string()));
@@ -653,6 +767,8 @@ void ScreenshotFeature::Capture()
 	screenshot.format = srcDesc.Format;
 	screenshot.width = copyW;
 	screenshot.height = copyH;
-	screenshot.outputPath = BuildScreenshotPath(screenshotPath);
+	screenshot.saveAsPng = sdrUsePng;
+	screenshot.outputPath = BuildScreenshotPath(screenshotPath, screenshot.saveAsPng);
+	screenshot.copyToClipboard = copyToClipboard;
 	EnqueueScreenshot(std::move(screenshot));
 }

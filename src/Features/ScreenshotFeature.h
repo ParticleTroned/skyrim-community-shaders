@@ -31,6 +31,8 @@ struct ScreenshotFeature : public Feature
 
 	// Settings
 	std::string screenshotPath = "Screenshots";
+	bool sdrUsePng = true;
+	bool copyToClipboard = false;
 
 	std::atomic<bool> captureRequested{ false };
 
@@ -42,6 +44,8 @@ private:
 		uint32_t width = 0;
 		uint32_t height = 0;
 		std::filesystem::path outputPath;
+		bool saveAsPng = true;
+		bool copyToClipboard = false;
 	};
 
 	std::mutex screenshotQueueMutex;

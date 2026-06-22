@@ -1,4 +1,5 @@
 #include "ShaderCache.h"
+#include "Feature.h"
 #include "Globals.h"
 #include "ShaderFileWatcher.h"
 #include "Util.h"
@@ -1283,6 +1284,9 @@ namespace SIE
 
 		std::wstring GetDiskPath(const std::string_view& name, uint32_t descriptor, ShaderClass shaderClass)
 		{
+			// Keep shader-cache IO relative to Data/... so Skyrim's normal working-directory
+			// behavior and MO2's USVFS both see the same paths. Resolving this to an absolute
+			// game path would bypass MO2's virtualized Data tree and break Overwrite/mod output.
 			const auto suffixNarrow = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString);
 			const std::wstring suffix(suffixNarrow.begin(), suffixNarrow.end());
 
@@ -2322,12 +2326,12 @@ namespace SIE
 
 	bool ShaderCache::IsDiskCache() const
 	{
-		return isDiskCache;
+		return isDiskCache.load(std::memory_order_relaxed);
 	}
 
 	void ShaderCache::SetDiskCache(bool value)
 	{
-		isDiskCache = value;
+		isDiskCache.store(value, std::memory_order_relaxed);
 	}
 
 	bool ShaderCache::IsSkipUnchangedShaders() const
@@ -2338,6 +2342,48 @@ namespace SIE
 	void ShaderCache::SetSkipUnchangedShaders(bool value)
 	{
 		isSkipUnchangedShaders = value;
+	}
+
+	static bool PartialInvalidation(const std::vector<std::string>& defines)
+	{
+		size_t deleted = 0;
+		size_t kept = 0;
+		const bool ok = Util::CacheInvalidation::TryPartialInvalidation(
+			L"Data/ShaderCache", L"Data/Shaders", defines, &deleted, &kept);
+		if (ok) {
+			logger::info("Partial disk cache invalidation: deleted {} shader dirs, kept {}", deleted, kept);
+		} else {
+			logger::warn("Partial disk cache invalidation unavailable, falling back to full wipe");
+		}
+		return ok;
+	}
+
+	static void AppendUniqueDefine(std::vector<std::string>& defines, const std::string& define)
+	{
+		if (std::ranges::find(defines, define) == defines.end()) {
+			defines.push_back(define);
+		}
+	}
+
+	static std::vector<std::string> CollectMismatchDefines(
+		const std::vector<ShaderCache::CacheMismatch>& mismatches,
+		const std::vector<Util::CacheInvalidation::FeatureState>& featureStates,
+		ShaderCache::CacheMismatch::Kind kind)
+	{
+		std::vector<std::string> defines;
+		for (const auto& mismatch : mismatches) {
+			if (mismatch.kind != kind) {
+				continue;
+			}
+
+			for (const auto& featureState : featureStates) {
+				if (featureState.shortName == mismatch.shortName) {
+					AppendUniqueDefine(defines, featureState.define);
+					break;
+				}
+			}
+		}
+		return defines;
 	}
 
 	void ShaderCache::DeleteDiskCache()
@@ -2356,31 +2402,77 @@ namespace SIE
 		CSimpleIniA ini;
 		ini.SetUnicode();
 		ini.LoadFile(L"Data\\ShaderCache\\Info.ini");
-		bool valid = true;
+		cacheMismatches.clear();
+		diskCacheHeld.store(false, std::memory_order_relaxed);
+		heldMismatchDefines.clear();
 
-		// Check plugin version
+		std::optional<std::string> cachedPluginVersion;
 		if (auto pluginVersion = ini.GetValue("Cache", "PluginVersion")) {
-			if (strcmp(Plugin::VERSION.string().c_str(), pluginVersion) != 0) {
-				logger::info("Disk cache outdated: plugin version changed (current: {}, cached: {})",
-					Plugin::VERSION.string(), pluginVersion);
-				valid = false;
+			cachedPluginVersion = pluginVersion;
+		}
+
+		std::vector<Util::CacheInvalidation::FeatureState> featureStates;
+		std::map<std::string, Util::CacheInvalidation::CacheIniEntry> cacheEntries;
+		for (auto* feature : Feature::GetFeatureList()) {
+			const auto shortName = feature->GetShortName();
+			featureStates.push_back({ shortName, std::string(feature->GetName()), feature->loaded,
+				feature->version, std::string(feature->GetShaderDefineName()) });
+
+			Util::CacheInvalidation::CacheIniEntry entry;
+			entry.enabled = ini.GetBoolValue(shortName.c_str(), "Enabled", false);
+			if (auto version = ini.GetValue(shortName.c_str(), "Version")) {
+				entry.version = version;
 			}
-		} else {
-			logger::info("Disk cache outdated: no plugin version found");
-			valid = false;
+			cacheEntries[shortName] = entry;
 		}
 
-		// Check feature validation
-		if (!(globals::state->ValidateCache(ini))) {
-			logger::info("Disk cache outdated: feature validation failed");
-			valid = false;
-		}
+		cacheMismatches = Util::CacheInvalidation::ClassifyMismatches(
+			Plugin::VERSION.string(), cachedPluginVersion, featureStates, cacheEntries);
 
-		if (valid) {
+		heldMismatchDefines = CollectMismatchDefines(cacheMismatches, featureStates, CacheMismatch::Kind::EnabledFlip);
+		auto versionMismatchDefines = CollectMismatchDefines(cacheMismatches, featureStates, CacheMismatch::Kind::FeatureVersion);
+
+		if (cacheMismatches.empty()) {
 			logger::info("Using disk cache");
+			return;
+		}
+
+		for (const auto& mismatch : cacheMismatches) {
+			logger::info("Disk cache mismatch: {} - {}", mismatch.feature, mismatch.detail);
+		}
+
+		const bool onlyEnabledFlips = std::ranges::all_of(cacheMismatches,
+			[](const CacheMismatch& mismatch) { return mismatch.kind == CacheMismatch::Kind::EnabledFlip; });
+		if (onlyEnabledFlips) {
+			diskCacheHeld.store(true, std::memory_order_relaxed);
+			logger::info("Disk cache held: feature set changed; compiling memory-only this session");
+			return;
+		}
+
+		const bool onlyFeatureVersions = std::ranges::all_of(cacheMismatches,
+			[](const CacheMismatch& mismatch) { return mismatch.kind == CacheMismatch::Kind::FeatureVersion; });
+		if (onlyFeatureVersions && PartialInvalidation(versionMismatchDefines)) {
+			WriteDiskCacheInfo();
 		} else {
 			DeleteDiskCache();
 		}
+	}
+
+	void ShaderCache::AcceptCacheRebuild()
+	{
+		if (!diskCacheHeld.load(std::memory_order_relaxed)) {
+			return;
+		}
+
+		if (!PartialInvalidation(heldMismatchDefines)) {
+			DeleteDiskCache();
+		}
+		heldMismatchDefines.clear();
+		WriteDiskCacheInfo();
+		diskCacheHeld.store(false, std::memory_order_relaxed);
+		cacheMismatches.clear();
+		Clear();
+		logger::info("Cache rebuild accepted: rebuilding disk cache for the current feature set");
 	}
 
 	void ShaderCache::WriteDiskCacheInfo()
@@ -2389,7 +2481,16 @@ namespace SIE
 		ini.SetUnicode();
 		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION.string().c_str());
 		globals::state->WriteDiskCacheInfo(ini);
-		ini.SaveFile(L"Data\\ShaderCache\\Info.ini");
+		try {
+			std::filesystem::create_directories(L"Data\\ShaderCache");
+		} catch (const std::filesystem::filesystem_error& ex) {
+			logger::error("Failed to create shader cache directory: {}", ex.what());
+			return;
+		}
+		if (const auto result = ini.SaveFile(L"Data\\ShaderCache\\Info.ini"); result < 0) {
+			logger::error("Failed to save disk cache info (plugin version: {})", Plugin::VERSION.string());
+			return;
+		}
 		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION.string());
 	}
 
@@ -2516,7 +2617,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		if (const auto shaderBlob =
-				SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor, isDiskCache, dependencyTracker.get())) {
+				SShaderCache::CompileShader(ShaderClass::Vertex, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get())) {
 			auto device = globals::d3d::device;
 
 			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader,
@@ -2545,7 +2646,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		if (const auto shaderBlob =
-				SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, isDiskCache, dependencyTracker.get())) {
+				SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get())) {
 			auto device = globals::d3d::device;
 
 			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader,
@@ -2574,7 +2675,7 @@ namespace SIE
 		uint32_t descriptor)
 	{
 		if (const auto shaderBlob =
-				SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor, isDiskCache, dependencyTracker.get())) {
+				SShaderCache::CompileShader(ShaderClass::Compute, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get())) {
 			auto device = globals::d3d::device;
 
 			auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader,

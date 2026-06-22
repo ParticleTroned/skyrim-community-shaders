@@ -48,6 +48,7 @@ public:
 
 private:
 	static void RenderWelcomeSection();
+	static void RenderCacheMismatchSection();
 	static void RenderQuickLinksSection();
 	static void RenderFAQSection();
 	static void RenderActiveConstraintsSection();

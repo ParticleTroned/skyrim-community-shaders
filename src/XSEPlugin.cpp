@@ -141,7 +141,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 					break;
 				}
 
-				if (shaderCache->IsDiskCache()) {
+				if (shaderCache->IsDiskCacheActive()) {
 					shaderCache->WriteDiskCacheInfo();
 				}
 

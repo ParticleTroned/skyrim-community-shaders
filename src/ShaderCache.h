@@ -2,8 +2,10 @@
 
 #include <BS_thread_pool.hpp>
 #include <efsw/efsw.hpp>
+#include <atomic>
 #include <vector>
 
+#include "Utils/CacheInvalidation.h"
 #include "Utils/WinApi.h"
 
 using namespace std::chrono;
@@ -332,6 +334,11 @@ namespace SIE
 
 		bool IsDiskCache() const;
 		void SetDiskCache(bool value);
+		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
+		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
+		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_relaxed); }
+		bool IsDiskCacheActive() const { return isDiskCache.load(std::memory_order_relaxed) && !diskCacheHeld.load(std::memory_order_relaxed); }
+		void AcceptCacheRebuild();
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void WriteDiskCacheInfo();
@@ -737,7 +744,10 @@ namespace SIE
 		ShaderMapArray<RE::BSGraphics::ComputeShader> computeShaders;
 
 		bool isEnabled = true;
-		bool isDiskCache = true;
+		std::atomic_bool isDiskCache{ true };
+		std::atomic_bool diskCacheHeld{ false };
+		std::vector<CacheMismatch> cacheMismatches;
+		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
 		bool isAsync = true;
 		bool isDump = false;

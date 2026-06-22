@@ -129,6 +129,15 @@ void AdvancedSettingsRenderer::RenderLoggingSection()
 							  "Higher values finish compilation faster but may cause stuttering."));
 	}
 
+	auto& menuSettings = globals::menu->GetSettings();
+	ImGui::Checkbox(T("menu.advanced.background_compile_on_boot", "Background Compile on Boot"), &menuSettings.BackgroundShaderCompilationOnBoot);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("menu.advanced.background_compile_on_boot_tooltip",
+							  "Load the menu immediately and compile shaders in the background on boot. "
+							  "This is the same behavior as pressing the Skip Compilation key automatically. "
+							  "Shaders still compile; only the startup wait is skipped. Takes effect on next launch."));
+	}
+
 	ImGui::Columns(2, nullptr, false);
 
 	// Dump Ini Settings button

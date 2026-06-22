@@ -184,8 +184,9 @@ bool OverlayRenderer::ShouldSkipRendering()
 	auto hide = shaderCache->IsHideErrors();
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	auto* renderDoc = RenderDoc::GetSingleton();
+	const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
 	const bool showCompilationOverlay = shaderCache->IsCompiling() &&
-		(!shaderCache->backgroundCompilation || Menu::GetSingleton()->GetSettings().ShowInGameShaderCompilationOverlay);
+		(!backgroundCompilation || Menu::GetSingleton()->GetSettings().ShowInGameShaderCompilationOverlay);
 
 	return !(showCompilationOverlay ||
 			 Menu::GetSingleton()->IsEnabled ||
@@ -254,11 +255,13 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto* renderDoc = RenderDoc::GetSingleton();
 	bool renderDocAvailable = renderDoc->IsAvailable();
 	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
+	const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
+	const bool menuLoaded = shaderCache->menuLoaded.load(std::memory_order_relaxed);
 	const bool showCompilationOverlay = shaderCache->IsCompiling() &&
-		(!shaderCache->backgroundCompilation || Menu::GetSingleton()->GetSettings().ShowInGameShaderCompilationOverlay);
+		(!backgroundCompilation || Menu::GetSingleton()->GetSettings().ShowInGameShaderCompilationOverlay);
 
 	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
-		shaderCache->backgroundCompilation ? "Background " : "",
+		backgroundCompilation ? "Background " : "",
 		shaderCache->GetShaderStatsString(!state->IsDeveloperMode()).c_str());
 	auto percent = (float)compiledShaders / (float)totalShaders;
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
@@ -278,7 +281,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 					"Open the Community Shaders menu home page to rebuild it or fix your setup and restart."));
 		}
 		if (state->IsDeveloperMode()) {
-			int32_t threadLimit = shaderCache->backgroundCompilation ? shaderCache->backgroundCompilationThreadCount : shaderCache->compilationThreadCount;
+			int32_t threadLimit = backgroundCompilation ? shaderCache->backgroundCompilationThreadCount : shaderCache->compilationThreadCount;
 			int compilationRunning = (int)shaderCache->compilationPool.get_tasks_running();
 			int heavyInFlight = shaderCache->GetHeavyTasksInFlight();
 			int heavyLimit = static_cast<int>(Util::GetPerformanceCoreCount());
@@ -294,7 +297,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				ImGui::Text("Slow shaders: %llu (very slow: %llu)", slow, verySlow);
 			}
 		}
-		if (!shaderCache->backgroundCompilation && shaderCache->menuLoaded) {
+		if (!backgroundCompilation && menuLoaded) {
 			auto skipShadersText = fmt::format(
 				"Press {} to proceed without completing shader compilation. ",
 				keyIdToString(Menu::GetSingleton()->GetSettings().SkipCompilationKey));

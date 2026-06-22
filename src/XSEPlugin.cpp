@@ -130,9 +130,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				FrameAnnotations::OnDataLoaded();
 
 				auto shaderCache = globals::shaderCache;
-				shaderCache->menuLoaded = true;
+				shaderCache->menuLoaded.store(true, std::memory_order_relaxed);
 
-				while (shaderCache->IsCompiling() && !shaderCache->backgroundCompilation && !globals::game::quitGame) {
+				while (shaderCache->IsCompiling() && !shaderCache->backgroundCompilation.load(std::memory_order_relaxed) && !globals::game::quitGame) {
 					std::this_thread::sleep_for(100ms);
 				}
 
@@ -141,9 +141,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 					break;
 				}
 
-				if (shaderCache->IsDiskCacheActive()) {
-					shaderCache->WriteDiskCacheInfo();
-				}
+				shaderCache->WriteDiskCacheInfoWhenReady();
 
 				Feature::ForEachLoadedFeature("DataLoaded", [](Feature* feature) { feature->DataLoaded(); });
 			}

@@ -183,6 +183,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CSEditorToggleKey,
 	EnableShaderBlocking,
 	ShowInGameShaderCompilationOverlay,
+	BackgroundShaderCompilationOnBoot,
 	FirstTimeSetupCompleted,
 	SkipClearCacheConfirmation,
 	AutoHideFeatureList,
@@ -504,6 +505,12 @@ void Menu::Load(json& o_json)
 				settings.SelectedThemePreset = "Default";
 			}
 		}
+	}
+
+	// Settings load before the first kDataLoaded shader wait. OR this in so an
+	// environment override or a runtime Skip Compilation press is never cleared.
+	if (settings.BackgroundShaderCompilationOnBoot) {
+		globals::shaderCache->backgroundCompilation.store(true, std::memory_order_relaxed);
 	}
 }
 
@@ -1081,7 +1088,7 @@ void Menu::ProcessInputEventQueue()
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 						 }
 					 } },
-					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
+					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation.store(true, std::memory_order_relaxed); } },
 					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
 					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
 					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },

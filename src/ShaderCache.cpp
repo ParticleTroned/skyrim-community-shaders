@@ -13,6 +13,9 @@
 
 #include "Plugin.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace SIE
 {
 	// Custom include handler to track all includes during shader compilation
@@ -2389,6 +2392,8 @@ namespace SIE
 	void ShaderCache::DeleteDiskCache()
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex };
+		diskCacheHeld.store(false, std::memory_order_relaxed);
+		diskCacheInfoWritePending.store(false, std::memory_order_relaxed);
 		try {
 			std::filesystem::remove_all(L"Data/ShaderCache");
 			logger::info("Deleted disk cache");
@@ -2494,8 +2499,59 @@ namespace SIE
 		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION.string());
 	}
 
+	void ShaderCache::WriteDiskCacheInfoWhenReady()
+	{
+		if (!IsDiskCacheActive()) {
+			return;
+		}
+
+		if (IsCompiling()) {
+			diskCacheInfoWritePending.store(true, std::memory_order_release);
+			if (!IsCompiling()) {
+				WritePendingDiskCacheInfoIfNeeded();
+				return;
+			}
+			logger::info("Deferring disk cache info write until shader compilation completes");
+			return;
+		}
+
+		WriteDiskCacheInfo();
+	}
+
+	void ShaderCache::WritePendingDiskCacheInfoIfNeeded()
+	{
+		if (!diskCacheInfoWritePending.exchange(false, std::memory_order_acq_rel)) {
+			return;
+		}
+
+		if (IsDiskCacheActive()) {
+			WriteDiskCacheInfo();
+		}
+	}
+
+	static bool IsEnvVarTruthy(const char* name)
+	{
+		char buffer[16] = {};
+		const DWORD length = GetEnvironmentVariableA(name, buffer, sizeof(buffer));
+		if (length == 0 || length >= sizeof(buffer)) {
+			return false;
+		}
+
+		std::string value(buffer, length);
+		std::ranges::transform(value, value.begin(), [](unsigned char c) {
+			return static_cast<char>(std::tolower(c));
+		});
+		return value == "1" || value == "true";
+	}
+
 	ShaderCache::ShaderCache()
 	{
+		if (IsEnvVarTruthy("COMMUNITYSHADERS_BACKGROUND_COMPILE") ||
+			IsEnvVarTruthy("OPENSHADERS_BACKGROUND_COMPILE")) {
+			backgroundCompilation.store(true, std::memory_order_relaxed);
+			logger::info("Background shader compilation on boot enabled by environment variable");
+		}
+
 		dependencyTracker = std::make_unique<ShaderFileDependencyTracker>();
 		logger::debug("ShaderCache initialized: {} startup threads, {} background threads, {} pool threads",
 			(int)compilationThreadCount, (int)backgroundCompilationThreadCount, (int)compilationPool.get_thread_count());
@@ -3214,7 +3270,7 @@ namespace SIE
 			                                    // Dispatch when pool has room. Use < (not <=) so that after
 			                                    // push_task() the total never exceeds the limit.
 			                                    (int)shaderCache->compilationPool.get_tasks_total() <
-			                                        (!shaderCache->backgroundCompilation ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
+			                                        (!shaderCache->backgroundCompilation.load(std::memory_order_relaxed) ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
 			/*Woke up because of a stop request. */
 			return std::nullopt;
 		}
@@ -3306,6 +3362,7 @@ namespace SIE
 
 		bool shouldLogCompletion = false;
 		double completionTimeMs = 0.0;
+		bool compilationCompleted = false;
 
 		// Determine whether this task was resolved from the disk cache or actually compiled.
 		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
@@ -3356,6 +3413,7 @@ namespace SIE
 				completionTime.store(now.QuadPart, std::memory_order_relaxed);
 				completionTimeMs = static_cast<double>(now.QuadPart - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
 				shouldLogCompletion = true;
+				compilationCompleted = true;
 			}
 
 			// Update task tracking
@@ -3366,6 +3424,9 @@ namespace SIE
 		// Log completion outside the lock
 		if (shouldLogCompletion) {
 			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
+		}
+		if (compilationCompleted) {
+			cache.WritePendingDiskCacheInfoIfNeeded();
 		}
 
 		conditionVariable.notify_one();

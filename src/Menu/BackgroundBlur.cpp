@@ -145,7 +145,7 @@ namespace BackgroundBlur
 
 		bool IsStartupMenuBlurSourceReady(SIE::ShaderCache* shaderCache)
 		{
-			return !shaderCache || (shaderCache->menuLoaded && !shaderCache->IsCompiling());
+			return !shaderCache || (shaderCache->menuLoaded.load(std::memory_order_relaxed) && !shaderCache->IsCompiling());
 		}
 
 		bool ShouldSkipStartupMenuBlur(const Upscaling& upscaling)

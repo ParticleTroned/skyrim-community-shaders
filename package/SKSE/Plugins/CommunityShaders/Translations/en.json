@@ -1572,6 +1572,8 @@
     "menu.advanced.avg_parallelism_tooltip_2": "Roughly the worker count where adding more cores gives diminishing returns.",
     "menu.advanced.avoid_flow_control": "Avoid Flow Control",
     "menu.advanced.avoid_flow_control_tooltip": "Adds D3DCOMPILE_AVOID_FLOW_CONTROL to the shader compiler flags.\nForces fxc to flatten branches into predicated ops rather than emitting dynamic flow control. Often a win for short branch bodies and uniformly-taken branches; usually a loss for long divergent branches that vanilla flow control would skip entirely.\nResets every launch. Toggling this clears the shader cache and triggers a full recompile.",
+    "menu.advanced.background_compile_on_boot": "Background Compile on Boot",
+    "menu.advanced.background_compile_on_boot_tooltip": "Load the menu immediately and compile shaders in the background on boot. This is the same behavior as pressing the Skip Compilation key automatically. Shaders still compile; only the startup wait is skipped. Takes effect on next launch.",
     "menu.advanced.background_compiler_threads": "Background Compiler Threads",
     "menu.advanced.background_compiler_threads_tooltip": "Number of threads used to compile shaders during gameplay. Defaults to half of performance cores to avoid impacting the render thread. Higher values finish compilation faster but may cause stuttering.",
     "menu.advanced.block_next": "Block Next:",

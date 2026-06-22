@@ -342,6 +342,8 @@ namespace SIE
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void WriteDiskCacheInfo();
+		void WriteDiskCacheInfoWhenReady();
+		void WritePendingDiskCacheInfoIfNeeded();
 		bool IsSkipUnchangedShaders() const;
 		void SetSkipUnchangedShaders(bool value);
 		bool UseFileWatcher() const;
@@ -488,8 +490,8 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
-		bool backgroundCompilation = false;
-		bool menuLoaded = false;
+		std::atomic_bool backgroundCompilation{ false };
+		std::atomic_bool menuLoaded{ false };
 
 		enum class LightingShaderTechniques
 		{
@@ -746,6 +748,7 @@ namespace SIE
 		bool isEnabled = true;
 		std::atomic_bool isDiskCache{ true };
 		std::atomic_bool diskCacheHeld{ false };
+		std::atomic_bool diskCacheInfoWritePending{ false };
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer

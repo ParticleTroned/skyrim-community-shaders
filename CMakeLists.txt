@@ -123,6 +123,10 @@ target_include_directories(
         ${CLIB_UTIL_INCLUDE_DIRS}
         "${CMAKE_SOURCE_DIR}/package/Shaders"
         "${CMAKE_SOURCE_DIR}/extern/sk_hdr_png/include"
+        # DXVK's vendored Vulkan-Headers — lets CS talk to DXVK's own Vulkan
+        # device (via the IDXGIVkInterop* interfaces) for the no-interop
+        # frame-generation path, without an external Vulkan SDK install.
+        "${CMAKE_SOURCE_DIR}/extern/dxvk/include/vulkan/include"
         ${DETOURS_INCLUDE_DIRS}
 )
 

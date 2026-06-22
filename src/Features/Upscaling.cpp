@@ -2,6 +2,7 @@
 
 #include "../I18n/I18n.h"
 #include "Deferred.h"
+#include "Upscaling/DxvkInterop.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
@@ -541,6 +542,22 @@ void Upscaling::SetupResources()
 
 	if (globals::features::hdrDisplay.loaded) {
 		globals::features::hdrDisplay.SetupResources();
+	}
+
+	// Bridge to DXVK's own Vulkan device for the no-interop frame-generation path.
+	// On native D3D11 this is a no-op (IsAvailable() stays false).
+	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	if (dxvk->Initialize()) {
+		// Probe: confirm a CS D3D11 texture maps to a valid backing VkImage on
+		// DXVK's device — the mechanism FFX-Vulkan will use, with no interop.
+		VkImage probeImage = VK_NULL_HANDLE;
+		VkImageCreateInfo probeInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+		if (dxvk->GetVkImage(main.texture, &probeImage, nullptr, &probeInfo) && probeImage != VK_NULL_HANDLE) {
+			logger::info("[Upscaling] DXVK texture->VkImage probe OK: main RT VkImage={:#x} ({}x{}, vkFormat={})",
+				reinterpret_cast<uintptr_t>(probeImage), probeInfo.extent.width, probeInfo.extent.height, static_cast<int>(probeInfo.format));
+		} else {
+			logger::warn("[Upscaling] DXVK texture->VkImage probe FAILED");
+		}
 	}
 }
 

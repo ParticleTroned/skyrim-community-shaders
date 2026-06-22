@@ -279,6 +279,15 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
 		DestroyUpscalingTextureResources(a_upscalemethod);
+
+		// Tear down the FSR3 context when leaving FSR (only if it was actually upscaling),
+		// and stand up a fresh one when entering FSR. The context runs on the D3D11 (DXVK)
+		// device via the FFX DX11 backend — no DX12 device, no interop.
+		if (previousUpscaleMode == UpscaleMethod::kFSR && previousUpscalingWasActive)
+			fidelityFX.DestroyFSRResources();
+		if (a_upscalemethod == UpscaleMethod::kFSR)
+			fidelityFX.CreateFSRResources();
+
 		CreateUpscalingTextureResources(a_upscalemethod);
 
 		previousUpscaleMode = a_upscalemethod;
@@ -706,6 +715,21 @@ void Upscaling::Upscale()
 		globals::profiler->EndPass();
 	}
 
+	{
+		globals::profiler->BeginPass("Upscaling::Upscale");
+		state->BeginPerfEvent("Upscaling");
+		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
+
+		// FSR3 upscaling dispatch. Runs through the FFX DX11 backend on globals::d3d::device,
+		// which DXVK translates onto its single Vulkan device — no DX12, no interop.
+		if (GetUpscaleMethod() == UpscaleMethod::kFSR) {
+			auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
+		}
+
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
+	}
 }
 
 void Upscaling::PerformUpscaling()

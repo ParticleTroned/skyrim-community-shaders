@@ -93,6 +93,11 @@ find_package(directx-headers CONFIG REQUIRED)
 find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
 
+# FidelityFX SDK — builds the FSR3 upscaler against the DX11 backend. Under DXVK this
+# runs as plain D3D11 work on the proxy device (DXVK's single Vulkan device), with no
+# DX12 device and no DXGI shared-handle interop.
+include(FidelityFX-SDK)
+
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"

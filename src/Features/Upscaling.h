@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Feature.h"
+#include "Upscaling/FidelityFX.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include <d3d11_4.h>
 #include <winrt/base.h>
@@ -118,6 +119,7 @@ public:
 	virtual void ClearShaderCache() override;
 
 	static inline RCAS rcas;
+	static inline FidelityFX fidelityFX;
 
 	float projectionPosScaleX = 0.0f;
 	float projectionPosScaleY = 0.0f;

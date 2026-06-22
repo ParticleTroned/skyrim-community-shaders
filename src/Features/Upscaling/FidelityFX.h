@@ -85,6 +85,16 @@ public:
 	 */
 	bool DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits);
 
+	/**
+	 * @brief SEH-guarded upscale (+ optional frame generation) for the per-frame call site.
+	 *        Catches any fault in the VK dispatch/submit path, logs the fault address, and
+	 *        disables further dispatch so a single fault doesn't CTD or crash-loop.
+	 */
+	void UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness, bool a_frameGeneration, bool a_isHDR, float a_peakNits);
+
+	// Set after a dispatch fault is caught; stops further FSR VK dispatch this session.
+	bool dispatchFaulted = false;
+
 private:
 	// FSR scratch buffers. Upscaling-only uses [1]; frame generation uses all three
 	// (shared resources, upscaling, frame interpolation), per the FFX backend model.

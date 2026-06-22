@@ -76,12 +76,12 @@ namespace
 	// SEH wrappers — kept free of any object that requires unwinding so __try is legal
 	// (MSVC forbids __try in a function with C++ objects whose lifetime spans it). A
 	// fault here is typically RenderDoc interfering with FFX; we degrade gracefully.
-	static LONG LogFfxException(_EXCEPTION_POINTERS* ep)
+	static LONG LogFfxException(const char* where, _EXCEPTION_POINTERS* ep)
 	{
 		uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"CommunityShaders.dll"));
 		uintptr_t addr = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
-		logger::critical("[FidelityFX] ffxFsr3ContextCreate FAULTED code=0x{:08X} addr=0x{:X} rva=0x{:X}",
-			(uint32_t)ep->ExceptionRecord->ExceptionCode, addr, addr >= base ? (addr - base) : 0);
+		logger::critical("[FidelityFX] {} FAULTED code=0x{:08X} addr=0x{:X} rva=0x{:X}",
+			where, (uint32_t)ep->ExceptionRecord->ExceptionCode, addr, addr >= base ? (addr - base) : 0);
 		return EXCEPTION_EXECUTE_HANDLER;
 	}
 
@@ -89,7 +89,7 @@ namespace
 	{
 		__try {
 			return ffxFsr3ContextCreate(ctx, desc);
-		} __except (LogFfxException(GetExceptionInformation())) {
+		} __except (LogFfxException("ffxFsr3ContextCreate", GetExceptionInformation())) {
 			return FFX_ERROR_BACKEND_API_ERROR;
 		}
 	}
@@ -403,6 +403,22 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 	if (state->frameAnnotations)
 		state->EndPerfEvent();
+}
+
+void FidelityFX::UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness, bool a_frameGeneration, bool a_isHDR, float a_peakNits)
+{
+	if (dispatchFaulted)
+		return;
+	// __try here contains only the dispatch CALLS (no C++ unwinding objects in this scope;
+	// the std::vector layout guards live inside Upscale/DispatchFrameGeneration), so SEH is legal.
+	__try {
+		Upscale(a_color, a_reactiveMask, a_transparencyCompositionMask, a_motionVectors, a_sharpness);
+		if (a_frameGeneration)
+			DispatchFrameGeneration(a_color, a_isHDR, a_peakNits);
+	} __except (LogFfxException("FSR VK dispatch", GetExceptionInformation())) {
+		dispatchFaulted = true;
+		logger::critical("[FidelityFX] FSR VK dispatch faulted — disabling FSR VK dispatch this session to avoid repeated crashes");
+	}
 }
 
 bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits)

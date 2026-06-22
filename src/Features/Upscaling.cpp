@@ -754,21 +754,16 @@ void Upscaling::Upscale()
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
-		// FSR3 upscaling dispatch. Runs through the FFX DX11 backend on globals::d3d::device,
-		// which DXVK translates onto its single Vulkan device — no DX12, no interop.
+		// FSR3 upscaling (+ optional frame generation) dispatch. Runs through the FFX
+		// Vulkan backend on DXVK's own VkDevice — no DX12, no interop. SEH-guarded so a
+		// fault degrades gracefully instead of crashing.
 		if (GetUpscaleMethod() == UpscaleMethod::kFSR) {
 			auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
-
-			// FSR3 frame generation: optical flow + interpolation, also on the DX11
-			// (DXVK) device with no interop. Produces an interpolated frame into a
-			// CS-owned texture. Off unless enabled in settings.
-			if (settings.frameGeneration && fidelityFX.frameGenContextActive) {
-				auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
-				bool isHDR = hdr && hdr->settings.enableHDR;
-				float peakNits = hdr ? std::clamp((float)hdr->settings.hdrPeakNits, 1.0f, 10000.0f) : 1000.0f;
-				fidelityFX.DispatchFrameGeneration(main.texture, isHDR, peakNits);
-			}
+			auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
+			bool wantFG = settings.frameGeneration && fidelityFX.frameGenContextActive;
+			bool isHDR = hdr && hdr->settings.enableHDR;
+			float peakNits = hdr ? std::clamp((float)hdr->settings.hdrPeakNits, 1.0f, 10000.0f) : 1000.0f;
+			fidelityFX.UpscaleAndGenerate(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR, wantFG, isHDR, peakNits);
 		}
 
 		state->EndPerfEvent();

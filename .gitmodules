@@ -6,8 +6,7 @@
 	url = https://github.com/NVIDIAGameWorks/Streamline.git
 [submodule "extern/FidelityFX-SDK"]
 	path = extern/FidelityFX-SDK
-	url = https://github.com/alandtse/FidelityFX-SDK-DX11
-	branch = optiscaler-build
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
 [submodule "extern/dxvk"]
 	path = extern/dxvk
 	url = https://github.com/doodlum/dxvk.git

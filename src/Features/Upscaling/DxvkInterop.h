@@ -20,6 +20,7 @@
 
 #include <d3d11.h>
 #include <dxgi1_6.h>
+#include <vector>
 #include <vulkan/vulkan.h>
 #include <winrt/base.h>
 
@@ -121,6 +122,55 @@ namespace SIE
 
 		IDXGIVkInteropDevice* GetInteropDevice() const { return interopDevice.get(); }
 
+		// --- Command-buffer ring for recording foreign Vulkan (FFX) work ---
+
+		/**
+		 * @brief Creates the command pool + per-frame command-buffer/fence ring on
+		 *        DXVK's queue family. Required before BeginFrameCommandBuffer().
+		 * @param a_framesInFlight Ring depth (number of in-flight command buffers).
+		 * @return true on success.
+		 */
+		bool CreateCommandResources(uint32_t a_framesInFlight = 3);
+
+		/** @brief Destroys the command pool, command buffers and fences. */
+		void DestroyCommandResources();
+
+		/** @brief Whether the command ring is ready (CreateCommandResources succeeded). */
+		bool CommandResourcesReady() const { return commandPool != VK_NULL_HANDLE; }
+
+		/**
+		 * @brief Acquires the next ring command buffer (waits its fence), begins it
+		 *        (ONE_TIME_SUBMIT) and returns it for ffxGetCommandListVK.
+		 * @return The VkCommandBuffer, or VK_NULL_HANDLE on failure.
+		 */
+		VkCommandBuffer BeginFrameCommandBuffer();
+
+		/**
+		 * @brief Ends + submits the current ring command buffer on DXVK's queue.
+		 *        Flushes DXVK's pending D3D11 work first, then submits under the
+		 *        submission-queue lock with the ring fence. Optionally blocks until done.
+		 * @param a_commandBuffer The buffer returned by BeginFrameCommandBuffer().
+		 * @param a_waitIdle If true, waits the fence before returning (needed when the
+		 *        result is consumed immediately, e.g. presenting an interpolated frame).
+		 * @return true on success.
+		 */
+		bool SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool a_waitIdle = false);
+
+		/**
+		 * @brief Transitions an interop image's layout via DXVK's own tracker
+		 *        (IDXGIVkInteropDevice::TransitionSurfaceLayout) so DXVK stays synced.
+		 *        Never issue a raw vkCmdPipelineBarrier on an interop image.
+		 * @param a_resource The D3D11 texture.
+		 * @param a_oldLayout Current layout (read it from GetVkImage's pLayout).
+		 * @param a_newLayout Desired layout.
+		 * @param a_aspect Image aspect (color/depth).
+		 */
+		void TransitionImageLayout(ID3D11Resource* a_resource, VkImageLayout a_oldLayout,
+			VkImageLayout a_newLayout, VkImageAspectFlags a_aspect = VK_IMAGE_ASPECT_COLOR_BIT) const;
+
+		/** @brief Queries the IDXGIVkInteropSurface for a D3D11 resource. */
+		bool GetInteropSurface(ID3D11Resource* a_resource, IDXGIVkInteropSurface** a_outSurface) const;
+
 	private:
 		DxvkInterop() = default;
 
@@ -136,5 +186,12 @@ namespace SIE
 
 		PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
 		PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr = nullptr;
+
+		// Command-buffer ring (recorded on DXVK's queue family, submitted on its queue).
+		VkCommandPool commandPool = VK_NULL_HANDLE;
+		std::vector<VkCommandBuffer> commandBuffers;
+		std::vector<VkFence> commandFences;
+		uint32_t framesInFlight = 0;
+		uint32_t commandFrameIndex = 0;
 	};
 }

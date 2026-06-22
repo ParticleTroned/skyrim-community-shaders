@@ -114,4 +114,162 @@ namespace SIE
 		if (interopDevice)
 			interopDevice->ReleaseSubmissionQueue();
 	}
+
+	bool DxvkInterop::CreateCommandResources(uint32_t a_framesInFlight)
+	{
+		if (!available)
+			return false;
+		if (commandPool != VK_NULL_HANDLE)
+			return true;
+
+		framesInFlight = a_framesInFlight ? a_framesInFlight : 1;
+
+		VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		poolInfo.queueFamilyIndex = queueFamilyIndex;
+		if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+			logger::error("[DxvkInterop] vkCreateCommandPool failed");
+			commandPool = VK_NULL_HANDLE;
+			return false;
+		}
+
+		commandBuffers.resize(framesInFlight, VK_NULL_HANDLE);
+		VkCommandBufferAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+		allocInfo.commandPool = commandPool;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandBufferCount = framesInFlight;
+		if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
+			logger::error("[DxvkInterop] vkAllocateCommandBuffers failed");
+			DestroyCommandResources();
+			return false;
+		}
+
+		// Fences start signaled so the first BeginFrameCommandBuffer doesn't block.
+		commandFences.resize(framesInFlight, VK_NULL_HANDLE);
+		VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+		fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+		for (uint32_t i = 0; i < framesInFlight; ++i) {
+			if (vkCreateFence(device, &fenceInfo, nullptr, &commandFences[i]) != VK_SUCCESS) {
+				logger::error("[DxvkInterop] vkCreateFence failed");
+				DestroyCommandResources();
+				return false;
+			}
+		}
+
+		commandFrameIndex = 0;
+		logger::info("[DxvkInterop] Command ring created ({} frames in flight, queueFamily {})", framesInFlight, queueFamilyIndex);
+		return true;
+	}
+
+	void DxvkInterop::DestroyCommandResources()
+	{
+		if (device == VK_NULL_HANDLE)
+			return;
+
+		// Ensure no in-flight submissions before tearing down.
+		for (auto f : commandFences) {
+			if (f != VK_NULL_HANDLE)
+				vkWaitForFences(device, 1, &f, VK_TRUE, UINT64_MAX);
+		}
+		for (auto f : commandFences) {
+			if (f != VK_NULL_HANDLE)
+				vkDestroyFence(device, f, nullptr);
+		}
+		commandFences.clear();
+
+		if (commandPool != VK_NULL_HANDLE) {
+			// Freeing the pool frees its command buffers.
+			vkDestroyCommandPool(device, commandPool, nullptr);
+			commandPool = VK_NULL_HANDLE;
+		}
+		commandBuffers.clear();
+		framesInFlight = 0;
+		commandFrameIndex = 0;
+	}
+
+	VkCommandBuffer DxvkInterop::BeginFrameCommandBuffer()
+	{
+		if (commandPool == VK_NULL_HANDLE)
+			return VK_NULL_HANDLE;
+
+		commandFrameIndex = (commandFrameIndex + 1) % framesInFlight;
+		VkFence fence = commandFences[commandFrameIndex];
+		VkCommandBuffer cb = commandBuffers[commandFrameIndex];
+
+		// Make sure this ring slot's previous submission finished before reuse.
+		vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+		vkResetFences(device, 1, &fence);
+		vkResetCommandBuffer(cb, 0);
+
+		VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		if (vkBeginCommandBuffer(cb, &beginInfo) != VK_SUCCESS) {
+			logger::error("[DxvkInterop] vkBeginCommandBuffer failed");
+			return VK_NULL_HANDLE;
+		}
+		return cb;
+	}
+
+	bool DxvkInterop::SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool a_waitIdle)
+	{
+		if (commandPool == VK_NULL_HANDLE || a_commandBuffer == VK_NULL_HANDLE)
+			return false;
+
+		if (vkEndCommandBuffer(a_commandBuffer) != VK_SUCCESS) {
+			logger::error("[DxvkInterop] vkEndCommandBuffer failed");
+			return false;
+		}
+
+		VkFence fence = commandFences[commandFrameIndex];
+
+		VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &a_commandBuffer;
+
+		// Flush DXVK's pending D3D11 work (which produced the FFX inputs) so it is
+		// visible to the queue before our submission, then submit under the lock so
+		// DXVK's own worker thread doesn't race us on the shared graphics queue.
+		FlushRenderingCommands();
+		LockSubmissionQueue();
+		VkResult vr = vkQueueSubmit(queue, 1, &submitInfo, fence);
+		ReleaseSubmissionQueue();
+
+		if (vr != VK_SUCCESS) {
+			logger::error("[DxvkInterop] vkQueueSubmit failed ({})", (int)vr);
+			return false;
+		}
+
+		if (a_waitIdle)
+			vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+
+		return true;
+	}
+
+	bool DxvkInterop::GetInteropSurface(ID3D11Resource* a_resource, IDXGIVkInteropSurface** a_outSurface) const
+	{
+		if (!a_resource || !a_outSurface)
+			return false;
+		return SUCCEEDED(a_resource->QueryInterface(__uuidof(IDXGIVkInteropSurface), reinterpret_cast<void**>(a_outSurface)));
+	}
+
+	void DxvkInterop::TransitionImageLayout(ID3D11Resource* a_resource, VkImageLayout a_oldLayout,
+		VkImageLayout a_newLayout, VkImageAspectFlags a_aspect) const
+	{
+		if (!interopDevice || a_oldLayout == a_newLayout)
+			return;
+
+		winrt::com_ptr<IDXGIVkInteropSurface> surface;
+		if (!GetInteropSurface(a_resource, surface.put()))
+			return;
+
+		VkImageSubresourceRange range{};
+		range.aspectMask = a_aspect;
+		range.baseMipLevel = 0;
+		range.levelCount = VK_REMAINING_MIP_LEVELS;
+		range.baseArrayLayer = 0;
+		range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+
+		// DXVK performs the barrier on its own context and updates its layout tracker.
+		interopDevice->TransitionSurfaceLayout(surface.get(), &range, a_oldLayout, a_newLayout);
+	}
 }

@@ -20,7 +20,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
 	upscaleMethod,
 	qualityMode,
-	sharpnessFSR);
+	sharpnessFSR,
+	frameGeneration);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -116,6 +117,14 @@ void Upscaling::DrawSettings()
 		ImGui::SliderInt(T(TKEY("upscale_preset"), "Upscale Preset"), (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str());
 
 		ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
+
+		ImGui::Checkbox(T(TKEY("frame_generation"), "Frame Generation (FSR3)"), &settings.frameGeneration);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("frame_generation_tooltip"),
+				"Generates interpolated frames via FSR3 optical flow + interpolation. "
+				"Runs entirely on the DXVK Vulkan device (no DX12, no interop). "
+				"Changing this rebuilds the FSR3 context."));
+		}
 	}
 }
 
@@ -272,26 +281,34 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
+	static bool previousFrameGeneration = false;
 
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
+	// Toggling frame generation requires recreating the FSR3 context (upscaling-only
+	// vs. interpolation-enabled are distinct context layouts).
+	bool frameGenChanged = (previousFrameGeneration != settings.frameGeneration) && (a_upscalemethod == UpscaleMethod::kFSR);
 
-	if (upscaleModeChanged) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({})",
-			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
+	if (upscaleModeChanged || frameGenChanged) {
+		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), FrameGen: {} -> {}",
+			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod), previousFrameGeneration, settings.frameGeneration);
 
 		DestroyUpscalingTextureResources(a_upscalemethod);
 
-		// Tear down the FSR3 context when leaving FSR (only if it was actually upscaling),
-		// and stand up a fresh one when entering FSR. The context runs on the D3D11 (DXVK)
-		// device via the FFX DX11 backend — no DX12 device, no interop.
-		if (previousUpscaleMode == UpscaleMethod::kFSR && previousUpscalingWasActive)
+		// Tear down the FSR3 context when leaving FSR (only if it was actually upscaling)
+		// or when frame generation toggles, and stand up a fresh one when entering FSR.
+		// The context runs on the D3D11 (DXVK) device via the FFX DX11 backend — no DX12
+		// device, no interop. Frame generation adds the optical-flow + interpolation
+		// passes (also DX11), writing into a CS-owned interpolated-frame texture.
+		bool hadContext = (previousUpscaleMode == UpscaleMethod::kFSR && previousUpscalingWasActive) || (frameGenChanged && previousUpscaleMode == UpscaleMethod::kFSR);
+		if (hadContext)
 			fidelityFX.DestroyFSRResources();
 		if (a_upscalemethod == UpscaleMethod::kFSR)
-			fidelityFX.CreateFSRResources();
+			fidelityFX.CreateFSRResources(settings.frameGeneration);
 
 		CreateUpscalingTextureResources(a_upscalemethod);
 
 		previousUpscaleMode = a_upscalemethod;
+		previousFrameGeneration = settings.frameGeneration;
 		previousUpscalingWasActive = IsUpscalingActive();
 	}
 }
@@ -742,6 +759,16 @@ void Upscaling::Upscale()
 		if (GetUpscaleMethod() == UpscaleMethod::kFSR) {
 			auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
+
+			// FSR3 frame generation: optical flow + interpolation, also on the DX11
+			// (DXVK) device with no interop. Produces an interpolated frame into a
+			// CS-owned texture. Off unless enabled in settings.
+			if (settings.frameGeneration && fidelityFX.frameGenContextActive) {
+				auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
+				bool isHDR = hdr && hdr->settings.enableHDR;
+				float peakNits = hdr ? std::clamp((float)hdr->settings.hdrPeakNits, 1.0f, 10000.0f) : 1000.0f;
+				fidelityFX.DispatchFrameGeneration(main.texture, isHDR, peakNits);
+			}
 		}
 
 		state->EndPerfEvent();

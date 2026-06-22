@@ -93,9 +93,13 @@ find_package(directx-headers CONFIG REQUIRED)
 find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
 
-# FidelityFX SDK — builds the FSR3 upscaler against the DX11 backend. Under DXVK this
-# runs as plain D3D11 work on the proxy device (DXVK's single Vulkan device), with no
-# DX12 device and no DXGI shared-handle interop.
+# Vulkan SDK — CS talks to DXVK's own VkDevice (via the IDXGIVkInterop* interfaces)
+# and drives the FFX Vulkan backend on it. Using the SDK's headers (single source,
+# avoids a vulkan_core.h struct-layout split across the DXVK<->FFX interop boundary).
+find_package(Vulkan REQUIRED)
+
+# FidelityFX SDK — official v1.1.4 Vulkan backend. FSR3 upscaling + frame generation
+# run on DXVK's single Vulkan device (no DX12, no interop). See cmake/FidelityFX-SDK.cmake.
 include(FidelityFX-SDK)
 
 target_compile_definitions(
@@ -123,10 +127,6 @@ target_include_directories(
         ${CLIB_UTIL_INCLUDE_DIRS}
         "${CMAKE_SOURCE_DIR}/package/Shaders"
         "${CMAKE_SOURCE_DIR}/extern/sk_hdr_png/include"
-        # DXVK's vendored Vulkan-Headers — lets CS talk to DXVK's own Vulkan
-        # device (via the IDXGIVkInterop* interfaces) for the no-interop
-        # frame-generation path, without an external Vulkan SDK install.
-        "${CMAKE_SOURCE_DIR}/extern/dxvk/include/vulkan/include"
         ${DETOURS_INCLUDE_DIRS}
 )
 
@@ -153,6 +153,7 @@ target_link_libraries(
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
         windowscodecs
+        Vulkan::Vulkan
 )
 
 # Some third-party libs (e.g. FFX backend) are built with /GL.

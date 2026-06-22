@@ -41,6 +41,10 @@ public:
 		uint upscaleMethod = (uint)UpscaleMethod::kFSR;
 		uint qualityMode = 1;
 		float sharpnessFSR = 0.0f;
+		// FSR3 frame generation. Runs optical flow + interpolation on the DX11
+		// (DXVK) device — no DX12, no interop. Off by default. Only meaningful
+		// with FSR upscaling active.
+		bool frameGeneration = false;
 	};
 
 	Settings settings;

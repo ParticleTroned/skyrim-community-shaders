@@ -42,6 +42,7 @@ public:
 	// First-time setup management
 	static bool ShouldShowFirstTimeSetup();
 	static void RenderFirstTimeSetupDialog();
+	static bool TryCompleteFirstTimeSetupFromInput(uint32_t key, bool skipNextKeyRelease = true);
 
 	// Returns true and clears state if key release should be skipped (was used to close dialog)
 	static bool ShouldSkipKeyRelease(uint32_t key);
@@ -53,7 +54,7 @@ private:
 	static void RenderFAQSection();
 	static void RenderActiveConstraintsSection();
 
-	static void MarkFirstTimeSetupComplete(uint32_t closingKey);
+	static void MarkFirstTimeSetupComplete(uint32_t closingKey, bool skipNextKeyRelease = true);
 
 	// State
 	static bool isFirstTimeSetupShown;

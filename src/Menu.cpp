@@ -1070,6 +1070,10 @@ void Menu::ProcessInputEventQueue()
 			const bool allowSetupCloseKey = wasCapturingHotkey && HomePageRenderer::ShouldShowFirstTimeSetup() &&
 			                                (key == VK_RETURN || key == VK_ESCAPE);
 
+			if (event.IsDown() && !wasCapturingHotkey && HomePageRenderer::TryCompleteFirstTimeSetupFromInput(key)) {
+				continue;
+			}
+
 			// Dispatch bound hotkey actions for `key`. Combo bindings (modifier + key)
 			// fire on key-down for responsiveness; single-key bindings fire on key-up.
 			auto dispatchHotkeyActions = [this, key](bool combosOnly) {
@@ -1153,14 +1157,16 @@ void Menu::ProcessInputEventQueue()
 					{ &settings.ScreenshotKey, &settingScreenshotKey, [this](std::vector<InputCombo> keys) { settings.ScreenshotKey = keys; settingScreenshotKey = false; } },
 				};
 				bool handled = false;
+				bool closedFirstTimeSetup = false;
 				for (auto& h : hotkeyActions) {
 					if (*(h.settingFlag)) {
 						// During first-time setup, don't capture Enter or Escape as hotkeys
-						// These keys are reserved for closing the dialog, unless we are recording a modifier
+						// These keys cancel capture and close the dialog instead.
 						if (HomePageRenderer::ShouldShowFirstTimeSetup() && (key == VK_RETURN || key == VK_ESCAPE)) {
-							// Do not stop capture here, just let it pass through to the UI
-							// The UI code in HomePageRenderer checks for Enter/Escape and completes setup
 							*(h.settingFlag) = false;  // Cancel hotkey capture mode
+							if (!IsCapturingHotkeyInput()) {
+								closedFirstTimeSetup = HomePageRenderer::TryCompleteFirstTimeSetupFromInput(key, false);
+							}
 							handled = true;
 							break;
 						}
@@ -1195,6 +1201,9 @@ void Menu::ProcessInputEventQueue()
 						handled = true;
 						break;
 					}
+				}
+				if (closedFirstTimeSetup) {
+					continue;
 				}
 				if (!handled) {
 					// Single-key hotkeys fire on key-up; combos already fired on key-down.
@@ -1307,6 +1316,11 @@ bool Menu::ShouldSwallowInput()
 {
 	auto editorWindow = EditorWindow::GetSingleton();
 	return IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() || (editorWindow && editorWindow->open);
+}
+
+bool Menu::ShouldBlockAllGameInput()
+{
+	return HomePageRenderer::ShouldShowFirstTimeSetup();
 }
 
 bool Menu::IsPreviewFlying()

@@ -184,6 +184,25 @@ namespace
 		return result;
 	}
 
+	bool ShouldBlockInputForMenu(RE::InputEvent* const* a_events, bool a_blockAllDevices)
+	{
+		if (a_blockAllDevices) {
+			return true;
+		}
+
+		if (!a_events || !*a_events) {
+			return true;
+		}
+
+		for (auto event = *a_events; event; event = event->next) {
+			if (event->GetDevice() != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	void LogInputHookSafeguardOnce(
 		InputHookSafeguardReason a_reason,
 		RE::BSTEventSource<RE::InputEvent*>* a_dispatcher,
@@ -587,22 +606,20 @@ struct BSInputDeviceManager_PollInputDevices
 		// Run Reflex frame pacing as early as possible in the frame loop.
 		globals::features::upscaling.streamline.UpdateReflex();
 
-		bool blockedDevice = true;
-
 		auto menu = globals::menu;
+		const bool shouldSwallowInput = menu->ShouldSwallowInput();
+		const bool blockAllDevices = menu->ShouldBlockAllGameInput();
 
 		if (a_events) {
 			menu->ProcessInputEvents(a_events);
-
-			if (*a_events) {
-				if (auto device = (*a_events)->GetDevice()) {
-					// Block all devices except gamepad when menu is open.
-					blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
-				}
-			}
 		}
 
-		if (blockedDevice && menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
+		// Block all devices except gamepad when the normal menu is open, but
+		// inspect the whole event list so a leading gamepad event cannot let
+		// keyboard or mouse input pass through to Skyrim.
+		bool blockedDevice = ShouldBlockInputForMenu(a_events, blockAllDevices);
+
+		if (blockedDevice && shouldSwallowInput) {  //the menu is open, eat all keypresses
 			// During active flying preview, let input reach the game for movement/camera.
 			if (menu->IsPreviewFlying()) {
 				func(a_dispatcher, a_events);

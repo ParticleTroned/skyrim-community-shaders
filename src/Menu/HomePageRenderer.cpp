@@ -807,7 +807,26 @@ bool HomePageRenderer::ShouldShowFirstTimeSetup()
 	return !menu->GetSettings().FirstTimeSetupCompleted;
 }
 
-void HomePageRenderer::MarkFirstTimeSetupComplete(uint32_t closingKey)
+bool HomePageRenderer::TryCompleteFirstTimeSetupFromInput(uint32_t key, bool skipNextKeyRelease)
+{
+	if (key != VK_RETURN && key != VK_ESCAPE) {
+		return false;
+	}
+
+	if (!ShouldShowFirstTimeSetup()) {
+		return false;
+	}
+
+	auto menu = Menu::GetSingleton();
+	if (menu->settingToggleKey) {
+		return false;
+	}
+
+	MarkFirstTimeSetupComplete(key, skipNextKeyRelease);
+	return true;
+}
+
+void HomePageRenderer::MarkFirstTimeSetupComplete(uint32_t closingKey, bool skipNextKeyRelease)
 {
 	// Set the flag in the Menu settings
 	auto menu = Menu::GetSingleton();
@@ -820,5 +839,5 @@ void HomePageRenderer::MarkFirstTimeSetupComplete(uint32_t closingKey)
 	globals::state->Save();
 
 	isFirstTimeSetupShown = true;
-	keyThatClosedDialog = closingKey;
+	keyThatClosedDialog = skipNextKeyRelease ? closingKey : 0;
 }

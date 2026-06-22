@@ -1121,44 +1121,6 @@ std::unordered_map<std::string, bool>& State::GetDisabledFeatures()
 
 // --- Utility Method Implementations ---
 
-bool State::IsSaveLoadSafeModeActive() const
-{
-	return saveLoadSafeModeArmed && frameCount <= saveLoadSafeModeFrame;
-}
-
-void State::BeginSaveLoadSafeMode(uint32_t a_frameCount)
-{
-	saveLoadSafeModeArmed = true;
-	saveLoadSafeModeFrame = a_frameCount + kSaveLoadSafeModeGraceFrames;
-}
-
-void State::ExtendSaveLoadSafeMode(uint32_t a_frameCount, uint32_t a_graceFrames)
-{
-	saveLoadSafeModeArmed = true;
-	const auto newLimit = a_frameCount + a_graceFrames;
-	if (newLimit > saveLoadSafeModeFrame)
-		saveLoadSafeModeFrame = newLimit;
-}
-
-bool State::IsPersistentMutationBlockActive() const
-{
-	return persistentMutationBlockArmed && frameCount <= persistentMutationBlockFrame;
-}
-
-void State::BeginPersistentMutationBlock(uint32_t a_frameCount)
-{
-	persistentMutationBlockArmed = true;
-	persistentMutationBlockFrame = a_frameCount + kSaveMutationBlockGraceFrames;
-}
-
-void State::ExtendPersistentMutationBlock(uint32_t a_frameCount, uint32_t a_graceFrames)
-{
-	persistentMutationBlockArmed = true;
-	const auto newLimit = a_frameCount + a_graceFrames;
-	if (newLimit > persistentMutationBlockFrame)
-		persistentMutationBlockFrame = newLimit;
-}
-
 float State::GetTotalSmoothedDrawCalls() const
 {
 	return static_cast<float>(smoothDrawCalls[magic_enum::enum_integer(RE::BSShader::Type::Total)]);

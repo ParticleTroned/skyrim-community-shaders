@@ -19,9 +19,6 @@ using json = nlohmann::json;
 class State
 {
 public:
-	static constexpr uint32_t kSaveLoadSafeModeGraceFrames = 180;
-	static constexpr uint32_t kSaveMutationBlockGraceFrames = 180;
-
 	State()
 	{
 		std::lock_guard<std::mutex> lock(statsMutex);
@@ -335,10 +332,6 @@ public:
 
 	Util::FrameChecker frameChecker;
 	uint frameCount = 0;
-	bool saveLoadSafeModeArmed = false;
-	uint32_t saveLoadSafeModeFrame = 0;
-	bool persistentMutationBlockArmed = false;
-	uint32_t persistentMutationBlockFrame = 0;
 
 	// Skyrim constants
 	D3D_FEATURE_LEVEL featureLevel;
@@ -361,12 +354,6 @@ public:
 	 * @return Total number of draw calls as float
 	 */
 	float GetTotalSmoothedDrawCalls() const;
-	bool IsSaveLoadSafeModeActive() const;
-	void BeginSaveLoadSafeMode(uint32_t a_frameCount);
-	void ExtendSaveLoadSafeMode(uint32_t a_frameCount, uint32_t a_graceFrames);
-	bool IsPersistentMutationBlockActive() const;
-	void BeginPersistentMutationBlock(uint32_t a_frameCount);
-	void ExtendPersistentMutationBlock(uint32_t a_frameCount, uint32_t a_graceFrames);
 
 	/**
 	 * @brief Base helper that iterates through valid shader types (excluding None and Total)

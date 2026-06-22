@@ -192,8 +192,7 @@ bool Widget::HasSavedFile() const
 
 bool Widget::CanApplyPersistentChanges() const
 {
-	auto* state = State::GetSingleton();
-	return !state || !state->IsPersistentMutationBlockActive();
+	return true;
 }
 
 void Widget::DrawMenu()

@@ -152,33 +152,16 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
-			if (errors.empty() && globals::state) {
-				const uint32_t frame = globals::state->frameCount;
-				globals::state->BeginSaveLoadSafeMode(frame);
-				globals::state->BeginPersistentMutationBlock(frame);
-			}
-
 			break;
 		}
 	case SKSE::MessagingInterface::kSaveGame:
 		{
-			if (errors.empty() && globals::state) {
-				const uint32_t frame = globals::state->frameCount;
-				globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
-				globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
-			}
-
 			break;
 		}
 	case SKSE::MessagingInterface::kPostLoadGame:
 	case SKSE::MessagingInterface::kNewGame:
 		{
 			if (errors.empty()) {
-				if (globals::state) {
-					const uint32_t frame = globals::state->frameCount;
-					globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
-					globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
-				}
 				ResetRuntimeStateAfterGameLoad();
 				logger::info("Handled {}", message->type == SKSE::MessagingInterface::kPostLoadGame ? "kPostLoadGame" : "kNewGame");
 			}

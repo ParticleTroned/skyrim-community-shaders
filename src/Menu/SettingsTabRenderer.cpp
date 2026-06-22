@@ -261,16 +261,6 @@ void SettingsTabRenderer::RenderShadersTab()
 			ImGui::Text("%s", T("menu.settings.enable_async_tooltip", "Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!"));
 		}
 
-		bool showInGameShaderCompilationOverlay = globals::menu->GetSettings().ShowInGameShaderCompilationOverlay;
-		if (ImGui::Checkbox(T("menu.settings.show_ingame_shader_compilation_overlay", "Show In-Game Shader Compilation Overlay"), &showInGameShaderCompilationOverlay)) {
-			globals::menu->GetSettings().ShowInGameShaderCompilationOverlay = showInGameShaderCompilationOverlay;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T("menu.settings.show_ingame_shader_compilation_overlay_tooltip",
-								  "Shows the top-left shader compilation progress window during background/in-game compilation.\n"
-								  "Startup compilation progress remains visible either way."));
-		}
-
 		// Skip confirmation when clearing shader cache
 		auto& menuSettings = globals::menu->GetSettings();
 		bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;

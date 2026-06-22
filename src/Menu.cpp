@@ -182,7 +182,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShaderBlockNextKey,
 	CSEditorToggleKey,
 	EnableShaderBlocking,
-	ShowInGameShaderCompilationOverlay,
 	BackgroundShaderCompilationOnBoot,
 	FirstTimeSetupCompleted,
 	SkipClearCacheConfirmation,

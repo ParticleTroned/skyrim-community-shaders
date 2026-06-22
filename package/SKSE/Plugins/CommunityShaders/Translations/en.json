@@ -2030,8 +2030,6 @@
     "menu.settings.shader_very_slow": "Very slow (>=8s)",
     "menu.settings.show_footer": "Show Footer",
     "menu.settings.show_footer_tooltip": "Shows the footer with game version, swap chain, and GPU information at the bottom of the window",
-    "menu.settings.show_ingame_shader_compilation_overlay": "Show In-Game Shader Compilation Overlay",
-    "menu.settings.show_ingame_shader_compilation_overlay_tooltip": "Shows the top-left shader compilation progress window during background/in-game compilation.\nStartup compilation progress remains visible either way.",
     "menu.settings.show_icon_buttons_in_header": "Show Icon Buttons in Header",
     "menu.settings.show_icon_buttons_in_header_tooltip": "When enabled: Shows action buttons (Save, Load, Clear Cache) as icons in the header\nWhen disabled: Shows as text buttons below the header",
     "menu.settings.skip_clear_cache_dialogue": "Skip Clear Cache Dialogue",

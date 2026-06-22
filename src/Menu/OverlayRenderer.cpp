@@ -184,11 +184,8 @@ bool OverlayRenderer::ShouldSkipRendering()
 	auto hide = shaderCache->IsHideErrors();
 	auto* abTestingManager = ABTestingManager::GetSingleton();
 	auto* renderDoc = RenderDoc::GetSingleton();
-	const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
-	const bool showCompilationOverlay = shaderCache->IsCompiling() &&
-		(!backgroundCompilation || Menu::GetSingleton()->GetSettings().ShowInGameShaderCompilationOverlay);
 
-	return !(showCompilationOverlay ||
+	return !(shaderCache->IsCompiling() ||
 			 Menu::GetSingleton()->IsEnabled ||
 			 EditorWindow::GetSingleton()->open ||
 			 abTestingManager->IsEnabled() ||
@@ -257,8 +254,6 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
 	const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
 	const bool menuLoaded = shaderCache->menuLoaded.load(std::memory_order_relaxed);
-	const bool showCompilationOverlay = shaderCache->IsCompiling() &&
-		(!backgroundCompilation || Menu::GetSingleton()->GetSettings().ShowInGameShaderCompilationOverlay);
 
 	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
 		backgroundCompilation ? "Background " : "",
@@ -266,7 +261,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto percent = (float)compiledShaders / (float)totalShaders;
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
 
-	if (showCompilationOverlay) {
+	if (shaderCache->IsCompiling()) {
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();

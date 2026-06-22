@@ -7,6 +7,7 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <d3dcompiler.h>
+#include <future>
 #include <mutex>
 
 namespace Util
@@ -210,35 +211,60 @@ namespace Util
 			return nullptr;
 		}
 		logger::debug("Compiling {} with {}", str, DefinesToString(macros));
+
+		bool canUseDxc = !_stricmp(Program, "main");
+		std::future<std::vector<uint8_t>> dxcFuture;
+		if (canUseDxc) {
+			dxcFuture = std::async(std::launch::async, [&FilePath, &macros, ProgramType]() {
+				return SIE::ShaderCache::CompileSpirvFromFile(
+					FilePath, macros.data(), ProgramType, !globals::state->IsDeveloperMode(), L"Data\\Shaders");
+			});
+		}
+
 		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), &include, Program, ProgramType, flags, 0, &shaderBlob, &shaderErrors))) {
 			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? static_cast<char*>(shaderErrors->GetBufferPointer()) : "Unknown error");
 			return nullptr;
 		}
 		if (shaderErrors)
 			logger::debug("Shader logs:\n{}", static_cast<char*>(shaderErrors->GetBufferPointer()));
+
+		std::vector<uint8_t> spirvData;
+		if (canUseDxc)
+			spirvData = dxcFuture.get();
+		// DXVK 2.7.1 rejects descriptor-type samplers (samplers are sourced from a global heap
+		// via push index). Our DXC SPIR-V emits descriptor samplers, which crash the DXVK CS
+		// thread. Route sampler-using shaders to the DXBC blob instead; DXVK's dxbc-spirv
+		// converter emits valid heap samplers. FXC already produced shaderBlob, so this is free.
+		if (!spirvData.empty() && (SIE::ShaderCache::SpirvUsesSampler(spirvData) || SIE::ShaderCache::SpirvUsesGroupshared(spirvData))) {
+			logger::debug("DXC: {} uses a sampler/groupshared; using DXBC for DXVK compatibility", str);
+			spirvData.clear();
+		}
+		const void* code = spirvData.empty() ? shaderBlob->GetBufferPointer() : spirvData.data();
+		SIZE_T codeSize = spirvData.empty() ? shaderBlob->GetBufferSize() : spirvData.size();
+
 		if (!_stricmp(ProgramType, "ps_5_0")) {
 			ID3D11PixelShader* regShader;
-			DX::ThrowIfFailed(device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			DX::ThrowIfFailed(device->CreatePixelShader(code, codeSize, nullptr, &regShader));
 			return regShader;
 		} else if (!_stricmp(ProgramType, "vs_5_0")) {
 			ID3D11VertexShader* regShader;
-			DX::ThrowIfFailed(device->CreateVertexShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			DX::ThrowIfFailed(device->CreateVertexShader(code, codeSize, nullptr, &regShader));
 			return regShader;
 		} else if (!_stricmp(ProgramType, "hs_5_0")) {
 			ID3D11HullShader* regShader;
-			DX::ThrowIfFailed(device->CreateHullShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			DX::ThrowIfFailed(device->CreateHullShader(code, codeSize, nullptr, &regShader));
 			return regShader;
 		} else if (!_stricmp(ProgramType, "ds_5_0")) {
 			ID3D11DomainShader* regShader;
-			DX::ThrowIfFailed(device->CreateDomainShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			DX::ThrowIfFailed(device->CreateDomainShader(code, codeSize, nullptr, &regShader));
 			return regShader;
 		} else if (!_stricmp(ProgramType, "cs_5_0")) {
 			ID3D11ComputeShader* regShader;
-			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			DX::ThrowIfFailed(device->CreateComputeShader(code, codeSize, nullptr, &regShader));
 			return regShader;
 		} else if (!_stricmp(ProgramType, "cs_4_0")) {
 			ID3D11ComputeShader* regShader;
-			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
+			DX::ThrowIfFailed(device->CreateComputeShader(code, codeSize, nullptr, &regShader));
 			return regShader;
 		}
 

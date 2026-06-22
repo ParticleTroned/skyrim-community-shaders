@@ -406,10 +406,6 @@ struct BSInputDeviceManager_PollInputDevices
 {
 	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
 	{
-		// Reflex sleep/cap runs here by design: this executes before rendering work for the frame.
-		// UpdateReflex() enforces "once per frame" internally in case this hook is hit multiple times.
-		globals::features::upscaling.streamline.UpdateReflex();
-
 		bool blockedDevice = true;
 
 		auto menu = globals::menu;

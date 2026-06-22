@@ -1008,8 +1008,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				float2 screenSz{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 				auto renderSize = Util::ConvertToDynamic(screenSz, true);
 				data.MipBias = std::log2f(renderSize.x / screenSz.x);
-				if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
-					data.MipBias -= 1.0f;
 			} else {
 				data.MipBias = 0;
 			}

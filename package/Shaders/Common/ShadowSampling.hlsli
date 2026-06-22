@@ -46,12 +46,12 @@ namespace ShadowSampling
 
 	bool HasDirectionalShadows()
 	{
-		return SharedData::HasDirectionalShadows;
+		return sd.HasDirectionalShadows;
 	}
 
 	float GetWorldShadow(float3 positionWS, float3 offset)
 	{
-		if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu)
+		if (sd.InInterior || sd.HideSky || sd.InMapMenu)
 			return 1.0;
 
 		float worldShadow = 1.0;
@@ -69,7 +69,7 @@ namespace ShadowSampling
 	float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screenPosition, out float surfaceShadow)
 	{
 #if defined(EFFECT)
-		float viewRayLength = min(Permutation::EffectRadius * 0.2, 256);
+		float viewRayLength = min(perm.EffectRadius * 0.2, 256);
 		float3 startPosition = positionWS - viewDirection * viewRayLength;
 		float3 endPosition = positionWS + viewDirection * viewRayLength;
 #elif defined(UNDERWATER)
@@ -89,13 +89,13 @@ namespace ShadowSampling
 		uint sampleCount = clamp(uint(totalRayLength / stepSize + 0.5), 1, 4);
 		float rcpSampleCount = rcp(sampleCount);
 
-		float noise = Random::InterleavedGradientNoise(screenPosition, SharedData::FrameCount);
+		float noise = Random::InterleavedGradientNoise(screenPosition, sd.FrameCount);
 
 		float worldShadow = 0.0;
 		for (uint i = 0; i < sampleCount; i++) {
 			float t = (float(i) + noise) * rcpSampleCount;
 			float3 sampledPositionWS = lerp(endPosition, startPosition, t);
-			float worldShadowSample = ShadowSampling::GetWorldShadow(sampledPositionWS, FrameBuffer::CameraPosAdjust.xyz);
+			float worldShadowSample = ShadowSampling::GetWorldShadow(sampledPositionWS, fb.CameraPosAdjust.xyz);
 			surfaceShadow = worldShadowSample;
 			worldShadow += worldShadowSample;
 		}
@@ -145,7 +145,7 @@ namespace ShadowSampling
 		float3 ambientColor = GetRawAmbientLighting(normal);
 
 #if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
+		if (fd.iblSettings.EnableIBL) {
 			ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, ImageBasedLightingNormal);
 		}
 #endif
@@ -159,7 +159,7 @@ namespace ShadowSampling
 		float3 ambientColor = GetRawAmbientLighting(normal);
 
 #	if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
+		if (fd.iblSettings.EnableIBL) {
 			ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ImageBasedLightingNormal, skylightingDiffuse);
 		}
 #	endif
@@ -170,8 +170,8 @@ namespace ShadowSampling
 
 	float3 GetDirectionalLighting()
 	{
-		float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-		return Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, MinDirectionalLightMultiplier), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+		float llDirLightMult = (fd.linearLightingSettings.enableLinearLighting && !fd.linearLightingSettings.isDirLightLinear) ? fd.linearLightingSettings.dirLightMult : 1.0f;
+		return Color::DirectionalLight(sd.DirLightColor.xyz / max(llDirLightMult, MinDirectionalLightMultiplier), fd.linearLightingSettings.isDirLightLinear) * llDirLightMult;
 	}
 
 	float3 GetSceneLightingColor()

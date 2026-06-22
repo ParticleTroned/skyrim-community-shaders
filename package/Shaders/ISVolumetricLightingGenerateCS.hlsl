@@ -65,7 +65,7 @@ cbuffer PerTechnique : register(b0)
 
 	float shadowMapDepth = positionCSShifted.z;
 
-	bool noShadow = !SharedData::InInterior;
+	bool noShadow = !sd.InInterior;
 	if (EndSplitDistances.z >= shadowMapDepth) {
 		uint cascadeIndex = ShadowMapCount >= 3.0f && shadowMapDepth > EndSplitDistances.y ? 2 : shadowMapDepth > EndSplitDistances.x ? 1 :
 		                                                                                                                                0;

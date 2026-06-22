@@ -171,7 +171,7 @@ namespace ExtendedMaterials
 		ProcessTerrainHeightWeights(heightBlend, w1, w2, heights, weights, total);
 #		if defined(TERRAIN_VARIATION)
 		// Boost height by 30% when terrain variation is enabled to enhance depth perception
-		[branch] if (SharedData::terrainVariationSettings.enableTilingFix)
+		[branch] if (fd.terrainVariationSettings.enableTilingFix)
 		{
 			total *= 1.3;
 		}
@@ -189,7 +189,7 @@ namespace ExtendedMaterials
 		float heights[6] = { 0, 0, 0, 0, 0, 0 };
 
 		if (w1.x > 0.01) {
-			[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand0HasDisplacement) != 0)
+			[branch] if ((perm.ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand0HasDisplacement) != 0)
 			{
 #		if defined(TERRAIN_VARIATION)
 				heights[0] = ScaleDisplacement(StochasticEffectParallax(TexLandTHDisp0Sampler, SampTerrainParallaxSampler, coords, mipLevels[0], sharedOffset, dx, dy).x, params[0]);
@@ -207,7 +207,7 @@ namespace ExtendedMaterials
 			}
 		}
 		if (w1.y > 0.01) {
-			[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand1HasDisplacement) != 0)
+			[branch] if ((perm.ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand1HasDisplacement) != 0)
 			{
 #		if defined(TERRAIN_VARIATION)
 				heights[1] = ScaleDisplacement(StochasticEffectParallax(TexLandTHDisp1Sampler, SampTerrainParallaxSampler, coords, mipLevels[1], sharedOffset, dx, dy).x, params[1]);
@@ -225,7 +225,7 @@ namespace ExtendedMaterials
 			}
 		}
 		if (w1.z > 0.01) {
-			[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand2HasDisplacement) != 0)
+			[branch] if ((perm.ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand2HasDisplacement) != 0)
 			{
 #		if defined(TERRAIN_VARIATION)
 				heights[2] = ScaleDisplacement(StochasticEffectParallax(TexLandTHDisp2Sampler, SampTerrainParallaxSampler, coords, mipLevels[2], sharedOffset, dx, dy).x, params[2]);
@@ -242,7 +242,7 @@ namespace ExtendedMaterials
 #		endif
 			}
 		}
-		[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand3HasDisplacement) != 0 && w1.w > 0.01)
+		[branch] if ((perm.ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand3HasDisplacement) != 0 && w1.w > 0.01)
 		{
 #		if defined(TERRAIN_VARIATION)
 			heights[3] = ScaleDisplacement(StochasticEffectParallax(TexLandTHDisp3Sampler, SampTerrainParallaxSampler, coords, mipLevels[3], sharedOffset, dx, dy).x, params[3]);
@@ -258,7 +258,7 @@ namespace ExtendedMaterials
 			heights[3] = ScaleDisplacement(TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[3]).w, params[3]);
 #		endif
 		}
-		[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand4HasDisplacement) != 0 && w2.x > 0.01)
+		[branch] if ((perm.ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand4HasDisplacement) != 0 && w2.x > 0.01)
 		{
 #		if defined(TERRAIN_VARIATION)
 			heights[4] = ScaleDisplacement(StochasticEffectParallax(TexLandTHDisp4Sampler, SampTerrainParallaxSampler, coords, mipLevels[4], sharedOffset, dx, dy).x, params[4]);
@@ -274,7 +274,7 @@ namespace ExtendedMaterials
 			heights[4] = ScaleDisplacement(TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipLevels[4]).w, params[4]);
 #		endif
 		}
-		[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand5HasDisplacement) != 0 && w2.y > 0.01)
+		[branch] if ((perm.ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand5HasDisplacement) != 0 && w2.y > 0.01)
 		{
 #		if defined(TERRAIN_VARIATION)
 			heights[5] = ScaleDisplacement(StochasticEffectParallax(TexLandTHDisp5Sampler, SampTerrainParallaxSampler, coords, mipLevels[5], sharedOffset, dx, dy).x, params[5]);
@@ -295,7 +295,7 @@ namespace ExtendedMaterials
 		ProcessTerrainHeightWeights(heightBlend, w1, w2, heights, weights, total);
 #		if defined(TERRAIN_VARIATION)
 		// Boost height by 30% when terrain variation is enabled to enhance depth perception
-		[branch] if (SharedData::terrainVariationSettings.enableTilingFix)
+		[branch] if (fd.terrainVariationSettings.enableTilingFix)
 		{
 			total *= 1.3;
 		}
@@ -330,14 +330,14 @@ namespace ExtendedMaterials
 
 #if defined(LANDSCAPE)
 #	if defined(TRUE_PBR)
-		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
+		float blendFactor = fd.extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
 		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
 		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
 		float scalercp = rcp(scale);
 		float maxHeight = 0.1 * scale;
 #	else
-		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
+		float blendFactor = fd.extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
 		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
 		float scale = 1;

@@ -70,8 +70,8 @@ bool IsFroxelBehindSceneDepth(uint3 coord)
 
 float3 ComputeHistoryVolumeUVAndDepth(float3 positionWS, out bool validHistory, out float previousViewDepth)
 {
-	float3 previousPositionWS = positionWS + FrameBuffer::CameraPosAdjust.xyz - FrameBuffer::CameraPreviousPosAdjust.xyz;
-	float4 previousClip = mul(FrameBuffer::CameraPreviousViewProjUnjittered, float4(previousPositionWS, 1.0f));
+	float3 previousPositionWS = positionWS + fb.CameraPosAdjust.xyz - fb.CameraPreviousPosAdjust.xyz;
+	float4 previousClip = mul(fb.CameraPreviousViewProjUnjittered, float4(previousPositionWS, 1.0f));
 
 	previousViewDepth = abs(previousClip.w);
 	validHistory = previousClip.w > 0.0f;
@@ -139,7 +139,7 @@ float SampleDirectionalShadowPCF(float3 positionLS, uint cascadeIndex)
 		return 1.0f;
 
 	float2 texelSize = rcp(float2(max(shadowWidth, 1), max(shadowHeight, 1)));
-	float compareDepth = positionLS.z - SharedData::exponentialHeightFogSettings.volumetricShadowBias;
+	float compareDepth = positionLS.z - fd.exponentialHeightFogSettings.volumetricShadowBias;
 
 	float2 uvMin = texelSize * 1.5f;
 	float2 uvMax = 1.0f.xx - uvMin;
@@ -158,7 +158,7 @@ float SampleDirectionalShadowPCF(float3 positionLS, uint cascadeIndex)
 
 float SampleDirectionalShadow(float3 positionWS)
 {
-	if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu)
+	if (sd.InInterior || sd.HideSky || sd.InMapMenu)
 		return 1.0f;
 	if (!VolumetricFogHasDirectionalShadowMap)
 		return 1.0f;
@@ -172,7 +172,7 @@ float SampleDirectionalShadow(float3 positionWS)
 	float cascadeSelect = smoothstep(0.0f, 1.0f, saturate((shadowMapDepth - directionalShadowLightData.StartSplitDistances.y) / splitDenom));
 	uint primaryCascade = (uint)cascadeSelect;
 
-	float3 absolutePositionWS = positionWS + FrameBuffer::CameraPosAdjust.xyz;
+	float3 absolutePositionWS = positionWS + fb.CameraPosAdjust.xyz;
 	float3 positionLS = mul(directionalShadowLightData.ShadowProj[primaryCascade], float4(absolutePositionWS, 1.0f)).xyz;
 	if (any(positionLS.xy < 0.0f) || any(positionLS.xy > 1.0f))
 		return 1.0f;
@@ -196,12 +196,12 @@ float SampleDirectionalShadow(float3 positionWS)
 
 float SampleDirectionalWorldShadow(float3 positionWS)
 {
-	if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu)
+	if (sd.InInterior || sd.HideSky || sd.InMapMenu)
 		return 1.0f;
 
 	float worldShadow = 1.0f;
 #if defined(TERRAIN_SHADOWS)
-	worldShadow *= TerrainShadows::GetTerrainShadow(positionWS + FrameBuffer::CameraPosAdjust.xyz, LinearSampler);
+	worldShadow *= TerrainShadows::GetTerrainShadow(positionWS + fb.CameraPosAdjust.xyz, LinearSampler);
 #endif
 #if defined(CLOUD_SHADOWS)
 	worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
@@ -211,25 +211,25 @@ float SampleDirectionalWorldShadow(float3 positionWS)
 
 float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 {
-	float phaseG = SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution;
+	float phaseG = fd.exponentialHeightFogSettings.volumetricFogScatteringDistribution;
 	float3 skyDirection = abs(phaseG) > 0.001f ? normalize(-viewDirection * phaseG) : 0.0f.xxx;
 	float3 skyVisibilityDirection = abs(phaseG) > 0.001f ? skyDirection : float3(0.0f, 0.0f, 1.0f);
 	float skyVisibility = 1.0f;
-	if (VolumetricFogHasSkylighting && !SharedData::InInterior) {
+	if (VolumetricFogHasSkylighting && !sd.InInterior) {
 		float3 skylightingPosition = positionWS;
 		sh2 skylightingSH = Skylighting::SampleNoBias(skylightingPosition);
 		skyVisibility = Skylighting::EvaluateDiffuse(skylightingSH, skyVisibilityDirection, Skylighting::GetFadeOutFactor(skylightingPosition));
 	}
 
 	float3 skyLighting =
-		SharedData::exponentialHeightFogSettings.fogInscatteringColor.rgb *
-		SharedData::exponentialHeightFogSettings.fogInscatteringColor.a *
+		fd.exponentialHeightFogSettings.fogInscatteringColor.rgb *
+		fd.exponentialHeightFogSettings.fogInscatteringColor.a *
 		skyVisibility;
 	[branch] if (VolumetricFogHasIBL)
 		skyLighting = ImageBasedLighting::GetIBLColorOccluded(skyDirection, skyVisibility);
 
 	return skyLighting *
-	       SharedData::exponentialHeightFogSettings.volumetricSkyLightingIntensity;
+	       fd.exponentialHeightFogSettings.volumetricSkyLightingIntensity;
 }
 
 #if defined(LIGHT_LIMIT_FIX)
@@ -270,7 +270,7 @@ float3 AccumulateLocalLightScattering(
 	float3 cellCornerWS = ExponentialHeightFog::ComputeCellWorldPosition(coord + uint3(1, 1, 1), cellOffset, cornerViewDepth);
 	float cellRadius = max(length(cellCornerWS - positionWS), 1.0f);
 
-	float phaseG = SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution;
+	float phaseG = fd.exponentialHeightFogSettings.volumetricFogScatteringDistribution;
 	float3 localScattering = 0.0f.xxx;
 	[loop] for (uint lightIndex = 0; lightIndex < lightCount; lightIndex++)
 	{
@@ -298,7 +298,7 @@ float3 AccumulateLocalLightScattering(
 	}
 
 	return localScattering *
-	       SharedData::exponentialHeightFogSettings.volumetricLocalLightScatteringIntensity *
+	       fd.exponentialHeightFogSettings.volumetricLocalLightScatteringIntensity *
 	       materialScattering;
 }
 #else
@@ -332,8 +332,8 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 	float directionalShadow = SampleDirectionalShadow(positionWS) *
 	                          SampleDirectionalWorldShadow(positionWS);
 	float3 directionalScattering =
-		SharedData::DirLightColor.xyz *
-		SharedData::exponentialHeightFogSettings.volumetricDirectionalScatteringIntensity *
+		sd.DirLightColor.xyz *
+		fd.exponentialHeightFogSettings.volumetricDirectionalScatteringIntensity *
 		directionalShadow *
 		directionalPhase *
 		materialScatteringAndExtinction.rgb;
@@ -349,8 +349,8 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 		viewDirection,
 		materialScatteringAndExtinction.rgb);
 
-	float3 emissive = SharedData::exponentialHeightFogSettings.volumetricFogEmissive.rgb *
-	                  SharedData::exponentialHeightFogSettings.volumetricFogEmissive.a *
+	float3 emissive = fd.exponentialHeightFogSettings.volumetricFogEmissive.rgb *
+	                  fd.exponentialHeightFogSettings.volumetricFogEmissive.a *
 	                  extinction;
 
 	return float4(max(directionalScattering + skyScattering + localScattering + emissive, 0.0f.xxx), extinction);

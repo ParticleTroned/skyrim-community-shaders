@@ -66,8 +66,8 @@ namespace VolumetricShadows
 		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(midPosition));
 
 		// Cascade projections are world-space; positions come in camera-relative.
-		startPosition += FrameBuffer::CameraPosAdjust.xyz;
-		endPosition += FrameBuffer::CameraPosAdjust.xyz;
+		startPosition += fb.CameraPosAdjust.xyz;
+		endPosition += fb.CameraPosAdjust.xyz;
 
 		// Early out beyond cascade range
 		if (shadowMapDepth >= directionalShadowLightData.EndSplitDistances.y) {
@@ -147,7 +147,7 @@ namespace VolumetricShadows
 		float fade = saturate(shadowMapDepth / directionalShadowLightData.EndSplitDistances.y);
 
 		// Cascade projections are world-space; position comes in camera-relative.
-		float3 positionWS = position + FrameBuffer::CameraPosAdjust.xyz;
+		float3 positionWS = position + fb.CameraPosAdjust.xyz;
 
 		// Compute cascade blend factor
 		float cascadeSelect = saturate((shadowMapDepth - directionalShadowLightData.StartSplitDistances.y) / (directionalShadowLightData.EndSplitDistances.x - directionalShadowLightData.StartSplitDistances.y));

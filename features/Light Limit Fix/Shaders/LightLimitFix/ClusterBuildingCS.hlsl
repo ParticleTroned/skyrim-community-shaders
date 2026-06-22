@@ -17,7 +17,7 @@ float3 GetPositionVS(float2 texcoord, float depth)
 	clipSpaceLocation.y *= -1;
 	clipSpaceLocation.z = depth;
 	clipSpaceLocation.w = 1.0f;
-	float4 homogenousLocation = mul(FrameBuffer::CameraProjInverse, clipSpaceLocation);
+	float4 homogenousLocation = mul(fb.CameraProjInverse, clipSpaceLocation);
 	return homogenousLocation.xyz / homogenousLocation.w;
 }
 

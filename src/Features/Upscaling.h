@@ -1,20 +1,10 @@
 #pragma once
 
 #include "Feature.h"
-#include "Upscaling/DX12SwapChain.h"
-#include "Upscaling/FidelityFX.h"
 #include "Upscaling/RCAS/RCAS.h"
-#include "Upscaling/Streamline.h"
 #include <d3d11_4.h>
-#include <d3d12.h>
 #include <winrt/base.h>
 
-/**
- * @brief Provides upscaling functionality including DLSS, FSR and TAA.
- *
- * This feature handles various upscaling methods and frame generation technologies
- * to improve performance while maintaining visual quality.
- */
 struct Upscaling : Feature
 {
 private:
@@ -31,11 +21,9 @@ public:
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { T("feature.upscaling.description", "Advanced upscaling and frame generation technologies for improved performance"),
-			{ T("feature.upscaling.key_feature_1", "DLSS (Deep Learning Super Sampling) support"),
-				T("feature.upscaling.key_feature_2", "FSR (FidelityFX Super Resolution) support"),
-				T("feature.upscaling.key_feature_3", "TAA (Temporal Anti-Aliasing) support"),
-				T("feature.upscaling.key_feature_4", "Frame generation for supported systems") } };
+		return { T("feature.upscaling.description", "Advanced upscaling technologies for improved performance"),
+			{ T("feature.upscaling.key_feature_2", "FSR (FidelityFX Super Resolution) support"),
+				T("feature.upscaling.key_feature_3", "TAA (Temporal Anti-Aliasing) support") } };
 	};
 
 	float2 jitter = { 0, 0 };
@@ -45,27 +33,13 @@ public:
 		kNONE,
 		kTAA,
 		kFSR,
-		kDLSS
 	};
 
 	struct Settings
 	{
-		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
-		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 1;  // Default to Quality (1=Quality, 2=Balanced, 3=Performance, 4=Ultra Performance, 0=Native AA)
-		uint frameLimitMode = 1;
-		uint frameGenerationMode = 1;
-		uint frameGenerationForceEnable = 0;
-		bool frameGenerationAllowInMenus = false;
-		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
+		uint upscaleMethod = (uint)UpscaleMethod::kFSR;
+		uint qualityMode = 1;
 		float sharpnessFSR = 0.0f;
-		float sharpnessDLSS = 0.0f;
-		uint presetDLSS = 0;  // 0=Default, 1=J, 2=K, 3=L, 4=M
-		bool reflexLowLatencyMode = false;
-		bool reflexLowLatencyBoost = false;
-		bool reflexUseMarkersToOptimize = false;
-		bool reflexUseFPSLimit = false;
-		float reflexFPSLimit = 60.0f;
 	};
 
 	Settings settings;
@@ -89,19 +63,12 @@ public:
 	// Runtime state
 	bool isWindowed = false;
 	bool lowRefreshRate = false;
-	bool fidelityFXMissing = false;
-	bool d3d12SwapChainActive = false;
 
 	// Timing and scaling
 	double refreshRate = 0.0f;
 	float2 resolutionScale = { 1.0f, 1.0f };
 	LARGE_INTEGER qpf;
 
-	// FG FPS Measurement for Overlay
-	bool IsFrameGenerationDx12PathActive() const;
-	bool IsFrameGenerationActive() const;
-	bool ShouldUseFrameGenerationThisFrame() const;
-	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
 
 	// Feature interface overrides
@@ -111,11 +78,6 @@ public:
 	virtual void RestoreDefaultSettings() override;
 	virtual void DataLoaded() override;
 
-	/**
-	 * @brief Installs Direct3D-related hooks for device and factory creation.
-	 *
-	 * Loads FidelityFX support and patches the import address table (IAT) to redirect D3D11 device and DXGI factory creation functions to custom hook implementations.
-	**/
 	virtual void Load() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
@@ -126,7 +88,7 @@ public:
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[4];  // One for each UpscaleMethod (kNONE, kTAA, kFSR, kDLSS)
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[3];
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
@@ -142,7 +104,6 @@ public:
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;
 
-	// Helper: Create a Texture2D matching source format at a given size
 	static eastl::unique_ptr<Texture2D> CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
 		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr);
 
@@ -153,18 +114,10 @@ public:
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;
-	Texture2D* motionVectorCopyTexture = nullptr;
-	Texture2D* sharpenerTexture = nullptr;
 
 	virtual void ClearShaderCache() override;
 
-	// Static instances instead of singletons
-	static inline Streamline streamline;
-	static inline FidelityFX fidelityFX;  ///< Only for frame generation
-	static inline DX12SwapChain dx12SwapChain;
-	static inline RCAS rcas;  ///< Standalone RCAS sharpening for DLSS
-
-	winrt::com_ptr<ID3D11PixelShader> copyDepthToSharedBufferPS;
+	static inline RCAS rcas;
 
 	float projectionPosScaleX = 0.0f;
 	float projectionPosScaleY = 0.0f;
@@ -175,57 +128,13 @@ public:
 	bool previousUpscalingWasActive = false;
 	bool depthUpscaleUseWideKernel = false;
 
-	/**
-	 * Set by MenuOpenCloseEventHandler when LoadingMenu closes (cell/worldspace transitions,
-	 * initial load). Consumed at the start of Upscale() to force a one-frame DLSS feature
-	 * rebuild.
-	 */
-	std::atomic<bool> pendingDLSSReset{ false };
-
-	void CopySharedD3D12Resources();
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
 
-	/**
-	 * @brief Applies RCAS sharpening to the main render target after DLSS upscaling.
-	 *
-	 * Runs in HDR space before tonemapping. Only called when DLSS is active and sharpness > 0.
-	 */
-	void ApplySharpening();
-
 	static void TimerSleepQPC(int64_t targetQPC);
 
-	void FrameLimiter();
-
 	static double GetRefreshRate(HWND a_window);
-
-	// Unified interface methods - external code should use these instead of direct access
-	void LoadUpscalingSDKs();  // Loads all SDKs at once
-	HANDLE GetFrameLatencyWaitableObject() const;
-	float GetFrameTime() const;
-
-	// Backend interface methods
-	bool IsBackendInitialized() const;
-	void CheckBackendFeatures(IDXGIAdapter* adapter);
-	void UpgradeBackendInterface(void** ppInterface);
-	void SetBackendD3DDevice(ID3D11Device* device);
-	void PostBackendDevice();
-
-	// Module availability methods
-	bool HasFrameGenModule() const;
-
-	// Proxy interface methods
-	void SetProxyD3D11Device(ID3D11Device* device);
-	void SetProxyD3D11DeviceContext(ID3D11DeviceContext* context);
-	void CreateProxySwapChain(IDXGIAdapter* adapter, DXGI_SWAP_CHAIN_DESC swapChainDesc);
-	void CreateProxyInterop();
-	IDXGISwapChain* GetProxySwapChain();
-
-	using BlurResources = DX12SwapChain::BlurResources;
-
-	// Get all D3D11 resources needed for background blur when D3D12 swap chain is active
-	BlurResources GetBlurResources() const;
 
 private:
 	struct Main_UpdateJitter

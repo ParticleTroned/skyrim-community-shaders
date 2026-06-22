@@ -101,7 +101,7 @@ float4 SSSSBlurCS(
 	// texcoord is in DR-space UVs (coming from DTid / full buffer dim), so it already
 	// addresses the rendered sub-rectangle of the texture. Non-DR UVs are derived for
 	// eye-half detection during clamping.
-	float2 texcoordNonDR = texcoord * FrameBuffer::DynamicResolutionParams2.xy;
+	float2 texcoordNonDR = texcoord * fb.DynamicResolutionParams2.xy;
 
 	// Input is already linear and albedo-free from the pre-pass
 	float4 colorM = ColorTexture.SampleLevel(PointSampler, texcoord, 0);
@@ -129,10 +129,10 @@ float4 SSSSBlurCS(
 	finalStep *= sssAmount;
 	finalStep *= profile.x;  // Modulate it using the profile
 	// Scale the step into DR-UV space so blur width in rendered pixels stays consistent.
-	finalStep *= FrameBuffer::DynamicResolutionParams1.xy;
+	finalStep *= fb.DynamicResolutionParams1.xy;
 
 	// Per-pixel rotation to break separable axis-aligned banding
-	float jitter = Random::InterleavedGradientNoise(texcoord * SharedData::BufferDim.xy, SharedData::FrameCount) * Math::TAU;
+	float jitter = Random::InterleavedGradientNoise(texcoord * sd.BufferDim.xy, sd.FrameCount) * Math::TAU;
 	float2x2 rotationMatrix = float2x2(cos(jitter), sin(jitter), -sin(jitter), cos(jitter));
 
 	// Accumulate the other samples:

@@ -97,6 +97,14 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// Now validate disk cache after features have had a chance to modify their state
 				shaderCache->ValidateDiskCache();
 
+				// Persist cache info immediately — plugin/feature versions are known now and do
+				// not depend on shader compilation. This makes the disk cache incrementally
+				// reusable: shaders saved this session are validated on the next launch even if
+				// the (potentially multi-thousand-shader) compile is interrupted or the game is
+				// closed before it finishes. Previously this only ran after a full compile.
+				if (shaderCache->IsDiskCache())
+					shaderCache->WriteDiskCacheInfo();
+
 				if (shaderCache->UseFileWatcher())
 					shaderCache->StartFileWatcher();
 			}

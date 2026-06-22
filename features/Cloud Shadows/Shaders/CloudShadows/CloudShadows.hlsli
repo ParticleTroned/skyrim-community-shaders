@@ -25,8 +25,8 @@ namespace CloudShadows
 
 	float GetCloudShadowMult(float3 worldPosition, SamplerState textureSampler)
 	{
-		float3 cloudSampleDir = GetCloudShadowSampleDir(worldPosition, SharedData::DirLightDirection.xyz).xyz;
+		float3 cloudSampleDir = GetCloudShadowSampleDir(worldPosition, sd.DirLightDirection.xyz).xyz;
 		float cloudCubeSample = CloudShadowsTexture.SampleLevel(textureSampler, cloudSampleDir, 0).x;
-		return lerp(1.0, 1.0 - cloudCubeSample, SharedData::cloudShadowsSettings.Opacity);
+		return lerp(1.0, 1.0 - cloudCubeSample, fd.cloudShadowsSettings.Opacity);
 	}
 }

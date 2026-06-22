@@ -21,10 +21,10 @@ SamplerState PointSampler : register(s0);
 
 [numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID) {
 	// Early exit if dispatch thread is outside screen bounds
-	if (any(DTid.xy >= uint2(SharedData::BufferDim.xy)))
+	if (any(DTid.xy >= uint2(sd.BufferDim.xy)))
 		return;
 
-	float2 texCoord = (DTid.xy + 0.5) * SharedData::BufferDim.zw;
+	float2 texCoord = (DTid.xy + 0.5) * sd.BufferDim.zw;
 
 #if defined(BURLEY)
 

@@ -101,7 +101,7 @@ float4 GetReflectionColor(
 
 				// Final sample to world-space
 				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, iterationDepth, 1.0);
-				positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
+				positionWS = mul(fb.CameraViewProjInverse, positionWS);
 				positionWS.xyz = positionWS.xyz / positionWS.w;
 				positionWS.w = 1.0;
 
@@ -150,7 +150,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float depth = DepthTex.SampleLevel(DepthSampler, screenPosition, 0).x;
 
 	float4 positionVS = float4(float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
-	positionVS = mul(FrameBuffer::CameraProjInverse, positionVS);
+	positionVS = mul(fb.CameraProjInverse, positionVS);
 	positionVS.xyz = positionVS.xyz / positionVS.w;
 
 	float3 viewPosition = positionVS.xyz;
@@ -164,7 +164,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	float4 reflectionPosition = float4(viewPosition + reflectionDirection, 1.0);
-	float4 projReflectionPosition = mul(FrameBuffer::CameraProj, reflectionPosition);
+	float4 projReflectionPosition = mul(fb.CameraProj, reflectionPosition);
 	projReflectionPosition /= projReflectionPosition.w;
 	projReflectionPosition.xy = projReflectionPosition.xy * float2(0.5, -0.5) + float2(0.5, 0.5);
 

@@ -4,14 +4,15 @@
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
-#define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
+#define ENABLE_LL fd.linearLightingSettings.enableLinearLighting
 
 #if defined(PSHADER) && defined(LIGHTING)
-cbuffer LLPerGeometry : register(b8)
+struct LLPerGeometryType
 {
 	float emissiveMult;
 	float3 pad0;
 };
+cbuffer LLPerGeometryBuf : register(b8) { LLPerGeometryType llpg; };
 #endif
 
 // Float limits
@@ -200,13 +201,13 @@ namespace Color
 #	if defined(TRUE_PBR)
 		return ENABLE_LL ? color : LinearToSrgb(color);
 #	else
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.colorGamma) * fd.linearLightingSettings.vanillaDiffuseColorMult : color;
 #	endif
 	}
 
 	float3 Light(float3 color, bool isLinear = false)
 	{
-		color = (ENABLE_LL && !isLinear) ? pow(abs(color), SharedData::linearLightingSettings.lightGamma) : color;
+		color = (ENABLE_LL && !isLinear) ? pow(abs(color), fd.linearLightingSettings.lightGamma) : color;
 #	if defined(TRUE_PBR)
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
@@ -217,63 +218,63 @@ namespace Color
 	float3 DirectionalLight(float3 color, bool isLinear = false)
 	{
 		return Light(color, isLinear) *
-		       ((ENABLE_LL && !isLinear) ? Math::PI * SharedData::linearLightingSettings.directionalLightMult : 1.0f);
+		       ((ENABLE_LL && !isLinear) ? Math::PI * fd.linearLightingSettings.directionalLightMult : 1.0f);
 	}
 
 	float3 PointLight(float3 color, bool isLinear = false)
 	{
 		return Light(color, isLinear) *
-		       ((ENABLE_LL && !isLinear) ? Math::PI * SharedData::linearLightingSettings.pointLightMult : 1.0f);
+		       ((ENABLE_LL && !isLinear) ? Math::PI * fd.linearLightingSettings.pointLightMult : 1.0f);
 	}
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
-		return ENABLE_LL ? (pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult) : color;
+		return ENABLE_LL ? (pow(abs(color / max(llpg.emissiveMult, 1e-5)), fd.linearLightingSettings.emitColorGamma) * llpg.emissiveMult * fd.linearLightingSettings.emitColorMult) : color;
 	}
 #	endif
 
 	float3 Glowmap(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL ? color * SharedData::linearLightingSettings.glowmapMult : LinearToSrgb(color);
+		return ENABLE_LL ? color * fd.linearLightingSettings.glowmapMult : LinearToSrgb(color);
 #	else
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.glowmapGamma) * SharedData::linearLightingSettings.glowmapMult : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.glowmapGamma) * fd.linearLightingSettings.glowmapMult : color;
 #	endif
 	}
 
 	float3 Ambient(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.ambientGamma) * fd.linearLightingSettings.ambientMult : color;
 	}
 
 	float3 Fog(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.fogGamma) : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.fogGamma) : color;
 	}
 
 	float FogAlpha(float alpha)
 	{
-		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+		return ENABLE_LL ? pow(abs(alpha), fd.linearLightingSettings.fogAlphaGamma) : alpha;
 	}
 
 	float3 Effect(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.effectGamma) : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.effectGamma) : color;
 	}
 
 	float3 EffectMult(float3 color)
 	{
 		if (ENABLE_LL) {
 #	if defined(MEMBRANE)
-			color *= SharedData::linearLightingSettings.membraneEffectMult;
+			color *= fd.linearLightingSettings.membraneEffectMult;
 #	elif defined(BLOOD)
-			color *= SharedData::linearLightingSettings.bloodEffectMult;
+			color *= fd.linearLightingSettings.bloodEffectMult;
 #	elif defined(PROJECTED_UV)
-			color *= SharedData::linearLightingSettings.projectedEffectMult;
+			color *= fd.linearLightingSettings.projectedEffectMult;
 #	elif defined(DEFERRED)
-			color *= SharedData::linearLightingSettings.deferredEffectMult;
+			color *= fd.linearLightingSettings.deferredEffectMult;
 #	else
-			color *= SharedData::linearLightingSettings.otherEffectMult;
+			color *= fd.linearLightingSettings.otherEffectMult;
 #	endif
 		}
 		return color;
@@ -281,32 +282,32 @@ namespace Color
 
 	float EffectLightingMult()
 	{
-		return ENABLE_LL ? SharedData::linearLightingSettings.effectLightingMult : 1.0f;
+		return ENABLE_LL ? fd.linearLightingSettings.effectLightingMult : 1.0f;
 	}
 
 	float EffectAlpha(float alpha)
 	{
-		return ENABLE_LL ? pow(abs(alpha), SharedData::linearLightingSettings.effectAlphaGamma) : alpha;
+		return ENABLE_LL ? pow(abs(alpha), fd.linearLightingSettings.effectAlphaGamma) : alpha;
 	}
 
 	float3 Sky(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.skyGamma) : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.skyGamma) : color;
 	}
 
 	float3 Water(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.waterGamma) : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.waterGamma) : color;
 	}
 
 	float3 VolumetricLighting(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.vlGamma) : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.vlGamma) : color;
 	}
 
 	float3 ColorToLinear(float3 color)
 	{
-		return ENABLE_LL ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) : color;
+		return ENABLE_LL ? pow(abs(color), fd.linearLightingSettings.colorGamma) : color;
 	}
 
 	float3 RadianceToLinear(float3 color)
@@ -341,7 +342,7 @@ namespace Color
 
 	float VanillaDiffuseColorMult()
 	{
-		return ENABLE_LL ? SharedData::linearLightingSettings.vanillaDiffuseColorMult : 1.0f;
+		return ENABLE_LL ? fd.linearLightingSettings.vanillaDiffuseColorMult : 1.0f;
 	}
 #else
 	const static float PBRLightingScale = 1.0;

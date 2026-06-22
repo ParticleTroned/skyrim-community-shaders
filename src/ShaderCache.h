@@ -343,6 +343,33 @@ namespace SIE
 		/** @brief Returns true if the HLSL source file exists on disk for this shader. */
 		inline static bool IsShaderSourceAvailable(const RE::BSShader& shader);
 
+		static std::vector<uint8_t> CompileSpirvFromFile(const std::wstring& path, const D3D_SHADER_MACRO* defines, const char* profile, bool optimize, const wchar_t* extraIncludeDir = nullptr, const char* entryPoint = "main");
+
+		/**
+		 * @brief Returns true if the compiled SPIR-V declares a sampler (OpTypeSampler).
+		 *
+		 * DXVK 2.7.1 sources every sampler from a single global sampler heap addressed by a
+		 * push-constant index; it has no per-pipeline sampler-descriptor path and throws
+		 * "Sampler descriptor without push index found" for any descriptor-type sampler. Our
+		 * DXC-compiled SPIR-V emits exactly such descriptor samplers, so sampler-using shaders
+		 * must instead be handed to DXVK as DXBC, whose dxbc-spirv converter rewrites samplers
+		 * into valid heap/push-index form. We scan the actual SPIR-V words that would be handed
+		 * to DXVK (rather than reflecting the FXC blob), so FXC/DXC differences in sampler
+		 * elimination cannot let a sampler-bearing SPIR-V slip through to DXVK and crash it.
+		 */
+		static bool SpirvUsesSampler(const std::vector<uint8_t>& spirv);
+
+		/**
+		 * @brief Returns true if the SPIR-V declares groupshared memory (a Workgroup-storage variable).
+		 *
+		 * On the AMD proprietary Vulkan driver, several DXC-compiled compute shaders that use
+		 * groupshared memory (combined with barriers / atomics) fail vkCreateComputePipelines
+		 * with VK_ERROR_UNKNOWN (-13), even though FXC accepts the same HLSL and the groupshared
+		 * size is within limits. DXVK's own dxbc-spirv converter emits these acceptably, so we
+		 * route groupshared compute shaders to the DXBC path (correctness over the DXC fast path).
+		 */
+		static bool SpirvUsesGroupshared(const std::vector<uint8_t>& spirv);
+
 		/** @brief Returns true if any shader compilation tasks are in progress. */
 		bool IsCompiling();
 		/** Gets whether the shader cache is enabled. */

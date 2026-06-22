@@ -88,11 +88,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 [numthreads(8, 8, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {
 	// Early exit if dispatch thread is outside screen bounds
-	if (any(dispatchID.xy >= uint2(SharedData::BufferDim.xy)))
+	if (any(dispatchID.xy >= uint2(sd.BufferDim.xy)))
 		return;
 
-	float2 uv = float2(dispatchID.xy + 0.5) * SharedData::BufferDim.zw;
-	uv *= FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+	float2 uv = float2(dispatchID.xy + 0.5) * sd.BufferDim.zw;
+	uv *= fb.DynamicResolutionParams2.xy;  // adjust for dynamic res
 
 	float3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
 	float3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
@@ -103,7 +103,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 	float depth = DepthTexture[dispatchID.xy];
 	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
-	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
+	positionWS = mul(fb.CameraViewProjInverse, positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
 	if (depth == 1.0)
@@ -112,7 +112,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float glossiness = normalGlossiness.z;
 
 	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
-	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
+	float3 normalWS = normalize(mul(fb.CameraViewInverse, float4(normalVS, 0)).xyz);
 
 #if defined(SSGI)
 
@@ -131,7 +131,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 directionalAmbientColor = 0;
 
 #	if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
+	if (fd.iblSettings.EnableIBL) {
 		float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 
 #		if defined(SKYLIGHTING)
@@ -207,30 +207,30 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #	endif
 
 #	if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
+		if (fd.iblSettings.EnableIBL) {
 			float3 envSample = EnvTexture.SampleLevel(LinearSampler, R, level);
 			float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level);
 			float3 envSpecular, skySpecular;
 
-			if (SharedData::iblSettings.DALCMode >= 2) {
+			if (fd.iblSettings.DALCMode >= 2) {
 				// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
 				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, R, 15));
-				envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * fd.iblSettings.DALCAmount;
+				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * fd.iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
-				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
+				envSpecular *= (fd.iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
 				skySpecular *= skylightingSpecular;
 #		endif
 			} else {
 				// Mode 0/1: IBL ratio-based
 				float3 ratio = ImageBasedLighting::GetIBLRatio();
-				envSpecular = Color::IrradianceToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				envSpecular = Color::IrradianceToLinear(envSample * ratio) * fd.iblSettings.EnvIBLScale;
+				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * fd.iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
 #		endif
 			}
-			if (SharedData::InInterior) {
+			if (sd.InInterior) {
 				skySpecular = 0;
 			}
 

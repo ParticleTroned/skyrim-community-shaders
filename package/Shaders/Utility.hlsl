@@ -134,12 +134,12 @@ VS_OUTPUT main(VS_INPUT input)
 #		if defined(SKINNED)
 	precise int4 boneIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
-	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
+	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, boneIndices, fb.CameraPosAdjust.xyz, input.BoneWeights);
 	precise float4 positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
 
-	positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
+	positionCS = mul(fb.CameraViewProj, positionWS);
 #		else
-	precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
+	precise float4x4 modelViewProj = mul(fb.CameraViewProj, World);
 	positionCS = mul(modelViewProj, positionMS);
 #		endif
 
@@ -164,9 +164,9 @@ VS_OUTPUT main(VS_INPUT input)
 #			if defined(SKINNED)
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, boneIndices, input.BoneWeights);
 	normalMS = normalize(mul(normalMS, transpose(boneRSMatrix)));
-	normalVS = mul(FrameBuffer::CameraView, float4(normalMS, 0)).xyz;
+	normalVS = mul(fb.CameraView, float4(normalMS, 0)).xyz;
 #			else
-	normalVS = mul(mul(FrameBuffer::CameraView, World), float4(normalMS, 0)).xyz;
+	normalVS = mul(mul(fb.CameraView, World), float4(normalMS, 0)).xyz;
 #			endif
 #			if defined(RENDER_NORMAL_CLAMP)
 	normalVS = max(min(normalVS, 0.1), -0.1);
@@ -373,7 +373,7 @@ PS_OUTPUT main(PS_INPUT input)
 	baseTexCoord = input.TexCoord0.xy;
 #		endif
 #	endif
-	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
+	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, sd.MipBias);
 
 #	if defined(RENDER_SHADOWMAP_PB)
 	if (input.TexCoord1.z < 0) {
@@ -396,7 +396,7 @@ PS_OUTPUT main(PS_INPUT input)
 	alpha *= input.Alpha.y;
 #		endif
 #		if defined(GRAYSCALE_TO_ALPHA)
-	float grayScaleColor = TexGrayscaleSampler.SampleBias(SampGrayscaleSampler, float2(baseColor.w, alpha), SharedData::MipBias).w;
+	float grayScaleColor = TexGrayscaleSampler.SampleBias(SampGrayscaleSampler, float2(baseColor.w, alpha), sd.MipBias).w;
 	if (grayScaleColor - AlphaTestRef.x < 0) {
 		discard;
 	}
@@ -428,9 +428,9 @@ PS_OUTPUT main(PS_INPUT input)
 	TexStencilSampler.GetDimensions(0, stencilDimensions.x, stencilDimensions.y, stencilDimensions.z);
 	stencilValue = TexStencilSampler.Load(float3(stencilDimensions.xy * depthUv, 0)).x;
 #			endif
-	depthUv = depthUv * FrameBuffer::DynamicResolutionParams2.xy;
+	depthUv = depthUv * fb.DynamicResolutionParams2.xy;
 	float4 positionCS = float4(2 * float2(depthUv.x, -depthUv.y + 1) - 1, depth, 1);
-	float4 positionMS = mul(FrameBuffer::CameraViewProjInverse, positionCS);
+	float4 positionMS = mul(fb.CameraViewProjInverse, positionCS);
 	positionMS.xyz = positionMS.xyz / positionMS.w;
 
 	float fadeFactor = 1 - pow(saturate(dot(positionMS.xyz, positionMS.xyz) / ShadowLightParam.z), 8);
@@ -442,14 +442,14 @@ PS_OUTPUT main(PS_INPUT input)
 	float fadeFactor = input.Alpha.x;
 #		endif
 
-	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, SharedData::FrameCount);
+	float noise = Random::InterleavedGradientNoise(input.PositionCS.xy, sd.FrameCount);
 
 	float2 rotation;
 	sincos(Math::TAU * noise, rotation.y, rotation.x);
 	float2x2 rotationMatrix = float2x2(rotation.x, rotation.y, -rotation.y, rotation.x);
 
 #		if defined(RENDER_SHADOWMASK)
-	if (SharedData::InInterior)
+	if (sd.InInterior)
 		shadowColor = float4(0, 0, 0, 0);
 
 	if (EndSplitDistances.z >= shadowMapDepth) {
@@ -517,7 +517,7 @@ PS_OUTPUT main(PS_INPUT input)
 			shadowVisibility = min(shadowVisibility, lerp(1, focusShadowVisibility, focusShadowFade));
 		}
 
-		shadowColor.xyzw = lerp(1.0 * !SharedData::InInterior, shadowVisibility, fadeFactor);
+		shadowColor.xyzw = lerp(1.0 * !sd.InInterior, shadowVisibility, fadeFactor);
 	}
 #		elif defined(RENDER_SHADOWMASKSPOT)
 	float4 positionLS = mul(transpose(ShadowMapProj[0]), float4(positionMS.xyz, 1));

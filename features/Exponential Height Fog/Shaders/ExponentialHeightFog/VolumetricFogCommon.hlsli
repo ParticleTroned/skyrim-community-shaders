@@ -15,22 +15,22 @@ namespace ExponentialHeightFog
 
 	float GetHeightFogFalloff()
 	{
-		return SharedData::exponentialHeightFogSettings.fogHeightFalloff * 0.001f;
+		return fd.exponentialHeightFogSettings.fogHeightFalloff * 0.001f;
 	}
 
 	float GetHeightFogDensity()
 	{
-		return SharedData::exponentialHeightFogSettings.fogDensity * 0.001f;
+		return fd.exponentialHeightFogSettings.fogDensity * 0.001f;
 	}
 
 	float GetVolumetricStartDistance()
 	{
-		return max(0.0f, SharedData::exponentialHeightFogSettings.volumetricFogStartDistance);
+		return max(0.0f, fd.exponentialHeightFogSettings.volumetricFogStartDistance);
 	}
 
 	float GetVolumetricEndDistance()
 	{
-		return max(GetVolumetricStartDistance() + 1.0f, SharedData::exponentialHeightFogSettings.volumetricFogDistance);
+		return max(GetVolumetricStartDistance() + 1.0f, fd.exponentialHeightFogSettings.volumetricFogDistance);
 	}
 
 	float GetVolumetricGridSizeZ()
@@ -38,13 +38,13 @@ namespace ExponentialHeightFog
 #if defined(EXP_HEIGHT_FOG_GRID_SIZE_Z)
 		return clamp(float(EXP_HEIGHT_FOG_GRID_SIZE_Z), 16.0f, 160.0f);
 #else
-		return clamp(float(SharedData::exponentialHeightFogSettings.volumetricGridSizeZ), 16.0f, 160.0f);
+		return clamp(float(fd.exponentialHeightFogSettings.volumetricGridSizeZ), 16.0f, 160.0f);
 #endif
 	}
 
 	float GetVolumetricDepthDistributionScale()
 	{
-		return max(SharedData::exponentialHeightFogSettings.volumetricDepthDistributionScale, GetVolumetricGridSizeZ() / 120.0f);
+		return max(fd.exponentialHeightFogSettings.volumetricDepthDistributionScale, GetVolumetricGridSizeZ() / 120.0f);
 	}
 
 	float3 GetVolumetricGridZParams(float gridSizeZ)
@@ -53,7 +53,7 @@ namespace ExponentialHeightFog
 		return EXP_HEIGHT_FOG_GRID_Z_PARAMS;
 #else
 		gridSizeZ = clamp(gridSizeZ, 16.0f, 160.0f);
-		float nearPlane = max(SharedData::CameraData.y, GetVolumetricStartDistance());
+		float nearPlane = max(sd.CameraData.y, GetVolumetricStartDistance());
 		float farPlane = max(nearPlane + 1.0f, GetVolumetricEndDistance());
 		float nearWithOffset = nearPlane + 0.095f * 100.0f;
 		float farExp = exp2(min(gridSizeZ / GetVolumetricDepthDistributionScale(), 120.0f));
@@ -92,9 +92,9 @@ namespace ExponentialHeightFog
 		float fogDensity = GetHeightFogDensity();
 		float fogHeightFalloff = GetHeightFogFalloff();
 		float worldHeight = positionWS.z + cameraWS.z;
-		float exponent = fogHeightFalloff * max(worldHeight - SharedData::exponentialHeightFogSettings.fogHeight, 0.0f);
+		float exponent = fogHeightFalloff * max(worldHeight - fd.exponentialHeightFogSettings.fogHeight, 0.0f);
 		float localDensity = fogDensity * exp2(-exponent);
-		return max(localDensity * SharedData::exponentialHeightFogSettings.volumetricFogExtinctionScale * 0.5f, 0.0f);
+		return max(localDensity * fd.exponentialHeightFogSettings.volumetricFogExtinctionScale * 0.5f, 0.0f);
 	}
 }
 

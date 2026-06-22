@@ -161,7 +161,7 @@ void PerformanceOverlay::DrawSettings()
 		ImGui::Checkbox(T(TKEY("show_vram"), "Show VRAM Usage"), &this->settings.ShowVRAM);
 		ImGui::Checkbox(T(TKEY("show_cs_passes"), "Show CS Render Passes"), &this->settings.ShowCSPasses);
 
-		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
+		bool isFrameGenerationActive = false;
 		if (this->settings.ShowFPS && isFrameGenerationActive) {
 			ImGui::Checkbox(T(TKEY("show_pre_fg_graph"), "Show Pre-FG Frametime Graph"), &this->settings.ShowPreFGFrameTimeGraph);
 
@@ -476,22 +476,6 @@ void PerformanceOverlay::DrawFPS()
 		}
 	}
 
-	// Show Post-FG frametime graph if enabled
-	if (this->settings.ShowPostFGFrameTimeGraph && this->state.isFrameGenerationActive) {
-		// Check if FSR frame generation is active (FSR doesn't provide timing data)
-		bool isFrameGenActive = globals::features::upscaling.IsFrameGenerationActive();
-
-		if (isFrameGenActive) {
-			// Show note that FSR uses calculated data
-			Util::Text::Warning("%s", T(TKEY("post_fg_calculated"), "Post-FG: Calculated timing (2x Pre-FG)"));
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("AMD FSR Frame Generation uses calculated timing data (2x Pre-FG).\nNVIDIA DLSS Frame Generation provides measured timing data.");
-			}
-		}
-
-		// Show post-FG graph for both DLSS and FSR (FSR uses calculated data)
-		this->DrawPostFGFrameTimeGraph();
-	}
 }
 
 void PerformanceOverlay::DrawVRAM()
@@ -1920,7 +1904,7 @@ void PerformanceOverlay::UpdateSummaryTestData(float smoothedFrameTime, float ot
 void PerformanceOverlay::UpdateGraphValues()
 {
 	// Check if Frame Generation is active
-	state.isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
+	state.isFrameGenerationActive = false;
 
 	// Sync frame history buffer size with user settings
 	settings.FrameHistorySize = std::clamp(
@@ -1994,31 +1978,6 @@ void PerformanceOverlay::UpdateGraphValues()
 	// Exponential smoothing for stable graph scaling
 	state.smoothedMinFrameTime = state.smoothedMinFrameTime + Settings::kSmoothingFactor * (graphMin - state.smoothedMinFrameTime);
 	state.smoothedMaxFrameTime = state.smoothedMaxFrameTime + Settings::kSmoothingFactor * (graphMax - state.smoothedMaxFrameTime);
-
-	if (state.isFrameGenerationActive) {
-		// Get frametime directly from the Frame Generation system
-		float fgDeltaTime = globals::features::upscaling.GetFrameGenerationFrameTime();
-
-		// Check if FSR frame generation is active (FSR doesn't provide timing data)
-		bool isFrameGenActive = globals::features::upscaling.IsFrameGenerationActive();
-		if (fgDeltaTime > 0.0f && !isFrameGenActive) {
-			state.postFGFrameTimeMs = fgDeltaTime * 1000.0f;
-			state.postFGFps = 1000.0f / state.postFGFrameTimeMs;
-		} else {
-			// Fallback if FG time is not available
-			state.postFGFrameTimeMs = state.frameTimeMs / Settings::kFrameGenerationMultiplier;
-			state.postFGFps = state.fps * Settings::kFrameGenerationMultiplier;
-		}
-
-		// Update post-FG smooth values when timer elapses
-		if (state.updateTimer <= 0.0f) {
-			state.postFGSmoothFps = state.postFGFps;
-			state.postFGSmoothFrameTimeMs = state.postFGFrameTimeMs;
-		}
-
-		// Update post-FG frametime history
-		state.postFGFrameTimeHistory.Push(state.postFGFrameTimeMs);
-	}
 
 	// Update smooth values with user-specified interval
 	state.updateTimer += deltaTime;

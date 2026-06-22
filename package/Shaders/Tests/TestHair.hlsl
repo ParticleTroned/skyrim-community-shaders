@@ -15,7 +15,7 @@
 SamplerState SampColorSampler : register(s0);
 
 // Stub SharedData namespace with hairSpecularSettings
-// This must be defined before Hair.hlsli is included since it uses SharedData::hairSpecularSettings
+// This must be defined before Hair.hlsli is included since it uses fd.hairSpecularSettings
 namespace SharedData
 {
 	struct HairSpecularSettings

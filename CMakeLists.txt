@@ -90,11 +90,8 @@ find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(directx-headers CONFIG REQUIRED)
-add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
-
 find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
-include(FidelityFX-SDK)
 
 target_compile_definitions(
     ${PROJECT_NAME}
@@ -144,8 +141,6 @@ target_link_libraries(
         unordered_dense::unordered_dense
         efsw::efsw
         Tracy::TracyClient
-        Streamline
-        d3d12.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
         windowscodecs
@@ -425,6 +420,18 @@ install(
     PATTERN "Tests" EXCLUDE
 )
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
+
+# DXVK DLLs — placed in Root/ since they go next to SkyrimSE.exe, not in Data/
+set(DXVK_BUILD_DIR "${CMAKE_SOURCE_DIR}/extern/dxvk/build/src")
+if(EXISTS "${DXVK_BUILD_DIR}/d3d11/d3d11.dll")
+    install(
+        FILES
+            "${DXVK_BUILD_DIR}/d3d11/d3d11.dll"
+            "${DXVK_BUILD_DIR}/dxgi/dxgi.dll"
+        DESTINATION Root
+        COMPONENT DXVK
+    )
+endif()
 
 # #######################################################################################################################
 # # Automatic AIO preparation (incremental copy system)

@@ -2011,11 +2011,6 @@ void EditorWindow::HideGameMenus()
 	if (gameMenusHidden)
 		return;
 
-	// ShowMenus(false) stops the game from rendering to the back buffer.
-	// Without d3d12SwapChain, blur reads directly from that buffer and would freeze.
-	if (!globals::features::upscaling.d3d12SwapChainActive)
-		return;
-
 	if (auto ui = RE::UI::GetSingleton()) {
 		ui->ShowMenus(false);
 		gameMenusHidden = true;

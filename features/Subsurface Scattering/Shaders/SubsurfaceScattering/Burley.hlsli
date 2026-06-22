@@ -71,7 +71,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, float sssAmount, bool hum
 	float3 d3d = diffuseMeanFreePath.xyz * dmfpForSampling / s3d;
 
 	const float3 normalVS = GBuffer::DecodeNormal(NormalTexture[DTid].xy);
-	const float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
+	const float3 normalWS = normalize(mul(fb.CameraViewInverse, float4(normalVS, 0)).xyz);
 
 	float3 weightSum = 0.0f;
 	float3 colorSum = 0.0f;
@@ -79,12 +79,12 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, float sssAmount, bool hum
 	float2 uvScale = (GAME_UNIT_TO_CM * 0.1f * (0.5f / tan(0.5 * radians(SSSS_FOVY)))) / centerDepth;  // Scale in mm
 
 	// center sample weight
-	float centerRadius = 0.5f * (SharedData::BufferDim.z / uvScale.x + SharedData::BufferDim.w / uvScale.y);
+	float centerRadius = 0.5f * (sd.BufferDim.z / uvScale.x + sd.BufferDim.w / uvScale.y);
 	float centerRadiusCDF = GetBurleyCDF(d, centerRadius, 0).x;
 	float3 centerWeight = GetBurleyCDF(d3d, centerRadius, 0);
 
 	int3 seed = int3(DTid.xy, 0);
-	int seedStart = Random::pcg3d(int3(seed.xy, SharedData::FrameCount)).x;
+	int seedStart = Random::pcg3d(int3(seed.xy, sd.FrameCount)).x;
 
 	[loop] for (int i = 0; i < (int)BurleySamples; ++i)
 	{
@@ -105,7 +105,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, float sssAmount, bool hum
 
 		float2 sampleUV = texCoord + uvOffset;
 		float2 clampedUV = clamp(sampleUV, float2(0.0f, 0.0f), float2(1.0f, 1.0f));
-		uint2 samplePixcoord = uint2(clampedUV * SharedData::BufferDim.xy);
+		uint2 samplePixcoord = uint2(clampedUV * sd.BufferDim.xy);
 		float maskSample = MaskTexture[samplePixcoord].x;
 		bool mask = maskSample > 1e-5f;
 
@@ -115,7 +115,7 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, float sssAmount, bool hum
 		float3 sampleColor = ColorTexture[samplePixcoord].xyz * maskSample;
 		float sampleDepth = SharedData::GetScreenDepth(DepthTexture[samplePixcoord].x);
 		float3 sampleNormalVS = GBuffer::DecodeNormal(NormalTexture[samplePixcoord].xy);
-		float3 sampleNormalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(sampleNormalVS, 0)).xyz);
+		float3 sampleNormalWS = normalize(mul(fb.CameraViewInverse, float4(sampleNormalVS, 0)).xyz);
 
 		float deltaDepth = (sampleDepth - centerDepth) * 10.f / GAME_UNIT_TO_CM;  // convert to mm
 		float radiusSampledInMM = sqrt(radius * radius + deltaDepth * deltaDepth);

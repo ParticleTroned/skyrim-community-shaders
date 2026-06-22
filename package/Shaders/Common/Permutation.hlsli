@@ -1,6 +1,21 @@
 #ifndef __PERMUTATION_DEPENDENCY_HLSL__
 #define __PERMUTATION_DEPENDENCY_HLSL__
 
+struct PermutationData
+{
+	uint VertexShaderDescriptor;
+	uint PixelShaderDescriptor;
+	uint ExtraShaderDescriptor;
+	uint ExtraFeatureDescriptor;
+
+	float EffectRadius;
+};
+
+cbuffer PerShader : register(b4)
+{
+	PermutationData perm;
+};
+
 namespace Permutation
 {
 
@@ -87,16 +102,6 @@ namespace Permutation
 		static const int THLand5HasDisplacement = (1 << 5);
 		static const int THLandHasDisplacement = (1 << 9);
 	}
-
-	cbuffer PerShader : register(b4)
-	{
-		uint VertexShaderDescriptor;
-		uint PixelShaderDescriptor;
-		uint ExtraShaderDescriptor;
-		uint ExtraFeatureDescriptor;
-
-		float EffectRadius;
-	};
 
 }
 #endif  // __PERMUTATION_DEPENDENCY_HLSL__

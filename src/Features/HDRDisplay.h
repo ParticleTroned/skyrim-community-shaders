@@ -104,8 +104,6 @@ public:
 
 	/** @brief Scales UI brightness in the Frame Gen UI buffer using the UI brightness compute shader. */
 	void ScaleUIBrightnessForFG();
-	/** @brief Returns true when the D3D12 UI buffer path should be used for frame generation. */
-	bool ShouldUseD3D12UIBuffer();
 
 	/** @brief Runs the HDR output compute shader to composite scene and UI, then copies to the back buffer. */
 	void ApplyHDR();
@@ -251,14 +249,6 @@ private:
 		bool hdrReady,
 		bool frameGenActive,
 		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& presentChain);
-
-	struct D3D12UIBufferMode
-	{
-		bool useUIBuffer = false;
-		bool useFallbackCopy = false;
-	};
-
-	D3D12UIBufferMode GetD3D12UIBufferMode();
 
 	// Bind scene (t0), UI (t1, may be null), UAV (u0), CB (b0); dispatch the output CS; unbind.
 	void DispatchHDROutput(ID3D11ShaderResourceView* sceneSRV, ID3D11ShaderResourceView* uiSRV, ID3D11UnorderedAccessView* uav);

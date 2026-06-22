@@ -9,9 +9,9 @@ RWTexture3D<float4> VBufferA : register(u0);
 	float viewDepth;
 	float3 positionWS = ExponentialHeightFog::ComputeCellWorldPosition(dispatchID, 0.5f.xxx, viewDepth);
 
-	float extinction = ExponentialHeightFog::EvaluateHeightFogExtinction(positionWS, FrameBuffer::CameraPosAdjust.xyz);
-	float3 albedo = saturate(SharedData::exponentialHeightFogSettings.volumetricFogAlbedo.rgb);
-	float3 scattering = extinction * albedo * SharedData::exponentialHeightFogSettings.volumetricFogAlbedo.a;
+	float extinction = ExponentialHeightFog::EvaluateHeightFogExtinction(positionWS, fb.CameraPosAdjust.xyz);
+	float3 albedo = saturate(fd.exponentialHeightFogSettings.volumetricFogAlbedo.rgb);
+	float3 scattering = extinction * albedo * fd.exponentialHeightFogSettings.volumetricFogAlbedo.a;
 
 	VBufferA[dispatchID] = float4(scattering, extinction);
 }

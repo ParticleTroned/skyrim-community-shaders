@@ -69,8 +69,8 @@ float CalcMSLE(float3 a, float3 b)
 uint PatternFixupID(uint i)
 {
 	uint ret = 15;
-	ret = ((3441033216 >> i) & 0x1) ? 2 : ret;
-	ret = ((845414400 >> i) & 0x1) ? 8 : ret;
+	ret = ((3441033216u >> i) & 0x1u) ? 2 : ret;
+	ret = ((845414400u >> i) & 0x1u) ? 8 : ret;
 	return ret;
 }
 
@@ -179,8 +179,17 @@ void InsetColorBBoxP1(float3 texels[16], inout float3 blockMin, inout float3 blo
 	float3 refinedBlockMax = blockMin;
 
 	for (uint i = 0; i < 16; ++i) {
-		refinedBlockMin = min(refinedBlockMin, texels[i] == blockMin ? refinedBlockMin : texels[i]);
-		refinedBlockMax = max(refinedBlockMax, texels[i] == blockMax ? refinedBlockMax : texels[i]);
+		float3 t = texels[i];
+		float3 selMin = float3(
+			(t.x == blockMin.x) ? refinedBlockMin.x : t.x,
+			(t.y == blockMin.y) ? refinedBlockMin.y : t.y,
+			(t.z == blockMin.z) ? refinedBlockMin.z : t.z);
+		refinedBlockMin = min(refinedBlockMin, selMin);
+		float3 selMax = float3(
+			(t.x == blockMax.x) ? refinedBlockMax.x : t.x,
+			(t.y == blockMax.y) ? refinedBlockMax.y : t.y,
+			(t.z == blockMax.z) ? refinedBlockMax.z : t.z);
+		refinedBlockMax = max(refinedBlockMax, selMax);
 	}
 
 	float3 logRefinedBlockMax = log2(refinedBlockMax + 1.0f);

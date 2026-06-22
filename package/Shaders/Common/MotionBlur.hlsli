@@ -7,8 +7,8 @@ namespace MotionBlur
 {
 	float2 GetSSMotionVector(float4 a_wsPosition, float4 a_previousWSPosition)
 	{
-		float4 screenPosition = mul(FrameBuffer::CameraViewProjUnjittered, a_wsPosition);
-		float4 previousScreenPosition = mul(FrameBuffer::CameraPreviousViewProjUnjittered, a_previousWSPosition);
+		float4 screenPosition = mul(fb.CameraViewProjUnjittered, a_wsPosition);
+		float4 previousScreenPosition = mul(fb.CameraPreviousViewProjUnjittered, a_previousWSPosition);
 		screenPosition.xy = screenPosition.xy / screenPosition.ww;
 		previousScreenPosition.xy = previousScreenPosition.xy / previousScreenPosition.ww;
 		return float2(-0.5, 0.5) * (screenPosition.xy - previousScreenPosition.xy);

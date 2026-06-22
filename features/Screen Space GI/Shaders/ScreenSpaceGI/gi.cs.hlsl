@@ -261,7 +261,7 @@ void CalculateGI(
 					frontBackMult = frontBackMult < 0 ? 0.0 : frontBackMult;  // backface
 
 					if (frontBackMult > 0.f) {
-						float3 sampleHorizonVecWS = normalize(mul(FrameBuffer::CameraViewInverse, half4(sampleHorizonVec, 0)).xyz);
+						float3 sampleHorizonVecWS = normalize(mul(fb.CameraViewInverse, half4(sampleHorizonVec, 0)).xyz);
 
 						float3 sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance).rgb * frontBackMult * giBoost * countbits(validBits) * 0.03125;
 						sampleRadiance = max(sampleRadiance, 0);
@@ -338,7 +338,7 @@ void CalculateGI(
 	float2 normalSample = FULLRES_LOAD(srcNormal, pxCoord, uv * OUT_FRAME_SCALE, samplerLinearClamp);
 	float3 viewspaceNormal = GBuffer::DecodeNormal(normalSample);
 
-	half2 encodedWorldNormal = GBuffer::EncodeNormal(ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse));
+	half2 encodedWorldNormal = GBuffer::EncodeNormal(ViewToWorldVector(viewspaceNormal, fb.CameraViewInverse));
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 
 	// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used

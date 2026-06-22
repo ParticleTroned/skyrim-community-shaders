@@ -73,7 +73,7 @@ groupshared float2 g_shadowHeight[NTHREADS];
 	float2 rayStartUV = (rayStartPxCoord + .5) * PxSize;
 	float2 rawThreadUV = rayStartUV + gtid * lightUVDir;
 
-	bool2 isUVinRange = (rawThreadUV > 0) && (rawThreadUV < 1);
+	bool2 isUVinRange = bool2(rawThreadUV.x > 0 && rawThreadUV.x < 1, rawThreadUV.y > 0 && rawThreadUV.y < 1);
 	bool isValid = isVertical ? isUVinRange.y : isUVinRange.x;
 
 	float2 threadUV = rawThreadUV - floor(rawThreadUV);  // wraparound

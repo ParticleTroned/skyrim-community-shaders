@@ -76,11 +76,20 @@ namespace
 	// SEH wrappers — kept free of any object that requires unwinding so __try is legal
 	// (MSVC forbids __try in a function with C++ objects whose lifetime spans it). A
 	// fault here is typically RenderDoc interfering with FFX; we degrade gracefully.
+	static LONG LogFfxException(_EXCEPTION_POINTERS* ep)
+	{
+		uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"CommunityShaders.dll"));
+		uintptr_t addr = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
+		logger::critical("[FidelityFX] ffxFsr3ContextCreate FAULTED code=0x{:08X} addr=0x{:X} rva=0x{:X}",
+			(uint32_t)ep->ExceptionRecord->ExceptionCode, addr, addr >= base ? (addr - base) : 0);
+		return EXCEPTION_EXECUTE_HANDLER;
+	}
+
 	FfxErrorCode SafeContextCreate(FfxFsr3Context* ctx, FfxFsr3ContextDescription* desc)
 	{
 		__try {
 			return ffxFsr3ContextCreate(ctx, desc);
-		} __except (EXCEPTION_EXECUTE_HANDLER) {
+		} __except (LogFfxException(GetExceptionInformation())) {
 			return FFX_ERROR_BACKEND_API_ERROR;
 		}
 	}
@@ -245,7 +254,14 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 		return;
 	}
 
+	// ffxFsr3ContextCreate flushes internal GPU jobs (ExecuteGpuJobsVK), which records and
+	// SUBMITS a command buffer to DXVK's shared graphics queue. Hold DXVK's submission lock
+	// (after flushing its pending D3D11 work) so that submit doesn't race DXVK's own worker
+	// thread on the single graphics queue.
+	dxvk->FlushRenderingCommands();
+	dxvk->LockSubmissionQueue();
 	FfxErrorCode createErr = SafeContextCreate(&fsrContext[0], &contextDescription);
+	dxvk->ReleaseSubmissionQueue();
 	if (createErr != FFX_OK) {
 		logger::critical("[FidelityFX] ffxFsr3ContextCreate (VK) failed: 0x{:08X}", (uint32_t)createErr);
 		// Context not created — free scratch/textures/commands WITHOUT destroying the
@@ -370,12 +386,12 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		fsrDispatchCrashLogged = true;
 	}
 
-	RestoreLayouts(dxvk, guards);
-
-	// Submit the upscale (wait so the result is ready) and copy it back into the game's
-	// color target. Frame generation, if enabled, runs on its own command buffer next,
-	// reading the prepared dilated depth/MVs that the upscale stored in the FSR3 context.
+	// Submit the upscale (wait so the result is ready), THEN restore layouts. The layout
+	// transitions run on DXVK's context and are flushed ahead of our queue submit, so the
+	// restore MUST come after the FFX work has actually executed — otherwise FFX reads the
+	// resources in the wrong (already-restored) layout and the GPU faults.
 	dxvk->SubmitFrameCommandBuffer(cb, /*waitIdle*/ true);
+	RestoreLayouts(dxvk, guards);
 	currentCommandBuffer = VK_NULL_HANDLE;
 	if (dispatched)
 		context->CopyResource(a_upscalingTexture, upscaledTexture->resource.get());
@@ -450,8 +466,8 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_
 		}
 	}
 
-	RestoreLayouts(dxvk, guards);
 	dxvk->SubmitFrameCommandBuffer(cb, /*waitIdle*/ true);
+	RestoreLayouts(dxvk, guards);
 
 	++frameID;
 

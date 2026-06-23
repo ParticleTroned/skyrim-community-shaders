@@ -1023,7 +1023,7 @@ HRESULT HDRDisplay::RunPresentChainWithHDR(
 	return presentChain(swapChain, syncInterval, flags);
 }
 
-void HDRDisplay::PresentInterpolatedFrame(
+HRESULT HDRDisplay::PresentInterpolatedFrame(
 	IDXGISwapChain* swapChain,
 	UINT syncInterval,
 	UINT flags,
@@ -1031,7 +1031,7 @@ void HDRDisplay::PresentInterpolatedFrame(
 	const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& presentChain)
 {
 	if (!sceneSRV || !hdrDataCB || !outputTexture || !GetHDROutputCS())
-		return;
+		return E_FAIL;
 
 	std::lock_guard<std::mutex> lock(settingsMutex);
 
@@ -1052,13 +1052,15 @@ void HDRDisplay::PresentInterpolatedFrame(
 		backBuffer->Release();
 	}
 
-	presentChain(swapChain, syncInterval, flags);
+	const HRESULT hr = presentChain(swapChain, syncInterval, flags);
 
 	// Throttled confirmation that the extra-frame present path is live (visual quality
 	// is verified separately). Logs roughly every few seconds while frame gen is active.
 	static uint64_t interpPresentCount = 0;
 	if ((interpPresentCount++ % 300) == 0)
 		logger::info("[FidelityFX] Frame gen: presented interpolated frame (count {})", interpPresentCount);
+
+	return hr;
 }
 
 HRESULT HDRDisplay::HandleSwapChainPresent(
@@ -1082,8 +1084,13 @@ HRESULT HDRDisplay::HandleSwapChainPresent(
 	// which converts the FP16 scene to the swapchain format the interpolated frame also needs.
 	if (hdrReady && globals::features::upscaling.loaded &&
 		globals::features::upscaling.IsFrameGenInterpolatedReady()) {
-		if (auto* interpSRV = globals::features::upscaling.GetFrameGenInterpolatedSRV())
-			PresentInterpolatedFrame(swapChain, syncInterval, flags, interpSRV, presentChain);
+		if (auto* interpSRV = globals::features::upscaling.GetFrameGenInterpolatedSRV()) {
+			const HRESULT interpHr = PresentInterpolatedFrame(swapChain, syncInterval, flags, interpSRV, presentChain);
+			// Debug (CS_FG_ONLY_INTERP): present ONLY the generated frame so its content can
+			// be inspected in isolation; skip the real-frame present this frame.
+			if (SUCCEEDED(interpHr) && globals::features::upscaling.fidelityFX.DebugOnlyInterpolated())
+				return interpHr;
+		}
 	}
 
 	return RunPresentChainWithHDR(swapChain, syncInterval, flags, hdrReady, false, presentChain);

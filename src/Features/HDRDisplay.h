@@ -157,7 +157,7 @@ public:
 	 * @param sceneSRV The interpolated scene color to composite and present.
 	 * @param presentChain The original Present call chain to invoke.
 	 */
-	void PresentInterpolatedFrame(
+	HRESULT PresentInterpolatedFrame(
 		IDXGISwapChain* swapChain,
 		UINT syncInterval,
 		UINT flags,

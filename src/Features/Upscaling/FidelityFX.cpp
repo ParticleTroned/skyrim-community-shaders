@@ -142,6 +142,95 @@ namespace
 			logger::warn("[FidelityFX][FFX] {}", buf);
 	}
 
+	// Frame-generation debug controls, read once from environment variables. Used to
+	// diagnose the black interpolated frames:
+	//   CS_FG_DEBUG_VIEW=1    FFX draws debug views into the interpolated output
+	//   CS_FG_DEBUG_TEAR=1    FFX draws tear lines into the interpolated output
+	//   CS_FG_DEBUG_PACING=1  FFX draws pacing lines into the generated output
+	//   CS_FG_ONLY_INTERP=1   present only the interpolated frame (hide the real one)
+	//   CS_FG_READBACK=1      log interpolated-frame pixel stats (all-black detection)
+	struct FgDebug
+	{
+		uint32_t ffxFlags = 0;
+		bool onlyInterpolated = false;
+		bool readback = false;
+	};
+
+	const FgDebug& GetFgDebug()
+	{
+		static const FgDebug cfg = [] {
+			auto on = [](const char* name) {
+				char buf[16]{};
+				size_t len = 0;
+				getenv_s(&len, buf, sizeof(buf), name);
+				return len > 1 && buf[0] != '0';
+			};
+			FgDebug c;
+			if (on("CS_FG_DEBUG_VIEW"))
+				c.ffxFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_VIEW;
+			if (on("CS_FG_DEBUG_TEAR"))
+				c.ffxFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;
+			if (on("CS_FG_DEBUG_PACING"))
+				c.ffxFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
+			c.onlyInterpolated = on("CS_FG_ONLY_INTERP");
+			c.readback = on("CS_FG_READBACK");
+			if (c.ffxFlags || c.onlyInterpolated || c.readback)
+				logger::info("[FidelityFX] FG debug: ffxFlags=0x{:X} onlyInterp={} readback={}",
+					c.ffxFlags, c.onlyInterpolated, c.readback);
+			return c;
+		}();
+		return cfg;
+	}
+
+	// Headless black-frame detector: copies the interpolated frame to a staging texture
+	// and scans sampled bytes for any non-zero content. Logs throttled. Answers the key
+	// question: is FFX producing a black frame, or is the present path blacking it?
+	void LogInterpolatedStats(ID3D11Resource* tex)
+	{
+		static int counter = 0;
+		if ((counter++ % 120) != 0 || !tex)
+			return;
+
+		auto device = globals::d3d::device;
+		auto context = globals::d3d::context;
+		D3D11_TEXTURE2D_DESC desc{};
+		static_cast<ID3D11Texture2D*>(tex)->GetDesc(&desc);
+
+		D3D11_TEXTURE2D_DESC sdesc = desc;
+		sdesc.Usage = D3D11_USAGE_STAGING;
+		sdesc.BindFlags = 0;
+		sdesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		sdesc.MiscFlags = 0;
+		winrt::com_ptr<ID3D11Texture2D> staging;
+		if (FAILED(device->CreateTexture2D(&sdesc, nullptr, staging.put())))
+			return;
+		context->CopyResource(staging.get(), tex);
+
+		D3D11_MAPPED_SUBRESOURCE map{};
+		if (FAILED(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &map)))
+			return;
+
+		const uint8_t* base = static_cast<const uint8_t*>(map.pData);
+		uint64_t nonZero = 0, sampled = 0;
+		uint8_t maxByte = 0;
+		for (uint32_t y = 0; y < desc.Height; y += 8) {
+			const uint8_t* row = base + static_cast<size_t>(y) * map.RowPitch;
+			for (uint32_t b = 0; b < map.RowPitch; b += 4) {
+				++sampled;
+				if (row[b]) {
+					++nonZero;
+					if (row[b] > maxByte)
+						maxByte = row[b];
+				}
+			}
+		}
+		context->Unmap(staging.get(), 0);
+
+		logger::info("[FG-READBACK] interp {}x{} fmt={} nonZero={}/{} maxByte={} -> {}",
+			desc.Width, desc.Height, (int)desc.Format, nonZero, sampled, maxByte,
+			nonZero == 0 ? "ALL BLACK" : "has content");
+	}
+
 	eastl::unique_ptr<Texture2D> MakeDisplayTexture(ID3D11Resource* templateTex, uint32_t w, uint32_t h, const char* name)
 	{
 		D3D11_TEXTURE2D_DESC tdesc{};
@@ -293,6 +382,8 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 	auto& main = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	upscaledTexture = MakeDisplayTexture(main.texture, displayWidth, displayHeight, "FidelityFX::UpscaledColor").release();
 	interpolatedTexture = MakeDisplayTexture(main.texture, displayWidth, displayHeight, "FidelityFX::InterpolatedFrame").release();
+	// Clean (never interop-touched) copy target sampled by the present composite.
+	interpolatedDisplayTexture = MakeDisplayTexture(main.texture, displayWidth, displayHeight, "FidelityFX::InterpolatedDisplay").release();
 
 	frameGenContextActive = true;
 	frameID = 0;
@@ -326,6 +417,7 @@ void FidelityFX::DestroyFSRResources()
 	};
 	destroyTex(upscaledTexture);
 	destroyTex(interpolatedTexture);
+	destroyTex(interpolatedDisplayTexture);
 
 	if (dxvk->IsAvailable())
 		dxvk->DestroyCommandResources();
@@ -493,7 +585,7 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_
 	fgConfig.frameGenerationEnabled = true;
 	fgConfig.allowAsyncWorkloads = false;
 	fgConfig.HUDLessColor = FfxResource({});
-	fgConfig.flags = 0;
+	fgConfig.flags = GetFgDebug().ffxFlags;  // FFX debug-draw flags (CS_FG_DEBUG_*)
 	fgConfig.onlyPresentInterpolated = false;
 
 	// ffxFsr3ConfigureFrameGeneration performs the context-side setup the dispatch needs —
@@ -538,8 +630,23 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_
 
 	++frameID;
 
+	// Copy the FFX output into a normally-tracked texture so the present composite can sample
+	// it in SHADER_READ_ONLY layout (the interop-touched interpolatedTexture stays in GENERAL,
+	// which samples as black). CopyResource handles the source layout correctly.
+	if (produced && interpolatedDisplayTexture)
+		globals::d3d::context->CopyResource(interpolatedDisplayTexture->resource.get(), interpolatedTexture->resource.get());
+
+	// Headless black-frame diagnostic (CS_FG_READBACK): inspect what FFX actually wrote.
+	if (produced && GetFgDebug().readback)
+		LogInterpolatedStats(interpolatedTexture->resource.get());
+
 	if (state->frameAnnotations)
 		state->EndPerfEvent();
 
 	return produced;
+}
+
+bool FidelityFX::DebugOnlyInterpolated() const
+{
+	return GetFgDebug().onlyInterpolated;
 }

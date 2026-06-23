@@ -56,6 +56,13 @@ public:
 	Texture2D* upscaledTexture = nullptr;
 	Texture2D* interpolatedTexture = nullptr;
 
+	// A clean copy of the interpolated frame for the present composite to sample. The FFX
+	// output (interpolatedTexture) is touched via the DXVK interop path and DXVK keeps such
+	// surfaces in VK_IMAGE_LAYOUT_GENERAL, so sampling it directly reads black (the SRV
+	// descriptor expects SHADER_READ_ONLY_OPTIMAL). CopyResource into this normally-tracked
+	// texture restores correct layout handling for sampling.
+	Texture2D* interpolatedDisplayTexture = nullptr;
+
 	// True for the current frame once DispatchFrameGeneration has produced an
 	// interpolated frame into interpolatedTexture; consumed by the present path.
 	// Reset at the start of each UpscaleAndGenerate so a skipped frame can't
@@ -100,6 +107,9 @@ public:
 
 	// Set after a dispatch fault is caught; stops further FSR VK dispatch this session.
 	bool dispatchFaulted = false;
+
+	/** @brief Debug (CS_FG_ONLY_INTERP): present only the interpolated frame, hiding the real one. */
+	bool DebugOnlyInterpolated() const;
 
 private:
 	// FSR scratch buffers. Upscaling-only uses [1]; frame generation uses all three

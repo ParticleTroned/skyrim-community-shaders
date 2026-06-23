@@ -229,13 +229,14 @@ bool Upscaling::IsFrameGenInterpolatedReady() const
 {
 	return loaded && settings.frameGeneration && GetUpscaleMethod() == UpscaleMethod::kFSR &&
 	       fidelityFX.frameGenContextActive && fidelityFX.interpolatedFrameReady &&
-	       fidelityFX.interpolatedTexture != nullptr;
+	       fidelityFX.interpolatedDisplayTexture != nullptr;
 }
 
 ID3D11ShaderResourceView* Upscaling::GetFrameGenInterpolatedSRV() const
 {
-	return (fidelityFX.interpolatedTexture && fidelityFX.interpolatedTexture->srv) ?
-	           fidelityFX.interpolatedTexture->srv.get() :
+	// The clean copy (interpolatedDisplayTexture), not the interop-touched FFX output.
+	return (fidelityFX.interpolatedDisplayTexture && fidelityFX.interpolatedDisplayTexture->srv) ?
+	           fidelityFX.interpolatedDisplayTexture->srv.get() :
 	           nullptr;
 }
 

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <type_traits>
+#include <unordered_set>
 
 #include "Utils/WinApi.h"
 
@@ -32,43 +33,63 @@ namespace
 
 		return form;
 	}
+
+	template <class T>
+	T* ResolveWaterDataWorldSpace(T* worldSpace)
+	{
+		while (worldSpace && worldSpace->parentWorld && worldSpace->parentUseFlags.all(RE::TESWorldSpace::ParentUseFlag::kUseWaterData)) {
+			worldSpace = worldSpace->parentWorld;
+		}
+		return worldSpace;
+	}
 }
 
 bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 {
 	if (!worldSpace) {
 		currentCache.reset();
+		currentWorldSpaceForm = nullptr;
 		currentWorldSpace.clear();
 		return false;
 	}
 
-	while (worldSpace->parentWorld && worldSpace->parentUseFlags.all(RE::TESWorldSpace::ParentUseFlag::kUseWaterData))
-		worldSpace = worldSpace->parentWorld;
-
-	const auto newWorldSpace = worldSpace->GetFormEditorID();
-	if (currentWorldSpace == newWorldSpace) {
-		logger::debug("[Unified Water] [Cache] Runtime cache for {} already active", currentWorldSpace);
+	worldSpace = ResolveWaterDataWorldSpace(worldSpace);
+	if (currentCache && currentWorldSpaceForm == worldSpace) {
 		return true;
 	}
 
-	currentWorldSpace = newWorldSpace;
+	const auto newWorldSpace = worldSpace->GetFormEditorID();
+	if (!newWorldSpace || !*newWorldSpace) {
+		logger::error("[Unified Water] [Cache] WorldSpace has no EditorID");
+		currentCache.reset();
+		currentWorldSpaceForm = nullptr;
+		currentWorldSpace.clear();
+		return false;
+	}
+
+	std::string key{ newWorldSpace };
 
 	const auto snap = std::atomic_load_explicit(&cacheMap, std::memory_order_acquire);
 	if (!snap) {
 		logger::error("[Unified Water] [Cache] Failed to get cache snapshot");
+		currentCache.reset();
+		currentWorldSpaceForm = nullptr;
+		currentWorldSpace.clear();
 		return false;
 	}
 
-	const auto it = snap->find(newWorldSpace);
+	const auto it = snap->find(key);
 	if (it == snap->end()) {
-		logger::error("[Unified Water] [Cache] Failed to get runtime cache for {}", newWorldSpace);
+		logger::error("[Unified Water] [Cache] Failed to get runtime cache for {}", key);
 		currentCache.reset();
+		currentWorldSpaceForm = nullptr;
 		currentWorldSpace.clear();
 		return false;
 	}
 
 	currentCache = it->second;
-	currentWorldSpace = std::move(newWorldSpace);
+	currentWorldSpaceForm = worldSpace;
+	currentWorldSpace = std::move(key);
 	logger::debug("[Unified Water] [Cache] Runtime cache for {} activated", currentWorldSpace);
 
 	return true;
@@ -77,7 +98,8 @@ bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 std::vector<WaterCache::Instruction>* WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const int32_t x, const int32_t y)
 {
 	if (!SetCurrentWorldSpace(worldSpace)) {
-		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", worldSpace->GetFormEditorID());
+		const auto editorID = worldSpace ? worldSpace->GetFormEditorID() : nullptr;
+		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", editorID ? editorID : "<null>");
 		return nullptr;
 	}
 
@@ -159,7 +181,8 @@ bool WaterCache::RegenerateCaches()
 	for (const auto& entry : fs::directory_iterator(dir, ec)) {
 		if (ec)
 			break;
-		if (!entry.is_regular_file())
+		std::error_code entryEc;
+		if (!entry.is_regular_file(entryEc))
 			continue;
 
 		const auto& path = entry.path();
@@ -219,7 +242,13 @@ bool WaterCache::LoadCaches()
 		if (const auto snap = std::atomic_load_explicit(&cacheMap, std::memory_order_acquire)) {
 			if (const auto it = snap->find(currentWorldSpace); it != snap->end()) {
 				currentCache = it->second;
+			} else {
+				currentCache.reset();
+				currentWorldSpaceForm = nullptr;
 			}
+		} else {
+			currentCache.reset();
+			currentWorldSpaceForm = nullptr;
 		}
 	}
 
@@ -709,15 +738,18 @@ std::vector<RE::TESWorldSpace*> WaterCache::GetValidWorldSpaces()
 {
 	auto worldSpaces = RE::TESDataHandler::GetSingleton()->GetFormArray<RE::TESWorldSpace>();
 	auto validWorldSpaces = std::vector<RE::TESWorldSpace*>();
+	validWorldSpaces.reserve(worldSpaces.size());
+
+	std::unordered_set<RE::TESWorldSpace*> seenWorldSpaces;
+	seenWorldSpaces.reserve(worldSpaces.size());
 
 	for (auto& worldSpace : worldSpaces) {
-		while (worldSpace->parentWorld && worldSpace->parentUseFlags.all(RE::TESWorldSpace::ParentUseFlag::kUseWaterData))
-			worldSpace = worldSpace->parentWorld;
+		worldSpace = ResolveWaterDataWorldSpace(worldSpace);
 
-		if (!worldSpace->worldWater)
+		if (!worldSpace || !worldSpace->worldWater)
 			continue;
 
-		if (std::ranges::find(validWorldSpaces, worldSpace) != validWorldSpaces.end())
+		if (!seenWorldSpaces.insert(worldSpace).second)
 			continue;
 
 		validWorldSpaces.push_back(worldSpace);

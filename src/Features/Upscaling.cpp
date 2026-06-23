@@ -2319,6 +2319,29 @@ namespace
 		return !IsVRLoadingPresentationContextActive(state);
 	}
 
+	bool HasLiveVRRenderScaleLatch(const Upscaling& a_upscaling)
+	{
+		if (!a_upscaling.loaded || !globals::game::isVR)
+			return false;
+
+		const auto& boot = a_upscaling.perfMode.GetBootSnapshot();
+		return boot.valid &&
+		       boot.active &&
+		       IsRenderScaleMethodEligible(boot.method) &&
+		       IsRenderScaleQualityMode(boot.qualityMode);
+	}
+
+	bool HasActiveVRRenderScaleLatch(const Upscaling& a_upscaling)
+	{
+		if (!HasLiveVRRenderScaleLatch(a_upscaling))
+			return false;
+
+		if (!IsRenderScaleMethodEligible(a_upscaling.GetConfiguredUpscaleMethodForTransition()))
+			return false;
+
+		return a_upscaling.GetPerfModeRequested();
+	}
+
 	bool ShouldBlockForPendingExplicitVRUpscalingWork(const Upscaling& a_upscaling)
 	{
 		return HasPendingExplicitVRUpscalingWork(a_upscaling) &&
@@ -5086,10 +5109,10 @@ bool Upscaling::IsPerfModeActive() const
 	if (IsRenderDocUpscalingBlocked())
 		return false;
 
-	if (!CanActivateVRRenderScaleRuntime(*this))
-		return false;
+	if (globals::game::isVR)
+		return HasActiveVRRenderScaleLatch(*this);
 
-	return perfMode.IsActive(settings, GetUpscaleMethod());
+	return loaded && perfMode.IsActive(settings, GetUpscaleMethod());
 }
 
 bool Upscaling::GetPerfModeRequested() const
@@ -5410,7 +5433,9 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 
 bool Upscaling::IsPerfModePresentationActive() const
 {
-	return IsPerfModeActive() && perfMode.HasKnownHMDSize();
+	return IsPerfModeActive() &&
+	       perfMode.HasKnownHMDSize() &&
+	       CanActivateVRRenderScaleRuntime(*this);
 }
 
 bool Upscaling::IsPresentationUpscalingActive() const
@@ -5435,19 +5460,20 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 	if (IsRenderDocUpscalingBlocked())
 		return false;
 
-	if (!CanActivateVRRenderScaleRuntime(*this)) {
+	const bool activeLatch = HasActiveVRRenderScaleLatch(*this);
+	if (!activeLatch && !CanActivateVRRenderScaleRuntime(*this)) {
 		if (a_allowCreate)
 			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 		return false;
 	}
 
-	if (ShouldBlockForPendingExplicitVRUpscalingWork(*this)) {
+	if (!activeLatch && ShouldBlockForPendingExplicitVRUpscalingWork(*this)) {
 		if (a_allowCreate)
 			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 		return false;
 	}
 
-	if (a_allowCreate && DeferVRPerfModeBootLatchForPendingDLSS(*this))
+	if (!activeLatch && a_allowCreate && DeferVRPerfModeBootLatchForPendingDLSS(*this))
 		return false;
 
 	return perfMode.TryGetOpenVRRenderTargetSize(settings, GetUpscaleMethod(), a_width, a_height, a_allowCreate);
@@ -5776,7 +5802,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 		return;
 
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
-	const bool perfModeActive = IsPerfModeActive();
+	const bool perfModeActive = HasLiveVRRenderScaleLatch(*this);
 	const bool perfModeEligible = perfMode.IsEligible(settings, configuredMethod);
 	if (!perfModeActive && !perfModeEligible && !perfMode.HasRestartRequiredChange())
 		return;

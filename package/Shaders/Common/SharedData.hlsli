@@ -295,10 +295,16 @@ struct SharedDataLayout
 	float Timer;
 	uint FrameCount;
 	uint FrameCountAlwaysActive;
-	bool InInterior;  // If the current cell is an interior
-	bool HasDirectionalShadows;
-	bool InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
-	bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
+	// NOTE: these MUST be uint, not bool. HLSL cbuffer `bool` is a 32-bit int under
+	// FXC/DXBC (matching the C++ uint upload), but DXC->SPIR-V does not size cbuffer
+	// `bool` as a storable 32-bit type, and -fvk-use-dx-layout fixes offsets/strides
+	// but not member sizing — so a `bool` here shifts every following member (MipBias,
+	// AmbientSHR/G/B, HDRData) and corrupts ambient/HDR under DXVK. Use uint everywhere
+	// in cbuffers; non-zero is still truthy in conditions.
+	uint InInterior;  // If the current cell is an interior
+	uint HasDirectionalShadows;
+	uint InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
+	uint HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
 	float MipBias;            // Offset to mip level for TAA sharpness
 	float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -FLT_MAX when no water body found
 	float3 pad0;

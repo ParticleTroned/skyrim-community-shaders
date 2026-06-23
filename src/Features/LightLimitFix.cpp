@@ -1267,16 +1267,18 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 						bool hasGradientConfig = false;
 						ParticleLights::GradientConfig gradientConfig{};
 						if (!material->greyscaleTexturePath.empty()) {
-							// Gradient configs are optional overrides; missing entries fall back to the base particle config.
 							const auto gradientName = Util::GetLowercaseStem(material->greyscaleTexturePath.c_str(), ".dds");
-							if (gradientName) {
-								auto& gradientConfigs = particleLights.particleLightGradientConfigs;
-								auto itGradient = gradientConfigs.find(*gradientName);
-								if (itGradient != gradientConfigs.end()) {
-									hasGradientConfig = true;
-									gradientConfig = itGradient->second;
-								}
+							if (!gradientName) {
+								return cacheInvalidReference(node);
 							}
+
+							auto& gradientConfigs = particleLights.particleLightGradientConfigs;
+							auto itGradient = gradientConfigs.find(*gradientName);
+							if (itGradient == gradientConfigs.end()) {
+								return cacheInvalidReference(node);
+							}
+							hasGradientConfig = true;
+							gradientConfig = itGradient->second;
 						}
 
 						ParticleLightReference reference{};

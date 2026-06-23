@@ -270,11 +270,28 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		}
 		ImGui::TextUnformatted(progressTitle.c_str());
 		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
-		if (shaderCache->IsDiskCacheHeld()) {
+		if (shaderCache->HasFeatureSetRevertPending()) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
-				T("overlay.cache_held",
-					"Feature set changed: your previous shader cache is preserved on disk.\n"
-					"Open the Community Shaders menu home page to rebuild it or fix your setup and restart."));
+				"Feature toggles restored for next launch.\n"
+				"Restart to use the saved shader cache.");
+		} else if (shaderCache->HasFeatureSetChanges()) {
+			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
+				"Feature changes detected. Compiling a new disk cache for this setup.\n"
+				"To restore the previous feature setup, open CS menu > Home tab > Shader Cache Changes.");
+		} else if (shaderCache->IsDiskCacheHeld()) {
+			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
+				"Saved shader cache does not match: a feature is missing or failed to load.\n"
+				"Open CS menu > Home tab > Shader Cache Changes.");
+		}
+		if (FeatureIssues::HasFeatureIssues()) {
+			const size_t issueCount = FeatureIssues::GetFeatureIssues().size();
+			const auto issueMessage = fmt::format(
+				"WARNING: {} feature{} failed to load (bad install or version mismatch).\n"
+				"Check CS menu > Feature Issues tab, then quit, fix your mod setup, and restart.\n"
+				"Compiling now bakes the wrong shaders and you will have to recompile after fixing.",
+				issueCount,
+				issueCount == 1 ? "" : "s");
+			ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", issueMessage.c_str());
 		}
 		if (state->IsDeveloperMode()) {
 			int32_t threadLimit = backgroundCompilation ? shaderCache->backgroundCompilationThreadCount : shaderCache->compilationThreadCount;

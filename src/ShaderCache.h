@@ -336,11 +336,15 @@ namespace SIE
 		void SetDiskCache(bool value);
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
 		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
+		bool HasFeatureSetChanges() const { return featureSetChanged.load(std::memory_order_relaxed); }
+		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_relaxed); }
 		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_relaxed); }
 		bool IsDiskCacheActive() const { return isDiskCache.load(std::memory_order_relaxed) && !diskCacheHeld.load(std::memory_order_relaxed); }
 		void AcceptCacheRebuild();
 		void DeleteDiskCache();
 		void ValidateDiskCache();
+		void CommitFeatureSetChange();
+		void CancelFeatureSetChangeForRevert();
 		void WriteDiskCacheInfo();
 		void WriteDiskCacheInfoWhenReady();
 		void WritePendingDiskCacheInfoIfNeeded();
@@ -748,6 +752,8 @@ namespace SIE
 		bool isEnabled = true;
 		std::atomic_bool isDiskCache{ true };
 		std::atomic_bool diskCacheHeld{ false };
+		std::atomic_bool featureSetChanged{ false };
+		std::atomic_bool featureSetRevertPending{ false };
 		std::atomic_bool diskCacheInfoWritePending{ false };
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<std::string> heldMismatchDefines;

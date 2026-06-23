@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include <BS_thread_pool.hpp>
 
+#include <cstdint>
+
 class WaterCache
 {
 public:
@@ -164,6 +166,7 @@ private:
 	std::atomic<std::shared_ptr<const CacheMap>> cacheMap{ std::make_shared<CacheMap>() };
 
 	std::shared_ptr<RuntimeCache> currentCache;
+	const RE::TESWorldSpace* currentWorldSpaceForm = nullptr;
 	std::string currentWorldSpace;
 
 	bool LoadCaches();

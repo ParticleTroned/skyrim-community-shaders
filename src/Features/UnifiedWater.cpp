@@ -10,6 +10,7 @@
 
 #include <imgui_internal.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
@@ -23,6 +24,13 @@ static bool IsChildWorldSpace(const RE::TESWorldSpace* ws)
 {
 	return ws && ws->parentWorld &&
 	       ws->parentUseFlags.all(RE::TESWorldSpace::ParentUseFlag::kUseLODData);
+}
+
+static int64_t SteadyClockMs()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch())
+		.count();
 }
 
 static bool IsInteriorCellActive()
@@ -395,8 +403,17 @@ void UnifiedWater::TryCompleteDeferredChildWorldspaceCull(RE::TES* tes)
 	if (!tes || !tes->gridCells)
 		return;
 
-	if (CullAllWaterLODParents(*gWaterLOD, tes))
+	constexpr int64_t kRetryIntervalMs = 100;
+	const auto now = SteadyClockMs();
+	const auto nextRetry = nextChildWsCullRetryMs.load(std::memory_order_acquire);
+	if (nextRetry > now)
+		return;
+	nextChildWsCullRetryMs.store(now + kRetryIntervalMs, std::memory_order_release);
+
+	if (CullAllWaterLODParents(*gWaterLOD, tes)) {
 		pendingChildWsCull.store(false, std::memory_order_release);
+		nextChildWsCullRetryMs.store(0, std::memory_order_release);
+	}
 }
 
 void UnifiedWater::LoadSettings(json& o_json)
@@ -468,16 +485,15 @@ void UnifiedWater::DrawOverlay()
 	auto& themeSettings = Menu::GetSingleton()->GetTheme();
 
 	if (waterCache->IsBuildRunning()) {
-		auto progressTitle = fmt::format("Generating Water Cache:");
-		auto percent = static_cast<float>(snapshot.completed) / static_cast<float>(snapshot.total);
-		auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", snapshot.completed, snapshot.total, 100 * percent);
+		auto percent = snapshot.total ? std::min(1.0f, static_cast<float>(snapshot.done) / static_cast<float>(snapshot.total)) : 0.0f;
+		auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", snapshot.done, snapshot.total, 100 * percent);
 
 		ImGui::SetNextWindowPos(ImVec2(pos, pos + vOffset));
 		if (!ImGui::Begin("UWCacheCreationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();
 			return;
 		}
-		ImGui::TextUnformatted(progressTitle.c_str());
+		ImGui::TextUnformatted("Generating Water Cache:");
 		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
 
 		ImGui::End();
@@ -650,13 +666,27 @@ bool UnifiedWater::LoadOrderChanged()
 		namespace fs = std::filesystem;
 		const auto pluginPath = Util::PathHelpers::GetDataPath() / file->fileName;
 		std::error_code ec;
-		const auto fileSize = fs::exists(pluginPath, ec) ? fs::file_size(pluginPath, ec) : 0;
-		if (!ec)
-			addValueToHash(fileSize);
+		const fs::directory_entry entry(pluginPath, ec);
+		const bool hasMetadata = !ec && entry.exists(ec) && !ec;
+
+		uintmax_t fileSize = 0;
+		if (hasMetadata) {
+			fileSize = entry.file_size(ec);
+			if (ec) {
+				fileSize = 0;
+			}
+		}
+		addValueToHash(fileSize);
+
 		ec.clear();
-		const auto writeTime = fs::exists(pluginPath, ec) ? fs::last_write_time(pluginPath, ec).time_since_epoch().count() : 0;
-		if (!ec)
-			addValueToHash(writeTime);
+		int64_t writeTime = 0;
+		if (hasMetadata) {
+			const auto lastWriteTime = entry.last_write_time(ec);
+			if (!ec) {
+				writeTime = lastWriteTime.time_since_epoch().count();
+			}
+		}
+		addValueToHash(writeTime);
 	};
 
 	static constexpr uint64_t kUnifiedWaterCacheVersion = 2;
@@ -678,7 +708,8 @@ bool UnifiedWater::LoadOrderChanged()
 	const fs::path path = Util::PathHelpers::GetDataPath() / "UWLoadOrder.hash";
 
 	uint64_t existingHash = 0;
-	if (fs::exists(path)) {
+	std::error_code hashEc;
+	if (fs::exists(path, hashEc)) {
 		std::ifstream file(path, std::ios::binary);
 		if (file.is_open()) {
 			file.read(reinterpret_cast<char*>(&existingHash), sizeof(existingHash));
@@ -859,8 +890,10 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 	auto& uw = globals::features::unifiedWater;
 	uw.currentPlayerWorldSpace.store(worldSpace, std::memory_order_release);
 	uw.cachedTes.store(tes, std::memory_order_release);
-	if (!enteringChild)
+	if (!enteringChild) {
 		uw.pendingChildWsCull.store(false, std::memory_order_release);  // leaving child WS: discard any stale pending cull
+		uw.nextChildWsCullRetryMs.store(0, std::memory_order_release);
+	}
 
 	func(tes, worldSpace, isExterior);
 
@@ -868,6 +901,7 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 	if (!uw.waterCache) {
 		uw.pendingChildWsCull.store(false, std::memory_order_release);
+		uw.nextChildWsCullRetryMs.store(0, std::memory_order_release);
 		uw.UpdateWaterLODCull();
 		return;
 	}
@@ -888,6 +922,7 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 		// Keep deferred retries enabled until attached cells are observed and culled.
 		uw.pendingChildWsCull.store(true, std::memory_order_release);
+		uw.nextChildWsCullRetryMs.store(0, std::memory_order_release);
 	}
 }
 
@@ -898,6 +933,7 @@ void UnifiedWater::TES_DestroySkyCell::thunk(RE::TES* tes)
 	auto& uw = globals::features::unifiedWater;
 	uw.currentPlayerWorldSpace.store(nullptr, std::memory_order_release);
 	uw.pendingChildWsCull.store(false, std::memory_order_release);
+	uw.nextChildWsCullRetryMs.store(0, std::memory_order_release);
 	uw.cachedTes.store(nullptr, std::memory_order_release);
 	uw.exteriorWorldspaceActive.store(false, std::memory_order_release);
 	uw.ClearGeneratedWaterTiles();
@@ -973,6 +1009,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 			uw.UpdateWaterLODCull();
 			return;
 		}
+
+		built.reserve(instructions->size());
 
 		uw.UnregisterGeneratedWaterTilesInTree(water.get());
 		ClearWaterNodeChildren(water.get(), waterSystem);

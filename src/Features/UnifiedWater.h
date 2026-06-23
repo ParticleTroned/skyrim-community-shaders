@@ -8,6 +8,7 @@
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
+#include <vector>
 
 struct UnifiedWater : OverlayFeature
 {
@@ -41,6 +42,8 @@ struct UnifiedWater : OverlayFeature
 		int32_t x{};
 		int32_t y{};
 		uint32_t size{};
+		RE::FormID waterForm{};
+		std::uint8_t waterFlags{};
 	};
 
 	void RegisterGeneratedWaterTile(const RE::NiAVObject* object, const WaterTilePlacement& placement);
@@ -150,6 +153,7 @@ private:
 	std::unordered_map<const RE::NiAVObject*, WaterTilePlacement> generatedWaterTiles;
 
 	void ClearGeneratedWaterTiles();
+	void RemoveDuplicateGeneratedWaterTiles(RE::TESWaterSystem* waterSystem, RE::NiNode* lodRoot, const std::vector<WaterTilePlacement>& touchedTiles);
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 
 	void SetFlowmapTex() const;

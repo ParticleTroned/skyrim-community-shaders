@@ -103,6 +103,15 @@ namespace
 		}
 	}
 
+	FfxErrorCode SafeDispatchFrameGenerationPrepare(FfxFsr3Context* ctx, const FfxFsr3DispatchFrameGenerationPrepareDescription* desc)
+	{
+		__try {
+			return ffxFsr3ContextDispatchFrameGenerationPrepare(ctx, desc);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return FFX_ERROR_BACKEND_API_ERROR;
+		}
+	}
+
 	FfxErrorCode SafeConfigureFrameGeneration(FfxFsr3Context* ctx, const FfxFrameGenerationConfig* cfg)
 	{
 		__try {
@@ -384,6 +393,33 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	if (!dispatched && !fsrDispatchCrashLogged) {
 		logger::critical("[FidelityFX] ffxFsr3ContextDispatchUpscale (VK) failed or faulted.");
 		fsrDispatchCrashLogged = true;
+	}
+
+	// Frame generation needs fgPrepareDescriptions[frameID&1] populated with this frame's
+	// renderSize/camera so ffxFsr3DispatchFrameGeneration reads valid dispatch dimensions.
+	// ffxFsr3ContextDispatchUpscale prepares the dilated depth/MV RESOURCES but does NOT
+	// record those descriptions; only DispatchFrameGenerationPrepare does (ffx_fsr3.cpp:481).
+	// Without it the FI dispatch reads a garbage renderSize -> groupCountY ~67M -> device-lost.
+	// For the combined upscale+FG path (!interpolationOnly) it records the descriptions and
+	// skips the extra GPU prepare, so it is cheap. Same frameID/cb as the upscale.
+	if (dispatched && frameGenContextActive) {
+		FfxFsr3DispatchFrameGenerationPrepareDescription prepDesc{};
+		prepDesc.commandList = dispatchParameters.commandList;
+		prepDesc.depth = dispatchParameters.depth;
+		prepDesc.motionVectors = dispatchParameters.motionVectors;
+		prepDesc.jitterOffset = dispatchParameters.jitterOffset;
+		prepDesc.motionVectorScale = dispatchParameters.motionVectorScale;
+		prepDesc.renderSize = dispatchParameters.renderSize;
+		prepDesc.frameTimeDelta = dispatchParameters.frameTimeDelta;
+		prepDesc.cameraNear = dispatchParameters.cameraNear;
+		prepDesc.cameraFar = dispatchParameters.cameraFar;
+		prepDesc.viewSpaceToMetersFactor = dispatchParameters.viewSpaceToMetersFactor;
+		prepDesc.cameraFovAngleVertical = dispatchParameters.cameraFovAngleVertical;
+		prepDesc.frameID = frameID;
+		if (SafeDispatchFrameGenerationPrepare(&fsrContext[0], &prepDesc) != FFX_OK && !fsrDispatchCrashLogged) {
+			logger::critical("[FidelityFX] ffxFsr3ContextDispatchFrameGenerationPrepare (VK) failed.");
+			fsrDispatchCrashLogged = true;
+		}
 	}
 
 	// Submit the upscale (wait so the result is ready), THEN restore layouts. The layout

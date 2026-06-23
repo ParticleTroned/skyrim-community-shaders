@@ -1523,7 +1523,7 @@ namespace SIE
 			}
 
 			// save shader to disk
-			if (useDiskCache && !IsSaveLoadSafeModeActive()) {
+			if ((useDiskCache || cache.IsDiskCacheActive()) && !IsSaveLoadSafeModeActive()) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
 				if (!std::filesystem::is_directory(directoryPath)) {
 					try {
@@ -2436,6 +2436,8 @@ namespace SIE
 		ini.LoadFile(L"Data\\ShaderCache\\Info.ini");
 		cacheMismatches.clear();
 		diskCacheHeld = false;
+		featureSetChanged = false;
+		featureSetRevertPending = false;
 		heldMismatchDefines.clear();
 
 		std::optional<std::string> cachedPluginVersion;
@@ -2487,8 +2489,25 @@ namespace SIE
 				return mismatch.kind == CacheMismatch::Kind::EnabledFlip;
 			});
 		if (onlyEnabledFlips) {
+			const bool hasMissingOrFailedFeature = std::any_of(cacheMismatches.begin(), cacheMismatches.end(),
+				[](const CacheMismatch& mismatch) {
+					if (mismatch.nowPresent)
+						return false;
+
+					auto* state = globals::state;
+					return !state || !state->IsFeatureDisabled(mismatch.shortName);
+				});
+
+			if (hasMissingOrFailedFeature) {
+				diskCacheHeld = true;
+				logger::info("Disk cache HELD (not deleted): a previously cached feature is missing or failed to load; compiling memory-only this session");
+				return;
+			}
+
 			diskCacheHeld = true;
-			logger::info("Disk cache HELD (not deleted): feature set changed; compiling memory-only this session");
+			featureSetChanged = true;
+			featureSetRevertPending = false;
+			logger::info("Feature set changed: preserving saved disk cache until the current feature set is committed");
 			return;
 		}
 
@@ -2503,6 +2522,67 @@ namespace SIE
 		}
 	}
 
+	void ShaderCache::CommitFeatureSetChange()
+	{
+		if (!featureSetChanged)
+			return;
+
+		if (!PartialInvalidation(heldMismatchDefines))
+			DeleteDiskCache();
+
+		diskCacheHeld = false;
+
+		std::vector<hlslRecord> records;
+		{
+			std::scoped_lock lockH{ hlslMapMutex };
+			for (const auto& [_, shaderRecords] : hlslToShaderMap) {
+				records.insert(records.end(), shaderRecords.begin(), shaderRecords.end());
+			}
+		}
+
+		std::set<std::wstring> savedPaths;
+		for (const auto& record : records) {
+			if (!savedPaths.insert(record.diskPath).second)
+				continue;
+
+			auto shaderBlob = GetCompletedShader(record.key);
+			if (!shaderBlob || IsShaderLoadedFromDisk(record.key))
+				continue;
+
+			const std::filesystem::path diskPath{ record.diskPath };
+			try {
+				std::filesystem::create_directories(diskPath.parent_path());
+			} catch (std::filesystem::filesystem_error const& ex) {
+				logger::error("Failed to create folder: {}", ex.what());
+				continue;
+			}
+
+			const HRESULT saveResult = D3DWriteBlobToFile(shaderBlob, record.diskPath.c_str(), true);
+			if (FAILED(saveResult))
+				logger::error("Failed to save shader to {}", Util::WStringToString(record.diskPath));
+			else
+				logger::debug("Saved shader to {}", Util::WStringToString(record.diskPath));
+		}
+
+		heldMismatchDefines.clear();
+		WriteDiskCacheInfo();
+		featureSetChanged = false;
+		featureSetRevertPending = false;
+		cacheMismatches.clear();
+		logger::info("Feature set change committed: rebuilt disk cache for the current feature set");
+	}
+
+	void ShaderCache::CancelFeatureSetChangeForRevert()
+	{
+		if (!featureSetChanged)
+			return;
+
+		featureSetChanged = false;
+		featureSetRevertPending = true;
+		heldMismatchDefines.clear();
+		logger::info("Feature set change canceled: saved disk cache will be reused after restart");
+	}
+
 	void ShaderCache::AcceptCacheRebuild()
 	{
 		if (!diskCacheHeld)
@@ -2514,6 +2594,8 @@ namespace SIE
 		heldMismatchDefines.clear();
 		WriteDiskCacheInfo();
 		diskCacheHeld = false;
+		featureSetChanged = false;
+		featureSetRevertPending = false;
 		cacheMismatches.clear();
 		Clear();
 		logger::info("Cache rebuild accepted: rebuilding disk cache for the current feature set");

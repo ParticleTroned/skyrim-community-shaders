@@ -177,7 +177,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 					break;
 				}
 
-				if (shaderCache->IsDiskCacheActive()) {
+				if (shaderCache->HasFeatureSetChanges()) {
+					shaderCache->CommitFeatureSetChange();
+				} else if (shaderCache->IsDiskCacheActive()) {
 					shaderCache->WriteDiskCacheInfo();
 				}
 

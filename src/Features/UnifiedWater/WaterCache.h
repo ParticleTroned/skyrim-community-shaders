@@ -31,7 +31,7 @@ public:
 	};
 
 	bool SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace);
-	std::vector<Instruction>* GetInstructions(const RE::TESWorldSpace* worldSpace, uint32_t lodLevel, uint32_t x, uint32_t y);
+	std::vector<Instruction>* GetInstructions(const RE::TESWorldSpace* worldSpace, uint32_t lodLevel, int32_t x, int32_t y);
 
 	static void GenerateTamrielPrecache();
 	bool LoadOrGenerateCaches();
@@ -176,8 +176,8 @@ private:
 	static void GetLODCoords(int32_t lodLevel, int32_t x, int32_t y, int32_t& outX, int32_t& outY);
 
 	static bool TryGetCellData(RE::TESWorldSpace* worldSpace, RE::TESFileArray* files, int32_t x, int32_t y, RE::FormID& outFormID, float& outWaterHeight, float& outLandHeight, bool resolveFormID);
-	static void ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID);
-	static void ReadMinLandHeightData(RE::TESFile* file, float& minHeight);
+	static bool ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID);
+	static bool ReadMinLandHeightData(RE::TESFile* file, float& minHeight);
 
 	template <class T>
 	static bool TryWriteCacheToFile(const std::string& name, const WorldSpaceHeader& header, const std::vector<T>& vec);

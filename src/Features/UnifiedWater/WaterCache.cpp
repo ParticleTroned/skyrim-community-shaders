@@ -2,6 +2,8 @@
 
 #include <BS_thread_pool.hpp>
 #include <cmath>
+#include <limits>
+#include <type_traits>
 
 #include "Utils/WinApi.h"
 
@@ -60,7 +62,7 @@ bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 	return true;
 }
 
-std::vector<WaterCache::Instruction>* WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const uint32_t x, const uint32_t y)
+std::vector<WaterCache::Instruction>* WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const int32_t x, const int32_t y)
 {
 	if (!SetCurrentWorldSpace(worldSpace)) {
 		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", worldSpace->GetFormEditorID());
@@ -605,6 +607,11 @@ bool WaterCache::TryBuildRuntimeCache(const DiskCache& diskCache, RuntimeCache& 
 
 	cache.header = hdr;
 
+	if (hdr.dataCount != static_cast<int32_t>(diskCache.instructions.size())) {
+		logger::warn("[Unified Water] [Cache] Disk cache instruction count mismatch");
+		return false;
+	}
+
 	int32_t diskReadIndex = 0;
 	int32_t skippedInvalidInstructionCount = 0;
 
@@ -624,6 +631,20 @@ bool WaterCache::TryBuildRuntimeCache(const DiskCache& diskCache, RuntimeCache& 
 			auto instruction = diskCache.instructions[diskReadIndex];
 			if (instruction.lodLevel != static_cast<uint32_t>(lodLevel))
 				break;
+
+			if (instruction.size == 0 || instruction.size > static_cast<uint32_t>(lodLevel)) {
+				logger::warn("[Unified Water] [Cache] Skipping invalid LOD{} instruction size {} at {},{}", lodLevel, instruction.size, instruction.x, instruction.y);
+				diskReadIndex++;
+				continue;
+			}
+
+			const int64_t instructionMaxX = static_cast<int64_t>(instruction.x) + static_cast<int64_t>(instruction.size) - 1;
+			const int64_t instructionMaxY = static_cast<int64_t>(instruction.y) + static_cast<int64_t>(instruction.size) - 1;
+			if (instruction.x < minX || instruction.y < minY || instructionMaxX > maxX || instructionMaxY > maxY) {
+				logger::warn("[Unified Water] [Cache] Skipping out-of-bounds LOD{} instruction footprint at {},{} size {}", lodLevel, instruction.x, instruction.y, instruction.size);
+				diskReadIndex++;
+				continue;
+			}
 
 			if (!IsValidCellHeight(instruction.waterHeight)) {
 				// Keep old or malformed disk caches from restoring bad water tiles
@@ -662,6 +683,11 @@ bool WaterCache::TryBuildRuntimeCache(const DiskCache& diskCache, RuntimeCache& 
 
 	if (skippedInvalidInstructionCount) {
 		logger::debug("[Unified Water] [Cache] Skipped {} cached instructions with invalid water heights", skippedInvalidInstructionCount);
+	}
+
+	if (diskReadIndex != static_cast<int32_t>(diskCache.instructions.size())) {
+		logger::warn("[Unified Water] [Cache] Disk cache has unexpected LOD ordering");
+		return false;
 	}
 
 	return true;
@@ -703,33 +729,36 @@ bool WaterCache::TryGetCellData(RE::TESWorldSpace* worldSpace, RE::TESFileArray*
 	const auto size = static_cast<int32_t>(files->size());
 	const auto arrayData = files->data();
 
-	int32_t fileIndex = size - 1;
-	RE::TESFile* file = arrayData[fileIndex]->Duplicate();
 	bool foundWaterData = false;
 	bool foundLandData = false;
+	RE::TESFile* waterFile = nullptr;
 
 	// Search through the files in reverse load order to find the cell and read the water height and waterForm FormID
-	do {
+	for (int32_t fileIndex = size - 1; fileIndex >= 0; --fileIndex) {
+		RE::TESFile* file = arrayData[fileIndex]->Duplicate();
 		if (file && file->SeekCell(worldSpace, x, y)) {
-			ReadWaterData(file, outWaterHeight, outFormID);
-			foundWaterData = true;
-			break;
+			if (ReadWaterData(file, outWaterHeight, outFormID)) {
+				waterFile = file;
+				foundWaterData = true;
+				break;
+			}
 		}
-		file = --fileIndex >= 0 ? arrayData[fileIndex]->Duplicate() : nullptr;
-	} while (fileIndex >= 0);
+	}
 
-	if (resolveFormID && outFormID)
-		outFormID = file->GetRuntimeFormID(outFormID);
+	if (resolveFormID && outFormID && waterFile)
+		outFormID = waterFile->GetRuntimeFormID(outFormID);
 
-	// Continue searching from the previous file to find the original record for the cell, this always has the landscape data - extract land height
-	do {
+	// Search independently for the winning landscape record. Landscape-only overrides can load after
+	// the winning water record, so continuing from the water file would miss them.
+	for (int32_t fileIndex = size - 1; fileIndex >= 0; --fileIndex) {
+		RE::TESFile* file = arrayData[fileIndex]->Duplicate();
 		if (file && file->SeekCell(worldSpace, x, y) && file->SeekLandscapeForCurrentCell()) {
-			ReadMinLandHeightData(file, outLandHeight);
-			foundLandData = true;
-			break;
+			if (ReadMinLandHeightData(file, outLandHeight)) {
+				foundLandData = true;
+				break;
+			}
 		}
-		file = --fileIndex >= 0 ? arrayData[fileIndex]->Duplicate() : nullptr;
-	} while (fileIndex >= 0);
+	}
 
 	if (!foundWaterData || !foundLandData) {
 		outFormID = 0;
@@ -746,27 +775,29 @@ bool WaterCache::TryGetCellData(RE::TESWorldSpace* worldSpace, RE::TESFileArray*
 	return foundWaterData && foundLandData;
 }
 
-void WaterCache::ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID)
+bool WaterCache::ReadWaterData(RE::TESFile* file, float& waterHeight, RE::FormID& formID)
 {
 	if (!file->SeekNextSubrecordType(Util::FCC("XCLW")))
-		return;
+		return false;
 
 	file->ReadData(&waterHeight, 4);
 	if (file->isBigEndian)
 		waterHeight = std::bit_cast<float>(_byteswap_ulong(std::bit_cast<uint32_t>(waterHeight)));
 
 	if (!file->SeekNextSubrecordType(Util::FCC("XCWT")))
-		return;
+		return true;
 
 	file->ReadData(&formID, 4);
 	if (file->isBigEndian)
 		formID = _byteswap_ulong(formID);
+
+	return true;
 }
 
-void WaterCache::ReadMinLandHeightData(RE::TESFile* file, float& minHeight)
+bool WaterCache::ReadMinLandHeightData(RE::TESFile* file, float& minHeight)
 {
 	if (!file->SeekNextSubrecordType(Util::FCC("VHGT")))
-		return;
+		return false;
 
 	struct VHGTData
 	{
@@ -796,6 +827,8 @@ void WaterCache::ReadMinLandHeightData(RE::TESFile* file, float& minHeight)
 			minHeight = std::min(height, minHeight);
 		}
 	}
+
+	return true;
 }
 
 template <typename T>
@@ -825,7 +858,8 @@ bool WaterCache::TryReadCacheFromFile(const std::string& name, WorldSpaceHeader&
 {
 	namespace fs = std::filesystem;
 	const fs::path path = Util::PathHelpers::GetDataPath() / "UnifiedWaterCache" / name;
-	if (!fs::exists(path))
+	std::error_code ec;
+	if (!fs::exists(path, ec))
 		return false;
 
 	std::ifstream ifs(path, std::ios::binary);
@@ -837,6 +871,49 @@ bool WaterCache::TryReadCacheFromFile(const std::string& name, WorldSpaceHeader&
 	ifs.read(reinterpret_cast<char*>(&header), sizeof(header));
 	if (!ifs || header.label != Util::FCC("WTCH")) {
 		logger::error("[Unified Water] [Cache] Invalid or corrupt header for '{}'", path.string());
+		return false;
+	}
+
+	const int64_t expectedWidth = static_cast<int64_t>(header.bounds.maxX) - static_cast<int64_t>(header.bounds.minX) + 1;
+	const int64_t expectedHeight = static_cast<int64_t>(header.bounds.maxY) - static_cast<int64_t>(header.bounds.minY) + 1;
+	if (header.width <= 0 ||
+		header.height <= 0 ||
+		header.width > 512 ||
+		header.height > 512 ||
+		header.width != expectedWidth ||
+		header.height != expectedHeight ||
+		header.dataCount < 0) {
+		logger::error("[Unified Water] [Cache] Invalid bounds in '{}'", path.string());
+		return false;
+	}
+
+	const uint64_t cellCount = static_cast<uint64_t>(header.width) * static_cast<uint64_t>(header.height);
+	if constexpr (std::is_same_v<T, Heights>) {
+		if (static_cast<uint64_t>(header.dataCount) != cellCount) {
+			logger::error("[Unified Water] [Cache] Invalid precache cell count in '{}'", path.string());
+			return false;
+		}
+	} else if constexpr (std::is_same_v<T, Instruction>) {
+		if (static_cast<uint64_t>(header.dataCount) > cellCount * 4) {
+			logger::error("[Unified Water] [Cache] Invalid instruction count in '{}'", path.string());
+			return false;
+		}
+	}
+
+	if (static_cast<uint64_t>(header.dataCount) > (std::numeric_limits<uint64_t>::max() - sizeof(WorldSpaceHeader)) / sizeof(T)) {
+		logger::error("[Unified Water] [Cache] Payload too large in '{}'", path.string());
+		return false;
+	}
+
+	const uint64_t expectedSize = sizeof(WorldSpaceHeader) + static_cast<uint64_t>(header.dataCount) * sizeof(T);
+	const auto fileSize = fs::file_size(path, ec);
+	if (ec) {
+		logger::error("[Unified Water] [Cache] Failed to inspect '{}': {}", path.string(), ec.message());
+		return false;
+	}
+
+	if (fileSize != expectedSize) {
+		logger::error("[Unified Water] [Cache] Size mismatch for '{}': expected {} bytes, got {} bytes", path.string(), expectedSize, fileSize);
 		return false;
 	}
 

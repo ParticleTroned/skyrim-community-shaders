@@ -4,6 +4,9 @@
 #include "UnifiedWater/WaterCache.h"
 
 #include <atomic>
+#include <memory>
+#include <shared_mutex>
+#include <unordered_map>
 
 struct UnifiedWater : OverlayFeature
 {
@@ -31,6 +34,17 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	Settings settings;
+
+	struct WaterTilePlacement
+	{
+		int32_t x{};
+		int32_t y{};
+		uint32_t size{};
+	};
+
+	void RegisterGeneratedWaterTile(const RE::NiAVObject* object, const WaterTilePlacement& placement);
+	void UnregisterGeneratedWaterTilesInTree(const RE::NiAVObject* object);
+	bool TryGetGeneratedWaterTile(const RE::NiAVObject* object, WaterTilePlacement& placement) const;
 
 	struct TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams
 	{
@@ -76,7 +90,7 @@ struct UnifiedWater : OverlayFeature
 
 	struct BSWaterShader_SetupGeometry
 	{
-		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass);
+		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass, uint32_t renderFlags);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -113,8 +127,8 @@ struct UnifiedWater : OverlayFeature
 private:
 	RE::NiPointer<RE::BSTriShape> waterMesh;
 	RE::NiPointer<RE::BSTriShape> optimisedWaterMesh;
-	Flowmap* flowmap = nullptr;
-	WaterCache* waterCache = nullptr;
+	std::unique_ptr<Flowmap> flowmap;
+	std::unique_ptr<WaterCache> waterCache;
 
 	RE::NiNode** gWaterLOD = nullptr;
 	RE::NiPointer<RE::NiSourceTexture>* gFlowMapSourceTex = nullptr;
@@ -130,6 +144,10 @@ private:
 	std::atomic_bool exteriorWorldspaceActive{ false };
 	std::atomic_bool mapMenuOpen{ false };
 
+	mutable std::shared_mutex generatedWaterTilesLock;
+	std::unordered_map<const RE::NiAVObject*, WaterTilePlacement> generatedWaterTiles;
+
+	void ClearGeneratedWaterTiles();
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 
 	void SetFlowmapTex() const;

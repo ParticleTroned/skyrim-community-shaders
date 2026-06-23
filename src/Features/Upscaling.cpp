@@ -2630,6 +2630,11 @@ namespace
 		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
 	}
 
+	bool IsExplicitVRMenuPresentationContextActive()
+	{
+		return globals::game::isVR && IsKnownGameMenuContextActive();
+	}
+
 	bool IsGameMenuContextActive()
 	{
 		return IsKnownGameMenuContextActive();
@@ -3037,6 +3042,9 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return false;
 	}
 
+	if (!IsExplicitVRMenuPresentationContextActive())
+		return false;
+
 	const auto& plan = GetRuntimeResolutionPlan();
 	const uint32_t renderWidth = ClampPositiveDimension(plan.engineRenderSize.x);
 	const uint32_t renderHeight = ClampPositiveDimension(plan.engineRenderSize.y);
@@ -3095,17 +3103,10 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return false;
 
 	// The exact reduced menu bridge is a direct menu-text signal. Arm the short
-	// observed tail without reintroducing the old diagnostic observer.
+	// observed tail only after an explicit menu context confirms this is not
+	// normal in-game projected UI/HUD work.
 	ExtendVRObservedProjectedMenuTail(kVRObservedMenuPresentationTailFrames);
 	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
-
-	const bool menuTextProtectionContext =
-		plan.knownMenuContextActive ||
-		plan.menuContextActive ||
-		IsVRMenuPresentationContextActive() ||
-		IsVRSceneFeatureMenuPauseContextActive();
-	if (!menuTextProtectionContext)
-		return false;
 
 	const bool liveLayerDrawn = DrawVRMenuBridgeIntoFinalCompositeLayer(
 		a_context,
@@ -13007,7 +13008,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 	upscaling.PostDisplay();
 	func(a1);
 
-	if (globals::game::isVR && upscaling.IsPerfModePresentationActive()) {
+	if (globals::game::isVR && upscaling.IsPerfModePresentationActive() && IsExplicitVRMenuPresentationContextActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();
 		if (observedProjectedMenu) {
 			ExtendVRObservedProjectedMenuTail();

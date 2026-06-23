@@ -11,7 +11,7 @@ struct GrassLightingSettings
 	float Glossiness;
 	float SpecularStrength;
 	float SubsurfaceScatteringAmount;
-	bool OverrideComplexGrassSettings;
+	uint OverrideComplexGrassSettings;  // uint not bool: DXC->SPIR-V sizes cbuffer bool differently than the C++ uint upload
 
 	float BasicGrassBrightness;
 	float ComplexGrassThreshold;
@@ -20,14 +20,16 @@ struct GrassLightingSettings
 
 struct CPMSettings
 {
-	bool EnableComplexMaterial;
-	bool EnableParallax;
-	bool EnableTerrainParallax;
-	bool EnableHeightBlending;
-	bool EnableShadows;
-	bool ExtendShadows;
-	bool EnableParallaxWarpingFix;
-	bool pad0;
+	// uint not bool: HLSL cbuffer bool is 32-bit under DXBC but DXC->SPIR-V sizes it
+	// differently, shifting the struct; the C++ upload (ExtendedMaterials.h) uses uint.
+	uint EnableComplexMaterial;
+	uint EnableParallax;
+	uint EnableTerrainParallax;
+	uint EnableHeightBlending;
+	uint EnableShadows;
+	uint ExtendShadows;
+	uint EnableParallaxWarpingFix;
+	uint pad0;
 };
 
 struct CubemapCreatorSettings
@@ -40,7 +42,7 @@ struct CubemapCreatorSettings
 
 struct TerraOccSettings
 {
-	bool EnableTerrainShadow;
+	uint EnableTerrainShadow;  // uint not bool (DXC->SPIR-V cbuffer sizing); C++ TerrainShadows.h uploads uint
 	float3 Scale;
 	float2 ZRange;
 	float2 Offset;
@@ -63,7 +65,7 @@ struct WetnessEffectsSettings
 	float Wetness;
 	float PuddleWetness;
 
-	bool EnableWetnessEffects;
+	uint EnableWetnessEffects;  // uint not bool (DXC->SPIR-V cbuffer sizing); C++ WetnessEffects.h uploads uint
 	float MaxRainWetness;
 	float MaxPuddleWetness;
 	float MaxShoreWetness;
@@ -76,10 +78,10 @@ struct WetnessEffectsSettings
 	float MinRainWetness;
 	float SkinWetness;
 	float WeatherTransitionSpeed;
-	bool EnableRaindropFx;
+	uint EnableRaindropFx;
 
-	bool EnableSplashes;
-	bool EnableRipples;
+	uint EnableSplashes;
+	uint EnableRipples;
 	uint EnableVanillaRipples;
 	float RaindropFxRange;
 
@@ -124,7 +126,7 @@ struct LODBlendingSettings
 	float LODTerrainBrightness;
 	float LODObjectBrightness;
 	float LODObjectSnowBrightness;
-	bool DisableTerrainVertexColors;
+	uint DisableTerrainVertexColors;  // uint not bool (DXC->SPIR-V cbuffer sizing); C++ LODBlending.h uploads uint
 	float LODTerrainGamma;
 	float LODObjectGamma;
 	float LODObjectSnowGamma;

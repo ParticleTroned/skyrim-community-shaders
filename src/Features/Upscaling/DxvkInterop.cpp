@@ -262,12 +262,21 @@ namespace SIE
 		if (!GetInteropSurface(a_resource, surface.put()))
 			return;
 
+		// Read the actual mip/layer counts — DXVK's TransitionSurfaceLayout iterates the
+		// subresources literally, so VK_REMAINING_MIP_LEVELS / VK_REMAINING_ARRAY_LAYERS
+		// (0xFFFFFFFF) make it walk ~4 billion entries and corrupt the heap. Query the real
+		// counts from the image info (CS's interop textures are single-mip, single-layer).
+		VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+		info.queueFamilyIndexCount = 0;
+		info.pQueueFamilyIndices = nullptr;
+		surface->GetVulkanImageInfo(nullptr, nullptr, &info);
+
 		VkImageSubresourceRange range{};
 		range.aspectMask = a_aspect;
 		range.baseMipLevel = 0;
-		range.levelCount = VK_REMAINING_MIP_LEVELS;
+		range.levelCount = info.mipLevels ? info.mipLevels : 1;
 		range.baseArrayLayer = 0;
-		range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+		range.layerCount = info.arrayLayers ? info.arrayLayers : 1;
 
 		// DXVK performs the barrier on its own context and updates its layout tracker.
 		interopDevice->TransitionSurfaceLayout(surface.get(), &range, a_oldLayout, a_newLayout);

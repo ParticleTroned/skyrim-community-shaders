@@ -71,7 +71,7 @@ groupshared BoundingBoxPacked SharedBoundingBoxes[64];
 	for (uint i = 0; i < BoundingBoxCount; i++) {
 		BoundingBoxPacked boundingBox = SharedBoundingBoxes[i];
 		// Test high level collision
-		if (all(cellCentreMS >= boundingBox.MinExtent && cellCentreMS <= boundingBox.MaxExtent)) {
+		if (all(cellCentreMS >= boundingBox.MinExtent) && all(cellCentreMS <= boundingBox.MaxExtent)) {
 			// Process collision data
 			for (uint j = boundingBox.IndexStart; j < boundingBox.IndexEnd; j++) {
 				float4 collisionInstance = CollisionInstances[j];

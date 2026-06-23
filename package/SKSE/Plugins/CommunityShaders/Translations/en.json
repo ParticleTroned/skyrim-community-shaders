@@ -1372,6 +1372,8 @@
     "feature.upscaling.preset_quality": "Quality",
     "feature.upscaling.preset_ultra_performance": "Ultra Performance",
     "feature.upscaling.reflex_blocked_by_fg": "Reflex is unavailable while the DX12 frame-generation swapchain is active.",
+    "feature.upscaling.reflex_boost": "Boost",
+    "feature.upscaling.reflex_low_latency": "Low Latency",
     "feature.upscaling.reflex_not_available": "Reflex is not available. Ensure sl.reflex.dll is present and restart.",
     "feature.upscaling.sharpness": "Sharpness",
     "feature.upscaling.streamline_logging": "Streamline Logging",

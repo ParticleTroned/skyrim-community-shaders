@@ -102,6 +102,12 @@ find_package(Vulkan REQUIRED)
 # run on DXVK's single Vulkan device (no DX12, no interop). See cmake/FidelityFX-SDK.cmake.
 include(FidelityFX-SDK)
 
+# NVIDIA Streamline (SL) — headers only (INTERFACE lib). The sl.interposer + sl.* plugin
+# DLLs are loaded at runtime from the CS subfolder (never the game root) and SL is driven
+# on Vulkan via DXVK's VkDevice (manual hooking). DLSS/Reflex/DLSS-G are gated to NVIDIA
+# hardware and disabled on non-NVIDIA GPUs. See src/Features/Upscaling/Streamline.*.
+add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
+
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
@@ -154,6 +160,7 @@ target_link_libraries(
         ${DETOURS_LIBRARY}
         windowscodecs
         Vulkan::Vulkan
+        Streamline
 )
 
 # Some third-party libs (e.g. FFX backend) are built with /GL.
@@ -478,6 +485,25 @@ if(EXISTS "${DXC_SOURCE_DLL}")
     )
 else()
     message(WARNING "dxcompiler.dll not found for staging — the SPIR-V shader path will be unavailable at runtime")
+endif()
+
+# NVIDIA Streamline (DLSS/Reflex) plugin DLLs — staged into the CS subfolder (NEVER
+# the game root); loaded explicitly by src/Features/Upscaling/Streamline.cpp. These
+# are NVIDIA redistributables and are NOT bundled in the repo, so this block is a
+# no-op on a clean checkout: drop sl.interposer.dll + sl.*.dll into
+# ${STREAMLINE_DLL_DIR} (default extern/Streamline-DX12/bin/x64) to stage them.
+# On any machine without these DLLs, Streamline degrades cleanly to FSR.
+set(STREAMLINE_DLL_DIR "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/bin/x64" CACHE PATH "Directory holding the Streamline plugin DLLs to stage")
+if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
+    file(GLOB _SL_DLLS "${STREAMLINE_DLL_DIR}/sl.*.dll")
+    message(STATUS "Staging Streamline plugin DLLs from ${STREAMLINE_DLL_DIR}")
+    install(
+        FILES ${_SL_DLLS}
+        DESTINATION SKSE/Plugins/CommunityShaders/streamline
+        COMPONENT Streamline
+    )
+else()
+    message(STATUS "Streamline plugin DLLs not present (${STREAMLINE_DLL_DIR}) — DLSS/Reflex will be unavailable at runtime (FSR used instead)")
 endif()
 
 # #######################################################################################################################

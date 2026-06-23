@@ -34,13 +34,20 @@ public:
 		kNONE,
 		kTAA,
 		kFSR,
+		kDLSS,  // NVIDIA DLSS — only selectable on NVIDIA hardware (gated in GetUpscaleMethod)
 	};
 
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kFSR;
+		// The method to fall back to when DLSS is selected on non-NVIDIA hardware
+		// (so a config authored on an NVIDIA machine degrades cleanly to FSR/TAA here).
+		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
 		uint qualityMode = 1;
 		float sharpnessFSR = 0.0f;
+		// NVIDIA Reflex low-latency (NVIDIA-only; ignored on other GPUs).
+		bool reflexLowLatencyMode = false;
+		bool reflexLowLatencyBoost = false;
 		// FSR3 frame generation. Runs optical flow + interpolation on the DX11
 		// (DXVK) device — no DX12, no interop. Off by default. Only meaningful
 		// with FSR upscaling active.
@@ -98,7 +105,7 @@ public:
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[3];
+	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[4];  // one per UpscaleMethod (incl. kDLSS)
 	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;

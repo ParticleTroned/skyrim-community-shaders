@@ -4,6 +4,7 @@
 #include "DxvkLoader.h"
 #include "Deferred.h"
 #include "Upscaling/DxvkInterop.h"
+#include "Upscaling/Streamline.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
@@ -20,8 +21,11 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Upscaling::Settings,
 	upscaleMethod,
+	upscaleMethodNoDLSS,
 	qualityMode,
 	sharpnessFSR,
+	reflexLowLatencyMode,
+	reflexLowLatencyBoost,
 	frameGeneration,
 	fgShowOnlyGenerated,
 	fgDebugView,
@@ -46,7 +50,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 {
 	DXGI_ADAPTER_DESC adapterDesc;
 	pAdapter->GetDesc(&adapterDesc);
-	globals::state->SetAdapterDescription(adapterDesc.Description);
+	globals::state->SetAdapterDescription(adapterDesc.Description, adapterDesc.VendorId);
 
 	auto& upscaling = globals::features::upscaling;
 
@@ -86,11 +90,17 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
+	auto* streamline = SIE::Streamline::GetSingleton();
+	const bool dlssAvailable = globals::state->IsNVIDIA() && streamline->IsDLSSSupported();
+
 	std::vector<std::string> upscaleModes = {
 		T(TKEY("method_none"), "None"),
 		T(TKEY("method_taa"), "TAA"),
 		"AMD FSR 3.1"
 	};
+	// DLSS is only offered on NVIDIA hardware where the SL DLSS feature came up.
+	if (dlssAvailable)
+		upscaleModes.push_back("NVIDIA DLSS");
 
 	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
 
@@ -151,6 +161,16 @@ void Upscaling::DrawSettings()
 			ImGui::Checkbox(T(TKEY("fg_debug_pacing_lines"), "Debug Pacing Lines"), &settings.fgDebugPacingLines);
 			ImGui::Unindent();
 		}
+	} else if (upscaleMethod == UpscaleMethod::kDLSS) {
+		ImGui::SliderInt(T(TKEY("upscale_preset"), "Upscale Preset"), (int*)&settings.qualityMode, 0, 4);
+	}
+
+	// NVIDIA Reflex — only shown on NVIDIA hardware where SL Reflex came up.
+	if (streamline->IsReflexSupported()) {
+		ImGui::SeparatorText(T(TKEY("nvidia_reflex"), "NVIDIA Reflex"));
+		ImGui::Checkbox(T(TKEY("reflex_low_latency"), "Low Latency"), &settings.reflexLowLatencyMode);
+		if (settings.reflexLowLatencyMode)
+			ImGui::Checkbox(T(TKEY("reflex_boost"), "Boost"), &settings.reflexLowLatencyBoost);
 	}
 }
 
@@ -170,11 +190,14 @@ void Upscaling::LoadSettings(json& o_json)
 {
 	settings = o_json;
 
-	constexpr auto enumCount = 3;  // kNONE, kTAA, kFSR
+	constexpr auto enumCount = 4;  // kNONE, kTAA, kFSR, kDLSS
 	if (settings.upscaleMethod >= static_cast<uint>(enumCount)) {
 		logger::warn("[Upscaling] Loaded upscaleMethod {} out of range, clamping to {}", settings.upscaleMethod, enumCount - 1);
 		settings.upscaleMethod = enumCount - 1;
 	}
+	// The DLSS fallback must itself never be DLSS (kDLSS = enumCount-1).
+	if (settings.upscaleMethodNoDLSS >= static_cast<uint>(UpscaleMethod::kDLSS))
+		settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kFSR);
 
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
@@ -247,7 +270,17 @@ void Upscaling::PostPostLoad()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
-	return (UpscaleMethod)settings.upscaleMethod;
+	auto method = (UpscaleMethod)settings.upscaleMethod;
+	// Central AMD/non-NVIDIA gate: DLSS is only valid on an NVIDIA GPU where the SL
+	// DLSS feature actually came up. Every render-path consumer funnels through this,
+	// so coercing here guarantees no DLSS dispatch can run on incompatible hardware.
+	if (method == UpscaleMethod::kDLSS &&
+		!(globals::state->IsNVIDIA() && SIE::Streamline::GetSingleton()->IsDLSSSupported())) {
+		method = (UpscaleMethod)settings.upscaleMethodNoDLSS;
+		if (method == UpscaleMethod::kDLSS)  // guard against a bad persisted fallback
+			method = UpscaleMethod::kFSR;
+	}
+	return method;
 }
 
 bool Upscaling::IsFrameGenerationActive() const
@@ -661,12 +694,20 @@ void Upscaling::SetupResources()
 		} else {
 			logger::warn("[Upscaling] DXVK texture->VkImage probe FAILED");
 		}
+
+		// NVIDIA Streamline (DLSS/Reflex) on DXVK's Vulkan device. Initialize() is a
+		// no-op on non-NVIDIA hardware (this AMD machine) and when the SL plugin DLLs
+		// are absent; SetVulkanDevice() hands DXVK's Vk handles to SL and probes
+		// feature support. On AMD this just logs "disabled" and the upscaler stays FSR.
+		auto* streamline = SIE::Streamline::GetSingleton();
+		if (streamline->Initialize())
+			streamline->SetVulkanDevice();
 	}
 }
 
 void Upscaling::ClearShaderCache()
 {
-	for (int i = 0; i < 3; ++i) {
+	for (int i = 0; i < 4; ++i) {
 		encodeTexturesCS[i] = nullptr;
 	}
 
@@ -847,6 +888,20 @@ void Upscaling::Upscale()
 		if (GetUpscaleMethod() == UpscaleMethod::kFSR) {
 			auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 			fidelityFX.UpscaleAndGenerate(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
+		} else if (GetUpscaleMethod() == UpscaleMethod::kDLSS) {
+			// NVIDIA DLSS over DXVK's Vulkan device (best-effort, NVIDIA-only). This
+			// branch is unreachable on non-NVIDIA hardware — GetUpscaleMethod() coerces
+			// kDLSS to the FSR/TAA fallback there. EvaluateDLSS is itself gated on
+			// slIsFeatureSupported(kFeatureDLSS) and SEH-guarded.
+			auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+			auto& depthTex = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+			const auto displaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+			const auto renderSize = Util::ConvertToDynamic(displaySize);
+			SIE::Streamline::GetSingleton()->EvaluateDLSS(
+				main.texture, main.texture, depthTex.texture, motionVector.texture,
+				(uint32_t)renderSize.x, (uint32_t)renderSize.y,
+				(uint32_t)displaySize.x, (uint32_t)displaySize.y,
+				settings.qualityMode, settings.sharpnessFSR);
 		}
 
 		state->EndPerfEvent();

@@ -18,6 +18,7 @@
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/Streamline.h"
 #include "Features/VolumetricLighting.h"
 
 #include "ShaderTools/BSShaderHooks.h"
@@ -309,7 +310,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 {
 	DXGI_ADAPTER_DESC adapterDesc;
 	pAdapter->GetDesc(&adapterDesc);
-	globals::state->SetAdapterDescription(adapterDesc.Description);
+	globals::state->SetAdapterDescription(adapterDesc.Description, adapterDesc.VendorId);
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
@@ -413,6 +414,14 @@ struct BSInputDeviceManager_PollInputDevices
 {
 	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
 	{
+		// Drive NVIDIA Reflex low-latency sleep at the input-poll boundary (no-op on
+		// non-NVIDIA hardware / when Streamline is not initialized).
+		{
+			auto& upscaling = globals::features::upscaling;
+			SIE::Streamline::GetSingleton()->UpdateReflex(
+				upscaling.settings.reflexLowLatencyMode, upscaling.settings.reflexLowLatencyBoost);
+		}
+
 		bool blockedDevice = true;
 
 		auto menu = globals::menu;

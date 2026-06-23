@@ -299,6 +299,16 @@ namespace SIE
 			addLit(L"-spirv");
 			addLit(L"-fspv-target-env=vulkan1.3");
 
+			// D3D11-faithful constant-buffer packing. Without this DXC lays out cbuffer
+			// members with Vulkan/std140 offsets, but DXVK uploads cbuffers using D3D11
+			// (HLSL) packing — so any cbuffer holding matrices or scalar arrays (every
+			// scene cbuffer: view/projection matrices, bone/water arrays) is read at the
+			// wrong offsets, producing garbage transforms (white/black scene). This makes
+			// DXC emit Offset/ArrayStride/MatrixStride decorations matching D3D's packing,
+			// the same layout DXVK writes. Matrices are already explicitly row_major in
+			// source, so no -Zpr/-Zpc is needed. SM6 / wave intrinsics are unaffected.
+			addLit(L"-fvk-use-dx-layout");
+
 			addLit(L"-fvk-b-shift");
 			addLit(L"0");
 			addLit(L"0");

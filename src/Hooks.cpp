@@ -3,6 +3,7 @@
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/ExternalEmittance.h"
 
+#include "DxvkLoader.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -977,12 +978,26 @@ namespace Hooks
 
 	void InstallEarlyHooks()
 	{
+		// Load DXVK's d3d11/dxgi from the mod subfolder (not the game root) before
+		// the game creates its device. The IAT hooks below redirect the game's two
+		// entry points to these exports; the inert System32 copies are never called.
+		const bool dxvkLoaded = DxvkLoader::Load();
+		if (!dxvkLoaded) {
+			logger::error("[DXVK] DXVK DLLs unavailable in subfolder; falling back to system d3d11/dxgi (DXVK disabled)");
+		}
+
 		if (!globals::features::upscaling.loaded) {
 			logger::info("Hooking D3D11CreateDeviceAndSwapChain");
-			*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+			const auto iatOriginal = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+			*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = dxvkLoaded ?
+			                                                     reinterpret_cast<uintptr_t>(DxvkLoader::GetD3D11CreateDeviceAndSwapChain()) :
+			                                                     iatOriginal;
 		}
 
 		logger::info("Hooking CreateDXGIFactory");
-		*(uintptr_t*)&ptrCreateDXGIFactory = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", "CreateDXGIFactory");
+		const auto iatOriginalDxgi = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", "CreateDXGIFactory");
+		*(uintptr_t*)&ptrCreateDXGIFactory = dxvkLoaded ?
+		                                         reinterpret_cast<uintptr_t>(DxvkLoader::GetCreateDXGIFactory()) :
+		                                         iatOriginalDxgi;
 	}
 }

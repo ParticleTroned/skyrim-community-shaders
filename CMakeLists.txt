@@ -431,14 +431,27 @@ install(
 )
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
 
-# DXVK DLLs — placed in Root/ since they go next to SkyrimSE.exe, not in Data/
+# DXVK DLLs — staged into the mod's Data subfolder (NOT the game root) under unique
+# base names (csd3d11.dll / csgi.dll) and loaded explicitly by the plugin at startup
+# (src/DxvkLoader.cpp). tools/stage-dxvk-dlls.ps1 renames them and repoints d3d11's
+# single "dxgi.dll" import to "csgi.dll" so DXVK's two DLLs bind to each other rather
+# than to the System32 copies Skyrim maps for its two imported entry points.
 set(DXVK_BUILD_DIR "${CMAKE_SOURCE_DIR}/extern/dxvk/build/src")
 if(EXISTS "${DXVK_BUILD_DIR}/d3d11/d3d11.dll")
     install(
-        FILES
-            "${DXVK_BUILD_DIR}/d3d11/d3d11.dll"
-            "${DXVK_BUILD_DIR}/dxgi/dxgi.dll"
-        DESTINATION Root
+        CODE
+        "
+        execute_process(
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File \"${CMAKE_SOURCE_DIR}/tools/stage-dxvk-dlls.ps1\"
+                -Src \"${DXVK_BUILD_DIR}\"
+                -Dst \"\${CMAKE_INSTALL_PREFIX}/SKSE/Plugins/CommunityShaders/dxvk\"
+            RESULT_VARIABLE _dxvk_stage_rc
+        )
+        if(NOT _dxvk_stage_rc EQUAL 0)
+            message(FATAL_ERROR \"stage-dxvk-dlls.ps1 failed with code \${_dxvk_stage_rc}\")
+        endif()
+        "
         COMPONENT DXVK
     )
 endif()

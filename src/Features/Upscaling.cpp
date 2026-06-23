@@ -1,6 +1,7 @@
 #include "Upscaling.h"
 
 #include "../I18n/I18n.h"
+#include "DxvkLoader.h"
 #include "Deferred.h"
 #include "Upscaling/DxvkInterop.h"
 #include "HDRDisplay.h"
@@ -174,7 +175,13 @@ void Upscaling::DataLoaded()
 
 void Upscaling::Load()
 {
-	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainUpscaling, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+	// Route the game's device creation to DXVK's subfolder-loaded export (set up by
+	// DxvkLoader during InstallEarlyHooks), not the inert System32 d3d11 the IAT now
+	// resolves to. Fall back to the IAT original only if DXVK failed to load.
+	const auto iatOriginal = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainUpscaling, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = DxvkLoader::IsLoaded() ?
+	                                                              reinterpret_cast<uintptr_t>(DxvkLoader::GetD3D11CreateDeviceAndSwapChain()) :
+	                                                              iatOriginal;
 }
 
 struct BSImageSpace_Init_FXAA

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 
 namespace SIE
 {
@@ -1497,11 +1498,21 @@ namespace SIE
 			// save shader to disk
 			if (useDiskCache) {
 				auto directoryPath = std::format("Data/ShaderCache/{}", shader.fxpFilename);
-				if (!std::filesystem::is_directory(directoryPath)) {
-					try {
-						std::filesystem::create_directories(directoryPath);
-					} catch (std::filesystem::filesystem_error const& ex) {
-						logger::error("Failed to create folder: {}", ex.what());
+				{
+					static std::mutex directoryCreationMutex;
+					std::scoped_lock lock{ directoryCreationMutex };
+					std::error_code createError;
+					std::filesystem::create_directories(directoryPath, createError);
+
+					std::error_code statusError;
+					if (!std::filesystem::is_directory(directoryPath, statusError)) {
+						if (createError) {
+							logger::error("Failed to create shader cache folder {}: {}", directoryPath, createError.message());
+						} else if (statusError) {
+							logger::error("Failed to inspect shader cache folder {}: {}", directoryPath, statusError.message());
+						} else {
+							logger::error("Shader cache path is not a folder: {}", directoryPath);
+						}
 					}
 				}
 
@@ -2406,10 +2417,20 @@ namespace SIE
 	{
 		CSimpleIniA ini;
 		ini.SetUnicode();
-		ini.LoadFile(L"Data\\ShaderCache\\Info.ini");
+		const auto loadResult = ini.LoadFile(L"Data\\ShaderCache\\Info.ini");
 		cacheMismatches.clear();
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 		heldMismatchDefines.clear();
+
+		if (loadResult < 0) {
+			if (std::filesystem::exists(L"Data\\ShaderCache")) {
+				logger::info("Disk cache info missing; rebuilding disk cache");
+				DeleteDiskCache();
+			} else {
+				logger::info("No disk cache found; building disk cache");
+			}
+			return;
+		}
 
 		std::optional<std::string> cachedPluginVersion;
 		if (auto pluginVersion = ini.GetValue("Cache", "PluginVersion")) {

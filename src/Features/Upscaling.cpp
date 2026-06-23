@@ -225,6 +225,20 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	return (UpscaleMethod)settings.upscaleMethod;
 }
 
+bool Upscaling::IsFrameGenInterpolatedReady() const
+{
+	return loaded && settings.frameGeneration && GetUpscaleMethod() == UpscaleMethod::kFSR &&
+	       fidelityFX.frameGenContextActive && fidelityFX.interpolatedFrameReady &&
+	       fidelityFX.interpolatedTexture != nullptr;
+}
+
+ID3D11ShaderResourceView* Upscaling::GetFrameGenInterpolatedSRV() const
+{
+	return (fidelityFX.interpolatedTexture && fidelityFX.interpolatedTexture->srv) ?
+	           fidelityFX.interpolatedTexture->srv.get() :
+	           nullptr;
+}
+
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 {
 	logger::debug("[Upscaling] Creating texture resources for method {} ({})", static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));

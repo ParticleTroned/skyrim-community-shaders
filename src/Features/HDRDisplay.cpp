@@ -1023,6 +1023,44 @@ HRESULT HDRDisplay::RunPresentChainWithHDR(
 	return presentChain(swapChain, syncInterval, flags);
 }
 
+void HDRDisplay::PresentInterpolatedFrame(
+	IDXGISwapChain* swapChain,
+	UINT syncInterval,
+	UINT flags,
+	ID3D11ShaderResourceView* sceneSRV,
+	const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& presentChain)
+{
+	if (!sceneSRV || !hdrDataCB || !outputTexture || !GetHDROutputCS())
+		return;
+
+	std::lock_guard<std::mutex> lock(settingsMutex);
+
+	UpdateHDRData();
+
+	// Composite the interpolated scene with the same UI this frame draws into uiTexture,
+	// then copy to the (current) back buffer and present it ahead of the real frame.
+	auto context = globals::d3d::context;
+	ID3D11ShaderResourceView* uiSRV = (uiTexture && uiTexture->srv) ? uiTexture->srv.get() : nullptr;
+
+	ID3D11RenderTargetView* nullRTV = nullptr;
+	context->OMSetRenderTargets(1, &nullRTV, nullptr);
+	DispatchHDROutput(sceneSRV, uiSRV, outputTexture->uav.get());
+
+	ID3D11Texture2D* backBuffer = nullptr;
+	if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) && backBuffer) {
+		context->CopyResource(backBuffer, outputTexture->resource.get());
+		backBuffer->Release();
+	}
+
+	presentChain(swapChain, syncInterval, flags);
+
+	// Throttled confirmation that the extra-frame present path is live (visual quality
+	// is verified separately). Logs roughly every few seconds while frame gen is active.
+	static uint64_t interpPresentCount = 0;
+	if ((interpPresentCount++ % 300) == 0)
+		logger::info("[FidelityFX] Frame gen: presented interpolated frame (count {})", interpPresentCount);
+}
+
 HRESULT HDRDisplay::HandleSwapChainPresent(
 	IDXGISwapChain* swapChain,
 	UINT syncInterval,
@@ -1038,6 +1076,15 @@ HRESULT HDRDisplay::HandleSwapChainPresent(
 	DrawImGuiForPresent(false, hdrReady);
 	globals::menu->DrawOverlay();
 	globals::d3d::context->RSSetViewports(1, &savedViewport);
+
+	// FSR3 frame generation (PATH B): present the interpolated frame ahead of the real one.
+	// Gated by the user's frame-gen toggle; no-op otherwise. Requires the HDR composite path,
+	// which converts the FP16 scene to the swapchain format the interpolated frame also needs.
+	if (hdrReady && globals::features::upscaling.loaded &&
+		globals::features::upscaling.IsFrameGenInterpolatedReady()) {
+		if (auto* interpSRV = globals::features::upscaling.GetFrameGenInterpolatedSRV())
+			PresentInterpolatedFrame(swapChain, syncInterval, flags, interpSRV, presentChain);
+	}
 
 	return RunPresentChainWithHDR(swapChain, syncInterval, flags, hdrReady, false, presentChain);
 }

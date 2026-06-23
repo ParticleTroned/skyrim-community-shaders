@@ -407,6 +407,9 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 void FidelityFX::UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness, bool a_frameGeneration, bool a_isHDR, float a_peakNits)
 {
+	// Stale-frame guard: cleared every frame, set true only if FG dispatch produces.
+	interpolatedFrameReady = false;
+
 	if (dispatchFaulted)
 		return;
 	// __try here contains only the dispatch CALLS (no C++ unwinding objects in this scope;
@@ -414,7 +417,7 @@ void FidelityFX::UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_r
 	__try {
 		Upscale(a_color, a_reactiveMask, a_transparencyCompositionMask, a_motionVectors, a_sharpness);
 		if (a_frameGeneration)
-			DispatchFrameGeneration(a_color, a_isHDR, a_peakNits);
+			interpolatedFrameReady = DispatchFrameGeneration(a_color, a_isHDR, a_peakNits);
 	} __except (LogFfxException("FSR VK dispatch", GetExceptionInformation())) {
 		dispatchFaulted = true;
 		logger::critical("[FidelityFX] FSR VK dispatch faulted — disabling FSR VK dispatch this session to avoid repeated crashes");
@@ -457,7 +460,19 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_
 	fgConfig.flags = 0;
 	fgConfig.onlyPresentInterpolated = false;
 
-	if (SafeConfigureFrameGeneration(&fsrContext[0], &fgConfig) == FFX_OK) {
+	// ffxFsr3ConfigureFrameGeneration performs the context-side setup the dispatch needs —
+	// it stores the FG flags/HUDLessColor and sets the SDK's internal s_Context (which
+	// ffxFsr3DispatchFrameGeneration requires) — BEFORE wiring up the FFX frame-gen swapchain.
+	// PATH B is dispatch-only with no FFX swapchain, so config.swapChain is null and the final
+	// swapchain step returns FFX_ERROR_INVALID_ARGUMENT. That is expected and benign: the state
+	// the dispatch relies on has already been applied, so we proceed regardless. Any OTHER error
+	// is genuinely unexpected.
+	const FfxErrorCode cfgErr = SafeConfigureFrameGeneration(&fsrContext[0], &fgConfig);
+	if (cfgErr != FFX_OK && cfgErr != FFX_ERROR_INVALID_ARGUMENT && !fgDispatchCrashLogged) {
+		logger::critical("[FidelityFX] ffxFsr3ConfigureFrameGeneration (VK) unexpected error: 0x{:08X}", (uint32_t)cfgErr);
+		fgDispatchCrashLogged = true;
+	}
+	{
 		FfxFrameGenerationDispatchDescription fgDesc{};
 		fgDesc.commandList = ffxGetCommandListVK(cb);
 		fgDesc.presentColor = WrapAndPrepare(dxvk, a_presentColor, L"FSR3_FG_PresentColor", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);

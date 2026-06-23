@@ -56,6 +56,12 @@ public:
 	Texture2D* upscaledTexture = nullptr;
 	Texture2D* interpolatedTexture = nullptr;
 
+	// True for the current frame once DispatchFrameGeneration has produced an
+	// interpolated frame into interpolatedTexture; consumed by the present path.
+	// Reset at the start of each UpscaleAndGenerate so a skipped frame can't
+	// re-present a stale interpolated image.
+	bool interpolatedFrameReady = false;
+
 	/**
 	 * @brief Creates FSR3 resources (and, when requested, frame-generation) on DXVK's VkDevice.
 	 * @param a_frameGeneration When true, also runs optical flow + frame interpolation.

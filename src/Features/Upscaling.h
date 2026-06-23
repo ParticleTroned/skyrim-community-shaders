@@ -116,6 +116,12 @@ public:
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
 	void Upscale();
 
+	/** @brief True when FSR3 frame generation produced an interpolated frame to present this frame. */
+	bool IsFrameGenInterpolatedReady() const;
+
+	/** @brief SRV of the interpolated (display-resolution) frame, or nullptr if none. */
+	ID3D11ShaderResourceView* GetFrameGenInterpolatedSRV() const;
+
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;
 	Texture2D* transparencyCompositionMaskTexture = nullptr;

@@ -1,4 +1,5 @@
 #include "ShaderCache.h"
+#include "DxvkLoader.h"
 #include "Globals.h"
 #include "ShaderFileWatcher.h"
 #include "Util.h"
@@ -213,9 +214,20 @@ namespace SIE
 
 		static void InitOnce()
 		{
-			HMODULE mod = LoadLibraryW(L"dxcompiler.dll");
+			// Load DXC from the Community Shaders folder, never the game root: the
+			// staged DLLs sit alongside DXVK in .../CommunityShaders/dxvk, and
+			// LOAD_WITH_ALTERED_SEARCH_PATH makes DXC resolve its own dxil.dll
+			// dependency from that same directory rather than from the game root.
+			HMODULE mod = nullptr;
+			const auto dxcDir = DxvkLoader::GetDxvkDir();
+			if (!dxcDir.empty()) {
+				const auto dxcPath = (dxcDir / L"dxcompiler.dll").wstring();
+				mod = LoadLibraryExW(dxcPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+				if (!mod)
+					logger::warn("dxcompiler.dll not found in '{}' (error {})", dxcDir.string(), GetLastError());
+			}
 			if (!mod) {
-				logger::warn("dxcompiler.dll not found — SPIR-V path disabled");
+				logger::warn("dxcompiler.dll not found in Community Shaders folder — SPIR-V path disabled");
 				return;
 			}
 			auto fn = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(mod, "DxcCreateInstance"));

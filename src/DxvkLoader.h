@@ -2,6 +2,7 @@
 
 #include <d3d11.h>
 #include <dxgi.h>
+#include <filesystem>
 
 // Loads DXVK's d3d11/dxgi DLLs from the Community Shaders mod subfolder
 // (Data/SKSE/Plugins/CommunityShaders/dxvk) under unique base names
@@ -25,6 +26,14 @@ namespace DxvkLoader
 
 	/** @brief Whether Load() has succeeded. */
 	bool IsLoaded();
+
+	/** @brief Directory holding the staged native DLLs
+	 *  (Data/SKSE/Plugins/CommunityShaders/dxvk), resolved relative to this
+	 *  plugin's own module so it is independent of the process CWD or a mod
+	 *  manager's virtual file system. Also hosts the DXC compiler DLLs
+	 *  (dxcompiler.dll / dxil.dll) so nothing is loaded from the game root.
+	 *  @return the directory, or an empty path if the module could not be resolved. */
+	std::filesystem::path GetDxvkDir();
 
 	/** @brief DXVK's D3D11CreateDeviceAndSwapChain export, or nullptr if not loaded. */
 	decltype(&D3D11CreateDeviceAndSwapChain) GetD3D11CreateDeviceAndSwapChain();

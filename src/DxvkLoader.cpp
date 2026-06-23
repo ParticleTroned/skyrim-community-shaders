@@ -10,27 +10,27 @@ namespace DxvkLoader
 		bool g_loaded = false;
 		decltype(&D3D11CreateDeviceAndSwapChain) g_d3d11Create = nullptr;
 		decltype(&CreateDXGIFactory) g_createFactory = nullptr;
+	}
 
-		// Directory holding the staged DXVK DLLs, resolved relative to this
-		// plugin's own module so it works regardless of the process CWD or a mod
-		// manager's virtual file system. CommunityShaders.dll lives in
-		// .../SKSE/Plugins, so the DLLs sit in .../SKSE/Plugins/CommunityShaders/dxvk.
-		std::filesystem::path GetDxvkDir()
-		{
-			HMODULE self = nullptr;
-			if (!::GetModuleHandleExW(
-					GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-					reinterpret_cast<LPCWSTR>(&GetDxvkDir),
-					&self)) {
-				return {};
-			}
-			wchar_t buf[MAX_PATH]{};
-			const DWORD n = ::GetModuleFileNameW(self, buf, MAX_PATH);
-			if (n == 0 || n >= MAX_PATH) {
-				return {};
-			}
-			return std::filesystem::path(buf).parent_path() / L"CommunityShaders" / L"dxvk";
+	// Directory holding the staged DXVK DLLs, resolved relative to this
+	// plugin's own module so it works regardless of the process CWD or a mod
+	// manager's virtual file system. CommunityShaders.dll lives in
+	// .../SKSE/Plugins, so the DLLs sit in .../SKSE/Plugins/CommunityShaders/dxvk.
+	std::filesystem::path GetDxvkDir()
+	{
+		HMODULE self = nullptr;
+		if (!::GetModuleHandleExW(
+				GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCWSTR>(&GetDxvkDir),
+				&self)) {
+			return {};
 		}
+		wchar_t buf[MAX_PATH]{};
+		const DWORD n = ::GetModuleFileNameW(self, buf, MAX_PATH);
+		if (n == 0 || n >= MAX_PATH) {
+			return {};
+		}
+		return std::filesystem::path(buf).parent_path() / L"CommunityShaders" / L"dxvk";
 	}
 
 	bool Load()

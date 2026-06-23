@@ -283,10 +283,12 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 	if (FAILED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) || !backBuffer)
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 
-	// HUDLess buffer (scene without UI): produced by the HDR composite this frame when HDR is on.
-	// FFX uses it to suppress UI-region interpolation so the UI isn't ghosted. Null when HDR off.
+	// HUDLess buffer (scene without UI): HDR on -> produced by the composite (ApplyHDR); HDR off ->
+	// snapshotted from the back buffer before the UI draws (MenuManagerDrawInterfaceStartHook).
+	// Either way it's fresh this frame while frame gen is active. FFX uses it to suppress UI-region
+	// interpolation so the UI isn't ghosted.
 	ID3D11Resource* hudless = nullptr;
-	if (isHDR && hdr && hdr->hudlessTexture && hdr->hudlessTexture->resource)
+	if (hdr && hdr->hudlessTexture && hdr->hudlessTexture->resource)
 		hudless = hdr->hudlessTexture->resource.get();
 
 	if (!fidelityFX.GenerateInterpolatedFrame(backBuffer.get(), hudless, isHDR, peakNits, ffxDebugFlags))
@@ -1021,10 +1023,17 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
-	globals::features::upscaling.PostDisplay();
+	auto& upscaling = globals::features::upscaling;
+	upscaling.PostDisplay();
 
-	if (globals::features::hdrDisplay.loaded) {
-		globals::features::hdrDisplay.SetUIBuffer();
+	auto& hdr = globals::features::hdrDisplay;
+	if (hdr.loaded) {
+		// HDR-off frame generation: snapshot the HUD-less scene now, before the vanilla UI draws,
+		// so FFX gets a HUDLessColor and the UI isn't ghosted. With HDR on, ApplyHDR produces the
+		// hudless from the separated scene instead.
+		if (!hdr.settings.enableHDR && upscaling.IsFrameGenerationActive())
+			hdr.CaptureHudlessFromBackBuffer();
+		hdr.SetUIBuffer();
 	}
 
 	func(a1);

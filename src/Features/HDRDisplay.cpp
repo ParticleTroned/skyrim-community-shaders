@@ -838,6 +838,19 @@ void HDRDisplay::SetUIBuffer()
 	globals::d3d::context->OMSetRenderTargets(1, &fb.RTV, nullptr);
 }
 
+void HDRDisplay::CaptureHudlessFromBackBuffer()
+{
+	// Snapshot the current back buffer before the UI is drawn → the HUD-less scene, in swapchain
+	// format (matches presentColor). Used as HUDLessColor for frame gen when HDR is off (with HDR
+	// on, ApplyHDR produces the hudless from the separated scene instead).
+	if (!hudlessTexture || !hudlessTexture->resource || !globals::d3d::swapChain)
+		return;
+
+	winrt::com_ptr<ID3D11Texture2D> backBuffer;
+	if (SUCCEEDED(globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) && backBuffer)
+		globals::d3d::context->CopyResource(hudlessTexture->resource.get(), backBuffer.get());
+}
+
 bool HDRDisplay::UsesDeferredPresentComposite() const
 {
 	return loaded && settings.enableHDR &&

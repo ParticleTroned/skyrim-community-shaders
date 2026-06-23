@@ -259,7 +259,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
 		backgroundCompilation ? "Background " : "",
 		shaderCache->GetShaderStatsString(!state->IsDeveloperMode()).c_str());
-	auto percent = (float)compiledShaders / (float)totalShaders;
+	auto percent = totalShaders ? static_cast<float>(compiledShaders) / static_cast<float>(totalShaders) : 0.0f;
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
 
 	if (shaderCache->IsCompiling()) {

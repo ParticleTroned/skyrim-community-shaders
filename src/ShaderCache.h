@@ -3,6 +3,7 @@
 #include <BS_thread_pool.hpp>
 #include <efsw/efsw.hpp>
 #include <atomic>
+#include <mutex>
 #include <vector>
 
 #include "Utils/CacheInvalidation.h"
@@ -335,8 +336,8 @@ namespace SIE
 		bool IsDiskCache() const;
 		void SetDiskCache(bool value);
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
-		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
-		const std::vector<CacheMismatch>& GetPreviousCacheMismatches() const { return previousCacheMismatches; }
+		std::vector<CacheMismatch> GetCacheMismatches() const;
+		std::vector<CacheMismatch> GetPreviousCacheMismatches() const;
 		bool HasFeatureSetChanges() const { return featureSetChanged.load(std::memory_order_relaxed); }
 		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_relaxed); }
 		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp.load(std::memory_order_relaxed); }
@@ -768,6 +769,7 @@ namespace SIE
 		std::atomic_bool featureSetCacheBackedUp{ false };
 		std::atomic_bool previousDiskCacheAvailable{ false };
 		std::atomic_bool diskCacheInfoWritePending{ false };
+		mutable std::mutex cacheStateMutex;
 		std::vector<CacheMismatch> cacheMismatches;
 		std::vector<CacheMismatch> previousCacheMismatches;
 		std::vector<std::string> heldMismatchDefines;

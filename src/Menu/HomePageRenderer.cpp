@@ -295,8 +295,8 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	ImGui::Spacing();
 
 	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
-	const auto& mismatches = (cacheHeld || featureChangeHeld) ? shaderCache->GetCacheMismatches() :
-	                                                           shaderCache->GetPreviousCacheMismatches();
+	const auto mismatches = (cacheHeld || featureChangeHeld) ? shaderCache->GetCacheMismatches() :
+	                                                          shaderCache->GetPreviousCacheMismatches();
 	for (const auto& mismatch : mismatches) {
 		const char* detail = mismatch.detail.c_str();
 		if (mismatch.kind == MismatchKind::EnabledFlip) {

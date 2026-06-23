@@ -2346,6 +2346,18 @@ namespace SIE
 		return isDiskCache.load(std::memory_order_relaxed);
 	}
 
+	std::vector<ShaderCache::CacheMismatch> ShaderCache::GetCacheMismatches() const
+	{
+		std::scoped_lock lock{ cacheStateMutex };
+		return cacheMismatches;
+	}
+
+	std::vector<ShaderCache::CacheMismatch> ShaderCache::GetPreviousCacheMismatches() const
+	{
+		std::scoped_lock lock{ cacheStateMutex };
+		return previousCacheMismatches;
+	}
+
 	void ShaderCache::SetDiskCache(bool value)
 	{
 		isDiskCache.store(value, std::memory_order_relaxed);
@@ -2356,6 +2368,7 @@ namespace SIE
 			featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
 			previousDiskCacheAvailable.store(false, std::memory_order_relaxed);
 			diskCacheInfoWritePending.store(false, std::memory_order_relaxed);
+			std::scoped_lock lock{ cacheStateMutex };
 			cacheMismatches.clear();
 			previousCacheMismatches.clear();
 			heldMismatchDefines.clear();
@@ -2548,6 +2561,7 @@ namespace SIE
 		if (removedActive && removedPrevious && removedSwap)
 			logger::info("Deleted disk cache and rollback cache");
 
+		std::scoped_lock stateLock{ cacheStateMutex };
 		cacheMismatches.clear();
 		previousCacheMismatches.clear();
 		heldMismatchDefines.clear();
@@ -2596,7 +2610,10 @@ namespace SIE
 	void ShaderCache::RefreshPreviousDiskCacheInfo()
 	{
 		previousDiskCacheAvailable.store(false, std::memory_order_relaxed);
-		previousCacheMismatches.clear();
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			previousCacheMismatches.clear();
+		}
 
 		if (!HasDiskCacheInfo(PreviousDiskCachePath()))
 			return;
@@ -2621,7 +2638,10 @@ namespace SIE
 			return;
 		}
 
-		previousCacheMismatches = std::move(mismatches);
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			previousCacheMismatches = std::move(mismatches);
+		}
 		previousDiskCacheAvailable.store(true, std::memory_order_relaxed);
 	}
 
@@ -2629,14 +2649,17 @@ namespace SIE
 	{
 		CSimpleIniA ini;
 		ini.SetUnicode();
-		cacheMismatches.clear();
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 		featureSetChanged.store(false, std::memory_order_relaxed);
 		featureSetRevertPending.store(false, std::memory_order_relaxed);
 		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
 		previousDiskCacheAvailable.store(false, std::memory_order_relaxed);
-		previousCacheMismatches.clear();
-		heldMismatchDefines.clear();
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			cacheMismatches.clear();
+			previousCacheMismatches.clear();
+			heldMismatchDefines.clear();
+		}
 
 		if (!IsDiskCache()) {
 			logger::info("Disk cache disabled; skipping disk cache validation");
@@ -2654,22 +2677,27 @@ namespace SIE
 			return;
 		}
 
-		cacheMismatches = ClassifyCacheInfo(ini);
-		heldMismatchDefines = GetDefinesForMismatches(cacheMismatches, CacheMismatch::Kind::EnabledFlip);
-		const auto versionMismatchDefines = GetDefinesForMismatches(cacheMismatches, CacheMismatch::Kind::FeatureVersion);
+		auto currentMismatches = ClassifyCacheInfo(ini);
+		auto enabledFlipDefines = GetDefinesForMismatches(currentMismatches, CacheMismatch::Kind::EnabledFlip);
+		const auto versionMismatchDefines = GetDefinesForMismatches(currentMismatches, CacheMismatch::Kind::FeatureVersion);
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			cacheMismatches = currentMismatches;
+			heldMismatchDefines = enabledFlipDefines;
+		}
 
-		if (cacheMismatches.empty()) {
+		if (currentMismatches.empty()) {
 			logger::info("Using disk cache");
 			return;
 		}
 
-		for (const auto& mismatch : cacheMismatches) {
+		for (const auto& mismatch : currentMismatches) {
 			logger::info("Disk cache mismatch: {} - {}", mismatch.feature, mismatch.detail);
 		}
 
-		const bool onlyEnabledFlips = OnlyEnabledFlips(cacheMismatches);
+		const bool onlyEnabledFlips = OnlyEnabledFlips(currentMismatches);
 		if (onlyEnabledFlips) {
-			if (HasMissingOrFailedFeature(cacheMismatches)) {
+			if (HasMissingOrFailedFeature(currentMismatches)) {
 				diskCacheHeld.store(true, std::memory_order_relaxed);
 				logger::info("Disk cache HELD (not deleted): a previously cached feature is missing or failed to load; compiling memory-only this session");
 				return;
@@ -2690,7 +2718,7 @@ namespace SIE
 			return;
 		}
 
-		const bool onlyFeatureVersions = std::ranges::all_of(cacheMismatches,
+		const bool onlyFeatureVersions = std::ranges::all_of(currentMismatches,
 			[](const CacheMismatch& mismatch) { return mismatch.kind == CacheMismatch::Kind::FeatureVersion; });
 		if (onlyFeatureVersions && PartialInvalidation(versionMismatchDefines)) {
 			WriteDiskCacheInfo();
@@ -2701,10 +2729,20 @@ namespace SIE
 
 	void ShaderCache::CommitFeatureSetChange()
 	{
+		if (!IsDiskCache()) {
+			return;
+		}
+
 		if (!featureSetChanged.load(std::memory_order_relaxed))
 			return;
 
-		if (!featureSetCacheBackedUp.load(std::memory_order_relaxed) && !PartialInvalidation(heldMismatchDefines))
+		std::vector<std::string> heldDefines;
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			heldDefines = heldMismatchDefines;
+		}
+
+		if (!featureSetCacheBackedUp.load(std::memory_order_relaxed) && !PartialInvalidation(heldDefines))
 			DeleteActiveDiskCache();
 
 		diskCacheHeld.store(false, std::memory_order_relaxed);
@@ -2741,18 +2779,26 @@ namespace SIE
 				logger::debug("Saved shader to {}", Util::WStringToString(record.diskPath));
 		}
 
-		heldMismatchDefines.clear();
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			heldMismatchDefines.clear();
+			cacheMismatches.clear();
+		}
 		WriteDiskCacheInfo();
 		featureSetChanged.store(false, std::memory_order_relaxed);
 		featureSetRevertPending.store(false, std::memory_order_relaxed);
 		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
-		cacheMismatches.clear();
 		RefreshPreviousDiskCacheInfo();
 		logger::info("Feature set change committed: rebuilt disk cache for the current feature set");
 	}
 
 	bool ShaderCache::RestorePreviousDiskCache()
 	{
+		if (!IsDiskCache()) {
+			logger::warn("Cannot restore previous shader cache while disk cache is disabled");
+			return false;
+		}
+
 		RefreshPreviousDiskCacheInfo();
 		if (!HasPreviousDiskCache()) {
 			logger::warn("Cannot restore previous shader cache: no compatible previous cache is available");
@@ -2810,8 +2856,11 @@ namespace SIE
 		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 		diskCacheInfoWritePending.store(false, std::memory_order_relaxed);
-		heldMismatchDefines.clear();
-		cacheMismatches.clear();
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			heldMismatchDefines.clear();
+			cacheMismatches.clear();
+		}
 		RefreshPreviousDiskCacheInfo();
 		logger::info("Previous shader cache restored: restart to load it");
 		return true;
@@ -2819,20 +2868,33 @@ namespace SIE
 
 	void ShaderCache::AcceptCacheRebuild()
 	{
+		if (!IsDiskCache()) {
+			return;
+		}
+
 		if (!diskCacheHeld.load(std::memory_order_relaxed)) {
 			return;
 		}
 
-		if (!PartialInvalidation(heldMismatchDefines))
+		std::vector<std::string> heldDefines;
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			heldDefines = heldMismatchDefines;
+		}
+
+		if (!PartialInvalidation(heldDefines))
 			DeleteActiveDiskCache();
 
-		heldMismatchDefines.clear();
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			heldMismatchDefines.clear();
+			cacheMismatches.clear();
+		}
 		WriteDiskCacheInfo();
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 		featureSetChanged.store(false, std::memory_order_relaxed);
 		featureSetRevertPending.store(false, std::memory_order_relaxed);
 		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
-		cacheMismatches.clear();
 		RefreshPreviousDiskCacheInfo();
 		Clear();
 		logger::info("Cache rebuild accepted: rebuilding disk cache for the current feature set");

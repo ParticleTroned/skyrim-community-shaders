@@ -346,7 +346,7 @@ namespace
 			a_material->baseColor.blue * a_material->baseColorScale,
 			1.0f
 		};
-		if (auto emittance = a_shaderProperty->unk88) {
+		if (auto emittance = a_shaderProperty->emittanceColor) {
 			materialEmissiveTint.red *= emittance->red;
 			materialEmissiveTint.green *= emittance->green;
 			materialEmissiveTint.blue *= emittance->blue;
@@ -1416,7 +1416,7 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightRefe
 		color.green *= material->baseColor.green * material->baseColorScale;
 		color.blue *= material->baseColor.blue * material->baseColorScale;
 
-		if (auto emittance = shaderProperty->unk88) {
+		if (auto emittance = shaderProperty->emittanceColor) {
 			color.red *= emittance->red;
 			color.green *= emittance->green;
 			color.blue *= emittance->blue;

@@ -9,6 +9,7 @@
 
 #include "RE/L/LoadingMenu.h"
 #include "RE/M/MapMenu.h"
+#include "RE/N/NiIntegersExtraData.h"
 #include "RE/P/PlayerCharacter.h"
 
 #include <imgui_internal.h>
@@ -17,11 +18,14 @@
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
 	UseOptimisedMeshes)
+
+static const RE::BSFixedString kGeneratedWaterTileExtraDataName = "CS_UWGeneratedWaterTile";
 
 static bool IsChildWorldSpace(const RE::TESWorldSpace* ws)
 {
@@ -125,33 +129,116 @@ struct WaterPositionKey
 	std::uint8_t waterFlags = 0;
 };
 
-static bool operator==(const WaterPositionKey& lhs, const WaterPositionKey& rhs)
+struct GeneratedTileKey
+{
+	int32_t x = 0;
+	int32_t y = 0;
+	uint32_t size = 0;
+	RE::FormID waterForm = 0;
+	std::uint8_t waterFlags = 0;
+};
+
+static bool operator==(const GeneratedTileKey& lhs, const GeneratedTileKey& rhs)
 {
 	return lhs.x == rhs.x &&
 	       lhs.y == rhs.y &&
-	       lhs.z == rhs.z &&
-	       lhs.scale == rhs.scale &&
+	       lhs.size == rhs.size &&
 	       lhs.waterForm == rhs.waterForm &&
 	       lhs.waterFlags == rhs.waterFlags;
 }
 
-struct WaterPositionKeyHash
+struct GeneratedTileKeyHash
 {
-	size_t operator()(const WaterPositionKey& key) const noexcept
+	size_t operator()(const GeneratedTileKey& key) const noexcept
 	{
 		size_t hash = std::hash<int32_t>{}(key.x);
 		hash ^= std::hash<int32_t>{}(key.y) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-		hash ^= std::hash<int32_t>{}(key.z) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-		hash ^= std::hash<int32_t>{}(key.scale) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+		hash ^= std::hash<uint32_t>{}(key.size) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
 		hash ^= std::hash<RE::FormID>{}(key.waterForm) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
 		hash ^= std::hash<std::uint8_t>{}(key.waterFlags) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
 		return hash;
 	}
 };
 
+static GeneratedTileKey GetGeneratedTileKey(const UnifiedWater::WaterTilePlacement& placement)
+{
+	return {
+		placement.x,
+		placement.y,
+		placement.size,
+		placement.waterForm,
+		placement.waterFlags,
+	};
+}
+
 static int32_t QuantizeWaterPosition(float value)
 {
 	return static_cast<int32_t>(std::lround(value));
+}
+
+static RE::NiIntegersExtraData* GetGeneratedWaterTileMarker(const RE::NiAVObject* object)
+{
+	const auto extraData = object ? object->GetExtraData(kGeneratedWaterTileExtraDataName) : nullptr;
+	if (!extraData)
+		return nullptr;
+
+	static const REL::Relocation<const RE::NiRTTI*> niIntegersExtraDataRTTI{ RE::NiIntegersExtraData::Ni_RTTI };
+	if (extraData->GetRTTI() != niIntegersExtraDataRTTI.get())
+		return nullptr;
+
+	return static_cast<RE::NiIntegersExtraData*>(extraData);
+}
+
+static bool TryGetGeneratedWaterTileMarker(const RE::NiAVObject* object, UnifiedWater::WaterTilePlacement& placement)
+{
+	const auto* marker = GetGeneratedWaterTileMarker(object);
+	if (!marker || !marker->value || marker->size < 3)
+		return false;
+
+	const auto size = marker->value[2];
+	if (size <= 0)
+		return false;
+
+	placement.x = marker->value[0];
+	placement.y = marker->value[1];
+	placement.size = static_cast<uint32_t>(size);
+	placement.waterForm = 0;
+	placement.waterFlags = 0;
+	return true;
+}
+
+static void SetGeneratedWaterTileMarker(RE::NiAVObject* object, const UnifiedWater::WaterTilePlacement& placement)
+{
+	if (!object)
+		return;
+
+	if (auto* marker = GetGeneratedWaterTileMarker(object);
+	    marker && marker->value && marker->size >= 3) {
+		marker->value[0] = placement.x;
+		marker->value[1] = placement.y;
+		marker->value[2] = static_cast<std::int32_t>(placement.size);
+		return;
+	}
+
+	if (auto* staleMarker = object->GetExtraData(kGeneratedWaterTileExtraDataName)) {
+		object->RemoveExtraData(staleMarker);
+	}
+
+	if (auto* marker = RE::NiIntegersExtraData::Create(
+			kGeneratedWaterTileExtraDataName,
+			{ placement.x, placement.y, static_cast<std::int32_t>(placement.size) })) {
+		object->AddExtraData(marker);
+	}
+}
+
+static void RemoveGeneratedWaterTileMarker(RE::NiAVObject* object)
+{
+	if (!object)
+		return;
+
+	if (auto* marker = object->GetExtraData(kGeneratedWaterTileExtraDataName)) {
+		object->RemoveExtraData(marker);
+	}
 }
 
 static WaterPositionKey GetWaterPositionKey(const RE::TESWaterObject* waterObject)
@@ -183,66 +270,7 @@ static bool IsChildOfNode(const RE::NiAVObject* object, const RE::NiNode* root)
 	return object == root;
 }
 
-static RE::BSTriShape* SelectDuplicateWaterSystemShapeToRemove(RE::BSTriShape* existing, RE::BSTriShape* candidate, RE::NiNode* lodRoot)
-{
-	if (!existing)
-		return candidate;
-	if (!candidate)
-		return existing;
-
-	const bool existingIsLOD = IsChildOfNode(existing, lodRoot);
-	const bool candidateIsLOD = IsChildOfNode(candidate, lodRoot);
-	if (existingIsLOD != candidateIsLOD)
-		return existingIsLOD ? existing : candidate;
-
-	return candidate;
-}
-
-static void RemoveDuplicateWaterSystemObjects(RE::TESWaterSystem* waterSystem, RE::NiNode* lodRoot)
-{
-	if (!waterSystem)
-		return;
-
-	static thread_local std::unordered_map<WaterPositionKey, RE::BSTriShape*, WaterPositionKeyHash> shapeByPosition;
-	static thread_local std::vector<RE::BSTriShape*> duplicateShapes;
-
-	shapeByPosition.clear();
-	duplicateShapes.clear();
-
-	const auto objectCount = waterSystem->waterObjects.size();
-	if (shapeByPosition.bucket_count() < objectCount)
-		shapeByPosition.reserve(objectCount);
-	if (duplicateShapes.capacity() < objectCount)
-		duplicateShapes.reserve(objectCount);
-
-	for (const auto& waterObject : waterSystem->waterObjects) {
-		const auto shape = waterObject ? waterObject->shape.get() : nullptr;
-		if (!shape)
-			continue;
-
-		const auto key = GetWaterPositionKey(waterObject.get());
-		const auto [it, inserted] = shapeByPosition.try_emplace(key, shape);
-		if (inserted)
-			continue;
-
-		const auto existing = it->second;
-		const auto duplicate = SelectDuplicateWaterSystemShapeToRemove(existing, shape, lodRoot);
-		if (duplicate == existing)
-			it->second = shape;
-
-		duplicateShapes.push_back(duplicate);
-	}
-
-	for (const auto shape : duplicateShapes) {
-		if (!shape)
-			continue;
-
-		shape->SetAppCulled(true);
-		waterSystem->RemoveWater(shape);
-	}
-}
-
-static bool RemoveWaterObjectForShape(RE::TESWaterSystem* waterSystem, const RE::BSTriShape* shape)
+static bool RemoveWaterObjectForShape(RE::TESWaterSystem* waterSystem, const RE::BSTriShape* shape, WaterPositionKey* removedKey = nullptr)
 {
 	if (!waterSystem || !shape)
 		return false;
@@ -251,6 +279,8 @@ static bool RemoveWaterObjectForShape(RE::TESWaterSystem* waterSystem, const RE:
 	for (auto it = waterSystem->waterObjects.begin(); it != waterSystem->waterObjects.end(); ++it) {
 		const auto waterObject = it->get();
 		if (waterObject && waterObject->shape.get() == shape) {
+			if (removedKey)
+				*removedKey = GetWaterPositionKey(waterObject);
 			waterSystem->waterObjects.erase(it);
 			return true;
 		}
@@ -351,7 +381,8 @@ static CullCompletionState CullWaterParentByGridCells(RE::NiNode* waterParent, R
 
 		CullCompletionState childState;
 		UnifiedWater::WaterTilePlacement placement;
-		if (globals::features::unifiedWater.TryGetGeneratedWaterTile(child.get(), placement)) {
+		if (TryGetGeneratedWaterTileMarker(child.get(), placement) ||
+		    globals::features::unifiedWater.TryGetGeneratedWaterTile(child.get(), placement)) {
 			childState = ShouldCullTileFootprint(tes, placement.x, placement.y, placement.size);
 		} else {
 			int32_t x, y;
@@ -736,6 +767,8 @@ void UnifiedWater::RegisterGeneratedWaterTile(const RE::NiAVObject* object, cons
 	if (!object)
 		return;
 
+	SetGeneratedWaterTileMarker(const_cast<RE::NiAVObject*>(object), placement);
+
 	std::unique_lock lock(generatedWaterTilesLock);
 	generatedWaterTiles[object] = placement;
 }
@@ -750,6 +783,7 @@ void UnifiedWater::UnregisterGeneratedWaterTilesInTree(const RE::NiAVObject* obj
 		if (!current)
 			return;
 
+		RemoveGeneratedWaterTileMarker(const_cast<RE::NiAVObject*>(current));
 		generatedWaterTiles.erase(current);
 		if (const auto node = const_cast<RE::NiAVObject*>(current)->AsNode()) {
 			for (const auto& child : node->GetChildren()) {
@@ -773,6 +807,59 @@ bool UnifiedWater::TryGetGeneratedWaterTile(const RE::NiAVObject* object, WaterT
 
 	placement = it->second;
 	return true;
+}
+
+void UnifiedWater::RemoveDuplicateGeneratedWaterTiles(RE::TESWaterSystem* waterSystem, RE::NiNode* lodRoot, const std::vector<WaterTilePlacement>& touchedTiles)
+{
+	if (!waterSystem || !lodRoot || touchedTiles.empty())
+		return;
+
+	static thread_local std::unordered_set<GeneratedTileKey, GeneratedTileKeyHash> touchedTileKeys;
+	static thread_local std::vector<RE::NiPointer<RE::BSTriShape>> duplicateShapes;
+	touchedTileKeys.clear();
+	duplicateShapes.clear();
+	touchedTileKeys.reserve(touchedTiles.size());
+	duplicateShapes.reserve(touchedTiles.size());
+
+	for (const auto& touched : touchedTiles) {
+		touchedTileKeys.insert(GetGeneratedTileKey(touched));
+	}
+
+	{
+		std::shared_lock lock(generatedWaterTilesLock);
+		for (const auto& [object, placement] : generatedWaterTiles) {
+			if (!object || !touchedTileKeys.contains(GetGeneratedTileKey(placement)) || !IsChildOfNode(object, lodRoot))
+				continue;
+
+			if (const auto shape = const_cast<RE::NiAVObject*>(object)->AsTriShape()) {
+				duplicateShapes.emplace_back(shape);
+			}
+		}
+	}
+
+	if (duplicateShapes.empty())
+		return;
+
+	{
+		std::unique_lock lock(generatedWaterTilesLock);
+		for (const auto& shape : duplicateShapes) {
+			generatedWaterTiles.erase(shape.get());
+		}
+	}
+
+	for (const auto& shape : duplicateShapes) {
+		if (!shape)
+			continue;
+
+		RemoveGeneratedWaterTileMarker(shape.get());
+		shape->SetAppCulled(true);
+		RemoveWaterObjectForShape(waterSystem, shape.get());
+		if (shape->parent) {
+			shape->parent->DetachChild2(shape.get());
+		}
+	}
+
+	duplicateShapes.clear();
 }
 
 void UnifiedWater::ClearGeneratedWaterTiles()
@@ -1061,6 +1148,9 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		waterSystem->waterObjects.reserve(waterSystem->waterObjects.size() + static_cast<std::uint32_t>(built.size()));
 	}
 
+	std::vector<WaterTilePlacement> touchedTiles;
+	touchedTiles.reserve(built.size());
+
 	for (auto& [shape, instruction] : built) {
 		waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
 
@@ -1078,13 +1168,18 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 
 		// Remove the exact object added above. Generated UW tiles are rendered from the LOD root
 		// and should not remain in TESWaterSystem's active close-water object list.
-		if (!RemoveWaterObjectForShape(waterSystem, shape)) {
+		WaterPositionKey removedKey;
+		if (RemoveWaterObjectForShape(waterSystem, shape, &removedKey)) {
+			const WaterTilePlacement touchedTile{ instruction->x, instruction->y, instruction->size, removedKey.waterForm, removedKey.waterFlags };
+			uw.RegisterGeneratedWaterTile(shape, touchedTile);
+			touchedTiles.push_back(touchedTile);
+		} else {
 			logger::warn("[Unified Water] Failed to remove generated tile from TESWaterSystem at {},{}", instruction->x, instruction->y);
 		}
 	}
 
 	if (auto waterLOD = uw.gWaterLOD; waterLOD && *waterLOD) {
-		RemoveDuplicateWaterSystemObjects(waterSystem, *waterLOD);
+		uw.RemoveDuplicateGeneratedWaterTiles(waterSystem, *waterLOD, touchedTiles);
 		DetachAllChildOccurrences(*waterLOD, water.get());
 		(*waterLOD)->AttachChild(water.get(), true);
 		uw.UpdateWaterLODCull();
@@ -1179,7 +1274,7 @@ void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader,
 			const auto waterShaderProp = static_cast<RE::BSWaterShaderProperty*>(prop);
 			int32_t x, y;
 			WaterTilePlacement placement;
-			if (uw.TryGetGeneratedWaterTile(pass->geometry, placement)) {
+			if (TryGetGeneratedWaterTileMarker(pass->geometry, placement) || uw.TryGetGeneratedWaterTile(pass->geometry, placement)) {
 				x = placement.x;
 				y = placement.y;
 			} else {

@@ -420,16 +420,19 @@ namespace SIE
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void CommitFeatureSetChange();
-		void CancelFeatureSetChangeForRevert();
+		bool RestorePreviousDiskCache();
 		void WriteDiskCacheInfo();
 
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
 
 		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
+		const std::vector<CacheMismatch>& GetPreviousCacheMismatches() const { return previousCacheMismatches; }
 		bool HasFeatureSetChanges() const { return featureSetChanged; }
 		bool HasFeatureSetRevertPending() const { return featureSetRevertPending; }
+		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp; }
+		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable; }
 		bool IsDiskCacheHeld() const { return diskCacheHeld; }
-		bool IsDiskCacheActive() const { return isDiskCache && !diskCacheHeld; }
+		bool IsDiskCacheActive() const { return isDiskCache && !diskCacheHeld && !featureSetRevertPending; }
 		void AcceptCacheRebuild();
 
 		bool IsSkipUnchangedShaders() const;
@@ -820,6 +823,9 @@ namespace SIE
 		ShaderCache();
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
+		bool BackupActiveDiskCache();
+		void DeleteActiveDiskCache();
+		void RefreshPreviousDiskCacheInfo();
 
 		~ShaderCache();
 
@@ -837,7 +843,10 @@ namespace SIE
 		bool diskCacheHeld = false;
 		bool featureSetChanged = false;
 		bool featureSetRevertPending = false;
+		bool featureSetCacheBackedUp = false;
+		bool previousDiskCacheAvailable = false;
 		std::vector<CacheMismatch> cacheMismatches;
+		std::vector<CacheMismatch> previousCacheMismatches;
 		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
 		bool isAsync = true;

@@ -258,14 +258,20 @@ void HomePageRenderer::RenderWelcomeSection()
 void HomePageRenderer::RenderCacheMismatchSection()
 {
 	auto* shaderCache = globals::shaderCache;
-	if (!shaderCache || (!shaderCache->IsDiskCacheHeld() && !shaderCache->HasFeatureSetChanges()))
+	if (!shaderCache || (!shaderCache->IsDiskCacheHeld() &&
+	                        !shaderCache->HasFeatureSetChanges() &&
+	                        !shaderCache->HasFeatureSetRevertPending() &&
+	                        !shaderCache->HasPreviousDiskCache()))
 		return;
 
 	auto* menu = Menu::GetSingleton();
 	const ImVec4 warningColor = menu ? menu->GetTheme().StatusPalette.Warning : ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
 	const bool featureSetChanged = shaderCache->HasFeatureSetChanges();
 	const bool revertPending = shaderCache->HasFeatureSetRevertPending();
+	const bool featureSetCacheBackedUp = shaderCache->HasFeatureSetCacheBackup();
+	const bool previousCacheAvailable = shaderCache->HasPreviousDiskCache();
 	const bool cacheHeld = shaderCache->IsDiskCacheHeld() && !featureSetChanged && !revertPending;
+	const bool featureChangeHeld = shaderCache->IsDiskCacheHeld() && featureSetChanged && !featureSetCacheBackedUp;
 
 	ImGui::PushStyleColor(ImGuiCol_Text, warningColor);
 	const bool headerOpen = ImGui::CollapsingHeader("Shader Cache Changes", ImGuiTreeNodeFlags_DefaultOpen);
@@ -275,7 +281,7 @@ void HomePageRenderer::RenderCacheMismatchSection()
 
 	if (revertPending) {
 		const ImVec4 restartColor = menu ? menu->GetTheme().StatusPalette.RestartNeeded : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
-		ImGui::TextColored(restartColor, "%s", "Boot settings updated - restart to use the saved shader cache.");
+		ImGui::TextColored(restartColor, "%s", "Previous shader cache restored - restart to use it.");
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
@@ -285,12 +291,19 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	ImGui::TextWrapped("%s", cacheHeld ?
 		"A feature used by the saved shader cache is missing or failed to load. CS is keeping the saved disk cache "
 		"unchanged until you choose what to do." :
-		"Your feature setup changed. CS is building the disk cache for the current setup. Future launches will use it "
-		"after compilation finishes.");
+		featureChangeHeld ?
+			"Your feature setup changed, but CS could not save a rollback copy. CS is keeping the saved disk cache "
+			"unchanged until it can rebuild safely." :
+		featureSetChanged ?
+			"Your feature setup changed. CS saved the previous shader cache and is building a new cache for the "
+			"current setup. If you do nothing, future launches will use the new cache after compilation finishes." :
+			"A previous shader cache is available. Restore it if you want to go back to the earlier feature setup.");
 	ImGui::Spacing();
 
 	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
-	for (const auto& mismatch : shaderCache->GetCacheMismatches()) {
+	const auto& mismatches = (cacheHeld || featureChangeHeld) ? shaderCache->GetCacheMismatches() :
+	                                                           shaderCache->GetPreviousCacheMismatches();
+	for (const auto& mismatch : mismatches) {
 		const char* detail = mismatch.detail.c_str();
 		if (mismatch.kind == MismatchKind::EnabledFlip) {
 			if (cacheHeld) {
@@ -298,7 +311,9 @@ void HomePageRenderer::RenderCacheMismatchSection()
 				             "enabled now, but missing from the saved cache" :
 				             "in the saved cache, but missing or failed now";
 			} else {
-				detail = mismatch.nowPresent ? "enabled now" : "disabled now";
+				detail = mismatch.nowPresent ?
+				             "enabled now; previous cache had it disabled" :
+				             "disabled now; previous cache had it enabled";
 			}
 		}
 		ImGui::BulletText("%s: %s", mismatch.feature.c_str(), detail);
@@ -307,23 +322,27 @@ void HomePageRenderer::RenderCacheMismatchSection()
 
 	ImGui::TextWrapped("%s", cacheHeld ?
 		"Review the listed feature. If CS menu > Feature Issues is available, check it for details. Fix the feature install in your mod manager and restart to reuse the saved cache, or rebuild for the current setup if the feature was removed intentionally:" :
-		"To go back, restore the previous feature setup and restart:");
+		featureChangeHeld ?
+			"Restore is unavailable because CS could not save a rollback copy. Let compilation finish to rebuild the cache for the current setup." :
+		"To go back, restore the previous cache and boot toggles, then restart:");
 
-	if (!cacheHeld) {
-		const bool matchClicked = ImGui::Button("Revert Feature Toggles & Restart");
+	if (!cacheHeld && !featureChangeHeld) {
+		const bool restoreDisabled = shaderCache->IsCompiling() || !previousCacheAvailable || (featureSetChanged && !featureSetCacheBackedUp);
+		if (restoreDisabled)
+			ImGui::BeginDisabled();
+
+		const bool restoreClicked = ImGui::Button("Restore Previous Cache & Restart");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Enables or disables the changed features to match the previous feature setup.");
+			ImGui::TextUnformatted("Swaps the previous shader cache back into use and resets boot toggles to match it. Restart required.");
 		}
-		if (matchClicked) {
-			if (auto* state = globals::state) {
-				for (const auto& mismatch : shaderCache->GetCacheMismatches()) {
-					if (mismatch.kind == MismatchKind::EnabledFlip)
-						state->SetFeatureDisabled(mismatch.shortName, mismatch.nowPresent);
-				}
-				state->Save();
-				shaderCache->CancelFeatureSetChangeForRevert();
-			}
-		}
+		if (restoreClicked)
+			shaderCache->RestorePreviousDiskCache();
+
+		if (restoreDisabled)
+			ImGui::EndDisabled();
+
+		if (shaderCache->IsCompiling())
+			ImGui::TextDisabled("Available after shader compilation finishes.");
 	}
 
 	if (cacheHeld) {

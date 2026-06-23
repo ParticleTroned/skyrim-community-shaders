@@ -1,7 +1,15 @@
 ﻿#pragma once
 #include <BS_thread_pool.hpp>
 
+#include <atomic>
+#include <cfloat>
+#include <chrono>
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
 class WaterCache
 {
@@ -142,7 +150,7 @@ private:
 
 		int64_t ElapsedMs() const
 		{
-			return duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+			return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
 		}
 
 		BuildProgressSnapshot Snapshot() const
@@ -153,7 +161,7 @@ private:
 			s.failed = failed.load(std::memory_order_relaxed);
 			s.done = s.completed + s.failed;
 			s.active = active.load(std::memory_order_relaxed);
-			s.elapsedMs = duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+			s.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
 			return s;
 		}
 	};

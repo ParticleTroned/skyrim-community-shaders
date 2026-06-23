@@ -231,6 +231,22 @@ namespace
 			nonZero == 0 ? "ALL BLACK" : "has content");
 	}
 
+	// Map the swap chain's DXGI format to the FFX surface format so the frame-interpolation
+	// context's back-buffer format matches what we actually present.
+	FfxSurfaceFormat DxgiToFfxSurfaceFormat(DXGI_FORMAT fmt)
+	{
+		switch (fmt) {
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+			return FFX_SURFACE_FORMAT_R10G10B10A2_UNORM;
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+			return FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		default:
+			return FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+		}
+	}
+
 	eastl::unique_ptr<Texture2D> MakeDisplayTexture(ID3D11Resource* templateTex, uint32_t w, uint32_t h, const char* name)
 	{
 		D3D11_TEXTURE2D_DESC tdesc{};
@@ -302,11 +318,15 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 
 	const bool hdr = globals::features::hdrDisplay.loaded;
 	contextDescription.flags = FFX_FSR3_ENABLE_AUTO_EXPOSURE;
-	if (hdr) {
+	if (hdr)
 		contextDescription.flags |= FFX_FSR3_ENABLE_HIGH_DYNAMIC_RANGE;
-		contextDescription.backBufferFormat = FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
-	} else {
-		contextDescription.backBufferFormat = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+	// Frame interpolation runs on the final composited back buffer, so the context's back-buffer
+	// format must match the actual swap chain format (independent of HDR Display being enabled).
+	contextDescription.backBufferFormat = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+	{
+		DXGI_SWAP_CHAIN_DESC scDesc{};
+		if (globals::d3d::swapChain && SUCCEEDED(globals::d3d::swapChain->GetDesc(&scDesc)))
+			contextDescription.backBufferFormat = DxgiToFfxSurfaceFormat(scDesc.BufferDesc.Format);
 	}
 
 	auto makeInterface = [&](int slot, size_t maxContexts) -> bool {
@@ -381,9 +401,17 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 	// user setting. interpolatedTexture is small relative to the FFX-internal buffers.
 	auto& main = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	upscaledTexture = MakeDisplayTexture(main.texture, displayWidth, displayHeight, "FidelityFX::UpscaledColor").release();
-	interpolatedTexture = MakeDisplayTexture(main.texture, displayWidth, displayHeight, "FidelityFX::InterpolatedFrame").release();
-	// Clean (never interop-touched) copy target sampled by the present composite.
-	interpolatedDisplayTexture = MakeDisplayTexture(main.texture, displayWidth, displayHeight, "FidelityFX::InterpolatedDisplay").release();
+	// Frame-gen textures match the swap chain (back buffer) format and size so the interpolated
+	// frame and the captured real frame copy straight to/from the back buffer with no conversion.
+	winrt::com_ptr<ID3D11Texture2D> backBuffer;
+	if (globals::d3d::swapChain && SUCCEEDED(globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) && backBuffer) {
+		D3D11_TEXTURE2D_DESC bbDesc{};
+		backBuffer->GetDesc(&bbDesc);
+		interpolatedTexture = MakeDisplayTexture(backBuffer.get(), bbDesc.Width, bbDesc.Height, "FidelityFX::InterpolatedFrame").release();
+		fgPresentColor = MakeDisplayTexture(backBuffer.get(), bbDesc.Width, bbDesc.Height, "FidelityFX::FGPresentColor").release();
+	} else {
+		logger::critical("[FidelityFX] No swap chain back buffer available; frame generation disabled.");
+	}
 
 	frameGenContextActive = true;
 	frameID = 0;
@@ -417,7 +445,7 @@ void FidelityFX::DestroyFSRResources()
 	};
 	destroyTex(upscaledTexture);
 	destroyTex(interpolatedTexture);
-	destroyTex(interpolatedDisplayTexture);
+	destroyTex(fgPresentColor);
 
 	if (dxvk->IsAvailable())
 		dxvk->DestroyCommandResources();
@@ -508,10 +536,13 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		prepDesc.viewSpaceToMetersFactor = dispatchParameters.viewSpaceToMetersFactor;
 		prepDesc.cameraFovAngleVertical = dispatchParameters.cameraFovAngleVertical;
 		prepDesc.frameID = frameID;
-		if (SafeDispatchFrameGenerationPrepare(&fsrContext[0], &prepDesc) != FFX_OK && !fsrDispatchCrashLogged) {
+		const bool prepared = SafeDispatchFrameGenerationPrepare(&fsrContext[0], &prepDesc) == FFX_OK;
+		if (!prepared && !fsrDispatchCrashLogged) {
 			logger::critical("[FidelityFX] ffxFsr3ContextDispatchFrameGenerationPrepare (VK) failed.");
 			fsrDispatchCrashLogged = true;
 		}
+		// The present-time interpolation dispatch may only run when this frame was prepared.
+		fgPreparedThisFrame = prepared;
 	}
 
 	// Submit the upscale (wait so the result is ready), THEN restore layouts. The layout
@@ -533,23 +564,65 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		state->EndPerfEvent();
 }
 
-void FidelityFX::UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness, bool a_frameGeneration, bool a_isHDR, float a_peakNits)
+void FidelityFX::UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
-	// Stale-frame guard: cleared every frame, set true only if FG dispatch produces.
-	interpolatedFrameReady = false;
-
 	if (dispatchFaulted)
 		return;
-	// __try here contains only the dispatch CALLS (no C++ unwinding objects in this scope;
-	// the std::vector layout guards live inside Upscale/DispatchFrameGeneration), so SEH is legal.
+	// __try here contains only the dispatch CALL (no C++ unwinding objects in this scope; the
+	// std::vector layout guards live inside Upscale), so SEH is legal. Frame interpolation is
+	// dispatched later at present time (GenerateInterpolatedFrame); here we only upscale and
+	// record the frame-gen prepare descriptions.
 	__try {
 		Upscale(a_color, a_reactiveMask, a_transparencyCompositionMask, a_motionVectors, a_sharpness);
-		if (a_frameGeneration)
-			interpolatedFrameReady = DispatchFrameGeneration(a_color, a_isHDR, a_peakNits);
 	} __except (LogFfxException("FSR VK dispatch", GetExceptionInformation())) {
 		dispatchFaulted = true;
 		logger::critical("[FidelityFX] FSR VK dispatch faulted — disabling FSR VK dispatch this session to avoid repeated crashes");
 	}
+}
+
+bool FidelityFX::GenerateInterpolatedFrame(ID3D11Resource* a_backBuffer, bool a_isHDR, float a_peakNits)
+{
+	if (dispatchFaulted || !frameGenContextActive || !interpolatedTexture || !fgPresentColor || !a_backBuffer)
+		return false;
+
+	// Only interpolate when this exact frame was prepared by the upscale (matching frameID).
+	// Presents without a fresh upscale (menus, loading) would otherwise dispatch on stale inputs.
+	if (!fgPreparedThisFrame)
+		return false;
+	fgPreparedThisFrame = false;
+
+	bool produced = false;
+	// SEH-guard the present-time VK dispatch just like the upscale path.
+	__try {
+		// Snapshot the real, fully-composited back buffer: it is both the presentColor fed to
+		// interpolation and the source used to restore the real frame after we present the
+		// interpolated one. CopyResource handles the swap-chain image's layout.
+		globals::d3d::context->CopyResource(fgPresentColor->resource.get(), a_backBuffer);
+		produced = DispatchFrameGeneration(fgPresentColor->resource.get(), a_isHDR, a_peakNits);
+	} __except (LogFfxException("FSR VK frame-gen dispatch", GetExceptionInformation())) {
+		dispatchFaulted = true;
+		logger::critical("[FidelityFX] FSR VK frame-gen dispatch faulted — disabling frame generation this session");
+		produced = false;
+	}
+	return produced;
+}
+
+void FidelityFX::BlitInterpolatedToBackBuffer(IDXGISwapChain* a_swapChain)
+{
+	if (!a_swapChain || !interpolatedTexture)
+		return;
+	winrt::com_ptr<ID3D11Texture2D> backBuffer;
+	if (SUCCEEDED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) && backBuffer)
+		globals::d3d::context->CopyResource(backBuffer.get(), interpolatedTexture->resource.get());
+}
+
+void FidelityFX::BlitRealToBackBuffer(IDXGISwapChain* a_swapChain)
+{
+	if (!a_swapChain || !fgPresentColor)
+		return;
+	winrt::com_ptr<ID3D11Texture2D> backBuffer;
+	if (SUCCEEDED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) && backBuffer)
+		globals::d3d::context->CopyResource(backBuffer.get(), fgPresentColor->resource.get());
 }
 
 bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits)
@@ -629,12 +702,6 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_
 	RestoreLayouts(dxvk, guards);
 
 	++frameID;
-
-	// Copy the FFX output into a normally-tracked texture so the present composite can sample
-	// it in SHADER_READ_ONLY layout (the interop-touched interpolatedTexture stays in GENERAL,
-	// which samples as black). CopyResource handles the source layout correctly.
-	if (produced && interpolatedDisplayTexture)
-		globals::d3d::context->CopyResource(interpolatedDisplayTexture->resource.get(), interpolatedTexture->resource.get());
 
 	// Headless black-frame diagnostic (CS_FG_READBACK): inspect what FFX actually wrote.
 	if (produced && GetFgDebug().readback)

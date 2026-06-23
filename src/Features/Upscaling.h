@@ -116,11 +116,14 @@ public:
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
 	void Upscale();
 
-	/** @brief True when FSR3 frame generation produced an interpolated frame to present this frame. */
-	bool IsFrameGenInterpolatedReady() const;
-
-	/** @brief SRV of the interpolated (display-resolution) frame, or nullptr if none. */
-	ID3D11ShaderResourceView* GetFrameGenInterpolatedSRV() const;
+	/**
+	 * @brief Wraps the swap-chain present to insert FSR3 frame generation, independent of HDR Display.
+	 *        Called after the real frame is composited into the back buffer; when frame gen is active
+	 *        it interpolates from that back buffer and presents the generated frame ahead of the real one.
+	 * @param a_present The underlying present chain to invoke (once for real-only, twice for gen+real).
+	 */
+	HRESULT PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,
+		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_present);
 
 	// D3D11 textures
 	Texture2D* reactiveMaskTexture = nullptr;

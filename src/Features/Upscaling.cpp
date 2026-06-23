@@ -225,19 +225,36 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	return (UpscaleMethod)settings.upscaleMethod;
 }
 
-bool Upscaling::IsFrameGenInterpolatedReady() const
+HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,
+	const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_present)
 {
-	return loaded && settings.frameGeneration && GetUpscaleMethod() == UpscaleMethod::kFSR &&
-	       fidelityFX.frameGenContextActive && fidelityFX.interpolatedFrameReady &&
-	       fidelityFX.interpolatedDisplayTexture != nullptr;
-}
+	// Independent of HDR Display: this wraps the present chain AFTER the real frame has been
+	// composited into the back buffer. When frame gen is active we interpolate from that final
+	// back buffer and present the generated frame ahead of the real one.
+	const bool active = loaded && settings.frameGeneration && GetUpscaleMethod() == UpscaleMethod::kFSR &&
+	                    fidelityFX.frameGenContextActive && !fidelityFX.dispatchFaulted;
+	if (!active)
+		return a_present(a_swapChain, a_syncInterval, a_flags);
 
-ID3D11ShaderResourceView* Upscaling::GetFrameGenInterpolatedSRV() const
-{
-	// The clean copy (interpolatedDisplayTexture), not the interop-touched FFX output.
-	return (fidelityFX.interpolatedDisplayTexture && fidelityFX.interpolatedDisplayTexture->srv) ?
-	           fidelityFX.interpolatedDisplayTexture->srv.get() :
-	           nullptr;
+	// The only HDR relationship: tell the interpolation dispatch how the back buffer is encoded.
+	auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
+	const bool isHDR = hdr && hdr->settings.enableHDR;
+	const float peakNits = hdr ? std::clamp((float)hdr->settings.hdrPeakNits, 1.0f, 10000.0f) : 1000.0f;
+
+	winrt::com_ptr<ID3D11Texture2D> backBuffer;
+	if (FAILED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) || !backBuffer)
+		return a_present(a_swapChain, a_syncInterval, a_flags);
+
+	if (!fidelityFX.GenerateInterpolatedFrame(backBuffer.get(), isHDR, peakNits))
+		return a_present(a_swapChain, a_syncInterval, a_flags);  // no interpolated frame this present
+
+	// Present the generated frame, then the real frame (vsync paces the two under DXVK).
+	fidelityFX.BlitInterpolatedToBackBuffer(a_swapChain);
+	const HRESULT hr = a_present(a_swapChain, a_syncInterval, a_flags);
+	if (fidelityFX.DebugOnlyInterpolated())
+		return hr;
+	fidelityFX.BlitRealToBackBuffer(a_swapChain);
+	return a_present(a_swapChain, a_syncInterval, a_flags);
 }
 
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
@@ -776,16 +793,13 @@ void Upscaling::Upscale()
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
-		// FSR3 upscaling (+ optional frame generation) dispatch. Runs through the FFX
-		// Vulkan backend on DXVK's own VkDevice — no DX12, no interop. SEH-guarded so a
-		// fault degrades gracefully instead of crashing.
+		// FSR3 upscale + frame-gen prepare. Runs through the FFX Vulkan backend on DXVK's own
+		// VkDevice — no DX12, no interop. SEH-guarded so a fault degrades gracefully. Frame
+		// INTERPOLATION is dispatched later at present time on the final back buffer
+		// (PresentWithFrameGeneration), independent of HDR Display.
 		if (GetUpscaleMethod() == UpscaleMethod::kFSR) {
 			auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-			auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
-			bool wantFG = settings.frameGeneration && fidelityFX.frameGenContextActive;
-			bool isHDR = hdr && hdr->settings.enableHDR;
-			float peakNits = hdr ? std::clamp((float)hdr->settings.hdrPeakNits, 1.0f, 10000.0f) : 1000.0f;
-			fidelityFX.UpscaleAndGenerate(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR, wantFG, isHDR, peakNits);
+			fidelityFX.UpscaleAndGenerate(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVector.texture, settings.sharpnessFSR);
 		}
 
 		state->EndPerfEvent();

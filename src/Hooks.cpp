@@ -261,12 +261,18 @@ struct IDXGISwapChain_Present
 	{
 		globals::state->Reset();
 
+		// HDR Display composites the real frame into the back buffer, then calls the present
+		// chain. We wrap that chain with FSR3 frame generation: it interpolates from the final
+		// back buffer and presents the generated frame ahead of the real one. Frame gen and HDR
+		// are independent — when either is off, its wrapper is a passthrough.
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
 			This,
 			SyncInterval,
 			Flags,
 			[&](IDXGISwapChain* swapChain, UINT syncInterval, UINT presentFlags) {
-				return func(swapChain, syncInterval, presentFlags);
+				return globals::features::upscaling.PresentWithFrameGeneration(
+					swapChain, syncInterval, presentFlags,
+					[&](IDXGISwapChain* sc, UINT si, UINT f) { return func(sc, si, f); });
 			});
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();

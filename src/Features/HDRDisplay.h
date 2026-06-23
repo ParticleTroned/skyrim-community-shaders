@@ -147,23 +147,6 @@ public:
 		UINT flags,
 		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& presentChain);
 
-	/**
-	 * @brief Composites a given scene SRV through the HDR output pass and presents it as one
-	 *        extra frame, ahead of the real frame. Used by FSR3 frame generation to display
-	 *        the interpolated frame (PATH B: dispatch-only FG + manual double-present).
-	 * @param swapChain The DXGI swap chain.
-	 * @param syncInterval VSync interval (per-present pacing comes from this under DXVK vsync).
-	 * @param flags Present flags.
-	 * @param sceneSRV The interpolated scene color to composite and present.
-	 * @param presentChain The original Present call chain to invoke.
-	 */
-	HRESULT PresentInterpolatedFrame(
-		IDXGISwapChain* swapChain,
-		UINT syncInterval,
-		UINT flags,
-		ID3D11ShaderResourceView* sceneSRV,
-		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& presentChain);
-
 	/** @brief Returns true while the Present bottom hook is suppressed during deferred compositing. */
 	bool IsPresentSuppressed() const { return presentSuppressed; }
 	/**

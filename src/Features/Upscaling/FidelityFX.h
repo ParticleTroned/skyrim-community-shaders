@@ -52,22 +52,15 @@ public:
 	// and the frame-generation dispatch (consumes them).
 	uint64_t frameID = 0;
 
-	// CS-owned upscale output (display resolution) and interpolated frame.
+	// CS-owned upscale output and the FFX frame-interpolation output (interpolatedTexture).
+	// interpolatedTexture is in the SWAPCHAIN format so it copies straight to the back buffer.
 	Texture2D* upscaledTexture = nullptr;
 	Texture2D* interpolatedTexture = nullptr;
 
-	// A clean copy of the interpolated frame for the present composite to sample. The FFX
-	// output (interpolatedTexture) is touched via the DXVK interop path and DXVK keeps such
-	// surfaces in VK_IMAGE_LAYOUT_GENERAL, so sampling it directly reads black (the SRV
-	// descriptor expects SHADER_READ_ONLY_OPTIMAL). CopyResource into this normally-tracked
-	// texture restores correct layout handling for sampling.
-	Texture2D* interpolatedDisplayTexture = nullptr;
-
-	// True for the current frame once DispatchFrameGeneration has produced an
-	// interpolated frame into interpolatedTexture; consumed by the present path.
-	// Reset at the start of each UpscaleAndGenerate so a skipped frame can't
-	// re-present a stale interpolated image.
-	bool interpolatedFrameReady = false;
+	// A snapshot of the real, fully-composited back buffer captured at present time. It is the
+	// presentColor fed to frame interpolation and the source used to restore the real frame to
+	// the back buffer after the interpolated frame is presented. Swapchain format.
+	Texture2D* fgPresentColor = nullptr;
 
 	/**
 	 * @brief Creates FSR3 resources (and, when requested, frame-generation) on DXVK's VkDevice.
@@ -89,29 +82,43 @@ public:
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
 
 	/**
-	 * @brief Dispatches frame generation, producing one interpolated frame into interpolatedTexture.
-	 *        Must be called after Upscale() in the same frame. No-op unless frame-gen is enabled.
-	 * @param a_presentColor The final upscaled color for this frame.
-	 * @param a_isHDR Whether HDR output is active.
-	 * @param a_peakNits HDR peak luminance.
-	 * @return true if an interpolated frame was produced.
+	 * @brief SEH-guarded FSR3 upscale (+ frame-gen prepare) for the per-frame upscale call site.
+	 *        Frame interpolation itself is dispatched later, at present time, on the final back
+	 *        buffer (see GenerateInterpolatedFrame) — this is independent of HDR Display.
 	 */
-	bool DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits);
+	void UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness);
 
 	/**
-	 * @brief SEH-guarded upscale (+ optional frame generation) for the per-frame call site.
-	 *        Catches any fault in the VK dispatch/submit path, logs the fault address, and
-	 *        disables further dispatch so a single fault doesn't CTD or crash-loop.
+	 * @brief Captures the composited back buffer and dispatches frame interpolation from it.
+	 *        Called at present time; the interpolated frame lands in interpolatedTexture.
+	 * @param a_backBuffer The fully-composited real back buffer (the actual color to be presented).
+	 * @param a_isHDR Whether the back buffer is PQ-encoded HDR (vs sRGB). The only HDR input.
+	 * @param a_peakNits HDR peak luminance for the interpolation transfer function.
+	 * @return true if an interpolated frame was produced.
 	 */
-	void UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness, bool a_frameGeneration, bool a_isHDR, float a_peakNits);
+	bool GenerateInterpolatedFrame(ID3D11Resource* a_backBuffer, bool a_isHDR, float a_peakNits);
+
+	/** @brief Copy the interpolated frame into the swap chain's current back buffer. */
+	void BlitInterpolatedToBackBuffer(IDXGISwapChain* a_swapChain);
+
+	/** @brief Restore the captured real frame into the swap chain's current back buffer. */
+	void BlitRealToBackBuffer(IDXGISwapChain* a_swapChain);
 
 	// Set after a dispatch fault is caught; stops further FSR VK dispatch this session.
 	bool dispatchFaulted = false;
+
+	// True once the upscale has recorded this frame's frame-gen prepare descriptions; the
+	// present-time interpolation dispatch consumes and clears it, so a present without a
+	// matching upscale (menus, loading screens) won't interpolate from stale prepare data.
+	bool fgPreparedThisFrame = false;
 
 	/** @brief Debug (CS_FG_ONLY_INTERP): present only the interpolated frame, hiding the real one. */
 	bool DebugOnlyInterpolated() const;
 
 private:
+	/** @brief Records the frame-interpolation dispatch (presentColor -> interpolatedTexture) on DXVK's VkDevice. */
+	bool DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits);
+
 	// FSR scratch buffers. Upscaling-only uses [1]; frame generation uses all three
 	// (shared resources, upscaling, frame interpolation), per the FFX backend model.
 	void* fsrScratchBuffers[3] = { nullptr, nullptr, nullptr };

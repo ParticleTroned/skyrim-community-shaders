@@ -12,7 +12,9 @@
 #include "Util.h"
 
 #include "Features/InteriorSun.h"
+#include "Features/HDRDisplay.h"
 #include "Features/LightLimitFix.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -451,14 +453,19 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
-		auto state = globals::state;
-		auto menu = globals::menu;
-		state->Reset();
-		menu->DrawOverlay();
+		globals::state->Reset();
 
-		HRESULT retval = func(This, SyncInterval, Flags);
+		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
+			This,
+			SyncInterval,
+			Flags,
+			[&](IDXGISwapChain* swapChain, UINT syncInterval, UINT presentFlags) {
+				return func(swapChain, syncInterval, presentFlags);
+			});
 
-		TracyD3D11Collect(state->tracyCtx);
+		globals::features::screenshotFeature.ProcessCaptureRequest();
+
+		TracyD3D11Collect(globals::state->tracyCtx);
 
 		return retval;
 	}
@@ -494,6 +501,19 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
+	DXGI_SWAP_CHAIN_DESC modifiedDesc = *pSwapChainDesc;
+
+	if (globals::features::hdrDisplay.loaded) {
+		modifiedDesc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+		modifiedDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+		if (modifiedDesc.BufferCount < 2)
+			modifiedDesc.BufferCount = 2;
+
+		HDRDisplay::wasExclusiveFullscreen = !modifiedDesc.Windowed;
+
+		logger::info("[HDR] Upgraded swap chain: R10G10B10A2_UNORM + FLIP_DISCARD");
+	}
+
 	auto ret = ptrD3D11CreateDeviceAndSwapChain(pAdapter,
 		DriverType,
 		Software,
@@ -501,7 +521,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 		&featureLevel,
 		1,
 		SDKVersion,
-		pSwapChainDesc,
+		&modifiedDesc,
 		ppSwapChain,
 		ppDevice,
 		pFeatureLevel,
@@ -658,6 +678,9 @@ namespace Hooks
 			globals::ReInit();
 
 			logger::info("Detouring virtual function tables");
+			// InstallSwapChainPresentHooks installs SwapChainPresentBottom (suppression) and OMSetBlendState first.
+			// IDXGISwapChain_Present is installed last so it sits at the top of the Detours chain and fires first.
+			HDRDisplay::InstallSwapChainPresentHooks(globals::d3d::swapChain);
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);
 
 			auto shaderCache = globals::shaderCache;

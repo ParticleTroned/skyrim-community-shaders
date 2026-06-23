@@ -336,15 +336,23 @@ namespace SIE
 		void SetDiskCache(bool value);
 		using CacheMismatch = Util::CacheInvalidation::CacheMismatch;
 		const std::vector<CacheMismatch>& GetCacheMismatches() const { return cacheMismatches; }
+		const std::vector<CacheMismatch>& GetPreviousCacheMismatches() const { return previousCacheMismatches; }
 		bool HasFeatureSetChanges() const { return featureSetChanged.load(std::memory_order_relaxed); }
 		bool HasFeatureSetRevertPending() const { return featureSetRevertPending.load(std::memory_order_relaxed); }
+		bool HasFeatureSetCacheBackup() const { return featureSetCacheBackedUp.load(std::memory_order_relaxed); }
+		bool HasPreviousDiskCache() const { return previousDiskCacheAvailable.load(std::memory_order_relaxed); }
 		bool IsDiskCacheHeld() const { return diskCacheHeld.load(std::memory_order_relaxed); }
-		bool IsDiskCacheActive() const { return isDiskCache.load(std::memory_order_relaxed) && !diskCacheHeld.load(std::memory_order_relaxed); }
+		bool IsDiskCacheActive() const
+		{
+			return isDiskCache.load(std::memory_order_relaxed) &&
+			       !diskCacheHeld.load(std::memory_order_relaxed) &&
+			       !featureSetRevertPending.load(std::memory_order_relaxed);
+		}
 		void AcceptCacheRebuild();
 		void DeleteDiskCache();
 		void ValidateDiskCache();
 		void CommitFeatureSetChange();
-		void CancelFeatureSetChangeForRevert();
+		bool RestorePreviousDiskCache();
 		void WriteDiskCacheInfo();
 		void WriteDiskCacheInfoWhenReady();
 		void WritePendingDiskCacheInfoIfNeeded();
@@ -737,6 +745,9 @@ namespace SIE
 		ShaderCache();
 		void ManageCompilationSet(std::stop_token stoken);
 		void ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task);
+		bool BackupActiveDiskCache();
+		void DeleteActiveDiskCache();
+		void RefreshPreviousDiskCacheInfo();
 
 		~ShaderCache();
 
@@ -754,8 +765,11 @@ namespace SIE
 		std::atomic_bool diskCacheHeld{ false };
 		std::atomic_bool featureSetChanged{ false };
 		std::atomic_bool featureSetRevertPending{ false };
+		std::atomic_bool featureSetCacheBackedUp{ false };
+		std::atomic_bool previousDiskCacheAvailable{ false };
 		std::atomic_bool diskCacheInfoWritePending{ false };
 		std::vector<CacheMismatch> cacheMismatches;
+		std::vector<CacheMismatch> previousCacheMismatches;
 		std::vector<std::string> heldMismatchDefines;
 		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
 		bool isAsync = true;

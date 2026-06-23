@@ -5,6 +5,9 @@
 #include "Util.h"
 
 #include <d3dcompiler.h>
+#include <map>
+#include <optional>
+#include <string_view>
 
 #include "Deferred.h"
 #include "State.h"
@@ -2358,12 +2361,150 @@ namespace SIE
 		isSkipUnchangedShaders = value;
 	}
 
+	static const std::filesystem::path& DiskCachePath()
+	{
+		static const std::filesystem::path path{ L"Data/ShaderCache" };
+		return path;
+	}
+
+	static const std::filesystem::path& PreviousDiskCachePath()
+	{
+		static const std::filesystem::path path{ L"Data/ShaderCache.Previous" };
+		return path;
+	}
+
+	static const std::filesystem::path& SwapDiskCachePath()
+	{
+		static const std::filesystem::path path{ L"Data/ShaderCache.Swap" };
+		return path;
+	}
+
+	static bool PathExists(const std::filesystem::path& path)
+	{
+		std::error_code ec;
+		const bool exists = std::filesystem::exists(path, ec);
+		return exists && !ec;
+	}
+
+	static bool HasDiskCacheInfo(const std::filesystem::path& cachePath)
+	{
+		return PathExists(cachePath / L"Info.ini");
+	}
+
+	static bool RemovePath(const std::filesystem::path& path, std::string_view label)
+	{
+		std::error_code ec;
+		std::filesystem::remove_all(path, ec);
+		if (ec) {
+			logger::error("Failed to remove {} shader cache path {}: {}", label, Util::WStringToString(path.wstring()), ec.message());
+			return false;
+		}
+		return true;
+	}
+
+	static bool MoveDirectory(const std::filesystem::path& source, const std::filesystem::path& destination, std::string_view label)
+	{
+		std::error_code ec;
+		std::filesystem::rename(source, destination, ec);
+		if (!ec)
+			return true;
+
+		logger::warn("Failed to move {} shader cache from {} to {}: {}", label,
+			Util::WStringToString(source.wstring()), Util::WStringToString(destination.wstring()), ec.message());
+		return false;
+	}
+
+	static bool LoadDiskCacheInfo(const std::filesystem::path& cachePath, CSimpleIniA& ini)
+	{
+		ini.SetUnicode();
+		if (ini.LoadFile((cachePath / L"Info.ini").c_str()) < 0)
+			return false;
+		return true;
+	}
+
+	static std::vector<Util::CacheInvalidation::FeatureState> GetCurrentFeatureStates()
+	{
+		std::vector<Util::CacheInvalidation::FeatureState> featureStates;
+		for (auto* feature : Feature::GetFeatureList()) {
+			featureStates.push_back({ feature->GetShortName(), feature->GetName(), feature->loaded,
+				feature->version, std::string(feature->GetShaderDefineName()) });
+		}
+		return featureStates;
+	}
+
+	static std::map<std::string, Util::CacheInvalidation::CacheIniEntry> GetCacheEntries(
+		const CSimpleIniA& ini,
+		const std::vector<Util::CacheInvalidation::FeatureState>& featureStates)
+	{
+		std::map<std::string, Util::CacheInvalidation::CacheIniEntry> cacheEntries;
+		for (const auto& featureState : featureStates) {
+			Util::CacheInvalidation::CacheIniEntry entry;
+			entry.enabled = ini.GetBoolValue(featureState.shortName.c_str(), "Enabled", false);
+			if (auto version = ini.GetValue(featureState.shortName.c_str(), "Version"))
+				entry.version = version;
+			cacheEntries[featureState.shortName] = entry;
+		}
+		return cacheEntries;
+	}
+
+	static std::vector<Util::CacheInvalidation::CacheMismatch> ClassifyCacheInfo(const CSimpleIniA& ini)
+	{
+		std::optional<std::string> cachedPluginVersion;
+		if (auto pluginVersion = ini.GetValue("Cache", "PluginVersion"))
+			cachedPluginVersion = pluginVersion;
+
+		const auto featureStates = GetCurrentFeatureStates();
+		const auto cacheEntries = GetCacheEntries(ini, featureStates);
+		return Util::CacheInvalidation::ClassifyMismatches(
+			Plugin::VERSION.string(), cachedPluginVersion, featureStates, cacheEntries);
+	}
+
+	static std::vector<std::string> GetDefinesForMismatches(
+		const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches,
+		Util::CacheInvalidation::CacheMismatch::Kind kind)
+	{
+		const auto featureStates = GetCurrentFeatureStates();
+		std::vector<std::string> defines;
+		for (const auto& mismatch : mismatches) {
+			if (mismatch.kind != kind)
+				continue;
+
+			const auto stateIt = std::find_if(featureStates.begin(), featureStates.end(),
+				[&](const Util::CacheInvalidation::FeatureState& featureState) {
+					return featureState.shortName == mismatch.shortName;
+				});
+			if (stateIt != featureStates.end() && std::ranges::find(defines, stateIt->define) == defines.end())
+				defines.push_back(stateIt->define);
+		}
+		return defines;
+	}
+
+	static bool OnlyEnabledFlips(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
+	{
+		return std::all_of(mismatches.begin(), mismatches.end(),
+			[](const Util::CacheInvalidation::CacheMismatch& mismatch) {
+				return mismatch.kind == Util::CacheInvalidation::CacheMismatch::Kind::EnabledFlip;
+			});
+	}
+
+	static bool HasMissingOrFailedFeature(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
+	{
+		return std::any_of(mismatches.begin(), mismatches.end(),
+			[](const Util::CacheInvalidation::CacheMismatch& mismatch) {
+				if (mismatch.kind != Util::CacheInvalidation::CacheMismatch::Kind::EnabledFlip || mismatch.nowPresent)
+					return false;
+
+				auto* state = globals::state;
+				return !state || !state->IsFeatureDisabled(mismatch.shortName);
+			});
+	}
+
 	static bool PartialInvalidation(const std::vector<std::string>& defines)
 	{
 		size_t deleted = 0;
 		size_t kept = 0;
 		const bool ok = Util::CacheInvalidation::TryPartialInvalidation(
-			L"Data/ShaderCache", L"Data/Shaders", defines, &deleted, &kept);
+			DiskCachePath(), L"Data/Shaders", defines, &deleted, &kept);
 		if (ok) {
 			logger::info("Partial disk cache invalidation: deleted {} shader dirs, kept {}", deleted, kept);
 		} else {
@@ -2372,93 +2513,134 @@ namespace SIE
 		return ok;
 	}
 
-	static void AppendUniqueDefine(std::vector<std::string>& defines, const std::string& define)
+	void ShaderCache::DeleteActiveDiskCache()
 	{
-		if (std::ranges::find(defines, define) == defines.end()) {
-			defines.push_back(define);
-		}
-	}
-
-	static std::vector<std::string> CollectMismatchDefines(
-		const std::vector<ShaderCache::CacheMismatch>& mismatches,
-		const std::vector<Util::CacheInvalidation::FeatureState>& featureStates,
-		ShaderCache::CacheMismatch::Kind kind)
-	{
-		std::vector<std::string> defines;
-		for (const auto& mismatch : mismatches) {
-			if (mismatch.kind != kind) {
-				continue;
-			}
-
-			for (const auto& featureState : featureStates) {
-				if (featureState.shortName == mismatch.shortName) {
-					AppendUniqueDefine(defines, featureState.define);
-					break;
-				}
-			}
-		}
-		return defines;
+		std::scoped_lock lock{ compilationSet.compilationMutex };
+		if (RemovePath(DiskCachePath(), "active"))
+			logger::info("Deleted active disk cache");
 	}
 
 	void ShaderCache::DeleteDiskCache()
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex };
 		diskCacheHeld.store(false, std::memory_order_relaxed);
+		featureSetChanged.store(false, std::memory_order_relaxed);
+		featureSetRevertPending.store(false, std::memory_order_relaxed);
+		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
+		previousDiskCacheAvailable.store(false, std::memory_order_relaxed);
 		diskCacheInfoWritePending.store(false, std::memory_order_relaxed);
-		try {
-			std::filesystem::remove_all(L"Data/ShaderCache");
-			logger::info("Deleted disk cache");
-		} catch (std::filesystem::filesystem_error const& ex) {
-			logger::error("Failed to delete disk cache: {}", ex.what());
+
+		const bool removedActive = RemovePath(DiskCachePath(), "active");
+		const bool removedPrevious = RemovePath(PreviousDiskCachePath(), "previous");
+		const bool removedSwap = RemovePath(SwapDiskCachePath(), "temporary");
+
+		if (removedActive && removedPrevious && removedSwap)
+			logger::info("Deleted disk cache and rollback cache");
+
+		cacheMismatches.clear();
+		previousCacheMismatches.clear();
+		heldMismatchDefines.clear();
+	}
+
+	bool ShaderCache::BackupActiveDiskCache()
+	{
+		std::scoped_lock lock{ compilationSet.compilationMutex };
+		if (!HasDiskCacheInfo(DiskCachePath())) {
+			logger::warn("Cannot back up shader cache: active cache info is missing");
+			return false;
 		}
+
+		if (!RemovePath(SwapDiskCachePath(), "temporary"))
+			return false;
+
+		const bool hadPreviousCache = PathExists(PreviousDiskCachePath());
+		if (hadPreviousCache && !MoveDirectory(PreviousDiskCachePath(), SwapDiskCachePath(), "previous to temporary"))
+			return false;
+
+		if (!MoveDirectory(DiskCachePath(), PreviousDiskCachePath(), "active to previous")) {
+			if (hadPreviousCache)
+				MoveDirectory(SwapDiskCachePath(), PreviousDiskCachePath(), "temporary back to previous");
+			return false;
+		}
+
+		try {
+			std::filesystem::create_directories(DiskCachePath());
+		} catch (std::filesystem::filesystem_error const& ex) {
+			logger::error("Failed to create new shader cache folder: {}", ex.what());
+			MoveDirectory(PreviousDiskCachePath(), DiskCachePath(), "previous back to active");
+			if (hadPreviousCache)
+				MoveDirectory(SwapDiskCachePath(), PreviousDiskCachePath(), "temporary back to previous");
+			RefreshPreviousDiskCacheInfo();
+			return false;
+		}
+
+		if (hadPreviousCache)
+			RemovePath(SwapDiskCachePath(), "temporary");
+
+		RefreshPreviousDiskCacheInfo();
+		logger::info("Saved previous shader cache for feature rollback");
+		return HasPreviousDiskCache();
+	}
+
+	void ShaderCache::RefreshPreviousDiskCacheInfo()
+	{
+		previousDiskCacheAvailable.store(false, std::memory_order_relaxed);
+		previousCacheMismatches.clear();
+
+		if (!HasDiskCacheInfo(PreviousDiskCachePath()))
+			return;
+
+		CSimpleIniA ini;
+		if (!LoadDiskCacheInfo(PreviousDiskCachePath(), ini)) {
+			logger::warn("Previous shader cache exists but its cache info could not be read");
+			return;
+		}
+
+		auto mismatches = ClassifyCacheInfo(ini);
+		if (mismatches.empty())
+			return;
+
+		if (!OnlyEnabledFlips(mismatches)) {
+			logger::info("Previous shader cache is not offered for restore because versions changed");
+			return;
+		}
+
+		if (HasMissingOrFailedFeature(mismatches)) {
+			logger::info("Previous shader cache is not offered for restore because a cached feature is missing or failed to load");
+			return;
+		}
+
+		previousCacheMismatches = std::move(mismatches);
+		previousDiskCacheAvailable.store(true, std::memory_order_relaxed);
 	}
 
 	void ShaderCache::ValidateDiskCache()
 	{
 		CSimpleIniA ini;
 		ini.SetUnicode();
-		const auto loadResult = ini.LoadFile(L"Data\\ShaderCache\\Info.ini");
 		cacheMismatches.clear();
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 		featureSetChanged.store(false, std::memory_order_relaxed);
 		featureSetRevertPending.store(false, std::memory_order_relaxed);
+		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
+		previousDiskCacheAvailable.store(false, std::memory_order_relaxed);
+		previousCacheMismatches.clear();
 		heldMismatchDefines.clear();
 
-		if (loadResult < 0) {
-			if (std::filesystem::exists(L"Data\\ShaderCache")) {
+		RefreshPreviousDiskCacheInfo();
+		if (!LoadDiskCacheInfo(DiskCachePath(), ini)) {
+			if (PathExists(DiskCachePath())) {
 				logger::info("Disk cache info missing; rebuilding disk cache");
-				DeleteDiskCache();
+				DeleteActiveDiskCache();
 			} else {
 				logger::info("No disk cache found; building disk cache");
 			}
 			return;
 		}
 
-		std::optional<std::string> cachedPluginVersion;
-		if (auto pluginVersion = ini.GetValue("Cache", "PluginVersion")) {
-			cachedPluginVersion = pluginVersion;
-		}
-
-		std::vector<Util::CacheInvalidation::FeatureState> featureStates;
-		std::map<std::string, Util::CacheInvalidation::CacheIniEntry> cacheEntries;
-		for (auto* feature : Feature::GetFeatureList()) {
-			const auto shortName = feature->GetShortName();
-			featureStates.push_back({ shortName, std::string(feature->GetName()), feature->loaded,
-				feature->version, std::string(feature->GetShaderDefineName()) });
-
-			Util::CacheInvalidation::CacheIniEntry entry;
-			entry.enabled = ini.GetBoolValue(shortName.c_str(), "Enabled", false);
-			if (auto version = ini.GetValue(shortName.c_str(), "Version")) {
-				entry.version = version;
-			}
-			cacheEntries[shortName] = entry;
-		}
-
-		cacheMismatches = Util::CacheInvalidation::ClassifyMismatches(
-			Plugin::VERSION.string(), cachedPluginVersion, featureStates, cacheEntries);
-
-		heldMismatchDefines = CollectMismatchDefines(cacheMismatches, featureStates, CacheMismatch::Kind::EnabledFlip);
-		auto versionMismatchDefines = CollectMismatchDefines(cacheMismatches, featureStates, CacheMismatch::Kind::FeatureVersion);
+		cacheMismatches = ClassifyCacheInfo(ini);
+		heldMismatchDefines = GetDefinesForMismatches(cacheMismatches, CacheMismatch::Kind::EnabledFlip);
+		const auto versionMismatchDefines = GetDefinesForMismatches(cacheMismatches, CacheMismatch::Kind::FeatureVersion);
 
 		if (cacheMismatches.empty()) {
 			logger::info("Using disk cache");
@@ -2469,28 +2651,26 @@ namespace SIE
 			logger::info("Disk cache mismatch: {} - {}", mismatch.feature, mismatch.detail);
 		}
 
-		const bool onlyEnabledFlips = std::ranges::all_of(cacheMismatches,
-			[](const CacheMismatch& mismatch) { return mismatch.kind == CacheMismatch::Kind::EnabledFlip; });
+		const bool onlyEnabledFlips = OnlyEnabledFlips(cacheMismatches);
 		if (onlyEnabledFlips) {
-			const bool hasMissingOrFailedFeature = std::any_of(cacheMismatches.begin(), cacheMismatches.end(),
-				[](const CacheMismatch& mismatch) {
-					if (mismatch.nowPresent)
-						return false;
-
-					auto* state = globals::state;
-					return !state || !state->IsFeatureDisabled(mismatch.shortName);
-				});
-
-			if (hasMissingOrFailedFeature) {
+			if (HasMissingOrFailedFeature(cacheMismatches)) {
 				diskCacheHeld.store(true, std::memory_order_relaxed);
 				logger::info("Disk cache HELD (not deleted): a previously cached feature is missing or failed to load; compiling memory-only this session");
 				return;
 			}
 
-			diskCacheHeld.store(true, std::memory_order_relaxed);
 			featureSetChanged.store(true, std::memory_order_relaxed);
 			featureSetRevertPending.store(false, std::memory_order_relaxed);
-			logger::info("Feature set changed: preserving saved disk cache until the current feature set is committed");
+			if (BackupActiveDiskCache()) {
+				diskCacheHeld.store(false, std::memory_order_relaxed);
+				featureSetCacheBackedUp.store(true, std::memory_order_relaxed);
+				WriteDiskCacheInfo();
+				logger::info("Feature set changed: compiling a new active disk cache; previous cache is available for restore");
+			} else {
+				diskCacheHeld.store(true, std::memory_order_relaxed);
+				featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
+				logger::warn("Feature set changed but previous cache backup failed; preserving the active cache and compiling memory-only");
+			}
 			return;
 		}
 
@@ -2499,7 +2679,7 @@ namespace SIE
 		if (onlyFeatureVersions && PartialInvalidation(versionMismatchDefines)) {
 			WriteDiskCacheInfo();
 		} else {
-			DeleteDiskCache();
+			DeleteActiveDiskCache();
 		}
 	}
 
@@ -2508,8 +2688,8 @@ namespace SIE
 		if (!featureSetChanged.load(std::memory_order_relaxed))
 			return;
 
-		if (!PartialInvalidation(heldMismatchDefines))
-			DeleteDiskCache();
+		if (!featureSetCacheBackedUp.load(std::memory_order_relaxed) && !PartialInvalidation(heldMismatchDefines))
+			DeleteActiveDiskCache();
 
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 
@@ -2549,19 +2729,76 @@ namespace SIE
 		WriteDiskCacheInfo();
 		featureSetChanged.store(false, std::memory_order_relaxed);
 		featureSetRevertPending.store(false, std::memory_order_relaxed);
+		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
 		cacheMismatches.clear();
+		RefreshPreviousDiskCacheInfo();
 		logger::info("Feature set change committed: rebuilt disk cache for the current feature set");
 	}
 
-	void ShaderCache::CancelFeatureSetChangeForRevert()
+	bool ShaderCache::RestorePreviousDiskCache()
 	{
-		if (!featureSetChanged.load(std::memory_order_relaxed))
-			return;
+		RefreshPreviousDiskCacheInfo();
+		if (!HasPreviousDiskCache()) {
+			logger::warn("Cannot restore previous shader cache: no compatible previous cache is available");
+			return false;
+		}
+		if (IsCompiling()) {
+			logger::warn("Cannot restore previous shader cache while shader compilation is still running");
+			return false;
+		}
+		if (!globals::state) {
+			logger::warn("Cannot restore previous shader cache: state is not available");
+			return false;
+		}
+
+		CSimpleIniA previousInfo;
+		if (!LoadDiskCacheInfo(PreviousDiskCachePath(), previousInfo)) {
+			logger::warn("Cannot restore previous shader cache: previous cache info could not be read");
+			return false;
+		}
+
+		{
+			std::scoped_lock lock{ compilationSet.compilationMutex };
+			if (!RemovePath(SwapDiskCachePath(), "temporary"))
+				return false;
+
+			const bool activeExists = PathExists(DiskCachePath());
+			if (activeExists && !MoveDirectory(DiskCachePath(), SwapDiskCachePath(), "active to temporary"))
+				return false;
+
+			if (!MoveDirectory(PreviousDiskCachePath(), DiskCachePath(), "previous to active")) {
+				if (activeExists)
+					MoveDirectory(SwapDiskCachePath(), DiskCachePath(), "temporary back to active");
+				return false;
+			}
+
+			if (activeExists) {
+				if (!RemovePath(PreviousDiskCachePath(), "previous")) {
+					logger::warn("Previous shader cache was restored, but the current cache could not replace the rollback slot");
+				} else if (!MoveDirectory(SwapDiskCachePath(), PreviousDiskCachePath(), "temporary to previous")) {
+					logger::warn("Previous shader cache was restored, but the current cache could not be saved as the new rollback slot");
+					RemovePath(SwapDiskCachePath(), "temporary");
+				}
+			}
+		}
+
+		for (auto* feature : Feature::GetFeatureList()) {
+			const auto shortName = feature->GetShortName();
+			const bool enabledInPreviousCache = previousInfo.GetBoolValue(shortName.c_str(), "Enabled", false);
+			globals::state->SetFeatureDisabled(shortName, !enabledInPreviousCache);
+		}
+		globals::state->Save();
 
 		featureSetChanged.store(false, std::memory_order_relaxed);
 		featureSetRevertPending.store(true, std::memory_order_relaxed);
+		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
+		diskCacheHeld.store(false, std::memory_order_relaxed);
+		diskCacheInfoWritePending.store(false, std::memory_order_relaxed);
 		heldMismatchDefines.clear();
-		logger::info("Feature set change canceled: saved disk cache will be reused after restart");
+		cacheMismatches.clear();
+		RefreshPreviousDiskCacheInfo();
+		logger::info("Previous shader cache restored: restart to load it");
+		return true;
 	}
 
 	void ShaderCache::AcceptCacheRebuild()
@@ -2570,32 +2807,35 @@ namespace SIE
 			return;
 		}
 
-		if (!PartialInvalidation(heldMismatchDefines)) {
-			DeleteDiskCache();
-		}
+		if (!PartialInvalidation(heldMismatchDefines))
+			DeleteActiveDiskCache();
+
 		heldMismatchDefines.clear();
 		WriteDiskCacheInfo();
 		diskCacheHeld.store(false, std::memory_order_relaxed);
 		featureSetChanged.store(false, std::memory_order_relaxed);
 		featureSetRevertPending.store(false, std::memory_order_relaxed);
+		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
 		cacheMismatches.clear();
+		RefreshPreviousDiskCacheInfo();
 		Clear();
 		logger::info("Cache rebuild accepted: rebuilding disk cache for the current feature set");
 	}
 
 	void ShaderCache::WriteDiskCacheInfo()
 	{
+		try {
+			std::filesystem::create_directories(DiskCachePath());
+		} catch (std::filesystem::filesystem_error const& ex) {
+			logger::error("Failed to create shader cache folder: {}", ex.what());
+			return;
+		}
+
 		CSimpleIniA ini;
 		ini.SetUnicode();
 		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION.string().c_str());
 		globals::state->WriteDiskCacheInfo(ini);
-		try {
-			std::filesystem::create_directories(L"Data\\ShaderCache");
-		} catch (const std::filesystem::filesystem_error& ex) {
-			logger::error("Failed to create shader cache directory: {}", ex.what());
-			return;
-		}
-		if (const auto result = ini.SaveFile(L"Data\\ShaderCache\\Info.ini"); result < 0) {
+		if (const auto result = ini.SaveFile((DiskCachePath() / L"Info.ini").c_str()); result < 0) {
 			logger::error("Failed to save disk cache info (plugin version: {})", Plugin::VERSION.string());
 			return;
 		}

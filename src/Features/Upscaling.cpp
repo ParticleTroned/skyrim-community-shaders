@@ -10025,15 +10025,30 @@ bool Upscaling::ShouldClearHMDMaskInPhase(Upscaling::HMDMaskClearPhase a_phase) 
 	if (ShouldDeferHMDClearMask())
 		return false;
 
+	// The normal VR vendor path and the render-scale submit path are mutually exclusive.
+	// Keep HMD clears on the path that currently owns the eye outputs.
+	bool submitStagePhase = false;
 	switch (a_phase) {
 	case HMDMaskClearPhase::PerEyeInput:
 	case HMDMaskClearPhase::PerEyeOutput:
+		break;
 	case HMDMaskClearPhase::SubmitStageOutput:
 	case HMDMaskClearPhase::SubmitStageFoveatedOutput:
-		return true;
+		submitStagePhase = true;
+		break;
 	default:
 		return false;
 	}
+
+	if (!IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()))
+		return false;
+
+	const bool presentationUpscalingActive = IsPresentationUpscalingActive();
+	if (!submitStagePhase)
+		return !presentationUpscalingActive;
+
+	return presentationUpscalingActive &&
+	       runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 }
 
 void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,

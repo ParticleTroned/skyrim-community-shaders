@@ -2349,6 +2349,17 @@ namespace SIE
 	void ShaderCache::SetDiskCache(bool value)
 	{
 		isDiskCache.store(value, std::memory_order_relaxed);
+		if (!value) {
+			diskCacheHeld.store(false, std::memory_order_relaxed);
+			featureSetChanged.store(false, std::memory_order_relaxed);
+			featureSetRevertPending.store(false, std::memory_order_relaxed);
+			featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
+			previousDiskCacheAvailable.store(false, std::memory_order_relaxed);
+			diskCacheInfoWritePending.store(false, std::memory_order_relaxed);
+			cacheMismatches.clear();
+			previousCacheMismatches.clear();
+			heldMismatchDefines.clear();
+		}
 	}
 
 	bool ShaderCache::IsSkipUnchangedShaders() const
@@ -2627,6 +2638,11 @@ namespace SIE
 		previousCacheMismatches.clear();
 		heldMismatchDefines.clear();
 
+		if (!IsDiskCache()) {
+			logger::info("Disk cache disabled; skipping disk cache validation");
+			return;
+		}
+
 		RefreshPreviousDiskCacheInfo();
 		if (!LoadDiskCacheInfo(DiskCachePath(), ini)) {
 			if (PathExists(DiskCachePath())) {
@@ -2844,6 +2860,11 @@ namespace SIE
 
 	void ShaderCache::WriteDiskCacheInfoWhenReady()
 	{
+		if (!IsDiskCache()) {
+			diskCacheInfoWritePending.store(false, std::memory_order_relaxed);
+			return;
+		}
+
 		if (!IsDiskCacheActive() && !HasFeatureSetChanges()) {
 			return;
 		}
@@ -2868,6 +2889,10 @@ namespace SIE
 	void ShaderCache::WritePendingDiskCacheInfoIfNeeded()
 	{
 		if (!diskCacheInfoWritePending.exchange(false, std::memory_order_acq_rel)) {
+			return;
+		}
+
+		if (!IsDiskCache()) {
 			return;
 		}
 

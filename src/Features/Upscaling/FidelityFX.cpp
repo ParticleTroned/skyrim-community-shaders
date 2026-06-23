@@ -580,7 +580,7 @@ void FidelityFX::UpscaleAndGenerate(ID3D11Resource* a_color, ID3D11Resource* a_r
 	}
 }
 
-bool FidelityFX::GenerateInterpolatedFrame(ID3D11Resource* a_backBuffer, bool a_isHDR, float a_peakNits)
+bool FidelityFX::GenerateInterpolatedFrame(ID3D11Resource* a_backBuffer, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags)
 {
 	if (dispatchFaulted || !frameGenContextActive || !interpolatedTexture || !fgPresentColor || !a_backBuffer)
 		return false;
@@ -598,7 +598,7 @@ bool FidelityFX::GenerateInterpolatedFrame(ID3D11Resource* a_backBuffer, bool a_
 		// interpolation and the source used to restore the real frame after we present the
 		// interpolated one. CopyResource handles the swap-chain image's layout.
 		globals::d3d::context->CopyResource(fgPresentColor->resource.get(), a_backBuffer);
-		produced = DispatchFrameGeneration(fgPresentColor->resource.get(), a_isHDR, a_peakNits);
+		produced = DispatchFrameGeneration(fgPresentColor->resource.get(), a_isHDR, a_peakNits, a_debugFlags);
 	} __except (LogFfxException("FSR VK frame-gen dispatch", GetExceptionInformation())) {
 		dispatchFaulted = true;
 		logger::critical("[FidelityFX] FSR VK frame-gen dispatch faulted — disabling frame generation this session");
@@ -625,7 +625,7 @@ void FidelityFX::BlitRealToBackBuffer(IDXGISwapChain* a_swapChain)
 		globals::d3d::context->CopyResource(backBuffer.get(), fgPresentColor->resource.get());
 }
 
-bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits)
+bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags)
 {
 	if (!frameGenContextActive || !interpolatedTexture)
 		return false;
@@ -658,7 +658,7 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_
 	fgConfig.frameGenerationEnabled = true;
 	fgConfig.allowAsyncWorkloads = false;
 	fgConfig.HUDLessColor = FfxResource({});
-	fgConfig.flags = GetFgDebug().ffxFlags;  // FFX debug-draw flags (CS_FG_DEBUG_*)
+	fgConfig.flags = a_debugFlags | GetFgDebug().ffxFlags;  // UI toggles | env (CS_FG_DEBUG_*)
 	fgConfig.onlyPresentInterpolated = false;
 
 	// ffxFsr3ConfigureFrameGeneration performs the context-side setup the dispatch needs —

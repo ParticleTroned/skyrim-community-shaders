@@ -22,7 +22,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	upscaleMethod,
 	qualityMode,
 	sharpnessFSR,
-	frameGeneration);
+	frameGeneration,
+	fgShowOnlyGenerated,
+	fgDebugView,
+	fgDebugTearLines,
+	fgDebugPacingLines);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -125,6 +129,27 @@ void Upscaling::DrawSettings()
 				"Generates interpolated frames via FSR3 optical flow + interpolation. "
 				"Runs entirely on the DXVK Vulkan device (no DX12, no interop). "
 				"Changing this rebuilds the FSR3 context."));
+		}
+
+		if (settings.frameGeneration) {
+			ImGui::Indent();
+			ImGui::TextDisabled("%s", T(TKEY("frame_generation_debug"), "Frame Generation Debug"));
+
+			ImGui::Checkbox(T(TKEY("fg_show_only_generated"), "Show Only Generated Frames"), &settings.fgShowOnlyGenerated);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("fg_show_only_generated_tooltip"),
+					"Present only the interpolated frames (hides the real frames) so the "
+					"generated output can be inspected in isolation."));
+
+			ImGui::Checkbox(T(TKEY("fg_debug_view"), "Debug View"), &settings.fgDebugView);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("fg_debug_view_tooltip"),
+					"FFX draws debug visualizations (motion vectors, disocclusion, etc.) "
+					"into the generated frames."));
+
+			ImGui::Checkbox(T(TKEY("fg_debug_tear_lines"), "Debug Tear Lines"), &settings.fgDebugTearLines);
+			ImGui::Checkbox(T(TKEY("fg_debug_pacing_lines"), "Debug Pacing Lines"), &settings.fgDebugPacingLines);
+			ImGui::Unindent();
 		}
 	}
 }
@@ -241,17 +266,27 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 	const bool isHDR = hdr && hdr->settings.enableHDR;
 	const float peakNits = hdr ? std::clamp((float)hdr->settings.hdrPeakNits, 1.0f, 10000.0f) : 1000.0f;
 
+	// Debug-draw flags (UI toggles) baked into the interpolation dispatch.
+	uint32_t ffxDebugFlags = 0;
+	if (settings.fgDebugView)
+		ffxDebugFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_VIEW;
+	if (settings.fgDebugTearLines)
+		ffxDebugFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;
+	if (settings.fgDebugPacingLines)
+		ffxDebugFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
+
 	winrt::com_ptr<ID3D11Texture2D> backBuffer;
 	if (FAILED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) || !backBuffer)
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 
-	if (!fidelityFX.GenerateInterpolatedFrame(backBuffer.get(), isHDR, peakNits))
+	if (!fidelityFX.GenerateInterpolatedFrame(backBuffer.get(), isHDR, peakNits, ffxDebugFlags))
 		return a_present(a_swapChain, a_syncInterval, a_flags);  // no interpolated frame this present
 
 	// Present the generated frame, then the real frame (vsync paces the two under DXVK).
 	fidelityFX.BlitInterpolatedToBackBuffer(a_swapChain);
 	const HRESULT hr = a_present(a_swapChain, a_syncInterval, a_flags);
-	if (fidelityFX.DebugOnlyInterpolated())
+	// "Show only generated frames": skip the real-frame present so the generated output is shown alone.
+	if (settings.fgShowOnlyGenerated || fidelityFX.DebugOnlyInterpolated())
 		return hr;
 	fidelityFX.BlitRealToBackBuffer(a_swapChain);
 	return a_present(a_swapChain, a_syncInterval, a_flags);

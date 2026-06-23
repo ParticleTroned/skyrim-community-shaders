@@ -45,6 +45,11 @@ public:
 		// (DXVK) device — no DX12, no interop. Off by default. Only meaningful
 		// with FSR upscaling active.
 		bool frameGeneration = false;
+		// Frame-gen debug toggles (only meaningful while frameGeneration is on):
+		bool fgShowOnlyGenerated = false;  // present only the interpolated frame
+		bool fgDebugView = false;          // FFX draws debug views into the generated frame
+		bool fgDebugTearLines = false;     // FFX draws tear lines into the generated frame
+		bool fgDebugPacingLines = false;   // FFX draws pacing lines into the generated frame
 	};
 
 	Settings settings;

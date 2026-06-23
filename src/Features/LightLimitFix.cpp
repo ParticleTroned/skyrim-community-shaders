@@ -1343,14 +1343,17 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 						ParticleLights::GradientConfig gradientConfig{};
 						if (!material->greyscaleTexturePath.empty()) {
 							textureName = ExtractTextureStem(material->greyscaleTexturePath.c_str());
-							if (!textureName.empty()) {
-								auto& gradientConfigs = particleLights.particleLightGradientConfigs;
-								auto itGradient = gradientConfigs.find(textureName);
-								if (itGradient != gradientConfigs.end()) {
-									hasGradientConfig = true;
-									gradientConfig = itGradient->second;
-								}
+							if (textureName.size() < 1) {
+								return cacheInvalidReference(node);
 							}
+
+							auto& gradientConfigs = particleLights.particleLightGradientConfigs;
+							auto itGradient = gradientConfigs.find(textureName);
+							if (itGradient == gradientConfigs.end()) {
+								return cacheInvalidReference(node);
+							}
+							hasGradientConfig = true;
+							gradientConfig = itGradient->second;
 						}
 
 						ParticleLightReference reference{};

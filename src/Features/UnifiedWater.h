@@ -4,6 +4,9 @@
 #include "UnifiedWater/WaterCache.h"
 
 #include <atomic>
+#include <memory>
+#include <shared_mutex>
+#include <unordered_map>
 
 struct UnifiedWater : OverlayFeature
 {
@@ -20,7 +23,6 @@ struct UnifiedWater : OverlayFeature
 				T("feature.unified_water.key_feature_3", "Provides background systems for water geometry rendering, allowing more advanced water effects."),
 				T("feature.unified_water.key_feature_4", "Improves vanilla performance by using optimized water meshes for distant water.") } };
 	};
-
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
 	struct Settings
@@ -29,6 +31,17 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	Settings settings;
+
+	struct WaterTilePlacement
+	{
+		int32_t x{};
+		int32_t y{};
+		uint32_t size{};
+	};
+
+	void RegisterGeneratedWaterTile(const RE::NiAVObject* object, const WaterTilePlacement& placement);
+	void UnregisterGeneratedWaterTilesInTree(const RE::NiAVObject* object);
+	bool TryGetGeneratedWaterTile(const RE::NiAVObject* object, WaterTilePlacement& placement) const;
 
 	struct TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams
 	{
@@ -74,7 +87,7 @@ struct UnifiedWater : OverlayFeature
 
 	struct BSWaterShader_SetupGeometry
 	{
-		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass);
+		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass, uint32_t renderFlags);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -112,8 +125,8 @@ struct UnifiedWater : OverlayFeature
 private:
 	RE::NiPointer<RE::BSTriShape> waterMesh;
 	RE::NiPointer<RE::BSTriShape> optimisedWaterMesh;
-	Flowmap* flowmap = nullptr;
-	WaterCache* waterCache = nullptr;
+	std::unique_ptr<Flowmap> flowmap;
+	std::unique_ptr<WaterCache> waterCache;
 
 	RE::NiNode** gWaterLOD = nullptr;
 	RE::NiPointer<RE::NiSourceTexture>* gFlowMapSourceTex = nullptr;
@@ -122,8 +135,18 @@ private:
 	RE::NiPoint2* gDisplacementMeshPos = nullptr;
 	RE::NiPoint2* gDisplacementMeshFlowCellOffset = nullptr;
 
+	std::atomic<RE::TESWorldSpace*> currentPlayerWorldSpace{ nullptr };
+	std::atomic<bool> pendingChildWsCull{ false };
+	// Game-thread TES snapshot used by deferred child-worldspace cull fallbacks.
+	std::atomic<RE::TES*> cachedTes{ nullptr };
 	std::atomic_bool exteriorWorldspaceActive{ false };
 	std::atomic_bool mapMenuOpen{ false };
+
+	mutable std::shared_mutex generatedWaterTilesLock;
+	std::unordered_map<const RE::NiAVObject*, WaterTilePlacement> generatedWaterTiles;
+
+	void ClearGeneratedWaterTiles();
+	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 
 	void SetFlowmapTex() const;
 	bool IsExteriorWorldspaceActive() const;

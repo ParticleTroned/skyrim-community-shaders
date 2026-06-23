@@ -2,7 +2,23 @@
 
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
+#include <algorithm>
 #include <charconv>
+#include <cwctype>
+#include <optional>
+#include <sstream>
+#include <vector>
+
+namespace
+{
+	bool IsDdsExtension(std::wstring extension)
+	{
+		std::ranges::transform(extension, extension.begin(), [](const wchar_t ch) {
+			return static_cast<wchar_t>(std::towlower(ch));
+		});
+		return extension == L".dds";
+	}
+}
 
 bool Flowmap::TryGetFlowmap(RE::NiPointer<RE::NiSourceTexture>& outFlowmapTex) const
 {
@@ -56,7 +72,7 @@ bool Flowmap::RegenerateAndLoadFlowmap(bool useMips)
 			continue;
 
 		const auto& path = entry.path();
-		if (path.extension() != ".dds")
+		if (!IsDdsExtension(path.extension().wstring()))
 			continue;
 
 		std::error_code rec;
@@ -86,78 +102,129 @@ bool Flowmap::LoadFlowmap()
 
 	const fs::path dir = Util::PathHelpers::GetDataPath() / "textures" / "water" / "flowmaps";
 
-	fs::directory_entry file;
+	struct FlowmapCandidate
+	{
+		fs::directory_entry file;
+		int32_t width = 0;
+		int32_t height = 0;
+		int32_t offsetX = 0;
+		int32_t offsetY = 0;
+		fs::file_time_type writeTime{};
+	};
 
-	if (fs::exists(dir) && fs::is_directory(dir)) {
-		for (const auto& entry : fs::directory_iterator(dir)) {
-			if (!entry.is_regular_file()) {
-				continue;
-			}
-
-			const std::wstring name = entry.path().filename().wstring();
-			if (name.rfind(L"Tamriel-Flowmap", 0) == 0) {
-				file = entry;
-				break;
-			}
-		}
-	}
-
-	if (file.path().empty()) {
-		logger::debug("[Unified Water] [Flowmap] No flowmap found");
-		return false;
-	}
-
-	std::vector<std::string> tokens;
-	std::istringstream iss(file.path().filename().stem().string());
-	std::string token;
-
-	while (std::getline(iss, token, '.')) {
-		tokens.push_back(token);
-	}
-
-	if (tokens.size() != 5) {
-		logger::error("[Unified Water] [Flowmap] Invalid file name");
-		return false;
-	}
-
-	auto path = std::format(R"(textures\water\flowmaps\{})", file.path().filename().string().c_str());
-	RE::NiPointer<RE::NiTexture> tex;
-	RE::BSShaderManager::GetTexture(path.c_str(), true, tex, false);
-
-	if (!tex || tex->GetRTTI() != globals::rtti::NiSourceTextureRTTI.get()) {
-		logger::error("[Unified Water] [Flowmap] Failed to load flowmap from {}", path);
-		return false;
-	}
-
-	const auto sourceTex = static_cast<RE::NiSourceTexture*>(tex.get());
-
-	if (!sourceTex || !sourceTex->rendererTexture || !sourceTex->rendererTexture->texture) {
-		logger::error("[Unified Water] [Flowmap] Flowmap invalid", path);
-		return false;
-	}
-
-	flowmapTex = RE::NiPointer(sourceTex);
-
-	auto parse_int = [&](const std::string& str, int32_t& out) -> bool {
+	auto parseInt = [](const std::string& str, int32_t& out) -> bool {
 		int temp;
 		auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), temp);
-		if (ec != std::errc{} || ptr != str.data() + str.size()) {
-			logger::error("[Unified Water] [Flowmap] Failed to parse '{}' from filename", str);
+		if (ec != std::errc{} || ptr != str.data() + str.size())
 			return false;
-		}
 		out = temp;
 		return true;
 	};
 
-	if (!parse_int(tokens[1], width) || !parse_int(tokens[2], height) || !parse_int(tokens[3], offsetX) || !parse_int(tokens[4], offsetY)) {
+	auto tryParseCandidate = [&](const fs::directory_entry& entry) -> std::optional<FlowmapCandidate> {
+		std::vector<std::string> tokens;
+		std::istringstream iss(entry.path().filename().stem().string());
+		std::string token;
+
+		while (std::getline(iss, token, '.')) {
+			tokens.push_back(token);
+		}
+
+		if (tokens.size() != 5 || tokens[0] != "Tamriel-Flowmap")
+			return std::nullopt;
+
+		FlowmapCandidate candidate;
+		candidate.file = entry;
+		if (!parseInt(tokens[1], candidate.width) ||
+			!parseInt(tokens[2], candidate.height) ||
+			!parseInt(tokens[3], candidate.offsetX) ||
+			!parseInt(tokens[4], candidate.offsetY) ||
+			candidate.width <= 0 ||
+			candidate.height <= 0) {
+			return std::nullopt;
+		}
+
+		std::error_code ec;
+		candidate.writeTime = entry.last_write_time(ec);
+		if (ec)
+			candidate.writeTime = fs::file_time_type{};
+
+		return candidate;
+	};
+
+	std::vector<FlowmapCandidate> candidates;
+
+	std::error_code ec;
+	if (fs::exists(dir, ec) && fs::is_directory(dir, ec)) {
+		for (const auto& entry : fs::directory_iterator(dir, ec)) {
+			if (ec) {
+				logger::warn("[Unified Water] [Flowmap] Failed while scanning '{}': {}", dir.string(), ec.message());
+				break;
+			}
+
+			std::error_code entryEc;
+			if (!entry.is_regular_file(entryEc)) {
+				continue;
+			}
+
+			const std::wstring name = entry.path().filename().wstring();
+			if (!IsDdsExtension(entry.path().extension().wstring()) || name.rfind(L"Tamriel-Flowmap", 0) != 0) {
+				continue;
+			}
+
+			auto candidate = tryParseCandidate(entry);
+			if (!candidate) {
+				logger::warn("[Unified Water] [Flowmap] Ignoring invalid flowmap file '{}'", entry.path().filename().string());
+				continue;
+			}
+
+			candidates.push_back(std::move(*candidate));
+		}
+	}
+
+	if (candidates.empty()) {
+		logger::debug("[Unified Water] [Flowmap] No flowmap found");
 		return false;
 	}
 
-	invWidth = 1.0f / static_cast<float>(width);
-	invHeight = 1.0f / static_cast<float>(height);
+	std::ranges::sort(candidates, [](const FlowmapCandidate& lhs, const FlowmapCandidate& rhs) {
+		if (lhs.writeTime != rhs.writeTime)
+			return lhs.writeTime > rhs.writeTime;
+		return lhs.file.path().filename().string() > rhs.file.path().filename().string();
+	});
 
-	logger::debug("[Unified Water] [Flowmap] Flowmap loaded");
-	return true;
+	for (const auto& candidate : candidates) {
+		auto path = std::format(R"(textures\water\flowmaps\{})", candidate.file.path().filename().string());
+		RE::NiPointer<RE::NiTexture> tex;
+		RE::BSShaderManager::GetTexture(path.c_str(), true, tex, false);
+
+		if (!tex || tex->GetRTTI() != globals::rtti::NiSourceTextureRTTI.get()) {
+			logger::warn("[Unified Water] [Flowmap] Failed to load flowmap from {}", path);
+			continue;
+		}
+
+		const auto sourceTex = static_cast<RE::NiSourceTexture*>(tex.get());
+		if (!sourceTex || !sourceTex->rendererTexture || !sourceTex->rendererTexture->texture) {
+			logger::warn("[Unified Water] [Flowmap] Flowmap invalid: {}", path);
+			continue;
+		}
+
+		flowmapTex = RE::NiPointer(sourceTex);
+
+		width = candidate.width;
+		height = candidate.height;
+		offsetX = candidate.offsetX;
+		offsetY = candidate.offsetY;
+
+		invWidth = 1.0f / static_cast<float>(width);
+		invHeight = 1.0f / static_cast<float>(height);
+
+		logger::debug("[Unified Water] [Flowmap] Flowmap loaded from {}", candidate.file.path().filename().string());
+		return true;
+	}
+
+	logger::error("[Unified Water] [Flowmap] No valid flowmap candidate could be loaded");
+	return false;
 }
 
 bool Flowmap::GenerateFlowmap(bool useMips)

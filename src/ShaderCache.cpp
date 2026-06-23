@@ -5,6 +5,7 @@
 #include "Util.h"
 
 #include <d3dcompiler.h>
+#include <fstream>
 #include <future>
 
 // Minimal DXC declarations — avoids pulling in full dxcapi.h which
@@ -392,6 +393,63 @@ namespace SIE
 
 	static ankerl::unordered_dense::map<std::string, std::vector<uint8_t>> g_spirvBlobs;
 	static std::mutex g_spirvMutex;
+
+	// SPIR-V disk persistence.
+	//
+	// The on-disk shader cache stores FXC's DXBC blob, but DXVK consumes our DXC
+	// SPIR-V *directly* (no DXBC->SPIR-V intermediary) only when the SPIR-V blob is
+	// present in g_spirvBlobs. On a warm run the DXBC blob is read from disk and DXC
+	// is never launched, so without persisting SPIR-V every cached shader would fall
+	// back to DXVK's slower DXBC->SPIR-V converter at pipeline-creation time. To keep
+	// the direct path on warm runs we write a ".spv" sidecar next to the DXBC cache
+	// file and reload it into g_spirvBlobs on a cache hit. Sampler/groupshared shaders
+	// are intentionally routed to DXBC under DXVK, so they get no sidecar (and any
+	// stale one is removed) — a warm run then correctly uses DXBC for them.
+	static std::wstring GetSpirvSidecarPath(const std::wstring& a_diskPath)
+	{
+		return a_diskPath + L".spv";
+	}
+
+	static void WriteSpirvSidecar(const std::wstring& a_diskPath, const std::vector<uint8_t>& a_spirv)
+	{
+		const auto spvPath = GetSpirvSidecarPath(a_diskPath);
+		std::ofstream out(std::filesystem::path(spvPath), std::ios::binary | std::ios::trunc);
+		if (!out) {
+			logger::warn("Failed to write SPIR-V sidecar {}", Util::WStringToString(spvPath));
+			return;
+		}
+		out.write(reinterpret_cast<const char*>(a_spirv.data()), static_cast<std::streamsize>(a_spirv.size()));
+	}
+
+	static void RemoveSpirvSidecar(const std::wstring& a_diskPath)
+	{
+		std::error_code ec;
+		std::filesystem::remove(std::filesystem::path(GetSpirvSidecarPath(a_diskPath)), ec);
+	}
+
+	// Load a ".spv" sidecar (if present) into g_spirvBlobs so a DXBC disk-cache hit
+	// still uses the direct SPIR-V path. The sidecar is written together with the DXBC
+	// cache file, so a non-outdated DXBC hit implies the sidecar is equally fresh.
+	static bool LoadSpirvSidecarIntoCache(const std::wstring& a_diskPath, const std::string& a_key)
+	{
+		const auto spvPath = std::filesystem::path(GetSpirvSidecarPath(a_diskPath));
+		std::error_code ec;
+		if (!std::filesystem::exists(spvPath, ec))
+			return false;
+		std::ifstream in(spvPath, std::ios::binary | std::ios::ate);
+		if (!in)
+			return false;
+		const std::streamsize size = in.tellg();
+		if (size <= 0)
+			return false;
+		in.seekg(0, std::ios::beg);
+		std::vector<uint8_t> spirv(static_cast<size_t>(size));
+		if (!in.read(reinterpret_cast<char*>(spirv.data()), size))
+			return false;
+		std::lock_guard lock(g_spirvMutex);
+		g_spirvBlobs.insert_or_assign(a_key, std::move(spirv));
+		return true;
+	}
 
 	namespace SShaderCache
 	{
@@ -1727,6 +1785,10 @@ namespace SIE
 					}
 				} else {
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
+					// Reload the SPIR-V sidecar so this warm cache hit keeps the direct
+					// SPIR-V path instead of DXVK's DXBC->SPIR-V intermediary.
+					if (LoadSpirvSidecarIntoCache(diskPath, key))
+						logger::debug("Loaded SPIR-V sidecar for {}", key);
 					cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob, /*fromDisk=*/true);
 					return shaderBlob;
 				}
@@ -1860,8 +1922,16 @@ namespace SIE
 			}
 			if (!spirvData.empty()) {
 				logger::debug("DXC: SPIR-V compiled {} bytes for {}", spirvData.size(), key);
+				// Persist the sidecar before moving so warm runs keep the direct path.
+				if (useDiskCache)
+					WriteSpirvSidecar(diskPath, spirvData);
 				std::lock_guard lock(g_spirvMutex);
 				g_spirvBlobs.insert_or_assign(key, std::move(spirvData));
+			} else if (useDiskCache) {
+				// No SPIR-V kept (sampler/groupshared, or DXC produced none): drop any
+				// stale sidecar so a future warm run doesn't wrongly use SPIR-V for a
+				// shader that must take the DXBC path under DXVK.
+				RemoveSpirvSidecar(diskPath);
 			}
 
 			cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob);

@@ -121,6 +121,9 @@ public:
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
 	void Upscale();
 
+	/** @brief True when FSR3 frame generation is configured + active this session (FSR method, context built, not faulted). */
+	bool IsFrameGenerationActive() const;
+
 	/**
 	 * @brief Wraps the swap-chain present to insert FSR3 frame generation, independent of HDR Display.
 	 *        Called after the real frame is composited into the back buffer; when frame gen is active

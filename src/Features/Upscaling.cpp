@@ -250,15 +250,19 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	return (UpscaleMethod)settings.upscaleMethod;
 }
 
+bool Upscaling::IsFrameGenerationActive() const
+{
+	return loaded && settings.frameGeneration && GetUpscaleMethod() == UpscaleMethod::kFSR &&
+	       fidelityFX.frameGenContextActive && !fidelityFX.dispatchFaulted;
+}
+
 HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,
 	const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_present)
 {
-	// Independent of HDR Display: this wraps the present chain AFTER the real frame has been
-	// composited into the back buffer. When frame gen is active we interpolate from that final
-	// back buffer and present the generated frame ahead of the real one.
-	const bool active = loaded && settings.frameGeneration && GetUpscaleMethod() == UpscaleMethod::kFSR &&
-	                    fidelityFX.frameGenContextActive && !fidelityFX.dispatchFaulted;
-	if (!active)
+	// Wraps the present chain AFTER the real frame has been composited into the back buffer.
+	// When frame gen is active we interpolate from that final back buffer and present the
+	// generated frame ahead of the real one.
+	if (!IsFrameGenerationActive())
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 
 	// The only HDR relationship: tell the interpolation dispatch how the back buffer is encoded.
@@ -279,7 +283,13 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 	if (FAILED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) || !backBuffer)
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 
-	if (!fidelityFX.GenerateInterpolatedFrame(backBuffer.get(), isHDR, peakNits, ffxDebugFlags))
+	// HUDLess buffer (scene without UI): produced by the HDR composite this frame when HDR is on.
+	// FFX uses it to suppress UI-region interpolation so the UI isn't ghosted. Null when HDR off.
+	ID3D11Resource* hudless = nullptr;
+	if (isHDR && hdr && hdr->hudlessTexture && hdr->hudlessTexture->resource)
+		hudless = hdr->hudlessTexture->resource.get();
+
+	if (!fidelityFX.GenerateInterpolatedFrame(backBuffer.get(), hudless, isHDR, peakNits, ffxDebugFlags))
 		return a_present(a_swapChain, a_syncInterval, a_flags);  // no interpolated frame this present
 
 	// Present the generated frame, then the real frame (vsync paces the two under DXVK).

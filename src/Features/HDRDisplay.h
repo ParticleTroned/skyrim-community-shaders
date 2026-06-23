@@ -185,6 +185,9 @@ public:
 	Texture2D* hdrTexture = nullptr;
 	Texture2D* outputTexture = nullptr;
 	Texture2D* uiTexture = nullptr;          // Separate UI render target for proper compositing
+	// HUD-less composite (scene without UI), swapchain format. Produced during ApplyHDR when FSR3
+	// frame generation is active, and handed to FFX as HUDLessColor so the UI isn't interpolated.
+	Texture2D* hudlessTexture = nullptr;
 	Texture2D* cleanSceneCapture = nullptr;  // Pre-blur copy of hdrTexture for clean captures
 	uint cleanSceneCaptureFrame = UINT32_MAX;  // frameCount when cleanSceneCapture was last refreshed
 

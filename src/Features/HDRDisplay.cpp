@@ -676,6 +676,12 @@ void HDRDisplay::SetupResources()
 	outputTexture->CreateSRV(srvDesc);
 	outputTexture->CreateUAV(uavDesc);
 
+	// HUD-less composite target (scene without UI), swapchain format — fed to FFX frame
+	// generation as HUDLessColor so the UI region is not interpolated/ghosted.
+	hudlessTexture = new Texture2D(texDesc, "HDR::HudlessTexture");
+	hudlessTexture->CreateSRV(srvDesc);
+	hudlessTexture->CreateUAV(uavDesc);
+
 	// UI texture for separate UI rendering
 	// Use R8G8B8A8_UNORM (8-bit SDR) - vanilla UI is SDR and 8-bit precision
 	// naturally truncates near-black ghost bar artifacts to zero
@@ -1108,6 +1114,13 @@ void HDRDisplay::ApplyHDR()
 		}
 
 		DispatchHDROutput(sceneSRV, uiSRV, outputTexture->uav.get());
+
+		// FSR3 frame generation HUDLess buffer: re-run the composite with NO UI so FFX gets a
+		// scene-only back-buffer-format image (HUDLessColor). FFX uses it to detect and suppress
+		// interpolation distortion in the UI region — the UI is taken from presentColor, not ghosted.
+		if (hudlessTexture && globals::features::upscaling.loaded &&
+			globals::features::upscaling.IsFrameGenerationActive())
+			DispatchHDROutput(sceneSRV, nullptr, hudlessTexture->uav.get());
 	}
 
 	{
@@ -1254,6 +1267,14 @@ void HDRDisplay::DestroyResources()
 		uiTexture->resource = nullptr;
 		delete uiTexture;
 		uiTexture = nullptr;
+	}
+
+	if (hudlessTexture) {
+		hudlessTexture->srv = nullptr;
+		hudlessTexture->uav = nullptr;
+		hudlessTexture->resource = nullptr;
+		delete hudlessTexture;
+		hudlessTexture = nullptr;
 	}
 
 	if (cleanSceneCapture) {

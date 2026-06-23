@@ -92,12 +92,15 @@ public:
 	 * @brief Captures the composited back buffer and dispatches frame interpolation from it.
 	 *        Called at present time; the interpolated frame lands in interpolatedTexture.
 	 * @param a_backBuffer The fully-composited real back buffer (the actual color to be presented).
+	 * @param a_hudlessColor Optional scene-without-UI image (swapchain format) so FFX suppresses
+	 *        UI interpolation; null when unavailable (e.g. HDR off). The UI is then preserved from
+	 *        the back buffer rather than ghosted.
 	 * @param a_isHDR Whether the back buffer is PQ-encoded HDR (vs sRGB). The only HDR input.
 	 * @param a_peakNits HDR peak luminance for the interpolation transfer function.
 	 * @param a_debugFlags FFX_FSR3_FRAME_GENERATION_FLAG_* debug-draw bits (0 for none).
 	 * @return true if an interpolated frame was produced.
 	 */
-	bool GenerateInterpolatedFrame(ID3D11Resource* a_backBuffer, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags);
+	bool GenerateInterpolatedFrame(ID3D11Resource* a_backBuffer, ID3D11Resource* a_hudlessColor, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags);
 
 	/** @brief Copy the interpolated frame into the swap chain's current back buffer. */
 	void BlitInterpolatedToBackBuffer(IDXGISwapChain* a_swapChain);
@@ -118,7 +121,7 @@ public:
 
 private:
 	/** @brief Records the frame-interpolation dispatch (presentColor -> interpolatedTexture) on DXVK's VkDevice. */
-	bool DispatchFrameGeneration(ID3D11Resource* a_presentColor, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags);
+	bool DispatchFrameGeneration(ID3D11Resource* a_presentColor, ID3D11Resource* a_hudlessColor, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags);
 
 	// FSR scratch buffers. Upscaling-only uses [1]; frame generation uses all three
 	// (shared resources, upscaling, frame interpolation), per the FFX backend model.

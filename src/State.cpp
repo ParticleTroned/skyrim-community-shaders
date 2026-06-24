@@ -9,6 +9,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <codecvt>
 #include <cstring>
@@ -52,9 +53,7 @@ static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 
 namespace
 {
-	static constexpr std::string_view kForcedDisableAtBootFeatures[] = {
-		"UnifiedWater"
-	};
+	static constexpr std::array<std::string_view, 0> kForcedDisableAtBootFeatures{};
 
 	void StoreMax(std::atomic_uint32_t& a_target, uint32_t a_value)
 	{
@@ -110,6 +109,7 @@ namespace
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
 		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
+			{ "UnifiedWater", true },
 			{ WetnessEffects::kShortName, false }
 		};
 

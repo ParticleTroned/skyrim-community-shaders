@@ -687,6 +687,11 @@ public:
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateCycleStartFrame{ 0 };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateRetryCount{ 0 };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateAbandonedRetryFrame{ 0 };
+	std::atomic<bool> pendingPerfModeRenderTargetRecreateDLSSResetAtCycleStart{ false };
+	std::atomic<bool> pendingPerfModeRenderTargetRecreateFSRResetAtCycleStart{ false };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
@@ -714,6 +719,7 @@ public:
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	mutable std::atomic_bool submitStageRuntimeActive{ false };
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
+	std::atomic<uint32_t> foveatedVendorDispatchRetryFrame{ 0 };
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();
@@ -746,6 +752,9 @@ public:
 	bool IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const;
 	bool IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const;
 	bool IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) const;
+	void RecordFoveatedVendorDispatchFailure(UpscaleMethod a_upscaleMethod, const char* a_context);
+	void DeferFoveatedVendorDispatch(UpscaleMethod a_upscaleMethod, uint32_t a_delayFrames, const char* a_reason = nullptr);
+	void ResetFoveatedVendorDispatchHealth(const char* a_reason = nullptr);
 	bool IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const;
 	float2 GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const;

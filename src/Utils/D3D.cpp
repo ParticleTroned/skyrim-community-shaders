@@ -7,7 +7,6 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <d3dcompiler.h>
-#include <future>
 #include <mutex>
 
 namespace Util
@@ -212,15 +211,6 @@ namespace Util
 		}
 		logger::debug("Compiling {} with {}", str, DefinesToString(macros));
 
-		bool canUseDxc = !_stricmp(Program, "main");
-		std::future<std::vector<uint8_t>> dxcFuture;
-		if (canUseDxc) {
-			dxcFuture = std::async(std::launch::async, [&FilePath, &macros, ProgramType]() {
-				return SIE::ShaderCache::CompileSpirvFromFile(
-					FilePath, macros.data(), ProgramType, !globals::state->IsDeveloperMode(), L"Data\\Shaders");
-			});
-		}
-
 		if (FAILED(D3DCompileFromFile(FilePath, macros.data(), &include, Program, ProgramType, flags, 0, &shaderBlob, &shaderErrors))) {
 			logger::warn("Shader compilation failed:\n\n{}", shaderErrors ? static_cast<char*>(shaderErrors->GetBufferPointer()) : "Unknown error");
 			return nullptr;
@@ -228,19 +218,9 @@ namespace Util
 		if (shaderErrors)
 			logger::debug("Shader logs:\n{}", static_cast<char*>(shaderErrors->GetBufferPointer()));
 
-		std::vector<uint8_t> spirvData;
-		if (canUseDxc)
-			spirvData = dxcFuture.get();
-		// DXVK 2.7.1 rejects descriptor-type samplers (samplers are sourced from a global heap
-		// via push index). Our DXC SPIR-V emits descriptor samplers, which crash the DXVK CS
-		// thread. Route sampler-using shaders to the DXBC blob instead; DXVK's dxbc-spirv
-		// converter emits valid heap samplers. FXC already produced shaderBlob, so this is free.
-		if (!spirvData.empty() && (SIE::ShaderCache::SpirvUsesSampler(spirvData) || SIE::ShaderCache::SpirvUsesGroupshared(spirvData))) {
-			logger::debug("DXC: {} uses a sampler/groupshared; using DXBC for DXVK compatibility", str);
-			spirvData.clear();
-		}
-		const void* code = spirvData.empty() ? shaderBlob->GetBufferPointer() : spirvData.data();
-		SIZE_T codeSize = spirvData.empty() ? shaderBlob->GetBufferSize() : spirvData.size();
+		// DXVK ingests the FXC-produced DXBC blob and converts it to SPIR-V internally.
+		const void* code = shaderBlob->GetBufferPointer();
+		SIZE_T codeSize = shaderBlob->GetBufferSize();
 
 		if (!_stricmp(ProgramType, "ps_5_0")) {
 			ID3D11PixelShader* regShader;

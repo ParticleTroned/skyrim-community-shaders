@@ -30,8 +30,7 @@ namespace DxvkLoader
 	/** @brief Directory holding the staged native DLLs
 	 *  (Data/SKSE/Plugins/CommunityShaders/dxvk), resolved relative to this
 	 *  plugin's own module so it is independent of the process CWD or a mod
-	 *  manager's virtual file system. Also hosts the DXC compiler DLLs
-	 *  (dxcompiler.dll / dxil.dll) so nothing is loaded from the game root.
+	 *  manager's virtual file system.
 	 *  @return the directory, or an empty path if the module could not be resolved. */
 	std::filesystem::path GetDxvkDir();
 

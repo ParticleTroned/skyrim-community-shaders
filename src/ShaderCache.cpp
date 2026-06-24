@@ -10,86 +10,6 @@
 
 #include <d3dcompiler.h>
 #include <fstream>
-#include <future>
-
-// Minimal DXC declarations — avoids pulling in full dxcapi.h which
-// introduces COM/OLE dependencies that crash during DLL static init.
-// Hierarchy: IDxcBlob : IUnknown, IDxcBlobEncoding : IDxcBlob, IDxcBlobUtf8 : IDxcBlobEncoding
-struct __declspec(uuid("73EFFE2A-70DC-45F8-9690-EFF64C02429D")) IDxcCompilerArgs;
-struct __declspec(uuid("8BA5FB08-5195-40e2-AC58-0D989C3A0102")) IDxcBlob : public IUnknown
-{
-	virtual LPVOID STDMETHODCALLTYPE GetBufferPointer() = 0;
-	virtual SIZE_T STDMETHODCALLTYPE GetBufferSize() = 0;
-};
-struct __declspec(uuid("7241d424-2646-4191-97c0-98e96e42fc68")) IDxcBlobEncoding : public IDxcBlob
-{
-	virtual HRESULT STDMETHODCALLTYPE GetEncoding(BOOL* pKnown, UINT32* pCodePage) = 0;
-};
-struct __declspec(uuid("3DA636C9-BA71-4024-A301-30CBF125305B")) IDxcBlobUtf8 : public IDxcBlobEncoding
-{
-	virtual LPCSTR STDMETHODCALLTYPE GetStringPointer() = 0;
-	virtual SIZE_T STDMETHODCALLTYPE GetStringLength() = 0;
-};
-struct __declspec(uuid("7f61fc7d-950d-467f-b3e3-3c02fb49187c")) IDxcIncludeHandler : public IUnknown
-{
-	virtual HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource) = 0;
-};
-struct __declspec(uuid("4605C4CB-2019-492A-ADA4-65F20BB7D67F")) IDxcUtils : public IUnknown
-{
-	// Stub vtable entries before LoadFile — 10 methods before it in IDxcUtils
-	virtual HRESULT STDMETHODCALLTYPE _CreateBlobFromBlob() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _CreateBlobFromPinned() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _MoveToBlob() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _CreateBlob() = 0;
-	virtual HRESULT STDMETHODCALLTYPE LoadFile(LPCWSTR pFileName, UINT32* pCodePage, IDxcBlobEncoding** pBlobEncoding) = 0;
-	virtual HRESULT STDMETHODCALLTYPE _CreateReadOnlyStreamFromBlob() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _CreateDefaultIncludeHandler() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _GetBlobAsUtf8() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _GetBlobAsWide() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _GetDxilContainerPart() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _CreateReflection() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _BuildArguments() = 0;
-	virtual HRESULT STDMETHODCALLTYPE _GetPDBContents() = 0;
-};
-
-enum { DXC_OUT_NONE = 0, DXC_OUT_OBJECT = 1, DXC_OUT_ERRORS = 2 };
-
-struct DxcBuffer
-{
-	LPCVOID Ptr;
-	SIZE_T Size;
-	UINT Encoding;
-};
-constexpr UINT DXC_CP_ACP = 0;
-
-struct __declspec(uuid("CEDB484A-D4E9-445A-B991-CA21CA157DC2")) IDxcOperationResult : public IUnknown
-{
-	virtual HRESULT STDMETHODCALLTYPE GetStatus(HRESULT* pStatus) = 0;
-	virtual HRESULT STDMETHODCALLTYPE GetResult(IDxcBlob** ppResult) = 0;
-	virtual HRESULT STDMETHODCALLTYPE GetErrorBuffer(IDxcBlobEncoding** ppErrors) = 0;
-};
-struct __declspec(uuid("58346CDA-DDE7-4497-9461-6F87AF5E0659")) IDxcResult : public IDxcOperationResult
-{
-	virtual BOOL STDMETHODCALLTYPE HasOutput(UINT32 dxcOutKind) = 0;
-	virtual HRESULT STDMETHODCALLTYPE GetOutput(UINT32 dxcOutKind, REFIID iid, void** ppvObject, void** ppOutputName) = 0;
-	virtual UINT32 STDMETHODCALLTYPE GetNumOutputs() = 0;
-	virtual UINT32 STDMETHODCALLTYPE GetOutputByIndex(UINT32 Index) = 0;
-	virtual UINT32 STDMETHODCALLTYPE PrimaryOutput() = 0;
-};
-struct __declspec(uuid("228B4687-5A6A-4730-900C-9702B2203F54")) IDxcCompiler3 : public IUnknown
-{
-	virtual HRESULT STDMETHODCALLTYPE Compile(
-		const DxcBuffer* pSource, LPCWSTR* pArguments, UINT32 argCount,
-		IDxcIncludeHandler* pIncludeHandler, REFIID riid, LPVOID* ppResult) = 0;
-	virtual HRESULT STDMETHODCALLTYPE Disassemble(
-		const DxcBuffer* pObject, REFIID riid, LPVOID* ppResult) = 0;
-};
-
-static const CLSID CLSID_DxcCompiler = { 0x73e22d93, 0xe6ce, 0x47f3, { 0xb5, 0xbf, 0xf0, 0x66, 0x4f, 0x39, 0xc1, 0xb0 } };
-static const GUID CLSID_DxcLibrary = { 0x6245d6af, 0x66e0, 0x48fd, { 0x80, 0xb4, 0x4d, 0x27, 0x17, 0x96, 0x74, 0x8c } };
-static const GUID CLSID_DxcUtils = CLSID_DxcLibrary;
-
-typedef HRESULT(__stdcall* DxcCreateInstanceProc)(REFCLSID rclsid, REFIID riid, LPVOID* ppv);
 
 #include "Deferred.h"
 #include "State.h"
@@ -158,312 +78,6 @@ namespace SIE
 		}
 	};
 
-	class DxcIncludeHandler : public IDxcIncludeHandler
-	{
-		std::vector<std::filesystem::path> m_searchDirs;
-		IDxcUtils* m_utils;
-		std::atomic<ULONG> m_refCount{ 1 };
-
-	public:
-		DxcIncludeHandler(const std::filesystem::path& baseDir, IDxcUtils* utils, const wchar_t* extraDir = nullptr)
-			: m_utils(utils)
-		{
-			m_searchDirs.push_back(baseDir);
-			if (extraDir)
-				m_searchDirs.emplace_back(extraDir);
-		}
-
-		HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource) override
-		{
-			for (auto& dir : m_searchDirs) {
-				auto fullPath = dir / pFilename;
-				IDxcBlobEncoding* blob = nullptr;
-				HRESULT hr = m_utils->LoadFile(fullPath.c_str(), nullptr, &blob);
-				if (SUCCEEDED(hr)) {
-					*ppIncludeSource = blob;
-					return S_OK;
-				}
-			}
-			return E_FAIL;
-		}
-
-		HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override
-		{
-			if (IsEqualIID(riid, __uuidof(IUnknown)) || IsEqualIID(riid, __uuidof(IDxcIncludeHandler))) {
-				*ppv = this;
-				AddRef();
-				return S_OK;
-			}
-			*ppv = nullptr;
-			return E_NOINTERFACE;
-		}
-
-		ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refCount; }
-
-		ULONG STDMETHODCALLTYPE Release() override
-		{
-			auto c = --m_refCount;
-			if (c == 0)
-				delete this;
-			return c;
-		}
-	};
-
-	namespace DxcSpirv
-	{
-		static std::once_flag s_initFlag;
-		static IDxcCompiler3* s_compiler = nullptr;
-		static IDxcUtils* s_utils = nullptr;
-		static bool s_available = false;
-
-		static void InitOnce()
-		{
-			// Load DXC from the Community Shaders folder, never the game root: the
-			// staged DLLs sit alongside DXVK in .../CommunityShaders/dxvk, and
-			// LOAD_WITH_ALTERED_SEARCH_PATH makes DXC resolve its own dxil.dll
-			// dependency from that same directory rather than from the game root.
-			HMODULE mod = nullptr;
-			const auto dxcDir = DxvkLoader::GetDxvkDir();
-			if (!dxcDir.empty()) {
-				const auto dxcPath = (dxcDir / L"dxcompiler.dll").wstring();
-				mod = LoadLibraryExW(dxcPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-				if (!mod)
-					logger::warn("dxcompiler.dll not found in '{}' (error {})", dxcDir.string(), GetLastError());
-			}
-			if (!mod) {
-				logger::warn("dxcompiler.dll not found in Community Shaders folder — SPIR-V path disabled");
-				return;
-			}
-			auto fn = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(mod, "DxcCreateInstance"));
-			if (!fn) {
-				logger::warn("DXC: GetProcAddress(DxcCreateInstance) failed");
-				return;
-			}
-			HRESULT hr = fn(CLSID_DxcCompiler, IID_PPV_ARGS(&s_compiler));
-			if (FAILED(hr)) {
-				logger::warn("DXC: DxcCreateInstance(Compiler) failed hr=0x{:08X}", (uint32_t)hr);
-				return;
-			}
-			hr = fn(CLSID_DxcUtils, IID_PPV_ARGS(&s_utils));
-			if (FAILED(hr)) {
-				logger::warn("DXC: DxcCreateInstance(Utils) failed hr=0x{:08X}", (uint32_t)hr);
-				s_compiler->Release();
-				s_compiler = nullptr;
-				return;
-			}
-			s_available = true;
-			logger::info("DXC SPIR-V compiler loaded");
-		}
-
-		static bool Init()
-		{
-			std::call_once(s_initFlag, InitOnce);
-			return s_available;
-		}
-
-		static std::vector<uint8_t> Compile(
-			const std::wstring& path,
-			const D3D_SHADER_MACRO* defines,
-			const char* profile,
-			bool optimize,
-			const wchar_t* extraIncludeDir = nullptr,
-			const char* entryPoint = "main")
-		{
-			if (!Init())
-				return {};
-
-			IDxcBlobEncoding* sourceBlob = nullptr;
-			HRESULT loadHr = s_utils->LoadFile(path.c_str(), nullptr, &sourceBlob);
-			if (FAILED(loadHr)) {
-				logger::error("DXC: LoadFile failed hr=0x{:08X} path={}", (uint32_t)loadHr, std::filesystem::path(path).string());
-				return {};
-			}
-			logger::trace("DXC: LoadFile OK, blob size={}, path={}", sourceBlob->GetBufferSize(), std::filesystem::path(path).string());
-
-			std::vector<std::wstring> argStorage;
-			std::vector<LPCWSTR> args;
-
-			size_t defineCount = 0;
-			if (defines)
-				for (auto* d = defines; d->Name; ++d)
-					defineCount++;
-			argStorage.reserve(4 + defineCount);
-
-			auto addLit = [&](const wchar_t* s) { args.push_back(s); };
-			auto addOwned = [&](std::wstring s) {
-				argStorage.push_back(std::move(s));
-				args.push_back(argStorage.back().c_str());
-			};
-
-			addLit(L"-E");
-			addOwned(std::wstring(entryPoint, entryPoint + strlen(entryPoint)));
-			addLit(L"-T");
-			addOwned(std::wstring(profile, profile + strlen(profile)));
-			addLit(L"-spirv");
-			addLit(L"-fspv-target-env=vulkan1.3");
-
-			// D3D11-faithful constant-buffer packing. Without this DXC lays out cbuffer
-			// members with Vulkan/std140 offsets, but DXVK uploads cbuffers using D3D11
-			// (HLSL) packing — so any cbuffer holding matrices or scalar arrays (every
-			// scene cbuffer: view/projection matrices, bone/water arrays) is read at the
-			// wrong offsets, producing garbage transforms (white/black scene). This makes
-			// DXC emit Offset/ArrayStride/MatrixStride decorations matching D3D's packing,
-			// the same layout DXVK writes. Matrices are already explicitly row_major in
-			// source, so no -Zpr/-Zpc is needed. SM6 / wave intrinsics are unaffected.
-			addLit(L"-fvk-use-dx-layout");
-
-			addLit(L"-fvk-b-shift");
-			addLit(L"0");
-			addLit(L"0");
-			addLit(L"-fvk-t-shift");
-			addLit(L"128");
-			addLit(L"0");
-			addLit(L"-fvk-s-shift");
-			addLit(L"256");
-			addLit(L"0");
-			addLit(L"-fvk-u-shift");
-			addLit(L"512");
-			addLit(L"0");
-
-			addLit(L"-I");
-			addOwned(std::filesystem::path(path).parent_path().wstring());
-
-			if (extraIncludeDir) {
-				addLit(L"-I");
-				addOwned(std::wstring(extraIncludeDir));
-			}
-
-			if (optimize)
-				addLit(L"-O3");
-			else
-				addLit(L"-Od");
-
-			if (defines) {
-				for (auto* d = defines; d->Name; ++d) {
-					std::wstring def = L"-D";
-					std::string name(d->Name);
-					def.append(name.begin(), name.end());
-					if (d->Definition && *d->Definition) {
-						def += L'=';
-						std::string val(d->Definition);
-						def.append(val.begin(), val.end());
-					}
-					addOwned(std::move(def));
-				}
-			}
-
-			auto* includeHandler = new DxcIncludeHandler(
-				std::filesystem::path(path).parent_path(), s_utils, extraIncludeDir);
-
-			DxcBuffer src{ sourceBlob->GetBufferPointer(), sourceBlob->GetBufferSize(), DXC_CP_ACP };
-			IDxcResult* result = nullptr;
-			HRESULT hr = s_compiler->Compile(&src, args.data(), static_cast<UINT32>(args.size()),
-				includeHandler, IID_PPV_ARGS(&result));
-
-			sourceBlob->Release();
-			includeHandler->Release();
-
-			if (FAILED(hr) || !result) {
-				logger::error("DXC: Compile call failed hr=0x{:08X} result={:p}", (uint32_t)hr, (void*)result);
-				if (result)
-					result->Release();
-				return {};
-			}
-
-			HRESULT status;
-			result->GetStatus(&status);
-			if (FAILED(status)) {
-				IDxcBlobEncoding* errorBuf = nullptr;
-				result->GetErrorBuffer(&errorBuf);
-				if (errorBuf && errorBuf->GetBufferSize() > 0) {
-					auto sz = errorBuf->GetBufferSize();
-					auto* p = reinterpret_cast<const char*>(errorBuf->GetBufferPointer());
-					// Trim null terminator
-					while (sz > 0 && p[sz - 1] == '\0')
-						sz--;
-					auto errText = std::string_view(p, sz).substr(0, 1024);
-					logger::warn("DXC SPIR-V compile failed:\n{}", errText);
-				}
-				if (errorBuf)
-					errorBuf->Release();
-				result->Release();
-				return {};
-			}
-
-			IDxcBlob* spirv = nullptr;
-			result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&spirv), nullptr);
-			std::vector<uint8_t> data;
-			if (spirv && spirv->GetBufferSize() > 0) {
-				auto* p = static_cast<const uint8_t*>(spirv->GetBufferPointer());
-				data.assign(p, p + spirv->GetBufferSize());
-			}
-			if (spirv)
-				spirv->Release();
-			result->Release();
-			return data;
-		}
-	}
-
-	static ankerl::unordered_dense::map<std::string, std::vector<uint8_t>> g_spirvBlobs;
-	static std::mutex g_spirvMutex;
-
-	// SPIR-V disk persistence.
-	//
-	// The on-disk shader cache stores FXC's DXBC blob, but DXVK consumes our DXC
-	// SPIR-V *directly* (no DXBC->SPIR-V intermediary) only when the SPIR-V blob is
-	// present in g_spirvBlobs. On a warm run the DXBC blob is read from disk and DXC
-	// is never launched, so without persisting SPIR-V every cached shader would fall
-	// back to DXVK's slower DXBC->SPIR-V converter at pipeline-creation time. To keep
-	// the direct path on warm runs we write a ".spv" sidecar next to the DXBC cache
-	// file and reload it into g_spirvBlobs on a cache hit. Sampler/groupshared shaders
-	// are intentionally routed to DXBC under DXVK, so they get no sidecar (and any
-	// stale one is removed) — a warm run then correctly uses DXBC for them.
-	static std::wstring GetSpirvSidecarPath(const std::wstring& a_diskPath)
-	{
-		return a_diskPath + L".spv";
-	}
-
-	static void WriteSpirvSidecar(const std::wstring& a_diskPath, const std::vector<uint8_t>& a_spirv)
-	{
-		const auto spvPath = GetSpirvSidecarPath(a_diskPath);
-		std::ofstream out(std::filesystem::path(spvPath), std::ios::binary | std::ios::trunc);
-		if (!out) {
-			logger::warn("Failed to write SPIR-V sidecar {}", Util::WStringToString(spvPath));
-			return;
-		}
-		out.write(reinterpret_cast<const char*>(a_spirv.data()), static_cast<std::streamsize>(a_spirv.size()));
-	}
-
-	static void RemoveSpirvSidecar(const std::wstring& a_diskPath)
-	{
-		std::error_code ec;
-		std::filesystem::remove(std::filesystem::path(GetSpirvSidecarPath(a_diskPath)), ec);
-	}
-
-	// Load a ".spv" sidecar (if present) into g_spirvBlobs so a DXBC disk-cache hit
-	// still uses the direct SPIR-V path. The sidecar is written together with the DXBC
-	// cache file, so a non-outdated DXBC hit implies the sidecar is equally fresh.
-	static bool LoadSpirvSidecarIntoCache(const std::wstring& a_diskPath, const std::string& a_key)
-	{
-		const auto spvPath = std::filesystem::path(GetSpirvSidecarPath(a_diskPath));
-		std::error_code ec;
-		if (!std::filesystem::exists(spvPath, ec))
-			return false;
-		std::ifstream in(spvPath, std::ios::binary | std::ios::ate);
-		if (!in)
-			return false;
-		const std::streamsize size = in.tellg();
-		if (size <= 0)
-			return false;
-		in.seekg(0, std::ios::beg);
-		std::vector<uint8_t> spirv(static_cast<size_t>(size));
-		if (!in.read(reinterpret_cast<char*>(spirv.data()), size))
-			return false;
-		std::lock_guard lock(g_spirvMutex);
-		g_spirvBlobs.insert_or_assign(a_key, std::move(spirv));
-		return true;
-	}
-
 	namespace SShaderCache
 	{
 		static void GetShaderDefines(const RE::BSShader&, uint32_t, D3D_SHADER_MACRO*);
@@ -498,10 +112,6 @@ namespace SIE
 		constexpr const char* PixelShaderProfile = "ps_5_0";
 		constexpr const char* ComputeShaderProfile = "cs_5_0";
 
-		constexpr const char* DxcVertexShaderProfile = "vs_6_0";
-		constexpr const char* DxcPixelShaderProfile = "ps_6_0";
-		constexpr const char* DxcComputeShaderProfile = "cs_6_0";
-
 		static std::wstring GetShaderPath(const std::string_view& name)
 		{
 			return std::format(L"Data/Shaders/{}.hlsl", std::wstring(name.begin(), name.end()));
@@ -516,19 +126,6 @@ namespace SIE
 				return PixelShaderProfile;
 			case ShaderClass::Compute:
 				return ComputeShaderProfile;
-			}
-			return nullptr;
-		}
-
-		static const char* GetDxcShaderProfile(ShaderClass shaderClass)
-		{
-			switch (shaderClass) {
-			case ShaderClass::Vertex:
-				return DxcVertexShaderProfile;
-			case ShaderClass::Pixel:
-				return DxcPixelShaderProfile;
-			case ShaderClass::Compute:
-				return DxcComputeShaderProfile;
 			}
 			return nullptr;
 		}
@@ -1811,10 +1408,6 @@ namespace SIE
 					}
 				} else {
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
-					// Reload the SPIR-V sidecar so this warm cache hit keeps the direct
-					// SPIR-V path instead of DXVK's DXBC->SPIR-V intermediary.
-					if (LoadSpirvSidecarIntoCache(diskPath, key))
-						logger::debug("Loaded SPIR-V sidecar for {}", key);
 					cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob, /*fromDisk=*/true);
 					return shaderBlob;
 				}
@@ -1853,12 +1446,6 @@ namespace SIE
 				return nullptr;
 			}
 			logger::debug("Compiling {} {}:{}:{:X} to {}", pathString, magic_enum::enum_name(type), magic_enum::enum_name(shaderClass), descriptor, MergeDefinesString(defines));
-
-			// Launch DXC SPIR-V compilation concurrently with FXC
-			auto dxcFuture = std::async(std::launch::async, [&path, &defines, shaderClass]() {
-				return DxcSpirv::Compile(path, defines.data(),
-					GetDxcShaderProfile(shaderClass), !globals::state->IsDeveloperMode());
-			});
 
 			// compile shaders — match Utils/D3D.cpp CompileShader flag policy (strictness, optional toggles, validation).
 			ID3DBlob* errorBlob = nullptr;
@@ -1959,29 +1546,6 @@ namespace SIE
 					logger::debug("Saved shader to {}", Util::WStringToString(diskPath));
 				}
 			}
-			auto spirvData = dxcFuture.get();
-			// DXVK 2.7.1 rejects descriptor-type samplers (it sources samplers from a global
-			// heap via push index). Our DXC SPIR-V emits descriptor samplers, so route any
-			// sampler-using shader to the DXBC blob instead — DXVK's dxbc-spirv converter emits
-			// valid heap samplers. The FXC blob already exists, so this costs no extra compile.
-			if (!spirvData.empty() && (ShaderCache::SpirvUsesSampler(spirvData) || ShaderCache::SpirvUsesGroupshared(spirvData))) {
-				logger::debug("DXC: shader {} uses a sampler/groupshared; using DXBC for DXVK compatibility", key);
-				spirvData.clear();
-			}
-			if (!spirvData.empty()) {
-				logger::debug("DXC: SPIR-V compiled {} bytes for {}", spirvData.size(), key);
-				// Persist the sidecar before moving so warm runs keep the direct path.
-				if (useDiskCache)
-					WriteSpirvSidecar(diskPath, spirvData);
-				std::lock_guard lock(g_spirvMutex);
-				g_spirvBlobs.insert_or_assign(key, std::move(spirvData));
-			} else if (useDiskCache) {
-				// No SPIR-V kept (sampler/groupshared, or DXC produced none): drop any
-				// stale sidecar so a future warm run doesn't wrongly use SPIR-V for a
-				// shader that must take the DXBC path under DXVK.
-				RemoveSpirvSidecar(diskPath);
-			}
-
 			cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob);
 			return shaderBlob;
 		}
@@ -2999,88 +2563,6 @@ namespace SIE
 		return !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type) && modifiedShaderMap.at(a_type) > a_current;
 	}
 
-	std::vector<uint8_t> ShaderCache::CompileSpirvFromFile(const std::wstring& path, const D3D_SHADER_MACRO* defines, const char* profile, bool optimize, const wchar_t* extraIncludeDir, const char* entryPoint)
-	{
-		const char* dxcProfile = nullptr;
-		if (!_stricmp(profile, "vs_5_0"))
-			dxcProfile = "vs_6_0";
-		else if (!_stricmp(profile, "ps_5_0"))
-			dxcProfile = "ps_6_0";
-		else if (!_stricmp(profile, "cs_5_0") || !_stricmp(profile, "cs_4_0") || !_stricmp(profile, "cs_5_1"))
-			dxcProfile = "cs_6_0";
-		else if (!_stricmp(profile, "hs_5_0"))
-			dxcProfile = "hs_6_0";
-		else if (!_stricmp(profile, "ds_5_0"))
-			dxcProfile = "ds_6_0";
-		else
-			return {};
-
-		return DxcSpirv::Compile(path, defines, dxcProfile, optimize, extraIncludeDir, entryPoint);
-	}
-
-	bool ShaderCache::SpirvUsesSampler(const std::vector<uint8_t>& spirv)
-	{
-		// SPIR-V is a stream of 32-bit words: a 5-word header followed by instructions.
-		// Each instruction's first word packs (wordCount << 16) | opcode. We only need to
-		// find a single OpTypeSampler (opcode 26) declaration to know the shader binds a
-		// sampler as a separate descriptor — which DXVK 2.7.1 cannot accept.
-		constexpr uint16_t SpvOpTypeSampler = 26u;
-
-		if (spirv.size() < 20u || (spirv.size() % sizeof(uint32_t)) != 0u)
-			return false;
-
-		const auto* words = reinterpret_cast<const uint32_t*>(spirv.data());
-		const size_t wordCount = spirv.size() / sizeof(uint32_t);
-
-		if (words[0] != 0x07230203u)  // not SPIR-V magic; nothing to scan
-			return false;
-
-		size_t i = 5u;  // skip the fixed header
-		while (i < wordCount) {
-			const uint32_t insn = words[i];
-			const uint16_t len = uint16_t(insn >> 16u);
-			const uint16_t op = uint16_t(insn & 0xffffu);
-			if (len == 0u)
-				break;  // malformed; stop scanning
-			if (op == SpvOpTypeSampler)
-				return true;
-			i += len;
-		}
-
-		return false;
-	}
-
-	bool ShaderCache::SpirvUsesGroupshared(const std::vector<uint8_t>& spirv)
-	{
-		// Scan for an OpVariable (opcode 59) with the Workgroup storage class (4) — i.e.
-		// HLSL `groupshared`. OpVariable layout: [resultType, resultId, storageClass, ...].
-		constexpr uint16_t SpvOpVariable = 59u;
-		constexpr uint32_t SpvStorageClassWorkgroup = 4u;
-
-		if (spirv.size() < 20u || (spirv.size() % sizeof(uint32_t)) != 0u)
-			return false;
-
-		const auto* words = reinterpret_cast<const uint32_t*>(spirv.data());
-		const size_t wordCount = spirv.size() / sizeof(uint32_t);
-
-		if (words[0] != 0x07230203u)
-			return false;
-
-		size_t i = 5u;
-		while (i < wordCount) {
-			const uint32_t insn = words[i];
-			const uint16_t len = uint16_t(insn >> 16u);
-			const uint16_t op = uint16_t(insn & 0xffffu);
-			if (len == 0u)
-				break;
-			if (op == SpvOpVariable && len >= 4u && (i + 3u) < wordCount && words[i + 3u] == SpvStorageClassWorkgroup)
-				return true;
-			i += len;
-		}
-
-		return false;
-	}
-
 	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
@@ -3091,25 +2573,9 @@ namespace SIE
 			auto newShader = SShaderCache::CreateVertexShader(*shaderBlob, shader,
 				descriptor);
 
-			auto key = SShaderCache::GetShaderString(ShaderClass::Vertex, shader, descriptor, true);
-			std::vector<uint8_t> spirvData;
-			{
-				std::lock_guard lock(g_spirvMutex);
-				auto it = g_spirvBlobs.find(key);
-				if (it != g_spirvBlobs.end())
-					spirvData = it->second;
-			}
-
-			const void* bytecode = spirvData.empty() ? shaderBlob->GetBufferPointer() : spirvData.data();
-			SIZE_T bytecodeSize = spirvData.empty() ? newShader->byteCodeSize : spirvData.size();
-
-			if (!spirvData.empty())
-				logger::debug("VS {}::{:X}: using SPIR-V ({} bytes)", magic_enum::enum_name(shader.shaderType.get()), descriptor, bytecodeSize);
-
 			std::lock_guard lockGuard(vertexShadersMutex);
 
-			const auto result = device->CreateVertexShader(bytecode,
-				bytecodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
+			const auto result = device->CreateVertexShader(shaderBlob->GetBufferPointer(), newShader->byteCodeSize, nullptr, reinterpret_cast<ID3D11VertexShader**>(&newShader->shader));
 			if (FAILED(result)) {
 				logger::error("Failed to create vertex shader {}::{:X} hr=0x{:08X}",
 					magic_enum::enum_name(shader.shaderType.get()), descriptor, (uint32_t)result);
@@ -3135,24 +2601,8 @@ namespace SIE
 			auto newShader = SShaderCache::CreatePixelShader(*shaderBlob, shader,
 				descriptor);
 
-			auto key = SShaderCache::GetShaderString(ShaderClass::Pixel, shader, descriptor, true);
-			std::vector<uint8_t> spirvData;
-			{
-				std::lock_guard lock(g_spirvMutex);
-				auto it = g_spirvBlobs.find(key);
-				if (it != g_spirvBlobs.end())
-					spirvData = it->second;
-			}
-
-			const void* bytecode = spirvData.empty() ? shaderBlob->GetBufferPointer() : spirvData.data();
-			SIZE_T bytecodeSize = spirvData.empty() ? shaderBlob->GetBufferSize() : spirvData.size();
-
-			if (!spirvData.empty())
-				logger::debug("PS {}::{:X}: using SPIR-V ({} bytes)", magic_enum::enum_name(shader.shaderType.get()), descriptor, bytecodeSize);
-
 			std::lock_guard lockGuard(pixelShadersMutex);
-			const auto result = device->CreatePixelShader(bytecode,
-				bytecodeSize, nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
+			const auto result = device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11PixelShader**>(&newShader->shader));
 			if (FAILED(result)) {
 				logger::error("Failed to create pixel shader {}::{:X} hr=0x{:08X}",
 					magic_enum::enum_name(shader.shaderType.get()),
@@ -3179,24 +2629,8 @@ namespace SIE
 			auto newShader = SShaderCache::CreateComputeShader(*shaderBlob, shader,
 				descriptor);
 
-			auto key = SShaderCache::GetShaderString(ShaderClass::Compute, shader, descriptor, true);
-			std::vector<uint8_t> spirvData;
-			{
-				std::lock_guard lock(g_spirvMutex);
-				auto it = g_spirvBlobs.find(key);
-				if (it != g_spirvBlobs.end())
-					spirvData = it->second;
-			}
-
-			const void* bytecode = spirvData.empty() ? shaderBlob->GetBufferPointer() : spirvData.data();
-			SIZE_T bytecodeSize = spirvData.empty() ? shaderBlob->GetBufferSize() : spirvData.size();
-
-			if (!spirvData.empty())
-				logger::debug("CS {}::{:X}: using SPIR-V ({} bytes)", magic_enum::enum_name(shader.shaderType.get()), descriptor, bytecodeSize);
-
 			std::lock_guard lockGuard(computeShadersMutex);
-			const auto result = device->CreateComputeShader(bytecode,
-				bytecodeSize, nullptr, reinterpret_cast<ID3D11ComputeShader**>(&newShader->shader));
+			const auto result = device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, reinterpret_cast<ID3D11ComputeShader**>(&newShader->shader));
 			if (FAILED(result)) {
 				logger::error("Failed to create compute shader {}::{:X} hr=0x{:08X}",
 					magic_enum::enum_name(shader.shaderType.get()),

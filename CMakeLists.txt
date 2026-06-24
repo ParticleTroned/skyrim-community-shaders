@@ -468,30 +468,6 @@ if(EXISTS "${DXVK_BUILD_DIR}/d3d11/d3d11.dll")
     )
 endif()
 
-# DXC SPIR-V compiler — staged alongside DXVK in the CS subfolder (NEVER the game
-# root); loaded explicitly by src/ShaderCache.cpp via LoadLibraryEx +
-# LOAD_WITH_ALTERED_SEARCH_PATH. dxil.dll is intentionally NOT shipped: it is the
-# DXIL signing/validation library for the DXBC/DX12 container path and is unused
-# for direct HLSL->SPIR-V output (-spirv -fspv-target-env=vulkan1.3).
-file(GLOB _DXC_NUGET_DLL
-    "${CMAKE_BINARY_DIR}/_deps/shadertestframework-src/src/nuget/Microsoft.Direct3D.DXC/*/build/native/bin/x64/dxcompiler.dll")
-if(_DXC_NUGET_DLL)
-    list(GET _DXC_NUGET_DLL 0 DXC_SOURCE_DLL)
-else()
-    # In-repo fallback (FFX SDK submodule) so staging works without the test NuGet.
-    set(DXC_SOURCE_DLL "${CMAKE_SOURCE_DIR}/extern/FidelityFX-SDK/sdk/tools/binary_store/dxcompiler.dll")
-endif()
-if(EXISTS "${DXC_SOURCE_DLL}")
-    message(STATUS "Staging DXC for SPIR-V: ${DXC_SOURCE_DLL}")
-    install(
-        FILES "${DXC_SOURCE_DLL}"
-        DESTINATION SKSE/Plugins/CommunityShaders/dxvk
-        COMPONENT DXVK
-    )
-else()
-    message(WARNING "dxcompiler.dll not found for staging — the SPIR-V shader path will be unavailable at runtime")
-endif()
-
 # NVIDIA Streamline (DLSS/Reflex) plugin DLLs — staged into the CS subfolder (NEVER
 # the game root); loaded explicitly by src/Features/Upscaling/Streamline.cpp. These
 # are NVIDIA redistributables and are NOT bundled in the repo, so this block is a

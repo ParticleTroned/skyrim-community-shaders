@@ -160,9 +160,9 @@ static int ComputeGraphLegendWidth(int totalWidth, int minGraphWidth, float widt
 	return std::min(desiredLegendWidth, availableLegendWidth);
 }
 
-static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
+static bool HasActiveTimingMode(const Profiler::TimerResult& result, bool cpuMode)
 {
-	return cpuMode ? result.hasCpu : result.hasGpu;
+	return cpuMode ? result.cpuActive : result.gpuActive;
 }
 
 static constexpr uint32_t kDisplayedRollingFrameCount = 60;
@@ -216,7 +216,6 @@ static DisplayTimingStats GetDisplayTimingStats(const Profiler::TimerResult& res
 	std::sort(samples.begin(), samples.begin() + sampleCount);
 	stats.p95Ms = GetSortedPercentile(samples, sampleCount, 95.0f);
 	stats.p99Ms = GetSortedPercentile(samples, sampleCount, 99.0f);
-	stats.timeMs = stats.avgMs;
 	return stats;
 }
 
@@ -315,7 +314,7 @@ void ProfilingRenderer::RenderGraph()
 
 	double accumulated = 0.0;
 	for (const auto& result : results) {
-		if (!result.valid || !HasTimingMode(result, cpuMode))
+		if (!result.valid || !HasActiveTimingMode(result, cpuMode))
 			continue;
 
 		const auto stats = GetDisplayTimingStats(result, cpuMode);
@@ -365,7 +364,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	FeatureTimingData data;
 	std::string prefix = featurePrefix + "::";
 	for (const auto& r : results) {
-		if (!r.valid || !HasTimingMode(r, cpuMode) || !r.name.starts_with(prefix))
+		if (!r.valid || !HasActiveTimingMode(r, cpuMode) || !r.name.starts_with(prefix))
 			continue;
 
 		std::string label = r.name.substr(prefix.size());
@@ -602,7 +601,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		std::unordered_map<std::string, size_t> groupIndex;
 
 		for (const auto& result : profiler.GetResults()) {
-			if (!result.valid || !HasTimingMode(result, cpuMode))
+			if (!result.valid || !HasActiveTimingMode(result, cpuMode))
 				continue;
 
 			const auto stats = GetDisplayTimingStats(result, cpuMode);

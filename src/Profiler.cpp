@@ -423,15 +423,17 @@ void Profiler::RebuildResults(const std::unordered_map<std::string, ActiveTimerD
 		if (activeTimers) {
 			auto it = activeTimers->find(known.name);
 			if (it != activeTimers->end()) {
-				result.gpuTimeMs = it->second.hasGpu ? it->second.gpuMs : known.gpu.lastMs;
-				result.cpuTimeMs = it->second.hasCpu ? it->second.cpuMs : known.cpu.lastMs;
+				result.gpuActive = it->second.hasGpu;
+				result.cpuActive = it->second.hasCpu;
+				result.gpuTimeMs = result.gpuActive ? it->second.gpuMs : 0.0f;
+				result.cpuTimeMs = result.cpuActive ? it->second.cpuMs : 0.0f;
 			} else {
-				result.gpuTimeMs = known.gpu.lastMs;
-				result.cpuTimeMs = known.cpu.lastMs;
+				result.gpuTimeMs = 0.0f;
+				result.cpuTimeMs = 0.0f;
 			}
 		} else {
-			result.gpuTimeMs = known.gpu.lastMs;
-			result.cpuTimeMs = known.cpu.lastMs;
+			result.gpuTimeMs = 0.0f;
+			result.cpuTimeMs = 0.0f;
 		}
 
 		if (known.hasGpu) {

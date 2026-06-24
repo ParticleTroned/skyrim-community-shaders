@@ -9232,23 +9232,26 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		ID3D11Buffer* cbs[1] = { vrClearHMDMaskCB.get() };
 		context->CSSetConstantBuffers(0, 1, cbs);
 
-		for (uint32_t i = 0; i < 2; ++i) {
-			uint32_t depthOffset = (i == 1) ? eyeWidthIn : 0;
-			uint32_t clearMaskParams[8] = {
-				depthOffset,
-				0,
-				0,
-				0,
-				eyeWidthIn,
-				eyeHeightIn,
-				eyeWidthIn,
-				eyeHeightIn
-			};
-			context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, clearMaskParams, 0, 0);
+		{
+			Profiler::ScopedPass profile(globals::profiler, GetHMDMaskClearProfileName(HMDMaskClearPhase::PerEyeInput));
+			for (uint32_t i = 0; i < 2; ++i) {
+				uint32_t depthOffset = (i == 1) ? eyeWidthIn : 0;
+				uint32_t clearMaskParams[8] = {
+					depthOffset,
+					0,
+					0,
+					0,
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthIn,
+					eyeHeightIn
+				};
+				context->UpdateSubresource(vrClearHMDMaskCB.get(), 0, nullptr, clearMaskParams, 0, 0);
 
-			ID3D11UnorderedAccessView* uavs[1] = { vrIntermediateColorIn[i]->uav.get() };
-			context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-			context->Dispatch(dispatchX, dispatchY, 1);
+				ID3D11UnorderedAccessView* uavs[1] = { vrIntermediateColorIn[i]->uav.get() };
+				context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+				context->Dispatch(dispatchX, dispatchY, 1);
+			}
 		}
 
 		ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
@@ -10077,7 +10080,23 @@ bool Upscaling::ShouldClearHMDMaskInPhase(Upscaling::HMDMaskClearPhase a_phase) 
 	       runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 }
 
-void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+const char* Upscaling::GetHMDMaskClearProfileName(Upscaling::HMDMaskClearPhase a_phase)
+{
+	switch (a_phase) {
+	case Upscaling::HMDMaskClearPhase::PerEyeInput:
+		return "Upscaling::ClearHMDMaskPerEyeInput";
+	case Upscaling::HMDMaskClearPhase::PerEyeOutput:
+		return "Upscaling::ClearHMDMaskPerEyeOutput";
+	case Upscaling::HMDMaskClearPhase::SubmitStageOutput:
+		return "Upscaling::ClearHMDMaskSubmitStageOutput";
+	case Upscaling::HMDMaskClearPhase::SubmitStageFoveatedOutput:
+		return "Upscaling::ClearHMDMaskSubmitStageFoveatedOutput";
+	default:
+		return "Upscaling::ClearHMDMask";
+	}
+}
+
+void Upscaling::ClearHMDMask(const char* profileName, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 	uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight, uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY, uint32_t colorOffsetY)
 {
 	if (!globals::game::isVR)
@@ -10124,7 +10143,7 @@ void Upscaling::ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderRe
 		context->CSSetConstantBuffers(0, 1, cbs);
 
 		{
-			CS_PROFILE_SCOPE("Upscaling::ClearHMDMask");
+			Profiler::ScopedPass profile(globals::profiler, profileName && *profileName ? profileName : "Upscaling::ClearHMDMask");
 			context->Dispatch(dispatchX, dispatchY, 1);
 		}
 
@@ -10147,6 +10166,7 @@ void Upscaling::ClearHMDMaskForEye(Upscaling::HMDMaskClearPhase a_phase, ID3D11U
 		return;
 
 	ClearHMDMask(
+		GetHMDMaskClearProfileName(a_phase),
 		colorUAV,
 		depthSRV,
 		depthWidth,

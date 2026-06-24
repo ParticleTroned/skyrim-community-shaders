@@ -524,7 +524,7 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> vrClearHMDMaskCS;
 	winrt::com_ptr<ID3D11Buffer> vrClearHMDMaskCB;
 	// Helper to dispatch mask clearing for a single eye region
-	void ClearHMDMask(ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
+	void ClearHMDMask(const char* profileName, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,
 		uint32_t depthOffsetX, uint32_t colorOffsetX, uint32_t depthOffsetY = 0, uint32_t colorOffsetY = 0);
 
@@ -870,6 +870,7 @@ private:
 		SubmitStageOutput,
 		SubmitStageFoveatedOutput
 	};
+	static const char* GetHMDMaskClearProfileName(HMDMaskClearPhase a_phase);
 	bool ShouldClearHMDMaskInPhase(HMDMaskClearPhase a_phase) const;
 	void ClearHMDMaskForEye(HMDMaskClearPhase a_phase, ID3D11UnorderedAccessView* colorUAV, ID3D11ShaderResourceView* depthSRV,
 		uint32_t depthWidth, uint32_t depthHeight, uint32_t colorWidth, uint32_t colorHeight,

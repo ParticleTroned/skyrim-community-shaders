@@ -27,8 +27,6 @@ struct UnifiedWater : OverlayFeature
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
-	// Temporary kill switch paired with State.cpp's forced boot-disable list.
-	virtual bool IsHiddenFromUserView() const override { return true; }
 
 	struct Settings
 	{

@@ -1,10 +1,12 @@
 #include "FidelityFX.h"
 
+#include "../../DxvkLoader.h"
 #include "../../State.h"
 #include "../HDRDisplay.h"
 #include "../Upscaling.h"
 #include "DxvkInterop.h"
 
+#include <cstring>
 #include <vector>
 
 namespace
@@ -12,15 +14,15 @@ namespace
 	// Mirror of the FFX VK backend's getVKImageLayoutFromResourceState so we can
 	// pre-transition DXVK interop images into the layout FFX assumes (FFX seeds its
 	// first barrier oldLayout from the declared state).
-	VkImageLayout FfxStateToLayout(FfxResourceStates state)
+	VkImageLayout FfxStateToLayout(uint32_t state)
 	{
 		switch (state) {
-		case FFX_RESOURCE_STATE_UNORDERED_ACCESS:
-		case FFX_RESOURCE_STATE_COMMON:
+		case FFX_API_RESOURCE_STATE_UNORDERED_ACCESS:
+		case FFX_API_RESOURCE_STATE_COMMON:
 			return VK_IMAGE_LAYOUT_GENERAL;
-		case FFX_RESOURCE_STATE_COPY_SRC:
+		case FFX_API_RESOURCE_STATE_COPY_SRC:
 			return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-		case FFX_RESOURCE_STATE_COPY_DEST:
+		case FFX_API_RESOURCE_STATE_COPY_DEST:
 			return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		default:
 			// COMPUTE_READ / PIXEL_COMPUTE_READ / PIXEL_READ
@@ -42,18 +44,17 @@ namespace
 
 	// Wrap a D3D11 resource as an FFX VK resource (its backing VkImage) and queue the
 	// layout transition needed before the FFX dispatch.
-	FfxResource WrapAndPrepare(SIE::DxvkInterop* dxvk, ID3D11Resource* resource,
-		const wchar_t* name, FfxResourceStates state, FfxResourceUsage usage,
-		VkImageAspectFlags aspect, std::vector<LayoutGuard>& guards)
+	FfxApiResource WrapAndPrepare(SIE::DxvkInterop* dxvk, ID3D11Resource* resource,
+		uint32_t state, uint32_t usage, VkImageAspectFlags aspect, std::vector<LayoutGuard>& guards)
 	{
 		if (!resource)
-			return ffxGetResourceVK(nullptr, {}, name, state);
+			return ffxApiGetResourceVK(nullptr, {}, state);
 
 		VkImage image = VK_NULL_HANDLE;
 		VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
 		if (!dxvk->GetVkImage(resource, &image, &layout, &info) || image == VK_NULL_HANDLE)
-			return ffxGetResourceVK(nullptr, {}, name, state);
+			return ffxApiGetResourceVK(nullptr, {}, state);
 
 		VkImageLayout ffxLayout = FfxStateToLayout(state);
 		if (layout != ffxLayout) {
@@ -61,8 +62,8 @@ namespace
 			guards.push_back({ resource, layout, ffxLayout, aspect });
 		}
 
-		FfxResourceDescription desc = ffxGetImageResourceDescriptionVK(image, info, usage);
-		return ffxGetResourceVK(reinterpret_cast<void*>(image), desc, name, state);
+		FfxApiResourceDescription desc = ffxApiGetImageResourceDescriptionVK(image, info, usage);
+		return ffxApiGetResourceVK(reinterpret_cast<void*>(image), desc, state);
 	}
 
 	void RestoreLayouts(SIE::DxvkInterop* dxvk, std::vector<LayoutGuard>& guards)
@@ -73,6 +74,41 @@ namespace
 		guards.clear();
 	}
 
+	// --- DXVK ⇄ unmodified prebuilt-FFX VK backend shim -------------------------------------
+	// The official amd_fidelityfx_vk.dll resolves every device function through the
+	// vkGetDeviceProcAddr callback we hand it in ffxCreateBackendVKDesc. Two of those resolve
+	// to NULL on DXVK, and the stock backend calls them without a null-check:
+	//   • vkGetBufferMemoryRequirements2KHR — DXVK promoted VK_KHR_get_memory_requirements2 to
+	//     core and dropped the KHR alias, so the KHR name is NULL. The breadcrumbs dedicated-
+	//     allocation setup (enabled because DXVK enumerates VK_KHR_dedicated_allocation) calls
+	//     it during ffxCreateContext → access violation. Route to the core entry point.
+	//   • vkCmdWriteBufferMarkerAMD / 2AMD — DXVK enumerates VK_AMD_buffer_marker (so the
+	//     backend turns on its breadcrumbs marker path) but leaves the entry points NULL. They
+	//     are called at dispatch → access violation. Hand back a no-op stub so the debug-only
+	//     breadcrumbs feature degrades to nothing instead of crashing.
+	// The gating capability flags come from static vkEnumerateDeviceExtensionProperties calls
+	// we cannot intercept, but the NULL calls themselves go through this callback — so shimming
+	// it lets the UNMODIFIED prebuilt DLL run on DXVK with no patching.
+	PFN_vkGetDeviceProcAddr g_realDeviceProcAddr = nullptr;
+
+	VKAPI_ATTR void VKAPI_CALL Noop_vkCmdWriteBufferMarker(
+		VkCommandBuffer, VkPipelineStageFlagBits, VkBuffer, VkDeviceSize, uint32_t) {}
+
+	VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL DxvkFfxGetDeviceProcAddr(VkDevice device, const char* pName)
+	{
+		if (!pName || !g_realDeviceProcAddr)
+			return nullptr;
+		if (std::strcmp(pName, "vkGetBufferMemoryRequirements2KHR") == 0) {
+			if (auto p = g_realDeviceProcAddr(device, "vkGetBufferMemoryRequirements2KHR"))
+				return p;
+			return g_realDeviceProcAddr(device, "vkGetBufferMemoryRequirements2");
+		}
+		if (std::strcmp(pName, "vkCmdWriteBufferMarkerAMD") == 0 ||
+			std::strcmp(pName, "vkCmdWriteBufferMarker2AMD") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Noop_vkCmdWriteBufferMarker);
+		return g_realDeviceProcAddr(device, pName);
+	}
+
 	// SEH wrappers — kept free of any object that requires unwinding so __try is legal
 	// (MSVC forbids __try in a function with C++ objects whose lifetime spans it). A
 	// fault here is typically RenderDoc interfering with FFX; we degrade gracefully.
@@ -80,63 +116,66 @@ namespace
 	{
 		uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"CommunityShaders.dll"));
 		uintptr_t addr = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
-		logger::critical("[FidelityFX] {} FAULTED code=0x{:08X} addr=0x{:X} rva=0x{:X}",
-			where, (uint32_t)ep->ExceptionRecord->ExceptionCode, addr, addr >= base ? (addr - base) : 0);
+		// For a call/jump through a null pointer (addr==0), the return address sits at [Rsp].
+		// Resolve its owning module so we see WHO made the null call (FFX DLL vs Vulkan vs us).
+		uintptr_t caller = 0, callerRva = 0;
+		char callerMod[64] = "?";
+		if (ep->ContextRecord && ep->ContextRecord->Rsp) {
+			caller = *reinterpret_cast<uintptr_t*>(ep->ContextRecord->Rsp);
+			HMODULE m = nullptr;
+			if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+					reinterpret_cast<LPCWSTR>(caller), &m) &&
+				m) {
+				wchar_t path[MAX_PATH]{};
+				GetModuleFileNameW(m, path, MAX_PATH);
+				const wchar_t* leaf = wcsrchr(path, L'\\');
+				wcstombs_s(nullptr, callerMod, sizeof(callerMod), leaf ? leaf + 1 : path, _TRUNCATE);
+				callerRva = caller - reinterpret_cast<uintptr_t>(m);
+			}
+		}
+		logger::critical("[FidelityFX] {} FAULTED code=0x{:08X} addr=0x{:X} rva=0x{:X} caller=0x{:X} ({}+0x{:X})",
+			where, (uint32_t)ep->ExceptionRecord->ExceptionCode, addr, addr >= base ? (addr - base) : 0,
+			caller, callerMod, callerRva);
 		return EXCEPTION_EXECUTE_HANDLER;
 	}
 
-	FfxErrorCode SafeContextCreate(FfxFsr3Context* ctx, FfxFsr3ContextDescription* desc)
+	// Three generic SEH wrappers over the resolved FFX-API function-pointer table. One
+	// SafeDispatch covers upscale + FG-prepare + FG dispatch (all are ffxDispatch with a
+	// different header.type). Success is FFX_API_RETURN_OK (0).
+	ffxReturnCode_t SafeCreateContext(const ffxFunctions* api, ffxContext* ctx, ffxCreateContextDescHeader* desc)
 	{
 		__try {
-			return ffxFsr3ContextCreate(ctx, desc);
-		} __except (LogFfxException("ffxFsr3ContextCreate", GetExceptionInformation())) {
-			return FFX_ERROR_BACKEND_API_ERROR;
+			return api->CreateContext(ctx, desc, nullptr);
+		} __except (LogFfxException("ffxCreateContext", GetExceptionInformation())) {
+			return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
 		}
 	}
 
-	FfxErrorCode SafeDispatchUpscale(FfxFsr3Context* ctx, const FfxFsr3DispatchUpscaleDescription* desc)
+	ffxReturnCode_t SafeDispatch(const ffxFunctions* api, ffxContext* ctx, const ffxDispatchDescHeader* desc)
 	{
 		__try {
-			return ffxFsr3ContextDispatchUpscale(ctx, desc);
+			return api->Dispatch(ctx, desc);
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			return FFX_ERROR_BACKEND_API_ERROR;
+			return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
 		}
 	}
 
-	FfxErrorCode SafeDispatchFrameGenerationPrepare(FfxFsr3Context* ctx, const FfxFsr3DispatchFrameGenerationPrepareDescription* desc)
+	ffxReturnCode_t SafeConfigure(const ffxFunctions* api, ffxContext* ctx, const ffxConfigureDescHeader* desc)
 	{
 		__try {
-			return ffxFsr3ContextDispatchFrameGenerationPrepare(ctx, desc);
+			return api->Configure(ctx, desc);
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			return FFX_ERROR_BACKEND_API_ERROR;
-		}
-	}
-
-	FfxErrorCode SafeConfigureFrameGeneration(FfxFsr3Context* ctx, const FfxFrameGenerationConfig* cfg)
-	{
-		__try {
-			return ffxFsr3ConfigureFrameGeneration(ctx, cfg);
-		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			return FFX_ERROR_BACKEND_API_ERROR;
-		}
-	}
-
-	FfxErrorCode SafeDispatchFrameGeneration(const FfxFrameGenerationDispatchDescription* desc)
-	{
-		__try {
-			return ffxFsr3DispatchFrameGeneration(desc);
-		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			return FFX_ERROR_BACKEND_API_ERROR;
+			return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
 		}
 	}
 
 	// Surface FFX's own diagnostics (missing device features, pipeline failures, etc.).
-	void FfxMessageCallback(FfxMsgType type, const wchar_t* message)
+	void FfxApiMessageCallback(uint32_t type, const wchar_t* message)
 	{
 		char buf[1024] = {};
 		size_t converted = 0;
 		wcstombs_s(&converted, buf, sizeof(buf), message ? message : L"", _TRUNCATE);
-		if (type == FFX_MESSAGE_TYPE_ERROR)
+		if (type == FFX_API_MESSAGE_TYPE_ERROR)
 			logger::error("[FidelityFX][FFX] {}", buf);
 		else
 			logger::warn("[FidelityFX][FFX] {}", buf);
@@ -166,12 +205,14 @@ namespace
 				return len > 1 && buf[0] != '0';
 			};
 			FgDebug c;
+			// The FFX-API frame-gen flag bit positions differ from the native FSR3 flags;
+			// remap explicitly rather than copying bit values.
 			if (on("CS_FG_DEBUG_VIEW"))
-				c.ffxFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_VIEW;
+				c.ffxFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_VIEW;  // 1<<2
 			if (on("CS_FG_DEBUG_TEAR"))
-				c.ffxFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;
+				c.ffxFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;  // 1<<0
 			if (on("CS_FG_DEBUG_PACING"))
-				c.ffxFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
+				c.ffxFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_PACING_LINES;  // 1<<4
 			c.onlyInterpolated = on("CS_FG_ONLY_INTERP");
 			c.readback = on("CS_FG_READBACK");
 			if (c.ffxFlags || c.onlyInterpolated || c.readback)
@@ -233,17 +274,17 @@ namespace
 
 	// Map the swap chain's DXGI format to the FFX surface format so the frame-interpolation
 	// context's back-buffer format matches what we actually present.
-	FfxSurfaceFormat DxgiToFfxSurfaceFormat(DXGI_FORMAT fmt)
+	uint32_t DxgiToFfxApiSurfaceFormat(DXGI_FORMAT fmt)
 	{
 		switch (fmt) {
 		case DXGI_FORMAT_R10G10B10A2_UNORM:
-			return FFX_SURFACE_FORMAT_R10G10B10A2_UNORM;
+			return FFX_API_SURFACE_FORMAT_R10G10B10A2_UNORM;
 		case DXGI_FORMAT_R16G16B16A16_FLOAT:
-			return FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+			return FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
 		case DXGI_FORMAT_R8G8B8A8_UNORM:
 		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
 		default:
-			return FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+			return FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
 		}
 	}
 
@@ -279,9 +320,37 @@ namespace
 
 void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 {
-	if (fsrScratchBuffers[0] || fsrScratchBuffers[1]) {
+	if (upscaleContext || fgContext) {
 		logger::warn("[FidelityFX] FSR resources already created, skipping allocation");
 		return;
+	}
+
+	// Resolve the 5 FFX-API entry points from the prebuilt signed DLL. It is staged into the
+	// CS dxvk subfolder alongside DXVK. DxvkLoader loads its DLLs by ABSOLUTE path (the dxvk
+	// subfolder is NOT on the loader search path), so load by absolute path here too.
+	if (!ffxModule) {
+		const auto ffxPath = (DxvkLoader::GetDxvkDir() / L"amd_fidelityfx_vk.dll").wstring();
+		ffxModule = LoadLibraryExW(ffxPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+		if (!ffxModule) {
+			logger::error("[FidelityFX] amd_fidelityfx_vk.dll not found in '{}' (err {}) — FSR (VK) cannot initialize", DxvkLoader::GetDxvkDir().string(), GetLastError());
+			return;
+		}
+		ffxLoadFunctions(&ffxApi, ffxModule);
+		if (!ffxApi.CreateContext || !ffxApi.DestroyContext || !ffxApi.Configure || !ffxApi.Dispatch) {
+			logger::error("[FidelityFX] amd_fidelityfx_vk.dll missing FFX-API entry points");
+			FreeLibrary(ffxModule);
+			ffxModule = nullptr;
+			return;
+		}
+		logger::info("[FidelityFX] Loaded official FFX-API DLL amd_fidelityfx_vk.dll");
+
+		// Route the FFX-API's internal diagnostics (device-cap checks, pipeline failures) to our log.
+		ffxConfigureDescGlobalDebug1 dbg{};
+		dbg.header.type = FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1;
+		dbg.header.pNext = nullptr;
+		dbg.fpMessage = FfxApiMessageCallback;
+		dbg.debugLevel = FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_WARNINGS;
+		ffxApi.Configure(nullptr, &dbg.header);
 	}
 
 	auto* dxvk = SIE::DxvkInterop::GetSingleton();
@@ -296,12 +365,6 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 		return;
 	}
 
-	VkDeviceContext vkCtx{};
-	vkCtx.vkDevice = dxvk->GetDevice();
-	vkCtx.vkPhysicalDevice = dxvk->GetPhysicalDevice();
-	vkCtx.vkDeviceProcAddr = dxvk->GetDeviceProcAddr();
-	fsrFfxDevice = ffxGetDeviceVK(&vkCtx);
-
 	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto renderSize = Util::ConvertToDynamic(screenSize);
 	uint32_t displayWidth = (uint32_t)screenSize.x;
@@ -309,86 +372,79 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 	uint32_t renderWidth = (uint32_t)renderSize.x;
 	uint32_t renderHeight = (uint32_t)renderSize.y;
 
-	FfxFsr3ContextDescription contextDescription{};
-	contextDescription.maxRenderSize = { renderWidth, renderHeight };
-	contextDescription.maxUpscaleSize = { displayWidth, displayHeight };
-	contextDescription.displaySize = { displayWidth, displayHeight };
-
-	contextDescription.fpMessage = FfxMessageCallback;
-
 	const bool hdr = globals::features::hdrDisplay.loaded;
-	contextDescription.flags = FFX_FSR3_ENABLE_AUTO_EXPOSURE;
-	if (hdr)
-		contextDescription.flags |= FFX_FSR3_ENABLE_HIGH_DYNAMIC_RANGE;
-	// Frame interpolation runs on the final composited back buffer, so the context's back-buffer
-	// format must match the actual swap chain format (independent of HDR Display being enabled).
-	contextDescription.backBufferFormat = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+
+	// FG back-buffer format = actual swap-chain format (independent of HDR Display being on).
+	uint32_t backBufferFormat = FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
 	{
 		DXGI_SWAP_CHAIN_DESC scDesc{};
 		if (globals::d3d::swapChain && SUCCEEDED(globals::d3d::swapChain->GetDesc(&scDesc)))
-			contextDescription.backBufferFormat = DxgiToFfxSurfaceFormat(scDesc.BufferDesc.Format);
+			backBufferFormat = DxgiToFfxApiSurfaceFormat(scDesc.BufferDesc.Format);
 	}
 
-	auto makeInterface = [&](int slot, size_t maxContexts) -> bool {
-		size_t scratchSize = ffxGetScratchMemorySizeVK(dxvk->GetPhysicalDevice(), maxContexts);
-		fsrScratchBuffers[slot] = calloc(scratchSize ? scratchSize : 1, 1);
-		if (!fsrScratchBuffers[slot]) {
-			logger::critical("[FidelityFX] Failed to allocate FSR3 VK scratch buffer {}", slot);
-			return false;
-		}
-		FfxInterface iface{};
-		FfxErrorCode ifErr = ffxGetInterfaceVK(&iface, fsrFfxDevice, fsrScratchBuffers[slot], scratchSize, maxContexts);
-		logger::info("[FidelityFX] slot {} ffxGetInterfaceVK=0x{:08X} scratchSize={} ifScratchSize={} fpGetSDKVersion={} fpGetDeviceCapabilities={} fpCreateBackendContext={} fpDestroyBackendContext={}",
-			slot, (uint32_t)ifErr, scratchSize, iface.scratchBufferSize,
-			iface.fpGetSDKVersion != nullptr, iface.fpGetDeviceCapabilities != nullptr,
-			iface.fpCreateBackendContext != nullptr, iface.fpDestroyBackendContext != nullptr);
-		if (ifErr != FFX_OK) {
-			logger::critical("[FidelityFX] ffxGetInterfaceVK failed for slot {}", slot);
-			return false;
-		}
-		if (slot == 0)
-			contextDescription.backendInterfaceSharedResources = iface;
-		else if (slot == 1)
-			contextDescription.backendInterfaceUpscaling = iface;
-		else
-			contextDescription.backendInterfaceFrameInterpolation = iface;
-		return true;
+	// One backend-VK desc per create-context call. Pointers need only live for the call.
+	auto makeBackendDesc = [&]() {
+		ffxCreateBackendVKDesc d{};
+		d.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;  // 0x3
+		d.header.pNext = nullptr;
+		d.vkDevice = dxvk->GetDevice();
+		d.vkPhysicalDevice = dxvk->GetPhysicalDevice();
+		// Route the backend's device-function resolution through our DXVK-compat shim so the
+		// unmodified prebuilt DLL doesn't call DXVK's NULL aliases (see DxvkFfxGetDeviceProcAddr).
+		g_realDeviceProcAddr = dxvk->GetDeviceProcAddr();
+		d.vkDeviceProcAddr = &DxvkFfxGetDeviceProcAddr;
+		return d;
 	};
 
-	// This FFX v1.1.4 build does NOT honor FFX_FSR3_ENABLE_UPSCALING_ONLY:
-	// ffxFsr3ContextCreate computes a local `upscalingOnly` but never assigns it to
-	// contextPrivate->upscalingOnly (ffx_fsr3.cpp:68), so the context always builds the
-	// full upscaler + optical-flow + frame-interpolation pipeline and verifies all three
-	// backend interfaces. Always provide them: shared(1), upscaling(1), frameInterp(2).
-	if (!makeInterface(0, 1) || !makeInterface(1, 1) || !makeInterface(2, 2)) {
-		for (auto& buf : fsrScratchBuffers) {
-			if (buf) {
-				free(buf);
-				buf = nullptr;
-			}
-		}
-		if (dxvk->IsAvailable())
-			dxvk->DestroyCommandResources();
-		return;
-	}
-
-	// ffxFsr3ContextCreate flushes internal GPU jobs (ExecuteGpuJobsVK), which records and
-	// SUBMITS a command buffer to DXVK's shared graphics queue. Hold DXVK's submission lock
-	// (after flushing its pending D3D11 work) so that submit doesn't race DXVK's own worker
-	// thread on the single graphics queue.
+	// ffxCreateContext flushes internal GPU init jobs that record + SUBMIT onto DXVK's shared
+	// graphics queue. Hold DXVK's submission lock (after flushing its pending D3D11 work).
 	dxvk->FlushRenderingCommands();
 	dxvk->LockSubmissionQueue();
-	FfxErrorCode createErr = SafeContextCreate(&fsrContext[0], &contextDescription);
+
+	logger::info("[FidelityFX] DXVK VK handles: device=0x{:X} physicalDevice=0x{:X} procAddr=0x{:X}",
+		(uintptr_t)dxvk->GetDevice(), (uintptr_t)dxvk->GetPhysicalDevice(), (uintptr_t)dxvk->GetDeviceProcAddr());
+
+	// (1) Upscale context.
+	ffxCreateBackendVKDesc upscaleBackend = makeBackendDesc();
+	ffxCreateContextDescUpscale upscaleDesc{};
+	upscaleDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;  // 0x10000
+	upscaleDesc.header.pNext = &upscaleBackend.header;
+	upscaleDesc.flags = FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+	if (hdr)
+		upscaleDesc.flags |= FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
+	upscaleDesc.maxRenderSize = { renderWidth, renderHeight };
+	upscaleDesc.maxUpscaleSize = { displayWidth, displayHeight };
+	upscaleDesc.fpMessage = FfxApiMessageCallback;
+	ffxReturnCode_t rcUpscale = SafeCreateContext(&ffxApi, &upscaleContext, &upscaleDesc.header);
+
+	// (2) Frame-generation context.
+	ffxReturnCode_t rcFg = FFX_API_RETURN_OK;
+	if (rcUpscale == FFX_API_RETURN_OK) {
+		ffxCreateBackendVKDesc fgBackend = makeBackendDesc();
+		ffxCreateContextDescFrameGeneration fgDesc{};
+		fgDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;  // 0x20001
+		fgDesc.header.pNext = &fgBackend.header;
+		fgDesc.flags = 0;
+		if (hdr)
+			fgDesc.flags |= FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE;  // 1<<5
+		fgDesc.displaySize = { displayWidth, displayHeight };
+		fgDesc.maxRenderSize = { renderWidth, renderHeight };
+		fgDesc.backBufferFormat = backBufferFormat;
+		rcFg = SafeCreateContext(&ffxApi, &fgContext, &fgDesc.header);
+	}
+
 	dxvk->ReleaseSubmissionQueue();
-	if (createErr != FFX_OK) {
-		logger::critical("[FidelityFX] ffxFsr3ContextCreate (VK) failed: 0x{:08X}", (uint32_t)createErr);
-		// Context not created — free scratch/textures/commands WITHOUT destroying the
-		// (non-existent) FFX context, which would fault.
-		for (auto& buf : fsrScratchBuffers) {
-			if (buf) {
-				free(buf);
-				buf = nullptr;
-			}
+
+	if (rcUpscale != FFX_API_RETURN_OK || rcFg != FFX_API_RETURN_OK) {
+		logger::critical("[FidelityFX] ffxCreateContext (VK) failed: upscale=0x{:08X} fg=0x{:08X}",
+			(uint32_t)rcUpscale, (uint32_t)rcFg);
+		if (upscaleContext) {
+			ffxApi.DestroyContext(&upscaleContext, nullptr);
+			upscaleContext = nullptr;
+		}
+		if (fgContext) {
+			ffxApi.DestroyContext(&fgContext, nullptr);
+			fgContext = nullptr;
 		}
 		if (dxvk->IsAvailable())
 			dxvk->DestroyCommandResources();
@@ -415,7 +471,7 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 
 	frameGenContextActive = true;
 	frameID = 0;
-	logger::info("[FidelityFX] Created FSR3 context on DXVK VkDevice (Display: {}x{}, Render: {}x{}, frame-gen capable)",
+	logger::info("[FidelityFX] Created FFX-API upscale+FG contexts on DXVK VkDevice (Display: {}x{}, Render: {}x{})",
 		displayWidth, displayHeight, renderWidth, renderHeight);
 }
 
@@ -423,16 +479,15 @@ void FidelityFX::DestroyFSRResources()
 {
 	auto* dxvk = SIE::DxvkInterop::GetSingleton();
 
-	if (contextCreated && ffxFsr3ContextDestroy(&fsrContext[0]) != FFX_OK)
-		logger::critical("[FidelityFX] Failed to destroy FSR3 context!");
-	contextCreated = false;
-
-	for (auto& buf : fsrScratchBuffers) {
-		if (buf) {
-			free(buf);
-			buf = nullptr;
-		}
+	if (contextCreated) {
+		if (upscaleContext && ffxApi.DestroyContext && ffxApi.DestroyContext(&upscaleContext, nullptr) != FFX_API_RETURN_OK)
+			logger::critical("[FidelityFX] Failed to destroy FFX upscale context!");
+		if (fgContext && ffxApi.DestroyContext && ffxApi.DestroyContext(&fgContext, nullptr) != FFX_API_RETURN_OK)
+			logger::critical("[FidelityFX] Failed to destroy FFX frame-generation context!");
 	}
+	upscaleContext = nullptr;
+	fgContext = nullptr;
+	contextCreated = false;
 
 	auto destroyTex = [](Texture2D*& t) {
 		if (t) {
@@ -454,12 +509,13 @@ void FidelityFX::DestroyFSRResources()
 	currentCommandBuffer = VK_NULL_HANDLE;
 	fsrDispatchCrashLogged = false;
 	fgDispatchCrashLogged = false;
+	// ffxModule intentionally kept loaded for the process lifetime.
 }
 
 void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
 	auto* dxvk = SIE::DxvkInterop::GetSingleton();
-	if (!dxvk->IsAvailable() || !dxvk->CommandResourcesReady() || !upscaledTexture)
+	if (!dxvk->IsAvailable() || !dxvk->CommandResourcesReady() || !upscaledTexture || !upscaleContext)
 		return;
 
 	auto renderer = globals::game::renderer;
@@ -483,62 +539,64 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	currentCommandBuffer = cb;
 
 	std::vector<LayoutGuard> guards;
+	void* commandList = reinterpret_cast<void*>(cb);  // raw VkCommandBuffer; the FFX-API takes it directly
 
-	FfxFsr3DispatchUpscaleDescription dispatchParameters{};
-	dispatchParameters.commandList = ffxGetCommandListVK(cb);
-	dispatchParameters.color = WrapAndPrepare(dxvk, a_upscalingTexture, L"FSR3_Color", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
-	dispatchParameters.depth = WrapAndPrepare(dxvk, depthTexture.texture, L"FSR3_Depth", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_DEPTHTARGET, VK_IMAGE_ASPECT_DEPTH_BIT, guards);
-	dispatchParameters.motionVectors = WrapAndPrepare(dxvk, a_motionVectors, L"FSR3_MotionVectors", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
-	dispatchParameters.reactive = WrapAndPrepare(dxvk, a_reactiveMask, L"FSR3_Reactive", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
-	dispatchParameters.transparencyAndComposition = WrapAndPrepare(dxvk, a_transparencyCompositionMask, L"FSR3_TransComp", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
-	dispatchParameters.exposure = ffxGetResourceVK(nullptr, {}, L"FSR3_Exposure", FFX_RESOURCE_STATE_COMPUTE_READ);
-	dispatchParameters.upscaleOutput = WrapAndPrepare(dxvk, upscaledTexture->resource.get(), L"FSR3_Output", FFX_RESOURCE_STATE_UNORDERED_ACCESS, FFX_RESOURCE_USAGE_UAV, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+	ffxDispatchDescUpscale dp{};
+	dp.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;  // 0x10001
+	dp.commandList = commandList;
+	dp.color = WrapAndPrepare(dxvk, a_upscalingTexture, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+	dp.depth = WrapAndPrepare(dxvk, depthTexture.texture, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_DEPTHTARGET, VK_IMAGE_ASPECT_DEPTH_BIT, guards);
+	dp.motionVectors = WrapAndPrepare(dxvk, a_motionVectors, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+	dp.reactive = WrapAndPrepare(dxvk, a_reactiveMask, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+	dp.transparencyAndComposition = WrapAndPrepare(dxvk, a_transparencyCompositionMask, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+	dp.exposure = ffxApiGetResourceVK(nullptr, {}, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+	dp.output = WrapAndPrepare(dxvk, upscaledTexture->resource.get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, FFX_API_RESOURCE_USAGE_UAV, VK_IMAGE_ASPECT_COLOR_BIT, guards);
 
-	dispatchParameters.motionVectorScale = { renderSize.x, renderSize.y };
-	dispatchParameters.renderSize = { (uint)renderSize.x, (uint)renderSize.y };
-	dispatchParameters.jitterOffset = { -jitter.x, -jitter.y };
-	dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
-	dispatchParameters.cameraFar = *globals::game::cameraFar;
-	dispatchParameters.cameraNear = *globals::game::cameraNear;
-	dispatchParameters.enableSharpening = true;
-	dispatchParameters.sharpness = a_sharpness;
-	dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
-	dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
-	dispatchParameters.reset = false;
-	dispatchParameters.preExposure = 1.0f;
-	dispatchParameters.flags = 0;
-	dispatchParameters.frameID = frameID;
+	dp.motionVectorScale = { renderSize.x, renderSize.y };
+	dp.renderSize = { (uint32_t)renderSize.x, (uint32_t)renderSize.y };
+	dp.upscaleSize = { (uint32_t)screenSize.x, (uint32_t)screenSize.y };
+	dp.jitterOffset = { -jitter.x, -jitter.y };
+	dp.frameTimeDelta = *globals::game::deltaTime * 1000.f;
+	dp.cameraFar = *globals::game::cameraFar;
+	dp.cameraNear = *globals::game::cameraNear;
+	dp.enableSharpening = true;
+	dp.sharpness = a_sharpness;
+	dp.cameraFovAngleVertical = Util::GetVerticalFOVRad();
+	dp.viewSpaceToMetersFactor = 0.01428222656f;
+	dp.reset = false;
+	dp.preExposure = 1.0f;
+	dp.flags = 0;
+	// NOTE: ffxDispatchDescUpscale has NO frameID field (unlike the native FSR3 upscale desc).
 
-	bool dispatched = SafeDispatchUpscale(&fsrContext[0], &dispatchParameters) == FFX_OK;
+	bool dispatched = SafeDispatch(&ffxApi, &upscaleContext, &dp.header) == FFX_API_RETURN_OK;
 	if (!dispatched && !fsrDispatchCrashLogged) {
-		logger::critical("[FidelityFX] ffxFsr3ContextDispatchUpscale (VK) failed or faulted.");
+		logger::critical("[FidelityFX] ffxDispatch(upscale, VK) failed or faulted.");
 		fsrDispatchCrashLogged = true;
 	}
 
-	// Frame generation needs fgPrepareDescriptions[frameID&1] populated with this frame's
-	// renderSize/camera so ffxFsr3DispatchFrameGeneration reads valid dispatch dimensions.
-	// ffxFsr3ContextDispatchUpscale prepares the dilated depth/MV RESOURCES but does NOT
-	// record those descriptions; only DispatchFrameGenerationPrepare does (ffx_fsr3.cpp:481).
-	// Without it the FI dispatch reads a garbage renderSize -> groupCountY ~67M -> device-lost.
-	// For the combined upscale+FG path (!interpolationOnly) it records the descriptions and
-	// skips the extra GPU prepare, so it is cheap. Same frameID/cb as the upscale.
-	if (dispatched && frameGenContextActive) {
-		FfxFsr3DispatchFrameGenerationPrepareDescription prepDesc{};
-		prepDesc.commandList = dispatchParameters.commandList;
-		prepDesc.depth = dispatchParameters.depth;
-		prepDesc.motionVectors = dispatchParameters.motionVectors;
-		prepDesc.jitterOffset = dispatchParameters.jitterOffset;
-		prepDesc.motionVectorScale = dispatchParameters.motionVectorScale;
-		prepDesc.renderSize = dispatchParameters.renderSize;
-		prepDesc.frameTimeDelta = dispatchParameters.frameTimeDelta;
-		prepDesc.cameraNear = dispatchParameters.cameraNear;
-		prepDesc.cameraFar = dispatchParameters.cameraFar;
-		prepDesc.viewSpaceToMetersFactor = dispatchParameters.viewSpaceToMetersFactor;
-		prepDesc.cameraFovAngleVertical = dispatchParameters.cameraFovAngleVertical;
-		prepDesc.frameID = frameID;
-		const bool prepared = SafeDispatchFrameGenerationPrepare(&fsrContext[0], &prepDesc) == FFX_OK;
+	// FG-prepare on the FG context: records this frame's dilated depth/MV + camera/renderSize
+	// that the present-time interpolation dispatch reads. Same frameID/cb as the upscale.
+	if (dispatched && frameGenContextActive && fgContext) {
+		ffxDispatchDescFrameGenerationPrepare prep{};
+		prep.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE;  // 0x20004
+		prep.frameID = frameID;
+		prep.flags = 0;
+		prep.commandList = commandList;
+		prep.renderSize = dp.renderSize;
+		prep.jitterOffset = dp.jitterOffset;
+		prep.motionVectorScale = dp.motionVectorScale;
+		prep.frameTimeDelta = dp.frameTimeDelta;
+		prep.unused_reset = false;
+		prep.cameraNear = dp.cameraNear;
+		prep.cameraFar = dp.cameraFar;
+		prep.cameraFovAngleVertical = dp.cameraFovAngleVertical;
+		prep.viewSpaceToMetersFactor = dp.viewSpaceToMetersFactor;
+		prep.depth = dp.depth;
+		prep.motionVectors = dp.motionVectors;
+
+		const bool prepared = SafeDispatch(&ffxApi, &fgContext, &prep.header) == FFX_API_RETURN_OK;
 		if (!prepared && !fsrDispatchCrashLogged) {
-			logger::critical("[FidelityFX] ffxFsr3ContextDispatchFrameGenerationPrepare (VK) failed.");
+			logger::critical("[FidelityFX] ffxDispatch(FG-prepare, VK) failed.");
 			fsrDispatchCrashLogged = true;
 		}
 		// The present-time interpolation dispatch may only run when this frame was prepared.
@@ -627,7 +685,7 @@ void FidelityFX::BlitRealToBackBuffer(IDXGISwapChain* a_swapChain)
 
 bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, ID3D11Resource* a_hudlessColor, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags)
 {
-	if (!frameGenContextActive || !interpolatedTexture)
+	if (!frameGenContextActive || !fgContext || !interpolatedTexture)
 		return false;
 
 	auto* dxvk = SIE::DxvkInterop::GetSingleton();
@@ -640,7 +698,7 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, ID3D11R
 		state->BeginPerfEvent("FSR VK Frame Generation");
 
 	// Own command buffer (the upscale already submitted and stored its dilated depth/MVs
-	// in the FSR3 context). presentColor is the upscaled real frame, now in a_presentColor.
+	// in the FG context). presentColor is the upscaled real frame, now in a_presentColor.
 	VkCommandBuffer cb = dxvk->BeginFrameCommandBuffer();
 	if (cb == VK_NULL_HANDLE) {
 		if (state->frameAnnotations)
@@ -650,54 +708,60 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, ID3D11R
 
 	std::vector<LayoutGuard> guards;
 	bool produced = false;
+	void* commandList = reinterpret_cast<void*>(cb);
 
-	FfxFrameGenerationConfig fgConfig{};
-	fgConfig.swapChain = nullptr;
-	fgConfig.presentCallback = nullptr;
-	fgConfig.frameGenerationCallback = nullptr;
-	fgConfig.frameGenerationEnabled = true;
-	fgConfig.allowAsyncWorkloads = false;
-	// HUDLessColor (scene without UI): lets FFX detect + suppress UI-region interpolation so the
-	// UI is preserved from presentColor instead of ghosted. Swapchain format, matches presentColor.
-	fgConfig.HUDLessColor = a_hudlessColor ?
-	                            WrapAndPrepare(dxvk, a_hudlessColor, L"FSR3_FG_HUDLess", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards) :
-	                            FfxResource({});
-	fgConfig.flags = a_debugFlags | GetFgDebug().ffxFlags;  // UI toggles | env (CS_FG_DEBUG_*)
-	fgConfig.onlyPresentInterpolated = false;
-
-	// ffxFsr3ConfigureFrameGeneration performs the context-side setup the dispatch needs —
-	// it stores the FG flags/HUDLessColor and sets the SDK's internal s_Context (which
-	// ffxFsr3DispatchFrameGeneration requires) — BEFORE wiring up the FFX frame-gen swapchain.
-	// PATH B is dispatch-only with no FFX swapchain, so config.swapChain is null and the final
-	// swapchain step returns FFX_ERROR_INVALID_ARGUMENT. That is expected and benign: the state
-	// the dispatch relies on has already been applied, so we proceed regardless. Any OTHER error
-	// is genuinely unexpected.
-	const FfxErrorCode cfgErr = SafeConfigureFrameGeneration(&fsrContext[0], &fgConfig);
-	if (cfgErr != FFX_OK && cfgErr != FFX_ERROR_INVALID_ARGUMENT && !fgDispatchCrashLogged) {
-		logger::critical("[FidelityFX] ffxFsr3ConfigureFrameGeneration (VK) unexpected error: 0x{:08X}", (uint32_t)cfgErr);
-		fgDispatchCrashLogged = true;
-	}
+	// PATH B (dispatch-only): NO swapchain + NO_SWAPCHAIN_CONTEXT_NOTIFY so the context only
+	// runs interpolation and never touches a swapchain (DXVK owns it). With that flag set the
+	// null-swapchain configure returns OK, so any non-OK is genuinely unexpected.
 	{
-		FfxFrameGenerationDispatchDescription fgDesc{};
-		fgDesc.commandList = ffxGetCommandListVK(cb);
-		fgDesc.presentColor = WrapAndPrepare(dxvk, a_presentColor, L"FSR3_FG_PresentColor", FFX_RESOURCE_STATE_COMPUTE_READ, FFX_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
-		fgDesc.outputs[0] = WrapAndPrepare(dxvk, interpolatedTexture->resource.get(), L"FSR3_FG_Output", FFX_RESOURCE_STATE_UNORDERED_ACCESS, FFX_RESOURCE_USAGE_UAV, VK_IMAGE_ASPECT_COLOR_BIT, guards);
-		fgDesc.numInterpolatedFrames = 1;
-		fgDesc.reset = false;
-		fgDesc.frameID = frameID;
-		fgDesc.interpolationRect = { 0, 0, (int)globals::game::graphicsState->screenWidth, (int)globals::game::graphicsState->screenHeight };
-		if (a_isHDR) {
-			fgDesc.backBufferTransferFunction = FFX_BACKBUFFER_TRANSFER_FUNCTION_PQ;
-			fgDesc.minMaxLuminance[0] = 0.0f;
-			fgDesc.minMaxLuminance[1] = a_peakNits;
-		} else {
-			fgDesc.backBufferTransferFunction = FFX_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
-			fgDesc.minMaxLuminance[0] = 0.0f;
-			fgDesc.minMaxLuminance[1] = 1.0f;
+		ffxConfigureDescFrameGeneration cfg{};
+		cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;  // 0x20002
+		cfg.swapChain = nullptr;
+		cfg.presentCallback = nullptr;
+		cfg.presentCallbackUserContext = nullptr;
+		cfg.frameGenerationCallback = nullptr;
+		cfg.frameGenerationCallbackUserContext = nullptr;
+		cfg.frameGenerationEnabled = true;
+		cfg.allowAsyncWorkloads = false;
+		// HUDLessColor (scene without UI): lets FFX detect + suppress UI-region interpolation so the
+		// UI is preserved from presentColor instead of ghosted. Swapchain format, matches presentColor.
+		cfg.HUDLessColor = a_hudlessColor ?
+		                       WrapAndPrepare(dxvk, a_hudlessColor, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards) :
+		                       ffxApiGetResourceVK(nullptr, {}, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+		cfg.flags = a_debugFlags | GetFgDebug().ffxFlags | FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;  // | 1<<3
+		cfg.onlyPresentGenerated = false;
+		cfg.generationRect = { 0, 0, (int32_t)globals::game::graphicsState->screenWidth, (int32_t)globals::game::graphicsState->screenHeight };
+		cfg.frameID = frameID;
+
+		const ffxReturnCode_t cfgErr = SafeConfigure(&ffxApi, &fgContext, &cfg.header);
+		if (cfgErr != FFX_API_RETURN_OK && !fgDispatchCrashLogged) {
+			logger::critical("[FidelityFX] ffxConfigure(FG, VK) unexpected error: 0x{:08X}", (uint32_t)cfgErr);
+			fgDispatchCrashLogged = true;
 		}
-		produced = SafeDispatchFrameGeneration(&fgDesc) == FFX_OK;
+	}
+
+	{
+		ffxDispatchDescFrameGeneration fg{};
+		fg.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION;  // 0x20003
+		fg.commandList = commandList;
+		fg.presentColor = WrapAndPrepare(dxvk, a_presentColor, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+		fg.outputs[0] = WrapAndPrepare(dxvk, interpolatedTexture->resource.get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, FFX_API_RESOURCE_USAGE_UAV, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+		fg.numGeneratedFrames = 1;
+		fg.reset = false;
+		fg.frameID = frameID;
+		fg.generationRect = { 0, 0, (int32_t)globals::game::graphicsState->screenWidth, (int32_t)globals::game::graphicsState->screenHeight };
+		if (a_isHDR) {
+			fg.backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ;
+			fg.minMaxLuminance[0] = 0.0f;
+			fg.minMaxLuminance[1] = a_peakNits;
+		} else {
+			fg.backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+			fg.minMaxLuminance[0] = 0.0f;
+			fg.minMaxLuminance[1] = 1.0f;
+		}
+		produced = SafeDispatch(&ffxApi, &fgContext, &fg.header) == FFX_API_RETURN_OK;
 		if (!produced && !fgDispatchCrashLogged) {
-			logger::critical("[FidelityFX] ffxFsr3DispatchFrameGeneration (VK) failed or faulted.");
+			logger::critical("[FidelityFX] ffxDispatch(FG, VK) failed or faulted.");
 			fgDispatchCrashLogged = true;
 		}
 	}

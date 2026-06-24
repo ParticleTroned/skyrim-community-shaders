@@ -306,11 +306,11 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 	// Debug-draw flags (UI toggles) baked into the interpolation dispatch.
 	uint32_t ffxDebugFlags = 0;
 	if (settings.fgDebugView)
-		ffxDebugFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_VIEW;
+		ffxDebugFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_VIEW;
 	if (settings.fgDebugTearLines)
-		ffxDebugFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;
+		ffxDebugFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;
 	if (settings.fgDebugPacingLines)
-		ffxDebugFlags |= FFX_FSR3_FRAME_GENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
+		ffxDebugFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
 
 	winrt::com_ptr<ID3D11Texture2D> backBuffer;
 	if (FAILED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) || !backBuffer)

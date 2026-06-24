@@ -2,21 +2,14 @@
 
 #include <winrt/base.h>
 
-// The FSR3 frame-generation entry points (ffxFsr3DispatchFrameGeneration,
-// ffxFsr3ContextDispatchFrameGenerationPrepare) are gated in ffx_fsr3.h behind
-// FFX_OF && FFX_IF (optical flow + frame interpolation). The SDK static libs are
-// built with both enabled by default, so the symbols exist; expose the
-// declarations to CS by defining these before including the header.
-#ifndef FFX_OF
-#	define FFX_OF
-#endif
-#ifndef FFX_IF
-#	define FFX_IF
-#endif
+#include <vulkan/vulkan.h>  // before vk/ffx_api_vk.h; provides VkDevice/VkImage/etc.
 
-#include <FidelityFX/host/backends/vk/ffx_vk.h>
-#include <FidelityFX/host/ffx_fsr3.h>
-#include <FidelityFX/host/ffx_interface.h>
+#include <ffx_api/ffx_api.h>              // ffxContext, ffxFunctions typedefs, FfxApiReturnCodes
+#include <ffx_api/ffx_api_loader.h>       // ffxFunctions + ffxLoadFunctions(module)
+#include <ffx_api/ffx_api_types.h>        // FfxApiResource, state/usage/format/transfer enums
+#include <ffx_api/ffx_upscale.h>          // ffxCreateContextDescUpscale / ffxDispatchDescUpscale
+#include <ffx_api/ffx_framegeneration.h>  // FG create/configure/prepare/dispatch descs
+#include <ffx_api/vk/ffx_api_vk.h>        // ffxCreateBackendVKDesc + ffxApiGet*VK helpers
 
 #include "../../Buffer.h"
 #include "../../State.h"
@@ -40,10 +33,14 @@ class FidelityFX
 public:
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
 
-	FfxFsr3Context fsrContext[2];
+	// FFX-API contexts created against DXVK's VkDevice. The DLL owns its own backend
+	// scratch memory, so there are no scratch buffers and no host-side backend interface.
+	ffxContext upscaleContext = nullptr;  // ffxCreateContextDescUpscale + chained backend-VK
+	ffxContext fgContext = nullptr;       // ffxCreateContextDescFrameGeneration + chained backend-VK
 
-	// The FFX device handle wrapping DXVK's VkDevice.
-	FfxDevice fsrFfxDevice = nullptr;
+	// The 5 FFX-API entry points resolved from amd_fidelityfx_vk.dll (CS dxvk subfolder).
+	ffxFunctions ffxApi{};
+	HMODULE ffxModule = nullptr;
 
 	// Whether the live FSR3 context was created with frame interpolation enabled.
 	bool frameGenContextActive = false;
@@ -123,12 +120,8 @@ private:
 	/** @brief Records the frame-interpolation dispatch (presentColor -> interpolatedTexture) on DXVK's VkDevice. */
 	bool DispatchFrameGeneration(ID3D11Resource* a_presentColor, ID3D11Resource* a_hudlessColor, bool a_isHDR, float a_peakNits, uint32_t a_debugFlags);
 
-	// FSR scratch buffers. Upscaling-only uses [1]; frame generation uses all three
-	// (shared resources, upscaling, frame interpolation), per the FFX backend model.
-	void* fsrScratchBuffers[3] = { nullptr, nullptr, nullptr };
-
-	// Whether ffxFsr3ContextCreate succeeded (so DestroyFSRResources only tears down a
-	// real context — destroying an uncreated one faults).
+	// Whether both ffxCreateContext calls succeeded (so DestroyFSRResources only tears
+	// down a real context — destroying an uncreated one faults).
 	bool contextCreated = false;
 
 	// The command buffer in flight for the current frame (begun in Upscale, submitted in

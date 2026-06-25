@@ -3750,6 +3750,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		specularColor = 0;
 #	endif
 
+	specularColor = Color::IrradianceToLinear(specularColor);
+
 	diffuseColor = reflectionDiffuseColor;
 
 #	if (defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE))

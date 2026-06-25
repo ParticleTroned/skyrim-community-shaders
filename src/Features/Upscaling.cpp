@@ -4999,6 +4999,29 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 	plan.engineRenderSize = state ? Util::ConvertToDynamic(screenSize) : screenSize;
 	plan.finalOutputSize = screenSize;
 
+	// In VR vendor paths, the engine dynamic-resolution ratios are temporarily forced to 1:1
+	// during full-resolution presentation phases. The runtime plan should keep using the
+	// intended upscaling ratio so history/resource sizing does not oscillate every frame.
+	auto resolveVendorDynamicRenderSize = [&](const float2& a_displaySize) {
+		if (a_displaySize.x <= 0.0f || a_displaySize.y <= 0.0f)
+			return a_displaySize;
+
+		auto resolveScale = [](float a_scale) {
+			return std::isfinite(a_scale) && a_scale > 0.0f ? std::clamp(a_scale, 0.0f, 1.0f) : 1.0f;
+		};
+		auto scaleDimension = [](float a_dimension, float a_scale) {
+			const float scaled = a_dimension * a_scale;
+			return std::isfinite(scaled) && scaled > 0.0f ? std::max(1.0f, std::floor(scaled + 0.5f)) : 1.0f;
+		};
+
+		const float scaleX = resolveScale(resolutionScale.x);
+		const float scaleY = resolveScale(resolutionScale.y);
+		return float2{
+			scaleDimension(a_displaySize.x, scaleX),
+			scaleDimension(a_displaySize.y, scaleY)
+		};
+	};
+
 	const bool vrRenderScaleLatched = IsVRRenderScaleModeLatched();
 	if (vrRenderScaleLatched) {
 		const float2 displaySize = perfMode.GetDisplayScreenSize();
@@ -5011,6 +5034,8 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		plan.owner = ResolutionOwner::VRRenderScaleMode;
 		plan.outputTarget = UpscalingOutputTarget::SubmitStageIntermediate;
 	} else if (plan.vendorMethod && IsUpscalingActive()) {
+		if (globals::game::isVR)
+			plan.engineRenderSize = resolveVendorDynamicRenderSize(plan.trueHMDDisplaySize);
 		plan.owner = ResolutionOwner::VendorDynamicResolution;
 		plan.outputTarget = plan.upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening() ?
 		                        UpscalingOutputTarget::Sharpener :
@@ -10478,9 +10503,8 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	ApplyDynamicResolutionState(a_viewport);
 
-	// Resource creation uses the runtime dynamic-resolution ratios via ConvertToDynamic.
-	CheckResources(upscaleMethod);
 	RefreshRuntimeResolutionState();
+	CheckResources(upscaleMethod);
 
 	// Disable dynamic resolution unless the game explicitly enables it.
 	if (!globals::game::isVR)

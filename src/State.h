@@ -202,11 +202,6 @@ public:
 	/** @brief Converts and stores the GPU adapter description (and PCI vendor ID). */
 	void SetAdapterDescription(const std::wstring& description, uint32_t vendorId = 0);
 
-	/** @brief True when the active GPU is an NVIDIA adapter (vendor ID 0x10DE).
-	 *  Used to gate NVIDIA-only features (DLSS, Reflex, DLSS-G) — on non-NVIDIA
-	 *  hardware they are detected as incompatible and never used. */
-	[[nodiscard]] bool IsNVIDIA() const { return adapterVendorId == 0x10DE; }
-
 	bool frameAnnotations = false;
 
 	// Pass D3DCOMPILE_PARTIAL_PRECISION to fxc. With explicit min16float types this is

@@ -129,7 +129,7 @@ namespace BackgroundBlur
 			return state && state->IsMainOrLoadingMenuOpen(globals::game::ui);
 		}
 
-		bool IsStartupMenuBlurSourceReady(SIE::ShaderCache* shaderCache)
+		bool IsStartupMenuBlurSourceReady(ShaderCache* shaderCache)
 		{
 			return !shaderCache || (shaderCache->menuLoaded && !shaderCache->IsCompiling());
 		}

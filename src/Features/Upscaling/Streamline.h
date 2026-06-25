@@ -22,68 +22,65 @@
 // SL types are intentionally kept out of this header (sl.h pulls in a large
 // surface); all Streamline state lives in Streamline.cpp behind an opaque impl.
 
-namespace SIE
+class Streamline
 {
-	class Streamline
-	{
-	public:
-		static Streamline* GetSingleton();
+public:
+	static Streamline* GetSingleton();
 
-		/**
+	/**
 		 * @brief Loads sl.interposer.dll from the CS folder and runs slInit on the
 		 *        Vulkan backend (manual hooking). Idempotent.
 		 * @return true if Streamline initialized. Returns false WITHOUT loading any
 		 *         DLL on non-NVIDIA hardware, or if the SL plugin DLLs are absent.
 		 */
-		bool Initialize();
+	bool Initialize();
 
-		/**
+	/**
 		 * @brief Hands DXVK's Vulkan device to Streamline (slSetVulkanInfo) and probes
 		 *        which features are supported on the active adapter (slIsFeatureSupported).
 		 *        Must be called after the D3D11/DXVK device exists and DxvkInterop is up.
 		 */
-		void SetVulkanDevice();
+	void SetVulkanDevice();
 
-		/** @brief slShutdown + frees the interposer. Safe to call when not initialized. */
-		void Shutdown();
+	/** @brief slShutdown + frees the interposer. Safe to call when not initialized. */
+	void Shutdown();
 
-		/** @brief Whether Streamline initialized (implies NVIDIA + plugins present). */
-		[[nodiscard]] bool IsInitialized() const { return initialized; }
+	/** @brief Whether Streamline initialized (implies NVIDIA + plugins present). */
+	[[nodiscard]] bool IsInitialized() const { return initialized; }
 
-		/** @brief Whether DLSS super-resolution is supported on this adapter. */
-		[[nodiscard]] bool IsDLSSSupported() const { return featureDLSS; }
+	/** @brief Whether DLSS super-resolution is supported on this adapter. */
+	[[nodiscard]] bool IsDLSSSupported() const { return featureDLSS; }
 
-		/** @brief Whether Reflex low-latency is supported on this adapter. */
-		[[nodiscard]] bool IsReflexSupported() const { return featureReflex; }
+	/** @brief Whether Reflex low-latency is supported on this adapter. */
+	[[nodiscard]] bool IsReflexSupported() const { return featureReflex; }
 
-		/** @brief Whether DLSS-G frame generation is supported on this adapter. */
-		[[nodiscard]] bool IsDLSSGSupported() const { return featureDLSSG; }
+	/** @brief Whether DLSS-G frame generation is supported on this adapter. */
+	[[nodiscard]] bool IsDLSSGSupported() const { return featureDLSSG; }
 
-		/**
+	/**
 		 * @brief DLSS super-resolution dispatch over DXVK's VkDevice (best-effort,
 		 *        NVIDIA-only). Tags the color/depth/motion VkImages (via DxvkInterop)
 		 *        and runs slEvaluateFeature(kFeatureDLSS). No-op unless IsDLSSSupported().
 		 */
-		void EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
-			ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
-			uint32_t a_renderWidth, uint32_t a_renderHeight,
-			uint32_t a_outputWidth, uint32_t a_outputHeight,
-			uint32_t a_qualityMode, float a_sharpness);
+	void EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
+		ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+		uint32_t a_renderWidth, uint32_t a_renderHeight,
+		uint32_t a_outputWidth, uint32_t a_outputHeight,
+		uint32_t a_qualityMode, float a_sharpness);
 
-		/**
+	/**
 		 * @brief Per-frame Reflex low-latency sleep (best-effort, NVIDIA-only).
 		 *        No-op unless IsReflexSupported().
 		 */
-		void UpdateReflex(bool a_enable, bool a_boost);
+	void UpdateReflex(bool a_enable, bool a_boost);
 
-	private:
-		Streamline() = default;
+private:
+	Streamline() = default;
 
-		bool triedInit = false;   ///< Initialize() ran (success or not) — gates re-entry.
-		bool initialized = false;  ///< slInit succeeded and the interposer is loaded.
-		bool vulkanDeviceSet = false;
-		bool featureDLSS = false;
-		bool featureReflex = false;
-		bool featureDLSSG = false;
-	};
-}
+	bool triedInit = false;    ///< Initialize() ran (success or not) — gates re-entry.
+	bool initialized = false;  ///< slInit succeeded and the interposer is loaded.
+	bool vulkanDeviceSet = false;
+	bool featureDLSS = false;
+	bool featureReflex = false;
+	bool featureDLSSG = false;
+};

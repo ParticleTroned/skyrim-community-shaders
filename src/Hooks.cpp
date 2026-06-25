@@ -13,8 +13,8 @@
 
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
-#include "Features/ScreenshotFeature.h"
 #include "Features/LightLimitFix.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Upscaling.h"
@@ -418,7 +418,7 @@ struct BSInputDeviceManager_PollInputDevices
 		// non-NVIDIA hardware / when Streamline is not initialized).
 		{
 			auto& upscaling = globals::features::upscaling;
-			SIE::Streamline::GetSingleton()->UpdateReflex(
+			Streamline::GetSingleton()->UpdateReflex(
 				upscaling.settings.reflexLowLatencyMode, upscaling.settings.reflexLowLatencyBoost);
 		}
 
@@ -431,8 +431,8 @@ struct BSInputDeviceManager_PollInputDevices
 
 			if (*a_events) {
 				if (auto device = (*a_events)->GetDevice()) {
-						// Block all devices except gamepad when menu is open
-						blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
+					// Block all devices except gamepad when menu is open
+					blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
 				}
 			}
 		}

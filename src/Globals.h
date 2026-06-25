@@ -45,11 +45,8 @@ class RenderDoc;
 class RemoteControl;
 class Menu;
 
-namespace SIE
-{
-	class ShaderCache;
-	class ShaderFileDependencyTracker;
-}
+class ShaderCache;
+class ShaderFileDependencyTracker;
 
 /**
  * @brief Initializes core singletons (ShaderCache, State, Menu, Deferred).
@@ -236,7 +233,7 @@ namespace globals
 	extern State* state;
 	extern Deferred* deferred;
 	extern Menu* menu;
-	extern SIE::ShaderCache* shaderCache;
+	extern ShaderCache* shaderCache;
 	extern Profiler* profiler;
 
 	/** @brief Initializes core singletons (ShaderCache, State, Menu, Deferred). Called once at plugin load. */

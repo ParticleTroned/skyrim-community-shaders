@@ -7,7 +7,7 @@
 #include <detours/detours.h>
 #include <vector>
 
-namespace SIE::DxvkWsiHook
+namespace DxvkWsiHook
 {
 	namespace
 	{

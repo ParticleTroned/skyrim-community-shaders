@@ -1,14 +1,14 @@
 #include "Upscaling.h"
 
 #include "../I18n/I18n.h"
-#include "DxvkLoader.h"
 #include "Deferred.h"
-#include "Upscaling/DxvkInterop.h"
-#include "Upscaling/DxvkWsiHook.h"
-#include "Upscaling/Streamline.h"
+#include "DxvkLoader.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
+#include "Upscaling/DxvkInterop.h"
+#include "Upscaling/DxvkWsiHook.h"
+#include "Upscaling/Streamline.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <Windows.h>
@@ -79,7 +79,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	// DXVK resolves our swapchain-function wrappers (the hook point for the FFX frame-generation
 	// swapchain). Pass-through until the FG swapchain is wired, so this is a no-op when idle.
 	if (DxvkLoader::IsLoaded())
-		SIE::DxvkWsiHook::Install();
+		DxvkWsiHook::Install();
 
 	return ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
 		DriverType,
@@ -97,8 +97,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
-	auto* streamline = SIE::Streamline::GetSingleton();
-	const bool dlssAvailable = globals::state->IsNVIDIA() && streamline->IsDLSSSupported();
+	auto* streamline = Streamline::GetSingleton();
+	const bool dlssAvailable = streamline->IsDLSSSupported();
 
 	std::vector<std::string> upscaleModes = {
 		T(TKEY("method_none"), "None"),
@@ -143,9 +143,9 @@ void Upscaling::DrawSettings()
 		ImGui::Checkbox(T(TKEY("frame_generation"), "Frame Generation (FSR3)"), &settings.frameGeneration);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("frame_generation_tooltip"),
-				"Generates interpolated frames via FSR3 optical flow + interpolation. "
-				"Runs entirely on the DXVK Vulkan device (no DX12, no interop). "
-				"Changing this rebuilds the FSR3 context."));
+								  "Generates interpolated frames via FSR3 optical flow + interpolation. "
+								  "Runs entirely on the DXVK Vulkan device (no DX12, no interop). "
+								  "Changing this rebuilds the FSR3 context."));
 		}
 
 		if (settings.frameGeneration) {
@@ -155,14 +155,14 @@ void Upscaling::DrawSettings()
 			ImGui::Checkbox(T(TKEY("fg_show_only_generated"), "Show Only Generated Frames"), &settings.fgShowOnlyGenerated);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("fg_show_only_generated_tooltip"),
-					"Present only the interpolated frames (hides the real frames) so the "
-					"generated output can be inspected in isolation."));
+									  "Present only the interpolated frames (hides the real frames) so the "
+									  "generated output can be inspected in isolation."));
 
 			ImGui::Checkbox(T(TKEY("fg_debug_view"), "Debug View"), &settings.fgDebugView);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("fg_debug_view_tooltip"),
-					"FFX draws debug visualizations (motion vectors, disocclusion, etc.) "
-					"into the generated frames."));
+									  "FFX draws debug visualizations (motion vectors, disocclusion, etc.) "
+									  "into the generated frames."));
 
 			ImGui::Checkbox(T(TKEY("fg_debug_tear_lines"), "Debug Tear Lines"), &settings.fgDebugTearLines);
 			ImGui::Checkbox(T(TKEY("fg_debug_pacing_lines"), "Debug Pacing Lines"), &settings.fgDebugPacingLines);
@@ -237,10 +237,10 @@ void Upscaling::Load()
 	// (plugin load, before any DXGI factory exists) catches it as well as the device-level
 	// swapchain functions. Idempotent.
 	if (DxvkLoader::IsLoaded()) {
-		SIE::DxvkWsiHook::Install();
+		DxvkWsiHook::Install();
 		// Register FFX as the frame-generation provider before device creation, so its
 		// device-creation requirements (the extra queues) are injected at vkCreateDevice.
-		SIE::DxvkWsiHook::SetProvider(&fidelityFX);
+		DxvkWsiHook::SetProvider(&fidelityFX);
 	}
 
 	// Route the game's device creation to DXVK's subfolder-loaded export (set up by
@@ -291,11 +291,12 @@ void Upscaling::PostPostLoad()
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
 	auto method = (UpscaleMethod)settings.upscaleMethod;
-	// Central AMD/non-NVIDIA gate: DLSS is only valid on an NVIDIA GPU where the SL
-	// DLSS feature actually came up. Every render-path consumer funnels through this,
-	// so coercing here guarantees no DLSS dispatch can run on incompatible hardware.
+	// Central DLSS gate: DLSS is only valid where Streamline reports the feature supported
+	// (its own per-feature compatibility check — slIsFeatureSupported). Every render-path
+	// consumer funnels through this, so coercing here guarantees no DLSS dispatch runs when
+	// the feature is unavailable.
 	if (method == UpscaleMethod::kDLSS &&
-		!(globals::state->IsNVIDIA() && SIE::Streamline::GetSingleton()->IsDLSSSupported())) {
+		!Streamline::GetSingleton()->IsDLSSSupported()) {
 		method = (UpscaleMethod)settings.upscaleMethodNoDLSS;
 		if (method == UpscaleMethod::kDLSS)  // guard against a bad persisted fallback
 			method = UpscaleMethod::kFSR;
@@ -322,7 +323,7 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 	// swapchain), FFX interpolates and paces the real + generated frames internally — present once
 	// and let it run. The legacy dispatch-only double-present below is the fallback used only when
 	// the swapchain is NOT wrapped.
-	if (SIE::DxvkWsiHook::IsSwapchainWrapped()) {
+	if (DxvkWsiHook::IsSwapchainWrapped()) {
 		// Interpolate only on frames the upscale actually prepared (gameplay). Menus / loading have
 		// no prepare, so disable interpolation and pass the frame through 1:1 — otherwise FFX's
 		// present blocks waiting for interpolation inputs that never arrive. frameID must advance by
@@ -477,8 +478,8 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		// trigger when the desired wrap state differs from the current one (avoids redundant
 		// destroy/recreate churn when already in the right state).
 		if ((frameGenChanged || upscaleModeChanged) &&
-			fidelityFX.WantsToWrap() != SIE::DxvkWsiHook::IsSwapchainWrapped())
-			SIE::DxvkWsiHook::RequestSwapchainRecreate();
+			fidelityFX.WantsToWrap() != DxvkWsiHook::IsSwapchainWrapped())
+			DxvkWsiHook::RequestSwapchainRecreate();
 	}
 }
 
@@ -626,12 +627,18 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	if (upscaleMethod == UpscaleMethod::kFSR) {
 		auto getUpscaleRatio = [](uint qualityMode) -> float {
 			switch (qualityMode) {
-			case 0: return 1.0f;          // Native (Quality)
-			case 1: return 1.5f;          // Quality
-			case 2: return 1.7f;          // Balanced
-			case 3: return 2.0f;          // Performance
-			case 4: return 3.0f;          // Ultra Performance
-			default: return 1.5f;
+			case 0:
+				return 1.0f;  // Native (Quality)
+			case 1:
+				return 1.5f;  // Quality
+			case 2:
+				return 1.7f;  // Balanced
+			case 3:
+				return 2.0f;  // Performance
+			case 4:
+				return 3.0f;  // Ultra Performance
+			default:
+				return 1.5f;
 			}
 		};
 		float resolutionScaleBase = 1.0f / getUpscaleRatio(settings.qualityMode);
@@ -732,7 +739,7 @@ void Upscaling::SetupResources()
 
 	// Bridge to DXVK's own Vulkan device for the no-interop frame-generation path.
 	// On native D3D11 this is a no-op (IsAvailable() stays false).
-	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	auto* dxvk = DxvkInterop::GetSingleton();
 	if (dxvk->Initialize()) {
 		// Probe: confirm a CS D3D11 texture maps to a valid backing VkImage on
 		// DXVK's device — the mechanism FFX-Vulkan will use, with no interop.
@@ -749,7 +756,7 @@ void Upscaling::SetupResources()
 		// no-op on non-NVIDIA hardware (this AMD machine) and when the SL plugin DLLs
 		// are absent; SetVulkanDevice() hands DXVK's Vk handles to SL and probes
 		// feature support. On AMD this just logs "disabled" and the upscaler stays FSR.
-		auto* streamline = SIE::Streamline::GetSingleton();
+		auto* streamline = Streamline::GetSingleton();
 		if (streamline->Initialize())
 			streamline->SetVulkanDevice();
 	}
@@ -947,7 +954,7 @@ void Upscaling::Upscale()
 			auto& depthTex = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 			const auto displaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 			const auto renderSize = Util::ConvertToDynamic(displaySize);
-			SIE::Streamline::GetSingleton()->EvaluateDLSS(
+			Streamline::GetSingleton()->EvaluateDLSS(
 				main.texture, main.texture, depthTex.texture, motionVector.texture,
 				(uint32_t)renderSize.x, (uint32_t)renderSize.y,
 				(uint32_t)displaySize.x, (uint32_t)displaySize.y,

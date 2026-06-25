@@ -7,8 +7,8 @@
 #include <ffx_api/ffx_api.h>              // ffxContext, ffxFunctions typedefs, FfxApiReturnCodes
 #include <ffx_api/ffx_api_loader.h>       // ffxFunctions + ffxLoadFunctions(module)
 #include <ffx_api/ffx_api_types.h>        // FfxApiResource, state/usage/format/transfer enums
-#include <ffx_api/ffx_upscale.h>          // ffxCreateContextDescUpscale / ffxDispatchDescUpscale
 #include <ffx_api/ffx_framegeneration.h>  // FG create/configure/prepare/dispatch descs
+#include <ffx_api/ffx_upscale.h>          // ffxCreateContextDescUpscale / ffxDispatchDescUpscale
 #include <ffx_api/vk/ffx_api_vk.h>        // ffxCreateBackendVKDesc + ffxApiGet*VK helpers
 
 #include "../../Buffer.h"
@@ -29,7 +29,7 @@
  * VkImage); presentation of the generated frame is handled by the present hook (the FFX
  * frame-gen swapchain is DX12/VK-WSI-owning and incompatible with DXVK owning the swapchain).
  */
-class FidelityFX : public SIE::IFrameGenProvider
+class FidelityFX : public IFrameGenProvider
 {
 public:
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
@@ -40,8 +40,8 @@ public:
 	// double-present is used only when the swapchain is NOT wrapped.
 	const char* Name() const override { return "FFX FSR3"; }
 	bool WantsToWrap() const override;
-	SIE::FrameGenDeviceRequirements GetDeviceRequirements(VkPhysicalDevice physicalDevice) override;
-	void OnDeviceCreated(VkPhysicalDevice physicalDevice, VkDevice device, const SIE::FrameGenQueues& queues) override;
+	FrameGenDeviceRequirements GetDeviceRequirements(VkPhysicalDevice physicalDevice) override;
+	void OnDeviceCreated(VkPhysicalDevice physicalDevice, VkDevice device, const FrameGenQueues& queues) override;
 	VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo,
 		const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) override;
 	VkResult GetSwapchainImages(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pCount, VkImage* pImages) override;
@@ -69,7 +69,7 @@ public:
 	// Replacement WSI functions FFX hands back for the wrapped swapchain.
 	ffxQueryDescSwapchainReplacementFunctionsVK fgSwapchainFns{};
 	// Queues claimed for the FG swapchain (game = DXVK graphics; present/acquire = injected).
-	SIE::FrameGenQueues fgQueues;
+	FrameGenQueues fgQueues;
 
 	// FFX-API contexts created against DXVK's VkDevice. The DLL owns its own backend
 	// scratch memory, so there are no scratch buffers and no host-side backend interface.

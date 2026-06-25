@@ -46,7 +46,7 @@ namespace
 
 	// Wrap a D3D11 resource as an FFX VK resource (its backing VkImage) and queue the
 	// layout transition needed before the FFX dispatch.
-	FfxApiResource WrapAndPrepare(SIE::DxvkInterop* dxvk, ID3D11Resource* resource,
+	FfxApiResource WrapAndPrepare(DxvkInterop* dxvk, ID3D11Resource* resource,
 		uint32_t state, uint32_t usage, VkImageAspectFlags aspect, std::vector<LayoutGuard>& guards)
 	{
 		if (!resource)
@@ -68,7 +68,7 @@ namespace
 		return ffxApiGetResourceVK(reinterpret_cast<void*>(image), desc, state);
 	}
 
-	void RestoreLayouts(SIE::DxvkInterop* dxvk, std::vector<LayoutGuard>& guards)
+	void RestoreLayouts(DxvkInterop* dxvk, std::vector<LayoutGuard>& guards)
 	{
 		// FFX leaves each resource in its declared-state (ffx) layout; move it back.
 		for (auto it = guards.rbegin(); it != guards.rend(); ++it)
@@ -413,7 +413,7 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 		ffxApi.Configure(nullptr, &dbg.header);
 	}
 
-	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	auto* dxvk = DxvkInterop::GetSingleton();
 	// Lazily bridge to DXVK's Vulkan device — CreateFSRResources can run before the
 	// SetupResources probe, so don't rely on prior initialization. Idempotent.
 	if (!dxvk->Initialize()) {
@@ -538,7 +538,7 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 
 void FidelityFX::DestroyFSRResources()
 {
-	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	auto* dxvk = DxvkInterop::GetSingleton();
 
 	if (contextCreated) {
 		if (upscaleContext && ffxApi.DestroyContext && ffxApi.DestroyContext(&upscaleContext, nullptr) != FFX_API_RETURN_OK)
@@ -590,7 +590,7 @@ void FidelityFX::CaptureHudlessFromBackBuffer()
 
 void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
-	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	auto* dxvk = DxvkInterop::GetSingleton();
 	if (!dxvk->IsAvailable() || !dxvk->CommandResourcesReady() || !upscaledTexture || !upscaleContext)
 		return;
 
@@ -764,7 +764,7 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, ID3D11R
 	if (!frameGenContextActive || !fgContext || !interpolatedTexture)
 		return false;
 
-	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	auto* dxvk = DxvkInterop::GetSingleton();
 	if (!dxvk->IsAvailable() || !dxvk->CommandResourcesReady())
 		return false;
 
@@ -867,14 +867,14 @@ bool FidelityFX::DebugOnlyInterpolated() const
 // DxvkWsiHook injects our queues at vkCreateDevice and routes DXVK's WSI here when FG is on.
 // ===========================================================================================
 
-SIE::FrameGenDeviceRequirements FidelityFX::GetDeviceRequirements(VkPhysicalDevice)
+FrameGenDeviceRequirements FidelityFX::GetDeviceRequirements(VkPhysicalDevice)
 {
-	SIE::FrameGenDeviceRequirements req;
+	FrameGenDeviceRequirements req;
 	req.presentCapableQueues = 2;  // FFX needs a present + an image-acquire queue, distinct from game
 	return req;
 }
 
-void FidelityFX::OnDeviceCreated(VkPhysicalDevice, VkDevice, const SIE::FrameGenQueues& queues)
+void FidelityFX::OnDeviceCreated(VkPhysicalDevice, VkDevice, const FrameGenQueues& queues)
 {
 	fgQueues = queues;
 }
@@ -892,7 +892,7 @@ bool FidelityFX::WantsToWrap() const
 VkResult FidelityFX::CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo,
 	const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain)
 {
-	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	auto* dxvk = DxvkInterop::GetSingleton();
 	if (!dxvk->IsAvailable() || !ffxApi.CreateContext || fgQueues.presentQueue == VK_NULL_HANDLE)
 		return VK_ERROR_INITIALIZATION_FAILED;
 
@@ -1019,7 +1019,7 @@ void FidelityFX::SetFrameGenForPresent(bool a_enabled, ID3D11Resource* a_hudless
 {
 	if (!fgSwapchainContext || !fgContext)
 		return;
-	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	auto* dxvk = DxvkInterop::GetSingleton();
 
 	// HUD-less scene (back-buffer format, no UI). FFX diffs it against the presented frame to
 	// detect the UI region and present the real UI over each generated frame instead of
@@ -1082,7 +1082,7 @@ void FidelityFX::DestroySwapchain(VkDevice, VkSwapchainKHR, const VkAllocationCa
 		SafeConfigure(&ffxApi, &fgContext, &cfg.header);
 	}
 	if (fgSwapchainContext) {
-		auto* dxvk = SIE::DxvkInterop::GetSingleton();
+		auto* dxvk = DxvkInterop::GetSingleton();
 		dxvk->LockSubmissionQueue();
 		SafeDestroyContext(&ffxApi, &fgSwapchainContext);
 		dxvk->ReleaseSubmissionQueue();

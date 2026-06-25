@@ -180,7 +180,7 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 		globals::state->ForEachShaderTypeWithIndex([&](auto type, int classIndex) {
 			ImGui::TableNextColumn();
 
-			if (!(SIE::ShaderCache::IsSupportedShader(type) || state->IsDeveloperMode())) {
+			if (!(ShaderCache::IsSupportedShader(type) || state->IsDeveloperMode())) {
 				ImGui::BeginDisabled();
 				ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
 				ImGui::EndDisabled();
@@ -364,7 +364,7 @@ void AdvancedSettingsRenderer::RenderShaderDebugSection()
 		static bool sortAscending = false;  // Descending by default (highest usage first)		// Create shader rows for the table utility (simplified - no filter data needed)
 		struct ShaderRow
 		{
-			SIE::ShaderCache::ActiveShaderInfo shader;
+			ShaderCache::ActiveShaderInfo shader;
 			uint32_t totalDrawCalls;
 		};
 

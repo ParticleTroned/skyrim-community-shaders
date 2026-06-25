@@ -18,7 +18,7 @@
 // runtime behaviour is identical to no hook. This validates the interception mechanism and the
 // install timing (DXVK must resolve our wrappers, and pass-through must not perturb present).
 // The FFX FG-swapchain routing is layered on top of this foundation in a later step.
-namespace SIE::DxvkWsiHook
+namespace DxvkWsiHook
 {
 	// Install the vkGetInstanceProcAddr detour. MUST be called from the
 	// D3D11CreateDeviceAndSwapChain hook BEFORE the real call, so it is in place before DXVK

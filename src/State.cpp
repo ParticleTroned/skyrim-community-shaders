@@ -101,7 +101,7 @@ void State::Draw()
 
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
-				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
+				if (currentPixelDescriptor & static_cast<uint32_t>(ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
 					if (volumetricShadows.loaded)
 						volumetricShadows.CopyShadowLightData();
 					if (globals::features::exponentialHeightFog.loaded)
@@ -167,7 +167,7 @@ void State::Debug()
 
 	if (currentShader && updateShader && frameAnnotations) {
 		BeginPerfEvent(std::format("Draw: CS {}::{:x}::{}", magic_enum::enum_name(currentShader->shaderType.get()), permutationData.PixelShaderDescriptor, currentShader->fxpFilename));
-		SetPerfMarker(std::format("Defines: {}", SIE::ShaderCache::GetDefinesString(*currentShader, permutationData.PixelShaderDescriptor)));
+		SetPerfMarker(std::format("Defines: {}", ShaderCache::GetDefinesString(*currentShader, permutationData.PixelShaderDescriptor)));
 		EndPerfEvent();
 	}
 }
@@ -819,81 +819,81 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 		switch (a_shader.shaderType.get()) {
 		case RE::BSShader::Type::Lighting:
 			{
-				a_vertexDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::DoAlphaTest |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::RimLighting |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::SoftLighting |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BackLighting |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Specular |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AnisoLighting |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr);
+				a_vertexDescriptor &= ~((uint32_t)ShaderCache::LightingShaderFlags::AdditionalAlphaMask |
+										(uint32_t)ShaderCache::LightingShaderFlags::AmbientSpecular |
+										(uint32_t)ShaderCache::LightingShaderFlags::DoAlphaTest |
+										(uint32_t)ShaderCache::LightingShaderFlags::ShadowDir |
+										(uint32_t)ShaderCache::LightingShaderFlags::DefShadow |
+										(uint32_t)ShaderCache::LightingShaderFlags::CharacterLight |
+										(uint32_t)ShaderCache::LightingShaderFlags::RimLighting |
+										(uint32_t)ShaderCache::LightingShaderFlags::SoftLighting |
+										(uint32_t)ShaderCache::LightingShaderFlags::BackLighting |
+										(uint32_t)ShaderCache::LightingShaderFlags::Specular |
+										(uint32_t)ShaderCache::LightingShaderFlags::AnisoLighting |
+										(uint32_t)ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
+										(uint32_t)ShaderCache::LightingShaderFlags::Snow |
+										(uint32_t)ShaderCache::LightingShaderFlags::TruePbr);
 
-				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
-									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
-									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
-									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::CharacterLight |
-									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow);
-				if (a_pixelDescriptor & (uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask) {
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::DoAlphaTest;
-					a_pixelDescriptor &= ~(uint32_t)SIE::ShaderCache::LightingShaderFlags::AdditionalAlphaMask;
+				a_pixelDescriptor &= ~((uint32_t)ShaderCache::LightingShaderFlags::AmbientSpecular |
+									   (uint32_t)ShaderCache::LightingShaderFlags::ShadowDir |
+									   (uint32_t)ShaderCache::LightingShaderFlags::DefShadow |
+									   (uint32_t)ShaderCache::LightingShaderFlags::CharacterLight |
+									   (uint32_t)ShaderCache::LightingShaderFlags::BaseObjectIsSnow);
+				if (a_pixelDescriptor & (uint32_t)ShaderCache::LightingShaderFlags::AdditionalAlphaMask) {
+					a_pixelDescriptor |= (uint32_t)ShaderCache::LightingShaderFlags::DoAlphaTest;
+					a_pixelDescriptor &= ~(uint32_t)ShaderCache::LightingShaderFlags::AdditionalAlphaMask;
 				}
 
-				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
+				a_pixelDescriptor &= ~((uint32_t)ShaderCache::LightingShaderFlags::Snow);
 
 				if (deferred->deferredPass || a_forceDeferred)
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
+					a_pixelDescriptor |= (uint32_t)ShaderCache::LightingShaderFlags::Deferred;
 
 				{
 					uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
-					if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap ||
-						technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Parallax ||
-						technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Facegen ||
-						technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::FacegenRGBTint ||
-						technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjects ||
-						technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::LODObjectHD ||
-						technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::MultiIndexSparkle ||
-						technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Hair)
+					if (technique == (uint32_t)ShaderCache::LightingShaderTechniques::Glowmap ||
+						technique == (uint32_t)ShaderCache::LightingShaderTechniques::Parallax ||
+						technique == (uint32_t)ShaderCache::LightingShaderTechniques::Facegen ||
+						technique == (uint32_t)ShaderCache::LightingShaderTechniques::FacegenRGBTint ||
+						technique == (uint32_t)ShaderCache::LightingShaderTechniques::LODObjects ||
+						technique == (uint32_t)ShaderCache::LightingShaderTechniques::LODObjectHD ||
+						technique == (uint32_t)ShaderCache::LightingShaderTechniques::MultiIndexSparkle ||
+						technique == (uint32_t)ShaderCache::LightingShaderTechniques::Hair)
 						a_vertexDescriptor &= ~(0x3F << 24);
 				}
 
 				{
 					uint32_t technique = 0x3F & (a_pixelDescriptor >> 24);
-					if (technique == (uint32_t)SIE::ShaderCache::LightingShaderTechniques::Glowmap)
+					if (technique == (uint32_t)ShaderCache::LightingShaderTechniques::Glowmap)
 						a_pixelDescriptor &= ~(0x3F << 24);
 				}
 			}
 			break;
 		case RE::BSShader::Type::Water:
 			{
-				auto flags = ~((uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections |
-							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Cubemap |
-							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior);
+				auto flags = ~((uint32_t)ShaderCache::WaterShaderFlags::Reflections |
+							   (uint32_t)ShaderCache::WaterShaderFlags::Cubemap |
+							   (uint32_t)ShaderCache::WaterShaderFlags::Interior);
 				a_vertexDescriptor &= flags;
 				a_pixelDescriptor &= flags;
 			}
 			break;
 		case RE::BSShader::Type::Effect:
 			{
-				auto flags = ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
-							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
-							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
+				auto flags = ~((uint32_t)ShaderCache::EffectShaderFlags::GrayscaleToColor |
+							   (uint32_t)ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
+							   (uint32_t)ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
 				a_vertexDescriptor &= flags;
 				a_pixelDescriptor &= flags;
 
 				if (deferred->deferredPass || a_forceDeferred)
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;
+					a_pixelDescriptor |= (uint32_t)ShaderCache::EffectShaderFlags::Deferred;
 			}
 			break;
 		case RE::BSShader::Type::DistantTree:
 			{
 				if (deferred->deferredPass || a_forceDeferred)
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::DistantTreeShaderFlags::Deferred;
+					a_pixelDescriptor |= (uint32_t)ShaderCache::DistantTreeShaderFlags::Deferred;
 			}
 			break;
 		case RE::BSShader::Type::Sky:
@@ -906,7 +906,7 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			{
 				auto technique = a_vertexDescriptor & 0xF;
 				auto flags = a_vertexDescriptor & ~0xF;
-				if (technique == static_cast<uint32_t>(SIE::ShaderCache::GrassShaderTechniques::TruePbr)) {
+				if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::TruePbr)) {
 					technique = 0;
 				}
 				a_vertexDescriptor = flags | technique;
@@ -1020,6 +1020,11 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				float2 screenSz{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 				auto renderSize = Util::ConvertToDynamic(screenSz, true);
 				data.MipBias = std::log2f(renderSize.x / screenSz.x);
+				// DLSS reconstructs from a lower internal resolution and recommends an extra
+				// -1 LOD bias so textures keep their detail; FSR applies its own sharpening
+				// (RCAS) and uses the unmodified log2 ratio.
+				if (upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
+					data.MipBias -= 1.0f;
 			} else {
 				data.MipBias = 0;
 			}

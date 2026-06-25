@@ -1,6 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -35,7 +36,6 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
-#include "Features/CSEditor.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -156,14 +156,14 @@ namespace globals
 	State* state = nullptr;
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
-	SIE::ShaderCache* shaderCache = nullptr;
+	ShaderCache* shaderCache = nullptr;
 
 	static Profiler profilerInstance;
 	Profiler* profiler = &profilerInstance;
 
 	void OnInit()
 	{
-		shaderCache = &SIE::ShaderCache::Instance();
+		shaderCache = &ShaderCache::Instance();
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();

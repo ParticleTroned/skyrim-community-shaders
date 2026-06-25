@@ -535,12 +535,12 @@ namespace Permutations
 		return result;
 	}
 
-	uint32_t GetLightingShaderDescriptor(SIE::ShaderCache::LightingShaderTechniques technique, uint32_t flags)
+	uint32_t GetLightingShaderDescriptor(ShaderCache::LightingShaderTechniques technique, uint32_t flags)
 	{
 		return ((static_cast<uint32_t>(technique) & 0x3F) << 24) | flags;
 	}
 
-	void AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques technique, const std::unordered_set<uint32_t>& flags, std::unordered_set<uint32_t>& result)
+	void AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques technique, const std::unordered_set<uint32_t>& flags, std::unordered_set<uint32_t>& result)
 	{
 		for (uint32_t flag : flags) {
 			result.insert(GetLightingShaderDescriptor(technique, flag));
@@ -549,7 +549,7 @@ namespace Permutations
 
 	std::unordered_set<uint32_t> GeneratePBRLightingPixelPermutations()
 	{
-		using enum SIE::ShaderCache::LightingShaderFlags;
+		using enum ShaderCache::LightingShaderFlags;
 
 		constexpr std::array defaultFlags{ Deferred, AnisoLighting, Skinned, DoAlphaTest };
 		constexpr std::array projectedUvFlags{ Deferred, AnisoLighting, DoAlphaTest, Snow };
@@ -567,13 +567,13 @@ namespace Permutations
 		const std::unordered_set<uint32_t> landFlagValues = GenerateFlagPermutations(landFlags, defaultConstantFlags);
 
 		std::unordered_set<uint32_t> result;
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::None, defaultFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::None, projectedUvFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::LODObjects, lodObjectsFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::LODObjectHD, lodObjectsFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::TreeAnim, treeFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::MTLand, landFlagValues, result);
-		AddLightingShaderDescriptors(SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend, landFlagValues, result);
+		AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques::None, defaultFlagValues, result);
+		AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques::None, projectedUvFlagValues, result);
+		AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques::LODObjects, lodObjectsFlagValues, result);
+		AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques::LODObjectHD, lodObjectsFlagValues, result);
+		AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques::TreeAnim, treeFlagValues, result);
+		AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques::MTLand, landFlagValues, result);
+		AddLightingShaderDescriptors(ShaderCache::LightingShaderTechniques::MTLandLODBlend, landFlagValues, result);
 		return result;
 	}
 }
@@ -740,26 +740,26 @@ struct BSLightingShaderProperty_GetRenderPasses
 				constexpr uint32_t LightingTechniqueStart = 0x4800002D;
 				auto lightingTechnique = currentPass->passEnum - LightingTechniqueStart;
 				auto lightingFlags = lightingTechnique & ~(~0u << 24);
-				auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((lightingTechnique >> 24) & 0x3F);
+				auto lightingType = static_cast<ShaderCache::LightingShaderTechniques>((lightingTechnique >> 24) & 0x3F);
 				lightingFlags &= ~0b111000u;
 				if (isPbr) {
-					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
-					lightingFlags &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Specular);
+					lightingFlags |= static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr);
+					lightingFlags &= ~static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Specular);
 					if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
 						auto* material = static_cast<BSLightingShaderMaterialPBRLandscape*>(property->material);
 						if (material->HasGlint()) {
-							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
+							lightingFlags |= static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting);
 						}
 					} else {
 						auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
 						if (material->glintParameters.enabled || (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kProjectedUV) && material->projectedMaterialGlintParameters.enabled)) {
-							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
+							lightingFlags |= static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting);
 						}
 					}
 				}
 
 				if (issEnabledAndInteriorWithSun)
-					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ShadowDir) | static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::DefShadow);
+					lightingFlags |= static_cast<uint32_t>(ShaderCache::LightingShaderFlags::ShadowDir) | static_cast<uint32_t>(ShaderCache::LightingShaderFlags::DefShadow);
 
 				lightingTechnique = (static_cast<uint32_t>(lightingType) << 24) | lightingFlags;
 				currentPass->passEnum = lightingTechnique + LightingTechniqueStart;
@@ -774,13 +774,13 @@ struct BSLightingShaderProperty_GetRenderPasses
 
 bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
 {
-	using enum SIE::ShaderCache::LightingShaderTechniques;
+	using enum ShaderCache::LightingShaderTechniques;
 
 	const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
 
 	auto lightingFlags = shader->currentRawTechnique & ~(~0u << 24);
-	auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
-	if (!(lightingType == LODLand || lightingType == LODLandNoise) && (lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr))) {
+	auto lightingType = static_cast<ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
+	if (!(lightingType == LODLand || lightingType == LODLandNoise) && (lightingFlags & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr))) {
 		auto shadowState = globals::game::shadowState;
 		auto renderer = globals::game::renderer;
 		auto graphicsState = globals::game::graphicsState;
@@ -948,7 +948,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 						GlintParameters[3] = pbrMaterial->GetGlintParameters().densityRandomization;
 						shadowState->SetPSConstant(GlintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MultiLayerParallaxData);
 					}
-					if ((lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0 && pbrMaterial->GetProjectedMaterialGlintParameters().enabled) {
+					if ((lightingFlags & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::ProjectedUV)) != 0 && pbrMaterial->GetProjectedMaterialGlintParameters().enabled) {
 						shaderFlags.set(PBRShaderFlags::ProjectedGlint);
 
 						std::array<float, 4> ProjectedGlintParameters;
@@ -1034,7 +1034,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			shadowState->SetVSConstant(texCoordOffsetScale, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 11);
 		}
 
-		if (lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::CharacterLight)) {
+		if (lightingFlags & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::CharacterLight)) {
 			static const REL::Relocation<RE::ImageSpaceTexture*> characterLightTexture{ RELOCATION_ID(513464, 391302) };
 
 			if (characterLightTexture->renderTarget >= RE::RENDER_TARGET::kFRAMEBUFFER) {
@@ -1066,9 +1066,9 @@ struct BSLightingShader_SetupGeometry
 	{
 		const auto originalTechnique = shader->currentRawTechnique;
 
-		if ((shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0) {
-			shader->currentRawTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AmbientSpecular);
-			shader->currentRawTechnique ^= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
+		if ((shader->currentRawTechnique & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr)) != 0) {
+			shader->currentRawTechnique |= static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AmbientSpecular);
+			shader->currentRawTechnique ^= static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting);
 		}
 
 		shader->currentRawTechnique &= ~0b111000u;
@@ -1088,10 +1088,10 @@ struct BSLightingShader_GetPixelTechnique
 		uint32_t pixelTechnique = rawTechnique;
 
 		pixelTechnique &= ~0b111000000u;
-		if ((pixelTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
-			pixelTechnique &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Skinned);
+		if ((pixelTechnique & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
+			pixelTechnique &= ~static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Skinned);
 		}
-		pixelTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::VC);
+		pixelTechnique |= static_cast<uint32_t>(ShaderCache::LightingShaderFlags::VC);
 
 		return pixelTechnique;
 	}

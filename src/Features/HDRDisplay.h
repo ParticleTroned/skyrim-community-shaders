@@ -95,12 +95,6 @@ public:
 
 	/** @brief Redirects kFRAMEBUFFER.RTV to the UI texture for vanilla UI capture. */
 	void SetUIBuffer();
-	/**
-	 * @brief Snapshots the current back buffer (HUD-less scene) into hudlessTexture.
-	 *        Used for FSR3 frame generation when HDR is OFF: called before the UI draws so the
-	 *        scene-without-UI is available as HUDLessColor (HDR-on produces it via the composite).
-	 */
-	void CaptureHudlessFromBackBuffer();
 	/** @brief Clears the UI texture and restores the original kFRAMEBUFFER.RTV. */
 	void ClearUIBuffer();
 	/** @brief Returns true when non-FG HDR deferred compositing is active (composite after Present-hook mods). */
@@ -191,9 +185,6 @@ public:
 	Texture2D* hdrTexture = nullptr;
 	Texture2D* outputTexture = nullptr;
 	Texture2D* uiTexture = nullptr;          // Separate UI render target for proper compositing
-	// HUD-less composite (scene without UI), swapchain format. Produced during ApplyHDR when FSR3
-	// frame generation is active, and handed to FFX as HUDLessColor so the UI isn't interpolated.
-	Texture2D* hudlessTexture = nullptr;
 	Texture2D* cleanSceneCapture = nullptr;  // Pre-blur copy of hdrTexture for clean captures
 	uint cleanSceneCaptureFrame = UINT32_MAX;  // frameCount when cleanSceneCapture was last refreshed
 

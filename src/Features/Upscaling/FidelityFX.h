@@ -13,6 +13,7 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "FrameGenProvider.h"
 
 /**
  * @brief AMD FidelityFX Super Resolution 3 (upscaling + frame generation) on DXVK's Vulkan device.
@@ -28,10 +29,43 @@
  * VkImage); presentation of the generated frame is handled by the present hook (the FFX
  * frame-gen swapchain is DX12/VK-WSI-owning and incompatible with DXVK owning the swapchain).
  */
-class FidelityFX
+class FidelityFX : public SIE::IFrameGenProvider
 {
 public:
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
+
+	// --- IFrameGenProvider: the proper FFX VK frame-generation SWAPCHAIN path -----------------
+	// When frame generation is enabled, DXVK's swapchain is wrapped by the FFX FG swapchain (via
+	// DxvkWsiHook), which interpolates + paces presentation internally. The legacy dispatch-only
+	// double-present is used only when the swapchain is NOT wrapped.
+	const char* Name() const override { return "FFX FSR3"; }
+	bool WantsToWrap() const override;
+	SIE::FrameGenDeviceRequirements GetDeviceRequirements(VkPhysicalDevice physicalDevice) override;
+	void OnDeviceCreated(VkPhysicalDevice physicalDevice, VkDevice device, const SIE::FrameGenQueues& queues) override;
+	VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo,
+		const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) override;
+	VkResult GetSwapchainImages(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pCount, VkImage* pImages) override;
+	VkResult AcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
+		VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex) override;
+	VkResult QueuePresent(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) override;
+	void DestroySwapchain(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) override;
+
+	// Per-frame frame-generation state for the wrapped (FG swapchain) present path: enable
+	// interpolation only on frames an upscale actually prepared (gameplay), and disable it at
+	// menus / loading screens (no prepare) so the FG swapchain passes the frame through 1:1
+	// instead of blocking on absent interpolation inputs. Call once per present while wrapped.
+	// a_hudlessColor is the scene-without-UI image (back-buffer format); when interpolating it is
+	// handed to FFX as HUDLessColor so the UI region isn't ghosted on generated frames. Pass null
+	// to skip UI suppression.
+	void SetFrameGenForPresent(bool a_enabled, ID3D11Resource* a_hudlessColor);
+
+	// The FFX frame-generation SWAPCHAIN context (distinct from fgContext, the interpolation
+	// context). Owns the real VkSwapchainKHR + the present/interpolation pacing threads.
+	ffxContext fgSwapchainContext = nullptr;
+	// Replacement WSI functions FFX hands back for the wrapped swapchain.
+	ffxQueryDescSwapchainReplacementFunctionsVK fgSwapchainFns{};
+	// Queues claimed for the FG swapchain (game = DXVK graphics; present/acquire = injected).
+	SIE::FrameGenQueues fgQueues;
 
 	// FFX-API contexts created against DXVK's VkDevice. The DLL owns its own backend
 	// scratch memory, so there are no scratch buffers and no host-side backend interface.
@@ -58,6 +92,24 @@ public:
 	// presentColor fed to frame interpolation and the source used to restore the real frame to
 	// the back buffer after the interpolated frame is presented. Swapchain format.
 	Texture2D* fgPresentColor = nullptr;
+
+	// The scene WITHOUT the UI (swapchain format), handed to FFX as HUDLessColor so the UI region
+	// isn't interpolated/ghosted. Frame generation owns this resource (it is FG state, lifecycle-
+	// locked to the FG context); HDRDisplay no longer owns it. It is produced each frame while FG is
+	// active: HDR off -> CaptureHudlessFromBackBuffer snapshots the pre-UI back buffer; HDR on ->
+	// HDRDisplay::ApplyHDR re-runs its composite with no UI into GetHudlessUAV().
+	Texture2D* hudlessColor = nullptr;
+
+	/** @brief HUDLessColor render target for the HDR-on producer; null unless the FG context is
+	 *         live (so a producer can never dispatch into a freed/absent UAV). */
+	ID3D11UnorderedAccessView* GetHudlessUAV() const { return (frameGenContextActive && hudlessColor) ? hudlessColor->uav.get() : nullptr; }
+
+	/** @brief HUD-less scene resource for the present path (HUDLessColor source); null when absent. */
+	ID3D11Resource* GetHudlessResource() const { return hudlessColor ? hudlessColor->resource.get() : nullptr; }
+
+	/** @brief HDR-off producer: snapshots the pre-UI back buffer into hudlessColor. Null-safe; call
+	 *         from the pre-UI hook only while frame generation is active. */
+	void CaptureHudlessFromBackBuffer();
 
 	/**
 	 * @brief Creates FSR3 resources (and, when requested, frame-generation) on DXVK's VkDevice.

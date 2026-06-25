@@ -115,7 +115,7 @@ namespace SIE
 
 		/** @brief Flush outstanding D3D11 rendering before foreign Vulkan submits. */
 		void FlushRenderingCommands() const;
-		/** @brief Lock DXVK's submission queue around a foreign Vulkan submit. */
+		/** @brief Lock DXVK's submission queue around a foreign Vulkan submit (drains pending work). */
 		void LockSubmissionQueue() const;
 		/** @brief Release DXVK's submission queue after a foreign Vulkan submit. */
 		void ReleaseSubmissionQueue() const;

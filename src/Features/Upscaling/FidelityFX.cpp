@@ -5,8 +5,10 @@
 #include "../HDRDisplay.h"
 #include "../Upscaling.h"
 #include "DxvkInterop.h"
+#include "DxvkWsiHook.h"
 
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace
@@ -91,6 +93,34 @@ namespace
 	// it lets the UNMODIFIED prebuilt DLL run on DXVK with no patching.
 	PFN_vkGetDeviceProcAddr g_realDeviceProcAddr = nullptr;
 
+	// FFX FG-swapchain game-queue submit serialization.
+	// In composeOnGameQueue mode the FG swapchain submits to the shared DXVK graphics queue from
+	// TWO threads: interpolation from the calling (Present) thread, and UI composition from FFX's
+	// internal present/pacing thread. Vulkan requires vkQueueSubmit on a single VkQueue to be
+	// externally synchronized, so we route those submits through this leaf mutex. It is held only
+	// across the submit call (no drain, no wait), so it can never deadlock.
+	//
+	// We deliberately do NOT serialize against DXVK's OWN renderer submits with DXVK's queue mutex
+	// (m_mutexQueue). A DXVK fork exposing it (IDXGIVkInteropDevice2::LockDeviceQueue) was tried and
+	// DEADLOCKS: DxvkSubmissionQueue::submitCmdLists holds m_mutexQueue across presentImage ->
+	// vkQueuePresentKHR (dxvk_queue.cpp), which is OUR wrapped present -> FFX QueuePresent -> the
+	// composition's game-queue submit -> LockDeviceQueue -> m_mutexQueue again (recursive on the
+	// submit thread / cross-thread with FFX's pacing thread). DXVK calling our present while holding
+	// its queue mutex makes that lock fundamentally unusable here. So we keep this leaf mutex: it
+	// serializes FFX-vs-FFX, and FFX-vs-DXVK-internal relies on the driver's per-queue serialization
+	// (validated stable across long runs + repeated FG toggles). The DXVK fork change was reverted.
+	std::mutex g_ffxGameQueueSubmitMutex;
+	PFN_vkQueueSubmit g_ffxRealQueueSubmit = nullptr;
+	VkQueue g_ffxGameQueue = VK_NULL_HANDLE;
+
+	VkResult FfxGameQueueSubmit(uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence)
+	{
+		if (!g_ffxRealQueueSubmit || g_ffxGameQueue == VK_NULL_HANDLE)
+			return VK_ERROR_INITIALIZATION_FAILED;
+		std::lock_guard<std::mutex> lock(g_ffxGameQueueSubmitMutex);
+		return g_ffxRealQueueSubmit(g_ffxGameQueue, submitCount, pSubmits, fence);
+	}
+
 	VKAPI_ATTR void VKAPI_CALL Noop_vkCmdWriteBufferMarker(
 		VkCommandBuffer, VkPipelineStageFlagBits, VkBuffer, VkDeviceSize, uint32_t) {}
 
@@ -167,6 +197,36 @@ namespace
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
 			return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
 		}
+	}
+
+	ffxReturnCode_t SafeQuery(const ffxFunctions* api, ffxContext* ctx, ffxQueryDescHeader* desc)
+	{
+		__try {
+			return api->Query(ctx, desc);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+		}
+	}
+
+	void SafeDestroyContext(const ffxFunctions* api, ffxContext* ctx)
+	{
+		__try {
+			api->DestroyContext(ctx, nullptr);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+		}
+	}
+
+	// ---- FFX VK frame-generation SWAPCHAIN support -----------------------------------------
+	// The FG swapchain calls this per generated frame to run interpolation. It hands us a
+	// pre-filled dispatch desc (its command list, the present color, the interpolation output);
+	// we dispatch it on the frame-generation (interpolation) context, which already holds this
+	// frame's prepared motion vectors / depth from the upscale-time prepare.
+	ffxReturnCode_t FfxFrameGenDispatchCallback(ffxDispatchDescFrameGeneration* params, void* pUserCtx)
+	{
+		auto* self = static_cast<FidelityFX*>(pUserCtx);
+		if (!self || !self->fgContext)
+			return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+		return SafeDispatch(&self->ffxApi, &self->fgContext, &params->header);
 	}
 
 	// Surface FFX's own diagnostics (missing device features, pipeline failures, etc.).
@@ -465,6 +525,7 @@ void FidelityFX::CreateFSRResources([[maybe_unused]] bool a_frameGeneration)
 		backBuffer->GetDesc(&bbDesc);
 		interpolatedTexture = MakeDisplayTexture(backBuffer.get(), bbDesc.Width, bbDesc.Height, "FidelityFX::InterpolatedFrame").release();
 		fgPresentColor = MakeDisplayTexture(backBuffer.get(), bbDesc.Width, bbDesc.Height, "FidelityFX::FGPresentColor").release();
+		hudlessColor = MakeDisplayTexture(backBuffer.get(), bbDesc.Width, bbDesc.Height, "FidelityFX::HudlessColor").release();
 	} else {
 		logger::critical("[FidelityFX] No swap chain back buffer available; frame generation disabled.");
 	}
@@ -501,6 +562,7 @@ void FidelityFX::DestroyFSRResources()
 	destroyTex(upscaledTexture);
 	destroyTex(interpolatedTexture);
 	destroyTex(fgPresentColor);
+	destroyTex(hudlessColor);
 
 	if (dxvk->IsAvailable())
 		dxvk->DestroyCommandResources();
@@ -510,6 +572,20 @@ void FidelityFX::DestroyFSRResources()
 	fsrDispatchCrashLogged = false;
 	fgDispatchCrashLogged = false;
 	// ffxModule intentionally kept loaded for the process lifetime.
+}
+
+void FidelityFX::CaptureHudlessFromBackBuffer()
+{
+	// Snapshot the current back buffer before the UI is drawn -> the HUD-less scene, in swapchain
+	// format (matches fgPresentColor). Used as HUDLessColor for frame gen when HDR is OFF (HDR on
+	// produces it via HDRDisplay's composite into GetHudlessUAV()). Frame generation owns the
+	// resource now; null-safe before the FG context exists / when FG is inactive.
+	if (!hudlessColor || !hudlessColor->resource || !globals::d3d::swapChain)
+		return;
+
+	winrt::com_ptr<ID3D11Texture2D> backBuffer;
+	if (SUCCEEDED(globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) && backBuffer)
+		globals::d3d::context->CopyResource(hudlessColor->resource.get(), backBuffer.get());
 }
 
 void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
@@ -784,4 +860,208 @@ bool FidelityFX::DispatchFrameGeneration(ID3D11Resource* a_presentColor, ID3D11R
 bool FidelityFX::DebugOnlyInterpolated() const
 {
 	return GetFgDebug().onlyInterpolated;
+}
+
+// ===========================================================================================
+// IFrameGenProvider: the proper FFX VK frame-generation SWAPCHAIN path.
+// DxvkWsiHook injects our queues at vkCreateDevice and routes DXVK's WSI here when FG is on.
+// ===========================================================================================
+
+SIE::FrameGenDeviceRequirements FidelityFX::GetDeviceRequirements(VkPhysicalDevice)
+{
+	SIE::FrameGenDeviceRequirements req;
+	req.presentCapableQueues = 2;  // FFX needs a present + an image-acquire queue, distinct from game
+	return req;
+}
+
+void FidelityFX::OnDeviceCreated(VkPhysicalDevice, VkDevice, const SIE::FrameGenQueues& queues)
+{
+	fgQueues = queues;
+}
+
+bool FidelityFX::WantsToWrap() const
+{
+	// Wrap DXVK's swapchain only when FG is actually active and we have the injected queues.
+	// (Re-evaluated at every swapchain (re)creation; toggling FG triggers a recreate.)
+	return globals::features::upscaling.IsFrameGenerationActive() &&
+	       fgQueues.presentQueue != VK_NULL_HANDLE &&
+	       fgQueues.imageAcquireQueue != VK_NULL_HANDLE &&
+	       ffxModule != nullptr && ffxApi.CreateContext != nullptr;
+}
+
+VkResult FidelityFX::CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo,
+	const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain)
+{
+	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+	if (!dxvk->IsAvailable() || !ffxApi.CreateContext || fgQueues.presentQueue == VK_NULL_HANDLE)
+		return VK_ERROR_INITIALIZATION_FAILED;
+
+	*pSwapchain = VK_NULL_HANDLE;
+
+	// gameQueue = DXVK's graphics queue (shared with DXVK's renderer). submitFunc serializes FFX's
+	// own two-threaded game-queue access (interpolation on the calling thread + composition on FFX's
+	// present thread) through a leaf mutex — see FfxGameQueueSubmit. We deliberately do NOT route it
+	// through DXVK's LockSubmissionQueue: that calls synchronize() (drains DXVK's submit queue +
+	// holds its queue mutex), which deadlocks when invoked from FFX's present thread.
+	VkQueueInfoFFXAPI gameQ{};
+	gameQ.queue = dxvk->GetQueue();
+	gameQ.familyIndex = dxvk->GetQueueFamilyIndex();
+	g_ffxGameQueue = gameQ.queue;
+	if (!g_ffxRealQueueSubmit && dxvk->GetDeviceProcAddr())
+		g_ffxRealQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(dxvk->GetDeviceProcAddr()(device, "vkQueueSubmit"));
+	gameQ.submitFunc = g_ffxRealQueueSubmit ? &FfxGameQueueSubmit : nullptr;
+	// present + image-acquire = the injected queues (exclusive to FFX; no submit serialization).
+	VkQueueInfoFFXAPI presentQ{};
+	presentQ.queue = fgQueues.presentQueue;
+	presentQ.familyIndex = fgQueues.presentFamily;
+	VkQueueInfoFFXAPI acquireQ{};
+	acquireQ.queue = fgQueues.imageAcquireQueue;
+	acquireQ.familyIndex = fgQueues.imageAcquireFamily;
+	VkQueueInfoFFXAPI asyncQ{};  // optional; left null (no async compute queue on this device)
+
+	// Present family has no GRAPHICS bit (it is a compute family), so composition runs on the
+	// game queue (composeOnPresentQueue = false).
+	ffxCreateContextDescFrameGenerationSwapChainModeVK mode{};
+	mode.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_MODE_VK;
+	mode.header.pNext = nullptr;
+	mode.composeOnPresentQueue = false;
+
+	ffxCreateContextDescFrameGenerationSwapChainVK desc{};
+	desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK;
+	desc.header.pNext = &mode.header;
+	desc.physicalDevice = dxvk->GetPhysicalDevice();
+	desc.device = device;
+	desc.swapchain = pSwapchain;  // in: VK_NULL_HANDLE -> out: the wrapped handle
+	desc.allocator = const_cast<VkAllocationCallbacks*>(pAllocator);
+	desc.createInfo = *pCreateInfo;
+	desc.gameQueue = gameQ;
+	desc.asyncComputeQueue = asyncQ;
+	desc.presentQueue = presentQ;
+	desc.imageAcquireQueue = acquireQ;
+
+	// FFX records + submits swapchain init work; hold DXVK's lock around the create.
+	dxvk->FlushRenderingCommands();
+	dxvk->LockSubmissionQueue();
+	ffxReturnCode_t rc = SafeCreateContext(&ffxApi, &fgSwapchainContext, &desc.header);
+	dxvk->ReleaseSubmissionQueue();
+	if (rc != FFX_API_RETURN_OK || !fgSwapchainContext) {
+		logger::error("[FidelityFX] FG swapchain CreateContext failed: 0x{:08X}", (uint32_t)rc);
+		fgSwapchainContext = nullptr;
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+
+	// Query FFX's replacement WSI functions (DXVK's acquire/getimages/present route to these).
+	fgSwapchainFns = {};
+	fgSwapchainFns.header.type = FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK;
+	fgSwapchainFns.header.pNext = nullptr;
+	if (SafeQuery(&ffxApi, &fgSwapchainContext, &fgSwapchainFns.header) != FFX_API_RETURN_OK ||
+		!fgSwapchainFns.pOutQueuePresentKHR) {
+		logger::error("[FidelityFX] FG swapchain replacement-function query failed");
+		SafeDestroyContext(&ffxApi, &fgSwapchainContext);
+		fgSwapchainContext = nullptr;
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+
+	// Link the interpolation (FG) context to this swapchain and register our dispatch callback so
+	// the swapchain drives interpolation per generated frame. (Per-frame frameID/HUDless state is
+	// updated from the upscale path.)
+	{
+		ffxConfigureDescFrameGeneration cfg{};
+		cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+		cfg.swapChain = fgSwapchainContext;
+		cfg.frameGenerationCallback = &FfxFrameGenDispatchCallback;
+		cfg.frameGenerationCallbackUserContext = this;
+		cfg.frameGenerationEnabled = true;
+		cfg.allowAsyncWorkloads = false;
+		cfg.flags = GetFgDebug().ffxFlags;
+		cfg.generationRect = { 0, 0, (int32_t)pCreateInfo->imageExtent.width, (int32_t)pCreateInfo->imageExtent.height };
+		cfg.frameID = frameID;
+		SafeConfigure(&ffxApi, &fgContext, &cfg.header);
+	}
+
+	logger::info("[FidelityFX] FFX FG swapchain created + linked ({}x{}, wrapped handle 0x{:X})",
+		pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height, (uintptr_t)*pSwapchain);
+	return VK_SUCCESS;
+}
+
+VkResult FidelityFX::GetSwapchainImages(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pCount, VkImage* pImages)
+{
+	return fgSwapchainFns.pOutGetSwapchainImagesKHR ?
+	           fgSwapchainFns.pOutGetSwapchainImagesKHR(device, swapchain, pCount, pImages) :
+	           VK_ERROR_INITIALIZATION_FAILED;
+}
+
+VkResult FidelityFX::AcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
+	VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex)
+{
+	return fgSwapchainFns.pOutAcquireNextImageKHR ?
+	           fgSwapchainFns.pOutAcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, pImageIndex) :
+	           VK_ERROR_INITIALIZATION_FAILED;
+}
+
+VkResult FidelityFX::QueuePresent(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+	return fgSwapchainFns.pOutQueuePresentKHR ?
+	           fgSwapchainFns.pOutQueuePresentKHR(queue, pPresentInfo) :
+	           VK_ERROR_INITIALIZATION_FAILED;
+}
+
+void FidelityFX::SetFrameGenForPresent(bool a_enabled, ID3D11Resource* a_hudlessColor)
+{
+	if (!fgSwapchainContext || !fgContext)
+		return;
+	auto* dxvk = SIE::DxvkInterop::GetSingleton();
+
+	// HUD-less scene (back-buffer format, no UI). FFX diffs it against the presented frame to
+	// detect the UI region and present the real UI over each generated frame instead of
+	// interpolating it (which ghosts). Only needed while actually interpolating.
+	FfxApiResource hudless = ffxApiGetResourceVK(nullptr, {}, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+	if (a_enabled && a_hudlessColor && dxvk && dxvk->IsAvailable()) {
+		// Queue the transition into shader-read on DXVK's context (WrapAndPrepare reads DXVK's
+		// current layout and barriers to it). Ordering is implicit and free: we are inside the
+		// present hook, before a_present, so this barrier is the last thing recorded on DXVK's
+		// context this frame — DXVK's command stream submits it ahead of vkQueuePresentKHR (and
+		// therefore ahead of FFX's interpolation, which reads HUDLessColor on the game queue from
+		// within that present). No explicit drain needed (which would stall every generated frame).
+		// We deliberately do NOT restore the layout: FFX leaves it in shader-read, and next frame's
+		// D3D11 write to the hud-less texture transitions out of it (DXVK tracked the move).
+		std::vector<LayoutGuard> guards;
+		hudless = WrapAndPrepare(dxvk, a_hudlessColor, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
+	}
+
+	ffxConfigureDescFrameGeneration cfg{};
+	cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+	cfg.swapChain = fgSwapchainContext;
+	cfg.frameGenerationCallback = &FfxFrameGenDispatchCallback;
+	cfg.frameGenerationCallbackUserContext = this;
+	cfg.frameGenerationEnabled = a_enabled;
+	cfg.allowAsyncWorkloads = false;
+	cfg.HUDLessColor = hudless;
+	cfg.flags = GetFgDebug().ffxFlags;
+	cfg.generationRect = { 0, 0, (int32_t)globals::game::graphicsState->screenWidth, (int32_t)globals::game::graphicsState->screenHeight };
+	cfg.frameID = frameID;
+	SafeConfigure(&ffxApi, &fgContext, &cfg.header);
+}
+
+void FidelityFX::DestroySwapchain(VkDevice, VkSwapchainKHR, const VkAllocationCallbacks*)
+{
+	// Unlink the interpolation context, then tear down the FG swapchain (stops its present +
+	// interpolation threads and destroys the real VkSwapchainKHR it owns).
+	if (fgContext) {
+		ffxConfigureDescFrameGeneration cfg{};
+		cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+		cfg.swapChain = nullptr;
+		cfg.frameGenerationEnabled = false;
+		cfg.frameID = frameID;
+		SafeConfigure(&ffxApi, &fgContext, &cfg.header);
+	}
+	if (fgSwapchainContext) {
+		auto* dxvk = SIE::DxvkInterop::GetSingleton();
+		dxvk->LockSubmissionQueue();
+		SafeDestroyContext(&ffxApi, &fgSwapchainContext);
+		dxvk->ReleaseSubmissionQueue();
+		fgSwapchainContext = nullptr;
+	}
+	fgSwapchainFns = {};
+	logger::info("[FidelityFX] FFX FG swapchain destroyed");
 }

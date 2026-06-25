@@ -676,12 +676,6 @@ void HDRDisplay::SetupResources()
 	outputTexture->CreateSRV(srvDesc);
 	outputTexture->CreateUAV(uavDesc);
 
-	// HUD-less composite target (scene without UI), swapchain format — fed to FFX frame
-	// generation as HUDLessColor so the UI region is not interpolated/ghosted.
-	hudlessTexture = new Texture2D(texDesc, "HDR::HudlessTexture");
-	hudlessTexture->CreateSRV(srvDesc);
-	hudlessTexture->CreateUAV(uavDesc);
-
 	// UI texture for separate UI rendering
 	// Use R8G8B8A8_UNORM (8-bit SDR) - vanilla UI is SDR and 8-bit precision
 	// naturally truncates near-black ghost bar artifacts to zero
@@ -836,19 +830,6 @@ void HDRDisplay::SetUIBuffer()
 
 	fb.RTV = uiTexture->rtv.get();
 	globals::d3d::context->OMSetRenderTargets(1, &fb.RTV, nullptr);
-}
-
-void HDRDisplay::CaptureHudlessFromBackBuffer()
-{
-	// Snapshot the current back buffer before the UI is drawn → the HUD-less scene, in swapchain
-	// format (matches presentColor). Used as HUDLessColor for frame gen when HDR is off (with HDR
-	// on, ApplyHDR produces the hudless from the separated scene instead).
-	if (!hudlessTexture || !hudlessTexture->resource || !globals::d3d::swapChain)
-		return;
-
-	winrt::com_ptr<ID3D11Texture2D> backBuffer;
-	if (SUCCEEDED(globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) && backBuffer)
-		globals::d3d::context->CopyResource(hudlessTexture->resource.get(), backBuffer.get());
 }
 
 bool HDRDisplay::UsesDeferredPresentComposite() const
@@ -1128,12 +1109,14 @@ void HDRDisplay::ApplyHDR()
 
 		DispatchHDROutput(sceneSRV, uiSRV, outputTexture->uav.get());
 
-		// FSR3 frame generation HUDLess buffer: re-run the composite with NO UI so FFX gets a
-		// scene-only back-buffer-format image (HUDLessColor). FFX uses it to detect and suppress
-		// interpolation distortion in the UI region — the UI is taken from presentColor, not ghosted.
-		if (hudlessTexture && globals::features::upscaling.loaded &&
-			globals::features::upscaling.IsFrameGenerationActive())
-			DispatchHDROutput(sceneSRV, nullptr, hudlessTexture->uav.get());
+		// FSR3 frame generation HUDLess buffer: re-run the composite with NO UI into the frame-gen-
+		// owned HUDLessColor target (FidelityFX owns the texture; we only produce its content here).
+		// GetHudlessUAV() returns null unless the FG context is live, so this can never dispatch into
+		// a freed/absent UAV; the IsFrameGenerationActive() gate skips the extra pass when FG is off.
+		if (globals::features::upscaling.loaded && globals::features::upscaling.IsFrameGenerationActive()) {
+			if (auto* hudlessUAV = globals::features::upscaling.fidelityFX.GetHudlessUAV())
+				DispatchHDROutput(sceneSRV, nullptr, hudlessUAV);
+		}
 	}
 
 	{
@@ -1280,14 +1263,6 @@ void HDRDisplay::DestroyResources()
 		uiTexture->resource = nullptr;
 		delete uiTexture;
 		uiTexture = nullptr;
-	}
-
-	if (hudlessTexture) {
-		hudlessTexture->srv = nullptr;
-		hudlessTexture->uav = nullptr;
-		hudlessTexture->resource = nullptr;
-		delete hudlessTexture;
-		hudlessTexture = nullptr;
 	}
 
 	if (cleanSceneCapture) {

@@ -4,6 +4,7 @@
 #include "DxvkLoader.h"
 #include "Deferred.h"
 #include "Upscaling/DxvkInterop.h"
+#include "Upscaling/DxvkWsiHook.h"
 #include "Upscaling/Streamline.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
@@ -73,6 +74,12 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	upscaling.isWindowed = pSwapChainDesc->Windowed;
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
+
+	// Under DXVK, arm the Vulkan WSI interception BEFORE the real device/swapchain is created so
+	// DXVK resolves our swapchain-function wrappers (the hook point for the FFX frame-generation
+	// swapchain). Pass-through until the FG swapchain is wired, so this is a no-op when idle.
+	if (DxvkLoader::IsLoaded())
+		SIE::DxvkWsiHook::Install();
 
 	return ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
 		DriverType,
@@ -223,6 +230,19 @@ void Upscaling::DataLoaded()
 
 void Upscaling::Load()
 {
+	// Arm the DXVK Vulkan WSI interception NOW — before DXVK creates its VkInstance/VkDevice at
+	// the game's first DXGI call. This is critical for the FFX frame-generation swapchain: the
+	// instance-level vkCreateDevice (where we inject the extra FFX queues) is resolved by DXVK at
+	// instance creation, which precedes our D3D11CreateDeviceAndSwapChain hook. Installing here
+	// (plugin load, before any DXGI factory exists) catches it as well as the device-level
+	// swapchain functions. Idempotent.
+	if (DxvkLoader::IsLoaded()) {
+		SIE::DxvkWsiHook::Install();
+		// Register FFX as the frame-generation provider before device creation, so its
+		// device-creation requirements (the extra queues) are injected at vkCreateDevice.
+		SIE::DxvkWsiHook::SetProvider(&fidelityFX);
+	}
+
 	// Route the game's device creation to DXVK's subfolder-loaded export (set up by
 	// DxvkLoader during InstallEarlyHooks), not the inert System32 d3d11 the IAT now
 	// resolves to. Fall back to the IAT original only if DXVK failed to load.
@@ -298,6 +318,28 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 	if (!IsFrameGenerationActive())
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 
+	// When the FFX VK frame-generation swapchain owns presentation (DxvkWsiHook wrapped DXVK's
+	// swapchain), FFX interpolates and paces the real + generated frames internally — present once
+	// and let it run. The legacy dispatch-only double-present below is the fallback used only when
+	// the swapchain is NOT wrapped.
+	if (SIE::DxvkWsiHook::IsSwapchainWrapped()) {
+		// Interpolate only on frames the upscale actually prepared (gameplay). Menus / loading have
+		// no prepare, so disable interpolation and pass the frame through 1:1 — otherwise FFX's
+		// present blocks waiting for interpolation inputs that never arrive. frameID must advance by
+		// exactly 1 per interpolated frame; the FG dispatch that normally advances it is skipped
+		// while wrapped, so advance it here.
+		const bool interpolate = fidelityFX.fgPreparedThisFrame;
+		// HUD-less scene (no UI) so FFX suppresses UI-region interpolation. Frame generation owns it:
+		// HDR on -> HDRDisplay's composite wrote it; HDR off -> snapshotted pre-UI in
+		// MenuManagerDrawInterfaceStartHook. Null before the FG context exists (no UI suppression).
+		fidelityFX.SetFrameGenForPresent(interpolate, fidelityFX.GetHudlessResource());
+		fidelityFX.fgPreparedThisFrame = false;
+		const HRESULT hr = a_present(a_swapChain, a_syncInterval, a_flags);
+		if (interpolate)
+			++fidelityFX.frameID;
+		return hr;
+	}
+
 	// The only HDR relationship: tell the interpolation dispatch how the back buffer is encoded.
 	auto* hdr = globals::features::hdrDisplay.loaded ? &globals::features::hdrDisplay : nullptr;
 	const bool isHDR = hdr && hdr->settings.enableHDR;
@@ -316,13 +358,11 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 	if (FAILED(a_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.put()))) || !backBuffer)
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 
-	// HUDLess buffer (scene without UI): HDR on -> produced by the composite (ApplyHDR); HDR off ->
-	// snapshotted from the back buffer before the UI draws (MenuManagerDrawInterfaceStartHook).
-	// Either way it's fresh this frame while frame gen is active. FFX uses it to suppress UI-region
-	// interpolation so the UI isn't ghosted.
-	ID3D11Resource* hudless = nullptr;
-	if (hdr && hdr->hudlessTexture && hdr->hudlessTexture->resource)
-		hudless = hdr->hudlessTexture->resource.get();
+	// HUDLess buffer (scene without UI), owned by frame generation: HDR on -> produced by the
+	// composite (ApplyHDR); HDR off -> snapshotted from the back buffer before the UI draws
+	// (MenuManagerDrawInterfaceStartHook). Either way it's fresh this frame while frame gen is
+	// active. FFX uses it to suppress UI-region interpolation so the UI isn't ghosted.
+	ID3D11Resource* hudless = fidelityFX.GetHudlessResource();
 
 	if (!fidelityFX.GenerateInterpolatedFrame(backBuffer.get(), hudless, isHDR, peakNits, ffxDebugFlags))
 		return a_present(a_swapChain, a_syncInterval, a_flags);  // no interpolated frame this present
@@ -429,6 +469,16 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		previousUpscaleMode = a_upscalemethod;
 		previousFrameGeneration = settings.frameGeneration;
 		previousUpscalingWasActive = IsUpscalingActive();
+
+		// Frame generation toggled (or FSR+FG just came up): ask DXVK to recreate its swapchain so
+		// the FFX VK frame-generation swapchain is wrapped/unwrapped to match. The recreate runs
+		// through DXVK's own swapchain lifecycle (via an OUT_OF_DATE present), so it survives being
+		// toggled live. When unwrapping, native presentation resumes with zero FG overhead. Only
+		// trigger when the desired wrap state differs from the current one (avoids redundant
+		// destroy/recreate churn when already in the right state).
+		if ((frameGenChanged || upscaleModeChanged) &&
+			fidelityFX.WantsToWrap() != SIE::DxvkWsiHook::IsSwapchainWrapped())
+			SIE::DxvkWsiHook::RequestSwapchainRecreate();
 	}
 }
 
@@ -1082,14 +1132,15 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 	upscaling.PostDisplay();
 
 	auto& hdr = globals::features::hdrDisplay;
-	if (hdr.loaded) {
-		// HDR-off frame generation: snapshot the HUD-less scene now, before the vanilla UI draws,
-		// so FFX gets a HUDLessColor and the UI isn't ghosted. With HDR on, ApplyHDR produces the
-		// hudless from the separated scene instead.
-		if (!hdr.settings.enableHDR && upscaling.IsFrameGenerationActive())
-			hdr.CaptureHudlessFromBackBuffer();
+	// Frame-generation HUD-less capture: when HDR is NOT producing the hudless (HDR off / not
+	// loaded), snapshot the pre-UI back buffer now so FFX gets a HUDLessColor and the UI isn't
+	// ghosted. With HDR on, ApplyHDR produces the hudless into the FG-owned UAV instead. FidelityFX
+	// owns the texture; HDRDisplay no longer has any hudless state.
+	const bool hdrProducesHudless = hdr.loaded && hdr.settings.enableHDR;
+	if (!hdrProducesHudless && upscaling.IsFrameGenerationActive())
+		upscaling.fidelityFX.CaptureHudlessFromBackBuffer();
+	if (hdr.loaded)
 		hdr.SetUIBuffer();
-	}
 
 	func(a1);
 }

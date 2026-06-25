@@ -6024,6 +6024,41 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	};
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	const auto relatchUpscaleMethod = GetUpscaleMethod();
+	auto hasPendingVendorReset = [&]() {
+		return pendingDLSSReset.load(std::memory_order_acquire) ||
+		       pendingFSRReset.load(std::memory_order_acquire) ||
+		       fidelityFX.HasFSRResourcesPendingTeardown();
+	};
+	auto shouldSkipNoOpRelatch = [&]() {
+		if (!IsRenderScaleMethodEligible(relatchUpscaleMethod))
+			return false;
+
+		if (HasPendingVRUpscalingTransition() ||
+			postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+			hasPendingVendorReset() ||
+			perfMode.HasRestartRequiredChange() ||
+			!AreCommonVendorTexturesReady(relatchUpscaleMethod)) {
+			return false;
+		}
+
+		const auto& boot = perfMode.GetBootSnapshot();
+		if (!boot.valid || !boot.active || boot.method != relatchUpscaleMethod)
+			return false;
+
+		if (ClampToggleUInt(settings.renderScaleMode) == 0 ||
+			ClampQualityModeUInt(settings.qualityMode) != ClampQualityModeUInt(boot.qualityMode)) {
+			return false;
+		}
+
+		const float2 targetDisplaySize = perfMode.GetDisplayScreenSize();
+		const float2 targetRenderSize = perfMode.GetRenderScreenSize();
+		if (targetDisplaySize.x <= 0.0f || targetDisplaySize.y <= 0.0f ||
+			targetRenderSize.x <= 0.0f || targetRenderSize.y <= 0.0f) {
+			return false;
+		}
+
+		return AreVRRenderScaleRenderTargetsSizedForDimensions(targetRenderSize, targetDisplaySize);
+	};
 
 	static bool loggedRelatchVendorDefer = false;
 	static bool loggedRelatchD3DDefer = false;
@@ -6041,6 +6076,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		"[VRRenderScale] Applying render-target relatch{}{}",
 		a_caller && *a_caller ? " from " : "",
 		a_caller && *a_caller ? a_caller : "");
+
+	if (shouldSkipNoOpRelatch()) {
+		if (ClampToggleUInt(settings.perfMode) == 0)
+			settings.perfMode = 1;
+		clearRelatchDelay();
+		clearRelatchRetryLogs();
+		logger::debug("[VRRenderScale] Skipped render-target relatch; current render-scale target is already active.");
+		return false;
+	}
 
 	bool relatchRenderScaleActive = false;
 	try {
@@ -6476,6 +6520,15 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		};
 		return key;
 	};
+	const auto getTrackedRenderScaleMode = [&]() {
+		if (!globals::game::isVR)
+			return IsRenderScaleModeRequested() ? 1u : 0u;
+
+		if (!IsRenderScaleMethodEligible(a_upscalemethod))
+			return 0u;
+
+		return ClampToggleUInt(settings.renderScaleMode);
+	};
 
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
 	static bool previousFrameGenMode = false;
@@ -6486,7 +6539,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFSRRuntimeFsr4Active = false;
 	static uint32_t previousQualityMode = GetRuntimeQualityMode();
 	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	static uint32_t previousRenderScaleMode = IsRenderScaleModeRequested() ? 1u : 0u;
+	static uint32_t previousRenderScaleMode = getTrackedRenderScaleMode();
 	static uint32_t previousPerfMode = ClampToggleUInt(settings.perfMode);
 	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
 
@@ -6495,7 +6548,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
 	const uint32_t qualityModeCurrent = GetRuntimeQualityMode();
 	const uint32_t dlssPresetCurrent = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
-	const uint32_t renderScaleModeCurrent = IsRenderScaleModeRequested() ? 1u : 0u;
+	const uint32_t renderScaleModeCurrent = getTrackedRenderScaleMode();
 	const uint32_t perfModeCurrent = ClampToggleUInt(settings.perfMode);
 	const bool qualityModeChanged = previousQualityMode != qualityModeCurrent;
 	const bool dlssPresetChanged = previousDLSSPreset != dlssPresetCurrent;

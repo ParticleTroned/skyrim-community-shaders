@@ -485,10 +485,14 @@ install(
 
 # NVIDIA Streamline (DLSS/Reflex) plugin DLLs — staged into the CS subfolder (NEVER
 # the game root); loaded explicitly by src/Features/Upscaling/Streamline.cpp. These
-# are NVIDIA redistributables and are NOT bundled in the repo, so this block is a
-# no-op on a clean checkout: drop sl.interposer.dll + sl.*.dll into
-# ${STREAMLINE_DLL_DIR} (default extern/Streamline-DX12/bin/x64) to stage them.
-# On any machine without these DLLs, Streamline degrades cleanly to FSR.
+# are NVIDIA redistributables and are NOT bundled in the repo: cmake/Streamline (added via
+# add_subdirectory above) FETCHES them at configure time from the release zip when
+# STREAMLINE_FETCH is ON and repoints ${STREAMLINE_DLL_DIR} at the extracted DLLs. With the
+# fetch disabled (or on a clean checkout that skipped it) this falls back to the default
+# extern/Streamline-DX12/bin/x64 — drop sl.interposer.dll + sl.*.dll there to stage them.
+# When the DLLs are absent the block below is a no-op and Streamline degrades cleanly to FSR.
+# The CACHE set here is a fallback default — the Streamline subdir's FORCE set wins when it
+# fetched the DLLs (it runs first, so this plain set is a no-op once that cache var exists).
 set(STREAMLINE_DLL_DIR "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/bin/x64" CACHE PATH "Directory holding the Streamline plugin DLLs to stage")
 if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
     file(GLOB _SL_DLLS "${STREAMLINE_DLL_DIR}/sl.*.dll")
@@ -614,8 +618,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # (AIO_ZIP_PACKAGE, Package-AIO-Manual, AUTO_PLUGIN_DEPLOYMENT) gets a DXVK-runnable mod.
     set(_aio_dxvk_dir "${AIO_DIR}/SKSE/Plugins/CommunityShaders/dxvk")
 
-    # FidelityFX: the official prebuilt signed amd_fidelityfx_vk.dll (guaranteed present by
-    # the FATAL_ERROR guard in cmake/FidelityFX-SDK.cmake). Plain copy — it is never built.
+    # FidelityFX: the official prebuilt signed amd_fidelityfx_vk.dll (fetched at configure time
+    # and guaranteed present by the FATAL_ERROR guard in cmake/FidelityFX-SDK.cmake). Plain copy.
     list(
         APPEND _prepare_aio_cmds
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_aio_dxvk_dir}"

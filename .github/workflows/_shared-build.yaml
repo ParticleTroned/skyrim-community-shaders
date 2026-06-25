@@ -71,6 +71,39 @@ jobs:
                   cmake-preset: ${{ matrix.compiler.cmake-preset }}
                   build-dir: ${{ matrix.compiler.build-dir }}
 
+            # DXVK is a git submodule that CMake only STAGES (it never builds it). The
+            # install()/PREPARE_AIO rules need extern/dxvk/build/src/d3d11/d3d11.dll to exist,
+            # so we build DXVK natively here (using the MSVC env already set up above) before
+            # the CMake configure/build below. The FFX + Streamline DLL fetches (Tasks A/B)
+            # happen automatically during the run-cmake configure, so they need no CI step.
+            - name: Resolve DXVK submodule SHA
+              id: dxvk_sha
+              shell: bash
+              run: echo "sha=$(git -C extern/dxvk rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+            # Cache the DXVK build keyed on the submodule SHA so it is reused across runs
+            # (a full DXVK build is slow). Bumping the submodule invalidates the cache.
+            - name: Cache DXVK build
+              id: cache_dxvk
+              uses: actions/cache@v5
+              with:
+                  path: extern/dxvk/build
+                  key: ${{ runner.os }}-dxvk-${{ steps.dxvk_sha.outputs.sha }}
+
+            - name: Install DXVK build tools (meson, ninja, glslang)
+              if: steps.cache_dxvk.outputs.cache-hit != 'true'
+              shell: pwsh
+              run: |
+                  python -m pip install --upgrade meson ninja
+                  choco install vulkan-sdk -y --no-progress
+
+            - name: Build DXVK
+              if: steps.cache_dxvk.outputs.cache-hit != 'true'
+              shell: pwsh
+              run: |
+                  meson setup extern/dxvk/build extern/dxvk --buildtype release
+                  ninja -C extern/dxvk/build
+
             - name: Build using run-cmake
               uses: lukka/run-cmake@v10
               with:

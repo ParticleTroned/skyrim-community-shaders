@@ -411,6 +411,14 @@ namespace Util
 		return IconLoader::InitializeMenuIcons(menu);
 	}
 
+	bool LoadTextureFromFile(ID3D11Device* device,
+		const char* filename,
+		ID3D11ShaderResourceView** out_srv,
+		ImVec2& out_size)
+	{
+		return IconLoader::LoadTextureFromFile(device, filename, out_srv, out_size);
+	}
+
 	// Text rendering helpers
 	ImVec2 DrawSharpText(const char* text, bool alignToPixelGrid, float scale)
 	{
@@ -1280,9 +1288,9 @@ namespace Util
 		if (searchQuery.empty())
 			return true;
 
-		// Get both short name and display name
+		// Get both short name and UI display name
 		std::string shortName = feat->GetShortName();
-		std::string displayName = feat->GetName();
+		std::string displayName = feat->GetDisplayName();
 		std::string query = searchQuery;
 
 		// Convert all to lowercase for case-insensitive search

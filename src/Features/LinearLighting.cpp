@@ -1,6 +1,6 @@
 #include "LinearLighting.h"
 
-#include "AdaptiveBrightness.h"
+#include "AdaptiveBalance.h"
 #include "LocationContext.h"
 #include "State.h"
 
@@ -149,8 +149,9 @@ void LinearLighting::PostPostLoad()
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
 	const bool linearLightingEnabled = IsRuntimeEnabled();
-	const bool adaptiveBrightnessEnabled = globals::features::adaptiveBrightness.IsRuntimeEnabled();
-	const auto effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
+	const bool adaptiveBalanceEnabled = globals::features::adaptiveBalance.IsRuntimeEnabled();
+	const auto effectiveSettings = globals::features::adaptiveBalance.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
+	const auto imageAdjustments = globals::features::adaptiveBalance.GetEffectiveImageAdjustments();
 
 	auto data = PerFrameData{};
 	data.enableLinearLighting = linearLightingEnabled;
@@ -180,7 +181,11 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = effectiveSettings.projectedEffectMult;
 	data.deferredEffectMult = effectiveSettings.deferredEffectMult;
 	data.otherEffectMult = effectiveSettings.otherEffectMult;
-	data.enableAdaptiveBrightness = adaptiveBrightnessEnabled;
+	data.enableAdaptiveBalance = adaptiveBalanceEnabled;
+	data.adaptiveImageBrightnessMult = imageAdjustments.imageBrightness;
+	data.adaptiveBloomMult = imageAdjustments.bloom;
+	data.adaptiveSaturationMult = imageAdjustments.saturation;
+	data.adaptiveContrastMult = imageAdjustments.contrast;
 	return data;
 }
 
@@ -221,8 +226,7 @@ void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
-	const bool linearLightingEnabled = IsRuntimeEnabled();
-	if (lightProperty != nullptr && (linearLightingEnabled || globals::features::adaptiveBrightness.IsRuntimeEnabled())) {
+	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBalance.IsRuntimeEnabled())) {
 		PerGeometryData perGeometryData{};
 		perGeometryData.emissiveMult = lightProperty->emissiveMult;
 		PerGeometryCB->Update(perGeometryData);

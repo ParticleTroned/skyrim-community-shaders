@@ -244,7 +244,7 @@ namespace FeatureIssues
 		if (!issue.replacementFeature.empty()) {
 			Feature* replacementFeatureObj = s_featureLookupCache.FindFeature(issue.replacementFeature);
 			if (replacementFeatureObj) {
-				issue.replacementFeatureDisplayName = replacementFeatureObj->GetName();
+				issue.replacementFeatureDisplayName = replacementFeatureObj->GetDisplayName();
 				issue.replacementFeatureInstalled = replacementFeatureObj->loaded;
 				issue.replacementFeatureModLink = replacementFeatureObj->IsCore() ? "" : replacementFeatureObj->GetFeatureModLink();
 			} else {
@@ -257,7 +257,7 @@ namespace FeatureIssues
 			if (issueType == FeatureIssueInfo::IssueType::VERSION_MISMATCH) {
 				Feature* featureObj = s_featureLookupCache.FindFeature(shortName);
 				if (featureObj) {
-					issue.replacementFeatureDisplayName = featureObj->GetName();
+					issue.replacementFeatureDisplayName = featureObj->GetDisplayName();
 					issue.replacementFeatureInstalled = false;  // Not installed (wrong version)
 					issue.replacementFeatureModLink = featureObj->IsCore() ? "" : featureObj->GetFeatureModLink();
 				} else {

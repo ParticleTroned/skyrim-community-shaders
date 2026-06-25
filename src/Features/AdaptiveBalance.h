@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -15,26 +16,30 @@ namespace RE
 	class TESForm;
 }
 
-struct AdaptiveBrightness : Feature
+struct AdaptiveBalance : Feature
 {
-	static AdaptiveBrightness* GetSingleton()
+	static constexpr std::string_view kFeatureName = "Adaptive Balance";
+	static constexpr std::string_view kFeatureShortName = "AdaptiveBalance";
+
+	static AdaptiveBalance* GetSingleton()
 	{
-		static AdaptiveBrightness singleton;
+		static AdaptiveBalance singleton;
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() override { return "Adaptive Brightness"; }
-	virtual inline std::string GetShortName() override { return "AdaptiveBrightness"; }
+	virtual inline std::string GetName() override { return std::string(kFeatureName); }
+	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
+	virtual std::string_view GetSettingsBannerAssetPath() const override { return "FeatureBanners/AdaptiveBalance.png"; }
 	virtual inline bool IsCore() const override { return true; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Adaptive Brightness adjusts scene brightness by location and exterior time of day without enabling full Linear Lighting.",
-			{ "Separate exterior day and night brightness",
+			"Blends scene lighting and final image balance by location and exterior time of day without enabling full Linear Lighting.",
+			{ "Separate exterior day and night scene/image profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Optional per-location overrides with COC codes",
-				"Advanced per-profile light and atmosphere controls" }
+				"Per-profile brightness, bloom, saturation, and contrast control" }
 		};
 	}
 
@@ -55,6 +60,10 @@ struct AdaptiveBrightness : Feature
 	struct ProfileSettings
 	{
 		float brightness = 1.0f;
+		float imageBrightness = 1.0f;
+		float bloom = 1.0f;
+		float saturation = 1.0f;
+		float contrast = 1.0f;
 		bool advanced = false;
 
 		float directionalLightMult = 1.0f;
@@ -99,7 +108,17 @@ struct AdaptiveBrightness : Feature
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
 
-	static constexpr const char* kDefaultLocationOverridePresetName = "AdaptiveBrightnessPreset";
+	struct ImageAdjustments
+	{
+		float imageBrightness = 1.0f;
+		float bloom = 1.0f;
+		float saturation = 1.0f;
+		float contrast = 1.0f;
+	};
+
+	static constexpr const char* kDefaultGlobalPresetName = "AdaptiveBalanceGlobalPreset";
+	static constexpr const char* kDefaultLocationOverridePresetName = "AdaptiveBalancePreset";
+	static constexpr const char* kDefaultFullPresetName = "AdaptiveBalanceFullPreset";
 	static constexpr std::size_t kInvalidLocationOverrideIndex = static_cast<std::size_t>(-1);
 
 	struct LocationOverrideCache
@@ -111,9 +130,13 @@ struct AdaptiveBrightness : Feature
 		bool valid = false;
 	};
 
+	std::string globalPresetName = kDefaultGlobalPresetName;
+	std::string globalPresetStatus;
 	std::string selectedLocationOverrideKey;
 	std::string locationOverridePresetName = kDefaultLocationOverridePresetName;
 	std::string locationOverridePresetStatus;
+	std::string fullPresetName = kDefaultFullPresetName;
+	std::string fullPresetStatus;
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
 	bool advancedControlsOpen = false;
@@ -130,27 +153,45 @@ struct AdaptiveBrightness : Feature
 
 	bool IsRuntimeEnabled() const;
 	LinearLighting::Settings GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const;
+	ImageAdjustments GetEffectiveImageAdjustments() const;
+
+	struct ActiveProfileBlend
+	{
+		const ProfileSettings* from = nullptr;
+		const ProfileSettings* to = nullptr;
+		float factor = 0.0f;
+	};
 
 	LinearLighting::Settings GetNeutralLinearLightingSettings() const;
 	LinearLighting::Settings ApplyProfile(const LinearLighting::Settings& a_base, const ProfileSettings& a_profile) const;
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
+	static ImageAdjustments GetImageAdjustments(const ProfileSettings& a_profile);
+	static ImageAdjustments LerpImageAdjustments(const ImageAdjustments& a_a, const ImageAdjustments& a_b, float a_t);
+	ActiveProfileBlend GetActiveProfileBlend() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;
 	const LocationOverride* GetActiveLocationOverride() const;
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
+	void DrawExteriorTimeSettings();
 	void DrawProfile(Profile a_profile);
 	void DrawProfileSettings(ProfileSettings& a_profile);
 	void SetAdvancedControlsOpen(bool a_open);
+	void DrawGlobalPresetControls();
 	void DrawLocationOverrides();
 	void DrawLocationOverridePresetControls();
+	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride();
 	void ClearLocationOverrideSelection();
 	void ResetLocationOverrideEdit();
 	ProfileSettings* GetLocationOverrideEditProfile(LocationOverride& a_locationOverride);
+	bool ExportGlobalPreset();
+	bool ImportGlobalPreset();
 	bool ExportLocationOverrides();
 	bool ImportLocationOverrides();
+	bool ExportFullPreset();
+	bool ImportFullPreset();
 	std::optional<LocationOverrideTarget> GetCurrentLocationOverrideTarget() const;
 	LocationOverride* FindLocationOverride(const std::string& a_key);
 	const LocationOverride* FindLocationOverride(const std::string& a_key) const;

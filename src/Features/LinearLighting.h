@@ -88,8 +88,12 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		// Reuses the former tail padding slot in SharedData.hlsli::LinearLightingSettings.
-		uint enableAdaptiveBrightness;
+		// Adaptive Balance extends the shared payload with final-image controls.
+		uint enableAdaptiveBalance;
+		float adaptiveImageBrightnessMult;
+		float adaptiveBloomMult;
+		float adaptiveSaturationMult;
+		float adaptiveContrastMult;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 

@@ -8,7 +8,7 @@ Texture2D<float4> AlbedoTexture : register(t3);
 #include "SubsurfaceScattering/SSSCommon.hlsli"
 
 [numthreads(8, 8, 1)] void main(uint3 DTid : SV_DispatchThreadID) {
-	if (any(DTid.xy >= uint2(sd.BufferDim.xy)))
+	if (any(DTid.xy >= uint2(SharedData::BufferDim.xy)))
 		return;
 
 	float4 color = ColorTexture[DTid.xy];

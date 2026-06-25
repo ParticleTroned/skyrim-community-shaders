@@ -77,15 +77,15 @@ namespace Hair
 		// https://advances.realtimerendering.com/s2016
 		dirDiffuse = saturate(oNdotL + wrapped) / (1 + wrapped);
 		float3 scatterColor = pow(baseColor, 0.5);
-		dirDiffuse = saturate(scatterColor + NdotL) * dirDiffuse * lightColor * fd.hairSpecularSettings.DiffuseMult;
+		dirDiffuse = saturate(scatterColor + NdotL) * dirDiffuse * lightColor * SharedData::hairSpecularSettings.DiffuseMult;
 
 		float3 TshiftPrimary;
 		float3 TshiftSecondary;
 
-		if (fd.hairSpecularSettings.EnableTangentShift) {
+		if (SharedData::hairSpecularSettings.EnableTangentShift) {
 			const float shift = TexTangentShift.SampleLevel(SampColorSampler, uv, 0).x - 0.5;
-			TshiftPrimary = ShiftTangent(T, N, shift + fd.hairSpecularSettings.PrimaryTangentShift);
-			TshiftSecondary = ShiftTangent(T, N, shift + fd.hairSpecularSettings.SecondaryTangentShift);
+			TshiftPrimary = ShiftTangent(T, N, shift + SharedData::hairSpecularSettings.PrimaryTangentShift);
+			TshiftSecondary = ShiftTangent(T, N, shift + SharedData::hairSpecularSettings.SecondaryTangentShift);
 		} else {
 			TshiftPrimary = T;
 			TshiftSecondary = T;
@@ -97,9 +97,9 @@ namespace Hair
 		float3 specR = 0.25 * F * (specPrimary + specSecondary * scatterColor) * NdotL * saturate(VNdotV * (3.4e+38));
 		float scatterFresnel1 = pow(saturate(-dot(L, V)), 9) * pow(saturate(1 - VNdotV * VNdotV), 12);
 		float scatterFresnel2 = saturate(pow(abs(1 - VNdotV), 20));
-		float3 specT = (scatterFresnel1 + scatterFresnel2 * scatterColor) * fd.hairSpecularSettings.Transmission;
-		dirSpecular = specR * lightColor * fd.hairSpecularSettings.SpecularMult;
-		dirTransmission = specT * softColor * fd.hairSpecularSettings.SpecularMult;
+		float3 specT = (scatterFresnel1 + scatterFresnel2 * scatterColor) * SharedData::hairSpecularSettings.Transmission;
+		dirSpecular = specR * lightColor * SharedData::hairSpecularSettings.SpecularMult;
+		dirTransmission = specT * softColor * SharedData::hairSpecularSettings.SpecularMult;
 	}
 
 	float Hair_g(float B, float Theta)
@@ -202,15 +202,15 @@ namespace Hair
 		dirTransmission = 0;
 		const float roughness = 1 - saturate(shininess * 0.01);
 
-		if (fd.hairSpecularSettings.EnableTangentShift) {
+		if (SharedData::hairSpecularSettings.EnableTangentShift) {
 			const float shift = TexTangentShift.SampleLevel(SampColorSampler, uv, 0).x - 0.5;
 			T = ShiftTangent(T, N, shift);
 		}
 
 		float shadow = context.hairShadow * context.detailedShadow;
 
-		dirTransmission += D_Marschner(L, V, T, roughness, baseColor, 0, fd.hairSpecularSettings.Transmission) * lightColor * shadow * fd.hairSpecularSettings.SpecularMult;
-		dirTransmission += GetHairDiffuseAttenuationKajiyaKay(T, V, L, shadow, baseColor) * lightColor * shadow * fd.hairSpecularSettings.DiffuseMult;
+		dirTransmission += D_Marschner(L, V, T, roughness, baseColor, 0, SharedData::hairSpecularSettings.Transmission) * lightColor * shadow * SharedData::hairSpecularSettings.SpecularMult;
+		dirTransmission += GetHairDiffuseAttenuationKajiyaKay(T, V, L, shadow, baseColor) * lightColor * shadow * SharedData::hairSpecularSettings.DiffuseMult;
 	}
 
 	void GetHairDirectLight(out DirectLightingOutput lightingOutput, DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv)
@@ -221,7 +221,7 @@ namespace Hair
 		const float3 VN = normalize(tbnTr[2]);
 		const float3 L = normalize(context.lightDir);
 
-		if (fd.hairSpecularSettings.HairMode == 0) {
+		if (SharedData::hairSpecularSettings.HairMode == 0) {
 			GetHairDirectLightScheuermann(lightingOutput.diffuse, lightingOutput.specular, lightingOutput.transmission, T, L, V, N, VN, context, material.Shininess, uv, material.BaseColor);
 		} else {
 			GetHairDirectLightMarschner(lightingOutput.diffuse, lightingOutput.specular, lightingOutput.transmission, T, L, V, N, VN, context, material.Shininess, uv, material.BaseColor);
@@ -236,22 +236,22 @@ namespace Hair
 		const float3 V = normalize(context.viewDir);
 		const float3 N = normalize(context.vertexNormal);
 
-		if (fd.hairSpecularSettings.HairMode == 1) {
-			if (fd.hairSpecularSettings.EnableTangentShift) {
+		if (SharedData::hairSpecularSettings.HairMode == 1) {
+			if (SharedData::hairSpecularSettings.EnableTangentShift) {
 				const float shift = TexTangentShift.SampleLevel(SampColorSampler, uv, 0).x - 0.5;
 				T = ShiftTangent(T, N, shift);
 			}
 			float3 L = normalize(V - T * dot(V, T));
 
-			lobeWeights.diffuse = D_Marschner(L, V, T, 1 - saturate(material.Shininess * 0.01), material.BaseColor, 0.2, 0) * Math::PI * fd.hairSpecularSettings.SpecularIndirectMult;
-			lobeWeights.diffuse += GetHairDiffuseAttenuationKajiyaKay(T, V, L, 1, material.BaseColor) * Math::PI * fd.hairSpecularSettings.DiffuseIndirectMult;
+			lobeWeights.diffuse = D_Marschner(L, V, T, 1 - saturate(material.Shininess * 0.01), material.BaseColor, 0.2, 0) * Math::PI * SharedData::hairSpecularSettings.SpecularIndirectMult;
+			lobeWeights.diffuse += GetHairDiffuseAttenuationKajiyaKay(T, V, L, 1, material.BaseColor) * Math::PI * SharedData::hairSpecularSettings.DiffuseIndirectMult;
 			return;
 		} else {
-			lobeWeights.diffuse = saturate(material.BaseColor * fd.hairSpecularSettings.DiffuseIndirectMult);
+			lobeWeights.diffuse = saturate(material.BaseColor * SharedData::hairSpecularSettings.DiffuseIndirectMult);
 			float2 hairBRDF = BRDF::EnvBRDF(material.Roughness, saturate(dot(N, V)));
 			float3 hairSpecularLobe = material.F0 * hairBRDF.x + hairBRDF.y;
 			lobeWeights.diffuse *= (1 - hairSpecularLobe);
-			lobeWeights.specular = saturate(hairSpecularLobe * fd.hairSpecularSettings.SpecularIndirectMult);
+			lobeWeights.specular = saturate(hairSpecularLobe * SharedData::hairSpecularSettings.SpecularIndirectMult);
 		}
 	}
 
@@ -263,7 +263,7 @@ namespace Hair
 
 	float HairSelfShadow(float3 positionWS, float3 lightDirWS, float noise)
 	{
-		if (!fd.hairSpecularSettings.EnableSelfShadow) {
+		if (!SharedData::hairSpecularSettings.EnableSelfShadow) {
 			return 1.0;
 		}
 
@@ -272,7 +272,7 @@ namespace Hair
 
 		float3 positionVS = FrameBuffer::WorldToView(positionWS);
 		float3 lightDirVS = FrameBuffer::WorldToView(lightDirWS, false);
-		lightDirVS *= max(fd.hairSpecularSettings.SelfShadowScale * GAME_UNIT_TO_CM, 0.05);
+		lightDirVS *= max(SharedData::hairSpecularSettings.SelfShadowScale * GAME_UNIT_TO_CM, 0.05);
 		float stepSize = 1.0 / stepCount;
 
 		float3 ray = positionVS + lightDirVS * (noise - 0.5) * 2 * stepSize;
@@ -293,9 +293,9 @@ namespace Hair
 		}
 
 		if (hitCount > 0) {
-			shadow -= pow(abs((float)hitCount / (float)stepCount), fd.hairSpecularSettings.SelfShadowExponent);
+			shadow -= pow(abs((float)hitCount / (float)stepCount), SharedData::hairSpecularSettings.SelfShadowExponent);
 		}
-		return lerp(1.0, shadow, fd.hairSpecularSettings.SelfShadowStrength);
+		return lerp(1.0, shadow, SharedData::hairSpecularSettings.SelfShadowStrength);
 	}
 }
 #endif  //__HAIR_DEPENDENCY_HLSL__

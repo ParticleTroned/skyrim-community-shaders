@@ -4,7 +4,7 @@ namespace WaterEffects
 {
 	float2 PanCausticsUV(float2 uv, float speed, float tiling)
 	{
-		return frac((float2(1, 0) * sd.Timer * speed) + (uv * tiling));
+		return frac((float2(1, 0) * SharedData::Timer * speed) + (uv * tiling));
 	}
 
 	float SampleCaustics(float2 uv)
@@ -33,7 +33,7 @@ namespace WaterEffects
 			float causticsFade = 1.0 - saturate(causticsDistToWater / 1024.0);
 			causticsFade *= causticsFade;
 
-			float2 causticsUV = (worldPosition.xy + fb.CameraPosAdjust.xy) * 0.005;
+			float2 causticsUV = (worldPosition.xy + FrameBuffer::CameraPosAdjust.xy) * 0.005;
 			float2 dispersionOffset = float2(0.6, 0.8) * (0.025 * shoreFactorCaustics * saturate(causticsDistToWater / 256.0));
 
 			float2 causticsUV1 = PanCausticsUV(causticsUV, 0.5 * 0.2, 1.0);

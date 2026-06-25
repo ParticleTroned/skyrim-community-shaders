@@ -181,20 +181,20 @@ PS_OUTPUT main(PS_INPUT input)
 	float fogFactor = min(FogParam.w, pow(saturate(fogDistanceFactor * FogParam.y - FogParam.x), FogParam.z));
 	float3 fogColor = Color::Fog(lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor));
 #		if defined(IBL)
-	if (fd.iblSettings.EnableIBL) {
+	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #		endif
 #		if defined(EXP_HEIGHT_FOG)
-	bool exponentialHeightFogEnabled = fd.exponentialHeightFogSettings.enabled;
+	bool exponentialHeightFogEnabled = SharedData::exponentialHeightFogSettings.enabled;
 	float2 monoUV = input.TexCoord.xy;
 	float4 positionWS = float4(2 * float2(monoUV.x, -monoUV.y + 1) - 1, depth, 1);
-	positionWS = mul(fb.CameraViewProjInverse, positionWS);
+	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 	float4 exponentialHeightFog = (float4)0;
 	if (exponentialHeightFogEnabled) {
-		float4 fogScreenPosition = float4(monoUV * sd.BufferDim.xy, depth, 1.0f);
-		exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(positionWS.xyz, fb.CameraPosAdjust.xyz, fogColor, fogScreenPosition);
+		float4 fogScreenPosition = float4(monoUV * SharedData::BufferDim.xy, depth, 1.0f);
+		exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(positionWS.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, fogScreenPosition);
 	}
 	if (isGeometryDepth || exponentialHeightFogEnabled) {
 		float fogFade = exponentialHeightFogEnabled ? ExponentialHeightFog::GetVanillaFogFade(FogNearColor.w) : FogNearColor.w;
@@ -223,9 +223,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 		float4 vsPosition = float4(2 * input.TexCoord.x - 1, 1 - 2 * input.TexCoord.y, depth, 1);
 
-		float4 csPosition = mul(fb.CameraViewProjInverse, vsPosition);
+		float4 csPosition = mul(FrameBuffer::CameraViewProjInverse, vsPosition);
 		csPosition.xyz /= csPosition.w;
-		csPosition.xyz += fb.CameraPosAdjust.xyz;
+		csPosition.xyz += FrameBuffer::CameraPosAdjust.xyz;
 
 		float3 noiseSeed = 0.07 * (SparklesParameters2.x * csPosition.xyz);
 		float noiseValue = 0.5 * (SimplexNoise(noiseSeed) + 1);

@@ -53,7 +53,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 originalUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 
 	// Remove jitter offset to get the correct sampling coordinates
-	float2 uv = originalUV - (jitter * sd.BufferDim.zw);
+	float2 uv = originalUV - (jitter * SharedData::BufferDim.zw);
 
 	// Clamp within dynamic-resolution bounds.
 	uv = FrameBuffer::ClampDynamicResolutionAdjustedScreenPosition(uv, input.TexCoord);

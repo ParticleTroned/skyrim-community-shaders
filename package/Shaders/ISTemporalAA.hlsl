@@ -86,25 +86,25 @@ static const float3 kLumaWeights = float3(0.5, 0.25, 0.25);
 
 float2 ClampScreenUV(float2 screenUV, float2 drMax)
 {
-	return min(max(fb.DynamicResolutionParams1.xy * screenUV, float2(0, 0)), drMax);
+	return min(max(FrameBuffer::DynamicResolutionParams1.xy * screenUV, float2(0, 0)), drMax);
 }
 
 float4 ClampScreenUV4(float4 screenUV, float2 drMax)
 {
-	return min(max(fb.DynamicResolutionParams1.xyxy * screenUV, float4(0, 0, 0, 0)), drMax.xyxy);
+	return min(max(FrameBuffer::DynamicResolutionParams1.xyxy * screenUV, float4(0, 0, 0, 0)), drMax.xyxy);
 }
 
 float2 ClampHistoryUV(float2 reprojectedUV)
 {
-	float2 uv = max(fb.DynamicResolutionParams1.zw * reprojectedUV, float2(0, 0));
-	uv.x = min(fb.DynamicResolutionParams2.w, uv.x);
-	uv.y = min(fb.DynamicResolutionParams1.w, uv.y);
+	float2 uv = max(FrameBuffer::DynamicResolutionParams1.zw * reprojectedUV, float2(0, 0));
+	uv.x = min(FrameBuffer::DynamicResolutionParams2.w, uv.x);
+	uv.y = min(FrameBuffer::DynamicResolutionParams1.w, uv.y);
 	return uv;
 }
 
 float2 GetDynamicResolutionMax()
 {
-	return float2(fb.DynamicResolutionParams2.z, fb.DynamicResolutionParams1.y);
+	return float2(FrameBuffer::DynamicResolutionParams2.z, FrameBuffer::DynamicResolutionParams1.y);
 }
 
 // Neighbour tap: .yxz sample; luma via dot(.xzy, kLumaWeights). See channel-layout comment above.

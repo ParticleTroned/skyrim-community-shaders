@@ -132,8 +132,8 @@ inline float4 StochasticSampleLOD(float rnd, Texture2D tex, SamplerState samp, f
 	// Apply simple scaled offsets
 	float2 microOffset1 = (offsetsLOD.offset1 + dir1) * offsetScale;
 	float2 microOffset2 = (offsetsLOD.offset2 + dir2) * offsetScale;
-	float4 sample1 = tex.SampleBias(samp, uv + microOffset1, sd.MipBias);
-	float4 sample2 = tex.SampleBias(samp, uv + microOffset2, sd.MipBias);
+	float4 sample1 = tex.SampleBias(samp, uv + microOffset1, SharedData::MipBias);
+	float4 sample2 = tex.SampleBias(samp, uv + microOffset2, SharedData::MipBias);
 
 	// Simple 2-sample blend weighted toward first sample
 	return lerp(sample2, sample1, 0.65);
@@ -144,7 +144,7 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 {
 	// Calculate custom mip level from original UVs.
 	float mipLevel = tex.CalculateLevelOfDetail(samp, uv);
-	float adjustedMipLevel = mipLevel + sd.MipBias;
+	float adjustedMipLevel = mipLevel + SharedData::MipBias;
 
 	// 3 Sample Blend
 	float4 sample1 = tex.SampleLevel(samp, uv + offsets.offset1, adjustedMipLevel);
@@ -179,7 +179,7 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 inline float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 uv, float mipLevel, StochasticOffsets offsets, float2 dx, float2 dy)
 {
 	// Early exit for disabled terrain variation - avoid all other computations
-	if (!fd.terrainVariationSettings.enableTilingFix) {
+	if (!SharedData::terrainVariationSettings.enableTilingFix) {
 		return tex.SampleLevel(samp, uv, mipLevel);
 	}
 

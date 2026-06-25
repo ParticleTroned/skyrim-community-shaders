@@ -5,7 +5,7 @@
 
 namespace HDRSun
 {
-	// sd.HDRData units used here:
+	// SharedData::HDRData units used here:
 	// .x - HDR enabled flag (0/1)
 	// .y - paper white in nits
 	// .z - display peak luminance in nits
@@ -16,7 +16,7 @@ namespace HDRSun
 	static const float kMinHdrSunBoost = 1.0f;
 	inline bool IsHdrSunActive()
 	{
-		return sd.HDRData.x > 0.5f && (perm.ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun);
+		return SharedData::HDRData.x > 0.5f && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun);
 	}
 
 	// Returns an HDR sun gain in normalized linear space. Sky.hlsl applies it after depth/cloud occlusion.
@@ -29,10 +29,10 @@ namespace HDRSun
 
 		// --- Max linear multiplier for this display ---
 		// Scene target: peak/paperWhite, menu target: 100/peak (via kMenuSunNits).
-		float paperWhiteNits = max(sd.HDRData.y, 1.0f);
-		float peakNits = max(sd.HDRData.z, paperWhiteNits + 1.0f);
+		float paperWhiteNits = max(SharedData::HDRData.y, 1.0f);
+		float peakNits = max(SharedData::HDRData.z, paperWhiteNits + 1.0f);
 		float peakRatio = peakNits / paperWhiteNits;
-		float menuSunMul = (sd.HDRData.w > 1e-3f) ? (kMenuSunNits / peakNits) : 1.0f;
+		float menuSunMul = (SharedData::HDRData.w > 1e-3f) ? (kMenuSunNits / peakNits) : 1.0f;
 		float maxBoost = max(kMinHdrSunBoost, peakRatio * menuSunMul);
 
 		// --- weight 0..1: local brightness / alpha / UV rim ---

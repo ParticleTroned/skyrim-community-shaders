@@ -8,10 +8,7 @@ namespace GBuffer
 
 	half2 OctWrap(half2 v)
 	{
-		half2 w = 1.0h - abs(v.yx);
-		w.x *= (v.x >= 0.0h) ? 1.0h : -1.0h;
-		w.y *= (v.y >= 0.0h) ? 1.0h : -1.0h;
-		return w;
+		return (1.0h - abs(v.yx)) * (v.xy >= 0.0h ? 1.0h : -1.0h);
 	}
 
 	half2 EncodeNormal(half3 n)
@@ -29,8 +26,7 @@ namespace GBuffer
 		// https://twitter.com/Stubbesaurus/status/937994790553227264
 		half3 n = half3(f.x, f.y, 1.0h - abs(f.x) - abs(f.y));
 		half t = saturate(-n.z);
-		n.x += (n.x >= 0.0h) ? -t : t;
-		n.y += (n.y >= 0.0h) ? -t : t;
+		n.xy += n.xy >= 0.0h ? -t : t;
 		return -normalize(n);
 	}
 

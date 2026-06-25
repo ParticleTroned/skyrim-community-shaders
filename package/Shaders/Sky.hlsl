@@ -252,10 +252,10 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif  // OCCLUSION
 
 #	if defined(EXP_HEIGHT_FOG)
-	const bool inReflection = (perm.ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
-	if (inReflection && fd.exponentialHeightFogSettings.enabled) {
-		float3 skyFogPosition = normalize(input.FogPosition.xyz) * sd.CameraData.x;
-		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(skyFogPosition, fb.CameraPosAdjust.xyz, psout.Color.xyz, float4(input.Position.xy * fb.DynamicResolutionParams2.xy, input.Position.z, 1));
+	const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
+	if (inReflection && SharedData::exponentialHeightFogSettings.enabled) {
+		float3 skyFogPosition = normalize(input.FogPosition.xyz) * SharedData::CameraData.x;
+		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(skyFogPosition, FrameBuffer::CameraPosAdjust.xyz, psout.Color.xyz, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
 		psout.Color.xyz = lerp(psout.Color.xyz, exponentialHeightFog.xyz, exponentialHeightFog.w);
 	}
 #	endif
@@ -275,7 +275,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	else
 	// Even without cloud shadows enabled, sun disc should be occluded by scene depth (clouds, terrain, etc.)
-	if ((perm.ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
+	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
 		float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
 		if (depth < input.Position.z)
 			psout.Color.w = 0;

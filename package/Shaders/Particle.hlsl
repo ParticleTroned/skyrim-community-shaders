@@ -253,14 +253,14 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 propertyColor = 0.0;
 
-	float2 uv = input.Position.xy * sd.BufferDim.zw;
+	float2 uv = input.Position.xy * SharedData::BufferDim.zw;
 
 	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, input.Position.z, 1);
-	positionWS = mul(fb.CameraViewProjInverse, positionWS);
+	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
 	float unusedDetailedShadow;
-	float3 dirLightColor = sd.DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
+	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
 	float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
 
 	propertyColor += dirLightColor;

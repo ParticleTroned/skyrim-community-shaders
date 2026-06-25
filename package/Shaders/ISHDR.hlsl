@@ -88,10 +88,7 @@ float3 GetTonemapFactorHejlBurgessDawson(float3 luminance, bool isHDR = false)
 
 	if (isHDR)  // branch before shoulder (f''(x) = 0)
 	{
-		float3 linearSeg = 1.47829915 * luminance - 0.0321621545;
-		color.x = (luminance.x < 0.0843247172) ? color.x : linearSeg.x;
-		color.y = (luminance.y < 0.0843247172) ? color.y : linearSeg.y;
-		color.z = (luminance.z < 0.0843247172) ? color.z : linearSeg.z;
+		color = (luminance < 0.0843247172) ? color : (1.47829915 * luminance - 0.0321621545);
 	}
 
 	return Param.y * color;
@@ -146,7 +143,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 
-	float4 hdrShared = sd.HDRData;
+	float4 hdrShared = SharedData::HDRData;
 	bool isHDR = hdrShared.x > 0.5;
 	float menuSceneEncoding = hdrShared.w;
 	static const float MENU_SCENE_ISHDR_BYPASS_THRESHOLD = 0.9;  // encoding 1.0 == main/loading

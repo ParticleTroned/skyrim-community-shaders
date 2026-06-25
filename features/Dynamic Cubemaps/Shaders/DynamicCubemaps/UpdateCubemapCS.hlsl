@@ -82,7 +82,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		if (linearDepth > 16.5 && depth != 1.0) {  // Ignore objects which are too close or the sky
 #endif
 			half4 positionCS = half4(2 * half2(uv.x, -uv.y + 1) - 1, depth, 1);
-			positionCS = mul(fb.CameraViewProjInverse, positionCS);
+			positionCS = mul(FrameBuffer::CameraViewProjInverse, positionCS);
 			positionCS.xyz = positionCS.xyz / positionCS.w;
 
 			position += positionCS.xyz;
@@ -112,7 +112,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 	}
 
 	float4 position = DynamicCubemapPosition[ThreadID];
-	position.xyz = (position.xyz + (CameraPreviousPosAdjust2.xyz * 0.001)) - (fb.CameraPosAdjust.xyz * 0.001);  // Remove adjustment, add new adjustment
+	position.xyz = (position.xyz + (CameraPreviousPosAdjust2.xyz * 0.001)) - (FrameBuffer::CameraPosAdjust.xyz * 0.001);  // Remove adjustment, add new adjustment
 	DynamicCubemapPosition[ThreadID] = position;
 
 	float4 color = DynamicCubemapRaw[ThreadID];

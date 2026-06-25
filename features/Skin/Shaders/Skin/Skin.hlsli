@@ -126,12 +126,12 @@ namespace Skin
 		}
 
 		float3 sssTransmittance = SSSSTransmittance(
-									  fd.skinData.sssParams.x,
-									  fd.skinData.sssParams.y,
+									  SharedData::skinData.sssParams.x,
+									  SharedData::skinData.sssParams.y,
 									  N,
 									  L,
 									  material.Thickness) *
-		                          fd.skinData.sssParams.w;
+		                          SharedData::skinData.sssParams.w;
 		lightingOutput.transmission = min(sssTransmittance * context.lightColor * context.softShadow * material.BaseColor, context.lightColor);
 	}
 

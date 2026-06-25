@@ -140,6 +140,7 @@ PS_OUTPUT main(PS_INPUT input)
 	} else {
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
+	bloomColor *= SharedData::linearLightingSettings.adaptiveBloomMult;
 
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 
@@ -175,13 +176,17 @@ PS_OUTPUT main(PS_INPUT input)
 		blendedColor += bloomMask * bloomColor;
 	}
 
+	const float imageBrightness = Cinematic.w * SharedData::linearLightingSettings.adaptiveImageBrightnessMult;
+	const float saturation = Cinematic.x * SharedData::linearLightingSettings.adaptiveSaturationMult;
+	const float contrast = Cinematic.z * SharedData::linearLightingSettings.adaptiveContrastMult;
+
 	float blendedLuminance = Color::RGBToLuminance(blendedColor);
-	float3 tintedColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
-	float3 contrastedColor = lerp(avgValue.x, tintedColor, Cinematic.z);
+	float3 tintedColor = imageBrightness * lerp(lerp(blendedLuminance, blendedColor, saturation), blendedLuminance * Tint.xyz, Tint.w).xyz;
+	float3 contrastedColor = lerp(avgValue.x, tintedColor, contrast);
 
 	// Contrast modified to fix crushed shadows
 	float safeAvgValue = max(avgValue.x, EPSILON_DIVISION);
-	float3 contrastedColorModified = pow(max(0.0, abs(tintedColor) / safeAvgValue), Cinematic.z) * safeAvgValue * sign(tintedColor);
+	float3 contrastedColorModified = pow(max(EPSILON_DIVISION, abs(tintedColor) / safeAvgValue), contrast) * safeAvgValue * sign(tintedColor);
 	contrastedColor = lerp(contrastedColorModified, contrastedColor, saturate(contrastedColorModified / 0.1f));  // blend in modified contrast for shadows
 
 	outputColor = contrastedColor;

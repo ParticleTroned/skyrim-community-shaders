@@ -1375,9 +1375,9 @@ namespace Util
 		if (searchQuery.empty())
 			return true;
 
-		// Get both short name and display name
+		// Get both short name and UI display name
 		std::string shortName = feat->GetShortName();
-		std::string displayName = feat->GetName();
+		std::string displayName = feat->GetDisplayName();
 		std::string query = searchQuery;
 
 		// Convert all to lowercase for case-insensitive search

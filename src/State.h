@@ -50,7 +50,6 @@ public:
 	bool settingCustomShader = false;
 	RE::BSShader* currentShader = nullptr;
 	std::string adapterDescription = "";
-	uint32_t adapterVendorId = 0;  // PCI vendor ID of the active GPU (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel)
 
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
@@ -199,8 +198,8 @@ public:
 	/** @brief Inserts a single-point GPU performance marker. */
 	void SetPerfMarker(std::string_view title);
 
-	/** @brief Converts and stores the GPU adapter description (and PCI vendor ID). */
-	void SetAdapterDescription(const std::wstring& description, uint32_t vendorId = 0);
+	/** @brief Converts and stores the GPU adapter description. */
+	void SetAdapterDescription(const std::wstring& description);
 
 	bool frameAnnotations = false;
 

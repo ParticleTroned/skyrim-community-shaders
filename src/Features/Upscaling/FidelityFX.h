@@ -62,6 +62,10 @@ public:
 	// The FFX frame-generation SWAPCHAIN context (distinct from fgContext, the interpolation
 	// context). Owns the real VkSwapchainKHR + the present/interpolation pacing threads.
 	ffxContext fgSwapchainContext = nullptr;
+	// The WRAPPED VkSwapchainKHR handle FFX returns from the swapchain create. This — NOT the
+	// ffx-api context handle — is what ffxConfigureDescFrameGeneration.swapChain must point to:
+	// FFX reinterpret_casts it straight to FrameInterpolationSwapChainVK* and calls into it.
+	VkSwapchainKHR fgWrappedSwapchain = VK_NULL_HANDLE;
 	// Replacement WSI functions FFX hands back for the wrapped swapchain.
 	ffxQueryDescSwapchainReplacementFunctionsVK fgSwapchainFns{};
 	// Queues claimed for the FG swapchain (game = DXVK graphics; present/acquire = injected).

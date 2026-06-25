@@ -962,16 +962,25 @@ VkResult FidelityFX::CreateSwapchain(VkDevice device, const VkSwapchainCreateInf
 		return VK_ERROR_INITIALIZATION_FAILED;
 	}
 
+	// The wrapped VkSwapchainKHR FFX wrote back into *pSwapchain IS the FrameInterpolationSwapChainVK
+	// object; ffxConfigure(frameGeneration).swapChain must point to THAT (FFX reinterpret_casts it),
+	// not the ffx-api context handle. Passing the context handle crashes inside FFX (returns 3).
+	fgWrappedSwapchain = *pSwapchain;
+
 	// Link the interpolation (FG) context to this swapchain and register our dispatch callback so
 	// the swapchain drives interpolation per generated frame. (Per-frame frameID/HUDless state is
 	// updated from the upscale path.)
 	{
 		ffxConfigureDescFrameGeneration cfg{};
 		cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-		cfg.swapChain = fgSwapchainContext;
+		cfg.swapChain = reinterpret_cast<void*>(fgWrappedSwapchain);
 		cfg.frameGenerationCallback = &FfxFrameGenDispatchCallback;
 		cfg.frameGenerationCallbackUserContext = this;
-		cfg.frameGenerationEnabled = true;
+		// Start DISABLED: enabling here (before any FG-prepare has run) spawns FFX's presenter
+		// thread and lets it interpolate on empty prepared inputs -> GPU device-lost. The per-present
+		// SetFrameGenForPresent enables it only on frames an upscale actually prepared (the canonical
+		// sample likewise configures enabled per-frame, never force-true at create).
+		cfg.frameGenerationEnabled = false;
 		cfg.allowAsyncWorkloads = false;
 		cfg.flags = GetFgDebug().ffxFlags;
 		cfg.generationRect = { 0, 0, (int32_t)pCreateInfo->imageExtent.width, (int32_t)pCreateInfo->imageExtent.height };
@@ -1029,15 +1038,32 @@ void FidelityFX::SetFrameGenForPresent(bool a_enabled, ID3D11Resource* a_hudless
 		hudless = WrapAndPrepare(dxvk, a_hudlessColor, FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_USAGE_READ_ONLY, VK_IMAGE_ASPECT_COLOR_BIT, guards);
 	}
 
+	// Debug-draw flags: the in-game toggles (Upscaling settings) OR the env-var overrides. With
+	// DRAW_DEBUG_VIEW set, FFX forces onlyPresentInterpolated, so every presented frame becomes the
+	// debug visualization — a positive on-screen proof that interpolation actually ran.
+	uint32_t dbgFlags = GetFgDebug().ffxFlags;
+	const auto& s = globals::features::upscaling.settings;
+	if (s.fgDebugView)
+		dbgFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_VIEW;
+	if (s.fgDebugTearLines)
+		dbgFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;
+	if (s.fgDebugPacingLines)
+		dbgFlags |= FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
+
 	ffxConfigureDescFrameGeneration cfg{};
 	cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-	cfg.swapChain = fgSwapchainContext;
+	cfg.swapChain = reinterpret_cast<void*>(fgWrappedSwapchain);
 	cfg.frameGenerationCallback = &FfxFrameGenDispatchCallback;
 	cfg.frameGenerationCallbackUserContext = this;
 	cfg.frameGenerationEnabled = a_enabled;
 	cfg.allowAsyncWorkloads = false;
 	cfg.HUDLessColor = hudless;
-	cfg.flags = GetFgDebug().ffxFlags;
+	cfg.flags = dbgFlags;
+	// "Show Only Generated Frames": present the interpolated frame and SKIP the real one, so the
+	// display rate drops to the generated cadence (~halves it) — the in-game toggle + the
+	// CS_FG_ONLY_INTERP env both feed this. Was never wired to the swapchain path before (it only
+	// affected the legacy dispatch-only fallback), so toggling it did nothing here.
+	cfg.onlyPresentGenerated = s.fgShowOnlyGenerated || GetFgDebug().onlyInterpolated;
 	cfg.generationRect = { 0, 0, (int32_t)globals::game::graphicsState->screenWidth, (int32_t)globals::game::graphicsState->screenHeight };
 	cfg.frameID = frameID;
 	SafeConfigure(&ffxApi, &fgContext, &cfg.header);
@@ -1063,5 +1089,6 @@ void FidelityFX::DestroySwapchain(VkDevice, VkSwapchainKHR, const VkAllocationCa
 		fgSwapchainContext = nullptr;
 	}
 	fgSwapchainFns = {};
+	fgWrappedSwapchain = VK_NULL_HANDLE;
 	logger::info("[FidelityFX] FFX FG swapchain destroyed");
 }

@@ -2450,7 +2450,7 @@ namespace SIE
 	{
 		std::vector<Util::CacheInvalidation::FeatureState> featureStates;
 		for (auto* feature : Feature::GetFeatureList()) {
-			featureStates.push_back({ feature->GetShortName(), feature->GetName(), feature->loaded,
+			featureStates.push_back({ feature->GetShortName(), feature->GetDisplayName(), feature->loaded,
 				feature->version, std::string(feature->GetShaderDefineName()) });
 		}
 		return featureStates;

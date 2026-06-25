@@ -1868,6 +1868,7 @@ namespace
 
 	void SanitizeUpscalingSettings(Upscaling::Settings& settings)
 	{
+		const Upscaling::Settings defaults{};
 		settings.upscaleMethod = std::min<uint>(settings.upscaleMethod, static_cast<uint>(Upscaling::UpscaleMethod::kDLSS));
 		settings.upscaleMethodNoDLSS = std::min<uint>(settings.upscaleMethodNoDLSS, static_cast<uint>(Upscaling::UpscaleMethod::kFSR));
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
@@ -1887,8 +1888,8 @@ namespace
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
 		settings.streamlineLogLevel = ClampStreamlineLogLevelUInt(settings.streamlineLogLevel);
-		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.0f);
-		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, 0.1f);
+		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, defaults.sharpnessFSR);
+		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, defaults.sharpnessDLSS);
 		settings.dlssSharpener = ClampDLSSSharpenerModeUInt(settings.dlssSharpener);
 		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 		SanitizeFoveatedSettings(settings);
@@ -4469,6 +4470,7 @@ void Upscaling::LoadSettings(json& o_json)
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");
 	const bool hasRenderScaleModeSetting = o_json.contains("renderScaleMode");
 	const bool hasLegacyPerfModeSetting = o_json.contains("perfMode");
+	const bool hasLegacySettings = o_json.is_object() && !o_json.empty();
 	settings = o_json;
 	if (!hasRenderScaleModeSetting && hasLegacyPerfModeSetting) {
 		try {
@@ -4476,7 +4478,7 @@ void Upscaling::LoadSettings(json& o_json)
 		} catch (...) {
 			logger::warn("[Upscaling] Loaded legacy perfMode setting could not be migrated; using VR Render Scale Mode default.");
 		}
-	} else if (!hasRenderScaleModeSetting) {
+	} else if (!hasRenderScaleModeSetting && hasLegacySettings) {
 		// Pre-render-scale configs may still carry non-native quality presets for
 		// regular vendor upscaling. Do not infer VR Render Scale Mode from quality alone.
 		settings.renderScaleMode = 0u;

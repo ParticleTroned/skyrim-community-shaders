@@ -126,17 +126,17 @@ public:
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
 		uint qualityMode = 3;  // Shared upscaler preset; defaults to Quality
 		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
-		uint renderScaleMode = 0;
+		uint renderScaleMode = 1;
 		bool vrFpsStabilizerSync = false;
-		uint perfMode = 0;
+		uint perfMode = 1;
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
-		float sharpnessFSR = 0.0f;
-		float sharpnessDLSS = 0.1f;
-		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
+		float sharpnessFSR = 0.9f;
+		float sharpnessDLSS = 0.9f;
+		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::LumaUnsharp);
 		bool fsr4RuntimeEnable = true;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;

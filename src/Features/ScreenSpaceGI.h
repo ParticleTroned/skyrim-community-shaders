@@ -80,7 +80,7 @@ public:
 
 	struct Settings
 	{
-		bool Enabled = REL::Module::IsVR() ? false : true;   // disabled in VR by default
+		bool Enabled = false;
 		bool EnableGI = REL::Module::IsVR() ? false : true;  // AO only for VR by default
 		bool EnableExperimentalSpecularGI = false;
 		bool EnableVanillaSSAO = false;

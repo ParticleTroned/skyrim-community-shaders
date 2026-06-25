@@ -183,15 +183,15 @@ public:
 		float StereoBlendColorThreshold = Config::kDefaultStereoBlendColorThreshold;
 
 		// Foveated detail budgets. These use the active Upscaling FOV profile.
-		bool EnableLightingFoveation = false;
+		bool EnableLightingFoveation = true;
 		bool EnableLightingFoveationHardCutoff = false;
-		bool EnableSSRFoveation = false;
+		bool EnableSSRFoveation = true;
 		bool EnableSSRFoveationHardCutoff = false;
-		bool EnableWaterParallaxFoveation = false;
+		bool EnableWaterParallaxFoveation = true;
 		bool EnableWaterParallaxFoveationHardCutoff = false;
-		bool EnableWetternessFoveation = false;
+		bool EnableWetternessFoveation = true;
 		bool EnableWetternessFoveationHardCutoff = false;
-		bool EnableDynamicCubemapFoveation = false;
+		bool EnableDynamicCubemapFoveation = true;
 		bool EnableDynamicCubemapVisibilityThrottle = false;
 
 		// VR Menu Overlay positioning settings

@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <winrt/base.h>
 
@@ -129,6 +130,7 @@ public:
 
 	void ProcessInputEvents(RE::InputEvent* const* a_events);
 	bool ShouldSwallowInput();
+	bool ShouldBlockAllGameInput();
 	bool IsPreviewFlying();
 	std::string BuildFontSignature(float baseFontSize) const;
 
@@ -491,6 +493,10 @@ private:
 	// Input event handling
 	std::vector<KeyEvent> _keyEventQueue;
 	mutable std::shared_mutex _inputEventMutex;
+
+	// Keys whose key-down already fired a combo hotkey. Their matching key-up is
+	// suppressed so a shared single-key binding does not also fire after modifier release.
+	std::unordered_set<uint32_t> _comboFiredKeys;
 
 	Menu() = default;
 

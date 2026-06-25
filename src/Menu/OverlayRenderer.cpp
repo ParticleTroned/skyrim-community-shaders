@@ -284,6 +284,7 @@ bool OverlayRenderer::ShouldSkipRendering(const Menu& menu, bool hasDrawableFeat
 
 	return !(shaderCache->IsCompiling() ||
 			 menu.IsEnabled ||
+			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 EditorWindow::GetSingleton()->open ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||
@@ -375,11 +376,12 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto* renderDoc = RenderDoc::GetSingleton();
 	bool renderDocAvailable = renderDoc->IsAvailable();
 	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
+	const bool backgroundCompilation = shaderCache->backgroundCompilation;
 
 	auto progressTitle = fmt::format("{}Compiling Shaders: {}",
-		shaderCache->backgroundCompilation ? "Background " : "",
+		backgroundCompilation ? "Background " : "",
 		shaderCache->GetShaderStatsString(!state->IsDeveloperMode()).c_str());
-	auto percent = (float)compiledShaders / (float)totalShaders;
+	auto percent = totalShaders > 0 ? static_cast<float>(compiledShaders) / static_cast<float>(totalShaders) : 0.0f;
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
 
 	if (shaderCache->IsCompiling()) {
@@ -391,7 +393,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		ImGui::TextUnformatted(progressTitle.c_str());
 		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
 		if (state->IsDeveloperMode()) {
-			int32_t threadLimit = shaderCache->backgroundCompilation ? shaderCache->backgroundCompilationThreadCount : shaderCache->compilationThreadCount;
+			int32_t threadLimit = backgroundCompilation ? shaderCache->backgroundCompilationThreadCount : shaderCache->compilationThreadCount;
 			int compilationRunning = (int)shaderCache->compilationPool.get_tasks_running();
 			int heavyInFlight = shaderCache->GetHeavyTasksInFlight();
 			int heavyLimit = static_cast<int>(Util::GetPerformanceCoreCount());
@@ -407,7 +409,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				ImGui::Text("Slow shaders: %llu (very slow: %llu)", slow, verySlow);
 			}
 		}
-		if (!shaderCache->backgroundCompilation && shaderCache->menuLoaded) {
+		if (!backgroundCompilation && shaderCache->menuLoaded) {
 			auto skipShadersText = fmt::format(
 				"Press {} to proceed without completing shader compilation. ",
 				keyIdToString(Menu::GetSingleton()->GetSettings().SkipCompilationKey));

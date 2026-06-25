@@ -185,6 +185,86 @@ namespace
 		return result;
 	}
 
+	bool IsVRControllerInputDevice(RE::INPUT_DEVICES::INPUT_DEVICE a_device)
+	{
+		return a_device == RE::INPUT_DEVICES::INPUT_DEVICE::kVivePrimary ||
+		       a_device == RE::INPUT_DEVICES::INPUT_DEVICE::kViveSecondary ||
+		       a_device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusPrimary ||
+		       a_device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusSecondary ||
+		       a_device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRPrimary ||
+		       a_device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRSecondary;
+	}
+
+	enum class MenuInputBlockDecision
+	{
+		kAllow,
+		kBlock,
+		kInvalidHead,
+		kGetDeviceException
+	};
+
+	const RE::InputEvent* TryGetInputEventHead(RE::InputEvent* const* a_events)
+	{
+		if (!a_events) {
+			return nullptr;
+		}
+
+		__try {
+			return *a_events;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return nullptr;
+		}
+	}
+
+	MenuInputBlockDecision GetMenuInputBlockDecision(RE::InputEvent* const* a_events, bool a_blockAllDevices)
+	{
+		if (a_blockAllDevices) {
+			return MenuInputBlockDecision::kBlock;
+		}
+
+		if (!a_events) {
+			return MenuInputBlockDecision::kBlock;
+		}
+
+		RE::InputEvent* event = nullptr;
+		__try {
+			event = *a_events;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return MenuInputBlockDecision::kInvalidHead;
+		}
+
+		if (!event) {
+			return MenuInputBlockDecision::kBlock;
+		}
+
+		while (event) {
+			RE::INPUT_DEVICES::INPUT_DEVICE device{};
+			RE::InputEvent* next = nullptr;
+			__try {
+				device = event->GetDevice();
+				next = event->next;
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				return MenuInputBlockDecision::kGetDeviceException;
+			}
+
+			if (globals::game::isVR) {
+				if (device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) {
+					event = next;
+				} else if (IsVRControllerInputDevice(device) && !globals::features::vr.IsOpenVRCompatible()) {
+					event = next;
+				} else {
+					return MenuInputBlockDecision::kBlock;
+				}
+			} else if (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) {
+				return MenuInputBlockDecision::kBlock;
+			} else {
+				event = next;
+			}
+		}
+
+		return MenuInputBlockDecision::kAllow;
+	}
+
 	void LogInputHookSafeguardOnce(
 		InputHookSafeguardReason a_reason,
 		RE::BSTEventSource<RE::InputEvent*>* a_dispatcher,
@@ -558,53 +638,36 @@ struct BSInputDeviceManager_PollInputDevices
 		// Run Reflex frame pacing as early as possible in the frame loop.
 		globals::features::upscaling.streamline.UpdateReflex();
 
-		bool blockedDevice = true;
-
 		auto menu = globals::menu;
+		const bool shouldSwallowInput = menu->ShouldSwallowInput();
+		const bool blockAllDevices = menu->ShouldBlockAllGameInput();
 
 		if (a_events) {
-			menu->ProcessInputEvents(a_events);
-
-			if (*a_events) {
-				if (auto device = (*a_events)->GetDevice()) {
-					if (globals::game::isVR) {
-						// In VR, block mouse/keyboard input when menu is open (like Flatrim)
-						// Allow gamepad input to pass through
-						// Also handle VR controller devices based on OpenVR compatibility
-						bool isVRController = ((device == RE::INPUT_DEVICES::INPUT_DEVICE::kVivePrimary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kViveSecondary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusPrimary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kOculusSecondary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRPrimary) ||
-											   (device == RE::INPUT_DEVICES::INPUT_DEVICE::kWMRSecondary));
-
-						// Allow gamepad input to pass through always
-						if (device == RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) {
-							blockedDevice = false;
-						}
-						// For VR controllers, only block if OpenVR is compatible
-						else if (isVRController) {
-							blockedDevice = globals::features::vr.IsOpenVRCompatible();
-						}
-						// For mouse/keyboard and other devices, block them (like Flatrim)
-						else {
-							blockedDevice = true;
-						}
-					} else {
-						// Block all devices except gamepad when menu is open
-						blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
-					}
-				}
+			__try {
+				menu->ProcessInputEvents(a_events);
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				LogInputHookSafeguardOnce(InputHookSafeguardReason::kProcessInputEventsException, a_dispatcher, TryGetInputEventHead(a_events), false);
 			}
 		}
 
-		if (blockedDevice && menu->ShouldSwallowInput()) {  //the menu is open, eat all keypresses
+		// Block all devices while first-time setup is modal. For the normal menu,
+		// inspect the whole event list so a leading gamepad/controller event cannot
+		// let keyboard or mouse input pass through to Skyrim.
+		const auto blockDecision = GetMenuInputBlockDecision(a_events, blockAllDevices);
+		if (blockDecision == MenuInputBlockDecision::kInvalidHead) {
+			LogInputHookSafeguardOnce(InputHookSafeguardReason::kInvalidHead, a_dispatcher, nullptr, false);
+		} else if (blockDecision == MenuInputBlockDecision::kGetDeviceException) {
+			LogInputHookSafeguardOnce(InputHookSafeguardReason::kGetDeviceException, a_dispatcher, TryGetInputEventHead(a_events), false);
+		}
+		const bool blockedDevice = blockDecision != MenuInputBlockDecision::kAllow;
+
+		if (blockedDevice && shouldSwallowInput) {  //the menu is open, eat all keypresses
 			// During active flying preview, let input reach the game for movement/camera.
 			if (menu->IsPreviewFlying()) {
 				func(a_dispatcher, a_events);
 				return;
 			}
-			LogInputHookSafeguardOnce(InputHookSafeguardReason::kSwallow, a_dispatcher, a_events ? *a_events : nullptr, true);
+			LogInputHookSafeguardOnce(InputHookSafeguardReason::kSwallow, a_dispatcher, TryGetInputEventHead(a_events), true);
 			constexpr RE::InputEvent* const dummy[] = { nullptr };
 			func(a_dispatcher, dummy);
 			return;

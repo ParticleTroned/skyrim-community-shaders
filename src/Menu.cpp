@@ -1008,6 +1008,63 @@ void Menu::ProcessInputEventQueue()
 			const bool wasCapturingHotkey = IsCapturingHotkeyInput();
 			const bool allowSetupCloseKey = wasCapturingHotkey && HomePageRenderer::ShouldShowFirstTimeSetup() &&
 			                                (key == VK_RETURN || key == VK_ESCAPE);
+
+			if (event.IsDown() && !wasCapturingHotkey && HomePageRenderer::TryCompleteFirstTimeSetupFromInput(key)) {
+				continue;
+			}
+
+			auto shaderCache = globals::shaderCache;
+			auto dispatchHotkeyActions = [this, key, shaderCache](bool combosOnly) {
+				struct KeyAction
+				{
+					std::vector<InputCombo>& settingKey;
+					std::function<void()> action;
+				};
+
+				KeyAction keyActions[] = {
+					{ settings.ToggleKey, [this]() {
+						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+							 IsEnabled = !IsEnabled;
+							 if (IsEnabled)
+								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
+						 }
+					 } },
+					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
+					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
+					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
+					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
+					{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
+					{ settings.WeatherEditorToggleKey, []() {
+						 auto* ew = EditorWindow::GetSingleton();
+						 if (!ew)
+							 return;
+						 if (ew->GetPreviewMode() == EditorWindow::PreviewMode::FreeCamera) {
+							 // Flying -> lock camera position for editing
+							 ew->ToggleFreeCameraLock();
+						 } else if (ew->IsInPreviewMode()) {
+							 // Locked or PlayMode -> fully exit preview
+							 ew->ExitPreviewMode();
+						 } else {
+							 WeatherEditor::ToggleEditorWindow();
+						 }
+					 } },
+				};
+
+				// RenderDoc's capture key is a single, unmodified key; only consider it on key-up.
+				if (!combosOnly && RenderDoc::GetSingleton()->HandleCaptureHotkey(key))
+					return true;
+
+				for (const auto& ka : keyActions) {
+					const bool isCombo = ka.settingKey.size() > 1;
+					if (isCombo == combosOnly && InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
+						ka.action();
+						return true;
+					}
+				}
+
+				return false;
+			};
+
 			if (!event.IsPressed()) {
 				// Skip key release if it was used to close the first-time setup dialog
 				if (HomePageRenderer::ShouldSkipKeyRelease(key)) {
@@ -1021,7 +1078,6 @@ void Menu::ProcessInputEventQueue()
 					bool* settingFlag;
 					std::function<void(std::vector<InputCombo>)> action;
 				};
-				auto shaderCache = globals::shaderCache;
 				HotkeyAction hotkeyActions[] = {
 					{ &settings.ToggleKey, &settingToggleKey, [this](std::vector<InputCombo> keys) { settings.ToggleKey = keys; settingToggleKey = false; } },
 					{ &settings.SkipCompilationKey, &settingSkipCompilationKey, [this](std::vector<InputCombo> keys) { settings.SkipCompilationKey = keys; settingSkipCompilationKey = false; } },
@@ -1032,14 +1088,16 @@ void Menu::ProcessInputEventQueue()
 					{ &settings.WeatherEditorToggleKey, &settingWeatherEditorToggleKey, [this](std::vector<InputCombo> keys) { settings.WeatherEditorToggleKey = keys; settingWeatherEditorToggleKey = false; } },
 				};
 				bool handled = false;
+				bool closedFirstTimeSetup = false;
 				for (auto& h : hotkeyActions) {
 					if (*(h.settingFlag)) {
 						// During first-time setup, don't capture Enter or Escape as hotkeys
-						// These keys are reserved for closing the dialog, unless we are recording a modifier
+						// These keys cancel capture and close the dialog instead.
 						if (HomePageRenderer::ShouldShowFirstTimeSetup() && (key == VK_RETURN || key == VK_ESCAPE)) {
-							// Do not stop capture here, just let it pass through to the UI
-							// The UI code in HomePageRenderer checks for Enter/Escape and completes setup
 							*(h.settingFlag) = false;  // Cancel hotkey capture mode
+							if (!IsCapturingHotkeyInput()) {
+								closedFirstTimeSetup = HomePageRenderer::TryCompleteFirstTimeSetupFromInput(key, false);
+							}
 							handled = true;
 							break;
 						}
@@ -1075,48 +1133,15 @@ void Menu::ProcessInputEventQueue()
 						break;
 					}
 				}
+				if (closedFirstTimeSetup) {
+					continue;
+				}
 				if (!handled) {
-					struct KeyAction
-					{
-						std::vector<InputCombo>& settingKey;
-						std::function<void()> action;
-					};
-					KeyAction keyActions[] = {
-						{ settings.ToggleKey, [this]() {
-							 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
-								 IsEnabled = !IsEnabled;
-								 if (IsEnabled)
-									 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
-							 }
-						 } },
-						{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
-						{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnabled()); } },
-						{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
-						{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
-						{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
-						{ settings.WeatherEditorToggleKey, []() {
-							 auto* ew = EditorWindow::GetSingleton();
-							 if (!ew)
-								 return;
-							 if (ew->GetPreviewMode() == EditorWindow::PreviewMode::FreeCamera) {
-								 // Flying -> lock camera position for editing
-								 ew->ToggleFreeCameraLock();
-							 } else if (ew->IsInPreviewMode()) {
-								 // Locked or PlayMode -> fully exit preview
-								 ew->ExitPreviewMode();
-							 } else {
-								 WeatherEditor::ToggleEditorWindow();
-							 }
-						 } },
-					};
-					if (!RenderDoc::GetSingleton()->HandleCaptureHotkey(key)) {
-						for (const auto& ka : keyActions) {
-							if (InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
-								ka.action();
-								break;
-							}
-						}
-					}
+					// Single-key hotkeys fire on key-up; combos already fired on key-down.
+					// If this key's key-down already fired a combo, suppress the single-key
+					// binding so releasing the modifier first does not trigger it as well.
+					if (_comboFiredKeys.erase(key) == 0)
+						dispatchHotkeyActions(false);
 				}
 
 				// Handle ESC key for menu and editor window
@@ -1130,6 +1155,12 @@ void Menu::ProcessInputEventQueue()
 						IsEnabled = false;
 					}
 				}
+			} else if (event.IsDown() && !wasCapturingHotkey) {
+				// Fire combo hotkeys on the key-down transition so they respond on
+				// press rather than release. IsDown() (not IsPressed()) ensures we
+				// trigger only once instead of every frame the key is held.
+				if (dispatchHotkeyActions(true))
+					_comboFiredKeys.insert(key);
 			}
 
 			// Don't forward hotkey events to ImGui when input is captured (prevents e.g. End key scrolling the feature list)
@@ -1215,6 +1246,11 @@ bool Menu::ShouldSwallowInput()
 {
 	auto editorWindow = EditorWindow::GetSingleton();
 	return IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() || (editorWindow && editorWindow->open);
+}
+
+bool Menu::ShouldBlockAllGameInput()
+{
+	return HomePageRenderer::ShouldShowFirstTimeSetup();
 }
 
 bool Menu::IsPreviewFlying()

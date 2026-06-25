@@ -808,6 +808,8 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 
 	float3 R = reflect(viewDirection, WaterParams.y * normal + float3(0, 0, 1 - WaterParams.y));
 	float3 reflectionColor = CubeMapTex.SampleLevel(CubeMapSampler, R, 0).xyz;
+	float3 finalSsrReflectionColor = 0.0.xxx;
+	float ssrFraction = 0.0;
 
 #			if defined(DYNAMIC_CUBEMAPS)
 	float3 dynamicCubemap;
@@ -842,13 +844,12 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 		float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
 		float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
 		float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
-		float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-		float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
-		reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
+		finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
+		ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
 	}
 #			endif
 
-	return reflectionColor;
+	return Color::IrradianceToGamma(lerp(Color::IrradianceToLinear(reflectionColor), Color::IrradianceToLinear(finalSsrReflectionColor), ssrFraction));
 }
 
 float GetScreenDepthWater(float2 screenPosition)

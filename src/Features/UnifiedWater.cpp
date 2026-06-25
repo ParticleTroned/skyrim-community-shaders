@@ -11,6 +11,7 @@
 
 #include <imgui_internal.h>
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -23,11 +24,19 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseOptimisedMeshes)
 
 static const RE::BSFixedString kGeneratedWaterTileExtraDataName = "CS_UWGeneratedWaterTile";
+static constexpr std::uint32_t kGeneratedWaterTileMarkerSize = 5;
+
+static const RE::TESWorldSpace* ResolveLODDataWorldSpace(const RE::TESWorldSpace* ws)
+{
+	while (ws && ws->parentWorld && ws->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLODData)) {
+		ws = ws->parentWorld;
+	}
+	return ws;
+}
 
 static bool IsChildWorldSpace(const RE::TESWorldSpace* ws)
 {
-	return ws && ws->parentWorld &&
-	       ws->parentUseFlags.all(RE::TESWorldSpace::ParentUseFlag::kUseLODData);
+	return ws && ResolveLODDataWorldSpace(ws) != ws;
 }
 
 static int64_t SteadyClockMs()
@@ -189,7 +198,7 @@ static RE::NiIntegersExtraData* GetGeneratedWaterTileMarker(const RE::NiAVObject
 static bool TryGetGeneratedWaterTileMarker(const RE::NiAVObject* object, UnifiedWater::WaterTilePlacement& placement)
 {
 	const auto* marker = GetGeneratedWaterTileMarker(object);
-	if (!marker || !marker->value || marker->size < 3)
+	if (!marker || !marker->value || marker->size < kGeneratedWaterTileMarkerSize)
 		return false;
 
 	const auto size = marker->value[2];
@@ -199,8 +208,8 @@ static bool TryGetGeneratedWaterTileMarker(const RE::NiAVObject* object, Unified
 	placement.x = marker->value[0];
 	placement.y = marker->value[1];
 	placement.size = static_cast<uint32_t>(size);
-	placement.waterForm = 0;
-	placement.waterFlags = 0;
+	placement.waterForm = std::bit_cast<RE::FormID>(marker->value[3]);
+	placement.waterFlags = static_cast<std::uint8_t>(marker->value[4]);
 	return true;
 }
 
@@ -210,10 +219,12 @@ static void SetGeneratedWaterTileMarker(RE::NiAVObject* object, const UnifiedWat
 		return;
 
 	if (auto* marker = GetGeneratedWaterTileMarker(object);
-	    marker && marker->value && marker->size >= 3) {
+	    marker && marker->value && marker->size >= kGeneratedWaterTileMarkerSize) {
 		marker->value[0] = placement.x;
 		marker->value[1] = placement.y;
 		marker->value[2] = static_cast<std::int32_t>(placement.size);
+		marker->value[3] = std::bit_cast<std::int32_t>(placement.waterForm);
+		marker->value[4] = static_cast<std::int32_t>(placement.waterFlags);
 		return;
 	}
 
@@ -223,7 +234,11 @@ static void SetGeneratedWaterTileMarker(RE::NiAVObject* object, const UnifiedWat
 
 	if (auto* marker = RE::NiIntegersExtraData::Create(
 			kGeneratedWaterTileExtraDataName,
-			{ placement.x, placement.y, static_cast<std::int32_t>(placement.size) })) {
+			{ placement.x,
+				placement.y,
+				static_cast<std::int32_t>(placement.size),
+				std::bit_cast<std::int32_t>(placement.waterForm),
+				static_cast<std::int32_t>(placement.waterFlags) })) {
 		object->AddExtraData(marker);
 	}
 }
@@ -954,6 +969,9 @@ int32_t UnifiedWater::BSWaterShaderMaterial_ComputeCRC32::thunk(RE::BSWaterShade
 
 bool UnifiedWater::IsExteriorWorldspaceActive() const
 {
+	if (IsChildWorldSpace(currentPlayerWorldSpace.load(std::memory_order_acquire)))
+		return true;
+
 	// Interior cells may still inherit stale exterior worldspace state during transitions
 	return exteriorWorldspaceActive.load(std::memory_order_acquire) && !IsInteriorCellActive();
 }

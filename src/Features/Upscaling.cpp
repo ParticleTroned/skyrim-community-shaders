@@ -117,6 +117,10 @@ namespace
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
+	constexpr uint32_t kVRSubmitStageVendorRelatchCooldownFrames = 30u;
+	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
+	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
+	constexpr uint32_t kVRSubmitStageFoveatedFailureRetryFrames = 30u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
@@ -2213,6 +2217,31 @@ namespace
 		       IsVRLoadingPresentationTailActive(a_state);
 	}
 
+	bool IsVRRenderScaleRelatchSubmitProtectionTailActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		if (!IsLoadingTransitionTailActive(a_state))
+			return false;
+
+		if (!IsVRRenderScaleTransitionSafetyRelevant(a_upscaling))
+			return false;
+
+		return a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       a_upscaling.perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire);
+	}
+
+	bool IsVRLoadingSubmitProtectionContextActive(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		return (IsVRTransitionPresentationProtectionActive(a_upscaling, a_state) &&
+		        IsVRLoadingPresentationContextActive(a_state)) ||
+		       IsVRRenderScaleRelatchSubmitProtectionTailActive(a_upscaling, a_state);
+	}
+
 	bool HasCompletedVRWorldFrameAfterLatestLoad(const State* a_state)
 	{
 		if (!a_state)
@@ -2381,8 +2410,8 @@ namespace
 
 	bool ShouldBypassVRFoveatedVendorDispatchForTransition(const Upscaling& a_upscaling, const State* a_state)
 	{
-		(void)a_upscaling;
-		return IsSaveLoadTransitionContextActive(a_state);
+		return IsSaveLoadTransitionContextActive(a_state) ||
+		       IsVRLoadingSubmitProtectionContextActive(a_upscaling, a_state);
 	}
 
 	bool HasPendingVRVendorRuntimeReset(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
@@ -5798,6 +5827,8 @@ void Upscaling::DestroyVRIntermediateTextures()
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageForceFullEyeVendorFallback = false;
+	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageFoveatedVendorRetryBackoff();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -5986,6 +6017,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		a_caller && *a_caller ? " from " : "",
 		a_caller && *a_caller ? a_caller : "");
 
+	bool relatchRenderScaleActive = false;
 	try {
 		if (!ResetVRVendorRuntimeResources(true, true)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
@@ -6008,7 +6040,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
 		perfMode.EnsureBootLatch(settings, relatchUpscaleMethod, true);
 
-		const bool relatchRenderScaleActive = perfMode.IsActive(settings, relatchUpscaleMethod);
+		relatchRenderScaleActive = perfMode.IsActive(settings, relatchUpscaleMethod);
 		const float2 relatchTargetDisplaySize = perfMode.GetDisplayScreenSize();
 		const float2 relatchTargetEngineSize = relatchRenderScaleActive ?
 		                                           perfMode.GetRenderScreenSize() :
@@ -6078,10 +6110,44 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
+	ClearSubmitStageFoveatedVendorRetryBackoff();
+	if (relatchUpscaleMethod == UpscaleMethod::kDLSS && relatchRenderScaleActive) {
+		ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
+	} else {
+		ClearSubmitStageVendorResumeCooldown();
+	}
 	clearRelatchDelay();
 	clearRelatchRetryLogs();
 	logger::debug("[VRRenderScale] Applied render-target relatch");
 	return true;
+}
+
+void Upscaling::ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame)
+{
+	const uint32_t currentFrame = std::max(a_currentFrame, 1u);
+	submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
+	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
+	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+	submitStageVendorResumeFrame.store(currentFrame + kVRSubmitStageVendorRelatchCooldownFrames, std::memory_order_release);
+}
+
+void Upscaling::ClearSubmitStageVendorResumeCooldown()
+{
+	submitStageVendorResumeFrame.store(0, std::memory_order_release);
+	submitStageVendorResumeStartFrame.store(0, std::memory_order_release);
+	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
+	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+}
+
+void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame)
+{
+	const uint32_t currentFrame = std::max(a_currentFrame, 1u);
+	submitStageFoveatedVendorRetryFrame.store(currentFrame + kVRSubmitStageFoveatedFailureRetryFrames, std::memory_order_release);
+}
+
+void Upscaling::ClearSubmitStageFoveatedVendorRetryBackoff()
+{
+	submitStageFoveatedVendorRetryFrame.store(0, std::memory_order_release);
 }
 
 bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
@@ -6110,6 +6176,8 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageForceFullEyeVendorFallback = false;
+	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageFoveatedVendorRetryBackoff();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -10968,6 +11036,8 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
 	submitStageForceFullEyeVendorFallback = false;
+	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageFoveatedVendorRetryBackoff();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -11169,6 +11239,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 	const bool submitBoundsPresentationFallback = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
 	const bool transitionProtectionActive = IsVRTransitionPresentationProtectionActive(*this, state);
+	bool transitionPresentationCooldown = false;
+	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
+	if (upscaleMethod == UpscaleMethod::kDLSS && vrRenderScaleMode && vendorResumeFrame != 0) {
+		if (currentFrame < vendorResumeFrame) {
+			transitionPresentationCooldown = true;
+		} else {
+			ClearSubmitStageVendorResumeCooldown();
+		}
+	}
 	const bool vrRenderScaleMenuVendorSafetyBlocked =
 		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
@@ -11184,24 +11263,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool submitMenuPresentationFallback =
 		submitMenuPresentationContext &&
 		vrRenderScaleMenuVendorSafetyBlocked;
-	const bool presentationOnly =
-		vrRenderScaleMode &&
-		(submitPresentationContext || submitBoundsPresentationFallback || submitMenuPresentationFallback) &&
-		!vrRenderScaleMenuCanUseVendor;
-	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
-	const bool foveatedRequested =
-		!presentationOnly &&
-		!sceneFeatureMenuPauseContext &&
-		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
-		!vrRenderScaleMenuCanUseVendor &&
-		!foveatedTransitionBypass;
-	const bool submitStageFoveatedPeripheryTAAPathActive =
-		foveatedRequested &&
-		IsPeripheryTAAPathActive(upscaleMethod);
-	const bool submitStageNeedsRawDepthInput =
-		upscaleMethod == UpscaleMethod::kDLSS ||
-		submitStageFoveatedPeripheryTAAPathActive;
-	CheckResources(upscaleMethod);
+	auto computePresentationOnly = [&]() {
+		return vrRenderScaleMode &&
+		       (transitionPresentationCooldown ||
+				   ((submitPresentationContext ||
+						submitBoundsPresentationFallback ||
+						submitMenuPresentationFallback) &&
+					   !vrRenderScaleMenuCanUseVendor));
+	};
+	bool presentationOnly = computePresentationOnly();
 	if (IsSubmitStageDeviceLost())
 		return false;
 
@@ -11214,8 +11284,84 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		submitStageForceFullEyeVendorFallback = false;
 	}
 
+	const bool foveatedTransitionBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
+	if (transitionPresentationCooldown) {
+		const bool hmdClearDeferred = ShouldDeferHMDClearMask();
+		const bool projectedMaskDeferred = ShouldDeferVRProjectedMaskRepair(*this, state);
+		const bool cooldownStableCandidate =
+			vrRenderScaleMode &&
+			!currentMenuPresentationContext &&
+			!submitMenuPresentationContext &&
+			!presentationRenderTarget &&
+			!submitBoundsPresentationFallback &&
+			sourceRegion.matchesExpectedSize &&
+			!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
+			!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
+			!HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
+			!transitionProtectionActive &&
+			!hmdClearDeferred &&
+			!projectedMaskDeferred &&
+			!foveatedTransitionBypass &&
+			motionVector.texture &&
+			depth.texture;
+		uint32_t stableFrames = submitStageVendorResumeStableFrames.load(std::memory_order_acquire);
+		if (cooldownStableCandidate) {
+			const uint32_t lastStableFrame = submitStageVendorResumeLastStableFrame.load(std::memory_order_acquire);
+			if (lastStableFrame != currentFrame) {
+				stableFrames =
+					lastStableFrame != 0 && currentFrame == lastStableFrame + 1 ?
+						stableFrames + 1u :
+						1u;
+				submitStageVendorResumeStableFrames.store(stableFrames, std::memory_order_release);
+				submitStageVendorResumeLastStableFrame.store(currentFrame, std::memory_order_release);
+			}
+		} else {
+			stableFrames = 0;
+			submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
+			submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+		}
+
+		const uint32_t cooldownStartFrame = submitStageVendorResumeStartFrame.load(std::memory_order_acquire);
+		if (ElapsedFrames(cooldownStartFrame, currentFrame) >= kVRSubmitStageVendorRelatchMinCooldownFrames &&
+			stableFrames >= kVRSubmitStageVendorRelatchStableFrames) {
+			ClearSubmitStageVendorResumeCooldown();
+			transitionPresentationCooldown = false;
+			presentationOnly = computePresentationOnly();
+			logger::debug("[VRRenderScale] Cleared submit-stage vendor resume cooldown after {} stable frames.", stableFrames);
+		}
+	}
+
+	if (!presentationOnly)
+		CheckResources(upscaleMethod);
+	if (IsSubmitStageDeviceLost())
+		return false;
+
+	bool foveatedFailureBackoffActive = false;
+	const uint32_t foveatedRetryFrame = submitStageFoveatedVendorRetryFrame.load(std::memory_order_acquire);
+	if (upscaleMethod == UpscaleMethod::kDLSS && foveatedRetryFrame != 0) {
+		if (currentFrame < foveatedRetryFrame) {
+			foveatedFailureBackoffActive = true;
+		} else {
+			ClearSubmitStageFoveatedVendorRetryBackoff();
+		}
+	}
+
+	const bool foveatedRequested =
+		!presentationOnly &&
+		!sceneFeatureMenuPauseContext &&
+		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
+		!vrRenderScaleMenuCanUseVendor &&
+		!foveatedTransitionBypass &&
+		!foveatedFailureBackoffActive;
+	const bool submitStageFoveatedPeripheryTAAPathActive =
+		foveatedRequested &&
+		IsPeripheryTAAPathActive(upscaleMethod);
+	const bool submitStageNeedsRawDepthInput =
+		upscaleMethod == UpscaleMethod::kDLSS ||
+		submitStageFoveatedPeripheryTAAPathActive;
+
 	const bool submitStagePreparedThisFrame = submitStagePreparedFrame == currentFrame;
-	if (!submitStagePreparedThisFrame) {
+	if (!submitStagePreparedThisFrame && !presentationOnly) {
 		if (!ApplyPendingVendorRuntimeReset(upscaleMethod, "submit-stage ")) {
 			if (IsSubmitStageDeviceLost())
 				return false;
@@ -11225,7 +11371,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (IsSubmitStageDeviceLost())
 			return false;
 
-		if (!presentationOnly && HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
+		if (HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
 			return false;
 
 		UpdateHistoryResetState(upscaleMethod);
@@ -11563,7 +11709,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				return false;
 			LogWarnOnceFmt(
 				loggedFoveatedSubmitException[eyeIndex],
-				"[Upscaling] Submit-stage foveated {} threw for eye {}; falling back to full-eye vendor dispatch: {}",
+				"[Upscaling] Submit-stage foveated {} threw for eye {}; using fallback path: {}",
 				upscaleMethodName,
 				eyeIndex,
 				e.what());
@@ -11574,7 +11720,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				return false;
 			LogWarnOnceFmt(
 				loggedFoveatedSubmitException[eyeIndex],
-				"[Upscaling] Submit-stage foveated {} threw for eye {}; falling back to full-eye vendor dispatch",
+				"[Upscaling] Submit-stage foveated {} threw for eye {}; using fallback path",
 				upscaleMethodName,
 				eyeIndex);
 			vendorSucceeded = false;
@@ -11584,10 +11730,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (!vendorSucceeded) {
 			submitStageForceFullEyeVendorFallback = true;
 			RequestHistoryReset();
+			if (upscaleMethod == UpscaleMethod::kDLSS)
+				ArmSubmitStageFoveatedVendorRetryBackoff(currentFrame);
 			static bool loggedFoveatedSubmitFallback[2] = {};
 			if (!loggedFoveatedSubmitFallback[eyeIndex]) {
 				logger::warn(
-					"[Upscaling] Submit-stage foveated {} failed for eye {}; falling back to full-eye vendor dispatch for this frame.",
+					"[Upscaling] Submit-stage foveated {} failed for eye {}; using stretch fallback for this frame and retrying foveated dispatch after a short backoff.",
 					upscaleMethodName,
 					eyeIndex);
 				loggedFoveatedSubmitFallback[eyeIndex] = true;
@@ -11595,8 +11743,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
-	bool fullEyeVendorFallbackAvailable = true;
-	if (!vendorSucceeded && submitStagePreparedFrameFoveatedRegionEncode) {
+	bool fullEyeVendorFallbackAvailable =
+		!(upscaleMethod == UpscaleMethod::kDLSS &&
+			foveatedRequested &&
+			submitStageForceFullEyeVendorFallback);
+	if (!vendorSucceeded && fullEyeVendorFallbackAvailable && submitStagePreparedFrameFoveatedRegionEncode) {
 		bool encodedFoveatedRegions = false;
 		fullEyeVendorFallbackAvailable = EncodeSubmitStageVRInputs(
 			sourceTexture,
@@ -12380,6 +12531,8 @@ void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 		return;
 
 	submitStageDeviceLost.store(false, std::memory_order_release);
+	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageFoveatedVendorRetryBackoff();
 	streamline.ResetDLSSIdleFences();
 	streamline.slSetD3DDevice(device);
 }

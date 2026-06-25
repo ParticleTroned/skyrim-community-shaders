@@ -708,6 +708,11 @@ public:
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
 	bool submitStageForceFullEyeVendorFallback = false;
+	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
+	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
+	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
+	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
+	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
@@ -855,6 +860,10 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
+	void ClearSubmitStageVendorResumeCooldown();
+	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame);
+	void ClearSubmitStageFoveatedVendorRetryBackoff();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);

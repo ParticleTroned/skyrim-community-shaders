@@ -41,12 +41,13 @@ public:
 	// First-time setup management
 	static bool ShouldShowFirstTimeSetup();
 	static void RenderFirstTimeSetupDialog();
+	static bool TryCompleteFirstTimeSetupFromInput(uint32_t key, bool skipNextKeyRelease = true);
 	static bool ShouldSkipKeyRelease(uint32_t key);
 
 private:
 	static void RenderWelcomeSection();
 	static void RenderCacheMismatchSection();
-	static void MarkFirstTimeSetupComplete(uint32_t closingKey);
+	static void MarkFirstTimeSetupComplete(uint32_t closingKey, bool skipNextKeyRelease = true);
 
 	// State
 	static bool isFirstTimeSetupShown;

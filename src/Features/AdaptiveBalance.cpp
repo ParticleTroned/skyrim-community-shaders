@@ -1904,7 +1904,7 @@ AdaptiveBalance::ActiveProfileBlend AdaptiveBalance::GetActiveProfileBlend() con
 
 std::string AdaptiveBalance::GetContextLabel() const
 {
-	constexpr auto displayName = kFeatureName;
+	const std::string displayName = T(AdaptiveBalance::kFeatureDisplayNameKey, AdaptiveBalance::kFeatureName.data());
 
 	if (!settings.enabled)
 		return std::format("{} is disabled.", displayName);

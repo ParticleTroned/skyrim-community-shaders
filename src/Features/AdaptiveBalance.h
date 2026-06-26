@@ -20,6 +20,7 @@ struct AdaptiveBalance : Feature
 {
 	static constexpr std::string_view kFeatureName = "Adaptive Balance";
 	static constexpr std::string_view kFeatureShortName = "AdaptiveBalance";
+	static constexpr const char* kFeatureDisplayNameKey = "feature.adaptive_balance.name";
 
 	static AdaptiveBalance* GetSingleton()
 	{
@@ -28,6 +29,7 @@ struct AdaptiveBalance : Feature
 	}
 
 	virtual inline std::string GetName() override { return std::string(kFeatureName); }
+	virtual std::string GetDisplayName() override { return T(kFeatureDisplayNameKey, kFeatureName.data()); }
 	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
 	virtual std::string_view GetSettingsBannerAssetPath() const override { return "FeatureBanners/AdaptiveBalance.png"; }
 	virtual inline bool IsCore() const override { return true; }

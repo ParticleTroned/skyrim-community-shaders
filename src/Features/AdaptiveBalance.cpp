@@ -101,7 +101,7 @@ namespace
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
 	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBalance_Global";
-	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBalance";
+	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBalance_LocationOverrides";
 	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBalance_Full";
 
 	enum class PresetKind
@@ -710,7 +710,7 @@ namespace
 	}
 }
 
-void AdaptiveBalance::DrawSettings()
+void AdaptiveBalance::DrawSettingsHeaderControls()
 {
 	const auto displayName = GetDisplayName();
 	ImGui::Checkbox(("Enable " + displayName).c_str(), &settings.enabled);
@@ -719,7 +719,10 @@ void AdaptiveBalance::DrawSettings()
 		const auto contextLabel = GetContextLabel();
 		ImGui::TextWrapped("%s", contextLabel.c_str());
 	}
+}
 
+void AdaptiveBalance::DrawSettings()
+{
 	ImGui::BeginDisabled(!settings.enabled);
 
 	DrawGlobalPresetControls();

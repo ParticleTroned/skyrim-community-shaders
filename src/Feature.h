@@ -98,6 +98,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() { return {}; }
 	virtual void SetupResources() {}
 	virtual void Reset() {}
+	virtual void DrawSettingsHeaderControls() {}
 	virtual void DrawSettings() {}
 	virtual void DrawUnloadedUI();
 

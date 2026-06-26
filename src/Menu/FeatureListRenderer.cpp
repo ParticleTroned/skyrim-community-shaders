@@ -770,6 +770,15 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	// Restore cursor position after the title and separator
 	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
+	if (!isDisabled && isLoaded) {
+		if (sceneControlled)
+			ImGui::BeginDisabled();
+
+		feat->DrawSettingsHeaderControls();
+
+		if (sceneControlled)
+			ImGui::EndDisabled();
+	}
 	DrawFeatureBanner(feat);
 }
 

@@ -37,13 +37,15 @@ struct AdaptiveBalance : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			T("feature.adaptive_balance.description", "Blends scene lighting and final image balance by location and exterior time of day without enabling full Linear Lighting."),
+			T("feature.adaptive_balance.description", "Blends scene lighting and final image balance by location and exterior time of day."),
 			{ T("feature.adaptive_balance.key_feature_1", "Separate exterior day and night scene/image profiles"),
 				T("feature.adaptive_balance.key_feature_2", "Separate interior, dungeon, and dwelling profiles"),
 				T("feature.adaptive_balance.key_feature_3", "Optional per-location overrides with COC codes"),
 				T("feature.adaptive_balance.key_feature_4", "Per-profile brightness, bloom, saturation, and contrast control") }
 		};
 	}
+
+	virtual void DrawSettingsHeaderControls() override;
 
 	enum class Profile : uint32_t
 	{
@@ -116,9 +118,9 @@ struct AdaptiveBalance : Feature
 		float contrast = 1.0f;
 	};
 
-	static constexpr const char* kDefaultGlobalPresetName = "AdaptiveBalanceGlobalPreset";
-	static constexpr const char* kDefaultLocationOverridePresetName = "AdaptiveBalancePreset";
-	static constexpr const char* kDefaultFullPresetName = "AdaptiveBalanceFullPreset";
+	static constexpr const char* kDefaultGlobalPresetName = "Default";
+	static constexpr const char* kDefaultLocationOverridePresetName = "Default";
+	static constexpr const char* kDefaultFullPresetName = "Default";
 	static constexpr std::size_t kInvalidLocationOverrideIndex = static_cast<std::size_t>(-1);
 
 	struct LocationOverrideCache

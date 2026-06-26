@@ -26,8 +26,14 @@ void ExtendedTranslucency::BSLightingShader_SetupGeometry(RE::BSRenderPass* pass
 	// Clear the ExtraFeatureDescriptor to disable this effect on default
 	SetFeatureDescriptor(MaterialModel::DescriptorDisabled);
 
-	auto& property0 = pass->geometry->GetGeometryRuntimeData().alphaProperty;
-	auto& property1 = pass->geometry->GetGeometryRuntimeData().shaderProperty;
+	if (!pass || !pass->geometry) {
+		return;
+	}
+
+	auto* geometry = pass->geometry;
+	auto& runtimeData = geometry->GetGeometryRuntimeData();
+	auto& property0 = runtimeData.alphaProperty;
+	auto& property1 = runtimeData.shaderProperty;
 	auto alphaProperty = property0 && property0->GetRTTI() == globals::rtti::NiAlphaPropertyRTTI.get() ? static_cast<RE::NiAlphaProperty*>(property0.get()) : nullptr;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
@@ -37,12 +43,12 @@ void ExtendedTranslucency::BSLightingShader_SetupGeometry(RE::BSRenderPass* pass
 		return;
 	}
 
-	const auto* data = pass->geometry->GetExtraData(NiExtraDataName_AnisotropicAlphaMaterial);
+	const auto* data = geometry->GetExtraData(NiExtraDataName_AnisotropicAlphaMaterial);
 	if (!data) {
 		// If there is no extra data for explicit settings, use the default material model from global user settings
 		// And respect the SkinnedOnly setting
 		const auto& feature = globals::features::extendedTranslucency;
-		if (!feature.settings.SkinnedOnly || pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr) {
+		if (!feature.settings.SkinnedOnly || runtimeData.skinInstance != nullptr) {
 			SetFeatureDescriptor(MaterialModel::DescriptorUseDefault);
 		}
 	} else {

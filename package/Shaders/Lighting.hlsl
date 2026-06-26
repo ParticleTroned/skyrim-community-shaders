@@ -4068,7 +4068,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 
-	psout.Reflectance = float4(indirectLobeWeights.specular, psout.Diffuse.w);
+	psout.Reflectance = float4(saturate(indirectLobeWeights.specular), psout.Diffuse.w);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(SNOW)

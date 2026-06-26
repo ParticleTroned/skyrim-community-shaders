@@ -713,7 +713,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TRUE_PBR)
 	psout.Albedo = float4(Color::IrradianceToGamma(indirectDiffuseLobeWeight), 1);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1 - pbrSurfaceProperties.Roughness, 1);
-	psout.Reflectance = float4(indirectSpecularLobeWeight, 1);
+	psout.Reflectance = float4(saturate(indirectSpecularLobeWeight), 1);
 #			else
 	psout.Albedo = float4(albedo, 1);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), specColor.w, 1);

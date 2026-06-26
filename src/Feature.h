@@ -76,6 +76,12 @@ public:
 	virtual bool IsDisabledByDefault() const { return false; }
 
 	/**
+	 * Whether the feature must stay disabled at boot, ignoring user overrides.
+	 * Use for bundled/internal features that should not be user-activatable.
+	 */
+	virtual bool IsForcedDisabledAtBoot() const { return false; }
+
+	/**
 	 * Whether the feature will show up in the GUI menu
 	 */
 	virtual bool IsInMenu() const { return true; }

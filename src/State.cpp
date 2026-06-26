@@ -5,6 +5,7 @@
 #include <pystring/pystring.h>
 
 #include "Deferred.h"
+#include "Feature.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
@@ -33,6 +34,19 @@
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 #endif
+
+namespace
+{
+	bool IsForcedDisabledFeature(const std::string& a_featureName)
+	{
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->GetShortName() == a_featureName)
+				return feature->IsForcedDisabledAtBoot();
+		}
+
+		return false;
+	}
+}
 
 void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 {
@@ -372,7 +386,10 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		for (auto* feature : Feature::GetFeatureList()) {
 			try {
 				const std::string featureName = feature->GetShortName();
-				if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
+				if (feature->IsForcedDisabledAtBoot()) {
+					disabledFeatures[featureName] = true;
+					logger::info("Feature '{}' is forced disabled at boot", featureName);
+				} else if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
 					disabledFeatures[featureName] = true;
 					logger::info("Feature '{}' is disabled by default", featureName);
 				}
@@ -1097,6 +1114,9 @@ void State::ClearDisabledFeatures()
 
 bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
 {
+	if (IsForcedDisabledFeature(featureName))
+		isDisabled = true;
+
 	bool wasPreviouslyDisabled = disabledFeatures.count(featureName) > 0 ? disabledFeatures[featureName] : false;  // Properly check if it exists
 	disabledFeatures[featureName] = isDisabled;
 

@@ -13,6 +13,11 @@ public:
 	virtual inline std::string GetShortName() override { return "ExponentialHeightFog"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
+	virtual bool IsDisabledByDefault() const override { return true; }
+	virtual bool IsForcedDisabledAtBoot() const override { return true; }
+	virtual bool IsInMenu() const override { return false; }
+	virtual bool IsHiddenFromUserView() const override { return true; }
+	virtual bool DrawFailLoadMessage() const override { return false; }
 
 	virtual inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{

@@ -19,15 +19,24 @@ namespace DynamicCubemaps
 #if !defined(WATER)
 
 #	if defined(SKYLIGHTING)
-	float3 GetDynamicCubemapSpecularIrradiance(float3 N, float3 V, float roughness, sh2 skylighting)
+	float3 GetDynamicCubemapSpecularIrradiance(float3 N, float3 VN, float3 V, float roughness, sh2 skylighting)
 #	else
-	float3 GetDynamicCubemapSpecularIrradiance(float3 N, float3 V, float roughness)
+	float3 GetDynamicCubemapSpecularIrradiance(float3 N, float3 VN, float3 V, float roughness)
 #	endif
 	{
-#	if defined(DEFERRED)
-		return 1.0;
-#	else
+#	if defined(EYE)
 		float3 R = reflect(-V, N);
+		float horizon = min(1.0 + dot(R, VN), 1.0);
+		horizon *= horizon * horizon;
+#	else
+		float horizon = 1.0;
+#	endif
+#	if defined(DEFERRED)
+		return horizon;
+#	else
+#		if !defined(EYE)
+		float3 R = reflect(-V, N);
+#		endif
 		float NoV = saturate(dot(N, V));
 
 		float level = roughness * 7.0;

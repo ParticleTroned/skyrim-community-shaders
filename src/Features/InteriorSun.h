@@ -70,6 +70,10 @@ public:
 
 	void UpdateRasterStateCullMode(const RE::BSRenderPass* pass, const uint32_t technique) const
 	{
+		if (!pass || !pass->shaderProperty || !rasterStateCullMode || !globals::game::stateUpdateFlags) {
+			return;
+		}
+
 		if (isInteriorWithSun && settings.ForceDoubleSidedRendering && technique & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmap)) {
 			const auto flags = pass->shaderProperty->flags;
 			const auto renderTwoSided = flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided) || flags.none(RE::BSShaderProperty::EShaderPropertyFlag::kAssumeShadowmask, RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);

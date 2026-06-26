@@ -97,6 +97,7 @@ public:
 	// Lightweight opt-in for render-target relatches; avoid disk/world discovery here.
 	virtual void SetupRenderTargetResources() {}
 	virtual void Reset() {}
+	virtual void DrawSettingsHeaderControls() {}
 	virtual void DrawSettings() {}
 	virtual void DrawUnloadedUI();
 

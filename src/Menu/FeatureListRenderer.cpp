@@ -2,16 +2,12 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
-#include <d3d11.h>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
 #include <ranges>
 #include <system_error>
-#include <unordered_map>
 #include <unordered_set>
-#include <wrl/client.h>
 
 #include "Feature.h"
 #include "FeatureConstraints.h"
@@ -47,62 +43,6 @@ namespace
 		return ImVec2(
 			iconSize.x + style.FramePadding.x * 2.0f,
 			iconSize.y + style.FramePadding.y * 2.0f);
-	}
-
-	struct FeatureBannerTexture
-	{
-		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
-		ImVec2 size = { 0.0f, 0.0f };
-		std::filesystem::path sourcePath;
-		bool loadAttempted = false;
-	};
-
-	FeatureBannerTexture* TryGetFeatureBannerTexture(Feature* feature)
-	{
-		if (!feature)
-			return nullptr;
-
-		const auto relativePath = feature->GetSettingsBannerAssetPath();
-		if (relativePath.empty())
-			return nullptr;
-
-		static std::unordered_map<std::string, FeatureBannerTexture> bannerCache;
-		auto& banner = bannerCache[feature->GetShortName()];
-
-		const auto sourcePath = Util::PathHelpers::GetCommunityShaderPath() / std::string(relativePath);
-		if (!banner.loadAttempted || banner.sourcePath != sourcePath) {
-			if (!globals::d3d::device)
-				return nullptr;
-
-			banner = {};
-			banner.sourcePath = sourcePath;
-			banner.loadAttempted = true;
-
-			ID3D11ShaderResourceView* loadedSrv = nullptr;
-			ImVec2 loadedSize = {};
-			const auto sourcePathString = sourcePath.string();
-			if (Util::LoadTextureFromFile(globals::d3d::device, sourcePathString.c_str(), &loadedSrv, loadedSize)) {
-				banner.srv.Attach(loadedSrv);
-				banner.size = loadedSize;
-			}
-		}
-
-		return banner.srv.Get() ? &banner : nullptr;
-	}
-
-	void DrawFeatureBanner(Feature* feature)
-	{
-		auto* banner = TryGetFeatureBannerTexture(feature);
-		if (!banner || !banner->srv.Get() || banner->size.x <= 0.0f || banner->size.y <= 0.0f)
-			return;
-
-		const float availableWidth = ImGui::GetContentRegionAvail().x;
-		if (availableWidth <= 0.0f)
-			return;
-
-		const float aspectRatio = banner->size.y / banner->size.x;
-		const ImVec2 drawSize(availableWidth, std::round(availableWidth * aspectRatio));
-		ImGui::Image(banner->srv.Get(), drawSize);
 	}
 
 	bool IsCoreMenu(const std::string& menuName)
@@ -792,7 +732,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 		if (sceneControlled)
 			ImGui::EndDisabled();
 	}
-	DrawFeatureBanner(feat);
 }
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled)

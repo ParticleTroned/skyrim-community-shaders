@@ -919,8 +919,22 @@ VkResult FidelityFX::CreateSwapchain(VkDevice device, const VkSwapchainCreateInf
 	acquireQ.familyIndex = fgQueues.imageAcquireFamily;
 	VkQueueInfoFFXAPI asyncQ{};  // optional; left null (no async compute queue on this device)
 
-	// Present family has no GRAPHICS bit (it is a compute family), so composition runs on the
-	// game queue (composeOnPresentQueue = false).
+	// CONFIRM + guard: FFX's swapchain init fails with 0x3 if the present queue family can't present to
+	// this surface. The WSI hook now sources present/acquire from the game family (which DXVK presents
+	// on), so this should be VK_TRUE — log it so a regression is immediately visible.
+	if (auto gipa = dxvk->GetInstanceProcAddr()) {
+		auto vkGPDSS = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
+			gipa(dxvk->GetInstance(), "vkGetPhysicalDeviceSurfaceSupportKHR"));
+		if (vkGPDSS && pCreateInfo->surface) {
+			VkBool32 presentOK = VK_FALSE;
+			vkGPDSS(dxvk->GetPhysicalDevice(), presentQ.familyIndex, pCreateInfo->surface, &presentOK);
+			logger::info("[FidelityFX] FG swapchain: present family {} surface-present support = {}",
+				presentQ.familyIndex, (bool)presentOK);
+		}
+	}
+
+	// The present family is now the game family (graphics-capable). Composition could run on the present
+	// queue; keep it on the game queue (composeOnPresentQueue = false) while confirming the fix.
 	ffxCreateContextDescFrameGenerationSwapChainModeVK mode{};
 	mode.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_MODE_VK;
 	mode.header.pNext = nullptr;
@@ -934,6 +948,14 @@ VkResult FidelityFX::CreateSwapchain(VkDevice device, const VkSwapchainCreateInf
 	desc.swapchain = pSwapchain;  // in: VK_NULL_HANDLE -> out: the wrapped handle
 	desc.allocator = const_cast<VkAllocationCallbacks*>(pAllocator);
 	desc.createInfo = *pCreateInfo;
+	// FFX's swapchain init (getRealSwapchainCreateInfo) hard-fails with 0x3 on ANY createInfo.pNext
+	// struct outside its small whitelist. DXVK chains extension structs (e.g. present-modes /
+	// present-scaling from VK_EXT_swapchain_maintenance1) that FFX doesn't recognize. Strip the whole
+	// chain — FFX builds a plain swapchain; format/colorspace come from direct fields, and the wrapped
+	// present doesn't need DXVK's VRR / fullscreen-exclusive extension structs.
+	for (auto* p = reinterpret_cast<const VkBaseInStructure*>(pCreateInfo->pNext); p; p = p->pNext)
+		logger::info("[FidelityFX] FG swapchain: stripping createInfo.pNext sType={}", (uint32_t)p->sType);
+	desc.createInfo.pNext = nullptr;
 	desc.gameQueue = gameQ;
 	desc.asyncComputeQueue = asyncQ;
 	desc.presentQueue = presentQ;

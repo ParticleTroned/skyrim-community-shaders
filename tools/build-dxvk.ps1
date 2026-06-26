@@ -1,0 +1,92 @@
+<#
+.SYNOPSIS
+    Build DXVK's d3d11.dll + dxgi.dll (the csd3d11/csgi renderer DLLs Community Shaders stages)
+    from the extern/dxvk submodule — fast and incrementally — so every Build*.bat produces them
+    with no separate meson step.
+
+.DESCRIPTION
+    Called by BuildRelease.bat (and therefore by every one-click wrapper) before the CMake
+    configure/build. The configure-time staging guard in CMakeLists.txt
+    (if EXISTS extern/dxvk/build/src/d3d11/d3d11.dll) then picks the DLLs up and stages them.
+
+    Speed:
+      * Only d3d11 + dxgi are built. CS loads nothing else, and the full DXVK build additionally
+        needs the legacy d3d8.h which is absent from the modern Windows SDK (so a full build fails
+        locally anyway).
+      * Incremental: if the DLLs already exist and were built from the current submodule commit
+        (recorded in a stamp file), this is a no-op — warm builds pay nothing for DXVK.
+      * meson's --vsenv activates the Visual Studio toolchain itself (via vswhere), so this works
+        from a plain shell without a vcvars prompt.
+
+    Exit code: 0 on build / skip / "meson missing but DLLs already present" (non-fatal — the build
+    proceeds and CMake's guard just reuses or skips). Non-zero only on a genuine meson build failure.
+
+.PARAMETER BuildType
+    meson --buildtype (default 'release'). DXVK is a runtime DLL; a release DXVK is fine even for
+    a Debug-config CS build, and keeps it fast.
+#>
+[CmdletBinding()]
+param(
+    [string]$BuildType = 'release'
+)
+
+$ErrorActionPreference = 'Stop'
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot  = Split-Path -Parent $ScriptDir
+$DxvkSrc   = Join-Path $RepoRoot 'extern\dxvk'
+$BuildDir  = Join-Path $DxvkSrc 'build'
+$D3d11Dll  = Join-Path $BuildDir 'src\d3d11\d3d11.dll'
+$DxgiDll   = Join-Path $BuildDir 'src\dxgi\dxgi.dll'
+$Stamp     = Join-Path $BuildDir '.cs-dxvk-sha'
+
+if (-not (Test-Path (Join-Path $DxvkSrc 'meson.build'))) {
+    Write-Warning "[build-dxvk] extern/dxvk is not checked out (no meson.build). Run 'git submodule update --init extern/dxvk'. Skipping."
+    exit 0
+}
+
+# Current submodule commit drives the incremental skip.
+$sha = ''
+try { $sha = (& git -C $DxvkSrc rev-parse HEAD 2>$null) } catch {}
+if (-not $sha) { $sha = 'unknown' }
+$short = $sha.Substring(0, [Math]::Min(8, $sha.Length))
+
+$haveDlls = (Test-Path $D3d11Dll) -and (Test-Path $DxgiDll)
+
+# Fast path: DLLs present and built from the current submodule commit -> nothing to do.
+if ($haveDlls -and (Test-Path $Stamp) -and ((Get-Content $Stamp -Raw).Trim() -eq $sha)) {
+    Write-Host "[build-dxvk] DXVK d3d11+dxgi up to date ($short) - skipping"
+    exit 0
+}
+
+$meson = (Get-Command meson -ErrorAction SilentlyContinue).Source
+if (-not $meson) {
+    if ($haveDlls) {
+        Write-Warning "[build-dxvk] meson not found; reusing the existing DXVK build (it may be stale vs $short)."
+        exit 0
+    }
+    Write-Warning "[build-dxvk] meson not found and no DXVK build present - the mod will ship WITHOUT the DXVK renderer. Install it with 'pip install meson ninja'."
+    exit 0
+}
+
+Write-Host "[build-dxvk] building DXVK d3d11+dxgi ($short, $BuildType)..."
+
+# meson setup is needed once (or after a clean). meson compile auto-reconfigures when meson.build
+# changes; a plain submodule bump is picked up incrementally by ninja via file timestamps.
+if (-not (Test-Path (Join-Path $BuildDir 'build.ninja'))) {
+    & $meson setup $BuildDir $DxvkSrc --vsenv --buildtype $BuildType `
+        -Denable_d3d8=false -Denable_d3d9=false -Denable_d3d10=false
+    if ($LASTEXITCODE -ne 0) { Write-Error "[build-dxvk] meson setup failed"; exit 1 }
+}
+
+& $meson compile -C $BuildDir
+if ($LASTEXITCODE -ne 0) { Write-Error "[build-dxvk] meson compile failed"; exit 1 }
+
+if (-not ((Test-Path $D3d11Dll) -and (Test-Path $DxgiDll))) {
+    Write-Error "[build-dxvk] build reported success but d3d11.dll/dxgi.dll are missing"
+    exit 1
+}
+
+Set-Content -Path $Stamp -Value $sha -Encoding ascii
+Write-Host "[build-dxvk] done ($short)"
+exit 0

@@ -95,6 +95,14 @@ namespace DxvkWsiHook
 					pCreateInfo ? (int)pCreateInfo->imageFormat : -1);
 			}
 
+			// This (re)creation reconciles the swapchain to the current WantsToWrap state, so any
+			// pending recreate request is now satisfied — clear it. Without this, a recreate requested
+			// while no swapchain existed (FG on at startup) stays set after the INITIAL creation already
+			// wrapped the swapchain, and the first present then spuriously forces a destroy+recreate of
+			// the just-built FFX swapchain (which hangs). The per-frame check (Upscaling.cpp) re-requests
+			// if the outcome still doesn't match (e.g. FFX creation failed and we fell back to native).
+			g_pendingRecreate.store(false, std::memory_order_release);
+
 			// Conditional wrap: only hand the swapchain to the provider when frame generation is
 			// actually enabled. When off, DXVK gets a native swapchain and presents with zero
 			// frame-gen overhead. (Runtime toggle recreates the swapchain to switch paths.)
@@ -127,8 +135,11 @@ namespace DxvkWsiHook
 			VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages)
 		{
 			CaptureReals(device);
-			if (IsProviderSwapchain(swapchain))
+			if (IsProviderSwapchain(swapchain)) {
+				static bool s_log = false;
+				if (!s_log) { s_log = true; logger::info("[DxvkWsiHook] FFX GetSwapchainImages (first call, count-query={})", pSwapchainImages == nullptr); }
 				return g_provider->GetSwapchainImages(device, swapchain, pSwapchainImageCount, pSwapchainImages);
+			}
 			return g_realGetImages(device, swapchain, pSwapchainImageCount, pSwapchainImages);
 		}
 
@@ -200,9 +211,13 @@ namespace DxvkWsiHook
 			std::vector<const char*> extensions(
 				pCreateInfo->ppEnabledExtensionNames,
 				pCreateInfo->ppEnabledExtensionNames + pCreateInfo->enabledExtensionCount);
-			static const float priorities[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+			static const float priorities[16] = {
+				1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+				1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f
+			};
 			uint32_t gameFamily = UINT32_MAX;
 			uint32_t presentFamily = UINT32_MAX;
+			uint32_t gameFamilyBaseCount = 0;  // DXVK's own queue count on the game family; FFX queues sit above it
 			bool modify = false;
 
 			if (g_provider && getQFP) {
@@ -221,40 +236,31 @@ namespace DxvkWsiHook
 					}
 				}
 
-				// Present/acquire queues: a compute-capable family (virtually always present-capable
-				// on real GPUs; re-validated against the surface at swapchain creation), distinct from
-				// the game family, with enough queues for the provider's request.
-				if (req.presentCapableQueues > 0) {
-					for (uint32_t f = 0; f < famCount; ++f) {
-						if (f == gameFamily)
+				// Present/acquire queues: take them from the GAME family, NOT a separate compute family.
+				// DXVK already presents on the game family, so it is guaranteed surface-present-capable;
+				// a compute-only family on NVIDIA does NOT advertise WSI present support, which makes FFX's
+				// swapchain create fail its vkGetPhysicalDeviceSurfaceSupportKHR check (-> 0x3). FFX only
+				// requires the present/game queues to be distinct VkQueue HANDLES, not distinct families,
+				// so we request extra game-family queues (at indices above DXVK's own) for FFX to use.
+				if (req.presentCapableQueues > 0 && gameFamily != UINT32_MAX) {
+					for (auto& q : queues) {
+						if (q.queueFamilyIndex != gameFamily)
 							continue;
-						if ((fams[f].queueFlags & VK_QUEUE_COMPUTE_BIT) && fams[f].queueCount >= req.presentCapableQueues) {
-							presentFamily = f;
-							break;
+						gameFamilyBaseCount = q.queueCount;  // DXVK keeps [0..base-1]; FFX takes [base..base+req-1]
+						const uint32_t want = q.queueCount + req.presentCapableQueues;
+						if (want <= fams[gameFamily].queueCount &&
+							want <= (uint32_t)(sizeof(priorities) / sizeof(priorities[0]))) {
+							q.queueCount = want;
+							q.pQueuePriorities = priorities;
+							presentFamily = gameFamily;
+							modify = true;
+							logger::info("[DxvkWsiHook] injecting {} present/acquire queues from game family {} (indices {}..{}) for provider '{}'",
+								req.presentCapableQueues, gameFamily, gameFamilyBaseCount, want - 1, g_provider->Name());
+						} else {
+							logger::warn("[DxvkWsiHook] game family {} lacks spare queues ({} available, need {}); FG unavailable",
+								gameFamily, fams[gameFamily].queueCount, want);
 						}
-					}
-					if (presentFamily != UINT32_MAX) {
-						bool bumped = false;
-						for (auto& q : queues) {
-							if (q.queueFamilyIndex == presentFamily) {
-								q.queueCount = req.presentCapableQueues;
-								q.pQueuePriorities = priorities;
-								bumped = true;
-								break;
-							}
-						}
-						if (!bumped) {
-							VkDeviceQueueCreateInfo extra{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
-							extra.queueFamilyIndex = presentFamily;
-							extra.queueCount = req.presentCapableQueues;
-							extra.pQueuePriorities = priorities;
-							queues.push_back(extra);
-						}
-						modify = true;
-						logger::info("[DxvkWsiHook] injecting {} queues from family {} for provider '{}' (game family {})",
-							req.presentCapableQueues, presentFamily, g_provider->Name(), gameFamily);
-					} else {
-						logger::warn("[DxvkWsiHook] no spare present-capable family for provider '{}'; FG unavailable", g_provider->Name());
+						break;
 					}
 				}
 
@@ -293,10 +299,12 @@ namespace DxvkWsiHook
 				if (getDevQ) {
 					FrameGenQueues fq;
 					if (gameFamily != UINT32_MAX)
-						getDevQ(*pDevice, gameFamily, 0, &fq.gameQueue);
+						getDevQ(*pDevice, gameFamily, 0, &fq.gameQueue);  // DXVK's graphics queue (shared)
 					fq.gameFamily = gameFamily;
-					getDevQ(*pDevice, presentFamily, 0, &fq.presentQueue);
-					getDevQ(*pDevice, presentFamily, 1, &fq.imageAcquireQueue);
+					// FFX present/acquire = extra queues from the SAME game family, above DXVK's own (so
+					// they are surface-present-capable yet distinct handles from DXVK's graphics queue).
+					getDevQ(*pDevice, presentFamily, gameFamilyBaseCount + 0, &fq.presentQueue);
+					getDevQ(*pDevice, presentFamily, gameFamilyBaseCount + 1, &fq.imageAcquireQueue);
 					fq.presentFamily = presentFamily;
 					fq.imageAcquireFamily = presentFamily;
 					g_injected.present = fq.presentQueue;
@@ -385,6 +393,24 @@ namespace DxvkWsiHook
 
 		g_installed = true;
 		logger::info("[DxvkWsiHook] vkGetInstanceProcAddr detour installed (WSI interception armed)");
+
+		// Tell DXVK's presenter which swapchain handle FFX owns, so it acts as a thin submit + hand-off
+		// for it (no second present loop) — parity with the official single-present-loop FFX model,
+		// which is what eliminates the present deadlock. Resolved from the loaded DXVK module.
+		using SetQueryFn = void (*)(bool (*)(VkSwapchainKHR));
+		HMODULE dxvkMod = GetModuleHandleW(L"csd3d11.dll");
+		if (!dxvkMod)
+			dxvkMod = GetModuleHandleW(L"d3d11.dll");
+		auto setQuery = dxvkMod ? reinterpret_cast<SetQueryFn>(
+			reinterpret_cast<void*>(GetProcAddress(dxvkMod, "dxvkSetFrameGenOwnershipQuery"))) : nullptr;
+		if (setQuery) {
+			setQuery(+[](VkSwapchainKHR sc) -> bool {
+				return sc != VK_NULL_HANDLE && sc == g_providerSwapchain;
+			});
+			logger::info("[DxvkWsiHook] registered frame-gen swapchain-ownership predicate with DXVK");
+		} else {
+			logger::warn("[DxvkWsiHook] dxvkSetFrameGenOwnershipQuery not found in DXVK module — present may deadlock; rebuild DXVK from source");
+		}
 		return true;
 	}
 

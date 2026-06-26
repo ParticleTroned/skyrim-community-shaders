@@ -650,17 +650,11 @@ void Menu::Init()
  *
  * The method manages:
  * - ImGui docking space and window positioning
- * - Focus change handling
  * - Dynamic window flags based on docking state
  * - Header, navigation tabs, and settings panels coordination
  */
 void Menu::DrawSettings()
 {
-	if (focusChanged) {
-		OnFocusChanged();
-		focusChanged = false;
-	}
-
 	// Apply theme styling with universal contrast enhancement
 	ThemeManager::SetupImGuiStyle(*this);
 	ImGui::GetIO().ConfigDockingWithShift = settings.RequireShiftToDock;
@@ -896,10 +890,15 @@ void Menu::DrawFooter()
  * serves as the bridge between Menu's state and the extracted overlay rendering logic.
  *
  * Handles VR setup, input event processing, shader compilation status, feature overlays,
- * A/B testing, and ImGui frame management through the specialized renderer component.
+ * A/B testing, focus recovery, and ImGui frame management through the specialized renderer component.
  */
 void Menu::DrawOverlay()
 {
+	if (focusChanged) {
+		OnFocusChanged();
+		focusChanged = false;
+	}
+
 	// Only process reloads when ImGui is NOT in an active frame
 	ImGuiContext* ctx = ImGui::GetCurrentContext();
 	bool canReload = ctx && !ctx->WithinFrameScope && ctx->WithinEndChildID == 0;
@@ -1215,6 +1214,7 @@ void Menu::OnFocusChanged()
 			device->ClearInputState();
 		}
 	}
+	_comboFiredKeys.clear();
 	// Allows tab to work again after alt+tabbing back in.
 	ImGui::GetIO().ClearInputKeys();
 }

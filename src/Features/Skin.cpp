@@ -591,22 +591,25 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 
 void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
+	if (!settings.EnableSkin || !PerGeometryCB || !a_pass || !a_pass->geometry)
+		return;
+
 	auto context = globals::d3d::context;
+	if (!context)
+		return;
 
-	if (settings.EnableSkin) {
-		auto geometry = a_pass->geometry;
-		float4 wetness = GetWetness(geometry);
+	auto geometry = a_pass->geometry;
+	float4 wetness = GetWetness(geometry);
 
-		if (currentWetness != wetness) {
-			currentWetness = wetness;
-			PerGeometryData perGeometryData{};
-			perGeometryData.skinPerGeometry = wetness;
-			PerGeometryCB->Update(perGeometryData);
-		}
-
-		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-		context->PSSetConstantBuffers(7, 1, &buffer);
+	if (currentWetness != wetness) {
+		currentWetness = wetness;
+		PerGeometryData perGeometryData{};
+		perGeometryData.skinPerGeometry = wetness;
+		PerGeometryCB->Update(perGeometryData);
 	}
+
+	ID3D11Buffer* buffer = { PerGeometryCB->CB() };
+	context->PSSetConstantBuffers(7, 1, &buffer);
 }
 
 void Skin::SetShaderResources(ID3D11DeviceContext* a_context)

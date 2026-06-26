@@ -9,6 +9,7 @@
 #include "Utils/D3D.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 #define I18N_KEY_PREFIX "feature.terrain_blending."
@@ -21,6 +22,190 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	enum class TerrainBlendingReplayPath
+	{
+		kUnknown,
+		kTerrainBlend,
+		kNoBlend
+	};
+
+	const char* ToString(TerrainBlendingReplayPath a_path)
+	{
+		switch (a_path) {
+		case TerrainBlendingReplayPath::kTerrainBlend:
+			return "terrain_blend";
+		case TerrainBlendingReplayPath::kNoBlend:
+			return "no_blend";
+		default:
+			return "unknown";
+		}
+	}
+
+	RE::BSShader::Type GetExpectedShaderType(TerrainBlendingReplayPath a_path)
+	{
+		switch (a_path) {
+		case TerrainBlendingReplayPath::kTerrainBlend:
+		case TerrainBlendingReplayPath::kNoBlend:
+			return RE::BSShader::Type::Lighting;
+		default:
+			return RE::BSShader::Type::None;
+		}
+	}
+
+	TerrainBlendingReplayPath GetRenderPassReplayPath(const RE::BSRenderPass* a_pass, const char*& a_reason)
+	{
+		a_reason = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			if (!a_pass) {
+				a_reason = "pass";
+				return TerrainBlendingReplayPath::kUnknown;
+			}
+
+			auto* shaderProperty = a_pass->shaderProperty;
+			if (!shaderProperty) {
+				return TerrainBlendingReplayPath::kUnknown;
+			}
+
+			const auto flags = shaderProperty->flags;
+			if (flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
+				return TerrainBlendingReplayPath::kTerrainBlend;
+			}
+			if (flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
+				return TerrainBlendingReplayPath::kNoBlend;
+			}
+			return TerrainBlendingReplayPath::kUnknown;
+		}
+#if defined(_MSC_VER)
+		__except (1) {
+			a_reason = "exception";
+			return TerrainBlendingReplayPath::kUnknown;
+		}
+#else
+		a_reason = "unknown";
+		return TerrainBlendingReplayPath::kUnknown;
+#endif
+	}
+
+	bool IsRenderPassBeyondTerrainCullDistance(const RE::BSRenderPass* a_pass, const RE::NiPoint3& a_eyePosition, float a_cullDistance, const char*& a_reason)
+	{
+		a_reason = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			return (a_pass->geometry->worldBound.center.GetDistance(a_eyePosition) - a_pass->geometry->worldBound.radius) > a_cullDistance;
+		}
+#if defined(_MSC_VER)
+		__except (1) {
+			a_reason = "exception";
+			return false;
+		}
+#else
+		a_reason = "unknown";
+		return false;
+#endif
+	}
+
+	void LogDroppedTerrainBlendingPass(std::string_view a_phase, TerrainBlendingReplayPath a_path, const RE::BSRenderPass* a_pass, const char* a_reason)
+	{
+		if (!(globals::state && globals::state->IsDeveloperMode()))
+			return;
+
+		static std::atomic<uint64_t> dropCount = 0;
+		const auto count = dropCount.fetch_add(1, std::memory_order_relaxed) + 1;
+		if (count <= 16 || (count % 128) == 0) {
+			logger::warn("[TerrainBlending] dropped {} pass #{} path={} reason={} pass=0x{:X}",
+				a_phase,
+				count,
+				ToString(a_path),
+				a_reason ? a_reason : "unknown",
+				reinterpret_cast<std::uintptr_t>(a_pass));
+		}
+	}
+
+	bool ShouldSkipCaptureFailure(const char* a_reason)
+	{
+		if (!a_reason) {
+			return false;
+		}
+
+		const std::string_view reason{ a_reason };
+		return reason == "pass" ||
+		       reason == "geometry" ||
+		       reason == "shader" ||
+		       reason == "shader_property" ||
+		       reason == "exception";
+	}
+
+	bool CanReplayRenderPass(const TerrainBlending::RenderPass& a_renderPass, TerrainBlendingReplayPath a_path, const char*& a_reason)
+	{
+		a_reason = nullptr;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			auto* pass = a_renderPass.a_pass;
+			if (!pass) {
+				a_reason = "pass";
+				return false;
+			}
+			if (!pass->geometry) {
+				a_reason = "geometry";
+				return false;
+			}
+			auto& geometryRuntimeData = pass->geometry->GetGeometryRuntimeData();
+			auto* geometryShaderProperty = geometryRuntimeData.shaderProperty.get();
+			if (!geometryShaderProperty) {
+				a_reason = "geometry_shader_property";
+				return false;
+			}
+			if (!pass->shader) {
+				a_reason = "shader";
+				return false;
+			}
+			if (!pass->shaderProperty) {
+				a_reason = "shader_property";
+				return false;
+			}
+			if (pass->shader->shaderType.get() != GetExpectedShaderType(a_path)) {
+				a_reason = "shader_type";
+				return false;
+			}
+			const auto path = GetRenderPassReplayPath(pass, a_reason);
+			if (a_reason) {
+				return false;
+			}
+			if (path != a_path) {
+				a_reason = "replay_path";
+				return false;
+			}
+			return true;
+		}
+#if defined(_MSC_VER)
+		__except (1) {
+			a_reason = "exception";
+			return false;
+		}
+#endif
+		a_reason = "unknown";
+		return false;
+	}
+
+	void RestoreTerrainBlendingDepthSrvs(RE::BSGraphics::Renderer* a_renderer, ID3D11ShaderResourceView* a_mainDepthSrv, ID3D11ShaderResourceView* a_prepassSrv)
+	{
+		if (!a_renderer) {
+			return;
+		}
+
+		auto& mainDepth = a_renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto& zPrepassCopy = a_renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+		mainDepth.depthSRV = a_mainDepthSrv;
+		zPrepassCopy.depthSRV = a_prepassSrv;
+	}
+
 	uint32_t GetDepthBlendExtent(float a_sceneExtent, uint32_t a_resourceExtent)
 	{
 		if (!a_resourceExtent)
@@ -427,16 +612,46 @@ TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmedi
 {
 	auto shaderCache = globals::shaderCache;
 
+	if (!a_pass) {
+		LogDroppedTerrainBlendingPass("capture", TerrainBlendingReplayPath::kUnknown, a_pass, "pass");
+		return RenderPassImmediatelyAction::Skip;
+	}
+
 	if (shaderCache->IsEnabled() && settings.Enabled) {
+		auto leaveTerrainDepthSection = [&]() {
+			if (renderTerrainDepth) {
+				ResetTerrainDepth();
+				renderTerrainDepth = false;
+			}
+		};
+
 		if (renderDepth) {
 			// Entering or exiting terrain depth section
-			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
+			const char* reason = nullptr;
+			const bool inTerrainCandidate = GetRenderPassReplayPath(a_pass, reason) == TerrainBlendingReplayPath::kTerrainBlend;
+			if (reason) {
+				leaveTerrainDepthSection();
+				LogDroppedTerrainBlendingPass("depth", TerrainBlendingReplayPath::kTerrainBlend, a_pass, reason);
+				return RenderPassImmediatelyAction::Skip;
+			}
 
-			if (inTerrain && a_pass->geometry) {
+			bool inTerrain = inTerrainCandidate;
+
+			if (inTerrain && !a_pass->geometry) {
+				leaveTerrainDepthSection();
+				LogDroppedTerrainBlendingPass("depth", TerrainBlendingReplayPath::kTerrainBlend, a_pass, "geometry");
+				return RenderPassImmediatelyAction::Skip;
+			}
+
+			if (inTerrain) {
 				const float cullDistance = settings.TerrainCullDistance;
 				if (cullDistance > 0.0f) {
-					if ((a_pass->geometry->worldBound.center.GetDistance(eyePosition) - a_pass->geometry->worldBound.radius) > cullDistance) {
+					if (IsRenderPassBeyondTerrainCullDistance(a_pass, eyePosition, cullDistance, reason)) {
 						inTerrain = false;
+					} else if (reason) {
+						leaveTerrainDepthSection();
+						LogDroppedTerrainBlendingPass("depth", TerrainBlendingReplayPath::kTerrainBlend, a_pass, reason);
+						return RenderPassImmediatelyAction::Skip;
 					}
 				}
 			}
@@ -451,21 +666,25 @@ TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmedi
 				return RenderPassImmediatelyAction::DrawTwice;
 			}
 		} else if (globals::state->inWorld) {
-			if (auto shaderProperty = a_pass->shaderProperty) {
-				if (a_pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
-					if (shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
-						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-						terrainRenderPasses.push_back(call);
-						return RenderPassImmediatelyAction::Skip;
-					}
+			const char* reason = nullptr;
+			const auto replayPath = GetRenderPassReplayPath(a_pass, reason);
+			if (reason) {
+				LogDroppedTerrainBlendingPass("capture", TerrainBlendingReplayPath::kUnknown, a_pass, reason);
+				return RenderPassImmediatelyAction::Skip;
+			}
 
-					// Detect meshes which should not get terrain blending using an unused flag (kNoTransparencyMultiSample)
-					if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
-						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-						renderPasses.push_back(call);
-						return RenderPassImmediatelyAction::Skip;
-					}
+			if (replayPath == TerrainBlendingReplayPath::kTerrainBlend || replayPath == TerrainBlendingReplayPath::kNoBlend) {
+				RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
+				if (!CanReplayRenderPass(call, replayPath, reason)) {
+					LogDroppedTerrainBlendingPass("capture", replayPath, a_pass, reason);
+					return ShouldSkipCaptureFailure(reason) ? RenderPassImmediatelyAction::Skip : RenderPassImmediatelyAction::Draw;
 				}
+				if (replayPath == TerrainBlendingReplayPath::kTerrainBlend) {
+					terrainRenderPasses.push_back(call);
+				} else {
+					renderPasses.push_back(call);
+				}
+				return RenderPassImmediatelyAction::Skip;
 			}
 		}
 	}
@@ -483,11 +702,7 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		renderAltTerrain = false;
 		terrainRenderPasses.clear();
 		renderPasses.clear();
-		auto renderer = globals::game::renderer;
-		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-		auto& zPrepassCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-		mainDepth.depthSRV = depthSRVBackup;
-		zPrepassCopy.depthSRV = prepassSRVBackup;
+		RestoreTerrainBlendingDepthSrvs(globals::game::renderer, depthSRVBackup, prepassSRVBackup);
 		return;
 	}
 
@@ -495,6 +710,18 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto context = globals::d3d::context;
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
+	if (!renderer || !context || !shadowState || !stateUpdateFlags || !terrainDepthStencilState) {
+		renderDepth = false;
+		renderTerrainDepth = false;
+		renderAltTerrain = false;
+		if (!terrainRenderPasses.empty() || !renderPasses.empty()) {
+			LogDroppedTerrainBlendingPass("replay", TerrainBlendingReplayPath::kUnknown, nullptr, "render_state");
+		}
+		terrainRenderPasses.clear();
+		renderPasses.clear();
+		RestoreTerrainBlendingDepthSrvs(renderer, depthSRVBackup, prepassSRVBackup);
+		return;
+	}
 
 	auto mainDepthSRV = mainDepthCopy ? mainDepthCopy->srv.get() : terrainDepth.depthSRV;
 	context->PSSetShaderResources(55, 1, &mainDepthSRV);
@@ -519,8 +746,14 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		// Enable rendering for depth below the surface
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
-		for (auto& renderPass : terrainRenderPasses)
+		for (auto& renderPass : terrainRenderPasses) {
+			const char* reason = nullptr;
+			if (!CanReplayRenderPass(renderPass, TerrainBlendingReplayPath::kTerrainBlend, reason)) {
+				LogDroppedTerrainBlendingPass("replay", TerrainBlendingReplayPath::kTerrainBlend, renderPass.a_pass, reason);
+				continue;
+			}
 			::Hooks::DrawRenderPassImmediately(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+		}
 
 		// Reset alpha blending
 		alphaBlendMode = 0;
@@ -530,8 +763,14 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		depthStencilDepthMode = RE::BSGraphics::DepthStencilDepthMode::kTestEqual;
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 
-		for (auto& renderPass : renderPasses)
+		for (auto& renderPass : renderPasses) {
+			const char* reason = nullptr;
+			if (!CanReplayRenderPass(renderPass, TerrainBlendingReplayPath::kNoBlend, reason)) {
+				LogDroppedTerrainBlendingPass("replay", TerrainBlendingReplayPath::kNoBlend, renderPass.a_pass, reason);
+				continue;
+			}
 			::Hooks::DrawRenderPassImmediately(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+		}
 
 		terrainRenderPasses.clear();
 		renderPasses.clear();
@@ -540,7 +779,6 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 			globals::state->EndPerfEvent();
 	}
 
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	mainDepth.depthSRV = depthSRVBackup;
+	RestoreTerrainBlendingDepthSrvs(renderer, depthSRVBackup, prepassSRVBackup);
 }
 #undef I18N_KEY_PREFIX

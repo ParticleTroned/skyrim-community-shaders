@@ -223,19 +223,22 @@ RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
 
 void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
-	if (!PerGeometryCB)
+	if (!PerGeometryCB || !a_pass || !a_pass->geometry)
 		return;
 
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
 	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBalance.IsRuntimeEnabled())) {
+		auto context = globals::d3d::context;
+		if (!context)
+			return;
+
 		PerGeometryData perGeometryData{};
 		perGeometryData.emissiveMult = lightProperty->emissiveMult;
 		PerGeometryCB->Update(perGeometryData);
 
 		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-		auto context = globals::d3d::context;
 		context->PSSetConstantBuffers(8, 1, &buffer);
 	}
 }

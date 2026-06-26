@@ -186,23 +186,66 @@ namespace
 		return result;
 	}
 
-	bool ShouldBlockInputForMenu(RE::InputEvent* const* a_events, bool a_blockAllDevices)
+	enum class MenuInputBlockDecision
+	{
+		kAllow,
+		kBlock,
+		kInvalidHead,
+		kGetDeviceException
+	};
+
+	const RE::InputEvent* TryGetInputEventHead(RE::InputEvent* const* a_events)
+	{
+		if (!a_events) {
+			return nullptr;
+		}
+
+		__try {
+			return *a_events;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return nullptr;
+		}
+	}
+
+	MenuInputBlockDecision GetMenuInputBlockDecision(RE::InputEvent* const* a_events, bool a_blockAllDevices)
 	{
 		if (a_blockAllDevices) {
-			return true;
+			return MenuInputBlockDecision::kBlock;
 		}
 
-		if (!a_events || !*a_events) {
-			return true;
+		if (!a_events) {
+			return MenuInputBlockDecision::kBlock;
 		}
 
-		for (auto event = *a_events; event; event = event->next) {
-			if (event->GetDevice() != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) {
-				return true;
+		RE::InputEvent* event = nullptr;
+		__try {
+			event = *a_events;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return MenuInputBlockDecision::kInvalidHead;
+		}
+
+		if (!event) {
+			return MenuInputBlockDecision::kBlock;
+		}
+
+		while (event) {
+			RE::INPUT_DEVICES::INPUT_DEVICE device{};
+			RE::InputEvent* next = nullptr;
+			__try {
+				device = event->GetDevice();
+				next = event->next;
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				return MenuInputBlockDecision::kGetDeviceException;
 			}
+
+			if (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad) {
+				return MenuInputBlockDecision::kBlock;
+			}
+
+			event = next;
 		}
 
-		return false;
+		return MenuInputBlockDecision::kAllow;
 	}
 
 	void LogInputHookSafeguardOnce(
@@ -631,13 +674,23 @@ struct BSInputDeviceManager_PollInputDevices
 		const bool blockAllDevices = menu->ShouldBlockAllGameInput();
 
 		if (a_events) {
-			menu->ProcessInputEvents(a_events);
+			__try {
+				menu->ProcessInputEvents(a_events);
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				LogInputHookSafeguardOnce(InputHookSafeguardReason::kProcessInputEventsException, a_dispatcher, TryGetInputEventHead(a_events), false);
+			}
 		}
 
 		// Block all devices except gamepad when the normal menu is open, but
 		// inspect the whole event list so a leading gamepad event cannot let
 		// keyboard or mouse input pass through to Skyrim.
-		bool blockedDevice = ShouldBlockInputForMenu(a_events, blockAllDevices);
+		const auto blockDecision = GetMenuInputBlockDecision(a_events, blockAllDevices);
+		if (blockDecision == MenuInputBlockDecision::kInvalidHead) {
+			LogInputHookSafeguardOnce(InputHookSafeguardReason::kInvalidHead, a_dispatcher, nullptr, false);
+		} else if (blockDecision == MenuInputBlockDecision::kGetDeviceException) {
+			LogInputHookSafeguardOnce(InputHookSafeguardReason::kGetDeviceException, a_dispatcher, TryGetInputEventHead(a_events), false);
+		}
+		const bool blockedDevice = blockDecision != MenuInputBlockDecision::kAllow;
 
 		if (blockedDevice && shouldSwallowInput) {  //the menu is open, eat all keypresses
 			// During active flying preview, let input reach the game for movement/camera.
@@ -645,7 +698,7 @@ struct BSInputDeviceManager_PollInputDevices
 				func(a_dispatcher, a_events);
 				return;
 			}
-			LogInputHookSafeguardOnce(InputHookSafeguardReason::kSwallow, a_dispatcher, a_events ? *a_events : nullptr, true);
+			LogInputHookSafeguardOnce(InputHookSafeguardReason::kSwallow, a_dispatcher, TryGetInputEventHead(a_events), true);
 			constexpr RE::InputEvent* const dummy[] = { nullptr };
 			func(a_dispatcher, dummy);
 			return;

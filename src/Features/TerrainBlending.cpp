@@ -8,6 +8,9 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+#include <algorithm>
+#include <cmath>
+
 #define I18N_KEY_PREFIX "feature.terrain_blending."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -15,6 +18,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Enabled,
 	TerrainCullDistance,
 	BlendStrength)
+
+namespace
+{
+	uint32_t GetDepthBlendExtent(float a_sceneExtent, uint32_t a_resourceExtent)
+	{
+		if (!a_resourceExtent)
+			return 0;
+
+		if (!std::isfinite(a_sceneExtent) || a_sceneExtent <= 0.0f)
+			return 0;
+
+		return std::clamp(static_cast<uint32_t>(std::max(1l, std::lround(a_sceneExtent))), 1u, a_resourceExtent);
+	}
+}
 
 void TerrainBlending::DrawSettings()
 {
@@ -55,6 +72,11 @@ void TerrainBlending::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+void TerrainBlending::RestoreDefaultSettings()
+{
+	settings = {};
+}
+
 ID3D11VertexShader* TerrainBlending::GetTerrainVertexShader()
 {
 	if (!terrainVertexShader) {
@@ -86,6 +108,39 @@ void TerrainBlending::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	static ID3D11Device* shaderDevice = nullptr;
+	if (shaderDevice != device) {
+		ClearShaderCache();
+		shaderDevice = device;
+	}
+
+	if (!renderer || !device) {
+		return;
+	}
+
+	if (terrainDepth.texture) {
+		terrainDepth.texture->Release();
+		terrainDepth.texture = nullptr;
+	}
+	if (terrainDepth.depthSRV) {
+		terrainDepth.depthSRV->Release();
+		terrainDepth.depthSRV = nullptr;
+	}
+	if (terrainDepth.views[0]) {
+		terrainDepth.views[0]->Release();
+		terrainDepth.views[0] = nullptr;
+	}
+	delete blendedDepthTexture;
+	blendedDepthTexture = nullptr;
+	delete blendedDepthTexture16;
+	blendedDepthTexture16 = nullptr;
+	delete mainDepthCopy;
+	mainDepthCopy = nullptr;
+	if (terrainDepthStencilState) {
+		terrainDepthStencilState->Release();
+		terrainDepthStencilState = nullptr;
+	}
+	depthBlendCB.reset();
 
 	{
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -134,6 +189,14 @@ void TerrainBlending::SetupResources()
 		blendedDepthTexture16->CreateSRV(srvDesc);
 		blendedDepthTexture16->CreateUAV(uavDesc);
 
+		texDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		srvDesc.Format = texDesc.Format;
+		uavDesc.Format = texDesc.Format;
+
+		mainDepthCopy = new Texture2D(texDesc, "TerrainBlending::MainDepthCopy");
+		mainDepthCopy->CreateSRV(srvDesc);
+		mainDepthCopy->CreateUAV(uavDesc);
+
 		auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		depthSRVBackup = mainDepth.depthSRV;
 
@@ -150,6 +213,8 @@ void TerrainBlending::SetupResources()
 		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, &terrainDepthStencilState));
 		Util::SetResourceName(terrainDepthStencilState, "TerrainBlending::DepthStencilState");
 	}
+
+	depthBlendCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<DepthBlendCB>(), "TerrainBlending::DepthBlendCB");
 }
 
 void TerrainBlending::PostPostLoad()
@@ -218,9 +283,40 @@ void TerrainBlending::BlendPrepassDepths()
 		globals::state->BeginPerfEvent("Terrain Blending - Blend Prepass Depths");
 
 	auto context = globals::d3d::context;
-	context->OMSetRenderTargets(0, nullptr, nullptr);
+	if (!context || !depthBlendCB || !depthSRVBackup || !terrainDepth.texture || !terrainDepth.depthSRV ||
+		!blendedDepthTexture || !blendedDepthTexture->uav ||
+		!blendedDepthTexture16 || !blendedDepthTexture16->uav ||
+		!mainDepthCopy || !mainDepthCopy->uav) {
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
+		return;
+	}
 
-	auto dispatchCount = Util::GetScreenDispatchCount();
+	D3D11_TEXTURE2D_DESC terrainDepthDesc{};
+	terrainDepth.texture->GetDesc(&terrainDepthDesc);
+
+	const auto* viewport = globals::game::graphicsState;
+	const float2 displaySize{
+		static_cast<float>(viewport ? viewport->screenWidth : terrainDepthDesc.Width),
+		static_cast<float>(viewport ? viewport->screenHeight : terrainDepthDesc.Height)
+	};
+	const float2 blendSize = Util::ConvertToDynamic(displaySize);
+	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, blendedDepthTexture16->desc.Width, mainDepthCopy->desc.Width });
+	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, blendedDepthTexture16->desc.Height, mainDepthCopy->desc.Height });
+	const uint32_t blendWidth = GetDepthBlendExtent(blendSize.x, maxBlendWidth);
+	const uint32_t blendHeight = GetDepthBlendExtent(blendSize.y, maxBlendHeight);
+	if (!blendWidth || !blendHeight) {
+		if (globals::state->frameAnnotations)
+			globals::state->EndPerfEvent();
+		return;
+	}
+
+	DepthBlendCB depthBlendData{};
+	depthBlendData.blendWidth = blendWidth;
+	depthBlendData.blendHeight = blendHeight;
+	depthBlendCB->Update(depthBlendData);
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Terrain Blending - Depth Blend CS");
@@ -228,32 +324,33 @@ void TerrainBlending::BlendPrepassDepths()
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[2] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get() };
+		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get(), mainDepthCopy->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		auto buffer = depthBlendCB->CB();
+		context->CSSetConstantBuffers(0, 1, &buffer);
 
 		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
 
 		globals::profiler->BeginPass("TerrainBlending::DepthBlend");
-		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+		context->Dispatch((blendWidth + 7u) >> 3u, (blendHeight + 7u) >> 3u, 1);
 		globals::profiler->EndPass();
 	}
 
 	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11UnorderedAccessView* uavs[2] = { nullptr, nullptr };
+	ID3D11UnorderedAccessView* uavs[3] = { nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+	ID3D11Buffer* buffer = nullptr;
+	context->CSSetConstantBuffers(0, 1, &buffer);
 
 	ID3D11ComputeShader* shader = nullptr;
 	context->CSSetShader(shader, nullptr, 0);
 
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 	stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-
-	auto renderer = globals::game::renderer;
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-
-	context->CopyResource(terrainDepth.texture, mainDepth.texture);
 
 	if (globals::state->frameAnnotations)
 		globals::state->EndPerfEvent();
@@ -290,9 +387,14 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 
 	singleton.eyePosition = Util::GetEyePosition();
 
-	if (shaderCache->IsEnabled() && singleton.settings.Enabled) {
-		mainDepth.depthSRV = singleton.blendedDepthTexture->srv.get();
-		zPrepassCopy.depthSRV = singleton.blendedDepthTexture->srv.get();
+	auto blendedDepthSRV = singleton.GetBlendedDepthSRV();
+	const bool tbActive = shaderCache->IsEnabled() && singleton.settings.Enabled &&
+		blendedDepthSRV && singleton.depthSRVBackup && singleton.prepassSRVBackup &&
+		singleton.terrainDepth.texture && singleton.terrainDepth.views[0];
+
+	if (tbActive) {
+		mainDepth.depthSRV = blendedDepthSRV;
+		zPrepassCopy.depthSRV = blendedDepthSRV;
 
 		singleton.renderDepth = true;
 		singleton.ResetDepth();
@@ -394,7 +496,8 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 
-	context->PSSetShaderResources(55, 1, &terrainDepth.depthSRV);
+	auto mainDepthSRV = mainDepthCopy ? mainDepthCopy->srv.get() : terrainDepth.depthSRV;
+	context->PSSetShaderResources(55, 1, &mainDepthSRV);
 
 	const uint64_t terrainPassCount = static_cast<uint64_t>(terrainRenderPasses.size());
 	const uint64_t noBlendPassCount = static_cast<uint64_t>(renderPasses.size());

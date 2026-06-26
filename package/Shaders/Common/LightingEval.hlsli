@@ -178,6 +178,15 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 
 		float2 specularBRDF = BRDF::EnvBRDF(material.Roughness, NdotV);
 		lobeWeights.specular = material.F0 * specularBRDF.x + specularBRDF.y;
+#		if defined(EYE)
+		float specularBRDFSum = max(specularBRDF.x + specularBRDF.y, EPSILON_DOT_CLAMP);
+		lobeWeights.specular *= 1 + material.F0 * (1 / specularBRDFSum - 1);
+
+		float3 R = reflect(-V, N);
+		float horizon = min(1.0 + dot(R, VN), 1.0);
+		horizon = horizon * horizon;
+		lobeWeights.specular *= horizon;
+#		endif
 	}
 #	endif
 #endif

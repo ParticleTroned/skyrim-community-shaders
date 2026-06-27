@@ -108,18 +108,10 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 # avoids a vulkan_core.h struct-layout split across the DXVK<->FFX interop boundary).
 find_package(Vulkan REQUIRED)
 
-# FidelityFX SDK — official prebuilt signed FFX API Vulkan DLL (amd_fidelityfx_vk.dll).
-# FSR3 upscaling + frame generation run on DXVK's single Vulkan device (no DX12, no interop)
-# via the FFX API (ffxCreateContext/ffxConfigure/ffxDispatch/...), resolved at runtime by
-# LoadLibrary (no import lib, no native FFX libs built). The module adds only the ffx-api
-# headers; the DLL is staged into the CS dxvk subfolder by the FFX install COMPONENT below.
-# See cmake/FidelityFX-SDK.cmake.
-include(FidelityFX-SDK)
-
-# NVIDIA Streamline (SL) — headers only (INTERFACE lib). The sl.interposer + sl.* plugin
-# DLLs are loaded at runtime from the CS subfolder (never the game root) and SL is driven
-# on Vulkan via DXVK's VkDevice (manual hooking). DLSS/Reflex/DLSS-G are gated to NVIDIA
-# hardware and disabled on non-NVIDIA GPUs. See src/Features/Upscaling/Streamline.*.
+# NVIDIA Streamline (SL) — headers only (INTERFACE lib). sl.interposer.dll IS DXVK's
+# vulkan-1.dll (full interposition); sl.* plugin DLLs are loaded at runtime from the CS
+# subfolder. FSR, XeSS, DLSS, Reflex, and DLSS-G all run as SL plugins.
+# See src/Features/Upscaling/Streamline.*.
 add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 
 target_compile_definitions(
@@ -472,17 +464,6 @@ if(EXISTS "${DXVK_BUILD_DIR}/d3d11/d3d11.dll")
     )
 endif()
 
-# FidelityFX FFX API VK DLL — the official prebuilt, signed amd_fidelityfx_vk.dll, staged
-# alongside DXVK's csd3d11.dll / csgi.dll in the CS subfolder (NEVER the game root) so the
-# runtime LoadLibrary in src/Features/Upscaling/FidelityFX.cpp finds it next to the renderer.
-# Only the VK DLL is needed (DXVK = Vulkan); amd_fidelityfx_dx12.dll is intentionally omitted.
-# FFX_API_VK_DLL is defined in cmake/FidelityFX-SDK.cmake.
-install(
-    FILES "${FFX_API_VK_DLL}"
-    DESTINATION SKSE/Plugins/CommunityShaders/dxvk
-    COMPONENT FFX
-)
-
 # NVIDIA Streamline (DLSS/Reflex) plugin DLLs — staged into the CS subfolder (NEVER
 # the game root); loaded explicitly by src/Features/Upscaling/Streamline.cpp. These
 # are NVIDIA redistributables and are NOT bundled in the repo: cmake/Streamline (added via
@@ -496,9 +477,21 @@ install(
 set(STREAMLINE_DLL_DIR "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/bin/x64" CACHE PATH "Directory holding the Streamline plugin DLLs to stage")
 if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
     file(GLOB _SL_DLLS "${STREAMLINE_DLL_DIR}/sl.*.dll")
+    # NGX inference models (nvngx_dlss.dll / nvngx_dlssg.dll / ...) ship next to the sl.*.dll
+    # plugins in the SDK bin folder. Streamline loads them from the plugin directory at runtime;
+    # without them slIsFeatureSupported reports DLSS / DLSS-G unsupported even on capable NVIDIA
+    # hardware (only Reflex, which needs no model, stays available).
+    file(GLOB _SL_NGX_DLLS "${STREAMLINE_DLL_DIR}/nvngx_*.dll")
+    # Custom plugins built from the Streamline fork (sl.fsr, sl.xess) live in the fork's
+    # _artifacts tree, not in the official SDK zip. Pick them up if they've been built.
+    file(GLOB _SL_FORK_DLLS "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/_artifacts/sl.*/Develop_x64/sl.*.dll")
+    if(_SL_FORK_DLLS)
+        list(APPEND _SL_DLLS ${_SL_FORK_DLLS})
+        message(STATUS "Staging Streamline fork plugins: ${_SL_FORK_DLLS}")
+    endif()
     message(STATUS "Staging Streamline plugin DLLs from ${STREAMLINE_DLL_DIR}")
     install(
-        FILES ${_SL_DLLS}
+        FILES ${_SL_DLLS} ${_SL_NGX_DLLS}
         DESTINATION SKSE/Plugins/CommunityShaders/streamline
         COMPONENT Streamline
     )
@@ -612,21 +605,11 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
 
     # Stage the runtime renderer DLLs that live OUTSIDE package/ and features/ (the only
     # trees globbed above). The glob-based PREPARE_AIO path never invokes the install()
-    # COMPONENT rules (FFX / DXVK / Streamline), so without this the AIO archive and the
-    # auto-deploy would ship a mod with no FFX upscaler — and no DXVK renderer at all.
+    # COMPONENT rules (DXVK / Streamline), so without this the AIO archive and the
+    # auto-deploy would ship a mod with no DXVK renderer at all.
     # We mirror those install() rules straight into ${AIO_DIR} so every downstream consumer
     # (AIO_ZIP_PACKAGE, Package-AIO-Manual, AUTO_PLUGIN_DEPLOYMENT) gets a DXVK-runnable mod.
     set(_aio_dxvk_dir "${AIO_DIR}/SKSE/Plugins/CommunityShaders/dxvk")
-
-    # FidelityFX: the official prebuilt signed amd_fidelityfx_vk.dll (fetched at configure time
-    # and guaranteed present by the FATAL_ERROR guard in cmake/FidelityFX-SDK.cmake). Plain copy.
-    list(
-        APPEND _prepare_aio_cmds
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${_aio_dxvk_dir}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFX_API_VK_DLL}" "${_aio_dxvk_dir}/"
-    )
-    # Track the DLL as an input so a changed binary re-triggers PREPARE_AIO.
-    list(APPEND _AIO_PACKAGE_FILES "${FFX_API_VK_DLL}")
 
     # DXVK: rename + import-repoint via the same staging script the install(CODE) rule uses
     # (csd3d11.dll / csgi.dll). Only when a local DXVK build exists, mirroring the guard above.
@@ -644,6 +627,12 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
         set(_aio_sl_dir "${AIO_DIR}/SKSE/Plugins/CommunityShaders/streamline")
         file(GLOB _AIO_SL_DLLS "${STREAMLINE_DLL_DIR}/sl.*.dll")
+        # NGX models alongside the plugins — see the install() rule above; DLSS/DLSS-G need these.
+        file(GLOB _AIO_SL_NGX "${STREAMLINE_DLL_DIR}/nvngx_*.dll")
+        list(APPEND _AIO_SL_DLLS ${_AIO_SL_NGX})
+        # Custom fork plugins (sl.fsr, sl.xess) from the fork's build artifacts.
+        file(GLOB _AIO_SL_FORK "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/_artifacts/sl.*/Develop_x64/sl.*.dll")
+        list(APPEND _AIO_SL_DLLS ${_AIO_SL_FORK})
         list(APPEND _prepare_aio_cmds COMMAND ${CMAKE_COMMAND} -E make_directory "${_aio_sl_dir}")
         foreach(_sl IN LISTS _AIO_SL_DLLS)
             list(APPEND _prepare_aio_cmds COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_sl}" "${_aio_sl_dir}/")

@@ -801,10 +801,6 @@ void HDRDisplay::RestoreFramebuffer()
 	framebufferRedirected = false;
 }
 
-bool HDRDisplay::IsFGCompositingThisFrame() const
-{
-	return false;
-}
 
 void HDRDisplay::SetUIBuffer()
 {
@@ -1108,15 +1104,6 @@ void HDRDisplay::ApplyHDR()
 		}
 
 		DispatchHDROutput(sceneSRV, uiSRV, outputTexture->uav.get());
-
-		// FSR3 frame generation HUDLess buffer: re-run the composite with NO UI into the frame-gen-
-		// owned HUDLessColor target (FidelityFX owns the texture; we only produce its content here).
-		// GetHudlessUAV() returns null unless the FG context is live, so this can never dispatch into
-		// a freed/absent UAV; the IsFrameGenerationActive() gate skips the extra pass when FG is off.
-		if (globals::features::upscaling.loaded && globals::features::upscaling.IsFrameGenerationActive()) {
-			if (auto* hudlessUAV = globals::features::upscaling.fidelityFX.GetHudlessUAV())
-				DispatchHDROutput(sceneSRV, nullptr, hudlessUAV);
-		}
 	}
 
 	{
@@ -1481,8 +1468,6 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 {
 	bool isMainOrLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
 	auto* ui = globals::game::ui;
-	bool skipUIComposite = IsFGCompositingThisFrame();
-
 	// Linear Lighting keeps the pipeline linear throughout.
 	// Without it, ISHDR gamma-encodes its output even in HDR mode.
 	bool isSceneLinear = globals::features::linearLighting.settings.enableLinearLighting;
@@ -1494,7 +1479,7 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	data.enableHDR = settings.enableHDR ? 1.f : 0.f;
 	data.paperWhite = static_cast<float>(settings.hdrPaperWhite);
 	data.peakNits = effectivePeakNits;
-	data.skipUIComposite = skipUIComposite ? 1.f : 0.f;
+	data.skipUIComposite = 0.f;
 	data.uiBrightness = settings.hdrUIBrightness;
 	data.isSceneLinear = isSceneLinear ? 1.f : 0.f;
 	data.pad0 = isMainOrLoadingMenu ? 1.f : 0.f;

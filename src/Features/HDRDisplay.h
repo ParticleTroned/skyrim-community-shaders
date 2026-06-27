@@ -253,6 +253,4 @@ private:
 	// Bind scene (t0), UI (t1, may be null), UAV (u0), CB (b0); dispatch the output CS; unbind.
 	void DispatchHDROutput(ID3D11ShaderResourceView* sceneSRV, ID3D11ShaderResourceView* uiSRV, ID3D11UnorderedAccessView* uav);
 
-	// True when FFX frame generation is actively compositing UI this frame.
-	bool IsFGCompositingThisFrame() const;
 };

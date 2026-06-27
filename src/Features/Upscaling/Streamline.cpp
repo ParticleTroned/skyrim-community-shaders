@@ -5,6 +5,7 @@
 #include "../../DxvkLoader.h"
 #include "../../Globals.h"
 #include "../../State.h"
+#include "../../Utils/Game.h"
 
 #include <filesystem>
 
@@ -18,7 +19,11 @@
 #include <sl_core_api.h>
 #include <sl_device_wrappers.h>
 #include <sl_dlss.h>
+#include <sl_dlss_g.h>
+#include <sl_fsr.h>
+#include <sl_xess.h>
 #include <sl_helpers_vk.h>
+#include <sl_matrix_helpers.h>
 #include <sl_pcl.h>
 #include <sl_reflex.h>
 #include <sl_version.h>
@@ -35,7 +40,7 @@ namespace
 		PFun_slInit* slInit = nullptr;
 		PFun_slShutdown* slShutdown = nullptr;
 		PFun_slIsFeatureSupported* slIsFeatureSupported = nullptr;
-		PFun_slSetVulkanInfo* slSetVulkanInfo = nullptr;
+		PFun_slGetFeatureRequirements* slGetFeatureRequirements = nullptr;
 		PFun_slGetNewFrameToken* slGetNewFrameToken = nullptr;
 		PFun_slSetTagForFrame* slSetTagForFrame = nullptr;
 		PFun_slSetConstants* slSetConstants = nullptr;
@@ -49,8 +54,23 @@ namespace
 		PFun_slDLSSSetOptions* slDLSSSetOptions = nullptr;
 		PFun_slReflexSetOptions* slReflexSetOptions = nullptr;
 		PFun_slReflexSleep* slReflexSleep = nullptr;
+		PFun_slPCLSetMarker* slPCLSetMarker = nullptr;
+		PFun_slDLSSGSetOptions* slDLSSGSetOptions = nullptr;
+		PFun_slDLSSGGetState* slDLSSGGetState = nullptr;
+		PFun_slFSRSetOptions* slFSRSetOptions = nullptr;
+		PFun_slFSRFrameGenerationSetOptions* slFSRFrameGenerationSetOptions = nullptr;
+		PFun_slFSRGetFrameGenState* slFSRGetFrameGenState = nullptr;
+		PFun_slXeSSSetOptions* slXeSSSetOptions = nullptr;
 
 		sl::ViewportHandle viewport{ 0 };
+
+		// ONE frame token per game frame, shared by every per-frame SL call (PCL markers, common
+		// constants, DLSS-G resource tags, Reflex sleep) and matched to the present. DLSS-G requires
+		// the constants/tags/markers and the present to all carry the SAME frame index, otherwise SL
+		// logs "common constants cannot be found for frame N" and silently drops the generated frame.
+		// Established at the SimulationStart marker (frame start) and reused for the rest of the frame.
+		sl::FrameToken* frameToken = nullptr;
+		uint32_t frameIndex = 0;
 
 		// Latches off after a dispatch fault so a single SEH fault (e.g. a driver
 		// mismatch on an untested NVIDIA path) can't crash the game every frame.
@@ -59,6 +79,31 @@ namespace
 		// Cached Reflex options to avoid redundant slReflexSetOptions calls.
 		bool reflexCacheValid = false;
 		sl::ReflexMode reflexCachedMode = sl::ReflexMode::eOff;
+
+		// Cached DLSS-G interpolation mode. SetDLSSGMode is called every frame with the gameplay-state
+		// gate (on in-world, off while loading/paused/in-menu per the DLSS-G guide §13), so cache the
+		// last mode and only issue slDLSSGSetOptions on a real change.
+		bool dlssgModeCached = false;
+		bool dlssgModeOn = false;
+
+		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset at the frame
+		// start (SimulationStart); set by TagDLSSGResources. If still false at present, the present path
+		// sets a null/passthrough tag — SL's present hook requires a tag every present or it stalls.
+		bool dlssgTaggedThisFrame = false;
+
+		// Cached VkImageViews for the DLSS-G tagged resources (0=depth, 1=motion, 2=hudless). SL's
+		// Vulkan backend requires a view per tagged resource. These must PERSIST after the non-blocking
+		// submit because DLSS-G consumes them at present time, so they are recreated only when the
+		// underlying VkImage changes and freed at Shutdown.
+		struct {
+			VkImage image = VK_NULL_HANDLE;
+			VkImageView view = VK_NULL_HANDLE;
+		} dlssgViewCache[3];
+
+		struct {
+			VkImage image = VK_NULL_HANDLE;
+			VkImageView view = VK_NULL_HANDLE;
+		} fsrFgHudlessCache;
 	} g_sl;
 
 	// Routes Streamline's own logging into the CS logger.
@@ -103,6 +148,31 @@ Streamline* Streamline::GetSingleton()
 	return &singleton;
 }
 
+void Streamline::PreloadInterposer()
+{
+	// Map sl.interposer.dll EARLY — before DXVK creates its VkInstance — so DXVK's
+	// loadVulkanLibrary("sl.interposer.dll") (which we added to its loader) aliases this already-mapped
+	// module and routes DXVK's ENTIRE Vulkan surface through Streamline (full interposition). A bare
+	// runtime LoadLibraryA from inside csd3d11.dll does NOT search the CS dxvk/ subfolder, so without
+	// this preload DXVK falls through to the real vulkan-1.dll and SL never sees the device/present.
+	// LOAD_WITH_ALTERED_SEARCH_PATH lets the interposer resolve its sibling sl.*.dll from the CS folder.
+	if (g_sl.interposer)
+		return;
+	const auto slDir = GetStreamlineDir();
+	if (slDir.empty())
+		return;
+	const auto interposerPath = (slDir / L"sl.interposer.dll").wstring();
+	g_sl.interposer = LoadLibraryExW(interposerPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+	logger::info("[Streamline] interposer preload for DXVK Vulkan interposition: {}",
+		g_sl.interposer ? "mapped" : "FAILED (DXVK uses real driver)");
+	if (!g_sl.interposer)
+		return;
+	// slInit MUST run before DXVK creates its VkInstance (the interposer's vkCreateInstance/Device proxies
+	// add DLSS-G's device requirements + capture the handles). The later SetupResources Initialize() call
+	// no-ops (triedInit guard).
+	Initialize();
+}
+
 bool Streamline::Initialize()
 {
 	if (triedInit)
@@ -123,7 +193,9 @@ bool Streamline::Initialize()
 	const auto interposerPath = (slDir / L"sl.interposer.dll").wstring();
 	// LOAD_WITH_ALTERED_SEARCH_PATH so the interposer resolves its sibling sl.*.dll
 	// plugins from the same CS folder rather than the game root / System32.
-	g_sl.interposer = LoadLibraryExW(interposerPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+	// May already be mapped by PreloadInterposer() (so DXVK could alias it as its vulkan-1.dll).
+	if (!g_sl.interposer)
+		g_sl.interposer = LoadLibraryExW(interposerPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!g_sl.interposer) {
 		// Expected on a normal install: the SL plugin DLLs are not bundled (NVIDIA
 		// redistributables). Degrade cleanly to FSR.
@@ -135,7 +207,7 @@ bool Streamline::Initialize()
 		Resolve(g_sl.slInit, "slInit") &&
 		Resolve(g_sl.slShutdown, "slShutdown") &&
 		Resolve(g_sl.slIsFeatureSupported, "slIsFeatureSupported") &&
-		Resolve(g_sl.slSetVulkanInfo, "slSetVulkanInfo") &&
+		Resolve(g_sl.slGetFeatureRequirements, "slGetFeatureRequirements") &&
 		Resolve(g_sl.slGetNewFrameToken, "slGetNewFrameToken") &&
 		Resolve(g_sl.slSetTagForFrame, "slSetTagForFrame") &&
 		Resolve(g_sl.slSetConstants, "slSetConstants") &&
@@ -151,14 +223,15 @@ bool Streamline::Initialize()
 
 	const auto slDirWide = slDir.wstring();
 	const wchar_t* pluginPaths[] = { slDirWide.c_str() };
-	sl::Feature featuresToLoad[] = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL };
+	sl::Feature featuresToLoad[] = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL, sl::kFeatureDLSS_G,
+		sl::kFeatureFSR, sl::kFeatureXeSS };
 
 	sl::Preferences pref{};
 	pref.renderAPI = sl::RenderAPI::eVulkan;
-	// Manual hooking: DXVK owns the Vk device/instance; we hand them to SL via
-	// slSetVulkanInfo rather than letting SL proxy vkCreateDevice. Frame-based
-	// tagging is required by slEvaluateFeature / slSetTagForFrame.
-	pref.flags |= sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+	// Frame-based tagging is required by slEvaluateFeature / slSetTagForFrame.
+	pref.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+	// Full interposition: sl.interposer.dll IS DXVK's vulkan-1.dll, so SL's own
+	// vkCreateInstance/Device/present proxies run. eUseManualHooking must be OFF.
 	pref.featuresToLoad = featuresToLoad;
 	pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(featuresToLoad));
 	pref.pathsToPlugins = pluginPaths;
@@ -167,9 +240,9 @@ bool Streamline::Initialize()
 	pref.engineVersion = "1.0";
 	// projectId is expected to be a GUID string for the eCustom engine path.
 	pref.projectId = "a0f57b54-1daf-4934-90ae-c4035c19df04";
-	pref.logLevel = sl::LogLevel::eOff;
+	pref.logLevel = sl::LogLevel::eVerbose;  // TEMP: diagnose sl.fsr/sl.xess plugin-load failure
 	pref.logMessageCallback = &LogCallback;
-	pref.pathToLogsAndData = nullptr;  // no file logging
+	pref.pathToLogsAndData = L"C:\\Temp\\sllog";  // TEMP: full SL file log (sl.log) for diagnosis
 
 	const sl::Result res = g_sl.slInit(pref, sl::kSDKVersion);
 	if (res != sl::Result::eOk) {
@@ -196,24 +269,8 @@ void Streamline::SetVulkanDevice()
 		return;
 	}
 
-	// Hand DXVK's own Vulkan device/instance/queue to Streamline. DXVK exposes a
-	// single graphics+compute queue; SL is told that family for both. The
-	// optical-flow queue is left null — DLSS-G is not wired on DXVK (the queue +
-	// VK_NV_optical_flow extension are vkCreateDevice-time properties DXVK owns).
-	sl::VulkanInfo info{};
-	info.device = dxvk->GetDevice();
-	info.instance = dxvk->GetInstance();
-	info.physicalDevice = dxvk->GetPhysicalDevice();
-	info.graphicsQueueFamily = dxvk->GetQueueFamilyIndex();
-	info.graphicsQueueIndex = 0;
-	info.computeQueueFamily = dxvk->GetQueueFamilyIndex();
-	info.computeQueueIndex = 0;
-
-	const sl::Result res = g_sl.slSetVulkanInfo(info);
-	if (res != sl::Result::eOk) {
-		logger::warn("[Streamline] slSetVulkanInfo failed (result {})", static_cast<int>(res));
-		return;
-	}
+	// SL already owns instance/device/queues (it created them via its vkCreateInstance/Device proxies
+	// as DXVK's loader under full interposition), so no slSetVulkanInfo handoff is needed.
 	vulkanDeviceSet = true;
 
 	// Per-adapter feature probe. AdapterInfo with vkPhysicalDevice set keys SL off
@@ -231,10 +288,9 @@ void Streamline::SetVulkanDevice()
 
 	featureDLSS = supported(sl::kFeatureDLSS);
 	featureReflex = supported(sl::kFeatureReflex);
-	// DLSS-G is expected to be unsupported here: it needs an optical-flow queue
-	// created at vkCreateDevice time, which DXVK does not provide. Probed for
-	// completeness/logging only; it is never wired into the present path.
 	featureDLSSG = supported(sl::kFeatureDLSS_G);
+	featureXeSS = supported(sl::kFeatureXeSS);  // Community Shaders sl.xess plugin (any GPU)
+	featureFSR = supported(sl::kFeatureFSR);    // Community Shaders sl.fsr plugin (any GPU)
 
 	// Bind the feature-specific functions (valid only after the device is set).
 	if (featureDLSS) {
@@ -247,13 +303,68 @@ void Streamline::SetVulkanDevice()
 		g_sl.slGetFeatureFunction(sl::kFeatureReflex, "slReflexSleep", reinterpret_cast<void*&>(g_sl.slReflexSleep));
 		featureReflex = g_sl.slReflexSetOptions != nullptr && g_sl.slReflexSleep != nullptr;
 	}
+	// PCL latency markers (separate feature, loaded by default in slInit). Used to bracket the
+	// frame pipeline so Reflex can place its sleep optimally and report PCL stats. GPU-agnostic.
+	g_sl.slGetFeatureFunction(sl::kFeaturePCL, "slPCLSetMarker", reinterpret_cast<void*&>(g_sl.slPCLSetMarker));
+	logger::info("[Streamline] PCL latency markers {}", g_sl.slPCLSetMarker ? "available" : "unavailable");
+	if (featureDLSSG) {
+		g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSGSetOptions));
+		g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", reinterpret_cast<void*&>(g_sl.slDLSSGGetState));
+		featureDLSSG = g_sl.slDLSSGSetOptions != nullptr && g_sl.slDLSSGGetState != nullptr;
+	}
+	if (featureFSR) {
+		g_sl.slGetFeatureFunction(sl::kFeatureFSR, "slFSRSetOptions", reinterpret_cast<void*&>(g_sl.slFSRSetOptions));
+		g_sl.slGetFeatureFunction(sl::kFeatureFSR, "slFSRFrameGenerationSetOptions", reinterpret_cast<void*&>(g_sl.slFSRFrameGenerationSetOptions));
+		g_sl.slGetFeatureFunction(sl::kFeatureFSR, "slFSRGetFrameGenState", reinterpret_cast<void*&>(g_sl.slFSRGetFrameGenState));
+		featureFSR = g_sl.slFSRSetOptions != nullptr;
+	}
+	if (featureXeSS) {
+		g_sl.slGetFeatureFunction(sl::kFeatureXeSS, "slXeSSSetOptions", reinterpret_cast<void*&>(g_sl.slXeSSSetOptions));
+		featureXeSS = g_sl.slXeSSSetOptions != nullptr;
+	}
 
-	logger::info("[Streamline] feature support: DLSS={} Reflex={} DLSS-G={} (DLSS-G unwired on DXVK)",
-		featureDLSS, featureReflex, featureDLSSG);
+	logger::info("[Streamline] feature support: DLSS={} Reflex={} DLSS-G={} FSR={} XeSS={} (FSR-FG fns {})",
+		featureDLSS, featureReflex, featureDLSSG, featureFSR, featureXeSS,
+		g_sl.slFSRFrameGenerationSetOptions ? "ok" : "missing");
+
+	// Identify the GPU generation from the Vulkan physical device for DLSS render-preset selection.
+	// (vkGetPhysicalDeviceProperties carries the real PCI vendor/device IDs even under DXVK, unlike
+	// the DXGI adapter desc which the create hook may not capture.)
+	if (auto getProps = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+			dxvk->GetInstanceProcAddr()(dxvk->GetInstance(), "vkGetPhysicalDeviceProperties"))) {
+		VkPhysicalDeviceProperties props{};
+		getProps(dxvk->GetPhysicalDevice(), &props);
+		isNvidiaGPU = props.vendorID == 0x10DE;
+		isRTXBelow40Series = isNvidiaGPU &&
+		                     ((props.deviceID >= 0x2200 && props.deviceID <= 0x2600) ||   // RTX 30 (Ampere)
+								(props.deviceID >= 0x1E00 && props.deviceID <= 0x1FFF));   // RTX 20 (Turing w/ RT)
+		logger::info("[Streamline] GPU vendor=0x{:04X} device=0x{:04X} -> DLSS preset group: {}",
+			props.vendorID, props.deviceID,
+			isNvidiaGPU ? (isRTXBelow40Series ? "RTX 20/30 (J)" : "RTX 40+ (M)") : "non-NVIDIA (default)");
+	}
+
 }
 
 void Streamline::Shutdown()
 {
+	// Free the cached DLSS-G resource views before tearing down the device.
+	if (auto* dxvk = DxvkInterop::GetSingleton(); dxvk && dxvk->IsAvailable()) {
+		VkDevice vkDevice = dxvk->GetDevice();
+		if (auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
+				dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"))) {
+			for (auto& c : g_sl.dlssgViewCache) {
+				if (c.view != VK_NULL_HANDLE)
+					vkDestroyImageView(vkDevice, c.view, nullptr);
+				c.view = VK_NULL_HANDLE;
+				c.image = VK_NULL_HANDLE;
+			}
+			if (g_sl.fsrFgHudlessCache.view != VK_NULL_HANDLE)
+				vkDestroyImageView(vkDevice, g_sl.fsrFgHudlessCache.view, nullptr);
+			g_sl.fsrFgHudlessCache.view = VK_NULL_HANDLE;
+			g_sl.fsrFgHudlessCache.image = VK_NULL_HANDLE;
+		}
+	}
+
 	if (g_sl.interposer) {
 		if (initialized && g_sl.slShutdown)
 			g_sl.slShutdown();
@@ -263,6 +374,25 @@ void Streamline::Shutdown()
 	initialized = false;
 	vulkanDeviceSet = false;
 	featureDLSS = featureReflex = featureDLSSG = false;
+}
+
+// Returns the shared per-frame SL frame token. Pass a_beginFrame=true at the FIRST SL touch of the
+// frame (the SimulationStart marker) to advance the frame index and mint a fresh token; every other
+// per-frame SL call passes false to reuse it, so constants/tags/markers/present all carry one frame
+// index (the DLSS-G "constants must match the presented frame" contract). Falls back to minting on
+// the current index if none has been established yet.
+static sl::FrameToken* SharedFrameToken(bool a_beginFrame)
+{
+	if (a_beginFrame || g_sl.frameToken == nullptr) {
+		if (a_beginFrame) {
+			++g_sl.frameIndex;
+			g_sl.dlssgTaggedThisFrame = false;  // new frame: no valid DLSS-G tag set yet
+		}
+		sl::FrameToken* token = nullptr;
+		if (g_sl.slGetNewFrameToken(token, &g_sl.frameIndex) == sl::Result::eOk && token)
+			g_sl.frameToken = token;
+	}
+	return g_sl.frameToken;
 }
 
 void Streamline::UpdateReflex(bool a_enable, bool a_boost)
@@ -285,8 +415,10 @@ void Streamline::UpdateReflex(bool a_enable, bool a_boost)
 			}
 		}
 		if (mode != sl::ReflexMode::eOff) {
-			sl::FrameToken* token = nullptr;
-			if (g_sl.slGetNewFrameToken(token, nullptr) == sl::Result::eOk && token)
+			// Reflex sleep runs just before the SimulationStart marker establishes this frame's token,
+			// so it reuses the current (prior frame's) shared token — acceptable for pacing and keeps a
+			// single frame-begin point (SimulationStart) for the DLSS-G constants/present contract.
+			if (sl::FrameToken* token = SharedFrameToken(false))
 				g_sl.slReflexSleep(*token);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -295,11 +427,27 @@ void Streamline::UpdateReflex(bool a_enable, bool a_boost)
 	}
 }
 
+void Streamline::SetPCLMarker(PclMarker a_marker)
+{
+	if (!initialized || !g_sl.slPCLSetMarker || g_sl.dispatchFaulted)
+		return;
+	__try {
+		// SimulationStart is the first SL marker of the frame — establish the shared frame token here.
+		sl::FrameToken* token = SharedFrameToken(a_marker == PclMarker::SimulationStart);
+		if (token)
+			g_sl.slPCLSetMarker(static_cast<sl::PCLMarker>(a_marker), *token);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] PCL marker faulted — disabling for this session");
+	}
+}
+
 void Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
 	ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	uint32_t a_renderWidth, uint32_t a_renderHeight,
 	uint32_t a_outputWidth, uint32_t a_outputHeight,
-	uint32_t a_qualityMode, float a_sharpness)
+	uint32_t a_qualityMode, float a_sharpness,
+	float a_jitterX, float a_jitterY)
 {
 	// Best-effort DLSS super-resolution dispatch on DXVK's Vulkan device.
 	//
@@ -318,23 +466,37 @@ void Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_color
 	if (!dxvk || !dxvk->IsAvailable() || !dxvk->CommandResourcesReady())
 		return;
 
+	// Flush DXVK's pending D3D11 rendering so the interop VkImages (color/depth/motion) are in a
+	// submitted, consistent state before SL records its compute work against them. The XeSS VK path
+	// does the same; without it slEvaluateFeature throws internally (eErrorExceptionHandler) using
+	// images that still have in-flight writes. SL handles the layout barriers itself from the
+	// per-resource state we tag below, so unlike XeSS no manual TransitionImageLayout is needed.
+	dxvk->FlushRenderingCommands();
+
 	(void)a_sharpness;  // sharpness is deprecated in DLSSOptions; RCAS handles sharpening.
 
 	__try {
-		// Map quality preset -> DLSS mode.
+		// Map quality preset -> DLSS mode. The qualityMode convention is shared with the
+		// render-scale table in Upscaling::ConfigureUpscaling (getUpscaleRatio): 0=Native(1.0x),
+		// 1=Quality(0.667x), 2=Balanced(0.58x), 3=Performance(0.5x), 4=Ultra Performance(0.33x).
+		// The DLSS mode must match that render ratio, otherwise slEvaluateFeature receives a
+		// render resolution outside the [min,max] range of the selected mode.
 		sl::DLSSMode dlssMode = sl::DLSSMode::eMaxQuality;
 		switch (a_qualityMode) {
 		case 0:
-			dlssMode = sl::DLSSMode::eMaxPerformance;
+			dlssMode = sl::DLSSMode::eDLAA;  // Native AA, no upscale (render ratio 1.0)
 			break;
 		case 1:
-			dlssMode = sl::DLSSMode::eBalanced;
+			dlssMode = sl::DLSSMode::eMaxQuality;  // DLSS Quality (0.667x)
 			break;
 		case 2:
-			dlssMode = sl::DLSSMode::eMaxQuality;
+			dlssMode = sl::DLSSMode::eBalanced;  // DLSS Balanced (0.58x)
 			break;
 		case 3:
-			dlssMode = sl::DLSSMode::eUltraPerformance;
+			dlssMode = sl::DLSSMode::eMaxPerformance;  // DLSS Performance (0.5x)
+			break;
+		case 4:
+			dlssMode = sl::DLSSMode::eUltraPerformance;  // DLSS Ultra Performance (0.33x)
 			break;
 		default:
 			dlssMode = sl::DLSSMode::eMaxQuality;
@@ -346,23 +508,119 @@ void Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_color
 		options.outputWidth = a_outputWidth;
 		options.outputHeight = a_outputHeight;
 		options.colorBuffersHDR = sl::Boolean::eFalse;  // CS upscales the SDR scene; HDR composite happens later.
+		options.useAutoExposure = sl::Boolean::eTrue;   // matches the proven dev-branch DLSS integration.
+
+		// Per-GPU DLSS render-preset selection (ported from the proven dev-branch integration). Without
+		// setting these explicitly SL applies its own per-mode default (preset K on current drivers)
+		// regardless of GPU. RTX 40+ (Ada, e.g. 4080) uses preset M for the upscaling modes; RTX 20/30
+		// (Turing/Ampere) use preset J. The generation is resolved once at device-set time from the
+		// Vulkan physical device (isRTXBelow40Series / isNvidiaGPU).
+		if (isRTXBelow40Series) {
+			options.dlaaPreset = sl::DLSSPreset::ePresetJ;
+			options.ultraQualityPreset = sl::DLSSPreset::ePresetJ;
+			options.qualityPreset = sl::DLSSPreset::ePresetJ;
+			options.balancedPreset = sl::DLSSPreset::ePresetJ;
+			options.performancePreset = sl::DLSSPreset::ePresetJ;
+			options.ultraPerformancePreset = sl::DLSSPreset::ePresetM;
+		} else if (isNvidiaGPU) {
+			options.dlaaPreset = sl::DLSSPreset::ePresetJ;
+			options.ultraQualityPreset = sl::DLSSPreset::ePresetJ;
+			options.qualityPreset = sl::DLSSPreset::ePresetM;
+			options.balancedPreset = sl::DLSSPreset::ePresetM;
+			options.performancePreset = sl::DLSSPreset::ePresetM;
+			options.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
+		}
+
+		static bool s_loggedPreset = false;
+		if (!s_loggedPreset) {
+			s_loggedPreset = true;
+			logger::info("[Streamline] DLSS presets set (mode {}): quality={} (RTX40+={} below40={})",
+				static_cast<int>(dlssMode), static_cast<int>(options.qualityPreset),
+				isNvidiaGPU && !isRTXBelow40Series, isRTXBelow40Series);
+		}
+
 		if (g_sl.slDLSSSetOptions(g_sl.viewport, options) != sl::Result::eOk)
 			return;
 
-		sl::FrameToken* token = nullptr;
-		if (g_sl.slGetNewFrameToken(token, nullptr) != sl::Result::eOk || !token)
+		// Use the shared per-frame token so the DLSS-SR constants set here ALSO satisfy DLSS-G (which
+		// reads common constants for the same frame at present time) — they are the same camera matrices.
+		sl::FrameToken* token = SharedFrameToken(false);
+		if (!token)
 			return;
+
+		// slEvaluateFeature(kFeatureDLSS) needs per-frame constants for THIS frame token (else
+		// eErrorMissingConstants). This mirrors the proven dev-branch DLSS integration exactly:
+		// real camera matrices from the frame-buffer cache fed through recalculateCameraMatrices,
+		// NEGATED jitter (DLSS's sign convention, same as the FFX path), mvecScale {1,1} (Skyrim's
+		// MVs are already in SL's expected space), and depthInverted=false.
+		{
+			sl::Constants consts{};
+			consts.cameraAspectRatio = static_cast<float>(a_outputWidth) / static_cast<float>(a_outputHeight);
+			consts.cameraFOV = Util::GetVerticalFOVRad();
+			consts.cameraNear = *globals::game::cameraNear;
+			consts.cameraFar = *globals::game::cameraFar;
+
+			auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+			auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered().Transpose();
+
+			consts.cameraMotionIncluded = sl::Boolean::eTrue;
+			consts.cameraPinholeOffset = { 0.f, 0.f };
+			consts.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
+			consts.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
+			consts.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
+			consts.cameraPos = *reinterpret_cast<const sl::float3*>(&globals::game::frameBufferCached.GetCameraPosAdjust());
+			consts.cameraViewToClip = *reinterpret_cast<const sl::float4x4*>(&cameraViewToClip);
+			consts.depthInverted = sl::Boolean::eFalse;
+
+			sl::recalculateCameraMatrices(consts);
+
+			consts.jitterOffset = { -a_jitterX, -a_jitterY };
+			consts.reset = sl::Boolean::eFalse;
+			consts.mvecScale = { 1.0f, 1.0f };
+			consts.motionVectors3D = sl::Boolean::eFalse;
+			consts.motionVectorsInvalidValue = FLT_MIN;
+			consts.orthographicProjection = sl::Boolean::eFalse;
+			consts.motionVectorsDilated = sl::Boolean::eFalse;
+			consts.motionVectorsJittered = sl::Boolean::eFalse;
+			g_sl.slSetConstants(consts, *token, g_sl.viewport);
+		}
 
 		// Wrap each interop image as an SL Vulkan resource. The backing VkImages
 		// belong to DXVK; SL records its compute work into the command buffer we
-		// provide and we submit it under DXVK's queue lock (mirroring FidelityFX).
+		// provide and we submit it under DXVK's queue lock.
+		// SL's Vulkan backend documents the sl::Resource `view` (VkImageView) as MANDATORY for VK
+		// (sl_core_types.h) — passing null faults slEvaluateFeature internally (eErrorExceptionHandler).
+		// Create a transient view per tagged resource (depth gets VK_IMAGE_ASPECT_DEPTH_BIT), exactly
+		// like the working XeSS VK path, and destroy them after submit.
+		VkDevice vkDevice = dxvk->GetDevice();
+		auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
+			dxvk->GetDeviceProcAddr()(vkDevice, "vkCreateImageView"));
+		VkImageView createdViews[4] = {};
+		int createdViewCount = 0;
+
 		const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out, uint32_t a_w, uint32_t a_h) {
 			VkImage image = VK_NULL_HANDLE;
 			VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 			VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
 			if (!dxvk->GetVkImage(a_res, &image, &layout, &info) || image == VK_NULL_HANDLE)
 				return false;
-			a_out = sl::Resource{ sl::ResourceType::eTex2d, image, nullptr, nullptr, static_cast<uint32_t>(layout) };
+			VkImageView view = VK_NULL_HANDLE;
+			if (vkCreateImageView) {
+				VkImageViewCreateInfo ci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+				ci.image = image;
+				ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				ci.format = info.format;
+				ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				if (info.format == VK_FORMAT_D32_SFLOAT || info.format == VK_FORMAT_D24_UNORM_S8_UINT ||
+					info.format == VK_FORMAT_D16_UNORM || info.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+					ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+				ci.subresourceRange.levelCount = 1;
+				ci.subresourceRange.layerCount = 1;
+				vkCreateImageView(vkDevice, &ci, nullptr, &view);
+				if (view != VK_NULL_HANDLE && createdViewCount < 4)
+					createdViews[createdViewCount++] = view;
+			}
+			a_out = sl::Resource{ sl::ResourceType::eTex2d, image, nullptr, view, static_cast<uint32_t>(layout) };
 			a_out.width = a_w;
 			a_out.height = a_h;
 			a_out.nativeFormat = static_cast<uint32_t>(info.format);
@@ -404,11 +662,777 @@ void Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_color
 		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, static_cast<uint32_t>(std::size(tags)), cmd);
 
 		const sl::BaseStructure* inputs[] = { &g_sl.viewport };
-		g_sl.slEvaluateFeature(sl::kFeatureDLSS, *token, inputs, static_cast<uint32_t>(std::size(inputs)), cmd);
+		const sl::Result evalRes = g_sl.slEvaluateFeature(sl::kFeatureDLSS, *token, inputs, static_cast<uint32_t>(std::size(inputs)), cmd);
+
+		// Diagnostic: confirm the DLSS dispatch actually executed (once, and on any change of
+		// result/resolution). eOk here means SL recorded the upscale into the command buffer.
+		static sl::Result s_loggedRes = sl::Result::eErrorNotInitialized;
+		static uint32_t s_loggedDims = 0;
+		const uint32_t dims = (a_renderWidth << 16) | (a_outputWidth & 0xFFFF);
+		if (evalRes != s_loggedRes || dims != s_loggedDims) {
+			s_loggedRes = evalRes;
+			s_loggedDims = dims;
+			logger::info("[Streamline] DLSS evaluate result={} render={}x{} output={}x{}",
+				static_cast<int>(evalRes), a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight);
+		}
 
 		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/true);
+
+		// Destroy the transient views now that the (waited-on) submit has consumed them.
+		if (auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
+				dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"))) {
+			for (int i = 0; i < createdViewCount; ++i)
+				vkDestroyImageView(vkDevice, createdViews[i], nullptr);
+		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
 		logger::error("[Streamline] DLSS dispatch faulted — disabling for this session");
 	}
+}
+
+void Streamline::EvaluateXeSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
+	ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+	uint32_t a_renderWidth, uint32_t a_renderHeight,
+	uint32_t a_outputWidth, uint32_t a_outputHeight,
+	uint32_t a_qualityMode, float a_sharpness,
+	float a_jitterX, float a_jitterY)
+{
+	if (!initialized || !featureXeSS || g_sl.dispatchFaulted)
+		return;
+	if (!a_colorIn || !a_colorOut || !a_depth || !a_motionVectors)
+		return;
+
+	auto* dxvk = DxvkInterop::GetSingleton();
+	if (!dxvk || !dxvk->IsAvailable() || !dxvk->CommandResourcesReady())
+		return;
+	dxvk->FlushRenderingCommands();
+
+	__try {
+		sl::XeSSMode xessMode = sl::XeSSMode::eQuality;
+		switch (a_qualityMode) {
+		case 0:
+			xessMode = sl::XeSSMode::eNativeAA;
+			break;
+		case 1:
+			xessMode = sl::XeSSMode::eQuality;
+			break;
+		case 2:
+			xessMode = sl::XeSSMode::eBalanced;
+			break;
+		case 3:
+			xessMode = sl::XeSSMode::ePerformance;
+			break;
+		case 4:
+			xessMode = sl::XeSSMode::eUltraPerformance;
+			break;
+		}
+
+		sl::XeSSOptions xessOpts{};
+		xessOpts.mode = xessMode;
+		xessOpts.outputWidth = a_outputWidth;
+		xessOpts.outputHeight = a_outputHeight;
+		xessOpts.sharpness = a_sharpness;
+		xessOpts.colorBuffersHDR = sl::Boolean::eFalse;
+		if (g_sl.slXeSSSetOptions(g_sl.viewport, xessOpts) != sl::Result::eOk)
+			return;
+
+		sl::FrameToken* token = SharedFrameToken(false);
+		if (!token)
+			return;
+
+		{
+			sl::Constants consts{};
+			consts.cameraAspectRatio = static_cast<float>(a_outputWidth) / static_cast<float>(a_outputHeight);
+			consts.cameraFOV = Util::GetVerticalFOVRad();
+			consts.cameraNear = *globals::game::cameraNear;
+			consts.cameraFar = *globals::game::cameraFar;
+			auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+			auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered().Transpose();
+			consts.cameraMotionIncluded = sl::Boolean::eTrue;
+			consts.cameraPinholeOffset = { 0.f, 0.f };
+			consts.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
+			consts.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
+			consts.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
+			consts.cameraPos = *reinterpret_cast<const sl::float3*>(&globals::game::frameBufferCached.GetCameraPosAdjust());
+			consts.cameraViewToClip = *reinterpret_cast<const sl::float4x4*>(&cameraViewToClip);
+			// Skyrim's depth (as tagged here) is standard [0..1], NOT reversed-Z — matches the DLSS path
+			// above and the FSR/XeSS plugins' own depth flags. (The FSR/XeSS plugins read only jitterOffset
+			// from these constants, so this is for correctness/consistency, not a behavioural input.)
+			consts.depthInverted = sl::Boolean::eFalse;
+			sl::recalculateCameraMatrices(consts);
+			consts.jitterOffset = { -a_jitterX, -a_jitterY };
+			consts.reset = sl::Boolean::eFalse;
+			consts.mvecScale = { 1.0f, 1.0f };
+			consts.motionVectors3D = sl::Boolean::eFalse;
+			consts.motionVectorsInvalidValue = FLT_MIN;
+			consts.orthographicProjection = sl::Boolean::eFalse;
+			consts.motionVectorsDilated = sl::Boolean::eFalse;
+			consts.motionVectorsJittered = sl::Boolean::eFalse;
+			g_sl.slSetConstants(consts, *token, g_sl.viewport);
+		}
+
+		VkDevice vkDevice = dxvk->GetDevice();
+		auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
+			dxvk->GetDeviceProcAddr()(vkDevice, "vkCreateImageView"));
+		VkImageView createdViews[4] = {};
+		int createdViewCount = 0;
+
+		const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out, uint32_t a_w, uint32_t a_h) {
+			VkImage image = VK_NULL_HANDLE;
+			VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+			VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+			if (!dxvk->GetVkImage(a_res, &image, &layout, &info) || image == VK_NULL_HANDLE)
+				return false;
+			VkImageView view = VK_NULL_HANDLE;
+			if (vkCreateImageView) {
+				VkImageViewCreateInfo ci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+				ci.image = image;
+				ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				ci.format = info.format;
+				ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				if (info.format == VK_FORMAT_D32_SFLOAT || info.format == VK_FORMAT_D24_UNORM_S8_UINT ||
+					info.format == VK_FORMAT_D16_UNORM || info.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+					ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+				ci.subresourceRange.levelCount = 1;
+				ci.subresourceRange.layerCount = 1;
+				vkCreateImageView(vkDevice, &ci, nullptr, &view);
+				if (view != VK_NULL_HANDLE && createdViewCount < 4)
+					createdViews[createdViewCount++] = view;
+			}
+			a_out = sl::Resource{ sl::ResourceType::eTex2d, image, nullptr, view, static_cast<uint32_t>(layout) };
+			a_out.width = a_w;
+			a_out.height = a_h;
+			a_out.nativeFormat = static_cast<uint32_t>(info.format);
+			a_out.mipLevels = info.mipLevels;
+			a_out.arrayLayers = info.arrayLayers;
+			a_out.usage = static_cast<uint32_t>(info.usage);
+			a_out.flags = static_cast<uint32_t>(info.flags);
+			return true;
+		};
+
+		sl::Resource colorInRes{}, colorOutRes{}, depthRes{}, mvecRes{};
+		if (!makeResource(a_colorIn, colorInRes, a_renderWidth, a_renderHeight) ||
+			!makeResource(a_colorOut, colorOutRes, a_outputWidth, a_outputHeight) ||
+			!makeResource(a_depth, depthRes, a_renderWidth, a_renderHeight) ||
+			!makeResource(a_motionVectors, mvecRes, a_renderWidth, a_renderHeight))
+			return;
+
+		sl::Extent renderExtent{ 0, 0, a_renderWidth, a_renderHeight };
+		sl::Extent outputExtent{ 0, 0, a_outputWidth, a_outputHeight };
+		sl::ResourceTag tags[] = {
+			sl::ResourceTag{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent },
+			sl::ResourceTag{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent, &outputExtent },
+			sl::ResourceTag{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent },
+			sl::ResourceTag{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent },
+		};
+
+		VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
+		if (cmd == VK_NULL_HANDLE)
+			return;
+
+		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, static_cast<uint32_t>(std::size(tags)), cmd);
+
+		const sl::BaseStructure* inputs[] = { &g_sl.viewport };
+		const sl::Result evalRes = g_sl.slEvaluateFeature(sl::kFeatureXeSS, *token, inputs, static_cast<uint32_t>(std::size(inputs)), cmd);
+
+		static sl::Result s_loggedRes = sl::Result::eErrorNotInitialized;
+		static uint32_t s_loggedDims = 0;
+		const uint32_t dims = (a_renderWidth << 16) | (a_outputWidth & 0xFFFF);
+		if (evalRes != s_loggedRes || dims != s_loggedDims) {
+			s_loggedRes = evalRes;
+			s_loggedDims = dims;
+			logger::info("[Streamline] XeSS evaluate result={} render={}x{} output={}x{}",
+				static_cast<int>(evalRes), a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight);
+		}
+
+		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/true);
+
+		if (auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
+				dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"))) {
+			for (int i = 0; i < createdViewCount; ++i)
+				vkDestroyImageView(vkDevice, createdViews[i], nullptr);
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] XeSS dispatch faulted — disabling for this session");
+	}
+}
+
+void Streamline::EvaluateFSR(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
+	ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+	uint32_t a_renderWidth, uint32_t a_renderHeight,
+	uint32_t a_outputWidth, uint32_t a_outputHeight,
+	uint32_t a_qualityMode, float a_sharpness,
+	float a_jitterX, float a_jitterY)
+{
+	if (!initialized || !featureFSR || g_sl.dispatchFaulted)
+		return;
+	if (!a_colorIn || !a_colorOut || !a_depth || !a_motionVectors)
+		return;
+
+	auto* dxvk = DxvkInterop::GetSingleton();
+	if (!dxvk || !dxvk->IsAvailable() || !dxvk->CommandResourcesReady())
+		return;
+	dxvk->FlushRenderingCommands();
+
+	__try {
+		sl::FSRMode fsrMode = sl::FSRMode::eMaxQuality;
+		switch (a_qualityMode) {
+		case 0:
+			fsrMode = sl::FSRMode::eNativeAA;
+			break;
+		case 1:
+			fsrMode = sl::FSRMode::eMaxQuality;
+			break;
+		case 2:
+			fsrMode = sl::FSRMode::eBalanced;
+			break;
+		case 3:
+			fsrMode = sl::FSRMode::eMaxPerformance;
+			break;
+		case 4:
+			fsrMode = sl::FSRMode::eUltraPerformance;
+			break;
+		}
+
+		sl::FSROptions fsrOpts{};
+		fsrOpts.mode = fsrMode;
+		fsrOpts.outputWidth = a_outputWidth;
+		fsrOpts.outputHeight = a_outputHeight;
+		fsrOpts.sharpness = a_sharpness;
+		fsrOpts.colorBuffersHDR = sl::Boolean::eFalse;
+		if (g_sl.slFSRSetOptions(g_sl.viewport, fsrOpts) != sl::Result::eOk)
+			return;
+
+		sl::FrameToken* token = SharedFrameToken(false);
+		if (!token)
+			return;
+
+		{
+			sl::Constants consts{};
+			consts.cameraAspectRatio = static_cast<float>(a_outputWidth) / static_cast<float>(a_outputHeight);
+			consts.cameraFOV = Util::GetVerticalFOVRad();
+			consts.cameraNear = *globals::game::cameraNear;
+			consts.cameraFar = *globals::game::cameraFar;
+			auto viewMatrix = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+			auto cameraViewToClip = globals::game::frameBufferCached.GetCameraProjUnjittered().Transpose();
+			consts.cameraMotionIncluded = sl::Boolean::eTrue;
+			consts.cameraPinholeOffset = { 0.f, 0.f };
+			consts.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
+			consts.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
+			consts.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
+			consts.cameraPos = *reinterpret_cast<const sl::float3*>(&globals::game::frameBufferCached.GetCameraPosAdjust());
+			consts.cameraViewToClip = *reinterpret_cast<const sl::float4x4*>(&cameraViewToClip);
+			// Skyrim's depth (as tagged here) is standard [0..1], NOT reversed-Z — matches the DLSS path
+			// above and the FSR/XeSS plugins' own depth flags. (The FSR/XeSS plugins read only jitterOffset
+			// from these constants, so this is for correctness/consistency, not a behavioural input.)
+			consts.depthInverted = sl::Boolean::eFalse;
+			sl::recalculateCameraMatrices(consts);
+			consts.jitterOffset = { -a_jitterX, -a_jitterY };
+			consts.reset = sl::Boolean::eFalse;
+			consts.mvecScale = { 1.0f, 1.0f };
+			consts.motionVectors3D = sl::Boolean::eFalse;
+			consts.motionVectorsInvalidValue = FLT_MIN;
+			consts.orthographicProjection = sl::Boolean::eFalse;
+			consts.motionVectorsDilated = sl::Boolean::eFalse;
+			consts.motionVectorsJittered = sl::Boolean::eFalse;
+			g_sl.slSetConstants(consts, *token, g_sl.viewport);
+		}
+
+		VkDevice vkDevice = dxvk->GetDevice();
+		auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
+			dxvk->GetDeviceProcAddr()(vkDevice, "vkCreateImageView"));
+		VkImageView createdViews[4] = {};
+		int createdViewCount = 0;
+
+		const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out, uint32_t a_w, uint32_t a_h) {
+			VkImage image = VK_NULL_HANDLE;
+			VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+			VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+			if (!dxvk->GetVkImage(a_res, &image, &layout, &info) || image == VK_NULL_HANDLE)
+				return false;
+			VkImageView view = VK_NULL_HANDLE;
+			if (vkCreateImageView) {
+				VkImageViewCreateInfo ci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+				ci.image = image;
+				ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				ci.format = info.format;
+				ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				if (info.format == VK_FORMAT_D32_SFLOAT || info.format == VK_FORMAT_D24_UNORM_S8_UINT ||
+					info.format == VK_FORMAT_D16_UNORM || info.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+					ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+				ci.subresourceRange.levelCount = 1;
+				ci.subresourceRange.layerCount = 1;
+				vkCreateImageView(vkDevice, &ci, nullptr, &view);
+				if (view != VK_NULL_HANDLE && createdViewCount < 4)
+					createdViews[createdViewCount++] = view;
+			}
+			a_out = sl::Resource{ sl::ResourceType::eTex2d, image, nullptr, view, static_cast<uint32_t>(layout) };
+			a_out.width = a_w;
+			a_out.height = a_h;
+			a_out.nativeFormat = static_cast<uint32_t>(info.format);
+			a_out.mipLevels = info.mipLevels;
+			a_out.arrayLayers = info.arrayLayers;
+			a_out.usage = static_cast<uint32_t>(info.usage);
+			a_out.flags = static_cast<uint32_t>(info.flags);
+			return true;
+		};
+
+		sl::Resource colorInRes{}, colorOutRes{}, depthRes{}, mvecRes{};
+		if (!makeResource(a_colorIn, colorInRes, a_renderWidth, a_renderHeight) ||
+			!makeResource(a_colorOut, colorOutRes, a_outputWidth, a_outputHeight) ||
+			!makeResource(a_depth, depthRes, a_renderWidth, a_renderHeight) ||
+			!makeResource(a_motionVectors, mvecRes, a_renderWidth, a_renderHeight))
+			return;
+
+		sl::Extent renderExtent{ 0, 0, a_renderWidth, a_renderHeight };
+		sl::Extent outputExtent{ 0, 0, a_outputWidth, a_outputHeight };
+		sl::ResourceTag tags[] = {
+			sl::ResourceTag{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent },
+			sl::ResourceTag{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent, &outputExtent },
+			sl::ResourceTag{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent },
+			sl::ResourceTag{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent },
+		};
+
+		VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
+		if (cmd == VK_NULL_HANDLE)
+			return;
+
+		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, static_cast<uint32_t>(std::size(tags)), cmd);
+
+		const sl::BaseStructure* inputs[] = { &g_sl.viewport };
+		const sl::Result evalRes = g_sl.slEvaluateFeature(sl::kFeatureFSR, *token, inputs, static_cast<uint32_t>(std::size(inputs)), cmd);
+
+		static sl::Result s_loggedRes = sl::Result::eErrorNotInitialized;
+		static uint32_t s_loggedDims = 0;
+		const uint32_t dims = (a_renderWidth << 16) | (a_outputWidth & 0xFFFF);
+		if (evalRes != s_loggedRes || dims != s_loggedDims) {
+			s_loggedRes = evalRes;
+			s_loggedDims = dims;
+			logger::info("[Streamline] FSR evaluate result={} render={}x{} output={}x{}",
+				static_cast<int>(evalRes), a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight);
+		}
+
+		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/true);
+
+		if (auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
+				dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"))) {
+			for (int i = 0; i < createdViewCount; ++i)
+				vkDestroyImageView(vkDevice, createdViews[i], nullptr);
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] FSR dispatch faulted — disabling for this session");
+	}
+}
+
+void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
+	uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate)
+{
+	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
+		return;
+
+	// Called every frame with the gameplay gate — skip the SL call when the mode hasn't changed.
+	if (g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable)
+		return;
+
+	__try {
+		sl::DLSSGOptions options{};
+		options.mode = a_enable ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
+		options.numFramesToGenerate = a_numFramesToGenerate;
+		// CS upscales via dynamic resolution, so the depth/MV inputs are at the (smaller) render
+		// size while the back buffer is at display size. DLSS-G must be told this — without the
+		// eDynamicResolutionEnabled flag + dimensions it assumes full-res inputs, mismatches the
+		// DRS-downscaled depth/MV, and its eBlockPresentingClientQueue blocks the present queue
+		// waiting on a workload that can't complete (the reported toggle freeze).
+		// eRetainResourcesWhenOff: DLSS-G is toggled off every loading screen / menu and back on for
+		// gameplay; retaining its resources across those off periods avoids realloc stutter on re-enable.
+		options.flags = sl::DLSSGFlags::eDynamicResolutionEnabled | sl::DLSSGFlags::eRetainResourcesWhenOff;
+		options.dynamicResWidth = a_renderWidth;
+		options.dynamicResHeight = a_renderHeight;
+		options.mvecDepthWidth = a_renderWidth;
+		options.mvecDepthHeight = a_renderHeight;
+		options.colorWidth = a_displayWidth;
+		options.colorHeight = a_displayHeight;
+		// eBlockNoClientQueues (Vulkan-only): SL does NOT block the client's presenting queue while it
+		// runs frame generation. eBlockPresentingClientQueue (the default) blocks that queue until the FG
+		// workload completes — which DEADLOCKS on a paused/menu/frozen scene where no new frame arrives to
+		// unblock it (the reported hang). With NoClientQueues the present returns immediately and SL paces
+		// asynchronously, so a frozen scene simply presents 1:1 with no hang. (Tradeoff: tagged depth/MV
+		// must not be overwritten before SL consumes them; acceptable here since we only interpolate
+		// during gameplay and the inputs are stable frame-to-frame.)
+		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
+		const sl::Result res = g_sl.slDLSSGSetOptions(g_sl.viewport, options);
+		if (res != sl::Result::eOk) {
+			logger::warn("[Streamline] slDLSSGSetOptions failed (result {})", static_cast<int>(res));
+		} else {
+			g_sl.dlssgModeCached = true;
+			g_sl.dlssgModeOn = a_enable;
+			logger::info("[Streamline] DLSS-G mode={} frames={}", a_enable, a_numFramesToGenerate);
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] DLSS-G SetOptions faulted — disabling for this session");
+	}
+}
+
+bool Streamline::SetFSRFrameGen(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
+	uint32_t a_displayWidth, uint32_t a_displayHeight, bool a_hdr)
+{
+	// Returns true only when the option was actually delivered to the plugin. The caller retries until
+	// it does, because featureFSR (and the FG entry points) come up a few frames AFTER the first
+	// CheckResources — a one-shot transition would silently miss that window.
+	if (!initialized || !featureFSR || !g_sl.slFSRFrameGenerationSetOptions || g_sl.dispatchFaulted)
+		return false;
+
+	bool ok = false;
+	__try {
+		sl::FSRFrameGenOptions options{};
+		options.enabled = a_enable ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+		options.renderWidth = a_renderWidth;
+		options.renderHeight = a_renderHeight;
+		options.displayWidth = a_displayWidth;
+		options.displayHeight = a_displayHeight;
+		options.colorBuffersHDR = a_hdr ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+		const sl::Result res = g_sl.slFSRFrameGenerationSetOptions(g_sl.viewport, options);
+		if (res != sl::Result::eOk) {
+			logger::warn("[Streamline] slFSRFrameGenerationSetOptions failed (result {})", static_cast<int>(res));
+		} else {
+			ok = true;
+			logger::info("[Streamline] FSR frame generation {} (render {}x{} display {}x{})",
+				a_enable ? "ENABLED" : "disabled", a_renderWidth, a_renderHeight, a_displayWidth, a_displayHeight);
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] FSR SetFrameGen faulted — disabling for this session");
+	}
+	return ok;
+}
+
+bool Streamline::IsFSRFrameGenActive() const
+{
+	if (!initialized || !featureFSR || !g_sl.slFSRGetFrameGenState || g_sl.dispatchFaulted)
+		return false;
+	sl::FSRFrameGenState state{};
+	if (g_sl.slFSRGetFrameGenState(g_sl.viewport, state) != sl::Result::eOk)
+		return false;
+	return state.numFramesActuallyPresented >= 2;
+}
+
+bool Streamline::GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) const
+{
+	if (!initialized || !featureDLSSG)
+		return false;
+
+	sl::DLSSGState state{};
+	const sl::Result res = g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr);
+	if (res != sl::Result::eOk)
+		return false;
+	a_vramUsage = state.estimatedVRAMUsageInBytes;
+	a_maxFrames = state.numFramesToGenerateMax;
+	return state.status == sl::DLSSGStatus::eOk;
+}
+
+void Streamline::LogDLSSGFrameStats()
+{
+	// SL owns present under interposition. Query slDLSSGGetState on the render thread purely for
+	// doubling telemetry. numFramesActuallyPresented is a cumulative counter that reads 2 while
+	// doubling. Throttled to ~once/2s so any SL warning can't spam the log.
+	if (g_sl.dispatchFaulted || !g_sl.slDLSSGGetState || !g_sl.dlssgModeOn)
+		return;
+	static uint32_t s_n = 0;
+	if ((s_n++ % 120) != 0)
+		return;
+	__try {
+		sl::DLSSGState state{};
+		if (g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr) == sl::Result::eOk)
+			logger::info("[Streamline] DLSS-G status={} framesPresented={} (2 = doubling active)",
+				static_cast<int>(state.status), state.numFramesActuallyPresented);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+	}
+}
+
+void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+	ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight)
+{
+	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
+		return;
+	if (!a_depth || !a_motionVectors)
+		return;
+
+	auto* dxvk = DxvkInterop::GetSingleton();
+	if (!dxvk || !dxvk->IsAvailable() || !dxvk->CommandResourcesReady())
+		return;
+
+	__try {
+		// §16.1 inputs back-pressure is now a GPU-side wait queued on the present thread (OnDLSSGPostPresent),
+		// matching the SL sample's QueueGPUWaitOnSyncObjectSet — it gates the graphics queue so the rendering
+		// that overwrites these depth/MV targets waits for the OFA to finish reading them. The old host-side
+		// vkWaitSemaphores here blocked the CPU but did NOT gate the GPU's overwriting submissions, so the
+		// OFA read being-overwritten memory -> device loss. Removed.
+
+		// Tag DLSS-G inputs for the SAME frame the constants/markers/present use, else SL cannot match
+		// them to the presented frame and drops interpolation.
+		sl::FrameToken* token = SharedFrameToken(false);
+		if (!token)
+			return;
+
+		// SL's Vulkan backend needs a VkImageView per tagged resource (the DLSS-SR path proved a
+		// null view faults SL). DLSS-G consumes these at present time after a non-blocking submit,
+		// so views are cached per VkImage (recreated only on change) rather than created+destroyed
+		// per frame — see g_sl.dlssgViewCache. slot: 0=depth, 1=motion, 2=hudless.
+		VkDevice vkDevice = dxvk->GetDevice();
+		auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
+			dxvk->GetDeviceProcAddr()(vkDevice, "vkCreateImageView"));
+		auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
+			dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"));
+
+		const auto cachedView = [&](int a_slot, VkImage a_image, VkFormat a_format) -> VkImageView {
+			auto& c = g_sl.dlssgViewCache[a_slot];
+			if (c.image == a_image && c.view != VK_NULL_HANDLE)
+				return c.view;
+			if (c.view != VK_NULL_HANDLE && vkDestroyImageView)
+				vkDestroyImageView(vkDevice, c.view, nullptr);
+			c.view = VK_NULL_HANDLE;
+			c.image = a_image;
+			if (vkCreateImageView) {
+				VkImageViewCreateInfo ci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+				ci.image = a_image;
+				ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				ci.format = a_format;
+				ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				if (a_format == VK_FORMAT_D32_SFLOAT || a_format == VK_FORMAT_D24_UNORM_S8_UINT ||
+					a_format == VK_FORMAT_D16_UNORM || a_format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+					ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+				ci.subresourceRange.levelCount = 1;
+				ci.subresourceRange.layerCount = 1;
+				vkCreateImageView(vkDevice, &ci, nullptr, &c.view);
+			}
+			return c.view;
+		};
+
+		const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out, uint32_t a_w, uint32_t a_h, int a_slot) {
+			VkImage image = VK_NULL_HANDLE;
+			VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+			VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+			if (!dxvk->GetVkImage(a_res, &image, &layout, &info) || image == VK_NULL_HANDLE)
+				return false;
+			a_out = sl::Resource{ sl::ResourceType::eTex2d, image, nullptr, cachedView(a_slot, image, info.format), static_cast<uint32_t>(layout) };
+			a_out.width = a_w;
+			a_out.height = a_h;
+			a_out.nativeFormat = static_cast<uint32_t>(info.format);
+			a_out.mipLevels = info.mipLevels;
+			a_out.arrayLayers = info.arrayLayers;
+			a_out.usage = static_cast<uint32_t>(info.usage);
+			a_out.flags = static_cast<uint32_t>(info.flags);
+			return true;
+		};
+
+		sl::Resource depthRes{}, mvecRes{};
+		if (!makeResource(a_depth, depthRes, a_renderWidth, a_renderHeight, 0) ||
+			!makeResource(a_motionVectors, mvecRes, a_renderWidth, a_renderHeight, 1))
+			return;
+
+		sl::Extent extent{};
+		extent.width = a_renderWidth;
+		extent.height = a_renderHeight;
+
+		// eValidUntilPresent: SL references the inputs and reads them at present (no per-frame copy).
+		// eOnlyValidNow forces SL to COPY depth/MV every frame, which accumulated until a sustained-
+		// gameplay hang (~36s) — so we use eValidUntilPresent and accept the small fast-motion artifact
+		// risk (host may overwrite inputs before present) over the hang. The §16.1 fence wait above is
+		// the proper mitigation for that artifact when SL populates the fence.
+		sl::ResourceTag tags[3];
+		uint32_t tagCount = 0;
+		tags[tagCount++] = { &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extent };
+		tags[tagCount++] = { &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extent };
+
+		sl::Resource hudlessRes{};
+		if (a_hudlessColor && makeResource(a_hudlessColor, hudlessRes, a_renderWidth, a_renderHeight, 2))
+			tags[tagCount++] = { &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent };
+
+		VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
+		if (cmd == VK_NULL_HANDLE)
+			return;
+
+		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, tagCount, cmd);
+		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/false);
+		g_sl.dlssgTaggedThisFrame = true;  // valid inputs tagged: present will interpolate this frame
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] DLSS-G tag faulted — disabling for this session");
+	}
+}
+
+void Streamline::TagFSRFGHudless(ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight)
+{
+	if (!initialized || !featureFSR || g_sl.dispatchFaulted)
+		return;
+	if (!a_hudlessColor)
+		return;
+
+	auto* dxvk = DxvkInterop::GetSingleton();
+	if (!dxvk || !dxvk->IsAvailable() || !dxvk->CommandResourcesReady())
+		return;
+
+	__try {
+		sl::FrameToken* token = SharedFrameToken(false);
+		if (!token)
+			return;
+
+		VkImage image = VK_NULL_HANDLE;
+		VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+		if (!dxvk->GetVkImage(a_hudlessColor, &image, &layout, &info) || image == VK_NULL_HANDLE)
+			return;
+
+		VkDevice vkDevice = dxvk->GetDevice();
+		auto& c = g_sl.fsrFgHudlessCache;
+		if (c.image != image || c.view == VK_NULL_HANDLE) {
+			auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
+				dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"));
+			if (c.view != VK_NULL_HANDLE && vkDestroyImageView)
+				vkDestroyImageView(vkDevice, c.view, nullptr);
+			c.view = VK_NULL_HANDLE;
+			c.image = image;
+			auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
+				dxvk->GetDeviceProcAddr()(vkDevice, "vkCreateImageView"));
+			if (vkCreateImageView) {
+				VkImageViewCreateInfo ci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+				ci.image = image;
+				ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				ci.format = info.format;
+				ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				ci.subresourceRange.levelCount = 1;
+				ci.subresourceRange.layerCount = 1;
+				vkCreateImageView(vkDevice, &ci, nullptr, &c.view);
+			}
+		}
+
+		sl::Resource hudlessRes{ sl::ResourceType::eTex2d, image, nullptr, c.view, static_cast<uint32_t>(layout) };
+		hudlessRes.width = a_renderWidth;
+		hudlessRes.height = a_renderHeight;
+		hudlessRes.nativeFormat = static_cast<uint32_t>(info.format);
+		hudlessRes.mipLevels = info.mipLevels;
+		hudlessRes.arrayLayers = info.arrayLayers;
+		hudlessRes.usage = static_cast<uint32_t>(info.usage);
+
+		sl::Extent extent{ 0, 0, a_renderWidth, a_renderHeight };
+		sl::ResourceTag tags[] = {
+			{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent },
+		};
+
+		VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
+		if (cmd == VK_NULL_HANDLE)
+			return;
+
+		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, static_cast<uint32_t>(std::size(tags)), cmd);
+		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/false);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] FSR FG hudless tag faulted — disabling for this session");
+	}
+}
+
+void Streamline::ClearDLSSGTags()
+{
+	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
+		return;
+
+	__try {
+		sl::FrameToken* token = SharedFrameToken(false);
+		if (!token)
+			return;
+
+		// Null-resource tags tell DLSS-G "no valid interpolation inputs this frame" so it presents the
+		// real frame 1:1. Required on every present that did not set valid tags (the first present, and
+		// loading/paused/menu frames) — otherwise SL's present hook waits on inputs that never arrive and
+		// stalls. Null tags carry no GPU work, so they are set with a NULL command buffer: this works
+		// even before DXVK's interop command ring is ready (the very first present at swapchain create).
+		sl::ResourceTag tags[] = {
+			sl::ResourceTag{ nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, nullptr },
+			sl::ResourceTag{ nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, nullptr },
+			sl::ResourceTag{ nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, nullptr },
+		};
+		// Use a real command buffer when the interop ring is ready (most frames); fall back to a null
+		// command buffer at the very first present (before the ring exists) — null tags record no work.
+		VkCommandBuffer cmd = VK_NULL_HANDLE;
+		auto* dxvk = DxvkInterop::GetSingleton();
+		if (dxvk && dxvk->IsAvailable() && dxvk->CommandResourcesReady())
+			cmd = dxvk->BeginFrameCommandBuffer();
+		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, static_cast<uint32_t>(std::size(tags)), cmd);
+		if (cmd != VK_NULL_HANDLE)
+			dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/false);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] DLSS-G clear-tags faulted — disabling for this session");
+	}
+}
+
+void Streamline::EnsureDLSSGPresentTag()
+{
+	// Called from the present path for the DLSS-G/SL-owned swapchain. If the render pass already set a
+	// valid tag this frame (gameplay), interpolate; otherwise set a null/passthrough tag so the present
+	// never waits on absent inputs. This is what makes the FIRST present (before any render pass) and
+	// every loading/menu present safe.
+	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
+		return;
+	if (g_sl.dlssgTaggedThisFrame)
+		return;
+	ClearDLSSGTags();
+}
+
+void Streamline::SetConstants(const float4x4& a_clipToPrevClip, const float4x4& a_prevClipToClip,
+	float2 a_jitter, float2 a_mvecScale, float a_cameraNear, float a_cameraFar,
+	float a_cameraFOV, float a_cameraAspect, bool a_depthInverted, bool a_reset)
+{
+	if (!initialized || g_sl.dispatchFaulted)
+		return;
+
+	__try {
+		sl::FrameToken* token = SharedFrameToken(false);
+		if (!token)
+			return;
+
+		sl::Constants consts{};
+		std::memcpy(&consts.clipToPrevClip, &a_clipToPrevClip, sizeof(float4x4));
+		std::memcpy(&consts.prevClipToClip, &a_prevClipToClip, sizeof(float4x4));
+		consts.jitterOffset = { a_jitter.x, a_jitter.y };
+		consts.mvecScale = { a_mvecScale.x, a_mvecScale.y };
+		consts.cameraNear = a_cameraNear;
+		consts.cameraFar = a_cameraFar;
+		consts.cameraFOV = a_cameraFOV;
+		consts.cameraAspectRatio = a_cameraAspect;
+		consts.depthInverted = a_depthInverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+		consts.cameraMotionIncluded = sl::Boolean::eTrue;
+		consts.motionVectors3D = sl::Boolean::eFalse;
+		consts.reset = a_reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+
+		g_sl.slSetConstants(consts, *token, g_sl.viewport);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+		logger::error("[Streamline] SetConstants faulted — disabling for this session");
+	}
+}
+
+void Streamline::RegisterDxvkOwnershipPredicate()
+{
+	// Under full interposition SL's interposed present is unconditionally on the present path, so EVERY
+	// DXVK swapchain is externally paced. Register the ownership predicate so DXVK omits its present-fence
+	// pNext + present-wait worker (which SL never signals — without this the first post-present acquire
+	// blocks forever and the game freezes on the intro logo).
+	HMODULE dxvkModule = GetModuleHandleW(L"csd3d11.dll");
+	if (!dxvkModule) {
+		logger::warn("[Streamline] DXVK module not loaded — cannot register ownership predicate");
+		return;
+	}
+	using SetQueryFn = void (*)(bool (*)(VkSwapchainKHR));
+	auto setQuery = reinterpret_cast<SetQueryFn>(GetProcAddress(dxvkModule, "dxvkSetFrameGenOwnershipQuery"));
+	if (!setQuery) {
+		logger::warn("[Streamline] dxvkSetFrameGenOwnershipQuery not found in DXVK module");
+		return;
+	}
+	setQuery([](VkSwapchainKHR) -> bool { return true; });
+	logger::info("[Streamline] registered DXVK ownership predicate (all swapchains externally paced)");
 }

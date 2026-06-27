@@ -4,8 +4,6 @@
         "locale": "fr",
         "auto_generated": true
     },
-    "common.active": "Active",
-    "common.inactive": "Inactive",
     "cs_editor.active_click_pause": "Actif - Cliquez pour mettre en pause",
     "cs_editor.add": "Ajouter",
     "cs_editor.add_new_marker": "Ajouter un nouveau marqueur",
@@ -132,5 +130,7 @@
     "cs_editor.force_this_weather": "Forcez cette météo",
     "cs_editor.force_weather": "Force Météo",
     "cs_editor.form_id": "ID du formulaire",
-    "cs_editor.form_id_label": "ID du formulaire : %08X"
+    "cs_editor.form_id_label": "ID du formulaire : %08X",
+    "common.active": "Active",
+    "common.inactive": "Inactive"
 }

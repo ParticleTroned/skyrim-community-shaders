@@ -262,6 +262,12 @@ struct IDXGISwapChain_Present
 	{
 		globals::state->Reset();
 
+		// Reflex/PCL latency markers: render submission is complete by present time; bracket the
+		// present so Reflex can measure render→display latency.
+		auto* streamline = Streamline::GetSingleton();
+		streamline->SetPCLMarker(Streamline::PclMarker::RenderSubmitEnd);
+		streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
+
 		// HDR Display composites the real frame into the back buffer, then calls the present
 		// chain. We wrap that chain with FSR3 frame generation: it interpolates from the final
 		// back buffer and presents the generated frame ahead of the real one. Frame gen and HDR
@@ -275,6 +281,8 @@ struct IDXGISwapChain_Present
 					swapChain, syncInterval, presentFlags,
 					[&](IDXGISwapChain* sc, UINT si, UINT f) { return func(sc, si, f); });
 			});
+
+		streamline->SetPCLMarker(Streamline::PclMarker::PresentEnd);
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
 
@@ -310,7 +318,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 {
 	DXGI_ADAPTER_DESC adapterDesc;
 	pAdapter->GetDesc(&adapterDesc);
-	globals::state->SetAdapterDescription(adapterDesc.Description);
+	globals::state->SetAdapterDescription(adapterDesc.Description, adapterDesc.VendorId, adapterDesc.DeviceId);
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
@@ -414,12 +422,16 @@ struct BSInputDeviceManager_PollInputDevices
 {
 	static void thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events)
 	{
-		// Drive NVIDIA Reflex low-latency sleep at the input-poll boundary (no-op on
-		// non-NVIDIA hardware / when Streamline is not initialized).
+		// Drive low-latency at the input-poll boundary.
 		{
 			auto& upscaling = globals::features::upscaling;
-			Streamline::GetSingleton()->UpdateReflex(
-				upscaling.settings.reflexLowLatencyMode, upscaling.settings.reflexLowLatencyBoost);
+			// DLSS-G requires Reflex ON while it runs (per DLSSGStatus), independent of the user's
+			// setting — otherwise DLSS-G stalls. Force Reflex when DLSS-G FG is active.
+			const bool dlssgActive = upscaling.IsFrameGenerationActive() &&
+			                         upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG;
+			const bool wantReflex = dlssgActive || upscaling.settings.reflexEnabled;
+			Streamline::GetSingleton()->UpdateReflex(wantReflex, wantReflex && upscaling.settings.reflexBoost);
+			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::SimulationStart);
 		}
 
 		bool blockedDevice = true;

@@ -50,6 +50,8 @@ public:
 	bool settingCustomShader = false;
 	RE::BSShader* currentShader = nullptr;
 	std::string adapterDescription = "";
+	uint32_t adapterVendorId = 0;  // PCI vendor ID of the active GPU (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel)
+	uint32_t adapterDeviceId = 0;  // PCI device ID of the active GPU (used for NVIDIA RTX-generation detection)
 
 	uint32_t currentVertexDescriptor = 0;
 	uint32_t currentPixelDescriptor = 0;
@@ -198,8 +200,19 @@ public:
 	/** @brief Inserts a single-point GPU performance marker. */
 	void SetPerfMarker(std::string_view title);
 
-	/** @brief Converts and stores the GPU adapter description. */
-	void SetAdapterDescription(const std::wstring& description);
+	/** @brief Converts and stores the GPU adapter description (and PCI vendor + device IDs). */
+	void SetAdapterDescription(const std::wstring& description, uint32_t vendorId = 0, uint32_t deviceId = 0);
+
+	/** @brief True when the active GPU is an Intel adapter (PCI vendor 0x8086).
+	 *  Used to gate the XeSS auto-default to XMX-accelerated Intel Arc hardware. */
+	[[nodiscard]] bool IsIntelGPU() const { return adapterVendorId == 0x8086; }
+
+	/** @brief PCI vendor ID of the active GPU (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel). */
+	[[nodiscard]] uint32_t GetAdapterVendorId() const { return adapterVendorId; }
+
+	/** @brief PCI device ID of the active GPU. Used for NVIDIA RTX-generation detection
+	 *  (DLSS preset selection differs between RTX 20/30 and RTX 40+). */
+	[[nodiscard]] uint32_t GetAdapterDeviceId() const { return adapterDeviceId; }
 
 	bool frameAnnotations = false;
 

@@ -101,6 +101,21 @@ void DxvkInterop::FlushRenderingCommands() const
 		interopDevice->FlushRenderingCommands();
 }
 
+void DxvkInterop::WaitDeviceIdle() const
+{
+	if (!interopDevice)
+		return;
+	// DXVK-safe drain. Do NOT call vkDeviceWaitIdle directly here: DXVK owns the queues from its own
+	// submission thread, and vkDeviceWaitIdle requires external synchronization of ALL queue access —
+	// an unsynchronized external call races DXVK's submit thread (and, while DLSS-G is active, waits on
+	// Streamline's async pacer queue) and HANGS. That was the frame-gen toggle freeze. Instead flush
+	// pending D3D11 work to the GPU and take/release DXVK's submission lock, which drains DXVK's pending
+	// submissions the DXVK-managed way without the unsafe global wait.
+	FlushRenderingCommands();
+	LockSubmissionQueue();
+	ReleaseSubmissionQueue();
+}
+
 void DxvkInterop::LockSubmissionQueue() const
 {
 	if (interopDevice)
@@ -224,9 +239,9 @@ bool DxvkInterop::SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &a_commandBuffer;
 
-	// Flush DXVK's pending D3D11 work (which produced the FFX inputs) so it is
-	// visible to the queue before our submission, then submit under the lock so
-	// DXVK's own worker thread doesn't race us on the shared graphics queue.
+	// Flush DXVK's pending D3D11 work so it is visible to the queue before our
+	// submission, then submit under the lock so DXVK's own worker thread doesn't
+	// race us on the shared graphics queue.
 	FlushRenderingCommands();
 	LockSubmissionQueue();
 	VkResult vr = vkQueueSubmit(queue, 1, &submitInfo, fence);

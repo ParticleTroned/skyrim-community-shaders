@@ -9,9 +9,9 @@
 // VkDevice / VkQueue and map any D3D11 texture to its backing VkImage — WITHOUT
 // pulling in DXVK's internal headers and WITHOUT creating a second device.
 //
-// This is the foundation for running the FidelityFX Vulkan backend (FSR3 frame
-// generation) on DXVK's single device with no interop: the VkImages handed to
-// FFX are DXVK's own images, and FFX submits onto DXVK's own queue.
+// This is the foundation for Streamline interposition: the VkImages handed to
+// Streamline plugins (DLSS, FSR, XeSS) are DXVK's own images, and Streamline
+// submits onto DXVK's own queue via the interposer.
 //
 // The interfaces below are ABI-stable COM interfaces; the GUIDs match DXVK's
 // dxgi_interfaces.h exactly. They are queried at runtime from the live device,
@@ -113,6 +113,10 @@ public:
 
 	/** @brief Flush outstanding D3D11 rendering before foreign Vulkan submits. */
 	void FlushRenderingCommands() const;
+	/** @brief Block until the Vulkan device is idle (vkDeviceWaitIdle). Used to drain in-flight
+	 *  presents/queues before manipulating the swapchain (frame-gen method switch), which the
+	 *  Streamline DLSS-G guide §13/§19 mandates to avoid present deadlocks. */
+	void WaitDeviceIdle() const;
 	/** @brief Lock DXVK's submission queue around a foreign Vulkan submit (drains pending work). */
 	void LockSubmissionQueue() const;
 	/** @brief Release DXVK's submission queue after a foreign Vulkan submit. */
@@ -120,7 +124,7 @@ public:
 
 	IDXGIVkInteropDevice* GetInteropDevice() const { return interopDevice.get(); }
 
-	// --- Command-buffer ring for recording foreign Vulkan (FFX) work ---
+	// --- Command-buffer ring for recording Streamline tag/evaluate work ---
 
 	/**
 		 * @brief Creates the command pool + per-frame command-buffer/fence ring on

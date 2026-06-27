@@ -3,10 +3,7 @@
 	url = https://github.com/alandtse/CommonLibVR.git
 [submodule "extern/Streamline-DX12"]
 	path = extern/Streamline-DX12
-	url = https://github.com/NVIDIAGameWorks/Streamline.git
-[submodule "extern/FidelityFX-SDK"]
-	path = extern/FidelityFX-SDK
-	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
+	url = https://github.com/doodlum/Streamline.git
 [submodule "extern/dxvk"]
 	path = extern/dxvk
 	url = https://github.com/doodlum/dxvk.git

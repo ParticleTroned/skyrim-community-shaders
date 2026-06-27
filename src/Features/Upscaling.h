@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Feature.h"
-#include "Upscaling/FidelityFX.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include <d3d11_4.h>
 #include <winrt/base.h>
@@ -34,29 +33,34 @@ public:
 		kNONE,
 		kTAA,
 		kFSR,
-		kDLSS,  // NVIDIA DLSS — only selectable on NVIDIA hardware (gated in GetUpscaleMethod)
+		kDLSS,
+		kXeSS,
+	};
+
+	enum class FrameGenMethod
+	{
+		kFSR,
+		kDLSSG,
 	};
 
 	struct Settings
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kFSR;
-		// The method to fall back to when DLSS is selected on non-NVIDIA hardware
-		// (so a config authored on an NVIDIA machine degrades cleanly to FSR/TAA here).
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
 		uint qualityMode = 1;
 		float sharpnessFSR = 0.0f;
-		// NVIDIA Reflex low-latency (NVIDIA-only; ignored on other GPUs).
+		bool reflexEnabled = false;
+		bool reflexBoost = false;
+		// Legacy fields kept for JSON backward compatibility.
 		bool reflexLowLatencyMode = false;
 		bool reflexLowLatencyBoost = false;
-		// FSR3 frame generation. Runs optical flow + interpolation on the DX11
-		// (DXVK) device — no DX12, no interop. Off by default. Only meaningful
-		// with FSR upscaling active.
 		bool frameGeneration = false;
-		// Frame-gen debug toggles (only meaningful while frameGeneration is on):
-		bool fgShowOnlyGenerated = false;  // present only the interpolated frame
-		bool fgDebugView = false;          // FFX draws debug views into the generated frame
-		bool fgDebugTearLines = false;     // FFX draws tear lines into the generated frame
-		bool fgDebugPacingLines = false;   // FFX draws pacing lines into the generated frame
+		uint frameGenMethod = (uint)FrameGenMethod::kFSR;
+		bool fgShowOnlyGenerated = false;
+		bool fgDebugView = false;
+		bool fgDebugTearLines = false;
+		bool fgDebugPacingLines = false;
+		bool hardwareDefaultsApplied = false;
 	};
 
 	Settings settings;
@@ -68,14 +72,7 @@ public:
 		float pad0;
 	};
 
-	struct UpscalingDataCB
-	{
-		float2 trueSamplingDim;
-		float2 pad0;
-	};
-
 	ConstantBuffer* jitterCB = nullptr;
-	ConstantBuffer* upscalingDataCB = nullptr;
 
 	// Runtime state
 	bool isWindowed = false;
@@ -100,13 +97,11 @@ public:
 	virtual void SetupResources() override;
 
 	UpscaleMethod GetUpscaleMethod() const;
+	FrameGenMethod GetFrameGenMethod() const;
+
+	void ApplyHardwareDefaults();
 
 	void CheckResources(UpscaleMethod a_upscalemethod);
-	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
-	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
-
-	winrt::com_ptr<ID3D11ComputeShader> encodeTexturesCS[4];  // one per UpscaleMethod (incl. kDLSS)
-	ID3D11ComputeShader* GetEncodeTexturesCS();
 
 	winrt::com_ptr<ID3D11PixelShader> depthRefractionUpscalePS;
 	ID3D11PixelShader* GetDepthRefractionUpscalePS();
@@ -128,26 +123,18 @@ public:
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
 	void Upscale();
 
-	/** @brief True when FSR3 frame generation is configured + active this session (FSR method, context built, not faulted). */
 	bool IsFrameGenerationActive() const;
 
-	/**
-	 * @brief Wraps the swap-chain present to insert FSR3 frame generation, independent of HDR Display.
-	 *        Called after the real frame is composited into the back buffer; when frame gen is active
-	 *        it interpolates from that back buffer and presents the generated frame ahead of the real one.
-	 * @param a_present The underlying present chain to invoke (once for real-only, twice for gen+real).
-	 */
 	HRESULT PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,
 		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_present);
 
 	// D3D11 textures
-	Texture2D* reactiveMaskTexture = nullptr;
-	Texture2D* transparencyCompositionMaskTexture = nullptr;
+	Texture2D* upscaledTexture = nullptr;
+	Texture2D* hudlessTexture = nullptr;
 
 	virtual void ClearShaderCache() override;
 
 	static inline RCAS rcas;
-	static inline FidelityFX fidelityFX;
 
 	float projectionPosScaleX = 0.0f;
 	float projectionPosScaleY = 0.0f;
@@ -156,6 +143,11 @@ public:
 	float dynamicResolutionHeightRatio = 1.0f;
 
 	bool previousUpscalingWasActive = false;
+	// FSR frame generation under the sl.fsr plugin: the last FG-enabled state actually
+	// delivered to slFSRFrameGenerationSetOptions (-1 = none yet). Re-synced every frame
+	// until it matches the desired state, because featureFSR + the FG entry points come up
+	// a few frames after the first CheckResources.
+	int fsrFgAppliedState = -1;
 	bool depthUpscaleUseWideKernel = false;
 
 	void PostDisplay();
@@ -167,6 +159,11 @@ public:
 	static double GetRefreshRate(HWND a_window);
 
 private:
+	void CreateUpscaledTexture();
+	void DestroyUpscaledTexture();
+	void CreateHudlessTexture();
+	void DestroyHudlessTexture();
+
 	struct Main_UpdateJitter
 	{
 		static void thunk(RE::BSGraphics::State* a_state);

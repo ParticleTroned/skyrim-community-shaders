@@ -184,7 +184,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #if defined(DYNAMIC_CUBEMAPS)
 
-	float3 reflectance = ReflectanceTexture[dispatchID.xy];
+	float3 reflectance = saturate(ReflectanceTexture[dispatchID.xy]);
 
 	if (any(reflectance > 0.0)) {
 		float3 V = -normalize(positionWS.xyz);

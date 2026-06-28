@@ -912,7 +912,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 	psout.Specular = float4(psout.Diffuse.xyz, finalColor.w);
 	psout.Albedo = float4(psout.Diffuse.xyz, finalColor.w);
-	psout.Reflectance = float4(psout.Diffuse.xyz, finalColor.w);
+	psout.Reflectance = float4(saturate(psout.Diffuse.xyz), finalColor.w);
 	psout.Masks = float4(Color::RGBToLuminance(psout.Diffuse.xyz).xxx, finalColor.w);
 #		else
 	psout.Albedo = float4(0, 0, 0, finalColor.w);

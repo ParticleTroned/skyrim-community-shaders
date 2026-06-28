@@ -30,6 +30,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	brightness,
 	imageBrightness,
 	bloom,
+	advancedBloom,
 	saturation,
 	contrast,
 	advanced,
@@ -70,6 +71,8 @@ namespace
 	constexpr float kImageBrightnessMax = 2.0f;
 	constexpr float kBloomMin = 0.0f;
 	constexpr float kBloomMax = 3.0f;
+	constexpr float kAdvancedBloomMin = 0.0f;
+	constexpr float kAdvancedBloomMax = 2.0f;
 	constexpr float kSaturationMin = 0.0f;
 	constexpr float kSaturationMax = 2.0f;
 	constexpr float kContrastMin = 0.0f;
@@ -157,9 +160,9 @@ namespace
 		return std::clamp(SafeFinite(a_value, 1.0f), kBrightnessMin, kBrightnessMax);
 	}
 
-	float ClampRange(float a_value, float a_min, float a_max)
+	float ClampRange(float a_value, float a_min, float a_max, float a_fallback = 1.0f)
 	{
-		return std::clamp(SafeFinite(a_value, 1.0f), a_min, a_max);
+		return std::clamp(SafeFinite(a_value, a_fallback), a_min, a_max);
 	}
 
 	float WrapHour(float a_hour)
@@ -439,6 +442,7 @@ namespace
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
 		a_profile.imageBrightness = ClampRange(a_profile.imageBrightness, kImageBrightnessMin, kImageBrightnessMax);
 		a_profile.bloom = ClampRange(a_profile.bloom, kBloomMin, kBloomMax);
+		a_profile.advancedBloom = ClampRange(a_profile.advancedBloom, kAdvancedBloomMin, kAdvancedBloomMax, 0.0f);
 		a_profile.saturation = ClampRange(a_profile.saturation, kSaturationMin, kSaturationMax);
 		a_profile.contrast = ClampRange(a_profile.contrast, kContrastMin, kContrastMax);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
@@ -839,7 +843,8 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile)
 
 	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Rebalances world lighting before the final image. Use this when a place is lit too dark or too bright.");
 	drawSlider("Image Brightness", a_profile.imageBrightness, kImageBrightnessMin, kImageBrightnessMax, "Brightens or darkens the final image without changing light balance.");
-	drawSlider("Bloom", a_profile.bloom, kBloomMin, kBloomMax, "Scales glow around bright areas. 1.00 keeps the current weather look.");
+	drawSlider("Vanilla Bloom", a_profile.bloom, kBloomMin, kBloomMax, "Scales Skyrim's existing bloom intensity. Very low cost; it does not improve bloom shape or softness.");
+	drawSlider("Advanced Bloom", a_profile.advancedBloom, kAdvancedBloomMin, kAdvancedBloomMax, "Adds softer multi-radius bloom from bright pixels. Moderate cost; 0.00 disables the extra shader work.");
 	drawSlider("Saturation", a_profile.saturation, kSaturationMin, kSaturationMax, "Scales final color intensity. 1.00 keeps the current weather look.");
 	drawSlider("Contrast", a_profile.contrast, kContrastMin, kContrastMax, "Scales final dark-light separation. 1.00 keeps the current weather look.");
 
@@ -1846,6 +1851,7 @@ AdaptiveBalance::ImageAdjustments AdaptiveBalance::GetImageAdjustments(const Pro
 	return {
 		.imageBrightness = ClampRange(a_profile.imageBrightness, kImageBrightnessMin, kImageBrightnessMax),
 		.bloom = ClampRange(a_profile.bloom, kBloomMin, kBloomMax),
+		.advancedBloom = ClampRange(a_profile.advancedBloom, kAdvancedBloomMin, kAdvancedBloomMax, 0.0f),
 		.saturation = ClampRange(a_profile.saturation, kSaturationMin, kSaturationMax),
 		.contrast = ClampRange(a_profile.contrast, kContrastMin, kContrastMax),
 	};
@@ -1861,6 +1867,7 @@ AdaptiveBalance::ImageAdjustments AdaptiveBalance::LerpImageAdjustments(const Im
 	return {
 		.imageBrightness = lerp(a_a.imageBrightness, a_b.imageBrightness),
 		.bloom = lerp(a_a.bloom, a_b.bloom),
+		.advancedBloom = lerp(a_a.advancedBloom, a_b.advancedBloom),
 		.saturation = lerp(a_a.saturation, a_b.saturation),
 		.contrast = lerp(a_a.contrast, a_b.contrast),
 	};

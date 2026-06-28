@@ -184,6 +184,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.enableAdaptiveBalance = adaptiveBalanceEnabled;
 	data.adaptiveImageBrightnessMult = imageAdjustments.imageBrightness;
 	data.adaptiveBloomMult = imageAdjustments.bloom;
+	data.adaptiveAdvancedBloomMult = imageAdjustments.advancedBloom;
 	data.adaptiveSaturationMult = imageAdjustments.saturation;
 	data.adaptiveContrastMult = imageAdjustments.contrast;
 	return data;

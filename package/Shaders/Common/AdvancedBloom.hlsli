@@ -47,44 +47,44 @@ namespace AdvancedBloom
 		return color * (contribution / max(luminance, 1e-4));
 	}
 
-	float3 SamplePrefiltered(float2 uv)
+	float3 SamplePrefiltered(float2 uv, float2 screenUv)
 	{
-		float2 clampedUv = FrameBuffer::ClampDynamicResolutionAdjustedScreenPosition(uv, uv);
+		float2 clampedUv = FrameBuffer::ClampDynamicResolutionAdjustedScreenPosition(uv, screenUv);
 		return Prefilter(BlendTex.SampleLevel(BlendSampler, clampedUv, 0).xyz);
 	}
 
-	float3 SampleCompass(float2 uv, float2 texelSize, float radius)
+	float3 SampleCompass(float2 uv, float2 screenUv, float2 texelSize, float radius)
 	{
 		float2 stepSize = texelSize * radius;
 
-		float3 sum = SamplePrefiltered(uv + float2(stepSize.x, 0.0));
-		sum += SamplePrefiltered(uv - float2(stepSize.x, 0.0));
-		sum += SamplePrefiltered(uv + float2(0.0, stepSize.y));
-		sum += SamplePrefiltered(uv - float2(0.0, stepSize.y));
+		float3 sum = SamplePrefiltered(uv + float2(stepSize.x, 0.0), screenUv);
+		sum += SamplePrefiltered(uv - float2(stepSize.x, 0.0), screenUv);
+		sum += SamplePrefiltered(uv + float2(0.0, stepSize.y), screenUv);
+		sum += SamplePrefiltered(uv - float2(0.0, stepSize.y), screenUv);
 
 		return sum * 0.25;
 	}
 
-	float3 SampleDiagonals(float2 uv, float2 texelSize, float radius)
+	float3 SampleDiagonals(float2 uv, float2 screenUv, float2 texelSize, float radius)
 	{
 		float2 stepSize = texelSize * radius;
 
-		float3 sum = SamplePrefiltered(uv + stepSize);
-		sum += SamplePrefiltered(uv - stepSize);
-		sum += SamplePrefiltered(uv + float2(stepSize.x, -stepSize.y));
-		sum += SamplePrefiltered(uv + float2(-stepSize.x, stepSize.y));
+		float3 sum = SamplePrefiltered(uv + stepSize, screenUv);
+		sum += SamplePrefiltered(uv - stepSize, screenUv);
+		sum += SamplePrefiltered(uv + float2(stepSize.x, -stepSize.y), screenUv);
+		sum += SamplePrefiltered(uv + float2(-stepSize.x, stepSize.y), screenUv);
 
 		return sum * 0.25;
 	}
 
-	float3 Compute(float2 uv)
+	float3 Compute(float2 uv, float2 screenUv)
 	{
 		float2 texelSize = max(SharedData::BufferDim.zw, float2(1.0 / 8192.0, 1.0 / 8192.0));
 
-		float3 center = SamplePrefiltered(uv);
-		float3 fine = SampleCompass(uv, texelSize, 1.5);
-		float3 mid = SampleDiagonals(uv, texelSize, 5.0);
-		float3 wide = SampleCompass(uv, texelSize, 16.0);
+		float3 center = SamplePrefiltered(uv, screenUv);
+		float3 fine = SampleCompass(uv, screenUv, texelSize, 1.5);
+		float3 mid = SampleDiagonals(uv, screenUv, texelSize, 5.0);
+		float3 wide = SampleCompass(uv, screenUv, texelSize, 16.0);
 
 		return center * 0.28 + fine * 0.34 + mid * 0.24 + wide * 0.14;
 	}

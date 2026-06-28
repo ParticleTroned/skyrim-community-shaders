@@ -843,7 +843,7 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile)
 
 	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Rebalances world lighting before the final image. Use this when a place is lit too dark or too bright.");
 	drawSlider("Image Brightness", a_profile.imageBrightness, kImageBrightnessMin, kImageBrightnessMax, "Brightens or darkens the final image without changing light balance.");
-	drawSlider("Vanilla Bloom", a_profile.bloom, kBloomMin, kBloomMax, "Scales Skyrim's existing bloom. Very low cost; it does not improve bloom shape or softness.");
+	drawSlider("Vanilla Bloom", a_profile.bloom, kBloomMin, kBloomMax, "Scales Skyrim's existing bloom intensity. Very low cost; it does not improve bloom shape or softness.");
 	drawSlider("Advanced Bloom", a_profile.advancedBloom, kAdvancedBloomMin, kAdvancedBloomMax, "Adds softer multi-radius bloom from bright pixels. Moderate cost; 0.00 disables the extra shader work.");
 	drawSlider("Saturation", a_profile.saturation, kSaturationMin, kSaturationMax, "Scales final color intensity. 1.00 keeps the current weather look.");
 	drawSlider("Contrast", a_profile.contrast, kContrastMin, kContrastMax, "Scales final dark-light separation. 1.00 keeps the current weather look.");

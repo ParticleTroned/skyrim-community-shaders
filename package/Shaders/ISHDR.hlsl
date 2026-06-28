@@ -94,12 +94,16 @@ PS_OUTPUT main(PS_INPUT input)
 	} else {
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
-	bloomColor *= SharedData::linearLightingSettings.adaptiveBloomMult;
+	// Keep the two bloom sliders independent: vanilla bloom scales the native gate,
+	// while advanced bloom keeps the original threshold and uses its own color term.
+	const float bloomIntensity = Param.x * SharedData::linearLightingSettings.adaptiveBloomMult;
+	const float advancedBloomIntensity = Param.x;
 
+	float3 advancedBloomColor = 0.0;
 	float advancedBloomMult = SharedData::linearLightingSettings.adaptiveAdvancedBloomMult;
 	[branch] if (advancedBloomMult > 0.0001)
 	{
-		bloomColor += AdvancedBloom::Compute(uv) * advancedBloomMult;
+		advancedBloomColor = AdvancedBloom::Compute(uv, input.TexCoord.xy) * advancedBloomMult;
 	}
 
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
@@ -116,15 +120,14 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 blendedColor;
 		[branch] if (Param.z > 0.5)
 		{
-			blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
+			blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity);
 		}
 		else
 		{
 			float maxCol = Color::RGBToLuminance(inputColor);
 			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
 			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
-			blendedColor = compressedHuePreserving;
-			blendedColor += saturate(Param.x - blendedColor) * bloomColor;
+			blendedColor = DisplayMapping::ApplyBloom(compressedHuePreserving, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity);
 		}
 
 		gameSdrColor = blendedColor;

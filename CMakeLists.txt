@@ -489,6 +489,11 @@ if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
         list(APPEND _SL_DLLS ${_SL_FORK_DLLS})
         message(STATUS "Staging Streamline fork plugins: ${_SL_FORK_DLLS}")
     endif()
+    # sl.template.dll is the SDK's example plugin. The interposer's PluginManager auto-loads EVERY
+    # sl.*.dll in the plugin folder, and the sample's slOnPluginLoad feeds a NULL string into its
+    # embedded JSON config (strlen(NULL) crash in sl.common) which aborts slInit and wedges the
+    # interposer. Never stage it.
+    list(FILTER _SL_DLLS EXCLUDE REGEX "sl\\.template\\.dll$")
     message(STATUS "Staging Streamline plugin DLLs from ${STREAMLINE_DLL_DIR}")
     install(
         FILES ${_SL_DLLS} ${_SL_NGX_DLLS}
@@ -633,6 +638,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         # Custom fork plugins (sl.fsr, sl.xess) from the fork's build artifacts.
         file(GLOB _AIO_SL_FORK "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/_artifacts/sl.*/Develop_x64/sl.*.dll")
         list(APPEND _AIO_SL_DLLS ${_AIO_SL_FORK})
+        # Never stage sl.template.dll — the SDK sample plugin crashes slInit (see install() rule above).
+        list(FILTER _AIO_SL_DLLS EXCLUDE REGEX "sl\\.template\\.dll$")
         list(APPEND _prepare_aio_cmds COMMAND ${CMAKE_COMMAND} -E make_directory "${_aio_sl_dir}")
         foreach(_sl IN LISTS _AIO_SL_DLLS)
             list(APPEND _prepare_aio_cmds COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_sl}" "${_aio_sl_dir}/")

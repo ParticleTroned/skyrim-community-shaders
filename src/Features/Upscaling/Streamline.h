@@ -58,8 +58,18 @@ public:
 		uint32_t a_qualityMode, float a_sharpness,
 		float a_jitterX, float a_jitterY);
 
+	// Standalone FSR frame-generation prepare: tags ONLY depth + motion vectors (no color) and drives the
+	// sl.fsr plugin's FG-prepare via slEvaluateFeature(kFeatureFSR). Decoupled from the upscaler, so FSR FG
+	// works under any upscale method. Call every gameplay frame while FSR FG is the active method.
+	void EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+		uint32_t a_renderWidth, uint32_t a_renderHeight,
+		uint32_t a_outputWidth, uint32_t a_outputHeight,
+		float a_jitterX, float a_jitterY);
+
 	[[nodiscard]] bool SetFSRFrameGen(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
-		uint32_t a_displayWidth, uint32_t a_displayHeight, bool a_hdr);
+		uint32_t a_displayWidth, uint32_t a_displayHeight, bool a_hdr,
+		bool a_debugView = false, bool a_debugTearLines = false, bool a_debugPacingLines = false,
+		bool a_onlyPresentGenerated = false);
 
 	[[nodiscard]] bool IsFSRFrameGenActive() const;
 
@@ -99,6 +109,10 @@ public:
 	// Register the DXVK frame-gen ownership predicate so DXVK treats all swapchains as
 	// externally paced under interposition (skips present-fence, present-wait worker).
 	static void RegisterDxvkOwnershipPredicate();
+
+	// Force DXVK to recreate its Vulkan swapchain on the next acquire (used to evict sl.dlss_g's sticky
+	// present proxy when switching FG method DLSS-G -> FSR so the FFX FG layer can re-wrap the swapchain).
+	static void RequestDxvkSwapchainRecreate();
 
 private:
 	Streamline() = default;

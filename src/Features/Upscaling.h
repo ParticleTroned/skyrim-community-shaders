@@ -125,6 +125,11 @@ public:
 
 	bool IsFrameGenerationActive() const;
 
+	// Effective NVIDIA Reflex state under the frame-generation policy: DLSS-G frame-gen forces Reflex ON
+	// (DLSS-G stalls without it), FSR frame-gen forces it OFF, and with no frame generation it follows the
+	// user's reflexEnabled toggle. Never mutates the saved preference.
+	[[nodiscard]] bool GetEffectiveReflex() const;
+
 	HRESULT PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,
 		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_present);
 
@@ -148,6 +153,15 @@ public:
 	// until it matches the desired state, because featureFSR + the FG entry points come up
 	// a few frames after the first CheckResources.
 	int fsrFgAppliedState = -1;
+	// Last FSR-FG debug-flag signature delivered to the plugin (bit0 view, bit1 tear, bit2 pacing, bit3
+	// show-only-generated). Re-pushed when it changes so runtime debug toggles reach the per-present config.
+	uint32_t fsrFgDebugApplied = 0;
+
+	// Latched true while DLSS-G frame-gen is active (its present proxy stickily owns the swapchain and
+	// bypasses the Vulkan present hooks). A later switch into FSR-FG forces a DXVK swapchain recreate to
+	// evict the proxy; cleared once that recreate has been requested. See CheckResources.
+	bool dlssgProxyMayOwnPresent = false;
+
 	bool depthUpscaleUseWideKernel = false;
 
 	void PostDisplay();

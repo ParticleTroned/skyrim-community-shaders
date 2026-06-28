@@ -6,17 +6,17 @@
 
 // Loads DXVK's d3d11/dxgi DLLs from the Community Shaders mod subfolder
 // (Data/SKSE/Plugins/CommunityShaders/dxvk) under unique base names
-// (csd3d11.dll / csgi.dll) so DXVK runs from Data/ rather than the game root.
+// (dxvk_d3d11.dll / dxvk_dxgi.dll) so DXVK runs from Data/ rather than the game root.
 //
 // Skyrim statically imports exactly one symbol from each of d3d11.dll and
 // dxgi.dll (D3D11CreateDeviceAndSwapChain / CreateDXGIFactory), so the System32
 // copies are mapped at process start. The Windows loader keys modules by base
 // name, so a second "d3d11.dll"/"dxgi.dll" loaded from a subfolder would merely
-// alias the already-mapped System32 module. Giving DXVK's DLLs unique base names
-// sidesteps that; CS then points its two IAT hooks at these exports so the game
-// renders on DXVK while the inert System32 copies are never called. The d3d11
-// DLL's single "dxgi.dll" import is repointed to "csgi.dll" at build time -- see
-// tools/stage-dxvk-dlls.ps1.
+// alias the already-mapped System32 module. DXVK is built with a 'dxvk_' name
+// prefix (so dxvk_d3d11.dll imports dxvk_dxgi.dll, not System32 dxgi); CS then
+// points its two IAT hooks at these exports so the game renders on DXVK while the
+// inert System32 copies are never called. tools/stage-dxvk-dlls.ps1 just copies
+// the two prefixed DLLs into place.
 namespace DxvkLoader
 {
 	/** @brief Load DXVK's renamed DLLs once (idempotent). Must be called before the

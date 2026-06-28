@@ -46,22 +46,21 @@ namespace DxvkLoader
 			return false;
 		}
 
-		const auto dxgiPath = (dir / L"csgi.dll").wstring();
-		const auto d3d11Path = (dir / L"csd3d11.dll").wstring();
+		const auto dxgiPath = (dir / L"dxvk_dxgi.dll").wstring();
+		const auto d3d11Path = (dir / L"dxvk_d3d11.dll").wstring();
 
-		// Load dxgi first: csd3d11.dll imports it (the original "dxgi.dll" import
-		// is repointed to "csgi.dll"), and the loader binds that import to the
-		// already-mapped module by base name.
+		// Load dxgi first: dxvk_d3d11.dll imports dxvk_dxgi.dll (DXVK is built with the dxvk_ name prefix),
+		// and the loader binds that import to the already-mapped module by base name.
 		const HMODULE dxgiMod = ::LoadLibraryExW(dxgiPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 		if (!dxgiMod) {
 			const DWORD err = ::GetLastError();
-			logger::error("[DXVK] Failed to load csgi.dll from '{}' (error {})", dir.string(), err);
+			logger::error("[DXVK] Failed to load dxvk_dxgi.dll from '{}' (error {})", dir.string(), err);
 			return false;
 		}
 		const HMODULE d3d11Mod = ::LoadLibraryExW(d3d11Path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 		if (!d3d11Mod) {
 			const DWORD err = ::GetLastError();
-			logger::error("[DXVK] Failed to load csd3d11.dll from '{}' (error {})", dir.string(), err);
+			logger::error("[DXVK] Failed to load dxvk_d3d11.dll from '{}' (error {})", dir.string(), err);
 			return false;
 		}
 
@@ -74,7 +73,7 @@ namespace DxvkLoader
 			return false;
 		}
 
-		logger::info("[DXVK] Loaded DXVK from '{}' (csd3d11.dll + csgi.dll)", dir.string());
+		logger::info("[DXVK] Loaded DXVK from '{}' (dxvk_d3d11.dll + dxvk_dxgi.dll)", dir.string());
 		g_loaded = true;
 		return true;
 	}

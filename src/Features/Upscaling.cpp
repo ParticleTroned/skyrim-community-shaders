@@ -221,10 +221,27 @@ void Upscaling::DrawSettings()
 	if (reflexAvailable) {
 		ImGui::SeparatorText(T(TKEY("low_latency"), "Low Latency"));
 
-		ImGui::Checkbox("NVIDIA Reflex", &settings.reflexEnabled);
+		// Frame generation dictates Reflex: DLSS-G forces it ON, FSR-FG forces it OFF. In those cases show a
+		// disabled checkbox reflecting the forced state; only when no frame generation is active is it the
+		// user's toggle. (GetEffectiveReflex encodes the same policy used at the apply sites.)
+		const bool fgForcesReflex = IsFrameGenerationActive() &&
+		                            (GetFrameGenMethod() == FrameGenMethod::kDLSSG ||
+		                             GetFrameGenMethod() == FrameGenMethod::kFSR);
+		if (fgForcesReflex) {
+			bool effectiveReflex = GetEffectiveReflex();
+			ImGui::BeginDisabled();
+			ImGui::Checkbox("NVIDIA Reflex", &effectiveReflex);
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", GetFrameGenMethod() == FrameGenMethod::kDLSSG ?
+			                              T(TKEY("reflex_forced_dlssg"), "(forced on by DLSS-G)") :
+			                              T(TKEY("reflex_forced_fsrfg"), "(forced off by FSR frame gen)"));
+		} else {
+			ImGui::Checkbox("NVIDIA Reflex", &settings.reflexEnabled);
 
-		if (settings.reflexEnabled)
-			ImGui::Checkbox(T(TKEY("reflex_boost"), "Boost"), &settings.reflexBoost);
+			if (settings.reflexEnabled)
+				ImGui::Checkbox(T(TKEY("reflex_boost"), "Boost"), &settings.reflexBoost);
+		}
 	}
 }
 
@@ -421,6 +438,24 @@ bool Upscaling::IsFrameGenerationActive() const
 	return Streamline::GetSingleton()->IsFSRSupported();
 }
 
+bool Upscaling::GetEffectiveReflex() const
+{
+	// DLSS-G frame generation REQUIRES Reflex on (it stalls otherwise); FSR frame generation requires it
+	// OFF (FFX paces the swapchain itself, Reflex fights it); with no frame generation the user's saved
+	// reflexEnabled toggle wins. The saved preference is never mutated — only the effective value changes.
+	if (IsFrameGenerationActive()) {
+		switch (GetFrameGenMethod()) {
+		case FrameGenMethod::kDLSSG:
+			return true;
+		case FrameGenMethod::kFSR:
+			return false;
+		default:
+			break;
+		}
+	}
+	return settings.reflexEnabled;
+}
+
 HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,
 	const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_present)
 {
@@ -560,6 +595,12 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		bool needDLSSG = settings.frameGeneration && fgMethod == FrameGenMethod::kDLSSG;
 		bool hadDLSSG = previousFrameGeneration && previousFGMethod == FrameGenMethod::kDLSSG;
 
+		// Once DLSS-G frame-gen is active its present proxy wraps the swapchain and is STICKY — it bypasses
+		// the Vulkan present hooks, so FSR's cooperative VK_SUBOPTIMAL can never reclaim present. Latch that
+		// here; any later switch into FSR-FG forces a DXVK swapchain recreate (below) to evict the proxy.
+		if (needDLSSG)
+			dlssgProxyMayOwnPresent = true;
+
 		const auto fgDisplaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 		const auto fgRenderSize = Util::ConvertToDynamic(fgDisplaySize);
 
@@ -592,13 +633,35 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	// DXVK swapchain (un)wrap from its present hook once it has the state, so CS requests no recreate.
 	{
 		const int desiredFG = (settings.frameGeneration && fgMethod == FrameGenMethod::kFSR) ? 1 : 0;
-		if (desiredFG != fsrFgAppliedState) {
+		// Re-push when the enable state OR any FSR-FG debug toggle changes — the debug overlays (tear/pacing
+		// lines, debug view, show-only-generated) are applied per-present from these options, so a runtime
+		// toggle has to reach the plugin even when FG is already on.
+		const uint32_t fgDebugSig = (settings.fgDebugView ? 1u : 0u) | (settings.fgDebugTearLines ? 2u : 0u) |
+		                            (settings.fgDebugPacingLines ? 4u : 0u) | (settings.fgShowOnlyGenerated ? 8u : 0u);
+		if (desiredFG != fsrFgAppliedState || fgDebugSig != fsrFgDebugApplied) {
 			const bool fgHDR = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
 			const auto dispSz = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 			const auto rendSz = Util::ConvertToDynamic(dispSz);
 			if (Streamline::GetSingleton()->SetFSRFrameGen(desiredFG != 0,
-					(uint32_t)rendSz.x, (uint32_t)rendSz.y, (uint32_t)dispSz.x, (uint32_t)dispSz.y, fgHDR))
+					(uint32_t)rendSz.x, (uint32_t)rendSz.y, (uint32_t)dispSz.x, (uint32_t)dispSz.y, fgHDR,
+					settings.fgDebugView, settings.fgDebugTearLines, settings.fgDebugPacingLines, settings.fgShowOnlyGenerated)) {
 				fsrFgAppliedState = desiredFG;  // delivered; the plugin (un)wraps on its next present
+				fsrFgDebugApplied = fgDebugSig;
+			}
+		}
+
+		// If FSR-FG is now actually enabled (fsrFgAppliedState==1 — the enable can take a few CheckResources
+		// to land while featureFSR warms up) AND DLSS-G's sticky proxy might still own present, force the DXVK
+		// swapchain recreate to evict it. On the recreate the interposer suppresses sl.dlss_g's create hook and
+		// the FFX FG layer wraps the fresh swapchain — the only way to hand present from DLSS-G back to FSR.
+		// The latch is sticky across frames, so this fires on the frame the enable finally lands (fixing the
+		// race where SetFSRFrameGen hadn't delivered on the transition frame) and covers the indirect
+		// DLSS-G -> disabled -> FSR-FG path too. Cleared after firing so steady-state FSR-FG never recreates
+		// every frame. Pure disabled -> FSR-FG with no prior DLSS-G leaves the latch false (FSR's own
+		// cooperative SUBOPTIMAL wrap handles that, no forced recreate needed).
+		if (fsrFgAppliedState == 1 && dlssgProxyMayOwnPresent) {
+			Streamline::RequestDxvkSwapchainRecreate();
+			dlssgProxyMayOwnPresent = false;
 		}
 	}
 }
@@ -1243,7 +1306,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	// Reflex/PCL: the game simulation has finished and post-process/upscale render submission
 	// happens here — mark the simulation-end / render-submit-start boundary.
 	auto* streamline = Streamline::GetSingleton();
-	if (upscaling.settings.reflexEnabled) {
+	if (upscaling.GetEffectiveReflex()) {
 		streamline->SetPCLMarker(Streamline::PclMarker::SimulationEnd);
 		streamline->SetPCLMarker(Streamline::PclMarker::RenderSubmitStart);
 	}
@@ -1291,8 +1354,16 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				Streamline::GetSingleton()->LogDLSSGFrameStats();
 			}
 		} else if (fgMethod == FrameGenMethod::kFSR && gameplay) {
-			const auto rendSize = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
-			Streamline::GetSingleton()->TagFSRFGHudless(hudless, (uint32_t)rendSize.x, (uint32_t)rendSize.y);
+			// Drive the FSR FG-prepare every gameplay frame from depth + motion vectors, independent of the
+			// active upscaler (the sl.fsr plugin runs FrameGenerationPrepare on a color-less FSR evaluate).
+			const auto dispSize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+			const auto rendSize = Util::ConvertToDynamic(dispSize);
+			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+			Streamline::GetSingleton()->EvaluateFSRFrameGen(
+				depth.texture, motionVector.texture,
+				(uint32_t)rendSize.x, (uint32_t)rendSize.y,
+				(uint32_t)dispSize.x, (uint32_t)dispSize.y,
+				upscaling.jitter.x, upscaling.jitter.y);
 		}
 	}
 

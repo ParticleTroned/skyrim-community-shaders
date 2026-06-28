@@ -49,7 +49,7 @@ if %ERRORLEVEL% NEQ 0 (
 rem Parallelize across projects too (MSBuild /m); Ninja is parallel by default.
 if not defined CMAKE_BUILD_PARALLEL_LEVEL set "CMAKE_BUILD_PARALLEL_LEVEL=%NUMBER_OF_PROCESSORS%"
 
-rem Build the DXVK renderer DLLs (csd3d11.dll / csgi.dll) the plugin stages, BEFORE configure so
+rem Build the DXVK renderer DLLs (dxvk_d3d11.dll / dxvk_dxgi.dll) the plugin stages, BEFORE configure so
 rem CMake's EXISTS guard picks them up. Fast + incremental: a no-op when the dxvk submodule is
 rem unchanged (see tools\build-dxvk.ps1). All Build*.bat wrappers reach this through here.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build-dxvk.ps1"

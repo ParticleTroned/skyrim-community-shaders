@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Build DXVK's d3d11.dll + dxgi.dll (the csd3d11/csgi renderer DLLs Community Shaders stages)
+    Build DXVK's d3d11 + dxgi (the dxvk_d3d11/dxvk_dxgi renderer DLLs Community Shaders stages)
     from the extern/dxvk submodule — fast and incrementally — so every Build*.bat produces them
     with no separate meson step.
 

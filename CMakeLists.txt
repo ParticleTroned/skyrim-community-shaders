@@ -440,12 +440,12 @@ install(
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
 
 # DXVK DLLs — staged into the mod's Data subfolder (NOT the game root) under unique
-# base names (csd3d11.dll / csgi.dll) and loaded explicitly by the plugin at startup
-# (src/DxvkLoader.cpp). tools/stage-dxvk-dlls.ps1 renames them and repoints d3d11's
-# single "dxgi.dll" import to "csgi.dll" so DXVK's two DLLs bind to each other rather
-# than to the System32 copies Skyrim maps for its two imported entry points.
+# base names (dxvk_d3d11.dll / dxvk_dxgi.dll) and loaded explicitly by the plugin at
+# startup (src/DxvkLoader.cpp). DXVK builds them with that 'dxvk_' prefix natively (so
+# d3d11 already imports dxvk_dxgi.dll, not the System32 copies Skyrim maps for its two
+# imported entry points); tools/stage-dxvk-dlls.ps1 just copies them into place.
 set(DXVK_BUILD_DIR "${CMAKE_SOURCE_DIR}/extern/dxvk/build/src")
-if(EXISTS "${DXVK_BUILD_DIR}/d3d11/d3d11.dll")
+if(EXISTS "${DXVK_BUILD_DIR}/d3d11/dxvk_d3d11.dll")
     install(
         CODE
         "
@@ -611,9 +611,9 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # (AIO_ZIP_PACKAGE, Package-AIO-Manual, AUTO_PLUGIN_DEPLOYMENT) gets a DXVK-runnable mod.
     set(_aio_dxvk_dir "${AIO_DIR}/SKSE/Plugins/CommunityShaders/dxvk")
 
-    # DXVK: rename + import-repoint via the same staging script the install(CODE) rule uses
-    # (csd3d11.dll / csgi.dll). Only when a local DXVK build exists, mirroring the guard above.
-    if(EXISTS "${DXVK_BUILD_DIR}/d3d11/d3d11.dll")
+    # DXVK: copy the dxvk_-prefixed DLLs via the same staging script the install(CODE) rule uses
+    # (dxvk_d3d11.dll / dxvk_dxgi.dll). Only when a local DXVK build exists, mirroring the guard above.
+    if(EXISTS "${DXVK_BUILD_DIR}/d3d11/dxvk_d3d11.dll")
         list(
             APPEND _prepare_aio_cmds
             COMMAND powershell -NoProfile -ExecutionPolicy Bypass

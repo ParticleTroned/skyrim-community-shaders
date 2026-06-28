@@ -425,11 +425,9 @@ struct BSInputDeviceManager_PollInputDevices
 		// Drive low-latency at the input-poll boundary.
 		{
 			auto& upscaling = globals::features::upscaling;
-			// DLSS-G requires Reflex ON while it runs (per DLSSGStatus), independent of the user's
-			// setting — otherwise DLSS-G stalls. Force Reflex when DLSS-G FG is active.
-			const bool dlssgActive = upscaling.IsFrameGenerationActive() &&
-			                         upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG;
-			const bool wantReflex = dlssgActive || upscaling.settings.reflexEnabled;
+			// Reflex policy (GetEffectiveReflex): DLSS-G frame-gen forces Reflex ON (it stalls otherwise),
+			// FSR frame-gen forces it OFF (FFX paces the swapchain itself), no frame-gen follows the toggle.
+			const bool wantReflex = upscaling.GetEffectiveReflex();
 			Streamline::GetSingleton()->UpdateReflex(wantReflex, wantReflex && upscaling.settings.reflexBoost);
 			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::SimulationStart);
 		}
@@ -1005,26 +1003,28 @@ namespace Hooks
 
 	void InstallEarlyHooks()
 	{
-		// Load DXVK's d3d11/dxgi from the mod subfolder (not the game root) before
-		// the game creates its device. The IAT hooks below redirect the game's two
-		// entry points to these exports; the inert System32 copies are never called.
-		const bool dxvkLoaded = DxvkLoader::Load();
-		if (!dxvkLoaded) {
-			logger::error("[DXVK] DXVK DLLs unavailable in subfolder; falling back to system d3d11/dxgi (DXVK disabled)");
+		// Load DXVK's d3d11/dxgi from the mod subfolder (not the game root) before the game creates its
+		// device. The IAT hooks below redirect the game's two entry points to these exports; the inert
+		// System32 copies are never called.
+		//
+		// DXVK is a HARD requirement: the entire Community Shaders rendering path (full Streamline
+		// interposition, the FFX/SL frame-gen + upscaling plugins, the DXVK interop device) is built on it,
+		// and there is no meaningful native-D3D11 mode anymore. If the bundled DLLs can't be loaded, fail
+		// loudly rather than limp along on the system d3d11/dxgi (which would silently disable everything).
+		if (!DxvkLoader::Load()) {
+			stl::report_and_fail(
+				"Community Shaders could not load its bundled DXVK renderer (dxvk_d3d11.dll / dxvk_dxgi.dll) "
+				"from Data/SKSE/Plugins/CommunityShaders/dxvk. Reinstall Community Shaders or verify the files exist."sv);
 		}
 
 		if (!globals::features::upscaling.loaded) {
 			logger::info("Hooking D3D11CreateDeviceAndSwapChain");
-			const auto iatOriginal = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
-			*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = dxvkLoaded ?
-			                                                     reinterpret_cast<uintptr_t>(DxvkLoader::GetD3D11CreateDeviceAndSwapChain()) :
-			                                                     iatOriginal;
+			SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChain, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+			*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChain = reinterpret_cast<uintptr_t>(DxvkLoader::GetD3D11CreateDeviceAndSwapChain());
 		}
 
 		logger::info("Hooking CreateDXGIFactory");
-		const auto iatOriginalDxgi = SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", "CreateDXGIFactory");
-		*(uintptr_t*)&ptrCreateDXGIFactory = dxvkLoaded ?
-		                                         reinterpret_cast<uintptr_t>(DxvkLoader::GetCreateDXGIFactory()) :
-		                                         iatOriginalDxgi;
+		SKSE::PatchIAT(hk_CreateDXGIFactory, "dxgi.dll", "CreateDXGIFactory");
+		*(uintptr_t*)&ptrCreateDXGIFactory = reinterpret_cast<uintptr_t>(DxvkLoader::GetCreateDXGIFactory());
 	}
 }

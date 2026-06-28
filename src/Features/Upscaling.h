@@ -112,17 +112,6 @@ public:
 	winrt::com_ptr<ID3D11VertexShader> upscaleVS;
 	ID3D11VertexShader* GetUpscaleVS();
 
-	// Motion-vector dilation (restores dev's EncodeTexturesCS behaviour): fills zero-MV pixels (foliage,
-	// sky, character — passes that don't write motion) from the longest 5x5 neighbour so the upscalers
-	// don't ghost them. Returns the dilated MV resource (display-size N/A — operates at render size), or
-	// the original resource if the pass can't run.
-	winrt::com_ptr<ID3D11ComputeShader> motionVectorDilateCS;
-	ID3D11ComputeShader* GetMotionVectorDilateCS();
-	Texture2D* dilatedMotionVectorTexture = nullptr;
-	ConstantBuffer* mvDilateCB = nullptr;
-	ID3D11Resource* DilateMotionVectors(ID3D11Resource* a_mvTexture, ID3D11ShaderResourceView* a_mvSRV,
-		uint32_t a_renderWidth, uint32_t a_renderHeight);
-
 	winrt::com_ptr<ID3D11DepthStencilState> upscaleDepthStencilState;
 	winrt::com_ptr<ID3D11BlendState> upscaleBlendState;
 	winrt::com_ptr<ID3D11RasterizerState> upscaleRasterizerState;

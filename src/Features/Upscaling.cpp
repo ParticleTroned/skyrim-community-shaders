@@ -621,6 +621,13 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				(uint32_t)fgDisplaySize.x, (uint32_t)fgDisplaySize.y);
 		}
 
+		// NOTE on the goal items "recreate swapchain on FG-mode change" + "unload DLSS-G when off": a blanket
+		// forced recreate on every FG-mode edge deadlocks FSR's controlled FFX unwrap (it has live present/
+		// interpolation threads that must drain via its own present->SUBOPTIMAL path), and runtime
+		// slSetFeatureLoaded(kFeatureDLSS_G,false) mid-session froze FSR-FG -> DLSS-G (toggling the DLSS-G
+		// present proxy fights the swapchain lifecycle). Both need a coordinated interposer-level
+		// owner-suppression design (see comshaders-fg-goal-5items memory) — NOT the host-only approach.
+
 		previousUpscaleMode = a_upscalemethod;
 		previousFrameGeneration = settings.frameGeneration;
 		previousFGMethod = fgMethod;

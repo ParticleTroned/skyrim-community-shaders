@@ -700,6 +700,82 @@ ID3D11VertexShader* Upscaling::GetUpscaleVS()
 	return upscaleVS.get();
 }
 
+ID3D11ComputeShader* Upscaling::GetMotionVectorDilateCS()
+{
+	if (!motionVectorDilateCS) {
+		logger::debug("Compiling MotionVectorDilateCS.hlsl");
+		motionVectorDilateCS.attach((ID3D11ComputeShader*)Util::CompileShader(
+			L"Data/Shaders/Upscaling/MotionVectorDilateCS.hlsl", {}, "cs_5_0"));
+	}
+	return motionVectorDilateCS.get();
+}
+
+ID3D11Resource* Upscaling::DilateMotionVectors(ID3D11Resource* a_mvTexture, ID3D11ShaderResourceView* a_mvSRV,
+	uint32_t a_renderWidth, uint32_t a_renderHeight)
+{
+	auto* context = globals::d3d::context;
+	auto* cs = GetMotionVectorDilateCS();
+	if (!context || !cs || !a_mvTexture || !a_mvSRV || a_renderWidth == 0 || a_renderHeight == 0)
+		return a_mvTexture;
+
+	if (!dilatedMotionVectorTexture) {
+		D3D11_TEXTURE2D_DESC desc{};
+		static_cast<ID3D11Texture2D*>(a_mvTexture)->GetDesc(&desc);
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.MipLevels = 1;
+		desc.MiscFlags = 0;
+		try {
+			dilatedMotionVectorTexture = new Texture2D(desc, "Upscaling::DilatedMotionVector");
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+			uavDesc.Format = desc.Format;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			dilatedMotionVectorTexture->CreateUAV(uavDesc);
+		} catch (...) {
+			delete dilatedMotionVectorTexture;
+			dilatedMotionVectorTexture = nullptr;
+			return a_mvTexture;
+		}
+	}
+	if (!mvDilateCB) {
+		D3D11_BUFFER_DESC cbDesc{};
+		cbDesc.ByteWidth = 16;
+		cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		try {
+			mvDilateCB = new ConstantBuffer(cbDesc, "Upscaling::MVDilateCB");
+		} catch (...) {
+			return a_mvTexture;
+		}
+	}
+	if (!dilatedMotionVectorTexture->resource || !dilatedMotionVectorTexture->uav)
+		return a_mvTexture;
+
+	struct
+	{
+		float renderDim[2];
+		float pad[2];
+	} cbData = { { (float)a_renderWidth, (float)a_renderHeight }, { 0.0f, 0.0f } };
+	mvDilateCB->Update(cbData);
+
+	ID3D11ShaderResourceView* srv[] = { a_mvSRV };
+	ID3D11UnorderedAccessView* uav[] = { dilatedMotionVectorTexture->uav.get() };
+	ID3D11Buffer* cb[] = { mvDilateCB->CB() };
+	context->CSSetShader(cs, nullptr, 0);
+	context->CSSetShaderResources(0, 1, srv);
+	context->CSSetUnorderedAccessViews(0, 1, uav, nullptr);
+	context->CSSetConstantBuffers(0, 1, cb);
+	context->Dispatch((a_renderWidth + 7) / 8, (a_renderHeight + 7) / 8, 1);
+
+	ID3D11ShaderResourceView* nullSRV[] = { nullptr };
+	ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
+	context->CSSetShaderResources(0, 1, nullSRV);
+	context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	return dilatedMotionVectorTexture->resource.get();
+}
+
 eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
 	bool copyBindFlags, bool createSRV, bool createUAV, const char* name)
 {
@@ -952,6 +1028,7 @@ void Upscaling::ClearShaderCache()
 	depthRefractionUpscalePS = nullptr;
 	underwaterMaskUpscalePS = nullptr;
 	upscaleVS = nullptr;
+	motionVectorDilateCS = nullptr;
 }
 
 void UpdateCameraData()
@@ -1065,6 +1142,14 @@ void Upscaling::Upscale()
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
+	// Restore dev's motion-vector dilation (removed with EncodeTexturesCS): Skyrim leaves foliage/sky/
+	// character pixels with zero MV, which ghosts them in the upscalers. Fill those gaps once here and feed
+	// the dilated MV (instead of the raw engine target) to whichever upscaler runs below.
+	const auto mvDisplaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	const auto mvRenderSize = Util::ConvertToDynamic(mvDisplaySize);
+	ID3D11Resource* dilatedMV = DilateMotionVectors(motionVector.texture, motionVector.SRV,
+		(uint32_t)mvRenderSize.x, (uint32_t)mvRenderSize.y);
+
 	{
 		globals::profiler->BeginPass("Upscaling::Upscale");
 		state->BeginPerfEvent("Upscaling");
@@ -1079,7 +1164,7 @@ void Upscaling::Upscale()
 			const auto renderSize = Util::ConvertToDynamic(displaySize);
 			if (upscaledTexture && upscaledTexture->resource) {
 				Streamline::GetSingleton()->EvaluateFSR(
-					main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
+					main.texture, upscaledTexture->resource.get(), depthTex.texture, dilatedMV,
 					(uint32_t)renderSize.x, (uint32_t)renderSize.y,
 					(uint32_t)displaySize.x, (uint32_t)displaySize.y,
 					settings.qualityMode, settings.sharpnessFSR,
@@ -1096,7 +1181,7 @@ void Upscaling::Upscale()
 			// output texture, then copy it back to main.
 			if (upscaledTexture && upscaledTexture->resource) {
 				Streamline::GetSingleton()->EvaluateDLSS(
-					main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
+					main.texture, upscaledTexture->resource.get(), depthTex.texture, dilatedMV,
 					(uint32_t)renderSize.x, (uint32_t)renderSize.y,
 					(uint32_t)displaySize.x, (uint32_t)displaySize.y,
 					settings.qualityMode, settings.sharpnessFSR,
@@ -1112,7 +1197,7 @@ void Upscaling::Upscale()
 			// Upscale into the separate texture, then copy back.
 			if (upscaledTexture && upscaledTexture->resource) {
 				Streamline::GetSingleton()->EvaluateXeSS(
-					main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
+					main.texture, upscaledTexture->resource.get(), depthTex.texture, dilatedMV,
 					(uint32_t)renderSize.x, (uint32_t)renderSize.y,
 					(uint32_t)displaySize.x, (uint32_t)displaySize.y,
 					settings.qualityMode, settings.sharpnessFSR,
@@ -1368,7 +1453,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			const auto rendSize = Util::ConvertToDynamic(dispSize);
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 			Streamline::GetSingleton()->EvaluateFSRFrameGen(
-				depth.texture, motionVector.texture,
+				depth.texture, motionVector.texture, hudless,
 				(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 				(uint32_t)dispSize.x, (uint32_t)dispSize.y,
 				upscaling.jitter.x, upscaling.jitter.y);

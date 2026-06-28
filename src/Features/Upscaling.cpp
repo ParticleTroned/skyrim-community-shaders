@@ -526,10 +526,24 @@ void Upscaling::DestroyUpscaledTexture()
 void Upscaling::CreateHudlessTexture()
 {
 	auto renderer = globals::game::renderer;
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	// Size + format from kFRAMEBUFFER (the swapchain back buffer) — the hudless is captured FROM it just
+	// before the UI composites, so matching its format means the hudless is already in the back-buffer
+	// format FFX/DLSS-G expect (no precision-group mismatch).
+	// Source = kFRAMEBUFFER (the swapchain back buffer). Its `.texture` field is NULL under CS+DXVK, but its
+	// SRV is valid and references the real back-buffer texture — fetch the resource from the SRV. This gives
+	// the back-buffer FORMAT (R10G10B10A2 / 10-bit when HDR is on; kMAIN is RGBA16F / 16-bit), so the hudless
+	// matches the back buffer's precision group exactly (no conversion needed for FFX's UI extraction).
+	auto& fb = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
+	if (!fb.SRV)
+		return;  // framebuffer SRV not ready yet (early load) — defer; the capture hook creates it lazily
+	winrt::com_ptr<ID3D11Resource> fbResource;
+	fb.SRV->GetResource(fbResource.put());
+	winrt::com_ptr<ID3D11Texture2D> fbTexture;
+	if (!fbResource || FAILED(fbResource->QueryInterface(IID_PPV_ARGS(fbTexture.put()))) || !fbTexture)
+		return;
 
 	D3D11_TEXTURE2D_DESC texDesc{};
-	main.texture->GetDesc(&texDesc);
+	fbTexture->GetDesc(&texDesc);
 	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
 	hudlessTexture = new Texture2D(texDesc);
@@ -614,32 +628,13 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		}
 
 		// 2. On select, initialize DLSS-G mode OFF (registers the viewport). The actual ON is driven
-		//    per-frame by the gameplay gate in Main_PostProcessing.
+		//    per-frame by the gameplay gate in Main_PostProcessing. (The plugin load + proxy install is
+		//    handled by the load/unload reconcile in the per-frame section below, per Streamline DLSS-G §18.)
 		if (needDLSSG && !hadDLSSG) {
 			Streamline::GetSingleton()->SetDLSSGMode(false,
 				(uint32_t)fgRenderSize.x, (uint32_t)fgRenderSize.y,
 				(uint32_t)fgDisplaySize.x, (uint32_t)fgDisplaySize.y);
-
-			// RE-ENABLE fix: if DLSS-G was already active this session, its present proxy relinquished present
-			// on the previous off/away edge and will NOT re-acquire it from slDLSSGSetOptions(eOn) alone —
-			// DLSS-G comes back as framesPresented=1 (no doubling). This happens both on a plain FG off->on
-			// toggle AND when coming back from FSR-FG. Force a DXVK swapchain recreate so CreateSwapchainKHR
-			// re-installs the proxy fresh, exactly as at boot. Fires on ANY DLSS-G re-activation (not the
-			// first — the boot swapchain already carries the proxy). Safe from the FSR side because FSR-FG's
-			// FFX FrameInterpolationSwapChain isn't actually installed when its context fails, so there is no
-			// live FFX present/interp to deadlock the recreate against.
-			if (dlssgHasBeenActive) {
-				Streamline::RequestDxvkSwapchainRecreate();
-				logger::info("[Upscaling] DLSS-G re-activate: requested swapchain recreate to re-install present proxy");
-			}
 		}
-
-		// NOTE on the goal items "recreate swapchain on FG-mode change" + "unload DLSS-G when off": a blanket
-		// forced recreate on every FG-mode edge deadlocks FSR's controlled FFX unwrap (it has live present/
-		// interpolation threads that must drain via its own present->SUBOPTIMAL path), and runtime
-		// slSetFeatureLoaded(kFeatureDLSS_G,false) mid-session froze FSR-FG -> DLSS-G (toggling the DLSS-G
-		// present proxy fights the swapchain lifecycle). Both need a coordinated interposer-level
-		// owner-suppression design (see comshaders-fg-goal-5items memory) — NOT the host-only approach.
 
 		previousUpscaleMode = a_upscalemethod;
 		previousFrameGeneration = settings.frameGeneration;
@@ -682,6 +677,26 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		if (fsrFgAppliedState == 1 && dlssgProxyMayOwnPresent) {
 			Streamline::RequestDxvkSwapchainRecreate();
 			dlssgProxyMayOwnPresent = false;
+		}
+
+		// DLSS-G runtime load/unload reconcile (Streamline DLSS-G guide §18). Keep the plugin's loaded state
+		// matched to selection: LOADED only while DLSS-G is the selected FG method, UNLOADED otherwise (incl.
+		// at boot when another method is default) so a disabled DLSS-G has NO overhead — no extra present
+		// queue, no off-screen back-buffer copy. The (un)load itself happens inside DXVK's swapchain recreate
+		// (DxvkSwapchainTornDownCallback calls slSetFeatureLoaded in the no-swapchain window), which is the
+		// only way the create installs/omits DLSS-G's proxy correctly. We request ONE recreate per state
+		// change and latch until the callback flips IsDLSSGLoaded(), so no recreate storm.
+		auto* sl = Streamline::GetSingleton();
+		const bool dlssgSelected = settings.frameGeneration && fgMethod == FrameGenMethod::kDLSSG;
+		if (dlssgSelected != sl->IsDLSSGLoaded()) {
+			sl->SetDLSSGDesiredLoaded(dlssgSelected);
+			if (!dlssgLoadRecreatePending) {
+				Streamline::RequestDxvkSwapchainRecreate();
+				dlssgLoadRecreatePending = true;
+				logger::info("[Upscaling] DLSS-G {} requested (swapchain recreate, guide §18)", dlssgSelected ? "load" : "unload");
+			}
+		} else {
+			dlssgLoadRecreatePending = false;  // the load/unload landed
 		}
 	}
 }
@@ -1309,6 +1324,23 @@ void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
+
+	// Capture the hudless scene for frame generation HERE — this hook fires just before the UI/HUD is drawn
+	// (func(a1) below), so the back buffer holds the fully-composited scene WITHOUT UI, in the back-buffer
+	// format. The game's kFRAMEBUFFER `.texture` is NULL under DXVK, but its SRV references the real back
+	// buffer — read the resource from the SRV. Both DLSS-G and FSR FG consume this as their HUDLessColor.
+	if (upscaling.IsFrameGenerationActive()) {
+		if (!upscaling.hudlessTexture || !upscaling.hudlessTexture->resource)
+			upscaling.CreateHudlessTexture();
+		auto& fb = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
+		if (fb.SRV && upscaling.hudlessTexture && upscaling.hudlessTexture->resource) {
+			winrt::com_ptr<ID3D11Resource> fbResource;
+			fb.SRV->GetResource(fbResource.put());
+			if (fbResource)
+				globals::d3d::context->CopyResource(upscaling.hudlessTexture->resource.get(), fbResource.get());
+		}
+	}
+
 	upscaling.PostDisplay();
 
 	auto& hdr = globals::features::hdrDisplay;
@@ -1334,12 +1366,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kXeSS || upscaleMethod == UpscaleMethod::kDLSS)
 		upscaling.PerformUpscaling();
 
-	// Capture the hudless scene (post-upscale, pre-UI) for frame generation. Both DLSS-G and
-	// FSR FG use this as their HUDLessColor input to avoid re-generating UI artifacts.
-	if (upscaling.IsFrameGenerationActive() && upscaling.hudlessTexture && upscaling.hudlessTexture->resource) {
-		auto& main = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		globals::d3d::context->CopyResource(upscaling.hudlessTexture->resource.get(), main.texture);
-	}
+	// (HUDLessColor is captured later, in MenuManagerDrawInterfaceStartHook just before the UI draws, from
+	// kFRAMEBUFFER — the fully-composited pre-UI swapchain in back-buffer format.)
 
 	// Frame-gen resource tagging is independent of which upscaler ran (an upscaler + frame
 	// generation can be active together), so this is its own `if`, not an `else if`.
@@ -1362,14 +1390,28 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			// VK_ERROR_DEVICE_LOST. SetDLSSGMode is cached, so passing a constant `true` issues the real
 			// slDLSSGSetOptions exactly once (the registered-off -> on edge) and no-ops every frame after.
 			const auto dispSize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
-			const auto rendSize = Util::ConvertToDynamic(dispSize);
+			// renderSize MUST be the actual DRS render size (the sub-rect where depth/MV are valid), NOT the
+			// lock-inflated full size. Util::ConvertToDynamic(dispSize) returns FULL res while the upscaler holds
+			// dynamicResolutionLock, so the FG-prepare was reading the whole 1920x1080 depth/MV texture even
+			// though only the top-left render sub-rect is valid → the stale 3/4 showed as garbage motion vectors
+			// (depth's stale region reads as uniform far-plane so it looked filled). ignoreLock=true gives the
+			// true render size (dev computed screenSize * resolutionScale, equivalent).
+			const auto rendSize = Util::ConvertToDynamic(dispSize, /*ignoreLock=*/true);
 			Streamline::GetSingleton()->SetDLSSGMode(true,
 				(uint32_t)rendSize.x, (uint32_t)rendSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y);
 
 			if (gameplay) {
+				// FG depth = the pre-upscale render-res kMAIN. With an active upscaler UpscaleDepth() rewrote kMAIN
+				// to display res, but first copied the render-res depth into kMAIN_COPY — tag that. TAA (no upscaler):
+				// kMAIN is still render-res. DLSS-G tags this eOnlyValidNow, so SL snapshots it at tag time (instead
+				// of a CS-side CopyResource) and the later in-place depth upscale / next frame can't disturb it.
 				auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+				auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+				ID3D11Resource* fgDepth = (upscaling.IsUpscalingActive() && depthCopy.texture)
+				                              ? depthCopy.texture
+				                              : depth.texture;
 				Streamline::GetSingleton()->TagDLSSGResources(
-					depth.texture, motionVector.texture, hudless,
+					fgDepth, motionVector.texture, hudless,
 					(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 					(uint32_t)dispSize.x, (uint32_t)dispSize.y);
 				Streamline::GetSingleton()->LogDLSSGFrameStats();
@@ -1381,10 +1423,20 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			// Drive the FSR FG-prepare every gameplay frame from depth + motion vectors, independent of the
 			// active upscaler (the sl.fsr plugin runs FrameGenerationPrepare on a color-less FSR evaluate).
 			const auto dispSize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
-			const auto rendSize = Util::ConvertToDynamic(dispSize);
+			// renderSize MUST be the actual DRS render size where depth/MV are valid (see the DLSS-G branch
+			// above) — ignoreLock=true, else ConvertToDynamic returns full res and FFX reads stale MV in the
+			// 3/4 of the texture outside the render sub-rect (the "motion vectors don't fill the screen" bug).
+			const auto rendSize = Util::ConvertToDynamic(dispSize, /*ignoreLock=*/true);
+			// FG depth = pre-upscale render-res kMAIN (see the DLSS-G branch): kMAIN_COPY holds the render-res
+			// depth UpscaleDepth() saved before rewriting kMAIN to display res. TAA (no upscaler): use kMAIN. The
+			// sl.fsr FG-prepare consumes depth at evaluate (mid-frame), so kMAIN_COPY is still the correct depth.
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+			auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY];
+			ID3D11Resource* fgDepth = (upscaling.IsUpscalingActive() && depthCopy.texture)
+			                              ? depthCopy.texture
+			                              : depth.texture;
 			Streamline::GetSingleton()->EvaluateFSRFrameGen(
-				depth.texture, motionVector.texture, hudless,
+				fgDepth, motionVector.texture, hudless,
 				(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 				(uint32_t)dispSize.x, (uint32_t)dispSize.y,
 				upscaling.jitter.x, upscaling.jitter.y);

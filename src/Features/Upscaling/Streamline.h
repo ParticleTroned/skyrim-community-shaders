@@ -62,6 +62,7 @@ public:
 	// sl.fsr plugin's FG-prepare via slEvaluateFeature(kFeatureFSR). Decoupled from the upscaler, so FSR FG
 	// works under any upscale method. Call every gameplay frame while FSR FG is the active method.
 	void EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+		ID3D11Resource* a_hudlessColor,
 		uint32_t a_renderWidth, uint32_t a_renderHeight,
 		uint32_t a_outputWidth, uint32_t a_outputHeight,
 		float a_jitterX, float a_jitterY);
@@ -89,6 +90,12 @@ public:
 
 	void SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
 		uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate = 1);
+
+	// DLSS-G runtime (un)load (Streamline DLSS-G guide §18): set the desired loaded state, then call
+	// RequestDxvkSwapchainRecreate() — DXVK's torn-down callback applies slSetFeatureLoaded in the
+	// no-swapchain window so the next create installs/omits DLSS-G's proxy. Unloaded => no overhead when off.
+	void SetDLSSGDesiredLoaded(bool a_loaded);
+	[[nodiscard]] bool IsDLSSGLoaded() const;
 
 	[[nodiscard]] bool GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) const;
 

@@ -169,6 +169,10 @@ public:
 	// (the boot swapchain already carries the proxy).
 	bool dlssgHasBeenActive = false;
 
+	// One-recreate-per-change latch for the DLSS-G load/unload reconcile (Streamline DLSS-G guide §18):
+	// set when a (un)load recreate has been requested, cleared once IsDLSSGLoaded() matches selection.
+	bool dlssgLoadRecreatePending = false;
+
 	bool depthUpscaleUseWideKernel = false;
 
 	void PostDisplay();

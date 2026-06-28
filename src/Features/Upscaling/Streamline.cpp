@@ -48,6 +48,7 @@ namespace
 		PFun_slGetFeatureFunction* slGetFeatureFunction = nullptr;
 		PFun_slAllocateResources* slAllocateResources = nullptr;
 		PFun_slFreeResources* slFreeResources = nullptr;
+		PFun_slSetFeatureLoaded* slSetFeatureLoaded = nullptr;  // runtime DLSS-G (un)load, bracketed by swapchain recreate
 
 		// Feature-specific entry points (resolved via slGetFeatureFunction).
 		PFun_slDLSSGetOptimalSettings* slDLSSGetOptimalSettings = nullptr;
@@ -105,6 +106,39 @@ namespace
 			VkImageView view = VK_NULL_HANDLE;
 		} fsrFgHudlessCache;
 	} g_sl;
+
+	// DLSS-G runtime load state (Streamline DLSS-G guide §18). DLSS-G is loaded at slInit, so current=true.
+	// CS sets `desired` on a real select/deselect and requests a DXVK swapchain recreate; DXVK's torn-down
+	// callback below applies slSetFeatureLoaded while no swapchain exists, so the next vkCreateSwapchainKHR
+	// installs/omits DLSS-G's present proxy + extra queue. Unloading when off removes the queue + off-screen
+	// copy overhead the guide warns about.
+	std::atomic<bool> g_dlssgDesiredLoaded{ true };
+	bool g_dlssgCurrentlyLoaded = true;
+
+	// Invoked by DXVK inside recreateSwapChain() between destroy and create (registered via
+	// dxvkSetSwapchainTornDownCallback). Toggles DLSS-G's loaded state to match `desired` in exactly the
+	// window the guide requires. Runs on DXVK's present/acquire thread under its surface lock.
+	void DxvkSwapchainTornDownCallback()
+	{
+		const bool desired = g_dlssgDesiredLoaded.load(std::memory_order_acquire);
+		if (desired == g_dlssgCurrentlyLoaded || !g_sl.slSetFeatureLoaded || g_sl.dispatchFaulted)
+			return;
+		__try {
+			if (g_sl.slSetFeatureLoaded(sl::kFeatureDLSS_G, desired) != sl::Result::eOk)
+				return;
+			g_dlssgCurrentlyLoaded = desired;
+			// A reloaded plugin may sit at a new base — re-resolve its entry points; reset the mode cache so
+			// the next SetDLSSGMode re-issues slDLSSGSetOptions (plugin option state is gone after an unload).
+			g_sl.dlssgModeCached = false;
+			g_sl.dlssgModeOn = false;
+			if (desired) {
+				g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSGSetOptions));
+				g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", reinterpret_cast<void*&>(g_sl.slDLSSGGetState));
+			}
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			g_sl.dispatchFaulted = true;
+		}
+	}
 
 	// Routes Streamline's own logging into the CS logger.
 	void LogCallback(sl::LogType a_type, const char* a_msg)
@@ -215,6 +249,10 @@ bool Streamline::Initialize()
 		Resolve(g_sl.slGetFeatureFunction, "slGetFeatureFunction") &&
 		Resolve(g_sl.slAllocateResources, "slAllocateResources") &&
 		Resolve(g_sl.slFreeResources, "slFreeResources");
+
+	// Non-fatal: runtime DLSS-G (un)load (Streamline DLSS-G guide §18 — avoids the extra present queue +
+	// off-screen-copy overhead when DLSS-G is off). Absent on older SL builds -> the unload is skipped.
+	Resolve(g_sl.slSetFeatureLoaded, "slSetFeatureLoaded");
 	if (!resolved) {
 		FreeLibrary(g_sl.interposer);
 		g_sl.interposer = nullptr;
@@ -480,7 +518,36 @@ static void cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 	a_consts.cameraViewToClip = *reinterpret_cast<const sl::float4x4*>(&cameraViewToClip);
 	a_consts.depthInverted = sl::Boolean::eFalse;
 
-	sl::recalculateCameraMatrices(a_consts);
+	sl::recalculateCameraMatrices(a_consts);  // keep: fills clipToCameraView from cameraViewToClip
+
+	// Override clipToPrevClip/prevClipToClip with a deterministic jitter-free reprojection from the game's OWN
+	// current + previous unjittered view-proj, so SL's depth->MV reconstruction reproduces MotionBlur::GetSSMotionVector.
+	// recalculateCameraMatrices derives these from a STATIC previous-frame cache (its own header: "DO NOT USE THIS IN
+	// ANYTHING PROPER") that aliases across call sites — the upscale evaluate and the FG-prepare both build constants
+	// every frame, each clobbering the other's "previous".
+	//
+	// CAMERA-RELATIVE BRIDGE (critical): Skyrim renders camera-relative. curVP.Invert() reconstructs world relative to
+	// the CURRENT camera origin (CameraPosAdjust), but CameraPreviousViewProjUnjittered expects world relative to the
+	// PREVIOUS camera origin (CameraPreviousPosAdjust) — the engine tracks the two adjusts separately and authors the
+	// per-object previous-world positions in the previous frame's relative space (Lighting.hlsl:176 etc.). We must
+	// translate the reconstructed world by the camera displacement (cur - prev adjust) to move it into the previous
+	// frame's space before applying prevVP. Without this the reprojection assumes the camera only ROTATED, so motion
+	// vectors are wrong under camera TRANSLATION (the sky still looks right because it is at infinity / translation-
+	// invariant — which is exactly why the engine's own DeferredCompositeCS sky path can feed the current-relative
+	// position to both legs). The translation scales with the homogeneous w, so it composes correctly pre-divide.
+	//
+	// Jitter: the game unprojects with the JITTERED inverse and reprojects UNJITTERED; that factors into a jitter-free
+	// reprojection ∘ a current de-jitter, and SL applies the de-jitter itself via jitterOffset — so both legs here use
+	// the UNJITTERED VP. .Transpose() maps the game's mul(M,v) column-vector matrices to SL's row-vector convention.
+	Matrix curVP = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
+	Matrix prevVP = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose();
+	const auto& posAdj = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const auto& prevPosAdj = globals::game::frameBufferCached.GetCameraPreviousPosAdjust();
+	Matrix camDelta = Matrix::CreateTranslation(posAdj.x - prevPosAdj.x, posAdj.y - prevPosAdj.y, posAdj.z - prevPosAdj.z);
+	Matrix clipToPrevClip = curVP.Invert() * camDelta * prevVP;  // clip -> cur-rel world -> prev-rel world -> prev clip
+	Matrix prevClipToClip = clipToPrevClip.Invert();
+	a_consts.clipToPrevClip = *reinterpret_cast<const sl::float4x4*>(&clipToPrevClip);
+	a_consts.prevClipToClip = *reinterpret_cast<const sl::float4x4*>(&prevClipToClip);
 
 	a_consts.jitterOffset = { -a_jitterX, -a_jitterY };
 	a_consts.reset = sl::Boolean::eFalse;
@@ -551,7 +618,7 @@ static void cs_DestroyViews(DxvkInterop* a_dxvk, VkDevice a_device, const VkImag
 static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::ViewportHandle& a_viewport,
 	ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_outputWidth, uint32_t a_outputHeight,
-	float a_jitterX, float a_jitterY)
+	float a_jitterX, float a_jitterY, ID3D11Resource* a_hudlessColor = nullptr)
 {
 	auto* dxvk = DxvkInterop::GetSingleton();
 	if (!dxvk)
@@ -568,32 +635,41 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	VkDevice vkDevice = dxvk->GetDevice();
 	auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
 		dxvk->GetDeviceProcAddr()(vkDevice, "vkCreateImageView"));
-	VkImageView views[4] = {};
+	VkImageView views[5] = {};
 	int nv = 0;
 	const auto wrap = [&](ID3D11Resource* a_res, sl::Resource& a_out, uint32_t a_w, uint32_t a_h) -> bool {
 		VkImageView v = VK_NULL_HANDLE;
 		if (!cs_WrapInteropImage(dxvk, vkDevice, vkCreateImageView, a_res, a_out, a_w, a_h, v))
 			return false;
-		if (v != VK_NULL_HANDLE && nv < 4)
+		if (v != VK_NULL_HANDLE && nv < 5)
 			views[nv++] = v;
 		return true;
 	};
 
 	const bool haveColor = (a_colorIn && a_colorOut);
-	sl::Resource colorInRes{}, colorOutRes{}, depthRes{}, mvecRes{};
+	const bool haveHudless = (a_hudlessColor != nullptr);
+	sl::Resource colorInRes{}, colorOutRes{}, depthRes{}, mvecRes{}, hudlessRes{};
 	bool ok = wrap(a_depth, depthRes, a_renderWidth, a_renderHeight) &&
 	          wrap(a_motionVectors, mvecRes, a_renderWidth, a_renderHeight);
 	if (ok && haveColor)
 		ok = wrap(a_colorIn, colorInRes, a_renderWidth, a_renderHeight) &&
 		     wrap(a_colorOut, colorOutRes, a_outputWidth, a_outputHeight);
+	// HUDLessColor is the post-upscale, pre-UI scene at DISPLAY (output) resolution — tag it at output dims.
+	if (ok && haveHudless)
+		ok = wrap(a_hudlessColor, hudlessRes, a_outputWidth, a_outputHeight);
 	if (!ok) {
 		cs_DestroyViews(dxvk, vkDevice, views, nv);
 		return sl::Result::eErrorMissingInputParameter;
 	}
 
+	// Motion vectors must carry the SAME dimensions + subrect as depth (SL/FFX reconstruct MV on the depth
+	// grid). Force MV's reported dimensions to depth's and tag both with the one renderExtent below.
+	mvecRes.width = depthRes.width;
+	mvecRes.height = depthRes.height;
+
 	sl::Extent renderExtent{ 0, 0, a_renderWidth, a_renderHeight };
 	sl::Extent outputExtent{ 0, 0, a_outputWidth, a_outputHeight };
-	sl::ResourceTag tags[4];
+	sl::ResourceTag tags[5];
 	uint32_t nt = 0;
 	if (haveColor) {
 		tags[nt++] = sl::ResourceTag{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent };
@@ -601,6 +677,8 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	}
 	tags[nt++] = sl::ResourceTag{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent };
 	tags[nt++] = sl::ResourceTag{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent };
+	if (haveHudless)
+		tags[nt++] = sl::ResourceTag{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &outputExtent };
 
 	sl::Result evalRes = sl::Result::eErrorNotInitialized;
 	VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
@@ -852,6 +930,7 @@ void Streamline::EvaluateFSR(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorO
 }
 
 void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
+	ID3D11Resource* a_hudlessColor,
 	uint32_t a_renderWidth, uint32_t a_renderHeight,
 	uint32_t a_outputWidth, uint32_t a_outputHeight,
 	float a_jitterX, float a_jitterY)
@@ -879,9 +958,11 @@ void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 
 	__try {
 		const sl::ViewportHandle fgViewport{ 1 };
+		// Tag depth + MV (FG-prepare inputs) AND the hudless scene (present-time UI extraction). No color, so
+		// the plugin's shared kFeatureFSR evaluate runs FG-prepare, not an upscale.
 		const sl::Result evalRes = cs_EvaluateFeatureCore(sl::kFeatureFSR, fgViewport,
 			nullptr, nullptr, a_depth, a_motionVectors,
-			a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY);
+			a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY, a_hudlessColor);
 
 		static sl::Result s_loggedRes = sl::Result::eErrorNotInitialized;
 		if (evalRes != s_loggedRes) {
@@ -898,6 +979,11 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 	uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate)
 {
 	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
+		return;
+
+	// DLSS-G may be runtime-unloaded when not the selected FG method (guide §18). Don't call its options
+	// entry point while unloaded — wait for the load (driven by the swapchain recreate) to land.
+	if (!g_dlssgCurrentlyLoaded)
 		return;
 
 	// Called every frame with the gameplay gate — skip the SL call when the mode hasn't changed.
@@ -918,8 +1004,8 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		options.flags = sl::DLSSGFlags::eDynamicResolutionEnabled | sl::DLSSGFlags::eRetainResourcesWhenOff;
 		options.dynamicResWidth = a_renderWidth;
 		options.dynamicResHeight = a_renderHeight;
-		options.mvecDepthWidth = a_renderWidth;
-		options.mvecDepthHeight = a_renderHeight;
+		options.mvecDepthWidth = a_displayWidth;  // texture dims, not render size (extent gives the sub-rect)
+		options.mvecDepthHeight = a_displayHeight;  // texture dims, not render size (extent gives the sub-rect)
 		options.colorWidth = a_displayWidth;
 		options.colorHeight = a_displayHeight;
 		// eBlockNoClientQueues (Vulkan-only): SL does NOT block the client's presenting queue while it
@@ -1093,8 +1179,12 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 			if (!dxvk->GetVkImage(a_res, &image, &layout, &info) || image == VK_NULL_HANDLE)
 				return false;
 			a_out = sl::Resource{ sl::ResourceType::eTex2d, image, nullptr, cachedView(a_slot, image, info.format), static_cast<uint32_t>(layout) };
-			a_out.width = a_w;
-			a_out.height = a_h;
+			// Resource dimensions = FULL texture size (the VkImage); the valid render sub-rect is the tag Extent.
+			// Reporting the render size (a_w/a_h) told SL/DLSS-G the buffer was render-sized while the VkImage is
+			// full-sized -> mis-scaled inputs. info.extent is the real texture size.
+			(void)a_w; (void)a_h;
+			a_out.width = info.extent.width;
+			a_out.height = info.extent.height;
 			a_out.nativeFormat = static_cast<uint32_t>(info.format);
 			a_out.mipLevels = info.mipLevels;
 			a_out.arrayLayers = info.arrayLayers;
@@ -1108,18 +1198,25 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 			!makeResource(a_motionVectors, mvecRes, a_renderWidth, a_renderHeight, 1))
 			return;
 
+		// Motion vectors must carry the SAME dimensions + subrect as depth (DLSS-G dilates MV on the depth
+		// grid — DLSSG.MVecsSubrect must equal DLSSG.DepthSubrect). Force MV's dimensions to depth's; both are
+		// tagged with the one `extent` below.
+		mvecRes.width = depthRes.width;
+		mvecRes.height = depthRes.height;
+
 		sl::Extent extent{};
 		extent.width = a_renderWidth;
 		extent.height = a_renderHeight;
 
-		// eValidUntilPresent: SL references the inputs and reads them at present (no per-frame copy).
-		// eOnlyValidNow forces SL to COPY depth/MV every frame, which accumulated until a sustained-
-		// gameplay hang (~36s) — so we use eValidUntilPresent and accept the small fast-motion artifact
-		// risk (host may overwrite inputs before present) over the hang. The §16.1 fence wait above is
-		// the proper mitigation for that artifact when SL populates the fence.
+		// Depth: eOnlyValidNow — SL snapshots the depth into its own copy at tag time. This replaces a CS-side
+		// CopyResource: the tagged depth is kMAIN_COPY, the render-res depth the engine saved before the in-place
+		// depth upscale rewrote kMAIN; eValidUntilPresent would have SL read it back at present, after that upscale
+		// and the next frame have reused kMAIN_COPY. eOnlyValidNow captures it now, while it is still correct.
+		// MV stays eValidUntilPresent (referenced, no copy): copying BOTH depth+MV every frame is what previously
+		// accumulated into a sustained-gameplay hang; the MV target is not disturbed before present.
 		sl::ResourceTag tags[3];
 		uint32_t tagCount = 0;
-		tags[tagCount++] = { &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extent };
+		tags[tagCount++] = { &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &extent };
 		tags[tagCount++] = { &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extent };
 
 		// HUDLessColor is the post-upscale, pre-UI scene at DISPLAY (back-buffer) resolution — NOT render
@@ -1315,6 +1412,28 @@ void Streamline::RegisterDxvkOwnershipPredicate()
 	}
 	setQuery([](VkSwapchainKHR) -> bool { return true; });
 	logger::info("[Streamline] registered DXVK ownership predicate (all swapchains externally paced)");
+
+	// Register the swapchain-torn-down callback used to (un)load DLSS-G in the no-swapchain window
+	// (Streamline DLSS-G guide §18). Non-fatal if the DXVK build predates the export.
+	using SetTornDownFn = void (*)(void (*)());
+	if (auto setTornDown = reinterpret_cast<SetTornDownFn>(GetProcAddress(dxvkModule, "dxvkSetSwapchainTornDownCallback"))) {
+		setTornDown(&DxvkSwapchainTornDownCallback);
+		logger::info("[Streamline] registered DXVK swapchain-torn-down callback (DLSS-G load/unload)");
+	} else {
+		logger::warn("[Streamline] dxvkSetSwapchainTornDownCallback not found — DLSS-G stays resident when disabled");
+	}
+}
+
+void Streamline::SetDLSSGDesiredLoaded(bool a_loaded)
+{
+	// Request DLSS-G to be (un)loaded on the next swapchain recreate (applied by DxvkSwapchainTornDownCallback
+	// in the no-swapchain window). The caller must follow this with RequestDxvkSwapchainRecreate().
+	g_dlssgDesiredLoaded.store(a_loaded, std::memory_order_release);
+}
+
+bool Streamline::IsDLSSGLoaded() const
+{
+	return g_dlssgCurrentlyLoaded;
 }
 
 void Streamline::RequestDxvkSwapchainRecreate()

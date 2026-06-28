@@ -38,7 +38,7 @@ struct AdaptiveBalance : Feature
 			{ "Separate exterior day and night scene/image profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Optional per-location overrides with COC codes",
-				"Per-profile brightness, bloom, saturation, and contrast control" }
+				"Per-profile brightness, dual bloom, saturation, and contrast control" }
 		};
 	}
 
@@ -62,6 +62,7 @@ struct AdaptiveBalance : Feature
 		float brightness = 1.0f;
 		float imageBrightness = 1.0f;
 		float bloom = 1.0f;
+		float advancedBloom = 0.0f;
 		float saturation = 1.0f;
 		float contrast = 1.0f;
 		bool advanced = false;
@@ -112,6 +113,7 @@ struct AdaptiveBalance : Feature
 	{
 		float imageBrightness = 1.0f;
 		float bloom = 1.0f;
+		float advancedBloom = 0.0f;
 		float saturation = 1.0f;
 		float contrast = 1.0f;
 	};

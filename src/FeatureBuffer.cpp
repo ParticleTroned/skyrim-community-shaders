@@ -95,12 +95,13 @@ namespace
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
-	static_assert(sizeof(LinearLightingSettingsCB) == 128);
+	static_assert(sizeof(LinearLightingSettingsCB) == 144);
 	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBalance) == 108);
 	static_assert(offsetof(LinearLightingSettingsCB, adaptiveImageBrightnessMult) == 112);
 	static_assert(offsetof(LinearLightingSettingsCB, adaptiveBloomMult) == 116);
-	static_assert(offsetof(LinearLightingSettingsCB, adaptiveSaturationMult) == 120);
-	static_assert(offsetof(LinearLightingSettingsCB, adaptiveContrastMult) == 124);
+	static_assert(offsetof(LinearLightingSettingsCB, adaptiveAdvancedBloomMult) == 120);
+	static_assert(offsetof(LinearLightingSettingsCB, adaptiveSaturationMult) == 124);
+	static_assert(offsetof(LinearLightingSettingsCB, adaptiveContrastMult) == 128);
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);

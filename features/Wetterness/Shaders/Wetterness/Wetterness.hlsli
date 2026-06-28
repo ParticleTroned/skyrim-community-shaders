@@ -65,7 +65,8 @@ namespace Wetterness
 		float rippleMaxRadiusSqr = rippleMaxRadius * rippleMaxRadius;
 		float splashTime = 0.0;
 		if (enableSplashes) {
-			splashTime = t * raindropPhaseScale / CS_WETNESS_SETTINGS.SplashesLifetime;
+			float splashLifetime = max(CS_WETNESS_SETTINGS.SplashesLifetime, 1e-3);
+			splashTime = t * raindropPhaseScale / splashLifetime;
 		}
 		float rippleTime = t * raindropPhaseScale;
 		float worldPhase = worldPos.z * 0.001;

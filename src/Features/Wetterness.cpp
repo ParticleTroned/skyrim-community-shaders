@@ -237,6 +237,31 @@ namespace
 		return weather && weather->precipitationData && weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy);
 	}
 
+	float LinearStep(float start, float end, float value)
+	{
+		const float range = end - start;
+		if (std::abs(range) <= 1e-5f) {
+			return value >= end ? 1.0f : 0.0f;
+		}
+		return std::clamp((value - start) / range, 0.0f, 1.0f);
+	}
+
+	float GetVisibleRainTransitionWeight(const RE::TESWeather* weather, float currentWeatherPct, bool isCurrentWeather)
+	{
+		if (!IsRainyWeather(weather)) {
+			return 0.0f;
+		}
+
+		const float clampedWeatherPct = std::clamp(currentWeatherPct, 0.0f, 1.0f);
+		if (isCurrentWeather) {
+			const float fadeInThreshold = weather->data.precipitationBeginFadeIn * (1.0f / 255.0f);
+			return LinearStep(fadeInThreshold, 1.0f, clampedWeatherPct);
+		}
+
+		const float fadeOutThreshold = weather->data.precipitationEndFadeOut * (1.0f / 255.0f);
+		return 1.0f - LinearStep(0.0f, fadeOutThreshold, clampedWeatherPct);
+	}
+
 	float ClampDryingHours(float hours, float fallback = DRYING_HOURS_MAX)
 	{
 		if (!std::isfinite(hours))
@@ -2122,26 +2147,29 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	// Keep rain-driven visuals transition-aware: if either current or last weather is rainy,
 	// blend both contributions so rain fades out/in over the handoff instead of hard-dropping.
 	const float weatherRainTransitionWeight = std::clamp(currentRainWeight + lastRainWeight, 0.0f, 1.0f);
-	// Prevent long raindrop linger near transition end by requiring both:
-	// - active precipitation FX intensity
-	// - weather-level rain state
+	const float currentRainVisibilityWeight = GetVisibleRainTransitionWeight(currentWeather, currentWeight, true);
+	const float lastRainVisibilityWeight = GetVisibleRainTransitionWeight(lastWeather, currentWeight, false);
+	const float visibleRainTransitionWeight = std::clamp(currentRainVisibilityWeight + lastRainVisibilityWeight, 0.0f, 1.0f);
+	// Visible rain should survive transient precip-object loss in SE while still respecting
+	// the game's own precipitation fade-in/fade-out thresholds.
 	const float currentRainingVisual = std::min(currentRainingFX, currentRainingAccum);
 	const float lastRainingVisual = std::min(lastRainingFX, lastRainingAccum);
 	const float blendedRainingAccum = std::clamp(currentRainingAccum * currentWeight + lastRainingAccum * lastWeight, 0.0f, 1.0f);
 	const float blendedRainingVisualWeighted = std::clamp(currentRainingVisual * currentRainWeight + lastRainingVisual * lastRainWeight, 0.0f, 1.0f);
-	const float blendedRainingVisual = blendedRainingVisualWeighted;
+	const float blendedRainingVisibleByWeather = std::clamp(currentRainingAccum * currentRainVisibilityWeight + lastRainingAccum * lastRainVisibilityWeight, 0.0f, 1.0f);
+	const float blendedRainingVisual = std::max(blendedRainingVisualWeighted, blendedRainingVisibleByWeather);
 	const float raindropTransitionFalloff = std::clamp(settings.RaindropTransitionFalloff, 0.5f, 6.0f);
 	const float blendedRainingVisualShaped = std::pow(std::clamp(blendedRainingVisual, 0.0f, 1.0f), raindropTransitionFalloff);
-	const float blendedRainingVisualSnapped = (weatherRainTransitionWeight > 0.005f && blendedRainingVisualShaped >= 0.0025f) ? blendedRainingVisualShaped : 0.0f;
+	const float blendedRainingVisualSnapped = (visibleRainTransitionWeight > 0.005f && blendedRainingVisualShaped >= 0.0025f) ? blendedRainingVisualShaped : 0.0f;
 	const float wetFilmTransitionFalloff = std::min(raindropTransitionFalloff, 1.0f);
 	const float blendedWetFilmRainingVisualShaped = std::pow(std::clamp(blendedRainingVisual, 0.0f, 1.0f), wetFilmTransitionFalloff);
-	const float blendedWetFilmRainingVisualSnapped = (weatherRainTransitionWeight > 0.005f && blendedWetFilmRainingVisualShaped >= 0.0025f) ? blendedWetFilmRainingVisualShaped : 0.0f;
+	const float blendedWetFilmRainingVisualSnapped = (visibleRainTransitionWeight > 0.005f && blendedWetFilmRainingVisualShaped >= 0.0025f) ? blendedWetFilmRainingVisualShaped : 0.0f;
 	const bool hasPrecipitationFxSignal = (currentRainingFX > 0.0f) || (lastRainingFX > 0.0f);
 	const bool rainingByWeatherMetadata =
 		(engineRaining && blendedRainingAccum > 0.0f) ||
 		((weatherRainTransitionWeight > 0.01f) && (blendedRainingAccum > 0.01f));
 	const bool rainingNow = (blendedRainingVisualSnapped > 0.0f) || rainingByWeatherMetadata;
-	const float rainExposureSource = hasPrecipitationFxSignal ? blendedRainingVisualWeighted : blendedRainingAccum;
+	const float rainExposureSource = hasPrecipitationFxSignal ? blendedRainingVisual : blendedRainingAccum;
 	const auto getEffectiveDryingHours = [&](float rainEventWeight) {
 		if (enableWeatherDrivenDryingModel) {
 			return GetWeatherDrivenDryingHours(currentWeather, lastWeather, currentWeight, lastWeight, rainEventWeight);
@@ -2352,9 +2380,9 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	if (runtimeInactive) {
 		data.settings.EnableWetterness = 0u;
 	}
-	// Raindrops should stop when rain weather transition is complete (weight reaches zero),
-	// not immediately when current weather pointer flips.
-	if (weatherRainTransitionWeight <= 0.005f || isInterior) {
+	// Raindrops should stop when visible precipitation fades out completely, not when
+	// the weather pointer flips or a precip object drops for a frame.
+	if (visibleRainTransitionWeight <= 0.005f || isInterior) {
 		data.settings.EnableRaindropFx = 0u;
 	}
 	const float modernReflectionUi = SanitizeReflectionScale(modernWetIndirectSpecularScale, MAX_MODERN_WET_REFLECTION_UI_SCALE, DEFAULT_MODERN_WET_REFLECTION_UI);
@@ -2486,28 +2514,19 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 
 void Wetterness::Prepass()
 {
+	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
-	if (!context) {
+	if (!renderer || !context) {
 		return;
 	}
 
-	ID3D11ShaderResourceView* precipOcclusionSrv = nullptr;
-	const bool wetnessActiveThisFrame =
-		g_hasLastFrameData &&
-		g_lastFrameData.settings.EnableWetterness != 0u &&
-		(g_lastFrameData.PackedRainReflectionControl & RAIN_REFLECTION_CONTROL_OCCLUSION_VALID_BIT) != 0u;
-	if (!wetnessActiveThisFrame) {
+	if (g_hasLastFrameData && g_lastFrameData.settings.EnableWetterness == 0u) {
 		ID3D11ShaderResourceView* nullSrv = nullptr;
 		context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 1, &nullSrv);
 		return;
 	}
 
-	auto renderer = globals::game::renderer;
-	if (!renderer) {
-		context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 1, &precipOcclusionSrv);
-		return;
-	}
-
+	ID3D11ShaderResourceView* precipOcclusionSrv = nullptr;
 	auto& precipOcclusionTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
 	if (precipOcclusionTexture.depthSRV) {
 		precipOcclusionSrv = precipOcclusionTexture.depthSRV;

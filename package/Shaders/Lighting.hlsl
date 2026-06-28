@@ -848,7 +848,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "WetnessEffects/WetnessEffects.hlsli"
 #		define CS_TEX_PRECIP_OCCLUSION WetnessEffects::TexPrecipOcclusion
 #		define CS_GET_RAIN_DROPS(worldPos, time, normal, strength) WetnessEffects::GetRainDrops(worldPos, time, normal, strength)
-#		define CS_REORIENT_NORMAL(n1, n2) ReorientNormal(n1, n2)
+#		define CS_REORIENT_NORMAL(n1, n2) WetnessEffects::ReorientNormal(n1, n2)
 #	endif
 
 #	if defined(TERRAIN_BLENDING)

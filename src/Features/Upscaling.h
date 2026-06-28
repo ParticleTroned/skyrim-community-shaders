@@ -162,6 +162,13 @@ public:
 	// evict the proxy; cleared once that recreate has been requested. See CheckResources.
 	bool dlssgProxyMayOwnPresent = false;
 
+	// Set once DLSS-G has actually generated frames this session. Used to detect a DLSS-G RE-enable (FG
+	// toggled off then on while DLSS-G stays the method): the proxy relinquished present on the off edge
+	// and slDLSSGSetOptions(eOn) alone does not re-acquire it under interposition, so a re-enable forces a
+	// swapchain recreate to re-install the proxy (see CheckResources). Not needed on the first activation
+	// (the boot swapchain already carries the proxy).
+	bool dlssgHasBeenActive = false;
+
 	bool depthUpscaleUseWideKernel = false;
 
 	void PostDisplay();

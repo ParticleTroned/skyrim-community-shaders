@@ -619,6 +619,19 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			Streamline::GetSingleton()->SetDLSSGMode(false,
 				(uint32_t)fgRenderSize.x, (uint32_t)fgRenderSize.y,
 				(uint32_t)fgDisplaySize.x, (uint32_t)fgDisplaySize.y);
+
+			// RE-ENABLE fix: if DLSS-G was already active this session, its present proxy relinquished present
+			// on the previous off/away edge and will NOT re-acquire it from slDLSSGSetOptions(eOn) alone —
+			// DLSS-G comes back as framesPresented=1 (no doubling). This happens both on a plain FG off->on
+			// toggle AND when coming back from FSR-FG. Force a DXVK swapchain recreate so CreateSwapchainKHR
+			// re-installs the proxy fresh, exactly as at boot. Fires on ANY DLSS-G re-activation (not the
+			// first — the boot swapchain already carries the proxy). Safe from the FSR side because FSR-FG's
+			// FFX FrameInterpolationSwapChain isn't actually installed when its context fails, so there is no
+			// live FFX present/interp to deadlock the recreate against.
+			if (dlssgHasBeenActive) {
+				Streamline::RequestDxvkSwapchainRecreate();
+				logger::info("[Upscaling] DLSS-G re-activate: requested swapchain recreate to re-install present proxy");
+			}
 		}
 
 		// NOTE on the goal items "recreate swapchain on FG-mode change" + "unload DLSS-G when off": a blanket
@@ -1360,6 +1373,9 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 					(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 					(uint32_t)dispSize.x, (uint32_t)dispSize.y);
 				Streamline::GetSingleton()->LogDLSSGFrameStats();
+				// DLSS-G has now run for gameplay this session; a later off->on toggle must recreate the
+				// swapchain to re-install the present proxy (see CheckResources block 2).
+				upscaling.dlssgHasBeenActive = true;
 			}
 		} else if (fgMethod == FrameGenMethod::kFSR && gameplay) {
 			// Drive the FSR FG-prepare every gameplay frame from depth + motion vectors, independent of the
@@ -1368,7 +1384,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			const auto rendSize = Util::ConvertToDynamic(dispSize);
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 			Streamline::GetSingleton()->EvaluateFSRFrameGen(
-				depth.texture, motionVector.texture,
+				depth.texture, motionVector.texture, hudless,
 				(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 				(uint32_t)dispSize.x, (uint32_t)dispSize.y,
 				upscaling.jitter.x, upscaling.jitter.y);

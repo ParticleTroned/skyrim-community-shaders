@@ -314,6 +314,7 @@ namespace SharedData
 		uint enableAdaptiveBalance;
 		float adaptiveImageBrightnessMult;
 		float adaptiveBloomMult;
+		float adaptiveAdvancedBloomMult;
 		float adaptiveSaturationMult;
 		float adaptiveContrastMult;
 	};

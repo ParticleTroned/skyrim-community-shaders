@@ -25,6 +25,7 @@ Texture2D<float4> ImageTex : register(t0);
 Texture2D<float4> AdaptTex : register(t1);
 #	elif defined(BLEND)
 Texture2D<float4> BlendTex : register(t1);
+#		include "Common/AdvancedBloom.hlsli"
 #	endif
 Texture2D<float4> AvgTex : register(t2);
 
@@ -141,6 +142,12 @@ PS_OUTPUT main(PS_INPUT input)
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
 	bloomColor *= SharedData::linearLightingSettings.adaptiveBloomMult;
+
+	float advancedBloomMult = SharedData::linearLightingSettings.adaptiveAdvancedBloomMult;
+	[branch] if (advancedBloomMult > 0.0001)
+	{
+		bloomColor += AdvancedBloom::Compute(uv) * advancedBloomMult;
+	}
 
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 

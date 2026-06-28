@@ -128,7 +128,14 @@ namespace DisplayMapping
 		return XYZToRGB(col);
 	}
 
-	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol)
+	float3 ApplyBloom(float3 col, float3 bloomCol, float bloomIntensity, float3 advancedBloomCol, float advancedBloomIntensity)
+	{
+		float3 bloomMask = saturate(bloomIntensity - col);
+		float3 advancedBloomMask = saturate(advancedBloomIntensity - col);
+		return col + bloomMask * bloomCol + advancedBloomMask * advancedBloomCol;
+	}
+
+	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol, float bloomIntensity, float3 advancedBloomCol, float advancedBloomIntensity)
 	{
 		float3 ictcp = RGBToICtCp(col);
 
@@ -138,7 +145,7 @@ namespace DisplayMapping
 
 		// Non-hue preserving mapping
 		float3 perChannelCompressed = GetTonemapFactorHejlBurgessDawson(col);
-		perChannelCompressed += saturate(Param.x - perChannelCompressed) * bloomCol;
+		perChannelCompressed = ApplyBloom(perChannelCompressed, bloomCol, bloomIntensity, advancedBloomCol, advancedBloomIntensity);
 
 		col = perChannelCompressed;
 

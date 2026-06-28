@@ -1027,7 +1027,8 @@ void Streamline::LogDLSSGFrameStats()
 }
 
 void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
-	ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight)
+	ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight,
+	uint32_t a_displayWidth, uint32_t a_displayHeight)
 {
 	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
 		return;
@@ -1121,9 +1122,15 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		tags[tagCount++] = { &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extent };
 		tags[tagCount++] = { &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extent };
 
+		// HUDLessColor is the post-upscale, pre-UI scene at DISPLAY (back-buffer) resolution — NOT render
+		// resolution like depth/MV. Tag it with the display extent so DLSS-G's UI extraction samples the
+		// right region (tagging it render-res left it sampling only the top-left render sub-rect).
+		sl::Extent displayExtent{};
+		displayExtent.width = a_displayWidth;
+		displayExtent.height = a_displayHeight;
 		sl::Resource hudlessRes{};
-		if (a_hudlessColor && makeResource(a_hudlessColor, hudlessRes, a_renderWidth, a_renderHeight, 2))
-			tags[tagCount++] = { &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent };
+		if (a_hudlessColor && makeResource(a_hudlessColor, hudlessRes, a_displayWidth, a_displayHeight, 2))
+			tags[tagCount++] = { &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &displayExtent };
 
 		VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
 		if (cmd == VK_NULL_HANDLE)

@@ -95,7 +95,8 @@ public:
 	void LogDLSSGFrameStats();
 
 	void TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
-		ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight);
+		ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight,
+		uint32_t a_displayWidth, uint32_t a_displayHeight);
 
 	void TagFSRFGHudless(ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight);
 

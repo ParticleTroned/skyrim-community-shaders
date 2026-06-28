@@ -1350,7 +1350,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 				Streamline::GetSingleton()->TagDLSSGResources(
 					depth.texture, motionVector.texture, hudless,
-					(uint32_t)rendSize.x, (uint32_t)rendSize.y);
+					(uint32_t)rendSize.x, (uint32_t)rendSize.y,
+					(uint32_t)dispSize.x, (uint32_t)dispSize.y);
 				Streamline::GetSingleton()->LogDLSSGFrameStats();
 			}
 		} else if (fgMethod == FrameGenMethod::kFSR && gameplay) {

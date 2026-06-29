@@ -1410,6 +1410,24 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				ID3D11Resource* fgDepth = (upscaling.IsUpscalingActive() && depthCopy.texture)
 				                              ? depthCopy.texture
 				                              : depth.texture;
+
+				// DLSS-G DOUBLING REQUIRES the sl.fsr plugin's per-frame kFeatureFSR evaluate under DXVK: only the
+				// FSR upscaler makes DLSS-G double — DLSS/DLAA (kFeatureDLSS) and bare TAA present 1:1 even though
+				// DLSS-G engages (proven by present-rate isolation). So for the TAA / no-upscaler case, drive a
+				// 1.0x FSR evaluate purely as the DLSS-G keep-alive: it upscales kMAIN into the throwaway
+				// upscaledTexture (NOT copied back, so TAA's image stays on screen) and, via cs_BuildConstants,
+				// sets the viewport-0 common constants DLSS-G's present hook reads. This replaces SetCommonConstants
+				// (the evaluate sets the same constants once per frame, avoiding the duplicate-constants guard).
+				if (!upscaling.IsUpscalingActive()) {
+					upscaling.CreateUpscaledTexture();  // idempotent; TAA path has no upscale output otherwise
+					auto& mainColor = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+					if (upscaling.upscaledTexture && upscaling.upscaledTexture->resource && mainColor.texture)
+						Streamline::GetSingleton()->EvaluateFSR(
+							mainColor.texture, upscaling.upscaledTexture->resource.get(), fgDepth, motionVector.texture,
+							(uint32_t)dispSize.x, (uint32_t)dispSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y,
+							0 /*native 1.0x*/, 0.0f, upscaling.jitter.x, upscaling.jitter.y);
+				}
+
 				Streamline::GetSingleton()->TagDLSSGResources(
 					fgDepth, motionVector.texture, hudless,
 					(uint32_t)rendSize.x, (uint32_t)rendSize.y,

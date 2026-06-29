@@ -494,6 +494,21 @@ if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
     # embedded JSON config (strlen(NULL) crash in sl.common) which aborts slInit and wedges the
     # interposer. Never stage it.
     list(FILTER _SL_DLLS EXCLUDE REGEX "sl\\.template\\.dll$")
+    # NvLowLatencyVk.dll — the VK_NV_low_latency runtime SL's chi layer loads from the plugin dir at init
+    # (sl.chi/nvllvk.cpp). WITHOUT it, NvLL never initializes ("Failed to load NvLowLatencyVk.dll" → m_reflex
+    # is null), so every Reflex/NvLL marker/sleep fails and DLSS-G cannot pace frame generation on the
+    # non-upscaler (TAA/native) path — it presents 1:1. It is NOT an sl.*.dll / nvngx_*.dll so the globs above
+    # miss it; it ships in the SDK bin or the fork's external/reflex-sdk-vk/lib. Stage whichever exists.
+    set(_SL_NVLL "${STREAMLINE_DLL_DIR}/NvLowLatencyVk.dll")
+    if(NOT EXISTS "${_SL_NVLL}")
+        set(_SL_NVLL "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/external/reflex-sdk-vk/lib/NvLowLatencyVk.dll")
+    endif()
+    if(EXISTS "${_SL_NVLL}")
+        list(APPEND _SL_NGX_DLLS "${_SL_NVLL}")
+        message(STATUS "Staging NvLowLatencyVk.dll from ${_SL_NVLL}")
+    else()
+        message(WARNING "NvLowLatencyVk.dll not found — DLSS-G frame pacing (esp. with TAA/native) will not work")
+    endif()
     message(STATUS "Staging Streamline plugin DLLs from ${STREAMLINE_DLL_DIR}")
     install(
         FILES ${_SL_DLLS} ${_SL_NGX_DLLS}
@@ -640,6 +655,15 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(APPEND _AIO_SL_DLLS ${_AIO_SL_FORK})
         # Never stage sl.template.dll — the SDK sample plugin crashes slInit (see install() rule above).
         list(FILTER _AIO_SL_DLLS EXCLUDE REGEX "sl\\.template\\.dll$")
+        # NvLowLatencyVk.dll — required for NvLL/Reflex (and thus DLSS-G pacing); not an sl.*/nvngx_* dll so
+        # the globs miss it. See the install() rule above. Stage from the SDK bin or the fork's reflex-sdk-vk/lib.
+        set(_aio_nvll "${STREAMLINE_DLL_DIR}/NvLowLatencyVk.dll")
+        if(NOT EXISTS "${_aio_nvll}")
+            set(_aio_nvll "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/external/reflex-sdk-vk/lib/NvLowLatencyVk.dll")
+        endif()
+        if(EXISTS "${_aio_nvll}")
+            list(APPEND _AIO_SL_DLLS "${_aio_nvll}")
+        endif()
         list(APPEND _prepare_aio_cmds COMMAND ${CMAKE_COMMAND} -E make_directory "${_aio_sl_dir}")
         foreach(_sl IN LISTS _AIO_SL_DLLS)
             list(APPEND _prepare_aio_cmds COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_sl}" "${_aio_sl_dir}/")

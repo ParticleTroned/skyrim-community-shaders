@@ -110,10 +110,6 @@ public:
 	void ClearDLSSGTags();
 	void EnsureDLSSGPresentTag();
 
-	void SetConstants(const float4x4& a_clipToPrevClip, const float4x4& a_prevClipToClip,
-		float2 a_jitter, float2 a_mvecScale, float a_cameraNear, float a_cameraFar,
-		float a_cameraFOV, float a_cameraAspect, bool a_depthInverted, bool a_reset);
-
 	// Register the DXVK frame-gen ownership predicate so DXVK treats all swapchains as
 	// externally paced under interposition (skips present-fence, present-wait worker).
 	static void RegisterDxvkOwnershipPredicate();

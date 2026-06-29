@@ -81,11 +81,16 @@ namespace
 		bool reflexCacheValid = false;
 		sl::ReflexMode reflexCachedMode = sl::ReflexMode::eOff;
 
-		// Cached DLSS-G interpolation mode. SetDLSSGMode is called every frame with the gameplay-state
-		// gate (on in-world, off while loading/paused/in-menu per the DLSS-G guide §13), so cache the
-		// last mode and only issue slDLSSGSetOptions on a real change.
+		// Cached DLSS-G interpolation mode + the render/display dims it was issued for. SetDLSSGMode is called
+		// every frame with the gameplay-state gate (on in-world, off while loading/paused/in-menu per the DLSS-G
+		// guide §13), so cache and only issue slDLSSGSetOptions on a real change. The DIMS are part of the key:
+		// changing upscaler or quality changes the render size (and whether DRS is active), which flips the
+		// eDynamicResolutionEnabled flag + dynamicRes — re-issuing only on the on/off edge would leave stale
+		// options (a sub-display dynamicRes feeding full-res TAA inputs device-loses; full-res options feeding a
+		// DRS upscaler stops doubling).
 		bool dlssgModeCached = false;
 		bool dlssgModeOn = false;
+		uint32_t dlssgCachedRenderW = 0, dlssgCachedRenderH = 0, dlssgCachedDisplayW = 0, dlssgCachedDisplayH = 0;
 
 		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset at the frame
 		// start (SimulationStart); set by TagDLSSGResources. If still false at present, the present path
@@ -120,6 +125,13 @@ namespace
 	// window the guide requires. Runs on DXVK's present/acquire thread under its surface lock.
 	void DxvkSwapchainTornDownCallback()
 	{
+		// ANY swapchain teardown (load/unload OR a plain resize/fullscreen recreate) invalidates DLSS-G's
+		// per-swapchain option state, so force the next SetDLSSGMode to re-issue slDLSSGSetOptions against the
+		// new swapchain dimensions. Without this, a plain recreate (desired==current, early-returns below) would
+		// leave the mode cached and the first post-resize SetDLSSGMode suppressed.
+		g_sl.dlssgModeCached = false;
+		g_sl.dlssgModeOn = false;
+
 		const bool desired = g_dlssgDesiredLoaded.load(std::memory_order_acquire);
 		if (desired == g_dlssgCurrentlyLoaded || !g_sl.slSetFeatureLoaded || g_sl.dispatchFaulted)
 			return;
@@ -127,10 +139,8 @@ namespace
 			if (g_sl.slSetFeatureLoaded(sl::kFeatureDLSS_G, desired) != sl::Result::eOk)
 				return;
 			g_dlssgCurrentlyLoaded = desired;
-			// A reloaded plugin may sit at a new base — re-resolve its entry points; reset the mode cache so
-			// the next SetDLSSGMode re-issues slDLSSGSetOptions (plugin option state is gone after an unload).
-			g_sl.dlssgModeCached = false;
-			g_sl.dlssgModeOn = false;
+			// A reloaded plugin may sit at a new base — re-resolve its entry points (plugin option state is gone
+			// after an unload; the mode cache was already reset above).
 			if (desired) {
 				g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSGSetOptions));
 				g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", reinterpret_cast<void*&>(g_sl.slDLSSGGetState));
@@ -987,23 +997,29 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		return;
 
 	// Called every frame with the gameplay gate — skip the SL call when the mode hasn't changed.
-	if (g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable)
+	if (g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable &&
+		g_sl.dlssgCachedRenderW == a_renderWidth && g_sl.dlssgCachedRenderH == a_renderHeight &&
+		g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight)
 		return;
 
 	__try {
 		sl::DLSSGOptions options{};
 		options.mode = a_enable ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
 		options.numFramesToGenerate = a_numFramesToGenerate;
-		// CS upscales via dynamic resolution, so the depth/MV inputs are at the (smaller) render
-		// size while the back buffer is at display size. DLSS-G must be told this — without the
-		// eDynamicResolutionEnabled flag + dimensions it assumes full-res inputs, mismatches the
-		// DRS-downscaled depth/MV, and its eBlockPresentingClientQueue blocks the present queue
-		// waiting on a workload that can't complete (the reported toggle freeze).
 		// eRetainResourcesWhenOff: DLSS-G is toggled off every loading screen / menu and back on for
 		// gameplay; retaining its resources across those off periods avoids realloc stutter on re-enable.
-		options.flags = sl::DLSSGFlags::eDynamicResolutionEnabled | sl::DLSSGFlags::eRetainResourcesWhenOff;
-		options.dynamicResWidth = a_renderWidth;
-		options.dynamicResHeight = a_renderHeight;
+		options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+		// eDynamicResolutionEnabled ONLY when an upscaler actually downscales (render < display): the depth/MV
+		// inputs are then a render-res sub-rect of the full-size targets and DLSS-G must be told the optimal
+		// render res. With TAA / native (render == display) this is FIXED-ratio — the guide says DO NOT set the
+		// DRS flag (it mis-configures DLSS-G; setting it with dynamicRes == color device-loses during interpolation).
+		// Leave dynamicResWidth/Height 0 in that case so DLSS-G treats the inputs as full color-res.
+		const bool drsActive = (a_renderWidth < a_displayWidth) || (a_renderHeight < a_displayHeight);
+		if (drsActive) {
+			options.flags |= sl::DLSSGFlags::eDynamicResolutionEnabled;
+			options.dynamicResWidth = a_renderWidth;
+			options.dynamicResHeight = a_renderHeight;
+		}
 		options.mvecDepthWidth = a_displayWidth;  // texture dims, not render size (extent gives the sub-rect)
 		options.mvecDepthHeight = a_displayHeight;  // texture dims, not render size (extent gives the sub-rect)
 		options.colorWidth = a_displayWidth;
@@ -1022,6 +1038,10 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		} else {
 			g_sl.dlssgModeCached = true;
 			g_sl.dlssgModeOn = a_enable;
+			g_sl.dlssgCachedRenderW = a_renderWidth;
+			g_sl.dlssgCachedRenderH = a_renderHeight;
+			g_sl.dlssgCachedDisplayW = a_displayWidth;
+			g_sl.dlssgCachedDisplayH = a_displayHeight;
 			logger::info("[Streamline] DLSS-G mode={} frames={}", a_enable, a_numFramesToGenerate);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1094,9 +1114,12 @@ bool Streamline::GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) con
 
 void Streamline::LogDLSSGFrameStats()
 {
-	// SL owns present under interposition. Query slDLSSGGetState on the render thread purely for
-	// doubling telemetry. numFramesActuallyPresented is a cumulative counter that reads 2 while
-	// doubling. Throttled to ~once/2s so any SL warning can't spam the log.
+	// Throttled (~once/2s) status log only. WARNING: numFramesActuallyPresented is NOT a reliable doubling
+	// signal here — DLSS-G presents the generated frame asynchronously on DXVK's present thread, while this
+	// reads slDLSSGGetState on the render thread, so the value is a timing-dependent sample that reads 1 even
+	// while actually doubling (observed: TAA reads 1 while FPS visibly doubles; FSR-native reads 1 too). The
+	// SL header warns slDLSSGGetState "must be synchronized with the present thread". Verify doubling visually
+	// or with PresentMon — do NOT gate logic on this number.
 	if (g_sl.dispatchFaulted || !g_sl.slDLSSGGetState || !g_sl.dlssgModeOn)
 		return;
 	static uint32_t s_n = 0;
@@ -1105,7 +1128,7 @@ void Streamline::LogDLSSGFrameStats()
 	__try {
 		sl::DLSSGState state{};
 		if (g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr) == sl::Result::eOk)
-			logger::info("[Streamline] DLSS-G status={} framesPresented={} (2 = doubling active)",
+			logger::info("[Streamline] DLSS-G status={} framesPresented={} (telemetry only — unreliable)",
 				static_cast<int>(state.status), state.numFramesActuallyPresented);
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
@@ -1126,11 +1149,16 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		return;
 
 	__try {
-		// §16.1 inputs back-pressure is now a GPU-side wait queued on the present thread (OnDLSSGPostPresent),
-		// matching the SL sample's QueueGPUWaitOnSyncObjectSet — it gates the graphics queue so the rendering
-		// that overwrites these depth/MV targets waits for the OFA to finish reading them. The old host-side
-		// vkWaitSemaphores here blocked the CPU but did NOT gate the GPU's overwriting submissions, so the
-		// OFA read being-overwritten memory -> device loss. Removed.
+		// Input back-pressure (DLSS-G guide §16.1): with queueParallelismMode=eBlockNoClientQueues SL does NOT
+		// block the client queue, so the guide asks the app to gate reuse of tagged inputs on
+		// DLSSGState::inputsProcessingCompletionFence. We do NOT implement that fence wait; instead we keep the
+		// inputs valid by construction: DEPTH is tagged eOnlyValidNow (below) so SL snapshots it immediately and
+		// the in-place depth upscale / next frame cannot corrupt SL's copy; MV stays eValidUntilPresent (copying
+		// BOTH inputs every frame is what previously accumulated into a sustained-gameplay hang) and is read at
+		// present, before the next frame overwrites kMOTION_VECTOR. A prior host-side vkWaitSemaphores here only
+		// blocked the CPU, not the GPU's overwriting submissions, so it was removed. No device loss has been
+		// observed under sustained gameplay; if a future change makes the async OFA read race an MV reuse, add the
+		// inputsProcessingCompletionFence GPU wait here rather than reintroducing a per-frame MV copy.
 
 		// Tag DLSS-G inputs for the SAME frame the constants/markers/present use, else SL cannot match
 		// them to the presented frame and drops interpolation.
@@ -1228,6 +1256,11 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		sl::Resource hudlessRes{};
 		if (a_hudlessColor && makeResource(a_hudlessColor, hudlessRes, a_displayWidth, a_displayHeight, 2))
 			tags[tagCount++] = { &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &displayExtent };
+		else
+			// Capture/wrap failed (early frame, SRV not ready, resolution change). Tag a NULL hudless so DLSS-G
+			// does no UI extraction THIS frame instead of retaining the previous eValidUntilPresent hudless (a
+			// stale UI region composited into the interpolated frame).
+			tags[tagCount++] = { nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, nullptr };
 
 		VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
 		if (cmd == VK_NULL_HANDLE)
@@ -1358,39 +1391,6 @@ void Streamline::EnsureDLSSGPresentTag()
 	if (g_sl.dlssgTaggedThisFrame)
 		return;
 	ClearDLSSGTags();
-}
-
-void Streamline::SetConstants(const float4x4& a_clipToPrevClip, const float4x4& a_prevClipToClip,
-	float2 a_jitter, float2 a_mvecScale, float a_cameraNear, float a_cameraFar,
-	float a_cameraFOV, float a_cameraAspect, bool a_depthInverted, bool a_reset)
-{
-	if (!initialized || g_sl.dispatchFaulted)
-		return;
-
-	__try {
-		sl::FrameToken* token = SharedFrameToken(false);
-		if (!token)
-			return;
-
-		sl::Constants consts{};
-		std::memcpy(&consts.clipToPrevClip, &a_clipToPrevClip, sizeof(float4x4));
-		std::memcpy(&consts.prevClipToClip, &a_prevClipToClip, sizeof(float4x4));
-		consts.jitterOffset = { a_jitter.x, a_jitter.y };
-		consts.mvecScale = { a_mvecScale.x, a_mvecScale.y };
-		consts.cameraNear = a_cameraNear;
-		consts.cameraFar = a_cameraFar;
-		consts.cameraFOV = a_cameraFOV;
-		consts.cameraAspectRatio = a_cameraAspect;
-		consts.depthInverted = a_depthInverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-		consts.cameraMotionIncluded = sl::Boolean::eTrue;
-		consts.motionVectors3D = sl::Boolean::eFalse;
-		consts.reset = a_reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-
-		g_sl.slSetConstants(consts, *token, g_sl.viewport);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		g_sl.dispatchFaulted = true;
-		logger::error("[Streamline] SetConstants faulted — disabling for this session");
-	}
 }
 
 void Streamline::RegisterDxvkOwnershipPredicate()

@@ -93,6 +93,7 @@ struct LinearLighting : Feature
 		float adaptiveAdvancedBloomMult;
 		float adaptiveSaturationMult;
 		float adaptiveContrastMult;
+		float pad0[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 

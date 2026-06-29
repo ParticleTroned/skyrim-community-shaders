@@ -914,8 +914,20 @@ float3 NormalizeWetnessVector(float3 v, float3 fallback)
 #	endif
 
 #	if defined(WETTERNESS) && defined(DYNAMIC_CUBEMAPS)
+bool IsFiniteWetternessCubemapIrradiance(float3 value)
+{
+	const float3 finiteLimit = float3(1.0e8, 1.0e8, 1.0e8);
+	return all(value == value) && all(abs(value) < finiteLimit);
+}
+
+float3 SanitizeWetternessCubemapIrradiance(float3 irradiance)
+{
+	return IsFiniteWetternessCubemapIrradiance(irradiance) ? irradiance : 0.0.xxx;
+}
+
 float3 ApplyWetternessCubemapClarity(float3 wetCubemapIrradiance, float postRainBlend, float postRainCubemapGlareReductionFromClarity)
 {
+	wetCubemapIrradiance = SanitizeWetternessCubemapIrradiance(wetCubemapIrradiance);
 	float wetCubemapClarityAmount = saturate(postRainBlend * postRainCubemapGlareReductionFromClarity);
 	if (wetCubemapClarityAmount > 1e-4) {
 		float wetCubemapClarityT = sqrt(smoothstep(0.0, 1.0, wetCubemapClarityAmount));
@@ -927,7 +939,7 @@ float3 ApplyWetternessCubemapClarity(float3 wetCubemapIrradiance, float postRain
 		wetCubemapIrradiance = lerp(wetCubemapIrradiance, glareReducedIrradiance, wetCubemapClarityT);
 	}
 
-	return wetCubemapIrradiance;
+	return SanitizeWetternessCubemapIrradiance(wetCubemapIrradiance);
 }
 #	endif
 

@@ -794,6 +794,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(EYE)
+#		undef WETTERNESS
 #		undef WETNESS_EFFECTS
 #	endif
 

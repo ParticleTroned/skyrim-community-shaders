@@ -428,6 +428,9 @@ public:
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
 	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.
 	void RefreshRuntimeResolutionState();
+	// Read-side helper: avoid rebuilding the cached plan multiple times in one frame.
+	void EnsureRuntimeResolutionStateCurrent();
+	void InvalidateFrameScopedUpscalingState();
 	// Rebuild only the cached plan from already-latched state; backend dispatch code must only read the cached plan.
 	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
@@ -477,7 +480,8 @@ public:
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;
 
-	void CheckResources(UpscaleMethod a_upscalemethod);
+	bool CheckResources(UpscaleMethod a_upscalemethod);
+	bool EnsureResourcesCurrent(UpscaleMethod a_upscalemethod);
 	void CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 	void DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod);
 
@@ -592,8 +596,9 @@ public:
 
 	void ConfigureTAA();
 	void ConfigureUpscaling(RE::BSGraphics::State* a_state);
-	void ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
-	void PrepareFullResolutionPostProcessing();
+	bool ApplyLockedFullResolutionDynamicResolutionState(RE::BSGraphics::State* a_state);
+	bool ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
+	void PrepareFullResolutionPostProcessing(RE::BSGraphics::State* a_state = nullptr, bool a_resetProjection = false);
 	bool ResetVRSubmitStageState(bool a_destroyDLSSResources = true);
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
@@ -652,6 +657,12 @@ public:
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
 	uint32_t historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t runtimeResolutionStateLastRefreshFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
+	UpscaleMethod resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;
+	bool resourceCheckStable = false;
+	UpscaleMethod resourceCheckStableMethod = UpscaleMethod::kNONE;
+	uint64_t resourceCheckStableKey = 0;
 	bool historyResetTrackingInitialized = false;
 	float2 previousHistoryScreenSize = { 0.0f, 0.0f };
 	float2 previousHistoryResolutionScale = { 1.0f, 1.0f };

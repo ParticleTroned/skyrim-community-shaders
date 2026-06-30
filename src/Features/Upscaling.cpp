@@ -1966,10 +1966,10 @@ namespace
 				   a_resolutionScale.y < kDynamicResolutionUpscalingScaleThreshold);
 	}
 
-	void SetDynamicResolutionEnabledForUpscaling(bool a_enabled, bool a_forceDisabled = false)
+	bool SetDynamicResolutionEnabledForUpscaling(bool a_enabled, bool a_forceDisabled = false)
 	{
 		if (!globals::game::isVR)
-			return;
+			return false;
 
 		static bool initialized = false;
 		static bool originalEnabled = false;
@@ -1983,11 +1983,17 @@ namespace
 		}
 
 		const bool targetEnabled = a_enabled ? true : (a_forceDisabled ? false : (changedByUpscaling ? originalEnabled : *enabled));
+		bool changed = false;
 		if (*enabled != targetEnabled) {
 			*enabled = targetEnabled;
+			changed = true;
 		}
 
-		changedByUpscaling = a_enabled || a_forceDisabled;
+		const bool targetChangedByUpscaling = a_enabled || a_forceDisabled;
+		if (changedByUpscaling != targetChangedByUpscaling)
+			changed = true;
+		changedByUpscaling = targetChangedByUpscaling;
+		return changed;
 	}
 
 	void DisableAutoDynamicResolutionSetting()
@@ -2440,6 +2446,113 @@ namespace
 		return a_startFrame != 0 && a_frame >= a_startFrame ? a_frame - a_startFrame : 0u;
 	}
 
+	uint32_t GetFrameScopedUpscalingWorkFrame()
+	{
+		const auto* state = globals::state;
+		return state ? std::max(state->frameCount, 1u) : std::numeric_limits<uint32_t>::max();
+	}
+
+	uint64_t HashResourceCheckValue(uint64_t a_hash, uint64_t a_value)
+	{
+		return a_hash ^ (a_value + 0x9E3779B97F4A7C15ull + (a_hash << 6) + (a_hash >> 2));
+	}
+
+	uint64_t QuantizeResourceCheckFloat(float a_value)
+	{
+		return std::isfinite(a_value) ? static_cast<uint64_t>(static_cast<int64_t>(std::llround(a_value * 100000.0f))) : 0ull;
+	}
+
+	uint64_t BuildUpscalingResourceMutationSettingsKey(const Upscaling::Settings& a_settings)
+	{
+		uint64_t hash = 0xCBF29CE484222325ull;
+		auto add = [&](uint64_t a_value) {
+			hash = HashResourceCheckValue(hash, a_value);
+		};
+		auto addFloat = [&](float a_value) {
+			add(QuantizeResourceCheckFloat(a_value));
+		};
+
+		add(std::min<uint>(a_settings.upscaleMethod, static_cast<uint>(Upscaling::UpscaleMethod::kDLSS)));
+		add(std::min<uint>(a_settings.upscaleMethodNoDLSS, static_cast<uint>(Upscaling::UpscaleMethod::kFSR)));
+		add(ClampQualityModeUInt(a_settings.qualityMode));
+		add(std::min<uint>(a_settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex));
+		add(ClampToggleUInt(a_settings.renderScaleMode));
+		add(ClampToggleUInt(a_settings.perfMode));
+		add(ClampToggleUInt(a_settings.frameGenerationMode));
+		add(a_settings.fsr4RuntimeEnable);
+		add(a_settings.foveatedVendorDispatch);
+		add(a_settings.foveatedPeripheryMaskVisualization);
+		add(a_settings.periphery_taa_enable);
+		const float clampedPeripheryTAACenterArea = ClampFoveatedCenterScale(a_settings.periphery_taa_center_area);
+		addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
+		addFloat(ClampFoveatedCenterHorizontalScale(a_settings.foveatedCenterHorizontalScale));
+		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedLeftEyeMaskOffsetX));
+		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedLeftEyeMaskOffsetY));
+		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedRightEyeMaskOffsetX));
+		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedRightEyeMaskOffsetY));
+		addFloat(clampedPeripheryTAACenterArea);
+		addFloat(ClampPeripheryTAAOuterScaleForCenter(a_settings.periphery_taa_outer_scale, clampedPeripheryTAACenterArea));
+		addFloat(ClampPeripheryTAACenterBlendFeather(a_settings.periphery_taa_center_blend_feather));
+		return hash;
+	}
+
+	uint64_t BuildResourceCheckStableKey(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_upscaleMethod)
+	{
+		const auto& settings = a_upscaling.settings;
+		uint64_t hash = 0xCBF29CE484222325ull;
+		auto add = [&](uint64_t a_value) {
+			hash = HashResourceCheckValue(hash, a_value);
+		};
+		auto addFloat = [&](float a_value) {
+			add(QuantizeResourceCheckFloat(a_value));
+		};
+
+		add(static_cast<uint64_t>(a_upscaleMethod));
+		add(a_upscaling.GetRuntimeQualityMode());
+		if (a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
+			add(std::min<uint>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex));
+
+		const uint32_t trackedRenderScaleMode = !globals::game::isVR ?
+		                                            (a_upscaling.IsRenderScaleModeRequested() ? 1u : 0u) :
+		                                            (IsRenderScaleMethodEligible(a_upscaleMethod) ? ClampToggleUInt(settings.renderScaleMode) : 0u);
+		add(trackedRenderScaleMode);
+		add(ClampToggleUInt(settings.perfMode));
+		add(settings.frameGenerationMode && a_upscaling.d3d12SwapChainActive);
+		if (a_upscaleMethod == Upscaling::UpscaleMethod::kFSR) {
+			const bool runtimePathActive = a_upscaling.IsFSRRuntimePathActive(a_upscaleMethod);
+			const bool runtimeFsr4Configured =
+				settings.fsr4RuntimeEnable &&
+				Upscaling::fidelityFX.IsRuntimeFsr4Available();
+			const bool runtimeFsr4PathActive = a_upscaling.IsFSRRuntimeFsr4PathActive(a_upscaleMethod);
+
+			add(runtimePathActive);
+			add(runtimeFsr4Configured);
+			add(runtimeFsr4PathActive);
+		}
+
+		const bool foveatedDispatchActive = a_upscaling.IsFoveatedVendorDispatchEnabled(a_upscaleMethod);
+		add(foveatedDispatchActive);
+		if (foveatedDispatchActive) {
+			const bool peripheryTAAEnabled = a_upscaling.IsPeripheryTAAEnabled(a_upscaleMethod);
+			add(peripheryTAAEnabled);
+			add(a_upscaling.IsPeripheryTAAPathActive(a_upscaleMethod));
+			addFloat(ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale));
+			addFloat(ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX));
+			addFloat(ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY));
+			addFloat(ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetX));
+			addFloat(ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetY));
+			if (peripheryTAAEnabled) {
+				const float clampedPeripheryTAACenterArea = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
+				addFloat(clampedPeripheryTAACenterArea);
+				addFloat(ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, clampedPeripheryTAACenterArea));
+				addFloat(ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather));
+			} else {
+				addFloat(ClampFoveatedCenterScale(settings.foveatedCenterArea));
+			}
+		}
+		return hash;
+	}
+
 	bool ShouldDeferVRRenderScaleRelatchForPostLoadSettle(const Upscaling& a_upscaling, const State* a_state)
 	{
 		if (!a_upscaling.pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire))
@@ -2667,16 +2780,6 @@ namespace
 	bool IsGameMenuContextActive()
 	{
 		return IsKnownGameMenuContextActive();
-	}
-
-	bool IsSubmitStageMenuPresentationContextActive()
-	{
-		if (!globals::game::isVR)
-			return false;
-
-		// Native-layout menu targets are not final eye images; keep VR menus
-		// off the submit-stage menu presentation path.
-		return false;
 	}
 
 	bool TryGetTexture2DDesc(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& outDesc)
@@ -3591,6 +3694,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 void Upscaling::DrawSettings()
 {
+	const uint64_t resourceSettingsKeyBefore = BuildUpscalingResourceMutationSettingsKey(settings);
+
 	struct UpscaleUiChoice
 	{
 		UpscaleMethod method;
@@ -4233,6 +4338,9 @@ void Upscaling::DrawSettings()
 		Util::DrawDllVersionTable("NVIDIA Streamline DLLs (click to open folder)", Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
 		ImGui::TreePop();
 	}
+
+	if (resourceSettingsKeyBefore != BuildUpscalingResourceMutationSettingsKey(settings))
+		InvalidateFrameScopedUpscalingState();
 }
 
 void Upscaling::DrawFoveatedSetupInstructions()
@@ -4272,6 +4380,7 @@ void Upscaling::DrawFoveatedSettings()
 		return;
 	}
 
+	const uint64_t resourceSettingsKeyBefore = BuildUpscalingResourceMutationSettingsKey(settings);
 	SanitizeFoveatedSettings(settings);
 	const UpscaleMethod upscaleMethod = GetUpscaleMethod();
 	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
@@ -4309,6 +4418,8 @@ void Upscaling::DrawFoveatedSettings()
 	};
 	if (!foveatedDispatchRequestedForMethod) {
 		drawInactiveSavedFoveatedProfile(foveatedDispatchSupportedForMethod ? "enable Foveated Upscaling (FOV)" : "requires DLSS or FSR");
+		if (resourceSettingsKeyBefore != BuildUpscalingResourceMutationSettingsKey(settings))
+			InvalidateFrameScopedUpscalingState();
 		return;
 	}
 
@@ -4478,6 +4589,9 @@ void Upscaling::DrawFoveatedSettings()
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	drawActiveFoveatedProfileStatus();
+
+	if (resourceSettingsKeyBefore != BuildUpscalingResourceMutationSettingsKey(settings))
+		InvalidateFrameScopedUpscalingState();
 }
 
 const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
@@ -4518,8 +4632,13 @@ void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 		}
 	}
 
+	const bool changedUpscaleMode =
+		settings.upscaleMethod != static_cast<uint>(UpscaleMethod::kNONE) ||
+		settings.upscaleMethodNoDLSS != static_cast<uint>(UpscaleMethod::kNONE);
 	settings.upscaleMethod = static_cast<uint>(UpscaleMethod::kNONE);
 	settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
+	if (changedUpscaleMode)
+		InvalidateFrameScopedUpscalingState();
 }
 
 void Upscaling::SaveSettings(json& o_json)
@@ -4607,6 +4726,7 @@ void Upscaling::LoadSettings(json& o_json)
 		previousUpscaleMethod != currentUpscaleMethod;
 	if (runtimeReady && perfModeRelevantSettingChanged)
 		RequestPerfModeRenderTargetRecreate("upscaling settings reload");
+	InvalidateFrameScopedUpscalingState();
 
 	auto iniSettingCollection = globals::game::iniPrefSettingCollection;
 	if (iniSettingCollection) {
@@ -4626,6 +4746,7 @@ void Upscaling::RestoreDefaultSettings()
 	settings.reflexUseFPSLimit = false;
 	SanitizeUpscalingSettings(settings);
 	ApplyOpenCompositeUpscalingBlocker(true);
+	InvalidateFrameScopedUpscalingState();
 }
 
 struct BSOpenVR_GetRenderTargetSize
@@ -4979,6 +5100,28 @@ void Upscaling::RefreshRuntimeResolutionState()
 	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	perfMode.UpdateRestartRequiredState(settings, requestedUpscaleMethod);
 	RefreshRuntimeResolutionPlan();
+	runtimeResolutionStateLastRefreshFrame = GetFrameScopedUpscalingWorkFrame();
+}
+
+void Upscaling::EnsureRuntimeResolutionStateCurrent()
+{
+	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
+	if (currentFrame != std::numeric_limits<uint32_t>::max() &&
+		runtimeResolutionStateLastRefreshFrame == currentFrame) {
+		return;
+	}
+
+	RefreshRuntimeResolutionState();
+}
+
+void Upscaling::InvalidateFrameScopedUpscalingState()
+{
+	runtimeResolutionStateLastRefreshFrame = std::numeric_limits<uint32_t>::max();
+	resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
+	resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;
+	resourceCheckStable = false;
+	resourceCheckStableMethod = UpscaleMethod::kNONE;
+	resourceCheckStableKey = 0;
 }
 
 void Upscaling::RefreshRuntimeResolutionPlan()
@@ -5280,6 +5423,7 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	const bool activeMatchesRequest = IsVRRenderScaleModeLatched() == a_enabled;
 	if (ClampToggleUInt(settings.perfMode) == requested && activeMatchesRequest && !perfMode.HasRestartRequiredChange()) {
 		if (renderScaleSettingsChanged) {
+			InvalidateFrameScopedUpscalingState();
 			RequestHistoryReset();
 			RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 		}
@@ -5287,6 +5431,7 @@ void Upscaling::SetPerfModeRequested(bool a_enabled, const char* a_reason, bool 
 	}
 
 	settings.perfMode = requested;
+	InvalidateFrameScopedUpscalingState();
 	RequestHistoryReset();
 	RequestPerfModeRenderTargetRecreate(a_reason, a_origin);
 }
@@ -5303,6 +5448,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	                               static_cast<int>(UpscaleMethod::kFSR);
 	const int targetMethodValue = std::clamp(static_cast<int>(a_targetMethod), static_cast<int>(UpscaleMethod::kNONE), maxMethodValue);
 	UpscaleMethod targetMethod = static_cast<UpscaleMethod>(targetMethodValue);
+	const auto previousMethod = GetUpscaleMethod();
 	if (GetOpenCompositeUpscalingBlocker().active) {
 		targetMethod = UpscaleMethod::kNONE;
 		settings.upscaleMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
@@ -5311,7 +5457,6 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
 	const uint32_t dlssPreset = std::min(a_dlssPreset, kDLSSPresetMaxIndex);
 	const bool renderScaleQuality = IsRenderScaleQualityMode(qualityMode);
-	const auto previousMethod = GetUpscaleMethod();
 	const bool previousRenderScaleRelevant =
 		isVR &&
 		IsVRRenderScaleTransitionSafetyRelevant(*this, previousMethod);
@@ -5323,6 +5468,8 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	const bool targetMethodRenderScaleEligible = IsRenderScaleMethodEligible(targetMethod);
 	const bool targetRenderScaleMode = targetMethodRenderScaleEligible && a_renderScaleModeEnabled && renderScaleQuality;
 	const bool methodChanged = previousMethod != targetMethod;
+	if (methodChanged)
+		InvalidateFrameScopedUpscalingState();
 	const bool methodRelatchRequired =
 		isVR &&
 		methodChanged &&
@@ -5352,8 +5499,10 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 			settingsChanged = true;
 		}
 		ClearPendingVRUpscalingTransition();
-		if (settingsChanged)
+		if (settingsChanged) {
+			InvalidateFrameScopedUpscalingState();
 			RequestHistoryReset();
+		}
 		return;
 	}
 
@@ -5361,6 +5510,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		settings.dlssPreset = dlssPreset;
 		pendingVRDLSSPreset.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
 		clearPendingTransitionTimingIfIdle();
+		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
 		return;
 	}
@@ -5427,8 +5577,10 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		presetChanged = true;
 	}
 
-	if (presetChanged || renderScaleModeChanged)
+	if (presetChanged || renderScaleModeChanged) {
+		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
+	}
 
 	const uint32_t requestedPerfMode = targetRenderScaleMode ? 1u : 0u;
 	if (perfModeRequestPending)
@@ -5625,6 +5777,7 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 {
+	InvalidateFrameScopedUpscalingState();
 	logger::debug("[Upscaling] Creating texture resources for method {} ({})", static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
 	auto renderer = globals::game::renderer;
@@ -5701,6 +5854,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 {
+	InvalidateFrameScopedUpscalingState();
 	logger::debug("[Upscaling] Destroying texture resources for method {} ({})", static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
 	// Clean up D3D11 textures that are no longer needed
@@ -5724,12 +5878,14 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 void Upscaling::DestroySubmitStageDLSSSharpenerTextures()
 {
+	InvalidateFrameScopedUpscalingState();
 	for (auto& texture : submitStageDLSSSharpenerTexture)
 		texture.reset();
 }
 
 void Upscaling::DestroyCommonUpscalingTextures()
 {
+	InvalidateFrameScopedUpscalingState();
 	DestroyTexture(reactiveMaskTexture);
 	DestroyTexture(transparencyCompositionMaskTexture);
 	DestroyTexture(motionVectorCopyTexture);
@@ -5800,6 +5956,7 @@ namespace
 
 void Upscaling::DestroyVRIntermediateTextures()
 {
+	InvalidateFrameScopedUpscalingState();
 	RetiredVRIntermediateTextures retired{};
 	retired.retireFrame = globals::state ? globals::state->frameCount : 0u;
 	bool hasRetiredTextures = false;
@@ -5896,6 +6053,7 @@ void Upscaling::RequestPostLoadRuntimeReset()
 		return;
 
 	postLoadRuntimeResetPending.store(true, std::memory_order_release);
+	InvalidateFrameScopedUpscalingState();
 	logger::debug("[Upscaling] Armed VR post-load runtime reset");
 }
 
@@ -5925,6 +6083,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	if (!wasPending || relatchDelayFrames > previousRelatchDelay)
 		MarkPerfModeRenderTargetRecreateQueued(relatchDelayFrames);
 	RequestHistoryReset();
+	InvalidateFrameScopedUpscalingState();
 	BeginVRRenderScaleInfoTransition(a_reason);
 	if (wasPending)
 		return;
@@ -6239,6 +6398,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	if (!globals::game::isVR)
 		return true;
 
+	InvalidateFrameScopedUpscalingState();
 	UnbindUpscalingResources();
 	DestroyVRIntermediateTextures();
 	DestroyFoveatedResources();
@@ -6567,8 +6727,14 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	return true;
 }
 
-void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
+bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
+	resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
+	resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;
+	resourceCheckStable = false;
+	resourceCheckStableMethod = UpscaleMethod::kNONE;
+	resourceCheckStableKey = 0;
+
 	struct FoveatedLayoutKey
 	{
 		int32_t centerScaleQ = 0;
@@ -6723,7 +6889,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
 	} else if (resourceChangeDetected && vrRenderScaleRelatchOwnsResourceChange) {
-		return;
+		return false;
 	} else if (resourceChangeDetected) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, SubmitStage: {} -> {}, VRRenderScaleLatch: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode), static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
@@ -6879,7 +7045,7 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				HasPendingVRVendorRuntimeReset(*this, a_upscalemethod));
 
 		if (deferForVRRenderScaleRelatch) {
-			return;
+			return false;
 		}
 
 		const auto requeueMissingCommonRecreate = [&]() {
@@ -6898,30 +7064,67 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		} catch (const std::exception& e) {
 			if (globals::game::isVR && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
 				if (MarkSubmitStageDeviceLostIfNeeded(e, "missing common texture recreation"))
-					return;
+					return false;
 
 				requeueMissingCommonRecreate();
 				logger::warn(
 					"[VRRenderScale] Deferred missing common texture recreation for {} after failure: {}",
 					magic_enum::enum_name(a_upscalemethod),
 					e.what());
-				return;
+				return false;
 			}
 			throw;
 		} catch (...) {
 			if (globals::game::isVR && IsVRRenderScaleTransitionSafetyRelevant(*this, a_upscalemethod)) {
 				if (MarkSubmitStageDeviceLostIfDeviceRemoved("missing common texture recreation"))
-					return;
+					return false;
 
 				requeueMissingCommonRecreate();
 				logger::warn(
 					"[VRRenderScale] Deferred missing common texture recreation for {} after an unknown failure",
 					magic_enum::enum_name(a_upscalemethod));
-				return;
+				return false;
 			}
 			throw;
 		}
 	}
+
+	resourceCheckLastCompletedFrame = GetFrameScopedUpscalingWorkFrame();
+	resourceCheckLastCompletedMethod = a_upscalemethod;
+	resourceCheckStable = true;
+	resourceCheckStableMethod = a_upscalemethod;
+	resourceCheckStableKey = BuildResourceCheckStableKey(*this, a_upscalemethod);
+	return true;
+}
+
+bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
+{
+	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
+	if (currentFrame != std::numeric_limits<uint32_t>::max() &&
+		resourceCheckLastCompletedFrame == currentFrame &&
+		resourceCheckLastCompletedMethod == a_upscalemethod) {
+		return true;
+	}
+
+	if (resourceCheckStable &&
+		resourceCheckStableMethod == a_upscalemethod &&
+		!pendingDLSSReset.load(std::memory_order_acquire) &&
+		!pendingFSRReset.load(std::memory_order_acquire) &&
+		!fidelityFX.HasFSRResourcesPendingTeardown() &&
+		!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
+		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
+		!vrRenderScaleResourceTrackingSyncPending.load(std::memory_order_acquire) &&
+		!HasPendingVRUpscalingTransition() &&
+		AreCommonVendorTexturesReady(a_upscalemethod)) {
+		const uint64_t stableKey = BuildResourceCheckStableKey(*this, a_upscalemethod);
+		if (resourceCheckStableKey == stableKey) {
+			resourceCheckLastCompletedFrame = currentFrame;
+			resourceCheckLastCompletedMethod = a_upscalemethod;
+			return true;
+		}
+	}
+
+	return CheckResources(a_upscalemethod);
 }
 
 ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
@@ -7816,6 +8019,7 @@ bool Upscaling::BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidt
 
 void Upscaling::DestroyFoveatedResources()
 {
+	InvalidateFrameScopedUpscalingState();
 	for (uint32_t i = 0; i < 2; ++i) {
 		foveatedCenterColorIn[i].reset();
 		foveatedCenterColorOut[i].reset();
@@ -7830,6 +8034,7 @@ void Upscaling::DestroyFoveatedResources()
 
 void Upscaling::DestroyPeripheryTAAResources()
 {
+	InvalidateFrameScopedUpscalingState();
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		for (uint32_t historySlot = 0; historySlot < 2; ++historySlot) {
 			peripheryTAAHistoryColor[eye][historySlot].reset();
@@ -10512,19 +10717,14 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		globals::game::isVR &&
 		vendorUpscalingMethod &&
 		IsVRRenderScaleMenuPreparationContextActive(state);
-	RefreshRuntimeResolutionState();
+	EnsureRuntimeResolutionStateCurrent();
 	auto applyFullResolutionPresentation = [&](UpscaleMethod a_upscaleMethod, const char* a_context) {
 		float2 presentationDisplaySize = runtimeResolutionPlan.trueHMDDisplaySize;
 		if (presentationDisplaySize.x <= 0.0f || presentationDisplaySize.y <= 0.0f)
 			presentationDisplaySize = screenSize;
-		resolutionScale = { 1.0f, 1.0f };
-		jitter = { 0.0f, 0.0f };
-		a_viewport->projectionPosScaleX = 0.0f;
-		a_viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
+		PrepareFullResolutionPostProcessing(a_viewport, true);
 		LogVRRenderScalePresentationPlanIfChanged(a_upscaleMethod, a_context, presentationDisplaySize, screenSize);
-		CheckResources(a_upscaleMethod);
-		RefreshRuntimeResolutionState();
+		EnsureResourcesCurrent(a_upscaleMethod);
 	};
 
 	if (runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode) {
@@ -10541,22 +10741,19 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		auto phaseCount = GetJitterPhaseCount(renderWidth, outputWidth);
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 
-		a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
-		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
+		const float targetProjectionPosScaleX = -jitter.x / renderWidth;
+		const float targetProjectionPosScaleY = 2.0f * jitter.y / renderHeight;
+		const bool projectionDirty =
+			a_viewport->projectionPosScaleX != targetProjectionPosScaleX ||
+			a_viewport->projectionPosScaleY != targetProjectionPosScaleY;
+		a_viewport->projectionPosScaleX = targetProjectionPosScaleX;
+		a_viewport->projectionPosScaleY = targetProjectionPosScaleY;
 
-		auto& runtimeData = a_viewport->GetRuntimeData();
-		SetDynamicResolutionEnabledForUpscaling(false);
-		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionLock = 1;
-		dynamicResolutionWidthRatio = 1.0f;
-		dynamicResolutionHeightRatio = 1.0f;
-		UpdateCameraData();
+		const bool dynamicResolutionDirty = ApplyLockedFullResolutionDynamicResolutionState(a_viewport);
+		if (projectionDirty && !dynamicResolutionDirty)
+			UpdateCameraData();
 
-		CheckResources(runtimeResolutionPlan.upscaleMethod);
-		RefreshRuntimeResolutionState();
+		EnsureResourcesCurrent(runtimeResolutionPlan.upscaleMethod);
 		return;
 	}
 	if (globals::game::isVR &&
@@ -10573,6 +10770,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		return;
 	}
 
+	bool vendorProjectionDirty = false;
 	if (vendorUpscalingMethod) {
 		float resolutionScaleBase = GetQualityModeResolutionScale(GetRuntimeQualityMode());
 
@@ -10586,12 +10784,16 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
 
-		if (globals::game::isVR)
-			a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
-		else
-			a_viewport->projectionPosScaleX = -2.0f * jitter.x / renderWidth;
-
-		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
+		const float targetProjectionPosScaleX =
+			globals::game::isVR ?
+				-jitter.x / renderWidth :
+				-2.0f * jitter.x / renderWidth;
+		const float targetProjectionPosScaleY = 2.0f * jitter.y / renderHeight;
+		vendorProjectionDirty =
+			a_viewport->projectionPosScaleX != targetProjectionPosScaleX ||
+			a_viewport->projectionPosScaleY != targetProjectionPosScaleY;
+		a_viewport->projectionPosScaleX = targetProjectionPosScaleX;
+		a_viewport->projectionPosScaleY = targetProjectionPosScaleY;
 	} else {
 		resolutionScale = { 1.0f, 1.0f };
 
@@ -10625,29 +10827,34 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 			dynamicResolutionHeightRatio = runtimeData.dynamicResolutionHeightRatio;
 			UpdateCameraData();
 		}
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionState();
+		EnsureResourcesCurrent(upscaleMethod);
 		return;
 	}
 
-	ApplyDynamicResolutionState(a_viewport);
-
-	RefreshRuntimeResolutionState();
-	CheckResources(upscaleMethod);
+	const bool dynamicResolutionDirty = ApplyDynamicResolutionState(a_viewport);
+	if (globals::game::isVR && vendorProjectionDirty && !dynamicResolutionDirty)
+		UpdateCameraData();
+	EnsureResourcesCurrent(upscaleMethod);
 
 	// Disable dynamic resolution unless the game explicitly enables it.
 	if (!globals::game::isVR)
 		runtimeData.dynamicResolutionLock = 1;
 }
 
-void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
+bool Upscaling::ApplyLockedFullResolutionDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 {
 	if (!a_viewport)
-		return;
+		return false;
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
-	if (IsVRRenderScaleModeLatched()) {
-		SetDynamicResolutionEnabledForUpscaling(false);
+	bool cameraDataDirty = globals::game::isVR && SetDynamicResolutionEnabledForUpscaling(false);
+	if (runtimeData.dynamicResolutionPreviousWidthRatio != 1.0f ||
+		runtimeData.dynamicResolutionPreviousHeightRatio != 1.0f ||
+		runtimeData.dynamicResolutionWidthRatio != 1.0f ||
+		runtimeData.dynamicResolutionHeightRatio != 1.0f ||
+		runtimeData.dynamicResolutionLock != 1 ||
+		dynamicResolutionWidthRatio != 1.0f ||
+		dynamicResolutionHeightRatio != 1.0f) {
 		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
 		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
 		runtimeData.dynamicResolutionWidthRatio = 1.0f;
@@ -10655,37 +10862,71 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 		runtimeData.dynamicResolutionLock = 1;
 		dynamicResolutionWidthRatio = 1.0f;
 		dynamicResolutionHeightRatio = 1.0f;
-		UpdateCameraData();
-		return;
+		cameraDataDirty = true;
 	}
 
+	if (cameraDataDirty)
+		UpdateCameraData();
+
+	return cameraDataDirty;
+}
+
+bool Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
+{
+	if (!a_viewport)
+		return false;
+
+	if (IsVRRenderScaleModeLatched()) {
+		return ApplyLockedFullResolutionDynamicResolutionState(a_viewport);
+	}
+
+	auto& runtimeData = a_viewport->GetRuntimeData();
 	auto upscaleMethod = GetRuntimeUpscaleMethod();
 	if (!IsVendorUpscalingMethod(upscaleMethod))
-		return;
+		return false;
 
 	const bool shouldUnlockDynamicResolution = globals::game::isVR && ShouldUnlockDynamicResolutionForUpscaling(upscaleMethod, resolutionScale);
 
 	if (globals::game::isVR) {
-		SetDynamicResolutionEnabledForUpscaling(shouldUnlockDynamicResolution);
+		bool cameraDataDirty = SetDynamicResolutionEnabledForUpscaling(shouldUnlockDynamicResolution);
 		if (shouldUnlockDynamicResolution) {
-			runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
-			runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-			runtimeData.dynamicResolutionWidthRatio = resolutionScale.x;
-			runtimeData.dynamicResolutionHeightRatio = resolutionScale.y;
-			runtimeData.dynamicResolutionLock = 0;
-			dynamicResolutionWidthRatio = resolutionScale.x;
-			dynamicResolutionHeightRatio = resolutionScale.y;
+			if (runtimeData.dynamicResolutionPreviousWidthRatio != runtimeData.dynamicResolutionWidthRatio ||
+				runtimeData.dynamicResolutionPreviousHeightRatio != runtimeData.dynamicResolutionHeightRatio ||
+				runtimeData.dynamicResolutionWidthRatio != resolutionScale.x ||
+				runtimeData.dynamicResolutionHeightRatio != resolutionScale.y ||
+				runtimeData.dynamicResolutionLock != 0 ||
+				dynamicResolutionWidthRatio != resolutionScale.x ||
+				dynamicResolutionHeightRatio != resolutionScale.y) {
+				runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
+				runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
+				runtimeData.dynamicResolutionWidthRatio = resolutionScale.x;
+				runtimeData.dynamicResolutionHeightRatio = resolutionScale.y;
+				runtimeData.dynamicResolutionLock = 0;
+				dynamicResolutionWidthRatio = resolutionScale.x;
+				dynamicResolutionHeightRatio = resolutionScale.y;
+				cameraDataDirty = true;
+			}
 		} else {
-			runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-			runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-			runtimeData.dynamicResolutionWidthRatio = 1.0f;
-			runtimeData.dynamicResolutionHeightRatio = 1.0f;
-			runtimeData.dynamicResolutionLock = 1;
-			dynamicResolutionWidthRatio = 1.0f;
-			dynamicResolutionHeightRatio = 1.0f;
+			if (runtimeData.dynamicResolutionPreviousWidthRatio != 1.0f ||
+				runtimeData.dynamicResolutionPreviousHeightRatio != 1.0f ||
+				runtimeData.dynamicResolutionWidthRatio != 1.0f ||
+				runtimeData.dynamicResolutionHeightRatio != 1.0f ||
+				runtimeData.dynamicResolutionLock != 1 ||
+				dynamicResolutionWidthRatio != 1.0f ||
+				dynamicResolutionHeightRatio != 1.0f) {
+				runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
+				runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
+				runtimeData.dynamicResolutionWidthRatio = 1.0f;
+				runtimeData.dynamicResolutionHeightRatio = 1.0f;
+				runtimeData.dynamicResolutionLock = 1;
+				dynamicResolutionWidthRatio = 1.0f;
+				dynamicResolutionHeightRatio = 1.0f;
+				cameraDataDirty = true;
+			}
 		}
-		UpdateCameraData();
-		return;
+		if (cameraDataDirty)
+			UpdateCameraData();
+		return cameraDataDirty;
 	}
 
 	runtimeData.dynamicResolutionPreviousWidthRatio = dynamicResolutionWidthRatio;
@@ -10696,25 +10937,35 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 
 	dynamicResolutionWidthRatio = resolutionScale.x;
 	dynamicResolutionHeightRatio = resolutionScale.y;
+	return false;
 }
 
-void Upscaling::PrepareFullResolutionPostProcessing()
+void Upscaling::PrepareFullResolutionPostProcessing(RE::BSGraphics::State* a_viewport, bool a_resetProjection)
 {
-	auto viewport = globals::game::graphicsState;
+	auto* viewport = a_viewport ? a_viewport : globals::game::graphicsState;
 	if (!viewport)
 		return;
 
-	auto& runtimeData = viewport->GetRuntimeData();
-	if (globals::game::isVR)
-		SetDynamicResolutionEnabledForUpscaling(false);
-	runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-	runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-	runtimeData.dynamicResolutionWidthRatio = 1.0f;
-	runtimeData.dynamicResolutionHeightRatio = 1.0f;
-	runtimeData.dynamicResolutionLock = 1;
-	dynamicResolutionWidthRatio = 1.0f;
-	dynamicResolutionHeightRatio = 1.0f;
-	UpdateCameraData();
+	bool cameraDataDirty = false;
+	if (a_resetProjection) {
+		cameraDataDirty =
+			resolutionScale.x != 1.0f ||
+			resolutionScale.y != 1.0f ||
+			jitter.x != 0.0f ||
+			jitter.y != 0.0f ||
+			viewport->projectionPosScaleX != 0.0f ||
+			viewport->projectionPosScaleY != 0.0f;
+		if (cameraDataDirty) {
+			resolutionScale = { 1.0f, 1.0f };
+			jitter = { 0.0f, 0.0f };
+			viewport->projectionPosScaleX = 0.0f;
+			viewport->projectionPosScaleY = 0.0f;
+		}
+	}
+
+	const bool dynamicResolutionDirty = ApplyLockedFullResolutionDynamicResolutionState(viewport);
+	if (cameraDataDirty && !dynamicResolutionDirty)
+		UpdateCameraData();
 }
 
 void Upscaling::SetupResources()
@@ -10974,9 +11225,7 @@ void Upscaling::PostDisplay()
 		IsVRMenuPresentationContextActive() &&
 		IsVRRenderScaleTransitionSafetyRelevant(*this);
 	if (vrVendorMenu) {
-		viewport->projectionPosScaleX = 0.0f;
-		viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
+		PrepareFullResolutionPostProcessing(viewport, true);
 	}
 
 	if (d3d12SwapChainActive)
@@ -11218,6 +11467,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 		return;
 
 	const bool alreadyMarked = submitStageDeviceLost.exchange(true, std::memory_order_acq_rel);
+	InvalidateFrameScopedUpscalingState();
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedFramePresentationOnly = false;
 	submitStagePreparedFrameFoveatedRegionEncode = false;
@@ -11297,7 +11547,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!state || !renderer || !context)
 		return false;
 
-	RefreshRuntimeResolutionState();
+	EnsureRuntimeResolutionStateCurrent();
 	const auto& resolutionPlan = GetRuntimeResolutionPlan();
 	const auto upscaleMethod = resolutionPlan.upscaleMethod;
 	if (!IsVendorUpscalingMethod(upscaleMethod))
@@ -11330,7 +11580,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		resolutionPlan.menuContextActive ||
 		currentMenuPresentationContext ||
 		sceneFeatureMenuPauseContext;
-	const bool submitMenuPresentationContext = IsSubmitStageMenuPresentationContextActive();
 
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	sourceTexture->GetDesc(&sourceDesc);
@@ -11392,9 +11641,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (!sourceStereoLayout.IsValid())
 		return false;
 	const uint32_t eyeIndex = a_eye == vr::Eye_Right ? 1u : 0u;
-	const bool sourceHasPerEyeLayout =
-		sourceDesc.ArraySize > 1 ||
-		(sourceDesc.ArraySize == 1 && TextureContainsVREyeRegion(sourceDesc.Width, sourceDesc.Height, sourceStereoLayout.eyes[1]));
 	const bool sourceUsesCombinedStereoLayout =
 		sourceDesc.ArraySize == 1 &&
 		TextureContainsVREyeRegion(sourceDesc.Width, sourceDesc.Height, sourceStereoLayout.eyes[1]);
@@ -11441,28 +11687,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			ClearSubmitStageVendorResumeCooldown();
 		}
 	}
-	const bool vrRenderScaleMenuVendorSafetyBlocked =
-		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
-		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-		HasPendingVRVendorRuntimeReset(*this, upscaleMethod) ||
-		transitionProtectionActive;
-	const bool vrRenderScaleMenuCanUseVendor =
-		vrRenderScaleMode &&
-		!presentationRenderTarget &&
-		submitMenuPresentationContext &&
-		sourceRegion.matchesExpectedSize &&
-		(a_inputBounds || sourceHasPerEyeLayout) &&
-		!vrRenderScaleMenuVendorSafetyBlocked;
-	const bool submitMenuPresentationFallback =
-		submitMenuPresentationContext &&
-		vrRenderScaleMenuVendorSafetyBlocked;
 	auto computePresentationOnly = [&]() {
 		return vrRenderScaleMode &&
 		       (transitionPresentationCooldown ||
-				   ((submitPresentationContext ||
-						submitBoundsPresentationFallback ||
-						submitMenuPresentationFallback) &&
-					   !vrRenderScaleMenuCanUseVendor));
+				   submitPresentationContext ||
+				   submitBoundsPresentationFallback);
 	};
 	bool presentationOnly = computePresentationOnly();
 	if (IsSubmitStageDeviceLost())
@@ -11484,7 +11713,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		const bool cooldownStableCandidate =
 			vrRenderScaleMode &&
 			!currentMenuPresentationContext &&
-			!submitMenuPresentationContext &&
 			!presentationRenderTarget &&
 			!submitBoundsPresentationFallback &&
 			sourceRegion.matchesExpectedSize &&
@@ -11531,7 +11759,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	if (!presentationOnly)
-		CheckResources(upscaleMethod);
+		EnsureResourcesCurrent(upscaleMethod);
 	if (IsSubmitStageDeviceLost())
 		return false;
 
@@ -11549,7 +11777,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		!presentationOnly &&
 		!sceneFeatureMenuPauseContext &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
-		!vrRenderScaleMenuCanUseVendor &&
 		!foveatedTransitionBypass &&
 		!foveatedFailureBackoffActive;
 	const bool submitStageFoveatedPeripheryTAAPathActive =
@@ -11573,7 +11800,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (HasPendingVRVendorRuntimeReset(*this, upscaleMethod))
 			return false;
 
-		UpdateHistoryResetState(upscaleMethod);
+		if (historyResetLatchedFrame != currentFrame)
+			UpdateHistoryResetState(upscaleMethod);
 		LatchHistoryResetForCurrentFrame();
 	} else {
 		const bool vendorResetPending = HasPendingVRVendorRuntimeReset(*this, upscaleMethod);
@@ -11638,8 +11866,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	}
 
 	const auto clearSubmittedEyeHMDMask = [&]() {
-		if (vrRenderScaleMenuCanUseVendor)
-			return;
 		if (presentationRenderTarget)
 			return;
 		if (!depth.depthSRV || !vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->uav)
@@ -11748,8 +11974,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			ApplyKnownGameMenuFinalComposite(targetEyeIndex, *vrIntermediateColorOut[targetEyeIndex], eyeWidthOut, eyeHeightOut, currentFrame);
 		}
 
-		if (!vrRenderScaleMenuCanUseVendor &&
-			!presentationRenderTarget &&
+		if (!presentationRenderTarget &&
 			depth.depthSRV &&
 			clearDepthWidth &&
 			clearDepthHeight &&
@@ -12242,6 +12467,7 @@ void Upscaling::QueueVRPerfModeRequest(bool a_enabled, VRUpscalingTransitionOrig
 
 void Upscaling::MarkVRUpscalingTransitionQueued(VRUpscalingTransitionOrigin a_origin)
 {
+	InvalidateFrameScopedUpscalingState();
 	const uint32_t frame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
 	const bool transitionAlreadyQueued = pendingVRUpscalingTransitionFrame.load(std::memory_order_acquire) != 0;
 	const auto currentOrigin = LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin);
@@ -12259,6 +12485,7 @@ void Upscaling::ClearPendingVRUpscalingTransition()
 	pendingVRPerfMode.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
 	pendingVRUpscalingTransitionFrame.store(0, std::memory_order_release);
 	pendingVRUpscalingTransitionOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
+	InvalidateFrameScopedUpscalingState();
 }
 
 bool Upscaling::HasPendingVRUpscalingTransition() const
@@ -12402,8 +12629,10 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 		if (perfModePending || ClampToggleUInt(settings.perfMode) != 0 || IsVRRenderScaleModeLatched() || perfMode.HasRestartRequiredChange())
 			SetPerfModeRequested(false, "VR upscaling deferred transition", false, transitionOrigin);
 
-		if (renderScaleModeChanged)
+		if (renderScaleModeChanged) {
+			InvalidateFrameScopedUpscalingState();
 			RequestHistoryReset();
+		}
 		return;
 	}
 
@@ -12455,6 +12684,7 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 	}
 
 	if (changed || renderScaleModeChanged) {
+		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
 		if (a_upscaleMethod == UpscaleMethod::kDLSS)
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
@@ -12488,7 +12718,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool inWorld = state->inWorld;
 	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
 	const float2 screenSize = state->screenSize;
-	RefreshRuntimeResolutionState();
+	EnsureRuntimeResolutionStateCurrent();
 	float2 engineRenderSize = runtimeResolutionPlan.engineRenderSize;
 	float2 finalOutputSize = runtimeResolutionPlan.finalOutputSize;
 	if (engineRenderSize.x <= 0.0f || engineRenderSize.y <= 0.0f)
@@ -13298,7 +13528,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	if (screenSize.x <= 0.0f || screenSize.y <= 0.0f) {
 		return;
 	}
-	RefreshRuntimeResolutionState();
+	EnsureRuntimeResolutionStateCurrent();
 	const bool vrRenderScaleActive = runtimeResolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
 	if (!vrRenderScaleActive) {
 		return;
@@ -13486,14 +13716,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::game::isVR &&
 		(upscaling.IsVRRenderScaleModeLatched() || renderScalePresentationProtection) &&
 		(vrScenePresentationBlockActive || loadingTransitionTailActive);
-	const bool fullResolutionMenuPresentation = menuPresentationContext;
-	const bool loadingTransitionMenuPresentation =
-		fullResolutionMenuPresentation &&
-		(vrScenePresentationBlockActive || loadingTransitionTailActive);
-	const bool runNativeVendorAAInMenu =
-		fullResolutionMenuPresentation &&
-		upscaling.GetRuntimeQualityMode() == 0 &&
-		!loadingTransitionMenuPresentation;
 	const bool vendorDynamicResolutionActive =
 		vendorMethodSelected &&
 		upscaling.IsUpscalingActive() &&
@@ -13523,7 +13745,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (menuPresentationContext && !runNativeVendorAAInMenu && !presentationUpscalingActive) {
+	if (menuPresentationContext && !presentationUpscalingActive) {
 		if (upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
 
@@ -13533,17 +13755,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
-		if (fullResolutionMenuPresentation)
-			upscaling.PrepareFullResolutionPostProcessing();
-		else
-			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		upscaling.PrepareFullResolutionPostProcessing();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		func(a_this, a3, a_target, a_4, a_5);
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		if (fullResolutionMenuPresentation)
-			upscaling.PrepareFullResolutionPostProcessing();
-		else
-			upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
+		upscaling.PrepareFullResolutionPostProcessing();
 		return;
 	}
 

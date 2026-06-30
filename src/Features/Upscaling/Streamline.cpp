@@ -334,9 +334,11 @@ bool Streamline::Initialize()
 
 	const auto slDirWide = slDir.wstring();
 	const wchar_t* pluginPaths[] = { slDirWide.c_str() };
-	// Co-load BOTH FG plugins so the user can switch FG method in-game with NO restart. They no longer fight
-	// over the swapchain: the interposer's WSI dispatch suppresses sl.dlss_g's swapchain hooks whenever the
-	// sl.fsr FFX FrameInterpolationSwapChain owns present ("sl.fsr.fgActive" param). And they no longer fight
+	// Load all features the host drives. The user switches FG method in-game with NO restart, and the two FG
+	// plugins don't fight over the swapchain because CS keeps only ONE of them owning present at a time: sl.dlss_g
+	// is loaded/unloaded by FG method (slSetFeatureLoaded in the DXVK swapchain-recreate window — see
+	// Upscaling's reconcile), so when FSR-FG owns present sl.dlss_g has no WSI hooks at all. This is what lets the
+	// STOCK, UNMODIFIED SL interposer work — no interposer-side hook suppression is needed. They also don't fight
 	// over the shared per-frame constants/tags: the FSR FG-prepare runs on a DEDICATED viewport (see
 	// EvaluateFSRFrameGen) so its depth/MV tags + camera constants never collide with the upscaler's (which
 	// dlss_g also reads on viewport 0).

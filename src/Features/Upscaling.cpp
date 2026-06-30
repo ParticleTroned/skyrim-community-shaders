@@ -667,8 +667,10 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 		// If FSR-FG is now actually enabled (fsrFgAppliedState==1 — the enable can take a few CheckResources
 		// to land while featureFSR warms up) AND DLSS-G's sticky proxy might still own present, force the DXVK
-		// swapchain recreate to evict it. On the recreate the interposer suppresses sl.dlss_g's create hook and
-		// the FFX FG layer wraps the fresh swapchain — the only way to hand present from DLSS-G back to FSR.
+		// swapchain recreate to evict it. DLSS-G is unloaded (slSetFeatureLoaded false in the no-swapchain window —
+		// see the reconcile below) so its WSI hooks are gone on the fresh swapchain, leaving the FFX FG layer to
+		// wrap it — the only way to hand present from DLSS-G back to FSR. (This is why the stock, UNMODIFIED SL
+		// interposer suffices: the host-side unload, not an interposer hook-suppression, resolves the coexistence.)
 		// The latch is sticky across frames, so this fires on the frame the enable finally lands (fixing the
 		// race where SetFSRFrameGen hadn't delivered on the transition frame) and covers the indirect
 		// DLSS-G -> disabled -> FSR-FG path too. Cleared after firing so steady-state FSR-FG never recreates

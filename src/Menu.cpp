@@ -1019,6 +1019,30 @@ static std::vector<InputCombo> DeriveCSEditorKey(const std::vector<InputCombo>& 
 	return { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(baseKey) };
 }
 
+// Map a Skyrim XInput gamepad button mask (ButtonEvent::GetIDCode for kGamepad) to the matching ImGui gamepad
+// key, so ImGui's built-in controller navigation works. ImGui face buttons follow the physical position:
+// FaceDown = A (activate), FaceRight = B (cancel), FaceLeft = X, FaceUp = Y.
+static ImGuiKey GamepadMaskToImGuiKey(uint32_t a_mask)
+{
+	switch (a_mask) {
+	case 0x0001: return ImGuiKey_GamepadDpadUp;
+	case 0x0002: return ImGuiKey_GamepadDpadDown;
+	case 0x0004: return ImGuiKey_GamepadDpadLeft;
+	case 0x0008: return ImGuiKey_GamepadDpadRight;
+	case 0x0010: return ImGuiKey_GamepadStart;
+	case 0x0020: return ImGuiKey_GamepadBack;
+	case 0x0040: return ImGuiKey_GamepadL3;
+	case 0x0080: return ImGuiKey_GamepadR3;
+	case 0x0100: return ImGuiKey_GamepadL1;
+	case 0x0200: return ImGuiKey_GamepadR1;
+	case 0x1000: return ImGuiKey_GamepadFaceDown;   // A
+	case 0x2000: return ImGuiKey_GamepadFaceRight;  // B
+	case 0x4000: return ImGuiKey_GamepadFaceLeft;   // X
+	case 0x8000: return ImGuiKey_GamepadFaceUp;     // Y
+	default: return ImGuiKey_None;
+	}
+}
+
 void Menu::ProcessInputEventQueue()
 {
 	std::unique_lock<std::shared_mutex> mutex(_inputEventMutex);
@@ -1028,6 +1052,21 @@ void Menu::ProcessInputEventQueue()
 			io.AddInputCharacter(event.keyCode);
 			continue;
 		}
+
+		// Feed gamepad buttons to ImGui so its built-in nav drives any open CS window (e.g. Display Settings).
+		if (event.device == RE::INPUT_DEVICE::kGamepad) {
+			if (event.eventType == RE::INPUT_EVENT_TYPE::kButton) {
+				const ImGuiKey gp = GamepadMaskToImGuiKey(event.keyCode);
+				if (gp != ImGuiKey_None) {
+					io.AddKeyEvent(gp, event.IsPressed());
+					DisplaySettingsMenu::SetGamepadActive(true);
+				}
+			}
+			continue;
+		}
+		// Any KBM button/mouse input flips the active device back (drives the close-prompt glyph).
+		if (event.device == RE::INPUT_DEVICE::kKeyboard || event.device == RE::INPUT_DEVICE::kMouse)
+			DisplaySettingsMenu::SetGamepadActive(false);
 		if (event.device == RE::INPUT_DEVICE::kMouse) {
 			logger::trace("Detect mouse scan code {} value {} pressed: {}", event.keyCode, event.value, event.IsPressed());
 			auto* ew = EditorWindow::GetSingleton();

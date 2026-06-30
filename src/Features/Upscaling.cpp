@@ -112,10 +112,88 @@ static bool DrawStepper(const char* a_label, int* a_index, const std::vector<con
 		return false;
 	*a_index = std::clamp(*a_index, 0, count - 1);
 
+	if (!Upscaling::useArrowSteppers) {
+		ImGui::BeginDisabled(a_disabled);
+		const bool changed = ImGui::SliderInt(a_label, a_index, 0, count - 1, a_options[*a_index], ImGuiSliderFlags_NoInput);
+		*a_index = std::clamp(*a_index, 0, count - 1);
+		ImGui::EndDisabled();
+		return changed;
+	}
+
+	// PhotoMode-style "< value >" stepper (ported from powerof3/PhotoMode's ImGui::EnumSlider /
+	// CenteredTextWithArrows, MIT): the label sits in the left half (dimmed until the row is hovered) and the
+	// current option is centered in the right half, flanked by chevron arrows that highlight on hover. Click
+	// the left/right half (or press Left/Right while the row is hovered) to step; the option list wraps.
+	bool changed = false;
+	ImGui::PushID(a_label);
 	ImGui::BeginDisabled(a_disabled);
-	const bool changed = ImGui::SliderInt(a_label, a_index, 0, count - 1, a_options[*a_index], ImGuiSliderFlags_NoInput);
-	*a_index = std::clamp(*a_index, 0, count - 1);
+
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const float       rowH = ImGui::GetFrameHeight();
+	const float       fullW = ImGui::GetContentRegionAvail().x;
+	const float       labelHalf = fullW * 0.5f + style.ItemInnerSpacing.x;
+	const float       valueW = std::max(rowH * 3.0f, fullW - labelHalf);
+
+	const float  rowStartX = ImGui::GetCursorPosX();
+	const ImVec2 rowScreen = ImGui::GetCursorScreenPos();
+	const ImVec2 valueMin(rowScreen.x + labelHalf, rowScreen.y);
+	const ImVec2 valueMax(valueMin.x + valueW, rowScreen.y + rowH);
+	const bool   rowHovered = !a_disabled && ImGui::IsMouseHoveringRect(valueMin, valueMax);
+
+	// Label (left half) — normal CS text colour; dims only when the control is disabled (BeginDisabled alpha).
+	ImGui::AlignTextToFramePadding();
+	ImGui::TextUnformatted(a_label);
+
+	// Value region (right half) — an invisible button gives hover/click; we draw the text + chevrons over it.
+	ImGui::SameLine();
+	ImGui::SetCursorPosX(rowStartX + labelHalf);
+	const bool  navPressed = ImGui::InvisibleButton("##value", ImVec2(valueW, rowH));
+	const bool  active = !a_disabled && (rowHovered || ImGui::IsItemHovered() || ImGui::IsItemFocused());
+	// Normal CS text colour by default; brighten to pure white when the row is hovered/controller-focused.
+	const ImU32 col = active ? IM_COL32_WHITE : ImGui::GetColorU32(ImGuiCol_Text);
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	const char* text = a_options[*a_index];
+	const ImVec2 ts = ImGui::CalcTextSize(text);
+	dl->AddText(ImVec2(valueMin.x + (valueW - ts.x) * 0.5f, valueMin.y + (rowH - ts.y) * 0.5f), col, text);
+
+	// Chevron arrows at the inner edges of the value region.
+	const float  midY = valueMin.y + rowH * 0.5f;
+	const float  ax = rowH * 0.16f, ay = rowH * 0.26f, inset = rowH * 0.5f, th = 2.5f;
+	const ImVec2 lc(valueMin.x + inset, midY), rc(valueMax.x - inset, midY);
+	dl->AddLine(ImVec2(lc.x + ax, lc.y - ay), ImVec2(lc.x - ax, lc.y), col, th);
+	dl->AddLine(ImVec2(lc.x - ax, lc.y), ImVec2(lc.x + ax, lc.y + ay), col, th);
+	dl->AddLine(ImVec2(rc.x - ax, rc.y - ay), ImVec2(rc.x + ax, rc.y), col, th);
+	dl->AddLine(ImVec2(rc.x + ax, rc.y), ImVec2(rc.x - ax, rc.y + ay), col, th);
+
+	// Activation fires once on release (navPressed): a mouse click steps by which half was clicked, a
+	// controller/keyboard activate (A / Enter) advances. (Don't also test IsItemClicked — it fires on the press
+	// frame while navPressed fires on release, which double-steps a single mouse click.)
+	if (navPressed) {
+		if (ImGui::IsMouseHoveringRect(valueMin, valueMax)) {
+			const float mx = ImGui::GetIO().MousePos.x;
+			*a_index = (mx < valueMin.x + valueW * 0.5f) ? (*a_index - 1 + count) % count : (*a_index + 1) % count;
+		} else {
+			*a_index = (*a_index + 1) % count;
+		}
+		changed = true;
+	}
+	// D-pad / arrow keys step while the row is hovered or controller-focused (single column → nav left/right
+	// has nowhere to go, so it falls through to here, matching PhotoMode's EnumSlider).
+	if (active) {
+		if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) {
+			*a_index = (*a_index - 1 + count) % count;
+			changed = true;
+		}
+		if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) {
+			*a_index = (*a_index + 1) % count;
+			changed = true;
+		}
+	}
+
 	ImGui::EndDisabled();
+	ImGui::PopID();
+	*a_index = std::clamp(*a_index, 0, count - 1);
 	return changed;
 }
 
@@ -146,31 +224,6 @@ void Upscaling::DrawSettings()
 		settings.upscaleMethod = (uint)a_m;
 		if (a_m != UpscaleMethod::kDLSS)
 			settings.upscaleMethodNoDLSS = (uint)a_m;
-	};
-
-	// Upscaler selector as a single stepper: Off / Native AA / Quality / Balanced / Performance / Ultra
-	// Performance, bound to (upscaleMethod, qualityMode). Picking a mode makes this the active upscaler with
-	// qualityMode 0-4 (Native AA = 0, which is DLAA for DLSS); Off drops back to TAA.
-	auto drawUpscalerStepper = [&](const char* a_label, UpscaleMethod a_method) {
-		const std::vector<const char*> options = {
-			"Off",
-			T(TKEY("preset_native_aa"), "Native AA"),                  // qualityMode 0
-			T(TKEY("preset_quality"), "Quality"),                      // 1
-			T(TKEY("preset_balanced"), "Balanced"),                    // 2
-			T(TKEY("preset_performance"), "Performance"),              // 3
-			T(TKEY("preset_ultra_performance"), "Ultra Performance"),  // 4
-		};
-		const bool active = settings.upscaleMethod == (uint)a_method;
-		int idx = (active && settings.qualityMode <= 4) ? (int)settings.qualityMode + 1 : 0;
-		if (DrawStepper(a_label, &idx, options)) {
-			if (idx == 0) {
-				if (settings.upscaleMethod == (uint)a_method)
-					selectUpscaler(UpscaleMethod::kTAA);
-			} else {
-				selectUpscaler(a_method);
-				settings.qualityMode = (uint)(idx - 1);  // 0-4
-			}
-		}
 	};
 
 	// ---- Display (VSync + frame limiter) ----
@@ -219,33 +272,60 @@ void Upscaling::DrawSettings()
 		settings.frameRateLimitDivisor = divisorOptions[std::clamp(sel, 0, maxSel)];
 	}
 
-	// ---- Anti-Aliasing (vendor-neutral base) ----
-	ImGui::SeparatorText(T(TKEY("aa_header"), "Anti-Aliasing"));
+	// ---- Upscaling ----
+	ImGui::SeparatorText(T(TKEY("upscaling_header"), "Upscaling"));
 	{
-		const std::vector<const char*> aaOptions = { T(TKEY("method_none"), "None"), T(TKEY("method_taa"), "TAA") };
-		int aaIdx = (settings.upscaleMethod == (uint)UpscaleMethod::kTAA) ? 1 : 0;
-		if (DrawStepper(T(TKEY("aa_method"), "Anti-Aliasing"), &aaIdx, aaOptions))
-			selectUpscaler(aaIdx == 1 ? UpscaleMethod::kTAA : UpscaleMethod::kNONE);
+		// Single Technique stepper: Off / TAA / FSR / (XeSS) / (DLSS), filtered by what the GPU supports.
+		// Bound to upscaleMethod; Off = no AA, TAA = base temporal AA, the rest are upscalers.
+		std::vector<const char*>   techLabels = { "Off", T(TKEY("method_taa"), "TAA"), "FSR" };
+		std::vector<UpscaleMethod> techMethods = { UpscaleMethod::kNONE, UpscaleMethod::kTAA, UpscaleMethod::kFSR };
+		if (xessAvailable) {
+			techLabels.push_back("XeSS");
+			techMethods.push_back(UpscaleMethod::kXeSS);
+		}
+		if (dlssAvailable) {
+			techLabels.push_back("DLSS");
+			techMethods.push_back(UpscaleMethod::kDLSS);
+		}
+
+		int techIdx = 0;
+		for (int i = 0; i < static_cast<int>(techMethods.size()); ++i)
+			if (settings.upscaleMethod == (uint)techMethods[i])
+				techIdx = i;
+		if (DrawStepper(T(TKEY("upscaling_technique"), "Upscaling Technique"), &techIdx, techLabels))
+			selectUpscaler(techMethods[std::clamp(techIdx, 0, static_cast<int>(techMethods.size()) - 1)]);
+
+		// Upscale Preset (only for upscalers that resolve a quality level). Native = qualityMode 0 (DLAA for
+		// DLSS, native-res AA for FSR/XeSS), then Quality/Balanced/Performance/Ultra Performance.
+		const UpscaleMethod cur = (UpscaleMethod)settings.upscaleMethod;
+		const bool hasPreset = (cur == UpscaleMethod::kFSR || cur == UpscaleMethod::kXeSS || cur == UpscaleMethod::kDLSS);
+		if (hasPreset) {
+			const std::vector<const char*> presets = {
+				T(TKEY("preset_native"), "Native"),                        // qualityMode 0
+				T(TKEY("preset_quality"), "Quality"),                      // 1
+				T(TKEY("preset_balanced"), "Balanced"),                    // 2
+				T(TKEY("preset_performance"), "Performance"),              // 3
+				T(TKEY("preset_ultra_performance"), "Ultra Performance"),  // 4
+			};
+			int pIdx = std::clamp((int)settings.qualityMode, 0, 4);
+			if (DrawStepper(T(TKEY("upscale_preset"), "Upscale Preset"), &pIdx, presets))
+				settings.qualityMode = (uint)std::clamp(pIdx, 0, 4);
+
+			if (cur == UpscaleMethod::kFSR)
+				ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
+		}
 	}
 
-	// ---- NVIDIA DLSS Technologies ----
-	ImGui::SeparatorText(T(TKEY("nv_header"), "NVIDIA DLSS Technologies"));
+	// ---- Frame Generation ----
+	ImGui::SeparatorText(T(TKEY("fg_header"), "Frame Generation"));
 	{
-		ImGui::BeginDisabled(!dlssAvailable);
+		// DLSS-G and FSR-FG are separate controls; only one method is active at a time (selecting one clears
+		// the other, since frameGenMethod is single-valued and each stepper derives its state from it).
 
-		// DLSS Super Resolution stepper. Its "Native AA" stop is DLAA (DLSS at native res, qualityMode 0).
-		drawUpscalerStepper(T(TKEY("nv_dlss_sr"), "Super Resolution"), UpscaleMethod::kDLSS);
-
-		// DLSS Frame Generation: one slider — Off / Dynamic / 2x / 3x / … up to the hardware max. Dynamic lets
-		// the driver pick the multiplier (eDynamic on 50-series, eAuto on 40-series; targets the Display frame
-		// rate). Any active state makes DLSS-G the FG method (disables FSR-FG).
-		{
-			ImGui::BeginDisabled(!dlssgAvailable);
-			const bool dlssgFg = settings.frameGeneration && settings.frameGenMethod == (uint)FrameGenMethod::kDLSSG;
-			// Fixed-multiplier stops capped at the hardware max (numFramesToGenerateMax + 1, max 6x).
+		// DLSS Frame Generation: Off / Dynamic / 2x … up to the hardware max. Any non-Off makes DLSS-G the method.
+		if (dlssgAvailable) {
 			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();
-			const uint maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
-
+			const uint     maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
 			std::vector<std::string> fgStrings = { "Off", std::string(T(TKEY("fg_dynamic"), "Dynamic")) };
 			for (uint m = 2; m <= maxMultiplier; ++m)
 				fgStrings.push_back(std::format("{}x", m));
@@ -253,11 +333,11 @@ void Upscaling::DrawSettings()
 			for (auto& s : fgStrings)
 				fgStates.push_back(s.c_str());
 
-			// Current index: 0 = Off, 1 = Dynamic, 2..N = the fixed multiplier (idx == multiplier).
+			const bool dlssgFg = settings.frameGeneration && settings.frameGenMethod == (uint)FrameGenMethod::kDLSSG;
 			int fgIdx = !dlssgFg ? 0 :
 			            settings.dlssgDynamic ? 1 :
 			            std::clamp((int)settings.frameGenMultiplier, 2, (int)maxMultiplier);
-			if (DrawStepper(T(TKEY("nv_frame_generation"), "Frame Generation"), &fgIdx, fgStates)) {
+			if (DrawStepper(T(TKEY("nv_frame_generation"), "DLSS Frame Generation"), &fgIdx, fgStates)) {
 				if (fgIdx == 0) {
 					if (settings.frameGenMethod == (uint)FrameGenMethod::kDLSSG)
 						settings.frameGeneration = false;
@@ -269,48 +349,11 @@ void Upscaling::DrawSettings()
 						settings.frameGenMultiplier = (uint)fgIdx;  // 2x..maxMultiplier
 				}
 			}
-			ImGui::EndDisabled();
 		}
 
-		// NVIDIA Reflex Low Latency. FG dictates it (DLSS-G forces on, FSR-FG forces off); else user toggle.
-		{
-			ImGui::BeginDisabled(!reflexAvailable);
-			// Three states: Off / On / On + Boost.
-			const std::vector<const char*> reflexStates = { "Off", "On", T(TKEY("reflex_on_boost"), "On + Boost") };
-			const bool fgForcesReflex = IsFrameGenerationActive() &&
-			                            (GetFrameGenMethod() == FrameGenMethod::kDLSSG || GetFrameGenMethod() == FrameGenMethod::kFSR);
-			if (fgForcesReflex) {
-				// Effective state under the FG policy (DLSS-G forces on, FSR-FG forces off). Shown disabled.
-				int idx = GetEffectiveReflex() ? (settings.reflexBoost ? 2 : 1) : 0;
-				DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates, /*disabled=*/true);
-				ImGui::SameLine();
-				ImGui::TextDisabled("%s", GetFrameGenMethod() == FrameGenMethod::kDLSSG ?
-				                              T(TKEY("reflex_forced_dlssg"), "(forced on by DLSS-G)") :
-				                              T(TKEY("reflex_forced_fsrfg"), "(forced off by FSR frame gen)"));
-			} else {
-				int idx = settings.reflexEnabled ? (settings.reflexBoost ? 2 : 1) : 0;
-				if (DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates)) {
-					settings.reflexEnabled = (idx >= 1);
-					settings.reflexBoost = (idx == 2);
-				}
-			}
-			ImGui::EndDisabled();
-		}
-
-		ImGui::EndDisabled();  // !dlssAvailable
-	}
-
-	// ---- AMD FidelityFX ----
-	ImGui::SeparatorText(T(TKEY("amd_header"), "AMD FidelityFX"));
-	{
-		drawUpscalerStepper(T(TKEY("amd_fsr"), "AMD FSR Upscaling"), UpscaleMethod::kFSR);
-		if (settings.upscaleMethod == (uint)UpscaleMethod::kFSR) {
-			ImGui::Indent();
-			ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
-			ImGui::Unindent();
-		}
+		// FSR Frame Generation: Off / On. Turning it on makes FSR the method (clearing DLSS-G).
 		bool fsrFg = settings.frameGeneration && settings.frameGenMethod == (uint)FrameGenMethod::kFSR;
-		if (DrawToggleStepper(T(TKEY("amd_fsr_fg"), "AMD FSR Frame Generation"), &fsrFg)) {
+		if (DrawToggleStepper(T(TKEY("amd_fsr_fg"), "FSR Frame Generation"), &fsrFg)) {
 			if (fsrFg) {
 				settings.frameGeneration = true;
 				settings.frameGenMethod = (uint)FrameGenMethod::kFSR;
@@ -320,14 +363,28 @@ void Upscaling::DrawSettings()
 		}
 	}
 
-	// ---- Xe Super Sampling (Intel) ----
-	ImGui::SeparatorText(T(TKEY("intel_header"), "Xe Super Sampling"));
-	{
-		ImGui::BeginDisabled(!xessAvailable);
-		drawUpscalerStepper(T(TKEY("intel_xess"), "Intel XeSS"), UpscaleMethod::kXeSS);
-		ImGui::EndDisabled();
+	// ---- Low Latency (NVIDIA Reflex) ----
+	if (reflexAvailable) {
+		ImGui::SeparatorText(T(TKEY("ll_header"), "Low Latency"));
+		// Three states: Off / On / On + Boost. FG dictates it (DLSS-G forces on, FSR-FG forces off); else user toggle.
+		const std::vector<const char*> reflexStates = { "Off", "On", T(TKEY("reflex_on_boost"), "On + Boost") };
+		const bool fgForcesReflex = IsFrameGenerationActive() &&
+		                            (GetFrameGenMethod() == FrameGenMethod::kDLSSG || GetFrameGenMethod() == FrameGenMethod::kFSR);
+		if (fgForcesReflex) {
+			int idx = GetEffectiveReflex() ? (settings.reflexBoost ? 2 : 1) : 0;
+			DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates, /*disabled=*/true);
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", GetFrameGenMethod() == FrameGenMethod::kDLSSG ?
+			                              T(TKEY("reflex_forced_dlssg"), "(forced on by DLSS-G)") :
+			                              T(TKEY("reflex_forced_fsrfg"), "(forced off by FSR frame gen)"));
+		} else {
+			int idx = settings.reflexEnabled ? (settings.reflexBoost ? 2 : 1) : 0;
+			if (DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates)) {
+				settings.reflexEnabled = (idx >= 1);
+				settings.reflexBoost = (idx == 2);
+			}
+		}
 	}
-
 }
 
 void Upscaling::SaveSettings(json& o_json)

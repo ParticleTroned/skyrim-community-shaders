@@ -6,6 +6,17 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+
+namespace
+{
+	// SkyUI/vanilla pause-menu SystemPage Scaleform: the System tab's page movieclip and the state/index values
+	// for "the Display options view is showing" (System → SETTINGS → DISPLAY). See SkyUI SystemPage.as.
+	constexpr const char* kPagePath = "_root.QuestJournalFader.Menu_mc.SystemFader.Page_mc";
+	constexpr int         kOptionsListsState = 4;     // SystemPage.OPTIONS_LISTS_STATE
+	constexpr int         kDisplayCategoryIndex = 1;  // SettingsList entry order: 0 Gameplay, 1 Display, 2 Audio
+}
+
 DisplaySettingsMenu* DisplaySettingsMenu::GetSingleton()
 {
 	static DisplaySettingsMenu singleton;
@@ -16,94 +27,79 @@ void DisplaySettingsMenu::Register()
 {
 	if (auto* ui = RE::UI::GetSingleton()) {
 		ui->AddEventSink<RE::MenuOpenCloseEvent>(this);
-		logger::info("[DisplaySettings] registered System-menu entry hook");
+		logger::info("[DisplaySettings] registered pause-menu Settings->Display hook");
 	}
 }
 
-bool DisplaySettingsMenu::SetupSystemMenuEntry() const
+RE::GPtr<RE::GFxMovieView> DisplaySettingsMenu::GetSystemTabView() const
 {
-	// Adapted from powerof3/PhotoMode (MIT): grab the System tab's GFx view, force the Mod Manager entry
-	// visible, then rename it to our title. Selecting it fires ModManagerMenu, which we intercept below.
 	const auto menu = RE::UI::GetSingleton()->GetMenu<RE::JournalMenu>(RE::JournalMenu::MENU_NAME);
-	if (!menu) {
-		logger::info("[DisplaySettings] SetupSystemMenuEntry: no JournalMenu");
-		return false;
-	}
-	const auto& view = menu->GetRuntimeData().systemTab.view;  // GPtr<GFxMovieView>
+	if (!menu)
+		return nullptr;
+	return menu->GetRuntimeData().systemTab.view;  // GPtr<GFxMovieView>
+}
 
-	RE::GFxValue page;
-	if (!view || !view->GetVariable(&page, "_root.QuestJournalFader.Menu_mc.SystemFader.Page_mc")) {
-		logger::info("[DisplaySettings] SetupSystemMenuEntry: GFx path _root.QuestJournalFader.Menu_mc.SystemFader.Page_mc not found (view={})", static_cast<bool>(view));
-		return false;
-	}
+void DisplaySettingsMenu::Update()
+{
+	// Poll the pause-menu Scaleform while it is open: open our window the moment the player enters the Display
+	// options view (System → SETTINGS → DISPLAY). Rising-edge so it only opens once per selection.
+	if (!journalOpen)
+		return;
 
-	RE::GFxValue showModMenu;
-	if (page.GetMember("_showModMenu", &showModMenu) && !showModMenu.GetBool()) {
-		std::array<RE::GFxValue, 1> args;
-		args[0] = true;
-		page.Invoke("SetShowMod", nullptr, args.data(), args.size());
-		logger::info("[DisplaySettings] forced SetShowMod(true)");
-	}
-
-	RE::GFxValue categoryList;
-	if (!page.GetMember("CategoryList", &categoryList)) {
-		logger::info("[DisplaySettings] SetupSystemMenuEntry: no CategoryList member");
-		return false;
+	// Our window was just closed: send the page back to the category list (deferred here so the GFx Invoke runs
+	// on the main thread, not the present thread where Draw() closes the window).
+	if (navBackPending.load(std::memory_order_relaxed)) {
+		NavigateSystemPageBack();
+		navBackPending.store(false, std::memory_order_relaxed);
+		return;
 	}
 
-	RE::GFxValue entryList;
-	if (!categoryList.GetMember("entryList", &entryList)) {
-		logger::info("[DisplaySettings] SetupSystemMenuEntry: no entryList member");
-		return false;
-	}
+	if (isOpen.load(std::memory_order_relaxed))
+		return;
 
-	// Hijack the entry whose selection opens "Mod Manager Menu" (which we intercept in ProcessEvent).
-	// PhotoMode targets "$MOD MANAGER"; on AE-style menus that slot is "$CREATIONS" ("$INSTALLED CONTENT" is a
-	// different menu, so it is NOT a fallback). Renaming the entry's text leaves its action intact. Priority
-	// order matters — pick the first candidate that EXISTS, not the lowest index.
-	static constexpr std::array candidates{ "$MOD MANAGER"sv, "$CREATIONS"sv };
-	const std::uint32_t count = entryList.GetArraySize();
-	std::vector<std::string> texts(count);
-	for (std::uint32_t i = 0; i < count; ++i) {
-		RE::GFxValue elem;
-		if (!entryList.GetElement(i, &elem))
-			continue;
-		RE::GFxValue text;
-		if (elem.GetMember("text", &text) && text.IsString())
-			texts[i] = text.GetString();
-	}
+	const auto view = GetSystemTabView();
+	if (!view)
+		return;
 
-	std::optional<std::uint32_t> hijackIndex;
-	std::string_view             hijackText;
-	for (const auto cand : candidates) {
-		for (std::uint32_t i = 0; i < count; ++i) {
-			if (texts[i] == cand) {
-				hijackIndex = i;
-				hijackText = cand;
-				break;
-			}
-		}
-		if (hijackIndex)
-			break;
-	}
+	RE::GFxValue state, selIndex;
+	const std::string statePath = std::string(kPagePath) + ".iCurrentState";
+	const std::string indexPath = std::string(kPagePath) + ".SettingsList.selectedIndex";
+	if (!view->GetVariable(&state, statePath.c_str()) || !view->GetVariable(&selIndex, indexPath.c_str()))
+		return;
 
-	if (hijackIndex) {
-		RE::GFxValue entry;
-		view->CreateObject(&entry);
-		entry.SetMember("text", "Display Settings");
-		entryList.SetElement(*hijackIndex, entry);
-		categoryList.Invoke("InvalidateData");
-		logger::info("[DisplaySettings] hijacked '{}' (index {}) -> 'Display Settings'", hijackText, *hijackIndex);
-		return true;
-	}
+	const int curState = state.IsNumber() ? static_cast<int>(state.GetNumber()) : -1;
+	const int curIndex = selIndex.IsNumber() ? static_cast<int>(selIndex.GetNumber()) : -1;
+	const bool displayNow = (curState == kOptionsListsState && curIndex == kDisplayCategoryIndex);
 
-	logger::info("[DisplaySettings] SetupSystemMenuEntry: no hijackable entry found");
-	return false;
+	if (displayNow && !wasDisplayOptions)
+		Activate();
+	wasDisplayOptions = displayNow;
+}
+
+void DisplaySettingsMenu::NavigateSystemPageBack()
+{
+	// Simulate pressing the menu's Back/Cancel: SystemPage.onCancelPress() runs the page's own transition (from
+	// the Display options view back to the Settings-category list, with the proper bookkeeping + cancel sound).
+	// Doing the EndState/StartState by hand soft-locked the menu, so let the page drive it.
+	auto* ui = RE::UI::GetSingleton();
+	if (!ui || !ui->IsMenuOpen(RE::JournalMenu::MENU_NAME))
+		return;
+	const auto view = GetSystemTabView();
+	if (!view)
+		return;
+
+	const std::string cancelPath = std::string(kPagePath) + ".onCancelPress";
+	view->Invoke(cancelPath.c_str(), nullptr, nullptr, 0);
+	// Treat the Display view as already-handled so a one-frame lag in the state change can't re-open our window.
+	wasDisplayOptions = true;
 }
 
 void DisplaySettingsMenu::Activate()
 {
-	isOpen = true;
+	isOpen.store(true, std::memory_order_relaxed);
+	navFocusPending = true;  // focus the window for controller nav on the first frame it draws
+	closing = false;
+	animProgress = 0.0f;  // animate in from scratch
 }
 
 RE::BSEventNotifyControl DisplaySettingsMenu::ProcessEvent(const RE::MenuOpenCloseEvent* a_event,
@@ -112,19 +108,16 @@ RE::BSEventNotifyControl DisplaySettingsMenu::ProcessEvent(const RE::MenuOpenClo
 	if (!a_event)
 		return RE::BSEventNotifyControl::kContinue;
 
-	auto* ui = RE::UI::GetSingleton();
-
-	if (a_event->opening && a_event->menuName == RE::JournalMenu::MENU_NAME) {
-		// System (pause) menu opened — inject our entry into the Mod Manager slot.
-		wantSystemMenuEntry = !SetupSystemMenuEntry();
-	} else if (a_event->opening && a_event->menuName == RE::ModManagerMenu::MENU_NAME) {
-		// Our entry was selected (it occupies the Mod Manager slot). Hide both menus and open our window.
-		if (ui && ui->IsMenuOpen(RE::JournalMenu::MENU_NAME)) {
-			if (auto* queue = RE::UIMessageQueue::GetSingleton()) {
-				queue->AddMessage(RE::ModManagerMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
-				queue->AddMessage(RE::JournalMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
-			}
-			Activate();
+	if (a_event->menuName == RE::JournalMenu::MENU_NAME) {
+		// Gate the per-frame Scaleform polling on the pause menu being open; close our window when it closes.
+		journalOpen = a_event->opening;
+		wasDisplayOptions = false;
+		if (!a_event->opening) {
+			isOpen.store(false, std::memory_order_relaxed);  // pause menu gone — drop our window immediately
+			navBackPending.store(false, std::memory_order_relaxed);  // nothing to navigate back to
+			navFocusPending = false;
+			closing = false;
+			animProgress = 0.0f;
 		}
 	}
 
@@ -133,89 +126,93 @@ RE::BSEventNotifyControl DisplaySettingsMenu::ProcessEvent(const RE::MenuOpenClo
 
 void DisplaySettingsMenu::Draw()
 {
-	if (!isOpen)
+	if (!isOpen.load(std::memory_order_relaxed))
 		return;
 
-	ImGui::GetIO().MouseDrawCursor = true;  // the System menu was hidden; draw our own cursor
+	auto& io = ImGui::GetIO();
 
-	// PhotoMode-style theme (palette ported from powerof3/PhotoMode, MIT), pushed scoped so the rest of CS
-	// keeps its own theme. Translucent-black panels, tan Skyrim border, flat (no rounding), subtle white grabs.
-	constexpr float a = 0.68f;
-	const ImVec4 bg{ 0.0f, 0.0f, 0.0f, a };
-	const ImVec4 tan{ 0.569f, 0.545f, 0.506f, a };
-	const ImVec4 frame{ 0.2f, 0.2f, 0.2f, a };
-	const ImVec4 hilite{ 1.0f, 1.0f, 1.0f, 0.1f };
-	int nCol = 0, nVar = 0;
-	auto col = [&](ImGuiCol c, const ImVec4& v) { ImGui::PushStyleColor(c, v); ++nCol; };
-	auto var = [&](ImGuiStyleVar s, float v) { ImGui::PushStyleVar(s, v); ++nVar; };
-	col(ImGuiCol_WindowBg, bg);
-	col(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-	col(ImGuiCol_PopupBg, bg);
-	col(ImGuiCol_Border, tan);
-	col(ImGuiCol_Separator, tan);
-	col(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-	col(ImGuiCol_TextDisabled, ImVec4(1, 1, 1, 0.30f));
-	col(ImGuiCol_FrameBg, frame);
-	col(ImGuiCol_FrameBgHovered, frame);
-	col(ImGuiCol_FrameBgActive, frame);
-	col(ImGuiCol_SliderGrab, ImVec4(1, 1, 1, 0.245f));
-	col(ImGuiCol_SliderGrabActive, ImVec4(1, 1, 1, 0.531f));
-	col(ImGuiCol_CheckMark, ImVec4(1, 1, 1, 0.8f));
-	col(ImGuiCol_Button, bg);
-	col(ImGuiCol_ButtonHovered, hilite);
-	col(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
-	col(ImGuiCol_Header, hilite);
-	col(ImGuiCol_HeaderHovered, hilite);
-	col(ImGuiCol_HeaderActive, hilite);
-	col(ImGuiCol_Tab, ImVec4(0, 0, 0, 0));
-	col(ImGuiCol_TabHovered, ImVec4(0.2f, 0.2f, 0.2f, 1));
-	col(ImGuiCol_TabActive, ImVec4(0.2f, 0.2f, 0.2f, 1));
-	col(ImGuiCol_TabUnfocused, ImVec4(0, 0, 0, 0));
-	col(ImGuiCol_TabUnfocusedActive, ImVec4(0.2f, 0.2f, 0.2f, 1));
-	var(ImGuiStyleVar_WindowBorderSize, 3.5f);
-	var(ImGuiStyleVar_FrameBorderSize, 1.0f);  // PhotoMode draws a thin border around sliders/frames
-	var(ImGuiStyleVar_WindowRounding, 0.0f);
-	var(ImGuiStyleVar_ChildRounding, 0.0f);
-	var(ImGuiStyleVar_FrameRounding, 0.0f);
-	var(ImGuiStyleVar_GrabRounding, 0.0f);
-	var(ImGuiStyleVar_GrabMinSize, 20.0f);
-	var(ImGuiStyleVar_TabRounding, 0.0f);
+	// Open/close animation. animProgress eases 0→1 (open) or 1→0 (closing) using the frame delta. Once a close
+	// finishes, actually close the window and queue the page's back-navigation.
+	constexpr float kOpenDuration = 0.18f, kCloseDuration = 0.14f;
+	const float     dt = io.DeltaTime > 0.0f ? io.DeltaTime : (1.0f / 60.0f);
+	animProgress = std::clamp(animProgress + (closing ? -dt / kCloseDuration : dt / kOpenDuration), 0.0f, 1.0f);
+	if (closing && animProgress <= 0.0f) {
+		isOpen.store(false, std::memory_order_relaxed);
+		closing = false;
+		navBackPending.store(true, std::memory_order_relaxed);
+		return;
+	}
+	const float t = closing ? animProgress : (1.0f - (1.0f - animProgress) * (1.0f - animProgress) * (1.0f - animProgress));  // easeOutCubic in
+	const float animAlpha = std::clamp(t, 0.0f, 1.0f);
+	const float animSlide = (1.0f - t) * 40.0f;  // px: slides up into place on open, down on close
 
+	// Controller vs mouse/keyboard: when a controller is driving, hide our cursor and park the mouse offscreen so
+	// ImGui's gamepad nav owns focus (a stale mouse-hover would otherwise keep stealing it). KBM shows the cursor.
+	const bool gamepad = s_gamepadActive;
+	io.MouseDrawCursor = !gamepad;
+	if (gamepad)
+		io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+
+	// The box is sized by width/height and centered horizontally; boxPushUp shifts it up from vertical center.
+	// CS's themed window background fills it and RenderBackgroundBlur applies the menu blur behind it.
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
-	const ImVec2 center{ viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f };
-	// Centered, covering most of the screen, non-movable, no title bar (PhotoMode look).
-	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x * 0.7f, viewport->Size.y * 0.8f), ImGuiCond_Always);
+	const ImVec2         winSize{ std::max(100.0f, viewport->Size.x * boxWidth),
+        std::max(100.0f, viewport->Size.y * boxHeight) };
+	const ImVec2         center{ viewport->Pos.x + viewport->Size.x * 0.5f,
+        viewport->Pos.y + viewport->Size.y * (0.5f - boxPushUp) + animSlide };
 
-	constexpr auto flags = ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-	                       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
+	// On open, focus the window so it becomes ImGui's nav target (controller directions then move within it).
+	if (navFocusPending) {
+		ImGui::SetNextWindowFocus();
+		navFocusPending = false;
+	}
+	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(winSize, ImGuiCond_Always);
+
+	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, animAlpha);  // fade in/out with the open/close animation
+
+	// NOTE: no ImGuiWindowFlags_NoNav — it would block controller/keyboard navigation and prevent the window
+	// from taking nav focus (which is exactly what we need for D-pad navigation here).
+	constexpr auto flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+	                       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
+	                       ImGuiWindowFlags_NoTitleBar;
 	if (ImGui::Begin("##CSDisplaySettings", nullptr, flags)) {
-		ImGui::SetWindowFontScale(1.3f);
-		ImGui::TextUnformatted("DISPLAY SETTINGS");
-		ImGui::SetWindowFontScale(1.0f);
+		const float windowW = ImGui::GetWindowSize().x;
+
+		// Centered title (slightly larger than the body), then the body font scale for the rest of the window.
+		ImGui::SetWindowFontScale(1.3f * boxFontScale);
+		const char* title = "COMMUNITY SHADERS SETTINGS";
+		ImGui::SetCursorPosX((windowW - ImGui::CalcTextSize(title).x) * 0.5f);
+		ImGui::TextUnformatted(title);
+		ImGui::SetWindowFontScale(boxFontScale);
 		ImGui::Separator();
 
-		const float footerHeight = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
-		if (ImGui::BeginChild("##content", ImVec2(0, -footerHeight))) {
-			if (ImGui::BeginTabBar("##DisplaySettingsTabs")) {
-				if (ImGui::BeginTabItem("Upscaling")) {
-					globals::features::upscaling.DrawSettings();
-					ImGui::EndTabItem();
-				}
-				if (globals::features::hdrDisplay.loaded && ImGui::BeginTabItem("HDR")) {
-					globals::features::hdrDisplay.DrawSettings();
-					ImGui::EndTabItem();
-				}
-				ImGui::EndTabBar();
+		// Centered fixed-width content column.
+		const float avail = ImGui::GetContentRegionAvail().x;
+		const float colW = std::min(avail, 860.0f);
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - colW) * 0.5f);
+
+		// Render with the "< value >" arrow steppers (scoped to this window); colours come from CS's theme.
+		// NavFlattened folds this child's items into the parent's nav so the controller focuses each row directly
+		// instead of treating the whole content frame as one nav target.
+		Upscaling::useArrowSteppers = true;
+		if (ImGui::BeginChild("##content", ImVec2(colW, 0.0f), ImGuiChildFlags_NavFlattened)) {
+			ImGui::SetWindowFontScale(boxFontScale);  // child windows don't inherit the parent's font scale
+			globals::features::upscaling.DrawSettings();
+			if (globals::features::hdrDisplay.loaded) {
+				ImGui::SeparatorText("HDR");
+				globals::features::hdrDisplay.DrawSettings();
 			}
 		}
 		ImGui::EndChild();
+		Upscaling::useArrowSteppers = false;
 
-		if (ImGui::Button("Close", ImVec2(120.0f, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
-			isOpen = false;
+		// Esc (KBM) or B/Circle (controller) starts the close animation; when it finishes the window closes and
+		// the pause menu navigates back (handled at the top of Draw).
+		if (!closing && (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)))
+			closing = true;
 	}
 	ImGui::End();
 
-	ImGui::PopStyleVar(nVar);
-	ImGui::PopStyleColor(nCol);
+	ImGui::PopStyleVar();  // ImGuiStyleVar_Alpha
 }

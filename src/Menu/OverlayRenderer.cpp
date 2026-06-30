@@ -190,6 +190,7 @@ bool OverlayRenderer::ShouldSkipRendering()
 	return !(shaderCache->IsCompiling() ||
 			 Menu::GetSingleton()->IsEnabled ||
 			 EditorWindow::GetSingleton()->open ||
+			 DisplaySettingsMenu::GetSingleton()->IsOpen() ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||
 			 globals::features::performanceOverlay.settings.ShowInOverlay ||

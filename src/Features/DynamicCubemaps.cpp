@@ -511,6 +511,10 @@ void DynamicCubemaps::UpdateCubemap()
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Cubemap Update");
 
+	auto context = globals::d3d::context;
+	ID3D11Buffer* sharedBuffers[2]{ globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
+	context->CSSetConstantBuffers(5, 2, sharedBuffers);
+
 	// Reset capture when game time jumps (wait menu, timescale changes, console commands)
 	if (auto calendar = globals::game::calendar) {
 		float currentHoursPassed = calendar->GetHoursPassed();

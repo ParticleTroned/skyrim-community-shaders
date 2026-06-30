@@ -202,6 +202,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		float3 finalIrradiance = 0;
 
 		float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(R)))) * Color::ReflectionNormalisationScale;
+		float skylightingSpecular = 1.0;
 
 #	if defined(SKYLIGHTING)
 #		if defined(VR)
@@ -211,37 +212,22 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #		endif
 
 		sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, R);
-		float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe);
+		skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe);
 #	endif
 
 #	if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
-			float3 envSample = EnvTexture.SampleLevel(LinearSampler, R, level);
-			float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level);
 			float3 envSpecular, skySpecular;
-
-			if (SharedData::iblSettings.DALCMode >= 2) {
-				// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
-				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, R, 15));
-				envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
-#		if defined(SKYLIGHTING)
-				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
-				skySpecular *= skylightingSpecular;
-#		endif
-			} else {
-				// Mode 0/1: IBL ratio-based
-				float3 ratio = ImageBasedLighting::GetIBLRatio();
-				envSpecular = Color::IrradianceToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
-#		if defined(SKYLIGHTING)
-				skySpecular *= skylightingSpecular;
-#		endif
-			}
-			if (SharedData::InInterior) {
-				skySpecular = 0;
-			}
-
+			ImageBasedLighting::ComputeSpecularIBL(
+				EnvTexture,
+				EnvReflectionsTexture,
+				LinearSampler,
+				R,
+				level,
+				directionalAmbientColorSpecular,
+				skylightingSpecular,
+				envSpecular,
+				skySpecular);
 			finalIrradiance = envSpecular + skySpecular;
 		} else
 #	endif

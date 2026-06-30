@@ -25,7 +25,6 @@ Texture2D<float4> ImageTex : register(t0);
 Texture2D<float4> AdaptTex : register(t1);
 #	elif defined(BLEND)
 Texture2D<float4> BlendTex : register(t1);
-#		include "Common/AdvancedBloom.hlsli"
 #	endif
 Texture2D<float4> AvgTex : register(t2);
 
@@ -134,11 +133,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
-	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
-	float exposureScale = 1.0;
-	if (avgValue.x != 0 && avgValue.y != 0)
-		exposureScale = avgValue.y / avgValue.x;
-	inputColor *= exposureScale;
 
 	float3 bloomColor = 0;
 	if (Flags.x > 0.5) {
@@ -146,16 +140,8 @@ PS_OUTPUT main(PS_INPUT input)
 	} else {
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
-	bloomColor *= max(SharedData::linearLightingSettings.adaptiveBloomMult, 0.0);
-	const float bloomIntensity = Param.x;
-	const float advancedBloomIntensity = 1.0;
 
-	float advancedBloomMult = SharedData::linearLightingSettings.adaptiveAdvancedBloomMult;
-	float3 advancedBloomColor = 0.0;
-	[branch] if (advancedBloomMult > 0.0001)
-	{
-		advancedBloomColor = AdvancedBloom::Compute(uv, input.TexCoord.xy, exposureScale) * advancedBloomMult;
-	}
+	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 
 	float4 hdrShared = SharedData::HDRData;
 	bool isHDR = hdrShared.x > 0.5;
@@ -166,33 +152,36 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 outputColor = 0.0;
 
+	if (avgValue.x != 0 && avgValue.y != 0)
+		inputColor *= avgValue.y / avgValue.x;
 	inputColor = max(0, inputColor);
 
 	float3 blendedColor;
 
 	[branch] if (Param.z > 0.5)
 	{
-		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity, isHDR);
+		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, isHDR);
 	}
 	else
 	{
 		float maxCol = Color::RGBToLuminance(inputColor);
 		float mappedMax = GetTonemapFactorReinhard(maxCol, isHDR).x;
 		float3 compressedHuePreserving = inputColor * mappedMax / max(maxCol, EPSILON_DIVISION);
-		blendedColor = DisplayMapping::ApplyBloom(compressedHuePreserving, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity, isHDR);
+		blendedColor = compressedHuePreserving;
+		// SDR uses a hard cutoff (Param.x - blendedColor) so legacy weather mods that tuned
+		// bloom intensity against this shoulder don't get blown-out highlights. HDR keeps the
+		// soft-saturation form (1 - exp2(-x)) which bleeds bloom into specular peaks intentionally.
+		float3 bloomMask = isHDR ? saturate(Param.x - (1.0 - exp2(-blendedColor))) : saturate(Param.x - blendedColor);
+		blendedColor += bloomMask * bloomColor;
 	}
 
-	const float imageBrightness = Cinematic.w * SharedData::linearLightingSettings.adaptiveImageBrightnessMult;
-	const float saturation = Cinematic.x * SharedData::linearLightingSettings.adaptiveSaturationMult;
-	const float contrast = Cinematic.z * SharedData::linearLightingSettings.adaptiveContrastMult;
-
 	float blendedLuminance = Color::RGBToLuminance(blendedColor);
-	float3 tintedColor = imageBrightness * lerp(lerp(blendedLuminance, blendedColor, saturation), blendedLuminance * Tint.xyz, Tint.w).xyz;
-	float3 contrastedColor = lerp(avgValue.x, tintedColor, contrast);
+	float3 tintedColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
+	float3 contrastedColor = lerp(avgValue.x, tintedColor, Cinematic.z);
 
 	// Contrast modified to fix crushed shadows
 	float safeAvgValue = max(avgValue.x, EPSILON_DIVISION);
-	float3 contrastedColorModified = pow(max(EPSILON_DIVISION, abs(tintedColor) / safeAvgValue), contrast) * safeAvgValue * sign(tintedColor);
+	float3 contrastedColorModified = pow(max(0.0, abs(tintedColor) / safeAvgValue), Cinematic.z) * safeAvgValue * sign(tintedColor);
 	contrastedColor = lerp(contrastedColorModified, contrastedColor, saturate(contrastedColorModified / 0.1f));  // blend in modified contrast for shadows
 
 	outputColor = contrastedColor;

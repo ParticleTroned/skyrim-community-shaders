@@ -186,20 +186,7 @@ namespace DisplayMapping
 	}
 
 #if defined(PSHADER) && defined(BLEND)
-	float3 GetBloomMask(float3 col, float bloomIntensity, bool isHDR = false)
-	{
-		float3 maskBase = isHDR ? (1.0 - exp2(-col)) : col;
-		return saturate(bloomIntensity - maskBase);
-	}
-
-	float3 ApplyBloom(float3 col, float3 bloomCol, float bloomIntensity, float3 advancedBloomCol, float advancedBloomIntensity, bool isHDR = false)
-	{
-		float3 bloomMask = GetBloomMask(col, bloomIntensity, isHDR);
-		float3 advancedBloomMask = GetBloomMask(col, advancedBloomIntensity, isHDR);
-		return col + bloomMask * bloomCol + advancedBloomMask * advancedBloomCol;
-	}
-
-	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol, float bloomIntensity, float3 advancedBloomCol, float advancedBloomIntensity, bool isHDR = false)
+	float3 HuePreservingHejlBurgessDawson(float3 col, float3 bloomCol, bool isHDR = false)
 	{
 		float3 ictcp = RGBToICtCp(col);
 
@@ -209,7 +196,7 @@ namespace DisplayMapping
 
 		// Non-hue preserving mapping
 		float3 perChannelCompressed = GetTonemapFactorHejlBurgessDawson(col, isHDR);
-		perChannelCompressed = ApplyBloom(perChannelCompressed, bloomCol, bloomIntensity, advancedBloomCol, advancedBloomIntensity, isHDR);
+		perChannelCompressed += saturate(Param.x - perChannelCompressed) * bloomCol;
 
 		col = perChannelCompressed;
 

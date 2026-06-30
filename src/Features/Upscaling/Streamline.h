@@ -20,6 +20,11 @@
 #include <sl_version.h>
 #pragma warning(pop)
 
+using PFun_slSetTagCompat = sl::Result(const sl::ViewportHandle& viewport,
+	const sl::ResourceTag* tags,
+	uint32_t numTags,
+	sl::CommandBuffer* cmdBuffer);
+
 class Streamline
 {
 public:
@@ -51,6 +56,7 @@ public:
 	PFun_slEvaluateFeature* slEvaluateFeature{};
 	PFun_slAllocateResources* slAllocateResources{};
 	PFun_slFreeResources* slFreeResources{};
+	PFun_slSetTagCompat* slSetTag{};
 	PFun_slGetFeatureRequirements* slGetFeatureRequirements{};
 	PFun_slGetFeatureVersion* slGetFeatureVersion{};
 	PFun_slUpgradeInterface* slUpgradeInterface{};

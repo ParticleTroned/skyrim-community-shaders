@@ -224,7 +224,7 @@ void Streamline::LoadInterposer()
 	pref.projectId = "f8776929-c969-43bd-ac2b-294b4de58aac";
 
 	pref.renderAPI = sl::RenderAPI::eD3D11;
-	pref.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+	pref.flags = sl::PreferenceFlags::eUseManualHooking;
 
 	// Hook up all of the functions exported by the SL Interposer Library
 	slInit = (PFun_slInit*)GetProcAddress(interposer, "slInit");
@@ -235,6 +235,7 @@ void Streamline::LoadInterposer()
 	slEvaluateFeature = (PFun_slEvaluateFeature*)GetProcAddress(interposer, "slEvaluateFeature");
 	slAllocateResources = (PFun_slAllocateResources*)GetProcAddress(interposer, "slAllocateResources");
 	slFreeResources = (PFun_slFreeResources*)GetProcAddress(interposer, "slFreeResources");
+	slSetTag = (PFun_slSetTagCompat*)GetProcAddress(interposer, "slSetTag");
 	slGetFeatureRequirements = (PFun_slGetFeatureRequirements*)GetProcAddress(interposer, "slGetFeatureRequirements");
 	slGetFeatureVersion = (PFun_slGetFeatureVersion*)GetProcAddress(interposer, "slGetFeatureVersion");
 	slUpgradeInterface = (PFun_slUpgradeInterface*)GetProcAddress(interposer, "slUpgradeInterface");
@@ -257,6 +258,7 @@ void Streamline::LoadInterposer()
 	requireExport("slEvaluateFeature", slEvaluateFeature);
 	requireExport("slAllocateResources", slAllocateResources);
 	requireExport("slFreeResources", slFreeResources);
+	requireExport("slSetTag", slSetTag);
 	requireExport("slGetFeatureRequirements", slGetFeatureRequirements);
 	requireExport("slGetFeatureVersion", slGetFeatureVersion);
 	requireExport("slUpgradeInterface", slUpgradeInterface);
@@ -656,7 +658,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth)
 {
 	auto context = globals::d3d::context;
-	if (!initialized || !featureDLSS || !slEvaluateFeature || !context ||
+	if (!initialized || !featureDLSS || !slEvaluateFeature || !slSetTag || !context ||
 		!colorIn || !colorOut || !depth || !mvec || !reactiveMask || !transparencyMask) {
 		return false;
 	}
@@ -697,24 +699,35 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp,
 	};
 
 	sl::ResourceTag tags[] = {
-		{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
-		{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &extentOut },
-		{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
-		{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
-		{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn },
-		{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilEvaluate, &extentIn }
+		{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentIn },
+		{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentOut },
+		{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
+		{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
+		{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
+		{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn }
 	};
 
+	const sl::Result tagResult = slSetTag(vp, tags, _countof(tags), context);
+	if (tagResult != sl::Result::eOk) {
+		static sl::ViewportHandle lastLoggedTagErrorViewport{};
+		static sl::Result lastLoggedTagErrorResult{};
+		if (lastLoggedTagErrorViewport != vp || lastLoggedTagErrorResult != tagResult) {
+			lastLoggedTagErrorViewport = vp;
+			lastLoggedTagErrorResult = tagResult;
+			logger::error(
+				"[Streamline] slSetTag failed result={} viewport={} extentIn={}x{} extentOut={}x{}",
+				static_cast<int>(tagResult),
+				static_cast<uint32_t>(vp),
+				extentIn.width,
+				extentIn.height,
+				extentOut.width,
+				extentOut.height);
+		}
+		return false;
+	}
+
 	sl::ViewportHandle view(vp);
-	const sl::BaseStructure* inputs[] = {
-		&view,
-		&tags[0],
-		&tags[1],
-		&tags[2],
-		&tags[3],
-		&tags[4],
-		&tags[5]
-	};
+	const sl::BaseStructure* inputs[] = { &view };
 
 	auto state = globals::state;
 	if (state && state->frameAnnotations) {
@@ -770,10 +783,22 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	};
 	const auto renderSize = Util::ConvertToDynamic(baseSize);
 	auto& upscaling = globals::features::upscaling;
+	const bool wantsSharpenerOutput = upscaling.settings.sharpnessDLSS > 0.0f;
 	const bool useSharpenerOutput =
-		upscaling.settings.sharpnessDLSS > 0.0f &&
+		wantsSharpenerOutput &&
 		upscaling.sharpenerTexture &&
-		upscaling.sharpenerTexture->resource;
+		upscaling.sharpenerTexture->resource &&
+		upscaling.sharpenerTexture->srv;
+	if (wantsSharpenerOutput && !useSharpenerOutput) {
+		static bool loggedMissingSharpenerTexture = false;
+		if (!loggedMissingSharpenerTexture) {
+			logger::warn("[Streamline] DLSS sharpening requested without a valid sharpener texture; skipping DLSS evaluate until resources are rebuilt.");
+			loggedMissingSharpenerTexture = true;
+		}
+		upscaling.dlssSharpenerOutputValid = false;
+		globals::features::upscaling.RequestHistoryReset();
+		return;
+	}
 	ID3D11Resource* colorOut = useSharpenerOutput ?
 	                               upscaling.sharpenerTexture->resource.get() :
 	                               a_upscalingTexture;

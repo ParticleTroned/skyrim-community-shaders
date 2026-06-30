@@ -84,6 +84,18 @@ public:
 	// Runtime state
 	bool isWindowed = false;
 	bool lowRefreshRate = false;
+	// True when the game requested exclusive fullscreen and we converted it to borderless (see the
+	// swapchain-creation hook). Exclusive fullscreen is incompatible with Streamline-over-DXVK frame
+	// generation and HDR, so it is always faked as borderless stretched-to-monitor.
+	bool fakedExclusiveFullscreen = false;
+	// The game's requested fullscreen window + resolution. While faking fullscreen we report this size
+	// from GetClientRect/GetWindowRect for this window, so Skyrim lays out the world AND the UI at the
+	// resolution it asked for (e.g. 1920x1080) and DXVK uniformly scales the whole frame to the monitor
+	// — exactly like real exclusive fullscreen. Without this the UI follows the native client rect while
+	// the 3D stays at the game resolution, so the world stretches but the UI does not.
+	HWND fakeFullscreenWindow = nullptr;
+	LONG fakeFullscreenWidth = 0;
+	LONG fakeFullscreenHeight = 0;
 
 	// Timing and scaling
 	double refreshRate = 0.0f;

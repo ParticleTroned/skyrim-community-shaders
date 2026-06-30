@@ -40,6 +40,40 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
+// GetClientRect / GetWindowRect hooks (patched into the game exe's IAT only — DXVK, in its own
+// module, keeps seeing the real window). While faking exclusive fullscreen they report the
+// game-requested resolution for the render window, so Skyrim sizes the world and the UI to the same
+// resolution and DXVK uniformly scales the frame to the monitor. All other windows/modes pass through.
+decltype(&GetClientRect) ptrGetClientRect = nullptr;
+decltype(&GetWindowRect) ptrGetWindowRect = nullptr;
+
+static bool FakeRectForWindow(HWND a_window, LPRECT a_rect)
+{
+	auto& up = globals::features::upscaling;
+	if (!up.fakedExclusiveFullscreen || a_window != up.fakeFullscreenWindow || !a_rect ||
+		up.fakeFullscreenWidth <= 0 || up.fakeFullscreenHeight <= 0)
+		return false;
+	a_rect->left = 0;
+	a_rect->top = 0;
+	a_rect->right = up.fakeFullscreenWidth;
+	a_rect->bottom = up.fakeFullscreenHeight;
+	return true;
+}
+
+BOOL WINAPI hk_GetClientRect(HWND hWnd, LPRECT lpRect)
+{
+	if (FakeRectForWindow(hWnd, lpRect))
+		return TRUE;
+	return ptrGetClientRect(hWnd, lpRect);
+}
+
+BOOL WINAPI hk_GetWindowRect(HWND hWnd, LPRECT lpRect)
+{
+	if (FakeRectForWindow(hWnd, lpRect))
+		return TRUE;
+	return ptrGetWindowRect(hWnd, lpRect);
+}
+
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	IDXGIAdapter* pAdapter,
 	D3D_DRIVER_TYPE DriverType,
@@ -76,7 +110,25 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	auto refreshRate = Upscaling::GetRefreshRate(pSwapChainDesc->OutputWindow);
 	upscaling.refreshRate = refreshRate;
 	upscaling.lowRefreshRate = refreshRate < 120;
-	upscaling.isWindowed = pSwapChainDesc->Windowed;
+
+	// Exclusive fullscreen is faked as borderless by DXVK (dxgi.fakeFullscreen): the desktop mode is
+	// left untouched and the window just covers the monitor, so Streamline/FFX keep owning present and
+	// frame generation works in "fullscreen" (a real mode-set to e.g. 1080p@60 would starve DLSS-G's
+	// generated frames of refresh headroom). The swapchain stays created as the game asked; we only
+	// record that it is effectively borderless so HDR and other windowed-vs-exclusive checks agree.
+	const bool requestedExclusiveFullscreen = (pSwapChainDesc->Windowed == FALSE);
+	upscaling.fakedExclusiveFullscreen = requestedExclusiveFullscreen;
+	upscaling.isWindowed = pSwapChainDesc->Windowed || requestedExclusiveFullscreen;
+	if (requestedExclusiveFullscreen) {
+		// Record the window + the resolution the game asked for, so the GetClientRect/GetWindowRect hooks
+		// report it back and Skyrim renders world + UI at that size (DXVK then scales the whole frame to
+		// fill the monitor — like real exclusive fullscreen).
+		upscaling.fakeFullscreenWindow = pSwapChainDesc->OutputWindow;
+		upscaling.fakeFullscreenWidth = static_cast<LONG>(pSwapChainDesc->BufferDesc.Width);
+		upscaling.fakeFullscreenHeight = static_cast<LONG>(pSwapChainDesc->BufferDesc.Height);
+		logger::info("[Upscaling] Exclusive fullscreen requested; presenting as borderless and reporting client rect {}x{}",
+			upscaling.fakeFullscreenWidth, upscaling.fakeFullscreenHeight);
+	}
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
@@ -356,6 +408,17 @@ void Upscaling::Load()
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = DxvkLoader::IsLoaded() ?
 	                                                              reinterpret_cast<uintptr_t>(DxvkLoader::GetD3D11CreateDeviceAndSwapChain()) :
 	                                                              iatOriginal;
+
+	// Hook the game's window-rect queries so we can report the game-requested resolution while faking
+	// exclusive fullscreen (see the rect hooks above). Patching the exe IAT only affects Skyrim's own
+	// calls; fall back to the real user32 export if the game resolves them dynamically.
+	HMODULE user32 = GetModuleHandleW(L"user32.dll");
+	const auto clientOrig = SKSE::PatchIAT(hk_GetClientRect, "user32.dll", "GetClientRect");
+	ptrGetClientRect = reinterpret_cast<decltype(ptrGetClientRect)>(
+		clientOrig ? clientOrig : reinterpret_cast<uintptr_t>(GetProcAddress(user32, "GetClientRect")));
+	const auto windowOrig = SKSE::PatchIAT(hk_GetWindowRect, "user32.dll", "GetWindowRect");
+	ptrGetWindowRect = reinterpret_cast<decltype(ptrGetWindowRect)>(
+		windowOrig ? windowOrig : reinterpret_cast<uintptr_t>(GetProcAddress(user32, "GetWindowRect")));
 }
 
 struct BSImageSpace_Init_FXAA

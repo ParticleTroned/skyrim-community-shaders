@@ -1,21 +1,26 @@
 #pragma once
 #include "Buffer.h"
+#include "Features/VR/OpenVRDetection.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
-#include "Features/VR/OpenVRDetection.h"
 #include "Utils/Input.h"
 #include <algorithm>
+#include <cstdint>
 #include <d3d11.h>
 #include <imgui_impl_dx11.h>
 #include <magic_enum/magic_enum.hpp>
 #include <openvr.h>
-#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <winrt/base.h>
 
 using namespace DirectX::SimpleMath;
+
+namespace RE
+{
+	class BSOpenVR;
+}
 
 // Backwards compatibility aliases
 using ControllerDevice = InputDeviceType;
@@ -100,8 +105,8 @@ public:
 		static constexpr float kDefaultStereoBlendColorThreshold = 0.02f;
 
 		// Default HMD overlay offset values (in meters, relative to HMD)
-		static constexpr float kDefaultHMDOffsetX = 0.26f;   ///< Default horizontal offset from HMD
-		static constexpr float kDefaultHMDOffsetY = -0.04f;  ///< Default vertical offset from HMD
+		static constexpr float kDefaultHMDOffsetX = 0.26f;     ///< Default horizontal offset from HMD
+		static constexpr float kDefaultHMDOffsetY = -0.04f;    ///< Default vertical offset from HMD
 		static constexpr float kDefaultHMDOffsetZ = -0.5125f;  ///< Default depth offset from HMD
 
 		// Default controller overlay offset values (in meters, relative to controller)
@@ -171,6 +176,11 @@ public:
 	 */
 	struct Settings
 	{
+		static constexpr uint32_t kButtonBY = 1;
+		static constexpr uint32_t kButtonGrip = 2;
+		static constexpr uint32_t kButtonXA = 7;
+		static constexpr uint32_t kButtonJoystickTrigger = 32;
+
 		// Performance optimization settings
 		bool EnableDepthBufferCullingExterior = true;  ///< Enable depth buffer culling for VR performance
 		bool EnableDepthBufferCullingInterior = true;
@@ -245,29 +255,29 @@ public:
 		static std::vector<ButtonCombo> DefaultVRMenuOpenKeys()
 		{
 			return {
-				ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA)),
-				ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY))
+				ButtonCombo::Primary(kButtonXA),
+				ButtonCombo::Primary(kButtonBY)
 			};
 		}
 
 		static std::vector<ButtonCombo> DefaultVRMenuCloseKeys()
 		{
 			return {
-				ButtonCombo::Both(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip))
+				ButtonCombo::Both(kButtonGrip)
 			};
 		}
 
 		static std::vector<ButtonCombo> DefaultVROverlayOpenKeys()
 		{
 			return {
-				ButtonCombo::Primary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+				ButtonCombo::Primary(kButtonJoystickTrigger)
 			};
 		}
 
 		static std::vector<ButtonCombo> DefaultVROverlayCloseKeys()
 		{
 			return {
-				ButtonCombo::Secondary(static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger))
+				ButtonCombo::Secondary(kButtonJoystickTrigger)
 			};
 		}
 
@@ -372,10 +382,7 @@ public:
 		ID3D11RenderTargetView* oldRTV = nullptr;
 		float clearColor[4] = { 0, 0, 0, 0 };
 
-		bool IsValid() const
-		{
-			return gameOverlay && cleanOverlay && openvr && openvr->vrSystem;
-		}
+		bool IsValid() const;
 
 		void SaveRenderTarget()
 		{

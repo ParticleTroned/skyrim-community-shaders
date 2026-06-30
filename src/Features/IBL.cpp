@@ -4,6 +4,7 @@
 #include "DynamicCubemaps.h"
 #include "LocationContext.h"
 #include "Shadercache.h"
+#include "State.h"
 #include "WeatherVariableRegistry.h"
 
 #include <DDSTextureLoader.h>
@@ -486,5 +487,10 @@ IBL::CommonBufferData IBL::GetCommonBufferData() const
 
 bool IBL::IsRuntimeEnabled() const
 {
-	return loaded && settings.EnableIBL != 0 && !LocationContext::IsDisabledByLocation(settings.DisableInInteriors, false);
+	const auto state = globals::state;
+	const bool menuDisabled = state && (state->IsMainOrLoadingMenuOpen() || state->isMapMenuOpen);
+	return loaded &&
+	       settings.EnableIBL != 0 &&
+	       !menuDisabled &&
+	       !LocationContext::IsDisabledByLocation(settings.DisableInInteriors, false);
 }

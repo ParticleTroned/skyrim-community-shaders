@@ -1411,15 +1411,16 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				                              ? depthCopy.texture
 				                              : depth.texture;
 
-				// DLSS-G DOUBLING REQUIRES the sl.fsr plugin's per-frame kFeatureFSR evaluate under DXVK: only the
-				// FSR upscaler makes DLSS-G double — DLSS/DLAA (kFeatureDLSS) and bare TAA present 1:1 even though
-				// DLSS-G engages (proven by present-rate isolation). So for the TAA / no-upscaler case, drive a
-				// 1.0x FSR evaluate purely as the DLSS-G keep-alive: it upscales kMAIN into the throwaway
-				// upscaledTexture (NOT copied back, so TAA's image stays on screen) and, via cs_BuildConstants,
-				// sets the viewport-0 common constants DLSS-G's present hook reads. This replaces SetCommonConstants
-				// (the evaluate sets the same constants once per frame, avoiding the duplicate-constants guard).
+				// Under DXVK full-interposition, sl.dlss_g's present hook only PROCESSES (generates) a frame
+				// when a per-frame slEvaluateFeature(kFeatureFSR/DLSS) ran that frame — proven by exhaustive
+				// visual testing (the NVIDIA DLSSG dev overlay appears for FSR/DLSS, never for bare TAA). The
+				// sample needs no evaluate only because it uses eUseManualHooking (native synchronous present),
+				// which is mutually exclusive with the interposition the whole CS integration relies on. So on
+				// the no-upscaler (TAA) path drive a 1.0x FSR evaluate as the DLSS-G keep-alive: it sets the
+				// viewport-0 constants AND provides the per-frame SL-tracked evaluate sl.dlss_g requires. Output
+				// goes to the throwaway upscaledTexture (never copied back) so TAA's image is untouched.
 				if (!upscaling.IsUpscalingActive()) {
-					upscaling.CreateUpscaledTexture();  // idempotent; TAA path has no upscale output otherwise
+					upscaling.CreateUpscaledTexture();  // idempotent throwaway target
 					auto& mainColor = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 					if (upscaling.upscaledTexture && upscaling.upscaledTexture->resource && mainColor.texture)
 						Streamline::GetSingleton()->EvaluateFSR(

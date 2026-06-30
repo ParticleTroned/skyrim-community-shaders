@@ -7,6 +7,7 @@
 #include "../../State.h"
 #include "../../Utils/Game.h"
 
+#include <cstring>
 #include <filesystem>
 
 // Streamline SDK headers (header-only in the repo; the plugin DLLs ship separately
@@ -55,6 +56,7 @@ namespace
 		PFun_slDLSSSetOptions* slDLSSSetOptions = nullptr;
 		PFun_slReflexSetOptions* slReflexSetOptions = nullptr;
 		PFun_slReflexSleep* slReflexSleep = nullptr;
+		PFun_slReflexGetState* slReflexGetState = nullptr;
 		PFun_slPCLSetMarker* slPCLSetMarker = nullptr;
 		PFun_slDLSSGSetOptions* slDLSSGSetOptions = nullptr;
 		PFun_slDLSSGGetState* slDLSSGGetState = nullptr;
@@ -72,6 +74,19 @@ namespace
 		// Established at the SimulationStart marker (frame start) and reused for the rest of the frame.
 		sl::FrameToken* frameToken = nullptr;
 		uint32_t frameIndex = 0;
+
+		// Render-thread display-frame token. Skyrim drives input (which advances frameIndex at the SimulationStart
+		// marker) on a DIFFERENT thread than rendering/present, so by the time the render thread tags resources /
+		// fires its present marker, the input thread has often already advanced frameIndex to the NEXT frame. That
+		// made the DLSS-G present (correlated to kMarkerPresentFrame = the PresentStart marker's token) look up a
+		// frame the render thread never tagged → "SL resource tags for frame N not set yet" / "common constants for
+		// frame N - using last set". We latch ONE token at the first render-thread SL call of a display frame and
+		// reuse it for constants + DLSS-G tags + the render-thread present markers, so tag-frame == present-frame
+		// regardless of the input-thread race. Re-latched after PresentEnd. (Input-thread Reflex sim markers keep
+		// using the live SharedFrameToken — they legitimately belong to the next frame already in flight.)
+		sl::FrameToken* renderFrameToken = nullptr;
+		uint32_t renderFrameIndex = UINT32_MAX;
+		bool renderFrameLatched = false;
 
 		// Latches off after a dispatch fault so a single SEH fault (e.g. a driver
 		// mismatch on an untested NVIDIA path) can't crash the game every frame.
@@ -92,9 +107,9 @@ namespace
 		bool dlssgModeOn = false;
 		uint32_t dlssgCachedRenderW = 0, dlssgCachedRenderH = 0, dlssgCachedDisplayW = 0, dlssgCachedDisplayH = 0;
 
-		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset at the frame
-		// start (SimulationStart); set by TagDLSSGResources. If still false at present, the present path
-		// sets a null/passthrough tag — SL's present hook requires a tag every present or it stalls.
+		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset on the render thread
+		// at frame end (CloseRenderFrame, after PresentEnd); set by TagDLSSGResources. If still false at present,
+		// the present path sets a null/passthrough tag — SL's present hook requires a tag every present or it stalls.
 		bool dlssgTaggedThisFrame = false;
 
 		// Cached VkImageViews for the DLSS-G tagged resources (0=depth, 1=motion, 2=hudless). SL's
@@ -150,9 +165,48 @@ namespace
 		}
 	}
 
+	// Streamline emits a handful of WARN-level diagnostics that are benign for Community Shaders' DXVK
+	// full-interposition setup but cannot be fixed without editing NVIDIA's SIGNED SL binaries (verified present
+	// and identical from SL 2.10.3 through 2.12.0 — no SDK release removes them). We've individually confirmed
+	// each is harmless, so we drop them here rather than letting them spam the log. This filters ONLY these exact,
+	// known strings — any other SL warning/error still flows through. Re-audit this list on every SL SDK bump.
+	bool IsBenignSLWarning(const char* a_msg)
+	{
+		if (!a_msg)
+			return false;
+		static constexpr const char* kBenign[] = {
+			// sl.chi/vulkan.cpp: logs "not implemented" but immediately delegates to the working NvLL
+			// implementation (NvLL_VK_SetLatencyMarker) — a stale message, not a missing feature.
+			"setAsyncFrameMarker is not implemented",
+			// sl.common requests Vulkan command-buffer hooks (BeginCommandBuffer/CmdBindPipeline/
+			// CmdBindDescriptorSets) the interposer doesn't register; its resource state-tracking is unused on
+			// our path and DLSS-G/Reflex function regardless ("will not function properly" is a false alarm here).
+			"is NOT supported, plugin will not function properly",
+			// RSync is a D3D-only low-latency feature; under Vulkan it never initializes. SL itself tags this
+			// "This is probably not a big deal".
+			"RSync will not run because it was not initialized",
+			// sl.dlss_g first-present bootstrap: the backbuffer extent is briefly 0x0 before the swapchain is
+			// known; SL resets it to the full backbuffer size itself. One-shot, self-correcting.
+			"Invalid backbuffer resource extent",
+			// CS maps the interposer (as DXVK's vulkan-1.dll) before DXVK creates its device, so DXVK touches
+			// Vulkan before slInit by construction. slInit is already hoisted as early as an SKSE plugin can.
+			"some DX/VK APIs were invoked before slInit",
+			// dlss_g present pacing prints this when a frame is unusually long (load screen, alt-tab, our
+			// camera-warp test). Cosmetic frame-timer reset.
+			"reseting frame timer",
+		};
+		for (const char* needle : kBenign) {
+			if (std::strstr(a_msg, needle))
+				return true;
+		}
+		return false;
+	}
+
 	// Routes Streamline's own logging into the CS logger.
 	void LogCallback(sl::LogType a_type, const char* a_msg)
 	{
+		if (a_type == sl::LogType::eWarn && IsBenignSLWarning(a_msg))
+			return;  // documented-benign NVIDIA SL diagnostic — see IsBenignSLWarning
 		switch (a_type) {
 		case sl::LogType::eError:
 			logger::warn("[Streamline/SL] {}", a_msg);
@@ -295,6 +349,13 @@ bool Streamline::Initialize()
 	// projectId is expected to be a GUID string for the eCustom engine path.
 	pref.projectId = "a0f57b54-1daf-4934-90ae-c4035c19df04";
 	pref.logLevel = sl::LogLevel::eDefault;
+	// Route SL's own logging through LogCallback into the CS logger (and drop documented-benign SL warnings
+	// there). We deliberately do NOT set pref.pathToLogsAndData: that makes the signed SL binaries write their
+	// own raw sl.log file, which always contains NVIDIA's internal SL_LOG_WARN diagnostics (setAsyncFrameMarker,
+	// command-buffer hook-not-supported, RSync, before-slInit, …) that cannot be removed without editing the
+	// signed DLLs and are present in every SL SDK through 2.12.0. The CS-surfaced log (CommunityShaders.log) is
+	// the one that matters and stays clean via the callback filter. Re-add pathToLogsAndData only for local SL
+	// debugging, with the understanding that the raw file carries NVIDIA's diagnostics verbatim.
 	pref.logMessageCallback = &LogCallback;
 
 	const sl::Result res = g_sl.slInit(pref, sl::kSDKVersion);
@@ -354,6 +415,7 @@ void Streamline::SetVulkanDevice()
 	if (featureReflex) {
 		g_sl.slGetFeatureFunction(sl::kFeatureReflex, "slReflexSetOptions", reinterpret_cast<void*&>(g_sl.slReflexSetOptions));
 		g_sl.slGetFeatureFunction(sl::kFeatureReflex, "slReflexSleep", reinterpret_cast<void*&>(g_sl.slReflexSleep));
+		g_sl.slGetFeatureFunction(sl::kFeatureReflex, "slReflexGetState", reinterpret_cast<void*&>(g_sl.slReflexGetState));
 		featureReflex = g_sl.slReflexSetOptions != nullptr && g_sl.slReflexSleep != nullptr;
 	}
 	// PCL latency markers (separate feature, loaded by default in slInit). Used to bracket the
@@ -437,15 +499,36 @@ void Streamline::Shutdown()
 static sl::FrameToken* SharedFrameToken(bool a_beginFrame)
 {
 	if (a_beginFrame || g_sl.frameToken == nullptr) {
-		if (a_beginFrame) {
+		if (a_beginFrame)
 			++g_sl.frameIndex;
-			g_sl.dlssgTaggedThisFrame = false;  // new frame: no valid DLSS-G tag set yet
-		}
 		sl::FrameToken* token = nullptr;
 		if (g_sl.slGetNewFrameToken(token, &g_sl.frameIndex) == sl::Result::eOk && token)
 			g_sl.frameToken = token;
 	}
 	return g_sl.frameToken;
+}
+
+// Render-thread display-frame token: latched once per display frame so constants, DLSS-G resource tags and the
+// render-thread present markers all carry the SAME token even though Skyrim's input thread keeps advancing
+// frameIndex underneath us. Latch is released in CloseRenderFrame() (after the PresentEnd marker), so the next
+// display frame's first render-thread SL call captures a fresh token. See g_sl.renderFrameToken.
+static sl::FrameToken* RenderFrameToken()
+{
+	if (!g_sl.renderFrameLatched) {
+		g_sl.renderFrameToken = SharedFrameToken(false);
+		g_sl.renderFrameIndex = g_sl.frameIndex;
+		g_sl.renderFrameLatched = true;
+	}
+	return g_sl.renderFrameToken ? g_sl.renderFrameToken : SharedFrameToken(false);
+}
+
+static void CloseRenderFrame()
+{
+	g_sl.renderFrameLatched = false;
+	// Reset the "valid DLSS-G tag set this frame" flag here (render thread, frame end) rather than at the
+	// input-thread SimulationStart: resetting it off-thread could clear it between TagDLSSGResources and the
+	// present's EnsureDLSSGPresentTag check, making the present null-tag a frame that WAS validly tagged.
+	g_sl.dlssgTaggedThisFrame = false;
 }
 
 void Streamline::UpdateReflex(bool a_enable, bool a_boost)
@@ -485,10 +568,23 @@ void Streamline::SetPCLMarker(PclMarker a_marker)
 	if (!initialized || !g_sl.slPCLSetMarker || g_sl.dispatchFaulted)
 		return;
 	__try {
-		// SimulationStart is the first SL marker of the frame — establish the shared frame token here.
-		sl::FrameToken* token = SharedFrameToken(a_marker == PclMarker::SimulationStart);
+		// Render-thread markers (submit/present) carry the LATCHED render-frame token so DLSS-G's present —
+		// correlated to kMarkerPresentFrame, which the PresentStart marker sets — matches the frame the render
+		// thread actually tagged. Input-thread markers (SimulationStart/PCLatencyPing) use the live token: they
+		// belong to the next frame already in flight on the input thread. SimulationStart mints/advances it.
+		const bool renderThreadMarker =
+			a_marker == PclMarker::RenderSubmitStart || a_marker == PclMarker::RenderSubmitEnd ||
+			a_marker == PclMarker::PresentStart || a_marker == PclMarker::PresentEnd ||
+			a_marker == PclMarker::TriggerFlash;
+		sl::FrameToken* token = renderThreadMarker ?
+		                            RenderFrameToken() :
+		                            SharedFrameToken(a_marker == PclMarker::SimulationStart);
 		if (token)
 			g_sl.slPCLSetMarker(static_cast<sl::PCLMarker>(a_marker), *token);
+		// PresentEnd closes the display frame's render-thread markers — release the latch so the next display
+		// frame's first render-thread SL call captures a fresh token.
+		if (a_marker == PclMarker::PresentEnd)
+			CloseRenderFrame();
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
 		logger::error("[Streamline] PCL marker faulted — disabling for this session");
@@ -634,13 +730,27 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	if (!dxvk)
 		return sl::Result::eErrorNotInitialized;
 
-	sl::FrameToken* token = SharedFrameToken(false);
+	// Use the latched render-thread display-frame token (NOT the live SharedFrameToken, which the input thread
+	// races ahead) so these constants land on the same frame as the DLSS-G tags and present marker.
+	sl::FrameToken* token = RenderFrameToken();
 	if (!token)
 		return sl::Result::eErrorMissingInputParameter;
 
-	sl::Constants consts;
-	cs_BuildConstants(consts, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY);
-	g_sl.slSetConstants(consts, *token, a_viewport);
+	// Set common constants EXACTLY once per display frame per viewport. Main_PostProcessing runs more than once
+	// per frame, so an unguarded set here calls slSetConstants twice with slightly different camera values and SL
+	// rejects it: "Setting different 'common' constants multiple times within the same frame is NOT allowed".
+	// Keyed on renderFrameIndex (the latched display-frame index) — NOT the live frameIndex, which the input
+	// thread can advance mid-display-frame and would let a second set slip through. (Render thread only.)
+	// Viewports used: 0 (upscale/keep-alive) and 1 (FSR FG-prepare).
+	static uint32_t s_constFrameByVp[2] = { UINT32_MAX, UINT32_MAX };
+	const uint32_t vpId = a_viewport;
+	if (vpId >= 2 || s_constFrameByVp[vpId] != g_sl.renderFrameIndex) {
+		if (vpId < 2)
+			s_constFrameByVp[vpId] = g_sl.renderFrameIndex;
+		sl::Constants consts;
+		cs_BuildConstants(consts, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY);
+		g_sl.slSetConstants(consts, *token, a_viewport);
+	}
 
 	VkDevice vkDevice = dxvk->GetDevice();
 	auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
@@ -1114,22 +1224,21 @@ bool Streamline::GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) con
 
 void Streamline::LogDLSSGFrameStats()
 {
-	// Throttled (~once/2s) status log only. WARNING: numFramesActuallyPresented is NOT a reliable doubling
-	// signal here — DLSS-G presents the generated frame asynchronously on DXVK's present thread, while this
-	// reads slDLSSGGetState on the render thread, so the value is a timing-dependent sample that reads 1 even
-	// while actually doubling (observed: TAA reads 1 while FPS visibly doubles; FSR-native reads 1 too). The
-	// SL header warns slDLSSGGetState "must be synchronized with the present thread". Verify doubling visually
-	// or with PresentMon — do NOT gate logic on this number.
-	if (g_sl.dispatchFaulted || !g_sl.slDLSSGGetState || !g_sl.dlssgModeOn)
+	// Throttled (~once/2s) Reflex-status log. We deliberately do NOT call slDLSSGGetState here: the SL header
+	// requires it be called on the PRESENT thread (CS would call it on the render thread → SL logs "slDLSSGGetState
+	// must be synchronized with the present thread" every call), and numFramesActuallyPresented is an unreliable,
+	// thread-timing-dependent value anyway (verify doubling visually / with PresentMon). lowLatencyAvailable is the
+	// reliable "Reflex is working" signal and slReflexGetState is not present-thread-restricted.
+	if (g_sl.dispatchFaulted || !g_sl.slReflexGetState || !g_sl.dlssgModeOn)
 		return;
 	static uint32_t s_n = 0;
 	if ((s_n++ % 120) != 0)
 		return;
 	__try {
-		sl::DLSSGState state{};
-		if (g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr) == sl::Result::eOk)
-			logger::info("[Streamline] DLSS-G status={} framesPresented={} (telemetry only — unreliable)",
-				static_cast<int>(state.status), state.numFramesActuallyPresented);
+		sl::ReflexState rstate{};
+		if (g_sl.slReflexGetState(rstate) == sl::Result::eOk)
+			logger::info("[Streamline] Reflex lowLatencyAvailable={} latencyReportAvailable={} flashDriverControlled={}",
+				rstate.lowLatencyAvailable, rstate.latencyReportAvailable, rstate.flashIndicatorDriverControlled);
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
 	}
@@ -1161,8 +1270,8 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		// inputsProcessingCompletionFence GPU wait here rather than reintroducing a per-frame MV copy.
 
 		// Tag DLSS-G inputs for the SAME frame the constants/markers/present use, else SL cannot match
-		// them to the presented frame and drops interpolation.
-		sl::FrameToken* token = SharedFrameToken(false);
+		// them to the presented frame and drops interpolation. Latched render-thread token (see RenderFrameToken).
+		sl::FrameToken* token = RenderFrameToken();
 		if (!token)
 			return;
 
@@ -1287,7 +1396,7 @@ void Streamline::TagFSRFGHudless(ID3D11Resource* a_hudlessColor, uint32_t a_rend
 		return;
 
 	__try {
-		sl::FrameToken* token = SharedFrameToken(false);
+		sl::FrameToken* token = RenderFrameToken();
 		if (!token)
 			return;
 
@@ -1351,7 +1460,7 @@ void Streamline::ClearDLSSGTags()
 		return;
 
 	__try {
-		sl::FrameToken* token = SharedFrameToken(false);
+		sl::FrameToken* token = RenderFrameToken();
 		if (!token)
 			return;
 

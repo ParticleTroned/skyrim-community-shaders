@@ -84,6 +84,8 @@ public:
 		RenderSubmitEnd = 3,
 		PresentStart = 4,
 		PresentEnd = 5,
+		TriggerFlash = 7,    // sl::PCLMarker::eTriggerFlash — sample fires once/frame
+		PCLatencyPing = 8,   // sl::PCLMarker::ePCLatencyPing — sample fires once/frame
 	};
 
 	void SetPCLMarker(PclMarker a_marker);

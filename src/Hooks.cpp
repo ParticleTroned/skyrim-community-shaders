@@ -266,6 +266,7 @@ struct IDXGISwapChain_Present
 		// present so Reflex can measure render→display latency.
 		auto* streamline = Streamline::GetSingleton();
 		streamline->SetPCLMarker(Streamline::PclMarker::RenderSubmitEnd);
+		streamline->SetPCLMarker(Streamline::PclMarker::TriggerFlash);  // sample fires this once/frame before present
 		streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
 
 		// HDR Display composites the real frame into the back buffer, then calls the present
@@ -430,6 +431,7 @@ struct BSInputDeviceManager_PollInputDevices
 			const bool wantReflex = upscaling.GetEffectiveReflex();
 			Streamline::GetSingleton()->UpdateReflex(wantReflex, wantReflex && upscaling.settings.reflexBoost);
 			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::SimulationStart);
+			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::PCLatencyPing);  // sample fires this once/frame
 		}
 
 		bool blockedDevice = true;

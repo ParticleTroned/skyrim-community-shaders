@@ -37,7 +37,7 @@ namespace FeatureVersions
         {"SkySync"sv,              {1,3,0}},
         {"Skylighting"sv,          {1,4,0}},
         {"SubsurfaceScattering"sv, {3,1,5}},
-        {"TerrainBlending"sv,      {1,1,5}},
+        {"TerrainBlending"sv,      {1,2,5}},
         {"TerrainHelper"sv,        {1,0,1}},
         {"TerrainShadows"sv,       {1,2,0}},
         {"TerrainVariation"sv,     {1,0,1}},

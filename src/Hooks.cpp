@@ -262,6 +262,16 @@ struct IDXGISwapChain_Present
 	{
 		globals::state->Reset();
 
+		// DLSS-G frame pacing requires the present run with VSync OFF (no Independent Flip). The game can still
+		// reach here with SyncInterval=1 even when iVSyncPresentInterval=0, and SL 2.12.0's DLSS-G then DISABLES
+		// interpolation outright (SL log: "VSync interval 1 not supported with FG" → "interpolation … disabled
+		// (SyncInterval=1)") so frame-gen stops doubling. (2.10.3 silently clamped; 2.12.0 is strict.) Force
+		// SyncInterval=0 for the DLSS-G present path. FSR-FG/FFX manages its own present pacing.
+		if (SyncInterval != 0 &&
+			globals::features::upscaling.IsFrameGenerationActive() &&
+			globals::features::upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG)
+			SyncInterval = 0;
+
 		// Reflex/PCL latency markers: render submission is complete by present time; bracket the
 		// present so Reflex can measure render→display latency.
 		auto* streamline = Streamline::GetSingleton();

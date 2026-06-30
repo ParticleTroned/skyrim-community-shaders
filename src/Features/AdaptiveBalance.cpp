@@ -91,6 +91,9 @@ namespace
 	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBalance_Global";
 	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBalance_LocationOverrides";
 	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBalance_Full";
+	constexpr const char* kImportedChangesSaveHint =
+		"Import changes the current settings immediately, but those changes are not saved automatically. Use the main Save Settings button to keep them after closing the game.";
+	constexpr const char* kImportedChangesSaveStatusSuffix = " Use Save Settings to keep these changes after closing the game.";
 
 	enum class PresetKind
 	{
@@ -556,7 +559,7 @@ namespace
 	{
 		const auto* presetJson = FindBasePresetJson(a_json);
 		if (!presetJson) {
-			o_status = "Import failed: no profiles array was found.";
+			o_status = "Import failed: no profile data was found.";
 			return false;
 		}
 
@@ -571,7 +574,7 @@ namespace
 			a_settings.profiles = std::move(importedProfiles);
 			return true;
 		} catch (const json::exception& e) {
-			o_status = std::format("Import failed: invalid base profiles ({})", e.what());
+			o_status = std::format("Import failed: invalid profile data ({})", e.what());
 			return false;
 		}
 	}
@@ -640,6 +643,12 @@ namespace
 		ImGui::PopTextWrapPos();
 	}
 
+	std::string AppendImportedChangesSaveReminder(std::string a_status)
+	{
+		a_status += kImportedChangesSaveStatusSuffix;
+		return a_status;
+	}
+
 	void DrawPresetNameInput(const char* a_label, const char* a_id, std::string& a_name, const std::filesystem::path& a_exportPath, const std::filesystem::path* a_alternateImportPath = nullptr)
 	{
 		ImGui::TextUnformatted(a_label);
@@ -706,10 +715,28 @@ void AdaptiveBalance::DrawSettings()
 
 	DrawGlobalPresetControls();
 
+	const auto currentProfile = GetCurrentProfileForUI();
+	std::string currentProfileTabSyncKey = std::to_string(static_cast<uint32_t>(currentProfile));
+	if (const auto* activeOverride = GetActiveLocationOverride()) {
+		currentProfileTabSyncKey += ':';
+		currentProfileTabSyncKey += activeOverride->key;
+	}
+
+	bool selectCurrentProfileTab = false;
+	if (!profileTabSyncInitialized || profileTabSyncKey != currentProfileTabSyncKey) {
+		selectedProfileTab = currentProfile;
+		profileTabSyncKey = std::move(currentProfileTabSyncKey);
+		profileTabSyncInitialized = true;
+		selectCurrentProfileTab = true;
+	}
+
 	ImGui::SeparatorText("Profiles");
 	if (ImGui::BeginTabBar("##AdaptiveBalanceProfiles", ImGuiTabBarFlags_None)) {
 		for (auto profile : kProfileOrder) {
-			if (ImGui::BeginTabItem(GetProfileName(profile))) {
+			const ImGuiTabItemFlags tabFlags =
+				selectCurrentProfileTab && selectedProfileTab == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
+				selectedProfileTab = profile;
 				DrawProfile(profile);
 				ImGui::EndTabItem();
 			}
@@ -740,6 +767,7 @@ void AdaptiveBalance::LoadSettings(json& o_json)
 	if (fullPresetName.empty())
 		fullPresetName = kDefaultFullPresetName;
 	ClearLocationOverrideSelection();
+	InvalidateProfileTabSync();
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
 }
@@ -764,6 +792,7 @@ void AdaptiveBalance::RestoreDefaultSettings()
 	fullPresetName = kDefaultFullPresetName;
 	fullPresetStatus.clear();
 	ClearLocationOverrideSelection();
+	InvalidateProfileTabSync();
 	SetAdvancedControlsOpen(keepAdvancedControlsOpen);
 	MarkLocationOverrideLookupDirty();
 }
@@ -778,17 +807,17 @@ void AdaptiveBalance::DrawExteriorTimeSettings()
 	ImGui::SeparatorText("Exterior Time");
 	ImGui::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Game hour when exterior day settings start blending in.");
+		ImGui::Text("Hour when the Exterior Day profile starts blending in.");
 	}
 
 	ImGui::SliderFloat("Night Blend Start", &settings.nightStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Game hour when exterior night settings start blending in.");
+		ImGui::Text("Hour when the Exterior Night profile starts blending in.");
 	}
 
 	ImGui::SliderFloat("Blend Duration", &settings.transitionHours, 0.0f, 4.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Hours needed to fully reach the target exterior profile.");
+		ImGui::Text("Hours used to blend between Exterior Day and Exterior Night.");
 	}
 
 	NormalizeExteriorTimeSettings(settings);
@@ -824,7 +853,7 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile, const char
 	ImGui::Indent();
 
 	ImGui::Spacing();
-	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Rebalances world lighting before tonemapping. Use this when a place is lit too dark or too bright.");
+	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
 
 	bool advancedControls = advancedControlsOpen;
 	if (ImGui::Checkbox("Advanced Controls", &advancedControls))
@@ -870,8 +899,9 @@ void AdaptiveBalance::SetAdvancedControlsOpen(bool a_open)
 void AdaptiveBalance::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets save the five base profiles below. Location overrides are separate and only affect saved places.");
-	DrawHintText("The base profiles below are the live settings. Import copies a preset into them; the preset file is not kept loaded.");
+	DrawHintText("Global presets store the five profile tabs and exterior timing.");
+	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
+	DrawHintText(kImportedChangesSaveHint);
 	ImGui::PushID("GlobalPresetControls");
 
 	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
@@ -882,7 +912,7 @@ void AdaptiveBalance::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Save day-night timing and the five base profiles. Location overrides are not included.");
+		ImGui::Text("Export exterior timing and the five profile tabs. Location overrides are not included.");
 	}
 
 	ImGui::SameLine();
@@ -890,7 +920,8 @@ void AdaptiveBalance::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the live base profiles from this preset. Saved location overrides stay unchanged.");
+		ImGui::Text("Replace the five profile tabs in the current settings. Saved location overrides stay unchanged.");
+		ImGui::Text("%s", kImportedChangesSaveHint);
 	}
 
 	if (!globalPresetStatus.empty())
@@ -902,8 +933,9 @@ void AdaptiveBalance::DrawGlobalPresetControls()
 void AdaptiveBalance::DrawLocationOverrides()
 {
 	ImGui::SeparatorText("Location Override Profiles");
-	DrawHintText("Location overrides sit on top of the current base profiles. Only saved places use them.");
-	DrawHintText("The override list below is live. Import copies entries into it; preset files are not kept loaded afterward.");
+	DrawHintText("Location overrides are per-place profiles. A saved override is used when its location or cell matches where you are.");
+	DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
+	DrawHintText(kImportedChangesSaveHint);
 
 	const auto target = GetCurrentLocationOverrideTarget();
 	const auto* activeOverride = GetActiveLocationOverride();
@@ -912,9 +944,9 @@ void AdaptiveBalance::DrawLocationOverrides()
 	const char* currentOverrideButtonLabel = hasSavedTarget ? "Open Current Location Override" : "Create Current Location Override";
 
 	if (activeOverride) {
-		ImGui::TextWrapped("Active here: override \"%s\". Base profile underneath: %s.", activeOverride->name.c_str(), GetProfileName(currentProfile));
+		ImGui::TextWrapped("Using saved override \"%s\" here. Base profile: %s.", activeOverride->name.c_str(), GetProfileName(currentProfile));
 	} else {
-		ImGui::TextWrapped("Active here: base profile %s. No location override is loaded for this place.", GetProfileName(currentProfile));
+		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(currentProfile));
 	}
 
 	ImGui::BeginDisabled(!target.has_value());
@@ -924,7 +956,7 @@ void AdaptiveBalance::DrawLocationOverrides()
 	ImGui::EndDisabled();
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Create an override for the current place, or open the saved one for editing.");
+		ImGui::Text("Save this place as an override, or open its existing override.");
 	}
 
 	ImGui::SameLine();
@@ -938,7 +970,7 @@ void AdaptiveBalance::DrawLocationOverrides()
 
 	DrawLocationOverridePresetControls();
 	ImGui::SeparatorText("Saved Overrides");
-	DrawHintText("These rows are the saved live overrides. One becomes active only when its location or cell matches.");
+	DrawHintText("These saved overrides are matched by location or cell. Click a row to edit it.");
 
 	if (settings.locationOverrides.empty()) {
 		ClearLocationOverrideSelection();
@@ -1103,14 +1135,14 @@ void AdaptiveBalance::DrawLocationOverrides()
 				ClearLocationOverrideSelection();
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Apply the edited values and close this override editor.");
+				ImGui::Text("Save these values to the selected override.");
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel")) {
 				ClearLocationOverrideSelection();
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Discard the current edits and close this override editor.");
+				ImGui::Text("Discard changes to the selected override.");
 			}
 		}
 		ImGui::PopID();
@@ -1122,7 +1154,7 @@ void AdaptiveBalance::DrawLocationOverrides()
 void AdaptiveBalance::DrawLocationOverridePresetControls()
 {
 	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets contain saved location overrides only. They do not include the five global base profiles.");
+	DrawHintText("Override presets store saved location and cell overrides only. They do not include the five profile tabs.");
 	ImGui::PushID("LocationOverridePresetControls");
 
 	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
@@ -1136,7 +1168,7 @@ void AdaptiveBalance::DrawLocationOverridePresetControls()
 	}
 	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Save only the current location override list.");
+		ImGui::Text("Export the saved override list.");
 	}
 
 	ImGui::SameLine();
@@ -1144,7 +1176,8 @@ void AdaptiveBalance::DrawLocationOverridePresetControls()
 		ImportLocationOverrides();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Merge location overrides from this preset into the live override list.");
+		ImGui::Text("Add overrides from this preset to the override list below.");
+		ImGui::Text("%s", kImportedChangesSaveHint);
 	}
 
 	if (!locationOverridePresetStatus.empty())
@@ -1156,8 +1189,9 @@ void AdaptiveBalance::DrawLocationOverridePresetControls()
 void AdaptiveBalance::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets contain both layers: the global base profiles and all saved location overrides.");
-	DrawHintText("Import copies both layers into the live settings and replaces the current override list.");
+	DrawHintText("Full presets store exterior timing, the five profile tabs, and all saved location overrides.");
+	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
+	DrawHintText(kImportedChangesSaveHint);
 	ImGui::PushID("FullPresetControls");
 
 	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);
@@ -1168,7 +1202,7 @@ void AdaptiveBalance::DrawFullPresetControls()
 		ExportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Save timing, all five base profiles, and all saved location overrides together.");
+		ImGui::Text("Export exterior timing, the five profile tabs, and all saved overrides.");
 	}
 
 	ImGui::SameLine();
@@ -1176,7 +1210,8 @@ void AdaptiveBalance::DrawFullPresetControls()
 		ImportFullPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the live base profiles and the live override list from this preset.");
+		ImGui::Text("Replace the profile tabs and saved override list in the current settings.");
+		ImGui::Text("%s", kImportedChangesSaveHint);
 	}
 
 	if (!fullPresetStatus.empty())
@@ -1230,7 +1265,7 @@ bool AdaptiveBalance::ImportGlobalPreset()
 		return false;
 
 	advancedControlsOpen = HasAdvancedControlsOpen(settings);
-	globalPresetStatus = std::format("Imported global preset from {}.", resolvedPath->filename().string());
+	globalPresetStatus = AppendImportedChangesSaveReminder(std::format("Imported global preset from {}.", resolvedPath->filename().string()));
 	return true;
 }
 
@@ -1324,12 +1359,12 @@ bool AdaptiveBalance::ImportLocationOverrides()
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
 	advancedControlsOpen = HasAdvancedControlsOpen(settings);
-	locationOverridePresetStatus = std::format(
+	locationOverridePresetStatus = AppendImportedChangesSaveReminder(std::format(
 		"Imported {} location override(s) from {} ({} replaced, {} skipped).",
 		stats.imported,
 		path.filename().string(),
 		stats.replaced,
-		stats.skipped);
+		stats.skipped));
 	return true;
 }
 
@@ -1405,11 +1440,11 @@ bool AdaptiveBalance::ImportFullPreset()
 	NormalizeLocationOverrides();
 	MarkLocationOverrideLookupDirty();
 	advancedControlsOpen = HasAdvancedControlsOpen(settings);
-	fullPresetStatus = std::format(
+	fullPresetStatus = AppendImportedChangesSaveReminder(std::format(
 		"Imported full preset from {} ({} location override(s), {} skipped).",
 		resolvedPath->filename().string(),
 		settings.locationOverrides.size(),
-		stats.skipped);
+		stats.skipped));
 	return true;
 }
 
@@ -1522,6 +1557,12 @@ void AdaptiveBalance::ClearLocationOverrideSelection()
 {
 	selectedLocationOverrideKey.clear();
 	ResetLocationOverrideEdit();
+}
+
+void AdaptiveBalance::InvalidateProfileTabSync()
+{
+	profileTabSyncKey.clear();
+	profileTabSyncInitialized = false;
 }
 
 void AdaptiveBalance::ResetLocationOverrideEdit()

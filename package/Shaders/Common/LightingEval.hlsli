@@ -183,6 +183,10 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 #endif
 }
 
+#if defined(WETNESS_EFFECTS) && defined(WETTERNESS)
+#	undef WETTERNESS
+#endif
+
 #if defined(WETTERNESS)
 struct WetnessDirectLightingParams
 {

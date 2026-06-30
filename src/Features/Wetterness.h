@@ -27,15 +27,11 @@ public:
 		};
 	}
 
-	bool HasShaderDefine(RE::BSShader::Type type) override
-	{
-		return type == RE::BSShader::Type::Lighting ||
-		       type == RE::BSShader::Type::Water;
-	};
+	bool HasShaderDefine(RE::BSShader::Type type) override;
 
 	struct Settings
 	{
-		uint EnableWetterness = true;
+		uint EnableWetterness = false;
 		float MaxRainWetness = 1.5f;
 		float MaxPuddleWetness = 2.5f;
 		float MaxShoreWetness = 0.75f;
@@ -100,7 +96,7 @@ public:
 	// Only the shader-consumed core settings live here; extra wetness controls are packed into the explicit tail lanes below.
 	struct ShaderSettings
 	{
-		uint EnableWetterness = true;
+		uint EnableWetterness = false;
 		float MaxRainWetness = 1.5f;
 		float MaxPuddleWetness = 2.5f;
 		float MaxShoreWetness = 0.75f;
@@ -124,7 +120,7 @@ public:
 		float WetIndirectSpecularScale = 0.8f;
 		// Shader/runtime value in game units.
 		float RaindropFxRange = 2000.0f;
-		float RaindropGridSize = 3.f;  // uploaded as 1 / grid size for shader evaluation
+		float RaindropGridSize = 3.f;   // uploaded as 1 / grid size for shader evaluation
 		float RaindropInterval = 0.5f;  // uploaded as 1 / interval seconds for shader evaluation
 		float RaindropChance = 0.8f;
 		float SplashesLifetime = 6.0f;
@@ -243,7 +239,8 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool IsCore() const override { return false; };
-	bool IsRuntimeActive() const { return loaded && settings.EnableWetterness != 0; }
+	virtual bool IsDisabledByDefault() const override { return true; }
+	bool IsRuntimeActive() const;
 	bool IsRuntimeProcessingActive() const;
 	void ResetRuntimeStateAfterGameLoad() const { ResetRuntimeState(); }
 

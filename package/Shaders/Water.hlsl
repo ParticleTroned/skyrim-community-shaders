@@ -320,8 +320,8 @@ Texture2D<float4> RawSSRReflectionTex : register(t11);
 
 cbuffer PerTechnique : register(b0)
 {
-	float4 VPOSOffset : packoffset(c0);    // inverse main render target width and height in xy, 0 in zw
-	float4 PosAdjust : packoffset(c1);  // inverse framebuffer range in w
+	float4 VPOSOffset : packoffset(c0);  // inverse main render target width and height in xy, 0 in zw
+	float4 PosAdjust : packoffset(c1);   // inverse framebuffer range in w
 	float4 CameraDataWater : packoffset(c2);
 	float4 SunDir : packoffset(c3);
 	float4 SunColor : packoffset(c4);
@@ -586,6 +586,10 @@ FlowmapData GetFlowmapDataWorldSpace(FlowmapData textureSpaceData)
 #			if defined(LOD)
 #				undef WATER_EFFECTS
 #				undef WETNESS_EFFECTS
+#			endif
+
+#			if defined(WETNESS_EFFECTS) && defined(WETTERNESS)
+#				undef WETTERNESS
 #			endif
 
 #			if defined(WETTERNESS)

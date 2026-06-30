@@ -25,7 +25,7 @@ public:
 				T("feature.wetness_effects.key_feature_5", "Support for skin wetness and material-specific responses") } };
 	};
 
-	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+	bool HasShaderDefine(RE::BSShader::Type) override { return IsRuntimeActive(); };
 
 	struct Settings
 	{
@@ -117,9 +117,9 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void RestoreDefaultSettings() override;
-	void DisableForWetternessConflict();
 
 	bool IsRuntimeActive() const { return loaded && settings.EnableWetnessEffects != 0; }
+	bool ResolveWetternessConflict();
 
 	// Override to provide weather analysis configuration
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const override

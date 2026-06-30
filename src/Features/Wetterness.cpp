@@ -1,9 +1,11 @@
 #include "Wetterness.h"
+#include "CSEditor.h"
+#include "Globals.h"
 #include "GrassLighting.h"
 #include "Menu.h"
 #include "State.h"
 #include "Utils/UI.h"
-#include "CSEditor.h"
+#include "WetnessEffects.h"
 
 #include <algorithm>
 #include <array>
@@ -1242,6 +1244,20 @@ static const std::array<Wetterness::ClimateSettings, 6> CLIMATE_PRESETS = { {
 	CLIMATE_PRESET_INFO[5].settings   // Monsoon/Extreme
 } };
 
+bool Wetterness::HasShaderDefine(RE::BSShader::Type type)
+{
+	if (type != RE::BSShader::Type::Lighting && type != RE::BSShader::Type::Water) {
+		return false;
+	}
+
+	return IsRuntimeActive();
+}
+
+bool Wetterness::IsRuntimeActive() const
+{
+	return loaded && settings.EnableWetterness != 0 && !globals::features::wetnessEffects.IsRuntimeActive();
+}
+
 void Wetterness::SetupResources()
 {
 	// No authored puddle-mask resources are required.
@@ -1365,9 +1381,18 @@ void Wetterness::DrawSettings()
 
 	drawSectionDivider();
 
+	const bool wetnessEffectsActive = globals::features::wetnessEffects.IsRuntimeActive();
+	if (wetnessEffectsActive && settings.EnableWetterness != 0u) {
+		settings.EnableWetterness = 0u;
+		ResetRuntimeState();
+	}
+	ImGui::BeginDisabled(wetnessEffectsActive);
 	drawUintCheckbox("Enable Wetterness", settings.EnableWetterness);
+	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables wetness visuals. Off = no rain film, puddles, or shore wetness.");
+		ImGui::TextUnformatted(wetnessEffectsActive ?
+								   "Disabled because Wetness Effects is active; Wetness Effects has priority." :
+								   "Enables wetness visuals. Off = no rain film, puddles, or shore wetness.");
 	}
 
 	ImGui::TextUnformatted("Wetterness Preset");
@@ -2052,7 +2077,7 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		return g_cachedCommonBufferData;
 	}
 
-	if (!loaded || settings.EnableWetterness == 0u) {
+	if (!IsRuntimeActive()) {
 		ResetRuntimeState();
 		PerFrame data = MakeDisabledPerFrameData();
 		g_lastFrameData = data;

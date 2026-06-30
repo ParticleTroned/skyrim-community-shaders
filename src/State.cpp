@@ -443,7 +443,10 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 		auto& wetnessEffects = globals::features::wetnessEffects;
 		if (wetnessEffects.loaded && globals::features::wetterness.loaded) {
-			wetnessEffects.DisableForWetternessConflict();
+			if (wetnessEffects.ResolveWetternessConflict()) {
+				auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
+				weatherRegistry->CaptureFeatureUserSettings(globals::features::wetterness.GetShortName());
+			}
 		}
 
 		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {

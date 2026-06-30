@@ -834,6 +834,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		undef WETNESS_EFFECTS
 #	endif
 
+#	if defined(WETNESS_EFFECTS) && defined(WETTERNESS)
+#		undef WETTERNESS
+#	endif
+
 #	if defined(WETTERNESS)
 #		define CS_WETNESS_RUNTIME SharedData::wetternessSettings
 #		define CS_WETNESS_SETTINGS SharedData::wetternessSettings.settings
@@ -2543,7 +2547,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float shoreWetnessAlbedo = saturate(shoreFactorAlbedo * CS_WETNESS_SETTINGS.MaxShoreWetness);
 	float shoreWetnessDarkeningMask = shoreWetnessAlbedo * shoreWetnessAlbedo;
 
-	[branch] if (wetnessEnabled) {
+	[branch] if (wetnessEnabled)
+	{
 		// Calculate wetness angle and occlusion.
 		float minWetnessValue = CS_WETNESS_SETTINGS.MinRainWetness;
 		float minWetnessAngle = saturate(max(minWetnessValue, worldNormal.z));
@@ -2626,9 +2631,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float dirtDryingPower = 24.0 / dirtDryingHours;
 		float grassDryingPower = 24.0 / grassDryingHours;
 		float dryingOverrideAmount = abs(stoneDryingPower - 1.0) +
-			abs(dirtDryingPower - 1.0) +
-			abs(grassDryingPower - 1.0);
-		[branch] if (postRainBlend > 0.0 && dryingOverrideAmount > 1e-3) {
+		                             abs(dirtDryingPower - 1.0) +
+		                             abs(grassDryingPower - 1.0);
+		[branch] if (postRainBlend > 0.0 && dryingOverrideAmount > 1e-3)
+		{
 			float surfaceDryingMultiplier =
 				stoneFactor * stoneDryingPower +
 				dirtFactor * dirtDryingPower +
@@ -2675,7 +2681,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float puddleOcclusion = lerp(puddleOcclusionSoft, localRainOcclusion, roofLikeMask);
 		float puddleOcclusionInfluence = roofLikeMask * roofLikeMask;
 		float puddleRainExposure = lerp(1.0, puddleOcclusion, puddleOcclusionPhase * puddleOcclusionInfluence);
-		[branch] if (inRainBlend > 0.0) {
+		[branch] if (inRainBlend > 0.0)
+		{
 			float openSkyUpness = smoothstep(0.55, 0.96, rainSurfaceUpness);
 			float openSkyAmbient = smoothstep(0.35, 0.75, saturate(openSkyVisibility));
 			float openSkyMask = openSkyUpness * openSkyAmbient;
@@ -2873,7 +2880,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetDirectSpecularScale = lerp(1.0, wetFilmDirectScale, wetFilmDominance * saturate(wetFilmFloorScale * 0.85));
 		wetDirectSpecularScale *= lerp(1.0, 0.24, rainPuddlePhase);
 		wetnessGlossinessSpecular *= lerp(1.0, 0.88, rainPuddlePhase);
-		[branch] if (postRainVisible) {
+		[branch] if (postRainVisible)
+		{
 			wetDirectSpecularScale *= lerp(1.0, postRainDirectScale, postRainOverridePhase);
 			wetnessGlossinessSpecular *= lerp(1.0, postRainGlossScale, postRainOverridePhase);
 			float postRainDirectMirrorScale = lerp(1.0, 0.82, postRainMirrorMix);
@@ -2883,7 +2891,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float postRainDirectSpecCompensation = lerp(1.0, 0.82, postRainSpecBoostCurve);
 			wetDirectSpecularScale *= lerp(1.0, postRainDirectSpecCompensation, postRainOverridePhase * 0.75);
 		}
-		[branch] if (postRainVisible) {
+		[branch] if (postRainVisible)
+		{
 			postRainPuddleReflectionOverrideScale = clamp(postRainPuddleReflectionOverrideScale, 0.25, 1.9);
 		}
 		wetnessGlossinessSpecular = saturate(wetnessGlossinessSpecular * lerp(1.0, 1.90, deepPuddleMask));
@@ -3168,7 +3177,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const bool wetLightingVisible = wetSpecularEnabled && waterRoughnessSpecular < 0.999 && wetnessGlossinessSpecular > 1e-4;
 	bool wetDirectLightingVisible = false;
 	bool wetIndirectLightingVisible = false;
-	[branch] if (wetLightingVisible) {
+	[branch] if (wetLightingVisible)
+	{
 		wetReflectionModeConfig = GetWetReflectionModeConfig(CS_WETNESS_SETTINGS.WetIndirectSpecularScale);
 		if (postRainOverridePhase > 1e-4) {
 			// Post-rain puddles keep the general Wet Reflection scale as the baseline.
@@ -3615,46 +3625,48 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float shorePersistentDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.ShorePersistentDarkeningStrength);
 	shorePersistentDarkeningStrength = (shorePersistentDarkeningStrength < 1e-5) ? 0.0 : shorePersistentDarkeningStrength;
 	const bool shorePersistentDarkeningEnabled = shorePersistentDarkeningStrength > 1e-4 && shorePersistentDarkeningMask > 1e-4;
-	[branch] if (wetnessEnabled || shorePersistentDarkeningEnabled) {
+	[branch] if (wetnessEnabled || shorePersistentDarkeningEnabled)
+	{
 #			if defined(TRUE_PBR)
 #				if !defined(LANDSCAPE)
-	[branch] if ((PBRFlags & PBR::Flags::TwoLayer) != 0)
-	{
-		porosity = 0;
-	}
-	else
-#				endif
-	{
-		porosity = lerp(porosity, 0.0, saturate(sqrt(material.Metallic)));
-	}
-#			elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
-	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
-#			endif
-	float wetDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.WetDarkeningStrength);
-	float lodSafeWetDarkeningFade = 1.0;
-	float viewDistance = abs(viewPosition.z);
-	lodSafeWetDarkeningFade = 1.0 - smoothstep(4096.0, 12288.0, viewDistance);
-	wetDarkeningStrength *= lerp(0.65, 1.0, lodSafeWetDarkeningFade);
-	float rainDrivenWetness = wetSurfaceDarkeningMask;
-	float wetnessDarkeningAmount = porosity * rainDarkeningAbsorption * rainDrivenWetness * wetDarkeningStrength;
-	float rainWetVisualMask = smoothstep(0.02, 0.08, rainDrivenWetness);
-	float wetDarkeningBlend = saturate(0.8 * wetDarkeningStrength) * rainWetVisualMask;
-	wetDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
-	if (wetDarkeningBlend > 0.0 && (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
-		float3 wetDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount);
-		material.BaseColor = lerp(material.BaseColor, wetDarkenedBaseColor, wetDarkeningBlend);
-	}
-#			if !defined(SKIN) && !defined(HAIR)
-	[branch] if (shorePersistentDarkeningEnabled) {
-		float shoreDarkeningMask = shorePersistentDarkeningMask;
-		float shoreDarkeningAmount = porosity * shoreDarkeningAbsorption * shoreDarkeningMask * shorePersistentDarkeningStrength;
-		float shoreDarkeningBlend = saturate(0.5 * shorePersistentDarkeningStrength) * shoreDarkeningMask;
-		shoreDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
-		if (shoreDarkeningBlend > 0.0 && (shoreDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
-			float3 shoreDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + shoreDarkeningAmount);
-			material.BaseColor = lerp(material.BaseColor, shoreDarkenedBaseColor, shoreDarkeningBlend);
+		[branch] if ((PBRFlags & PBR::Flags::TwoLayer) != 0)
+		{
+			porosity = 0;
 		}
-	}
+		else
+#				endif
+		{
+			porosity = lerp(porosity, 0.0, saturate(sqrt(material.Metallic)));
+		}
+#			elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX)
+		porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
+#			endif
+		float wetDarkeningStrength = max(0.0, CS_WETNESS_SETTINGS.WetDarkeningStrength);
+		float lodSafeWetDarkeningFade = 1.0;
+		float viewDistance = abs(viewPosition.z);
+		lodSafeWetDarkeningFade = 1.0 - smoothstep(4096.0, 12288.0, viewDistance);
+		wetDarkeningStrength *= lerp(0.65, 1.0, lodSafeWetDarkeningFade);
+		float rainDrivenWetness = wetSurfaceDarkeningMask;
+		float wetnessDarkeningAmount = porosity * rainDarkeningAbsorption * rainDrivenWetness * wetDarkeningStrength;
+		float rainWetVisualMask = smoothstep(0.02, 0.08, rainDrivenWetness);
+		float wetDarkeningBlend = saturate(0.8 * wetDarkeningStrength) * rainWetVisualMask;
+		wetDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
+		if (wetDarkeningBlend > 0.0 && (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
+			float3 wetDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount);
+			material.BaseColor = lerp(material.BaseColor, wetDarkenedBaseColor, wetDarkeningBlend);
+		}
+#			if !defined(SKIN) && !defined(HAIR)
+		[branch] if (shorePersistentDarkeningEnabled)
+		{
+			float shoreDarkeningMask = shorePersistentDarkeningMask;
+			float shoreDarkeningAmount = porosity * shoreDarkeningAbsorption * shoreDarkeningMask * shorePersistentDarkeningStrength;
+			float shoreDarkeningBlend = saturate(0.5 * shorePersistentDarkeningStrength) * shoreDarkeningMask;
+			shoreDarkeningBlend *= lerp(0.75, 1.0, lodSafeWetDarkeningFade);
+			if (shoreDarkeningBlend > 0.0 && (shoreDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
+				float3 shoreDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + shoreDarkeningAmount);
+				material.BaseColor = lerp(material.BaseColor, shoreDarkenedBaseColor, shoreDarkeningBlend);
+			}
+		}
 #			endif
 	}
 #		endif

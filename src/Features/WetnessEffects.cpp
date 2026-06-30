@@ -1,6 +1,6 @@
 #include "WetnessEffects.h"
-#include "Menu.h"
 #include "CSEditor.h"
+#include "Menu.h"
 #include "Utils/UI.h"
 #include "Wetterness.h"
 
@@ -241,10 +241,7 @@ namespace Ripples
 
 void WetnessEffects::PostPostLoad()
 {
-	if (globals::features::wetterness.loaded) {
-		DisableForWetternessConflict();
-		return;
-	}
+	ResolveWetternessConflict();
 
 	splashesOfStormsLoaded = static_cast<bool>(GetModuleHandle(L"po3_SplashesOfStorms.dll"));
 	if (splashesOfStormsLoaded) {
@@ -256,14 +253,16 @@ void WetnessEffects::PostPostLoad()
 	Ripples::Install();
 }
 
-void WetnessEffects::DisableForWetternessConflict()
+bool WetnessEffects::ResolveWetternessConflict()
 {
-	failedLoadedMessage =
-		"Wetness Effects was automatically disabled because Wetterness is active.\n"
-		"These features cannot run in parallel.";
-	settings.EnableWetnessEffects = false;
-	loaded = false;
-	logger::warn("[{}] {}", GetName(), failedLoadedMessage);
+	auto& wetterness = globals::features::wetterness;
+	if (!IsRuntimeActive() || !wetterness.loaded || wetterness.settings.EnableWetterness == 0u)
+		return false;
+
+	wetterness.settings.EnableWetterness = false;
+	wetterness.ResetRuntimeStateAfterGameLoad();
+	logger::warn("[{}] Wetterness was disabled because Wetness Effects is active; Wetness Effects has priority.", GetName());
+	return true;
 }
 
 void WetnessEffects::DrawSettings()

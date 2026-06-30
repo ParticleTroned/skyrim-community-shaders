@@ -1463,7 +1463,7 @@
     "feature.upscaling.reflex_forced_fsrfg": "(forced off by FSR frame gen)",
     "feature.upscaling.sharpness": "Sharpness",
     "feature.upscaling.upscale_preset": "Upscale Preset",
-    "feature.upscaling.vsync": "VSync",
+    "feature.upscaling.vsync": "Vertical Synchronisation",
     "feature.upscaling.vsync_dlssg": "(forced off by DLSS-G)",
     "feature.volumetric_lighting.description": "Volumetric Lighting creates realistic light scattering effects through fog, dust, and atmospheric particles.\nThis adds dramatic god rays and atmospheric depth to both interior and exterior environments.",
     "feature.volumetric_lighting.enable_exteriors": "Enable Volumetric Lighting in Exteriors",

@@ -92,17 +92,21 @@ public:
 
 	void SetPCLMarker(PclMarker a_marker);
 
-	// a_numFramesToGenerate: 1 = 2x (single frame), 2 = 3x, 3 = 4x; clamped to the hardware max.
+	// a_numFramesToGenerate: 1 = 2x (single frame), 2 = 3x …; clamped to the hardware max.
 	// a_autoMode: DLSS-G eAuto (fixed multiplier, but the driver auto-disables FG when it would lower FPS).
+	// a_dynamic: DLSS-G eDynamic (Dynamic Multi Frame Generation) — overrides a_autoMode; a_dynamicTargetFps
+	//   is the desired output fps (0 => auto-detect the monitor refresh). Use only when IsDLSSGDynamicSupported().
 	void SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
 		uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate = 1,
-		bool a_autoMode = false);
+		bool a_autoMode = false, bool a_dynamic = false, float a_dynamicTargetFps = 0.0f);
 
-	// Query DLSS-G capabilities (numFramesToGenerateMax) and cache them. MUST run on the present thread
-	// (slDLSSGGetState requirement); CS calls this from its present hook. Cheap + idempotent once cached.
+	// Query DLSS-G capabilities (numFramesToGenerateMax, Dynamic MFG support) and cache them. MUST run on the
+	// present thread (slDLSSGGetState requirement); CS calls this from its present hook. Idempotent once cached.
 	void QueryDLSSGCapabilities();
 	// Max numFramesToGenerate the hardware supports (0 = not yet queried). Max multiplier = this + 1.
 	[[nodiscard]] uint32_t GetDLSSGMaxFramesToGenerate() const;
+	// Whether DLSS-G Dynamic Multi Frame Generation (eDynamic) is supported (50-series + driver + D3D12).
+	[[nodiscard]] bool IsDLSSGDynamicSupported() const;
 
 	// DLSS-G runtime (un)load (Streamline DLSS-G guide §18): set the desired loaded state, then call
 	// RequestDxvkSwapchainRecreate() — DXVK's torn-down callback applies slSetFeatureLoaded in the

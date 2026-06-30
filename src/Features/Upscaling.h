@@ -56,13 +56,13 @@ public:
 		bool reflexLowLatencyBoost = false;
 		bool frameGeneration = false;
 		uint frameGenMethod = (uint)FrameGenMethod::kFSR;
-		// DLSS-G Multi Frame Generation: the total frame multiplier (2 = 2x single-frame, 3 = 3x, 4 = 4x).
-		// numFramesToGenerate = multiplier - 1. Capped at runtime to the hardware max (numFramesToGenerateMax+1);
-		// 40-series caps at 2x, 50-series supports up to 4x. Vulkan does not support Dynamic MFG (eDynamic).
+		// DLSS-G fixed frame multiplier (2 = 2x single-frame … up to 6x). numFramesToGenerate = multiplier - 1.
+		// Capped at runtime to the hardware max (numFramesToGenerateMax+1): 40-series caps at 2x, 50-series up to 6x.
 		uint frameGenMultiplier = 2;
-		// DLSS-G eAuto: use the fixed multiplier but let the driver auto-disable interpolation when it detects
-		// the game would run faster (higher FPS) without it. false = eOn (always interpolate at the multiplier).
-		bool dlssgAutoMode = false;
+		// DLSS-G "Dynamic" mode: the driver picks the multiplier itself. Maps to eDynamic when the hardware
+		// supports Dynamic MFG (50-series), else eAuto (40-series). The target fps is the Display frame-rate
+		// option. false = a fixed multiplier (frameGenMultiplier).
+		bool dlssgDynamic = false;
 		bool fgShowOnlyGenerated = false;
 		bool fgDebugView = false;
 		bool fgDebugTearLines = false;

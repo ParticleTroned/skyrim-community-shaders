@@ -31,7 +31,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGeneration,
 	frameGenMethod,
 	frameGenMultiplier,
-	dlssgAutoMode,
+	dlssgDynamic,
 	fgShowOnlyGenerated,
 	fgDebugView,
 	fgDebugTearLines,
@@ -101,214 +101,96 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		ppImmediateContext);
 }
 
+// Discrete selector backed by a native ImGui::SliderInt over the option index. The current option's text
+// is shown as the slider's value (the format string carries no %d, so ImGui renders it literally and it
+// updates as the handle moves). The slider's max bound is options.size()-1, so callers limit the range
+// simply by limiting how many options they pass (e.g. the MFG multiplier list capped to the hardware max).
+static bool DrawStepper(const char* a_label, int* a_index, const std::vector<const char*>& a_options, bool a_disabled = false)
+{
+	const int count = static_cast<int>(a_options.size());
+	if (count == 0)
+		return false;
+	*a_index = std::clamp(*a_index, 0, count - 1);
+
+	ImGui::BeginDisabled(a_disabled);
+	const bool changed = ImGui::SliderInt(a_label, a_index, 0, count - 1, a_options[*a_index], ImGuiSliderFlags_NoInput);
+	*a_index = std::clamp(*a_index, 0, count - 1);
+	ImGui::EndDisabled();
+	return changed;
+}
+
+// Two-state Off/On selector bound to a bool, using the same native slider.
+static bool DrawToggleStepper(const char* a_label, bool* a_value, bool a_disabled = false)
+{
+	const std::vector<const char*> onOff = { "Off", "On" };
+	int idx = *a_value ? 1 : 0;
+	if (DrawStepper(a_label, &idx, onOff, a_disabled)) {
+		*a_value = (idx == 1);
+		return true;
+	}
+	return false;
+}
+
 void Upscaling::DrawSettings()
 {
 	auto* streamline = Streamline::GetSingleton();
 	const bool dlssAvailable = streamline->IsDLSSSupported();
 	const bool xessAvailable = streamline->IsXeSSSupported();
 
-	// Build the upscale method list. Enum order: kNONE=0, kTAA=1, kFSR=2, kDLSS=3, kXeSS=4.
-	// We always show None/TAA/FSR; DLSS and XeSS are appended only when available. The combo
-	// index maps directly to the UpscaleMethod enum value, so we track the mapping.
-	std::vector<std::pair<UpscaleMethod, std::string>> upscaleModes = {
-		{ UpscaleMethod::kNONE, T(TKEY("method_none"), "None") },
-		{ UpscaleMethod::kTAA, T(TKEY("method_taa"), "TAA") },
-		{ UpscaleMethod::kFSR, std::string("AMD FSR 3.1") },
-	};
-	if (dlssAvailable)
-		upscaleModes.push_back({ UpscaleMethod::kDLSS, "NVIDIA DLSS" });
-	if (xessAvailable)
-		upscaleModes.push_back({ UpscaleMethod::kXeSS, "Intel XeSS" });
-
-	// Find which combo index the current setting maps to.
-	int comboIndex = 0;
-	for (int i = 0; i < (int)upscaleModes.size(); ++i) {
-		if ((uint)upscaleModes[i].first == settings.upscaleMethod)
-			comboIndex = i;
-	}
-
-	std::vector<const char*> modeLabels;
-	for (auto& [_, label] : upscaleModes)
-		modeLabels.push_back(label.c_str());
-	ImGui::Combo(T(TKEY("method"), "Method"), &comboIndex, modeLabels.data(), (int)modeLabels.size());
-
-	comboIndex = std::clamp(comboIndex, 0, (int)upscaleModes.size() - 1);
-	settings.upscaleMethod = (uint)upscaleModes[comboIndex].first;
-
-	auto upscaleMethod = GetUpscaleMethod();
-
-	if (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kXeSS) {
-		const char* upscalePresets[] = {
-			T(TKEY("preset_ultra_performance"), "Ultra Performance"),
-			T(TKEY("preset_performance"), "Performance"),
-			T(TKEY("preset_balanced"), "Balanced"),
-			T(TKEY("preset_quality"), "Quality"),
-			T(TKEY("preset_native_aa"), "Native AA")
-		};
-
-		int presetIndex = 0;
-		if (settings.qualityMode <= 4)
-			presetIndex = 4 - static_cast<int>(settings.qualityMode);
-		presetIndex = std::clamp(presetIndex, 0, 4);
-
-		std::string labelWithScale = std::format("{} ( {:.2f}x )", upscalePresets[presetIndex], (resolutionScale.x + resolutionScale.y) * 0.5f);
-
-		ImGui::SliderInt(T(TKEY("upscale_preset"), "Upscale Preset"), (int*)&settings.qualityMode, 0, 4, labelWithScale.c_str());
-
-		if (upscaleMethod == UpscaleMethod::kFSR)
-			ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
-	} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-		// DLSS quality modes are ordered forward (0=DLAA ... 4=Ultra Performance) to match the
-		// sl::DLSSMode mapping in Streamline::EvaluateDLSS — unlike the FSR/XeSS branch above which
-		// is reverse-indexed. Without an explicit format string ImGui::SliderInt renders the raw
-		// integer ("0".."4"), so build a named label the same way the FSR/XeSS branch does.
-		const char* dlssPresets[] = {
-			T(TKEY("preset_dlaa"), "DLAA"),                            // qualityMode 0 -> eDLAA
-			T(TKEY("preset_quality"), "Quality"),                     // 1 -> eMaxQuality
-			T(TKEY("preset_balanced"), "Balanced"),                   // 2 -> eBalanced
-			T(TKEY("preset_performance"), "Performance"),             // 3 -> eMaxPerformance
-			T(TKEY("preset_ultra_performance"), "Ultra Performance")  // 4 -> eUltraPerformance
-		};
-		int dlssIndex = std::clamp((int)settings.qualityMode, 0, 4);
-		std::string dlssLabel = std::format("{} ( {:.2f}x )", dlssPresets[dlssIndex], (resolutionScale.x + resolutionScale.y) * 0.5f);
-		ImGui::SliderInt(T(TKEY("upscale_preset"), "Upscale Preset"), (int*)&settings.qualityMode, 0, 4, dlssLabel.c_str());
-	}
-
-	ImGui::Checkbox(T(TKEY("frame_generation"), "Frame Generation"), &settings.frameGeneration);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("frame_generation_tooltip"),
-							  "Generates interpolated frames to increase perceived frame rate. "
-							  "Works with any upscale method."));
-	}
-
-	if (settings.frameGeneration) {
-		ImGui::Indent();
-
-		const bool dlssgAvailable = streamline->IsDLSSGSupported();
-
-		std::vector<std::pair<FrameGenMethod, std::string>> fgModes = {
-			{ FrameGenMethod::kFSR, "AMD FSR 3" },
-		};
-		if (dlssgAvailable)
-			fgModes.push_back({ FrameGenMethod::kDLSSG, "NVIDIA DLSS-G" });
-
-		if (fgModes.size() > 1) {
-			int fgIndex = 0;
-			for (int i = 0; i < (int)fgModes.size(); ++i) {
-				if ((uint)fgModes[i].first == settings.frameGenMethod)
-					fgIndex = i;
-			}
-			std::vector<const char*> fgLabels;
-			for (auto& [_, label] : fgModes)
-				fgLabels.push_back(label.c_str());
-			ImGui::Combo(T(TKEY("fg_method"), "FG Method"), &fgIndex, fgLabels.data(), (int)fgLabels.size());
-			fgIndex = std::clamp(fgIndex, 0, (int)fgModes.size() - 1);
-			settings.frameGenMethod = (uint)fgModes[fgIndex].first;
-		}
-
-		// DLSS-G Multi Frame Generation: pick the frame multiplier and optional Auto mode. The multiplier is
-		// capped to the hardware max (numFramesToGenerateMax + 1), queried once DLSS-G is running — 40-series
-		// reports 2x only, 50-series up to 4x. Vulkan does not support Dynamic MFG, so it is not offered.
-		if (GetFrameGenMethod() == FrameGenMethod::kDLSSG) {
-			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();  // 0 = not yet detected
-			const uint maxMultiplier = maxFrames > 0u ? maxFrames + 1u : 2u;
-			settings.frameGenMultiplier = std::clamp(settings.frameGenMultiplier, 2u, maxMultiplier);
-
-			if (maxMultiplier > 2u) {
-				std::vector<std::string> multLabels;
-				for (uint m = 2; m <= maxMultiplier; ++m)
-					multLabels.push_back(std::format("{}x", m));
-				std::vector<const char*> multCStrs;
-				for (auto& s : multLabels)
-					multCStrs.push_back(s.c_str());
-				int multIndex = std::clamp((int)settings.frameGenMultiplier - 2, 0, (int)multCStrs.size() - 1);
-				if (ImGui::Combo(T(TKEY("fg_multiplier"), "Frame Multiplier"), &multIndex, multCStrs.data(), (int)multCStrs.size()))
-					settings.frameGenMultiplier = (uint)multIndex + 2u;
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", T(TKEY("fg_multiplier_tooltip"),
-						"Generated frames per rendered frame. 2x = 1 generated, 4x = 3 generated. Limited by your GPU."));
-			} else {
-				ImGui::TextDisabled("%s", T(TKEY("fg_multiplier_2x_only"), "Frame Multiplier: 2x (max for this GPU)"));
-			}
-
-			ImGui::Checkbox(T(TKEY("fg_dlssg_auto"), "Auto Mode"), &settings.dlssgAutoMode);
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%s", T(TKEY("fg_dlssg_auto_tooltip"),
-					"Let the driver automatically turn off frame generation when the game would run faster without it."));
-		}
-
-		ImGui::TextDisabled("%s", T(TKEY("frame_generation_debug"), "Frame Generation Debug"));
-
-		ImGui::Checkbox(T(TKEY("fg_show_only_generated"), "Show Only Generated Frames"), &settings.fgShowOnlyGenerated);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fg_show_only_generated_tooltip"),
-								  "Present only the interpolated frames (hides the real frames) so the "
-								  "generated output can be inspected in isolation."));
-
-		ImGui::Checkbox(T(TKEY("fg_debug_view"), "Debug View"), &settings.fgDebugView);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fg_debug_view_tooltip"),
-								  "FFX draws debug visualizations (motion vectors, disocclusion, etc.) "
-								  "into the generated frames."));
-
-		ImGui::Checkbox(T(TKEY("fg_debug_tear_lines"), "Debug Tear Lines"), &settings.fgDebugTearLines);
-		ImGui::Checkbox(T(TKEY("fg_debug_pacing_lines"), "Debug Pacing Lines"), &settings.fgDebugPacingLines);
-		ImGui::Unindent();
-	}
-
-	// Low-latency section: Reflex only (when available).
+	const bool dlssgAvailable = streamline->IsDLSSGSupported();
 	const bool reflexAvailable = streamline->IsReflexSupported();
-	if (reflexAvailable) {
-		ImGui::SeparatorText(T(TKEY("low_latency"), "Low Latency"));
 
-		// Frame generation dictates Reflex: DLSS-G forces it ON, FSR-FG forces it OFF. In those cases show a
-		// disabled checkbox reflecting the forced state; only when no frame generation is active is it the
-		// user's toggle. (GetEffectiveReflex encodes the same policy used at the apply sites.)
-		const bool fgForcesReflex = IsFrameGenerationActive() &&
-		                            (GetFrameGenMethod() == FrameGenMethod::kDLSSG ||
-		                             GetFrameGenMethod() == FrameGenMethod::kFSR);
-		if (fgForcesReflex) {
-			bool effectiveReflex = GetEffectiveReflex();
-			ImGui::BeginDisabled();
-			ImGui::Checkbox("NVIDIA Reflex", &effectiveReflex);
-			ImGui::EndDisabled();
-			ImGui::SameLine();
-			ImGui::TextDisabled("%s", GetFrameGenMethod() == FrameGenMethod::kDLSSG ?
-			                              T(TKEY("reflex_forced_dlssg"), "(forced on by DLSS-G)") :
-			                              T(TKEY("reflex_forced_fsrfg"), "(forced off by FSR frame gen)"));
-		} else {
-			ImGui::Checkbox("NVIDIA Reflex", &settings.reflexEnabled);
+	// Selecting any upscaler sets the single upscaleMethod (so the others read off). Remember the last
+	// non-DLSS pick in upscaleMethodNoDLSS for the GetUpscaleMethod fallback on non-NVIDIA GPUs.
+	auto selectUpscaler = [&](UpscaleMethod a_m) {
+		settings.upscaleMethod = (uint)a_m;
+		if (a_m != UpscaleMethod::kDLSS)
+			settings.upscaleMethodNoDLSS = (uint)a_m;
+	};
 
-			if (settings.reflexEnabled)
-				ImGui::Checkbox(T(TKEY("reflex_boost"), "Boost"), &settings.reflexBoost);
+	// Upscaler selector as a single stepper: Off / Native AA / Quality / Balanced / Performance / Ultra
+	// Performance, bound to (upscaleMethod, qualityMode). Picking a mode makes this the active upscaler with
+	// qualityMode 0-4 (Native AA = 0, which is DLAA for DLSS); Off drops back to TAA.
+	auto drawUpscalerStepper = [&](const char* a_label, UpscaleMethod a_method) {
+		const std::vector<const char*> options = {
+			"Off",
+			T(TKEY("preset_native_aa"), "Native AA"),                  // qualityMode 0
+			T(TKEY("preset_quality"), "Quality"),                      // 1
+			T(TKEY("preset_balanced"), "Balanced"),                    // 2
+			T(TKEY("preset_performance"), "Performance"),              // 3
+			T(TKEY("preset_ultra_performance"), "Ultra Performance"),  // 4
+		};
+		const bool active = settings.upscaleMethod == (uint)a_method;
+		int idx = (active && settings.qualityMode <= 4) ? (int)settings.qualityMode + 1 : 0;
+		if (DrawStepper(a_label, &idx, options)) {
+			if (idx == 0) {
+				if (settings.upscaleMethod == (uint)a_method)
+					selectUpscaler(UpscaleMethod::kTAA);
+			} else {
+				selectUpscaler(a_method);
+				settings.qualityMode = (uint)(idx - 1);  // 0-4
+			}
 		}
-	}
+	};
 
-	// Present pacing: VSync + frame limiter. The limiter defaults to the monitor refresh rate so VSync-on stays
-	// inside the VRR window; Reflex drives the cap when it is active, otherwise DXVK's own limiter. VSync is
-	// always forced off for DLSS-G (incompatible on Vulkan — Reflex paces it instead).
-	ImGui::SeparatorText(T(TKEY("present_header"), "Present"));
-	// DLSS-G forces VSync off (incompatible on Vulkan); show the checkbox greyed-out at its effective value with
-	// a "(forced off)" note, mirroring the Reflex control above.
-	const bool vsyncForcedOff = IsFrameGenerationActive() && GetFrameGenMethod() == FrameGenMethod::kDLSSG;
-	if (vsyncForcedOff) {
-		bool effectiveVsync = false;
-		ImGui::BeginDisabled();
-		ImGui::Checkbox(T(TKEY("vsync"), "VSync"), &effectiveVsync);
-		ImGui::EndDisabled();
-		ImGui::SameLine();
-		ImGui::TextDisabled("%s", T(TKEY("vsync_dlssg"), "(forced off by DLSS-G)"));
-	} else {
-		ImGui::Checkbox(T(TKEY("vsync"), "VSync"), &settings.vsync);
-	}
-	// Frame Rate: a slider across divisors of the monitor refresh rate, with the far-right stop being
-	// "Unlocked (variable)". Stored as the divisor (settings.frameRateLimitDivisor): 1 = refresh, 2 = half…,
-	// 0 = unlocked. The slider's text shows the resolved fps so the stops track the actual monitor (e.g. on a
-	// 165 Hz display: 41 / 55 / 83 / 165 FPS / Unlocked).
+	// ---- Display (VSync + frame limiter) ----
+	ImGui::SeparatorText(T(TKEY("display_header"), "Display"));
 	{
+		// VSync stepper. DLSS-G forces it off (incompatible on Vulkan) — show it disabled with a "(forced off)" note.
+		const bool vsyncForcedOff = IsFrameGenerationActive() && GetFrameGenMethod() == FrameGenMethod::kDLSSG;
+		if (vsyncForcedOff) {
+			bool effectiveVsync = false;
+			DrawToggleStepper(T(TKEY("vsync"), "Vertical Synchronisation"), &effectiveVsync, /*disabled=*/true);
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", T(TKEY("vsync_dlssg"), "(forced off by DLSS-G)"));
+		} else {
+			DrawToggleStepper(T(TKEY("vsync"), "Vertical Synchronisation"), &settings.vsync);
+		}
+
+		// Frame Rate: a stepper across divisors of the monitor refresh rate, far-right stop = "Unlocked (variable)".
+		// Stored as the divisor (settings.frameRateLimitDivisor): 1 = refresh, 2 = half…, 0 = unlocked. The stop text
+		// shows the resolved fps so the stops track the actual monitor (e.g. 165 Hz → 41/55/83/165 FPS/Unlocked).
 		const int refresh = GetMonitorRefreshRate();
-		// Left -> right: largest divisor (lowest fps) up to divisor 1 (refresh), then unlocked. Cap the largest
-		// divisor so the slowest stop stays >= 30 fps (and at most quarter-refresh).
 		std::vector<int> divisorOptions;  // each entry is a divisor; 0 = unlocked
 		for (int d = 4; d >= 1; --d) {
 			if (refresh / d >= 30)
@@ -317,20 +199,135 @@ void Upscaling::DrawSettings()
 		if (divisorOptions.empty())
 			divisorOptions.push_back(1);
 		divisorOptions.push_back(0);  // Unlocked (variable) — far-right stop
-		const int maxSel = static_cast<int>(divisorOptions.size()) - 1;
 
+		std::vector<std::string> fpsStrings;
+		for (int d : divisorOptions)
+			fpsStrings.push_back(d == 0 ?
+			                         std::string(T(TKEY("frame_rate_unlocked"), "Unlocked (variable)")) :
+			                         std::format("{} FPS", refresh / d));
+		std::vector<const char*> fpsLabels;
+		for (auto& s : fpsStrings)
+			fpsLabels.push_back(s.c_str());
+
+		const int maxSel = static_cast<int>(divisorOptions.size()) - 1;
 		int sel = maxSel > 0 ? maxSel - 1 : 0;  // default to refresh (divisor 1) if the stored value isn't a stop
 		for (int i = 0; i <= maxSel; ++i) {
 			if (divisorOptions[i] == settings.frameRateLimitDivisor)
 				sel = i;
 		}
-
-		const std::string sliderLabel = divisorOptions[sel] == 0 ?
-		                                    std::string(T(TKEY("frame_rate_unlocked"), "Unlocked (variable)")) :
-		                                    std::format("{} FPS", refresh / divisorOptions[sel]);
-		ImGui::SliderInt(T(TKEY("frame_rate"), "Frame Rate"), &sel, 0, maxSel, sliderLabel.c_str());
+		DrawStepper(T(TKEY("frame_rate"), "Frame Rate"), &sel, fpsLabels);
 		settings.frameRateLimitDivisor = divisorOptions[std::clamp(sel, 0, maxSel)];
 	}
+
+	// ---- Anti-Aliasing (vendor-neutral base) ----
+	ImGui::SeparatorText(T(TKEY("aa_header"), "Anti-Aliasing"));
+	{
+		const std::vector<const char*> aaOptions = { T(TKEY("method_none"), "None"), T(TKEY("method_taa"), "TAA") };
+		int aaIdx = (settings.upscaleMethod == (uint)UpscaleMethod::kTAA) ? 1 : 0;
+		if (DrawStepper(T(TKEY("aa_method"), "Anti-Aliasing"), &aaIdx, aaOptions))
+			selectUpscaler(aaIdx == 1 ? UpscaleMethod::kTAA : UpscaleMethod::kNONE);
+	}
+
+	// ---- NVIDIA DLSS Technologies ----
+	ImGui::SeparatorText(T(TKEY("nv_header"), "NVIDIA DLSS Technologies"));
+	{
+		ImGui::BeginDisabled(!dlssAvailable);
+
+		// DLSS Super Resolution stepper. Its "Native AA" stop is DLAA (DLSS at native res, qualityMode 0).
+		drawUpscalerStepper(T(TKEY("nv_dlss_sr"), "Super Resolution"), UpscaleMethod::kDLSS);
+
+		// DLSS Frame Generation: one slider — Off / Dynamic / 2x / 3x / … up to the hardware max. Dynamic lets
+		// the driver pick the multiplier (eDynamic on 50-series, eAuto on 40-series; targets the Display frame
+		// rate). Any active state makes DLSS-G the FG method (disables FSR-FG).
+		{
+			ImGui::BeginDisabled(!dlssgAvailable);
+			const bool dlssgFg = settings.frameGeneration && settings.frameGenMethod == (uint)FrameGenMethod::kDLSSG;
+			// Fixed-multiplier stops capped at the hardware max (numFramesToGenerateMax + 1, max 6x).
+			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();
+			const uint maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
+
+			std::vector<std::string> fgStrings = { "Off", std::string(T(TKEY("fg_dynamic"), "Dynamic")) };
+			for (uint m = 2; m <= maxMultiplier; ++m)
+				fgStrings.push_back(std::format("{}x", m));
+			std::vector<const char*> fgStates;
+			for (auto& s : fgStrings)
+				fgStates.push_back(s.c_str());
+
+			// Current index: 0 = Off, 1 = Dynamic, 2..N = the fixed multiplier (idx == multiplier).
+			int fgIdx = !dlssgFg ? 0 :
+			            settings.dlssgDynamic ? 1 :
+			            std::clamp((int)settings.frameGenMultiplier, 2, (int)maxMultiplier);
+			if (DrawStepper(T(TKEY("nv_frame_generation"), "Frame Generation"), &fgIdx, fgStates)) {
+				if (fgIdx == 0) {
+					if (settings.frameGenMethod == (uint)FrameGenMethod::kDLSSG)
+						settings.frameGeneration = false;
+				} else {
+					settings.frameGeneration = true;
+					settings.frameGenMethod = (uint)FrameGenMethod::kDLSSG;
+					settings.dlssgDynamic = (fgIdx == 1);
+					if (fgIdx >= 2)
+						settings.frameGenMultiplier = (uint)fgIdx;  // 2x..maxMultiplier
+				}
+			}
+			ImGui::EndDisabled();
+		}
+
+		// NVIDIA Reflex Low Latency. FG dictates it (DLSS-G forces on, FSR-FG forces off); else user toggle.
+		{
+			ImGui::BeginDisabled(!reflexAvailable);
+			// Three states: Off / On / On + Boost.
+			const std::vector<const char*> reflexStates = { "Off", "On", T(TKEY("reflex_on_boost"), "On + Boost") };
+			const bool fgForcesReflex = IsFrameGenerationActive() &&
+			                            (GetFrameGenMethod() == FrameGenMethod::kDLSSG || GetFrameGenMethod() == FrameGenMethod::kFSR);
+			if (fgForcesReflex) {
+				// Effective state under the FG policy (DLSS-G forces on, FSR-FG forces off). Shown disabled.
+				int idx = GetEffectiveReflex() ? (settings.reflexBoost ? 2 : 1) : 0;
+				DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates, /*disabled=*/true);
+				ImGui::SameLine();
+				ImGui::TextDisabled("%s", GetFrameGenMethod() == FrameGenMethod::kDLSSG ?
+				                              T(TKEY("reflex_forced_dlssg"), "(forced on by DLSS-G)") :
+				                              T(TKEY("reflex_forced_fsrfg"), "(forced off by FSR frame gen)"));
+			} else {
+				int idx = settings.reflexEnabled ? (settings.reflexBoost ? 2 : 1) : 0;
+				if (DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates)) {
+					settings.reflexEnabled = (idx >= 1);
+					settings.reflexBoost = (idx == 2);
+				}
+			}
+			ImGui::EndDisabled();
+		}
+
+		ImGui::EndDisabled();  // !dlssAvailable
+	}
+
+	// ---- AMD FidelityFX ----
+	ImGui::SeparatorText(T(TKEY("amd_header"), "AMD FidelityFX"));
+	{
+		drawUpscalerStepper(T(TKEY("amd_fsr"), "AMD FSR Upscaling"), UpscaleMethod::kFSR);
+		if (settings.upscaleMethod == (uint)UpscaleMethod::kFSR) {
+			ImGui::Indent();
+			ImGui::SliderFloat(T(TKEY("sharpness"), "Sharpness"), &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
+			ImGui::Unindent();
+		}
+		bool fsrFg = settings.frameGeneration && settings.frameGenMethod == (uint)FrameGenMethod::kFSR;
+		if (DrawToggleStepper(T(TKEY("amd_fsr_fg"), "AMD FSR Frame Generation"), &fsrFg)) {
+			if (fsrFg) {
+				settings.frameGeneration = true;
+				settings.frameGenMethod = (uint)FrameGenMethod::kFSR;
+			} else if (settings.frameGenMethod == (uint)FrameGenMethod::kFSR) {
+				settings.frameGeneration = false;
+			}
+		}
+	}
+
+	// ---- Xe Super Sampling (Intel) ----
+	ImGui::SeparatorText(T(TKEY("intel_header"), "Xe Super Sampling"));
+	{
+		ImGui::BeginDisabled(!xessAvailable);
+		drawUpscalerStepper(T(TKEY("intel_xess"), "Intel XeSS"), UpscaleMethod::kXeSS);
+		ImGui::EndDisabled();
+	}
+
 }
 
 void Upscaling::SaveSettings(json& o_json)
@@ -1529,12 +1526,18 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			// (depth's stale region reads as uniform far-plane so it looked filled). ignoreLock=true gives the
 			// true render size (dev computed screenSize * resolutionScale, equivalent).
 			const auto rendSize = Util::ConvertToDynamic(dispSize, /*ignoreLock=*/true);
-			// Multi Frame Generation: multiplier N -> numFramesToGenerate N-1 (2x=1, 3x=2, 4x=3). Clamped to
-			// the hardware max inside SetDLSSGMode. dlssgAutoMode selects eAuto (auto-disable FG when faster off).
+			// Dynamic mode maps to eDynamic on hardware that supports it (50-series), else eAuto (40-series),
+			// targeting the Display frame-rate option (0 fps => SL auto-detects the refresh). A fixed multiplier
+			// N -> numFramesToGenerate N-1; clamped to the hardware max inside SetDLSSGMode.
+			auto* sl = Streamline::GetSingleton();
+			const bool dynamic = upscaling.settings.dlssgDynamic;
+			const bool useDynamic = dynamic && sl->IsDLSSGDynamicSupported();
+			const bool useAuto = dynamic && !useDynamic;
 			const uint32_t numFramesToGenerate = upscaling.settings.frameGenMultiplier > 1 ? upscaling.settings.frameGenMultiplier - 1 : 1;
-			Streamline::GetSingleton()->SetDLSSGMode(true,
+			const float dynTargetFps = dynamic ? static_cast<float>(upscaling.GetTargetFrameRate()) : 0.0f;
+			sl->SetDLSSGMode(true,
 				(uint32_t)rendSize.x, (uint32_t)rendSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y,
-				numFramesToGenerate, upscaling.settings.dlssgAutoMode);
+				numFramesToGenerate, useAuto, useDynamic, dynTargetFps);
 
 			if (gameplay) {
 				// FG depth = the pre-upscale render-res kMAIN. With an active upscaler UpscaleDepth() rewrote kMAIN

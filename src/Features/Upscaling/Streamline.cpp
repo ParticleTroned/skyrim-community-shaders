@@ -112,7 +112,10 @@ namespace
 		// (numFramesToGenerateMax), queried once on the present thread via QueryDLSSGCapabilities (0 = unknown).
 		uint32_t dlssgCachedNumFrames = 0;
 		bool dlssgCachedAuto = false;
+		bool dlssgCachedDynamic = false;
+		float dlssgCachedDynamicFps = 0.0f;
 		std::atomic<uint32_t> dlssgMaxFramesToGenerate = 0;
+		std::atomic<bool> dlssgDynamicSupported = false;
 
 		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset on the render thread
 		// at frame end (CloseRenderFrame, after PresentEnd); set by TagDLSSGResources. If still false at present,
@@ -1107,7 +1110,8 @@ void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 }
 
 void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
-	uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate, bool a_autoMode)
+	uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate, bool a_autoMode,
+	bool a_dynamic, float a_dynamicTargetFps)
 {
 	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
 		return;
@@ -1125,17 +1129,26 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		numFrames = maxFrames;
 
 	// Called every frame with the gameplay gate — skip the SL call when nothing relevant changed
-	// (mode, multiplier, auto-mode, or the render/display dims are all part of the key).
+	// (mode, multiplier, auto/dynamic, target fps, or the render/display dims are all part of the key).
 	if (g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable &&
 		g_sl.dlssgCachedNumFrames == numFrames && g_sl.dlssgCachedAuto == a_autoMode &&
+		g_sl.dlssgCachedDynamic == a_dynamic && g_sl.dlssgCachedDynamicFps == a_dynamicTargetFps &&
 		g_sl.dlssgCachedRenderW == a_renderWidth && g_sl.dlssgCachedRenderH == a_renderHeight &&
 		g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight)
 		return;
 
 	__try {
 		sl::DLSSGOptions options{};
-		options.mode = a_enable ? (a_autoMode ? sl::DLSSGMode::eAuto : sl::DLSSGMode::eOn) : sl::DLSSGMode::eOff;
+		// eDynamic (Dynamic MFG) overrides eAuto; both fall back from the caller when unsupported.
+		options.mode = !a_enable ? sl::DLSSGMode::eOff :
+		               a_dynamic ? sl::DLSSGMode::eDynamic :
+		               a_autoMode ? sl::DLSSGMode::eAuto :
+		                            sl::DLSSGMode::eOn;
 		options.numFramesToGenerate = numFrames;
+		// Dynamic mode targets a frame rate (0 => SL auto-detects the monitor refresh); numFramesToGenerate
+		// is ignored by eDynamic per the SL guide.
+		if (a_dynamic)
+			options.dynamicTargetFrameRate = a_dynamicTargetFps;
 		// eRetainResourcesWhenOff: DLSS-G is toggled off every loading screen / menu and back on for
 		// gameplay; retaining its resources across those off periods avoids realloc stutter on re-enable.
 		options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
@@ -1170,12 +1183,14 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 			g_sl.dlssgModeOn = a_enable;
 			g_sl.dlssgCachedNumFrames = numFrames;
 			g_sl.dlssgCachedAuto = a_autoMode;
+			g_sl.dlssgCachedDynamic = a_dynamic;
+			g_sl.dlssgCachedDynamicFps = a_dynamicTargetFps;
 			g_sl.dlssgCachedRenderW = a_renderWidth;
 			g_sl.dlssgCachedRenderH = a_renderHeight;
 			g_sl.dlssgCachedDisplayW = a_displayWidth;
 			g_sl.dlssgCachedDisplayH = a_displayHeight;
-			logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} (max {})", a_enable,
-				a_autoMode ? "auto" : "on", numFrames, maxFrames);
+			logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {})", a_enable,
+				!a_enable ? "off" : a_dynamic ? "dynamic" : a_autoMode ? "auto" : "on", numFrames, a_dynamicTargetFps, maxFrames);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
@@ -1257,8 +1272,9 @@ void Streamline::QueryDLSSGCapabilities()
 		sl::DLSSGState state{};
 		if (g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr) == sl::Result::eOk && state.numFramesToGenerateMax > 0u) {
 			g_sl.dlssgMaxFramesToGenerate.store(state.numFramesToGenerateMax, std::memory_order_release);
-			logger::info("[Streamline] DLSS-G numFramesToGenerateMax = {} (max {}x multiplier)",
-				state.numFramesToGenerateMax, state.numFramesToGenerateMax + 1u);
+			g_sl.dlssgDynamicSupported.store(state.bIsDynamicMFGSupported == sl::Boolean::eTrue, std::memory_order_release);
+			logger::info("[Streamline] DLSS-G numFramesToGenerateMax = {} (max {}x multiplier), DynamicMFG supported = {}",
+				state.numFramesToGenerateMax, state.numFramesToGenerateMax + 1u, state.bIsDynamicMFGSupported == sl::Boolean::eTrue);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
@@ -1268,6 +1284,11 @@ void Streamline::QueryDLSSGCapabilities()
 uint32_t Streamline::GetDLSSGMaxFramesToGenerate() const
 {
 	return g_sl.dlssgMaxFramesToGenerate.load(std::memory_order_acquire);
+}
+
+bool Streamline::IsDLSSGDynamicSupported() const
+{
+	return g_sl.dlssgDynamicSupported.load(std::memory_order_acquire);
 }
 
 void Streamline::LogDLSSGFrameStats()

@@ -1,5 +1,6 @@
 #include "OverlayRenderer.h"
 #include "BackgroundBlur.h"
+#include "DisplaySettingsMenu.h"
 #include "HomePageRenderer.h"
 #include "ThemeManager.h"
 
@@ -171,6 +172,7 @@ void OverlayRenderer::RenderOverlay(
 	}
 
 	RenderFeatureOverlays();
+	DisplaySettingsMenu::GetSingleton()->Draw();  // PhotoMode-style window, opened from the System menu
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
 	PatchOverlappingWindowBackgrounds();

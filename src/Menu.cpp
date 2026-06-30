@@ -27,6 +27,7 @@
 #include "I18n/I18n.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/BackgroundBlur.h"
+#include "Menu/DisplaySettingsMenu.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "Menu/HomePageRenderer.h"
@@ -1290,7 +1291,8 @@ void Menu::ProcessInputEvents(RE::InputEvent* const* a_events)
 bool Menu::ShouldSwallowInput()
 {
 	auto editorWindow = EditorWindow::GetSingleton();
-	return IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() || (editorWindow && editorWindow->open);
+	return IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() || (editorWindow && editorWindow->open) ||
+	       DisplaySettingsMenu::GetSingleton()->IsOpen();
 }
 
 bool Menu::IsPreviewFlying()

@@ -5,6 +5,7 @@
 #include "Hooks.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/DisplaySettingsMenu.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
@@ -122,6 +123,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				globals::OnDataLoaded();
 				EngineFix::InstallOnDataLoadedFixes();
 				FrameAnnotations::OnDataLoaded();
+				DisplaySettingsMenu::GetSingleton()->Register();  // System-menu "Display Settings" entry
 
 				auto shaderCache = globals::shaderCache;
 				shaderCache->menuLoaded = true;

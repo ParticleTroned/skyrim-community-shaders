@@ -2979,10 +2979,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(ambientNormal)));
 
 #	if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		if (SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection) {
-			directionalAmbientColor = ImageBasedLighting::GetStaticDiffuseIBL(ambientNormal, SampColorSampler);
-		}
+	const bool useStaticIBL = SharedData::iblSettings.EnableStaticIBL && !inWorld && !inReflection;
+	if (useStaticIBL) {
+		directionalAmbientColor = ImageBasedLighting::GetStaticDiffuseIBL(ambientNormal, SampColorSampler);
 	}
 #	endif
 
@@ -3029,7 +3028,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
-		if (!(SharedData::iblSettings.UseStaticIBL && !inWorld && !inReflection)) {
+		if (!useStaticIBL) {
 #		if defined(SKYLIGHTING)
 			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -ambientNormal, skylightingDiffuse);
 #		else
@@ -3182,7 +3181,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(SKYLIGHTING)
 #		if defined(IBL)
-	if (!SharedData::iblSettings.EnableIBL)
+	if (!(SharedData::iblSettings.EnableIBL || useStaticIBL))
 #		endif
 	{
 		Skylighting::ApplySkylighting(color.xyz, directionalAmbientColor, outputAlbedo, skylightingDiffuse);

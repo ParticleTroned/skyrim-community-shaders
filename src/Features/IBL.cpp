@@ -10,6 +10,9 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace
 {
 	constexpr uint32_t kIblPsSrvSlot = 76u;
@@ -41,12 +44,56 @@ namespace
 		return a_settings.DALCAmount <= 0.0f;
 	}
 
+	bool IsStaticIBLEnabled(const IBL::Settings& a_settings)
+	{
+		return a_settings.EnableIBL != 0 && a_settings.UseStaticIBL != 0;
+	}
+
+	float ClampFinite(float a_value, float a_min, float a_max, float a_fallback)
+	{
+		return std::clamp(std::isfinite(a_value) ? a_value : a_fallback, a_min, a_max);
+	}
+
+	uint ClampBool(uint a_value)
+	{
+		return a_value != 0 ? 1u : 0u;
+	}
+
+	uint ClampDALCMode(uint a_value)
+	{
+		return std::min(a_value, kDALCPlusSkyDirectionalMode);
+	}
+
+	void SanitizeSettings(IBL::Settings& a_settings)
+	{
+		const IBL::Settings defaults{};
+		a_settings.EnableIBL = ClampBool(a_settings.EnableIBL);
+		a_settings.PreserveFogLuminance = ClampBool(a_settings.PreserveFogLuminance);
+		a_settings.UseStaticIBL = ClampBool(a_settings.UseStaticIBL);
+		a_settings.DALCAmount = ClampFinite(a_settings.DALCAmount, 0.0f, 1.0f, defaults.DALCAmount);
+		a_settings.EnvIBLScale = ClampFinite(a_settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, defaults.EnvIBLScale);
+		a_settings.SkyIBLScale = ClampFinite(a_settings.SkyIBLScale, kIBLScaleMin, kIBLScaleMax, defaults.SkyIBLScale);
+		a_settings.EnvIBLSaturation = ClampFinite(a_settings.EnvIBLSaturation, 0.0f, 2.0f, defaults.EnvIBLSaturation);
+		a_settings.SkyIBLSaturation = ClampFinite(a_settings.SkyIBLSaturation, 0.0f, 2.0f, defaults.SkyIBLSaturation);
+		a_settings.FogAmount = ClampFinite(a_settings.FogAmount, 0.0f, 1.0f, defaults.FogAmount);
+		a_settings.DALCMode = ClampDALCMode(a_settings.DALCMode);
+		a_settings.DisableInInteriors = ClampBool(a_settings.DisableInInteriors);
+	}
+
+	IBL::Settings GetSanitizedSettings(const IBL::Settings& a_settings)
+	{
+		IBL::Settings result = a_settings;
+		SanitizeSettings(result);
+		return result;
+	}
+
 	uint GetEffectiveDALCMode(const IBL::Settings& a_settings)
 	{
-		if (IsDALCModeDisabled(a_settings) && a_settings.DALCMode >= kDALCPlusSkyMode)
+		const IBL::Settings settings = GetSanitizedSettings(a_settings);
+		if (IsDALCModeDisabled(settings) && settings.DALCMode >= kDALCPlusSkyMode)
 			return kDALCLuminanceRatioMode;
 
-		return a_settings.DALCMode;
+		return settings.DALCMode;
 	}
 }
 
@@ -67,6 +114,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void IBL::DrawSettings()
 {
+	SanitizeSettings(settings);
 	bool recaptureWeatherBaseline = false;
 	bool enableIBL = settings.EnableIBL != 0;
 	if (Util::WeatherUI::Checkbox("Enable IBL", this, "EnableIBL", &enableIBL)) {
@@ -165,16 +213,18 @@ void IBL::DrawSettings()
 void IBL::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SanitizeSettings(settings);
 }
 
 void IBL::SaveSettings(json& o_json)
 {
-	o_json = settings;
+	o_json = GetSanitizedSettings(settings);
 }
 
 void IBL::RestoreDefaultSettings()
 {
 	settings = {};
+	SanitizeSettings(settings);
 }
 
 void IBL::RegisterWeatherVariables()
@@ -253,17 +303,20 @@ void IBL::ReflectionsPrepass()
 	if (!context)
 		return;
 
-	if (!IsRuntimeEnabled() || !envIBLTexture || !skyIBLTexture) {
+	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);
+	const bool dynamicIBLEnabled = IsRuntimeEnabled() && envIBLTexture && skyIBLTexture;
+	const bool staticIBLEnabled = IsStaticIBLEnabled(runtimeSettings) && staticDiffuseIBLTexture && staticSpecularIBLTexture;
+	auto* staticDiffuseSrv = staticIBLEnabled ? staticDiffuseIBLTexture->srv.get() : nullptr;
+	auto* staticSpecularSrv = staticIBLEnabled ? staticSpecularIBLTexture->srv.get() : nullptr;
+	auto* envSrv = dynamicIBLEnabled ? envIBLTexture->srv.get() : nullptr;
+	auto* skySrv = dynamicIBLEnabled ? skyIBLTexture->srv.get() : nullptr;
+
+	if (!envSrv && !skySrv && !staticDiffuseSrv && !staticSpecularSrv) {
 		ClearIblPsSrvs(context);
 		return;
 	}
 
-	SetIblPsSrvs(
-		context,
-		envIBLTexture->srv.get(),
-		skyIBLTexture->srv.get(),
-		staticDiffuseIBLTexture ? staticDiffuseIBLTexture->srv.get() : nullptr,
-		staticSpecularIBLTexture ? staticSpecularIBLTexture->srv.get() : nullptr);
+	SetIblPsSrvs(context, envSrv, skySrv, staticDiffuseSrv, staticSpecularSrv);
 }
 
 void IBL::Prepass()
@@ -275,13 +328,15 @@ void IBL::Prepass()
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 
 	auto& envTexture = dynamicCubemaps.envTexture;
+	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);
+	const bool dynamicIBLEnabled = IsRuntimeEnabled() && envIBLTexture && skyIBLTexture;
+	const bool staticIBLEnabled = IsStaticIBLEnabled(runtimeSettings) && staticDiffuseIBLTexture && staticSpecularIBLTexture;
+	auto* staticDiffuseSrv = staticIBLEnabled ? staticDiffuseIBLTexture->srv.get() : nullptr;
+	auto* staticSpecularSrv = staticIBLEnabled ? staticSpecularIBLTexture->srv.get() : nullptr;
 
-	ClearIblPsSrvs(context);
+	SetIblPsSrvs(context, nullptr, nullptr, staticDiffuseSrv, staticSpecularSrv);
 
-	if (!IsRuntimeEnabled())
-		return;
-
-	if (!envIBLTexture || !skyIBLTexture)
+	if (!dynamicIBLEnabled)
 		return;
 
 	std::array<ID3D11ShaderResourceView*, 1> srvs = { (dynamicCubemaps.loaded && envTexture) ? envTexture->srv.get() : nullptr };
@@ -332,7 +387,7 @@ void IBL::Prepass()
 	}
 
 	// Set PS shader resource
-	SetIblPsSrvs(context, envIBLTexture->srv.get(), skyIBLTexture->srv.get(), nullptr, nullptr);
+	SetIblPsSrvs(context, envIBLTexture->srv.get(), skyIBLTexture->srv.get(), staticDiffuseSrv, staticSpecularSrv);
 }
 
 void IBL::SetupResources()
@@ -467,28 +522,32 @@ ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
 
 IBL::CommonBufferData IBL::GetCommonBufferData() const
 {
+	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);
+	const bool dynamicIBLEnabled = IsRuntimeEnabled() && envIBLTexture && skyIBLTexture;
+	const bool staticIBLEnabled = IsStaticIBLEnabled(runtimeSettings) && staticDiffuseIBLTexture && staticSpecularIBLTexture;
 	return {
-		.EnableIBL = IsRuntimeEnabled() ? 1u : 0u,
-		.PreserveFogLuminance = settings.PreserveFogLuminance,
-		.UseStaticIBL = settings.UseStaticIBL,
-		.DALCAmount = settings.DALCAmount,
-		.EnvIBLScale = settings.EnvIBLScale,
-		.SkyIBLScale = settings.SkyIBLScale,
-		.EnvIBLSaturation = settings.EnvIBLSaturation,
-		.SkyIBLSaturation = settings.SkyIBLSaturation,
-		.FogAmount = settings.FogAmount,
-		.DALCMode = GetEffectiveDALCMode(settings),
-		.DisableInInteriors = settings.DisableInInteriors,
-		.pad0 = 0.0f
+		.EnableIBL = dynamicIBLEnabled ? 1u : 0u,
+		.PreserveFogLuminance = runtimeSettings.PreserveFogLuminance,
+		.pad0 = 0u,
+		.DALCAmount = runtimeSettings.DALCAmount,
+		.EnvIBLScale = runtimeSettings.EnvIBLScale,
+		.SkyIBLScale = runtimeSettings.SkyIBLScale,
+		.EnvIBLSaturation = runtimeSettings.EnvIBLSaturation,
+		.SkyIBLSaturation = runtimeSettings.SkyIBLSaturation,
+		.FogAmount = runtimeSettings.FogAmount,
+		.DALCMode = GetEffectiveDALCMode(runtimeSettings),
+		.DisableInInteriors = runtimeSettings.DisableInInteriors,
+		.EnableStaticIBL = staticIBLEnabled ? 1u : 0u
 	};
 }
 
 bool IBL::IsRuntimeEnabled() const
 {
+	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);
 	const auto state = globals::state;
 	const bool menuDisabled = state && (state->IsMainOrLoadingMenuOpen() || state->isMapMenuOpen);
 	return loaded &&
-	       settings.EnableIBL != 0 &&
+	       runtimeSettings.EnableIBL != 0 &&
 	       !menuDisabled &&
-	       !LocationContext::IsDisabledByLocation(settings.DisableInInteriors, false);
+	       !LocationContext::IsDisabledByLocation(runtimeSettings.DisableInInteriors, false);
 }

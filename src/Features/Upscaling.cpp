@@ -34,7 +34,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fgDebugView,
 	fgDebugTearLines,
 	fgDebugPacingLines,
-	hardwareDefaultsApplied);
+	hardwareDefaultsApplied,
+	vsync,
+	frameRateLimit);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
 
@@ -242,6 +244,35 @@ void Upscaling::DrawSettings()
 			if (settings.reflexEnabled)
 				ImGui::Checkbox(T(TKEY("reflex_boost"), "Boost"), &settings.reflexBoost);
 		}
+	}
+
+	// Present pacing: VSync + frame limiter. The limiter defaults to the monitor refresh rate so VSync-on stays
+	// inside the VRR window; Reflex drives the cap when it is active, otherwise DXVK's own limiter. VSync is
+	// always forced off for DLSS-G (incompatible on Vulkan — Reflex paces it instead).
+	ImGui::SeparatorText(T(TKEY("present_header"), "Present"));
+	ImGui::Checkbox(T(TKEY("vsync"), "VSync"), &settings.vsync);
+	if (settings.vsync && IsFrameGenerationActive() && GetFrameGenMethod() == FrameGenMethod::kDLSSG) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", T(TKEY("vsync_dlssg"), "(forced off — incompatible with DLSS-G)"));
+	}
+	int limitMode = settings.frameRateLimit > 0 ? 2 : (settings.frameRateLimit < 0 ? 1 : 0);
+	const char* limitModes[] = {
+		T(TKEY("frame_limit_refresh"), "Display refresh rate"),
+		T(TKEY("frame_limit_unlimited"), "Unlimited"),
+		T(TKEY("frame_limit_custom"), "Custom"),
+	};
+	if (ImGui::Combo(T(TKEY("frame_limit"), "Frame Rate Limit"), &limitMode, limitModes, 3)) {
+		if (limitMode == 0)
+			settings.frameRateLimit = 0;
+		else if (limitMode == 1)
+			settings.frameRateLimit = -1;
+		else if (settings.frameRateLimit <= 0)
+			settings.frameRateLimit = GetTargetFrameRate();  // seed the custom value from the current refresh rate
+	}
+	if (limitMode == 2) {
+		int fps = settings.frameRateLimit;
+		if (ImGui::SliderInt(T(TKEY("frame_limit_fps"), "Max FPS"), &fps, 30, 360))
+			settings.frameRateLimit = std::clamp(fps, 1, 1000);
 	}
 }
 
@@ -454,6 +485,42 @@ bool Upscaling::GetEffectiveReflex() const
 		}
 	}
 	return settings.reflexEnabled;
+}
+
+int Upscaling::GetTargetFrameRate() const
+{
+	// Resolve settings.frameRateLimit to an fps cap: >0 = explicit, <0 = unlimited (0), 0 = the monitor refresh
+	// rate (default — so VSync-on stays inside the VRR window and DLSS-G's generated frames don't outrun the
+	// display). Returns 0 for "no limit".
+	if (settings.frameRateLimit > 0)
+		return settings.frameRateLimit;
+	if (settings.frameRateLimit < 0)
+		return 0;
+	DEVMODEA dm{};
+	dm.dmSize = sizeof(dm);
+	if (EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &dm) && (dm.dmFields & DM_DISPLAYFREQUENCY) && dm.dmDisplayFrequency > 1)
+		return static_cast<int>(dm.dmDisplayFrequency);
+	return 60;
+}
+
+void Upscaling::ApplyDxvkFrameRateLimit(double a_fps)
+{
+	// Non-Reflex fallback: drive DXVK's own frame limiter via the dxvkSetTargetFrameRate export (same
+	// GetProcAddress pattern as the other dxvk* hooks). a_fps<=0 clears the limit. Graceful no-op if the export
+	// is absent (e.g. a DXVK build without it) so the Reflex path is unaffected. Only pushes on change.
+	using SetFrameRateFn = void (*)(double);
+	static SetFrameRateFn fn = nullptr;
+	static bool resolved = false;
+	if (!resolved) {
+		resolved = true;
+		if (HMODULE m = GetModuleHandleW(L"dxvk_d3d11.dll"))
+			fn = reinterpret_cast<SetFrameRateFn>(GetProcAddress(m, "dxvkSetTargetFrameRate"));
+	}
+	static double lastFps = -2.0;
+	if (fn && a_fps != lastFps) {
+		lastFps = a_fps;
+		fn(a_fps > 0.0 ? a_fps : 0.0);
+	}
 }
 
 HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,

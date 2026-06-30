@@ -61,6 +61,13 @@ public:
 		bool fgDebugTearLines = false;
 		bool fgDebugPacingLines = false;
 		bool hardwareDefaultsApplied = false;
+
+		// Present pacing. VSync is applied in our present hook (forced OFF whenever DLSS-G is the active FG
+		// method — VSync is incompatible with DLSS-G on Vulkan). frameRateLimit: 0 = cap at the monitor refresh
+		// rate (default, so VSync-on plays nice with VRR), <0 = unlimited, >0 = explicit fps. The cap is driven
+		// by Reflex when available (lowest latency; DLSS-G handles it this way), else by DXVK's frame limiter.
+		bool vsync = false;
+		int frameRateLimit = 0;
 	};
 
 	Settings settings;
@@ -129,6 +136,12 @@ public:
 	// (DLSS-G stalls without it), FSR frame-gen forces it OFF, and with no frame generation it follows the
 	// user's reflexEnabled toggle. Never mutates the saved preference.
 	[[nodiscard]] bool GetEffectiveReflex() const;
+
+	// Resolve the frame-rate cap (settings.frameRateLimit) to an fps value: 0 = the monitor refresh rate
+	// (default), <0 = unlimited, >0 = explicit. Returns 0 for "no limit". Driven by Reflex when active, else DXVK.
+	[[nodiscard]] int GetTargetFrameRate() const;
+	// Apply a frame-rate cap through DXVK's own limiter (the non-Reflex fallback). fps<=0 clears the limit.
+	void ApplyDxvkFrameRateLimit(double a_fps);
 
 	HRESULT PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags,
 		const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& a_present);

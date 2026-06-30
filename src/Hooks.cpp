@@ -262,17 +262,18 @@ struct IDXGISwapChain_Present
 	{
 		globals::state->Reset();
 
-		// VSync is fundamentally incompatible with DLSS-G frame generation on Vulkan — it is NEVER valid (the
-		// IFLIP-based "application-controlled VSync" path / DLSSGState::bIsVsyncSupportAvailable is a D3D12 concept
-		// that does not apply here). Presenting DLSS-G with SyncInterval>0 makes SL's DLSS-G DISABLE interpolation
-		// outright (SL log: "VSync interval 1 not supported with FG" → "interpolation … disabled (SyncInterval=1)")
-		// so frame-gen stops doubling — and the game reaches our present hook with SyncInterval=1 intermittently
-		// even when iVSyncPresentInterval=0. So ALWAYS force SyncInterval=0 here whenever DLSS-G is the active FG
-		// method. (Reflex caps the rate for DLSS-G.) FSR-FG/FFX manages its own present pacing.
-		if (SyncInterval != 0 &&
-			globals::features::upscaling.IsFrameGenerationActive() &&
-			globals::features::upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG)
-			SyncInterval = 0;
+		// CS owns VSync via the Upscaling menu setting, overriding whatever SyncInterval the game passes. The one
+		// hard rule: VSync is fundamentally incompatible with DLSS-G frame generation on Vulkan, so it is ALWAYS
+		// forced off when DLSS-G is the active FG method (the IFLIP-based application-controlled-VSync path is a
+		// D3D12 concept that does not apply; presenting DLSS-G with SyncInterval>0 makes SL DISABLE interpolation
+		// — "VSync interval 1 not supported with FG" — and frame-gen stops doubling). Reflex caps the rate for
+		// DLSS-G; the frame limiter handles VRR for the rest. FSR-FG/FFX still paces its own present underneath.
+		{
+			auto& up = globals::features::upscaling;
+			const bool dlssgActive = up.IsFrameGenerationActive() &&
+			                         up.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG;
+			SyncInterval = dlssgActive ? 0u : (up.settings.vsync ? 1u : 0u);
+		}
 
 		// Reflex/PCL latency markers: render submission is complete by present time; bracket the
 		// present so Reflex can measure render→display latency.
@@ -441,7 +442,13 @@ struct BSInputDeviceManager_PollInputDevices
 			// Reflex policy (GetEffectiveReflex): DLSS-G frame-gen forces Reflex ON (it stalls otherwise),
 			// FSR frame-gen forces it OFF (FFX paces the swapchain itself), no frame-gen follows the toggle.
 			const bool wantReflex = upscaling.GetEffectiveReflex();
-			Streamline::GetSingleton()->UpdateReflex(wantReflex, wantReflex && upscaling.settings.reflexBoost);
+			// Frame limiter: cap at GetTargetFrameRate() (default = refresh rate). Reflex paces it when active
+			// (lowest latency; DLSS-G relies on this); otherwise DXVK's own limiter. Exactly one is engaged so
+			// they don't double-limit.
+			const int targetFps = upscaling.GetTargetFrameRate();
+			const uint32_t reflexLimitUs = (wantReflex && targetFps > 0) ? static_cast<uint32_t>(1000000.0 / targetFps) : 0u;
+			Streamline::GetSingleton()->UpdateReflex(wantReflex, wantReflex && upscaling.settings.reflexBoost, reflexLimitUs);
+			upscaling.ApplyDxvkFrameRateLimit(wantReflex ? 0.0 : static_cast<double>(targetFps));
 			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::SimulationStart);
 			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::PCLatencyPing);  // sample fires this once/frame
 		}

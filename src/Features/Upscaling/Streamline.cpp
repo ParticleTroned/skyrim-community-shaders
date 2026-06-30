@@ -95,6 +95,7 @@ namespace
 		// Cached Reflex options to avoid redundant slReflexSetOptions calls.
 		bool reflexCacheValid = false;
 		sl::ReflexMode reflexCachedMode = sl::ReflexMode::eOff;
+		uint32_t reflexCachedFrameLimitUs = 0;
 
 		// Cached DLSS-G interpolation mode + the render/display dims it was issued for. SetDLSSGMode is called
 		// every frame with the gameplay-state gate (on in-world, off while loading/paused/in-menu per the DLSS-G
@@ -533,7 +534,7 @@ static void CloseRenderFrame()
 	g_sl.dlssgTaggedThisFrame = false;
 }
 
-void Streamline::UpdateReflex(bool a_enable, bool a_boost)
+void Streamline::UpdateReflex(bool a_enable, bool a_boost, uint32_t a_frameLimitUs)
 {
 	// Tractable on the existing DXVK device (markers + sleep only, no extra queues).
 	if (!initialized || !featureReflex || g_sl.dispatchFaulted)
@@ -544,11 +545,13 @@ void Streamline::UpdateReflex(bool a_enable, bool a_boost)
 	                                        sl::ReflexMode::eLowLatency;
 
 	__try {
-		if (!g_sl.reflexCacheValid || g_sl.reflexCachedMode != mode) {
+		if (!g_sl.reflexCacheValid || g_sl.reflexCachedMode != mode || g_sl.reflexCachedFrameLimitUs != a_frameLimitUs) {
 			sl::ReflexOptions options{};
 			options.mode = mode;
+			options.frameLimitUs = a_frameLimitUs;  // Reflex frame limiter (0 = unlimited)
 			if (g_sl.slReflexSetOptions(options) == sl::Result::eOk) {
 				g_sl.reflexCachedMode = mode;
+				g_sl.reflexCachedFrameLimitUs = a_frameLimitUs;
 				g_sl.reflexCacheValid = true;
 			}
 		}

@@ -74,7 +74,9 @@ public:
 
 	[[nodiscard]] bool IsFSRFrameGenActive() const;
 
-	void UpdateReflex(bool a_enable, bool a_boost);
+	// a_frameLimitUs: Reflex frame-limiter interval in microseconds (0 = no limit). Only takes effect while
+	// Reflex is on; the caller uses DXVK's limiter instead when Reflex is off.
+	void UpdateReflex(bool a_enable, bool a_boost, uint32_t a_frameLimitUs = 0);
 
 	enum class PclMarker : uint32_t
 	{

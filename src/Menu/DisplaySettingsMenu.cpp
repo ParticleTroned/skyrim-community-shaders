@@ -189,11 +189,7 @@ void DisplaySettingsMenu::Draw()
 
 	constexpr auto flags = ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
 	                       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
-	const bool pushedFont = s_displayFont != nullptr;
 	if (ImGui::Begin("##CSDisplaySettings", nullptr, flags)) {
-		if (pushedFont)
-			ImGui::PushFont(s_displayFont);
-
 		ImGui::SetWindowFontScale(1.3f);
 		ImGui::TextUnformatted("DISPLAY SETTINGS");
 		ImGui::SetWindowFontScale(1.0f);
@@ -217,9 +213,6 @@ void DisplaySettingsMenu::Draw()
 
 		if (ImGui::Button("Close", ImVec2(120.0f, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
 			isOpen = false;
-
-		if (pushedFont)
-			ImGui::PopFont();
 	}
 	ImGui::End();
 

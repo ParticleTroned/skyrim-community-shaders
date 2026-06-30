@@ -449,20 +449,6 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		menu.loadedFontRoles[bodyIndex] = bodyFont;
 	}
 
-	// PhotoMode-style display font for the "Display Settings" window (Jost — a geometric Futura-like face,
-	// close to PhotoMode's look). Added to the shared atlas; ImGui 1.92 lets us push it at any size. Re-set
-	// each rebuild because the ImFont* invalidates on io.Fonts->Clear().
-	{
-		ImFont* dsFont = nullptr;
-		auto dsPath = fontsRoot / "Jost" / "Jost-Regular.ttf";
-		if (std::filesystem::exists(dsPath)) {
-			float dsSize = std::round(std::clamp(fontSize, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE));
-			ImFontConfig cfg = font_config;
-			dsFont = io.Fonts->AddFontFromFileTTF(dsPath.string().c_str(), dsSize, &cfg);
-		}
-		DisplaySettingsMenu::SetDisplayFont(dsFont);
-	}
-
 	io.FontDefault = bodyFont ? bodyFont : io.Fonts->AddFontDefault();
 	menu.cachedFontName = const_cast<Menu&>(menu).GetFontRoleSettings(Menu::FontRole::Body).File;
 	cachedFontSize = fontSize;

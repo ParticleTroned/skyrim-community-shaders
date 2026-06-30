@@ -2,6 +2,8 @@
 
 #include <RE/Skyrim.h>
 
+struct ImFont;
+
 /**
  * @brief PhotoMode-style "Display Settings" in-game menu.
  *
@@ -24,6 +26,10 @@ public:
 	[[nodiscard]] bool IsOpen() const { return isOpen; }
 	void Close() { isOpen = false; }
 
+	// The PhotoMode-style display font, loaded into the shared ImGui atlas by ThemeManager each font rebuild
+	// (pointer invalidates on rebuild, so it is re-set there). Pushed for the window content in Draw().
+	static void SetDisplayFont(ImFont* a_font) { s_displayFont = a_font; }
+
 	RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event,
 		RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
 
@@ -37,4 +43,6 @@ private:
 	bool isOpen = false;
 	// True until the entry has been injected into the currently-open System menu (re-armed each open).
 	bool wantSystemMenuEntry = false;
+
+	static inline ImFont* s_displayFont = nullptr;
 };

@@ -477,23 +477,33 @@ endif()
 set(STREAMLINE_DLL_DIR "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/bin/x64" CACHE PATH "Directory holding the Streamline plugin DLLs to stage")
 if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
     file(GLOB _SL_DLLS "${STREAMLINE_DLL_DIR}/sl.*.dll")
+    # STREAMLINE_DLL_DIR is the SIGNED production SDK build (cmake/Streamline prefers it) — ship the official
+    # signed sl.common/dlss/dlss_g/pcl/reflex from here. Drop sl.interposer: the fork's interposer carries a
+    # CS-only WSI-hook change (DLSS-G ↔ FSR-FG present coexistence) that the stock signed one lacks, so the
+    # fork build below MUST own it (and is necessarily unsigned). sl.fsr / sl.xess are fork-only to begin with.
+    list(FILTER _SL_DLLS EXCLUDE REGEX "sl\\.interposer\\.dll$")
     # NGX inference models (nvngx_dlss.dll / nvngx_dlssg.dll / ...) ship next to the sl.*.dll
     # plugins in the SDK bin folder. Streamline loads them from the plugin directory at runtime;
     # without them slIsFeatureSupported reports DLSS / DLSS-G unsupported even on capable NVIDIA
     # hardware (only Reflex, which needs no model, stays available).
     file(GLOB _SL_NGX_DLLS "${STREAMLINE_DLL_DIR}/nvngx_*.dll")
-    # Custom plugins built from the Streamline fork (sl.fsr, sl.xess) live in the fork's
-    # _artifacts tree, not in the official SDK zip. Pick them up if they've been built.
+    # Custom + CS-modified plugins built from the Streamline fork live in the fork's _artifacts tree, not the
+    # official SDK zip. The fork builds the FULL SDK there, but we take ONLY sl.fsr / sl.xess (custom) and
+    # sl.interposer (CS WSI-hook change) — the rest must remain the official SIGNED SDK binaries globbed above.
     file(GLOB _SL_FORK_DLLS "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/_artifacts/sl.*/Develop_x64/sl.*.dll")
+    list(FILTER _SL_FORK_DLLS INCLUDE REGEX "sl\\.(fsr|xess|interposer)\\.dll$")
     if(_SL_FORK_DLLS)
         list(APPEND _SL_DLLS ${_SL_FORK_DLLS})
         message(STATUS "Staging Streamline fork plugins: ${_SL_FORK_DLLS}")
     endif()
-    # sl.template.dll is the SDK's example plugin. The interposer's PluginManager auto-loads EVERY
-    # sl.*.dll in the plugin folder, and the sample's slOnPluginLoad feeds a NULL string into its
-    # embedded JSON config (strlen(NULL) crash in sl.common) which aborts slInit and wedges the
-    # interposer. Never stage it.
-    list(FILTER _SL_DLLS EXCLUDE REGEX "sl\\.template\\.dll$")
+    # Drop plugins we must not ship — applied AFTER the fork-artifacts append above, because the fork builds
+    # the FULL SDK (sl.deepdvc/directsr/dlss_d/imgui/nis/...) into _artifacts and re-introduces them.
+    #  - sl.template.dll: SDK example plugin; its slOnPluginLoad feeds a NULL string into its embedded JSON
+    #    config (strlen(NULL) crash in sl.common) which aborts slInit and wedges the interposer.
+    #  - the rest: features CS never requests in featuresToLoad (DLSS, Reflex, PCL, DLSS-G, FSR, XeSS); the
+    #    interposer auto-loads every sl.*.dll and logs "Ignoring plugin 'sl.X' since it was not requested by the
+    #    host" for each. (dlss_d = Ray Reconstruction, kept distinct from dlss / dlss_g by the trailing _d\.dll.)
+    list(FILTER _SL_DLLS EXCLUDE REGEX "sl\\.(template|deepdvc|directsr|dlss_d|imgui|nis|nvperf)\\.dll$")
     # NvLowLatencyVk.dll — the VK_NV_low_latency runtime SL's chi layer loads from the plugin dir at init
     # (sl.chi/nvllvk.cpp). WITHOUT it, NvLL never initializes ("Failed to load NvLowLatencyVk.dll" → m_reflex
     # is null), so every Reflex/NvLL marker/sleep fails and DLSS-G cannot pace frame generation on the
@@ -647,14 +657,19 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
         set(_aio_sl_dir "${AIO_DIR}/SKSE/Plugins/CommunityShaders/streamline")
         file(GLOB _AIO_SL_DLLS "${STREAMLINE_DLL_DIR}/sl.*.dll")
+        # Signed SDK plugins from STREAMLINE_DLL_DIR; the fork owns sl.interposer (CS WSI-hook change) — drop the
+        # stock signed one here (see install() rule above for the full rationale).
+        list(FILTER _AIO_SL_DLLS EXCLUDE REGEX "sl\\.interposer\\.dll$")
         # NGX models alongside the plugins — see the install() rule above; DLSS/DLSS-G need these.
         file(GLOB _AIO_SL_NGX "${STREAMLINE_DLL_DIR}/nvngx_*.dll")
         list(APPEND _AIO_SL_DLLS ${_AIO_SL_NGX})
-        # Custom fork plugins (sl.fsr, sl.xess) from the fork's build artifacts.
+        # Take ONLY sl.fsr / sl.xess (custom) + sl.interposer (CS-modified) from the fork; the rest stay signed.
         file(GLOB _AIO_SL_FORK "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/_artifacts/sl.*/Develop_x64/sl.*.dll")
+        list(FILTER _AIO_SL_FORK INCLUDE REGEX "sl\\.(fsr|xess|interposer)\\.dll$")
         list(APPEND _AIO_SL_DLLS ${_AIO_SL_FORK})
-        # Never stage sl.template.dll — the SDK sample plugin crashes slInit (see install() rule above).
-        list(FILTER _AIO_SL_DLLS EXCLUDE REGEX "sl\\.template\\.dll$")
+        # Drop must-not-ship plugins AFTER the fork-artifacts append (the fork builds the full SDK; see the
+        # install() rule above for the full rationale — sl.template crashes slInit; the rest are unrequested).
+        list(FILTER _AIO_SL_DLLS EXCLUDE REGEX "sl\\.(template|deepdvc|directsr|dlss_d|imgui|nis|nvperf)\\.dll$")
         # NvLowLatencyVk.dll — required for NvLL/Reflex (and thus DLSS-G pacing); not an sl.*/nvngx_* dll so
         # the globs miss it. See the install() rule above. Stage from the SDK bin or the fork's reflex-sdk-vk/lib.
         set(_aio_nvll "${STREAMLINE_DLL_DIR}/NvLowLatencyVk.dll")

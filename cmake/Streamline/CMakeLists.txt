@@ -58,7 +58,22 @@ endif()
 # folder inside the zip — typically <_sl_deps_dir>/.../bin/x64). FORCE so a stale cached value
 # (e.g. the old extern/Streamline-DX12/bin/x64 default) is overridden once the DLLs are fetched.
 if(_sl_interposer)
-    list(GET _sl_interposer 0 _sl_interposer_first)
+    # The SDK zip ships BOTH a signed PRODUCTION build (…/bin/x64) and an unsigned DEVELOPMENT build
+    # (…/bin/x64/development) — each with its own sl.interposer.dll. Prefer the signed production directory:
+    # CS ships official-signed SDK plugins (sl.common/dlss/dlss_g/pcl/reflex) from here, and the fork supplies
+    # its own (necessarily unsigned) sl.interposer/sl.fsr/sl.xess separately. Both builds emit identical SL
+    # SL_LOG_WARN diagnostics, so this is purely about shipping signed binaries, not about log noise.
+    set(_sl_interposer_first "")
+    foreach(_sl_cand IN LISTS _sl_interposer)
+        get_filename_component(_sl_cand_dir "${_sl_cand}" DIRECTORY)
+        if(NOT _sl_cand_dir MATCHES "/development$")
+            set(_sl_interposer_first "${_sl_cand}")
+            break()
+        endif()
+    endforeach()
+    if(NOT _sl_interposer_first)
+        list(GET _sl_interposer 0 _sl_interposer_first)
+    endif()
     get_filename_component(_sl_dll_dir "${_sl_interposer_first}" DIRECTORY)
     set(STREAMLINE_DLL_DIR "${_sl_dll_dir}" CACHE PATH "Directory holding the Streamline plugin DLLs to stage" FORCE)
     message(STATUS "Streamline plugin DLLs available at ${STREAMLINE_DLL_DIR}")

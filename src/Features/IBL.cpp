@@ -13,6 +13,12 @@ namespace
 {
 	constexpr uint32_t kIblPsSrvSlot = 76u;
 	constexpr uint32_t kIblPsSrvCount = 4u;
+	constexpr float kIBLScaleMin = 0.0f;
+	constexpr float kIBLScaleMax = 2.0f;
+	constexpr uint kDALCLuminanceRatioMode = 0;
+	constexpr uint kDALCColorRatioMode = 1;
+	constexpr uint kDALCPlusSkyMode = 2;
+	constexpr uint kDALCPlusSkyDirectionalMode = 3;
 
 	void SetIblPsSrvs(ID3D11DeviceContext* a_context,
 		ID3D11ShaderResourceView* a_env,
@@ -27,6 +33,19 @@ namespace
 	void ClearIblPsSrvs(ID3D11DeviceContext* a_context)
 	{
 		SetIblPsSrvs(a_context, nullptr, nullptr, nullptr, nullptr);
+	}
+
+	bool IsDALCModeDisabled(const IBL::Settings& a_settings)
+	{
+		return a_settings.DALCAmount <= 0.0f;
+	}
+
+	uint GetEffectiveDALCMode(const IBL::Settings& a_settings)
+	{
+		if (IsDALCModeDisabled(a_settings) && a_settings.DALCMode >= kDALCPlusSkyMode)
+			return kDALCLuminanceRatioMode;
+
+		return a_settings.DALCMode;
 	}
 }
 
@@ -58,11 +77,11 @@ void IBL::DrawSettings()
 	}
 
 	ImGui::BeginDisabled(settings.EnableIBL == 0);
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, 0.0f, 10.0f, "%.2f");
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Intensity multiplier for the environment IBL (from Dynamic Cubemaps).\nControls how strongly the surrounding environment contributes to ambient lighting.");
 	}
-	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, 0.0f, 10.0f, "%.2f");
+	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Sky IBL Scale", this, "SkyIBLScale", &settings.SkyIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Intensity multiplier for the sky IBL (from the game's native reflections cubemap).\nControls how strongly the sky contributes to ambient lighting.");
 	}
@@ -81,11 +100,9 @@ void IBL::DrawSettings()
 			"0 = no matching (pure IBL brightness), 1 = fully matched to vanilla ambient.");
 	}
 	{
-		static const char* dalcModeNames[] = { "Luminance Ratio", "Color Ratio", "DALC + Sky", "DALC + Sky (Directional)" };
 		int dalcMode = static_cast<int>(settings.DALCMode);
-		if (ImGui::Combo("DALC Mode", &dalcMode, dalcModeNames, IM_ARRAYSIZE(dalcModeNames))) {
-			settings.DALCMode = static_cast<uint>(dalcMode);
-		}
+		auto _ = Util::DisableGuard(IsDALCModeDisabled(settings));
+		ImGui::Text("DALC Mode");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"How the DALC-to-IBL brightness ratio is computed:\n"
@@ -93,6 +110,25 @@ void IBL::DrawSettings()
 				"Color Ratio: Per-channel ratio (preserves DALC color tint).\n"
 				"DALC + Sky: Uses vanilla ambient as base, sky IBL on top. Skylighting only affects sky.\n"
 				"DALC + Sky (Directional): Same, but Skylighting also dims vanilla ambient per-direction.");
+		}
+		if (ImGui::BeginTable("##IBLDALCMode", 2, ImGuiTableFlags_SizingStretchSame)) {
+			ImGui::TableNextColumn();
+			if (ImGui::RadioButton("Luminance Ratio", &dalcMode, static_cast<int>(kDALCLuminanceRatioMode))) {
+				settings.DALCMode = static_cast<uint>(dalcMode);
+			}
+			ImGui::TableNextColumn();
+			if (ImGui::RadioButton("DALC + Sky", &dalcMode, static_cast<int>(kDALCPlusSkyMode))) {
+				settings.DALCMode = static_cast<uint>(dalcMode);
+			}
+			ImGui::TableNextColumn();
+			if (ImGui::RadioButton("Color Ratio", &dalcMode, static_cast<int>(kDALCColorRatioMode))) {
+				settings.DALCMode = static_cast<uint>(dalcMode);
+			}
+			ImGui::TableNextColumn();
+			if (ImGui::RadioButton("DALC + Sky (Directional)", &dalcMode, static_cast<int>(kDALCPlusSkyDirectionalMode))) {
+				settings.DALCMode = static_cast<uint>(dalcMode);
+			}
+			ImGui::EndTable();
 		}
 	}
 	ImGui::Checkbox("Use Static IBL For Out-of-World Objects", (bool*)&settings.UseStaticIBL);
@@ -162,7 +198,7 @@ void IBL::RegisterWeatherVariables()
 		"Intensity of environment IBL from the Dynamic Cubemaps environment cubemap",
 		&settings.EnvIBLScale,
 		1.0f,
-		0.0f, 10.0f));
+		kIBLScaleMin, kIBLScaleMax));
 
 	// Intensity of sky IBL (from the game's native reflections cubemap)
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
@@ -171,7 +207,7 @@ void IBL::RegisterWeatherVariables()
 		"Intensity of sky IBL from the game's native reflections cubemap",
 		&settings.SkyIBLScale,
 		1.0f,
-		0.0f, 10.0f));
+		kIBLScaleMin, kIBLScaleMax));
 
 	// Color saturation of environment IBL
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
@@ -252,7 +288,7 @@ void IBL::Prepass()
 	std::array<ID3D11SamplerState*, 1> samplers = { Deferred::GetSingleton()->linearSampler };
 
 	// IBL - Environment cubemap SH projection (skip for DALC-based modes that don't use EnvIBL)
-	if (settings.DALCMode < 2) {
+	if (GetEffectiveDALCMode(settings) < kDALCPlusSkyMode) {
 		samplers[0] = Deferred::GetSingleton()->linearSampler;
 
 		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
@@ -442,7 +478,7 @@ IBL::CommonBufferData IBL::GetCommonBufferData() const
 		.EnvIBLSaturation = settings.EnvIBLSaturation,
 		.SkyIBLSaturation = settings.SkyIBLSaturation,
 		.FogAmount = settings.FogAmount,
-		.DALCMode = settings.DALCMode,
+		.DALCMode = GetEffectiveDALCMode(settings),
 		.DisableInInteriors = settings.DisableInInteriors,
 		.pad0 = 0.0f
 	};

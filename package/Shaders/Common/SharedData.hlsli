@@ -273,7 +273,7 @@ namespace SharedData
 	{
 		uint EnableIBL;
 		uint PreserveFogLuminance;
-		uint UseStaticIBL;
+		uint pad0;
 		float DALCAmount;
 		float EnvIBLScale;
 		float SkyIBLScale;
@@ -282,7 +282,7 @@ namespace SharedData
 		float FogAmount;
 		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
 		uint DisableInInteriors;
-		float pad0;
+		uint EnableStaticIBL;
 	};
 
 	struct ExtendedTranslucencySettings

@@ -61,7 +61,7 @@ public:
 	{
 		uint EnableIBL;
 		uint PreserveFogLuminance;
-		uint UseStaticIBL;
+		uint pad0;
 		float DALCAmount;
 		float EnvIBLScale;
 		float SkyIBLScale;
@@ -70,7 +70,7 @@ public:
 		float FogAmount;
 		uint DALCMode;
 		uint DisableInInteriors;
-		float pad0;
+		uint EnableStaticIBL;
 	};
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;

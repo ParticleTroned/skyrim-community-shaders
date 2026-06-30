@@ -262,14 +262,18 @@ struct IDXGISwapChain_Present
 	{
 		globals::state->Reset();
 
-		// DLSS-G frame pacing requires the present run with VSync OFF (no Independent Flip). The game can still
-		// reach here with SyncInterval=1 even when iVSyncPresentInterval=0, and SL 2.12.0's DLSS-G then DISABLES
-		// interpolation outright (SL log: "VSync interval 1 not supported with FG" → "interpolation … disabled
-		// (SyncInterval=1)") so frame-gen stops doubling. (2.10.3 silently clamped; 2.12.0 is strict.) Force
-		// SyncInterval=0 for the DLSS-G present path. FSR-FG/FFX manages its own present pacing.
+		// DLSS-G checklist: VSync with Frame Generation is only valid when the system supports it (IFLIP — see
+		// Streamline::IsDLSSGVsyncSupported / DLSSGState::bIsVsyncSupportAvailable). Where it is NOT supported,
+		// presenting DLSS-G with SyncInterval>0 makes SL 2.12.0's DLSS-G DISABLE interpolation outright (SL log:
+		// "VSync interval 1 not supported with FG" → "interpolation … disabled (SyncInterval=1)") so frame-gen
+		// stops doubling — and the game reaches here with SyncInterval=1 intermittently even when
+		// iVSyncPresentInterval=0. So control VSync here, in our present hook: when DLSS-G is active and VSync+FG
+		// is unsupported, force SyncInterval=0; otherwise let the app's SyncInterval pass through (VSync allowed).
+		// FSR-FG/FFX manages its own present pacing.
 		if (SyncInterval != 0 &&
 			globals::features::upscaling.IsFrameGenerationActive() &&
-			globals::features::upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG)
+			globals::features::upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG &&
+			!Streamline::GetSingleton()->IsDLSSGVsyncSupported())
 			SyncInterval = 0;
 
 		// Reflex/PCL latency markers: render submission is complete by present time; bracket the

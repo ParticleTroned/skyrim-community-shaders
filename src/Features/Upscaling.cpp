@@ -30,49 +30,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	reflexLowLatencyBoost,
 	frameGeneration,
 	frameGenMethod,
+	frameGenMultiplier,
+	dlssgAutoMode,
 	fgShowOnlyGenerated,
 	fgDebugView,
 	fgDebugTearLines,
 	fgDebugPacingLines,
 	hardwareDefaultsApplied,
 	vsync,
-	frameRateLimit);
+	frameRateLimitDivisor);
 
 decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscaling;
-
-// GetClientRect / GetWindowRect hooks (patched into the game exe's IAT only — DXVK, in its own
-// module, keeps seeing the real window). While faking exclusive fullscreen they report the
-// game-requested resolution for the render window, so Skyrim sizes the world and the UI to the same
-// resolution and DXVK uniformly scales the frame to the monitor. All other windows/modes pass through.
-decltype(&GetClientRect) ptrGetClientRect = nullptr;
-decltype(&GetWindowRect) ptrGetWindowRect = nullptr;
-
-static bool FakeRectForWindow(HWND a_window, LPRECT a_rect)
-{
-	auto& up = globals::features::upscaling;
-	if (!up.fakedExclusiveFullscreen || a_window != up.fakeFullscreenWindow || !a_rect ||
-		up.fakeFullscreenWidth <= 0 || up.fakeFullscreenHeight <= 0)
-		return false;
-	a_rect->left = 0;
-	a_rect->top = 0;
-	a_rect->right = up.fakeFullscreenWidth;
-	a_rect->bottom = up.fakeFullscreenHeight;
-	return true;
-}
-
-BOOL WINAPI hk_GetClientRect(HWND hWnd, LPRECT lpRect)
-{
-	if (FakeRectForWindow(hWnd, lpRect))
-		return TRUE;
-	return ptrGetClientRect(hWnd, lpRect);
-}
-
-BOOL WINAPI hk_GetWindowRect(HWND hWnd, LPRECT lpRect)
-{
-	if (FakeRectForWindow(hWnd, lpRect))
-		return TRUE;
-	return ptrGetWindowRect(hWnd, lpRect);
-}
 
 HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	IDXGIAdapter* pAdapter,
@@ -111,24 +79,11 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	upscaling.refreshRate = refreshRate;
 	upscaling.lowRefreshRate = refreshRate < 120;
 
-	// Exclusive fullscreen is faked as borderless by DXVK (dxgi.fakeFullscreen): the desktop mode is
-	// left untouched and the window just covers the monitor, so Streamline/FFX keep owning present and
-	// frame generation works in "fullscreen" (a real mode-set to e.g. 1080p@60 would starve DLSS-G's
-	// generated frames of refresh headroom). The swapchain stays created as the game asked; we only
-	// record that it is effectively borderless so HDR and other windowed-vs-exclusive checks agree.
-	const bool requestedExclusiveFullscreen = (pSwapChainDesc->Windowed == FALSE);
-	upscaling.fakedExclusiveFullscreen = requestedExclusiveFullscreen;
-	upscaling.isWindowed = pSwapChainDesc->Windowed || requestedExclusiveFullscreen;
-	if (requestedExclusiveFullscreen) {
-		// Record the window + the resolution the game asked for, so the GetClientRect/GetWindowRect hooks
-		// report it back and Skyrim renders world + UI at that size (DXVK then scales the whole frame to
-		// fill the monitor — like real exclusive fullscreen).
-		upscaling.fakeFullscreenWindow = pSwapChainDesc->OutputWindow;
-		upscaling.fakeFullscreenWidth = static_cast<LONG>(pSwapChainDesc->BufferDesc.Width);
-		upscaling.fakeFullscreenHeight = static_cast<LONG>(pSwapChainDesc->BufferDesc.Height);
-		logger::info("[Upscaling] Exclusive fullscreen requested; presenting as borderless and reporting client rect {}x{}",
-			upscaling.fakeFullscreenWidth, upscaling.fakeFullscreenHeight);
-	}
+	// Exclusive fullscreen is handled entirely in DXVK (dxgi.fullscreenNativeRefresh): it does the real
+	// mode-set at the game resolution but forces the native refresh, so the swapchain IS the game
+	// resolution (the display engine stretches it to the panel) while DLSS-G keeps its refresh headroom.
+	// Nothing CS-side to do beyond recording the windowed state.
+	upscaling.isWindowed = pSwapChainDesc->Windowed;
 
 	const D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_1;
 
@@ -251,6 +206,37 @@ void Upscaling::DrawSettings()
 			settings.frameGenMethod = (uint)fgModes[fgIndex].first;
 		}
 
+		// DLSS-G Multi Frame Generation: pick the frame multiplier and optional Auto mode. The multiplier is
+		// capped to the hardware max (numFramesToGenerateMax + 1), queried once DLSS-G is running — 40-series
+		// reports 2x only, 50-series up to 4x. Vulkan does not support Dynamic MFG, so it is not offered.
+		if (GetFrameGenMethod() == FrameGenMethod::kDLSSG) {
+			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();  // 0 = not yet detected
+			const uint maxMultiplier = maxFrames > 0u ? maxFrames + 1u : 2u;
+			settings.frameGenMultiplier = std::clamp(settings.frameGenMultiplier, 2u, maxMultiplier);
+
+			if (maxMultiplier > 2u) {
+				std::vector<std::string> multLabels;
+				for (uint m = 2; m <= maxMultiplier; ++m)
+					multLabels.push_back(std::format("{}x", m));
+				std::vector<const char*> multCStrs;
+				for (auto& s : multLabels)
+					multCStrs.push_back(s.c_str());
+				int multIndex = std::clamp((int)settings.frameGenMultiplier - 2, 0, (int)multCStrs.size() - 1);
+				if (ImGui::Combo(T(TKEY("fg_multiplier"), "Frame Multiplier"), &multIndex, multCStrs.data(), (int)multCStrs.size()))
+					settings.frameGenMultiplier = (uint)multIndex + 2u;
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("%s", T(TKEY("fg_multiplier_tooltip"),
+						"Generated frames per rendered frame. 2x = 1 generated, 4x = 3 generated. Limited by your GPU."));
+			} else {
+				ImGui::TextDisabled("%s", T(TKEY("fg_multiplier_2x_only"), "Frame Multiplier: 2x (max for this GPU)"));
+			}
+
+			ImGui::Checkbox(T(TKEY("fg_dlssg_auto"), "Auto Mode"), &settings.dlssgAutoMode);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", T(TKEY("fg_dlssg_auto_tooltip"),
+					"Let the driver automatically turn off frame generation when the game would run faster without it."));
+		}
+
 		ImGui::TextDisabled("%s", T(TKEY("frame_generation_debug"), "Frame Generation Debug"));
 
 		ImGui::Checkbox(T(TKEY("fg_show_only_generated"), "Show Only Generated Frames"), &settings.fgShowOnlyGenerated);
@@ -315,24 +301,35 @@ void Upscaling::DrawSettings()
 	} else {
 		ImGui::Checkbox(T(TKEY("vsync"), "VSync"), &settings.vsync);
 	}
-	int limitMode = settings.frameRateLimit > 0 ? 2 : (settings.frameRateLimit < 0 ? 1 : 0);
-	const char* limitModes[] = {
-		T(TKEY("frame_limit_refresh"), "Display refresh rate"),
-		T(TKEY("frame_limit_unlimited"), "Unlimited"),
-		T(TKEY("frame_limit_custom"), "Custom"),
-	};
-	if (ImGui::Combo(T(TKEY("frame_limit"), "Frame Rate Limit"), &limitMode, limitModes, 3)) {
-		if (limitMode == 0)
-			settings.frameRateLimit = 0;
-		else if (limitMode == 1)
-			settings.frameRateLimit = -1;
-		else if (settings.frameRateLimit <= 0)
-			settings.frameRateLimit = GetTargetFrameRate();  // seed the custom value from the current refresh rate
-	}
-	if (limitMode == 2) {
-		int fps = settings.frameRateLimit;
-		if (ImGui::SliderInt(T(TKEY("frame_limit_fps"), "Max FPS"), &fps, 30, 360))
-			settings.frameRateLimit = std::clamp(fps, 1, 1000);
+	// Frame Rate: a slider across divisors of the monitor refresh rate, with the far-right stop being
+	// "Unlocked (variable)". Stored as the divisor (settings.frameRateLimitDivisor): 1 = refresh, 2 = half…,
+	// 0 = unlocked. The slider's text shows the resolved fps so the stops track the actual monitor (e.g. on a
+	// 165 Hz display: 41 / 55 / 83 / 165 FPS / Unlocked).
+	{
+		const int refresh = GetMonitorRefreshRate();
+		// Left -> right: largest divisor (lowest fps) up to divisor 1 (refresh), then unlocked. Cap the largest
+		// divisor so the slowest stop stays >= 30 fps (and at most quarter-refresh).
+		std::vector<int> divisorOptions;  // each entry is a divisor; 0 = unlocked
+		for (int d = 4; d >= 1; --d) {
+			if (refresh / d >= 30)
+				divisorOptions.push_back(d);
+		}
+		if (divisorOptions.empty())
+			divisorOptions.push_back(1);
+		divisorOptions.push_back(0);  // Unlocked (variable) — far-right stop
+		const int maxSel = static_cast<int>(divisorOptions.size()) - 1;
+
+		int sel = maxSel > 0 ? maxSel - 1 : 0;  // default to refresh (divisor 1) if the stored value isn't a stop
+		for (int i = 0; i <= maxSel; ++i) {
+			if (divisorOptions[i] == settings.frameRateLimitDivisor)
+				sel = i;
+		}
+
+		const std::string sliderLabel = divisorOptions[sel] == 0 ?
+		                                    std::string(T(TKEY("frame_rate_unlocked"), "Unlocked (variable)")) :
+		                                    std::format("{} FPS", refresh / divisorOptions[sel]);
+		ImGui::SliderInt(T(TKEY("frame_rate"), "Frame Rate"), &sel, 0, maxSel, sliderLabel.c_str());
+		settings.frameRateLimitDivisor = divisorOptions[std::clamp(sel, 0, maxSel)];
 	}
 }
 
@@ -408,17 +405,6 @@ void Upscaling::Load()
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = DxvkLoader::IsLoaded() ?
 	                                                              reinterpret_cast<uintptr_t>(DxvkLoader::GetD3D11CreateDeviceAndSwapChain()) :
 	                                                              iatOriginal;
-
-	// Hook the game's window-rect queries so we can report the game-requested resolution while faking
-	// exclusive fullscreen (see the rect hooks above). Patching the exe IAT only affects Skyrim's own
-	// calls; fall back to the real user32 export if the game resolves them dynamically.
-	HMODULE user32 = GetModuleHandleW(L"user32.dll");
-	const auto clientOrig = SKSE::PatchIAT(hk_GetClientRect, "user32.dll", "GetClientRect");
-	ptrGetClientRect = reinterpret_cast<decltype(ptrGetClientRect)>(
-		clientOrig ? clientOrig : reinterpret_cast<uintptr_t>(GetProcAddress(user32, "GetClientRect")));
-	const auto windowOrig = SKSE::PatchIAT(hk_GetWindowRect, "user32.dll", "GetWindowRect");
-	ptrGetWindowRect = reinterpret_cast<decltype(ptrGetWindowRect)>(
-		windowOrig ? windowOrig : reinterpret_cast<uintptr_t>(GetProcAddress(user32, "GetWindowRect")));
 }
 
 struct BSImageSpace_Init_FXAA
@@ -558,20 +544,26 @@ bool Upscaling::GetEffectiveReflex() const
 	return settings.reflexEnabled;
 }
 
-int Upscaling::GetTargetFrameRate() const
+int Upscaling::GetMonitorRefreshRate() const
 {
-	// Resolve settings.frameRateLimit to an fps cap: >0 = explicit, <0 = unlimited (0), 0 = the monitor refresh
-	// rate (default — so VSync-on stays inside the VRR window and DLSS-G's generated frames don't outrun the
-	// display). Returns 0 for "no limit".
-	if (settings.frameRateLimit > 0)
-		return settings.frameRateLimit;
-	if (settings.frameRateLimit < 0)
-		return 0;
+	if (refreshRate >= 1.0)
+		return static_cast<int>(std::lround(refreshRate));
 	DEVMODEA dm{};
 	dm.dmSize = sizeof(dm);
 	if (EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &dm) && (dm.dmFields & DM_DISPLAYFREQUENCY) && dm.dmDisplayFrequency > 1)
 		return static_cast<int>(dm.dmDisplayFrequency);
 	return 60;
+}
+
+int Upscaling::GetTargetFrameRate() const
+{
+	// Divisor of the monitor refresh rate: 0 (unlocked) => no cap; otherwise refresh / divisor (so the cap
+	// stays at/below refresh — VSync-on stays inside the VRR window and DLSS-G's generated frames don't
+	// outrun the display). Returns 0 for "no limit".
+	const int divisor = settings.frameRateLimitDivisor;
+	if (divisor <= 0)
+		return 0;
+	return std::max(1, static_cast<int>(std::lround(static_cast<double>(GetMonitorRefreshRate()) / divisor)));
 }
 
 void Upscaling::ApplyDxvkFrameRateLimit(double a_fps)
@@ -1537,8 +1529,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			// (depth's stale region reads as uniform far-plane so it looked filled). ignoreLock=true gives the
 			// true render size (dev computed screenSize * resolutionScale, equivalent).
 			const auto rendSize = Util::ConvertToDynamic(dispSize, /*ignoreLock=*/true);
+			// Multi Frame Generation: multiplier N -> numFramesToGenerate N-1 (2x=1, 3x=2, 4x=3). Clamped to
+			// the hardware max inside SetDLSSGMode. dlssgAutoMode selects eAuto (auto-disable FG when faster off).
+			const uint32_t numFramesToGenerate = upscaling.settings.frameGenMultiplier > 1 ? upscaling.settings.frameGenMultiplier - 1 : 1;
 			Streamline::GetSingleton()->SetDLSSGMode(true,
-				(uint32_t)rendSize.x, (uint32_t)rendSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y);
+				(uint32_t)rendSize.x, (uint32_t)rendSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y,
+				numFramesToGenerate, upscaling.settings.dlssgAutoMode);
 
 			if (gameplay) {
 				// FG depth = the pre-upscale render-res kMAIN. With an active upscaler UpscaleDepth() rewrote kMAIN

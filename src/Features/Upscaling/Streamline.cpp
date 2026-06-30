@@ -107,6 +107,12 @@ namespace
 		bool dlssgModeCached = false;
 		bool dlssgModeOn = false;
 		uint32_t dlssgCachedRenderW = 0, dlssgCachedRenderH = 0, dlssgCachedDisplayW = 0, dlssgCachedDisplayH = 0;
+		// Multi Frame Generation: cached numFramesToGenerate + auto-mode are part of the options key, so a
+		// multiplier/mode change re-issues slDLSSGSetOptions. dlssgMaxFramesToGenerate is the hardware cap
+		// (numFramesToGenerateMax), queried once on the present thread via QueryDLSSGCapabilities (0 = unknown).
+		uint32_t dlssgCachedNumFrames = 0;
+		bool dlssgCachedAuto = false;
+		std::atomic<uint32_t> dlssgMaxFramesToGenerate = 0;
 
 		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset on the render thread
 		// at frame end (CloseRenderFrame, after PresentEnd); set by TagDLSSGResources. If still false at present,
@@ -1101,7 +1107,7 @@ void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 }
 
 void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
-	uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate)
+	uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate, bool a_autoMode)
 {
 	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
 		return;
@@ -1111,16 +1117,25 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 	if (!g_dlssgCurrentlyLoaded)
 		return;
 
-	// Called every frame with the gameplay gate — skip the SL call when the mode hasn't changed.
+	// Clamp the requested multiplier to what the hardware reports (numFramesToGenerateMax). 0 = not yet
+	// queried — pass the request through and let SL clamp it. Always at least 1 (2x single-frame).
+	const uint32_t maxFrames = g_sl.dlssgMaxFramesToGenerate.load(std::memory_order_acquire);
+	uint32_t numFrames = a_numFramesToGenerate < 1u ? 1u : a_numFramesToGenerate;
+	if (maxFrames > 0u && numFrames > maxFrames)
+		numFrames = maxFrames;
+
+	// Called every frame with the gameplay gate — skip the SL call when nothing relevant changed
+	// (mode, multiplier, auto-mode, or the render/display dims are all part of the key).
 	if (g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable &&
+		g_sl.dlssgCachedNumFrames == numFrames && g_sl.dlssgCachedAuto == a_autoMode &&
 		g_sl.dlssgCachedRenderW == a_renderWidth && g_sl.dlssgCachedRenderH == a_renderHeight &&
 		g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight)
 		return;
 
 	__try {
 		sl::DLSSGOptions options{};
-		options.mode = a_enable ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-		options.numFramesToGenerate = a_numFramesToGenerate;
+		options.mode = a_enable ? (a_autoMode ? sl::DLSSGMode::eAuto : sl::DLSSGMode::eOn) : sl::DLSSGMode::eOff;
+		options.numFramesToGenerate = numFrames;
 		// eRetainResourcesWhenOff: DLSS-G is toggled off every loading screen / menu and back on for
 		// gameplay; retaining its resources across those off periods avoids realloc stutter on re-enable.
 		options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
@@ -1153,11 +1168,14 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		} else {
 			g_sl.dlssgModeCached = true;
 			g_sl.dlssgModeOn = a_enable;
+			g_sl.dlssgCachedNumFrames = numFrames;
+			g_sl.dlssgCachedAuto = a_autoMode;
 			g_sl.dlssgCachedRenderW = a_renderWidth;
 			g_sl.dlssgCachedRenderH = a_renderHeight;
 			g_sl.dlssgCachedDisplayW = a_displayWidth;
 			g_sl.dlssgCachedDisplayH = a_displayHeight;
-			logger::info("[Streamline] DLSS-G mode={} frames={}", a_enable, a_numFramesToGenerate);
+			logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} (max {})", a_enable,
+				a_autoMode ? "auto" : "on", numFrames, maxFrames);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
@@ -1225,6 +1243,31 @@ bool Streamline::GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) con
 	a_vramUsage = state.estimatedVRAMUsageInBytes;
 	a_maxFrames = state.numFramesToGenerateMax;
 	return state.status == sl::DLSSGStatus::eOk;
+}
+
+void Streamline::QueryDLSSGCapabilities()
+{
+	// slDLSSGGetState must run on the present thread (SL requirement) — CS calls this from its present hook.
+	// We only need the static capability (numFramesToGenerateMax), so query once and cache it.
+	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted || !g_dlssgCurrentlyLoaded)
+		return;
+	if (g_sl.dlssgMaxFramesToGenerate.load(std::memory_order_acquire) != 0u)
+		return;  // already cached
+	__try {
+		sl::DLSSGState state{};
+		if (g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr) == sl::Result::eOk && state.numFramesToGenerateMax > 0u) {
+			g_sl.dlssgMaxFramesToGenerate.store(state.numFramesToGenerateMax, std::memory_order_release);
+			logger::info("[Streamline] DLSS-G numFramesToGenerateMax = {} (max {}x multiplier)",
+				state.numFramesToGenerateMax, state.numFramesToGenerateMax + 1u);
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+	}
+}
+
+uint32_t Streamline::GetDLSSGMaxFramesToGenerate() const
+{
+	return g_sl.dlssgMaxFramesToGenerate.load(std::memory_order_acquire);
 }
 
 void Streamline::LogDLSSGFrameStats()

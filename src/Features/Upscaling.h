@@ -56,6 +56,13 @@ public:
 		bool reflexLowLatencyBoost = false;
 		bool frameGeneration = false;
 		uint frameGenMethod = (uint)FrameGenMethod::kFSR;
+		// DLSS-G Multi Frame Generation: the total frame multiplier (2 = 2x single-frame, 3 = 3x, 4 = 4x).
+		// numFramesToGenerate = multiplier - 1. Capped at runtime to the hardware max (numFramesToGenerateMax+1);
+		// 40-series caps at 2x, 50-series supports up to 4x. Vulkan does not support Dynamic MFG (eDynamic).
+		uint frameGenMultiplier = 2;
+		// DLSS-G eAuto: use the fixed multiplier but let the driver auto-disable interpolation when it detects
+		// the game would run faster (higher FPS) without it. false = eOn (always interpolate at the multiplier).
+		bool dlssgAutoMode = false;
 		bool fgShowOnlyGenerated = false;
 		bool fgDebugView = false;
 		bool fgDebugTearLines = false;
@@ -63,11 +70,13 @@ public:
 		bool hardwareDefaultsApplied = false;
 
 		// Present pacing. VSync is applied in our present hook (forced OFF whenever DLSS-G is the active FG
-		// method — VSync is incompatible with DLSS-G on Vulkan). frameRateLimit: 0 = cap at the monitor refresh
-		// rate (default, so VSync-on plays nice with VRR), <0 = unlimited, >0 = explicit fps. The cap is driven
-		// by Reflex when available (lowest latency; DLSS-G handles it this way), else by DXVK's frame limiter.
+		// method — VSync is incompatible with DLSS-G on Vulkan). The cap is driven by Reflex when available
+		// (lowest latency; DLSS-G handles it this way), else by DXVK's frame limiter.
 		bool vsync = false;
-		int frameRateLimit = 0;
+		// Frame-rate cap as a DIVISOR of the monitor refresh rate: 1 = refresh (default), 2 = half, 3 = third…;
+		// 0 = unlocked (variable, no cap). Stored as the divisor (not an fps) so the cap stays meaningful across
+		// monitors/refresh rates. Resolved to fps by GetTargetFrameRate().
+		int frameRateLimitDivisor = 1;
 	};
 
 	Settings settings;
@@ -84,18 +93,6 @@ public:
 	// Runtime state
 	bool isWindowed = false;
 	bool lowRefreshRate = false;
-	// True when the game requested exclusive fullscreen and we converted it to borderless (see the
-	// swapchain-creation hook). Exclusive fullscreen is incompatible with Streamline-over-DXVK frame
-	// generation and HDR, so it is always faked as borderless stretched-to-monitor.
-	bool fakedExclusiveFullscreen = false;
-	// The game's requested fullscreen window + resolution. While faking fullscreen we report this size
-	// from GetClientRect/GetWindowRect for this window, so Skyrim lays out the world AND the UI at the
-	// resolution it asked for (e.g. 1920x1080) and DXVK uniformly scales the whole frame to the monitor
-	// — exactly like real exclusive fullscreen. Without this the UI follows the native client rect while
-	// the 3D stays at the game resolution, so the world stretches but the UI does not.
-	HWND fakeFullscreenWindow = nullptr;
-	LONG fakeFullscreenWidth = 0;
-	LONG fakeFullscreenHeight = 0;
 
 	// Timing and scaling
 	double refreshRate = 0.0f;
@@ -149,8 +146,10 @@ public:
 	// user's reflexEnabled toggle. Never mutates the saved preference.
 	[[nodiscard]] bool GetEffectiveReflex() const;
 
-	// Resolve the frame-rate cap (settings.frameRateLimit) to an fps value: 0 = the monitor refresh rate
-	// (default), <0 = unlimited, >0 = explicit. Returns 0 for "no limit". Driven by Reflex when active, else DXVK.
+	// Monitor refresh rate in Hz (from the cached swapchain refreshRate, else the current display mode, else 60).
+	[[nodiscard]] int GetMonitorRefreshRate() const;
+	// Resolve the frame-rate cap to an fps value: refresh / frameRateLimitDivisor, or 0 ("no limit") when the
+	// divisor is 0 (unlocked). Driven by Reflex when active, else DXVK's limiter.
 	[[nodiscard]] int GetTargetFrameRate() const;
 	// Apply a frame-rate cap through DXVK's own limiter (the non-Reflex fallback). fps<=0 clears the limit.
 	void ApplyDxvkFrameRateLimit(double a_fps);

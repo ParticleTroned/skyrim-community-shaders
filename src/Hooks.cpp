@@ -273,6 +273,10 @@ struct IDXGISwapChain_Present
 			const bool dlssgActive = up.IsFrameGenerationActive() &&
 			                         up.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG;
 			SyncInterval = dlssgActive ? 0u : (up.settings.vsync ? 1u : 0u);
+			// Query DLSS-G's Multi Frame Generation cap here (present thread, as SL requires); idempotent,
+			// caches once. Drives the UI multiplier limit and the clamp in SetDLSSGMode.
+			if (dlssgActive)
+				Streamline::GetSingleton()->QueryDLSSGCapabilities();
 		}
 
 		// Reflex/PCL latency markers: render submission is complete by present time; bracket the

@@ -81,6 +81,14 @@
             "cacheVariables": {
                 "COMMONLIB_PREBUILT_MULTICONFIG": "OFF"
             }
+        },
+        {
+            "name": "AIO-Release",
+            "description": "Release configure preset for an AIO output without hidden packaged features.",
+            "inherits": "ALL",
+            "cacheVariables": {
+                "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -124,6 +132,13 @@
             "description": "Debug build for CS SKSE plugin, generate an AIO folder thats ready to copy",
             "configurePreset": "ALL-DEBUG",
             "configuration": "Debug",
+            "targets": ["CommunityShaders", "AIO"]
+        },
+        {
+            "name": "AIO-Release",
+            "description": "Release build for an AIO folder that excludes hidden packaged features",
+            "configurePreset": "AIO-Release",
+            "configuration": "Release",
             "targets": ["CommunityShaders", "AIO"]
         }
     ]

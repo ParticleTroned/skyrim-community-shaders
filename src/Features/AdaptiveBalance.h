@@ -31,7 +31,6 @@ struct AdaptiveBalance : Feature
 	virtual inline std::string GetName() override { return std::string(kFeatureName); }
 	virtual std::string GetDisplayName() override { return T(kFeatureDisplayNameKey, kFeatureName.data()); }
 	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
-	virtual std::string_view GetSettingsBannerAssetPath() const override { return "FeatureBanners/AdaptiveBalance.png"; }
 	virtual inline bool IsCore() const override { return true; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -129,6 +128,9 @@ struct AdaptiveBalance : Feature
 	std::string fullPresetStatus;
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
+	Profile selectedProfileTab = Profile::ExteriorDay;
+	std::string profileTabSyncKey;
+	bool profileTabSyncInitialized = false;
 	bool advancedControlsOpen = false;
 	mutable std::unordered_map<std::string, std::size_t> locationOverrideLookup;
 	mutable LocationOverrideCache locationOverrideCache;
@@ -171,6 +173,7 @@ struct AdaptiveBalance : Feature
 	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride();
 	void ClearLocationOverrideSelection();
+	void InvalidateProfileTabSync();
 	void ResetLocationOverrideEdit();
 	ProfileSettings* GetLocationOverrideEditProfile(LocationOverride& a_locationOverride);
 	bool ExportGlobalPreset();

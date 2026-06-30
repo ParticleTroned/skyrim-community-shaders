@@ -21,10 +21,10 @@ endif()
 option(STREAMLINE_FETCH "Fetch the Streamline plugin DLLs (~213 MB release zip) at configure time" ON)
 
 set(STREAMLINE_FETCH_URL
-    "https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.10.3/streamline-sdk-v2.10.3.zip"
+    "https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.12.0/streamline-sdk-v2.12.0.zip"
 )
 set(_sl_deps_dir "${CMAKE_BINARY_DIR}/_deps/streamline")
-set(_sl_zip "${_sl_deps_dir}/streamline-sdk-v2.10.3.zip")
+set(_sl_zip "${_sl_deps_dir}/streamline-sdk-v2.12.0.zip")
 
 # Lazy guard: only fetch when enabled and the interposer is not already extracted.
 file(GLOB_RECURSE _sl_interposer "${_sl_deps_dir}/*sl.interposer.dll")

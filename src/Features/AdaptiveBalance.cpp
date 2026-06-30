@@ -550,8 +550,8 @@ namespace
 
 		return std::any_of(a_settings.profiles.begin(), a_settings.profiles.end(), profileHasAdvancedControls) ||
 		       std::any_of(a_settings.locationOverrides.begin(), a_settings.locationOverrides.end(), [&](const AdaptiveBalance::LocationOverride& a_locationOverride) {
-			       return profileHasAdvancedControls(a_locationOverride.profile);
-		       });
+				   return profileHasAdvancedControls(a_locationOverride.profile);
+			   });
 	}
 
 	const json* FindBasePresetJson(const json& a_json)
@@ -822,15 +822,22 @@ void AdaptiveBalance::DrawExteriorTimeSettings()
 void AdaptiveBalance::DrawProfile(Profile a_profile)
 {
 	auto& profile = settings.profiles[ProfileIndex(a_profile)];
+	const bool exteriorProfile = a_profile == Profile::ExteriorDay || a_profile == Profile::ExteriorNight;
 
 	ImGui::PushID(static_cast<int>(ProfileIndex(a_profile)));
-	if (a_profile == Profile::ExteriorDay || a_profile == Profile::ExteriorNight)
+	if (exteriorProfile) {
+		ImGui::SeparatorText("Exterior Profile Blend");
+		ImGui::Indent();
 		DrawExteriorTimeSettings();
-	DrawProfileSettings(profile);
+		DrawProfileSettings(profile, "Profile Values");
+		ImGui::Unindent();
+	} else {
+		DrawProfileSettings(profile);
+	}
 	ImGui::PopID();
 }
 
-void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile)
+void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle)
 {
 	ClampProfileSettings(a_profile);
 
@@ -841,7 +848,14 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile)
 		}
 	};
 
+	ImGui::SeparatorText(a_sectionTitle);
+	ImGui::Indent();
+
+	ImGui::Spacing();
 	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Rebalances world lighting before the final image. Use this when a place is lit too dark or too bright.");
+
+	ImGui::Spacing();
+	ImGui::SeparatorText("Profile Image Postprocessing");
 	drawSlider("Image Brightness", a_profile.imageBrightness, kImageBrightnessMin, kImageBrightnessMax, "Brightens or darkens the final image without changing light balance.");
 	drawSlider("Vanilla Bloom", a_profile.bloom, kBloomMin, kBloomMax, "Scales Skyrim's existing bloom. Very low cost; it does not improve bloom shape or softness.");
 	drawSlider("Advanced Bloom", a_profile.advancedBloom, kAdvancedBloomMin, kAdvancedBloomMax, "Adds softer multi-radius bloom from bright pixels. Moderate cost; 0.00 disables the extra shader work.");
@@ -871,6 +885,7 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile)
 		ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
 	}
 
+	ImGui::Unindent();
 	ClampProfileSettings(a_profile);
 }
 
@@ -922,7 +937,7 @@ void AdaptiveBalance::DrawGlobalPresetControls()
 
 void AdaptiveBalance::DrawLocationOverrides()
 {
-	ImGui::SeparatorText("Location Overrides");
+	ImGui::SeparatorText("Location Override Profiles");
 	DrawHintText("Location overrides sit on top of the current base profiles. Only saved places use them.");
 	DrawHintText("The override list below is live. Import copies entries into it; preset files are not kept loaded afterward.");
 
@@ -1114,11 +1129,11 @@ void AdaptiveBalance::DrawLocationOverrides()
 	}
 
 	if (auto* selectedOverride = FindLocationOverride(selectedLocationOverrideKey)) {
-		ImGui::SeparatorText("Edit Saved Override");
+		ImGui::SeparatorText("Edit Location Override Profile");
 		ImGui::TextWrapped("%s (%s, %s)", selectedOverride->name.c_str(), selectedOverride->type.c_str(), selectedOverride->key.c_str());
 		ImGui::PushID(selectedOverride->key.c_str());
 		if (auto* editProfile = GetLocationOverrideEditProfile(*selectedOverride)) {
-			DrawProfileSettings(*editProfile);
+			DrawProfileSettings(*editProfile, "Override Profile Values");
 			if (ImGui::Button("Save Edit")) {
 				selectedOverride->profile = *editProfile;
 				ClearLocationOverrideSelection();
@@ -1614,9 +1629,9 @@ std::size_t AdaptiveBalance::ResolveLocationOverrideIndex() const
 	const uint32_t cellFormID = forms.cell ? forms.cell->GetFormID() : 0;
 
 	if (locationOverrideCache.valid &&
-	    locationOverrideCache.lookupVersion == locationOverrideLookupVersion &&
-	    locationOverrideCache.locationFormID == locationFormID &&
-	    locationOverrideCache.cellFormID == cellFormID) {
+		locationOverrideCache.lookupVersion == locationOverrideLookupVersion &&
+		locationOverrideCache.locationFormID == locationFormID &&
+		locationOverrideCache.cellFormID == cellFormID) {
 		return locationOverrideCache.overrideIndex;
 	}
 

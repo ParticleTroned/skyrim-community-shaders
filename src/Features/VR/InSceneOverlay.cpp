@@ -6,16 +6,16 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/VRUtils.h"
+#include <DirectXMath.h>
+#include <SimpleMath.h>
 #include <atomic>
 #include <cmath>
 #include <cstring>
-#include <DirectXMath.h>
-#include <limits>
-#include <SimpleMath.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
 #include <d3dcompiler.h>
 #include <imgui_impl_dx11.h>
+#include <limits>
 
 using namespace DirectX;
 using namespace DirectX::SimpleMath;
@@ -277,6 +277,15 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
 						logger::warn(
 							"[VRRenderScale] Suppressing OpenVR submit after submit-stage device loss while render-scale is still active; original texture is not a final HMD submit target.");
+					}
+					return vr::VRCompositorError_None;
+				}
+
+				if (upscaling.ShouldSuppressVRRenderScaleOriginalSubmitFallback(pTexture)) {
+					static std::atomic_bool loggedRenderScaleFallbackSuppression{ false };
+					if (!loggedRenderScaleFallbackSuppression.exchange(true, std::memory_order_relaxed)) {
+						logger::warn(
+							"[VRRenderScale] Suppressing OpenVR submit for reduced render-scale texture during loading/relatch; waiting for final-sized presentation output.");
 					}
 					return vr::VRCompositorError_None;
 				}
@@ -765,11 +774,11 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 
 	// Helper to draw the overlay quad with a given WVP matrix
 	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx,
-		                       const InSceneCB& cbData,
-		                       ID3D11Texture2D* texture,
-		                       winrt::com_ptr<ID3D11ShaderResourceView>& srv,
-		                       ID3D11Texture2D*& cachedTexture,
-		                       const char* label) {
+							   const InSceneCB& cbData,
+							   ID3D11Texture2D* texture,
+							   winrt::com_ptr<ID3D11ShaderResourceView>& srv,
+							   ID3D11Texture2D*& cachedTexture,
+							   const char* label) {
 		D3D11_MAPPED_SUBRESOURCE mappedResource;
 		if (SUCCEEDED(ctx->Map(inSceneResources.cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
 			memcpy(mappedResource.pData, &cbData, sizeof(InSceneCB));
@@ -901,7 +910,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			oldRTVs[i]->Release();
 	if (oldDSV)
 		oldDSV->Release();
-
 }
 
 void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* targetTexture, ID3D11UnorderedAccessView* targetUAV, const D3D11_TEXTURE2D_DESC& targetDesc, const vr::VRTextureBounds_t* bounds)

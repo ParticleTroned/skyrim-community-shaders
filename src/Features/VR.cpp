@@ -6,6 +6,7 @@
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "RE/B/BSOpenVR.h"
+#include "RE/B/BSOpenVRControllerDevice.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
 #include "ScreenSpaceGI.h"
@@ -39,6 +40,11 @@
 #include <windows.h>
 
 using AttachMode = VR::Settings::OverlayAttachMode;
+
+bool VR::OverlayRenderContext::IsValid() const
+{
+	return gameOverlay && cleanOverlay && openvr && openvr->vrSystem;
+}
 
 namespace
 {

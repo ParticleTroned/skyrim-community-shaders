@@ -35,11 +35,11 @@ struct AdaptiveBalance : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			T("feature.adaptive_balance.description", "Blends scene lighting and final image balance by location and exterior time of day."),
-			{ T("feature.adaptive_balance.key_feature_1", "Separate exterior day and night scene/image profiles"),
-				T("feature.adaptive_balance.key_feature_2", "Separate interior, dungeon, and dwelling profiles"),
-				T("feature.adaptive_balance.key_feature_3", "Optional per-location overrides with COC codes"),
-				T("feature.adaptive_balance.key_feature_4", "Per-profile brightness, dual bloom, saturation, and contrast control") }
+			"Blends scene lighting and final image balance by location and exterior time of day.",
+			{ "Separate exterior day and night scene/image profiles",
+				"Separate interior, dungeon, and dwelling profiles",
+				"Optional per-location overrides with COC codes",
+				"Per-profile brightness, dual bloom, saturation, and contrast control" }
 		};
 	}
 

@@ -134,6 +134,11 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 uv = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
 
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
+	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
+	float exposureScale = 1.0;
+	if (avgValue.x != 0 && avgValue.y != 0)
+		exposureScale = avgValue.y / avgValue.x;
+	inputColor *= exposureScale;
 
 	float3 bloomColor = 0;
 	if (Flags.x > 0.5) {
@@ -141,15 +146,15 @@ PS_OUTPUT main(PS_INPUT input)
 	} else {
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
-	bloomColor *= SharedData::linearLightingSettings.adaptiveBloomMult;
+	const float bloomIntensity = Param.x * SharedData::linearLightingSettings.adaptiveBloomMult;
+	const float advancedBloomIntensity = Param.x;
 
 	float advancedBloomMult = SharedData::linearLightingSettings.adaptiveAdvancedBloomMult;
+	float3 advancedBloomColor = 0.0;
 	[branch] if (advancedBloomMult > 0.0001)
 	{
-		bloomColor += AdvancedBloom::Compute(uv) * advancedBloomMult;
+		advancedBloomColor = AdvancedBloom::Compute(uv, input.TexCoord.xy, exposureScale) * advancedBloomMult;
 	}
-
-	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 
 	float4 hdrShared = SharedData::HDRData;
 	bool isHDR = hdrShared.x > 0.5;
@@ -160,27 +165,20 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 outputColor = 0.0;
 
-	if (avgValue.x != 0 && avgValue.y != 0)
-		inputColor *= avgValue.y / avgValue.x;
 	inputColor = max(0, inputColor);
 
 	float3 blendedColor;
 
 	[branch] if (Param.z > 0.5)
 	{
-		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, isHDR);
+		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity, isHDR);
 	}
 	else
 	{
 		float maxCol = Color::RGBToLuminance(inputColor);
 		float mappedMax = GetTonemapFactorReinhard(maxCol, isHDR).x;
-		float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
-		blendedColor = compressedHuePreserving;
-		// SDR uses a hard cutoff (Param.x - blendedColor) so legacy weather mods that tuned
-		// bloom intensity against this shoulder don't get blown-out highlights. HDR keeps the
-		// soft-saturation form (1 - exp2(-x)) which bleeds bloom into specular peaks intentionally.
-		float3 bloomMask = isHDR ? saturate(Param.x - (1.0 - exp2(-blendedColor))) : saturate(Param.x - blendedColor);
-		blendedColor += bloomMask * bloomColor;
+		float3 compressedHuePreserving = inputColor * mappedMax / max(maxCol, EPSILON_DIVISION);
+		blendedColor = DisplayMapping::ApplyBloom(compressedHuePreserving, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity, isHDR);
 	}
 
 	const float imageBrightness = Cinematic.w * SharedData::linearLightingSettings.adaptiveImageBrightnessMult;

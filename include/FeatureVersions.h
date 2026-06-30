@@ -48,7 +48,6 @@ namespace FeatureVersions
         {"VolumetricShadows"sv,    {2,1,0}},
         {"WaterEffects"sv,         {1,2,0}},
         {"WetnessEffects"sv,       {3,1,0}},
-        {"Wetterness"sv,           {1,0,5}},
     };
 
     inline const std::unordered_set<std::string_view> FEATURE_CORE_NAMES{

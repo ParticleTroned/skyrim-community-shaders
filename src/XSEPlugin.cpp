@@ -2,7 +2,6 @@
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
-#include "Features/Wetterness.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -29,7 +28,6 @@ void ResetRuntimeStateAfterGameLoad()
 	WeatherManager::GetSingleton()->ClearCache();
 	globals::features::lightLimitFix.Reset();
 	globals::features::interiorSun.isInteriorWithSun = false;
-	globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
 }
 
 void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::level::info)

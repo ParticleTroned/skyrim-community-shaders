@@ -134,69 +134,6 @@ namespace SharedData
 		float pad0;
 	};
 
-	// Nested wetterness settings block matching Wetterness::ShaderSettings on the CPU side.
-	// A few timing/distribution fields are uploaded in shader-ready form rather than raw UI units.
-	struct WetternessShaderSettings
-	{
-		uint EnableWetterness;
-		float MaxRainWetness;
-		float MaxPuddleWetness;
-		float MaxShoreWetness;
-		uint ShoreRange;
-		float PuddleRadius;
-		float PuddleMaxAngle;
-		float PuddleMinWetness;
-		float MinRainWetness;
-		float SkinWetness;
-		float PuddleLayout;
-		float StoneDryingMultiplier;
-		float DirtDryingMultiplier;
-		float GrassDryingMultiplier;
-		uint EnableRaindropFx;
-		uint EnableSplashes;
-		uint EnableRipples;
-		uint EnableModernWetReflection;
-		uint EnableLegacyWetReflection;
-		float WetIndirectSpecularScale;
-		float RaindropFxRange;
-		float RaindropGridSize;  // shader-ready grid scale: 1 / user grid size
-		float RaindropInterval;  // shader-ready temporal scale: 1 / user interval seconds
-		float RaindropChance;
-		float SplashesLifetime;
-		float SplashesStrength;
-		float SplashesMinRadius;
-		float SplashesMaxRadius;
-		float RippleStrength;
-		float RippleRadius;
-		float RippleBreadth;
-		float RippleLifetime;  // shader-ready lifetime scale: interval / ripple lifetime
-		float PostRainPuddleWaterStrength;
-		float RaindropTransitionFalloff;
-		float WetDarkeningStrength;
-		float WetHighlightReduction;
-		uint EnableForwardReflectionBias;
-		uint EnableVanillaReflectionCompensation;
-		float WetFilmSpecularFloorScale;
-		float ShorePersistentDarkeningStrength;
-	};
-
-	struct WetternessSettings
-	{
-		row_major float4x4 OcclusionViewProj;
-
-		float Time;
-		float Raining;
-		float Wetness;
-		float PuddleWetness;
-
-		WetternessShaderSettings settings;
-
-		uint PackedPostRainControl;
-		uint PackedRainReflectionControl;
-		uint WetnessDistanceFadeRangePacked;
-		float RainContactWetnessScale;
-	};
-
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
@@ -394,7 +331,6 @@ namespace SharedData
 		TerraOccSettings terraOccSettings;
 		LightLimitFixSettings lightLimitFixSettings;
 		WetnessEffectsSettings wetnessEffectsSettings;
-		WetternessSettings wetternessSettings;
 		SkylightingSettings skylightingSettings;
 		CloudShadowsSettings cloudShadowsSettings;
 		LODBlendingSettings lodBlendingSettings;

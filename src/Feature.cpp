@@ -2,8 +2,8 @@
 
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
-#include "Features/CSEditor.h"
 #include "Features/AdaptiveBalance.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExponentialHeightFog.h"
@@ -38,7 +38,6 @@
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
-#include "Features/Wetterness.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
@@ -233,7 +232,6 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::screenSpaceShadows,
 		&globals::features::extendedMaterials,
 		&globals::features::wetnessEffects,
-		&globals::features::wetterness,
 		&globals::features::lightLimitFix,
 		&globals::features::dynamicCubemaps,
 		&globals::features::cloudShadows,

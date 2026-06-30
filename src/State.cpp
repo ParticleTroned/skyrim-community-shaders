@@ -19,8 +19,6 @@
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
-#include "Features/WetnessEffects.h"
-#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -441,14 +439,6 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 			}
 		}
 
-		auto& wetnessEffects = globals::features::wetnessEffects;
-		if (wetnessEffects.loaded && globals::features::wetterness.loaded) {
-			if (wetnessEffects.ResolveWetternessConflict()) {
-				auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-				weatherRegistry->CaptureFeatureUserSettings(globals::features::wetterness.GetShortName());
-			}
-		}
-
 		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
 			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
 			Save(a_configMode);  // Use original config mode
@@ -807,7 +797,8 @@ void State::SetupResources()
 
 	auto [data, size] = GetFeatureBufferData(false);
 	(void)data;
-	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)size));
+	// Feature data is dynamically packed and only needs D3D11's 16-byte CB alignment.
+	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)size, true, 16));
 
 	// Grab main texture to get resolution
 	D3D11_TEXTURE2D_DESC texDesc{};

@@ -24,26 +24,6 @@ namespace WetnessEffects
 		return val * val;
 	}
 
-	// https://blog.selfshadow.com/publications/blending-in-detail/
-	// geometric normal s, a base normal t and a secondary (or detail) normal u
-	float3 ReorientNormal(float3 u, float3 t, float3 s)
-	{
-		// Build the shortest-arc quaternion
-		float4 q = float4(cross(s, t), dot(s, t) + 1) / sqrt(2 * (dot(s, t) + 1));
-
-		// Rotate the normal
-		return u * (q.w * q.w - dot(q.xyz, q.xyz)) + 2 * q.xyz * dot(q.xyz, u) + 2 * q.w * cross(q.xyz, u);
-	}
-
-	// for when s = (0,0,1)
-	float3 ReorientNormal(float3 n1, float3 n2)
-	{
-		n1 += float3(0, 0, 1);
-		n2 *= float3(-1, -1, 1);
-
-		return n1 * dot(n1, n2) / n1.z - n2;
-	}
-
 	// xyz - ripple normal, w - splotches
 	float4 GetRainDrops(float3 worldPos, float t, float3 normal, float rippleStrengthModifier = 1.0, float2 flowOffset = float2(0.0, 0.0))
 	{

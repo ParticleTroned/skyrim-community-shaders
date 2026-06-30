@@ -6,9 +6,9 @@
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
-#include "Features/ExponentialHeightFog.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/HDRDisplay.h"
@@ -39,7 +39,6 @@
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
-#include "Features/Wetterness.h"
 #include "Menu.h"
 #include "Profiler.h"
 #include "ShaderCache.h"
@@ -60,7 +59,6 @@ namespace globals
 	{
 		AdaptiveBalance adaptiveBalance{};
 		CloudShadows cloudShadows{};
-		Wetterness wetterness{};
 		DynamicCubemaps dynamicCubemaps{};
 		ExtendedMaterials extendedMaterials{};
 		GrassCollision grassCollision{};

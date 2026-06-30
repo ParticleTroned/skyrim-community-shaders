@@ -61,8 +61,7 @@ void GrassLighting::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(
-				"Specular highlight glossiness. This also defines the dry endpoint for Wetterness grass glossiness after rain and grass drying finish.");
+			ImGui::TextUnformatted("Specular highlight glossiness.");
 		}
 
 		ImGui::SliderFloat(
@@ -74,8 +73,7 @@ void GrassLighting::DrawSettings()
 			ImGuiSliderFlags_AlwaysClamp);
 		SanitizeSettings();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(
-				"Specular highlight strength. This also defines the dry endpoint for Wetterness grass specular strength after rain and grass drying finish.");
+			ImGui::TextUnformatted("Specular highlight strength.");
 		}
 
 		ImGui::Spacing();

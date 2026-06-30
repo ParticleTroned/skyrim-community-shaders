@@ -46,19 +46,19 @@ D3D11_BUFFER_DESC StructuredBufferDesc(uint64_t count, bool uav = true, bool dyn
 	return desc;
 }
 
-static constexpr std::uint32_t GetCBufferSize(std::uint32_t buffer_size)
+static constexpr std::uint32_t GetCBufferSize(std::uint32_t buffer_size, std::uint32_t alignment = 64)
 {
-	return (buffer_size + (64 - 1)) & ~(64 - 1);
+	return (buffer_size + (alignment - 1)) & ~(alignment - 1);
 }
 
-inline D3D11_BUFFER_DESC ConstantBufferDesc(uint32_t size, bool dynamic = true)
+inline D3D11_BUFFER_DESC ConstantBufferDesc(uint32_t size, bool dynamic = true, std::uint32_t alignment = 64)
 {
 	D3D11_BUFFER_DESC desc{};
 	ZeroMemory(&desc, sizeof(desc));
 	desc.Usage = dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	desc.CPUAccessFlags = dynamic ? D3D11_CPU_ACCESS_WRITE : 0;
-	desc.ByteWidth = GetCBufferSize(size);
+	desc.ByteWidth = GetCBufferSize(size, alignment);
 	return desc;
 }
 

@@ -523,7 +523,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # timestamps for unchanged files and prevents downstream incremental
     # deploys from copying everything every build.
     set(_prepare_aio_cmds)
-    string(REPLACE ";" "\\;" _feature_paths_arg "${FEATURE_PATHS}")
 
     # Ensure SKSE/Plugins dir exists
     # Note: DLL and PDB are copied via POST_BUILD command to avoid race conditions
@@ -542,7 +541,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=AIO
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_PATHS="${_feature_paths_arg}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -646,19 +644,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # Exclude test files from production packages
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
     set(_shader_copy_cmds)
-
-    set(_feature_shader_paths)
-    foreach(_fpath IN LISTS FEATURE_PATHS)
-        if(EXISTS "${_fpath}/Shaders")
-            list(APPEND _feature_shader_paths "${_fpath}/Shaders")
-        endif()
-    endforeach()
-    string(
-        REPLACE ";"
-        "\\;"
-        _feature_shader_paths_arg
-        "${_feature_shader_paths}"
-    )
+    set(_shader_copy_inputs ${_package_shaders})
 
     list(
         APPEND _shader_copy_cmds
@@ -667,7 +653,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=SHADERS
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_SHADER_PATHS="${_feature_shader_paths_arg}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -683,6 +668,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
                 "${_fpath}/Shaders/*"
             )
             list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
+            list(APPEND _shader_copy_inputs ${_feat_shaders})
             append_copy_if_different(_shader_copy_cmds _feat_shaders "${_fpath}/Shaders" "${AIO_DIR}/Shaders")
         endif()
     endforeach()
@@ -694,7 +680,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_shader_copy_cmds}
         COMMAND ${CMAKE_COMMAND} -E touch copy_shaders.stamp
         DEPENDS
-            ${HLSL_FILES}
+            ${_shader_copy_inputs}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
     )

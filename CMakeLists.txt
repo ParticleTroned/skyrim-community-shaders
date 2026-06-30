@@ -124,10 +124,7 @@ target_include_directories(
         ${DETOURS_INCLUDE_DIRS}
 )
 
-target_compile_definitions(
-    ${PROJECT_NAME}
-    PRIVATE SK_HDR_PNG_COMMUNITY_SHADERS
-)
+target_compile_definitions(${PROJECT_NAME} PRIVATE SK_HDR_PNG_COMMUNITY_SHADERS)
 
 target_link_libraries(
     ${PROJECT_NAME}
@@ -353,7 +350,12 @@ endif()
 # #######################################################################################################################
 # # Automatic deployment
 # #######################################################################################################################
-file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
+file(
+    GLOB FEATURE_PATHS
+    LIST_DIRECTORIES true
+    CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/features/*
+)
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
 # Set AIO directory path used by multiple targets below
@@ -405,6 +407,75 @@ install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
 
 if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     message("Preparing AIO package in ${AIO_DIR}")
+
+    # File additions/removals change which files cleanup must keep, but removed
+    # files are no longer build dependencies. Track the current source-file set
+    # explicitly so stale AIO/package stamps are invalidated on feature removal.
+    file(
+        GLOB_RECURSE _AIO_INPUT_MANIFEST_FILES
+        LIST_DIRECTORIES FALSE
+        CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/package/*"
+    )
+    list(FILTER _AIO_INPUT_MANIFEST_FILES EXCLUDE REGEX "/Tests/")
+    foreach(_fpath IN LISTS FEATURE_PATHS)
+        file(
+            GLOB_RECURSE _tmp
+            LIST_DIRECTORIES FALSE
+            CONFIGURE_DEPENDS
+            "${_fpath}/*"
+        )
+        list(FILTER _tmp EXCLUDE REGEX "/Tests/")
+        list(APPEND _AIO_INPUT_MANIFEST_FILES ${_tmp})
+    endforeach()
+
+    set(_aio_input_manifest_entries)
+    foreach(_src IN LISTS _AIO_INPUT_MANIFEST_FILES)
+        file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${_src}")
+        list(APPEND _aio_input_manifest_entries "${_rel}")
+    endforeach()
+    list(SORT _aio_input_manifest_entries)
+    string(
+        REPLACE ";"
+        "\n"
+        _aio_input_manifest
+        "${_aio_input_manifest_entries}"
+    )
+    string(APPEND _aio_input_manifest "\n")
+
+    set(_aio_input_manifest_path
+        "${CMAKE_CURRENT_BINARY_DIR}/aio_inputs.manifest"
+    )
+    set(_previous_aio_input_manifest "")
+    if(EXISTS "${_aio_input_manifest_path}")
+        file(READ "${_aio_input_manifest_path}" _previous_aio_input_manifest)
+    endif()
+
+    if(NOT _previous_aio_input_manifest STREQUAL _aio_input_manifest)
+        if(NOT _previous_aio_input_manifest STREQUAL "")
+            message(
+                STATUS
+                "AIO package inputs changed: invalidating stale package/deploy stamps"
+            )
+        endif()
+        file(WRITE "${_aio_input_manifest_path}" "${_aio_input_manifest}")
+        file(
+            REMOVE
+            "${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp"
+            "${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp"
+            "${CMAKE_CURRENT_BINARY_DIR}/aio_package.stamp"
+        )
+        file(
+            GLOB _aio_deploy_stamps
+            "${CMAKE_CURRENT_BINARY_DIR}/*_deploy.stamp"
+            "${CMAKE_CURRENT_BINARY_DIR}/*_plugin.stamp"
+            "${CMAKE_CURRENT_BINARY_DIR}/*_shaders_full.stamp"
+            "${CMAKE_CURRENT_BINARY_DIR}/*_shaders_only.stamp"
+        )
+        foreach(_stamp IN LISTS _aio_deploy_stamps)
+            file(REMOVE "${_stamp}")
+        endforeach()
+    endif()
 
     function(append_copy_if_different _cmds _srcs _src_base _dst_base)
         foreach(_src IN LISTS ${_srcs})
@@ -1040,18 +1111,24 @@ add_custom_command(
 add_custom_target("AIO" DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
 
 # Manual AIO package target
-set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
-add_custom_command(
-    OUTPUT ${AIO_PACKAGE}
-    DEPENDS ${CORE_SOURCES}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
-    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
-    COMMAND
-        ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
-        ${AIO_PACKAGE} --format=7zip -- .
-    COMMENT "Creating AIO zip package (manual)"
-)
-add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
+if(TARGET AIO_ZIP_PACKAGE)
+    add_custom_target("Package-AIO-Manual")
+    add_dependencies("Package-AIO-Manual" AIO_ZIP_PACKAGE)
+else()
+    set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
+    add_custom_command(
+        OUTPUT ${AIO_PACKAGE}
+        DEPENDS ${CORE_SOURCES}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
+        COMMAND
+            ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+        COMMAND
+            ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
+            ${AIO_PACKAGE} --format=7zip -- .
+        COMMENT "Creating AIO zip package (manual)"
+    )
+    add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
+endif()
 
 # #######################################################################################################################
 # # Shader Unit Tests

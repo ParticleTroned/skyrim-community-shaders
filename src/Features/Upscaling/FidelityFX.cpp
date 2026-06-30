@@ -84,9 +84,9 @@ namespace
 		const std::string description = ToUpperAscii(stl::utf16_to_utf8(wideDescription).value_or(""));
 
 		if (description.find("RDNA4") != std::string::npos ||
-		    description.find("RDNA 4") != std::string::npos ||
-		    description.find("NAVI4") != std::string::npos ||
-		    description.find("NAVI 4") != std::string::npos) {
+			description.find("RDNA 4") != std::string::npos ||
+			description.find("NAVI4") != std::string::npos ||
+			description.find("NAVI 4") != std::string::npos) {
 			return true;
 		}
 
@@ -278,8 +278,8 @@ namespace
 				versionIds[i]);
 
 			if (versionIds[i] == a_requestedVersion ||
-			    RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
-			    RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
+				RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
+				RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
 				a_versionId = versionIds[i];
 				a_versionName = versionName;
 				return true;
@@ -1190,15 +1190,15 @@ bool FidelityFX::EnsureRuntimeUpscalerInterop()
 	}
 
 	if (!swapChain.d3d11Device.get() ||
-	    !swapChain.d3d11Context.get() ||
-	    !swapChain.d3d12Device.get() ||
-	    !swapChain.commandQueue.get() ||
-	    !swapChain.commandAllocators[0].get() ||
-	    !swapChain.commandAllocators[1].get() ||
-	    !swapChain.commandLists[0].get() ||
-	    !swapChain.commandLists[1].get() ||
-	    !runtimeD3D11Fence.get() ||
-	    !runtimeD3D12Fence.get()) {
+		!swapChain.d3d11Context.get() ||
+		!swapChain.d3d12Device.get() ||
+		!swapChain.commandQueue.get() ||
+		!swapChain.commandAllocators[0].get() ||
+		!swapChain.commandAllocators[1].get() ||
+		!swapChain.commandLists[0].get() ||
+		!swapChain.commandLists[1].get() ||
+		!runtimeD3D11Fence.get() ||
+		!runtimeD3D12Fence.get()) {
 		std::string missing;
 		auto appendMissing = [&](const char* a_name) {
 			if (!missing.empty())
@@ -1403,7 +1403,7 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	recordRuntimeProviderResult(true);
 
 	if ((runtimeUpscalerProviderMatchedVersionId != 0 || !runtimeUpscalerProviderMatchedVersionName.empty()) &&
-	    !RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
+		!RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
 		logger::warn(
 			"[FidelityFX] Runtime upscaler provider '{}' does not match requested FSR version {}; reporting actual provider path.",
 			RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName),
@@ -1547,7 +1547,7 @@ bool FidelityFX::EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, u
 bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool a_enableSharpening)
+	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness)
 {
 	if (a_contextIndex >= runtimeUpscalerContextCount || !runtimeUpscalerContexts[a_contextIndex])
 		return false;
@@ -1677,8 +1677,8 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			dispatchParameters.motionVectorScale = { a_motionVectorScaleX, a_motionVectorScaleY };
 			dispatchParameters.renderSize = { a_renderWidth, a_renderHeight };
 			dispatchParameters.upscaleSize = { a_displayWidth, a_displayHeight };
-			dispatchParameters.enableSharpening = a_enableSharpening;
-			dispatchParameters.sharpness = a_enableSharpening ? a_sharpness : 0.0f;
+			dispatchParameters.enableSharpening = true;
+			dispatchParameters.sharpness = a_sharpness;
 			dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
 			dispatchParameters.preExposure = 1.0f;
 			dispatchParameters.reset = upscaling.ShouldResetHistoryThisFrame();
@@ -1750,7 +1750,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color, ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 	uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
-	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool a_enableSharpening)
+	float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness)
 {
 	if (!a_color || !a_depth || !a_motionVectors || !a_reactiveMask || !a_transparencyCompositionMask || !a_output ||
 		!a_renderWidth || !a_renderHeight || !a_displayWidth || !a_displayHeight) {
@@ -1783,22 +1783,21 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		auto tryRuntimeUpscaler = [&](uint32_t a_requestedVersion, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight) {
 			try {
 				if (EnsureRuntimeUpscalerContexts(a_fullRenderWidth, a_fullRenderHeight, fullDisplayWidth, fullDisplayHeight, runtimeContextCount, a_requestedVersion) &&
-				    DispatchRuntimeUpscalerSingle(
-					    a_contextIndex,
-					    a_color,
-					    a_depth,
-					    a_motionVectors,
-					    a_reactiveMask,
-					    a_transparencyCompositionMask,
-					    a_output,
-					    a_renderWidth,
-					    a_renderHeight,
-					    a_displayWidth,
-					    a_displayHeight,
-					    a_motionVectorScaleX,
-					    a_motionVectorScaleY,
-					    a_sharpness,
-					    a_enableSharpening)) {
+					DispatchRuntimeUpscalerSingle(
+						a_contextIndex,
+						a_color,
+						a_depth,
+						a_motionVectors,
+						a_reactiveMask,
+						a_transparencyCompositionMask,
+						a_output,
+						a_renderWidth,
+						a_renderHeight,
+						a_displayWidth,
+						a_displayHeight,
+						a_motionVectorScaleX,
+						a_motionVectorScaleY,
+						a_sharpness)) {
 					RecordRuntimeUpscalerFramePath(GetRuntimeUpscalerProviderFramePath(a_requestedVersion));
 					return true;
 				}
@@ -1872,8 +1871,8 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	dispatchParameters.frameTimeDelta = *globals::game::deltaTime * 1000.f;
 	dispatchParameters.cameraFar = *globals::game::cameraFar;
 	dispatchParameters.cameraNear = *globals::game::cameraNear;
-	dispatchParameters.enableSharpening = a_enableSharpening;
-	dispatchParameters.sharpness = a_enableSharpening ? a_sharpness : 0.0f;
+	dispatchParameters.enableSharpening = true;
+	dispatchParameters.sharpness = a_sharpness;
 	dispatchParameters.cameraFovAngleVertical = Util::GetVerticalFOVRad();
 	dispatchParameters.viewSpaceToMetersFactor = 0.01428222656f;
 	const bool runtimeFallbackReset = runtimeRequested && runtimeFallbackResetDispatchesRemaining > 0;
@@ -1901,12 +1900,12 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	return dispatchOK;
 }
 
-bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, ID3D11Resource* a_output, float a_sharpness, bool a_enableSharpening)
+void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness)
 {
 	auto renderer = globals::game::renderer;
 	auto state = globals::state;
 	if (!renderer || !state)
-		return false;
+		return;
 
 	auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -1917,8 +1916,6 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 	};
 	const auto renderSize = Util::ConvertToDynamic(screenSize);
 
-	ID3D11Resource* output = a_output ? a_output : a_upscalingTexture;
-
 	if (!UpscaleRegion(
 			0,
 			a_upscalingTexture,
@@ -1926,18 +1923,14 @@ bool FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			a_motionVectors,
 			a_reactiveMask,
 			a_transparencyCompositionMask,
-			output,
+			a_upscalingTexture,
 			static_cast<uint32_t>(renderSize.x),
 			static_cast<uint32_t>(renderSize.y),
 			static_cast<uint32_t>(screenSize.x),
 			static_cast<uint32_t>(screenSize.y),
 			renderSize.x,
 			renderSize.y,
-			a_sharpness,
-			a_enableSharpening)) {
+			a_sharpness)) {
 		logger::error("[FidelityFX] Upscale dispatch failed.");
-		return false;
 	}
-
-	return true;
 }

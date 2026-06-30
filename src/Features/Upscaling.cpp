@@ -5,10 +5,10 @@
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
-#include "Utils/Game.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <Windows.h>
 #include <algorithm>
@@ -31,9 +31,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationAllowInMenus,
 	streamlineLogLevel,
 	sharpnessFSR,
-	fsrSharpener,
 	sharpnessDLSS,
-	dlssSharpener,
 	fsr4RuntimeEnable,
 	reflexLowLatencyMode,
 	reflexLowLatencyBoost,
@@ -45,26 +43,6 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 
 namespace
 {
-	constexpr float kRCASSharpnessOverdrive = 1.15457f;  // Previous 1.75x curve at slider 0.7.
-	constexpr float kLumaSharpnessOverdrive = 2.5f;
-	const char* const kExternalSharpenerModeNames[] = {
-		"Off",
-		"RCAS",
-		"Luma Unsharp"
-	};
-	const char* const kFSRSharpenerModeNames[] = {
-		"Built-in",
-		"RCAS",
-		"Luma Unsharp",
-		"Off"
-	};
-	const uint32_t kFSRSharpenerModeUiOrder[] = {
-		static_cast<uint32_t>(Upscaling::FSRSharpenerMode::BuiltIn),
-		static_cast<uint32_t>(Upscaling::FSRSharpenerMode::RCAS),
-		static_cast<uint32_t>(Upscaling::FSRSharpenerMode::LumaUnsharp),
-		static_cast<uint32_t>(Upscaling::FSRSharpenerMode::Off)
-	};
-
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 
@@ -105,92 +83,6 @@ namespace
 	uint ClampQualityModeUInt(uint value)
 	{
 		return std::min<uint>(value, Upscaling::kQualityModeMaxIndex);
-	}
-
-	uint ClampExternalSharpenerModeUInt(uint value)
-	{
-		return std::min<uint>(value, Upscaling::kExternalSharpenerModeMaxIndex);
-	}
-
-	uint ClampFSRSharpenerModeUInt(uint value)
-	{
-		return std::min<uint>(value, Upscaling::kFSRSharpenerModeMaxIndex);
-	}
-
-	float GetRCASSharpness(float a_sharpness)
-	{
-		const float clampedSharpness = std::clamp(a_sharpness, 0.0f, 1.0f);
-		return exp2((2.0f * clampedSharpness) - 2.0f) * kRCASSharpnessOverdrive;
-	}
-
-	float GetLumaSharpness(float a_sharpness)
-	{
-		const float clampedSharpness = std::clamp(a_sharpness, 0.0f, 1.0f);
-		return exp2((2.0f * clampedSharpness) - 2.0f) * kLumaSharpnessOverdrive;
-	}
-
-	Upscaling::ExternalSharpenerMode GetExternalSharpenerMode(Upscaling::FSRSharpenerMode a_mode)
-	{
-		switch (a_mode) {
-		case Upscaling::FSRSharpenerMode::RCAS:
-			return Upscaling::ExternalSharpenerMode::RCAS;
-		case Upscaling::FSRSharpenerMode::LumaUnsharp:
-			return Upscaling::ExternalSharpenerMode::LumaUnsharp;
-		case Upscaling::FSRSharpenerMode::BuiltIn:
-		case Upscaling::FSRSharpenerMode::Off:
-		default:
-			return Upscaling::ExternalSharpenerMode::Off;
-		}
-	}
-
-	Upscaling::ExternalSharpenerMode GetActiveExternalSharpenerMode(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_method)
-	{
-		switch (a_method) {
-		case Upscaling::UpscaleMethod::kDLSS:
-			return a_upscaling.ShouldApplyDLSSSharpening() ?
-				       a_upscaling.GetDLSSSharpenerMode() :
-				       Upscaling::ExternalSharpenerMode::Off;
-		case Upscaling::UpscaleMethod::kFSR:
-			return a_upscaling.ShouldApplyFSRSharpening() ?
-				       GetExternalSharpenerMode(a_upscaling.GetFSRSharpenerMode()) :
-				       Upscaling::ExternalSharpenerMode::Off;
-		case Upscaling::UpscaleMethod::kNONE:
-		case Upscaling::UpscaleMethod::kTAA:
-		default:
-			return Upscaling::ExternalSharpenerMode::Off;
-		}
-	}
-
-	bool RequiresExternalSharpenerTexture(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_method)
-	{
-		return GetActiveExternalSharpenerMode(a_upscaling, a_method) != Upscaling::ExternalSharpenerMode::Off;
-	}
-
-	float GetActiveExternalSharpness(const Upscaling& a_upscaling, Upscaling::UpscaleMethod a_method)
-	{
-		switch (a_method) {
-		case Upscaling::UpscaleMethod::kDLSS:
-			return a_upscaling.settings.sharpnessDLSS;
-		case Upscaling::UpscaleMethod::kFSR:
-			return a_upscaling.settings.sharpnessFSR;
-		case Upscaling::UpscaleMethod::kNONE:
-		case Upscaling::UpscaleMethod::kTAA:
-		default:
-			return 0.0f;
-		}
-	}
-
-	bool DispatchExternalSharpener(Upscaling::ExternalSharpenerMode a_mode, float a_sharpness, ID3D11ShaderResourceView* a_inputSRV, ID3D11UnorderedAccessView* a_outputUAV, uint32_t a_width = 0, uint32_t a_height = 0)
-	{
-		switch (a_mode) {
-		case Upscaling::ExternalSharpenerMode::RCAS:
-			return Upscaling::rcas.ApplySharpen(a_inputSRV, a_outputUAV, GetRCASSharpness(a_sharpness), a_width, a_height);
-		case Upscaling::ExternalSharpenerMode::LumaUnsharp:
-			return Upscaling::lumaSharpen.ApplySharpen(a_inputSRV, a_outputUAV, GetLumaSharpness(a_sharpness), a_width, a_height);
-		case Upscaling::ExternalSharpenerMode::Off:
-		default:
-			return true;
-		}
 	}
 
 	bool TryGetTexture2DDesc(ID3D11Resource* a_resource, D3D11_TEXTURE2D_DESC& a_desc)
@@ -322,7 +214,6 @@ namespace
 		winrt::com_ptr<ID3D11DepthStencilView> depthStencilView;
 		winrt::com_ptr<ID3D11ShaderResourceView> pixelShaderResources[1];
 	};
-
 	uint MigrateLegacyQualityModeUInt(uint value)
 	{
 		switch (value) {
@@ -398,10 +289,8 @@ namespace
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
 		settings.streamlineLogLevel = std::min<uint>(settings.streamlineLogLevel, 2u);
-		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.5f);
-		settings.fsrSharpener = ClampFSRSharpenerModeUInt(settings.fsrSharpener);
-		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, 0.5f);
-		settings.dlssSharpener = ClampExternalSharpenerModeUInt(settings.dlssSharpener);
+		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.0f);
+		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, 0.0f);
 		if (!std::isfinite(settings.reflexFPSLimit))
 			settings.reflexFPSLimit = 60.0f;
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
@@ -678,7 +567,7 @@ void Upscaling::DrawSettings()
 		} else if (fidelityFX.IsRuntimeFsr4FailureLatched()) {
 			ImGui::TextDisabled("Runtime FSR 4.1 is latched off after a runtime failure; using runtime FSR 3.1.5 fallback.");
 		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
-		           !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
+				   !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
 			ImGui::TextDisabled("Runtime FSR context creation failed; using host FSR 3.1.5 fallback.");
 		}
 		if (!runtimeUpscalerPresent && runtimeFsr4Requested)
@@ -712,43 +601,10 @@ void Upscaling::DrawSettings()
 		}
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
-			const uint32_t fsrSharpenerStoredMode = ClampFSRSharpenerModeUInt(settings.fsrSharpener);
-			int fsrSharpenerMode = 0;
-			for (int i = 0; i < IM_ARRAYSIZE(kFSRSharpenerModeUiOrder); ++i) {
-				if (kFSRSharpenerModeUiOrder[i] == fsrSharpenerStoredMode) {
-					fsrSharpenerMode = i;
-					break;
-				}
-			}
-			if (ImGui::Combo("Sharpener", &fsrSharpenerMode, kFSRSharpenerModeNames, IM_ARRAYSIZE(kFSRSharpenerModeNames))) {
-				fsrSharpenerMode = std::clamp(fsrSharpenerMode, 0, static_cast<int>(IM_ARRAYSIZE(kFSRSharpenerModeUiOrder) - 1));
-				settings.fsrSharpener = kFSRSharpenerModeUiOrder[fsrSharpenerMode];
-			}
+			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Selects the FSR sharpening path.");
-				ImGui::TextUnformatted("Built-in uses FidelityFX sharpening directly inside the FSR dispatch.");
-				ImGui::TextUnformatted("RCAS and Luma Unsharp disable the built-in pass and run an external post-upscale sharpen pass instead.");
-			}
-
-			if (GetFSRSharpenerMode() != FSRSharpenerMode::Off) {
-				ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					switch (GetFSRSharpenerMode()) {
-					case FSRSharpenerMode::BuiltIn:
-						ImGui::TextUnformatted("Adjusts FidelityFX's built-in sharpening pass for FSR.");
-						break;
-					case FSRSharpenerMode::RCAS:
-						ImGui::TextUnformatted("Adjusts the external RCAS sharpening pass applied after FSR.");
-						break;
-					case FSRSharpenerMode::LumaUnsharp:
-						ImGui::TextUnformatted("Adjusts the external luma-only unsharp mask applied after FSR.");
-						break;
-					case FSRSharpenerMode::Off:
-					default:
-						break;
-					}
-					ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
-				}
+				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
+				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 			}
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			const uint32_t dlssProfileOrder[] = { 4u, 0u, 1u, 2u, 3u };  // F, J, K, L, M
@@ -792,22 +648,10 @@ void Upscaling::DrawSettings()
 				}
 			}
 
-			int dlssSharpenerMode = static_cast<int>(ClampExternalSharpenerModeUInt(settings.dlssSharpener));
-			if (ImGui::Combo("Sharpener", &dlssSharpenerMode, kExternalSharpenerModeNames, IM_ARRAYSIZE(kExternalSharpenerModeNames))) {
-				settings.dlssSharpener = ClampExternalSharpenerModeUInt(static_cast<uint>(std::max(dlssSharpenerMode, 0)));
-			}
+			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Selects the post-DLSS sharpening pass.");
-				ImGui::TextUnformatted("RCAS is punchier and more obvious, but can add shimmer or harsher edge contrast.");
-				ImGui::TextUnformatted("Luma Unsharp is cleaner and more natural, preserving color while sharpening luminance.");
-			}
-
-			if (GetDLSSSharpenerMode() != ExternalSharpenerMode::Off) {
-				ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
-					ImGui::TextUnformatted("Range: 0.0 off/softest to 1.0 strongest.");
-				}
+				ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
+				ImGui::TextUnformatted("Range: 0.0 off/softest to 1.0 sharpest.");
 			}
 
 			if (isNvidiaAdapter) {
@@ -1114,31 +958,6 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	return (UpscaleMethod)settings.upscaleMethodNoDLSS;
 }
 
-Upscaling::ExternalSharpenerMode Upscaling::GetDLSSSharpenerMode() const
-{
-	return static_cast<ExternalSharpenerMode>(ClampExternalSharpenerModeUInt(settings.dlssSharpener));
-}
-
-Upscaling::FSRSharpenerMode Upscaling::GetFSRSharpenerMode() const
-{
-	return static_cast<FSRSharpenerMode>(ClampFSRSharpenerModeUInt(settings.fsrSharpener));
-}
-
-bool Upscaling::ShouldApplyDLSSSharpening() const
-{
-	return settings.sharpnessDLSS > 0.0f && GetDLSSSharpenerMode() != ExternalSharpenerMode::Off;
-}
-
-bool Upscaling::ShouldApplyFSRSharpening() const
-{
-	return settings.sharpnessFSR > 0.0f && GetExternalSharpenerMode(GetFSRSharpenerMode()) != ExternalSharpenerMode::Off;
-}
-
-bool Upscaling::ShouldUseFSRBuiltInSharpening() const
-{
-	return GetFSRSharpenerMode() == FSRSharpenerMode::BuiltIn;
-}
-
 void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 {
 	logger::debug("[Upscaling] Creating texture resources for method {} ({})", static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
@@ -1191,8 +1010,8 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		}
 	}
 
-	if (RequiresExternalSharpenerTexture(*this, a_upscalemethod)) {
-		// Shared vendor-upscaler sharpener texture - matches kMAIN format for HDR sharpening
+	if (a_upscalemethod == UpscaleMethod::kDLSS) {
+		// RCAS sharpener texture - matches kMAIN format for HDR sharpening
 		if (!sharpenerTexture) {
 			main.texture->GetDesc(&texDesc);
 			main.SRV->GetDesc(&srvDesc);
@@ -1231,16 +1050,14 @@ void Upscaling::DestroyUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		motionVectorCopyTexture.reset();
 	}
 
-	if (!RequiresExternalSharpenerTexture(*this, a_upscalemethod)) {
+	if (a_upscalemethod != UpscaleMethod::kDLSS) {
 		sharpenerTexture.reset();
-		vendorUpscaleOutputInSharpenerTexture = false;
 	}
 }
 
 void Upscaling::DestroyAllUpscalingTextureResources()
 {
 	DestroyUpscalingTextureResources(UpscaleMethod::kNONE);
-	vendorUpscaleOutputInSharpenerTexture = false;
 }
 
 void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
@@ -1297,16 +1114,10 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	}
 
 	const bool vendorUpscalerActive = a_upscalemethod == UpscaleMethod::kDLSS || a_upscalemethod == UpscaleMethod::kFSR;
-	const bool requiresSharpenerTexture = RequiresExternalSharpenerTexture(*this, a_upscalemethod);
 	const bool sourceTextureDescChanged =
 		currentTextureSourceDescsValid &&
 		previousTextureSourceDescsValid &&
 		(!TextureDescMatches(previousMainDesc, mainDesc) || !TextureDescMatches(previousMotionVectorDesc, motionVectorDesc));
-
-	if (vendorUpscalerActive && !requiresSharpenerTexture && sharpenerTexture) {
-		sharpenerTexture.reset();
-		vendorUpscaleOutputInSharpenerTexture = false;
-	}
 
 	if (upscaleModeChanged || frameGenModeChanged || qualityModeChanged || dlssPresetChanged || fsrRuntimePathChanged || fsrRuntimeFsr4ConfiguredChanged || fsrRuntimeVersionChanged) {
 		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), Quality: {} -> {}, DLSSPreset: {} -> {}, FrameGen: {} -> {} (d3d12Active={}), FSRRuntimePath: {} -> {}",
@@ -1375,18 +1186,17 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		D3D11_TEXTURE2D_DESC expectedSharpenerDesc = mainDesc;
 		expectedSharpenerDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
-		const bool coreVendorTextureStateInvalid =
+		const bool vendorTextureStateInvalid =
 			!TextureMatchesRequirements(reactiveMaskTexture, expectedMaskDesc, true, true) ||
 			!TextureMatchesRequirements(transparencyCompositionMaskTexture, expectedMaskDesc, true, true) ||
-			!TextureMatchesRequirements(motionVectorCopyTexture, expectedMotionVectorDesc, true, true);
-		const bool sharpenerTextureStateInvalid =
-			requiresSharpenerTexture && !TextureMatchesRequirements(sharpenerTexture, expectedSharpenerDesc, true, true);
+			!TextureMatchesRequirements(motionVectorCopyTexture, expectedMotionVectorDesc, true, true) ||
+			(a_upscalemethod == UpscaleMethod::kDLSS && !TextureMatchesRequirements(sharpenerTexture, expectedSharpenerDesc, true, true));
 
-		if (sourceTextureDescChanged || coreVendorTextureStateInvalid) {
+		if (sourceTextureDescChanged || vendorTextureStateInvalid) {
 			logger::debug(
 				"[Upscaling] Recreating vendor upscaler textures (sourceDescChanged={}, textureStateInvalid={})",
 				sourceTextureDescChanged,
-				coreVendorTextureStateInvalid);
+				vendorTextureStateInvalid);
 			if (a_upscalemethod == UpscaleMethod::kDLSS) {
 				streamline.DestroyDLSSResources();
 			} else if (a_upscalemethod == UpscaleMethod::kFSR) {
@@ -1396,11 +1206,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			DestroyAllUpscalingTextureResources();
 			CreateUpscalingTextureResources(a_upscalemethod);
 			RequestHistoryReset();
-		} else if (sharpenerTextureStateInvalid) {
-			logger::debug("[Upscaling] Recreating vendor upscaler sharpener texture");
-			sharpenerTexture.reset();
-			vendorUpscaleOutputInSharpenerTexture = false;
-			CreateUpscalingTextureResources(a_upscalemethod);
 		}
 	}
 
@@ -1598,7 +1403,7 @@ void Upscaling::SetupResources()
 	depthStencilDesc.DepthEnable = true;                           // Enable depth testing
 	depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;  // Write to all depth bits
 	depthStencilDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;          // Always pass depth test (write all depths)
-	depthStencilDesc.StencilEnable = false;  // Disable stencil testing
+	depthStencilDesc.StencilEnable = false;                        // Disable stencil testing
 
 	DX::ThrowIfFailed(globals::d3d::device->CreateDepthStencilState(&depthStencilDesc, upscaleDepthStencilState.put()));
 
@@ -1633,9 +1438,6 @@ void Upscaling::SetupResources()
 	CheckResources(GetUpscaleMethod());
 
 	rcas.Initialize();
-	if (GetDLSSSharpenerMode() == ExternalSharpenerMode::LumaUnsharp ||
-		GetFSRSharpenerMode() == FSRSharpenerMode::LumaUnsharp)
-		lumaSharpen.Initialize();
 
 	if (d3d12SwapChainActive)
 		dx12SwapChain.CreateSharedResources();
@@ -1658,8 +1460,6 @@ void Upscaling::ClearShaderCache()
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr;
-	rcas.ClearShaderCache();
-	lumaSharpen.ClearShaderCache();
 }
 
 void Upscaling::CopySharedD3D12Resources()
@@ -2245,27 +2045,13 @@ void Upscaling::Upscale()
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 		ID3D11Resource* motionVectorResource = requiresEncodedMotionVectors ?
-			motionVectorCopyTexture->resource.get() :
-			nullptr;
-		vendorUpscaleOutputInSharpenerTexture = false;
+		                                           motionVectorCopyTexture->resource.get() :
+		                                           nullptr;
 
 		if (upscaleMethod == UpscaleMethod::kDLSS) {
 			streamline.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource);
 		} else if (upscaleMethod == UpscaleMethod::kFSR) {
-			ID3D11Resource* colorOut =
-				(ShouldApplyFSRSharpening() && sharpenerTexture) ? sharpenerTexture->resource.get() : main.texture;
-			const bool outputToSharpener = colorOut != main.texture;
-			const bool upscaled = fidelityFX.Upscale(
-				main.texture,
-				reactiveMaskTexture->resource.get(),
-				transparencyCompositionMaskTexture->resource.get(),
-				motionVectorResource,
-				colorOut,
-				settings.sharpnessFSR,
-				ShouldUseFSRBuiltInSharpening());
-			if (!upscaled)
-				RequestHistoryReset();
-			vendorUpscaleOutputInSharpenerTexture = outputToSharpener && upscaled;
+			fidelityFX.Upscale(main.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), motionVectorResource, settings.sharpnessFSR);
 		}
 
 		state->EndPerfEvent();
@@ -2459,29 +2245,25 @@ void Upscaling::ApplySharpening()
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
 
-	const auto upscaleMethod = GetUpscaleMethod();
-	const auto sharpenerMode = GetActiveExternalSharpenerMode(*this, upscaleMethod);
-	if (sharpenerMode == ExternalSharpenerMode::Off)
+	if (settings.sharpnessDLSS <= 0.0f)
 		return;
 
-	if (!sharpenerTexture)
+	if (!dlssSharpenerOutputValid || !sharpenerTexture)
 		return;
 
-	if (!vendorUpscaleOutputInSharpenerTexture)
-		return;
+	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
+	currentSharpness = exp2(-currentSharpness);
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	if (!main.UAV || !main.texture || !sharpenerTexture->resource)
+	if (!main.UAV || !sharpenerTexture->srv)
 		return;
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	// Zero-copy path: the vendor upscaler has already written to sharpenerTexture; sharpen directly into kMAIN.UAV.
-	if (!sharpenerTexture->srv || !DispatchExternalSharpener(sharpenerMode, GetActiveExternalSharpness(*this, upscaleMethod), sharpenerTexture->srv.get(), main.UAV))
-		context->CopyResource(main.texture, sharpenerTexture->resource.get());
+	rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
@@ -2519,7 +2301,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
 		upscaling.PerformUpscaling();
 
-	if (upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kFSR)
+	if (upscaleMethod == UpscaleMethod::kDLSS)
 		upscaling.ApplySharpening();
 
 	if (upscaleMethod == UpscaleMethod::kNONE) {

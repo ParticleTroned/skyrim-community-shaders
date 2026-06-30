@@ -769,14 +769,15 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		static_cast<float>(gameViewport ? gameViewport->screenHeight : 0)
 	};
 	const auto renderSize = Util::ConvertToDynamic(baseSize);
-
-	// When DLSS sharpening is active, direct DLSS output to sharpenerTexture so the selected
-	// pass can sharpen directly into kMAIN.UAV without a CopyResource round-trip.
 	auto& upscaling = globals::features::upscaling;
-	ID3D11Resource* colorOut =
-		(upscaling.ShouldApplyDLSSSharpening() && upscaling.sharpenerTexture) ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
-	const bool outputToSharpener = colorOut != a_upscalingTexture;
-	upscaling.vendorUpscaleOutputInSharpenerTexture = false;
+	const bool useSharpenerOutput =
+		upscaling.settings.sharpnessDLSS > 0.0f &&
+		upscaling.sharpenerTexture &&
+		upscaling.sharpenerTexture->resource;
+	ID3D11Resource* colorOut = useSharpenerOutput ?
+	                               upscaling.sharpenerTexture->resource.get() :
+	                               a_upscalingTexture;
+	upscaling.dlssSharpenerOutputValid = false;
 
 	// Simple full-texture upscale.
 	const sl::Extent extentIn{ 0, 0, (uint)renderSize.x, (uint)renderSize.y };
@@ -786,9 +787,9 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		a_upscalingTexture, colorOut,
 		depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 		extentIn, extentOut, (uint)baseSize.x);
-	upscaling.vendorUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
+	upscaling.dlssSharpenerOutputValid = evaluated && useSharpenerOutput;
 	if (!evaluated) {
-		upscaling.RequestHistoryReset();
+		globals::features::upscaling.RequestHistoryReset();
 		static bool loggedEvaluateFailure = false;
 		if (!loggedEvaluateFailure) {
 			logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");

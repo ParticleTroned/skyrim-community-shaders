@@ -855,6 +855,18 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
+float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceFactor)
+{
+#			if defined(UNIFIED_WATER) && !defined(UNDERWATER) && !defined(LOD)
+	// Distant UW still uses close-water depth shading. Fade it out with distance so
+	// coarse LOD terrain depth cannot imprint blocky shallow-water patterns.
+	float farDepthFade = smoothstep(0.7, 0.95, distanceFactor);
+	return lerp(depthMul, 1.0.xxxx, farDepthFade);
+#			else
+	return depthMul;
+#			endif
+}
+
 struct DiffuseOutput
 {
 	float3 refractionColor;
@@ -998,6 +1010,10 @@ PS_OUTPUT main(PS_INPUT input)
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z);
 #				endif
+#			endif
+
+#			if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(LOD)
+	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceFactor);
 #			endif
 
 #			if defined(UNDERWATER)

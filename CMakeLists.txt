@@ -44,11 +44,27 @@ option(
     "Build shader unit tests (runs automatically before packaging)"
     ON
 )
+option(
+    AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES
+    "Exclude feature packages hidden from user-facing feature lists from AIO and package outputs."
+    OFF
+)
+set(AIO_EXCLUDED_FEATURE_PACKAGES
+    ""
+    CACHE STRING
+    "Additional semicolon-separated feature package directories to exclude from AIO and package outputs."
+)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
+message(
+    "\tExclude hidden AIO feature packages: ${AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES}"
+)
+message(
+    "\tAdditional excluded AIO feature packages: ${AIO_EXCLUDED_FEATURE_PACKAGES}"
+)
 
 # #######################################################################################################################
 # # Build version info from git
@@ -236,6 +252,7 @@ foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
     get_filename_component(_FEATURE_DIR "${FEATURE_PATH}" DIRECTORY)
     get_filename_component(_FEATURE_DIR "${_FEATURE_DIR}" DIRECTORY)
     get_filename_component(_FEATURE_DIR "${_FEATURE_DIR}" DIRECTORY)
+    set("FEATURE_DIR_FOR_SHORT_NAME_${FEATURE}" "${_FEATURE_DIR}")
     if(EXISTS "${_FEATURE_DIR}/CORE")
         list(APPEND FEATURE_CORE_NAMES "\t\t\"${FEATURE}\"sv")
     endif()
@@ -349,7 +366,124 @@ endif()
 # #######################################################################################################################
 # # Automatic deployment
 # #######################################################################################################################
-file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
+file(
+    GLOB FEATURE_PATHS
+    LIST_DIRECTORIES true
+    CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/features/*
+)
+
+set(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE ${AIO_EXCLUDED_FEATURE_PACKAGES})
+
+if(AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES)
+    file(
+        GLOB_RECURSE _AIO_FEATURE_HEADER_FILES
+        LIST_DIRECTORIES false
+        CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/Features/*.h"
+    )
+
+    set(_AIO_HIDDEN_FEATURE_SHORT_NAMES)
+    foreach(_feature_header IN LISTS _AIO_FEATURE_HEADER_FILES)
+        file(READ "${_feature_header}" _feature_header_contents)
+        string(
+            REGEX MATCH
+                "IsHiddenFromUserView[^{]*\\{[ \t\r\n]*return[ \t\r\n]*true[ \t\r\n]*;"
+            _hidden_feature_match
+            "${_feature_header_contents}"
+        )
+        if(_hidden_feature_match)
+            set(_hidden_feature_short_name "")
+            string(
+                REGEX MATCH
+                    "GetShortName[^{]*\\{[ \t\r\n]*return[ \t\r\n]*\"([^\"]+)\""
+                _short_name_match
+                "${_feature_header_contents}"
+            )
+            if(_short_name_match)
+                set(_hidden_feature_short_name "${CMAKE_MATCH_1}")
+            else()
+                string(
+                    REGEX MATCH
+                        "kFeatureShortName[ \t\r\n]*=[ \t\r\n]*\"([^\"]+)\""
+                    _short_name_constant_match
+                    "${_feature_header_contents}"
+                )
+                if(_short_name_constant_match)
+                    set(_hidden_feature_short_name "${CMAKE_MATCH_1}")
+                endif()
+            endif()
+            if(_hidden_feature_short_name)
+                list(
+                    APPEND _AIO_HIDDEN_FEATURE_SHORT_NAMES
+                    "${_hidden_feature_short_name}"
+                )
+            else()
+                message(
+                    WARNING
+                    "Could not detect short name for hidden feature header: ${_feature_header}"
+                )
+            endif()
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _AIO_HIDDEN_FEATURE_SHORT_NAMES)
+
+    foreach(_feature_short_name IN LISTS _AIO_HIDDEN_FEATURE_SHORT_NAMES)
+        if(DEFINED FEATURE_DIR_FOR_SHORT_NAME_${_feature_short_name})
+            set(_hidden_feature_dir
+                "${FEATURE_DIR_FOR_SHORT_NAME_${_feature_short_name}}"
+            )
+            get_filename_component(
+                _feature_dir_name
+                "${_hidden_feature_dir}"
+                NAME
+            )
+            list(
+                APPEND _AIO_FEATURE_DIR_NAMES_TO_EXCLUDE
+                "${_feature_dir_name}"
+            )
+            message(
+                STATUS
+                "Detected hidden feature for AIO/package exclusion: ${_feature_short_name} (${_feature_dir_name})"
+            )
+        else()
+            message(
+                WARNING
+                "Hidden feature short name does not match a packaged feature config: ${_feature_short_name}"
+            )
+        endif()
+    endforeach()
+endif()
+
+if(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
+    list(REMOVE_DUPLICATES _AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
+    set(_VISIBLE_FEATURE_PATHS)
+    set(_UNMATCHED_AIO_EXCLUDED_FEATURE_PACKAGES
+        ${AIO_EXCLUDED_FEATURE_PACKAGES}
+    )
+    foreach(_fpath IN LISTS FEATURE_PATHS)
+        get_filename_component(_feature_dir_name "${_fpath}" NAME)
+        if(_feature_dir_name IN_LIST _AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
+            list(
+                REMOVE_ITEM _UNMATCHED_AIO_EXCLUDED_FEATURE_PACKAGES
+                "${_feature_dir_name}"
+            )
+            message(
+                STATUS
+                "Excluding feature from AIO/package outputs: ${_feature_dir_name}"
+            )
+        else()
+            list(APPEND _VISIBLE_FEATURE_PATHS "${_fpath}")
+        endif()
+    endforeach()
+    set(FEATURE_PATHS "${_VISIBLE_FEATURE_PATHS}")
+    foreach(_feature_dir_name IN LISTS _UNMATCHED_AIO_EXCLUDED_FEATURE_PACKAGES)
+        message(
+            WARNING
+            "AIO_EXCLUDED_FEATURE_PACKAGES entry does not match a feature package: ${_feature_dir_name}"
+        )
+    endforeach()
+endif()
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
 # Set AIO directory path used by multiple targets below
@@ -731,8 +865,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                 # size-mismatch cases.
                 COMMAND
                     ${ROBOCOPY_WRAPPER} "${AIO_DIR}" "${DEPLOY_TARGET}" "/E"
-                    "/XD" "${AIO_DIR}/Shaders" "/COPY:DAT" "/R:1" "/W:1"
-                    "/NFL" "/NDL" "/NJH" "/NJS"
+                    "/XD" "${AIO_DIR}/Shaders" "/COPY:DAT" "/R:1" "/W:1" "/NFL"
+                    "/NDL" "/NJH" "/NJS"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_deploy.stamp
                 DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp

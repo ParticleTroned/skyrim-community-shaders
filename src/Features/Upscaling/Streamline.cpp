@@ -107,11 +107,6 @@ namespace
 		bool dlssgModeOn = false;
 		uint32_t dlssgCachedRenderW = 0, dlssgCachedRenderH = 0, dlssgCachedDisplayW = 0, dlssgCachedDisplayH = 0;
 
-		// DLSS-G checklist: VSync with Frame Generation is only valid when the system supports it (IFLIP). Cached
-		// from DLSSGState::bIsVsyncSupportAvailable, refreshed from the present path. When false the present hook
-		// forces VSync off for DLSS-G; when true the app's VSync is allowed to pass through.
-		bool dlssgVsyncSupported = false;
-
 		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset on the render thread
 		// at frame end (CloseRenderFrame, after PresentEnd); set by TagDLSSGResources. If still false at present,
 		// the present path sets a null/passthrough tag — SL's present hook requires a tag every present or it stalls.
@@ -199,10 +194,6 @@ namespace
 			// dlss_g present pacing prints this when a frame is unusually long (load screen, alt-tab, our
 			// camera-warp test). Cosmetic frame-timer reset.
 			"reseting frame timer",
-			// IsDLSSGVsyncSupported polls slDLSSGGetState from the present hook for bIsVsyncSupportAvailable; SL
-			// warns about present-thread sync re the inputs-processing completion fence, which CS does not use
-			// (eBlockNoClientQueues without the host fence wait) — benign for a read-only capability poll.
-			"slDLSSGGetState must be synchronized with the present thread",
 		};
 		for (const char* needle : kBenign) {
 			if (std::strstr(a_msg, needle))
@@ -1231,28 +1222,6 @@ bool Streamline::GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) con
 	a_vramUsage = state.estimatedVRAMUsageInBytes;
 	a_maxFrames = state.numFramesToGenerateMax;
 	return state.status == sl::DLSSGStatus::eOk;
-}
-
-bool Streamline::IsDLSSGVsyncSupported()
-{
-	// DLSS-G checklist (SL 2.11+): VSync with Frame Generation is only valid when the system reports support for
-	// it via DLSSGState::bIsVsyncSupportAvailable (true when IFLIP is available). Call this from the present path
-	// (where slDLSSGGetState is synchronized with the present thread). The value is a stable system capability, so
-	// poll it ~once/second and cache in between — negligible per-present cost. Returns false until DLSS-G is active
-	// and has reported, which is the safe default (the present hook then forces VSync off for DLSS-G).
-	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted || !g_sl.slDLSSGGetState || !g_sl.dlssgModeOn)
-		return false;
-	static uint32_t s_poll = 0;
-	if ((s_poll++ % 60) == 0) {
-		__try {
-			sl::DLSSGState state{};
-			if (g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr) == sl::Result::eOk)
-				g_sl.dlssgVsyncSupported = (state.bIsVsyncSupportAvailable == sl::Boolean::eTrue);
-		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			g_sl.dispatchFaulted = true;
-		}
-	}
-	return g_sl.dlssgVsyncSupported;
 }
 
 void Streamline::LogDLSSGFrameStats()

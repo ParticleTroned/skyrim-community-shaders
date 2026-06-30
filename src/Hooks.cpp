@@ -262,18 +262,16 @@ struct IDXGISwapChain_Present
 	{
 		globals::state->Reset();
 
-		// DLSS-G checklist: VSync with Frame Generation is only valid when the system supports it (IFLIP — see
-		// Streamline::IsDLSSGVsyncSupported / DLSSGState::bIsVsyncSupportAvailable). Where it is NOT supported,
-		// presenting DLSS-G with SyncInterval>0 makes SL 2.12.0's DLSS-G DISABLE interpolation outright (SL log:
-		// "VSync interval 1 not supported with FG" → "interpolation … disabled (SyncInterval=1)") so frame-gen
-		// stops doubling — and the game reaches here with SyncInterval=1 intermittently even when
-		// iVSyncPresentInterval=0. So control VSync here, in our present hook: when DLSS-G is active and VSync+FG
-		// is unsupported, force SyncInterval=0; otherwise let the app's SyncInterval pass through (VSync allowed).
-		// FSR-FG/FFX manages its own present pacing.
+		// VSync is fundamentally incompatible with DLSS-G frame generation on Vulkan — it is NEVER valid (the
+		// IFLIP-based "application-controlled VSync" path / DLSSGState::bIsVsyncSupportAvailable is a D3D12 concept
+		// that does not apply here). Presenting DLSS-G with SyncInterval>0 makes SL's DLSS-G DISABLE interpolation
+		// outright (SL log: "VSync interval 1 not supported with FG" → "interpolation … disabled (SyncInterval=1)")
+		// so frame-gen stops doubling — and the game reaches our present hook with SyncInterval=1 intermittently
+		// even when iVSyncPresentInterval=0. So ALWAYS force SyncInterval=0 here whenever DLSS-G is the active FG
+		// method. (Reflex caps the rate for DLSS-G.) FSR-FG/FFX manages its own present pacing.
 		if (SyncInterval != 0 &&
 			globals::features::upscaling.IsFrameGenerationActive() &&
-			globals::features::upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG &&
-			!Streamline::GetSingleton()->IsDLSSGVsyncSupported())
+			globals::features::upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kDLSSG)
 			SyncInterval = 0;
 
 		// Reflex/PCL latency markers: render submission is complete by present time; bracket the

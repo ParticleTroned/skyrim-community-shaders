@@ -101,11 +101,6 @@ public:
 
 	[[nodiscard]] bool GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) const;
 
-	// DLSS-G checklist: whether VSync with Frame Generation is supported on this system (IFLIP available), from
-	// DLSSGState::bIsVsyncSupportAvailable. Polled from the present path + cached. Drives whether the present hook
-	// forces VSync off for the DLSS-G present (when unsupported) or lets the app's SyncInterval pass through.
-	[[nodiscard]] bool IsDLSSGVsyncSupported();
-
 	void LogDLSSGFrameStats();
 
 	void TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,

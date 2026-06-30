@@ -18,6 +18,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <string_view>
 
@@ -203,6 +204,54 @@ namespace
 	char ToLowerAscii(char a_char)
 	{
 		return static_cast<char>(std::tolower(static_cast<unsigned char>(a_char)));
+	}
+
+	float HashToUnitFloat(std::uint32_t a_value)
+	{
+		a_value ^= a_value >> 16;
+		a_value *= 0x7feb352du;
+		a_value ^= a_value >> 15;
+		a_value *= 0x846ca68bu;
+		a_value ^= a_value >> 16;
+		return static_cast<float>(a_value & 0x00FFFFFFu) / static_cast<float>(0x01000000u);
+	}
+
+	// Smooth deterministic legacy flicker without the removed external PerlinNoise header.
+	float LegacyFlickerNoiseSigned(std::uint32_t a_seed, float a_time)
+	{
+		constexpr float tau = 6.28318530717958647692f;
+		const float phase = HashToUnitFloat(a_seed) * tau;
+		const float frequency = 0.85f + (HashToUnitFloat(a_seed ^ 0x9E3779B9u) * 0.5f);
+		const float wave1 = std::sin((a_time * frequency) + phase);
+		const float wave2 = std::sin((a_time * frequency * 1.93f) + (phase * 1.67f));
+		const float wave3 = std::sin((a_time * frequency * 3.17f) + (phase * 2.31f));
+		return std::clamp((wave1 * 0.6f) + (wave2 * 0.3f) + (wave3 * 0.1f), -1.0f, 1.0f);
+	}
+
+	float LegacyFlickerNoise01(std::uint32_t a_seed, float a_time)
+	{
+		return std::clamp((LegacyFlickerNoiseSigned(a_seed, a_time) * 0.5f) + 0.5f, 0.0f, 1.0f);
+	}
+
+	void ApplyLegacyParticleLightFlicker(LightLimitFix::LightData& a_light, const LightLimitFix::ParticleLightInfo& a_particleLight)
+	{
+		if (!a_particleLight.flicker || !a_particleLight.node || !globals::state) {
+			return;
+		}
+
+		const auto seed = static_cast<std::uint32_t>(std::hash<void*>{}(a_particleLight.node));
+		const float scaledTimer = globals::state->timer * a_particleLight.flickerSpeed;
+		a_light.positionWS.data.x += LegacyFlickerNoiseSigned(seed, scaledTimer) * a_particleLight.flickerMovement;
+		a_light.positionWS.data.y += LegacyFlickerNoiseSigned(seed + 1u, scaledTimer) * a_particleLight.flickerMovement;
+		a_light.positionWS.data.z += LegacyFlickerNoiseSigned(seed + 2u, scaledTimer) * a_particleLight.flickerMovement;
+
+		// Legacy LLF applied flicker after distance dimming. The current path keeps fade
+		// separate from color, so convert back into pre-fade color space first.
+		const float fadeCompensation = 1.0f / std::max(a_light.fade, 1e-4f);
+		const float flickerIntensity = LegacyFlickerNoise01(seed + 3u, scaledTimer) * a_particleLight.flickerIntensity * fadeCompensation;
+		a_light.color.x = std::max(0.0f, a_light.color.x - flickerIntensity);
+		a_light.color.y = std::max(0.0f, a_light.color.y - flickerIntensity);
+		a_light.color.z = std::max(0.0f, a_light.color.z - flickerIntensity);
 	}
 
 	bool EndsWithDdsInsensitive(std::string_view a_filename)
@@ -435,6 +484,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ParticleRadius,
 	BillboardBrightness,
 	BillboardRadius,
+	UseParticleLights087LegacyMode,
 	ParticleClusterThreshold,  // NEW
 	MaxParticlesPerEmitter,    // NEW
 	MaxParticleDistance,       // NEW
@@ -533,6 +583,14 @@ void LightLimitFix::DrawSettings()
 			ImGui::SliderFloat("Particle Radius", &settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, "%.2f");
 			ImGui::SliderFloat("Billboard Brightness", &settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, "%.2f");
 			ImGui::SliderFloat("Billboard Radius", &settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, "%.2f");
+			ImGui::Checkbox("v0.8.7 Particle Lights Legacy", &settings.UseParticleLights087LegacyMode);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"Restores the v0.8.7 particle-light alpha model.\n"
+					"When enabled, brightness comes from material / shader / vertex alpha and RadiusMult affects radius only.\n"
+					"When disabled, the current path uses RadiusMult for both intensity and radius.\n"
+					"This is most noticeable on billboard-backed particle lights.");
+			}
 
 			ImGui::Spacing();
 			ImGui::Spacing();
@@ -1504,14 +1562,24 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightRefe
 		color.green *= config.colorMult.green;
 		color.blue *= config.colorMult.blue;
 	}
-	// Keep particle light energy stable and config-driven (1.4.6-style behavior).
-	color.alpha = std::max(config.radiusMult, 0.0f);
+
+	const float sourceAlpha = std::max(color.alpha * material->baseColor.alpha * shaderProperty->alpha, 0.0f);
+	if (settings.UseParticleLights087LegacyMode) {
+		color.alpha = sourceAlpha;
+	} else {
+		// Keep particle light energy stable and config-driven (1.4.6-style behavior).
+		color.alpha = std::max(config.radiusMult, 0.0f);
+	}
 
 	ParticleLightInfo info;
 	info.billboard = a_reference.billboard;
 	info.node = a_pass->geometry;
 	info.color = color;
 	info.radiusMult = config.radiusMult;
+	info.flicker = config.flicker;
+	info.flickerSpeed = config.flickerSpeed;
+	info.flickerIntensity = config.flickerIntensity;
+	info.flickerMovement = config.flickerMovement;
 
 	bool enqueued = false;
 	{
@@ -1573,7 +1641,10 @@ float LightLimitFix::CalculateLightDistance(float3 a_lightPosition, float a_radi
 	return (a_lightPosition.x * a_lightPosition.x) + (a_lightPosition.y * a_lightPosition.y) + (a_lightPosition.z * a_lightPosition.z) - (a_radius * a_radius);
 }
 
-void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light)
+void LightLimitFix::AddCachedParticleLights(
+	eastl::vector<LightData>& lightsData,
+	LightLimitFix::LightData& light,
+	const ParticleLightInfo* a_particleLight)
 {
 	if (lightsData.size() >= MAX_LIGHTS) {
 		return;
@@ -1612,6 +1683,10 @@ void LightLimitFix::AddCachedParticleLights(eastl::vector<LightData>& lightsData
 	light.fade *= dimmer;
 	const float luminanceScale = light.fade;
 	if ((light.color.x + light.color.y + light.color.z) * luminanceScale > 1e-4 && light.radius > 1e-4) {
+		if (a_particleLight) {
+			ApplyLegacyParticleLightFlicker(light, *a_particleLight);
+		}
+
 		light.invRadius = 1.f / light.radius;
 		lightsData.push_back(light);
 
@@ -1902,7 +1977,7 @@ void LightLimitFix::UpdateLights()
 				light.lightFlags.set(LightFlags::Simple);
 				light.lightFlags.set(LightFlags::Particle);
 
-				AddCachedParticleLights(lightsData, light);
+				AddCachedParticleLights(lightsData, light, &particleLight);
 			}
 		}
 

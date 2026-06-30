@@ -169,6 +169,10 @@ public:
 		RE::BSGeometry* node;
 		RE::NiColorA color;
 		float radiusMult = 1.0f;
+		bool flicker = false;
+		float flickerSpeed = 1.0f;
+		float flickerIntensity = 0.0f;
+		float flickerMovement = 0.0f;
 	};
 
 	struct ParticleLightReference
@@ -218,7 +222,7 @@ public:
 	virtual void ClearShaderCache() override;
 
 	float CalculateLightDistance(float3 a_lightPosition, float a_radius);
-	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light);
+	void AddCachedParticleLights(eastl::vector<LightData>& lightsData, LightLimitFix::LightData& light, const ParticleLightInfo* a_particleLight = nullptr);
 	void SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached = true);
 	void RefreshJsonPlacedLightCacheFrame();
 	bool IsJsonPlacedLight(RE::BSLight* a_bsLight, RE::NiLight* a_niLight);
@@ -248,6 +252,7 @@ public:
 		float ParticleRadius = 1.0f;
 		float BillboardBrightness = 1.0f;
 		float BillboardRadius = 1.0f;
+		bool UseParticleLights087LegacyMode = false;
 		float ParticleClusterThreshold = 32.0f;  // default = previous hardcoded value
 		int MaxParticlesPerEmitter = 256;        // max default
 		float MaxParticleDistance = 6000.0f;     // distance cutoff for particle lights (in game units)

@@ -391,9 +391,7 @@ void ExponentialHeightFog::Prepass()
 	auto* depthSrv = Util::GetCurrentSceneDepthSRV(true);
 	auto& ibl = globals::features::ibl;
 	auto& skylighting = globals::features::skylighting;
-	const bool hasIBL = ibl.loaded &&
-	                    ibl.settings.EnableIBL != 0 &&
-	                    !(ibl.settings.DisableInInteriors && Util::IsInterior()) &&
+	const bool hasIBL = ibl.IsRuntimeEnabled() &&
 	                    ibl.envIBLTexture &&
 	                    ibl.skyIBLTexture;
 	const bool hasSkylighting = skylighting.loaded && skylighting.texProbeArray;

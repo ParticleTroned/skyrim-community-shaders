@@ -448,7 +448,16 @@ struct BSInputDeviceManager_PollInputDevices
 			const int targetFps = upscaling.GetTargetFrameRate();
 			const uint32_t reflexLimitUs = (wantReflex && targetFps > 0) ? static_cast<uint32_t>(1000000.0 / targetFps) : 0u;
 			Streamline::GetSingleton()->UpdateReflex(wantReflex, wantReflex && upscaling.settings.reflexBoost, reflexLimitUs);
-			upscaling.ApplyDxvkFrameRateLimit(wantReflex ? 0.0 : static_cast<double>(targetFps));
+			// DXVK limiter (the non-Reflex fallback). It paces DXVK's real presents; under FSR frame generation
+			// FFX inserts one generated frame per real present, so the real-present cap must be HALVED for the
+			// displayed rate to land on the user's target. 0 => unlimited (and Reflex-driven cases pass 0 here).
+			double dxvkFps = 0.0;
+			if (!wantReflex && targetFps > 0) {
+				const bool fsrFg = upscaling.IsFrameGenerationActive() &&
+				                   upscaling.GetFrameGenMethod() == Upscaling::FrameGenMethod::kFSR;
+				dxvkFps = fsrFg ? targetFps / 2.0 : static_cast<double>(targetFps);
+			}
+			upscaling.ApplyDxvkFrameRateLimit(dxvkFps);
 			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::SimulationStart);
 			Streamline::GetSingleton()->SetPCLMarker(Streamline::PclMarker::PCLatencyPing);  // sample fires this once/frame
 		}

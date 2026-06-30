@@ -250,10 +250,18 @@ void Upscaling::DrawSettings()
 	// inside the VRR window; Reflex drives the cap when it is active, otherwise DXVK's own limiter. VSync is
 	// always forced off for DLSS-G (incompatible on Vulkan — Reflex paces it instead).
 	ImGui::SeparatorText(T(TKEY("present_header"), "Present"));
-	ImGui::Checkbox(T(TKEY("vsync"), "VSync"), &settings.vsync);
-	if (settings.vsync && IsFrameGenerationActive() && GetFrameGenMethod() == FrameGenMethod::kDLSSG) {
+	// DLSS-G forces VSync off (incompatible on Vulkan); show the checkbox greyed-out at its effective value with
+	// a "(forced off)" note, mirroring the Reflex control above.
+	const bool vsyncForcedOff = IsFrameGenerationActive() && GetFrameGenMethod() == FrameGenMethod::kDLSSG;
+	if (vsyncForcedOff) {
+		bool effectiveVsync = false;
+		ImGui::BeginDisabled();
+		ImGui::Checkbox(T(TKEY("vsync"), "VSync"), &effectiveVsync);
+		ImGui::EndDisabled();
 		ImGui::SameLine();
-		ImGui::TextDisabled("%s", T(TKEY("vsync_dlssg"), "(forced off — incompatible with DLSS-G)"));
+		ImGui::TextDisabled("%s", T(TKEY("vsync_dlssg"), "(forced off by DLSS-G)"));
+	} else {
+		ImGui::Checkbox(T(TKEY("vsync"), "VSync"), &settings.vsync);
 	}
 	int limitMode = settings.frameRateLimit > 0 ? 2 : (settings.frameRateLimit < 0 ? 1 : 0);
 	const char* limitModes[] = {

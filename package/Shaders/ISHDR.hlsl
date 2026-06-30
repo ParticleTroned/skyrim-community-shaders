@@ -146,8 +146,9 @@ PS_OUTPUT main(PS_INPUT input)
 	} else {
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
-	const float bloomIntensity = Param.x * SharedData::linearLightingSettings.adaptiveBloomMult;
-	const float advancedBloomIntensity = Param.x;
+	bloomColor *= max(SharedData::linearLightingSettings.adaptiveBloomMult, 0.0);
+	const float bloomIntensity = Param.x;
+	const float advancedBloomIntensity = 1.0;
 
 	float advancedBloomMult = SharedData::linearLightingSettings.adaptiveAdvancedBloomMult;
 	float3 advancedBloomColor = 0.0;

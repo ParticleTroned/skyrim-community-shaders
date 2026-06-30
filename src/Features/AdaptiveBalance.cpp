@@ -72,7 +72,7 @@ namespace
 	constexpr float kBloomMin = 0.0f;
 	constexpr float kBloomMax = 3.0f;
 	constexpr float kAdvancedBloomMin = 0.0f;
-	constexpr float kAdvancedBloomMax = 6.0f;
+	constexpr float kAdvancedBloomMax = 12.0f;
 	constexpr float kSaturationMin = 0.0f;
 	constexpr float kSaturationMax = 2.0f;
 	constexpr float kContrastMin = 0.0f;

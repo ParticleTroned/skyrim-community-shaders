@@ -4595,7 +4595,7 @@ if (alpha - AlphaTestRefRS < 0) {
 	}
 #		endif
 
-	psout.Reflectance = float4(indirectLobeWeights.specular, psout.Diffuse.w);
+	psout.Reflectance = float4(saturate(indirectLobeWeights.specular), psout.Diffuse.w);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(SNOW)

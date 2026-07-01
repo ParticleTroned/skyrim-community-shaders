@@ -377,6 +377,9 @@ public:
 
 	Util::FrameChecker frameChecker;
 	uint frameCount = 0;
+	// Last frameCount on which the per-draw State::Draw() ran the frame-level SceneSettings update (cell
+	// transition / menu revert), so it fires once per frame instead of on every draw.
+	uint lastSceneSettingsUpdateFrame = ~0u;
 	// Thread-safe mirror of frameCount maintained by the render thread.
 	// Off-thread readers (MCP listener, future telemetry) must read this
 	// instead of touching frameCount directly to avoid a data race.

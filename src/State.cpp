@@ -61,8 +61,14 @@ void State::Draw()
 	auto& volumetricShadows = globals::features::volumetricShadows;
 
 	if (shaderCache->IsEnabled()) {
-		// Process deferred cell transitions (interior detection)
-		SceneSettingsManager::GetSingleton()->Update();
+		// Process deferred cell transitions (interior detection). State::Draw() runs per-draw (hooked on
+		// BSGraphics::SetDirtyStates, ~12k×/frame), but cell-transition / menu-revert handling is frame-level —
+		// gate it to once per frame so we don't re-run (and re-resolve the singleton) on every draw. VTune showed
+		// SceneSettingsManager::GetSingleton() as a per-draw hotspot; this caches the per-frame update.
+		if (frameCount != lastSceneSettingsUpdateFrame) {
+			lastSceneSettingsUpdateFrame = frameCount;
+			SceneSettingsManager::GetSingleton()->Update();
+		}
 
 		if (csEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");

@@ -610,6 +610,12 @@ public:
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
 	static bool TraceVRMenuBridgeDrawOperation(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
+	enum class DynamicResolutionUpsampleStage : uint8_t
+	{
+		Render,
+		Dispatch
+	};
+	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);

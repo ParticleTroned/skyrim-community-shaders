@@ -29,6 +29,20 @@ namespace FrameAnnotations
 				return enumName;
 			}
 		}
+
+		template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType>
+		bool TryReplaceDynamicResolutionUpsample(Upscaling::DynamicResolutionUpsampleStage a_stage)
+		{
+			if constexpr (EffectType == RE::ImageSpaceManager::ISUpsampleDynamicResolution) {
+				return globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISUpsampleDynamicResolution", a_stage);
+			} else if constexpr (EffectType == RE::ImageSpaceManager::ISFullScreenVR) {
+				return globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISFullScreenVR", a_stage);
+			} else if constexpr (EffectType == RE::ImageSpaceManager::ISCopyDynamicFetchDisabled) {
+				return globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISCopyDynamicFetchDisabled", a_stage);
+			}
+
+			return false;
+		}
 	}
 
 	template <RE::BSShader::Type ShaderType>
@@ -74,6 +88,9 @@ namespace FrameAnnotations
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 		{
+			if (TryReplaceDynamicResolutionUpsample<EffectType>(Upscaling::DynamicResolutionUpsampleStage::Render))
+				return;
+
 			std::string eventName = BuildEventName(EffectType) + " Draw";
 			globals::state->BeginPerfEvent(eventName);
 
@@ -90,6 +107,9 @@ namespace FrameAnnotations
 	{
 		static void thunk(void* imageSpaceShader, uint32_t a1, uint32_t a2, uint32_t a3)
 		{
+			if (TryReplaceDynamicResolutionUpsample<EffectType>(Upscaling::DynamicResolutionUpsampleStage::Dispatch))
+				return;
+
 			std::string eventName = BuildEventName(EffectType) + " Dispatch";
 			globals::state->BeginPerfEvent(eventName);
 

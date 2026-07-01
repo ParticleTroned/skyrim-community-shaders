@@ -6580,13 +6580,16 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog()
 
 	if (HasPendingVRUpscalingTransition() ||
 		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
-		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-		HasPendingVRVendorRuntimeReset(*this, runtimeMethod)) {
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
 		return;
 	}
 
-	if (postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
-		ShouldDeferVRUpscalingTransitionSettings() ||
+	// A stuck post-load reset is part of the recovery target here; only defer for
+	// active save/load and menu contexts that still need presentation protection.
+	const bool settingsDeferContext =
+		state->pendingPostLoadRuntimeReset ||
+		IsCommunityShadersMenuOpen();
+	if (settingsDeferContext ||
 		IsVRLoadingPresentationContextActive(state) ||
 		IsVRMenuScenePresentationBlockActive() ||
 		IsVRMenuPresentationContextActive()) {
@@ -6597,6 +6600,8 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog()
 	if (ElapsedFrames(startFrame, currentFrame) < kVRSubmitStageBoundsFallbackWatchdogFrames)
 		return;
 
+	const bool postLoadResetPending = postLoadRuntimeResetPending.load(std::memory_order_acquire);
+	const bool vendorResetPending = HasPendingVRVendorRuntimeReset(*this, runtimeMethod);
 	const uint32_t recoveryFrame = submitStageBoundsFallbackRecoveryFrame.load(std::memory_order_acquire);
 	if (recoveryFrame != 0 &&
 		ElapsedFrames(recoveryFrame, currentFrame) < kVRSubmitStageBoundsFallbackRecoveryBackoffFrames) {
@@ -6609,7 +6614,21 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog()
 	const uint32_t expectedWidth = submitStageBoundsFallbackExpectedWidth.load(std::memory_order_acquire);
 	const uint32_t expectedHeight = submitStageBoundsFallbackExpectedHeight.load(std::memory_order_acquire);
 
+	RequestPerfModeRenderTargetRecreate("persistent VR render-scale scene submit bounds mismatch", VRUpscalingTransitionOrigin::VRAPI);
+	const bool relatchQueued = pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
 	submitStageBoundsFallbackRecoveryFrame.store(currentFrame, std::memory_order_release);
+	if (!relatchQueued) {
+		logger::warn(
+			"[VRRenderScale] Recovery relatch request was rejected after {} frame(s) of scene submit bounds mismatch. method={} actual={}x{} expected={}x{}",
+			elapsedFrames,
+			magic_enum::enum_name(runtimeMethod),
+			actualWidth,
+			actualHeight,
+			expectedWidth,
+			expectedHeight);
+		return;
+	}
+
 	if (runtimeMethod == UpscaleMethod::kDLSS) {
 		pendingDLSSReset.store(true, std::memory_order_release);
 		pendingDLSSHistoryReset.store(true, std::memory_order_release);
@@ -6621,16 +6640,18 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog()
 	}
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
-	RequestPerfModeRenderTargetRecreate("persistent VR render-scale scene submit bounds mismatch", VRUpscalingTransitionOrigin::VRAPI);
+	if (postLoadResetPending)
+		postLoadRuntimeResetPending.store(false, std::memory_order_release);
 
 	logger::warn(
-		"[VRRenderScale] Queued recovery relatch after {} frame(s) of scene submit bounds mismatch. method={} actual={}x{} expected={}x{}",
+		"[VRRenderScale] Queued recovery relatch after {} frame(s) of scene submit bounds mismatch. method={} actual={}x{} expected={}x{} pendingReset={}",
 		elapsedFrames,
 		magic_enum::enum_name(runtimeMethod),
 		actualWidth,
 		actualHeight,
 		expectedWidth,
-		expectedHeight);
+		expectedHeight,
+		BoolText(postLoadResetPending || vendorResetPending));
 }
 
 void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame)

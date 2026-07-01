@@ -12417,6 +12417,248 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	return true;
 }
 
+bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage)
+{
+	auto state = globals::state;
+	const auto upscaleMethod = GetRuntimeUpscaleMethod();
+	if (!globals::game::isVR ||
+		!IsVendorUpscalingMethod(upscaleMethod) ||
+		!IsVRRenderScaleSubmitPathEnabled() ||
+		!IsSubmitStageUpscalingActive() ||
+		ShouldSuppressVRInSceneOverlaySubmit() ||
+		IsCommunityShadersMenuOpen()) {
+		return false;
+	}
+	if (!state)
+		return false;
+	if (IsVRMenuPresentationContextActive() ||
+		IsVRRenderScaleMenuPreparationContextActive(state)) {
+		return false;
+	}
+
+	if (IsVRTransitionPresentationProtectionActive(*this, state) &&
+		IsVRLoadingPresentationContextActive(state)) {
+		return false;
+	}
+
+	EnsureRuntimeResolutionStateCurrent();
+	const auto& resolutionPlan = GetRuntimeResolutionPlan();
+	if (resolutionPlan.owner != ResolutionOwner::VRRenderScaleMode ||
+		resolutionPlan.outputTarget != UpscalingOutputTarget::SubmitStageIntermediate) {
+		return false;
+	}
+
+	auto context = globals::d3d::context;
+	if (!context)
+		return false;
+
+	uint32_t inputWidth = ClampPositiveDimension(resolutionPlan.engineRenderSize.x);
+	uint32_t inputHeight = ClampPositiveDimension(resolutionPlan.engineRenderSize.y);
+	uint32_t outputWidth = ClampPositiveDimension(resolutionPlan.finalOutputSize.x);
+	uint32_t outputHeight = ClampPositiveDimension(resolutionPlan.finalOutputSize.y);
+	if (!inputWidth || !inputHeight) {
+		const auto dynamicRenderSize = Util::ConvertToDynamic(state->screenSize);
+		inputWidth = ClampPositiveDimension(dynamicRenderSize.x);
+		inputHeight = ClampPositiveDimension(dynamicRenderSize.y);
+	}
+	if (!outputWidth || !outputHeight) {
+		outputWidth = ClampPositiveDimension(state->screenSize.x);
+		outputHeight = ClampPositiveDimension(state->screenSize.y);
+	}
+	if (!inputWidth || !inputHeight)
+		return false;
+	if (inputWidth >= outputWidth && inputHeight >= outputHeight)
+		return false;
+
+	ID3D11ShaderResourceView* psSourceSRV = nullptr;
+	ID3D11ShaderResourceView* csSourceSRV = nullptr;
+	context->PSGetShaderResources(0, 1, &psSourceSRV);
+	context->CSGetShaderResources(0, 1, &csSourceSRV);
+
+	const auto releaseSourceSRVs = [&]() {
+		if (psSourceSRV)
+			psSourceSRV->Release();
+		if (csSourceSRV)
+			csSourceSRV->Release();
+	};
+
+	ID3D11ShaderResourceView* sourceSRV = nullptr;
+	ID3D11Resource* sourceResource = nullptr;
+	ID3D11Texture2D* sourceTexture = nullptr;
+	ID3D11ShaderResourceView* sourceCandidates[2] = {};
+	if (a_stage == DynamicResolutionUpsampleStage::Dispatch) {
+		sourceCandidates[0] = csSourceSRV;
+		sourceCandidates[1] = psSourceSRV;
+	} else {
+		sourceCandidates[0] = psSourceSRV;
+		sourceCandidates[1] = csSourceSRV;
+	}
+
+	const auto tryAcquireSource = [&](ID3D11ShaderResourceView* a_candidateSRV) {
+		if (!a_candidateSRV)
+			return false;
+
+		ID3D11Resource* candidateResource = nullptr;
+		a_candidateSRV->GetResource(&candidateResource);
+		if (!candidateResource)
+			return false;
+
+		ID3D11Texture2D* candidateTexture = nullptr;
+		if (FAILED(candidateResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&candidateTexture))) || !candidateTexture) {
+			candidateResource->Release();
+			return false;
+		}
+
+		D3D11_TEXTURE2D_DESC candidateDesc{};
+		candidateTexture->GetDesc(&candidateDesc);
+		if (candidateDesc.Width < inputWidth || candidateDesc.Height < inputHeight) {
+			candidateTexture->Release();
+			candidateResource->Release();
+			return false;
+		}
+
+		sourceSRV = a_candidateSRV;
+		sourceResource = candidateResource;
+		sourceTexture = candidateTexture;
+		return true;
+	};
+
+	for (uint32_t i = 0; i < 2 && !sourceTexture; ++i) {
+		if (!sourceCandidates[i])
+			continue;
+		if (i == 1 && sourceCandidates[i] == sourceCandidates[0])
+			continue;
+		(void)tryAcquireSource(sourceCandidates[i]);
+	}
+
+	const char* passName = a_passName ? a_passName : "dynamic-resolution pass";
+	if (!sourceSRV || !sourceResource || !sourceTexture) {
+		static bool loggedMissingSource = false;
+		if (!loggedMissingSource) {
+			logger::warn(
+				"[Upscaling] {} replacement could not find a suitable source SRV t0 for {}x{}; falling back to vanilla pass.",
+				passName,
+				inputWidth,
+				inputHeight);
+			loggedMissingSource = true;
+		}
+		releaseSourceSRVs();
+		return false;
+	}
+
+	ID3D11RenderTargetView* outputRTV = nullptr;
+	ID3D11DepthStencilView* outputDSV = nullptr;
+	context->OMGetRenderTargets(1, &outputRTV, &outputDSV);
+	if (!outputRTV) {
+		sourceTexture->Release();
+		sourceResource->Release();
+		releaseSourceSRVs();
+		return false;
+	}
+
+	ID3D11Resource* outputResource = nullptr;
+	outputRTV->GetResource(&outputResource);
+	ID3D11Texture2D* outputTexture = nullptr;
+	if (!outputResource || FAILED(outputResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&outputTexture))) || !outputTexture) {
+		if (outputResource)
+			outputResource->Release();
+		outputRTV->Release();
+		if (outputDSV)
+			outputDSV->Release();
+		sourceTexture->Release();
+		sourceResource->Release();
+		releaseSourceSRVs();
+		return false;
+	}
+
+	const auto releaseRefs = [&]() {
+		outputTexture->Release();
+		outputResource->Release();
+		outputRTV->Release();
+		if (outputDSV)
+			outputDSV->Release();
+		sourceTexture->Release();
+		sourceResource->Release();
+		releaseSourceSRVs();
+	};
+	const auto unbindSourceSRV = [&]() {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		context->PSSetShaderResources(0, 1, &nullSRV);
+		context->CSSetShaderResources(0, 1, &nullSRV);
+	};
+	const auto restoreSourceSRVs = [&]() {
+		context->PSSetShaderResources(0, 1, &psSourceSRV);
+		context->CSSetShaderResources(0, 1, &csSourceSRV);
+	};
+
+	// In-place/UI-target passes can carry late full-resolution HUD/interactions.
+	// Let vanilla execute these to avoid submitting cropped low-res prompt frames.
+	const bool inPlacePass = outputTexture == sourceTexture;
+	const bool uiRenderTargetPass = IsVRPresentationRenderTargetTexture(sourceTexture) || IsVRPresentationRenderTargetTexture(outputTexture);
+	const bool interactionUiContext = !IsKnownGameMenuContextActive();
+	if ((inPlacePass || uiRenderTargetPass) && interactionUiContext) {
+		releaseRefs();
+		return false;
+	}
+
+	unbindSourceSRV();
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+
+	auto copyDynamicRegionToTarget = [&](ID3D11Texture2D* a_targetTexture) {
+		if (!a_targetTexture)
+			return false;
+		if (a_targetTexture == sourceTexture)
+			return true;
+
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		D3D11_TEXTURE2D_DESC targetDesc{};
+		sourceTexture->GetDesc(&sourceDesc);
+		a_targetTexture->GetDesc(&targetDesc);
+		if (sourceDesc.SampleDesc.Count != targetDesc.SampleDesc.Count ||
+			sourceDesc.Format != targetDesc.Format ||
+			inputWidth > sourceDesc.Width ||
+			inputHeight > sourceDesc.Height ||
+			inputWidth > targetDesc.Width ||
+			inputHeight > targetDesc.Height) {
+			static bool loggedCopyMismatch = false;
+			if (!loggedCopyMismatch) {
+				logger::warn(
+					"[Upscaling] Submit-stage replacement could not copy source: input={}x{} source={}x{} fmt={} samples={} target={}x{} fmt={} samples={}",
+					inputWidth,
+					inputHeight,
+					sourceDesc.Width,
+					sourceDesc.Height,
+					static_cast<uint32_t>(sourceDesc.Format),
+					sourceDesc.SampleDesc.Count,
+					targetDesc.Width,
+					targetDesc.Height,
+					static_cast<uint32_t>(targetDesc.Format),
+					targetDesc.SampleDesc.Count);
+				loggedCopyMismatch = true;
+			}
+			return false;
+		}
+
+		D3D11_BOX sourceBox{ 0, 0, 0, inputWidth, inputHeight, 1 };
+		context->CopySubresourceRegion(a_targetTexture, 0, 0, 0, 0, sourceTexture, 0, &sourceBox);
+		return true;
+	};
+
+	const bool copiedToOutput = copyDynamicRegionToTarget(outputTexture);
+	if (copiedToOutput) {
+		context->OMSetRenderTargets(1, &outputRTV, outputDSV);
+		releaseRefs();
+		if (globals::game::stateUpdateFlags)
+			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+		return true;
+	}
+
+	context->OMSetRenderTargets(1, &outputRTV, outputDSV);
+	restoreSourceSRVs();
+	releaseRefs();
+	return false;
+}
+
 void Upscaling::RequestHistoryReset()
 {
 	historyResetRequested = true;

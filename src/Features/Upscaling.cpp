@@ -120,6 +120,7 @@ namespace
 	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
 	constexpr uint32_t kVRSubmitStageFoveatedFailureRetryFrames = 30u;
+	constexpr uint32_t kVRSubmitStageUnderwaterMaskTailFrames = 4u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
@@ -131,6 +132,7 @@ namespace
 	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
 	// Keep the DrawIndexedInstanced hook hot only around menu bridge windows.
 	std::atomic_uint32_t g_vrMenuBridgeTraceTailEndFrame{ 0 };
+	std::atomic_uint32_t g_vrSubmitStageUnderwaterMaskTailEndFrame{ 0 };
 	std::atomic_uint64_t g_vrMenuBridgeTraceCachedState{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
@@ -2703,6 +2705,31 @@ namespace
 	bool IsVRMenuBridgeTraceTailActive(const State* a_state)
 	{
 		return globals::game::isVR && IsFrameTailActive(a_state, g_vrMenuBridgeTraceTailEndFrame);
+	}
+
+	bool IsVRSubmitStageUnderwaterMaskRefreshRelevant(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
+		uint32_t tailEndFrame = g_vrSubmitStageUnderwaterMaskTailEndFrame.load(std::memory_order_acquire);
+		if (tailEndFrame != 0 && currentFrame + kVRSubmitStageUnderwaterMaskTailFrames + 1u < tailEndFrame) {
+			g_vrSubmitStageUnderwaterMaskTailEndFrame.store(0, std::memory_order_release);
+			tailEndFrame = 0;
+		}
+
+		auto* waterSystem = globals::game::waterSystem;
+		const bool waterContextActive =
+			waterSystem &&
+			(waterSystem->playerUnderwater || waterSystem->partiallyUnderwater);
+		if (waterContextActive) {
+			// ExtendFrameTail includes the current frame; keep the configured tail after water clears.
+			ExtendFrameTail(g_vrSubmitStageUnderwaterMaskTailEndFrame, kVRSubmitStageUnderwaterMaskTailFrames + 1u);
+			return true;
+		}
+
+		return tailEndFrame != 0 && currentFrame < tailEndFrame;
 	}
 
 	bool IsVRMenuPresentationContextActive()
@@ -13843,6 +13870,9 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
 	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState) {
+		return;
+	}
+	if (!IsVRSubmitStageUnderwaterMaskRefreshRelevant(state)) {
 		return;
 	}
 	if (ShouldDeferVRProjectedMaskRepair(*this, state)) {

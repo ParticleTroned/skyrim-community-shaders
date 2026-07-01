@@ -6429,7 +6429,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
 	ClearSubmitStageFoveatedVendorRetryBackoff();
-	if (relatchUpscaleMethod == UpscaleMethod::kDLSS && relatchRenderScaleActive) {
+	if (IsVendorUpscalingMethod(relatchUpscaleMethod) && relatchRenderScaleActive) {
 		ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
 	} else {
 		ClearSubmitStageVendorResumeCooldown();
@@ -11763,7 +11763,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool transitionProtectionActive = IsVRTransitionPresentationProtectionActive(*this, state);
 	bool transitionPresentationCooldown = false;
 	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
-	if (upscaleMethod == UpscaleMethod::kDLSS && vrRenderScaleMode && vendorResumeFrame != 0) {
+	if (vrRenderScaleMode && vendorResumeFrame != 0) {
 		if (currentFrame < vendorResumeFrame) {
 			transitionPresentationCooldown = true;
 		} else {

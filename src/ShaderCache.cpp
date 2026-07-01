@@ -2543,6 +2543,24 @@ namespace SIE
 			});
 	}
 
+	static bool AreRestorablePreviousCacheMismatches(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
+	{
+		return !mismatches.empty() && OnlyEnabledFlips(mismatches) && !HasMissingOrFailedFeature(mismatches);
+	}
+
+	static bool SetPreviousCacheRestoreCandidate(
+		std::vector<Util::CacheInvalidation::CacheMismatch> mismatches,
+		bool& previousDiskCacheAvailable,
+		std::vector<Util::CacheInvalidation::CacheMismatch>& previousCacheMismatches)
+	{
+		if (!AreRestorablePreviousCacheMismatches(mismatches) || !HasDiskCacheInfo(PreviousDiskCachePath()))
+			return false;
+
+		previousCacheMismatches = std::move(mismatches);
+		previousDiskCacheAvailable = true;
+		return true;
+	}
+
 	static bool PartialInvalidation(const std::vector<std::string>& defines)
 	{
 		size_t deleted = 0;
@@ -2620,7 +2638,7 @@ namespace SIE
 
 		RefreshPreviousDiskCacheInfo();
 		logger::info("Saved previous shader cache for feature rollback");
-		return previousDiskCacheAvailable;
+		return true;
 	}
 
 	void ShaderCache::RefreshPreviousDiskCacheInfo()
@@ -2695,8 +2713,18 @@ namespace SIE
 			if (BackupActiveDiskCache()) {
 				diskCacheHeld = false;
 				featureSetCacheBackedUp = true;
+				// We just moved the pre-change active cache into the rollback slot.
+				// In this enabled-flip-only path, that cache is the valid restore target
+				// for the previous boot configuration even if the immediate compatibility
+				// refresh has not derived the UI state yet.
+				const bool previousRestoreAvailable =
+					SetPreviousCacheRestoreCandidate(cacheMismatches, previousDiskCacheAvailable, previousCacheMismatches);
 				WriteDiskCacheInfo();
-				logger::info("Feature set changed: compiling a new active disk cache; previous cache is available for restore");
+				if (previousRestoreAvailable) {
+					logger::info("Feature set changed: compiling a new active disk cache; previous cache is available for restore");
+				} else {
+					logger::info("Feature set changed: compiling a new active disk cache; previous cache was saved but is not currently available for restore");
+				}
 			} else {
 				diskCacheHeld = true;
 				featureSetCacheBackedUp = false;
@@ -2720,6 +2748,9 @@ namespace SIE
 	{
 		if (!featureSetChanged)
 			return;
+
+		const bool committedFeatureSetBackup = featureSetCacheBackedUp;
+		auto committedPreviousCacheMismatches = committedFeatureSetBackup ? cacheMismatches : std::vector<CacheMismatch>{};
 
 		if (!featureSetCacheBackedUp && !PartialInvalidation(heldMismatchDefines))
 			DeleteActiveDiskCache();
@@ -2765,12 +2796,23 @@ namespace SIE
 		featureSetCacheBackedUp = false;
 		cacheMismatches.clear();
 		RefreshPreviousDiskCacheInfo();
+		if (committedFeatureSetBackup && !previousDiskCacheAvailable &&
+			SetPreviousCacheRestoreCandidate(std::move(committedPreviousCacheMismatches), previousDiskCacheAvailable, previousCacheMismatches)) {
+			logger::info("Previous shader cache restore retained from feature-change backup");
+		}
 		logger::info("Feature set change committed: rebuilt disk cache for the current feature set");
 	}
 
 	bool ShaderCache::RestorePreviousDiskCache()
 	{
+		const bool hadPreviousRestoreCandidate = previousDiskCacheAvailable;
+		auto retainedPreviousCacheMismatches = previousCacheMismatches;
+
 		RefreshPreviousDiskCacheInfo();
+		if (!previousDiskCacheAvailable && hadPreviousRestoreCandidate &&
+			SetPreviousCacheRestoreCandidate(std::move(retainedPreviousCacheMismatches), previousDiskCacheAvailable, previousCacheMismatches)) {
+			logger::info("Previous shader cache restore retained from feature-change backup");
+		}
 		if (!previousDiskCacheAvailable) {
 			logger::warn("Cannot restore previous shader cache: no compatible previous cache is available");
 			return false;
@@ -3440,7 +3482,7 @@ namespace SIE
 		// still reads high briefly, which would otherwise underflow uint64_t (logs as ~2^64-1).
 		const uint64_t total = compilationSet.totalTasks.load(std::memory_order_relaxed);
 		const uint64_t done = compilationSet.completedTasks.load(std::memory_order_relaxed) +
-		                     compilationSet.failedTasks.load(std::memory_order_relaxed);
+		                      compilationSet.failedTasks.load(std::memory_order_relaxed);
 		// This task has already finished running, but Complete(task) has not yet updated the counters.
 		// Include the current task in the local progress snapshot so the logged remaining count is accurate.
 		const uint64_t doneIncludingCurrent = (done < total) ? (done + 1) : total;

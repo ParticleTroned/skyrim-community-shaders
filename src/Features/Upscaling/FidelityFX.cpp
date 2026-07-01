@@ -24,10 +24,8 @@ namespace
 {
 	constexpr wchar_t kFrameGenerationDllName[] = L"amd_fidelityfx_framegeneration_dx12.dll";
 	constexpr wchar_t kLoaderDllName[] = L"amd_fidelityfx_loader_dx12.dll";
-	constexpr wchar_t kUpscalerDllName[] = L"amd_fidelityfx_upscaler_dx12.dll";
 	constexpr uint32_t kAmdVendorId = 0x1002u;
 	constexpr uint32_t kNvidiaVendorId = 0x10DEu;
-	constexpr uint32_t kRuntimeFsr315Version = FFX_UPSCALER_MAKE_VERSION(3u, 1u, 5u);
 
 	void* s_fidelityFxDllDirectoryCookie = nullptr;
 
@@ -208,6 +206,18 @@ namespace
 		const uint32_t minor = (a_version >> 12) & 0x3FFu;
 		const uint32_t patch = a_version & 0xFFFu;
 		return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
+	}
+
+	const std::string& PendingFsrDispatchLabel()
+	{
+		static const std::string label = "Pending FSR dispatch";
+		return label;
+	}
+
+	const std::string& HostFsrFallbackLabel()
+	{
+		static const std::string label = std::format("{} fallback", FidelityFX::GetHostFsrSdkLabel());
+		return label;
 	}
 
 	bool RuntimeProviderNameMatchesVersion(const std::string& a_providerName, uint32_t a_version)
@@ -524,7 +534,7 @@ void FidelityFX::LoadFFX()
 
 	const std::filesystem::path framegenPath = pluginDir / kFrameGenerationDllName;
 	const std::filesystem::path loaderPath = pluginDir / kLoaderDllName;
-	const std::filesystem::path upscalerPath = pluginDir / kUpscalerDllName;
+	const std::filesystem::path upscalerPath = pluginDir / RuntimeUpscalerDllName.data();
 
 	const bool framegenDllExists = std::filesystem::exists(framegenPath);
 	const bool upscalerDllExists = std::filesystem::exists(upscalerPath);
@@ -609,24 +619,78 @@ bool FidelityFX::IsRuntimeFsr4FailureLatched() const
 	return runtimeFsr4FailureLatched;
 }
 
-const char* FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
+const std::string& FidelityFX::GetHostFsrSdkLabel()
+{
+	static const std::string label = std::format("Host FSR3 SDK {}", UpscalerVersionToString(Fsr3Version));
+	return label;
+}
+
+const std::string& FidelityFX::GetRuntimeUpscalerLabel(uint32_t a_version)
+{
+	static const std::string runtimeFsr3Label = std::format("Runtime FSR3 {} ({})", UpscalerVersionToString(Fsr3Version), RuntimeUpscalerDllNameUtf8);
+	static const std::string runtimeFsr4Label = std::format("Runtime FSR4 ({})", RuntimeUpscalerDllNameUtf8);
+
+	if (a_version == Fsr3Version)
+		return runtimeFsr3Label;
+	if (a_version == FFX_UPSCALER_VERSION)
+		return runtimeFsr4Label;
+
+	thread_local std::string fallbackLabel;
+	fallbackLabel = std::format("Runtime FSR {} ({})", UpscalerVersionToString(a_version), RuntimeUpscalerDllNameUtf8);
+	return fallbackLabel;
+}
+
+const std::string& FidelityFX::GetRuntimeUpscalerLastFramePathLabel() const
 {
 	if (!runtimeUpscalerLastFramePathValid)
-		return "Pending FSR dispatch";
+		return PendingFsrDispatchLabel();
 
 	switch (runtimeUpscalerLastFramePath) {
 	case RuntimeUpscalerFramePath::kHostFsr31:
-		return "Host FSR 3.1.5";
+		return GetHostFsrSdkLabel();
 	case RuntimeUpscalerFramePath::kRuntimeFsr31:
-		return "Runtime FSR 3.1.5";
+		return GetRuntimeUpscalerLabel(Fsr3Version);
 	case RuntimeUpscalerFramePath::kRuntimeFsr4:
-		return "Runtime FSR 4.1";
+		return GetRuntimeUpscalerLabel(FFX_UPSCALER_VERSION);
 	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
-		return "Host FSR 3.1.5 fallback";
+		return HostFsrFallbackLabel();
 	case RuntimeUpscalerFramePath::kInactive:
 	default:
-		return "Pending FSR dispatch";
+		return PendingFsrDispatchLabel();
 	}
+}
+
+const std::string& FidelityFX::GetConfiguredFsrPathLabel() const
+{
+	if (runtimeUpscalerFailureLatched)
+		return HostFsrFallbackLabel();
+
+	if (runtimeFsr4FailureLatched) {
+		if (ShouldUseRuntimeUpscalerForFSR())
+			return GetRuntimeUpscalerLabel(Fsr3Version);
+
+		return HostFsrFallbackLabel();
+	}
+
+	if (runtimeUpscalerSupportCheckKnown && !runtimeUpscalerSupportConfirmed)
+		return HostFsrFallbackLabel();
+
+	if (ShouldRequestRuntimeFsr4())
+		return GetRuntimeUpscalerLabel(FFX_UPSCALER_VERSION);
+
+	if (ShouldUseRuntimeUpscalerForFSR())
+		return GetRuntimeUpscalerLabel(Fsr3Version);
+
+	return GetHostFsrSdkLabel();
+}
+
+const std::string& FidelityFX::GetDisplayedFsrPathLabel() const
+{
+	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0;
+	if (runtimeUpscalerLastFramePathValid && runtimeUpscalerLastFrameIndex == currentFrame)
+		return GetRuntimeUpscalerLastFramePathLabel();
+
+	return GetConfiguredFsrPathLabel();
 }
 
 std::string FidelityFX::GetRuntimeUpscalerProviderName() const
@@ -664,7 +728,8 @@ void FidelityFX::LatchRuntimeUpscalerFailure()
 		return;
 
 	runtimeUpscalerFailureLatched = true;
-	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using host FSR 3.1.5 until runtime resources are reset, FSR resources are rebuilt, or the method changes.");
+	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using {} until runtime resources are reset, FSR resources are rebuilt, or the method changes.",
+		GetHostFsrSdkLabel());
 }
 
 void FidelityFX::LatchRuntimeFsr4Failure()
@@ -673,7 +738,8 @@ void FidelityFX::LatchRuntimeFsr4Failure()
 		return;
 
 	runtimeFsr4FailureLatched = true;
-	logger::warn("[FidelityFX] Runtime FSR 4.1 path failed; falling back to runtime FSR 3.1.5 until runtime resources are reset, FSR resources are rebuilt, or the method changes.");
+	logger::warn("[FidelityFX] Runtime FSR4 path failed; falling back to {} until runtime resources are reset, FSR resources are rebuilt, or the method changes.",
+		GetRuntimeUpscalerLabel(Fsr3Version));
 }
 
 FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const
@@ -681,7 +747,7 @@ FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFrame
 	if (RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, FFX_UPSCALER_VERSION))
 		return RuntimeUpscalerFramePath::kRuntimeFsr4;
 
-	if (RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, kRuntimeFsr315Version))
+	if (RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, Fsr3Version))
 		return RuntimeUpscalerFramePath::kRuntimeFsr31;
 
 	return a_requestedVersion == FFX_UPSCALER_VERSION ? RuntimeUpscalerFramePath::kRuntimeFsr4 : RuntimeUpscalerFramePath::kRuntimeFsr31;
@@ -1385,7 +1451,7 @@ bool FidelityFX::ShouldRequestRuntimeFsr4() const
 
 uint32_t FidelityFX::GetPreferredRuntimeUpscalerVersion() const
 {
-	return ShouldRequestRuntimeFsr4() ? FFX_UPSCALER_VERSION : kRuntimeFsr315Version;
+	return ShouldRequestRuntimeFsr4() ? FFX_UPSCALER_VERSION : Fsr3Version;
 }
 
 bool FidelityFX::EnsureRuntimeUpscalerInterop()
@@ -2003,8 +2069,9 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 
 	const bool runtimeFsr4Requested = ShouldRequestRuntimeFsr4();
 	const bool runtimeRequested = runtimeFsr4Requested || ShouldUseRuntimeUpscalerForFSR();
-	const uint32_t requestedRuntimeVersion = runtimeFsr4Requested ? FFX_UPSCALER_VERSION : kRuntimeFsr315Version;
-	const uint32_t runtimeContextCount = UseSplitPerEyeFSRContexts() ? 2u : 1u;
+	const uint32_t requestedRuntimeVersion = runtimeFsr4Requested ? FFX_UPSCALER_VERSION : Fsr3Version;
+	const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
+	const uint32_t runtimeContextCount = splitPerEyeContexts ? 2u : 1u;
 	const bool runtimeSelected = runtimeRequested && CanUseRuntimeUpscalerPath();
 
 	if (runtimeSelected) {
@@ -2015,7 +2082,6 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		float2 screenSize{};
 		float2 renderSize{};
 		GetRuntimeUpscaleSizes(screenSize, renderSize);
-		const bool splitPerEyeContexts = UseSplitPerEyeFSRContexts();
 		const uint32_t fullDisplayWidth = static_cast<uint32_t>(splitPerEyeContexts ? screenSize.x / 2.0f : screenSize.x);
 		const uint32_t fullDisplayHeight = static_cast<uint32_t>(screenSize.y);
 		const uint32_t requestedFullRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2.0f : renderSize.x);
@@ -2063,11 +2129,13 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		if (tryRuntimeUpscaler(requestedRuntimeVersion, fullRenderWidth, fullRenderHeight))
 			return true;
 
-		// Try runtime FSR 3.1.5 before giving up on amd_fidelityfx_upscaler_dx12.dll.
+		// Try the runtime FSR3 provider in the upscaler DLL before falling back to the host SDK.
 		if (runtimeFsr4Requested && ShouldUseRuntimeUpscalerForFSR()) {
 			LatchRuntimeFsr4Failure();
 			runtimeFallbackResetDispatchesRemaining = std::max(runtimeFallbackResetDispatchesRemaining, runtimeContextCount);
-			if (tryRuntimeUpscaler(kRuntimeFsr315Version, fullRenderWidth, fullRenderHeight))
+			const uint32_t fallbackRenderWidth = splitPerEyeContexts ? fullRenderWidth : requestedFullRenderWidth;
+			const uint32_t fallbackRenderHeight = splitPerEyeContexts ? fullRenderHeight : requestedFullRenderHeight;
+			if (tryRuntimeUpscaler(Fsr3Version, fallbackRenderWidth, fallbackRenderHeight))
 				return true;
 		}
 

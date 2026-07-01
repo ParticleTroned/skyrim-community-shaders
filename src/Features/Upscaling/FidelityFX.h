@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -31,7 +32,9 @@ class FidelityFX
 {
 public:
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
-
+	static constexpr uint32_t Fsr3Version = FFX_UPSCALER_MAKE_VERSION(FFX_FSR3_VERSION_MAJOR, FFX_FSR3_VERSION_MINOR, FFX_FSR3_VERSION_PATCH);
+	static constexpr std::wstring_view RuntimeUpscalerDllName = L"amd_fidelityfx_upscaler_dx12.dll";
+	static constexpr std::string_view RuntimeUpscalerDllNameUtf8 = "amd_fidelityfx_upscaler_dx12.dll";
 	~FidelityFX();
 
 	HMODULE module = nullptr;
@@ -75,7 +78,11 @@ public:
 	bool IsRuntimeUpscalerProviderMatchingRequestedVersion() const;
 	bool IsRuntimeUpscalerFailureLatched() const;
 	bool IsRuntimeFsr4FailureLatched() const;
-	const char* GetRuntimeUpscalerLastFramePathLabel() const;
+	const std::string& GetRuntimeUpscalerLastFramePathLabel() const;
+	const std::string& GetConfiguredFsrPathLabel() const;
+	const std::string& GetDisplayedFsrPathLabel() const;
+	static const std::string& GetHostFsrSdkLabel();
+	static const std::string& GetRuntimeUpscalerLabel(uint32_t a_version);
 	std::string GetRuntimeUpscalerProviderName() const;
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
 

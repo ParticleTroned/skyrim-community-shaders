@@ -884,8 +884,20 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	std::atomic<uint32_t> submitStageBoundsFallbackStartFrame{ 0 };
+	std::atomic<uint32_t> submitStageBoundsFallbackLastFrame{ 0 };
+	std::atomic<uint32_t> submitStageBoundsFallbackRecoveryFrame{ 0 };
+	std::atomic<uint32_t> submitStageBoundsFallbackMethod{ static_cast<uint32_t>(UpscaleMethod::kNONE) };
+	std::atomic<uint32_t> submitStageBoundsFallbackActualWidth{ 0 };
+	std::atomic<uint32_t> submitStageBoundsFallbackActualHeight{ 0 };
+	std::atomic<uint32_t> submitStageBoundsFallbackExpectedWidth{ 0 };
+	std::atomic<uint32_t> submitStageBoundsFallbackExpectedHeight{ 0 };
+
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
+	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
+	void ClearSubmitStageBoundsFallbackWatchdog();
+	void ServiceSubmitStageBoundsFallbackWatchdog();
 	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame);
 	void ClearSubmitStageFoveatedVendorRetryBackoff();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);

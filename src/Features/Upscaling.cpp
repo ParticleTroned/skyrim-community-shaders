@@ -119,6 +119,8 @@ namespace
 	constexpr uint32_t kVRSubmitStageVendorRelatchCooldownFrames = 30u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchStableFrames = 3u;
+	constexpr uint32_t kVRSubmitStageBoundsFallbackWatchdogFrames = 180u;
+	constexpr uint32_t kVRSubmitStageBoundsFallbackRecoveryBackoffFrames = 300u;
 	constexpr uint32_t kVRSubmitStageFoveatedFailureRetryFrames = 30u;
 	constexpr uint32_t kVRSubmitStageUnderwaterMaskTailFrames = 4u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
@@ -6117,6 +6119,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 	submitStageVendorEyeState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
@@ -6493,6 +6496,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
+	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	if (IsVendorUpscalingMethod(relatchUpscaleMethod) && relatchRenderScaleActive) {
 		ArmSubmitStageVendorResumeCooldown(std::max(state->frameCount, 1u));
@@ -6526,6 +6530,124 @@ void Upscaling::ClearSubmitStageVendorResumeCooldown()
 	submitStageVendorResumeStartFrame.store(0, std::memory_order_release);
 	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
 	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+}
+
+void Upscaling::RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight)
+{
+	const uint32_t currentFrame = std::max(a_currentFrame, 1u);
+	const uint32_t previousLastFrame = submitStageBoundsFallbackLastFrame.load(std::memory_order_acquire);
+	const bool resetSequence =
+		previousLastFrame == 0 ||
+		currentFrame < previousLastFrame ||
+		currentFrame - previousLastFrame > 1u;
+
+	submitStageBoundsFallbackMethod.store(static_cast<uint32_t>(a_upscaleMethod), std::memory_order_release);
+	submitStageBoundsFallbackActualWidth.store(a_actualWidth, std::memory_order_release);
+	submitStageBoundsFallbackActualHeight.store(a_actualHeight, std::memory_order_release);
+	submitStageBoundsFallbackExpectedWidth.store(a_expectedWidth, std::memory_order_release);
+	submitStageBoundsFallbackExpectedHeight.store(a_expectedHeight, std::memory_order_release);
+	if (resetSequence)
+		submitStageBoundsFallbackStartFrame.store(currentFrame, std::memory_order_release);
+	submitStageBoundsFallbackLastFrame.store(currentFrame, std::memory_order_release);
+}
+
+void Upscaling::ClearSubmitStageBoundsFallbackWatchdog()
+{
+	submitStageBoundsFallbackLastFrame.store(0, std::memory_order_release);
+	submitStageBoundsFallbackStartFrame.store(0, std::memory_order_release);
+	submitStageBoundsFallbackRecoveryFrame.store(0, std::memory_order_release);
+	submitStageBoundsFallbackMethod.store(static_cast<uint32_t>(UpscaleMethod::kNONE), std::memory_order_release);
+	submitStageBoundsFallbackActualWidth.store(0, std::memory_order_release);
+	submitStageBoundsFallbackActualHeight.store(0, std::memory_order_release);
+	submitStageBoundsFallbackExpectedWidth.store(0, std::memory_order_release);
+	submitStageBoundsFallbackExpectedHeight.store(0, std::memory_order_release);
+}
+
+void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog()
+{
+	if (!globals::game::isVR)
+		return;
+
+	auto* state = globals::state;
+	if (!state)
+		return;
+
+	const uint32_t lastFrame = submitStageBoundsFallbackLastFrame.load(std::memory_order_acquire);
+	const uint32_t startFrame = submitStageBoundsFallbackStartFrame.load(std::memory_order_acquire);
+	if (startFrame == 0 || lastFrame == 0)
+		return;
+
+	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	if (currentFrame < lastFrame || currentFrame - lastFrame > 2u) {
+		ClearSubmitStageBoundsFallbackWatchdog();
+		return;
+	}
+
+	if (!IsVRRenderScaleModeLatched() || IsSubmitStageDeviceLost()) {
+		ClearSubmitStageBoundsFallbackWatchdog();
+		return;
+	}
+
+	const auto runtimeMethod = GetRuntimeUpscaleMethod();
+	const auto fallbackMethod = static_cast<UpscaleMethod>(submitStageBoundsFallbackMethod.load(std::memory_order_acquire));
+	if (!IsVendorUpscalingMethod(runtimeMethod) || fallbackMethod != runtimeMethod) {
+		ClearSubmitStageBoundsFallbackWatchdog();
+		return;
+	}
+
+	if (HasPendingVRUpscalingTransition() ||
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		HasPendingVRVendorRuntimeReset(*this, runtimeMethod)) {
+		return;
+	}
+
+	if (postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		ShouldDeferVRUpscalingTransitionSettings() ||
+		IsVRLoadingPresentationContextActive(state) ||
+		IsVRMenuScenePresentationBlockActive() ||
+		IsVRMenuPresentationContextActive()) {
+		ClearSubmitStageBoundsFallbackWatchdog();
+		return;
+	}
+
+	if (ElapsedFrames(startFrame, currentFrame) < kVRSubmitStageBoundsFallbackWatchdogFrames)
+		return;
+
+	const uint32_t recoveryFrame = submitStageBoundsFallbackRecoveryFrame.load(std::memory_order_acquire);
+	if (recoveryFrame != 0 &&
+		ElapsedFrames(recoveryFrame, currentFrame) < kVRSubmitStageBoundsFallbackRecoveryBackoffFrames) {
+		return;
+	}
+
+	const uint32_t elapsedFrames = ElapsedFrames(startFrame, currentFrame);
+	const uint32_t actualWidth = submitStageBoundsFallbackActualWidth.load(std::memory_order_acquire);
+	const uint32_t actualHeight = submitStageBoundsFallbackActualHeight.load(std::memory_order_acquire);
+	const uint32_t expectedWidth = submitStageBoundsFallbackExpectedWidth.load(std::memory_order_acquire);
+	const uint32_t expectedHeight = submitStageBoundsFallbackExpectedHeight.load(std::memory_order_acquire);
+
+	submitStageBoundsFallbackRecoveryFrame.store(currentFrame, std::memory_order_release);
+	if (runtimeMethod == UpscaleMethod::kDLSS) {
+		pendingDLSSReset.store(true, std::memory_order_release);
+		pendingDLSSHistoryReset.store(true, std::memory_order_release);
+		pendingFSRReset.store(false, std::memory_order_release);
+	} else if (runtimeMethod == UpscaleMethod::kFSR) {
+		pendingFSRReset.store(true, std::memory_order_release);
+		pendingDLSSReset.store(false, std::memory_order_release);
+		pendingDLSSHistoryReset.store(false, std::memory_order_release);
+	}
+	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageFoveatedVendorRetryBackoff();
+	RequestPerfModeRenderTargetRecreate("persistent VR render-scale scene submit bounds mismatch", VRUpscalingTransitionOrigin::VRAPI);
+
+	logger::warn(
+		"[VRRenderScale] Queued recovery relatch after {} frame(s) of scene submit bounds mismatch. method={} actual={}x{} expected={}x{}",
+		elapsedFrames,
+		magic_enum::enum_name(runtimeMethod),
+		actualWidth,
+		actualHeight,
+		expectedWidth,
+		expectedHeight);
 }
 
 void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame)
@@ -6567,6 +6689,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	submitStageVendorEyeState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
@@ -10875,6 +10998,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	ApplyPendingVRUpscalingTransition(requestedUpscaleMethod);
 	QueueDeferredVRRenderScaleActivationIfReady(*this);
+	ServiceSubmitStageBoundsFallbackWatchdog();
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
 		if (ApplyPendingPerfModeRenderTargetRecreate("ConfigureUpscaling"))
 			return;
@@ -11658,6 +11782,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorEyeState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
@@ -11859,6 +11984,24 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 	const bool submitBoundsPresentationFallback = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
+	const bool submitBoundsFallbackWatchdogRelevant =
+		submitBoundsPresentationFallback &&
+		!submitPresentationContext &&
+		!currentMenuPresentationContext &&
+		!sceneFeatureMenuPauseContext &&
+		!resolutionPlan.knownMenuContextActive &&
+		!resolutionPlan.menuContextActive;
+	if (submitBoundsFallbackWatchdogRelevant) {
+		RecordSubmitStageBoundsFallback(
+			upscaleMethod,
+			currentFrame,
+			sourceRegion.width,
+			sourceRegion.height,
+			sourceEyeWidthIn,
+			sourceEyeHeightIn);
+	} else if (submitBoundsPresentationFallback) {
+		ClearSubmitStageBoundsFallbackWatchdog();
+	}
 	const bool transitionProtectionActive = IsVRTransitionPresentationProtectionActive(*this, state);
 	bool transitionPresentationCooldown = false;
 	const uint32_t vendorResumeFrame = submitStageVendorResumeFrame.load(std::memory_order_acquire);
@@ -11928,6 +12071,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (ElapsedFrames(cooldownStartFrame, currentFrame) >= kVRSubmitStageVendorRelatchMinCooldownFrames &&
 			stableFrames >= kVRSubmitStageVendorRelatchStableFrames) {
 			ClearSubmitStageVendorResumeCooldown();
+			ClearSubmitStageBoundsFallbackWatchdog();
 			transitionPresentationCooldown = false;
 			presentationOnly = computePresentationOnly();
 			logger::debug("[VRRenderScale] Cleared submit-stage vendor resume cooldown after {} stable frames.", stableFrames);
@@ -13385,6 +13529,7 @@ void Upscaling::SetBackendD3DDevice(ID3D11Device* device)
 
 	submitStageDeviceLost.store(false, std::memory_order_release);
 	ClearSubmitStageVendorResumeCooldown();
+	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	streamline.ResetDLSSIdleFences();
 	streamline.slSetD3DDevice(device);

@@ -634,7 +634,8 @@ static void cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 	a_consts.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	a_consts.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	a_consts.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	a_consts.cameraPos = *reinterpret_cast<const sl::float3*>(&globals::game::frameBufferCached.GetCameraPosAdjust());
+	const auto cameraPosAdjust = globals::game::frameBufferCached.GetCameraPosAdjust();
+	a_consts.cameraPos = *reinterpret_cast<const sl::float3*>(&cameraPosAdjust);
 	a_consts.cameraViewToClip = *reinterpret_cast<const sl::float4x4*>(&cameraViewToClip);
 	a_consts.depthInverted = sl::Boolean::eFalse;
 

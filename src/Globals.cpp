@@ -131,7 +131,6 @@ namespace globals
 		REL::Relocation<ID3D11Buffer**> perFrame;
 		REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> currentAccumulator;
 
-		D3D11_MAPPED_SUBRESOURCE* mappedFrameBuffer = nullptr;
 		FrameBufferCache frameBufferCached{};
 	}
 
@@ -237,60 +236,42 @@ namespace globals
 			shaderCache->StopCompilation();
 	}
 
-	/**
- * @brief Caches the current frame buffer data and clears the mapped pointer.
- *
- * Copies the contents of the mapped frame buffer into an internal cache and resets the mapped frame buffer pointer.
- */
-	void CacheFramebuffer()
+	// --- FrameBufferCache: serve per-frame camera data live from the game struct (RendererShadowState).
+	// The constant buffer stored these matrices transposed vs the game's row-major ViewData, and posAdjust
+	// maps 1:1 with w=0 (verified at runtime and confirmed identical in-game), so we transpose / repack. ---
+
+#define CS_CAMERA_MAT(LIVE_EXPR)                                                                   \
+	auto* ss = game::shadowState;                                                                 \
+	return ss ? (ss->GetRuntimeData().cameraData.getEye().LIVE_EXPR) : Matrix::Identity;
+
+	Matrix FrameBufferCache::GetCameraView() const { CS_CAMERA_MAT(viewMat.Transpose()) }
+	Matrix FrameBufferCache::GetCameraProj() const { CS_CAMERA_MAT(projMat.Transpose()) }
+	Matrix FrameBufferCache::GetCameraViewProj() const { CS_CAMERA_MAT(viewProjMat.Transpose()) }
+	Matrix FrameBufferCache::GetCameraViewProjUnjittered() const { CS_CAMERA_MAT(viewProjMatrixUnjittered.Transpose()) }
+	Matrix FrameBufferCache::GetCameraPreviousViewProjUnjittered() const { CS_CAMERA_MAT(previousViewProjMatrixUnjittered.Transpose()) }
+	Matrix FrameBufferCache::GetCameraProjUnjittered() const { CS_CAMERA_MAT(projMatrixUnjittered.Transpose()) }
+	Matrix FrameBufferCache::GetCameraProjUnjitteredInverse() const { CS_CAMERA_MAT(projMatrixUnjittered.Invert().Transpose()) }
+	Matrix FrameBufferCache::GetCameraViewInverse() const { CS_CAMERA_MAT(viewMat.Invert().Transpose()) }
+	Matrix FrameBufferCache::GetCameraViewProjInverse() const { CS_CAMERA_MAT(viewProjMat.Invert().Transpose()) }
+	Matrix FrameBufferCache::GetCameraProjInverse() const { CS_CAMERA_MAT(projMat.Invert().Transpose()) }
+
+#undef CS_CAMERA_MAT
+
+	float4 FrameBufferCache::GetCameraPosAdjust() const
 	{
-		using namespace game;
-		auto frameBuffer = (FrameBuffer*)mappedFrameBuffer->pData;
-		frameBufferCached.data = *frameBuffer;
-		mappedFrameBuffer = nullptr;
+		auto* ss = game::shadowState;
+		if (!ss)
+			return {};
+		auto p = ss->GetRuntimeData().posAdjust.getEye();
+		return { p.x, p.y, p.z, 0.0f };
 	}
 
-	/**
- * @brief Hooks the ID3D11DeviceContext::Map method to track mapping of the per-frame resource.
- *
- * Calls the original Map function and, if the mapped resource matches the current per-frame buffer, stores the mapped subresource pointer for later use.
- *
- * @return HRESULT Result of the original Map call.
- */
-	struct ID3D11DeviceContext_Map
+	float4 FrameBufferCache::GetCameraPreviousPosAdjust() const
 	{
-		static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE* pMappedResource)
-		{
-			HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
-			if (hr == S_OK) {
-				if (*globals::game::perFrame.get() == pResource)
-					globals::game::mappedFrameBuffer = pMappedResource;
-			}
-			return hr;
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	/**
- * @brief Hooked implementation of ID3D11DeviceContext::Unmap that caches the frame buffer if applicable.
- *
- * If the resource being unmapped matches the current per-frame buffer and a mapped frame buffer is present, caches the frame buffer data before calling the original Unmap function.
- */
-	struct ID3D11DeviceContext_Unmap
-	{
-		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
-		{
-			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer) {
-				CacheFramebuffer();
-			}
-			func(This, pResource, Subresource);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	void InstallD3DHooks(ID3D11DeviceContext* a_context)
-	{
-		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
-		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+		auto* ss = game::shadowState;
+		if (!ss)
+			return {};
+		auto p = ss->GetRuntimeData().previousPosAdjust.getEye();
+		return { p.x, p.y, p.z, 0.0f };
 	}
 }

@@ -68,11 +68,6 @@ void OnDataLoaded();
  */
 void OnGameWindowClose();
 
-/**
- * @brief Installs Detours hooks on the device context's Map/Unmap vtable slots to capture per-frame constant buffer data.
- * @param a_context The D3D11 device context to hook.
- */
-void InstallD3DHooks(ID3D11DeviceContext* a_context);
 namespace globals
 {
 	namespace d3d
@@ -124,61 +119,29 @@ namespace globals
 
 	}
 
-	/** @brief GPU constant buffer layout matching Skyrim's per-frame camera data. */
-	struct FrameBuffer
-	{
-		Matrix CameraView;
-		Matrix CameraProj;
-		Matrix CameraViewProj;
-		Matrix CameraViewProjUnjittered;
-		Matrix CameraPreviousViewProjUnjittered;
-		Matrix CameraProjUnjittered;
-		Matrix CameraProjUnjitteredInverse;
-		Matrix CameraViewInverse;
-		Matrix CameraViewProjInverse;
-		Matrix CameraProjInverse;
-		float4 CameraPosAdjust;
-		float4 CameraPreviousPosAdjust;
-		float4 FrameParams;
-		float4 DynamicResolutionParams1;
-		float4 DynamicResolutionParams2;
-	};
-
-	/** @brief Cached snapshot of per-frame camera data, captured between Map/Unmap of the per-frame constant buffer. */
+	/**
+	 * @brief Per-frame camera data read directly from the game (RendererShadowState::cameraData +
+	 *        posAdjust), replacing the old approach of copying Skyrim's per-frame constant buffer via
+	 *        D3D11 Map/Unmap hooks.
+	 *
+	 * The game's ViewData matrices are row-major; the constant buffer stored them transposed (verified at
+	 * runtime, and confirmed identical in-game), and posAdjust maps 1:1 with w=0 — so the accessors
+	 * transpose / repack here. Stateless: every accessor reads the live game struct.
+	 */
 	struct FrameBufferCache
 	{
-		FrameBuffer data;
-
-		/** Gets the camera view matrix. */
-		const Matrix& GetCameraView() const { return data.CameraView; }
-		/** Gets the camera projection matrix. */
-		const Matrix& GetCameraProj() const { return data.CameraProj; }
-		/** Gets the combined camera view-projection matrix. */
-		const Matrix& GetCameraViewProj() const { return data.CameraViewProj; }
-		/** Gets the unjittered camera view-projection matrix. */
-		const Matrix& GetCameraViewProjUnjittered() const { return data.CameraViewProjUnjittered; }
-		/** Gets the previous frame's unjittered view-projection matrix. */
-		const Matrix& GetCameraPreviousViewProjUnjittered() const { return data.CameraPreviousViewProjUnjittered; }
-		/** Gets the unjittered camera projection matrix. */
-		const Matrix& GetCameraProjUnjittered() const { return data.CameraProjUnjittered; }
-		/** Gets the inverse of the unjittered camera projection matrix. */
-		const Matrix& GetCameraProjUnjitteredInverse() const { return data.CameraProjUnjitteredInverse; }
-		/** Gets the inverse camera view matrix. */
-		const Matrix& GetCameraViewInverse() const { return data.CameraViewInverse; }
-		/** Gets the inverse camera view-projection matrix. */
-		const Matrix& GetCameraViewProjInverse() const { return data.CameraViewProjInverse; }
-		/** Gets the inverse camera projection matrix. */
-		const Matrix& GetCameraProjInverse() const { return data.CameraProjInverse; }
-		/** Gets the camera position adjustment vector. */
-		const float4& GetCameraPosAdjust() const { return data.CameraPosAdjust; }
-		/** Gets the previous frame's camera position adjustment vector. */
-		const float4& GetCameraPreviousPosAdjust() const { return data.CameraPreviousPosAdjust; }
-		/** Gets the frame parameters (timer, frame count, etc.). */
-		const float4& GetFrameParams() const { return data.FrameParams; }
-		/** Gets the first set of dynamic resolution parameters. */
-		const float4& GetDynamicResolutionParams1() const { return data.DynamicResolutionParams1; }
-		/** Gets the second set of dynamic resolution parameters. */
-		const float4& GetDynamicResolutionParams2() const { return data.DynamicResolutionParams2; }
+		Matrix GetCameraView() const;
+		Matrix GetCameraProj() const;
+		Matrix GetCameraViewProj() const;
+		Matrix GetCameraViewProjUnjittered() const;
+		Matrix GetCameraPreviousViewProjUnjittered() const;
+		Matrix GetCameraProjUnjittered() const;
+		Matrix GetCameraProjUnjitteredInverse() const;
+		Matrix GetCameraViewInverse() const;
+		Matrix GetCameraViewProjInverse() const;
+		Matrix GetCameraProjInverse() const;
+		float4 GetCameraPosAdjust() const;
+		float4 GetCameraPreviousPosAdjust() const;
 	};
 
 	namespace game
@@ -214,7 +177,6 @@ namespace globals
 		extern REL::Relocation<ID3D11Buffer**> perFrame;
 		extern REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> currentAccumulator;
 
-		extern D3D11_MAPPED_SUBRESOURCE* mappedFrameBuffer;
 		extern FrameBufferCache frameBufferCached;
 	}
 
@@ -244,9 +206,4 @@ namespace globals
 	void OnDataLoaded();
 	/** @brief Signals shader compilation to stop when the game window is closing. */
 	void OnGameWindowClose();
-	/**
-	 * @brief Installs Detours hooks on the device context's Map/Unmap vtable slots to capture per-frame constant buffer data.
-	 * @param a_context The D3D11 device context to hook.
-	 */
-	void InstallD3DHooks(ID3D11DeviceContext* a_context);
 }

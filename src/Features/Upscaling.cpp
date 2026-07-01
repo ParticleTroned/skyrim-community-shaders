@@ -75,19 +75,18 @@ decltype(&D3D11CreateDeviceAndSwapChain) ptrD3D11CreateDeviceAndSwapChainUpscali
 
 namespace
 {
-	// Keep transition diagnostics behind one switch. They stay at info while the
-	// VR transition artifact is being captured; change VR_TRANSITION_DIAG_LOG_LEVEL
-	// later to move all callsites together.
+	// Keep transition diagnostics behind one switch. They default to debug so
+	// normal info logging does not pay per-frame diagnostic formatting costs.
 #ifndef VR_TRANSITION_DIAG_ENABLED
 #define VR_TRANSITION_DIAG_ENABLED 1
 #endif
 #ifndef VR_TRANSITION_DIAG_LOG_LEVEL
-#define VR_TRANSITION_DIAG_LOG_LEVEL info
+#define VR_TRANSITION_DIAG_LOG_LEVEL debug
 #endif
 #if VR_TRANSITION_DIAG_ENABLED
 #define VR_TRANSITION_DIAG_LOG(...)                                      \
 	do {                                                                 \
-		if (globals::game::isVR)                                         \
+		if (ShouldLogVRTransitionDiagnostics())                          \
 			logger::VR_TRANSITION_DIAG_LOG_LEVEL(__VA_ARGS__);           \
 	} while (false)
 #else
@@ -1684,6 +1683,16 @@ namespace
 		return a_value ? "yes" : "no";
 	}
 
+	bool ShouldLogVRTransitionDiagnostics()
+	{
+#if VR_TRANSITION_DIAG_ENABLED
+		auto* state = globals::state;
+		return globals::game::isVR && state && state->GetLogLevel() <= spdlog::level::VR_TRANSITION_DIAG_LOG_LEVEL;
+#else
+		return false;
+#endif
+	}
+
 	uint32_t GetCurrentFrameForLog()
 	{
 		const auto* state = globals::state;
@@ -1715,7 +1724,7 @@ namespace
 		if (queuedFrame == 0)
 			return;
 
-		logger::info(
+		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync still pending ({}): queuedFrame={}, frame={}.",
 			a_reason && a_reason[0] != '\0' ? a_reason : "unspecified reason",
 			queuedFrame,
@@ -1736,7 +1745,7 @@ namespace
 			return;
 
 		a_upscaling.pendingVRFpsStabilizerSyncLastWaitLogFrame.store(logFrame, std::memory_order_release);
-		logger::info(
+		logger::debug(
 			"[Upscaling] VR FPS Stabilizer Sync waiting for {}: queuedFrame={}, frame={}, loadingMenu={}, inWorld={}.",
 			a_reason && a_reason[0] != '\0' ? a_reason : "world-ready state",
 			queuedFrame,
@@ -1748,6 +1757,10 @@ namespace
 	template <class Fn>
 	bool LogVRTransitionDiagnosticOnce(bool& a_logged, Fn&& a_log)
 	{
+		if (!ShouldLogVRTransitionDiagnostics()) {
+			a_logged = false;
+			return false;
+		}
 		if (a_logged)
 			return false;
 
@@ -2082,14 +2095,26 @@ namespace
 
 	void LogVRTransitionDiagnostics(const Upscaling& a_upscaling, const char* a_event = nullptr, bool a_force = false)
 	{
+		static bool diagnosticsActive = false;
+		auto deactivateDiagnostics = [&]() {
+			if (!diagnosticsActive)
+				return;
+
+			g_vrTransitionDiagnostics = {};
+			diagnosticsActive = false;
+		};
 #if !VR_TRANSITION_DIAG_ENABLED
 		(void)a_upscaling;
 		(void)a_event;
 		(void)a_force;
+		deactivateDiagnostics();
 		return;
 #else
-		if (!globals::game::isVR)
+		if (!ShouldLogVRTransitionDiagnostics()) {
+			deactivateDiagnostics();
 			return;
+		}
+		diagnosticsActive = true;
 
 		const auto snapshot = BuildVRTransitionDiagnosticSnapshot(a_upscaling);
 		const bool interesting = IsVRTransitionSnapshotInteresting(snapshot);
@@ -9612,6 +9637,18 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
 	RefreshRuntimeResolutionPlan();
+	auto finishResourceConfiguration = [&](UpscaleMethod a_method) {
+		CheckResources(a_method);
+		RefreshRuntimeResolutionPlan();
+	};
+	auto prepareFullResolutionVendorPresentation = [&]() {
+		resolutionScale = { 1.0f, 1.0f };
+		jitter = { 0.0f, 0.0f };
+		a_viewport->projectionPosScaleX = 0.0f;
+		a_viewport->projectionPosScaleY = 0.0f;
+		PrepareFullResolutionPostProcessing();
+		finishResourceConfiguration(upscaleMethod);
+	};
 	if (runtimeResolutionPlan.owner == ResolutionOwner::PerfMode) {
 		const int renderWidth = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.x));
 		const int renderHeight = std::max(1, static_cast<int>(runtimeResolutionPlan.engineRenderSize.y));
@@ -9624,42 +9661,19 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		a_viewport->projectionPosScaleX = -jitter.x / renderWidth;
 		a_viewport->projectionPosScaleY = 2.0f * jitter.y / renderHeight;
 
-		auto& runtimeData = a_viewport->GetRuntimeData();
-		SetDynamicResolutionEnabledForUpscaling(false);
-		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionLock = 1;
-		dynamicResolutionWidthRatio = 1.0f;
-		dynamicResolutionHeightRatio = 1.0f;
-		UpdateCameraData();
-
-		CheckResources(runtimeResolutionPlan.upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		ApplyFullResolutionDynamicResolutionState(a_viewport);
+		finishResourceConfiguration(runtimeResolutionPlan.upscaleMethod);
 		return;
 	}
 	if (globals::game::isVR && vendorUpscalingMethod && IsKnownGameMenuContextActive() && !IsSubmitStageMenuPresentationContextActive()) {
-		resolutionScale = { 1.0f, 1.0f };
-		jitter = { 0.0f, 0.0f };
-		a_viewport->projectionPosScaleX = 0.0f;
-		a_viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		prepareFullResolutionVendorPresentation();
 		return;
 	}
 	if (globals::game::isVR &&
 		vendorUpscalingMethod &&
 		IsVRTransitionPresentationProtectionActive(*this, state) &&
 		IsVRLoadingPresentationContextActive(state)) {
-		resolutionScale = { 1.0f, 1.0f };
-		jitter = { 0.0f, 0.0f };
-		a_viewport->projectionPosScaleX = 0.0f;
-		a_viewport->projectionPosScaleY = 0.0f;
-		PrepareFullResolutionPostProcessing();
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		prepareFullResolutionVendorPresentation();
 		return;
 	}
 
@@ -9698,37 +9712,48 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	if (!vendorUpscalingMethod) {
 		if (dynamicResolutionWidthRatio != 1.0f || dynamicResolutionHeightRatio != 1.0f) {
 			if (globals::game::isVR) {
-				SetDynamicResolutionEnabledForUpscaling(false);
-				runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-				runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-				runtimeData.dynamicResolutionWidthRatio = 1.0f;
-				runtimeData.dynamicResolutionHeightRatio = 1.0f;
-				runtimeData.dynamicResolutionLock = 1;
+				ApplyFullResolutionDynamicResolutionState(a_viewport);
 			} else {
 				runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
 				runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
 				runtimeData.dynamicResolutionWidthRatio = 1.0f;
 				runtimeData.dynamicResolutionHeightRatio = 1.0f;
 				runtimeData.dynamicResolutionLock = 1;
+				dynamicResolutionWidthRatio = runtimeData.dynamicResolutionWidthRatio;
+				dynamicResolutionHeightRatio = runtimeData.dynamicResolutionHeightRatio;
+				UpdateCameraData();
 			}
-			dynamicResolutionWidthRatio = runtimeData.dynamicResolutionWidthRatio;
-			dynamicResolutionHeightRatio = runtimeData.dynamicResolutionHeightRatio;
-			UpdateCameraData();
 		}
-		CheckResources(upscaleMethod);
-		RefreshRuntimeResolutionPlan();
+		finishResourceConfiguration(upscaleMethod);
 		return;
 	}
 
 	ApplyDynamicResolutionState(a_viewport);
 
 	// Resource creation uses the runtime dynamic-resolution ratios via ConvertToDynamic.
-	CheckResources(upscaleMethod);
-	RefreshRuntimeResolutionPlan();
+	finishResourceConfiguration(upscaleMethod);
 
 	// Disable dynamic resolution unless the game explicitly enables it.
 	if (!globals::game::isVR)
 		runtimeData.dynamicResolutionLock = 1;
+}
+
+void Upscaling::ApplyFullResolutionDynamicResolutionState(RE::BSGraphics::State* a_viewport)
+{
+	if (!a_viewport)
+		return;
+
+	auto& runtimeData = a_viewport->GetRuntimeData();
+	if (globals::game::isVR)
+		SetDynamicResolutionEnabledForUpscaling(false);
+	runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
+	runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
+	runtimeData.dynamicResolutionWidthRatio = 1.0f;
+	runtimeData.dynamicResolutionHeightRatio = 1.0f;
+	runtimeData.dynamicResolutionLock = 1;
+	dynamicResolutionWidthRatio = 1.0f;
+	dynamicResolutionHeightRatio = 1.0f;
+	UpdateCameraData();
 }
 
 void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
@@ -9738,15 +9763,7 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
 	if (IsPerfModeActive()) {
-		SetDynamicResolutionEnabledForUpscaling(false);
-		runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionWidthRatio = 1.0f;
-		runtimeData.dynamicResolutionHeightRatio = 1.0f;
-		runtimeData.dynamicResolutionLock = 1;
-		dynamicResolutionWidthRatio = 1.0f;
-		dynamicResolutionHeightRatio = 1.0f;
-		UpdateCameraData();
+		ApplyFullResolutionDynamicResolutionState(a_viewport);
 		return;
 	}
 
@@ -9757,8 +9774,8 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	const bool shouldUnlockDynamicResolution = globals::game::isVR && ShouldUnlockDynamicResolutionForUpscaling(upscaleMethod, resolutionScale);
 
 	if (globals::game::isVR) {
-		SetDynamicResolutionEnabledForUpscaling(shouldUnlockDynamicResolution);
 		if (shouldUnlockDynamicResolution) {
+			SetDynamicResolutionEnabledForUpscaling(true);
 			runtimeData.dynamicResolutionPreviousWidthRatio = runtimeData.dynamicResolutionWidthRatio;
 			runtimeData.dynamicResolutionPreviousHeightRatio = runtimeData.dynamicResolutionHeightRatio;
 			runtimeData.dynamicResolutionWidthRatio = resolutionScale.x;
@@ -9767,13 +9784,8 @@ void Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 			dynamicResolutionWidthRatio = resolutionScale.x;
 			dynamicResolutionHeightRatio = resolutionScale.y;
 		} else {
-			runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-			runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-			runtimeData.dynamicResolutionWidthRatio = 1.0f;
-			runtimeData.dynamicResolutionHeightRatio = 1.0f;
-			runtimeData.dynamicResolutionLock = 1;
-			dynamicResolutionWidthRatio = 1.0f;
-			dynamicResolutionHeightRatio = 1.0f;
+			ApplyFullResolutionDynamicResolutionState(a_viewport);
+			return;
 		}
 		UpdateCameraData();
 		return;
@@ -9795,17 +9807,7 @@ void Upscaling::PrepareFullResolutionPostProcessing()
 	if (!viewport)
 		return;
 
-	auto& runtimeData = viewport->GetRuntimeData();
-	if (globals::game::isVR)
-		SetDynamicResolutionEnabledForUpscaling(false);
-	runtimeData.dynamicResolutionPreviousWidthRatio = 1.0f;
-	runtimeData.dynamicResolutionPreviousHeightRatio = 1.0f;
-	runtimeData.dynamicResolutionWidthRatio = 1.0f;
-	runtimeData.dynamicResolutionHeightRatio = 1.0f;
-	runtimeData.dynamicResolutionLock = 1;
-	dynamicResolutionWidthRatio = 1.0f;
-	dynamicResolutionHeightRatio = 1.0f;
-	UpdateCameraData();
+	ApplyFullResolutionDynamicResolutionState(viewport);
 }
 
 void Upscaling::SetupResources()
@@ -10250,6 +10252,9 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 void Upscaling::LogVRCompositorSubmitPath(vr::EVREye a_eye, const char* a_path, const vr::Texture_t* a_inputTexture,
 	const vr::VRTextureBounds_t* a_inputBounds, const vr::Texture_t* a_outputTexture, const vr::VRTextureBounds_t* a_outputBounds, vr::EVRSubmitFlags a_submitFlags) const
 {
+	if (!ShouldLogVRTransitionDiagnostics())
+		return;
+
 	VRTransitionDiagnosticSnapshot snapshot{};
 	if (!TryBuildVRSubmitPathDiagnosticSnapshot(*this, snapshot))
 		return;

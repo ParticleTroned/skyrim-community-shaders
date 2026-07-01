@@ -556,6 +556,7 @@ public:
 		Upscaling* upscaling = nullptr;
 	};
 
+	void ApplyFullResolutionDynamicResolutionState(RE::BSGraphics::State* a_state);
 	void ApplyDynamicResolutionState(RE::BSGraphics::State* a_state);
 	void PrepareFullResolutionPostProcessing();
 	bool ResetVRSubmitStageState(bool a_destroyDLSSResources = true);

@@ -179,7 +179,7 @@ struct AdaptiveBalance : Feature
 	static const char* GetProfileName(Profile a_profile);
 	void DrawExteriorTimeSettings();
 	void DrawProfile(Profile a_profile);
-	void DrawProfileSettings(ProfileSettings& a_profile);
+	void DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle = "Profile Values");
 	void SetAdvancedControlsOpen(bool a_open);
 	void DrawGlobalPresetControls();
 	void DrawLocationOverrides();

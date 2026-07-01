@@ -2824,12 +2824,6 @@ namespace
 		return menu && menu->initialized && menu->ShouldSwallowInput();
 	}
 
-	bool IsVRSceneFeatureMenuPauseContextActive()
-	{
-		return globals::game::isVR &&
-		       (IsVRMenuPresentationContextActive() || IsCommunityShadersMenuOpen());
-	}
-
 	bool IsExplicitVRMenuPresentationContextActive()
 	{
 		return globals::game::isVR && IsKnownGameMenuContextActive();
@@ -11870,7 +11864,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool submitPresentationContext =
 		loadingPresentationContext ||
 		presentationRenderTarget;
-	const bool sceneFeatureMenuPauseContext = IsVRSceneFeatureMenuPauseContextActive();
+	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
+	const bool sceneFeatureMenuPauseContext =
+		globals::game::isVR &&
+		(currentMenuPresentationContext || communityShadersMenuOpen);
 	const bool menuTextProtectionContext =
 		resolutionPlan.knownMenuContextActive ||
 		resolutionPlan.menuContextActive ||
@@ -12088,9 +12085,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 	}
 
+	const bool foveatedMaskVisualizationPreview =
+		settings.foveatedPeripheryMaskVisualization &&
+		communityShadersMenuOpen &&
+		!currentMenuPresentationContext &&
+		!submitPresentationContext &&
+		!resolutionPlan.knownMenuContextActive &&
+		!resolutionPlan.menuContextActive;
 	const bool foveatedRequested =
 		!presentationOnly &&
-		!sceneFeatureMenuPauseContext &&
+		(!sceneFeatureMenuPauseContext || foveatedMaskVisualizationPreview) &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!foveatedTransitionBypass &&
 		!foveatedFailureBackoffActive;

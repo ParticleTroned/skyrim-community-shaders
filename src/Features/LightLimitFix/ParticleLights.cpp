@@ -3,8 +3,25 @@
 #include "Utils/StringUtils.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <exception>
 #include <numbers>
+
+namespace
+{
+	constexpr float kFlickerSpeedMax = 100.0f;
+	constexpr float kFlickerIntensityMax = 100.0f;
+	constexpr float kFlickerMovementMax = 4096.0f;
+
+	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
+	{
+		if (!std::isfinite(a_value)) {
+			return a_default;
+		}
+		return std::clamp(a_value, a_min, a_max);
+	}
+}
 
 void ParticleLights::GetConfigs()
 {
@@ -48,6 +65,14 @@ void ParticleLights::GetConfigs()
 			data.colorMult.blue = (float)ini.GetDoubleValue("Light", "ColorMultBlue", 1.0);
 			data.radiusMult = (float)ini.GetDoubleValue("Light", "RadiusMult", 1.0);
 			data.saturationMult = (float)ini.GetDoubleValue("Light", "SaturationMult", 1.0);
+			data.flicker = ini.GetBoolValue("Light", "Flicker", false);
+			data.flickerSpeed = ClampFiniteOrDefault((float)ini.GetDoubleValue("Light", "FlickerSpeed", 1.0), 0.0f, kFlickerSpeedMax, 1.0f);
+			data.flickerIntensity = ClampFiniteOrDefault((float)ini.GetDoubleValue("Light", "FlickerIntensity", 0.0), 0.0f, kFlickerIntensityMax, 0.0f);
+			data.flickerMovement = ClampFiniteOrDefault(
+				(float)ini.GetDoubleValue("Light", "FlickerMovement", 0.0) / std::numbers::pi_v<float>,
+				0.0f,
+				kFlickerMovementMax,
+				0.0f);
 
 			const auto filename = Util::GetLowercaseStem(path, ".ini");
 			if (!filename) {

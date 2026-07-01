@@ -48,6 +48,19 @@ public:
 		 * @param p Percentile in [0, 100].
 		 */
 		float GetPercentile(float p) const;
+
+		/**
+		 * @brief Computes two interpolated percentiles from a single buffer copy.
+		 *
+		 * Equivalent to two GetPercentile() calls but ~4x cheaper: it copies the samples once and
+		 * uses std::nth_element (O(n) partial sort) to place only the order statistics the two
+		 * percentiles need, instead of a full std::sort per call. CollectResults needs p95+p99 for
+		 * both the GPU and CPU histories every frame, and the per-call full sort was the single
+		 * biggest Community Shaders cost on the render thread.
+		 * @param pLow,pHigh Percentiles in [0, 100].
+		 * @param outLow,outHigh Receive the interpolated results.
+		 */
+		void GetPercentiles(float pLow, float pHigh, float& outLow, float& outHigh) const;
 	};
 
 	/** @brief Snapshot of GPU/CPU timing data for a single named pass. */

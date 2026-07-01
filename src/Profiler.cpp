@@ -31,6 +31,42 @@ float Profiler::RollingHistory::GetPercentile(float p) const
 	return sorted[lo] * (1.0f - frac) + sorted[hi] * frac;
 }
 
+void Profiler::RollingHistory::GetPercentiles(float pLow, float pHigh, float& outLow, float& outHigh) const
+{
+	if (count == 0) {
+		outLow = outHigh = lastMs;
+		return;
+	}
+
+	thread_local std::vector<float> buf;
+	buf.resize(count);
+	for (uint32_t i = 0; i < count; i++)
+		buf[i] = history[i];
+
+	// Interpolation endpoints (matches GetPercentile exactly).
+	const auto endpoints = [this](float p, uint32_t& lo, uint32_t& hi, float& frac) {
+		const float idx = (p / 100.0f) * static_cast<float>(count - 1);
+		lo = static_cast<uint32_t>(idx);
+		hi = std::min(lo + 1, count - 1);
+		frac = idx - static_cast<float>(lo);
+	};
+	uint32_t loL, hiL, loH, hiH;
+	float fracL, fracH;
+	endpoints(pLow, loL, hiL, fracL);
+	endpoints(pHigh, loH, hiH, fracH);
+
+	// All four order statistics we read are >= the lowest of them. Partition once so [lowest, count)
+	// holds the largest (count - lowest) samples (O(n)), then fully sort only that tail. For p95/p99
+	// the tail is a handful of elements, so this is far cheaper than a full sort — and cheaper than
+	// one nth_element per index, whose per-call setup dominates at these small sizes.
+	const uint32_t lowest = std::min(std::min(loL, hiL), std::min(loH, hiH));
+	std::nth_element(buf.begin(), buf.begin() + lowest, buf.end());
+	std::sort(buf.begin() + lowest, buf.end());
+
+	outLow = buf[loL] * (1.0f - fracL) + buf[hiL] * fracL;
+	outHigh = buf[loH] * (1.0f - fracH) + buf[hiH] * fracH;
+}
+
 void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 {
 	Release();
@@ -222,11 +258,9 @@ void Profiler::CollectResults()
 			result.cpuTimeMs = known.cpu.lastMs;
 		}
 		result.avgMs = known.gpu.GetAverage();
-		result.p95Ms = known.gpu.GetPercentile(95.0f);
-		result.p99Ms = known.gpu.GetPercentile(99.0f);
+		known.gpu.GetPercentiles(95.0f, 99.0f, result.p95Ms, result.p99Ms);
 		result.cpuAvgMs = known.cpu.GetAverage();
-		result.cpuP95Ms = known.cpu.GetPercentile(95.0f);
-		result.cpuP99Ms = known.cpu.GetPercentile(99.0f);
+		known.cpu.GetPercentiles(95.0f, 99.0f, result.cpuP95Ms, result.cpuP99Ms);
 		result.valid = true;
 		result.historyBuffer = known.gpu.history;
 		result.historyHead = known.gpu.head;

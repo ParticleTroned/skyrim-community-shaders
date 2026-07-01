@@ -2523,6 +2523,28 @@ namespace SIE
 			});
 	}
 
+	static bool AreRestorablePreviousCacheMismatches(const std::vector<Util::CacheInvalidation::CacheMismatch>& mismatches)
+	{
+		return !mismatches.empty() && OnlyEnabledFlips(mismatches) && !HasMissingOrFailedFeature(mismatches);
+	}
+
+	bool ShaderCache::SetPreviousCacheRestoreCandidate(std::vector<CacheMismatch> mismatches)
+	{
+		if (!AreRestorablePreviousCacheMismatches(mismatches) || !HasDiskCacheInfo(PreviousDiskCachePath()))
+			return false;
+
+		CSimpleIniA previousInfo;
+		if (!LoadDiskCacheInfo(PreviousDiskCachePath(), previousInfo))
+			return false;
+
+		{
+			std::scoped_lock lock{ cacheStateMutex };
+			previousCacheMismatches = std::move(mismatches);
+		}
+		previousDiskCacheAvailable.store(true, std::memory_order_relaxed);
+		return true;
+	}
+
 	static bool PartialInvalidation(const std::vector<std::string>& defines)
 	{
 		size_t deleted = 0;
@@ -2604,7 +2626,7 @@ namespace SIE
 
 		RefreshPreviousDiskCacheInfo();
 		logger::info("Saved previous shader cache for feature rollback");
-		return HasPreviousDiskCache();
+		return true;
 	}
 
 	void ShaderCache::RefreshPreviousDiskCacheInfo()
@@ -2708,8 +2730,18 @@ namespace SIE
 			if (BackupActiveDiskCache()) {
 				diskCacheHeld.store(false, std::memory_order_relaxed);
 				featureSetCacheBackedUp.store(true, std::memory_order_relaxed);
+				// We just moved the pre-change active cache into the rollback slot.
+				// In this enabled-flip-only path, that cache is the valid restore target
+				// for the previous boot configuration even if the immediate compatibility
+				// refresh has not derived the UI state yet.
+				const bool previousRestoreAvailable =
+					SetPreviousCacheRestoreCandidate(currentMismatches);
 				WriteDiskCacheInfo();
-				logger::info("Feature set changed: compiling a new active disk cache; previous cache is available for restore");
+				if (previousRestoreAvailable) {
+					logger::info("Feature set changed: compiling a new active disk cache; previous cache is available for restore");
+				} else {
+					logger::info("Feature set changed: compiling a new active disk cache; previous cache was saved but is not currently available for restore");
+				}
 			} else {
 				diskCacheHeld.store(true, std::memory_order_relaxed);
 				featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
@@ -2736,13 +2768,17 @@ namespace SIE
 		if (!featureSetChanged.load(std::memory_order_relaxed))
 			return;
 
+		const bool committedFeatureSetBackup = featureSetCacheBackedUp.load(std::memory_order_relaxed);
+		std::vector<CacheMismatch> committedPreviousCacheMismatches;
 		std::vector<std::string> heldDefines;
 		{
 			std::scoped_lock lock{ cacheStateMutex };
+			if (committedFeatureSetBackup)
+				committedPreviousCacheMismatches = cacheMismatches;
 			heldDefines = heldMismatchDefines;
 		}
 
-		if (!featureSetCacheBackedUp.load(std::memory_order_relaxed) && !PartialInvalidation(heldDefines))
+		if (!committedFeatureSetBackup && !PartialInvalidation(heldDefines))
 			DeleteActiveDiskCache();
 
 		diskCacheHeld.store(false, std::memory_order_relaxed);
@@ -2789,6 +2825,10 @@ namespace SIE
 		featureSetRevertPending.store(false, std::memory_order_relaxed);
 		featureSetCacheBackedUp.store(false, std::memory_order_relaxed);
 		RefreshPreviousDiskCacheInfo();
+		if (committedFeatureSetBackup && !previousDiskCacheAvailable.load(std::memory_order_relaxed) &&
+			SetPreviousCacheRestoreCandidate(std::move(committedPreviousCacheMismatches))) {
+			logger::info("Previous shader cache restore retained from feature-change backup");
+		}
 		logger::info("Feature set change committed: rebuilt disk cache for the current feature set");
 	}
 
@@ -2799,7 +2839,18 @@ namespace SIE
 			return false;
 		}
 
+		const bool hadPreviousRestoreCandidate = previousDiskCacheAvailable.load(std::memory_order_relaxed);
+		std::vector<CacheMismatch> retainedPreviousCacheMismatches;
+		if (hadPreviousRestoreCandidate) {
+			std::scoped_lock lock{ cacheStateMutex };
+			retainedPreviousCacheMismatches = previousCacheMismatches;
+		}
+
 		RefreshPreviousDiskCacheInfo();
+		if (!previousDiskCacheAvailable.load(std::memory_order_relaxed) && hadPreviousRestoreCandidate &&
+			SetPreviousCacheRestoreCandidate(std::move(retainedPreviousCacheMismatches))) {
+			logger::info("Previous shader cache restore retained from feature-change backup");
+		}
 		if (!HasPreviousDiskCache()) {
 			logger::warn("Cannot restore previous shader cache: no compatible previous cache is available");
 			return false;

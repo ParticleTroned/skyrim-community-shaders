@@ -749,6 +749,7 @@ namespace SIE
 		bool BackupActiveDiskCache();
 		void DeleteActiveDiskCache();
 		void RefreshPreviousDiskCacheInfo();
+		bool SetPreviousCacheRestoreCandidate(std::vector<CacheMismatch> mismatches);
 
 		~ShaderCache();
 

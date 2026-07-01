@@ -272,22 +272,22 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
 		if (shaderCache->HasFeatureSetRevertPending()) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
-				"Previous shader cache restored for next launch.\n"
+				"Previous cache restored.\n"
 				"Restart to use it.");
 		} else if (shaderCache->HasFeatureSetChanges()) {
 			if (shaderCache->HasFeatureSetCacheBackup()) {
 				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
-					"Feature changes detected. Compiling a new disk cache for this setup.\n"
-					"Previous cache saved. To go back, open CS menu > Home tab > Shader Cache Changes after compilation finishes.");
+					"Feature setup changed. Building a new shader cache for this setup.\n"
+					"Previous cache saved.");
 			} else {
 				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
-					"Feature changes detected. Compiling memory-only until CS can rebuild the disk cache.\n"
-					"Previous cache restore is unavailable because CS could not save a rollback copy.");
+					"Feature setup changed. Building shaders in memory until the cache can be rebuilt.\n"
+					"Previous cache is not available for restore.");
 			}
 		} else if (shaderCache->IsDiskCacheHeld()) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
-				"Saved shader cache does not match: a feature is missing or failed to load.\n"
-				"Open CS menu > Home tab > Shader Cache Changes.");
+				"Saved shader cache cannot be used.\n"
+				"A required feature is missing or failed to load.");
 		}
 		if (FeatureIssues::HasFeatureIssues()) {
 			const size_t issueCount = FeatureIssues::GetFeatureIssues().size();

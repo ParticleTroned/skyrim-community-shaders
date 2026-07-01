@@ -82,6 +82,12 @@ else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
+set(CS_PL_FORK_VERSION
+    "PL3.15-VR"
+    CACHE STRING
+    "Display version label for the Particle Lights fork."
+)
+message("\tParticle Lights fork version: ${CS_PL_FORK_VERSION}")
 
 # #######################################################################################################################
 # # Add CMake features

@@ -16,6 +16,9 @@ namespace Plugin
 	};
 
 	inline constexpr auto NAME = "@PROJECT_NAME@"sv;
+	inline constexpr auto DISPLAY_NAME = "CS Particle Lights"sv;
+	inline constexpr auto FORK_VERSION = "@CS_PL_FORK_VERSION@"sv;
+	inline constexpr auto MENU_TITLE = "CS Particle Lights @CS_PL_FORK_VERSION@"sv;
 
 	/// Full git describe string, e.g. "v1.4.11", "v1.4.11-3-gabcdef1", "v1.4.11-3-gabcdef1-dirty".
 	/// Matches "v{VERSION}" exactly on a clean tagged release build.

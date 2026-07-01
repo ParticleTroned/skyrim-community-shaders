@@ -34,6 +34,7 @@
 #include "Menu/OverlayRenderer.h"
 #include "Menu/SettingsTabRenderer.h"
 #include "Menu/ThemeManager.h"
+#include "Plugin.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -771,8 +772,7 @@ void Menu::DrawSettings()
 	}
 	const ImGuiID mainDockSpaceId = ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
 
-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto baseTitle = std::format("CS {} Particle Lights (Unofficial Fork)", versionStr);
+	auto baseTitle = std::string{ Plugin::MENU_TITLE };
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
 	auto title = std::format("{}###CommunityShaders", baseTitle);
 

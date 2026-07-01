@@ -6,6 +6,7 @@
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Plugin.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -101,8 +102,6 @@ void HomePageRenderer::RenderWelcomeSection()
 	auto menu = Menu::GetSingleton();
 	const auto& theme = menu->GetTheme();
 	const ImVec4 titleColor = theme.StatusPalette.InfoColor;
-	ImVec4 versionColor = theme.StatusPalette.InfoColor;
-	versionColor.w *= 0.86f;
 	const ImVec4 forkNoticeColor = theme.Palette.Text;
 
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 8.0f * scale));
@@ -128,28 +127,28 @@ void HomePageRenderer::RenderWelcomeSection()
 	const float titleBlockY = ImGui::GetCursorPosY();
 	const float titleBlockHeight = ImGui::GetTextLineHeightWithSpacing();
 	const float baseLineHeightWithSpacing = titleBlockHeight / TITLE_FONT_SCALE;
-	const char* forkTitle = "CS Particle Lights Fork";
-	const char* forkVersion = "PL3.15-VR";
+	const char* forkTitle = Plugin::DISPLAY_NAME.data();
+	const char* forkVersion = Plugin::FORK_VERSION.data();
 	const float titleLineGap = 2.0f * scale;
 	const float titleAreaBottomY = titleBlockY + titleBlockHeight + ImGui::GetStyle().ItemSpacing.y +
 	                               baseLineHeightWithSpacing * FORK_NOTICE_OFFSET_LINES;
 
-	ImGui::SetWindowFontScale(TITLE_FORK_FONT_SCALE);
+	ImGui::SetWindowFontScale(TITLE_PRIMARY_LINE_FONT_SCALE);
 	const float titleLineHeight = ImGui::GetTextLineHeight();
 
-	ImGui::SetWindowFontScale(TITLE_VERSION_FONT_SCALE);
+	ImGui::SetWindowFontScale(TITLE_SECONDARY_LINE_FONT_SCALE);
 	const float versionLineHeight = ImGui::GetTextLineHeight();
 
 	const float titleGroupHeight = titleLineHeight + titleLineGap + versionLineHeight;
 	const float titleGroupY = titleBlockY + std::max(0.0f, (titleAreaBottomY - titleBlockY - titleGroupHeight) * 0.5f);
 
-	ImGui::SetWindowFontScale(TITLE_FORK_FONT_SCALE);
+	ImGui::SetWindowFontScale(TITLE_PRIMARY_LINE_FONT_SCALE);
 	ImGui::SetCursorPosY(titleGroupY);
 	DrawCenteredTextColored(forkTitle, windowSize.x, titleColor);
 
-	ImGui::SetWindowFontScale(TITLE_VERSION_FONT_SCALE);
+	ImGui::SetWindowFontScale(TITLE_SECONDARY_LINE_FONT_SCALE);
 	ImGui::SetCursorPosY(titleGroupY + titleLineHeight + titleLineGap);
-	DrawCenteredTextColored(forkVersion, windowSize.x, versionColor);
+	DrawCenteredTextColored(forkVersion, windowSize.x, titleColor);
 
 	// Only pop font if we pushed one
 	if (titleFont) {

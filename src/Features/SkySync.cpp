@@ -380,6 +380,36 @@ void SkySync::SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell)
 	sky->root->Update(updateData);
 }
 
+float SkySync::GetPlayerAltitude()
+{
+	const auto player = RE::PlayerCharacter::GetSingleton();
+	if (!player)
+		return 0.0f;
+
+	const auto worldSpace = player->GetWorldspace();
+	return worldSpace ? player->GetPositionZ() - worldSpace->GetDefaultWaterHeight() : 0.0f;
+}
+
+RE::NiPoint3 SkySync::GetApparentDirection(const RE::NiPoint3& dir, const float altitude)
+{
+	const float dipAngle = -std::atan(altitude / RenderDistance);
+	float sinPhi, cosPhi;
+	DirectX::XMScalarSinCosEst(&sinPhi, &cosPhi, dipAngle);
+
+	const auto rotationAxis = dir.UnitCross({ 0.0f, 0.0f, 1.0f });
+	const float axisDotDir = rotationAxis.Dot(dir);
+	const auto axisCrossDir = rotationAxis.Cross(dir);
+	const float oneMinusCosPhi = 1.0f - cosPhi;
+
+	const float x = dir.x * cosPhi + axisCrossDir.x * sinPhi + rotationAxis.x * (axisDotDir * oneMinusCosPhi);
+	const float y = dir.y * cosPhi + axisCrossDir.y * sinPhi + rotationAxis.y * (axisDotDir * oneMinusCosPhi);
+	const float z = dir.z * cosPhi + axisCrossDir.z * sinPhi + rotationAxis.z * (axisDotDir * oneMinusCosPhi);
+
+	RE::NiPoint3 rotated = { x, y, z };
+	rotated.Unitize();
+	return rotated;
+}
+
 void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[])
 {
 	const auto sun = sky->sun;
@@ -393,6 +423,8 @@ void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensit
 		CalculateAlternateSunDirectionAndDistance(dir, dist, sky->currentGameHour, sunrise, sunset, sunAngle);
 	} else
 		CalculateSunDirectionAndDistance(sun, dir, dist);
+
+	dir = GetApparentDirection(dir, GetPlayerAltitude());
 
 	SetSunPosition(sun, dir, dist);
 
@@ -415,6 +447,8 @@ void SkySync::ProcessMoon(const RE::Sky* sky, const Caster type, RE::NiPoint3 di
 
 	if (moonAndStarsLoaded)
 		dir = { dir.y, -dir.x, dir.z };
+
+	dir = GetApparentDirection(dir, GetPlayerAltitude());
 
 	dirs[idx] = dir;
 

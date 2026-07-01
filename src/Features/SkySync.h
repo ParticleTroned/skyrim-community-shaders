@@ -170,4 +170,8 @@ private:
 	static void CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& outDir, float& outDist, float time, float sunrise, float sunset, float sunAngle);
 
 	static void SetSunPosition(const RE::Sun* sun, const RE::NiPoint3& dir, float distance);
+
+	static constexpr float RenderDistance = 325000.0f;
+	static RE::NiPoint3 GetApparentDirection(const RE::NiPoint3& dir, float altitude);
+	static float GetPlayerAltitude();
 };

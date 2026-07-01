@@ -328,6 +328,7 @@ namespace SharedData
 		float adaptiveAdvancedBloomMult;
 		float adaptiveSaturationMult;
 		float adaptiveContrastMult;
+		float3 pad0;
 	};
 
 	struct TerrainBlendingSettings

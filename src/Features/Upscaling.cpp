@@ -129,6 +129,9 @@ namespace
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
+	// Keep the DrawIndexedInstanced hook hot only around menu bridge windows.
+	std::atomic_uint32_t g_vrMenuBridgeTraceTailEndFrame{ 0 };
+	std::atomic_uint64_t g_vrMenuBridgeTraceCachedState{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
@@ -2697,6 +2700,11 @@ namespace
 		return globals::game::isVR && IsFrameTailActive(a_state, g_vrObservedProjectedMenuTailEndFrame);
 	}
 
+	bool IsVRMenuBridgeTraceTailActive(const State* a_state)
+	{
+		return globals::game::isVR && IsFrameTailActive(a_state, g_vrMenuBridgeTraceTailEndFrame);
+	}
+
 	bool IsVRMenuPresentationContextActive()
 	{
 		return globals::game::isVR &&
@@ -2737,6 +2745,27 @@ namespace
 		ExtendFrameTail(g_vrObservedProjectedMenuTailEndFrame, a_tailFrames);
 	}
 
+	void ResetVRMenuBridgeTraceState()
+	{
+		g_vrMenuBridgeTraceTailEndFrame.store(0, std::memory_order_release);
+		g_vrMenuBridgeTraceCachedState.store(0, std::memory_order_relaxed);
+	}
+
+	void ResetVRMenuPresentationTrackingState()
+	{
+		g_vrMenuPresentationTailEndFrame.store(0, std::memory_order_release);
+		g_vrObservedProjectedMenuTailEndFrame.store(0, std::memory_order_release);
+		ResetVRMenuBridgeTraceState();
+	}
+
+	void ExtendVRMenuBridgeTraceTail(uint32_t a_tailFrames = kVRObservedMenuPresentationTailFrames)
+	{
+		if (!globals::game::isVR || !globals::state)
+			return;
+
+		ExtendFrameTail(g_vrMenuBridgeTraceTailEndFrame, a_tailFrames);
+	}
+
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
 	{
 		if (!a_ui)
@@ -2775,6 +2804,38 @@ namespace
 	bool IsExplicitVRMenuPresentationContextActive()
 	{
 		return globals::game::isVR && IsKnownGameMenuContextActive();
+	}
+
+	uint64_t EncodeVRMenuBridgeTraceState(uint32_t a_frame, bool a_active)
+	{
+		return (static_cast<uint64_t>(a_frame) << 1) | (a_active ? 1ull : 0ull);
+	}
+
+	bool IsVRMenuBridgeTraceContextActive(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		auto& upscaling = globals::features::upscaling;
+		if (!upscaling.IsVRRenderScaleModeActive() || !upscaling.IsPresentationUpscalingActive())
+			return false;
+
+		return IsExplicitVRMenuPresentationContextActive() ||
+		       IsVRMenuBridgeTraceTailActive(a_state) ||
+		       IsVRObservedProjectedMenuTailActive(a_state);
+	}
+
+	void RefreshVRMenuBridgeTraceState(const State* a_state)
+	{
+		if (!globals::game::isVR || !a_state) {
+			g_vrMenuBridgeTraceCachedState.store(0, std::memory_order_relaxed);
+			return;
+		}
+
+		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
+		g_vrMenuBridgeTraceCachedState.store(
+			EncodeVRMenuBridgeTraceState(currentFrame, IsVRMenuBridgeTraceContextActive(a_state)),
+			std::memory_order_relaxed);
 	}
 
 	bool IsGameMenuContextActive()
@@ -3292,6 +3353,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	// normal in-game projected UI/HUD work.
 	ExtendVRObservedProjectedMenuTail(kVRObservedMenuPresentationTailFrames);
 	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+	ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
 
 	const bool liveLayerDrawn = DrawVRMenuBridgeIntoFinalCompositeLayer(
 		a_context,
@@ -3310,6 +3372,24 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 
 	vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
 	return true;
+}
+
+bool Upscaling::ShouldTraceVRMenuBridgeDrawOperation()
+{
+	auto* state = globals::state;
+	if (!globals::game::isVR || !state)
+		return false;
+
+	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	const uint64_t cachedState = g_vrMenuBridgeTraceCachedState.load(std::memory_order_relaxed);
+	if ((cachedState >> 1) != currentFrame ||
+		((cachedState & 1ull) == 0 &&
+			(IsVRMenuBridgeTraceTailActive(state) || IsVRObservedProjectedMenuTailActive(state)))) {
+		RefreshVRMenuBridgeTraceState(state);
+	}
+
+	return g_vrMenuBridgeTraceCachedState.load(std::memory_order_relaxed) ==
+	       EncodeVRMenuBridgeTraceState(currentFrame, true);
 }
 
 bool Upscaling::TraceVRMenuBridgeDrawOperation(
@@ -4810,16 +4890,17 @@ void Upscaling::DataLoaded()
 RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
-	if (a_event && IsVRMenuPresentationTailMenuName(a_event->menuName))
+	if (a_event && IsVRMenuPresentationTailMenuName(a_event->menuName)) {
 		ExtendVRMenuPresentationTail();
+		ExtendVRMenuBridgeTraceTail();
+	}
 
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		g_vrLoadingMenuOpenFromEvent.store(a_event->opening, std::memory_order_relaxed);
 		if (a_event->opening) {
 			g_vrLoadingTransitionCloseFrame.store(0, std::memory_order_release);
 			g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
-			g_vrMenuPresentationTailEndFrame.store(0, std::memory_order_release);
-			g_vrObservedProjectedMenuTailEndFrame.store(0, std::memory_order_release);
+			ResetVRMenuPresentationTrackingState();
 			globals::features::upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		} else if (globals::state) {
 			const uint32_t currentFrame = std::max(globals::state->frameCount, 1u);
@@ -11228,6 +11309,8 @@ void Upscaling::PostDisplay()
 		PrepareFullResolutionPostProcessing(viewport, true);
 	}
 
+	RefreshVRMenuBridgeTraceState(globals::state);
+
 	if (d3d12SwapChainActive)
 		SetUIBuffer();
 
@@ -13928,9 +14011,11 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 		if (observedProjectedMenu) {
 			ExtendVRObservedProjectedMenuTail();
 			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+			ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
 		} else if (IsVRObservedProjectedMenuTailActive(globals::state) &&
 				   IsCurrentRenderTargetVRObservedMenuPresentationFollowTexture()) {
 			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
+			ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
 		}
 	}
 }

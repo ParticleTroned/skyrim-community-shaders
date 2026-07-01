@@ -302,7 +302,8 @@ namespace globals
 			INT BaseVertexLocation,
 			UINT StartInstanceLocation)
 		{
-			if (Upscaling::TraceVRMenuBridgeDrawOperation(
+			if (Upscaling::ShouldTraceVRMenuBridgeDrawOperation() &&
+				Upscaling::TraceVRMenuBridgeDrawOperation(
 					This,
 					IndexCountPerInstance,
 					InstanceCount,

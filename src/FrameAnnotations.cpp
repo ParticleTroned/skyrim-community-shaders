@@ -33,15 +33,13 @@ namespace FrameAnnotations
 		template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType>
 		bool TryReplaceDynamicResolutionUpsample(Upscaling::DynamicResolutionUpsampleStage a_stage)
 		{
-			if constexpr (EffectType == RE::ImageSpaceManager::ISUpsampleDynamicResolution) {
-				return globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISUpsampleDynamicResolution", a_stage);
-			} else if constexpr (EffectType == RE::ImageSpaceManager::ISFullScreenVR) {
-				return globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISFullScreenVR", a_stage);
-			} else if constexpr (EffectType == RE::ImageSpaceManager::ISCopyDynamicFetchDisabled) {
-				return globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample("ISCopyDynamicFetchDisabled", a_stage);
-			}
-
-			return false;
+			constexpr const char* passName =
+				EffectType == RE::ImageSpaceManager::ISUpsampleDynamicResolution ? "ISUpsampleDynamicResolution" :
+				EffectType == RE::ImageSpaceManager::ISFullScreenVR              ? "ISFullScreenVR" :
+				EffectType == RE::ImageSpaceManager::ISCopyDynamicFetchDisabled  ? "ISCopyDynamicFetchDisabled" :
+																				   nullptr;
+			return passName &&
+			       globals::features::upscaling.TryReplaceVanillaDynamicResolutionUpsample(passName, a_stage);
 		}
 	}
 

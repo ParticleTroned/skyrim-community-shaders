@@ -93,6 +93,9 @@ bool TerrainHelper::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 					txSet->SetTexture(static_cast<RE::BSTextureSet::Texture>(3), slot.parallax[textureI]);
 				}
 			}
+
+			// Signal readers to re-sync their private snapshot on the next access.
+			extendedSlotsVersion.fetch_add(1, std::memory_order_release);
 		}
 	}
 
@@ -164,15 +167,23 @@ void TerrainHelper::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialB
 		return;
 	}
 
+	// Re-sync the render-thread-private snapshot only when the writer has changed the map
+	// (rare — cell/LAND streaming). The common per-draw path is a single relaxed atomic load
+	// plus a lock-free hash lookup, with NO mutex acquire.
+	if (extendedSlotsVersion.load(std::memory_order_acquire) != snapshotVersion) {
+		const std::lock_guard lock(extendedSlotsMutex);
+		extendedSlotsSnapshot = extendedSlots;
+		snapshotVersion = extendedSlotsVersion.load(std::memory_order_relaxed);
+	}
+
 	ExtendedSlots materialBase;
 	{
-		const std::shared_lock lock(extendedSlotsMutex);
-
-		if (!extendedSlots.contains(material->hashKey)) {
-			// hash does not exists
+		auto it = extendedSlotsSnapshot.find(material->hashKey);
+		if (it == extendedSlotsSnapshot.end()) {
+			// hash does not exist
 			return;
 		}
-		materialBase = extendedSlots[material->hashKey];
+		materialBase = it->second;
 	}
 
 	const auto state = globals::state;

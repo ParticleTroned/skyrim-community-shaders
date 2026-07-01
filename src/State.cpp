@@ -68,11 +68,16 @@ void State::Draw()
 		if (frameCount != lastSceneSettingsUpdateFrame) {
 			lastSceneSettingsUpdateFrame = frameCount;
 			SceneSettingsManager::GetSingleton()->Update();
-		}
 
-		if (csEditor.loaded) {
-			ZoneScopedN("WeatherManager::UpdateFeatures");
-			WeatherManager::GetSingleton()->UpdateFeatures();
+			// Weather state changes at most once per frame (usually far slower), so updating
+			// weather-driven feature settings is a per-frame concern. It was being called on
+			// every State::Draw() (~12k×/frame via BSGraphics::SetDirtyStates) — including the
+			// GetSingleton magic-static guard and a GetCurrentWeathers() read each time. Gate it
+			// to once per frame like the scene-settings update above.
+			if (csEditor.loaded) {
+				ZoneScopedN("WeatherManager::UpdateFeatures");
+				WeatherManager::GetSingleton()->UpdateFeatures();
+			}
 		}
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {

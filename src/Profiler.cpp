@@ -244,9 +244,13 @@ void Profiler::CollectResults()
 	totalTimeMs = activeTotalMs;
 	cpuTotalTimeMs = activeCpuTotalMs;
 
+	// Percentiles are rolling-window order statistics that change slowly; refresh the cached
+	// values only periodically so we don't run std::nth_element for every timer every frame.
+	const bool refreshPercentiles = (framesSinceInit % kPercentileInterval) == 0;
+
 	results.clear();
 	results.reserve(knownTimers.size());
-	for (const auto& known : knownTimers) {
+	for (auto& known : knownTimers) {
 		TimerResult result;
 		result.name = known.name;
 		auto it = activeTimers.find(known.name);
@@ -258,9 +262,15 @@ void Profiler::CollectResults()
 			result.cpuTimeMs = known.cpu.lastMs;
 		}
 		result.avgMs = known.gpu.GetAverage();
-		known.gpu.GetPercentiles(95.0f, 99.0f, result.p95Ms, result.p99Ms);
 		result.cpuAvgMs = known.cpu.GetAverage();
-		known.cpu.GetPercentiles(95.0f, 99.0f, result.cpuP95Ms, result.cpuP99Ms);
+		if (refreshPercentiles) {
+			known.gpu.GetPercentiles(95.0f, 99.0f, known.p95Ms, known.p99Ms);
+			known.cpu.GetPercentiles(95.0f, 99.0f, known.cpuP95Ms, known.cpuP99Ms);
+		}
+		result.p95Ms = known.p95Ms;
+		result.p99Ms = known.p99Ms;
+		result.cpuP95Ms = known.cpuP95Ms;
+		result.cpuP99Ms = known.cpuP99Ms;
 		result.valid = true;
 		result.historyBuffer = known.gpu.history;
 		result.historyHead = known.gpu.head;

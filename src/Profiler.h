@@ -200,7 +200,20 @@ private:
 		std::string name;
 		RollingHistory gpu;
 		RollingHistory cpu;
+		// Cached p95/p99. These are rolling-window order statistics that change slowly, so
+		// CollectResults refreshes them only once every kPercentileInterval frames instead of
+		// running std::nth_element for every timer every frame (a measurable render-thread cost
+		// in draw-heavy exteriors with many passes). The per-frame instantaneous gpu/cpu times
+		// are unaffected.
+		float p95Ms = 0.0f;
+		float p99Ms = 0.0f;
+		float cpuP95Ms = 0.0f;
+		float cpuP99Ms = 0.0f;
 	};
+
+	// Refresh cached percentiles every N frames (~20 Hz at 150 fps — imperceptible for the
+	// overlay/devbench, which display slowly-changing rolling stats).
+	static constexpr uint32_t kPercentileInterval = 8;
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
 	float totalTimeMs = 0.0f;

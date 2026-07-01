@@ -34,8 +34,19 @@ public:
 		std::array<RE::NiSourceTexturePtr, 6> parallax;
 	};
 
-	std::shared_mutex extendedSlotsMutex;
-	std::unordered_map<uint32_t, ExtendedSlots> extendedSlots;
+	// Single-reader (render-thread BSLightingShader::SetupMaterial) + rare-writer
+	// (streaming-thread TESObjectLAND_SetupMaterial, only on cell/LAND load). Rather than
+	// take a lock on EVERY terrain-material draw (hot in exteriors — profiled as the single
+	// biggest CS-side render-thread cost), the render thread reads a private snapshot of the
+	// map with ZERO locking, and only re-syncs the snapshot (under the mutex) when the writer
+	// bumps extendedSlotsVersion. The mutex is therefore taken only on the rare write and the
+	// even rarer re-sync, not per draw. The snapshot/snapshotVersion are owned exclusively by
+	// the render thread (single reader — confirmed by profiling), so they need no atomics.
+	std::mutex extendedSlotsMutex;
+	std::unordered_map<uint32_t, ExtendedSlots> extendedSlots;        // writer-owned (guarded)
+	std::atomic<uint64_t> extendedSlotsVersion{ 0 };                  // bumped by the writer
+	std::unordered_map<uint32_t, ExtendedSlots> extendedSlotsSnapshot; // render-thread-private
+	uint64_t snapshotVersion = 0;                                    // render-thread-private
 	RE::BGSTextureSet* defaultLandTexture;
 	bool enabled = false;
 

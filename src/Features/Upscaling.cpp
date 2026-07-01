@@ -8764,7 +8764,8 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			extentOut,
 			params.outputWidth,
 			params.pinholeOffsetX,
-			params.pinholeOffsetY);
+			params.pinholeOffsetY,
+			params.label);
 	}
 
 	if (a_upscaleMethod == UpscaleMethod::kFSR) {
@@ -12496,6 +12497,51 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			RequestHistoryReset();
 			if (upscaleMethod == UpscaleMethod::kDLSS)
 				ArmSubmitStageFoveatedVendorRetryBackoff(currentFrame);
+			if (globals::state && globals::state->IsDeveloperMode()) {
+				static uint32_t loggedFoveatedFallbackDiagCount[2] = {};
+				static uint32_t loggedFoveatedFallbackDiagFrame[2] = {};
+				const uint32_t boundedEyeIndex = std::min(eyeIndex, 1u);
+				const bool logFoveatedFallbackDiag =
+					loggedFoveatedFallbackDiagCount[boundedEyeIndex] < 12u ||
+					(loggedFoveatedFallbackDiagFrame[boundedEyeIndex] != 0 &&
+						currentFrame - loggedFoveatedFallbackDiagFrame[boundedEyeIndex] >= 300u);
+				++loggedFoveatedFallbackDiagCount[boundedEyeIndex];
+				if (logFoveatedFallbackDiag) {
+					loggedFoveatedFallbackDiagFrame[boundedEyeIndex] = currentFrame;
+					logger::debug(
+						"[Upscaling][DLSSDiag] Submit-stage foveated vendor fallback armed. method={} eye={} frame={} retryFrame={} input={}x{} output={}x{} source={}x{} array={} fmt={} sourceRegion={}x{} box=({},{})->({},{}) expected={}x{} presentationOnly={} transitionBypass={} menuPause={} maskPreview={} backoffWasActive={} preparedFoveatedEncode={} forceFullEyeFallback={} submitBoundsFallback={} sourceCombined={} boundsCombined={}",
+						upscaleMethodName,
+						eyeIndex,
+						currentFrame,
+						upscaleMethod == UpscaleMethod::kDLSS ? currentFrame + kVRSubmitStageFoveatedFailureRetryFrames : 0u,
+						eyeWidthIn,
+						eyeHeightIn,
+						eyeWidthOut,
+						eyeHeightOut,
+						sourceDesc.Width,
+						sourceDesc.Height,
+						sourceDesc.ArraySize,
+						magic_enum::enum_name(sourceDesc.Format),
+						sourceRegion.width,
+						sourceRegion.height,
+						sourceRegion.box.left,
+						sourceRegion.box.top,
+						sourceRegion.box.right,
+						sourceRegion.box.bottom,
+						sourceEyeWidthIn,
+						sourceEyeHeightIn,
+						presentationOnly,
+						foveatedTransitionBypass,
+						sceneFeatureMenuPauseContext,
+						foveatedMaskVisualizationPreview,
+						foveatedFailureBackoffActive,
+						submitStagePreparedFrameFoveatedRegionEncode,
+						submitStageForceFullEyeVendorFallback,
+						submitBoundsPresentationFallback,
+						sourceUsesCombinedStereoLayout,
+						inputBoundsUseCombinedStereoSpace);
+				}
+			}
 			static bool loggedFoveatedSubmitFallback[2] = {};
 			if (!loggedFoveatedSubmitFallback[eyeIndex]) {
 				logger::warn(

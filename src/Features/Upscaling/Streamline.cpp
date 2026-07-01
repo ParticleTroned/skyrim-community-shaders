@@ -1,9 +1,13 @@
 #include "Streamline.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <dxgi.h>
 #include <dxgi1_3.h>
+#include <limits>
+#include <string>
+#include <string_view>
 
 #include "../../Deferred.h"
 #include "../../State.h"
@@ -14,6 +18,9 @@
 namespace
 {
 	constexpr UINT NVIDIA_VENDOR_ID = 0x10DE;
+	constexpr uint32_t kDLSSDiagnosticMaxInitialLogs = 12;
+	constexpr uint32_t kDLSSDiagnosticRepeatFrameGap = 300;
+	constexpr int32_t kDLSSDiagnosticTextResultCode = std::numeric_limits<int32_t>::min();
 
 	enum class D3D11IdleFenceResult : uint8_t
 	{
@@ -21,6 +28,34 @@ namespace
 		Pending,
 		Failed
 	};
+
+	enum class DLSSDiagnosticStage : uint8_t
+	{
+		ResolveViewport,
+		FrameToken,
+		SetConstants,
+		SetOptions,
+		Evaluate,
+		Count
+	};
+
+	const char* GetDLSSDiagnosticStageName(DLSSDiagnosticStage a_stage)
+	{
+		switch (a_stage) {
+		case DLSSDiagnosticStage::ResolveViewport:
+			return "ResolveViewport";
+		case DLSSDiagnosticStage::FrameToken:
+			return "FrameToken";
+		case DLSSDiagnosticStage::SetConstants:
+			return "SetConstants";
+		case DLSSDiagnosticStage::SetOptions:
+			return "SetOptions";
+		case DLSSDiagnosticStage::Evaluate:
+			return "Evaluate";
+		default:
+			return "Unknown";
+		}
+	}
 
 	void ReleaseD3D11IdleFence(ID3D11Query*& a_query)
 	{
@@ -51,12 +86,11 @@ namespace
 		if (!a_resource)
 			return false;
 
-		ID3D11Texture2D* texture = nullptr;
-		if (FAILED(a_resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) || !texture)
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(a_resource->QueryInterface(IID_PPV_ARGS(texture.put()))))
 			return false;
 
 		texture->GetDesc(&a_desc);
-		texture->Release();
 		return true;
 	}
 
@@ -67,6 +101,264 @@ namespace
 			return true;
 
 		return IsHDRDLSSInputFormat(desc.Format);
+	}
+
+	std::string FormatExtent(const sl::Extent& a_extent)
+	{
+		return std::format("top={} left={} width={} height={}", a_extent.top, a_extent.left, a_extent.width, a_extent.height);
+	}
+
+	std::string DescribeTextureResource(ID3D11Resource* a_resource)
+	{
+		if (!a_resource)
+			return "null";
+
+		D3D11_TEXTURE2D_DESC desc{};
+		if (!TryGetTexture2DDesc(a_resource, desc)) {
+			return std::format("ptr=0x{:X} non-Texture2D", reinterpret_cast<std::uintptr_t>(a_resource));
+		}
+
+		return std::format(
+			"ptr=0x{:X} {}x{} fmt={} mips={} array={} samples={} bind=0x{:X} misc=0x{:X} usage={} cpu=0x{:X}",
+			reinterpret_cast<std::uintptr_t>(a_resource),
+			desc.Width,
+			desc.Height,
+			magic_enum::enum_name(desc.Format),
+			desc.MipLevels,
+			desc.ArraySize,
+			desc.SampleDesc.Count,
+			desc.BindFlags,
+			desc.MiscFlags,
+			magic_enum::enum_name(desc.Usage),
+			desc.CPUAccessFlags);
+	}
+
+	bool ShouldLogDLSSDiagnostics()
+	{
+		return globals::state && globals::state->IsDeveloperMode();
+	}
+
+	std::string FormatDLSSDiagnosticResult(int32_t a_resultCode, std::string_view a_resultLabel)
+	{
+		if (!a_resultLabel.empty())
+			return std::string(a_resultLabel);
+
+		return std::format("{}", a_resultCode);
+	}
+
+	bool ShouldEmitDLSSDiagnostic(
+		DLSSDiagnosticStage a_stage,
+		const Streamline::DLSSDispatchDiagnostics* a_diagnostics,
+		int32_t a_resultCode,
+		std::string_view a_resultLabel)
+	{
+		if (!a_diagnostics)
+			return false;
+
+		struct ThrottleState
+		{
+			bool valid = false;
+			uint32_t count = 0;
+			uint32_t lastFrame = 0;
+			uint32_t requestedViewport = 0;
+			uint32_t resolvedViewport = 0;
+			uint32_t outputWidth = 0;
+			uint32_t outputHeight = 0;
+			uint32_t qualityMode = 0;
+			uint32_t dlssPreset = 0;
+			uint32_t extentInWidth = 0;
+			uint32_t extentInHeight = 0;
+			uint32_t extentOutWidth = 0;
+			uint32_t extentOutHeight = 0;
+			int32_t viewportScaleXQ = 0;
+			int32_t viewportScaleYQ = 0;
+			int32_t pinholeOffsetXQ = 0;
+			int32_t pinholeOffsetYQ = 0;
+			bool croppedViewport = false;
+			int32_t resultCode = 0;
+			std::string resultLabel;
+			std::string label;
+		};
+
+		static std::array<ThrottleState, static_cast<size_t>(DLSSDiagnosticStage::Count) * 2> throttle{};
+		const uint32_t boundedEye = globals::game::isVR ? std::min(a_diagnostics->eyeIndex, 1u) : 0u;
+		const size_t index = static_cast<size_t>(a_stage) * 2u + boundedEye;
+		auto& state = throttle[index];
+		const char* label = a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
+		const auto quantizeFloat = [](float a_value) {
+			if (!std::isfinite(a_value))
+				return 0;
+
+			const double scaled = static_cast<double>(a_value) * 1000000.0;
+			if (scaled > static_cast<double>(std::numeric_limits<int32_t>::max()))
+				return std::numeric_limits<int32_t>::max();
+			if (scaled < static_cast<double>(std::numeric_limits<int32_t>::min()))
+				return std::numeric_limits<int32_t>::min();
+
+			return static_cast<int32_t>(std::lround(scaled));
+		};
+		const int32_t viewportScaleXQ = quantizeFloat(a_diagnostics->viewportScaleX);
+		const int32_t viewportScaleYQ = quantizeFloat(a_diagnostics->viewportScaleY);
+		const int32_t pinholeOffsetXQ = quantizeFloat(a_diagnostics->pinholeOffsetX);
+		const int32_t pinholeOffsetYQ = quantizeFloat(a_diagnostics->pinholeOffsetY);
+		const bool signatureChanged =
+			!state.valid ||
+			state.requestedViewport != static_cast<uint32_t>(a_diagnostics->requestedViewport) ||
+			state.resolvedViewport != static_cast<uint32_t>(a_diagnostics->resolvedViewport) ||
+			state.outputWidth != a_diagnostics->outputWidth ||
+			state.outputHeight != a_diagnostics->outputHeight ||
+			state.qualityMode != a_diagnostics->qualityMode ||
+			state.dlssPreset != a_diagnostics->dlssPreset ||
+			state.extentInWidth != a_diagnostics->extentIn.width ||
+			state.extentInHeight != a_diagnostics->extentIn.height ||
+			state.extentOutWidth != a_diagnostics->extentOut.width ||
+			state.extentOutHeight != a_diagnostics->extentOut.height ||
+			state.viewportScaleXQ != viewportScaleXQ ||
+			state.viewportScaleYQ != viewportScaleYQ ||
+			state.pinholeOffsetXQ != pinholeOffsetXQ ||
+			state.pinholeOffsetYQ != pinholeOffsetYQ ||
+			state.croppedViewport != a_diagnostics->croppedViewport ||
+			state.resultCode != a_resultCode ||
+			state.resultLabel != a_resultLabel ||
+			state.label != label;
+
+		if (signatureChanged) {
+			state = {};
+			state.valid = true;
+			state.requestedViewport = static_cast<uint32_t>(a_diagnostics->requestedViewport);
+			state.resolvedViewport = static_cast<uint32_t>(a_diagnostics->resolvedViewport);
+			state.outputWidth = a_diagnostics->outputWidth;
+			state.outputHeight = a_diagnostics->outputHeight;
+			state.qualityMode = a_diagnostics->qualityMode;
+			state.dlssPreset = a_diagnostics->dlssPreset;
+			state.extentInWidth = a_diagnostics->extentIn.width;
+			state.extentInHeight = a_diagnostics->extentIn.height;
+			state.extentOutWidth = a_diagnostics->extentOut.width;
+			state.extentOutHeight = a_diagnostics->extentOut.height;
+			state.viewportScaleXQ = viewportScaleXQ;
+			state.viewportScaleYQ = viewportScaleYQ;
+			state.pinholeOffsetXQ = pinholeOffsetXQ;
+			state.pinholeOffsetYQ = pinholeOffsetYQ;
+			state.croppedViewport = a_diagnostics->croppedViewport;
+			state.resultCode = a_resultCode;
+			state.resultLabel = a_resultLabel;
+			state.label = label;
+		}
+
+		const uint32_t frame = a_diagnostics->frame;
+		const bool emit =
+			signatureChanged ||
+			state.count < kDLSSDiagnosticMaxInitialLogs ||
+			(frame != 0 && state.lastFrame != 0 && frame - state.lastFrame >= kDLSSDiagnosticRepeatFrameGap);
+
+		++state.count;
+		if (emit)
+			state.lastFrame = frame;
+
+		return emit;
+	}
+
+	void LogDLSSDispatchDiagnostics(
+		DLSSDiagnosticStage a_stage,
+		int32_t a_resultCode,
+		std::string_view a_resultLabel,
+		const Streamline::DLSSDispatchDiagnostics* a_diagnostics)
+	{
+		if (!a_diagnostics)
+			return;
+
+		if (!ShouldLogDLSSDiagnostics())
+			return;
+
+		if (!ShouldEmitDLSSDiagnostic(a_stage, a_diagnostics, a_resultCode, a_resultLabel))
+			return;
+
+		const auto& upscaling = globals::features::upscaling;
+		const auto& plan = upscaling.GetRuntimeResolutionPlan();
+		const char* label = a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
+		const auto* frameToken = a_diagnostics->frameToken ? a_diagnostics->frameToken : upscaling.streamline.frameToken;
+		const uint32_t frame = a_diagnostics->frame;
+		const std::string result = FormatDLSSDiagnosticResult(a_resultCode, a_resultLabel);
+
+		logger::debug(
+			"[Streamline][DLSSDiag] stage={} result={} label='{}' frame={} eye={} requestedViewport={} resolvedViewport={} frameToken=0x{:X} quality={} preset={} hdr={} output={}x{} extentIn=[{}] extentOut=[{}] viewportScale={:.6f}x{:.6f} croppedViewport={} pinhole={:.6f},{:.6f} jitter={:.6f},{:.6f} historyReset={} submitStageVR={} presentationActive={} renderScaleActive={} foveatedConfigured={} peripheryTAAConfigured={} optionsCache(valid={} viewport={} output={}x{} quality={} preset={} hdr={} legacy={}) plan(owner={} method={} quality={} display={}x{} render={}x{} final={}x{} foveated={} peripheryTAA={} menu={} knownMenu={} loading={})",
+			GetDLSSDiagnosticStageName(a_stage),
+			result,
+			label,
+			frame,
+			a_diagnostics->eyeIndex,
+			static_cast<uint32_t>(a_diagnostics->requestedViewport),
+			static_cast<uint32_t>(a_diagnostics->resolvedViewport),
+			reinterpret_cast<std::uintptr_t>(frameToken),
+			a_diagnostics->qualityMode,
+			a_diagnostics->dlssPreset,
+			a_diagnostics->colorBuffersHDR,
+			a_diagnostics->outputWidth,
+			a_diagnostics->outputHeight,
+			FormatExtent(a_diagnostics->extentIn),
+			FormatExtent(a_diagnostics->extentOut),
+			a_diagnostics->viewportScaleX,
+			a_diagnostics->viewportScaleY,
+			a_diagnostics->croppedViewport,
+			a_diagnostics->pinholeOffsetX,
+			a_diagnostics->pinholeOffsetY,
+			a_diagnostics->jitterX,
+			a_diagnostics->jitterY,
+			a_diagnostics->historyResetRequested,
+			a_diagnostics->submitStageVRDLSS,
+			a_diagnostics->presentationUpscalingActive,
+			a_diagnostics->renderScaleActive,
+			a_diagnostics->foveatedDispatchEnabled,
+			a_diagnostics->peripheryTAAEnabled,
+			a_diagnostics->optionsCacheValid,
+			a_diagnostics->optionsCacheViewport,
+			a_diagnostics->optionsCacheOutputWidth,
+			a_diagnostics->optionsCacheOutputHeight,
+			a_diagnostics->optionsCacheQualityMode,
+			a_diagnostics->optionsCacheDLSSPreset,
+			a_diagnostics->optionsCacheHDR,
+			a_diagnostics->optionsCacheLegacyProfile,
+			magic_enum::enum_name(plan.owner),
+			magic_enum::enum_name(plan.upscaleMethod),
+			plan.qualityMode,
+			static_cast<uint32_t>(plan.trueHMDDisplaySize.x),
+			static_cast<uint32_t>(plan.trueHMDDisplaySize.y),
+			static_cast<uint32_t>(plan.engineRenderSize.x),
+			static_cast<uint32_t>(plan.engineRenderSize.y),
+			static_cast<uint32_t>(plan.finalOutputSize.x),
+			static_cast<uint32_t>(plan.finalOutputSize.y),
+			plan.foveatedActive,
+			plan.peripheryTAAActive,
+			plan.menuContextActive,
+			plan.knownMenuContextActive,
+			plan.loadingMenuActive);
+
+		logger::debug(
+			"[Streamline][DLSSDiag] resources label='{}' frame={} eye={} colorIn=[{}] colorOut=[{}] depth=[{}] mvec=[{}] reactive=[{}] transparency=[{}]",
+			label,
+			frame,
+			a_diagnostics->eyeIndex,
+			DescribeTextureResource(a_diagnostics->colorIn),
+			DescribeTextureResource(a_diagnostics->colorOut),
+			DescribeTextureResource(a_diagnostics->depth),
+			DescribeTextureResource(a_diagnostics->motionVectors),
+			DescribeTextureResource(a_diagnostics->reactiveMask),
+			DescribeTextureResource(a_diagnostics->transparencyMask));
+	}
+
+	void LogDLSSDispatchDiagnostics(DLSSDiagnosticStage a_stage, sl::Result a_result, const Streamline::DLSSDispatchDiagnostics* a_diagnostics)
+	{
+		const auto resultLabel = magic_enum::enum_name(a_result);
+		LogDLSSDispatchDiagnostics(a_stage, static_cast<int32_t>(a_result), resultLabel, a_diagnostics);
+	}
+
+	void LogDLSSDispatchDiagnostics(DLSSDiagnosticStage a_stage, const char* a_result, const Streamline::DLSSDispatchDiagnostics* a_diagnostics)
+	{
+		LogDLSSDispatchDiagnostics(
+			a_stage,
+			kDLSSDiagnosticTextResultCode,
+			a_result ? std::string_view(a_result) : std::string_view(),
+			a_diagnostics);
 	}
 
 	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
@@ -442,13 +734,15 @@ bool Streamline::EnsureFrameToken()
 	return frameToken != nullptr;
 }
 
-bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY)
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics)
 {
 	if (!globals::features::upscaling.streamline.initialized)
 		return false;
 
-	if (!EnsureFrameToken())
+	if (!EnsureFrameToken()) {
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "unavailable", diagnostics);
 		return false;
+	}
 
 	// In VR, we need to set constants for each viewport/eye separately
 	// In non-VR, this is called once per frame
@@ -573,6 +867,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
 		logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetConstants, res, diagnostics);
 		return false;
 	}
 
@@ -603,7 +898,7 @@ bool Streamline::IsRTXAndBelow40Series(IDXGIAdapter* a_adapter)
 	return false;
 }
 
-bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset)
+bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics)
 {
 	if (!slDLSSSetOptions)
 		return false;
@@ -689,6 +984,7 @@ bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex
 			static_cast<uint32_t>(p_viewport),
 			eyeIndex,
 			magic_enum::enum_name(result));
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetOptions, result, diagnostics);
 		cache.valid = false;
 		return false;
 	}
@@ -906,7 +1202,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
-	float pinholeOffsetX, float pinholeOffsetY)
+	float pinholeOffsetX, float pinholeOffsetY, const char* label)
 {
 	auto context = globals::d3d::context;
 	if (!initialized || !featureDLSS || !slEvaluateFeature || !context ||
@@ -923,9 +1219,10 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	sl::Resource transparencyMaskRes = { sl::ResourceType::eTex2d, transparencyMask, 0 };
 
 	auto& upscaling = globals::features::upscaling;
+	auto state = globals::state;
 	float viewportScaleX = 1.0f;
 	float viewportScaleY = 1.0f;
-	if (auto state = globals::state) {
+	if (state) {
 		const auto& resolutionPlan = upscaling.GetRuntimeResolutionPlan();
 		auto fullOutputSize = resolutionPlan.finalOutputSize;
 		if (fullOutputSize.x <= 0.0f || fullOutputSize.y <= 0.0f)
@@ -942,17 +1239,77 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
 	const uint32_t dlssPreset = std::min(upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
-	if (!ResolveDLSSViewport(vp, eyeIndex, qualityMode, dlssPreset, vp))
-		return false;
-
-	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY))
-		return false;
-	if (!SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset))
-		return false;
-
+	const sl::ViewportHandle requestedViewport = vp;
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
 		upscaling.IsPresentationUpscalingActive();
+
+	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics();
+	DLSSDispatchDiagnostics diagnostics{};
+	DLSSDispatchDiagnostics* diagnosticsPtr = collectDLSSDiagnostics ? &diagnostics : nullptr;
+	if (diagnosticsPtr) {
+		diagnostics.label = label ? label : "DLSS Evaluate";
+		diagnostics.frame = state ? state->frameCount : 0u;
+		diagnostics.eyeIndex = eyeIndex;
+		diagnostics.requestedViewport = requestedViewport;
+		diagnostics.resolvedViewport = vp;
+		diagnostics.extentIn = extentIn;
+		diagnostics.extentOut = extentOut;
+		diagnostics.outputWidth = outputWidth;
+		diagnostics.outputHeight = extentOut.height;
+		diagnostics.qualityMode = qualityMode;
+		diagnostics.dlssPreset = dlssPreset;
+		diagnostics.viewportScaleX = viewportScaleX;
+		diagnostics.viewportScaleY = viewportScaleY;
+		diagnostics.croppedViewport = viewportScaleX < 0.999f || viewportScaleY < 0.999f;
+		diagnostics.pinholeOffsetX = pinholeOffsetX;
+		diagnostics.pinholeOffsetY = pinholeOffsetY;
+		diagnostics.jitterX = upscaling.jitter.x;
+		diagnostics.jitterY = upscaling.jitter.y;
+		diagnostics.colorBuffersHDR = colorBuffersHDR;
+		diagnostics.submitStageVRDLSS = submitStageVRDLSS;
+		diagnostics.presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
+		diagnostics.renderScaleActive = upscaling.IsVRRenderScaleModeActive();
+		diagnostics.foveatedDispatchEnabled = upscaling.IsFoveatedVendorDispatchEnabled(upscaling.GetRuntimeUpscaleMethod());
+		diagnostics.peripheryTAAEnabled = upscaling.IsPeripheryTAAEnabled(upscaling.GetRuntimeUpscaleMethod());
+		diagnostics.historyResetRequested = upscaling.ShouldResetHistoryThisFrame();
+		diagnostics.frameToken = frameToken;
+		diagnostics.colorIn = colorIn;
+		diagnostics.colorOut = colorOut;
+		diagnostics.depth = depth;
+		diagnostics.motionVectors = mvec;
+		diagnostics.reactiveMask = reactiveMask;
+		diagnostics.transparencyMask = transparencyMask;
+	}
+	const auto updateOptionsCacheDiagnostics = [&]() {
+		if (!diagnosticsPtr)
+			return;
+
+		const auto& optionsCache = GetDLSSOptionsCache(eyeIndex, qualityMode, dlssPreset);
+		diagnostics.optionsCacheValid = optionsCache.valid;
+		diagnostics.optionsCacheViewport = optionsCache.viewport;
+		diagnostics.optionsCacheOutputWidth = optionsCache.outputWidth;
+		diagnostics.optionsCacheOutputHeight = optionsCache.outputHeight;
+		diagnostics.optionsCacheQualityMode = optionsCache.qualityMode;
+		diagnostics.optionsCacheDLSSPreset = optionsCache.dlssPreset;
+		diagnostics.optionsCacheHDR = optionsCache.isHDR;
+		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
+	};
+
+	if (!ResolveDLSSViewport(vp, eyeIndex, qualityMode, dlssPreset, vp)) {
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::ResolveViewport, "unavailable", diagnosticsPtr);
+		return false;
+	}
+	if (diagnosticsPtr)
+		diagnostics.resolvedViewport = vp;
+	updateOptionsCacheDiagnostics();
+
+	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, diagnosticsPtr))
+		return false;
+	if (!SetDLSSOptions(vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
+		return false;
+	updateOptionsCacheDiagnostics();
+
 	const bool emitPCLMarkers =
 		!submitStageVRDLSS &&
 		upscaling.settings.reflexUseMarkersToOptimize &&
@@ -997,7 +1354,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		&tags[5]
 	};
 
-	auto state = globals::state;
 	if (state && state->frameAnnotations) {
 		if (globals::game::isVR) {
 			char buf[32];
@@ -1016,6 +1372,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		state->EndPerfEvent();
 
 	if (evalResult != sl::Result::eOk) {
+		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::Evaluate, evalResult, diagnosticsPtr);
 		static sl::ViewportHandle lastLoggedEvalErrorViewport[2] = {};
 		static sl::Result lastLoggedEvalErrorResult[2] = {};
 		uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0;
@@ -1059,7 +1416,7 @@ bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D1
 	sl::Extent extentIn{ 0u, 0u, renderWidth, renderHeight };
 	sl::Extent extentOut{ 0u, 0u, outputWidth, outputHeight };
 
-	return EvaluateDLSS(vp, eyeIndex, colorIn, colorOut, depth, mvec, reactiveMask, transparencyMask, extentIn, extentOut, outputWidth, pinholeOffsetX, pinholeOffsetY);
+	return EvaluateDLSS(vp, eyeIndex, colorIn, colorOut, depth, mvec, reactiveMask, transparencyMask, extentIn, extentOut, outputWidth, pinholeOffsetX, pinholeOffsetY, "UpscaleRegion");
 }
 
 void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
@@ -1157,7 +1514,10 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					upscaling.vrIntermediateColorIn[i]->resource.get(), upscaling.vrIntermediateColorOut[i]->resource.get(),
 					upscaling.vrIntermediateDepth[i]->resource.get(), upscaling.vrIntermediateMotionVectors[i]->resource.get(),
 					upscaling.vrIntermediateReactiveMask[i]->resource.get(), upscaling.vrIntermediateTransparencyMask[i]->resource.get(),
-					extentIn, extentOut, eyeWidthOut);
+					extentIn, extentOut, eyeWidthOut,
+					0.0f,
+					0.0f,
+					"VR prepared per-eye");
 			}
 
 			bool fallbackPresented = false;
@@ -1200,14 +1560,20 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
 			depthTexture.texture, upscaling.vrIntermediateMotionVectors[0]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
-			extentIn, extentOut, eyeWidthOut);
+			extentIn, extentOut, eyeWidthOut,
+			0.0f,
+			0.0f,
+			"VR direct eye0 combined");
 
 		// Eye 1 writes to intermediate, then copy into right half of combined output.
 		const bool rightEvaluated = EvaluateDLSS(viewportRight, 1,
 			upscaling.vrIntermediateColorIn[1]->resource.get(), upscaling.vrIntermediateColorOut[1]->resource.get(),
 			upscaling.vrIntermediateDepth[1]->resource.get(), upscaling.vrIntermediateMotionVectors[1]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[1]->resource.get(), upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
-			extentIn, extentOut, eyeWidthOut);
+			extentIn, extentOut, eyeWidthOut,
+			0.0f,
+			0.0f,
+			"VR direct eye1 intermediate");
 
 		if (leftEvaluated && rightEvaluated) {
 			if (depthTexture.depthSRV) {
@@ -1250,7 +1616,10 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		const bool evaluated = EvaluateDLSS(viewport, 0,
 			a_upscalingTexture, colorOut,
 			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
-			extentIn, extentOut, (uint)screenSize.x);
+			extentIn, extentOut, (uint)screenSize.x,
+			0.0f,
+			0.0f,
+			"Non-VR main");
 		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
 		if (!evaluated) {
 			upscaling.RequestHistoryReset();

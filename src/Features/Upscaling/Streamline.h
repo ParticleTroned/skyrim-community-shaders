@@ -14,8 +14,8 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
-#include <sl_reflex.h>
 #include <sl_matrix_helpers.h>
+#include <sl_reflex.h>
 #include <sl_version.h>
 #pragma warning(pop)
 
@@ -118,12 +118,56 @@ public:
 	ReflexOptionsCache reflexOptionsCache{};
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
 
+	struct DLSSDispatchDiagnostics
+	{
+		const char* label = "DLSS Evaluate";
+		uint32_t frame = 0;
+		uint32_t eyeIndex = 0;
+		sl::ViewportHandle requestedViewport{ 0 };
+		sl::ViewportHandle resolvedViewport{ 0 };
+		sl::Extent extentIn{};
+		sl::Extent extentOut{};
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = 0;
+		float viewportScaleX = 1.0f;
+		float viewportScaleY = 1.0f;
+		bool croppedViewport = false;
+		float pinholeOffsetX = 0.0f;
+		float pinholeOffsetY = 0.0f;
+		float jitterX = 0.0f;
+		float jitterY = 0.0f;
+		bool colorBuffersHDR = false;
+		bool submitStageVRDLSS = false;
+		bool presentationUpscalingActive = false;
+		bool renderScaleActive = false;
+		bool foveatedDispatchEnabled = false;
+		bool peripheryTAAEnabled = false;
+		bool historyResetRequested = false;
+		bool optionsCacheValid = false;
+		uint32_t optionsCacheViewport = UINT32_MAX;
+		uint32_t optionsCacheOutputWidth = 0;
+		uint32_t optionsCacheOutputHeight = 0;
+		uint32_t optionsCacheQualityMode = 0;
+		uint32_t optionsCacheDLSSPreset = 0;
+		bool optionsCacheHDR = false;
+		bool optionsCacheLegacyProfile = false;
+		sl::FrameToken* frameToken = nullptr;
+		ID3D11Resource* colorIn = nullptr;
+		ID3D11Resource* colorOut = nullptr;
+		ID3D11Resource* depth = nullptr;
+		ID3D11Resource* motionVectors = nullptr;
+		ID3D11Resource* reactiveMask = nullptr;
+		ID3D11Resource* transparencyMask = nullptr;
+	};
+
 	// Helper: Execute DLSS for a single viewport with given resources
 	bool EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
-		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
+		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const char* label = "DLSS Evaluate");
 
 	// Cached DLL version info for Streamline plugin directory
 	static std::vector<std::pair<std::string, std::string>> dllVersions;
@@ -134,7 +178,7 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f);
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	bool EnsureFrameToken();
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
@@ -145,7 +189,7 @@ public:
 	void FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
 	void FreeVRDLSSViewportSlot(uint32_t slotIndex, bool logFailures);
 	DLSSOptionsCache& GetDLSSOptionsCache(uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
-	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset);
+	bool SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics = nullptr);
 	void InvalidateDLSSOptionsCache();
 	void ResetDLSSIdleFences();
 	void ResetFrameTracking();

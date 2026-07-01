@@ -1049,12 +1049,20 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
-float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceFactor)
+static const float UnifiedWaterDistanceDepthFadeViewStart = 32768.0;
+static const float UnifiedWaterDistanceDepthFadeViewEnd = 65536.0;
+
+float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceFactor, float viewDistance)
 {
 #			if defined(UNIFIED_WATER) && !defined(UNDERWATER) && !defined(LOD)
-	// Distant UW still uses close-water depth shading. Fade it out with distance so
-	// coarse LOD terrain depth cannot imprint blocky shallow-water patterns.
-	float farDepthFade = smoothstep(0.7, 0.95, distanceFactor);
+	// Distant UW still uses close-water depth shading. Fade it out only when both
+	// water depth shading and explicit camera distance indicate far water.
+	float waterDepthFade = smoothstep(0.7, 0.95, distanceFactor);
+	float viewDistanceFade = smoothstep(
+		UnifiedWaterDistanceDepthFadeViewStart,
+		UnifiedWaterDistanceDepthFadeViewEnd,
+		viewDistance);
+	float farDepthFade = waterDepthFade * viewDistanceFade;
 	return lerp(depthMul, 1.0.xxxx, farDepthFade);
 #			else
 	return depthMul;
@@ -1196,8 +1204,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(SIMPLE) || defined(UNDERWATER) || defined(LOD) || defined(SPECULAR)
 	float3 viewDirection = normalize(input.WPosition.xyz);
+	float viewDistance = input.WPosition.w;
 
-	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (length(input.WPosition.xyz) - 8192) / (WaterParams.x - 8192)));
+	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
 	float distanceBlendFactor = distanceFactor;
 #			if defined(UNIFIED_WATER)
@@ -1235,7 +1244,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 #			if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(LOD)
-	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceFactor);
+	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceFactor, viewDistance);
 #			endif
 
 #			if defined(UNDERWATER)

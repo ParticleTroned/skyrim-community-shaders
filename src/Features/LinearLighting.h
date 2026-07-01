@@ -88,14 +88,7 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		// Adaptive Balance extends the shared payload with final-image controls.
 		uint enableAdaptiveBalance;
-		float adaptiveImageBrightnessMult;
-		float adaptiveBloomMult;
-		float adaptiveAdvancedBloomMult;
-		float adaptiveSaturationMult;
-		float adaptiveContrastMult;
-		float pad0[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 

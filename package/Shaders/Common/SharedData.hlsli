@@ -323,12 +323,6 @@ namespace SharedData
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBalance;
-		float adaptiveImageBrightnessMult;
-		float adaptiveBloomMult;
-		float adaptiveAdvancedBloomMult;
-		float adaptiveSaturationMult;
-		float adaptiveContrastMult;
-		float3 pad0;
 	};
 
 	struct TerrainBlendingSettings

@@ -151,7 +151,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	const bool linearLightingEnabled = IsRuntimeEnabled();
 	const bool adaptiveBalanceEnabled = globals::features::adaptiveBalance.IsRuntimeEnabled();
 	const auto effectiveSettings = globals::features::adaptiveBalance.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
-	const auto imageAdjustments = globals::features::adaptiveBalance.GetEffectiveImageAdjustments();
 
 	auto data = PerFrameData{};
 	data.enableLinearLighting = linearLightingEnabled;
@@ -182,11 +181,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.deferredEffectMult = effectiveSettings.deferredEffectMult;
 	data.otherEffectMult = effectiveSettings.otherEffectMult;
 	data.enableAdaptiveBalance = adaptiveBalanceEnabled;
-	data.adaptiveImageBrightnessMult = imageAdjustments.imageBrightness;
-	data.adaptiveBloomMult = imageAdjustments.bloom;
-	data.adaptiveAdvancedBloomMult = imageAdjustments.advancedBloom;
-	data.adaptiveSaturationMult = imageAdjustments.saturation;
-	data.adaptiveContrastMult = imageAdjustments.contrast;
 	return data;
 }
 

@@ -35,11 +35,11 @@ struct AdaptiveBalance : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Blends scene lighting and final image balance by location and exterior time of day.",
-			{ "Separate exterior day and night scene/image profiles",
+			"Blends scene lighting by location and exterior time of day.",
+			{ "Separate exterior day and night lighting profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Optional per-location overrides with COC codes",
-				"Per-profile brightness, dual bloom, saturation, and contrast control" }
+				"Per-profile brightness and advanced lighting controls" }
 		};
 	}
 
@@ -61,11 +61,6 @@ struct AdaptiveBalance : Feature
 	struct ProfileSettings
 	{
 		float brightness = 1.0f;
-		float imageBrightness = 1.0f;
-		float bloom = 1.0f;
-		float advancedBloom = 0.0f;
-		float saturation = 1.0f;
-		float contrast = 1.0f;
 		bool advanced = false;
 
 		float directionalLightMult = 1.0f;
@@ -110,15 +105,6 @@ struct AdaptiveBalance : Feature
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
 
-	struct ImageAdjustments
-	{
-		float imageBrightness = 1.0f;
-		float bloom = 1.0f;
-		float advancedBloom = 0.0f;
-		float saturation = 1.0f;
-		float contrast = 1.0f;
-	};
-
 	static constexpr const char* kDefaultGlobalPresetName = "Default";
 	static constexpr const char* kDefaultLocationOverridePresetName = "Default";
 	static constexpr const char* kDefaultFullPresetName = "Default";
@@ -156,7 +142,6 @@ struct AdaptiveBalance : Feature
 
 	bool IsRuntimeEnabled() const;
 	LinearLighting::Settings GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const;
-	ImageAdjustments GetEffectiveImageAdjustments() const;
 
 	struct ActiveProfileBlend
 	{
@@ -168,8 +153,6 @@ struct AdaptiveBalance : Feature
 	LinearLighting::Settings GetNeutralLinearLightingSettings() const;
 	LinearLighting::Settings ApplyProfile(const LinearLighting::Settings& a_base, const ProfileSettings& a_profile) const;
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
-	static ImageAdjustments GetImageAdjustments(const ProfileSettings& a_profile);
-	static ImageAdjustments LerpImageAdjustments(const ImageAdjustments& a_a, const ImageAdjustments& a_b, float a_t);
 	ActiveProfileBlend GetActiveProfileBlend() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;

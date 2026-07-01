@@ -7,7 +7,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
+	float4 Color: SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -24,7 +24,6 @@ Texture2D<float4> ImageTex : register(t0);
 Texture2D<float4> AdaptTex : register(t1);
 #	elif defined(BLEND)
 Texture2D<float4> BlendTex : register(t1);
-#		include "Common/AdvancedBloom.hlsli"
 #	endif
 Texture2D<float4> AvgTex : register(t2);
 
@@ -94,71 +93,49 @@ PS_OUTPUT main(PS_INPUT input)
 	} else {
 		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
 	}
-	// Keep the two bloom sliders independent: vanilla bloom scales the native gate,
-	// while advanced bloom keeps the original threshold and uses its own color term.
-	const float bloomIntensity = Param.x * SharedData::linearLightingSettings.adaptiveBloomMult;
-	const float advancedBloomIntensity = Param.x;
-
-	float3 advancedBloomColor = 0.0;
-	float advancedBloomMult = SharedData::linearLightingSettings.adaptiveAdvancedBloomMult;
-	[branch] if (advancedBloomMult > 0.0001)
-	{
-		advancedBloomColor = AdvancedBloom::Compute(uv, input.TexCoord.xy) * advancedBloomMult;
-	}
 
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
 
-	// Vanilla tonemapping and post-processing
-	float3 gameSdrColor = 0.0;
-	float3 ppColor = 0.0;
+	float3 outputColor = 0.0;
+
+	if (avgValue.x != 0 && avgValue.y != 0)
+		inputColor *= avgValue.y / avgValue.x;
+	inputColor = max(0, inputColor);
+
+	float3 blendedColor;
+
+	[branch] if (Param.z > 0.5)
 	{
-		if (avgValue.x != 0 && avgValue.y != 0)
-			inputColor *= avgValue.y / avgValue.x;
-
-		inputColor = max(0, inputColor);
-
-		float3 blendedColor;
-		[branch] if (Param.z > 0.5)
-		{
-			blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity);
-		}
-		else
-		{
-			float maxCol = Color::RGBToLuminance(inputColor);
-			float mappedMax = GetTonemapFactorReinhard(maxCol).x;
-			float3 compressedHuePreserving = inputColor * mappedMax / maxCol;
-			blendedColor = DisplayMapping::ApplyBloom(compressedHuePreserving, bloomColor, bloomIntensity, advancedBloomColor, advancedBloomIntensity);
-		}
-
-		gameSdrColor = blendedColor;
-
-		const float imageBrightness = Cinematic.w * SharedData::linearLightingSettings.adaptiveImageBrightnessMult;
-		const float saturation = Cinematic.x * SharedData::linearLightingSettings.adaptiveSaturationMult;
-		const float contrast = Cinematic.z * SharedData::linearLightingSettings.adaptiveContrastMult;
-
-		float blendedLuminance = Color::RGBToLuminance(blendedColor);
-		float3 tintedColor = imageBrightness * lerp(lerp(blendedLuminance, blendedColor, saturation), blendedLuminance * Tint.xyz, Tint.w).xyz;
-		float3 contrastedColor = lerp(avgValue.x, tintedColor, contrast);
-
-		// Contrast modified to fix crushed shadows
-		float safeAvgValue = max(avgValue.x, EPSILON_DIVISION);
-		float3 contrastedColorModified = pow(max(EPSILON_DIVISION, abs(tintedColor) / safeAvgValue), contrast) * safeAvgValue * sign(tintedColor);
-		contrastedColor = lerp(contrastedColorModified, contrastedColor, saturate(contrastedColorModified / 0.1f));  // blend in modified contrast for shadows
-
-		ppColor = max(0, contrastedColor);
+		blendedColor = DisplayMapping::HuePreservingHejlBurgessDawson(inputColor, bloomColor);
+	}
+	else
+	{
+		float maxCol = Color::RGBToLuminance(inputColor);
+		float mappedMax = GetTonemapFactorReinhard(maxCol).x;
+		float3 compressedHuePreserving = inputColor * mappedMax / max(maxCol, EPSILON_DIVISION);
+		blendedColor = compressedHuePreserving + saturate(Param.x - compressedHuePreserving) * bloomColor;
 	}
 
-	float3 srgbColor = ppColor;
+	float blendedLuminance = Color::RGBToLuminance(blendedColor);
+	float3 tintedColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
+	float3 contrastedColor = lerp(avgValue.x, tintedColor, Cinematic.z);
+
+	// Contrast modified to fix crushed shadows
+	float safeAvgValue = max(avgValue.x, EPSILON_DIVISION);
+	float3 contrastedColorModified = pow(max(0.0, abs(tintedColor) / safeAvgValue), Cinematic.z) * safeAvgValue * sign(tintedColor);
+	contrastedColor = lerp(contrastedColorModified, contrastedColor, saturate(contrastedColorModified / 0.1f));  // blend in modified contrast for shadows
+
+	outputColor = contrastedColor;
 
 #		if defined(FADE)
-	srgbColor = lerp(srgbColor, Fade.xyz, Fade.w);
+	outputColor = lerp(outputColor, Fade.xyz, Fade.w);
 #		endif
 
 	if (ENABLE_LL)
-		srgbColor = Color::LinearToGammaSafe(srgbColor);
-	srgbColor = FrameBuffer::ToSRGBColor(srgbColor);
+		outputColor = Color::LinearToGammaSafe(outputColor);
+	outputColor = FrameBuffer::ToSRGBColor(outputColor);
 
-	psout.Color = float4(srgbColor, 1.0);
+	psout.Color = float4(outputColor, 1.0);
 
 #	endif
 

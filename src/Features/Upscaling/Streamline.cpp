@@ -820,9 +820,17 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 		g_sl.slSetTagForFrame(*token, a_viewport, tags, nt, cmd);
 		const sl::BaseStructure* inputs[] = { &a_viewport };
 		evalRes = g_sl.slEvaluateFeature(a_feature, *token, inputs, static_cast<uint32_t>(std::size(inputs)), cmd);
-		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/true);
+		// Submit async (was waitIdle=true, which serialized CPU↔GPU every frame just to free the
+		// views below — a ~1ms/frame main-thread stall). The views are referenced by the submitted
+		// DLSS dispatch, so hand them to the ring for destruction once this slot's fence signals
+		// (BeginFrameCommandBuffer), instead of blocking here. Same-queue submission order keeps the
+		// DLSS output ordered ahead of DXVK's later reads of colorOut.
+		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/false);
+		dxvk->QueueViewsForDeferredDelete(views, static_cast<uint32_t>(nv));
+	} else {
+		// Nothing was submitted — the views carry no pending GPU work, so free them immediately.
+		cs_DestroyViews(dxvk, vkDevice, views, nv);
 	}
-	cs_DestroyViews(dxvk, vkDevice, views, nv);
 	return evalRes;
 }
 

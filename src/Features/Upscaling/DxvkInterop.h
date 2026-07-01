@@ -137,6 +137,17 @@ public:
 	/** @brief Destroys the command pool, command buffers and fences. */
 	void DestroyCommandResources();
 
+	/**
+		 * @brief Waits every in-flight ring submission and flushes deferred view deletes, WITHOUT
+		 *        tearing the ring down. Call before destroying interop textures (resolution / upscale-
+		 *        method change): the upscaler eval submits work to DXVK's queue asynchronously
+		 *        (waitIdle=false), invisible to DXVK's resource-lifetime tracker, so an in-flight
+		 *        dispatch could still be writing an interop image that is about to be freed. Draining
+		 *        here restores that guarantee at a CPU cost paid ONLY on rare resource-change frames —
+		 *        the per-frame eval path stays async.
+		 */
+	void DrainCommandRing();
+
 	/** @brief Whether the command ring is ready (CreateCommandResources succeeded). */
 	bool CommandResourcesReady() const { return commandPool != VK_NULL_HANDLE; }
 
@@ -157,6 +168,17 @@ public:
 		 * @return true on success.
 		 */
 	bool SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool a_waitIdle = false);
+
+	/**
+		 * @brief Enqueue transient VkImageViews for destruction once the CURRENT ring slot's
+		 *        submission completes (i.e. when that slot is next reused, its fence already
+		 *        signalled). Lets a caller that recorded the views into the just-submitted
+		 *        command buffer free them without a per-frame vkWaitForFences stall — the views
+		 *        stay alive until the GPU is provably done with them.
+		 * @param a_views Array of views (VK_NULL_HANDLE entries are ignored).
+		 * @param a_count Number of entries in @p a_views.
+		 */
+	void QueueViewsForDeferredDelete(const VkImageView* a_views, uint32_t a_count);
 
 	/**
 		 * @brief Transitions an interop image's layout via DXVK's own tracker
@@ -188,11 +210,16 @@ private:
 
 	PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
 	PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr = nullptr;
+	PFN_vkDestroyImageView vkDestroyImageView = nullptr;
 
 	// Command-buffer ring (recorded on DXVK's queue family, submitted on its queue).
 	VkCommandPool commandPool = VK_NULL_HANDLE;
 	std::vector<VkCommandBuffer> commandBuffers;
 	std::vector<VkFence> commandFences;
+	// Per-slot transient image views awaiting destruction. Freed when the slot's fence signals
+	// (at reuse in BeginFrameCommandBuffer), so the DLSS-eval path need not block on the GPU to
+	// free the views it recorded. Indexed like commandBuffers/commandFences.
+	std::vector<std::vector<VkImageView>> pendingViewDeletes;
 	uint32_t framesInFlight = 0;
 	uint32_t commandFrameIndex = 0;
 };

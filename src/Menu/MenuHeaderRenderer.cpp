@@ -28,8 +28,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 		return;
 	}
 
-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
-	auto title = std::format("CS {} Particle Lights Fork", versionStr);
+	std::string title{ Plugin::MENU_TITLE };
 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
 
 	if (isDocked) {

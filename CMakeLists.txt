@@ -82,6 +82,25 @@ else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
+set(CS_PL_FORK_VERSION_DEFAULT "PL3.15-SE")
+set(CS_PL_FORK_VERSION_HELP "Display version label for the Particle Lights fork.")
+if(NOT DEFINED CS_PL_FORK_VERSION OR CS_PL_FORK_VERSION STREQUAL "" OR CS_PL_FORK_VERSION STREQUAL "PL3.15-VR")
+    set(CS_PL_FORK_VERSION
+        "${CS_PL_FORK_VERSION_DEFAULT}"
+        CACHE STRING
+        "${CS_PL_FORK_VERSION_HELP}"
+        FORCE
+    )
+else()
+    set(CS_PL_FORK_VERSION
+        "${CS_PL_FORK_VERSION}"
+        CACHE STRING
+        "${CS_PL_FORK_VERSION_HELP}"
+    )
+endif()
+unset(CS_PL_FORK_VERSION_DEFAULT)
+unset(CS_PL_FORK_VERSION_HELP)
+message("\tParticle Lights fork version: ${CS_PL_FORK_VERSION}")
 
 # #######################################################################################################################
 # # Add CMake features

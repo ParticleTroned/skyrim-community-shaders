@@ -10,8 +10,8 @@ public:
 	static constexpr const char* DISCORD_URL = "https://discord.gg/utSWStYTx2";
 	static constexpr const char* GITHUB_URL = "https://github.com/ParticleTroned/skyrim-community-shaders/tree/cs-1.7-PL-SE";
 	static constexpr float TITLE_FONT_SCALE = 2.0f;
-	static constexpr float TITLE_FORK_FONT_SCALE = 1.85f;
-	static constexpr float TITLE_VERSION_FONT_SCALE = 0.85f;
+	static constexpr float TITLE_PRIMARY_LINE_FONT_SCALE = 1.85f;
+	static constexpr float TITLE_SECONDARY_LINE_FONT_SCALE = 0.85f;
 	static constexpr float HOTKEY_TEXT_SCALE = 1.6f;
 	static constexpr float HOTKEY_TEXT_SCALE_CAPTURING = 2.0f;
 	static constexpr float HOTKEY_HOVER_DIM_FACTOR = 0.7f;

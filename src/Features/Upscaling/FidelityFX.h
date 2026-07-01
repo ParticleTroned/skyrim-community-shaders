@@ -56,6 +56,8 @@ public:
 	void CreateFSRResources();
 
 	void DestroyFSRResources(bool a_waitForIdle = true);
+	bool HasFSRResources() const;
+	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
 	bool HasFSRResourcesPendingTeardown() const;
 	bool PollFSRResourceTeardownReady(const char* a_reason = nullptr);
 	void ResetFSRIdleFence();
@@ -87,6 +89,10 @@ private:
 	// FSR scratch buffer - needs to be freed in DestroyFSRResources
 	void* fsrScratchBuffer = nullptr;
 	uint32_t fsrContextCount = 0;
+	uint32_t fsrContextMaxRenderWidth = 0;
+	uint32_t fsrContextMaxRenderHeight = 0;
+	uint32_t fsrContextDisplayWidth = 0;
+	uint32_t fsrContextDisplayHeight = 0;
 
 	uint32_t runtimeUpscalerContextCount = 0;
 	uint32_t runtimeUpscalerMaxRenderWidth = 0;

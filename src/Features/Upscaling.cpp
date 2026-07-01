@@ -6295,7 +6295,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	auto hasPendingVendorReset = [&]() {
 		return pendingDLSSReset.load(std::memory_order_acquire) ||
 		       pendingFSRReset.load(std::memory_order_acquire) ||
-		       fidelityFX.HasFSRResourcesPendingTeardown();
+		       (relatchUpscaleMethod != UpscaleMethod::kFSR && fidelityFX.HasFSRResourcesPendingTeardown());
 	};
 	auto shouldSkipNoOpRelatch = [&]() {
 		if (!IsRenderScaleMethodEligible(relatchUpscaleMethod))
@@ -6364,7 +6364,43 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	float2 relatchTargetDisplaySize{ 0.0f, 0.0f };
 	float2 relatchTargetEngineSize{ 0.0f, 0.0f };
 	try {
-		if (!ResetVRVendorRuntimeResources(true, true)) {
+		const auto canPreserveFSRResourcesForRelatch = [&]() {
+			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
+				pendingFSRReset.load(std::memory_order_acquire) ||
+				!fidelityFX.HasFSRResources() ||
+				!perfMode.trueHMDEyeWidth ||
+				!perfMode.trueHMDEyeHeight) {
+				return false;
+			}
+
+			const uint32_t qualityMode = ClampQualityModeUInt(settings.qualityMode);
+			const bool renderScaleTargetActive =
+				IsRenderScaleMethodEligible(relatchUpscaleMethod) &&
+				IsRenderScaleQualityMode(qualityMode) &&
+				ClampToggleUInt(settings.renderScaleMode) != 0 &&
+				ClampToggleUInt(settings.perfMode) != 0;
+			const float renderScale = renderScaleTargetActive ? GetQualityModeResolutionScale(qualityMode) : 1.0f;
+			auto scaleDimension = [](uint32_t a_dimension, float a_scale) {
+				if (!std::isfinite(a_scale))
+					return a_dimension;
+
+				const float scaled = static_cast<float>(a_dimension) * std::clamp(a_scale, 0.1f, 1.0f);
+				return std::clamp<uint32_t>(
+					static_cast<uint32_t>(std::floor(scaled)),
+					1u,
+					std::max<uint32_t>(a_dimension, 1u));
+			};
+			const uint32_t renderEyeWidth = renderScaleTargetActive ? scaleDimension(perfMode.trueHMDEyeWidth, renderScale) : perfMode.trueHMDEyeWidth;
+			const uint32_t renderEyeHeight = renderScaleTargetActive ? scaleDimension(perfMode.trueHMDEyeHeight, renderScale) : perfMode.trueHMDEyeHeight;
+			return fidelityFX.AreFSRResourcesCompatible(
+				renderEyeWidth,
+				renderEyeHeight,
+				perfMode.trueHMDEyeWidth,
+				perfMode.trueHMDEyeHeight,
+				2u);
+		};
+		const bool preserveFSRResourcesForRelatch = canPreserveFSRResourcesForRelatch();
+		if (!ResetVRVendorRuntimeResources(true, true, !preserveFSRResourcesForRelatch)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
 				clearRelatchRetryLogs();
@@ -6420,10 +6456,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingFSRReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(true, std::memory_order_release);
 		} else if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
-			pendingFSRReset.store(true, std::memory_order_release);
+			pendingFSRReset.store(!preserveFSRResourcesForRelatch, std::memory_order_release);
 			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
+			if (preserveFSRResourcesForRelatch)
+				RequestHistoryReset();
 		} else {
 			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
@@ -6604,12 +6642,13 @@ void Upscaling::ClearVRRenderScaleInfoTransition()
 	vrRenderScaleInfoTransitionStartFrame = 0;
 }
 
-bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources)
+bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources)
 {
 	if (!globals::game::isVR)
 		return true;
 
-	if (!fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
+	const bool destroyFSRResources = a_destroyFSRResources || pendingFSRReset.load(std::memory_order_acquire);
+	if (destroyFSRResources && !fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
 		pendingFSRReset.store(true, std::memory_order_release);
 		return false;
 	}
@@ -6621,7 +6660,8 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 		return false;
 	}
 
-	fidelityFX.DestroyFSRResources(false);
+	if (destroyFSRResources)
+		fidelityFX.DestroyFSRResources(false);
 	DestroyCommonUpscalingTextures();
 	if (a_destroyPeripheryTAAResources)
 		DestroyPeripheryTAAResources();
@@ -6946,6 +6986,31 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		a_upscalemethod == UpscaleMethod::kFSR &&
 		fsrRuntimePathCurrent &&
 		foveatedDispatchChanged;
+	const auto canPreserveFSRResourcesForCurrentVRPlan = [&]() {
+		if (!globals::game::isVR ||
+			!fidelityFX.HasFSRResources() ||
+			runtimeResolutionPlan.finalOutputSize.x <= 0.0f ||
+			runtimeResolutionPlan.finalOutputSize.y <= 0.0f ||
+			runtimeResolutionPlan.engineRenderSize.x <= 0.0f ||
+			runtimeResolutionPlan.engineRenderSize.y <= 0.0f) {
+			return false;
+		}
+
+		const uint32_t displayWidthPerEye = std::max<uint32_t>(1u, ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.x) / 2u);
+		const uint32_t displayHeight = ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.y);
+		const uint32_t renderWidthPerEye = std::max<uint32_t>(1u, ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.x) / 2u);
+		const uint32_t renderHeight = ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.y);
+		return fidelityFX.AreFSRResourcesCompatible(renderWidthPerEye, renderHeight, displayWidthPerEye, displayHeight, 2u);
+	};
+	const bool vrFSRQualityChangeCanPreserveResources =
+		fsrQualityModeChanged &&
+		previousUpscaleMode == UpscaleMethod::kFSR &&
+		a_upscalemethod == UpscaleMethod::kFSR &&
+		!fsrRuntimePathChanged &&
+		!fsrRuntimeFsr4ConfiguredChanged &&
+		!fsrRuntimeVersionChanged &&
+		!pendingFSRReset.load(std::memory_order_acquire) &&
+		canPreserveFSRResourcesForCurrentVRPlan();
 	const bool renderScaleTransitionRelevant = ShouldIncludeInactiveVRVendorReset(*this, a_upscalemethod);
 	const bool resourceChangeDetected =
 		upscaleModeChanged ||
@@ -7068,10 +7133,14 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 					destroyVRQualityResources();
 			} else if (fsrQualityModeChanged) {
 				vrDLSSSettingsRelatched.store(false, std::memory_order_release);
-				fidelityFX.DestroyFSRResources();
-				fsrResourcesDestroyedForQuality = true;
 				destroyVRQualityResources();
-				if (a_upscalemethod == UpscaleMethod::kFSR) {
+				if (vrFSRQualityChangeCanPreserveResources) {
+					RequestHistoryReset();
+				} else {
+					fidelityFX.DestroyFSRResources();
+					fsrResourcesDestroyedForQuality = true;
+				}
+				if (a_upscalemethod == UpscaleMethod::kFSR && !vrFSRQualityChangeCanPreserveResources) {
 					fsrResourcesRecreatedForQuality = createFSRResourcesWhenSafe();
 				}
 			} else {
@@ -7214,11 +7283,14 @@ bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 		return true;
 	}
 
+	const bool fsrResourcesNeedRetirement =
+		a_upscalemethod != UpscaleMethod::kFSR &&
+		fidelityFX.HasFSRResourcesPendingTeardown();
 	if (resourceCheckStable &&
 		resourceCheckStableMethod == a_upscalemethod &&
 		!pendingDLSSReset.load(std::memory_order_acquire) &&
 		!pendingFSRReset.load(std::memory_order_acquire) &&
-		!fidelityFX.HasFSRResourcesPendingTeardown() &&
+		!fsrResourcesNeedRetirement &&
 		!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
 		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 		!vrRenderScaleResourceTrackingSyncPending.load(std::memory_order_acquire) &&

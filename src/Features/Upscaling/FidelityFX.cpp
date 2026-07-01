@@ -821,6 +821,10 @@ void FidelityFX::CreateFSRResources()
 	if (!state) {
 		logger::critical("[FidelityFX] Missing global state when creating FSR resources.");
 		fsrContextCount = 0;
+		fsrContextMaxRenderWidth = 0;
+		fsrContextMaxRenderHeight = 0;
+		fsrContextDisplayWidth = 0;
+		fsrContextDisplayHeight = 0;
 		return;
 	}
 
@@ -845,6 +849,10 @@ void FidelityFX::CreateFSRResources()
 	if (!fsrScratchBuffer) {
 		logger::critical("[FidelityFX] Failed to allocate FSR3 scratch buffer memory!");
 		fsrContextCount = 0;
+		fsrContextMaxRenderWidth = 0;
+		fsrContextMaxRenderHeight = 0;
+		fsrContextDisplayWidth = 0;
+		fsrContextDisplayHeight = 0;
 		return;
 	}
 	memset(fsrScratchBuffer, 0, scratchBufferSize);
@@ -855,6 +863,10 @@ void FidelityFX::CreateFSRResources()
 		free(fsrScratchBuffer);
 		fsrScratchBuffer = nullptr;
 		fsrContextCount = 0;
+		fsrContextMaxRenderWidth = 0;
+		fsrContextMaxRenderHeight = 0;
+		fsrContextDisplayWidth = 0;
+		fsrContextDisplayHeight = 0;
 		return;
 	}
 
@@ -887,11 +899,19 @@ void FidelityFX::CreateFSRResources()
 			free(fsrScratchBuffer);
 			fsrScratchBuffer = nullptr;
 			fsrContextCount = 0;
+			fsrContextMaxRenderWidth = 0;
+			fsrContextMaxRenderHeight = 0;
+			fsrContextDisplayWidth = 0;
+			fsrContextDisplayHeight = 0;
 			return;
 		}
 	}
 
 	fsrContextCount = numContexts;
+	fsrContextMaxRenderWidth = renderWidth;
+	fsrContextMaxRenderHeight = renderHeight;
+	fsrContextDisplayWidth = displayWidth;
+	fsrContextDisplayHeight = displayHeight;
 	logger::info("[FidelityFX] Created {} FSR3 contexts (Display: {}x{}, MaxRender: {}x{}, RequestedRender: {}x{}, SplitPerEye={})",
 		numContexts, displayWidth, displayHeight, renderWidth, renderHeight, requestedRenderWidth, requestedRenderHeight, splitPerEyeContexts);
 }
@@ -1086,6 +1106,25 @@ void FidelityFX::ResetFSRIdleFence()
 	pendingRuntimeTeardownD3D12FenceValue = 0;
 }
 
+bool FidelityFX::HasFSRResources() const
+{
+	return fsrContextCount != 0 && fsrScratchBuffer != nullptr;
+}
+
+bool FidelityFX::AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const
+{
+	return HasFSRResources() &&
+	       fsrContextCount == a_contextCount &&
+	       a_renderWidth != 0 &&
+	       a_renderHeight != 0 &&
+	       a_displayWidth != 0 &&
+	       a_displayHeight != 0 &&
+	       a_renderWidth <= fsrContextMaxRenderWidth &&
+	       a_renderHeight <= fsrContextMaxRenderHeight &&
+	       a_displayWidth == fsrContextDisplayWidth &&
+	       a_displayHeight == fsrContextDisplayHeight;
+}
+
 bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
 {
 	const char* reason = a_reason && *a_reason ? a_reason : "runtime upscaler teardown";
@@ -1241,6 +1280,10 @@ void FidelityFX::DestroyFSRResources(bool a_waitForIdle)
 			logger::critical("[FidelityFX] Failed to destroy FSR3 context for eye {}!", i);
 	}
 	fsrContextCount = 0;
+	fsrContextMaxRenderWidth = 0;
+	fsrContextMaxRenderHeight = 0;
+	fsrContextDisplayWidth = 0;
+	fsrContextDisplayHeight = 0;
 
 	if (fsrScratchBuffer) {
 		free(fsrScratchBuffer);
@@ -1977,8 +2020,12 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		const uint32_t fullDisplayHeight = static_cast<uint32_t>(screenSize.y);
 		const uint32_t requestedFullRenderWidth = static_cast<uint32_t>(splitPerEyeContexts ? renderSize.x / 2.0f : renderSize.x);
 		const uint32_t requestedFullRenderHeight = static_cast<uint32_t>(renderSize.y);
-		const uint32_t fullRenderWidth = runtimeFsr4Requested ? fullDisplayWidth : requestedFullRenderWidth;
-		const uint32_t fullRenderHeight = runtimeFsr4Requested ? fullDisplayHeight : requestedFullRenderHeight;
+		// Mirror the host VR path: keep runtime contexts/resources sized for the
+		// largest per-eye display bounds so render-scale quality changes do not
+		// force DX11<->DX12 runtime context/shared-resource churn.
+		const bool useFullRenderBounds = splitPerEyeContexts || runtimeFsr4Requested;
+		const uint32_t fullRenderWidth = useFullRenderBounds ? fullDisplayWidth : requestedFullRenderWidth;
+		const uint32_t fullRenderHeight = useFullRenderBounds ? fullDisplayHeight : requestedFullRenderHeight;
 
 		auto tryRuntimeUpscaler = [&](uint32_t a_requestedVersion, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight) {
 			try {
@@ -2020,7 +2067,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 		if (runtimeFsr4Requested && ShouldUseRuntimeUpscalerForFSR()) {
 			LatchRuntimeFsr4Failure();
 			runtimeFallbackResetDispatchesRemaining = std::max(runtimeFallbackResetDispatchesRemaining, runtimeContextCount);
-			if (tryRuntimeUpscaler(kRuntimeFsr315Version, requestedFullRenderWidth, requestedFullRenderHeight))
+			if (tryRuntimeUpscaler(kRuntimeFsr315Version, fullRenderWidth, fullRenderHeight))
 				return true;
 		}
 

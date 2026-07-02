@@ -1623,6 +1623,16 @@ bool Streamline::IsDLSSGLoaded() const
 	return g_dlssgCurrentlyLoaded;
 }
 
+bool Streamline::IsDLSSGLoadSettled() const
+{
+	// True once the load/unload reconcile has landed: the desired state has been
+	// applied by DxvkSwapchainTornDownCallback and no recreate is outstanding for
+	// it. Used to defer the first slDLSSGSetOptions(on) until the FINAL swapchain
+	// exists, so a toggle engages FG exactly once instead of engage -> teardown ->
+	// re-engage (the visible debug-overlay bounce).
+	return g_dlssgDesiredLoaded.load(std::memory_order_acquire) == g_dlssgCurrentlyLoaded;
+}
+
 void Streamline::RequestDxvkSwapchainRecreate()
 {
 	// Force DXVK to recreate its Vulkan swapchain on the next acquire. Needed when switching FG method

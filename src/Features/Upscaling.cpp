@@ -1618,9 +1618,16 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			const bool useAuto = dynamic && !useDynamic;
 			const uint32_t numFramesToGenerate = upscaling.settings.frameGenMultiplier > 1 ? upscaling.settings.frameGenMultiplier - 1 : 1;
 			const float dynTargetFps = dynamic ? static_cast<float>(upscaling.GetTargetFrameRate()) : 0.0f;
-			sl->SetDLSSGMode(true,
-				(uint32_t)rendSize.x, (uint32_t)rendSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y,
-				numFramesToGenerate, useAuto, useDynamic, dynTargetFps);
+			// Engage only once the load reconcile has settled (plugin loaded AND its
+			// swapchain-recreate landed). Engaging earlier turns FG on against the OLD
+			// swapchain, which the queued recreate immediately tears down — the visible
+			// engage -> blank -> re-engage bounce on a menu toggle. The recreate path
+			// itself is untouched; we only defer the first slDLSSGSetOptions(on).
+			if (sl->IsDLSSGLoaded() && sl->IsDLSSGLoadSettled()) {
+				sl->SetDLSSGMode(true,
+					(uint32_t)rendSize.x, (uint32_t)rendSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y,
+					numFramesToGenerate, useAuto, useDynamic, dynTargetFps);
+			}
 
 			if (gameplay) {
 				// FG depth = the pre-upscale render-res kMAIN. With an active upscaler UpscaleDepth() rewrote kMAIN

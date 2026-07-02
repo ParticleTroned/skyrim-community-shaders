@@ -113,6 +113,8 @@ public:
 	// no-swapchain window so the next create installs/omits DLSS-G's proxy. Unloaded => no overhead when off.
 	void SetDLSSGDesiredLoaded(bool a_loaded);
 	[[nodiscard]] bool IsDLSSGLoaded() const;
+	// Desired load state has been applied (no load/unload recreate outstanding).
+	[[nodiscard]] bool IsDLSSGLoadSettled() const;
 
 	[[nodiscard]] bool GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) const;
 

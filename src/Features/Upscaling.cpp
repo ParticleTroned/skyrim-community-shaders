@@ -326,7 +326,13 @@ void Upscaling::DrawSettings()
 		if (dlssgAvailable) {
 			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();
 			const uint     maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
-			std::vector<std::string> fgStrings = { "Off", std::string(T(TKEY("fg_dynamic"), "Dynamic")) };
+			// The adaptive slot is "Dynamic" only when the hardware supports Dynamic
+			// MFG (RTX 50+); otherwise DLSS-G runs its automatic single-frame mode,
+			// so label it "Auto" (e.g. RTX 40 reports DynamicMFG=false).
+			std::vector<std::string> fgStrings = { "Off",
+				streamline->IsDLSSGDynamicSupported()
+					? std::string(T(TKEY("fg_dynamic"), "Dynamic"))
+					: std::string(T(TKEY("fg_auto"), "Auto")) };
 			for (uint m = 2; m <= maxMultiplier; ++m)
 				fgStrings.push_back(std::format("{}x", m));
 			std::vector<const char*> fgStates;

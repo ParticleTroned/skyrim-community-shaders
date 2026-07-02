@@ -450,7 +450,14 @@ struct BSInputDeviceManager_PollInputDevices
 			// Frame limiter: cap at GetTargetFrameRate() (default = refresh rate). Reflex paces it when active
 			// (lowest latency; DLSS-G relies on this); otherwise DXVK's own limiter. Exactly one is engaged so
 			// they don't double-limit.
-			const int targetFps = upscaling.GetTargetFrameRate();
+			//
+			// The cap is a GAMEPLAY concern (keep frametimes inside the VRR window; pace DLSS-G's generated
+			// frames). The main menu and loading screens have no gameplay and vanilla leaves them uncapped
+			// (many hundreds/thousands of fps), so DON'T cap them — a stale menu pinned to refresh looks like
+			// a CS bug. Force uncapped whenever the main/loading menu is open, regardless of the saved divisor.
+			auto* ui = globals::game::ui;
+			const bool atMenu = globals::state->IsMainOrLoadingMenuOpen(ui);
+			const int targetFps = atMenu ? 0 : upscaling.GetTargetFrameRate();
 			const uint32_t reflexLimitUs = (wantReflex && targetFps > 0) ? static_cast<uint32_t>(1000000.0 / targetFps) : 0u;
 			Streamline::GetSingleton()->UpdateReflex(wantReflex, wantReflex && upscaling.settings.reflexBoost, reflexLimitUs);
 			// DXVK limiter (the non-Reflex fallback). It paces DXVK's real presents; under FSR frame generation

@@ -449,6 +449,10 @@ void Upscaling::Load()
 		// Map sl.interposer.dll NOW so DXVK's Vulkan loader (which tries sl.interposer.dll first) aliases
 		// it at its imminent first-DXGI VkInstance creation — routing DXVK's whole Vulkan surface through
 		// Streamline (full interposition). Must precede DXVK's instance creation; this is that window.
+		//
+		// ALWAYS preloaded (do not gate on the configured upscale method): DLSS must be available
+		// on capable hardware at all times, and FSR/XeSS run as sl.* plugins too, so every runtime
+		// upscaler/frame-gen switch needs the interposition established at boot.
 		Streamline::GetSingleton()->PreloadInterposer();
 	}
 
@@ -509,6 +513,15 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	if (method == UpscaleMethod::kXeSS &&
 		!Streamline::GetSingleton()->IsXeSSSupported()) {
 		method = UpscaleMethod::kFSR;
+	}
+	// FSR is the fallback of the chains above but is itself an SL plugin (sl.fsr):
+	// without Streamline (plugins missing, or disabled by configuration this session
+	// because no SL feature was requested at startup) its backend cannot engage, and
+	// a half-engaged upscaler (render-res switch with no evaluate) is undefined
+	// behavior. Clamp to TAA — a restart with the new setting picks the real method.
+	if (method == UpscaleMethod::kFSR &&
+		!Streamline::GetSingleton()->IsFSRSupported()) {
+		method = UpscaleMethod::kTAA;
 	}
 	return method;
 }

@@ -7,6 +7,7 @@
 #include "../../State.h"
 #include "../../Utils/Game.h"
 
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 
@@ -528,7 +529,19 @@ static sl::FrameToken* RenderFrameToken()
 {
 	if (!g_sl.renderFrameLatched) {
 		g_sl.renderFrameToken = SharedFrameToken(false);
-		g_sl.renderFrameIndex = g_sl.frameIndex;
+		// Derive the index FROM the token, never from g_sl.frameIndex: the input
+		// thread advances frameIndex + mints the next token concurrently (and
+		// causally adjacent to this latch, every frame boundary), so reading the
+		// (token, index) pair non-atomically can pair the OLD token with the NEW
+		// index. The once-per-frame constants guard keys on this index, so that
+		// mismatch re-issued slSetConstants on an already-set token — SL's
+		// "Setting different 'common' constants multiple times" clobber, which
+		// non-atomically corrupts the constants the presented frame reads
+		// (identity/NaN clipToPrevClip in the DLSS-G overlay, garbage into the
+		// FSR-FG prepare).
+		g_sl.renderFrameIndex = g_sl.renderFrameToken
+		                            ? static_cast<uint32_t>(*g_sl.renderFrameToken)
+		                            : g_sl.frameIndex;
 		g_sl.renderFrameLatched = true;
 	}
 	return g_sl.renderFrameToken ? g_sl.renderFrameToken : SharedFrameToken(false);
@@ -568,8 +581,16 @@ void Streamline::UpdateReflex(bool a_enable, bool a_boost, uint32_t a_frameLimit
 			// Reflex sleep runs just before the SimulationStart marker establishes this frame's token,
 			// so it reuses the current (prior frame's) shared token — acceptable for pacing and keeps a
 			// single frame-begin point (SimulationStart) for the DLSS-G constants/present contract.
-			if (sl::FrameToken* token = SharedFrameToken(false))
-				g_sl.slReflexSleep(*token);
+			// ONCE PER RENDERED FRAME: PollInputDevices (our caller) runs more than once per frame, and
+			// sleeping on every poll destroys Reflex's pacing (visible judder). Same guard dev carried
+			// (lastReflexSleepFrame) — it was lost in the Vulkan-interposition rewrite.
+			static uint32_t s_lastSleepFrame = UINT32_MAX;
+			const uint32_t gameFrame = globals::state->frameCount;
+			if (s_lastSleepFrame != gameFrame) {
+				s_lastSleepFrame = gameFrame;
+				if (sl::FrameToken* token = SharedFrameToken(false))
+					g_sl.slReflexSleep(*token);
+			}
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
@@ -579,8 +600,31 @@ void Streamline::UpdateReflex(bool a_enable, bool a_boost, uint32_t a_frameLimit
 
 void Streamline::SetPCLMarker(PclMarker a_marker)
 {
+	// PresentEnd must release the render-frame latch UNCONDITIONALLY (before any
+	// early-out): the once-per-frame evaluate/constants guards key on the latched
+	// index, and a permanently-held latch (e.g. after a PCL fault) would silently
+	// skip every subsequent evaluate.
+	if (a_marker == PclMarker::PresentEnd)
+		CloseRenderFrame();
 	if (!initialized || !g_sl.slPCLSetMarker || g_sl.dispatchFaulted)
 		return;
+
+	// SimulationStart fires once per INPUT POLL (BSInputDeviceManager::PollInputDevices),
+	// and Skyrim polls more than once per rendered frame. Mint/advance the SL frame
+	// token only on the FIRST poll of each game frame — poll-rate minting floods the
+	// token sequence (constants/tags then straddle tokens SL never presents with) and
+	// poll-rate SimulationStart markers corrupt the PCL timing Reflex/DLSS-G pace by.
+	// Same once-per-frame rule dev enforced around its poll-driven Reflex work.
+	bool beginFrame = false;
+	if (a_marker == PclMarker::SimulationStart) {
+		static uint32_t s_lastSimFrame = UINT32_MAX;
+		const uint32_t gameFrame = globals::state->frameCount;
+		if (s_lastSimFrame == gameFrame)
+			return;  // repeat poll within the same rendered frame: no marker, no mint
+		s_lastSimFrame = gameFrame;
+		beginFrame = true;
+	}
+
 	__try {
 		// Render-thread markers (submit/present) carry the LATCHED render-frame token so DLSS-G's present —
 		// correlated to kMarkerPresentFrame, which the PresentStart marker sets — matches the frame the render
@@ -592,13 +636,9 @@ void Streamline::SetPCLMarker(PclMarker a_marker)
 			a_marker == PclMarker::TriggerFlash;
 		sl::FrameToken* token = renderThreadMarker ?
 		                            RenderFrameToken() :
-		                            SharedFrameToken(a_marker == PclMarker::SimulationStart);
+		                            SharedFrameToken(beginFrame);
 		if (token)
 			g_sl.slPCLSetMarker(static_cast<sl::PCLMarker>(a_marker), *token);
-		// PresentEnd closes the display frame's render-thread markers — release the latch so the next display
-		// frame's first render-thread SL call captures a fresh token.
-		if (a_marker == PclMarker::PresentEnd)
-			CloseRenderFrame();
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
 		logger::error("[Streamline] PCL marker faulted — disabling for this session");
@@ -617,7 +657,12 @@ void Streamline::SetPCLMarker(PclMarker a_marker)
 // Fill SL common constants for the frame: real camera matrices from the frame-buffer cache fed through
 // recalculateCameraMatrices, NEGATED jitter (SL/DLSS/FFX sign convention), non-inverted depth, and unit
 // mvec scale (Skyrim MVs are already in SL space). Identical inputs for every upscaler and the FG-prepare.
-static void cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, uint32_t a_outputHeight,
+// Returns false when the engine camera data is not yet valid this frame (zero/singular view-proj during
+// boot/menu/load frames): Matrix::Invert then yields NaN/INF, and sl::recalculateCameraMatrices' unguarded
+// vectorNormalize turns zero camera rows into NaN camera vectors — SL consumes all of it verbatim (the
+// NaN clipToPrevClip/prevClipToClip visible in the NGX dev overlay). The caller skips slSetConstants for
+// such frames; SL then keeps the last good constants, which is correct for a static/UI frame.
+static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, uint32_t a_outputHeight,
 	float a_jitterX, float a_jitterY)
 {
 	a_consts = {};
@@ -678,6 +723,21 @@ static void cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 	a_consts.orthographicProjection = sl::Boolean::eFalse;
 	a_consts.motionVectorsDilated = sl::Boolean::eFalse;
 	a_consts.motionVectorsJittered = sl::Boolean::eFalse;
+
+	// Validity gate (see the function comment). Checks one representative of each
+	// contamination path: the reprojection pair (NaN from inverting a zero/singular
+	// view-proj) and the camera basis (NaN from recalculateCameraMatrices normalizing
+	// zero rows). Also rejects a degenerate projection (_33 == 0 => zero cameraData).
+	if (!std::isfinite(clipToPrevClip._11) || !std::isfinite(prevClipToClip._11) ||
+		!std::isfinite(a_consts.cameraRight.x) || !std::isfinite(a_consts.cameraUp.y) ||
+		cameraViewToClip._33 == 0.0f) {
+		static uint32_t s_skipN = 0;
+		if ((s_skipN++ % 240) == 0)
+			logger::debug("[Streamline] skipping constants set - engine camera data not valid this frame");
+		return false;
+	}
+
+	return true;
 }
 
 // Wrap one DXVK interop D3D11 resource as an SL Vulkan resource. SL's VK backend documents the
@@ -757,13 +817,37 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	// Keyed on renderFrameIndex (the latched display-frame index) — NOT the live frameIndex, which the input
 	// thread can advance mid-display-frame and would let a second set slip through. (Render thread only.)
 	// Viewports used: 0 (upscale/keep-alive) and 1 (FSR FG-prepare).
+	// Constants + evaluate, ONCE per display frame per viewport, and never one
+	// without the other:
+	//  * Main_PostProcessing runs more than once per rendered frame; on dev the
+	//    second call was implicitly aborted (its per-evaluate constants set failed
+	//    on the duplicate and the evaluate bailed). Letting a second evaluate run
+	//    feeds NGX/FFX the SAME frame twice (same image, same jitter), corrupting
+	//    their temporal accumulation - shimmer/crawl/judder on every SL upscaler
+	//    and the FSR FG-prepare, while plain TAA is unaffected. First call wins.
+	//  * An evaluate WITHOUT this frame's constants is equally wrong: SL's 3-deep
+	//    ring silently falls back to the LAST SET constants on an exact-match miss,
+	//    so the upscaler would de-jitter with the previous frame's offset. If the
+	//    camera data is invalid this frame (cs_BuildConstants false), skip the
+	//    evaluate too and retry the whole pair next frame - dev parity again.
+	static uint32_t s_evalFrameByVp[2] = { UINT32_MAX, UINT32_MAX };
 	static uint32_t s_constFrameByVp[2] = { UINT32_MAX, UINT32_MAX };
 	const uint32_t vpId = a_viewport;
-	if (vpId >= 2 || s_constFrameByVp[vpId] != g_sl.renderFrameIndex) {
-		if (vpId < 2)
+	if (vpId < 2) {
+		if (s_evalFrameByVp[vpId] == g_sl.renderFrameIndex)
+			return sl::Result::eOk;
+		if (s_constFrameByVp[vpId] != g_sl.renderFrameIndex) {
+			sl::Constants consts;
+			if (!cs_BuildConstants(consts, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY))
+				return sl::Result::eOk;
 			s_constFrameByVp[vpId] = g_sl.renderFrameIndex;
+			g_sl.slSetConstants(consts, *token, a_viewport);
+		}
+		s_evalFrameByVp[vpId] = g_sl.renderFrameIndex;
+	} else {
 		sl::Constants consts;
-		cs_BuildConstants(consts, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY);
+		if (!cs_BuildConstants(consts, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY))
+			return sl::Result::eOk;
 		g_sl.slSetConstants(consts, *token, a_viewport);
 	}
 

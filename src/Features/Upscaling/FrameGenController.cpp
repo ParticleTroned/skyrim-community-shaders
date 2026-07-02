@@ -142,9 +142,16 @@ namespace FrameGen
 		const bool wantLoaded = a_target == Method::kDLSSG;
 		if (sl->IsDLSSGLoaded() == wantLoaded) {
 			if (wantLoaded && owner != Method::kDLSSG) {
-				// Already loaded (boot default) - adopt without a recreate.
+				// Already loaded (boot default) - adopt without a recreate, but
+				// still register the viewport with interpolation OFF exactly like
+				// the load-landed path: engaging straight to mode-on without the
+				// registered-off -> on edge leaves the present proxy passive
+				// (loaded, stable, but never doubling).
+				const auto dims = CurrentDims(false);
+				sl->SetDLSSGMode(false, dims.renderWidth, dims.renderHeight,
+					dims.displayWidth, dims.displayHeight);
 				owner = Method::kDLSSG;
-				logger::info("[FrameGen] DLSS-G already loaded - adopted as present owner");
+				logger::info("[FrameGen] DLSS-G already loaded - registered + adopted as present owner");
 			}
 			return;
 		}

@@ -8900,7 +8900,8 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			params.outputWidth,
 			params.pinholeOffsetX,
 			params.pinholeOffsetY,
-			params.label);
+			params.label,
+			params.dlssViewportRole);
 	}
 
 	if (a_upscaleMethod == UpscaleMethod::kFSR) {
@@ -9020,6 +9021,7 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	vendorParams.transparencyMask = foveatedCenterTransparencyMask[eyeIndex]->resource.get();
 	vendorParams.colorOut = foveatedCenterColorOut[eyeIndex]->resource.get();
 	vendorParams.label = "foveated center";
+	vendorParams.dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
 	if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
 		return false;
 

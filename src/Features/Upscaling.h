@@ -937,6 +937,7 @@ private:
 		ID3D11Resource* transparencyMask = nullptr;
 		ID3D11Resource* colorOut = nullptr;
 		const char* label = "vendor eye dispatch";
+		Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FullEye;
 	};
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
 	bool EnsureHMDMaskClearResources();

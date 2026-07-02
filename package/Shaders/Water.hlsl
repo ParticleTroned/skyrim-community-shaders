@@ -193,7 +193,8 @@ VS_OUTPUT main(VS_INPUT input)
 	float2 scrollAdjust3 = posAdjust / NormalsScale.zz;
 
 #				if defined(UNIFIED_WATER) && defined(NORMAL_TEXCOORD)
-	float2 scaledUV = input.TexCoord0.xy * ObjectUV.z;
+	float2 cellShift = float2(floor(ObjectUV.z * 0.5), floor((ObjectUV.z - 1.0) * 0.5));
+	float2 scaledUV = input.TexCoord0.xy * ObjectUV.z - cellShift;
 #				endif
 
 #				if !(defined(FLOWMAP) && (defined(REFRACTIONS) || defined(BLEND_NORMALS) || defined(DEPTH) || NUM_SPECULAR_LIGHTS == 0))

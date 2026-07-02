@@ -833,6 +833,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 			return;
 		}
 
+		built.reserve(instructions->size());
 		ClearWaterNodeChildren(water.get(), waterSystem);
 
 		for (auto& instruction : *instructions) {

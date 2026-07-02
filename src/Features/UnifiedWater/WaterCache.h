@@ -164,9 +164,11 @@ private:
 	std::atomic<std::shared_ptr<const CacheMap>> cacheMap{ std::make_shared<CacheMap>() };
 
 	std::shared_ptr<RuntimeCache> currentCache;
+	std::weak_ptr<const CacheMap> currentCacheSnapshot;
+	const RE::TESWorldSpace* currentWorldSpaceForm = nullptr;
 	std::string currentWorldSpace;
 
-	bool LoadCaches();
+	bool LoadCaches(bool allowPartial = false);
 
 	static void BuildPreCache(RE::TESWorldSpace* worldSpace, PreCache& cache);
 	static bool BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCache);

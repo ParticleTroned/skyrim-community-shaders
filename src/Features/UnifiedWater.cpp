@@ -12,15 +12,6 @@
 #include "RE/P/PlayerCharacter.h"
 
 #include <imgui_internal.h>
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <mutex>
-#include <thread>
-#include <unordered_map>
-#include <vector>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,

@@ -470,11 +470,11 @@ endif()
 # add_subdirectory above) FETCHES them at configure time from the release zip when
 # STREAMLINE_FETCH is ON and repoints ${STREAMLINE_DLL_DIR} at the extracted DLLs. With the
 # fetch disabled (or on a clean checkout that skipped it) this falls back to the default
-# extern/Streamline-DX12/bin/x64 — drop sl.interposer.dll + sl.*.dll there to stage them.
+# extern/Streamline/bin/x64 — drop sl.interposer.dll + sl.*.dll there to stage them.
 # When the DLLs are absent the block below is a no-op and Streamline degrades cleanly to FSR.
 # The CACHE set here is a fallback default — the Streamline subdir's FORCE set wins when it
 # fetched the DLLs (it runs first, so this plain set is a no-op once that cache var exists).
-set(STREAMLINE_DLL_DIR "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/bin/x64" CACHE PATH "Directory holding the Streamline plugin DLLs to stage")
+set(STREAMLINE_DLL_DIR "${CMAKE_SOURCE_DIR}/extern/Streamline/bin/x64" CACHE PATH "Directory holding the Streamline plugin DLLs to stage")
 if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
     file(GLOB _SL_DLLS "${STREAMLINE_DLL_DIR}/sl.*.dll")
     # STREAMLINE_DLL_DIR is the SIGNED production SDK build (cmake/Streamline prefers it) — ship the official
@@ -490,7 +490,7 @@ if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
     # Custom + CS-modified plugins built from the Streamline fork live in the fork's _artifacts tree, not the
     # official SDK zip. The fork builds the FULL SDK there, but we take ONLY sl.fsr / sl.xess (custom) and
     # sl.interposer (CS WSI-hook change) — the rest must remain the official SIGNED SDK binaries globbed above.
-    file(GLOB _SL_FORK_DLLS "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/_artifacts/sl.*/Develop_x64/sl.*.dll")
+    file(GLOB _SL_FORK_DLLS "${CMAKE_SOURCE_DIR}/extern/Streamline/_artifacts/sl.*/Develop_x64/sl.*.dll")
     list(FILTER _SL_FORK_DLLS INCLUDE REGEX "sl\\.(fsr|xess|interposer)\\.dll$")
     if(_SL_FORK_DLLS)
         list(APPEND _SL_DLLS ${_SL_FORK_DLLS})
@@ -511,7 +511,7 @@ if(EXISTS "${STREAMLINE_DLL_DIR}/sl.interposer.dll")
     # miss it; it ships in the SDK bin or the fork's external/reflex-sdk-vk/lib. Stage whichever exists.
     set(_SL_NVLL "${STREAMLINE_DLL_DIR}/NvLowLatencyVk.dll")
     if(NOT EXISTS "${_SL_NVLL}")
-        set(_SL_NVLL "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/external/reflex-sdk-vk/lib/NvLowLatencyVk.dll")
+        set(_SL_NVLL "${CMAKE_SOURCE_DIR}/extern/Streamline/external/reflex-sdk-vk/lib/NvLowLatencyVk.dll")
     endif()
     if(EXISTS "${_SL_NVLL}")
         list(APPEND _SL_NGX_DLLS "${_SL_NVLL}")
@@ -664,7 +664,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         file(GLOB _AIO_SL_NGX "${STREAMLINE_DLL_DIR}/nvngx_*.dll")
         list(APPEND _AIO_SL_DLLS ${_AIO_SL_NGX})
         # Take ONLY sl.fsr / sl.xess (custom) + sl.interposer (CS-modified) from the fork; the rest stay signed.
-        file(GLOB _AIO_SL_FORK "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/_artifacts/sl.*/Develop_x64/sl.*.dll")
+        file(GLOB _AIO_SL_FORK "${CMAKE_SOURCE_DIR}/extern/Streamline/_artifacts/sl.*/Develop_x64/sl.*.dll")
         list(FILTER _AIO_SL_FORK INCLUDE REGEX "sl\\.(fsr|xess|interposer)\\.dll$")
         list(APPEND _AIO_SL_DLLS ${_AIO_SL_FORK})
         # Drop must-not-ship plugins AFTER the fork-artifacts append (the fork builds the full SDK; see the
@@ -674,7 +674,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         # the globs miss it. See the install() rule above. Stage from the SDK bin or the fork's reflex-sdk-vk/lib.
         set(_aio_nvll "${STREAMLINE_DLL_DIR}/NvLowLatencyVk.dll")
         if(NOT EXISTS "${_aio_nvll}")
-            set(_aio_nvll "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/external/reflex-sdk-vk/lib/NvLowLatencyVk.dll")
+            set(_aio_nvll "${CMAKE_SOURCE_DIR}/extern/Streamline/external/reflex-sdk-vk/lib/NvLowLatencyVk.dll")
         endif()
         if(EXISTS "${_aio_nvll}")
             list(APPEND _AIO_SL_DLLS "${_aio_nvll}")

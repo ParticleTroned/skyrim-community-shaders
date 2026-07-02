@@ -1,8 +1,8 @@
 [submodule "extern/CommonLibSSE-NG"]
 	path = extern/CommonLibSSE-NG
 	url = https://github.com/alandtse/CommonLibVR.git
-[submodule "extern/Streamline-DX12"]
-	path = extern/Streamline-DX12
+[submodule "extern/Streamline"]
+	path = extern/Streamline
 	url = https://github.com/doodlum/Streamline.git
 [submodule "extern/dxvk"]
 	path = extern/dxvk

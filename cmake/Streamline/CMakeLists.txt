@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 add_library(Streamline INTERFACE)
 
 target_include_directories(
-  Streamline INTERFACE ${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/include)
+  Streamline INTERFACE ${CMAKE_SOURCE_DIR}/extern/Streamline/include)
 
 if(MSVC)
   target_compile_options(Streamline INTERFACE /wd5103)
@@ -11,7 +11,7 @@ endif()
 
 # Fetch the Streamline plugin DLLs (sl.interposer.dll + sl.*.dll) at configure time. These
 # are NOT in the submodule — since SL 2.7.32 they ship only in the release zip — and only the
-# headers above come from extern/Streamline-DX12. The zip is large (~213 MB), so the fetch is
+# headers above come from extern/Streamline. The zip is large (~213 MB), so the fetch is
 # lazy + cached: we download+extract only when STREAMLINE_FETCH is ON AND the extracted
 # interposer is not already present. On success STREAMLINE_DLL_DIR is repointed at the folder
 # under the extracted tree that holds sl.interposer.dll; the install() COMPONENT + PREPARE_AIO
@@ -56,7 +56,7 @@ endif()
 
 # Point STREAMLINE_DLL_DIR at the directory holding sl.interposer.dll (robust to a top-level
 # folder inside the zip — typically <_sl_deps_dir>/.../bin/x64). FORCE so a stale cached value
-# (e.g. the old extern/Streamline-DX12/bin/x64 default) is overridden once the DLLs are fetched.
+# (e.g. the old extern/Streamline/bin/x64 default) is overridden once the DLLs are fetched.
 if(_sl_interposer)
     # The SDK zip ships BOTH a signed PRODUCTION build (…/bin/x64) and an unsigned DEVELOPMENT build
     # (…/bin/x64/development) — each with its own sl.interposer.dll. Prefer the signed production directory:

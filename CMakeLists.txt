@@ -83,8 +83,14 @@ else()
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
 set(CS_PL_FORK_VERSION_DEFAULT "PL3.15-SE")
-set(CS_PL_FORK_VERSION_HELP "Display version label for the Particle Lights fork.")
-if(NOT DEFINED CS_PL_FORK_VERSION OR CS_PL_FORK_VERSION STREQUAL "" OR CS_PL_FORK_VERSION STREQUAL "PL3.15-VR")
+set(CS_PL_FORK_VERSION_HELP
+    "Display version label for the Particle Lights fork."
+)
+if(
+    NOT DEFINED CS_PL_FORK_VERSION
+    OR CS_PL_FORK_VERSION STREQUAL ""
+    OR CS_PL_FORK_VERSION STREQUAL "PL3.15-VR"
+)
     set(CS_PL_FORK_VERSION
         "${CS_PL_FORK_VERSION_DEFAULT}"
         CACHE STRING
@@ -509,6 +515,7 @@ string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
 # Set AIO directory path used by multiple targets below
 set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
+set(AIO_INSTALL_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_install.stamp")
 
 # Robocopy wrapper for Windows incremental file copy (used by deployment targets).
 # We invoke through `cmd /c "<absolute-path>"` rather than the bare wrapper path because
@@ -1148,7 +1155,9 @@ if(AIO_ZIP_TO_DIST)
         COMMAND ${CMAKE_COMMAND} -E tar cf ${AIO_ARCHIVE} --format=7zip -- .
         COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
         WORKING_DIRECTORY ${AIO_DIR}
-        DEPENDS PREPARE_AIO ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
+        # Package from the same full-install AIO tree used by the AIO target so
+        # zip builds cannot archive stale staging content.
+        DEPENDS ${AIO_INSTALL_STAMP}
         COMMENT "Creating AIO archive ${AIO_ARCHIVE}"
     )
 
@@ -1237,13 +1246,27 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 endforeach()
 
 # AIO Folder target
+#
+# Use a dedicated stamp instead of the copied DLL as the tracked OUTPUT.
+# CommunityShaders also copies the DLL into ${AIO_DIR} in a POST_BUILD step for
+# the incremental packaging path; if the AIO target tracks that same DLL, the
+# full install step can be skipped even when the rest of the AIO tree is stale.
+
+# If the AIO folder is missing at configure time, clear the stamp so the next
+# AIO build re-runs the full install instead of assuming the previous output is
+# intact.
+if(NOT EXISTS "${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll")
+    file(REMOVE "${AIO_INSTALL_STAMP}")
+endif()
+
 add_custom_command(
-    OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
-    DEPENDS ${CORE_SOURCES}
+    OUTPUT ${AIO_INSTALL_STAMP}
+    DEPENDS ${CORE_SOURCES} ${PROJECT_NAME}
     COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
+    COMMAND ${CMAKE_COMMAND} -E touch ${AIO_INSTALL_STAMP}
     COMMENT "Installing to AIO folder"
 )
-add_custom_target("AIO" DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
+add_custom_target("AIO" DEPENDS ${AIO_INSTALL_STAMP})
 
 # Manual AIO package target
 if(TARGET AIO_ZIP_PACKAGE)

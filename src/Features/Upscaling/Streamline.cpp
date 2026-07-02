@@ -1245,14 +1245,27 @@ bool Streamline::SetFSRFrameGen(bool a_enable, uint32_t a_renderWidth, uint32_t 
 	return ok;
 }
 
-bool Streamline::IsFSRFrameGenActive() const
+void Streamline::LogFSRFrameGenStats()
 {
+	// Throttled (~once/2s) FSR-FG activity log. numFramesActuallyPresented is the sl.fsr
+	// plugin's own per-present measurement: 2 = interpolation active (doubling), 1 = the
+	// FFX swapchain is absent or passing through. The one reliable runtime signal for
+	// whether FSR-FG is actually generating frames (screen captures can't see it - the
+	// FFX overlay/present happens after CS's capture point and DWM may not composite it).
 	if (!initialized || !featureFSR || !g_sl.slFSRGetFrameGenState || g_sl.dispatchFaulted)
-		return false;
-	sl::FSRFrameGenState state{};
-	if (g_sl.slFSRGetFrameGenState(g_sl.viewport, state) != sl::Result::eOk)
-		return false;
-	return state.numFramesActuallyPresented >= 2;
+		return;
+	static uint32_t s_n = 0;
+	if ((s_n++ % 120) != 0)
+		return;
+	__try {
+		sl::FSRFrameGenState state{};
+		if (g_sl.slFSRGetFrameGenState(g_sl.viewport, state) == sl::Result::eOk)
+			logger::info("[Streamline] FSR-FG state: framesPresented={} status={} vram={} MB",
+				state.numFramesActuallyPresented, state.status,
+				state.estimatedVRAMUsageInBytes >> 20);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+	}
 }
 
 bool Streamline::GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) const
@@ -1633,13 +1646,13 @@ bool Streamline::IsDLSSGLoadSettled() const
 	return g_dlssgDesiredLoaded.load(std::memory_order_acquire) == g_dlssgCurrentlyLoaded;
 }
 
-void Streamline::RequestDxvkSwapchainRecreate()
+void Streamline::RequestDxvkSwapchainRecreate(const char* a_reason)
 {
-	// Force DXVK to recreate its Vulkan swapchain on the next acquire. Needed when switching FG method
-	// from DLSS-G back to FSR: sl.dlss_g's present proxy is sticky and bypasses the Vulkan present hooks,
-	// so FSR can never return VK_SUBOPTIMAL to drive the recreate that lets the FFX FG layer re-wrap the
-	// swapchain. This goes through DXVK's own internal recreate (preserves the D3D11 back buffers), which
-	// runs vkDestroy/CreateSwapchainKHR — dlss_g releases its proxy and FFX wraps the fresh swapchain.
+	// Force DXVK to recreate its Vulkan swapchain on the next acquire. This is the only window in which
+	// sl.dlss_g may be (un)loaded (DxvkSwapchainTornDownCallback runs between destroy and create) and the
+	// only way to evict sl.dlss_g's sticky present proxy (it bypasses the Vulkan present hooks, so FSR can
+	// never return VK_SUBOPTIMAL to reclaim presentation). Goes through DXVK's own internal recreate,
+	// which preserves the D3D11 back buffers.
 	static auto requestRecreate = []() -> void (*)() {
 		HMODULE dxvkModule = GetModuleHandleW(L"dxvk_d3d11.dll");
 		if (!dxvkModule)
@@ -1648,8 +1661,8 @@ void Streamline::RequestDxvkSwapchainRecreate()
 	}();
 	if (requestRecreate) {
 		requestRecreate();
-		logger::info("[Streamline] requested DXVK swapchain recreate (FG method switch)");
+		logger::info("[Streamline] requested DXVK swapchain recreate ({})", a_reason);
 	} else {
-		logger::warn("[Streamline] dxvkRequestSwapchainRecreate not found — DLSS-G->FSR switch may not re-wrap");
+		logger::warn("[Streamline] dxvkRequestSwapchainRecreate not found — {} cannot take effect", a_reason);
 	}
 }

@@ -177,30 +177,6 @@ public:
 	float dynamicResolutionHeightRatio = 1.0f;
 
 	bool previousUpscalingWasActive = false;
-	// FSR frame generation under the sl.fsr plugin: the last FG-enabled state actually
-	// delivered to slFSRFrameGenerationSetOptions (-1 = none yet). Re-synced every frame
-	// until it matches the desired state, because featureFSR + the FG entry points come up
-	// a few frames after the first CheckResources.
-	int fsrFgAppliedState = -1;
-	// Last FSR-FG debug-flag signature delivered to the plugin (bit0 view, bit1 tear, bit2 pacing, bit3
-	// show-only-generated). Re-pushed when it changes so runtime debug toggles reach the per-present config.
-	uint32_t fsrFgDebugApplied = 0;
-
-	// Latched true while DLSS-G frame-gen is active (its present proxy stickily owns the swapchain and
-	// bypasses the Vulkan present hooks). A later switch into FSR-FG forces a DXVK swapchain recreate to
-	// evict the proxy; cleared once that recreate has been requested. See CheckResources.
-	bool dlssgProxyMayOwnPresent = false;
-
-	// Set once DLSS-G has actually generated frames this session. Used to detect a DLSS-G RE-enable (FG
-	// toggled off then on while DLSS-G stays the method): the proxy relinquished present on the off edge
-	// and slDLSSGSetOptions(eOn) alone does not re-acquire it under interposition, so a re-enable forces a
-	// swapchain recreate to re-install the proxy (see CheckResources). Not needed on the first activation
-	// (the boot swapchain already carries the proxy).
-	bool dlssgHasBeenActive = false;
-
-	// One-recreate-per-change latch for the DLSS-G load/unload reconcile (Streamline DLSS-G guide §18):
-	// set when a (un)load recreate has been requested, cleared once IsDLSSGLoaded() matches selection.
-	bool dlssgLoadRecreatePending = false;
 
 	bool depthUpscaleUseWideKernel = false;
 

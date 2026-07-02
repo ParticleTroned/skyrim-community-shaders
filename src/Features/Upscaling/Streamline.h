@@ -31,6 +31,10 @@ public:
 	void Shutdown();
 
 	[[nodiscard]] bool IsInitialized() const { return initialized; }
+	// The per-adapter feature probe has run (SetVulkanDevice). Until then the
+	// Is*Supported() flags read false, so method fallbacks (e.g. DLSS-G -> FSR
+	// when unsupported) give transient wrong answers during early boot.
+	[[nodiscard]] bool IsFeatureSupportResolved() const { return vulkanDeviceSet; }
 	[[nodiscard]] bool IsDLSSSupported() const { return featureDLSS; }
 	[[nodiscard]] bool IsReflexSupported() const { return featureReflex; }
 	[[nodiscard]] bool IsDLSSGSupported() const { return featureDLSSG; }
@@ -72,7 +76,9 @@ public:
 		bool a_debugView = false, bool a_debugTearLines = false, bool a_debugPacingLines = false,
 		bool a_onlyPresentGenerated = false);
 
-	[[nodiscard]] bool IsFSRFrameGenActive() const;
+	// Throttled log of the sl.fsr plugin's frame-generation state (framesPresented 2 = doubling
+	// active, 1 = not wrapped/pass-through). Call per gameplay frame while FSR-FG is selected.
+	void LogFSRFrameGenStats();
 
 	// a_frameLimitUs: Reflex frame-limiter interval in microseconds (0 = no limit). Only takes effect while
 	// Reflex is on; the caller uses DXVK's limiter instead when Reflex is off.
@@ -133,9 +139,9 @@ public:
 	// externally paced under interposition (skips present-fence, present-wait worker).
 	static void RegisterDxvkOwnershipPredicate();
 
-	// Force DXVK to recreate its Vulkan swapchain on the next acquire (used to evict sl.dlss_g's sticky
-	// present proxy when switching FG method DLSS-G -> FSR so the FFX FG layer can re-wrap the swapchain).
-	static void RequestDxvkSwapchainRecreate();
+	// Force DXVK to recreate its Vulkan swapchain on the next acquire. The teardown window is where
+	// sl.dlss_g gets (un)loaded and how its sticky present proxy is evicted; a_reason is logged.
+	static void RequestDxvkSwapchainRecreate(const char* a_reason = "FG method switch");
 
 private:
 	Streamline() = default;

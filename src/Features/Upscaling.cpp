@@ -7,6 +7,7 @@
 #include "Hooks.h"
 #include "State.h"
 #include "Upscaling/DxvkInterop.h"
+#include "Upscaling/FrameGenController.h"
 #include "Upscaling/Streamline.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -775,20 +776,11 @@ void Upscaling::DestroyHudlessTexture()
 void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
-	static bool previousFrameGeneration = false;
-	static auto previousFGMethod = FrameGenMethod::kFSR;
 
-	auto fgMethod = GetFrameGenMethod();
-	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
-	bool frameGenChanged = (previousFrameGeneration != settings.frameGeneration);
-	bool fgMethodChanged = (previousFGMethod != fgMethod);
-
-	if (upscaleModeChanged || frameGenChanged || fgMethodChanged) {
-		logger::debug("[Upscaling] Resource change detected - Upscale: {} ({}) -> {} ({}), FrameGen: {} -> {}, FG method: {} -> {}",
+	if (previousUpscaleMode != a_upscalemethod) {
+		logger::debug("[Upscaling] Upscale method changed: {} ({}) -> {} ({})",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode),
-			static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod),
-			previousFrameGeneration, settings.frameGeneration,
-			magic_enum::enum_name(previousFGMethod), magic_enum::enum_name(fgMethod));
+			static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
 		// Upscaled texture lifecycle — shared by all upscale methods that need a separate output texture.
 		bool hadUpscale = (previousUpscaleMode == UpscaleMethod::kFSR ||
@@ -813,107 +805,13 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			CreateHudlessTexture();
 		}
 
-		// FG context lifecycle (DLSS-G and FFX FG are mutually exclusive; independent of upscale
-		// method). ORDER MATTERS: per the Streamline DLSS-G guide, DLSS-G must be turned OFF
-		// and the device drained BEFORE any swapchain manipulation.
-		bool needDLSSG = settings.frameGeneration && fgMethod == FrameGenMethod::kDLSSG;
-		bool hadDLSSG = previousFrameGeneration && previousFGMethod == FrameGenMethod::kDLSSG;
-
-		// Once DLSS-G frame-gen is active its present proxy wraps the swapchain and is STICKY — it bypasses
-		// the Vulkan present hooks, so FSR's cooperative VK_SUBOPTIMAL can never reclaim present. Latch that
-		// here; any later switch into FSR-FG forces a DXVK swapchain recreate (below) to evict the proxy.
-		if (needDLSSG)
-			dlssgProxyMayOwnPresent = true;
-
-		const auto fgDisplaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
-		const auto fgRenderSize = Util::ConvertToDynamic(fgDisplaySize);
-
-		// 1. DLSS-G OFF first, then drain the device.
-		if (hadDLSSG && !needDLSSG) {
-			Streamline::GetSingleton()->SetDLSSGMode(false,
-				(uint32_t)fgRenderSize.x, (uint32_t)fgRenderSize.y,
-				(uint32_t)fgDisplaySize.x, (uint32_t)fgDisplaySize.y);
-			if (auto* dxvk = DxvkInterop::GetSingleton())
-				dxvk->WaitDeviceIdle();
-		}
-
-		// 2. On select, initialize DLSS-G mode OFF (registers the viewport). The actual ON is driven
-		//    per-frame by the gameplay gate in Main_PostProcessing. (The plugin load + proxy install is
-		//    handled by the load/unload reconcile in the per-frame section below, per Streamline DLSS-G §18.)
-		if (needDLSSG && !hadDLSSG) {
-			Streamline::GetSingleton()->SetDLSSGMode(false,
-				(uint32_t)fgRenderSize.x, (uint32_t)fgRenderSize.y,
-				(uint32_t)fgDisplaySize.x, (uint32_t)fgDisplaySize.y);
-		}
-
 		previousUpscaleMode = a_upscalemethod;
-		previousFrameGeneration = settings.frameGeneration;
-		previousFGMethod = fgMethod;
 		previousUpscalingWasActive = IsUpscalingActive();
 	}
 
-	// Per-frame robust FSR-FG sync. Push the desired on/off state to the sl.fsr
-	// plugin until it sticks — featureFSR + the FG entry points come up a few frames after the first
-	// CheckResources, so a one-shot transition silently misses the enable. The plugin self-triggers the
-	// DXVK swapchain (un)wrap from its present hook once it has the state, so CS requests no recreate.
-	{
-		const int desiredFG = (settings.frameGeneration && fgMethod == FrameGenMethod::kFSR) ? 1 : 0;
-		// Re-push when the enable state OR any FSR-FG debug toggle changes — the debug overlays (tear/pacing
-		// lines, debug view, show-only-generated) are applied per-present from these options, so a runtime
-		// toggle has to reach the plugin even when FG is already on.
-		const uint32_t fgDebugSig = (settings.fgDebugView ? 1u : 0u) | (settings.fgDebugTearLines ? 2u : 0u) |
-		                            (settings.fgDebugPacingLines ? 4u : 0u) | (settings.fgShowOnlyGenerated ? 8u : 0u);
-		if (desiredFG != fsrFgAppliedState || fgDebugSig != fsrFgDebugApplied) {
-			const bool fgHDR = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
-			const auto dispSz = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
-			const auto rendSz = Util::ConvertToDynamic(dispSz);
-			if (Streamline::GetSingleton()->SetFSRFrameGen(desiredFG != 0,
-					(uint32_t)rendSz.x, (uint32_t)rendSz.y, (uint32_t)dispSz.x, (uint32_t)dispSz.y, fgHDR,
-					settings.fgDebugView, settings.fgDebugTearLines, settings.fgDebugPacingLines, settings.fgShowOnlyGenerated)) {
-				fsrFgAppliedState = desiredFG;  // delivered; the plugin (un)wraps on its next present
-				fsrFgDebugApplied = fgDebugSig;
-			}
-		}
-
-		// If FSR-FG is now actually enabled (fsrFgAppliedState==1 — the enable can take a few CheckResources
-		// to land while featureFSR warms up) AND DLSS-G's sticky proxy might still own present, force the DXVK
-		// swapchain recreate to evict it. DLSS-G is unloaded (slSetFeatureLoaded false in the no-swapchain window —
-		// see the reconcile below) so its WSI hooks are gone on the fresh swapchain, leaving the FFX FG layer to
-		// wrap it — the only way to hand present from DLSS-G back to FSR. (This is why the stock, UNMODIFIED SL
-		// interposer suffices: the host-side unload, not an interposer hook-suppression, resolves the coexistence.)
-		// The latch is sticky across frames, so this fires on the frame the enable finally lands (fixing the
-		// race where SetFSRFrameGen hadn't delivered on the transition frame) and covers the indirect
-		// DLSS-G -> disabled -> FSR-FG path too. Cleared after firing so steady-state FSR-FG never recreates
-		// every frame. Pure disabled -> FSR-FG with no prior DLSS-G leaves the latch false (FSR's own
-		// cooperative SUBOPTIMAL wrap handles that, no forced recreate needed).
-		if (fsrFgAppliedState == 1 && dlssgProxyMayOwnPresent) {
-			Streamline::RequestDxvkSwapchainRecreate();
-			dlssgProxyMayOwnPresent = false;
-		}
-
-		// DLSS-G runtime load/unload reconcile (Streamline DLSS-G guide §18). Keep the plugin's loaded state
-		// matched to selection: LOADED only while DLSS-G is the selected FG method, UNLOADED otherwise (incl.
-		// at boot when another method is default) so a disabled DLSS-G has NO overhead — no extra present
-		// queue, no off-screen back-buffer copy. The (un)load itself happens inside DXVK's swapchain recreate
-		// (DxvkSwapchainTornDownCallback calls slSetFeatureLoaded in the no-swapchain window), which is the
-		// only way the create installs/omits DLSS-G's proxy correctly. We request ONE recreate per state
-		// change and latch until the callback flips IsDLSSGLoaded(), so no recreate storm.
-		auto* sl = Streamline::GetSingleton();
-		// Keeping sl.dlss_g loaded while another method is selected was measured at
-		// -3.1% FPS uncapped (+18 MB): its pass-through present proxy taxes every
-		// present. The unload below is a real win, not just hygiene.
-		const bool dlssgSelected = settings.frameGeneration && fgMethod == FrameGenMethod::kDLSSG;
-		if (dlssgSelected != sl->IsDLSSGLoaded()) {
-			sl->SetDLSSGDesiredLoaded(dlssgSelected);
-			if (!dlssgLoadRecreatePending) {
-				Streamline::RequestDxvkSwapchainRecreate();
-				dlssgLoadRecreatePending = true;
-				logger::info("[Upscaling] DLSS-G {} requested (swapchain recreate, guide §18)", dlssgSelected ? "load" : "unload");
-			}
-		} else {
-			dlssgLoadRecreatePending = false;  // the load/unload landed
-		}
-	}
+	// Frame-generation present ownership (DLSS-G / FSR-FG lifecycle, plugin
+	// load state, swapchain recreates) is owned by the FrameGen controller.
+	FrameGen::Controller::GetSingleton()->Reconcile();
 }
 
 ID3D11PixelShader* Upscaling::GetDepthRefractionUpscalePS()
@@ -1598,41 +1496,20 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		                              : nullptr;
 
 		if (fgMethod == FrameGenMethod::kDLSSG) {
-			// DLSS-G mode is set ON ONCE — the first frame the Streamline swapchain owns presentation —
-			// and left ON for the swapchain lifetime. slDLSSGSetOptions is NOT thread-safe vs Streamline's
-			// present hook (DLSS-G guide section 6.0); that present hook runs on DXVK's submit thread while this
-			// runs on the render thread, so flipping the mode per-frame races the present and triggers
-			// VK_ERROR_DEVICE_LOST. SetDLSSGMode is cached, so passing a constant `true` issues the real
-			// slDLSSGSetOptions exactly once (the registered-off -> on edge) and no-ops every frame after.
-			const auto dispSize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
-			// renderSize MUST be the actual DRS render size (the sub-rect where depth/MV are valid), NOT the
-			// lock-inflated full size. Util::ConvertToDynamic(dispSize) returns FULL res while the upscaler holds
-			// dynamicResolutionLock, so the FG-prepare was reading the whole 1920x1080 depth/MV texture even
-			// though only the top-left render sub-rect is valid → the stale 3/4 showed as garbage motion vectors
-			// (depth's stale region reads as uniform far-plane so it looked filled). ignoreLock=true gives the
-			// true render size (dev computed screenSize * resolutionScale, equivalent).
-			const auto rendSize = Util::ConvertToDynamic(dispSize, /*ignoreLock=*/true);
-			// Dynamic mode maps to eDynamic on hardware that supports it (50-series), else eAuto (40-series),
-			// targeting the Display frame-rate option (0 fps => SL auto-detects the refresh). A fixed multiplier
-			// N -> numFramesToGenerate N-1; clamped to the hardware max inside SetDLSSGMode.
-			auto* sl = Streamline::GetSingleton();
-			const bool dynamic = upscaling.settings.dlssgDynamic;
-			const bool useDynamic = dynamic && sl->IsDLSSGDynamicSupported();
-			const bool useAuto = dynamic && !useDynamic;
-			const uint32_t numFramesToGenerate = upscaling.settings.frameGenMultiplier > 1 ? upscaling.settings.frameGenMultiplier - 1 : 1;
-			const float dynTargetFps = dynamic ? static_cast<float>(upscaling.GetTargetFrameRate()) : 0.0f;
-			// Engage only once the load reconcile has settled (plugin loaded AND its
-			// swapchain-recreate landed). Engaging earlier turns FG on against the OLD
-			// swapchain, which the queued recreate immediately tears down — the visible
-			// engage -> blank -> re-engage bounce on a menu toggle. The recreate path
-			// itself is untouched; we only defer the first slDLSSGSetOptions(on).
-			if (sl->IsDLSSGLoaded() && sl->IsDLSSGLoadSettled()) {
-				sl->SetDLSSGMode(true,
-					(uint32_t)rendSize.x, (uint32_t)rendSize.y, (uint32_t)dispSize.x, (uint32_t)dispSize.y,
-					numFramesToGenerate, useAuto, useDynamic, dynTargetFps);
-			}
+			// Turn DLSS-G interpolation on. The controller defers the first
+			// slDLSSGSetOptions(on) until the load reconcile settled on the final
+			// swapchain (single engagement, no toggle bounce), and SetDLSSGMode
+			// caches so steady-state frames are no-ops. slDLSSGSetOptions is NOT
+			// thread-safe vs Streamline's present hook (guide section 6.0), which
+			// is why the mode is never flipped per-frame.
+			FrameGen::Controller::GetSingleton()->EngageDLSSG();
 
 			if (gameplay) {
+				const auto dispSize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+				// renderSize MUST be the actual DRS render size where depth/MV are valid — ignoreLock=true, else
+				// ConvertToDynamic returns full res and SL reads stale MV in the region outside the render sub-rect.
+				const auto rendSize = Util::ConvertToDynamic(dispSize, /*ignoreLock=*/true);
+
 				// FG depth = the pre-upscale render-res kMAIN. With an active upscaler UpscaleDepth() rewrote kMAIN
 				// to display res, but first copied the render-res depth into kMAIN_COPY — tag that. TAA (no upscaler):
 				// kMAIN is still render-res. DLSS-G tags this eOnlyValidNow, so SL snapshots it at tag time (instead
@@ -1666,9 +1543,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 					(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 					(uint32_t)dispSize.x, (uint32_t)dispSize.y);
 				Streamline::GetSingleton()->LogDLSSGFrameStats();
-				// DLSS-G has now run for gameplay this session; a later off->on toggle must recreate the
-				// swapchain to re-install the present proxy (see CheckResources block 2).
-				upscaling.dlssgHasBeenActive = true;
 			}
 		} else if (fgMethod == FrameGenMethod::kFSR && gameplay) {
 			// Drive the FSR FG-prepare every gameplay frame from depth + motion vectors, independent of the
@@ -1691,6 +1565,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 				(uint32_t)dispSize.x, (uint32_t)dispSize.y,
 				upscaling.jitter.x, upscaling.jitter.y);
+			Streamline::GetSingleton()->LogFSRFrameGenStats();
 		}
 	}
 

@@ -1,17 +1,8 @@
 ﻿#include "WaterCache.h"
 
 #include <BS_thread_pool.hpp>
-#include <algorithm>
-#include <bit>
-#include <cfloat>
-#include <chrono>
 #include <cmath>
-#include <filesystem>
-#include <format>
-#include <fstream>
 #include <limits>
-#include <string>
-#include <thread>
 #include <type_traits>
 #include <unordered_set>
 
@@ -51,45 +42,6 @@ namespace
 		}
 		return worldSpace;
 	}
-
-	struct WorldSpaceCellBounds
-	{
-		int32_t minX = 0;
-		int32_t minY = 0;
-		int32_t maxX = 0;
-		int32_t maxY = 0;
-		int32_t width = 0;
-		int32_t height = 0;
-	};
-
-	bool TryGetWorldSpaceCellBounds(const RE::TESWorldSpace* worldSpace, WorldSpaceCellBounds& bounds)
-	{
-		if (!worldSpace)
-			return false;
-
-		const auto wsMin = worldSpace->minimumCoords;
-		const auto wsMax = worldSpace->maximumCoords;
-
-		if (wsMin.x == FLT_MIN ||
-			wsMin.y == FLT_MIN ||
-			wsMax.x == FLT_MAX ||
-			wsMax.y == FLT_MAX ||
-			wsMin.x == FLT_MAX ||
-			wsMin.y == FLT_MAX ||
-			wsMax.x == FLT_MIN ||
-			wsMax.y == FLT_MIN) {
-			return false;
-		}
-
-		Util::WorldToCell(wsMin, bounds.minX, bounds.minY);
-		Util::WorldToCell(wsMax, bounds.maxX, bounds.maxY);
-		bounds.maxX -= 1;
-		bounds.maxY -= 1;
-		bounds.width = bounds.maxX - bounds.minX + 1;
-		bounds.height = bounds.maxY - bounds.minY + 1;
-
-		return bounds.width > 0 && bounds.height > 0 && bounds.width <= 512 && bounds.height <= 512;
-	}
 }
 
 bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
@@ -102,6 +54,10 @@ bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 	}
 
 	worldSpace = ResolveWaterDataWorldSpace(worldSpace);
+	if (currentCache && currentWorldSpaceForm == worldSpace) {
+		return true;
+	}
+
 	const auto newWorldSpace = worldSpace->GetFormEditorID();
 	if (!newWorldSpace || !*newWorldSpace) {
 		logger::error("[Unified Water] [Cache] WorldSpace has no EditorID");
@@ -129,13 +85,6 @@ bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)
 		currentWorldSpaceForm = nullptr;
 		currentWorldSpace.clear();
 		return false;
-	}
-
-	if (currentCache &&
-		currentWorldSpaceForm == worldSpace &&
-		currentWorldSpace == key &&
-		currentCache == it->second) {
-		return true;
 	}
 
 	currentCache = it->second;
@@ -221,11 +170,6 @@ bool WaterCache::LoadOrGenerateCaches()
 
 bool WaterCache::RegenerateCaches()
 {
-	if (async.running.load(std::memory_order_acquire)) {
-		logger::warn("[Unified Water] [Cache] Build already running");
-		return false;
-	}
-
 	logger::info("[Unified Water] [Cache] Clearing and regenerating caches...");
 
 	namespace fs = std::filesystem;
@@ -294,6 +238,20 @@ bool WaterCache::LoadCaches()
 
 	std::atomic_store_explicit(&cacheMap, std::const_pointer_cast<const CacheMap>(newCacheMap), std::memory_order_release);
 
+	if (!currentWorldSpace.empty()) {
+		if (const auto snap = std::atomic_load_explicit(&cacheMap, std::memory_order_acquire)) {
+			if (const auto it = snap->find(currentWorldSpace); it != snap->end()) {
+				currentCache = it->second;
+			} else {
+				currentCache.reset();
+				currentWorldSpaceForm = nullptr;
+			}
+		} else {
+			currentCache.reset();
+			currentWorldSpaceForm = nullptr;
+		}
+	}
+
 	const auto t1 = std::chrono::steady_clock::now();
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 	logger::info("[Unified Water] [Cache] Caches loaded in {} ms", ms);
@@ -332,15 +290,14 @@ bool WaterCache::GenerateCaches()
 	logger::info("[Unified Water] [Cache] Starting async disk cache build for {} WorldSpaces on {} threads", buildProgress.total.load(), threads);
 
 	for (auto& worldSpace : worldSpaces) {
-		const auto editorID = worldSpace ? worldSpace->GetFormEditorID() : nullptr;
+		const char* editorID = worldSpace && worldSpace->editorID.c_str() ? worldSpace->editorID.c_str() : "";
 		if (!worldSpace || !editorID || !*editorID) {
 			logger::warn("[Unified Water] [Cache] WorldSpace has no EditorID - skipping");
 			buildProgress.Done(true);
 			continue;
 		}
 
-		auto editorIDString = std::string(editorID);
-		async.pool->detach_task([this, worldSpace, editorID = std::move(editorIDString)] {
+		async.pool->detach_task([this, worldSpace, editorID] {
 			DiskCache cache = {};
 			const auto name = std::format("{}_cache.wc", editorID);
 			const auto success = BuildDiskCache(worldSpace, cache) && TryWriteCacheToFile(name, cache.header, cache.instructions);
@@ -411,30 +368,40 @@ bool WaterCache::BuildDiskCache(RE::TESWorldSpace* worldSpace, DiskCache& diskCa
 	bool hasPrecache = false;
 	PreCache preCache;
 
+	const auto wsMin = worldSpace->minimumCoords;
+	const auto wsMax = worldSpace->maximumCoords;
+
 	if (editorID == "Tamriel") {
 		if (TryReadCacheFromFile("Tamriel_precache.wpc", preCache.header, preCache.heights)) {
 			diskCache.header = preCache.header;
 			hasPrecache = true;
 		} else {
 			logger::warn("[Unified Water] [Cache] Tamriel: Failed to load precache, falling back to generation");
+			Util::WorldToCell(wsMin, minX, minY);
+			Util::WorldToCell(wsMax, maxX, maxY);
+			maxX -= 1;
+			maxY -= 1;
+			hdr.width = maxX - minX + 1;
+			hdr.height = maxY - minY + 1;
+			hdr.dataCount = 0;
 		}
+	} else {
+		Util::WorldToCell(wsMin, minX, minY);
+		Util::WorldToCell(wsMax, maxX, maxY);
+		maxX -= 1;
+		maxY -= 1;
+		hdr.width = maxX - minX + 1;
+		hdr.height = maxY - minY + 1;
+		hdr.dataCount = 0;
 	}
 
-	if (!hasPrecache) {
-		WorldSpaceCellBounds bounds;
-		if (!TryGetWorldSpaceCellBounds(worldSpace, bounds)) {
-			logger::warn("[Unified Water] [Cache] {}: Invalid WorldSpace - skipping", editorID.c_str());
-			diskCache = {};
-			return false;
-		}
+	bool invalidWS = wsMin.x == FLT_MIN || wsMin.y == FLT_MIN || wsMax.x == FLT_MAX || wsMax.y == FLT_MAX || wsMin.x == FLT_MAX || wsMin.y == FLT_MAX || wsMax.x == FLT_MIN || wsMax.y == FLT_MIN;
+	invalidWS = invalidWS || hdr.width <= 0 || hdr.height <= 0 || hdr.width > 512 || hdr.height > 512;
 
-		minX = bounds.minX;
-		minY = bounds.minY;
-		maxX = bounds.maxX;
-		maxY = bounds.maxY;
-		hdr.width = bounds.width;
-		hdr.height = bounds.height;
-		hdr.dataCount = 0;
+	if (invalidWS) {
+		logger::warn("[Unified Water] [Cache] {}: Invalid WorldSpace - skipping", editorID.c_str());
+		diskCache = {};
+		return true;
 	}
 
 	logger::debug("[Unified Water] [Cache] {}: Building disk cache...", editorID.c_str());
@@ -784,13 +751,6 @@ std::vector<RE::TESWorldSpace*> WaterCache::GetValidWorldSpaces()
 
 		if (!seenWorldSpaces.insert(worldSpace).second)
 			continue;
-
-		WorldSpaceCellBounds bounds;
-		if (!TryGetWorldSpaceCellBounds(worldSpace, bounds)) {
-			const auto editorID = worldSpace->GetFormEditorID();
-			logger::debug("[Unified Water] [Cache] Skipping invalid WorldSpace {}", editorID ? editorID : "<null>");
-			continue;
-		}
 
 		validWorldSpaces.push_back(worldSpace);
 	}

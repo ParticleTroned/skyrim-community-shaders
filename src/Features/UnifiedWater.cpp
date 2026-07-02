@@ -20,8 +20,6 @@
 #include <fstream>
 #include <imgui_internal.h>
 #include <mutex>
-#include <thread>
-#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -270,6 +268,19 @@ static WaterPositionKey GetWaterPositionKey(const RE::TESWaterObject* waterObjec
 		waterObject->waterType ? waterObject->waterType->formID : 0,
 		waterObject->flags,
 	};
+}
+
+static bool IsChildOfNode(const RE::NiAVObject* object, const RE::NiNode* root)
+{
+	if (!object || !root)
+		return false;
+
+	for (auto parent = object->parent; parent; parent = parent->parent) {
+		if (parent == root)
+			return true;
+	}
+
+	return object == root;
 }
 
 static bool RemoveWaterObjectForShape(RE::TESWaterSystem* waterSystem, const RE::BSTriShape* shape, WaterPositionKey* removedKey = nullptr)
@@ -829,25 +840,14 @@ void UnifiedWater::RemoveDuplicateGeneratedWaterTiles(RE::TESWaterSystem* waterS
 
 	{
 		std::shared_lock lock(generatedWaterTilesLock);
-		auto collectDuplicates = [&](auto&& self, RE::NiAVObject* object) -> void {
-			if (!object)
-				return;
+		for (const auto& [object, placement] : generatedWaterTiles) {
+			if (!object || !touchedTileKeys.contains(GetGeneratedTileKey(placement)) || !IsChildOfNode(object, lodRoot))
+				continue;
 
-			if (const auto it = generatedWaterTiles.find(object);
-				it != generatedWaterTiles.end() && touchedTileKeys.contains(GetGeneratedTileKey(it->second))) {
-				if (const auto shape = object->AsTriShape()) {
-					duplicateShapes.emplace_back(shape);
-				}
+			if (const auto shape = const_cast<RE::NiAVObject*>(object)->AsTriShape()) {
+				duplicateShapes.emplace_back(shape);
 			}
-
-			if (const auto node = object->AsNode()) {
-				for (const auto& child : node->GetChildren()) {
-					self(self, child.get());
-				}
-			}
-		};
-
-		collectDuplicates(collectDuplicates, lodRoot);
+		}
 	}
 
 	if (duplicateShapes.empty())
@@ -877,10 +877,6 @@ void UnifiedWater::RemoveDuplicateGeneratedWaterTiles(RE::TESWaterSystem* waterS
 
 void UnifiedWater::ClearGeneratedWaterTiles()
 {
-	if (gWaterLOD && *gWaterLOD) {
-		UnregisterGeneratedWaterTilesInTree(*gWaterLOD);
-	}
-
 	std::unique_lock lock(generatedWaterTilesLock);
 	generatedWaterTiles.clear();
 }
@@ -1075,7 +1071,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	// Additional game-thread retry path for deferred child-WS cull completion.
 	uw.TryCompleteDeferredChildWorldspaceCull(uw.cachedTes.load(std::memory_order_acquire));
 
-	std::vector<std::pair<RE::NiPointer<RE::BSTriShape>, const WaterCache::Instruction*>> built;
+	std::vector<std::pair<RE::BSTriShape*, const WaterCache::Instruction*>> built;
 	bool attaching = false;
 	RE::NiPointer<RE::BSMultiBoundNode> water;
 
@@ -1091,14 +1087,10 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		const auto node = block->node;
 		const auto lodLevel = node->GetLODLevel();
 		const auto worldSpace = block->node->manager->worldSpace;
-		const auto worldSpaceEditorID = worldSpace ? worldSpace->GetFormEditorID() : nullptr;
 
 		const auto instructions = uw.waterCache->GetInstructions(worldSpace, lodLevel, node->baseCellX, node->baseCellY);
 		if (!instructions) {
-			logger::warn("[Unified Water] No instructions found for {} chunk at {}, {}",
-				worldSpaceEditorID ? worldSpaceEditorID : "<null>",
-				node->baseCellX,
-				node->baseCellY);
+			logger::warn("[Unified Water] No instructions found for {} chunk at {}, {}", worldSpace->GetFormEditorID(), node->baseCellX, node->baseCellY);
 			// Reattach the saved node before falling back to vanilla
 			block->chunk->AttachChild(water.get(), true);
 			func(block);
@@ -1123,7 +1115,9 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		}
 
 		built.reserve(instructions->size());
-		bool cloneFailed = false;
+
+		uw.UnregisterGeneratedWaterTilesInTree(water.get());
+		ClearWaterNodeChildren(water.get(), waterSystem);
 
 		for (auto& instruction : *instructions) {
 			if (!instruction.form.ptr)
@@ -1132,39 +1126,24 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 			RE::NiCloningProcess cloningProcess;
 
 			const auto targetShape = ShouldUseOptimisedGeneratedWaterMesh(instruction, uw.settings.UseOptimisedMeshes) ? uw.optimisedWaterMesh : uw.waterMesh;
-			RE::NiPointer<RE::NiObject> clonedShape(targetShape ? targetShape->CreateClone(cloningProcess) : nullptr);
-			RE::NiPointer<RE::BSTriShape> shape(clonedShape ? clonedShape->AsTriShape() : nullptr);
-			if (!shape) {
-				logger::warn("[Unified Water] Failed to clone water mesh for {} tile at {},{} size {}",
-					worldSpaceEditorID ? worldSpaceEditorID : "<null>",
-					instruction.x,
-					instruction.y,
-					instruction.size);
-				cloneFailed = true;
-				continue;
-			}
+			RE::BSTriShape* shape = targetShape->CreateClone(cloningProcess)->AsTriShape();
 
 			const auto posX = (instruction.x - node->baseCellX) * 4096.0f + instruction.size * 2048.0f;
 			const auto posY = (instruction.y - node->baseCellY) * 4096.0f + instruction.size * 2048.0f;
 			shape->local.scale = static_cast<float>(instruction.size);
 			shape->local.translate = { posX, posY, instruction.waterHeight };
 
-			built.emplace_back(std::move(shape), &instruction);
-		}
-
-		if (built.empty() || cloneFailed) {
-			// If UW tile generation fails, keep the original water visible for the whole block.
-			block->chunk->AttachChild(water.get(), true);
-		} else {
-			uw.UnregisterGeneratedWaterTilesInTree(water.get());
-			ClearWaterNodeChildren(water.get(), waterSystem);
-
-			for (const auto& [shape, instruction] : built) {
-				uw.RegisterGeneratedWaterTile(shape.get(), { instruction->x, instruction->y, instruction->size });
-				water->AttachChild(shape.get(), true);
-			}
+			uw.RegisterGeneratedWaterTile(shape, { instruction.x, instruction.y, instruction.size });
+			water->AttachChild(shape, true);
+			built.emplace_back(shape, &instruction);
 
 			block->waterAttached = true;
+		}
+
+		if (built.empty()) {
+			// If every UW tile failed to build, keep the original water visible
+			block->chunk->AttachChild(water.get(), true);
+		} else {
 			attaching = true;
 		}
 	}
@@ -1186,7 +1165,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	touchedTiles.reserve(built.size());
 
 	for (auto& [shape, instruction] : built) {
-		waterSystem->AddWater(shape.get(), instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
+		waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
 
 		if (const auto prop = shape->GetGeometryRuntimeData().shaderProperty.get(); prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
 			const auto waterShaderProp = static_cast<RE::BSWaterShaderProperty*>(prop);
@@ -1203,9 +1182,9 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 		// Remove the exact object added above. Generated UW tiles are rendered from the LOD root
 		// and should not remain in TESWaterSystem's active close-water object list.
 		WaterPositionKey removedKey;
-		if (RemoveWaterObjectForShape(waterSystem, shape.get(), &removedKey)) {
+		if (RemoveWaterObjectForShape(waterSystem, shape, &removedKey)) {
 			const WaterTilePlacement touchedTile{ instruction->x, instruction->y, instruction->size, removedKey.waterForm, removedKey.waterFlags };
-			uw.RegisterGeneratedWaterTile(shape.get(), touchedTile);
+			uw.RegisterGeneratedWaterTile(shape, touchedTile);
 			touchedTiles.push_back(touchedTile);
 		} else {
 			logger::warn("[Unified Water] Failed to remove generated tile from TESWaterSystem at {},{}", instruction->x, instruction->y);

@@ -3,15 +3,10 @@
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <algorithm>
-#include <chrono>
 #include <charconv>
-#include <climits>
 #include <cwctype>
-#include <filesystem>
-#include <format>
 #include <optional>
 #include <sstream>
-#include <string>
 #include <vector>
 
 namespace
@@ -78,8 +73,7 @@ bool Flowmap::RegenerateAndLoadFlowmap(bool useMips)
 			continue;
 
 		const auto& path = entry.path();
-		const auto filename = path.filename().wstring();
-		if (!IsDdsExtension(path.extension().wstring()) || filename.rfind(L"Tamriel-Flowmap", 0) != 0)
+		if (!IsDdsExtension(path.extension().wstring()))
 			continue;
 
 		std::error_code rec;

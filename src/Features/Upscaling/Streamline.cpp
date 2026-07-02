@@ -592,20 +592,23 @@ bool Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t width, u
 
 	sl::DLSSPreset selectedPreset = sl::DLSSPreset::ePresetK;
 	switch (dlssPreset) {
-	case 0:
+	case Upscaling::kDLSSPresetJ:
 		selectedPreset = sl::DLSSPreset::ePresetJ;
 		break;
-	case 1:
+	case Upscaling::kDLSSPresetK:
 		selectedPreset = sl::DLSSPreset::ePresetK;
 		break;
-	case 2:
+	case Upscaling::kDLSSPresetL:
 		selectedPreset = sl::DLSSPreset::ePresetL;
 		break;
-	case 3:
+	case Upscaling::kDLSSPresetM:
 		selectedPreset = sl::DLSSPreset::ePresetM;
 		break;
-	case 4:
+	case Upscaling::kDLSSPresetF:
 		selectedPreset = sl::DLSSPreset::ePresetF;
+		break;
+	case Upscaling::kDLSSPresetE:
+		selectedPreset = sl::DLSSPreset::ePresetE;
 		break;
 	default:
 		selectedPreset = sl::DLSSPreset::ePresetK;

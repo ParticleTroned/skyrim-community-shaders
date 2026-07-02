@@ -56,7 +56,13 @@ public:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
-	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
+	static constexpr uint32_t kDLSSPresetJ = 0;
+	static constexpr uint32_t kDLSSPresetK = 1;
+	static constexpr uint32_t kDLSSPresetL = 2;
+	static constexpr uint32_t kDLSSPresetM = 3;
+	static constexpr uint32_t kDLSSPresetF = 4;
+	static constexpr uint32_t kDLSSPresetE = 5;
+	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{
@@ -82,8 +88,8 @@ public:
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 3;  // Shared upscaler preset; defaults to Quality
-		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
+		uint qualityMode = 3;            // Shared upscaler preset; defaults to Quality
+		uint dlssPreset = kDLSSPresetK;  // Settings ids: J, K, L, M, F, E (default K)
 		uint frameLimitMode = 1;
 		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;

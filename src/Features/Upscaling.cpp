@@ -12,6 +12,7 @@
 #include "Utils/UI.h"
 #include <Windows.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cfloat>
 #include <cmath>
@@ -240,15 +241,75 @@ namespace
 		// Legacy values were 0=Default, 1=J, 2=K, 3=L, 4=M.
 		switch (value) {
 		case 1:
-			return 0;
+			return Upscaling::kDLSSPresetJ;
 		case 2:
-			return 1;
+			return Upscaling::kDLSSPresetK;
 		case 3:
-			return 2;
+			return Upscaling::kDLSSPresetL;
 		case 4:
-			return 3;
+			return Upscaling::kDLSSPresetM;
 		default:
-			return 1;
+			return Upscaling::kDLSSPresetK;
+		}
+	}
+
+	constexpr std::array kDLSSProfileDisplayOrder = {
+		Upscaling::kDLSSPresetE,
+		Upscaling::kDLSSPresetF,
+		Upscaling::kDLSSPresetJ,
+		Upscaling::kDLSSPresetK,
+		Upscaling::kDLSSPresetL,
+		Upscaling::kDLSSPresetM
+	};
+
+	const char* GetDLSSPresetLabel(uint32_t preset)
+	{
+		switch (preset) {
+		case Upscaling::kDLSSPresetE:
+			return "E";
+		case Upscaling::kDLSSPresetF:
+			return "F";
+		case Upscaling::kDLSSPresetJ:
+			return "J";
+		case Upscaling::kDLSSPresetK:
+			return "K";
+		case Upscaling::kDLSSPresetL:
+			return "L";
+		case Upscaling::kDLSSPresetM:
+			return "M";
+		default:
+			return "K";
+		}
+	}
+
+	void DrawDLSSPresetTooltip(uint32_t preset)
+	{
+		switch (preset) {
+		case Upscaling::kDLSSPresetJ:
+			ImGui::TextUnformatted("DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: about K. Use only if K ghosts.");
+			break;
+		case Upscaling::kDLSSPresetK:
+			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+			break;
+		case Upscaling::kDLSSPresetL:
+			ImGui::TextUnformatted("Default for Ultra Performance on newer RTX cards. Sharper and more stable, but higher cost than J/K/F.");
+			ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+			break;
+		case Upscaling::kDLSSPresetM:
+			ImGui::TextUnformatted("Default for Performance on newer RTX cards. Similar image-quality improvements to L, closer in speed to J/K.");
+			ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+			break;
+		case Upscaling::kDLSSPresetF:
+			ImGui::TextUnformatted("Legacy/deprecated preset. Best Performance/Ultra Performance starting point for RTX 3000-series cards.");
+			ImGui::TextUnformatted("If you want the adjacent legacy comparison profile, try E.");
+			break;
+		case Upscaling::kDLSSPresetE:
+			ImGui::TextUnformatted("Legacy/deprecated preset. Secondary comparison option next to F for older DLSS behavior.");
+			ImGui::TextUnformatted("On RTX 3000-series cards, start with F first, then compare E if you want another legacy profile.");
+			break;
+		default:
+			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+			break;
 		}
 	}
 
@@ -606,45 +667,22 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 			}
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-			const uint32_t dlssProfileOrder[] = { 4u, 0u, 1u, 2u, 3u };  // F, J, K, L, M
-			const char* dlssProfiles[] = { "F", "J", "K", "L", "M" };
 			settings.dlssPreset = std::min(settings.dlssPreset, kDLSSPresetMaxIndex);
 
 			int dlssProfileUiIndex = 0;
-			for (int i = 0; i < IM_ARRAYSIZE(dlssProfileOrder); ++i) {
-				if (dlssProfileOrder[i] == settings.dlssPreset) {
+			for (int i = 0; i < static_cast<int>(kDLSSProfileDisplayOrder.size()); ++i) {
+				if (kDLSSProfileDisplayOrder[i] == settings.dlssPreset) {
 					dlssProfileUiIndex = i;
 					break;
 				}
 			}
 
-			ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex), dlssProfiles[dlssProfileUiIndex]);
-			dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex));
-			settings.dlssPreset = dlssProfileOrder[dlssProfileUiIndex];
+			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
+			ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(kDLSSProfileDisplayOrder[dlssProfileUiIndex]));
+			dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
+			settings.dlssPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				switch (settings.dlssPreset) {
-				case 0:
-					ImGui::TextUnformatted("DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: about K. Use only if K ghosts.");
-					break;
-				case 1:
-					ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
-					break;
-				case 2:
-					ImGui::TextUnformatted("Default for Ultra Performance on newer RTX cards. Sharper and more stable, but higher cost than J/K/F.");
-					ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
-					break;
-				case 3:
-					ImGui::TextUnformatted("Default for Performance on newer RTX cards. Similar image-quality improvements to L, closer in speed to J/K.");
-					ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
-					break;
-				case 4:
-					ImGui::TextUnformatted("Intended for Ultra Performance/DLAA. Default preset for Ultra Performance.");
-					ImGui::TextUnformatted("Best Performance/Ultra Performance choice for RTX 3000-series cards.");
-					break;
-				default:
-					ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
-					break;
-				}
+				DrawDLSSPresetTooltip(settings.dlssPreset);
 			}
 
 			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
@@ -654,7 +692,7 @@ void Upscaling::DrawSettings()
 			}
 
 			if (isNvidiaAdapter) {
-				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards and F on RTX 3000-series cards.");
+				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards. On RTX 3000-series cards, start with F and compare E if you want the other legacy profile.");
 			}
 		}
 	}

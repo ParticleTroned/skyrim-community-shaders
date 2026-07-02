@@ -130,6 +130,7 @@ public:
 	};
 	ReflexOptionsCache reflexOptionsCache{};
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
+	bool lastDLSSFailureDuplicatedConstants = false;
 
 	struct DLSSDispatchDiagnostics
 	{
@@ -208,6 +209,8 @@ public:
 	void InvalidateDLSSOptionsCache();
 	void ResetDLSSIdleFences();
 	void ResetFrameTracking();
+	void ClearLastDLSSFailureState() { lastDLSSFailureDuplicatedConstants = false; }
+	bool WasLastDLSSFailureDuplicatedConstants() const { return lastDLSSFailureDuplicatedConstants; }
 	bool HasDLSSResourcesPendingTeardown() const;
 
 	void Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors);

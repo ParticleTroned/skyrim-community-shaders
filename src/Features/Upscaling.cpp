@@ -8891,6 +8891,9 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 
 bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Upscaling::VendorEyeDispatchParams& params)
 {
+	if (a_upscaleMethod == UpscaleMethod::kDLSS)
+		streamline.ClearLastDLSSFailureState();
+
 	if (!IsVendorUpscalingMethod(a_upscaleMethod) || params.eyeIndex >= 2)
 		return false;
 	if (!params.inputWidth || !params.inputHeight || !params.outputWidth || !params.outputHeight)
@@ -12667,6 +12670,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			submitBoundsPresentationFallback ? "submit-bounds-stretch-output" : "menu-loading-presentation-output");
 	}
 
+	if (upscaleMethod == UpscaleMethod::kDLSS)
+		streamline.ClearLastDLSSFailureState();
+
 	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening();
 	Texture2D* vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
 	if (submitDLSSSharpening) {
@@ -12884,11 +12890,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			loggedSubmitFailure[eyeIndex] = true;
 		}
 
-		if (upscaleMethod == UpscaleMethod::kDLSS) {
+		const bool duplicateDLSSConstantsFailure =
+			upscaleMethod == UpscaleMethod::kDLSS &&
+			streamline.WasLastDLSSFailureDuplicatedConstants();
+
+		if (upscaleMethod == UpscaleMethod::kDLSS && !duplicateDLSSConstantsFailure) {
 			streamline.InvalidateDLSSOptionsCache();
 			streamline.ResetFrameTracking();
 		}
-		RequestHistoryReset();
+		if (!duplicateDLSSConstantsFailure)
+			RequestHistoryReset();
 
 		if (IsSubmitStageDeviceLost())
 			return false;

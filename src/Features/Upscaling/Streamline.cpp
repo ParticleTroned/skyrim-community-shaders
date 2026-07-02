@@ -870,6 +870,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.motionVectorsJittered = sl::Boolean::eFalse;
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
+		lastDLSSFailureDuplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
 		logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetConstants, res, diagnostics);
 		return false;

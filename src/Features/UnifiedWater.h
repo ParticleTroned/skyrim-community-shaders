@@ -4,7 +4,6 @@
 #include "UnifiedWater/WaterCache.h"
 
 #include <atomic>
-#include <cstdint>
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
@@ -138,7 +137,6 @@ private:
 
 	std::atomic<RE::TESWorldSpace*> currentPlayerWorldSpace{ nullptr };
 	std::atomic<bool> pendingChildWsCull{ false };
-	std::atomic<int64_t> nextChildWsCullRetryMs{ 0 };
 	// Game-thread TES snapshot used by deferred child-worldspace cull fallbacks.
 	std::atomic<RE::TES*> cachedTes{ nullptr };
 	std::atomic_bool exteriorWorldspaceActive{ false };

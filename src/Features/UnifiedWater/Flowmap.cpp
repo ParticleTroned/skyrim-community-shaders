@@ -62,14 +62,13 @@ bool Flowmap::RegenerateAndLoadFlowmap(bool useMips)
 	std::error_code ec;
 	fs::create_directories(dir, ec);
 
-	if (ec || !fs::is_directory(dir, ec))
+	if (!fs::exists(dir))
 		return false;
 
 	for (const auto& entry : fs::directory_iterator(dir, ec)) {
 		if (ec)
 			break;
-		std::error_code entryEc;
-		if (!entry.is_regular_file(entryEc))
+		if (!entry.is_regular_file())
 			continue;
 
 		const auto& path = entry.path();
@@ -156,7 +155,7 @@ bool Flowmap::LoadFlowmap()
 	std::vector<FlowmapCandidate> candidates;
 
 	std::error_code ec;
-	if (fs::is_directory(dir, ec)) {
+	if (fs::exists(dir, ec) && fs::is_directory(dir, ec)) {
 		for (const auto& entry : fs::directory_iterator(dir, ec)) {
 			if (ec) {
 				logger::warn("[Unified Water] [Flowmap] Failed while scanning '{}': {}", dir.string(), ec.message());
@@ -188,13 +187,11 @@ bool Flowmap::LoadFlowmap()
 		return false;
 	}
 
-	if (candidates.size() > 1) {
-		std::ranges::sort(candidates, [](const FlowmapCandidate& lhs, const FlowmapCandidate& rhs) {
-			if (lhs.writeTime != rhs.writeTime)
-				return lhs.writeTime > rhs.writeTime;
-			return lhs.file.path().filename().string() > rhs.file.path().filename().string();
-		});
-	}
+	std::ranges::sort(candidates, [](const FlowmapCandidate& lhs, const FlowmapCandidate& rhs) {
+		if (lhs.writeTime != rhs.writeTime)
+			return lhs.writeTime > rhs.writeTime;
+		return lhs.file.path().filename().string() > rhs.file.path().filename().string();
+	});
 
 	for (const auto& candidate : candidates) {
 		auto path = std::format(R"(textures\water\flowmaps\{})", candidate.file.path().filename().string());

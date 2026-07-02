@@ -2,14 +2,12 @@
 
 #include "Deferred.h"
 #include "Globals.h"
-#include "Hooks.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 
 #define I18N_KEY_PREFIX "feature.terrain_blending."
@@ -22,176 +20,135 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
-	enum class TerrainBlendingReplayPath
+	bool IsTerrainBlendingCapturedPass(const RE::BSRenderPass* a_pass, bool& a_isTerrainBlend, bool& a_failed)
 	{
-		kUnknown,
-		kTerrainBlend,
-		kNoBlend
-	};
-
-	const char* ToString(TerrainBlendingReplayPath a_path)
-	{
-		switch (a_path) {
-		case TerrainBlendingReplayPath::kTerrainBlend:
-			return "terrain_blend";
-		case TerrainBlendingReplayPath::kNoBlend:
-			return "no_blend";
-		default:
-			return "unknown";
-		}
-	}
-
-	RE::BSShader::Type GetExpectedShaderType(TerrainBlendingReplayPath a_path)
-	{
-		switch (a_path) {
-		case TerrainBlendingReplayPath::kTerrainBlend:
-		case TerrainBlendingReplayPath::kNoBlend:
-			return RE::BSShader::Type::Lighting;
-		default:
-			return RE::BSShader::Type::None;
-		}
-	}
-
-	TerrainBlendingReplayPath GetRenderPassReplayPath(const RE::BSRenderPass* a_pass, const char*& a_reason)
-	{
-		a_reason = nullptr;
+		a_isTerrainBlend = false;
+		a_failed = false;
 #if defined(_MSC_VER)
 		__try
 #endif
 		{
 			if (!a_pass) {
-				a_reason = "pass";
-				return TerrainBlendingReplayPath::kUnknown;
+				a_failed = true;
+				return false;
 			}
 
 			auto* shaderProperty = a_pass->shaderProperty;
 			if (!shaderProperty) {
-				return TerrainBlendingReplayPath::kUnknown;
+				return false;
 			}
 
 			const auto flags = shaderProperty->flags;
 			if (flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
-				return TerrainBlendingReplayPath::kTerrainBlend;
+				a_isTerrainBlend = true;
+				return true;
 			}
 			if (flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kNoTransparencyMultiSample)) {
-				return TerrainBlendingReplayPath::kNoBlend;
+				return true;
 			}
-			return TerrainBlendingReplayPath::kUnknown;
+			return false;
 		}
 #if defined(_MSC_VER)
 		__except (1) {
-			a_reason = "exception";
-			return TerrainBlendingReplayPath::kUnknown;
-		}
-#else
-		a_reason = "unknown";
-		return TerrainBlendingReplayPath::kUnknown;
-#endif
-	}
-
-	bool IsRenderPassBeyondTerrainCullDistance(const RE::BSRenderPass* a_pass, const RE::NiPoint3& a_eyePosition, float a_cullDistance, const char*& a_reason)
-	{
-		a_reason = nullptr;
-#if defined(_MSC_VER)
-		__try
-#endif
-		{
-			return (a_pass->geometry->worldBound.center.GetDistance(a_eyePosition) - a_pass->geometry->worldBound.radius) > a_cullDistance;
-		}
-#if defined(_MSC_VER)
-		__except (1) {
-			a_reason = "exception";
+			a_failed = true;
 			return false;
 		}
 #else
-		a_reason = "unknown";
+		a_failed = true;
 		return false;
 #endif
 	}
 
-	void LogDroppedTerrainBlendingPass(std::string_view a_phase, TerrainBlendingReplayPath a_path, const RE::BSRenderPass* a_pass, const char* a_reason)
+	bool ShouldRenderTerrainDepthPass(const RE::BSRenderPass* a_pass, const RE::NiPoint3& a_eyePosition, float a_cullDistance, bool& a_failed)
 	{
-		if (!(globals::state && globals::state->IsDeveloperMode()))
-			return;
+		a_failed = false;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			if (!a_pass || !a_pass->geometry) {
+				a_failed = true;
+				return false;
+			}
 
-		static std::atomic<uint64_t> dropCount = 0;
-		const auto count = dropCount.fetch_add(1, std::memory_order_relaxed) + 1;
-		if (count <= 16 || (count % 128) == 0) {
-			logger::warn("[TerrainBlending] dropped {} pass #{} path={} reason={} pass=0x{:X}",
-				a_phase,
-				count,
-				ToString(a_path),
-				a_reason ? a_reason : "unknown",
-				reinterpret_cast<std::uintptr_t>(a_pass));
+			if (a_cullDistance <= 0.0f) {
+				return true;
+			}
+
+			return (a_pass->geometry->worldBound.center.GetDistance(a_eyePosition) - a_pass->geometry->worldBound.radius) <= a_cullDistance;
 		}
-	}
-
-	bool ShouldSkipCaptureFailure(const char* a_reason)
-	{
-		if (!a_reason) {
+#if defined(_MSC_VER)
+		__except (1) {
+			a_failed = true;
 			return false;
 		}
-
-		const std::string_view reason{ a_reason };
-		return reason == "pass" ||
-		       reason == "geometry" ||
-		       reason == "shader" ||
-		       reason == "shader_property" ||
-		       reason == "exception";
+#else
+		a_failed = true;
+		return false;
+#endif
 	}
 
-	bool CanReplayRenderPass(const TerrainBlending::RenderPass& a_renderPass, TerrainBlendingReplayPath a_path, const char*& a_reason)
+	bool CanReplayRenderPass(const TerrainBlending::RenderPass& a_renderPass, bool a_expectedTerrainBlend, bool& a_skipOriginal)
 	{
-		a_reason = nullptr;
+		a_skipOriginal = false;
 #if defined(_MSC_VER)
 		__try
 #endif
 		{
 			auto* pass = a_renderPass.a_pass;
 			if (!pass) {
-				a_reason = "pass";
+				a_skipOriginal = true;
 				return false;
 			}
 			if (!pass->geometry) {
-				a_reason = "geometry";
+				a_skipOriginal = true;
 				return false;
 			}
 			auto& geometryRuntimeData = pass->geometry->GetGeometryRuntimeData();
-			auto* geometryShaderProperty = geometryRuntimeData.shaderProperty.get();
-			if (!geometryShaderProperty) {
-				a_reason = "geometry_shader_property";
+			if (!geometryRuntimeData.shaderProperty) {
 				return false;
 			}
 			if (!pass->shader) {
-				a_reason = "shader";
+				a_skipOriginal = true;
 				return false;
 			}
 			if (!pass->shaderProperty) {
-				a_reason = "shader_property";
+				a_skipOriginal = true;
 				return false;
 			}
-			if (pass->shader->shaderType.get() != GetExpectedShaderType(a_path)) {
-				a_reason = "shader_type";
+			if (pass->shader->shaderType.get() != RE::BSShader::Type::Lighting) {
 				return false;
 			}
-			const auto path = GetRenderPassReplayPath(pass, a_reason);
-			if (a_reason) {
+			bool isTerrainBlend = false;
+			bool classificationFailed = false;
+			const bool capturedPass = IsTerrainBlendingCapturedPass(pass, isTerrainBlend, classificationFailed);
+			if (classificationFailed) {
+				a_skipOriginal = true;
 				return false;
 			}
-			if (path != a_path) {
-				a_reason = "replay_path";
+			if (!capturedPass || isTerrainBlend != a_expectedTerrainBlend) {
 				return false;
 			}
 			return true;
 		}
 #if defined(_MSC_VER)
 		__except (1) {
-			a_reason = "exception";
+			a_skipOriginal = true;
 			return false;
 		}
 #endif
-		a_reason = "unknown";
+		a_skipOriginal = true;
 		return false;
+	}
+
+	void RestoreTerrainBlendingMainDepthSrv(RE::BSGraphics::Renderer* a_renderer, ID3D11ShaderResourceView* a_mainDepthSrv)
+	{
+		if (!a_renderer) {
+			return;
+		}
+
+		auto& mainDepth = a_renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		mainDepth.depthSRV = a_mainDepthSrv;
 	}
 
 	void RestoreTerrainBlendingDepthSrvs(RE::BSGraphics::Renderer* a_renderer, ID3D11ShaderResourceView* a_mainDepthSrv, ID3D11ShaderResourceView* a_prepassSrv)
@@ -200,22 +157,12 @@ namespace
 			return;
 		}
 
-		auto& mainDepth = a_renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		RestoreTerrainBlendingMainDepthSrv(a_renderer, a_mainDepthSrv);
+
 		auto& zPrepassCopy = a_renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-		mainDepth.depthSRV = a_mainDepthSrv;
 		zPrepassCopy.depthSRV = a_prepassSrv;
 	}
 
-	uint32_t GetDepthBlendExtent(float a_sceneExtent, uint32_t a_resourceExtent)
-	{
-		if (!a_resourceExtent)
-			return 0;
-
-		if (!std::isfinite(a_sceneExtent) || a_sceneExtent <= 0.0f)
-			return 0;
-
-		return std::clamp(static_cast<uint32_t>(std::max(1l, std::lround(a_sceneExtent))), 1u, a_resourceExtent);
-	}
 }
 
 void TerrainBlending::DrawSettings()
@@ -250,6 +197,19 @@ void TerrainBlending::DrawSettings()
 void TerrainBlending::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.Enabled = settings.Enabled ? 1u : 0u;
+
+	if (!std::isfinite(settings.TerrainCullDistance)) {
+		settings.TerrainCullDistance = 1024.0f;
+	} else {
+		settings.TerrainCullDistance = std::clamp(settings.TerrainCullDistance, 0.0f, 8192.0f);
+	}
+
+	if (!std::isfinite(settings.BlendStrength)) {
+		settings.BlendStrength = 1.0f;
+	} else {
+		settings.BlendStrength = std::clamp(settings.BlendStrength, 0.125f, 1.25f);
+	}
 }
 
 void TerrainBlending::SaveSettings(json& o_json)
@@ -509,6 +469,7 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 		if (singleton.renderTerrainDepth) {
 			singleton.renderTerrainDepth = false;
 			singleton.ResetTerrainDepth();
+			singleton.renderAltTerrain = false;
 		}
 
 		singleton.BlendPrepassDepths();
@@ -523,88 +484,82 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	}
 }
 
-TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 {
+	auto& singleton = globals::features::terrainBlending;
 	auto shaderCache = globals::shaderCache;
 
 	if (!a_pass) {
-		LogDroppedTerrainBlendingPass("capture", TerrainBlendingReplayPath::kUnknown, a_pass, "pass");
-		return RenderPassImmediatelyAction::Skip;
+		return;
 	}
 
-	if (shaderCache->IsEnabled() && settings.Enabled) {
+	if (shaderCache->IsEnabled() && singleton.settings.Enabled) {
 		auto leaveTerrainDepthSection = [&]() {
-			if (renderTerrainDepth) {
-				ResetTerrainDepth();
-				renderTerrainDepth = false;
+			if (singleton.renderTerrainDepth) {
+				singleton.ResetTerrainDepth();
+				singleton.renderTerrainDepth = false;
+				singleton.renderAltTerrain = false;
 			}
 		};
 
-		if (renderDepth) {
+		if (singleton.renderDepth) {
 			// Entering or exiting terrain depth section
-			const char* reason = nullptr;
-			const bool inTerrainCandidate = GetRenderPassReplayPath(a_pass, reason) == TerrainBlendingReplayPath::kTerrainBlend;
-			if (reason) {
+			bool classificationFailed = false;
+			bool inTerrain = false;
+			IsTerrainBlendingCapturedPass(a_pass, inTerrain, classificationFailed);
+			if (classificationFailed) {
 				leaveTerrainDepthSection();
-				LogDroppedTerrainBlendingPass("depth", TerrainBlendingReplayPath::kTerrainBlend, a_pass, reason);
-				return RenderPassImmediatelyAction::Skip;
-			}
-
-			bool inTerrain = inTerrainCandidate;
-
-			if (inTerrain && !a_pass->geometry) {
-				leaveTerrainDepthSection();
-				LogDroppedTerrainBlendingPass("depth", TerrainBlendingReplayPath::kTerrainBlend, a_pass, "geometry");
-				return RenderPassImmediatelyAction::Skip;
+				return;
 			}
 
 			if (inTerrain) {
-				const float cullDistance = settings.TerrainCullDistance;
-				if (cullDistance > 0.0f) {
-					if (IsRenderPassBeyondTerrainCullDistance(a_pass, eyePosition, cullDistance, reason)) {
-						inTerrain = false;
-					} else if (reason) {
-						leaveTerrainDepthSection();
-						LogDroppedTerrainBlendingPass("depth", TerrainBlendingReplayPath::kTerrainBlend, a_pass, reason);
-						return RenderPassImmediatelyAction::Skip;
-					}
+				bool depthPassFailed = false;
+				inTerrain = ShouldRenderTerrainDepthPass(a_pass, singleton.eyePosition, singleton.settings.TerrainCullDistance, depthPassFailed);
+				if (depthPassFailed) {
+					leaveTerrainDepthSection();
+					return;
 				}
 			}
 
-			if (renderTerrainDepth != inTerrain) {
-				if (!inTerrain)
-					ResetTerrainDepth();
-				renderTerrainDepth = inTerrain;
+			if (singleton.renderTerrainDepth != inTerrain) {
+				if (!inTerrain) {
+					singleton.ResetTerrainDepth();
+					singleton.renderAltTerrain = false;
+				}
+				singleton.renderTerrainDepth = inTerrain;
 			}
 
 			if (inTerrain) {
-				return RenderPassImmediatelyAction::DrawTwice;
+				func(a_pass, a_technique, a_alphaTest, a_renderFlags);  // Run terrain twice
 			}
 		} else if (globals::state->inWorld) {
-			const char* reason = nullptr;
-			const auto replayPath = GetRenderPassReplayPath(a_pass, reason);
-			if (reason) {
-				LogDroppedTerrainBlendingPass("capture", TerrainBlendingReplayPath::kUnknown, a_pass, reason);
-				return RenderPassImmediatelyAction::Skip;
+			bool classificationFailed = false;
+			bool isTerrainBlend = false;
+			const bool capturedPass = IsTerrainBlendingCapturedPass(a_pass, isTerrainBlend, classificationFailed);
+			if (classificationFailed) {
+				return;
 			}
 
-			if (replayPath == TerrainBlendingReplayPath::kTerrainBlend || replayPath == TerrainBlendingReplayPath::kNoBlend) {
-				RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-				if (!CanReplayRenderPass(call, replayPath, reason)) {
-					LogDroppedTerrainBlendingPass("capture", replayPath, a_pass, reason);
-					return ShouldSkipCaptureFailure(reason) ? RenderPassImmediatelyAction::Skip : RenderPassImmediatelyAction::Draw;
-				}
-				if (replayPath == TerrainBlendingReplayPath::kTerrainBlend) {
-					terrainRenderPasses.push_back(call);
+			if (capturedPass) {
+				TerrainBlending::RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
+				bool skipOriginal = false;
+				if (!CanReplayRenderPass(call, isTerrainBlend, skipOriginal)) {
+					if (skipOriginal) {
+						return;
+					}
 				} else {
-					renderPasses.push_back(call);
+					if (isTerrainBlend) {
+						singleton.terrainRenderPasses.push_back(call);
+					} else {
+						singleton.renderPasses.push_back(call);
+					}
+					return;
 				}
-				return RenderPassImmediatelyAction::Skip;
 			}
 		}
 	}
 
-	return RenderPassImmediatelyAction::Draw;
+	func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 }
 
 void TerrainBlending::RenderTerrainBlendingPasses()
@@ -629,9 +584,6 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		renderDepth = false;
 		renderTerrainDepth = false;
 		renderAltTerrain = false;
-		if (!terrainRenderPasses.empty() || !renderPasses.empty()) {
-			LogDroppedTerrainBlendingPass("replay", TerrainBlendingReplayPath::kUnknown, nullptr, "render_state");
-		}
 		terrainRenderPasses.clear();
 		renderPasses.clear();
 		RestoreTerrainBlendingDepthSrvs(renderer, depthSRVBackup, prepassSRVBackup);
@@ -661,12 +613,11 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		context->OMSetDepthStencilState(terrainDepthStencilState, 0xFF);
 
 		for (auto& renderPass : terrainRenderPasses) {
-			const char* reason = nullptr;
-			if (!CanReplayRenderPass(renderPass, TerrainBlendingReplayPath::kTerrainBlend, reason)) {
-				LogDroppedTerrainBlendingPass("replay", TerrainBlendingReplayPath::kTerrainBlend, renderPass.a_pass, reason);
+			bool skipOriginal = false;
+			if (!CanReplayRenderPass(renderPass, true, skipOriginal)) {
 				continue;
 			}
-			::Hooks::DrawRenderPassImmediately(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
 		}
 
 		// Reset alpha blending
@@ -678,12 +629,11 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 		stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE);
 
 		for (auto& renderPass : renderPasses) {
-			const char* reason = nullptr;
-			if (!CanReplayRenderPass(renderPass, TerrainBlendingReplayPath::kNoBlend, reason)) {
-				LogDroppedTerrainBlendingPass("replay", TerrainBlendingReplayPath::kNoBlend, renderPass.a_pass, reason);
+			bool skipOriginal = false;
+			if (!CanReplayRenderPass(renderPass, false, skipOriginal)) {
 				continue;
 			}
-			::Hooks::DrawRenderPassImmediately(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
+			Hooks::BSBatchRenderer__RenderPassImmediately::func(renderPass.a_pass, renderPass.a_technique, renderPass.a_alphaTest, renderPass.a_renderFlags);
 		}
 
 		terrainRenderPasses.clear();
@@ -693,6 +643,6 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 			globals::state->EndPerfEvent();
 	}
 
-	RestoreTerrainBlendingDepthSrvs(renderer, depthSRVBackup, prepassSRVBackup);
+	RestoreTerrainBlendingMainDepthSrv(renderer, depthSRVBackup);
 }
 #undef I18N_KEY_PREFIX

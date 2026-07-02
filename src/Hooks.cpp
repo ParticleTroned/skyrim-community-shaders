@@ -11,11 +11,9 @@
 #include "TruePBR.h"
 #include "Util.h"
 
-#include "Features/InteriorSun.h"
 #include "Features/HDRDisplay.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenshotFeature.h"
-#include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
@@ -1018,91 +1016,6 @@ namespace Hooks
 		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
-	{
-#if defined(_MSC_VER)
-		__try
-#endif
-		{
-			return globals::features::lightLimitFix.loaded &&
-			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
-		}
-#if defined(_MSC_VER)
-		__except (1) {
-			// Fail open on transient invalid render-pass data to avoid crashing render-thread hooks.
-			return false;
-		}
-#endif
-	}
-
-	// This is from 1.4.0 but absent in 1.4.6
-	void BSBatchRenderer_RenderPassImmediately1::thunk(
-		RE::BSRenderPass* a_pass,
-		uint32_t a_technique,
-		bool a_alphaTest,
-		uint32_t a_renderFlags)
-	{
-		if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
-			return;
-		}
-
-		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-	}
-
-	struct BSBatchRenderer_RenderPassImmediately2  // This is from 1.4.0 but absent in 1.4.6
-	{
-		static void thunk(RE::BSRenderPass* a_pass,
-			uint32_t a_technique,
-			bool a_alphaTest,
-			uint32_t a_renderFlags)
-		{
-			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
-				return;
-			}
-
-			if (globals::features::terrainBlending.loaded) {
-				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
-					return;
-				}
-				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
-					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-				}
-			}
-
-			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-		}
-
-		// This is from 1.4.0 but absent in 1.4.6
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSBatchRenderer_RenderPassImmediately3  // This is from 1.4.0 but absent in 1.4.6
-	{
-		static void thunk(RE::BSRenderPass* a_pass,
-			uint32_t a_technique,
-			bool a_alphaTest,
-			uint32_t a_renderFlags)
-		{
-			if (ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
-				return;
-			}
-
-			// Original call
-			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-		}
-
-		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
-	};
-
-	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
-	{
-		if (globals::features::interiorSun.loaded) {
-			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
-		}
-		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
-	}
-
 #ifdef TRACY_ENABLE
 	struct Main_Update
 	{
@@ -1312,14 +1225,6 @@ namespace Hooks
 
 		logger::info("Hooking BSLightingShader");
 		stl::write_vfunc<0x4, BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
-
-		logger::info("Hooking BSBatchRenderer::RenderPassImmediately");
-		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately1>(
-			REL::RelocationID(100877, 107673).address() + REL::Relocate(0x1E5, 0x1EE));
-		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately2>(
-			REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
-		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately3>(
-			REL::RelocationID(100871, 107667).address() + REL::Relocate(0xEE, 0xED));
 
 		// Patch render space in BSLightingShader::SetupGeometry to always use world space
 		// The variable updateEyePosition is set to 1 when not skinned. By patching to be 0 it will always use world space

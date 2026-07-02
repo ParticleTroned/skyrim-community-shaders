@@ -107,15 +107,6 @@ public:
 	/** @brief Executes deferred terrain and no-blend render passes with appropriate depth and alpha blending states. */
 	void RenderTerrainBlendingPasses();
 
-	enum class RenderPassImmediatelyAction
-	{
-		Draw,
-		Skip,
-		DrawTwice
-	};
-
-	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
-
 	struct Hooks
 	{
 		struct Main_RenderDepth
@@ -124,10 +115,19 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSBatchRenderer__RenderPassImmediately
+		{
+			static void thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			// To know when we are rendering z-prepass depth vs shadows depth
 			stl::write_thunk_call<Main_RenderDepth>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x395, 0x395));
+
+			// To manipulate the depth buffer write, depth testing, alpha blending
+			stl::write_thunk_call<BSBatchRenderer__RenderPassImmediately>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
 
 			logger::info("[Terrain Blending] Installed hooks");
 		}

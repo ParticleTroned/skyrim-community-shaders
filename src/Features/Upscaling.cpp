@@ -7102,6 +7102,16 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	}
 
 	const bool renderScalePostLoadResetRelevant = IsVRRenderScalePostLoadResetRelevant(*this, a_upscaleMethod);
+	const auto relatchMethod = GetConfiguredUpscaleMethodForTransition();
+	const bool resetFSRRenderScaleBootLatch =
+		renderScalePostLoadResetRelevant &&
+		a_upscaleMethod == UpscaleMethod::kFSR;
+	const bool queueFSRRenderScaleRelatch =
+		resetFSRRenderScaleBootLatch &&
+		relatchMethod == UpscaleMethod::kFSR &&
+		perfMode.IsEligible(settings, relatchMethod) &&
+		perfMode.HasKnownHMDSize();
+
 	if (!postLoadRuntimeResetPending.exchange(false, std::memory_order_acq_rel))
 		return true;
 
@@ -7115,12 +7125,26 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		magic_enum::enum_name(a_upscaleMethod));
 
 	try {
+		if (resetFSRRenderScaleBootLatch) {
+			perfMode.ResetBootLatch();
+			perfModeAllowBootLatchCreate.store(true, std::memory_order_release);
+			InvalidateFrameScopedUpscalingState();
+		}
+
 		if (!ResetVRVendorRuntimeResources(true, false)) {
 			logger::warn("[Upscaling] VR post-load runtime reset deferred because vendor resources are still in use");
 			postLoadRuntimeResetPending.store(true, std::memory_order_release);
 			return false;
 		}
-		RecreateVendorRuntimeResources(a_upscaleMethod, true);
+
+		if (resetFSRRenderScaleBootLatch) {
+			RefreshRuntimeResolutionState();
+			RecreateVendorRuntimeResources(GetRuntimeUpscaleMethod(), true);
+			if (queueFSRRenderScaleRelatch)
+				RequestPerfModeRenderTargetRecreate("post-load render-scale relatch", VRUpscalingTransitionOrigin::PostLoadSync);
+		} else {
+			RecreateVendorRuntimeResources(a_upscaleMethod, true);
+		}
 	} catch (const std::exception& e) {
 		logger::error("[Upscaling] VR post-load runtime reset failed: {}", e.what());
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "VR post-load runtime reset"))

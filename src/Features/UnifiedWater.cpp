@@ -12,13 +12,13 @@
 #include "RE/N/NiIntegersExtraData.h"
 #include "RE/P/PlayerCharacter.h"
 
+#include <imgui_internal.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <imgui_internal.h>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,7 +40,7 @@ static int64_t SteadyClockMs()
 {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::steady_clock::now().time_since_epoch())
-	    .count();
+		.count();
 }
 
 static bool IsInteriorCellActive()
@@ -174,16 +174,6 @@ static GeneratedTileKey GetGeneratedTileKey(const UnifiedWater::WaterTilePlaceme
 	};
 }
 
-static bool ShouldUseOptimisedGeneratedWaterMesh(const WaterCache::Instruction& instruction, const bool useOptimisedMeshes)
-{
-	if (!useOptimisedMeshes)
-		return false;
-
-	// LOD4 tiles still need per-cell culling. For coarser LOD, partial tiles are
-	// usually shoreline/boundary tiles, so keep them on the full mesh.
-	return instruction.lodLevel <= 4 || instruction.size == instruction.lodLevel;
-}
-
 static int32_t QuantizeWaterPosition(float value)
 {
 	return static_cast<int32_t>(std::lround(value));
@@ -226,7 +216,7 @@ static void SetGeneratedWaterTileMarker(RE::NiAVObject* object, const UnifiedWat
 		return;
 
 	if (auto* marker = GetGeneratedWaterTileMarker(object);
-		marker && marker->value && marker->size >= 3) {
+	    marker && marker->value && marker->size >= 3) {
 		marker->value[0] = placement.x;
 		marker->value[1] = placement.y;
 		marker->value[2] = static_cast<std::int32_t>(placement.size);
@@ -395,7 +385,7 @@ static CullCompletionState CullWaterParentByGridCells(RE::NiNode* waterParent, R
 		CullCompletionState childState;
 		UnifiedWater::WaterTilePlacement placement;
 		if (TryGetGeneratedWaterTileMarker(child.get(), placement) ||
-			globals::features::unifiedWater.TryGetGeneratedWaterTile(child.get(), placement)) {
+		    globals::features::unifiedWater.TryGetGeneratedWaterTile(child.get(), placement)) {
 			childState = ShouldCullTileFootprint(tes, placement.x, placement.y, placement.size);
 		} else {
 			int32_t x, y;
@@ -1125,7 +1115,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 
 			RE::NiCloningProcess cloningProcess;
 
-			const auto targetShape = ShouldUseOptimisedGeneratedWaterMesh(instruction, uw.settings.UseOptimisedMeshes) ? uw.optimisedWaterMesh : uw.waterMesh;
+			const auto targetShape = lodLevel > 4 || uw.settings.UseOptimisedMeshes ? uw.optimisedWaterMesh : uw.waterMesh;
 			RE::BSTriShape* shape = targetShape->CreateClone(cloningProcess)->AsTriShape();
 
 			const auto posX = (instruction.x - node->baseCellX) * 4096.0f + instruction.size * 2048.0f;

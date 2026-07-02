@@ -4,11 +4,6 @@
 #include "UnifiedWater/WaterCache.h"
 
 #include <atomic>
-#include <cstdint>
-#include <memory>
-#include <shared_mutex>
-#include <unordered_map>
-#include <vector>
 
 struct UnifiedWater : OverlayFeature
 {
@@ -34,19 +29,6 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	Settings settings;
-
-	struct WaterTilePlacement
-	{
-		int32_t x{};
-		int32_t y{};
-		uint32_t size{};
-		RE::FormID waterForm{};
-		std::uint8_t waterFlags{};
-	};
-
-	void RegisterGeneratedWaterTile(const RE::NiAVObject* object, const WaterTilePlacement& placement);
-	void UnregisterGeneratedWaterTilesInTree(const RE::NiAVObject* object);
-	bool TryGetGeneratedWaterTile(const RE::NiAVObject* object, WaterTilePlacement& placement) const;
 
 	struct TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams
 	{
@@ -92,7 +74,7 @@ struct UnifiedWater : OverlayFeature
 
 	struct BSWaterShader_SetupGeometry
 	{
-		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass, uint32_t renderFlags);
+		static void thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -129,8 +111,8 @@ struct UnifiedWater : OverlayFeature
 private:
 	RE::NiPointer<RE::BSTriShape> waterMesh;
 	RE::NiPointer<RE::BSTriShape> optimisedWaterMesh;
-	std::unique_ptr<Flowmap> flowmap;
-	std::unique_ptr<WaterCache> waterCache;
+	Flowmap* flowmap = nullptr;
+	WaterCache* waterCache = nullptr;
 
 	RE::NiNode** gWaterLOD = nullptr;
 	RE::NiPointer<RE::NiSourceTexture>* gFlowMapSourceTex = nullptr;
@@ -141,17 +123,11 @@ private:
 
 	std::atomic<RE::TESWorldSpace*> currentPlayerWorldSpace{ nullptr };
 	std::atomic<bool> pendingChildWsCull{ false };
-	std::atomic<int64_t> nextChildWsCullRetryMs{ 0 };
 	// Game-thread TES snapshot used by deferred child-worldspace cull fallbacks.
 	std::atomic<RE::TES*> cachedTes{ nullptr };
 	std::atomic_bool exteriorWorldspaceActive{ false };
 	std::atomic_bool mapMenuOpen{ false };
 
-	mutable std::shared_mutex generatedWaterTilesLock;
-	std::unordered_map<const RE::NiAVObject*, WaterTilePlacement> generatedWaterTiles;
-
-	void ClearGeneratedWaterTiles();
-	void RemoveDuplicateGeneratedWaterTiles(RE::TESWaterSystem* waterSystem, RE::NiNode* lodRoot, const std::vector<WaterTilePlacement>& touchedTiles);
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
 
 	void SetFlowmapTex() const;

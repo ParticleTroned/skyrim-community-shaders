@@ -2,12 +2,12 @@
 
 struct VS_INPUT
 {
-	float4 Position : POSITION0;
+	float4 Position: POSITION0;
 };
 
 struct VS_OUTPUT
 {
-	float4 Position : SV_POSITION0;
+	float4 Position: SV_POSITION0;
 };
 
 #	ifdef VSHADER
@@ -27,7 +27,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
+	float4 Color: SV_Target0;
 };
 
 #	ifdef PSHADER
@@ -57,73 +57,73 @@ PS_OUTPUT main(PS_INPUT input)
 struct VS_INPUT
 {
 #	if defined(SPECULAR) || defined(UNDERWATER) || defined(STENCIL) || defined(SIMPLE)
-	float4 Position : POSITION0;
+	float4 Position: POSITION0;
 #		if defined(NORMAL_TEXCOORD)
-	float2 TexCoord0 : TEXCOORD0;
+	float2 TexCoord0: TEXCOORD0;
 #		endif
 #		if defined(VC)
-	float4 Color : COLOR0;
+	float4 Color: COLOR0;
 #		endif
 #	endif
 
 #	if defined(LOD)
-	float4 Position : POSITION0;
+	float4 Position: POSITION0;
 #		if defined(VC)
-	float4 Color : COLOR0;
+	float4 Color: COLOR0;
 #		endif
 #	endif
 #	if defined(VR)
-	uint InstanceID : SV_INSTANCEID;
+	uint InstanceID: SV_INSTANCEID;
 #	endif  // VR
 };
 
 struct VS_OUTPUT
 {
 #	if defined(SPECULAR) || defined(UNDERWATER)
-	float4 HPosition : SV_POSITION0;
+	float4 HPosition: SV_POSITION0;
 #		if !defined(UNIFIED_WATER)
-	float4 FogParam : COLOR0;
+	float4 FogParam: COLOR0;
 #		endif
-	float4 WPosition : TEXCOORD0;
-	float4 TexCoord1 : TEXCOORD1;
-	float4 TexCoord2 : TEXCOORD2;
+	float4 WPosition: TEXCOORD0;
+	float4 TexCoord1: TEXCOORD1;
+	float4 TexCoord2: TEXCOORD2;
 #		if defined(WADING) || (defined(FLOWMAP) && (defined(REFRACTIONS) || defined(BLEND_NORMALS))) || (defined(VERTEX_ALPHA_DEPTH) && defined(VC)) || ((defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0) && defined(FLOWMAP) /*!defined(NORMAL_TEXCOORD) && !defined(BLEND_NORMALS) && !defined(VC)*/)
-	float4 TexCoord3 : TEXCOORD3;
+	float4 TexCoord3: TEXCOORD3;
 #		endif
 #		if defined(FLOWMAP)
-	nointerpolation float2 TexCoord4 : TEXCOORD4;
+	nointerpolation float2 TexCoord4: TEXCOORD4;
 #		endif
 #		if NUM_SPECULAR_LIGHTS == 0
-	float4 MPosition : TEXCOORD5;
+	float4 MPosition: TEXCOORD5;
 #		endif
 #	endif
 
 #	if defined(SIMPLE)
-	float4 HPosition : SV_POSITION0;
-	float4 FogParam : COLOR0;
-	float4 WPosition : TEXCOORD0;
-	float4 TexCoord1 : TEXCOORD1;
-	float4 TexCoord2 : TEXCOORD2;
-	float4 MPosition : TEXCOORD5;
+	float4 HPosition: SV_POSITION0;
+	float4 FogParam: COLOR0;
+	float4 WPosition: TEXCOORD0;
+	float4 TexCoord1: TEXCOORD1;
+	float4 TexCoord2: TEXCOORD2;
+	float4 MPosition: TEXCOORD5;
 #	endif
 
 #	if defined(LOD)
-	float4 HPosition : SV_POSITION0;
-	float4 FogParam : COLOR0;
-	float4 WPosition : TEXCOORD0;
-	float4 TexCoord1 : TEXCOORD1;
+	float4 HPosition: SV_POSITION0;
+	float4 FogParam: COLOR0;
+	float4 WPosition: TEXCOORD0;
+	float4 TexCoord1: TEXCOORD1;
 #	endif
 
 #	if defined(STENCIL)
-	float4 HPosition : SV_POSITION0;
-	float4 WorldPosition : POSITION1;
-	float4 PreviousWorldPosition : POSITION2;
+	float4 HPosition: SV_POSITION0;
+	float4 WorldPosition: POSITION1;
+	float4 PreviousWorldPosition: POSITION2;
 #	endif
 
-	float4 NormalsScale : TEXCOORD8;
+	float4 NormalsScale: TEXCOORD8;
 #	if defined(VR)
-	float ClipDistance : SV_ClipDistance0;  // o11
-	float CullDistance : SV_CullDistance0;  // p11
+	float ClipDistance: SV_ClipDistance0;  // o11
+	float CullDistance: SV_CullDistance0;  // p11
 #	endif  // VR
 };
 
@@ -217,7 +217,8 @@ VS_OUTPUT main(VS_INPUT input)
 	float2 scrollAdjust3 = posAdjust / NormalsScale.zz;
 
 #				if defined(UNIFIED_WATER) && defined(NORMAL_TEXCOORD)
-	float2 scaledUV = input.TexCoord0.xy * ObjectUV.z;
+	float2 cellShift = float2(floor(ObjectUV.z * 0.5), floor((ObjectUV.z - 1.0) * 0.5));
+	float2 scaledUV = input.TexCoord0.xy * ObjectUV.z - cellShift;
 #				endif
 
 #				if !(defined(FLOWMAP) && (defined(REFRACTIONS) || defined(BLEND_NORMALS) || defined(DEPTH) || NUM_SPECULAR_LIGHTS == 0))
@@ -312,12 +313,12 @@ typedef VS_OUTPUT PS_INPUT;
 struct PS_OUTPUT
 {
 #	if defined(UNDERWATER) || defined(SIMPLE) || defined(LOD) || defined(SPECULAR)
-	float4 Lighting : SV_Target0;
+	float4 Lighting: SV_Target0;
 #	endif
 
 #	if defined(STENCIL)
-	float4 WaterMask : SV_Target0;
-	float2 MotionVector : SV_Target1;
+	float4 WaterMask: SV_Target0;
+	float2 MotionVector: SV_Target1;
 #	endif
 };
 
@@ -900,9 +901,9 @@ static const float WaterReflectionHeightFadeEnd = 8000.0;
 float GetWaterReflectionHeightFade(uint eyeIndex)
 {
 	float cameraRelativeWaterHeight = SharedData::WaterData[WaterReflectionCenterWaterTile].w;
-#	if defined(VR)
+#			if defined(VR)
 	cameraRelativeWaterHeight += FrameBuffer::CameraPosAdjust[0].z - FrameBuffer::CameraPosAdjust[eyeIndex].z;
-#	endif
+#			endif
 
 	if (cameraRelativeWaterHeight <= WATER_HEIGHT_NO_TILE_SENTINEL) {
 		return 1.0;
@@ -1049,26 +1050,6 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
-static const float UnifiedWaterDistanceDepthFadeViewStart = 32768.0;
-static const float UnifiedWaterDistanceDepthFadeViewEnd = 65536.0;
-
-float4 ApplyUnifiedWaterDistanceDepthFade(float4 depthMul, float distanceFactor, float viewDistance)
-{
-#			if defined(UNIFIED_WATER) && !defined(UNDERWATER) && !defined(LOD)
-	// Distant UW still uses close-water depth shading. Fade it out only when both
-	// water depth shading and explicit camera distance indicate far water.
-	float waterDepthFade = smoothstep(0.7, 0.95, distanceFactor);
-	float viewDistanceFade = smoothstep(
-		UnifiedWaterDistanceDepthFadeViewStart,
-		UnifiedWaterDistanceDepthFadeViewEnd,
-		viewDistance);
-	float farDepthFade = waterDepthFade * viewDistanceFade;
-	return lerp(depthMul, 1.0.xxxx, farDepthFade);
-#			else
-	return depthMul;
-#			endif
-}
-
 struct DiffuseOutput
 {
 	float3 refractionColor;
@@ -1205,9 +1186,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(SIMPLE) || defined(UNDERWATER) || defined(LOD) || defined(SPECULAR)
 	float3 viewDirection = normalize(input.WPosition.xyz);
-	float viewDistance = input.WPosition.w;
 
-	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (viewDistance - 8192) / (WaterParams.x - 8192)));
+	float distanceFactor = saturate(lerp(FrameBuffer::FrameParams.w, 1, (length(input.WPosition.xyz) - 8192) / (WaterParams.x - 8192)));
 	float4 distanceMul = saturate(lerp(VarAmounts.z, 1, -(distanceFactor - 1))).xxxx;
 	float distanceBlendFactor = distanceFactor;
 #			if defined(UNIFIED_WATER)
@@ -1242,10 +1222,6 @@ PS_OUTPUT main(PS_INPUT input)
 		planeMul * float4(length(depthAdjustedViewDirection).xx, abs(viewSurfaceAngle).xx) /
 		FogParam.z);
 #				endif
-#			endif
-
-#			if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && !defined(LOD)
-	distanceMul = ApplyUnifiedWaterDistanceDepthFade(distanceMul, distanceFactor, viewDistance);
 #			endif
 
 #			if defined(UNDERWATER)
@@ -1386,7 +1362,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #						endif
 
-float3 finalColor = lerp(finalColorPreFog, fogColor * PosAdjust[eyeIndex].w, Color::FogAlpha(fogDistanceFactor));
+	float3 finalColor = lerp(finalColorPreFog, fogColor * PosAdjust[eyeIndex].w, Color::FogAlpha(fogDistanceFactor));
 
 #						if defined(CS_DEBUG_WETNESS)
 	// DEBUG MODE: Override water color with debug visualization
@@ -1414,7 +1390,7 @@ float3 finalColor = lerp(finalColorPreFog, fogColor * PosAdjust[eyeIndex].w, Col
 	}
 #						endif
 
-finalColorPreFog = lerp(finalColorPreFog, preFogColor * PosAdjust[eyeIndex].w, Color::FogAlpha(fogDistanceFactor));
+	finalColorPreFog = lerp(finalColorPreFog, preFogColor * PosAdjust[eyeIndex].w, Color::FogAlpha(fogDistanceFactor));
 
 	float3 refractionColor = diffuseOutput.refractionColor;
 

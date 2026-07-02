@@ -96,9 +96,20 @@ public:
 	// 0=Native AA/DLAA, 1=Hoshipa, 2=Ultra Quality, 3=Quality,
 	// 4=Balanced, 5=Performance, 6=Ultra Performance
 	static constexpr uint32_t kQualityModeMaxIndex = 6;
-	static constexpr uint32_t kDLSSPresetMaxIndex = 4;  // 0=J, 1=K, 2=L, 3=M, 4=F
+	static constexpr uint32_t kDLSSPresetJ = 0;
+	static constexpr uint32_t kDLSSPresetK = 1;
+	static constexpr uint32_t kDLSSPresetL = 2;
+	static constexpr uint32_t kDLSSPresetM = 3;
+	static constexpr uint32_t kDLSSPresetF = 4;
+	static constexpr uint32_t kDLSSPresetE = 5;
+	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	static constexpr uint32_t kPendingVRUpscalingSettingUnset = std::numeric_limits<uint32_t>::max();
+
+	static constexpr uint32_t ClampDLSSPresetUInt(uint32_t a_preset)
+	{
+		return a_preset <= kDLSSPresetMaxIndex ? a_preset : kDLSSPresetMaxIndex;
+	}
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{
@@ -124,8 +135,8 @@ public:
 	{
 		uint upscaleMethod = (uint)UpscaleMethod::kDLSS;
 		uint upscaleMethodNoDLSS = (uint)UpscaleMethod::kFSR;
-		uint qualityMode = 3;  // Shared upscaler preset; defaults to Quality
-		uint dlssPreset = 1;   // 0=J, 1=K, 2=L, 3=M, 4=F (default K)
+		uint qualityMode = 3;            // Shared upscaler preset; defaults to Quality
+		uint dlssPreset = kDLSSPresetK;  // Settings ids: J, K, L, M, F, E (default K)
 		uint renderScaleMode = 1;
 		bool vrFpsStabilizerSync = false;
 		uint perfMode = 1;

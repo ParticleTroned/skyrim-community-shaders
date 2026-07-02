@@ -910,7 +910,7 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 
 	// Map custom render-scale presets to the nearest supported DLSS mode.
 	qualityMode = std::min(qualityMode, Upscaling::kQualityModeMaxIndex);
-	dlssPreset = std::min(dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+	dlssPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
 
 	bool useLegacyProfile = isRTXBelow40series;
 	auto& cache = GetDLSSOptionsCache(viewportRole, eyeIndex, qualityMode, dlssPreset);
@@ -954,20 +954,23 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 
 	sl::DLSSPreset selectedPreset = sl::DLSSPreset::ePresetK;
 	switch (dlssPreset) {
-	case 0:
+	case Upscaling::kDLSSPresetJ:
 		selectedPreset = sl::DLSSPreset::ePresetJ;
 		break;
-	case 1:
+	case Upscaling::kDLSSPresetK:
 		selectedPreset = sl::DLSSPreset::ePresetK;
 		break;
-	case 2:
+	case Upscaling::kDLSSPresetL:
 		selectedPreset = sl::DLSSPreset::ePresetL;
 		break;
-	case 3:
+	case Upscaling::kDLSSPresetM:
 		selectedPreset = sl::DLSSPreset::ePresetM;
 		break;
-	case 4:
+	case Upscaling::kDLSSPresetF:
 		selectedPreset = sl::DLSSPreset::ePresetF;
+		break;
+	case Upscaling::kDLSSPresetE:
+		selectedPreset = sl::DLSSPreset::ePresetE;
 		break;
 	default:
 		selectedPreset = sl::DLSSPreset::ePresetK;
@@ -1008,7 +1011,7 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 int Streamline::FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const
 {
 	const uint32_t clampedQualityMode = std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
-	const uint32_t clampedPreset = std::min<uint32_t>(dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+	const uint32_t clampedPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
 	for (uint32_t slot = 0; slot < kVRDLSSViewportSlotCount; ++slot) {
 		const auto& viewportSlot = vrDLSSViewportSlots[roleIndex][slot];
@@ -1097,7 +1100,7 @@ bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::Viewport
 
 	const uint32_t eye = eyeIndex > 0 ? 1u : 0u;
 	const uint32_t clampedQualityMode = std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
-	const uint32_t clampedPreset = std::min<uint32_t>(dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+	const uint32_t clampedPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
 
 	int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
@@ -1152,7 +1155,7 @@ Streamline::DLSSOptionsCache& Streamline::GetDLSSOptionsCache(DLSSViewportRole v
 
 	const uint32_t eye = eyeIndex > 0 ? 1u : 0u;
 	const uint32_t clampedQualityMode = std::min<uint32_t>(qualityMode, Upscaling::kQualityModeMaxIndex);
-	const uint32_t clampedPreset = std::min<uint32_t>(dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+	const uint32_t clampedPreset = Upscaling::ClampDLSSPresetUInt(dlssPreset);
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
 
 	const int slotIndex = FindVRDLSSViewportSlot(viewportRole, clampedQualityMode, clampedPreset);
@@ -1255,7 +1258,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
-	const uint32_t dlssPreset = std::min(upscaling.settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+	const uint32_t dlssPreset = Upscaling::ClampDLSSPresetUInt(upscaling.settings.dlssPreset);
 	const sl::ViewportHandle requestedViewport = vp;
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&

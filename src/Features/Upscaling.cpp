@@ -20,6 +20,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cfloat>
 #include <cmath>
@@ -1190,7 +1191,7 @@ namespace
 		bool hasQualityMode = false;
 		uint32_t qualityMode = 0;
 		bool hasDLSSPreset = false;
-		uint32_t dlssPreset = 1;
+		uint32_t dlssPreset = Upscaling::kDLSSPresetK;
 		bool hasRenderScaleMode = false;
 		bool renderScaleMode = false;
 
@@ -1211,7 +1212,7 @@ namespace
 	{
 		Upscaling::UpscaleMethod method = Upscaling::UpscaleMethod::kNONE;
 		uint32_t qualityMode = 0;
-		uint32_t dlssPreset = 1;
+		uint32_t dlssPreset = Upscaling::kDLSSPresetK;
 		bool renderScaleMode = false;
 	};
 
@@ -1302,7 +1303,7 @@ namespace
 			profile.qualityMode = ClampQualityModeUInt(parsedValue);
 			profile.hasQualityMode = true;
 		} else if (isDLSSPreset) {
-			profile.dlssPreset = std::min<uint32_t>(parsedValue, Upscaling::kDLSSPresetMaxIndex);
+			profile.dlssPreset = Upscaling::ClampDLSSPresetUInt(parsedValue);
 			profile.hasDLSSPreset = true;
 			if (isLegacyDLSSProfile)
 				profile.hasLegacyMethodSelection = true;
@@ -1428,6 +1429,66 @@ namespace
 			return value;
 		default:
 			return 6u;
+		}
+	}
+
+	constexpr std::array kDLSSProfileDisplayOrder = {
+		Upscaling::kDLSSPresetE,
+		Upscaling::kDLSSPresetF,
+		Upscaling::kDLSSPresetJ,
+		Upscaling::kDLSSPresetK,
+		Upscaling::kDLSSPresetL,
+		Upscaling::kDLSSPresetM
+	};
+
+	const char* GetDLSSPresetLabel(uint32_t preset)
+	{
+		switch (preset) {
+		case Upscaling::kDLSSPresetE:
+			return "E";
+		case Upscaling::kDLSSPresetF:
+			return "F";
+		case Upscaling::kDLSSPresetJ:
+			return "J";
+		case Upscaling::kDLSSPresetK:
+			return "K";
+		case Upscaling::kDLSSPresetL:
+			return "L";
+		case Upscaling::kDLSSPresetM:
+			return "M";
+		default:
+			return "K";
+		}
+	}
+
+	void DrawDLSSPresetTooltip(uint32_t preset)
+	{
+		switch (preset) {
+		case Upscaling::kDLSSPresetJ:
+			ImGui::TextUnformatted("DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: about K. Use only if K ghosts.");
+			break;
+		case Upscaling::kDLSSPresetK:
+			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+			break;
+		case Upscaling::kDLSSPresetL:
+			ImGui::TextUnformatted("Default for Ultra Performance on newer RTX cards. Sharper and more stable, but higher cost than J/K/F.");
+			ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+			break;
+		case Upscaling::kDLSSPresetM:
+			ImGui::TextUnformatted("Default for Performance on newer RTX cards. Similar image-quality improvements to L, closer in speed to J/K.");
+			ImGui::TextUnformatted("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
+			break;
+		case Upscaling::kDLSSPresetF:
+			ImGui::TextUnformatted("Legacy/deprecated preset. Best Performance/Ultra Performance starting point for RTX 3000-series cards.");
+			ImGui::TextUnformatted("If you want the adjacent legacy comparison profile, try E.");
+			break;
+		case Upscaling::kDLSSPresetE:
+			ImGui::TextUnformatted("Legacy/deprecated preset. Secondary comparison option next to F for older DLSS behavior.");
+			ImGui::TextUnformatted("On RTX 3000-series cards, start with F first, then compare E if you want another legacy profile.");
+			break;
+		default:
+			ImGui::TextUnformatted("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
+			break;
 		}
 	}
 
@@ -1903,7 +1964,7 @@ namespace
 		settings.upscaleMethod = std::min<uint>(settings.upscaleMethod, static_cast<uint>(Upscaling::UpscaleMethod::kDLSS));
 		settings.upscaleMethodNoDLSS = std::min<uint>(settings.upscaleMethodNoDLSS, static_cast<uint>(Upscaling::UpscaleMethod::kFSR));
 		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
-		settings.dlssPreset = std::min<uint>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex);
+		settings.dlssPreset = Upscaling::ClampDLSSPresetUInt(settings.dlssPreset);
 		settings.renderScaleMode = ClampToggleUInt(settings.renderScaleMode);
 		settings.perfMode = ClampToggleUInt(settings.perfMode);
 		if (REL::Module::IsVR() && !IsRenderScaleQualityMode(settings.qualityMode)) {
@@ -2503,7 +2564,7 @@ namespace
 		add(std::min<uint>(a_settings.upscaleMethod, static_cast<uint>(Upscaling::UpscaleMethod::kDLSS)));
 		add(std::min<uint>(a_settings.upscaleMethodNoDLSS, static_cast<uint>(Upscaling::UpscaleMethod::kFSR)));
 		add(ClampQualityModeUInt(a_settings.qualityMode));
-		add(std::min<uint>(a_settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex));
+		add(Upscaling::ClampDLSSPresetUInt(a_settings.dlssPreset));
 		add(ClampToggleUInt(a_settings.renderScaleMode));
 		add(ClampToggleUInt(a_settings.perfMode));
 		add(ClampToggleUInt(a_settings.frameGenerationMode));
@@ -2538,7 +2599,7 @@ namespace
 		add(static_cast<uint64_t>(a_upscaleMethod));
 		add(a_upscaling.GetRuntimeQualityMode());
 		if (a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS)
-			add(std::min<uint>(settings.dlssPreset, Upscaling::kDLSSPresetMaxIndex));
+			add(Upscaling::ClampDLSSPresetUInt(settings.dlssPreset));
 
 		const uint32_t trackedRenderScaleMode = !globals::game::isVR ?
 		                                            (a_upscaling.IsRenderScaleModeRequested() ? 1u : 0u) :
@@ -4176,55 +4237,32 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 			}
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-			// Keep persisted preset values stable (0=J,1=K,2=L,3=M,4=F) while
-			// presenting an alphabetical selection list in the UI.
-			const uint32_t dlssProfileOrder[] = { 4u, 0u, 1u, 2u, 3u };  // F, J, K, L, M
-			const char* dlssProfiles[] = { "F", "J", "K", "L", "M" };
-			settings.dlssPreset = std::min(settings.dlssPreset, kDLSSPresetMaxIndex);
+			settings.dlssPreset = ClampDLSSPresetUInt(settings.dlssPreset);
 			const uint32_t effectiveDLSSPreset = GetEffectiveDLSSPreset();
 
 			int dlssProfileUiIndex = 0;
-			for (int i = 0; i < IM_ARRAYSIZE(dlssProfileOrder); ++i) {
-				if (dlssProfileOrder[i] == effectiveDLSSPreset) {
+			for (int i = 0; i < static_cast<int>(kDLSSProfileDisplayOrder.size()); ++i) {
+				if (kDLSSProfileDisplayOrder[i] == effectiveDLSSPreset) {
 					dlssProfileUiIndex = i;
 					break;
 				}
 			}
 
-			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex), dlssProfiles[dlssProfileUiIndex])) {
-				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, static_cast<int>(kDLSSPresetMaxIndex));
+			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
+			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
+			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
+				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,
 					IsRenderScaleModeRequested(),
 					GetEffectiveUpscalingQualityMode(),
-					dlssProfileOrder[dlssProfileUiIndex],
+					displayedDLSSPreset,
 					"upscaling menu DLSS profile change");
 			}
 
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				switch (effectiveDLSSPreset) {
-				case 0:
-					ImGui::Text("DLAA/Quality/Balanced preset. Slightly less ghosting than K, but more flicker. Speed: ~K. Use only if K ghosts.");
-					break;
-				case 1:
-					ImGui::Text("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
-					break;
-				case 2:
-					ImGui::Text("Default for Ultra Performance on newer RTX cards. Sharper and more stable, but higher cost than J/K/F.");
-					ImGui::Text("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
-					break;
-				case 3:
-					ImGui::Text("Default for Performance on newer RTX cards. Similar image-quality improvements to L, closer in speed to J/K.");
-					ImGui::Text("For RTX 3000-series cards, F is usually the better Performance/Ultra Performance choice.");
-					break;
-				case 4:
-					ImGui::Text("Intended for Ultra Performance/DLAA. Default preset for Ultra Performance.");
-					ImGui::Text("Best Performance/Ultra Performance choice for RTX 3000-series cards.");
-					break;
-				default:
-					ImGui::Text("Default for DLAA/Quality/Balanced. Best all-round stability and image quality. Speed: fast. Recommended for most users.");
-					break;
-				}
+				DrawDLSSPresetTooltip(displayedDLSSPreset);
 			}
 
 			int dlssSharpenerMode = static_cast<int>(ClampDLSSSharpenerModeUInt(settings.dlssSharpener));
@@ -4246,7 +4284,7 @@ void Upscaling::DrawSettings()
 			}
 
 			if (isNvidiaAdapter) {
-				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards and F on RTX 3000-series cards.");
+				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards. On RTX 3000-series cards, start with F and compare E if you want the other legacy profile.");
 			}
 		}
 
@@ -5691,7 +5729,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 		settings.upscaleMethodNoDLSS = static_cast<uint32_t>(UpscaleMethod::kNONE);
 	}
 	const uint32_t qualityMode = std::min(a_qualityMode, kQualityModeMaxIndex);
-	const uint32_t dlssPreset = std::min(a_dlssPreset, kDLSSPresetMaxIndex);
+	const uint32_t dlssPreset = ClampDLSSPresetUInt(a_dlssPreset);
 	const bool renderScaleQuality = IsRenderScaleQualityMode(qualityMode);
 	const bool previousRenderScaleRelevant =
 		isVR &&
@@ -7439,7 +7477,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static bool previousFSRRuntimeFsr4Configured = false;
 	static bool previousFSRRuntimeFsr4Active = false;
 	static uint32_t previousQualityMode = GetRuntimeQualityMode();
-	static uint32_t previousDLSSPreset = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	static uint32_t previousDLSSPreset = ClampDLSSPresetUInt(settings.dlssPreset);
 	static uint32_t previousRenderScaleMode = getTrackedRenderScaleMode();
 	static uint32_t previousPerfMode = ClampToggleUInt(settings.perfMode);
 	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
@@ -7448,7 +7486,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
 	bool upscaleModeChanged = (previousUpscaleMode != a_upscalemethod);
 	const uint32_t qualityModeCurrent = GetRuntimeQualityMode();
-	const uint32_t dlssPresetCurrent = std::min<uint>(settings.dlssPreset, kDLSSPresetMaxIndex);
+	const uint32_t dlssPresetCurrent = ClampDLSSPresetUInt(settings.dlssPreset);
 	const uint32_t renderScaleModeCurrent = getTrackedRenderScaleMode();
 	const uint32_t perfModeCurrent = ClampToggleUInt(settings.perfMode);
 	const bool qualityModeChanged = previousQualityMode != qualityModeCurrent;
@@ -13498,7 +13536,9 @@ uint32_t Upscaling::GetEffectiveDLSSQualityMode() const
 uint32_t Upscaling::GetEffectiveDLSSPreset() const
 {
 	const uint32_t pendingPreset = pendingVRDLSSPreset.load(std::memory_order_acquire);
-	return pendingPreset != kPendingVRUpscalingSettingUnset ? pendingPreset : settings.dlssPreset;
+	return pendingPreset != kPendingVRUpscalingSettingUnset ?
+	           ClampDLSSPresetUInt(pendingPreset) :
+	           ClampDLSSPresetUInt(settings.dlssPreset);
 }
 
 void Upscaling::QueueVRUpscalingQualityMode(uint32_t a_qualityMode, VRUpscalingTransitionOrigin a_origin)
@@ -13515,7 +13555,7 @@ void Upscaling::QueueVRRenderScaleModeRequest(bool a_enabled, VRUpscalingTransit
 
 void Upscaling::QueueVRDLSSPreset(uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin)
 {
-	pendingVRDLSSPreset.store(std::min(a_dlssPreset, kDLSSPresetMaxIndex), std::memory_order_release);
+	pendingVRDLSSPreset.store(ClampDLSSPresetUInt(a_dlssPreset), std::memory_order_release);
 	MarkVRUpscalingTransitionQueued(a_origin);
 }
 
@@ -13683,6 +13723,7 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 	const uint32_t pendingQualityMode = pendingVRUpscalingQualityMode.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
 	const uint32_t pendingRenderScaleMode = pendingVRRenderScaleMode.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
 	const uint32_t pendingPreset = pendingVRDLSSPreset.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
+	const uint32_t clampedPendingPreset = ClampDLSSPresetUInt(pendingPreset);
 	const uint32_t pendingPerfMode = pendingVRPerfMode.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
 	const auto transitionOrigin = LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin);
 	pendingVRUpscalingTransitionFrame.store(0, std::memory_order_release);
@@ -13735,8 +13776,8 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 
 	if (a_upscaleMethod == UpscaleMethod::kDLSS &&
 		pendingPreset != kPendingVRUpscalingSettingUnset &&
-		settings.dlssPreset != pendingPreset) {
-		settings.dlssPreset = pendingPreset;
+		settings.dlssPreset != clampedPendingPreset) {
+		settings.dlssPreset = clampedPendingPreset;
 		changed = true;
 	}
 

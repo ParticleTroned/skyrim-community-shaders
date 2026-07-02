@@ -6518,8 +6518,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	float2 relatchTargetDisplaySize{ 0.0f, 0.0f };
 	float2 relatchTargetEngineSize{ 0.0f, 0.0f };
 	try {
+		const bool forceFSRResourceRecreateForAMDRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			fidelityFX.IsAmdAdapterDetected();
 		const auto canPreserveFSRResourcesForRelatch = [&]() {
 			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
+				forceFSRResourceRecreateForAMDRelatch ||
 				pendingFSRReset.load(std::memory_order_acquire) ||
 				!fidelityFX.HasFSRResources() ||
 				!perfMode.trueHMDEyeWidth ||
@@ -6554,6 +6558,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				2u);
 		};
 		const bool preserveFSRResourcesForRelatch = canPreserveFSRResourcesForRelatch();
+		const bool recreateFSRResourcesDuringRelatch =
+			forceFSRResourceRecreateForAMDRelatch &&
+			!preserveFSRResourcesForRelatch;
 		if (!ResetVRVendorRuntimeResources(true, true, !preserveFSRResourcesForRelatch)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
@@ -6602,7 +6609,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 		}
 
-		RecreateVendorRuntimeResources(relatchUpscaleMethod, relatchUpscaleMethod != UpscaleMethod::kFSR);
+		if (recreateFSRResourcesDuringRelatch)
+			RefreshRuntimeResolutionState();
+		RecreateVendorRuntimeResources(
+			relatchUpscaleMethod,
+			relatchUpscaleMethod != UpscaleMethod::kFSR || recreateFSRResourcesDuringRelatch);
+		const bool fsrResourcesRecreatedDuringRelatch =
+			recreateFSRResourcesDuringRelatch &&
+			fidelityFX.HasFSRResources();
+		const bool fsrRelatchNeedsDeferredReset =
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			!preserveFSRResourcesForRelatch &&
+			!fsrResourcesRecreatedDuringRelatch;
+		if (recreateFSRResourcesDuringRelatch && !fsrResourcesRecreatedDuringRelatch) {
+			logger::warn("[VRRenderScale] Render-target relatch could not recreate FSR resources immediately; scheduling deferred rebuild.");
+		}
 
 		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
@@ -6610,11 +6631,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingFSRReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(true, std::memory_order_release);
 		} else if (relatchUpscaleMethod == UpscaleMethod::kFSR) {
-			pendingFSRReset.store(!preserveFSRResourcesForRelatch, std::memory_order_release);
+			pendingFSRReset.store(fsrRelatchNeedsDeferredReset, std::memory_order_release);
 			pendingDLSSReset.store(false, std::memory_order_release);
 			pendingDLSSHistoryReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
-			if (preserveFSRResourcesForRelatch)
+			if (preserveFSRResourcesForRelatch || fsrResourcesRecreatedDuringRelatch)
 				RequestHistoryReset();
 		} else {
 			pendingDLSSReset.store(false, std::memory_order_release);
@@ -6622,7 +6643,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingFSRReset.store(false, std::memory_order_release);
 			vrDLSSSettingsRelatched.store(false, std::memory_order_release);
 		}
-		RefreshRuntimeResolutionState();
+		if (!recreateFSRResourcesDuringRelatch)
+			RefreshRuntimeResolutionState();
 	} catch (const std::exception& e) {
 		if (!MarkSubmitStageDeviceLostIfNeeded(e, "render-target relatch")) {
 			const uint32_t retryFrames = IsOutOfMemoryException(e) ?

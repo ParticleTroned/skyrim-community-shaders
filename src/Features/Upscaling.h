@@ -555,7 +555,9 @@ public:
 		eastl::unique_ptr<Texture2D> transparencyMask[2];
 		eastl::unique_ptr<Texture2D> submitStageDLSSSharpener[2];
 	};
+	// Retired submit-stage intermediates stay alive briefly so in-flight GPU work can drain.
 	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
+	uint32_t deferredVRIntermediateTextureCleanupFrame = 0;
 
 	struct VRIntermediateTextureCache
 	{
@@ -571,6 +573,7 @@ public:
 		eastl::unique_ptr<Texture2D> reactiveMask[2];
 		eastl::unique_ptr<Texture2D> transparencyMask[2];
 	};
+	// Single alternate-size reuse cache; validated against the current layout before reuse.
 	VRIntermediateTextureCache cachedVRIntermediateTextures;
 
 	// Helper to create/resize per-eye buffers matching source formats
@@ -903,6 +906,8 @@ private:
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
+	void ScheduleVRIntermediateTextureCleanup();
+	void ServiceVRIntermediateTextureCleanup();
 	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;

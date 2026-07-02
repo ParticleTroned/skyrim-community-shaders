@@ -123,6 +123,8 @@ namespace
 	constexpr uint32_t kVRSubmitStageBoundsFallbackRecoveryBackoffFrames = 300u;
 	constexpr uint32_t kVRSubmitStageFoveatedFailureRetryFrames = 30u;
 	constexpr uint32_t kVRSubmitStageUnderwaterMaskTailFrames = 4u;
+	constexpr uint32_t kVRRetiredIntermediateTextureTailFrames = 4u;
+	constexpr size_t kVRRetiredIntermediateTextureMaxSets = 4u;
 	// Hold post-load VR render-scale activation for roughly two seconds of
 	// completed world presentation so delayed RaceSex/projected-menu handoff
 	// cannot sneak in between "first world frame" and menu protection.
@@ -6207,13 +6209,11 @@ void Upscaling::DestroyVRIntermediateTextures()
 
 	if (hasRetiredTextures) {
 		retiredVRIntermediateTextures.push_back(std::move(retired));
-		const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
-		std::erase_if(retiredVRIntermediateTextures, [currentFrame](const RetiredVRIntermediateTextures& entry) {
-			return currentFrame >= entry.retireFrame && currentFrame - entry.retireFrame > 4u;
-		});
-		while (retiredVRIntermediateTextures.size() > 4) {
+		while (retiredVRIntermediateTextures.size() > kVRRetiredIntermediateTextureMaxSets) {
 			retiredVRIntermediateTextures.erase(retiredVRIntermediateTextures.begin());
 		}
+		ScheduleVRIntermediateTextureCleanup();
+		ServiceVRIntermediateTextureCleanup();
 	}
 
 	for (uint32_t i = 0; i < 2; ++i) {
@@ -6244,6 +6244,39 @@ void Upscaling::DestroyVRIntermediateTextures()
 	submitStageMirrorSourceTexture = nullptr;
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
+}
+
+void Upscaling::ScheduleVRIntermediateTextureCleanup()
+{
+	deferredVRIntermediateTextureCleanupFrame = 0;
+	const auto scheduleFrame = [this](uint32_t a_retireFrame) {
+		const uint32_t cleanupFrame = a_retireFrame + kVRRetiredIntermediateTextureTailFrames + 1u;
+		if (deferredVRIntermediateTextureCleanupFrame == 0 ||
+			cleanupFrame < deferredVRIntermediateTextureCleanupFrame) {
+			deferredVRIntermediateTextureCleanupFrame = cleanupFrame;
+		}
+	};
+
+	for (const auto& entry : retiredVRIntermediateTextures)
+		scheduleFrame(entry.retireFrame);
+}
+
+void Upscaling::ServiceVRIntermediateTextureCleanup()
+{
+	if (deferredVRIntermediateTextureCleanupFrame == 0)
+		return;
+
+	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
+	if (currentFrame < deferredVRIntermediateTextureCleanupFrame)
+		return;
+
+	std::erase_if(retiredVRIntermediateTextures, [currentFrame](const RetiredVRIntermediateTextures& entry) {
+		return ElapsedFrames(entry.retireFrame, currentFrame) > kVRRetiredIntermediateTextureTailFrames;
+	});
+	while (retiredVRIntermediateTextures.size() > kVRRetiredIntermediateTextureMaxSets) {
+		retiredVRIntermediateTextures.erase(retiredVRIntermediateTextures.begin());
+	}
+	ScheduleVRIntermediateTextureCleanup();
 }
 
 void Upscaling::UnbindUpscalingResources()
@@ -9825,6 +9858,22 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		       texture->desc.Height == outHeight &&
 		       texture->desc.Format == expectedColorOutFormat;
 	};
+	const auto hasRequiredIntermediateViews =
+		[&](const eastl::unique_ptr<Texture2D>& colorIn,
+			const eastl::unique_ptr<Texture2D>& colorOut,
+			const eastl::unique_ptr<Texture2D>& depth,
+			const eastl::unique_ptr<Texture2D>& linearDepth,
+			const eastl::unique_ptr<Texture2D>& motionVectors,
+			const eastl::unique_ptr<Texture2D>& reactiveMask,
+			const eastl::unique_ptr<Texture2D>& transparencyMask) {
+			return coversInput(colorIn, colorSrcDesc.Format, true) &&
+		           matchesOutput(colorOut) &&
+		           coversInput(depth, DXGI_FORMAT_R24G8_TYPELESS, false) &&
+		           coversInput(linearDepth, DXGI_FORMAT_R32_FLOAT, true) &&
+		           coversInput(motionVectors, mvecSrcDesc.Format, true) &&
+		           coversInput(reactiveMask, reactiveSrcDesc.Format, true) &&
+		           coversInput(transparencyMask, transparencySrcDesc.Format, true);
+		};
 
 	bool hasAllIntermediates =
 		vrIntermediateColorIn[0] && vrIntermediateColorIn[1] &&
@@ -9848,27 +9897,36 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		currentOutHeight = vrIntermediateColorOut[0]->desc.Height;
 		currentHasRequiredViews = true;
 		for (uint32_t eye = 0; eye < 2 && !needsRecreate; ++eye) {
-			const bool eyeHasRequiredViews =
-				coversInput(vrIntermediateColorIn[eye], colorSrcDesc.Format, true) &&
-				matchesOutput(vrIntermediateColorOut[eye]) &&
-				coversInput(vrIntermediateDepth[eye], DXGI_FORMAT_R24G8_TYPELESS, false) &&
-				coversInput(vrIntermediateLinearDepth[eye], DXGI_FORMAT_R32_FLOAT, true) &&
-				coversInput(vrIntermediateMotionVectors[eye], mvecSrcDesc.Format, true) &&
-				coversInput(vrIntermediateReactiveMask[eye], reactiveSrcDesc.Format, true) &&
-				coversInput(vrIntermediateTransparencyMask[eye], transparencySrcDesc.Format, true);
+			const bool eyeHasRequiredViews = hasRequiredIntermediateViews(
+				vrIntermediateColorIn[eye],
+				vrIntermediateColorOut[eye],
+				vrIntermediateDepth[eye],
+				vrIntermediateLinearDepth[eye],
+				vrIntermediateMotionVectors[eye],
+				vrIntermediateReactiveMask[eye],
+				vrIntermediateTransparencyMask[eye]);
 			currentHasRequiredViews = currentHasRequiredViews && eyeHasRequiredViews;
 			needsRecreate = !eyeHasRequiredViews;
 		}
 	}
 
 	if (needsRecreate) {
-		const bool cacheMatchesOutputFormat =
-			cachedVRIntermediateTextures.colorOut[0] &&
-			cachedVRIntermediateTextures.colorOut[1] &&
-			cachedVRIntermediateTextures.colorOut[0]->desc.Format == expectedColorOutFormat &&
-			cachedVRIntermediateTextures.colorOut[1]->desc.Format == expectedColorOutFormat &&
-			(!requiresColorOutRTV || (cachedVRIntermediateTextures.colorOut[0]->rtv && cachedVRIntermediateTextures.colorOut[1]->rtv));
-		if (MatchesVRIntermediateTextureCache(cachedVRIntermediateTextures, inWidth, inHeight, outWidth, outHeight) && cacheMatchesOutputFormat) {
+		bool cacheHasRequiredViews = true;
+		if (MatchesVRIntermediateTextureCache(cachedVRIntermediateTextures, inWidth, inHeight, outWidth, outHeight)) {
+			for (uint32_t eye = 0; eye < 2 && cacheHasRequiredViews; ++eye) {
+				cacheHasRequiredViews = hasRequiredIntermediateViews(
+					cachedVRIntermediateTextures.colorIn[eye],
+					cachedVRIntermediateTextures.colorOut[eye],
+					cachedVRIntermediateTextures.depth[eye],
+					cachedVRIntermediateTextures.linearDepth[eye],
+					cachedVRIntermediateTextures.motionVectors[eye],
+					cachedVRIntermediateTextures.reactiveMask[eye],
+					cachedVRIntermediateTextures.transparencyMask[eye]);
+			}
+		} else {
+			cacheHasRequiredViews = false;
+		}
+		if (cacheHasRequiredViews) {
 			logger::debug("[Upscaling] Reusing cached VR intermediates: per-eye in {}x{}, out {}x{}",
 				inWidth, inHeight, outWidth, outHeight);
 
@@ -11159,6 +11217,8 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	if (deferredVRIntermediateTextureCleanupFrame != 0)
+		ServiceVRIntermediateTextureCleanup();
 	QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(*this);
 	ApplyPendingVRFpsStabilizerLoadSync();
 	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();

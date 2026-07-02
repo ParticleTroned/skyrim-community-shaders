@@ -899,6 +899,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		// only way the create installs/omits DLSS-G's proxy correctly. We request ONE recreate per state
 		// change and latch until the callback flips IsDLSSGLoaded(), so no recreate storm.
 		auto* sl = Streamline::GetSingleton();
+		// Keeping sl.dlss_g loaded while another method is selected was measured at
+		// -3.1% FPS uncapped (+18 MB): its pass-through present proxy taxes every
+		// present. The unload below is a real win, not just hygiene.
 		const bool dlssgSelected = settings.frameGeneration && fgMethod == FrameGenMethod::kDLSSG;
 		if (dlssgSelected != sl->IsDLSSGLoaded()) {
 			sl->SetDLSSGDesiredLoaded(dlssgSelected);

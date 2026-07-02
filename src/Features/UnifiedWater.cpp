@@ -542,6 +542,8 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 			return;
 		}
 
+		built.reserve(instructions->size());
+
 		// Detach by index because DetachChild mutates the child list
 		auto count = water->GetChildren().size();
 		while (count > 0) {

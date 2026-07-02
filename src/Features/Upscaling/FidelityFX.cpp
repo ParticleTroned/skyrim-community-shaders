@@ -29,6 +29,12 @@ namespace
 
 	void* s_fidelityFxDllDirectoryCookie = nullptr;
 
+	bool ShouldEmitFidelityFXDiagLogs()
+	{
+		auto* state = globals::state;
+		return state && state->IsDeveloperMode();
+	}
+
 	enum class D3D11IdleFenceResult : uint8_t
 	{
 		Ready,
@@ -946,6 +952,26 @@ void FidelityFX::CreateFSRResources()
 	const uint32_t requestedRenderHeight = static_cast<uint32_t>(renderSize.y);
 	const uint32_t renderWidth = splitPerEyeContexts ? displayWidth : requestedRenderWidth;
 	const uint32_t renderHeight = splitPerEyeContexts ? displayHeight : requestedRenderHeight;
+	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
+	if (emitDiagLogs) {
+		const bool amdAdapter = IsAmdAdapterDetected();
+		const bool runtimeUpscalerPresent = IsRuntimeUpscalerPresent();
+		const bool runtimeFsr4AutoEligible = IsRuntimeFsr4AutoEligible();
+		logger::debug(
+			"[FidelityFX][Diag] CreateFSRResources plan amd={} rdna4={} runtimeUpscaler={} runtimeFsr4={} contexts={} display={}x{} requestedRender={}x{} maxRender={}x{} splitPerEye={}",
+			amdAdapter ? "yes" : "no",
+			runtimeFsr4AutoEligible ? "yes" : "no",
+			(runtimeUpscalerPresent && amdAdapter) ? "yes" : "no",
+			(runtimeUpscalerPresent && runtimeFsr4AutoEligible) ? "yes" : "no",
+			numContexts,
+			displayWidth,
+			displayHeight,
+			requestedRenderWidth,
+			requestedRenderHeight,
+			renderWidth,
+			renderHeight,
+			splitPerEyeContexts ? "yes" : "no");
+	}
 
 	for (uint32_t i = 0; i < numContexts; ++i) {
 		FfxFsr3ContextDescription contextDescription{};
@@ -978,8 +1004,10 @@ void FidelityFX::CreateFSRResources()
 	fsrContextMaxRenderHeight = renderHeight;
 	fsrContextDisplayWidth = displayWidth;
 	fsrContextDisplayHeight = displayHeight;
-	logger::info("[FidelityFX] Created {} FSR3 contexts (Display: {}x{}, MaxRender: {}x{}, RequestedRender: {}x{}, SplitPerEye={})",
-		numContexts, displayWidth, displayHeight, renderWidth, renderHeight, requestedRenderWidth, requestedRenderHeight, splitPerEyeContexts);
+	if (emitDiagLogs) {
+		logger::debug("[FidelityFX] Created {} FSR3 contexts (Display: {}x{}, MaxRender: {}x{}, RequestedRender: {}x{}, SplitPerEye={})",
+			numContexts, displayWidth, displayHeight, renderWidth, renderHeight, requestedRenderWidth, requestedRenderHeight, splitPerEyeContexts);
+	}
 }
 
 void FidelityFX::DestroyRuntimeUpscalerContexts(bool a_waitForIdle)
@@ -1313,6 +1341,25 @@ void FidelityFX::ResetRuntimeUpscalerResources(bool a_invalidateProviderCache)
 
 void FidelityFX::DestroyFSRResources(bool a_waitForIdle)
 {
+	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
+	if (emitDiagLogs) {
+		logger::debug(
+			"[FidelityFX][Diag] DestroyFSRResources waitForIdle={} contexts={} maxRender={}x{} display={}x{} scratch={} pendingTeardown={} runtimeContexts={} runtimeMaxRender={}x{} runtimeMaxDisplay={}x{}",
+			a_waitForIdle ? "yes" : "no",
+			fsrContextCount,
+			fsrContextMaxRenderWidth,
+			fsrContextMaxRenderHeight,
+			fsrContextDisplayWidth,
+			fsrContextDisplayHeight,
+			fsrScratchBuffer ? "yes" : "no",
+			HasFSRResourcesPendingTeardown() ? "yes" : "no",
+			runtimeUpscalerContextCount,
+			runtimeUpscalerMaxRenderWidth,
+			runtimeUpscalerMaxRenderHeight,
+			runtimeUpscalerMaxDisplayWidth,
+			runtimeUpscalerMaxDisplayHeight);
+	}
+
 	if (a_waitForIdle) {
 		const char* reason = "FSR resource teardown";
 		const ULONGLONG waitStart = GetTickCount64();
@@ -1576,8 +1623,9 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	uint64_t runtimeVersionId = 0;
 	std::string runtimeVersionName;
 	const bool hasRuntimeVersionOverride = QueryRuntimeUpscalerVersionId(swapChain.d3d12Device.get(), a_requestedVersion, runtimeVersionId, runtimeVersionName);
-	if (hasRuntimeVersionOverride) {
-		logger::info(
+	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
+	if (emitDiagLogs && hasRuntimeVersionOverride) {
+		logger::debug(
 			"[FidelityFX] Runtime upscaler will request FSR version {} through generic override '{}' (id 0x{:X})",
 			UpscalerVersionToString(a_requestedVersion),
 			runtimeVersionName.empty() ? "(unnamed)" : runtimeVersionName,
@@ -1681,29 +1729,29 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 			UpscalerVersionToString(a_requestedVersion));
 	}
 
-	if (createdContextWithGenericVersionOverride) {
-		logger::info("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path.");
+	if (emitDiagLogs && createdContextWithGenericVersionOverride) {
+		logger::debug("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path.");
 	}
-	if (createdContextWithGenericVersionAndUpscalerDescriptor) {
-		logger::info("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path with the upscaler version descriptor.");
+	if (emitDiagLogs && createdContextWithGenericVersionAndUpscalerDescriptor) {
+		logger::debug("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path with the upscaler version descriptor.");
 	}
-	if (createdContextWithUpscalerVersionDescriptor) {
-		logger::info("[FidelityFX] Runtime upscaler context creation used the upscaler FSR version descriptor.");
+	if (emitDiagLogs && createdContextWithUpscalerVersionDescriptor) {
+		logger::debug("[FidelityFX] Runtime upscaler context creation used the upscaler FSR version descriptor.");
 	}
 	if (createdContextWithDefaultProvider) {
 		logger::warn("[FidelityFX] Runtime upscaler context creation succeeded only through the default provider path after explicit FSR version requests failed; reporting the actual provider path.");
 	}
 
-	if (runtimeUpscalerProviderMatchedVersionName.empty()) {
-		logger::info("[FidelityFX] Created {} runtime upscaler context(s) for FSR version {} (Render: {}x{}, Display: {}x{}).",
+	if (emitDiagLogs && runtimeUpscalerProviderMatchedVersionName.empty()) {
+		logger::debug("[FidelityFX] Created {} runtime upscaler context(s) for FSR version {} (Render: {}x{}, Display: {}x{}).",
 			a_contextCount,
 			UpscalerVersionToString(a_requestedVersion),
 			a_fullRenderWidth,
 			a_fullRenderHeight,
 			a_fullDisplayWidth,
 			a_fullDisplayHeight);
-	} else {
-		logger::info("[FidelityFX] Created {} runtime upscaler context(s) using provider '{}' (id 0x{:X}) for FSR version {} (Render: {}x{}, Display: {}x{}).",
+	} else if (emitDiagLogs) {
+		logger::debug("[FidelityFX] Created {} runtime upscaler context(s) using provider '{}' (id 0x{:X}) for FSR version {} (Render: {}x{}, Display: {}x{}).",
 			a_contextCount,
 			RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName),
 			runtimeUpscalerProviderMatchedVersionId,

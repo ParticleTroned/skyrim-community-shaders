@@ -153,6 +153,12 @@ namespace
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 
+	bool ShouldEmitUpscalingDiagLogs()
+	{
+		auto* state = globals::state;
+		return state && state->IsDeveloperMode();
+	}
+
 	bool IsExplicitVRUpscalingTransitionOrigin(Upscaling::VRUpscalingTransitionOrigin a_origin)
 	{
 		return a_origin != Upscaling::VRUpscalingTransitionOrigin::PostLoadSync;
@@ -6316,7 +6322,22 @@ void Upscaling::RequestPostLoadRuntimeReset()
 
 	postLoadRuntimeResetPending.store(true, std::memory_order_release);
 	InvalidateFrameScopedUpscalingState();
-	logger::debug("[Upscaling] Armed VR post-load runtime reset");
+	auto* state = globals::state;
+	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
+	if (emitDiagLogs) {
+		const auto method = GetConfiguredUpscaleMethodForTransition();
+		logger::debug(
+			"[Upscaling][Diag] Armed VR post-load runtime reset frame={} method={} renderScaleMode={} perfMode={} quality={} pendingDLSS={} pendingFSR={} screen={}x{}",
+			state ? state->frameCount : 0u,
+			magic_enum::enum_name(method),
+			BoolText(IsRenderScaleModeRequested()),
+			BoolText(ClampToggleUInt(settings.perfMode) != 0),
+			ClampQualityModeUInt(settings.qualityMode),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			state ? ClampPositiveDimension(state->screenSize.x) : 0u,
+			state ? ClampPositiveDimension(state->screenSize.y) : 0u);
+	}
 }
 
 void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpscalingTransitionOrigin a_origin)
@@ -6350,10 +6371,25 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	if (wasPending)
 		return;
 
-	if (a_reason && *a_reason) {
-		logger::debug("[VRRenderScale] Queued render-target relatch: {}", a_reason);
-	} else {
-		logger::debug("[VRRenderScale] Queued render-target relatch");
+	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
+	if (emitDiagLogs) {
+		auto* state = globals::state;
+		logger::debug(
+			"[VRRenderScale][Diag] Queued render-target relatch{}{} origin={} method={} frame={} postLoadSettle={} renderScaleMode={} perfMode={} quality={} pendingPostLoadReset={} pendingDLSS={} pendingFSR={} hmd={}x{}",
+			a_reason && *a_reason ? ": " : "",
+			a_reason && *a_reason ? a_reason : "",
+			magic_enum::enum_name(a_origin),
+			magic_enum::enum_name(configuredMethod),
+			state ? state->frameCount : 0u,
+			BoolText(pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire)),
+			BoolText(IsRenderScaleModeRequested()),
+			BoolText(ClampToggleUInt(settings.perfMode) != 0),
+			ClampQualityModeUInt(settings.qualityMode),
+			BoolText(postLoadRuntimeResetPending.load(std::memory_order_acquire)),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			perfMode.trueHMDEyeWidth,
+			perfMode.trueHMDEyeHeight);
 	}
 }
 
@@ -6426,6 +6462,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	if (!pendingPerfModeRenderTargetRecreate.exchange(false, std::memory_order_acq_rel))
 		return true;
+	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	const uint32_t retryDelayFrames = std::max(
 		pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire),
 		kVRUpscalingTransitionApplyDelayFrames);
@@ -6494,10 +6531,27 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		lastRelatchLogMethod = relatchUpscaleMethod;
 	}
 
-	logger::debug(
-		"[VRRenderScale] Applying render-target relatch{}{}",
-		a_caller && *a_caller ? " from " : "",
-		a_caller && *a_caller ? a_caller : "");
+	if (emitDiagLogs) {
+		logger::debug(
+			"[VRRenderScale][Diag] Applying render-target relatch{}{} method={} frame={} pendingPostLoadReset={} postLoadSettle={} saveLoadContext={} loadingPresentation={} stableWorldCount={} stableWorldLastFrame={} lastCompletedWorldFrame={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={} currentScreen={}x{}",
+			a_caller && *a_caller ? " from " : "",
+			a_caller && *a_caller ? a_caller : "",
+			magic_enum::enum_name(relatchUpscaleMethod),
+			state->frameCount,
+			BoolText(postLoadRuntimeResetPending.load(std::memory_order_acquire)),
+			BoolText(pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire)),
+			BoolText(IsSaveLoadTransitionContextActive(state)),
+			BoolText(IsVRLoadingPresentationContextActive(state)),
+			g_vrRenderScaleStableWorldCount.load(std::memory_order_acquire),
+			g_vrRenderScaleStableWorldLastFrame.load(std::memory_order_acquire),
+			state->lastCompletedWorldRenderFrame,
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()),
+			BoolText(fidelityFX.HasFSRResourcesPendingTeardown()),
+			ClampPositiveDimension(state->screenSize.x),
+			ClampPositiveDimension(state->screenSize.y));
+	}
 
 	if (shouldSkipNoOpRelatch()) {
 		if (ClampToggleUInt(settings.perfMode) == 0)
@@ -6518,9 +6572,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	float2 relatchTargetDisplaySize{ 0.0f, 0.0f };
 	float2 relatchTargetEngineSize{ 0.0f, 0.0f };
 	try {
+		const bool amdAdapterForRelatch = fidelityFX.IsAmdAdapterDetected();
 		const bool forceFSRResourceRecreateForAMDRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			fidelityFX.IsAmdAdapterDetected();
+			amdAdapterForRelatch;
 		const auto canPreserveFSRResourcesForRelatch = [&]() {
 			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
 				forceFSRResourceRecreateForAMDRelatch ||
@@ -6561,6 +6616,25 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool recreateFSRResourcesDuringRelatch =
 			forceFSRResourceRecreateForAMDRelatch &&
 			!preserveFSRResourcesForRelatch;
+		if (emitDiagLogs) {
+			logger::debug(
+				"[VRRenderScale][Diag] Relatch resource plan method={} amd={} forceFSRRecreate={} preserveFSR={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				magic_enum::enum_name(relatchUpscaleMethod),
+				BoolText(amdAdapterForRelatch),
+				BoolText(forceFSRResourceRecreateForAMDRelatch),
+				BoolText(preserveFSRResourcesForRelatch),
+				BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+				BoolText(perfMode.IsActive(settings, relatchUpscaleMethod)),
+				ClampPositiveDimension(perfMode.GetRenderScreenSize().x),
+				ClampPositiveDimension(perfMode.GetRenderScreenSize().y),
+				ClampPositiveDimension(perfMode.GetDisplayScreenSize().x),
+				ClampPositiveDimension(perfMode.GetDisplayScreenSize().y),
+				perfMode.trueHMDEyeWidth,
+				perfMode.trueHMDEyeHeight,
+				ClampQualityModeUInt(settings.qualityMode),
+				BoolText(IsRenderScaleModeRequested()),
+				BoolText(ClampToggleUInt(settings.perfMode) != 0));
+		}
 		if (!ResetVRVendorRuntimeResources(true, true, !preserveFSRResourcesForRelatch)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
@@ -6624,6 +6698,18 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (recreateFSRResourcesDuringRelatch && !fsrResourcesRecreatedDuringRelatch) {
 			logger::warn("[VRRenderScale] Render-target relatch could not recreate FSR resources immediately; scheduling deferred rebuild.");
 		}
+		if (relatchUpscaleMethod == UpscaleMethod::kFSR && emitDiagLogs) {
+			logger::debug(
+				"[VRRenderScale][Diag] FSR relatch recreate result forceAMD={} immediateRecreate={} recreated={} deferredReset={} targetRender={}x{} targetDisplay={}x{}",
+				BoolText(forceFSRResourceRecreateForAMDRelatch),
+				BoolText(recreateFSRResourcesDuringRelatch),
+				BoolText(fsrResourcesRecreatedDuringRelatch),
+				BoolText(fsrRelatchNeedsDeferredReset),
+				ClampPositiveDimension(relatchTargetEngineSize.x),
+				ClampPositiveDimension(relatchTargetEngineSize.y),
+				ClampPositiveDimension(relatchTargetDisplaySize.x),
+				ClampPositiveDimension(relatchTargetDisplaySize.y));
+		}
 
 		if (relatchUpscaleMethod == UpscaleMethod::kDLSS) {
 			pendingDLSSHistoryReset.store(true, std::memory_order_release);
@@ -6684,17 +6770,41 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 	clearRelatchDelay();
 	clearRelatchRetryLogs();
-	logger::debug("[VRRenderScale] Applied render-target relatch");
+	if (emitDiagLogs) {
+		logger::debug(
+			"[VRRenderScale][Diag] Applied render-target relatch method={} active={} render={}x{} display={}x{} pendingDLSS={} pendingFSR={} fsrResources={}",
+			magic_enum::enum_name(relatchUpscaleMethod),
+			BoolText(relatchRenderScaleActive),
+			ClampPositiveDimension(relatchTargetEngineSize.x),
+			ClampPositiveDimension(relatchTargetEngineSize.y),
+			ClampPositiveDimension(relatchTargetDisplaySize.x),
+			ClampPositiveDimension(relatchTargetDisplaySize.y),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()));
+	}
 	return true;
 }
 
 void Upscaling::ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame)
 {
 	const uint32_t currentFrame = std::max(a_currentFrame, 1u);
+	const uint32_t resumeFrame = currentFrame + kVRSubmitStageVendorRelatchCooldownFrames;
+	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
 	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
 	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
-	submitStageVendorResumeFrame.store(currentFrame + kVRSubmitStageVendorRelatchCooldownFrames, std::memory_order_release);
+	submitStageVendorResumeFrame.store(resumeFrame, std::memory_order_release);
+	if (emitDiagLogs) {
+		logger::debug(
+			"[VRRenderScale][Diag] Armed submit-stage vendor resume cooldown method={} startFrame={} resumeFrame={} pendingDLSS={} pendingFSR={} fsrResources={}",
+			magic_enum::enum_name(GetRuntimeUpscaleMethod()),
+			currentFrame,
+			resumeFrame,
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()));
+	}
 }
 
 void Upscaling::ClearSubmitStageVendorResumeCooldown()
@@ -6965,6 +7075,19 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 		return true;
 
 	const bool destroyFSRResources = a_destroyFSRResources || pendingFSRReset.load(std::memory_order_acquire);
+	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
+	if (emitDiagLogs) {
+		logger::debug(
+			"[Upscaling][Diag] Reset VR vendor runtime resources destroyDLSS={} destroyPeripheryTAA={} destroyFSR={} requestedDestroyFSR={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={}",
+			BoolText(a_destroyDLSSResources),
+			BoolText(a_destroyPeripheryTAAResources),
+			BoolText(destroyFSRResources),
+			BoolText(a_destroyFSRResources),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()),
+			BoolText(fidelityFX.HasFSRResourcesPendingTeardown()));
+	}
 	if (destroyFSRResources && !fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
 		pendingFSRReset.store(true, std::memory_order_release);
 		return false;
@@ -6990,9 +7113,29 @@ void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bo
 	if (!IsVendorUpscalingMethod(a_upscaleMethod))
 		return;
 
+	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
+	if (emitDiagLogs) {
+		logger::debug(
+			"[Upscaling][Diag] Recreate vendor runtime resources method={} recreateTemporal={} render={}x{} display={}x{} pendingDLSS={} pendingFSR={} fsrResourcesBefore={}",
+			magic_enum::enum_name(a_upscaleMethod),
+			BoolText(a_recreateTemporalResources),
+			ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.x),
+			ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.y),
+			ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.x),
+			ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.y),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()));
+	}
 	CreateUpscalingTextureResources(a_upscaleMethod);
 	if (a_recreateTemporalResources && a_upscaleMethod == UpscaleMethod::kFSR)
 		fidelityFX.CreateFSRResources();
+	if (a_upscaleMethod == UpscaleMethod::kFSR && emitDiagLogs) {
+		logger::debug(
+			"[Upscaling][Diag] Recreate FSR runtime resources result recreateTemporal={} fsrResourcesAfter={}",
+			BoolText(a_recreateTemporalResources),
+			BoolText(fidelityFX.HasFSRResources()));
+	}
 }
 
 bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context)
@@ -7176,8 +7319,27 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	if (!renderScalePostLoadResetRelevant)
 		return true;
 
-	logger::debug("[Upscaling] Applying VR post-load runtime reset for method {}",
-		magic_enum::enum_name(a_upscaleMethod));
+	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
+	if (emitDiagLogs) {
+		logger::debug(
+			"[Upscaling][Diag] Applying VR post-load runtime reset method={} relatchMethod={} frame={} resetFSRBootLatch={} queueFSRRelatch={} renderScaleRelevant={} pendingDLSS={} pendingFSR={} fsrResources={} saveLoadContext={} loadingPresentation={} stableWorldCount={} stableWorldLastFrame={} lastCompletedWorldFrame={} screen={}x{}",
+			magic_enum::enum_name(a_upscaleMethod),
+			magic_enum::enum_name(relatchMethod),
+			state ? state->frameCount : 0u,
+			BoolText(resetFSRRenderScaleBootLatch),
+			BoolText(queueFSRRenderScaleRelatch),
+			BoolText(renderScalePostLoadResetRelevant),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()),
+			BoolText(IsSaveLoadTransitionContextActive(state)),
+			BoolText(IsVRLoadingPresentationContextActive(state)),
+			g_vrRenderScaleStableWorldCount.load(std::memory_order_acquire),
+			g_vrRenderScaleStableWorldLastFrame.load(std::memory_order_acquire),
+			state ? state->lastCompletedWorldRenderFrame : 0u,
+			state ? ClampPositiveDimension(state->screenSize.x) : 0u,
+			state ? ClampPositiveDimension(state->screenSize.y) : 0u);
+	}
 
 	try {
 		if (resetFSRRenderScaleBootLatch) {
@@ -7212,7 +7374,15 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 		return false;
 	}
 
-	logger::debug("[Upscaling] Applied VR post-load runtime reset");
+	if (emitDiagLogs) {
+		logger::debug(
+			"[Upscaling][Diag] Applied VR post-load runtime reset method={} pendingPostLoad={} pendingDLSS={} pendingFSR={} fsrResources={}",
+			magic_enum::enum_name(a_upscaleMethod),
+			BoolText(postLoadRuntimeResetPending.load(std::memory_order_acquire)),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()));
+	}
 	return true;
 }
 

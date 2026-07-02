@@ -1,9 +1,5 @@
 #pragma once
 
-#include "Buffer.h"
-
-#include <memory>
-
 /** @brief Provides seamless depth-based blending between terrain and objects to eliminate harsh transitions. */
 struct TerrainBlending : Feature
 {
@@ -35,18 +31,10 @@ public:
 	{
 		uint32_t Enabled = true;
 		float TerrainCullDistance = 1024.0f;
-		float BlendStrength = 0.5f;
+		float BlendStrength = 1.0f;
 		float pad0 = 0.0f;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
-
-	struct alignas(16) DepthBlendCB
-	{
-		uint32_t blendWidth = 0;
-		uint32_t blendHeight = 0;
-		uint32_t pad[2] = {};
-	};
-	STATIC_ASSERT_ALIGNAS_16(DepthBlendCB);
 
 	Settings settings;
 
@@ -54,7 +42,6 @@ public:
 	virtual void DrawSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
-	virtual void RestoreDefaultSettings() override;
 
 	/** @brief Creates GPU resources including depth textures, blended depth buffers, and stencil states. */
 	virtual void SetupResources() override;
@@ -104,14 +91,6 @@ public:
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;
-	Texture2D* mainDepthCopy = nullptr;
-
-	ID3D11ShaderResourceView* GetBlendedDepthSRV() const
-	{
-		if (blendedDepthTexture && blendedDepthTexture->srv)
-			return blendedDepthTexture->srv.get();
-		return nullptr;
-	}
 
 	RE::BSGraphics::DepthStencilData terrainDepth;
 
@@ -120,7 +99,6 @@ public:
 	ID3D11ShaderResourceView* depthSRVBackup = nullptr;
 	ID3D11ShaderResourceView* prepassSRVBackup = nullptr;
 
-	std::unique_ptr<ConstantBuffer> depthBlendCB = nullptr;
 	ID3D11ComputeShader* depthBlendShader = nullptr;
 
 	/** @brief Releases all cached vertex and compute shaders for recompilation. */

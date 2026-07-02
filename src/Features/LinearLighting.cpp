@@ -1,11 +1,32 @@
 #include "LinearLighting.h"
 
+#include <cmath>
+
 #include "../I18n/I18n.h"
 #include "AdaptiveBalance.h"
 #include "LocationContext.h"
 #include "State.h"
 
+#include "RE/B/BGSDefaultObjectManager.h"
+
 #define I18N_KEY_PREFIX "feature.linear_lighting."
+
+namespace
+{
+	constexpr uint kWhiteDiffuseCategoryObject = 0;
+	constexpr uint kWhiteDiffuseCategoryAnimal = 1;
+
+	bool IsAnimalGeometry(const RE::BSGeometry* a_geometry)
+	{
+		const auto ref = a_geometry ? a_geometry->GetUserData() : nullptr;
+		const auto actor = ref ? ref->As<RE::Actor>() : nullptr;
+		if (!actor)
+			return false;
+
+		return actor->HasKeywordWithType(RE::DefaultObjectID::kKeywordAnimal) ||
+		       actor->HasKeywordWithType(RE::DefaultObjectID::kKeywordHorse);
+	}
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
@@ -30,6 +51,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ambientMult,
 	emitColorMult,
 	glowmapMult,
+	whiteDiffuseMult,
+	animalWhiteDiffuseMult,
 	effectLightingMult,
 	membraneEffectMult,
 	bloodEffectMult,
@@ -177,6 +200,10 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.ambientMult = effectiveSettings.ambientMult;
 	data.emitColorMult = effectiveSettings.emitColorMult;
 	data.glowmapMult = effectiveSettings.glowmapMult;
+	data.whiteDiffuseMult = effectiveSettings.whiteDiffuseMult;
+	data.animalWhiteDiffuseMult = effectiveSettings.animalWhiteDiffuseMult;
+	useAnimalWhiteDiffuseCategory = adaptiveBalanceEnabled &&
+	                                std::abs(effectiveSettings.animalWhiteDiffuseMult - effectiveSettings.whiteDiffuseMult) > 1e-5f;
 	data.effectLightingMult = effectiveSettings.effectLightingMult;
 	data.membraneEffectMult = effectiveSettings.membraneEffectMult;
 	data.bloodEffectMult = effectiveSettings.bloodEffectMult;
@@ -231,6 +258,9 @@ void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 		PerGeometryData perGeometryData{};
 		perGeometryData.emissiveMult = lightProperty->emissiveMult;
+		perGeometryData.whiteDiffuseCategory = useAnimalWhiteDiffuseCategory && IsAnimalGeometry(a_pass->geometry) ?
+		                                           kWhiteDiffuseCategoryAnimal :
+		                                           kWhiteDiffuseCategoryObject;
 		PerGeometryCB->Update(perGeometryData);
 
 		ID3D11Buffer* buffer = { PerGeometryCB->CB() };

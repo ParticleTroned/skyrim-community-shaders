@@ -242,6 +242,8 @@ namespace SharedData
 		float ambientMult;
 		float emitColorMult;
 		float glowmapMult;
+		float whiteDiffuseMult;
+		float animalWhiteDiffuseMult;
 		float effectLightingMult;
 		float membraneEffectMult;
 		float bloodEffectMult;
@@ -249,6 +251,7 @@ namespace SharedData
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBalance;
+		uint2 pad0;
 	};
 
 	struct TerrainBlendingSettings

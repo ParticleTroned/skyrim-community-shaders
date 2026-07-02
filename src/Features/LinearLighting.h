@@ -47,6 +47,8 @@ struct LinearLighting : Feature
 		float ambientMult = 1.0f;
 		float emitColorMult = 1.0f;
 		float glowmapMult = 0.66f;
+		float whiteDiffuseMult = 1.0f;
+		float animalWhiteDiffuseMult = 1.0f;
 
 		// Effect multipliers
 		float effectLightingMult = 0.32f;
@@ -80,6 +82,8 @@ struct LinearLighting : Feature
 		float ambientMult;
 		float emitColorMult;
 		float glowmapMult;
+		float whiteDiffuseMult;
+		float animalWhiteDiffuseMult;
 		float effectLightingMult;
 		float membraneEffectMult;
 		float bloodEffectMult;
@@ -87,19 +91,23 @@ struct LinearLighting : Feature
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBalance;
+		uint pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 
 	struct alignas(16) PerGeometryData
 	{
 		float emissiveMult;
-		float pad0[3];
+		uint whiteDiffuseCategory;
+		float pad0[2];
 	};
+	STATIC_ASSERT_ALIGNAS_16(PerGeometryData);
 
 	ConstantBuffer* PerGeometryCB = nullptr;
 
 	uint isDirLightLinear = false;
 	float dirLightMult = 1.0f;
+	bool useAnimalWhiteDiffuseCategory = false;
 
 	virtual void DrawSettings() override;
 

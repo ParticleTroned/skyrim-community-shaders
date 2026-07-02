@@ -31,7 +31,8 @@
 cbuffer LLPerGeometry : register(b8)
 {
 	float emissiveMult;
-	float3 pad0;
+	uint whiteDiffuseCategory;
+	float2 pad0;
 };
 #endif
 
@@ -42,6 +43,12 @@ cbuffer LLPerGeometry : register(b8)
 namespace Color
 {
 	static float GammaCorrectionValue = 2.2;
+	static const uint WhiteDiffuseCategoryAnimal = 1;
+	static const float WhiteDiffuseThresholdObject = 0.80f;
+	static const float WhiteDiffuseThresholdAnimal = 0.78f;
+	static const float WhiteDiffuseMaskEnd = 0.98f;
+	static const float WhiteDiffuseSaturationStart = 0.10f;
+	static const float WhiteDiffuseSaturationEnd = 0.35f;
 
 	// Copyright 2019 Google LLC.
 	// SPDX-License-Identifier: Apache-2.0
@@ -225,13 +232,75 @@ namespace Color
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? LinearToSkyrimGamma(color) : color;
 	}
 
+	bool IsAnimalWhiteDiffuseCategory()
+	{
+#	if defined(PSHADER) && defined(LIGHTING)
+		return whiteDiffuseCategory == WhiteDiffuseCategoryAnimal;
+#	else
+		return false;
+#	endif
+	}
+
+	float WhiteDiffuseThreshold()
+	{
+		return IsAnimalWhiteDiffuseCategory() ? WhiteDiffuseThresholdAnimal : WhiteDiffuseThresholdObject;
+	}
+
+	float WhiteDiffuseMask(float3 color, float threshold)
+	{
+		const float3 baseColor = saturate(color);
+		const float maxChannel = max(baseColor.r, max(baseColor.g, baseColor.b));
+		const float minChannel = min(baseColor.r, min(baseColor.g, baseColor.b));
+		const float saturation = maxChannel > 1e-5 ? (maxChannel - minChannel) / maxChannel : 0.0f;
+		const float luminance = dot(baseColor, float3(0.2126f, 0.7152f, 0.0722f));
+
+		const float brightNeutral = smoothstep(threshold, WhiteDiffuseMaskEnd, luminance);
+		const float lowSaturation = 1.0f - smoothstep(WhiteDiffuseSaturationStart, WhiteDiffuseSaturationEnd, saturation);
+		return brightNeutral * lowSaturation;
+	}
+
+	float WhiteDiffuseMultiplier()
+	{
+#	if defined(PSHADER) && defined(LIGHTING)
+		return whiteDiffuseCategory == WhiteDiffuseCategoryAnimal ?
+		           SharedData::linearLightingSettings.animalWhiteDiffuseMult :
+		           SharedData::linearLightingSettings.whiteDiffuseMult;
+#	else
+		return SharedData::linearLightingSettings.whiteDiffuseMult;
+#	endif
+	}
+
+	float3 ApplyWhiteDiffuseBalance(float3 color)
+	{
+		if (!ENABLE_ADAPTIVE_BALANCE_ADJUSTMENTS)
+			return color;
+
+		const float multiplier = WhiteDiffuseMultiplier();
+		if (multiplier >= 0.9999f)
+			return color;
+
+		const float threshold = WhiteDiffuseThreshold();
+		const float mask = WhiteDiffuseMask(color, threshold);
+		if (mask <= 0.0f)
+			return color;
+
+		const float3 whiteExcess = max(color - threshold, 0.0f.xxx);
+		return color + whiteExcess * (multiplier - 1.0f) * mask;
+	}
+
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
+		color = ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
 #	else
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
+		color = ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
 #	endif
+		return color;
+	}
+
+	float3 DiffuseAlbedo(float3 color)
+	{
+		return ApplyWhiteDiffuseBalance(Diffuse(color));
 	}
 
 	float3 Light(float3 color, bool isLinear = false)

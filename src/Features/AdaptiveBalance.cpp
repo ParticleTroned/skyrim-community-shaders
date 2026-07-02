@@ -35,6 +35,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	emitColorMult,
 	glowmapMult,
 	effectLightingMult,
+	whiteDiffuseMult,
+	animalWhiteDiffuseMult,
 	skyGammaOffset,
 	fogGammaOffset,
 	fogAlphaGammaOffset,
@@ -62,6 +64,10 @@ namespace
 {
 	constexpr float kBrightnessMin = 0.25f;
 	constexpr float kBrightnessMax = 2.0f;
+	constexpr float kWhiteDiffuseMultiplierMin = 0.0f;
+	constexpr float kWhiteDiffuseMultiplierMax = 1.0f;
+	constexpr float kWhiteDiffuseSliderKnee = 0.25f;
+	constexpr float kWhiteDiffuseValueKnee = 0.75f;
 	constexpr float kGammaOffsetMin = -1.0f;
 	constexpr float kGammaOffsetMax = 1.0f;
 
@@ -136,6 +142,33 @@ namespace
 	float ClampGamma(float a_value)
 	{
 		return std::clamp(SafeFinite(a_value, 1.0f), 0.1f, 3.0f);
+	}
+
+	float ClampWhiteDiffuseMultiplier(float a_value)
+	{
+		return std::clamp(SafeFinite(a_value, 1.0f), kWhiteDiffuseMultiplierMin, kWhiteDiffuseMultiplierMax);
+	}
+
+	float WhiteDiffuseValueFromSlider(float a_sliderValue)
+	{
+		const float sliderValue = std::clamp(SafeFinite(a_sliderValue, 1.0f), 0.0f, 1.0f);
+		if (sliderValue <= kWhiteDiffuseSliderKnee)
+			return sliderValue * (kWhiteDiffuseValueKnee / kWhiteDiffuseSliderKnee);
+
+		const float highSliderRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseSliderKnee;
+		const float highValueRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseValueKnee;
+		return kWhiteDiffuseValueKnee + ((sliderValue - kWhiteDiffuseSliderKnee) / highSliderRange) * highValueRange;
+	}
+
+	float WhiteDiffuseSliderFromValue(float a_value)
+	{
+		const float value = ClampWhiteDiffuseMultiplier(a_value);
+		if (value <= kWhiteDiffuseValueKnee)
+			return value * (kWhiteDiffuseSliderKnee / kWhiteDiffuseValueKnee);
+
+		const float highValueRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseValueKnee;
+		const float highSliderRange = kWhiteDiffuseMultiplierMax - kWhiteDiffuseSliderKnee;
+		return kWhiteDiffuseSliderKnee + ((value - kWhiteDiffuseValueKnee) / highValueRange) * highSliderRange;
 	}
 
 	float ClampGammaOffset(float a_value)
@@ -429,6 +462,8 @@ namespace
 		a_profile.emitColorMult = ClampMultiplier(a_profile.emitColorMult);
 		a_profile.glowmapMult = ClampMultiplier(a_profile.glowmapMult);
 		a_profile.effectLightingMult = ClampMultiplier(a_profile.effectLightingMult);
+		a_profile.whiteDiffuseMult = ClampWhiteDiffuseMultiplier(a_profile.whiteDiffuseMult);
+		a_profile.animalWhiteDiffuseMult = ClampWhiteDiffuseMultiplier(a_profile.animalWhiteDiffuseMult);
 		a_profile.skyGammaOffset = ClampGammaOffset(a_profile.skyGammaOffset);
 		a_profile.fogGammaOffset = ClampGammaOffset(a_profile.fogGammaOffset);
 		a_profile.fogAlphaGammaOffset = ClampGammaOffset(a_profile.fogAlphaGammaOffset);
@@ -849,6 +884,22 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile, const char
 		}
 	};
 
+	const auto drawWhiteDiffuseSlider = [](const char* a_label, float& a_value, const char* a_tooltip) {
+		float sliderValue = WhiteDiffuseSliderFromValue(a_value);
+		const std::string preview = std::format("{:.2f}", ClampWhiteDiffuseMultiplier(a_value));
+		if (ImGui::SliderFloat(a_label, &sliderValue, 0.0f, 1.0f, preview.c_str(), ImGuiSliderFlags_AlwaysClamp))
+			a_value = WhiteDiffuseValueFromSlider(sliderValue);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", a_tooltip);
+			ImGui::Text(
+				"Non-linear response: slider 0.00-%.2f maps to value 0.00-%.2f, slider %.2f-1.00 maps to value %.2f-1.00.",
+				kWhiteDiffuseSliderKnee,
+				kWhiteDiffuseValueKnee,
+				kWhiteDiffuseSliderKnee,
+				kWhiteDiffuseValueKnee);
+		}
+	};
+
 	ImGui::SeparatorText(a_sectionTitle);
 	ImGui::Indent();
 
@@ -869,6 +920,16 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile, const char
 		ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, 3.0f, "%.2f");
+
+		ImGui::SeparatorText("White Diffuse Balance");
+		drawWhiteDiffuseSlider(
+			"Objects",
+			a_profile.whiteDiffuseMult,
+			"Caps over-bright white object diffuse colors. Lower values reduce clipped whites above the threshold without changing darker surfaces.");
+		drawWhiteDiffuseSlider(
+			"Animoils",
+			a_profile.animalWhiteDiffuseMult,
+			"Caps over-bright white animal diffuse colors, including horses when their actor keyword data is available. Missing or untagged animals use the object value.");
 
 		ImGui::SeparatorText("Atmosphere Gamma Offsets");
 		ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f");
@@ -1777,6 +1838,8 @@ LinearLighting::Settings AdaptiveBalance::GetNeutralLinearLightingSettings() con
 	neutral.vlGamma = 1.0f;
 	neutral.glowmapMult = 1.0f;
 	neutral.effectLightingMult = 1.0f;
+	neutral.whiteDiffuseMult = 1.0f;
+	neutral.animalWhiteDiffuseMult = 1.0f;
 
 	return neutral;
 }
@@ -1794,6 +1857,9 @@ LinearLighting::Settings AdaptiveBalance::ApplyProfile(const LinearLighting::Set
 	const auto advancedMult = [&](float a_multiplier) {
 		return a_profile.advanced ? ClampMultiplier(a_multiplier) : 1.0f;
 	};
+	const auto advancedWhiteMult = [&](float a_multiplier) {
+		return a_profile.advanced ? ClampWhiteDiffuseMultiplier(a_multiplier) : 1.0f;
+	};
 	const auto advancedOffset = [&](float a_offset) {
 		return a_profile.advanced ? ClampGammaOffset(a_offset) : 0.0f;
 	};
@@ -1804,6 +1870,8 @@ LinearLighting::Settings AdaptiveBalance::ApplyProfile(const LinearLighting::Set
 	out.emitColorMult = ClampMultiplier(out.emitColorMult * masterScale(0.35f) * advancedMult(a_profile.emitColorMult));
 	out.glowmapMult = ClampMultiplier(out.glowmapMult * masterScale(0.35f) * advancedMult(a_profile.glowmapMult));
 	out.effectLightingMult = ClampMultiplier(out.effectLightingMult * masterScale(0.55f) * advancedMult(a_profile.effectLightingMult));
+	out.whiteDiffuseMult = ClampWhiteDiffuseMultiplier(out.whiteDiffuseMult * advancedWhiteMult(a_profile.whiteDiffuseMult));
+	out.animalWhiteDiffuseMult = ClampWhiteDiffuseMultiplier(out.animalWhiteDiffuseMult * advancedWhiteMult(a_profile.animalWhiteDiffuseMult));
 
 	out.skyGamma = ClampGamma(out.skyGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.skyGammaOffset));
 	out.fogGamma = ClampGamma(out.fogGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.fogGammaOffset));
@@ -1841,6 +1909,8 @@ LinearLighting::Settings AdaptiveBalance::LerpSettings(const LinearLighting::Set
 	out.emitColorMult = lerp(a_a.emitColorMult, a_b.emitColorMult);
 	out.glowmapMult = lerp(a_a.glowmapMult, a_b.glowmapMult);
 	out.effectLightingMult = lerp(a_a.effectLightingMult, a_b.effectLightingMult);
+	out.whiteDiffuseMult = lerp(a_a.whiteDiffuseMult, a_b.whiteDiffuseMult);
+	out.animalWhiteDiffuseMult = lerp(a_a.animalWhiteDiffuseMult, a_b.animalWhiteDiffuseMult);
 	out.membraneEffectMult = lerp(a_a.membraneEffectMult, a_b.membraneEffectMult);
 	out.bloodEffectMult = lerp(a_a.bloodEffectMult, a_b.bloodEffectMult);
 	out.projectedEffectMult = lerp(a_a.projectedEffectMult, a_b.projectedEffectMult);

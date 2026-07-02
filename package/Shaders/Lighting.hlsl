@@ -749,7 +749,7 @@ float3 GetWorldMapBaseColor(float3 originalBaseColor, float3 rawBaseColor, float
 #		if defined(LODOBJECTS)
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.269999981, 0.281000018, 0.441000015, 0.441000015) + float4(0.0780000091, 0.09799999, -0.0349999964, 0.465000004);
 	float4 lodColor = lodColorMul.xyzw * 2.0.xxxx;
-	lodColor.xyz = Color::Diffuse(lodColor.xyz);
+	lodColor.xyz = Color::DiffuseAlbedo(lodColor.xyz);
 	bool useLodColorZ = lodColorMul.w > 0.5;
 	lodColor.xyz = max(lodColor.xyz, rawBaseColor.xyz);
 	lodColor.w = useLodColorZ ? lodColor.z : min(lodColor.w, rawBaseColor.z);
@@ -757,7 +757,7 @@ float3 GetWorldMapBaseColor(float3 originalBaseColor, float3 rawBaseColor, float
 #		else
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.199999988, 0.441000015, 0.269999981, 0.281000018) + float4(0.300000012, 0.465000004, 0.0780000091, 0.09799999);
 	float3 lodColor = lodColorMul.zwy * 2.0.xxx;
-	lodColor.xyz = Color::Diffuse(lodColor.xyz);
+	lodColor.xyz = Color::DiffuseAlbedo(lodColor.xyz);
 	lodColor.xy = max(lodColor.xy, rawBaseColor.xy);
 	lodColor.z = lodColorMul.y > 0.5 ? max((lodMultiplier * 0.441 + -0.0349999964) * 2, rawBaseColor.z) : min(lodColor.z, rawBaseColor.z);
 	return lodColorMul.xxx * (lodColor - rawBaseColor.xyz) + rawBaseColor;
@@ -1756,7 +1756,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	else  // Non-landscape code
 	float4 rawBaseColor = TexColorSampler.SampleBias(SampColorSampler, diffuseUv, SharedData::MipBias);
-	baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
+	baseColor = float4(Color::DiffuseAlbedo(rawBaseColor.rgb), rawBaseColor.a);
 	float4 normalColor = TexNormalSampler.SampleBias(SampNormalSampler, uv, SharedData::MipBias);
 	normal = normalColor;
 #		if defined(TRUE_PBR)
@@ -2076,7 +2076,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		discard;
 
 	rawBaseColor = Triplanar::SampleStochasticBias(TexColorSampler, SampColorSampler, projWorldPos, triWeights, ProjectedUVParams2.y, SharedData::MipBias, screenNoise);
-	baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
+	baseColor = float4(Color::DiffuseAlbedo(rawBaseColor.rgb), rawBaseColor.a);
 	worldNormal.xyz = projectedNormal;
 #		elif !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX) && !defined(SPARKLE)
 	if (ProjectedUVParams3.w > 0.5) {
@@ -2109,7 +2109,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
-			baseColor.xyz = Color::Diffuse(ProjectedUVParams2.xyz);
+			baseColor.xyz = Color::DiffuseAlbedo(ProjectedUVParams2.xyz);
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
 #			endif  // SNOW

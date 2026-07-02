@@ -69,6 +69,8 @@ struct AdaptiveBalance : Feature
 		float emitColorMult = 1.0f;
 		float glowmapMult = 1.0f;
 		float effectLightingMult = 1.0f;
+		float whiteDiffuseMult = 1.0f;
+		float animalWhiteDiffuseMult = 1.0f;
 
 		float skyGammaOffset = 0.0f;
 		float fogGammaOffset = 0.0f;

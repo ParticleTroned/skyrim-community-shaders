@@ -1575,7 +1575,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			bool allEvaluated = true;
 			for (uint32_t i = 0; i < 2; ++i) {
 				sl::ViewportHandle vp = (i == 1) ? viewportRight : viewport;
-				allEvaluated &= EvaluateDLSS(vp, i,
+				const bool eyeEvaluated = EvaluateDLSS(vp, i,
 					upscaling.vrIntermediateColorIn[i]->resource.get(), upscaling.vrIntermediateColorOut[i]->resource.get(),
 					upscaling.vrIntermediateDepth[i]->resource.get(), upscaling.vrIntermediateMotionVectors[i]->resource.get(),
 					upscaling.vrIntermediateReactiveMask[i]->resource.get(), upscaling.vrIntermediateTransparencyMask[i]->resource.get(),
@@ -1583,6 +1583,8 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					0.0f,
 					0.0f,
 					"VR prepared per-eye");
+				upscaling.RecordVRDLSSFullEyeEvaluation(i, eyeEvaluated);
+				allEvaluated &= eyeEvaluated;
 			}
 
 			bool fallbackPresented = false;
@@ -1629,6 +1631,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			0.0f,
 			0.0f,
 			"VR direct eye0 combined");
+		upscaling.RecordVRDLSSFullEyeEvaluation(0, leftEvaluated);
 
 		// Eye 1 writes to intermediate, then copy into right half of combined output.
 		const bool rightEvaluated = EvaluateDLSS(viewportRight, 1,
@@ -1639,6 +1642,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			0.0f,
 			0.0f,
 			"VR direct eye1 intermediate");
+		upscaling.RecordVRDLSSFullEyeEvaluation(1, rightEvaluated);
 
 		if (leftEvaluated && rightEvaluated) {
 			if (depthTexture.depthSRV) {

@@ -81,7 +81,7 @@ public:
 	enum class VRUpscalingTransitionOrigin : uint8_t
 	{
 		CSMenu,
-		VRAPI = CSMenu,  // Legacy external API alias; internal recovery uses RecoveryRelatch.
+		VRAPI,  // Legacy external API entrypoints remain separate from direct CS menu changes.
 		RecoveryRelatch,
 		PostLoadSync
 	};
@@ -653,6 +653,7 @@ public:
 	void RequestVRSubmitStageHistoryReset();
 	bool IsSubmitStageUpscalingActive() const;
 	bool IsSubmitStageDeviceLost() const;
+	void RecordVRDLSSFullEyeEvaluation(uint32_t a_eyeIndex, bool a_success);
 	bool ShouldSuppressVRInSceneOverlaySubmit() const;
 	bool IsVRProtectedFullSizeSubmitTexture(const vr::Texture_t* a_texture) const;
 	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
@@ -794,6 +795,11 @@ public:
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
 	std::atomic<uint64_t> submitStageVendorResumeStableEyeMaskState{ 0 };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
+	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipFrame{ 0 };
+	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipCount{ 0 };
+	std::atomic<uint32_t> vrDLSSRapidTransitionGuardEndFrame{ 0 };
+	std::atomic<uint32_t> vrDLSSRapidTransitionCleanEyeMask{ 0 };
+	std::atomic_bool vrDLSSRapidTransitionGuardLogged{ false };
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
@@ -812,6 +818,9 @@ public:
 	void BeginVRRenderScaleInfoTransition(const char* a_reason = nullptr);
 	void CompleteVRRenderScaleInfoTransition(const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
 	void ClearVRRenderScaleInfoTransition();
+	void RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_currentActive, UpscaleMethod a_previousMethod, UpscaleMethod a_currentMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
+	bool ShouldBypassVRDLSSFoveatedForRapidTransition();
+	void ClearVRDLSSRapidTransitionGuard();
 	uint32_t GetEffectiveUpscalingQualityMode() const;
 	uint32_t GetEffectiveDLSSQualityMode() const;
 	uint32_t GetEffectiveDLSSPreset() const;

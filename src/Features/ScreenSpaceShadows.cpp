@@ -804,7 +804,18 @@ void ScreenSpaceShadows::SetupResources()
 
 	{
 		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return;
+
 		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+		if (!shadowMask.texture || !shadowMask.SRV) {
+			static bool loggedMissingShadowMask = false;
+			if (!loggedMissingShadowMask) {
+				logger::warn("[ScreenSpaceShadows] Skipping setup because kSHADOW_MASK is unavailable after render-target recreation.");
+				loggedMissingShadowMask = true;
+			}
+			return;
+		}
 
 		D3D11_TEXTURE2D_DESC texDesc{};
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};

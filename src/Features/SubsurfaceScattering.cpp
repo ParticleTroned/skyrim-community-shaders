@@ -575,7 +575,20 @@ void SubsurfaceScattering::SetupResources()
 	}
 
 	auto renderer = globals::game::renderer;
+	if (!renderer)
+		return;
+
 	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.SRV || !main.UAV) {
+		delete blurHorizontalTemp;
+		blurHorizontalTemp = nullptr;
+		static bool loggedMissingMainTarget = false;
+		if (!loggedMissingMainTarget) {
+			logger::warn("[SSS] Skipping setup because kMAIN is unavailable after render-target recreation.");
+			loggedMissingMainTarget = true;
+		}
+		return;
+	}
 
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);

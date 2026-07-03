@@ -6048,7 +6048,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		target.dlssPreset,
 		BoolText(IsRenderScaleModeRequested()),
 		BoolText(target.renderScaleMode));
-	vrFpsStabilizerProfileApplyFrame.store(state ? std::max(state->frameCount, 1u) : queuedFrame, std::memory_order_release);
+	vrFpsStabilizerPendingRelatchRequest.store(true, std::memory_order_release);
 	ApplyCSMenuUpscalingTransition(
 		target.method,
 		target.renderScaleMode,
@@ -6056,6 +6056,11 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		target.dlssPreset,
 		"VR FPS Stabilizer save-load sync",
 		VRUpscalingTransitionOrigin::PostLoadSync);
+	if (!HasPendingVRRenderScaleTransition() &&
+		!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
+		vrFpsStabilizerPendingRelatchRequest.store(false, std::memory_order_release);
+		vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
+	}
 }
 
 bool Upscaling::IsPerfModePresentationActive() const
@@ -6533,6 +6538,8 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(requirePostLoadSettle, std::memory_order_release);
 	}
 	const auto effectiveOrigin = storeRelatchOrigin ? a_origin : currentOrigin;
+	const uint32_t pendingContractGeneration = pendingVRRenderScaleContractGeneration.load(std::memory_order_acquire);
+	ConsumeVRFpsStabilizerPendingRelatchRequest(effectiveOrigin, pendingContractGeneration, "request");
 	if (IsVRRenderScaleRecoveryOrigin(effectiveOrigin) ||
 		(effectiveOrigin == VRUpscalingTransitionOrigin::PostLoadSync &&
 			a_recoverySnapshot &&
@@ -6596,6 +6603,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
+		vrFpsStabilizerPendingRelatchRequest.store(false, std::memory_order_release);
+		vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
 		ClearVRRenderScaleInfoTransition();
 		return true;
@@ -6678,6 +6687,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		return true;
 	const auto relatchOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const auto queuedRecoverySnapshot = pendingVRRenderScaleRecoverySnapshot;
+	ConsumeVRFpsStabilizerPendingRelatchRequest(
+		relatchOrigin,
+		pendingVRRenderScaleContractGeneration.load(std::memory_order_acquire),
+		"execute");
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	const uint32_t retryDelayFrames = std::max(
 		pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire),
@@ -6688,6 +6701,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
+		vrFpsStabilizerPendingRelatchRequest.store(false, std::memory_order_release);
+		vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
 	};
 	auto requeueRelatch = [&](uint32_t a_minDelayFrames, bool a_includeExistingRetryDelay = true) {
@@ -7523,20 +7538,51 @@ void Upscaling::RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_cur
 		guardEndFrame);
 }
 
+bool Upscaling::ConsumeVRFpsStabilizerPendingRelatchRequest(VRUpscalingTransitionOrigin a_origin, uint32_t a_generation, const char* a_phase)
+{
+	if (a_origin != VRUpscalingTransitionOrigin::PostLoadSync) {
+		vrFpsStabilizerPendingRelatchRequest.store(false, std::memory_order_release);
+		vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
+		return false;
+	}
+
+	if (!vrFpsStabilizerPendingRelatchRequest.exchange(false, std::memory_order_acq_rel))
+		return false;
+
+	if (a_generation == 0) {
+		vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
+		return false;
+	}
+
+	vrFpsStabilizerPendingRelatchGeneration.store(a_generation, std::memory_order_release);
+	if (ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][Diag] Tagged VR FPS Stabilizer PostLoadSync relatch generation {} phase={}.",
+			a_generation,
+			a_phase && *a_phase ? a_phase : "unknown");
+	}
+	return true;
+}
+
 bool Upscaling::RecordVRFpsStabilizerLowPeakRelatch(bool a_previousActive, bool a_currentActive, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame, uint32_t a_generation)
 {
 	if (!globals::game::isVR)
 		return false;
 
 	const uint32_t currentFrame = std::max(a_frame, 1u);
-	const uint32_t stabilizerApplyFrame = vrFpsStabilizerProfileApplyFrame.load(std::memory_order_acquire);
+	const uint32_t generation = std::max(a_generation, 1u);
+	const uint64_t relatchKey = (static_cast<uint64_t>(generation) << 1) | (a_currentActive ? 1ull : 0ull);
+	if (vrFpsStabilizerLowPeakRelatchKey.load(std::memory_order_acquire) == relatchKey)
+		return true;
+
+	const uint32_t stabilizerRelatchGeneration = vrFpsStabilizerPendingRelatchGeneration.load(std::memory_order_acquire);
 	const bool stabilizerScopedRelatch =
 		a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
-		stabilizerApplyFrame != 0 &&
-		currentFrame >= stabilizerApplyFrame &&
-		currentFrame - stabilizerApplyFrame <= kVRRapidRenderScaleFlipWindowFrames;
+		stabilizerRelatchGeneration == generation;
+	if (stabilizerRelatchGeneration != 0 && generation > stabilizerRelatchGeneration)
+		vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
 	if (stabilizerScopedRelatch)
-		vrFpsStabilizerProfileApplyFrame.store(0, std::memory_order_release);
+		vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
 	if (!stabilizerScopedRelatch || a_previousActive == a_currentActive) {
 		vrFpsStabilizerRapidRenderScaleFlipFrame.store(0, std::memory_order_release);
 		vrFpsStabilizerRapidRenderScaleFlipCount.store(0, std::memory_order_release);
@@ -7544,10 +7590,6 @@ bool Upscaling::RecordVRFpsStabilizerLowPeakRelatch(bool a_previousActive, bool 
 		return false;
 	}
 
-	const uint32_t generation = std::max(a_generation, 1u);
-	const uint64_t relatchKey = (static_cast<uint64_t>(generation) << 1) | (a_currentActive ? 1ull : 0ull);
-	if (vrFpsStabilizerLowPeakRelatchKey.load(std::memory_order_acquire) == relatchKey)
-		return true;
 	if (vrFpsStabilizerRapidRenderScaleRecordedRelatchKey.load(std::memory_order_acquire) == relatchKey)
 		return false;
 
@@ -12995,6 +13037,8 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
 	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 	pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
+	vrFpsStabilizerPendingRelatchRequest.store(false, std::memory_order_release);
+	vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
 	pendingVRRenderScaleRecoverySnapshot = {};
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
 	vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
@@ -14422,6 +14466,8 @@ void Upscaling::ClearPendingVRUpscalingTransition()
 	pendingVRPerfMode.store(kPendingVRUpscalingSettingUnset, std::memory_order_release);
 	pendingVRUpscalingTransitionFrame.store(0, std::memory_order_release);
 	pendingVRUpscalingTransitionOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
+	vrFpsStabilizerPendingRelatchRequest.store(false, std::memory_order_release);
+	vrFpsStabilizerPendingRelatchGeneration.store(0, std::memory_order_release);
 	InvalidateFrameScopedUpscalingState();
 }
 

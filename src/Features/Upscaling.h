@@ -800,7 +800,8 @@ public:
 	std::atomic<uint32_t> vrDLSSRapidTransitionGuardEndFrame{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidTransitionCleanEyeMask{ 0 };
 	std::atomic_bool vrDLSSRapidTransitionGuardLogged{ false };
-	std::atomic<uint32_t> vrFpsStabilizerProfileApplyFrame{ 0 };
+	std::atomic_bool vrFpsStabilizerPendingRelatchRequest{ false };
+	std::atomic<uint32_t> vrFpsStabilizerPendingRelatchGeneration{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerRapidRenderScaleFlipFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerRapidRenderScaleFlipCount{ 0 };
 	std::atomic<uint64_t> vrFpsStabilizerRapidRenderScaleRecordedRelatchKey{ 0 };
@@ -824,6 +825,7 @@ public:
 	void CompleteVRRenderScaleInfoTransition(const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
 	void ClearVRRenderScaleInfoTransition();
 	void RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_currentActive, UpscaleMethod a_previousMethod, UpscaleMethod a_currentMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
+	bool ConsumeVRFpsStabilizerPendingRelatchRequest(VRUpscalingTransitionOrigin a_origin, uint32_t a_generation, const char* a_phase);
 	bool RecordVRFpsStabilizerLowPeakRelatch(bool a_previousActive, bool a_currentActive, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame, uint32_t a_generation);
 	void ReleaseVRFpsStabilizerLowPeakRelatchResources(const char* a_phase);
 	bool ShouldBypassVRDLSSFoveatedForRapidTransition();

@@ -189,6 +189,25 @@ public:
 		FoveatedRegionPlan foveatedRegion{};
 	};
 
+	struct VRRenderScaleDesiredProfile
+	{
+		bool qualityModePending = false;
+		bool renderScaleModePending = false;
+		bool dlssPresetPending = false;
+		bool perfModePending = false;
+		uint32_t qualityMode = 0;
+		bool renderScaleModeEnabled = false;
+		uint32_t dlssPreset = kDLSSPresetK;
+		bool perfModeEnabled = false;
+		uint32_t queuedFrame = 0;
+		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+
+		bool HasPendingSettings() const
+		{
+			return qualityModePending || renderScaleModePending || dlssPresetPending || perfModePending;
+		}
+	};
+
 	struct PerfModeState
 	{
 		struct BootSnapshot
@@ -234,6 +253,12 @@ public:
 
 	PerfModeState perfMode;
 	RuntimeResolutionPlan runtimeResolutionPlan;
+	VRRenderScaleDesiredProfile GetPendingVRRenderScaleDesiredProfile() const;
+	uint32_t GetActiveVRRenderScaleContractGeneration() const;
+	bool IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMethod) const;
+	void MarkVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
+	void MarkVendorRuntimeResourcesReady(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
+	void ClearVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, bool a_clearRuntimeGeneration = false);
 
 	struct JitterCB
 	{
@@ -584,6 +609,7 @@ public:
 		uint32_t inHeight = 0;
 		uint32_t outWidth = 0;
 		uint32_t outHeight = 0;
+		uint32_t generation = 0;
 		eastl::unique_ptr<Texture2D> colorIn[2];
 		eastl::unique_ptr<Texture2D> colorOut[2];
 		eastl::unique_ptr<Texture2D> depth[2];
@@ -594,12 +620,13 @@ public:
 	};
 	// Single alternate-size reuse cache; validated against the current layout before reuse.
 	VRIntermediateTextureCache cachedVRIntermediateTextures;
+	uint32_t vrIntermediateTextureGeneration = 0;
 
 	// Helper to create/resize per-eye buffers matching source formats
 	void CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc);
+		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
 	void EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc);
+		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
 	bool EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc);
 
@@ -725,6 +752,10 @@ public:
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
 	std::atomic<bool> pendingDLSSReset{ false };
 	std::atomic<bool> pendingFSRReset{ false };
+	std::atomic<uint32_t> pendingDLSSResetGeneration{ 0 };
+	std::atomic<uint32_t> pendingFSRResetGeneration{ 0 };
+	uint32_t vrDLSSRuntimeResourceGeneration = 0;
+	uint32_t vrFSRRuntimeResourceGeneration = 0;
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ false };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
@@ -811,7 +842,7 @@ public:
 	bool GetRuntimeFoveatedRegionDimensions(uint32_t& a_inputWidthPerEye, uint32_t& a_inputHeight, uint32_t& a_outputWidthPerEye, uint32_t& a_outputHeight) const;
 	bool BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool isVR, float centerScale, float centerFeather, float centerHorizontalScale, bool usePeripheryTAAProfile = false);
 	bool GetFoveatedEncodeRegions(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool usePeripheryTAAProfile, bool usePeripheryTAAPath, std::array<FoveatedEncodeRegion, 2>& outRegions);
-	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr);
+	bool EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Resource* motionVectors, ID3D11Resource* depthSource, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool copyDepthInput = true, bool allowFoveatedRegionEncode = false, bool* encodedFoveatedRegions = nullptr, uint32_t contractGeneration = 0);
 	bool StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight);
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
@@ -916,6 +947,7 @@ private:
 	std::atomic<uint32_t> submitStageBoundsFallbackLastFrame{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackRecoveryFrame{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackMethod{ static_cast<uint32_t>(UpscaleMethod::kNONE) };
+	std::atomic<uint32_t> submitStageBoundsFallbackGeneration{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackActualWidth{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackActualHeight{ 0 };
 	std::atomic<uint32_t> submitStageBoundsFallbackExpectedWidth{ 0 };
@@ -924,7 +956,8 @@ private:
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
 	void ClearSubmitStageVendorResumeStability();
-	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
+	bool TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFrame, uint32_t a_eyeIndex, bool a_stableCandidate, UpscaleMethod a_upscaleMethod);
+	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();
 	void ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery = false);
 	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame);

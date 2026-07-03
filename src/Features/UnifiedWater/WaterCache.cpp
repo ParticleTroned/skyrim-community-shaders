@@ -18,6 +18,44 @@ namespace
 		       height != FLT_MAX &&
 		       std::fabs(height) < kMaxValidCellHeight;
 	}
+
+	bool TryGetWorldSpaceCellBounds(const RE::TESWorldSpace* worldSpace, int32_t& minX, int32_t& minY, int32_t& maxX, int32_t& maxY, int32_t& width, int32_t& height)
+	{
+		if (!worldSpace)
+			return false;
+
+		const auto wsMin = worldSpace->minimumCoords;
+		const auto wsMax = worldSpace->maximumCoords;
+		const bool invalidCoords =
+			!std::isfinite(wsMin.x) ||
+			!std::isfinite(wsMin.y) ||
+			!std::isfinite(wsMax.x) ||
+			!std::isfinite(wsMax.y) ||
+			wsMin.x == FLT_MIN ||
+			wsMin.y == FLT_MIN ||
+			wsMax.x == FLT_MAX ||
+			wsMax.y == FLT_MAX ||
+			wsMin.x == FLT_MAX ||
+			wsMin.y == FLT_MAX ||
+			wsMax.x == FLT_MIN ||
+			wsMax.y == FLT_MIN;
+		if (invalidCoords)
+			return false;
+
+		Util::WorldToCell(wsMin, minX, minY);
+		Util::WorldToCell(wsMax, maxX, maxY);
+		maxX -= 1;
+		maxY -= 1;
+
+		const int64_t boundsWidth = static_cast<int64_t>(maxX) - static_cast<int64_t>(minX) + 1;
+		const int64_t boundsHeight = static_cast<int64_t>(maxY) - static_cast<int64_t>(minY) + 1;
+		if (boundsWidth <= 0 || boundsHeight <= 0 || boundsWidth > 512 || boundsHeight > 512)
+			return false;
+
+		width = static_cast<int32_t>(boundsWidth);
+		height = static_cast<int32_t>(boundsHeight);
+		return true;
+	}
 }
 
 bool WaterCache::SetCurrentWorldSpace(const RE::TESWorldSpace* worldSpace)

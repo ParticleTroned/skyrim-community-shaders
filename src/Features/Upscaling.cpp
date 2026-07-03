@@ -129,6 +129,7 @@ namespace
 	// Keep a short post-load horizon for RaceSex/projected-menu ownership checks.
 	// Render-scale startup relatch itself is only gated on the first world frame.
 	constexpr uint32_t kVRRaceSexPostLoadArmWindowFrames = 180u;
+	constexpr uint32_t kVRRaceSexPostCloseRenderScaleBlockFrames = 60u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
@@ -647,6 +648,8 @@ namespace
 	{
 		auto& upscaling = globals::features::upscaling;
 		if (upscaling.IsSubmitStageDeviceLost())
+			return false;
+		if (ShouldBypassVRRenderScaleStartupRaceSexPresentation(upscaling, globals::state))
 			return false;
 
 		if (upscaling.IsVRRenderScaleModeLatched()) {
@@ -1478,6 +1481,58 @@ namespace
 			IsRenderScaleMethodEligible(target.method) &&
 			IsRenderScaleQualityMode(target.qualityMode);
 		return target;
+	}
+
+	bool HasPendingVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
+			return false;
+
+		const uint32_t queuedFrame = a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
+		if (queuedFrame == 0)
+			return false;
+
+		const bool interior = Util::IsInterior();
+		const auto currentMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
+		const uint32_t qualityMode = a_upscaling.GetEffectiveUpscalingQualityMode();
+		const uint64_t cacheKey =
+			static_cast<uint64_t>(queuedFrame) |
+			(static_cast<uint64_t>(interior ? 1u : 0u) << 32) |
+			(static_cast<uint64_t>(static_cast<uint32_t>(currentMethod) & 0xFFu) << 33) |
+			(static_cast<uint64_t>(qualityMode & 0xFFu) << 41);
+
+		static std::atomic_uint64_t cachedKey{ 0 };
+		static std::atomic_bool cachedRenderScaleIntent{ false };
+		if (cachedKey.load(std::memory_order_acquire) == cacheKey)
+			return cachedRenderScaleIntent.load(std::memory_order_acquire);
+
+		VRFpsStabilizerUpscalingProfiles profiles;
+		bool renderScaleIntent = false;
+		if (TryLoadVRFpsStabilizerUpscalingProfiles(profiles)) {
+			const auto& profile = interior ? profiles.interior : profiles.exterior;
+			renderScaleIntent =
+				profile.hasRenderScaleMode &&
+				profile.renderScaleMode &&
+				ResolveVRFpsStabilizerTransitionTarget(a_upscaling, profile).renderScaleMode;
+		}
+
+		cachedRenderScaleIntent.store(renderScaleIntent, std::memory_order_release);
+		cachedKey.store(cacheKey, std::memory_order_release);
+		return renderScaleIntent;
+	}
+
+	bool HasVRStartupRenderScaleIntent(const Upscaling& a_upscaling)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		if (a_upscaling.IsVRRenderScaleModeLatched())
+			return true;
+
+		return IsVRRenderScaleDesiredProfileActive(
+				   a_upscaling,
+				   a_upscaling.GetConfiguredUpscaleMethodForTransition()) ||
+		       HasPendingVRFpsStabilizerRenderScaleIntent(a_upscaling);
 	}
 
 	uint MigrateLegacyQualityModeUInt(uint value)
@@ -2418,16 +2473,27 @@ namespace
 		return true;
 	}
 
-	bool IsVRFpsStabilizerLoadSyncReady(const State* a_state)
+	bool IsVRFpsStabilizerLoadSyncReady(const Upscaling& a_upscaling, const State* a_state)
 	{
-		return a_state &&
-		       !IsMainOrLoadingMenuContextActive() &&
-		       HasCompletedVRWorldFrameAfterLatestLoad(a_state);
+		if (!a_state)
+			return false;
+
+		if (IsMainOrLoadingMenuContextActive())
+			return false;
+
+		if (!HasCompletedVRWorldFrameAfterLatestLoad(a_state))
+			return false;
+
+		const bool renderScaleRaceSexProtected =
+			HasVRStartupRenderScaleIntent(a_upscaling) &&
+			IsVRRaceSexRenderScaleProtectionContextActive(a_state);
+
+		return !renderScaleRaceSexProtected;
 	}
 
-	uint32_t GetVRFpsStabilizerCurrentSyncFrame(const State* a_state)
+	uint32_t GetVRFpsStabilizerCurrentSyncFrame(const Upscaling& a_upscaling, const State* a_state)
 	{
-		if (!IsVRFpsStabilizerLoadSyncReady(a_state))
+		if (!IsVRFpsStabilizerLoadSyncReady(a_upscaling, a_state))
 			return 0;
 
 		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
@@ -2454,10 +2520,10 @@ namespace
 			return;
 
 		const auto* state = globals::state;
-		if (!IsVRFpsStabilizerLoadSyncReady(state))
+		if (!IsVRFpsStabilizerLoadSyncReady(a_upscaling, state))
 			return;
 
-		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(state);
+		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(a_upscaling, state);
 		if (syncFrame == 0 ||
 			a_upscaling.vrFpsStabilizerSyncResolvedFrame.load(std::memory_order_acquire) == syncFrame) {
 			return;
@@ -2475,10 +2541,10 @@ namespace
 			return true;
 
 		const auto* state = globals::state;
-		if (!IsVRFpsStabilizerLoadSyncReady(state))
+		if (!IsVRFpsStabilizerLoadSyncReady(a_upscaling, state))
 			return false;
 
-		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(state);
+		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(a_upscaling, state);
 		return syncFrame != 0 &&
 		       a_upscaling.vrFpsStabilizerSyncResolvedFrame.load(std::memory_order_acquire) != syncFrame;
 	}
@@ -2491,7 +2557,7 @@ namespace
 		if (!a_activationTarget || !globals::game::isVR || !a_state)
 			return false;
 
-		if (IsVRRaceSexRenderScaleProtectionContextActive(a_state))
+		if (ShouldBypassVRRenderScaleStartupRaceSexPresentation(a_upscaling, a_state))
 			return true;
 
 		if (!HasCompletedVRWorldFrameAfterLatestLoad(a_state))
@@ -2519,6 +2585,9 @@ namespace
 			return false;
 
 		const auto* state = globals::state;
+		if (ShouldBypassVRRenderScaleStartupRaceSexPresentation(a_upscaling, state))
+			return false;
+
 		if (!HasCompletedVRWorldFrameAfterLatestLoad(state))
 			return false;
 
@@ -2538,7 +2607,7 @@ namespace
 		const auto* state = globals::state;
 		return !IsVRMenuPresentationContextActive() &&
 		       !IsVRRenderScaleMenuPreparationContextActive(state) &&
-		       !IsVRRaceSexRenderScaleProtectionContextActive(state);
+		       !ShouldBypassVRRenderScaleStartupRaceSexPresentation(a_upscaling, state);
 	}
 
 	bool ShouldBlockVRRenderScaleBootLatchForPendingWork(const Upscaling& a_upscaling)
@@ -2932,11 +3001,7 @@ namespace
 		if (!globals::game::isVR || !a_state)
 			return false;
 
-		if (a_upscaling.IsVRRenderScaleModeLatched())
-			return false;
-
-		if (!a_upscaling.CanUseVRRenderScaleMode() ||
-			!a_upscaling.GetPerfModeRequested()) {
+		if (!HasVRStartupRenderScaleIntent(a_upscaling)) {
 			return false;
 		}
 
@@ -5136,7 +5201,8 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				IsVRRaceSexPostLoadArmWindowActive(globals::state),
 				std::memory_order_release);
 		}
-		ExtendVRRaceSexMenuPresentationTail();
+		ExtendVRRaceSexMenuPresentationTail(
+			a_event->opening ? kVRMenuPresentationTailFrames : kVRRaceSexPostCloseRenderScaleBlockFrames);
 	}
 
 	if (a_event && IsVRMenuPresentationTailMenuName(a_event->menuName)) {
@@ -5187,7 +5253,13 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 		return false;
 	}
 
+	const bool raceSexMenuOpen = ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
 	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_relaxed);
+	g_vrRaceSexMenuOpenFromEvent.store(raceSexMenuOpen, std::memory_order_release);
+	if (raceSexMenuOpen) {
+		g_vrRaceSexPostLoadProtectionActive.store(true, std::memory_order_release);
+		ExtendVRRaceSexMenuPresentationTail();
+	}
 	eventSource->AddEventSink(&singleton);
 	registered.store(true, std::memory_order_release);
 	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for DLSS history reset-on-load");
@@ -5499,7 +5571,11 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		};
 	};
 
-	const bool vrRenderScaleLatched = IsVRRenderScaleModeLatched();
+	const bool startupRaceSexRenderScaleVisualBypass =
+		ShouldBypassVRRenderScaleStartupRaceSexPresentation(*this, state);
+	const bool vrRenderScaleLatched =
+		IsVRRenderScaleModeLatched() &&
+		!startupRaceSexRenderScaleVisualBypass;
 	if (vrRenderScaleLatched) {
 		const float2 displaySize = perfMode.GetDisplayScreenSize();
 		const float2 renderSize = perfMode.GetRenderScreenSize();
@@ -5973,7 +6049,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	}
 
 	const auto* state = globals::state;
-	if (!IsVRFpsStabilizerLoadSyncReady(state))
+	if (!IsVRFpsStabilizerLoadSyncReady(*this, state))
 		return;
 
 	VRFpsStabilizerUpscalingProfiles profiles;
@@ -6118,7 +6194,8 @@ bool Upscaling::AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RE
 		return true;
 	};
 
-	if (IsVRRenderScaleModeLatched()) {
+	if (IsVRRenderScaleModeLatched() &&
+		!ShouldBypassVRRenderScaleStartupRaceSexPresentation(*this, globals::state)) {
 		const auto displaySize = perfMode.GetDisplayScreenSize();
 		const auto renderSize = perfMode.GetRenderScreenSize();
 		if (displaySize.x <= 0.0f || displaySize.y <= 0.0f || renderSize.x <= 0.0f || renderSize.y <= 0.0f)
@@ -12255,7 +12332,8 @@ bool Upscaling::ApplyDynamicResolutionState(RE::BSGraphics::State* a_viewport)
 	if (!a_viewport)
 		return false;
 
-	if (IsVRRenderScaleModeLatched()) {
+	if (IsVRRenderScaleModeLatched() &&
+		!ShouldBypassVRRenderScaleStartupRaceSexPresentation(*this, globals::state)) {
 		return ApplyLockedFullResolutionDynamicResolutionState(a_viewport);
 	}
 
@@ -15553,6 +15631,9 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
 	const bool startupRaceSexRenderScaleVisualBypass =
 		ShouldBypassVRRenderScaleStartupRaceSexPresentation(upscaling, globals::state);
+	const bool vrRenderScaleVisuallyActive =
+		upscaling.IsVRRenderScaleModeLatched() &&
+		!startupRaceSexRenderScaleVisualBypass;
 	const bool renderScalePresentationProtection =
 		globals::game::isVR &&
 		!startupRaceSexRenderScaleVisualBypass &&
@@ -15561,12 +15642,12 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		vendorMethodSelected &&
 		globals::game::isVR &&
 		!startupRaceSexRenderScaleVisualBypass &&
-		(upscaling.IsVRRenderScaleModeLatched() || renderScalePresentationProtection) &&
+		(vrRenderScaleVisuallyActive || renderScalePresentationProtection) &&
 		(vrScenePresentationBlockActive || loadingTransitionTailActive);
 	const bool vendorDynamicResolutionActive =
 		vendorMethodSelected &&
 		upscaling.IsUpscalingActive() &&
-		!upscaling.IsVRRenderScaleModeLatched();
+		!vrRenderScaleVisuallyActive;
 	const bool presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 	const bool submitPathDisabledForVendor =
 		vendorMethodSelected &&

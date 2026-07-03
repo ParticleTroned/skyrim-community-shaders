@@ -197,21 +197,28 @@ public:
 			bool active = false;
 			UpscaleMethod method = UpscaleMethod::kNONE;
 			uint32_t qualityMode = 0;
+			uint32_t dlssPreset = kDLSSPresetK;
 			float renderScale = 1.0f;
 			uint32_t displayEyeWidth = 0;
 			uint32_t displayEyeHeight = 0;
 			uint32_t renderEyeWidth = 0;
 			uint32_t renderEyeHeight = 0;
+			bool renderScaleEnabled = false;
+			bool perfModeEnabled = false;
+			bool submitStageVendorAllowed = false;
+			uint32_t generation = 0;
 		};
 
 		void ResetBootLatch();
+		void RestoreBootLatch(const BootSnapshot& a_snapshot);
 		void RecordTrueHMDSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 		bool IsRequested(const Settings& a_settings) const;
 		bool IsEligible(const Settings& a_settings, UpscaleMethod a_method) const;
 		void UpdateRestartRequiredState(const Settings& a_settings, UpscaleMethod a_method);
-		bool EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate);
+		bool EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate, uint32_t a_generation = 0);
 		bool IsActive(const Settings& a_settings, UpscaleMethod a_method) const;
-		bool TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height, bool a_allowCreate);
+		bool TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height, bool a_allowCreate, uint32_t a_generation = 0);
+		void SetSubmitStageVendorAllowed(bool a_allowed);
 		float2 GetDisplayScreenSize() const;
 		float2 GetRenderScreenSize() const;
 		const BootSnapshot& GetBootSnapshot() const { return boot; }
@@ -434,6 +441,7 @@ public:
 	UpscaleMethod GetLegacyDLSSPreferredUpscaleMethodForAPI() const;
 	UpscaleMethod GetRuntimeUpscaleMethod() const;
 	uint32_t GetRuntimeQualityMode() const;
+	uint32_t GetRuntimeDLSSPreset() const;
 	DLSSSharpenerMode GetDLSSSharpenerMode() const;
 	bool ShouldApplyDLSSSharpening() const;
 	const RuntimeResolutionPlan& GetRuntimeResolutionPlan() const;
@@ -723,21 +731,26 @@ public:
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
+	std::atomic<uint32_t> vrRenderScaleNextContractGeneration{ 1 };
+	std::atomic<uint32_t> pendingVRRenderScaleContractGeneration{ 0 };
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t submitStagePreparedGeneration = 0;
 	bool submitStagePreparedFramePresentationOnly = false;
 	bool submitStagePreparedFrameFoveatedRegionEncode = false;
 	struct SubmitStageVendorEyeState
 	{
 		bool ready = false;
 		bool usedFoveatedVendorPath = false;
+		uint32_t generation = 0;
 		uint32_t depthWidth = 0;
 		uint32_t depthHeight = 0;
 		uint32_t depthOffsetX = 0;
 		uint32_t depthOffsetY = 0;
 	};
 	uint32_t submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t submitStageVendorOutputGeneration = 0;
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
 	bool submitStageForceFullEyeVendorFallback = false;

@@ -1302,7 +1302,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
-	const uint32_t dlssPreset = Upscaling::ClampDLSSPresetUInt(upscaling.settings.dlssPreset);
+	const uint32_t dlssPreset = upscaling.GetRuntimeDLSSPreset();
 	const sl::ViewportHandle requestedViewport = vp;
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&

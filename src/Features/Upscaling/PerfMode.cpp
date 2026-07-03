@@ -38,6 +38,18 @@ void Upscaling::PerfModeState::ResetBootLatch()
 	displaySizeChanged = false;
 }
 
+void Upscaling::PerfModeState::RestoreBootLatch(const BootSnapshot& a_snapshot)
+{
+	boot = a_snapshot;
+	displaySizeChanged =
+		boot.valid &&
+		boot.active &&
+		trueHMDEyeWidth != 0 &&
+		trueHMDEyeHeight != 0 &&
+		(boot.displayEyeWidth != trueHMDEyeWidth || boot.displayEyeHeight != trueHMDEyeHeight);
+	restartRequired = displaySizeChanged;
+}
+
 void Upscaling::PerfModeState::RecordTrueHMDSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
 {
 	if (!a_eyeWidth || !a_eyeHeight)
@@ -87,17 +99,17 @@ void Upscaling::PerfModeState::UpdateRestartRequiredState(const Settings& a_sett
 		restartRequired =
 			boot.active &&
 			(!requestedNow ||
-			 displaySizeChanged ||
-			 !eligibleNow ||
-			 boot.method != a_method ||
-			 boot.qualityMode != qualityMode);
+				displaySizeChanged ||
+				!eligibleNow ||
+				boot.method != a_method ||
+				boot.qualityMode != qualityMode);
 		return;
 	}
 
 	restartRequired = requestedNow && eligibleNow && (trueHMDEyeWidth != 0) && (trueHMDEyeHeight != 0);
 }
 
-bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate)
+bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, UpscaleMethod a_method, bool a_allowCreate, uint32_t a_generation)
 {
 	if (boot.valid) {
 		UpdateRestartRequiredState(a_settings, a_method);
@@ -128,22 +140,28 @@ bool Upscaling::PerfModeState::EnsureBootLatch(const Settings& a_settings, Upsca
 	boot.active = true;
 	boot.method = a_method;
 	boot.qualityMode = qualityMode;
+	boot.dlssPreset = Upscaling::ClampDLSSPresetUInt(a_settings.dlssPreset);
 	boot.renderScale = renderScale;
 	boot.displayEyeWidth = trueHMDEyeWidth;
 	boot.displayEyeHeight = trueHMDEyeHeight;
 	boot.renderEyeWidth = ScaleDimension(trueHMDEyeWidth, renderScale);
 	boot.renderEyeHeight = ScaleDimension(trueHMDEyeHeight, renderScale);
+	boot.renderScaleEnabled = std::min<uint32_t>(a_settings.renderScaleMode, 1u) != 0;
+	boot.perfModeEnabled = IsRequested(a_settings);
+	boot.submitStageVendorAllowed = true;
+	boot.generation = std::max(a_generation, 1u);
 	restartRequired = false;
 	displaySizeChanged = false;
 
 	logger::info(
-		"[VRRenderScale] Boot-latched {} quality {} at display {}x{} per eye -> render {}x{} per eye.",
+		"[VRRenderScale] Boot-latched {} quality {} at display {}x{} per eye -> render {}x{} per eye (generation {}).",
 		magic_enum::enum_name(a_method),
 		qualityMode,
 		boot.displayEyeWidth,
 		boot.displayEyeHeight,
 		boot.renderEyeWidth,
-		boot.renderEyeHeight);
+		boot.renderEyeHeight,
+		boot.generation);
 
 	return true;
 }
@@ -155,9 +173,9 @@ bool Upscaling::PerfModeState::IsActive(const Settings& a_settings, UpscaleMetho
 	return boot.valid && boot.active;
 }
 
-bool Upscaling::PerfModeState::TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height, bool a_allowCreate)
+bool Upscaling::PerfModeState::TryGetOpenVRRenderTargetSize(const Settings& a_settings, UpscaleMethod a_method, uint32_t& a_width, uint32_t& a_height, bool a_allowCreate, uint32_t a_generation)
 {
-	if (!EnsureBootLatch(a_settings, a_method, a_allowCreate))
+	if (!EnsureBootLatch(a_settings, a_method, a_allowCreate, a_generation))
 		return false;
 
 	if (!boot.renderEyeWidth || !boot.renderEyeHeight)
@@ -166,6 +184,12 @@ bool Upscaling::PerfModeState::TryGetOpenVRRenderTargetSize(const Settings& a_se
 	a_width = boot.renderEyeWidth;
 	a_height = boot.renderEyeHeight;
 	return true;
+}
+
+void Upscaling::PerfModeState::SetSubmitStageVendorAllowed(bool a_allowed)
+{
+	if (boot.valid)
+		boot.submitStageVendorAllowed = a_allowed;
 }
 
 float2 Upscaling::PerfModeState::GetDisplayScreenSize() const

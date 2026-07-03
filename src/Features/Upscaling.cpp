@@ -6835,9 +6835,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingDLSSResetForRelatch ||
 			(!preserveDLSSResourcesForRelatch &&
 				(relatchUpscaleMethod == UpscaleMethod::kDLSS || previousBootWasActiveDLSS));
-		const bool forceFSRResourceRecreateForAMDRelatch =
-			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			amdAdapterForRelatch;
 		const uint32_t relatchQualityMode = ClampQualityModeUInt(relatchSettings.qualityMode);
 		const bool relatchTargetRenderScaleActive = authoritativeRelatchActivationTarget;
 		const float relatchRenderScale = relatchTargetRenderScaleActive ? GetQualityModeResolutionScale(relatchQualityMode) : 1.0f;
@@ -6859,6 +6856,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchTargetRenderScaleActive ?
 				scaleRelatchDimension(perfMode.trueHMDEyeHeight, relatchRenderScale) :
 				perfMode.trueHMDEyeHeight;
+		const bool forceFSRResourceRecreateForAMDRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			amdAdapterForRelatch;
 		const auto canPreserveFSRResourcesForRelatch = [&]() {
 			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
 				forceFSRResourceRecreateForAMDRelatch ||
@@ -6877,8 +6877,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				2u);
 		};
 		const bool preserveFSRResourcesForRelatch = canPreserveFSRResourcesForRelatch();
+		const bool missingCompatibleFSRResourcesForActiveRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			relatchTargetRenderScaleActive &&
+			!preserveFSRResourcesForRelatch;
 		const bool recreateFSRResourcesDuringRelatch =
-			forceFSRResourceRecreateForAMDRelatch &&
+			(forceFSRResourceRecreateForAMDRelatch || missingCompatibleFSRResourcesForActiveRelatch) &&
 			!preserveFSRResourcesForRelatch;
 		// AMD off-relatches are the observed crash window: tearing down the
 		// active FSR runtime and recreating native RTs must be fully serialized.
@@ -6905,7 +6909,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} preserveDLSS={} destroyDLSS={} forceFSRRecreate={} preserveFSR={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} preserveDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
@@ -6913,6 +6917,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(preserveDLSSResourcesForRelatch),
 				BoolText(destroyDLSSResourcesForRelatch),
 				BoolText(forceFSRResourceRecreateForAMDRelatch),
+				BoolText(missingCompatibleFSRResourcesForActiveRelatch),
 				BoolText(preserveFSRResourcesForRelatch),
 				BoolText(forceSynchronousFSRTeardownForAMDNativeRestore),
 				BoolText(pendingDLSSResetForRelatch),
@@ -7000,6 +7005,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!fsrResourcesRecreatedDuringRelatch;
 		if (recreateFSRResourcesDuringRelatch && !fsrResourcesRecreatedDuringRelatch) {
 			logger::warn("[VRRenderScale] Render-target relatch could not recreate FSR resources immediately; scheduling deferred rebuild.");
+			if (missingCompatibleFSRResourcesForActiveRelatch) {
+				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
+				InvalidateFrameScopedUpscalingState();
+				ClearSubmitStageVendorResumeStability();
+				requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
+				return false;
+			}
 		}
 		if (relatchUpscaleMethod == UpscaleMethod::kFSR && emitDiagLogs) {
 			logger::debug(

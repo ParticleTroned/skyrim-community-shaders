@@ -78,7 +78,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	auto refreshRate = Upscaling::GetRefreshRate(pSwapChainDesc->OutputWindow);
 	upscaling.refreshRate = refreshRate;
-	upscaling.lowRefreshRate = refreshRate < 120;
 
 	// Exclusive fullscreen is handled entirely in DXVK (dxgi.fullscreenNativeRefresh): it does the real
 	// mode-set at the game resolution but forces the native refresh, so the swapchain IS the game
@@ -984,15 +983,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 	runtimeData.dynamicResolutionLock = 1;
 
-	// Diagnostic: log the active upscaler's render vs display resolution whenever it changes.
-	// Proves the dynamic-resolution downscale is engaged (render < display) for the selected
-	// method — for DLSS this is how we confirm the kFSR/kXeSS/kDLSS gate fix took effect.
+	// Log the active upscaler's render vs display resolution whenever it changes.
 	static float s_loggedScale = -1.0f;
 	static int s_loggedMethod = -1;
 	if (std::abs(resolutionScale.x - s_loggedScale) > 0.001f || (int)upscaleMethod != s_loggedMethod) {
 		s_loggedScale = resolutionScale.x;
 		s_loggedMethod = (int)upscaleMethod;
-		logger::info("[Upscaling] active method={} scale={:.3f} render={}x{} display={}x{}",
+		logger::debug("[Upscaling] active method={} scale={:.3f} render={}x{} display={}x{}",
 			(int)upscaleMethod, resolutionScale.x,
 			(int)(screenSize.x * resolutionScale.x), (int)(screenSize.y * resolutionScale.y),
 			(int)screenSize.x, (int)screenSize.y);
@@ -1001,8 +998,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 void Upscaling::SetupResources()
 {
-	QueryPerformanceFrequency(&qpf);
-
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
@@ -1121,14 +1116,6 @@ void Upscaling::PostDisplay()
 	UpdateCameraData();
 
 	globals::state->UpdateSharedData(false, false);
-}
-
-void Upscaling::TimerSleepQPC(int64_t targetQPC)
-{
-	LARGE_INTEGER currentQPC;
-	do {
-		QueryPerformanceCounter(&currentQPC);
-	} while (currentQPC.QuadPart < targetQPC);
 }
 
 /*
@@ -1542,7 +1529,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 					fgDepth, motionVector.texture, hudless,
 					(uint32_t)rendSize.x, (uint32_t)rendSize.y,
 					(uint32_t)dispSize.x, (uint32_t)dispSize.y);
-				Streamline::GetSingleton()->LogDLSSGFrameStats();
+				Streamline::GetSingleton()->LogReflexStatus();
 			}
 		} else if (fgMethod == FrameGenMethod::kFSR && gameplay) {
 			// Drive the FSR FG-prepare every gameplay frame from depth + motion vectors, independent of the

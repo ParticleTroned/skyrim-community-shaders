@@ -122,15 +122,11 @@ public:
 	// Desired load state has been applied (no load/unload recreate outstanding).
 	[[nodiscard]] bool IsDLSSGLoadSettled() const;
 
-	[[nodiscard]] bool GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) const;
-
-	void LogDLSSGFrameStats();
+	void LogReflexStatus();
 
 	void TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 		ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight,
 		uint32_t a_displayWidth, uint32_t a_displayHeight);
-
-	void TagFSRFGHudless(ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight);
 
 	void ClearDLSSGTags();
 	void EnsureDLSSGPresentTag();

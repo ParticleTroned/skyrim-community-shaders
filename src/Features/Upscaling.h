@@ -92,7 +92,6 @@ public:
 
 	// Runtime state
 	bool isWindowed = false;
-	bool lowRefreshRate = false;
 
 	// When true, the discrete settings steppers render as PhotoMode-style "< value >" arrow controls rather
 	// than native sliders. DisplaySettingsMenu sets this around its DrawSettings() call so the in-game Display
@@ -102,7 +101,6 @@ public:
 	// Timing and scaling
 	double refreshRate = 0.0f;
 	float2 resolutionScale = { 1.0f, 1.0f };
-	LARGE_INTEGER qpf;
 
 	bool IsUpscalingActive() const;
 
@@ -183,8 +181,6 @@ public:
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
-
-	static void TimerSleepQPC(int64_t targetQPC);
 
 	static double GetRefreshRate(HWND a_window);
 

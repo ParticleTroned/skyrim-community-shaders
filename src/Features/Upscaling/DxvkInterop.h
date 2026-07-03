@@ -95,7 +95,6 @@ public:
 	VkInstance GetInstance() const { return instance; }
 	VkPhysicalDevice GetPhysicalDevice() const { return physicalDevice; }
 	VkDevice GetDevice() const { return device; }
-	VkQueue GetQueue() const { return queue; }
 	uint32_t GetQueueFamilyIndex() const { return queueFamilyIndex; }
 	PFN_vkGetInstanceProcAddr GetInstanceProcAddr() const { return vkGetInstanceProcAddr; }
 	PFN_vkGetDeviceProcAddr GetDeviceProcAddr() const { return vkGetDeviceProcAddr; }
@@ -121,8 +120,6 @@ public:
 	void LockSubmissionQueue() const;
 	/** @brief Release DXVK's submission queue after a foreign Vulkan submit. */
 	void ReleaseSubmissionQueue() const;
-
-	IDXGIVkInteropDevice* GetInteropDevice() const { return interopDevice.get(); }
 
 	// --- Command-buffer ring for recording Streamline tag/evaluate work ---
 
@@ -179,21 +176,6 @@ public:
 		 * @param a_count Number of entries in @p a_views.
 		 */
 	void QueueViewsForDeferredDelete(const VkImageView* a_views, uint32_t a_count);
-
-	/**
-		 * @brief Transitions an interop image's layout via DXVK's own tracker
-		 *        (IDXGIVkInteropDevice::TransitionSurfaceLayout) so DXVK stays synced.
-		 *        Never issue a raw vkCmdPipelineBarrier on an interop image.
-		 * @param a_resource The D3D11 texture.
-		 * @param a_oldLayout Current layout (read it from GetVkImage's pLayout).
-		 * @param a_newLayout Desired layout.
-		 * @param a_aspect Image aspect (color/depth).
-		 */
-	void TransitionImageLayout(ID3D11Resource* a_resource, VkImageLayout a_oldLayout,
-		VkImageLayout a_newLayout, VkImageAspectFlags a_aspect = VK_IMAGE_ASPECT_COLOR_BIT) const;
-
-	/** @brief Queries the IDXGIVkInteropSurface for a D3D11 resource. */
-	bool GetInteropSurface(ID3D11Resource* a_resource, IDXGIVkInteropSurface** a_outSurface) const;
 
 private:
 	DxvkInterop() = default;

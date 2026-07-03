@@ -131,11 +131,6 @@ namespace
 			VkImage image = VK_NULL_HANDLE;
 			VkImageView view = VK_NULL_HANDLE;
 		} dlssgViewCache[3];
-
-		struct {
-			VkImage image = VK_NULL_HANDLE;
-			VkImageView view = VK_NULL_HANDLE;
-		} fsrFgHudlessCache;
 	} g_sl;
 
 	// DLSS-G runtime load state (Streamline DLSS-G guide §18). DLSS-G is loaded at slInit, so current=true.
@@ -470,7 +465,6 @@ void Streamline::SetVulkanDevice()
 			props.vendorID, props.deviceID,
 			isNvidiaGPU ? (isRTXBelow40Series ? "RTX 20/30 (J)" : "RTX 40+ (M)") : "non-NVIDIA (default)");
 	}
-
 }
 
 void Streamline::Shutdown()
@@ -486,10 +480,6 @@ void Streamline::Shutdown()
 				c.view = VK_NULL_HANDLE;
 				c.image = VK_NULL_HANDLE;
 			}
-			if (g_sl.fsrFgHudlessCache.view != VK_NULL_HANDLE)
-				vkDestroyImageView(vkDevice, g_sl.fsrFgHudlessCache.view, nullptr);
-			g_sl.fsrFgHudlessCache.view = VK_NULL_HANDLE;
-			g_sl.fsrFgHudlessCache.image = VK_NULL_HANDLE;
 		}
 	}
 
@@ -501,7 +491,7 @@ void Streamline::Shutdown()
 	}
 	initialized = false;
 	vulkanDeviceSet = false;
-	featureDLSS = featureReflex = featureDLSSG = false;
+	featureDLSS = featureReflex = featureDLSSG = featureXeSS = featureFSR = false;
 }
 
 // Returns the shared per-frame SL frame token. Pass a_beginFrame=true at the FIRST SL touch of the
@@ -811,25 +801,19 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 	if (!token)
 		return sl::Result::eErrorMissingInputParameter;
 
-	// Set common constants EXACTLY once per display frame per viewport. Main_PostProcessing runs more than once
-	// per frame, so an unguarded set here calls slSetConstants twice with slightly different camera values and SL
-	// rejects it: "Setting different 'common' constants multiple times within the same frame is NOT allowed".
+	// Set constants AND evaluate exactly once per display frame per viewport, and never one without the other.
+	// Main_PostProcessing runs more than once per rendered frame:
+	//  * A duplicate slSetConstants is rejected by SL ("Setting different 'common' constants multiple times within
+	//    the same frame is NOT allowed"), and letting a second evaluate run feeds NGX/FFX the SAME frame twice
+	//    (same image, same jitter), corrupting their temporal accumulation — shimmer/crawl/judder on every SL
+	//    upscaler and the FSR FG-prepare, while plain TAA is unaffected. First call wins.
+	//  * An evaluate WITHOUT this frame's constants is equally wrong: SL's 3-deep ring silently falls back to the
+	//    LAST SET constants on an exact-match miss, so the upscaler would de-jitter with the previous frame's
+	//    offset. If the camera data is invalid this frame (cs_BuildConstants false), skip the evaluate too and
+	//    retry the whole pair next frame.
 	// Keyed on renderFrameIndex (the latched display-frame index) — NOT the live frameIndex, which the input
 	// thread can advance mid-display-frame and would let a second set slip through. (Render thread only.)
 	// Viewports used: 0 (upscale/keep-alive) and 1 (FSR FG-prepare).
-	// Constants + evaluate, ONCE per display frame per viewport, and never one
-	// without the other:
-	//  * Main_PostProcessing runs more than once per rendered frame; on dev the
-	//    second call was implicitly aborted (its per-evaluate constants set failed
-	//    on the duplicate and the evaluate bailed). Letting a second evaluate run
-	//    feeds NGX/FFX the SAME frame twice (same image, same jitter), corrupting
-	//    their temporal accumulation - shimmer/crawl/judder on every SL upscaler
-	//    and the FSR FG-prepare, while plain TAA is unaffected. First call wins.
-	//  * An evaluate WITHOUT this frame's constants is equally wrong: SL's 3-deep
-	//    ring silently falls back to the LAST SET constants on an exact-match miss,
-	//    so the upscaler would de-jitter with the previous frame's offset. If the
-	//    camera data is invalid this frame (cs_BuildConstants false), skip the
-	//    evaluate too and retry the whole pair next frame - dev parity again.
 	static uint32_t s_evalFrameByVp[2] = { UINT32_MAX, UINT32_MAX };
 	static uint32_t s_constFrameByVp[2] = { UINT32_MAX, UINT32_MAX };
 	const uint32_t vpId = a_viewport;
@@ -937,7 +921,9 @@ void Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_color
 		return;
 
 	auto* dxvk = DxvkInterop::GetSingleton();
-	if (!dxvk->CommandResourcesReady())  // DXVK is a hard requirement (load-time enforced); only the command-pool timing gate remains
+	// DXVK itself is a hard requirement (load-time enforced), so the per-frame SL paths below only gate on
+	// whether the interop command ring is ready yet — a timing check, not a DXVK-availability check.
+	if (!dxvk->CommandResourcesReady())
 		return;
 	// Flush DXVK's pending D3D11 rendering so the interop VkImages are submitted/consistent before SL
 	// records its compute work; SL applies the layout barriers itself from the tagged per-resource state.
@@ -1039,7 +1025,7 @@ void Streamline::EvaluateXeSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_color
 		return;
 
 	auto* dxvk = DxvkInterop::GetSingleton();
-	if (!dxvk->CommandResourcesReady())  // DXVK is a hard requirement (load-time enforced); only the command-pool timing gate remains
+	if (!dxvk->CommandResourcesReady())
 		return;
 	dxvk->FlushRenderingCommands();
 
@@ -1104,7 +1090,7 @@ void Streamline::EvaluateFSR(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorO
 		return;
 
 	auto* dxvk = DxvkInterop::GetSingleton();
-	if (!dxvk->CommandResourcesReady())  // DXVK is a hard requirement (load-time enforced); only the command-pool timing gate remains
+	if (!dxvk->CommandResourcesReady())
 		return;
 	dxvk->FlushRenderingCommands();
 
@@ -1179,7 +1165,7 @@ void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 		return;
 
 	auto* dxvk = DxvkInterop::GetSingleton();
-	if (!dxvk->CommandResourcesReady())  // DXVK is a hard requirement (load-time enforced); only the command-pool timing gate remains
+	if (!dxvk->CommandResourcesReady())
 		return;
 	dxvk->FlushRenderingCommands();
 
@@ -1352,20 +1338,6 @@ void Streamline::LogFSRFrameGenStats()
 	}
 }
 
-bool Streamline::GetDLSSGState(uint64_t& a_vramUsage, uint32_t& a_maxFrames) const
-{
-	if (!initialized || !featureDLSSG)
-		return false;
-
-	sl::DLSSGState state{};
-	const sl::Result res = g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr);
-	if (res != sl::Result::eOk)
-		return false;
-	a_vramUsage = state.estimatedVRAMUsageInBytes;
-	a_maxFrames = state.numFramesToGenerateMax;
-	return state.status == sl::DLSSGStatus::eOk;
-}
-
 void Streamline::QueryDLSSGCapabilities()
 {
 	// slDLSSGGetState must run on the present thread (SL requirement) — CS calls this from its present hook.
@@ -1397,7 +1369,7 @@ bool Streamline::IsDLSSGDynamicSupported() const
 	return g_sl.dlssgDynamicSupported.load(std::memory_order_acquire);
 }
 
-void Streamline::LogDLSSGFrameStats()
+void Streamline::LogReflexStatus()
 {
 	// Throttled (~once/2s) Reflex-status log. We deliberately do NOT call slDLSSGGetState here: the SL header
 	// requires it be called on the PRESENT thread (CS would call it on the render thread → SL logs "slDLSSGGetState
@@ -1429,7 +1401,7 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		return;
 
 	auto* dxvk = DxvkInterop::GetSingleton();
-	if (!dxvk->CommandResourcesReady())  // DXVK is a hard requirement (load-time enforced); only the command-pool timing gate remains
+	if (!dxvk->CommandResourcesReady())
 		return;
 
 	__try {
@@ -1484,7 +1456,7 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 			return c.view;
 		};
 
-		const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out, uint32_t a_w, uint32_t a_h, int a_slot) {
+		const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out, int a_slot) {
 			VkImage image = VK_NULL_HANDLE;
 			VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 			VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
@@ -1492,9 +1464,8 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 				return false;
 			a_out = sl::Resource{ sl::ResourceType::eTex2d, image, nullptr, cachedView(a_slot, image, info.format), static_cast<uint32_t>(layout) };
 			// Resource dimensions = FULL texture size (the VkImage); the valid render sub-rect is the tag Extent.
-			// Reporting the render size (a_w/a_h) told SL/DLSS-G the buffer was render-sized while the VkImage is
+			// Reporting the render size here told SL/DLSS-G the buffer was render-sized while the VkImage is
 			// full-sized -> mis-scaled inputs. info.extent is the real texture size.
-			(void)a_w; (void)a_h;
 			a_out.width = info.extent.width;
 			a_out.height = info.extent.height;
 			a_out.nativeFormat = static_cast<uint32_t>(info.format);
@@ -1506,8 +1477,8 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		};
 
 		sl::Resource depthRes{}, mvecRes{};
-		if (!makeResource(a_depth, depthRes, a_renderWidth, a_renderHeight, 0) ||
-			!makeResource(a_motionVectors, mvecRes, a_renderWidth, a_renderHeight, 1))
+		if (!makeResource(a_depth, depthRes, 0) ||
+			!makeResource(a_motionVectors, mvecRes, 1))
 			return;
 
 		// Motion vectors must carry the SAME dimensions + subrect as depth (DLSS-G dilates MV on the depth
@@ -1538,7 +1509,7 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		displayExtent.width = a_displayWidth;
 		displayExtent.height = a_displayHeight;
 		sl::Resource hudlessRes{};
-		if (a_hudlessColor && makeResource(a_hudlessColor, hudlessRes, a_displayWidth, a_displayHeight, 2))
+		if (a_hudlessColor && makeResource(a_hudlessColor, hudlessRes, 2))
 			tags[tagCount++] = { &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &displayExtent };
 		else
 			// Capture/wrap failed (early frame, SRV not ready, resolution change). Tag a NULL hudless so DLSS-G
@@ -1556,76 +1527,6 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
 		logger::error("[Streamline] DLSS-G tag faulted — disabling for this session");
-	}
-}
-
-void Streamline::TagFSRFGHudless(ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight)
-{
-	if (!initialized || !featureFSR || g_sl.dispatchFaulted)
-		return;
-	if (!a_hudlessColor)
-		return;
-
-	auto* dxvk = DxvkInterop::GetSingleton();
-	if (!dxvk->CommandResourcesReady())  // DXVK is a hard requirement (load-time enforced); only the command-pool timing gate remains
-		return;
-
-	__try {
-		sl::FrameToken* token = RenderFrameToken();
-		if (!token)
-			return;
-
-		VkImage image = VK_NULL_HANDLE;
-		VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-		VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-		if (!dxvk->GetVkImage(a_hudlessColor, &image, &layout, &info) || image == VK_NULL_HANDLE)
-			return;
-
-		VkDevice vkDevice = dxvk->GetDevice();
-		auto& c = g_sl.fsrFgHudlessCache;
-		if (c.image != image || c.view == VK_NULL_HANDLE) {
-			auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
-				dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"));
-			if (c.view != VK_NULL_HANDLE && vkDestroyImageView)
-				vkDestroyImageView(vkDevice, c.view, nullptr);
-			c.view = VK_NULL_HANDLE;
-			c.image = image;
-			auto vkCreateImageView = reinterpret_cast<PFN_vkCreateImageView>(
-				dxvk->GetDeviceProcAddr()(vkDevice, "vkCreateImageView"));
-			if (vkCreateImageView) {
-				VkImageViewCreateInfo ci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-				ci.image = image;
-				ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-				ci.format = info.format;
-				ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-				ci.subresourceRange.levelCount = 1;
-				ci.subresourceRange.layerCount = 1;
-				vkCreateImageView(vkDevice, &ci, nullptr, &c.view);
-			}
-		}
-
-		sl::Resource hudlessRes{ sl::ResourceType::eTex2d, image, nullptr, c.view, static_cast<uint32_t>(layout) };
-		hudlessRes.width = a_renderWidth;
-		hudlessRes.height = a_renderHeight;
-		hudlessRes.nativeFormat = static_cast<uint32_t>(info.format);
-		hudlessRes.mipLevels = info.mipLevels;
-		hudlessRes.arrayLayers = info.arrayLayers;
-		hudlessRes.usage = static_cast<uint32_t>(info.usage);
-
-		sl::Extent extent{ 0, 0, a_renderWidth, a_renderHeight };
-		sl::ResourceTag tags[] = {
-			{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent },
-		};
-
-		VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
-		if (cmd == VK_NULL_HANDLE)
-			return;
-
-		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, static_cast<uint32_t>(std::size(tags)), cmd);
-		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/false);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		g_sl.dispatchFaulted = true;
-		logger::error("[Streamline] FSR FG hudless tag faulted — disabling for this session");
 	}
 }
 
@@ -1653,7 +1554,7 @@ void Streamline::ClearDLSSGTags()
 		// command buffer at the very first present (before the ring exists) — null tags record no work.
 		VkCommandBuffer cmd = VK_NULL_HANDLE;
 		auto* dxvk = DxvkInterop::GetSingleton();
-		if (dxvk->CommandResourcesReady())  // DXVK hard-required; only the command-pool timing gate remains
+		if (dxvk->CommandResourcesReady())
 			cmd = dxvk->BeginFrameCommandBuffer();
 		g_sl.slSetTagForFrame(*token, g_sl.viewport, tags, static_cast<uint32_t>(std::size(tags)), cmd);
 		if (cmd != VK_NULL_HANDLE)

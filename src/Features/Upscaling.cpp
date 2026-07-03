@@ -4269,12 +4269,15 @@ void Upscaling::DrawSettings()
 		if (!globals::game::isVR)
 			return;
 
-		const auto vrRenderScaleStatus = GetVRRenderScaleModeStatus();
 		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
 		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
 		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
 		const bool vrRenderScaleRequested = GetPerfModeRequested();
-		const bool perfModeRelatchPending = pendingPerfModeRenderTargetRecreate.load(std::memory_order_relaxed);
+		const bool perfModeRelatchPending =
+			pendingPerfModeRenderTargetRecreate.load(std::memory_order_relaxed) ||
+			perfModeRenderTargetRecreateInProgress.load(std::memory_order_relaxed) ||
+			postLoadRuntimeResetPending.load(std::memory_order_relaxed) ||
+			HasPendingVRRenderScaleTransition();
 		const bool publicRenderScaleRequested = vrRenderScaleRequested;
 		const bool publicRenderScaleCanEdit =
 			(renderScaleMethodEligible && renderScaleQualitySelected) ||
@@ -4303,7 +4306,12 @@ void Upscaling::DrawSettings()
 			ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
 			ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 		}
-		ImGui::Text("VR Render Scale Status: %s", GetVRRenderScaleModeStatusName(vrRenderScaleStatus));
+		if (perfMode.HasRestartRequiredChange()) {
+			Util::Text::Warning(
+				perfModeRelatchPending ?
+					"Warning: VR Render Scale Mode relatch pending" :
+					"Warning: VR Render Scale Mode relatch scheduled");
+		}
 
 		ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -4313,8 +4321,6 @@ void Upscaling::DrawSettings()
 			ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
 		}
 
-		if (perfMode.HasRestartRequiredChange())
-			Util::Text::Warning(perfModeRelatchPending ? "Warning: VR Render Scale Mode relatch pending" : "Warning: VR Render Scale Mode change requires relatch or restart");
 		if (!renderScaleMethodEligible)
 			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
 

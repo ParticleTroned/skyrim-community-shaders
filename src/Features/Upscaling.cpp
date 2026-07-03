@@ -6830,8 +6830,7 @@ void Upscaling::ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame)
 	const uint32_t resumeFrame = currentFrame + kVRSubmitStageVendorRelatchCooldownFrames;
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	submitStageVendorResumeStartFrame.store(currentFrame, std::memory_order_release);
-	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
-	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+	ClearSubmitStageVendorResumeStability();
 	submitStageVendorResumeFrame.store(resumeFrame, std::memory_order_release);
 	if (emitDiagLogs) {
 		logger::debug(
@@ -6849,8 +6848,14 @@ void Upscaling::ClearSubmitStageVendorResumeCooldown()
 {
 	submitStageVendorResumeFrame.store(0, std::memory_order_release);
 	submitStageVendorResumeStartFrame.store(0, std::memory_order_release);
+	ClearSubmitStageVendorResumeStability();
+}
+
+void Upscaling::ClearSubmitStageVendorResumeStability()
+{
 	submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
 	submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+	submitStageVendorResumeStableEyeMaskState.store(0, std::memory_order_release);
 }
 
 void Upscaling::RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight)
@@ -6884,7 +6889,7 @@ void Upscaling::ClearSubmitStageBoundsFallbackWatchdog()
 	submitStageBoundsFallbackExpectedHeight.store(0, std::memory_order_release);
 }
 
-void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog()
+void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery)
 {
 	if (!globals::game::isVR)
 		return;
@@ -6935,7 +6940,7 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog()
 		return;
 	}
 
-	if (ElapsedFrames(startFrame, currentFrame) < kVRSubmitStageBoundsFallbackWatchdogFrames)
+	if (!a_forceRecovery && ElapsedFrames(startFrame, currentFrame) < kVRSubmitStageBoundsFallbackWatchdogFrames)
 		return;
 
 	const bool postLoadResetPending = postLoadRuntimeResetPending.load(std::memory_order_acquire);
@@ -12453,15 +12458,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 		return false;
 	}
-	const bool submitBoundsPresentationFallback = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
-	const bool submitBoundsFallbackWatchdogRelevant =
-		submitBoundsPresentationFallback &&
+	const bool submitBoundsMismatch = vrRenderScaleMode && !sourceRegion.matchesExpectedSize;
+	const bool submitBoundsGameplayMismatch =
+		submitBoundsMismatch &&
 		!submitPresentationContext &&
 		!currentMenuPresentationContext &&
 		!sceneFeatureMenuPauseContext &&
 		!resolutionPlan.knownMenuContextActive &&
 		!resolutionPlan.menuContextActive;
-	if (submitBoundsFallbackWatchdogRelevant) {
+	const bool submitBoundsPresentationFallback =
+		submitBoundsMismatch &&
+		!submitBoundsGameplayMismatch;
+	if (submitBoundsGameplayMismatch) {
 		RecordSubmitStageBoundsFallback(
 			upscaleMethod,
 			currentFrame,
@@ -12469,7 +12477,24 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			sourceRegion.height,
 			sourceEyeWidthIn,
 			sourceEyeHeightIn);
-	} else if (submitBoundsPresentationFallback) {
+		ServiceSubmitStageBoundsFallbackWatchdog(true);
+		ClearSubmitStageVendorResumeStability();
+		static std::atomic_bool loggedGameplayBoundsBypass{ false };
+		if (!loggedGameplayBoundsBypass.exchange(true, std::memory_order_relaxed)) {
+			logger::warn(
+				"[VRRenderScale] Submit-stage {} bypassed render-scale presentation for non-standard gameplay submit bounds. eye={} source={}x{} actual={}x{} expected={}x{} openVRBounds={}",
+				upscaleMethodName,
+				eyeIndex,
+				sourceDesc.Width,
+				sourceDesc.Height,
+				sourceRegion.width,
+				sourceRegion.height,
+				sourceEyeWidthIn,
+				sourceEyeHeightIn,
+				BoolText(sourceRegion.fromOpenVRBounds));
+		}
+		return false;
+	} else if (submitBoundsMismatch) {
 		ClearSubmitStageBoundsFallbackWatchdog();
 	}
 	const bool transitionProtectionActive = IsVRTransitionPresentationProtectionActive(*this, state);
@@ -12521,24 +12546,44 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			motionVector.texture &&
 			depth.texture;
 		uint32_t stableFrames = submitStageVendorResumeStableFrames.load(std::memory_order_acquire);
+		bool bothEyesStableThisFrame = false;
 		if (cooldownStableCandidate) {
-			const uint32_t lastStableFrame = submitStageVendorResumeLastStableFrame.load(std::memory_order_acquire);
-			if (lastStableFrame != currentFrame) {
-				stableFrames =
-					lastStableFrame != 0 && currentFrame == lastStableFrame + 1 ?
-						stableFrames + 1u :
-						1u;
-				submitStageVendorResumeStableFrames.store(stableFrames, std::memory_order_release);
-				submitStageVendorResumeLastStableFrame.store(currentFrame, std::memory_order_release);
+			const uint32_t eyeMaskBit = 1u << std::min<uint32_t>(eyeIndex, 1u);
+			const uint64_t currentEyeMaskFrame = static_cast<uint64_t>(currentFrame) << 32;
+			uint64_t stableEyeMaskState = submitStageVendorResumeStableEyeMaskState.load(std::memory_order_acquire);
+			uint32_t stableEyeMask = 0;
+			while (true) {
+				const bool sameFrame = static_cast<uint32_t>(stableEyeMaskState >> 32) == currentFrame;
+				const uint64_t desiredState =
+					(sameFrame ? stableEyeMaskState : currentEyeMaskFrame) |
+					static_cast<uint64_t>(eyeMaskBit);
+				if (submitStageVendorResumeStableEyeMaskState.compare_exchange_weak(stableEyeMaskState, desiredState, std::memory_order_acq_rel, std::memory_order_acquire)) {
+					stableEyeMask = static_cast<uint32_t>(desiredState);
+					break;
+				}
+			}
+
+			constexpr uint32_t kBothVREyesMask = 0x3u;
+			if ((stableEyeMask & kBothVREyesMask) == kBothVREyesMask) {
+				bothEyesStableThisFrame = true;
+				const uint32_t lastStableFrame = submitStageVendorResumeLastStableFrame.load(std::memory_order_acquire);
+				if (lastStableFrame != currentFrame) {
+					stableFrames =
+						lastStableFrame != 0 && currentFrame == lastStableFrame + 1 ?
+							stableFrames + 1u :
+							1u;
+					submitStageVendorResumeStableFrames.store(stableFrames, std::memory_order_release);
+					submitStageVendorResumeLastStableFrame.store(currentFrame, std::memory_order_release);
+				}
 			}
 		} else {
 			stableFrames = 0;
-			submitStageVendorResumeStableFrames.store(0, std::memory_order_release);
-			submitStageVendorResumeLastStableFrame.store(0, std::memory_order_release);
+			ClearSubmitStageVendorResumeStability();
 		}
 
 		const uint32_t cooldownStartFrame = submitStageVendorResumeStartFrame.load(std::memory_order_acquire);
 		if (ElapsedFrames(cooldownStartFrame, currentFrame) >= kVRSubmitStageVendorRelatchMinCooldownFrames &&
+			bothEyesStableThisFrame &&
 			stableFrames >= kVRSubmitStageVendorRelatchStableFrames) {
 			ClearSubmitStageVendorResumeCooldown();
 			ClearSubmitStageBoundsFallbackWatchdog();

@@ -745,6 +745,7 @@ public:
 	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeStableFrames{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
+	std::atomic<uint64_t> submitStageVendorResumeStableEyeMaskState{ 0 };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
@@ -909,9 +910,10 @@ private:
 
 	void ArmSubmitStageVendorResumeCooldown(uint32_t a_currentFrame);
 	void ClearSubmitStageVendorResumeCooldown();
+	void ClearSubmitStageVendorResumeStability();
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();
-	void ServiceSubmitStageBoundsFallbackWatchdog();
+	void ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery = false);
 	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame);
 	void ClearSubmitStageFoveatedVendorRetryBackoff();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);

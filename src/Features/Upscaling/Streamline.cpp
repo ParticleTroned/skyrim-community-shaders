@@ -1005,6 +1005,22 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 	cache.dlssPreset = dlssPreset;
 	cache.isHDR = colorBuffersHDR;
 	cache.useLegacyProfile = useLegacyProfile;
+	if (p_viewport == viewport) {
+		activeDLSSViewportResourcesAllocated[0] = true;
+	} else if (p_viewport == viewportRight) {
+		activeDLSSViewportResourcesAllocated[1] = true;
+	} else {
+		for (auto& roleSlots : vrDLSSViewportSlots) {
+			for (auto& slot : roleSlots) {
+				for (uint32_t eye = 0; eye < 2; ++eye) {
+					if (slot.viewport[eye] == p_viewport) {
+						slot.resourcesAllocated[eye] = true;
+						return true;
+					}
+				}
+			}
+		}
+	}
 	return true;
 }
 
@@ -1045,10 +1061,10 @@ int Streamline::ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportR
 	return static_cast<int>(lruSlot);
 }
 
-void Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures)
+bool Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures)
 {
 	if (!slDLSSSetOptions || !slFreeResources)
-		return;
+		return true;
 
 	sl::DLSSOptions dlssOptions{};
 	dlssOptions.mode = sl::DLSSMode::eOff;
@@ -1068,28 +1084,40 @@ void Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32
 			a_eyeIndex,
 			magic_enum::enum_name(freeResult));
 	}
+	return freeResult == sl::Result::eOk;
 }
 
-void Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures)
+bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures)
 {
 	if (slotIndex >= kVRDLSSViewportSlotCount)
-		return;
+		return true;
 
 	const uint32_t roleIndex = GetDLSSViewportRoleIndex(viewportRole);
 	auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
 	if (!slot.valid)
-		return;
+		return true;
 
+	bool slotResourcesFreed = true;
 	for (uint32_t eye = 0; eye < 2; ++eye) {
+		slot.resourcesAllocated[eye] = slot.resourcesAllocated[eye] || slot.optionsCache[eye].valid;
 		const bool shouldLogFailures = logFailures || slot.optionsCache[eye].valid;
-		FreeDLSSViewportResources(slot.viewport[eye], eye, shouldLogFailures);
+		if (slot.resourcesAllocated[eye]) {
+			const bool eyeFreed = FreeDLSSViewportResources(slot.viewport[eye], eye, shouldLogFailures);
+			slotResourcesFreed = eyeFreed && slotResourcesFreed;
+			if (eyeFreed)
+				slot.resourcesAllocated[eye] = false;
+		}
 		slot.optionsCache[eye] = {};
 	}
+
+	if (slot.resourcesAllocated[0] || slot.resourcesAllocated[1])
+		return false;
 
 	slot.valid = false;
 	slot.qualityMode = 0;
 	slot.dlssPreset = 0;
 	slot.lastUse = 0;
+	return slotResourcesFreed;
 }
 
 bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport)
@@ -1124,13 +1152,23 @@ bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::Viewport
 			} else {
 				ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
 			}
-			FreeVRDLSSViewportSlot(viewportRole, static_cast<uint32_t>(slotIndex), true);
+			if (!FreeVRDLSSViewportSlot(viewportRole, static_cast<uint32_t>(slotIndex), true)) {
+				static bool loggedSlotRecycleFreeFailure = false;
+				if (!loggedSlotRecycleFreeFailure) {
+					logger::warn("[Streamline] Deferring VR DLSS evaluate because the viewport slot recycle could not free the previous slot resources.");
+					loggedSlotRecycleFreeFailure = true;
+				}
+				nonVRDLSSOptionsCache.valid = false;
+				return false;
+			}
 		}
 
 		slot.valid = true;
 		slot.qualityMode = clampedQualityMode;
 		slot.dlssPreset = clampedPreset;
 		slot.lastUse = 0;
+		slot.resourcesAllocated[0] = false;
+		slot.resourcesAllocated[1] = false;
 		for (auto& optionsCache : slot.optionsCache)
 			optionsCache = {};
 
@@ -1200,12 +1238,18 @@ bool Streamline::HasDLSSResourcesPendingTeardown() const
 	if (!initialized || !featureDLSS)
 		return false;
 
+	if (activeDLSSViewportResourcesAllocated[0] || activeDLSSViewportResourcesAllocated[1])
+		return true;
+
 	if (nonVRDLSSOptionsCache.valid)
 		return true;
 
 	for (const auto& roleSlots : vrDLSSViewportSlots) {
 		for (const auto& slot : roleSlots) {
 			if (slot.valid)
+				return true;
+
+			if (slot.resourcesAllocated[0] || slot.resourcesAllocated[1])
 				return true;
 
 			for (const auto& optionsCache : slot.optionsCache) {
@@ -1662,6 +1706,7 @@ bool Streamline::DestroyDLSSResources()
 	if (!initialized || !featureDLSS || !slDLSSSetOptions || !slFreeResources) {
 		ResetDLSSIdleFences();
 		InvalidateDLSSOptionsCache();
+		activeDLSSViewportResourcesAllocated = {};
 		ResetFrameTracking();
 		return true;
 	}
@@ -1679,13 +1724,25 @@ bool Streamline::DestroyDLSSResources()
 		ResetDLSSIdleFences();
 	}
 
-	FreeDLSSViewportResources(viewport, 0, true);
+	bool activeViewportResourcesFreed = true;
+	if (activeDLSSViewportResourcesAllocated[0]) {
+		const bool leftFreed = FreeDLSSViewportResources(viewport, 0, true);
+		activeViewportResourcesFreed = leftFreed && activeViewportResourcesFreed;
+		if (leftFreed)
+			activeDLSSViewportResourcesAllocated[0] = false;
+	}
 
 	if (globals::game::isVR) {
-		FreeDLSSViewportResources(viewportRight, 1, true);
+		if (activeDLSSViewportResourcesAllocated[1]) {
+			const bool rightFreed = FreeDLSSViewportResources(viewportRight, 1, true);
+			activeViewportResourcesFreed = rightFreed && activeViewportResourcesFreed;
+			if (rightFreed)
+				activeDLSSViewportResourcesAllocated[1] = false;
+		}
 		for (uint32_t roleIndex = 0; roleIndex < kVRDLSSViewportRoleCount; ++roleIndex) {
 			for (uint32_t slotIndex = 0; slotIndex < kVRDLSSViewportSlotCount; ++slotIndex) {
-				FreeVRDLSSViewportSlot(static_cast<DLSSViewportRole>(roleIndex), slotIndex, false);
+				const bool slotFreed = FreeVRDLSSViewportSlot(static_cast<DLSSViewportRole>(roleIndex), slotIndex, false);
+				activeViewportResourcesFreed = slotFreed && activeViewportResourcesFreed;
 			}
 		}
 	}
@@ -1694,7 +1751,7 @@ bool Streamline::DestroyDLSSResources()
 	InvalidateDLSSOptionsCache();
 	vrDLSSViewportUseCounter = 0;
 	ResetFrameTracking();
-	return true;
+	return activeViewportResourcesFreed;
 }
 
 void Streamline::UpdateReflex()

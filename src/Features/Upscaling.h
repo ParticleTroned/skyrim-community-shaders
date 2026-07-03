@@ -58,7 +58,7 @@ public:
 		Native,
 		VendorDynamicResolution,
 		VRRenderScaleMode,
-		PerfMode = VRRenderScaleMode  // Legacy alias for VRAPI/source compatibility.
+		PerfMode = VRRenderScaleMode  // Legacy alias for older source compatibility.
 	};
 
 	enum class UpscalingOutputTarget : uint8_t
@@ -81,7 +81,8 @@ public:
 	enum class VRUpscalingTransitionOrigin : uint8_t
 	{
 		CSMenu,
-		VRAPI,
+		VRAPI = CSMenu,  // Legacy external API alias; internal recovery uses RecoveryRelatch.
+		RecoveryRelatch,
 		PostLoadSync
 	};
 
@@ -492,7 +493,7 @@ public:
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
@@ -760,10 +761,12 @@ public:
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateFrame{ 0 };
 	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateDelayFrames{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreatePostLoadSettle{ false };
+	std::atomic<uint32_t> pendingPerfModeRenderTargetRecreateOrigin{ static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu) };
 	std::atomic<bool> perfModeRenderTargetRecreateInProgress{ false };
 	std::atomic<bool> perfModeAllowBootLatchCreate{ true };
 	std::atomic<uint32_t> vrRenderScaleNextContractGeneration{ 1 };
 	std::atomic<uint32_t> pendingVRRenderScaleContractGeneration{ 0 };
+	PerfModeState::BootSnapshot pendingVRRenderScaleRecoverySnapshot{};
 	std::atomic<bool> vrDLSSSettingsRelatched{ false };
 	mutable std::atomic_bool submitStageDeviceLost{ false };
 	uint32_t submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
@@ -967,7 +970,7 @@ private:
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
 	void ScheduleVRIntermediateTextureCleanup();
 	void ServiceVRIntermediateTextureCleanup();
-	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true);
+	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);

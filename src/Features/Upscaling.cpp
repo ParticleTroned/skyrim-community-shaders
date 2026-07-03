@@ -136,6 +136,7 @@ namespace
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrRaceSexMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrRaceSexPostLoadProtectionActive{ false };
+	std::atomic_bool g_vrStartupPresentationBypassPending{ true };
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
@@ -304,7 +305,7 @@ namespace
 	bool IsCommunityShadersMenuOpen();
 	bool IsVRMenuBridgeTraceTailActive(const State* a_state);
 	bool IsVRRaceSexRenderScaleProtectionContextActive(const State* a_state);
-	bool ShouldBypassVRRenderScaleStartupRaceSexPresentation(const Upscaling& a_upscaling, const State* a_state);
+	bool ShouldBypassVRRenderScaleStartupPresentation(const Upscaling& a_upscaling, const State* a_state);
 	bool IsVRRenderScaleMenuPreparationContextActive(const State* a_state);
 
 	bool IsRenderDocDllLoaded(bool a_probeProcess)
@@ -2358,7 +2359,7 @@ namespace
 
 	bool IsVRTransitionPresentationProtectionActive(const Upscaling& a_upscaling, const State* a_state)
 	{
-		if (ShouldBypassVRRenderScaleStartupRaceSexPresentation(a_upscaling, a_state))
+		if (ShouldBypassVRRenderScaleStartupPresentation(a_upscaling, a_state))
 			return false;
 
 		return IsVRRenderScaleTransitionSafetyRelevant(a_upscaling) &&
@@ -2912,6 +2913,11 @@ namespace
 		const bool raceSexMenuActive =
 			IsRaceSexMenuContextActive(globals::game::ui) ||
 			IsVRRaceSexMenuEventContextActive(a_state);
+		if (g_vrStartupPresentationBypassPending.load(std::memory_order_acquire) && raceSexMenuActive) {
+			g_vrRaceSexPostLoadProtectionActive.store(true, std::memory_order_release);
+			return true;
+		}
+
 		const bool protectionArmed = g_vrRaceSexPostLoadProtectionActive.load(std::memory_order_acquire);
 		if (!protectionArmed) {
 			if (!raceSexMenuActive || !IsVRRaceSexPostLoadArmWindowActive(a_state))
@@ -2929,10 +2935,23 @@ namespace
 		return active;
 	}
 
-	bool ShouldBypassVRRenderScaleStartupRaceSexPresentation(const Upscaling& a_upscaling, const State* a_state)
+	bool ShouldBypassVRRenderScaleStartupPresentation(const Upscaling& a_upscaling, const State* a_state)
 	{
 		if (!globals::game::isVR || !a_state)
 			return false;
+
+		// Keep visuals on the native/render-scale-off path only for the one-time
+		// startup gap before the first world frame and startup RaceMenu are done.
+		if (g_vrStartupPresentationBypassPending.load(std::memory_order_acquire)) {
+			const bool worldFrameCompleted = HasCompletedVRWorldFrameAfterLatestLoad(a_state);
+			const bool startupRaceSexActive =
+				IsRaceSexMenuContextActive(globals::game::ui) ||
+				IsVRRaceSexMenuEventContextActive(a_state);
+			if (!worldFrameCompleted || startupRaceSexActive) {
+				return true;
+			}
+			g_vrStartupPresentationBypassPending.store(false, std::memory_order_release);
+		}
 
 		if (a_upscaling.IsVRRenderScaleModeLatched())
 			return false;
@@ -12181,12 +12200,12 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenHeight = static_cast<int>(screenSize.y);
 
 	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
-	const bool startupRaceSexRenderScaleVisualBypass =
-		ShouldBypassVRRenderScaleStartupRaceSexPresentation(*this, state);
+	const bool startupPresentationBypass =
+		ShouldBypassVRRenderScaleStartupPresentation(*this, state);
 	const bool vrRenderScaleMenuPresentationContext =
 		globals::game::isVR &&
 		vendorUpscalingMethod &&
-		!startupRaceSexRenderScaleVisualBypass &&
+		!startupPresentationBypass &&
 		IsVRRenderScaleMenuPreparationContextActive(state);
 	EnsureRuntimeResolutionStateCurrent();
 	auto applyFullResolutionPresentation = [&](UpscaleMethod a_upscaleMethod, const char* a_context) {
@@ -12231,7 +12250,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	}
 	if (globals::game::isVR &&
 		vendorUpscalingMethod &&
-		!startupRaceSexRenderScaleVisualBypass &&
+		!startupPresentationBypass &&
 		(IsVRMenuScenePresentationBlockActive() || IsVRLoadingPresentationTailActive(state))) {
 		applyFullResolutionPresentation(
 			upscaleMethod,
@@ -12700,7 +12719,7 @@ void Upscaling::PostDisplay()
 		IsVendorUpscalingMethod(GetRuntimeUpscaleMethod()) &&
 		IsVRMenuPresentationContextActive() &&
 		IsVRRenderScaleTransitionSafetyRelevant(*this) &&
-		!ShouldBypassVRRenderScaleStartupRaceSexPresentation(*this, globals::state);
+		!ShouldBypassVRRenderScaleStartupPresentation(*this, globals::state);
 	if (vrVendorMenu) {
 		PrepareFullResolutionPostProcessing(viewport, true);
 	}
@@ -12866,7 +12885,7 @@ bool Upscaling::ShouldSuppressVRInSceneOverlaySubmit() const
 	if (!globals::game::isVR)
 		return false;
 
-	if (ShouldBypassVRRenderScaleStartupRaceSexPresentation(*this, globals::state))
+	if (ShouldBypassVRRenderScaleStartupPresentation(*this, globals::state))
 		return false;
 
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition())
@@ -15648,16 +15667,16 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::game::isVR &&
 		IsVRLoadingPresentationTailActive(globals::state);
 	const bool vrScenePresentationBlockActive = IsVRMenuScenePresentationBlockActive();
-	const bool startupRaceSexRenderScaleVisualBypass =
-		ShouldBypassVRRenderScaleStartupRaceSexPresentation(upscaling, globals::state);
+	const bool startupPresentationBypass =
+		ShouldBypassVRRenderScaleStartupPresentation(upscaling, globals::state);
 	const bool renderScalePresentationProtection =
 		globals::game::isVR &&
-		!startupRaceSexRenderScaleVisualBypass &&
+		!startupPresentationBypass &&
 		IsVRTransitionPresentationProtectionActive(upscaling, globals::state);
 	const bool menuPresentationContext =
 		vendorMethodSelected &&
 		globals::game::isVR &&
-		!startupRaceSexRenderScaleVisualBypass &&
+		!startupPresentationBypass &&
 		(upscaling.IsVRRenderScaleModeLatched() || renderScalePresentationProtection) &&
 		(vrScenePresentationBlockActive || loadingTransitionTailActive);
 	const bool vendorDynamicResolutionActive =

@@ -84,7 +84,8 @@
                 "ENABLE_SKYRIM_AE": "ON",
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
-                "AUTO_PLUGIN_DEPLOYMENT": "OFF"
+                "AUTO_PLUGIN_DEPLOYMENT": "OFF",
+                "CS_PL_FORK_VERSION": "PL3.15-VR"
             },
             "inherits": "skyrim"
         },
@@ -120,7 +121,8 @@
                 "ENABLE_SKYRIM_AE": "ON",
                 "ENABLE_SKYRIM_SE": "ON",
                 "ENABLE_SKYRIM_VR": "ON",
-                "AUTO_PLUGIN_DEPLOYMENT": "OFF"
+                "AUTO_PLUGIN_DEPLOYMENT": "OFF",
+                "CS_PL_FORK_VERSION": "PL3.15-VR"
             },
             "inherits": "skyrim"
         },
@@ -129,7 +131,8 @@
             "description": "Release configure preset for an AIO output without hidden packaged features.",
             "inherits": "ALL",
             "cacheVariables": {
-                "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON"
+                "AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES": "ON",
+                "CS_PL_FORK_VERSION": "PL3.15-SE"
             }
         }
     ],

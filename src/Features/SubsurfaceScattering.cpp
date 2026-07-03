@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <stdexcept>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
@@ -35,6 +37,7 @@ namespace
 {
 	constexpr float kHumanSkinControlMin = 0.0f;
 	constexpr float kHumanSkinControlMax = 2.0f;
+	constexpr uint32_t kBlurHorizontalTempAllocationRetryFrames = 120;
 
 	template <class TNPC>
 	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
@@ -311,7 +314,31 @@ void SubsurfaceScattering::DrawSSS()
 	const auto sssSize = submitStageSceneDomain ? Util::ConvertToDynamic(globals::state->screenSize, true) : globals::state->screenSize;
 	const auto sssWidth = static_cast<uint32_t>(std::max(1l, std::lround(sssSize.x)));
 	const auto sssHeight = static_cast<uint32_t>(std::max(1l, std::lround(sssSize.y)));
-	EnsureBlurHorizontalTemp(sssWidth, sssHeight);
+
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+	if (!renderer || !context || !blurCB)
+		return;
+
+	if (!EnsureBlurHorizontalTemp(sssWidth, sssHeight, false))
+		return;
+
+	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.SRV || !main.UAV)
+		return;
+
+	auto mask = renderer->GetRuntimeData().renderTargets[MASKS];
+	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
+	auto normal = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
+	if (!mask.SRV || !albedo.SRV || !normal.SRV)
+		return;
+
+	if (!blurHorizontalTemp)
+		return;
+
+	ID3D11UnorderedAccessView* blurUAV = blurHorizontalTemp->uav.get();
+	if (!blurUAV || !blurHorizontalTemp->srv || !blurHorizontalTemp->resource)
+		return;
 
 	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 
@@ -331,23 +358,16 @@ void SubsurfaceScattering::DrawSSS()
 		blurCB->Update(blurCBData);
 	}
 
-	auto renderer = globals::game::renderer;
-	auto context = globals::d3d::context;
 	Util::BindGlobalConstantBuffersForCS(context);
 
 	{
 		ID3D11Buffer* buffer[1] = { blurCB->CB() };
 		context->CSSetConstantBuffers(1, 1, buffer);
 
-		auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		D3D11_TEXTURE2D_DESC mainDesc{};
 		main.texture->GetDesc(&mainDesc);
 
-		auto mask = renderer->GetRuntimeData().renderTargets[MASKS];
-		auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
-		auto normal = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
-
-		ID3D11UnorderedAccessView* uav = blurHorizontalTemp->uav.get();
+		ID3D11UnorderedAccessView* uav = blurUAV;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		ID3D11ShaderResourceView* views[5];
@@ -440,19 +460,57 @@ void SubsurfaceScattering::DrawSSS()
 	context->CSSetShader(shader, nullptr, 0);
 }
 
-void SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height)
+bool SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height, bool a_throwOnFailure)
 {
+	const auto failPrerequisite = [a_throwOnFailure](const char* a_message) {
+		if (a_throwOnFailure)
+			throw std::runtime_error(a_message);
+		return false;
+	};
+
 	auto renderer = globals::game::renderer;
+	if (!renderer)
+		return failPrerequisite("SubsurfaceScattering::EnsureBlurHorizontalTemp missing renderer");
+
 	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.SRV || !main.UAV)
+		return failPrerequisite("SubsurfaceScattering::EnsureBlurHorizontalTemp missing main render target resources");
 
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
+	if (texDesc.Width == 0 || texDesc.Height == 0)
+		return failPrerequisite("SubsurfaceScattering::EnsureBlurHorizontalTemp invalid main render target size");
 
 	a_width = std::clamp(a_width, 1u, texDesc.Width);
 	a_height = std::clamp(a_height, 1u, texDesc.Height);
 
-	if (blurHorizontalTemp && blurHorizontalTemp->desc.Width == a_width && blurHorizontalTemp->desc.Height == a_height)
-		return;
+	if (blurHorizontalTemp &&
+		blurHorizontalTemp->desc.Width == a_width &&
+		blurHorizontalTemp->desc.Height == a_height &&
+		blurHorizontalTemp->resource &&
+		blurHorizontalTemp->srv &&
+		blurHorizontalTemp->uav)
+		return true;
+
+	static uint32_t nextNonThrowingAllocationRetryFrame = 0;
+	static uint32_t lastFailedWidth = 0;
+	static uint32_t lastFailedHeight = 0;
+	static bool loggedAllocationFailure = false;
+	const auto handleAllocationFailure = [&]() {
+		if (const auto state = globals::state)
+			nextNonThrowingAllocationRetryFrame = state->frameCount + kBlurHorizontalTempAllocationRetryFrames;
+		lastFailedWidth = a_width;
+		lastFailedHeight = a_height;
+		return false;
+	};
+	if (!a_throwOnFailure) {
+		const auto state = globals::state;
+		if (state &&
+			state->frameCount < nextNonThrowingAllocationRetryFrame &&
+			lastFailedWidth == a_width &&
+			lastFailedHeight == a_height)
+			return false;
+	}
 
 	texDesc.Width = a_width;
 	texDesc.Height = a_height;
@@ -464,10 +522,35 @@ void SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a
 	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 	main.UAV->GetDesc(&uavDesc);
 
-	delete blurHorizontalTemp;
-	blurHorizontalTemp = new Texture2D(texDesc, "SubsurfaceScattering::BlurHorizontalTemp");
-	blurHorizontalTemp->CreateSRV(srvDesc);
-	blurHorizontalTemp->CreateUAV(uavDesc);
+	try {
+		auto replacement = std::make_unique<Texture2D>(texDesc, "SubsurfaceScattering::BlurHorizontalTemp");
+		replacement->CreateSRV(srvDesc);
+		replacement->CreateUAV(uavDesc);
+
+		delete blurHorizontalTemp;
+		blurHorizontalTemp = replacement.release();
+		nextNonThrowingAllocationRetryFrame = 0;
+		lastFailedWidth = 0;
+		lastFailedHeight = 0;
+		loggedAllocationFailure = false;
+		return true;
+	} catch (const std::exception& e) {
+		if (a_throwOnFailure)
+			throw;
+		if (!loggedAllocationFailure) {
+			logger::warn("[SSS] Skipping subsurface scattering because the blur temporary texture could not be allocated: {}", e.what());
+			loggedAllocationFailure = true;
+		}
+		return handleAllocationFailure();
+	} catch (...) {
+		if (a_throwOnFailure)
+			throw;
+		if (!loggedAllocationFailure) {
+			logger::warn("[SSS] Skipping subsurface scattering because the blur temporary texture could not be allocated.");
+			loggedAllocationFailure = true;
+		}
+		return handleAllocationFailure();
+	}
 }
 
 void SubsurfaceScattering::SetupResources()
@@ -487,12 +570,26 @@ void SubsurfaceScattering::SetupResources()
 	}
 
 	auto renderer = globals::game::renderer;
+	if (!renderer)
+		return;
+
+	static bool loggedMissingMainTarget = false;
 	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!main.texture || !main.SRV || !main.UAV) {
+		delete blurHorizontalTemp;
+		blurHorizontalTemp = nullptr;
+		if (!loggedMissingMainTarget) {
+			logger::warn("[SSS] Skipping setup because kMAIN is unavailable after render-target recreation.");
+			loggedMissingMainTarget = true;
+		}
+		return;
+	}
+	loggedMissingMainTarget = false;
 
 	D3D11_TEXTURE2D_DESC texDesc{};
 	main.texture->GetDesc(&texDesc);
 
-	EnsureBlurHorizontalTemp(texDesc.Width, texDesc.Height);
+	EnsureBlurHorizontalTemp(texDesc.Width, texDesc.Height, false);
 }
 
 void SubsurfaceScattering::SetupRenderTargetResources()

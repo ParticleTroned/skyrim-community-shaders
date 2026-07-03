@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #pragma warning(push)
@@ -804,7 +805,20 @@ void ScreenSpaceShadows::SetupResources()
 
 	{
 		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return;
+
+		static bool loggedMissingShadowMask = false;
+		static bool loggedShadowResourceAllocationFailure = false;
 		auto shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+		if (!shadowMask.texture || !shadowMask.SRV) {
+			if (!loggedMissingShadowMask) {
+				logger::warn("[ScreenSpaceShadows] Skipping setup because kSHADOW_MASK is unavailable after render-target recreation.");
+				loggedMissingShadowMask = true;
+			}
+			return;
+		}
+		loggedMissingShadowMask = false;
 
 		D3D11_TEXTURE2D_DESC texDesc{};
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -822,14 +836,34 @@ void ScreenSpaceShadows::SetupResources()
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
-		screenSpaceShadowsTexture = new Texture2D(texDesc);
-		screenSpaceShadowsTexture->CreateSRV(srvDesc);
-		screenSpaceShadowsTexture->CreateUAV(uavDesc);
 
-		if (globals::game::isVR) {
-			stereoSyncCopyTex = new Texture2D(texDesc);
-			stereoSyncCopyTex->CreateSRV(srvDesc);
-			stereoSyncCopyTex->CreateUAV(uavDesc);
+		try {
+			auto screenSpaceShadowsReplacement = std::make_unique<Texture2D>(texDesc);
+			screenSpaceShadowsReplacement->CreateSRV(srvDesc);
+			screenSpaceShadowsReplacement->CreateUAV(uavDesc);
+
+			std::unique_ptr<Texture2D> stereoSyncCopyReplacement;
+			if (globals::game::isVR) {
+				stereoSyncCopyReplacement = std::make_unique<Texture2D>(texDesc);
+				stereoSyncCopyReplacement->CreateSRV(srvDesc);
+				stereoSyncCopyReplacement->CreateUAV(uavDesc);
+			}
+
+			screenSpaceShadowsTexture = screenSpaceShadowsReplacement.release();
+			stereoSyncCopyTex = stereoSyncCopyReplacement.release();
+			loggedShadowResourceAllocationFailure = false;
+		} catch (const std::exception& e) {
+			if (!loggedShadowResourceAllocationFailure) {
+				logger::warn("[ScreenSpaceShadows] Skipping setup because shadow resources could not be allocated after render-target recreation: {}", e.what());
+				loggedShadowResourceAllocationFailure = true;
+			}
+			return;
+		} catch (...) {
+			if (!loggedShadowResourceAllocationFailure) {
+				logger::warn("[ScreenSpaceShadows] Skipping setup because shadow resources could not be allocated after render-target recreation.");
+				loggedShadowResourceAllocationFailure = true;
+			}
+			return;
 		}
 	}
 }

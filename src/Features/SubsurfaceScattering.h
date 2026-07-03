@@ -109,7 +109,7 @@ public:
 	float3 Gaussian(DiffusionProfile& a_profile, float variance, float r);
 	float3 Profile(DiffusionProfile& a_profile, float r);
 	void CalculateKernel(DiffusionProfile& a_profile, Kernel& kernel);
-	void EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height);
+	bool EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height, bool a_throwOnFailure = true);
 
 	void DrawSSS();
 

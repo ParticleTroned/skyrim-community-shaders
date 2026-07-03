@@ -149,9 +149,11 @@ namespace
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
-	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = 1800;
+	constexpr uint32_t kVRRapidRenderScaleFlipWindowFrames = 1800;
+	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = kVRRapidRenderScaleFlipWindowFrames;
 	constexpr uint32_t kVRDLSSRapidTransitionGuardFrames = 180;
 	constexpr uint32_t kVRDLSSRapidTransitionCleanEyeMask = 0x3u;
+	constexpr uint32_t kVRFpsStabilizerLowPeakRelatchMinFlipCount = 2u;
 
 	bool ShouldEmitUpscalingDiagLogs()
 	{
@@ -6027,6 +6029,7 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		target.dlssPreset,
 		BoolText(IsRenderScaleModeRequested()),
 		BoolText(target.renderScaleMode));
+	vrFpsStabilizerProfileApplyFrame.store(state ? std::max(state->frameCount, 1u) : queuedFrame, std::memory_order_release);
 	ApplyCSMenuUpscalingTransition(
 		target.method,
 		target.renderScaleMode,
@@ -6854,7 +6857,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			previousBootSnapshot.valid &&
 			previousBootSnapshot.active &&
 			previousBootSnapshot.method == UpscaleMethod::kDLSS;
+		const uint32_t relatchQualityMode = ClampQualityModeUInt(relatchSettings.qualityMode);
+		const bool relatchTargetRenderScaleActive = authoritativeRelatchActivationTarget;
+		const bool lowPeakStabilizerRelatch = RecordVRFpsStabilizerLowPeakRelatch(
+			previousRenderScaleActive,
+			relatchTargetRenderScaleActive,
+			relatchOrigin,
+			state->frameCount,
+			relatchContractGeneration);
 		const bool preserveDLSSResourcesForRelatch =
+			!lowPeakStabilizerRelatch &&
 			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
 			previousBootWasActiveDLSS &&
 			!pendingDLSSResetForRelatch;
@@ -6862,8 +6874,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			pendingDLSSResetForRelatch ||
 			(!preserveDLSSResourcesForRelatch &&
 				(relatchUpscaleMethod == UpscaleMethod::kDLSS || previousBootWasActiveDLSS));
-		const uint32_t relatchQualityMode = ClampQualityModeUInt(relatchSettings.qualityMode);
-		const bool relatchTargetRenderScaleActive = authoritativeRelatchActivationTarget;
 		const float relatchRenderScale = relatchTargetRenderScaleActive ? GetQualityModeResolutionScale(relatchQualityMode) : 1.0f;
 		auto scaleRelatchDimension = [](uint32_t a_dimension, float a_scale) {
 			if (!a_dimension || !std::isfinite(a_scale))
@@ -6903,7 +6913,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				plannedRelatchDisplaySize);
 		const bool forceFSRResourceRecreateForRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			(amdAdapterForRelatch ||
+			(lowPeakStabilizerRelatch ||
+				amdAdapterForRelatch ||
 				(relatchTargetRenderScaleActive && plannedRelatchWillResizeRenderTargets));
 		const auto canPreserveFSRResourcesForRelatch = [&]() {
 			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
@@ -6953,10 +6964,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} preserveDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} lowPeakStabilizer={} amd={} preserveDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
+				BoolText(lowPeakStabilizerRelatch),
 				BoolText(amdAdapterForRelatch),
 				BoolText(preserveDLSSResourcesForRelatch),
 				BoolText(destroyDLSSResourcesForRelatch),
@@ -6977,11 +6989,14 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(ClampToggleUInt(relatchSettings.renderScaleMode) != 0),
 				BoolText(ClampToggleUInt(relatchSettings.perfMode) != 0));
 		}
-		if (!ResetVRVendorRuntimeResources(
-				destroyDLSSResourcesForRelatch,
-				true,
-				!preserveFSRResourcesForRelatch,
-				forceSynchronousFSRTeardownForRelatch)) {
+		if (lowPeakStabilizerRelatch)
+			ReleaseVRFpsStabilizerLowPeakRelatchResources("before-vendor-reset");
+		const bool vendorRuntimeReset = ResetVRVendorRuntimeResources(
+			destroyDLSSResourcesForRelatch,
+			true,
+			!preserveFSRResourcesForRelatch,
+			forceSynchronousFSRTeardownForRelatch);
+		if (!vendorRuntimeReset) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
 				clearRelatchRetryLogs();
@@ -7487,6 +7502,88 @@ void Upscaling::RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_cur
 		BoolText(a_currentActive),
 		currentFrame,
 		guardEndFrame);
+}
+
+bool Upscaling::RecordVRFpsStabilizerLowPeakRelatch(bool a_previousActive, bool a_currentActive, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame, uint32_t a_generation)
+{
+	if (!globals::game::isVR)
+		return false;
+
+	const uint32_t currentFrame = std::max(a_frame, 1u);
+	const uint32_t stabilizerApplyFrame = vrFpsStabilizerProfileApplyFrame.load(std::memory_order_acquire);
+	const bool stabilizerScopedRelatch =
+		a_origin == VRUpscalingTransitionOrigin::PostLoadSync &&
+		stabilizerApplyFrame != 0 &&
+		currentFrame >= stabilizerApplyFrame &&
+		currentFrame - stabilizerApplyFrame <= kVRRapidRenderScaleFlipWindowFrames;
+	if (stabilizerScopedRelatch)
+		vrFpsStabilizerProfileApplyFrame.store(0, std::memory_order_release);
+	if (!stabilizerScopedRelatch || a_previousActive == a_currentActive) {
+		vrFpsStabilizerRapidRenderScaleFlipFrame.store(0, std::memory_order_release);
+		vrFpsStabilizerRapidRenderScaleFlipCount.store(0, std::memory_order_release);
+		vrFpsStabilizerLowPeakRelatchKey.store(0, std::memory_order_release);
+		return false;
+	}
+
+	const uint32_t generation = std::max(a_generation, 1u);
+	const uint64_t relatchKey = (static_cast<uint64_t>(generation) << 1) | (a_currentActive ? 1ull : 0ull);
+	if (vrFpsStabilizerLowPeakRelatchKey.load(std::memory_order_acquire) == relatchKey)
+		return true;
+	if (vrFpsStabilizerRapidRenderScaleRecordedRelatchKey.load(std::memory_order_acquire) == relatchKey)
+		return false;
+
+	vrFpsStabilizerRapidRenderScaleRecordedRelatchKey.store(relatchKey, std::memory_order_release);
+
+	const uint32_t previousFlipFrame = vrFpsStabilizerRapidRenderScaleFlipFrame.load(std::memory_order_acquire);
+	const bool rapidFlip =
+		previousFlipFrame != 0 &&
+		currentFrame >= previousFlipFrame &&
+		currentFrame - previousFlipFrame <= kVRRapidRenderScaleFlipWindowFrames;
+	const uint32_t previousFlipCount = vrFpsStabilizerRapidRenderScaleFlipCount.load(std::memory_order_acquire);
+	const uint32_t flipCount = rapidFlip ? std::min(previousFlipCount + 1u, 255u) : 1u;
+	vrFpsStabilizerRapidRenderScaleFlipFrame.store(currentFrame, std::memory_order_release);
+	vrFpsStabilizerRapidRenderScaleFlipCount.store(flipCount, std::memory_order_release);
+
+	if (flipCount < kVRFpsStabilizerLowPeakRelatchMinFlipCount) {
+		vrFpsStabilizerLowPeakRelatchKey.store(0, std::memory_order_release);
+		return false;
+	}
+
+	vrFpsStabilizerLowPeakRelatchKey.store(relatchKey, std::memory_order_release);
+	logger::debug(
+		"[VRRenderScale] Using low-peak memory relatch for rapid VR FPS Stabilizer render-scale flip {}. previousActive={} currentActive={} generation={} frame={}",
+		flipCount,
+		BoolText(a_previousActive),
+		BoolText(a_currentActive),
+		generation,
+		currentFrame);
+	return true;
+}
+
+void Upscaling::ReleaseVRFpsStabilizerLowPeakRelatchResources(const char* a_phase)
+{
+	if (!globals::game::isVR)
+		return;
+
+	const bool hadCachedIntermediates = HasVRIntermediateTextureCache(cachedVRIntermediateTextures);
+	const size_t retiredSetCountBeforeCleanup = retiredVRIntermediateTextures.size();
+	ServiceVRIntermediateTextureCleanup();
+	const size_t retiredSetCountAfterCleanup = retiredVRIntermediateTextures.size();
+	if (!hadCachedIntermediates &&
+		retiredSetCountAfterCleanup == retiredSetCountBeforeCleanup)
+		return;
+
+	InvalidateFrameScopedUpscalingState();
+	ClearVRIntermediateTextureCache(cachedVRIntermediateTextures);
+
+	if (ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][Diag] Released optional VR intermediate cache for low-peak Stabilizer relatch phase={} cached={} retiredSetsBeforeCleanup={} retiredSetsAfterCleanup={}",
+			a_phase && *a_phase ? a_phase : "unknown",
+			BoolText(hadCachedIntermediates),
+			retiredSetCountBeforeCleanup,
+			retiredSetCountAfterCleanup);
+	}
 }
 
 bool Upscaling::ShouldBypassVRDLSSFoveatedForRapidTransition()

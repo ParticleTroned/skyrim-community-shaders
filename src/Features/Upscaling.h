@@ -800,6 +800,11 @@ public:
 	std::atomic<uint32_t> vrDLSSRapidTransitionGuardEndFrame{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidTransitionCleanEyeMask{ 0 };
 	std::atomic_bool vrDLSSRapidTransitionGuardLogged{ false };
+	std::atomic<uint32_t> vrFpsStabilizerProfileApplyFrame{ 0 };
+	std::atomic<uint32_t> vrFpsStabilizerRapidRenderScaleFlipFrame{ 0 };
+	std::atomic<uint32_t> vrFpsStabilizerRapidRenderScaleFlipCount{ 0 };
+	std::atomic<uint64_t> vrFpsStabilizerRapidRenderScaleRecordedRelatchKey{ 0 };
+	std::atomic<uint64_t> vrFpsStabilizerLowPeakRelatchKey{ 0 };
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
@@ -819,6 +824,8 @@ public:
 	void CompleteVRRenderScaleInfoTransition(const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
 	void ClearVRRenderScaleInfoTransition();
 	void RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_currentActive, UpscaleMethod a_previousMethod, UpscaleMethod a_currentMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
+	bool RecordVRFpsStabilizerLowPeakRelatch(bool a_previousActive, bool a_currentActive, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame, uint32_t a_generation);
+	void ReleaseVRFpsStabilizerLowPeakRelatchResources(const char* a_phase);
 	bool ShouldBypassVRDLSSFoveatedForRapidTransition();
 	void ClearVRDLSSRapidTransitionGuard();
 	uint32_t GetEffectiveUpscalingQualityMode() const;

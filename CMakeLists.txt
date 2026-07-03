@@ -82,11 +82,28 @@ else()
     set(GIT_DESCRIBE "unknown")
 endif()
 message("\tBuild version: ${GIT_DESCRIBE}")
+set(_CS_PL_FORK_VERSION_DEFAULT "PL3.15-VR")
+set(_CS_PL_FORK_VERSION_FORCE OFF)
+if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
+    set(_CS_PL_FORK_VERSION_DEFAULT "PL3.15-SE")
+    set(_CS_PL_FORK_VERSION_FORCE ON)
+elseif(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\](ALL|ALL-VS2022|ALL-TRACY)$]])
+    set(_CS_PL_FORK_VERSION_DEFAULT "PL3.15-VR")
+    set(_CS_PL_FORK_VERSION_FORCE ON)
+endif()
 set(CS_PL_FORK_VERSION
-    "PL3.15-VR"
+    "${_CS_PL_FORK_VERSION_DEFAULT}"
     CACHE STRING
     "Display version label for the Particle Lights fork."
 )
+if(_CS_PL_FORK_VERSION_FORCE)
+    set(CS_PL_FORK_VERSION
+        "${_CS_PL_FORK_VERSION_DEFAULT}"
+        CACHE STRING
+        "Display version label for the Particle Lights fork."
+        FORCE
+    )
+endif()
 message("\tParticle Lights fork version: ${CS_PL_FORK_VERSION}")
 
 # #######################################################################################################################

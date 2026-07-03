@@ -6883,12 +6883,31 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchTargetRenderScaleActive ?
 				scaleRelatchDimension(perfMode.trueHMDEyeHeight, relatchRenderScale) :
 				perfMode.trueHMDEyeHeight;
-		const bool forceFSRResourceRecreateForAMDRelatch =
+		const float2 plannedRelatchDisplaySize{
+			static_cast<float>(perfMode.trueHMDEyeWidth * 2u),
+			static_cast<float>(perfMode.trueHMDEyeHeight)
+		};
+		const float2 plannedRelatchEngineSize{
+			static_cast<float>(relatchTargetRenderEyeWidth * 2u),
+			static_cast<float>(relatchTargetRenderEyeHeight)
+		};
+		const bool plannedRelatchSizeKnown =
+			perfMode.trueHMDEyeWidth != 0 &&
+			perfMode.trueHMDEyeHeight != 0 &&
+			relatchTargetRenderEyeWidth != 0 &&
+			relatchTargetRenderEyeHeight != 0;
+		const bool plannedRelatchWillResizeRenderTargets =
+			plannedRelatchSizeKnown &&
+			!AreVRRenderScaleRenderTargetsSizedForDimensions(
+				relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
+				plannedRelatchDisplaySize);
+		const bool forceFSRResourceRecreateForRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
-			amdAdapterForRelatch;
+			(amdAdapterForRelatch ||
+				(relatchTargetRenderScaleActive && plannedRelatchWillResizeRenderTargets));
 		const auto canPreserveFSRResourcesForRelatch = [&]() {
 			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
-				forceFSRResourceRecreateForAMDRelatch ||
+				forceFSRResourceRecreateForRelatch ||
 				pendingFSRReset.load(std::memory_order_acquire) ||
 				!fidelityFX.HasFSRResources() ||
 				!perfMode.trueHMDEyeWidth ||
@@ -6909,17 +6928,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchTargetRenderScaleActive &&
 			!preserveFSRResourcesForRelatch;
 		const bool recreateFSRResourcesDuringRelatch =
-			(forceFSRResourceRecreateForAMDRelatch || missingCompatibleFSRResourcesForActiveRelatch) &&
+			(forceFSRResourceRecreateForRelatch || missingCompatibleFSRResourcesForActiveRelatch) &&
 			!preserveFSRResourcesForRelatch;
-		// AMD off-relatches are the observed crash window: tearing down the
-		// active FSR runtime and recreating native RTs must be fully serialized.
-		const bool forceSynchronousFSRTeardownForAMDNativeRestore =
-			amdAdapterForRelatch &&
-			previousBootSnapshot.valid &&
-			previousBootSnapshot.active &&
-			previousBootSnapshot.method == UpscaleMethod::kFSR &&
-			!relatchTargetRenderScaleActive &&
-			!preserveFSRResourcesForRelatch;
+		const bool fsrResourcesNeedTeardownForRelatch = fidelityFX.HasFSRResourcesPendingTeardown();
+		// FSR contexts are large in VR. Serialize forced relatch teardown so D3D
+		// render-target recreation does not race peak allocation pressure.
+		const bool forceSynchronousFSRTeardownForRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			!preserveFSRResourcesForRelatch &&
+			fsrResourcesNeedTeardownForRelatch;
 		if (emitDiagLogs) {
 			const auto relatchDiagDisplaySize =
 				perfMode.trueHMDEyeWidth && perfMode.trueHMDEyeHeight ?
@@ -6943,10 +6960,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(amdAdapterForRelatch),
 				BoolText(preserveDLSSResourcesForRelatch),
 				BoolText(destroyDLSSResourcesForRelatch),
-				BoolText(forceFSRResourceRecreateForAMDRelatch),
+				BoolText(forceFSRResourceRecreateForRelatch),
 				BoolText(missingCompatibleFSRResourcesForActiveRelatch),
 				BoolText(preserveFSRResourcesForRelatch),
-				BoolText(forceSynchronousFSRTeardownForAMDNativeRestore),
+				BoolText(forceSynchronousFSRTeardownForRelatch),
 				BoolText(pendingDLSSResetForRelatch),
 				BoolText(pendingFSRReset.load(std::memory_order_acquire)),
 				BoolText(relatchTargetRenderScaleActive),
@@ -6964,7 +6981,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				destroyDLSSResourcesForRelatch,
 				true,
 				!preserveFSRResourcesForRelatch,
-				forceSynchronousFSRTeardownForAMDNativeRestore)) {
+				forceSynchronousFSRTeardownForRelatch)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
 				clearRelatchRetryLogs();
@@ -7042,8 +7059,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		if (relatchUpscaleMethod == UpscaleMethod::kFSR && emitDiagLogs) {
 			logger::debug(
-				"[VRRenderScale][Diag] FSR relatch recreate result forceAMD={} immediateRecreate={} recreated={} deferredReset={} targetRender={}x{} targetDisplay={}x{}",
-				BoolText(forceFSRResourceRecreateForAMDRelatch),
+				"[VRRenderScale][Diag] FSR relatch recreate result forceRecreate={} amd={} immediateRecreate={} recreated={} deferredReset={} targetRender={}x{} targetDisplay={}x{}",
+				BoolText(forceFSRResourceRecreateForRelatch),
+				BoolText(amdAdapterForRelatch),
 				BoolText(recreateFSRResourcesDuringRelatch),
 				BoolText(fsrResourcesRecreatedDuringRelatch),
 				BoolText(fsrRelatchNeedsDeferredReset),

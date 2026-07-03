@@ -410,8 +410,8 @@ void ScreenSpaceShadows::DrawShadows()
 			}
 		}
 
-			dynamicRes.x = std::clamp(dynamicRes.x, 0.25f, 2.0f);
-			dynamicRes.y = std::clamp(dynamicRes.y, 0.25f, 2.0f);
+		dynamicRes.x = std::clamp(dynamicRes.x, 0.25f, 2.0f);
+		dynamicRes.y = std::clamp(dynamicRes.y, 0.25f, 2.0f);
 	}
 
 	auto* raymarchLeft = GetComputeRaymarch();
@@ -537,8 +537,14 @@ void ScreenSpaceShadows::DrawShadows()
 
 void ScreenSpaceShadows::DrawStereoSync()
 {
-	if (!globals::game::isVR || !enableStereoSync || !stereoSyncCopyTex || !stereoSyncCB)
+	if (!globals::game::isVR ||
+		!enableStereoSync ||
+		!stereoSyncCopyTex ||
+		!stereoSyncCopyTex->resource ||
+		!stereoSyncCopyTex->srv ||
+		!stereoSyncCB) {
 		return;
+	}
 
 	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
 	if (stereoSyncCS && stereoSyncUsesTerrainBlendingDepth != useTerrainBlendingDepth) {
@@ -698,6 +704,22 @@ void ScreenSpaceShadows::DrawStereoSync()
 void ScreenSpaceShadows::Prepass()
 {
 	auto context = globals::d3d::context;
+	if (!context)
+		return;
+
+	auto clearOutputView = [&] {
+		ID3D11ShaderResourceView* view = nullptr;
+		context->PSSetShaderResources(45, 1, &view);
+	};
+	if (!screenSpaceShadowsTexture ||
+		!screenSpaceShadowsTexture->resource ||
+		!screenSpaceShadowsTexture->uav ||
+		!screenSpaceShadowsTexture->srv ||
+		!raymarchCB ||
+		!pointBorderSampler) {
+		clearOutputView();
+		return;
+	}
 
 	float white[4] = { 1, 1, 1, 1 };
 	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
@@ -746,13 +768,13 @@ void ScreenSpaceShadows::SetupResources()
 	}
 
 	delete raymarchCB;
+	raymarchCB = nullptr;
 	raymarchCB = new ConstantBuffer(ConstantBufferDesc<RaymarchCB>());
 
 	delete stereoSyncCB;
+	stereoSyncCB = nullptr;
 	if (globals::game::isVR) {
 		stereoSyncCB = new ConstantBuffer(ConstantBufferDesc<StereoSyncCB>());
-	} else {
-		stereoSyncCB = nullptr;
 	}
 
 	if (pointBorderSampler) {

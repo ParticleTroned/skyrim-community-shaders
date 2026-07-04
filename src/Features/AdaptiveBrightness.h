@@ -16,14 +16,14 @@ namespace RE
 	class TESForm;
 }
 
-struct AdaptiveBalance : Feature
+struct AdaptiveBrightness : Feature
 {
-	static constexpr std::string_view kFeatureName = "Adaptive Balance";
-	static constexpr std::string_view kFeatureShortName = "AdaptiveBalance";
+	static constexpr std::string_view kFeatureName = "Adaptive Brightness";
+	static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
 
-	static AdaptiveBalance* GetSingleton()
+	static AdaptiveBrightness* GetSingleton()
 	{
-		static AdaptiveBalance singleton;
+		static AdaptiveBrightness singleton;
 		return &singleton;
 	}
 

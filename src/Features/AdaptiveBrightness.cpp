@@ -1,4 +1,4 @@
-#include "AdaptiveBalance.h"
+#include "AdaptiveBrightness.h"
 
 #include "LocationContext.h"
 #include "State.h"
@@ -26,7 +26,7 @@
 #include <utility>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	AdaptiveBalance::ProfileSettings,
+	AdaptiveBrightness::ProfileSettings,
 	brightness,
 	advanced,
 	directionalLightMult,
@@ -42,7 +42,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	vlGammaOffset)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	AdaptiveBalance::LocationOverride,
+	AdaptiveBrightness::LocationOverride,
 	key,
 	name,
 	type,
@@ -50,7 +50,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	profile)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	AdaptiveBalance::Settings,
+	AdaptiveBrightness::Settings,
 	enabled,
 	dayStartHour,
 	nightStartHour,
@@ -65,9 +65,9 @@ namespace
 	constexpr float kGammaOffsetMin = -1.0f;
 	constexpr float kGammaOffsetMax = 1.0f;
 
-	using Profile = AdaptiveBalance::Profile;
+	using Profile = AdaptiveBrightness::Profile;
 
-	constexpr std::array<Profile, AdaptiveBalance::kProfileCount> kProfileOrder{
+	constexpr std::array<Profile, AdaptiveBrightness::kProfileCount> kProfileOrder{
 		Profile::ExteriorDay,
 		Profile::ExteriorNight,
 		Profile::Interior,
@@ -75,7 +75,7 @@ namespace
 		Profile::Dwelling
 	};
 
-	constexpr std::array<const char*, AdaptiveBalance::kProfileCount> kProfileNames{
+	constexpr std::array<const char*, AdaptiveBrightness::kProfileCount> kProfileNames{
 		"Exterior Day",
 		"Exterior Night",
 		"Interior",
@@ -88,9 +88,9 @@ namespace
 	constexpr const char* kPresetVersion = "1.0.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
-	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBalance_Global";
-	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBalance_LocationOverrides";
-	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBalance_Full";
+	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBrightness_Global";
+	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBrightness_LocationOverrides";
+	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBrightness_Full";
 	constexpr const char* kImportedChangesSaveHint =
 		"Import changes the current settings immediately, but those changes are not saved automatically. Use the main Save Settings button to keep them after closing the game.";
 	constexpr const char* kImportedChangesSaveStatusSuffix = " Use Save Settings to keep these changes after closing the game.";
@@ -120,7 +120,7 @@ namespace
 		return std::clamp(
 			static_cast<std::size_t>(a_profile),
 			static_cast<std::size_t>(0),
-			AdaptiveBalance::kProfileCount - 1);
+			AdaptiveBrightness::kProfileCount - 1);
 	}
 
 	float SafeFinite(float a_value, float a_fallback)
@@ -213,12 +213,12 @@ namespace
 	{
 		switch (a_kind) {
 		case PresetKind::Global:
-			return AdaptiveBalance::kDefaultGlobalPresetName;
+			return AdaptiveBrightness::kDefaultGlobalPresetName;
 		case PresetKind::Full:
-			return AdaptiveBalance::kDefaultFullPresetName;
+			return AdaptiveBrightness::kDefaultFullPresetName;
 		case PresetKind::Location:
 		default:
-			return AdaptiveBalance::kDefaultLocationOverridePresetName;
+			return AdaptiveBrightness::kDefaultLocationOverridePresetName;
 		}
 	}
 
@@ -282,7 +282,7 @@ namespace
 	{
 		// Keep exported presets outside the live Overrides folder so sharing a preset
 		// does not implicitly turn it into an active feature override on next load.
-		return Util::PathHelpers::GetCommunityShaderPath() / AdaptiveBalance::kFeatureShortName.data() / "Presets";
+		return Util::PathHelpers::GetCommunityShaderPath() / AdaptiveBrightness::kFeatureShortName.data() / "Presets";
 	}
 
 	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind)
@@ -420,7 +420,7 @@ namespace
 		}
 	}
 
-	void ClampProfileSettings(AdaptiveBalance::ProfileSettings& a_profile)
+	void ClampProfileSettings(AdaptiveBrightness::ProfileSettings& a_profile)
 	{
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
@@ -436,13 +436,13 @@ namespace
 		a_profile.vlGammaOffset = ClampGammaOffset(a_profile.vlGammaOffset);
 	}
 
-	void NormalizeBaseProfiles(std::array<AdaptiveBalance::ProfileSettings, AdaptiveBalance::kProfileCount>& a_profiles)
+	void NormalizeBaseProfiles(std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>& a_profiles)
 	{
 		for (auto& profile : a_profiles)
 			ClampProfileSettings(profile);
 	}
 
-	void NormalizeExteriorTimeSettings(AdaptiveBalance::Settings& a_settings)
+	void NormalizeExteriorTimeSettings(AdaptiveBrightness::Settings& a_settings)
 	{
 		a_settings.dayStartHour = WrapHour(a_settings.dayStartHour);
 		a_settings.nightStartHour = WrapHour(a_settings.nightStartHour);
@@ -468,7 +468,7 @@ namespace
 	json MakePresetMetadata(std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
-			{ "feature", AdaptiveBalance::kFeatureShortName.data() },
+			{ "feature", AdaptiveBrightness::kFeatureShortName.data() },
 			{ "modName", GetPresetModName(a_name, a_kind) },
 			{ "type", std::string(a_type) },
 			{ "version", kPresetVersion },
@@ -476,7 +476,7 @@ namespace
 		};
 	}
 
-	json MakeBasePresetJson(const AdaptiveBalance::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
+	json MakeBasePresetJson(const AdaptiveBrightness::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
 			{ "dayStartHour", a_settings.dayStartHour },
@@ -487,7 +487,7 @@ namespace
 		};
 	}
 
-	void NormalizeImportedLocationOverride(AdaptiveBalance::LocationOverride& a_locationOverride)
+	void NormalizeImportedLocationOverride(AdaptiveBrightness::LocationOverride& a_locationOverride)
 	{
 		if (a_locationOverride.name.empty())
 			a_locationOverride.name = a_locationOverride.key;
@@ -498,12 +498,12 @@ namespace
 		ClampProfileSettings(a_locationOverride.profile);
 	}
 
-	LocationOverrideImportStats ParseLocationOverridesJson(const json& a_json, std::vector<AdaptiveBalance::LocationOverride>& o_locationOverrides)
+	LocationOverrideImportStats ParseLocationOverridesJson(const json& a_json, std::vector<AdaptiveBrightness::LocationOverride>& o_locationOverrides)
 	{
 		LocationOverrideImportStats stats;
 		for (const auto& entry : a_json) {
 			try {
-				auto locationOverride = entry.get<AdaptiveBalance::LocationOverride>();
+				auto locationOverride = entry.get<AdaptiveBrightness::LocationOverride>();
 				if (!IsValidFormKey(locationOverride.key)) {
 					++stats.skipped;
 					continue;
@@ -520,14 +520,14 @@ namespace
 		return stats;
 	}
 
-	bool HasAdvancedControlsOpen(const AdaptiveBalance::Settings& a_settings)
+	bool HasAdvancedControlsOpen(const AdaptiveBrightness::Settings& a_settings)
 	{
-		const auto profileHasAdvancedControls = [](const AdaptiveBalance::ProfileSettings& a_profile) {
+		const auto profileHasAdvancedControls = [](const AdaptiveBrightness::ProfileSettings& a_profile) {
 			return a_profile.advanced;
 		};
 
 		return std::any_of(a_settings.profiles.begin(), a_settings.profiles.end(), profileHasAdvancedControls) ||
-		       std::any_of(a_settings.locationOverrides.begin(), a_settings.locationOverrides.end(), [&](const AdaptiveBalance::LocationOverride& a_locationOverride) {
+		       std::any_of(a_settings.locationOverrides.begin(), a_settings.locationOverrides.end(), [&](const AdaptiveBrightness::LocationOverride& a_locationOverride) {
 				   return profileHasAdvancedControls(a_locationOverride.profile);
 			   });
 	}
@@ -545,7 +545,7 @@ namespace
 				return &*it;
 		}
 
-		for (const auto* featureName : { AdaptiveBalance::kFeatureName.data(), AdaptiveBalance::kFeatureShortName.data() }) {
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data() }) {
 			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
 				if (auto profilesIt = it->find(kProfilesFieldName.data()); profilesIt != it->end() && profilesIt->is_array())
 					return &*it;
@@ -555,7 +555,7 @@ namespace
 		return nullptr;
 	}
 
-	bool ApplyBasePresetJson(const json& a_json, AdaptiveBalance::Settings& a_settings, std::string& o_status)
+	bool ApplyBasePresetJson(const json& a_json, AdaptiveBrightness::Settings& a_settings, std::string& o_status)
 	{
 		const auto* presetJson = FindBasePresetJson(a_json);
 		if (!presetJson) {
@@ -564,7 +564,7 @@ namespace
 		}
 
 		try {
-			auto importedProfiles = presetJson->at(kProfilesFieldName.data()).get<std::array<AdaptiveBalance::ProfileSettings, AdaptiveBalance::kProfileCount>>();
+			auto importedProfiles = presetJson->at(kProfilesFieldName.data()).get<std::array<AdaptiveBrightness::ProfileSettings, AdaptiveBrightness::kProfileCount>>();
 			NormalizeBaseProfiles(importedProfiles);
 
 			a_settings.dayStartHour = GetOptionalFloat(*presetJson, "dayStartHour", a_settings.dayStartHour);
@@ -590,7 +590,7 @@ namespace
 		if (auto it = a_json.find(kLocationOverridesFieldName.data()); it != a_json.end())
 			return &*it;
 
-		for (const auto* featureName : { AdaptiveBalance::kFeatureName.data(), AdaptiveBalance::kFeatureShortName.data() }) {
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data() }) {
 			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
 				if (auto overridesIt = it->find(kLocationOverridesFieldName.data()); overridesIt != it->end())
 					return &*overridesIt;
@@ -698,7 +698,7 @@ namespace
 	}
 }
 
-void AdaptiveBalance::DrawSettingsHeaderControls()
+void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
 	const auto displayName = GetDisplayName();
 	ImGui::Checkbox(("Enable " + displayName).c_str(), &settings.enabled);
@@ -709,7 +709,7 @@ void AdaptiveBalance::DrawSettingsHeaderControls()
 	}
 }
 
-void AdaptiveBalance::DrawSettings()
+void AdaptiveBrightness::DrawSettings()
 {
 	ImGui::BeginDisabled(!settings.enabled);
 
@@ -731,7 +731,7 @@ void AdaptiveBalance::DrawSettings()
 	}
 
 	ImGui::SeparatorText("Profiles");
-	if (ImGui::BeginTabBar("##AdaptiveBalanceProfiles", ImGuiTabBarFlags_None)) {
+	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
 		for (auto profile : kProfileOrder) {
 			const ImGuiTabItemFlags tabFlags =
 				selectCurrentProfileTab && selectedProfileTab == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
@@ -751,7 +751,7 @@ void AdaptiveBalance::DrawSettings()
 	ImGui::EndDisabled();
 }
 
-void AdaptiveBalance::LoadSettings(json& o_json)
+void AdaptiveBrightness::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	NormalizeExteriorTimeSettings(settings);
@@ -772,7 +772,7 @@ void AdaptiveBalance::LoadSettings(json& o_json)
 	MarkLocationOverrideLookupDirty();
 }
 
-void AdaptiveBalance::SaveSettings(json& o_json)
+void AdaptiveBrightness::SaveSettings(json& o_json)
 {
 	NormalizeExteriorTimeSettings(settings);
 	NormalizeBaseProfiles(settings.profiles);
@@ -780,7 +780,7 @@ void AdaptiveBalance::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
-void AdaptiveBalance::RestoreDefaultSettings()
+void AdaptiveBrightness::RestoreDefaultSettings()
 {
 	const bool keepAdvancedControlsOpen = advancedControlsOpen;
 	settings = {};
@@ -797,12 +797,12 @@ void AdaptiveBalance::RestoreDefaultSettings()
 	MarkLocationOverrideLookupDirty();
 }
 
-const char* AdaptiveBalance::GetProfileName(Profile a_profile)
+const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
 {
 	return kProfileNames[ProfileIndex(a_profile)];
 }
 
-void AdaptiveBalance::DrawExteriorTimeSettings()
+void AdaptiveBrightness::DrawExteriorTimeSettings()
 {
 	ImGui::SeparatorText("Exterior Time");
 	ImGui::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
@@ -823,7 +823,7 @@ void AdaptiveBalance::DrawExteriorTimeSettings()
 	NormalizeExteriorTimeSettings(settings);
 }
 
-void AdaptiveBalance::DrawProfile(Profile a_profile)
+void AdaptiveBrightness::DrawProfile(Profile a_profile)
 {
 	auto& profile = settings.profiles[ProfileIndex(a_profile)];
 	const bool exteriorProfile = a_profile == Profile::ExteriorDay || a_profile == Profile::ExteriorNight;
@@ -838,7 +838,7 @@ void AdaptiveBalance::DrawProfile(Profile a_profile)
 	ImGui::PopID();
 }
 
-void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle)
+void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle)
 {
 	ClampProfileSettings(a_profile);
 
@@ -862,7 +862,7 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile, const char
 	a_profile.advanced = advancedControlsOpen;
 
 	if (advancedControlsOpen) {
-		ImGui::SeparatorText("Light Balance");
+		ImGui::SeparatorText("Light Multipliers");
 		ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, 3.0f, "%.2f");
@@ -882,7 +882,7 @@ void AdaptiveBalance::DrawProfileSettings(ProfileSettings& a_profile, const char
 	ClampProfileSettings(a_profile);
 }
 
-void AdaptiveBalance::SetAdvancedControlsOpen(bool a_open)
+void AdaptiveBrightness::SetAdvancedControlsOpen(bool a_open)
 {
 	advancedControlsOpen = a_open;
 
@@ -896,7 +896,7 @@ void AdaptiveBalance::SetAdvancedControlsOpen(bool a_open)
 		locationOverrideEditProfile->advanced = advancedControlsOpen;
 }
 
-void AdaptiveBalance::DrawGlobalPresetControls()
+void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
 	DrawHintText("Global presets store the five profile tabs and exterior timing.");
@@ -930,7 +930,7 @@ void AdaptiveBalance::DrawGlobalPresetControls()
 	ImGui::PopID();
 }
 
-void AdaptiveBalance::DrawLocationOverrides()
+void AdaptiveBrightness::DrawLocationOverrides()
 {
 	ImGui::SeparatorText("Location Override Profiles");
 	DrawHintText("Location overrides are per-place profiles. A saved override is used when its location or cell matches where you are.");
@@ -1020,7 +1020,7 @@ void AdaptiveBalance::DrawLocationOverrides()
 		return ascending ? cmp < 0 : cmp > 0;
 	};
 
-	if (ImGui::BeginTable("##AdaptiveBalanceLocationOverrides", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingStretchProp)) {
+	if (ImGui::BeginTable("##AdaptiveBrightnessLocationOverrides", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingStretchProp)) {
 		const float actionColumnWidth = std::max(
 			96.0f * Util::GetUIScale(),
 			ImGui::CalcTextSize("Edit").x + ImGui::CalcTextSize("Copy").x + ImGui::GetStyle().FramePadding.x * 4.0f + ImGui::GetStyle().ItemSpacing.x + 8.0f);
@@ -1151,7 +1151,7 @@ void AdaptiveBalance::DrawLocationOverrides()
 	}
 }
 
-void AdaptiveBalance::DrawLocationOverridePresetControls()
+void AdaptiveBrightness::DrawLocationOverridePresetControls()
 {
 	ImGui::SeparatorText("Override Presets");
 	DrawHintText("Override presets store saved location and cell overrides only. They do not include the five profile tabs.");
@@ -1186,7 +1186,7 @@ void AdaptiveBalance::DrawLocationOverridePresetControls()
 	ImGui::PopID();
 }
 
-void AdaptiveBalance::DrawFullPresetControls()
+void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
 	DrawHintText("Full presets store exterior timing, the five profile tabs, and all saved location overrides.");
@@ -1220,7 +1220,7 @@ void AdaptiveBalance::DrawFullPresetControls()
 	ImGui::PopID();
 }
 
-bool AdaptiveBalance::ExportGlobalPreset()
+bool AdaptiveBrightness::ExportGlobalPreset()
 {
 	NormalizeExteriorTimeSettings(settings);
 	NormalizeBaseProfiles(settings.profiles);
@@ -1234,7 +1234,7 @@ bool AdaptiveBalance::ExportGlobalPreset()
 			globalPresetName,
 			PresetKind::Global,
 			"global",
-			"Adaptive Balance global preset");
+			"Adaptive Brightness global preset");
 
 		if (!WriteJsonFileAtomic(path, exportJson)) {
 			globalPresetStatus = std::format("Export failed: could not write {}.", path.string());
@@ -1249,7 +1249,7 @@ bool AdaptiveBalance::ExportGlobalPreset()
 	}
 }
 
-bool AdaptiveBalance::ImportGlobalPreset()
+bool AdaptiveBrightness::ImportGlobalPreset()
 {
 	const auto resolvedPath = ResolvePresetImportPath(globalPresetName, PresetKind::Global);
 	if (!resolvedPath) {
@@ -1269,7 +1269,7 @@ bool AdaptiveBalance::ImportGlobalPreset()
 	return true;
 }
 
-bool AdaptiveBalance::ExportLocationOverrides()
+bool AdaptiveBrightness::ExportLocationOverrides()
 {
 	NormalizeLocationOverrides();
 
@@ -1288,7 +1288,7 @@ bool AdaptiveBalance::ExportLocationOverrides()
 			locationOverridePresetName,
 			PresetKind::Location,
 			"locations",
-			"Adaptive Balance location override preset");
+			"Adaptive Brightness location override preset");
 
 		if (!WriteJsonFileAtomic(path, exportJson)) {
 			locationOverridePresetStatus = std::format("Export failed: could not write {}.", path.string());
@@ -1303,7 +1303,7 @@ bool AdaptiveBalance::ExportLocationOverrides()
 	}
 }
 
-bool AdaptiveBalance::ImportLocationOverrides()
+bool AdaptiveBrightness::ImportLocationOverrides()
 {
 	NormalizeLocationOverrides();
 
@@ -1368,7 +1368,7 @@ bool AdaptiveBalance::ImportLocationOverrides()
 	return true;
 }
 
-bool AdaptiveBalance::ExportFullPreset()
+bool AdaptiveBrightness::ExportFullPreset()
 {
 	NormalizeExteriorTimeSettings(settings);
 	NormalizeBaseProfiles(settings.profiles);
@@ -1383,7 +1383,7 @@ bool AdaptiveBalance::ExportFullPreset()
 			fullPresetName,
 			PresetKind::Full,
 			"full",
-			"Adaptive Balance full preset");
+			"Adaptive Brightness full preset");
 		exportJson["locationOverrides"] = settings.locationOverrides;
 
 		if (!WriteJsonFileAtomic(path, exportJson)) {
@@ -1399,7 +1399,7 @@ bool AdaptiveBalance::ExportFullPreset()
 	}
 }
 
-bool AdaptiveBalance::ImportFullPreset()
+bool AdaptiveBrightness::ImportFullPreset()
 {
 	const auto resolvedPath = ResolvePresetImportPath(fullPresetName, PresetKind::Full);
 	if (!resolvedPath) {
@@ -1448,7 +1448,7 @@ bool AdaptiveBalance::ImportFullPreset()
 	return true;
 }
 
-bool AdaptiveBalance::IsRuntimeEnabled() const
+bool AdaptiveBrightness::IsRuntimeEnabled() const
 {
 	if (!loaded || !settings.enabled)
 		return false;
@@ -1460,7 +1460,7 @@ bool AdaptiveBalance::IsRuntimeEnabled() const
 	return true;
 }
 
-AdaptiveBalance::Profile AdaptiveBalance::GetInteriorProfile() const
+AdaptiveBrightness::Profile AdaptiveBrightness::GetInteriorProfile() const
 {
 	const auto forms = GetCurrentLocationForms();
 	const auto* location = forms.location;
@@ -1474,7 +1474,7 @@ AdaptiveBalance::Profile AdaptiveBalance::GetInteriorProfile() const
 	return Profile::Interior;
 }
 
-AdaptiveBalance::Profile AdaptiveBalance::GetCurrentProfileForUI() const
+AdaptiveBrightness::Profile AdaptiveBrightness::GetCurrentProfileForUI() const
 {
 	const auto location = LocationContext::Get();
 	if (location.inInterior)
@@ -1483,7 +1483,7 @@ AdaptiveBalance::Profile AdaptiveBalance::GetCurrentProfileForUI() const
 	return GetExteriorNightFactor() >= 0.5f ? Profile::ExteriorNight : Profile::ExteriorDay;
 }
 
-const AdaptiveBalance::LocationOverride* AdaptiveBalance::GetActiveLocationOverride() const
+const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::GetActiveLocationOverride() const
 {
 	const auto overrideIndex = ResolveLocationOverrideIndex();
 	if (overrideIndex == kInvalidLocationOverrideIndex || overrideIndex >= settings.locationOverrides.size())
@@ -1492,7 +1492,7 @@ const AdaptiveBalance::LocationOverride* AdaptiveBalance::GetActiveLocationOverr
 	return &settings.locationOverrides[overrideIndex];
 }
 
-std::optional<AdaptiveBalance::LocationOverrideTarget> AdaptiveBalance::GetCurrentLocationOverrideTarget() const
+std::optional<AdaptiveBrightness::LocationOverrideTarget> AdaptiveBrightness::GetCurrentLocationOverrideTarget() const
 {
 	const auto forms = GetCurrentLocationForms();
 	const auto currentProfile = GetCurrentProfileForUI();
@@ -1521,7 +1521,7 @@ std::optional<AdaptiveBalance::LocationOverrideTarget> AdaptiveBalance::GetCurre
 	return makeTarget(forms.cell, kOverrideTypeCell);
 }
 
-void AdaptiveBalance::SaveCurrentLocationOverride()
+void AdaptiveBrightness::SaveCurrentLocationOverride()
 {
 	const auto target = GetCurrentLocationOverrideTarget();
 	if (!target)
@@ -1553,25 +1553,25 @@ void AdaptiveBalance::SaveCurrentLocationOverride()
 	MarkLocationOverrideLookupDirty();
 }
 
-void AdaptiveBalance::ClearLocationOverrideSelection()
+void AdaptiveBrightness::ClearLocationOverrideSelection()
 {
 	selectedLocationOverrideKey.clear();
 	ResetLocationOverrideEdit();
 }
 
-void AdaptiveBalance::InvalidateProfileTabSync()
+void AdaptiveBrightness::InvalidateProfileTabSync()
 {
 	profileTabSyncKey.clear();
 	profileTabSyncInitialized = false;
 }
 
-void AdaptiveBalance::ResetLocationOverrideEdit()
+void AdaptiveBrightness::ResetLocationOverrideEdit()
 {
 	locationOverrideEditKey.clear();
 	locationOverrideEditProfile.reset();
 }
 
-AdaptiveBalance::ProfileSettings* AdaptiveBalance::GetLocationOverrideEditProfile(LocationOverride& a_locationOverride)
+AdaptiveBrightness::ProfileSettings* AdaptiveBrightness::GetLocationOverrideEditProfile(LocationOverride& a_locationOverride)
 {
 	if (locationOverrideEditKey != a_locationOverride.key || !locationOverrideEditProfile) {
 		locationOverrideEditKey = a_locationOverride.key;
@@ -1581,7 +1581,7 @@ AdaptiveBalance::ProfileSettings* AdaptiveBalance::GetLocationOverrideEditProfil
 	return locationOverrideEditProfile ? &*locationOverrideEditProfile : nullptr;
 }
 
-AdaptiveBalance::LocationOverride* AdaptiveBalance::FindLocationOverride(const std::string& a_key)
+AdaptiveBrightness::LocationOverride* AdaptiveBrightness::FindLocationOverride(const std::string& a_key)
 {
 	const auto overrideIndex = FindLocationOverrideIndexByKey(a_key);
 	if (overrideIndex == kInvalidLocationOverrideIndex)
@@ -1590,7 +1590,7 @@ AdaptiveBalance::LocationOverride* AdaptiveBalance::FindLocationOverride(const s
 	return &settings.locationOverrides[overrideIndex];
 }
 
-const AdaptiveBalance::LocationOverride* AdaptiveBalance::FindLocationOverride(const std::string& a_key) const
+const AdaptiveBrightness::LocationOverride* AdaptiveBrightness::FindLocationOverride(const std::string& a_key) const
 {
 	const auto overrideIndex = FindLocationOverrideIndexByKey(a_key);
 	if (overrideIndex == kInvalidLocationOverrideIndex)
@@ -1599,7 +1599,7 @@ const AdaptiveBalance::LocationOverride* AdaptiveBalance::FindLocationOverride(c
 	return &settings.locationOverrides[overrideIndex];
 }
 
-std::size_t AdaptiveBalance::FindLocationOverrideIndexByKey(const std::string& a_key) const
+std::size_t AdaptiveBrightness::FindLocationOverrideIndexByKey(const std::string& a_key) const
 {
 	if (!IsValidFormKey(a_key))
 		return kInvalidLocationOverrideIndex;
@@ -1613,7 +1613,7 @@ std::size_t AdaptiveBalance::FindLocationOverrideIndexByKey(const std::string& a
 	return it->second;
 }
 
-std::size_t AdaptiveBalance::FindLocationOverrideIndexByForm(const RE::TESForm* a_form) const
+std::size_t AdaptiveBrightness::FindLocationOverrideIndexByForm(const RE::TESForm* a_form) const
 {
 	if (!a_form)
 		return kInvalidLocationOverrideIndex;
@@ -1622,7 +1622,7 @@ std::size_t AdaptiveBalance::FindLocationOverrideIndexByForm(const RE::TESForm* 
 	return FindLocationOverrideIndexByKey(key);
 }
 
-std::size_t AdaptiveBalance::ResolveLocationOverrideIndex() const
+std::size_t AdaptiveBrightness::ResolveLocationOverrideIndex() const
 {
 	EnsureLocationOverrideLookup();
 
@@ -1662,7 +1662,7 @@ std::size_t AdaptiveBalance::ResolveLocationOverrideIndex() const
 	return resolvedIndex;
 }
 
-void AdaptiveBalance::NormalizeLocationOverrides()
+void AdaptiveBrightness::NormalizeLocationOverrides()
 {
 	bool changedLookup = false;
 
@@ -1704,13 +1704,13 @@ void AdaptiveBalance::NormalizeLocationOverrides()
 		MarkLocationOverrideLookupDirty();
 }
 
-void AdaptiveBalance::MarkLocationOverrideLookupDirty()
+void AdaptiveBrightness::MarkLocationOverrideLookupDirty()
 {
 	locationOverrideLookupDirty = true;
 	locationOverrideCache = {};
 }
 
-void AdaptiveBalance::EnsureLocationOverrideLookup() const
+void AdaptiveBrightness::EnsureLocationOverrideLookup() const
 {
 	if (!locationOverrideLookupDirty)
 		return;
@@ -1727,7 +1727,7 @@ void AdaptiveBalance::EnsureLocationOverrideLookup() const
 	++locationOverrideLookupVersion;
 }
 
-float AdaptiveBalance::GetExteriorNightFactor() const
+float AdaptiveBrightness::GetExteriorNightFactor() const
 {
 	const auto* sky = globals::game::sky;
 	const float hour = sky ? WrapHour(sky->currentGameHour) : 12.0f;
@@ -1759,7 +1759,7 @@ float AdaptiveBalance::GetExteriorNightFactor() const
 	return 1.0f - std::clamp(dayFactor, 0.0f, 1.0f);
 }
 
-LinearLighting::Settings AdaptiveBalance::GetNeutralLinearLightingSettings() const
+LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings() const
 {
 	auto neutral = LinearLighting::Settings{};
 
@@ -1781,7 +1781,7 @@ LinearLighting::Settings AdaptiveBalance::GetNeutralLinearLightingSettings() con
 	return neutral;
 }
 
-LinearLighting::Settings AdaptiveBalance::ApplyProfile(const LinearLighting::Settings& a_base, const ProfileSettings& a_profile) const
+LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::Settings& a_base, const ProfileSettings& a_profile) const
 {
 	auto out = a_base;
 	const float brightness = ClampBrightness(a_profile.brightness);
@@ -1814,7 +1814,7 @@ LinearLighting::Settings AdaptiveBalance::ApplyProfile(const LinearLighting::Set
 	return out;
 }
 
-LinearLighting::Settings AdaptiveBalance::LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const
+LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const
 {
 	auto out = a_a;
 	const float t = std::clamp(SafeFinite(a_t, 0.0f), 0.0f, 1.0f);
@@ -1850,7 +1850,7 @@ LinearLighting::Settings AdaptiveBalance::LerpSettings(const LinearLighting::Set
 	return out;
 }
 
-LinearLighting::Settings AdaptiveBalance::GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const
+LinearLighting::Settings AdaptiveBrightness::GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const
 {
 	auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
 
@@ -1866,7 +1866,7 @@ LinearLighting::Settings AdaptiveBalance::GetEffectiveLinearLightingSettings(con
 	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
 }
 
-AdaptiveBalance::ActiveProfileBlend AdaptiveBalance::GetActiveProfileBlend() const
+AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend() const
 {
 	if (const auto* locationOverride = GetActiveLocationOverride())
 		return { .from = &locationOverride->profile, .to = &locationOverride->profile, .factor = 0.0f };
@@ -1886,7 +1886,7 @@ AdaptiveBalance::ActiveProfileBlend AdaptiveBalance::GetActiveProfileBlend() con
 	};
 }
 
-std::string AdaptiveBalance::GetContextLabel() const
+std::string AdaptiveBrightness::GetContextLabel() const
 {
 	constexpr auto displayName = kFeatureName;
 

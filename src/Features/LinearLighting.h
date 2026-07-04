@@ -88,7 +88,7 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint enableAdaptiveBalance;
+		uint enableAdaptiveBrightness;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 

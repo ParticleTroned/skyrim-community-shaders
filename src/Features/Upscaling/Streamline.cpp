@@ -1272,13 +1272,15 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		options.mvecDepthHeight = a_displayHeight;  // texture dims, not render size (extent gives the sub-rect)
 		options.colorWidth = a_displayWidth;
 		options.colorHeight = a_displayHeight;
-		// eBlockNoClientQueues (Vulkan-only): SL does NOT block the client's presenting queue while it
-		// runs frame generation. eBlockPresentingClientQueue (the default) blocks that queue until the FG
-		// workload completes — which FREEZES the game (re-confirmed in-game under full interposition,
-		// 2026-07-04; historically the same hang under manual hooking). With NoClientQueues the present
-		// returns immediately and SL paces asynchronously. The tradeoff — the app must keep the tagged
-		// inputs valid until SL consumed them (§16.1) — is discharged by the per-frame evaluate wait in
-		// cs_EvaluateFeatureCore while DLSS-G is active.
+		// eBlockNoClientQueues (Vulkan-only): SL does NOT block the client's presenting queue while
+		// it runs frame generation; the §16.1 input guarantee is CS's (WaitDLSSGSubmission at the
+		// present hook). The default eBlockPresentingClientQueue is UNUSABLE here — three freezes,
+		// each stack-dumped, wedge traced through every controllable layer: interop ring fence
+		// (made never-blocking), DXVK CS-thread sync, DXVK submit throttle, and terminally a
+		// kernel-mode driver wait inside the present path (nvoglv64!DrvPresentBuffers →
+		// NtGdiDdDDIWaitForSynchronizationObjectFromCpu) installed by SL's queue block at FG
+		// engagement, waiting on FG work the blocked single-queue pipeline can never deliver.
+		// Below anything CS or the dxvk fork can modify. Do not retry.
 		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
 		const sl::Result res = g_sl.slDLSSGSetOptions(g_sl.viewport, options);
 		if (res != sl::Result::eOk) {

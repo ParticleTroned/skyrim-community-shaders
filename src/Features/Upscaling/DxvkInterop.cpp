@@ -242,12 +242,58 @@ VkCommandBuffer DxvkInterop::BeginFrameCommandBuffer()
 	if (commandPool == VK_NULL_HANDLE)
 		return VK_NULL_HANDLE;
 
-	commandFrameIndex = (commandFrameIndex + 1) % framesInFlight;
+	// NEVER-BLOCKING acquire (task #88 experiment): a fence wait here deadlocks under SL's
+	// eBlockPresentingClientQueue (the queue is held at each present until FG completes, so ring
+	// fences signal late — and at FG engagement transitions possibly never while we're the ones
+	// starving it). Instead: take any already-signaled slot; if none, GROW the ring; only at a
+	// hard cap fall back to waiting (logged — if that fires under the SL-block mode, the
+	// experiment failed).
+	constexpr uint32_t kMaxRingDepth = 64;
+	uint32_t next = (commandFrameIndex + 1) % framesInFlight;
+	if (vkGetFenceStatus(device, commandFences[next]) != VK_SUCCESS) {
+		uint32_t freeSlot = UINT32_MAX;
+		for (uint32_t i = 0; i < framesInFlight; ++i) {
+			const uint32_t cand = (next + i) % framesInFlight;
+			if (vkGetFenceStatus(device, commandFences[cand]) == VK_SUCCESS) {
+				freeSlot = cand;
+				break;
+			}
+		}
+		if (freeSlot != UINT32_MAX) {
+			next = freeSlot;
+		} else if (framesInFlight < kMaxRingDepth) {
+			VkCommandBuffer newCb = VK_NULL_HANDLE;
+			VkCommandBufferAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+			allocInfo.commandPool = commandPool;
+			allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+			allocInfo.commandBufferCount = 1;
+			VkFence newFence = VK_NULL_HANDLE;
+			VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+			fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+			if (vkAllocateCommandBuffers(device, &allocInfo, &newCb) == VK_SUCCESS &&
+				vkCreateFence(device, &fenceInfo, nullptr, &newFence) == VK_SUCCESS) {
+				commandBuffers.push_back(newCb);
+				commandFences.push_back(newFence);
+				pendingViewDeletes.emplace_back();
+				next = framesInFlight;
+				++framesInFlight;
+				logger::info("[DxvkInterop] Command ring grown to {} (all slots in flight)", framesInFlight);
+			} else {
+				logger::warn("[DxvkInterop] ring growth failed — falling back to fence wait");
+				vkWaitForFences(device, 1, &commandFences[next], VK_TRUE, UINT64_MAX);
+			}
+		} else {
+			static bool s_warned = false;
+			if (!s_warned) {
+				s_warned = true;
+				logger::warn("[DxvkInterop] ring at max depth {} with all slots in flight — waiting (deadlock risk under SL queue-block)", kMaxRingDepth);
+			}
+			vkWaitForFences(device, 1, &commandFences[next], VK_TRUE, UINT64_MAX);
+		}
+	}
+	commandFrameIndex = next;
 	VkFence fence = commandFences[commandFrameIndex];
 	VkCommandBuffer cb = commandBuffers[commandFrameIndex];
-
-	// Make sure this ring slot's previous submission finished before reuse.
-	vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 
 	// That submission is now complete, so any transient views tagged to this slot are no longer
 	// referenced by the GPU — destroy them here rather than blocking the submit path on a fence.

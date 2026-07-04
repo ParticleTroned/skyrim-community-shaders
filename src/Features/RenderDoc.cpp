@@ -872,8 +872,7 @@ std::string RenderDoc::BuildAutomaticCaptureComments(const std::string& userComm
 	comments += std::format("Skyrim {} {}\n", runtimeName, gameVersion);
 
 	// Plugin version
-	auto pluginVersion = Util::GetFormattedVersion(Plugin::VERSION);
-	comments += std::format("Community Shaders {}\n", pluginVersion);
+	comments += std::format("Community Shaders {}\n", Plugin::VERSION_LABEL);
 
 	// Enabled features
 	const auto& features = Feature::GetFeatureList();

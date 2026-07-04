@@ -268,6 +268,54 @@ void WetnessEffects::PostPostLoad()
 	Ripples::Install();
 }
 
+bool WetnessEffects::HasPerformanceSettings() const
+{
+	return IsRuntimeActive() && !globals::features::wetterness.IsRuntimeActive();
+}
+
+json WetnessEffects::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Settings", settings },
+		{ "ClimatePreset", static_cast<uint32_t>(climatePreset) }
+	};
+}
+
+void WetnessEffects::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (a_enabled) {
+		settings = {};
+		climatePreset = defaultPreset;
+		ApplyClimatePreset(climatePreset);
+		settings.EnableWetnessEffects = 1u;
+	} else {
+		settings.EnableWetnessEffects = 0u;
+	}
+
+	Ripples::UpdateSettings();
+}
+
+json WetnessEffects::CapturePerformanceCostMeasurementState() const
+{
+	return CapturePerformanceSettingsState();
+}
+
+void WetnessEffects::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	if (a_state.contains("Settings"))
+		settings = a_state.at("Settings").get<Settings>();
+
+	const auto restoredPreset = a_state.value("ClimatePreset", static_cast<uint32_t>(climatePreset));
+	if (restoredPreset < static_cast<uint32_t>(CLIMATE_PRESET_INFO.size()))
+		climatePreset = static_cast<ClimatePreset>(restoredPreset);
+
+	DetectCurrentPreset();
+	Ripples::UpdateSettings();
+}
+
 void WetnessEffects::DrawSettings()
 {
 	// Climate Preset Selection - Always visible at the top
@@ -578,6 +626,60 @@ static void DrawRainTypeLabel(const char* prefix, float rate)
 		ImGui::BulletText("Heavy: 7.5 - 15 mm/hr");
 		ImGui::BulletText("Extreme: >15 mm/hr");
 	}
+}
+
+void WetnessEffects::DrawPerformanceSettings(bool a_advanced)
+{
+	if (globals::features::wetterness.IsRuntimeActive()) {
+		ImGui::TextDisabled("Legacy Wetness Effects is hidden while Wetterness is active.");
+		return;
+	}
+
+	bool enabled = settings.EnableWetnessEffects != 0;
+	if (ImGui::Checkbox("Enable Wetness", &enabled)) {
+		settings.EnableWetnessEffects = enabled ? 1u : 0u;
+		Ripples::UpdateSettings();
+	}
+
+	const char* presetNames[CLIMATE_PRESET_INFO.size()];
+	for (size_t i = 0; i < CLIMATE_PRESET_INFO.size(); ++i) {
+		presetNames[i] = CLIMATE_PRESET_INFO[i].name;
+	}
+	int currentComboIndex = static_cast<int>(climatePreset);
+	{
+		Util::PresetControlStyleWrapper presetControlStyle;
+		if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {
+			ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
+			climatePreset = newPreset;
+			if (newPreset != ClimatePreset::Custom) {
+				ApplyClimatePreset(newPreset);
+			}
+		}
+	}
+
+	if (!a_advanced) {
+		return;
+	}
+
+	ImGui::SeparatorText("Advanced");
+	bool enableRaindrops = settings.EnableRaindropFx != 0;
+	if (ImGui::Checkbox("Enable Raindrop Effects", &enableRaindrops))
+		settings.EnableRaindropFx = enableRaindrops ? 1u : 0u;
+
+	ImGui::BeginDisabled(!settings.EnableRaindropFx);
+	bool enableSplashes = settings.EnableSplashes != 0;
+	if (ImGui::Checkbox("Enable Splashes", &enableSplashes))
+		settings.EnableSplashes = enableSplashes ? 1u : 0u;
+
+	bool enableRipples = settings.EnableRipples != 0;
+	if (ImGui::Checkbox("Enable Ripples", &enableRipples))
+		settings.EnableRipples = enableRipples ? 1u : 0u;
+
+	ImGui::SliderFloat("Raindrop Effect Range", &settings.RaindropFxRange, 1e2f, 2e3f, "%.0f units");
+	ImGui::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
+	ImGui::SliderFloat("Interval", &settings.RaindropInterval, 0.1f, 2.0f, "%.1f sec");
+	ImGui::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::EndDisabled();
 }
 
 // =====================

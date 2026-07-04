@@ -105,6 +105,14 @@ public:
 	virtual void SetupRenderTargetResources() override;
 
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return bendSettings.Enable != 0; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawFoveationSettings();
 
 	virtual void ClearShaderCache() override;

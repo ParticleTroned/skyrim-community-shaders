@@ -365,6 +365,27 @@ namespace Util
 	};
 
 	/**
+	 * RAII wrapper for performance-relevant controls.
+	 * Uses a gold/red frame border so compact performance controls stand out
+	 * without introducing a separate palette.
+	 */
+	class PerformanceFrameStyleWrapper
+	{
+	public:
+		explicit PerformanceFrameStyleWrapper(bool includeCheckMark = false);
+		~PerformanceFrameStyleWrapper();
+
+		PerformanceFrameStyleWrapper(const PerformanceFrameStyleWrapper&) = delete;
+		PerformanceFrameStyleWrapper& operator=(const PerformanceFrameStyleWrapper&) = delete;
+		PerformanceFrameStyleWrapper(PerformanceFrameStyleWrapper&&) = delete;
+		PerformanceFrameStyleWrapper& operator=(PerformanceFrameStyleWrapper&&) = delete;
+
+	private:
+		int m_pushedStyles;
+		int m_pushedVars;
+	};
+
+	/**
 	 * Creates a transparent button with theme text color hover. Caller must push/pop FrameBorderSize=0 separately.
 	 */
 	StyledButtonWrapper TransparentIconButtonStyle();
@@ -1015,6 +1036,7 @@ namespace Util
 		ImVec4 WithAlpha(ImVec4 color, float alpha);
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha);
 		ImVec4 Lift(ImVec4 color, float amount, float alpha);
+		ImVec4 PerformanceDelta(int direction);
 	}
 
 	/**

@@ -663,6 +663,54 @@ void LightLimitFix::DrawSettings()
 	}
 }
 
+void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
+{
+	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
+
+	ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+	ImGui::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
+
+	if (!a_advanced) {
+		return;
+	}
+
+	ImGui::SeparatorText("Particle Lights");
+	ImGui::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
+	ImGui::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
+	ImGui::SliderFloat("Cluster Threshold", &settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, "%.1f");
+	ImGui::SliderInt("Max Particles per Emitter", &settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
+	ImGui::SliderFloat("Max Particle Distance", &settings.MaxParticleDistance, 1000.0f, kMaxParticleDistanceMax, "%.0f");
+	ImGui::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
+
+	ImGui::SeparatorText("Contact Shadows");
+	const char* qualityOptions[] = { "Low", "Medium", "High" };
+	int contactShadowQuality = static_cast<int>(settings.ContactShadowQuality);
+	if (ImGui::Combo("Contact Shadow Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
+		settings.ContactShadowQuality = static_cast<uint>(std::clamp(contactShadowQuality, 0, static_cast<int>(kContactShadowQualityMax)));
+	}
+
+	int contactShadowClusterBudget = static_cast<int>(settings.ContactShadowClusterBudget);
+	if (ImGui::SliderInt("Cached Lights per Cluster", &contactShadowClusterBudget, static_cast<int>(kContactShadowClusterBudgetMin), static_cast<int>(kContactShadowClusterBudgetMax))) {
+		settings.ContactShadowClusterBudget = static_cast<uint>(contactShadowClusterBudget);
+	}
+
+	int strictContactShadowBudget = static_cast<int>(settings.StrictContactShadowBudget);
+	if (ImGui::SliderInt("Strict Light Budget", &strictContactShadowBudget, 0, static_cast<int>(kStrictContactShadowBudgetMax))) {
+		settings.StrictContactShadowBudget = static_cast<uint>(strictContactShadowBudget);
+	}
+
+	ImGui::Checkbox("Enable Particle Contact Shadows", &settings.EnableParticleContactShadows);
+	int particleContactShadowBudget = static_cast<int>(settings.ParticleContactShadowBudget);
+	if (ImGui::SliderInt("Particle Budget per Cluster", &particleContactShadowBudget, 0, static_cast<int>(kParticleContactShadowBudgetMax))) {
+		settings.ParticleContactShadowBudget = static_cast<uint>(particleContactShadowBudget);
+	}
+}
+
+json LightLimitFix::CapturePerformanceSettingsState() const
+{
+	return settings;
+}
+
 void LightLimitFix::DrawOverlay()
 {
 	if (!settings.EnableLightsVisualisation)

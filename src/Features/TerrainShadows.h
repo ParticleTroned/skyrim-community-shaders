@@ -82,6 +82,11 @@ public:
 	void CompileComputeShaders();
 
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableTerrainShadow; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.EnableTerrainShadow = a_enabled; }
 
 	virtual void EarlyPrepass() override;
 	void LoadHeightmap();

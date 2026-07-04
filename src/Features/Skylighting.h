@@ -28,6 +28,13 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return true; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -56,7 +63,7 @@ public:
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
 		float ProbeFieldSize = kDefaultProbeFieldSize;  // XY probe field size in world units
-		uint ProbeGridQuality = 1;  // 0: performance, 1: balanced, 2: quality, 3: ultra quality, 4: hoshipa
+		uint ProbeGridQuality = 1;                      // 0: performance, 1: balanced, 2: quality, 3: ultra quality, 4: hoshipa
 		bool EnableIncrementalProbeUpdates = true;
 		uint StableSliceCount = 8;
 		bool EnableReducedUpdateFrequency = true;

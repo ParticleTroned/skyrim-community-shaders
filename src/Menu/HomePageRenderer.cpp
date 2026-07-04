@@ -18,7 +18,7 @@
 
 namespace
 {
-	constexpr float FORK_NOTICE_OFFSET_LINES = 2.0f;
+	constexpr float FORK_NOTICE_OFFSET_LINES = 1.15f;
 	constexpr float FORK_NOTICE_ITALIC_SLANT = 0.18f;
 
 	float CenteredTextX(float windowWidth, float textWidth)
@@ -64,6 +64,39 @@ namespace
 			DrawCenteredItalicTextLine(line, windowWidth, color);
 		}
 	}
+
+	bool BigRadioButton(const char* label, int* value, int buttonValue, float diameter)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ImVec2 labelSize = ImGui::CalcTextSize(label);
+		const float rowHeight = std::max(diameter, labelSize.y);
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const ImVec2 size(diameter + style.ItemInnerSpacing.x + labelSize.x, rowHeight);
+		const bool selected = *value == buttonValue;
+
+		const bool pressed = ImGui::InvisibleButton(label, size);
+		if (pressed)
+			*value = buttonValue;
+
+		const ImVec2 center(pos.x + diameter * 0.5f, pos.y + rowHeight * 0.5f);
+		const float radius = diameter * 0.5f;
+		const ImU32 bgColor = ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
+		const ImU32 borderColor = ImGui::GetColorU32(ImGuiCol_Border);
+		const ImU32 checkColor = ImGui::GetColorU32(ImGuiCol_CheckMark);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+		drawList->AddCircleFilled(center, radius, bgColor, 32);
+		drawList->AddCircle(center, radius, borderColor, 32, std::max(1.0f, 2.0f * Util::GetUIScale()));
+		if (selected)
+			drawList->AddCircleFilled(center, radius * 0.62f, checkColor, 32);
+
+		drawList->AddText(
+			ImVec2(pos.x + diameter + style.ItemInnerSpacing.x, pos.y + (rowHeight - labelSize.y) * 0.5f),
+			ImGui::GetColorU32(ImGuiCol_Text),
+			label);
+
+		return pressed;
+	}
 }
 
 // Static member definitions
@@ -94,6 +127,46 @@ void HomePageRenderer::RenderHomePage()
 	// RenderFAQSection();
 
 	ImGui::EndChild();
+}
+
+void HomePageRenderer::RenderModeSection()
+{
+	auto* menu = Menu::GetSingleton();
+	if (!menu)
+		return;
+
+	auto& settings = menu->GetSettings();
+	settings.PerformanceUiMode = std::clamp(settings.PerformanceUiMode, 0, 1);
+
+	const char* modeLabel = "Interface Mode";
+	const char* essentialsLabel = "Essentials (Recommended)";
+	const char* advancedLabel = "Advanced (Full UI)";
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const float contentWidth = ImGui::GetContentRegionAvail().x;
+	const float radioDiameter = ImGui::GetFrameHeight() * 2.0f;
+	const ImVec2 modeLabelSize = ImGui::CalcTextSize(modeLabel);
+	const ImVec2 essentialsLabelSize = ImGui::CalcTextSize(essentialsLabel);
+	const ImVec2 advancedLabelSize = ImGui::CalcTextSize(advancedLabel);
+	const float modeLabelWidth = modeLabelSize.x;
+	const float essentialsWidth = radioDiameter + style.ItemInnerSpacing.x + essentialsLabelSize.x;
+	const float advancedWidth = radioDiameter + style.ItemInnerSpacing.x + advancedLabelSize.x;
+	const float spacing = style.ItemSpacing.x * 3.0f;
+	const float rowWidth = modeLabelWidth + essentialsWidth + advancedWidth + spacing;
+	const float rowHeight = std::max(radioDiameter, modeLabelSize.y);
+	const float rowY = ImGui::GetCursorPosY();
+	const float rowX = ImGui::GetCursorPosX() + std::max(0.0f, (contentWidth - rowWidth) * 0.5f);
+
+	ImGui::SetCursorPos(ImVec2(rowX, rowY + (rowHeight - modeLabelSize.y) * 0.5f));
+	ImGui::TextUnformatted(modeLabel);
+
+	ImGui::PushID("HomeInterfaceMode");
+	ImGui::SetCursorPos(ImVec2(rowX + modeLabelWidth + style.ItemSpacing.x, rowY));
+	BigRadioButton(essentialsLabel, &settings.PerformanceUiMode, 0, radioDiameter);
+	ImGui::SetCursorPos(ImVec2(rowX + modeLabelWidth + style.ItemSpacing.x * 2.0f + essentialsWidth, rowY));
+	BigRadioButton(advancedLabel, &settings.PerformanceUiMode, 1, radioDiameter);
+	ImGui::PopID();
+
+	ImGui::SetCursorPosY(rowY + rowHeight);
 }
 
 void HomePageRenderer::RenderWelcomeSection()
@@ -169,6 +242,8 @@ void HomePageRenderer::RenderWelcomeSection()
 								},
 		windowSize.x, forkNoticeColor);
 
+	ImGui::Spacing();
+	RenderModeSection();
 	ImGui::Spacing();
 
 	// Vertical padding between intro text and the social artwork.
@@ -334,7 +409,7 @@ void HomePageRenderer::RenderCacheMismatchSection()
 
 		const bool restoreClicked = ImGui::Button("Restore Previous Cache");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Restores the previous cache and resets feature toggles to match it. Restart required.");
+			ImGui::TextUnformatted("Go back to the earlier shader setup. Restart required.");
 		}
 		if (restoreClicked)
 			shaderCache->RestorePreviousDiskCache();
@@ -351,7 +426,7 @@ void HomePageRenderer::RenderCacheMismatchSection()
 			shaderCache->AcceptCacheRebuild();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Rebuilds the disk cache for the current feature setup.");
+			ImGui::TextUnformatted("Keep the current feature setup and rebuild shaders for it.");
 		}
 	}
 

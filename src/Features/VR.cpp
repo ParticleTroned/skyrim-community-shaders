@@ -393,6 +393,112 @@ void VR::RestoreDefaultSettings()
 	recordingButtonControllers.clear();
 }
 
+bool VR::SupportsPerformanceCostMeasurement() const
+{
+	return REL::Module::IsVR();
+}
+
+bool VR::IsPerformanceCostMeasurementEnabled() const
+{
+	const auto& screenSpaceShadows = globals::features::screenSpaceShadows;
+	const auto& screenSpaceGI = globals::features::screenSpaceGI;
+	const bool screenSpaceShadowsStereoSyncActive =
+		screenSpaceShadows.loaded &&
+		screenSpaceShadows.bendSettings.Enable != 0 &&
+		screenSpaceShadows.enableStereoSync;
+	const bool screenSpaceGIStereoSyncActive =
+		screenSpaceGI.loaded &&
+		screenSpaceGI.settings.Enabled &&
+		screenSpaceGI.settings.EnableStereoSync;
+	return settings.EnableDepthBufferCullingExterior ||
+	       settings.EnableDepthBufferCullingInterior ||
+	       screenSpaceShadowsStereoSyncActive ||
+	       screenSpaceGIStereoSyncActive ||
+	       settings.EnableStereoBlend ||
+	       settings.EnableLightingFoveation ||
+	       settings.EnableLightingFoveationHardCutoff ||
+	       settings.EnableSSRFoveation ||
+	       settings.EnableSSRFoveationHardCutoff ||
+	       settings.EnableWaterParallaxFoveation ||
+	       settings.EnableWaterParallaxFoveationHardCutoff ||
+	       settings.EnableWetternessFoveation ||
+	       settings.EnableWetternessFoveationHardCutoff ||
+	       settings.EnableDynamicCubemapFoveation ||
+	       settings.EnableDynamicCubemapVisibilityThrottle;
+}
+
+void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	const Settings defaults{};
+	const ScreenSpaceGI::Settings screenSpaceGIDefaults{};
+	auto& screenSpaceShadows = globals::features::screenSpaceShadows;
+	auto& screenSpaceGI = globals::features::screenSpaceGI;
+	settings.EnableDepthBufferCullingExterior = a_enabled ? defaults.EnableDepthBufferCullingExterior : false;
+	settings.EnableDepthBufferCullingInterior = a_enabled ? defaults.EnableDepthBufferCullingInterior : false;
+	screenSpaceShadows.enableStereoSync = false;
+	screenSpaceGI.settings.EnableStereoSync = a_enabled ? screenSpaceGIDefaults.EnableStereoSync : false;
+	settings.EnableStereoBlend = a_enabled ? defaults.EnableStereoBlend : false;
+	settings.EnableLightingFoveation = a_enabled ? defaults.EnableLightingFoveation : false;
+	settings.EnableLightingFoveationHardCutoff = a_enabled ? defaults.EnableLightingFoveationHardCutoff : false;
+	settings.EnableSSRFoveation = a_enabled ? defaults.EnableSSRFoveation : false;
+	settings.EnableSSRFoveationHardCutoff = a_enabled ? defaults.EnableSSRFoveationHardCutoff : false;
+	settings.EnableWaterParallaxFoveation = a_enabled ? defaults.EnableWaterParallaxFoveation : false;
+	settings.EnableWaterParallaxFoveationHardCutoff = a_enabled ? defaults.EnableWaterParallaxFoveationHardCutoff : false;
+	settings.EnableWetternessFoveation = a_enabled ? defaults.EnableWetternessFoveation : false;
+	settings.EnableWetternessFoveationHardCutoff = a_enabled ? defaults.EnableWetternessFoveationHardCutoff : false;
+	settings.EnableDynamicCubemapFoveation = a_enabled ? defaults.EnableDynamicCubemapFoveation : false;
+	settings.EnableDynamicCubemapVisibilityThrottle = a_enabled ? defaults.EnableDynamicCubemapVisibilityThrottle : false;
+	settings.ClampToValidRanges();
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+	UpdateDepthBufferCulling();
+}
+
+json VR::CapturePerformanceCostMeasurementState() const
+{
+	return {
+		{ "EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior },
+		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
+		{ "EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync },
+		{ "EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync },
+		{ "EnableStereoBlend", settings.EnableStereoBlend },
+		{ "EnableLightingFoveation", settings.EnableLightingFoveation },
+		{ "EnableLightingFoveationHardCutoff", settings.EnableLightingFoveationHardCutoff },
+		{ "EnableSSRFoveation", settings.EnableSSRFoveation },
+		{ "EnableSSRFoveationHardCutoff", settings.EnableSSRFoveationHardCutoff },
+		{ "EnableWaterParallaxFoveation", settings.EnableWaterParallaxFoveation },
+		{ "EnableWaterParallaxFoveationHardCutoff", settings.EnableWaterParallaxFoveationHardCutoff },
+		{ "EnableWetternessFoveation", settings.EnableWetternessFoveation },
+		{ "EnableWetternessFoveationHardCutoff", settings.EnableWetternessFoveationHardCutoff },
+		{ "EnableDynamicCubemapFoveation", settings.EnableDynamicCubemapFoveation },
+		{ "EnableDynamicCubemapVisibilityThrottle", settings.EnableDynamicCubemapVisibilityThrottle }
+	};
+}
+
+void VR::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	settings.EnableDepthBufferCullingExterior = a_state.value("EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior);
+	settings.EnableDepthBufferCullingInterior = a_state.value("EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior);
+	globals::features::screenSpaceShadows.enableStereoSync = a_state.value("EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync);
+	globals::features::screenSpaceGI.settings.EnableStereoSync = a_state.value("EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync);
+	settings.EnableStereoBlend = a_state.value("EnableStereoBlend", settings.EnableStereoBlend);
+	settings.EnableLightingFoveation = a_state.value("EnableLightingFoveation", settings.EnableLightingFoveation);
+	settings.EnableLightingFoveationHardCutoff = a_state.value("EnableLightingFoveationHardCutoff", settings.EnableLightingFoveationHardCutoff);
+	settings.EnableSSRFoveation = a_state.value("EnableSSRFoveation", settings.EnableSSRFoveation);
+	settings.EnableSSRFoveationHardCutoff = a_state.value("EnableSSRFoveationHardCutoff", settings.EnableSSRFoveationHardCutoff);
+	settings.EnableWaterParallaxFoveation = a_state.value("EnableWaterParallaxFoveation", settings.EnableWaterParallaxFoveation);
+	settings.EnableWaterParallaxFoveationHardCutoff = a_state.value("EnableWaterParallaxFoveationHardCutoff", settings.EnableWaterParallaxFoveationHardCutoff);
+	settings.EnableWetternessFoveation = a_state.value("EnableWetternessFoveation", settings.EnableWetternessFoveation);
+	settings.EnableWetternessFoveationHardCutoff = a_state.value("EnableWetternessFoveationHardCutoff", settings.EnableWetternessFoveationHardCutoff);
+	settings.EnableDynamicCubemapFoveation = a_state.value("EnableDynamicCubemapFoveation", settings.EnableDynamicCubemapFoveation);
+	settings.EnableDynamicCubemapVisibilityThrottle = a_state.value("EnableDynamicCubemapVisibilityThrottle", settings.EnableDynamicCubemapVisibilityThrottle);
+	settings.ClampToValidRanges();
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+	UpdateDepthBufferCulling();
+}
+
 void VR::SetupResources()
 {
 	// Detect OpenVR version and compatibility early to avoid CTDs
@@ -988,6 +1094,95 @@ void VR::DrawSettings()
 	}
 }
 
+void VR::DrawPerformanceSettings(bool)
+{
+	if (!REL::Module::IsVR()) {
+		ImGui::TextDisabled("VR performance settings are available only in VR.");
+		return;
+	}
+
+	bool exteriorChanged = ImGui::Checkbox("Depth Buffer Culling Exterior", &settings.EnableDepthBufferCullingExterior);
+	bool interiorChanged = ImGui::Checkbox("Depth Buffer Culling Interior", &settings.EnableDepthBufferCullingInterior);
+	if (exteriorChanged || interiorChanged) {
+		UpdateDepthBufferCulling();
+	}
+
+	if (ImGui::SliderFloat("Min Occludee Box Extent", &settings.MinOccludeeBoxExtent, 0.0f, 1000.0f, "%.1f")) {
+		if (gMinOccludeeBoxExtent) {
+			*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
+		}
+	}
+
+	auto& screenSpaceShadows = globals::features::screenSpaceShadows;
+	auto& screenSpaceGI = globals::features::screenSpaceGI;
+	const bool screenSpaceShadowsEnabled = screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
+	const bool screenSpaceGIEnabled = screenSpaceGI.loaded && screenSpaceGI.settings.Enabled;
+
+	ImGui::SeparatorText("Stereo");
+	{
+		auto guard = Util::DisableGuard(!screenSpaceShadowsEnabled);
+		ImGui::Checkbox("Stereo Sync SSS", &screenSpaceShadows.enableStereoSync);
+	}
+	{
+		auto guard = Util::DisableGuard(!screenSpaceGIEnabled);
+		ImGui::Checkbox("Stereo Sync SSGI", &screenSpaceGI.settings.EnableStereoSync);
+	}
+	ImGui::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
+
+	ImGui::SeparatorText("Shader FOV");
+	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+	auto& waterEffects = globals::features::waterEffects;
+	auto& wetnessEffects = globals::features::wetnessEffects;
+	auto& wetterness = globals::features::wetterness;
+	const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
+	const bool waterParallaxAvailable = waterEffects.loaded;
+	const bool wetnessEffectsRuntimeActive = wetnessEffects.IsRuntimeActive();
+	const bool wetternessAvailable = wetterness.loaded && wetterness.IsRuntimeActive() && !wetnessEffectsRuntimeActive;
+	const bool dynamicCubemapsAvailable = dynamicCubemaps.loaded;
+
+	ImGui::Checkbox("Lighting", &settings.EnableLightingFoveation);
+	{
+		auto guard = Util::DisableGuard(!ssrAvailable);
+		ImGui::Checkbox("SSR", &settings.EnableSSRFoveation);
+	}
+	{
+		auto guard = Util::DisableGuard(!waterParallaxAvailable);
+		ImGui::Checkbox("Water Parallax Detail", &settings.EnableWaterParallaxFoveation);
+	}
+	{
+		auto guard = Util::DisableGuard(!wetternessAvailable);
+		ImGui::Checkbox("Wetterness", &settings.EnableWetternessFoveation);
+	}
+	if (!ssrAvailable)
+		ImGui::TextDisabled("SSR foveation requires runtime-active Screen Space Reflections.");
+	if (!waterParallaxAvailable)
+		ImGui::TextDisabled("Water Parallax Detail requires Water Effects.");
+	if (!wetternessAvailable)
+		ImGui::TextDisabled(wetnessEffectsRuntimeActive ? "Wetterness foveation is not available with legacy Wetness Effects." : "Wetterness foveation requires Wetterness to be enabled.");
+	{
+		auto guard = Util::DisableGuard(!dynamicCubemapsAvailable);
+		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
+	}
+
+	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
+	const bool dynamicCubemapVisibilityThrottleBlockedByWetterness = IsWetternessActiveForDynamicCubemapVisibilityThrottle();
+	{
+		auto guard = Util::DisableGuard(!dynamicCubemapsAvailable || dynamicCubemapVisibilityThrottleBlockedByWetterness);
+		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
+	}
+	if (!dynamicCubemapsAvailable)
+		ImGui::TextDisabled("Dynamic Cubemap FOV controls require Dynamic Cubemaps.");
+	if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
+		ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
+}
+
+json VR::CapturePerformanceSettingsState() const
+{
+	json state = CapturePerformanceCostMeasurementState();
+	state["MinOccludeeBoxExtent"] = settings.MinOccludeeBoxExtent;
+	return state;
+}
+
 namespace
 {
 	void DrawControllerInputInstructions()
@@ -1329,17 +1524,17 @@ namespace
 				"Sync Screen Space Shadows",
 				screenSpaceShadows.enableStereoSync,
 				screenSpaceShadowsEnabled,
-				"Matches screen-space shadow results between VR eyes.",
-				"Reduces left/right shadow mismatch and per-eye noise.",
-				"Costs one extra VR compute pass when Screen Space Shadows is active.",
+				"Keeps screen-space shadows more consistent between both eyes.",
+				"Can reduce VR shimmer or left/right mismatch.",
+				"Costs some performance while Screen Space Shadows is active.",
 				"Requires VR and active Screen Space Shadows.");
 			drawSyncToggle(
 				"Sync SSGI",
 				screenSpaceGI.settings.EnableStereoSync,
 				screenSpaceGIEnabled,
-				"Matches SSGI AO/GI results between VR eyes.",
-				"Reduces left/right AO and indirect-light mismatch.",
-				"Costs one extra compute pass, plus a center pass when SSGI FOV is active.",
+				"Keeps ambient shadowing more consistent between both eyes.",
+				"Can reduce VR shimmer or left/right mismatch.",
+				"Costs some performance while SSGI is active.",
 				"Requires VR and active SSGI.");
 
 			if (!isVR)
@@ -1367,32 +1562,31 @@ namespace
 
 			ImGui::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Depth-aware blend between eyes after deferred composite.");
-				ImGui::TextUnformatted("Can hide residual screen-space mismatches.");
-				ImGui::TextUnformatted("Costs one full-screen compute pass when active.");
+				ImGui::TextUnformatted("Helps hide left/right eye mismatches from some effects.");
+				ImGui::TextUnformatted("Use it only if you notice artifacts, because it can cost performance.");
 			}
 
-			ImGui::Text("Runtime gate: %s", screenSpaceEffectActive ? "screen-space effect active" : "inactive - no supported screen-space effect");
-			ImGui::Text("Current state: %s", blendCanRun ? "will run" : "off");
+			ImGui::Text("Available: %s", screenSpaceEffectActive ? "yes" : "no supported effect is active");
+			ImGui::Text("Current state: %s", blendCanRun ? "active" : "off");
 			ImGui::Spacing();
 
 			ImGui::BeginDisabled(!settings.EnableStereoBlend);
 
 			ImGui::SliderFloat("Max Blend Strength", &settings.StereoBlendMaxFactor, VR::Config::kMinStereoBlendMaxFactor, VR::Config::kMaxStereoBlendMaxFactor, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Limits cross-eye color contribution. Lower is safer; default is %.3f.", VR::Config::kDefaultStereoBlendMaxFactor);
+				ImGui::Text("Controls how strongly the two eyes are blended. Lower is safer.");
 			}
 
 			ImGui::SliderFloat("Depth Match Tolerance", &settings.StereoBlendDepthSigma, VR::Config::kMinStereoBlendDepthSigma, VR::Config::kMaxStereoBlendDepthSigma, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Depth tolerance for cross-eye matches.");
-				ImGui::TextUnformatted("Lower values are stricter and reduce halo risk.");
+				ImGui::TextUnformatted("Controls how closely the two eyes must match before blending.");
+				ImGui::TextUnformatted("Lower values reduce halo risk.");
 			}
 
 			ImGui::SliderFloat("Color Mismatch Threshold", &settings.StereoBlendColorThreshold, VR::Config::kMinStereoBlendColorThreshold, VR::Config::kMaxStereoBlendColorThreshold, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Minimum luminance mismatch before blending.");
-				ImGui::TextUnformatted("Higher values skip already-matching pixels.");
+				ImGui::TextUnformatted("Only blends when the two eyes differ enough.");
+				ImGui::TextUnformatted("Higher values blend less often.");
 			}
 
 			if (ImGui::Button("Reset Blending Defaults")) {
@@ -1403,9 +1597,9 @@ namespace
 
 			ImGui::EndDisabled();
 
-			ImGui::TextDisabled("Performance: runs one full-screen compute pass while enabled.");
+			ImGui::TextDisabled("Performance: costs extra while active.");
 			ImGui::Spacing();
-			ImGui::TextWrapped("This pass operates on final composite color and cannot reliably attribute pixels to individual screen-space producers.");
+			ImGui::TextWrapped("This is a broad fallback. Use the cost check to decide if it is worth keeping on.");
 		}
 	}
 
@@ -1436,19 +1630,24 @@ namespace
 		auto drawDetailBudget = [](const char* a_label, bool& a_enabled, const char* a_hardCutoffLabel, bool& a_hardCutoff,
 									const char* a_line0, const char* a_line1, const char* a_line2,
 									const char* a_hardLine0, const char* a_hardLine1, const char* a_hardLine2) {
+			auto drawTooltipLine = [](const char* a_text) {
+				if (a_text && a_text[0] != '\0')
+					ImGui::TextUnformatted(a_text);
+			};
+
 			ImGui::Checkbox(a_label, &a_enabled);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted(a_line0);
-				ImGui::TextUnformatted(a_line1);
-				ImGui::TextUnformatted(a_line2);
+				drawTooltipLine(a_line0);
+				drawTooltipLine(a_line1);
+				drawTooltipLine(a_line2);
 			}
 
 			ImGui::BeginDisabled(!a_enabled);
 			ImGui::Checkbox(a_hardCutoffLabel, &a_hardCutoff);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted(a_hardLine0);
-				ImGui::TextUnformatted(a_hardLine1);
-				ImGui::TextUnformatted(a_hardLine2);
+				drawTooltipLine(a_hardLine0);
+				drawTooltipLine(a_hardLine1);
+				drawTooltipLine(a_hardLine2);
 			}
 			ImGui::EndDisabled();
 		};
@@ -1593,10 +1792,9 @@ namespace
 				}
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Master switch for eligible shader/detail FOV features and Dynamic Cubemap FOV throttles.");
-				ImGui::TextUnformatted("Screen Space Shadows and SSGI FOV stay controlled separately.");
-				ImGui::TextUnformatted("Does not change Upscaling FOV, mask visualization, mask geometry, FOV + TAA, or hard-cutoff sub-modes.");
-				ImGui::TextUnformatted("Turning on enables only available features; turning off clears those toggles.");
+				ImGui::TextUnformatted("Turns on all available FOV performance options in this section.");
+				ImGui::TextUnformatted("Screen Space Shadows and SSGI have their own FOV toggles.");
+				ImGui::TextUnformatted("Turn it off to clear these options.");
 			}
 			ImGui::SameLine();
 			if (anyFoveationFeatureAvailable)
@@ -1614,12 +1812,12 @@ namespace
 			settings.EnableLightingFoveation,
 			"Hard Cutoff Outside FOV##Lighting",
 			settings.EnableLightingFoveationHardCutoff,
-			"Uses the active shared FOV mask to reduce expensive auxiliary detail in the Lighting shader.",
-			"The full visible FOV uses the FOV-only visible scale, or the FOV + TAA visible outer scale when FOV + TAA is enabled.",
-			"Base diffuse lighting, albedo, normal, and shadowmask sampling remain unchanged.",
-			"Uses a binary mask for Lighting shader auxiliary detail.",
-			"Inside the FOV mask gets full auxiliary detail; outside the mask skips those optional paths instead of feathering quality.",
-			"This can save more work, but can make detail transitions more visible near the mask edge.");
+			"Reduces extra lighting detail near the edge of your VR view.",
+			"Can improve performance with little change in the center.",
+			"",
+			"Stronger version of the setting above.",
+			"Saves more performance, but edge changes may be more visible.",
+			"");
 		ImGui::Separator();
 
 		ImGui::BeginDisabled(!ssrAvailable);
@@ -1628,12 +1826,12 @@ namespace
 			settings.EnableSSRFoveation,
 			"Hard Cutoff Outside FOV##SSR",
 			settings.EnableSSRFoveationHardCutoff,
-			"Uses the active shared FOV mask to reduce expensive screen-space reflection raymarching in VR.",
-			"Inside the FOV mask keeps full SSR. The feather band uses fewer raymarch iterations and fades SSR alpha so existing reflection fallback shows through.",
-			"Outside the mask, SSR raymarching is skipped and downstream water/reflection fallback remains responsible for the result.",
-			"Uses a binary mask for SSR raymarching.",
-			"Inside the FOV mask keeps full SSR; outside the mask skips SSR raymarching completely and relies on fallback reflections.",
-			"This assumes only the foveated area is visibly important and can make reflective water transitions more visible near the mask edge.");
+			"Reduces reflection detail near the edge of your VR view.",
+			"Can improve performance while keeping reflections strongest where you look.",
+			"",
+			"Stronger version of the setting above.",
+			"Saves more performance, but reflections may change more at the edge.",
+			"");
 		ImGui::EndDisabled();
 		if (!ssrAvailable) {
 			ImGui::TextDisabled("SSR foveation requires Dynamic Cubemaps SSR.");
@@ -1648,12 +1846,12 @@ namespace
 			settings.EnableWaterParallaxFoveation,
 			"Hard Cutoff Outside FOV##WaterParallax",
 			settings.EnableWaterParallaxFoveationHardCutoff,
-			"Uses the active shared FOV mask to reduce expensive Water Effects parallax loops in VR.",
-			"Inside the FOV mask keeps full water parallax. The feather band uses fewer parallax steps and fades offsets toward base water normals.",
-			"Base water color, normal sampling, reflection, refraction, and Wetterness ripple paths remain active.",
-			"Uses a binary mask for Water Effects parallax detail.",
-			"Inside the FOV mask keeps full parallax; outside the mask skips parallax offsets and uses base water normal UVs.",
-			"This assumes only the foveated area is visibly important and can make water microdetail transitions more visible near the mask edge.");
+			"Reduces small water detail near the edge of your VR view.",
+			"Can improve performance while keeping water detail strongest where you look.",
+			"",
+			"Stronger version of the setting above.",
+			"Saves more performance, but water detail may change more at the edge.",
+			"");
 		ImGui::EndDisabled();
 		if (!waterParallaxAvailable)
 			ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
@@ -1665,12 +1863,12 @@ namespace
 			settings.EnableWetternessFoveation,
 			"Hard Cutoff Outside FOV##Wetterness",
 			settings.EnableWetternessFoveationHardCutoff,
-			"Uses the active shared FOV mask to reduce Wetterness raindrop/ripple microdetail and direct wet specular in VR.",
-			"Base wetness, puddles, darkening, shore wetness, broad reflection, and cubemap wet reflectance remain active everywhere.",
-			"This applies only to Wetterness and does not affect legacy Wetness Effects.",
-			"Uses a binary mask for Wetterness dynamic detail.",
-			"Inside the FOV mask keeps full dynamic wet detail; outside the mask skips raindrop/ripple work and direct wet specular contribution.",
-			"This assumes only the foveated area is visibly important and can make wet microdetail transitions more visible near the mask edge.");
+			"Reduces small rain and wetness detail near the edge of your VR view.",
+			"Can improve performance while keeping wet detail strongest where you look.",
+			"",
+			"Stronger version of the setting above.",
+			"Saves more performance, but wet detail may change more at the edge.",
+			"");
 		ImGui::EndDisabled();
 		if (wetnessEffectsRuntimeActive)
 			ImGui::TextDisabled("Wetterness dynamic-detail foveation is only available with Wetterness. Wetness Effects is not supported.");
@@ -1691,19 +1889,16 @@ namespace
 		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive);
 		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Uses the active shared FOV mask as the VR-only foveation gate for Dynamic Cubemap update cadence.");
-			ImGui::TextUnformatted("When active, cubemap capture, inference, irradiance, and BC6H compression are spread across more frames when reflections are low priority.");
-			ImGui::TextUnformatted("Additive with Low-Visibility Cubemap Throttle; this is not a shader-detail feathered vs hard-cutoff pair.");
+			ImGui::TextUnformatted("Updates cubemap reflections less often when they are less visible.");
+			ImGui::TextUnformatted("Can improve performance, but reflections may react a little slower.");
 		}
 		ImGui::EndDisabled();
 
 		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive || dynamicCubemapVisibilityThrottleBlockedByWetterness);
 		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Adds visibility-based reduction for Dynamic Cubemaps when the secondary reflection path is not currently useful.");
-			ImGui::TextUnformatted("When no real reflection pass is active, exterior fake-reflection cubemap work is not forced and any pending secondary reflection task is skipped.");
-			ImGui::TextUnformatted("It can be enabled independently, but enabling both cubemap toggles applies both cadence throttling and eligible low-value reflection-task skipping.");
-			ImGui::TextUnformatted("Additive with Dynamic Cubemap Cadence; it is not a replacement mode or a hard-cutoff option.");
+			ImGui::TextUnformatted("Skips extra cubemap reflection work when it is unlikely to be noticed.");
+			ImGui::TextUnformatted("Can improve performance in low-reflection scenes.");
 		}
 		ImGui::EndDisabled();
 		if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
@@ -1731,10 +1926,10 @@ namespace
 			const bool statusAnyCubemapFoveationEnabled =
 				settings.EnableDynamicCubemapFoveation ||
 				settings.EnableDynamicCubemapVisibilityThrottle;
-			ImGui::Text("Shared FOV mask: %s", foveatedProfileActive ? "active" : profile.available ? "full visible coverage" :
+			ImGui::Text("Shared FOV area: %s", foveatedProfileActive ? "active" : profile.available ? "full visible coverage" :
 																									  "unavailable");
 			ImGui::Text("Lighting auxiliary detail: %s (%s)", statusLightingActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusLightingMode));
-			ImGui::Text("SSR raymarch: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
+			ImGui::Text("SSR reflections: %s (%s)", statusSSRActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusSSRMode));
 			ImGui::Text("Water parallax detail: %s (%s)", statusWaterParallaxActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWaterParallaxMode));
 			ImGui::Text("Wetterness dynamic detail: %s (%s)", statusWetternessActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusWetternessMode));
 			ImGui::Text("Screen Space Shadows: %s", statusScreenSpaceShadowsEnabled && foveatedProfileActive ? "active" : "inactive");

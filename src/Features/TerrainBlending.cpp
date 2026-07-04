@@ -85,10 +85,10 @@ namespace
 
 	// Engine-hook override map for Utility shadowmask passes:
 	// 1) PS slot 17 override: bind TB-selected depth SRV for OBB depth reads; prevents occlusion instability / mesh popping.
-	// 2) PS slot 2 override: bind TB-selected depth SRV for shadowmask reads; prevents unstable/moving ground shadow imprint, and dark overlay style artifacts. 
+	// 2) PS slot 2 override: bind TB-selected depth SRV for shadowmask reads; prevents unstable/moving ground shadow imprint, and dark overlay style artifacts.
 	// 3) OM depth override: force DepthFunc=ALWAYS only on descriptor 0x1062002; mitigate shadowmask ground artifacts caused by failed depth testing in 0x1062002.
-		// All override paths below are gated by IsEngineHookFeatureGateSatisfied and all are VR-specific at runtime (isVR, gateSatisfied).
-		// Developer Mode only: logs one hook snapshot per gate-on cycle ([TB Override]/[TB DepthOverride]) and explicit fallback activate/reset events.
+	// All override paths below are gated by IsEngineHookFeatureGateSatisfied and all are VR-specific at runtime (isVR, gateSatisfied).
+	// Developer Mode only: logs one hook snapshot per gate-on cycle ([TB Override]/[TB DepthOverride]) and explicit fallback activate/reset events.
 	// Fallbacks: caller fallback is in ShouldAllowCallerWithFallback(...) (2 and 3 widen after 5 rejects and collapse on first allowlisted hit), SRV-source fallback is in Util::GetCurrentSceneDepthSRV(...).
 	// Pixel descriptors:
 	// - 0x262002 -> apply (1) + (2)
@@ -152,12 +152,12 @@ namespace
 		return globals::state && globals::state->IsDeveloperMode();
 	}
 
-// Caller identity must come from _ReturnAddress() at each hook callsite.
-// Normalize to module-relative RVA so values are stable across process ASLR.
-uint32_t ToModuleRva(const void* a_returnAddress)
-{
-	return static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(a_returnAddress) - REL::Module::get().base());
-}
+	// Caller identity must come from _ReturnAddress() at each hook callsite.
+	// Normalize to module-relative RVA so values are stable across process ASLR.
+	uint32_t ToModuleRva(const void* a_returnAddress)
+	{
+		return static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(a_returnAddress) - REL::Module::get().base());
+	}
 
 	bool ShouldUseBlendedDepthSRV()
 	{
@@ -533,6 +533,44 @@ void TerrainBlending::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+}
+
+void TerrainBlending::DrawPerformanceSettings(bool)
+{
+	bool enabled = settings.Enabled != 0;
+	if (ImGui::Checkbox("Enable Terrain Blending", &enabled)) {
+		settings.Enabled = enabled ? 1u : 0u;
+	}
+
+	ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
+}
+
+json TerrainBlending::CapturePerformanceSettingsState() const
+{
+	return settings;
+}
+
+void TerrainBlending::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (a_enabled) {
+		settings = Settings{};
+		return;
+	}
+
+	settings.Enabled = 0u;
+}
+
+json TerrainBlending::CapturePerformanceCostMeasurementState() const
+{
+	return settings;
+}
+
+void TerrainBlending::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	settings = a_state.get<Settings>();
 }
 
 void TerrainBlending::LoadSettings(json& o_json)
@@ -1105,7 +1143,6 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 			func(a1, a2);
 		}
 	}
-
 }
 
 TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)

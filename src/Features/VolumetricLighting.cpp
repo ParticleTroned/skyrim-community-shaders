@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
-#include "RE/N/NiDirectionalLight.h"
 #include "LocationContext.h"
+#include "RE/N/NiDirectionalLight.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
@@ -108,11 +108,9 @@ namespace
 	{
 		saturation = ClampFinite(saturation, 0.0f, kGodraySaturationMax, 1.0f);
 		const float luminance = GetLuminance(color);
-		return ClampColor01({
-			luminance + (color.red - luminance) * saturation,
+		return ClampColor01({ luminance + (color.red - luminance) * saturation,
 			luminance + (color.green - luminance) * saturation,
-			luminance + (color.blue - luminance) * saturation
-		});
+			luminance + (color.blue - luminance) * saturation });
 	}
 
 	RE::NiColor LerpColor(const RE::NiColor& a, const RE::NiColor& b, float t)
@@ -226,7 +224,7 @@ void VolumetricLighting::DrawSettings()
 		ImGui::SameLine();
 		ImGui::TextDisabled("(VR restart required)");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("VR pre-allocates volumetric lighting targets at boot. Restart the game after changing this toggle.");
+			ImGui::TextUnformatted("In VR, this change needs a restart before it fully applies.");
 		}
 	};
 
@@ -237,7 +235,7 @@ void VolumetricLighting::DrawSettings()
 				SetupVL();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Rain-only mode. Automatically disables weather-driven VL while rain is active and restores it after rain.");
+			ImGui::Text("Turns off rain-driven volumetric lighting while it is raining, then restores it after rain.");
 	}
 
 	DrawGodrayTuningSettings();
@@ -256,6 +254,74 @@ void VolumetricLighting::DrawSettings()
 
 	if (settings.InteriorEnabled)
 		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
+}
+
+void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
+{
+	SanitizeSettings();
+
+	auto drawVRRestartHint = [] {
+		if (!globals::game::isVR) {
+			return;
+		}
+
+		ImGui::SameLine();
+		ImGui::TextDisabled("(VR restart required)");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("In VR, this change needs a restart before it fully applies.");
+		}
+	};
+
+	auto drawQuality = [&](const char* label, int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType) {
+		quality = ClampQualityIndex(quality);
+		if (ImGui::SliderInt(label, &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality])) {
+			if (inLocationType)
+				SetupVL();
+		}
+
+		if (!a_advanced || static_cast<Quality>(quality) != Quality::Custom) {
+			return;
+		}
+
+		auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
+		if (ImGui::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+			customSize.Width = Width * 32;
+			if (inLocationType)
+				SetupVL();
+		}
+		if (ImGui::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+			customSize.Height = Height * 32;
+			if (inLocationType)
+				SetupVL();
+		}
+		if (ImGui::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+			customSize.Depth = Depth * 10;
+			if (inLocationType)
+				SetupVL();
+		}
+	};
+
+	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
+		SetupVL();
+	drawVRRestartHint();
+	if (settings.ExteriorEnabled)
+		drawQuality("Exterior Quality", settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
+
+	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
+		SetupVL();
+	drawVRRestartHint();
+	if (settings.InteriorEnabled)
+		drawQuality("Interior Quality", settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
+
+	if (REL::Module::IsVR()) {
+		if (ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
+			SetupVL();
+	}
+}
+
+json VolumetricLighting::CapturePerformanceSettingsState() const
+{
+	return settings;
 }
 
 void VolumetricLighting::DrawGodrayTuningSettings()
@@ -405,8 +471,7 @@ void VolumetricLighting::RestoreDefaultSettings()
 {
 	settings = {};
 	SanitizeSettings();
-	if (globals::game::isVR)
-	{
+	if (globals::game::isVR) {
 		Util::ResetGameSettingsToDefaults(hiddenVREnableSettings);
 		Util::ResetGameSettingsToDefaults(hiddenVRWeatherUpdateSettings);
 	}
@@ -447,6 +512,46 @@ void VolumetricLighting::SanitizeSettings()
 bool VolumetricLighting::IsExteriorEnabled() const
 {
 	return settings.ExteriorEnabled;
+}
+
+bool VolumetricLighting::IsPerformanceCostMeasurementEnabled() const
+{
+	return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
+}
+
+void VolumetricLighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	const Settings defaults{};
+	if (inInterior) {
+		settings.InteriorEnabled = a_enabled;
+		if (a_enabled) {
+			settings.InteriorQuality = defaults.InteriorQuality;
+			settings.InteriorCustomSize = defaults.InteriorCustomSize;
+		}
+	} else {
+		settings.ExteriorEnabled = a_enabled;
+		if (a_enabled) {
+			settings.ExteriorQuality = defaults.ExteriorQuality;
+			settings.ExteriorCustomSize = defaults.ExteriorCustomSize;
+		}
+	}
+
+	SetupVL();
+}
+
+json VolumetricLighting::CapturePerformanceCostMeasurementState() const
+{
+	return settings;
+}
+
+void VolumetricLighting::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	settings = a_state.get<Settings>();
+	SanitizeSettings();
+	SetupVL();
 }
 
 void VolumetricLighting::SetExteriorEnabled(bool enabled)
@@ -536,8 +641,8 @@ void VolumetricLighting::EarlyPrepass()
 		IsRainTransitionActive();
 
 	if (initialised &&
-	    currentlyInInterior == inInterior &&
-	    nextRainSuppressionActive == rainOnlySuppressionActive)
+		currentlyInInterior == inInterior &&
+		nextRainSuppressionActive == rainOnlySuppressionActive)
 		return;
 
 	initialised = true;

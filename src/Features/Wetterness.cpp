@@ -1932,6 +1932,145 @@ float Wetterness::GetEffectiveGrassSpecularStrength(float drySpecularStrength, c
 	return BlendGrassLightingEndpoint(dryEndpoint, rainEndpoint, runtimeState.grassLightingWetnessPhase);
 }
 
+void Wetterness::DrawPerformanceSettings(bool a_advanced)
+{
+	InvalidateSanitizedSettingsCache();
+
+	auto drawUintCheckbox = [](const char* label, uint& value) {
+		bool enabled = value != 0;
+		const bool changed = ImGui::Checkbox(label, &enabled);
+		value = enabled ? 1u : 0u;
+		return changed;
+	};
+
+	auto markPresetDirtyIfEdited = [this]() {
+		if (ImGui::IsItemDeactivatedAfterEdit()) {
+			DetectCurrentPreset();
+		}
+	};
+
+	drawUintCheckbox("Enable Wetterness", settings.EnableWetterness);
+
+	ImGui::TextUnformatted("Wetterness Presets");
+	if (ImGui::BeginTable("WetternessPerformancePresetButtons", static_cast<int>(WETTERNESS_UI_PRESETS.size()), ImGuiTableFlags_SizingStretchProp)) {
+		for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
+			ImGui::TableSetupColumn(WETTERNESS_UI_PRESETS[i].name, ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		}
+
+		ImGui::TableNextRow();
+		for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
+			ImGui::TableNextColumn();
+			const auto& preset = WETTERNESS_UI_PRESETS[i];
+			const bool presetActive = IsWetternessUiPresetActive(*this, preset);
+			[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
+			if (ImGui::Button(preset.name, ImVec2(-1.0f, 0.0f))) {
+				ApplyWetternessUiPreset(*this, preset);
+				DetectCurrentPreset();
+			}
+		}
+
+		ImGui::EndTable();
+	}
+
+	if (!a_advanced) {
+		SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
+		return;
+	}
+
+	ImGui::SeparatorText("Advanced");
+	drawUintCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
+	const bool raindropSettingsDisabled = settings.EnableRaindropFx == 0;
+	const bool raindropAdvancedDisabled = raindropSettingsDisabled || settings.EnableWetterness == 0;
+
+	ImGui::BeginDisabled(raindropSettingsDisabled);
+	drawUintCheckbox("Enable Splashes", settings.EnableSplashes);
+	drawUintCheckbox("Enable Ripples", settings.EnableRipples);
+	ImGui::EndDisabled();
+
+	ImGui::BeginDisabled(raindropAdvancedDisabled);
+	ImGui::SliderFloat("Raindrop Effect Range", &settings.RaindropFxRangeWorldUnits, RAINDROP_FX_RANGE_UI_MIN_GAME_UNITS, RAINDROP_FX_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
+	markPresetDirtyIfEdited();
+	ImGui::SliderFloat("Interval", &settings.RaindropInterval, 0.1f, 2.0f, "%.1f sec");
+	markPresetDirtyIfEdited();
+	ImGui::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	markPresetDirtyIfEdited();
+	ImGui::EndDisabled();
+
+	ImGui::SliderFloat("Wetness Fade Range", &wetnessDistanceFadeRange, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
+
+	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
+}
+
+json Wetterness::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Settings", settings },
+		{ "ModernWetIndirectSpecularScale", modernWetIndirectSpecularScale },
+		{ "LegacyWetIndirectSpecularScale", legacyWetIndirectSpecularScale },
+		{ "PuddleDryingHours", puddleDryingHours },
+		{ "PuddleLayout", puddleLayout },
+		{ "RainReflectionBalance", rainReflectionBalance },
+		{ "PuddleSkyReflectionScale", puddleSkyReflectionScale },
+		{ "PostRainWaterClarity", postRainWaterClarity },
+		{ "ShorePersistentDarkeningStrength", shorePersistentDarkeningStrength },
+		{ "WetnessDistanceFadeRange", wetnessDistanceFadeRange },
+		{ "RainGrassGlossiness", rainGrassGlossiness },
+		{ "RainGrassSpecularStrength", rainGrassSpecularStrength }
+	};
+}
+
+void Wetterness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (a_enabled) {
+		ApplyDefaultWetternessUiPreset(*this);
+		settings.EnableWetterness = 1u;
+	} else {
+		settings.EnableWetterness = 0u;
+	}
+
+	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
+	SanitizeShaderFacingSettings(settings);
+	InvalidateSanitizedSettingsCache();
+	ResetRuntimeState();
+	DetectCurrentPreset();
+}
+
+json Wetterness::CapturePerformanceCostMeasurementState() const
+{
+	json state = CapturePerformanceSettingsState();
+	state["EnableWeatherDrivenDryingModel"] = enableWeatherDrivenDryingModel;
+	return state;
+}
+
+void Wetterness::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	if (a_state.contains("Settings"))
+		settings = a_state.at("Settings").get<Settings>();
+
+	modernWetIndirectSpecularScale = a_state.value("ModernWetIndirectSpecularScale", modernWetIndirectSpecularScale);
+	legacyWetIndirectSpecularScale = a_state.value("LegacyWetIndirectSpecularScale", legacyWetIndirectSpecularScale);
+	puddleDryingHours = a_state.value("PuddleDryingHours", puddleDryingHours);
+	puddleLayout = a_state.value("PuddleLayout", puddleLayout);
+	rainReflectionBalance = a_state.value("RainReflectionBalance", rainReflectionBalance);
+	puddleSkyReflectionScale = a_state.value("PuddleSkyReflectionScale", puddleSkyReflectionScale);
+	postRainWaterClarity = a_state.value("PostRainWaterClarity", postRainWaterClarity);
+	shorePersistentDarkeningStrength = a_state.value("ShorePersistentDarkeningStrength", shorePersistentDarkeningStrength);
+	wetnessDistanceFadeRange = a_state.value("WetnessDistanceFadeRange", wetnessDistanceFadeRange);
+	rainGrassGlossiness = a_state.value("RainGrassGlossiness", rainGrassGlossiness);
+	rainGrassSpecularStrength = a_state.value("RainGrassSpecularStrength", rainGrassSpecularStrength);
+	enableWeatherDrivenDryingModel = a_state.value("EnableWeatherDrivenDryingModel", enableWeatherDrivenDryingModel);
+
+	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
+	SanitizeShaderFacingSettings(settings);
+	InvalidateSanitizedSettingsCache();
+	ResetRuntimeState();
+	DetectCurrentPreset();
+}
+
 Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 {
 	const bool canUseFrameCache = globals::state != nullptr;

@@ -1053,8 +1053,7 @@ namespace Hooks
 			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
 		}
 #if defined(_MSC_VER)
-		__except (1)
-		{
+		__except (1) {
 			// Fail open on transient invalid render-pass data to avoid crashing render-thread hooks.
 			return false;
 		}
@@ -1173,6 +1172,23 @@ namespace Hooks
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		const char* GetVolumetricLightingProfileName(RE::BSComputeShader* shader)
+		{
+			if (!shader)
+				return nullptr;
+
+			if (shader->name == "ISVolumetricLightingGenerateCS"sv)
+				return "VolumetricLighting::Generate";
+			if (shader->name == "ISVolumetricLightingRaymarchCS"sv)
+				return "VolumetricLighting::Raymarch";
+			if (shader->name == "ISVolumetricLightingBlurHCS"sv)
+				return "VolumetricLighting::BlurH";
+			if (shader->name == "ISVolumetricLightingBlurVCS"sv)
+				return "VolumetricLighting::BlurV";
+
+			return nullptr;
+		}
+
 		struct Renderer_DispatchCSShader
 		{
 			static void thunk(RE::BSGraphics::Renderer* renderer, RE::BSGraphics::ComputeShader* shader, uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ)
@@ -1180,11 +1196,14 @@ namespace Hooks
 				auto state = globals::state;
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
+				const char* profileName = nullptr;
 
 				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
-					if (vl.loaded) {
+					if (vl.loaded && CurrentlyDispatchedComputeShader) {
+						profileName = GetVolumetricLightingProfileName(CurrentlyDispatchedComputeShader);
+
 						if (CurrentlyDispatchedShader == nullptr) {
 							techniqueId = 0;
 							if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingGenerateCS"sv) {
@@ -1210,7 +1229,13 @@ namespace Hooks
 						}
 					}
 				}
-				func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+
+				if (profileName) {
+					CS_PROFILE_SCOPE(profileName);
+					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+				} else {
+					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};

@@ -22,6 +22,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
@@ -32,8 +33,9 @@
 
 namespace
 {
-	// Core built-in menu names that always appear first in the menu list
-	constexpr std::array<const char*, 5> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", "Display" };
+	constexpr const char* PERFORMANCE_TUNING_MENU_NAME = "Performance Tuning";
+	// Core built-in menu names that always appear before the feature list.
+	constexpr std::array<const char*, 6> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", PERFORMANCE_TUNING_MENU_NAME, "Display" };
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 
 	ImVec2 GetRestoreDefaultsIconSize()
@@ -110,6 +112,81 @@ namespace
 	bool IsCoreMenu(const std::string& menuName)
 	{
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
+	}
+
+	bool IsPerformanceTuningMenuSelected(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t selectedMenu)
+	{
+		if (selectedMenu >= menuList.size())
+			return false;
+
+		const auto* builtInMenu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuList[selectedMenu]);
+		return builtInMenu && builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME;
+	}
+
+	bool TrySelectPerformanceTuningMenu(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t& selectedMenu)
+	{
+		for (size_t i = 0; i < menuList.size(); ++i) {
+			const auto* builtInMenu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuList[i]);
+			if (builtInMenu && builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME) {
+				selectedMenu = i;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool IsPerformanceMeasurementNavigationLocked(size_t listId, size_t selectedMenu)
+	{
+		return PerformanceTuningRenderer::HasActiveMeasurements() && listId != selectedMenu;
+	}
+
+	int& GetFeatureUiModeValue(Feature* feature)
+	{
+		static std::unordered_map<std::string, int> featureUiModes;
+		static int fallbackMode = 0;
+		if (!feature)
+			return fallbackMode;
+
+		const std::string featureShortName = feature->GetShortName();
+		return featureUiModes[featureShortName];
+	}
+
+	bool IsFeatureAdvancedUiMode(Feature* feature)
+	{
+		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
+			return false;
+
+		int& mode = GetFeatureUiModeValue(feature);
+		mode = std::clamp(mode, 0, 1);
+		return mode != 0;
+	}
+
+	bool DrawFeatureUiModeToggle(Feature* feature)
+	{
+		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
+			return false;
+
+		int& mode = GetFeatureUiModeValue(feature);
+		mode = std::clamp(mode, 0, 1);
+		bool advanced = mode != 0;
+
+		ImGui::PushID("FeatureUiMode");
+		if (ImGui::Checkbox("Advanced", &advanced))
+			mode = advanced ? 1 : 0;
+		ImGui::PopID();
+
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Shows every setting for this feature.");
+			ImGui::TextUnformatted("Turn it off to return to the simpler Essentials view.");
+		}
+		return mode != 0;
+	}
+
+	float GetFeatureUiModeToggleWidth()
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		return ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize("Advanced").x;
 	}
 
 	/**
@@ -191,14 +268,20 @@ namespace
 	/**
 	 * @brief Draws a feature header with the feature name in large text
 	 * @param featureName The display name of the feature
-	 * @param description Short description shown below the title (single line, truncated if too long)
+	 * @param description Short description shown below the title
 	 * @return The height of just the title line (for button alignment)
 	 */
-	float DrawFeatureHeader(const std::string& featureName, const std::string& description = "")
+	float DrawFeatureHeader(const std::string& featureName, const std::string& description = "", float reservedRightWidth = 0.0f)
 	{
 		auto& themeSettings = globals::menu->GetTheme();
 		auto& palette = themeSettings.Palette;
 		auto& featureHeading = themeSettings.FeatureHeading;
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const float availableWidth = ImGui::GetContentRegionAvail().x;
+		const float maxReservedWidth = std::max(0.0f, availableWidth - ImGui::GetFrameHeight());
+		const float reservedWidth = std::clamp(reservedRightWidth, 0.0f, maxReservedWidth);
+		const float textWidth = std::max(ImGui::GetFrameHeight(), availableWidth - reservedWidth - style.ItemSpacing.x);
+		const float wrapPosX = ImGui::GetCursorPosX() + textWidth;
 
 		// Sanitize and clamp to UI slider range to prevent malformed theme JSON from destabilizing layout
 		float titleScale = featureHeading.FeatureTitleScale;
@@ -207,21 +290,18 @@ namespace
 		}
 		titleScale = std::clamp(titleScale, 1.0f, 3.0f);
 
-		// Calculate title size and draw feature name with Title font
-		ImVec2 titleSize;
+		const float titleStartY = ImGui::GetCursorPosY();
 		{
 			MenuFonts::FontRoleGuard titleGuard(Menu::FontRole::Title);
-			titleSize = ImGui::CalcTextSize(featureName.c_str());
-			titleSize.x *= titleScale;
-			titleSize.y *= titleScale;
-
 			ImGui::SetWindowFontScale(titleScale);
+			ImGui::PushTextWrapPos(wrapPosX);
 			ImGui::TextUnformatted(featureName.c_str());
+			ImGui::PopTextWrapPos();
 			ImGui::SetWindowFontScale(1.0f);
 		}
 
 		// Store the title-only height for return value
-		float titleOnlyHeight = titleSize.y;
+		float titleOnlyHeight = ImGui::GetCursorPosY() - titleStartY;
 
 		// Draw description if provided (wrapped to content width)
 		if (!description.empty()) {
@@ -229,7 +309,9 @@ namespace
 			ImVec4 descColor = palette.Text;
 			descColor.w *= 0.7f;  // Slightly dimmed
 			ImGui::PushStyleColor(ImGuiCol_Text, descColor);
-			ImGui::TextWrapped("%s", description.c_str());
+			ImGui::PushTextWrapPos(wrapPosX);
+			ImGui::TextUnformatted(description.c_str());
+			ImGui::PopTextWrapPos();
 			ImGui::PopStyleColor();
 		}
 
@@ -279,6 +361,14 @@ void FeatureListRenderer::RenderFeatureList(
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
 
 	HandlePendingFeatureSelection(pendingFeatureSelection, menuList, selectedMenu);
+	if (PerformanceTuningRenderer::HasActiveMeasurements() && !IsPerformanceTuningMenuSelected(menuList, selectedMenu))
+		TrySelectPerformanceTuningMenu(menuList, selectedMenu);
+
+	auto cancelPerformanceMeasurementsIfInactive = [&]() {
+		if (!IsPerformanceTuningMenuSelected(menuList, selectedMenu))
+			PerformanceTuningRenderer::CancelActiveMeasurements(true);
+	};
+	cancelPerformanceMeasurementsIfInactive();
 
 	// Determine if left panel should be visible based on auto-hide settings
 	bool leftPanelVisible = ShouldShowLeftPanel();
@@ -290,10 +380,12 @@ void FeatureListRenderer::RenderFeatureList(
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
+			cancelPerformanceMeasurementsIfInactive();
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		} else {
 			// When left panel is hidden, right column takes full width
 			ImGui::TableSetupColumn("##MenuConfig", 0, 1);
+			cancelPerformanceMeasurementsIfInactive();
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		}
 
@@ -325,12 +417,17 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
-		BuiltInMenu{ "General", drawGeneralSettings },
-		BuiltInMenu{ "Advanced", drawAdvancedSettings },
-		BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } }
+		BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } },
+		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() { PerformanceTuningRenderer::Render(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
+
+	const bool essentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
+	if (!essentialsMode) {
+		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "General", drawGeneralSettings });
+		menuList.insert(menuList.begin() + 2, BuiltInMenu{ "Advanced", drawAdvancedSettings });
+	}
 
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
@@ -339,6 +436,11 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 			std::string category(feat->GetCategory());
 			categorizedFeatures[category].push_back(feat);
 		}
+	}
+
+	const std::string utilityCategory(FeatureCategories::kUtility);
+	if (categoryExpansionStates.find(utilityCategory) == categoryExpansionStates.end()) {
+		categoryExpansionStates[utilityCategory] = true;
 	}
 
 	// Sort features within each category
@@ -387,7 +489,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-		return !feat->IsHiddenFromUserView() && !feat->loaded && feat->IsInMenu() && (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
+		return !feat->IsHiddenFromUserView() && !feat->loaded && feat->IsInMenu() &&
+		       (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
 		menuList.push_back("Unloaded Features"s);
@@ -458,7 +561,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		}
 
 		// Add Features header and search bar after built-in settings
-		Util::DrawSectionHeader("Features", true);
+		Util::DrawSectionHeader((globals::menu && globals::menu->IsPerformanceUiMode()) ? "Essentials" : "Features", true);
 		Util::DrawFeatureSearchBar(featureSearch);
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
@@ -502,13 +605,19 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
 
+		const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
+		ImGui::BeginDisabled(navigationLocked);
 		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
 			selectedMenuRef = listId;
+		ImGui::EndDisabled();
 
 		ImGui::PopStyleColor();
 	} else {
+		const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
+		ImGui::BeginDisabled(navigationLocked);
 		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
 			selectedMenuRef = listId;
+		ImGui::EndDisabled();
 	}
 }
 
@@ -571,6 +680,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	}
 
 	ImGui::PushID(featureName.c_str());
+	const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
+	ImGui::BeginDisabled(navigationLocked);
 	bool bootEnabled = !isDisabled;
 	if (hasFailedMessage) {
 		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
@@ -584,10 +695,9 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Toggle feature loading at boot.\n"
+			"Turns this feature on or off after restart.\n"
 			"Current state: %s\n"
-			"Restart required for changes to take effect.\n"
-			"Disabling removes performance impact.",
+			"Turning it off can improve performance.",
 			bootEnabled ? "Enabled" : "Disabled");
 	}
 	ImGui::SameLine();
@@ -598,6 +708,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		selectedMenuRef = listId;
 	}
 	ImGui::PopStyleColor();
+	ImGui::EndDisabled();
 	ImGui::PopID();
 }
 
@@ -661,9 +772,11 @@ bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string&
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
 {
 	const auto featureName = feat->GetShortName();
+	const bool showFeatureUiModeToggle = isLoaded && globals::menu && globals::menu->IsPerformanceUiMode();
 
 	// Calculate action button widths
 	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
+	const float toggleWidth = showFeatureUiModeToggle ? GetFeatureUiModeToggleWidth() : 0.0f;
 
 	const char* overrideButtonText = "Apply Override";
 	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
@@ -676,6 +789,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	if (!isDisabled && isLoaded && hasOverrides) {
 		totalButtonWidth = overrideButtonWidth;
 	}
+	if (showFeatureUiModeToggle) {
+		if (totalButtonWidth > 0.0f)
+			totalButtonWidth += ImGui::GetStyle().ItemSpacing.x;
+		totalButtonWidth += toggleWidth;
+	}
 
 	// Get available content width for positioning
 	float availableWidth = ImGui::GetContentRegionAvail().x;
@@ -687,22 +805,20 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	auto [description, keyFeatures] = feat->GetFeatureSummary();
 	(void)keyFeatures;  // Not used for subtitle display
 
-	// Draw feature title and description on the left
-	// Returns title-only height for button alignment
-	float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), description);
+	// Draw feature title and description on the left.
+	const float titleOnlyHeight = DrawFeatureHeader(feat->GetName(), description, totalButtonWidth);
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
 
-	// Position action buttons to the right of the header, middle-aligned with title only
-	float buttonHeight = ImGui::GetFrameHeight();
-
-	// Calculate Y position to middle-align buttons with title text only (not description)
-	float buttonY = titleStartPos.y + (titleOnlyHeight - buttonHeight) * 0.5f;
+	// Position header actions inside the header row, aligned to the title line.
+	const float buttonHeight = ImGui::GetFrameHeight();
+	const float buttonY = titleStartPos.y + std::max(0.0f, (titleOnlyHeight - buttonHeight) * 0.5f);
+	float buttonX = titleStartPos.x + availableWidth - totalButtonWidth;
 
 	// Apply Override button (when feature has available overrides)
 	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - totalButtonWidth, buttonY));
+		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));
 		if (sceneControlled)
 			ImGui::BeginDisabled();
 		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
@@ -727,6 +843,13 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 					"the mod author's recommended settings.");
 			}
 		}
+
+		buttonX += overrideButtonWidth + ImGui::GetStyle().ItemSpacing.x;
+	}
+
+	if (showFeatureUiModeToggle) {
+		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));
+		DrawFeatureUiModeToggle(feat);
 	}
 
 	// Restore cursor position after the title and separator
@@ -748,7 +871,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 
 	if (isDisabled) {
-		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled at boot.");
+		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled until restart.");
 		ImGui::Spacing();
 		ImGui::Text("Enable the feature in the feature list to access its configuration options.");
 		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
@@ -759,8 +882,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		}
 	} else {
 		if (isLoaded) {
+			const bool globalEssentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
+			const bool featureAdvancedMode = IsFeatureAdvancedUiMode(feat);
+			const bool essentialsFeatureMode = globalEssentialsMode && !featureAdvancedMode;
+			const bool performanceFeatureMode = essentialsFeatureMode && feat->HasPerformanceSettings();
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			if (weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
+			if (!essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
 				if (ImGui::Checkbox("Pause Weather Overrides", &paused)) {
 					weatherRegistry->SetFeaturePaused(feat->GetShortName(), paused);
@@ -779,7 +906,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				const auto& featureShortName = feat->GetShortName();
 				auto* sceneMgr = SceneSettingsManager::GetSingleton();
 				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
-				if (sceneControlled || scenePaused) {
+				if (!essentialsFeatureMode && (sceneControlled || scenePaused)) {
 					bool active = !scenePaused;
 					if (Util::FeatureToggle("##PauseSceneSettings", &active))
 						sceneMgr->SetFeaturePaused(featureShortName, !active);
@@ -797,7 +924,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::BeginDisabled();
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			feat->DrawSettings();
+			if (performanceFeatureMode) {
+				Util::PerformanceFrameStyleWrapper performanceStyle(true);
+				feat->DrawPerformanceSettings(false);
+			} else if (essentialsFeatureMode) {
+				ImGui::TextDisabled("Toggle Advanced in the header to expose feature's full UI");
+			} else {
+				feat->DrawSettings();
+			}
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 
 			if (sceneControlled)

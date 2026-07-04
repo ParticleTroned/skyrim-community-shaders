@@ -1,6 +1,7 @@
 #include "ScreenSpaceGI.h"
 
 #include <DirectXTex.h>
+#include <algorithm>
 #include <cmath>
 
 #include "Deferred.h"
@@ -501,13 +502,17 @@ void ScreenSpaceGI::DrawSettings()
 		}
 
 		if (showAdvanced) {
-			ImGui::SliderInt("Slices", (int*)&settings.NumSlices, 1, 10);
+			int numSlices = static_cast<int>(settings.NumSlices);
+			if (ImGui::SliderInt("Slices", &numSlices, 1, 10))
+				settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(
 					"How many directions do the samples take.\n"
 					"Controls noise.");
 
-			ImGui::SliderInt("Steps Per Slice", (int*)&settings.NumSteps, 1, 20);
+			int numSteps = static_cast<int>(settings.NumSteps);
+			if (ImGui::SliderInt("Steps Per Slice", &numSteps, 1, 20))
+				settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(
 					"How many samples does it take in one direction.\n"
@@ -732,9 +737,8 @@ void ScreenSpaceGI::DrawFoveationSettings()
 		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Uses the active upscaling FOV mask for Screen Space GI.");
-		ImGui::TextUnformatted("When enabled, SSGI is computed only inside the mask; outside receives no SSGI.");
-		ImGui::TextUnformatted("AO-only mode; IL/GI and denoisers are disabled while active.");
+		ImGui::TextUnformatted("Focuses ambient shadowing in the clearest part of the VR view.");
+		ImGui::TextUnformatted("Can improve performance, but the effect is reduced near the edge of your view.");
 		if (!loaded)
 			ImGui::TextUnformatted("Requires Screen Space GI.");
 		else if (!settings.Enabled)
@@ -757,6 +761,130 @@ void ScreenSpaceGI::DrawFoveationSettings()
 		Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
 }
 
+void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
+{
+	ApplyPlatformSettingOverrides(settings);
+	SyncResolvedSharedMaskScale(settings);
+	const bool isVR = REL::Module::IsVR();
+
+	if (!ShadersOK())
+		Util::Text::Error("Compute shaders failed to compile!");
+
+	ImGui::Checkbox("Enable", &settings.Enabled);
+
+	const int previousResourceProfile = settings.ResourceProfile;
+	{
+		auto guard = Util::DisableGuard(!settings.Enabled);
+		if (ImGui::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly)) {
+			settings.ResourceProfile = kResourceProfileAOOnly;
+		}
+	}
+
+	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
+	if (settings.ResourceProfile != previousResourceProfile) {
+		if (settings.ResourceProfile == kResourceProfileAOOnly)
+			DisableGIEffects(settings);
+		recompileFlag = true;
+	}
+	if (settings.ResourceProfile == kResourceProfileAOOnly)
+		settings.EnableGI = false;
+
+	{
+		auto guard = Util::DisableGuard(!settings.Enabled);
+		ImGui::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
+	}
+
+	if (isVR) {
+		ImGui::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+		settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
+	}
+
+	recompileFlag |= ImGui::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
+
+	const int previousResolutionMode = settings.ResolutionMode;
+	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+	if (ImGui::BeginTable("SSGIPerformanceResolutionMode", 3, ImGuiTableFlags_SizingStretchProp)) {
+		ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
+		ImGui::TableNextColumn();
+		ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
+		ImGui::TableNextColumn();
+		ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
+		ImGui::EndTable();
+	}
+	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+	if (settings.ResolutionMode != previousResolutionMode) {
+		settings.CenterFullResMaskScale = 0.0f;
+		recompileFlag = true;
+	}
+
+	if (isVR) {
+		DrawFoveationSettings();
+		ImGui::Checkbox("Sync SSGI", &settings.EnableStereoSync);
+	}
+
+	if (a_advanced) {
+		ImGui::SeparatorText("Advanced");
+		int numSlices = static_cast<int>(settings.NumSlices);
+		if (ImGui::SliderInt("Slices", &numSlices, 1, 10))
+			settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
+		int numSteps = static_cast<int>(settings.NumSteps);
+		if (ImGui::SliderInt("Steps Per Slice", &numSteps, 1, 20))
+			settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
+	}
+
+	if (IsResourceProfileRestartPending()) {
+		Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
+	}
+}
+
+json ScreenSpaceGI::CapturePerformanceSettingsState() const
+{
+	return settings;
+}
+
+void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (!a_enabled) {
+		settings.Enabled = false;
+		return;
+	}
+
+	settings = Settings{};
+	settings.Enabled = true;
+	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
+	settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
+	if (!REL::Module::IsVR())
+		ResetVRSpecificSettings(settings);
+	else
+		SyncResolvedSharedMaskScale(settings);
+}
+
+json ScreenSpaceGI::CapturePerformanceCostMeasurementState() const
+{
+	return settings;
+}
+
+void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	settings = a_state.get<Settings>();
+	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
+	settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
+	if (!REL::Module::IsVR())
+		ResetVRSpecificSettings(settings);
+	else
+		SyncResolvedSharedMaskScale(settings);
+}
+
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;
@@ -772,8 +900,8 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	}
 	// Backward compatibility: older configs used a single InteriorsOnly toggle.
 	if (o_json.contains("InteriorsOnly") &&
-	    !o_json.contains("AOInteriorsOnly") &&
-	    !o_json.contains("ILInteriorsOnly")) {
+		!o_json.contains("AOInteriorsOnly") &&
+		!o_json.contains("ILInteriorsOnly")) {
 		const bool legacyInteriorsOnly = o_json.value("InteriorsOnly", settings.AOInteriorsOnly);
 		settings.AOInteriorsOnly = legacyInteriorsOnly;
 		settings.ILInteriorsOnly = legacyInteriorsOnly;
@@ -1207,19 +1335,19 @@ bool ScreenSpaceGI::ShadersOK()
 	const bool runtimeGIActive = !foveatedSsgiActive && IsGIActive();
 	const bool fullGIShadersOK = !runtimeGIActive ||
 	                             (texRadiance &&
-	                              texRadianceTemp &&
-	                              texIlY[0] &&
-	                              texIlY[1] &&
-	                              texIlCoCg[0] &&
-	                              texIlCoCg[1] &&
-	                              texGiSpecular[0] &&
-	                              texGiSpecular[1] &&
-	                              prefilterRadianceCompute &&
-	                              radianceDisoccCompute &&
-	                              giCompute &&
-	                              blurCompute &&
-	                              upsampleCompute &&
-	                              (!REL::Module::IsVR() || stereoSyncCompute));
+									 texRadianceTemp &&
+									 texIlY[0] &&
+									 texIlY[1] &&
+									 texIlCoCg[0] &&
+									 texIlCoCg[1] &&
+									 texGiSpecular[0] &&
+									 texGiSpecular[1] &&
+									 prefilterRadianceCompute &&
+									 radianceDisoccCompute &&
+									 giCompute &&
+									 blurCompute &&
+									 upsampleCompute &&
+									 (!REL::Module::IsVR() || stereoSyncCompute));
 
 	const bool centerAOShadersOK = texCenterAo &&
 	                               centerGIMaskedAOOnlyCompute &&
@@ -1227,11 +1355,11 @@ bool ScreenSpaceGI::ShadersOK()
 	                               (!REL::Module::IsVR() || centerStereoSyncAOOnlyCompute);
 	const bool centerGIShadersOK = !runtimeGIActive ||
 	                               (texCenterIlY &&
-	                                texCenterIlCoCg &&
-	                                texCenterGiSpecular &&
-	                                centerGIMaskedCompute &&
-	                                centerBlendCompute &&
-	                                (!REL::Module::IsVR() || centerStereoSyncCompute));
+									   texCenterIlCoCg &&
+									   texCenterGiSpecular &&
+									   centerGIMaskedCompute &&
+									   centerBlendCompute &&
+									   (!REL::Module::IsVR() || centerStereoSyncCompute));
 	const bool centerMaskActive = foveatedSsgiActive && centerScale > 0.0f;
 
 	if (!centerMaskActive)
@@ -1481,10 +1609,10 @@ void ScreenSpaceGI::DrawSSGI()
 	                                  centerBlendAOOnlyCompute;
 	const bool centerGIShadersReady = !runILPath ||
 	                                  (texCenterIlY &&
-	                                   texCenterIlCoCg &&
-	                                   texCenterGiSpecular &&
-	                                   centerGIMaskedCompute &&
-	                                   centerBlendCompute);
+										  texCenterIlCoCg &&
+										  texCenterGiSpecular &&
+										  centerGIMaskedCompute &&
+										  centerBlendCompute);
 	const bool centerShadersReady = centerAOShadersReady && centerGIShadersReady;
 	const bool centerMaskEnabled = centerShadersReady &&
 	                               foveatedSsgiActive &&
@@ -1503,13 +1631,13 @@ void ScreenSpaceGI::DrawSSGI()
 		return false;
 	};
 	if (!requireActiveShader(runRadianceDisoccPass, activeRadianceDisoccCompute, "radianceDisocc(active)") ||
-	    !requireActiveShader(!foveatedSsgiActive, activeGICompute, "gi(active)") ||
-	    !requireActiveShader(blurEnabled, blurCompute.get(), "blur") ||
-	    !requireActiveShader(stereoSyncBaseEnabled, activeStereoSyncCompute, "stereoSync(active)") ||
-	    !requireActiveShader((resolutionMode != 0) && !centerDirectWrite && !foveatedSsgiActive, activeUpsampleCompute, "upsample(active)") ||
-	    !requireActiveShader(centerMaskEnabled, activeCenterGICompute, "centerGI(active)") ||
-	    !requireActiveShader(stereoSyncCenterEnabled, activeCenterStereoSyncCompute, "centerStereoSync(active)") ||
-	    !requireActiveShader(centerBlendNeeded, activeCenterBlendCompute, "centerBlend(active)")) {
+		!requireActiveShader(!foveatedSsgiActive, activeGICompute, "gi(active)") ||
+		!requireActiveShader(blurEnabled, blurCompute.get(), "blur") ||
+		!requireActiveShader(stereoSyncBaseEnabled, activeStereoSyncCompute, "stereoSync(active)") ||
+		!requireActiveShader((resolutionMode != 0) && !centerDirectWrite && !foveatedSsgiActive, activeUpsampleCompute, "upsample(active)") ||
+		!requireActiveShader(centerMaskEnabled, activeCenterGICompute, "centerGI(active)") ||
+		!requireActiveShader(stereoSyncCenterEnabled, activeCenterStereoSyncCompute, "centerStereoSync(active)") ||
+		!requireActiveShader(centerBlendNeeded, activeCenterBlendCompute, "centerBlend(active)")) {
 		return;
 	}
 
@@ -1593,7 +1721,7 @@ void ScreenSpaceGI::DrawSSGI()
 		std::abs(cache.centerOffsets[0].x - centerOffsets[0].x) > 1e-6f ||
 		std::abs(cache.centerOffsets[0].y - centerOffsets[0].y) > 1e-6f ||
 		(isVR && (std::abs(cache.centerOffsets[1].x - centerOffsets[1].x) > 1e-6f ||
-		          std::abs(cache.centerOffsets[1].y - centerOffsets[1].y) > 1e-6f));
+					 std::abs(cache.centerOffsets[1].y - centerOffsets[1].y) > 1e-6f));
 	if (centerCacheDirty) {
 		cache.frameWidth = resolution[0];
 		cache.frameHeight = resolution[1];
@@ -1772,11 +1900,11 @@ void ScreenSpaceGI::DrawSSGI()
 			// radianceDisocc wrote mip 0 directly to texRadianceTemp above.
 			resetViews();
 			srvs.at(0) = texRadianceTemp->srv.get();
-			uavs.at(0) = uavRadiance[0].get();        // Mip 0
-			uavs.at(1) = uavRadiance[1].get();        // Mip 1
-			uavs.at(2) = uavRadiance[2].get();        // Mip 2
-			uavs.at(3) = uavRadiance[3].get();        // Mip 3
-			uavs.at(4) = uavRadiance[4].get();        // Mip 4
+			uavs.at(0) = uavRadiance[0].get();  // Mip 0
+			uavs.at(1) = uavRadiance[1].get();  // Mip 1
+			uavs.at(2) = uavRadiance[2].get();  // Mip 2
+			uavs.at(3) = uavRadiance[3].get();  // Mip 3
+			uavs.at(4) = uavRadiance[4].get();  // Mip 4
 
 			context->CSSetShaderResources(0, 1, srvs.data());
 			context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);

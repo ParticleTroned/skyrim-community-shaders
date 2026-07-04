@@ -2500,7 +2500,7 @@ namespace SIE
 		const auto featureStates = GetCurrentFeatureStates();
 		const auto cacheEntries = GetCacheEntries(ini, featureStates);
 		return Util::CacheInvalidation::ClassifyMismatches(
-			Plugin::VERSION.string(), cachedPluginVersion, featureStates, cacheEntries);
+			std::string{ Plugin::VERSION_LABEL }, cachedPluginVersion, featureStates, cacheEntries);
 	}
 
 	static std::vector<std::string> GetDefinesForMismatches(
@@ -2906,10 +2906,10 @@ namespace SIE
 
 		CSimpleIniA ini;
 		ini.SetUnicode();
-		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION.string().c_str());
+		ini.SetValue("Cache", "PluginVersion", Plugin::VERSION_LABEL.data());
 		globals::state->WriteDiskCacheInfo(ini);
 		ini.SaveFile((DiskCachePath() / L"Info.ini").c_str());
-		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION.string());
+		logger::info("Saved disk cache info (plugin version: {})", Plugin::VERSION_LABEL);
 	}
 
 	static bool IsEnvVarTruthy(const char* a_name)

@@ -1457,10 +1457,23 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	// Reflex/PCL: the game simulation has finished and post-process/upscale render submission
 	// happens here — mark the simulation-end / render-submit-start boundary.
+	// Main_PostProcessing runs MORE THAN ONCE per rendered frame (same reason the constants/evaluate
+	// pair below is guarded once-per-frame). Fire these two markers only on the FIRST invocation each
+	// frame: otherwise SimulationEnd/RenderSubmitStart land ~2×/frame while their partners
+	// (RenderSubmitEnd/PresentStart/PresentEnd) fire 1×/frame on the present thread, doubling and
+	// desyncing the Sim→Submit→Present timeline DLSS-G paces the *interpolated* frame from. That
+	// systematically biases the generated frame's camera-reprojection phase — the whole static world
+	// gets flagged dynamic and reprojected wrong, worsening with camera rotation speed (real frames,
+	// rendered by the engine, are unaffected). Matches the once-per-frame SimulationStart rule.
 	auto* streamline = Streamline::GetSingleton();
 	if (upscaling.GetEffectiveReflex()) {
-		streamline->SetPCLMarker(Streamline::PclMarker::SimulationEnd);
-		streamline->SetPCLMarker(Streamline::PclMarker::RenderSubmitStart);
+		static uint32_t s_lastSimEndFrame = UINT32_MAX;
+		const uint32_t gameFrame = globals::state->frameCount;
+		if (s_lastSimEndFrame != gameFrame) {
+			s_lastSimEndFrame = gameFrame;
+			streamline->SetPCLMarker(Streamline::PclMarker::SimulationEnd);
+			streamline->SetPCLMarker(Streamline::PclMarker::RenderSubmitStart);
+		}
 	}
 
 	if (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kXeSS || upscaleMethod == UpscaleMethod::kDLSS)

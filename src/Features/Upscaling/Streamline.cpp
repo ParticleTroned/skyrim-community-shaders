@@ -623,7 +623,15 @@ void Streamline::SetPCLMarker(PclMarker a_marker)
 		const bool renderThreadMarker =
 			a_marker == PclMarker::RenderSubmitStart || a_marker == PclMarker::RenderSubmitEnd ||
 			a_marker == PclMarker::PresentStart || a_marker == PclMarker::PresentEnd ||
-			a_marker == PclMarker::TriggerFlash;
+			a_marker == PclMarker::TriggerFlash ||
+			// SimulationEnd is fired on the RENDER thread (Main_PostProcessing), immediately before
+			// RenderSubmitStart — it must carry the SAME latched render-frame token as the other
+			// render-thread markers, not the live SharedFrameToken the input thread keeps advancing.
+			// Left on the live token it could file the presented frame's Sim-end under frame N+1 while
+			// SimulationStart(N) and RenderSubmit*/Present*(N) file under N, so DLSS-G reads an
+			// incomplete Sim span and falls back to a stale/default interpolation phase for the
+			// generated frame (whole static world flagged dynamic, worsening with camera speed).
+			a_marker == PclMarker::SimulationEnd;
 		sl::FrameToken* token = renderThreadMarker ?
 		                            RenderFrameToken() :
 		                            SharedFrameToken(beginFrame);

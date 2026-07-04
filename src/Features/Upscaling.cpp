@@ -13986,6 +13986,66 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		return false;
 	}
 
+	const bool submitDLSSSharpeningRequested = upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening();
+	const bool submitStageMenuFinalCompositeRequested =
+		vrRenderScaleMode &&
+		!presentationRenderTarget &&
+		menuTextProtectionContext;
+	bool submitDLSSSharpening = false;
+	Texture2D* vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
+	if (!presentationOnly) {
+		submitDLSSSharpening = submitDLSSSharpeningRequested;
+		if (submitDLSSSharpening) {
+			static bool loggedSharpenerOutputFailure[2] = {};
+			if (!EnsureSubmitStageDLSSSharpenerTexture(eyeIndex, *vrIntermediateColorOut[eyeIndex])) {
+				LogWarnOnceFmt(
+					loggedSharpenerOutputFailure[eyeIndex],
+					"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because the intermediate output is unavailable.",
+					eyeIndex);
+				submitDLSSSharpening = false;
+			} else {
+				vendorColorOutput = submitStageDLSSSharpenerTexture[eyeIndex].get();
+			}
+		}
+		if (!vendorColorOutput || !vendorColorOutput->resource || !vendorColorOutput->uav)
+			return false;
+	}
+
+	const bool expectedFoveatedVendorPath = shouldUseFoveatedVendorThisEye;
+	const auto& cachedEyeState = submitStageVendorEyeState[eyeIndex];
+	// OpenVR can submit the same eye twice in one frame; reuse the finalized eye output when the vendor work is identical.
+	const bool canReuseSubmitStageEyeOutput =
+		!presentationOnly &&
+		upscaleMethod == UpscaleMethod::kDLSS &&
+		cachedEyeState.ready &&
+		cachedEyeState.method == static_cast<uint32_t>(upscaleMethod) &&
+		cachedEyeState.generation == activeContractGeneration &&
+		cachedEyeState.usedFoveatedVendorPath == expectedFoveatedVendorPath &&
+		cachedEyeState.usedDLSSSharpening == submitDLSSSharpening &&
+		cachedEyeState.usedMenuFinalComposite == submitStageMenuFinalCompositeRequested &&
+		cachedEyeState.inputWidth == eyeWidthIn &&
+		cachedEyeState.inputHeight == eyeHeightIn &&
+		cachedEyeState.outputWidth == eyeWidthOut &&
+		cachedEyeState.outputHeight == eyeHeightOut &&
+		cachedEyeState.sourceSubresource == sourceSubresource &&
+		cachedEyeState.sourceBoxLeft == colorBox.left &&
+		cachedEyeState.sourceBoxTop == colorBox.top &&
+		cachedEyeState.sourceBoxRight == colorBox.right &&
+		cachedEyeState.sourceBoxBottom == colorBox.bottom &&
+		cachedEyeState.depthWidth == sourceRegion.depthWidth &&
+		cachedEyeState.depthHeight == sourceRegion.depthHeight &&
+		cachedEyeState.depthOffsetX == sourceRegion.depthOffsetX &&
+		cachedEyeState.depthOffsetY == sourceRegion.depthOffsetY &&
+		vrIntermediateColorOut[eyeIndex] &&
+		vrIntermediateColorOut[eyeIndex]->resource;
+	if (canReuseSubmitStageEyeOutput) {
+		a_outputTexture = *a_inputTexture;
+		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
+		a_outputTexture.eType = vr::TextureType_DirectX;
+		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
+		return true;
+	}
+
 	context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 	if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage source copy"))
 		return false;
@@ -14024,9 +14084,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				return false;
 		}
 
-		if (vrRenderScaleMode &&
-			!presentationRenderTarget &&
-			menuTextProtectionContext) {
+		if (submitStageMenuFinalCompositeRequested) {
 			ApplyKnownGameMenuFinalComposite(targetEyeIndex, *vrIntermediateColorOut[targetEyeIndex], eyeWidthOut, eyeHeightOut, currentFrame);
 		}
 
@@ -14146,6 +14204,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		}
 
 		submitStageVendorEyeState[targetEyeIndex].usedFoveatedVendorPath = false;
+		submitStageVendorEyeState[targetEyeIndex].usedDLSSSharpening = replaySubmitDLSSSharpening;
+		submitStageVendorEyeState[targetEyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
 		return true;
 	};
 
@@ -14158,23 +14218,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		streamline.ClearLastDLSSFailureState();
-
-	bool submitDLSSSharpening = upscaleMethod == UpscaleMethod::kDLSS && ShouldApplyDLSSSharpening();
-	Texture2D* vendorColorOutput = vrIntermediateColorOut[eyeIndex].get();
-	if (submitDLSSSharpening) {
-		static bool loggedSharpenerOutputFailure[2] = {};
-		if (!EnsureSubmitStageDLSSSharpenerTexture(eyeIndex, *vrIntermediateColorOut[eyeIndex])) {
-			LogWarnOnceFmt(
-				loggedSharpenerOutputFailure[eyeIndex],
-				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because the intermediate output is unavailable.",
-				eyeIndex);
-			submitDLSSSharpening = false;
-		} else {
-			vendorColorOutput = submitStageDLSSSharpenerTexture[eyeIndex].get();
-		}
-	}
-	if (!vendorColorOutput || !vendorColorOutput->resource || !vendorColorOutput->uav)
-		return false;
 
 	bool vendorSucceeded = false;
 	if (shouldUseFoveatedVendorThisEye) {
@@ -14413,7 +14456,19 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	submitStageVendorEyeState[eyeIndex].ready = true;
 	submitStageVendorEyeState[eyeIndex].usedFoveatedVendorPath = shouldUseFoveatedVendorThisEye && !submitStageForceFullEyeVendorFallback;
+	submitStageVendorEyeState[eyeIndex].usedDLSSSharpening = submitDLSSSharpening;
+	submitStageVendorEyeState[eyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
+	submitStageVendorEyeState[eyeIndex].method = static_cast<uint32_t>(upscaleMethod);
 	submitStageVendorEyeState[eyeIndex].generation = activeContractGeneration;
+	submitStageVendorEyeState[eyeIndex].inputWidth = eyeWidthIn;
+	submitStageVendorEyeState[eyeIndex].inputHeight = eyeHeightIn;
+	submitStageVendorEyeState[eyeIndex].outputWidth = eyeWidthOut;
+	submitStageVendorEyeState[eyeIndex].outputHeight = eyeHeightOut;
+	submitStageVendorEyeState[eyeIndex].sourceSubresource = sourceSubresource;
+	submitStageVendorEyeState[eyeIndex].sourceBoxLeft = colorBox.left;
+	submitStageVendorEyeState[eyeIndex].sourceBoxTop = colorBox.top;
+	submitStageVendorEyeState[eyeIndex].sourceBoxRight = colorBox.right;
+	submitStageVendorEyeState[eyeIndex].sourceBoxBottom = colorBox.bottom;
 	submitStageVendorEyeState[eyeIndex].depthWidth = sourceRegion.depthWidth;
 	submitStageVendorEyeState[eyeIndex].depthHeight = sourceRegion.depthHeight;
 	submitStageVendorEyeState[eyeIndex].depthOffsetX = sourceRegion.depthOffsetX;

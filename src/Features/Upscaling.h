@@ -804,7 +804,19 @@ public:
 	{
 		bool ready = false;
 		bool usedFoveatedVendorPath = false;
+		bool usedDLSSSharpening = false;
+		bool usedMenuFinalComposite = false;
+		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		uint32_t generation = 0;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		UINT sourceSubresource = 0;
+		uint32_t sourceBoxLeft = 0;
+		uint32_t sourceBoxTop = 0;
+		uint32_t sourceBoxRight = 0;
+		uint32_t sourceBoxBottom = 0;
 		uint32_t depthWidth = 0;
 		uint32_t depthHeight = 0;
 		uint32_t depthOffsetX = 0;

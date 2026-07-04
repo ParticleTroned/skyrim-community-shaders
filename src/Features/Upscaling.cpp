@@ -1478,6 +1478,9 @@ void Upscaling::UpscaleDepth()
 
 void Upscaling::Main_UpdateJitter::thunk(RE::BSGraphics::State* a_state)
 {
+	// Establish this render frame's explicit SL frame ID before any SL call of the frame
+	// (constants, tags, evaluates, markers all fetch their token with it).
+	Streamline::GetSingleton()->BeginRenderFrame();
 	globals::features::upscaling.ConfigureTAA();
 	func(a_state);
 	globals::features::upscaling.ConfigureUpscaling(a_state);

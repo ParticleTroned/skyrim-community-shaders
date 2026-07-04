@@ -280,12 +280,18 @@ struct IDXGISwapChain_Present
 				Streamline::GetSingleton()->QueryDLSSGCapabilities();
 		}
 
-		// Reflex/PCL latency markers: render submission is complete by present time; bracket the
-		// present so Reflex can measure render→display latency.
+		// Reflex/PCL latency markers: render submission is complete by present time. When the DXVK
+		// present-marker bridge is active, PresentStart/End fire on DXVK's submit thread around the
+		// REAL vkQueuePresentKHR (this D3D11 call only queues the present) — we just hand it this
+		// frame's id. Without the bridge (older DXVK dll), fall back to bracketing here.
 		auto* streamline = Streamline::GetSingleton();
 		streamline->SetPCLMarker(Streamline::PclMarker::RenderSubmitEnd);
 		streamline->SetPCLMarker(Streamline::PclMarker::TriggerFlash);  // sample fires this once/frame before present
-		streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
+		const bool bridgedMarkers = streamline->PresentMarkersBridged();
+		if (bridgedMarkers)
+			streamline->NotifyPresentQueued();
+		else
+			streamline->SetPCLMarker(Streamline::PclMarker::PresentStart);
 
 		// HDR Display composites the real frame into the back buffer, then calls the present
 		// chain. We wrap that chain with FSR3 frame generation: it interpolates from the final
@@ -301,7 +307,8 @@ struct IDXGISwapChain_Present
 					[&](IDXGISwapChain* sc, UINT si, UINT f) { return func(sc, si, f); });
 			});
 
-		streamline->SetPCLMarker(Streamline::PclMarker::PresentEnd);
+		if (!bridgedMarkers)
+			streamline->SetPCLMarker(Streamline::PclMarker::PresentEnd);
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
 

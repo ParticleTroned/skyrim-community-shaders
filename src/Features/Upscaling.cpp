@@ -4886,6 +4886,194 @@ void Upscaling::DrawSettings()
 		InvalidateFrameScopedUpscalingState();
 }
 
+json Upscaling::CapturePerformanceSettingsState() const
+{
+	return settings;
+}
+
+void Upscaling::DrawPerformanceSettings(bool)
+{
+	const uint64_t resourceSettingsKeyBefore = BuildUpscalingResourceMutationSettingsKey(settings);
+
+	struct UpscaleUiChoice
+	{
+		UpscaleMethod method;
+		bool useRuntimeFsr4;
+		const char* label;
+	};
+
+	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
+	const bool featureDLSS = streamline.featureDLSS;
+	ApplyOpenCompositeUpscalingBlocker();
+	const auto openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
+	const bool openCompositeBlocksUpscaling = openCompositeBlocker.active;
+
+	uint32_t* currentUpscaleMode = &settings.upscaleMethod;
+	if (!featureDLSS)
+		currentUpscaleMode = &settings.upscaleMethodNoDLSS;
+	if (*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) && !runtimeFsr4AutoEligible)
+		settings.fsr4RuntimeEnable = false;
+
+	std::vector<UpscaleUiChoice> upscaleChoices = {
+		{ UpscaleMethod::kNONE, false, "None" }
+	};
+	if (!openCompositeBlocksUpscaling) {
+		upscaleChoices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
+		upscaleChoices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR3" });
+		if (runtimeFsr4AutoEligible)
+			upscaleChoices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR4" });
+		if (featureDLSS)
+			upscaleChoices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
+	}
+
+	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
+		if (static_cast<uint32_t>(choice.method) != *currentUpscaleMode)
+			return false;
+		if (choice.method == UpscaleMethod::kFSR)
+			return settings.fsr4RuntimeEnable == choice.useRuntimeFsr4;
+		return true;
+	};
+
+	int methodUiIndex = 0;
+	for (int i = 0; i < static_cast<int>(upscaleChoices.size()); ++i) {
+		if (matchesCurrentChoice(upscaleChoices[i])) {
+			methodUiIndex = i;
+			break;
+		}
+	}
+
+	if (openCompositeBlocksUpscaling)
+		ImGui::BeginDisabled();
+	const bool methodChanged = ImGui::SliderInt("Upscale Method", &methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1), upscaleChoices[methodUiIndex].label);
+	if (openCompositeBlocksUpscaling)
+		ImGui::EndDisabled();
+
+	methodUiIndex = std::clamp(methodUiIndex, 0, static_cast<int>(upscaleChoices.size() - 1));
+	const auto& selectedUpscaleChoice = upscaleChoices[methodUiIndex];
+	if (methodChanged || !matchesCurrentChoice(selectedUpscaleChoice)) {
+		const bool targetRenderScaleMode = IsRenderScaleModeRequested();
+		const uint32_t targetQualityMode = GetEffectiveUpscalingQualityMode();
+		const uint32_t targetDLSSPreset = GetEffectiveDLSSPreset();
+		if (selectedUpscaleChoice.method == UpscaleMethod::kFSR)
+			settings.fsr4RuntimeEnable = selectedUpscaleChoice.useRuntimeFsr4;
+		ApplyCSMenuUpscalingTransition(
+			selectedUpscaleChoice.method,
+			targetRenderScaleMode,
+			targetQualityMode,
+			targetDLSSPreset,
+			"performance tuning method change");
+	}
+	if (openCompositeBlocksUpscaling) {
+		Util::Text::Warning("Upscaling is locked to None while Open Composite has %s=true.", openCompositeBlocker.settingName.c_str());
+	}
+
+	const auto upscaleMethod = GetUpscaleMethod();
+	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA) {
+		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
+		const bool usePendingVRUpscalingQuality = globals::game::isVR && IsRenderScaleMethodEligible(upscaleMethod);
+		const uint32_t effectiveQualityMode = usePendingVRUpscalingQuality ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
+		const char* baseLabel = GetQualityModeName(effectiveQualityMode, upscaleMethod == UpscaleMethod::kDLSS);
+		std::string labelWithScale = std::format(
+			"{} ( {:.2f}x )",
+			baseLabel,
+			Upscaling::GetQualityModeResolutionScale(effectiveQualityMode));
+
+		int qualityMode = static_cast<int>(effectiveQualityMode);
+		if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str())) {
+			const uint32_t requestedQualityMode = static_cast<uint32_t>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
+			const bool targetRenderScaleMode = IsRenderScaleModeRequested() && IsRenderScaleQualityMode(requestedQualityMode);
+			ApplyCSMenuUpscalingTransition(
+				upscaleMethod,
+				targetRenderScaleMode,
+				requestedQualityMode,
+				GetEffectiveDLSSPreset(),
+				"performance tuning preset change");
+		}
+
+		if (upscaleMethod == UpscaleMethod::kDLSS) {
+			settings.dlssPreset = ClampDLSSPresetUInt(settings.dlssPreset);
+			const uint32_t effectiveDLSSPreset = GetEffectiveDLSSPreset();
+
+			int dlssProfileUiIndex = 0;
+			for (int i = 0; i < static_cast<int>(kDLSSProfileDisplayOrder.size()); ++i) {
+				if (kDLSSProfileDisplayOrder[i] == effectiveDLSSPreset) {
+					dlssProfileUiIndex = i;
+					break;
+				}
+			}
+
+			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
+			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
+			if (ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetLabel(displayedDLSSPreset))) {
+				dlssProfileUiIndex = std::clamp(dlssProfileUiIndex, 0, dlssProfileUiMaxIndex);
+				displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
+				ApplyCSMenuUpscalingTransition(
+					upscaleMethod,
+					IsRenderScaleModeRequested(),
+					GetEffectiveUpscalingQualityMode(),
+					displayedDLSSPreset,
+					"performance tuning DLSS profile change");
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				DrawDLSSPresetTooltip(displayedDLSSPreset);
+			}
+		}
+	}
+
+	if (globals::game::isVR) {
+		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
+		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
+		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
+		const bool publicRenderScaleRequested = GetPerfModeRequested();
+		const bool publicRenderScaleCanEdit =
+			(renderScaleMethodEligible && renderScaleQualitySelected) ||
+			publicRenderScaleRequested;
+
+		const char* renderScaleModes[] = { "Disabled", "Enabled" };
+		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
+		{
+			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
+			if (ImGui::SliderInt("VR Render Scale Mode", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
+				ApplyCSMenuUpscalingTransition(
+					upscaleMethod,
+					enableRenderScaleMode,
+					renderScaleQualityMode,
+					GetEffectiveDLSSPreset(),
+					"performance tuning render-scale mode change");
+			}
+		}
+
+		SanitizeFoveatedSettings(settings);
+		const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
+		if (foveatedDispatchSupportedForMethod) {
+			ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
+		} else {
+			ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
+		}
+
+		const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
+		auto foveatedGuard = Util::DisableGuard(!foveatedDispatchRequestedForMethod);
+		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
+	}
+
+	if (streamline.reflexSupportedOnCurrentAdapter) {
+		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
+		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
+		const char* toggleModes[] = { "Disabled", "Enabled" };
+		if (!reflexAvailable || reflexBlockedByFrameGeneration)
+			ImGui::BeginDisabled();
+		int lowLatencyMode = settings.reflexLowLatencyMode ? 1 : 0;
+		ImGui::SliderInt("Low Latency Mode", &lowLatencyMode, 0, 1, toggleModes[lowLatencyMode]);
+		settings.reflexLowLatencyMode = lowLatencyMode > 0;
+		if (!reflexAvailable || reflexBlockedByFrameGeneration)
+			ImGui::EndDisabled();
+	}
+
+	if (resourceSettingsKeyBefore != BuildUpscalingResourceMutationSettingsKey(settings))
+		InvalidateFrameScopedUpscalingState();
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -5677,6 +5865,213 @@ uint32_t Upscaling::GetRuntimeQualityMode() const
 uint32_t Upscaling::GetRuntimeDLSSPreset() const
 {
 	return ClampDLSSPresetUInt(settings.dlssPreset);
+}
+
+bool Upscaling::SupportsPerformanceCostMeasurement() const
+{
+	return !IsOpenCompositeUpscalingBlocked(true) && !IsRenderDocUpscalingBlocked(true);
+}
+
+bool Upscaling::IsPerformanceCostMeasurementEnabled() const
+{
+	return GetUpscaleMethod() != UpscaleMethod::kNONE;
+}
+
+namespace
+{
+	bool IsVRRenderScalePerformanceCostMeasurement(const Upscaling& a_upscaling)
+	{
+		if (!REL::Module::IsVR())
+			return false;
+
+		if (!IsRenderScaleMethodEligible(a_upscaling.GetConfiguredUpscaleMethodForTransition()))
+			return false;
+
+		const auto status = a_upscaling.GetVRRenderScaleModeStatus();
+		return status == Upscaling::VRRenderScaleStatus::Active ||
+		       status == Upscaling::VRRenderScaleStatus::PendingRelatch;
+	}
+
+	Upscaling::UpscaleMethod GetDefaultPerformanceCostMeasurementMethod(const Upscaling& a_upscaling)
+	{
+		const Upscaling::Settings defaults{};
+		if (a_upscaling.IsOpenCompositeUpscalingBlocked())
+			return Upscaling::UpscaleMethod::kNONE;
+		if (IsRenderDocUpscalingBlocked())
+			return Upscaling::UpscaleMethod::kNONE;
+
+		const auto primaryMethod = ClampUpscaleMethod(defaults.upscaleMethod, Upscaling::UpscaleMethod::kDLSS);
+		if (primaryMethod != Upscaling::UpscaleMethod::kDLSS)
+			return primaryMethod;
+
+		if (Upscaling::streamline.featureDLSS || !Upscaling::streamline.featureCheckComplete)
+			return Upscaling::UpscaleMethod::kDLSS;
+
+		return ClampUpscaleMethod(defaults.upscaleMethodNoDLSS, Upscaling::UpscaleMethod::kFSR);
+	}
+
+	bool IsTargetVRRenderScalePerformanceCostMeasurement(const Upscaling& a_upscaling, bool a_targetEnabled)
+	{
+		if (!REL::Module::IsVR())
+			return false;
+
+		if (!a_targetEnabled)
+			return IsVRRenderScalePerformanceCostMeasurement(a_upscaling);
+
+		const Upscaling::Settings defaults{};
+		const auto targetMethod = GetDefaultPerformanceCostMeasurementMethod(a_upscaling);
+		return IsRenderScaleMethodEligible(targetMethod) &&
+		       ClampToggleUInt(defaults.renderScaleMode) != 0 &&
+		       IsRenderScaleQualityMode(ClampQualityModeUInt(defaults.qualityMode));
+	}
+
+	bool IsVRRenderScalePerformanceCostMeasurementState(const Upscaling& a_upscaling, const json& a_state)
+	{
+		if (!REL::Module::IsVR() || !a_state.is_object())
+			return false;
+
+		const uint32_t primaryMethod = a_state.value("upscaleMethod", a_upscaling.settings.upscaleMethod);
+		const uint32_t fallbackMethod = a_state.value("upscaleMethodNoDLSS", a_upscaling.settings.upscaleMethodNoDLSS);
+		const Upscaling::UpscaleMethod targetMethod =
+			Upscaling::streamline.featureDLSS ?
+				ClampUpscaleMethod(primaryMethod, Upscaling::UpscaleMethod::kDLSS) :
+				ClampUpscaleMethod(fallbackMethod, Upscaling::UpscaleMethod::kFSR);
+		const uint32_t qualityMode = ClampQualityModeUInt(a_state.value("qualityMode", a_upscaling.settings.qualityMode));
+		const bool renderScaleMode = ClampToggleUInt(a_state.value("renderScaleMode", a_upscaling.settings.renderScaleMode)) != 0;
+
+		return IsRenderScaleMethodEligible(targetMethod) &&
+		       renderScaleMode &&
+		       IsRenderScaleQualityMode(qualityMode);
+	}
+}
+
+void Upscaling::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (a_enabled) {
+		const Settings defaults{};
+		const UpscaleMethod targetMethod = GetDefaultPerformanceCostMeasurementMethod(*this);
+		const uint32_t qualityMode = ClampQualityModeUInt(defaults.qualityMode);
+		const uint32_t dlssPreset = ClampDLSSPresetUInt(defaults.dlssPreset);
+		const bool renderScaleModeEnabled =
+			ClampToggleUInt(defaults.renderScaleMode) != 0 &&
+			IsRenderScaleMethodEligible(targetMethod) &&
+			IsRenderScaleQualityMode(qualityMode);
+
+		settings.fsr4RuntimeEnable = defaults.fsr4RuntimeEnable;
+		ApplyCSMenuUpscalingTransition(
+			targetMethod,
+			renderScaleModeEnabled,
+			qualityMode,
+			dlssPreset,
+			"performance cost measurement on");
+		settings.upscaleMethod = static_cast<uint32_t>(ClampUpscaleMethod(defaults.upscaleMethod, UpscaleMethod::kDLSS));
+		settings.upscaleMethodNoDLSS = static_cast<uint32_t>(ClampUpscaleMethod(defaults.upscaleMethodNoDLSS, UpscaleMethod::kFSR));
+		settings.qualityMode = qualityMode;
+		settings.dlssPreset = dlssPreset;
+		settings.renderScaleMode = ClampToggleUInt(defaults.renderScaleMode);
+		settings.perfMode = ClampToggleUInt(defaults.perfMode);
+		settings.fsr4RuntimeEnable = defaults.fsr4RuntimeEnable;
+		settings.foveatedVendorDispatch = defaults.foveatedVendorDispatch;
+		settings.periphery_taa_enable = defaults.periphery_taa_enable;
+		SanitizeFoveatedSettings(settings);
+		InvalidateFrameScopedUpscalingState();
+		return;
+	}
+
+	ApplyCSMenuUpscalingTransition(
+		UpscaleMethod::kNONE,
+		false,
+		ClampQualityModeUInt(settings.qualityMode),
+		ClampDLSSPresetUInt(settings.dlssPreset),
+		"performance cost measurement off");
+	settings.foveatedVendorDispatch = false;
+	settings.periphery_taa_enable = false;
+	InvalidateFrameScopedUpscalingState();
+}
+
+bool Upscaling::IsPerformanceCostMeasurementReady() const
+{
+	if (!REL::Module::IsVR())
+		return true;
+
+	const auto status = GetVRRenderScaleModeStatus();
+	if (status == VRRenderScaleStatus::PendingRelatch)
+		return false;
+
+	if (status == VRRenderScaleStatus::Active) {
+		const bool activeStateRequested = GetVRRenderScaleModeRequested() && CanUseVRRenderScaleMode();
+		return activeStateRequested && IsVendorRuntimeReadyForActiveContract(GetRuntimeUpscaleMethod());
+	}
+	if (IsVRRenderScaleModeLatched())
+		return false;
+
+	return true;
+}
+
+const char* Upscaling::GetPerformanceCostMeasurementWaitText() const
+{
+	return "Waiting for VR Render Scale to finish switching";
+}
+
+bool Upscaling::RequiresMenuCloseForPerformanceCostMeasurement(bool a_targetEnabled) const
+{
+	return IsTargetVRRenderScalePerformanceCostMeasurement(*this, a_targetEnabled);
+}
+
+bool Upscaling::RequiresMenuCloseForPerformanceCostMeasurementRestore(const json& a_state) const
+{
+	return IsVRRenderScalePerformanceCostMeasurement(*this) ||
+	       IsVRRenderScalePerformanceCostMeasurementState(*this, a_state);
+}
+
+json Upscaling::CapturePerformanceCostMeasurementState() const
+{
+	return {
+		{ "upscaleMethod", settings.upscaleMethod },
+		{ "upscaleMethodNoDLSS", settings.upscaleMethodNoDLSS },
+		{ "qualityMode", settings.qualityMode },
+		{ "dlssPreset", settings.dlssPreset },
+		{ "renderScaleMode", settings.renderScaleMode },
+		{ "perfMode", settings.perfMode },
+		{ "fsr4RuntimeEnable", settings.fsr4RuntimeEnable },
+		{ "foveatedVendorDispatch", settings.foveatedVendorDispatch },
+		{ "periphery_taa_enable", settings.periphery_taa_enable }
+	};
+}
+
+void Upscaling::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	const uint32_t primaryMethod = a_state.value("upscaleMethod", settings.upscaleMethod);
+	const uint32_t fallbackMethod = a_state.value("upscaleMethodNoDLSS", settings.upscaleMethodNoDLSS);
+	const uint32_t qualityMode = ClampQualityModeUInt(a_state.value("qualityMode", settings.qualityMode));
+	const uint32_t dlssPreset = ClampDLSSPresetUInt(a_state.value("dlssPreset", settings.dlssPreset));
+	const bool renderScaleMode = ClampToggleUInt(a_state.value("renderScaleMode", settings.renderScaleMode)) != 0;
+
+	const UpscaleMethod targetMethod = streamline.featureDLSS ?
+	                                       ClampUpscaleMethod(primaryMethod, UpscaleMethod::kDLSS) :
+	                                       ClampUpscaleMethod(fallbackMethod, UpscaleMethod::kFSR);
+
+	ApplyCSMenuUpscalingTransition(
+		targetMethod,
+		renderScaleMode,
+		qualityMode,
+		dlssPreset,
+		"performance cost measurement restore");
+
+	settings.upscaleMethod = static_cast<uint32_t>(ClampUpscaleMethod(primaryMethod, UpscaleMethod::kDLSS));
+	settings.upscaleMethodNoDLSS = static_cast<uint32_t>(ClampUpscaleMethod(fallbackMethod, UpscaleMethod::kFSR));
+	settings.qualityMode = qualityMode;
+	settings.dlssPreset = dlssPreset;
+	settings.renderScaleMode = ClampToggleUInt(a_state.value("renderScaleMode", settings.renderScaleMode));
+	settings.perfMode = ClampToggleUInt(a_state.value("perfMode", settings.perfMode));
+	settings.fsr4RuntimeEnable = a_state.value("fsr4RuntimeEnable", settings.fsr4RuntimeEnable);
+	settings.foveatedVendorDispatch = a_state.value("foveatedVendorDispatch", settings.foveatedVendorDispatch);
+	settings.periphery_taa_enable = a_state.value("periphery_taa_enable", settings.periphery_taa_enable);
+	SanitizeFoveatedSettings(settings);
+	InvalidateFrameScopedUpscalingState();
 }
 
 Upscaling::DLSSSharpenerMode Upscaling::GetDLSSSharpenerMode() const

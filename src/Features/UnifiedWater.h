@@ -93,6 +93,11 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.UseOptimisedMeshes; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.UseOptimisedMeshes = a_enabled; }
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;

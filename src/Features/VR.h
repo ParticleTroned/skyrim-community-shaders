@@ -152,6 +152,15 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override;
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 

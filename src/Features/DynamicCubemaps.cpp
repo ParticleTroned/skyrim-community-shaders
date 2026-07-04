@@ -7,6 +7,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling.h"
+#include "Util.h"
 #include "Utils/D3D.h"
 #include "VR.h"
 #include "Wetterness.h"
@@ -36,6 +37,11 @@ namespace
 	{
 		auto& wetterness = globals::features::wetterness;
 		return wetterness.IsRuntimeProcessingActive() ? &wetterness : nullptr;
+	}
+
+	bool IsWetternessActiveForVisibilityThrottle()
+	{
+		return globals::features::wetterness.IsRuntimeActive();
 	}
 
 	RE::NiPoint3 GetCubemapCaptureAnchorPosition()
@@ -115,7 +121,11 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 void DynamicCubemaps::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Screen Space Reflections", ImGuiTreeNodeFlags_DefaultOpen)) {
-		recompileFlag |= ImGui::Checkbox("Enable Screen Space Reflections", reinterpret_cast<bool*>(&settings.EnabledSSR));
+		bool enabledSSR = settings.EnabledSSR != 0;
+		if (ImGui::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
+			settings.EnabledSSR = enabledSSR ? 1u : 0u;
+			recompileFlag = true;
+		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enable Screen Space Reflections on Water");
 			if (REL::Module::IsVR() && !enabledAtBoot) {
@@ -131,7 +141,9 @@ void DynamicCubemaps::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Dynamic Cubemap Creator", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
-		ImGui::Checkbox("Enable Creator", reinterpret_cast<bool*>(&settings.EnabledCreator));
+		bool enabledCreator = settings.EnabledCreator != 0;
+		if (ImGui::Checkbox("Enable Creator", &enabledCreator))
+			settings.EnabledCreator = enabledCreator ? 1u : 0u;
 		if (settings.EnabledCreator) {
 			ImGui::ColorEdit3("Color", reinterpret_cast<float*>(&settings.CubemapColor));
 			ImGui::SliderFloat("Roughness", &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
@@ -213,6 +225,103 @@ void DynamicCubemaps::DrawSettings()
 			Util::RenderImGuiSettingsTree(hiddenVRCubeMapSettings, "hiddenVR");
 			ImGui::TreePop();
 		}
+	}
+}
+
+void DynamicCubemaps::DrawPerformanceSettings(bool a_advanced)
+{
+	bool enabledSSR = settings.EnabledSSR != 0;
+	if (ImGui::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
+		settings.EnabledSSR = enabledSSR ? 1u : 0u;
+		recompileFlag = true;
+	}
+	if (REL::Module::IsVR() && settings.EnabledSSR && !enabledAtBoot) {
+		Util::Text::Warning("SSR was not enabled at boot. Save settings and restart to enable it in VR.");
+	}
+
+	if (a_advanced && REL::Module::IsVR()) {
+		auto& vrSettings = globals::features::vr.settings;
+		ImGui::SeparatorText("Advanced VR");
+		ImGui::Checkbox("Dynamic Cubemap Cadence", &vrSettings.EnableDynamicCubemapFoveation);
+		if (IsWetternessActiveForVisibilityThrottle())
+			vrSettings.EnableDynamicCubemapVisibilityThrottle = false;
+		{
+			auto guard = Util::DisableGuard(IsWetternessActiveForVisibilityThrottle());
+			ImGui::Checkbox("Low-Visibility Cubemap Throttle", &vrSettings.EnableDynamicCubemapVisibilityThrottle);
+		}
+		if (IsWetternessActiveForVisibilityThrottle())
+			ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
+	}
+}
+
+json DynamicCubemaps::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Settings", settings },
+		{ "PerformanceTuningVR",
+			{ { "EnableDynamicCubemapFoveation", globals::features::vr.settings.EnableDynamicCubemapFoveation },
+				{ "EnableDynamicCubemapVisibilityThrottle", globals::features::vr.settings.EnableDynamicCubemapVisibilityThrottle } } }
+	};
+}
+
+bool DynamicCubemaps::IsPerformanceCostMeasurementEnabled() const
+{
+	if (IsSSRRuntimeActive())
+		return true;
+
+	const auto foveationState = GetDynamicCubemapFoveationState(*this);
+	return foveationState.cadenceEnabled || foveationState.visibilityThrottleEnabled;
+}
+
+void DynamicCubemaps::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	const Settings defaults{};
+	const VR::Settings vrDefaults{};
+	const uint newValue = a_enabled ? defaults.EnabledSSR : 0u;
+	const bool ssrChanged = settings.EnabledSSR != newValue;
+	settings.EnabledSSR = newValue;
+
+	if (REL::Module::IsVR()) {
+		auto& vrSettings = globals::features::vr.settings;
+		vrSettings.EnableDynamicCubemapFoveation = a_enabled ? vrDefaults.EnableDynamicCubemapFoveation : false;
+		vrSettings.EnableDynamicCubemapVisibilityThrottle = a_enabled ? vrDefaults.EnableDynamicCubemapVisibilityThrottle : false;
+		if (IsWetternessActiveForVisibilityThrottle())
+			vrSettings.EnableDynamicCubemapVisibilityThrottle = false;
+	}
+
+	if (ssrChanged) {
+		recompileFlag = true;
+		MarkCubemapRefreshHighPriority();
+	}
+}
+
+json DynamicCubemaps::CapturePerformanceCostMeasurementState() const
+{
+	return {
+		{ "EnabledSSR", settings.EnabledSSR },
+		{ "EnableDynamicCubemapFoveation", globals::features::vr.settings.EnableDynamicCubemapFoveation },
+		{ "EnableDynamicCubemapVisibilityThrottle", globals::features::vr.settings.EnableDynamicCubemapVisibilityThrottle }
+	};
+}
+
+void DynamicCubemaps::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	const uint restoredEnabledSSR = a_state.value("EnabledSSR", settings.EnabledSSR);
+	const bool ssrChanged = settings.EnabledSSR != restoredEnabledSSR;
+	settings.EnabledSSR = restoredEnabledSSR;
+
+	auto& vrSettings = globals::features::vr.settings;
+	vrSettings.EnableDynamicCubemapFoveation = a_state.value("EnableDynamicCubemapFoveation", vrSettings.EnableDynamicCubemapFoveation);
+	vrSettings.EnableDynamicCubemapVisibilityThrottle = a_state.value("EnableDynamicCubemapVisibilityThrottle", vrSettings.EnableDynamicCubemapVisibilityThrottle);
+	if (IsWetternessActiveForVisibilityThrottle())
+		vrSettings.EnableDynamicCubemapVisibilityThrottle = false;
+
+	if (ssrChanged) {
+		recompileFlag = true;
+		MarkCubemapRefreshHighPriority();
 	}
 }
 

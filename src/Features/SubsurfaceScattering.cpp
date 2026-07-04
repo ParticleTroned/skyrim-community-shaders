@@ -16,6 +16,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionP
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SubsurfaceScattering::Settings,
+	EnableSubsurfaceScattering,
 	EnableCharacterLighting,
 	CharacterLightingStrength,
 	SSMode,
@@ -123,6 +124,7 @@ namespace
 void SubsurfaceScattering::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable Subsurface Scattering", &settings.EnableSubsurfaceScattering);
 		ImGui::Checkbox("Enable Character Lighting", (bool*)&settings.EnableCharacterLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Vanilla feature, not recommended.");
@@ -170,7 +172,9 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::TreePop();
 			}
 		} else if (settings.SSMode == 1) {
-			ImGui::SliderInt("Burley Samples", (int*)&settings.BurleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+			int burleySamples = static_cast<int>(settings.BurleySamples);
+			if (ImGui::SliderInt("Burley Samples", &burleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
+				settings.BurleySamples = static_cast<uint>(std::clamp(burleySamples, 1, 64));
 			if (ImGui::TreeNodeEx("Base Profile", ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathBase);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -205,6 +209,50 @@ void SubsurfaceScattering::DrawSettings()
 
 		ImGui::TreePop();
 	}
+}
+
+void SubsurfaceScattering::DrawPerformanceSettings(bool)
+{
+	ImGui::Checkbox("Enable Subsurface Scattering", &settings.EnableSubsurfaceScattering);
+
+	ImGui::TextUnformatted("SSS Mode");
+	ImGui::RadioButton("Separable SSS", &settings.SSMode, 0);
+	ImGui::SameLine();
+	ImGui::RadioButton("Burley", &settings.SSMode, 1);
+
+	if (settings.SSMode == 1) {
+		int burleySamples = static_cast<int>(settings.BurleySamples);
+		if (ImGui::SliderInt("Burley Samples", &burleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
+			settings.BurleySamples = static_cast<uint>(std::clamp(burleySamples, 1, 64));
+	}
+}
+
+json SubsurfaceScattering::CapturePerformanceSettingsState() const
+{
+	return settings;
+}
+
+void SubsurfaceScattering::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (a_enabled) {
+		settings = Settings{};
+		return;
+	}
+
+	settings.EnableSubsurfaceScattering = false;
+}
+
+json SubsurfaceScattering::CapturePerformanceCostMeasurementState() const
+{
+	return settings;
+}
+
+void SubsurfaceScattering::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	settings = a_state.get<Settings>();
 }
 
 float3 SubsurfaceScattering::Gaussian(DiffusionProfile& a_profile, float variance, float r)
@@ -302,6 +350,11 @@ void SubsurfaceScattering::CalculateKernel(DiffusionProfile& a_profile, Kernel& 
 
 void SubsurfaceScattering::DrawSSS()
 {
+	if (!settings.EnableSubsurfaceScattering) {
+		validMaterials = false;
+		return;
+	}
+
 	if (!validMaterials)
 		return;
 

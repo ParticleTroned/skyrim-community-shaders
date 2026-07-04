@@ -26,9 +26,46 @@ public:
 		CPU
 	};
 
+	struct PerformanceTimingTotals
+	{
+		float gpuAvgMs = 0.0f;
+		float cpuAvgMs = 0.0f;
+		bool hasGpu = false;
+		bool hasCpu = false;
+	};
+
+	struct PerformanceTimingSummary
+	{
+		float gpuTotalMs = 0.0f;
+		float cpuTotalMs = 0.0f;
+		float frameMs = 0.0f;
+		float fps = 0.0f;
+		bool valid = false;
+		std::unordered_map<std::string, PerformanceTimingTotals> features;
+	};
+
+	struct PerformanceTimingHighlight
+	{
+		int frameDirection = 0;
+		int fpsDirection = 0;
+		int gpuTotalDirection = 0;
+		int cpuTotalDirection = 0;
+		int featureGpuDirection = 0;
+		int featureCpuDirection = 0;
+	};
+
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
 	static bool HasFeatureTimers(const std::string& featurePrefix);
 	static void RenderFeatureTimers(const std::string& featurePrefix);
+	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
+	static void RenderFeaturePerformanceSummary(
+		const std::string& featurePrefix,
+		const PerformanceTimingHighlight* highlight = nullptr,
+		const PerformanceTimingSummary* summaryOverride = nullptr);
+	static void RenderFeaturePerformanceSummary(
+		const std::vector<std::string>& featurePrefixes,
+		const PerformanceTimingHighlight* highlight = nullptr,
+		const PerformanceTimingSummary* summaryOverride = nullptr);
 
 private:
 	static inline TimingMode timingMode = TimingMode::GPU;
@@ -96,6 +133,7 @@ private:
 	static void RenderGraph();
 	static bool RenderFeatureOverview();
 	static FeatureTimingData CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode);
+	static FeatureTimingData CollectFeatureTimingData(const std::vector<std::string>& featurePrefixes, bool cpuMode);
 	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight);
 	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);
 };

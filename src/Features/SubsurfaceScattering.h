@@ -20,6 +20,7 @@ public:
 
 	struct Settings
 	{
+		bool EnableSubsurfaceScattering = true;
 		uint EnableCharacterLighting = false;
 		float CharacterLightingStrength = 1.0f;
 		int SSMode = 1;
@@ -105,6 +106,14 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableSubsurfaceScattering; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
 	float3 Gaussian(DiffusionProfile& a_profile, float variance, float r);
 	float3 Profile(DiffusionProfile& a_profile, float r);

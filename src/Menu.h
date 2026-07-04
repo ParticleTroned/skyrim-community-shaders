@@ -415,6 +415,7 @@ public:
 		bool BackgroundShaderCompilationOnBoot = false;                                                                // Load the menu immediately and compile shaders in the background on boot
 		bool AutoHideFeatureList = false;                                                                              // Auto-hide left feature list panel, show on hover
 		bool SkipConstraintWarning = false;                                                                            // Skip popup when a setting change creates new constraints
+		int PerformanceUiMode = 0;                                                                                     // 0 = Essentials, 1 = Advanced
 		bool RequireShiftToDock = true;                                                                                // Require holding Shift to dock windows
 		bool UseResolutionFont = true;                                                                                 // When true, runtime font size scales with screen resolution; when persisted to theme files, FontSize is zeroed for backward compatibility
 		ThemeSettings Theme;
@@ -423,6 +424,8 @@ public:
 	const ThemeSettings& GetTheme() const { return settings.Theme; }  // Provide read-only access to the Theme.
 	Settings& GetSettings() { return settings; }                      // Provide access to settings for other components
 	const Settings& GetSettings() const { return settings; }
+	bool IsPerformanceUiMode() const { return settings.PerformanceUiMode == 0; }
+	bool IsAdvancedUiMode() const { return settings.PerformanceUiMode != 0; }
 	winrt::com_ptr<IDXGIAdapter3> GetDXGIAdapter3() const { return dxgiAdapter3; }  // Provide access to dxgiAdapter3
 	ThemeSettings::FontRoleSettings& GetFontRoleSettings(FontRole role) { return settings.Theme.FontRoles[static_cast<size_t>(role)]; }
 	const ThemeSettings::FontRoleSettings& GetFontRoleSettings(FontRole role) const { return settings.Theme.FontRoles[static_cast<size_t>(role)]; }

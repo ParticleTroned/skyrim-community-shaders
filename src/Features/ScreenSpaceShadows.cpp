@@ -124,7 +124,9 @@ namespace
 
 void ScreenSpaceShadows::DrawSettings()
 {
-	ImGui::Checkbox("Enable", (bool*)&bendSettings.Enable);
+	bool enabled = bendSettings.Enable != 0;
+	if (ImGui::Checkbox("Enable", &enabled))
+		bendSettings.Enable = enabled ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Turns screen space shadows on or off.");
 	}
@@ -133,7 +135,9 @@ void ScreenSpaceShadows::DrawSettings()
 	ImGui::TextUnformatted("Performance");
 	ImGui::Separator();
 
-	ImGui::SliderInt("Sample Count Multiplier", (int*)&bendSettings.SampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax));
+	int sampleCount = static_cast<int>(bendSettings.SampleCount);
+	if (ImGui::SliderInt("Sample Count Multiplier", &sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)))
+		bendSettings.SampleCount = static_cast<uint>(std::clamp(sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)));
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Higher values improve detail but cost more performance. In VR, values >1 are not recommended.");
 	}
@@ -177,6 +181,67 @@ void ScreenSpaceShadows::DrawSettings()
 	ImGui::Spacing();
 }
 
+void ScreenSpaceShadows::DrawPerformanceSettings(bool a_advanced)
+{
+	bool enabled = bendSettings.Enable != 0;
+	if (ImGui::Checkbox("Enable", &enabled))
+		bendSettings.Enable = enabled ? 1u : 0u;
+
+	int sampleCount = static_cast<int>(bendSettings.SampleCount);
+	if (ImGui::SliderInt("Sample Count Multiplier", &sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)))
+		bendSettings.SampleCount = static_cast<uint>(std::clamp(sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)));
+
+	if (globals::game::isVR) {
+		ImGui::SliderFloat("VR Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
+		ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+		bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
+
+		DrawFoveationSettings();
+		ImGui::Checkbox("Sync Screen Space Shadows", &enableStereoSync);
+	}
+
+	if (a_advanced) {
+		ImGui::SeparatorText("Advanced");
+		ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
+		ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax);
+		ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, kShadowContrastMin, kShadowContrastMax);
+	}
+}
+
+json ScreenSpaceShadows::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Settings", bendSettings },
+		{ "EnableStereoSync", enableStereoSync }
+	};
+}
+
+void ScreenSpaceShadows::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (a_enabled) {
+		bendSettings = BendSettings{};
+		enableStereoSync = false;
+		return;
+	}
+
+	bendSettings.Enable = 0u;
+}
+
+json ScreenSpaceShadows::CapturePerformanceCostMeasurementState() const
+{
+	return CapturePerformanceSettingsState();
+}
+
+void ScreenSpaceShadows::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	if (a_state.contains("Settings"))
+		bendSettings = a_state.at("Settings").get<BendSettings>();
+	enableStereoSync = a_state.value("EnableStereoSync", enableStereoSync);
+}
+
 void ScreenSpaceShadows::DrawFoveationSettings()
 {
 	if (!globals::game::isVR) {
@@ -195,9 +260,8 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 			bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Uses the active shared VR foveation mask for Screen Space Shadows.");
-		ImGui::TextUnformatted("When enabled, full-quality SSS is computed inside the mask and fades to no SSS outside it.");
-		ImGui::TextUnformatted("The mask scale, horizontal scale, offsets, and FOV + TAA profile come from the shared VR foveation setup.");
+		ImGui::TextUnformatted("Focuses shadow detail in the clearest part of the VR view.");
+		ImGui::TextUnformatted("Can improve performance, but shadows may fade near the edge of your view.");
 		if (!loaded)
 			ImGui::TextUnformatted("Requires Screen Space Shadows.");
 		else if (bendSettings.Enable == 0)

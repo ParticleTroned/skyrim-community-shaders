@@ -36,6 +36,14 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawFoveationSettings();
 
 	virtual void LoadSettings(json& o_json) override;
@@ -88,14 +96,14 @@ public:
 		bool ILInteriorsOnly = REL::Module::IsVR() ? true : false;
 		// performance/quality
 		uint NumSlices = REL::Module::IsVR() ? 3u : 4u;
-		uint NumSteps = REL::Module::IsVR() ? 6u : 8u;   // AO preset for VR
+		uint NumSteps = REL::Module::IsVR() ? 6u : 8u;  // AO preset for VR
 		bool EnableAdaptiveSampling = true;
 		int ResolutionMode = 0;  // Full Res default (VR and flat)
 		int ResourceProfile = REL::Module::IsVR() ? kResourceProfileAOOnly : kResourceProfileFullGI;
-		float VRCullDistance = 1500.0f;                  // 0 disables VR distance culling
-		float CenterFullResMaskScale = 0.0f;             // runtime cache; SSGI FOV derives this from the shared VR foveation profile
+		float VRCullDistance = 1500.0f;       // 0 disables VR distance culling
+		float CenterFullResMaskScale = 0.0f;  // runtime cache; SSGI FOV derives this from the shared VR foveation profile
 		bool EnableFoveated = REL::Module::IsVR() ? true : false;
-		bool EnableStereoSync = true;                    // VR-only bilateral cross-eye stabilization pass
+		bool EnableStereoSync = true;  // VR-only bilateral cross-eye stabilization pass
 		// visual
 		float MinScreenRadius = 0.01f;
 		float AORadius = 256.f;

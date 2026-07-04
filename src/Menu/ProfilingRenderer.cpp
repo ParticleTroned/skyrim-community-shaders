@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <imgui.h>
 #include <string>
@@ -12,6 +13,7 @@
 #include "Globals.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/UI.h"
 
 static constexpr float kGraphHeadroomScale = 1.2f;
 static constexpr float kMainGraphHeight = 180.0f;
@@ -20,6 +22,42 @@ static constexpr float kFeatureGraphMinFrameTimeSec = 0.00001f;
 static constexpr float kTimingTableMetricColumnWidth = 55.0f;
 static constexpr float kTimingTablePercentColumnWidth = 45.0f;
 static constexpr float kStatsRefreshSeconds = 1.0f;
+static constexpr uint32_t kGameFrameTimingSamples = 60;
+
+static float GetAverageGameFrameMs()
+{
+	static std::array<float, kGameFrameTimingSamples> samples{};
+	static uint32_t head = 0;
+	static uint32_t count = 0;
+
+	const float frameMs = ImGui::GetIO().DeltaTime * 1000.0f;
+	if (std::isfinite(frameMs) && frameMs > 0.0f) {
+		samples[head] = frameMs;
+		head = (head + 1) % kGameFrameTimingSamples;
+		count = std::min<uint32_t>(count + 1, kGameFrameTimingSamples);
+	}
+
+	if (count == 0)
+		return 0.0f;
+
+	float sum = 0.0f;
+	for (uint32_t i = 0; i < count; ++i)
+		sum += samples[i];
+
+	return sum / static_cast<float>(count);
+}
+
+static void TextWithTuningDelta(int direction, const char* fmt, ...)
+{
+	va_list args;
+	va_start(args, fmt);
+	if (direction == 0) {
+		ImGui::TextV(fmt, args);
+	} else {
+		ImGui::TextColoredV(Util::Color::PerformanceDelta(direction), fmt, args);
+	}
+	va_end(args);
+}
 
 static int ScaleToUiInt(float value)
 {
@@ -147,6 +185,42 @@ static std::string BuildProfilerGraphLabel(std::string_view label)
 		result = result.substr(0, kMaxGraphLabelLength - 2) + "..";
 
 	return result;
+}
+
+static bool TryMatchTimingPrefix(std::string_view timerName, std::string_view prefix, bool compactLabel, std::string& label)
+{
+	if (timerName == prefix) {
+		label.assign(timerName.data(), timerName.size());
+		return true;
+	}
+
+	if (!timerName.starts_with(prefix) || timerName.size() <= prefix.size() + 2 || timerName[prefix.size()] != ':' || timerName[prefix.size() + 1] != ':')
+		return false;
+
+	if (compactLabel) {
+		const auto compact = timerName.substr(prefix.size() + 2);
+		label.assign(compact.data(), compact.size());
+	} else {
+		label.assign(timerName.data(), timerName.size());
+	}
+	return true;
+}
+
+static std::string BuildTimingPrefixKey(const std::vector<std::string>& prefixes)
+{
+	std::string key;
+	for (const auto& prefix : prefixes) {
+		if (!key.empty())
+			key += '|';
+		key += prefix;
+	}
+	return key;
+}
+
+static std::string GetTimingRootName(const std::string& timerName)
+{
+	const auto pos = timerName.find("::");
+	return pos == std::string::npos ? timerName : timerName.substr(0, pos);
 }
 
 static int ComputeGraphLegendWidth(int totalWidth, int minGraphWidth, float widthFraction, int minLegendWidth, int maxLegendWidth)
@@ -360,15 +434,27 @@ void ProfilingRenderer::RenderGraph()
 
 ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode)
 {
+	return CollectFeatureTimingData(std::vector<std::string>{ featurePrefix }, cpuMode);
+}
+
+ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(const std::vector<std::string>& featurePrefixes, bool cpuMode)
+{
 	const auto& results = globals::profiler->GetResults();
 
 	FeatureTimingData data;
-	std::string prefix = featurePrefix + "::";
+	const bool compactLabel = featurePrefixes.size() == 1;
 	for (const auto& r : results) {
-		if (!r.valid || !HasTimingMode(r, cpuMode) || !r.name.starts_with(prefix))
+		if (!r.valid || !HasTimingMode(r, cpuMode))
 			continue;
 
-		std::string label = r.name.substr(prefix.size());
+		std::string label;
+		for (const auto& prefix : featurePrefixes) {
+			if (TryMatchTimingPrefix(r.name, prefix, compactLabel, label))
+				break;
+		}
+		if (label.empty())
+			continue;
+
 		const auto stats = GetDisplayTimingStats(r, cpuMode);
 		float timeMs = stats.timeMs;
 		float avg = stats.avgMs;
@@ -764,4 +850,175 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 
 	profiler.RequestCapture();
 	RenderFeatureTimingData(featurePrefix, featureMode, true);
+}
+
+ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
+{
+	PerformanceTimingSummary summary;
+	if (!globals::profiler) {
+		return summary;
+	}
+
+	auto& profiler = (*globals::profiler);
+	if (requestCapture && !profiler.IsUserEnabled())
+		profiler.SetUserEnabled(true);
+	if (requestCapture)
+		profiler.RequestCapture();
+
+	struct FeaturePrefixLookup
+	{
+		std::string featurePrefix;
+	};
+	struct TimingBucket
+	{
+		float gpuExactMs = 0.0f;
+		float cpuExactMs = 0.0f;
+		float gpuChildMs = 0.0f;
+		float cpuChildMs = 0.0f;
+		bool hasGpuExact = false;
+		bool hasCpuExact = false;
+		bool hasGpuChild = false;
+		bool hasCpuChild = false;
+	};
+
+	std::vector<FeaturePrefixLookup> prefixLookup;
+	prefixLookup.reserve(featurePrefixes.size());
+	for (const auto& featurePrefix : featurePrefixes) {
+		summary.features.try_emplace(featurePrefix);
+		prefixLookup.push_back({ featurePrefix });
+	}
+	auto isRequestedFeatureRoot = [&](const std::string& rootName) {
+		if (prefixLookup.empty())
+			return true;
+
+		for (const auto& lookup : prefixLookup) {
+			if (lookup.featurePrefix == rootName)
+				return true;
+		}
+
+		return false;
+	};
+
+	std::unordered_map<std::string, TimingBucket> timingBuckets;
+	for (const auto& result : profiler.GetResults()) {
+		if (!result.valid)
+			continue;
+
+		const std::string rootName = GetTimingRootName(result.name);
+		if (!isRequestedFeatureRoot(rootName))
+			continue;
+
+		auto& bucket = timingBuckets[rootName];
+		const bool rootTimer = result.name == rootName;
+		if (HasTimingMode(result, false)) {
+			const float avgMs = GetDisplayTimingStats(result, false).avgMs;
+			if (rootTimer) {
+				bucket.gpuExactMs += avgMs;
+				bucket.hasGpuExact = true;
+			} else {
+				bucket.gpuChildMs += avgMs;
+				bucket.hasGpuChild = true;
+			}
+		}
+
+		if (HasTimingMode(result, true)) {
+			const float avgMs = GetDisplayTimingStats(result, true).avgMs;
+			if (rootTimer) {
+				bucket.cpuExactMs += avgMs;
+				bucket.hasCpuExact = true;
+			} else {
+				bucket.cpuChildMs += avgMs;
+				bucket.hasCpuChild = true;
+			}
+		}
+	}
+
+	summary.frameMs = GetAverageGameFrameMs();
+	summary.fps = summary.frameMs > 0.0f ? 1000.0f / summary.frameMs : 0.0f;
+	for (const auto& [rootName, bucket] : timingBuckets) {
+		const float gpuMs = bucket.hasGpuExact ? bucket.gpuExactMs : bucket.gpuChildMs;
+		const float cpuMs = bucket.hasCpuExact ? bucket.cpuExactMs : bucket.cpuChildMs;
+		const bool hasGpu = bucket.hasGpuExact || bucket.hasGpuChild;
+		const bool hasCpu = bucket.hasCpuExact || bucket.hasCpuChild;
+
+		if (hasGpu)
+			summary.gpuTotalMs += gpuMs;
+		if (hasCpu)
+			summary.cpuTotalMs += cpuMs;
+
+		for (const auto& lookup : prefixLookup) {
+			if (rootName != lookup.featurePrefix)
+				continue;
+
+			auto& totals = summary.features[lookup.featurePrefix];
+			if (hasGpu) {
+				totals.gpuAvgMs += gpuMs;
+				totals.hasGpu = true;
+			}
+			if (hasCpu) {
+				totals.cpuAvgMs += cpuMs;
+				totals.hasCpu = true;
+			}
+			break;
+		}
+	}
+	summary.valid = summary.frameMs > 0.0f || summary.gpuTotalMs > 0.0f || summary.cpuTotalMs > 0.0f;
+	return summary;
+}
+
+void ProfilingRenderer::RenderFeaturePerformanceSummary(
+	const std::string& featurePrefix,
+	const PerformanceTimingHighlight* highlight,
+	const PerformanceTimingSummary* summaryOverride)
+{
+	RenderFeaturePerformanceSummary(std::vector<std::string>{ featurePrefix }, highlight, summaryOverride);
+}
+
+void ProfilingRenderer::RenderFeaturePerformanceSummary(
+	const std::vector<std::string>& featurePrefixes,
+	const PerformanceTimingHighlight* highlight,
+	const PerformanceTimingSummary* /*summaryOverride*/)
+{
+	if (!globals::profiler) {
+		ImGui::TextDisabled("No profiler available.");
+		return;
+	}
+
+	if (featurePrefixes.empty()) {
+		ImGui::TextDisabled("No feature selected.");
+		return;
+	}
+
+	const auto gpuData = CollectFeatureTimingData(featurePrefixes, false);
+	const auto cpuData = CollectFeatureTimingData(featurePrefixes, true);
+	auto& graphState = featureGraphs[BuildTimingPrefixKey(featurePrefixes)];
+
+	if (!gpuData.entries.empty() || !cpuData.entries.empty()) {
+		if (!gpuData.entries.empty())
+			TextWithTuningDelta(highlight ? highlight->featureGpuDirection : 0, "Feat GPU %.3f ms", gpuData.totalAvg);
+		if (!gpuData.entries.empty() && !cpuData.entries.empty())
+			ImGui::SameLine();
+		if (!cpuData.entries.empty())
+			TextWithTuningDelta(highlight ? highlight->featureCpuDirection : 0, "CPU %.3f ms", cpuData.totalAvg);
+	}
+
+	ImGui::Spacing();
+	ImGui::TextUnformatted("GPU");
+	ImGui::PushID("PerformanceSummaryGPU");
+	if (RenderFeatureTimingGraph(featurePrefixes.front(), gpuData, graphState.gpuGraph, 82)) {
+		TextWithTuningDelta(highlight ? highlight->featureGpuDirection : 0, "Avg %.3f ms  P95 %.3f  P99 %.3f", gpuData.totalAvg, gpuData.totalP95, gpuData.totalP99);
+	} else {
+		ImGui::TextDisabled("No GPU timing data");
+	}
+	ImGui::PopID();
+
+	ImGui::Spacing();
+	ImGui::TextUnformatted("CPU");
+	ImGui::PushID("PerformanceSummaryCPU");
+	if (RenderFeatureTimingGraph(featurePrefixes.front(), cpuData, graphState.cpuGraph, 82)) {
+		TextWithTuningDelta(highlight ? highlight->featureCpuDirection : 0, "Avg %.3f ms  P95 %.3f  P99 %.3f", cpuData.totalAvg, cpuData.totalP95, cpuData.totalP99);
+	} else {
+		ImGui::TextDisabled("No CPU timing data");
+	}
+	ImGui::PopID();
 }

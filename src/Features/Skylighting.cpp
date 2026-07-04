@@ -267,6 +267,62 @@ void Skylighting::ResetSkylighting()
 	queuedResetSkylighting = false;
 }
 
+void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (a_enabled)
+		return;
+
+	const uint previousProbeGridQuality = settings.ProbeGridQuality;
+	settings.ProbeGridQuality = 0;
+	settings.EnableReducedUpdateFrequency = true;
+	settings.OcclusionUpdateInterval = 16;
+	settings.ProbeUpdateInterval = 16;
+	settings.EnableIncrementalProbeUpdates = true;
+	settings.StableSliceCount = 1;
+	settings.EnableFastProbeSampling = true;
+	settings.ProbeFieldSize = Settings::kWorldCellSize * Settings::kMinProbeFieldSizeCells;
+	NormalizeSettingsForRuntime(settings);
+	ApplyProbeGridQuality();
+
+	const bool probeGridChanged = previousProbeGridQuality != settings.ProbeGridQuality;
+	const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
+
+	if (canResetRuntimeResources && probeGridChanged)
+		SetupResources();
+
+	if (canResetRuntimeResources)
+		ResetSkylighting();
+	else
+		queuedResetSkylighting = true;
+}
+
+json Skylighting::CapturePerformanceCostMeasurementState() const
+{
+	return settings;
+}
+
+void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	const uint previousProbeGridQuality = settings.ProbeGridQuality;
+	settings = a_state.get<Settings>();
+	NormalizeSettingsForRuntime(settings);
+	ApplyProbeGridQuality();
+
+	const bool probeGridChanged = previousProbeGridQuality != settings.ProbeGridQuality;
+	const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
+
+	if (canResetRuntimeResources && probeGridChanged)
+		SetupResources();
+
+	if (canResetRuntimeResources)
+		ResetSkylighting();
+	else
+		queuedResetSkylighting = true;
+}
+
 void Skylighting::DrawSettings()
 {
 	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
@@ -426,6 +482,86 @@ void Skylighting::DrawSettings()
 	ImGui::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Smaller angles create a more focused top-down shadow.");
+}
+
+void Skylighting::DrawPerformanceSettings(bool a_advanced)
+{
+	settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
+
+	int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
+	if (ImGui::BeginCombo("Probe Grid Quality", GetProbeGridPreset(settings.ProbeGridQuality).Label)) {
+		for (uint quality = 0; quality < kProbeGridPresets.size(); quality++) {
+			const bool isSelected = (probeGridQualityUI == static_cast<int>(quality));
+			if (ImGui::Selectable(kProbeGridPresets[quality].Label, isSelected))
+				probeGridQualityUI = static_cast<int>(quality);
+			if (isSelected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+
+	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
+	if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {
+		settings.ProbeGridQuality = static_cast<uint>(probeGridQualityUI);
+		ApplyProbeGridQuality();
+		SetupResources();
+		ResetSkylighting();
+	}
+	ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
+
+	if (!a_advanced) {
+		return;
+	}
+
+	ImGui::SeparatorText("Advanced");
+	ImGui::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
+
+	NormalizeSettingsForRuntime(settings);
+	uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
+	settings.StableSliceCount = stableSliceCount;
+	bool usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
+
+	ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
+	{
+		int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
+		if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16))
+			settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
+
+		ImGui::BeginDisabled(usesIncrementalProbeSlices);
+		int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
+		if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
+			settings.ProbeUpdateInterval = ClampUpdateInterval(static_cast<uint>(probeIntervalUI));
+		ImGui::EndDisabled();
+	}
+	ImGui::EndDisabled();
+	NormalizeSettingsForRuntime(settings);
+
+	const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
+	if (ImGui::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
+		previousIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates) {
+		ResetProbeUpdateWindow(*this);
+	}
+
+	ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
+	{
+		int stableSliceCountUI = static_cast<int>(stableSliceCount);
+		if (ImGui::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(probeArrayDims[2]))) {
+			const uint nextStableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), probeArrayDims[2]);
+			if (settings.StableSliceCount != nextStableSliceCount) {
+				settings.StableSliceCount = nextStableSliceCount;
+				ResetProbeUpdateWindow(*this);
+			}
+		}
+	}
+	ImGui::EndDisabled();
+
+	ImGui::Checkbox("Enable Fast Probe Sampling", &settings.EnableFastProbeSampling);
+
+	float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
+	if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
+		settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
+		ResetSkylighting();
+	}
 }
 
 void Skylighting::SetupResources()

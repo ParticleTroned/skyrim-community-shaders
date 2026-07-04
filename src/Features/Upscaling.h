@@ -468,6 +468,19 @@ public:
 
 	// Feature interface overrides
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override;
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual bool IsPerformanceCostMeasurementReady() const override;
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
+	virtual bool RequiresMenuCloseForPerformanceCostMeasurement(bool a_targetEnabled) const override;
+	virtual bool RequiresMenuCloseForPerformanceCostMeasurementRestore(const json& a_state) const override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings();
 	virtual void SaveSettings(json& o_json) override;

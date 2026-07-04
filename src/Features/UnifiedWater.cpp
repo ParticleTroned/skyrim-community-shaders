@@ -379,6 +379,11 @@ void UnifiedWater::DrawSettings()
 	}
 }
 
+void UnifiedWater::DrawPerformanceSettings(bool)
+{
+	ImGui::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
+}
+
 void UnifiedWater::DrawOverlay()
 {
 	if (!waterCache || !waterCache->IsBuildRunning() && !waterCache->HasBuildFailed())

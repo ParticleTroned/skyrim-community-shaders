@@ -216,6 +216,75 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
+	{
+		const Settings defaults{};
+		if (a_enabled) {
+			settings.EnableParticleLights = defaults.EnableParticleLights;
+			settings.EnableParticleLightsCulling = defaults.EnableParticleLightsCulling;
+			settings.EnableParticleLightsDetection = defaults.EnableParticleLightsDetection;
+			settings.ParticleClusterThreshold = defaults.ParticleClusterThreshold;
+			settings.MaxParticlesPerEmitter = defaults.MaxParticlesPerEmitter;
+			settings.MaxParticleDistance = defaults.MaxParticleDistance;
+			settings.EnableParticleLightsOptimization = defaults.EnableParticleLightsOptimization;
+			settings.EnableContactShadows = defaults.EnableContactShadows;
+			settings.ContactShadowsInteriorsOnly = defaults.ContactShadowsInteriorsOnly;
+			settings.EnableParticleContactShadows = defaults.EnableParticleContactShadows;
+			settings.ContactShadowQuality = defaults.ContactShadowQuality;
+			settings.ContactShadowClusterBudget = defaults.ContactShadowClusterBudget;
+			settings.ParticleContactShadowBudget = defaults.ParticleContactShadowBudget;
+			settings.StrictContactShadowBudget = defaults.StrictContactShadowBudget;
+			return;
+		}
+
+		settings.EnableParticleLights = false;
+		settings.EnableContactShadows = false;
+		settings.EnableParticleContactShadows = false;
+	}
+	virtual json CapturePerformanceCostMeasurementState() const override
+	{
+		return {
+			{ "EnableParticleLights", settings.EnableParticleLights },
+			{ "EnableParticleLightsCulling", settings.EnableParticleLightsCulling },
+			{ "EnableParticleLightsDetection", settings.EnableParticleLightsDetection },
+			{ "ParticleClusterThreshold", settings.ParticleClusterThreshold },
+			{ "MaxParticlesPerEmitter", settings.MaxParticlesPerEmitter },
+			{ "MaxParticleDistance", settings.MaxParticleDistance },
+			{ "EnableParticleLightsOptimization", settings.EnableParticleLightsOptimization },
+			{ "EnableContactShadows", settings.EnableContactShadows },
+			{ "ContactShadowsInteriorsOnly", settings.ContactShadowsInteriorsOnly },
+			{ "EnableParticleContactShadows", settings.EnableParticleContactShadows },
+			{ "ContactShadowQuality", settings.ContactShadowQuality },
+			{ "ContactShadowClusterBudget", settings.ContactShadowClusterBudget },
+			{ "ParticleContactShadowBudget", settings.ParticleContactShadowBudget },
+			{ "StrictContactShadowBudget", settings.StrictContactShadowBudget }
+		};
+	}
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
+	{
+		if (!a_state.is_object())
+			return;
+
+		settings.EnableParticleLights = a_state.value("EnableParticleLights", settings.EnableParticleLights);
+		settings.EnableParticleLightsCulling = a_state.value("EnableParticleLightsCulling", settings.EnableParticleLightsCulling);
+		settings.EnableParticleLightsDetection = a_state.value("EnableParticleLightsDetection", settings.EnableParticleLightsDetection);
+		settings.ParticleClusterThreshold = a_state.value("ParticleClusterThreshold", settings.ParticleClusterThreshold);
+		settings.MaxParticlesPerEmitter = a_state.value("MaxParticlesPerEmitter", settings.MaxParticlesPerEmitter);
+		settings.MaxParticleDistance = a_state.value("MaxParticleDistance", settings.MaxParticleDistance);
+		settings.EnableParticleLightsOptimization = a_state.value("EnableParticleLightsOptimization", settings.EnableParticleLightsOptimization);
+		settings.EnableContactShadows = a_state.value("EnableContactShadows", settings.EnableContactShadows);
+		settings.ContactShadowsInteriorsOnly = a_state.value("ContactShadowsInteriorsOnly", settings.ContactShadowsInteriorsOnly);
+		settings.EnableParticleContactShadows = a_state.value("EnableParticleContactShadows", settings.EnableParticleContactShadows);
+		settings.ContactShadowQuality = a_state.value("ContactShadowQuality", settings.ContactShadowQuality);
+		settings.ContactShadowClusterBudget = a_state.value("ContactShadowClusterBudget", settings.ContactShadowClusterBudget);
+		settings.ParticleContactShadowBudget = a_state.value("ParticleContactShadowBudget", settings.ParticleContactShadowBudget);
+		settings.StrictContactShadowBudget = a_state.value("StrictContactShadowBudget", settings.StrictContactShadowBudget);
+	}
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override { return settings.EnableLightsVisualisation; }
 

@@ -32,6 +32,7 @@
 #include "Menu/IconLoader.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsTabRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "Plugin.h"
@@ -174,6 +175,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BackgroundShaderCompilationOnBoot,
 	AutoHideFeatureList,
 	SkipConstraintWarning,
+	PerformanceUiMode,
 	RequireShiftToDock,
 	UseResolutionFont,
 	Theme,
@@ -917,6 +919,10 @@ void Menu::DrawSettings()
 		}
 	}
 	ImGui::End();
+	if (!IsEnabled) {
+		PerformanceTuningRenderer::NotifyMenuClosed();
+		PerformanceTuningRenderer::CancelActiveMeasurements();
+	}
 }
 
 /**
@@ -1159,12 +1165,17 @@ void Menu::ProcessInputEventQueue()
 				KeyAction keyActions[] = {
 					{ settings.ToggleKey, [this]() {
 						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+							 const bool wasEnabled = IsEnabled;
 							 IsEnabled = !IsEnabled;
 							 if (globals::features::vr.IsOpenVRCompatible()) {
 								 globals::features::vr.ResetMenuInputRuntimeState();
 							 }
 							 if (IsEnabled)
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
+							 else if (wasEnabled) {
+								 PerformanceTuningRenderer::NotifyMenuClosed();
+								 PerformanceTuningRenderer::CancelActiveMeasurements();
+							 }
 						 }
 					 } },
 					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
@@ -1301,6 +1312,8 @@ void Menu::ProcessInputEventQueue()
 						editorWindow->open = false;
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
 						IsEnabled = false;
+						PerformanceTuningRenderer::NotifyMenuClosed();
+						PerformanceTuningRenderer::CancelActiveMeasurements();
 						if (globals::features::vr.IsOpenVRCompatible()) {
 							globals::features::vr.ResetMenuInputRuntimeState();
 						}

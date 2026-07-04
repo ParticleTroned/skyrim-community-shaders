@@ -13656,6 +13656,18 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			!resolutionPlan.loadingMenuActive &&
 			!startupOrMenuProtectionContext;
 		if (submitBoundsGameplayMismatch) {
+			const uint32_t memoryReliefEndFrame = vrRenderScaleMemoryReliefEndFrame.load(std::memory_order_acquire);
+			const uint32_t dlssRapidGuardEndFrame = vrDLSSRapidTransitionGuardEndFrame.load(std::memory_order_acquire);
+			const bool rapidTransitionPressureActive =
+				(memoryReliefEndFrame != 0 && currentFrame <= memoryReliefEndFrame) ||
+				(dlssRapidGuardEndFrame != 0 && currentFrame <= dlssRapidGuardEndFrame);
+			const bool displaySizedSubmitDuringPressure =
+				sourceRegion.width == eyeWidthOut &&
+				sourceRegion.height == eyeHeightOut &&
+				sourceEyeWidthIn == eyeWidthIn &&
+				sourceEyeHeightIn == eyeHeightIn &&
+				(eyeWidthOut != eyeWidthIn || eyeHeightOut != eyeHeightIn) &&
+				rapidTransitionPressureActive;
 			RecordSubmitStageBoundsFallback(
 				upscaleMethod,
 				currentFrame,
@@ -13664,7 +13676,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				sourceRegion.height,
 				sourceEyeWidthIn,
 				sourceEyeHeightIn);
-			ServiceSubmitStageBoundsFallbackWatchdog(true);
+			ServiceSubmitStageBoundsFallbackWatchdog(!displaySizedSubmitDuringPressure);
 		} else {
 			ClearSubmitStageBoundsFallbackWatchdog();
 		}

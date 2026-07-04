@@ -903,13 +903,21 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 		g_sl.slSetTagForFrame(*token, a_viewport, tags, nt, cmd);
 		const sl::BaseStructure* inputs[] = { &a_viewport };
 		evalRes = g_sl.slEvaluateFeature(a_feature, *token, inputs, static_cast<uint32_t>(std::size(inputs)), cmd);
-		// Submit async (was waitIdle=true, which serialized CPU↔GPU every frame just to free the
-		// views below — a ~1ms/frame main-thread stall). The views are referenced by the submitted
-		// DLSS dispatch, so hand them to the ring for destruction once this slot's fence signals
-		// (BeginFrameCommandBuffer), instead of blocking here. Same-queue submission order keeps the
-		// DLSS output ordered ahead of DXVK's later reads of colorOut.
-		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/false);
-		dxvk->QueueViewsForDeferredDelete(views, static_cast<uint32_t>(nv));
+		// Submit async when no frame generation is running (was waitIdle=true — a ~1ms/frame
+		// main-thread stall; e22095b9). With DLSS-G ACTIVE the wait is REQUIRED, not a cleanup
+		// convenience: it keeps the CPU from running frames ahead of the GPU, which is what
+		// guarantees the eValidUntilPresent-tagged DLSS-G inputs (motion vectors, hudless, depth)
+		// are not rewritten by the next frame's passes while the present-time interpolation is
+		// still reading them. Removing it made generation correlate wrong-frame inputs against
+		// the frame's camera constants — the whole static world flagged is_dynamic, scaling with
+		// camera motion (bisected to e22095b9 by in-game review). The serialization cost is
+		// irrelevant while frame generation is doubling presented frames.
+		const bool waitForDlssg = g_sl.dlssgModeOn;
+		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/waitForDlssg);
+		if (waitForDlssg)
+			cs_DestroyViews(dxvk, vkDevice, views, nv);
+		else
+			dxvk->QueueViewsForDeferredDelete(views, static_cast<uint32_t>(nv));
 	} else {
 		// Nothing was submitted — the views carry no pending GPU work, so free them immediately.
 		cs_DestroyViews(dxvk, vkDevice, views, nv);

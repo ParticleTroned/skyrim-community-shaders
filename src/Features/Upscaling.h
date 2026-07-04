@@ -16,6 +16,11 @@
 #include <vector>
 #include <winrt/base.h>
 
+namespace RE
+{
+	class RaceSexMenu;
+}
+
 /**
  * @brief Provides upscaling functionality including DLSS, FSR and TAA.
  *
@@ -669,6 +674,7 @@ public:
 	};
 	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
+	void NotifyGameLoadStarted(bool a_newGame);
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
 
@@ -1087,6 +1093,12 @@ private:
 	struct BSFaceGenManager_UpdatePendingCustomizationTextures
 	{
 		static void thunk();
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct RaceSexMenu_ChangeName
+	{
+		static void thunk(RE::RaceSexMenu* a_this, const char* a_name);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

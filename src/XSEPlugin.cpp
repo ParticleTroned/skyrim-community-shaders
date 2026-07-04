@@ -1,7 +1,7 @@
 #include "Deferred.h"
-#include "Features/Upscaling.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -167,8 +167,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				auto shaderCache = globals::shaderCache;
 				shaderCache->menuLoaded = true;
 				while (shaderCache->IsCompiling() &&
-				       !shaderCache->backgroundCompilation.load(std::memory_order_relaxed) &&
-				       !globals::game::quitGame.load(std::memory_order_relaxed)) {
+					   !shaderCache->backgroundCompilation.load(std::memory_order_relaxed) &&
+					   !globals::game::quitGame.load(std::memory_order_relaxed)) {
 					std::this_thread::sleep_for(100ms);
 				}
 
@@ -212,13 +212,15 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kNewGame:
 		{
 			if (errors.empty()) {
+				const bool newGame = message->type == SKSE::MessagingInterface::kNewGame;
+				globals::features::upscaling.NotifyGameLoadStarted(newGame);
 				if (globals::state) {
 					const uint32_t frame = globals::state->frameCount;
 					globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
 					globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
 				}
 				ResetRuntimeStateAfterGameLoad();
-				logger::info("Handled {}", message->type == SKSE::MessagingInterface::kPostLoadGame ? "kPostLoadGame" : "kNewGame");
+				logger::info("Handled {}", newGame ? "kNewGame" : "kPostLoadGame");
 			}
 
 			break;

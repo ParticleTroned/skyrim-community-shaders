@@ -127,18 +127,41 @@ namespace
 	constexpr uint32_t kVRRetiredIntermediateTextureTailFrames = 4u;
 	constexpr size_t kVRRetiredIntermediateTextureMaxSets = 4u;
 	// Keep a short post-load horizon for RaceSex/projected-menu ownership checks.
-	// Render-scale startup relatch itself is only gated on the first world frame.
+	// New-game render-scale activation waits for character naming and stable world presentation.
 	constexpr uint32_t kVRRaceSexPostLoadArmWindowFrames = 180u;
 	constexpr uint32_t kVRRaceSexPostCloseRenderScaleBlockFrames = 60u;
+	constexpr uint32_t kVRRaceSexPostNameRenderScaleBlockFrames = 60u;
+	constexpr uint32_t kVRStartupWorldRenderScaleSettleFrames = 10u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetAdjustMax = 0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
 	constexpr float kFoveatedMaskOffsetResolvedMax = 0.30f;
+	enum class VRStartupRaceSexGateState : uint32_t
+	{
+		Inactive,
+		AwaitingRaceSex,
+		AwaitingName,
+		PostNameTail,
+		Complete
+	};
+	enum class VRStartupLoadKind : uint32_t
+	{
+		Unknown,
+		NewGame,
+		PostLoadGame
+	};
 	std::atomic_bool g_vrLoadingMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrRaceSexMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrRaceSexPostLoadProtectionActive{ false };
+	std::atomic_bool g_vrStartupRaceSexGateEligible{ false };
+	std::atomic_uint32_t g_vrStartupRaceSexGateState{ static_cast<uint32_t>(VRStartupRaceSexGateState::Inactive) };
+	std::atomic_uint32_t g_vrStartupLoadKind{ static_cast<uint32_t>(VRStartupLoadKind::Unknown) };
+	std::atomic_uint32_t g_vrStartupRaceSexNameFrame{ 0 };
+	std::atomic_uint32_t g_vrStartupRaceSexReleaseFrame{ 0 };
+	std::atomic_uint64_t g_vrRaceSexTraceLastKey{ std::numeric_limits<uint64_t>::max() };
 	std::atomic_uint32_t g_vrLoadingTransitionCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionTailEndFrame{ 0 };
+	std::atomic_uint32_t g_vrStartupRaceSexFirstLoadCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrRaceSexMenuPresentationTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
@@ -303,6 +326,9 @@ namespace
 	bool IsCommunityShadersMenuOpen();
 	bool IsVRMenuBridgeTraceTailActive(const State* a_state);
 	bool IsVRRaceSexRenderScaleProtectionContextActive(const State* a_state);
+	bool IsVRStartupRaceSexGateEligible();
+	void MaybeArmVRStartupRaceSexGateForRenderScale(const State* a_state, bool a_renderScaleRequested);
+	bool IsVRStartupRaceSexGateBlockingRenderScale();
 	bool ShouldBypassVRRenderScaleStartupRaceSexPresentation(const Upscaling& a_upscaling, const State* a_state);
 	bool IsVRRenderScaleMenuPreparationContextActive(const State* a_state);
 
@@ -1483,25 +1509,21 @@ namespace
 		return target;
 	}
 
-	bool HasPendingVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
+	bool HasVRFpsStabilizerRenderScaleIntentForCurrentProfile(const Upscaling& a_upscaling, uint32_t a_cacheFrame)
 	{
 		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
-			return false;
-
-		const uint32_t queuedFrame = a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
-		if (queuedFrame == 0)
 			return false;
 
 		const bool interior = Util::IsInterior();
 		const auto currentMethod = a_upscaling.GetConfiguredUpscaleMethodForTransition();
 		const uint32_t qualityMode = a_upscaling.GetEffectiveUpscalingQualityMode();
 		const uint64_t cacheKey =
-			static_cast<uint64_t>(queuedFrame) |
+			static_cast<uint64_t>(a_cacheFrame) |
 			(static_cast<uint64_t>(interior ? 1u : 0u) << 32) |
 			(static_cast<uint64_t>(static_cast<uint32_t>(currentMethod) & 0xFFu) << 33) |
 			(static_cast<uint64_t>(qualityMode & 0xFFu) << 41);
 
-		static std::atomic_uint64_t cachedKey{ 0 };
+		static std::atomic_uint64_t cachedKey{ std::numeric_limits<uint64_t>::max() };
 		static std::atomic_bool cachedRenderScaleIntent{ false };
 		if (cachedKey.load(std::memory_order_acquire) == cacheKey)
 			return cachedRenderScaleIntent.load(std::memory_order_acquire);
@@ -1521,6 +1543,20 @@ namespace
 		return renderScaleIntent;
 	}
 
+	bool HasConfiguredVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
+	{
+		return HasVRFpsStabilizerRenderScaleIntentForCurrentProfile(a_upscaling, 0);
+	}
+
+	bool HasPendingVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
+	{
+		const uint32_t queuedFrame = a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
+		if (queuedFrame == 0)
+			return false;
+
+		return HasVRFpsStabilizerRenderScaleIntentForCurrentProfile(a_upscaling, queuedFrame);
+	}
+
 	bool HasVRStartupRenderScaleIntent(const Upscaling& a_upscaling)
 	{
 		if (!globals::game::isVR)
@@ -1532,6 +1568,7 @@ namespace
 		return IsVRRenderScaleDesiredProfileActive(
 				   a_upscaling,
 				   a_upscaling.GetConfiguredUpscaleMethodForTransition()) ||
+		       HasConfiguredVRFpsStabilizerRenderScaleIntent(a_upscaling) ||
 		       HasPendingVRFpsStabilizerRenderScaleIntent(a_upscaling);
 	}
 
@@ -2484,6 +2521,10 @@ namespace
 		if (!HasCompletedVRWorldFrameAfterLatestLoad(a_state))
 			return false;
 
+		MaybeArmVRStartupRaceSexGateForRenderScale(a_state, HasVRStartupRenderScaleIntent(a_upscaling));
+		if (IsVRStartupRaceSexGateBlockingRenderScale())
+			return false;
+
 		const bool renderScaleRaceSexProtected =
 			HasVRStartupRenderScaleIntent(a_upscaling) &&
 			IsVRRaceSexRenderScaleProtectionContextActive(a_state);
@@ -2578,13 +2619,22 @@ namespace
 		if (!globals::game::isVR)
 			return true;
 
+		const auto* state = globals::state;
+		MaybeArmVRStartupRaceSexGateForRenderScale(
+			state,
+			HasVRStartupRenderScaleIntent(a_upscaling) ||
+				a_upscaling.GetPerfModeRequested() ||
+				IsPendingVRRenderScaleActivationTarget(a_upscaling) ||
+				a_upscaling.IsVRRenderScaleModeLatched());
+		if (IsVRStartupRaceSexGateBlockingRenderScale())
+			return false;
+
 		if (IsVRMenuScenePresentationBlockActive())
 			return false;
 
 		if (HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(a_upscaling))
 			return false;
 
-		const auto* state = globals::state;
 		if (ShouldBypassVRRenderScaleStartupRaceSexPresentation(a_upscaling, state))
 			return false;
 
@@ -2971,24 +3021,471 @@ namespace
 		return GetVRLoadingTransitionCloseElapsedFrames(a_state) < kVRRaceSexPostLoadArmWindowFrames;
 	}
 
+	VRStartupRaceSexGateState GetVRStartupRaceSexGateState()
+	{
+		return static_cast<VRStartupRaceSexGateState>(
+			g_vrStartupRaceSexGateState.load(std::memory_order_acquire));
+	}
+
+	void SetVRStartupRaceSexGateState(VRStartupRaceSexGateState a_state)
+	{
+		g_vrStartupRaceSexGateState.store(static_cast<uint32_t>(a_state), std::memory_order_release);
+	}
+
+	const char* GetVRStartupRaceSexGateStateName(VRStartupRaceSexGateState a_state)
+	{
+		switch (a_state) {
+		case VRStartupRaceSexGateState::Inactive:
+			return "inactive";
+		case VRStartupRaceSexGateState::AwaitingRaceSex:
+			return "awaiting-racesex";
+		case VRStartupRaceSexGateState::AwaitingName:
+			return "awaiting-name";
+		case VRStartupRaceSexGateState::PostNameTail:
+			return "post-name-tail";
+		case VRStartupRaceSexGateState::Complete:
+			return "complete";
+		default:
+			return "unknown";
+		}
+	}
+
+	VRStartupLoadKind GetVRStartupLoadKind()
+	{
+		return static_cast<VRStartupLoadKind>(g_vrStartupLoadKind.load(std::memory_order_acquire));
+	}
+
+	const char* GetVRStartupLoadKindName(VRStartupLoadKind a_kind)
+	{
+		switch (a_kind) {
+		case VRStartupLoadKind::Unknown:
+			return "unknown";
+		case VRStartupLoadKind::NewGame:
+			return "new-game";
+		case VRStartupLoadKind::PostLoadGame:
+			return "post-load-game";
+		default:
+			return "unknown";
+		}
+	}
+
+	void TraceVRRaceSexStartupSignal(const char* a_source, bool a_forceLog = false)
+	{
+		if (!globals::game::isVR)
+			return;
+
+		const auto* state = globals::state;
+		if (!state || !ShouldEmitUpscalingDiagLogs())
+			return;
+
+		auto* ui = globals::game::ui;
+		const uint32_t frame = state ? std::max(state->frameCount, 1u) : 0u;
+		const bool directOpen = IsRaceSexMenuContextActive(ui);
+		const bool eventOpen = g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire);
+		const bool tailActive = IsVRRaceSexMenuPresentationTailActive(state);
+		const bool loadingOpen = IsLoadingMenuContextActive();
+		const bool mainOpen = IsMainMenuContextActive();
+		const bool observedProjectedTail = IsVRObservedProjectedMenuTailActive(state);
+		const bool bridgeTail = IsVRMenuBridgeTraceTailActive(state);
+		const auto gateState = GetVRStartupRaceSexGateState();
+		const auto loadKind = GetVRStartupLoadKind();
+		const bool gateEligible = g_vrStartupRaceSexGateEligible.load(std::memory_order_acquire);
+		const bool protectionArmed = g_vrRaceSexPostLoadProtectionActive.load(std::memory_order_acquire);
+		const bool renderScaleIntent = HasVRStartupRenderScaleIntent(globals::features::upscaling);
+		const bool renderScaleLatched = globals::features::upscaling.IsVRRenderScaleModeLatched();
+		const bool perfRequested = globals::features::upscaling.GetPerfModeRequested();
+		const bool pendingTransition = globals::features::upscaling.HasPendingVRUpscalingTransition();
+		const bool pendingPerfRelatch = globals::features::upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
+		const bool completedWorldFrame = HasCompletedVRWorldFrameAfterLatestLoad(state);
+		const uint32_t nameFrame = g_vrStartupRaceSexNameFrame.load(std::memory_order_acquire);
+		const uint32_t releaseFrame = g_vrStartupRaceSexReleaseFrame.load(std::memory_order_acquire);
+		const uint32_t lastWorldFrame = state ? state->lastCompletedWorldRenderFrame : 0u;
+		const uint32_t loadingCloseFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		const uint32_t firstLoadCloseFrame = g_vrStartupRaceSexFirstLoadCloseFrame.load(std::memory_order_acquire);
+		const uint32_t tailEndFrame = g_vrRaceSexMenuPresentationTailEndFrame.load(std::memory_order_acquire);
+
+		uint64_t key = 0;
+		key |= static_cast<uint64_t>(directOpen) << 0;
+		key |= static_cast<uint64_t>(eventOpen) << 1;
+		key |= static_cast<uint64_t>(tailActive) << 2;
+		key |= static_cast<uint64_t>(loadingOpen) << 3;
+		key |= static_cast<uint64_t>(mainOpen) << 4;
+		key |= static_cast<uint64_t>(observedProjectedTail) << 5;
+		key |= static_cast<uint64_t>(bridgeTail) << 6;
+		key |= (static_cast<uint64_t>(static_cast<uint32_t>(gateState)) & 0x7u) << 7;
+		key |= static_cast<uint64_t>(gateEligible) << 10;
+		key |= static_cast<uint64_t>(protectionArmed) << 11;
+		key |= static_cast<uint64_t>(renderScaleIntent) << 12;
+		key |= static_cast<uint64_t>(renderScaleLatched) << 13;
+		key |= static_cast<uint64_t>(perfRequested) << 14;
+		key |= static_cast<uint64_t>(pendingTransition) << 15;
+		key |= static_cast<uint64_t>(pendingPerfRelatch) << 16;
+		key |= static_cast<uint64_t>(completedWorldFrame) << 17;
+		key |= static_cast<uint64_t>(std::min<uint32_t>(nameFrame, 0xFFFFu)) << 18;
+		key |= static_cast<uint64_t>(std::min<uint32_t>(releaseFrame, 0xFFFFu)) << 34;
+		key |= (static_cast<uint64_t>(static_cast<uint32_t>(loadKind)) & 0x3u) << 50;
+
+		if (!a_forceLog) {
+			uint64_t previousKey = g_vrRaceSexTraceLastKey.load(std::memory_order_acquire);
+			if (previousKey == key)
+				return;
+			if (!g_vrRaceSexTraceLastKey.compare_exchange_strong(
+					previousKey,
+					key,
+					std::memory_order_acq_rel,
+					std::memory_order_acquire)) {
+				return;
+			}
+		} else {
+			g_vrRaceSexTraceLastKey.store(key, std::memory_order_release);
+		}
+
+		logger::debug(
+			"[VRRenderScale][RaceSexTrace] source={} frame={} directOpen={} eventOpen={} tail={} tailEnd={} loading={} main={} projectedTail={} bridgeTail={} gate={} loadKind={} eligible={} protection={} renderScaleIntent={} latched={} perfRequested={} pendingTransition={} pendingRelatch={} worldComplete={} lastWorldFrame={} loadingCloseFrame={} firstLoadCloseFrame={} nameFrame={} releaseFrame={}",
+			a_source ? a_source : "unknown",
+			frame,
+			BoolText(directOpen),
+			BoolText(eventOpen),
+			BoolText(tailActive),
+			tailEndFrame,
+			BoolText(loadingOpen),
+			BoolText(mainOpen),
+			BoolText(observedProjectedTail),
+			BoolText(bridgeTail),
+			GetVRStartupRaceSexGateStateName(gateState),
+			GetVRStartupLoadKindName(loadKind),
+			BoolText(gateEligible),
+			BoolText(protectionArmed),
+			BoolText(renderScaleIntent),
+			BoolText(renderScaleLatched),
+			BoolText(perfRequested),
+			BoolText(pendingTransition),
+			BoolText(pendingPerfRelatch),
+			BoolText(completedWorldFrame),
+			lastWorldFrame,
+			loadingCloseFrame,
+			firstLoadCloseFrame,
+			nameFrame,
+			releaseFrame);
+	}
+
+	uint32_t GetCurrentFrameForVRStartupRaceSexGate()
+	{
+		return globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+	}
+
+	uint32_t GetVRStartupRaceSexReleaseFrame(uint32_t a_startFrame)
+	{
+		return a_startFrame + kVRRaceSexPostNameRenderScaleBlockFrames + kVRStartupWorldRenderScaleSettleFrames;
+	}
+
+	bool IsBeforeFirstCompletedVRWorldFrame(const State* a_state)
+	{
+		return !a_state ||
+		       a_state->lastCompletedWorldRenderFrame == std::numeric_limits<uint32_t>::max();
+	}
+
+	uint32_t GetVRStartupRaceSexWatchEndFrame()
+	{
+		uint32_t closeFrame = g_vrStartupRaceSexFirstLoadCloseFrame.load(std::memory_order_acquire);
+		if (closeFrame == 0)
+			closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		if (closeFrame == 0)
+			return 0;
+
+		return closeFrame + kVRRaceSexPostLoadArmWindowFrames;
+	}
+
+	void SetVRStartupRaceSexPostNameTail(uint32_t a_currentFrame)
+	{
+		SetVRStartupRaceSexGateState(VRStartupRaceSexGateState::PostNameTail);
+		g_vrStartupRaceSexNameFrame.store(a_currentFrame, std::memory_order_release);
+		g_vrStartupRaceSexReleaseFrame.store(GetVRStartupRaceSexReleaseFrame(a_currentFrame), std::memory_order_release);
+		ExtendFrameTail(g_vrRaceSexMenuPresentationTailEndFrame, kVRRaceSexPostNameRenderScaleBlockFrames);
+	}
+
+	bool ShouldArmVRStartupRaceSexWatchGate(const State* a_state)
+	{
+		if (!globals::game::isVR)
+			return false;
+
+		const auto loadKind = GetVRStartupLoadKind();
+		if (loadKind == VRStartupLoadKind::PostLoadGame)
+			return false;
+
+		if (IsVRStartupRaceSexGateEligible())
+			return true;
+
+		if (IsMainMenuContextActive())
+			return true;
+
+		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
+		const uint32_t firstLoadCloseFrame = g_vrStartupRaceSexFirstLoadCloseFrame.load(std::memory_order_acquire);
+		const bool firstLoadRaceSexWatchWindow =
+			closeFrame != 0 &&
+			closeFrame == firstLoadCloseFrame &&
+			IsVRRaceSexPostLoadArmWindowActive(a_state);
+		if (firstLoadRaceSexWatchWindow)
+			return true;
+
+		return IsBeforeFirstCompletedVRWorldFrame(a_state) &&
+		       IsVRRaceSexPostLoadArmWindowActive(a_state);
+	}
+
+	void ResetVRStartupRaceSexGate(bool a_newGame, bool a_renderScaleIntent)
+	{
+		g_vrStartupRaceSexGateEligible.store(a_newGame, std::memory_order_release);
+		g_vrStartupLoadKind.store(
+			static_cast<uint32_t>(a_newGame ? VRStartupLoadKind::NewGame : VRStartupLoadKind::PostLoadGame),
+			std::memory_order_release);
+		SetVRStartupRaceSexGateState(
+			a_newGame && a_renderScaleIntent ? VRStartupRaceSexGateState::AwaitingRaceSex : VRStartupRaceSexGateState::Inactive);
+		g_vrStartupRaceSexNameFrame.store(0, std::memory_order_release);
+		g_vrStartupRaceSexReleaseFrame.store(0, std::memory_order_release);
+		g_vrStartupRaceSexFirstLoadCloseFrame.store(0, std::memory_order_release);
+		g_vrRaceSexTraceLastKey.store(std::numeric_limits<uint64_t>::max(), std::memory_order_release);
+		g_vrRaceSexMenuOpenFromEvent.store(false, std::memory_order_release);
+		g_vrRaceSexPostLoadProtectionActive.store(false, std::memory_order_release);
+		g_vrRaceSexMenuPresentationTailEndFrame.store(0, std::memory_order_release);
+		if (a_newGame && a_renderScaleIntent)
+			logger::debug("[VRRenderScale] Startup RaceSex render-scale gate armed from kNewGame.");
+	}
+
+	bool IsVRStartupRaceSexGateEligible()
+	{
+		return g_vrStartupRaceSexGateEligible.load(std::memory_order_acquire);
+	}
+
+	bool IsVRStartupRaceSexObservedContextActive(const State* a_state)
+	{
+		return IsRaceSexMenuContextActive(globals::game::ui) ||
+		       IsVRRaceSexMenuEventContextActive(a_state);
+	}
+
+	bool ShouldArmVRStartupRaceSexNameGate(const Upscaling& a_upscaling, const State* a_state)
+	{
+		if (!HasVRStartupRenderScaleIntent(a_upscaling))
+			return false;
+
+		return IsVRStartupRaceSexGateEligible() ||
+		       IsVRStartupRaceSexObservedContextActive(a_state);
+	}
+
+	void ArmVRStartupRaceSexWatchGate(const char* a_reason)
+	{
+		const auto gateState = GetVRStartupRaceSexGateState();
+		if (gateState != VRStartupRaceSexGateState::Inactive)
+			return;
+
+		g_vrStartupRaceSexGateEligible.store(true, std::memory_order_release);
+		SetVRStartupRaceSexGateState(VRStartupRaceSexGateState::AwaitingRaceSex);
+		g_vrStartupRaceSexNameFrame.store(0, std::memory_order_release);
+		g_vrStartupRaceSexReleaseFrame.store(0, std::memory_order_release);
+		logger::debug(
+			"[VRRenderScale] Startup RaceSex render-scale watch armed{}{}.",
+			a_reason && *a_reason ? " from " : "",
+			a_reason && *a_reason ? a_reason : "");
+	}
+
+	void ArmVRStartupRaceSexNameGate(const char* a_reason)
+	{
+		const auto gateState = GetVRStartupRaceSexGateState();
+		if (gateState != VRStartupRaceSexGateState::Inactive &&
+			gateState != VRStartupRaceSexGateState::AwaitingRaceSex) {
+			return;
+		}
+
+		g_vrStartupRaceSexGateEligible.store(true, std::memory_order_release);
+		SetVRStartupRaceSexGateState(VRStartupRaceSexGateState::AwaitingName);
+		g_vrStartupRaceSexNameFrame.store(0, std::memory_order_release);
+		g_vrStartupRaceSexReleaseFrame.store(0, std::memory_order_release);
+		logger::debug(
+			"[VRRenderScale] Startup RaceSex render-scale name gate armed{}{}.",
+			a_reason && *a_reason ? " from " : "",
+			a_reason && *a_reason ? a_reason : "");
+	}
+
+	void MaybeArmVRStartupRaceSexGateForRenderScale(const State* a_state, bool a_renderScaleRequested)
+	{
+		if (!a_renderScaleRequested || !globals::game::isVR || !a_state)
+			return;
+
+		if (GetVRStartupRaceSexGateState() == VRStartupRaceSexGateState::Complete)
+			return;
+
+		if (IsVRStartupRaceSexObservedContextActive(a_state)) {
+			ArmVRStartupRaceSexNameGate("startup RaceSex context");
+			return;
+		}
+
+		if (!ShouldArmVRStartupRaceSexWatchGate(a_state))
+			return;
+
+		ArmVRStartupRaceSexWatchGate("startup render-scale request");
+	}
+
+	void MarkVRStartupRaceSexNameConfirmed()
+	{
+		const auto gateState = GetVRStartupRaceSexGateState();
+		if (gateState == VRStartupRaceSexGateState::Inactive) {
+			if (!HasVRStartupRenderScaleIntent(globals::features::upscaling))
+				return;
+
+			if (IsVRStartupRaceSexGateEligible() ||
+				IsVRStartupRaceSexObservedContextActive(globals::state)) {
+				ArmVRStartupRaceSexNameGate("RaceSex name confirmation");
+			} else {
+				return;
+			}
+		}
+
+		if (GetVRStartupRaceSexGateState() == VRStartupRaceSexGateState::Complete)
+			return;
+
+		const uint32_t currentFrame = GetCurrentFrameForVRStartupRaceSexGate();
+		SetVRStartupRaceSexPostNameTail(currentFrame);
+		g_vrRaceSexMenuOpenFromEvent.store(false, std::memory_order_release);
+		logger::debug(
+			"[VRRenderScale] Startup RaceSex name confirmed at frame {}; render-scale activation waits until frame {}.",
+			currentFrame,
+			GetVRStartupRaceSexReleaseFrame(currentFrame));
+	}
+
+	void ServiceVRStartupRaceSexGate()
+	{
+		if (!globals::game::isVR)
+			return;
+
+		auto gateState = GetVRStartupRaceSexGateState();
+		if (gateState == VRStartupRaceSexGateState::Inactive ||
+			gateState == VRStartupRaceSexGateState::Complete) {
+			return;
+		}
+
+		const auto* state = globals::state;
+		if (!state)
+			return;
+
+		if (gateState == VRStartupRaceSexGateState::AwaitingRaceSex) {
+			if (IsVRStartupRaceSexObservedContextActive(state)) {
+				ArmVRStartupRaceSexNameGate("RaceSex observed during startup watch");
+				return;
+			}
+
+			if (IsMainMenuContextActive())
+				return;
+
+			if (IsLoadingMenuContextActive())
+				return;
+
+			const uint32_t currentFrame = GetCurrentFrameForVRStartupRaceSexGate();
+			const uint32_t watchEndFrame = GetVRStartupRaceSexWatchEndFrame();
+			if (watchEndFrame == 0)
+				return;
+
+			g_vrStartupRaceSexReleaseFrame.store(watchEndFrame, std::memory_order_release);
+			if (currentFrame < watchEndFrame)
+				return;
+
+			SetVRStartupRaceSexGateState(VRStartupRaceSexGateState::Complete);
+			g_vrStartupRaceSexGateEligible.store(false, std::memory_order_release);
+			g_vrRaceSexPostLoadProtectionActive.store(false, std::memory_order_release);
+			logger::debug(
+				"[VRRenderScale] Startup RaceSex watch released at frame {} without RaceSex menu.",
+				currentFrame);
+			return;
+		}
+
+		if (!HasCompletedVRWorldFrameAfterLatestLoad(state))
+			return;
+
+		if (gateState == VRStartupRaceSexGateState::AwaitingName) {
+			if (IsVRStartupRaceSexObservedContextActive(state))
+				return;
+
+			const uint32_t currentFrame = GetCurrentFrameForVRStartupRaceSexGate();
+			SetVRStartupRaceSexPostNameTail(currentFrame);
+			logger::debug(
+				"[VRRenderScale] Startup RaceSex context ended before name hook; render-scale activation waits until frame {}.",
+				GetVRStartupRaceSexReleaseFrame(currentFrame));
+			return;
+		}
+
+		if (gateState != VRStartupRaceSexGateState::PostNameTail)
+			return;
+
+		const uint32_t nameFrame = g_vrStartupRaceSexNameFrame.load(std::memory_order_acquire);
+		if (nameFrame == 0)
+			return;
+
+		const uint32_t releaseFrame = g_vrStartupRaceSexReleaseFrame.load(std::memory_order_acquire);
+		if (releaseFrame == 0)
+			return;
+
+		const uint32_t worldFrame = state->lastCompletedWorldRenderFrame;
+		const uint32_t currentFrame = GetCurrentFrameForVRStartupRaceSexGate();
+		if (worldFrame < nameFrame)
+			return;
+
+		if (currentFrame < releaseFrame)
+			return;
+
+		SetVRStartupRaceSexGateState(VRStartupRaceSexGateState::Complete);
+		g_vrStartupRaceSexGateEligible.store(false, std::memory_order_release);
+		g_vrRaceSexPostLoadProtectionActive.store(false, std::memory_order_release);
+		logger::debug(
+			"[VRRenderScale] Startup RaceSex render-scale gate released at frame {} after world frame {}.",
+			currentFrame,
+			worldFrame);
+	}
+
+	bool IsVRStartupRaceSexGateBlockingRenderScale()
+	{
+		ServiceVRStartupRaceSexGate();
+
+		switch (GetVRStartupRaceSexGateState()) {
+		case VRStartupRaceSexGateState::AwaitingRaceSex:
+		case VRStartupRaceSexGateState::AwaitingName:
+		case VRStartupRaceSexGateState::PostNameTail:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	bool IsVRRaceSexRenderScaleProtectionContextActive(const State* a_state)
 	{
 		if (!globals::game::isVR)
 			return false;
 
+		if (IsVRStartupRaceSexGateBlockingRenderScale()) {
+			g_vrRaceSexPostLoadProtectionActive.store(true, std::memory_order_release);
+			return true;
+		}
+
 		const bool raceSexMenuActive =
 			IsRaceSexMenuContextActive(globals::game::ui) ||
 			IsVRRaceSexMenuEventContextActive(a_state);
+		if (raceSexMenuActive) {
+			g_vrRaceSexPostLoadProtectionActive.store(true, std::memory_order_release);
+			return true;
+		}
+
 		const bool protectionArmed = g_vrRaceSexPostLoadProtectionActive.load(std::memory_order_acquire);
 		if (!protectionArmed) {
-			if (!raceSexMenuActive || !IsVRRaceSexPostLoadArmWindowActive(a_state))
+			if (!IsVRRaceSexPostLoadArmWindowActive(a_state))
+				return false;
+
+			const bool projectedStartupMenuActive =
+				IsVRObservedProjectedMenuTailActive(a_state) ||
+				IsVRMenuBridgeTraceTailActive(a_state);
+			if (!projectedStartupMenuActive)
 				return false;
 
 			g_vrRaceSexPostLoadProtectionActive.store(true, std::memory_order_release);
 		}
 
 		const bool active =
-			raceSexMenuActive ||
 			IsVRObservedProjectedMenuTailActive(a_state) ||
 			IsVRMenuBridgeTraceTailActive(a_state);
 		if (!active)
@@ -3000,6 +3497,9 @@ namespace
 	{
 		if (!globals::game::isVR || !a_state)
 			return false;
+
+		if (IsVRStartupRaceSexGateBlockingRenderScale())
+			return true;
 
 		if (!HasVRStartupRenderScaleIntent(a_upscaling)) {
 			return false;
@@ -5203,12 +5703,17 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	if (a_event && a_event->menuName == RE::RaceSexMenu::MENU_NAME) {
 		g_vrRaceSexMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 		if (a_event->opening) {
+			const bool postLoadRaceSexContext =
+				ShouldArmVRStartupRaceSexNameGate(globals::features::upscaling, globals::state);
+			if (postLoadRaceSexContext)
+				ArmVRStartupRaceSexNameGate("RaceSex menu open");
 			g_vrRaceSexPostLoadProtectionActive.store(
-				IsVRRaceSexPostLoadArmWindowActive(globals::state),
+				postLoadRaceSexContext,
 				std::memory_order_release);
 		}
 		ExtendVRRaceSexMenuPresentationTail(
 			a_event->opening ? kVRMenuPresentationTailFrames : kVRRaceSexPostCloseRenderScaleBlockFrames);
+		TraceVRRaceSexStartupSignal(a_event->opening ? "menu-event-open" : "menu-event-close", true);
 	}
 
 	if (a_event && IsVRMenuPresentationTailMenuName(a_event->menuName)) {
@@ -5229,6 +5734,8 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			g_vrLoadingTransitionTailEndFrame.store(
 				currentFrame + kVRSaveLoadTransitionTailFrames,
 				std::memory_order_release);
+			if (IsBeforeFirstCompletedVRWorldFrame(globals::state))
+				g_vrStartupRaceSexFirstLoadCloseFrame.store(currentFrame, std::memory_order_release);
 		}
 		if (!a_event->opening) {
 			QueueVendorRuntimeResetAfterLoadingMenu(globals::features::upscaling);
@@ -5263,13 +5770,41 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 	g_vrLoadingMenuOpenFromEvent.store(ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME), std::memory_order_relaxed);
 	g_vrRaceSexMenuOpenFromEvent.store(raceSexMenuOpen, std::memory_order_release);
 	if (raceSexMenuOpen) {
-		g_vrRaceSexPostLoadProtectionActive.store(true, std::memory_order_release);
+		const bool postLoadRaceSexContext =
+			ShouldArmVRStartupRaceSexNameGate(globals::features::upscaling, globals::state);
+		if (postLoadRaceSexContext)
+			ArmVRStartupRaceSexNameGate("RaceSex menu registration");
+		g_vrRaceSexPostLoadProtectionActive.store(
+			postLoadRaceSexContext,
+			std::memory_order_release);
 		ExtendVRRaceSexMenuPresentationTail();
 	}
+	TraceVRRaceSexStartupSignal("menu-event-register", true);
 	eventSource->AddEventSink(&singleton);
 	registered.store(true, std::memory_order_release);
 	logger::info("[Upscaling] Registered MenuOpenCloseEventHandler for DLSS history reset-on-load");
 	return true;
+}
+
+void Upscaling::NotifyGameLoadStarted(bool a_newGame)
+{
+	ResetVRStartupRaceSexGate(a_newGame, a_newGame && HasVRStartupRenderScaleIntent(*this));
+	if (a_newGame) {
+		logger::debug(
+			"[VRRenderScale] New-game startup render-scale gate initialized (initialIntent={}).",
+			BoolText(HasVRStartupRenderScaleIntent(*this)));
+	}
+}
+
+void Upscaling::RaceSexMenu_ChangeName::thunk(RE::RaceSexMenu* a_this, const char* a_name)
+{
+	func(a_this, a_name);
+	logger::debug(
+		"[VRRenderScale][RaceSexTrace] source=change-name-hook frame={} hasName={}",
+		globals::state ? std::max(globals::state->frameCount, 1u) : 0u,
+		BoolText(a_name && *a_name));
+	MarkVRStartupRaceSexNameConfirmed();
+	TraceVRRaceSexStartupSignal("change-name-hook", true);
 }
 
 void Upscaling::Load()
@@ -5289,6 +5824,7 @@ void Upscaling::Load()
 
 	if (REL::Module::IsVR()) {
 		stl::write_vfunc<0x12, BSOpenVR_GetRenderTargetSize>(RE::VTABLE_BSOpenVR[0]);
+		stl::detour_thunk<RaceSexMenu_ChangeName>(REL::RelocationID(51540, 52415));
 	}
 
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainUpscaling, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
@@ -6700,6 +7236,18 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchActivationTarget);
 
 	static bool loggedRelatchRuntimeActivationDefer = false;
+	static bool loggedRelatchStartupRaceSexGateDefer = false;
+	MaybeArmVRStartupRaceSexGateForRenderScale(state, relatchActivationTarget);
+	if (IsVRStartupRaceSexGateBlockingRenderScale()) {
+		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
+		if (!loggedRelatchStartupRaceSexGateDefer) {
+			logger::debug("[VRRenderScale] Render-target relatch waiting for startup RaceSex/name/world gate to clear.");
+			loggedRelatchStartupRaceSexGateDefer = true;
+		}
+		return false;
+	}
+	loggedRelatchStartupRaceSexGateDefer = false;
+
 	if (startupActivationProtection && !CanStartVRRenderScaleRuntime(*this)) {
 		MarkPerfModeRenderTargetRecreateQueued(kVRRenderScalePostLoadSettleRetryFrames);
 		if (!loggedRelatchRuntimeActivationDefer) {
@@ -6794,6 +7342,16 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		*this,
 		state,
 		authoritativeRelatchActivationTarget);
+	MaybeArmVRStartupRaceSexGateForRenderScale(state, authoritativeRelatchActivationTarget);
+	if (IsVRStartupRaceSexGateBlockingRenderScale()) {
+		requeueRelatch(kVRRenderScalePostLoadSettleRetryFrames);
+		if (!loggedRelatchStartupRaceSexGateDefer) {
+			logger::debug("[VRRenderScale] Render-target relatch waiting for startup RaceSex/name/world gate to clear.");
+			loggedRelatchStartupRaceSexGateDefer = true;
+		}
+		return false;
+	}
+	loggedRelatchStartupRaceSexGateDefer = false;
 	if (authoritativeStartupActivationProtection && !CanStartVRRenderScaleRuntime(*this)) {
 		requeueRelatch(kVRRenderScalePostLoadSettleRetryFrames);
 		if (!loggedRelatchRuntimeActivationDefer) {
@@ -12141,6 +12699,22 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
+	if (globals::game::isVR) {
+		const auto gateState = GetVRStartupRaceSexGateState();
+		const auto* state = globals::state;
+		const bool startupRaceSexCandidate =
+			state &&
+			gateState != VRStartupRaceSexGateState::Complete &&
+			(gateState != VRStartupRaceSexGateState::Inactive ||
+				IsMainMenuContextActive() ||
+				IsLoadingMenuContextActive() ||
+				IsBeforeFirstCompletedVRWorldFrame(state) ||
+				IsVRRaceSexPostLoadArmWindowActive(state) ||
+				IsVRStartupRaceSexObservedContextActive(state));
+		if (startupRaceSexCandidate)
+			MaybeArmVRStartupRaceSexGateForRenderScale(state, HasVRStartupRenderScaleIntent(*this));
+	}
+	TraceVRRaceSexStartupSignal("configure-poll");
 	if (deferredVRIntermediateTextureCleanupFrame != 0)
 		ServiceVRIntermediateTextureCleanup();
 	QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(*this);
@@ -14447,15 +15021,19 @@ bool Upscaling::ShouldDeferVRUpscalingTransitionSettings() const
 	if (!pendingRenderScaleTransition)
 		return false;
 
+	const auto* state = globals::state;
+	if (!state)
+		return false;
+
+	MaybeArmVRStartupRaceSexGateForRenderScale(state, IsPendingVRRenderScaleActivationTarget(*this));
+	if (IsVRStartupRaceSexGateBlockingRenderScale())
+		return true;
+
 	if (!IsPendingVRRenderScaleActivationTarget(*this))
 		return false;
 
 	if (postLoadRuntimeResetPending.load(std::memory_order_acquire))
 		return true;
-
-	const auto* state = globals::state;
-	if (!state)
-		return false;
 
 	return UsesVRRenderScaleStartupActivationProtection(*this, state, true);
 }

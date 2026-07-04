@@ -1262,6 +1262,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		float wetnessOcclusion = inWorld;
 		float openSkyVisibility = inWorld;
 #		endif
+		float roofWetnessExposure = saturate(openSkyVisibility * 2.0);
 		// Keep rain coverage from collapsing in overcast/rainy lighting.
 		wetnessOcclusion = lerp(wetnessOcclusion, max(wetnessOcclusion, 0.82), inRainBlend);
 
@@ -1307,6 +1308,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 			rainSurfaceUpness > 0.05 &&
 			CS_WETNESS_SETTINGS.Raining > 0.0f &&
 			(CS_WETNESS_SETTINGS.EnableRaindropFx != 0) &&
+			openSkyVisibility > 0.5 &&
 			(rainDropDistance < maxRainDropDistance);
 		const bool raindropOcclusionNeeded = raindropFxActive && vrWetternessDynamicDetailEnabled && inRainBlend > 0.0;
 		const bool shelterOcclusionNeeded = puddleOcclusionPhase * roofLikeMask > 1e-3;
@@ -1384,6 +1386,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 
 		float wetnessOcclusionMix = lerp(1.0, wetnessOcclusion, 0.35);
 		rainWetness *= wetnessOcclusionMix;
+		rainWetness *= roofWetnessExposure;
 		puddleWetness *= wetnessOcclusionMix;
 
 		// Apply per-surface post-rain drying response (neutral at multiplier=1.0).
@@ -1465,7 +1468,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		}
 #		endif
 		puddle *= puddleRainExposure;
-		puddle *= saturate(wetnessOcclusion * 2.0);
+		puddle *= roofWetnessExposure;
 		// Match the old dev culling targets by fading puddle-driven wetness with view depth.
 		puddle *= wetnessDistanceFade;
 		float puddleDepthSignal = saturate(puddle);
@@ -3193,7 +3196,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SPECULAR
 #		endif      // SPARKLE
 
-#	endif      // SNOW
+#	endif  // SNOW
 
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
@@ -4152,9 +4155,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	elif defined(SKYLIGHTING)
 	float3 vertexColor = input.Color.xyz;
 	float vertexAO = Color::ColorToLinear(max(max(vertexColor.r, vertexColor.g), vertexColor.b).xxx).x;
-	#	if defined(TRUE_PBR)
+#		if defined(TRUE_PBR)
 	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
-	#	endif
+#		endif
 	// Modify skylightingDiffuse such that skylightingDiffuse * vertexAO = min(skylightingDiffuse, vertexAO)
 	skylightingDiffuse = saturate(skylightingDiffuse / max(vertexAO, 1e-5));
 #		if defined(TRUE_PBR)

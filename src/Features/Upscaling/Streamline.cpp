@@ -125,12 +125,16 @@ namespace
 
 		// Cached VkImageViews for the DLSS-G tagged resources (0=depth, 1=motion, 2=hudless). SL's
 		// Vulkan backend requires a view per tagged resource. These must PERSIST after the non-blocking
-		// submit because DLSS-G consumes them at present time, so they are recreated only when the
-		// underlying VkImage changes and freed at Shutdown.
+		// submit because DLSS-G consumes them at present time. 4 entries per slot: depth alternates
+		// kMAIN/kMAIN_COPY and motion cycles the caller's 3-deep MV ring, so every steady-state image
+		// keeps a live view — a one-entry cache would destroy+recreate a view on EVERY tag while an
+		// in-flight generation may still read the old one. Eviction (round-robin) only happens when
+		// engine targets are recreated (resolution change, behind an interop-ring drain); freed at Shutdown.
 		struct {
 			VkImage image = VK_NULL_HANDLE;
 			VkImageView view = VK_NULL_HANDLE;
-		} dlssgViewCache[3];
+		} dlssgViewCache[3][4];
+		uint32_t dlssgViewEvict[3] = {};
 	} g_sl;
 
 	// DLSS-G runtime load state (Streamline DLSS-G guide §18). DLSS-G is loaded at slInit, so current=true.
@@ -474,11 +478,13 @@ void Streamline::Shutdown()
 		VkDevice vkDevice = dxvk->GetDevice();
 		if (auto vkDestroyImageView = reinterpret_cast<PFN_vkDestroyImageView>(
 				dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"))) {
-			for (auto& c : g_sl.dlssgViewCache) {
-				if (c.view != VK_NULL_HANDLE)
-					vkDestroyImageView(vkDevice, c.view, nullptr);
-				c.view = VK_NULL_HANDLE;
-				c.image = VK_NULL_HANDLE;
+			for (auto& slot : g_sl.dlssgViewCache) {
+				for (auto& c : slot) {
+					if (c.view != VK_NULL_HANDLE)
+						vkDestroyImageView(vkDevice, c.view, nullptr);
+					c.view = VK_NULL_HANDLE;
+					c.image = VK_NULL_HANDLE;
+				}
 			}
 		}
 	}
@@ -1417,12 +1423,15 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		// block the client queue, so the guide asks the app to gate reuse of tagged inputs on
 		// DLSSGState::inputsProcessingCompletionFence. We do NOT implement that fence wait; instead we keep the
 		// inputs valid by construction: DEPTH is tagged eOnlyValidNow (below) so SL snapshots it immediately and
-		// the in-place depth upscale / next frame cannot corrupt SL's copy; MV stays eValidUntilPresent (copying
-		// BOTH inputs every frame is what previously accumulated into a sustained-gameplay hang) and is read at
-		// present, before the next frame overwrites kMOTION_VECTOR. A prior host-side vkWaitSemaphores here only
-		// blocked the CPU, not the GPU's overwriting submissions, so it was removed. No device loss has been
-		// observed under sustained gameplay; if a future change makes the async OFA read race an MV reuse, add the
-		// inputsProcessingCompletionFence GPU wait here rather than reintroducing a per-frame MV copy.
+		// the in-place depth upscale / next frame cannot corrupt SL's copy; MV is a caller-provided slot of a
+		// 3-deep private ring (Upscaling::CopyIntoDLSSGMVRing) that nothing rewrites until 3 presents later.
+		// The previous "MV = live kMOTION_VECTOR, read at present before the next frame overwrites it" was
+		// WRONG under DXVK: generation runs at present on SL's own queues, concurrent with the next frame's
+		// clears/rewrites already executing on DXVK's graphics queue — lost races correlated wrong-frame MVs
+		// against this frame's clipToPrevClip and flagged/mis-reprojected the whole static world on generated
+		// frames, worsening with camera speed. (SL-side eOnlyValidNow snapshots of BOTH inputs previously
+		// accumulated into a sustained-gameplay hang, hence the CS-side ring instead. A prior host-side
+		// vkWaitSemaphores only blocked the CPU, not the GPU's overwriting submissions, so it was removed.)
 
 		// Tag DLSS-G inputs for the SAME frame the constants/markers/present use, else SL cannot match
 		// them to the presented frame and drops interpolation. Latched render-thread token (see RenderFrameToken).
@@ -1441,11 +1450,26 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 			dxvk->GetDeviceProcAddr()(vkDevice, "vkDestroyImageView"));
 
 		const auto cachedView = [&](int a_slot, VkImage a_image, VkFormat a_format) -> VkImageView {
-			auto& c = g_sl.dlssgViewCache[a_slot];
-			if (c.image == a_image && c.view != VK_NULL_HANDLE)
-				return c.view;
-			if (c.view != VK_NULL_HANDLE && vkDestroyImageView)
-				vkDestroyImageView(vkDevice, c.view, nullptr);
+			auto* entries = g_sl.dlssgViewCache[a_slot];
+			// Hit: this image already has a live view (steady state for every frame after the first few).
+			for (int i = 0; i < 4; ++i)
+				if (entries[i].image == a_image && entries[i].view != VK_NULL_HANDLE)
+					return entries[i].view;
+			// Miss: take an empty entry, else evict round-robin (only reached when engine targets were
+			// recreated — the caller drained the interop ring first, so the evicted view is not in flight).
+			int idx = -1;
+			for (int i = 0; i < 4; ++i)
+				if (entries[i].view == VK_NULL_HANDLE) {
+					idx = i;
+					break;
+				}
+			if (idx < 0) {
+				idx = g_sl.dlssgViewEvict[a_slot];
+				g_sl.dlssgViewEvict[a_slot] = (g_sl.dlssgViewEvict[a_slot] + 1) % 4;
+				if (entries[idx].view != VK_NULL_HANDLE && vkDestroyImageView)
+					vkDestroyImageView(vkDevice, entries[idx].view, nullptr);
+			}
+			auto& c = entries[idx];
 			c.view = VK_NULL_HANDLE;
 			c.image = a_image;
 			if (vkCreateImageView) {
@@ -1503,8 +1527,8 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		// CopyResource: the tagged depth is kMAIN_COPY, the render-res depth the engine saved before the in-place
 		// depth upscale rewrote kMAIN; eValidUntilPresent would have SL read it back at present, after that upscale
 		// and the next frame have reused kMAIN_COPY. eOnlyValidNow captures it now, while it is still correct.
-		// MV stays eValidUntilPresent (referenced, no copy): copying BOTH depth+MV every frame is what previously
-		// accumulated into a sustained-gameplay hang; the MV target is not disturbed before present.
+		// MV: eValidUntilPresent (referenced, no SL copy) but pointing at the caller's private ring slot, which
+		// is valid by construction until well past this present's generation read (see the §16.1 note above).
 		sl::ResourceTag tags[3];
 		uint32_t tagCount = 0;
 		tags[tagCount++] = { &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &extent };

@@ -772,6 +772,68 @@ void Upscaling::DestroyHudlessTexture()
 	}
 }
 
+// DLSS-G reads its tagged motion vectors at PRESENT time (eValidUntilPresent) on Streamline's own
+// queues, asynchronously to DXVK's graphics queue — which by then is already executing the NEXT
+// frame's passes, clearing/rewriting the live kMOTION_VECTOR target. When generation loses that race
+// it correlates next-frame/cleared MVs against THIS frame's clipToPrevClip: every static pixel
+// disagrees by exactly the camera's per-frame motion, so the whole world is flagged dynamic and
+// mis-reprojected on GENERATED frames only, worsening with camera speed (real frames never re-read
+// MV at present and stay clean). An SL-side snapshot (eOnlyValidNow) is not an option — snapshotting
+// both FG inputs previously accumulated into a sustained-gameplay hang (see TagDLSSGResources).
+// Instead the tag stays eValidUntilPresent but points at a private copy that is valid by
+// construction: kMOTION_VECTOR is copied into a 3-deep ring on the game's own command stream
+// (ordered after this frame's MV writes and before the next frame's), one slot per rendered frame —
+// a slot is not rewritten until 3 presents later, long after this present's generation completed.
+// Returns the slot to tag, or null (tag the live target) if the copy could not be made.
+ID3D11Resource* Upscaling::CopyIntoDLSSGMVRing(ID3D11Texture2D* a_motionVectors)
+{
+	if (!a_motionVectors || !globals::d3d::context)
+		return nullptr;
+
+	D3D11_TEXTURE2D_DESC srcDesc{};
+	a_motionVectors->GetDesc(&srcDesc);
+
+	if (dlssgMVRing[0] &&
+		(dlssgMVRing[0]->desc.Width != srcDesc.Width ||
+			dlssgMVRing[0]->desc.Height != srcDesc.Height ||
+			dlssgMVRing[0]->desc.Format != srcDesc.Format)) {
+		// Engine target recreated (resolution change). The old slots may still be referenced by an
+		// in-flight present/generation — drain the interop ring first (same rule as DestroyUpscaledTexture).
+		if (auto* dxvk = DxvkInterop::GetSingleton(); dxvk && dxvk->CommandResourcesReady())
+			dxvk->DrainCommandRing();
+		DestroyDLSSGMVRing();
+	}
+
+	if (!dlssgMVRing[0]) {
+		// Match the live target's desc exactly (CopyResource requires identical format/size, and identical
+		// bind flags keep DXVK's backing VkImage usage/layout compatible with the SL view wrap).
+		for (auto*& tex : dlssgMVRing)
+			tex = new Texture2D(srcDesc);
+		Util::SetResourceName(dlssgMVRing[0]->resource.get(), "Upscaling::DLSSGMVRing0");
+		Util::SetResourceName(dlssgMVRing[1]->resource.get(), "Upscaling::DLSSGMVRing1");
+		Util::SetResourceName(dlssgMVRing[2]->resource.get(), "Upscaling::DLSSGMVRing2");
+		logger::info("[Upscaling] Created DLSS-G MV ring (3x {}x{}, format={})",
+			srcDesc.Width, srcDesc.Height, static_cast<int>(srcDesc.Format));
+	}
+
+	auto* dst = dlssgMVRing[dlssgMVRingIndex];
+	dlssgMVRingIndex = (dlssgMVRingIndex + 1) % 3;
+	globals::d3d::context->CopyResource(dst->resource.get(), a_motionVectors);
+	return dst->resource.get();
+}
+
+void Upscaling::DestroyDLSSGMVRing()
+{
+	for (auto*& tex : dlssgMVRing) {
+		if (tex) {
+			delete tex;
+			tex = nullptr;
+		}
+	}
+	dlssgMVRingIndex = 0;
+	logger::debug("[Upscaling] Destroyed DLSS-G MV ring");
+}
+
 void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 {
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
@@ -1538,10 +1600,23 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 							0 /*native 1.0x*/, 0.0f, upscaling.jitter.x, upscaling.jitter.y);
 				}
 
-				Streamline::GetSingleton()->TagDLSSGResources(
-					fgDepth, motionVector.texture, hudless,
-					(uint32_t)rendSize.x, (uint32_t)rendSize.y,
-					(uint32_t)dispSize.x, (uint32_t)dispSize.y);
+				// Copy + tag once per rendered frame: Main_PostProcessing runs more than once per frame
+				// (see the marker gate above). Re-tagging is redundant (same token, same content — SL keeps
+				// the last), and each extra call would advance the MV ring, halving its reuse distance.
+				static uint32_t s_lastTagFrame = UINT32_MAX;
+				const uint32_t tagFrame = globals::state->frameCount;
+				if (s_lastTagFrame != tagFrame) {
+					s_lastTagFrame = tagFrame;
+					// Tag a private ring copy of the MVs, NOT the live kMOTION_VECTOR: DLSS-G reads the MV tag
+					// at PRESENT time, racing the next frame's rewrite of the live target on DXVK's graphics
+					// queue — lost races correlate wrong-frame MVs against this frame's camera constants and
+					// flag/mis-reproject the whole static world on generated frames (see CopyIntoDLSSGMVRing).
+					ID3D11Resource* fgMV = upscaling.CopyIntoDLSSGMVRing(motionVector.texture);
+					Streamline::GetSingleton()->TagDLSSGResources(
+						fgDepth, fgMV ? fgMV : motionVector.texture, hudless,
+						(uint32_t)rendSize.x, (uint32_t)rendSize.y,
+						(uint32_t)dispSize.x, (uint32_t)dispSize.y);
+				}
 				Streamline::GetSingleton()->LogReflexStatus();
 			}
 		} else if (fgMethod == FrameGenMethod::kFSR && gameplay) {

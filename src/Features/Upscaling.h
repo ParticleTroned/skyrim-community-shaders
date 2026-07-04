@@ -214,6 +214,19 @@ public:
 		}
 	};
 
+	struct VRRenderScaleRelatchSignature
+	{
+		bool valid = false;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		bool renderScaleActive = false;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		uint32_t renderEyeWidth = 0;
+		uint32_t renderEyeHeight = 0;
+		uint32_t displayEyeWidth = 0;
+		uint32_t displayEyeHeight = 0;
+	};
+
 	struct PerfModeState
 	{
 		struct BootSnapshot
@@ -608,6 +621,7 @@ public:
 	// Retired submit-stage intermediates stay alive briefly so in-flight GPU work can drain.
 	std::vector<RetiredVRIntermediateTextures> retiredVRIntermediateTextures;
 	uint32_t deferredVRIntermediateTextureCleanupFrame = 0;
+	winrt::com_ptr<ID3D11Query> vrIntermediateTextureCleanupFence;
 
 	struct VRIntermediateTextureCache
 	{
@@ -801,6 +815,12 @@ public:
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
 	std::atomic<uint64_t> submitStageVendorResumeStableEyeMaskState{ 0 };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
+	std::atomic<uint32_t> vrRenderScaleRapidRelatchFrame{ 0 };
+	std::atomic<uint32_t> vrRenderScaleRapidRelatchCount{ 0 };
+	std::atomic<uint32_t> vrRenderScaleMemoryReliefEndFrame{ 0 };
+	std::atomic<uint32_t> vrRenderScaleMemoryReliefCleanEyeMask{ 0 };
+	std::atomic_bool vrRenderScaleMemoryReliefLogged{ false };
+	VRRenderScaleRelatchSignature vrRenderScaleLastRapidRelatchSignature{};
 	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipFrame{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipCount{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidTransitionGuardEndFrame{ 0 };
@@ -824,6 +844,13 @@ public:
 	void BeginVRRenderScaleInfoTransition(const char* a_reason = nullptr);
 	void CompleteVRRenderScaleInfoTransition(const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
 	void ClearVRRenderScaleInfoTransition();
+	void RecordVRRenderScaleRelatch(const VRRenderScaleRelatchSignature& a_signature, bool a_previousActive, UpscaleMethod a_previousMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
+	void MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSignature& a_signature, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
+	bool IsVRRenderScaleMemoryReliefActive();
+	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
+	void ClearVRRenderScaleMemoryRelief();
+	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);
+	void RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success);
 	void RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_currentActive, UpscaleMethod a_previousMethod, UpscaleMethod a_currentMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	bool ShouldBypassVRDLSSFoveatedForRapidTransition();
 	void ClearVRDLSSRapidTransitionGuard();
@@ -865,7 +892,7 @@ public:
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name);
 	void DestroySubmitStageDLSSSharpenerTextures();
 	void DestroyCommonUpscalingTextures();
-	void DestroyVRIntermediateTextures();
+	void DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard = true);
 	void UnbindUpscalingResources();
 	void DestroyFoveatedResources();
 	bool EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource);

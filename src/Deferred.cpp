@@ -34,6 +34,31 @@ struct BlendStates
 	}
 };
 
+static void ReleaseRenderTargetSlot(RE::RENDER_TARGET target)
+{
+	auto renderer = globals::game::renderer;
+	if (!renderer)
+		return;
+
+	auto& data = renderer->GetRuntimeData().renderTargets[target];
+	if (data.UAV) {
+		data.UAV->Release();
+		data.UAV = nullptr;
+	}
+	if (data.RTV) {
+		data.RTV->Release();
+		data.RTV = nullptr;
+	}
+	if (data.SRV) {
+		data.SRV->Release();
+		data.SRV = nullptr;
+	}
+	if (data.texture) {
+		data.texture->Release();
+		data.texture = nullptr;
+	}
+}
+
 void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc, D3D11_RENDER_TARGET_VIEW_DESC rtvDesc, D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc, DXGI_FORMAT format, uint bindFlags)
 {
 	auto renderer = globals::game::renderer;
@@ -45,17 +70,63 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 	rtvDesc.Format = format;
 	uavDesc.Format = format;
 
+	ID3D11Texture2D* texture = nullptr;
+	ID3D11ShaderResourceView* srv = nullptr;
+	ID3D11RenderTargetView* rtv = nullptr;
+	ID3D11UnorderedAccessView* uav = nullptr;
+	auto releaseCreated = [&]() {
+		if (uav) {
+			uav->Release();
+			uav = nullptr;
+		}
+		if (rtv) {
+			rtv->Release();
+			rtv = nullptr;
+		}
+		if (srv) {
+			srv->Release();
+			srv = nullptr;
+		}
+		if (texture) {
+			texture->Release();
+			texture = nullptr;
+		}
+	};
+
+	try {
+		DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, nullptr, &texture));
+
+		if (texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE)
+			DX::ThrowIfFailed(device->CreateShaderResourceView(texture, &srvDesc, &srv));
+
+		if (texDesc.BindFlags & D3D11_BIND_RENDER_TARGET)
+			DX::ThrowIfFailed(device->CreateRenderTargetView(texture, &rtvDesc, &rtv));
+
+		if (texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(texture, &uavDesc, &uav));
+	} catch (...) {
+		releaseCreated();
+		throw;
+	}
+
 	auto& data = renderer->GetRuntimeData().renderTargets[target];
-	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, nullptr, &data.texture));
+	ReleaseRenderTargetSlot(target);
+	data.texture = texture;
+	data.SRV = srv;
+	data.RTV = rtv;
+	data.UAV = uav;
+}
 
-	if (texDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE)
-		DX::ThrowIfFailed(device->CreateShaderResourceView(data.texture, &srvDesc, &data.SRV));
-
-	if (texDesc.BindFlags & D3D11_BIND_RENDER_TARGET)
-		DX::ThrowIfFailed(device->CreateRenderTargetView(data.texture, &rtvDesc, &data.RTV));
-
-	if (texDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)
-		DX::ThrowIfFailed(device->CreateUnorderedAccessView(data.texture, &uavDesc, &data.UAV));
+void Deferred::ReleaseRenderTargets()
+{
+	ReleaseRenderTargetSlot(ALBEDO);
+	ReleaseRenderTargetSlot(SPECULAR);
+	ReleaseRenderTargetSlot(REFLECTANCE);
+	ReleaseRenderTargetSlot(NORMALROUGHNESS);
+	ReleaseRenderTargetSlot(MASKS);
+	ReleaseRenderTargetSlot(MASKS2);
+	ReleaseRenderTargetSlot(RE::RENDER_TARGETS::kWATER_1);
+	ReleaseRenderTargetSlot(RE::RENDER_TARGETS::kWATER_2);
 }
 
 void Deferred::SetupResources()

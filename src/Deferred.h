@@ -19,6 +19,7 @@ public:
 	}
 
 	void SetupResources();
+	void ReleaseRenderTargets();
 	void CopyShadowData();
 	void ReflectionsPrepasses();
 	void EarlyPrepasses();

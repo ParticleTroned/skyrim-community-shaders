@@ -243,6 +243,13 @@ namespace FrameGen
 	void Controller::EngageDLSSG()
 	{
 		auto* sl = Streamline::GetSingleton();
+		// TEMP DIAGNOSTIC (task #85): trace the engagement gate ~1/s.
+		{
+			static uint32_t s_n = 0;
+			if ((s_n++ % 150) == 0)
+				logger::info("[FGDBG] EngageDLSSG phase={} loaded={} settled={}",
+					static_cast<int>(phase), sl->IsDLSSGLoaded(), sl->IsDLSSGLoadSettled());
+		}
 		if (phase != Phase::kIdle || !sl->IsDLSSGLoaded())
 			return;
 

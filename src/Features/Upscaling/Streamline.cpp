@@ -1282,8 +1282,9 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 			g_sl.dlssgCachedRenderH = a_renderHeight;
 			g_sl.dlssgCachedDisplayW = a_displayWidth;
 			g_sl.dlssgCachedDisplayH = a_displayHeight;
-			logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {})", a_enable,
-				!a_enable ? "off" : a_dynamic ? "dynamic" : a_autoMode ? "auto" : "on", numFrames, a_dynamicTargetFps, maxFrames);
+			logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {}) render={}x{} display={}x{} drs={}", a_enable,
+				!a_enable ? "off" : a_dynamic ? "dynamic" : a_autoMode ? "auto" : "on", numFrames, a_dynamicTargetFps, maxFrames,
+				a_renderWidth, a_renderHeight, a_displayWidth, a_displayHeight, drsActive);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;

@@ -6217,6 +6217,60 @@ void Upscaling::SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, u
 	ApplyCSMenuUpscalingTransition(GetConfiguredUpscaleMethodForTransition(), a_renderScaleModeEnabled, a_qualityMode, a_dlssPreset, a_reason, a_origin);
 }
 
+uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
+{
+	if (!globals::game::isVR)
+		return 0;
+
+	const auto* state = globals::state;
+	auto* ui = globals::game::ui;
+	uint32_t reasons = 0;
+	const bool raceSexMenuOpen =
+		IsRaceSexMenuContextActive(ui) ||
+		g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire);
+	const bool startupRaceSexProtected =
+		HasVRStartupRenderScaleIntent(*this) &&
+		IsVRRaceSexRenderScaleProtectionContextActive(state);
+	const bool worldFrameReady = HasCompletedVRWorldFrameAfterLatestLoad(state);
+	const bool loadTransitionActive =
+		IsLoadingMenuContextActive() ||
+		IsVRLoadingPresentationContextActive(state) ||
+		IsSaveLoadTransitionContextActive(state) ||
+		!worldFrameReady ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire);
+	const bool relatchPending =
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		pendingDLSSReset.load(std::memory_order_acquire) ||
+		pendingFSRReset.load(std::memory_order_acquire);
+	const bool transitionPending =
+		HasPendingVRUpscalingTransition() ||
+		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
+		HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this);
+
+	if (raceSexMenuOpen) {
+		reasons |= kVRUpscalingApplyBlockRaceSexMenu;
+	}
+
+	if (startupRaceSexProtected || IsVRRaceSexMenuPresentationTailActive(state)) {
+		reasons |= kVRUpscalingApplyBlockRaceSexStartupTail;
+	}
+
+	if (loadTransitionActive) {
+		reasons |= kVRUpscalingApplyBlockLoadingMenu;
+	}
+
+	if (relatchPending) {
+		reasons |= kVRUpscalingApplyBlockRelatchPending;
+	}
+
+	if (transitionPending) {
+		reasons |= kVRUpscalingApplyBlockTransitionPending;
+	}
+
+	return reasons;
+}
+
 void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 {
 	if (!globals::game::isVR || !settings.vrFpsStabilizerSync) {

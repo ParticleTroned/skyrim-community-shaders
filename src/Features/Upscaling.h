@@ -111,6 +111,11 @@ public:
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
 	static constexpr uint32_t kPendingVRUpscalingSettingUnset = std::numeric_limits<uint32_t>::max();
+	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
+	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexStartupTail = 1u << 1;
+	static constexpr uint32_t kVRUpscalingApplyBlockLoadingMenu = 1u << 2;
+	static constexpr uint32_t kVRUpscalingApplyBlockRelatchPending = 1u << 3;
+	static constexpr uint32_t kVRUpscalingApplyBlockTransitionPending = 1u << 4;
 
 	static constexpr uint32_t ClampDLSSPresetUInt(uint32_t a_preset)
 	{
@@ -511,6 +516,7 @@ public:
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
 	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);

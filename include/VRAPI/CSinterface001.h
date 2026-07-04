@@ -12,7 +12,8 @@ namespace CSPluginAPI
 	inline constexpr uint32_t CSInterfaceMessageType = 0x43534150;  // "CSAP"
 	inline constexpr unsigned int CSInterfaceRevision001 = 1;
 	inline constexpr unsigned int CSInterfaceRevision002 = 2;
-	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision002;
+	inline constexpr unsigned int CSInterfaceRevision003 = 3;
+	inline constexpr unsigned int CSInterfaceRevision = CSInterfaceRevision003;
 	// Guidance for VR transition controllers that hide render-scale relatches
 	// behind a game fade. These constants are advisory only and do not change
 	// the ABI; Community Shaders does not drive Game.FadeOutGame itself.
@@ -67,6 +68,16 @@ namespace CSPluginAPI
 		kDLSS = 3
 	};
 
+	enum class VRUpscalingApplyBlockReason : uint32_t
+	{
+		kNone = 0,
+		kRaceSexMenu = 1u << 0,
+		kRaceSexStartupTail = 1u << 1,
+		kLoadingMenu = 1u << 2,
+		kRelatchPending = 1u << 3,
+		kTransitionPending = 1u << 4
+	};
+
 	// This object provides access to Community Shaders' mod support API.
 	struct ICSInterface001
 	{
@@ -112,6 +123,12 @@ namespace CSPluginAPI
 		virtual UpscaleMethod GetUpscaleMethod() = 0;
 		virtual void SetUpscaleMethod(UpscaleMethod method) = 0;
 		virtual void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) = 0;
+
+		// Revision 3. External transition controllers should query this before
+		// applying VR upscaling profiles. Non-zero block reasons mean the caller
+		// should buffer its latest desired profile and try again later.
+		virtual uint32_t GetVRUpscalingApplyBlockReasons() = 0;
+		virtual bool IsVRUpscalingProfileApplyAllowed() = 0;
 	};
 }  // namespace CSPluginAPI
 

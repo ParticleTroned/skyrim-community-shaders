@@ -822,10 +822,46 @@ public:
 		uint32_t depthOffsetX = 0;
 		uint32_t depthOffsetY = 0;
 	};
+	struct SubmitStageFoveatedCenterState
+	{
+		bool ready = false;
+		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint32_t method = static_cast<uint32_t>(UpscaleMethod::kNONE);
+		uint32_t generation = 0;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		uint32_t motionVectorWidth = 0;
+		uint32_t motionVectorHeight = 0;
+		uint32_t colorInputBaseOffsetX = 0;
+		uint32_t depthInputBaseOffsetX = 0;
+		uint32_t auxInputBaseOffsetX = 0;
+		uint32_t rectInputOffsetX = 0;
+		uint32_t rectInputOffsetY = 0;
+		uint32_t rectOutputOffsetX = 0;
+		uint32_t rectOutputOffsetY = 0;
+		UINT submitSourceSubresource = 0;
+		uint32_t submitSourceBoxLeft = 0;
+		uint32_t submitSourceBoxTop = 0;
+		uint32_t submitSourceBoxRight = 0;
+		uint32_t submitSourceBoxBottom = 0;
+		float pinholeOffsetX = 0.0f;
+		float pinholeOffsetY = 0.0f;
+		ID3D11Resource* colorIn = nullptr;
+		ID3D11Resource* depthIn = nullptr;
+		ID3D11Resource* motionVectorsIn = nullptr;
+		ID3D11Resource* reactiveMaskIn = nullptr;
+		ID3D11Resource* transparencyMaskIn = nullptr;
+		ID3D11Resource* colorOut = nullptr;
+	};
 	uint32_t submitStageVendorOutputFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t submitStageVendorOutputGeneration = 0;
 	ID3D11Texture2D* submitStageVendorOutputSourceTexture = nullptr;
 	std::array<SubmitStageVendorEyeState, 2> submitStageVendorEyeState = {};
+	std::array<SubmitStageFoveatedCenterState, 2> submitStageFoveatedCenterState = {};
 	bool submitStageForceFullEyeVendorFallback = false;
 	std::atomic<uint32_t> submitStageVendorResumeFrame{ 0 };
 	std::atomic<uint32_t> submitStageVendorResumeStartFrame{ 0 };
@@ -918,7 +954,7 @@ public:
 	bool BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidth, uint32_t outputHeight, float centerScale, float taaOuterScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY, uint32_t coveragePadding, uint32_t& outTileCount);
 	void DestroyPeripheryTAAResources();
 	bool DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr);
-	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr);
+	bool DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr);
 	struct FoveatedEyeDispatchParams
 	{
 		uint32_t inputWidthPerEye = 0;
@@ -950,11 +986,14 @@ public:
 		uint32_t centerColorInputBaseOffsetX = 0;
 		uint32_t centerDepthInputBaseOffsetX = 0;
 		uint32_t centerAuxInputBaseOffsetX = 0;
+		UINT submitSourceSubresource = 0;
+		D3D11_BOX submitSourceBox{};
+		bool submitSourceBoxValid = false;
 		Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
 	};
 	void ConfigureFoveatedPeripherySourceRegion(FoveatedEyeDispatchParams& params, const eastl::unique_ptr<Texture2D>& sourceTexture, uint32_t validWidth, uint32_t validHeight) const;
 	bool DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params);
-	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter);
+	bool DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr);
 	void DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f);
 	void DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 		ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,

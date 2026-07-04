@@ -466,20 +466,19 @@ endif()
 
 # Streamline runtime DLLs. The signed production set — sl.common/dlss/dlss_g/pcl/reflex,
 # the nvngx_* NGX models, NvLowLatencyVk.dll, plus the FSR (amd_fidelityfx_vk.dll) and
-# XeSS (libxess.dll) runtimes, and sl.interposer.dll — is committed under
+# XeSS (libxess.dll) runtimes — is committed under
 # package/SKSE/Plugins/CommunityShaders/Streamline/ and ships with the package tree like
 # any other asset; there is no configure-time download. Only the CS-built (necessarily
-# unsigned) fork plugins sl.fsr / sl.xess are staged from the build tree.
-# sl.interposer is PINNED to the NVIDIA SDK build: shipping the fork-built interposer was
-# bisected (in-game, user-reviewed) as a root cause of the DLSS-G generated-frame
-# world-flash — its present-path changes mis-correlate presented frames with their tagged
-# inputs. Until the fork interposer is fixed, the SDK interposer ships (it silently drops
-# the unsigned sl.fsr/sl.xess, so those SL paths are unavailable — known trade-off).
+# unsigned) fork plugins are staged from the build tree: sl.interposer (CS WSI-hook
+# change for DLSS-G ↔ FSR-FG present coexistence) and the CS-custom sl.fsr / sl.xess.
+# (The fork interposer was briefly suspected in the DLSS-G world-flash and pinned to the
+# SDK build; a controlled follow-up round — waitIdle fix with the fork interposer restored
+# — cleared it. The flash was solely the async-eval input-lifetime race.)
 # NOTE: never stage the rest of the fork's _artifacts output — sl.template crashes
 # slInit (strlen(NULL) in its embedded JSON), and the others are never requested by
 # featuresToLoad (src/Features/Upscaling/Streamline.cpp).
 file(GLOB _SL_FORK_DLLS "${CMAKE_SOURCE_DIR}/extern/Streamline/_artifacts/sl.*/Develop_x64/sl.*.dll")
-list(FILTER _SL_FORK_DLLS INCLUDE REGEX "sl\\.(fsr|xess)\\.dll$")
+list(FILTER _SL_FORK_DLLS INCLUDE REGEX "sl\\.(fsr|xess|interposer)\\.dll$")
 if(_SL_FORK_DLLS)
     message(STATUS "Staging Streamline fork plugins: ${_SL_FORK_DLLS}")
     install(

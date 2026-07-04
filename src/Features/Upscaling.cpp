@@ -6771,6 +6771,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
+	submitStageFoveatedCenterState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -8188,6 +8189,7 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
+	submitStageFoveatedCenterState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -9972,6 +9974,7 @@ void Upscaling::DestroyFoveatedResources()
 		foveatedCenterReactiveMask[i].reset();
 		foveatedCenterTransparencyMask[i].reset();
 	}
+	submitStageFoveatedCenterState = {};
 	foveatedRectCache = {};
 	DestroyPeripheryTAAResources();
 }
@@ -10442,7 +10445,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 	return false;
 }
 
-bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole)
+bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
 {
 	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
@@ -10476,37 +10479,6 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	if (!context)
 		return false;
 
-	D3D11_BOX colorSrcBox{
-		colorInputBaseOffsetX + rect.inputOffsetX,
-		rect.inputOffsetY,
-		0u,
-		colorInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
-		rect.inputOffsetY + rect.inputHeight,
-		1u
-	};
-	D3D11_BOX depthSrcBox{
-		depthInputBaseOffsetX + rect.inputOffsetX,
-		rect.inputOffsetY,
-		0u,
-		depthInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
-		rect.inputOffsetY + rect.inputHeight,
-		1u
-	};
-	D3D11_BOX auxSrcBox{
-		auxInputBaseOffsetX + rect.inputOffsetX,
-		rect.inputOffsetY,
-		0u,
-		auxInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
-		rect.inputOffsetY + rect.inputHeight,
-		1u
-	};
-
-	context->CopySubresourceRegion(foveatedCenterColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, colorIn, 0, &colorSrcBox);
-	context->CopySubresourceRegion(foveatedCenterDepth[eyeIndex]->resource.get(), 0, 0, 0, 0, depthIn, 0, &depthSrcBox);
-	context->CopySubresourceRegion(foveatedCenterMotionVectors[eyeIndex]->resource.get(), 0, 0, 0, 0, motionVectorsIn, 0, &auxSrcBox);
-	context->CopySubresourceRegion(foveatedCenterReactiveMask[eyeIndex]->resource.get(), 0, 0, 0, 0, reactiveMaskIn, 0, &auxSrcBox);
-	context->CopySubresourceRegion(foveatedCenterTransparencyMask[eyeIndex]->resource.get(), 0, 0, 0, 0, transparencyMaskIn, 0, &auxSrcBox);
-
 	const auto& plan = foveatedRectCache.plan;
 	if (!plan.IsValid())
 		return false;
@@ -10535,8 +10507,126 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	vendorParams.label = dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 	                         "submit-stage foveated center" :
 	                         "foveated center";
-	if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
-		return false;
+	const auto* state = globals::state;
+	const bool submitStageDLSSCenter =
+		a_upscaleMethod == UpscaleMethod::kDLSS &&
+		dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter;
+	const uint32_t currentFrame = state ? state->frameCount : std::numeric_limits<uint32_t>::max();
+	const uint32_t activeContractGeneration = submitStageDLSSCenter ? GetActiveVRRenderScaleContractGeneration() : 0u;
+	const uint32_t runtimeQualityMode = submitStageDLSSCenter ? GetRuntimeQualityMode() : 0u;
+	const uint32_t runtimeDLSSPreset = submitStageDLSSCenter ? GetRuntimeDLSSPreset() : kDLSSPresetK;
+	const bool trackSubmitStageDLSSCenter = submitStageDLSSCenter && state && activeContractGeneration != 0 && submitSourceBox != nullptr;
+	SubmitStageFoveatedCenterState centerKey{};
+	if (trackSubmitStageDLSSCenter) {
+		centerKey.ready = true;
+		centerKey.frame = currentFrame;
+		centerKey.method = static_cast<uint32_t>(a_upscaleMethod);
+		centerKey.generation = activeContractGeneration;
+		centerKey.qualityMode = runtimeQualityMode;
+		centerKey.dlssPreset = runtimeDLSSPreset;
+		centerKey.inputWidth = rect.inputWidth;
+		centerKey.inputHeight = rect.inputHeight;
+		centerKey.outputWidth = rect.outputWidth;
+		centerKey.outputHeight = rect.outputHeight;
+		centerKey.motionVectorWidth = inputWidthPerEye;
+		centerKey.motionVectorHeight = inputHeight;
+		centerKey.colorInputBaseOffsetX = colorInputBaseOffsetX;
+		centerKey.depthInputBaseOffsetX = depthInputBaseOffsetX;
+		centerKey.auxInputBaseOffsetX = auxInputBaseOffsetX;
+		centerKey.rectInputOffsetX = rect.inputOffsetX;
+		centerKey.rectInputOffsetY = rect.inputOffsetY;
+		centerKey.rectOutputOffsetX = rect.outputOffsetX;
+		centerKey.rectOutputOffsetY = rect.outputOffsetY;
+		centerKey.submitSourceSubresource = submitSourceSubresource;
+		centerKey.submitSourceBoxLeft = submitSourceBox->left;
+		centerKey.submitSourceBoxTop = submitSourceBox->top;
+		centerKey.submitSourceBoxRight = submitSourceBox->right;
+		centerKey.submitSourceBoxBottom = submitSourceBox->bottom;
+		centerKey.pinholeOffsetX = pinholeOffset.x;
+		centerKey.pinholeOffsetY = pinholeOffset.y;
+		centerKey.colorIn = colorIn;
+		centerKey.depthIn = depthIn;
+		centerKey.motionVectorsIn = motionVectorsIn;
+		centerKey.reactiveMaskIn = reactiveMaskIn;
+		centerKey.transparencyMaskIn = transparencyMaskIn;
+		centerKey.colorOut = vendorParams.colorOut;
+	}
+	auto matchesSubmitStageDLSSCenter = [](const SubmitStageFoveatedCenterState& a_cached, const SubmitStageFoveatedCenterState& a_key) {
+		return a_cached.ready &&
+		       a_cached.frame == a_key.frame &&
+		       a_cached.method == a_key.method &&
+		       a_cached.generation == a_key.generation &&
+		       a_cached.qualityMode == a_key.qualityMode &&
+		       a_cached.dlssPreset == a_key.dlssPreset &&
+		       a_cached.inputWidth == a_key.inputWidth &&
+		       a_cached.inputHeight == a_key.inputHeight &&
+		       a_cached.outputWidth == a_key.outputWidth &&
+		       a_cached.outputHeight == a_key.outputHeight &&
+		       a_cached.motionVectorWidth == a_key.motionVectorWidth &&
+		       a_cached.motionVectorHeight == a_key.motionVectorHeight &&
+		       a_cached.colorInputBaseOffsetX == a_key.colorInputBaseOffsetX &&
+		       a_cached.depthInputBaseOffsetX == a_key.depthInputBaseOffsetX &&
+		       a_cached.auxInputBaseOffsetX == a_key.auxInputBaseOffsetX &&
+		       a_cached.rectInputOffsetX == a_key.rectInputOffsetX &&
+		       a_cached.rectInputOffsetY == a_key.rectInputOffsetY &&
+		       a_cached.rectOutputOffsetX == a_key.rectOutputOffsetX &&
+		       a_cached.rectOutputOffsetY == a_key.rectOutputOffsetY &&
+		       a_cached.submitSourceSubresource == a_key.submitSourceSubresource &&
+		       a_cached.submitSourceBoxLeft == a_key.submitSourceBoxLeft &&
+		       a_cached.submitSourceBoxTop == a_key.submitSourceBoxTop &&
+		       a_cached.submitSourceBoxRight == a_key.submitSourceBoxRight &&
+		       a_cached.submitSourceBoxBottom == a_key.submitSourceBoxBottom &&
+		       a_cached.pinholeOffsetX == a_key.pinholeOffsetX &&
+		       a_cached.pinholeOffsetY == a_key.pinholeOffsetY &&
+		       a_cached.colorIn == a_key.colorIn &&
+		       a_cached.depthIn == a_key.depthIn &&
+		       a_cached.motionVectorsIn == a_key.motionVectorsIn &&
+		       a_cached.reactiveMaskIn == a_key.reactiveMaskIn &&
+		       a_cached.transparencyMaskIn == a_key.transparencyMaskIn &&
+		       a_cached.colorOut == a_key.colorOut;
+	};
+	auto& centerState = submitStageFoveatedCenterState[eyeIndex];
+	const bool reuseSubmitStageDLSSCenter =
+		trackSubmitStageDLSSCenter &&
+		matchesSubmitStageDLSSCenter(centerState, centerKey);
+	if (!reuseSubmitStageDLSSCenter) {
+		D3D11_BOX colorSrcBox{
+			colorInputBaseOffsetX + rect.inputOffsetX,
+			rect.inputOffsetY,
+			0u,
+			colorInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
+			rect.inputOffsetY + rect.inputHeight,
+			1u
+		};
+		D3D11_BOX depthSrcBox{
+			depthInputBaseOffsetX + rect.inputOffsetX,
+			rect.inputOffsetY,
+			0u,
+			depthInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
+			rect.inputOffsetY + rect.inputHeight,
+			1u
+		};
+		D3D11_BOX auxSrcBox{
+			auxInputBaseOffsetX + rect.inputOffsetX,
+			rect.inputOffsetY,
+			0u,
+			auxInputBaseOffsetX + rect.inputOffsetX + rect.inputWidth,
+			rect.inputOffsetY + rect.inputHeight,
+			1u
+		};
+
+		context->CopySubresourceRegion(foveatedCenterColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, colorIn, 0, &colorSrcBox);
+		context->CopySubresourceRegion(foveatedCenterDepth[eyeIndex]->resource.get(), 0, 0, 0, 0, depthIn, 0, &depthSrcBox);
+		context->CopySubresourceRegion(foveatedCenterMotionVectors[eyeIndex]->resource.get(), 0, 0, 0, 0, motionVectorsIn, 0, &auxSrcBox);
+		context->CopySubresourceRegion(foveatedCenterReactiveMask[eyeIndex]->resource.get(), 0, 0, 0, 0, reactiveMaskIn, 0, &auxSrcBox);
+		context->CopySubresourceRegion(foveatedCenterTransparencyMask[eyeIndex]->resource.get(), 0, 0, 0, 0, transparencyMaskIn, 0, &auxSrcBox);
+
+		if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
+			return false;
+
+		if (trackSubmitStageDLSSCenter)
+			centerState = centerKey;
+	}
 
 	if (!foveatedCenterColorOut[eyeIndex] || !foveatedCenterColorOut[eyeIndex]->resource || !foveatedCenterColorOut[eyeIndex]->srv)
 		return false;
@@ -10887,7 +10977,9 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		params.centerDepthInputBaseOffsetX,
 		params.centerAuxInputBaseOffsetX,
 		outputColorUAV,
-		params.dlssViewportRole);
+		params.dlssViewportRole,
+		params.submitSourceSubresource,
+		params.submitSourceBoxValid ? &params.submitSourceBox : nullptr);
 }
 
 bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput)
@@ -11022,7 +11114,7 @@ bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, I
 	return true;
 }
 
-bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV)
+bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* outputResource, ID3D11UnorderedAccessView* outputUAV, UINT submitSourceSubresource, const D3D11_BOX* submitSourceBox)
 {
 	if (!globals::game::isVR || eyeIndex >= 2)
 		return false;
@@ -11139,6 +11231,11 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	params.centerTransparencyMaskInput = vrIntermediateTransparencyMask[eyeIndex] ? vrIntermediateTransparencyMask[eyeIndex]->resource.get() : nullptr;
 	params.outputUAV = outputUAV;
 	params.dlssViewportRole = Streamline::DLSSViewportRole::SubmitStageFoveatedCenter;
+	params.submitSourceSubresource = submitSourceSubresource;
+	if (submitSourceBox) {
+		params.submitSourceBox = *submitSourceBox;
+		params.submitSourceBoxValid = true;
+	}
 
 	static bool loggedFoveatedDispatchFailure = false;
 	try {
@@ -13488,6 +13585,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	submitStageVendorOutputGeneration = 0;
 	submitStageVendorOutputSourceTexture = nullptr;
 	submitStageVendorEyeState = {};
+	submitStageFoveatedCenterState = {};
 	submitStageForceFullEyeVendorFallback = false;
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
@@ -13785,6 +13883,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		submitStageVendorOutputGeneration = activeContractGeneration;
 		submitStageVendorOutputSourceTexture = sourceTexture;
 		submitStageVendorEyeState = {};
+		submitStageFoveatedCenterState = {};
 		submitStageForceFullEyeVendorFallback = false;
 	}
 
@@ -14231,7 +14330,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				eyeWidthOut,
 				eyeHeightOut,
 				vendorColorOutput->resource.get(),
-				vendorColorOutput->uav.get());
+				vendorColorOutput->uav.get(),
+				sourceSubresource,
+				&colorBox);
 		} catch (const std::exception& e) {
 			UnbindUpscalingResources();
 			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage foveated vendor dispatch"))

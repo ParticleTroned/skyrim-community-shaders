@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdint>
 
-inline constexpr unsigned int CSBuildNumber = 7;
+inline constexpr unsigned int CSBuildNumber = 8;
 
 namespace CSPluginAPI
 {
@@ -20,7 +20,7 @@ namespace CSPluginAPI
 
 	void ModMessageHandler(SKSE::MessagingInterface::Message* message);
 
-	// This object provides access to Community Shaders' mod support API version 1.
+	// This object provides access to Community Shaders' mod support API.
 	struct CSInterface001 : ICSInterface001
 	{
 		// Must mirror ICSInterface001 virtual order exactly.
@@ -52,10 +52,19 @@ namespace CSPluginAPI
 		virtual UpscaleMethod GetUpscaleMethod() override;
 		virtual void SetUpscaleMethod(UpscaleMethod method) override;
 		virtual void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile) override;
+
+		virtual uint32_t GetVRUpscalingApplyBlockReasons() override;
+		virtual bool IsVRUpscalingProfileApplyAllowed() override;
 	};
 
 	namespace detail
 	{
+		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kRaceSexMenu) == Upscaling::kVRUpscalingApplyBlockRaceSexMenu);
+		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kRaceSexStartupTail) == Upscaling::kVRUpscalingApplyBlockRaceSexStartupTail);
+		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kLoadingMenu) == Upscaling::kVRUpscalingApplyBlockLoadingMenu);
+		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kRelatchPending) == Upscaling::kVRUpscalingApplyBlockRelatchPending);
+		static_assert(static_cast<uint32_t>(VRUpscalingApplyBlockReason::kTransitionPending) == Upscaling::kVRUpscalingApplyBlockTransitionPending);
+
 		inline bool IsValidInterfaceRequest(const SKSE::MessagingInterface::Message* message)
 		{
 			return message &&
@@ -189,6 +198,19 @@ namespace CSPluginAPI
 		{
 			return upscaling.GetLegacyDLSSPreferredUpscaleMethodForAPI();
 		}
+
+		inline bool ShouldBlockVRUpscalingApply(const char* action)
+		{
+			const uint32_t reasons = globals::features::upscaling.GetVRUpscalingApplyBlockReasonsForAPI();
+			if (reasons == 0)
+				return false;
+
+			logger::debug(
+				"[CS API] Ignoring {} while VR upscaling profile apply is blocked (reasons=0x{:X}).",
+				action ? action : "VR upscaling API request",
+				reasons);
+			return true;
+		}
 	}
 
 	inline CSInterface001 g_interface001;
@@ -196,10 +218,11 @@ namespace CSPluginAPI
 	// Constructs and returns an API of the revision number requested.
 	inline void* GetApi(unsigned int revisionNumber)
 	{
-		// Accept revision 0 as "latest" and keep revision 1 available for
-		// already-compiled consumers. Revision 2 only appends vtable entries.
+		// Accept revision 0 as "latest" and keep older revisions available for
+		// already-compiled consumers. New revisions only append vtable entries.
 		if (revisionNumber != 0 &&
 		    revisionNumber != CSInterfaceRevision001 &&
+		    revisionNumber != CSInterfaceRevision002 &&
 		    revisionNumber != CSInterfaceRevision) {
 			return nullptr;
 		}
@@ -268,6 +291,8 @@ namespace CSPluginAPI
 			logger::warn("[CS API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
 		}
+		if (detail::ShouldBlockVRUpscalingApply("upscaler preset change"))
+			return;
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
@@ -306,6 +331,8 @@ namespace CSPluginAPI
 			logger::warn("[CS API] Ignoring invalid DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
+		if (detail::ShouldBlockVRUpscalingApply("DLSS profile change"))
+			return;
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t dlssPreset = static_cast<uint32_t>(profile);
@@ -337,6 +364,9 @@ namespace CSPluginAPI
 
 	inline void CSInterface001::SetRenderAtUpscaleResEnabled(bool enabled)
 	{
+		if (detail::ShouldBlockVRUpscalingApply("render-scale mode change"))
+			return;
+
 		globals::features::upscaling.SetPerfModeRequested(
 			enabled,
 			"CS API render-scale mode change",
@@ -359,6 +389,8 @@ namespace CSPluginAPI
 			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
+		if (detail::ShouldBlockVRUpscalingApply("legacy DLSS-preferred VR upscaling transition profile"))
+			return;
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
@@ -383,6 +415,8 @@ namespace CSPluginAPI
 			logger::warn("[CS API] Ignoring invalid upscaler method value {}", static_cast<uint32_t>(method));
 			return;
 		}
+		if (detail::ShouldBlockVRUpscalingApply("upscaler method change"))
+			return;
 
 		auto& upscaling = globals::features::upscaling;
 		upscaling.ApplyCSMenuUpscalingTransition(
@@ -408,6 +442,8 @@ namespace CSPluginAPI
 			logger::warn("[CS API] Ignoring invalid transition DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
 		}
+		if (detail::ShouldBlockVRUpscalingApply("VR method-specific upscaling transition profile"))
+			return;
 
 		auto& upscaling = globals::features::upscaling;
 		const uint32_t qualityMode = detail::UpscalePresetToQualityMode(preset);
@@ -419,5 +455,15 @@ namespace CSPluginAPI
 			dlssPreset,
 			"CS API VR method-specific upscaling transition profile",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
+	}
+
+	inline uint32_t CSInterface001::GetVRUpscalingApplyBlockReasons()
+	{
+		return globals::features::upscaling.GetVRUpscalingApplyBlockReasonsForAPI();
+	}
+
+	inline bool CSInterface001::IsVRUpscalingProfileApplyAllowed()
+	{
+		return GetVRUpscalingApplyBlockReasons() == 0;
 	}
 }  // namespace CSPluginAPI

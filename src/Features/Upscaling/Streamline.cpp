@@ -871,7 +871,32 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
 		lastDLSSFailureDuplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
-		logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
+		const auto resultLabel = magic_enum::enum_name(res);
+		if (diagnostics) {
+			if (ShouldEmitDLSSDiagnostic(DLSSDiagnosticStage::SetConstants, diagnostics, static_cast<int32_t>(res), resultLabel)) {
+				logger::error(
+					"[Streamline] Could not set constants for eye {}: result={} label='{}' role={} viewport={} frame={} extentIn={}x{} extentOut={}x{} output={}x{} scale={:.6f}x{:.6f} pinhole={:.6f},{:.6f} duplicateConstants={}",
+					eyeIndex,
+					FormatDLSSDiagnosticResult(static_cast<int32_t>(res), resultLabel),
+					diagnostics->label ? diagnostics->label : "DLSS Evaluate",
+					magic_enum::enum_name(diagnostics->viewportRole),
+					static_cast<uint32_t>(p_viewport),
+					diagnostics->frame,
+					diagnostics->extentIn.width,
+					diagnostics->extentIn.height,
+					diagnostics->extentOut.width,
+					diagnostics->extentOut.height,
+					diagnostics->outputWidth,
+					diagnostics->outputHeight,
+					diagnostics->viewportScaleX,
+					diagnostics->viewportScaleY,
+					diagnostics->pinholeOffsetX,
+					diagnostics->pinholeOffsetY,
+					lastDLSSFailureDuplicatedConstants);
+			}
+		} else {
+			logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
+		}
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetConstants, res, diagnostics);
 		return false;
 	}
@@ -1310,25 +1335,25 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics();
 	DLSSDispatchDiagnostics diagnostics{};
-	DLSSDispatchDiagnostics* diagnosticsPtr = collectDLSSDiagnostics ? &diagnostics : nullptr;
-	if (diagnosticsPtr) {
-		diagnostics.label = label ? label : "DLSS Evaluate";
-		diagnostics.frame = state ? state->frameCount : 0u;
-		diagnostics.eyeIndex = eyeIndex;
-		diagnostics.requestedViewport = requestedViewport;
-		diagnostics.resolvedViewport = vp;
-		diagnostics.extentIn = extentIn;
-		diagnostics.extentOut = extentOut;
-		diagnostics.outputWidth = outputWidth;
-		diagnostics.outputHeight = extentOut.height;
-		diagnostics.qualityMode = qualityMode;
-		diagnostics.dlssPreset = dlssPreset;
-		diagnostics.viewportRole = viewportRole;
-		diagnostics.viewportScaleX = viewportScaleX;
-		diagnostics.viewportScaleY = viewportScaleY;
-		diagnostics.croppedViewport = viewportScaleX < 0.999f || viewportScaleY < 0.999f;
-		diagnostics.pinholeOffsetX = pinholeOffsetX;
-		diagnostics.pinholeOffsetY = pinholeOffsetY;
+	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
+	diagnostics.label = label ? label : "DLSS Evaluate";
+	diagnostics.frame = state ? state->frameCount : 0u;
+	diagnostics.eyeIndex = eyeIndex;
+	diagnostics.requestedViewport = requestedViewport;
+	diagnostics.resolvedViewport = vp;
+	diagnostics.extentIn = extentIn;
+	diagnostics.extentOut = extentOut;
+	diagnostics.outputWidth = outputWidth;
+	diagnostics.outputHeight = extentOut.height;
+	diagnostics.qualityMode = qualityMode;
+	diagnostics.dlssPreset = dlssPreset;
+	diagnostics.viewportRole = viewportRole;
+	diagnostics.viewportScaleX = viewportScaleX;
+	diagnostics.viewportScaleY = viewportScaleY;
+	diagnostics.croppedViewport = viewportScaleX < 0.999f || viewportScaleY < 0.999f;
+	diagnostics.pinholeOffsetX = pinholeOffsetX;
+	diagnostics.pinholeOffsetY = pinholeOffsetY;
+	if (collectDLSSDiagnostics) {
 		diagnostics.jitterX = upscaling.jitter.x;
 		diagnostics.jitterY = upscaling.jitter.y;
 		diagnostics.colorBuffersHDR = colorBuffersHDR;
@@ -1347,7 +1372,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.transparencyMask = transparencyMask;
 	}
 	const auto updateOptionsCacheDiagnostics = [&]() {
-		if (!diagnosticsPtr)
+		if (!collectDLSSDiagnostics)
 			return;
 
 		const auto& optionsCache = GetDLSSOptionsCache(viewportRole, eyeIndex, qualityMode, dlssPreset);
@@ -1365,8 +1390,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::ResolveViewport, "unavailable", diagnosticsPtr);
 		return false;
 	}
-	if (diagnosticsPtr)
-		diagnostics.resolvedViewport = vp;
+	diagnostics.resolvedViewport = vp;
 	updateOptionsCacheDiagnostics();
 
 	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, diagnosticsPtr))

@@ -1149,12 +1149,9 @@ private:
 		std::string configPath;
 	};
 
-	const OpenCompositeUpscalingBlocker& GetOpenCompositeUpscalingBlocker(bool a_forceRefresh = false) const;
+	OpenCompositeUpscalingBlocker GetOpenCompositeUpscalingBlocker(bool a_forceRefresh = false) const;
 	void ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh = false);
 
-	mutable OpenCompositeUpscalingBlocker openCompositeUpscalingBlocker;
-	mutable bool openCompositeUpscalingBlockerCacheValid = false;
-	mutable ULONGLONG openCompositeUpscalingBlockerLastRefresh = 0;
 	bool openCompositeUpscalingBackendSkipLogged = false;
 	bool renderDocUpscalingBackendSkipLogged = false;
 

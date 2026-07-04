@@ -31,6 +31,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <string>
 #include <string_view>
@@ -1949,6 +1950,32 @@ namespace
 			setBlocker("fsrEnabled", settings.fsrEnabled);
 
 		return blocker;
+	}
+
+	struct OpenCompositeUpscalingBlockerCache
+	{
+		std::mutex lock;
+		DetectedOpenCompositeUpscalingBlocker blocker;
+		bool valid = false;
+	};
+
+	OpenCompositeUpscalingBlockerCache& GetOpenCompositeUpscalingBlockerCache()
+	{
+		static OpenCompositeUpscalingBlockerCache cache;
+		return cache;
+	}
+
+	template <class TAccessor>
+	auto AccessOpenCompositeUpscalingBlockerCache(bool a_forceRefresh, TAccessor&& a_accessor)
+	{
+		auto& cache = GetOpenCompositeUpscalingBlockerCache();
+		std::lock_guard<std::mutex> lock(cache.lock);
+		if (a_forceRefresh || !cache.valid) {
+			cache.blocker = FindOpenCompositeUpscalingBlocker();
+			cache.valid = true;
+		}
+
+		return std::forward<TAccessor>(a_accessor)(cache.blocker);
 	}
 
 	float ClampPeripheryTAACenterBlendFeather(float value)
@@ -4279,7 +4306,7 @@ void Upscaling::DrawSettings()
 	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
 	const bool featureDLSS = streamline.featureDLSS;
 	ApplyOpenCompositeUpscalingBlocker();
-	const auto& openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
+	const auto openCompositeBlocker = GetOpenCompositeUpscalingBlocker();
 	const bool openCompositeBlocksUpscaling = openCompositeBlocker.active;
 	const bool renderDocBlocksUpscaling = IsRenderDocUpscalingBlocked();
 
@@ -5325,27 +5352,20 @@ void Upscaling::DrawFoveatedSettings()
 		InvalidateFrameScopedUpscalingState();
 }
 
-const Upscaling::OpenCompositeUpscalingBlocker& Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
+Upscaling::OpenCompositeUpscalingBlocker Upscaling::GetOpenCompositeUpscalingBlocker(bool a_forceRefresh) const
 {
-	const ULONGLONG now = GetTickCount64();
-
-	if (!a_forceRefresh && openCompositeUpscalingBlockerCacheValid) {
-		return openCompositeUpscalingBlocker;
-	}
-
-	const auto detectedBlocker = FindOpenCompositeUpscalingBlocker();
-	openCompositeUpscalingBlocker.active = detectedBlocker.active;
-	openCompositeUpscalingBlocker.settingName = detectedBlocker.settingName;
-	openCompositeUpscalingBlocker.configPath = detectedBlocker.configPath;
-	openCompositeUpscalingBlockerCacheValid = true;
-	openCompositeUpscalingBlockerLastRefresh = now;
-
-	return openCompositeUpscalingBlocker;
+	return AccessOpenCompositeUpscalingBlockerCache(a_forceRefresh, [](const DetectedOpenCompositeUpscalingBlocker& a_detectedBlocker) {
+		Upscaling::OpenCompositeUpscalingBlocker blocker;
+		blocker.active = a_detectedBlocker.active;
+		blocker.settingName = a_detectedBlocker.settingName;
+		blocker.configPath = a_detectedBlocker.configPath;
+		return blocker;
+	});
 }
 
 void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 {
-	const auto& blocker = GetOpenCompositeUpscalingBlocker(a_forceRefresh);
+	const auto blocker = GetOpenCompositeUpscalingBlocker(a_forceRefresh);
 	if (!blocker.active)
 		return;
 
@@ -5513,7 +5533,7 @@ void Upscaling::DataLoaded()
 {
 	DisableAutoDynamicResolutionSetting();
 	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
 		logger::warn("[Upscaling] Skipping data-loaded upscaling adjustments because Open Composite has {}=true.", blocker.settingName);
 		return;
@@ -5648,7 +5668,7 @@ void Upscaling::RaceSexMenu_ChangeName::thunk(RE::RaceSexMenu* a_this, const cha
 void Upscaling::Load()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
 		logger::warn("[Upscaling] Skipping D3D11 device hook because Open Composite has {}=true.", blocker.settingName);
 		return;
@@ -5745,7 +5765,7 @@ struct SSRReflectionsRayTracingPostRenderHook
 void Upscaling::PostPostLoad()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
 		logger::warn("[Upscaling] Skipping upscaling render hooks because Open Composite has {}=true.", blocker.settingName);
 		return;
@@ -5793,7 +5813,7 @@ void Upscaling::PostPostLoad()
 
 Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 {
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return UpscaleMethod::kNONE;
 	if (IsRenderDocUpscalingBlocked())
 		return UpscaleMethod::kNONE;
@@ -5805,7 +5825,7 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 
 Upscaling::UpscaleMethod Upscaling::GetConfiguredUpscaleMethodForTransition() const
 {
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return UpscaleMethod::kNONE;
 	if (IsRenderDocUpscalingBlocked())
 		return UpscaleMethod::kNONE;
@@ -5822,7 +5842,7 @@ Upscaling::UpscaleMethod Upscaling::GetConfiguredUpscaleMethodForTransition() co
 
 Upscaling::UpscaleMethod Upscaling::GetLegacyDLSSPreferredUpscaleMethodForAPI() const
 {
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return UpscaleMethod::kNONE;
 	if (IsRenderDocUpscalingBlocked())
 		return UpscaleMethod::kNONE;
@@ -5836,7 +5856,7 @@ Upscaling::UpscaleMethod Upscaling::GetLegacyDLSSPreferredUpscaleMethodForAPI() 
 Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 {
 	const auto requestedMethod = GetUpscaleMethod();
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return requestedMethod;
 	if (IsRenderDocUpscalingBlocked())
 		return requestedMethod;
@@ -5850,7 +5870,7 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 
 uint32_t Upscaling::GetRuntimeQualityMode() const
 {
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return ClampQualityModeUInt(settings.qualityMode);
 	if (IsRenderDocUpscalingBlocked())
 		return ClampQualityModeUInt(settings.qualityMode);
@@ -6251,7 +6271,7 @@ bool Upscaling::CanUseVRRenderScaleMode() const
 	if (!REL::Module::IsVR())
 		return false;
 
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return false;
 	if (IsRenderDocUpscalingBlocked())
 		return false;
@@ -6267,7 +6287,7 @@ bool Upscaling::IsVRRenderScaleModeLatched() const
 	if (!REL::Module::IsVR())
 		return false;
 
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return false;
 	if (IsRenderDocUpscalingBlocked())
 		return false;
@@ -6298,7 +6318,7 @@ Upscaling::VRRenderScaleStatus Upscaling::GetVRRenderScaleModeStatus() const
 	const bool renderScaleToggleRequested = GetVRRenderScaleModeRequested();
 	const bool active = IsVRRenderScaleModeLatched();
 	const bool runtimeBlocked =
-		GetOpenCompositeUpscalingBlocker().active ||
+		IsOpenCompositeUpscalingBlocked() ||
 		IsRenderDocUpscalingBlocked() ||
 		IsSubmitStageDeviceLost();
 	const bool relatchPending =
@@ -6354,7 +6374,7 @@ const char* Upscaling::GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_stat
 
 bool Upscaling::IsPerfModeActive() const
 {
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return false;
 	if (IsRenderDocUpscalingBlocked())
 		return false;
@@ -6449,7 +6469,7 @@ void Upscaling::ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, boo
 	const int targetMethodValue = std::clamp(static_cast<int>(a_targetMethod), static_cast<int>(UpscaleMethod::kNONE), maxMethodValue);
 	UpscaleMethod targetMethod = static_cast<UpscaleMethod>(targetMethodValue);
 	const auto previousMethod = GetUpscaleMethod();
-	if (GetOpenCompositeUpscalingBlocker().active) {
+	if (IsOpenCompositeUpscalingBlocked()) {
 		targetMethod = UpscaleMethod::kNONE;
 		settings.upscaleMethod = static_cast<uint32_t>(UpscaleMethod::kNONE);
 		settings.upscaleMethodNoDLSS = static_cast<uint32_t>(UpscaleMethod::kNONE);
@@ -6775,7 +6795,7 @@ bool Upscaling::ConsumePerfModeBootLatchCreate()
 
 bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate)
 {
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return false;
 	if (IsRenderDocUpscalingBlocked())
 		return false;
@@ -7295,7 +7315,7 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(const char* a_reason, VRUpsc
 	if (!globals::game::isVR)
 		return;
 
-	if (GetOpenCompositeUpscalingBlocker().active)
+	if (IsOpenCompositeUpscalingBlocked())
 		return;
 
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
@@ -7380,7 +7400,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
 		return true;
 
-	if (GetOpenCompositeUpscalingBlocker().active) {
+	if (IsOpenCompositeUpscalingBlocked()) {
 		pendingPerfModeRenderTargetRecreate.store(false, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 		pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
@@ -13469,7 +13489,7 @@ void Upscaling::PrepareFullResolutionPostProcessing(RE::BSGraphics::State* a_vie
 void Upscaling::SetupResources()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
 		logger::warn("[Upscaling] Skipping upscaling resource setup because Open Composite has {}=true.", blocker.settingName);
 		return;
@@ -15901,7 +15921,7 @@ float Upscaling::GetFrameGenerationFrameTime() const
 void Upscaling::LoadUpscalingSDKs()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
-	const auto& blocker = GetOpenCompositeUpscalingBlocker();
+	const auto blocker = GetOpenCompositeUpscalingBlocker();
 	if (blocker.active) {
 		if (!openCompositeUpscalingBackendSkipLogged) {
 			if (blocker.configPath.empty()) {
@@ -16035,7 +16055,9 @@ IDXGISwapChain* Upscaling::GetProxySwapChain()
 
 bool Upscaling::IsOpenCompositeUpscalingBlocked(bool a_forceRefresh) const
 {
-	return GetOpenCompositeUpscalingBlocker(a_forceRefresh).active;
+	return AccessOpenCompositeUpscalingBlockerCache(a_forceRefresh, [](const DetectedOpenCompositeUpscalingBlocker& a_blocker) {
+		return a_blocker.active;
+	});
 }
 
 void Upscaling::Upscale()

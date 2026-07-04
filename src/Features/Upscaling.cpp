@@ -163,6 +163,9 @@ namespace
 	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = 1800;
 	constexpr uint32_t kVRDLSSRapidTransitionGuardFrames = 180;
 	constexpr uint32_t kVRDLSSRapidTransitionCleanEyeMask = 0x3u;
+	constexpr uint32_t kVRRenderScaleRapidRelatchWindowFrames = kVRDLSSRapidRenderScaleFlipWindowFrames;
+	constexpr uint32_t kVRRenderScaleMemoryReliefFrames = kVRDLSSRapidTransitionGuardFrames;
+	constexpr uint32_t kVRRenderScaleMemoryReliefCleanEyeMask = 0x3u;
 
 	bool ShouldEmitUpscalingDiagLogs()
 	{
@@ -6543,6 +6546,76 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 
 namespace
 {
+	enum class VRIntermediateCleanupFenceResult : uint8_t
+	{
+		Ready,
+		Pending,
+		Failed
+	};
+
+	bool VRRenderScaleRelatchSignatureEquals(
+		const Upscaling::VRRenderScaleRelatchSignature& a_lhs,
+		const Upscaling::VRRenderScaleRelatchSignature& a_rhs)
+	{
+		return a_lhs.valid == a_rhs.valid &&
+		       a_lhs.method == a_rhs.method &&
+		       a_lhs.renderScaleActive == a_rhs.renderScaleActive &&
+		       a_lhs.qualityMode == a_rhs.qualityMode &&
+		       a_lhs.dlssPreset == a_rhs.dlssPreset &&
+		       a_lhs.renderEyeWidth == a_rhs.renderEyeWidth &&
+		       a_lhs.renderEyeHeight == a_rhs.renderEyeHeight &&
+		       a_lhs.displayEyeWidth == a_rhs.displayEyeWidth &&
+		       a_lhs.displayEyeHeight == a_rhs.displayEyeHeight;
+	}
+
+	void ClearVRRenderScaleRelatchSignature(Upscaling::VRRenderScaleRelatchSignature& a_signature)
+	{
+		a_signature = {};
+	}
+
+	VRIntermediateCleanupFenceResult BeginOrPollVRIntermediateCleanupFence(
+		winrt::com_ptr<ID3D11Query>& a_query,
+		const char* a_reason)
+	{
+		auto context = globals::d3d::context;
+		auto device = globals::d3d::device;
+		if (!context || !device) {
+			a_query = nullptr;
+			return VRIntermediateCleanupFenceResult::Ready;
+		}
+
+		if (a_query) {
+			const HRESULT dataResult = context->GetData(a_query.get(), nullptr, 0, 0);
+			if (dataResult == S_OK) {
+				a_query = nullptr;
+				return VRIntermediateCleanupFenceResult::Ready;
+			}
+			if (dataResult == S_FALSE)
+				return VRIntermediateCleanupFenceResult::Pending;
+
+			logger::debug("[VRRenderScale] D3D11 idle fence poll failed before {}: 0x{:08X}",
+				a_reason && *a_reason ? a_reason : "VR intermediate cleanup",
+				static_cast<uint32_t>(dataResult));
+			a_query = nullptr;
+			return VRIntermediateCleanupFenceResult::Failed;
+		}
+
+		D3D11_QUERY_DESC queryDesc{};
+		queryDesc.Query = D3D11_QUERY_EVENT;
+		winrt::com_ptr<ID3D11Query> query;
+		const HRESULT createResult = device->CreateQuery(&queryDesc, query.put());
+		if (FAILED(createResult)) {
+			logger::debug("[VRRenderScale] D3D11 idle fence creation failed before {}: 0x{:08X}",
+				a_reason && *a_reason ? a_reason : "VR intermediate cleanup",
+				static_cast<uint32_t>(createResult));
+			return VRIntermediateCleanupFenceResult::Failed;
+		}
+
+		context->End(query.get());
+		a_query = std::move(query);
+		return VRIntermediateCleanupFenceResult::Pending;
+	}
+
 	bool HasVRIntermediateTextureCache(const Upscaling::VRIntermediateTextureCache& a_cache)
 	{
 		return a_cache.colorIn[0] && a_cache.colorIn[1] &&
@@ -6589,7 +6662,7 @@ namespace
 	}
 }
 
-void Upscaling::DestroyVRIntermediateTextures()
+void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 {
 	InvalidateFrameScopedUpscalingState();
 	RetiredVRIntermediateTextures retired{};
@@ -6617,6 +6690,7 @@ void Upscaling::DestroyVRIntermediateTextures()
 		while (retiredVRIntermediateTextures.size() > kVRRetiredIntermediateTextureMaxSets) {
 			retiredVRIntermediateTextures.erase(retiredVRIntermediateTextures.begin());
 		}
+		vrIntermediateTextureCleanupFence = nullptr;
 		ScheduleVRIntermediateTextureCleanup();
 		ServiceVRIntermediateTextureCleanup();
 	}
@@ -6647,7 +6721,8 @@ void Upscaling::DestroyVRIntermediateTextures()
 	ClearSubmitStageVendorResumeCooldown();
 	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
-	ClearVRDLSSRapidTransitionGuard();
+	if (a_clearRapidTransitionGuard)
+		ClearVRDLSSRapidTransitionGuard();
 	submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	submitStageMirrorEyeReady = {};
 	submitStageMirrorSourceTexture = nullptr;
@@ -6672,13 +6747,35 @@ void Upscaling::ScheduleVRIntermediateTextureCleanup()
 
 void Upscaling::ServiceVRIntermediateTextureCleanup()
 {
-	if (deferredVRIntermediateTextureCleanupFrame == 0)
+	const bool reliefActive = IsVRRenderScaleMemoryReliefActive();
+	if (deferredVRIntermediateTextureCleanupFrame == 0 && (!reliefActive || retiredVRIntermediateTextures.empty()))
 		return;
 
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
-	if (currentFrame < deferredVRIntermediateTextureCleanupFrame)
+	if (reliefActive && !retiredVRIntermediateTextures.empty()) {
+		const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
+			vrIntermediateTextureCleanupFence,
+			"VR render-scale memory relief intermediate cleanup");
+		if (fenceResult == VRIntermediateCleanupFenceResult::Pending) {
+			deferredVRIntermediateTextureCleanupFrame = currentFrame + 1u;
+			return;
+		}
+
+		if (fenceResult == VRIntermediateCleanupFenceResult::Ready) {
+			retiredVRIntermediateTextures.clear();
+			deferredVRIntermediateTextureCleanupFrame = 0;
+			if ((vrRenderScaleMemoryReliefCleanEyeMask.load(std::memory_order_acquire) & kVRRenderScaleMemoryReliefCleanEyeMask) == kVRRenderScaleMemoryReliefCleanEyeMask) {
+				ClearVRRenderScaleMemoryRelief();
+				logger::debug("[VRRenderScale] Cleared memory relief after retired intermediate cleanup and clean full-eye evaluation.");
+			}
+			return;
+		}
+	}
+
+	if (deferredVRIntermediateTextureCleanupFrame != 0 && currentFrame < deferredVRIntermediateTextureCleanupFrame)
 		return;
 
+	vrIntermediateTextureCleanupFence = nullptr;
 	std::erase_if(retiredVRIntermediateTextures, [currentFrame](const RetiredVRIntermediateTextures& entry) {
 		return ElapsedFrames(entry.retireFrame, currentFrame) > kVRRetiredIntermediateTextureTailFrames;
 	});
@@ -6895,6 +6992,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	if (ShouldWaitForPerfModeRenderTargetRecreateDelay())
 		return false;
+
+	static bool loggedRelatchMemoryReliefCleanupDefer = false;
+	if (IsVRRenderScaleMemoryReliefActive() && HasVRRenderScaleMemoryReliefCleanupPending()) {
+		ServiceVRIntermediateTextureCleanup();
+		if (HasVRRenderScaleMemoryReliefCleanupPending()) {
+			if (!loggedRelatchMemoryReliefCleanupDefer) {
+				logger::debug("[VRRenderScale] Render-target relatch waiting for memory relief intermediate cleanup.");
+				loggedRelatchMemoryReliefCleanupDefer = true;
+			}
+			return false;
+		}
+	}
+	loggedRelatchMemoryReliefCleanupDefer = false;
 
 	if (IsVRRenderScaleTransitionSafetyRelevant(*this) && HasPendingVRRenderScaleTransition()) {
 		return false;
@@ -7167,6 +7277,20 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!AreVRRenderScaleRenderTargetsSizedForDimensions(
 				relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
 				plannedRelatchDisplaySize);
+		VRRenderScaleRelatchSignature relatchSignature{};
+		relatchSignature.valid = true;
+		relatchSignature.method = relatchUpscaleMethod;
+		relatchSignature.renderScaleActive = relatchTargetRenderScaleActive;
+		relatchSignature.qualityMode = relatchQualityMode;
+		relatchSignature.dlssPreset = relatchUpscaleMethod == UpscaleMethod::kDLSS ? ClampDLSSPresetUInt(relatchSettings.dlssPreset) : 0u;
+		relatchSignature.renderEyeWidth = relatchTargetRenderEyeWidth;
+		relatchSignature.renderEyeHeight = relatchTargetRenderEyeHeight;
+		relatchSignature.displayEyeWidth = perfMode.trueHMDEyeWidth;
+		relatchSignature.displayEyeHeight = perfMode.trueHMDEyeHeight;
+		MaybeArmVRRenderScaleMemoryRelief(relatchSignature, relatchOrigin, state->frameCount);
+		const bool memoryReliefActiveForRelatch = IsVRRenderScaleMemoryReliefActive();
+		if (memoryReliefActiveForRelatch)
+			ApplyVRRenderScaleMemoryReliefTransitionCleanup("render-target relatch");
 		const bool forceFSRResourceRecreateForRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
 			(amdAdapterForRelatch ||
@@ -7287,7 +7411,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				ClampPositiveDimension(relatchTargetDisplaySize.x),
 				ClampPositiveDimension(relatchTargetDisplaySize.y));
 		} else {
+			const bool releasedDeferredTargetsForRelief = memoryReliefActiveForRelatch && globals::deferred;
+			if (releasedDeferredTargetsForRelief)
+				globals::deferred->ReleaseRenderTargets();
 			if (!Hooks::RecreateRenderTargetsForVRRenderScale()) {
+				if (releasedDeferredTargetsForRelief)
+					globals::deferred->SetupResources();
 				if (bootContractChanged && !renderTargetsRelatched) {
 					restorePreviousBootContract();
 				}
@@ -7360,11 +7489,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		if (!recreateFSRResourcesDuringRelatch)
 			RefreshRuntimeResolutionState();
-		RecordVRDLSSRenderScaleRelatch(
+		RecordVRRenderScaleRelatch(
+			relatchSignature,
 			previousRenderScaleActive,
-			relatchRenderScaleActive,
 			previousRelatchMethod,
-			relatchUpscaleMethod,
 			relatchOrigin,
 			state->frameCount);
 	} catch (const std::exception& e) {
@@ -7683,6 +7811,176 @@ void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame
 void Upscaling::ClearSubmitStageFoveatedVendorRetryBackoff()
 {
 	submitStageFoveatedVendorRetryFrame.store(0, std::memory_order_release);
+}
+
+void Upscaling::ClearVRRenderScaleMemoryRelief()
+{
+	vrRenderScaleMemoryReliefEndFrame.store(0, std::memory_order_release);
+	vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
+	vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
+	vrRenderScaleRapidRelatchFrame.store(0, std::memory_order_release);
+	vrRenderScaleRapidRelatchCount.store(0, std::memory_order_release);
+	ClearVRRenderScaleRelatchSignature(vrRenderScaleLastRapidRelatchSignature);
+	vrIntermediateTextureCleanupFence = nullptr;
+}
+
+bool Upscaling::IsVRRenderScaleMemoryReliefActive()
+{
+	if (!globals::game::isVR)
+		return false;
+
+	const uint32_t reliefEndFrame = vrRenderScaleMemoryReliefEndFrame.load(std::memory_order_acquire);
+	if (reliefEndFrame == 0)
+		return false;
+
+	const uint32_t currentFrame = globals::state ? std::max(globals::state->frameCount, 1u) : 1u;
+	if (currentFrame > reliefEndFrame) {
+		ClearVRRenderScaleMemoryRelief();
+		logger::debug("[VRRenderScale] Cleared memory relief after cooldown expiry.");
+		return false;
+	}
+
+	if (!vrRenderScaleMemoryReliefLogged.exchange(true, std::memory_order_acq_rel)) {
+		logger::debug("[VRRenderScale] Memory relief active until clean full-eye evaluation or frame {}.", reliefEndFrame);
+	}
+	return true;
+}
+
+bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
+{
+	return !retiredVRIntermediateTextures.empty() ||
+	       deferredVRIntermediateTextureCleanupFrame != 0 ||
+	       vrIntermediateTextureCleanupFence.get() != nullptr;
+}
+
+void Upscaling::ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason)
+{
+	if (!IsVRRenderScaleMemoryReliefActive())
+		return;
+
+	UnbindUpscalingResources();
+	DestroyFoveatedResources();
+	DestroyPeripheryTAAResources();
+	DestroyVRIntermediateTextures(false);
+	ServiceVRIntermediateTextureCleanup();
+
+	logger::debug(
+		"[VRRenderScale] Applied memory relief cleanup{}{} retiredSets={} cachedCleared=true",
+		a_reason && *a_reason ? ": " : "",
+		a_reason && *a_reason ? a_reason : "",
+		retiredVRIntermediateTextures.size());
+}
+
+void Upscaling::MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSignature& a_signature, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame)
+{
+	if (!globals::game::isVR || !a_signature.valid)
+		return;
+
+	const bool stabilizerTransitionScope =
+		a_origin == VRUpscalingTransitionOrigin::VRAPI ||
+		a_origin == VRUpscalingTransitionOrigin::PostLoadSync ||
+		IsSaveLoadTransitionContextActive(globals::state);
+	if (!stabilizerTransitionScope) {
+		vrRenderScaleRapidRelatchFrame.store(0, std::memory_order_release);
+		vrRenderScaleRapidRelatchCount.store(0, std::memory_order_release);
+		ClearVRRenderScaleRelatchSignature(vrRenderScaleLastRapidRelatchSignature);
+		return;
+	}
+
+	const bool signatureSizeKnown =
+		a_signature.renderEyeWidth != 0 &&
+		a_signature.renderEyeHeight != 0 &&
+		a_signature.displayEyeWidth != 0 &&
+		a_signature.displayEyeHeight != 0;
+	if (!signatureSizeKnown)
+		return;
+
+	if (vrRenderScaleLastRapidRelatchSignature.valid &&
+		VRRenderScaleRelatchSignatureEquals(vrRenderScaleLastRapidRelatchSignature, a_signature)) {
+		return;
+	}
+
+	const uint32_t currentFrame = std::max(a_frame, 1u);
+	const uint32_t previousRelatchFrame = vrRenderScaleRapidRelatchFrame.load(std::memory_order_acquire);
+	const bool rapidRelatch =
+		previousRelatchFrame != 0 &&
+		currentFrame >= previousRelatchFrame &&
+		currentFrame - previousRelatchFrame <= kVRRenderScaleRapidRelatchWindowFrames;
+	const uint32_t previousRelatchCount = vrRenderScaleRapidRelatchCount.load(std::memory_order_acquire);
+	const uint32_t relatchCount = rapidRelatch ? std::min(previousRelatchCount + 1u, 255u) : 1u;
+	vrRenderScaleRapidRelatchFrame.store(currentFrame, std::memory_order_release);
+	vrRenderScaleRapidRelatchCount.store(relatchCount, std::memory_order_release);
+	vrRenderScaleLastRapidRelatchSignature = a_signature;
+
+	if (relatchCount < 2u)
+		return;
+
+	const uint32_t reliefEndFrame = currentFrame + kVRRenderScaleMemoryReliefFrames;
+	vrRenderScaleMemoryReliefEndFrame.store(reliefEndFrame, std::memory_order_release);
+	vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
+	vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
+	ClearSubmitStageFoveatedVendorRetryBackoff();
+	RequestHistoryReset();
+
+	logger::debug(
+		"[VRRenderScale] Armed memory relief after {} distinct relatch target(s). origin={} method={} active={} quality={} dlssPreset={} render={}x{} display={}x{} frame={} reliefUntil={}",
+		relatchCount,
+		magic_enum::enum_name(a_origin),
+		magic_enum::enum_name(a_signature.method),
+		BoolText(a_signature.renderScaleActive),
+		a_signature.qualityMode,
+		a_signature.method == UpscaleMethod::kDLSS ? a_signature.dlssPreset : 0u,
+		a_signature.renderEyeWidth,
+		a_signature.renderEyeHeight,
+		a_signature.displayEyeWidth,
+		a_signature.displayEyeHeight,
+		currentFrame,
+		reliefEndFrame);
+}
+
+void Upscaling::RecordVRRenderScaleRelatch(const VRRenderScaleRelatchSignature& a_signature, bool a_previousActive, UpscaleMethod a_previousMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame)
+{
+	if (!globals::game::isVR || !a_signature.valid)
+		return;
+
+	RecordVRDLSSRenderScaleRelatch(
+		a_previousActive,
+		a_signature.renderScaleActive,
+		a_previousMethod,
+		a_signature.method,
+		a_origin,
+		a_frame);
+}
+
+void Upscaling::RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success)
+{
+	if (a_upscaleMethod == UpscaleMethod::kDLSS)
+		RecordVRDLSSFullEyeEvaluation(a_eyeIndex, a_success);
+
+	if (!globals::game::isVR || a_eyeIndex >= 2)
+		return;
+
+	if (!IsVRRenderScaleMemoryReliefActive())
+		return;
+
+	if (!a_success) {
+		vrRenderScaleMemoryReliefCleanEyeMask.store(0, std::memory_order_release);
+		return;
+	}
+
+	const uint32_t eyeBit = 1u << a_eyeIndex;
+	const uint32_t cleanMask = vrRenderScaleMemoryReliefCleanEyeMask.fetch_or(eyeBit, std::memory_order_acq_rel) | eyeBit;
+	if ((cleanMask & kVRRenderScaleMemoryReliefCleanEyeMask) != kVRRenderScaleMemoryReliefCleanEyeMask)
+		return;
+
+	if (HasVRRenderScaleMemoryReliefCleanupPending()) {
+		ServiceVRIntermediateTextureCleanup();
+		if (HasVRRenderScaleMemoryReliefCleanupPending())
+			return;
+	}
+
+	ClearVRRenderScaleMemoryRelief();
+	logger::debug("[VRRenderScale] Cleared memory relief after clean full-eye evaluation for both eyes.");
 }
 
 void Upscaling::ClearVRDLSSRapidTransitionGuard()
@@ -10056,7 +10354,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			params.label,
 			params.dlssViewportRole);
 		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
-			RecordVRDLSSFullEyeEvaluation(params.eyeIndex, evaluated);
+			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
 		return evaluated;
 	}
 
@@ -10067,7 +10365,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 		const float motionVectorScaleY = std::isfinite(params.motionVectorScaleY) && params.motionVectorScaleY > 0.0f ?
 		                                     params.motionVectorScaleY :
 		                                     static_cast<float>(params.inputHeight);
-		return fidelityFX.UpscaleRegion(
+		const bool evaluated = fidelityFX.UpscaleRegion(
 			params.eyeIndex,
 			params.colorIn,
 			params.depth,
@@ -10082,6 +10380,9 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 			motionVectorScaleX,
 			motionVectorScaleY,
 			settings.sharpnessFSR);
+		if (params.dlssViewportRole == Streamline::DLSSViewportRole::FullEye)
+			RecordVRRenderScaleFullEyeEvaluation(a_upscaleMethod, params.eyeIndex, evaluated);
+		return evaluated;
 	}
 
 	return false;
@@ -13420,9 +13721,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const bool dlssRapidTransitionBypass =
 		upscaleMethod == UpscaleMethod::kDLSS &&
 		ShouldBypassVRDLSSFoveatedForRapidTransition();
+	const bool memoryReliefFoveatedBypass = IsVRRenderScaleMemoryReliefActive();
 	const bool transitionFoveatedBypass = ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state);
 	const bool foveatedTransitionBypass =
-		transitionFoveatedBypass || dlssRapidTransitionBypass;
+		transitionFoveatedBypass ||
+		dlssRapidTransitionBypass ||
+		memoryReliefFoveatedBypass;
 	if (transitionPresentationCooldown) {
 		const bool hmdClearDeferred = ShouldDeferHMDClearMask();
 		const bool projectedMaskDeferred = ShouldDeferVRProjectedMaskRepair(*this, state);
@@ -15149,9 +15453,11 @@ void Upscaling::Upscale()
 	const bool dlssRapidTransitionBypass =
 		upscaleMethod == UpscaleMethod::kDLSS &&
 		ShouldBypassVRDLSSFoveatedForRapidTransition();
+	const bool memoryReliefFoveatedBypass = IsVRRenderScaleMemoryReliefActive();
 	const bool foveatedTransitionBypass =
 		ShouldBypassVRFoveatedVendorDispatchForTransition(*this, state) ||
-		dlssRapidTransitionBypass;
+		dlssRapidTransitionBypass ||
+		memoryReliefFoveatedBypass;
 	const bool foveatedDispatchRequested =
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) && !foveatedTransitionBypass;
 	bool encodedVRFoveatedRegions = false;

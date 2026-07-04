@@ -10442,7 +10442,7 @@ bool Upscaling::DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const Ups
 	return false;
 }
 
-bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV)
+bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX, uint32_t depthInputBaseOffsetX, uint32_t auxInputBaseOffsetX, ID3D11UnorderedAccessView* outputUAV, Streamline::DLSSViewportRole dlssViewportRole)
 {
 	if (!SupportsFoveatedVendorDispatch(a_upscaleMethod))
 		return false;
@@ -10531,8 +10531,10 @@ bool Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, u
 	vendorParams.reactiveMask = foveatedCenterReactiveMask[eyeIndex]->resource.get();
 	vendorParams.transparencyMask = foveatedCenterTransparencyMask[eyeIndex]->resource.get();
 	vendorParams.colorOut = foveatedCenterColorOut[eyeIndex]->resource.get();
-	vendorParams.label = "foveated center";
-	vendorParams.dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter;
+	vendorParams.dlssViewportRole = dlssViewportRole;
+	vendorParams.label = dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
+	                         "submit-stage foveated center" :
+	                         "foveated center";
 	if (!DispatchVendorEyeRegion(a_upscaleMethod, vendorParams))
 		return false;
 
@@ -10884,7 +10886,8 @@ bool Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod
 		params.centerColorInputBaseOffsetX,
 		params.centerDepthInputBaseOffsetX,
 		params.centerAuxInputBaseOffsetX,
-		outputColorUAV);
+		outputColorUAV,
+		params.dlssViewportRole);
 }
 
 bool Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput)
@@ -11135,6 +11138,7 @@ bool Upscaling::DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMeth
 	params.centerReactiveMaskInput = vrIntermediateReactiveMask[eyeIndex] ? vrIntermediateReactiveMask[eyeIndex]->resource.get() : nullptr;
 	params.centerTransparencyMaskInput = vrIntermediateTransparencyMask[eyeIndex] ? vrIntermediateTransparencyMask[eyeIndex]->resource.get() : nullptr;
 	params.outputUAV = outputUAV;
+	params.dlssViewportRole = Streamline::DLSSViewportRole::SubmitStageFoveatedCenter;
 
 	static bool loggedFoveatedDispatchFailure = false;
 	try {

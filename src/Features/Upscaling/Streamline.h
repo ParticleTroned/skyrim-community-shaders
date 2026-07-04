@@ -46,6 +46,8 @@ public:
 	{
 		FullEye = 0,
 		FoveatedCenter,
+		// Submit-stage foveated DLSS needs isolated Streamline viewport state.
+		SubmitStageFoveatedCenter,
 		Count
 	};
 	static constexpr uint32_t kVRDLSSViewportRoleCount = static_cast<uint32_t>(DLSSViewportRole::Count);

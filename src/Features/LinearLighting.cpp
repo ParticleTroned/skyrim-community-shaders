@@ -1,6 +1,6 @@
 #include "LinearLighting.h"
 
-#include "AdaptiveBalance.h"
+#include "AdaptiveBrightness.h"
 #include "LocationContext.h"
 #include "State.h"
 
@@ -149,8 +149,8 @@ void LinearLighting::PostPostLoad()
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
 	const bool linearLightingEnabled = IsRuntimeEnabled();
-	const bool adaptiveBalanceEnabled = globals::features::adaptiveBalance.IsRuntimeEnabled();
-	const auto effectiveSettings = globals::features::adaptiveBalance.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
+	const bool adaptiveBrightnessEnabled = globals::features::adaptiveBrightness.IsRuntimeEnabled();
+	const auto effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
 
 	auto data = PerFrameData{};
 	data.enableLinearLighting = linearLightingEnabled;
@@ -180,7 +180,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = effectiveSettings.projectedEffectMult;
 	data.deferredEffectMult = effectiveSettings.deferredEffectMult;
 	data.otherEffectMult = effectiveSettings.otherEffectMult;
-	data.enableAdaptiveBalance = adaptiveBalanceEnabled;
+	data.enableAdaptiveBrightness = adaptiveBrightnessEnabled;
 	return data;
 }
 
@@ -221,7 +221,7 @@ void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
-	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBalance.IsRuntimeEnabled())) {
+	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBrightness.IsRuntimeEnabled())) {
 		PerGeometryData perGeometryData{};
 		perGeometryData.emissiveMult = lightProperty->emissiveMult;
 		PerGeometryCB->Update(perGeometryData);

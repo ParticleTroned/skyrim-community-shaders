@@ -722,7 +722,15 @@ static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 	a_consts.prevClipToClip = *reinterpret_cast<const sl::float4x4*>(&prevClipToClip);
 
 	a_consts.jitterOffset = { -a_jitterX, -a_jitterY };
-	a_consts.reset = sl::Boolean::eFalse;
+	// reset: sample-matched history invalidation (its needNewPasses). Skyrim's equivalent
+	// discontinuities are loading-screen exits — the camera teleports and every temporal
+	// history (DLSS/DLSS-G/FSR) is garbage for the first frame after.
+	{
+		static bool s_wasLoading = false;
+		const bool loading = globals::state->isLoadingMenuOpen;
+		a_consts.reset = (!loading && s_wasLoading) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+		s_wasLoading = loading;
+	}
 	a_consts.mvecScale = { 1.0f, 1.0f };
 	a_consts.motionVectors3D = sl::Boolean::eFalse;
 	a_consts.motionVectorsInvalidValue = FLT_MIN;
@@ -1233,14 +1241,14 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 	if (maxFrames > 0u && numFrames > maxFrames)
 		numFrames = maxFrames;
 
-	// Called every frame with the gameplay gate — skip the SL call when nothing relevant changed
-	// (mode, multiplier, auto/dynamic, target fps, or the render/display dims are all part of the key).
-	if (g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable &&
+	// Sample-matched cadence: slDLSSGSetOptions is (re)issued EVERY frame (the Streamline_Sample
+	// calls SetDLSSGOptions unconditionally in its render loop; SL treats redundant sets as
+	// cheap no-ops). The cached fields below are kept only to log on real changes.
+	const bool changed = !(g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable &&
 		g_sl.dlssgCachedNumFrames == numFrames && g_sl.dlssgCachedAuto == a_autoMode &&
 		g_sl.dlssgCachedDynamic == a_dynamic && g_sl.dlssgCachedDynamicFps == a_dynamicTargetFps &&
 		g_sl.dlssgCachedRenderW == a_renderWidth && g_sl.dlssgCachedRenderH == a_renderHeight &&
-		g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight)
-		return;
+		g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight);
 
 	__try {
 		sl::DLSSGOptions options{};
@@ -1284,7 +1292,8 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
 		const sl::Result res = g_sl.slDLSSGSetOptions(g_sl.viewport, options);
 		if (res != sl::Result::eOk) {
-			logger::warn("[Streamline] slDLSSGSetOptions failed (result {})", static_cast<int>(res));
+			if (changed)
+				logger::warn("[Streamline] slDLSSGSetOptions failed (result {})", static_cast<int>(res));
 		} else {
 			g_sl.dlssgModeCached = true;
 			g_sl.dlssgModeOn = a_enable;
@@ -1296,9 +1305,10 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 			g_sl.dlssgCachedRenderH = a_renderHeight;
 			g_sl.dlssgCachedDisplayW = a_displayWidth;
 			g_sl.dlssgCachedDisplayH = a_displayHeight;
-			logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {}) render={}x{} display={}x{} drs={}", a_enable,
-				!a_enable ? "off" : a_dynamic ? "dynamic" : a_autoMode ? "auto" : "on", numFrames, a_dynamicTargetFps, maxFrames,
-				a_renderWidth, a_renderHeight, a_displayWidth, a_displayHeight, drsActive);
+			if (changed)
+				logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {}) render={}x{} display={}x{} drs={}", a_enable,
+					!a_enable ? "off" : a_dynamic ? "dynamic" : a_autoMode ? "auto" : "on", numFrames, a_dynamicTargetFps, maxFrames,
+					a_renderWidth, a_renderHeight, a_displayWidth, a_displayHeight, drsActive);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;

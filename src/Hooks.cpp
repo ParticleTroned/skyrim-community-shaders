@@ -276,8 +276,15 @@ struct IDXGISwapChain_Present
 			SyncInterval = dlssgActive ? 0u : (up.settings.vsync ? 1u : 0u);
 			// Query DLSS-G's Multi Frame Generation cap here (present thread, as SL requires); idempotent,
 			// caches once. Drives the UI multiplier limit and the clamp in SetDLSSGMode.
-			if (dlssgActive)
-				Streamline::GetSingleton()->QueryDLSSGCapabilities();
+			if (dlssgActive) {
+				auto* sl = Streamline::GetSingleton();
+				sl->QueryDLSSGCapabilities();
+				// §16.1 input bound, deferred to present time: block until the GPU executed this
+				// frame's evaluate/tag work before the present is queued. The wait overlaps all
+				// the CPU work since the evaluate — the residual stall is only what hasn't
+				// already executed on the GPU (vs the ~1ms stall of waiting at the evaluate).
+				sl->WaitDLSSGSubmission();
+			}
 		}
 
 		// Reflex/PCL latency markers: render submission is complete by present time. When the DXVK

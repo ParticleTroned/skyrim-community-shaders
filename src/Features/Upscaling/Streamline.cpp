@@ -548,6 +548,18 @@ static void CS_DxvkPresentMarkerBridge(uint64_t a_appFrameId, uint32_t a_phase)
 	}
 }
 
+void Streamline::WaitDLSSGSubmission()
+{
+	// Present hook (render thread), while DLSS-G is active: block until the GPU executed this
+	// frame's evaluate/tag submissions, so the present-time interpolation never runs against
+	// GPU work still in flight. The wait overlaps everything the CPU did since the evaluate —
+	// the residual stall is only what hasn't already executed (usually near zero).
+	if (!initialized || !g_sl.dlssgModeOn)
+		return;
+	if (auto* dxvk = DxvkInterop::GetSingleton())
+		dxvk->WaitLastSubmission();
+}
+
 void Streamline::BeginRenderFrame()
 {
 	// Render thread, frame start (Main_UpdateJitter hook). Establishes the explicit frame ID every
@@ -888,29 +900,28 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 		tags[nt++] = sl::ResourceTag{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &outputExtent };
 
 	sl::Result evalRes = sl::Result::eErrorNotInitialized;
+	// DLSS-G input protection (§16.1, eBlockNoClientQueues): the GPU must have EXECUTED this
+	// frame's evaluate/tag work before the present is queued. That bound is enforced at the
+	// present hook (WaitDLSSGSubmission -> DxvkInterop::WaitLastSubmission), where the wait
+	// overlaps the CPU's post-evaluate frame work instead of stalling here (~1ms recovered vs
+	// the old per-frame waitIdle). What does NOT suffice, each implemented and user-reviewed
+	// in-game (2026-07-04): tag-time eOnlyValidNow snapshots of all inputs (flash),
+	// explicit-frame-ID tokens alone (flash), the sample's §16.1 fence as a queue-wait
+	// (deadlock — SL's inputs processing lands behind the wait on DXVK's one graphics queue,
+	// stack-proven), PCL present markers at the real vkQueuePresentKHR via the DXVK bridge
+	// (flash), SL-internal eBlockPresentingClientQueue (freeze), DXVK synchronous present
+	// (flash), and a 1-frame-in-flight previous-fence bound (intermittent per-session flash —
+	// one frame of GPU lag is already too much).
 	VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
 	if (cmd != VK_NULL_HANDLE) {
 		g_sl.slSetTagForFrame(*token, a_viewport, tags, nt, cmd);
 		const sl::BaseStructure* inputs[] = { &a_viewport };
 		evalRes = g_sl.slEvaluateFeature(a_feature, *token, inputs, static_cast<uint32_t>(std::size(inputs)), cmd);
-		// Submit async without frame generation (e22095b9's perf win, ~1ms/frame of CPU↔GPU
-		// serialization saved). With DLSS-G ACTIVE the wait is REQUIRED — it is the §16.1 input
-		// contract (sl_dlss_g.h, eBlockNoClientQueues: the client must wait before modifying the
-		// tagged inputs of the previously presented frame) implemented the only sound way on
-		// DXVK's single graphics queue. Every async alternative was implemented and failed
-		// IN-GAME (2026-07-04, user-reviewed): tag-time snapshots of all inputs (eOnlyValidNow,
-		// both tag tables) — flash; explicit-frame-ID tokens — flash; the sample's §16.1 fence as
-		// a queue-wait — deadlock (SL's inputs processing lands behind the wait on the one queue,
-		// stack-proven); PCL present markers fired at the real vkQueuePresentKHR via the DXVK
-		// bridge — flash; SL-internal eBlockPresentingClientQueue — freeze. Do not re-attempt
-		// async under DLSS-G without new information. The cost is masked by frame generation
-		// doubling presented frames.
-		const bool waitForDlssg = g_sl.dlssgModeOn;
-		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/waitForDlssg);
-		if (waitForDlssg)
-			cs_DestroyViews(dxvk, vkDevice, views, nv);
-		else
-			dxvk->QueueViewsForDeferredDelete(views, static_cast<uint32_t>(nv));
+		// Submit async — no per-frame GPU catch-up wait (e22095b9's perf win, kept under frame
+		// generation too thanks to the bound above). The views are referenced by the submitted
+		// dispatch; the deferred-delete ring frees them once this slot's fence signals.
+		dxvk->SubmitFrameCommandBuffer(cmd, /*waitIdle=*/false);
+		dxvk->QueueViewsForDeferredDelete(views, static_cast<uint32_t>(nv));
 	} else {
 		// Nothing was submitted — the views carry no pending GPU work, so free them immediately.
 		cs_DestroyViews(dxvk, vkDevice, views, nv);

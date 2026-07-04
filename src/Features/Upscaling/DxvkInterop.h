@@ -167,6 +167,27 @@ public:
 	bool SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool a_waitIdle = false);
 
 	/**
+		 * @brief Block until the PREVIOUS interop submission's fence signals (1-frame-in-flight
+		 *        bound). In CPU-bound play the previous fence has long signaled and this costs
+		 *        microseconds — unlike a_waitIdle on the current submission (~1ms GPU catch-up).
+		 *        Call BEFORE BeginFrameCommandBuffer (the previous slot's fence is untouched
+		 *        there; the acquired slot's own fence gets reset).
+		 *        NOTE: a 1-frame bound proved INSUFFICIENT for DLSS-G (intermittent per-session
+		 *        flash) — kept for possible other uses; DLSS-G uses WaitLastSubmission at present.
+		 */
+	void WaitPreviousSubmission();
+
+	/**
+		 * @brief Block until the MOST RECENT interop submission's fence signals. Called from the
+		 *        present hook while DLSS-G is active: guarantees the GPU has executed this frame's
+		 *        evaluate/tag work before the present is queued — the exact bound the per-frame
+		 *        waitIdle provided — but the wait overlaps all CPU work between the evaluate and
+		 *        the present (UI, hudless copy, present prep) instead of stalling at the evaluate,
+		 *        recovering most of that ~1ms.
+		 */
+	void WaitLastSubmission();
+
+	/**
 		 * @brief Enqueue transient VkImageViews for destruction once the CURRENT ring slot's
 		 *        submission completes (i.e. when that slot is next reused, its fence already
 		 *        signalled). Lets a caller that recorded the views into the just-submitted
@@ -198,6 +219,9 @@ private:
 	VkCommandPool commandPool = VK_NULL_HANDLE;
 	std::vector<VkCommandBuffer> commandBuffers;
 	std::vector<VkFence> commandFences;
+	// Fence of the most recent SubmitFrameCommandBuffer (for WaitPreviousSubmission's
+	// 1-frame-in-flight bound). Cleared on ring teardown/drain.
+	VkFence lastSubmittedFence = VK_NULL_HANDLE;
 	// Per-slot transient image views awaiting destruction. Freed when the slot's fence signals
 	// (at reuse in BeginFrameCommandBuffer), so the DLSS-eval path need not block on the GPU to
 	// free the views it recorded. Indexed like commandBuffers/commandFences.

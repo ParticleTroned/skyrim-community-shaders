@@ -111,6 +111,10 @@ public:
 	// Streamline_Sample's engine-frame-counter pattern (no shared token, no cross-thread latch).
 	void BeginRenderFrame();
 
+	// Present hook, while DLSS-G is active: block until the GPU executed this frame's
+	// evaluate/tag submissions (§16.1 bound, overlapped with post-evaluate CPU work).
+	void WaitDLSSGSubmission();
+
 	// Whether the DXVK present-marker bridge is active (PresentStart/End fire on DXVK's submit
 	// thread around the real vkQueuePresentKHR). When true, the present hook must call
 	// NotifyPresentQueued() instead of firing PresentStart/PresentEnd itself.

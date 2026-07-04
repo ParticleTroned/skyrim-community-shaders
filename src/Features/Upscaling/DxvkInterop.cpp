@@ -202,6 +202,7 @@ void DxvkInterop::DestroyCommandResources()
 			vkDestroyFence(device, f, nullptr);
 	}
 	commandFences.clear();
+	lastSubmittedFence = VK_NULL_HANDLE;
 
 	if (commandPool != VK_NULL_HANDLE) {
 		// Freeing the pool frees its command buffers.
@@ -301,10 +302,33 @@ bool DxvkInterop::SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool
 		return false;
 	}
 
+	lastSubmittedFence = fence;
+
 	if (a_waitIdle)
 		vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 
 	return true;
+}
+
+void DxvkInterop::WaitPreviousSubmission()
+{
+	// 1-frame-in-flight bound: the previous submission's fence is usually long signaled by the
+	// time the next frame's evaluate runs (CPU-bound), making this near-free — but it guarantees
+	// the GPU never trails the CPU by more than one interop submission at present time. Safe
+	// against slot-reuse resets because the ring is 3 deep and this is called before
+	// BeginFrameCommandBuffer acquires (and resets) only its OWN slot's fence.
+	if (lastSubmittedFence != VK_NULL_HANDLE && device != VK_NULL_HANDLE)
+		vkWaitForFences(device, 1, &lastSubmittedFence, VK_TRUE, UINT64_MAX);
+}
+
+void DxvkInterop::WaitLastSubmission()
+{
+	// Same-frame bound, deferred to present time: waits the fence of the most recent submission
+	// (this frame's evaluate/tag work). Equivalent to the per-frame waitIdle's guarantee at the
+	// moment the present is queued, but the GPU executes that work concurrently with the CPU's
+	// post-evaluate frame work, so the residual wait here is only what hasn't already overlapped.
+	if (lastSubmittedFence != VK_NULL_HANDLE && device != VK_NULL_HANDLE)
+		vkWaitForFences(device, 1, &lastSubmittedFence, VK_TRUE, UINT64_MAX);
 }
 
 void DxvkInterop::QueueViewsForDeferredDelete(const VkImageView* a_views, uint32_t a_count)

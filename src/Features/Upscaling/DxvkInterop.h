@@ -167,17 +167,6 @@ public:
 	bool SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool a_waitIdle = false);
 
 	/**
-		 * @brief Block until the PREVIOUS interop submission's fence signals (1-frame-in-flight
-		 *        bound). In CPU-bound play the previous fence has long signaled and this costs
-		 *        microseconds — unlike a_waitIdle on the current submission (~1ms GPU catch-up).
-		 *        Call BEFORE BeginFrameCommandBuffer (the previous slot's fence is untouched
-		 *        there; the acquired slot's own fence gets reset).
-		 *        NOTE: a 1-frame bound proved INSUFFICIENT for DLSS-G (intermittent per-session
-		 *        flash) — kept for possible other uses; DLSS-G uses WaitLastSubmission at present.
-		 */
-	void WaitPreviousSubmission();
-
-	/**
 		 * @brief Block until the MOST RECENT interop submission's fence signals. Called from the
 		 *        present hook while DLSS-G is active: guarantees the GPU has executed this frame's
 		 *        evaluate/tag work before the present is queued — the exact bound the per-frame

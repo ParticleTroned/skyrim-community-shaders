@@ -356,17 +356,6 @@ bool DxvkInterop::SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool
 	return true;
 }
 
-void DxvkInterop::WaitPreviousSubmission()
-{
-	// 1-frame-in-flight bound: the previous submission's fence is usually long signaled by the
-	// time the next frame's evaluate runs (CPU-bound), making this near-free — but it guarantees
-	// the GPU never trails the CPU by more than one interop submission at present time. Safe
-	// against slot-reuse resets because the ring is 3 deep and this is called before
-	// BeginFrameCommandBuffer acquires (and resets) only its OWN slot's fence.
-	if (lastSubmittedFence != VK_NULL_HANDLE && device != VK_NULL_HANDLE)
-		vkWaitForFences(device, 1, &lastSubmittedFence, VK_TRUE, UINT64_MAX);
-}
-
 void DxvkInterop::WaitLastSubmission()
 {
 	// Same-frame bound, deferred to present time: waits the fence of the most recent submission

@@ -481,6 +481,7 @@ struct BSInputDeviceManager_PollInputDevices
 			// PCLatencyPing intentionally NOT fired: the sample sends it only on a dedicated
 			// latency-measurement key (F13), never per frame — per-frame pings pollute the
 			// Reflex latency statistics DLSS-G paces by.
+		}
 
 		// Poll the pause-menu Scaleform each frame (main thread) to detect System → SETTINGS → DISPLAY.
 		DisplaySettingsMenu::GetSingleton()->Update();

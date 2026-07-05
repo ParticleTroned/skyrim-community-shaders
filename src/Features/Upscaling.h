@@ -164,13 +164,6 @@ public:
 	Texture2D* upscaledTexture = nullptr;
 	Texture2D* hudlessTexture = nullptr;
 
-	// DLSS-G motion-vector ring: 3 private copies of kMOTION_VECTOR, one written per rendered frame.
-	// DLSS-G reads its tagged MV at PRESENT time on Streamline's own queues, racing the next frame's
-	// passes that clear/rewrite the live engine target on DXVK's graphics queue — the tag must point
-	// at a copy that is valid by construction until past that read. See CopyIntoDLSSGMVRing().
-	Texture2D* dlssgMVRing[3] = {};
-	uint32_t dlssgMVRingIndex = 0;
-
 	virtual void ClearShaderCache() override;
 
 	static inline RCAS rcas;
@@ -196,8 +189,6 @@ private:
 	void DestroyUpscaledTexture();
 	void CreateHudlessTexture();
 	void DestroyHudlessTexture();
-	ID3D11Resource* CopyIntoDLSSGMVRing(ID3D11Texture2D* a_motionVectors);
-	void DestroyDLSSGMVRing();
 
 	struct Main_UpdateJitter
 	{

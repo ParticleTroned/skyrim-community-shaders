@@ -1444,22 +1444,15 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		return;
 
 	__try {
-		// Input back-pressure (DLSS-G guide §16.1): with queueParallelismMode=eBlockNoClientQueues SL does NOT
-		// block the client queue, so the guide asks the app to gate reuse of tagged inputs on
-		// DLSSGState::inputsProcessingCompletionFence. We do NOT implement that fence wait; instead we keep the
-		// inputs valid by construction: DEPTH is tagged eOnlyValidNow (below) so SL snapshots it immediately and
-		// the in-place depth upscale / next frame cannot corrupt SL's copy; MV is a caller-provided slot of a
-		// 3-deep private ring (Upscaling::CopyIntoDLSSGMVRing) that nothing rewrites until 3 presents later.
-		// The previous "MV = live kMOTION_VECTOR, read at present before the next frame overwrites it" was
-		// WRONG under DXVK: generation runs at present on SL's own queues, concurrent with the next frame's
-		// clears/rewrites already executing on DXVK's graphics queue — lost races correlated wrong-frame MVs
-		// against this frame's clipToPrevClip and flagged/mis-reprojected the whole static world on generated
-		// frames, worsening with camera speed. (SL-side eOnlyValidNow snapshots of BOTH inputs previously
-		// accumulated into a sustained-gameplay hang, hence the CS-side ring instead. A prior host-side
-		// vkWaitSemaphores only blocked the CPU, not the GPU's overwriting submissions, so it was removed.)
+		// Input protection (DLSS-G guide §16.1, eBlockNoClientQueues): the present-hook GPU bound
+		// (WaitDLSSGSubmission) guarantees the GPU executed this frame's evaluate/tag work — including
+		// the MV writes — before the present is queued. MV is tagged as the LIVE kMOTION_VECTOR,
+		// sample-style (the former 3-deep CS-side MV ring was validated redundant under the bound and
+		// removed); DEPTH stays eOnlyValidNow because the in-place depth upscale rewrites the tagged
+		// kMAIN_COPY before present regardless of any bound.
 
 		// Tag DLSS-G inputs for the SAME frame the constants/markers/present use, else SL cannot match
-		// them to the presented frame and drops interpolation. Latched render-thread token (see RenderFrameToken).
+		// them to the presented frame and drops interpolation (explicit render-frame token).
 		sl::FrameToken* token = RenderFrameToken();
 		if (!token)
 			return;

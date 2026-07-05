@@ -54,6 +54,7 @@ set(AIO_EXCLUDED_FEATURE_PACKAGES
     CACHE STRING
     "Additional semicolon-separated feature package directories to exclude from AIO and package outputs."
 )
+set(AIO_NON_SHIPPED_FEATURE_PACKAGES "Wetness Effects")
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
@@ -64,6 +65,9 @@ message(
 )
 message(
     "\tAdditional excluded AIO feature packages: ${AIO_EXCLUDED_FEATURE_PACKAGES}"
+)
+message(
+    "\tNon-shipped AIO feature packages: ${AIO_NON_SHIPPED_FEATURE_PACKAGES}"
 )
 
 # #######################################################################################################################
@@ -396,7 +400,10 @@ file(
     ${CMAKE_SOURCE_DIR}/features/*
 )
 
-set(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE ${AIO_EXCLUDED_FEATURE_PACKAGES})
+set(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE
+    ${AIO_NON_SHIPPED_FEATURE_PACKAGES}
+    ${AIO_EXCLUDED_FEATURE_PACKAGES}
+)
 
 if(AIO_EXCLUDE_HIDDEN_FEATURE_PACKAGES)
     file(
@@ -481,14 +488,15 @@ endif()
 if(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
     list(REMOVE_DUPLICATES _AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
     set(_VISIBLE_FEATURE_PATHS)
-    set(_UNMATCHED_AIO_EXCLUDED_FEATURE_PACKAGES
+    set(_UNMATCHED_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE
+        ${AIO_NON_SHIPPED_FEATURE_PACKAGES}
         ${AIO_EXCLUDED_FEATURE_PACKAGES}
     )
     foreach(_fpath IN LISTS FEATURE_PATHS)
         get_filename_component(_feature_dir_name "${_fpath}" NAME)
         if(_feature_dir_name IN_LIST _AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
             list(
-                REMOVE_ITEM _UNMATCHED_AIO_EXCLUDED_FEATURE_PACKAGES
+                REMOVE_ITEM _UNMATCHED_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE
                 "${_feature_dir_name}"
             )
             message(
@@ -500,10 +508,14 @@ if(_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE)
         endif()
     endforeach()
     set(FEATURE_PATHS "${_VISIBLE_FEATURE_PATHS}")
-    foreach(_feature_dir_name IN LISTS _UNMATCHED_AIO_EXCLUDED_FEATURE_PACKAGES)
+    foreach(
+        _feature_dir_name
+        IN
+        LISTS _UNMATCHED_AIO_FEATURE_DIR_NAMES_TO_EXCLUDE
+    )
         message(
             WARNING
-            "AIO_EXCLUDED_FEATURE_PACKAGES entry does not match a feature package: ${_feature_dir_name}"
+            "Configured AIO feature exclusion does not match a feature package: ${_feature_dir_name}"
         )
     endforeach()
 endif()

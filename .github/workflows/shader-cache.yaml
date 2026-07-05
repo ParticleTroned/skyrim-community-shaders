@@ -1,0 +1,154 @@
+name: "Tools: Build Shader Cache"
+
+on:
+    workflow_dispatch:
+        inputs:
+            target_ref:
+                description: "Git ref, tag, or commit to build caches from (blank = current workflow commit)"
+                required: false
+                default: ""
+            runtime:
+                description: "Runtime(s) to build"
+                type: choice
+                required: true
+                default: "both"
+                options:
+                    - "both"
+                    - "SE"
+                    - "VR"
+            plugin_version_se:
+                description: "Optional SE plugin version override for Info.ini"
+                required: false
+                default: ""
+            plugin_version_vr:
+                description: "Optional VR plugin version override for Info.ini"
+                required: false
+                default: ""
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        name: Build shader cache (${{ matrix.runtime }})
+        runs-on: windows-2025
+        strategy:
+            matrix:
+                runtime: ${{ fromJSON(inputs.runtime == 'both' && '["SE","VR"]' || format('["{0}"]', inputs.runtime)) }}
+            fail-fast: false
+        steps:
+            - name: Checkout tooling
+              uses: actions/checkout@v6
+
+            - name: Resolve target ref
+              id: resolve
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  if [ -n "${{ inputs.target_ref }}" ]; then
+                    target_ref="${{ inputs.target_ref }}"
+                    label="${{ inputs.target_ref }}"
+                  else
+                    target_ref="${GITHUB_SHA}"
+                    label="${GITHUB_REF_NAME:-${GITHUB_SHA:0:7}}"
+                  fi
+
+                  safe_label="$(printf '%s' "$label" | tr '/:\\ ' '-' | tr -cd '[:alnum:]._-' )"
+                  if [ -z "$safe_label" ]; then
+                    safe_label="${GITHUB_SHA:0:7}"
+                  fi
+
+                  echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+                  echo "artifact_label=$safe_label" >> "$GITHUB_OUTPUT"
+
+            - name: Checkout target source
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ steps.resolve.outputs.target_ref }}
+                  path: target
+
+            - name: Setup Python
+              uses: actions/setup-python@v6
+              with:
+                  python-version: "3.12"
+
+            - name: Locate fxc.exe
+              id: find_fxc
+              shell: pwsh
+              run: |
+                  $fxcPath = ''
+                  $fxcCmd = Get-Command -Name fxc.exe -ErrorAction SilentlyContinue
+                  if ($fxcCmd) {
+                    $fxcPath = $fxcCmd.Source
+                  } else {
+                    $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
+                    if (Test-Path $sdkRoot) {
+                      $versions = Get-ChildItem -Path $sdkRoot -Directory | Sort-Object -Descending
+                      foreach ($version in $versions) {
+                        $candidate = Join-Path $version.FullName 'x64\fxc.exe'
+                        if (Test-Path $candidate) {
+                          $fxcPath = $candidate
+                          break
+                        }
+                      }
+                    }
+                  }
+
+                  if ($fxcPath -eq '') {
+                    Write-Error 'fxc.exe not found in PATH or common SDK locations' -ErrorAction Stop
+                  }
+
+                  Write-Host "Found fxc.exe at $fxcPath"
+                  Add-Content -Path $env:GITHUB_OUTPUT -Value "fxc_path=$fxcPath"
+
+            - name: Install hlslkit
+              shell: bash
+              run: pip install pyyaml git+https://github.com/alandtse/hlslkit.git@92fccb1060d67a5f7afc5b9ca2bfb206a0a90cd0
+
+            - name: Build shader cache
+              shell: pwsh
+              run: |
+                  $pluginVersion = ''
+                  if ('${{ matrix.runtime }}' -eq 'SE') {
+                    $pluginVersion = '${{ inputs.plugin_version_se }}'
+                  } else {
+                    $pluginVersion = '${{ inputs.plugin_version_vr }}'
+                  }
+
+                  $args = @(
+                    'tools/build-shader-cache.py',
+                    '--source-root', 'target',
+                    '--runtime', '${{ matrix.runtime }}',
+                    '--out', 'dist/shader-cache',
+                    '--jobs', '4',
+                    '--fxc', '${{ steps.find_fxc.outputs.fxc_path }}'
+                  )
+
+                  if ($pluginVersion -ne '') {
+                    $args += @('--plugin-version', $pluginVersion)
+                  }
+
+                  & python @args
+                  if ($LASTEXITCODE -ne 0) {
+                    exit $LASTEXITCODE
+                  }
+
+            - name: Package shader cache
+              shell: pwsh
+              run: |
+                  $packageName = "ShaderCache-${{ matrix.runtime }}-${{ steps.resolve.outputs.artifact_label }}.7z"
+                  $packagePath = Join-Path $env:GITHUB_WORKSPACE "dist\$packageName"
+
+                  Push-Location "dist/shader-cache/${{ matrix.runtime }}"
+                  7z a -t7z -mx=7 $packagePath ".\ShaderCache"
+                  Pop-Location
+
+                  Get-Item $packagePath | Format-List FullName, Length
+
+            - name: Upload shader cache artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ShaderCache-${{ matrix.runtime }}-${{ steps.resolve.outputs.artifact_label }}
+                  path: dist/ShaderCache-${{ matrix.runtime }}-${{ steps.resolve.outputs.artifact_label }}.7z
+                  retention-days: 30

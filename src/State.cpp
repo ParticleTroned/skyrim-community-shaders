@@ -109,7 +109,7 @@ namespace
 	void ApplyDefaultDisableAtBootSettings(json& a_disabledFeaturesJson)
 	{
 		static constexpr std::pair<std::string_view, bool> defaultDisableAtBootSettings[] = {
-			{ "UnifiedWater", true },
+			{ "UnifiedWater", false },
 			{ WetnessEffects::kShortName, false }
 		};
 

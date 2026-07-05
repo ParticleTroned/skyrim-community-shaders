@@ -244,6 +244,25 @@ namespace
 			DisableGIEffects(a_settings);
 	}
 
+	bool DrawResolutionModeSelector(const char* a_tableId, int& a_resolutionMode)
+	{
+		bool clickedResolutionMode = false;
+		if (ImGui::BeginTable(a_tableId, 3, ImGuiTableFlags_SizingStretchProp)) {
+			ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			clickedResolutionMode |= ImGui::RadioButton("Full Res", &a_resolutionMode, 0);
+			ImGui::TableNextColumn();
+			clickedResolutionMode |= ImGui::RadioButton("Half Res", &a_resolutionMode, 1);
+			ImGui::TableNextColumn();
+			clickedResolutionMode |= ImGui::RadioButton("Quarter Res", &a_resolutionMode, 2);
+			ImGui::EndTable();
+		}
+		return clickedResolutionMode;
+	}
+
 	float2 GetHardenedSsgiFrameDim(float2 a_renderTexSize)
 	{
 		float2 frameDim = Util::ConvertToDynamic(a_renderTexSize);
@@ -802,19 +821,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 
 	const int previousResolutionMode = settings.ResolutionMode;
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
-	if (ImGui::BeginTable("SSGIPerformanceResolutionMode", 3, ImGuiTableFlags_SizingStretchProp)) {
-		ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-		ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-		ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
-		ImGui::TableNextColumn();
-		ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
-		ImGui::TableNextColumn();
-		ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
-		ImGui::EndTable();
-	}
+	DrawResolutionModeSelector("SSGIPerformanceResolutionMode", settings.ResolutionMode);
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	if (settings.ResolutionMode != previousResolutionMode) {
 		settings.CenterFullResMaskScale = 0.0f;
@@ -840,11 +847,45 @@ void ScreenSpaceGI::DrawEssentialSettings()
 {
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
+	const bool isVR = REL::Module::IsVR();
 
 	if (!ShadersOK())
 		Util::Text::Error("Compute shaders failed to compile!");
 
 	ImGui::Checkbox("Enable", &settings.Enabled);
+
+	{
+		auto guard = Util::DisableGuard(!settings.Enabled);
+
+		const bool aoOnlyActive = IsAOOnlyPreset(settings, isVR);
+		{
+			[[maybe_unused]] auto style = Util::PresetButtonStyle(aoOnlyActive);
+			if (ImGui::Button("AO only", { -1, 0 })) {
+				ApplyAOOnlyPreset(settings);
+				recompileFlag = true;
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Full Res AO-only baseline with no GI resources.");
+		}
+
+		if (isVR) {
+			ImGui::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+			settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
+		}
+
+		const int previousResolutionMode = settings.ResolutionMode;
+		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+		const bool clickedResolutionMode = DrawResolutionModeSelector("SSGIEssentialsResolutionMode", settings.ResolutionMode);
+		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+		if (clickedResolutionMode)
+			settings.CenterFullResMaskScale = 0.0f;
+		recompileFlag |= settings.ResolutionMode != previousResolutionMode;
+	}
+
+	if (IsResourceProfileRestartPending()) {
+		Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
+	}
 }
 
 json ScreenSpaceGI::CapturePerformanceSettingsState() const

@@ -58,6 +58,21 @@ namespace
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
 
+	void DrawHeatWarpStrengthSetting()
+	{
+		ImGui::SliderFloat(
+			"Heat Warp Strength",
+			&globals::state->refractionScale,
+			0.0f,
+			2.0f,
+			"%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Scales ImageSpace refraction (heat shimmer around fire/heat sources).\n"
+				"Lower values reduce warping; 0 disables it.");
+		}
+	}
+
 	bool IsPlausibleRenderPointer(const void* a_ptr)
 	{
 		const auto value = reinterpret_cast<std::uintptr_t>(a_ptr);
@@ -450,17 +465,7 @@ void LightLimitFix::DrawSettings()
 	{
 		// Heat warp / refraction strength (moved from Advanced Settings)
 		ImGui::Text("ImageSpace Refraction");
-		ImGui::SliderFloat(
-			"Heat Warp Strength",
-			&globals::state->refractionScale,
-			0.0f,
-			2.0f,
-			"%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Scales ImageSpace refraction (heat shimmer around fire/heat sources).\n"
-				"Lower values reduce warping; 0 disables it.");
-		}
+		DrawHeatWarpStrengthSetting();
 
 		ImGui::Separator();
 		ImGui::Spacing();
@@ -707,6 +712,8 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 void LightLimitFix::DrawEssentialSettings()
 {
 	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
+	ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+	DrawHeatWarpStrengthSetting();
 }
 
 json LightLimitFix::CapturePerformanceSettingsState() const

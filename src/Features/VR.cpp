@@ -1218,9 +1218,25 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	}
 }
 
+namespace
+{
+	void DrawKeepDesktopWindowFocusedForVRMenuSetting();
+	void DrawStabilizeRenderScaleDesktopMirrorSetting();
+	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix);
+}
+
 void VR::DrawEssentialSettings()
 {
 	DrawPerformanceSettings(false);
+
+	ImGui::SeparatorText("Desktop");
+	DrawKeepDesktopWindowFocusedForVRMenuSetting();
+	DrawStabilizeRenderScaleDesktopMirrorSetting();
+
+	if (openVRInfo.isCompatible) {
+		ImGui::SeparatorText("Bindings");
+		DrawControllerBindingSummary(false, "EssentialVRBindings");
+	}
 }
 
 json VR::CapturePerformanceSettingsState() const
@@ -1232,126 +1248,142 @@ json VR::CapturePerformanceSettingsState() const
 
 namespace
 {
-	void DrawControllerInputInstructions()
+	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix)
 	{
-		auto& vr = globals::features::vr;
-		auto& settings = vr.settings;
-		if (!vr.openVRInfo.isCompatible)
-			return;
-		if (ImGui::CollapsingHeader("Controller Input Instructions", ImGuiTreeNodeFlags_DefaultOpen)) {
+		auto& settings = globals::features::vr.settings;
+		ImGui::PushID(a_idPrefix);
+
+		if (a_includeAutoHideSetting) {
 			ImGui::SliderInt("Auto-hide Welcome overlay timeout", &settings.kAutoHideSeconds, 0, VR::Config::kMaxAutoHideSeconds,
 				settings.kAutoHideSeconds <= 0 ? "Hidden" : "%d seconds");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Set to 0 to hide the overlay, or a positive value to show it for that many seconds");
 			}
-			ImGui::TextWrapped("Menu (while in the main menu or tween menu):");
-			if (ImGui::BeginTable("MenuInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::Text("Open Community Shaders Menu:");
-				ImGui::TableSetColumnIndex(1);
-				Util::DrawButtonCombo(settings.VRMenuOpenKeys, true);
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::Text("Close Community Shaders Menu:");
-				ImGui::TableSetColumnIndex(1);
-				Util::DrawButtonCombo(settings.VRMenuCloseKeys, true);
-				ImGui::EndTable();
-			}
-			ImGui::TextWrapped("Overlay (while in the main menu or tween menu):");
-			if (ImGui::BeginTable("OverlayInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::Text("Open Overlay:");
-				ImGui::TableSetColumnIndex(1);
-				Util::DrawButtonCombo(settings.VROverlayOpenKeys, true);
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::Text("Close Overlay:");
-				ImGui::TableSetColumnIndex(1);
-				Util::DrawButtonCombo(settings.VROverlayCloseKeys, true);
-				ImGui::EndTable();
-			}
-			ImGui::TextWrapped("Menu Controller Input:");
-			if (ImGui::BeginTable("ControllerInputTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TextColored(Util::GetControllerBothColor(), "Trigger (Both Controllers)");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("Left mouse button");
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TextColored(Util::GetControllerBothColor(), "Grip (Both Controllers)");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("Right mouse button");
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TextColored(Util::GetControllerBothColor(), "Touchpad Click (Both Controllers)");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("Middle mouse button");
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TextColored(Util::GetControllerBothColor(), "Stick Click (Both Controllers)");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("Middle mouse button");
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TextColored(Util::GetControllerBothColor(), "A/X (Both Controllers)");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("Enter");
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TextColored(Util::GetControllerPrimaryColor(), "B/Y (Primary Controller)");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("Tab");
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TextColored(Util::GetControllerSecondaryColor(), "B/Y (Secondary Controller)");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("Shift+Tab");
-				ImGui::EndTable();
-			}
-			// Thumbstick instructions
-			bool useAttachedControllerForCursor = (settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly || settings.attachMode == VR::Settings::OverlayAttachMode::Both);
-			if (ImGui::BeginTable("ThumbstickInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-				if (useAttachedControllerForCursor) {
-					if (settings.VRMenuAttachController == ControllerDevice::Primary) {
-						ImGui::TableNextRow();
-						ImGui::TableSetColumnIndex(0);
-						ImGui::TextColored(Util::GetControllerPrimaryColor(), "Primary Controller Thumbstick");
-						ImGui::TableSetColumnIndex(1);
-						ImGui::Text("Mouse movement (attached controller)");
-						ImGui::TableNextRow();
-						ImGui::TableSetColumnIndex(0);
-						ImGui::TextColored(Util::GetControllerSecondaryColor(), "Secondary Controller Thumbstick");
-						ImGui::TableSetColumnIndex(1);
-						ImGui::Text("Scroll");
-					} else {
-						ImGui::TableNextRow();
-						ImGui::TableSetColumnIndex(0);
-						ImGui::TextColored(Util::GetControllerPrimaryColor(), "Primary Controller Thumbstick");
-						ImGui::TableSetColumnIndex(1);
-						ImGui::Text("Scroll");
-						ImGui::TableNextRow();
-						ImGui::TableSetColumnIndex(0);
-						ImGui::TextColored(Util::GetControllerSecondaryColor(), "Secondary Controller Thumbstick");
-						ImGui::TableSetColumnIndex(1);
-						ImGui::Text("Mouse movement (attached controller)");
-					}
-				} else {
+		}
+
+		ImGui::TextWrapped("Menu (while in the main menu or tween menu):");
+		if (ImGui::BeginTable("MenuInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::Text("Open Community Shaders Menu:");
+			ImGui::TableSetColumnIndex(1);
+			Util::DrawButtonCombo(settings.VRMenuOpenKeys, true);
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::Text("Close Community Shaders Menu:");
+			ImGui::TableSetColumnIndex(1);
+			Util::DrawButtonCombo(settings.VRMenuCloseKeys, true);
+			ImGui::EndTable();
+		}
+
+		ImGui::TextWrapped("Overlay (while in the main menu or tween menu):");
+		if (ImGui::BeginTable("OverlayInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::Text("Open Overlay:");
+			ImGui::TableSetColumnIndex(1);
+			Util::DrawButtonCombo(settings.VROverlayOpenKeys, true);
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::Text("Close Overlay:");
+			ImGui::TableSetColumnIndex(1);
+			Util::DrawButtonCombo(settings.VROverlayCloseKeys, true);
+			ImGui::EndTable();
+		}
+
+		ImGui::TextWrapped("Menu Controller Input:");
+		if (ImGui::BeginTable("ControllerInputTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(Util::GetControllerBothColor(), "Trigger (Both Controllers)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("Left mouse button");
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(Util::GetControllerBothColor(), "Grip (Both Controllers)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("Right mouse button");
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(Util::GetControllerBothColor(), "Touchpad Click (Both Controllers)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("Middle mouse button");
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(Util::GetControllerBothColor(), "Stick Click (Both Controllers)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("Middle mouse button");
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(Util::GetControllerBothColor(), "A/X (Both Controllers)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("Enter");
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(Util::GetControllerPrimaryColor(), "B/Y (Primary Controller)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("Tab");
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(Util::GetControllerSecondaryColor(), "B/Y (Secondary Controller)");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("Shift+Tab");
+			ImGui::EndTable();
+		}
+
+		const bool useAttachedControllerForCursor =
+			settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
+			settings.attachMode == VR::Settings::OverlayAttachMode::Both;
+		if (ImGui::BeginTable("ThumbstickInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+			if (useAttachedControllerForCursor) {
+				if (settings.VRMenuAttachController == ControllerDevice::Primary) {
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
 					ImGui::TextColored(Util::GetControllerPrimaryColor(), "Primary Controller Thumbstick");
 					ImGui::TableSetColumnIndex(1);
-					ImGui::Text("Mouse movement (HMD mode)");
+					ImGui::Text("Mouse movement (attached controller)");
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
 					ImGui::TextColored(Util::GetControllerSecondaryColor(), "Secondary Controller Thumbstick");
 					ImGui::TableSetColumnIndex(1);
 					ImGui::Text("Scroll");
+				} else {
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::TextColored(Util::GetControllerPrimaryColor(), "Primary Controller Thumbstick");
+					ImGui::TableSetColumnIndex(1);
+					ImGui::Text("Scroll");
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::TextColored(Util::GetControllerSecondaryColor(), "Secondary Controller Thumbstick");
+					ImGui::TableSetColumnIndex(1);
+					ImGui::Text("Mouse movement (attached controller)");
 				}
-				ImGui::EndTable();
+			} else {
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextColored(Util::GetControllerPrimaryColor(), "Primary Controller Thumbstick");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("Mouse movement (HMD mode)");
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextColored(Util::GetControllerSecondaryColor(), "Secondary Controller Thumbstick");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("Scroll");
 			}
+			ImGui::EndTable();
+		}
+
+		ImGui::PopID();
+	}
+
+	void DrawControllerInputInstructions()
+	{
+		auto& vr = globals::features::vr;
+		if (!vr.openVRInfo.isCompatible)
+			return;
+		if (ImGui::CollapsingHeader("Controller Input Instructions", ImGuiTreeNodeFlags_DefaultOpen)) {
+			DrawControllerBindingSummary(true, "ControllerInputInstructions");
 		}
 	}
 

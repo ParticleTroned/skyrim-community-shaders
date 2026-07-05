@@ -279,11 +279,9 @@ struct IDXGISwapChain_Present
 			if (dlssgActive) {
 				auto* sl = Streamline::GetSingleton();
 				sl->QueryDLSSGCapabilities();
-				// §16.1 input bound, deferred to present time: block until the GPU executed this
-				// frame's evaluate/tag work before the present is queued. The wait overlaps all
-				// the CPU work since the evaluate — the residual stall is only what hasn't
-				// already executed on the GPU (vs the ~1ms stall of waiting at the evaluate).
-				sl->WaitDLSSGSubmission();
+				// No app-side §16.1 wait: eBlockPresentingClientQueue makes SL block the
+				// presenting queue itself, which provides the input guarantee internally.
+				// (WaitDLSSGSubmission remains available for the eBlockNoClientQueues fallback.)
 			}
 		}
 

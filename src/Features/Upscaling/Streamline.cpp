@@ -220,6 +220,14 @@ namespace
 	// Routes Streamline's own logging into the CS logger.
 	void LogCallback(sl::LogType a_type, const char* a_msg)
 	{
+		static const bool s_verbose = [] {
+			char v[2] = {};
+			return GetEnvironmentVariableA("CS_SL_VERBOSE", v, sizeof(v)) && v[0] == 0x31;
+		}();
+		if (s_verbose) {
+			logger::info("[Streamline/SL] {}", a_msg);
+			return;
+		}
 		if (a_type == sl::LogType::eWarn && IsBenignSLWarning(a_msg))
 			return;  // documented-benign NVIDIA SL diagnostic — see IsBenignSLWarning
 		switch (a_type) {
@@ -365,6 +373,9 @@ bool Streamline::Initialize()
 	pref.engineVersion = "1.0";
 	// projectId is expected to be a GUID string for the eCustom engine path.
 	pref.projectId = "a0f57b54-1daf-4934-90ae-c4035c19df04";
+	if (char v[2] = {}; GetEnvironmentVariableA("CS_SL_VERBOSE", v, sizeof(v)) && v[0] == 0x31)
+		pref.logLevel = sl::LogLevel::eVerbose;
+	else
 	pref.logLevel = sl::LogLevel::eDefault;
 	// Route SL's own logging through LogCallback into the CS logger (and drop documented-benign SL warnings
 	// there). We deliberately do NOT set pref.pathToLogsAndData: that makes the signed SL binaries write their
@@ -1250,6 +1261,24 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		g_sl.dlssgCachedRenderW == a_renderWidth && g_sl.dlssgCachedRenderH == a_renderHeight &&
 		g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight);
 
+	// DXVK blocking-mode support (eBlockPresentingClientQueue): while DLSS-G runs, SL blocks
+	// inside the present call, and DXVK's frame-latency wait would deadlock against it (its
+	// signal fires on the thread SL parks). The flag also gates the presenter's blocking-mode
+	// behaviors (VkPresentIdKHR under FG ownership, MAILBOX preference).
+	{
+		static void (*s_setSkip)(uint32_t) = nullptr;
+		static bool s_resolved = false;
+		if (!s_resolved) {
+			s_resolved = true;
+			if (HMODULE m = GetModuleHandleW(L"dxvk_d3d11.dll"))
+				s_setSkip = reinterpret_cast<void (*)(uint32_t)>(GetProcAddress(m, "dxvkSetSkipFrameLatencySync"));
+			if (!s_setSkip)
+				logger::warn("[Streamline] dxvkSetSkipFrameLatencySync not found - DLSS-G blocking mode may deadlock");
+		}
+		if (s_setSkip)
+			s_setSkip(a_enable ? 1u : 0u);
+	}
+
 	__try {
 		sl::DLSSGOptions options{};
 		// eDynamic (Dynamic MFG) overrides eAuto; both fall back from the caller when unsupported.
@@ -1280,16 +1309,17 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		options.mvecDepthHeight = a_displayHeight;  // texture dims, not render size (extent gives the sub-rect)
 		options.colorWidth = a_displayWidth;
 		options.colorHeight = a_displayHeight;
-		// eBlockNoClientQueues (Vulkan-only): SL does NOT block the client's presenting queue while
-		// it runs frame generation; the §16.1 input guarantee is CS's (WaitDLSSGSubmission at the
-		// present hook). The default eBlockPresentingClientQueue is UNUSABLE here — three freezes,
-		// each stack-dumped, wedge traced through every controllable layer: interop ring fence
-		// (made never-blocking), DXVK CS-thread sync, DXVK submit throttle, and terminally a
-		// kernel-mode driver wait inside the present path (nvoglv64!DrvPresentBuffers →
-		// NtGdiDdDDIWaitForSynchronizationObjectFromCpu) installed by SL's queue block at FG
-		// engagement, waiting on FG work the blocked single-queue pipeline can never deliver.
-		// Below anything CS or the dxvk fork can modify. Do not retry.
-		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
+		// eBlockPresentingClientQueue (the SL default): SL blocks the presenting queue itself
+		// while frame generation runs, providing the §16.1 input guarantee internally — no
+		// app-side wait needed. This mode REQUIRES flip-model presents: DLSS-G's pacer submits
+		// its hardware present to the flip queue, and on the GDI-copy present path that submit
+		// never completes ("Pacer flush has timed out", wedged in NtDxgkSubmitPresentToHwQueue).
+		// The dxvk fork therefore no longer chains VkSurfaceFullScreenExclusiveInfoEXT(DISALLOWED)
+		// at swapchain creation (that pNext locked the NVIDIA ICD onto the copy path; PresentMon
+		// verified the change: "Composed: Copy with GPU GDI" -> "Hardware: Legacy Flip"). It also
+		// needs the frame-latency skip + presentId attachment signalled via
+		// dxvkSetSkipFrameLatencySync above.
+		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
 		const sl::Result res = g_sl.slDLSSGSetOptions(g_sl.viewport, options);
 		if (res != sl::Result::eOk) {
 			if (changed)

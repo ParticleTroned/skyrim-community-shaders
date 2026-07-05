@@ -701,7 +701,7 @@ public:
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
 	static bool ShouldTraceVRMenuBridgeDrawOperation();
 	static bool TraceVRMenuBridgeDrawOperation(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
-		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
+		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva);
 	enum class DynamicResolutionUpsampleStage : uint8_t
 	{
 		Render,
@@ -1137,7 +1137,7 @@ private:
 		UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight);
 	bool TryCaptureAndSuppressVRMenuBridgeDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
-		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
+		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva);
 	bool ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D& a_outputTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame);
 	static constexpr uint32_t kVRMenuBridgeSRVSlots = 8;
 	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();

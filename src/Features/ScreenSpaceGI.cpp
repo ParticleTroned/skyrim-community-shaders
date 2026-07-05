@@ -821,11 +821,6 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 		recompileFlag = true;
 	}
 
-	if (isVR) {
-		DrawFoveationSettings();
-		ImGui::Checkbox("Sync SSGI", &settings.EnableStereoSync);
-	}
-
 	if (a_advanced) {
 		ImGui::SeparatorText("Sampling");
 		int numSlices = static_cast<int>(settings.NumSlices);

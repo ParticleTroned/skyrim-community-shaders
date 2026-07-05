@@ -192,9 +192,6 @@ void ScreenSpaceShadows::DrawPerformanceSettings(bool)
 		ImGui::SliderFloat("VR Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
 		ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
 		bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
-
-		DrawFoveationSettings();
-		ImGui::Checkbox("Sync Screen Space Shadows", &enableStereoSync);
 	}
 }
 

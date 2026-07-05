@@ -276,9 +276,7 @@ namespace
 			return MakeJsonMask({ "Enable",
 				"SampleCount",
 				"VRBaseSamplesAtReference",
-				"VRCullDistance",
-				"EnableFoveated",
-				"EnableStereoSync" });
+				"VRCullDistance" });
 		}
 		if (shortName == "ScreenSpaceGI") {
 			return MakeJsonMask({ "Enabled",
@@ -287,8 +285,6 @@ namespace
 				"VRCullDistance",
 				"EnableAdaptiveSampling",
 				"ResolutionMode",
-				"EnableFoveated",
-				"EnableStereoSync",
 				"NumSlices",
 				"NumSteps" });
 		}
@@ -435,11 +431,11 @@ namespace
 			bool ok = SaveFeatureSettingsToUserDefaults(
 				FindFeatureByShortName("ScreenSpaceShadows"),
 				userSettings,
-				MakeJsonMask({ "EnableStereoSync" }));
+				MakeJsonMask({ "EnableFoveated", "EnableStereoSync" }));
 			ok = SaveFeatureSettingsToUserDefaults(
 					 FindFeatureByShortName("ScreenSpaceGI"),
 					 userSettings,
-					 MakeJsonMask({ "EnableStereoSync" })) &&
+					 MakeJsonMask({ "EnableFoveated", "EnableStereoSync" })) &&
 			     ok;
 			return ok;
 		}
@@ -562,14 +558,14 @@ namespace
 			RestoreFeatureSettingsFromUserDefaults(
 				FindFeatureByShortName("ScreenSpaceShadows"),
 				userSettings,
-				MakeJsonMask({ "EnableStereoSync" }),
+				MakeJsonMask({ "EnableFoveated", "EnableStereoSync" }),
 				anyFound,
 				anyChanged,
 				anyFailed);
 			RestoreFeatureSettingsFromUserDefaults(
 				FindFeatureByShortName("ScreenSpaceGI"),
 				userSettings,
-				MakeJsonMask({ "EnableStereoSync" }),
+				MakeJsonMask({ "EnableFoveated", "EnableStereoSync" }),
 				anyFound,
 				anyChanged,
 				anyFailed);
@@ -934,7 +930,7 @@ namespace
 		if (shortName == "Upscaling")
 			return "Upscaling is set to None, with foveated upscaling disabled.";
 		if (shortName == "VR")
-			return "depth culling, stereo sync, stereo blend, shader FOV, and dynamic cubemap throttle are switched off.";
+			return "depth culling, screen-space stereo sync, screen-space FOV, stereo blend, shader FOV, and dynamic cubemap throttle are switched off.";
 		if (shortName == "ScreenSpaceShadows")
 			return "Screen Space Shadows are switched off.";
 		if (shortName == "ScreenSpaceGI")

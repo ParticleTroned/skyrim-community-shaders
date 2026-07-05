@@ -402,17 +402,27 @@ bool VR::IsPerformanceCostMeasurementEnabled() const
 {
 	const auto& screenSpaceShadows = globals::features::screenSpaceShadows;
 	const auto& screenSpaceGI = globals::features::screenSpaceGI;
+	const bool screenSpaceShadowsFoveatedActive =
+		screenSpaceShadows.loaded &&
+		screenSpaceShadows.bendSettings.Enable != 0 &&
+		screenSpaceShadows.bendSettings.EnableFoveated != 0;
 	const bool screenSpaceShadowsStereoSyncActive =
 		screenSpaceShadows.loaded &&
 		screenSpaceShadows.bendSettings.Enable != 0 &&
 		screenSpaceShadows.enableStereoSync;
+	const bool screenSpaceGIFoveatedActive =
+		screenSpaceGI.loaded &&
+		screenSpaceGI.settings.Enabled &&
+		screenSpaceGI.settings.EnableFoveated;
 	const bool screenSpaceGIStereoSyncActive =
 		screenSpaceGI.loaded &&
 		screenSpaceGI.settings.Enabled &&
 		screenSpaceGI.settings.EnableStereoSync;
 	return settings.EnableDepthBufferCullingExterior ||
 	       settings.EnableDepthBufferCullingInterior ||
+	       screenSpaceShadowsFoveatedActive ||
 	       screenSpaceShadowsStereoSyncActive ||
+	       screenSpaceGIFoveatedActive ||
 	       screenSpaceGIStereoSyncActive ||
 	       settings.EnableStereoBlend ||
 	       settings.EnableLightingFoveation ||
@@ -430,12 +440,15 @@ bool VR::IsPerformanceCostMeasurementEnabled() const
 void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	const Settings defaults{};
+	const ScreenSpaceShadows::BendSettings screenSpaceShadowsDefaults{};
 	const ScreenSpaceGI::Settings screenSpaceGIDefaults{};
 	auto& screenSpaceShadows = globals::features::screenSpaceShadows;
 	auto& screenSpaceGI = globals::features::screenSpaceGI;
 	settings.EnableDepthBufferCullingExterior = a_enabled ? defaults.EnableDepthBufferCullingExterior : false;
 	settings.EnableDepthBufferCullingInterior = a_enabled ? defaults.EnableDepthBufferCullingInterior : false;
+	screenSpaceShadows.bendSettings.EnableFoveated = a_enabled ? screenSpaceShadowsDefaults.EnableFoveated : 0u;
 	screenSpaceShadows.enableStereoSync = false;
+	screenSpaceGI.settings.EnableFoveated = a_enabled ? screenSpaceGIDefaults.EnableFoveated : false;
 	screenSpaceGI.settings.EnableStereoSync = a_enabled ? screenSpaceGIDefaults.EnableStereoSync : false;
 	settings.EnableStereoBlend = a_enabled ? defaults.EnableStereoBlend : false;
 	settings.EnableLightingFoveation = a_enabled ? defaults.EnableLightingFoveation : false;
@@ -458,7 +471,9 @@ json VR::CapturePerformanceCostMeasurementState() const
 	return {
 		{ "EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior },
 		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
+		{ "EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0 },
 		{ "EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync },
+		{ "EnableSSGIFoveated", globals::features::screenSpaceGI.settings.EnableFoveated },
 		{ "EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync },
 		{ "EnableStereoBlend", settings.EnableStereoBlend },
 		{ "EnableLightingFoveation", settings.EnableLightingFoveation },
@@ -481,7 +496,11 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 
 	settings.EnableDepthBufferCullingExterior = a_state.value("EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior);
 	settings.EnableDepthBufferCullingInterior = a_state.value("EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior);
+	globals::features::screenSpaceShadows.bendSettings.EnableFoveated =
+		a_state.value("EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0) ? 1u : 0u;
 	globals::features::screenSpaceShadows.enableStereoSync = a_state.value("EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync);
+	globals::features::screenSpaceGI.settings.EnableFoveated =
+		a_state.value("EnableSSGIFoveated", globals::features::screenSpaceGI.settings.EnableFoveated);
 	globals::features::screenSpaceGI.settings.EnableStereoSync = a_state.value("EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync);
 	settings.EnableStereoBlend = a_state.value("EnableStereoBlend", settings.EnableStereoBlend);
 	settings.EnableLightingFoveation = a_state.value("EnableLightingFoveation", settings.EnableLightingFoveation);

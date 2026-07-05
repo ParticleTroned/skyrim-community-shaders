@@ -25,6 +25,8 @@ static constexpr float kTimingTableMetricColumnWidth = 55.0f;
 static constexpr float kTimingTablePercentColumnWidth = 45.0f;
 static constexpr float kStatsRefreshSeconds = 1.0f;
 static constexpr uint32_t kDisplayedRollingFrameCount = 60;
+static constexpr uint32_t kOpenVRTimingRetryFrames = 120;
+static constexpr uint32_t kOpenVRTimingMaxCacheAgeFrames = 120;
 
 static bool IsPositiveFinite(float value)
 {
@@ -75,6 +77,16 @@ struct RollingTimingAverage
 	uint32_t count = 0;
 };
 
+struct OpenVRGameTimingCache
+{
+	RollingTimingAverage gpuMs;
+	RollingTimingAverage cpuMs;
+	uint32_t lastSampleFrame = 0;
+	uint32_t lastValidFrame = 0;
+	uint32_t nextRetryFrame = 0;
+	bool disabled = false;
+};
+
 static float GetAverageGameFrameMs()
 {
 	static RollingTimingAverage frameMsAverage;
@@ -116,48 +128,110 @@ static float GetAverageGameFrameMs()
 	return frameMsAverage.Get();
 }
 
-static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
+static bool TryGetOpenVRFrameTiming(vr::IVRCompositor* compositor, vr::Compositor_FrameTiming* timing, bool* faulted)
 {
-	if (!REL::Module::IsVR())
-		return;
+	if (faulted)
+		*faulted = false;
+	if (!compositor || !timing)
+		return false;
 
-	auto* openvr = RE::BSOpenVR::GetSingleton();
-	auto* compositor = openvr ? RE::BSOpenVR::GetIVRCompositor() : nullptr;
-	if (!compositor && openvr)
-		compositor = openvr->vrContext.vrCompositor;
-	if (!compositor)
-		return;
+	bool result = false;
+	__try {
+		result = compositor->GetFrameTiming(timing, 0);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		if (faulted)
+			*faulted = true;
+		result = false;
+	}
+	return result;
+}
 
-	std::array<vr::Compositor_FrameTiming, kDisplayedRollingFrameCount> timings{};
-	for (auto& timing : timings)
-		timing.m_nSize = static_cast<uint32_t>(sizeof(timing));
+static vr::IVRCompositor* TryResolveOpenVRCompositor(bool* faulted)
+{
+	if (faulted)
+		*faulted = false;
 
-	uint32_t frameCount = std::min<uint32_t>(
-		compositor->GetFrameTimings(timings.data(), static_cast<uint32_t>(timings.size())),
-		static_cast<uint32_t>(timings.size()));
-	if (frameCount == 0) {
-		if (!compositor->GetFrameTiming(timings.data(), 0))
-			return;
-		frameCount = 1;
+	vr::IVRCompositor* compositor = nullptr;
+	__try {
+		auto* openvr = RE::BSOpenVR::GetSingleton();
+		compositor = openvr ? RE::BSOpenVR::GetIVRCompositor() : nullptr;
+		if (!compositor && openvr)
+			compositor = openvr->vrContext.vrCompositor;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		if (faulted)
+			*faulted = true;
+		compositor = nullptr;
 	}
 
-	TimingAverage gpuAverage;
-	TimingAverage cpuAverage;
-	for (uint32_t i = 0; i < frameCount; ++i) {
-		const auto& timing = timings[i];
-		gpuAverage.Push(timing.m_flPreSubmitGpuMs);
-		cpuAverage.Push(timing.m_flNewFrameReadyMs - timing.m_flWaitGetPosesCalledMs);
+	return compositor;
+}
+
+static void ApplyOpenVRTimingCache(
+	const OpenVRGameTimingCache& cache,
+	uint32_t frameCount,
+	ProfilingRenderer::PerformanceTimingSummary& summary)
+{
+	if (cache.disabled ||
+		cache.lastValidFrame == 0 ||
+		frameCount < cache.lastValidFrame ||
+		frameCount - cache.lastValidFrame > kOpenVRTimingMaxCacheAgeFrames) {
+		return;
 	}
 
-	if (gpuAverage.HasSamples()) {
-		summary.gameGpuMs = gpuAverage.Get();
+	const float gpuMs = cache.gpuMs.Get();
+	if (IsPositiveFinite(gpuMs)) {
+		summary.gameGpuMs = gpuMs;
 		summary.hasGameGpu = true;
 	}
 
-	if (cpuAverage.HasSamples()) {
-		summary.gameCpuMs = cpuAverage.Get();
+	const float cpuMs = cache.cpuMs.Get();
+	if (IsPositiveFinite(cpuMs)) {
+		summary.gameCpuMs = cpuMs;
 		summary.hasGameCpu = true;
 	}
+}
+
+static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
+{
+	static OpenVRGameTimingCache cache;
+
+	const uint32_t frameCount = summary.frameCount;
+	if (!REL::Module::IsVR() || frameCount == 0 || cache.disabled)
+		return;
+
+	if (cache.lastSampleFrame != 0 && frameCount < cache.lastSampleFrame) {
+		cache = {};
+	}
+
+	if (cache.lastSampleFrame != frameCount && frameCount >= cache.nextRetryFrame) {
+		cache.lastSampleFrame = frameCount;
+
+		bool resolveFaulted = false;
+		auto* compositor = TryResolveOpenVRCompositor(&resolveFaulted);
+
+		if (resolveFaulted) {
+			cache.disabled = true;
+		} else if (!compositor) {
+			cache.nextRetryFrame = frameCount + kOpenVRTimingRetryFrames;
+		} else {
+			vr::Compositor_FrameTiming timing{};
+			timing.m_nSize = static_cast<uint32_t>(sizeof(timing));
+
+			bool faulted = false;
+			if (TryGetOpenVRFrameTiming(compositor, &timing, &faulted)) {
+				cache.gpuMs.Push(timing.m_flPreSubmitGpuMs);
+				cache.cpuMs.Push(timing.m_flNewFrameReadyMs - timing.m_flWaitGetPosesCalledMs);
+				cache.lastValidFrame = frameCount;
+				cache.nextRetryFrame = frameCount + 1;
+			} else if (faulted) {
+				cache.disabled = true;
+			} else {
+				cache.nextRetryFrame = frameCount + kOpenVRTimingRetryFrames;
+			}
+		}
+	}
+
+	ApplyOpenVRTimingCache(cache, frameCount, summary);
 }
 
 static void NormalizeGameFrameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -1158,7 +1232,6 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	summary.frameMs = GetAverageGameFrameMs();
 	summary.fps = summary.frameMs > 0.0f ? 1000.0f / summary.frameMs : 0.0f;
 	CaptureOpenVRGameTiming(summary);
-	NormalizeGameFrameTiming(summary);
 	for (const auto& [rootName, bucket] : timingBuckets) {
 		const float gpuMs = bucket.hasGpuExact ? bucket.gpuExactMs : bucket.gpuChildMs;
 		const float cpuMs = bucket.hasCpuExact ? bucket.cpuExactMs : bucket.cpuChildMs;
@@ -1186,6 +1259,7 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 			break;
 		}
 	}
+	NormalizeGameFrameTiming(summary);
 	summary.valid =
 		summary.frameMs > 0.0f ||
 		summary.hasGameGpu ||

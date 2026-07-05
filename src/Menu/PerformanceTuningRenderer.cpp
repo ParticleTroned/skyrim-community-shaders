@@ -187,6 +187,34 @@ namespace
 		return count > 0 ? sum / static_cast<float>(count) : 0.0f;
 	}
 
+	bool IsPositiveFiniteTiming(float value)
+	{
+		return std::isfinite(value) && value > 0.0f;
+	}
+
+	bool TryGetDisplayTimingMs(bool hasGameTiming, float gameTimingMs, float profilerTotalMs, float& value)
+	{
+		if (hasGameTiming && IsPositiveFiniteTiming(gameTimingMs)) {
+			value = gameTimingMs;
+			return true;
+		}
+		if (IsPositiveFiniteTiming(profilerTotalMs)) {
+			value = profilerTotalMs;
+			return true;
+		}
+		return false;
+	}
+
+	bool TryGetDisplayGpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
+	{
+		return TryGetDisplayTimingMs(summary.hasGameGpu, summary.gameGpuMs, summary.gpuTotalMs, value);
+	}
+
+	bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
+	{
+		return TryGetDisplayTimingMs(summary.hasGameCpu, summary.gameCpuMs, summary.cpuTotalMs, value);
+	}
+
 	ProfilingRenderer::PerformanceTimingTotals GetTimingTotalsForFeature(
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		const std::string& shortName);
@@ -214,12 +242,14 @@ namespace
 			sample.fpsSum += summary.fps;
 			sample.fpsSamples++;
 		}
-		if (summary.hasGameGpu) {
-			sample.gameGpuMsSum += summary.gameGpuMs;
+		float gpuMs = 0.0f;
+		if (TryGetDisplayGpuMs(summary, gpuMs)) {
+			sample.gameGpuMsSum += gpuMs;
 			sample.gameGpuSamples++;
 		}
-		if (summary.hasGameCpu) {
-			sample.gameCpuMsSum += summary.gameCpuMs;
+		float cpuMs = 0.0f;
+		if (TryGetDisplayCpuMs(summary, cpuMs)) {
+			sample.gameCpuMsSum += cpuMs;
 			sample.gameCpuSamples++;
 		}
 	}
@@ -379,14 +409,19 @@ namespace
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		const TuningHighlightState& highlightState)
 	{
+		float displayGpuMs = 0.0f;
+		const bool hasDisplayGpu = TryGetDisplayGpuMs(summary, displayGpuMs);
+		float displayCpuMs = 0.0f;
+		const bool hasDisplayCpu = TryGetDisplayCpuMs(summary, displayCpuMs);
+
 		if (ImGui::BeginTable("##PerformanceTuningTopCounters", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
 			RenderMetricCounter("Game", "Game:", summary.frameMs, "%.2f ms", highlightState.frameDirection, summary.frameMs > 0.0f);
 			ImGui::TableNextColumn();
-			RenderMetricCounter("GPU", "GPU:", summary.gameGpuMs, "%.2f ms", highlightState.gpuTotalDirection, summary.hasGameGpu);
+			RenderMetricCounter("GPU", "GPU:", displayGpuMs, "%.2f ms", highlightState.gpuTotalDirection, hasDisplayGpu);
 			ImGui::TableNextColumn();
-			RenderMetricCounter("CPU", "CPU:", summary.gameCpuMs, "%.2f ms", highlightState.cpuTotalDirection, summary.hasGameCpu);
+			RenderMetricCounter("CPU", "CPU:", displayCpuMs, "%.2f ms", highlightState.cpuTotalDirection, hasDisplayCpu);
 			ImGui::TableNextColumn();
 			RenderMetricCounter("FPS", "FPS:", summary.fps, "%.0f", highlightState.fpsDirection, summary.fps > 0.0f);
 			ImGui::EndTable();
@@ -438,6 +473,8 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
 				"Measures current settings against the comparison state using game timing.");
+			ImGui::TextUnformatted(
+				"Values are scene-dependent: measure grass collision where grass is visible, screen-space shadows where relevant lighting is present, and similar features where their inputs are active.");
 		}
 		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
 			ImGui::SameLine();
@@ -715,10 +752,14 @@ namespace
 		if (!state.baseline.valid || !current.valid)
 			return;
 
-		if (state.baseline.hasGameGpu && current.hasGameGpu)
-			state.gpuTotalDirection = GetDirectionFromFrameTimeDelta(current.gameGpuMs - state.baseline.gameGpuMs);
-		if (state.baseline.hasGameCpu && current.hasGameCpu)
-			state.cpuTotalDirection = GetDirectionFromFrameTimeDelta(current.gameCpuMs - state.baseline.gameCpuMs);
+		float baselineGpuMs = 0.0f;
+		float currentGpuMs = 0.0f;
+		if (TryGetDisplayGpuMs(state.baseline, baselineGpuMs) && TryGetDisplayGpuMs(current, currentGpuMs))
+			state.gpuTotalDirection = GetDirectionFromFrameTimeDelta(currentGpuMs - baselineGpuMs);
+		float baselineCpuMs = 0.0f;
+		float currentCpuMs = 0.0f;
+		if (TryGetDisplayCpuMs(state.baseline, baselineCpuMs) && TryGetDisplayCpuMs(current, currentCpuMs))
+			state.cpuTotalDirection = GetDirectionFromFrameTimeDelta(currentCpuMs - baselineCpuMs);
 		if (state.baseline.frameMs > 0.0f && current.frameMs > 0.0f) {
 			state.frameDirection = GetDirectionFromFrameTimeDelta(current.frameMs - state.baseline.frameMs);
 			state.fpsDirection = state.frameDirection;

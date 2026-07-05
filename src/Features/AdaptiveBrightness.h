@@ -130,6 +130,7 @@ struct AdaptiveBrightness : Feature
 	Profile selectedProfileTab = Profile::ExteriorDay;
 	std::string profileTabSyncKey;
 	bool profileTabSyncInitialized = false;
+	int profileTabLastDrawFrame = -1;
 	bool advancedControlsOpen = false;
 	mutable std::unordered_map<std::string, std::size_t> locationOverrideLookup;
 	mutable LocationOverrideCache locationOverrideCache;

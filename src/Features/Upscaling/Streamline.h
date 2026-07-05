@@ -112,12 +112,6 @@ public:
 		bool valid = false;
 		uint32_t frame = 0;
 		std::uintptr_t frameToken = 0;
-		std::uintptr_t colorIn = 0;
-		std::uintptr_t colorOut = 0;
-		std::uintptr_t depth = 0;
-		std::uintptr_t motionVectors = 0;
-		std::uintptr_t reactiveMask = 0;
-		std::uintptr_t transparencyMask = 0;
 		uint32_t viewport = UINT32_MAX;
 		uint32_t eyeIndex = 0;
 		uint32_t viewportRole = 0;

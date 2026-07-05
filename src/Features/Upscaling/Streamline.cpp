@@ -876,12 +876,6 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		signature.valid = true;
 		signature.frame = diagnostics ? diagnostics->frame : state->frameCount;
 		signature.frameToken = reinterpret_cast<std::uintptr_t>(frameToken);
-		signature.colorIn = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->colorIn) : 0u;
-		signature.colorOut = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->colorOut) : 0u;
-		signature.depth = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->depth) : 0u;
-		signature.motionVectors = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->motionVectors) : 0u;
-		signature.reactiveMask = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->reactiveMask) : 0u;
-		signature.transparencyMask = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->transparencyMask) : 0u;
 		signature.viewport = static_cast<uint32_t>(p_viewport);
 		signature.eyeIndex = eyeIndex;
 		signature.viewportRole = diagnostics ? static_cast<uint32_t>(diagnostics->viewportRole) : static_cast<uint32_t>(DLSSViewportRole::FullEye);
@@ -906,12 +900,6 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		return a_cached.valid &&
 		       a_cached.frame == a_signature.frame &&
 		       a_cached.frameToken == a_signature.frameToken &&
-		       a_cached.colorIn == a_signature.colorIn &&
-		       a_cached.colorOut == a_signature.colorOut &&
-		       a_cached.depth == a_signature.depth &&
-		       a_cached.motionVectors == a_signature.motionVectors &&
-		       a_cached.reactiveMask == a_signature.reactiveMask &&
-		       a_cached.transparencyMask == a_signature.transparencyMask &&
 		       a_cached.viewport == a_signature.viewport &&
 		       a_cached.eyeIndex == a_signature.eyeIndex &&
 		       a_cached.viewportRole == a_signature.viewportRole &&
@@ -939,18 +927,23 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	DLSSFrameConstantsCache frameConstantsSignature{};
 	if (canAcceptDuplicateConstants)
 		frameConstantsSignature = makeFrameConstantsSignature();
+	const auto hasCachedFrameConstantsSignature = [&]() {
+		if (!canAcceptDuplicateConstants)
+			return false;
+
+		for (const auto& cachedSignature : dlssFrameConstantsCache) {
+			if (frameConstantsMatch(cachedSignature, frameConstantsSignature))
+				return true;
+		}
+		return false;
+	};
+	if (hasCachedFrameConstantsSignature()) {
+		lastDLSSFailureDuplicatedConstants = false;
+		return true;
+	}
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
 		const bool duplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
-		if (duplicatedConstants && canAcceptDuplicateConstants) {
-			for (const auto& cachedSignature : dlssFrameConstantsCache) {
-				if (frameConstantsMatch(cachedSignature, frameConstantsSignature)) {
-					lastDLSSFailureDuplicatedConstants = false;
-					return true;
-				}
-			}
-		}
-
 		lastDLSSFailureDuplicatedConstants = duplicatedConstants;
 		const auto resultLabel = magic_enum::enum_name(res);
 		if (diagnostics) {

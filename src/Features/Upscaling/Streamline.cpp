@@ -1,6 +1,9 @@
 #include "Streamline.h"
 
 #include "DxvkInterop.h"
+#include "FrameGenController.h"
+
+#include "../Upscaling.h"
 
 #include "../../DxvkLoader.h"
 #include "../../Globals.h"
@@ -142,13 +145,17 @@ namespace
 		uint32_t dlssgViewEvict[3] = {};
 	} g_sl;
 
-	// DLSS-G runtime load state (Streamline DLSS-G guide §18). DLSS-G is loaded at slInit, so current=true.
+	// DLSS-G runtime load state (Streamline DLSS-G guide §18). On DLSS-G hardware the plugin is
+	// loaded at slInit (current=true, set in Initialize); on all other hardware it is never in
+	// featuresToLoad at all, so both start false and every transition below is a no-op — the
+	// FrameGenController must never see a phantom "loaded" state it then can't unload (the
+	// unload would never settle and block FSR-FG delivery behind the phase).
 	// CS sets `desired` on a real select/deselect and requests a DXVK swapchain recreate; DXVK's torn-down
 	// callback below applies slSetFeatureLoaded while no swapchain exists, so the next vkCreateSwapchainKHR
 	// installs/omits DLSS-G's present proxy + extra queue. Unloading when off removes the queue + off-screen
 	// copy overhead the guide warns about.
-	std::atomic<bool> g_dlssgDesiredLoaded{ true };
-	bool g_dlssgCurrentlyLoaded = true;
+	std::atomic<bool> g_dlssgDesiredLoaded{ false };
+	bool g_dlssgCurrentlyLoaded = false;
 
 	// Invoked by DXVK inside recreateSwapChain() between destroy and create (registered via
 	// dxvkSetSwapchainTornDownCallback). Toggles DLSS-G's loaded state to match `desired` in exactly the
@@ -294,6 +301,73 @@ void Streamline::PreloadInterposer()
 	Initialize();
 }
 
+// Pre-slInit hardware capability probe: does this system have DLSS-G-class hardware?
+// DLSS-G requires the optical-flow accelerator (NVIDIA Ada and newer), exposed as the
+// VK_NV_optical_flow device extension. Checked on a throwaway instance created against the
+// SYSTEM Vulkan loader (System32), untouched by the interposer — this must be known BEFORE
+// slInit: on non-DLSS-G hardware the sl.dlss_g plugin is omitted from featuresToLoad entirely,
+// because its swapchain hook rebuilds the very first swapchain create and strips the
+// FSE-DISALLOWED pNext that keeps the window on the copy present path FSR-FG requires (the
+// driver flip-locks a window at its first flip present, so the boot create decides).
+static bool ProbeDLSSGHardware()
+{
+	if (char v[2] = {}; GetEnvironmentVariableA("CS_FORCE_FSR_FG", v, sizeof(v)) && v[0] == '1') {
+		logger::info("[Streamline] CS_FORCE_FSR_FG=1: hardware probe reports no DLSS-G (FSR-FG path forced)");
+		return false;
+	}
+
+	wchar_t sysDir[MAX_PATH]{};
+	if (!GetSystemDirectoryW(sysDir, MAX_PATH))
+		return false;
+	const auto vkPath = std::wstring(sysDir) + L"\\vulkan-1.dll";
+	HMODULE vk = LoadLibraryExW(vkPath.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+	if (!vk) {
+		logger::warn("[Streamline] system vulkan-1.dll unavailable - assuming no DLSS-G hardware");
+		return false;
+	}
+
+	bool found = false;
+	auto gipa = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(vk, "vkGetInstanceProcAddr"));
+	auto createInstance = reinterpret_cast<PFN_vkCreateInstance>(GetProcAddress(vk, "vkCreateInstance"));
+	if (gipa && createInstance) {
+		VkApplicationInfo app{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
+		app.apiVersion = VK_API_VERSION_1_1;
+		VkInstanceCreateInfo ici{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+		ici.pApplicationInfo = &app;
+		VkInstance instance = VK_NULL_HANDLE;
+		if (createInstance(&ici, nullptr, &instance) == VK_SUCCESS && instance) {
+			auto enumDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(gipa(instance, "vkEnumeratePhysicalDevices"));
+			auto enumExts = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(gipa(instance, "vkEnumerateDeviceExtensionProperties"));
+			auto destroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(gipa(instance, "vkDestroyInstance"));
+			if (enumDevices && enumExts) {
+				uint32_t count = 0;
+				enumDevices(instance, &count, nullptr);
+				std::vector<VkPhysicalDevice> devices(count);
+				enumDevices(instance, &count, devices.data());
+				for (auto dev : devices) {
+					uint32_t extCount = 0;
+					enumExts(dev, nullptr, &extCount, nullptr);
+					std::vector<VkExtensionProperties> exts(extCount);
+					enumExts(dev, nullptr, &extCount, exts.data());
+					for (const auto& e : exts) {
+						if (std::strcmp(e.extensionName, "VK_NV_optical_flow") == 0) {
+							found = true;
+							break;
+						}
+					}
+					if (found)
+						break;
+				}
+			}
+			if (destroyInstance)
+				destroyInstance(instance, nullptr);
+		}
+	}
+	FreeLibrary(vk);
+	logger::info("[Streamline] hardware probe: DLSS-G-class GPU (VK_NV_optical_flow) {}", found ? "present" : "absent");
+	return found;
+}
+
 bool Streamline::Initialize()
 {
 	if (triedInit)
@@ -356,8 +430,23 @@ bool Streamline::Initialize()
 	// over the shared per-frame constants/tags: the FSR FG-prepare runs on a DEDICATED viewport (see
 	// EvaluateFSRFrameGen) so its depth/MV tags + camera constants never collide with the upscaler's (which
 	// dlss_g also reads on viewport 0).
-	sl::Feature featuresToLoad[] = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL, sl::kFeatureDLSS_G,
+	// ONE frame-generation method per system, decided by hardware here and never changed:
+	// DLSS-G-class hardware loads sl.dlss_g (its swapchain hook makes the window flip-model
+	// from the first create — exactly what its pacer needs); all other hardware omits the
+	// plugin entirely, so DXVK's FSE-DISALLOWED reaches the driver at the first create and the
+	// window stays on the copy present path FSR-FG requires. Both facts are per-window and
+	// locked at boot by the driver, which is why the method cannot be a runtime setting.
+	dlssgHardware = ProbeDLSSGHardware();
+
+	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL,
 		sl::kFeatureFSR, sl::kFeatureXeSS };
+	if (dlssgHardware) {
+		featuresToLoad.push_back(sl::kFeatureDLSS_G);
+		// slInit loads the plugin, so the §18 load-state tracking starts "loaded" here (and
+		// only here — on other hardware the plugin does not exist in this process).
+		g_dlssgDesiredLoaded.store(true, std::memory_order_release);
+		g_dlssgCurrentlyLoaded = true;
+	}
 
 	sl::Preferences pref{};
 	pref.renderAPI = sl::RenderAPI::eVulkan;
@@ -365,8 +454,8 @@ bool Streamline::Initialize()
 	pref.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
 	// Full interposition: sl.interposer.dll IS DXVK's vulkan-1.dll, so SL's own
 	// vkCreateInstance/Device/present proxies run. eUseManualHooking must be OFF.
-	pref.featuresToLoad = featuresToLoad;
-	pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(featuresToLoad));
+	pref.featuresToLoad = featuresToLoad.data();
+	pref.numFeaturesToLoad = static_cast<uint32_t>(featuresToLoad.size());
 	pref.pathsToPlugins = pluginPaths;
 	pref.numPathsToPlugins = 1;
 	pref.engine = sl::EngineType::eCustom;
@@ -466,9 +555,19 @@ void Streamline::SetVulkanDevice()
 		featureXeSS = g_sl.slXeSSSetOptions != nullptr;
 	}
 
+	// Hardware gate (see Initialize): on non-DLSS-G hardware the plugin was never loaded, so
+	// the per-adapter probe above already reported unsupported; this just keeps the invariant
+	// explicit (CS_FORCE_FSR_FG also lands here via the pre-slInit hardware probe).
+	featureDLSSG = featureDLSSG && dlssgHardware;
+
 	logger::info("[Streamline] feature support: DLSS={} Reflex={} DLSS-G={} FSR={} XeSS={} (FSR-FG fns {})",
 		featureDLSS, featureReflex, featureDLSSG, featureFSR, featureXeSS,
 		g_sl.slFSRFrameGenerationSetOptions ? "ok" : "missing");
+
+	// Present path: hardware flips for everyone (the dxvk default — FSE pNext not chained).
+	// DLSS-G's pacer requires flips, and FSR-FG runs correctly on them (validated in live
+	// play; note for the record that idle unattended FSR sessions once showed late wedges on
+	// flips — kept under observation, see dxvkSetFsePNextChain for the copy-path escape hatch).
 
 	// Identify the GPU generation from the Vulkan physical device for DLSS render-preset selection.
 	// (vkGetPhysicalDeviceProperties carries the real PCI vendor/device IDs even under DXVK, unlike
@@ -569,6 +668,51 @@ void Streamline::WaitDLSSGSubmission()
 		return;
 	if (auto* dxvk = DxvkInterop::GetSingleton())
 		dxvk->WaitLastSubmission();
+}
+
+void Streamline::PauseDLSSGForWindowGap()
+{
+	// Present hook, first skipped frame of a minimize: switch interpolation off (light,
+	// resources retained) BEFORE the present gap begins — a gap with the mode still eOn
+	// desyncs DLSS-G's frame pairing and the first resumed present wedges its pacer (§17).
+	// Runs on the render thread like every other SL call. The regular EngageDLSSG path
+	// re-enables on the first gameplay frame after restore (SetDLSSGMode caches, so the
+	// steady minimized state costs nothing).
+	if (!initialized || !g_sl.dlssgModeOn)
+		return;
+	SetDLSSGMode(false,
+		g_sl.dlssgCachedRenderW, g_sl.dlssgCachedRenderH,
+		g_sl.dlssgCachedDisplayW, g_sl.dlssgCachedDisplayH);
+	FrameGen::Controller::GetSingleton()->NotifyDLSSGPaused();
+	logger::info("[Streamline] DLSS-G interpolation paused (window minimized)");
+}
+
+void Streamline::PushDLSSGPresentWait()
+{
+	// Present hook (render thread), while DLSS-G is active: GPU-only replacement for
+	// WaitDLSSGSubmission — hand this frame's evaluate/tag submission semaphore to DXVK's
+	// presenter as an extra present-wait, so the present (and everything SL's frame
+	// interpolation orders against it) executes after that work with no CPU stall. Matches
+	// the Streamline sample's queue-wait-only §16.1 handling.
+	if (!initialized || !g_sl.dlssgModeOn)
+		return;
+
+	static void (*s_push)(VkSemaphore) = nullptr;
+	static bool s_resolved = false;
+	if (!s_resolved) {
+		s_resolved = true;
+		if (HMODULE m = GetModuleHandleW(L"dxvk_d3d11.dll"))
+			s_push = reinterpret_cast<void (*)(VkSemaphore)>(GetProcAddress(m, "dxvkPushPresentWaitSemaphore"));
+		if (!s_push)
+			logger::warn("[Streamline] dxvkPushPresentWaitSemaphore not found - DLSS-G present ordering unavailable");
+	}
+	if (!s_push)
+		return;
+
+	if (auto* dxvk = DxvkInterop::GetSingleton()) {
+		if (VkSemaphore sem = dxvk->TakeLastSubmitSemaphore())
+			s_push(sem);
+	}
 }
 
 void Streamline::BeginRenderFrame()
@@ -913,24 +1057,23 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 		tags[nt++] = sl::ResourceTag{ &colorInRes, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent };
 		tags[nt++] = sl::ResourceTag{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent, &outputExtent };
 	}
-	tags[nt++] = sl::ResourceTag{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent };
-	tags[nt++] = sl::ResourceTag{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &renderExtent };
+	// DLSS-G inputs are eOnlyValidNow: SL snapshots them into its own copies inside this very
+	// command buffer at tag time, so present-time interpolation never touches live game
+	// resources — the doc-correct lifetime when validity at present cannot be guaranteed, and
+	// the reason no CPU-side wait exists anywhere in this path. Ordering of the copies
+	// themselves is SL's own §16.0 contract (its blocking present waits the client present
+	// semaphore, which DXVK's final blit signals after this queue-ordered submission).
+	// HISTORY: eOnlyValidNow alone flashed in the GDI-copy-present era (2026-07-04), but that
+	// world also broke the pacer outright; on flip-model presents with the blocking mode
+	// working (2026-07-05) this is the documented configuration. The upscaler in/out tags stay
+	// eValidUntilPresent: they are consumed inside this same submission and DLSS-G reads the
+	// intercepted backbuffer, not these.
+	tags[nt++] = sl::ResourceTag{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &renderExtent };
+	tags[nt++] = sl::ResourceTag{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &renderExtent };
 	if (haveHudless)
-		tags[nt++] = sl::ResourceTag{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &outputExtent };
+		tags[nt++] = sl::ResourceTag{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &outputExtent };
 
 	sl::Result evalRes = sl::Result::eErrorNotInitialized;
-	// DLSS-G input protection (§16.1, eBlockNoClientQueues): the GPU must have EXECUTED this
-	// frame's evaluate/tag work before the present is queued. That bound is enforced at the
-	// present hook (WaitDLSSGSubmission -> DxvkInterop::WaitLastSubmission), where the wait
-	// overlaps the CPU's post-evaluate frame work instead of stalling here (~1ms recovered vs
-	// the old per-frame waitIdle). What does NOT suffice, each implemented and user-reviewed
-	// in-game (2026-07-04): tag-time eOnlyValidNow snapshots of all inputs (flash),
-	// explicit-frame-ID tokens alone (flash), the sample's §16.1 fence as a queue-wait
-	// (deadlock — SL's inputs processing lands behind the wait on DXVK's one graphics queue,
-	// stack-proven), PCL present markers at the real vkQueuePresentKHR via the DXVK bridge
-	// (flash), SL-internal eBlockPresentingClientQueue (freeze), DXVK synchronous present
-	// (flash), and a 1-frame-in-flight previous-fence bound (intermittent per-session flash —
-	// one frame of GPU lag is already too much).
 	VkCommandBuffer cmd = dxvk->BeginFrameCommandBuffer();
 	if (cmd != VK_NULL_HANDLE) {
 		g_sl.slSetTagForFrame(*token, a_viewport, tags, nt, cmd);
@@ -1309,16 +1452,15 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		options.mvecDepthHeight = a_displayHeight;  // texture dims, not render size (extent gives the sub-rect)
 		options.colorWidth = a_displayWidth;
 		options.colorHeight = a_displayHeight;
-		// eBlockPresentingClientQueue (the SL default): SL blocks the presenting queue itself
-		// while frame generation runs, providing the §16.1 input guarantee internally — no
-		// app-side wait needed. This mode REQUIRES flip-model presents: DLSS-G's pacer submits
-		// its hardware present to the flip queue, and on the GDI-copy present path that submit
-		// never completes ("Pacer flush has timed out", wedged in NtDxgkSubmitPresentToHwQueue).
-		// The dxvk fork therefore no longer chains VkSurfaceFullScreenExclusiveInfoEXT(DISALLOWED)
-		// at swapchain creation (that pNext locked the NVIDIA ICD onto the copy path; PresentMon
-		// verified the change: "Composed: Copy with GPU GDI" -> "Hardware: Legacy Flip"). It also
-		// needs the frame-latency skip + presentId attachment signalled via
-		// dxvkSetSkipFrameLatencySync above.
+		// eBlockPresentingClientQueue (the SL default) — DLSS-G's one and only queue mode here.
+		// SL blocks the presenting queue itself. The mode REQUIRES flip-model presents: on the
+		// GDI-copy path the pacer's hardware present never completes ("Pacer flush has timed
+		// out", wedged in NtDxgkSubmitPresentToHwQueue). The boot present path is per-window
+		// and sticky (Upscaling::bootPresentPathFlip), so DLSS-G is only engaged on flip-path
+		// boots — FrameGenController gates method availability on the boot path, and switching
+		// FG methods requires a restart. The §16.1 present-hook GPU bound (WaitDLSSGSubmission)
+		// stays: SL's queue block paces the present but does not order our interop-timeline
+		// evaluate/tag submissions ahead of it (generated frames flash without the bound).
 		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
 		const sl::Result res = g_sl.slDLSSGSetOptions(g_sl.viewport, options);
 		if (res != sl::Result::eOk) {

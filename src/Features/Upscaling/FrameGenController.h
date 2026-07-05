@@ -70,6 +70,10 @@ namespace FrameGen
 		// on the final swapchain, so a toggle engages exactly once.
 		void EngageDLSSG();
 
+		// Bookkeeping sync for the present-hook minimize pause (Streamline::
+		// PauseDLSSGForWindowGap): interpolation was switched off outside the controller.
+		void NotifyDLSSGPaused() { dlssgModeOn = false; }
+
 	private:
 		Controller() = default;
 
@@ -94,6 +98,7 @@ namespace FrameGen
 		// DLSS-G interpolation mode was issued ON (needs off + device drain
 		// before any swapchain manipulation when leaving the method).
 		bool dlssgModeOn = false;
+
 
 		// Last FSR-FG enable state actually accepted by the sl.fsr plugin
 		// (-1 = nothing delivered yet), and the debug-flag signature it was

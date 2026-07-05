@@ -113,7 +113,17 @@ public:
 
 	// Present hook, while DLSS-G is active: block until the GPU executed this frame's
 	// evaluate/tag submissions (§16.1 bound, overlapped with post-evaluate CPU work).
+	// CPU-wait fallback; the shipped path is PushDLSSGPresentWait below.
 	void WaitDLSSGSubmission();
+
+	// Present hook, while DLSS-G is active: GPU-only §16.1 ordering — hands the frame's
+	// evaluate/tag submission semaphore to DXVK as an extra present-wait (no CPU stall),
+	// matching the Streamline sample's queue-wait-only approach.
+	void PushDLSSGPresentWait();
+
+	// Present hook, first skipped frame of a minimize: light eOff before the present gap
+	// (§17 — a gap with interpolation on wedges the pacer at resume).
+	void PauseDLSSGForWindowGap();
 
 	// Whether the DXVK present-marker bridge is active (PresentStart/End fire on DXVK's submit
 	// thread around the real vkQueuePresentKHR). When true, the present hook must call
@@ -167,6 +177,11 @@ private:
 	bool featureDLSSG = false;
 	bool featureXeSS = false;
 	bool featureFSR = false;
+
+	// Pre-slInit hardware capability (VK_NV_optical_flow on the system loader): decides
+	// whether sl.dlss_g is loaded at all — and with it, the session's frame-generation
+	// method and present path. See ProbeDLSSGHardware in Streamline.cpp.
+	bool dlssgHardware = false;
 
 	bool isNvidiaGPU = false;
 	bool isRTXBelow40Series = false;

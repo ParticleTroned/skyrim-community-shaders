@@ -261,6 +261,29 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// While minimized, presents are a complete no-op — nothing reaches DXVK or the Vulkan
+		// present chain — and DLSS-G interpolation is switched off FIRST (SL guide §17: a
+		// present gap with the mode still eOn desyncs the generator's frame pairing, and the
+		// first resumed present wedges its pacer in the kernel present queue; reproduced).
+		// The light resources-retained eOff here runs on the present/render thread — the same
+		// thread as every other SL call, so the guide's thread-safety rule for
+		// slDLSSGSetOptions holds. The regular engage path re-enables interpolation on the
+		// first gameplay frame after restore. Focus loss without minimize needs nothing —
+		// presents continue and frame generation rides through (sample-verified); with SSE
+		// Display Tweaks' ForceMinimize, alt-tab becomes this minimize path.
+		{
+			static HWND s_window = nullptr;
+			if (!s_window) {
+				DXGI_SWAP_CHAIN_DESC desc{};
+				if (This && SUCCEEDED(This->GetDesc(&desc)))
+					s_window = desc.OutputWindow;
+			}
+			if (s_window && IsIconic(s_window)) {
+				Streamline::GetSingleton()->PauseDLSSGForWindowGap();
+				return S_OK;
+			}
+		}
+
 		globals::state->Reset();
 
 		// CS owns VSync via the Upscaling menu setting, overriding whatever SyncInterval the game passes. The one
@@ -279,9 +302,16 @@ struct IDXGISwapChain_Present
 			if (dlssgActive) {
 				auto* sl = Streamline::GetSingleton();
 				sl->QueryDLSSGCapabilities();
-				// No app-side §16.1 wait: eBlockPresentingClientQueue makes SL block the
-				// presenting queue itself, which provides the input guarantee internally.
-				// (WaitDLSSGSubmission remains available for the eBlockNoClientQueues fallback.)
+				// Empirical input bound. The documented SL Vulkan contract (§16.0, GPU
+				// semaphores only) is satisfied without this — and the generated frames
+				// flash anyway, with eValidUntilPresent AND with eOnlyValidNow inputs
+				// (2026-07-05, in-game). Every GPU-only alternative was implemented and
+				// failed: present-wait semaphore (pacer re-waits the list across its
+				// multi-present → deadlock), §16.1 fence queue-wait (deadlock), snapshots,
+				// token schemes, marker bridges (flash). This wait closes whatever ordering
+				// SL's internal queues actually need, and it OVERLAPS the post-evaluate CPU
+				// work — measured ~zero added frame time, unlike a stall at the evaluate.
+				sl->WaitDLSSGSubmission();
 			}
 		}
 

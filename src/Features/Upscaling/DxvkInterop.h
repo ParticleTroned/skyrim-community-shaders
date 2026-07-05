@@ -177,6 +177,20 @@ public:
 	void WaitLastSubmission();
 
 	/**
+		 * @brief One-shot handoff of the most recent submission's signal semaphore.
+		 *
+		 * The present hook forwards it to DXVK's presenter as an extra present-wait semaphore
+		 * (dxvkPushPresentWaitSemaphore), GPU-ordering the present after this frame's
+		 * evaluate/tag submission with no CPU stall — the Streamline sample's GPU-only §16.1
+		 * approach. Returns VK_NULL_HANDLE when no new submission happened since the last take
+		 * (each binary semaphore must be signaled and waited exactly once).
+		 */
+	VkSemaphore TakeLastSubmitSemaphore()
+	{
+		return std::exchange(lastSubmitSemaphore, VK_NULL_HANDLE);
+	}
+
+	/**
 		 * @brief Enqueue transient VkImageViews for destruction once the CURRENT ring slot's
 		 *        submission completes (i.e. when that slot is next reused, its fence already
 		 *        signalled). Lets a caller that recorded the views into the just-submitted
@@ -211,6 +225,10 @@ private:
 	// Fence of the most recent SubmitFrameCommandBuffer (for WaitPreviousSubmission's
 	// 1-frame-in-flight bound). Cleared on ring teardown/drain.
 	VkFence lastSubmittedFence = VK_NULL_HANDLE;
+	// Per-slot binary semaphores, one signaled by each submission; the latest is handed to
+	// the present hook exactly once via TakeLastSubmitSemaphore(). Indexed like commandFences.
+	std::vector<VkSemaphore> submitSemaphores;
+	VkSemaphore lastSubmitSemaphore = VK_NULL_HANDLE;
 	// Per-slot transient image views awaiting destruction. Freed when the slot's fence signals
 	// (at reuse in BeginFrameCommandBuffer), so the DLSS-eval path need not block on the GPU to
 	// free the views it recorded. Indexed like commandBuffers/commandFences.

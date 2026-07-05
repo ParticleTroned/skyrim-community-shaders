@@ -16,6 +16,8 @@
 #include <cfloat>
 #include <cmath>
 #include <format>
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 #define I18N_KEY_PREFIX "feature.upscaling."
 
@@ -319,11 +321,11 @@ void Upscaling::DrawSettings()
 	// ---- Frame Generation ----
 	ImGui::SeparatorText(T(TKEY("fg_header"), "Frame Generation"));
 	{
-		// DLSS-G and FSR-FG are separate controls; only one method is active at a time (selecting one clears
-		// the other, since frameGenMethod is single-valued and each stepper derives its state from it).
-
-		// DLSS Frame Generation: Off / Dynamic / 2x … up to the hardware max. Any non-Off makes DLSS-G the method.
+		// ONE method per system, hardware-derived (GetFrameGenMethod): DLSS-G on hardware that
+		// supports it, FSR-FG everywhere else. The user only toggles frame generation on/off
+		// (plus the multiplier on DLSS-G hardware).
 		if (dlssgAvailable) {
+			// DLSS Frame Generation: Off / Dynamic (or Auto) / 2x … up to the hardware max.
 			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();
 			const uint     maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
 			// The adaptive slot is "Dynamic" only when the hardware supports Dynamic
@@ -339,33 +341,20 @@ void Upscaling::DrawSettings()
 			for (auto& s : fgStrings)
 				fgStates.push_back(s.c_str());
 
-			const bool dlssgFg = settings.frameGeneration && settings.frameGenMethod == (uint)FrameGenMethod::kDLSSG;
-			int fgIdx = !dlssgFg ? 0 :
+			int fgIdx = !settings.frameGeneration ? 0 :
 			            settings.dlssgDynamic ? 1 :
 			            std::clamp((int)settings.frameGenMultiplier, 2, (int)maxMultiplier);
 			if (DrawStepper(T(TKEY("nv_frame_generation"), "DLSS Frame Generation"), &fgIdx, fgStates)) {
-				if (fgIdx == 0) {
-					if (settings.frameGenMethod == (uint)FrameGenMethod::kDLSSG)
-						settings.frameGeneration = false;
-				} else {
-					settings.frameGeneration = true;
-					settings.frameGenMethod = (uint)FrameGenMethod::kDLSSG;
+				settings.frameGeneration = fgIdx != 0;
+				if (fgIdx != 0) {
 					settings.dlssgDynamic = (fgIdx == 1);
 					if (fgIdx >= 2)
 						settings.frameGenMultiplier = (uint)fgIdx;  // 2x..maxMultiplier
 				}
 			}
-		}
-
-		// FSR Frame Generation: Off / On. Turning it on makes FSR the method (clearing DLSS-G).
-		bool fsrFg = settings.frameGeneration && settings.frameGenMethod == (uint)FrameGenMethod::kFSR;
-		if (DrawToggleStepper(T(TKEY("amd_fsr_fg"), "FSR Frame Generation"), &fsrFg)) {
-			if (fsrFg) {
-				settings.frameGeneration = true;
-				settings.frameGenMethod = (uint)FrameGenMethod::kFSR;
-			} else if (settings.frameGenMethod == (uint)FrameGenMethod::kFSR) {
-				settings.frameGeneration = false;
-			}
+		} else {
+			// FSR Frame Generation: Off / On.
+			DrawToggleStepper(T(TKEY("amd_fsr_fg"), "FSR Frame Generation"), &settings.frameGeneration);
 		}
 	}
 
@@ -560,14 +549,6 @@ void Upscaling::ApplyHardwareDefaults()
 		}
 	}
 
-	// FG priority: DLSS-G (NVIDIA) -> FSR FG (everything else)
-	if (settings.frameGenMethod == (uint)FrameGenMethod::kFSR) {
-		if (sl->IsDLSSGSupported()) {
-			settings.frameGenMethod = (uint)FrameGenMethod::kDLSSG;
-			logger::info("[Upscaling] Hardware default: DLSS-G selected for frame generation");
-		}
-	}
-
 	// Low-latency: Reflex if available
 	if (!settings.reflexEnabled) {
 		if (sl->IsReflexSupported()) {
@@ -579,11 +560,13 @@ void Upscaling::ApplyHardwareDefaults()
 
 Upscaling::FrameGenMethod Upscaling::GetFrameGenMethod() const
 {
-	auto method = (FrameGenMethod)settings.frameGenMethod;
-	if (method == FrameGenMethod::kDLSSG &&
-		!Streamline::GetSingleton()->IsDLSSGSupported())
-		method = FrameGenMethod::kFSR;
-	return method;
+	// ONE frame-generation method per system, hardware-derived and fixed for the session:
+	// DLSS-G on hardware that supports it, FSR-FG everywhere else. Not user-selectable — the
+	// two methods need opposite present paths (DLSS-G's pacer requires hardware flips; the FFX
+	// present worker requires the copy path on NVIDIA), which the driver locks per window, so
+	// a single hardware-matched method keeps everything switch-free and boot-independent.
+	// settings.frameGenMethod is legacy-ignored.
+	return Streamline::GetSingleton()->IsDLSSGSupported() ? FrameGenMethod::kDLSSG : FrameGenMethod::kFSR;
 }
 
 bool Upscaling::IsFrameGenerationActive() const
@@ -1181,9 +1164,28 @@ bool Upscaling::IsUpscalingActive() const
 	return resolutionScale.x < .99f;
 }
 
+bool Upscaling::IsWindowGapActive()
+{
+	// Minimized window: ALL Streamline/GPU-interop work must stop, not just presents — the
+	// frame generator's in-flight flip cannot retire against an iconic window and its pacer
+	// holds a driver lock while it times out; any SL evaluate in that window then blocks the
+	// render thread on that lock and wedges the pipeline (stack-proven). The Streamline sample
+	// survives minimize precisely because its whole loop stops; this is the equivalent gate.
+	static HWND s_window = nullptr;
+	if (!s_window && globals::d3d::swapChain) {
+		DXGI_SWAP_CHAIN_DESC desc{};
+		if (SUCCEEDED(globals::d3d::swapChain->GetDesc(&desc)))
+			s_window = desc.OutputWindow;
+	}
+	return s_window && IsIconic(s_window);
+}
+
 void Upscaling::Upscale()
 {
 	ZoneScoped;
+
+	if (IsWindowGapActive())
+		return;
 
 	auto state = globals::state;
 	auto context = globals::d3d::context;
@@ -1487,7 +1489,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	// Frame-gen resource tagging is independent of which upscaler ran (an upscaler + frame
 	// generation can be active together), so this is its own `if`, not an `else if`.
-	if (upscaling.IsFrameGenerationActive()) {
+	if (upscaling.IsFrameGenerationActive() && !Upscaling::IsWindowGapActive()) {
 		auto fgMethod = upscaling.GetFrameGenMethod();
 		auto renderer = globals::game::renderer;
 		auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];

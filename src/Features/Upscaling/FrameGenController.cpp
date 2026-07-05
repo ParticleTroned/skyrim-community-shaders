@@ -70,6 +70,14 @@ namespace FrameGen
 			!Streamline::GetSingleton()->IsFeatureSupportResolved())
 			return;
 
+		// Window transitions (SL DLSS-G guide §17), handled the way the Streamline sample does:
+		// focus loss needs NOTHING — rendering and presents continue and frame generation rides
+		// through (verified against the sample on this hardware, including direct-scanout
+		// flips); minimize is handled below CS entirely — DXVK's DXGI present becomes a no-op
+		// while the window is iconic, so the present flow stops completely (the sample stops
+		// its render loop at zero window size) and the frame generator drains and resumes on
+		// its own. Reactive FG teardown on these transitions was tried in several strengths
+		// and always lost the race to the pacer's in-flight flip.
 		const Method target = DesiredMethod();
 
 		StepPhaseCompletion();

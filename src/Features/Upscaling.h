@@ -98,6 +98,11 @@ public:
 	// Settings window matches PhotoMode, while the CS main menu keeps native sliders.
 	static inline bool useArrowSteppers = false;
 
+	// True while the game window is minimized: every Streamline/GPU-interop call (and the
+	// present itself, see the present hook) must be skipped for the gap's duration.
+	static bool IsWindowGapActive();
+
+
 	// Timing and scaling
 	double refreshRate = 0.0f;
 	float2 resolutionScale = { 1.0f, 1.0f };

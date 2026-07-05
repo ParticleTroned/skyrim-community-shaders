@@ -5,6 +5,7 @@
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/VR.hlsli"
 
 #if defined(TERRAIN_SHADOWS)
 #	include "TerrainShadows/TerrainShadows.hlsli"
@@ -21,6 +22,17 @@
 #	include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 #endif
 
+// Populated once per frame by Deferred::CopyShadowLightData from BSShadowDirectionalLight.
+struct DirectionalShadowLightData
+{
+	column_major float4x4 ShadowProj[2];
+	column_major float4x4 InvShadowProj[2];
+	float2 EndSplitDistances;
+	float2 StartSplitDistances;
+};
+
+StructuredBuffer<DirectionalShadowLightData> DirectionalShadowLights : register(t98);
+
 #if defined(VOLUMETRIC_SHADOWS)
 #	include "VolumetricShadows/VolumetricShadows.hlsli"
 #endif
@@ -30,6 +42,7 @@ namespace ShadowSampling
 	static const float3 LightingSampleNormal = float3(0, 0, 1);
 	static const float3 ImageBasedLightingNormal = float3(0, 0, -1);
 
+#if !defined(VOLUMETRIC_SHADOWS)
 	Texture2DArray<float4> SharedShadowMap : register(t18);
 
 	struct ShadowData
@@ -50,14 +63,70 @@ namespace ShadowSampling
 	};
 
 	StructuredBuffer<ShadowData> SharedShadowData : register(t19);
+#endif
+
+	bool HasDirectionalShadows()
+	{
+		return SharedData::HasDirectionalShadows != 0;
+	}
 
 	float GetShadowDepth(float3 positionWS, uint eyeIndex)
 	{
 		return SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionWS, eyeIndex));
 	}
 
-	float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screenPosition, uint eyeIndex)
+	float GetWorldShadow(float3 positionWS, float3 offset, uint eyeIndex);
+
+	float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screenPosition, uint eyeIndex, out float surfaceShadow)
 	{
+#if defined(VOLUMETRIC_SHADOWS)
+		surfaceShadow = 1.0;
+#	if defined(EFFECT)
+		float viewRayLength = 128.0;
+		float3 startPosition = positionWS - viewDirection * viewRayLength;
+		float3 endPosition = positionWS + viewDirection * viewRayLength;
+#	elif defined(UNDERWATER)
+		float viewRayLength = 128.0;
+		float3 startPosition = positionWS;
+		float3 endPosition = positionWS - viewDirection * viewRayLength;
+#	else
+		float viewRayLength = 128.0;
+		float3 startPosition = positionWS;
+		float3 endPosition = positionWS + viewDirection * viewRayLength;
+#	endif
+
+		float totalRayLength = distance(endPosition, startPosition);
+
+		const float stepSize = 32.0;
+		uint sampleCount = clamp(uint(totalRayLength / stepSize + 0.5), 1, 4);
+		float rcpSampleCount = rcp(sampleCount);
+
+		float noise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(screenPosition, SharedData::BufferDim.xy), SharedData::FrameCount);
+
+		float worldShadow = 0.0;
+		for (uint i = 0; i < sampleCount; i++) {
+			float t = (float(i) + noise) * rcpSampleCount;
+			float3 sampledPositionWS = lerp(endPosition, startPosition, t);
+			float worldShadowSample = GetWorldShadow(sampledPositionWS, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+			surfaceShadow = worldShadowSample;
+			worldShadow += worldShadowSample;
+		}
+
+		if (worldShadow == 0.0 && surfaceShadow == 0.0)
+			return 0.0;
+
+		worldShadow *= rcpSampleCount;
+
+		if (HasDirectionalShadows()) {
+			float vsmSurfaceShadow = 1.0;
+			float shadow = VolumetricShadows::GetVSMShadow3D(startPosition, endPosition, noise, sampleCount, eyeIndex, vsmSurfaceShadow);
+			surfaceShadow *= vsmSurfaceShadow;
+			return worldShadow * shadow;
+		}
+
+		return worldShadow;
+#else
+		surfaceShadow = 1.0;
 		ShadowData sD = SharedShadowData[0];
 
 		float fadeFactor = 1.0 - pow(saturate(dot(positionWS, positionWS) / sD.ShadowLightParam.z), 8);
@@ -100,9 +169,18 @@ namespace ShadowSampling
 			shadow = 1.0;
 		}
 
-		return lerp(1.0, shadow * rcpSampleCount, fadeFactor);
+		surfaceShadow = lerp(1.0, shadow * rcpSampleCount, fadeFactor);
+		return surfaceShadow;
+#endif
 	}
 
+	float Get3DFilteredShadow(float3 positionWS, float3 viewDirection, float2 screenPosition, uint eyeIndex)
+	{
+		float surfaceShadow;
+		return Get3DFilteredShadow(positionWS, viewDirection, screenPosition, eyeIndex, surfaceShadow);
+	}
+
+#if !defined(VOLUMETRIC_SHADOWS)
 	float Get2DFilteredShadowCascade(float noise, float2x2 rotationMatrix, float sampleOffsetScale, float2 baseUV, float cascadeIndex, float compareValue, uint eyeIndex)
 	{
 		const uint sampleCount = 16;
@@ -111,9 +189,9 @@ namespace ShadowSampling
 
 		float visibility = 0.0;
 
-#if defined(WATER)
+#	if defined(WATER)
 		sampleOffsetScale *= 2.0;
-#endif
+#	endif
 
 		for (uint sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
 			float2 sampleOffset = mul(Random::PoissonSampleOffsets16[sampleIndex], rotationMatrix);
@@ -162,10 +240,11 @@ namespace ShadowSampling
 
 		return 1.0;
 	}
+#endif
 
 	float GetWorldShadow(float3 positionWS, float3 offset, uint eyeIndex)
 	{
-		if (SharedData::InInterior || SharedData::HideSky)
+		if (SharedData::InInterior || SharedData::HideSky || SharedData::InMapMenu)
 			return 1.0;
 
 		float worldShadow = 1.0;
@@ -174,26 +253,29 @@ namespace ShadowSampling
 #endif
 
 #if defined(CLOUD_SHADOWS)
-		if (!SharedData::InMapMenu)
-			worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
+		worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
 #endif
 
 		return worldShadow;
 	}
 
-	float GetEffectShadow(float3 worldPosition, float3 viewDirection, float2 screenPosition, uint eyeIndex, out bool isWorldShadow)
+#if defined(VOLUMETRIC_SHADOWS)
+	float GetLightingShadow(float3 worldPosition, uint eyeIndex, out float detailedShadow)
 	{
-		isWorldShadow = false;
-		float worldShadow = GetWorldShadow(worldPosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
-		if (worldShadow != 0.0) {
-			float shadow = Get3DFilteredShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
-			isWorldShadow = shadow >= worldShadow;
-			return min(worldShadow, shadow);
+		if (!HasDirectionalShadows()) {
+			detailedShadow = 1.0;
+			return 1.0;
 		}
-		isWorldShadow = true;
-		return worldShadow;
+
+		return VolumetricShadows::GetVSMShadow2D(worldPosition, worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, detailedShadow);
 	}
 
+	float GetLightingShadow(float noise, float3 worldPosition, uint eyeIndex)
+	{
+		float detailedShadow;
+		return GetLightingShadow(worldPosition, eyeIndex, detailedShadow);
+	}
+#else
 	float GetLightingShadow(float noise, float3 worldPosition, uint eyeIndex)
 	{
 		float2 rotation;
@@ -215,6 +297,7 @@ namespace ShadowSampling
 
 		return worldShadow;
 	}
+#endif
 
 	float3 GetRawAmbientLighting(float3 normal)
 	{
@@ -234,6 +317,21 @@ namespace ShadowSampling
 		return ambientColor;
 	}
 
+#if defined(SKYLIGHTING) && !defined(INTERIOR)
+	float3 GetAmbientLighting(float3 normal, float skylightingDiffuse)
+	{
+		float3 ambientColor = GetRawAmbientLighting(normal);
+
+#	if defined(IBL)
+		if (SharedData::iblSettings.EnableIBL) {
+			ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ImageBasedLightingNormal, skylightingDiffuse);
+		}
+#	endif
+
+		return ambientColor;
+	}
+#endif
+
 	float3 GetDirectionalLighting()
 	{
 		float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
@@ -243,6 +341,34 @@ namespace ShadowSampling
 	float3 GetSceneLightingColor()
 	{
 		return GetAmbientLighting(LightingSampleNormal) + GetDirectionalLighting();
+	}
+
+#if defined(SKYLIGHTING) && !defined(INTERIOR)
+	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
+#else
+	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor)
+#endif
+	{
+#if defined(SKYLIGHTING) && !defined(INTERIOR)
+		float3 ambientColorAmb = GetAmbientLighting(LightingSampleNormal, skylightingDiffuse);
+#else
+		float3 ambientColorAmb = GetAmbientLighting(LightingSampleNormal);
+#endif
+
+		float3 dirLightColorDir = GetDirectionalLighting();
+
+		float inputLuma = Color::RGBToLuminance(inputColor);
+		float ambientLuma = Color::RGBToLuminance(ambientColorAmb);
+		float dirLightLuma = Color::RGBToLuminance(dirLightColorDir);
+		float totalLuma = ambientLuma + dirLightLuma;
+
+		if (totalLuma > 0.0 && ambientLuma > 0.0)
+			ambientColorAmb *= inputLuma / totalLuma;
+
+		float3 dirLightColorAmb = max(0.0, inputColor - ambientColorAmb);
+
+		dirColor = dirLightColorAmb;
+		ambientColor = ambientColorAmb;
 	}
 }
 

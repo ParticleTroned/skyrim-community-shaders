@@ -1056,6 +1056,8 @@ struct DiffuseOutput
 	float3 refractionDiffuseColor;
 	float depth;
 	float refractionMul;
+	float3 refractedViewDirection;
+	float skylightingDiffuse;
 };
 
 DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDirection, inout float4 distanceMul, float refractionsDepthFactor, float fresnel, uint eyeIndex, float3 viewPosition, float noise, float depth)
@@ -1107,6 +1109,7 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
 	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
 	float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
+	float skylightingDiffuse = 1.0;
 
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)) {
 #				if defined(SKYLIGHTING)
@@ -1119,7 +1122,7 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 #					endif
 
 		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(input.WPosition.xyz));
+		skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(input.WPosition.xyz));
 
 		float3 refractionDiffuseColorSkylight = Skylighting::MixDiffuse(skylightingDiffuse);
 		refractionDiffuseColor = Color::LinearToSkyrimGamma(Color::SkyrimGammaToLinear(refractionDiffuseColor) * refractionDiffuseColorSkylight);
@@ -1137,6 +1140,9 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	output.refractionDiffuseColor = refractionDiffuseColor;
 	output.depth = depth;
 	output.refractionMul = refractionMul;
+	float3 refractedViewDelta = refractionWorldPosition.xyz - input.WPosition.xyz;
+	output.refractedViewDirection = dot(refractedViewDelta, refractedViewDelta) > 1e-6 ? normalize(refractedViewDelta) : viewDirection;
+	output.skylightingDiffuse = skylightingDiffuse;
 	return output;
 #			else
 	DiffuseOutput output;
@@ -1144,6 +1150,8 @@ DiffuseOutput GetWaterDiffuseColor(PS_INPUT input, float3 normal, float3 viewDir
 	output.refractionDiffuseColor = output.refractionColor;
 	output.depth = 1;
 	output.refractionMul = 1;
+	output.refractedViewDirection = viewDirection;
+	output.skylightingDiffuse = 1.0;
 	return output;
 #			endif
 }
@@ -1282,6 +1290,33 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, depthControl.y, eyeIndex);
 	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, eyeIndex, viewPosition, screenNoise, depth);
 
+#				if defined(VOLUMETRIC_SHADOWS)
+	float surfaceShadow = 1.0;
+	if (ShadowSampling::HasDirectionalShadows()) {
+		float dirShadow = ShadowSampling::Get3DFilteredShadow(input.WPosition.xyz, diffuseOutput.refractedViewDirection, input.HPosition.xy, eyeIndex, surfaceShadow);
+
+		float3 dirColor;
+		float3 ambientColor;
+#					if defined(SKYLIGHTING) && !defined(INTERIOR)
+		ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor, diffuseOutput.skylightingDiffuse);
+#					else
+		ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor);
+#					endif
+
+		dirColor *= dirShadow;
+
+#					if defined(SKYLIGHTING)
+		ambientColor = Color::IrradianceToLinear(ambientColor);
+		ambientColor *= diffuseOutput.skylightingDiffuse;
+		ambientColor = Color::IrradianceToGamma(ambientColor);
+#					endif
+
+		diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;
+	}
+#				else
+	float surfaceShadow = 1.0;
+#				endif
+
 	float3 diffuseColor = lerp(diffuseOutput.refractionColor, diffuseOutput.refractionDiffuseColor, diffuseOutput.refractionMul);
 
 	depthControl = DepthControl * (distanceMul - 1) + 1;
@@ -1338,11 +1373,13 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #					endif
 #				else
-	float3 sunColor = GetSunColor(normal, viewDirection);
+	float3 sunColor = GetSunColor(normal, viewDirection) * surfaceShadow;
 
+#					if !defined(VOLUMETRIC_SHADOWS)
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior) && any(sunColor > 0.0)) {
 		sunColor *= ShadowSampling::GetWaterShadow(screenNoise, input.WPosition.xyz, eyeIndex);
 	}
+#					endif
 
 #					if defined(VC)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);

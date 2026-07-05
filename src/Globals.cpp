@@ -33,6 +33,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
+#include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
@@ -79,6 +80,7 @@ namespace globals
 		TerrainShadows terrainShadows{};
 		UnifiedWater unifiedWater{};
 		VolumetricLighting volumetricLighting{};
+		VolumetricShadows volumetricShadows{};
 		VR vr{};
 		WaterEffects waterEffects{};
 		PerformanceOverlay performanceOverlay{};

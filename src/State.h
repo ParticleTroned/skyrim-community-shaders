@@ -63,7 +63,7 @@ public:
 	static constexpr float kDefaultPbrMetalReflectionScale = 1.0f;
 	static constexpr float kDefaultPbrMetalHighlightScale = 0.25f;
 	float pbrMetalReflectionScale = kDefaultPbrMetalReflectionScale;  // Global scale for PBR metal reflections
-	float pbrMetalHighlightScale = kDefaultPbrMetalHighlightScale;  // Global scale for direct PBR metal highlights
+	float pbrMetalHighlightScale = kDefaultPbrMetalHighlightScale;    // Global scale for direct PBR metal highlights
 	// Burley SSS human skin controls.
 	float sssHumanMaleIntensity = 1.0f;
 	float sssHumanMaleSaturation = 1.0f;
@@ -250,6 +250,7 @@ public:
 	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
 	{
@@ -270,8 +271,8 @@ public:
 	ConstantBuffer* permutationCB = nullptr;
 
 #ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable: 4324)  // SharedDataCB intentionally uses aligned float4 members for shader-compatible math
+#	pragma warning(push)
+#	pragma warning(disable: 4324)  // SharedDataCB intentionally uses aligned float4 members for shader-compatible math
 #endif
 	struct alignas(16) SharedDataCB
 	{
@@ -288,11 +289,11 @@ public:
 		uint InMapMenu;
 		uint HideSky;
 		float MipBias;
-		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
-		float RefractionScale;  // matches HLSL SharedData::RefractionScale
+		float WaterSystemHeight;        // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
+		float RefractionScale;          // matches HLSL SharedData::RefractionScale
 		float PBRMetalReflectionScale;  // matches HLSL SharedData::PBRMetalReflectionScale
-		float PBRMetalHighlightScale;  // matches HLSL SharedData::PBRMetalHighlightScale
-		float SharedDataPackingPad0;  // HLSL leaves one scalar before the float2 below
+		float PBRMetalHighlightScale;   // matches HLSL SharedData::PBRMetalHighlightScale
+		uint HasDirectionalShadows;     // Uses the existing scalar padding slot before the float2 below
 		float PBRMetalReflectionScalePad0;
 		float PBRMetalReflectionScalePad1;
 		float SSSHumanMaleIntensity;
@@ -308,12 +309,12 @@ public:
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
-		float4 VRFoveationData0;           // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
-		float4 VRFoveationModes;           // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
-		float4 VRFoveationCenterOffsets;   // xy=left eye offset, zw=right eye offset
+		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
+		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
+		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
 	};
 #ifdef _MSC_VER
-#pragma warning(pop)
+#	pragma warning(pop)
 #endif
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
 	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);

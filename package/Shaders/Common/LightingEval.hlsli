@@ -15,9 +15,9 @@ float3 SafeNormalizeLighting(float3 v, float3 fallback)
 }
 
 #if defined(TRUE_PBR)
-DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float shadowFactor, float parallaxShadow)
+DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
 #else
-DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNormal, float3 viewDir, float3 lightDir, float3 lightColor, float shadowFactor, float parallaxShadow)
+DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNormal, float3 viewDir, float3 lightDir, float3 lightColor, float detailedShadow, float softShadow)
 #endif
 {
 	DirectContext context = (DirectContext)0;
@@ -26,9 +26,9 @@ DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNorma
 	context.viewDir = SafeNormalizeLighting(viewDir, context.worldNormal);
 	context.lightDir = SafeNormalizeLighting(lightDir, context.worldNormal);
 	context.halfVector = SafeNormalizeLighting(context.viewDir + context.lightDir, context.worldNormal);
-	context.lightColor = lightColor * shadowFactor * parallaxShadow;
-	context.detailedShadow = 1.0;
-	context.softShadow = 1.0;
+	context.lightColor = lightColor;
+	context.detailedShadow = detailedShadow;
+	context.softShadow = softShadow;
 #if defined(TRUE_PBR)
 	context.coatWorldNormal = SafeNormalizeLighting(coatWorldNormal, context.worldNormal);
 	context.coatViewDir = SafeNormalizeLighting(coatViewDir, context.coatWorldNormal);
@@ -36,11 +36,11 @@ DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNorma
 	context.coatHalfVector = SafeNormalizeLighting(context.coatViewDir + context.coatLightDir, context.coatWorldNormal);
 	[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 	{
-		context.coatLightColor = lightColor * shadowFactor;
+		context.coatLightColor = lightColor * softShadow;
 	}
 	else
 	{
-		context.coatLightColor = context.lightColor;
+		context.coatLightColor = context.lightColor * detailedShadow;
 	}
 #endif
 	return context;
@@ -57,13 +57,13 @@ IndirectContext CreateIndirectLightingContext(float3 worldNormal, float3 vertexN
 
 float3 VanillaSpecular(DirectContext context, float shininess, float2 uv, float2 uv_ddx, float2 uv_ddy)
 {
-    const float3 N = context.worldNormal;
-    const float3 G = context.vertexNormal;
-    float3 V = context.viewDir;
-    const float3 L = context.lightDir;
-    const float3 H = context.halfVector;
-    float HdotN;
-#	if defined(ANISO_LIGHTING)
+	const float3 N = context.worldNormal;
+	const float3 G = context.vertexNormal;
+	float3 V = context.viewDir;
+	const float3 L = context.lightDir;
+	const float3 H = context.halfVector;
+	float HdotN;
+#if defined(ANISO_LIGHTING)
 	const float3 AN = SafeNormalizeLighting(N * 0.5 + G, N);
 	float LdotAN = dot(AN, L);
 	float HdotAN = dot(AN, H);
@@ -114,19 +114,21 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 	}
 #	endif
 	const float NdotL = dot(context.worldNormal, context.lightDir);
-    lightingOutput.diffuse = saturate(NdotL) * context.lightColor * Color::VanillaNormalization();
-#		if defined(SOFT_LIGHTING)
-	lightingOutput.diffuse += context.lightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
-#		endif
+	float3 diffuseLightColor = context.lightColor * context.detailedShadow;
+	float3 softLightColor = context.lightColor * context.softShadow;
+	lightingOutput.diffuse = saturate(NdotL) * diffuseLightColor * Color::VanillaNormalization();
+#	if defined(SOFT_LIGHTING)
+	lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
+#	endif
 
-#		if defined(RIM_LIGHTING)
-	lightingOutput.diffuse += context.lightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
-#		endif
+#	if defined(RIM_LIGHTING)
+	lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
+#	endif
 
-#		if defined(BACK_LIGHTING)
-	lightingOutput.diffuse += context.lightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
-#		endif
-    lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * context.lightColor * Color::VanillaNormalization();
+#	if defined(BACK_LIGHTING)
+	lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
+#	endif
+	lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * diffuseLightColor * Color::VanillaNormalization();
 #endif
 }
 
@@ -268,7 +270,7 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 #	if defined(TRUE_PBR)
 	float3 lightColor = context.coatLightColor;
 #	else
-	float3 lightColor = context.lightColor;
+	float3 lightColor = context.lightColor * context.detailedShadow;
 #	endif
 	lightColor *= params.lightColorScale;
 
@@ -335,7 +337,7 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 #	if defined(TRUE_PBR)
 	const float3 lightColor = context.coatLightColor;
 #	else
-	const float3 lightColor = context.lightColor;
+	const float3 lightColor = context.lightColor * context.detailedShadow;
 #	endif
 
 	const float wetnessF0 = 0.02;
@@ -359,9 +361,9 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 
 	float3 wetnessSpecular = D * G * wetnessF * NdotL * lightColor;
 
-#if !defined(TRUE_PBR)
+#	if !defined(TRUE_PBR)
 	wetnessSpecular *= Color::PBRLightingCompensation * Color::PBRLightingScale;
-#endif
+#	endif
 
 	lightingOutput.diffuse *= 1 - wetnessF;
 	lightingOutput.specular *= 1 - wetnessF;

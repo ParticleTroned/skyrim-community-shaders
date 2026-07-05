@@ -98,6 +98,14 @@ public:
 	};
 
 	static bool IsInteriorWithSun(const RE::TESObjectCELL* cell);
+	bool IsActiveInteriorSun() const
+	{
+		if (!loaded)
+			return false;
+
+		const auto* tes = RE::TES::GetSingleton();
+		return tes && IsInteriorWithSun(tes->interiorCell);
+	}
 	virtual bool IsCore() const override { return true; };
 
 private:

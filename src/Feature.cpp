@@ -35,6 +35,7 @@
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
+#include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
@@ -244,6 +245,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::terrainBlending,
 		&globals::features::terrainHelper,
 		&globals::features::volumetricLighting,
+		&globals::features::volumetricShadows,
 		&globals::features::lodBlending,
 		&globals::features::inverseSquareLighting,
 		&globals::features::hairSpecular,

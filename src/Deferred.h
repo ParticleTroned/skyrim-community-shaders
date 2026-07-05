@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "RE/B/BSShadowDirectionalLight.h"
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
@@ -21,6 +22,7 @@ public:
 	void SetupResources();
 	void ReleaseRenderTargets();
 	void CopyShadowData();
+	void CopyShadowLightData();
 	void ReflectionsPrepasses();
 	void EarlyPrepasses();
 	void StartDeferred();
@@ -43,6 +45,17 @@ public:
 
 	ID3D11ComputeShader* mainCompositeCS = nullptr;
 	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
+
+	struct alignas(16) DirectionalShadowLightData
+	{
+		float4x4 ShadowProj[2];
+		float4x4 InvShadowProj[2];
+		float2 EndSplitDistances;
+		float2 StartSplitDistances;
+	};
+	STATIC_ASSERT_ALIGNAS_16(DirectionalShadowLightData);
+	static_assert(sizeof(DirectionalShadowLightData) == 4 * sizeof(float4x4) + sizeof(float4),
+		"DirectionalShadowLightData layout drifted from ShadowSampling.hlsli mirror");
 
 	bool deferredPass = false;
 
@@ -69,8 +82,14 @@ public:
 
 	ID3D11ComputeShader* copyShadowCS = nullptr;
 	Buffer* perShadow = nullptr;
+	Buffer* directionalShadowLights = nullptr;
 	ID3D11ShaderResourceView* shadowView = nullptr;
 
+private:
+	template <typename T>
+	void SetShadowCascadeParameters(const T& lightData, DirectionalShadowLightData& dd);
+
+public:
 	struct Hooks
 	{
 		struct Main_RenderShadowMaps

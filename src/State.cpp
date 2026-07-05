@@ -32,6 +32,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
@@ -179,6 +180,7 @@ void State::Draw()
 	auto& cloudShadows = globals::features::cloudShadows;
 	auto& csEditor = globals::features::csEditor;
 	auto& truePBR = globals::features::truePBR;
+	auto& volumetricShadows = globals::features::volumetricShadows;
 	auto context = globals::d3d::context;
 
 	if (shaderCache->IsEnabled()) {
@@ -221,6 +223,11 @@ void State::Draw()
 			truePBR.SetShaderResouces(context);
 		}
 
+		if (volumetricShadows.loaded) {
+			ZoneScopedN("VolumetricShadows::SetShaderResources");
+			volumetricShadows.SetShaderResources(context);
+		}
+
 		if (permutationData != permutationDataPrevious) {
 			permutationCB->Update(permutationData);
 			permutationDataPrevious = permutationData;
@@ -229,7 +236,10 @@ void State::Draw()
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
-					deferred->CopyShadowData();
+					if (volumetricShadows.loaded)
+						volumetricShadows.CopyShadowLightData();
+					else
+						deferred->CopyShadowData();
 				}
 			}
 		}
@@ -1325,6 +1335,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.RefractionScale = refractionScale;
 		data.PBRMetalReflectionScale = pbrMetalReflectionScale;
 		data.PBRMetalHighlightScale = pbrMetalHighlightScale;
+		data.HasDirectionalShadows = HasDirectionalShadows();
 
 		data.SSSHumanMaleIntensity = sssHumanMaleIntensity;
 		data.SSSHumanMaleSaturation = sssHumanMaleSaturation;
@@ -1457,6 +1468,14 @@ std::unordered_map<std::string, bool>& State::GetDisabledFeatures()
 float State::GetTotalSmoothedDrawCalls() const
 {
 	return static_cast<float>(smoothDrawCalls[magic_enum::enum_integer(RE::BSShader::Type::Total)]);
+}
+
+bool State::HasDirectionalShadows() const
+{
+	if (!Util::IsInterior())
+		return true;
+
+	return globals::features::interiorSun.IsActiveInteriorSun();
 }
 
 void State::LoadTheme()

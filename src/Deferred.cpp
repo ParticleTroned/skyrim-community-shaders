@@ -1,5 +1,8 @@
 #include "Deferred.h"
 
+#include <algorithm>
+#include <type_traits>
+
 #include <DDSTextureLoader.h>
 
 #include "ShaderCache.h"
@@ -152,6 +155,8 @@ void Deferred::SetupResources()
 		}
 		delete perShadow;
 		perShadow = nullptr;
+		delete directionalShadowLights;
+		directionalShadowLights = nullptr;
 		if (copyShadowCS) {
 			copyShadowCS->Release();
 			copyShadowCS = nullptr;
@@ -268,6 +273,27 @@ void Deferred::SetupResources()
 	}
 
 	{
+		D3D11_BUFFER_DESC sbDesc{};
+		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
+		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		sbDesc.StructureByteStride = sizeof(DirectionalShadowLightData);
+		sbDesc.ByteWidth = sizeof(DirectionalShadowLightData);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = 1;
+
+		if (!directionalShadowLights) {
+			directionalShadowLights = new Buffer(sbDesc, nullptr, "Deferred::DirectionalShadowLights");
+			directionalShadowLights->CreateSRV(srvDesc);
+		}
+	}
+
+	{
 		D3D11_TEXTURE2D_DESC texDesc;
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		mainTex.texture->GetDesc(&texDesc);
@@ -348,6 +374,63 @@ void Deferred::CopyShadowData()
 	}
 }
 
+template <typename T>
+void Deferred::SetShadowCascadeParameters(const T& lightData, DirectionalShadowLightData& dd)
+{
+	using descriptor_array_type = std::remove_cvref_t<decltype(lightData.shadowmapDescriptors)>;
+	using descriptor_size_type = typename descriptor_array_type::size_type;
+
+	const descriptor_size_type descriptorCount = lightData.shadowmapDescriptors.size();
+	const descriptor_size_type maxCascadeCount = static_cast<descriptor_size_type>(std::size(dd.ShadowProj));
+	const descriptor_size_type count = std::min(descriptorCount, maxCascadeCount);
+	for (descriptor_size_type i = 0; i < count; i++) {
+		auto proj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&lightData.shadowmapDescriptors[i].lightTransform));
+		DirectX::XMStoreFloat4x4(reinterpret_cast<DirectX::XMFLOAT4X4*>(&dd.ShadowProj[i]), proj);
+
+		DirectX::XMMATRIX invProj = DirectX::XMMatrixInverse(nullptr, proj);
+		DirectX::XMStoreFloat4x4(reinterpret_cast<DirectX::XMFLOAT4X4*>(&dd.InvShadowProj[i]), invProj);
+	}
+}
+
+void Deferred::CopyShadowLightData()
+{
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "CopyShadowLightData");
+
+	auto* context = globals::d3d::context;
+	if (!context)
+		return;
+
+	if (!directionalShadowLights) {
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		context->PSSetShaderResources(98, 1, &nullSRV);
+		return;
+	}
+
+	DirectionalShadowLightData dd{};
+
+	auto* shadowSceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
+	auto* sunShadowLight = shadowSceneNode ? shadowSceneNode->GetRuntimeData().sunShadowDirLight : nullptr;
+	if (sunShadowLight) {
+		auto& dirData = sunShadowLight->GetShadowDirectionalLightRuntimeData();
+		dd.EndSplitDistances = { dirData.endSplitDistances[0], dirData.endSplitDistances[1] };
+		dd.StartSplitDistances = { dirData.startSplitDistances[0], dirData.startSplitDistances[1] };
+
+		if (globals::game::isVR)
+			SetShadowCascadeParameters(sunShadowLight->GetVRRuntimeData(), dd);
+		else
+			SetShadowCascadeParameters(sunShadowLight->GetRuntimeData(), dd);
+	}
+
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	DX::ThrowIfFailed(context->Map(directionalShadowLights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+	memcpy(mapped.pData, &dd, sizeof(DirectionalShadowLightData));
+	context->Unmap(directionalShadowLights->resource.get(), 0);
+
+	ID3D11ShaderResourceView* srv = directionalShadowLights->srv.get();
+	context->PSSetShaderResources(98, 1, &srv);
+}
+
 void Deferred::ReflectionsPrepasses()
 {
 	ZoneScoped;
@@ -387,6 +470,8 @@ void Deferred::EarlyPrepasses()
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
+
+	CopyShadowLightData();
 
 	Feature::ForEachLoadedFeature("EarlyPrepass", [](Feature* feature) { feature->EarlyPrepass(); }, true);
 }

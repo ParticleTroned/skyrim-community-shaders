@@ -7410,6 +7410,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
 		ClearVRRenderScaleInfoTransition();
+		ClearVRFSRRelatchDrainGuard();
 		return true;
 	}
 
@@ -7838,11 +7839,43 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(ClampToggleUInt(relatchSettings.renderScaleMode) != 0),
 				BoolText(ClampToggleUInt(relatchSettings.perfMode) != 0));
 		}
+		bool fsrTeardownReadyForRelatch = false;
+		const bool drainFSRResourcesBeforeRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			!preserveFSRResourcesForRelatch &&
+			fsrResourcesNeedTeardownForRelatch;
+		if (drainFSRResourcesBeforeRelatch) {
+			const uint32_t previousDrainGeneration = vrFSRRelatchDrainGeneration.load(std::memory_order_acquire);
+			if (previousDrainGeneration != relatchContractGeneration) {
+				vrFSRRelatchDrainGeneration.store(relatchContractGeneration, std::memory_order_release);
+				vrFSRRelatchDrainLogged.store(false, std::memory_order_release);
+			}
+
+			if (!fidelityFX.PollFSRResourceTeardownReady("VR render-target relatch FSR drain")) {
+				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
+				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+				if (!vrFSRRelatchDrainLogged.exchange(true, std::memory_order_acq_rel)) {
+					logger::warn(
+						"[VRRenderScale] Render-target relatch waiting for FSR resources to drain before D3D target recreation. generation={} frame={}",
+						relatchContractGeneration,
+						state->frameCount);
+				}
+				return false;
+			}
+
+			fsrTeardownReadyForRelatch = true;
+			ClearVRFSRRelatchDrainGuard();
+		} else if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
+				   preserveFSRResourcesForRelatch ||
+				   !fidelityFX.HasFSRResourcesPendingTeardown()) {
+			ClearVRFSRRelatchDrainGuard();
+		}
 		if (!ResetVRVendorRuntimeResources(
 				destroyDLSSResourcesForRelatch,
 				true,
 				!preserveFSRResourcesForRelatch,
-				forceSynchronousFSRTeardownForRelatch)) {
+				forceSynchronousFSRTeardownForRelatch,
+				fsrTeardownReadyForRelatch)) {
 			if (IsSubmitStageDeviceLost() || MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch vendor resource teardown")) {
 				clearRelatchDelay();
 				clearRelatchRetryLogs();
@@ -7852,6 +7885,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
 			if (relatchUpscaleMethod == UpscaleMethod::kDLSS && destroyDLSSResourcesForRelatch)
 				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, relatchContractGeneration);
+			if (relatchUpscaleMethod == UpscaleMethod::kFSR && !preserveFSRResourcesForRelatch)
+				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
 			if (!loggedRelatchVendorDefer) {
 				logger::warn("[VRRenderScale] Render-target relatch deferred because vendor resources are still in use.");
 				loggedRelatchVendorDefer = true;
@@ -8000,6 +8035,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
+	ClearVRFSRRelatchDrainGuard();
 	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
 	if (IsVendorUpscalingMethod(relatchUpscaleMethod) && relatchRenderScaleActive) {
@@ -8273,15 +8309,23 @@ void Upscaling::ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery)
 		BoolText(postLoadResetPending || vendorResetPending));
 }
 
-void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame)
+void Upscaling::ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod)
 {
 	const uint32_t currentFrame = std::max(a_currentFrame, 1u);
+	submitStageFoveatedVendorRetryMethod.store(static_cast<uint32_t>(a_upscaleMethod), std::memory_order_release);
 	submitStageFoveatedVendorRetryFrame.store(currentFrame + kVRSubmitStageFoveatedFailureRetryFrames, std::memory_order_release);
 }
 
 void Upscaling::ClearSubmitStageFoveatedVendorRetryBackoff()
 {
 	submitStageFoveatedVendorRetryFrame.store(0, std::memory_order_release);
+	submitStageFoveatedVendorRetryMethod.store(static_cast<uint32_t>(UpscaleMethod::kNONE), std::memory_order_release);
+}
+
+void Upscaling::ClearVRFSRRelatchDrainGuard()
+{
+	vrFSRRelatchDrainGeneration.store(0, std::memory_order_release);
+	vrFSRRelatchDrainLogged.store(false, std::memory_order_release);
 }
 
 void Upscaling::ClearVRRenderScaleMemoryRelief()
@@ -8685,7 +8729,7 @@ void Upscaling::ClearVRRenderScaleInfoTransition()
 	vrRenderScaleInfoTransitionStartFrame = 0;
 }
 
-bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown)
+bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources, bool a_waitForFSRIdleTeardown, bool a_fsrTeardownAlreadyReady)
 {
 	if (!globals::game::isVR)
 		return true;
@@ -8694,18 +8738,21 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (emitDiagLogs) {
 		logger::debug(
-			"[Upscaling][Diag] Reset VR vendor runtime resources destroyDLSS={} destroyPeripheryTAA={} destroyFSR={} requestedDestroyFSR={} waitForFSRIdle={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={}",
+			"[Upscaling][Diag] Reset VR vendor runtime resources destroyDLSS={} destroyPeripheryTAA={} destroyFSR={} requestedDestroyFSR={} waitForFSRIdle={} fsrTeardownReady={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={}",
 			BoolText(a_destroyDLSSResources),
 			BoolText(a_destroyPeripheryTAAResources),
 			BoolText(destroyFSRResources),
 			BoolText(a_destroyFSRResources),
 			BoolText(a_waitForFSRIdleTeardown),
+			BoolText(a_fsrTeardownAlreadyReady),
 			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
 			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
 			BoolText(fidelityFX.HasFSRResources()),
 			BoolText(fidelityFX.HasFSRResourcesPendingTeardown()));
 	}
-	if (destroyFSRResources && !fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
+	if (destroyFSRResources &&
+		!a_fsrTeardownAlreadyReady &&
+		!fidelityFX.PollFSRResourceTeardownReady("VR vendor runtime FSR resource teardown")) {
 		MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR);
 		return false;
 	}
@@ -8718,7 +8765,7 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	}
 
 	if (destroyFSRResources) {
-		fidelityFX.DestroyFSRResources(a_waitForFSRIdleTeardown);
+		fidelityFX.DestroyFSRResources(a_waitForFSRIdleTeardown && !a_fsrTeardownAlreadyReady);
 		ClearVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, true);
 	}
 	DestroyCommonUpscalingTextures();
@@ -14346,11 +14393,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	bool foveatedFailureBackoffActive = false;
 	const uint32_t foveatedRetryFrame = submitStageFoveatedVendorRetryFrame.load(std::memory_order_acquire);
-	if (upscaleMethod == UpscaleMethod::kDLSS && foveatedRetryFrame != 0) {
-		if (currentFrame < foveatedRetryFrame) {
-			foveatedFailureBackoffActive = true;
-		} else {
+	const auto foveatedRetryMethod = static_cast<UpscaleMethod>(submitStageFoveatedVendorRetryMethod.load(std::memory_order_acquire));
+	if (foveatedRetryFrame != 0) {
+		if (currentFrame >= foveatedRetryFrame) {
 			ClearSubmitStageFoveatedVendorRetryBackoff();
+		} else if (foveatedRetryMethod == upscaleMethod) {
+			foveatedFailureBackoffActive = true;
 		}
 	}
 
@@ -14528,10 +14576,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool expectedFoveatedVendorPath = shouldUseFoveatedVendorThisEye;
 	const auto& cachedEyeState = submitStageVendorEyeState[eyeIndex];
-	// OpenVR can submit the same eye twice in one frame; reuse the finalized eye output when the vendor work is identical.
+	// OpenVR can submit the same eye twice in one frame; reuse the finalized
+	// vendor output when the submit signature is identical.
 	const bool canReuseSubmitStageEyeOutput =
 		!presentationOnly &&
-		upscaleMethod == UpscaleMethod::kDLSS &&
 		cachedEyeState.ready &&
 		cachedEyeState.method == static_cast<uint32_t>(upscaleMethod) &&
 		cachedEyeState.generation == activeContractGeneration &&
@@ -14776,8 +14824,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 		if (!vendorSucceeded) {
 			submitStageForceFullEyeVendorFallback = true;
 			RequestHistoryReset();
-			if (upscaleMethod == UpscaleMethod::kDLSS)
-				ArmSubmitStageFoveatedVendorRetryBackoff(currentFrame);
+			ArmSubmitStageFoveatedVendorRetryBackoff(currentFrame, upscaleMethod);
 			if (globals::state && globals::state->IsDeveloperMode()) {
 				static uint32_t loggedFoveatedFallbackDiagCount[2] = {};
 				static uint32_t loggedFoveatedFallbackDiagFrame[2] = {};
@@ -14790,11 +14837,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 				if (logFoveatedFallbackDiag) {
 					loggedFoveatedFallbackDiagFrame[boundedEyeIndex] = currentFrame;
 					logger::debug(
-						"[Upscaling][DLSSDiag] Submit-stage foveated vendor fallback armed. method={} eye={} frame={} retryFrame={} input={}x{} output={}x{} source={}x{} array={} fmt={} sourceRegion={}x{} box=({},{})->({},{}) expected={}x{} presentationOnly={} transitionBypass={} menuPause={} maskPreview={} backoffWasActive={} preparedFoveatedEncode={} forceFullEyeFallback={} submitBoundsFallback={} sourceCombined={} boundsCombined={}",
+						"[Upscaling][VendorDiag] Submit-stage foveated vendor fallback armed. method={} eye={} frame={} retryFrame={} input={}x{} output={}x{} source={}x{} array={} fmt={} sourceRegion={}x{} box=({},{})->({},{}) expected={}x{} presentationOnly={} transitionBypass={} menuPause={} maskPreview={} backoffWasActive={} preparedFoveatedEncode={} forceFullEyeFallback={} submitBoundsFallback={} sourceCombined={} boundsCombined={}",
 						upscaleMethodName,
 						eyeIndex,
 						currentFrame,
-						upscaleMethod == UpscaleMethod::kDLSS ? currentFrame + kVRSubmitStageFoveatedFailureRetryFrames : 0u,
+						currentFrame + kVRSubmitStageFoveatedFailureRetryFrames,
 						eyeWidthIn,
 						eyeHeightIn,
 						eyeWidthOut,

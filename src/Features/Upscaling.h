@@ -882,6 +882,9 @@ public:
 	std::atomic<uint32_t> submitStageVendorResumeLastStableFrame{ 0 };
 	std::atomic<uint64_t> submitStageVendorResumeStableEyeMaskState{ 0 };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
+	std::atomic<uint32_t> submitStageFoveatedVendorRetryMethod{ static_cast<uint32_t>(UpscaleMethod::kNONE) };
+	std::atomic<uint32_t> vrFSRRelatchDrainGeneration{ 0 };
+	std::atomic_bool vrFSRRelatchDrainLogged{ false };
 	std::atomic<uint32_t> vrRenderScaleRapidRelatchFrame{ 0 };
 	std::atomic<uint32_t> vrRenderScaleRapidRelatchCount{ 0 };
 	std::atomic<uint32_t> vrRenderScaleMemoryReliefEndFrame{ 0 };
@@ -1076,14 +1079,15 @@ private:
 	void RecordSubmitStageBoundsFallback(UpscaleMethod a_upscaleMethod, uint32_t a_currentFrame, uint32_t a_generation, uint32_t a_actualWidth, uint32_t a_actualHeight, uint32_t a_expectedWidth, uint32_t a_expectedHeight);
 	void ClearSubmitStageBoundsFallbackWatchdog();
 	void ServiceSubmitStageBoundsFallbackWatchdog(bool a_forceRecovery = false);
-	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame);
+	void ArmSubmitStageFoveatedVendorRetryBackoff(uint32_t a_currentFrame, UpscaleMethod a_upscaleMethod);
 	void ClearSubmitStageFoveatedVendorRetryBackoff();
+	void ClearVRFSRRelatchDrainGuard();
 	void MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception& a_exception, const char* a_context);
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context);
 	void ScheduleVRIntermediateTextureCleanup();
 	void ServiceVRIntermediateTextureCleanup();
-	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false);
+	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
 	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);

@@ -201,7 +201,7 @@ void ScreenSpaceShadows::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	if (a_advanced) {
-		ImGui::SeparatorText("Advanced");
+		ImGui::SeparatorText("Shadow Quality");
 		ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
 		ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax);
 		ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, kShadowContrastMin, kShadowContrastMax);

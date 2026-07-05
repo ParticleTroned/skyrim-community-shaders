@@ -1949,9 +1949,11 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 		}
 	};
 
-	drawUintCheckbox("Enable Wetterness", settings.EnableWetterness);
+	if (a_advanced)
+		drawUintCheckbox("Enable Wetterness", settings.EnableWetterness);
 
-	ImGui::TextUnformatted("Wetterness Presets");
+	if (a_advanced)
+		ImGui::TextUnformatted("Wetterness Presets");
 	if (ImGui::BeginTable("WetternessPerformancePresetButtons", static_cast<int>(WETTERNESS_UI_PRESETS.size()), ImGuiTableFlags_SizingStretchProp)) {
 		for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
 			ImGui::TableSetupColumn(WETTERNESS_UI_PRESETS[i].name, ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -1977,7 +1979,7 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	ImGui::SeparatorText("Advanced");
+	ImGui::SeparatorText("Rain Effects");
 	drawUintCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 	const bool raindropSettingsDisabled = settings.EnableRaindropFx == 0;
 	const bool raindropAdvancedDisabled = raindropSettingsDisabled || settings.EnableWetterness == 0;

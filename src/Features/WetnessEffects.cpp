@@ -661,7 +661,7 @@ void WetnessEffects::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	ImGui::SeparatorText("Advanced");
+	ImGui::SeparatorText("Rain Effects");
 	bool enableRaindrops = settings.EnableRaindropFx != 0;
 	if (ImGui::Checkbox("Enable Raindrop Effects", &enableRaindrops))
 		settings.EnableRaindropFx = enableRaindrops ? 1u : 0u;

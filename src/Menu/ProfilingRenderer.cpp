@@ -162,6 +162,12 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 
 static void NormalizeGameFrameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
 {
+	if (!IsPositiveFinite(summary.frameMs)) {
+		summary.frameMs = 0.0f;
+		summary.fps = 0.0f;
+		return;
+	}
+
 	float frameMs = summary.frameMs;
 	if (summary.hasGameGpu)
 		frameMs = std::max(frameMs, summary.gameGpuMs);
@@ -1066,6 +1072,7 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
 {
 	PerformanceTimingSummary summary;
+	summary.frameCount = globals::state ? globals::state->frameCount : 0;
 	if (!globals::profiler) {
 		return summary;
 	}
@@ -1190,16 +1197,14 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 
 void ProfilingRenderer::RenderFeaturePerformanceSummary(
 	const std::string& featurePrefix,
-	const PerformanceTimingHighlight* highlight,
-	const PerformanceTimingSummary* summaryOverride)
+	const PerformanceTimingHighlight* highlight)
 {
-	RenderFeaturePerformanceSummary(std::vector<std::string>{ featurePrefix }, highlight, summaryOverride);
+	RenderFeaturePerformanceSummary(std::vector<std::string>{ featurePrefix }, highlight);
 }
 
 void ProfilingRenderer::RenderFeaturePerformanceSummary(
 	const std::vector<std::string>& featurePrefixes,
-	const PerformanceTimingHighlight* highlight,
-	const PerformanceTimingSummary* /*summaryOverride*/)
+	const PerformanceTimingHighlight* highlight)
 {
 	if (!globals::profiler) {
 		ImGui::TextDisabled("No profiler available.");

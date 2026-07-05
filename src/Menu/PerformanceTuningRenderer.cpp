@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <string>
@@ -12,7 +13,6 @@
 
 #include "Feature.h"
 #include "Globals.h"
-#include "Menu.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Profiler.h"
 #include "Utils/UI.h"
@@ -73,6 +73,7 @@ namespace
 		int fpsSamples = 0;
 		int gameGpuSamples = 0;
 		int gameCpuSamples = 0;
+		uint32_t lastFrameCount = 0;
 	};
 
 	struct FeatureCostDelta
@@ -197,6 +198,13 @@ namespace
 	{
 		if (!summary.valid)
 			return;
+
+		if (summary.frameCount != 0) {
+			if (summary.frameCount == sample.lastFrameCount)
+				return;
+
+			sample.lastFrameCount = summary.frameCount;
+		}
 
 		if (summary.frameMs > 0.0f) {
 			sample.frameMsSum += summary.frameMs;
@@ -874,7 +882,7 @@ void PerformanceTuningRenderer::Render()
 			ImGui::SeparatorText("Profiling");
 			const auto selectedHighlight = BuildSelectedHighlight(highlightState, selectedFeature->GetShortName());
 			const auto profilingPrefixes = BuildProfilingPrefixesForFeature(selectedFeature->GetShortName());
-			ProfilingRenderer::RenderFeaturePerformanceSummary(profilingPrefixes, &selectedHighlight, &timingBeforeSettings);
+			ProfilingRenderer::RenderFeaturePerformanceSummary(profilingPrefixes, &selectedHighlight);
 		}
 		ImGui::EndChild();
 

@@ -241,7 +241,7 @@ void DynamicCubemaps::DrawPerformanceSettings(bool a_advanced)
 
 	if (a_advanced && REL::Module::IsVR()) {
 		auto& vrSettings = globals::features::vr.settings;
-		ImGui::SeparatorText("Advanced VR");
+		ImGui::SeparatorText("VR Performance");
 		ImGui::Checkbox("Dynamic Cubemap Cadence", &vrSettings.EnableDynamicCubemapFoveation);
 		if (IsWetternessActiveForVisibilityThrottle())
 			vrSettings.EnableDynamicCubemapVisibilityThrottle = false;

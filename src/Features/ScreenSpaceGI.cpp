@@ -828,7 +828,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	if (a_advanced) {
-		ImGui::SeparatorText("Advanced");
+		ImGui::SeparatorText("Sampling");
 		int numSlices = static_cast<int>(settings.NumSlices);
 		if (ImGui::SliderInt("Slices", &numSlices, 1, 10))
 			settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));

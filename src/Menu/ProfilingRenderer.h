@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -42,6 +43,7 @@ public:
 		float gameCpuMs = 0.0f;
 		float frameMs = 0.0f;
 		float fps = 0.0f;
+		uint32_t frameCount = 0;
 		bool hasGameGpu = false;
 		bool hasGameCpu = false;
 		bool valid = false;
@@ -64,12 +66,10 @@ public:
 	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
 	static void RenderFeaturePerformanceSummary(
 		const std::string& featurePrefix,
-		const PerformanceTimingHighlight* highlight = nullptr,
-		const PerformanceTimingSummary* summaryOverride = nullptr);
+		const PerformanceTimingHighlight* highlight = nullptr);
 	static void RenderFeaturePerformanceSummary(
 		const std::vector<std::string>& featurePrefixes,
-		const PerformanceTimingHighlight* highlight = nullptr,
-		const PerformanceTimingSummary* summaryOverride = nullptr);
+		const PerformanceTimingHighlight* highlight = nullptr);
 
 private:
 	static inline TimingMode timingMode = TimingMode::GPU;

@@ -151,6 +151,60 @@ namespace
 			a_settings.ProbeUpdateInterval = a_settings.OcclusionUpdateInterval;
 	}
 
+	void DrawSkylightingUpdatePerformanceSettings(Skylighting& a_skylighting)
+	{
+		auto& settings = a_skylighting.settings;
+
+		ImGui::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
+
+		NormalizeSettingsForRuntime(settings);
+		uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, a_skylighting.probeArrayDims[2]);
+		settings.StableSliceCount = stableSliceCount;
+		bool usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, a_skylighting.probeArrayDims[2]);
+
+		ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
+		{
+			int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
+			if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16))
+				settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
+
+			ImGui::BeginDisabled(usesIncrementalProbeSlices);
+			int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
+			if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
+				settings.ProbeUpdateInterval = ClampUpdateInterval(static_cast<uint>(probeIntervalUI));
+			ImGui::EndDisabled();
+		}
+		ImGui::EndDisabled();
+		NormalizeSettingsForRuntime(settings);
+
+		const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
+		if (ImGui::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
+			previousIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates) {
+			ResetProbeUpdateWindow(a_skylighting);
+		}
+
+		ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
+		{
+			int stableSliceCountUI = static_cast<int>(stableSliceCount);
+			if (ImGui::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(a_skylighting.probeArrayDims[2]))) {
+				const uint nextStableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), a_skylighting.probeArrayDims[2]);
+				if (settings.StableSliceCount != nextStableSliceCount) {
+					settings.StableSliceCount = nextStableSliceCount;
+					ResetProbeUpdateWindow(a_skylighting);
+				}
+			}
+		}
+		ImGui::EndDisabled();
+
+		ImGui::Checkbox("Enable Fast Probe Sampling", &settings.EnableFastProbeSampling);
+
+		float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
+		if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
+			settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
+			a_skylighting.ResetSkylighting();
+		}
+	}
+
 	template <class T>
 	void LoadIfPresent(const json& a_json, const char* a_key, T& a_value)
 	{
@@ -513,55 +567,8 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	ImGui::SeparatorText("Advanced");
-	ImGui::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
-
-	NormalizeSettingsForRuntime(settings);
-	uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
-	settings.StableSliceCount = stableSliceCount;
-	bool usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
-
-	ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
-	{
-		int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
-		if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16))
-			settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
-
-		ImGui::BeginDisabled(usesIncrementalProbeSlices);
-		int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
-		if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
-			settings.ProbeUpdateInterval = ClampUpdateInterval(static_cast<uint>(probeIntervalUI));
-		ImGui::EndDisabled();
-	}
-	ImGui::EndDisabled();
-	NormalizeSettingsForRuntime(settings);
-
-	const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
-	if (ImGui::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
-		previousIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates) {
-		ResetProbeUpdateWindow(*this);
-	}
-
-	ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
-	{
-		int stableSliceCountUI = static_cast<int>(stableSliceCount);
-		if (ImGui::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(probeArrayDims[2]))) {
-			const uint nextStableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), probeArrayDims[2]);
-			if (settings.StableSliceCount != nextStableSliceCount) {
-				settings.StableSliceCount = nextStableSliceCount;
-				ResetProbeUpdateWindow(*this);
-			}
-		}
-	}
-	ImGui::EndDisabled();
-
-	ImGui::Checkbox("Enable Fast Probe Sampling", &settings.EnableFastProbeSampling);
-
-	float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
-	if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
-		settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
-		ResetSkylighting();
-	}
+	ImGui::SeparatorText("Update Work");
+	DrawSkylightingUpdatePerformanceSettings(*this);
 }
 
 void Skylighting::SetupResources()

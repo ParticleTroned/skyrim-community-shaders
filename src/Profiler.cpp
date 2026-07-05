@@ -325,16 +325,22 @@ bool Profiler::CollectResults()
 	std::unordered_map<std::string, ActiveTimerData> activeTimers;
 	float activeTotalMs = 0.0f;
 	float activeCpuTotalMs = 0.0f;
+	bool hasGpuFrameData = false;
+	bool gpuFrameComplete = false;
+	bool gpuTimerQueriesComplete = true;
+	const bool hasCompletedCpuTimers = !frame.cpuTimers.empty();
 
 	if (frame.inFlight) {
 		HRESULT hr = context->GetData(frame.disjoint.get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH);
 		if (hr != S_OK)
 			return false;
 		frame.inFlight = false;
+		hasGpuFrameData = true;
 	}
 
-	if (!disjointData.Disjoint && frame.activeCount > 0) {
+	if (hasGpuFrameData && !disjointData.Disjoint && disjointData.Frequency > 0 && frame.activeCount > 0) {
 		double ticksToMs = 1000.0 / static_cast<double>(disjointData.Frequency);
+		gpuFrameComplete = true;
 
 		for (uint32_t i = 0; i < frame.activeCount; i++) {
 			auto& timer = frame.timers[i];
@@ -343,10 +349,14 @@ bool Profiler::CollectResults()
 
 			UINT64 tsBegin = 0, tsEnd = 0;
 
-			if (context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+			if (context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+				gpuTimerQueriesComplete = false;
 				continue;
-			if (context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+			}
+			if (context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+				gpuTimerQueriesComplete = false;
 				continue;
+			}
 
 			float ms = static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs);
 			auto& entry = activeTimers[timer.name];
@@ -377,6 +387,25 @@ bool Profiler::CollectResults()
 		auto& known = GetOrCreateTimer(timer.name);
 		known.hasCpu = true;
 		known.cpu.PushSample(timer.cpuMs);
+	}
+
+	if (gpuFrameComplete && gpuTimerQueriesComplete) {
+		for (auto& known : knownTimers) {
+			auto it = activeTimers.find(known.name);
+			const bool activeGpu = it != activeTimers.end() && it->second.hasGpu;
+			const bool activeCpu = it != activeTimers.end() && it->second.hasCpu;
+
+			if (known.hasGpu && !activeGpu)
+				known.gpu.PushSample(0.0f);
+			if (known.hasCpu && !activeCpu)
+				known.cpu.PushSample(0.0f);
+		}
+	} else if (hasCompletedCpuTimers) {
+		for (auto& known : knownTimers) {
+			auto it = activeTimers.find(known.name);
+			if (known.hasCpu && (it == activeTimers.end() || !it->second.hasCpu))
+				known.cpu.PushSample(0.0f);
+		}
 	}
 
 	frame.cpuTimers.clear();

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "Feature.h"
+#include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -30,6 +31,11 @@ namespace
 	constexpr int kTuningHighlightFrames = 240;
 	constexpr double kFeatureCostMeasurementSeconds = 3.0;
 	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
+
+	bool IsRenderScaleDesktopMirrorQualityAvailable()
+	{
+		return globals::game::isVR && globals::features::upscaling.IsVRRenderScaleModeActive();
+	}
 
 	constexpr std::array<std::string_view, 14> kPerformanceFeatureOrder = {
 		"Upscaling",
@@ -304,7 +310,7 @@ namespace
 				"DisableWeatherInteractionDuringRain" });
 		}
 		if (shortName == "VR") {
-			return MakeJsonMask({ "EnableDepthBufferCullingExterior",
+			json mask = MakeJsonMask({ "EnableDepthBufferCullingExterior",
 				"EnableDepthBufferCullingInterior",
 				"MinOccludeeBoxExtent",
 				"EnableStereoBlend",
@@ -314,6 +320,9 @@ namespace
 				"EnableWetternessFoveation",
 				"EnableDynamicCubemapFoveation",
 				"EnableDynamicCubemapVisibilityThrottle" });
+			if (IsRenderScaleDesktopMirrorQualityAvailable())
+				mask["StabilizeRenderScaleDesktopMirror"] = true;
+			return mask;
 		}
 		if (shortName == "Wetterness") {
 			json mask = currentSettings.is_object() ? currentSettings : json::object();

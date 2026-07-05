@@ -64,6 +64,11 @@ namespace
 		a_settings.EnableDynamicCubemapVisibilityThrottle = false;
 	}
 
+	bool IsRenderScaleDesktopMirrorQualityAvailable()
+	{
+		return globals::game::isVR && globals::features::upscaling.IsVRRenderScaleModeActive();
+	}
+
 	bool BeginTabItemWithFont(const char* label, Menu::FontRole role, ImGuiTabItemFlags flags = ImGuiTabItemFlags_None)
 	{
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
@@ -434,7 +439,8 @@ bool VR::IsPerformanceCostMeasurementEnabled() const
 	       settings.EnableWetternessFoveation ||
 	       settings.EnableWetternessFoveationHardCutoff ||
 	       settings.EnableDynamicCubemapFoveation ||
-	       settings.EnableDynamicCubemapVisibilityThrottle;
+	       settings.EnableDynamicCubemapVisibilityThrottle ||
+	       (IsRenderScaleDesktopMirrorQualityAvailable() && settings.StabilizeRenderScaleDesktopMirror);
 }
 
 void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
@@ -442,6 +448,7 @@ void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	const Settings defaults{};
 	const ScreenSpaceShadows::BendSettings screenSpaceShadowsDefaults{};
 	const ScreenSpaceGI::Settings screenSpaceGIDefaults{};
+	const bool renderScaleDesktopMirrorAvailable = IsRenderScaleDesktopMirrorQualityAvailable();
 	auto& screenSpaceShadows = globals::features::screenSpaceShadows;
 	auto& screenSpaceGI = globals::features::screenSpaceGI;
 	settings.EnableDepthBufferCullingExterior = a_enabled ? defaults.EnableDepthBufferCullingExterior : false;
@@ -461,6 +468,8 @@ void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	settings.EnableWetternessFoveationHardCutoff = a_enabled ? defaults.EnableWetternessFoveationHardCutoff : false;
 	settings.EnableDynamicCubemapFoveation = a_enabled ? defaults.EnableDynamicCubemapFoveation : false;
 	settings.EnableDynamicCubemapVisibilityThrottle = a_enabled ? defaults.EnableDynamicCubemapVisibilityThrottle : false;
+	if (renderScaleDesktopMirrorAvailable)
+		settings.StabilizeRenderScaleDesktopMirror = a_enabled ? defaults.StabilizeRenderScaleDesktopMirror : false;
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	UpdateDepthBufferCulling();
@@ -485,7 +494,8 @@ json VR::CapturePerformanceCostMeasurementState() const
 		{ "EnableWetternessFoveation", settings.EnableWetternessFoveation },
 		{ "EnableWetternessFoveationHardCutoff", settings.EnableWetternessFoveationHardCutoff },
 		{ "EnableDynamicCubemapFoveation", settings.EnableDynamicCubemapFoveation },
-		{ "EnableDynamicCubemapVisibilityThrottle", settings.EnableDynamicCubemapVisibilityThrottle }
+		{ "EnableDynamicCubemapVisibilityThrottle", settings.EnableDynamicCubemapVisibilityThrottle },
+		{ "StabilizeRenderScaleDesktopMirror", settings.StabilizeRenderScaleDesktopMirror }
 	};
 }
 
@@ -513,6 +523,7 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.EnableWetternessFoveationHardCutoff = a_state.value("EnableWetternessFoveationHardCutoff", settings.EnableWetternessFoveationHardCutoff);
 	settings.EnableDynamicCubemapFoveation = a_state.value("EnableDynamicCubemapFoveation", settings.EnableDynamicCubemapFoveation);
 	settings.EnableDynamicCubemapVisibilityThrottle = a_state.value("EnableDynamicCubemapVisibilityThrottle", settings.EnableDynamicCubemapVisibilityThrottle);
+	settings.StabilizeRenderScaleDesktopMirror = a_state.value("StabilizeRenderScaleDesktopMirror", settings.StabilizeRenderScaleDesktopMirror);
 	settings.ClampToValidRanges();
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	UpdateDepthBufferCulling();
@@ -1196,6 +1207,15 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		ImGui::TextDisabled("Dynamic Cubemap FOV controls require Dynamic Cubemaps.");
 	if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
 		ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
+
+	if (IsRenderScaleDesktopMirrorQualityAvailable()) {
+		ImGui::SeparatorText("Desktop Mirror");
+		ImGui::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Improves the desktop mirror image when VR Render Scale Mode lowers the source resolution.");
+			ImGui::TextUnformatted("Only the desktop view changes. This can cost a little performance while render scale is active.");
+		}
+	}
 }
 
 void VR::DrawEssentialSettings()
@@ -1356,11 +1376,16 @@ namespace
 	void DrawStabilizeRenderScaleDesktopMirrorSetting()
 	{
 		auto& settings = globals::features::vr.settings;
-		ImGui::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
+		const bool available = IsRenderScaleDesktopMirrorQualityAvailable();
+		{
+			auto guard = Util::DisableGuard(!available);
+			ImGui::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
+		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Improves the desktop mirror image when VR Render Scale Mode lowers the source resolution.");
-			ImGui::TextUnformatted("Uses the final per-eye render-scale output for the desktop mirror instead of leaving the mirror at the lower render-scale resolution when the fast direct copy is incompatible.");
-			ImGui::TextUnformatted("HMD presentation is unchanged. Off by default because it adds a small performance cost while render-scale submit is active and the mirror texture needs this fallback.");
+			ImGui::TextUnformatted("Only the desktop view changes. This can cost a little performance while render scale is active.");
+			if (!available)
+				ImGui::TextUnformatted("Available only while VR Render Scale Mode is active.");
 		}
 	}
 

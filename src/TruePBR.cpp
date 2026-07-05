@@ -640,7 +640,7 @@ namespace
 		return geometry && geometry->name.c_str() ? geometry->name.c_str() : "<null>";
 	}
 
-	BSLightingShaderMaterialPBR* TryGetRegisteredPBRMaterial(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry)
+	BSLightingShaderMaterialPBR* TryGetRegisteredPBRMaterial(RE::BSShaderProperty* property, RE::BSGeometry* geometry)
 	{
 		if (property == nullptr || !property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting)) {
 			return nullptr;
@@ -671,7 +671,7 @@ namespace
 		return material;
 	}
 
-	BSLightingShaderMaterialPBRLandscape* TryGetRegisteredPBRLandscapeMaterial(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry)
+	BSLightingShaderMaterialPBRLandscape* TryGetRegisteredPBRLandscapeMaterial(RE::BSShaderProperty* property, RE::BSGeometry* geometry)
 	{
 		if (property == nullptr ||
 			!property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) ||

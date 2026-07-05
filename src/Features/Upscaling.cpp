@@ -12134,7 +12134,12 @@ bool Upscaling::ApplySubmitStageDLSSSharpening(uint32_t eyeIndex, const Texture2
 		const uint32_t dispatchHeight = colorOutput->desc.Height;
 
 		UnbindUpscalingResources();
-		if (!DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get(), dispatchWidth, dispatchHeight)) {
+		bool sharpened = false;
+		{
+			CS_PROFILE_SCOPE("Upscaling::SubmitStageSharpen");
+			sharpened = DispatchDLSSSharpener(*this, sharpenInput.srv.get(), colorOutput->uav.get(), dispatchWidth, dispatchHeight);
+		}
+		if (!sharpened) {
 			LogWarnOnceFmt(
 				loggedSharpenerFailure[eyeIndex],
 				"[Upscaling] Submit-stage DLSS sharpening skipped for eye {} because {} dispatch failed.",
@@ -14730,8 +14735,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			vendorParams.transparencyMask = vrIntermediateTransparencyMask[targetEyeIndex]->resource.get();
 			vendorParams.colorOut = replayVendorColorOutput->resource.get();
 			vendorParams.label = "submit-stage full-eye replay";
-			if (!DispatchVendorEyeRegion(upscaleMethod, vendorParams))
-				return false;
+			{
+				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
+				if (!DispatchVendorEyeRegion(upscaleMethod, vendorParams))
+					return false;
+			}
 		} catch (const std::exception& e) {
 			UnbindUpscalingResources();
 			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye replay"))
@@ -14786,17 +14794,20 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	if (shouldUseFoveatedVendorThisEye) {
 		static bool loggedFoveatedSubmitException[2] = {};
 		try {
-			vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(
-				upscaleMethod,
-				eyeIndex,
-				eyeWidthIn,
-				eyeHeightIn,
-				eyeWidthOut,
-				eyeHeightOut,
-				vendorColorOutput->resource.get(),
-				vendorColorOutput->uav.get(),
-				sourceSubresource,
-				&colorBox);
+			{
+				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
+				vendorSucceeded = DispatchSubmitStageFoveatedVendorEye(
+					upscaleMethod,
+					eyeIndex,
+					eyeWidthIn,
+					eyeHeightIn,
+					eyeWidthOut,
+					eyeHeightOut,
+					vendorColorOutput->resource.get(),
+					vendorColorOutput->uav.get(),
+					sourceSubresource,
+					&colorBox);
+			}
 		} catch (const std::exception& e) {
 			UnbindUpscalingResources();
 			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage foveated vendor dispatch"))
@@ -14946,7 +14957,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 			vendorParams.transparencyMask = vrIntermediateTransparencyMask[eyeIndex]->resource.get();
 			vendorParams.colorOut = vendorColorOutput->resource.get();
 			vendorParams.label = "submit-stage full-eye";
-			vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
+			{
+				CS_PROFILE_SCOPE("Upscaling::SubmitStageUpscale");
+				vendorSucceeded = DispatchVendorEyeRegion(upscaleMethod, vendorParams);
+			}
 		} catch (const std::exception& e) {
 			UnbindUpscalingResources();
 			if (MarkSubmitStageDeviceLostIfNeeded(e, "submit-stage full-eye vendor dispatch"))

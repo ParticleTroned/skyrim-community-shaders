@@ -65,19 +65,26 @@ namespace
 
 	struct FeatureCostSample
 	{
-		float gpuMsSum = 0.0f;
-		float cpuMsSum = 0.0f;
-		int gpuSamples = 0;
-		int cpuSamples = 0;
-		int validSamples = 0;
+		float frameMsSum = 0.0f;
+		float fpsSum = 0.0f;
+		float gameGpuMsSum = 0.0f;
+		float gameCpuMsSum = 0.0f;
+		int frameSamples = 0;
+		int fpsSamples = 0;
+		int gameGpuSamples = 0;
+		int gameCpuSamples = 0;
 	};
 
 	struct FeatureCostDelta
 	{
-		float gpuMs = 0.0f;
-		float cpuMs = 0.0f;
-		bool hasGpu = false;
-		bool hasCpu = false;
+		float frameMs = 0.0f;
+		float fpsCost = 0.0f;
+		float gameGpuMs = 0.0f;
+		float gameCpuMs = 0.0f;
+		bool hasFrame = false;
+		bool hasFps = false;
+		bool hasGameGpu = false;
+		bool hasGameCpu = false;
 	};
 
 	enum class FeatureCostMeasurementPhase
@@ -100,7 +107,6 @@ namespace
 		bool discardAfterRestore = false;
 		ULONGLONG menuCloseTick = 0;
 		double phaseStartTime = 0.0;
-		FeatureCostSample baselineSample;
 		FeatureCostSample currentSample;
 		FeatureCostSample testSample;
 		FeatureCostDelta delta;
@@ -180,81 +186,67 @@ namespace
 		return count > 0 ? sum / static_cast<float>(count) : 0.0f;
 	}
 
-	float AverageMeasuredOrBaseline(float measuredSum, int measuredCount, float baselineSum, int baselineCount)
-	{
-		if (measuredCount > 0)
-			return AverageOrZero(measuredSum, measuredCount);
-
-		return AverageOrZero(baselineSum, baselineCount);
-	}
-
-	bool HasBaselineOrMeasured(int baselineCount, int measuredCount)
-	{
-		return baselineCount > 0 || measuredCount > 0;
-	}
-
 	ProfilingRenderer::PerformanceTimingTotals GetTimingTotalsForFeature(
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		const std::string& shortName);
-
-	ProfilingRenderer::PerformanceTimingTotals GetPerformanceCostTotals(
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		const std::string& shortName,
-		bool useTotalWorkload);
+	std::vector<std::string> BuildProfilingPrefixesForFeature(const std::string& shortName);
 
 	void AddFeatureCostSample(
 		FeatureCostSample& sample,
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		Feature* feature)
+		const ProfilingRenderer::PerformanceTimingSummary& summary)
 	{
-		if (!summary.valid || !feature)
+		if (!summary.valid)
 			return;
 
-		const auto featureTotals = GetPerformanceCostTotals(
-			summary,
-			feature->GetShortName(),
-			feature->UsesTotalPerformanceCostMeasurement());
-		if (featureTotals.hasGpu) {
-			sample.gpuMsSum += featureTotals.gpuAvgMs;
-			sample.gpuSamples++;
+		if (summary.frameMs > 0.0f) {
+			sample.frameMsSum += summary.frameMs;
+			sample.frameSamples++;
 		}
-		if (featureTotals.hasCpu) {
-			sample.cpuMsSum += featureTotals.cpuAvgMs;
-			sample.cpuSamples++;
+		if (summary.fps > 0.0f) {
+			sample.fpsSum += summary.fps;
+			sample.fpsSamples++;
 		}
-		sample.validSamples++;
+		if (summary.hasGameGpu) {
+			sample.gameGpuMsSum += summary.gameGpuMs;
+			sample.gameGpuSamples++;
+		}
+		if (summary.hasGameCpu) {
+			sample.gameCpuMsSum += summary.gameCpuMs;
+			sample.gameCpuSamples++;
+		}
 	}
 
 	void FinalizeFeatureCostMeasurement(FeatureCostMeasurementState& state)
 	{
-		const float currentGpuMs = AverageMeasuredOrBaseline(
-			state.currentSample.gpuMsSum,
-			state.currentSample.gpuSamples,
-			state.baselineSample.gpuMsSum,
-			state.baselineSample.gpuSamples);
-		const float currentCpuMs = AverageMeasuredOrBaseline(
-			state.currentSample.cpuMsSum,
-			state.currentSample.cpuSamples,
-			state.baselineSample.cpuMsSum,
-			state.baselineSample.cpuSamples);
-		const float testGpuMs = AverageOrZero(state.testSample.gpuMsSum, state.testSample.gpuSamples);
-		const float testCpuMs = AverageOrZero(state.testSample.cpuMsSum, state.testSample.cpuSamples);
+		const float currentFrameMs = AverageOrZero(state.currentSample.frameMsSum, state.currentSample.frameSamples);
+		const float currentGameGpuMs = AverageOrZero(state.currentSample.gameGpuMsSum, state.currentSample.gameGpuSamples);
+		const float currentGameCpuMs = AverageOrZero(state.currentSample.gameCpuMsSum, state.currentSample.gameCpuSamples);
+		const float testFrameMs = AverageOrZero(state.testSample.frameMsSum, state.testSample.frameSamples);
+		const float testGameGpuMs = AverageOrZero(state.testSample.gameGpuMsSum, state.testSample.gameGpuSamples);
+		const float testGameCpuMs = AverageOrZero(state.testSample.gameCpuMsSum, state.testSample.gameCpuSamples);
+		const bool hasFrame = state.currentSample.frameSamples > 0 && state.testSample.frameSamples > 0;
+		const bool hasFps = hasFrame || (state.currentSample.fpsSamples > 0 && state.testSample.fpsSamples > 0);
+		const float currentFps = hasFrame && currentFrameMs > 0.0f ?
+		                             1000.0f / currentFrameMs :
+		                             AverageOrZero(state.currentSample.fpsSum, state.currentSample.fpsSamples);
+		const float testFps = hasFrame && testFrameMs > 0.0f ?
+		                          1000.0f / testFrameMs :
+		                          AverageOrZero(state.testSample.fpsSum, state.testSample.fpsSamples);
 
-		state.delta.gpuMs = currentGpuMs - testGpuMs;
-		state.delta.cpuMs = currentCpuMs - testCpuMs;
-		state.delta.hasGpu =
-			HasBaselineOrMeasured(state.baselineSample.gpuSamples, state.currentSample.gpuSamples) &&
-			state.testSample.validSamples > 0;
-		state.delta.hasCpu =
-			HasBaselineOrMeasured(state.baselineSample.cpuSamples, state.currentSample.cpuSamples) &&
-			state.testSample.validSamples > 0;
+		state.delta.frameMs = currentFrameMs - testFrameMs;
+		state.delta.fpsCost = testFps - currentFps;
+		state.delta.gameGpuMs = currentGameGpuMs - testGameGpuMs;
+		state.delta.gameCpuMs = currentGameCpuMs - testGameCpuMs;
+		state.delta.hasFrame = hasFrame;
+		state.delta.hasFps = hasFps;
+		state.delta.hasGameGpu = state.currentSample.gameGpuSamples > 0 && state.testSample.gameGpuSamples > 0;
+		state.delta.hasGameCpu = state.currentSample.gameCpuSamples > 0 && state.testSample.gameCpuSamples > 0;
 	}
 
 	void StartFeatureCostMeasurement(
 		Feature* feature,
 		FeatureCostMeasurementState& state,
-		double currentTime,
-		const ProfilingRenderer::PerformanceTimingSummary& baseline)
+		double currentTime)
 	{
 		if (!feature || !feature->SupportsPerformanceCostMeasurement())
 			return;
@@ -265,7 +257,6 @@ namespace
 			return;
 
 		state.testEnabled = false;
-		AddFeatureCostSample(state.baselineSample, baseline, feature);
 		state.phase = FeatureCostMeasurementPhase::MeasuringCurrent;
 		state.phaseStartTime = currentTime;
 	}
@@ -310,7 +301,7 @@ namespace
 		const double elapsed = currentTime - state.phaseStartTime;
 
 		if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent) {
-			AddFeatureCostSample(state.currentSample, current, feature);
+			AddFeatureCostSample(state.currentSample, current);
 			if (elapsed >= kFeatureCostMeasurementSeconds) {
 				if (feature->RequiresMenuCloseForPerformanceCostMeasurement(state.testEnabled)) {
 					state.phase = FeatureCostMeasurementPhase::AwaitingMenuClose;
@@ -325,7 +316,7 @@ namespace
 		}
 
 		if (state.phase == FeatureCostMeasurementPhase::MeasuringTest) {
-			AddFeatureCostSample(state.testSample, current, feature);
+			AddFeatureCostSample(state.testSample, current);
 			if (elapsed >= kFeatureCostMeasurementSeconds) {
 				FinalizeFeatureCostMeasurement(state);
 				if (feature->RequiresMenuCloseForPerformanceCostMeasurementRestore(state.originalState)) {
@@ -380,22 +371,14 @@ namespace
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		const TuningHighlightState& highlightState)
 	{
-		const bool hasProfilerGpuTotal = summary.gpuTotalMs > 0.0f;
-		const bool hasProfilerCpuTotal = summary.cpuTotalMs > 0.0f;
-		const auto fitToFrameTime = [&](float value) {
-			return summary.frameMs > 0.0f ? std::min(value, summary.frameMs) : value;
-		};
-		const float gpuMs = hasProfilerGpuTotal ? fitToFrameTime(summary.gpuTotalMs) : summary.frameMs;
-		const float cpuMs = hasProfilerCpuTotal ? fitToFrameTime(summary.cpuTotalMs) : summary.frameMs;
-
 		if (ImGui::BeginTable("##PerformanceTuningTopCounters", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
 			RenderMetricCounter("Game", "Game:", summary.frameMs, "%.2f ms", highlightState.frameDirection, summary.frameMs > 0.0f);
 			ImGui::TableNextColumn();
-			RenderMetricCounter("GPU", "GPU:", gpuMs, "%.2f ms", hasProfilerGpuTotal ? highlightState.gpuTotalDirection : highlightState.frameDirection, gpuMs > 0.0f);
+			RenderMetricCounter("GPU", "GPU:", summary.gameGpuMs, "%.2f ms", highlightState.gpuTotalDirection, summary.hasGameGpu);
 			ImGui::TableNextColumn();
-			RenderMetricCounter("CPU", "CPU:", cpuMs, "%.2f ms", hasProfilerCpuTotal ? highlightState.cpuTotalDirection : highlightState.frameDirection, cpuMs > 0.0f);
+			RenderMetricCounter("CPU", "CPU:", summary.gameCpuMs, "%.2f ms", highlightState.cpuTotalDirection, summary.hasGameCpu);
 			ImGui::TableNextColumn();
 			RenderMetricCounter("FPS", "FPS:", summary.fps, "%.0f", highlightState.fpsDirection, summary.fps > 0.0f);
 			ImGui::EndTable();
@@ -407,25 +390,16 @@ namespace
 		(void)state;
 
 		if (feature && feature->GetShortName() == "Upscaling")
-			return "Upscaling set to None";
+			return "None";
+		if (feature && feature->GetShortName() == "Skylighting")
+			return "fastest state";
 
-		return "the off state";
-	}
-
-	const char* GetFeatureCostGpuLabel(Feature* feature)
-	{
-		return feature && feature->UsesTotalPerformanceCostMeasurement() ? "GPU impact" : "GPU cost";
-	}
-
-	const char* GetFeatureCostCpuLabel(Feature* feature)
-	{
-		return feature && feature->UsesTotalPerformanceCostMeasurement() ? "CPU impact" : "CPU cost";
+		return "Off";
 	}
 
 	void RenderFeatureCostMeasurement(
 		Feature* feature,
-		FeatureCostMeasurementState& state,
-		const ProfilingRenderer::PerformanceTimingSummary& timingAtStart)
+		FeatureCostMeasurementState& state)
 	{
 		if (!feature)
 			return;
@@ -450,14 +424,12 @@ namespace
 			!anyMeasurementRunning;
 		ImGui::BeginDisabled(!canStartMeasurement);
 		if (ImGui::Button("Actual feature cost")) {
-			StartFeatureCostMeasurement(feature, state, ImGui::GetTime(), timingAtStart);
+			StartFeatureCostMeasurement(feature, state, ImGui::GetTime());
 		}
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(
-				"Measures the millisecond change between the current settings and the comparison state.");
-			if (feature->UsesTotalPerformanceCostMeasurement())
-				ImGui::TextUnformatted("This feature uses total profiled workload because its settings can change work in other passes.");
+				"Measures current settings against the comparison state using game timing.");
 		}
 		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
 			ImGui::SameLine();
@@ -519,39 +491,53 @@ namespace
 
 			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, kFeatureCostMeasurementSeconds);
 			ImGui::SameLine();
-			ImGui::TextDisabled(
-				"%s %.1f / %.1fs",
-				state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ?
-					"Measuring current" :
-					"Measuring off",
-				elapsed,
-				kFeatureCostMeasurementSeconds);
+			if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent) {
+				ImGui::TextDisabled("Measuring current %.1f / %.1fs", elapsed, kFeatureCostMeasurementSeconds);
+			} else {
+				ImGui::TextDisabled(
+					"Measuring %s %.1f / %.1fs",
+					GetFeatureCostComparisonLabel(feature, state),
+					elapsed,
+					kFeatureCostMeasurementSeconds);
+			}
 			return;
 		}
 
 		if (state.phase != FeatureCostMeasurementPhase::Complete)
 			return;
 
-		if (!state.delta.hasGpu && !state.delta.hasCpu) {
+		if (!state.delta.hasFrame && !state.delta.hasFps && !state.delta.hasGameGpu && !state.delta.hasGameCpu) {
 			ImGui::SameLine();
-			ImGui::TextDisabled("No feature timing data");
+			ImGui::TextDisabled("No game timing data");
 			return;
 		}
 
 		ImGui::Spacing();
-		ImGui::TextDisabled("Impact of current settings compared with %s", GetFeatureCostComparisonLabel(feature, state));
-		if (state.delta.hasGpu)
+		ImGui::TextDisabled("Current vs %s", GetFeatureCostComparisonLabel(feature, state));
+		if (state.delta.hasFrame)
 			RenderDeltaMetric(
-				GetFeatureCostGpuLabel(feature),
-				state.delta.gpuMs,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.gpuMs),
+				"Game",
+				state.delta.frameMs,
+				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.frameMs),
 				"%+.3f ms");
-		if (state.delta.hasCpu)
+		if (state.delta.hasGameGpu)
 			RenderDeltaMetric(
-				GetFeatureCostCpuLabel(feature),
-				state.delta.cpuMs,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.cpuMs),
+				"GPU",
+				state.delta.gameGpuMs,
+				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.gameGpuMs),
 				"%+.3f ms");
+		if (state.delta.hasGameCpu)
+			RenderDeltaMetric(
+				"CPU",
+				state.delta.gameCpuMs,
+				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.gameCpuMs),
+				"%+.3f ms");
+		if (state.delta.hasFps)
+			RenderDeltaMetric(
+				"FPS cost",
+				state.delta.fpsCost,
+				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.fpsCost),
+				"%+.1f");
 	}
 
 	int GetFeatureListDirection(const TuningHighlightState& state, const std::string& shortName)
@@ -650,26 +636,6 @@ namespace
 		return totals;
 	}
 
-	ProfilingRenderer::PerformanceTimingTotals GetPerformanceCostTotals(
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		const std::string& shortName,
-		bool useTotalWorkload)
-	{
-		if (!useTotalWorkload)
-			return GetTimingTotalsForFeature(summary, shortName);
-
-		ProfilingRenderer::PerformanceTimingTotals totals;
-		if (summary.gpuTotalMs > 0.0f) {
-			totals.gpuAvgMs = summary.gpuTotalMs;
-			totals.hasGpu = true;
-		}
-		if (summary.cpuTotalMs > 0.0f) {
-			totals.cpuAvgMs = summary.cpuTotalMs;
-			totals.hasCpu = true;
-		}
-		return totals;
-	}
-
 	Feature* FindSelectedFeature(const std::vector<Feature*>& features, std::string& selectedShortName)
 	{
 		if (features.empty()) {
@@ -741,10 +707,14 @@ namespace
 		if (!state.baseline.valid || !current.valid)
 			return;
 
-		state.gpuTotalDirection = GetDirectionFromFrameTimeDelta(current.gpuTotalMs - state.baseline.gpuTotalMs);
-		state.cpuTotalDirection = GetDirectionFromFrameTimeDelta(current.cpuTotalMs - state.baseline.cpuTotalMs);
-		state.frameDirection = GetDirectionFromFrameTimeDelta(current.frameMs - state.baseline.frameMs);
-		state.fpsDirection = state.frameDirection;
+		if (state.baseline.hasGameGpu && current.hasGameGpu)
+			state.gpuTotalDirection = GetDirectionFromFrameTimeDelta(current.gameGpuMs - state.baseline.gameGpuMs);
+		if (state.baseline.hasGameCpu && current.hasGameCpu)
+			state.cpuTotalDirection = GetDirectionFromFrameTimeDelta(current.gameCpuMs - state.baseline.gameCpuMs);
+		if (state.baseline.frameMs > 0.0f && current.frameMs > 0.0f) {
+			state.frameDirection = GetDirectionFromFrameTimeDelta(current.frameMs - state.baseline.frameMs);
+			state.fpsDirection = state.frameDirection;
+		}
 
 		for (auto* feature : features) {
 			if (!feature)
@@ -895,7 +865,7 @@ void PerformanceTuningRenderer::Render()
 				RegisterSettingsEdit(highlightState, timingBeforeSettings, frameCount);
 				ClearCompletedFeatureCostMeasurement(selectedCostState);
 			}
-			RenderFeatureCostMeasurement(selectedFeature, selectedCostState, timingBeforeSettings);
+			RenderFeatureCostMeasurement(selectedFeature, selectedCostState);
 		}
 		ImGui::EndChild();
 

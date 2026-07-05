@@ -38,8 +38,12 @@ public:
 	{
 		float gpuTotalMs = 0.0f;
 		float cpuTotalMs = 0.0f;
+		float gameGpuMs = 0.0f;
+		float gameCpuMs = 0.0f;
 		float frameMs = 0.0f;
 		float fps = 0.0f;
+		bool hasGameGpu = false;
+		bool hasGameCpu = false;
 		bool valid = false;
 		std::unordered_map<std::string, PerformanceTimingTotals> features;
 	};

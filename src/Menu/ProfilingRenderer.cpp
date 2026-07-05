@@ -11,6 +11,8 @@
 #include <unordered_map>
 
 #include "Globals.h"
+#include "RE/B/BSOpenVR.h"
+#include "RE/M/Misc.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -22,29 +24,154 @@ static constexpr float kFeatureGraphMinFrameTimeSec = 0.00001f;
 static constexpr float kTimingTableMetricColumnWidth = 55.0f;
 static constexpr float kTimingTablePercentColumnWidth = 45.0f;
 static constexpr float kStatsRefreshSeconds = 1.0f;
-static constexpr uint32_t kGameFrameTimingSamples = 60;
+static constexpr uint32_t kDisplayedRollingFrameCount = 60;
+
+static bool IsPositiveFinite(float value)
+{
+	return std::isfinite(value) && value > 0.0f;
+}
+
+struct TimingAverage
+{
+	void Push(float value)
+	{
+		if (!IsPositiveFinite(value))
+			return;
+
+		sum += value;
+		count++;
+	}
+
+	[[nodiscard]] bool HasSamples() const { return count > 0; }
+	[[nodiscard]] float Get() const { return HasSamples() ? sum / static_cast<float>(count) : 0.0f; }
+
+	float sum = 0.0f;
+	uint32_t count = 0;
+};
+
+struct RollingTimingAverage
+{
+	void Push(float value)
+	{
+		if (!IsPositiveFinite(value))
+			return;
+
+		samples[head] = value;
+		head = (head + 1) % kDisplayedRollingFrameCount;
+		count = std::min<uint32_t>(count + 1, kDisplayedRollingFrameCount);
+	}
+
+	[[nodiscard]] float Get() const
+	{
+		TimingAverage average;
+		for (uint32_t i = 0; i < count; ++i)
+			average.Push(samples[i]);
+
+		return average.Get();
+	}
+
+	std::array<float, kDisplayedRollingFrameCount> samples{};
+	uint32_t head = 0;
+	uint32_t count = 0;
+};
 
 static float GetAverageGameFrameMs()
 {
-	static std::array<float, kGameFrameTimingSamples> samples{};
-	static uint32_t head = 0;
-	static uint32_t count = 0;
+	static RollingTimingAverage frameMsAverage;
+	static uint32_t lastFrameCount = 0;
+	static LARGE_INTEGER frequency{};
+	static LARGE_INTEGER lastCounter{};
 
-	const float frameMs = ImGui::GetIO().DeltaTime * 1000.0f;
-	if (std::isfinite(frameMs) && frameMs > 0.0f) {
-		samples[head] = frameMs;
-		head = (head + 1) % kGameFrameTimingSamples;
-		count = std::min<uint32_t>(count + 1, kGameFrameTimingSamples);
+	const uint32_t frameCount = globals::state ? globals::state->frameCount : 0;
+	if (frameCount != 0 && frameCount != lastFrameCount) {
+		const bool consecutiveFrame = lastFrameCount != 0 && frameCount == lastFrameCount + 1;
+
+		if (frequency.QuadPart == 0)
+			QueryPerformanceFrequency(&frequency);
+
+		LARGE_INTEGER currentCounter{};
+		QueryPerformanceCounter(&currentCounter);
+
+		float presentFrameMs = 0.0f;
+		if (consecutiveFrame && frequency.QuadPart > 0 && lastCounter.QuadPart != 0) {
+			presentFrameMs = static_cast<float>(
+				static_cast<double>(currentCounter.QuadPart - lastCounter.QuadPart) * 1000.0 /
+				static_cast<double>(frequency.QuadPart));
+		}
+
+		const float engineFrameMs = RE::GetSecondsSinceLastFrame() * 1000.0f;
+		const bool hasEngineFrame = IsPositiveFinite(engineFrameMs);
+		const bool hasPresentFrame = IsPositiveFinite(presentFrameMs);
+		if (hasEngineFrame || hasPresentFrame) {
+			frameMsAverage.Push(
+				hasEngineFrame && hasPresentFrame ?
+					std::max(engineFrameMs, presentFrameMs) :
+					(hasEngineFrame ? engineFrameMs : presentFrameMs));
+		}
+
+		lastCounter = currentCounter;
+		lastFrameCount = frameCount;
 	}
 
-	if (count == 0)
-		return 0.0f;
+	return frameMsAverage.Get();
+}
 
-	float sum = 0.0f;
-	for (uint32_t i = 0; i < count; ++i)
-		sum += samples[i];
+static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
+{
+	if (!REL::Module::IsVR())
+		return;
 
-	return sum / static_cast<float>(count);
+	auto* openvr = RE::BSOpenVR::GetSingleton();
+	auto* compositor = openvr ? RE::BSOpenVR::GetIVRCompositor() : nullptr;
+	if (!compositor && openvr)
+		compositor = openvr->vrContext.vrCompositor;
+	if (!compositor)
+		return;
+
+	std::array<vr::Compositor_FrameTiming, kDisplayedRollingFrameCount> timings{};
+	for (auto& timing : timings)
+		timing.m_nSize = static_cast<uint32_t>(sizeof(timing));
+
+	uint32_t frameCount = std::min<uint32_t>(
+		compositor->GetFrameTimings(timings.data(), static_cast<uint32_t>(timings.size())),
+		static_cast<uint32_t>(timings.size()));
+	if (frameCount == 0) {
+		if (!compositor->GetFrameTiming(timings.data(), 0))
+			return;
+		frameCount = 1;
+	}
+
+	TimingAverage gpuAverage;
+	TimingAverage cpuAverage;
+	for (uint32_t i = 0; i < frameCount; ++i) {
+		const auto& timing = timings[i];
+		gpuAverage.Push(timing.m_flPreSubmitGpuMs);
+		cpuAverage.Push(timing.m_flNewFrameReadyMs - timing.m_flWaitGetPosesCalledMs);
+	}
+
+	if (gpuAverage.HasSamples()) {
+		summary.gameGpuMs = gpuAverage.Get();
+		summary.hasGameGpu = true;
+	}
+
+	if (cpuAverage.HasSamples()) {
+		summary.gameCpuMs = cpuAverage.Get();
+		summary.hasGameCpu = true;
+	}
+}
+
+static void NormalizeGameFrameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
+{
+	float frameMs = summary.frameMs;
+	if (summary.hasGameGpu)
+		frameMs = std::max(frameMs, summary.gameGpuMs);
+	if (summary.hasGameCpu)
+		frameMs = std::max(frameMs, summary.gameCpuMs);
+
+	if (IsPositiveFinite(frameMs)) {
+		summary.frameMs = frameMs;
+		summary.fps = 1000.0f / frameMs;
+	}
 }
 
 static void TextWithTuningDelta(int direction, const char* fmt, ...)
@@ -57,6 +184,13 @@ static void TextWithTuningDelta(int direction, const char* fmt, ...)
 		ImGui::TextColoredV(Util::Color::PerformanceDelta(direction), fmt, args);
 	}
 	va_end(args);
+}
+
+static void RenderFeatureTimingStats(float avgMs, float p95Ms, float p99Ms, int direction)
+{
+	TextWithTuningDelta(direction, "Avg %.3f ms", avgMs);
+	TextWithTuningDelta(direction, "P95 %.3f", p95Ms);
+	TextWithTuningDelta(direction, "P99 %.3f", p99Ms);
 }
 
 static int ScaleToUiInt(float value)
@@ -239,8 +373,6 @@ static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
 	return cpuMode ? result.hasCpu : result.hasGpu;
 }
 
-static constexpr uint32_t kDisplayedRollingFrameCount = 60;
-
 struct DisplayTimingStats
 {
 	float timeMs = 0.0f;
@@ -248,6 +380,25 @@ struct DisplayTimingStats
 	float p95Ms = 0.0f;
 	float p99Ms = 0.0f;
 };
+
+static uint32_t CollectDisplayTimingSamples(const Profiler::TimerResult& result, bool cpuMode, std::array<float, kDisplayedRollingFrameCount>& samples)
+{
+	samples.fill(0.0f);
+
+	const uint32_t historyCount = cpuMode ? result.cpuHistoryCount : result.historyCount;
+	const uint32_t sampleCount = std::min(historyCount, kDisplayedRollingFrameCount);
+	if (sampleCount == 0)
+		return 0;
+
+	const uint32_t firstSample = historyCount - sampleCount;
+	for (uint32_t i = 0; i < sampleCount; ++i) {
+		samples[i] = cpuMode ?
+		                 result.GetCpuHistorySample(firstSample + i) :
+		                 result.GetHistorySample(firstSample + i);
+	}
+
+	return sampleCount;
+}
 
 static float GetSortedPercentile(const std::array<float, kDisplayedRollingFrameCount>& samples, uint32_t sampleCount, float percentile)
 {
@@ -261,30 +412,15 @@ static float GetSortedPercentile(const std::array<float, kDisplayedRollingFrameC
 	return samples[lo] * (1.0f - frac) + samples[hi] * frac;
 }
 
-static DisplayTimingStats GetDisplayTimingStats(const Profiler::TimerResult& result, bool cpuMode)
+static DisplayTimingStats ComputeDisplayTimingStats(std::array<float, kDisplayedRollingFrameCount> samples, uint32_t sampleCount)
 {
-	DisplayTimingStats stats{
-		cpuMode ? result.cpuTimeMs : result.gpuTimeMs,
-		cpuMode ? result.cpuAvgMs : result.avgMs,
-		cpuMode ? result.cpuP95Ms : result.p95Ms,
-		cpuMode ? result.cpuP99Ms : result.p99Ms
-	};
-
-	const uint32_t historyCount = cpuMode ? result.cpuHistoryCount : result.historyCount;
-	const uint32_t sampleCount = std::min(historyCount, kDisplayedRollingFrameCount);
+	DisplayTimingStats stats;
 	if (sampleCount == 0)
 		return stats;
 
-	std::array<float, kDisplayedRollingFrameCount> samples{};
 	float sum = 0.0f;
-	const uint32_t firstSample = historyCount - sampleCount;
-	for (uint32_t i = 0; i < sampleCount; ++i) {
-		const float sample = cpuMode ?
-		                         result.GetCpuHistorySample(firstSample + i) :
-		                         result.GetHistorySample(firstSample + i);
-		samples[i] = sample;
-		sum += sample;
-	}
+	for (uint32_t i = 0; i < sampleCount; ++i)
+		sum += samples[i];
 
 	stats.avgMs = sum / static_cast<float>(sampleCount);
 	std::sort(samples.begin(), samples.begin() + sampleCount);
@@ -293,6 +429,47 @@ static DisplayTimingStats GetDisplayTimingStats(const Profiler::TimerResult& res
 	stats.timeMs = stats.avgMs;
 	return stats;
 }
+
+static bool TryGetDisplayTimingStats(const Profiler::TimerResult& result, bool cpuMode, DisplayTimingStats& stats)
+{
+	std::array<float, kDisplayedRollingFrameCount> samples{};
+	const uint32_t sampleCount = CollectDisplayTimingSamples(result, cpuMode, samples);
+	if (sampleCount == 0)
+		return false;
+
+	stats = ComputeDisplayTimingStats(samples, sampleCount);
+	return true;
+}
+
+struct DisplayTimingSampleAccumulator
+{
+	void Add(const std::array<float, kDisplayedRollingFrameCount>& sourceSamples, uint32_t sourceSampleCount)
+	{
+		if (sourceSampleCount == 0)
+			return;
+
+		sampleCount = std::max(sampleCount, sourceSampleCount);
+		const uint32_t sampleOffset = kDisplayedRollingFrameCount - sourceSampleCount;
+		for (uint32_t i = 0; i < sourceSampleCount; ++i)
+			samples[sampleOffset + i] += sourceSamples[i];
+	}
+
+	[[nodiscard]] DisplayTimingStats GetStats() const
+	{
+		if (sampleCount == 0)
+			return {};
+
+		std::array<float, kDisplayedRollingFrameCount> compactSamples{};
+		const uint32_t sampleOffset = kDisplayedRollingFrameCount - sampleCount;
+		for (uint32_t i = 0; i < sampleCount; ++i)
+			compactSamples[i] = samples[sampleOffset + i];
+
+		return ComputeDisplayTimingStats(compactSamples, sampleCount);
+	}
+
+	std::array<float, kDisplayedRollingFrameCount> samples{};
+	uint32_t sampleCount = 0;
+};
 
 static float GetTextColumnWidth(const char* header, const std::vector<std::string>& labels, float extraWidth = 0.0f)
 {
@@ -392,7 +569,12 @@ void ProfilingRenderer::RenderGraph()
 		if (!result.valid || !HasTimingMode(result, cpuMode))
 			continue;
 
-		const auto stats = GetDisplayTimingStats(result, cpuMode);
+		std::array<float, kDisplayedRollingFrameCount> samples{};
+		const uint32_t sampleCount = CollectDisplayTimingSamples(result, cpuMode, samples);
+		if (sampleCount == 0)
+			continue;
+
+		const auto stats = ComputeDisplayTimingStats(samples, sampleCount);
 		float timeMs = stats.timeMs;
 
 		std::string groupName;
@@ -442,6 +624,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	const auto& results = globals::profiler->GetResults();
 
 	FeatureTimingData data;
+	DisplayTimingSampleAccumulator totalSamples;
 	const bool compactLabel = featurePrefixes.size() == 1;
 	for (const auto& r : results) {
 		if (!r.valid || !HasTimingMode(r, cpuMode))
@@ -455,19 +638,31 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 		if (label.empty())
 			continue;
 
-		const auto stats = GetDisplayTimingStats(r, cpuMode);
+		std::array<float, kDisplayedRollingFrameCount> samples{};
+		const uint32_t sampleCount = CollectDisplayTimingSamples(r, cpuMode, samples);
+		if (sampleCount == 0)
+			continue;
+
+		const auto stats = ComputeDisplayTimingStats(samples, sampleCount);
 		float timeMs = stats.timeMs;
 		float avg = stats.avgMs;
 		float p95 = stats.p95Ms;
 		float p99 = stats.p99Ms;
 		data.entries.push_back({ label, r.name, timeMs, avg, p95, p99 });
-		data.totalAvg += avg;
-		data.totalP95 += p95;
-		data.totalP99 += p99;
 		data.maxAvg = std::max(data.maxAvg, avg);
 		data.maxP95 = std::max(data.maxP95, p95);
 		data.maxP99 = std::max(data.maxP99, p99);
+		totalSamples.Add(samples, sampleCount);
 	}
+
+	const auto totalStats = totalSamples.GetStats();
+	data.totalAvg = totalStats.avgMs;
+	data.totalP95 = totalStats.p95Ms;
+	data.totalP99 = totalStats.p99Ms;
+
+	data.maxAvg = std::max(data.maxAvg, data.totalAvg);
+	data.maxP95 = std::max(data.maxP95, data.totalP95);
+	data.maxP99 = std::max(data.maxP99, data.totalP99);
 
 	return data;
 }
@@ -686,19 +881,23 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		cachedMaxP95Ms = 0.0f;
 		cachedMaxP99Ms = 0.0f;
 		std::unordered_map<std::string, size_t> groupIndex;
+		std::unordered_map<std::string, DisplayTimingSampleAccumulator> groupSampleTotals;
+		DisplayTimingSampleAccumulator totalSamples;
 
 		for (const auto& result : profiler.GetResults()) {
 			if (!result.valid || !HasTimingMode(result, cpuMode))
 				continue;
 
-			const auto stats = GetDisplayTimingStats(result, cpuMode);
+			std::array<float, kDisplayedRollingFrameCount> samples{};
+			const uint32_t sampleCount = CollectDisplayTimingSamples(result, cpuMode, samples);
+			if (sampleCount == 0)
+				continue;
+
+			const auto stats = ComputeDisplayTimingStats(samples, sampleCount);
 			float avg = stats.avgMs;
 			float p95 = stats.p95Ms;
 			float p99 = stats.p99Ms;
-
-			cachedTotalAvgMs += avg;
-			cachedTotalP95Ms += p95;
-			cachedTotalP99Ms += p99;
+			totalSamples.Add(samples, sampleCount);
 
 			auto pos = result.name.find("::");
 			if (pos != std::string::npos) {
@@ -712,17 +911,29 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 				}
 
 				auto& group = cachedGroups[groupIndex[groupName]];
-				group.totalAvgMs += avg;
-				group.totalP95Ms += p95;
-				group.totalP99Ms += p99;
 				group.passes.push_back({ passLabel, avg, p95, p99 });
+				groupSampleTotals[groupName].Add(samples, sampleCount);
 			} else {
 				groupIndex[result.name] = cachedGroups.size();
 				cachedGroups.push_back({ result.name, avg, p95, p99 });
 			}
 		}
 
-		for (const auto& group : cachedGroups) {
+		const auto totalStats = totalSamples.GetStats();
+		cachedTotalAvgMs = totalStats.avgMs;
+		cachedTotalP95Ms = totalStats.p95Ms;
+		cachedTotalP99Ms = totalStats.p99Ms;
+
+		for (auto& group : cachedGroups) {
+			if (!group.passes.empty()) {
+				if (auto it = groupSampleTotals.find(group.name); it != groupSampleTotals.end()) {
+					const auto groupStats = it->second.GetStats();
+					group.totalAvgMs = groupStats.avgMs;
+					group.totalP95Ms = groupStats.p95Ms;
+					group.totalP99Ms = groupStats.p99Ms;
+				}
+			}
+
 			cachedMaxAvgMs = std::max(cachedMaxAvgMs, group.totalAvgMs);
 			cachedMaxP95Ms = std::max(cachedMaxP95Ms, group.totalP95Ms);
 			cachedMaxP99Ms = std::max(cachedMaxP99Ms, group.totalP99Ms);
@@ -911,30 +1122,36 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 		auto& bucket = timingBuckets[rootName];
 		const bool rootTimer = result.name == rootName;
 		if (HasTimingMode(result, false)) {
-			const float avgMs = GetDisplayTimingStats(result, false).avgMs;
-			if (rootTimer) {
-				bucket.gpuExactMs += avgMs;
-				bucket.hasGpuExact = true;
-			} else {
-				bucket.gpuChildMs += avgMs;
-				bucket.hasGpuChild = true;
+			DisplayTimingStats stats;
+			if (TryGetDisplayTimingStats(result, false, stats)) {
+				if (rootTimer) {
+					bucket.gpuExactMs += stats.avgMs;
+					bucket.hasGpuExact = true;
+				} else {
+					bucket.gpuChildMs += stats.avgMs;
+					bucket.hasGpuChild = true;
+				}
 			}
 		}
 
 		if (HasTimingMode(result, true)) {
-			const float avgMs = GetDisplayTimingStats(result, true).avgMs;
-			if (rootTimer) {
-				bucket.cpuExactMs += avgMs;
-				bucket.hasCpuExact = true;
-			} else {
-				bucket.cpuChildMs += avgMs;
-				bucket.hasCpuChild = true;
+			DisplayTimingStats stats;
+			if (TryGetDisplayTimingStats(result, true, stats)) {
+				if (rootTimer) {
+					bucket.cpuExactMs += stats.avgMs;
+					bucket.hasCpuExact = true;
+				} else {
+					bucket.cpuChildMs += stats.avgMs;
+					bucket.hasCpuChild = true;
+				}
 			}
 		}
 	}
 
 	summary.frameMs = GetAverageGameFrameMs();
 	summary.fps = summary.frameMs > 0.0f ? 1000.0f / summary.frameMs : 0.0f;
+	CaptureOpenVRGameTiming(summary);
+	NormalizeGameFrameTiming(summary);
 	for (const auto& [rootName, bucket] : timingBuckets) {
 		const float gpuMs = bucket.hasGpuExact ? bucket.gpuExactMs : bucket.gpuChildMs;
 		const float cpuMs = bucket.hasCpuExact ? bucket.cpuExactMs : bucket.cpuChildMs;
@@ -962,7 +1179,12 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 			break;
 		}
 	}
-	summary.valid = summary.frameMs > 0.0f || summary.gpuTotalMs > 0.0f || summary.cpuTotalMs > 0.0f;
+	summary.valid =
+		summary.frameMs > 0.0f ||
+		summary.hasGameGpu ||
+		summary.hasGameCpu ||
+		summary.gpuTotalMs > 0.0f ||
+		summary.cpuTotalMs > 0.0f;
 	return summary;
 }
 
@@ -1006,7 +1228,7 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(
 	ImGui::TextUnformatted("GPU");
 	ImGui::PushID("PerformanceSummaryGPU");
 	if (RenderFeatureTimingGraph(featurePrefixes.front(), gpuData, graphState.gpuGraph, 82)) {
-		TextWithTuningDelta(highlight ? highlight->featureGpuDirection : 0, "Avg %.3f ms  P95 %.3f  P99 %.3f", gpuData.totalAvg, gpuData.totalP95, gpuData.totalP99);
+		RenderFeatureTimingStats(gpuData.totalAvg, gpuData.totalP95, gpuData.totalP99, highlight ? highlight->featureGpuDirection : 0);
 	} else {
 		ImGui::TextDisabled("No GPU timing data");
 	}
@@ -1016,7 +1238,7 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(
 	ImGui::TextUnformatted("CPU");
 	ImGui::PushID("PerformanceSummaryCPU");
 	if (RenderFeatureTimingGraph(featurePrefixes.front(), cpuData, graphState.cpuGraph, 82)) {
-		TextWithTuningDelta(highlight ? highlight->featureCpuDirection : 0, "Avg %.3f ms  P95 %.3f  P99 %.3f", cpuData.totalAvg, cpuData.totalP95, cpuData.totalP99);
+		RenderFeatureTimingStats(cpuData.totalAvg, cpuData.totalP95, cpuData.totalP99, highlight ? highlight->featureCpuDirection : 0);
 	} else {
 		ImGui::TextDisabled("No CPU timing data");
 	}

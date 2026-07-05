@@ -7199,14 +7199,18 @@ void Upscaling::ScheduleVRIntermediateTextureCleanup()
 void Upscaling::ServiceVRIntermediateTextureCleanup()
 {
 	const bool reliefActive = IsVRRenderScaleMemoryReliefActive();
-	if (deferredVRIntermediateTextureCleanupFrame == 0 && (!reliefActive || retiredVRIntermediateTextures.empty()))
+	const bool lowPeakNativeRestoreActive = vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire);
+	const bool forceFenceCleanup = reliefActive || lowPeakNativeRestoreActive;
+	if (deferredVRIntermediateTextureCleanupFrame == 0 && (!forceFenceCleanup || retiredVRIntermediateTextures.empty()))
 		return;
 
 	const uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
-	if (reliefActive && !retiredVRIntermediateTextures.empty()) {
+	if (forceFenceCleanup && !retiredVRIntermediateTextures.empty()) {
 		const auto fenceResult = BeginOrPollVRIntermediateCleanupFence(
 			vrIntermediateTextureCleanupFence,
-			"VR render-scale memory relief intermediate cleanup");
+			lowPeakNativeRestoreActive ?
+				"VR full-resolution restore intermediate cleanup" :
+				"VR render-scale memory relief intermediate cleanup");
 		if (fenceResult == VRIntermediateCleanupFenceResult::Pending) {
 			deferredVRIntermediateTextureCleanupFrame = currentFrame + 1u;
 			return;
@@ -7215,7 +7219,12 @@ void Upscaling::ServiceVRIntermediateTextureCleanup()
 		if (fenceResult == VRIntermediateCleanupFenceResult::Ready) {
 			retiredVRIntermediateTextures.clear();
 			deferredVRIntermediateTextureCleanupFrame = 0;
-			if ((vrRenderScaleMemoryReliefCleanEyeMask.load(std::memory_order_acquire) & kVRRenderScaleMemoryReliefCleanEyeMask) == kVRRenderScaleMemoryReliefCleanEyeMask) {
+			if (lowPeakNativeRestoreActive) {
+				vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
+				logger::debug("[VRRenderScale] Cleared retired intermediates before full-resolution render-scale-off restore.");
+			}
+			if (reliefActive &&
+				(vrRenderScaleMemoryReliefCleanEyeMask.load(std::memory_order_acquire) & kVRRenderScaleMemoryReliefCleanEyeMask) == kVRRenderScaleMemoryReliefCleanEyeMask) {
 				ClearVRRenderScaleMemoryRelief();
 				logger::debug("[VRRenderScale] Cleared memory relief after retired intermediate cleanup and clean full-eye evaluation.");
 			}
@@ -7389,6 +7398,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 		pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
 		pendingVRRenderScaleRecoverySnapshot = {};
+		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 		ClearVRRenderScaleInfoTransition();
 		ClearVRFSRRelatchDrainGuard();
 		return true;
@@ -7639,6 +7649,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	if (shouldSkipNoOpRelatch()) {
 		if (ClampToggleUInt(settings.perfMode) == 0)
 			settings.perfMode = 1;
+		vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 		clearRelatchDelay();
 		clearRelatchRetryLogs();
 		logger::debug("[VRRenderScale] Skipped render-target relatch; current render-scale target is already active.");
@@ -7682,14 +7693,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			previousBootSnapshot.valid &&
 			previousBootSnapshot.active &&
 			previousBootSnapshot.method == UpscaleMethod::kDLSS;
-		const bool preserveDLSSResourcesForRelatch =
-			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
-			previousBootWasActiveDLSS &&
-			!pendingDLSSResetForRelatch;
-		const bool destroyDLSSResourcesForRelatch =
-			pendingDLSSResetForRelatch ||
-			(!preserveDLSSResourcesForRelatch &&
-				(relatchUpscaleMethod == UpscaleMethod::kDLSS || previousBootWasActiveDLSS));
+		const bool previousBootWasActiveVendorRenderScale =
+			previousBootSnapshot.valid &&
+			previousBootSnapshot.active &&
+			previousBootSnapshot.renderScaleEnabled &&
+			previousBootSnapshot.perfModeEnabled &&
+			IsVendorUpscalingMethod(previousBootSnapshot.method);
 		const uint32_t relatchQualityMode = ClampQualityModeUInt(relatchSettings.qualityMode);
 		const bool relatchTargetRenderScaleActive = authoritativeRelatchActivationTarget;
 		const float relatchRenderScale = relatchTargetRenderScaleActive ? GetQualityModeResolutionScale(relatchQualityMode) : 1.0f;
@@ -7729,6 +7738,19 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!AreVRRenderScaleRenderTargetsSizedForDimensions(
 				relatchTargetRenderScaleActive ? plannedRelatchEngineSize : plannedRelatchDisplaySize,
 				plannedRelatchDisplaySize);
+		const bool lowPeakNativeRestoreRelatch =
+			plannedRelatchWillResizeRenderTargets &&
+			previousBootWasActiveVendorRenderScale &&
+			!relatchTargetRenderScaleActive;
+		const bool preserveDLSSResourcesForRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
+			previousBootWasActiveDLSS &&
+			!pendingDLSSResetForRelatch &&
+			!lowPeakNativeRestoreRelatch;
+		const bool destroyDLSSResourcesForRelatch =
+			pendingDLSSResetForRelatch ||
+			(!preserveDLSSResourcesForRelatch &&
+				(relatchUpscaleMethod == UpscaleMethod::kDLSS || previousBootWasActiveDLSS));
 		VRRenderScaleRelatchSignature relatchSignature{};
 		relatchSignature.valid = true;
 		relatchSignature.method = relatchUpscaleMethod;
@@ -7802,11 +7824,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} preserveDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} preserveDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
 				BoolText(amdAdapterForRelatch),
+				BoolText(lowPeakNativeRestoreRelatch),
 				BoolText(preserveDLSSResourcesForRelatch),
 				BoolText(destroyDLSSResourcesForRelatch),
 				BoolText(forceFSRResourceRecreateForRelatch),
@@ -7850,6 +7873,45 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			return false;
 		};
 		static bool loggedRapidAmdFsrRuntimeDrainDefer = false;
+		static bool loggedLowPeakNativeRestoreCleanupDefer = false;
+		const auto markLowPeakNativeRestoreVendorDirty = [&]() {
+			if (!lowPeakNativeRestoreRelatch)
+				return;
+
+			switch (previousBootSnapshot.method) {
+			case UpscaleMethod::kDLSS:
+				if (destroyDLSSResourcesForRelatch)
+					MarkVendorRuntimeResourcesDirty(UpscaleMethod::kDLSS, relatchContractGeneration);
+				break;
+			case UpscaleMethod::kFSR:
+				if (!preserveFSRResourcesForRelatch)
+					MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
+				break;
+			default:
+				break;
+			}
+		};
+		const auto deferForLowPeakNativeRestoreCleanup = [&]() {
+			if (!vrLowPeakNativeRestoreCleanupActive.load(std::memory_order_acquire))
+				return false;
+
+			ServiceVRIntermediateTextureCleanup();
+			if (HasPendingVRIntermediateTextureCleanup()) {
+				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+				if (!loggedLowPeakNativeRestoreCleanupDefer) {
+					logger::debug(
+						"[VRRenderScale] Render-target relatch waiting for retired intermediates to drain before full-resolution render-scale-off restore. method={} frame={}",
+						magic_enum::enum_name(relatchUpscaleMethod),
+						state->frameCount);
+					loggedLowPeakNativeRestoreCleanupDefer = true;
+				}
+				return true;
+			}
+
+			vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
+			loggedLowPeakNativeRestoreCleanupDefer = false;
+			return false;
+		};
 		bool fsrTeardownReadyForRelatch = false;
 		const bool drainFSRResourcesBeforeRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
@@ -7883,6 +7945,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		if (hasSupersedingRapidAmdFsrTransition())
 			return deferSupersededRapidAmdFsrRelatch("FSR drain", false);
+		if (deferForLowPeakNativeRestoreCleanup())
+			return false;
 		if (!ResetVRVendorRuntimeResources(
 				destroyDLSSResourcesForRelatch,
 				true,
@@ -7905,6 +7969,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				loggedRelatchVendorDefer = true;
 			}
 			return false;
+		}
+		if (lowPeakNativeRestoreRelatch) {
+			markLowPeakNativeRestoreVendorDirty();
+			vrLowPeakNativeRestoreCleanupActive.store(true, std::memory_order_release);
+			if (deferForLowPeakNativeRestoreCleanup())
+				return false;
 		}
 		if (rapidAmdFsrLowPeakRelatch &&
 			preserveFSRResourcesForRelatch &&
@@ -7953,7 +8023,9 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				ClampPositiveDimension(relatchTargetDisplaySize.x),
 				ClampPositiveDimension(relatchTargetDisplaySize.y));
 		} else {
-			const bool releasedDeferredTargetsForRelief = memoryReliefActiveForRelatch && globals::deferred;
+			const bool releasedDeferredTargetsForRelief =
+				(memoryReliefActiveForRelatch || lowPeakNativeRestoreRelatch) &&
+				globals::deferred;
 			if (releasedDeferredTargetsForRelief)
 				globals::deferred->ReleaseRenderTargets();
 			if (!Hooks::RecreateRenderTargetsForVRRenderScale()) {
@@ -8049,6 +8121,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			                                 kVRRenderScaleRelatchBusyRetryFrames;
 			requeueRelatch(retryFrames);
 		} else {
+			vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 			clearRelatchDelay();
 			clearRelatchRetryLogs();
 		}
@@ -8063,6 +8136,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		if (!MarkSubmitStageDeviceLostIfDeviceRemoved("render-target relatch")) {
 			requeueRelatch(kVRRenderScaleRelatchBusyRetryFrames);
 		} else {
+			vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 			clearRelatchDelay();
 			clearRelatchRetryLogs();
 		}
@@ -8071,6 +8145,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	}
 
 	vrRenderScaleResourceTrackingSyncPending.store(true, std::memory_order_release);
+	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	ClearVRFSRRelatchDrainGuard();
 	ClearSubmitStageBoundsFallbackWatchdog();
 	ClearSubmitStageFoveatedVendorRetryBackoff();
@@ -8397,11 +8472,16 @@ bool Upscaling::IsVRRenderScaleMemoryReliefActive()
 	return true;
 }
 
-bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
+bool Upscaling::HasPendingVRIntermediateTextureCleanup() const
 {
 	return !retiredVRIntermediateTextures.empty() ||
 	       deferredVRIntermediateTextureCleanupFrame != 0 ||
 	       vrIntermediateTextureCleanupFence.get() != nullptr;
+}
+
+bool Upscaling::HasVRRenderScaleMemoryReliefCleanupPending() const
+{
+	return HasPendingVRIntermediateTextureCleanup();
 }
 
 void Upscaling::ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason)
@@ -14111,6 +14191,7 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	pendingVRRenderScaleRecoverySnapshot = {};
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
 	vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
+	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
 	ClearVRRenderScaleInfoTransition();
 	ClearPendingVRUpscalingTransition();
 	streamline.ResetDLSSIdleFences();

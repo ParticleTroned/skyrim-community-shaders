@@ -892,6 +892,7 @@ public:
 	std::atomic<uint32_t> vrRenderScaleMemoryReliefEndFrame{ 0 };
 	std::atomic<uint32_t> vrRenderScaleMemoryReliefCleanEyeMask{ 0 };
 	std::atomic_bool vrRenderScaleMemoryReliefLogged{ false };
+	std::atomic_bool vrLowPeakNativeRestoreCleanupActive{ false };
 	VRRenderScaleRelatchSignature vrRenderScaleLastRapidRelatchSignature{};
 	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipFrame{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipCount{ 0 };
@@ -919,6 +920,7 @@ public:
 	void RecordVRRenderScaleRelatch(const VRRenderScaleRelatchSignature& a_signature, bool a_previousActive, UpscaleMethod a_previousMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	void MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSignature& a_signature, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	bool IsVRRenderScaleMemoryReliefActive();
+	bool HasPendingVRIntermediateTextureCleanup() const;
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);

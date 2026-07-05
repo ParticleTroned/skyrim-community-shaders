@@ -565,6 +565,14 @@ void TerrainBlending::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	settings.Enabled = 0u;
 }
 
+double TerrainBlending::GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
+{
+	if (!a_targetEnabled)
+		return 3.0;
+
+	return Feature::GetPerformanceCostMeasurementSettleSeconds(a_targetEnabled);
+}
+
 json TerrainBlending::CapturePerformanceCostMeasurementState() const
 {
 	return settings;

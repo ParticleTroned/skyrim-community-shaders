@@ -2043,6 +2043,18 @@ namespace
 		std::string configPath;
 	};
 
+	bool IsOpenCompositeExternalUpscalerActive(const Util::OCUExternalUpscalerState& a_state)
+	{
+		constexpr float kNativeRenderScaleEpsilon = 0.001f;
+		const bool externalMethodSelected = a_state.method != 0;
+		const bool externalRenderScaleActive =
+			std::isfinite(a_state.renderScale) &&
+			a_state.renderScale > 0.0f &&
+			std::abs(a_state.renderScale - 1.0f) > kNativeRenderScaleEpsilon;
+
+		return externalMethodSelected || externalRenderScaleActive;
+	}
+
 	std::string_view TrimAsciiWhitespace(std::string_view value)
 	{
 		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
@@ -2232,7 +2244,8 @@ namespace
 			return blocker;
 
 		Util::OCUExternalUpscalerState externalState{};
-		if (Util::TryReadOCUExternalUpscalerState(externalState)) {
+		if (Util::TryReadOCUExternalUpscalerState(externalState) &&
+			IsOpenCompositeExternalUpscalerActive(externalState)) {
 			blocker.active = true;
 			blocker.settingName = "OpenCompositeUnleashedSharedState";
 			blocker.configPath = "Local\\OpenCompositeUnleashedUpscalingState";

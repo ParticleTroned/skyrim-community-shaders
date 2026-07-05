@@ -4,17 +4,23 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "Feature.h"
+#include "Features/VR.h"
 #include "Globals.h"
+#include "Menu.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Profiler.h"
+#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
 namespace
@@ -22,10 +28,10 @@ namespace
 	constexpr float kTuningDeltaThresholdMs = 0.099f;
 	constexpr int kTuningSettleFrames = 20;
 	constexpr int kTuningHighlightFrames = 240;
-	constexpr double kFeatureCostMeasurementSeconds = 5.0;
+	constexpr double kFeatureCostMeasurementSeconds = 3.0;
 	constexpr float kFeatureCostDisplayEpsilonMs = 0.0005f;
 
-	constexpr std::array<std::string_view, 15> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 14> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"ScreenSpaceShadows",
@@ -38,7 +44,6 @@ namespace
 		"VolumetricLighting",
 		"UnifiedWater",
 		"Wetterness",
-		"WetnessEffects",
 		"SubsurfaceScattering",
 		"GrassCollision"
 	};
@@ -79,7 +84,7 @@ namespace
 	struct FeatureCostDelta
 	{
 		float frameMs = 0.0f;
-		float fpsCost = 0.0f;
+		float fpsDelta = 0.0f;
 		float gameGpuMs = 0.0f;
 		float gameCpuMs = 0.0f;
 		bool hasFrame = false;
@@ -94,9 +99,18 @@ namespace
 		MeasuringCurrent,
 		AwaitingMenuClose,
 		AwaitingContinue,
+		SettlingTest,
 		MeasuringTest,
 		AwaitingRestoreMenuClose,
 		Complete
+	};
+
+	enum class PerformanceUserDefaultsRestoreResult
+	{
+		Failed,
+		Missing,
+		Unchanged,
+		Restored
 	};
 
 	struct FeatureCostMeasurementState
@@ -116,6 +130,7 @@ namespace
 	static std::unordered_map<std::string, FeatureCostMeasurementState> g_costMeasurementStates;
 	static bool g_profilerStateCaptured = false;
 	static bool g_profilerWasUserEnabled = false;
+	static std::unordered_map<std::string, std::string> g_performanceDefaultsMessages;
 
 	void CaptureProfilerStateForPerformanceTuning()
 	{
@@ -154,9 +169,18 @@ namespace
 		return deltaMs > 0.0f ? 1 : -1;
 	}
 
+	int GetDirectionFromFeatureCostFpsDelta(float deltaFps)
+	{
+		if (std::abs(deltaFps) <= kFeatureCostDisplayEpsilonMs)
+			return 0;
+
+		return deltaFps > 0.0f ? -1 : 1;
+	}
+
 	bool IsFeatureCostMeasurementRunning(const FeatureCostMeasurementState& state)
 	{
 		return state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
+		       state.phase == FeatureCostMeasurementPhase::SettlingTest ||
 		       state.phase == FeatureCostMeasurementPhase::MeasuringTest;
 	}
 
@@ -192,14 +216,10 @@ namespace
 		return std::isfinite(value) && value > 0.0f;
 	}
 
-	bool TryGetDisplayTimingMs(bool hasGameTiming, float gameTimingMs, float profilerTotalMs, float& value)
+	bool TryGetDisplayTimingMs(bool hasGameTiming, float gameTimingMs, float& value)
 	{
 		if (hasGameTiming && IsPositiveFiniteTiming(gameTimingMs)) {
 			value = gameTimingMs;
-			return true;
-		}
-		if (IsPositiveFiniteTiming(profilerTotalMs)) {
-			value = profilerTotalMs;
 			return true;
 		}
 		return false;
@@ -207,18 +227,383 @@ namespace
 
 	bool TryGetDisplayGpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
 	{
-		return TryGetDisplayTimingMs(summary.hasGameGpu, summary.gameGpuMs, summary.gpuTotalMs, value);
+		return TryGetDisplayTimingMs(summary.hasGameGpu, summary.gameGpuMs, value);
 	}
 
 	bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
 	{
-		return TryGetDisplayTimingMs(summary.hasGameCpu, summary.gameCpuMs, summary.cpuTotalMs, value);
+		return TryGetDisplayTimingMs(summary.hasGameCpu, summary.gameCpuMs, value);
 	}
 
 	ProfilingRenderer::PerformanceTimingTotals GetTimingTotalsForFeature(
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		const std::string& shortName);
 	std::vector<std::string> BuildProfilingPrefixesForFeature(const std::string& shortName);
+
+	json MakeJsonMask(std::initializer_list<std::string_view> keys)
+	{
+		json mask = json::object();
+		for (const auto key : keys) {
+			mask[std::string(key)] = true;
+		}
+		return mask;
+	}
+
+	Feature* FindFeatureByShortName(std::string_view shortName)
+	{
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!feature)
+				continue;
+
+			const auto featureShortName = feature->GetShortName();
+			if (std::string_view(featureShortName) == shortName)
+				return feature;
+		}
+
+		return nullptr;
+	}
+
+	json GetPerformanceUserSettingsMask(Feature* feature, const json& currentSettings)
+	{
+		if (!feature)
+			return json::object();
+
+		const auto shortName = feature->GetShortName();
+		if (shortName == "DynamicCubemaps") {
+			return MakeJsonMask({ "EnabledSSR" });
+		}
+		if (shortName == "ScreenSpaceShadows") {
+			return MakeJsonMask({ "Enable",
+				"SampleCount",
+				"VRBaseSamplesAtReference",
+				"VRCullDistance",
+				"EnableFoveated",
+				"EnableStereoSync" });
+		}
+		if (shortName == "ScreenSpaceGI") {
+			return MakeJsonMask({ "Enabled",
+				"ResourceProfile",
+				"AOInteriorsOnly",
+				"VRCullDistance",
+				"EnableAdaptiveSampling",
+				"ResolutionMode",
+				"EnableFoveated",
+				"EnableStereoSync",
+				"NumSlices",
+				"NumSteps" });
+		}
+		if (shortName == "TerrainBlending") {
+			return MakeJsonMask({ "Enabled", "TerrainCullDistance" });
+		}
+		if (shortName == "SubsurfaceScattering") {
+			return MakeJsonMask({ "EnableSubsurfaceScattering", "SSMode", "BurleySamples" });
+		}
+		if (shortName == "VolumetricLighting") {
+			return MakeJsonMask({ "ExteriorEnabled",
+				"ExteriorQuality",
+				"ExteriorCustomSize",
+				"InteriorEnabled",
+				"InteriorQuality",
+				"InteriorCustomSize",
+				"DisableWeatherInteractionDuringRain" });
+		}
+		if (shortName == "VR") {
+			return MakeJsonMask({ "EnableDepthBufferCullingExterior",
+				"EnableDepthBufferCullingInterior",
+				"MinOccludeeBoxExtent",
+				"EnableStereoBlend",
+				"EnableLightingFoveation",
+				"EnableSSRFoveation",
+				"EnableWaterParallaxFoveation",
+				"EnableWetternessFoveation",
+				"EnableDynamicCubemapFoveation",
+				"EnableDynamicCubemapVisibilityThrottle" });
+		}
+		if (shortName == "Wetterness") {
+			json mask = currentSettings.is_object() ? currentSettings : json::object();
+			mask.erase("DebugSettings");
+			return mask;
+		}
+
+		const json mask = feature->CapturePerformanceSettingsState();
+		if (!mask.is_object() && currentSettings.is_object())
+			return currentSettings;
+
+		return mask;
+	}
+
+	bool ReadUserSettingsJson(json& settings)
+	{
+		settings = json::object();
+
+		const auto path = Util::PathHelpers::GetSettingsUserPath();
+		std::ifstream input(path);
+		if (!input.is_open())
+			return true;
+
+		try {
+			input >> settings;
+			if (!settings.is_object())
+				settings = json::object();
+			return true;
+		} catch (const std::exception& e) {
+			logger::warn("Failed to read performance tuning user defaults from {}: {}", path.string(), e.what());
+			settings = json::object();
+			return false;
+		}
+	}
+
+	bool WriteUserSettingsJson(const json& settings)
+	{
+		const auto path = Util::PathHelpers::GetSettingsUserPath();
+		try {
+			std::filesystem::create_directories(path.parent_path());
+		} catch (const std::exception& e) {
+			logger::warn("Failed to create settings directory for {}: {}", path.string(), e.what());
+			return false;
+		}
+
+		std::ofstream output(path);
+		if (!output.is_open()) {
+			logger::warn("Failed to open {} for performance tuning user defaults", path.string());
+			return false;
+		}
+
+		try {
+			output << settings.dump(1);
+			return true;
+		} catch (const std::exception& e) {
+			logger::warn("Failed to write performance tuning user defaults to {}: {}", path.string(), e.what());
+			return false;
+		}
+	}
+
+	bool MergeJsonByMask(json& target, const json& source, const json& mask)
+	{
+		if (mask.is_object()) {
+			if (!source.is_object())
+				return false;
+			if (!target.is_object())
+				target = json::object();
+
+			bool changed = false;
+			for (const auto& [key, maskValue] : mask.items()) {
+				if (!source.contains(key))
+					continue;
+				if (maskValue.is_object()) {
+					changed |= MergeJsonByMask(target[key], source[key], maskValue);
+				} else if (target[key] != source[key]) {
+					target[key] = source[key];
+					changed = true;
+				}
+			}
+			return changed;
+		}
+
+		if (target == source)
+			return false;
+
+		target = source;
+		return true;
+	}
+
+	bool SaveFeatureSettingsToUserDefaults(Feature* feature, json& userSettings, const json& mask)
+	{
+		if (!feature || !mask.is_object())
+			return true;
+
+		json currentSettings;
+		feature->SaveSettings(currentSettings);
+		json& savedFeatureSettings = userSettings[feature->GetName()];
+		MergeJsonByMask(savedFeatureSettings, currentSettings, mask);
+		return true;
+	}
+
+	bool SaveCrossFeaturePerformanceDefaults(Feature* feature, json& userSettings)
+	{
+		if (!feature)
+			return true;
+
+		const auto shortName = feature->GetShortName();
+		if (shortName == "DynamicCubemaps") {
+			return SaveFeatureSettingsToUserDefaults(
+				FindFeatureByShortName("VR"),
+				userSettings,
+				MakeJsonMask({ "EnableDynamicCubemapFoveation", "EnableDynamicCubemapVisibilityThrottle" }));
+		}
+		if (shortName == "VR") {
+			bool ok = SaveFeatureSettingsToUserDefaults(
+				FindFeatureByShortName("ScreenSpaceShadows"),
+				userSettings,
+				MakeJsonMask({ "EnableStereoSync" }));
+			ok = SaveFeatureSettingsToUserDefaults(
+					 FindFeatureByShortName("ScreenSpaceGI"),
+					 userSettings,
+					 MakeJsonMask({ "EnableStereoSync" })) &&
+			     ok;
+			return ok;
+		}
+
+		return true;
+	}
+
+	bool SavePerformanceSettingsToUserDefaults(Feature* feature)
+	{
+		if (!feature)
+			return false;
+
+		json userSettings;
+		if (!ReadUserSettingsJson(userSettings))
+			return false;
+
+		json currentSettings;
+		feature->SaveSettings(currentSettings);
+		const json mask = GetPerformanceUserSettingsMask(feature, currentSettings);
+		if (!SaveFeatureSettingsToUserDefaults(feature, userSettings, mask))
+			return false;
+		if (!SaveCrossFeaturePerformanceDefaults(feature, userSettings))
+			return false;
+
+		if (!WriteUserSettingsJson(userSettings))
+			return false;
+
+		logger::info("Saved Performance Tuning user defaults for {}", feature->GetDisplayName());
+		return true;
+	}
+
+	bool ShouldRestoreRuntimePerformanceState(Feature* feature)
+	{
+		if (!feature)
+			return false;
+
+		const auto shortName = feature->GetShortName();
+		return shortName == "Upscaling" ||
+		       shortName == "Skylighting" ||
+		       shortName == "VolumetricLighting" ||
+		       shortName == "LightLimitFix" ||
+		       shortName == "TerrainBlending" ||
+		       shortName == "SubsurfaceScattering" ||
+		       shortName == "ScreenSpaceGI";
+	}
+
+	void ApplyRestoredPerformanceRuntimeState(Feature* feature, const json& restoredSettings)
+	{
+		if (!feature)
+			return;
+
+		if (ShouldRestoreRuntimePerformanceState(feature)) {
+			feature->RestorePerformanceCostMeasurementState(restoredSettings);
+		}
+
+		if (feature->GetShortName() == "VR") {
+			feature->RestorePerformanceCostMeasurementState(restoredSettings);
+			if (globals::features::vr.gMinOccludeeBoxExtent) {
+				*globals::features::vr.gMinOccludeeBoxExtent = globals::features::vr.settings.MinOccludeeBoxExtent;
+			}
+		}
+	}
+
+	void RestoreFeatureSettingsFromUserDefaults(
+		Feature* feature,
+		const json& userSettings,
+		const json& mask,
+		bool& anyFound,
+		bool& anyChanged,
+		bool& anyFailed)
+	{
+		if (!feature || !mask.is_object())
+			return;
+
+		const auto featureName = feature->GetName();
+		if (!userSettings.contains(featureName) || !userSettings[featureName].is_object())
+			return;
+
+		anyFound = true;
+
+		json currentSettings;
+		feature->SaveSettings(currentSettings);
+		const json beforeSettings = currentSettings;
+		if (!MergeJsonByMask(currentSettings, userSettings[featureName], mask) || currentSettings == beforeSettings)
+			return;
+
+		try {
+			feature->LoadSettings(currentSettings);
+			ApplyRestoredPerformanceRuntimeState(feature, currentSettings);
+			anyChanged = true;
+		} catch (const std::exception& e) {
+			logger::warn("Failed to restore Performance Tuning user defaults for {}: {}", feature->GetDisplayName(), e.what());
+			anyFailed = true;
+		} catch (...) {
+			logger::warn("Failed to restore Performance Tuning user defaults for {}", feature->GetDisplayName());
+			anyFailed = true;
+		}
+	}
+
+	void RestoreCrossFeaturePerformanceDefaults(
+		Feature* feature,
+		const json& userSettings,
+		bool& anyFound,
+		bool& anyChanged,
+		bool& anyFailed)
+	{
+		if (!feature)
+			return;
+
+		const auto shortName = feature->GetShortName();
+		if (shortName == "DynamicCubemaps") {
+			RestoreFeatureSettingsFromUserDefaults(
+				FindFeatureByShortName("VR"),
+				userSettings,
+				MakeJsonMask({ "EnableDynamicCubemapFoveation", "EnableDynamicCubemapVisibilityThrottle" }),
+				anyFound,
+				anyChanged,
+				anyFailed);
+		} else if (shortName == "VR") {
+			RestoreFeatureSettingsFromUserDefaults(
+				FindFeatureByShortName("ScreenSpaceShadows"),
+				userSettings,
+				MakeJsonMask({ "EnableStereoSync" }),
+				anyFound,
+				anyChanged,
+				anyFailed);
+			RestoreFeatureSettingsFromUserDefaults(
+				FindFeatureByShortName("ScreenSpaceGI"),
+				userSettings,
+				MakeJsonMask({ "EnableStereoSync" }),
+				anyFound,
+				anyChanged,
+				anyFailed);
+		}
+	}
+
+	PerformanceUserDefaultsRestoreResult RestorePerformanceSettingsFromUserDefaults(Feature* feature)
+	{
+		if (!feature)
+			return PerformanceUserDefaultsRestoreResult::Failed;
+
+		json userSettings;
+		if (!ReadUserSettingsJson(userSettings))
+			return PerformanceUserDefaultsRestoreResult::Failed;
+
+		json currentSettings;
+		feature->SaveSettings(currentSettings);
+		const json mask = GetPerformanceUserSettingsMask(feature, currentSettings);
+		bool anyFound = false;
+		bool anyChanged = false;
+		bool anyFailed = false;
+		RestoreFeatureSettingsFromUserDefaults(feature, userSettings, mask, anyFound, anyChanged, anyFailed);
+		RestoreCrossFeaturePerformanceDefaults(feature, userSettings, anyFound, anyChanged, anyFailed);
+
+		if (anyFailed)
+			return PerformanceUserDefaultsRestoreResult::Failed;
+		if (!anyFound)
+			return PerformanceUserDefaultsRestoreResult::Missing;
+		if (!anyChanged)
+			return PerformanceUserDefaultsRestoreResult::Unchanged;
+
+		logger::info("Restored Performance Tuning user defaults for {}", feature->GetDisplayName());
+		return PerformanceUserDefaultsRestoreResult::Restored;
+	}
 
 	void AddFeatureCostSample(
 		FeatureCostSample& sample,
@@ -234,24 +619,101 @@ namespace
 			sample.lastFrameCount = summary.frameCount;
 		}
 
-		if (summary.frameMs > 0.0f) {
-			sample.frameMsSum += summary.frameMs;
+		if (summary.hasFrameSample && summary.frameSampleMs > 0.0f) {
+			sample.frameMsSum += summary.frameSampleMs;
 			sample.frameSamples++;
 		}
-		if (summary.fps > 0.0f) {
-			sample.fpsSum += summary.fps;
+		if (summary.hasFrameSample && summary.fpsSample > 0.0f) {
+			sample.fpsSum += summary.fpsSample;
 			sample.fpsSamples++;
 		}
-		float gpuMs = 0.0f;
-		if (TryGetDisplayGpuMs(summary, gpuMs)) {
-			sample.gameGpuMsSum += gpuMs;
+		if (summary.hasGameGpuSample && summary.gameGpuSampleMs > 0.0f) {
+			sample.gameGpuMsSum += summary.gameGpuSampleMs;
 			sample.gameGpuSamples++;
 		}
-		float cpuMs = 0.0f;
-		if (TryGetDisplayCpuMs(summary, cpuMs)) {
-			sample.gameCpuMsSum += cpuMs;
+		if (summary.hasGameCpuSample && summary.gameCpuSampleMs > 0.0f) {
+			sample.gameCpuMsSum += summary.gameCpuSampleMs;
 			sample.gameCpuSamples++;
 		}
+	}
+
+	bool RenderUserDefaultsIconButton(
+		const char* id,
+		const char* fallbackLabel,
+		ID3D11ShaderResourceView* texture,
+		const ImVec2& imageSize)
+	{
+		if (texture) {
+			auto iconButtonStyle = Util::TransparentIconButtonStyle();
+			return Util::ImageButtonWithFlash(id, texture, imageSize);
+		}
+
+		return Util::ButtonWithFlash(fallbackLabel);
+	}
+
+	bool RenderPerformanceUserDefaultButtons(Feature* feature, bool disabled)
+	{
+		if (!feature || !globals::menu)
+			return false;
+
+		bool settingsRestored = false;
+		const std::string featureKey = feature->GetShortName();
+		auto& message = g_performanceDefaultsMessages[featureKey];
+		auto& icons = globals::menu->uiIcons;
+		const float iconSize = ImGui::GetFrameHeight();
+		const ImVec2 imageSize(iconSize, iconSize);
+		const std::string applyId = "##ApplyPerformanceDefaults" + featureKey;
+		const std::string restoreId = "##RestorePerformanceDefaults" + featureKey;
+
+		ImGui::Spacing();
+		ImGui::BeginDisabled(disabled);
+		if (RenderUserDefaultsIconButton(
+				applyId.c_str(),
+				"Apply settings to user defaults",
+				icons.saveSettings.texture,
+				imageSize)) {
+			message = SavePerformanceSettingsToUserDefaults(feature) ?
+			              "Performance user defaults updated." :
+			              "Failed to update performance user defaults.";
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Apply the current Performance Tuning controls for this feature to user defaults.");
+		}
+
+		ImGui::SameLine();
+		if (RenderUserDefaultsIconButton(
+				restoreId.c_str(),
+				"Reset to user defaults",
+				icons.loadSettings.texture,
+				imageSize)) {
+			switch (RestorePerformanceSettingsFromUserDefaults(feature)) {
+			case PerformanceUserDefaultsRestoreResult::Restored:
+				settingsRestored = true;
+				message = "Performance user defaults restored.";
+				break;
+			case PerformanceUserDefaultsRestoreResult::Unchanged:
+				message = "Already using performance user defaults.";
+				break;
+			case PerformanceUserDefaultsRestoreResult::Missing:
+				message = "No saved performance user defaults found.";
+				break;
+			case PerformanceUserDefaultsRestoreResult::Failed:
+			default:
+				message = "Failed to restore performance user defaults.";
+				break;
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Reset the current Performance Tuning controls for this feature to saved user defaults.");
+		}
+		ImGui::EndDisabled();
+
+		if (!message.empty()) {
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", message.c_str());
+		}
+
+		return settingsRestored;
 	}
 
 	void FinalizeFeatureCostMeasurement(FeatureCostMeasurementState& state)
@@ -272,7 +734,7 @@ namespace
 		                          AverageOrZero(state.testSample.fpsSum, state.testSample.fpsSamples);
 
 		state.delta.frameMs = currentFrameMs - testFrameMs;
-		state.delta.fpsCost = testFps - currentFps;
+		state.delta.fpsDelta = currentFps - testFps;
 		state.delta.gameGpuMs = currentGameGpuMs - testGameGpuMs;
 		state.delta.gameCpuMs = currentGameCpuMs - testGameCpuMs;
 		state.delta.hasFrame = hasFrame;
@@ -306,6 +768,21 @@ namespace
 
 		feature->SetPerformanceCostMeasurementEnabled(state.testEnabled);
 		state.testStateApplied = true;
+	}
+
+	void BeginFeatureCostMeasurementTestSettle(Feature* feature, FeatureCostMeasurementState& state, double currentTime)
+	{
+		ApplyFeatureCostMeasurementTestState(feature, state);
+		state.testSample = {};
+		const double settleSeconds = feature ? std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled)) : 0.0;
+		if (settleSeconds > 0.0) {
+			state.phase = FeatureCostMeasurementPhase::SettlingTest;
+			state.phaseStartTime = currentTime;
+			return;
+		}
+
+		state.phase = FeatureCostMeasurementPhase::MeasuringTest;
+		state.phaseStartTime = currentTime;
 	}
 
 	void RestoreFeatureCostMeasurementOriginalState(Feature* feature, FeatureCostMeasurementState& state)
@@ -345,10 +822,18 @@ namespace
 					state.phase = FeatureCostMeasurementPhase::AwaitingMenuClose;
 					state.menuCloseTick = 0;
 				} else {
-					ApplyFeatureCostMeasurementTestState(feature, state);
-					state.phase = FeatureCostMeasurementPhase::MeasuringTest;
-					state.phaseStartTime = currentTime;
+					BeginFeatureCostMeasurementTestSettle(feature, state, currentTime);
 				}
+			}
+			return;
+		}
+
+		if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled));
+			if (elapsed >= settleSeconds) {
+				state.testSample = {};
+				state.phase = FeatureCostMeasurementPhase::MeasuringTest;
+				state.phaseStartTime = currentTime;
 			}
 			return;
 		}
@@ -440,6 +925,44 @@ namespace
 		return "Off";
 	}
 
+	const char* GetFeatureCostComparisonDetails(Feature* feature)
+	{
+		if (!feature)
+			return "the feature is switched off.";
+
+		const std::string shortName = feature->GetShortName();
+		if (shortName == "Upscaling")
+			return "Upscaling is set to None, with foveated upscaling disabled.";
+		if (shortName == "VR")
+			return "depth culling, stereo sync, stereo blend, shader FOV, and dynamic cubemap throttle are switched off.";
+		if (shortName == "ScreenSpaceShadows")
+			return "Screen Space Shadows are switched off.";
+		if (shortName == "ScreenSpaceGI")
+			return "SSGI/AO is switched off.";
+		if (shortName == "LightLimitFix")
+			return "particle lights, point-light contact shadows, and particle contact shadows are switched off.";
+		if (shortName == "DynamicCubemaps")
+			return "screen-space reflections, dynamic cubemap cadence, and low-visibility cubemap throttle are switched off.";
+		if (shortName == "Skylighting")
+			return "lowest Probe Grid Quality, reduced updates on, intervals at 16, incremental updates on, Stable Slice Count 1, fast sampling on, and minimum distance.";
+		if (shortName == "TerrainBlending")
+			return "Terrain Blending is switched off.";
+		if (shortName == "TerrainShadows")
+			return "Terrain Shadows are switched off.";
+		if (shortName == "VolumetricLighting")
+			return "Volumetric Lighting is switched off for the current interior/exterior context.";
+		if (shortName == "UnifiedWater")
+			return "optimized water meshes are switched off.";
+		if (shortName == "Wetterness")
+			return "Wetterness is switched off.";
+		if (shortName == "SubsurfaceScattering")
+			return "Subsurface Scattering is switched off.";
+		if (shortName == "GrassCollision")
+			return "Grass Collision is switched off.";
+
+		return "the feature's measurement state is switched off.";
+	}
+
 	void RenderFeatureCostMeasurement(
 		Feature* feature,
 		FeatureCostMeasurementState& state)
@@ -471,10 +994,13 @@ namespace
 		}
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(
-				"Measures current settings against the comparison state using game timing.");
-			ImGui::TextUnformatted(
-				"Values are scene-dependent: measure grass collision where grass is visible, screen-space shadows where relevant lighting is present, and similar features where their inputs are active.");
+			ImGui::TextWrapped(
+				"Measures current settings for %.0f seconds, then compares with the state below using raw game timing.",
+				kFeatureCostMeasurementSeconds);
+			ImGui::TextWrapped(
+				"Comparison: %s - %s",
+				GetFeatureCostComparisonLabel(feature, state),
+				GetFeatureCostComparisonDetails(feature));
 		}
 		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
 			ImGui::SameLine();
@@ -523,6 +1049,14 @@ namespace
 			ImGui::TextDisabled("The test is done.");
 			ImGui::TextWrapped(
 				"Close the Community Shaders menu now so your previous settings can be restored safely. Reopen after FPS and frame times look stable to see the result.");
+			return;
+		}
+
+		if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled));
+			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, settleSeconds);
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
 			return;
 		}
 
@@ -579,9 +1113,9 @@ namespace
 				"%+.3f ms");
 		if (state.delta.hasFps)
 			RenderDeltaMetric(
-				"FPS cost",
-				state.delta.fpsCost,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.fpsCost),
+				"FPS:",
+				state.delta.fpsDelta,
+				GetDirectionFromFeatureCostFpsDelta(state.delta.fpsDelta),
 				"%+.1f");
 	}
 
@@ -612,11 +1146,17 @@ namespace
 		return static_cast<int>(kPerformanceFeatureOrder.size());
 	}
 
+	bool ShouldShowInPerformanceTuning(Feature* feature)
+	{
+		return feature && feature->GetShortName() != "WetnessEffects";
+	}
+
 	std::vector<Feature*> BuildPerformanceFeatureList()
 	{
 		std::vector<Feature*> features;
 		for (auto* feature : Feature::GetFeatureList()) {
-			if (!feature || !feature->loaded || feature->IsHiddenFromUserView() || !feature->IsInMenu() || !feature->HasPerformanceSettings())
+			if (!feature || !feature->loaded || feature->IsHiddenFromUserView() || !feature->IsInMenu() || !feature->HasPerformanceSettings() ||
+				!ShouldShowInPerformanceTuning(feature))
 				continue;
 
 			features.push_back(feature);
@@ -696,16 +1236,6 @@ namespace
 
 		selectedShortName = features.front()->GetShortName();
 		return features.front();
-	}
-
-	Feature* FindFeatureByShortName(const std::string& shortName)
-	{
-		for (auto* feature : Feature::GetFeatureList()) {
-			if (feature && feature->GetShortName() == shortName)
-				return feature;
-		}
-
-		return nullptr;
 	}
 
 	void CancelFeatureCostMeasurement(Feature* feature, FeatureCostMeasurementState& state, bool allowPendingRestore)
@@ -858,7 +1388,6 @@ void PerformanceTuningRenderer::Render()
 	}
 	const bool anyMeasurementRunning = IsAnyFeatureCostMeasurementRunning();
 
-	const bool advancedPerformance = Menu::GetSingleton()->IsAdvancedUiMode();
 	const float selectorWidth = std::max(180.0f * Util::GetUIScale(), ImGui::GetContentRegionAvail().x * 0.18f);
 
 	RenderTopPerformanceCounters(timingBeforeSettings, highlightState);
@@ -905,16 +1434,17 @@ void PerformanceTuningRenderer::Render()
 			const json settingsStateBefore = selectedFeature->CapturePerformanceSettingsState();
 			ImGui::BeginDisabled(anyMeasurementRunning);
 			ImGui::BeginGroup();
-			selectedFeature->DrawPerformanceSettings(advancedPerformance);
+			selectedFeature->DrawPerformanceSettings(true);
 			ImGui::EndGroup();
 			ImGui::EndDisabled();
+			RenderFeatureCostMeasurement(selectedFeature, selectedCostState);
+			const bool settingsRestored = RenderPerformanceUserDefaultButtons(selectedFeature, IsAnyFeatureCostMeasurementRunning());
 			const json settingsStateAfter = selectedFeature->CapturePerformanceSettingsState();
-			const bool settingsEdited = settingsStateBefore != settingsStateAfter;
+			const bool settingsEdited = settingsRestored || settingsStateBefore != settingsStateAfter;
 			if (settingsEdited) {
 				RegisterSettingsEdit(highlightState, timingBeforeSettings, frameCount);
 				ClearCompletedFeatureCostMeasurement(selectedCostState);
 			}
-			RenderFeatureCostMeasurement(selectedFeature, selectedCostState);
 		}
 		ImGui::EndChild();
 

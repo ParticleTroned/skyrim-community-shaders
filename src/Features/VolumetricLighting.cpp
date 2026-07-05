@@ -229,11 +229,8 @@ void VolumetricLighting::DrawSettings()
 	};
 
 	if (REL::Module::IsVR()) {
-		{
-			Util::BlueFrameStyleWrapper disableDuringRainStyle(true);
-			if (ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
-				SetupVL();
-		}
+		if (ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
+			SetupVL();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Turns off rain-driven volumetric lighting while it is raining, then restores it after rain.");
 	}
@@ -327,7 +324,6 @@ json VolumetricLighting::CapturePerformanceSettingsState() const
 void VolumetricLighting::DrawGodrayTuningSettings()
 {
 	auto drawSlider = [](const char* label, float& value, float minValue, float maxValue, const char* tooltip) {
-		Util::YellowFrameStyleWrapper sliderStyle;
 		const bool changed = ImGui::SliderFloat(label, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(tooltip);

@@ -84,6 +84,7 @@ public:
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableGrassCollision; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.EnableGrassCollision = a_enabled; }

@@ -517,10 +517,7 @@ void TerrainBlending::DrawSettings()
 		ImGui::Text("Enable seamless blending between terrain and objects.");
 	}
 
-	{
-		Util::BlueFrameStyleWrapper blueFrameStyle;
-		ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
-	}
+	ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Scales blending strength. Lower values make blending tighter.");
 	}

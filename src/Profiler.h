@@ -1,7 +1,7 @@
 #pragma once
 
-#include <d3d11.h>
 #include <atomic>
+#include <d3d11.h>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -178,9 +178,11 @@ private:
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
 			float cpuMs = 0.0f;
+			bool ended = false;
 		};
 		std::vector<TimerPair> timers;
 		std::vector<CompletedCpuTimer> cpuTimers;
+		std::vector<uint32_t> activeTimerStack;
 		uint32_t activeCount = 0;
 		bool inFlight = false;
 	};

@@ -67,6 +67,13 @@ void TerrainShadows::DrawPerformanceSettings(bool)
 	ImGui::Checkbox("Enable Terrain Shadow", &settings.EnableTerrainShadow);
 }
 
+json TerrainShadows::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "EnableTerrainShadow", settings.EnableTerrainShadow }
+	};
+}
+
 void TerrainShadows::ClearShaderCache()
 {
 	if (shadowUpdateProgram) {

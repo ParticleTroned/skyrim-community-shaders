@@ -143,7 +143,7 @@ void HomePageRenderer::RenderModeSection()
 	const char* advancedLabel = "Advanced (Full UI)";
 	const ImGuiStyle& style = ImGui::GetStyle();
 	const float contentWidth = ImGui::GetContentRegionAvail().x;
-	const float radioDiameter = ImGui::GetFrameHeight() * 2.0f;
+	const float radioDiameter = ImGui::GetFrameHeight() * 1.5f;
 	const ImVec2 modeLabelSize = ImGui::CalcTextSize(modeLabel);
 	const ImVec2 essentialsLabelSize = ImGui::CalcTextSize(essentialsLabel);
 	const ImVec2 advancedLabelSize = ImGui::CalcTextSize(advancedLabel);

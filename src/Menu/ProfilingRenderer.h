@@ -43,9 +43,16 @@ public:
 		float gameCpuMs = 0.0f;
 		float frameMs = 0.0f;
 		float fps = 0.0f;
+		float gameGpuSampleMs = 0.0f;
+		float gameCpuSampleMs = 0.0f;
+		float frameSampleMs = 0.0f;
+		float fpsSample = 0.0f;
 		uint32_t frameCount = 0;
 		bool hasGameGpu = false;
 		bool hasGameCpu = false;
+		bool hasGameGpuSample = false;
+		bool hasGameCpuSample = false;
+		bool hasFrameSample = false;
 		bool valid = false;
 		std::unordered_map<std::string, PerformanceTimingTotals> features;
 	};
@@ -72,6 +79,7 @@ public:
 		const PerformanceTimingHighlight* highlight = nullptr);
 
 private:
+	static constexpr uint32_t kFeatureGraphHistorySize = 60;
 	static inline TimingMode timingMode = TimingMode::GPU;
 	static inline float timeSinceLastUpdate = 0.0f;
 	static inline float lastFrameTime = 0.0f;
@@ -103,8 +111,8 @@ private:
 
 	struct FeatureGraphState
 	{
-		ImGuiUtils::ProfilerGraph gpuGraph{ Profiler::kHistorySize };
-		ImGuiUtils::ProfilerGraph cpuGraph{ Profiler::kHistorySize };
+		ImGuiUtils::ProfilerGraph gpuGraph{ kFeatureGraphHistorySize };
+		ImGuiUtils::ProfilerGraph cpuGraph{ kFeatureGraphHistorySize };
 	};
 	struct FeatureTimingEntry
 	{

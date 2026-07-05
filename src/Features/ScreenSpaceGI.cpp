@@ -725,7 +725,6 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	bool foveatedEnabled = settings.EnableFoveated;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
-		Util::BlueFrameStyleWrapper accentFrameStyle(true);
 		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled)) {
 			settings.EnableFoveated = foveatedEnabled;
 			if (settings.EnableFoveated) {

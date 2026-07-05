@@ -25,12 +25,18 @@ static constexpr float kTimingTableMetricColumnWidth = 55.0f;
 static constexpr float kTimingTablePercentColumnWidth = 45.0f;
 static constexpr float kStatsRefreshSeconds = 1.0f;
 static constexpr uint32_t kDisplayedRollingFrameCount = 60;
+static constexpr float kMaxDisplayTimingSampleMs = 1000.0f;
 static constexpr uint32_t kOpenVRTimingRetryFrames = 120;
 static constexpr uint32_t kOpenVRTimingMaxCacheAgeFrames = 120;
 
 static bool IsPositiveFinite(float value)
 {
 	return std::isfinite(value) && value > 0.0f;
+}
+
+static bool IsDisplayTimingSampleValid(float value)
+{
+	return std::isfinite(value) && value >= 0.0f && value <= kMaxDisplayTimingSampleMs;
 }
 
 struct TimingAverage
@@ -87,12 +93,17 @@ struct OpenVRGameTimingCache
 	bool disabled = false;
 };
 
-static float GetAverageGameFrameMs()
+static float GetAverageGameFrameMs(float& sampleMs, bool& hasSample)
 {
 	static RollingTimingAverage frameMsAverage;
 	static uint32_t lastFrameCount = 0;
+	static uint32_t lastFrameSampleFrame = 0;
+	static float lastFrameSampleMs = 0.0f;
 	static LARGE_INTEGER frequency{};
 	static LARGE_INTEGER lastCounter{};
+
+	sampleMs = 0.0f;
+	hasSample = false;
 
 	const uint32_t frameCount = globals::state ? globals::state->frameCount : 0;
 	if (frameCount != 0 && frameCount != lastFrameCount) {
@@ -115,14 +126,21 @@ static float GetAverageGameFrameMs()
 		const bool hasEngineFrame = IsPositiveFinite(engineFrameMs);
 		const bool hasPresentFrame = IsPositiveFinite(presentFrameMs);
 		if (hasEngineFrame || hasPresentFrame) {
-			frameMsAverage.Push(
+			lastFrameSampleMs =
 				hasEngineFrame && hasPresentFrame ?
 					std::max(engineFrameMs, presentFrameMs) :
-					(hasEngineFrame ? engineFrameMs : presentFrameMs));
+					(hasEngineFrame ? engineFrameMs : presentFrameMs);
+			lastFrameSampleFrame = frameCount;
+			frameMsAverage.Push(lastFrameSampleMs);
 		}
 
 		lastCounter = currentCounter;
 		lastFrameCount = frameCount;
+	}
+
+	if (frameCount != 0 && frameCount == lastFrameCount && frameCount == lastFrameSampleFrame && IsPositiveFinite(lastFrameSampleMs)) {
+		sampleMs = lastFrameSampleMs;
+		hasSample = true;
 	}
 
 	return frameMsAverage.Get();
@@ -219,8 +237,19 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 
 			bool faulted = false;
 			if (TryGetOpenVRFrameTiming(compositor, &timing, &faulted)) {
-				cache.gpuMs.Push(timing.m_flPreSubmitGpuMs);
-				cache.cpuMs.Push(timing.m_flNewFrameReadyMs - timing.m_flWaitGetPosesCalledMs);
+				const float gpuMs = timing.m_flPreSubmitGpuMs;
+				if (IsPositiveFinite(gpuMs)) {
+					cache.gpuMs.Push(gpuMs);
+					summary.gameGpuSampleMs = gpuMs;
+					summary.hasGameGpuSample = true;
+				}
+
+				const float cpuMs = timing.m_flNewFrameReadyMs - timing.m_flWaitGetPosesCalledMs;
+				if (IsPositiveFinite(cpuMs)) {
+					cache.cpuMs.Push(cpuMs);
+					summary.gameCpuSampleMs = cpuMs;
+					summary.hasGameCpuSample = true;
+				}
 				cache.lastValidFrame = frameCount;
 				cache.nextRetryFrame = frameCount + 1;
 			} else if (faulted) {
@@ -236,13 +265,7 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 
 static void NormalizeGameFrameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
 {
-	if (!IsPositiveFinite(summary.frameMs)) {
-		summary.frameMs = 0.0f;
-		summary.fps = 0.0f;
-		return;
-	}
-
-	float frameMs = summary.frameMs;
+	float frameMs = IsPositiveFinite(summary.frameMs) ? summary.frameMs : 0.0f;
 	if (summary.hasGameGpu)
 		frameMs = std::max(frameMs, summary.gameGpuMs);
 	if (summary.hasGameCpu)
@@ -251,6 +274,30 @@ static void NormalizeGameFrameTiming(ProfilingRenderer::PerformanceTimingSummary
 	if (IsPositiveFinite(frameMs)) {
 		summary.frameMs = frameMs;
 		summary.fps = 1000.0f / frameMs;
+	} else {
+		summary.frameMs = 0.0f;
+		summary.fps = 0.0f;
+	}
+
+	if (!summary.hasFrameSample && !summary.hasGameGpuSample && !summary.hasGameCpuSample)
+		return;
+
+	float frameSampleMs = summary.frameSampleMs;
+	if (!summary.hasFrameSample)
+		frameSampleMs = 0.0f;
+	if (summary.hasGameGpuSample)
+		frameSampleMs = std::max(frameSampleMs, summary.gameGpuSampleMs);
+	if (summary.hasGameCpuSample)
+		frameSampleMs = std::max(frameSampleMs, summary.gameCpuSampleMs);
+
+	if (IsPositiveFinite(frameSampleMs)) {
+		summary.hasFrameSample = true;
+		summary.frameSampleMs = frameSampleMs;
+		summary.fpsSample = 1000.0f / frameSampleMs;
+	} else {
+		summary.frameSampleMs = 0.0f;
+		summary.fpsSample = 0.0f;
+		summary.hasFrameSample = false;
 	}
 }
 
@@ -448,6 +495,30 @@ static int ComputeGraphLegendWidth(int totalWidth, int minGraphWidth, float widt
 	return std::min(desiredLegendWidth, availableLegendWidth);
 }
 
+template <class FeatureTimingDataT>
+static int ComputeFeatureGraphLegendWidth(const FeatureTimingDataT& data, int totalWidth)
+{
+	if (data.entries.empty())
+		return 0;
+
+	const float uiScale = Util::GetUIScale();
+	constexpr float legendTextScale = 0.74f;
+	const float markerAndConnectorWidth = (3.0f + 5.0f + 18.0f + 8.0f + 5.0f) * uiScale;
+	const float textColumnWidth = std::max(
+		48.0f,
+		ImGui::CalcTextSize("000.00ms").x * legendTextScale + 5.0f * uiScale);
+	float labelWidth = 0.0f;
+	for (const auto& entry : data.entries) {
+		const auto label = BuildProfilerGraphLabel(entry.label);
+		labelWidth = std::max(labelWidth, ImGui::CalcTextSize(label.c_str()).x * legendTextScale);
+	}
+
+	const int desiredLegendWidth = static_cast<int>(std::ceil(markerAndConnectorWidth + textColumnWidth + labelWidth + 10.0f * uiScale));
+	const int minGraphWidth = ScaleToUiInt(24.0f);
+	const int availableLegendWidth = std::max(0, totalWidth - std::min(minGraphWidth, totalWidth));
+	return std::min(desiredLegendWidth, availableLegendWidth);
+}
+
 static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
 {
 	return cpuMode ? result.hasCpu : result.hasGpu;
@@ -466,16 +537,26 @@ static uint32_t CollectDisplayTimingSamples(const Profiler::TimerResult& result,
 	samples.fill(0.0f);
 
 	const uint32_t historyCount = cpuMode ? result.cpuHistoryCount : result.historyCount;
-	const uint32_t sampleCount = std::min(historyCount, kDisplayedRollingFrameCount);
-	if (sampleCount == 0)
+	if (historyCount == 0)
 		return 0;
 
-	const uint32_t firstSample = historyCount - sampleCount;
-	for (uint32_t i = 0; i < sampleCount; ++i) {
-		samples[i] = cpuMode ?
-		                 result.GetCpuHistorySample(firstSample + i) :
-		                 result.GetHistorySample(firstSample + i);
+	std::array<float, kDisplayedRollingFrameCount> collectedSamples{};
+	uint32_t sampleCount = 0;
+	for (uint32_t offset = 0; offset < historyCount && sampleCount < kDisplayedRollingFrameCount; ++offset) {
+		const uint32_t historyIndex = historyCount - 1 - offset;
+		const float sample = cpuMode ?
+		                         result.GetCpuHistorySample(historyIndex) :
+		                         result.GetHistorySample(historyIndex);
+		if (!IsDisplayTimingSampleValid(sample))
+			continue;
+
+		collectedSamples[kDisplayedRollingFrameCount - 1 - sampleCount] = sample;
+		sampleCount++;
 	}
+
+	const uint32_t sourceOffset = kDisplayedRollingFrameCount - sampleCount;
+	for (uint32_t i = 0; i < sampleCount; ++i)
+		samples[i] = collectedSamples[sourceOffset + i];
 
 	return sampleCount;
 }
@@ -778,7 +859,7 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 
 	const float uiScale = Util::GetUIScale();
 	const int totalWidth = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x));
-	const int legendWidth = totalWidth >= ScaleToUiInt(180.0f) ? ComputeGraphLegendWidth(totalWidth, ScaleToUiInt(80.0f), 0.50f, ScaleToUiInt(140.0f), ScaleToUiInt(300.0f)) : 0;
+	const int legendWidth = ComputeFeatureGraphLegendWidth(data, totalWidth);
 	const int graphWidth = std::max(1, totalWidth - legendWidth);
 	const float scaledGraphHeight = static_cast<float>(graphHeight) * uiScale;
 
@@ -1229,8 +1310,9 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 		}
 	}
 
-	summary.frameMs = GetAverageGameFrameMs();
+	summary.frameMs = GetAverageGameFrameMs(summary.frameSampleMs, summary.hasFrameSample);
 	summary.fps = summary.frameMs > 0.0f ? 1000.0f / summary.frameMs : 0.0f;
+	summary.fpsSample = summary.frameSampleMs > 0.0f ? 1000.0f / summary.frameSampleMs : 0.0f;
 	CaptureOpenVRGameTiming(summary);
 	for (const auto& [rootName, bucket] : timingBuckets) {
 		const float gpuMs = bucket.hasGpuExact ? bucket.gpuExactMs : bucket.gpuChildMs;
@@ -1262,8 +1344,11 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	NormalizeGameFrameTiming(summary);
 	summary.valid =
 		summary.frameMs > 0.0f ||
+		summary.hasFrameSample ||
 		summary.hasGameGpu ||
 		summary.hasGameCpu ||
+		summary.hasGameGpuSample ||
+		summary.hasGameCpuSample ||
 		summary.gpuTotalMs > 0.0f ||
 		summary.cpuTotalMs > 0.0f;
 	return summary;
@@ -1294,16 +1379,6 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(
 	const auto cpuData = CollectFeatureTimingData(featurePrefixes, true);
 	auto& graphState = featureGraphs[BuildTimingPrefixKey(featurePrefixes)];
 
-	if (!gpuData.entries.empty() || !cpuData.entries.empty()) {
-		if (!gpuData.entries.empty())
-			TextWithTuningDelta(highlight ? highlight->featureGpuDirection : 0, "Feat GPU %.3f ms", gpuData.totalAvg);
-		if (!gpuData.entries.empty() && !cpuData.entries.empty())
-			ImGui::SameLine();
-		if (!cpuData.entries.empty())
-			TextWithTuningDelta(highlight ? highlight->featureCpuDirection : 0, "CPU %.3f ms", cpuData.totalAvg);
-	}
-
-	ImGui::Spacing();
 	ImGui::TextUnformatted("GPU");
 	ImGui::PushID("PerformanceSummaryGPU");
 	if (RenderFeatureTimingGraph(featurePrefixes.front(), gpuData, graphState.gpuGraph, 82)) {

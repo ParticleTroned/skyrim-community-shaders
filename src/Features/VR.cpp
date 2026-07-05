@@ -1770,7 +1770,6 @@ namespace
 
 			{
 				auto masterGuard = Util::DisableGuard(!foveatedProfileActive || !anyFoveationFeatureAvailable);
-				Util::BlueFrameStyleWrapper blueFrameStyle(true);
 				if (ImGui::Checkbox("Toggle ALL", &allAvailableFoveationFeaturesEnabled)) {
 					const bool enableFoveationFeatures = allAvailableFoveationFeaturesEnabled;
 					auto applyMasterToggle = [&](const FoveationToggleRef& a_toggle) {

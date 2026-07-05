@@ -148,10 +148,7 @@ void ScreenSpaceShadows::DrawSettings()
 			ImGui::Text("Raises or lowers VR shadow quality and GPU cost.");
 		}
 
-		{
-			Util::BlueFrameStyleWrapper blueFrameStyle;
-			ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
-		}
+		ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("0 disables. Lower values improve performance but remove distant shadows.");
 		}
@@ -181,7 +178,7 @@ void ScreenSpaceShadows::DrawSettings()
 	ImGui::Spacing();
 }
 
-void ScreenSpaceShadows::DrawPerformanceSettings(bool a_advanced)
+void ScreenSpaceShadows::DrawPerformanceSettings(bool)
 {
 	bool enabled = bendSettings.Enable != 0;
 	if (ImGui::Checkbox("Enable", &enabled))
@@ -198,13 +195,6 @@ void ScreenSpaceShadows::DrawPerformanceSettings(bool a_advanced)
 
 		DrawFoveationSettings();
 		ImGui::Checkbox("Sync Screen Space Shadows", &enableStereoSync);
-	}
-
-	if (a_advanced) {
-		ImGui::SeparatorText("Shadow Quality");
-		ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
-		ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax);
-		ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, kShadowContrastMin, kShadowContrastMax);
 	}
 }
 
@@ -255,7 +245,6 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 	bool foveatedEnabled = bendSettings.EnableFoveated != 0;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
-		Util::BlueFrameStyleWrapper blueFrameStyle(true);
 		if (ImGui::Checkbox("Screen Space Shadows FOV", &foveatedEnabled))
 			bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
 	}

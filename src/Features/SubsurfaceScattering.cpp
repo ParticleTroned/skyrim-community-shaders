@@ -71,22 +71,10 @@ namespace
 	{
 		ImGui::SeparatorText(a_sectionTitle);
 		ImGui::PushID(a_sectionTitle);
-		{
-			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("SSS Intensity", &a_intensity, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
-		}
-		{
-			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("SSS Saturation", &a_saturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
-		}
-		{
-			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("Skin Brightness", &a_brightness, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
-		}
-		{
-			Util::BlueFrameStyleWrapper blueStyle;
-			ImGui::SliderFloat("Skin Saturation", &a_baseSaturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
-		}
+		ImGui::SliderFloat("SSS Intensity", &a_intensity, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		ImGui::SliderFloat("SSS Saturation", &a_saturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		ImGui::SliderFloat("Skin Brightness", &a_brightness, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
+		ImGui::SliderFloat("Skin Saturation", &a_baseSaturation, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
 		ImGui::PopID();
 	}
 

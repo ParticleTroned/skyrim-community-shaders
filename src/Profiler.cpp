@@ -1,7 +1,18 @@
 #include "Profiler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
+
+namespace
+{
+	constexpr float kMaxSaneProfilerSampleMs = 1000.0f;
+
+	bool IsValidProfilerSample(float ms)
+	{
+		return std::isfinite(ms) && ms >= 0.0f && ms <= kMaxSaneProfilerSampleMs;
+	}
+}
 
 float Profiler::RollingHistory::GetAverage() const
 {
@@ -34,6 +45,7 @@ float Profiler::RollingHistory::GetPercentile(float p) const
 void Profiler::ResetFrameState(FrameQueries& frame)
 {
 	frame.activeCount = 0;
+	frame.activeTimerStack.clear();
 	frame.inFlight = false;
 	frame.cpuTimers.clear();
 }
@@ -59,6 +71,7 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 		device->CreateQuery(&disjointDesc, frame.disjoint.put());
 
 		frame.timers.resize(kMaxTimers);
+		frame.activeTimerStack.reserve(kMaxTimers);
 		for (auto& timer : frame.timers) {
 			D3D11_QUERY_DESC tsDesc{};
 			tsDesc.Query = D3D11_QUERY_TIMESTAMP;
@@ -200,10 +213,14 @@ bool Profiler::BeginPass(std::string_view name)
 	if (frame.activeCount >= kMaxTimers)
 		return false;
 
-	auto& timer = frame.timers[frame.activeCount];
+	const uint32_t timerIndex = frame.activeCount++;
+	auto& timer = frame.timers[timerIndex];
 	timer.name.assign(name);
+	timer.cpuMs = 0.0f;
+	timer.ended = false;
 	context->End(timer.begin.get());
 	QueryPerformanceCounter(&timer.cpuBegin);
+	frame.activeTimerStack.push_back(timerIndex);
 
 	if (beginPerfEvent)
 		beginPerfEvent(name);
@@ -217,17 +234,22 @@ void Profiler::EndPass()
 		return;
 
 	auto& frame = frames[writeFrame];
-	if (frame.activeCount >= kMaxTimers)
+	if (frame.activeTimerStack.empty())
 		return;
 
-	auto& timer = frame.timers[frame.activeCount];
+	const uint32_t timerIndex = frame.activeTimerStack.back();
+	frame.activeTimerStack.pop_back();
+	if (timerIndex >= frame.activeCount || timerIndex >= frame.timers.size())
+		return;
+
+	auto& timer = frame.timers[timerIndex];
 
 	LARGE_INTEGER cpuEnd;
 	QueryPerformanceCounter(&cpuEnd);
 	timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
 
 	context->End(timer.end.get());
-	frame.activeCount++;
+	timer.ended = true;
 
 	if (endPerfEvent)
 		endPerfEvent({});
@@ -344,7 +366,7 @@ bool Profiler::CollectResults()
 
 		for (uint32_t i = 0; i < frame.activeCount; i++) {
 			auto& timer = frame.timers[i];
-			if (timer.name.empty())
+			if (timer.name.empty() || !timer.ended)
 				continue;
 
 			UINT64 tsBegin = 0, tsEnd = 0;
@@ -358,7 +380,13 @@ bool Profiler::CollectResults()
 				continue;
 			}
 
+			if (tsEnd < tsBegin)
+				continue;
+
 			float ms = static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs);
+			if (!IsValidProfilerSample(ms) || !IsValidProfilerSample(timer.cpuMs))
+				continue;
+
 			auto& entry = activeTimers[timer.name];
 			entry.gpuMs += ms;
 			entry.cpuMs += timer.cpuMs;
@@ -377,6 +405,8 @@ bool Profiler::CollectResults()
 
 	for (const auto& timer : frame.cpuTimers) {
 		if (timer.name.empty())
+			continue;
+		if (!IsValidProfilerSample(timer.cpuMs))
 			continue;
 
 		auto& entry = activeTimers[timer.name];
@@ -410,6 +440,7 @@ bool Profiler::CollectResults()
 
 	frame.cpuTimers.clear();
 	frame.activeCount = 0;
+	frame.activeTimerStack.clear();
 
 	totalTimeMs = activeTotalMs;
 	cpuTotalTimeMs = activeCpuTotalMs;

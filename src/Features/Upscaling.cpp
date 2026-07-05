@@ -5145,10 +5145,7 @@ void Upscaling::DrawFoveatedSettings()
 	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 
 	if (foveatedDispatchSupportedForMethod) {
-		{
-			Util::BlueFrameStyleWrapper foveatedStyle(true);
-			ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
-		}
+		ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Master switch for VR FOV-mask upscaling.");
 			ImGui::TextUnformatted("On: enables foveated upscaling controls and the shared FOV mask used by VR foveated effects.");
@@ -5204,10 +5201,7 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.05f, 1.0f), "Default FOV mask active. Tune it for your HMD for best image and performance.");
 	}
 
-	{
-		Util::BlueFrameStyleWrapper maskStyle(true);
-		ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
-	}
+	ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
 		ImGui::TextUnformatted("Green = upscaling center mask.");
@@ -5223,7 +5217,6 @@ void Upscaling::DrawFoveatedSettings()
 	ImGui::TextUnformatted("Upscaling FOV Controls");
 
 	{
-		Util::BlueFrameStyleWrapper areaStyle;
 		auto areaGuard = Util::DisableGuard(settings.periphery_taa_enable);
 		ImGui::SliderFloat("FOV Only Visible Scale", &settings.foveatedCenterArea, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	}
@@ -5239,10 +5232,7 @@ void Upscaling::DrawFoveatedSettings()
 	}
 	settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
 
-	{
-		Util::BlueFrameStyleWrapper baseExpandStyle;
-		ImGui::SliderFloat("Expand FOV Scale R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
-	}
+	ImGui::SliderFloat("Expand FOV Scale R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Widens the upscaling center mask horizontally.");
 		if (settings.periphery_taa_enable)
@@ -5259,17 +5249,14 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted(direction);
 		}
 	};
-	{
-		Util::BlueFrameStyleWrapper baseOffsetStyle;
-		ImGui::SliderFloat("FOV Left Eye Offset X", &settings.foveatedLeftEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
-		drawEyeOffsetTooltip("Left", "horizontal", "+X moves right, -X moves left.");
-		ImGui::SliderFloat("FOV Left Eye Offset Y", &settings.foveatedLeftEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
-		drawEyeOffsetTooltip("Left", "vertical", "+Y moves down, -Y moves up.");
-		ImGui::SliderFloat("FOV Right Eye Offset X", &settings.foveatedRightEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
-		drawEyeOffsetTooltip("Right", "horizontal", "+X moves right, -X moves left.");
-		ImGui::SliderFloat("FOV Right Eye Offset Y", &settings.foveatedRightEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
-		drawEyeOffsetTooltip("Right", "vertical", "+Y moves down, -Y moves up.");
-	}
+	ImGui::SliderFloat("FOV Left Eye Offset X", &settings.foveatedLeftEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	drawEyeOffsetTooltip("Left", "horizontal", "+X moves right, -X moves left.");
+	ImGui::SliderFloat("FOV Left Eye Offset Y", &settings.foveatedLeftEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	drawEyeOffsetTooltip("Left", "vertical", "+Y moves down, -Y moves up.");
+	ImGui::SliderFloat("FOV Right Eye Offset X", &settings.foveatedRightEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	drawEyeOffsetTooltip("Right", "horizontal", "+X moves right, -X moves left.");
+	ImGui::SliderFloat("FOV Right Eye Offset Y", &settings.foveatedRightEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	drawEyeOffsetTooltip("Right", "vertical", "+Y moves down, -Y moves up.");
 
 	settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 	settings.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
@@ -5280,10 +5267,7 @@ void Upscaling::DrawFoveatedSettings()
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::Separator();
 	ImGui::TextUnformatted("Upscaling FOV + TAA Settings");
-	{
-		Util::YellowFrameStyleWrapper taaStyle(true);
-		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
-	}
+	ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Enables periphery-only TAA outside the smaller vendor center region.");
 		ImGui::TextUnformatted("When ON, the FOV + TAA center scale becomes the active DLSS/FSR dispatch center.");
@@ -5293,10 +5277,7 @@ void Upscaling::DrawFoveatedSettings()
 	ImGui::BeginDisabled(!settings.periphery_taa_enable);
 	if (!settings.periphery_taa_enable)
 		ImGui::TextDisabled("Enable FOV + TAA to edit the center scale, transition, and visible outer scale.");
-	{
-		Util::YellowFrameStyleWrapper taaAreaStyle;
-		ImGui::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
-	}
+	ImGui::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	if (settings.periphery_taa_enable) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Actual DLSS/FSR center dispatch size for FOV + TAA.");
@@ -5305,15 +5286,12 @@ void Upscaling::DrawFoveatedSettings()
 		}
 	}
 	settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
-	{
-		Util::YellowFrameStyleWrapper transitionStyle;
-		ImGui::SliderFloat(
-			"Center Blend/TAA Transition",
-			&settings.periphery_taa_center_blend_feather,
-			kPeripheryTAACenterBlendFeatherMin,
-			kPeripheryTAACenterBlendFeatherMax,
-			"%.3f");
-	}
+	ImGui::SliderFloat(
+		"Center Blend/TAA Transition",
+		&settings.periphery_taa_center_blend_feather,
+		kPeripheryTAACenterBlendFeatherMin,
+		kPeripheryTAACenterBlendFeatherMax,
+		"%.3f");
 	if (settings.periphery_taa_enable) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Controls softness of the center-to-TAA transition edge.");
@@ -5323,15 +5301,12 @@ void Upscaling::DrawFoveatedSettings()
 	}
 	settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	const float taaOuterRangeMin = GetPeripheryTAAOuterScaleFloor(settings.periphery_taa_center_area);
-	{
-		Util::YellowFrameStyleWrapper taaRangeStyle;
-		ImGui::SliderFloat(
-			"FOV + TAA Visible Outer Scale",
-			&settings.periphery_taa_outer_scale,
-			taaOuterRangeMin,
-			kPeripheryTAAOuterScaleMax,
-			"%.2f");
-	}
+	ImGui::SliderFloat(
+		"FOV + TAA Visible Outer Scale",
+		&settings.periphery_taa_outer_scale,
+		taaOuterRangeMin,
+		kPeripheryTAAOuterScaleMax,
+		"%.2f");
 	if (settings.periphery_taa_enable) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Controls the shared HMD-visible boundary for FOV + TAA.");

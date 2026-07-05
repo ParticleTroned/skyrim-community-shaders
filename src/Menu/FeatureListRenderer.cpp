@@ -925,7 +925,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
 			if (performanceFeatureMode) {
-				Util::PerformanceFrameStyleWrapper performanceStyle(true);
 				feat->DrawPerformanceSettings(false);
 			} else if (essentialsFeatureMode) {
 				ImGui::TextDisabled("Toggle Advanced in the header to expose feature's full UI");

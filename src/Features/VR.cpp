@@ -1113,7 +1113,7 @@ void VR::DrawSettings()
 	}
 }
 
-void VR::DrawPerformanceSettings(bool)
+void VR::DrawPerformanceSettings(bool a_advanced)
 {
 	if (!REL::Module::IsVR()) {
 		ImGui::TextDisabled("VR performance settings are available only in VR.");
@@ -1131,6 +1131,9 @@ void VR::DrawPerformanceSettings(bool)
 			*gMinOccludeeBoxExtent = settings.MinOccludeeBoxExtent;
 		}
 	}
+
+	if (!a_advanced)
+		return;
 
 	auto& screenSpaceShadows = globals::features::screenSpaceShadows;
 	auto& screenSpaceGI = globals::features::screenSpaceGI;
@@ -1193,6 +1196,11 @@ void VR::DrawPerformanceSettings(bool)
 		ImGui::TextDisabled("Dynamic Cubemap FOV controls require Dynamic Cubemaps.");
 	if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
 		ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
+}
+
+void VR::DrawEssentialSettings()
+{
+	DrawPerformanceSettings(false);
 }
 
 json VR::CapturePerformanceSettingsState() const

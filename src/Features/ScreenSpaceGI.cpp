@@ -836,6 +836,17 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	}
 }
 
+void ScreenSpaceGI::DrawEssentialSettings()
+{
+	ApplyPlatformSettingOverrides(settings);
+	SyncResolvedSharedMaskScale(settings);
+
+	if (!ShadersOK())
+		Util::Text::Error("Compute shaders failed to compile!");
+
+	ImGui::Checkbox("Enable", &settings.Enabled);
+}
+
 json ScreenSpaceGI::CapturePerformanceSettingsState() const
 {
 	return settings;

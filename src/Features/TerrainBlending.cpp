@@ -542,6 +542,14 @@ void TerrainBlending::DrawPerformanceSettings(bool)
 	ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
 }
 
+void TerrainBlending::DrawEssentialSettings()
+{
+	bool enabled = settings.Enabled != 0;
+	if (ImGui::Checkbox("Enable Terrain Blending", &enabled)) {
+		settings.Enabled = enabled ? 1u : 0u;
+	}
+}
+
 json TerrainBlending::CapturePerformanceSettingsState() const
 {
 	return settings;

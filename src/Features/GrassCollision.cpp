@@ -37,6 +37,11 @@ void GrassCollision::DrawPerformanceSettings(bool)
 	ImGui::Checkbox("Enable Grass Collision", &settings.EnableGrassCollision);
 }
 
+void GrassCollision::DrawEssentialSettings()
+{
+	DrawPerformanceSettings(false);
+}
+
 json GrassCollision::CapturePerformanceSettingsState() const
 {
 	return {

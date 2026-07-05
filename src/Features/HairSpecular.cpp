@@ -73,6 +73,11 @@ void HairSpecular::DrawSettings()
 	ImGui::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
 }
 
+void HairSpecular::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enabled", (bool*)&settings.Enabled);
+}
+
 void HairSpecular::LoadSettings(json& o_json)
 {
 	settings = o_json;

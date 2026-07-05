@@ -65,6 +65,8 @@ public:
 
 	// Settings & UI
 	void DrawSettings() override;
+	bool HasEssentialSettings() const override { return true; }
+	void DrawEssentialSettings() override;
 	void RestoreDefaultSettings() override;
 	void LoadSettings(json& o_json) override;
 	void SaveSettings(json& o_json) override;
@@ -90,6 +92,7 @@ public:
 	std::string GetOverlayWarningMessage() const;
 
 private:
+	void DrawCaptureEnableToggle();
 	bool TriggerConfiguredCapture(bool a_checkDiskSpace = true);
 	uint32_t GetCaptureFrameCount() const;
 	void SetCaptureFrameCount(uint32_t a_frameCount);

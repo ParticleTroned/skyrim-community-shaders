@@ -195,6 +195,11 @@ void ScreenSpaceShadows::DrawPerformanceSettings(bool)
 	}
 }
 
+void ScreenSpaceShadows::DrawEssentialSettings()
+{
+	DrawPerformanceSettings(false);
+}
+
 json ScreenSpaceShadows::CapturePerformanceSettingsState() const
 {
 	return {

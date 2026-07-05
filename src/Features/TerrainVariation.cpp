@@ -39,6 +39,21 @@ void TerrainVariation::DrawSettings()
 	}
 }
 
+void TerrainVariation::DrawEssentialSettings()
+{
+	bool oldEnabled = settings.enableTilingFix;
+	ImGui::Checkbox("Enable Terrain Tiling Fix", (bool*)&settings.enableTilingFix);
+	if (oldEnabled != (bool)settings.enableTilingFix) {
+		UpdateShaderSettings();
+		logger::info("TerrainVariation setting changed to: {}", settings.enableTilingFix);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Reduces the repeating pattern effect on terrain textures.\n"
+			"This technique creates more natural-looking terrain by adding variation to texture sampling.");
+	}
+}
+
 void TerrainVariation::UpdateShaderSettings()
 {
 	if (!globals::state) {

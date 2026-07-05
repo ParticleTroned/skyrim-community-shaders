@@ -885,7 +885,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			const bool globalEssentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
 			const bool featureAdvancedMode = IsFeatureAdvancedUiMode(feat);
 			const bool essentialsFeatureMode = globalEssentialsMode && !featureAdvancedMode;
-			const bool performanceFeatureMode = essentialsFeatureMode && feat->HasPerformanceSettings();
+			const bool hasEssentialSettings = essentialsFeatureMode && feat->HasEssentialSettings();
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 			if (!essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
@@ -924,8 +924,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::BeginDisabled();
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			if (performanceFeatureMode) {
-				feat->DrawPerformanceSettings(false);
+			if (hasEssentialSettings) {
+				feat->DrawEssentialSettings();
 			} else if (essentialsFeatureMode) {
 				ImGui::TextDisabled("Toggle Advanced in the header to expose feature's full UI");
 			} else {
@@ -985,7 +985,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
 
-			if (feat != &globals::features::csEditor && globals::profiler && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
+			if (!essentialsFeatureMode && feat != &globals::features::csEditor && globals::profiler && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::Spacing();
 				ImGui::SeparatorText("Profiling");
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());

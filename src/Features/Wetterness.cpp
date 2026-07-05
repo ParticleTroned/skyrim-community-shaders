@@ -2004,6 +2004,11 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
 }
 
+void Wetterness::DrawEssentialSettings()
+{
+	DrawPerformanceSettings(false);
+}
+
 json Wetterness::CapturePerformanceSettingsState() const
 {
 	return {

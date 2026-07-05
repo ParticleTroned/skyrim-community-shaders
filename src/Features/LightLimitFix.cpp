@@ -704,6 +704,11 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	}
 }
 
+void LightLimitFix::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
+}
+
 json LightLimitFix::CapturePerformanceSettingsState() const
 {
 	return settings;

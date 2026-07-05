@@ -715,20 +715,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	DrawGlobalPresetControls();
 
-	const auto currentProfile = GetCurrentProfileForUI();
-	std::string currentProfileTabSyncKey = std::to_string(static_cast<uint32_t>(currentProfile));
-	if (const auto* activeOverride = GetActiveLocationOverride()) {
-		currentProfileTabSyncKey += ':';
-		currentProfileTabSyncKey += activeOverride->key;
-	}
-
-	bool selectCurrentProfileTab = false;
-	if (!profileTabSyncInitialized || profileTabSyncKey != currentProfileTabSyncKey) {
-		selectedProfileTab = currentProfile;
-		profileTabSyncKey = std::move(currentProfileTabSyncKey);
-		profileTabSyncInitialized = true;
-		selectCurrentProfileTab = true;
-	}
+	const bool selectCurrentProfileTab = SyncSelectedProfileTabToContext();
 
 	ImGui::SeparatorText("Profiles");
 	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
@@ -747,6 +734,41 @@ void AdaptiveBrightness::DrawSettings()
 
 	DrawLocationOverrides();
 	DrawFullPresetControls();
+
+	ImGui::EndDisabled();
+}
+
+void AdaptiveBrightness::DrawEssentialSettings()
+{
+	ImGui::BeginDisabled(!settings.enabled);
+
+	const bool selectCurrentProfileTab = SyncSelectedProfileTabToContext();
+
+	ImGui::SeparatorText("Profiles");
+	if (ImGui::BeginTabBar("##AdaptiveBrightnessProfilesEssentials", ImGuiTabBarFlags_None)) {
+		for (auto profile : kProfileOrder) {
+			const ImGuiTabItemFlags tabFlags =
+				selectCurrentProfileTab && selectedProfileTab == profile ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+			if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
+				selectedProfileTab = profile;
+				auto& profileSettings = settings.profiles[ProfileIndex(profile)];
+				const bool exteriorProfile = profile == Profile::ExteriorDay || profile == Profile::ExteriorNight;
+
+				ImGui::PushID(static_cast<int>(ProfileIndex(profile)));
+				if (exteriorProfile) {
+					DrawExteriorTimeSettings();
+					DrawProfileSettings(profileSettings, "Profile Values", false);
+				} else {
+					DrawProfileSettings(profileSettings, "Profile Values", false);
+				}
+				ImGui::PopID();
+
+				ImGui::EndTabItem();
+			}
+		}
+
+		ImGui::EndTabBar();
+	}
 
 	ImGui::EndDisabled();
 }
@@ -802,6 +824,24 @@ const char* AdaptiveBrightness::GetProfileName(Profile a_profile)
 	return kProfileNames[ProfileIndex(a_profile)];
 }
 
+bool AdaptiveBrightness::SyncSelectedProfileTabToContext()
+{
+	const auto currentProfile = GetCurrentProfileForUI();
+	std::string currentProfileTabSyncKey = std::to_string(static_cast<uint32_t>(currentProfile));
+	if (const auto* activeOverride = GetActiveLocationOverride()) {
+		currentProfileTabSyncKey += ':';
+		currentProfileTabSyncKey += activeOverride->key;
+	}
+
+	if (profileTabSyncInitialized && profileTabSyncKey == currentProfileTabSyncKey)
+		return false;
+
+	selectedProfileTab = currentProfile;
+	profileTabSyncKey = std::move(currentProfileTabSyncKey);
+	profileTabSyncInitialized = true;
+	return true;
+}
+
 void AdaptiveBrightness::DrawExteriorTimeSettings()
 {
 	ImGui::SeparatorText("Exterior Time");
@@ -838,7 +878,7 @@ void AdaptiveBrightness::DrawProfile(Profile a_profile)
 	ImGui::PopID();
 }
 
-void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle)
+void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls)
 {
 	ClampProfileSettings(a_profile);
 
@@ -855,13 +895,15 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 	ImGui::Spacing();
 	drawSlider("Scene Brightness", a_profile.brightness, kBrightnessMin, kBrightnessMax, "Overall brightness for this profile. Use it when this location type is too dark or too bright.");
 
-	bool advancedControls = advancedControlsOpen;
-	if (ImGui::Checkbox("Advanced Controls", &advancedControls))
-		SetAdvancedControlsOpen(advancedControls);
+	if (a_showAdvancedControls) {
+		bool advancedControls = advancedControlsOpen;
+		if (ImGui::Checkbox("Advanced Controls", &advancedControls))
+			SetAdvancedControlsOpen(advancedControls);
 
-	a_profile.advanced = advancedControlsOpen;
+		a_profile.advanced = advancedControlsOpen;
+	}
 
-	if (advancedControlsOpen) {
+	if (a_showAdvancedControls && advancedControlsOpen) {
 		ImGui::SeparatorText("Light Multipliers");
 		ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, 3.0f, "%.2f");

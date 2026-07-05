@@ -131,22 +131,7 @@ void RenderDoc::DrawSettings()
 	// Track section visibility for intelligent cache refreshing
 	bool isSectionVisible = false;
 
-	// Include enable toggle and annotation forcing logic here
-	bool prevRenderDocCapture = enableRenderDocCapture;
-	if (ImGui::Checkbox("Enable RenderDoc Capture", &enableRenderDocCapture)) {
-		if (enableRenderDocCapture && !prevRenderDocCapture) {
-			globals::state->useFrameAnnotations = globals::state->frameAnnotations;
-			globals::state->frameAnnotations = true;
-		}
-		if (!enableRenderDocCapture && prevRenderDocCapture) {
-			globals::state->frameAnnotations = globals::state->useFrameAnnotations;
-		}
-	}
-
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable RenderDoc frame capture for providing debug captures to the Community Shaders team.");
-		ImGui::Text("Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled.");
-	}
+	DrawCaptureEnableToggle();
 
 	// The rest of the UI renders only when capture is active
 	bool renderDocCaptureEnabled = enableRenderDocCapture;
@@ -562,6 +547,30 @@ void RenderDoc::LoadSettings(json& o_json)
 			static_cast<int64_t>(kMinCaptureFrameCount),
 			static_cast<int64_t>(kMaxCaptureFrameCount));
 		SetCaptureFrameCount(static_cast<uint32_t>(frameCount));
+	}
+}
+
+void RenderDoc::DrawEssentialSettings()
+{
+	DrawCaptureEnableToggle();
+}
+
+void RenderDoc::DrawCaptureEnableToggle()
+{
+	bool prevRenderDocCapture = enableRenderDocCapture;
+	if (ImGui::Checkbox("Enable RenderDoc Capture", &enableRenderDocCapture)) {
+		if (enableRenderDocCapture && !prevRenderDocCapture) {
+			globals::state->useFrameAnnotations = globals::state->frameAnnotations;
+			globals::state->frameAnnotations = true;
+		}
+		if (!enableRenderDocCapture && prevRenderDocCapture) {
+			globals::state->frameAnnotations = globals::state->useFrameAnnotations;
+		}
+	}
+
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Enable RenderDoc frame capture for providing debug captures to the Community Shaders team.");
+		ImGui::Text("Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled.");
 	}
 }
 

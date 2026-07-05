@@ -254,6 +254,11 @@ void DynamicCubemaps::DrawPerformanceSettings(bool a_advanced)
 	}
 }
 
+void DynamicCubemaps::DrawEssentialSettings()
+{
+	DrawPerformanceSettings(false);
+}
+
 json DynamicCubemaps::CapturePerformanceSettingsState() const
 {
 	return {

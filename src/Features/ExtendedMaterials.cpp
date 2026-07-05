@@ -87,6 +87,11 @@ void ExtendedMaterials::DrawSettings()
 	}
 }
 
+void ExtendedMaterials::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Complex Material", (bool*)&settings.EnableComplexMaterial);
+}
+
 void ExtendedMaterials::LoadSettings(json& o_json)
 {
 	settings = o_json;

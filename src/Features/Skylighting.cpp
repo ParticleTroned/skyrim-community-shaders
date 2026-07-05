@@ -557,6 +557,11 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 	DrawSkylightingUpdatePerformanceSettings(*this);
 }
 
+void Skylighting::DrawEssentialSettings()
+{
+	DrawPerformanceSettings(false);
+}
+
 json Skylighting::CapturePerformanceSettingsState() const
 {
 	return {

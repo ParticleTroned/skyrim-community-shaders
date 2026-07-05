@@ -5102,6 +5102,11 @@ void Upscaling::DrawPerformanceSettings(bool)
 		InvalidateFrameScopedUpscalingState();
 }
 
+void Upscaling::DrawEssentialSettings()
+{
+	DrawPerformanceSettings(false);
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));

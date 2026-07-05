@@ -108,8 +108,9 @@ namespace PNState
 
 void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& material, const TruePBR::PBRTextureSetData& textureSetData, uint32_t textureIndex);
 
-void TruePBR::DrawSettings()
+namespace
 {
+	void DrawPBRMetalSliders()
 	{
 		ImGui::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
 		if (ImGui::IsItemHovered()) {
@@ -119,6 +120,13 @@ void TruePBR::DrawSettings()
 		if (ImGui::IsItemHovered()) {
 			ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
 		}
+	}
+}
+
+void TruePBR::DrawSettings()
+{
+	{
+		DrawPBRMetalSliders();
 		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 
@@ -314,6 +322,11 @@ void TruePBR::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+}
+
+void TruePBR::DrawEssentialSettings()
+{
+	DrawPBRMetalSliders();
 }
 
 void TruePBR::SaveSettings(json& o_json)

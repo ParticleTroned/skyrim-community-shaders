@@ -45,6 +45,19 @@ void TerrainHelper::DrawSettings()
 	}
 }
 
+void TerrainHelper::DrawEssentialSettings()
+{
+	if (!featureAvailable) {
+		ImGui::TextDisabled("TerrainHelper.esp not detected. Runtime toggle is unavailable.");
+		return;
+	}
+
+	if (ImGui::Checkbox("Enable Terrain Helper", &settings.EnableTerrainHelper)) {
+		if (!settings.EnableTerrainHelper)
+			ClearTerrainHelperRuntimeState();
+	}
+}
+
 void TerrainHelper::LoadSettings(json& o_json)
 {
 	settings = o_json;

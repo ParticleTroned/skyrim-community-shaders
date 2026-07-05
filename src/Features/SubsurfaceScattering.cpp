@@ -215,6 +215,11 @@ void SubsurfaceScattering::DrawPerformanceSettings(bool)
 	}
 }
 
+void SubsurfaceScattering::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Subsurface Scattering", &settings.EnableSubsurfaceScattering);
+}
+
 json SubsurfaceScattering::CapturePerformanceSettingsState() const
 {
 	return settings;

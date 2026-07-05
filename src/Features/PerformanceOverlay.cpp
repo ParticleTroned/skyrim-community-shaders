@@ -230,6 +230,21 @@ void PerformanceOverlay::DrawSettings()
 	}
 }
 
+void PerformanceOverlay::DrawEssentialSettings()
+{
+	auto menu = Menu::GetSingleton();
+	const auto& themeSettings = menu->GetTheme();
+	const auto& menuSettings = menu->GetSettings();
+	ImGui::Checkbox("Show in Overlay", &this->settings.ShowInOverlay);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Opens performance overlay in a separate window that stays open\neven when the main menu is closed. ");
+		ImGui::Text("Toggle with ");
+		ImGui::SameLine();
+		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",
+			Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
+	}
+}
+
 void PerformanceOverlay::SaveSettings(json& j)
 {
 	// Persist all overlay settings to JSON

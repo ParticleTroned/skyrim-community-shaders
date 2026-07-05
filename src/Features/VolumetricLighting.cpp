@@ -316,6 +316,31 @@ void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 	}
 }
 
+void VolumetricLighting::DrawEssentialSettings()
+{
+	SanitizeSettings();
+
+	auto drawVRRestartHint = [] {
+		if (!globals::game::isVR) {
+			return;
+		}
+
+		ImGui::SameLine();
+		ImGui::TextDisabled("(VR restart required)");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("In VR, this change needs a restart before it fully applies.");
+		}
+	};
+
+	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
+		SetupVL();
+	drawVRRestartHint();
+
+	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
+		SetupVL();
+	drawVRRestartHint();
+}
+
 json VolumetricLighting::CapturePerformanceSettingsState() const
 {
 	return settings;

@@ -137,6 +137,8 @@ struct AdaptiveBrightness : Feature
 	mutable bool locationOverrideLookupDirty = true;
 
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -162,9 +164,10 @@ struct AdaptiveBrightness : Feature
 	float GetExteriorNightFactor() const;
 	std::string GetContextLabel() const;
 	static const char* GetProfileName(Profile a_profile);
+	bool SyncSelectedProfileTabToContext();
 	void DrawExteriorTimeSettings();
 	void DrawProfile(Profile a_profile);
-	void DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle = "Profile Values");
+	void DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle = "Profile Values", bool a_showAdvancedControls = true);
 	void SetAdvancedControlsOpen(bool a_open);
 	void DrawGlobalPresetControls();
 	void DrawLocationOverrides();

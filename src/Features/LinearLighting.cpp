@@ -89,6 +89,11 @@ void LinearLighting::DrawSettings()
 	}
 }
 
+void LinearLighting::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Linear Lighting", (bool*)&settings.enableLinearLighting);
+}
+
 void LinearLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;

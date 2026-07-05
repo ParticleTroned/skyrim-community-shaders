@@ -210,6 +210,18 @@ void IBL::DrawSettings()
 	}
 }
 
+void IBL::DrawEssentialSettings()
+{
+	SanitizeSettings(settings);
+	bool enableIBL = settings.EnableIBL != 0;
+	if (Util::WeatherUI::Checkbox("Enable IBL", this, "EnableIBL", &enableIBL)) {
+		settings.EnableIBL = enableIBL ? 1u : 0u;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");
+	}
+}
+
 void IBL::LoadSettings(json& o_json)
 {
 	settings = o_json;

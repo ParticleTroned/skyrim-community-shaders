@@ -107,6 +107,36 @@ public:
 		bool isHDR = false;
 		bool useLegacyProfile = false;
 	};
+	struct DLSSFrameConstantsCache
+	{
+		bool valid = false;
+		uint32_t frame = 0;
+		std::uintptr_t frameToken = 0;
+		std::uintptr_t colorIn = 0;
+		std::uintptr_t colorOut = 0;
+		std::uintptr_t depth = 0;
+		std::uintptr_t motionVectors = 0;
+		std::uintptr_t reactiveMask = 0;
+		std::uintptr_t transparencyMask = 0;
+		uint32_t viewport = UINT32_MAX;
+		uint32_t eyeIndex = 0;
+		uint32_t viewportRole = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = 0;
+		uint32_t extentInWidth = 0;
+		uint32_t extentInHeight = 0;
+		uint32_t extentOutWidth = 0;
+		uint32_t extentOutHeight = 0;
+		int32_t viewportScaleXQ = 0;
+		int32_t viewportScaleYQ = 0;
+		int32_t pinholeOffsetXQ = 0;
+		int32_t pinholeOffsetYQ = 0;
+		int32_t jitterXQ = 0;
+		int32_t jitterYQ = 0;
+		bool historyResetRequested = false;
+	};
 
 	struct VRDLSSViewportSlot
 	{
@@ -121,6 +151,8 @@ public:
 
 	DLSSOptionsCache nonVRDLSSOptionsCache{};
 	VRDLSSViewportSlot vrDLSSViewportSlots[kVRDLSSViewportRoleCount][kVRDLSSViewportSlotCount]{};
+	static constexpr uint32_t kDLSSFrameConstantsCacheSize = 16;
+	std::array<DLSSFrameConstantsCache, kDLSSFrameConstantsCacheSize> dlssFrameConstantsCache{};
 	uint64_t vrDLSSViewportUseCounter = 0;
 	std::array<bool, 2> activeDLSSViewportResourcesAllocated = {};
 	ID3D11Query* pendingDLSSResourceFreeIdleFence = nullptr;

@@ -146,6 +146,20 @@ namespace
 		return std::format("{}", a_resultCode);
 	}
 
+	int32_t QuantizeDLSSDiagnosticFloat(float a_value)
+	{
+		if (!std::isfinite(a_value))
+			return 0;
+
+		const double scaled = static_cast<double>(a_value) * 1000000.0;
+		if (scaled > static_cast<double>(std::numeric_limits<int32_t>::max()))
+			return std::numeric_limits<int32_t>::max();
+		if (scaled < static_cast<double>(std::numeric_limits<int32_t>::min()))
+			return std::numeric_limits<int32_t>::min();
+
+		return static_cast<int32_t>(std::lround(scaled));
+	}
+
 	bool ShouldEmitDLSSDiagnostic(
 		DLSSDiagnosticStage a_stage,
 		const Streamline::DLSSDispatchDiagnostics* a_diagnostics,
@@ -186,22 +200,10 @@ namespace
 		const size_t index = static_cast<size_t>(a_stage) * 2u + boundedEye;
 		auto& state = throttle[index];
 		const char* label = a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
-		const auto quantizeFloat = [](float a_value) {
-			if (!std::isfinite(a_value))
-				return 0;
-
-			const double scaled = static_cast<double>(a_value) * 1000000.0;
-			if (scaled > static_cast<double>(std::numeric_limits<int32_t>::max()))
-				return std::numeric_limits<int32_t>::max();
-			if (scaled < static_cast<double>(std::numeric_limits<int32_t>::min()))
-				return std::numeric_limits<int32_t>::min();
-
-			return static_cast<int32_t>(std::lround(scaled));
-		};
-		const int32_t viewportScaleXQ = quantizeFloat(a_diagnostics->viewportScaleX);
-		const int32_t viewportScaleYQ = quantizeFloat(a_diagnostics->viewportScaleY);
-		const int32_t pinholeOffsetXQ = quantizeFloat(a_diagnostics->pinholeOffsetX);
-		const int32_t pinholeOffsetYQ = quantizeFloat(a_diagnostics->pinholeOffsetY);
+		const int32_t viewportScaleXQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->viewportScaleX);
+		const int32_t viewportScaleYQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->viewportScaleY);
+		const int32_t pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->pinholeOffsetX);
+		const int32_t pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->pinholeOffsetY);
 		const bool signatureChanged =
 			!state.valid ||
 			state.requestedViewport != static_cast<uint32_t>(a_diagnostics->requestedViewport) ||
@@ -869,8 +871,87 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	slConstants.motionVectorsDilated = sl::Boolean::eFalse;
 	slConstants.motionVectorsJittered = sl::Boolean::eFalse;
 
+	const auto makeFrameConstantsSignature = [&]() {
+		DLSSFrameConstantsCache signature{};
+		signature.valid = true;
+		signature.frame = diagnostics ? diagnostics->frame : state->frameCount;
+		signature.frameToken = reinterpret_cast<std::uintptr_t>(frameToken);
+		signature.colorIn = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->colorIn) : 0u;
+		signature.colorOut = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->colorOut) : 0u;
+		signature.depth = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->depth) : 0u;
+		signature.motionVectors = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->motionVectors) : 0u;
+		signature.reactiveMask = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->reactiveMask) : 0u;
+		signature.transparencyMask = diagnostics ? reinterpret_cast<std::uintptr_t>(diagnostics->transparencyMask) : 0u;
+		signature.viewport = static_cast<uint32_t>(p_viewport);
+		signature.eyeIndex = eyeIndex;
+		signature.viewportRole = diagnostics ? static_cast<uint32_t>(diagnostics->viewportRole) : static_cast<uint32_t>(DLSSViewportRole::FullEye);
+		signature.outputWidth = diagnostics ? diagnostics->outputWidth : 0u;
+		signature.outputHeight = diagnostics ? diagnostics->outputHeight : 0u;
+		signature.qualityMode = diagnostics ? diagnostics->qualityMode : 0u;
+		signature.dlssPreset = diagnostics ? diagnostics->dlssPreset : 0u;
+		signature.extentInWidth = diagnostics ? diagnostics->extentIn.width : 0u;
+		signature.extentInHeight = diagnostics ? diagnostics->extentIn.height : 0u;
+		signature.extentOutWidth = diagnostics ? diagnostics->extentOut.width : 0u;
+		signature.extentOutHeight = diagnostics ? diagnostics->extentOut.height : 0u;
+		signature.viewportScaleXQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleX);
+		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleY);
+		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetX);
+		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetY);
+		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.x);
+		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.y);
+		signature.historyResetRequested = requestHistoryReset;
+		return signature;
+	};
+	const auto frameConstantsMatch = [](const DLSSFrameConstantsCache& a_cached, const DLSSFrameConstantsCache& a_signature) {
+		return a_cached.valid &&
+		       a_cached.frame == a_signature.frame &&
+		       a_cached.frameToken == a_signature.frameToken &&
+		       a_cached.colorIn == a_signature.colorIn &&
+		       a_cached.colorOut == a_signature.colorOut &&
+		       a_cached.depth == a_signature.depth &&
+		       a_cached.motionVectors == a_signature.motionVectors &&
+		       a_cached.reactiveMask == a_signature.reactiveMask &&
+		       a_cached.transparencyMask == a_signature.transparencyMask &&
+		       a_cached.viewport == a_signature.viewport &&
+		       a_cached.eyeIndex == a_signature.eyeIndex &&
+		       a_cached.viewportRole == a_signature.viewportRole &&
+		       a_cached.outputWidth == a_signature.outputWidth &&
+		       a_cached.outputHeight == a_signature.outputHeight &&
+		       a_cached.qualityMode == a_signature.qualityMode &&
+		       a_cached.dlssPreset == a_signature.dlssPreset &&
+		       a_cached.extentInWidth == a_signature.extentInWidth &&
+		       a_cached.extentInHeight == a_signature.extentInHeight &&
+		       a_cached.extentOutWidth == a_signature.extentOutWidth &&
+		       a_cached.extentOutHeight == a_signature.extentOutHeight &&
+		       a_cached.viewportScaleXQ == a_signature.viewportScaleXQ &&
+		       a_cached.viewportScaleYQ == a_signature.viewportScaleYQ &&
+		       a_cached.pinholeOffsetXQ == a_signature.pinholeOffsetXQ &&
+		       a_cached.pinholeOffsetYQ == a_signature.pinholeOffsetYQ &&
+		       a_cached.jitterXQ == a_signature.jitterXQ &&
+		       a_cached.jitterYQ == a_signature.jitterYQ &&
+		       a_cached.historyResetRequested == a_signature.historyResetRequested;
+	};
+	const bool canAcceptDuplicateConstants =
+		diagnostics &&
+		diagnostics->submitStageVRDLSS &&
+		(diagnostics->viewportRole == DLSSViewportRole::FullEye ||
+			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
+	DLSSFrameConstantsCache frameConstantsSignature{};
+	if (canAcceptDuplicateConstants)
+		frameConstantsSignature = makeFrameConstantsSignature();
+
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
-		lastDLSSFailureDuplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
+		const bool duplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
+		if (duplicatedConstants && canAcceptDuplicateConstants) {
+			for (const auto& cachedSignature : dlssFrameConstantsCache) {
+				if (frameConstantsMatch(cachedSignature, frameConstantsSignature)) {
+					lastDLSSFailureDuplicatedConstants = false;
+					return true;
+				}
+			}
+		}
+
+		lastDLSSFailureDuplicatedConstants = duplicatedConstants;
 		const auto resultLabel = magic_enum::enum_name(res);
 		if (diagnostics) {
 			if (ShouldEmitDLSSDiagnostic(DLSSDiagnosticStage::SetConstants, diagnostics, static_cast<int32_t>(res), resultLabel)) {
@@ -901,6 +982,19 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		return false;
 	}
 
+	if (canAcceptDuplicateConstants) {
+		auto* targetSlot = &dlssFrameConstantsCache[static_cast<uint32_t>(p_viewport) % dlssFrameConstantsCache.size()];
+		for (auto& cachedSignature : dlssFrameConstantsCache) {
+			if (!cachedSignature.valid ||
+				(cachedSignature.viewport == frameConstantsSignature.viewport &&
+					cachedSignature.eyeIndex == frameConstantsSignature.eyeIndex &&
+					cachedSignature.viewportRole == frameConstantsSignature.viewportRole)) {
+				targetSlot = &cachedSignature;
+				break;
+			}
+		}
+		*targetSlot = frameConstantsSignature;
+	}
 	return true;
 }
 
@@ -1233,6 +1327,7 @@ Streamline::DLSSOptionsCache& Streamline::GetDLSSOptionsCache(DLSSViewportRole v
 void Streamline::InvalidateDLSSOptionsCache()
 {
 	nonVRDLSSOptionsCache = {};
+	dlssFrameConstantsCache = {};
 	for (auto& roleSlots : vrDLSSViewportSlots) {
 		for (auto& slot : roleSlots) {
 			for (auto& optionsCache : slot.optionsCache)
@@ -1251,6 +1346,7 @@ void Streamline::ResetFrameTracking()
 {
 	frameToken = nullptr;
 	frameChecker = {};
+	dlssFrameConstantsCache = {};
 }
 
 bool Streamline::HasDLSSResourcesPendingTeardown() const
@@ -1353,23 +1449,23 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.croppedViewport = viewportScaleX < 0.999f || viewportScaleY < 0.999f;
 	diagnostics.pinholeOffsetX = pinholeOffsetX;
 	diagnostics.pinholeOffsetY = pinholeOffsetY;
+	diagnostics.submitStageVRDLSS = submitStageVRDLSS;
+	diagnostics.colorIn = colorIn;
+	diagnostics.colorOut = colorOut;
+	diagnostics.depth = depth;
+	diagnostics.motionVectors = mvec;
+	diagnostics.reactiveMask = reactiveMask;
+	diagnostics.transparencyMask = transparencyMask;
 	if (collectDLSSDiagnostics) {
 		diagnostics.jitterX = upscaling.jitter.x;
 		diagnostics.jitterY = upscaling.jitter.y;
 		diagnostics.colorBuffersHDR = colorBuffersHDR;
-		diagnostics.submitStageVRDLSS = submitStageVRDLSS;
 		diagnostics.presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
 		diagnostics.renderScaleActive = upscaling.IsVRRenderScaleModeActive();
 		diagnostics.foveatedDispatchEnabled = upscaling.IsFoveatedVendorDispatchEnabled(upscaling.GetRuntimeUpscaleMethod());
 		diagnostics.peripheryTAAEnabled = upscaling.IsPeripheryTAAEnabled(upscaling.GetRuntimeUpscaleMethod());
 		diagnostics.historyResetRequested = upscaling.ShouldResetHistoryThisFrame();
 		diagnostics.frameToken = frameToken;
-		diagnostics.colorIn = colorIn;
-		diagnostics.colorOut = colorOut;
-		diagnostics.depth = depth;
-		diagnostics.motionVectors = mvec;
-		diagnostics.reactiveMask = reactiveMask;
-		diagnostics.transparencyMask = transparencyMask;
 	}
 	const auto updateOptionsCacheDiagnostics = [&]() {
 		if (!collectDLSSDiagnostics)

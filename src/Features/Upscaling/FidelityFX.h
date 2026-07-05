@@ -61,6 +61,9 @@ public:
 	void DestroyFSRResources(bool a_waitForIdle = true);
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
+	bool HasRuntimeUpscalerResources() const;
+	bool PollRuntimeUpscalerTeardownReady(const char* a_reason = nullptr);
+	void ReleaseRuntimeUpscalerResourcesForRelatch(bool a_waitForIdle = true);
 	bool HasFSRResourcesPendingTeardown() const;
 	bool PollFSRResourceTeardownReady(const char* a_reason = nullptr);
 	void ResetFSRIdleFence();

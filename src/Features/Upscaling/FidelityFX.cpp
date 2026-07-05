@@ -1219,6 +1219,27 @@ bool FidelityFX::AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_re
 	       a_displayHeight == fsrContextDisplayHeight;
 }
 
+bool FidelityFX::HasRuntimeUpscalerResources() const
+{
+	bool hasRuntimeResources =
+		runtimeUpscalerContextCount != 0 ||
+		pendingRuntimeTeardownD3D11FenceValue != 0 ||
+		pendingRuntimeTeardownD3D12FenceValue != 0;
+	for (auto* resource : runtimeColorShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeDepthShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeMotionShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeReactiveShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeTransparencyShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	for (auto* resource : runtimeOutputShared)
+		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
+	return hasRuntimeResources;
+}
+
 bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
 {
 	const char* reason = a_reason && *a_reason ? a_reason : "runtime upscaler teardown";
@@ -1279,26 +1300,20 @@ bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
 	return true;
 }
 
+bool FidelityFX::PollRuntimeUpscalerTeardownReady(const char* a_reason)
+{
+	if (!HasRuntimeUpscalerResources()) {
+		pendingRuntimeTeardownD3D11FenceValue = 0;
+		pendingRuntimeTeardownD3D12FenceValue = 0;
+		return true;
+	}
+
+	return PollRuntimeUpscalerTeardownIdle(a_reason);
+}
+
 bool FidelityFX::HasFSRResourcesPendingTeardown() const
 {
-	bool hasRuntimeResources =
-		runtimeUpscalerContextCount != 0 ||
-		runtimeD3D11Fence.get() ||
-		runtimeD3D12Fence.get();
-	for (auto* resource : runtimeColorShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeDepthShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeMotionShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeReactiveShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeTransparencyShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-	for (auto* resource : runtimeOutputShared)
-		hasRuntimeResources = hasRuntimeResources || resource != nullptr;
-
-	return fsrContextCount != 0 || fsrScratchBuffer || hasRuntimeResources;
+	return fsrContextCount != 0 || fsrScratchBuffer || HasRuntimeUpscalerResources();
 }
 
 bool FidelityFX::PollFSRResourceTeardownReady(const char* a_reason)
@@ -1337,6 +1352,18 @@ void FidelityFX::ResetRuntimeUpscalerResources(bool a_invalidateProviderCache)
 	DestroyRuntimeUpscalerContexts(false);
 	DestroyRuntimeUpscalerResources(false);
 	ResetRuntimeUpscalerTracking(a_invalidateProviderCache);
+}
+
+void FidelityFX::ReleaseRuntimeUpscalerResourcesForRelatch(bool a_waitForIdle)
+{
+	if (a_waitForIdle)
+		WaitForRuntimeUpscalerIdle();
+
+	DestroyRuntimeUpscalerContexts(false);
+	DestroyRuntimeUpscalerResources(false);
+	ResetRuntimeCommandContexts();
+	pendingRuntimeTeardownD3D11FenceValue = 0;
+	pendingRuntimeTeardownD3D12FenceValue = 0;
 }
 
 void FidelityFX::DestroyFSRResources(bool a_waitForIdle)

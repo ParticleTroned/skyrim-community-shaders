@@ -7763,8 +7763,15 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		const bool memoryReliefActiveForRelatch = IsVRRenderScaleMemoryReliefActive();
 		if (memoryReliefActiveForRelatch)
 			ApplyVRRenderScaleMemoryReliefTransitionCleanup("render-target relatch");
+		const bool rapidAmdFsrLowPeakRelatch =
+			memoryReliefActiveForRelatch &&
+			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			amdAdapterForRelatch;
+		// In rapid AMD/FSR relatch windows, prefer reusing compatible host FSR
+		// contexts and reduce peak pressure elsewhere instead of forcing a rebuild.
 		const bool forceFSRResourceRecreateForRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
+			!rapidAmdFsrLowPeakRelatch &&
 			(amdAdapterForRelatch ||
 				(relatchTargetRenderScaleActive && plannedRelatchWillResizeRenderTargets));
 		const auto canPreserveFSRResourcesForRelatch = [&]() {
@@ -7839,6 +7846,30 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				BoolText(ClampToggleUInt(relatchSettings.renderScaleMode) != 0),
 				BoolText(ClampToggleUInt(relatchSettings.perfMode) != 0));
 		}
+		const auto hasSupersedingRapidAmdFsrTransition = [&]() {
+			return rapidAmdFsrLowPeakRelatch &&
+			       HasPendingVRRenderScaleTransition() &&
+			       pendingVRUpscalingTransitionFrame.load(std::memory_order_acquire) != 0;
+		};
+		static bool loggedRapidAmdFsrRelatchCoalesce = false;
+		const auto deferSupersededRapidAmdFsrRelatch = [&](const char* a_reason, bool a_resourcesRetired) {
+			if (a_resourcesRetired)
+				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
+			pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
+			pendingVRRenderScaleRecoverySnapshot = {};
+			InvalidateFrameScopedUpscalingState();
+			ClearSubmitStageVendorResumeStability();
+			requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+			if (!loggedRapidAmdFsrRelatchCoalesce) {
+				logger::debug(
+					"[VRRenderScale] Deferred rapid AMD/FSR relatch because a newer render-scale target superseded the in-flight target{}{}.",
+					a_reason && *a_reason ? " during " : "",
+					a_reason && *a_reason ? a_reason : "");
+				loggedRapidAmdFsrRelatchCoalesce = true;
+			}
+			return false;
+		};
+		static bool loggedRapidAmdFsrRuntimeDrainDefer = false;
 		bool fsrTeardownReadyForRelatch = false;
 		const bool drainFSRResourcesBeforeRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
@@ -7870,6 +7901,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				   !fidelityFX.HasFSRResourcesPendingTeardown()) {
 			ClearVRFSRRelatchDrainGuard();
 		}
+		if (hasSupersedingRapidAmdFsrTransition())
+			return deferSupersededRapidAmdFsrRelatch("FSR drain", false);
 		if (!ResetVRVendorRuntimeResources(
 				destroyDLSSResourcesForRelatch,
 				true,
@@ -7893,6 +7926,29 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			}
 			return false;
 		}
+		if (rapidAmdFsrLowPeakRelatch &&
+			preserveFSRResourcesForRelatch &&
+			fidelityFX.HasRuntimeUpscalerResources()) {
+			// Drop transient runtime upscaler allocations before resizing D3D render
+			// targets, while keeping compatible host FSR contexts alive.
+			if (!fidelityFX.PollRuntimeUpscalerTeardownReady("VR render-target relatch runtime upscaler drain")) {
+				MarkVendorRuntimeResourcesDirty(UpscaleMethod::kFSR, relatchContractGeneration);
+				requeueRelatch(kVRUpscalingTransitionApplyDelayFrames, false);
+				if (!loggedRapidAmdFsrRuntimeDrainDefer) {
+					logger::debug("[VRRenderScale] Rapid AMD/FSR relatch waiting for runtime upscaler resources to drain before D3D target recreation.");
+					loggedRapidAmdFsrRuntimeDrainDefer = true;
+				}
+				return false;
+			}
+
+			fidelityFX.ReleaseRuntimeUpscalerResourcesForRelatch(false);
+			loggedRapidAmdFsrRuntimeDrainDefer = false;
+		} else {
+			loggedRapidAmdFsrRuntimeDrainDefer = false;
+		}
+		if (hasSupersedingRapidAmdFsrTransition())
+			return deferSupersededRapidAmdFsrRelatch("vendor resource reset", true);
+		loggedRapidAmdFsrRelatchCoalesce = false;
 
 		perfMode.ResetBootLatch();
 		perfModeAllowBootLatchCreate.store(true, std::memory_order_release);

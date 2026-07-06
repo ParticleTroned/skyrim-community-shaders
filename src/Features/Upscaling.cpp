@@ -52,6 +52,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	frameGenerationForceEnable,
 	frameGenerationAllowInMenus,
 	streamlineLogLevel,
+	vrMenuBridgeDebugMode,
 	sharpnessFSR,
 	sharpnessDLSS,
 	dlssSharpener,
@@ -184,6 +185,12 @@ namespace
 		144,  // mode 48: HUD menu bridge variant
 		504   // mode 168: HUD menu bridge variant
 	} };
+	constexpr bool kVRMenuBridgeABModeEnabled = true;
+	constexpr bool kVRMenuBridgeRC55DiagnosticsLoggingEnabled = false;
+	constexpr double kVRMenuFinalCompositeSpikeThresholdUs = 500.0;
+	constexpr double kVRMenuLifecycleSpikeThresholdUs = 500.0;
+	constexpr uint32_t kVRMenuPerfSpikeLogLimit = 16u;
+	constexpr uint32_t kVRMenuBridgeSkippedDrawCountDiagSlots = 8u;
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = 1800;
@@ -321,6 +328,7 @@ namespace
 		uint64_t sampleCount = 0;
 		uint64_t totalTicks = 0;
 		uint64_t maxTicks = 0;
+		uint32_t spikeLogCount = 0;
 		uint32_t firstFrame = 0;
 		uint32_t lastFrame = 0;
 		uint64_t menuMaskSeen = 0;
@@ -348,7 +356,9 @@ namespace
 	std::vector<VRMenuBridgeDedupeDiagBucket> g_vrMenuBridgeDedupeDiagBuckets;
 	std::mutex g_vrMenuPerfDiagMutex;
 	std::array<VRMenuPerfDiagBucket, static_cast<size_t>(VRMenuPerfBucket::Count)> g_vrMenuPerfDiagBuckets{};
-	std::atomic_uint32_t g_vrMenuBridgeSkippedDrawCountDiagFrame{ 0 };
+	std::array<std::atomic_uint32_t, kVRMenuBridgeSkippedDrawCountDiagSlots> g_vrMenuBridgeSkippedDrawCounts{};
+	constexpr uint32_t kVRMenuBridgeDebugModeUnlatched = std::numeric_limits<uint32_t>::max();
+	std::atomic_uint32_t g_vrMenuBridgeDebugModeLatched{ kVRMenuBridgeDebugModeUnlatched };
 
 	const VRMenuBridgeHigherCallContext* GetCurrentVRMenuBridgeHigherCallContext();
 
@@ -356,6 +366,65 @@ namespace
 	{
 		auto* state = globals::state;
 		return state && state->IsDeveloperMode();
+	}
+
+	bool ShouldEmitVRMenuBridgeDiagLogs()
+	{
+		return kVRMenuBridgeRC55DiagnosticsLoggingEnabled && ShouldEmitUpscalingDiagLogs();
+	}
+
+	uint32_t ClampVRMenuBridgeDebugMode([[maybe_unused]] uint32_t a_mode)
+	{
+		if constexpr (!kVRMenuBridgeABModeEnabled) {
+			return Upscaling::kVRMenuBridgeDebugModeCurrent;
+		} else {
+			if (!REL::Module::IsVR())
+				return Upscaling::kVRMenuBridgeDebugModeCurrent;
+
+			return std::min<uint32_t>(a_mode, Upscaling::kVRMenuBridgeDebugModeMax);
+		}
+	}
+
+	void LatchVRMenuBridgeDebugMode(const Upscaling::Settings& a_settings)
+	{
+		if (!REL::Module::IsVR())
+			return;
+
+		uint32_t expected = kVRMenuBridgeDebugModeUnlatched;
+		g_vrMenuBridgeDebugModeLatched.compare_exchange_strong(
+			expected,
+			ClampVRMenuBridgeDebugMode(a_settings.vrMenuBridgeDebugMode),
+			std::memory_order_acq_rel,
+			std::memory_order_acquire);
+	}
+
+	uint32_t GetLatchedVRMenuBridgeDebugMode()
+	{
+		if (!REL::Module::IsVR())
+			return Upscaling::kVRMenuBridgeDebugModeCurrent;
+
+		const uint32_t latchedMode = g_vrMenuBridgeDebugModeLatched.load(std::memory_order_acquire);
+		if (latchedMode != kVRMenuBridgeDebugModeUnlatched)
+			return latchedMode;
+
+		LatchVRMenuBridgeDebugMode(globals::features::upscaling.settings);
+		const uint32_t initializedMode = g_vrMenuBridgeDebugModeLatched.load(std::memory_order_acquire);
+		return initializedMode == kVRMenuBridgeDebugModeUnlatched ?
+		           Upscaling::kVRMenuBridgeDebugModeCurrent :
+		           initializedMode;
+	}
+
+	[[maybe_unused]] const char* GetVRMenuBridgeDebugModeName(uint32_t a_mode)
+	{
+		switch (a_mode) {
+		case Upscaling::kVRMenuBridgeDebugModeCurrentD3D:
+			return "Current higher + D3D draw";
+		case Upscaling::kVRMenuBridgeDebugModePreRC55:
+			return "Pre-RC55 b175f44";
+		case Upscaling::kVRMenuBridgeDebugModeCurrent:
+		default:
+			return "Current HEAD";
+		}
 	}
 
 	bool IsVRMenuBridgeDrawShapeCandidate(
@@ -382,6 +451,13 @@ namespace
 
 	bool IsVRMenuBridgeDrawHookContextActive()
 	{
+		if constexpr (kVRMenuBridgeABModeEnabled) {
+			if (GetLatchedVRMenuBridgeDebugMode() == Upscaling::kVRMenuBridgeDebugModeCurrentD3D &&
+				!g_vrMenuBridgeHigherCallHookInstalled.load(std::memory_order_relaxed)) {
+				return false;
+			}
+		}
+
 		if (g_vrMenuBridgeDispatchCallHookInstalled.load(std::memory_order_relaxed))
 			return g_vrMenuBridgeDispatchCallContext.active;
 
@@ -396,18 +472,31 @@ namespace
 
 	void MaybeLogSkippedVRMenuBridgeDrawCount(UINT a_indexCount, uint32_t a_frame)
 	{
-		if (!ShouldEmitUpscalingDiagLogs() || a_frame == 0)
+		if (!ShouldEmitVRMenuBridgeDiagLogs() || a_frame == 0)
 			return;
 
-		if (g_vrMenuBridgeSkippedDrawCountDiagFrame.exchange(a_frame, std::memory_order_relaxed) == a_frame)
-			return;
+		const uint32_t key = std::max<uint32_t>(a_indexCount, 1u);
+		for (auto& loggedCount : g_vrMenuBridgeSkippedDrawCounts) {
+			uint32_t existing = loggedCount.load(std::memory_order_relaxed);
+			if (existing == key)
+				return;
 
-		logger::debug(
-			"[VRMenuBridge][DrawCountSkip] frame={} menus={} indexCount={} inferredMode={}",
-			a_frame,
-			FormatVRMenuBridgeDiagMenuMask(GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui)),
-			a_indexCount,
-			(a_indexCount % 3u) == 0u ? (a_indexCount / 3u) : 0u);
+			if (existing == 0u &&
+				loggedCount.compare_exchange_strong(existing, key, std::memory_order_relaxed, std::memory_order_relaxed)) {
+				logger::debug(
+					"[VRMenuBridge][DrawCountSkip] frame={} menus={} indexCount={} inferredMode={}",
+					a_frame,
+					FormatVRMenuBridgeDiagMenuMask(GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui)),
+					a_indexCount,
+					(a_indexCount % 3u) == 0u ? (a_indexCount / 3u) : 0u);
+				return;
+			}
+
+			if (existing == key)
+				return;
+		}
+
+		return;
 	}
 
 	uint32_t ToModuleRva(const void* a_returnAddress)
@@ -1383,14 +1472,80 @@ namespace
 		return static_cast<double>(a_ticks) * 1000.0 / static_cast<double>(GetVRMenuPerfCounterFrequency());
 	}
 
+	uint64_t ConvertVRMenuPerfMicrosecondsToTicks(double a_microseconds)
+	{
+		return static_cast<uint64_t>(
+			std::max(
+				1.0,
+				a_microseconds * static_cast<double>(GetVRMenuPerfCounterFrequency()) / 1000000.0));
+	}
+
+	uint64_t GetVRMenuFinalCompositeSpikeThresholdTicks()
+	{
+		static const uint64_t thresholdTicks = ConvertVRMenuPerfMicrosecondsToTicks(kVRMenuFinalCompositeSpikeThresholdUs);
+		return thresholdTicks;
+	}
+
+	struct ScopedVRMenuLifecycleDiagTimer
+	{
+		std::string_view label;
+		std::string detail;
+		uint32_t frame = 0;
+		uint64_t menuMask = 0;
+		uint64_t startTicks = 0;
+		bool active = false;
+
+		ScopedVRMenuLifecycleDiagTimer(std::string_view a_label, std::string a_detail = {}) :
+			label(a_label), detail(std::move(a_detail))
+		{
+			active = globals::game::isVR && ShouldEmitVRMenuBridgeDiagLogs();
+			if (!active)
+				return;
+
+			frame = globals::state ? globals::state->frameCount : 0;
+			menuMask = GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui);
+			startTicks = ReadVRMenuPerfCounterTicks();
+		}
+
+		~ScopedVRMenuLifecycleDiagTimer()
+		{
+			if (!active)
+				return;
+
+			const uint64_t endTicks = ReadVRMenuPerfCounterTicks();
+			const uint64_t elapsedTicks = endTicks >= startTicks ? (endTicks - startTicks) : 0;
+			const double elapsedUs = ConvertVRMenuPerfTicksToMicroseconds(elapsedTicks);
+			if (elapsedUs < kVRMenuLifecycleSpikeThresholdUs)
+				return;
+
+			if (detail.empty()) {
+				logger::debug(
+					"[VRMenuSpike][{}] frame={} elapsedUs={:.2f} menus={}",
+					label,
+					frame,
+					elapsedUs,
+					FormatVRMenuBridgeDiagMenuMask(menuMask));
+			} else {
+				logger::debug(
+					"[VRMenuSpike][{}] frame={} elapsedUs={:.2f} menus={} detail={}",
+					label,
+					frame,
+					elapsedUs,
+					FormatVRMenuBridgeDiagMenuMask(menuMask),
+					detail);
+			}
+		}
+	};
+
 	void RecordVRMenuPerfDiag(VRMenuPerfBucket a_bucket, uint64_t a_elapsedTicks, uint32_t a_frame, uint64_t a_menuMask)
 	{
-		if (!a_elapsedTicks || !ShouldEmitUpscalingDiagLogs())
+		if (!a_elapsedTicks || !ShouldEmitVRMenuBridgeDiagLogs())
 			return;
 
 		std::lock_guard lock(g_vrMenuPerfDiagMutex);
 		auto& bucket = g_vrMenuPerfDiagBuckets[static_cast<size_t>(a_bucket)];
 		const bool newBucket = bucket.sampleCount == 0;
+		const bool newMax = a_elapsedTicks > bucket.maxTicks;
 		const uint64_t previousMenuMaskSeen = bucket.menuMaskSeen;
 		if (newBucket)
 			bucket.firstFrame = a_frame;
@@ -1400,6 +1555,20 @@ namespace
 		bucket.maxTicks = std::max(bucket.maxTicks, a_elapsedTicks);
 		bucket.lastFrame = a_frame;
 		bucket.menuMaskSeen |= a_menuMask;
+
+		if (a_bucket == VRMenuPerfBucket::FinalCompositeTotal &&
+			a_elapsedTicks >= GetVRMenuFinalCompositeSpikeThresholdTicks() &&
+			(bucket.spikeLogCount < kVRMenuPerfSpikeLogLimit || newMax)) {
+			bucket.spikeLogCount++;
+			logger::debug(
+				"[VRMenuPerf][Spike] bucket={} frame={} elapsedUs={:.2f} maxUs={:.2f} samples={} menus={}",
+				GetVRMenuPerfBucketName(a_bucket),
+				a_frame,
+				ConvertVRMenuPerfTicksToMicroseconds(a_elapsedTicks),
+				ConvertVRMenuPerfTicksToMicroseconds(bucket.maxTicks),
+				bucket.sampleCount,
+				FormatVRMenuBridgeDiagMenuMask(a_menuMask));
+		}
 
 		const bool menusExpanded = bucket.menuMaskSeen != previousMenuMaskSeen;
 		if (newBucket || ShouldLogVRMenuDiagSampleCount(bucket.sampleCount) || menusExpanded) {
@@ -1492,7 +1661,7 @@ namespace
 		context.active = true;
 		if (const auto* state = globals::state)
 			context.frame = state->frameCount;
-		context.menuMask = ShouldEmitUpscalingDiagLogs() ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
+		context.menuMask = ShouldEmitVRMenuBridgeDiagLogs() ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
 		context.callsiteRva = kVRMenuBridgeDispatchCallsiteRva;
 		context.targetRva = kVRMenuBridgeDispatchTargetRva;
 		context.wrapperIdentity = a_rendererState;
@@ -1519,7 +1688,7 @@ namespace
 		}
 
 		const auto* state = globals::state;
-		const uint64_t menuMask = ShouldEmitUpscalingDiagLogs() ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
+		const uint64_t menuMask = ShouldEmitVRMenuBridgeDiagLogs() ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
 		auto context = MakeVRMenuBridgeHigherCallContext(
 			state ? state->frameCount : 0,
 			menuMask,
@@ -1562,7 +1731,7 @@ namespace
 
 	void RecordVRMenuBridgeHigherCallDiag(const VRMenuBridgeHigherCallContext& a_context)
 	{
-		if (!ShouldEmitUpscalingDiagLogs() || !a_context.active)
+		if (!ShouldEmitVRMenuBridgeDiagLogs() || !a_context.active)
 			return;
 
 		std::lock_guard lock(g_vrMenuBridgeHigherCallDiagMutex);
@@ -1606,7 +1775,7 @@ namespace
 
 	void RecordCurrentVRMenuBridgeHigherCaptureDiag(RE::RENDER_TARGETS::RENDER_TARGET a_sourceTarget)
 	{
-		if (!ShouldEmitUpscalingDiagLogs())
+		if (!ShouldEmitVRMenuBridgeDiagLogs())
 			return;
 
 		const auto* context = GetCurrentVRMenuBridgeCallContext();
@@ -1718,7 +1887,7 @@ namespace
 		uint64_t a_menuMask,
 		const VRMenuBridgeRuntimeDedupeKey& a_key)
 	{
-		if (!ShouldEmitUpscalingDiagLogs())
+		if (!ShouldEmitVRMenuBridgeDiagLogs())
 			return;
 
 		auto bucketIt = std::find_if(
@@ -1825,7 +1994,7 @@ namespace
 		}
 
 		entryIt->captureCount++;
-		if (ShouldEmitUpscalingDiagLogs()) {
+		if (ShouldEmitVRMenuBridgeDiagLogs()) {
 			RecordVRMenuBridgeDedupeDiag(
 				a_state->frameCount,
 				GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui),
@@ -1846,7 +2015,7 @@ namespace
 		uint32_t a_finalWidth,
 		uint32_t a_finalHeight)
 	{
-		if (!ShouldEmitUpscalingDiagLogs())
+		if (!ShouldEmitVRMenuBridgeDiagLogs())
 			return;
 
 		std::lock_guard lock(g_vrMenuBridgeCaptureDiagMutex);
@@ -3147,6 +3316,7 @@ namespace
 		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
 		settings.streamlineLogLevel = ClampStreamlineLogLevelUInt(settings.streamlineLogLevel);
+		settings.vrMenuBridgeDebugMode = ClampVRMenuBridgeDebugMode(settings.vrMenuBridgeDebugMode);
 		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, defaults.sharpnessFSR);
 		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, defaults.sharpnessDLSS);
 		settings.dlssSharpener = ClampDLSSSharpenerModeUInt(settings.dlssSharpener);
@@ -3162,6 +3332,7 @@ namespace
 		settings.renderScaleMode = 0;
 		settings.vrFpsStabilizerSync = false;
 		settings.perfMode = 0;
+		settings.vrMenuBridgeDebugMode = Upscaling::kVRMenuBridgeDebugModeCurrent;
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.6f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
@@ -3181,6 +3352,7 @@ namespace
 		o_json.erase("renderScaleMode");
 		o_json.erase("vrFpsStabilizerSync");
 		o_json.erase("perfMode");
+		o_json.erase("vrMenuBridgeDebugMode");
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
@@ -3977,6 +4149,20 @@ namespace
 		}
 	}
 
+	[[maybe_unused]] void LogVRMenuTailActivation(std::string_view a_tailName, uint32_t a_tailFrames, const std::atomic_uint32_t& a_endFrame)
+	{
+		if (!ShouldEmitVRMenuBridgeDiagLogs() || !globals::state)
+			return;
+
+		logger::debug(
+			"[VRMenuSpike][TailStart] frame={} tail={} tailFrames={} endFrame={} menus={}",
+			globals::state->frameCount,
+			a_tailName,
+			a_tailFrames,
+			a_endFrame.load(std::memory_order_acquire),
+			FormatVRMenuBridgeDiagMenuMask(GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui)));
+	}
+
 	bool IsVRMenuPresentationTailActive(const State* a_state)
 	{
 		return globals::game::isVR && IsFrameTailActive(a_state, g_vrMenuPresentationTailEndFrame);
@@ -4248,7 +4434,14 @@ namespace
 		if (!globals::game::isVR || !globals::state)
 			return;
 
-		ExtendFrameTail(g_vrMenuPresentationTailEndFrame, a_tailFrames);
+		if constexpr (kVRMenuBridgeRC55DiagnosticsLoggingEnabled) {
+			const bool wasActive = IsFrameTailActive(globals::state, g_vrMenuPresentationTailEndFrame);
+			ExtendFrameTail(g_vrMenuPresentationTailEndFrame, a_tailFrames);
+			if (!wasActive)
+				LogVRMenuTailActivation("menu-presentation", a_tailFrames, g_vrMenuPresentationTailEndFrame);
+		} else {
+			ExtendFrameTail(g_vrMenuPresentationTailEndFrame, a_tailFrames);
+		}
 	}
 
 	void ExtendVRRaceSexMenuPresentationTail(uint32_t a_tailFrames = kVRMenuPresentationTailFrames)
@@ -4264,7 +4457,14 @@ namespace
 		if (!globals::game::isVR || !globals::state)
 			return;
 
-		ExtendFrameTail(g_vrObservedProjectedMenuTailEndFrame, a_tailFrames);
+		if constexpr (kVRMenuBridgeRC55DiagnosticsLoggingEnabled) {
+			const bool wasActive = IsFrameTailActive(globals::state, g_vrObservedProjectedMenuTailEndFrame);
+			ExtendFrameTail(g_vrObservedProjectedMenuTailEndFrame, a_tailFrames);
+			if (!wasActive)
+				LogVRMenuTailActivation("observed-projected-menu", a_tailFrames, g_vrObservedProjectedMenuTailEndFrame);
+		} else {
+			ExtendFrameTail(g_vrObservedProjectedMenuTailEndFrame, a_tailFrames);
+		}
 	}
 
 	void ResetVRMenuBridgeTraceState()
@@ -4288,7 +4488,14 @@ namespace
 		if (!globals::game::isVR || !globals::state)
 			return;
 
-		ExtendFrameTail(g_vrMenuBridgeTraceTailEndFrame, a_tailFrames);
+		if constexpr (kVRMenuBridgeRC55DiagnosticsLoggingEnabled) {
+			const bool wasActive = IsFrameTailActive(globals::state, g_vrMenuBridgeTraceTailEndFrame);
+			ExtendFrameTail(g_vrMenuBridgeTraceTailEndFrame, a_tailFrames);
+			if (!wasActive)
+				LogVRMenuTailActivation("bridge-trace", a_tailFrames, g_vrMenuBridgeTraceTailEndFrame);
+		} else {
+			ExtendFrameTail(g_vrMenuBridgeTraceTailEndFrame, a_tailFrames);
+		}
 	}
 
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui)
@@ -4707,7 +4914,7 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 
 	const auto* state = globals::state;
 	const uint32_t frame = state ? state->frameCount : 0;
-	const bool emitPerfTiming = state && ShouldEmitUpscalingDiagLogs();
+	const bool emitPerfTiming = state && ShouldEmitVRMenuBridgeDiagLogs();
 	const uint64_t perfMenuMask = emitPerfTiming ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
 	ScopedVRMenuPerfDiagTimer perfTimer(
 		VRMenuPerfBucket::BridgeLayerDraw,
@@ -4785,6 +4992,25 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 	++vrMenuFinalCompositeLayerDrawCount;
 
 	return true;
+}
+
+bool Upscaling::IsVRMenuBridgePreRC55DebugMode()
+{
+	return kVRMenuBridgeABModeEnabled &&
+	       globals::game::isVR &&
+	       GetLatchedVRMenuBridgeDebugMode() == kVRMenuBridgeDebugModePreRC55;
+}
+
+bool Upscaling::IsVRMenuBridgeCurrentD3DDebugMode()
+{
+	return kVRMenuBridgeABModeEnabled &&
+	       globals::game::isVR &&
+	       GetLatchedVRMenuBridgeDebugMode() == kVRMenuBridgeDebugModeCurrentD3D;
+}
+
+bool Upscaling::ShouldInstallVRMenuBridgeD3DDrawHook()
+{
+	return IsVRMenuBridgePreRC55DebugMode() || IsVRMenuBridgeCurrentD3DDebugMode();
 }
 
 bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
@@ -4887,14 +5113,16 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
 	ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
 
-	if (TrySuppressKnownRedundantVRMenuBridgeCapture(
+	if (!IsVRMenuBridgePreRC55DebugMode() &&
+		TrySuppressKnownRedundantVRMenuBridgeCapture(
 			*this,
 			state,
 			a_callerRva,
 			menuSourceSlot,
 			menuSourceMatch,
 			destination)) {
-		RecordCurrentVRMenuBridgeHigherCaptureDiag(menuSourceMatch.target);
+		if (ShouldEmitVRMenuBridgeDiagLogs())
+			RecordCurrentVRMenuBridgeHigherCaptureDiag(menuSourceMatch.target);
 		vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
 		return true;
 	}
@@ -4914,7 +5142,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	if (!liveLayerDrawn)
 		return false;
 
-	if (ShouldEmitUpscalingDiagLogs()) {
+	if (ShouldEmitVRMenuBridgeDiagLogs()) {
 		const auto menuMask = GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui);
 		RecordCurrentVRMenuBridgeHigherCaptureDiag(menuSourceMatch.target);
 		RecordVRMenuBridgeCaptureDiag(
@@ -5029,7 +5257,7 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 		std::none_of(vrMenuFinalCompositeSuppressedTargets.begin(), vrMenuFinalCompositeSuppressedTargets.end(), [](bool suppressed) { return suppressed; })) {
 		return false;
 	}
-	const bool emitPerfTiming = ShouldEmitUpscalingDiagLogs();
+	const bool emitPerfTiming = ShouldEmitVRMenuBridgeDiagLogs();
 	const uint64_t perfMenuMask = emitPerfTiming ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
 	ScopedVRMenuPerfDiagTimer perfTimer(
 		VRMenuPerfBucket::FinalCompositeTotal,
@@ -5932,6 +6160,37 @@ void Upscaling::DrawSettings()
 
 		// VR Debug visualization -- per-eye buffers and native inputs
 		if (globals::game::isVR) {
+			if constexpr (kVRMenuBridgeABModeEnabled) {
+				ImGui::Separator();
+				const char* vrMenuBridgeDebugModes[] = { "Current HEAD", "Pre-RC55 b175f44", "Current higher + D3D draw" };
+				int vrMenuBridgeMode = static_cast<int>(std::clamp(
+					settings.vrMenuBridgeDebugMode,
+					static_cast<uint>(kVRMenuBridgeDebugModeCurrent),
+					static_cast<uint>(kVRMenuBridgeDebugModeMax)));
+				if (ImGui::Combo("VR Menu Bridge A/B Mode", &vrMenuBridgeMode, vrMenuBridgeDebugModes, IM_ARRAYSIZE(vrMenuBridgeDebugModes))) {
+					settings.vrMenuBridgeDebugMode = static_cast<uint>(std::clamp(
+						vrMenuBridgeMode,
+						static_cast<int>(kVRMenuBridgeDebugModeCurrent),
+						static_cast<int>(kVRMenuBridgeDebugModeMax)));
+				}
+				const uint32_t activeVRMenuBridgeMode = GetLatchedVRMenuBridgeDebugMode();
+				ImGui::TextDisabled(
+					"Active this run: %s. Restart Skyrim VR after changing this setting.",
+					GetVRMenuBridgeDebugModeName(activeVRMenuBridgeMode));
+				if (activeVRMenuBridgeMode != settings.vrMenuBridgeDebugMode) {
+					ImGui::TextDisabled(
+						"Saved for next run: %s.",
+						GetVRMenuBridgeDebugModeName(settings.vrMenuBridgeDebugMode));
+				}
+				ImGui::TextDisabled("Current HEAD uses higher/direct game hooks; current+D3D keeps higher context but skips the direct draw patch.");
+				ImGui::TextDisabled("Pre-RC55 uses the old global D3D draw hook path and disables newer HUD dedupe.");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Diagnostic A/B only. Use it to compare hook/menu behavior against commit b175f44a45153aafb0f69e7c4681190210a720f7.");
+					ImGui::TextUnformatted("Pre-RC55 mode also disables the newer HUD capture dedupe so the run is closer to the older baseline.");
+					ImGui::TextUnformatted("Current higher + D3D keeps the current higher context and dedupe, but skips the direct 0xDBDDF3 patch.");
+				}
+			}
+
 			ImGui::Separator();
 			static float debugRescale = 0.15f;
 			ImGui::SliderFloat("View Resize", &debugRescale, 0.05f, 1.f);
@@ -6519,6 +6778,7 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded upscaleMethodNoDLSS {} out of range, clamping to {}", settings.upscaleMethodNoDLSS, static_cast<uint>(UpscaleMethod::kFSR));
 	}
 	SanitizeUpscalingSettings(settings);
+	LatchVRMenuBridgeDebugMode(settings);
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
@@ -6634,6 +6894,17 @@ void Upscaling::DataLoaded()
 RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
+	if (a_event && ShouldEmitVRMenuBridgeDiagLogs()) {
+		const std::string_view menuName = a_event->menuName;
+		logger::debug(
+			"[VRMenuSpike][MenuEvent] frame={} menu={} opening={} presentationMenu={} menus={}",
+			globals::state ? globals::state->frameCount : 0,
+			menuName,
+			BoolText(a_event->opening),
+			BoolText(IsVRMenuPresentationTailMenuName(menuName)),
+			FormatVRMenuBridgeDiagMenuMask(GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui)));
+	}
+
 	if (a_event && a_event->menuName == RE::RaceSexMenu::MENU_NAME) {
 		g_vrRaceSexMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
 		if (a_event->opening) {
@@ -7026,8 +7297,23 @@ void Upscaling::PostPostLoad()
 		return;
 	}
 
-	if (globals::game::isVR)
-		TryInstallVRMenuBridgeHigherCallHook();
+	if (globals::game::isVR) {
+		if constexpr (kVRMenuBridgeABModeEnabled) {
+			if (IsVRMenuBridgePreRC55DebugMode()) {
+				logger::info("[Upscaling] VR menu bridge A/B mode: pre-RC55 D3D draw hook path; skipping current higher/direct hooks");
+			} else if (IsVRMenuBridgeCurrentD3DDebugMode()) {
+				logger::info("[Upscaling] VR menu bridge A/B mode: current higher hook + D3D draw hook path; skipping direct draw hook");
+				TryInstallVRMenuBridgeHigherCallHook();
+			} else {
+				logger::info("[Upscaling] VR menu bridge A/B mode: current HEAD higher/direct hook path");
+				TryInstallVRMenuBridgeHigherCallHook();
+				TryInstallVRMenuBridgeDirectDrawHook();
+			}
+		} else {
+			TryInstallVRMenuBridgeHigherCallHook();
+			TryInstallVRMenuBridgeDirectDrawHook();
+		}
+	}
 
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");
 	stl::detour_thunk<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084));
@@ -10944,7 +11230,6 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 
 	if (!encodeTexturesCS[methodIndex]) {
 		logger::debug("Compiling EncodeTexturesCS.hlsl for upscale method {}", methodIndex);
-
 		std::vector<std::pair<const char*, const char*>> defines;
 
 		// Add upscale method define
@@ -17098,12 +17383,13 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 	if (ShouldWaitForVRUpscalingTransitionDelay())
 		return;
 
+	const auto transitionOriginForDiag = LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin);
 	const uint32_t pendingQualityMode = pendingVRUpscalingQualityMode.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
 	const uint32_t pendingRenderScaleMode = pendingVRRenderScaleMode.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
 	const uint32_t pendingPreset = pendingVRDLSSPreset.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
 	const uint32_t clampedPendingPreset = ClampDLSSPresetUInt(pendingPreset);
 	const uint32_t pendingPerfMode = pendingVRPerfMode.exchange(kPendingVRUpscalingSettingUnset, std::memory_order_acq_rel);
-	const auto transitionOrigin = LoadVRUpscalingTransitionOrigin(pendingVRUpscalingTransitionOrigin);
+	const auto transitionOrigin = transitionOriginForDiag;
 	pendingVRUpscalingTransitionFrame.store(0, std::memory_order_release);
 	pendingVRUpscalingTransitionOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
 	bool changed = false;

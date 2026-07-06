@@ -14,6 +14,8 @@
 #include <codecvt>
 #include <cstring>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <thread>
 
 #include <RE/B/BGSSaveLoadGame.h>
@@ -167,11 +169,234 @@ namespace
 		main.texture->GetDesc(&texDesc);
 		return { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
 	}
+
+	constexpr double kStateDrawPhaseDiagThresholdUs = 500.0;
+	constexpr double kStateDrawPhaseDiagSevereThresholdUs = 3000.0;
+	constexpr bool kStateDrawPhaseDiagnosticsEnabled = false;
+
+	uint64_t ReadStateDrawDiagCounterTicks()
+	{
+		LARGE_INTEGER counter{};
+		QueryPerformanceCounter(&counter);
+		return static_cast<uint64_t>(counter.QuadPart);
+	}
+
+	double ConvertStateDrawDiagTicksToMicroseconds(uint64_t a_ticks)
+	{
+		static const uint64_t frequency = []() {
+			LARGE_INTEGER counterFrequency{};
+			QueryPerformanceFrequency(&counterFrequency);
+			return static_cast<uint64_t>(std::max<LONGLONG>(counterFrequency.QuadPart, 1));
+		}();
+		return static_cast<double>(a_ticks) * 1000000.0 / static_cast<double>(frequency);
+	}
+
+	uint64_t ConvertStateDrawDiagMicrosecondsToTicks(double a_microseconds)
+	{
+		static const uint64_t frequency = []() {
+			LARGE_INTEGER counterFrequency{};
+			QueryPerformanceFrequency(&counterFrequency);
+			return static_cast<uint64_t>(std::max<LONGLONG>(counterFrequency.QuadPart, 1));
+		}();
+		return static_cast<uint64_t>(
+			std::max(
+				1.0,
+				a_microseconds * static_cast<double>(frequency) / 1000000.0));
+	}
+
+	std::string FormatStateDrawDiagMenus()
+	{
+		auto* ui = globals::game::ui;
+		if (!ui)
+			return "none";
+
+		static constexpr std::array<std::string_view, 12> kMenuNames{ {
+			"Main Menu",
+			"Loading Menu",
+			"MapMenu",
+			"Journal Menu",
+			"StatsMenu",
+			"InventoryMenu",
+			"MagicMenu",
+			"TweenMenu",
+			"Dialogue Menu",
+			"BarterMenu",
+			"ContainerMenu",
+			"Crafting Menu",
+		} };
+
+		std::string result;
+		for (const auto menuName : kMenuNames) {
+			if (!ui->IsMenuOpen(menuName.data()))
+				continue;
+
+			if (!result.empty())
+				result += "|";
+			result += menuName;
+		}
+
+		return result.empty() ? "none" : result;
+	}
+
+	enum class StateDrawPhase : size_t
+	{
+		Total,
+		SceneSettingsUpdate,
+		PerfModeRelatch,
+		PostLoadRuntimeReset,
+		WeatherUpdateFeatures,
+		TerrainShaderHacks,
+		CloudShadowShaderHacks,
+		TerrainHelperResources,
+		TruePBRResources,
+		VolumetricShadowResources,
+		PermutationCBUpdate,
+		ShadowDataCopy,
+		DebugOverlay,
+		Count
+	};
+
+	struct StateDrawPhaseStats
+	{
+		uint64_t totalTicks = 0;
+		uint64_t maxTicks = 0;
+		uint32_t calls = 0;
+	};
+
+	struct StateDrawPhaseFrameStats
+	{
+		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		std::array<StateDrawPhaseStats, static_cast<size_t>(StateDrawPhase::Count)> phases{};
+
+		void Reset(uint32_t a_frame)
+		{
+			frame = a_frame;
+			phases = {};
+		}
+	};
+
+	StateDrawPhaseFrameStats g_stateDrawPhaseDiag;
+
+	bool ShouldRecordStateDrawPhaseDiag()
+	{
+		if constexpr (!kStateDrawPhaseDiagnosticsEnabled) {
+			return false;
+		} else {
+			auto* state = globals::state;
+			return globals::game::isVR && state && state->IsDeveloperMode();
+		}
+	}
+
+	StateDrawPhaseStats& GetStateDrawPhaseStats(StateDrawPhase a_phase)
+	{
+		return g_stateDrawPhaseDiag.phases[static_cast<size_t>(a_phase)];
+	}
+
+	void RecordStateDrawPhase(StateDrawPhase a_phase, uint32_t a_frame, uint64_t a_elapsedTicks)
+	{
+		if (!a_elapsedTicks)
+			return;
+
+		if (g_stateDrawPhaseDiag.frame != a_frame)
+			g_stateDrawPhaseDiag.Reset(a_frame);
+
+		auto& stats = GetStateDrawPhaseStats(a_phase);
+		stats.totalTicks += a_elapsedTicks;
+		stats.maxTicks = std::max(stats.maxTicks, a_elapsedTicks);
+		stats.calls++;
+	}
+
+	void FlushStateDrawPhaseDiagForNewFrame(uint32_t a_currentFrame)
+	{
+		if (g_stateDrawPhaseDiag.frame == std::numeric_limits<uint32_t>::max()) {
+			g_stateDrawPhaseDiag.Reset(a_currentFrame);
+			return;
+		}
+		if (g_stateDrawPhaseDiag.frame == a_currentFrame)
+			return;
+
+		const uint32_t completedFrame = g_stateDrawPhaseDiag.frame;
+		const auto& total = GetStateDrawPhaseStats(StateDrawPhase::Total);
+		const uint64_t thresholdTicks = ConvertStateDrawDiagMicrosecondsToTicks(kStateDrawPhaseDiagThresholdUs);
+		const uint64_t severeThresholdTicks = ConvertStateDrawDiagMicrosecondsToTicks(kStateDrawPhaseDiagSevereThresholdUs);
+		const bool shouldLog =
+			total.calls > 0 &&
+			(total.totalTicks >= thresholdTicks || total.maxTicks >= thresholdTicks);
+		if (shouldLog) {
+			static uint32_t loggedFrameCount = 0;
+			const bool severe = total.totalTicks >= severeThresholdTicks || total.maxTicks >= severeThresholdTicks;
+			if (loggedFrameCount < 256 || severe) {
+				loggedFrameCount++;
+				const auto& scene = GetStateDrawPhaseStats(StateDrawPhase::SceneSettingsUpdate);
+				const auto& relatch = GetStateDrawPhaseStats(StateDrawPhase::PerfModeRelatch);
+				const auto& postLoad = GetStateDrawPhaseStats(StateDrawPhase::PostLoadRuntimeReset);
+				const auto& weather = GetStateDrawPhaseStats(StateDrawPhase::WeatherUpdateFeatures);
+				const auto& terrain = GetStateDrawPhaseStats(StateDrawPhase::TerrainShaderHacks);
+				const auto& cloud = GetStateDrawPhaseStats(StateDrawPhase::CloudShadowShaderHacks);
+				const auto& terrainResources = GetStateDrawPhaseStats(StateDrawPhase::TerrainHelperResources);
+				const auto& truePBRResources = GetStateDrawPhaseStats(StateDrawPhase::TruePBRResources);
+				const auto& volumetricShadowResources = GetStateDrawPhaseStats(StateDrawPhase::VolumetricShadowResources);
+				const auto& permutationUpdate = GetStateDrawPhaseStats(StateDrawPhase::PermutationCBUpdate);
+				const auto& shadowCopy = GetStateDrawPhaseStats(StateDrawPhase::ShadowDataCopy);
+				const auto& debugOverlay = GetStateDrawPhaseStats(StateDrawPhase::DebugOverlay);
+				logger::debug(
+					"[CSFramePhase][StateDraw] frame={} menus={} calls={} totalUs={:.2f} maxCallUs={:.2f} sceneUs={:.2f} relatchUs={:.2f} postLoadUs={:.2f} weatherUs={:.2f} terrainUs={:.2f} cloudUs={:.2f} terrainResUs={:.2f} truePBRResUs={:.2f} volShadowResUs={:.2f} permutationUs={:.2f} shadowCopyUs={:.2f} debugUs={:.2f}",
+					completedFrame,
+					FormatStateDrawDiagMenus(),
+					total.calls,
+					ConvertStateDrawDiagTicksToMicroseconds(total.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(total.maxTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(scene.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(relatch.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(postLoad.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(weather.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(terrain.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(cloud.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(terrainResources.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(truePBRResources.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(volumetricShadowResources.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(permutationUpdate.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(shadowCopy.totalTicks),
+					ConvertStateDrawDiagTicksToMicroseconds(debugOverlay.totalTicks));
+			}
+		}
+
+		g_stateDrawPhaseDiag.Reset(a_currentFrame);
+	}
+
+	struct ScopedStateDrawPhaseTimer
+	{
+		StateDrawPhase phase;
+		uint32_t frame = 0;
+		uint64_t startTicks = 0;
+		bool active = false;
+
+		ScopedStateDrawPhaseTimer(StateDrawPhase a_phase, uint32_t a_frame, bool a_active) :
+			phase(a_phase), frame(a_frame), active(a_active)
+		{
+			if (active)
+				startTicks = ReadStateDrawDiagCounterTicks();
+		}
+
+		~ScopedStateDrawPhaseTimer()
+		{
+			if (!active)
+				return;
+
+			const uint64_t endTicks = ReadStateDrawDiagCounterTicks();
+			RecordStateDrawPhase(phase, frame, endTicks >= startTicks ? (endTicks - startTicks) : 0);
+		}
+	};
 }
 
 void State::Draw()
 {
 	ZoneScoped;
+	const bool stateDrawDiagActive = ShouldRecordStateDrawPhaseDiag();
+	const uint32_t stateDrawDiagFrame = stateDrawDiagActive ? frameCount : 0;
+	if (stateDrawDiagActive)
+		FlushStateDrawPhaseDiagForNewFrame(stateDrawDiagFrame);
+	ScopedStateDrawPhaseTimer stateDrawTotalDiag(StateDrawPhase::Total, stateDrawDiagFrame, stateDrawDiagActive);
 
 	auto shaderCache = globals::shaderCache;
 	auto deferred = globals::deferred;
@@ -185,10 +410,17 @@ void State::Draw()
 
 	if (shaderCache->IsEnabled()) {
 		// Process deferred cell transitions (interior detection)
-		SceneSettingsManager::GetSingleton()->Update();
-		globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
+		{
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::SceneSettingsUpdate, stateDrawDiagFrame, stateDrawDiagActive);
+			SceneSettingsManager::GetSingleton()->Update();
+		}
+		{
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::PerfModeRelatch, stateDrawDiagFrame, stateDrawDiagActive);
+			globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
+		}
 
 		if (pendingPostLoadRuntimeReset) {
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::PostLoadRuntimeReset, stateDrawDiagFrame, stateDrawDiagActive);
 			globals::OnDataLoaded();
 			WeatherManager::GetSingleton()->ClearCache();
 			globals::features::lightLimitFix.Reset();
@@ -200,35 +432,42 @@ void State::Draw()
 
 		if (csEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::WeatherUpdateFeatures, stateDrawDiagFrame, stateDrawDiagActive);
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			ZoneScopedN("TerrainBlending::TerrainShaderHacks");
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TerrainShaderHacks, stateDrawDiagFrame, stateDrawDiagActive);
 			terrainBlending.TerrainShaderHacks();
 		}
 
 		if (cloudShadows.loaded) {
 			ZoneScopedN("CloudShadows::SkyShaderHacks");
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::CloudShadowShaderHacks, stateDrawDiagFrame, stateDrawDiagActive);
 			cloudShadows.SkyShaderHacks();
 		}
 
 		if (terrainHelper.loaded) {
 			ZoneScopedN("TerrainHelper::SetShaderResouces");
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TerrainHelperResources, stateDrawDiagFrame, stateDrawDiagActive);
 			terrainHelper.SetShaderResouces(context);
 		}
 
 		if (truePBR.loaded) {
 			ZoneScopedN("TruePBR::SetShaderResouces");
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TruePBRResources, stateDrawDiagFrame, stateDrawDiagActive);
 			truePBR.SetShaderResouces(context);
 		}
 
 		if (volumetricShadows.loaded) {
 			ZoneScopedN("VolumetricShadows::SetShaderResources");
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::VolumetricShadowResources, stateDrawDiagFrame, stateDrawDiagActive);
 			volumetricShadows.SetShaderResources(context);
 		}
 
 		if (permutationData != permutationDataPrevious) {
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::PermutationCBUpdate, stateDrawDiagFrame, stateDrawDiagActive);
 			permutationCB->Update(permutationData);
 			permutationDataPrevious = permutationData;
 		}
@@ -236,6 +475,7 @@ void State::Draw()
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
+					ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::ShadowDataCopy, stateDrawDiagFrame, stateDrawDiagActive);
 					if (volumetricShadows.loaded)
 						volumetricShadows.CopyShadowLightData();
 					else
@@ -244,8 +484,10 @@ void State::Draw()
 			}
 		}
 
-		if (globals::menu->overlayVisible && globals::features::performanceOverlay.loaded && globals::features::performanceOverlay.IsOverlayVisible())
+		if (globals::menu->overlayVisible && globals::features::performanceOverlay.loaded && globals::features::performanceOverlay.IsOverlayVisible()) {
+			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::DebugOverlay, stateDrawDiagFrame, stateDrawDiagActive);
 			Debug();
+		}
 
 		updateShader = false;
 	}

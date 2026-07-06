@@ -21,7 +21,11 @@
 
 #include "ShaderTools/BSShaderHooks.h"
 
+#include <algorithm>
+#include <array>
 #include <intrin.h>
+#include <string>
+#include <string_view>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
@@ -63,6 +67,285 @@ namespace
 			return "get_device_exception";
 		default:
 			return "unknown";
+		}
+	}
+
+	const char* BoolText(bool a_value)
+	{
+		return a_value ? "yes" : "no";
+	}
+
+	constexpr double kCSFrameIntervalSpikeThresholdMs = 12.0;
+	constexpr double kCSFrameIntervalSevereThresholdMs = 18.0;
+	constexpr double kCSFrameHookPhaseDiagThresholdUs = 500.0;
+	constexpr double kCSFrameHookPhaseDiagSevereThresholdUs = 3000.0;
+	constexpr bool kCSFrameDiagnosticsEnabled = false;
+
+	uint64_t ReadFrameDiagCounterTicks()
+	{
+		LARGE_INTEGER counter{};
+		QueryPerformanceCounter(&counter);
+		return static_cast<uint64_t>(counter.QuadPart);
+	}
+
+	double ConvertFrameDiagTicksToMilliseconds(uint64_t a_ticks)
+	{
+		static const uint64_t frequency = []() {
+			LARGE_INTEGER counterFrequency{};
+			QueryPerformanceFrequency(&counterFrequency);
+			return static_cast<uint64_t>(std::max<LONGLONG>(counterFrequency.QuadPart, 1));
+		}();
+		return static_cast<double>(a_ticks) * 1000.0 / static_cast<double>(frequency);
+	}
+
+	double ConvertFrameDiagTicksToMicroseconds(uint64_t a_ticks)
+	{
+		return ConvertFrameDiagTicksToMilliseconds(a_ticks) * 1000.0;
+	}
+
+	uint64_t ConvertFrameDiagMicrosecondsToTicks(double a_microseconds)
+	{
+		static const uint64_t frequency = []() {
+			LARGE_INTEGER counterFrequency{};
+			QueryPerformanceFrequency(&counterFrequency);
+			return static_cast<uint64_t>(std::max<LONGLONG>(counterFrequency.QuadPart, 1));
+		}();
+		return static_cast<uint64_t>(
+			std::max(
+				1.0,
+				a_microseconds * static_cast<double>(frequency) / 1000000.0));
+	}
+
+	std::string FormatFrameDiagMenus()
+	{
+		auto* ui = globals::game::ui;
+		if (!ui)
+			return "none";
+
+		static constexpr std::array<std::string_view, 12> kMenuNames{ {
+			"Main Menu",
+			"Loading Menu",
+			"MapMenu",
+			"Journal Menu",
+			"StatsMenu",
+			"InventoryMenu",
+			"MagicMenu",
+			"TweenMenu",
+			"Dialogue Menu",
+			"BarterMenu",
+			"ContainerMenu",
+			"Crafting Menu",
+		} };
+
+		std::string result;
+		for (const auto menuName : kMenuNames) {
+			if (!ui->IsMenuOpen(menuName.data()))
+				continue;
+
+			if (!result.empty())
+				result += "|";
+			result += menuName;
+		}
+
+		return result.empty() ? "none" : result;
+	}
+
+	enum class CSFrameHookPhase : size_t
+	{
+		SetDirtyStatesTotal,
+		SetDirtyStatesOriginal,
+		TerrainOnSetDirtyStates,
+		StateDraw,
+		BeginTechniqueTotal,
+		BeginTechniqueTerrainOnBegin,
+		BeginTechniqueModifyShaderLookup,
+		BeginTechniqueOriginal,
+		BeginTechniqueShaderCacheLookup,
+		BeginTechniqueBindCustomShader,
+		Count
+	};
+
+	struct CSFrameHookPhaseStats
+	{
+		uint64_t totalTicks = 0;
+		uint64_t maxTicks = 0;
+		uint32_t calls = 0;
+	};
+
+	struct CSFrameHookPhaseFrameStats
+	{
+		uint32_t frame = 0;
+		std::array<CSFrameHookPhaseStats, static_cast<size_t>(CSFrameHookPhase::Count)> phases{};
+		uint32_t computeCalls = 0;
+		uint32_t graphicsCalls = 0;
+
+		void Reset(uint32_t a_frame)
+		{
+			frame = a_frame;
+			phases = {};
+			computeCalls = 0;
+			graphicsCalls = 0;
+		}
+	};
+
+	CSFrameHookPhaseFrameStats g_csFrameHookPhaseDiag;
+
+	bool ShouldRecordCSFramePhaseDiag()
+	{
+		if constexpr (!kCSFrameDiagnosticsEnabled) {
+			return false;
+		} else {
+			auto* state = globals::state;
+			return globals::game::isVR && state && state->IsDeveloperMode();
+		}
+	}
+
+	CSFrameHookPhaseStats& GetCSFrameHookPhaseStats(CSFrameHookPhase a_phase)
+	{
+		return g_csFrameHookPhaseDiag.phases[static_cast<size_t>(a_phase)];
+	}
+
+	void RecordCSFrameHookPhase(CSFrameHookPhase a_phase, uint32_t a_frame, uint64_t a_elapsedTicks)
+	{
+		if (!a_elapsedTicks)
+			return;
+
+		if (g_csFrameHookPhaseDiag.frame != a_frame)
+			g_csFrameHookPhaseDiag.Reset(a_frame);
+
+		auto& stats = GetCSFrameHookPhaseStats(a_phase);
+		stats.totalTicks += a_elapsedTicks;
+		stats.maxTicks = std::max(stats.maxTicks, a_elapsedTicks);
+		stats.calls++;
+	}
+
+	void RecordCSFrameHookCall(uint32_t a_frame, bool a_isCompute)
+	{
+		if (g_csFrameHookPhaseDiag.frame != a_frame)
+			g_csFrameHookPhaseDiag.Reset(a_frame);
+
+		if (a_isCompute)
+			g_csFrameHookPhaseDiag.computeCalls++;
+		else
+			g_csFrameHookPhaseDiag.graphicsCalls++;
+	}
+
+	void FlushCSFrameHookPhaseDiag(uint32_t a_frame, double a_intervalMs)
+	{
+		if (!ShouldRecordCSFramePhaseDiag() || g_csFrameHookPhaseDiag.frame != a_frame)
+			return;
+
+		const auto& total = GetCSFrameHookPhaseStats(CSFrameHookPhase::SetDirtyStatesTotal);
+		const auto& beginTechnique = GetCSFrameHookPhaseStats(CSFrameHookPhase::BeginTechniqueTotal);
+		if (!total.calls && !beginTechnique.calls) {
+			g_csFrameHookPhaseDiag.Reset(0);
+			return;
+		}
+
+		const uint64_t logThresholdTicks = ConvertFrameDiagMicrosecondsToTicks(kCSFrameHookPhaseDiagThresholdUs);
+		const uint64_t severeThresholdTicks = ConvertFrameDiagMicrosecondsToTicks(kCSFrameHookPhaseDiagSevereThresholdUs);
+		const bool frameIntervalSpike = a_intervalMs >= kCSFrameIntervalSpikeThresholdMs;
+		const bool phaseSpike =
+			total.totalTicks >= logThresholdTicks ||
+			total.maxTicks >= logThresholdTicks ||
+			beginTechnique.totalTicks >= logThresholdTicks ||
+			beginTechnique.maxTicks >= logThresholdTicks;
+		if (!frameIntervalSpike && !phaseSpike) {
+			g_csFrameHookPhaseDiag.Reset(0);
+			return;
+		}
+
+		static uint32_t loggedFrameCount = 0;
+		const bool severe =
+			a_intervalMs >= kCSFrameIntervalSevereThresholdMs ||
+			total.totalTicks >= severeThresholdTicks ||
+			total.maxTicks >= severeThresholdTicks ||
+			beginTechnique.totalTicks >= severeThresholdTicks ||
+			beginTechnique.maxTicks >= severeThresholdTicks;
+		if (loggedFrameCount >= 256 && !severe) {
+			g_csFrameHookPhaseDiag.Reset(0);
+			return;
+		}
+		loggedFrameCount++;
+
+		const auto& original = GetCSFrameHookPhaseStats(CSFrameHookPhase::SetDirtyStatesOriginal);
+		const auto& onSetDirty = GetCSFrameHookPhaseStats(CSFrameHookPhase::TerrainOnSetDirtyStates);
+		const auto& stateDraw = GetCSFrameHookPhaseStats(CSFrameHookPhase::StateDraw);
+		const auto& beginTerrain = GetCSFrameHookPhaseStats(CSFrameHookPhase::BeginTechniqueTerrainOnBegin);
+		const auto& beginModifyLookup = GetCSFrameHookPhaseStats(CSFrameHookPhase::BeginTechniqueModifyShaderLookup);
+		const auto& beginOriginal = GetCSFrameHookPhaseStats(CSFrameHookPhase::BeginTechniqueOriginal);
+		const auto& beginShaderLookup = GetCSFrameHookPhaseStats(CSFrameHookPhase::BeginTechniqueShaderCacheLookup);
+		const auto& beginBind = GetCSFrameHookPhaseStats(CSFrameHookPhase::BeginTechniqueBindCustomShader);
+		logger::debug(
+			"[CSFramePhase][Hook] frame={} intervalMs={:.2f} menus={} setDirtyCalls={} graphicsCalls={} computeCalls={} setDirtyUs={:.2f} setDirtyMaxUs={:.2f} originalUs={:.2f} originalMaxUs={:.2f} onSetDirtyUs={:.2f} onSetDirtyMaxUs={:.2f} stateDrawUs={:.2f} stateDrawMaxUs={:.2f} beginTechniqueCalls={} beginTechniqueUs={:.2f} beginTechniqueMaxUs={:.2f} beginTerrainUs={:.2f} beginModifyLookupUs={:.2f} beginOriginalUs={:.2f} beginShaderLookupUs={:.2f} beginBindUs={:.2f}",
+			a_frame,
+			a_intervalMs,
+			FormatFrameDiagMenus(),
+			total.calls,
+			g_csFrameHookPhaseDiag.graphicsCalls,
+			g_csFrameHookPhaseDiag.computeCalls,
+			ConvertFrameDiagTicksToMicroseconds(total.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(total.maxTicks),
+			ConvertFrameDiagTicksToMicroseconds(original.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(original.maxTicks),
+			ConvertFrameDiagTicksToMicroseconds(onSetDirty.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(onSetDirty.maxTicks),
+			ConvertFrameDiagTicksToMicroseconds(stateDraw.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(stateDraw.maxTicks),
+			beginTechnique.calls,
+			ConvertFrameDiagTicksToMicroseconds(beginTechnique.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(beginTechnique.maxTicks),
+			ConvertFrameDiagTicksToMicroseconds(beginTerrain.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(beginModifyLookup.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(beginOriginal.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(beginShaderLookup.totalTicks),
+			ConvertFrameDiagTicksToMicroseconds(beginBind.totalTicks));
+
+		g_csFrameHookPhaseDiag.Reset(0);
+	}
+
+	void LogFrameIntervalSpikeIfNeeded(
+		[[maybe_unused]] uint64_t a_presentBeginTicks,
+		[[maybe_unused]] uint64_t a_previousPresentBeginTicks,
+		[[maybe_unused]] uint64_t a_beforePresentTicks,
+		[[maybe_unused]] uint64_t a_afterPresentTicks,
+		[[maybe_unused]] HRESULT a_presentResult)
+	{
+		if constexpr (!kCSFrameDiagnosticsEnabled) {
+			return;
+		} else {
+			auto* state = globals::state;
+			if (!globals::game::isVR || !state || !state->IsDeveloperMode() || a_previousPresentBeginTicks == 0)
+				return;
+
+			const double intervalMs = ConvertFrameDiagTicksToMilliseconds(a_presentBeginTicks - a_previousPresentBeginTicks);
+			if (intervalMs < kCSFrameIntervalSpikeThresholdMs)
+				return;
+
+			static uint32_t loggedSpikeCount = 0;
+			if (loggedSpikeCount >= 256 && intervalMs < kCSFrameIntervalSevereThresholdMs)
+				return;
+			++loggedSpikeCount;
+
+			const double prePresentMs = ConvertFrameDiagTicksToMilliseconds(a_beforePresentTicks - a_presentBeginTicks);
+			const double presentCallMs = ConvertFrameDiagTicksToMilliseconds(a_afterPresentTicks - a_beforePresentTicks);
+			auto& upscaling = globals::features::upscaling;
+			logger::debug(
+				"[CSFrameSpike] frame={} intervalMs={:.2f} prePresentMs={:.2f} presentCallMs={:.2f} menus={} paused={} renderScaleLatched={} perfActive={} presentationActive={} pendingRelatch={} pendingTransition={} profilerCpuMs={:.2f} profilerGpuMs={:.2f} hr=0x{:08X}",
+				state->frameCount,
+				intervalMs,
+				prePresentMs,
+				presentCallMs,
+				FormatFrameDiagMenus(),
+				BoolText(globals::game::ui && globals::game::ui->GameIsPaused()),
+				BoolText(upscaling.IsVRRenderScaleModeLatched()),
+				BoolText(upscaling.IsPerfModeActive()),
+				BoolText(upscaling.IsPresentationUpscalingActive()),
+				BoolText(upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)),
+				BoolText(upscaling.HasPendingVRUpscalingTransition()),
+				globals::profiler ? globals::profiler->GetCpuTotalTimeMs() : 0.0f,
+				globals::profiler ? globals::profiler->GetTotalTimeMs() : 0.0f,
+				static_cast<uint32_t>(a_presentResult));
 		}
 	}
 
@@ -370,6 +653,10 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
+	const bool phaseDiagActive = ShouldRecordCSFramePhaseDiag();
+	const uint32_t phaseDiagFrame = phaseDiagActive && state ? state->frameCount : 0;
+	const uint64_t totalStartTicks = phaseDiagActive ? ReadFrameDiagCounterTicks() : 0;
+	uint64_t phaseStartTicks = totalStartTicks;
 
 	state->updateShader = true;
 	state->currentShader = shader;
@@ -378,6 +665,11 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->currentPixelDescriptor = pixelDescriptor;
 
 	globals::features::terrainBlending.OnBeginTechnique(shader, pixelDescriptor, callerRva);
+	if (phaseDiagActive) {
+		const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
+		RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueTerrainOnBegin, phaseDiagFrame, phaseEndTicks - phaseStartTicks);
+		phaseStartTicks = phaseEndTicks;
+	}
 
 	state->permutationData.VertexShaderDescriptor = vertexDescriptor;
 	state->permutationData.PixelShaderDescriptor = pixelDescriptor;
@@ -386,15 +678,30 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->modifiedPixelDescriptor = pixelDescriptor;
 
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
+	if (phaseDiagActive) {
+		const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
+		RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueModifyShaderLookup, phaseDiagFrame, phaseEndTicks - phaseStartTicks);
+		phaseStartTicks = phaseEndTicks;
+	}
 
 	// Only check against non-shader bits
 	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
 
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
+	if (phaseDiagActive) {
+		const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
+		RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueOriginal, phaseDiagFrame, phaseEndTicks - phaseStartTicks);
+		phaseStartTicks = phaseEndTicks;
+	}
 
 	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
 		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
+		if (phaseDiagActive) {
+			const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
+			RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueShaderCacheLookup, phaseDiagFrame, phaseEndTicks - phaseStartTicks);
+			phaseStartTicks = phaseEndTicks;
+		}
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
 		} else {
@@ -411,10 +718,20 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			state->settingCustomShader = false;
 			shaderFound = true;
 		}
+		if (phaseDiagActive) {
+			const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
+			RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueBindCustomShader, phaseDiagFrame, phaseEndTicks - phaseStartTicks);
+			phaseStartTicks = phaseEndTicks;
+		}
 	}
 
 	state->lastModifiedVertexDescriptor = state->modifiedVertexDescriptor;
 	state->lastModifiedPixelDescriptor = state->modifiedPixelDescriptor;
+
+	if (phaseDiagActive) {
+		const uint64_t totalEndTicks = ReadFrameDiagCounterTicks();
+		RecordCSFrameHookPhase(CSFrameHookPhase::BeginTechniqueTotal, phaseDiagFrame, totalEndTicks - totalStartTicks);
+	}
 
 	return shaderFound;
 }
@@ -535,14 +852,30 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		const bool frameDiagActive = ShouldRecordCSFramePhaseDiag();
+		const uint64_t presentBeginTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
+		static uint64_t previousPresentBeginTicks = 0;
+		const uint64_t previousTicks = frameDiagActive ? previousPresentBeginTicks : 0;
+		if (frameDiagActive)
+			previousPresentBeginTicks = presentBeginTicks;
+
 		auto state = globals::state;
 		auto menu = globals::menu;
+		if (frameDiagActive) {
+			const uint32_t completedFrame = state ? state->frameCount : 0;
+			const double intervalMs = previousTicks != 0 ? ConvertFrameDiagTicksToMilliseconds(presentBeginTicks - previousTicks) : 0.0;
+			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
+		}
 		state->Reset();
 		menu->DrawOverlay();
 
+		const uint64_t beforePresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		HRESULT retval = func(This, SyncInterval, Flags);
+		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 
 		TracyD3D11Collect(state->tracyCtx);
+		if (frameDiagActive)
+			LogFrameIntervalSpikeIfNeeded(presentBeginTicks, previousTicks, beforePresentTicks, afterPresentTicks, retval);
 
 		return retval;
 	}
@@ -597,9 +930,32 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
+	if (!ShouldRecordCSFramePhaseDiag()) {
+		func(isCompute);
+		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
+		globals::state->Draw();
+		return;
+	}
+
+	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+	RecordCSFrameHookCall(frame, isCompute);
+
+	const uint64_t totalStartTicks = ReadFrameDiagCounterTicks();
+	uint64_t phaseStartTicks = totalStartTicks;
 	func(isCompute);
+	uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
+	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesOriginal, frame, phaseEndTicks - phaseStartTicks);
+
+	phaseStartTicks = phaseEndTicks;
 	globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
+	phaseEndTicks = ReadFrameDiagCounterTicks();
+	RecordCSFrameHookPhase(CSFrameHookPhase::TerrainOnSetDirtyStates, frame, phaseEndTicks - phaseStartTicks);
+
+	phaseStartTicks = phaseEndTicks;
 	globals::state->Draw();
+	phaseEndTicks = ReadFrameDiagCounterTicks();
+	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
+	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, phaseEndTicks - totalStartTicks);
 }
 
 struct ID3D11Device_CreateVertexShader

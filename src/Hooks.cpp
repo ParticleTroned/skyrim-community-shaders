@@ -77,8 +77,11 @@ namespace
 
 	constexpr double kCSFrameIntervalSpikeThresholdMs = 12.0;
 	constexpr double kCSFrameIntervalSevereThresholdMs = 18.0;
+	constexpr double kCSFrameIntervalExtremeThresholdMs = 30.0;
+	constexpr double kCSFrameIntervalSummaryWindowMs = 5000.0;
 	constexpr double kCSFrameHookPhaseDiagThresholdUs = 500.0;
 	constexpr double kCSFrameHookPhaseDiagSevereThresholdUs = 3000.0;
+	constexpr bool kCSFrameIntervalDiagnosticsEnabled = false;
 	constexpr bool kCSFrameDiagnosticsEnabled = false;
 
 	uint64_t ReadFrameDiagCounterTicks()
@@ -188,11 +191,52 @@ namespace
 		}
 	};
 
+	struct CSFrameIntervalDiagStats
+	{
+		uint64_t sampleCount = 0;
+		uint64_t moderateCount = 0;
+		uint64_t severeCount = 0;
+		uint64_t extremeCount = 0;
+		uint32_t firstFrame = 0;
+		uint32_t lastFrame = 0;
+		uint64_t firstPresentTicks = 0;
+		double totalIntervalMs = 0.0;
+		double maxIntervalMs = 0.0;
+		double maxPrePresentMs = 0.0;
+		double maxPresentCallMs = 0.0;
+
+		void Reset(uint32_t a_frame, uint64_t a_firstPresentTicks)
+		{
+			sampleCount = 0;
+			moderateCount = 0;
+			severeCount = 0;
+			extremeCount = 0;
+			firstFrame = a_frame;
+			lastFrame = a_frame;
+			firstPresentTicks = a_firstPresentTicks;
+			totalIntervalMs = 0.0;
+			maxIntervalMs = 0.0;
+			maxPrePresentMs = 0.0;
+			maxPresentCallMs = 0.0;
+		}
+	};
+
 	CSFrameHookPhaseFrameStats g_csFrameHookPhaseDiag;
+	CSFrameIntervalDiagStats g_csFrameIntervalDiag;
 
 	bool ShouldRecordCSFramePhaseDiag()
 	{
 		if constexpr (!kCSFrameDiagnosticsEnabled) {
+			return false;
+		} else {
+			auto* state = globals::state;
+			return globals::game::isVR && state && state->IsDeveloperMode();
+		}
+	}
+
+	bool ShouldRecordCSFrameIntervalDiag()
+	{
+		if constexpr (!kCSFrameIntervalDiagnosticsEnabled) {
 			return false;
 		} else {
 			auto* state = globals::state;
@@ -304,14 +348,50 @@ namespace
 		g_csFrameHookPhaseDiag.Reset(0);
 	}
 
-	void LogFrameIntervalSpikeIfNeeded(
+	void LogFrameIntervalSummaryIfNeeded(uint64_t a_presentBeginTicks, uint32_t a_frame)
+	{
+		if (!g_csFrameIntervalDiag.sampleCount || g_csFrameIntervalDiag.firstPresentTicks == 0)
+			return;
+
+		const double windowMs = ConvertFrameDiagTicksToMilliseconds(a_presentBeginTicks - g_csFrameIntervalDiag.firstPresentTicks);
+		if (windowMs < kCSFrameIntervalSummaryWindowMs)
+			return;
+
+		auto& upscaling = globals::features::upscaling;
+		logger::debug(
+			"[CSFrameSummary] frames={}..{} samples={} windowMs={:.2f} avgIntervalMs={:.2f} maxIntervalMs={:.2f} over{:.0f}ms={} over{:.0f}ms={} over{:.0f}ms={} maxPrePresentMs={:.2f} maxPresentCallMs={:.2f} menus={} renderScaleLatched={} perfActive={} presentationActive={} pendingRelatch={} pendingTransition={}",
+			g_csFrameIntervalDiag.firstFrame,
+			g_csFrameIntervalDiag.lastFrame,
+			g_csFrameIntervalDiag.sampleCount,
+			windowMs,
+			g_csFrameIntervalDiag.totalIntervalMs / static_cast<double>(g_csFrameIntervalDiag.sampleCount),
+			g_csFrameIntervalDiag.maxIntervalMs,
+			kCSFrameIntervalSpikeThresholdMs,
+			g_csFrameIntervalDiag.moderateCount,
+			kCSFrameIntervalSevereThresholdMs,
+			g_csFrameIntervalDiag.severeCount,
+			kCSFrameIntervalExtremeThresholdMs,
+			g_csFrameIntervalDiag.extremeCount,
+			g_csFrameIntervalDiag.maxPrePresentMs,
+			g_csFrameIntervalDiag.maxPresentCallMs,
+			FormatFrameDiagMenus(),
+			BoolText(upscaling.IsVRRenderScaleModeLatched()),
+			BoolText(upscaling.IsPerfModeActive()),
+			BoolText(upscaling.IsPresentationUpscalingActive()),
+			BoolText(upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)),
+			BoolText(upscaling.HasPendingVRUpscalingTransition()));
+
+		g_csFrameIntervalDiag.Reset(a_frame, a_presentBeginTicks);
+	}
+
+	void RecordFrameIntervalDiagnostics(
 		[[maybe_unused]] uint64_t a_presentBeginTicks,
 		[[maybe_unused]] uint64_t a_previousPresentBeginTicks,
 		[[maybe_unused]] uint64_t a_beforePresentTicks,
 		[[maybe_unused]] uint64_t a_afterPresentTicks,
 		[[maybe_unused]] HRESULT a_presentResult)
 	{
-		if constexpr (!kCSFrameDiagnosticsEnabled) {
+		if constexpr (!kCSFrameIntervalDiagnosticsEnabled) {
 			return;
 		} else {
 			auto* state = globals::state;
@@ -319,16 +399,33 @@ namespace
 				return;
 
 			const double intervalMs = ConvertFrameDiagTicksToMilliseconds(a_presentBeginTicks - a_previousPresentBeginTicks);
-			if (intervalMs < kCSFrameIntervalSpikeThresholdMs)
+			const double prePresentMs = ConvertFrameDiagTicksToMilliseconds(a_beforePresentTicks - a_presentBeginTicks);
+			const double presentCallMs = ConvertFrameDiagTicksToMilliseconds(a_afterPresentTicks - a_beforePresentTicks);
+			if (g_csFrameIntervalDiag.sampleCount == 0)
+				g_csFrameIntervalDiag.Reset(state->frameCount, a_previousPresentBeginTicks);
+
+			g_csFrameIntervalDiag.sampleCount++;
+			g_csFrameIntervalDiag.lastFrame = state->frameCount;
+			g_csFrameIntervalDiag.totalIntervalMs += intervalMs;
+			g_csFrameIntervalDiag.maxIntervalMs = std::max(g_csFrameIntervalDiag.maxIntervalMs, intervalMs);
+			g_csFrameIntervalDiag.maxPrePresentMs = std::max(g_csFrameIntervalDiag.maxPrePresentMs, prePresentMs);
+			g_csFrameIntervalDiag.maxPresentCallMs = std::max(g_csFrameIntervalDiag.maxPresentCallMs, presentCallMs);
+			if (intervalMs >= kCSFrameIntervalSpikeThresholdMs)
+				g_csFrameIntervalDiag.moderateCount++;
+			if (intervalMs >= kCSFrameIntervalSevereThresholdMs)
+				g_csFrameIntervalDiag.severeCount++;
+			if (intervalMs >= kCSFrameIntervalExtremeThresholdMs)
+				g_csFrameIntervalDiag.extremeCount++;
+
+			LogFrameIntervalSummaryIfNeeded(a_presentBeginTicks, state->frameCount);
+			if (intervalMs < kCSFrameIntervalSevereThresholdMs)
 				return;
 
 			static uint32_t loggedSpikeCount = 0;
-			if (loggedSpikeCount >= 256 && intervalMs < kCSFrameIntervalSevereThresholdMs)
+			if (loggedSpikeCount >= 128 && intervalMs < kCSFrameIntervalExtremeThresholdMs)
 				return;
 			++loggedSpikeCount;
 
-			const double prePresentMs = ConvertFrameDiagTicksToMilliseconds(a_beforePresentTicks - a_presentBeginTicks);
-			const double presentCallMs = ConvertFrameDiagTicksToMilliseconds(a_afterPresentTicks - a_beforePresentTicks);
 			auto& upscaling = globals::features::upscaling;
 			logger::debug(
 				"[CSFrameSpike] frame={} intervalMs={:.2f} prePresentMs={:.2f} presentCallMs={:.2f} menus={} paused={} renderScaleLatched={} perfActive={} presentationActive={} pendingRelatch={} pendingTransition={} profilerCpuMs={:.2f} profilerGpuMs={:.2f} hr=0x{:08X}",
@@ -852,7 +949,9 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
-		const bool frameDiagActive = ShouldRecordCSFramePhaseDiag();
+		const bool phaseDiagActive = ShouldRecordCSFramePhaseDiag();
+		const bool intervalDiagActive = ShouldRecordCSFrameIntervalDiag();
+		const bool frameDiagActive = phaseDiagActive || intervalDiagActive;
 		const uint64_t presentBeginTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		static uint64_t previousPresentBeginTicks = 0;
 		const uint64_t previousTicks = frameDiagActive ? previousPresentBeginTicks : 0;
@@ -861,7 +960,7 @@ struct IDXGISwapChain_Present
 
 		auto state = globals::state;
 		auto menu = globals::menu;
-		if (frameDiagActive) {
+		if (phaseDiagActive) {
 			const uint32_t completedFrame = state ? state->frameCount : 0;
 			const double intervalMs = previousTicks != 0 ? ConvertFrameDiagTicksToMilliseconds(presentBeginTicks - previousTicks) : 0.0;
 			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
@@ -874,8 +973,8 @@ struct IDXGISwapChain_Present
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 
 		TracyD3D11Collect(state->tracyCtx);
-		if (frameDiagActive)
-			LogFrameIntervalSpikeIfNeeded(presentBeginTicks, previousTicks, beforePresentTicks, afterPresentTicks, retval);
+		if (intervalDiagActive)
+			RecordFrameIntervalDiagnostics(presentBeginTicks, previousTicks, beforePresentTicks, afterPresentTicks, retval);
 
 		return retval;
 	}

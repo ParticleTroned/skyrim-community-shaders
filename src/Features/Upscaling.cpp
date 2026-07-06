@@ -187,10 +187,13 @@ namespace
 	} };
 	constexpr bool kVRMenuBridgeABModeEnabled = true;
 	constexpr bool kVRMenuBridgeRC55DiagnosticsLoggingEnabled = false;
+	constexpr bool kVRNarrowSpikeDiagnosticsEnabled = false;
 	constexpr double kVRMenuFinalCompositeSpikeThresholdUs = 500.0;
 	constexpr double kVRMenuLifecycleSpikeThresholdUs = 500.0;
+	constexpr double kVRNarrowLifecycleSpikeThresholdUs = 500.0;
+	constexpr double kVRNarrowMenuEventSpikeThresholdUs = 100.0;
+	constexpr uint32_t kVRNarrowSpikeLogLimit = 8u;
 	constexpr uint32_t kVRMenuPerfSpikeLogLimit = 16u;
-	constexpr uint32_t kVRMenuBridgeSkippedDrawCountDiagSlots = 8u;
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = 1800;
@@ -333,11 +336,52 @@ namespace
 		uint32_t lastFrame = 0;
 		uint64_t menuMaskSeen = 0;
 	};
+	enum class VRNarrowDiagBucket : uint32_t
+	{
+		FinalCompositeTotal = 0,
+		FinalCompositeShaderCreate,
+		RenderTargetRelatch,
+		VendorRuntimeReset,
+		PostLoadRuntimeReset,
+		RecreateVendorRuntimeResources,
+		CreateUpscalingTextureResources,
+		MenuOpenCloseEvent,
+		MenuPresentationTailEvent,
+		ObservedProjectedTailEvent,
+		MenuBridgeTraceTailEvent,
+		RaceSexTailEvent,
+		MenuDrawInterfaceTail,
+		Count
+	};
+	struct VRNarrowDiagBucketStats
+	{
+		uint64_t sampleCount = 0;
+		uint64_t totalTicks = 0;
+		uint64_t maxTicks = 0;
+		uint32_t spikeLogCount = 0;
+		uint32_t firstFrame = 0;
+		uint32_t lastFrame = 0;
+	};
 	constexpr std::array<std::string_view, static_cast<size_t>(VRMenuPerfBucket::Count)> kVRMenuPerfBucketNames{ {
 		"TryCaptureTotal",
 		"TryCaptureClassification",
 		"BridgeLayerDraw",
 		"FinalCompositeTotal",
+	} };
+	constexpr std::array<std::string_view, static_cast<size_t>(VRNarrowDiagBucket::Count)> kVRNarrowDiagBucketNames{ {
+		"FinalCompositeTotal",
+		"FinalCompositeShaderCreate",
+		"RenderTargetRelatch",
+		"VendorRuntimeReset",
+		"PostLoadRuntimeReset",
+		"RecreateVendorRuntimeResources",
+		"CreateUpscalingTextureResources",
+		"MenuOpenCloseEvent",
+		"MenuPresentationTailEvent",
+		"ObservedProjectedTailEvent",
+		"MenuBridgeTraceTailEvent",
+		"RaceSexTailEvent",
+		"MenuDrawInterfaceTail",
 	} };
 	constexpr uint32_t kVRKnownRedundantHUDMenuBridgeCallerRva = 0xDBDDF9u;
 	std::mutex g_vrMenuBridgeCaptureDiagMutex;
@@ -356,7 +400,8 @@ namespace
 	std::vector<VRMenuBridgeDedupeDiagBucket> g_vrMenuBridgeDedupeDiagBuckets;
 	std::mutex g_vrMenuPerfDiagMutex;
 	std::array<VRMenuPerfDiagBucket, static_cast<size_t>(VRMenuPerfBucket::Count)> g_vrMenuPerfDiagBuckets{};
-	std::array<std::atomic_uint32_t, kVRMenuBridgeSkippedDrawCountDiagSlots> g_vrMenuBridgeSkippedDrawCounts{};
+	std::mutex g_vrNarrowDiagMutex;
+	std::array<VRNarrowDiagBucketStats, static_cast<size_t>(VRNarrowDiagBucket::Count)> g_vrNarrowDiagBuckets{};
 	constexpr uint32_t kVRMenuBridgeDebugModeUnlatched = std::numeric_limits<uint32_t>::max();
 	std::atomic_uint32_t g_vrMenuBridgeDebugModeLatched{ kVRMenuBridgeDebugModeUnlatched };
 
@@ -371,6 +416,11 @@ namespace
 	bool ShouldEmitVRMenuBridgeDiagLogs()
 	{
 		return kVRMenuBridgeRC55DiagnosticsLoggingEnabled && ShouldEmitUpscalingDiagLogs();
+	}
+
+	bool ShouldEmitVRNarrowSpikeDiagLogs()
+	{
+		return kVRNarrowSpikeDiagnosticsEnabled && ShouldEmitUpscalingDiagLogs();
 	}
 
 	uint32_t ClampVRMenuBridgeDebugMode([[maybe_unused]] uint32_t a_mode)
@@ -469,35 +519,6 @@ namespace
 
 	uint64_t GetActiveVRMenuBridgeDiagMenuMask(RE::UI* a_ui);
 	std::string FormatVRMenuBridgeDiagMenuMask(uint64_t a_mask);
-
-	void MaybeLogSkippedVRMenuBridgeDrawCount(UINT a_indexCount, uint32_t a_frame)
-	{
-		if (!ShouldEmitVRMenuBridgeDiagLogs() || a_frame == 0)
-			return;
-
-		const uint32_t key = std::max<uint32_t>(a_indexCount, 1u);
-		for (auto& loggedCount : g_vrMenuBridgeSkippedDrawCounts) {
-			uint32_t existing = loggedCount.load(std::memory_order_relaxed);
-			if (existing == key)
-				return;
-
-			if (existing == 0u &&
-				loggedCount.compare_exchange_strong(existing, key, std::memory_order_relaxed, std::memory_order_relaxed)) {
-				logger::debug(
-					"[VRMenuBridge][DrawCountSkip] frame={} menus={} indexCount={} inferredMode={}",
-					a_frame,
-					FormatVRMenuBridgeDiagMenuMask(GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui)),
-					a_indexCount,
-					(a_indexCount % 3u) == 0u ? (a_indexCount / 3u) : 0u);
-				return;
-			}
-
-			if (existing == key)
-				return;
-		}
-
-		return;
-	}
 
 	uint32_t ToModuleRva(const void* a_returnAddress)
 	{
@@ -1445,6 +1466,11 @@ namespace
 		return kVRMenuPerfBucketNames[static_cast<size_t>(a_bucket)].data();
 	}
 
+	const char* GetVRNarrowDiagBucketName(VRNarrowDiagBucket a_bucket)
+	{
+		return kVRNarrowDiagBucketNames[static_cast<size_t>(a_bucket)].data();
+	}
+
 	uint64_t ReadVRMenuPerfCounterTicks()
 	{
 		LARGE_INTEGER counter{};
@@ -1485,6 +1511,105 @@ namespace
 		static const uint64_t thresholdTicks = ConvertVRMenuPerfMicrosecondsToTicks(kVRMenuFinalCompositeSpikeThresholdUs);
 		return thresholdTicks;
 	}
+
+	void RecordVRNarrowSpikeDiag(
+		VRNarrowDiagBucket a_bucket,
+		uint64_t a_elapsedTicks,
+		uint32_t a_frame,
+		double a_thresholdUs,
+		std::string_view a_detail = {})
+	{
+		if (!a_elapsedTicks || !ShouldEmitVRNarrowSpikeDiagLogs())
+			return;
+
+		std::lock_guard lock(g_vrNarrowDiagMutex);
+		auto& bucket = g_vrNarrowDiagBuckets[static_cast<size_t>(a_bucket)];
+		const bool firstSample = bucket.sampleCount == 0;
+		const bool newMax = a_elapsedTicks > bucket.maxTicks;
+		if (firstSample)
+			bucket.firstFrame = a_frame;
+
+		bucket.sampleCount++;
+		bucket.totalTicks += a_elapsedTicks;
+		if (newMax)
+			bucket.maxTicks = a_elapsedTicks;
+		bucket.lastFrame = a_frame;
+
+		const uint64_t thresholdTicks = ConvertVRMenuPerfMicrosecondsToTicks(a_thresholdUs);
+		const bool aboveThreshold = a_elapsedTicks >= thresholdTicks;
+		if (!firstSample && !aboveThreshold)
+			return;
+		if (!firstSample && bucket.spikeLogCount >= kVRNarrowSpikeLogLimit && !newMax)
+			return;
+
+		bucket.spikeLogCount++;
+		if (a_detail.empty()) {
+			logger::debug(
+				"[VRSpikeNarrow][{}] frame={} elapsedUs={:.2f} maxUs={:.2f} samples={} avgUs={:.2f}",
+				GetVRNarrowDiagBucketName(a_bucket),
+				a_frame,
+				ConvertVRMenuPerfTicksToMicroseconds(a_elapsedTicks),
+				ConvertVRMenuPerfTicksToMicroseconds(bucket.maxTicks),
+				bucket.sampleCount,
+				ConvertVRMenuPerfTicksToMicroseconds(bucket.totalTicks) / static_cast<double>(bucket.sampleCount));
+		} else {
+			logger::debug(
+				"[VRSpikeNarrow][{}] frame={} elapsedUs={:.2f} maxUs={:.2f} samples={} avgUs={:.2f} detail={}",
+				GetVRNarrowDiagBucketName(a_bucket),
+				a_frame,
+				ConvertVRMenuPerfTicksToMicroseconds(a_elapsedTicks),
+				ConvertVRMenuPerfTicksToMicroseconds(bucket.maxTicks),
+				bucket.sampleCount,
+				ConvertVRMenuPerfTicksToMicroseconds(bucket.totalTicks) / static_cast<double>(bucket.sampleCount),
+				a_detail);
+		}
+	}
+
+	struct ScopedVRNarrowSpikeTimer
+	{
+		VRNarrowDiagBucket bucket;
+		double thresholdUs = kVRNarrowLifecycleSpikeThresholdUs;
+		uint32_t frame = 0;
+		uint64_t startTicks = 0;
+		std::string detail;
+		bool active = false;
+
+		ScopedVRNarrowSpikeTimer(VRNarrowDiagBucket a_bucket, double a_thresholdUs = kVRNarrowLifecycleSpikeThresholdUs) :
+			bucket(a_bucket), thresholdUs(a_thresholdUs)
+		{
+			active = globals::game::isVR && ShouldEmitVRNarrowSpikeDiagLogs();
+			if (!active)
+				return;
+
+			frame = globals::state ? globals::state->frameCount : 0;
+			startTicks = ReadVRMenuPerfCounterTicks();
+		}
+
+		~ScopedVRNarrowSpikeTimer()
+		{
+			if (!active)
+				return;
+
+			const uint64_t endTicks = ReadVRMenuPerfCounterTicks();
+			RecordVRNarrowSpikeDiag(
+				bucket,
+				endTicks >= startTicks ? (endTicks - startTicks) : 0,
+				frame,
+				thresholdUs,
+				detail);
+		}
+
+		bool IsActive() const
+		{
+			return active;
+		}
+
+		void SetDetail(std::string a_detail)
+		{
+			if (active)
+				detail = std::move(a_detail);
+		}
+	};
 
 	struct ScopedVRMenuLifecycleDiagTimer
 	{
@@ -5214,7 +5339,6 @@ bool Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
 	}
 
 	if (!IsKnownVRMenuBridgeStereoIndexCount(a_indexCount)) {
-		MaybeLogSkippedVRMenuBridgeDrawCount(a_indexCount, currentFrame);
 		return false;
 	}
 
@@ -5276,9 +5400,21 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 	if (!context || !deferred || !deferred->linearSampler || !upscaleRasterizerState || !vrMenuCompositeBlendState || !vrMenuLayerCompositeCB)
 		return false;
 
+	ScopedVRNarrowSpikeTimer narrowCompositeTimer(VRNarrowDiagBucket::FinalCompositeTotal, kVRMenuFinalCompositeSpikeThresholdUs);
+
 	ID3D11PixelShader* pixelShader = nullptr;
 	try {
-		pixelShader = GetVRMenuLayerCompositePS();
+		{
+			ScopedVRNarrowSpikeTimer narrowShaderTimer(VRNarrowDiagBucket::FinalCompositeShaderCreate, kVRNarrowMenuEventSpikeThresholdUs);
+			if (narrowShaderTimer.IsActive() && !vrMenuLayerCompositePS) {
+				narrowShaderTimer.SetDetail(std::format(
+					"cachedBefore=no eye={} layer={}x{}",
+					a_eyeIndex,
+					vrMenuFinalCompositeLayerWidth,
+					vrMenuFinalCompositeLayerHeight));
+			}
+			pixelShader = GetVRMenuLayerCompositePS();
+		}
 	} catch (const std::exception& e) {
 		static bool loggedShaderFailure = false;
 		LogWarnOnce(loggedShaderFailure, "[VRMenuComposite] Final menu composite shader unavailable", e);
@@ -6894,6 +7030,30 @@ void Upscaling::DataLoaded()
 RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
+	const bool narrowMenuEventActive = a_event && globals::game::isVR && ShouldEmitVRNarrowSpikeDiagLogs();
+	const uint32_t narrowMenuEventFrame = globals::state ? globals::state->frameCount : 0;
+	const uint64_t narrowMenuEventStartTicks = narrowMenuEventActive ? ReadVRMenuPerfCounterTicks() : 0;
+	auto narrowMenuEventGuard = ScopeExit([&]() {
+		if (!narrowMenuEventActive)
+			return;
+
+		const uint64_t endTicks = ReadVRMenuPerfCounterTicks();
+		const std::string_view menuName = a_event->menuName;
+		RecordVRNarrowSpikeDiag(
+			VRNarrowDiagBucket::MenuOpenCloseEvent,
+			endTicks >= narrowMenuEventStartTicks ? (endTicks - narrowMenuEventStartTicks) : 0,
+			narrowMenuEventFrame,
+			kVRNarrowMenuEventSpikeThresholdUs,
+			std::format(
+				"menu={} opening={} presentationMenu={} raceSex={} loading={} menus={}",
+				menuName,
+				BoolText(a_event->opening),
+				BoolText(IsVRMenuPresentationTailMenuName(menuName)),
+				BoolText(menuName == RE::RaceSexMenu::MENU_NAME),
+				BoolText(menuName == RE::LoadingMenu::MENU_NAME),
+				FormatVRMenuBridgeDiagMenuMask(GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui))));
+	});
+
 	if (a_event && ShouldEmitVRMenuBridgeDiagLogs()) {
 		const std::string_view menuName = a_event->menuName;
 		logger::debug(
@@ -6912,14 +7072,58 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				IsVRRaceSexPostLoadArmWindowActive(globals::state),
 				std::memory_order_release);
 		}
+		const uint64_t tailStartTicks = narrowMenuEventActive ? ReadVRMenuPerfCounterTicks() : 0;
 		ExtendVRRaceSexMenuPresentationTail(
 			a_event->opening ? kVRMenuPresentationTailFrames : kVRRaceSexPostCloseRenderScaleBlockFrames);
+		if (narrowMenuEventActive) {
+			const uint64_t tailEndTicks = ReadVRMenuPerfCounterTicks();
+			RecordVRNarrowSpikeDiag(
+				VRNarrowDiagBucket::RaceSexTailEvent,
+				tailEndTicks >= tailStartTicks ? (tailEndTicks - tailStartTicks) : 0,
+				narrowMenuEventFrame,
+				kVRNarrowMenuEventSpikeThresholdUs,
+				std::format(
+					"opening={} tailFrames={} protection={} tailEnd={}",
+					BoolText(a_event->opening),
+					a_event->opening ? kVRMenuPresentationTailFrames : kVRRaceSexPostCloseRenderScaleBlockFrames,
+					BoolText(g_vrRaceSexPostLoadProtectionActive.load(std::memory_order_acquire)),
+					g_vrRaceSexMenuPresentationTailEndFrame.load(std::memory_order_acquire)));
+		}
 		TraceVRRaceSexStartupSignal(a_event->opening ? "menu-event-open" : "menu-event-close", true);
 	}
 
 	if (a_event && IsVRMenuPresentationTailMenuName(a_event->menuName)) {
+		const std::string_view menuName = a_event->menuName;
+		const uint64_t presentationTailStartTicks = narrowMenuEventActive ? ReadVRMenuPerfCounterTicks() : 0;
 		ExtendVRMenuPresentationTail();
+		if (narrowMenuEventActive) {
+			const uint64_t presentationTailEndTicks = ReadVRMenuPerfCounterTicks();
+			RecordVRNarrowSpikeDiag(
+				VRNarrowDiagBucket::MenuPresentationTailEvent,
+				presentationTailEndTicks >= presentationTailStartTicks ? (presentationTailEndTicks - presentationTailStartTicks) : 0,
+				narrowMenuEventFrame,
+				kVRNarrowMenuEventSpikeThresholdUs,
+				std::format(
+					"menu={} opening={} tailEnd={}",
+					menuName,
+					BoolText(a_event->opening),
+					g_vrMenuPresentationTailEndFrame.load(std::memory_order_acquire)));
+		}
+		const uint64_t bridgeTailStartTicks = narrowMenuEventActive ? ReadVRMenuPerfCounterTicks() : 0;
 		ExtendVRMenuBridgeTraceTail();
+		if (narrowMenuEventActive) {
+			const uint64_t bridgeTailEndTicks = ReadVRMenuPerfCounterTicks();
+			RecordVRNarrowSpikeDiag(
+				VRNarrowDiagBucket::MenuBridgeTraceTailEvent,
+				bridgeTailEndTicks >= bridgeTailStartTicks ? (bridgeTailEndTicks - bridgeTailStartTicks) : 0,
+				narrowMenuEventFrame,
+				kVRNarrowMenuEventSpikeThresholdUs,
+				std::format(
+					"menu={} opening={} tailEnd={}",
+					menuName,
+					BoolText(a_event->opening),
+					g_vrMenuBridgeTraceTailEndFrame.load(std::memory_order_acquire)));
+		}
 	}
 
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
@@ -8422,6 +8626,20 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 {
 	InvalidateFrameScopedUpscalingState();
 	logger::debug("[Upscaling] Creating texture resources for method {} ({})", static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
+	ScopedVRNarrowSpikeTimer narrowResourceTimer(VRNarrowDiagBucket::CreateUpscalingTextureResources);
+	if (narrowResourceTimer.IsActive()) {
+		narrowResourceTimer.SetDetail(std::format(
+			"method={} render={}x{} display={}x{} reactive={} transparency={} motionCopy={} sharpener={}",
+			magic_enum::enum_name(a_upscalemethod),
+			ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.x),
+			ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.y),
+			ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.x),
+			ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.y),
+			BoolText(reactiveMaskTexture != nullptr),
+			BoolText(transparencyCompositionMaskTexture != nullptr),
+			BoolText(motionVectorCopyTexture != nullptr),
+			BoolText(sharpenerTexture != nullptr)));
+	}
 
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -9049,6 +9267,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 
 	if (!pendingPerfModeRenderTargetRecreate.exchange(false, std::memory_order_acq_rel))
 		return true;
+	ScopedVRNarrowSpikeTimer narrowRelatchTimer(VRNarrowDiagBucket::RenderTargetRelatch);
 	const auto relatchOrigin = LoadVRUpscalingTransitionOrigin(pendingPerfModeRenderTargetRecreateOrigin);
 	const auto queuedRecoverySnapshot = pendingVRRenderScaleRecoverySnapshot;
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
@@ -9106,6 +9325,25 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		*this,
 		state,
 		authoritativeRelatchActivationTarget);
+	if (narrowRelatchTimer.IsActive()) {
+		narrowRelatchTimer.SetDetail(std::format(
+			"caller={} origin={} recoveryLocked={} method={} targetActive={} startupProtection={} pendingPostLoad={} postLoadSettle={} saveLoadContext={} loadingPresentation={} pendingDLSS={} pendingFSR={} fsrResources={} currentScreen={}x{}",
+			a_caller && *a_caller ? a_caller : "unknown",
+			magic_enum::enum_name(relatchOrigin),
+			BoolText(preserveActiveContractForRecovery),
+			magic_enum::enum_name(relatchUpscaleMethod),
+			BoolText(authoritativeRelatchActivationTarget),
+			BoolText(authoritativeStartupActivationProtection),
+			BoolText(postLoadRuntimeResetPending.load(std::memory_order_acquire)),
+			BoolText(pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire)),
+			BoolText(IsSaveLoadTransitionContextActive(state)),
+			BoolText(IsVRLoadingPresentationContextActive(state)),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()),
+			ClampPositiveDimension(state->screenSize.x),
+			ClampPositiveDimension(state->screenSize.y)));
+	}
 	if (authoritativeStartupActivationProtection && !CanStartVRRenderScaleRuntime(*this)) {
 		requeueRelatch(kVRRenderScalePostLoadSettleRetryFrames);
 		if (!loggedRelatchRuntimeActivationDefer) {
@@ -10407,6 +10645,21 @@ bool Upscaling::ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool 
 	if (!globals::game::isVR)
 		return true;
 
+	ScopedVRNarrowSpikeTimer narrowResetTimer(VRNarrowDiagBucket::VendorRuntimeReset);
+	if (narrowResetTimer.IsActive()) {
+		narrowResetTimer.SetDetail(std::format(
+			"destroyDLSS={} destroyPeripheryTAA={} requestedDestroyFSR={} waitForFSRIdle={} fsrTeardownReady={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={}",
+			BoolText(a_destroyDLSSResources),
+			BoolText(a_destroyPeripheryTAAResources),
+			BoolText(a_destroyFSRResources),
+			BoolText(a_waitForFSRIdleTeardown),
+			BoolText(a_fsrTeardownAlreadyReady),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()),
+			BoolText(fidelityFX.HasFSRResourcesPendingTeardown())));
+	}
+
 	const bool destroyFSRResources = a_destroyFSRResources || pendingFSRReset.load(std::memory_order_acquire);
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (emitDiagLogs) {
@@ -10451,6 +10704,21 @@ void Upscaling::RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bo
 {
 	if (!IsVendorUpscalingMethod(a_upscaleMethod))
 		return;
+
+	ScopedVRNarrowSpikeTimer narrowRecreateTimer(VRNarrowDiagBucket::RecreateVendorRuntimeResources);
+	if (narrowRecreateTimer.IsActive()) {
+		narrowRecreateTimer.SetDetail(std::format(
+			"method={} recreateTemporal={} render={}x{} display={}x{} pendingDLSS={} pendingFSR={} fsrResourcesBefore={}",
+			magic_enum::enum_name(a_upscaleMethod),
+			BoolText(a_recreateTemporalResources),
+			ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.x),
+			ClampPositiveDimension(runtimeResolutionPlan.engineRenderSize.y),
+			ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.x),
+			ClampPositiveDimension(runtimeResolutionPlan.finalOutputSize.y),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources())));
+	}
 
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (emitDiagLogs) {
@@ -10517,6 +10785,22 @@ bool Upscaling::ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, co
 	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire)) {
 		return true;
+	}
+
+	ScopedVRNarrowSpikeTimer narrowVendorResetTimer(VRNarrowDiagBucket::VendorRuntimeReset);
+	if (narrowVendorResetTimer.IsActive()) {
+		narrowVendorResetTimer.SetDetail(std::format(
+			"context={} method={} activePending={} inactivePending={} generationMismatch={} activeGeneration={} pendingDLSS={} pendingFSR={} fsrResources={} fsrTeardownPending={}",
+			a_context ? a_context : "",
+			magic_enum::enum_name(a_upscaleMethod),
+			BoolText(activeResetPending),
+			BoolText(inactiveResetPending),
+			BoolText(activeGenerationMismatch),
+			activeContractGeneration,
+			BoolText(dlssResetPending),
+			BoolText(fsrResetPending),
+			BoolText(fidelityFX.HasFSRResources()),
+			BoolText(fidelityFX.HasFSRResourcesPendingTeardown())));
 	}
 
 	const char* context = a_context ? a_context : "";
@@ -10691,6 +10975,22 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 
 	if (!renderScalePostLoadResetRelevant)
 		return true;
+
+	ScopedVRNarrowSpikeTimer narrowPostLoadResetTimer(VRNarrowDiagBucket::PostLoadRuntimeReset);
+	if (narrowPostLoadResetTimer.IsActive()) {
+		narrowPostLoadResetTimer.SetDetail(std::format(
+			"method={} relatchMethod={} resetFSRBootLatch={} queueFSRRelatch={} pendingDLSS={} pendingFSR={} fsrResources={} saveLoadContext={} loadingPresentation={} lastWorldFrame={}",
+			magic_enum::enum_name(a_upscaleMethod),
+			magic_enum::enum_name(relatchMethod),
+			BoolText(resetFSRRenderScaleBootLatch),
+			BoolText(queueFSRRenderScaleRelatch),
+			BoolText(pendingDLSSReset.load(std::memory_order_acquire)),
+			BoolText(pendingFSRReset.load(std::memory_order_acquire)),
+			BoolText(fidelityFX.HasFSRResources()),
+			BoolText(IsSaveLoadTransitionContextActive(state)),
+			BoolText(IsVRLoadingPresentationContextActive(state)),
+			state ? state->lastCompletedWorldRenderFrame : 0u));
+	}
 
 	const bool emitDiagLogs = ShouldEmitUpscalingDiagLogs();
 	if (emitDiagLogs) {
@@ -18478,13 +18778,35 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 	if (globals::game::isVR && upscaling.IsVRRenderScaleModeLatched() && IsExplicitVRMenuPresentationContextActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();
 		if (observedProjectedMenu) {
+			const bool narrowTailActive = ShouldEmitVRNarrowSpikeDiagLogs();
+			const uint32_t narrowTailFrame = globals::state ? globals::state->frameCount : 0;
+			const uint64_t narrowTailStartTicks = narrowTailActive ? ReadVRMenuPerfCounterTicks() : 0;
 			ExtendVRObservedProjectedMenuTail();
 			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
 			ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
+			if (narrowTailActive) {
+				const uint64_t narrowTailEndTicks = ReadVRMenuPerfCounterTicks();
+				RecordVRNarrowSpikeDiag(
+					VRNarrowDiagBucket::ObservedProjectedTailEvent,
+					narrowTailEndTicks >= narrowTailStartTicks ? (narrowTailEndTicks - narrowTailStartTicks) : 0,
+					narrowTailFrame,
+					kVRNarrowMenuEventSpikeThresholdUs);
+			}
 		} else if (IsVRObservedProjectedMenuTailActive(globals::state) &&
 				   IsCurrentRenderTargetVRObservedMenuPresentationFollowTexture()) {
+			const bool narrowTailActive = ShouldEmitVRNarrowSpikeDiagLogs();
+			const uint32_t narrowTailFrame = globals::state ? globals::state->frameCount : 0;
+			const uint64_t narrowTailStartTicks = narrowTailActive ? ReadVRMenuPerfCounterTicks() : 0;
 			ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
 			ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
+			if (narrowTailActive) {
+				const uint64_t narrowTailEndTicks = ReadVRMenuPerfCounterTicks();
+				RecordVRNarrowSpikeDiag(
+					VRNarrowDiagBucket::MenuDrawInterfaceTail,
+					narrowTailEndTicks >= narrowTailStartTicks ? (narrowTailEndTicks - narrowTailStartTicks) : 0,
+					narrowTailFrame,
+					kVRNarrowMenuEventSpikeThresholdUs);
+			}
 		}
 	}
 }

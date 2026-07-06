@@ -257,9 +257,7 @@ namespace
 		}
 		if (shortName == "ScreenSpaceShadows") {
 			return MakeJsonMask({ "Enable",
-				"SampleCount",
-				"EnableFoveated",
-				"EnableStereoSync" });
+				"SampleCount" });
 		}
 		if (shortName == "ScreenSpaceGI") {
 			return MakeJsonMask({ "Enabled",
@@ -267,8 +265,6 @@ namespace
 				"AOInteriorsOnly",
 				"EnableAdaptiveSampling",
 				"ResolutionMode",
-				"EnableFoveated",
-				"EnableStereoSync",
 				"NumSlices",
 				"NumSteps" });
 		}
@@ -784,7 +780,7 @@ namespace
 
 		const std::string shortName = feature->GetShortName();
 		if (shortName == "Upscaling")
-			return "Upscaling is set to None, with foveated upscaling disabled.";
+			return "Upscaling is set to None.";
 		if (shortName == "ScreenSpaceShadows")
 			return "Screen Space Shadows are switched off.";
 		if (shortName == "ScreenSpaceGI")
@@ -801,6 +797,8 @@ namespace
 			return "Volumetric Lighting is switched off for the current interior/exterior context.";
 		if (shortName == "UnifiedWater")
 			return "optimized water meshes are switched off.";
+		if (shortName == "SubsurfaceScattering")
+			return "Subsurface Scattering is switched off.";
 		if (shortName == "GrassCollision")
 			return "Grass Collision is switched off.";
 

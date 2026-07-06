@@ -4856,6 +4856,77 @@ bool Upscaling::EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_hei
 	return false;
 }
 
+void Upscaling::PrewarmVRMenuFinalCompositeResources()
+{
+	if (!globals::game::isVR ||
+		!globals::game::renderer ||
+		!globals::d3d::device ||
+		!IsVRRenderScaleModeActive() ||
+		!IsPresentationUpscalingActive() ||
+		!IsExplicitVRMenuPresentationContextActive() ||
+		IsCommunityShadersMenuOpen()) {
+		return;
+	}
+
+	if (!vrMenuLayerCompositePS && !vrMenuLayerCompositePSPrewarmAttempted) {
+		vrMenuLayerCompositePSPrewarmAttempted = true;
+		try {
+			(void)GetVRMenuLayerCompositePS();
+		} catch (const std::exception& e) {
+			(void)MarkSubmitStageDeviceLostIfNeeded(e, "VR menu final composite shader prewarm");
+		} catch (...) {
+			(void)MarkSubmitStageDeviceLostIfDeviceRemoved("VR menu final composite shader prewarm");
+		}
+	}
+
+	EnsureRuntimeResolutionStateCurrent();
+	const auto& plan = GetRuntimeResolutionPlan();
+	const uint32_t renderWidth = ClampPositiveDimension(plan.engineRenderSize.x);
+	const uint32_t renderHeight = ClampPositiveDimension(plan.engineRenderSize.y);
+	const uint32_t finalWidth = ClampPositiveDimension(plan.finalOutputSize.x);
+	const uint32_t finalHeight = ClampPositiveDimension(plan.finalOutputSize.y);
+	if (!renderWidth || !renderHeight || !finalWidth || !finalHeight ||
+		finalWidth <= renderWidth || finalHeight <= renderHeight) {
+		return;
+	}
+
+	const int menuBgTarget = static_cast<int>(RE::RENDER_TARGETS::kMENUBG);
+	if (menuBgTarget < 0 || menuBgTarget >= Util::GetRenderTargetCount())
+		return;
+
+	const auto& menuBg = globals::game::renderer->GetRuntimeData().renderTargets[menuBgTarget];
+	ID3D11Resource* menuBgResource = menuBg.texture ? menuBg.texture : menuBg.textureCopy;
+	D3D11_TEXTURE2D_DESC menuBgDesc{};
+	if (!TryGetTexture2DDesc(menuBgResource, menuBgDesc) ||
+		menuBgDesc.SampleDesc.Count != 1 ||
+		menuBgDesc.Format == DXGI_FORMAT_UNKNOWN) {
+		return;
+	}
+
+	if (vrMenuFinalCompositeLayer &&
+		vrMenuFinalCompositeLayer->resource &&
+		vrMenuFinalCompositeLayer->srv &&
+		vrMenuFinalCompositeLayer->rtv &&
+		vrMenuFinalCompositeLayerWidth == finalWidth &&
+		vrMenuFinalCompositeLayerHeight == finalHeight &&
+		vrMenuFinalCompositeLayerFormat == menuBgDesc.Format) {
+		return;
+	}
+
+	if (vrMenuFinalCompositeLayerPrewarmAttempted &&
+		vrMenuFinalCompositeLayerPrewarmWidth == finalWidth &&
+		vrMenuFinalCompositeLayerPrewarmHeight == finalHeight &&
+		vrMenuFinalCompositeLayerPrewarmFormat == menuBgDesc.Format) {
+		return;
+	}
+
+	vrMenuFinalCompositeLayerPrewarmAttempted = true;
+	vrMenuFinalCompositeLayerPrewarmWidth = finalWidth;
+	vrMenuFinalCompositeLayerPrewarmHeight = finalHeight;
+	vrMenuFinalCompositeLayerPrewarmFormat = menuBgDesc.Format;
+	(void)EnsureVRMenuFinalCompositeLayer(finalWidth, finalHeight, menuBgDesc.Format);
+}
+
 bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 	ID3D11DeviceContext* a_context,
 	DXGI_FORMAT a_format,
@@ -15341,7 +15412,12 @@ void Upscaling::ClearShaderCache()
 	vrDesktopMirrorBlitPS = nullptr;   // com_ptr automatically releases
 	vrDesktopMirrorBlitRTV = nullptr;  // com_ptr automatically releases
 	vrDesktopMirrorBlitTarget = nullptr;
-	vrMenuLayerCompositePS = nullptr;     // com_ptr automatically releases
+	vrMenuLayerCompositePS = nullptr;  // com_ptr automatically releases
+	vrMenuLayerCompositePSPrewarmAttempted = false;
+	vrMenuFinalCompositeLayerPrewarmAttempted = false;
+	vrMenuFinalCompositeLayerPrewarmWidth = 0;
+	vrMenuFinalCompositeLayerPrewarmHeight = 0;
+	vrMenuFinalCompositeLayerPrewarmFormat = DXGI_FORMAT_UNKNOWN;
 	vrClearHMDMaskCS = nullptr;           // com_ptr automatically releases
 	vrClearHMDMaskCB = nullptr;           // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr;  // com_ptr automatically releases
@@ -18441,6 +18517,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
 	upscaling.PostDisplay();
+	upscaling.PrewarmVRMenuFinalCompositeResources();
 	func(a1);
 
 	if (globals::game::isVR && upscaling.IsVRRenderScaleModeLatched() && IsExplicitVRMenuPresentationContextActive()) {

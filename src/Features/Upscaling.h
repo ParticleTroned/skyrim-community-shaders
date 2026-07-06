@@ -148,7 +148,6 @@ public:
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return GetUpscaleMethod() != UpscaleMethod::kNONE; }
-	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {

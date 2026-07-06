@@ -39,19 +39,19 @@ public:
 	{
 		float gpuTotalMs = 0.0f;
 		float cpuTotalMs = 0.0f;
-		float gameGpuMs = 0.0f;
-		float gameCpuMs = 0.0f;
+		float profilerGpuMs = 0.0f;
+		float profilerCpuMs = 0.0f;
 		float frameMs = 0.0f;
 		float fps = 0.0f;
-		float gameGpuSampleMs = 0.0f;
-		float gameCpuSampleMs = 0.0f;
+		float profilerGpuSampleMs = 0.0f;
+		float profilerCpuSampleMs = 0.0f;
 		float frameSampleMs = 0.0f;
 		float fpsSample = 0.0f;
 		uint32_t frameCount = 0;
-		bool hasGameGpu = false;
-		bool hasGameCpu = false;
-		bool hasGameGpuSample = false;
-		bool hasGameCpuSample = false;
+		bool hasProfilerGpu = false;
+		bool hasProfilerCpu = false;
+		bool hasProfilerGpuSample = false;
+		bool hasProfilerCpuSample = false;
 		bool hasFrameSample = false;
 		bool valid = false;
 		std::unordered_map<std::string, PerformanceTimingTotals> features;

@@ -882,20 +882,20 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	summary.gpuTotalMs = profiler.GetTotalTimeAverageMs(kDisplayedRollingFrameCount);
 	summary.cpuTotalMs = profiler.GetCpuTotalTimeAverageMs(kDisplayedRollingFrameCount);
 	if (IsPositiveFinite(summary.gpuTotalMs)) {
-		summary.gameGpuMs = summary.gpuTotalMs;
-		summary.gameGpuSampleMs = summary.gpuTotalMs;
-		summary.hasGameGpu = true;
-		summary.hasGameGpuSample = true;
+		summary.profilerGpuMs = summary.gpuTotalMs;
+		summary.profilerGpuSampleMs = summary.gpuTotalMs;
+		summary.hasProfilerGpu = true;
+		summary.hasProfilerGpuSample = true;
 	}
 	if (IsPositiveFinite(summary.cpuTotalMs)) {
-		summary.gameCpuMs = summary.cpuTotalMs;
-		summary.gameCpuSampleMs = summary.cpuTotalMs;
-		summary.hasGameCpu = true;
-		summary.hasGameCpuSample = true;
+		summary.profilerCpuMs = summary.cpuTotalMs;
+		summary.profilerCpuSampleMs = summary.cpuTotalMs;
+		summary.hasProfilerCpu = true;
+		summary.hasProfilerCpuSample = true;
 	}
 
-	if (summary.hasGameGpu || summary.hasGameCpu) {
-		summary.frameMs = std::max(summary.hasGameGpu ? summary.gameGpuMs : 0.0f, summary.hasGameCpu ? summary.gameCpuMs : 0.0f);
+	if (summary.hasProfilerGpu || summary.hasProfilerCpu) {
+		summary.frameMs = std::max(summary.hasProfilerGpu ? summary.profilerGpuMs : 0.0f, summary.hasProfilerCpu ? summary.profilerCpuMs : 0.0f);
 		summary.frameSampleMs = summary.frameMs;
 		summary.hasFrameSample = IsPositiveFinite(summary.frameSampleMs);
 		if (IsPositiveFinite(summary.frameMs)) {

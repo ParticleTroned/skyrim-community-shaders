@@ -69,12 +69,12 @@ namespace
 	{
 		float frameMsSum = 0.0f;
 		float fpsSum = 0.0f;
-		float gameGpuMsSum = 0.0f;
-		float gameCpuMsSum = 0.0f;
+		float profilerGpuMsSum = 0.0f;
+		float profilerCpuMsSum = 0.0f;
 		int frameSamples = 0;
 		int fpsSamples = 0;
-		int gameGpuSamples = 0;
-		int gameCpuSamples = 0;
+		int profilerGpuSamples = 0;
+		int profilerCpuSamples = 0;
 		uint32_t lastFrameCount = 0;
 	};
 
@@ -82,12 +82,12 @@ namespace
 	{
 		float frameMs = 0.0f;
 		float fpsDelta = 0.0f;
-		float gameGpuMs = 0.0f;
-		float gameCpuMs = 0.0f;
+		float profilerGpuMs = 0.0f;
+		float profilerCpuMs = 0.0f;
 		bool hasFrame = false;
 		bool hasFps = false;
-		bool hasGameGpu = false;
-		bool hasGameCpu = false;
+		bool hasProfilerGpu = false;
+		bool hasProfilerCpu = false;
 	};
 
 	enum class FeatureCostMeasurementPhase
@@ -199,10 +199,10 @@ namespace
 		return std::isfinite(value) && value > 0.0f;
 	}
 
-	bool TryGetDisplayTimingMs(bool hasGameTiming, float gameTimingMs, float& value)
+	bool TryGetDisplayTimingMs(bool hasProfilerTiming, float profilerTimingMs, float& value)
 	{
-		if (hasGameTiming && IsPositiveFiniteTiming(gameTimingMs)) {
-			value = gameTimingMs;
+		if (hasProfilerTiming && IsPositiveFiniteTiming(profilerTimingMs)) {
+			value = profilerTimingMs;
 			return true;
 		}
 		return false;
@@ -210,12 +210,12 @@ namespace
 
 	bool TryGetDisplayGpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
 	{
-		return TryGetDisplayTimingMs(summary.hasGameGpu, summary.gameGpuMs, value);
+		return TryGetDisplayTimingMs(summary.hasProfilerGpu, summary.profilerGpuMs, value);
 	}
 
 	bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
 	{
-		return TryGetDisplayTimingMs(summary.hasGameCpu, summary.gameCpuMs, value);
+		return TryGetDisplayTimingMs(summary.hasProfilerCpu, summary.profilerCpuMs, value);
 	}
 
 	ProfilingRenderer::PerformanceTimingTotals GetTimingTotalsForFeature(
@@ -413,31 +413,6 @@ namespace
 		return true;
 	}
 
-	bool ShouldRestoreRuntimePerformanceState(Feature* feature)
-	{
-		if (!feature)
-			return false;
-
-		const auto shortName = feature->GetShortName();
-		return shortName == "Upscaling" ||
-		       shortName == "Skylighting" ||
-		       shortName == "VolumetricLighting" ||
-		       shortName == "LightLimitFix" ||
-		       shortName == "TerrainBlending" ||
-		       shortName == "SubsurfaceScattering" ||
-		       shortName == "ScreenSpaceGI";
-	}
-
-	void ApplyRestoredPerformanceRuntimeState(Feature* feature, const json& restoredSettings)
-	{
-		if (!feature)
-			return;
-
-		if (ShouldRestoreRuntimePerformanceState(feature)) {
-			feature->RestorePerformanceCostMeasurementState(restoredSettings);
-		}
-	}
-
 	void RestoreFeatureSettingsFromUserDefaults(
 		Feature* feature,
 		const json& userSettings,
@@ -463,7 +438,6 @@ namespace
 
 		try {
 			feature->LoadSettings(currentSettings);
-			ApplyRestoredPerformanceRuntimeState(feature, currentSettings);
 			anyChanged = true;
 		} catch (const std::exception& e) {
 			logger::warn("Failed to restore Performance Tuning user defaults for {}: {}", feature->GetDisplayName(), e.what());
@@ -539,13 +513,13 @@ namespace
 			sample.fpsSum += summary.fpsSample;
 			sample.fpsSamples++;
 		}
-		if (summary.hasGameGpuSample && summary.gameGpuSampleMs > 0.0f) {
-			sample.gameGpuMsSum += summary.gameGpuSampleMs;
-			sample.gameGpuSamples++;
+		if (summary.hasProfilerGpuSample && summary.profilerGpuSampleMs > 0.0f) {
+			sample.profilerGpuMsSum += summary.profilerGpuSampleMs;
+			sample.profilerGpuSamples++;
 		}
-		if (summary.hasGameCpuSample && summary.gameCpuSampleMs > 0.0f) {
-			sample.gameCpuMsSum += summary.gameCpuSampleMs;
-			sample.gameCpuSamples++;
+		if (summary.hasProfilerCpuSample && summary.profilerCpuSampleMs > 0.0f) {
+			sample.profilerCpuMsSum += summary.profilerCpuSampleMs;
+			sample.profilerCpuSamples++;
 		}
 	}
 
@@ -631,11 +605,11 @@ namespace
 	void FinalizeFeatureCostMeasurement(FeatureCostMeasurementState& state)
 	{
 		const float currentFrameMs = AverageOrZero(state.currentSample.frameMsSum, state.currentSample.frameSamples);
-		const float currentGameGpuMs = AverageOrZero(state.currentSample.gameGpuMsSum, state.currentSample.gameGpuSamples);
-		const float currentGameCpuMs = AverageOrZero(state.currentSample.gameCpuMsSum, state.currentSample.gameCpuSamples);
+		const float currentProfilerGpuMs = AverageOrZero(state.currentSample.profilerGpuMsSum, state.currentSample.profilerGpuSamples);
+		const float currentProfilerCpuMs = AverageOrZero(state.currentSample.profilerCpuMsSum, state.currentSample.profilerCpuSamples);
 		const float testFrameMs = AverageOrZero(state.testSample.frameMsSum, state.testSample.frameSamples);
-		const float testGameGpuMs = AverageOrZero(state.testSample.gameGpuMsSum, state.testSample.gameGpuSamples);
-		const float testGameCpuMs = AverageOrZero(state.testSample.gameCpuMsSum, state.testSample.gameCpuSamples);
+		const float testProfilerGpuMs = AverageOrZero(state.testSample.profilerGpuMsSum, state.testSample.profilerGpuSamples);
+		const float testProfilerCpuMs = AverageOrZero(state.testSample.profilerCpuMsSum, state.testSample.profilerCpuSamples);
 		const bool hasFrame = state.currentSample.frameSamples > 0 && state.testSample.frameSamples > 0;
 		const bool hasFps = hasFrame || (state.currentSample.fpsSamples > 0 && state.testSample.fpsSamples > 0);
 		const float currentFps = hasFrame && currentFrameMs > 0.0f ?
@@ -647,12 +621,12 @@ namespace
 
 		state.delta.frameMs = currentFrameMs - testFrameMs;
 		state.delta.fpsDelta = currentFps - testFps;
-		state.delta.gameGpuMs = currentGameGpuMs - testGameGpuMs;
-		state.delta.gameCpuMs = currentGameCpuMs - testGameCpuMs;
+		state.delta.profilerGpuMs = currentProfilerGpuMs - testProfilerGpuMs;
+		state.delta.profilerCpuMs = currentProfilerCpuMs - testProfilerCpuMs;
 		state.delta.hasFrame = hasFrame;
 		state.delta.hasFps = hasFps;
-		state.delta.hasGameGpu = state.currentSample.gameGpuSamples > 0 && state.testSample.gameGpuSamples > 0;
-		state.delta.hasGameCpu = state.currentSample.gameCpuSamples > 0 && state.testSample.gameCpuSamples > 0;
+		state.delta.hasProfilerGpu = state.currentSample.profilerGpuSamples > 0 && state.testSample.profilerGpuSamples > 0;
+		state.delta.hasProfilerCpu = state.currentSample.profilerCpuSamples > 0 && state.testSample.profilerCpuSamples > 0;
 	}
 
 	void StartFeatureCostMeasurement(
@@ -799,8 +773,6 @@ namespace
 
 		if (feature && feature->GetShortName() == "Upscaling")
 			return "None";
-		if (feature && feature->GetShortName() == "Skylighting")
-			return "fastest state";
 
 		return "Off";
 	}
@@ -821,8 +793,6 @@ namespace
 			return "particle lights, point-light contact shadows, and particle contact shadows are switched off.";
 		if (shortName == "DynamicCubemaps")
 			return "screen-space reflections, dynamic cubemap cadence, and low-visibility cubemap throttle are switched off.";
-		if (shortName == "Skylighting")
-			return "lowest Probe Grid Quality, reduced updates on, intervals at 16, incremental updates on, Stable Slice Count 1, fast sampling on, and minimum distance.";
 		if (shortName == "TerrainBlending")
 			return "Terrain Blending is switched off.";
 		if (shortName == "TerrainShadows")
@@ -831,8 +801,6 @@ namespace
 			return "Volumetric Lighting is switched off for the current interior/exterior context.";
 		if (shortName == "UnifiedWater")
 			return "optimized water meshes are switched off.";
-		if (shortName == "SubsurfaceScattering")
-			return "Subsurface Scattering is switched off.";
 		if (shortName == "GrassCollision")
 			return "Grass Collision is switched off.";
 
@@ -909,9 +877,9 @@ namespace
 		if (state.phase != FeatureCostMeasurementPhase::Complete)
 			return;
 
-		if (!state.delta.hasFrame && !state.delta.hasFps && !state.delta.hasGameGpu && !state.delta.hasGameCpu) {
+		if (!state.delta.hasFrame && !state.delta.hasFps && !state.delta.hasProfilerGpu && !state.delta.hasProfilerCpu) {
 			ImGui::SameLine();
-			ImGui::TextDisabled("No game timing data");
+			ImGui::TextDisabled("No profiler timing data");
 			return;
 		}
 
@@ -923,17 +891,17 @@ namespace
 				state.delta.frameMs,
 				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.frameMs),
 				"%+.3f ms");
-		if (state.delta.hasGameGpu)
+		if (state.delta.hasProfilerGpu)
 			RenderDeltaMetric(
 				"GPU",
-				state.delta.gameGpuMs,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.gameGpuMs),
+				state.delta.profilerGpuMs,
+				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.profilerGpuMs),
 				"%+.3f ms");
-		if (state.delta.hasGameCpu)
+		if (state.delta.hasProfilerCpu)
 			RenderDeltaMetric(
 				"CPU",
-				state.delta.gameCpuMs,
-				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.gameCpuMs),
+				state.delta.profilerCpuMs,
+				GetDirectionFromFeatureCostFrameTimeDelta(state.delta.profilerCpuMs),
 				"%+.3f ms");
 		if (state.delta.hasFps)
 			RenderDeltaMetric(

@@ -120,7 +120,6 @@ public:
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const { return false; }
-	virtual bool UsesTotalPerformanceCostMeasurement() const { return false; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) { (void)a_enabled; }
 	virtual bool IsPerformanceCostMeasurementReady() const { return true; }
 	virtual const char* GetPerformanceCostMeasurementWaitText() const { return "Waiting for settings to apply"; }

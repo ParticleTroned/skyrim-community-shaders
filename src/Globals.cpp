@@ -294,44 +294,6 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct ID3D11DeviceContext_DrawIndexedInstanced
-	{
-		static void thunk(
-			ID3D11DeviceContext* This,
-			UINT IndexCountPerInstance,
-			UINT InstanceCount,
-			UINT StartIndexLocation,
-			INT BaseVertexLocation,
-			UINT StartInstanceLocation)
-		{
-			const bool shouldTraceVRMenuBridgeDraw = Upscaling::IsVRMenuBridgePreRC55DebugMode() ?
-			                                             Upscaling::ShouldTraceVRMenuBridgeDrawOperation() :
-			                                             (Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
-															  IndexCountPerInstance,
-															  InstanceCount,
-															  StartIndexLocation,
-															  BaseVertexLocation,
-															  StartInstanceLocation) &&
-															 Upscaling::ShouldTraceVRMenuBridgeDrawOperation());
-			if (shouldTraceVRMenuBridgeDraw) {
-				const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
-				if (Upscaling::TraceVRMenuBridgeDrawOperation(
-						This,
-						IndexCountPerInstance,
-						InstanceCount,
-						StartIndexLocation,
-						BaseVertexLocation,
-						StartInstanceLocation,
-						callerRva)) {
-					return;
-				}
-			}
-
-			func(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	/**
  * @brief Installs hooks on the Map and Unmap methods of the provided D3D11 device context.
  *
@@ -341,13 +303,5 @@ namespace globals
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
-		if (Upscaling::ShouldInstallVRMenuBridgeD3DDrawHook()) {
-			stl::detour_vfunc<20, ID3D11DeviceContext_DrawIndexedInstanced>(a_context);
-			if (Upscaling::IsVRMenuBridgePreRC55DebugMode()) {
-				logger::info("[Upscaling] Installed pre-RC55 VR menu bridge D3D draw hook");
-			} else {
-				logger::info("[Upscaling] Installed current-context VR menu bridge D3D draw hook");
-			}
-		}
 	}
 }

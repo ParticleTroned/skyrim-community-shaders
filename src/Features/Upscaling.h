@@ -116,11 +116,6 @@ public:
 	static constexpr uint32_t kVRUpscalingApplyBlockLoadingMenu = 1u << 2;
 	static constexpr uint32_t kVRUpscalingApplyBlockRelatchPending = 1u << 3;
 	static constexpr uint32_t kVRUpscalingApplyBlockTransitionPending = 1u << 4;
-	static constexpr uint32_t kVRMenuBridgeDebugModeCurrent = 0;
-	static constexpr uint32_t kVRMenuBridgeDebugModePreRC55 = 1;
-	static constexpr uint32_t kVRMenuBridgeDebugModeCurrentD3D = 2;
-	static constexpr uint32_t kVRMenuBridgeDebugModeMax = kVRMenuBridgeDebugModeCurrentD3D;
-
 	static constexpr uint32_t ClampDLSSPresetUInt(uint32_t a_preset)
 	{
 		return a_preset <= kDLSSPresetMaxIndex ? a_preset : kDLSSPresetMaxIndex;
@@ -160,7 +155,6 @@ public:
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
-		uint vrMenuBridgeDebugMode = kVRMenuBridgeDebugModeCurrent;
 		float sharpnessFSR = 0.9f;
 		float sharpnessDLSS = 0.9f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::LumaUnsharp);
@@ -705,9 +699,6 @@ public:
 	bool ShouldSuppressVRRenderScaleOriginalSubmitFallback(const vr::Texture_t* a_texture) const;
 	bool SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 		vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds);
-	static bool IsVRMenuBridgePreRC55DebugMode();
-	static bool IsVRMenuBridgeCurrentD3DDebugMode();
-	static bool ShouldInstallVRMenuBridgeD3DDrawHook();
 	static bool ShouldTraceVRMenuBridgeDirectDrawCandidate(UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation);
 	static bool ShouldTraceVRMenuBridgeDrawOperation();

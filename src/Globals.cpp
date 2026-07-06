@@ -304,17 +304,24 @@ namespace globals
 			INT BaseVertexLocation,
 			UINT StartInstanceLocation)
 		{
-			const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
-			if (Upscaling::ShouldTraceVRMenuBridgeDrawOperation() &&
-				Upscaling::TraceVRMenuBridgeDrawOperation(
-					This,
+			if (Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
 					IndexCountPerInstance,
 					InstanceCount,
 					StartIndexLocation,
 					BaseVertexLocation,
-					StartInstanceLocation,
-					callerRva)) {
-				return;
+					StartInstanceLocation) &&
+				Upscaling::ShouldTraceVRMenuBridgeDrawOperation()) {
+				const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
+				if (Upscaling::TraceVRMenuBridgeDrawOperation(
+						This,
+						IndexCountPerInstance,
+						InstanceCount,
+						StartIndexLocation,
+						BaseVertexLocation,
+						StartInstanceLocation,
+						callerRva)) {
+					return;
+				}
 			}
 
 			func(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);

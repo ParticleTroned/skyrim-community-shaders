@@ -24,6 +24,7 @@
 #include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 #include <cwctype>
 #include <directx/d3dx12.h>
 #include <dxgi.h>
@@ -153,12 +154,36 @@ namespace
 	std::atomic_uint32_t g_vrMenuPresentationTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrRaceSexMenuPresentationTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
-	// Keep the DrawIndexedInstanced hook hot only around menu bridge windows.
+	// Track short menu-bridge tails for diagnostics and exact menu draw suppression.
 	std::atomic_uint32_t g_vrMenuBridgeTraceTailEndFrame{ 0 };
 	std::atomic_uint32_t g_vrSubmitStageUnderwaterMaskTailEndFrame{ 0 };
 	std::atomic_uint64_t g_vrMenuBridgeTraceCachedState{ 0 };
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
+	constexpr uint32_t kVRMenuBridgeHigherCallsiteRva = 0x1349742u;
+	constexpr uint32_t kVRMenuBridgeHigherTargetRva = 0x1349B10u;
+	constexpr std::array<uint8_t, 5> kVRMenuBridgeHigherCallExpectedBytes{
+		0xE8, 0xC9, 0x03, 0x00, 0x00
+	};
+	constexpr uint32_t kVRMenuBridgeDispatchCallsiteRva = 0x134852Du;
+	constexpr uint32_t kVRMenuBridgeDispatchTargetRva = 0xDBDD00u;
+	constexpr std::array<uint8_t, 5> kVRMenuBridgeDispatchExpectedBytes{
+		0xE8, 0xCE, 0x57, 0xA7, 0xFF
+	};
+	constexpr uint8_t kVRMenuBridgeDispatchSelector = 0x03u;
+	constexpr uint8_t kVRMenuBridgeHigherExpectedSelector = 0x80u;
+	constexpr uint8_t kVRMenuBridgeHigherExpectedFlag = 0u;
+	constexpr uint32_t kVRMenuBridgeHigherExpectedMode = 0u;
+	constexpr uint32_t kVRMenuBridgeDirectDrawCallsiteRva = 0xDBDDF3u;
+	constexpr uint32_t kVRMenuBridgeDirectDrawCallerRva = 0xDBDDF9u;
+	constexpr std::array<uint8_t, 6> kVRMenuBridgeDirectDrawExpectedBytes{
+		0xFF, 0x90, 0xA0, 0x00, 0x00, 0x00
+	};
+	constexpr std::array<UINT, 3> kVRMenuBridgeKnownStereoIndexCounts{ {
+		6,    // mode 2: projected menu bridge
+		144,  // mode 48: HUD menu bridge variant
+		504   // mode 168: HUD menu bridge variant
+	} };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = 1800;
@@ -200,6 +225,55 @@ namespace
 		uint64_t hash = 0;
 		std::array<uint32_t, 4> frames{};
 	};
+	struct VRMenuBridgeHigherCallContext
+	{
+		bool active = false;
+		uint32_t frame = 0;
+		uint64_t menuMask = 0;
+		uint32_t callsiteRva = 0;
+		uint32_t targetRva = 0;
+		std::uintptr_t wrapperIdentity = 0;
+		std::uintptr_t subjectIdentity = 0;
+		std::uintptr_t subjectVtable = 0;
+		uint8_t selector = 0;
+		uint8_t flag = 0;
+		uint32_t mode = 0;
+	};
+	struct VRMenuBridgeHigherCallDiagBucket
+	{
+		uint32_t callsiteRva = 0;
+		uint32_t targetRva = 0;
+		std::uintptr_t subjectVtable = 0;
+		uint8_t selector = 0;
+		uint8_t flag = 0;
+		uint32_t mode = 0;
+		uint64_t menuMaskSeen = 0;
+		uint32_t callCount = 0;
+		uint32_t projectedCaptureCount = 0;
+		uint32_t hudCaptureCount = 0;
+		uint32_t otherCaptureCount = 0;
+		uint32_t firstFrame = 0;
+		uint32_t lastFrame = 0;
+	};
+	struct VRMenuBridgeRuntimeDedupeKey
+	{
+		uint32_t callerRva = 0;
+		RE::RENDER_TARGETS::RENDER_TARGET sourceTarget = RE::RENDER_TARGETS::kMENUBG;
+		uint32_t sourceSlot = 0;
+		std::uintptr_t sourceViewIdentity = 0;
+		std::uintptr_t sourceResourceIdentity = 0;
+		std::uintptr_t destinationViewIdentity = 0;
+		std::uintptr_t destinationResourceIdentity = 0;
+		bool sourceUsesTextureCopy = false;
+		bool destinationUsesTextureCopy = false;
+
+		bool operator==(const VRMenuBridgeRuntimeDedupeKey&) const = default;
+	};
+	struct VRMenuBridgeRuntimeDedupeEntry
+	{
+		VRMenuBridgeRuntimeDedupeKey key{};
+		uint32_t captureCount = 0;
+	};
 	struct VRMenuBridgeCaptureDiagBucket
 	{
 		uint32_t callerRva = 0;
@@ -226,15 +300,114 @@ namespace
 		uint64_t menuMaskSeen = 0;
 		uint32_t captureCount = 0;
 	};
+	struct VRMenuBridgeDedupeDiagBucket
+	{
+		VRMenuBridgeRuntimeDedupeKey key{};
+		uint64_t menuMaskSeen = 0;
+		uint32_t suppressionCount = 0;
+		uint32_t firstFrame = 0;
+		uint32_t lastFrame = 0;
+	};
+	enum class VRMenuPerfBucket : uint32_t
+	{
+		TryCaptureTotal = 0,
+		TryCaptureClassification,
+		BridgeLayerDraw,
+		FinalCompositeTotal,
+		Count
+	};
+	struct VRMenuPerfDiagBucket
+	{
+		uint64_t sampleCount = 0;
+		uint64_t totalTicks = 0;
+		uint64_t maxTicks = 0;
+		uint32_t firstFrame = 0;
+		uint32_t lastFrame = 0;
+		uint64_t menuMaskSeen = 0;
+	};
+	constexpr std::array<std::string_view, static_cast<size_t>(VRMenuPerfBucket::Count)> kVRMenuPerfBucketNames{ {
+		"TryCaptureTotal",
+		"TryCaptureClassification",
+		"BridgeLayerDraw",
+		"FinalCompositeTotal",
+	} };
+	constexpr uint32_t kVRKnownRedundantHUDMenuBridgeCallerRva = 0xDBDDF9u;
 	std::mutex g_vrMenuBridgeCaptureDiagMutex;
 	std::vector<VRMenuBridgeCaptureDiagBucket> g_vrMenuBridgeCaptureDiagBuckets;
 	uint32_t g_vrMenuBridgeCaptureFrameRepeatFrame = 0;
 	std::vector<VRMenuBridgeCaptureFrameRepeatBucket> g_vrMenuBridgeCaptureFrameRepeatBuckets;
+	thread_local VRMenuBridgeHigherCallContext g_vrMenuBridgeHigherCallContext;
+	thread_local VRMenuBridgeHigherCallContext g_vrMenuBridgeDispatchCallContext;
+	std::atomic_bool g_vrMenuBridgeHigherCallHookInstalled{ false };
+	std::atomic_bool g_vrMenuBridgeDispatchCallHookInstalled{ false };
+	std::mutex g_vrMenuBridgeHigherCallDiagMutex;
+	std::vector<VRMenuBridgeHigherCallDiagBucket> g_vrMenuBridgeHigherCallDiagBuckets;
+	std::mutex g_vrMenuBridgeRuntimeDedupeMutex;
+	uint32_t g_vrMenuBridgeRuntimeDedupeFrame = 0;
+	std::vector<VRMenuBridgeRuntimeDedupeEntry> g_vrMenuBridgeRuntimeDedupeEntries;
+	std::vector<VRMenuBridgeDedupeDiagBucket> g_vrMenuBridgeDedupeDiagBuckets;
+	std::mutex g_vrMenuPerfDiagMutex;
+	std::array<VRMenuPerfDiagBucket, static_cast<size_t>(VRMenuPerfBucket::Count)> g_vrMenuPerfDiagBuckets{};
+	std::atomic_uint32_t g_vrMenuBridgeSkippedDrawCountDiagFrame{ 0 };
+
+	const VRMenuBridgeHigherCallContext* GetCurrentVRMenuBridgeHigherCallContext();
 
 	bool ShouldEmitUpscalingDiagLogs()
 	{
 		auto* state = globals::state;
 		return state && state->IsDeveloperMode();
+	}
+
+	bool IsVRMenuBridgeDrawShapeCandidate(
+		UINT a_indexCount,
+		UINT a_instanceCount,
+		UINT a_startIndexLocation,
+		INT a_baseVertexLocation,
+		UINT a_startInstanceLocation)
+	{
+		return a_indexCount != 0 &&
+		       a_instanceCount == 2 &&
+		       a_startIndexLocation == 0 &&
+		       a_baseVertexLocation == 0 &&
+		       a_startInstanceLocation == 0;
+	}
+
+	bool IsKnownVRMenuBridgeStereoIndexCount(UINT a_indexCount)
+	{
+		return std::find(
+				   kVRMenuBridgeKnownStereoIndexCounts.begin(),
+				   kVRMenuBridgeKnownStereoIndexCounts.end(),
+				   a_indexCount) != kVRMenuBridgeKnownStereoIndexCounts.end();
+	}
+
+	bool IsVRMenuBridgeDrawHookContextActive()
+	{
+		if (g_vrMenuBridgeDispatchCallHookInstalled.load(std::memory_order_relaxed))
+			return g_vrMenuBridgeDispatchCallContext.active;
+
+		if (g_vrMenuBridgeHigherCallHookInstalled.load(std::memory_order_relaxed))
+			return GetCurrentVRMenuBridgeHigherCallContext() != nullptr;
+
+		return true;
+	}
+
+	uint64_t GetActiveVRMenuBridgeDiagMenuMask(RE::UI* a_ui);
+	std::string FormatVRMenuBridgeDiagMenuMask(uint64_t a_mask);
+
+	void MaybeLogSkippedVRMenuBridgeDrawCount(UINT a_indexCount, uint32_t a_frame)
+	{
+		if (!ShouldEmitUpscalingDiagLogs() || a_frame == 0)
+			return;
+
+		if (g_vrMenuBridgeSkippedDrawCountDiagFrame.exchange(a_frame, std::memory_order_relaxed) == a_frame)
+			return;
+
+		logger::debug(
+			"[VRMenuBridge][DrawCountSkip] frame={} menus={} indexCount={} inferredMode={}",
+			a_frame,
+			FormatVRMenuBridgeDiagMenuMask(GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui)),
+			a_indexCount,
+			(a_indexCount % 3u) == 0u ? (a_indexCount / 3u) : 0u);
 	}
 
 	uint32_t ToModuleRva(const void* a_returnAddress)
@@ -401,8 +574,10 @@ namespace
 	bool IsVRMenuPresentationContextActive();
 	bool IsVRMenuScenePresentationBlockActive();
 	bool IsCommunityShadersMenuOpen();
+	bool IsRaceSexMenuContextActive(RE::UI* a_ui);
 	bool IsVRMenuBridgeTraceTailActive(const State* a_state);
 	bool IsVRRaceSexRenderScaleProtectionContextActive(const State* a_state);
+	bool IsSaveLoadTransitionContextActive(const State* a_state);
 	bool ShouldBypassVRRenderScaleStartupRaceSexPresentation(const Upscaling& a_upscaling, const State* a_state);
 	bool IsVRRenderScaleMenuPreparationContextActive(const State* a_state);
 
@@ -1166,9 +1341,497 @@ namespace
 		return result.empty() ? "none" : result;
 	}
 
+	bool ShouldLogVRMenuDiagSampleCount(uint64_t a_sampleCount)
+	{
+		return a_sampleCount != 0 && (a_sampleCount & (a_sampleCount - 1)) == 0;
+	}
+
 	bool ShouldLogVRMenuBridgeCaptureCluster(uint32_t a_captureCount)
 	{
-		return a_captureCount != 0 && (a_captureCount & (a_captureCount - 1)) == 0;
+		return ShouldLogVRMenuDiagSampleCount(a_captureCount);
+	}
+
+	const char* GetVRMenuPerfBucketName(VRMenuPerfBucket a_bucket)
+	{
+		return kVRMenuPerfBucketNames[static_cast<size_t>(a_bucket)].data();
+	}
+
+	uint64_t ReadVRMenuPerfCounterTicks()
+	{
+		LARGE_INTEGER counter{};
+		QueryPerformanceCounter(&counter);
+		return static_cast<uint64_t>(counter.QuadPart);
+	}
+
+	uint64_t GetVRMenuPerfCounterFrequency()
+	{
+		static const uint64_t frequency = []() {
+			LARGE_INTEGER counterFrequency{};
+			QueryPerformanceFrequency(&counterFrequency);
+			return static_cast<uint64_t>(std::max<LONGLONG>(counterFrequency.QuadPart, 1));
+		}();
+		return frequency;
+	}
+
+	double ConvertVRMenuPerfTicksToMicroseconds(uint64_t a_ticks)
+	{
+		return static_cast<double>(a_ticks) * 1000000.0 / static_cast<double>(GetVRMenuPerfCounterFrequency());
+	}
+
+	double ConvertVRMenuPerfTicksToMilliseconds(uint64_t a_ticks)
+	{
+		return static_cast<double>(a_ticks) * 1000.0 / static_cast<double>(GetVRMenuPerfCounterFrequency());
+	}
+
+	void RecordVRMenuPerfDiag(VRMenuPerfBucket a_bucket, uint64_t a_elapsedTicks, uint32_t a_frame, uint64_t a_menuMask)
+	{
+		if (!a_elapsedTicks || !ShouldEmitUpscalingDiagLogs())
+			return;
+
+		std::lock_guard lock(g_vrMenuPerfDiagMutex);
+		auto& bucket = g_vrMenuPerfDiagBuckets[static_cast<size_t>(a_bucket)];
+		const bool newBucket = bucket.sampleCount == 0;
+		const uint64_t previousMenuMaskSeen = bucket.menuMaskSeen;
+		if (newBucket)
+			bucket.firstFrame = a_frame;
+
+		bucket.sampleCount++;
+		bucket.totalTicks += a_elapsedTicks;
+		bucket.maxTicks = std::max(bucket.maxTicks, a_elapsedTicks);
+		bucket.lastFrame = a_frame;
+		bucket.menuMaskSeen |= a_menuMask;
+
+		const bool menusExpanded = bucket.menuMaskSeen != previousMenuMaskSeen;
+		if (newBucket || ShouldLogVRMenuDiagSampleCount(bucket.sampleCount) || menusExpanded) {
+			logger::debug(
+				"[VRMenuPerf][{}] samples={} avgUs={:.2f} maxUs={:.2f} lastUs={:.2f} totalMs={:.3f} frames={}..{} menusSeen={}",
+				GetVRMenuPerfBucketName(a_bucket),
+				bucket.sampleCount,
+				ConvertVRMenuPerfTicksToMicroseconds(bucket.totalTicks) / static_cast<double>(bucket.sampleCount),
+				ConvertVRMenuPerfTicksToMicroseconds(bucket.maxTicks),
+				ConvertVRMenuPerfTicksToMicroseconds(a_elapsedTicks),
+				ConvertVRMenuPerfTicksToMilliseconds(bucket.totalTicks),
+				bucket.firstFrame,
+				bucket.lastFrame,
+				FormatVRMenuBridgeDiagMenuMask(bucket.menuMaskSeen));
+		}
+	}
+
+	struct ScopedVRMenuPerfDiagTimer
+	{
+		VRMenuPerfBucket bucket = VRMenuPerfBucket::TryCaptureTotal;
+		uint32_t frame = 0;
+		uint64_t menuMask = 0;
+		uint64_t startTicks = 0;
+		bool active = false;
+
+		ScopedVRMenuPerfDiagTimer(VRMenuPerfBucket a_bucket, uint32_t a_frame, uint64_t a_menuMask, bool a_active) :
+			bucket(a_bucket), frame(a_frame), menuMask(a_menuMask), active(a_active)
+		{
+			if (active)
+				startTicks = ReadVRMenuPerfCounterTicks();
+		}
+
+		~ScopedVRMenuPerfDiagTimer()
+		{
+			if (!active)
+				return;
+
+			const uint64_t endTicks = ReadVRMenuPerfCounterTicks();
+			RecordVRMenuPerfDiag(bucket, endTicks >= startTicks ? (endTicks - startTicks) : 0, frame, menuMask);
+		}
+	};
+
+	VRMenuBridgeHigherCallContext MakeVRMenuBridgeHigherCallContext(
+		uint32_t a_frame,
+		uint64_t a_menuMask,
+		std::uintptr_t a_wrapperIdentity,
+		uint8_t a_flag,
+		uint32_t a_mode)
+	{
+		VRMenuBridgeHigherCallContext context{};
+		context.active = true;
+		context.frame = a_frame;
+		context.menuMask = a_menuMask;
+		context.callsiteRva = kVRMenuBridgeHigherCallsiteRva;
+		context.targetRva = kVRMenuBridgeHigherTargetRva;
+		context.wrapperIdentity = a_wrapperIdentity;
+		context.flag = a_flag ? 1u : 0u;
+		context.mode = a_mode;
+		if (!a_wrapperIdentity)
+			return context;
+
+		context.subjectIdentity = *reinterpret_cast<const std::uintptr_t*>(a_wrapperIdentity);
+		if (!context.subjectIdentity)
+			return context;
+
+		context.subjectVtable = *reinterpret_cast<const std::uintptr_t*>(context.subjectIdentity);
+		context.selector = *reinterpret_cast<const uint8_t*>(context.subjectIdentity + 0x190u);
+		return context;
+	}
+
+	const VRMenuBridgeHigherCallContext* GetCurrentVRMenuBridgeHigherCallContext()
+	{
+		return g_vrMenuBridgeHigherCallContext.active ? &g_vrMenuBridgeHigherCallContext : nullptr;
+	}
+
+	const VRMenuBridgeHigherCallContext* GetCurrentVRMenuBridgeCallContext()
+	{
+		if (g_vrMenuBridgeDispatchCallContext.active)
+			return &g_vrMenuBridgeDispatchCallContext;
+
+		return GetCurrentVRMenuBridgeHigherCallContext();
+	}
+
+	VRMenuBridgeHigherCallContext MakeVRMenuBridgeDispatchCallContext(
+		std::uintptr_t a_rendererState,
+		std::uintptr_t a_renderPath,
+		uint32_t a_dispatchWord)
+	{
+		VRMenuBridgeHigherCallContext context{};
+		context.active = true;
+		if (const auto* state = globals::state)
+			context.frame = state->frameCount;
+		context.menuMask = ShouldEmitUpscalingDiagLogs() ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
+		context.callsiteRva = kVRMenuBridgeDispatchCallsiteRva;
+		context.targetRva = kVRMenuBridgeDispatchTargetRva;
+		context.wrapperIdentity = a_rendererState;
+		context.subjectIdentity = a_renderPath;
+		context.selector = kVRMenuBridgeDispatchSelector;
+		context.mode = a_dispatchWord;
+
+		if (a_renderPath)
+			context.subjectVtable = *reinterpret_cast<const std::uintptr_t*>(a_renderPath);
+
+		return context;
+	}
+
+	bool TryMakeVRMenuBridgeHigherFilterContext(
+		std::uintptr_t a_wrapperIdentity,
+		uint8_t a_flag,
+		uint32_t a_mode,
+		VRMenuBridgeHigherCallContext& a_outContext)
+	{
+		if (a_flag != kVRMenuBridgeHigherExpectedFlag ||
+			a_mode != kVRMenuBridgeHigherExpectedMode ||
+			!a_wrapperIdentity) {
+			return false;
+		}
+
+		const auto* state = globals::state;
+		const uint64_t menuMask = ShouldEmitUpscalingDiagLogs() ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
+		auto context = MakeVRMenuBridgeHigherCallContext(
+			state ? state->frameCount : 0,
+			menuMask,
+			a_wrapperIdentity,
+			a_flag,
+			a_mode);
+		if (!context.subjectIdentity ||
+			!context.subjectVtable ||
+			context.selector != kVRMenuBridgeHigherExpectedSelector) {
+			return false;
+		}
+
+		a_outContext = context;
+		return true;
+	}
+
+	uint32_t GetVRMenuBridgeHigherCaptureCount(const VRMenuBridgeHigherCallDiagBucket& a_bucket)
+	{
+		return a_bucket.projectedCaptureCount + a_bucket.hudCaptureCount + a_bucket.otherCaptureCount;
+	}
+
+	void LogVRMenuBridgeHigherCallDiag(const VRMenuBridgeHigherCallDiagBucket& a_bucket)
+	{
+		logger::debug(
+			"[VRMenuBridge][Upper] callsiteRva=0x{:X} targetRva=0x{:X} selector=0x{:02X} flag={} mode={} calls={} projectedCaptures={} hudCaptures={} otherCaptures={} frames={}..{} menusSeen={} subjectVtable=0x{:X}",
+			a_bucket.callsiteRva,
+			a_bucket.targetRva,
+			static_cast<uint32_t>(a_bucket.selector),
+			static_cast<uint32_t>(a_bucket.flag),
+			a_bucket.mode,
+			a_bucket.callCount,
+			a_bucket.projectedCaptureCount,
+			a_bucket.hudCaptureCount,
+			a_bucket.otherCaptureCount,
+			a_bucket.firstFrame,
+			a_bucket.lastFrame,
+			FormatVRMenuBridgeDiagMenuMask(a_bucket.menuMaskSeen),
+			static_cast<uint64_t>(a_bucket.subjectVtable));
+	}
+
+	void RecordVRMenuBridgeHigherCallDiag(const VRMenuBridgeHigherCallContext& a_context)
+	{
+		if (!ShouldEmitUpscalingDiagLogs() || !a_context.active)
+			return;
+
+		std::lock_guard lock(g_vrMenuBridgeHigherCallDiagMutex);
+		auto bucketIt = std::find_if(
+			g_vrMenuBridgeHigherCallDiagBuckets.begin(),
+			g_vrMenuBridgeHigherCallDiagBuckets.end(),
+			[&](const VRMenuBridgeHigherCallDiagBucket& a_bucket) {
+				return a_bucket.callsiteRva == a_context.callsiteRva &&
+			           a_bucket.targetRva == a_context.targetRva &&
+			           a_bucket.subjectVtable == a_context.subjectVtable &&
+			           a_bucket.selector == a_context.selector &&
+			           a_bucket.flag == a_context.flag &&
+			           a_bucket.mode == a_context.mode;
+			});
+
+		const bool newBucket = bucketIt == g_vrMenuBridgeHigherCallDiagBuckets.end();
+		if (newBucket) {
+			VRMenuBridgeHigherCallDiagBucket bucket{};
+			bucket.callsiteRva = a_context.callsiteRva;
+			bucket.targetRva = a_context.targetRva;
+			bucket.subjectVtable = a_context.subjectVtable;
+			bucket.selector = a_context.selector;
+			bucket.flag = a_context.flag;
+			bucket.mode = a_context.mode;
+			bucket.menuMaskSeen = a_context.menuMask;
+			bucket.callCount = 1;
+			bucket.firstFrame = a_context.frame;
+			bucket.lastFrame = a_context.frame;
+			g_vrMenuBridgeHigherCallDiagBuckets.push_back(bucket);
+			LogVRMenuBridgeHigherCallDiag(g_vrMenuBridgeHigherCallDiagBuckets.back());
+			return;
+		}
+
+		const uint64_t previousMenuMaskSeen = bucketIt->menuMaskSeen;
+		bucketIt->callCount++;
+		bucketIt->lastFrame = a_context.frame;
+		bucketIt->menuMaskSeen |= a_context.menuMask;
+		if (ShouldLogVRMenuDiagSampleCount(bucketIt->callCount) || bucketIt->menuMaskSeen != previousMenuMaskSeen)
+			LogVRMenuBridgeHigherCallDiag(*bucketIt);
+	}
+
+	void RecordCurrentVRMenuBridgeHigherCaptureDiag(RE::RENDER_TARGETS::RENDER_TARGET a_sourceTarget)
+	{
+		if (!ShouldEmitUpscalingDiagLogs())
+			return;
+
+		const auto* context = GetCurrentVRMenuBridgeCallContext();
+		if (!context)
+			return;
+
+		std::lock_guard lock(g_vrMenuBridgeHigherCallDiagMutex);
+		auto bucketIt = std::find_if(
+			g_vrMenuBridgeHigherCallDiagBuckets.begin(),
+			g_vrMenuBridgeHigherCallDiagBuckets.end(),
+			[&](const VRMenuBridgeHigherCallDiagBucket& a_bucket) {
+				return a_bucket.callsiteRva == context->callsiteRva &&
+			           a_bucket.targetRva == context->targetRva &&
+			           a_bucket.subjectVtable == context->subjectVtable &&
+			           a_bucket.selector == context->selector &&
+			           a_bucket.flag == context->flag &&
+			           a_bucket.mode == context->mode;
+			});
+		if (bucketIt == g_vrMenuBridgeHigherCallDiagBuckets.end()) {
+			VRMenuBridgeHigherCallDiagBucket bucket{};
+			bucket.callsiteRva = context->callsiteRva;
+			bucket.targetRva = context->targetRva;
+			bucket.subjectVtable = context->subjectVtable;
+			bucket.selector = context->selector;
+			bucket.flag = context->flag;
+			bucket.mode = context->mode;
+			bucket.menuMaskSeen = context->menuMask;
+			bucket.callCount = 1;
+			bucket.firstFrame = context->frame;
+			bucket.lastFrame = context->frame;
+			g_vrMenuBridgeHigherCallDiagBuckets.push_back(bucket);
+			bucketIt = g_vrMenuBridgeHigherCallDiagBuckets.end() - 1;
+		}
+
+		const uint32_t previousCaptureCount = GetVRMenuBridgeHigherCaptureCount(*bucketIt);
+		bucketIt->lastFrame = context->frame;
+		bucketIt->menuMaskSeen |= context->menuMask;
+		switch (a_sourceTarget) {
+		case RE::RENDER_TARGETS::kPROJECTEDMENU:
+			bucketIt->projectedCaptureCount++;
+			break;
+		case RE::RENDER_TARGETS::kHUDMENU:
+			bucketIt->hudCaptureCount++;
+			break;
+		default:
+			bucketIt->otherCaptureCount++;
+			break;
+		}
+
+		const uint32_t currentCaptureCount = GetVRMenuBridgeHigherCaptureCount(*bucketIt);
+		if (currentCaptureCount != previousCaptureCount &&
+			(currentCaptureCount == 1 || ShouldLogVRMenuBridgeCaptureCluster(currentCaptureCount))) {
+			LogVRMenuBridgeHigherCallDiag(*bucketIt);
+		}
+	}
+
+	VRMenuBridgeRuntimeDedupeKey MakeVRMenuBridgeRuntimeDedupeKey(
+		uint32_t a_callerRva,
+		uint32_t a_sourceSlot,
+		const VRMenuCompositionTargetMatch& a_sourceMatch,
+		const VRMenuCompositionTargetMatch& a_destinationMatch)
+	{
+		VRMenuBridgeRuntimeDedupeKey key{};
+		key.callerRva = a_callerRva;
+		key.sourceTarget = a_sourceMatch.target;
+		key.sourceSlot = a_sourceSlot;
+		key.sourceViewIdentity = a_sourceMatch.viewIdentity;
+		key.sourceResourceIdentity = a_sourceMatch.resourceIdentity;
+		key.destinationViewIdentity = a_destinationMatch.viewIdentity;
+		key.destinationResourceIdentity = a_destinationMatch.resourceIdentity;
+		key.sourceUsesTextureCopy = a_sourceMatch.usesTextureCopy;
+		key.destinationUsesTextureCopy = a_destinationMatch.usesTextureCopy;
+		return key;
+	}
+
+	bool IsKnownRedundantVRMenuBridgeCandidate(
+		const Upscaling&,
+		const State* a_state,
+		uint32_t a_callerRva,
+		uint32_t a_sourceSlot,
+		const VRMenuCompositionTargetMatch& a_sourceMatch,
+		const VRMenuCompositionTargetMatch& a_destinationMatch)
+	{
+		if (!globals::game::isVR || !a_state)
+			return false;
+
+		if (a_callerRva != kVRKnownRedundantHUDMenuBridgeCallerRva ||
+			a_sourceMatch.target != RE::RENDER_TARGETS::kHUDMENU ||
+			a_destinationMatch.target != RE::RENDER_TARGETS::kMENUBG ||
+			a_sourceSlot != 0 ||
+			a_sourceMatch.usesTextureCopy ||
+			a_destinationMatch.usesTextureCopy) {
+			return false;
+		}
+
+		if (IsMainOrLoadingMenuContextActive() || IsSaveLoadTransitionContextActive(a_state))
+			return false;
+
+		if (IsRaceSexMenuContextActive(globals::game::ui) ||
+			IsVRRaceSexRenderScaleProtectionContextActive(a_state)) {
+			return false;
+		}
+
+		return true;
+	}
+
+	void RecordVRMenuBridgeDedupeDiag(
+		uint32_t a_frame,
+		uint64_t a_menuMask,
+		const VRMenuBridgeRuntimeDedupeKey& a_key)
+	{
+		if (!ShouldEmitUpscalingDiagLogs())
+			return;
+
+		auto bucketIt = std::find_if(
+			g_vrMenuBridgeDedupeDiagBuckets.begin(),
+			g_vrMenuBridgeDedupeDiagBuckets.end(),
+			[&](const VRMenuBridgeDedupeDiagBucket& a_bucket) {
+				return a_bucket.key == a_key;
+			});
+
+		const bool newBucket = bucketIt == g_vrMenuBridgeDedupeDiagBuckets.end();
+		if (newBucket) {
+			VRMenuBridgeDedupeDiagBucket bucket{};
+			bucket.key = a_key;
+			bucket.menuMaskSeen = a_menuMask;
+			bucket.suppressionCount = 1;
+			bucket.firstFrame = a_frame;
+			bucket.lastFrame = a_frame;
+			g_vrMenuBridgeDedupeDiagBuckets.push_back(bucket);
+			bucketIt = g_vrMenuBridgeDedupeDiagBuckets.end() - 1;
+		} else {
+			const uint64_t previousMenuMaskSeen = bucketIt->menuMaskSeen;
+			bucketIt->suppressionCount++;
+			bucketIt->lastFrame = a_frame;
+			bucketIt->menuMaskSeen |= a_menuMask;
+			const bool menusExpanded = (bucketIt->menuMaskSeen != previousMenuMaskSeen);
+			if (ShouldLogVRMenuBridgeCaptureCluster(bucketIt->suppressionCount) || menusExpanded) {
+				logger::debug(
+					"[VRMenuBridge][Dedupe] callerRva=0x{:X} source={} srcSlot={} suppressions={} frames={}..{} menusSeen={} srcView=0x{:X} srcRes=0x{:X} srcSurface={} dstView=0x{:X} dstRes=0x{:X} dstSurface={}",
+					bucketIt->key.callerRva,
+					GetVRMenuCompositionTargetName(bucketIt->key.sourceTarget),
+					bucketIt->key.sourceSlot,
+					bucketIt->suppressionCount,
+					bucketIt->firstFrame,
+					bucketIt->lastFrame,
+					FormatVRMenuBridgeDiagMenuMask(bucketIt->menuMaskSeen),
+					static_cast<uint64_t>(bucketIt->key.sourceViewIdentity),
+					static_cast<uint64_t>(bucketIt->key.sourceResourceIdentity),
+					bucketIt->key.sourceUsesTextureCopy ? "textureCopy" : "texture",
+					static_cast<uint64_t>(bucketIt->key.destinationViewIdentity),
+					static_cast<uint64_t>(bucketIt->key.destinationResourceIdentity),
+					bucketIt->key.destinationUsesTextureCopy ? "textureCopy" : "texture");
+			}
+			return;
+		}
+		logger::debug(
+			"[VRMenuBridge][Dedupe] callerRva=0x{:X} source={} srcSlot={} suppressions={} frames={}..{} menusSeen={} srcView=0x{:X} srcRes=0x{:X} srcSurface={} dstView=0x{:X} dstRes=0x{:X} dstSurface={}",
+			bucketIt->key.callerRva,
+			GetVRMenuCompositionTargetName(bucketIt->key.sourceTarget),
+			bucketIt->key.sourceSlot,
+			bucketIt->suppressionCount,
+			bucketIt->firstFrame,
+			bucketIt->lastFrame,
+			FormatVRMenuBridgeDiagMenuMask(bucketIt->menuMaskSeen),
+			static_cast<uint64_t>(bucketIt->key.sourceViewIdentity),
+			static_cast<uint64_t>(bucketIt->key.sourceResourceIdentity),
+			bucketIt->key.sourceUsesTextureCopy ? "textureCopy" : "texture",
+			static_cast<uint64_t>(bucketIt->key.destinationViewIdentity),
+			static_cast<uint64_t>(bucketIt->key.destinationResourceIdentity),
+			bucketIt->key.destinationUsesTextureCopy ? "textureCopy" : "texture");
+	}
+
+	bool TrySuppressKnownRedundantVRMenuBridgeCapture(
+		const Upscaling& a_upscaling,
+		const State* a_state,
+		uint32_t a_callerRva,
+		uint32_t a_sourceSlot,
+		const VRMenuCompositionTargetMatch& a_sourceMatch,
+		const VRMenuCompositionTargetMatch& a_destinationMatch)
+	{
+		if (!IsKnownRedundantVRMenuBridgeCandidate(
+				a_upscaling,
+				a_state,
+				a_callerRva,
+				a_sourceSlot,
+				a_sourceMatch,
+				a_destinationMatch)) {
+			return false;
+		}
+
+		const auto key = MakeVRMenuBridgeRuntimeDedupeKey(
+			a_callerRva,
+			a_sourceSlot,
+			a_sourceMatch,
+			a_destinationMatch);
+
+		std::lock_guard lock(g_vrMenuBridgeRuntimeDedupeMutex);
+		if (g_vrMenuBridgeRuntimeDedupeFrame != a_state->frameCount) {
+			g_vrMenuBridgeRuntimeDedupeFrame = a_state->frameCount;
+			g_vrMenuBridgeRuntimeDedupeEntries.clear();
+		}
+
+		auto entryIt = std::find_if(
+			g_vrMenuBridgeRuntimeDedupeEntries.begin(),
+			g_vrMenuBridgeRuntimeDedupeEntries.end(),
+			[&](const VRMenuBridgeRuntimeDedupeEntry& a_entry) {
+				return a_entry.key == key;
+			});
+		if (entryIt == g_vrMenuBridgeRuntimeDedupeEntries.end()) {
+			VRMenuBridgeRuntimeDedupeEntry entry{};
+			entry.key = key;
+			entry.captureCount = 1;
+			g_vrMenuBridgeRuntimeDedupeEntries.push_back(entry);
+			return false;
+		}
+
+		entryIt->captureCount++;
+		if (ShouldEmitUpscalingDiagLogs()) {
+			RecordVRMenuBridgeDedupeDiag(
+				a_state->frameCount,
+				GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui),
+				key);
+		}
+		return true;
 	}
 
 	void RecordVRMenuBridgeCaptureDiag(
@@ -1178,7 +1841,6 @@ namespace
 		uint32_t a_sourceSlot,
 		const VRMenuCompositionTargetMatch& a_sourceMatch,
 		const VRMenuCompositionTargetMatch& a_destinationMatch,
-		const VRMenuBridgeCaptureStackDigest& a_stackDigest,
 		uint32_t a_renderWidth,
 		uint32_t a_renderHeight,
 		uint32_t a_finalWidth,
@@ -1186,28 +1848,6 @@ namespace
 	{
 		if (!ShouldEmitUpscalingDiagLogs())
 			return;
-
-		const auto menusCurrent = FormatVRMenuBridgeDiagMenuMask(a_menuMask);
-		const auto stackFrames = FormatVRMenuBridgeStackFrames(a_stackDigest.frames);
-		logger::debug(
-			"[VRMenuBridge][Capture] frame={} menus={} source={} srcSlot={} callerRva=0x{:X} stackHash=0x{:016X} render={}x{} final={}x{} srcView=0x{:X} srcRes=0x{:X} srcSurface={} dstView=0x{:X} dstRes=0x{:X} dstSurface={} stack={}",
-			a_frame,
-			menusCurrent,
-			GetVRMenuCompositionTargetName(a_sourceMatch.target),
-			a_sourceSlot,
-			a_callerRva,
-			a_stackDigest.hash,
-			a_renderWidth,
-			a_renderHeight,
-			a_finalWidth,
-			a_finalHeight,
-			static_cast<uint64_t>(a_sourceMatch.viewIdentity),
-			static_cast<uint64_t>(a_sourceMatch.resourceIdentity),
-			a_sourceMatch.usesTextureCopy ? "textureCopy" : "texture",
-			static_cast<uint64_t>(a_destinationMatch.viewIdentity),
-			static_cast<uint64_t>(a_destinationMatch.resourceIdentity),
-			a_destinationMatch.usesTextureCopy ? "textureCopy" : "texture",
-			stackFrames);
 
 		std::lock_guard lock(g_vrMenuBridgeCaptureDiagMutex);
 		if (g_vrMenuBridgeCaptureFrameRepeatFrame != a_frame) {
@@ -1220,7 +1860,6 @@ namespace
 			g_vrMenuBridgeCaptureFrameRepeatBuckets.end(),
 			[&](const VRMenuBridgeCaptureFrameRepeatBucket& a_bucket) {
 				return a_bucket.callerRva == a_callerRva &&
-			           a_bucket.stackHash == a_stackDigest.hash &&
 			           a_bucket.sourceTarget == a_sourceMatch.target &&
 			           a_bucket.sourceSlot == a_sourceSlot &&
 			           a_bucket.sourceViewIdentity == a_sourceMatch.viewIdentity &&
@@ -1233,7 +1872,6 @@ namespace
 		if (repeatIt == g_vrMenuBridgeCaptureFrameRepeatBuckets.end()) {
 			VRMenuBridgeCaptureFrameRepeatBucket bucket{};
 			bucket.callerRva = a_callerRva;
-			bucket.stackHash = a_stackDigest.hash;
 			bucket.sourceTarget = a_sourceMatch.target;
 			bucket.sourceSlot = a_sourceSlot;
 			bucket.sourceViewIdentity = a_sourceMatch.viewIdentity;
@@ -1249,6 +1887,8 @@ namespace
 		} else {
 			repeatIt->captureCount++;
 			repeatIt->menuMaskSeen |= a_menuMask;
+			const auto stackDigest = CaptureVRMenuBridgeStackDigest(a_callerRva);
+			repeatIt->stackHash = stackDigest.hash;
 			logger::debug(
 				"[VRMenuBridge][Repeat] frame={} menus={} source={} srcSlot={} callerRva=0x{:X} stackHash=0x{:016X} capturesThisFrame={} srcView=0x{:X} srcRes=0x{:X} srcSurface={} dstView=0x{:X} dstRes=0x{:X} dstSurface={}",
 				a_frame,
@@ -1271,7 +1911,6 @@ namespace
 			g_vrMenuBridgeCaptureDiagBuckets.end(),
 			[&](const VRMenuBridgeCaptureDiagBucket& a_bucket) {
 				return a_bucket.callerRva == a_callerRva &&
-			           a_bucket.stackHash == a_stackDigest.hash &&
 			           a_bucket.sourceTarget == a_sourceMatch.target;
 			});
 
@@ -1279,9 +1918,7 @@ namespace
 		if (newBucket) {
 			VRMenuBridgeCaptureDiagBucket bucket{};
 			bucket.callerRva = a_callerRva;
-			bucket.stackHash = a_stackDigest.hash;
 			bucket.sourceTarget = a_sourceMatch.target;
-			bucket.stackFrames = a_stackDigest.frames;
 			bucket.menuMaskSeen = a_menuMask;
 			bucket.captureCount = 1;
 			bucket.firstFrame = a_frame;
@@ -1299,6 +1936,46 @@ namespace
 
 		const bool menusExpanded = (bucketIt->menuMaskSeen != previousMenuMaskSeen);
 		if (newBucket || ShouldLogVRMenuBridgeCaptureCluster(bucketIt->captureCount) || menusExpanded) {
+			const auto menusCurrent = FormatVRMenuBridgeDiagMenuMask(a_menuMask);
+			const auto menusSeen = FormatVRMenuBridgeDiagMenuMask(bucketIt->menuMaskSeen);
+			if (bucketIt->stackHash == 0) {
+				const auto stackDigest = CaptureVRMenuBridgeStackDigest(a_callerRva);
+				bucketIt->stackHash = stackDigest.hash;
+				bucketIt->stackFrames = stackDigest.frames;
+			}
+			const auto stackFrames = FormatVRMenuBridgeStackFrames(bucketIt->stackFrames);
+			const auto* upperContext = GetCurrentVRMenuBridgeCallContext();
+			logger::debug(
+				"[VRMenuBridge][Capture] frame={} menus={} source={} srcSlot={} callerRva=0x{:X} stackHash=0x{:016X} captures={} frames={}..{} menusSeen={} render={}x{} final={}x{} srcView=0x{:X} srcRes=0x{:X} srcSurface={} dstView=0x{:X} dstRes=0x{:X} dstSurface={} upperCallsiteRva=0x{:X} upperTargetRva=0x{:X} upperSelector=0x{:02X} upperFlag={} upperMode={} upperWrapper=0x{:X} upperSubject=0x{:X} upperVtable=0x{:X} stack={}",
+				a_frame,
+				menusCurrent,
+				GetVRMenuCompositionTargetName(a_sourceMatch.target),
+				a_sourceSlot,
+				a_callerRva,
+				bucketIt->stackHash,
+				bucketIt->captureCount,
+				bucketIt->firstFrame,
+				bucketIt->lastFrame,
+				menusSeen,
+				a_renderWidth,
+				a_renderHeight,
+				a_finalWidth,
+				a_finalHeight,
+				static_cast<uint64_t>(a_sourceMatch.viewIdentity),
+				static_cast<uint64_t>(a_sourceMatch.resourceIdentity),
+				a_sourceMatch.usesTextureCopy ? "textureCopy" : "texture",
+				static_cast<uint64_t>(a_destinationMatch.viewIdentity),
+				static_cast<uint64_t>(a_destinationMatch.resourceIdentity),
+				a_destinationMatch.usesTextureCopy ? "textureCopy" : "texture",
+				upperContext ? upperContext->callsiteRva : 0u,
+				upperContext ? upperContext->targetRva : 0u,
+				upperContext ? static_cast<uint32_t>(upperContext->selector) : 0u,
+				upperContext ? static_cast<uint32_t>(upperContext->flag) : 0u,
+				upperContext ? upperContext->mode : 0u,
+				upperContext ? static_cast<uint64_t>(upperContext->wrapperIdentity) : 0ull,
+				upperContext ? static_cast<uint64_t>(upperContext->subjectIdentity) : 0ull,
+				upperContext ? static_cast<uint64_t>(upperContext->subjectVtable) : 0ull,
+				stackFrames);
 			logger::debug(
 				"[VRMenuBridge][Cluster] callerRva=0x{:X} stackHash=0x{:016X} source={} captures={} frames={}..{} menusSeen={} stack={}",
 				bucketIt->callerRva,
@@ -1307,8 +1984,8 @@ namespace
 				bucketIt->captureCount,
 				bucketIt->firstFrame,
 				bucketIt->lastFrame,
-				FormatVRMenuBridgeDiagMenuMask(bucketIt->menuMaskSeen),
-				FormatVRMenuBridgeStackFrames(bucketIt->stackFrames));
+				menusSeen,
+				stackFrames);
 		}
 	}
 
@@ -4030,6 +4707,13 @@ bool Upscaling::DrawVRMenuBridgeIntoFinalCompositeLayer(
 
 	const auto* state = globals::state;
 	const uint32_t frame = state ? state->frameCount : 0;
+	const bool emitPerfTiming = state && ShouldEmitUpscalingDiagLogs();
+	const uint64_t perfMenuMask = emitPerfTiming ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
+	ScopedVRMenuPerfDiagTimer perfTimer(
+		VRMenuPerfBucket::BridgeLayerDraw,
+		frame,
+		perfMenuMask,
+		emitPerfTiming);
 	static constexpr float kTransparent[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	if (vrMenuFinalCompositeLayerClearedFrame != frame) {
 		a_context->ClearRenderTargetView(vrMenuFinalCompositeLayer->rtv.get(), kTransparent);
@@ -4112,10 +4796,9 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	UINT a_startInstanceLocation,
 	uint32_t a_callerRva)
 {
+	auto* state = globals::state;
 	if (!globals::game::isVR || !a_context || vrMenuParallelBridgeDrawInProgress)
 		return false;
-
-	auto* state = globals::state;
 	if (!state)
 		return false;
 
@@ -4123,11 +4806,12 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return false;
 	if (IsCommunityShadersMenuOpen())
 		return false;
-	if (!a_indexCount ||
-		a_instanceCount != 2 ||
-		a_startIndexLocation != 0 ||
-		a_baseVertexLocation != 0 ||
-		a_startInstanceLocation != 0) {
+	if (!IsVRMenuBridgeDrawShapeCandidate(
+			a_indexCount,
+			a_instanceCount,
+			a_startIndexLocation,
+			a_baseVertexLocation,
+			a_startInstanceLocation)) {
 		return false;
 	}
 
@@ -4145,55 +4829,56 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	}
 
 	BeginVRMenuFinalCompositeFrame(state->frameCount);
-
-	ID3D11RenderTargetView* rtv = nullptr;
-	a_context->OMGetRenderTargets(1, &rtv, nullptr);
-	auto rtvRelease = ScopeExit([&]() {
-		if (rtv)
-			rtv->Release();
-	});
-	if (!rtv)
-		return false;
-
 	VRMenuCompositionTargetMatch destination{};
-	if (!TryResolveVRMenuCompositionView(rtv, destination) ||
-		destination.target != RE::RENDER_TARGETS::kMENUBG ||
-		destination.width != renderWidth ||
-		destination.height != renderHeight ||
-		destination.samples != 1) {
-		return false;
-	}
-
-	std::array<ID3D11ShaderResourceView*, kVRMenuBridgeSRVSlots> psSRVs{};
-	a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
-	auto srvRelease = ScopeExit([&]() {
-		for (auto* srv : psSRVs) {
-			if (srv)
-				srv->Release();
-		}
-	});
-
 	size_t menuSourceTargetIndex = kVRKnownGameMenuFinalCompositeTargets.size();
 	uint32_t menuSourceSlot = 0;
 	VRMenuCompositionTargetMatch menuSourceMatch{};
-	for (uint32_t slot = 0; slot < psSRVs.size(); ++slot) {
-		VRMenuCompositionTargetMatch source{};
-		if (!TryResolveVRMenuCompositionView(psSRVs[slot], source) || source.samples != 1)
-			continue;
+	{
+		ID3D11RenderTargetView* rtv = nullptr;
+		a_context->OMGetRenderTargets(1, &rtv, nullptr);
+		auto rtvRelease = ScopeExit([&]() {
+			if (rtv)
+				rtv->Release();
+		});
+		if (!rtv)
+			return false;
 
-		for (size_t targetIndex = 0; targetIndex < kVRKnownGameMenuFinalCompositeTargets.size(); ++targetIndex) {
-			if (source.target == kVRKnownGameMenuFinalCompositeTargets[targetIndex]) {
-				menuSourceTargetIndex = targetIndex;
-				menuSourceSlot = slot;
-				menuSourceMatch = source;
-				break;
-			}
+		if (!TryResolveVRMenuCompositionView(rtv, destination) ||
+			destination.target != RE::RENDER_TARGETS::kMENUBG ||
+			destination.width != renderWidth ||
+			destination.height != renderHeight ||
+			destination.samples != 1) {
+			return false;
 		}
-		if (menuSourceTargetIndex != kVRKnownGameMenuFinalCompositeTargets.size())
-			break;
+
+		std::array<ID3D11ShaderResourceView*, kVRMenuBridgeSRVSlots> psSRVs{};
+		a_context->PSGetShaderResources(0, static_cast<UINT>(psSRVs.size()), psSRVs.data());
+		auto srvRelease = ScopeExit([&]() {
+			for (auto* srv : psSRVs) {
+				if (srv)
+					srv->Release();
+			}
+		});
+
+		for (uint32_t slot = 0; slot < psSRVs.size(); ++slot) {
+			VRMenuCompositionTargetMatch source{};
+			if (!TryResolveVRMenuCompositionView(psSRVs[slot], source) || source.samples != 1)
+				continue;
+
+			for (size_t targetIndex = 0; targetIndex < kVRKnownGameMenuFinalCompositeTargets.size(); ++targetIndex) {
+				if (source.target == kVRKnownGameMenuFinalCompositeTargets[targetIndex]) {
+					menuSourceTargetIndex = targetIndex;
+					menuSourceSlot = slot;
+					menuSourceMatch = source;
+					break;
+				}
+			}
+			if (menuSourceTargetIndex != kVRKnownGameMenuFinalCompositeTargets.size())
+				break;
+		}
+		if (menuSourceTargetIndex == kVRKnownGameMenuFinalCompositeTargets.size())
+			return false;
 	}
-	if (menuSourceTargetIndex == kVRKnownGameMenuFinalCompositeTargets.size())
-		return false;
 
 	// The exact reduced menu bridge is a direct menu-text signal. Arm the short
 	// observed tail only after an explicit menu context confirms this is not
@@ -4201,6 +4886,18 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	ExtendVRObservedProjectedMenuTail(kVRObservedMenuPresentationTailFrames);
 	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
 	ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
+
+	if (TrySuppressKnownRedundantVRMenuBridgeCapture(
+			*this,
+			state,
+			a_callerRva,
+			menuSourceSlot,
+			menuSourceMatch,
+			destination)) {
+		RecordCurrentVRMenuBridgeHigherCaptureDiag(menuSourceMatch.target);
+		vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
+		return true;
+	}
 
 	const bool liveLayerDrawn = DrawVRMenuBridgeIntoFinalCompositeLayer(
 		a_context,
@@ -4219,7 +4916,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		const auto menuMask = GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui);
-		const auto stackDigest = CaptureVRMenuBridgeStackDigest(a_callerRva);
+		RecordCurrentVRMenuBridgeHigherCaptureDiag(menuSourceMatch.target);
 		RecordVRMenuBridgeCaptureDiag(
 			state->frameCount,
 			menuMask,
@@ -4227,7 +4924,6 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 			menuSourceSlot,
 			menuSourceMatch,
 			destination,
-			stackDigest,
 			renderWidth,
 			renderHeight,
 			finalWidth,
@@ -4254,6 +4950,47 @@ bool Upscaling::ShouldTraceVRMenuBridgeDrawOperation()
 
 	return g_vrMenuBridgeTraceCachedState.load(std::memory_order_relaxed) ==
 	       EncodeVRMenuBridgeTraceState(currentFrame, true);
+}
+
+bool Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
+	UINT a_indexCount,
+	UINT a_instanceCount,
+	UINT a_startIndexLocation,
+	INT a_baseVertexLocation,
+	UINT a_startInstanceLocation)
+{
+	if (!globals::game::isVR || !IsVRMenuBridgeDrawHookContextActive())
+		return false;
+
+	auto* state = globals::state;
+	if (!state)
+		return false;
+
+	if (!IsVRMenuBridgeDrawShapeCandidate(
+			a_indexCount,
+			a_instanceCount,
+			a_startIndexLocation,
+			a_baseVertexLocation,
+			a_startInstanceLocation)) {
+		return false;
+	}
+
+	auto& upscaling = globals::features::upscaling;
+	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	if (upscaling.vrMenuFinalCompositeFrame == currentFrame &&
+		std::all_of(
+			upscaling.vrMenuFinalCompositeSuppressedTargets.begin(),
+			upscaling.vrMenuFinalCompositeSuppressedTargets.end(),
+			[](bool a_suppressed) { return a_suppressed; })) {
+		return false;
+	}
+
+	if (!IsKnownVRMenuBridgeStereoIndexCount(a_indexCount)) {
+		MaybeLogSkippedVRMenuBridgeDrawCount(a_indexCount, currentFrame);
+		return false;
+	}
+
+	return true;
 }
 
 bool Upscaling::TraceVRMenuBridgeDrawOperation(
@@ -4292,6 +5029,13 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 		std::none_of(vrMenuFinalCompositeSuppressedTargets.begin(), vrMenuFinalCompositeSuppressedTargets.end(), [](bool suppressed) { return suppressed; })) {
 		return false;
 	}
+	const bool emitPerfTiming = ShouldEmitUpscalingDiagLogs();
+	const uint64_t perfMenuMask = emitPerfTiming ? GetActiveVRMenuBridgeDiagMenuMask(globals::game::ui) : 0;
+	ScopedVRMenuPerfDiagTimer perfTimer(
+		VRMenuPerfBucket::FinalCompositeTotal,
+		a_frame,
+		perfMenuMask,
+		emitPerfTiming);
 	if (!IsKnownGameMenuContextActive() ||
 		IsCommunityShadersMenuOpen() ||
 		IsVRMenuScenePresentationBlockActive() ||
@@ -6091,6 +6835,182 @@ struct SSRReflectionsRayTracingPostRenderHook
 };
 #endif
 
+struct VRMenuBridgeHigherCallHook
+{
+	static std::uintptr_t thunk(std::uintptr_t a_wrapperIdentity, uint8_t a_flag, uint32_t a_mode)
+	{
+		const auto previousContext = g_vrMenuBridgeHigherCallContext;
+		[[maybe_unused]] auto restoreContext = ScopeExit([&]() {
+			g_vrMenuBridgeHigherCallContext = previousContext;
+		});
+
+		VRMenuBridgeHigherCallContext filterContext{};
+		if (TryMakeVRMenuBridgeHigherFilterContext(a_wrapperIdentity, a_flag, a_mode, filterContext))
+			g_vrMenuBridgeHigherCallContext = filterContext;
+
+		return func(a_wrapperIdentity, a_flag, a_mode);
+	}
+
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+struct VRMenuBridgeDispatchCallHook
+{
+	static void thunk(
+		std::uintptr_t a_rendererState,
+		std::uintptr_t a_renderPath,
+		std::uintptr_t a_zero,
+		uint32_t a_dispatchWord)
+	{
+		const auto previousContext = g_vrMenuBridgeDispatchCallContext;
+		[[maybe_unused]] auto restoreContext = ScopeExit([&]() {
+			g_vrMenuBridgeDispatchCallContext = previousContext;
+		});
+
+		g_vrMenuBridgeDispatchCallContext = MakeVRMenuBridgeDispatchCallContext(
+			a_rendererState,
+			a_renderPath,
+			a_dispatchWord);
+		func(a_rendererState, a_renderPath, a_zero, a_dispatchWord);
+	}
+
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+[[maybe_unused]] bool TryInstallVRMenuBridgeDispatchCallHook()
+{
+	if (!globals::game::isVR)
+		return true;
+
+	static bool attempted = false;
+	static bool installed = false;
+	if (attempted)
+		return installed;
+
+	attempted = true;
+	const auto callsite = REL::Offset(kVRMenuBridgeDispatchCallsiteRva).address();
+	if (std::memcmp(
+			reinterpret_cast<const void*>(callsite),
+			kVRMenuBridgeDispatchExpectedBytes.data(),
+			kVRMenuBridgeDispatchExpectedBytes.size()) != 0) {
+		logger::warn(
+			"[Upscaling] VR menu bridge dispatch hook signature mismatch at 0x{:X}; falling back to higher-level bridge diagnostics",
+			kVRMenuBridgeDispatchCallsiteRva);
+		g_vrMenuBridgeDispatchCallHookInstalled.store(false, std::memory_order_release);
+		return false;
+	}
+
+	stl::write_thunk_call<VRMenuBridgeDispatchCallHook>(callsite);
+	logger::info(
+		"[Upscaling] Installed VR menu bridge dispatch hook at 0x{:X} (targetRva=0x{:X})",
+		kVRMenuBridgeDispatchCallsiteRva,
+		kVRMenuBridgeDispatchTargetRva);
+	g_vrMenuBridgeDispatchCallHookInstalled.store(true, std::memory_order_release);
+	installed = true;
+	return true;
+}
+
+bool TryInstallVRMenuBridgeHigherCallHook()
+{
+	if (!globals::game::isVR)
+		return true;
+
+	static bool attempted = false;
+	static bool installed = false;
+	if (attempted)
+		return installed;
+
+	attempted = true;
+	const auto callsite = REL::Offset(kVRMenuBridgeHigherCallsiteRva).address();
+	if (std::memcmp(
+			reinterpret_cast<const void*>(callsite),
+			kVRMenuBridgeHigherCallExpectedBytes.data(),
+			kVRMenuBridgeHigherCallExpectedBytes.size()) != 0) {
+		logger::warn(
+			"[Upscaling] VR menu bridge higher call hook signature mismatch at 0x{:X}; skipping higher-level bridge diagnostics",
+			kVRMenuBridgeHigherCallsiteRva);
+		g_vrMenuBridgeHigherCallHookInstalled.store(false, std::memory_order_release);
+		return false;
+	}
+
+	stl::write_thunk_call<VRMenuBridgeHigherCallHook>(callsite);
+	logger::info(
+		"[Upscaling] Installed VR menu bridge higher call hook at 0x{:X} (targetRva=0x{:X})",
+		kVRMenuBridgeHigherCallsiteRva,
+		kVRMenuBridgeHigherTargetRva);
+	g_vrMenuBridgeHigherCallHookInstalled.store(true, std::memory_order_release);
+	installed = true;
+	return true;
+}
+
+struct VRMenuBridgeDirectDrawHook
+{
+	static void thunk(
+		ID3D11DeviceContext* a_context,
+		UINT a_indexCount,
+		UINT a_instanceCount,
+		UINT a_startIndexLocation,
+		INT a_baseVertexLocation,
+		UINT a_startInstanceLocation)
+	{
+		if (Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
+				a_indexCount,
+				a_instanceCount,
+				a_startIndexLocation,
+				a_baseVertexLocation,
+				a_startInstanceLocation) &&
+			Upscaling::ShouldTraceVRMenuBridgeDrawOperation() &&
+			Upscaling::TraceVRMenuBridgeDrawOperation(
+				a_context,
+				a_indexCount,
+				a_instanceCount,
+				a_startIndexLocation,
+				a_baseVertexLocation,
+				a_startInstanceLocation,
+				kVRMenuBridgeDirectDrawCallerRva)) {
+			return;
+		}
+
+		a_context->DrawIndexedInstanced(
+			a_indexCount,
+			a_instanceCount,
+			a_startIndexLocation,
+			a_baseVertexLocation,
+			a_startInstanceLocation);
+	}
+};
+
+[[maybe_unused]] bool TryInstallVRMenuBridgeDirectDrawHook()
+{
+	if (!globals::game::isVR)
+		return true;
+
+	static bool attempted = false;
+	static bool installed = false;
+	if (attempted)
+		return installed;
+
+	attempted = true;
+	const auto callsite = REL::Offset(kVRMenuBridgeDirectDrawCallsiteRva).address();
+	if (std::memcmp(
+			reinterpret_cast<const void*>(callsite),
+			kVRMenuBridgeDirectDrawExpectedBytes.data(),
+			kVRMenuBridgeDirectDrawExpectedBytes.size()) != 0) {
+		logger::warn(
+			"[Upscaling] VR menu bridge direct hook signature mismatch at 0x{:X}; menu bridge capture disabled",
+			kVRMenuBridgeDirectDrawCallsiteRva);
+		return false;
+	}
+
+	SKSE::GetTrampoline().write_call<6>(callsite, VRMenuBridgeDirectDrawHook::thunk);
+	logger::info(
+		"[Upscaling] Installed VR menu bridge direct draw hook at 0x{:X} (callerRva=0x{:X})",
+		kVRMenuBridgeDirectDrawCallsiteRva,
+		kVRMenuBridgeDirectDrawCallerRva);
+	installed = true;
+	return true;
+}
+
 void Upscaling::PostPostLoad()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
@@ -6105,6 +7025,9 @@ void Upscaling::PostPostLoad()
 			GetRenderDocUpscalingBlockReason());
 		return;
 	}
+
+	if (globals::game::isVR)
+		TryInstallVRMenuBridgeHigherCallHook();
 
 	bool isGOG = !GetModuleHandle(L"steam_api64.dll");
 	stl::detour_thunk<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084));

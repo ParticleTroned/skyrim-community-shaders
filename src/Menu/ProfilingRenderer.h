@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -26,11 +27,59 @@ public:
 		CPU
 	};
 
+	struct PerformanceTimingTotals
+	{
+		float gpuAvgMs = 0.0f;
+		float cpuAvgMs = 0.0f;
+		bool hasGpu = false;
+		bool hasCpu = false;
+	};
+
+	struct PerformanceTimingSummary
+	{
+		float gpuTotalMs = 0.0f;
+		float cpuTotalMs = 0.0f;
+		float gameGpuMs = 0.0f;
+		float gameCpuMs = 0.0f;
+		float frameMs = 0.0f;
+		float fps = 0.0f;
+		float gameGpuSampleMs = 0.0f;
+		float gameCpuSampleMs = 0.0f;
+		float frameSampleMs = 0.0f;
+		float fpsSample = 0.0f;
+		uint32_t frameCount = 0;
+		bool hasGameGpu = false;
+		bool hasGameCpu = false;
+		bool hasGameGpuSample = false;
+		bool hasGameCpuSample = false;
+		bool hasFrameSample = false;
+		bool valid = false;
+		std::unordered_map<std::string, PerformanceTimingTotals> features;
+	};
+
+	struct PerformanceTimingHighlight
+	{
+		int frameDirection = 0;
+		int fpsDirection = 0;
+		int gpuTotalDirection = 0;
+		int cpuTotalDirection = 0;
+		int featureGpuDirection = 0;
+		int featureCpuDirection = 0;
+	};
+
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
 	static bool HasFeatureTimers(const std::string& featurePrefix);
 	static void RenderFeatureTimers(const std::string& featurePrefix);
+	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
+	static void RenderFeaturePerformanceSummary(
+		const std::string& featurePrefix,
+		const PerformanceTimingHighlight* highlight = nullptr);
+	static void RenderFeaturePerformanceSummary(
+		const std::vector<std::string>& featurePrefixes,
+		const PerformanceTimingHighlight* highlight = nullptr);
 
 private:
+	static constexpr uint32_t kFeatureGraphHistorySize = 60;
 	static inline TimingMode timingMode = TimingMode::GPU;
 	static inline float timeSinceLastUpdate = 0.0f;
 	static inline float lastFrameTime = 0.0f;
@@ -62,8 +111,8 @@ private:
 
 	struct FeatureGraphState
 	{
-		ImGuiUtils::ProfilerGraph gpuGraph{ Profiler::kHistorySize };
-		ImGuiUtils::ProfilerGraph cpuGraph{ Profiler::kHistorySize };
+		ImGuiUtils::ProfilerGraph gpuGraph{ kFeatureGraphHistorySize };
+		ImGuiUtils::ProfilerGraph cpuGraph{ kFeatureGraphHistorySize };
 	};
 	struct FeatureTimingEntry
 	{
@@ -94,6 +143,7 @@ private:
 	static void RenderGraph();
 	static bool RenderFeatureOverview();
 	static FeatureTimingData CollectFeatureTimingData(const std::string& featurePrefix, bool cpuMode);
+	static FeatureTimingData CollectFeatureTimingData(const std::vector<std::string>& featurePrefixes, bool cpuMode);
 	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight);
 	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);
 };

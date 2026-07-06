@@ -33,6 +33,7 @@
 #include "Menu/IconLoader.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsTabRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "ShaderCache.h"
@@ -1089,9 +1090,14 @@ void Menu::ProcessInputEventQueue()
 				KeyAction keyActions[] = {
 					{ settings.ToggleKey, [this]() {
 						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+							 const bool wasEnabled = IsEnabled;
 							 IsEnabled = !IsEnabled;
 							 if (IsEnabled)
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
+							 else if (wasEnabled) {
+								 PerformanceTuningRenderer::NotifyMenuClosed();
+								 PerformanceTuningRenderer::CancelActiveMeasurements();
+							 }
 						 }
 					 } },
 					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation.store(true, std::memory_order_relaxed); } },
@@ -1225,6 +1231,8 @@ void Menu::ProcessInputEventQueue()
 						editorWindow->open = false;
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
 						IsEnabled = false;
+						PerformanceTuningRenderer::NotifyMenuClosed();
+						PerformanceTuningRenderer::CancelActiveMeasurements();
 					}
 				}
 			} else if (event.IsDown() && !wasCapturingHotkey) {

@@ -35,7 +35,14 @@ public:
 		}
 
 		float GetAverage() const;
+		float GetAverage(uint32_t maxSamples) const;
 		float GetPercentile(float p) const;
+		float GetSample(uint32_t index) const
+		{
+			if (index >= count)
+				return 0.0f;
+			return history[(head - count + index + kHistorySize) % kHistorySize];
+		}
 	};
 
 	struct TimerResult
@@ -98,6 +105,8 @@ public:
 	const std::vector<TimerResult>& GetResults() const { return results; }
 	float GetTotalTimeMs() const { return totalTimeMs; }
 	float GetCpuTotalTimeMs() const { return cpuTotalTimeMs; }
+	float GetTotalTimeAverageMs(uint32_t maxSamples = 60) const { return totalGpuHistory.GetAverage(maxSamples); }
+	float GetCpuTotalTimeAverageMs(uint32_t maxSamples = 60) const { return totalCpuHistory.GetAverage(maxSamples); }
 	void ClearTimers();
 	void ClearTimersForFeature(const std::string& featureName);
 
@@ -178,9 +187,11 @@ private:
 			std::string name;
 			LARGE_INTEGER cpuBegin{};
 			float cpuMs = 0.0f;
+			bool ended = false;
 		};
 		std::vector<TimerPair> timers;
 		std::vector<CompletedCpuTimer> cpuTimers;
+		std::vector<uint32_t> activeTimerStack;
 		uint32_t activeCount = 0;
 		bool inFlight = false;
 	};
@@ -221,6 +232,8 @@ private:
 	std::unordered_map<std::string, size_t> knownTimerIndex;
 	std::vector<CpuTimer> activeCpuTimers;
 	std::vector<CompletedCpuTimer> completedCpuTimers;
+	RollingHistory totalGpuHistory;
+	RollingHistory totalCpuHistory;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
 

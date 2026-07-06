@@ -54,6 +54,26 @@ public:
 	virtual void LoadSettings(json&) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.ExteriorEnabled || settings.InteriorEnabled; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
+	{
+		if (a_enabled) {
+			settings.ExteriorEnabled = Settings{}.ExteriorEnabled;
+			settings.InteriorEnabled = Settings{}.InteriorEnabled;
+			return;
+		}
+
+		settings.ExteriorEnabled = false;
+		settings.InteriorEnabled = false;
+	}
+	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
+	{
+		auto state = a_state;
+		LoadSettings(state);
+	}
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
 	virtual void DataLoaded() override;

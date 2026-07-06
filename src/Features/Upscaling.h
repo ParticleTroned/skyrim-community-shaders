@@ -145,6 +145,26 @@ public:
 
 	// Feature interface overrides
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return GetUpscaleMethod() != UpscaleMethod::kNONE; }
+	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
+	{
+		if (a_enabled) {
+			settings = Settings{};
+			return;
+		}
+
+		settings.upscaleMethod = static_cast<uint>(UpscaleMethod::kNONE);
+		settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
+	}
+	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
+	{
+		auto state = a_state;
+		LoadSettings(state);
+	}
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;

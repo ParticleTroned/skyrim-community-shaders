@@ -40,6 +40,24 @@ public:
 
 	/** @brief Draws the ImGui settings panel for Terrain Blending configuration. */
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
+	{
+		if (a_enabled) {
+			settings = Settings{};
+			return;
+		}
+
+		settings.Enabled = 0u;
+	}
+	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
+	{
+		auto state = a_state;
+		LoadSettings(state);
+	}
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 

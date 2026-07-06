@@ -1,7 +1,18 @@
 #include "Profiler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
+
+namespace
+{
+	constexpr float kMaxSaneProfilerSampleMs = 1000.0f;
+
+	bool IsValidProfilerSample(float ms)
+	{
+		return std::isfinite(ms) && ms >= 0.0f && ms <= kMaxSaneProfilerSampleMs;
+	}
+}
 
 float Profiler::RollingHistory::GetAverage() const
 {
@@ -11,6 +22,19 @@ float Profiler::RollingHistory::GetAverage() const
 	for (uint32_t i = 0; i < count; i++)
 		sum += history[i];
 	return sum / static_cast<float>(count);
+}
+
+float Profiler::RollingHistory::GetAverage(uint32_t maxSamples) const
+{
+	if (count == 0 || maxSamples == 0)
+		return lastMs;
+
+	const uint32_t sampleCount = std::min(count, maxSamples);
+	float sum = 0.0f;
+	const uint32_t firstSample = count - sampleCount;
+	for (uint32_t i = 0; i < sampleCount; i++)
+		sum += GetSample(firstSample + i);
+	return sum / static_cast<float>(sampleCount);
 }
 
 float Profiler::RollingHistory::GetPercentile(float p) const
@@ -34,6 +58,7 @@ float Profiler::RollingHistory::GetPercentile(float p) const
 void Profiler::ResetFrameState(FrameQueries& frame)
 {
 	frame.activeCount = 0;
+	frame.activeTimerStack.clear();
 	frame.inFlight = false;
 	frame.cpuTimers.clear();
 }
@@ -59,6 +84,7 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 		device->CreateQuery(&disjointDesc, frame.disjoint.put());
 
 		frame.timers.resize(kMaxTimers);
+		frame.activeTimerStack.reserve(kMaxTimers);
 		for (auto& timer : frame.timers) {
 			D3D11_QUERY_DESC tsDesc{};
 			tsDesc.Query = D3D11_QUERY_TIMESTAMP;
@@ -86,6 +112,7 @@ void Profiler::Release()
 		frame.timers.clear();
 		frame.cpuTimers.clear();
 		frame.activeCount = 0;
+		frame.activeTimerStack.clear();
 		frame.inFlight = false;
 	}
 	results.clear();
@@ -93,6 +120,8 @@ void Profiler::Release()
 	knownTimerIndex.clear();
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
+	totalGpuHistory = {};
+	totalCpuHistory = {};
 	totalTimeMs = 0.0f;
 	cpuTotalTimeMs = 0.0f;
 	frameActive = false;
@@ -127,6 +156,8 @@ void Profiler::ClearTimers()
 	knownTimerIndex.clear();
 	activeCpuTimers.clear();
 	completedCpuTimers.clear();
+	totalGpuHistory = {};
+	totalCpuHistory = {};
 	totalTimeMs = 0.0f;
 	cpuTotalTimeMs = 0.0f;
 
@@ -200,10 +231,14 @@ bool Profiler::BeginPass(std::string_view name)
 	if (frame.activeCount >= kMaxTimers)
 		return false;
 
-	auto& timer = frame.timers[frame.activeCount];
+	const uint32_t timerIndex = frame.activeCount++;
+	auto& timer = frame.timers[timerIndex];
 	timer.name.assign(name);
+	timer.cpuMs = 0.0f;
+	timer.ended = false;
 	context->End(timer.begin.get());
 	QueryPerformanceCounter(&timer.cpuBegin);
+	frame.activeTimerStack.push_back(timerIndex);
 
 	if (beginPerfEvent)
 		beginPerfEvent(name);
@@ -217,17 +252,22 @@ void Profiler::EndPass()
 		return;
 
 	auto& frame = frames[writeFrame];
-	if (frame.activeCount >= kMaxTimers)
+	if (frame.activeTimerStack.empty())
 		return;
 
-	auto& timer = frame.timers[frame.activeCount];
+	const uint32_t timerIndex = frame.activeTimerStack.back();
+	frame.activeTimerStack.pop_back();
+	if (timerIndex >= frame.activeCount || timerIndex >= frame.timers.size())
+		return;
+
+	auto& timer = frame.timers[timerIndex];
 
 	LARGE_INTEGER cpuEnd;
 	QueryPerformanceCounter(&cpuEnd);
 	timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
 
 	context->End(timer.end.get());
-	frame.activeCount++;
+	timer.ended = true;
 
 	if (endPerfEvent)
 		endPerfEvent({});
@@ -325,30 +365,45 @@ bool Profiler::CollectResults()
 	std::unordered_map<std::string, ActiveTimerData> activeTimers;
 	float activeTotalMs = 0.0f;
 	float activeCpuTotalMs = 0.0f;
+	bool hasGpuFrameData = false;
+	bool gpuFrameComplete = false;
+	bool gpuTimerQueriesComplete = true;
+	const bool hasCompletedCpuTimers = !frame.cpuTimers.empty();
 
 	if (frame.inFlight) {
 		HRESULT hr = context->GetData(frame.disjoint.get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH);
 		if (hr != S_OK)
 			return false;
 		frame.inFlight = false;
+		hasGpuFrameData = true;
 	}
 
-	if (!disjointData.Disjoint && frame.activeCount > 0) {
+	if (hasGpuFrameData && !disjointData.Disjoint && disjointData.Frequency > 0 && frame.activeCount > 0) {
 		double ticksToMs = 1000.0 / static_cast<double>(disjointData.Frequency);
+		gpuFrameComplete = true;
 
 		for (uint32_t i = 0; i < frame.activeCount; i++) {
 			auto& timer = frame.timers[i];
-			if (timer.name.empty())
+			if (timer.name.empty() || !timer.ended)
 				continue;
 
 			UINT64 tsBegin = 0, tsEnd = 0;
 
-			if (context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+			if (context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+				gpuTimerQueriesComplete = false;
 				continue;
-			if (context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+			}
+			if (context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+				gpuTimerQueriesComplete = false;
+				continue;
+			}
+			if (tsEnd < tsBegin)
 				continue;
 
 			float ms = static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs);
+			if (!IsValidProfilerSample(ms) || !IsValidProfilerSample(timer.cpuMs))
+				continue;
+
 			auto& entry = activeTimers[timer.name];
 			entry.gpuMs += ms;
 			entry.cpuMs += timer.cpuMs;
@@ -368,6 +423,8 @@ bool Profiler::CollectResults()
 	for (const auto& timer : frame.cpuTimers) {
 		if (timer.name.empty())
 			continue;
+		if (!IsValidProfilerSample(timer.cpuMs))
+			continue;
 
 		auto& entry = activeTimers[timer.name];
 		entry.cpuMs += timer.cpuMs;
@@ -379,11 +436,35 @@ bool Profiler::CollectResults()
 		known.cpu.PushSample(timer.cpuMs);
 	}
 
+	if (gpuFrameComplete && gpuTimerQueriesComplete) {
+		for (auto& known : knownTimers) {
+			auto it = activeTimers.find(known.name);
+			const bool activeGpu = it != activeTimers.end() && it->second.hasGpu;
+			const bool activeCpu = it != activeTimers.end() && it->second.hasCpu;
+
+			if (known.hasGpu && !activeGpu)
+				known.gpu.PushSample(0.0f);
+			if (known.hasCpu && !activeCpu)
+				known.cpu.PushSample(0.0f);
+		}
+	} else if (hasCompletedCpuTimers) {
+		for (auto& known : knownTimers) {
+			auto it = activeTimers.find(known.name);
+			if (known.hasCpu && (it == activeTimers.end() || !it->second.hasCpu))
+				known.cpu.PushSample(0.0f);
+		}
+	}
+
 	frame.cpuTimers.clear();
 	frame.activeCount = 0;
+	frame.activeTimerStack.clear();
 
 	totalTimeMs = activeTotalMs;
 	cpuTotalTimeMs = activeCpuTotalMs;
+	if (gpuFrameComplete && gpuTimerQueriesComplete)
+		totalGpuHistory.PushSample(activeTotalMs);
+	if (gpuFrameComplete || hasCompletedCpuTimers)
+		totalCpuHistory.PushSample(activeCpuTotalMs);
 
 	RebuildResults(&activeTimers);
 	return true;

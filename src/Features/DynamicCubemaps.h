@@ -162,6 +162,19 @@ public:
 	virtual void LoadSettings(json&) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnabledSSR != 0; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
+	{
+		settings.EnabledSSR = a_enabled ? Settings{}.EnabledSSR : 0u;
+	}
+	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
+	{
+		auto state = a_state;
+		LoadSettings(state);
+	}
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 

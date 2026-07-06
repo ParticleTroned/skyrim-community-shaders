@@ -272,6 +272,43 @@ public:
 	uint clusterSize[3] = { 16 };
 
 	Settings settings;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override
+	{
+		return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows;
+	}
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
+	{
+		const Settings defaults{};
+		if (a_enabled) {
+			settings.EnableParticleLights = defaults.EnableParticleLights;
+			settings.EnableParticleLightsCulling = defaults.EnableParticleLightsCulling;
+			settings.EnableParticleLightsDetection = defaults.EnableParticleLightsDetection;
+			settings.ParticleClusterThreshold = defaults.ParticleClusterThreshold;
+			settings.MaxParticlesPerEmitter = defaults.MaxParticlesPerEmitter;
+			settings.MaxParticleDistance = defaults.MaxParticleDistance;
+			settings.EnableParticleLightsOptimization = defaults.EnableParticleLightsOptimization;
+			settings.EnableContactShadows = defaults.EnableContactShadows;
+			settings.ContactShadowsInteriorsOnly = defaults.ContactShadowsInteriorsOnly;
+			settings.EnableParticleContactShadows = defaults.EnableParticleContactShadows;
+			settings.ContactShadowQuality = defaults.ContactShadowQuality;
+			settings.ContactShadowClusterBudget = defaults.ContactShadowClusterBudget;
+			settings.ParticleContactShadowBudget = defaults.ParticleContactShadowBudget;
+			settings.StrictContactShadowBudget = defaults.StrictContactShadowBudget;
+			return;
+		}
+
+		settings.EnableParticleLights = false;
+		settings.EnableContactShadows = false;
+		settings.EnableParticleContactShadows = false;
+	}
+	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
+	{
+		auto state = a_state;
+		LoadSettings(state);
+	}
 
 	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass);
 	bool AddParticleLight(RE::BSRenderPass* a_pass, ParticleLightReference a_reference);

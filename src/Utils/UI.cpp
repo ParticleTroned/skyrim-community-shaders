@@ -553,6 +553,15 @@ namespace Util
 				std::clamp(color.z + clampedAmount, 0.0f, 1.0f),
 				std::clamp(alpha, 0.0f, 1.0f));
 		}
+
+		ImVec4 PerformanceDelta(int direction)
+		{
+			if (direction > 0)
+				return ImVec4(1.0f, 0.0f, 0.95f, 1.0f);
+			if (direction < 0)
+				return ImVec4(0.1f, 1.0f, 0.2f, 1.0f);
+			return ImGui::GetStyleColorVec4(ImGuiCol_Text);
+		}
 	}
 
 	namespace ButtonHelpers
@@ -765,6 +774,34 @@ namespace Util
 
 	YellowFrameStyleWrapper::~YellowFrameStyleWrapper()
 	{
+		if (m_pushedStyles > 0) {
+			ImGui::PopStyleColor(m_pushedStyles);
+		}
+	}
+
+	PerformanceFrameStyleWrapper::PerformanceFrameStyleWrapper(bool includeCheckMark) :
+		m_pushedStyles(0),
+		m_pushedVars(0)
+	{
+		const auto& status = Menu::GetSingleton()->GetTheme().StatusPalette;
+		const ImVec4 goldRed(
+			std::clamp(status.Warning.x * 0.92f + status.Error.x * 0.08f, 0.0f, 1.0f),
+			std::clamp(status.Warning.y * 0.82f + status.Error.y * 0.18f, 0.0f, 1.0f),
+			std::clamp(status.Warning.z * 0.62f + status.Error.z * 0.38f, 0.0f, 1.0f),
+			status.Warning.w);
+		const auto frameColors = AccentFrameHelpers::BuildFrameColors(goldRed);
+		AccentFrameHelpers::PushFrameColors(frameColors, m_pushedStyles, includeCheckMark);
+		ImGui::PushStyleColor(ImGuiCol_Border, Color::WithAlpha(goldRed, 0.86f));
+		m_pushedStyles++;
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, std::max(ImGui::GetStyle().FrameBorderSize, 1.0f));
+		m_pushedVars++;
+	}
+
+	PerformanceFrameStyleWrapper::~PerformanceFrameStyleWrapper()
+	{
+		if (m_pushedVars > 0) {
+			ImGui::PopStyleVar(m_pushedVars);
+		}
 		if (m_pushedStyles > 0) {
 			ImGui::PopStyleColor(m_pushedStyles);
 		}

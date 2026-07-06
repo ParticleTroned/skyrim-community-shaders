@@ -338,6 +338,22 @@ namespace Util
 	 * for visual consistency. For standalone destructive actions (delete icons, close buttons),
 	 * prefer ErrorButton which uses the brightness-based DestructiveButtonStyle.
 	 */
+	class PerformanceFrameStyleWrapper
+	{
+	public:
+		explicit PerformanceFrameStyleWrapper(bool includeCheckMark = false);
+		~PerformanceFrameStyleWrapper();
+
+		PerformanceFrameStyleWrapper(const PerformanceFrameStyleWrapper&) = delete;
+		PerformanceFrameStyleWrapper& operator=(const PerformanceFrameStyleWrapper&) = delete;
+		PerformanceFrameStyleWrapper(PerformanceFrameStyleWrapper&&) = delete;
+		PerformanceFrameStyleWrapper& operator=(PerformanceFrameStyleWrapper&&) = delete;
+
+	private:
+		int m_pushedStyles;
+		int m_pushedVars;
+	};
+
 	bool ErrorTextButton(const char* label, const ImVec2& size = ImVec2(0, 0));
 
 	/** Draws a destructive theme error-colored button for delete, clear, remove, or irreversible actions. */
@@ -1025,6 +1041,7 @@ namespace Util
 		ImVec4 WithAlpha(ImVec4 color, float alpha);
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha);
 		ImVec4 Lift(ImVec4 color, float amount, float alpha);
+		ImVec4 PerformanceDelta(int direction);
 	}
 
 	/**

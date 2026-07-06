@@ -21,6 +21,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "SceneSettingsManager.h"
@@ -32,8 +33,9 @@
 
 namespace
 {
+	constexpr const char* PERFORMANCE_TUNING_MENU_NAME = "Performance Tuning";
 	// Core built-in menu names that always appear first in the menu list
-	constexpr std::array<const char*, 5> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", "Display" };
+	constexpr std::array<const char*, 6> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", PERFORMANCE_TUNING_MENU_NAME, "Display" };
 	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 	constexpr float FEATURE_VERSION_TEXT_OPACITY = 0.6f;
 
@@ -121,6 +123,33 @@ namespace
 	bool IsCoreMenu(const std::string& menuName)
 	{
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
+	}
+
+	bool IsPerformanceTuningMenuSelected(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t selectedMenu)
+	{
+		if (selectedMenu >= menuList.size())
+			return false;
+
+		const auto* builtInMenu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuList[selectedMenu]);
+		return builtInMenu && builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME;
+	}
+
+	bool TrySelectPerformanceTuningMenu(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t& selectedMenu)
+	{
+		for (size_t i = 0; i < menuList.size(); ++i) {
+			const auto* builtInMenu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuList[i]);
+			if (builtInMenu && builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME) {
+				selectedMenu = i;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool IsPerformanceMeasurementNavigationLocked(size_t listId, size_t selectedMenu)
+	{
+		return PerformanceTuningRenderer::HasActiveMeasurements() && listId != selectedMenu;
 	}
 
 	/**
@@ -316,6 +345,14 @@ void FeatureListRenderer::RenderFeatureList(
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
 
 	HandlePendingFeatureSelection(pendingFeatureSelection, menuList, selectedMenu);
+	if (PerformanceTuningRenderer::HasActiveMeasurements() && !IsPerformanceTuningMenuSelected(menuList, selectedMenu))
+		TrySelectPerformanceTuningMenu(menuList, selectedMenu);
+
+	auto cancelPerformanceMeasurementsIfInactive = [&]() {
+		if (!IsPerformanceTuningMenuSelected(menuList, selectedMenu))
+			PerformanceTuningRenderer::CancelActiveMeasurements(true);
+	};
+	cancelPerformanceMeasurementsIfInactive();
 
 	// Determine if left panel should be visible based on auto-hide settings
 	bool leftPanelVisible = ShouldShowLeftPanel();
@@ -327,10 +364,12 @@ void FeatureListRenderer::RenderFeatureList(
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
+			cancelPerformanceMeasurementsIfInactive();
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		} else {
 			// When left panel is hidden, right column takes full width
 			ImGui::TableSetupColumn("##MenuConfig", 0, 1);
+			cancelPerformanceMeasurementsIfInactive();
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		}
 
@@ -364,7 +403,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
 		BuiltInMenu{ "General", drawGeneralSettings },
 		BuiltInMenu{ "Advanced", drawAdvancedSettings },
-		BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } }
+		BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } },
+		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() { PerformanceTuningRenderer::Render(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
@@ -540,13 +580,19 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
 
+		const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
+		ImGui::BeginDisabled(navigationLocked);
 		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
 			selectedMenuRef = listId;
+		ImGui::EndDisabled();
 
 		ImGui::PopStyleColor();
 	} else {
+		const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
+		ImGui::BeginDisabled(navigationLocked);
 		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
 			selectedMenuRef = listId;
+		ImGui::EndDisabled();
 	}
 }
 
@@ -609,6 +655,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	}
 
 	ImGui::PushID(featureName.c_str());
+	const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
+	ImGui::BeginDisabled(navigationLocked);
 	bool bootEnabled = !isDisabled;
 	if (hasFailedMessage) {
 		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
@@ -636,6 +684,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		selectedMenuRef = listId;
 	}
 	ImGui::PopStyleColor();
+	ImGui::EndDisabled();
 	ImGui::PopID();
 }
 

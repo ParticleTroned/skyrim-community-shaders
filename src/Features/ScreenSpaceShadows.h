@@ -69,6 +69,24 @@ public:
 
 	/** @brief Draws the ImGui settings UI for screen-space shadow configuration. */
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return bendSettings.Enable != 0; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
+	{
+		if (a_enabled) {
+			bendSettings = BendSettings{};
+			return;
+		}
+
+		bendSettings.Enable = 0u;
+	}
+	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
+	{
+		auto state = a_state;
+		LoadSettings(state);
+	}
 
 	/** @brief Releases the compiled raymarch compute shader for recompilation. */
 	virtual void ClearShaderCache() override;

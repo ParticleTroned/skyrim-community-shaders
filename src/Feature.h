@@ -106,6 +106,46 @@ public:
 	virtual void Reset() {}
 	virtual void DrawSettingsHeaderControls() {}
 	virtual void DrawSettings() {}
+	virtual bool HasPerformanceSettings() const { return false; }
+	virtual void DrawPerformanceSettings(bool a_advanced)
+	{
+		(void)a_advanced;
+		DrawSettings();
+	}
+	virtual json CapturePerformanceSettingsState() const
+	{
+		json state;
+		const_cast<Feature*>(this)->SaveSettings(state);
+		return state;
+	}
+	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const { return false; }
+	virtual bool UsesTotalPerformanceCostMeasurement() const { return false; }
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) { (void)a_enabled; }
+	virtual bool IsPerformanceCostMeasurementReady() const { return true; }
+	virtual const char* GetPerformanceCostMeasurementWaitText() const { return "Waiting for settings to apply"; }
+	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
+	{
+		(void)a_targetEnabled;
+		return 2.0;
+	}
+	virtual bool RequiresMenuCloseForPerformanceCostMeasurement(bool a_targetEnabled) const
+	{
+		(void)a_targetEnabled;
+		return false;
+	}
+	virtual bool RequiresMenuCloseForPerformanceCostMeasurementRestore(const json& a_state) const
+	{
+		(void)a_state;
+		return false;
+	}
+	virtual uint32_t GetPerformanceCostMeasurementMenuCloseWaitMs() const { return 5000u; }
+	virtual json CapturePerformanceCostMeasurementState() const { return IsPerformanceCostMeasurementEnabled(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state)
+	{
+		if (a_state.is_boolean())
+			SetPerformanceCostMeasurementEnabled(a_state.get<bool>());
+	}
 	virtual void DrawUnloadedUI();
 
 	virtual void ReflectionsPrepass() {};

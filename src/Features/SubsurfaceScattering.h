@@ -110,6 +110,7 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
 
 	float3 Gaussian(DiffusionProfile& a_profile, float variance, float r);
 	float3 Profile(DiffusionProfile& a_profile, float r);

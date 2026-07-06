@@ -3,7 +3,7 @@
 #include <cmath>
 
 #include "../I18n/I18n.h"
-#include "AdaptiveBalance.h"
+#include "AdaptiveBrightness.h"
 #include "LocationContext.h"
 #include "State.h"
 
@@ -175,8 +175,8 @@ void LinearLighting::PostPostLoad()
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
 	const bool linearLightingEnabled = IsRuntimeEnabled();
-	const bool adaptiveBalanceEnabled = globals::features::adaptiveBalance.IsRuntimeEnabled();
-	const auto effectiveSettings = globals::features::adaptiveBalance.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
+	const bool adaptiveBrightnessEnabled = globals::features::adaptiveBrightness.IsRuntimeEnabled();
+	const auto effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
 
 	auto data = PerFrameData{};
 	data.enableLinearLighting = linearLightingEnabled;
@@ -202,7 +202,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.glowmapMult = effectiveSettings.glowmapMult;
 	data.whiteDiffuseMult = effectiveSettings.whiteDiffuseMult;
 	data.animalWhiteDiffuseMult = effectiveSettings.animalWhiteDiffuseMult;
-	useAnimalWhiteDiffuseCategory = adaptiveBalanceEnabled &&
+	useAnimalWhiteDiffuseCategory = adaptiveBrightnessEnabled &&
 	                                std::abs(effectiveSettings.animalWhiteDiffuseMult - effectiveSettings.whiteDiffuseMult) > 1e-5f;
 	data.effectLightingMult = effectiveSettings.effectLightingMult;
 	data.membraneEffectMult = effectiveSettings.membraneEffectMult;
@@ -210,7 +210,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = effectiveSettings.projectedEffectMult;
 	data.deferredEffectMult = effectiveSettings.deferredEffectMult;
 	data.otherEffectMult = effectiveSettings.otherEffectMult;
-	data.enableAdaptiveBalance = adaptiveBalanceEnabled;
+	data.enableAdaptiveBrightness = adaptiveBrightnessEnabled;
 	return data;
 }
 
@@ -251,7 +251,7 @@ void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
-	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBalance.IsRuntimeEnabled())) {
+	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBrightness.IsRuntimeEnabled())) {
 		auto context = globals::d3d::context;
 		if (!context)
 			return;

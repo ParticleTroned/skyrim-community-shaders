@@ -16,15 +16,15 @@ namespace RE
 	class TESForm;
 }
 
-struct AdaptiveBalance : Feature
+struct AdaptiveBrightness : Feature
 {
-	static constexpr std::string_view kFeatureName = "Adaptive Balance";
-	static constexpr std::string_view kFeatureShortName = "AdaptiveBalance";
-	static constexpr const char* kFeatureDisplayNameKey = "feature.adaptive_balance.name";
+	static constexpr std::string_view kFeatureName = "Adaptive Brightness";
+	static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
+	static constexpr const char* kFeatureDisplayNameKey = "feature.adaptive_brightness.name";
 
-	static AdaptiveBalance* GetSingleton()
+	static AdaptiveBrightness* GetSingleton()
 	{
-		static AdaptiveBalance singleton;
+		static AdaptiveBrightness singleton;
 		return &singleton;
 	}
 
@@ -36,11 +36,11 @@ struct AdaptiveBalance : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			T("feature.adaptive_balance.description", "Blends scene lighting by location and exterior time of day."),
-			{ T("feature.adaptive_balance.key_feature_1", "Separate exterior day and night lighting profiles"),
-				T("feature.adaptive_balance.key_feature_2", "Separate interior, dungeon, and dwelling profiles"),
-				T("feature.adaptive_balance.key_feature_3", "Optional per-location overrides with COC codes"),
-				T("feature.adaptive_balance.key_feature_4", "Per-profile brightness and advanced lighting controls") }
+			T("feature.adaptive_brightness.description", "Blends scene lighting by location and exterior time of day."),
+			{ T("feature.adaptive_brightness.key_feature_1", "Separate exterior day and night lighting profiles"),
+				T("feature.adaptive_brightness.key_feature_2", "Separate interior, dungeon, and dwelling profiles"),
+				T("feature.adaptive_brightness.key_feature_3", "Optional per-location overrides with COC codes"),
+				T("feature.adaptive_brightness.key_feature_4", "Per-profile brightness and advanced lighting controls") }
 		};
 	}
 

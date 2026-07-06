@@ -250,7 +250,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint enableAdaptiveBalance;
+		uint enableAdaptiveBrightness;
 		uint2 pad0;
 	};
 

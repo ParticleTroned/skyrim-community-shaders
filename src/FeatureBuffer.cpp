@@ -105,7 +105,7 @@ namespace
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
 	static_assert(sizeof(LinearLightingSettingsCB) == 128);
-	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBalance) == 116);
+	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBrightness) == 116);
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 	static_assert(sizeof(ExponentialHeightFogSettingsCB) == 192);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);

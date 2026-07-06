@@ -5,7 +5,7 @@
 class ParticleLights;
 
 struct CloudShadows;
-struct AdaptiveBalance;
+struct AdaptiveBrightness;
 struct DynamicCubemaps;
 struct ExtendedMaterials;
 struct GrassCollision;
@@ -65,7 +65,7 @@ namespace globals
 
 	namespace features
 	{
-		extern AdaptiveBalance adaptiveBalance;
+		extern AdaptiveBrightness adaptiveBrightness;
 		extern CloudShadows cloudShadows;
 		extern DynamicCubemaps dynamicCubemaps;
 		extern ExtendedMaterials extendedMaterials;

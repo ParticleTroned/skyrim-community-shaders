@@ -9,7 +9,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float UnderwaterMask : SV_TARGET;
+	float UnderwaterMask: SV_TARGET;
 };
 
 SamplerState LinearSampler : register(s0);
@@ -17,7 +17,9 @@ SamplerState LinearSampler : register(s0);
 Texture2D<float> UnderwaterMask : register(t0);
 #	if defined(VR)
 Texture2D<float> SceneDepth : register(t1);
-#		if !defined(NO_HMD_STENCIL_MASK)
+// The HMD hidden-area stencil must not carve the underwater mask by default:
+// in reduced-resolution VR upscaling it can leave a clear-water HAM silhouette.
+#		if defined(USE_HMD_STENCIL_MASK)
 Texture2D<uint> StencilTex : register(t2);
 #		endif
 #	endif
@@ -29,10 +31,10 @@ cbuffer JitterCB : register(b0)
 	float pad0;
 };
 
-#if defined(VR)
+#	if defined(VR)
 static const float kSkyDepthThreshold = 1e-6;
 
-#	if defined(RAW_SCENE_DEPTH)
+#		if defined(RAW_SCENE_DEPTH)
 float SampleRawDepthClamped(int2 coord, int2 maxCoord)
 {
 	int2 c = clamp(coord, int2(0, 0), maxCoord);
@@ -73,9 +75,9 @@ float SampleRawMinDepth3x3(float2 uv)
 
 	return min(row0, min(row1, row2));
 }
-#	endif
+#		endif
 
-#	if !defined(NO_HMD_STENCIL_MASK)
+#		if defined(USE_HMD_STENCIL_MASK)
 bool IsHiddenStencil(uint2 coord)
 {
 	uint width;
@@ -83,10 +85,10 @@ bool IsHiddenStencil(uint2 coord)
 	StencilTex.GetDimensions(width, height);
 	int2 maxCoord = int2(width, height) - 1;
 
-	[unroll]
-	for (int y = -1; y <= 1; ++y) {
-		[unroll]
-		for (int x = -1; x <= 1; ++x) {
+	[unroll] for (int y = -1; y <= 1; ++y)
+	{
+		[unroll] for (int x = -1; x <= 1; ++x)
+		{
 			int2 sampleCoord = int2(coord) + int2(x, y);
 			if (any(sampleCoord < int2(0, 0)) || any(sampleCoord > maxCoord))
 				continue;
@@ -97,8 +99,8 @@ bool IsHiddenStencil(uint2 coord)
 
 	return false;
 }
+#		endif
 #	endif
-#endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -140,7 +142,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 depthUV = input.TexCoord;
 #		endif
 	uint2 depthCoord = min(uint2(depthUV * float2(depthWidth, depthHeight)), uint2(depthWidth, depthHeight) - 1);
-#		if !defined(NO_HMD_STENCIL_MASK)
+#		if defined(USE_HMD_STENCIL_MASK)
 	if (IsHiddenStencil(depthCoord)) {
 		psout.UnderwaterMask = 0.0;
 		return psout;

@@ -62,10 +62,10 @@ public:
 	bool HasFSRResources() const;
 	bool AreFSRResourcesCompatible(uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_contextCount) const;
 	bool HasRuntimeUpscalerResources() const;
-	bool PollRuntimeUpscalerTeardownReady(const char* a_reason = nullptr);
+	bool PollRuntimeUpscalerTeardownReady();
 	void ReleaseRuntimeUpscalerResourcesForRelatch(bool a_waitForIdle = true);
 	bool HasFSRResourcesPendingTeardown() const;
-	bool PollFSRResourceTeardownReady(const char* a_reason = nullptr);
+	bool PollFSRResourceTeardownReady();
 	void ResetFSRIdleFence();
 	void ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
@@ -145,9 +145,6 @@ private:
 	HMODULE frameGenerationModule = nullptr;
 	HMODULE runtimeUpscalerModule = nullptr;
 
-	// Flag to prevent spamming the log with FSR3 dispatch crash messages
-	bool fsrDispatchCrashLogged = false;
-
 	enum class RuntimeUpscalerFramePath : uint8_t
 	{
 		kInactive = 0,
@@ -183,7 +180,7 @@ private:
 	bool WaitForRuntimeD3D12Fence(uint64_t a_value);
 	bool EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight, uint32_t a_contextCount, uint32_t a_requestedVersion);
 	void WaitForRuntimeUpscalerIdle();
-	bool PollRuntimeUpscalerTeardownIdle(const char* a_reason);
+	bool PollRuntimeUpscalerTeardownIdle();
 	bool EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, uint32_t a_fullRenderWidth, uint32_t a_fullRenderHeight, uint32_t a_fullDisplayWidth, uint32_t a_fullDisplayHeight,
 		const D3D11_TEXTURE2D_DESC& a_colorDesc,
 		const D3D11_TEXTURE2D_DESC& a_depthDesc,

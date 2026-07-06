@@ -305,7 +305,6 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			upscaling.GetEffectiveDLSSPreset(),
-			"CS API upscaler preset change",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
@@ -345,7 +344,6 @@ namespace CSPluginAPI
 				upscaling.GetPerfModeRequested(),
 				upscaling.GetEffectiveDLSSQualityMode(),
 				dlssPreset,
-				"CS API legacy DLSS profile change",
 				Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 			return;
 		}
@@ -369,7 +367,6 @@ namespace CSPluginAPI
 
 		globals::features::upscaling.SetPerfModeRequested(
 			enabled,
-			"CS API render-scale mode change",
 			true,
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
@@ -400,7 +397,6 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
-			"CS API legacy DLSS-preferred VR upscaling transition profile",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
@@ -424,7 +420,6 @@ namespace CSPluginAPI
 			upscaling.IsRenderScaleModeRequested(),
 			upscaling.GetEffectiveDLSSQualityMode(),
 			upscaling.GetEffectiveDLSSPreset(),
-			"CS API upscaler method change",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 
@@ -453,7 +448,6 @@ namespace CSPluginAPI
 			renderScaleModeEnabled,
 			qualityMode,
 			dlssPreset,
-			"CS API VR method-specific upscaling transition profile",
 			Upscaling::VRUpscalingTransitionOrigin::VRAPI);
 	}
 

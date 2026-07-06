@@ -72,8 +72,6 @@ public:
 	PFun_slEvaluateFeature* slEvaluateFeature{};
 	PFun_slAllocateResources* slAllocateResources{};
 	PFun_slFreeResources* slFreeResources{};
-	PFun_slGetFeatureRequirements* slGetFeatureRequirements{};
-	PFun_slGetFeatureVersion* slGetFeatureVersion{};
 	PFun_slUpgradeInterface* slUpgradeInterface{};
 	PFun_slSetConstants* slSetConstants{};
 	PFun_slGetNativeInterface* slGetNativeInterface{};
@@ -163,13 +161,9 @@ public:
 	uint32_t lastReflexSleepFrame = UINT32_MAX;
 	bool lastDLSSFailureDuplicatedConstants = false;
 
-	struct DLSSDispatchDiagnostics
+	struct DLSSDispatchSignature
 	{
-		const char* label = "DLSS Evaluate";
 		uint32_t frame = 0;
-		uint32_t eyeIndex = 0;
-		sl::ViewportHandle requestedViewport{ 0 };
-		sl::ViewportHandle resolvedViewport{ 0 };
 		sl::Extent extentIn{};
 		sl::Extent extentOut{};
 		uint32_t outputWidth = 0;
@@ -177,35 +171,7 @@ public:
 		uint32_t qualityMode = 0;
 		uint32_t dlssPreset = 0;
 		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye;
-		float viewportScaleX = 1.0f;
-		float viewportScaleY = 1.0f;
-		bool croppedViewport = false;
-		float pinholeOffsetX = 0.0f;
-		float pinholeOffsetY = 0.0f;
-		float jitterX = 0.0f;
-		float jitterY = 0.0f;
-		bool colorBuffersHDR = false;
 		bool submitStageVRDLSS = false;
-		bool presentationUpscalingActive = false;
-		bool renderScaleActive = false;
-		bool foveatedDispatchEnabled = false;
-		bool peripheryTAAEnabled = false;
-		bool historyResetRequested = false;
-		bool optionsCacheValid = false;
-		uint32_t optionsCacheViewport = UINT32_MAX;
-		uint32_t optionsCacheOutputWidth = 0;
-		uint32_t optionsCacheOutputHeight = 0;
-		uint32_t optionsCacheQualityMode = 0;
-		uint32_t optionsCacheDLSSPreset = 0;
-		bool optionsCacheHDR = false;
-		bool optionsCacheLegacyProfile = false;
-		sl::FrameToken* frameToken = nullptr;
-		ID3D11Resource* colorIn = nullptr;
-		ID3D11Resource* colorOut = nullptr;
-		ID3D11Resource* depth = nullptr;
-		ID3D11Resource* motionVectors = nullptr;
-		ID3D11Resource* reactiveMask = nullptr;
-		ID3D11Resource* transparencyMask = nullptr;
 	};
 
 	// Helper: Execute DLSS for a single viewport with given resources
@@ -213,7 +179,7 @@ public:
 		ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 		ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
-		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const char* label = "DLSS Evaluate",
+		float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f,
 		DLSSViewportRole viewportRole = DLSSViewportRole::FullEye);
 
 	// Cached DLL version info for Streamline plugin directory
@@ -225,7 +191,7 @@ public:
 
 	void PostDevice();
 
-	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchDiagnostics* diagnostics = nullptr);
+	bool CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex = 0, float viewportScaleX = 1.0f, float viewportScaleY = 1.0f, float pinholeOffsetX = 0.0f, float pinholeOffsetY = 0.0f, const DLSSDispatchSignature* signature = nullptr);
 	bool EnsureFrameToken();
 
 	bool IsRTXAndBelow40Series(IDXGIAdapter* a_adapter);
@@ -233,10 +199,10 @@ public:
 	bool ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset, sl::ViewportHandle& outViewport);
 	int FindVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t qualityMode, uint32_t dlssPreset) const;
 	int ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportRole) const;
-	bool FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures);
-	bool FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures);
+	bool FreeDLSSViewportResources(sl::ViewportHandle a_viewport);
+	bool FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex);
 	DLSSOptionsCache& GetDLSSOptionsCache(DLSSViewportRole viewportRole, uint32_t eyeIndex, uint32_t qualityMode, uint32_t dlssPreset);
-	bool SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics = nullptr);
+	bool SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset);
 	void InvalidateDLSSOptionsCache();
 	void ResetDLSSIdleFences();
 	void ResetFrameTracking();

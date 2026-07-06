@@ -213,7 +213,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		{
 			if (errors.empty()) {
 				const bool newGame = message->type == SKSE::MessagingInterface::kNewGame;
-				globals::features::upscaling.NotifyGameLoadStarted(newGame);
+				globals::features::upscaling.NotifyGameLoadStarted();
 				if (globals::state) {
 					const uint32_t frame = globals::state->frameCount;
 					globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);

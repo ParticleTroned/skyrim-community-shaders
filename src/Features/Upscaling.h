@@ -16,11 +16,6 @@
 #include <vector>
 #include <winrt/base.h>
 
-namespace RE
-{
-	class RaceSexMenu;
-}
-
 /**
  * @brief Provides upscaling functionality including DLSS, FSR and TAA.
  *
@@ -154,7 +149,6 @@ public:
 		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
-		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.9f;
 		float sharpnessDLSS = 0.9f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::LumaUnsharp);
@@ -522,17 +516,17 @@ public:
 	bool IsVRRenderScaleModeActive() const;
 	VRRenderScaleStatus GetVRRenderScaleModeStatus() const;
 	static const char* GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status);
-	void SetVRRenderScaleModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	void SetVRRenderScaleModeRequested(bool a_enabled, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
 	bool GetPerfModeRequested() const;
-	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
-	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	void SetPerfModeRequested(bool a_enabled, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	void ApplyCSMenuUpscalingTransition(UpscaleMethod a_targetMethod, bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
+	void SetVRUpscalingTransitionProfile(bool a_renderScaleModeEnabled, uint32_t a_qualityMode, uint32_t a_dlssPreset, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	uint32_t GetVRUpscalingApplyBlockReasonsForAPI() const;
-	void RequestPerfModeRenderTargetRecreate(const char* a_reason = nullptr, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr);
-	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
+	void RequestPerfModeRenderTargetRecreate(VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu, const PerfModeState::BootSnapshot* a_recoverySnapshot = nullptr);
+	bool ApplyPendingPerfModeRenderTargetRecreate();
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t& a_height, bool a_allowCreate = false);
 	bool ConsumePerfModeBootLatchCreate();
@@ -711,7 +705,7 @@ public:
 	};
 	bool TryReplaceVanillaDynamicResolutionUpsample(const char* a_passName, DynamicResolutionUpsampleStage a_stage);
 	void Upscale();
-	void NotifyGameLoadStarted(bool a_newGame);
+	void NotifyGameLoadStarted();
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
 
@@ -888,27 +882,22 @@ public:
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryFrame{ 0 };
 	std::atomic<uint32_t> submitStageFoveatedVendorRetryMethod{ static_cast<uint32_t>(UpscaleMethod::kNONE) };
 	std::atomic<uint32_t> vrFSRRelatchDrainGeneration{ 0 };
-	std::atomic_bool vrFSRRelatchDrainLogged{ false };
 	std::atomic<uint32_t> vrRenderScaleRapidRelatchFrame{ 0 };
 	std::atomic<uint32_t> vrRenderScaleRapidRelatchCount{ 0 };
 	std::atomic<uint32_t> vrRenderScaleMemoryReliefEndFrame{ 0 };
 	std::atomic<uint32_t> vrRenderScaleMemoryReliefCleanEyeMask{ 0 };
-	std::atomic_bool vrRenderScaleMemoryReliefLogged{ false };
 	std::atomic_bool vrLowPeakNativeRestoreCleanupActive{ false };
 	VRRenderScaleRelatchSignature vrRenderScaleLastRapidRelatchSignature{};
 	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipFrame{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidRenderScaleFlipCount{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidTransitionGuardEndFrame{ 0 };
 	std::atomic<uint32_t> vrDLSSRapidTransitionCleanEyeMask{ 0 };
-	std::atomic_bool vrDLSSRapidTransitionGuardLogged{ false };
 	uint32_t submitStageMirrorFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageMirrorEyeReady = {};
 	ID3D11Texture2D* submitStageMirrorSourceTexture = nullptr;
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
-	bool vrRenderScaleInfoTransitionPending = false;
-	uint32_t vrRenderScaleInfoTransitionStartFrame = 0;
 
 	void CopySharedD3D12Resources();
 	void PostDisplay();
@@ -916,16 +905,13 @@ public:
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
-	void BeginVRRenderScaleInfoTransition(const char* a_reason = nullptr);
-	void CompleteVRRenderScaleInfoTransition(const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
-	void ClearVRRenderScaleInfoTransition();
 	void RecordVRRenderScaleRelatch(const VRRenderScaleRelatchSignature& a_signature, bool a_previousActive, UpscaleMethod a_previousMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	void MaybeArmVRRenderScaleMemoryRelief(const VRRenderScaleRelatchSignature& a_signature, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	bool IsVRRenderScaleMemoryReliefActive();
 	bool HasPendingVRIntermediateTextureCleanup() const;
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
-	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);
+	void ApplyVRRenderScaleMemoryReliefTransitionCleanup();
 	void RecordVRRenderScaleFullEyeEvaluation(UpscaleMethod a_upscaleMethod, uint32_t a_eyeIndex, bool a_success);
 	void RecordVRDLSSRenderScaleRelatch(bool a_previousActive, bool a_currentActive, UpscaleMethod a_previousMethod, UpscaleMethod a_currentMethod, VRUpscalingTransitionOrigin a_origin, uint32_t a_frame);
 	bool ShouldBypassVRDLSSFoveatedForRapidTransition();
@@ -1096,7 +1082,7 @@ private:
 	bool ResetVRVendorRuntimeResources(bool a_destroyDLSSResources, bool a_destroyPeripheryTAAResources, bool a_destroyFSRResources = true, bool a_waitForFSRIdleTeardown = false, bool a_fsrTeardownAlreadyReady = false);
 	void RecreateVendorRuntimeResources(UpscaleMethod a_upscaleMethod, bool a_recreateTemporalResources);
 	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
-	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod, const char* a_context);
+	bool ApplyPendingVendorRuntimeReset(UpscaleMethod a_upscaleMethod);
 	void UpdateDepthUpscaleKernelState(JitterCB& a_jitterData, bool a_enableWideKernelLogic);
 	enum class HMDMaskClearPhase : uint8_t
 	{
@@ -1126,7 +1112,6 @@ private:
 		ID3D11Resource* reactiveMask = nullptr;
 		ID3D11Resource* transparencyMask = nullptr;
 		ID3D11Resource* colorOut = nullptr;
-		const char* label = "vendor eye dispatch";
 		Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FullEye;
 	};
 	bool DispatchVendorEyeRegion(UpscaleMethod a_upscaleMethod, const VendorEyeDispatchParams& params);
@@ -1167,9 +1152,6 @@ private:
 	OpenCompositeUpscalingBlocker GetOpenCompositeUpscalingBlocker(bool a_forceRefresh = false) const;
 	void ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh = false);
 
-	bool openCompositeUpscalingBackendSkipLogged = false;
-	bool renderDocUpscalingBackendSkipLogged = false;
-
 	struct Main_UpdateJitter
 	{
 		static void thunk(RE::BSGraphics::State* a_state);
@@ -1203,12 +1185,6 @@ private:
 	struct BSFaceGenManager_UpdatePendingCustomizationTextures
 	{
 		static void thunk();
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct RaceSexMenu_ChangeName
-	{
-		static void thunk(RE::RaceSexMenu* a_this, const char* a_name);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

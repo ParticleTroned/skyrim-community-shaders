@@ -29,12 +29,6 @@ namespace
 
 	void* s_fidelityFxDllDirectoryCookie = nullptr;
 
-	bool ShouldEmitFidelityFXDiagLogs()
-	{
-		auto* state = globals::state;
-		return state && state->IsDeveloperMode();
-	}
-
 	enum class D3D11IdleFenceResult : uint8_t
 	{
 		Ready,
@@ -51,7 +45,7 @@ namespace
 		a_query = nullptr;
 	}
 
-	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
+	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query)
 	{
 		if (!a_context) {
 			ReleaseD3D11IdleFence(a_query);
@@ -69,7 +63,6 @@ namespace
 			if (dataResult == S_FALSE || dataResult == S_OK)
 				return D3D11IdleFenceResult::Pending;
 
-			logger::debug("[FidelityFX] D3D11 idle fence poll failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
 			ReleaseD3D11IdleFence(a_query);
 			return D3D11IdleFenceResult::Failed;
 		};
@@ -92,7 +85,6 @@ namespace
 
 		if (FAILED(createResult) || !a_query) {
 			a_context->Flush();
-			logger::debug("[FidelityFX] D3D11 idle fence creation failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(createResult));
 			return D3D11IdleFenceResult::Failed;
 		}
 
@@ -254,16 +246,6 @@ namespace
 		return {};
 	}
 
-	void RuntimeFfxMessage(uint32_t a_type, const wchar_t* a_message)
-	{
-		const std::string message = stl::utf16_to_utf8(a_message ? a_message : L"").value_or("unknown FidelityFX runtime message");
-		if (a_type == FFX_API_MESSAGE_TYPE_ERROR) {
-			logger::error("[FidelityFX] {}", message);
-		} else {
-			logger::warn("[FidelityFX] {}", message);
-		}
-	}
-
 	void EnsureFidelityFxDllDirectory(const std::filesystem::path& a_pluginDir)
 	{
 		if (s_fidelityFxDllDirectoryCookie) {
@@ -272,30 +254,20 @@ namespace
 
 		auto kernel32 = GetModuleHandleW(L"kernel32.dll");
 		if (!kernel32) {
-			logger::warn("[FidelityFX] Could not get kernel32 module while preparing FidelityFX DLL search path");
 			return;
 		}
 
 		using AddDllDirectoryFn = void*(WINAPI*)(PCWSTR);
 		auto addDllDirectory = reinterpret_cast<AddDllDirectoryFn>(GetProcAddress(kernel32, "AddDllDirectory"));
 		if (!addDllDirectory) {
-			logger::warn("[FidelityFX] AddDllDirectory is unavailable; FidelityFX provider discovery will rely on explicit DLL loads");
 			return;
 		}
 
 		s_fidelityFxDllDirectoryCookie = addDllDirectory(a_pluginDir.c_str());
-		if (!s_fidelityFxDllDirectoryCookie) {
-			logger::warn(
-				"[FidelityFX] Failed to add FidelityFX DLL directory {} (error {})",
-				stl::utf16_to_utf8(a_pluginDir.wstring()).value_or("<unknown>"),
-				GetLastError());
-		}
 	}
 
-	HMODULE LoadFidelityFxDll(const std::filesystem::path& a_path, DWORD& a_error)
+	HMODULE LoadFidelityFxDll(const std::filesystem::path& a_path)
 	{
-		a_error = ERROR_SUCCESS;
-
 		constexpr DWORD kLoadFlags =
 			LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
 			LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
@@ -306,19 +278,11 @@ namespace
 			return module;
 		}
 
-		a_error = GetLastError();
-		logger::warn(
-			"[FidelityFX] LoadLibraryEx failed for {} with error {}; retrying legacy LoadLibrary",
-			stl::utf16_to_utf8(a_path.wstring()).value_or("<unknown>"),
-			a_error);
-
 		module = LoadLibraryW(a_path.c_str());
 		if (module) {
-			a_error = ERROR_SUCCESS;
 			return module;
 		}
 
-		a_error = GetLastError();
 		return nullptr;
 	}
 
@@ -340,10 +304,6 @@ namespace
 
 		auto countResult = ffxModule.Query(nullptr, &countQuery.header);
 		if (countResult != FFX_API_RETURN_OK || versionCount == 0) {
-			logger::warn(
-				"[FidelityFX] Runtime upscaler version query failed or returned no versions (code {}, count {})",
-				static_cast<uint32_t>(countResult),
-				versionCount);
 			return false;
 		}
 
@@ -361,26 +321,13 @@ namespace
 
 		auto versionsResult = ffxModule.Query(nullptr, &versionsQuery.header);
 		if (versionsResult != FFX_API_RETURN_OK) {
-			logger::warn("[FidelityFX] Runtime upscaler version enumeration failed with code {}", static_cast<uint32_t>(versionsResult));
 			return false;
 		}
 
-		const auto requestedVersion = UpscalerVersionToString(a_requestedVersion);
 		const auto resultCount = std::min<size_t>(versionIds.size(), returnedVersionCount);
-
-		logger::debug(
-			"[FidelityFX] Runtime upscaler reported {} version provider(s); requested FSR version {}",
-			resultCount,
-			requestedVersion);
 
 		for (size_t i = 0; i < resultCount; ++i) {
 			const std::string versionName = versionNames[i] ? versionNames[i] : "";
-			logger::debug(
-				"[FidelityFX] Runtime upscaler version provider {}: '{}' (id 0x{:X})",
-				i,
-				versionName.empty() ? "(unnamed)" : versionName,
-				versionIds[i]);
-
 			if (versionIds[i] == a_requestedVersion ||
 				RuntimeProviderIdMatchesVersion(versionIds[i], a_requestedVersion) ||
 				RuntimeProviderNameMatchesVersion(versionName, a_requestedVersion)) {
@@ -390,19 +337,7 @@ namespace
 			}
 		}
 
-		logger::warn(
-			"[FidelityFX] Runtime upscaler did not report requested FSR version {}; falling back to upscaler version descriptor",
-			requestedVersion);
 		return false;
-	}
-
-	std::string FfxCreateResultText(bool a_attempted, ffxReturnCode_t a_result)
-	{
-		if (!a_attempted) {
-			return "not attempted";
-		}
-
-		return std::format("code {}", static_cast<uint32_t>(a_result));
 	}
 
 	enum class RuntimeUpscalerCreateAttempt : uint8_t
@@ -417,7 +352,6 @@ namespace
 	{
 		RuntimeUpscalerCreateAttempt attempt;
 		bool enabled;
-		bool attempted = false;
 		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
 	};
 
@@ -510,15 +444,13 @@ namespace
 		}
 	}
 
-	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters, bool& a_crashed)
+	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters)
 	{
-		a_crashed = false;
 		bool dispatchOk = true;
 
 		__try {
 			dispatchOk = ffxFsr3ContextDispatchUpscale(&a_context, &a_dispatchParameters) == FFX_OK;
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
-			a_crashed = true;
 			dispatchOk = false;
 		}
 
@@ -544,52 +476,23 @@ void FidelityFX::LoadFFX()
 
 	const bool framegenDllExists = std::filesystem::exists(framegenPath);
 	const bool upscalerDllExists = std::filesystem::exists(upscalerPath);
-	DWORD framegenLoadError = ERROR_SUCCESS;
-	DWORD upscalerLoadError = ERROR_SUCCESS;
-	DWORD loaderLoadError = ERROR_SUCCESS;
-
 	if (!module) {
-		module = LoadFidelityFxDll(loaderPath, loaderLoadError);
+		module = LoadFidelityFxDll(loaderPath);
 	}
 	if (!frameGenerationModule && framegenDllExists) {
-		frameGenerationModule = LoadFidelityFxDll(framegenPath, framegenLoadError);
+		frameGenerationModule = LoadFidelityFxDll(framegenPath);
 	}
 	if (!runtimeUpscalerModule && upscalerDllExists) {
-		runtimeUpscalerModule = LoadFidelityFxDll(upscalerPath, upscalerLoadError);
+		runtimeUpscalerModule = LoadFidelityFxDll(upscalerPath);
 	}
 
 	featureFSR3FG = frameGenerationModule != nullptr;
 	featureRuntimeUpscaler = runtimeUpscalerModule != nullptr;
 
 	FidelityFX::dllVersions = Util::EnumerateDllVersions(pluginDir);
-	for (const auto& [name, versionStr] : FidelityFX::dllVersions)
-		logger::info("[FidelityFX] {} version: {}", name, versionStr);
 
 	if (module) {
 		ffxLoadFunctions(&ffxModule, module);
-		logger::info("[FidelityFX] Loader DLL loaded successfully from plugin directory");
-	} else {
-		logger::error("[FidelityFX] Failed to load {} from plugin directory (Win32 error {})",
-			stl::utf16_to_utf8(kLoaderDllName).value_or("loader DLL"),
-			loaderLoadError);
-	}
-
-	if (featureFSR3FG) {
-		logger::info("[FidelityFX] Frame generation DLL loaded and available");
-	} else if (framegenDllExists) {
-		logger::warn("[FidelityFX] Frame generation DLL found but failed to load (Win32 error {}) - FSR3 frame generation disabled",
-			framegenLoadError);
-	} else {
-		logger::warn("[FidelityFX] Frame generation DLL not found - FSR3 frame generation disabled");
-	}
-
-	if (featureRuntimeUpscaler) {
-		logger::info("[FidelityFX] Runtime upscaler DLL loaded; runtime availability will be verified during context creation");
-	} else if (upscalerDllExists) {
-		logger::warn("[FidelityFX] Runtime upscaler DLL found but failed to load (Win32 error {}) - runtime FSR path disabled",
-			upscalerLoadError);
-	} else {
-		logger::warn("[FidelityFX] Runtime upscaler DLL not found - runtime FSR path disabled");
 	}
 }
 
@@ -734,8 +637,6 @@ void FidelityFX::LatchRuntimeUpscalerFailure()
 		return;
 
 	runtimeUpscalerFailureLatched = true;
-	logger::warn("[FidelityFX] Runtime upscaler path latched off after failure; using {} until runtime resources are reset, FSR resources are rebuilt, or the method changes.",
-		GetHostFsrSdkLabel());
 }
 
 void FidelityFX::LatchRuntimeFsr4Failure()
@@ -744,8 +645,6 @@ void FidelityFX::LatchRuntimeFsr4Failure()
 		return;
 
 	runtimeFsr4FailureLatched = true;
-	logger::warn("[FidelityFX] Runtime FSR4 path failed; falling back to {} until runtime resources are reset, FSR resources are rebuilt, or the method changes.",
-		GetRuntimeUpscalerLabel(Fsr3Version));
 }
 
 FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const
@@ -786,8 +685,7 @@ void FidelityFX::SetupFrameGeneration()
 	ffx::CreateBackendDX12Desc backendDesc{};
 	backendDesc.device = swapChain.d3d12Device.get();
 
-	if (ffx::CreateContext(frameGenContext, nullptr, createFg, backendDesc) != ffx::ReturnCode::Ok)
-		logger::critical("[FidelityFX] Failed to create frame generation context!");
+	(void)ffx::CreateContext(frameGenContext, nullptr, createFg, backendDesc);
 }
 
 void FidelityFX::Present(bool a_useFrameGeneration)
@@ -830,15 +728,13 @@ void FidelityFX::Present(bool a_useFrameGeneration)
 	configParameters.generationRect.width = swapChain.swapChainDesc.Width;
 	configParameters.generationRect.height = swapChain.swapChainDesc.Height;
 
-	if (ffx::Configure(frameGenContext, configParameters) != ffx::ReturnCode::Ok)
-		logger::critical("[FidelityFX] Failed to configure frame generation!");
+	(void)ffx::Configure(frameGenContext, configParameters);
 
 	ffx::ConfigureDescFrameGenerationSwapChainRegisterUiResourceDX12 uiConfig{};
 	uiConfig.uiResource = ffxApiGetResourceDX12(swapChain.uiBufferWrapped->resource.get());
 	uiConfig.flags = FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_USE_PREMUL_ALPHA | FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_ENABLE_INTERNAL_UI_DOUBLE_BUFFERING;
 
-	if (ffx::Configure(swapChainContext, uiConfig) != ffx::ReturnCode::Ok)
-		logger::critical("[FidelityFX] Failed to configure UI composition!");
+	(void)ffx::Configure(swapChainContext, uiConfig);
 
 	if (a_useFrameGeneration) {
 		ffx::DispatchDescFrameGenerationPrepare dispatchParameters{};
@@ -879,8 +775,7 @@ void FidelityFX::Present(bool a_useFrameGeneration)
 		cameraConfig.cameraPosition[1] = globals::game::frameBufferCached.GetCameraPosAdjust().y;
 		cameraConfig.cameraPosition[2] = globals::game::frameBufferCached.GetCameraPosAdjust().z;
 
-		if (ffx::Dispatch(frameGenContext, dispatchParameters, cameraConfig) != ffx::ReturnCode::Ok)
-			logger::critical("[FidelityFX] Failed to dispatch frame generation!");
+		(void)ffx::Dispatch(frameGenContext, dispatchParameters, cameraConfig);
 	}
 
 	frameID++;
@@ -891,7 +786,6 @@ void FidelityFX::CreateFSRResources()
 {
 	auto state = globals::state;
 	if (!state) {
-		logger::critical("[FidelityFX] Missing global state when creating FSR resources.");
 		fsrContextCount = 0;
 		fsrContextMaxRenderWidth = 0;
 		fsrContextMaxRenderHeight = 0;
@@ -907,7 +801,6 @@ void FidelityFX::CreateFSRResources()
 	DestroyRuntimeUpscalerResources(false);
 
 	if (fsrScratchBuffer) {
-		logger::warn("[FidelityFX] FSR resources already created, skipping allocation");
 		return;
 	}
 
@@ -919,7 +812,6 @@ void FidelityFX::CreateFSRResources()
 	const size_t scratchBufferSize = ffxGetScratchMemorySizeDX11(numContexts);
 	fsrScratchBuffer = calloc(scratchBufferSize, 1);
 	if (!fsrScratchBuffer) {
-		logger::critical("[FidelityFX] Failed to allocate FSR3 scratch buffer memory!");
 		fsrContextCount = 0;
 		fsrContextMaxRenderWidth = 0;
 		fsrContextMaxRenderHeight = 0;
@@ -931,7 +823,6 @@ void FidelityFX::CreateFSRResources()
 
 	FfxInterface fsrInterface{};
 	if (ffxGetInterfaceDX11(&fsrInterface, fsrDevice, fsrScratchBuffer, scratchBufferSize, numContexts) != FFX_OK) {
-		logger::critical("[FidelityFX] Failed to initialize FSR3 backend interface!");
 		free(fsrScratchBuffer);
 		fsrScratchBuffer = nullptr;
 		fsrContextCount = 0;
@@ -952,26 +843,6 @@ void FidelityFX::CreateFSRResources()
 	const uint32_t requestedRenderHeight = static_cast<uint32_t>(renderSize.y);
 	const uint32_t renderWidth = splitPerEyeContexts ? displayWidth : requestedRenderWidth;
 	const uint32_t renderHeight = splitPerEyeContexts ? displayHeight : requestedRenderHeight;
-	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
-	if (emitDiagLogs) {
-		const bool amdAdapter = IsAmdAdapterDetected();
-		const bool runtimeUpscalerPresent = IsRuntimeUpscalerPresent();
-		const bool runtimeFsr4AutoEligible = IsRuntimeFsr4AutoEligible();
-		logger::debug(
-			"[FidelityFX][Diag] CreateFSRResources plan amd={} rdna4={} runtimeUpscaler={} runtimeFsr4={} contexts={} display={}x{} requestedRender={}x{} maxRender={}x{} splitPerEye={}",
-			amdAdapter ? "yes" : "no",
-			runtimeFsr4AutoEligible ? "yes" : "no",
-			(runtimeUpscalerPresent && amdAdapter) ? "yes" : "no",
-			(runtimeUpscalerPresent && runtimeFsr4AutoEligible) ? "yes" : "no",
-			numContexts,
-			displayWidth,
-			displayHeight,
-			requestedRenderWidth,
-			requestedRenderHeight,
-			renderWidth,
-			renderHeight,
-			splitPerEyeContexts ? "yes" : "no");
-	}
 
 	for (uint32_t i = 0; i < numContexts; ++i) {
 		FfxFsr3ContextDescription contextDescription{};
@@ -985,7 +856,6 @@ void FidelityFX::CreateFSRResources()
 		contextDescription.backendInterfaceUpscaling = fsrInterface;
 
 		if (ffxFsr3ContextCreate(&fsrContext[i], &contextDescription) != FFX_OK) {
-			logger::critical("[FidelityFX] Failed to initialize FSR3 context for eye {}!", i);
 			for (uint32_t j = 0; j < i; ++j)
 				ffxFsr3ContextDestroy(&fsrContext[j]);
 			free(fsrScratchBuffer);
@@ -1004,10 +874,6 @@ void FidelityFX::CreateFSRResources()
 	fsrContextMaxRenderHeight = renderHeight;
 	fsrContextDisplayWidth = displayWidth;
 	fsrContextDisplayHeight = displayHeight;
-	if (emitDiagLogs) {
-		logger::debug("[FidelityFX] Created {} FSR3 contexts (Display: {}x{}, MaxRender: {}x{}, RequestedRender: {}x{}, SplitPerEye={})",
-			numContexts, displayWidth, displayHeight, renderWidth, renderHeight, requestedRenderWidth, requestedRenderHeight, splitPerEyeContexts);
-	}
 }
 
 void FidelityFX::DestroyRuntimeUpscalerContexts(bool a_waitForIdle)
@@ -1016,8 +882,8 @@ void FidelityFX::DestroyRuntimeUpscalerContexts(bool a_waitForIdle)
 		WaitForRuntimeUpscalerIdle();
 
 	for (uint32_t i = 0; i < std::size(runtimeUpscalerContexts); ++i) {
-		if (runtimeUpscalerContexts[i] && ffx::DestroyContext(runtimeUpscalerContexts[i]) != ffx::ReturnCode::Ok)
-			logger::warn("[FidelityFX] Failed to destroy runtime upscaler context {} cleanly.", i);
+		if (runtimeUpscalerContexts[i])
+			(void)ffx::DestroyContext(runtimeUpscalerContexts[i]);
 		runtimeUpscalerContexts[i] = nullptr;
 	}
 
@@ -1040,8 +906,7 @@ void FidelityFX::WaitForRuntimeUpscalerIdle()
 			const uint64_t d3d11FenceValue = runtimeFenceValue++;
 			DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), d3d11FenceValue));
 			swapChain.d3d11Context->Flush();
-			if (!WaitForRuntimeD3D12Fence(d3d11FenceValue))
-				logger::warn("[FidelityFX] Timed out waiting for runtime upscaler D3D11 work before teardown.");
+			(void)WaitForRuntimeD3D12Fence(d3d11FenceValue);
 		} else if (globals::d3d::context) {
 			globals::d3d::context->Flush();
 		}
@@ -1049,8 +914,7 @@ void FidelityFX::WaitForRuntimeUpscalerIdle()
 		if (swapChain.commandQueue && runtimeD3D12Fence) {
 			const uint64_t d3d12FenceValue = runtimeFenceValue++;
 			DX::ThrowIfFailed(swapChain.commandQueue->Signal(runtimeD3D12Fence.get(), d3d12FenceValue));
-			if (!WaitForRuntimeD3D12Fence(d3d12FenceValue))
-				logger::warn("[FidelityFX] Timed out waiting for runtime upscaler D3D12 work before teardown.");
+			(void)WaitForRuntimeD3D12Fence(d3d12FenceValue);
 		}
 
 		if (runtimeD3D12Fence) {
@@ -1061,9 +925,8 @@ void FidelityFX::WaitForRuntimeUpscalerIdle()
 			}
 		}
 	} catch (const std::exception& e) {
-		logger::warn("[FidelityFX] Failed to wait for runtime upscaler idle before teardown: {}", e.what());
+		(void)e;
 	} catch (...) {
-		logger::warn("[FidelityFX] Failed to wait for runtime upscaler idle before teardown.");
 	}
 }
 
@@ -1113,10 +976,9 @@ bool FidelityFX::EnsureRuntimeCommandContexts()
 			DX::ThrowIfFailed(commandContext.commandList->Close());
 		}
 	} catch (const std::exception& e) {
-		logger::error("[FidelityFX] Failed to create runtime upscaler command contexts: {}", e.what());
+		(void)e;
 		return false;
 	} catch (...) {
-		logger::error("[FidelityFX] Failed to create runtime upscaler command contexts.");
 		return false;
 	}
 
@@ -1159,11 +1021,6 @@ FidelityFX::RuntimeCommandContext* FidelityFX::AcquireRuntimeCommandContext()
 		return nullptr;
 
 	if (!WaitForRuntimeD3D12Fence(waitValue)) {
-		static bool loggedCommandPoolExhausted = false;
-		if (!loggedCommandPoolExhausted) {
-			logger::warn("[FidelityFX] Runtime upscaler command context pool exhausted; skipping dispatch instead of reusing an in-flight command allocator.");
-			loggedCommandPoolExhausted = true;
-		}
 		return nullptr;
 	}
 
@@ -1240,9 +1097,8 @@ bool FidelityFX::HasRuntimeUpscalerResources() const
 	return hasRuntimeResources;
 }
 
-bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
+bool FidelityFX::PollRuntimeUpscalerTeardownIdle()
 {
-	const char* reason = a_reason && *a_reason ? a_reason : "runtime upscaler teardown";
 	auto& swapChain = globals::features::upscaling.dx12SwapChain;
 	if (!runtimeD3D12Fence && !runtimeD3D11Fence) {
 		pendingRuntimeTeardownD3D11FenceValue = 0;
@@ -1286,12 +1142,11 @@ bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
 			pendingRuntimeTeardownD3D12FenceValue = 0;
 		}
 	} catch (const std::exception& e) {
-		logger::warn("[FidelityFX] Failed to poll runtime upscaler idle before {}: {}", reason, e.what());
+		(void)e;
 		pendingRuntimeTeardownD3D11FenceValue = 0;
 		pendingRuntimeTeardownD3D12FenceValue = 0;
 		return true;
 	} catch (...) {
-		logger::warn("[FidelityFX] Failed to poll runtime upscaler idle before {}.", reason);
 		pendingRuntimeTeardownD3D11FenceValue = 0;
 		pendingRuntimeTeardownD3D12FenceValue = 0;
 		return true;
@@ -1300,7 +1155,7 @@ bool FidelityFX::PollRuntimeUpscalerTeardownIdle(const char* a_reason)
 	return true;
 }
 
-bool FidelityFX::PollRuntimeUpscalerTeardownReady(const char* a_reason)
+bool FidelityFX::PollRuntimeUpscalerTeardownReady()
 {
 	if (!HasRuntimeUpscalerResources()) {
 		pendingRuntimeTeardownD3D11FenceValue = 0;
@@ -1308,7 +1163,7 @@ bool FidelityFX::PollRuntimeUpscalerTeardownReady(const char* a_reason)
 		return true;
 	}
 
-	return PollRuntimeUpscalerTeardownIdle(a_reason);
+	return PollRuntimeUpscalerTeardownIdle();
 }
 
 bool FidelityFX::HasFSRResourcesPendingTeardown() const
@@ -1316,30 +1171,19 @@ bool FidelityFX::HasFSRResourcesPendingTeardown() const
 	return fsrContextCount != 0 || fsrScratchBuffer || HasRuntimeUpscalerResources();
 }
 
-bool FidelityFX::PollFSRResourceTeardownReady(const char* a_reason)
+bool FidelityFX::PollFSRResourceTeardownReady()
 {
 	if (!HasFSRResourcesPendingTeardown()) {
 		ResetFSRIdleFence();
 		return true;
 	}
 
-	const char* reason = a_reason && *a_reason ? a_reason : "FSR resource teardown";
-	const auto result = BeginOrPollD3D11IdleFence(globals::d3d::context, pendingFSRResourceFreeIdleFence, reason);
+	const auto result = BeginOrPollD3D11IdleFence(globals::d3d::context, pendingFSRResourceFreeIdleFence);
 	if (result == D3D11IdleFenceResult::Pending) {
-		static bool loggedFSRResourceFreePending = false;
-		if (!loggedFSRResourceFreePending) {
-			logger::warn("[FidelityFX] Deferring FSR resource teardown because the D3D11 queue did not become idle.");
-			loggedFSRResourceFreePending = true;
-		}
 		return false;
 	}
 
-	if (!PollRuntimeUpscalerTeardownIdle(reason)) {
-		static bool loggedRuntimeUpscalerTeardownPending = false;
-		if (!loggedRuntimeUpscalerTeardownPending) {
-			logger::warn("[FidelityFX] Deferring FSR resource teardown because runtime upscaler GPU work is still in flight.");
-			loggedRuntimeUpscalerTeardownPending = true;
-		}
+	if (!PollRuntimeUpscalerTeardownIdle()) {
 		return false;
 	}
 
@@ -1368,39 +1212,14 @@ void FidelityFX::ReleaseRuntimeUpscalerResourcesForRelatch(bool a_waitForIdle)
 
 void FidelityFX::DestroyFSRResources(bool a_waitForIdle)
 {
-	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
-	if (emitDiagLogs) {
-		logger::debug(
-			"[FidelityFX][Diag] DestroyFSRResources waitForIdle={} contexts={} maxRender={}x{} display={}x{} scratch={} pendingTeardown={} runtimeContexts={} runtimeMaxRender={}x{} runtimeMaxDisplay={}x{}",
-			a_waitForIdle ? "yes" : "no",
-			fsrContextCount,
-			fsrContextMaxRenderWidth,
-			fsrContextMaxRenderHeight,
-			fsrContextDisplayWidth,
-			fsrContextDisplayHeight,
-			fsrScratchBuffer ? "yes" : "no",
-			HasFSRResourcesPendingTeardown() ? "yes" : "no",
-			runtimeUpscalerContextCount,
-			runtimeUpscalerMaxRenderWidth,
-			runtimeUpscalerMaxRenderHeight,
-			runtimeUpscalerMaxDisplayWidth,
-			runtimeUpscalerMaxDisplayHeight);
-	}
-
 	if (a_waitForIdle) {
-		const char* reason = "FSR resource teardown";
 		const ULONGLONG waitStart = GetTickCount64();
-		static bool loggedFSRTeardownTimeout = false;
 		while (true) {
-			const auto result = BeginOrPollD3D11IdleFence(globals::d3d::context, pendingFSRResourceFreeIdleFence, reason);
+			const auto result = BeginOrPollD3D11IdleFence(globals::d3d::context, pendingFSRResourceFreeIdleFence);
 			if (result != D3D11IdleFenceResult::Pending)
 				break;
 
 			if (GetTickCount64() - waitStart >= 5000) {
-				if (!loggedFSRTeardownTimeout) {
-					logger::warn("[FidelityFX] Timed out waiting for host FSR D3D11 work before teardown.");
-					loggedFSRTeardownTimeout = true;
-				}
 				break;
 			}
 
@@ -1413,11 +1232,8 @@ void FidelityFX::DestroyFSRResources(bool a_waitForIdle)
 	ResetFSRIdleFence();
 
 	const uint32_t numContexts = fsrContextCount;
-	if (numContexts == 0 && fsrScratchBuffer)
-		logger::warn("[FidelityFX] DestroyFSRResources called with unknown context count; skipping context destruction to avoid mismatched teardown.");
 	for (uint32_t i = 0; i < numContexts; ++i) {
-		if (ffxFsr3ContextDestroy(&fsrContext[i]) != FFX_OK)
-			logger::critical("[FidelityFX] Failed to destroy FSR3 context for eye {}!", i);
+		(void)ffxFsr3ContextDestroy(&fsrContext[i]);
 	}
 	fsrContextCount = 0;
 	fsrContextMaxRenderWidth = 0;
@@ -1437,7 +1253,6 @@ void FidelityFX::DestroyFSRResources(bool a_waitForIdle)
 	runtimeD3D11Fence = nullptr;
 	runtimeD3D12Fence = nullptr;
 	runtimeFenceValue = 1;
-	fsrDispatchCrashLogged = false;
 	ResetRuntimeUpscalerTracking(true);
 }
 
@@ -1564,10 +1379,9 @@ bool FidelityFX::EnsureRuntimeUpscalerInterop()
 		if (!EnsureRuntimeCommandContexts())
 			return false;
 	} catch (const std::exception& e) {
-		logger::error("[FidelityFX] Failed to initialize DX11->DX12 runtime interop: {}", e.what());
+		(void)e;
 		return false;
 	} catch (...) {
-		logger::error("[FidelityFX] Failed to initialize DX11->DX12 runtime interop.");
 		return false;
 	}
 
@@ -1650,26 +1464,12 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	uint64_t runtimeVersionId = 0;
 	std::string runtimeVersionName;
 	const bool hasRuntimeVersionOverride = QueryRuntimeUpscalerVersionId(swapChain.d3d12Device.get(), a_requestedVersion, runtimeVersionId, runtimeVersionName);
-	const bool emitDiagLogs = ShouldEmitFidelityFXDiagLogs();
-	if (emitDiagLogs && hasRuntimeVersionOverride) {
-		logger::debug(
-			"[FidelityFX] Runtime upscaler will request FSR version {} through generic override '{}' (id 0x{:X})",
-			UpscalerVersionToString(a_requestedVersion),
-			runtimeVersionName.empty() ? "(unnamed)" : runtimeVersionName,
-			runtimeVersionId);
-	}
-
-	bool createdContextWithGenericVersionOverride = false;
-	bool createdContextWithGenericVersionAndUpscalerDescriptor = false;
-	bool createdContextWithUpscalerVersionDescriptor = false;
-	bool createdContextWithDefaultProvider = false;
 
 	for (uint32_t i = 0; i < a_contextCount; ++i) {
 		ffx::CreateContextDescUpscale createDesc{};
 		createDesc.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
 		createDesc.maxRenderSize = { a_fullRenderWidth, a_fullRenderHeight };
 		createDesc.maxUpscaleSize = { a_fullDisplayWidth, a_fullDisplayHeight };
-		createDesc.fpMessage = RuntimeFfxMessage;
 
 		ffx::CreateContextDescUpscaleVersion versionDesc{};
 		versionDesc.version = a_requestedVersion;
@@ -1689,7 +1489,6 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 			if (!attempt.enabled)
 				continue;
 
-			attempt.attempted = true;
 			attempt.result = TryCreateRuntimeUpscalerContext(
 				runtimeUpscalerContexts[i],
 				attempt.attempt,
@@ -1702,38 +1501,10 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 				continue;
 
 			contextCreated = true;
-			if (attempt.attempt == RuntimeUpscalerCreateAttempt::kGenericOverrideOnly) {
-				createdContextWithGenericVersionOverride = true;
-			} else if (attempt.attempt == RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion) {
-				createdContextWithGenericVersionAndUpscalerDescriptor = true;
-			} else if (attempt.attempt == RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor) {
-				createdContextWithUpscalerVersionDescriptor = true;
-			} else if (attempt.attempt == RuntimeUpscalerCreateAttempt::kDefaultProvider) {
-				createdContextWithDefaultProvider = true;
-			}
 			break;
 		}
 
 		if (!contextCreated) {
-			const auto getAttemptResult = [&](RuntimeUpscalerCreateAttempt a_attempt) {
-				const auto iter = std::find_if(attempts.begin(), attempts.end(), [&](const RuntimeUpscalerCreateAttemptResult& a_result) {
-					return a_result.attempt == a_attempt;
-				});
-
-				return iter != attempts.end() ? FfxCreateResultText(iter->attempted, iter->result) : std::string("not attempted");
-			};
-
-			logger::error("[FidelityFX] Failed to create runtime upscaler context {} for FSR version {}. Generic override: {}, generic override + upscaler descriptor: {}, upscaler version descriptor: {}, default provider: {} (Render: {}x{}, Display: {}x{}).",
-				i,
-				UpscalerVersionToString(a_requestedVersion),
-				getAttemptResult(RuntimeUpscalerCreateAttempt::kGenericOverrideOnly),
-				getAttemptResult(RuntimeUpscalerCreateAttempt::kGenericOverrideWithUpscalerVersion),
-				getAttemptResult(RuntimeUpscalerCreateAttempt::kUpscalerVersionDescriptor),
-				getAttemptResult(RuntimeUpscalerCreateAttempt::kDefaultProvider),
-				a_fullRenderWidth,
-				a_fullRenderHeight,
-				a_fullDisplayWidth,
-				a_fullDisplayHeight);
 			DestroyRuntimeUpscalerContexts();
 			recordRuntimeProviderResult(false);
 			return false;
@@ -1748,46 +1519,6 @@ bool FidelityFX::EnsureRuntimeUpscalerContexts(uint32_t a_fullRenderWidth, uint3
 	runtimeUpscalerRequestedVersion = a_requestedVersion;
 	recordRuntimeProviderResult(true);
 
-	if ((runtimeUpscalerProviderMatchedVersionId != 0 || !runtimeUpscalerProviderMatchedVersionName.empty()) &&
-		!RuntimeProviderMatchesVersion(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName, a_requestedVersion)) {
-		logger::warn(
-			"[FidelityFX] Runtime upscaler provider '{}' does not match requested FSR version {}; reporting actual provider path.",
-			RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName),
-			UpscalerVersionToString(a_requestedVersion));
-	}
-
-	if (emitDiagLogs && createdContextWithGenericVersionOverride) {
-		logger::debug("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path.");
-	}
-	if (emitDiagLogs && createdContextWithGenericVersionAndUpscalerDescriptor) {
-		logger::debug("[FidelityFX] Runtime upscaler context creation used the generic FSR version override path with the upscaler version descriptor.");
-	}
-	if (emitDiagLogs && createdContextWithUpscalerVersionDescriptor) {
-		logger::debug("[FidelityFX] Runtime upscaler context creation used the upscaler FSR version descriptor.");
-	}
-	if (createdContextWithDefaultProvider) {
-		logger::warn("[FidelityFX] Runtime upscaler context creation succeeded only through the default provider path after explicit FSR version requests failed; reporting the actual provider path.");
-	}
-
-	if (emitDiagLogs && runtimeUpscalerProviderMatchedVersionName.empty()) {
-		logger::debug("[FidelityFX] Created {} runtime upscaler context(s) for FSR version {} (Render: {}x{}, Display: {}x{}).",
-			a_contextCount,
-			UpscalerVersionToString(a_requestedVersion),
-			a_fullRenderWidth,
-			a_fullRenderHeight,
-			a_fullDisplayWidth,
-			a_fullDisplayHeight);
-	} else if (emitDiagLogs) {
-		logger::debug("[FidelityFX] Created {} runtime upscaler context(s) using provider '{}' (id 0x{:X}) for FSR version {} (Render: {}x{}, Display: {}x{}).",
-			a_contextCount,
-			RuntimeProviderDisplayName(runtimeUpscalerProviderMatchedVersionId, runtimeUpscalerProviderMatchedVersionName),
-			runtimeUpscalerProviderMatchedVersionId,
-			UpscalerVersionToString(a_requestedVersion),
-			a_fullRenderWidth,
-			a_fullRenderHeight,
-			a_fullDisplayWidth,
-			a_fullDisplayHeight);
-	}
 	return true;
 }
 
@@ -1877,11 +1608,10 @@ bool FidelityFX::EnsureRuntimeUpscalerSharedResources(uint32_t a_contextCount, u
 			runtimeOutputShared[i] = new WrappedResource(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
 		}
 	} catch (const std::exception& e) {
-		logger::error("[FidelityFX] Failed to create runtime shared resources: {}", e.what());
+		(void)e;
 		DestroyRuntimeUpscalerResources();
 		return false;
 	} catch (...) {
-		logger::error("[FidelityFX] Failed to create runtime shared resources.");
 		DestroyRuntimeUpscalerResources();
 		return false;
 	}
@@ -2054,9 +1784,6 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 			dispatchOk = ffx::Dispatch(runtimeUpscalerContexts[a_contextIndex], dispatchParameters) == ffx::ReturnCode::Ok;
 			if (dispatchOk && runtimeFallbackReset)
 				runtimeFallbackResetDispatchesRemaining--;
-			if (!dispatchOk) {
-				logger::error("[FidelityFX] Runtime upscaler dispatch failed for eye {}.", a_contextIndex);
-			}
 
 			std::array<D3D12_RESOURCE_BARRIER, 6> endBarriers = {
 				CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[a_contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON),
@@ -2108,7 +1835,7 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 				commandContext->fenceValue = 0;
 			}
 		}
-		logger::error("[FidelityFX] Runtime upscaler dispatch path failed for eye {}: {}", a_contextIndex, e.what());
+		(void)e;
 		dispatchOk = false;
 	} catch (...) {
 		if (!commandListSubmitted) {
@@ -2122,7 +1849,6 @@ bool FidelityFX::DispatchRuntimeUpscalerSingle(uint32_t a_contextIndex, ID3D11Re
 				commandContext->fenceValue = 0;
 			}
 		}
-		logger::error("[FidelityFX] Runtime upscaler dispatch path failed for eye {}.", a_contextIndex);
 		dispatchOk = false;
 	}
 
@@ -2190,12 +1916,8 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 					return true;
 				}
 			} catch (const std::exception& e) {
-				logger::error("[FidelityFX] Runtime upscaler setup/dispatch for FSR version {} threw an exception: {}",
-					UpscalerVersionToString(a_requestedVersion),
-					e.what());
+				(void)e;
 			} catch (...) {
-				logger::error("[FidelityFX] Runtime upscaler setup/dispatch for FSR version {} threw an unknown exception.",
-					UpscalerVersionToString(a_requestedVersion));
 			}
 
 			return false;
@@ -2278,17 +2000,7 @@ bool FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3D11Resource* a_color,
 	dispatchParameters.preExposure = 1.0f;
 	dispatchParameters.flags = 0;
 
-	bool hostDispatchCrashed = false;
-	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed);
-	if (!dispatchOK && !hostDispatchCrashed) {
-		logger::critical("[FidelityFX] Failed to dispatch region upscaling for eye {}!", a_contextIndex);
-	}
-	if (hostDispatchCrashed) {
-		if (!fsrDispatchCrashLogged) {
-			logger::critical("[FidelityFX] Region FSR3 dispatch crashed for eye {} - this may be caused by RenderDoc capture interfering with FSR operations. Try disabling RenderDoc capture.", a_contextIndex);
-			fsrDispatchCrashLogged = true;
-		}
-	}
+	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters);
 
 	if (state->frameAnnotations)
 		state->EndPerfEvent();
@@ -2317,21 +2029,11 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 	if (splitPerEyeContexts) {
 		if (!upscaling.PreparePerEyeInputs(a_upscalingTexture, depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask, false, false)) {
-			static bool loggedPrepareFailure = false;
-			if (!loggedPrepareFailure) {
-				logger::warn("[FidelityFX] VR FSR skipped because per-eye input preparation failed.");
-				loggedPrepareFailure = true;
-			}
 			return;
 		}
 
 		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(false, true);
 		if (!perEyeResourcesReady) {
-			static bool loggedMissingResource = false;
-			if (!loggedMissingResource) {
-				logger::warn("[FidelityFX] VR FSR skipped because prepared per-eye resources are incomplete.");
-				loggedMissingResource = true;
-			}
 			return;
 		}
 
@@ -2357,38 +2059,29 @@ void FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					renderSize.x / 2.0f,
 					renderSize.y,
 					a_sharpness)) {
-				logger::error("[FidelityFX] Upscale dispatch failed for VR eye {}.", i);
 				allEvaluated = false;
 			}
 		}
 
 		if (allEvaluated) {
 			upscaling.FinalizePerEyeOutputs(a_upscalingTexture);
-		} else {
-			static bool loggedVREvaluateFailure = false;
-			if (!loggedVREvaluateFailure) {
-				logger::warn("[FidelityFX] VR FSR evaluate did not complete for both eyes; keeping the current scene texture instead of copying stale output.");
-				loggedVREvaluateFailure = true;
-			}
 		}
 		return;
 	}
 
-	if (!UpscaleRegion(
-			0,
-			a_upscalingTexture,
-			depthTexture.texture,
-			a_motionVectors,
-			a_reactiveMask,
-			a_transparencyCompositionMask,
-			a_upscalingTexture,
-			static_cast<uint32_t>(renderSize.x),
-			static_cast<uint32_t>(renderSize.y),
-			static_cast<uint32_t>(screenSize.x),
-			static_cast<uint32_t>(screenSize.y),
-			renderSize.x,
-			renderSize.y,
-			a_sharpness)) {
-		logger::error("[FidelityFX] Upscale dispatch failed.");
-	}
+	(void)UpscaleRegion(
+		0,
+		a_upscalingTexture,
+		depthTexture.texture,
+		a_motionVectors,
+		a_reactiveMask,
+		a_transparencyCompositionMask,
+		a_upscalingTexture,
+		static_cast<uint32_t>(renderSize.x),
+		static_cast<uint32_t>(renderSize.y),
+		static_cast<uint32_t>(screenSize.x),
+		static_cast<uint32_t>(screenSize.y),
+		renderSize.x,
+		renderSize.y,
+		a_sharpness);
 }

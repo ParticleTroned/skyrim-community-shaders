@@ -7,7 +7,6 @@
 #include <dxgi1_3.h>
 #include <limits>
 #include <string>
-#include <string_view>
 
 #include "../../Deferred.h"
 #include "../../State.h"
@@ -18,9 +17,6 @@
 namespace
 {
 	constexpr UINT NVIDIA_VENDOR_ID = 0x10DE;
-	constexpr uint32_t kDLSSDiagnosticMaxInitialLogs = 12;
-	constexpr uint32_t kDLSSDiagnosticRepeatFrameGap = 300;
-	constexpr int32_t kDLSSDiagnosticTextResultCode = std::numeric_limits<int32_t>::min();
 
 	enum class D3D11IdleFenceResult : uint8_t
 	{
@@ -28,34 +24,6 @@ namespace
 		Pending,
 		Failed
 	};
-
-	enum class DLSSDiagnosticStage : uint8_t
-	{
-		ResolveViewport,
-		FrameToken,
-		SetConstants,
-		SetOptions,
-		Evaluate,
-		Count
-	};
-
-	const char* GetDLSSDiagnosticStageName(DLSSDiagnosticStage a_stage)
-	{
-		switch (a_stage) {
-		case DLSSDiagnosticStage::ResolveViewport:
-			return "ResolveViewport";
-		case DLSSDiagnosticStage::FrameToken:
-			return "FrameToken";
-		case DLSSDiagnosticStage::SetConstants:
-			return "SetConstants";
-		case DLSSDiagnosticStage::SetOptions:
-			return "SetOptions";
-		case DLSSDiagnosticStage::Evaluate:
-			return "Evaluate";
-		default:
-			return "Unknown";
-		}
-	}
 
 	void ReleaseD3D11IdleFence(ID3D11Query*& a_query)
 	{
@@ -103,50 +71,7 @@ namespace
 		return IsHDRDLSSInputFormat(desc.Format);
 	}
 
-	std::string FormatExtent(const sl::Extent& a_extent)
-	{
-		return std::format("top={} left={} width={} height={}", a_extent.top, a_extent.left, a_extent.width, a_extent.height);
-	}
-
-	std::string DescribeTextureResource(ID3D11Resource* a_resource)
-	{
-		if (!a_resource)
-			return "null";
-
-		D3D11_TEXTURE2D_DESC desc{};
-		if (!TryGetTexture2DDesc(a_resource, desc)) {
-			return std::format("ptr=0x{:X} non-Texture2D", reinterpret_cast<std::uintptr_t>(a_resource));
-		}
-
-		return std::format(
-			"ptr=0x{:X} {}x{} fmt={} mips={} array={} samples={} bind=0x{:X} misc=0x{:X} usage={} cpu=0x{:X}",
-			reinterpret_cast<std::uintptr_t>(a_resource),
-			desc.Width,
-			desc.Height,
-			magic_enum::enum_name(desc.Format),
-			desc.MipLevels,
-			desc.ArraySize,
-			desc.SampleDesc.Count,
-			desc.BindFlags,
-			desc.MiscFlags,
-			magic_enum::enum_name(desc.Usage),
-			desc.CPUAccessFlags);
-	}
-
-	bool ShouldLogDLSSDiagnostics()
-	{
-		return globals::state && globals::state->IsDeveloperMode();
-	}
-
-	std::string FormatDLSSDiagnosticResult(int32_t a_resultCode, std::string_view a_resultLabel)
-	{
-		if (!a_resultLabel.empty())
-			return std::string(a_resultLabel);
-
-		return std::format("{}", a_resultCode);
-	}
-
-	int32_t QuantizeDLSSDiagnosticFloat(float a_value)
+	int32_t QuantizeDLSSSignatureFloat(float a_value)
 	{
 		if (!std::isfinite(a_value))
 			return 0;
@@ -160,214 +85,7 @@ namespace
 		return static_cast<int32_t>(std::lround(scaled));
 	}
 
-	bool ShouldEmitDLSSDiagnostic(
-		DLSSDiagnosticStage a_stage,
-		const Streamline::DLSSDispatchDiagnostics* a_diagnostics,
-		int32_t a_resultCode,
-		std::string_view a_resultLabel)
-	{
-		if (!a_diagnostics)
-			return false;
-
-		struct ThrottleState
-		{
-			bool valid = false;
-			uint32_t count = 0;
-			uint32_t lastFrame = 0;
-			uint32_t requestedViewport = 0;
-			uint32_t resolvedViewport = 0;
-			uint32_t outputWidth = 0;
-			uint32_t outputHeight = 0;
-			uint32_t qualityMode = 0;
-			uint32_t dlssPreset = 0;
-			uint32_t viewportRole = 0;
-			uint32_t extentInWidth = 0;
-			uint32_t extentInHeight = 0;
-			uint32_t extentOutWidth = 0;
-			uint32_t extentOutHeight = 0;
-			int32_t viewportScaleXQ = 0;
-			int32_t viewportScaleYQ = 0;
-			int32_t pinholeOffsetXQ = 0;
-			int32_t pinholeOffsetYQ = 0;
-			bool croppedViewport = false;
-			int32_t resultCode = 0;
-			std::string resultLabel;
-			std::string label;
-		};
-
-		static std::array<ThrottleState, static_cast<size_t>(DLSSDiagnosticStage::Count) * 2> throttle{};
-		const uint32_t boundedEye = globals::game::isVR ? std::min(a_diagnostics->eyeIndex, 1u) : 0u;
-		const size_t index = static_cast<size_t>(a_stage) * 2u + boundedEye;
-		auto& state = throttle[index];
-		const char* label = a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
-		const int32_t viewportScaleXQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->viewportScaleX);
-		const int32_t viewportScaleYQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->viewportScaleY);
-		const int32_t pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->pinholeOffsetX);
-		const int32_t pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(a_diagnostics->pinholeOffsetY);
-		const bool signatureChanged =
-			!state.valid ||
-			state.requestedViewport != static_cast<uint32_t>(a_diagnostics->requestedViewport) ||
-			state.resolvedViewport != static_cast<uint32_t>(a_diagnostics->resolvedViewport) ||
-			state.outputWidth != a_diagnostics->outputWidth ||
-			state.outputHeight != a_diagnostics->outputHeight ||
-			state.qualityMode != a_diagnostics->qualityMode ||
-			state.dlssPreset != a_diagnostics->dlssPreset ||
-			state.viewportRole != static_cast<uint32_t>(a_diagnostics->viewportRole) ||
-			state.extentInWidth != a_diagnostics->extentIn.width ||
-			state.extentInHeight != a_diagnostics->extentIn.height ||
-			state.extentOutWidth != a_diagnostics->extentOut.width ||
-			state.extentOutHeight != a_diagnostics->extentOut.height ||
-			state.viewportScaleXQ != viewportScaleXQ ||
-			state.viewportScaleYQ != viewportScaleYQ ||
-			state.pinholeOffsetXQ != pinholeOffsetXQ ||
-			state.pinholeOffsetYQ != pinholeOffsetYQ ||
-			state.croppedViewport != a_diagnostics->croppedViewport ||
-			state.resultCode != a_resultCode ||
-			state.resultLabel != a_resultLabel ||
-			state.label != label;
-
-		if (signatureChanged) {
-			state = {};
-			state.valid = true;
-			state.requestedViewport = static_cast<uint32_t>(a_diagnostics->requestedViewport);
-			state.resolvedViewport = static_cast<uint32_t>(a_diagnostics->resolvedViewport);
-			state.outputWidth = a_diagnostics->outputWidth;
-			state.outputHeight = a_diagnostics->outputHeight;
-			state.qualityMode = a_diagnostics->qualityMode;
-			state.dlssPreset = a_diagnostics->dlssPreset;
-			state.viewportRole = static_cast<uint32_t>(a_diagnostics->viewportRole);
-			state.extentInWidth = a_diagnostics->extentIn.width;
-			state.extentInHeight = a_diagnostics->extentIn.height;
-			state.extentOutWidth = a_diagnostics->extentOut.width;
-			state.extentOutHeight = a_diagnostics->extentOut.height;
-			state.viewportScaleXQ = viewportScaleXQ;
-			state.viewportScaleYQ = viewportScaleYQ;
-			state.pinholeOffsetXQ = pinholeOffsetXQ;
-			state.pinholeOffsetYQ = pinholeOffsetYQ;
-			state.croppedViewport = a_diagnostics->croppedViewport;
-			state.resultCode = a_resultCode;
-			state.resultLabel = a_resultLabel;
-			state.label = label;
-		}
-
-		const uint32_t frame = a_diagnostics->frame;
-		const bool emit =
-			signatureChanged ||
-			state.count < kDLSSDiagnosticMaxInitialLogs ||
-			(frame != 0 && state.lastFrame != 0 && frame - state.lastFrame >= kDLSSDiagnosticRepeatFrameGap);
-
-		++state.count;
-		if (emit)
-			state.lastFrame = frame;
-
-		return emit;
-	}
-
-	void LogDLSSDispatchDiagnostics(
-		DLSSDiagnosticStage a_stage,
-		int32_t a_resultCode,
-		std::string_view a_resultLabel,
-		const Streamline::DLSSDispatchDiagnostics* a_diagnostics)
-	{
-		if (!a_diagnostics)
-			return;
-
-		if (!ShouldLogDLSSDiagnostics())
-			return;
-
-		if (!ShouldEmitDLSSDiagnostic(a_stage, a_diagnostics, a_resultCode, a_resultLabel))
-			return;
-
-		const auto& upscaling = globals::features::upscaling;
-		const auto& plan = upscaling.GetRuntimeResolutionPlan();
-		const char* label = a_diagnostics->label ? a_diagnostics->label : "DLSS Evaluate";
-		const auto* frameToken = a_diagnostics->frameToken ? a_diagnostics->frameToken : upscaling.streamline.frameToken;
-		const uint32_t frame = a_diagnostics->frame;
-		const std::string result = FormatDLSSDiagnosticResult(a_resultCode, a_resultLabel);
-
-		logger::debug(
-			"[Streamline][DLSSDiag] stage={} result={} label='{}' frame={} eye={} role={} requestedViewport={} resolvedViewport={} frameToken=0x{:X} quality={} preset={} hdr={} output={}x{} extentIn=[{}] extentOut=[{}] viewportScale={:.6f}x{:.6f} croppedViewport={} pinhole={:.6f},{:.6f} jitter={:.6f},{:.6f} historyReset={} submitStageVR={} presentationActive={} renderScaleActive={} foveatedConfigured={} peripheryTAAConfigured={} optionsCache(valid={} viewport={} output={}x{} quality={} preset={} hdr={} legacy={}) plan(owner={} method={} quality={} display={}x{} render={}x{} final={}x{} foveated={} peripheryTAA={} menu={} knownMenu={} loading={})",
-			GetDLSSDiagnosticStageName(a_stage),
-			result,
-			label,
-			frame,
-			a_diagnostics->eyeIndex,
-			magic_enum::enum_name(a_diagnostics->viewportRole),
-			static_cast<uint32_t>(a_diagnostics->requestedViewport),
-			static_cast<uint32_t>(a_diagnostics->resolvedViewport),
-			reinterpret_cast<std::uintptr_t>(frameToken),
-			a_diagnostics->qualityMode,
-			a_diagnostics->dlssPreset,
-			a_diagnostics->colorBuffersHDR,
-			a_diagnostics->outputWidth,
-			a_diagnostics->outputHeight,
-			FormatExtent(a_diagnostics->extentIn),
-			FormatExtent(a_diagnostics->extentOut),
-			a_diagnostics->viewportScaleX,
-			a_diagnostics->viewportScaleY,
-			a_diagnostics->croppedViewport,
-			a_diagnostics->pinholeOffsetX,
-			a_diagnostics->pinholeOffsetY,
-			a_diagnostics->jitterX,
-			a_diagnostics->jitterY,
-			a_diagnostics->historyResetRequested,
-			a_diagnostics->submitStageVRDLSS,
-			a_diagnostics->presentationUpscalingActive,
-			a_diagnostics->renderScaleActive,
-			a_diagnostics->foveatedDispatchEnabled,
-			a_diagnostics->peripheryTAAEnabled,
-			a_diagnostics->optionsCacheValid,
-			a_diagnostics->optionsCacheViewport,
-			a_diagnostics->optionsCacheOutputWidth,
-			a_diagnostics->optionsCacheOutputHeight,
-			a_diagnostics->optionsCacheQualityMode,
-			a_diagnostics->optionsCacheDLSSPreset,
-			a_diagnostics->optionsCacheHDR,
-			a_diagnostics->optionsCacheLegacyProfile,
-			magic_enum::enum_name(plan.owner),
-			magic_enum::enum_name(plan.upscaleMethod),
-			plan.qualityMode,
-			static_cast<uint32_t>(plan.trueHMDDisplaySize.x),
-			static_cast<uint32_t>(plan.trueHMDDisplaySize.y),
-			static_cast<uint32_t>(plan.engineRenderSize.x),
-			static_cast<uint32_t>(plan.engineRenderSize.y),
-			static_cast<uint32_t>(plan.finalOutputSize.x),
-			static_cast<uint32_t>(plan.finalOutputSize.y),
-			plan.foveatedActive,
-			plan.peripheryTAAActive,
-			plan.menuContextActive,
-			plan.knownMenuContextActive,
-			plan.loadingMenuActive);
-
-		logger::debug(
-			"[Streamline][DLSSDiag] resources label='{}' frame={} eye={} colorIn=[{}] colorOut=[{}] depth=[{}] mvec=[{}] reactive=[{}] transparency=[{}]",
-			label,
-			frame,
-			a_diagnostics->eyeIndex,
-			DescribeTextureResource(a_diagnostics->colorIn),
-			DescribeTextureResource(a_diagnostics->colorOut),
-			DescribeTextureResource(a_diagnostics->depth),
-			DescribeTextureResource(a_diagnostics->motionVectors),
-			DescribeTextureResource(a_diagnostics->reactiveMask),
-			DescribeTextureResource(a_diagnostics->transparencyMask));
-	}
-
-	void LogDLSSDispatchDiagnostics(DLSSDiagnosticStage a_stage, sl::Result a_result, const Streamline::DLSSDispatchDiagnostics* a_diagnostics)
-	{
-		const auto resultLabel = magic_enum::enum_name(a_result);
-		LogDLSSDispatchDiagnostics(a_stage, static_cast<int32_t>(a_result), resultLabel, a_diagnostics);
-	}
-
-	void LogDLSSDispatchDiagnostics(DLSSDiagnosticStage a_stage, const char* a_result, const Streamline::DLSSDispatchDiagnostics* a_diagnostics)
-	{
-		LogDLSSDispatchDiagnostics(
-			a_stage,
-			kDLSSDiagnosticTextResultCode,
-			a_result ? std::string_view(a_result) : std::string_view(),
-			a_diagnostics);
-	}
-
-	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
+	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query)
 	{
 		if (!a_context) {
 			ReleaseD3D11IdleFence(a_query);
@@ -385,7 +103,6 @@ namespace
 			if (dataResult == S_FALSE || dataResult == S_OK)
 				return D3D11IdleFenceResult::Pending;
 
-			logger::debug("[Streamline] D3D11 idle fence poll failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(dataResult));
 			ReleaseD3D11IdleFence(a_query);
 			return D3D11IdleFenceResult::Failed;
 		};
@@ -408,7 +125,6 @@ namespace
 
 		if (FAILED(createResult) || !a_query) {
 			a_context->Flush();
-			logger::debug("[Streamline] D3D11 idle fence creation failed before {}: 0x{:08X}", a_reason, static_cast<uint32_t>(createResult));
 			return D3D11IdleFenceResult::Failed;
 		}
 
@@ -424,61 +140,6 @@ Streamline::~Streamline()
 	ResetDLSSIdleFences();
 }
 
-void LoggingCallback(sl::LogType type, const char* msg)
-{
-	// Remove trailing newlines from the raw message
-	std::string rawMsg(msg);
-	while (!rawMsg.empty() && (rawMsg.back() == '\n' || rawMsg.back() == '\r'))
-		rawMsg.pop_back();
-
-	// Remove leading bracketed metadata
-	const char* p = msg;
-	while (*p == '[') {
-		const char* close = strchr(p, ']');
-		if (!close)
-			break;
-		p = close + 1;
-		// Skip whitespace after each bracketed section
-		while (*p == ' ' || *p == '\t') ++p;
-	}
-	// Now p points to the first non-bracketed section (file/line info or message)
-	std::string cleanMsg(p);
-	// Trim leading/trailing whitespace and newlines
-	size_t start = cleanMsg.find_first_not_of(" \t\r\n");
-	size_t end = cleanMsg.find_last_not_of(" \t\r\n");
-	if (start != std::string::npos && end != std::string::npos)
-		cleanMsg = cleanMsg.substr(start, end - start + 1);
-	else
-		cleanMsg.clear();
-
-	// If the cleaned message is empty or only bracketed tokens, log the raw message
-	bool onlyBrackets = true;
-	for (char c : cleanMsg) {
-		if (c != '[' && c != ']' && c != ' ' && c != '\t') {
-			onlyBrackets = false;
-			break;
-		}
-	}
-	if (cleanMsg.empty() || onlyBrackets) {
-		logger::info("[StreamlineSDK:RAW] {}", rawMsg);
-		return;
-	}
-
-	// Use a clear prefix
-	const char* prefix = "[StreamlineSDK]";
-	switch (type) {
-	case sl::LogType::eInfo:
-		logger::info("{} {}", prefix, cleanMsg);
-		break;
-	case sl::LogType::eWarn:
-		logger::warn("{} {}", prefix, cleanMsg);
-		break;
-	case sl::LogType::eError:
-		logger::error("{} {}", prefix, cleanMsg);
-		break;
-	}
-}
-
 std::vector<std::pair<std::string, std::string>> Streamline::dllVersions = {};
 
 void Streamline::LoadInterposer()
@@ -489,25 +150,16 @@ void Streamline::LoadInterposer()
 	std::wstring interposerPath = std::wstring(Streamline::PluginDir) + L"\\sl.interposer.dll";
 	interposer = LoadLibraryW(interposerPath.c_str());
 	if (interposer == nullptr) {
-		DWORD errorCode = GetLastError();
-		logger::info("[Streamline] Failed to load interposer: Error Code {0:x}", errorCode);
 		featureDLSS = false;
 		featureReflex = false;
 		featurePCL = false;
 		reflexSupportedOnCurrentAdapter = false;
 		featureCheckComplete = true;
 		return;
-	} else {
-		logger::info("[Streamline] Interposer loaded at address: {0:p}", static_cast<void*>(interposer));
 	}
 
-	// Dynamically log all DLL versions in the Streamline plugin directory
 	std::filesystem::path pluginDir = std::filesystem::path(Streamline::PluginDir);
 	Streamline::dllVersions = Util::EnumerateDllVersions(pluginDir);
-	for (const auto& [name, versionStr] : Streamline::dllVersions)
-		logger::info("[Streamline] {} version: {}", name, versionStr);
-
-	logger::info("[Streamline] Initializing Streamline");
 
 	sl::Preferences pref;
 
@@ -516,20 +168,8 @@ void Streamline::LoadInterposer()
 	pref.featuresToLoad = featuresToLoad;
 	pref.numFeaturesToLoad = _countof(featuresToLoad);
 
-	// Set log level from settings
-	switch (globals::features::upscaling.settings.streamlineLogLevel) {
-	case 2:
-		pref.logLevel = sl::LogLevel::eVerbose;
-		break;
-	case 1:
-		pref.logLevel = sl::LogLevel::eDefault;
-		break;
-	case 0:
-	default:
-		pref.logLevel = sl::LogLevel::eOff;
-		break;
-	}
-	pref.logMessageCallback = LoggingCallback;
+	pref.logLevel = sl::LogLevel::eOff;
+	pref.logMessageCallback = nullptr;
 	pref.showConsole = false;
 	std::error_code pluginPathError;
 	auto pluginDirAbsolute = std::filesystem::absolute(std::filesystem::path(Streamline::PluginDir), pluginPathError);
@@ -541,7 +181,6 @@ void Streamline::LoadInterposer()
 	pluginPaths[0] = pluginDirAbsoluteW.c_str();
 	pref.pathsToPlugins = pluginPaths;
 	pref.numPathsToPlugins = 1;
-	logger::info("[Streamline] Plugin search path: {}", pluginDirAbsolute.string());
 
 	pref.engine = sl::EngineType::eCustom;
 	pref.engineVersion = "1.0.0";
@@ -559,8 +198,6 @@ void Streamline::LoadInterposer()
 	slEvaluateFeature = (PFun_slEvaluateFeature*)GetProcAddress(interposer, "slEvaluateFeature");
 	slAllocateResources = (PFun_slAllocateResources*)GetProcAddress(interposer, "slAllocateResources");
 	slFreeResources = (PFun_slFreeResources*)GetProcAddress(interposer, "slFreeResources");
-	slGetFeatureRequirements = (PFun_slGetFeatureRequirements*)GetProcAddress(interposer, "slGetFeatureRequirements");
-	slGetFeatureVersion = (PFun_slGetFeatureVersion*)GetProcAddress(interposer, "slGetFeatureVersion");
 	slUpgradeInterface = (PFun_slUpgradeInterface*)GetProcAddress(interposer, "slUpgradeInterface");
 	slSetConstants = (PFun_slSetConstants*)GetProcAddress(interposer, "slSetConstants");
 	slGetNativeInterface = (PFun_slGetNativeInterface*)GetProcAddress(interposer, "slGetNativeInterface");
@@ -569,7 +206,6 @@ void Streamline::LoadInterposer()
 	slSetD3DDevice = (PFun_slSetD3DDevice*)GetProcAddress(interposer, "slSetD3DDevice");
 
 	if (SL_FAILED(res, slInit(pref, sl::kSDKVersion))) {
-		logger::critical("[Streamline] Failed to initialize Streamline");
 		featureDLSS = false;
 		featureReflex = false;
 		featurePCL = false;
@@ -584,14 +220,12 @@ void Streamline::LoadInterposer()
 		InvalidateDLSSOptionsCache();
 		reflexOptionsCache = {};
 		lastReflexSleepFrame = UINT32_MAX;
-		logger::info("[Streamline] Successfully initialized Streamline");
 	}
 }
 
 void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 {
 	featureCheckComplete = false;
-	logger::info("[Streamline] Checking features");
 	DXGI_ADAPTER_DESC adapterDesc;
 	a_adapter->GetDesc(&adapterDesc);
 	reflexSupportedOnCurrentAdapter = adapterDesc.VendorId == NVIDIA_VENDOR_ID;
@@ -600,31 +234,23 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 	adapterInfo.deviceLUID = (uint8_t*)&adapterDesc.AdapterLuid;
 	adapterInfo.deviceLUIDSizeInBytes = sizeof(LUID);
 
-	auto checkFeatureAvailability = [&](sl::Feature feature, const char* featureName, bool& outAvailable) {
+	auto checkFeatureAvailability = [&](sl::Feature feature, bool& outAvailable) {
 		outAvailable = false;
 		bool loaded = false;
 		if (SL_FAILED(result, slIsFeatureLoaded(feature, loaded))) {
-			logger::warn("[Streamline] {} load-state query failed: {}", featureName, magic_enum::enum_name(result));
 			return;
 		}
 		if (!loaded) {
-			logger::info("[Streamline] {} feature is not loaded", featureName);
-			sl::FeatureRequirements featureRequirements;
-			sl::Result requirementsResult = slGetFeatureRequirements(feature, featureRequirements);
-			if (requirementsResult != sl::Result::eOk) {
-				logger::info("[Streamline] {} feature failed to load due to: {}", featureName, magic_enum::enum_name(requirementsResult));
-			}
 			return;
 		}
 
-		logger::info("[Streamline] {} feature is loaded", featureName);
 		outAvailable = slIsFeatureSupported(feature, adapterInfo) == sl::Result::eOk;
 	};
 
-	checkFeatureAvailability(sl::kFeatureDLSS, "DLSS", featureDLSS);
+	checkFeatureAvailability(sl::kFeatureDLSS, featureDLSS);
 	if (reflexSupportedOnCurrentAdapter) {
-		checkFeatureAvailability(sl::kFeatureReflex, "Reflex", featureReflex);
-		checkFeatureAvailability(sl::kFeaturePCL, "PCL", featurePCL);
+		checkFeatureAvailability(sl::kFeatureReflex, featureReflex);
+		checkFeatureAvailability(sl::kFeaturePCL, featurePCL);
 	} else {
 		featureReflex = false;
 		featurePCL = false;
@@ -632,19 +258,6 @@ void Streamline::CheckFeatures(IDXGIAdapter* a_adapter)
 
 	if (featureDLSS) {
 		isRTXBelow40series = IsRTXAndBelow40Series(a_adapter);
-
-		if (isRTXBelow40series)
-			logger::info("[Streamline] Older RTX GPU detected, DLSS 4.0 will be used instead of DLSS 4.5");
-		else
-			logger::info("[Streamline] Newer RTX GPU detected, DLSS 4.5 will be used instead of DLSS 4.0");
-	}
-
-	logger::info("[Streamline] DLSS {} available", featureDLSS ? "is" : "is not");
-	if (reflexSupportedOnCurrentAdapter) {
-		logger::info("[Streamline] Reflex {} available", featureReflex ? "is" : "is not");
-		logger::info("[Streamline] PCL {} available", featurePCL ? "is" : "is not");
-	} else {
-		logger::info("[Streamline] Reflex/PCL disabled on non-NVIDIA adapter");
 	}
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
@@ -671,21 +284,17 @@ void Streamline::PostDevice()
 
 	if (slGetFeatureFunction && reflexSupportedOnCurrentAdapter) {
 		if (slSetFeatureLoaded) {
-			const auto requestFeatureLoad = [&](sl::Feature feature, const char* featureName) {
-				const sl::Result loadResult = slSetFeatureLoaded(feature, true);
-				if (loadResult != sl::Result::eOk)
-					logger::warn("[Streamline] Failed to request {} load: {}", featureName, magic_enum::enum_name(loadResult));
+			const auto requestFeatureLoad = [&](sl::Feature feature) {
+				(void)slSetFeatureLoaded(feature, true);
 			};
 
-			requestFeatureLoad(sl::kFeatureReflex, "Reflex");
-			requestFeatureLoad(sl::kFeaturePCL, "PCL");
+			requestFeatureLoad(sl::kFeatureReflex);
+			requestFeatureLoad(sl::kFeaturePCL);
 		}
 
 		const auto bindFeatureFn = [&](sl::Feature feature, const char* functionName, void*& fn) {
 			fn = nullptr;
 			const sl::Result bindResult = slGetFeatureFunction(feature, functionName, fn);
-			if (bindResult != sl::Result::eOk)
-				logger::warn("[Streamline] {} bind failed with {}", functionName, magic_enum::enum_name(bindResult));
 			return bindResult == sl::Result::eOk && fn != nullptr;
 		};
 
@@ -695,22 +304,9 @@ void Streamline::PostDevice()
 		reflexFnsBound &= bindFeatureFn(sl::kFeatureReflex, "slReflexSetOptions", (void*&)slReflexSetOptions);
 		featureReflex = reflexFnsBound && slReflexSetOptions && slReflexSleep;
 
-		if (!featureReflex) {
-			logger::warn("[Streamline] Reflex functions are missing; Reflex runtime controls will be disabled");
-		} else {
-			logger::info("[Streamline] Reflex runtime controls are available");
-		}
-
 		slPCLSetMarker = nullptr;
 		bool pclFnBound = bindFeatureFn(sl::kFeaturePCL, "slPCLSetMarker", (void*&)slPCLSetMarker);
 		featurePCL = pclFnBound && slPCLSetMarker;
-		if (!featurePCL) {
-			logger::warn("[Streamline] PCL marker function is unavailable; marker optimization requests will be ignored");
-		} else {
-			logger::info("[Streamline] PCL marker interface is available");
-		}
-	} else if (!reflexSupportedOnCurrentAdapter) {
-		logger::info("[Streamline] Skipping Reflex/PCL binding on non-NVIDIA adapter");
 	}
 
 	InvalidateDLSSOptionsCache();
@@ -732,7 +328,6 @@ bool Streamline::EnsureFrameToken()
 		return frameToken != nullptr;
 
 	if (SL_FAILED(result, slGetNewFrameToken(frameToken, &globals::state->frameCount))) {
-		logger::error("[Streamline] Could not get frame token: {}", magic_enum::enum_name(result));
 		frameToken = nullptr;
 		return false;
 	}
@@ -740,15 +335,13 @@ bool Streamline::EnsureFrameToken()
 	return frameToken != nullptr;
 }
 
-bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchDiagnostics* diagnostics)
+bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eyeIndex, float viewportScaleX, float viewportScaleY, float pinholeOffsetX, float pinholeOffsetY, const DLSSDispatchSignature* dispatchSignature)
 {
 	if (!globals::features::upscaling.streamline.initialized)
 		return false;
 
-	if (!EnsureFrameToken()) {
-		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "unavailable", diagnostics);
+	if (!EnsureFrameToken())
 		return false;
-	}
 
 	// In VR, we need to set constants for each viewport/eye separately
 	// In non-VR, this is called once per frame
@@ -874,25 +467,25 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	const auto makeFrameConstantsSignature = [&]() {
 		DLSSFrameConstantsCache signature{};
 		signature.valid = true;
-		signature.frame = diagnostics ? diagnostics->frame : state->frameCount;
+		signature.frame = dispatchSignature ? dispatchSignature->frame : state->frameCount;
 		signature.frameToken = reinterpret_cast<std::uintptr_t>(frameToken);
 		signature.viewport = static_cast<uint32_t>(p_viewport);
 		signature.eyeIndex = eyeIndex;
-		signature.viewportRole = diagnostics ? static_cast<uint32_t>(diagnostics->viewportRole) : static_cast<uint32_t>(DLSSViewportRole::FullEye);
-		signature.outputWidth = diagnostics ? diagnostics->outputWidth : 0u;
-		signature.outputHeight = diagnostics ? diagnostics->outputHeight : 0u;
-		signature.qualityMode = diagnostics ? diagnostics->qualityMode : 0u;
-		signature.dlssPreset = diagnostics ? diagnostics->dlssPreset : 0u;
-		signature.extentInWidth = diagnostics ? diagnostics->extentIn.width : 0u;
-		signature.extentInHeight = diagnostics ? diagnostics->extentIn.height : 0u;
-		signature.extentOutWidth = diagnostics ? diagnostics->extentOut.width : 0u;
-		signature.extentOutHeight = diagnostics ? diagnostics->extentOut.height : 0u;
-		signature.viewportScaleXQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleX);
-		signature.viewportScaleYQ = QuantizeDLSSDiagnosticFloat(clampedViewportScaleY);
-		signature.pinholeOffsetXQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetX);
-		signature.pinholeOffsetYQ = QuantizeDLSSDiagnosticFloat(clampedPinholeOffsetY);
-		signature.jitterXQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.x);
-		signature.jitterYQ = QuantizeDLSSDiagnosticFloat(upscaling.jitter.y);
+		signature.viewportRole = dispatchSignature ? static_cast<uint32_t>(dispatchSignature->viewportRole) : static_cast<uint32_t>(DLSSViewportRole::FullEye);
+		signature.outputWidth = dispatchSignature ? dispatchSignature->outputWidth : 0u;
+		signature.outputHeight = dispatchSignature ? dispatchSignature->outputHeight : 0u;
+		signature.qualityMode = dispatchSignature ? dispatchSignature->qualityMode : 0u;
+		signature.dlssPreset = dispatchSignature ? dispatchSignature->dlssPreset : 0u;
+		signature.extentInWidth = dispatchSignature ? dispatchSignature->extentIn.width : 0u;
+		signature.extentInHeight = dispatchSignature ? dispatchSignature->extentIn.height : 0u;
+		signature.extentOutWidth = dispatchSignature ? dispatchSignature->extentOut.width : 0u;
+		signature.extentOutHeight = dispatchSignature ? dispatchSignature->extentOut.height : 0u;
+		signature.viewportScaleXQ = QuantizeDLSSSignatureFloat(clampedViewportScaleX);
+		signature.viewportScaleYQ = QuantizeDLSSSignatureFloat(clampedViewportScaleY);
+		signature.pinholeOffsetXQ = QuantizeDLSSSignatureFloat(clampedPinholeOffsetX);
+		signature.pinholeOffsetYQ = QuantizeDLSSSignatureFloat(clampedPinholeOffsetY);
+		signature.jitterXQ = QuantizeDLSSSignatureFloat(upscaling.jitter.x);
+		signature.jitterYQ = QuantizeDLSSSignatureFloat(upscaling.jitter.y);
 		signature.historyResetRequested = requestHistoryReset;
 		return signature;
 	};
@@ -920,10 +513,10 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 		       a_cached.historyResetRequested == a_signature.historyResetRequested;
 	};
 	const bool canAcceptDuplicateConstants =
-		diagnostics &&
-		diagnostics->submitStageVRDLSS &&
-		(diagnostics->viewportRole == DLSSViewportRole::FullEye ||
-			diagnostics->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
+		dispatchSignature &&
+		dispatchSignature->submitStageVRDLSS &&
+		(dispatchSignature->viewportRole == DLSSViewportRole::FullEye ||
+			dispatchSignature->viewportRole == DLSSViewportRole::SubmitStageFoveatedCenter);
 	DLSSFrameConstantsCache frameConstantsSignature{};
 	if (canAcceptDuplicateConstants)
 		frameConstantsSignature = makeFrameConstantsSignature();
@@ -943,35 +536,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, uint32_t eye
 	}
 
 	if (SL_FAILED(res, slSetConstants(slConstants, *frameToken, p_viewport))) {
-		const bool duplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
-		lastDLSSFailureDuplicatedConstants = duplicatedConstants;
-		const auto resultLabel = magic_enum::enum_name(res);
-		if (diagnostics) {
-			if (ShouldEmitDLSSDiagnostic(DLSSDiagnosticStage::SetConstants, diagnostics, static_cast<int32_t>(res), resultLabel)) {
-				logger::error(
-					"[Streamline] Could not set constants for eye {}: result={} label='{}' role={} viewport={} frame={} extentIn={}x{} extentOut={}x{} output={}x{} scale={:.6f}x{:.6f} pinhole={:.6f},{:.6f} duplicateConstants={}",
-					eyeIndex,
-					FormatDLSSDiagnosticResult(static_cast<int32_t>(res), resultLabel),
-					diagnostics->label ? diagnostics->label : "DLSS Evaluate",
-					magic_enum::enum_name(diagnostics->viewportRole),
-					static_cast<uint32_t>(p_viewport),
-					diagnostics->frame,
-					diagnostics->extentIn.width,
-					diagnostics->extentIn.height,
-					diagnostics->extentOut.width,
-					diagnostics->extentOut.height,
-					diagnostics->outputWidth,
-					diagnostics->outputHeight,
-					diagnostics->viewportScaleX,
-					diagnostics->viewportScaleY,
-					diagnostics->pinholeOffsetX,
-					diagnostics->pinholeOffsetY,
-					lastDLSSFailureDuplicatedConstants);
-			}
-		} else {
-			logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
-		}
-		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetConstants, res, diagnostics);
+		lastDLSSFailureDuplicatedConstants = res == sl::Result::eErrorDuplicatedConstants;
 		return false;
 	}
 
@@ -1015,7 +580,7 @@ bool Streamline::IsRTXAndBelow40Series(IDXGIAdapter* a_adapter)
 	return false;
 }
 
-bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics)
+bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset)
 {
 	if (!slDLSSSetOptions)
 		return false;
@@ -1100,11 +665,6 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 	dlssOptions.sharpness = 0.0f;
 
 	if (SL_FAILED(result, slDLSSSetOptions(p_viewport, dlssOptions))) {
-		logger::critical("[Streamline] Could not enable DLSS for viewport {} eye {}: {}",
-			static_cast<uint32_t>(p_viewport),
-			eyeIndex,
-			magic_enum::enum_name(result));
-		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetOptions, result, diagnostics);
 		cache.valid = false;
 		return false;
 	}
@@ -1173,7 +733,7 @@ int Streamline::ChooseVRDLSSViewportSlotForAllocation(DLSSViewportRole viewportR
 	return static_cast<int>(lruSlot);
 }
 
-bool Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32_t a_eyeIndex, bool a_logFailures)
+bool Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport)
 {
 	if (!slDLSSSetOptions || !slFreeResources)
 		return true;
@@ -1181,25 +741,13 @@ bool Streamline::FreeDLSSViewportResources(sl::ViewportHandle a_viewport, uint32
 	sl::DLSSOptions dlssOptions{};
 	dlssOptions.mode = sl::DLSSMode::eOff;
 
-	const sl::Result optionsResult = slDLSSSetOptions(a_viewport, dlssOptions);
-	if (a_logFailures && optionsResult != sl::Result::eOk) {
-		logger::debug("[Streamline] DLSS off failed for viewport {} eye {}: {}",
-			static_cast<uint32_t>(a_viewport),
-			a_eyeIndex,
-			magic_enum::enum_name(optionsResult));
-	}
+	slDLSSSetOptions(a_viewport, dlssOptions);
 
 	const sl::Result freeResult = slFreeResources(sl::kFeatureDLSS, a_viewport);
-	if (a_logFailures && freeResult != sl::Result::eOk) {
-		logger::debug("[Streamline] DLSS resource free failed for viewport {} eye {}: {}",
-			static_cast<uint32_t>(a_viewport),
-			a_eyeIndex,
-			magic_enum::enum_name(freeResult));
-	}
 	return freeResult == sl::Result::eOk;
 }
 
-bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex, bool logFailures)
+bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t slotIndex)
 {
 	if (slotIndex >= kVRDLSSViewportSlotCount)
 		return true;
@@ -1212,9 +760,8 @@ bool Streamline::FreeVRDLSSViewportSlot(DLSSViewportRole viewportRole, uint32_t 
 	bool slotResourcesFreed = true;
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		slot.resourcesAllocated[eye] = slot.resourcesAllocated[eye] || slot.optionsCache[eye].valid;
-		const bool shouldLogFailures = logFailures || slot.optionsCache[eye].valid;
 		if (slot.resourcesAllocated[eye]) {
-			const bool eyeFreed = FreeDLSSViewportResources(slot.viewport[eye], eye, shouldLogFailures);
+			const bool eyeFreed = FreeDLSSViewportResources(slot.viewport[eye]);
 			slotResourcesFreed = eyeFreed && slotResourcesFreed;
 			if (eyeFreed)
 				slot.resourcesAllocated[eye] = false;
@@ -1252,24 +799,14 @@ bool Streamline::ResolveDLSSViewport(DLSSViewportRole viewportRole, sl::Viewport
 		auto& slot = vrDLSSViewportSlots[roleIndex][slotIndex];
 		if (slot.valid) {
 			if (auto context = globals::d3d::context) {
-				if (BeginOrPollD3D11IdleFence(context, pendingVRDLSSSlotRecycleIdleFence, "VR DLSS viewport slot recycle") != D3D11IdleFenceResult::Ready) {
-					static bool loggedSlotRecycleTimeout = false;
-					if (!loggedSlotRecycleTimeout) {
-						logger::warn("[Streamline] Deferring VR DLSS evaluate because the viewport slot recycle did not become idle.");
-						loggedSlotRecycleTimeout = true;
-					}
+				if (BeginOrPollD3D11IdleFence(context, pendingVRDLSSSlotRecycleIdleFence) != D3D11IdleFenceResult::Ready) {
 					nonVRDLSSOptionsCache.valid = false;
 					return false;
 				}
 			} else {
 				ReleaseD3D11IdleFence(pendingVRDLSSSlotRecycleIdleFence);
 			}
-			if (!FreeVRDLSSViewportSlot(viewportRole, static_cast<uint32_t>(slotIndex), true)) {
-				static bool loggedSlotRecycleFreeFailure = false;
-				if (!loggedSlotRecycleFreeFailure) {
-					logger::warn("[Streamline] Deferring VR DLSS evaluate because the viewport slot recycle could not free the previous slot resources.");
-					loggedSlotRecycleFreeFailure = true;
-				}
+			if (!FreeVRDLSSViewportSlot(viewportRole, static_cast<uint32_t>(slotIndex))) {
 				nonVRDLSSOptionsCache.valid = false;
 				return false;
 			}
@@ -1380,7 +917,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
 	ID3D11Resource* mvec, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth,
-	float pinholeOffsetX, float pinholeOffsetY, const char* label, DLSSViewportRole viewportRole)
+	float pinholeOffsetX, float pinholeOffsetY, DLSSViewportRole viewportRole)
 {
 	auto context = globals::d3d::context;
 	if (!initialized || !featureDLSS || !slEvaluateFeature || !context ||
@@ -1417,99 +954,38 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	const bool colorBuffersHDR = GetDLSSColorBuffersHDR(colorIn);
 	const uint32_t qualityMode = std::min(upscaling.GetRuntimeQualityMode(), Upscaling::kQualityModeMaxIndex);
 	const uint32_t dlssPreset = upscaling.GetRuntimeDLSSPreset();
-	const sl::ViewportHandle requestedViewport = vp;
 	const bool submitStageVRDLSS =
 		globals::game::isVR &&
 		upscaling.IsPresentationUpscalingActive();
 
-	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics();
-	DLSSDispatchDiagnostics diagnostics{};
-	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
-	diagnostics.label = label ? label : "DLSS Evaluate";
-	diagnostics.frame = state ? state->frameCount : 0u;
-	diagnostics.eyeIndex = eyeIndex;
-	diagnostics.requestedViewport = requestedViewport;
-	diagnostics.resolvedViewport = vp;
-	diagnostics.extentIn = extentIn;
-	diagnostics.extentOut = extentOut;
-	diagnostics.outputWidth = outputWidth;
-	diagnostics.outputHeight = extentOut.height;
-	diagnostics.qualityMode = qualityMode;
-	diagnostics.dlssPreset = dlssPreset;
-	diagnostics.viewportRole = viewportRole;
-	diagnostics.viewportScaleX = viewportScaleX;
-	diagnostics.viewportScaleY = viewportScaleY;
-	diagnostics.croppedViewport = viewportScaleX < 0.999f || viewportScaleY < 0.999f;
-	diagnostics.pinholeOffsetX = pinholeOffsetX;
-	diagnostics.pinholeOffsetY = pinholeOffsetY;
-	diagnostics.submitStageVRDLSS = submitStageVRDLSS;
-	diagnostics.colorIn = colorIn;
-	diagnostics.colorOut = colorOut;
-	diagnostics.depth = depth;
-	diagnostics.motionVectors = mvec;
-	diagnostics.reactiveMask = reactiveMask;
-	diagnostics.transparencyMask = transparencyMask;
-	if (collectDLSSDiagnostics) {
-		diagnostics.jitterX = upscaling.jitter.x;
-		diagnostics.jitterY = upscaling.jitter.y;
-		diagnostics.colorBuffersHDR = colorBuffersHDR;
-		diagnostics.presentationUpscalingActive = upscaling.IsPresentationUpscalingActive();
-		diagnostics.renderScaleActive = upscaling.IsVRRenderScaleModeActive();
-		diagnostics.foveatedDispatchEnabled = upscaling.IsFoveatedVendorDispatchEnabled(upscaling.GetRuntimeUpscaleMethod());
-		diagnostics.peripheryTAAEnabled = upscaling.IsPeripheryTAAEnabled(upscaling.GetRuntimeUpscaleMethod());
-		diagnostics.historyResetRequested = upscaling.ShouldResetHistoryThisFrame();
-		diagnostics.frameToken = frameToken;
-	}
-	const auto updateOptionsCacheDiagnostics = [&]() {
-		if (!collectDLSSDiagnostics)
-			return;
+	DLSSDispatchSignature dispatchSignature{};
+	dispatchSignature.frame = state ? state->frameCount : 0u;
+	dispatchSignature.extentIn = extentIn;
+	dispatchSignature.extentOut = extentOut;
+	dispatchSignature.outputWidth = outputWidth;
+	dispatchSignature.outputHeight = extentOut.height;
+	dispatchSignature.qualityMode = qualityMode;
+	dispatchSignature.dlssPreset = dlssPreset;
+	dispatchSignature.viewportRole = viewportRole;
+	dispatchSignature.submitStageVRDLSS = submitStageVRDLSS;
 
-		const auto& optionsCache = GetDLSSOptionsCache(viewportRole, eyeIndex, qualityMode, dlssPreset);
-		diagnostics.optionsCacheValid = optionsCache.valid;
-		diagnostics.optionsCacheViewport = optionsCache.viewport;
-		diagnostics.optionsCacheOutputWidth = optionsCache.outputWidth;
-		diagnostics.optionsCacheOutputHeight = optionsCache.outputHeight;
-		diagnostics.optionsCacheQualityMode = optionsCache.qualityMode;
-		diagnostics.optionsCacheDLSSPreset = optionsCache.dlssPreset;
-		diagnostics.optionsCacheHDR = optionsCache.isHDR;
-		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
-	};
+	if (!ResolveDLSSViewport(viewportRole, vp, eyeIndex, qualityMode, dlssPreset, vp))
+		return false;
 
-	if (!ResolveDLSSViewport(viewportRole, vp, eyeIndex, qualityMode, dlssPreset, vp)) {
-		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::ResolveViewport, "unavailable", diagnosticsPtr);
+	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, &dispatchSignature))
 		return false;
-	}
-	diagnostics.resolvedViewport = vp;
-	updateOptionsCacheDiagnostics();
-
-	if (!CheckFrameConstants(vp, eyeIndex, viewportScaleX, viewportScaleY, pinholeOffsetX, pinholeOffsetY, diagnosticsPtr))
+	if (!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset))
 		return false;
-	if (!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
-		return false;
-	updateOptionsCacheDiagnostics();
 
 	const bool emitPCLMarkers =
 		!submitStageVRDLSS &&
 		upscaling.settings.reflexUseMarkersToOptimize &&
 		reflexOptionsCache.useMarkersToOptimize &&
 		featurePCL;
-	const auto emitPCLMarker = [&](sl::PCLMarker marker, const char* stageName, uint32_t stageIndex) {
+	const auto emitPCLMarker = [&](sl::PCLMarker marker) {
 		if (!emitPCLMarkers || !slPCLSetMarker || !frameToken)
 			return;
-		const sl::Result markerResult = slPCLSetMarker(marker, *frameToken);
-		if (markerResult != sl::Result::eOk) {
-			static bool markerErrorLogged[2][2] = { { false, false }, { false, false } };
-			const uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0u;
-			const uint32_t boundedStageIndex = std::min(stageIndex, 1u);
-			if (markerErrorLogged[logIdx][boundedStageIndex])
-				return;
-			markerErrorLogged[logIdx][boundedStageIndex] = true;
-			logger::warn(
-				"[Streamline] slPCLSetMarker({}) failed{}: {}",
-				stageName,
-				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
-				magic_enum::enum_name(markerResult));
-		}
+		slPCLSetMarker(marker, *frameToken);
 	};
 
 	sl::ResourceTag tags[] = {
@@ -1542,42 +1018,12 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
-	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart, "DLSS-EvaluateStart", 0);
+	emitPCLMarker(sl::PCLMarker::eRenderSubmitStart);
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
-	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd, "DLSS-EvaluateEnd", 1);
+	emitPCLMarker(sl::PCLMarker::eRenderSubmitEnd);
 
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
-
-	if (evalResult != sl::Result::eOk) {
-		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::Evaluate, evalResult, diagnosticsPtr);
-		static sl::ViewportHandle lastLoggedEvalErrorViewport[2] = {};
-		static sl::Result lastLoggedEvalErrorResult[2] = {};
-		uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0;
-		if (lastLoggedEvalErrorViewport[logIdx] != vp || lastLoggedEvalErrorResult[logIdx] != evalResult) {
-			lastLoggedEvalErrorViewport[logIdx] = vp;
-			lastLoggedEvalErrorResult[logIdx] = evalResult;
-			D3D11_TEXTURE2D_DESC colorInDesc{};
-			D3D11_TEXTURE2D_DESC colorOutDesc{};
-			TryGetTexture2DDesc(colorIn, colorInDesc);
-			TryGetTexture2DDesc(colorOut, colorOutDesc);
-			logger::error(
-				"[Streamline] slEvaluateFeature failed{} result={} viewport={} colorIn={}x{} fmt={} colorOut={}x{} fmt={} extentIn={}x{} extentOut={}x{}",
-				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
-				static_cast<int>(evalResult),
-				static_cast<uint32_t>(vp),
-				colorInDesc.Width,
-				colorInDesc.Height,
-				static_cast<uint32_t>(colorInDesc.Format),
-				colorOutDesc.Width,
-				colorOutDesc.Height,
-				static_cast<uint32_t>(colorOutDesc.Format),
-				extentIn.width,
-				extentIn.height,
-				extentOut.width,
-				extentOut.height);
-		}
-	}
 
 	return evalResult == sl::Result::eOk;
 }
@@ -1594,7 +1040,7 @@ bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D1
 	sl::Extent extentIn{ 0u, 0u, renderWidth, renderHeight };
 	sl::Extent extentOut{ 0u, 0u, outputWidth, outputHeight };
 
-	return EvaluateDLSS(vp, eyeIndex, colorIn, colorOut, depth, mvec, reactiveMask, transparencyMask, extentIn, extentOut, outputWidth, pinholeOffsetX, pinholeOffsetY, "UpscaleRegion");
+	return EvaluateDLSS(vp, eyeIndex, colorIn, colorOut, depth, mvec, reactiveMask, transparencyMask, extentIn, extentOut, outputWidth, pinholeOffsetX, pinholeOffsetY);
 }
 
 void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors)
@@ -1650,22 +1096,12 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				a_transparencyCompositionMask,
 				false,
 				true)) {
-			static bool loggedPrepareFailure = false;
-			if (!loggedPrepareFailure) {
-				logger::warn("[Streamline] VR DLSS/DLAA skipped because per-eye input preparation failed.");
-				loggedPrepareFailure = true;
-			}
 			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 			return;
 		}
 
 		const bool perEyeResourcesReady = upscaling.AreVRPerEyeUpscalingResourcesReady(true, false);
 		if (!perEyeResourcesReady) {
-			static bool loggedMissingResource = false;
-			if (!loggedMissingResource) {
-				logger::warn("[Streamline] VR DLSS/DLAA skipped because prepared per-eye resources are incomplete.");
-				loggedMissingResource = true;
-			}
 			upscaling.dlssUpscaleOutputInSharpenerTexture = false;
 			return;
 		}
@@ -1694,8 +1130,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 					upscaling.vrIntermediateReactiveMask[i]->resource.get(), upscaling.vrIntermediateTransparencyMask[i]->resource.get(),
 					extentIn, extentOut, eyeWidthOut,
 					0.0f,
-					0.0f,
-					"VR prepared per-eye");
+					0.0f);
 				upscaling.RecordVRDLSSFullEyeEvaluation(i, eyeEvaluated);
 				allEvaluated &= eyeEvaluated;
 			}
@@ -1706,17 +1141,6 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			} else {
 				upscaling.RequestHistoryReset();
 				fallbackPresented = presentStretchFallback();
-				static bool loggedVREvaluateFailure = false;
-				static bool loggedVRStretchFallbackFailure = false;
-				if (fallbackPresented) {
-					if (!loggedVREvaluateFailure) {
-						logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes; using full-size stretch fallback for this frame.");
-						loggedVREvaluateFailure = true;
-					}
-				} else if (!loggedVRStretchFallbackFailure) {
-					logger::warn("[Streamline] VR DLSS/DLAA evaluate did not complete for both eyes and stretch fallback failed; keeping the current scene texture.");
-					loggedVRStretchFallbackFailure = true;
-				}
 			}
 			upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && (allEvaluated || fallbackPresented);
 			return;
@@ -1742,8 +1166,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
 			0.0f,
-			0.0f,
-			"VR direct eye0 combined");
+			0.0f);
 		upscaling.RecordVRDLSSFullEyeEvaluation(0, leftEvaluated);
 
 		// Eye 1 writes to intermediate, then copy into right half of combined output.
@@ -1753,8 +1176,7 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			upscaling.vrIntermediateReactiveMask[1]->resource.get(), upscaling.vrIntermediateTransparencyMask[1]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
 			0.0f,
-			0.0f,
-			"VR direct eye1 intermediate");
+			0.0f);
 		upscaling.RecordVRDLSSFullEyeEvaluation(1, rightEvaluated);
 
 		if (leftEvaluated && rightEvaluated) {
@@ -1771,17 +1193,6 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		if (!leftEvaluated || !rightEvaluated) {
 			upscaling.RequestHistoryReset();
 			fallbackPresented = presentStretchFallback();
-			static bool loggedVRDirectEvaluateFailure = false;
-			static bool loggedVRDirectStretchFallbackFailure = false;
-			if (fallbackPresented) {
-				if (!loggedVRDirectEvaluateFailure) {
-					logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed; using full-size stretch fallback for this frame.");
-					loggedVRDirectEvaluateFailure = true;
-				}
-			} else if (!loggedVRDirectStretchFallbackFailure) {
-				logger::warn("[Streamline] VR DLSS/DLAA direct-eye evaluate failed and stretch fallback failed; keeping the current scene texture.");
-				loggedVRDirectStretchFallbackFailure = true;
-			}
 			if (!fallbackPresented && canRestoreDirectEye0Output) {
 				D3D11_BOX leftOutBackup = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
 				context->CopySubresourceRegion(colorOut, 0, 0, 0, 0, upscaling.vrIntermediateColorOut[0]->resource.get(), 0, &leftOutBackup);
@@ -1800,16 +1211,10 @@ void Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 			extentIn, extentOut, (uint)screenSize.x,
 			0.0f,
-			0.0f,
-			"Non-VR main");
+			0.0f);
 		upscaling.dlssUpscaleOutputInSharpenerTexture = outputToSharpener && evaluated;
 		if (!evaluated) {
 			upscaling.RequestHistoryReset();
-			static bool loggedEvaluateFailure = false;
-			if (!loggedEvaluateFailure) {
-				logger::warn("[Streamline] DLSS/DLAA evaluate failed; keeping the current scene texture instead of sharpening stale output.");
-				loggedEvaluateFailure = true;
-			}
 		}
 	}
 }
@@ -1829,12 +1234,7 @@ bool Streamline::DestroyDLSSResources()
 	}
 
 	if (auto context = globals::d3d::context) {
-		if (BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence, "DLSS resource free") != D3D11IdleFenceResult::Ready) {
-			static bool loggedDLSSResourceFreeTimeout = false;
-			if (!loggedDLSSResourceFreeTimeout) {
-				logger::warn("[Streamline] Deferring DLSS resource free because the D3D11 queue did not become idle.");
-				loggedDLSSResourceFreeTimeout = true;
-			}
+		if (BeginOrPollD3D11IdleFence(context, pendingDLSSResourceFreeIdleFence) != D3D11IdleFenceResult::Ready) {
 			return false;
 		}
 	} else {
@@ -1843,7 +1243,7 @@ bool Streamline::DestroyDLSSResources()
 
 	bool activeViewportResourcesFreed = true;
 	if (activeDLSSViewportResourcesAllocated[0]) {
-		const bool leftFreed = FreeDLSSViewportResources(viewport, 0, true);
+		const bool leftFreed = FreeDLSSViewportResources(viewport);
 		activeViewportResourcesFreed = leftFreed && activeViewportResourcesFreed;
 		if (leftFreed)
 			activeDLSSViewportResourcesAllocated[0] = false;
@@ -1851,14 +1251,14 @@ bool Streamline::DestroyDLSSResources()
 
 	if (globals::game::isVR) {
 		if (activeDLSSViewportResourcesAllocated[1]) {
-			const bool rightFreed = FreeDLSSViewportResources(viewportRight, 1, true);
+			const bool rightFreed = FreeDLSSViewportResources(viewportRight);
 			activeViewportResourcesFreed = rightFreed && activeViewportResourcesFreed;
 			if (rightFreed)
 				activeDLSSViewportResourcesAllocated[1] = false;
 		}
 		for (uint32_t roleIndex = 0; roleIndex < kVRDLSSViewportRoleCount; ++roleIndex) {
 			for (uint32_t slotIndex = 0; slotIndex < kVRDLSSViewportSlotCount; ++slotIndex) {
-				const bool slotFreed = FreeVRDLSSViewportSlot(static_cast<DLSSViewportRole>(roleIndex), slotIndex, false);
+				const bool slotFreed = FreeVRDLSSViewportSlot(static_cast<DLSSViewportRole>(roleIndex), slotIndex);
 				activeViewportResourcesFreed = slotFreed && activeViewportResourcesFreed;
 			}
 		}
@@ -1888,9 +1288,7 @@ void Streamline::UpdateReflex()
 			disableOptions.mode = sl::ReflexMode::eOff;
 			disableOptions.frameLimitUs = 0;
 			disableOptions.useMarkersToOptimize = false;
-			if (SL_FAILED(result, slReflexSetOptions(disableOptions))) {
-				logger::error("[Streamline] Failed to disable Reflex while Frame Generation is active: {}", magic_enum::enum_name(result));
-			} else {
+			if (slReflexSetOptions(disableOptions) == sl::Result::eOk) {
 				reflexOptionsCache.valid = true;
 				reflexOptionsCache.mode = disableOptions.mode;
 				reflexOptionsCache.frameLimitUs = disableOptions.frameLimitUs;
@@ -1915,7 +1313,6 @@ void Streamline::UpdateReflex()
 	if (!std::isfinite(reflexFPSLimit)) {
 		reflexFPSLimit = 60.0f;
 		settings.reflexFPSLimit = reflexFPSLimit;
-		logger::warn("[Streamline] reflexFPSLimit is not finite ({}), using {}", originalReflexFPSLimit, reflexFPSLimit);
 	}
 	const float fpsLimit = std::clamp(reflexFPSLimit, 20.0f, 240.0f);
 	options.frameLimitUs = settings.reflexUseFPSLimit ? static_cast<uint32_t>(std::lround(1000000.0 / static_cast<double>(fpsLimit))) : 0u;
@@ -1925,9 +1322,7 @@ void Streamline::UpdateReflex()
 		reflexOptionsCache.mode != options.mode ||
 		reflexOptionsCache.frameLimitUs != options.frameLimitUs ||
 		reflexOptionsCache.useMarkersToOptimize != options.useMarkersToOptimize) {
-		if (SL_FAILED(result, slReflexSetOptions(options))) {
-			logger::error("[Streamline] Failed to apply Reflex options: {}", magic_enum::enum_name(result));
-		} else {
+		if (slReflexSetOptions(options) == sl::Result::eOk) {
 			reflexOptionsCache.valid = true;
 			reflexOptionsCache.mode = options.mode;
 			reflexOptionsCache.frameLimitUs = options.frameLimitUs;
@@ -1949,7 +1344,5 @@ void Streamline::UpdateReflex()
 		return;
 
 	lastReflexSleepFrame = currentFrame;
-	if (SL_FAILED(result, slReflexSleep(*frameToken))) {
-		logger::warn("[Streamline] Reflex sleep call failed: {}", magic_enum::enum_name(result));
-	}
+	slReflexSleep(*frameToken);
 }

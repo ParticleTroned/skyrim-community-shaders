@@ -101,8 +101,7 @@ namespace
 	bool EnsureMenuTextureSRV(
 		ID3D11Texture2D* texture,
 		winrt::com_ptr<ID3D11ShaderResourceView>& srv,
-		ID3D11Texture2D*& cachedTexture,
-		const char* label)
+		ID3D11Texture2D*& cachedTexture)
 	{
 		if (!texture || !globals::d3d::device) {
 			return false;
@@ -111,7 +110,6 @@ namespace
 		if (texture != cachedTexture || !srv) {
 			srv = nullptr;
 			if (FAILED(globals::d3d::device->CreateShaderResourceView(texture, nullptr, srv.put()))) {
-				logger::error("VR: Failed to create {} menu texture SRV", label);
 				cachedTexture = nullptr;
 				return false;
 			}
@@ -273,20 +271,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				}
 
 				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsVRRenderScaleModeActive()) {
-					static std::atomic_bool loggedDeviceLostSuppression{ false };
-					if (!loggedDeviceLostSuppression.exchange(true, std::memory_order_relaxed)) {
-						logger::warn(
-							"[VRRenderScale] Suppressing OpenVR submit after submit-stage device loss while render-scale is still active; original texture is not a final HMD submit target.");
-					}
 					return vr::VRCompositorError_None;
 				}
 
 				if (upscaling.ShouldSuppressVRRenderScaleOriginalSubmitFallback(pTexture)) {
-					static std::atomic_bool loggedRenderScaleFallbackSuppression{ false };
-					if (!loggedRenderScaleFallbackSuppression.exchange(true, std::memory_order_relaxed)) {
-						logger::warn(
-							"[VRRenderScale] Suppressing OpenVR submit for reduced render-scale texture during loading/relatch; waiting for final-sized presentation output.");
-					}
 					return vr::VRCompositorError_None;
 				}
 
@@ -322,7 +310,6 @@ void VR::InitInSceneResources()
 	if (FAILED(D3DCompileFromFile(L"Data\\Shaders\\VR\\InSceneOverlay.vs.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
 			"main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vsBlob, &errorBlob))) {
 		if (errorBlob) {
-			logger::error("VR InScene VS compile error: {}", (char*)errorBlob->GetBufferPointer());
 			errorBlob->Release();
 		}
 		return;
@@ -336,7 +323,6 @@ void VR::InitInSceneResources()
 	if (FAILED(D3DCompileFromFile(L"Data\\Shaders\\VR\\InSceneOverlay.ps.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
 			"main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &errorBlob))) {
 		if (errorBlob) {
-			logger::error("VR InScene PS compile error: {}", (char*)errorBlob->GetBufferPointer());
 			errorBlob->Release();
 		}
 		if (vsBlob)
@@ -353,7 +339,6 @@ void VR::InitInSceneResources()
 	ID3D11PixelShader* ps = nullptr;
 	if (FAILED(device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vs)) ||
 		FAILED(device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &ps))) {
-		logger::error("VR: Failed to create shader objects");
 		if (vs)
 			vs->Release();
 		if (ps)
@@ -389,7 +374,6 @@ void VR::InitInSceneResources()
 	polygonLayout[1].InstanceDataStepRate = 0;
 
 	if (FAILED(device->CreateInputLayout(polygonLayout, 2, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), temp.inputLayout.put()))) {
-		logger::error("VR: Failed to create input layout");
 		vsBlob->Release();
 		return;
 	}
@@ -417,7 +401,6 @@ void VR::InitInSceneResources()
 	D3D11_SUBRESOURCE_DATA vertexData = {};
 	vertexData.pSysMem = vertices;
 	if (FAILED(device->CreateBuffer(&vertexBufferDesc, &vertexData, temp.vb.put()))) {
-		logger::error("VR: Failed to create vertex buffer");
 		return;
 	}
 
@@ -429,7 +412,6 @@ void VR::InitInSceneResources()
 	D3D11_SUBRESOURCE_DATA indexData = {};
 	indexData.pSysMem = indices;
 	if (FAILED(device->CreateBuffer(&indexBufferDesc, &indexData, temp.ib.put()))) {
-		logger::error("VR: Failed to create index buffer");
 		return;
 	}
 
@@ -439,7 +421,6 @@ void VR::InitInSceneResources()
 	matrixBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	matrixBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 	if (FAILED(device->CreateBuffer(&matrixBufferDesc, nullptr, temp.cb.put()))) {
-		logger::error("VR: Failed to create constant buffer");
 		return;
 	}
 
@@ -454,7 +435,6 @@ void VR::InitInSceneResources()
 	blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	blendDesc.RenderTarget[0].RenderTargetWriteMask = 0x0F;
 	if (FAILED(device->CreateBlendState(&blendDesc, temp.blendState.put()))) {
-		logger::error("VR: Failed to create blend state");
 		return;
 	}
 
@@ -463,7 +443,6 @@ void VR::InitInSceneResources()
 	depthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
 	depthDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
 	if (FAILED(device->CreateDepthStencilState(&depthDesc, temp.depthState.put()))) {
-		logger::error("VR: Failed to create depth stencil state");
 		return;
 	}
 
@@ -473,7 +452,6 @@ void VR::InitInSceneResources()
 	rasterDesc.FrontCounterClockwise = FALSE;
 	rasterDesc.DepthClipEnable = TRUE;
 	if (FAILED(device->CreateRasterizerState(&rasterDesc, temp.rasterizerState.put()))) {
-		logger::error("VR: Failed to create rasterizer state");
 		return;
 	}
 
@@ -486,7 +464,6 @@ void VR::InitInSceneResources()
 	samplerDesc.MinLOD = 0;
 	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 	if (FAILED(device->CreateSamplerState(&samplerDesc, temp.sampler.put()))) {
-		logger::error("VR: Failed to create sampler state");
 		return;
 	}
 	Util::SetResourceName(temp.sampler.get(), "VR::InSceneOverlaySampler");
@@ -495,7 +472,6 @@ void VR::InitInSceneResources()
 	if (FAILED(D3DCompile(kSubmitCompositeCS, sizeof(kSubmitCompositeCS) - 1, "VRSubmitMenuCompositeCS", nullptr, nullptr,
 			"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &csBlob, &errorBlob))) {
 		if (errorBlob) {
-			logger::error("VR submit menu composite CS compile error: {}", static_cast<char*>(errorBlob->GetBufferPointer()));
 			errorBlob->Release();
 		}
 		return;
@@ -505,7 +481,6 @@ void VR::InitInSceneResources()
 		errorBlob = nullptr;
 	}
 	if (FAILED(device->CreateComputeShader(csBlob->GetBufferPointer(), csBlob->GetBufferSize(), nullptr, temp.submitCompositeCS.put()))) {
-		logger::error("VR: Failed to create submit menu composite compute shader");
 		csBlob->Release();
 		return;
 	}
@@ -518,14 +493,12 @@ void VR::InitInSceneResources()
 	submitCompositeCBDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	submitCompositeCBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 	if (FAILED(device->CreateBuffer(&submitCompositeCBDesc, nullptr, temp.submitCompositeCB.put()))) {
-		logger::error("VR: Failed to create submit menu composite constant buffer");
 		return;
 	}
 	Util::SetResourceName(temp.submitCompositeCB.get(), "VR::SubmitMenuCompositeCB");
 
 	inSceneResources = std::move(temp);
 	inSceneResources.initialized = true;
-	logger::debug("VR: In-Scene Overlay resources initialized.");
 }
 
 void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV)
@@ -608,14 +581,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 
 	proj = DirectX::XMMatrixPerspectiveOffCenterRH(left * nearZ, right * nearZ, bottom * nearZ, top * nearZ, nearZ, farZ);
 
-	// Log projection values once per eye
-	static bool projLogged[2] = { false, false };
-	if (!projLogged[(int)eye]) {
-		logger::debug("VR Projection Eye {}: L={:.4f} R={:.4f} B={:.4f} T={:.4f}, EyeX={:.4f}",
-			(int)eye, left, right, bottom, top, eyeToHead._41);
-		projLogged[(int)eye] = true;
-	}
-
 	// Head-space VP (for HMD-relative mode)
 	vpHeadSpace = eyeToHead.Invert() * proj;
 
@@ -654,14 +619,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 
 			const DXGI_FORMAT rtvFormat = GetRenderTargetViewFormat(texDesc.Format);
 			if (!SupportsRenderTargetView(rtvDevice, rtvFormat)) {
-				logger::error("VR: Eye texture format cannot be used as an RTV ({}x{}, Format: {}, RTVFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X})",
-					texDesc.Width,
-					texDesc.Height,
-					(uint32_t)texDesc.Format,
-					(uint32_t)rtvFormat,
-					texDesc.ArraySize,
-					texDesc.SampleDesc.Count,
-					texDesc.BindFlags);
 				return;
 			}
 
@@ -688,15 +645,6 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 
 			HRESULT hr = rtvDevice->CreateRenderTargetView(targetTexture, &rtvDesc, cachedRTV.rtv.put());
 			if (FAILED(hr)) {
-				logger::error("VR: Failed to create RTV for eye texture ({}x{}, Format: {}, RTVFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X}). HRESULT: 0x{:08X}",
-					texDesc.Width,
-					texDesc.Height,
-					(uint32_t)texDesc.Format,
-					(uint32_t)rtvFormat,
-					texDesc.ArraySize,
-					texDesc.SampleDesc.Count,
-					texDesc.BindFlags,
-					(uint32_t)hr);
 				return;
 			}
 			cachedRTV.texture = targetTexture;
@@ -748,37 +696,12 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 	vpDesc.MaxDepth = 1.0f;
 	context->RSSetViewports(1, &vpDesc);
 
-	// Log texture and viewport details once per eye per session
-	static bool textureInfoLogged[2] = { false, false };
-	if (!textureInfoLogged[eyeIdx]) {
-		logger::debug("VR Submit Texture Info (Eye {}):", eyeIdx);
-		logger::debug("  Texture Size: {}x{}, Format: {}, ArraySize: {}, SampleCount: {}",
-			texDesc.Width, texDesc.Height, (uint32_t)texDesc.Format, texDesc.ArraySize, texDesc.SampleDesc.Count);
-		if (bounds) {
-			logger::debug("  Bounds: uMin={:.3f}, vMin={:.3f}, uMax={:.3f}, vMax={:.3f}",
-				bounds->uMin, bounds->vMin, bounds->uMax, bounds->vMax);
-			logger::debug("  Viewport: X={:.0f}, Y={:.0f}, W={:.0f}, H={:.0f}",
-				vpDesc.TopLeftX, vpDesc.TopLeftY, vpDesc.Width, vpDesc.Height);
-		} else {
-			logger::debug("  No bounds provided (full texture per eye, or texture array)");
-			logger::debug("  Viewport: X={:.0f}, Y={:.0f}, W={:.0f}, H={:.0f}",
-				vpDesc.TopLeftX, vpDesc.TopLeftY, vpDesc.Width, vpDesc.Height);
-		}
-		logger::debug("  RTV Dimension: {}",
-			(texDesc.ArraySize > 1 && texDesc.SampleDesc.Count > 1) ? "Texture2DMSArray" :
-			(texDesc.ArraySize > 1)                                 ? "Texture2DArray (per-eye slice)" :
-			(texDesc.SampleDesc.Count > 1)                          ? "Texture2DMS" :
-																	  "Texture2D (single)");
-		textureInfoLogged[eyeIdx] = true;
-	}
-
 	// Helper to draw the overlay quad with a given WVP matrix
 	auto drawOverlayQuad = [&](ID3D11DeviceContext* ctx,
 							   const InSceneCB& cbData,
 							   ID3D11Texture2D* texture,
 							   winrt::com_ptr<ID3D11ShaderResourceView>& srv,
-							   ID3D11Texture2D*& cachedTexture,
-							   const char* label) {
+							   ID3D11Texture2D*& cachedTexture) {
 		D3D11_MAPPED_SUBRESOURCE mappedResource;
 		if (SUCCEEDED(ctx->Map(inSceneResources.cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource))) {
 			memcpy(mappedResource.pData, &cbData, sizeof(InSceneCB));
@@ -807,7 +730,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 		ctx->OMSetDepthStencilState(inSceneResources.depthState.get(), 0);
 		ctx->RSSetState(inSceneResources.rasterizerState.get());
 
-		if (!EnsureMenuTextureSRV(texture, srv, cachedTexture, label)) {
+		if (!EnsureMenuTextureSRV(texture, srv, cachedTexture)) {
 			return;
 		}
 		ID3D11ShaderResourceView* srvPtr = srv.get();
@@ -840,8 +763,7 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			cbData,
 			menuTexture.get(),
 			inSceneResources.menuSRV,
-			inSceneResources.cachedMenuTexture,
-			"HMD");
+			inSceneResources.cachedMenuTexture);
 	}
 
 	// --- Render Controller Overlay ---
@@ -876,16 +798,14 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 							cbData,
 							menuControllerTexture.get(),
 							inSceneResources.menuControllerSRV,
-							inSceneResources.cachedMenuControllerTexture,
-							"controller");
+							inSceneResources.cachedMenuControllerTexture);
 					} else {
 						drawOverlayQuad(
 							context,
 							cbData,
 							menuTexture.get(),
 							inSceneResources.menuSRV,
-							inSceneResources.cachedMenuTexture,
-							"HMD");
+							inSceneResources.cachedMenuTexture);
 					}
 				}
 			}
@@ -1017,7 +937,7 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 
 	ID3D11ShaderResourceView* overlaySRV = nullptr;
 	if (showOnHMD) {
-		if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture, "HMD")) {
+		if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture)) {
 			return;
 		}
 		overlaySRV = inSceneResources.menuSRV.get();
@@ -1026,13 +946,12 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 			if (!EnsureMenuTextureSRV(
 					menuControllerTexture.get(),
 					inSceneResources.menuControllerSRV,
-					inSceneResources.cachedMenuControllerTexture,
-					"controller")) {
+					inSceneResources.cachedMenuControllerTexture)) {
 				return;
 			}
 			overlaySRV = inSceneResources.menuControllerSRV.get();
 		} else {
-			if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture, "HMD")) {
+			if (!EnsureMenuTextureSRV(menuTexture.get(), inSceneResources.menuSRV, inSceneResources.cachedMenuTexture)) {
 				return;
 			}
 			overlaySRV = inSceneResources.menuSRV.get();
@@ -1159,22 +1078,12 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 
 		const auto sourceDesc = submitCopy.pendingSourceDesc;
 		if (sourceDesc.ArraySize != 1 || sourceDesc.SampleDesc.Count != 1) {
-			logger::error("VR: Cannot composite in-scene menu into submit texture with array={} samples={}", sourceDesc.ArraySize, sourceDesc.SampleDesc.Count);
 			submitCopy.pendingCreate = false;
 			continue;
 		}
 
 		const DXGI_FORMAT viewFormat = GetRenderTargetViewFormat(sourceDesc.Format);
 		if (!SupportsUnorderedAccessView(device, viewFormat)) {
-			logger::error("VR: Cannot create in-scene menu submit copy UAV (eye={}, {}x{}, Format: {}, ViewFormat: {}, ArraySize: {}, Samples: {}, BindFlags: 0x{:X})",
-				eyeIdx,
-				sourceDesc.Width,
-				sourceDesc.Height,
-				(uint32_t)sourceDesc.Format,
-				(uint32_t)viewFormat,
-				sourceDesc.ArraySize,
-				sourceDesc.SampleDesc.Count,
-				sourceDesc.BindFlags);
 			submitCopy.pendingCreate = false;
 			continue;
 		}
@@ -1188,14 +1097,6 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 		winrt::com_ptr<ID3D11Texture2D> texture;
 		HRESULT hr = device->CreateTexture2D(&copyDesc, nullptr, texture.put());
 		if (FAILED(hr)) {
-			logger::error("VR: Failed to create in-scene menu submit copy texture (eye={}, {}x{}, Format: {}, ArraySize: {}, Samples: {}, HRESULT: 0x{:08X})",
-				eyeIdx,
-				copyDesc.Width,
-				copyDesc.Height,
-				(uint32_t)copyDesc.Format,
-				copyDesc.ArraySize,
-				copyDesc.SampleDesc.Count,
-				(uint32_t)hr);
 			submitCopy.pendingCreate = false;
 			continue;
 		}
@@ -1215,15 +1116,6 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
 		hr = device->CreateUnorderedAccessView(texture.get(), &uavDesc, uav.put());
 		if (FAILED(hr)) {
-			logger::error("VR: Failed to create in-scene menu submit copy UAV (eye={}, {}x{}, Format: {}, ViewFormat: {}, ArraySize: {}, Samples: {}, HRESULT: 0x{:08X})",
-				eyeIdx,
-				copyDesc.Width,
-				copyDesc.Height,
-				(uint32_t)copyDesc.Format,
-				(uint32_t)viewFormat,
-				copyDesc.ArraySize,
-				copyDesc.SampleDesc.Count,
-				(uint32_t)hr);
 			submitCopy.pendingCreate = false;
 			continue;
 		}
@@ -1236,13 +1128,6 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 		inSceneResources.cachedEyeRTVs[eyeIdx].rtv = nullptr;
 		Util::SetResourceName(submitCopy.texture.get(), eyeIdx == 0 ? "VR::InSceneOverlaySubmitCopyLeft" : "VR::InSceneOverlaySubmitCopyRight");
 		Util::SetResourceName(submitCopy.uav.get(), eyeIdx == 0 ? "VR::InSceneOverlaySubmitCopyLeft UAV" : "VR::InSceneOverlaySubmitCopyRight UAV");
-		logger::debug("VR: Created in-scene menu submit copy for eye {} ({}x{}, format={}, array={}, samples={})",
-			eyeIdx,
-			copyDesc.Width,
-			copyDesc.Height,
-			(uint32_t)copyDesc.Format,
-			copyDesc.ArraySize,
-			copyDesc.SampleDesc.Count);
 	}
 }
 
@@ -1255,7 +1140,6 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 	auto sourceTexture = ResolveSubmitTexture2D(inputTexture->handle);
 	auto* context = globals::d3d::context;
 	if (!sourceTexture || !context) {
-		logger::error("VR: OpenVR submit handle is not a D3D11 texture; skipping in-scene menu compositing");
 		return false;
 	}
 
@@ -1287,7 +1171,6 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 void VR::InstallSubmitHook()
 {
 	static bool installed = false;
-	static bool warnedUnavailable = false;
 	if (installed) {
 		inSceneResources.submitHookInstalled = true;
 		return;
@@ -1300,64 +1183,9 @@ void VR::InstallSubmitHook()
 	}
 
 	if (openvr && compositor) {
-		logger::info("VR: Installing IVRCompositor::Submit hook for in-scene overlay rendering");
-
-		// Log comprehensive VR system parameters (debug only)
-		logger::debug("=== VR System Configuration ===");
-
-		// Get and log IPD
-		float ipd = Util::GetIPDFromHMD();
-		logger::debug("IPD: {:.4f} meters ({:.2f} mm)", ipd, ipd * 1000.0f);
-
-		// Get and log eye transforms
-		if (openvr->vrSystem) {
-			vr::HmdMatrix34_t leftEye = openvr->vrSystem->GetEyeToHeadTransform(vr::Eye_Left);
-			vr::HmdMatrix34_t rightEye = openvr->vrSystem->GetEyeToHeadTransform(vr::Eye_Right);
-
-			logger::debug("Left Eye Transform:");
-			logger::debug("  Translation: X={:.4f}, Y={:.4f}, Z={:.4f}",
-				leftEye.m[0][3], leftEye.m[1][3], leftEye.m[2][3]);
-			logger::debug("Right Eye Transform:");
-			logger::debug("  Translation: X={:.4f}, Y={:.4f}, Z={:.4f}",
-				rightEye.m[0][3], rightEye.m[1][3], rightEye.m[2][3]);
-			logger::debug("Calculated Eye Separation: {:.4f} meters ({:.2f} mm)",
-				std::abs(leftEye.m[0][3] - rightEye.m[0][3]),
-				std::abs(leftEye.m[0][3] - rightEye.m[0][3]) * 1000.0f);
-
-			// Get projection matrices
-			vr::HmdMatrix44_t leftProj = openvr->vrSystem->GetProjectionMatrix(vr::Eye_Left, 0.1f, 1000.0f);
-			vr::HmdMatrix44_t rightProj = openvr->vrSystem->GetProjectionMatrix(vr::Eye_Right, 0.1f, 1000.0f);
-
-			logger::debug("Projection Matrices (near=0.1, far=1000.0):");
-			logger::debug("  Left [0][0]={:.4f}, [1][1]={:.4f}, [0][2]={:.4f}",
-				leftProj.m[0][0], leftProj.m[1][1], leftProj.m[0][2]);
-			logger::debug("  Right [0][0]={:.4f}, [1][1]={:.4f}, [0][2]={:.4f}",
-				rightProj.m[0][0], rightProj.m[1][1], rightProj.m[0][2]);
-		}
-
-		logger::debug("Convergence Formula Info:");
-		logger::debug("  Formula: stereoShift = (IPD/2) / (depth * tan(hFOV/2))");
-		logger::debug("  - Shift is independent of scale (scale only controls size)");
-		logger::debug("  - Depth is controlled by OffsetZ (negative = in front)");
-		float halfIPD = ipd / 2.0f;
-		if (openvr->vrSystem) {
-			vr::HmdMatrix44_t proj = openvr->vrSystem->GetProjectionMatrix(vr::Eye_Left, 0.1f, 1000.0f);
-			float tanHFOV = 1.0f / proj.m[0][0];
-			logger::debug("  tan(hFOV/2) = {:.4f}", tanHFOV);
-			logger::debug("  Example: At depth 1.0m, shift={:.6f}", halfIPD / (1.0f * tanHFOV));
-			logger::debug("  Example: At depth 2.0m, shift={:.6f}", halfIPD / (2.0f * tanHFOV));
-			logger::debug("  Example: At depth 5.0m, shift={:.6f}", halfIPD / (5.0f * tanHFOV));
-		}
-		logger::debug("================================");
-
 		// IVRCompositor::Submit is index 5
 		stl::detour_vfunc<5, IVRCompositor_Submit>(compositor);
 		installed = true;
 		inSceneResources.submitHookInstalled = true;
-
-		logger::info("VR: In-scene overlay initialized");
-	} else if (!warnedUnavailable) {
-		logger::warn("VR: Failed to install IVRCompositor::Submit hook - Interface not available");
-		warnedUnavailable = true;
 	}
 }

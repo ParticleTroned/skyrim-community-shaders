@@ -854,6 +854,9 @@ void Menu::DrawSettings()
 		Util::DrawClearShaderCacheConfirmation();
 	}
 	ImGui::End();
+	if (!IsEnabled) {
+		PerformanceTuningRenderer::CancelActiveMeasurements();
+	}
 }
 
 /**
@@ -1095,7 +1098,6 @@ void Menu::ProcessInputEventQueue()
 							 if (IsEnabled)
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 							 else if (wasEnabled) {
-								 PerformanceTuningRenderer::NotifyMenuClosed();
 								 PerformanceTuningRenderer::CancelActiveMeasurements();
 							 }
 						 }
@@ -1231,7 +1233,6 @@ void Menu::ProcessInputEventQueue()
 						editorWindow->open = false;
 					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
 						IsEnabled = false;
-						PerformanceTuningRenderer::NotifyMenuClosed();
 						PerformanceTuningRenderer::CancelActiveMeasurements();
 					}
 				}

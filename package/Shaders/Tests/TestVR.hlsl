@@ -179,3 +179,24 @@ static const float kEps = 0.0001f;
 	result = Stereo::ConvertUVToNormalizedScreenSpace(float2(0.25, 1.0));
 	ASSERT(IsTrue, abs(result.y - 1.0) < kEps);
 }
+
+/// @tags vr, stereo, uv, reprojection
+/// ApplyVelocityToUV rejects left-edge history in VR instead of clamping it.
+[numthreads(1, 1, 1)] void TestApplyVelocityToUVRejectsVREdgeHistory() {
+	bool oob = false;
+
+	// In-bounds reprojection stays valid and preserves the expected stereo-space result.
+	float2 resultRight = Stereo::ApplyVelocityToUV(float2(0.75, 0.5), float2(0.0, 0.0), oob);
+	ASSERT(IsFalse, oob);
+	ASSERT(IsTrue, abs(resultRight.x - 0.75) < kEps);
+	ASSERT(IsTrue, abs(resultRight.y - 0.5) < kEps);
+
+	// OOB past the right edge (mono >= 1): oob set; returned x is the dead saturate (0.5 stereo).
+	float2 resultOob = Stereo::ApplyVelocityToUV(float2(0.25, 0.5), float2(1.5, 0.0), oob);
+	ASSERT(IsTrue, oob);
+	ASSERT(IsTrue, abs(resultOob.x - 0.5) < kEps);
+
+	// OOB past the left edge (mono <= 0) must reject too, not clamp-and-sample.
+	Stereo::ApplyVelocityToUV(float2(0.25, 0.5), float2(-0.6, 0.0), oob);
+	ASSERT(IsTrue, oob);
+}

@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "PaletteWindow.h"
 #include "State.h"
+#include "Utils/Subrect.h"
 #include "Utils/UI.h"
 #include "Weather/LightingTemplateWidget.h"
 #include "WeatherUtils.h"
@@ -874,7 +875,9 @@ void EditorWindow::ShowViewportWindow()
 	}
 
 	if (tempTexture && tempTexture->srv) {
-		ImGui::Image((void*)tempTexture->srv.get(), imageSize);
+		// The preview is a render target SRV; draw it opaque so RT alpha does
+		// not create a transparent cutout in the VR menu plate.
+		Util::Subrect::ImageOpaque(tempTexture->srv.get(), imageSize);
 	} else {
 		ImGui::TextDisabled("Viewport unavailable");
 	}

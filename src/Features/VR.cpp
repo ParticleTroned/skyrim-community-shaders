@@ -458,6 +458,7 @@ void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	screenSpaceShadows.useStereoReproject = false;
 	screenSpaceGI.settings.EnableFoveated = a_enabled ? screenSpaceGIDefaults.EnableFoveated : false;
 	screenSpaceGI.settings.EnableStereoSync = a_enabled ? screenSpaceGIDefaults.EnableStereoSync : false;
+	screenSpaceGI.settings.UseStereoReproject = a_enabled ? screenSpaceGIDefaults.UseStereoReproject : false;
 	settings.EnableStereoBlend = a_enabled ? defaults.EnableStereoBlend : false;
 	settings.EnableLightingFoveation = a_enabled ? defaults.EnableLightingFoveation : false;
 	settings.EnableLightingFoveationHardCutoff = a_enabled ? defaults.EnableLightingFoveationHardCutoff : false;
@@ -486,6 +487,7 @@ json VR::CapturePerformanceCostMeasurementState() const
 		{ "EnableSSShadowsStereoReproject", globals::features::screenSpaceShadows.useStereoReproject },
 		{ "EnableSSGIFoveated", globals::features::screenSpaceGI.settings.EnableFoveated },
 		{ "EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync },
+		{ "EnableSSGIStereoReproject", globals::features::screenSpaceGI.settings.UseStereoReproject },
 		{ "EnableStereoBlend", settings.EnableStereoBlend },
 		{ "EnableLightingFoveation", settings.EnableLightingFoveation },
 		{ "EnableLightingFoveationHardCutoff", settings.EnableLightingFoveationHardCutoff },
@@ -516,6 +518,8 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	globals::features::screenSpaceGI.settings.EnableFoveated =
 		a_state.value("EnableSSGIFoveated", globals::features::screenSpaceGI.settings.EnableFoveated);
 	globals::features::screenSpaceGI.settings.EnableStereoSync = a_state.value("EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync);
+	globals::features::screenSpaceGI.settings.UseStereoReproject =
+		a_state.value("EnableSSGIStereoReproject", globals::features::screenSpaceGI.settings.UseStereoReproject);
 	settings.EnableStereoBlend = a_state.value("EnableStereoBlend", settings.EnableStereoBlend);
 	settings.EnableLightingFoveation = a_state.value("EnableLightingFoveation", settings.EnableLightingFoveation);
 	settings.EnableLightingFoveationHardCutoff = a_state.value("EnableLightingFoveationHardCutoff", settings.EnableLightingFoveationHardCutoff);
@@ -1168,6 +1172,10 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		auto guard = Util::DisableGuard(!screenSpaceGIEnabled);
 		ImGui::Checkbox("Stereo Sync SSGI", &screenSpaceGI.settings.EnableStereoSync);
 	}
+	{
+		auto guard = Util::DisableGuard(!screenSpaceGIEnabled || !screenSpaceGI.settings.EnableStereoSync);
+		ImGui::Checkbox("Stereo Reproject SSGI", &screenSpaceGI.settings.UseStereoReproject);
+	}
 	ImGui::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
 
 	ImGui::SeparatorText("Shader FOV");
@@ -1643,6 +1651,22 @@ namespace
 				"Can reduce VR shimmer or left/right mismatch.",
 				"Costs some performance while SSGI is active.",
 				"Requires VR and active SSGI.");
+			{
+				auto guard = Util::DisableGuard(!screenSpaceGIEnabled || !screenSpaceGI.settings.EnableStereoSync);
+				ImGui::Indent();
+				ImGui::Checkbox("Reproject SSGI", &screenSpaceGI.settings.UseStereoReproject);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Transfers exact Eye 0 (left) SSGI/AO results into Eye 1 (right).");
+					ImGui::TextUnformatted("Usually faster than bilateral sync because many Eye 1 pixels skip the GI march.");
+					ImGui::TextUnformatted("Falls back to the current sync path for foveated SSGI and unsupported modes.");
+					ImGui::TextUnformatted("HQ Specular IL disables the reprojection optimization for full GI.");
+					if (!screenSpaceGIEnabled)
+						ImGui::TextUnformatted("Requires VR and active SSGI.");
+					else if (!screenSpaceGI.settings.EnableStereoSync)
+						ImGui::TextUnformatted("Requires SSGI sync to be enabled.");
+				}
+				ImGui::Unindent();
+			}
 
 			if (!isVR)
 				ImGui::TextDisabled("VR-only.");

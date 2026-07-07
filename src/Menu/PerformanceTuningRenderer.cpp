@@ -444,7 +444,7 @@ namespace
 			ok = SaveFeatureSettingsToUserDefaults(
 					 FindFeatureByShortName("ScreenSpaceGI"),
 					 userSettings,
-					 MakeJsonMask({ "EnableFoveated", "EnableStereoSync" })) &&
+					 MakeJsonMask({ "EnableFoveated", "EnableStereoSync", "UseStereoReproject" })) &&
 			     ok;
 			return ok;
 		}
@@ -574,7 +574,7 @@ namespace
 			RestoreFeatureSettingsFromUserDefaults(
 				FindFeatureByShortName("ScreenSpaceGI"),
 				userSettings,
-				MakeJsonMask({ "EnableFoveated", "EnableStereoSync" }),
+				MakeJsonMask({ "EnableFoveated", "EnableStereoSync", "UseStereoReproject" }),
 				anyFound,
 				anyChanged,
 				anyFailed);

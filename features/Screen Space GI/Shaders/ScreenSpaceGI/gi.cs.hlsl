@@ -31,6 +31,7 @@
 #include "Common/GBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+#include "ScreenSpaceGI/StereoReproject.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
 
 Texture2D<float> srcWorkingDepth : register(t0);
@@ -168,9 +169,10 @@ void CalculateGI(
 		const float3 normalU = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, pxU, uvU * frameScale, samplerLinearClamp).xy);
 		const float3 normalD = GBuffer::DecodeNormal(FULLRES_LOAD(srcNormalRoughness, pxD, uvD * frameScale, samplerLinearClamp).xy);
 		const float normalVariance = ((1.0 - saturate(dot(viewspaceNormal, normalL))) +
-		                              (1.0 - saturate(dot(viewspaceNormal, normalR))) +
-		                              (1.0 - saturate(dot(viewspaceNormal, normalU))) +
-		                              (1.0 - saturate(dot(viewspaceNormal, normalD)))) * 0.25;
+										 (1.0 - saturate(dot(viewspaceNormal, normalR))) +
+										 (1.0 - saturate(dot(viewspaceNormal, normalU))) +
+										 (1.0 - saturate(dot(viewspaceNormal, normalD)))) *
+		                             0.25;
 
 		const float localVariance = saturate(depthVariance * 6.0 + normalVariance * 2.0);
 		const float farDepthT = saturate((viewspaceZ - DepthFadeRange.x) * DepthFadeScaleConst);
@@ -322,11 +324,11 @@ void CalculateGI(
 					float giBoost = 4.0 * Math::PI * (1 + GIDistanceCompensation * smoothstep(0, GICompensationMaxDist, s * EffectRadius));
 
 					// IL
-#ifdef CENTER_FULL_PASS
+#	ifdef CENTER_FULL_PASS
 					float3 normalSample = GBuffer::DecodeNormal(srcNormalRoughness.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).xy);
-#else
+#	else
 					float3 normalSample = GBuffer::DecodeNormal(srcNormal.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance));
-#endif
+#	endif
 					if (dot(samplePos, normalSample) > 0)
 						normalSample = -normalSample;
 					float frontBackMult = -dot(normalSample, sampleHorizonVec);
@@ -335,15 +337,15 @@ void CalculateGI(
 					if (frontBackMult > 0.f) {
 						float3 sampleHorizonVecWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], half4(sampleHorizonVec, 0)).xyz);
 
-					float3 sampleRadiance;
-#ifdef CENTER_FULL_PASS
-					sampleRadiance = Color::RadianceToLinear(srcSceneColor.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).rgb * GIStrength);
-#else
-					sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance).rgb;
-#endif
-					sampleRadiance *= frontBackMult * giBoost * countbits(validBits) * 0.03125;
-					sampleRadiance = max(sampleRadiance, 0);
-					float3 sampleRadianceYCoCg = Color::RGBToYCoCg(sampleRadiance);
+						float3 sampleRadiance;
+#	ifdef CENTER_FULL_PASS
+						sampleRadiance = Color::RadianceToLinear(srcSceneColor.SampleLevel(samplerPointClamp, sampleUV * frameScale, 0).rgb * GIStrength);
+#	else
+						sampleRadiance = srcRadiance.SampleLevel(samplerPointClamp, sampleUV * OUT_FRAME_SCALE, mipLevelRadiance).rgb;
+#	endif
+						sampleRadiance *= frontBackMult * giBoost * countbits(validBits) * 0.03125;
+						sampleRadiance = max(sampleRadiance, 0);
+						float3 sampleRadianceYCoCg = Color::RGBToYCoCg(sampleRadiance);
 
 						radianceY += sampleRadianceYCoCg.r * SphericalHarmonics::Evaluate(sampleHorizonVecWS);
 						radianceCoCg += sampleRadianceYCoCg.gb;
@@ -404,8 +406,7 @@ void CalculateGI(
 	o_currGIAOSpecular = float4(radianceSpecular, visibilitySpecular);
 }
 
-[numthreads(8, 8, 1)] void main(const uint2 dtid
-								: SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void main(const uint2 dtid : SV_DispatchThreadID) {
 #ifdef CENTER_FULL_PASS
 	const uint2 dispatchOffset = uint2(CenterDispatchOffsetX, CenterDispatchOffsetY);
 	const uint2 dispatchSize = uint2(CenterDispatchSizeX, CenterDispatchSizeY);
@@ -425,13 +426,13 @@ void CalculateGI(
 #ifdef CENTER_FULL_PASS
 	if (GetCenterFullMaskWeight(uv, eyeIndex) <= 0.0) {
 		outAo[pxCoord] = 0;
-#ifdef GI
+#	ifdef GI
 		outY[pxCoord] = 0;
 		outCoCg[pxCoord] = 0;
-#ifdef GI_SPECULAR
+#		ifdef GI_SPECULAR
 		outGISpecular[pxCoord] = 0;
-#endif
-#endif
+#		endif
+#	endif
 		return;
 	}
 #endif
@@ -448,6 +449,20 @@ void CalculateGI(
 	half2 encodedWorldNormal = GBuffer::EncodeNormal(ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse[eyeIndex]));
 #ifndef CENTER_FULL_PASS
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
+#endif
+
+#ifdef STEREO_EYE0_ONLY
+	if (eyeIndex != 0) {
+		int2 otherPx;
+		if (GIReprojectsCleanly(uv, viewspaceZ, eyeIndex, srcWorkingDepth, frameScale, otherPx)) {
+			outAo[pxCoord] = 0;
+#	ifdef GI
+			outY[pxCoord] = 0;
+			outCoCg[pxCoord] = 0;
+#	endif
+			return;
+		}
+	}
 #endif
 
 	// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
@@ -501,7 +516,7 @@ void CalculateGI(
 #	if defined(GI) && defined(GI_SPECULAR)
 		currGIAOSpecular = lerp(srcPrevGISpecular[pxCoord], currGIAOSpecular, lerpFactor);
 #	endif
-	#endif
+#endif
 	}
 
 	currAo *= vrCullFade;
@@ -519,8 +534,8 @@ void CalculateGI(
 #ifdef GI
 	outY[pxCoord] = currY;
 	outCoCg[pxCoord] = currCoCg;
-#ifdef GI_SPECULAR
+#	ifdef GI_SPECULAR
 	outGISpecular[pxCoord] = currGIAOSpecular;
-#endif
+#	endif
 #endif
 }

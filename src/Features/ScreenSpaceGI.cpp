@@ -29,6 +29,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VRCullDistance,
 	EnableFoveated,
 	EnableStereoSync,
+	UseStereoReproject,
 	MinScreenRadius,
 	AORadius,
 	GIRadius,
@@ -126,6 +127,7 @@ namespace
 		a_settings.CenterFullResMaskScale = defaults.CenterFullResMaskScale;
 		a_settings.EnableFoveated = defaults.EnableFoveated;
 		a_settings.EnableStereoSync = defaults.EnableStereoSync;
+		a_settings.UseStereoReproject = defaults.UseStereoReproject;
 	}
 
 	void StripVRSpecificSettings(json& o_json)
@@ -134,6 +136,7 @@ namespace
 		o_json.erase("CenterFullResMaskScale");
 		o_json.erase("EnableFoveated");
 		o_json.erase("EnableStereoSync");
+		o_json.erase("UseStereoReproject");
 	}
 
 	void DisableGIEffects(ScreenSpaceGI::Settings& a_settings)
@@ -231,6 +234,7 @@ namespace
 		a_settings.VRCullDistance = ClampVRCullDistance(a_settings.VRCullDistance);
 		if (!REL::Module::IsVR()) {
 			a_settings.EnableFoveated = false;
+			a_settings.UseStereoReproject = false;
 			a_settings.CenterFullResMaskScale = 0.0f;
 		} else {
 			a_settings.EnableVanillaSSAO = false;
@@ -1272,11 +1276,15 @@ void ScreenSpaceGI::ClearShaderCache()
 		&radianceDisoccAOOnlyCompute,
 		&giCompute,
 		&giAOOnlyCompute,
+		&giEye0OnlyCompute,
+		&giAOOnlyEye0OnlyCompute,
 		&centerGIMaskedCompute,
 		&centerGIMaskedAOOnlyCompute,
 		&blurCompute,
 		&stereoSyncCompute,
 		&stereoSyncAOOnlyCompute,
+		&reprojectCompute,
+		&reprojectAOOnlyCompute,
 		&centerStereoSyncCompute,
 		&centerStereoSyncAOOnlyCompute,
 		&upsampleCompute,
@@ -1315,6 +1323,8 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &centerBlendAOOnlyCompute, "centerBlend.cs.hlsl", {}, false, false, false },
 		};
 	if (REL::Module::IsVR()) {
+		shaderInfos.push_back({ &giAOOnlyEye0OnlyCompute, "gi.cs.hlsl", { { "STEREO_EYE0_ONLY", "" }, { "FRAMEBUFFER", "" } }, true, true, false, true });
+		shaderInfos.push_back({ &reprojectAOOnlyCompute, "reproject.cs.hlsl", { { "FRAMEBUFFER", "" } }, true, false, false });
 		shaderInfos.push_back({ &stereoSyncAOOnlyCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } }, true, false, false });
 		shaderInfos.push_back({ &centerStereoSyncAOOnlyCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" }, { "CENTER_DISPATCH", "" } }, false, false, false });
 	}
@@ -1325,6 +1335,8 @@ void ScreenSpaceGI::CompileComputeShaders()
 		shaderInfos.push_back({ &centerGIMaskedCompute, "gi.cs.hlsl", { { "CENTER_FULL_PASS", "" } }, false, false, true, true });
 		shaderInfos.push_back({ &blurCompute, "blur.cs.hlsl", {} });
 		if (REL::Module::IsVR()) {
+			shaderInfos.push_back({ &giEye0OnlyCompute, "gi.cs.hlsl", { { "GI", "" }, { "STEREO_EYE0_ONLY", "" }, { "FRAMEBUFFER", "" } }, true, true, false, true });
+			shaderInfos.push_back({ &reprojectCompute, "reproject.cs.hlsl", { { "GI", "" }, { "FRAMEBUFFER", "" } }, true, false, false });
 			shaderInfos.push_back({ &stereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" } }, true, false, true });
 			shaderInfos.push_back({ &centerStereoSyncCompute, "stereoSync.cs.hlsl", { { "FRAMEBUFFER", "" }, { "CENTER_DISPATCH", "" } }, false, false, true });
 		}
@@ -1529,24 +1541,32 @@ void ScreenSpaceGI::DrawSSGI()
 	const bool blurEnabled = !foveatedSsgiActive && settings.EnableBlur && runILPath;
 	const bool ssgiOutputNeeded = allowAOSpace || runILPath;
 	const bool vrStereoSyncEnabled = isVR && settings.EnableStereoSync;
-	const bool stereoSyncBaseEnabled = vrStereoSyncEnabled && !foveatedSsgiActive && ssgiOutputNeeded;
+	const bool vrStereoReprojectEnabled = vrStereoSyncEnabled && settings.UseStereoReproject;
 	ID3D11ComputeShader* activeRadianceDisoccCompute = nullptr;
 	ID3D11ComputeShader* activeGICompute = nullptr;
 	ID3D11ComputeShader* activeCenterGICompute = nullptr;
 	ID3D11ComputeShader* activeCenterBlendCompute = nullptr;
 	ID3D11ComputeShader* activeUpsampleCompute = nullptr;
 	ID3D11ComputeShader* activeStereoSyncCompute = nullptr;
+	ID3D11ComputeShader* activeStereoReprojectGICompute = nullptr;
+	ID3D11ComputeShader* activeReprojectCompute = nullptr;
 	ID3D11ComputeShader* activeCenterStereoSyncCompute = nullptr;
 	auto refreshActiveShaders = [&]() {
 		activeRadianceDisoccCompute = runILPath ? radianceDisoccCompute.get() : radianceDisoccAOOnlyCompute.get();
 		activeGICompute = runILPath ? giCompute.get() : giAOOnlyCompute.get();
+		activeStereoReprojectGICompute = runILPath ? giEye0OnlyCompute.get() : giAOOnlyEye0OnlyCompute.get();
 		activeCenterGICompute = runILPath ? centerGIMaskedCompute.get() : centerGIMaskedAOOnlyCompute.get();
 		activeCenterBlendCompute = runILPath ? centerBlendCompute.get() : centerBlendAOOnlyCompute.get();
 		activeUpsampleCompute = runILPath ? upsampleCompute.get() : upsampleAOOnlyCompute.get();
 		activeStereoSyncCompute = runILPath ? stereoSyncCompute.get() : stereoSyncAOOnlyCompute.get();
+		activeReprojectCompute = runILPath ? reprojectCompute.get() : reprojectAOOnlyCompute.get();
 		activeCenterStereoSyncCompute = runILPath ? centerStereoSyncCompute.get() : centerStereoSyncAOOnlyCompute.get();
 	};
 	refreshActiveShaders();
+	const bool stereoReprojectBaseEnabled =
+		vrStereoReprojectEnabled && !foveatedSsgiActive && ssgiOutputNeeded && (!runILPath || !settings.EnableExperimentalSpecularGI);
+	const bool useStereoReproject = stereoReprojectBaseEnabled && activeStereoReprojectGICompute && activeReprojectCompute;
+	const bool stereoSyncBaseEnabled = vrStereoSyncEnabled && !foveatedSsgiActive && ssgiOutputNeeded && !useStereoReproject;
 	static uint lastFrameAoTexIdx = 0;
 	static uint lastFrameGITexIdx = 0;
 	static uint lastFrameAccumTexIdx = 0;
@@ -1621,6 +1641,7 @@ void ScreenSpaceGI::DrawSSGI()
 	hashCombine(static_cast<uint64_t>(temporalEnabled));
 	hashCombine(static_cast<uint64_t>(blurEnabled));
 	hashCombine(static_cast<uint64_t>(settings.EnableExperimentalSpecularGI));
+	hashCombine(static_cast<uint64_t>(settings.UseStereoReproject));
 	hashCombine(static_cast<uint64_t>(allowAOSpace));
 	hashCombine(static_cast<uint64_t>(allowILSpace));
 	hashCombine(static_cast<uint64_t>(vrStereoSyncEnabled));
@@ -2018,7 +2039,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(activeGICompute, nullptr, 0);
+		context->CSSetShader(useStereoReproject ? activeStereoReprojectGICompute : activeGICompute, nullptr, 0);
 		{
 			CS_PROFILE_SCOPE("ScreenSpaceGI::GI");
 			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
@@ -2028,6 +2049,39 @@ void ScreenSpaceGI::DrawSSGI()
 		inputGITexIdx = !inputGITexIdx;
 		lastFrameGITexIdx = inputGITexIdx;
 		lastFrameAoTexIdx = inputAoTexIdx;
+	}
+
+	if (useStereoReproject) {
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Stereo Reproject");
+
+		resetViews();
+		srvs.at(0) = texWorkingDepth->srv.get();
+		srvs.at(1) = texAo[inputAoTexIdx]->srv.get();
+		if (runILPath) {
+			srvs.at(2) = texIlY[inputGITexIdx]->srv.get();
+			srvs.at(3) = texIlCoCg[inputGITexIdx]->srv.get();
+		}
+
+		uavs.at(0) = texAo[!inputAoTexIdx]->uav.get();
+		if (runILPath) {
+			uavs.at(1) = texIlY[!inputGITexIdx]->uav.get();
+			uavs.at(2) = texIlCoCg[!inputGITexIdx]->uav.get();
+		}
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShader(activeReprojectCompute, nullptr, 0);
+		{
+			CS_PROFILE_SCOPE("ScreenSpaceGI::Reproject");
+			context->Dispatch((internalRes[0] + 7u) >> 3, (internalRes[1] + 7u) >> 3, 1);
+		}
+
+		inputAoTexIdx = !inputAoTexIdx;
+		lastFrameAoTexIdx = inputAoTexIdx;
+		if (runILPath) {
+			inputGITexIdx = !inputGITexIdx;
+			lastFrameGITexIdx = inputGITexIdx;
+		}
 	}
 
 	// blur

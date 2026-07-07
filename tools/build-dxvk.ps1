@@ -47,7 +47,11 @@ $Stamp     = Join-Path $BuildDir '.cs-dxvk-sha'
 $vulkanHdr = Join-Path $DxvkSrc 'include\vulkan\include\vulkan\vulkan.h'
 if ((-not (Test-Path (Join-Path $DxvkSrc 'meson.build'))) -or (-not (Test-Path $vulkanHdr))) {
     Write-Host "[build-dxvk] initializing extern/dxvk submodule (+ nested Vulkan/SPIRV headers)..."
+    # git prints progress + a "registered for path" notice to stderr; under EAP=Stop, PowerShell 5.1
+    # wraps native stderr as a terminating NativeCommandError, so relax it just for this call.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     & git -C $RepoRoot submodule update --init --recursive --force -- extern/dxvk 2>&1 | Write-Host
+    $ErrorActionPreference = $prevEAP
 }
 if (-not (Test-Path (Join-Path $DxvkSrc 'meson.build'))) {
     Write-Warning "[build-dxvk] extern/dxvk still not checked out after submodule init. Skipping (mod ships without DXVK)."

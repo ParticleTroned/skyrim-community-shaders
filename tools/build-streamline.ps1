@@ -56,7 +56,11 @@ function Get-PluginDll([string]$name) { Join-Path $Artifacts "$name\${Config}_x6
 # repairs a half-populated checkout (dir present but empty). Idempotent + fast when already present.
 if (-not (Test-Path (Join-Path $SlSrc 'premake.lua'))) {
     Write-Host "[build-streamline] initializing extern/Streamline submodule..."
+    # git's stderr progress is not an error; relax EAP=Stop so PowerShell 5.1 doesn't treat the
+    # native stderr as a terminating NativeCommandError (same guard as the nested init below).
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     & git -C $RepoRoot submodule update --init --force -- extern/Streamline 2>&1 | Write-Host
+    $ErrorActionPreference = $prevEAP
 }
 if (-not (Test-Path (Join-Path $SlSrc 'premake.lua'))) {
     Write-Warning "[build-streamline] extern/Streamline still not checked out after submodule init. Skipping (mod ships without the fork plugins)."
@@ -119,14 +123,13 @@ if (-not $msbuild -or -not (Test-Path $msbuild)) {
 # the whole _project tree; a plain submodule bump is picked up incrementally by msbuild via timestamps.
 if (-not (Test-Path $Sln)) {
     Write-Host "[build-streamline] generating VS solution (setup.bat: packman + premake)..."
-    # setup.bat uses paths relative to the Streamline root (.\tools\packman, .\_project) so it must
-    # run with that as the working directory.
-    Push-Location $SlSrc
-    try {
-        & cmd /c "setup.bat vs2022" 2>&1 | Write-Host
-    } finally {
-        Pop-Location
-    }
+    # setup.bat uses paths relative to the Streamline root (.\tools\packman, .\_project). cmd cannot find
+    # a bare 'setup.bat' via the cwd (NoDefaultCurrentDirectoryInExePath) and Push-Location does NOT
+    # change the process cwd cmd inherits — so cd inside cmd itself. EAP relaxed: setup.bat's tooling
+    # (packman/premake/vswhere) writes benign stderr that EAP=Stop would otherwise treat as fatal.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    & cmd /c "cd /d $SlSrc && .\setup.bat vs2022" 2>&1 | Write-Host
+    $ErrorActionPreference = $prevEAP
     if (-not (Test-Path $Sln)) { Write-Error "[build-streamline] setup.bat did not produce $Sln"; exit 1 }
 }
 

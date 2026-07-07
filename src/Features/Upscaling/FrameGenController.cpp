@@ -70,14 +70,18 @@ namespace FrameGen
 			!Streamline::GetSingleton()->IsFeatureSupportResolved())
 			return;
 
-		// Window transitions (SL DLSS-G guide §17), handled the way the Streamline sample does:
-		// focus loss needs NOTHING — rendering and presents continue and frame generation rides
-		// through (verified against the sample on this hardware, including direct-scanout
-		// flips); minimize is handled below CS entirely — DXVK's DXGI present becomes a no-op
-		// while the window is iconic, so the present flow stops completely (the sample stops
-		// its render loop at zero window size) and the frame generator drains and resumes on
-		// its own. Reactive FG teardown on these transitions was tried in several strengths
-		// and always lost the race to the pacer's in-flight flip.
+		// Window-gap suspension (minimized / unfocused / being resized). Under DXVK, alt-tabbing
+		// away with FG on triggers a swapchain-recreate-on-occlusion that freezes the GPU while an
+		// FG-wrapped swapchain is live (and DLSS-G's pacer wedges across the present gap, guide §17).
+		// The present hook has already lightly suspended FG (SuspendForWindowGap) — hold ALL FG
+		// (re)delivery until the window is usable again: re-pushing an enable here would fight that
+		// pause (per-frame SetDLSSGMode churn = device loss; a re-wrap recreate on an occluded
+		// swapchain is the exact freeze this avoids). The first usable frame clears the latch and the
+		// steps below re-engage exactly once (EngageDLSSG for DLSS-G, StepFSRDelivery re-push for FSR).
+		if (Upscaling::IsWindowUnusable())
+			return;
+		windowGapPaused = false;
+
 		const Method target = DesiredMethod();
 
 		StepPhaseCompletion();
@@ -274,5 +278,42 @@ namespace FrameGen
 			dims.renderWidth, dims.renderHeight, dims.displayWidth, dims.displayHeight,
 			numFramesToGenerate, useAuto, useDynamic, dynTargetFps);
 		dlssgModeOn = true;
+	}
+
+	// Present hook, while the window is unusable (minimized / unfocused / being resized).
+	// Lightly stops whichever FG method owns present — DLSS-G interpolation off, FSR-FG
+	// unwrapped — with NO swapchain teardown/recreate and resources retained, generalizing
+	// the minimize-only pause. One-shot via the paused latch: fires once on the transition
+	// into the gap, never per-present (per-frame SetDLSSGMode churn = device loss). Reconcile
+	// clears the latch and the normal per-frame path (EngageDLSSG / StepFSRDelivery) re-engages
+	// once the window is usable again. Render/present thread only — the sole thread SL/FFX
+	// calls are safe on (WndProc only sets the atoms IsWindowUnusable reads).
+	void Controller::SuspendForWindowGap()
+	{
+		if (windowGapPaused)
+			return;
+		windowGapPaused = true;
+
+		// DLSS-G: light eOff, resources retained (guide §17). No-ops if DLSS-G was never
+		// engaged (wrong method / already off); clears dlssgModeOn via NotifyDLSSGPaused so
+		// EngageDLSSG re-engages on resume.
+		Streamline::GetSingleton()->PauseDLSSGForWindowGap();
+
+		// FSR-FG: disable the plugin's frame-gen options — the FFX FrameInterpolationSwapChain
+		// unwraps from its own present hook with NO recreate (the lightweight "stop generating"
+		// path, mirroring DLSS-G's resource-retained pause). Mark it undelivered so
+		// StepFSRDelivery re-pushes the enable (one wrap recreate) on the first usable frame.
+		if (fsrDelivered == 1) {
+			const auto dims = CurrentDims(false);
+			const bool hdr = globals::features::hdrDisplay.loaded &&
+			                 globals::features::hdrDisplay.settings.enableHDR;
+			const auto& s = globals::features::upscaling.settings;
+			if (Streamline::GetSingleton()->SetFSRFrameGen(false,
+					dims.renderWidth, dims.renderHeight, dims.displayWidth, dims.displayHeight, hdr,
+					s.fgDebugView, s.fgDebugTearLines, s.fgDebugPacingLines, s.fgShowOnlyGenerated)) {
+				fsrDelivered = 0;
+				logger::info("[FrameGen] FSR-FG suspended (window gap)");
+			}
+		}
 	}
 }

@@ -1180,6 +1180,28 @@ bool Upscaling::IsWindowGapActive()
 	return s_window && IsIconic(s_window);
 }
 
+void Upscaling::NotifyWindowFocus(bool a_focused)
+{
+	// WndProc thread. Atomic store only — the render/present thread acts on it.
+	s_windowUnfocused.store(!a_focused, std::memory_order_relaxed);
+}
+
+void Upscaling::NotifyWindowModifying(bool a_modifying)
+{
+	// WndProc thread (WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE). Atomic store only.
+	s_windowModifying.store(a_modifying, std::memory_order_relaxed);
+}
+
+bool Upscaling::IsWindowUnusable()
+{
+	// Minimized OR unfocused/occluded OR being resized/moved. Frame generation is suspended for
+	// the whole duration (see the present hook + FrameGen::Controller::SuspendForWindowGap): DXVK
+	// recreates the swapchain on occlusion and an FG-wrapped swapchain freezes the GPU.
+	return IsWindowGapActive() ||
+	       s_windowUnfocused.load(std::memory_order_relaxed) ||
+	       s_windowModifying.load(std::memory_order_relaxed);
+}
+
 void Upscaling::Upscale()
 {
 	ZoneScoped;
@@ -1489,7 +1511,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	// Frame-gen resource tagging is independent of which upscaler ran (an upscaler + frame
 	// generation can be active together), so this is its own `if`, not an `else if`.
-	if (upscaling.IsFrameGenerationActive() && !Upscaling::IsWindowGapActive()) {
+	if (upscaling.IsFrameGenerationActive() && !Upscaling::IsWindowUnusable()) {
 		auto fgMethod = upscaling.GetFrameGenMethod();
 		auto renderer = globals::game::renderer;
 		auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];

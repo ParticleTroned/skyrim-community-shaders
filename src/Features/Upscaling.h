@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Upscaling/RCAS/RCAS.h"
+#include <atomic>
 #include <d3d11_4.h>
 #include <winrt/base.h>
 
@@ -101,6 +102,23 @@ public:
 	// True while the game window is minimized: every Streamline/GPU-interop call (and the
 	// present itself, see the present hook) must be skipped for the gap's duration.
 	static bool IsWindowGapActive();
+
+	// Frame generation MUST be off whenever the window is not in a normal focused state:
+	// DXVK recreates the swapchain on occlusion and an FG-wrapped swapchain freezes the GPU
+	// (and DLSS-G's pacer wedges across a present gap, guide §17). These flags are set from
+	// the game's window/message thread (WndProc hook) — atomics ONLY, never touch SL/FFX
+	// there (wrong thread) — and read on the render/present thread via IsWindowUnusable().
+	static void NotifyWindowFocus(bool a_focused);        // WM_ACTIVATEAPP / WM_ACTIVATE
+	static void NotifyWindowModifying(bool a_modifying);  // WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE
+
+	// True while the window is minimized, unfocused (alt-tabbed / occluded), or being
+	// resized/moved. Frame generation is suspended for the duration (present hook ->
+	// FrameGen::Controller::SuspendForWindowGap). Superset of IsWindowGapActive() (minimize).
+	static bool IsWindowUnusable();
+
+	// Set from WndProc (window/message thread), read on the render/present thread.
+	static inline std::atomic<bool> s_windowUnfocused{ false };
+	static inline std::atomic<bool> s_windowModifying{ false };
 
 
 	// Timing and scaling

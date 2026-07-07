@@ -19,6 +19,7 @@
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/FrameGenController.h"
 #include "Features/Upscaling/Streamline.h"
 #include "Features/VolumetricLighting.h"
 
@@ -261,16 +262,20 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
-		// While minimized, presents are a complete no-op — nothing reaches DXVK or the Vulkan
-		// present chain — and DLSS-G interpolation is switched off FIRST (SL guide §17: a
-		// present gap with the mode still eOn desyncs the generator's frame pairing, and the
-		// first resumed present wedges its pacer in the kernel present queue; reproduced).
-		// The light resources-retained eOff here runs on the present/render thread — the same
-		// thread as every other SL call, so the guide's thread-safety rule for
-		// slDLSSGSetOptions holds. The regular engage path re-enables interpolation on the
-		// first gameplay frame after restore. Focus loss without minimize needs nothing —
-		// presents continue and frame generation rides through (sample-verified); with SSE
-		// Display Tweaks' ForceMinimize, alt-tab becomes this minimize path.
+		// Frame generation must be OFF whenever the window is not in a normal focused state —
+		// minimized, unfocused (alt-tabbed / occluded), or being resized/moved. On DXVK, an
+		// FG-wrapped swapchain that gets recreated on occlusion freezes the GPU, and DLSS-G's
+		// pacer wedges across a present gap with interpolation still eOn (guide §17). So suspend
+		// BOTH FG methods here (lightweight, resources retained — the controller's one-shot
+		// SuspendForWindowGap): DLSS-G interpolation off, FSR-FG unwrapped. This runs on the
+		// present/render thread — the only thread SL/FFX calls are safe on; the WndProc hook just
+		// sets the focus/resize atoms IsWindowUnusable reads. The normal per-frame engage path
+		// re-enables both on the first usable frame after restore.
+		//
+		// Minimized is special: the present itself is a complete no-op (nothing reaches DXVK's
+		// present chain), so short-circuit with S_OK. For focus-loss/occlusion WITHOUT minimize
+		// the present MUST still be issued (DXVK has to process the occlusion), so fall through
+		// with frame generation already suspended.
 		{
 			static HWND s_window = nullptr;
 			if (!s_window) {
@@ -278,9 +283,10 @@ struct IDXGISwapChain_Present
 				if (This && SUCCEEDED(This->GetDesc(&desc)))
 					s_window = desc.OutputWindow;
 			}
-			if (s_window && IsIconic(s_window)) {
-				Streamline::GetSingleton()->PauseDLSSGForWindowGap();
-				return S_OK;
+			if (Upscaling::IsWindowUnusable()) {
+				FrameGen::Controller::GetSingleton()->SuspendForWindowGap();
+				if (s_window && IsIconic(s_window))
+					return S_OK;
 			}
 		}
 
@@ -577,6 +583,29 @@ namespace Hooks
 			auto menu = globals::menu;
 			if ((a_msg == WM_KILLFOCUS || a_msg == WM_SETFOCUS) && menu->initialized) {
 				menu->focusChanged = true;
+			}
+			// Track the window's focus/modification state so the present hook can suspend frame
+			// generation while the window is not normally focused (see IDXGISwapChain_Present /
+			// Upscaling::IsWindowUnusable). This runs on the game's window/message thread — set
+			// atomic flags ONLY here; every SL/FFX call is made on the render/present thread.
+			switch (a_msg) {
+			case WM_ACTIVATEAPP:
+				// Whole-application activation: wParam FALSE => another app took focus (alt-tab).
+				Upscaling::NotifyWindowFocus(a_wParam != FALSE);
+				break;
+			case WM_ACTIVATE:
+				// Window-level (de)activation, including click-away within the app.
+				Upscaling::NotifyWindowFocus(LOWORD(a_wParam) != WA_INACTIVE);
+				break;
+			case WM_ENTERSIZEMOVE:
+				// User grabbed the title bar / a resize border — modal move/resize loop begins.
+				Upscaling::NotifyWindowModifying(true);
+				break;
+			case WM_EXITSIZEMOVE:
+				Upscaling::NotifyWindowModifying(false);
+				break;
+			default:
+				break;
 			}
 			if (a_msg == WM_CLOSE) {
 				globals::OnGameWindowClose();

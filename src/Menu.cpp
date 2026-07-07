@@ -15,7 +15,6 @@
 #include <imgui_stdlib.h>
 #include <iomanip>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "Deferred.h"
@@ -182,7 +181,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SelectedThemePreset)
 
 bool IsEnabled = false;
-std::unordered_map<std::string, int> Menu::categoryCounts;
 
 namespace
 {
@@ -728,8 +726,6 @@ void Menu::Init()
 	if (!BackgroundBlur::Initialize()) {
 		logger::warn("Menu::Init() - Failed to initialize background blur system");
 	}
-
-	BuildCategoryCounts();
 
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		globals::features::vr.EnsureOverlayInitialized();
@@ -1450,25 +1446,4 @@ void Menu::DrawWeatherDetailsWindow()
 	auto& weather = globals::features::csEditor;
 	bool* p_open = &globals::features::csEditor.WeatherDetailsWindow.Enabled;
 	weather.RenderWeatherDetailsWindow(p_open, !weather.WeatherDetailsWindow.ShowInOverlay);
-}
-
-/**
- * @brief Builds category counts for feature organization and display
- *
- * Iterates through all loaded features and counts how many features belong to each
- * category. This information is used for UI organization and displaying category
- * statistics in the feature navigation interface.
- *
- * @note Only counts features that are both loaded and configured to appear in the menu.
- */
-void Menu::BuildCategoryCounts()
-{
-	const std::vector<Feature*>& features = Feature::GetFeatureList();
-	// Get the category of each feature, and increment the count for that category
-	for (auto& feature : features) {
-		if (!feature->IsHiddenFromUserView() && feature->IsInMenu() && feature->loaded) {
-			std::string_view category = feature->GetCategory();
-			categoryCounts[std::string(category)]++;
-		}
-	}
 }

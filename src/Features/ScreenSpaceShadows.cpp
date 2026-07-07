@@ -197,7 +197,9 @@ void ScreenSpaceShadows::DrawPerformanceSettings(bool)
 
 void ScreenSpaceShadows::DrawEssentialSettings()
 {
-	DrawPerformanceSettings(false);
+	bool enabled = bendSettings.Enable != 0;
+	if (ImGui::Checkbox("Enable", &enabled))
+		bendSettings.Enable = enabled ? 1u : 0u;
 }
 
 json ScreenSpaceShadows::CapturePerformanceSettingsState() const

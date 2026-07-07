@@ -13,7 +13,6 @@
 #include <shared_mutex>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <winrt/base.h>
@@ -432,8 +431,6 @@ public:
 	ImFont* GetFont(FontRole role) const { return loadedFontRoles[static_cast<size_t>(role)]; }
 
 	void SelectFeatureMenu(const std::string& featureName);
-	static std::unordered_map<std::string, int> categoryCounts;  // Number of features in each feature category
-
 	bool overlayVisible = false;
 
 public:
@@ -511,7 +508,6 @@ private:
 	void DrawAdvancedSettings();
 	void DrawDisableAtBootSettings();
 	void DrawFooter();
-	void BuildCategoryCounts();
 
 	void addToEventQueue(KeyEvent e);
 	void ProcessInputEventQueue();

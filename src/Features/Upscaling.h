@@ -491,7 +491,7 @@ public:
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	void DrawFoveatedSetupInstructions();
-	void DrawFoveatedSettings();
+	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;

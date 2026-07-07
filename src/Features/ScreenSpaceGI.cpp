@@ -851,45 +851,8 @@ void ScreenSpaceGI::DrawEssentialSettings()
 {
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
-	const bool isVR = REL::Module::IsVR();
-
-	if (!ShadersOK())
-		Util::Text::Error("Compute shaders failed to compile!");
 
 	ImGui::Checkbox("Enable", &settings.Enabled);
-
-	{
-		auto guard = Util::DisableGuard(!settings.Enabled);
-
-		const bool aoOnlyActive = IsAOOnlyPreset(settings, isVR);
-		{
-			[[maybe_unused]] auto style = Util::PresetButtonStyle(aoOnlyActive);
-			if (ImGui::Button("AO only", { -1, 0 })) {
-				ApplyAOOnlyPreset(settings);
-				recompileFlag = true;
-			}
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Full Res AO-only baseline with no GI resources.");
-		}
-
-		if (isVR) {
-			ImGui::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
-			settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
-		}
-
-		const int previousResolutionMode = settings.ResolutionMode;
-		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
-		const bool clickedResolutionMode = DrawResolutionModeSelector("SSGIEssentialsResolutionMode", settings.ResolutionMode);
-		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
-		if (clickedResolutionMode)
-			settings.CenterFullResMaskScale = 0.0f;
-		recompileFlag |= settings.ResolutionMode != previousResolutionMode;
-	}
-
-	if (IsResourceProfileRestartPending()) {
-		Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
-	}
 }
 
 json ScreenSpaceGI::CapturePerformanceSettingsState() const

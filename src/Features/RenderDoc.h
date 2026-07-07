@@ -55,6 +55,7 @@ public:
 	std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	bool IsCore() const override { return true; }
 	bool IsInMenu() const override { return true; }
+	bool IsHiddenInEssentialsMode() const override { return true; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return { "In-application RenderDoc capture support and convenience UI.", { "Attach comments to captures that appear in RenderDoc UI", "Open captures folder", "Capture file management" } };

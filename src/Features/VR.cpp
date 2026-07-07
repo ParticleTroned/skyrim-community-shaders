@@ -1238,20 +1238,19 @@ namespace
 {
 	void DrawKeepDesktopWindowFocusedForVRMenuSetting();
 	void DrawStabilizeRenderScaleDesktopMirrorSetting();
+	void DrawKeyBindings();
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix);
 }
 
 void VR::DrawEssentialSettings()
 {
-	DrawPerformanceSettings(false);
-
 	ImGui::SeparatorText("Desktop");
 	DrawKeepDesktopWindowFocusedForVRMenuSetting();
 	DrawStabilizeRenderScaleDesktopMirrorSetting();
 
 	if (openVRInfo.isCompatible) {
 		ImGui::SeparatorText("Bindings");
-		DrawControllerBindingSummary(false, "EssentialVRBindings");
+		DrawKeyBindings();
 	}
 }
 

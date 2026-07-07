@@ -1163,8 +1163,11 @@ namespace
 	std::vector<Feature*> BuildPerformanceFeatureList()
 	{
 		std::vector<Feature*> features;
+		const bool essentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
 		for (auto* feature : Feature::GetFeatureList()) {
-			if (!feature || !feature->loaded || feature->IsHiddenFromUserView() || !feature->IsInMenu() || !feature->HasPerformanceSettings() ||
+			if (!feature || !feature->loaded || feature->IsHiddenFromUserView() ||
+				(essentialsMode && feature->IsHiddenInEssentialsMode()) ||
+				!feature->IsInMenu() || !feature->HasPerformanceSettings() ||
 				!ShouldShowInPerformanceTuning(feature))
 				continue;
 

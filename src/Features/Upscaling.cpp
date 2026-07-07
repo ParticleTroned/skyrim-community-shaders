@@ -5291,7 +5291,7 @@ json Upscaling::CapturePerformanceSettingsState() const
 	return settings;
 }
 
-void Upscaling::DrawPerformanceSettings(bool)
+void Upscaling::DrawPerformanceSettings(bool a_advanced)
 {
 	const uint64_t resourceSettingsKeyBefore = BuildUpscalingResourceMutationSettingsKey(settings);
 
@@ -5444,17 +5444,19 @@ void Upscaling::DrawPerformanceSettings(bool)
 			}
 		}
 
-		SanitizeFoveatedSettings(settings);
-		const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
-		if (foveatedDispatchSupportedForMethod) {
-			ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
-		} else {
-			ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
-		}
+		if (a_advanced) {
+			SanitizeFoveatedSettings(settings);
+			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
+			if (foveatedDispatchSupportedForMethod) {
+				ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
+			} else {
+				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
+			}
 
-		const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
-		auto foveatedGuard = Util::DisableGuard(!foveatedDispatchRequestedForMethod);
-		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
+			const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
+			auto foveatedGuard = Util::DisableGuard(!foveatedDispatchRequestedForMethod);
+			ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
+		}
 	}
 
 	if (streamline.reflexSupportedOnCurrentAdapter) {
@@ -5477,6 +5479,13 @@ void Upscaling::DrawPerformanceSettings(bool)
 void Upscaling::DrawEssentialSettings()
 {
 	DrawPerformanceSettings(false);
+
+	if (!REL::Module::IsVR())
+		return;
+
+	ImGui::SeparatorText("VR FOV");
+	DrawFoveatedSetupInstructions();
+	DrawFoveatedSettings(true);
 }
 
 void Upscaling::DrawFoveatedSetupInstructions()
@@ -5505,7 +5514,7 @@ void Upscaling::DrawFoveatedSetupInstructions()
 	}
 }
 
-void Upscaling::DrawFoveatedSettings()
+void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 {
 	if (!globals::game::isVR) {
 		ImGui::TextDisabled("VR FOV mask setup is available only in VR.");
@@ -5653,7 +5662,9 @@ void Upscaling::DrawFoveatedSettings()
 	}
 	ImGui::BeginDisabled(!settings.periphery_taa_enable);
 	if (!settings.periphery_taa_enable)
-		ImGui::TextDisabled("Enable FOV + TAA to edit the center scale, transition, and visible outer scale.");
+		ImGui::TextDisabled(a_essentialsLayout ?
+								"Enable FOV + TAA to edit the center and visible outer scales. All FOV controls are available in the VR tab." :
+								"Enable FOV + TAA to edit the center scale, transition, and visible outer scale.");
 	ImGui::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	if (settings.periphery_taa_enable) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -5663,20 +5674,24 @@ void Upscaling::DrawFoveatedSettings()
 		}
 	}
 	settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
-	ImGui::SliderFloat(
-		"Center Blend/TAA Transition",
-		&settings.periphery_taa_center_blend_feather,
-		kPeripheryTAACenterBlendFeatherMin,
-		kPeripheryTAACenterBlendFeatherMax,
-		"%.3f");
-	if (settings.periphery_taa_enable) {
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Controls softness of the center-to-TAA transition edge.");
-			ImGui::TextUnformatted("Lower = harder edge, higher = softer edge.");
-			ImGui::Text("Range: low %.2f (harder transition) to high %.2f (softer transition).", kPeripheryTAACenterBlendFeatherMin, kPeripheryTAACenterBlendFeatherMax);
+	if (!a_essentialsLayout) {
+		ImGui::SliderFloat(
+			"Center Blend/TAA Transition",
+			&settings.periphery_taa_center_blend_feather,
+			kPeripheryTAACenterBlendFeatherMin,
+			kPeripheryTAACenterBlendFeatherMax,
+			"%.3f");
+		if (settings.periphery_taa_enable) {
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Controls softness of the center-to-TAA transition edge.");
+				ImGui::TextUnformatted("Lower = harder edge, higher = softer edge.");
+				ImGui::Text("Range: low %.2f (harder transition) to high %.2f (softer transition).", kPeripheryTAACenterBlendFeatherMin, kPeripheryTAACenterBlendFeatherMax);
+			}
 		}
+		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
+	} else {
+		ImGui::TextDisabled("All FOV controls are available in the VR tab.");
 	}
-	settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	const float taaOuterRangeMin = GetPeripheryTAAOuterScaleFloor(settings.periphery_taa_center_area);
 	ImGui::SliderFloat(
 		"FOV + TAA Visible Outer Scale",
@@ -5694,6 +5709,8 @@ void Upscaling::DrawFoveatedSettings()
 	}
 	ImGui::EndDisabled();
 
+	settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
+	settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 		settings.periphery_taa_outer_scale,
 		settings.periphery_taa_center_area);

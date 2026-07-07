@@ -83,6 +83,11 @@ public:
 	virtual bool IsHiddenFromUserView() const { return false; }
 
 	/**
+	 * Whether the feature should be hidden while the menu is in Essentials mode.
+	 */
+	virtual bool IsHiddenInEssentialsMode() const { return false; }
+
+	/**
 	 * Whether to print the INI version missing message when this feature is unloaded
 	 */
 	virtual bool DrawFailLoadMessage() const { return true; }

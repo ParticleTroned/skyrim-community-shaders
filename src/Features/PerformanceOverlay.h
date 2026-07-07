@@ -127,6 +127,7 @@ struct PerformanceOverlay : OverlayFeature
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsCore() const override { return true; }
 	virtual bool IsInMenu() const override { return true; }
+	bool IsHiddenInEssentialsMode() const override { return true; }
 	bool IsOverlayVisible() const override { return settings.ShowInOverlay; }
 	bool RequiresGlobalOverlayToggle() const override { return true; }
 	const char* GetOverlayWindowName() const override { return kOverlayWindowName; }

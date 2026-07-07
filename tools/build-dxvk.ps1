@@ -36,8 +36,8 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Split-Path -Parent $ScriptDir
 $DxvkSrc   = Join-Path $RepoRoot 'extern\dxvk'
 $BuildDir  = Join-Path $DxvkSrc 'build'
-$D3d11Dll  = Join-Path $BuildDir 'src\d3d11\d3d11.dll'
-$DxgiDll   = Join-Path $BuildDir 'src\dxgi\dxgi.dll'
+$D3d11Dll  = Join-Path $BuildDir 'src\d3d11\dxvk_d3d11.dll'
+$DxgiDll   = Join-Path $BuildDir 'src\dxgi\dxvk_dxgi.dll'
 $Stamp     = Join-Path $BuildDir '.cs-dxvk-sha'
 
 if (-not (Test-Path (Join-Path $DxvkSrc 'meson.build'))) {
@@ -83,7 +83,7 @@ if (-not (Test-Path (Join-Path $BuildDir 'build.ninja'))) {
 if ($LASTEXITCODE -ne 0) { Write-Error "[build-dxvk] meson compile failed"; exit 1 }
 
 if (-not ((Test-Path $D3d11Dll) -and (Test-Path $DxgiDll))) {
-    Write-Error "[build-dxvk] build reported success but d3d11.dll/dxgi.dll are missing"
+    Write-Error "[build-dxvk] build reported success but dxvk_d3d11.dll/dxvk_dxgi.dll are missing"
     exit 1
 }
 

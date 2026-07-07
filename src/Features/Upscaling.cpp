@@ -3460,6 +3460,75 @@ namespace
 		return tailEndFrame != 0 && currentFrame < tailEndFrame;
 	}
 
+	bool IsVRHAMDynamicPathActive(const Upscaling& a_upscaling)
+	{
+		const auto upscaleMethod = a_upscaling.GetRuntimeUpscaleMethod();
+		const auto& plan = a_upscaling.GetRuntimeResolutionPlan();
+		return IsVendorUpscalingMethod(upscaleMethod) &&
+		       !a_upscaling.IsPresentationUpscalingActive() &&
+		       plan.owner == Upscaling::ResolutionOwner::VendorDynamicResolution;
+	}
+
+	bool UnderwaterMaskUpscaleVariantUsesNoHMDStencil(Upscaling::UnderwaterMaskUpscaleVariant a_variant)
+	{
+		return a_variant != Upscaling::UnderwaterMaskUpscaleVariant::Default;
+	}
+
+	bool UnderwaterMaskUpscaleVariantUsesRawSceneDepth(Upscaling::UnderwaterMaskUpscaleVariant a_variant)
+	{
+		return a_variant == Upscaling::UnderwaterMaskUpscaleVariant::RawDepthNoStencil;
+	}
+
+	bool UnderwaterMaskUpscaleVariantUsesDynamicSceneDepth(Upscaling::UnderwaterMaskUpscaleVariant a_variant)
+	{
+		return a_variant == Upscaling::UnderwaterMaskUpscaleVariant::DynamicDepthNoStencil;
+	}
+
+	bool ShouldUseVRDynamicDepthNoStencilUnderwaterMask(const Upscaling& a_upscaling, bool a_depthUpscaleActive)
+	{
+		return a_depthUpscaleActive &&
+		       globals::game::isVR &&
+		       IsVRHAMDynamicPathActive(a_upscaling);
+	}
+
+	bool BindUnderwaterMaskPassResources(
+		ID3D11DeviceContext* a_context,
+		ID3D11Resource* a_underwaterMaskCopyTexture,
+		ID3D11Resource* a_underwaterMaskTexture,
+		ID3D11RenderTargetView* a_underwaterMaskRTV,
+		ID3D11ShaderResourceView* a_underwaterMaskCopySRV,
+		ID3D11ShaderResourceView* a_depthSRV,
+		ID3D11ShaderResourceView* a_stencilSRV)
+	{
+		if (!a_context ||
+			!a_underwaterMaskCopyTexture ||
+			!a_underwaterMaskTexture ||
+			!a_underwaterMaskRTV ||
+			!a_underwaterMaskCopySRV ||
+			!a_depthSRV) {
+			return false;
+		}
+
+		CopyResourceIfNonAliased(a_context, a_underwaterMaskCopyTexture, a_underwaterMaskTexture);
+		a_context->OMSetDepthStencilState(nullptr, 0x00);
+
+		ID3D11ShaderResourceView* srvs[] = { a_underwaterMaskCopySRV, a_depthSRV, a_stencilSRV };
+		a_context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+		ID3D11RenderTargetView* rtvs[] = { a_underwaterMaskRTV };
+		a_context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
+		return true;
+	}
+
+	void UnbindUnderwaterMaskPassResources(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return;
+
+		ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
+		a_context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);
+	}
+
 	bool IsVRMenuPresentationContextActive()
 	{
 		return globals::game::isVR &&
@@ -10211,18 +10280,24 @@ ID3D11PixelShader* Upscaling::GetDepthRefractionUpscalePS()
 	return depthRefractionUpscalePS.get();
 }
 
-ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(bool a_useRawSceneDepth)
+ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVariant a_variant)
 {
-	auto& shader = a_useRawSceneDepth ? underwaterMaskUpscaleRawDepthNoStencilPS : underwaterMaskUpscalePS;
+	auto& shader = a_variant == UnderwaterMaskUpscaleVariant::RawDepthNoStencil     ? underwaterMaskUpscaleRawDepthNoStencilPS :
+	               a_variant == UnderwaterMaskUpscaleVariant::DynamicDepthNoStencil ? underwaterMaskUpscaleDynamicDepthNoStencilPS :
+	                                                                                  underwaterMaskUpscalePS;
 	if (!shader) {
 		logger::debug("Compiling UnderwaterMaskPS.hlsl");
 		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
 		if (globals::game::isVR) {
 			defines.push_back({ "VR", "" });
-			if (a_useRawSceneDepth) {
+			if (UnderwaterMaskUpscaleVariantUsesNoHMDStencil(a_variant)) {
 				defines.push_back({ "NO_HMD_STENCIL_MASK", "" });
+			}
+			if (UnderwaterMaskUpscaleVariantUsesRawSceneDepth(a_variant)) {
 				defines.push_back({ "RAW_SCENE_DEPTH", "" });
 			}
+			if (UnderwaterMaskUpscaleVariantUsesDynamicSceneDepth(a_variant))
+				defines.push_back({ "DYNAMIC_SCENE_DEPTH", "" });
 		}
 		shader.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/UnderwaterMaskUpscalePS.hlsl", defines, "ps_5_0"));
 	}
@@ -14337,6 +14412,7 @@ void Upscaling::ClearShaderCache()
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
+	underwaterMaskUpscaleDynamicDepthNoStencilPS = nullptr;
 	underwaterMaskUpscaleRawDepthNoStencilPS = nullptr;
 	cameraMotionVectorsPS = nullptr;   // com_ptr automatically releases
 	upscaleVS = nullptr;               // com_ptr automatically releases
@@ -17260,9 +17336,14 @@ void Upscaling::UpscaleDepth()
 		return;
 	}
 
+	const bool useVRDynamicDepthNoStencilUnderwaterMask = ShouldUseVRDynamicDepthNoStencilUnderwaterMask(*this, depthUpscaleActive);
+	const bool deferVRDynamicDepthCopyPropagationForUnderwaterMask = useVRDynamicDepthNoStencilUnderwaterMask;
 	auto* fullscreenVS = GetUpscaleVS();
 	auto* depthUpscalePS = depthUpscaleActive ? GetDepthRefractionUpscalePS() : nullptr;
-	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS();
+	const auto underwaterMaskVariant = useVRDynamicDepthNoStencilUnderwaterMask ?
+	                                       UnderwaterMaskUpscaleVariant::DynamicDepthNoStencil :
+	                                       UnderwaterMaskUpscaleVariant::Default;
+	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS(underwaterMaskVariant);
 	if (!fullscreenVS || !underwaterMaskPS || (depthUpscaleActive && !depthUpscalePS)) {
 		return;
 	}
@@ -17314,9 +17395,12 @@ void Upscaling::UpscaleDepth()
 	if (depthUpscaleActive) {
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Depth Upscale");
 
-		// Engine copies kMAIN->kMAIN_COPY during 3D scene rendering.
-		// In menu/non-3D contexts the engine path may skip this copy.
-		if (IsKnownGameMenuContextActive()) {
+		// Keep kMAIN_COPY on the pre-upscale depth until the dynamic VR underwater
+		// repair has consumed it.
+		const bool refreshDepthCopyBeforeDepthUpscale =
+			IsKnownGameMenuContextActive() ||
+			deferVRDynamicDepthCopyPropagationForUnderwaterMask;
+		if (refreshDepthCopyBeforeDepthUpscale) {
 			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 		}
 
@@ -17345,8 +17429,9 @@ void Upscaling::UpscaleDepth()
 			context->Draw(3, 0);
 		}
 
-		// Depth copy is also used on VR.
-		if (isVR) {
+		// Depth copy is also used on VR. The dynamic no-render-scale underwater
+		// repair needs the original dynamic depth until the mask pass completes.
+		if (isVR && !deferVRDynamicDepthCopyPropagationForUnderwaterMask) {
 			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
 		}
 	} else {
@@ -17363,26 +17448,31 @@ void Upscaling::UpscaleDepth()
 		viewport.Height = screenSize.y * 0.5f;
 		context->RSSetViewports(1, &viewport);
 
-		CopyResourceIfNonAliased(context, underwaterMask.textureCopy, underwaterMask.texture);
+		// Dynamic VR no-render-scale keeps t1 on the original dynamic depth and
+		// intentionally disables stencil-based HAM carving for this classification.
+		const bool underwaterMaskPassBound = BindUnderwaterMaskPassResources(
+			context,
+			underwaterMask.textureCopy,
+			underwaterMask.texture,
+			underwaterMask.RTV,
+			underwaterMask.SRVCopy,
+			depthCopy.depthSRV,
+			useVRDynamicDepthNoStencilUnderwaterMask ? nullptr : depthCopy.stencilSRV);
 
-		context->OMSetDepthStencilState(nullptr, 0x00);
-
-		// t0: vanilla mask copy, t1: current upscaled depth, t2: current stencil/HAM mask (VR).
-		ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV, depthCopy.stencilSRV };
-		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-
-		ID3D11RenderTargetView* rtvs[] = { underwaterMask.RTV };
-		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
-
-		context->PSSetShader(underwaterMaskPS, nullptr, 0);
-		{
-			CS_PROFILE_SCOPE("Upscaling::UnderwaterMaskUpscale");
-			context->Draw(3, 0);
+		if (underwaterMaskPassBound) {
+			context->PSSetShader(underwaterMaskPS, nullptr, 0);
+			{
+				CS_PROFILE_SCOPE("Upscaling::UnderwaterMaskUpscale");
+				context->Draw(3, 0);
+			}
 		}
 	}
 
-	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
-	context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);
+	UnbindUnderwaterMaskPassResources(context);
+
+	if (deferVRDynamicDepthCopyPropagationForUnderwaterMask) {
+		CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
+	}
 }
 
 void Upscaling::RefreshSubmitStageUnderwaterMask()
@@ -17435,7 +17525,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	static bool loggedSubmitStageUnderwaterShaderFailure = false;
 	try {
 		fullscreenVS = GetUpscaleVS();
-		underwaterMaskPS = GetUnderwaterMaskUpscalePS(true);
+		underwaterMaskPS = GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVariant::RawDepthNoStencil);
 	} catch (const std::exception& e) {
 		LogWarnOnce(
 			loggedSubmitStageUnderwaterShaderFailure,
@@ -17493,23 +17583,24 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
-	CopyResourceIfNonAliased(context, underwaterMask.textureCopy, underwaterMask.texture);
+	const bool underwaterMaskPassBound = BindUnderwaterMaskPassResources(
+		context,
+		underwaterMask.textureCopy,
+		underwaterMask.texture,
+		underwaterMask.RTV,
+		underwaterMask.SRVCopy,
+		depthCopy.depthSRV,
+		nullptr);
 
-	ID3D11RenderTargetView* rtvs[] = { underwaterMask.RTV };
-	context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
-	context->OMSetDepthStencilState(nullptr, 0x00);
-
-	ID3D11ShaderResourceView* srvs[] = { underwaterMask.SRVCopy, depthCopy.depthSRV };
-	context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-
-	context->PSSetShader(underwaterMaskPS, nullptr, 0);
-	{
-		CS_PROFILE_SCOPE("Upscaling::SubmitStageUnderwaterMask");
-		context->Draw(3, 0);
+	if (underwaterMaskPassBound) {
+		context->PSSetShader(underwaterMaskPS, nullptr, 0);
+		{
+			CS_PROFILE_SCOPE("Upscaling::SubmitStageUnderwaterMask");
+			context->Draw(3, 0);
+		}
 	}
 
-	ID3D11ShaderResourceView* nullPSResources[3] = { nullptr, nullptr, nullptr };
-	context->PSSetShaderResources(0, ARRAYSIZE(nullPSResources), nullPSResources);
+	UnbindUnderwaterMaskPassResources(context);
 }
 
 void Upscaling::ApplySharpening()

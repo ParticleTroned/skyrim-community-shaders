@@ -9,7 +9,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float UnderwaterMask : SV_TARGET;
+	float UnderwaterMask: SV_TARGET;
 };
 
 SamplerState LinearSampler : register(s0);
@@ -29,10 +29,10 @@ cbuffer JitterCB : register(b0)
 	float pad0;
 };
 
-#if defined(VR)
+#	if defined(VR)
 static const float kSkyDepthThreshold = 1e-6;
 
-#	if defined(RAW_SCENE_DEPTH)
+#		if defined(RAW_SCENE_DEPTH)
 float SampleRawDepthClamped(int2 coord, int2 maxCoord)
 {
 	int2 c = clamp(coord, int2(0, 0), maxCoord);
@@ -73,9 +73,9 @@ float SampleRawMinDepth3x3(float2 uv)
 
 	return min(row0, min(row1, row2));
 }
-#	endif
+#		endif
 
-#	if !defined(NO_HMD_STENCIL_MASK)
+#		if !defined(NO_HMD_STENCIL_MASK)
 bool IsHiddenStencil(uint2 coord)
 {
 	uint width;
@@ -83,10 +83,10 @@ bool IsHiddenStencil(uint2 coord)
 	StencilTex.GetDimensions(width, height);
 	int2 maxCoord = int2(width, height) - 1;
 
-	[unroll]
-	for (int y = -1; y <= 1; ++y) {
-		[unroll]
-		for (int x = -1; x <= 1; ++x) {
+	[unroll] for (int y = -1; y <= 1; ++y)
+	{
+		[unroll] for (int x = -1; x <= 1; ++x)
+		{
 			int2 sampleCoord = int2(coord) + int2(x, y);
 			if (any(sampleCoord < int2(0, 0)) || any(sampleCoord > maxCoord))
 				continue;
@@ -97,8 +97,8 @@ bool IsHiddenStencil(uint2 coord)
 
 	return false;
 }
+#		endif
 #	endif
-#endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -109,8 +109,9 @@ PS_OUTPUT main(PS_INPUT input)
 	// Remove jitter offset to get the correct sampling coordinates
 	float2 uv = originalUV - (jitter * SharedData::BufferDim.zw);
 
-	// Clamp within bounds
-#	if defined(RAW_SCENE_DEPTH)
+	// Clamp within bounds. Raw submit-stage and dynamic no-render-scale VR paths
+	// both sample pre-upscale depth, so preserve per-eye dynamic-resolution bounds.
+#	if defined(RAW_SCENE_DEPTH) || defined(DYNAMIC_SCENE_DEPTH)
 	uv = FrameBuffer::ClampDynamicResolutionAdjustedScreenPosition(uv, input.TexCoord);
 #	else
 	uv = clamp(uv, 0.0, FrameBuffer::DynamicResolutionParams1.xy);
@@ -125,16 +126,17 @@ PS_OUTPUT main(PS_INPUT input)
 	// the right eye, making the entire right-eye underwater fog incorrect.
 	//
 	// Fix: reconstruct the mask analytically per-eye, using scene depth for geometry
-	// pixels and ray direction only for sky/unrendered pixels. Submit-stage uses the
-	// raw-depth/no-stencil variant so the HMD hidden-area mask cannot carve HAM
-	// silhouettes into the water fog. If raw submit cannot resolve water height, do
-	// not reuse the copied vanilla mask: it is the artifact source.
+	// pixels and ray direction only for sky/unrendered pixels. Submit-stage uses
+	// raw-depth/no-stencil and dynamic no-render-scale VR uses dynamic-depth/no-stencil,
+	// so the HMD hidden-area mask cannot carve HAM silhouettes into the water fog.
+	// If raw submit cannot resolve water height, do not reuse the copied vanilla mask:
+	// it is the artifact source.
 
 	uint eyeIndex = (input.TexCoord.x >= 0.5) ? 1 : 0;
 	uint depthWidth;
 	uint depthHeight;
 	SceneDepth.GetDimensions(depthWidth, depthHeight);
-#		if defined(RAW_SCENE_DEPTH)
+#		if defined(RAW_SCENE_DEPTH) || defined(DYNAMIC_SCENE_DEPTH)
 	float2 depthUV = uv;
 #		else
 	float2 depthUV = input.TexCoord;
@@ -168,8 +170,8 @@ PS_OUTPUT main(PS_INPUT input)
 		// Convert to NDC [-1, 1].  UV y=0 is the top of the screen; NDC y=+1 is the top.
 		float2 ndc = float2(eyeUV.x * 2.0 - 1.0, 1.0 - eyeUV.y * 2.0);
 
-		// Sample either the current full-resolution upscaled depth or, in submit-stage,
-		// the raw dynamic-resolution scene depth with dynamic-resolution UVs.
+		// Sample either the current full-resolution upscaled depth or the
+		// pre-upscale dynamic scene depth with dynamic-resolution UVs.
 #		if defined(RAW_SCENE_DEPTH)
 		float depth = (useWideKernel > 0.5f) ? SampleRawMinDepth3x3(depthUV) : SampleRawMinDepth2x2(depthUV);
 #		else

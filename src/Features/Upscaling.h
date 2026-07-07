@@ -584,8 +584,15 @@ public:
 	ID3D11PixelShader* GetDepthRefractionUpscalePS();
 
 	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscalePS;
+	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscaleDynamicDepthNoStencilPS;
 	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscaleRawDepthNoStencilPS;
-	ID3D11PixelShader* GetUnderwaterMaskUpscalePS(bool a_useRawSceneDepth = false);
+	enum class UnderwaterMaskUpscaleVariant : uint8_t
+	{
+		Default,
+		DynamicDepthNoStencil,
+		RawDepthNoStencil
+	};
+	ID3D11PixelShader* GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVariant a_variant = UnderwaterMaskUpscaleVariant::Default);
 
 	winrt::com_ptr<ID3D11PixelShader> cameraMotionVectorsPS;
 	ID3D11PixelShader* GetCameraMotionVectorsPS();

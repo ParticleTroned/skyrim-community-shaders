@@ -57,6 +57,7 @@ namespace
 	constexpr float kMaxParticleDistanceMax = 20000.0f;
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
+	constexpr std::size_t kDirectionalNiLightEngineReadSize = 0x174;
 
 	void DrawHeatWarpStrengthSetting()
 	{
@@ -77,6 +78,63 @@ namespace
 	{
 		const auto value = reinterpret_cast<std::uintptr_t>(a_ptr);
 		return value >= 0x10000 && value < 0x800000000000ull && (value & 0x7) == 0;
+	}
+
+	bool IsReadableRange(const void* a_ptr, std::size_t a_size) noexcept
+	{
+		if (!a_ptr || a_size == 0) {
+			return false;
+		}
+
+		MEMORY_BASIC_INFORMATION memoryInfo{};
+		if (::VirtualQuery(a_ptr, &memoryInfo, sizeof(memoryInfo)) == 0) {
+			return false;
+		}
+		if (memoryInfo.State != MEM_COMMIT) {
+			return false;
+		}
+
+		constexpr DWORD kReadableProtection = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+		                                      PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+		if ((memoryInfo.Protect & kReadableProtection) == 0 || (memoryInfo.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) {
+			return false;
+		}
+
+		const auto base = reinterpret_cast<std::uintptr_t>(memoryInfo.BaseAddress);
+		const auto ptr = reinterpret_cast<std::uintptr_t>(a_ptr);
+		if (ptr < base) {
+			return false;
+		}
+
+		const auto offset = ptr - base;
+		if (offset > memoryInfo.RegionSize) {
+			return false;
+		}
+
+		const auto available = memoryInfo.RegionSize - offset;
+		return a_size <= available;
+	}
+
+	bool IsSafeDirectionalNiLight(const RE::NiLight* a_light)
+	{
+		static const RE::NiLight* validated = nullptr;
+		static uint32_t validatedFrame = std::numeric_limits<uint32_t>::max();
+
+		if (!IsPlausibleRenderPointer(a_light)) {
+			return false;
+		}
+
+		const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+		if (a_light == validated && frame == validatedFrame) {
+			return true;
+		}
+		if (!IsReadableRange(a_light, kDirectionalNiLightEngineReadSize)) {
+			return false;
+		}
+
+		validated = a_light;
+		validatedFrame = frame;
+		return true;
 	}
 
 	bool IsDirectionalSceneLightSafe(RE::BSRenderPass* a_pass, uint32_t& a_outNumLights, RE::BSLight*& a_outLight, RE::NiLight*& a_outNiLight)
@@ -104,7 +162,7 @@ namespace
 			}
 
 			a_outNiLight = a_outLight->light.get();
-			return IsPlausibleRenderPointer(a_outNiLight);
+			return IsSafeDirectionalNiLight(a_outNiLight);
 		}
 #if defined(_MSC_VER)
 		__except (1) {
@@ -2120,14 +2178,19 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 	// Invalid UI 3D scene directional slots are skipped to avoid a CTD.
 	const bool directionalSlotSafe = IsDirectionalSceneLightSafe(Pass, numLights, directionalLight, directionalNiLight);
 	if (!directionalSlotSafe) {
-		static int logged = 0;
-		if (logged++ < 10) {
+		static bool everLogged = false;
+		static std::uintptr_t lastLoggedNiLight = 0;
+		static int distinctLogged = 0;
+		const auto niLightValue = reinterpret_cast<std::uintptr_t>(directionalNiLight);
+		if ((!everLogged || niLightValue != lastLoggedNiLight) && distinctLogged++ < 20) {
+			everLogged = true;
+			lastLoggedNiLight = niLightValue;
 			logger::warn(
 				"[LLF] BSLightingShader_SetupGeometry: directional sceneLights[0] unsafe "
 				"(numLights={} BSLight=0x{:x} NiLight=0x{:x}); skipping engine SetupGeometry",
 				numLights,
 				reinterpret_cast<std::uintptr_t>(directionalLight),
-				reinterpret_cast<std::uintptr_t>(directionalNiLight));
+				niLightValue);
 		}
 	}
 

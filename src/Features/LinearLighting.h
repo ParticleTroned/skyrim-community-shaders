@@ -85,8 +85,10 @@ struct LinearLighting : Feature
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBrightness;
+		uint pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
+	static_assert(sizeof(PerFrameData) == 112);
 
 	struct alignas(16) PerGeometryData
 	{

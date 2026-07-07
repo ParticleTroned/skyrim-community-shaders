@@ -94,6 +94,7 @@ namespace
 	{
 		Idle,
 		MeasuringCurrent,
+		SettlingTest,
 		MeasuringTest,
 		Complete
 	};
@@ -171,6 +172,7 @@ namespace
 	bool IsFeatureCostMeasurementRunning(const FeatureCostMeasurementState& state)
 	{
 		return state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||
+		       state.phase == FeatureCostMeasurementPhase::SettlingTest ||
 		       state.phase == FeatureCostMeasurementPhase::MeasuringTest;
 	}
 
@@ -652,6 +654,22 @@ namespace
 		state.testStateApplied = true;
 	}
 
+	void BeginFeatureCostMeasurementTestSettle(Feature* feature, FeatureCostMeasurementState& state, double currentTime)
+	{
+		ApplyFeatureCostMeasurementTestState(feature, state);
+		state.testSample = {};
+
+		const double settleSeconds = feature ? std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled)) : 0.0;
+		if (settleSeconds > 0.0) {
+			state.phase = FeatureCostMeasurementPhase::SettlingTest;
+			state.phaseStartTime = currentTime;
+			return;
+		}
+
+		state.phase = FeatureCostMeasurementPhase::MeasuringTest;
+		state.phaseStartTime = currentTime;
+	}
+
 	void RestoreFeatureCostMeasurementOriginalState(Feature* feature, FeatureCostMeasurementState& state)
 	{
 		if (!feature || !state.testStateApplied)
@@ -685,7 +703,14 @@ namespace
 		if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent) {
 			AddFeatureCostSample(state.currentSample, current);
 			if (elapsed >= kFeatureCostMeasurementSeconds) {
-				ApplyFeatureCostMeasurementTestState(feature, state);
+				BeginFeatureCostMeasurementTestSettle(feature, state, currentTime);
+			}
+			return;
+		}
+
+		if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled));
+			if (elapsed >= settleSeconds) {
 				state.testSample = {};
 				state.phase = FeatureCostMeasurementPhase::MeasuringTest;
 				state.phaseStartTime = currentTime;
@@ -837,7 +862,7 @@ namespace
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped(
-				"Measures current settings for %.0f seconds, toggles the comparison state for %.0f seconds, then restores the original settings.",
+				"Measures current settings for %.0f seconds, lets the comparison state settle, measures it for %.0f seconds, then restores the original settings.",
 				kFeatureCostMeasurementSeconds,
 				kFeatureCostMeasurementSeconds);
 			ImGui::TextWrapped(
@@ -848,6 +873,14 @@ namespace
 		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
 			ImGui::SameLine();
 			ImGui::TextDisabled("Finish the current measurement first");
+		}
+
+		if (state.phase == FeatureCostMeasurementPhase::SettlingTest) {
+			const double settleSeconds = std::max(0.0, feature->GetPerformanceCostMeasurementSettleSeconds(state.testEnabled));
+			const double elapsed = std::clamp(ImGui::GetTime() - state.phaseStartTime, 0.0, settleSeconds);
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s %.1f / %.1fs", feature->GetPerformanceCostMeasurementWaitText(), elapsed, settleSeconds);
+			return;
 		}
 
 		if (state.phase == FeatureCostMeasurementPhase::MeasuringCurrent ||

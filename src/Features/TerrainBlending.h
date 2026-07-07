@@ -52,6 +52,13 @@ public:
 
 		settings.Enabled = 0u;
 	}
+	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override
+	{
+		if (!a_targetEnabled)
+			return 3.0;
+
+		return Feature::GetPerformanceCostMeasurementSettleSeconds(a_targetEnabled);
+	}
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
 	{

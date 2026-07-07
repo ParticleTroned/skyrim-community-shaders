@@ -40,8 +40,17 @@ $D3d11Dll  = Join-Path $BuildDir 'src\d3d11\dxvk_d3d11.dll'
 $DxgiDll   = Join-Path $BuildDir 'src\dxgi\dxvk_dxgi.dll'
 $Stamp     = Join-Path $BuildDir '.cs-dxvk-sha'
 
+# Cold checkout: init the dxvk submodule + its nested subprojects (Vulkan-Headers, SPIRV-Headers,
+# dxbc-spirv, libdisplay-info) so a fresh clone builds with no manual submodule step. --force
+# repairs a half-populated checkout (dir present but empty), which git otherwise skips as
+# "already at the recorded commit". Idempotent + fast when everything is already present.
+$vulkanHdr = Join-Path $DxvkSrc 'include\vulkan\include\vulkan\vulkan.h'
+if ((-not (Test-Path (Join-Path $DxvkSrc 'meson.build'))) -or (-not (Test-Path $vulkanHdr))) {
+    Write-Host "[build-dxvk] initializing extern/dxvk submodule (+ nested Vulkan/SPIRV headers)..."
+    & git -C $RepoRoot submodule update --init --recursive --force -- extern/dxvk 2>&1 | Write-Host
+}
 if (-not (Test-Path (Join-Path $DxvkSrc 'meson.build'))) {
-    Write-Warning "[build-dxvk] extern/dxvk is not checked out (no meson.build). Run 'git submodule update --init extern/dxvk'. Skipping."
+    Write-Warning "[build-dxvk] extern/dxvk still not checked out after submodule init. Skipping (mod ships without DXVK)."
     exit 0
 }
 
@@ -73,6 +82,22 @@ Write-Host "[build-dxvk] building DXVK d3d11+dxgi ($short, $BuildType)..."
 
 # meson setup is needed once (or after a clean). meson compile auto-reconfigures when meson.build
 # changes; a plain submodule bump is picked up incrementally by ninja via file timestamps.
+#
+# NOTE on unity (jumbo) builds: '-Dunity=on' does NOT work with this DXVK, in TWO independent ways,
+# so it is intentionally not used (measured + verified 2026-07):
+#   1. The vendored 'libdisplay-info' C subproject has file-local helpers (add_failure,
+#      parse_data_block, destroy_data_block) that collide when merged into one TU (C2084/C2371).
+#      This one IS scope-avoidable: meson >= ~1.10 honors '-Dlibdisplay-info:unity=off' (meson 1.7,
+#      the current MSI build, silently ignores it and still emits display-info-unity0.c.obj).
+#   2. Even with libdisplay-info excluded, the DXVK CORE (src/dxvk) unity TU fails: the dxbc-spirv
+#      sub-subproject header spirv_types.h has no include guard / #pragma once, so two .cpp files in
+#      the merged TU re-include it -> C2011 struct redefinitions across SpirvHeader/SpirvBuilder/etc.
+#      Fixing this needs include-guard edits inside the dxbc-spirv submodule headers (or excluding
+#      src/dxvk from unity, which discards most of the benefit) -- neither is a committable
+#      build-tooling change, and excluding the core would leave little to unify.
+# Net: a robust committable unity is not achievable here without upstream/fork header fixes. The
+# compile is already parallel (ninja, all cores) and the target set is pruned to d3d11+dxgi
+# (-Denable_d3d8/9/10=false); that is DXVK's cold-build floor.
 if (-not (Test-Path (Join-Path $BuildDir 'build.ninja'))) {
     & $meson setup $BuildDir $DxvkSrc --vsenv --buildtype $BuildType `
         -Denable_d3d8=false -Denable_d3d9=false -Denable_d3d10=false

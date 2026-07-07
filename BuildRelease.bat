@@ -55,6 +55,13 @@ rem unchanged (see tools\build-dxvk.ps1). All Build*.bat wrappers reach this thr
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build-dxvk.ps1"
 if errorlevel 1 exit /b 1
 
+rem Build the Streamline fork plugins (sl.interposer / sl.fsr / sl.xess) CMake stages from
+rem extern\Streamline\_artifacts\sl.*\Develop_x64. Without them the mod ships with no upscaling/FG
+rem (CMake only warns). Fast + incremental: a no-op when the Streamline submodule is unchanged
+rem (see tools\build-streamline.ps1). All Build*.bat wrappers reach this through here.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build-streamline.ps1"
+if errorlevel 1 exit /b 1
+
 rem 'if errorlevel 1' is evaluated at run time; %ERRORLEVEL% inside a
 rem parenthesized block expands at parse time and misses failures.
 if exist "build\%configpreset%\CMakeCache.txt" (

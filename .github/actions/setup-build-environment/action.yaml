@@ -176,6 +176,32 @@ runs:
                   }
                 }
 
+                # Check vcpkg triplet mismatch. A triplet change installs
+                # vcpkg_installed/ under a new directory, while cached
+                # find_library() results can still point at the old one.
+                if ($content -match 'VCPKG_TARGET_TRIPLET:\w+=(.+)') {
+                  $cachedTriplet = $Matches[1].Trim()
+                  $allPresets = (Get-Content "CMakePresets.json" -Raw | ConvertFrom-Json).configurePresets
+                  function Resolve-PresetTriplet([string]$name, [int]$depth = 0) {
+                    if ($depth -gt 10) { return $null }
+                    $p = $allPresets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+                    if (-not $p) { return $null }
+                    $tv = $p.cacheVariables.VCPKG_TARGET_TRIPLET
+                    if ($tv) { if ($tv.value) { return $tv.value } else { return $tv } }
+                    $parents = if ($p.inherits -is [array]) { $p.inherits } else { @($p.inherits) }
+                    foreach ($parent in $parents) {
+                      $t = Resolve-PresetTriplet $parent ($depth + 1)
+                      if ($t) { return $t }
+                    }
+                    return $null
+                  }
+                  $expectedTriplet = Resolve-PresetTriplet "${{ inputs.cmake-preset }}"
+                  if ($expectedTriplet -and $expectedTriplet -ne $cachedTriplet) {
+                    Write-Host "vcpkg triplet mismatch: cached='$cachedTriplet', expected='$expectedTriplet'"
+                    $stale = $true
+                  }
+                }
+
                 if ($stale) {
                   Write-Host "Removing stale $buildDir directory."
                   Remove-Item -Recurse -Force $buildDir

@@ -283,7 +283,7 @@ void IBL::RegisterWeatherVariables()
 		"Env IBL Scale",
 		"Intensity of environment IBL from the Dynamic Cubemaps environment cubemap",
 		&settings.EnvIBLScale,
-		1.0f,
+		0.75f,
 		kIBLScaleMin, kIBLScaleMax));
 
 	// Intensity of sky IBL (from the game's native reflections cubemap)
@@ -292,7 +292,7 @@ void IBL::RegisterWeatherVariables()
 		"Sky IBL Scale",
 		"Intensity of sky IBL from the game's native reflections cubemap",
 		&settings.SkyIBLScale,
-		1.0f,
+		1.5f,
 		kIBLScaleMin, kIBLScaleMax));
 
 	// Color saturation of environment IBL
@@ -319,7 +319,7 @@ void IBL::RegisterWeatherVariables()
 		"DALC Amount",
 		"Blend factor toward vanilla ambient brightness (0 = pure IBL, 1 = fully matched to DALC)",
 		&settings.DALCAmount,
-		1.0f,
+		0.0f,
 		0.0f, 1.0f));
 
 	// Fog color blending toward IBL ambient color

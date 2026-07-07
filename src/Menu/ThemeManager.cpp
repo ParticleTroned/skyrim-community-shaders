@@ -894,8 +894,15 @@ float ThemeManager::ResolveFontSize(const Menu& menu)
 	// Compute dynamic size from screen resolution
 	float dynamicSize;
 	if (globals::game::isVR) {
-		// VR: use overlay height
-		dynamicSize = VR::Config::kOverlayHeight * Constants::DEFAULT_FONT_RATIO;
+		uint32_t canvasW = 0;
+		uint32_t canvasH = 0;
+		if (globals::features::vr.GetMenuCanvasSize(canvasW, canvasH)) {
+			dynamicSize = static_cast<float>(canvasH) * Constants::DEFAULT_FONT_RATIO;
+		} else if (globals::state && globals::state->screenSize.y > 0) {
+			dynamicSize = globals::state->screenSize.y * Constants::DEFAULT_FONT_RATIO;
+		} else {
+			dynamicSize = Constants::DEFAULT_FONT_SIZE;
+		}
 	} else if (globals::state && globals::state->screenSize.y > 0) {
 		// Non-VR: use current screen height
 		dynamicSize = globals::state->screenSize.y * Constants::DEFAULT_FONT_RATIO;

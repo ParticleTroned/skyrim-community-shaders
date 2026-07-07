@@ -200,6 +200,7 @@ void OverlayRenderer::RenderOverlay(
 	float currentFontSize)
 {
 	HandleVRSetup();
+	ApplyVROverlayDisplaySize();
 	processInputEventQueue();
 
 	if (globals::features::vr.IsOpenVRCompatible()) {
@@ -331,23 +332,41 @@ void OverlayRenderer::HandleFontReload(Menu& menu, float& cachedFontSize, float 
 	}
 }
 
+bool OverlayRenderer::ApplyVROverlayDisplaySize()
+{
+	uint32_t canvasW = 0;
+	uint32_t canvasH = 0;
+	if (!globals::game::isVR || !globals::features::vr.GetMenuCanvasSize(canvasW, canvasH))
+		return false;
+
+	auto& io = ImGui::GetIO();
+	io.DisplaySize = ImVec2(static_cast<float>(canvasW), static_cast<float>(canvasH));
+	io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+	return true;
+}
+
 void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 {
 	// Start the Dear ImGui frame
 	ImGui_ImplDX11_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 
-	DXGI_SWAP_CHAIN_DESC desc{};
-	globals::d3d::swapChain->GetDesc(&desc);
+	// ImGui_ImplWin32_NewFrame() restores DisplaySize from the desktop window.
+	// Re-apply the active VR overlay canvas so input and rendering stay 1:1 with the menu texture.
+	const bool usingVROverlayCanvas = ApplyVROverlayDisplaySize();
+	if (!usingVROverlayCanvas) {
+		DXGI_SWAP_CHAIN_DESC desc{};
+		globals::d3d::swapChain->GetDesc(&desc);
 
-	const float displayW = static_cast<float>(desc.BufferDesc.Width);
-	const float displayH = static_cast<float>(desc.BufferDesc.Height);
-	Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH);
+		const float displayW = static_cast<float>(desc.BufferDesc.Width);
+		const float displayH = static_cast<float>(desc.BufferDesc.Height);
+		Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH);
+	}
 
 	ImGui::NewFrame();
 
 	// Detect display size change (cross-session via ini handler, mid-session via member)
-	const float2 currentDisplaySize{ displayW, displayH };
+	const float2 currentDisplaySize{ ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y };
 	if (menu.lastDisplaySize.x > 0.f && menu.lastDisplaySize != currentDisplaySize) {
 		logger::info("Display size changed: {}x{} -> {}x{}, resetting window layout",
 			menu.lastDisplaySize.x, menu.lastDisplaySize.y, currentDisplaySize.x, currentDisplaySize.y);

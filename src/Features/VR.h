@@ -376,6 +376,7 @@ public:
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();
+	bool GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const;
 	void RecreateOverlayTexturesIfNeeded(bool needsControllerTexture = true);
 	void SubmitOverlayFrame();
 	void HideOverlaysIfPresent();

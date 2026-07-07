@@ -54,6 +54,7 @@ private:
 	static std::vector<OverlayFeature*> CollectDrawableFeatureOverlays(const Menu& menu);
 	static bool ShouldDrawFeatureOverlay(const OverlayFeature& overlay, const Menu& menu);
 	static void HandleFontReload(Menu& menu, float& cachedFontSize, float currentFontSize);
+	static bool ApplyVROverlayDisplaySize();
 	static void InitializeImGuiFrame(Menu& menu);
 	static void RenderShaderCompilationStatus(const std::function<const char*(std::vector<InputCombo>)>& keyIdToString);
 	static void RenderShaderBlockingStatus();

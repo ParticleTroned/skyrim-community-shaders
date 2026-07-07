@@ -2906,6 +2906,35 @@ void VR::DestroyOverlay()
 	}
 }
 
+bool VR::GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const
+{
+	a_width = 0;
+	a_height = 0;
+	if (!globals::game::isVR || settings.attachMode == Settings::OverlayAttachMode::None)
+		return false;
+
+	const bool controllerCanvas = settings.attachMode == Settings::OverlayAttachMode::ControllerOnly;
+	ID3D11Texture2D* canvasTexture = controllerCanvas ? menuControllerTexture.get() : menuTexture.get();
+	if (canvasTexture) {
+		D3D11_TEXTURE2D_DESC desc{};
+		canvasTexture->GetDesc(&desc);
+		if (desc.Width > 0 && desc.Height > 0) {
+			a_width = desc.Width;
+			a_height = desc.Height;
+			return true;
+		}
+	}
+
+	if (controllerCanvas) {
+		a_width = static_cast<uint32_t>(Config::kOverlayWidth);
+		a_height = static_cast<uint32_t>(Config::kOverlayHeight);
+	} else {
+		a_width = static_cast<uint32_t>(Config::kHMDOverlayWidth);
+		a_height = static_cast<uint32_t>(Config::kHMDOverlayHeight);
+	}
+	return true;
+}
+
 void VR::RecreateOverlayTexturesIfNeeded(bool needsControllerTexture)
 {
 	if (!globals::d3d::device) {

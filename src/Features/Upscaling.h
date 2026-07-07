@@ -368,6 +368,12 @@ public:
 		float4 previousCameraPosAdjust;
 	};
 
+	struct CameraMotionVectorsCB
+	{
+		float4x4 curViewProjUnjitteredInverse[2];  // index 1 unused in flat
+		float4x4 prevViewProjUnjittered[2];
+	};
+
 	static_assert(sizeof(JitterCB) == 16, "JitterCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(UpscalingDataCB) == 64, "UpscalingDataCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 32, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
@@ -375,6 +381,7 @@ public:
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 304, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
 	struct FoveatedDispatchRect
 	{
@@ -442,6 +449,7 @@ public:
 
 	ConstantBuffer* jitterCB = nullptr;
 	ConstantBuffer* upscalingDataCB = nullptr;
+	ConstantBuffer* cameraMotionVectorsCB = nullptr;
 	ConstantBuffer* dynamicResolutionStretchCB = nullptr;
 	ConstantBuffer* vrMenuLayerCompositeCB = nullptr;
 	ConstantBuffer* foveatedPeripheryCB = nullptr;
@@ -578,6 +586,18 @@ public:
 	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscalePS;
 	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscaleRawDepthNoStencilPS;
 	ID3D11PixelShader* GetUnderwaterMaskUpscalePS(bool a_useRawSceneDepth = false);
+
+	winrt::com_ptr<ID3D11PixelShader> cameraMotionVectorsPS;
+	ID3D11PixelShader* GetCameraMotionVectorsPS();
+
+	/**
+	 * @brief Writes camera-derived motion vectors into kMOTION_VECTOR from depth and the
+	 *        unjittered view-proj delta. Valid only when nothing but the camera moves
+	 *        (the main menu, where no geometry pass writes motion vectors).
+	 *        Sets menuCameraMVsValid on success.
+	 */
+	void FillMenuCameraMotionVectors();
+	void PrepareMenuCameraMotionVectors();
 
 	winrt::com_ptr<ID3D11VertexShader> upscaleVS;
 	ID3D11VertexShader* GetUpscaleVS();
@@ -757,7 +777,9 @@ public:
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
+	bool menuCameraMVsValid = false;
 	uint32_t historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t runtimeResolutionStateLastRefreshFrame = std::numeric_limits<uint32_t>::max();
 	uint32_t resourceCheckLastCompletedFrame = std::numeric_limits<uint32_t>::max();
 	UpscaleMethod resourceCheckLastCompletedMethod = UpscaleMethod::kNONE;

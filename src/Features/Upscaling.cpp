@@ -9268,6 +9268,8 @@ bool Upscaling::ResetVRSubmitStageState(bool a_destroyDLSSResources)
 	historyResetTrackingInitialized = false;
 	historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
 	historyResetThisFrame = false;
+	menuCameraMVsValid = false;
+	menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
 	RequestHistoryReset();
 	return dlssResourcesDestroyed;
 }
@@ -10209,6 +10211,19 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(bool a_useRawSceneDepth
 	}
 
 	return shader.get();
+}
+
+ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
+{
+	if (!cameraMotionVectorsPS) {
+		logger::debug("Compiling CameraMotionVectorsPS.hlsl");
+		std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
+		if (globals::game::isVR)
+			defines.push_back({ "VR", "" });
+		cameraMotionVectorsPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl", defines, "ps_5_0"));
+	}
+
+	return cameraMotionVectorsPS.get();
 }
 
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
@@ -13910,6 +13925,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		resolutionScale = { 1.0f, 1.0f };
 		auto phaseCount = GetJitterPhaseCount(renderWidth, outputWidth);
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
+		// Loading screens reset vendor history every frame; unintegrated jitter only vibrates the image.
+		if (IsLoadingMenuContextActive())
+			jitter = { 0.0f, 0.0f };
 
 		const float targetProjectionPosScaleX = -jitter.x / renderWidth;
 		const float targetProjectionPosScaleY = 2.0f * jitter.y / renderHeight;
@@ -13956,6 +13974,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		auto phaseCount = GetJitterPhaseCount(renderWidth, screenWidth);
 
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
+		// Loading screens reset vendor history every frame; unintegrated jitter only vibrates the image.
+		if (IsLoadingMenuContextActive())
+			jitter = { 0.0f, 0.0f };
 
 		const float targetProjectionPosScaleX =
 			globals::game::isVR ?
@@ -14217,6 +14238,10 @@ void Upscaling::SetupResources()
 	// Create upscaling data constant buffer for encode textures compute shader
 	delete upscalingDataCB;
 	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
+	delete cameraMotionVectorsCB;
+	cameraMotionVectorsCB = new ConstantBuffer(ConstantBufferDesc<CameraMotionVectorsCB>(), "Upscaling::CameraMotionVectorsCB");
+	menuCameraMVsValid = false;
+	menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
 	delete dynamicResolutionStretchCB;
 	dynamicResolutionStretchCB = new ConstantBuffer(ConstantBufferDesc<DynamicResolutionStretchCB>(), "Upscaling::DynamicResolutionStretchCB");
 	delete vrMenuLayerCompositeCB;
@@ -14296,6 +14321,7 @@ void Upscaling::ClearShaderCache()
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
 	underwaterMaskUpscaleRawDepthNoStencilPS = nullptr;
+	cameraMotionVectorsPS = nullptr;   // com_ptr automatically releases
 	upscaleVS = nullptr;               // com_ptr automatically releases
 	foveatedPeripheryCS = nullptr;     // com_ptr automatically releases
 	foveatedCenterBlendCS = nullptr;   // com_ptr automatically releases
@@ -16408,6 +16434,100 @@ void Upscaling::ApplyPendingVRUpscalingTransition(UpscaleMethod a_upscaleMethod)
 	}
 }
 
+void Upscaling::FillMenuCameraMotionVectors()
+{
+	menuCameraMVsValid = false;
+
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+	if (!renderer || !context || !cameraMotionVectorsCB)
+		return;
+
+	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+
+	auto* pixelShader = GetCameraMotionVectorsPS();
+	auto* vertexShader = GetUpscaleVS();
+	if (!pixelShader || !vertexShader || !motionVector.RTV || !motionVector.texture || !depth.depthSRV)
+		return;
+
+	CS_GPU_PASS("Upscaling::MenuCameraMotionVectors");
+
+	CameraMotionVectorsCB cbData{};
+	const uint32_t numEyes = globals::game::isVR ? 2u : 1u;
+	for (uint32_t eyeIndex = 0; eyeIndex < numEyes; ++eyeIndex) {
+		// Inversion is convention-safe on the raw cb12 bytes; composition with the previous
+		// view-proj stays in the shader so the mul() convention matches FrameBuffer usage.
+		cbData.curViewProjUnjitteredInverse[eyeIndex] =
+			globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex).Invert();
+		cbData.prevViewProjUnjittered[eyeIndex] =
+			globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex);
+	}
+	cameraMotionVectorsCB->Update(cbData);
+
+	Util::FullscreenPassScope stateScope(context);
+
+	context->IASetInputLayout(nullptr);
+	context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	context->VSSetShader(vertexShader, nullptr, 0);
+	context->PSSetShader(pixelShader, nullptr, 0);
+	context->GSSetShader(nullptr, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+
+	ID3D11ShaderResourceView* srvs[] = { depth.depthSRV };
+	context->PSSetShaderResources(0, 1, srvs);
+
+	// b1 is preserved by FullscreenPassScope.
+	auto* constantBuffer = cameraMotionVectorsCB->CB();
+	context->PSSetConstantBuffers(1, 1, &constantBuffer);
+
+	context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+	context->OMSetDepthStencilState(nullptr, 0);
+	context->RSSetState(nullptr);
+
+	D3D11_TEXTURE2D_DESC motionVectorDesc{};
+	static_cast<ID3D11Texture2D*>(motionVector.texture)->GetDesc(&motionVectorDesc);
+	D3D11_VIEWPORT viewport{};
+	viewport.Width = static_cast<float>(motionVectorDesc.Width);
+	viewport.Height = static_cast<float>(motionVectorDesc.Height);
+	viewport.MaxDepth = 1.0f;
+	context->RSSetViewports(1, &viewport);
+
+	ID3D11RenderTargetView* rtv = motionVector.RTV;
+	context->OMSetRenderTargets(1, &rtv, nullptr);
+	context->Draw(3, 0);
+
+	menuCameraMVsValid = true;
+}
+
+void Upscaling::PrepareMenuCameraMotionVectors()
+{
+	auto state = globals::state;
+	if (!state) {
+		menuCameraMVsValid = false;
+		menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
+		return;
+	}
+
+	const uint32_t frame = state->frameCount;
+	if (menuCameraMVsPreparedFrame == frame)
+		return;
+
+	menuCameraMVsPreparedFrame = frame;
+	menuCameraMVsValid = false;
+
+	if (!IsMainMenuContextActive() || IsLoadingMenuContextActive())
+		return;
+
+	FillMenuCameraMotionVectors();
+}
+
 bool Upscaling::ShouldResetHistoryThisFrame() const
 {
 	return historyResetThisFrame;
@@ -16430,10 +16550,13 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	if (!state)
 		return;
 
+	PrepareMenuCameraMotionVectors();
+
 	auto ui = globals::game::ui;
 	const bool inWorld = state->inWorld;
 	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
-	const bool mainOrLoadingMenuOpen = state->IsMainOrLoadingMenuOpen(ui);
+	const bool mainMenuOpen = IsMainMenuContextActive();
+	const bool loadingMenuOpen = IsLoadingMenuContextActive();
 	const float2 screenSize = state->screenSize;
 	EnsureRuntimeResolutionStateCurrent();
 	float2 engineRenderSize = runtimeResolutionPlan.engineRenderSize;
@@ -16545,9 +16668,12 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 
 	if (state->pendingPostLoadRuntimeReset)
 		shouldReset = true;
-	// Main/loading menus animate without valid motion vectors, so temporal vendor
-	// upscalers must treat every frame there as a history cut.
-	if (mainOrLoadingMenuOpen)
+	// Loading screens animate geometry that camera-derived motion vectors cannot represent.
+	if (loadingMenuOpen)
+		shouldReset = true;
+	// The main menu has camera-only motion, so synthesized motion vectors can preserve
+	// temporal history there once the reprojection pass has run successfully.
+	if (mainMenuOpen && !menuCameraMVsValid)
 		shouldReset = true;
 
 	if (shouldReset)

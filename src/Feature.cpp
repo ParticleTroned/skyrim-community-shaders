@@ -6,6 +6,7 @@
 #include "FeatureVersions.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
+#include "Features/CSUtility.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -258,7 +259,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::csEditor,
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
-		&globals::features::unifiedWater
+		&globals::features::unifiedWater,
+		&globals::features::csUtility
 	};
 
 	if (REL::Module::IsVR()) {

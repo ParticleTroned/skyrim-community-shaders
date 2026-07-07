@@ -11,6 +11,7 @@
 #include "TruePBR.h"
 #include "Util.h"
 
+#include "Features/CSUtility.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/TerrainBlending.h"
@@ -1619,10 +1620,13 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::PixelShader* PixelShader, RE::BSRenderPass* Pass, DirectX::XMMATRIX& Transform, uint32_t LightCount, uint32_t ShadowLightCount, float WorldScale, uint32_t)
 		{
-			if (globals::features::lightLimitFix.loaded)
+			if (globals::features::lightLimitFix.loaded) {
 				globals::features::lightLimitFix.BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(Pass);
-			else
+			} else {
 				func(PixelShader, Pass, Transform, LightCount, ShadowLightCount, WorldScale, 0);
+				if (globals::features::csUtility.loaded)
+					globals::features::csUtility.UpdateVanillaPointLightData(Pass, LightCount);
+			}
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

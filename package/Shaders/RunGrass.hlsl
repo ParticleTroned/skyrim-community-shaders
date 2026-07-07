@@ -19,65 +19,65 @@
 
 struct VS_INPUT
 {
-	float4 Position : POSITION0;
-	float2 TexCoord : TEXCOORD0;
-	float4 Normal : NORMAL0;
-	float4 Color : COLOR0;
-	float4 InstanceData1 : TEXCOORD4;
-	float4 InstanceData2 : TEXCOORD5;
-	float4 InstanceData3 : TEXCOORD6;
-	float4 InstanceData4 : TEXCOORD7;
+	float4 Position: POSITION0;
+	float2 TexCoord: TEXCOORD0;
+	float4 Normal: NORMAL0;
+	float4 Color: COLOR0;
+	float4 InstanceData1: TEXCOORD4;
+	float4 InstanceData2: TEXCOORD5;
+	float4 InstanceData3: TEXCOORD6;
+	float4 InstanceData4: TEXCOORD7;
 #ifdef VR
-	uint InstanceID : SV_INSTANCEID;
+	uint InstanceID: SV_INSTANCEID;
 #endif  // VR
 };
 
 #ifdef GRASS_LIGHTING
 struct VS_OUTPUT
 {
-	float4 HPosition : SV_POSITION0;
-	float4 Color : COLOR0;
-	float VertexMult : COLOR1;
-	float3 TexCoord : TEXCOORD0;
-	float3 ViewSpacePosition :
+	float4 HPosition: SV_POSITION0;
+	float4 Color: COLOR0;
+	float VertexMult: COLOR1;
+	float3 TexCoord: TEXCOORD0;
+	float3 ViewSpacePosition:
 #	if !defined(VR)
 		TEXCOORD1;
 #	else
 		TEXCOORD2;
 #	endif
 #	if defined(RENDER_DEPTH)
-	float2 Depth :
+	float2 Depth:
 #		if !defined(VR)
 		TEXCOORD2;
 #		else
 		TEXCOORD3;
 #		endif
 #	endif  // RENDER_DEPTH
-	float4 WorldPosition : POSITION1;
-	float4 PreviousWorldPosition : POSITION2;
-	float4 VertexNormal : POSITION4;
+	float4 WorldPosition: POSITION1;
+	float4 PreviousWorldPosition: POSITION2;
+	float4 VertexNormal: POSITION4;
 #	ifdef VR
-	float ClipDistance : SV_ClipDistance0;
-	float CullDistance : SV_CullDistance0;
+	float ClipDistance: SV_ClipDistance0;
+	float CullDistance: SV_CullDistance0;
 #	endif  // VR
 };
 #else
 struct VS_OUTPUT
 {
-	float4 HPosition : SV_POSITION0;
-	float4 Color : COLOR0;
-	float VertexMult : COLOR1;
-	float3 TexCoord : TEXCOORD0;
-	float4 AmbientColor : TEXCOORD1;
-	float3 ViewSpacePosition : TEXCOORD2;
+	float4 HPosition: SV_POSITION0;
+	float4 Color: COLOR0;
+	float VertexMult: COLOR1;
+	float3 TexCoord: TEXCOORD0;
+	float4 AmbientColor: TEXCOORD1;
+	float3 ViewSpacePosition: TEXCOORD2;
 #	if defined(RENDER_DEPTH)
-	float2 Depth : TEXCOORD3;
+	float2 Depth: TEXCOORD3;
 #	endif  // RENDER_DEPTH
-	float4 WorldPosition : POSITION1;
-	float4 PreviousWorldPosition : POSITION2;
+	float4 WorldPosition: POSITION1;
+	float4 PreviousWorldPosition: POSITION2;
 #	ifdef VR
-	float ClipDistance : SV_ClipDistance0;
-	float CullDistance : SV_CullDistance0;
+	float ClipDistance: SV_ClipDistance0;
+	float CullDistance: SV_CullDistance0;
 #	endif  // VR
 };
 #endif
@@ -347,32 +347,32 @@ typedef VS_OUTPUT PS_INPUT;
 struct PS_OUTPUT
 {
 #	if defined(RENDER_DEPTH)
-	float4 PS : SV_Target0;
+	float4 PS: SV_Target0;
 #	else
-	float4 Diffuse : SV_Target0;
-	float2 MotionVectors : SV_Target1;
-	float4 NormalGlossiness : SV_Target2;
-	float4 Albedo : SV_Target3;
-	float4 Specular : SV_Target4;
+	float4 Diffuse: SV_Target0;
+	float2 MotionVectors: SV_Target1;
+	float4 NormalGlossiness: SV_Target2;
+	float4 Albedo: SV_Target3;
+	float4 Specular: SV_Target4;
 #		if defined(TRUE_PBR)
-	float4 Reflectance : SV_Target5;
+	float4 Reflectance: SV_Target5;
 #		endif  // TRUE_PBR
-	float4 Masks : SV_Target6;
-	float4 Masks2 : SV_Target7;
+	float4 Masks: SV_Target6;
+	float4 Masks2: SV_Target7;
 #	endif      // RENDER_DEPTH
 };
 #else
 struct PS_OUTPUT
 {
 #	if defined(RENDER_DEPTH)
-	float4 PS : SV_Target0;
+	float4 PS: SV_Target0;
 #	else
-	float4 Diffuse : SV_Target0;
-	float2 MotionVectors : SV_Target1;
-	float4 Normal : SV_Target2;
-	float4 Albedo : SV_Target3;
-	float4 Masks : SV_Target6;
-	float4 Masks2 : SV_Target7;
+	float4 Diffuse: SV_Target0;
+	float2 MotionVectors: SV_Target1;
+	float4 Normal: SV_Target2;
+	float4 Albedo: SV_Target3;
+	float4 Masks: SV_Target6;
+	float4 Masks2: SV_Target7;
 #	endif
 };
 #endif
@@ -701,7 +701,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
+				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
 				float lightShadow = 1.0;
 
 				float shadowComponent = 1.0;
@@ -900,7 +901,7 @@ PS_OUTPUT main(PS_INPUT input)
 #				endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
 
 				float lightShadow = 1.0;
 

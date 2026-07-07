@@ -294,6 +294,18 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
+	struct CSUtilitySettings
+	{
+		float skyBrightness;
+		float directionalLightMult;
+		float pointLightMult;
+		float linearPointLightMult;
+		float spotlightMult;
+		float linearSpotlightMult;
+		float omnidirectionalBulbMult;
+		float linearOmnidirectionalBulbMult;
+	};
+
 	struct LinearLightingSettings
 	{
 		uint enableLinearLighting;
@@ -311,10 +323,8 @@ namespace SharedData
 		float skyGamma;
 		float waterGamma;
 		float vlGamma;
-		float vanillaDiffuseColorMult;
-		float directionalLightMult;
-		float pointLightMult;
 		float ambientMult;
+		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;
 		float effectLightingMult;
@@ -356,6 +366,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		CSUtilitySettings csUtilitySettings;
 		LinearLightingSettings linearLightingSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		TruePBRSettings truePBRSettings;

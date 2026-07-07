@@ -1847,8 +1847,6 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 		return a_profile.advanced ? ClampGammaOffset(a_offset) : 0.0f;
 	};
 
-	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
-	out.pointLightMult = ClampMultiplier(out.pointLightMult * masterScale(0.75f) * advancedMult(a_profile.pointLightMult));
 	out.ambientMult = ClampMultiplier(out.ambientMult * masterScale(0.95f) * advancedMult(a_profile.ambientMult));
 	out.emitColorMult = ClampMultiplier(out.emitColorMult * masterScale(0.35f) * advancedMult(a_profile.emitColorMult));
 	out.glowmapMult = ClampMultiplier(out.glowmapMult * masterScale(0.35f) * advancedMult(a_profile.glowmapMult));
@@ -1859,6 +1857,32 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	out.fogAlphaGamma = ClampGamma(out.fogAlphaGamma + masterGammaOffset * 0.50f + advancedOffset(a_profile.fogAlphaGammaOffset));
 	out.waterGamma = ClampGamma(out.waterGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.waterGammaOffset));
 	out.vlGamma = ClampGamma(out.vlGamma + masterGammaOffset * 0.85f + advancedOffset(a_profile.vlGammaOffset));
+
+	return out;
+}
+
+CSUtility::Settings AdaptiveBrightness::ApplyProfile(const CSUtility::Settings& a_base, const ProfileSettings& a_profile) const
+{
+	auto out = a_base;
+	const float brightness = ClampBrightness(a_profile.brightness);
+	const float brightnessDelta = brightness - 1.0f;
+
+	const auto masterScale = [&](float a_weight) {
+		return std::max(0.0f, 1.0f + brightnessDelta * a_weight);
+	};
+	const auto advancedMult = [&](float a_multiplier) {
+		return a_profile.advanced ? ClampMultiplier(a_multiplier) : 1.0f;
+	};
+
+	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
+
+	const float pointLightScale = masterScale(0.75f) * advancedMult(a_profile.pointLightMult);
+	out.pointLightMult = ClampMultiplier(out.pointLightMult * pointLightScale);
+	out.linearPointLightMult = ClampMultiplier(out.linearPointLightMult * pointLightScale);
+	out.spotlightMult = ClampMultiplier(out.spotlightMult * pointLightScale);
+	out.linearSpotlightMult = ClampMultiplier(out.linearSpotlightMult * pointLightScale);
+	out.omnidirectionalBulbMult = ClampMultiplier(out.omnidirectionalBulbMult * pointLightScale);
+	out.linearOmnidirectionalBulbMult = ClampMultiplier(out.linearOmnidirectionalBulbMult * pointLightScale);
 
 	return out;
 }
@@ -1884,8 +1908,6 @@ LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::
 	out.waterGamma = lerp(a_a.waterGamma, a_b.waterGamma);
 	out.vlGamma = lerp(a_a.vlGamma, a_b.vlGamma);
 	out.vanillaDiffuseColorMult = lerp(a_a.vanillaDiffuseColorMult, a_b.vanillaDiffuseColorMult);
-	out.directionalLightMult = lerp(a_a.directionalLightMult, a_b.directionalLightMult);
-	out.pointLightMult = lerp(a_a.pointLightMult, a_b.pointLightMult);
 	out.ambientMult = lerp(a_a.ambientMult, a_b.ambientMult);
 	out.emitColorMult = lerp(a_a.emitColorMult, a_b.emitColorMult);
 	out.glowmapMult = lerp(a_a.glowmapMult, a_b.glowmapMult);
@@ -1895,6 +1917,26 @@ LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::
 	out.projectedEffectMult = lerp(a_a.projectedEffectMult, a_b.projectedEffectMult);
 	out.deferredEffectMult = lerp(a_a.deferredEffectMult, a_b.deferredEffectMult);
 	out.otherEffectMult = lerp(a_a.otherEffectMult, a_b.otherEffectMult);
+
+	return out;
+}
+
+CSUtility::Settings AdaptiveBrightness::LerpSettings(const CSUtility::Settings& a_a, const CSUtility::Settings& a_b, float a_t) const
+{
+	auto out = a_a;
+	const float t = std::clamp(SafeFinite(a_t, 0.0f), 0.0f, 1.0f);
+	const auto lerp = [&](float a_start, float a_end) {
+		return std::lerp(a_start, a_end, t);
+	};
+
+	out.skyBrightness = lerp(a_a.skyBrightness, a_b.skyBrightness);
+	out.directionalLightMult = lerp(a_a.directionalLightMult, a_b.directionalLightMult);
+	out.pointLightMult = lerp(a_a.pointLightMult, a_b.pointLightMult);
+	out.linearPointLightMult = lerp(a_a.linearPointLightMult, a_b.linearPointLightMult);
+	out.spotlightMult = lerp(a_a.spotlightMult, a_b.spotlightMult);
+	out.linearSpotlightMult = lerp(a_a.linearSpotlightMult, a_b.linearSpotlightMult);
+	out.omnidirectionalBulbMult = lerp(a_a.omnidirectionalBulbMult, a_b.omnidirectionalBulbMult);
+	out.linearOmnidirectionalBulbMult = lerp(a_a.linearOmnidirectionalBulbMult, a_b.linearOmnidirectionalBulbMult);
 
 	return out;
 }
@@ -1912,6 +1954,20 @@ LinearLighting::Settings AdaptiveBrightness::GetEffectiveLinearLightingSettings(
 
 	const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
 	const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
+	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+}
+
+CSUtility::Settings AdaptiveBrightness::GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings) const
+{
+	if (!IsRuntimeEnabled())
+		return a_csUtilitySettings;
+
+	const auto activeProfiles = GetActiveProfileBlend();
+	if (activeProfiles.from == activeProfiles.to)
+		return ApplyProfile(a_csUtilitySettings, *activeProfiles.from);
+
+	const auto fromSettings = ApplyProfile(a_csUtilitySettings, *activeProfiles.from);
+	const auto toSettings = ApplyProfile(a_csUtilitySettings, *activeProfiles.to);
 	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
 }
 

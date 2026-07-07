@@ -37,6 +37,7 @@ struct WetnessEffects;
 struct ExtendedTranslucency;
 struct Upscaling;
 struct CSEditor;
+struct CSUtility;
 struct ScreenshotFeature;
 
 class ParticleLights;
@@ -99,6 +100,7 @@ namespace globals
 		extern RenderDoc renderDoc;
 		extern ScreenshotFeature screenshotFeature;
 		extern CSEditor csEditor;
+		extern CSUtility csUtility;
 		extern TruePBR truePBR;
 
 		namespace llf

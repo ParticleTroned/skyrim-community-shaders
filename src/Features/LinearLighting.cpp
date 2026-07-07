@@ -21,10 +21,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	skyGamma,
 	waterGamma,
 	vlGamma,
-	vanillaDiffuseColorMult,
-	directionalLightMult,
-	pointLightMult,
 	ambientMult,
+	vanillaDiffuseColorMult,
 	emitColorMult,
 	glowmapMult,
 	effectLightingMult,
@@ -34,6 +32,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	deferredEffectMult,
 	otherEffectMult)
 
+namespace
+{
+	constexpr float kGammaMin = 0.1f;
+	constexpr float kGammaMax = 3.0f;
+	constexpr float kMultiplierMin = 0.0f;
+	constexpr float kMultiplierMax = 5.0f;
+	constexpr float kAmbientMultiplierMax = 5.0f;
+}
+
 void LinearLighting::DrawSettings()
 {
 	ImGui::Checkbox("Enable Linear Lighting", (bool*)&settings.enableLinearLighting);
@@ -41,44 +48,35 @@ void LinearLighting::DrawSettings()
 	ImGui::Checkbox("Disable in exteriors", (bool*)&settings.DisableInExteriors);
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("General")) {
-			ImGui::SeparatorText("Gamma Settings");
-			ImGui::SliderFloat("Fog Gamma", &settings.fogGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Fog Transparency Gamma", &settings.fogAlphaGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Sky Gamma", &settings.skyGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Volumetric Lighting Gamma", &settings.vlGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Water Gamma", &settings.waterGamma, 0.1f, 3.0f, "%.2f");
-
-			ImGui::SeparatorText("Multipliers");
-			ImGui::SliderFloat("Directional Light Multiplier", &settings.directionalLightMult, 0.0f, 10.0f, "%.2f");
-			ImGui::SliderFloat("Ambient Multiplier", &settings.ambientMult, 0.0f, 10.0f, "%.2f");
-			ImGui::SliderFloat("Glowmap Multiplier", &settings.glowmapMult, 0.0f, 10.0f, "%.2f");
-
+		if (ImGui::BeginTabItem("Gamma")) {
+			ImGui::SliderFloat("Ambient Gamma", &settings.ambientGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Color Gamma", &settings.colorGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Effect Gamma", &settings.effectGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Effect Transparency Gamma", &settings.effectAlphaGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Emissive Color Gamma", &settings.emitColorGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Fog Gamma", &settings.fogGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Fog Transparency Gamma", &settings.fogAlphaGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Glowmap Gamma", &settings.glowmapGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Light Gamma", &settings.lightGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Sky Gamma", &settings.skyGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Volumetric Lighting Gamma", &settings.vlGamma, kGammaMin, kGammaMax, "%.2f");
+			ImGui::SliderFloat("Water Gamma", &settings.waterGamma, kGammaMin, kGammaMax, "%.2f");
 			ImGui::EndTabItem();
 		}
 
-		if (ImGui::BeginTabItem("Advanced")) {
-			ImGui::SeparatorText("Gamma Settings");
-			ImGui::SliderFloat("Light Gamma", &settings.lightGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Color Gamma", &settings.colorGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Emissive Color Gamma", &settings.emitColorGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Glowmap Gamma", &settings.glowmapGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Ambient Gamma", &settings.ambientGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Effect Gamma", &settings.effectGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat("Effect Transparency Gamma", &settings.effectAlphaGamma, 0.1f, 3.0f, "%.2f");
-
-			ImGui::SeparatorText("Multipliers");
-			ImGui::SliderFloat("Vanilla Diffuse Color Multiplier", &settings.vanillaDiffuseColorMult, 0.0f, 10.0f, "%.2f");
-			ImGui::SliderFloat("Emissive Color Multiplier", &settings.emitColorMult, 0.0f, 10.0f, "%.2f");
-			ImGui::SliderFloat("Point Light Multiplier", &settings.pointLightMult, 0.0f, 10.0f, "%.2f");
+		if (ImGui::BeginTabItem("Multipliers")) {
+			ImGui::SliderFloat("Ambient Multiplier", &settings.ambientMult, kMultiplierMin, kAmbientMultiplierMax, "%.2f");
+			ImGui::SliderFloat("Vanilla Diffuse Color Multiplier", &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			ImGui::SliderFloat("Emissive Color Multiplier", &settings.emitColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			ImGui::SliderFloat("Glowmap Multiplier", &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			ImGui::SliderFloat("Effect Lighting Multiplier", &settings.effectLightingMult, kMultiplierMin, kMultiplierMax, "%.2f");
 
 			if (ImGui::TreeNodeEx("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-				ImGui::SliderFloat("Effect Lighting Multiplier", &settings.effectLightingMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat("Membrane Effects Multiplier", &settings.membraneEffectMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat("Blood Effects Multiplier", &settings.bloodEffectMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat("Projected Effects Multiplier", &settings.projectedEffectMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat("Deferred Effects Multiplier", &settings.deferredEffectMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat("Other Effects Multiplier", &settings.otherEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat("Blood Effects Multiplier", &settings.bloodEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+				ImGui::SliderFloat("Deferred Effects Multiplier", &settings.deferredEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+				ImGui::SliderFloat("Membrane Effects Multiplier", &settings.membraneEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+				ImGui::SliderFloat("Projected Effects Multiplier", &settings.projectedEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+				ImGui::SliderFloat("Other Effects Multiplier", &settings.otherEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
 				ImGui::TreePop();
 			}
 
@@ -174,8 +172,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.waterGamma = effectiveSettings.waterGamma;
 	data.vlGamma = effectiveSettings.vlGamma;
 	data.vanillaDiffuseColorMult = effectiveSettings.vanillaDiffuseColorMult;
-	data.directionalLightMult = effectiveSettings.directionalLightMult;
-	data.pointLightMult = effectiveSettings.pointLightMult;
 	data.ambientMult = effectiveSettings.ambientMult;
 	data.emitColorMult = effectiveSettings.emitColorMult;
 	data.glowmapMult = effectiveSettings.glowmapMult;

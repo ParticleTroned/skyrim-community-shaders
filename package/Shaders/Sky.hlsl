@@ -4,48 +4,48 @@
 
 struct VS_INPUT
 {
-	float4 Position : POSITION0;
+	float4 Position: POSITION0;
 
 #if defined(TEX) || defined(HORIZFADE)
-	float2 TexCoord : TEXCOORD0;
+	float2 TexCoord: TEXCOORD0;
 #endif
 
-	float4 Color : COLOR0;
+	float4 Color: COLOR0;
 #if defined(VR)
-	uint InstanceID : SV_INSTANCEID;
+	uint InstanceID: SV_INSTANCEID;
 #endif  // VR
 };
 
 struct VS_OUTPUT
 {
-	float4 Position : SV_POSITION0;
+	float4 Position: SV_POSITION0;
 
 #if defined(DITHER) && defined(TEX)
-	float4 TexCoord0 : TEXCOORD0;
+	float4 TexCoord0: TEXCOORD0;
 #elif defined(DITHER)
-	float2 TexCoord0 : TEXCOORD3;
+	float2 TexCoord0: TEXCOORD3;
 #elif defined(TEX) || defined(HORIZFADE)
-	float2 TexCoord0 : TEXCOORD0;
+	float2 TexCoord0: TEXCOORD0;
 #endif
 
 #if defined(TEXLERP)
-	float2 TexCoord1 : TEXCOORD1;
+	float2 TexCoord1: TEXCOORD1;
 #endif
 
 #if defined(HORIZFADE)
-	float TexCoord2 : TEXCOORD2;
+	float TexCoord2: TEXCOORD2;
 #endif
 
 #if defined(TEX) || defined(DITHER) || defined(HORIZFADE)
-	float4 Color : COLOR0;
+	float4 Color: COLOR0;
 #endif
 
-	float4 WorldPosition : POSITION1;
-	float4 PreviousWorldPosition : POSITION2;
+	float4 WorldPosition: POSITION1;
+	float4 PreviousWorldPosition: POSITION2;
 #if defined(VR)
-	float ClipDistance : SV_ClipDistance0;  // o11
-	float CullDistance : SV_CullDistance0;  // p11
-	uint EyeIndex : EYEIDX0;
+	float ClipDistance: SV_ClipDistance0;  // o11
+	float CullDistance: SV_CullDistance0;  // p11
+	uint EyeIndex: EYEIDX0;
 #endif  // VR
 };
 
@@ -152,11 +152,11 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
-	float4 MotionVectors : SV_Target1;
-	float4 Normal : SV_Target2;
+	float4 Color: SV_Target0;
+	float4 MotionVectors: SV_Target1;
+	float4 Normal: SV_Target2;
 #if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
-	float4 CloudShadows : SV_Target3;
+	float4 CloudShadows: SV_Target3;
 #endif
 };
 
@@ -215,16 +215,18 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 
+	float skyBrightnessMultiplier = SharedData::csUtilitySettings.skyBrightness;
+
 #		if defined(DITHER)
 #			if defined(VR)
 	// Keep the VR sky stereo-stable by avoiding screen-space dither in Color::Sky().
 	// If VR sky banding becomes visible, add a very small post-transform dither
 	// here using sky-stable coords: input.TexCoord0.zw for TEX, input.TexCoord0.xy otherwise.
 #				ifdef TEX
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + yyy;
+	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + yyy) * skyBrightnessMultiplier;
 	psout.Color.w = baseColor.w * input.Color.w;
 #				else
-	psout.Color.xyz = yyy + Color::Sky(input.Color.xyz);
+	psout.Color.xyz = (yyy + Color::Sky(input.Color.xyz)) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #				endif  // TEX
 #			else
@@ -236,13 +238,13 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 skyVertColor = Color::UseLinearLightingColorAdjustments() ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
 	float3 sunGlareColor = Color::Sky(skyVertColor) * baseColor.xyz;
 	// Dither/noise term is the legacy sky path contribution for gradient smoothing.
-	psout.Color.xyz = (sunGlareColor + yyy) + (Color::UseLinearLightingColorAdjustments() ? 0.0 : noiseGrad);
+	psout.Color.xyz = ((sunGlareColor + yyy) * skyBrightnessMultiplier) + (Color::UseLinearLightingColorAdjustments() ? 0.0 : noiseGrad);
 	psout.Color.w = baseColor.w * input.Color.w;
 #				else
-	psout.Color.xyz = yyy + Color::Sky(input.Color.xyz + noiseGrad);
+	psout.Color.xyz = (yyy + Color::Sky(input.Color.xyz + noiseGrad)) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #				endif  // TEX
-#			endif  // VR
+#			endif      // VR
 
 #		elif defined(MOONMASK)
 	psout.Color.xyzw = baseColor;
@@ -252,11 +254,11 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (Color::Sky(input.Color.xyz) * baseColor.xyz + yyy);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * ((Color::Sky(input.Color.xyz) * baseColor.xyz + yyy) * skyBrightnessMultiplier);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + yyy;
+	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + yyy) * skyBrightnessMultiplier;
 #		endif
 
 #	else

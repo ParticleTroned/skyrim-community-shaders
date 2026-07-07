@@ -43,10 +43,8 @@ struct LinearLighting : Feature
 		float vlGamma = 1.8f;
 
 		// Lighting multipliers
-		float vanillaDiffuseColorMult = 1.0f;
-		float directionalLightMult = 1.0f;
-		float pointLightMult = 1.0f;
 		float ambientMult = 1.0f;
+		float vanillaDiffuseColorMult = 1.0f;
 		float emitColorMult = 1.0f;
 		float glowmapMult = 0.66f;
 
@@ -76,10 +74,8 @@ struct LinearLighting : Feature
 		float skyGamma;
 		float waterGamma;
 		float vlGamma;
-		float vanillaDiffuseColorMult;
-		float directionalLightMult;
-		float pointLightMult;
 		float ambientMult;
+		float vanillaDiffuseColorMult;
 		float emitColorMult;
 		float glowmapMult;
 		float effectLightingMult;

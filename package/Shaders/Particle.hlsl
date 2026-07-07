@@ -347,7 +347,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade * 0.5;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade * 0.5;
 				propertyColor += lightColor;
 			}
 		}

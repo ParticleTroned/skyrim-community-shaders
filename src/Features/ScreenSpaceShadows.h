@@ -71,6 +71,8 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(RaymarchCB);
 
 	bool enableStereoSync = false;
+	// Optional VR-only path: transfer Eye 0's shadow into Eye 1 and skip the Eye 1 march.
+	bool useStereoReproject = false;
 
 	struct alignas(16) StereoSyncCB
 	{
@@ -100,6 +102,11 @@ public:
 	ConstantBuffer* stereoSyncCB = nullptr;
 	ID3D11ComputeShader* stereoSyncCS = nullptr;
 	bool stereoSyncUsesTerrainBlendingDepth = false;
+	ID3D11ComputeShader* stereoReprojectCS = nullptr;
+	bool stereoReprojectUsesTerrainBlendingDepth = false;
+	bool stereoReprojectCompileFailed = false;
+
+	ID3D11ComputeShader* GetStereoReprojectCS();
 
 	virtual void SetupResources() override;
 	virtual void SetupRenderTargetResources() override;

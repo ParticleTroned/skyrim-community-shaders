@@ -455,6 +455,7 @@ void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	settings.EnableDepthBufferCullingInterior = a_enabled ? defaults.EnableDepthBufferCullingInterior : false;
 	screenSpaceShadows.bendSettings.EnableFoveated = a_enabled ? screenSpaceShadowsDefaults.EnableFoveated : 0u;
 	screenSpaceShadows.enableStereoSync = false;
+	screenSpaceShadows.useStereoReproject = false;
 	screenSpaceGI.settings.EnableFoveated = a_enabled ? screenSpaceGIDefaults.EnableFoveated : false;
 	screenSpaceGI.settings.EnableStereoSync = a_enabled ? screenSpaceGIDefaults.EnableStereoSync : false;
 	settings.EnableStereoBlend = a_enabled ? defaults.EnableStereoBlend : false;
@@ -482,6 +483,7 @@ json VR::CapturePerformanceCostMeasurementState() const
 		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
 		{ "EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0 },
 		{ "EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync },
+		{ "EnableSSShadowsStereoReproject", globals::features::screenSpaceShadows.useStereoReproject },
 		{ "EnableSSGIFoveated", globals::features::screenSpaceGI.settings.EnableFoveated },
 		{ "EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync },
 		{ "EnableStereoBlend", settings.EnableStereoBlend },
@@ -509,6 +511,8 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	globals::features::screenSpaceShadows.bendSettings.EnableFoveated =
 		a_state.value("EnableSSShadowsFoveated", globals::features::screenSpaceShadows.bendSettings.EnableFoveated != 0) ? 1u : 0u;
 	globals::features::screenSpaceShadows.enableStereoSync = a_state.value("EnableSSShadowsStereoSync", globals::features::screenSpaceShadows.enableStereoSync);
+	globals::features::screenSpaceShadows.useStereoReproject =
+		a_state.value("EnableSSShadowsStereoReproject", globals::features::screenSpaceShadows.useStereoReproject);
 	globals::features::screenSpaceGI.settings.EnableFoveated =
 		a_state.value("EnableSSGIFoveated", globals::features::screenSpaceGI.settings.EnableFoveated);
 	globals::features::screenSpaceGI.settings.EnableStereoSync = a_state.value("EnableSSGIStereoSync", globals::features::screenSpaceGI.settings.EnableStereoSync);
@@ -1157,6 +1161,10 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		ImGui::Checkbox("Stereo Sync SSS", &screenSpaceShadows.enableStereoSync);
 	}
 	{
+		auto guard = Util::DisableGuard(!screenSpaceShadowsEnabled || !screenSpaceShadows.enableStereoSync);
+		ImGui::Checkbox("Stereo Reproject SSS", &screenSpaceShadows.useStereoReproject);
+	}
+	{
 		auto guard = Util::DisableGuard(!screenSpaceGIEnabled);
 		ImGui::Checkbox("Stereo Sync SSGI", &screenSpaceGI.settings.EnableStereoSync);
 	}
@@ -1612,6 +1620,21 @@ namespace
 				"Can reduce VR shimmer or left/right mismatch.",
 				"Costs some performance while Screen Space Shadows is active.",
 				"Requires VR and active Screen Space Shadows.");
+			{
+				auto guard = Util::DisableGuard(!screenSpaceShadowsEnabled || !screenSpaceShadows.enableStereoSync);
+				ImGui::Indent();
+				ImGui::Checkbox("Reproject Screen Space Shadows", &screenSpaceShadows.useStereoReproject);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Transfers Eye 0 (left) shadow into Eye 1 (right).");
+					ImGui::TextUnformatted("Usually faster than bilateral sync because it skips the Eye 1 shadow raymarch.");
+					ImGui::TextUnformatted("Eye-1-only disoccluded pixels fall back to unshadowed.");
+					if (!screenSpaceShadowsEnabled)
+						ImGui::TextUnformatted("Requires VR and active Screen Space Shadows.");
+					else if (!screenSpaceShadows.enableStereoSync)
+						ImGui::TextUnformatted("Requires Screen Space Shadows sync to be enabled.");
+				}
+				ImGui::Unindent();
+			}
 			drawSyncToggle(
 				"Sync SSGI",
 				screenSpaceGI.settings.EnableStereoSync,

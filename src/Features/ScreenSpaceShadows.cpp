@@ -204,7 +204,8 @@ json ScreenSpaceShadows::CapturePerformanceSettingsState() const
 {
 	return {
 		{ "Settings", bendSettings },
-		{ "EnableStereoSync", enableStereoSync }
+		{ "EnableStereoSync", enableStereoSync },
+		{ "UseStereoReproject", useStereoReproject }
 	};
 }
 
@@ -213,6 +214,7 @@ void ScreenSpaceShadows::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	if (a_enabled) {
 		bendSettings = BendSettings{};
 		enableStereoSync = false;
+		useStereoReproject = false;
 		return;
 	}
 
@@ -232,6 +234,7 @@ void ScreenSpaceShadows::RestorePerformanceCostMeasurementState(const json& a_st
 	if (a_state.contains("Settings"))
 		bendSettings = a_state.at("Settings").get<BendSettings>();
 	enableStereoSync = a_state.value("EnableStereoSync", enableStereoSync);
+	useStereoReproject = a_state.value("UseStereoReproject", useStereoReproject);
 }
 
 void ScreenSpaceShadows::DrawFoveationSettings()
@@ -288,6 +291,12 @@ void ScreenSpaceShadows::ClearShaderCache()
 		stereoSyncCS = nullptr;
 	}
 	stereoSyncUsesTerrainBlendingDepth = false;
+	if (stereoReprojectCS) {
+		stereoReprojectCS->Release();
+		stereoReprojectCS = nullptr;
+	}
+	stereoReprojectUsesTerrainBlendingDepth = false;
+	stereoReprojectCompileFailed = false;
 }
 
 uint ScreenSpaceShadows::GetScaledSampleCount(bool a_dynamic)
@@ -335,6 +344,33 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarchRight()
 {
 	return GetOrCreateRaymarchShader(raymarchRightCS, compiledSampleCountRight, raymarchRightUsesTerrainBlendingDepth, true);
+}
+
+ID3D11ComputeShader* ScreenSpaceShadows::GetStereoReprojectCS()
+{
+	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
+	if (stereoReprojectCS && stereoReprojectUsesTerrainBlendingDepth != useTerrainBlendingDepth) {
+		stereoReprojectCS->Release();
+		stereoReprojectCS = nullptr;
+		stereoReprojectCompileFailed = false;
+	}
+	if (!stereoReprojectCS && stereoReprojectCompileFailed && stereoReprojectUsesTerrainBlendingDepth != useTerrainBlendingDepth)
+		stereoReprojectCompileFailed = false;
+	if (stereoReprojectCompileFailed)
+		return nullptr;
+
+	if (!stereoReprojectCS) {
+		std::vector<std::pair<const char*, const char*>> defines{ { "VR", "" }, { "FRAMEBUFFER", "" } };
+		if (useTerrainBlendingDepth)
+			defines.push_back({ "TERRAIN_BLENDING", "" });
+
+		stereoReprojectUsesTerrainBlendingDepth = useTerrainBlendingDepth;
+		stereoReprojectCS = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\ShadowReprojectCS.hlsl", defines, "cs_5_0"));
+		if (!stereoReprojectCS)
+			stereoReprojectCompileFailed = true;
+	}
+
+	return stereoReprojectCS;
 }
 
 ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
@@ -471,14 +507,25 @@ void ScreenSpaceShadows::DrawShadows()
 	}
 
 	auto* raymarchLeft = GetComputeRaymarch();
-	ID3D11ComputeShader* raymarchRight = globals::game::isVR ? GetComputeRaymarchRight() : nullptr;
-	if (!raymarchLeft || (globals::game::isVR && !raymarchRight)) {
+	const bool stereoReprojectResourcesReady =
+		stereoSyncCopyTex &&
+		stereoSyncCopyTex->resource &&
+		stereoSyncCopyTex->srv &&
+		stereoSyncCB;
+	const bool stereoReprojectActive =
+		globals::game::isVR &&
+		enableStereoSync &&
+		stereoReprojectResourcesReady &&
+		useStereoReproject &&
+		GetStereoReprojectCS();
+	ID3D11ComputeShader* raymarchRight = (globals::game::isVR && !stereoReprojectActive) ? GetComputeRaymarchRight() : nullptr;
+	if (!raymarchLeft || (globals::game::isVR && !stereoReprojectActive && !raymarchRight)) {
 		ClearRaymarchState();
 		return;
 	}
 
 	uint maxCompiledSamples = compiledSampleCount > 0 ? compiledSampleCount : GetScaledSampleCount(false);
-	if (globals::game::isVR && compiledSampleCountRight > 0)
+	if (raymarchRight && compiledSampleCountRight > 0)
 		maxCompiledSamples = std::min(maxCompiledSamples, compiledSampleCountRight);
 
 	uint dynamicSampleCount = std::min(GetScaledSampleCount(true), maxCompiledSamples);
@@ -580,11 +627,12 @@ void ScreenSpaceShadows::DrawShadows()
 			DispatchEye("Left Eye", raymarchLeft, 0, lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
 		}
 
-		// Calculate light projection for right eye
-		auto lightProjectionRightF = CalculateLightProjection(1);
-		{
-			TracyD3D11Zone(globals::state->tracyCtx, "SSS - Right Eye");
-			DispatchEye("Right Eye", raymarchRight, 1, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
+		if (!stereoReprojectActive) {
+			auto lightProjectionRightF = CalculateLightProjection(1);
+			{
+				TracyD3D11Zone(globals::state->tracyCtx, "SSS - Right Eye");
+				DispatchEye("Right Eye", raymarchRight, 1, lightProjectionRightF.data(), InvTexSizeX, InvTexSizeY);
+			}
 		}
 	}
 
@@ -609,22 +657,29 @@ void ScreenSpaceShadows::DrawStereoSync()
 		stereoSyncUsesTerrainBlendingDepth = false;
 	}
 
-	if (!stereoSyncCS) {
-		std::vector<std::pair<const char*, const char*>> defines{ { "VR", "" }, { "FRAMEBUFFER", "" } };
-		if (useTerrainBlendingDepth)
-			defines.push_back({ "TERRAIN_BLENDING", "" });
-		stereoSyncCS = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\StereoSyncCS.hlsl", defines, "cs_5_0"));
-		if (stereoSyncCS)
-			stereoSyncUsesTerrainBlendingDepth = useTerrainBlendingDepth;
+	ID3D11ComputeShader* stereoCS = nullptr;
+	if (useStereoReproject)
+		stereoCS = GetStereoReprojectCS();
+	if (!stereoCS) {
+		if (!stereoSyncCS) {
+			std::vector<std::pair<const char*, const char*>> defines{ { "VR", "" }, { "FRAMEBUFFER", "" } };
+			if (useTerrainBlendingDepth)
+				defines.push_back({ "TERRAIN_BLENDING", "" });
+			stereoSyncCS = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\StereoSyncCS.hlsl", defines, "cs_5_0"));
+			if (stereoSyncCS)
+				stereoSyncUsesTerrainBlendingDepth = useTerrainBlendingDepth;
+		}
+		stereoCS = stereoSyncCS;
 	}
-	if (!stereoSyncCS)
+	if (!stereoCS)
 		return;
 
 	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "SSS - Stereo Sync");
+	const char* tracyLabel = stereoCS == stereoSyncCS ? "SSS - Stereo Sync" : "SSS - Stereo Reproject";
+	TracyD3D11Zone(globals::state->tracyCtx, tracyLabel);
 
 	if (globals::state->frameAnnotations)
-		globals::state->BeginPerfEvent("SSS - Stereo Sync");
+		globals::state->BeginPerfEvent(tracyLabel);
 
 	auto context = globals::d3d::context;
 
@@ -696,13 +751,14 @@ void ScreenSpaceShadows::DrawStereoSync()
 	ID3D11UnorderedAccessView* uavs[1]{ screenSpaceShadowsTexture->uav.get() };
 
 	{
-		CS_PROFILE_SCOPE("ScreenSpaceShadows::StereoSync");
+		const char* profileLabel = stereoCS == stereoSyncCS ? "ScreenSpaceShadows::StereoSync" : "ScreenSpaceShadows::StereoReproject";
+		CS_PROFILE_SCOPE(profileLabel);
 		CopyStereoSyncSource();
 
 		Util::BindGlobalConstantBuffersForCS(context);
 		context->CSSetShaderResources(0, 2, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-		context->CSSetShader(stereoSyncCS, nullptr, 0);
+		context->CSSetShader(stereoCS, nullptr, 0);
 
 		auto DispatchSyncBounds = [&](const FoveatedCommon::DispatchBounds& bounds, uint32_t eyeIndex) {
 			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
@@ -794,6 +850,7 @@ void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
 	bendSettings = o_json;
 	enableStereoSync = o_json.is_object() ? o_json.value("EnableStereoSync", false) : false;
+	useStereoReproject = o_json.is_object() ? o_json.value("UseStereoReproject", false) : false;
 	SanitizeBendSettings(bendSettings);
 }
 
@@ -801,12 +858,14 @@ void ScreenSpaceShadows::SaveSettings(json& o_json)
 {
 	o_json = bendSettings;
 	o_json["EnableStereoSync"] = enableStereoSync;
+	o_json["UseStereoReproject"] = useStereoReproject;
 }
 
 void ScreenSpaceShadows::RestoreDefaultSettings()
 {
 	bendSettings = {};
 	enableStereoSync = false;
+	useStereoReproject = false;
 }
 
 bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)

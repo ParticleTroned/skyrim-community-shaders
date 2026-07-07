@@ -1550,10 +1550,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 				const uint32_t tagFrame = globals::state->frameCount;
 				if (s_lastTagFrame != tagFrame) {
 					s_lastTagFrame = tagFrame;
-					// Tag the LIVE kMOTION_VECTOR, sample-style. The present-hook GPU bound
-					// (WaitDLSSGSubmission) guarantees the GPU executed this frame's MV writes + tag
-					// before the present, which validated the former 3-deep MV ring copy redundant
-					// (2-session in-game review) — it was removed with it.
+					// Tag the LIVE kMOTION_VECTOR, sample-style. NOTE: the present-hook bound that
+					// guaranteed the GPU executed this frame's MV writes + tag before the present (which had
+					// validated the former 3-deep MV ring copy redundant) was REMOVED; the MV ring stays
+					// removed, so live-MV tagging no longer has that ordering backing it.
 					Streamline::GetSingleton()->TagDLSSGResources(
 						fgDepth, motionVector.texture, hudless,
 						(uint32_t)rendSize.x, (uint32_t)rendSize.y,

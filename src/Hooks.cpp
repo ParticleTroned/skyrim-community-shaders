@@ -302,16 +302,6 @@ struct IDXGISwapChain_Present
 			if (dlssgActive) {
 				auto* sl = Streamline::GetSingleton();
 				sl->QueryDLSSGCapabilities();
-				// Empirical input bound. The documented SL Vulkan contract (§16.0, GPU
-				// semaphores only) is satisfied without this — and the generated frames
-				// flash anyway, with eValidUntilPresent AND with eOnlyValidNow inputs
-				// (2026-07-05, in-game). Every GPU-only alternative was implemented and
-				// failed: present-wait semaphore (pacer re-waits the list across its
-				// multi-present → deadlock), §16.1 fence queue-wait (deadlock), snapshots,
-				// token schemes, marker bridges (flash). This wait closes whatever ordering
-				// SL's internal queues actually need, and it OVERLAPS the post-evaluate CPU
-				// work — measured ~zero added frame time, unlike a stall at the evaluate.
-				sl->WaitDLSSGSubmission();
 			}
 		}
 

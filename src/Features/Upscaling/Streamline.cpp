@@ -658,18 +658,6 @@ static void CS_DxvkPresentMarkerBridge(uint64_t a_appFrameId, uint32_t a_phase)
 	}
 }
 
-void Streamline::WaitDLSSGSubmission()
-{
-	// Present hook (render thread), while DLSS-G is active: block until the GPU executed this
-	// frame's evaluate/tag submissions, so the present-time interpolation never runs against
-	// GPU work still in flight. The wait overlaps everything the CPU did since the evaluate —
-	// the residual stall is only what hasn't already executed (usually near zero).
-	if (!initialized || !g_sl.dlssgModeOn)
-		return;
-	if (auto* dxvk = DxvkInterop::GetSingleton())
-		dxvk->WaitLastSubmission();
-}
-
 void Streamline::PauseDLSSGForWindowGap()
 {
 	// Present hook, first skipped frame of a minimize: switch interpolation off (light,
@@ -685,34 +673,6 @@ void Streamline::PauseDLSSGForWindowGap()
 		g_sl.dlssgCachedDisplayW, g_sl.dlssgCachedDisplayH);
 	FrameGen::Controller::GetSingleton()->NotifyDLSSGPaused();
 	logger::info("[Streamline] DLSS-G interpolation paused (window minimized)");
-}
-
-void Streamline::PushDLSSGPresentWait()
-{
-	// Present hook (render thread), while DLSS-G is active: GPU-only replacement for
-	// WaitDLSSGSubmission — hand this frame's evaluate/tag submission semaphore to DXVK's
-	// presenter as an extra present-wait, so the present (and everything SL's frame
-	// interpolation orders against it) executes after that work with no CPU stall. Matches
-	// the Streamline sample's queue-wait-only §16.1 handling.
-	if (!initialized || !g_sl.dlssgModeOn)
-		return;
-
-	static void (*s_push)(VkSemaphore) = nullptr;
-	static bool s_resolved = false;
-	if (!s_resolved) {
-		s_resolved = true;
-		if (HMODULE m = GetModuleHandleW(L"dxvk_d3d11.dll"))
-			s_push = reinterpret_cast<void (*)(VkSemaphore)>(GetProcAddress(m, "dxvkPushPresentWaitSemaphore"));
-		if (!s_push)
-			logger::warn("[Streamline] dxvkPushPresentWaitSemaphore not found - DLSS-G present ordering unavailable");
-	}
-	if (!s_push)
-		return;
-
-	if (auto* dxvk = DxvkInterop::GetSingleton()) {
-		if (VkSemaphore sem = dxvk->TakeLastSubmitSemaphore())
-			s_push(sem);
-	}
 }
 
 void Streamline::BeginRenderFrame()
@@ -1458,9 +1418,9 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		// out", wedged in NtDxgkSubmitPresentToHwQueue). The boot present path is per-window
 		// and sticky (Upscaling::bootPresentPathFlip), so DLSS-G is only engaged on flip-path
 		// boots — FrameGenController gates method availability on the boot path, and switching
-		// FG methods requires a restart. The §16.1 present-hook GPU bound (WaitDLSSGSubmission)
-		// stays: SL's queue block paces the present but does not order our interop-timeline
-		// evaluate/tag submissions ahead of it (generated frames flash without the bound).
+		// FG methods requires a restart. NOTE: the present-hook ordering bound that kept our
+		// interop-timeline evaluate/tag submissions ahead of the present was removed, so
+		// generated frames may flash without an external ordering bound.
 		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
 		const sl::Result res = g_sl.slDLSSGSetOptions(g_sl.viewport, options);
 		if (res != sl::Result::eOk) {
@@ -1616,11 +1576,11 @@ void Streamline::TagDLSSGResources(ID3D11Resource* a_depth, ID3D11Resource* a_mo
 		return;
 
 	__try {
-		// Input protection (DLSS-G guide §16.1, eBlockNoClientQueues): the present-hook GPU bound
-		// (WaitDLSSGSubmission) guarantees the GPU executed this frame's evaluate/tag work — including
-		// the MV writes — before the present is queued. MV is tagged as the LIVE kMOTION_VECTOR,
-		// sample-style (the former 3-deep CS-side MV ring was validated redundant under the bound and
-		// removed); DEPTH stays eOnlyValidNow because the in-place depth upscale rewrites the tagged
+		// Input protection (DLSS-G guide §16.1, eBlockNoClientQueues): MV is tagged as the LIVE
+		// kMOTION_VECTOR, sample-style (the former 3-deep CS-side MV ring was removed). NOTE: the
+		// present-hook bound that guaranteed the GPU executed this frame's evaluate/tag work before
+		// the present was REMOVED, so live-MV tagging no longer has that ordering backing it.
+		// DEPTH stays eOnlyValidNow because the in-place depth upscale rewrites the tagged
 		// kMAIN_COPY before present regardless of any bound.
 
 		// Tag DLSS-G inputs for the SAME frame the constants/markers/present use, else SL cannot match

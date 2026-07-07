@@ -173,20 +173,6 @@ bool DxvkInterop::CreateCommandResources(uint32_t a_framesInFlight)
 		}
 	}
 
-	// Per-slot binary semaphores: each submission signals its slot's semaphore, and the present
-	// hook forwards the latest one to DXVK as an extra present-wait (GPU-only §16.1 ordering,
-	// matching the Streamline sample's queue-wait approach). A slot's semaphore is consumed by
-	// that frame's present, long before the slot cycles back (~framesInFlight frames later).
-	submitSemaphores.resize(framesInFlight, VK_NULL_HANDLE);
-	VkSemaphoreCreateInfo semInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-	for (uint32_t i = 0; i < framesInFlight; ++i) {
-		if (vkCreateSemaphore(device, &semInfo, nullptr, &submitSemaphores[i]) != VK_SUCCESS) {
-			logger::error("[DxvkInterop] vkCreateSemaphore failed");
-			DestroyCommandResources();
-			return false;
-		}
-	}
-
 	commandFrameIndex = 0;
 	pendingViewDeletes.assign(framesInFlight, {});
 	logger::info("[DxvkInterop] Command ring created ({} frames in flight, queueFamily {})", framesInFlight, queueFamilyIndex);
@@ -216,14 +202,6 @@ void DxvkInterop::DestroyCommandResources()
 			vkDestroyFence(device, f, nullptr);
 	}
 	commandFences.clear();
-	lastSubmittedFence = VK_NULL_HANDLE;
-
-	for (auto s : submitSemaphores) {
-		if (s != VK_NULL_HANDLE)
-			vkDestroySemaphore(device, s, nullptr);
-	}
-	submitSemaphores.clear();
-	lastSubmitSemaphore = VK_NULL_HANDLE;
 
 	if (commandPool != VK_NULL_HANDLE) {
 		// Freeing the pool frees its command buffers.
@@ -291,14 +269,10 @@ VkCommandBuffer DxvkInterop::BeginFrameCommandBuffer()
 			VkFence newFence = VK_NULL_HANDLE;
 			VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
 			fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-			VkSemaphore newSem = VK_NULL_HANDLE;
-			VkSemaphoreCreateInfo semInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
 			if (vkAllocateCommandBuffers(device, &allocInfo, &newCb) == VK_SUCCESS &&
-				vkCreateFence(device, &fenceInfo, nullptr, &newFence) == VK_SUCCESS &&
-				vkCreateSemaphore(device, &semInfo, nullptr, &newSem) == VK_SUCCESS) {
+				vkCreateFence(device, &fenceInfo, nullptr, &newFence) == VK_SUCCESS) {
 				commandBuffers.push_back(newCb);
 				commandFences.push_back(newFence);
-				submitSemaphores.push_back(newSem);
 				pendingViewDeletes.emplace_back();
 				next = framesInFlight;
 				++framesInFlight;
@@ -356,20 +330,9 @@ bool DxvkInterop::SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool
 
 	VkFence fence = commandFences[commandFrameIndex];
 
-	// Signal a per-slot binary semaphore alongside the fence: the present hook hands it to
-	// DXVK's presenter as an extra present-wait, GPU-ordering the present after this frame's
-	// evaluate/tag work with no CPU stall (matches the Streamline sample's GPU-only §16.1
-	// sync). Binary semaphores are single-signal/single-wait; the ring slot is not reused
-	// until its fence has signaled, which implies the present that waited on it retired.
-	VkSemaphore signalSem = submitSemaphores.empty() ? VK_NULL_HANDLE : submitSemaphores[commandFrameIndex];
-
 	VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &a_commandBuffer;
-	if (signalSem != VK_NULL_HANDLE) {
-		submitInfo.signalSemaphoreCount = 1;
-		submitInfo.pSignalSemaphores = &signalSem;
-	}
 
 	// Flush DXVK's pending D3D11 work so it is visible to the queue before our
 	// submission, then submit under the lock so DXVK's own worker thread doesn't
@@ -384,23 +347,10 @@ bool DxvkInterop::SubmitFrameCommandBuffer(VkCommandBuffer a_commandBuffer, bool
 		return false;
 	}
 
-	lastSubmittedFence = fence;
-	lastSubmitSemaphore = signalSem;
-
 	if (a_waitIdle)
 		vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 
 	return true;
-}
-
-void DxvkInterop::WaitLastSubmission()
-{
-	// Same-frame bound, deferred to present time: waits the fence of the most recent submission
-	// (this frame's evaluate/tag work). Equivalent to the per-frame waitIdle's guarantee at the
-	// moment the present is queued, but the GPU executes that work concurrently with the CPU's
-	// post-evaluate frame work, so the residual wait here is only what hasn't already overlapped.
-	if (lastSubmittedFence != VK_NULL_HANDLE && device != VK_NULL_HANDLE)
-		vkWaitForFences(device, 1, &lastSubmittedFence, VK_TRUE, UINT64_MAX);
 }
 
 void DxvkInterop::QueueViewsForDeferredDelete(const VkImageView* a_views, uint32_t a_count)

@@ -16430,8 +16430,10 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	if (!state)
 		return;
 
+	auto ui = globals::game::ui;
 	const bool inWorld = state->inWorld;
 	const bool inMapMenu = globals::game::ui ? globals::game::ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
+	const bool mainOrLoadingMenuOpen = state->IsMainOrLoadingMenuOpen(ui);
 	const float2 screenSize = state->screenSize;
 	EnsureRuntimeResolutionStateCurrent();
 	float2 engineRenderSize = runtimeResolutionPlan.engineRenderSize;
@@ -16542,6 +16544,10 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	}
 
 	if (state->pendingPostLoadRuntimeReset)
+		shouldReset = true;
+	// Main/loading menus animate without valid motion vectors, so temporal vendor
+	// upscalers must treat every frame there as a history cut.
+	if (mainOrLoadingMenuOpen)
 		shouldReset = true;
 
 	if (shouldReset)

@@ -250,9 +250,10 @@ namespace
 				std::max(availableMax.x - availableMin.x, 0.0f),
 				std::max(availableMax.y - availableMin.y, 0.0f));
 			const ImVec2 size = FitSizeToAspect(availableSpan, GetVRSettingsWindowAspect());
+			const float leftEdge = OverlayRenderer::GetDefaultVRLeftAnchorX(size.x);
 			return {
 				.center = ImVec2(
-					(availableMin.x + availableMax.x) * 0.5f,
+					leftEdge + size.x * 0.5f,
 					(availableMin.y + availableMax.y) * 0.5f),
 				.size = size
 			};

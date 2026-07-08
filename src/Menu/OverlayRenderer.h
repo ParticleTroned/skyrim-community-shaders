@@ -47,6 +47,8 @@ public:
 		float& cachedFontSize,
 		float currentFontSize);
 	static bool MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot);
+	static ImVec2 GetDefaultVRSettingsWindowSize(bool a_excludeShaderCompilationWindow = true);
+	static float GetDefaultVRLeftAnchorX(float a_windowWidth);
 
 private:
 	static void HandleVRSetup();

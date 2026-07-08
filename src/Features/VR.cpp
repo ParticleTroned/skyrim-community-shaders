@@ -290,6 +290,7 @@ constexpr const char* kMenuOverlayName = "Community Shaders Menu";
 constexpr const char* kControllerOverlayKey = "communityshaders.menu.controller";
 constexpr const char* kControllerOverlayName = "Community Shaders Menu (Controller)";
 constexpr float kLegacyDefaultHMDOffsetZ = -0.41f;
+constexpr float kPreviousDefaultHMDOffsetZ = -0.5125f;
 constexpr float kDefaultOffsetEpsilon = 0.0001f;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -351,7 +352,8 @@ void VR::LoadSettings(json& o_json)
 	LoadVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
 	if (o_json.is_object() &&
 		o_json.contains("VRMenuOffsetZ") &&
-		std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon) {
+		(std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
+			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kPreviousDefaultHMDOffsetZ) < kDefaultOffsetEpsilon)) {
 		settings.VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
 	}
 	MigrateLegacyBindingDefaults(settings);

@@ -105,9 +105,9 @@ public:
 		static constexpr float kDefaultStereoBlendColorThreshold = 0.02f;
 
 		// Default HMD overlay offset values (in meters, relative to HMD)
-		static constexpr float kDefaultHMDOffsetX = 0.26f;     ///< Default horizontal offset from HMD
-		static constexpr float kDefaultHMDOffsetY = -0.04f;    ///< Default vertical offset from HMD
-		static constexpr float kDefaultHMDOffsetZ = -0.5125f;  ///< Default depth offset from HMD
+		static constexpr float kDefaultHMDOffsetX = 0.26f;    ///< Default horizontal offset from HMD
+		static constexpr float kDefaultHMDOffsetY = -0.04f;   ///< Default vertical offset from HMD
+		static constexpr float kDefaultHMDOffsetZ = -1.025f;  ///< Default depth offset from HMD
 
 		// Default controller overlay offset values (in meters, relative to controller)
 		static constexpr float kDefaultControllerOffsetX = 0.22f;  ///< Default horizontal offset from controller

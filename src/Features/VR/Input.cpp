@@ -461,7 +461,7 @@ void VR::ProcessControllerInputForImGui()
 		gCursorOwner = CursorOwner::Desktop;
 		gDesktopCursorSticky = true;
 		gControllerCursorOwnershipFramesRemaining = 0;
-	} else if (!desktopCursorUsable || controllerCursorInteractionActive) {
+	} else {
 		gDesktopCursorSticky = false;
 	}
 
@@ -484,7 +484,7 @@ void VR::ProcessControllerInputForImGui()
 		const bool canAdoptWandCursor =
 			io.WantSetMousePos &&
 			HasUsableCursorPos(io.MousePos) &&
-			(wandState.isActivelyDrivingCursor || !desktopCursorUsable || gCursorOwner == CursorOwner::Wand);
+			(wandState.isActivelyDrivingCursor || !desktopCursorUsable || !gDesktopCursorSticky || gCursorOwner == CursorOwner::Wand);
 		if (canAdoptWandCursor) {
 			gCursorOwner = CursorOwner::Wand;
 			gDesktopCursorSticky = false;

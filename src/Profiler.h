@@ -51,6 +51,8 @@ public:
 		float cpuP99Ms = 0.0f;
 		bool hasGpu = false;
 		bool hasCpu = false;
+		bool activeGpu = false;
+		bool activeCpu = false;
 		bool valid = false;
 
 		const float* historyBuffer = nullptr;

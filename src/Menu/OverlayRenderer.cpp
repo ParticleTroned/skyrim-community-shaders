@@ -25,6 +25,9 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/VR.h"
 
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <cstring>
 
 namespace
@@ -35,6 +38,74 @@ namespace
 	constexpr const char* MAIN_WINDOW_ID = "###CommunityShaders";
 
 	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strstr(win->Name, MAIN_WINDOW_ID); }
+
+	float GetVRSettingsWindowAspect()
+	{
+		return globals::features::vr.settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ?
+		           VR::Config::kOverlayAspect :
+		           VR::Config::kHMDMenuAspect;
+	}
+
+	float GetVRMenuSafePadding()
+	{
+		return std::max(2.0f, ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale() * 0.5f);
+	}
+
+	void ExcludeShaderCompilationWindowFromTop(ImVec2& a_availableMin, const ImVec2& a_availableMax)
+	{
+		auto* shaderWindow = ImGui::FindWindowByName("ShaderCompilationInfo");
+		if (!shaderWindow || !shaderWindow->Active || shaderWindow->Hidden)
+			return;
+
+		const float shaderBottom = shaderWindow->Pos.y + shaderWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
+		if (shaderBottom > a_availableMin.y)
+			a_availableMin.y = std::min(shaderBottom, a_availableMax.y);
+	}
+
+	ImVec2 FitSizeToAspect(ImVec2 a_availableSize, float a_heightOverWidth)
+	{
+		a_availableSize.x = std::max(a_availableSize.x, 1.0f);
+		a_availableSize.y = std::max(a_availableSize.y, 1.0f);
+		a_heightOverWidth = std::isfinite(a_heightOverWidth) && a_heightOverWidth > 0.0f ? a_heightOverWidth : 1.0f;
+
+		float width = a_availableSize.x;
+		float height = width * a_heightOverWidth;
+		if (height > a_availableSize.y) {
+			height = a_availableSize.y;
+			width = height / a_heightOverWidth;
+		}
+
+		return ImVec2(width, height);
+	}
+
+	bool ComputeDesktopMirrorTransform(
+		float a_sourceWidth,
+		float a_sourceHeight,
+		float a_targetWidth,
+		float a_targetHeight,
+		float& a_scale,
+		float& a_offsetX,
+		float& a_offsetY)
+	{
+		if (a_sourceWidth <= 0.0f || a_sourceHeight <= 0.0f || a_targetWidth <= 0.0f || a_targetHeight <= 0.0f) {
+			return false;
+		}
+
+		a_scale = std::min(a_targetWidth / a_sourceWidth, a_targetHeight / a_sourceHeight);
+		if (!(a_scale > 0.0f)) {
+			return false;
+		}
+
+		const float leftoverX = std::max(0.0f, a_targetWidth - a_sourceWidth * a_scale);
+		const float leftoverY = std::max(0.0f, a_targetHeight - a_sourceHeight * a_scale);
+
+		// Keep the mirror biased toward the desktop origin, but retain half of the
+		// former centered padding so the desktop menu and dock targets do not sit
+		// flush against the top-left edge.
+		a_offsetX = leftoverX * 0.25f;
+		a_offsetY = leftoverY * 0.25f;
+		return true;
+	}
 
 	void DrawShaderCompilationFailures(uint64_t failed, const Menu::ThemeSettings& themeSettings)
 	{
@@ -117,6 +188,89 @@ namespace
 		filteredDrawData.TotalIdxCount = totalIdxCount;
 		filteredDrawData.TotalVtxCount = totalVtxCount;
 		return &filteredDrawData;
+	}
+
+	bool BuildScaledDesktopDrawData(
+		ImDrawData* drawData,
+		ImDrawData& scaledDrawData,
+		std::vector<ImDrawList*>& ownedCmdLists)
+	{
+		if (!drawData || !globals::game::isVR || !globals::features::vr.IsOpenVRCompatible() || !globals::d3d::swapChain) {
+			return false;
+		}
+
+		const float sourceWidth = drawData->DisplaySize.x;
+		const float sourceHeight = drawData->DisplaySize.y;
+		if (sourceWidth <= 0.0f || sourceHeight <= 0.0f) {
+			return false;
+		}
+
+		DXGI_SWAP_CHAIN_DESC desc{};
+		globals::d3d::swapChain->GetDesc(&desc);
+		const float targetWidth = static_cast<float>(desc.BufferDesc.Width);
+		const float targetHeight = static_cast<float>(desc.BufferDesc.Height);
+		if (targetWidth <= 0.0f || targetHeight <= 0.0f) {
+			return false;
+		}
+
+		float scale = 1.0f;
+		float offsetX = 0.0f;
+		float offsetY = 0.0f;
+		if (!ComputeDesktopMirrorTransform(sourceWidth, sourceHeight, targetWidth, targetHeight, scale, offsetX, offsetY)) {
+			return false;
+		}
+		if (scale == 1.0f && offsetX == 0.0f && offsetY == 0.0f) {
+			return false;
+		}
+
+		const ImVec2 sourceDisplayPos = drawData->DisplayPos;
+
+		scaledDrawData = *drawData;
+		scaledDrawData.DisplayPos = ImVec2(0.0f, 0.0f);
+		scaledDrawData.DisplaySize = ImVec2(targetWidth, targetHeight);
+		scaledDrawData.CmdLists.clear();
+		scaledDrawData.CmdLists.reserve(drawData->CmdListsCount);
+
+		int totalIdxCount = 0;
+		int totalVtxCount = 0;
+		for (int i = 0; i < drawData->CmdListsCount; ++i) {
+			auto* sourceCmdList = drawData->CmdLists[i];
+			auto* clonedCmdList = sourceCmdList ? sourceCmdList->CloneOutput() : nullptr;
+			if (!clonedCmdList) {
+				continue;
+			}
+
+			for (auto& vertex : clonedCmdList->VtxBuffer) {
+				vertex.pos.x = (vertex.pos.x - sourceDisplayPos.x) * scale + offsetX;
+				vertex.pos.y = (vertex.pos.y - sourceDisplayPos.y) * scale + offsetY;
+			}
+
+			for (auto& command : clonedCmdList->CmdBuffer) {
+				command.ClipRect.x = (command.ClipRect.x - sourceDisplayPos.x) * scale + offsetX;
+				command.ClipRect.y = (command.ClipRect.y - sourceDisplayPos.y) * scale + offsetY;
+				command.ClipRect.z = (command.ClipRect.z - sourceDisplayPos.x) * scale + offsetX;
+				command.ClipRect.w = (command.ClipRect.w - sourceDisplayPos.y) * scale + offsetY;
+			}
+
+			ownedCmdLists.push_back(clonedCmdList);
+			scaledDrawData.CmdLists.push_back(clonedCmdList);
+			totalIdxCount += clonedCmdList->IdxBuffer.Size;
+			totalVtxCount += clonedCmdList->VtxBuffer.Size;
+		}
+
+		if (scaledDrawData.CmdLists.Size != drawData->CmdListsCount) {
+			for (auto* cmdList : ownedCmdLists) {
+				IM_DELETE(cmdList);
+			}
+			ownedCmdLists.clear();
+			scaledDrawData.CmdLists.clear();
+			return false;
+		}
+
+		scaledDrawData.CmdListsCount = scaledDrawData.CmdLists.Size;
+		scaledDrawData.TotalIdxCount = totalIdxCount;
+		scaledDrawData.TotalVtxCount = totalVtxCount;
+		return true;
 	}
 
 	// Patches DrawList background vertices for windows involved in overlap.
@@ -203,10 +357,6 @@ void OverlayRenderer::RenderOverlay(
 	ApplyVROverlayDisplaySize();
 	processInputEventQueue();
 
-	if (globals::features::vr.IsOpenVRCompatible()) {
-		globals::features::vr.ProcessControllerInputForImGui();
-	}
-
 	auto drawableOverlays = CollectDrawableFeatureOverlays(menu);
 	if (ShouldSkipRendering(menu, !drawableOverlays.empty())) {
 		auto& io = ImGui::GetIO();
@@ -232,7 +382,9 @@ void OverlayRenderer::RenderOverlay(
 			io.MousePos = { -FLT_MAX, -FLT_MAX };  // prevent hover/tooltips during active flying
 		editorWindow->Draw();
 	} else if (menu.IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup()) {
-		ImGui::GetIO().MouseDrawCursor = true;
+		if (!globals::game::isVR || !globals::features::vr.IsOpenVRCompatible()) {
+			ImGui::GetIO().MouseDrawCursor = true;
+		}
 		if (menu.IsEnabled) {
 			drawSettings();
 		}
@@ -247,10 +399,53 @@ void OverlayRenderer::RenderOverlay(
 	FinalizeImGuiFrame(drawableOverlays);
 }
 
+ImVec2 OverlayRenderer::GetDefaultVRSettingsWindowSize(bool a_excludeShaderCompilationWindow)
+{
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	if (!viewport) {
+		return ImVec2(1.0f, 1.0f);
+	}
+
+	const float safePadding = GetVRMenuSafePadding();
+	ImVec2 availableMin(
+		viewport->WorkPos.x + safePadding,
+		viewport->WorkPos.y + safePadding);
+	const ImVec2 availableMax(
+		viewport->WorkPos.x + viewport->WorkSize.x - safePadding,
+		viewport->WorkPos.y + viewport->WorkSize.y - safePadding);
+	if (availableMax.x <= availableMin.x || availableMax.y <= availableMin.y) {
+		return ImVec2(1.0f, 1.0f);
+	}
+
+	if (a_excludeShaderCompilationWindow) {
+		ExcludeShaderCompilationWindowFromTop(availableMin, availableMax);
+	}
+	availableMin.y = std::min(availableMin.y, availableMax.y);
+
+	const ImVec2 availableSpan(
+		std::max(availableMax.x - availableMin.x, 0.0f),
+		std::max(availableMax.y - availableMin.y, 0.0f));
+	return FitSizeToAspect(availableSpan, GetVRSettingsWindowAspect());
+}
+
+float OverlayRenderer::GetDefaultVRLeftAnchorX(float a_windowWidth)
+{
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	const float safePadding = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale();
+	if (!viewport) {
+		return safePadding;
+	}
+
+	const float minLeftEdge = viewport->WorkPos.x + safePadding;
+	const float maxRightEdge = viewport->WorkPos.x + viewport->WorkSize.x - safePadding;
+	const float centeredLeftEdge = viewport->WorkPos.x + std::max(viewport->WorkSize.x - a_windowWidth, 0.0f) * 0.5f;
+	const float blendedLeftEdge = minLeftEdge + (centeredLeftEdge - minLeftEdge) * 0.5f;
+	return std::clamp(blendedLeftEdge, minLeftEdge, std::max(minLeftEdge, maxRightEdge - a_windowWidth));
+}
+
 bool OverlayRenderer::MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot)
 {
-	auto* shaderWin = ImGui::FindWindowByName("ShaderCompilationInfo");
-	if (!shaderWin || !shaderWin->Active || shaderWin->Hidden || windowSize.x <= 0.0f || windowSize.y <= 0.0f) {
+	if (windowSize.x <= 0.0f || windowSize.y <= 0.0f) {
 		return false;
 	}
 
@@ -259,12 +454,37 @@ bool OverlayRenderer::MoveWindowBelowShaderCompilationStatus(ImVec2& position, c
 		position.y - windowSize.y * pivot.y);
 	const ImVec2 windowMax(windowMin.x + windowSize.x, windowMin.y + windowSize.y);
 	const ImRect windowRect(windowMin, windowMax);
-	const ImRect shaderRect(shaderWin->Pos, ImVec2(shaderWin->Pos.x + shaderWin->Size.x, shaderWin->Pos.y + shaderWin->Size.y));
-	if (!windowRect.Overlaps(shaderRect)) {
+
+	const char* kStatusWindows[] = {
+		"ShaderCompilationInfo",
+		"UWCacheCreationInfo",
+		"ShaderBlockingInfo"
+	};
+
+	float targetMinY = windowRect.Min.y;
+	bool overlappedAny = false;
+	for (const char* windowName : kStatusWindows) {
+		auto* statusWin = ImGui::FindWindowByName(windowName);
+		if (!statusWin || !statusWin->Active || statusWin->Hidden) {
+			continue;
+		}
+
+		const ImRect statusRect(
+			statusWin->Pos,
+			ImVec2(statusWin->Pos.x + statusWin->Size.x, statusWin->Pos.y + statusWin->Size.y));
+		if (!windowRect.Overlaps(statusRect)) {
+			continue;
+		}
+
+		targetMinY = std::max(targetMinY, statusRect.Max.y + ImGui::GetStyle().ItemSpacing.y);
+		overlappedAny = true;
+	}
+
+	if (!overlappedAny) {
 		return false;
 	}
 
-	position.y += shaderRect.Max.y + ImGui::GetStyle().ItemSpacing.y - windowRect.Min.y;
+	position.y += targetMinY - windowRect.Min.y;
 	return true;
 }
 
@@ -354,13 +574,56 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 	// ImGui_ImplWin32_NewFrame() restores DisplaySize from the desktop window.
 	// Re-apply the active VR overlay canvas so input and rendering stay 1:1 with the menu texture.
 	const bool usingVROverlayCanvas = ApplyVROverlayDisplaySize();
-	if (!usingVROverlayCanvas) {
+	if (globals::d3d::swapChain) {
 		DXGI_SWAP_CHAIN_DESC desc{};
 		globals::d3d::swapChain->GetDesc(&desc);
+		if (usingVROverlayCanvas) {
+			// The desktop mirror uses an aspect-correct presentation of the VR canvas,
+			// anchored to the desktop origin. Mirror mouse input through the same transform.
+			auto& io = ImGui::GetIO();
+			const float sourceWidth = io.DisplaySize.x;
+			const float sourceHeight = io.DisplaySize.y;
+			const float targetWidth = static_cast<float>(desc.BufferDesc.Width);
+			const float targetHeight = static_cast<float>(desc.BufferDesc.Height);
+			float scale = 1.0f;
+			float offsetX = 0.0f;
+			float offsetY = 0.0f;
+			if (ComputeDesktopMirrorTransform(sourceWidth, sourceHeight, targetWidth, targetHeight, scale, offsetX, offsetY)) {
+				POINT cursorPos{};
+				if (GetCursorPos(&cursorPos) && ScreenToClient(desc.OutputWindow, &cursorPos)) {
+					const float localX = static_cast<float>(cursorPos.x);
+					const float localY = static_cast<float>(cursorPos.y);
+					const bool insideScaledCanvas =
+						localX >= offsetX &&
+						localX <= offsetX + sourceWidth * scale &&
+						localY >= offsetY &&
+						localY <= offsetY + sourceHeight * scale;
 
-		const float displayW = static_cast<float>(desc.BufferDesc.Width);
-		const float displayH = static_cast<float>(desc.BufferDesc.Height);
-		Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH);
+					if (insideScaledCanvas && scale > 0.0f) {
+						const float mappedX = (localX - offsetX) / scale;
+						const float mappedY = (localY - offsetY) / scale;
+						io.MousePos = ImVec2(mappedX, mappedY);
+						io.AddMousePosEvent(mappedX, mappedY);
+					} else {
+						io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+						io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+					}
+				} else {
+					io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+					io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+				}
+			}
+		} else {
+			const float displayW = static_cast<float>(desc.BufferDesc.Width);
+			const float displayH = static_cast<float>(desc.BufferDesc.Height);
+			Util::UpdateImGuiInput(desc.OutputWindow, displayW, displayH);
+		}
+	}
+
+	if (globals::features::vr.IsOpenVRCompatible()) {
+		// Let desktop/Win32 input establish the baseline first, then queue active
+		// VR controller or wand ownership before ImGui consumes this frame.
+		globals::features::vr.ProcessControllerInputForImGui();
 	}
 
 	ImGui::NewFrame();
@@ -385,7 +648,10 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto hide = shaderCache->IsHideErrors();
 
 	const float scale = Util::GetUIScale();
-	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	if (REL::Module::IsVR()) {
+		pos = GetDefaultVRLeftAnchorX(GetDefaultVRSettingsWindowSize(false).x);
+	}
 
 	uint64_t totalShaders = shaderCache->GetTotalTasks();
 	uint64_t compiledShaders = shaderCache->GetCompletedTasks();
@@ -540,7 +806,16 @@ void OverlayRenderer::FinalizeImGuiFrame(const std::vector<OverlayFeature*>& ove
 	BackgroundBlur::RenderBackgroundBlur();
 
 	ImDrawData filteredDrawData;
-	ImGui_ImplDX11_RenderDrawData(BuildDesktopDrawData(ImGui::GetDrawData(), overlays, filteredDrawData));
+	ImDrawData scaledDesktopDrawData;
+	std::vector<ImDrawList*> ownedDesktopCmdLists;
+	ImDrawData* desktopDrawData = BuildDesktopDrawData(ImGui::GetDrawData(), overlays, filteredDrawData);
+	if (BuildScaledDesktopDrawData(desktopDrawData, scaledDesktopDrawData, ownedDesktopCmdLists)) {
+		desktopDrawData = &scaledDesktopDrawData;
+	}
+	ImGui_ImplDX11_RenderDrawData(desktopDrawData);
+	for (auto* cmdList : ownedDesktopCmdLists) {
+		IM_DELETE(cmdList);
+	}
 
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		globals::features::vr.SubmitOverlayFrame();
@@ -564,7 +839,10 @@ void OverlayRenderer::RenderShaderBlockingStatus()
 	}
 
 	const float scale = Util::GetUIScale();
-	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	if (REL::Module::IsVR()) {
+		pos = GetDefaultVRLeftAnchorX(GetDefaultVRSettingsWindowSize(false).x);
+	}
 
 	// Stack below shader compilation window if visible
 	float yPos = pos;

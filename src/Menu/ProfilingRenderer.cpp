@@ -519,9 +519,14 @@ static int ComputeFeatureGraphLegendWidth(const FeatureTimingDataT& data, int to
 	return std::min(desiredLegendWidth, availableLegendWidth);
 }
 
-static bool HasTimingMode(const Profiler::TimerResult& result, bool cpuMode)
+static bool HasLiveTimingMode(const Profiler::TimerResult& result, bool cpuMode)
 {
-	return cpuMode ? result.hasCpu : result.hasGpu;
+	return cpuMode ? result.activeCpu : result.activeGpu;
+}
+
+static bool HasAnyLiveTimingMode(const Profiler::TimerResult& result)
+{
+	return result.activeGpu || result.activeCpu;
 }
 
 struct DisplayTimingStats
@@ -727,7 +732,7 @@ void ProfilingRenderer::RenderGraph()
 
 	double accumulated = 0.0;
 	for (const auto& result : results) {
-		if (!result.valid || !HasTimingMode(result, cpuMode))
+		if (!result.valid || !HasLiveTimingMode(result, cpuMode))
 			continue;
 
 		std::array<float, kDisplayedRollingFrameCount> samples{};
@@ -788,7 +793,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	DisplayTimingSampleAccumulator totalSamples;
 	const bool compactLabel = featurePrefixes.size() == 1;
 	for (const auto& r : results) {
-		if (!r.valid || !HasTimingMode(r, cpuMode))
+		if (!r.valid || !HasLiveTimingMode(r, cpuMode))
 			continue;
 
 		std::string label;
@@ -983,7 +988,7 @@ bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 
 	const std::string prefix = featurePrefix + "::";
 	for (const auto& result : globals::profiler->GetResults()) {
-		if (result.valid && result.name.starts_with(prefix))
+		if (result.valid && HasAnyLiveTimingMode(result) && result.name.starts_with(prefix))
 			return true;
 	}
 
@@ -1046,7 +1051,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		DisplayTimingSampleAccumulator totalSamples;
 
 		for (const auto& result : profiler.GetResults()) {
-			if (!result.valid || !HasTimingMode(result, cpuMode))
+			if (!result.valid || !HasLiveTimingMode(result, cpuMode))
 				continue;
 
 			std::array<float, kDisplayedRollingFrameCount> samples{};
@@ -1274,7 +1279,7 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 
 	std::unordered_map<std::string, TimingBucket> timingBuckets;
 	for (const auto& result : profiler.GetResults()) {
-		if (!result.valid)
+		if (!result.valid || !HasAnyLiveTimingMode(result))
 			continue;
 
 		const std::string rootName = GetTimingRootName(result.name);
@@ -1283,7 +1288,7 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 
 		auto& bucket = timingBuckets[rootName];
 		const bool rootTimer = result.name == rootName;
-		if (HasTimingMode(result, false)) {
+		if (HasLiveTimingMode(result, false)) {
 			DisplayTimingStats stats;
 			if (TryGetDisplayTimingStats(result, false, stats)) {
 				if (rootTimer) {
@@ -1296,7 +1301,7 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 			}
 		}
 
-		if (HasTimingMode(result, true)) {
+		if (HasLiveTimingMode(result, true)) {
 			DisplayTimingStats stats;
 			if (TryGetDisplayTimingStats(result, true, stats)) {
 				if (rootTimer) {

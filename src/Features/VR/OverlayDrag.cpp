@@ -6,7 +6,6 @@
 #include <SimpleMath.h>
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <openvr.h>
 
 using namespace DirectX::SimpleMath;
@@ -170,45 +169,6 @@ void VR::UpdateActiveDrag()
 			}
 		default:
 			break;
-		}
-	}
-
-	// Joystick depth control during grip
-	if (overlayDragState.dragging) {
-		RE::VRControllerState* gripController = nullptr;
-		size_t thumbIdx = 0;
-		if (overlayDragState.isPrimary) {
-			if (lastKnownLeftHandedMode) {
-				gripController = &primaryControllerState;
-				thumbIdx = static_cast<size_t>(RE::ControllerRole::Primary);
-			} else {
-				gripController = &secondaryControllerState;
-				thumbIdx = static_cast<size_t>(RE::ControllerRole::Secondary);
-			}
-		} else if (overlayDragState.isSecondary) {
-			if (lastKnownLeftHandedMode) {
-				gripController = &secondaryControllerState;
-				thumbIdx = static_cast<size_t>(RE::ControllerRole::Secondary);
-			} else {
-				gripController = &primaryControllerState;
-				thumbIdx = static_cast<size_t>(RE::ControllerRole::Primary);
-			}
-		}
-
-		if (gripController) {
-			float thumbY = gripController->thumbsticks[thumbIdx].y;
-			const float deadzone = settings.mouseDeadzone;
-			const float depthSpeed = 0.02f;
-			if (std::abs(thumbY) > deadzone) {
-				float depthDelta = -thumbY * depthSpeed;
-				if (overlayDragState.mode == OverlayDragState::DragMode::HMD) {
-					overlayDragState.initialHMDOffset.z += depthDelta;
-					overlayDragState.initialHMDOffset.z = std::clamp(overlayDragState.initialHMDOffset.z, -10.0f, 10.0f);
-				} else if (overlayDragState.mode == OverlayDragState::DragMode::Controller) {
-					overlayDragState.initialControllerOffset.z += depthDelta;
-					overlayDragState.initialControllerOffset.z = std::clamp(overlayDragState.initialControllerOffset.z, -10.0f, 10.0f);
-				}
-			}
 		}
 	}
 

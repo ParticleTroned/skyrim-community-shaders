@@ -131,10 +131,11 @@ namespace
 
 	ImDrawData* FilterShaderCompilationWindowFromHMD(ImDrawData* drawData, ImDrawData& filteredDrawData)
 	{
-		if (!drawData || !HasRenderedWorldFrame()) {
+		if (!drawData) {
 			return drawData;
 		}
 
+		const bool hideShaderCompilationWindow = HasRenderedWorldFrame();
 		bool removedAny = false;
 		int totalIdxCount = 0;
 		int totalVtxCount = 0;
@@ -144,11 +145,10 @@ namespace
 		filteredDrawData.CmdLists.reserve(drawData->CmdListsCount);
 		for (int i = 0; i < drawData->CmdListsCount; ++i) {
 			auto* cmdList = drawData->CmdLists[i];
-			if (IsDrawListOwnedByWindow(cmdList, "ShaderCompilationInfo")) {
+			if (hideShaderCompilationWindow && IsDrawListOwnedByWindow(cmdList, "ShaderCompilationInfo")) {
 				removedAny = true;
 				continue;
 			}
-
 			filteredDrawData.CmdLists.push_back(cmdList);
 			totalIdxCount += cmdList->IdxBuffer.Size;
 			totalVtxCount += cmdList->VtxBuffer.Size;
@@ -162,6 +162,39 @@ namespace
 		filteredDrawData.TotalIdxCount = totalIdxCount;
 		filteredDrawData.TotalVtxCount = totalVtxCount;
 		return &filteredDrawData;
+	}
+
+	float GetCustomVRCursorDotRadius()
+	{
+		const float toggleHeight = std::max(10.0f, std::round(ImGui::GetTextLineHeight() * 0.80f));
+		return std::max(2.0f, std::round(toggleHeight * 0.25f));
+	}
+
+	bool ShouldDrawCustomVRCursorDot(bool a_visible, const ImVec2& a_cursorPos, const ImVec2& a_displaySize)
+	{
+		if (!a_visible ||
+			!std::isfinite(a_cursorPos.x) ||
+			!std::isfinite(a_cursorPos.y) ||
+			a_cursorPos.x < 0.0f ||
+			a_cursorPos.y < 0.0f ||
+			a_cursorPos.x > a_displaySize.x ||
+			a_cursorPos.y > a_displaySize.y) {
+			return false;
+		}
+
+		return true;
+	}
+
+	void AppendCustomVRCursorDot(ImDrawList& drawList, const ImVec2& center)
+	{
+		const float radius = GetCustomVRCursorDotRadius();
+		const ImU32 glowColor = IM_COL32(72, 240, 230, 92);
+		const ImU32 outerColor = IM_COL32(44, 222, 236, 220);
+		const ImU32 innerColor = IM_COL32(186, 255, 248, 255);
+
+		drawList.AddCircleFilled(center, radius * 1.9f, glowColor, 24);
+		drawList.AddCircleFilled(center, radius, outerColor, 20);
+		drawList.AddCircleFilled(center, radius * 0.42f, innerColor, 16);
 	}
 
 	bool CenterWindowOnCurrentMonitorTopmost(HWND hwnd)
@@ -290,6 +323,8 @@ constexpr const char* kMenuOverlayName = "Community Shaders Menu";
 constexpr const char* kControllerOverlayKey = "communityshaders.menu.controller";
 constexpr const char* kControllerOverlayName = "Community Shaders Menu (Controller)";
 constexpr float kLegacyDefaultHMDOffsetZ = -0.41f;
+constexpr float kPreviousDefaultHMDOffsetZ = -0.5125f;
+constexpr float kCurrentDefaultHMDOffsetZ = -1.025f;
 constexpr float kDefaultOffsetEpsilon = 0.0001f;
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -351,7 +386,9 @@ void VR::LoadSettings(json& o_json)
 	LoadVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
 	if (o_json.is_object() &&
 		o_json.contains("VRMenuOffsetZ") &&
-		std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon) {
+		(std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kLegacyDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
+			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kPreviousDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
+			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kCurrentDefaultHMDOffsetZ) < kDefaultOffsetEpsilon)) {
 		settings.VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
 	}
 	MigrateLegacyBindingDefaults(settings);
@@ -2624,66 +2661,19 @@ void VR::UpdateVROverlayPosition()
 	if (showOnHMD) {
 		if (settings.VRMenuPositioningMethod == 0) {
 			// HMD Relative positioning
-			vr::TrackedDevicePose_t hmdPose;
-			if (!Util::GetDeviceToAbsoluteTrackingPoseCompatible(vr::TrackingUniverseStanding, 0, &hmdPose, 1))
-				return;
+			// Use a tracked-device-relative transform so the runtime owns the final head
+			// motion application. That avoids the subtle frame-to-frame instability from
+			// rebuilding an absolute world transform from noisy HMD poses every frame.
+			vr::HmdMatrix34_t hmdRelativeTransform = Util::CreateControllerOverlayTransform(
+				offsetX,
+				offsetY,
+				offsetZ,
+				overlayWidth,
+				hmdOverlayHeight);
 
-			if (hmdPose.bPoseIsValid) {
-				// Calculate position in front of HMD using offsets directly
-				float height = 0.0f;
-
-				// Create transform matrix - start with identity
-				vr::HmdMatrix34_t hmdTransform;
-				hmdTransform.m[0][0] = 1.0f;
-				hmdTransform.m[0][1] = 0.0f;
-				hmdTransform.m[0][2] = 0.0f;
-				hmdTransform.m[0][3] = 0.0f;
-				hmdTransform.m[1][0] = 0.0f;
-				hmdTransform.m[1][1] = 1.0f;
-				hmdTransform.m[1][2] = 0.0f;
-				hmdTransform.m[1][3] = 0.0f;
-				hmdTransform.m[2][0] = 0.0f;
-				hmdTransform.m[2][1] = 0.0f;
-				hmdTransform.m[2][2] = 1.0f;
-				hmdTransform.m[2][3] = 0.0f;
-
-				// Copy HMD position
-				hmdTransform.m[0][3] = hmdPose.mDeviceToAbsoluteTracking.m[0][3];
-				hmdTransform.m[1][3] = hmdPose.mDeviceToAbsoluteTracking.m[1][3];
-				hmdTransform.m[2][3] = hmdPose.mDeviceToAbsoluteTracking.m[2][3];
-
-				// Copy HMD orientation
-				hmdTransform.m[0][0] = hmdPose.mDeviceToAbsoluteTracking.m[0][0];
-				hmdTransform.m[0][1] = hmdPose.mDeviceToAbsoluteTracking.m[0][1];
-				hmdTransform.m[0][2] = hmdPose.mDeviceToAbsoluteTracking.m[0][2];
-				hmdTransform.m[1][0] = hmdPose.mDeviceToAbsoluteTracking.m[1][0];
-				hmdTransform.m[1][1] = hmdPose.mDeviceToAbsoluteTracking.m[1][1];
-				hmdTransform.m[1][2] = hmdPose.mDeviceToAbsoluteTracking.m[1][2];
-				hmdTransform.m[2][0] = hmdPose.mDeviceToAbsoluteTracking.m[2][0];
-				hmdTransform.m[2][1] = hmdPose.mDeviceToAbsoluteTracking.m[2][1];
-				hmdTransform.m[2][2] = hmdPose.mDeviceToAbsoluteTracking.m[2][2];
-
-				// Apply HMD offset positions directly (in HMD local space)
-				hmdTransform.m[0][3] += hmdTransform.m[0][0] * offsetX + hmdTransform.m[0][1] * offsetY + hmdTransform.m[0][2] * offsetZ;
-				hmdTransform.m[1][3] += hmdTransform.m[1][0] * offsetX + hmdTransform.m[1][1] * offsetY + hmdTransform.m[1][2] * offsetZ;
-				hmdTransform.m[2][3] += hmdTransform.m[2][0] * offsetX + hmdTransform.m[2][1] * offsetY + hmdTransform.m[2][2] * offsetZ;
-
-				// Move up by height (Y axis in HMD space)
-				hmdTransform.m[0][3] += hmdTransform.m[0][1] * height;
-				hmdTransform.m[1][3] += hmdTransform.m[1][1] * height;
-				hmdTransform.m[2][3] += hmdTransform.m[2][1] * height;
-
-				// Scale the overlay basis based on width/height.
-				ScaleOverlayTransform(hmdTransform, overlayWidth, hmdOverlayHeight);
-
-				Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
-				ctx.overlay->SetOverlayTransformAbsolute(menuOverlayHandle, vr::TrackingUniverseStanding, &hmdTransform);
-				ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * settings.VRMenuScale);
-
-			} else {
-				logger::debug("HMD pose invalid, falling back to fixed positioning");
-				settings.VRMenuPositioningMethod = 1;  // Fall back to fixed positioning
-			}
+			Util::SetOverlayInputFlags(ctx.overlay, menuOverlayHandle);
+			ctx.overlay->SetOverlayTransformTrackedDeviceRelative(menuOverlayHandle, vr::k_unTrackedDeviceIndex_Hmd, &hmdRelativeTransform);
+			ctx.overlay->SetOverlayWidthInMeters(menuOverlayHandle, baseWidth * settings.VRMenuScale);
 		}
 
 		if (settings.VRMenuPositioningMethod == 1) {
@@ -3207,6 +3197,9 @@ void VR::SubmitOverlayFrame()
 		ID3D11RenderTargetView* oldRTV = nullptr;
 		globals::d3d::context->OMGetRenderTargets(1, &oldRTV, nullptr);
 		float clearColor[4] = { 0, 0, 0, 0 };
+		ImGuiIO& io = ImGui::GetIO();
+		const bool useCustomVRCursorDot = customVRCursorVisible;
+		const ImVec2 customCursorPos = customVRCursorPos;
 
 		auto renderImGuiToTexture = [&](ID3D11RenderTargetView* targetRTV) {
 			if (!targetRTV) {
@@ -3216,9 +3209,36 @@ void VR::SubmitOverlayFrame()
 			ID3D11RenderTargetView* targetRTVPtr = targetRTV;
 			globals::d3d::context->OMSetRenderTargets(1, &targetRTVPtr, nullptr);
 			globals::d3d::context->ClearRenderTargetView(targetRTV, clearColor);
+			const bool previousMouseDrawCursor = io.MouseDrawCursor;
+			io.MouseDrawCursor = false;
 			ImGui::Render();
+			io.MouseDrawCursor = previousMouseDrawCursor;
 			ImDrawData filteredDrawData;
-			ImGui_ImplDX11_RenderDrawData(FilterShaderCompilationWindowFromHMD(ImGui::GetDrawData(), filteredDrawData));
+			ImDrawData* renderDrawData = FilterShaderCompilationWindowFromHMD(ImGui::GetDrawData(), filteredDrawData);
+			if (useCustomVRCursorDot &&
+				ShouldDrawCustomVRCursorDot(useCustomVRCursorDot, customCursorPos, io.DisplaySize) &&
+				io.Fonts &&
+				io.Fonts->IsBuilt()) {
+				ImDrawList cursorDrawList(ImGui::GetDrawListSharedData());
+				cursorDrawList._OwnerName = "CustomVRCursorDot";
+				cursorDrawList._ResetForNewFrame();
+				cursorDrawList.PushTextureID(io.Fonts->TexID);
+				cursorDrawList.PushClipRectFullScreen();
+				AppendCustomVRCursorDot(cursorDrawList, customCursorPos);
+				cursorDrawList.PopClipRect();
+				cursorDrawList.PopTextureID();
+				cursorDrawList._PopUnusedDrawCmd();
+
+				ImDrawData cursorAugmentedDrawData = *renderDrawData;
+				cursorAugmentedDrawData.CmdLists = renderDrawData->CmdLists;
+				cursorAugmentedDrawData.CmdLists.push_back(&cursorDrawList);
+				cursorAugmentedDrawData.CmdListsCount = cursorAugmentedDrawData.CmdLists.Size;
+				cursorAugmentedDrawData.TotalIdxCount += cursorDrawList.IdxBuffer.Size;
+				cursorAugmentedDrawData.TotalVtxCount += cursorDrawList.VtxBuffer.Size;
+				ImGui_ImplDX11_RenderDrawData(&cursorAugmentedDrawData);
+			} else {
+				ImGui_ImplDX11_RenderDrawData(renderDrawData);
+			}
 			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 		};
 

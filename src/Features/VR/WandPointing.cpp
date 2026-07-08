@@ -12,25 +12,46 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+	enum class WandPoseUpdateMode
+	{
+		None,
+		KeepAlive,
+		Active
+	};
+
 	constexpr uint32_t kWandCursorActiveFrames = 24;
-	constexpr float kWandPositionMotionThresholdSq = 0.0025f * 0.0025f;
-	constexpr float kWandDirectionMotionThreshold = 0.00001f;
+	constexpr float kWandActivePositionMotionThresholdSq = 0.0f;
+	constexpr float kWandIdlePositionMotionThresholdSq = 0.0075f * 0.0075f;
+	constexpr float kWandActiveDirectionMotionThreshold = 0.0f;
+	constexpr float kWandIdleDirectionMotionThreshold = 0.00008f;
+	constexpr float kWandActiveScreenMotionThresholdSq = 2.0f * 2.0f;
+	constexpr float kWandIdleScreenMotionThresholdSq = 8.0f * 8.0f;
+	constexpr float kWandEdgeStickOverscan = 0.08f;
 
 	vr::TrackedDeviceIndex_t g_previousWandController = vr::k_unTrackedDeviceIndexInvalid;
 	Vector3 g_previousWandRayOrigin = Vector3::Zero;
 	Vector3 g_previousWandRayDirection = Vector3::Zero;
+	ImVec2 g_previousWandScreenPos = ImVec2(0.0f, 0.0f);
 	uint32_t g_wandCursorActiveFramesRemaining = 0;
 	bool g_hasPreviousWandRay = false;
+	bool g_hasPreviousWandScreenPos = false;
 
-	bool ShouldUpdateCursorFromWandPose(bool a_forceCursorUpdate, vr::TrackedDeviceIndex_t a_controllerIndex, const Vector3& a_rayOrigin, const Vector3& a_rayDirection)
+	WandPoseUpdateMode GetWandPoseUpdateMode(bool a_forceCursorUpdate, vr::TrackedDeviceIndex_t a_controllerIndex, const Vector3& a_rayOrigin, const Vector3& a_rayDirection)
 	{
+		const float positionMotionThresholdSq = a_forceCursorUpdate ?
+		                                            kWandActivePositionMotionThresholdSq :
+		                                            kWandIdlePositionMotionThresholdSq;
+		const float directionMotionThreshold = a_forceCursorUpdate ?
+		                                           kWandActiveDirectionMotionThreshold :
+		                                           kWandIdleDirectionMotionThreshold;
+
 		bool moved = true;
 		if (g_hasPreviousWandRay && g_previousWandController == a_controllerIndex) {
 			const float positionDeltaSq = (a_rayOrigin - g_previousWandRayOrigin).LengthSquared();
 			const float directionDot = std::clamp(a_rayDirection.Dot(g_previousWandRayDirection), -1.0f, 1.0f);
 			const float directionDelta = 1.0f - directionDot;
-			moved = positionDeltaSq > kWandPositionMotionThresholdSq ||
-			        directionDelta > kWandDirectionMotionThreshold;
+			moved = positionDeltaSq > positionMotionThresholdSq ||
+			        directionDelta > directionMotionThreshold;
 		}
 
 		if (a_forceCursorUpdate || moved) {
@@ -39,7 +60,7 @@ namespace
 			g_previousWandRayDirection = a_rayDirection;
 			g_hasPreviousWandRay = true;
 			g_wandCursorActiveFramesRemaining = kWandCursorActiveFrames;
-			return true;
+			return WandPoseUpdateMode::Active;
 		}
 
 		if (g_wandCursorActiveFramesRemaining > 0) {
@@ -48,10 +69,10 @@ namespace
 			g_previousWandRayOrigin = a_rayOrigin;
 			g_previousWandRayDirection = a_rayDirection;
 			g_hasPreviousWandRay = true;
-			return true;
+			return WandPoseUpdateMode::KeepAlive;
 		}
 
-		return false;
+		return WandPoseUpdateMode::None;
 	}
 
 	void ResetWandPoseTracking()
@@ -59,8 +80,10 @@ namespace
 		g_previousWandController = vr::k_unTrackedDeviceIndexInvalid;
 		g_previousWandRayOrigin = Vector3::Zero;
 		g_previousWandRayDirection = Vector3::Zero;
+		g_previousWandScreenPos = ImVec2(0.0f, 0.0f);
 		g_wandCursorActiveFramesRemaining = 0;
 		g_hasPreviousWandRay = false;
+		g_hasPreviousWandScreenPos = false;
 	}
 }
 
@@ -123,11 +146,15 @@ bool VR::ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDevi
 
 	Vector3 hit = localOrigin + t * localDir;
 
-	if (hit.x < -0.5f || hit.x > 0.5f || hit.y < -0.5f || hit.y > 0.5f)
+	if (hit.x < -0.5f - kWandEdgeStickOverscan ||
+		hit.x > 0.5f + kWandEdgeStickOverscan ||
+		hit.y < -0.5f - kWandEdgeStickOverscan ||
+		hit.y > 0.5f + kWandEdgeStickOverscan) {
 		return false;
+	}
 
-	outUV.x = hit.x + 0.5f;
-	outUV.y = 0.5f - hit.y;
+	outUV.x = std::clamp(hit.x + 0.5f, 0.0f, 1.0f);
+	outUV.y = std::clamp(0.5f - hit.y, 0.0f, 1.0f);
 
 	return true;
 }
@@ -163,6 +190,7 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 		return;
 
 	ImGuiIO& io = ImGui::GetIO();
+	wandState.isActivelyDrivingCursor = false;
 
 	vr::TrackedDeviceIndex_t pointingController = vr::k_unTrackedDeviceIndexInvalid;
 
@@ -182,11 +210,17 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 
 	ImVec2 uv;
 	bool intersected = ComputeWandIntersection(pointingController, uv);
-	const bool updateCursorFromWand = ShouldUpdateCursorFromWandPose(a_forceCursorUpdate, pointingController, wandState.rayOrigin, wandState.rayDirection);
-	if (!updateCursorFromWand) {
-		wandState.isIntersecting = false;
-		io.MouseDrawCursor = false;
-		io.WantSetMousePos = false;
+	const WandPoseUpdateMode updateMode = GetWandPoseUpdateMode(a_forceCursorUpdate, pointingController, wandState.rayOrigin, wandState.rayDirection);
+	if (updateMode == WandPoseUpdateMode::None) {
+		if (g_hasPreviousWandScreenPos) {
+			wandState.isIntersecting = true;
+			io.MousePos = g_previousWandScreenPos;
+			io.AddMousePosEvent(g_previousWandScreenPos.x, g_previousWandScreenPos.y);
+			io.WantSetMousePos = true;
+		} else {
+			wandState.isIntersecting = false;
+			io.WantSetMousePos = false;
+		}
 		return;
 	}
 
@@ -197,13 +231,34 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 		screenX = std::clamp(screenX, 0.0f, io.DisplaySize.x);
 		screenY = std::clamp(screenY, 0.0f, io.DisplaySize.y);
 
-		io.MousePos = ImVec2(screenX, screenY);
-		io.AddMousePosEvent(screenX, screenY);
-		io.MouseDrawCursor = true;
+		ImVec2 stableScreenPos(screenX, screenY);
+		const float screenMotionThresholdSq = a_forceCursorUpdate ?
+		                                          kWandActiveScreenMotionThresholdSq :
+		                                          kWandIdleScreenMotionThresholdSq;
+		if (g_hasPreviousWandScreenPos &&
+			g_previousWandController == pointingController) {
+			const float dx = screenX - g_previousWandScreenPos.x;
+			const float dy = screenY - g_previousWandScreenPos.y;
+			if ((dx * dx + dy * dy) <= screenMotionThresholdSq) {
+				stableScreenPos = g_previousWandScreenPos;
+			}
+		}
+
+		g_previousWandScreenPos = stableScreenPos;
+		g_hasPreviousWandScreenPos = true;
+		wandState.isActivelyDrivingCursor = updateMode == WandPoseUpdateMode::Active;
+
+		io.MousePos = stableScreenPos;
+		io.AddMousePosEvent(stableScreenPos.x, stableScreenPos.y);
+		io.WantSetMousePos = true;
+	} else if (g_hasPreviousWandScreenPos) {
+		wandState.isIntersecting = true;
+		wandState.isActivelyDrivingCursor = updateMode == WandPoseUpdateMode::Active;
+		io.MousePos = g_previousWandScreenPos;
+		io.AddMousePosEvent(g_previousWandScreenPos.x, g_previousWandScreenPos.y);
 		io.WantSetMousePos = true;
 	} else {
 		wandState.isIntersecting = false;
-		io.MouseDrawCursor = false;
 		io.WantSetMousePos = false;
 	}
 }

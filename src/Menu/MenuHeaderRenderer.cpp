@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ParticleLights.h"
@@ -25,6 +26,23 @@ namespace
 		return ImGui::GetFontSize() * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER * a_uiScale;
 	}
 
+	float GetHeaderActionIconSize(float a_uiScale)
+	{
+		return GetHeaderIconSize(a_uiScale) * 1.5f;
+	}
+
+	float GetDockedActionIconSize(float a_uiScale, float a_titleBarHeight)
+	{
+		const float desiredSize = ImGui::GetFontSize() * ThemeManager::Constants::DOCKED_ICON_SIZE_MULTIPLIER * a_uiScale * 1.5f;
+		const float maxSize = std::max(1.0f, a_titleBarHeight - 2.0f * std::max(1.0f, ImGui::GetStyle().FramePadding.y * 0.35f));
+		return std::min(desiredSize, maxSize);
+	}
+
+	float GetSteamVRDockHandleSize(float a_uiScale)
+	{
+		return GetHeaderActionIconSize(a_uiScale);
+	}
+
 	float GetUndockedIconSpacing(float a_uiScale)
 	{
 		return ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING * a_uiScale;
@@ -33,9 +51,48 @@ namespace
 	float GetUndockedActionButtonSize(float a_uiScale)
 	{
 		const auto& style = ImGui::GetStyle();
-		const float iconSize = GetHeaderIconSize(a_uiScale);
+		const float iconSize = GetHeaderActionIconSize(a_uiScale);
 		const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * a_uiScale;
 		return std::max(0.0f, iconSize - paddingReduction) + style.FramePadding.x * 2.0f;
+	}
+
+	float GetSteamVRResizeHandleSize(float a_uiScale)
+	{
+		const float baseHandleSize = std::max(ImGui::GetFontSize() * 1.15f, 18.0f) * a_uiScale;
+		return baseHandleSize * 1.875f;
+	}
+
+	float GetSteamVRResizeHandleInset(float a_uiScale)
+	{
+		return std::max(ImGui::GetStyle().WindowBorderSize, 1.0f * a_uiScale);
+	}
+
+	struct SteamVRResizeDragState
+	{
+		ImGuiID activeId = 0;
+		ImVec2 startMouse = ImVec2(0.0f, 0.0f);
+		ImVec2 startPos = ImVec2(0.0f, 0.0f);
+		ImVec2 startSize = ImVec2(0.0f, 0.0f);
+	};
+
+	SteamVRResizeDragState g_steamVRResizeDragState;
+	constexpr float kSteamVRResizePointerSensitivity = 1.5f;
+
+	bool HasValidMousePos(const ImVec2& a_pos)
+	{
+		return std::isfinite(a_pos.x) &&
+		       std::isfinite(a_pos.y) &&
+		       a_pos.x > -100000.0f &&
+		       a_pos.y > -100000.0f;
+	}
+
+	float ClampResizeValue(float a_value, float a_min, float a_max)
+	{
+		if (a_max < a_min) {
+			return a_min;
+		}
+
+		return std::clamp(a_value, a_min, a_max);
 	}
 
 	float GetSteamVRHeaderRightInset(float a_uiScale)
@@ -111,7 +168,7 @@ void MenuHeaderRenderer::RenderHeader(
 		const float actionButtonsWidth = actionIcons.empty() ? 0.0f :
 		                                                       actionButtonWidth * static_cast<float>(actionIcons.size()) +
 		                                                           iconSpacing * static_cast<float>(actionIcons.size() - 1);
-		const float dockHandleWidth = showSteamVRDockHandle ? logoSize : 0.0f;
+		const float dockHandleWidth = showSteamVRDockHandle ? GetSteamVRDockHandleSize(uiScale) : 0.0f;
 		const float dockHandleSpacing = showSteamVRDockHandle && !actionIcons.empty() ? iconSpacing : 0.0f;
 		const float rightControlInset = showSteamVRDockHandle ? GetSteamVRHeaderRightInset(uiScale) : 0.0f;
 		const float buttonColumnWidth = actionButtonsWidth + dockHandleSpacing + dockHandleWidth + rightControlInset;
@@ -357,16 +414,13 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 	if (actionIcons.empty())
 		return;
 
-	// Docked: Draw larger icons in the title bar using foreground draw list
-	const float currentFontSize = ImGui::GetFontSize();
-	const float iconSize = currentFontSize * ThemeManager::Constants::DOCKED_ICON_SIZE_MULTIPLIER * uiScale;
-	const float iconSpacing = ThemeManager::Constants::DOCKED_ICON_SPACING * uiScale;
-	const float rightMargin = ThemeManager::Constants::DOCKED_RIGHT_MARGIN * uiScale;
-
 	// Get window position and calculate title bar area
 	ImVec2 windowPos = ImGui::GetWindowPos();
 	ImVec2 windowSize = ImGui::GetWindowSize();
 	float titleBarHeight = ImGui::GetFrameHeight();
+	const float iconSize = GetDockedActionIconSize(uiScale, titleBarHeight);
+	const float iconSpacing = ThemeManager::Constants::DOCKED_ICON_SPACING * uiScale;
+	const float rightMargin = ThemeManager::Constants::DOCKED_RIGHT_MARGIN * uiScale;
 
 	// Use foreground draw list to draw over the title bar
 	ImDrawList* fgDrawList = ImGui::GetForegroundDrawList();
@@ -441,7 +495,7 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 		return;
 
 	// Undocked: Draw icons as ImageButtons in a table column
-	const float iconSize = GetHeaderIconSize(uiScale);
+	const float iconSize = GetHeaderActionIconSize(uiScale);
 	const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * uiScale;
 	const float imageExtent = std::max(0.0f, iconSize - paddingReduction);
 	const ImVec2 imageSize(imageExtent, imageExtent);
@@ -495,7 +549,7 @@ void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpac
 	if (!window)
 		return;
 
-	const float handleSize = GetHeaderIconSize(uiScale);
+	const float handleSize = GetSteamVRDockHandleSize(uiScale);
 	const ImVec2 buttonSize(handleSize, handleSize);
 
 	ImGui::InvisibleButton("##SteamVRDockHandle", buttonSize);
@@ -539,39 +593,66 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 	const ImVec2 savedCursor = ImGui::GetCursorPos();
 	const ImVec2 windowPos = window->Pos;
 	const ImVec2 windowSize = window->Size;
-	const float handleSize = std::max(ImGui::GetFontSize() * 1.15f, 18.0f) * uiScale;
-	const float handleInset = std::max(ImGui::GetStyle().WindowBorderSize + 2.0f * uiScale, 2.0f * uiScale);
+	const float handleSize = GetSteamVRResizeHandleSize(uiScale);
+	const float handleInset = GetSteamVRResizeHandleInset(uiScale);
 	const float minWidth = 420.0f * uiScale;
 	const float minHeight = 320.0f * uiScale;
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	const ImVec2 resizeBoundsMin = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
+	const ImVec2 resizeBoundsMax = viewport ?
+	                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y) :
+	                                   ImGui::GetIO().DisplaySize;
 
 	auto drawResizeHandle = [&](const char* id, const ImVec2& min, bool topLeft) {
 		ImGui::SetCursorScreenPos(min);
 		ImGui::InvisibleButton(id, ImVec2(handleSize, handleSize));
 		const bool hovered = ImGui::IsItemHovered();
 		const bool active = ImGui::IsItemActive();
+		const bool activated = ImGui::IsItemActivated();
+		const ImGuiID itemId = ImGui::GetItemID();
 		if (hovered || active) {
 			ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
 		}
 
-		if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
-			const ImVec2 delta = ImGui::GetIO().MouseDelta;
-			ImVec2 newPos = window->Pos;
-			ImVec2 newSize = window->Size;
-			if (topLeft) {
-				const float maxInwardX = std::max(0.0f, newSize.x - minWidth);
-				const float maxInwardY = std::max(0.0f, newSize.y - minHeight);
-				const float appliedX = std::min(delta.x, maxInwardX);
-				const float appliedY = std::min(delta.y, maxInwardY);
-				newPos.x += appliedX;
-				newPos.y += appliedY;
-				newSize.x -= appliedX;
-				newSize.y -= appliedY;
-				ImGui::SetWindowPos(window, newPos, ImGuiCond_Always);
-			} else {
-				newSize.x = std::max(minWidth, newSize.x + delta.x);
-				newSize.y = std::max(minHeight, newSize.y + delta.y);
+		if (activated) {
+			g_steamVRResizeDragState.activeId = itemId;
+			g_steamVRResizeDragState.startMouse = ImGui::GetIO().MousePos;
+			g_steamVRResizeDragState.startPos = window->Pos;
+			g_steamVRResizeDragState.startSize = window->Size;
+		}
+
+		if (!active && g_steamVRResizeDragState.activeId == itemId) {
+			g_steamVRResizeDragState = {};
+		}
+
+		if (active && g_steamVRResizeDragState.activeId == itemId) {
+			const ImVec2 mousePos = ImGui::GetIO().MousePos;
+			if (HasValidMousePos(mousePos)) {
+				const ImVec2 clampedMousePos(
+					ClampResizeValue(mousePos.x, resizeBoundsMin.x, resizeBoundsMax.x),
+					ClampResizeValue(mousePos.y, resizeBoundsMin.y, resizeBoundsMax.y));
+				const ImVec2 delta(
+					(clampedMousePos.x - g_steamVRResizeDragState.startMouse.x) * kSteamVRResizePointerSensitivity,
+					(clampedMousePos.y - g_steamVRResizeDragState.startMouse.y) * kSteamVRResizePointerSensitivity);
+				ImVec2 newPos = g_steamVRResizeDragState.startPos;
+				ImVec2 newSize = g_steamVRResizeDragState.startSize;
+				if (topLeft) {
+					const ImVec2 fixedBottomRight(
+						g_steamVRResizeDragState.startPos.x + g_steamVRResizeDragState.startSize.x,
+						g_steamVRResizeDragState.startPos.y + g_steamVRResizeDragState.startSize.y);
+					newPos.x = ClampResizeValue(g_steamVRResizeDragState.startPos.x + delta.x, resizeBoundsMin.x, fixedBottomRight.x - minWidth);
+					newPos.y = ClampResizeValue(g_steamVRResizeDragState.startPos.y + delta.y, resizeBoundsMin.y, fixedBottomRight.y - minHeight);
+					newSize.x = fixedBottomRight.x - newPos.x;
+					newSize.y = fixedBottomRight.y - newPos.y;
+					ImGui::SetWindowPos(window, newPos, ImGuiCond_Always);
+				} else {
+					const float rightEdge = ClampResizeValue(g_steamVRResizeDragState.startPos.x + g_steamVRResizeDragState.startSize.x + delta.x, g_steamVRResizeDragState.startPos.x + minWidth, resizeBoundsMax.x);
+					const float bottomEdge = ClampResizeValue(g_steamVRResizeDragState.startPos.y + g_steamVRResizeDragState.startSize.y + delta.y, g_steamVRResizeDragState.startPos.y + minHeight, resizeBoundsMax.y);
+					newSize.x = rightEdge - g_steamVRResizeDragState.startPos.x;
+					newSize.y = bottomEdge - g_steamVRResizeDragState.startPos.y;
+				}
+				ImGui::SetWindowSize(window, newSize, ImGuiCond_Always);
 			}
-			ImGui::SetWindowSize(window, newSize, ImGuiCond_Always);
 		}
 
 		ImVec4 colorVec = ImGui::GetStyleColorVec4(active ? ImGuiCol_ResizeGripActive : hovered ? ImGuiCol_ResizeGripHovered :
@@ -579,12 +660,14 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 		colorVec.w = std::max(colorVec.w, hovered || active ? 0.95f : 0.75f);
 		const ImU32 color = ImGui::GetColorU32(colorVec);
 		ImDrawList* drawList = ImGui::GetForegroundDrawList();
+		drawList->PushClipRect(windowPos, ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y), true);
 		if (topLeft) {
 			drawList->AddTriangleFilled(min, ImVec2(min.x + handleSize, min.y), ImVec2(min.x, min.y + handleSize), color);
 		} else {
 			const ImVec2 br = ImVec2(min.x + handleSize, min.y + handleSize);
 			drawList->AddTriangleFilled(br, ImVec2(br.x - handleSize, br.y), ImVec2(br.x, br.y - handleSize), color);
 		}
+		drawList->PopClipRect();
 	};
 
 	drawResizeHandle("##SteamVRResizeTopLeft", ImVec2(windowPos.x + handleInset, windowPos.y + handleInset), true);
@@ -601,7 +684,8 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	ImGuiStyle& style = ImGui::GetStyle();
 	const float currentFontSize = ImGui::GetFontSize();
 	const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
-	const float iconSize = baseIconSize * uiScale;
+	const float logoSize = baseIconSize * uiScale;
+	const float actionIconSize = GetHeaderActionIconSize(uiScale);
 	const float textScaleFactor = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE * uiScale;
 	const float paddingX = ThemeManager::Constants::CURSOR_POSITION_PADDING * uiScale;
 	const float paddingY = style.FramePadding.y * 2.0f;
@@ -617,13 +701,13 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	                                     ImGui::CalcTextSize(title.c_str());
 
 	const float logoAspectRatio = showLogo && uiIcons.logo.size.y > 0.0f ? uiIcons.logo.size.x / uiIcons.logo.size.y : 1.0f;
-	const float logoWidth = showLogo ? iconSize * logoAspectRatio : 0.0f;
+	const float logoWidth = showLogo ? logoSize * logoAspectRatio : 0.0f;
 	const float titleGroupWidth = logoWidth + (showLogo ? style.ItemSpacing.x : 0.0f) + titleSize.x;
 	const float iconsWidth = actionIcons.empty() ? 0.0f :
-	                                               (static_cast<float>(actionIcons.size()) * iconSize) +
+	                                               (static_cast<float>(actionIcons.size()) * actionIconSize) +
 	                                                   (static_cast<float>(actionIcons.size() - 1) * iconSpacing);
 
-	const float headerHeight = std::max(iconSize, titleFontSize) + paddingY * 2.0f;
+	const float headerHeight = std::max(std::max(logoSize, actionIconSize), titleFontSize) + paddingY * 2.0f;
 	const ImVec2 cursorStart = ImGui::GetCursorPos();
 	const ImVec2 screenStart = ImGui::GetCursorScreenPos();
 	const float availableWidth = ImGui::GetContentRegionAvail().x;
@@ -645,8 +729,8 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	}
 
 	if (showLogo && uiIcons.logo.texture) {
-		const ImVec2 logoMin(titleX, centerY - iconSize * 0.5f);
-		const ImVec2 logoMax(logoMin.x + logoWidth, logoMin.y + iconSize);
+		const ImVec2 logoMin(titleX, centerY - logoSize * 0.5f);
+		const ImVec2 logoMax(logoMin.x + logoWidth, logoMin.y + logoSize);
 		drawList->AddImage(uiIcons.logo.texture, logoMin, logoMax, ImVec2(0, 0), ImVec2(1, 1), logoTint);
 		titleX = logoMax.x + style.ItemSpacing.x;
 	}
@@ -666,14 +750,14 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 		if (!icon.texture)
 			continue;
 
-		const ImVec2 buttonMin(iconX, centerY - iconSize * 0.5f);
-		const ImVec2 buttonMax(buttonMin.x + iconSize, buttonMin.y + iconSize);
+		const ImVec2 buttonMin(iconX, centerY - actionIconSize * 0.5f);
+		const ImVec2 buttonMax(buttonMin.x + actionIconSize, buttonMin.y + actionIconSize);
 		const ImVec2 imageMin(buttonMin.x + paddingReduction * 0.5f, buttonMin.y + paddingReduction * 0.5f);
 		const ImVec2 imageMax(buttonMax.x - paddingReduction * 0.5f, buttonMax.y - paddingReduction * 0.5f);
 
 		ImGui::SetCursorScreenPos(buttonMin);
 		ImGui::PushID(static_cast<int>(i));
-		const bool clicked = ImGui::InvisibleButton("##StableHeaderAction", ImVec2(iconSize, iconSize));
+		const bool clicked = ImGui::InvisibleButton("##StableHeaderAction", ImVec2(actionIconSize, actionIconSize));
 		const bool hovered = ImGui::IsItemHovered();
 		const bool hasActiveFlash = icon.flashId && Util::IsButtonFlashActive(icon.flashId);
 		if (clicked) {
@@ -700,7 +784,7 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 		drawList->AddImage(icon.texture, imageMin, imageMax, ImVec2(0, 0), ImVec2(1, 1), ImGui::GetColorU32(tintColor));
 		ImGui::PopID();
 
-		iconX += iconSize + iconSpacing;
+		iconX += actionIconSize + iconSpacing;
 	}
 
 	ImGui::SetCursorPos(ImVec2(cursorStart.x, cursorStart.y + headerHeight));

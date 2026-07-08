@@ -70,6 +70,10 @@ public:
 		static constexpr int kOverlayWidth = 1920;
 		static constexpr int kOverlayHeight = 1080;
 		static constexpr float kOverlayAspect = static_cast<float>(kOverlayHeight) / static_cast<float>(kOverlayWidth);
+		// Logical HMD menu layout is slightly less tall than the backing texture so the
+		// panel can fill more horizontal space while preserving a stable in-headset ratio.
+		static constexpr float kHMDMenuHeightScale = 1.4f;
+		static constexpr float kHMDMenuAspect = kOverlayAspect * kHMDMenuHeightScale;
 		// HMD presentation is intentionally taller than the controller texture so the menu does not read as a wide panel in-headset.
 		static constexpr float kHMDOverlayHeightScale = 1.5f;
 		static constexpr int kHMDOverlayWidth = kOverlayWidth;
@@ -105,9 +109,9 @@ public:
 		static constexpr float kDefaultStereoBlendColorThreshold = 0.02f;
 
 		// Default HMD overlay offset values (in meters, relative to HMD)
-		static constexpr float kDefaultHMDOffsetX = 0.26f;     ///< Default horizontal offset from HMD
-		static constexpr float kDefaultHMDOffsetY = -0.04f;    ///< Default vertical offset from HMD
-		static constexpr float kDefaultHMDOffsetZ = -0.5125f;  ///< Default depth offset from HMD
+		static constexpr float kDefaultHMDOffsetX = 0.26f;      ///< Default horizontal offset from HMD
+		static constexpr float kDefaultHMDOffsetY = -0.04f;     ///< Default vertical offset from HMD
+		static constexpr float kDefaultHMDOffsetZ = -0.76875f;  ///< Default depth offset from HMD
 
 		// Default controller overlay offset values (in meters, relative to controller)
 		static constexpr float kDefaultControllerOffsetX = 0.22f;  ///< Default horizontal offset from controller
@@ -558,11 +562,15 @@ public:
 	struct WandIntersectionState
 	{
 		bool isIntersecting = false;
+		bool isActivelyDrivingCursor = false;
 		ImVec2 uvCoordinates = ImVec2(0.0f, 0.0f);
 		vr::TrackedDeviceIndex_t controllerIndex = vr::k_unTrackedDeviceIndexInvalid;
 		Vector3 rayOrigin = Vector3::Zero;
 		Vector3 rayDirection = Vector3::Zero;
 	} wandState;
+
+	bool customVRCursorVisible = false;
+	ImVec2 customVRCursorPos = ImVec2(-FLT_MAX, -FLT_MAX);
 
 	struct InSceneResources
 	{

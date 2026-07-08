@@ -355,6 +355,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableDragToReposition,
 	kAutoHideSeconds,
 	VRMenuAutoResetDistance,
+	UseRuntimeDefaultMenuNavigation,
 	EnableWandPointing,
 	EnableStereoBlend,
 	StereoBlendDepthSigma,
@@ -390,6 +391,12 @@ void VR::LoadSettings(json& o_json)
 			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kPreviousDefaultHMDOffsetZ) < kDefaultOffsetEpsilon ||
 			std::abs(o_json.value("VRMenuOffsetZ", Config::kDefaultHMDOffsetZ) - kCurrentDefaultHMDOffsetZ) < kDefaultOffsetEpsilon)) {
 		settings.VRMenuOffsetZ = Config::kDefaultHMDOffsetZ;
+	}
+	if (o_json.is_object() &&
+		o_json.contains("EnableWandPointing") &&
+		!o_json.contains("UseRuntimeDefaultMenuNavigation") &&
+		!o_json.value("EnableWandPointing", true)) {
+		settings.UseRuntimeDefaultMenuNavigation = false;
 	}
 	MigrateLegacyBindingDefaults(settings);
 	// Validate and clamp loaded settings to ensure they're within valid ranges
@@ -1275,6 +1282,7 @@ namespace
 {
 	void DrawKeepDesktopWindowFocusedForVRMenuSetting();
 	void DrawStabilizeRenderScaleDesktopMirrorSetting();
+	void DrawCSMenuNavigationSettings();
 	void DrawKeyBindings();
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix);
 }
@@ -1300,6 +1308,44 @@ json VR::CapturePerformanceSettingsState() const
 
 namespace
 {
+	void DrawCSMenuNavigationSettings()
+	{
+		auto& vr = globals::features::vr;
+		if (!vr.openVRInfo.isCompatible)
+			return;
+
+		auto& settings = vr.settings;
+		ImGui::SeparatorText("CS Menu Navigation");
+
+		const bool effectiveWandNavigation = vr.CanUseWandPointing();
+		auto setWandNavigation = [&](bool a_enabled) {
+			const bool modeChanged = vr.CanUseWandPointing() != a_enabled;
+			settings.UseRuntimeDefaultMenuNavigation = false;
+			settings.EnableWandPointing = a_enabled;
+			if (modeChanged) {
+				vr.ResetWandPointingRuntimeState();
+			}
+		};
+
+		bool mouseNavigation = !effectiveWandNavigation;
+		if (ImGui::Checkbox("Mouse Navigation", &mouseNavigation)) {
+			setWandNavigation(false);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Use thumbstick-driven cursor navigation for the CS menu.");
+		}
+
+		ImGui::SameLine();
+
+		bool wandNavigation = effectiveWandNavigation;
+		if (ImGui::Checkbox("Wand Navigation", &wandNavigation)) {
+			setWandNavigation(true);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Use controller ray-cast pointing for the CS menu.");
+		}
+	}
+
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix)
 	{
 		auto& settings = globals::features::vr.settings;
@@ -1387,7 +1433,18 @@ namespace
 			settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
 			settings.attachMode == VR::Settings::OverlayAttachMode::Both;
 		if (ImGui::BeginTable("ThumbstickInstructionsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-			if (useAttachedControllerForCursor) {
+			if (globals::features::vr.CanUseWandPointing()) {
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextColored(Util::GetControllerPrimaryColor(), "Primary Controller Thumbstick");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("Scroll");
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextColored(Util::GetControllerSecondaryColor(), "Secondary Controller Thumbstick");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("Scroll");
+			} else if (useAttachedControllerForCursor) {
 				if (settings.VRMenuAttachController == ControllerDevice::Primary) {
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
@@ -1477,6 +1534,7 @@ namespace
 	{
 		auto& vr = globals::features::vr;
 		VR::Settings& settings = vr.settings;
+		DrawCSMenuNavigationSettings();
 		DrawKeepDesktopWindowFocusedForVRMenuSetting();
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 		ImGui::Separator();
@@ -1585,33 +1643,18 @@ namespace
 			return;
 		VR::Settings& settings = vr.settings;
 		if (ImGui::CollapsingHeader("Input Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-			// Wand pointing settings
-			const bool wandPointingBlockedByRuntime = vr.IsOpenCompositeRuntime();
-			if (wandPointingBlockedByRuntime) {
-				ImGui::BeginDisabled();
-			}
-			if (ImGui::Checkbox("Enable Wand Pointing", &settings.EnableWandPointing)) {
-				vr.ResetWandPointingRuntimeState();
-			}
-			if (wandPointingBlockedByRuntime) {
-				ImGui::EndDisabled();
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				if (wandPointingBlockedByRuntime) {
-					ImGui::Text("Disabled for OpenComposite runtime. Use desktop cursor for menu interaction.");
-				} else {
-					ImGui::Text("Use controller ray-casting to point at UI elements");
-				}
-			}
-			ImGui::Separator();
 			ImGui::Text("Joystick Settings");
 			ImGui::SliderFloat("Mouse Deadzone", &settings.mouseDeadzone, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Thumbstick deadzone for joystick cursor movement");
+				if (vr.CanUseWandPointing()) {
+					ImGui::TextUnformatted("Thumbstick deadzone for CS menu scrolling while Wand Navigation is active.");
+				} else {
+					ImGui::TextUnformatted("Thumbstick deadzone for CS menu cursor movement and scrolling while Mouse Navigation is active.");
+				}
 			}
 			ImGui::SliderFloat("Mouse Speed", &settings.mouseSpeed, 0.1f, 50.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Speed multiplier for joystick cursor movement");
+				ImGui::TextUnformatted("Speed multiplier for CS menu cursor movement while Mouse Navigation is active.");
 			}
 		}
 	}
@@ -2583,9 +2626,13 @@ namespace
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
-				ImGui::Text("Wand Pointing Requested");
+				ImGui::Text("Navigation Source");
 				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("%s", settings.EnableWandPointing ? "Yes" : "No");
+				if (settings.UseRuntimeDefaultMenuNavigation) {
+					ImGui::Text("%s", vr.CanUseWandPointing() ? "Runtime Default (Wand)" : "Runtime Default (Mouse)");
+				} else {
+					ImGui::Text("%s", settings.EnableWandPointing ? "User Override (Wand)" : "User Override (Mouse)");
+				}
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
@@ -3217,8 +3264,9 @@ void VR::SubmitOverlayFrame()
 		ImGuiIO& io = ImGui::GetIO();
 		const bool useCustomVRCursorDot = customVRCursorVisible;
 		const ImVec2 customCursorPos = customVRCursorPos;
+		const OverlayType customCursorOverlayType = customVRCursorOverlayType;
 
-		auto renderImGuiToTexture = [&](ID3D11RenderTargetView* targetRTV) {
+		auto renderImGuiToTexture = [&](ID3D11RenderTargetView* targetRTV, OverlayType targetOverlayType) {
 			if (!targetRTV) {
 				return;
 			}
@@ -3233,6 +3281,7 @@ void VR::SubmitOverlayFrame()
 			ImDrawData filteredDrawData;
 			ImDrawData* renderDrawData = FilterShaderCompilationWindowFromHMD(ImGui::GetDrawData(), filteredDrawData);
 			if (useCustomVRCursorDot &&
+				targetOverlayType == customCursorOverlayType &&
 				ShouldDrawCustomVRCursorDot(useCustomVRCursorDot, customCursorPos, io.DisplaySize) &&
 				io.Fonts &&
 				io.Fonts->IsBuilt()) {
@@ -3259,7 +3308,7 @@ void VR::SubmitOverlayFrame()
 			globals::d3d::context->OMSetRenderTargets(1, &oldRTV, nullptr);
 		};
 
-		renderImGuiToTexture(menuRTV.get());
+		renderImGuiToTexture(menuRTV.get(), OverlayType::HMD);
 
 		const bool controllerTextureUsedByIVROverlay = useIVROverlay && wantsControllerOverlay;
 		const bool controllerTextureUsedByInScene = useInSceneOverlay && wantsControllerOverlay;
@@ -3268,7 +3317,7 @@ void VR::SubmitOverlayFrame()
 			menuControllerRTV &&
 			(controllerTextureUsedByIVROverlay || controllerTextureUsedByInScene);
 		if (shouldRenderControllerTexture) {
-			renderImGuiToTexture(menuControllerRTV.get());
+			renderImGuiToTexture(menuControllerRTV.get(), OverlayType::Controller);
 
 			const bool controllerBeingDragged =
 				overlayDragState.dragging &&

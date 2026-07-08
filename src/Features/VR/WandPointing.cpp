@@ -20,9 +20,9 @@ namespace
 	};
 
 	constexpr uint32_t kWandCursorActiveFrames = 24;
-	constexpr float kWandActivePositionMotionThresholdSq = 0.0f;
+	constexpr float kWandActivePositionMotionThresholdSq = 0.0015f * 0.0015f;
 	constexpr float kWandIdlePositionMotionThresholdSq = 0.0075f * 0.0075f;
-	constexpr float kWandActiveDirectionMotionThreshold = 0.0f;
+	constexpr float kWandActiveDirectionMotionThreshold = 0.00002f;
 	constexpr float kWandIdleDirectionMotionThreshold = 0.00008f;
 	constexpr float kWandActiveScreenMotionThresholdSq = 2.0f * 2.0f;
 	constexpr float kWandIdleScreenMotionThresholdSq = 8.0f * 8.0f;
@@ -165,11 +165,13 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec
 	if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
 		if (ComputeWandIntersectionForOverlayType(OverlayType::HMD, controllerIndex, outUV)) {
 			intersected = true;
+			wandState.overlayType = OverlayType::HMD;
 		}
 	}
 	if (!intersected && (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both)) {
 		if (ComputeWandIntersectionForOverlayType(OverlayType::Controller, controllerIndex, outUV)) {
 			intersected = true;
+			wandState.overlayType = OverlayType::Controller;
 		}
 	}
 
@@ -184,25 +186,33 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec
 	return intersected;
 }
 
+ControllerDevice VR::GetWandPointingControllerDevice() const
+{
+	if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
+		return settings.VRMenuAttachController == ControllerDevice::Primary ?
+		           ControllerDevice::Secondary :
+		           ControllerDevice::Primary;
+	}
+
+	return ControllerDevice::Primary;
+}
+
+vr::TrackedDeviceIndex_t VR::GetWandPointingControllerIndex() const
+{
+	return Util::GetControllerIndexForDevice(GetWandPointingControllerDevice(), lastKnownLeftHandedMode);
+}
+
 void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 {
+	ImGuiIO& io = ImGui::GetIO();
+	io.WantSetMousePos = false;
+
 	if (!CanUseWandPointing() || !globals::menu || !globals::menu->IsEnabled)
 		return;
 
-	ImGuiIO& io = ImGui::GetIO();
 	wandState.isActivelyDrivingCursor = false;
 
-	vr::TrackedDeviceIndex_t pointingController = vr::k_unTrackedDeviceIndexInvalid;
-
-	if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
-		ControllerDevice oppositeController = (settings.VRMenuAttachController == ControllerDevice::Primary) ?
-		                                          ControllerDevice::Secondary :
-		                                          ControllerDevice::Primary;
-		pointingController = Util::GetControllerIndexForDevice(oppositeController, lastKnownLeftHandedMode);
-	} else {
-		pointingController = Util::GetControllerIndexForDevice(ControllerDevice::Primary, lastKnownLeftHandedMode);
-	}
-
+	const vr::TrackedDeviceIndex_t pointingController = GetWandPointingControllerIndex();
 	if (pointingController == vr::k_unTrackedDeviceIndexInvalid) {
 		wandState.isIntersecting = false;
 		return;
@@ -212,15 +222,7 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 	bool intersected = ComputeWandIntersection(pointingController, uv);
 	const WandPoseUpdateMode updateMode = GetWandPoseUpdateMode(a_forceCursorUpdate, pointingController, wandState.rayOrigin, wandState.rayDirection);
 	if (updateMode == WandPoseUpdateMode::None) {
-		if (g_hasPreviousWandScreenPos) {
-			wandState.isIntersecting = true;
-			io.MousePos = g_previousWandScreenPos;
-			io.AddMousePosEvent(g_previousWandScreenPos.x, g_previousWandScreenPos.y);
-			io.WantSetMousePos = true;
-		} else {
-			wandState.isIntersecting = false;
-			io.WantSetMousePos = false;
-		}
+		io.WantSetMousePos = false;
 		return;
 	}
 
@@ -235,8 +237,7 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 		const float screenMotionThresholdSq = a_forceCursorUpdate ?
 		                                          kWandActiveScreenMotionThresholdSq :
 		                                          kWandIdleScreenMotionThresholdSq;
-		if (g_hasPreviousWandScreenPos &&
-			g_previousWandController == pointingController) {
+		if (g_hasPreviousWandScreenPos) {
 			const float dx = screenX - g_previousWandScreenPos.x;
 			const float dy = screenY - g_previousWandScreenPos.y;
 			if ((dx * dx + dy * dy) <= screenMotionThresholdSq) {
@@ -250,12 +251,6 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 
 		io.MousePos = stableScreenPos;
 		io.AddMousePosEvent(stableScreenPos.x, stableScreenPos.y);
-		io.WantSetMousePos = true;
-	} else if (g_hasPreviousWandScreenPos) {
-		wandState.isIntersecting = true;
-		wandState.isActivelyDrivingCursor = updateMode == WandPoseUpdateMode::Active;
-		io.MousePos = g_previousWandScreenPos;
-		io.AddMousePosEvent(g_previousWandScreenPos.x, g_previousWandScreenPos.y);
 		io.WantSetMousePos = true;
 	} else {
 		wandState.isIntersecting = false;

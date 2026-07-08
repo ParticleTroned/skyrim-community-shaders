@@ -261,8 +261,9 @@ public:
 		bool KeepDesktopWindowFocusedForVRMenu = false;           ///< Keep the game window centered and foregrounded while the VR menu is open
 		bool StabilizeRenderScaleDesktopMirror = false;           ///< Blit render-scale output back to the desktop mirror when direct copy is incompatible
 
-		// Wand pointing settings
-		bool EnableWandPointing = true;  ///< Enable controller wand/ray-cast pointing (modern VR input)
+		// CS menu navigation settings
+		bool UseRuntimeDefaultMenuNavigation = true;  ///< Use runtime-based default navigation mode until the user selects a mode explicitly
+		bool EnableWandPointing = true;               ///< True uses wand/ray-cast navigation, false uses mouse/thumbstick navigation
 
 		// Visual customization
 		std::array<float, 4> dragHighlightColor = { 1.0f, 1.0f, 0.0f, 0.3f };  ///< RGBA color for drag highlight
@@ -367,12 +368,17 @@ public:
 	};
 	bool ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
 	bool ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV);
+	ControllerDevice GetWandPointingControllerDevice() const;
+	vr::TrackedDeviceIndex_t GetWandPointingControllerIndex() const;
 	void UpdateCursorFromWandPointing(bool a_forceCursorUpdate = false);
 	void ResetWandPointingRuntimeState();
 	void UpdateOverlayMenuStateFromInput();
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
 	void UpdateControllerState(const Menu::KeyEvent& event);
 	void ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
+	void ProcessThumbstickScrollMouseNavigation(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
+	void ProcessControllerInputForWandPointingPath(bool testMode, float mouseDeadzone, ImGuiIO& io);
+	void ProcessControllerInputForMouseNavigationPath(bool testMode, float mouseDeadzone, float mouseSpeed, ImGuiIO& io);
 	void ProcessControllerInputForImGui();
 	void ResetComboRecordingState();
 	void ReleaseMenuImGuiInputState();
@@ -571,6 +577,7 @@ public:
 
 	bool customVRCursorVisible = false;
 	ImVec2 customVRCursorPos = ImVec2(-FLT_MAX, -FLT_MAX);
+	OverlayType customVRCursorOverlayType = OverlayType::HMD;
 
 	struct InSceneResources
 	{
@@ -638,7 +645,7 @@ public:
 	void DetectOpenVRInfo();
 	bool IsOpenVRCompatible() const;
 	bool IsOpenCompositeRuntime() const { return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite; }
-	bool CanUseWandPointing() const { return settings.EnableWandPointing && !IsOpenCompositeRuntime(); }
+	bool CanUseWandPointing() const { return settings.UseRuntimeDefaultMenuNavigation ? !IsOpenCompositeRuntime() : settings.EnableWandPointing; }
 	void InitInSceneResources();
 	void EnsureInSceneOverlaySubmitCopyResources();
 	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);

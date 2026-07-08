@@ -583,7 +583,7 @@ void Deferred::DeferredPasses()
 	if (ssgi.loaded)
 		ssgi.DrawSSGI();
 	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
-	bool ssgi_hq_spec = ssgi.IsSpecularGIActive();
+	bool ssgi_hq_spec = ssgi.settings.Enabled && ssgi.IsSpecularGIActive();
 
 	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
 	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);

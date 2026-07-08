@@ -6,7 +6,9 @@
 
 #include "Deferred.h"
 #include "FoveatedCommon.h"
+#include "Globals.h"
 #include "LocationContext.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
@@ -67,6 +69,34 @@ namespace
 	int ClampResourceProfile(int a_profile)
 	{
 		return std::clamp(a_profile, ScreenSpaceGI::kResourceProfileFullGI, ScreenSpaceGI::kResourceProfileAOOnly);
+	}
+
+	void ClearScreenSpaceGIProfilerTimers()
+	{
+		if (globals::profiler) {
+			globals::profiler->ClearTimersForFeature("ScreenSpaceGI");
+		}
+	}
+
+	void SetScreenSpaceGIEnabled(ScreenSpaceGI::Settings& a_settings, bool a_enabled)
+	{
+		if (a_settings.Enabled == a_enabled)
+			return;
+
+		a_settings.Enabled = a_enabled;
+		if (!a_settings.Enabled) {
+			ClearScreenSpaceGIProfilerTimers();
+		}
+	}
+
+	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI::Settings& a_settings)
+	{
+		bool enabled = a_settings.Enabled;
+		if (!ImGui::Checkbox("Enable", &enabled))
+			return false;
+
+		SetScreenSpaceGIEnabled(a_settings, enabled);
+		return true;
 	}
 
 	bool IsSharedFoveatedMaskActive()
@@ -320,8 +350,12 @@ namespace
 
 void ScreenSpaceGI::RestoreDefaultSettings()
 {
+	const bool wasEnabled = settings.Enabled;
 	settings = {};
 	ApplyPlatformSettingOverrides(settings);
+	if (wasEnabled && !settings.Enabled) {
+		ClearScreenSpaceGIProfilerTimers();
+	}
 	recompileFlag = true;
 }
 
@@ -342,7 +376,7 @@ void ScreenSpaceGI::DrawSettings()
 	};
 
 	///////////////////////////////
-	ImGui::Checkbox("Enable", &settings.Enabled);
+	DrawScreenSpaceGIEnabledCheckbox(settings);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
 	}
@@ -792,7 +826,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (!ShadersOK())
 		Util::Text::Error("Compute shaders failed to compile!");
 
-	ImGui::Checkbox("Enable", &settings.Enabled);
+	DrawScreenSpaceGIEnabledCheckbox(settings);
 
 	const int previousResourceProfile = settings.ResourceProfile;
 	{
@@ -852,7 +886,7 @@ void ScreenSpaceGI::DrawEssentialSettings()
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
 
-	ImGui::Checkbox("Enable", &settings.Enabled);
+	DrawScreenSpaceGIEnabledCheckbox(settings);
 }
 
 json ScreenSpaceGI::CapturePerformanceSettingsState() const
@@ -863,7 +897,7 @@ json ScreenSpaceGI::CapturePerformanceSettingsState() const
 void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (!a_enabled) {
-		settings.Enabled = false;
+		SetScreenSpaceGIEnabled(settings, false);
 		return;
 	}
 
@@ -888,6 +922,7 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 	if (!a_state.is_object())
 		return;
 
+	const bool wasEnabled = settings.Enabled;
 	settings = a_state.get<Settings>();
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
@@ -896,6 +931,9 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 		ResetVRSpecificSettings(settings);
 	else
 		SyncResolvedSharedMaskScale(settings);
+	if (wasEnabled && !settings.Enabled) {
+		ClearScreenSpaceGIProfilerTimers();
+	}
 }
 
 void ScreenSpaceGI::LoadSettings(json& o_json)

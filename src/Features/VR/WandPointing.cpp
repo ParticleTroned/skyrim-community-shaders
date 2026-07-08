@@ -186,7 +186,7 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec
 
 void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 {
-	if (!settings.EnableWandPointing || !globals::menu || !globals::menu->IsEnabled)
+	if (!CanUseWandPointing() || !globals::menu || !globals::menu->IsEnabled)
 		return;
 
 	ImGuiIO& io = ImGui::GetIO();

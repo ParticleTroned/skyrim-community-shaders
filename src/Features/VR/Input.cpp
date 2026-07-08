@@ -465,8 +465,20 @@ void VR::ProcessControllerInputForImGui()
 		gDesktopCursorSticky = false;
 	}
 
+	const bool useWandPointing = CanUseWandPointing() && !testMode;
+	const bool wandCursorStateActive =
+		gCursorOwner == CursorOwner::Wand ||
+		gHasLastControllerCursorPos ||
+		gControllerCursorOwnershipFramesRemaining > 0 ||
+		wandState.isIntersecting ||
+		wandState.isActivelyDrivingCursor;
+	if (!useWandPointing && wandCursorStateActive) {
+		ResetWandPointingRuntimeState();
+		ResetCursorOwnershipState();
+	}
+
 	bool wandHandledCursor = false;
-	if (!testMode && settings.EnableWandPointing) {
+	if (useWandPointing) {
 		UpdateCursorFromWandPointing(controllerCursorInteractionActive);
 		wandHandledCursor = wandState.isIntersecting;
 		const bool canAdoptWandCursor =

@@ -637,6 +637,8 @@ public:
 
 	void DetectOpenVRInfo();
 	bool IsOpenVRCompatible() const;
+	bool IsOpenCompositeRuntime() const { return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite; }
+	bool CanUseWandPointing() const { return settings.EnableWandPointing && !IsOpenCompositeRuntime(); }
 	void InitInSceneResources();
 	void EnsureInSceneOverlaySubmitCopyResources();
 	void RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, const vr::VRTextureBounds_t* bounds, ID3D11RenderTargetView* targetRTV = nullptr);

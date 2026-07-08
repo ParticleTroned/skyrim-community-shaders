@@ -1586,11 +1586,22 @@ namespace
 		VR::Settings& settings = vr.settings;
 		if (ImGui::CollapsingHeader("Input Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 			// Wand pointing settings
+			const bool wandPointingBlockedByRuntime = vr.IsOpenCompositeRuntime();
+			if (wandPointingBlockedByRuntime) {
+				ImGui::BeginDisabled();
+			}
 			if (ImGui::Checkbox("Enable Wand Pointing", &settings.EnableWandPointing)) {
 				vr.ResetWandPointingRuntimeState();
 			}
+			if (wandPointingBlockedByRuntime) {
+				ImGui::EndDisabled();
+			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Use controller ray-casting to point at UI elements");
+				if (wandPointingBlockedByRuntime) {
+					ImGui::Text("Disabled for OpenComposite runtime. Use desktop cursor for menu interaction.");
+				} else {
+					ImGui::Text("Use controller ray-casting to point at UI elements");
+				}
 			}
 			ImGui::Separator();
 			ImGui::Text("Joystick Settings");
@@ -2572,9 +2583,15 @@ namespace
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
-				ImGui::Text("Wand Pointing Enabled");
+				ImGui::Text("Wand Pointing Requested");
 				ImGui::TableSetColumnIndex(1);
 				ImGui::Text("%s", settings.EnableWandPointing ? "Yes" : "No");
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("Wand Pointing Active");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%s", vr.CanUseWandPointing() ? "Yes" : "No");
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);

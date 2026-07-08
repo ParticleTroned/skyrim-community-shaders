@@ -68,7 +68,6 @@ namespace
 		const ImVec4 background = palette.Background;
 		const float backgroundAlpha = background.w;
 		const float frameAlpha = palette.FrameBorder.w;
-		const float childAlpha = std::clamp(backgroundAlpha - 0.08f, 0.18f, 0.34f);
 		const float controlAlpha = std::clamp(frameAlpha, backgroundAlpha + 0.12f, 0.72f);
 		const float elevatedAlpha = std::clamp(frameAlpha + 0.06f, backgroundAlpha + 0.18f, 0.78f);
 		const float popupAlpha = std::clamp(frameAlpha + 0.16f, backgroundAlpha + 0.28f, 0.84f);
@@ -91,7 +90,9 @@ namespace
 		const ImVec4 disabled = status.Disable;
 
 		colors[ImGuiCol_WindowBg] = palette.Background;
-		colors[ImGuiCol_ChildBg] = Lift(background, 0.006f, childAlpha);
+		// Keep child panels visually flush with the main surface instead of nesting them
+		// on a second darker slab. Borders/separators still provide the structure.
+		colors[ImGuiCol_ChildBg] = background;
 		colors[ImGuiCol_PopupBg] = popupSurface;
 		colors[ImGuiCol_Text] = palette.Text;
 		colors[ImGuiCol_TextDisabled] = WithAlpha(disabled, DISABLED_TEXT_ALPHA);
@@ -897,7 +898,13 @@ float ThemeManager::ResolveFontSize(const Menu& menu)
 		uint32_t canvasW = 0;
 		uint32_t canvasH = 0;
 		if (globals::features::vr.GetMenuCanvasSize(canvasW, canvasH)) {
-			dynamicSize = static_cast<float>(canvasH) * Constants::DEFAULT_FONT_RATIO;
+			// The HMD canvas can be intentionally taller than the logical menu layout to
+			// improve in-headset framing. Keep font sizing tied to the base menu aspect
+			// so typography does not become vertically oversized in HMD mode.
+			const float logicalMenuHeight = std::min(
+				static_cast<float>(canvasH),
+				static_cast<float>(canvasW) * VR::Config::kHMDMenuAspect);
+			dynamicSize = logicalMenuHeight * Constants::DEFAULT_FONT_RATIO;
 		} else if (globals::state && globals::state->screenSize.y > 0) {
 			dynamicSize = globals::state->screenSize.y * Constants::DEFAULT_FONT_RATIO;
 		} else {

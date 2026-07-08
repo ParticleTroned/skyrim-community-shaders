@@ -190,13 +190,18 @@ namespace
 		ImVec2 size;
 	};
 
+	float GetVRMenuSafePadding()
+	{
+		return std::max(2.0f, ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale() * 0.5f);
+	}
+
 	float GetVRSettingsWindowAspect()
 	{
 		switch (globals::features::vr.settings.attachMode) {
 		case VR::Settings::OverlayAttachMode::ControllerOnly:
 			return VR::Config::kOverlayAspect;
 		default:
-			return VR::Config::kHMDOverlayAspect;
+			return VR::Config::kHMDMenuAspect;
 		}
 	}
 
@@ -239,10 +244,20 @@ namespace
 
 		const ImVec2 viewportSize = viewport->Size;
 		if (REL::Module::IsVR()) {
-			ImVec2 availableMin = viewport->WorkPos;
+			const float safePadding = GetVRMenuSafePadding();
+			ImVec2 availableMin(
+				viewport->WorkPos.x + safePadding,
+				viewport->WorkPos.y + safePadding);
 			ImVec2 availableMax(
-				viewport->WorkPos.x + viewport->WorkSize.x,
-				viewport->WorkPos.y + viewport->WorkSize.y);
+				viewport->WorkPos.x + viewport->WorkSize.x - safePadding,
+				viewport->WorkPos.y + viewport->WorkSize.y - safePadding);
+			if (availableMax.x <= availableMin.x || availableMax.y <= availableMin.y) {
+				return {
+					.center = ImVec2(0.0f, 0.0f),
+					.size = ImVec2(1.0f, 1.0f)
+				};
+			}
+
 			ExcludeShaderCompilationWindowFromTop(availableMin, availableMax);
 			availableMin.y = std::min(availableMin.y, availableMax.y);
 
@@ -776,6 +791,7 @@ void Menu::DrawSettings()
 
 	// Check if this will be docked (we need to peek at the docking state)
 	static bool wasDocked = false;
+	static bool steamVRUndockedFirstOpenLayoutApplied = false;
 	bool willBeDocked = wasDocked;
 
 	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
@@ -806,6 +822,17 @@ void Menu::DrawSettings()
 		}
 	}
 
+	// SteamVR's undocked first open should start from the current default centered
+	// layout instead of inheriting stale saved placement from an older layout.
+	const bool forceSteamVRFirstUndockedLayout =
+		useSteamVRWindowControls &&
+		!willBeDocked &&
+		!steamVRUndockedFirstOpenLayoutApplied;
+	if (forceSteamVRFirstUndockedLayout) {
+		windowPos = defaultWindowPos;
+		windowSizeForOverlap = defaultWindowSize;
+	}
+
 	static bool menuWasOffsetForShaderCompile = false;
 	static ImVec2 preShaderCompileWindowPos;
 	bool restoreAfterShaderCompile = false;
@@ -827,14 +854,17 @@ void Menu::DrawSettings()
 		menuWasOffsetForShaderCompile = false;
 	}
 
-	const auto windowPosCond = (autoOffsetForShaderCompile || restoreAfterShaderCompile) ? ImGuiCond_Always : layoutCond;
+	const auto windowPosCond = (autoOffsetForShaderCompile || restoreAfterShaderCompile || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowPos(windowPos, windowPosCond, centeredPivot);
-	const auto windowSizeCond = repairSteamVRLegacyWindowSize ? ImGuiCond_Always : layoutCond;
+	const auto windowSizeCond = (repairSteamVRLegacyWindowSize || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowSize(defaultWindowSize, windowSizeCond);
+	if (forceSteamVRFirstUndockedLayout) {
+		steamVRUndockedFirstOpenLayoutApplied = true;
+	}
 	resetLayout = false;
 
 	// Determine window flags based on docking state
-	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
+	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 	const bool steamVRUndockedWindow = useSteamVRWindowControls && !willBeDocked;
 
 	// Only hide title bar when not docked
@@ -847,6 +877,9 @@ void Menu::DrawSettings()
 
 	ImGui::Begin(title.c_str(), &IsEnabled, windowFlags);
 	{
+		ImGui::SetScrollX(0.0f);
+		ImGui::SetScrollY(0.0f);
+
 		// Update docking state tracking
 		const bool actualDocked = ImGui::IsWindowDocked();
 		const bool isDocked = actualDocked;

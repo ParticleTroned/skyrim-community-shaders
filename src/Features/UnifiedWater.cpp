@@ -1,6 +1,7 @@
 ﻿#include "UnifiedWater.h"
 
 #include "Menu.h"
+#include "Menu/OverlayRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "Util.h"
 
@@ -397,7 +398,10 @@ void UnifiedWater::DrawOverlay()
 		return;
 
 	const float scale = Util::GetUIScale();
-	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	if (REL::Module::IsVR()) {
+		pos = OverlayRenderer::GetDefaultVRLeftAnchorX(OverlayRenderer::GetDefaultVRSettingsWindowSize(false).x);
+	}
 	const auto& style = ImGui::GetStyle();
 
 	// Stack below shader compilation window if it's visible this frame

@@ -198,6 +198,15 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 			"Shaders still compile; only the startup wait is skipped.\n"
 			"Takes effect on the next launch. Default off.");
 	}
+
+	if (globals::game::isVR) {
+		ImGui::Checkbox("Hide Compilation HUD in VR", &menuSettings.HideCompilationHUDInVR);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Suppresses the routine background shader compilation overlay in VR.\n"
+				"Blocking foreground compilation, failures, and warning states still show.");
+		}
+	}
 }
 
 void AdvancedSettingsRenderer::RenderShaderCacheControls()

@@ -412,6 +412,7 @@ public:
 		bool FirstTimeSetupCompleted = false;                                                                          // Track if first-time setup has been completed
 		bool SkipClearCacheConfirmation = false;                                                                       // Skip confirmation dialog when clearing shader cache
 		bool BackgroundShaderCompilationOnBoot = false;                                                                // Load the menu immediately and compile shaders in the background on boot
+		bool HideCompilationHUDInVR = false;                                                                           // Suppress routine background shader compilation HUD in VR
 		bool AutoHideFeatureList = false;                                                                              // Auto-hide left feature list panel, show on hover
 		bool SkipConstraintWarning = false;                                                                            // Skip popup when a setting change creates new constraints
 		int PerformanceUiMode = 0;                                                                                     // 0 = Essentials, 1 = Advanced

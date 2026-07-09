@@ -657,7 +657,8 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 
 	const float scale = Util::GetUIScale();
 	float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
-	if (REL::Module::IsVR()) {
+	const bool isVR = REL::Module::IsVR();
+	if (isVR) {
 		pos = GetDefaultVRLeftAnchorX(GetDefaultVRSettingsWindowSize(false).x);
 	}
 
@@ -665,7 +666,8 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	uint64_t compiledShaders = shaderCache->GetCompletedTasks();
 
 	auto state = globals::state;
-	auto& themeSettings = Menu::GetSingleton()->GetTheme();
+	auto* menu = Menu::GetSingleton();
+	auto& themeSettings = menu->GetTheme();
 	auto* renderDoc = RenderDoc::GetSingleton();
 	bool renderDocAvailable = renderDoc->IsAvailable();
 	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
@@ -678,18 +680,37 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", compiledShaders, totalShaders, 100 * percent);
 
 	if (shaderCache->IsCompiling()) {
+		const bool hasFeatureSetRevertPending = shaderCache->HasFeatureSetRevertPending();
+		const bool hasFeatureSetChanges = shaderCache->HasFeatureSetChanges();
+		const bool isDiskCacheHeld = shaderCache->IsDiskCacheHeld();
+		const bool hasFeatureIssues = FeatureIssues::HasFeatureIssues();
+		const bool hideRoutineHud = isVR && backgroundCompilation && menu->GetSettings().HideCompilationHUDInVR;
+		const bool hasExceptionalInfo =
+			hasFeatureSetRevertPending ||
+			hasFeatureSetChanges ||
+			isDiskCacheHeld ||
+			hasFeatureIssues ||
+			state->IsDeveloperMode() ||
+			(failed && !hide) ||
+			renderDocAvailable;
+
+		if (hideRoutineHud && !hasExceptionalInfo)
+			return;
+
 		ImGui::SetNextWindowPos(ImVec2(pos, pos));
 		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::End();
 			return;
 		}
-		ImGui::TextUnformatted(progressTitle.c_str());
-		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
-		if (shaderCache->HasFeatureSetRevertPending()) {
+		if (!hideRoutineHud) {
+			ImGui::TextUnformatted(progressTitle.c_str());
+			ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
+		}
+		if (hasFeatureSetRevertPending) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
 				"Previous cache restored.\n"
 				"Restart to use it.");
-		} else if (shaderCache->HasFeatureSetChanges()) {
+		} else if (hasFeatureSetChanges) {
 			if (shaderCache->HasFeatureSetCacheBackup()) {
 				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
 					"Feature setup changed. Building a new shader cache for this setup.\n"
@@ -699,12 +720,12 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 					"Feature setup changed. Building shaders in memory until the cache can be rebuilt.\n"
 					"Previous cache is not available for restore.");
 			}
-		} else if (shaderCache->IsDiskCacheHeld()) {
+		} else if (isDiskCacheHeld) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
 				"Saved shader cache cannot be used.\n"
 				"A required feature is missing or failed to load.");
 		}
-		if (FeatureIssues::HasFeatureIssues()) {
+		if (hasFeatureIssues) {
 			const size_t issueCount = FeatureIssues::GetFeatureIssues().size();
 			const auto issueMessage = fmt::format(
 				"WARNING: {} feature{} failed to load (bad install or version mismatch).\n"
@@ -734,7 +755,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		if (!backgroundCompilation && shaderCache->menuLoaded.load(std::memory_order_relaxed)) {
 			auto skipShadersText = fmt::format(
 				"Press {} to proceed without completing shader compilation. ",
-				keyIdToString(Menu::GetSingleton()->GetSettings().SkipCompilationKey));
+				keyIdToString(menu->GetSettings().SkipCompilationKey));
 			ImGui::TextUnformatted(skipShadersText.c_str());
 			ImGui::TextUnformatted("WARNING: Uncompiled shaders will have visual errors or cause stuttering when loading.");
 		}

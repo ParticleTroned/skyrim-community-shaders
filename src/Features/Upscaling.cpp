@@ -5025,6 +5025,25 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	return ret;
 }
 
+namespace
+{
+	void DrawVRRenderScaleModeTooltip()
+	{
+		ImGui::TextUnformatted("Experimental. Can provide a strong performance boost, but it is not fully tested in all situations.");
+		ImGui::TextUnformatted("DLSS/FSR VR only.");
+		ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
+		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
+	}
+
+	void DrawVRRenderScaleModeExperimentalNote()
+	{
+		ImGui::TextDisabled("(Experimental)");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			DrawVRRenderScaleModeTooltip();
+		}
+	}
+}
+
 void Upscaling::DrawSettings()
 {
 	const uint64_t resourceSettingsKeyBefore = BuildUpscalingResourceMutationSettingsKey(settings);
@@ -5217,10 +5236,9 @@ void Upscaling::DrawSettings()
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("DLSS/FSR VR only.");
-			ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
-			ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
+			DrawVRRenderScaleModeTooltip();
 		}
+		DrawVRRenderScaleModeExperimentalNote();
 		if (perfMode.HasRestartRequiredChange()) {
 			Util::Text::Warning(
 				perfModeRelatchPending ?
@@ -5806,6 +5824,10 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 					"performance tuning render-scale mode change");
 			}
 		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			DrawVRRenderScaleModeTooltip();
+		}
+		DrawVRRenderScaleModeExperimentalNote();
 
 		if (a_advanced) {
 			SanitizeFoveatedSettings(settings);

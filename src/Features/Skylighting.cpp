@@ -661,6 +661,10 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 {
 	DrawSkylightingPerformancePresetButtons(*this, "SkylightingPerformancePresetButtons");
 
+	if (!a_advanced) {
+		return;
+	}
+
 	settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 
 	int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
@@ -682,10 +686,6 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 		ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 	}
 	ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
-
-	if (!a_advanced) {
-		return;
-	}
 
 	ImGui::SeparatorText("Update Work");
 	DrawSkylightingUpdatePerformanceSettings(*this);

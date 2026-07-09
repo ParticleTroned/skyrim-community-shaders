@@ -67,7 +67,7 @@ namespace
 	constexpr float POST_RAIN_PUDDLE_SHINE_MAX = 5.0f;
 	constexpr float RAIN_REFLECTION_BALANCE_MIN = 0.0f;
 	constexpr float RAIN_REFLECTION_BALANCE_MAX = 1.0f;
-	constexpr float DEFAULT_RAIN_REFLECTION_BALANCE = 0.5f;
+	constexpr float DEFAULT_RAIN_REFLECTION_BALANCE = 0.25f;
 	constexpr float PUDDLE_SKY_REFLECTION_SCALE_MIN = 0.0f;
 	constexpr float PUDDLE_SKY_REFLECTION_SCALE_MAX = 1.0f;
 	constexpr float DEFAULT_PUDDLE_SKY_REFLECTION_SCALE = 0.5f;
@@ -135,6 +135,8 @@ namespace
 	{
 		return std::strcmp(preset.name, "Hoshipa") == 0;
 	}
+
+	constexpr float WETTERNESS_PROFILE_RAIN_REFLECTION_BALANCE = DEFAULT_RAIN_REFLECTION_BALANCE;
 
 	constexpr std::array<WetternessUiPresetDefinition, 4> WETTERNESS_UI_PRESETS = { { { "Performance",
 																						  "Cheapest wetness profile. Keeps the wet-ground look, but uses shorter ranges, sparser raindrops, and shorter splash/ripple lifetimes.",
@@ -719,6 +721,7 @@ namespace
 		settings.SplashesLifetime = preset.splashesLifetime;
 		settings.RippleLifetime = preset.rippleLifetime;
 		state.wetnessDistanceFadeRange = preset.wetnessFadeRange;
+		state.rainReflectionBalance = WETTERNESS_PROFILE_RAIN_REFLECTION_BALANCE;
 
 		if (IsHoshipaWetternessPreset(preset)) {
 			// Hoshipa preset: keep Quality-like baseline while applying the requested
@@ -733,7 +736,17 @@ namespace
 			state.modernWetIndirectSpecularScale = 1.0f;
 		}
 
-		SanitizePersistentReflectionSettings(settings, state.modernWetIndirectSpecularScale, state.legacyWetIndirectSpecularScale);
+		SanitizePersistentUiState(
+			settings,
+			state.modernWetIndirectSpecularScale,
+			state.legacyWetIndirectSpecularScale,
+			state.puddleDryingHours,
+			state.puddleLayout,
+			state.rainReflectionBalance,
+			state.puddleSkyReflectionScale,
+			state.postRainWaterClarity,
+			state.shorePersistentDarkeningStrength,
+			state.wetnessDistanceFadeRange);
 		return state;
 	}
 

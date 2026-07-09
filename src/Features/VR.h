@@ -371,6 +371,7 @@ public:
 	ControllerDevice GetWandPointingControllerDevice() const;
 	vr::TrackedDeviceIndex_t GetWandPointingControllerIndex() const;
 	void UpdateCursorFromWandPointing(bool a_forceCursorUpdate = false);
+	bool UpdateWandPoseOwnershipSignal();
 	void ResetWandPointingRuntimeState();
 	void UpdateOverlayMenuStateFromInput();
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);

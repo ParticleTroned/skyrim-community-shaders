@@ -36,8 +36,10 @@ namespace
 	CursorOwner gCursorOwner = CursorOwner::Desktop;
 	ImVec2 gLastDesktopMousePos = ImVec2(0.0f, 0.0f);
 	ImVec2 gLastControllerCursorPos = ImVec2(0.0f, 0.0f);
+	ImVec2 gMouseNavigationCursorPos = ImVec2(0.0f, 0.0f);
 	bool gHasLastDesktopMousePos = false;
 	bool gHasLastControllerCursorPos = false;
+	bool gHasMouseNavigationCursorPos = false;
 	bool gHasLastMenuNavigationMode = false;
 	bool gLastMenuNavigationUsesWand = false;
 	bool gWandClaimedCursorThisFrame = false;
@@ -79,20 +81,28 @@ namespace
 		           static_cast<size_t>(RE::ControllerRole::Secondary);
 	}
 
-	void ApplyThumbstickCursor(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, float mouseSpeed, ImGuiIO& io)
+	bool ApplyThumbstickCursorDelta(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, float mouseSpeed, ImVec2& mousePos, const ImVec2& displaySize)
 	{
 		float thumbstickX = controllerState.thumbsticks[thumbstickIndex].x;
 		float thumbstickY = controllerState.thumbsticks[thumbstickIndex].y;
 		if (std::abs(thumbstickX) <= deadzone && std::abs(thumbstickY) <= deadzone)
-			return;
+			return false;
 
+		mousePos.x += thumbstickX * mouseSpeed;
+		mousePos.y -= thumbstickY * mouseSpeed;
+		mousePos.x = std::clamp(mousePos.x, 0.0f, displaySize.x);
+		mousePos.y = std::clamp(mousePos.y, 0.0f, displaySize.y);
+		return true;
+	}
+
+	void ApplyThumbstickCursor(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, float mouseSpeed, ImGuiIO& io)
+	{
 		ImVec2 mousePos = HasUsableCursorPos(io.MousePos) ?
 		                      io.MousePos :
 		                      ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-		mousePos.x += thumbstickX * mouseSpeed;
-		mousePos.y -= thumbstickY * mouseSpeed;
-		mousePos.x = std::clamp(mousePos.x, 0.0f, io.DisplaySize.x);
-		mousePos.y = std::clamp(mousePos.y, 0.0f, io.DisplaySize.y);
+		if (!ApplyThumbstickCursorDelta(controllerState, thumbstickIndex, deadzone, mouseSpeed, mousePos, io.DisplaySize))
+			return;
+
 		io.MousePos = mousePos;
 		io.AddMousePosEvent(mousePos.x, mousePos.y);
 		io.MouseDrawCursor = true;
@@ -104,20 +114,25 @@ namespace
 		gCursorOwner = CursorOwner::Desktop;
 		gLastDesktopMousePos = ImVec2(0.0f, 0.0f);
 		gLastControllerCursorPos = ImVec2(0.0f, 0.0f);
+		gMouseNavigationCursorPos = ImVec2(0.0f, 0.0f);
 		gHasLastDesktopMousePos = false;
 		gHasLastControllerCursorPos = false;
+		gHasMouseNavigationCursorPos = false;
 		gWandClaimedCursorThisFrame = false;
 	}
 
-	void UpdateMenuNavigationPathState(bool a_useWandNavigation)
+	bool UpdateMenuNavigationPathState(bool a_useWandNavigation)
 	{
-		if (!gHasLastMenuNavigationMode || gLastMenuNavigationUsesWand != a_useWandNavigation) {
+		const bool changed = !gHasLastMenuNavigationMode || gLastMenuNavigationUsesWand != a_useWandNavigation;
+		if (changed) {
 			gVRScrollAccums.clear();
+			ResetVRImGuiButtonState();
 			ResetCursorOwnershipState();
 		}
 
 		gHasLastMenuNavigationMode = true;
 		gLastMenuNavigationUsesWand = a_useWandNavigation;
+		return changed;
 	}
 }
 
@@ -650,6 +665,56 @@ void VR::ProcessControllerInputForMouseNavigationPath(bool testMode, float mouse
 {
 	wandState.isIntersecting = false;
 	wandState.isActivelyDrivingCursor = false;
+	gLastControllerCursorPos = ImVec2(0.0f, 0.0f);
+	gHasLastControllerCursorPos = false;
+	gWandClaimedCursorThisFrame = false;
+	io.MouseDrawCursor = false;
+
+	const ImVec2 desktopBaselineMousePos = io.MousePos;
+	const bool desktopCursorUsable = HasUsableCursorPos(desktopBaselineMousePos);
+	bool desktopMouseMoved = false;
+	bool desktopMouseClicked = false;
+	bool controllerMouseClicked = false;
+	if (desktopCursorUsable && gHasLastDesktopMousePos) {
+		const float dx = desktopBaselineMousePos.x - gLastDesktopMousePos.x;
+		const float dy = desktopBaselineMousePos.y - gLastDesktopMousePos.y;
+		desktopMouseMoved = (dx * dx + dy * dy) > kDesktopCursorMotionThresholdSq;
+	}
+	for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
+		const bool mouseButtonDown = io.MouseDown[button];
+		if (desktopCursorUsable &&
+			mouseButtonDown &&
+			!gLastObservedMouseButtonDown[button] &&
+			!gVRMouseButtonDown[button]) {
+			desktopMouseClicked = true;
+		}
+		if (gVRMouseButtonDown[button]) {
+			controllerMouseClicked = true;
+		}
+		gLastObservedMouseButtonDown[button] = mouseButtonDown;
+	}
+	if (desktopCursorUsable) {
+		gLastDesktopMousePos = desktopBaselineMousePos;
+		gHasLastDesktopMousePos = true;
+	} else {
+		gHasLastDesktopMousePos = false;
+	}
+	if (desktopMouseMoved || desktopMouseClicked) {
+		gCursorOwner = CursorOwner::Desktop;
+	}
+	if ((!testMode && UpdateWandPoseOwnershipSignal()) || controllerMouseClicked) {
+		gCursorOwner = CursorOwner::Wand;
+	}
+
+	if (!gHasMouseNavigationCursorPos || !HasUsableCursorPos(gMouseNavigationCursorPos)) {
+		gMouseNavigationCursorPos = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+		gHasMouseNavigationCursorPos = true;
+		if (!desktopMouseMoved && !desktopMouseClicked) {
+			gCursorOwner = CursorOwner::Wand;
+		}
+	} else {
+		gMouseNavigationCursorPos = ClampCursorToDisplay(gMouseNavigationCursorPos, io.DisplaySize);
+	}
 
 	if (!testMode && !overlayDragState.dragging) {
 		bool useAttachedControllerForCursor = (settings.attachMode == VR::Settings::OverlayAttachMode::ControllerOnly ||
@@ -673,21 +738,34 @@ void VR::ProcessControllerInputForMouseNavigationPath(bool testMode, float mouse
 
 		if (cursorController) {
 			const size_t thumbstickIndex = GetThumbstickIndexForController(cursorController, primaryControllerState);
-			ApplyThumbstickCursor(*cursorController, thumbstickIndex, mouseDeadzone, mouseSpeed, io);
+			if (ApplyThumbstickCursorDelta(*cursorController, thumbstickIndex, mouseDeadzone, mouseSpeed, gMouseNavigationCursorPos, io.DisplaySize)) {
+				gCursorOwner = CursorOwner::Wand;
+			}
 		}
 
 		if (scrollController) {
 			const size_t thumbstickIndex = GetThumbstickIndexForController(scrollController, primaryControllerState);
+			if (IsThumbstickActive(*scrollController, thumbstickIndex, mouseDeadzone)) {
+				gCursorOwner = CursorOwner::Wand;
+			}
 			ProcessThumbstickScrollMouseNavigation(*scrollController, thumbstickIndex, mouseDeadzone, io);
 		}
 	}
 
+	if (gCursorOwner == CursorOwner::Desktop && desktopCursorUsable) {
+		gMouseNavigationCursorPos = ClampCursorToDisplay(desktopBaselineMousePos, io.DisplaySize);
+	}
+
 	// The VR menu renderer suppresses ImGui's native mouse cursor in the HMD pass,
 	// so the mouse-navigation path still needs to surface its resolved cursor position here.
-	if (HasUsableCursorPos(io.MousePos)) {
-		const ImVec2 mouseCursorPos = ClampCursorToDisplay(io.MousePos, io.DisplaySize);
+	if (HasUsableCursorPos(gMouseNavigationCursorPos)) {
+		const ImVec2 mouseCursorPos = ClampCursorToDisplay(gMouseNavigationCursorPos, io.DisplaySize);
 		io.MousePos = mouseCursorPos;
 		io.AddMousePosEvent(mouseCursorPos.x, mouseCursorPos.y);
+		io.MouseDrawCursor = false;
+		io.WantSetMousePos = false;
+		gMouseNavigationCursorPos = mouseCursorPos;
+		gHasMouseNavigationCursorPos = true;
 		customVRCursorVisible = true;
 		customVRCursorPos = mouseCursorPos;
 		customVRCursorOverlayType = settings.attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
@@ -711,7 +789,15 @@ void VR::ProcessControllerInputForImGui()
 	customVRCursorOverlayType = OverlayType::HMD;
 
 	const bool useWandNavigation = CanUseWandPointing();
-	UpdateMenuNavigationPathState(useWandNavigation);
+	const bool navigationModeChanged = UpdateMenuNavigationPathState(useWandNavigation);
+	if (navigationModeChanged) {
+		for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
+			io.AddMouseButtonEvent(button, false);
+		}
+		if (!useWandNavigation) {
+			ResetWandPointingRuntimeState();
+		}
+	}
 
 	if (useWandNavigation) {
 		ProcessControllerInputForWandPointingPath(testMode, mouseDeadzone, io);

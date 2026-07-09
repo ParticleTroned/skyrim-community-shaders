@@ -85,17 +85,28 @@ namespace
 		g_hasPreviousWandRay = false;
 		g_hasPreviousWandScreenPos = false;
 	}
+
+	bool TryGetControllerPointingRay(vr::TrackedDeviceIndex_t a_controllerIndex, Vector3& a_rayOrigin, Vector3& a_rayDirection)
+	{
+		float controllerM[3][4];
+		if (!Util::GetControllerWorldMatrix(a_controllerIndex, controllerM)) {
+			return false;
+		}
+
+		Matrix controllerWorld = Util::HmdMatrix34ToMatrix(Util::Float3x4ToHmdMatrix34(controllerM));
+		a_rayOrigin = controllerWorld.Translation();
+		a_rayDirection = controllerWorld.Forward();
+		return true;
+	}
 }
 
 bool VR::ComputeWandIntersectionForOverlayType(OverlayType type, vr::TrackedDeviceIndex_t controllerIndex, ImVec2& outUV)
 {
-	float controllerM[3][4];
-	if (!Util::GetControllerWorldMatrix(controllerIndex, controllerM)) {
+	Vector3 rayOrigin = Vector3::Zero;
+	Vector3 rayDir = Vector3::Zero;
+	if (!TryGetControllerPointingRay(controllerIndex, rayOrigin, rayDir)) {
 		return false;
 	}
-	Matrix controllerWorld = Util::HmdMatrix34ToMatrix(Util::Float3x4ToHmdMatrix34(controllerM));
-	Vector3 rayOrigin = controllerWorld.Translation();
-	Vector3 rayDir = controllerWorld.Forward();
 
 	// Update debug state
 	wandState.rayOrigin = rayOrigin;
@@ -269,6 +280,32 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 		wandState.isIntersecting = false;
 		io.WantSetMousePos = false;
 	}
+}
+
+bool VR::UpdateWandPoseOwnershipSignal()
+{
+	const vr::TrackedDeviceIndex_t pointingController = GetWandPointingControllerIndex();
+	if (pointingController == vr::k_unTrackedDeviceIndexInvalid) {
+		wandState.isIntersecting = false;
+		wandState.isActivelyDrivingCursor = false;
+		return false;
+	}
+
+	Vector3 rayOrigin = Vector3::Zero;
+	Vector3 rayDir = Vector3::Zero;
+	if (!TryGetControllerPointingRay(pointingController, rayOrigin, rayDir)) {
+		wandState.isIntersecting = false;
+		wandState.isActivelyDrivingCursor = false;
+		return false;
+	}
+
+	wandState.rayOrigin = rayOrigin;
+	wandState.rayDirection = rayDir;
+	const bool hadPreviousWandRay = g_hasPreviousWandRay && g_previousWandController == pointingController;
+	const WandPoseUpdateMode updateMode = GetWandPoseUpdateMode(false, pointingController, rayOrigin, rayDir);
+	wandState.isIntersecting = false;
+	wandState.isActivelyDrivingCursor = false;
+	return hadPreviousWandRay && updateMode == WandPoseUpdateMode::Active;
 }
 
 void VR::ResetWandPointingRuntimeState()

@@ -33,7 +33,7 @@ public:
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override;
@@ -71,6 +71,7 @@ public:
 		float MinSpecularVisibility = 0.1f;
 		float ProbeFieldSize = kDefaultProbeFieldSize;  // XY probe field size in world units
 		uint ProbeGridQuality = 1;                      // 0: performance, 1: balanced, 2: quality, 3: ultra quality, 4: hoshipa
+		bool EnableSkylighting = true;
 		bool EnableIncrementalProbeUpdates = true;
 		uint StableSliceCount = 11;
 		bool EnableReducedUpdateFrequency = true;
@@ -88,7 +89,7 @@ public:
 		float3 PosOffset;  // cell origin in camera model space
 		uint FastSamplingMode;
 		uint ArrayOrigin[3];  // xyz: array origin
-		uint _pad0;
+		uint Enabled;
 		int ValidMargin[4];
 		uint ArrayDims[3];
 		float ProbeFieldSize;
@@ -101,6 +102,7 @@ public:
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
+	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
 
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
 

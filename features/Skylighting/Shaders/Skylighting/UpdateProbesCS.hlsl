@@ -12,6 +12,9 @@ SamplerComparisonState comparisonSampler : register(s0);
 	const float fadeInThreshold = 15;
 	const static sh2 unitSH = Skylighting::UNIT_SH;
 	const SharedData::SkylightingSettings settings = SharedData::skylightingSettings;
+	if (!Skylighting::IsEnabled(settings))
+		return;
+
 	const uint3 arrayDims = max(settings.ArrayDims.xyz, uint3(1, 1, 1));
 	const float3 arrayDimsF = float3(arrayDims);
 	uint sliceCount = max(1u, settings.ProbeUpdateSliceCount);

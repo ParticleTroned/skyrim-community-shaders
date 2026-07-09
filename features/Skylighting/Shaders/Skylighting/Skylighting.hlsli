@@ -17,6 +17,21 @@ namespace Skylighting
 	const static sh2 UNIT_SH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
 	const static float DEFAULT_PROBE_FIELD_SIZE = 4096.f * 2.5f;
 
+	bool IsEnabled()
+	{
+		return SharedData::skylightingSettings.Enabled != 0;
+	}
+
+	bool IsEnabled(SharedData::SkylightingSettings params)
+	{
+		return params.Enabled != 0;
+	}
+
+	sh2 GetUnoccludedProbe()
+	{
+		return UNIT_SH / 1e-10;
+	}
+
 	uint3 GetArrayDims(SharedData::SkylightingSettings params)
 	{
 		return max(params.ArrayDims.xyz, uint3(1, 1, 1));
@@ -34,6 +49,9 @@ namespace Skylighting
 
 	float GetFadeOutFactor(float3 positionMS)
 	{
+		if (!IsEnabled())
+			return 0.0;
+
 		float3 uvw = saturate(positionMS / GetArraySize(SharedData::skylightingSettings) + .5);
 		float3 dists = min(uvw, 1 - uvw);
 		float edgeDist = min(dists.x, min(dists.y, dists.z));
@@ -67,6 +85,9 @@ namespace Skylighting
 #if defined(PSHADER)
 	void ApplySkylighting(inout float3 diffuseColor, inout float3 directionalAmbientColor, float3 albedo, float skylightingDiffuse)
 	{
+		if (!IsEnabled())
+			return;
+
 		float maxScale = 1.0;
 		if (directionalAmbientColor.x > 0.0)
 			maxScale = min(maxScale, diffuseColor.x / directionalAmbientColor.x);
@@ -93,10 +114,10 @@ namespace Skylighting
 		const uint3 arrayDims = GetArrayDims(params);
 		const float3 arraySize = GetArraySize(params);
 		const float3 cellSize = GetCellSize(params);
-		sh2 scaledUnitSH = UNIT_SH / 1e-10;
+		sh2 unoccludedProbe = GetUnoccludedProbe();
 
-		if (SharedData::InInterior)
-			return scaledUnitSH;
+		if (!IsEnabled(params) || SharedData::InInterior)
+			return unoccludedProbe;
 
 		positionMS.xyz += normalWS * cellSize * 0.5;  // Receiver normal bias
 
@@ -124,7 +145,8 @@ namespace Skylighting
 					float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
 
 					float tangentWeight = 1.0;
-					[branch] if (params.FastSamplingMode == 0) {
+					[branch] if (params.FastSamplingMode == 0)
+					{
 						// https://handmade.network/p/75/monter/blog/p/7288-engine_work__global_illumination_with_irradiance_probes
 						// Basic tangent checks. This branch can be skipped for fast-sampling mode.
 						tangentWeight = saturate(dot(normalize(cellCentreMS - positionMSAdjusted), normalWS) * 0.5 + 0.5);
@@ -148,7 +170,7 @@ namespace Skylighting
 	// yields min(skylightingDiffuse, vertexAO). Pass vertexAO = 1 to skip this compensation.
 	float GetVertexSkylightingDiffuse(float3 positionMS, float3 normalWS, float vertexAO)
 	{
-		if (SharedData::InInterior)
+		if (!IsEnabled() || SharedData::InInterior)
 			return 1.0;
 
 		float fadeOutFactor = GetFadeOutFactor(positionMS);
@@ -168,10 +190,10 @@ namespace Skylighting
 		const SharedData::SkylightingSettings params = SharedData::skylightingSettings;
 		const uint3 arrayDims = GetArrayDims(params);
 		const float3 arraySize = GetArraySize(params);
-		sh2 scaledUnitSH = UNIT_SH / 1e-10;
+		sh2 unoccludedProbe = GetUnoccludedProbe();
 
-		if (SharedData::InInterior)
-			return scaledUnitSH;
+		if (!IsEnabled(params) || SharedData::InInterior)
+			return unoccludedProbe;
 
 		float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
 		float3 uvw = positionMSAdjusted / arraySize + .5;

@@ -212,7 +212,7 @@ namespace SharedData
 		float3 PosOffset;  // cell origin in camera model space
 		uint FastSamplingMode;
 		uint3 ArrayOrigin;  // xyz: array origin
-		uint _pad0;
+		uint Enabled;
 		int4 ValidMargin;
 		uint3 ArrayDims;
 		float ProbeFieldSize;

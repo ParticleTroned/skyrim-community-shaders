@@ -924,8 +924,6 @@ namespace
 
 		if (feature && feature->GetShortName() == "Upscaling")
 			return "None";
-		if (feature && feature->GetShortName() == "Skylighting")
-			return "fastest state";
 
 		return "Off";
 	}
@@ -949,7 +947,7 @@ namespace
 		if (shortName == "DynamicCubemaps")
 			return "screen-space reflections, dynamic cubemap cadence, and low-visibility cubemap throttle are switched off.";
 		if (shortName == "Skylighting")
-			return "lowest Probe Grid Quality, reduced updates on, intervals at 16, incremental updates on, Stable Slice Count 1, fast sampling on, and minimum distance.";
+			return "Skylighting is switched off, so probe updates stop and ambient/reflection occlusion falls back to the unoccluded path.";
 		if (shortName == "TerrainBlending")
 			return "Terrain Blending is switched off.";
 		if (shortName == "TerrainShadows")

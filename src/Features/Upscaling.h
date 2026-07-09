@@ -157,7 +157,7 @@ public:
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.9f;
 		float sharpnessDLSS = 0.9f;
-		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::LumaUnsharp);
+		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool fsr4RuntimeEnable = true;
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.6f;

@@ -125,7 +125,7 @@ namespace Skylighting
 		float3 uvw = positionMSAdjusted / arraySize + .5;
 
 		if (any(uvw < 0) || any(uvw > 1))
-			return scaledUnitSH;
+			return unoccludedProbe;
 
 		float3 cellVxCoord = uvw * arrayDims;
 		int3 cell000 = floor(cellVxCoord - 0.5);
@@ -199,7 +199,7 @@ namespace Skylighting
 		float3 uvw = positionMSAdjusted / arraySize + .5;
 
 		if (any(uvw < 0) || any(uvw > 1))
-			return scaledUnitSH;
+			return unoccludedProbe;
 
 		float3 cellVxCoord = uvw * arrayDims;
 		int3 cell000 = floor(cellVxCoord - 0.5);

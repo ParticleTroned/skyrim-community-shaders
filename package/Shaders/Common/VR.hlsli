@@ -573,6 +573,18 @@ namespace Stereo
 		return result;
 	}
 
+	bool IsReprojectionExact(
+		StereoBilateralResult result,
+		float depth,
+		float otherEyeDepth,
+		float depthThreshold)
+	{
+		if (!result.valid)
+			return false;
+
+		return abs(depth - otherEyeDepth) <= depthThreshold;
+	}
+
 	void FinalizeStereoBlend(
 		inout StereoBilateralResult result,
 		float2 stereoUV,

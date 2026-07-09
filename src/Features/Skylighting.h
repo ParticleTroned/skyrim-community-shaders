@@ -28,7 +28,7 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return false; }
+	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
@@ -59,8 +59,10 @@ public:
 	struct Settings
 	{
 		static constexpr float kWorldCellSize = 4096.0f;
-		static constexpr float kDefaultProbeFieldSizeCells = 2.5f;
-		static constexpr float kMinProbeFieldSizeCells = 2.5f;
+		static constexpr float kPerformanceProbeFieldSizeCells = 2.5f;
+		static constexpr float kBalancedProbeFieldSizeCells = 3.1666667f;
+		static constexpr float kDefaultProbeFieldSizeCells = kBalancedProbeFieldSizeCells;
+		static constexpr float kMinProbeFieldSizeCells = kPerformanceProbeFieldSizeCells;
 		static constexpr float kMaxProbeFieldSizeCells = 8.0f;
 		static constexpr float kDefaultProbeFieldSize = kWorldCellSize * kDefaultProbeFieldSizeCells;
 
@@ -70,10 +72,10 @@ public:
 		float ProbeFieldSize = kDefaultProbeFieldSize;  // XY probe field size in world units
 		uint ProbeGridQuality = 1;                      // 0: performance, 1: balanced, 2: quality, 3: ultra quality, 4: hoshipa
 		bool EnableIncrementalProbeUpdates = true;
-		uint StableSliceCount = 8;
+		uint StableSliceCount = 11;
 		bool EnableReducedUpdateFrequency = true;
-		uint OcclusionUpdateInterval = 3;
-		uint ProbeUpdateInterval = 3;
+		uint OcclusionUpdateInterval = 6;
+		uint ProbeUpdateInterval = 13;
 		bool EnableFastProbeSampling = true;
 		bool IncludeMarkedRoofOccluders = false;
 	} settings;

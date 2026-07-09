@@ -1949,6 +1949,13 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 		}
 	};
 
+	auto sanitizePersistentPresetState = [this]() {
+		SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
+		InvalidateSanitizedSettingsCache();
+	};
+
+	sanitizePersistentPresetState();
+
 	if (a_advanced)
 		drawUintCheckbox("Enable Wetterness", settings.EnableWetterness);
 
@@ -1969,6 +1976,7 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 			[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
 			if (ImGui::Button(preset.name, ImVec2(-1.0f, 0.0f))) {
 				ApplyWetternessUiPreset(*this, preset);
+				sanitizePersistentPresetState();
 				DetectCurrentPreset();
 			}
 		}
@@ -1977,7 +1985,6 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	if (!a_advanced) {
-		SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
 		return;
 	}
 
@@ -2003,7 +2010,7 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 
 	ImGui::SliderFloat("Wetness Fade Range", &wetnessDistanceFadeRange, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
 
-	SanitizePersistentUiState(settings, modernWetIndirectSpecularScale, legacyWetIndirectSpecularScale, puddleDryingHours, puddleLayout, rainReflectionBalance, puddleSkyReflectionScale, postRainWaterClarity, shorePersistentDarkeningStrength, wetnessDistanceFadeRange);
+	sanitizePersistentPresetState();
 }
 
 void Wetterness::DrawEssentialSettings()

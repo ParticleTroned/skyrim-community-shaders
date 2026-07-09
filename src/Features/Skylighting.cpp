@@ -29,6 +29,67 @@ namespace
 		ProbeGridPreset{ 512, 512, 256, "Hoshipa (512 x 512 x 256)" },
 	};
 
+	struct SkylightingPerformancePreset
+	{
+		const char* Name;
+		const char* Description;
+		uint ProbeGridQuality;
+		uint OcclusionUpdateInterval;
+		uint ProbeUpdateInterval;
+		uint StableSliceCount;
+		float ProbeFieldSizeCells;
+		bool EnableReducedUpdateFrequency;
+		bool EnableIncrementalProbeUpdates;
+		bool EnableFastProbeSampling;
+	};
+
+	constexpr std::array<SkylightingPerformancePreset, 4> kSkylightingPerformancePresets = {
+		SkylightingPerformancePreset{
+			"Performance",
+			"Lowest cost profile from the provided performance baseline.",
+			0,
+			8,
+			16,
+			8,
+			2.5f,
+			true,
+			true,
+			true },
+		SkylightingPerformancePreset{
+			"Balanced",
+			"Default profile, one third of the way from Performance toward Hoshipa.",
+			1,
+			6,
+			13,
+			11,
+			Skylighting::Settings::kBalancedProbeFieldSizeCells,
+			true,
+			true,
+			true },
+		SkylightingPerformancePreset{
+			"Quality",
+			"Higher quality profile, two thirds of the way from Performance toward Hoshipa.",
+			2,
+			5,
+			9,
+			13,
+			3.8333333f,
+			true,
+			true,
+			true },
+		SkylightingPerformancePreset{
+			"Hoshipa",
+			"Highest quality profile from the provided Hoshipa baseline.",
+			4,
+			3,
+			6,
+			16,
+			4.5f,
+			true,
+			true,
+			true },
+	};
+
 	uint ClampProbeGridQuality(uint a_quality)
 	{
 		return std::min<uint>(a_quality, static_cast<uint>(kProbeGridPresets.size() - 1));
@@ -154,6 +215,94 @@ namespace
 		a_settings.ProbeUpdateInterval = ClampUpdateInterval(a_settings.ProbeUpdateInterval);
 	}
 
+	float GetPresetProbeFieldSize(const SkylightingPerformancePreset& a_preset)
+	{
+		return ClampProbeFieldSize(a_preset.ProbeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
+	}
+
+	bool MatchesSkylightingPerformancePreset(
+		const Skylighting& a_skylighting,
+		const SkylightingPerformancePreset& a_preset)
+	{
+		const auto& settings = a_skylighting.settings;
+		const uint probeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
+		const uint probeDepth = GetProbeGridPreset(probeGridQuality).Depth;
+		const float probeFieldSizeTolerance = Skylighting::Settings::kWorldCellSize * 0.01f;
+
+		return probeGridQuality == a_preset.ProbeGridQuality &&
+		       settings.EnableReducedUpdateFrequency == a_preset.EnableReducedUpdateFrequency &&
+		       ClampUpdateInterval(settings.OcclusionUpdateInterval) == a_preset.OcclusionUpdateInterval &&
+		       ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval) == a_preset.ProbeUpdateInterval &&
+		       settings.EnableIncrementalProbeUpdates == a_preset.EnableIncrementalProbeUpdates &&
+		       ClampStableSliceCount(settings.StableSliceCount, probeDepth) == a_preset.StableSliceCount &&
+		       settings.EnableFastProbeSampling == a_preset.EnableFastProbeSampling &&
+		       std::abs(ClampProbeFieldSize(settings.ProbeFieldSize) - GetPresetProbeFieldSize(a_preset)) <= probeFieldSizeTolerance;
+	}
+
+	void ApplySkylightingRuntimeSettingsChange(Skylighting& a_skylighting, uint a_previousProbeGridQuality)
+	{
+		NormalizeSettingsForRuntime(a_skylighting.settings);
+		a_skylighting.settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(a_skylighting.settings, a_skylighting.settings.ProbeUpdateInterval);
+		a_skylighting.ApplyProbeGridQuality();
+
+		const bool probeGridChanged = a_previousProbeGridQuality != a_skylighting.settings.ProbeGridQuality;
+		const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
+
+		if (canResetRuntimeResources && probeGridChanged)
+			a_skylighting.SetupResources();
+
+		if (canResetRuntimeResources)
+			a_skylighting.ResetSkylighting();
+		else
+			a_skylighting.queuedResetSkylighting = true;
+	}
+
+	void ApplySkylightingPerformancePreset(
+		Skylighting& a_skylighting,
+		const SkylightingPerformancePreset& a_preset)
+	{
+		const uint previousProbeGridQuality = a_skylighting.settings.ProbeGridQuality;
+		auto& settings = a_skylighting.settings;
+
+		settings.ProbeGridQuality = ClampProbeGridQuality(a_preset.ProbeGridQuality);
+		settings.EnableReducedUpdateFrequency = a_preset.EnableReducedUpdateFrequency;
+		settings.OcclusionUpdateInterval = ClampUpdateInterval(a_preset.OcclusionUpdateInterval);
+		settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, a_preset.ProbeUpdateInterval);
+		settings.EnableIncrementalProbeUpdates = a_preset.EnableIncrementalProbeUpdates;
+		settings.StableSliceCount = ClampStableSliceCount(a_preset.StableSliceCount, GetProbeGridPreset(settings.ProbeGridQuality).Depth);
+		settings.EnableFastProbeSampling = a_preset.EnableFastProbeSampling;
+		settings.ProbeFieldSize = GetPresetProbeFieldSize(a_preset);
+
+		ApplySkylightingRuntimeSettingsChange(a_skylighting, previousProbeGridQuality);
+	}
+
+	void DrawSkylightingPerformancePresetButtons(Skylighting& a_skylighting, const char* a_tableId)
+	{
+		ImGui::TextUnformatted("Performance Profiles");
+
+		if (ImGui::BeginTable(a_tableId, static_cast<int>(kSkylightingPerformancePresets.size()), ImGuiTableFlags_SizingStretchProp)) {
+			for (size_t i = 0; i < kSkylightingPerformancePresets.size(); ++i) {
+				ImGui::TableSetupColumn(kSkylightingPerformancePresets[i].Name, ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			}
+
+			ImGui::TableNextRow();
+			for (size_t i = 0; i < kSkylightingPerformancePresets.size(); ++i) {
+				ImGui::TableNextColumn();
+				const auto& preset = kSkylightingPerformancePresets[i];
+				const bool presetActive = MatchesSkylightingPerformancePreset(a_skylighting, preset);
+				[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
+				if (ImGui::Button(preset.Name, ImVec2(-1.0f, 0.0f))) {
+					ApplySkylightingPerformancePreset(a_skylighting, preset);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted(preset.Description);
+				}
+			}
+
+			ImGui::EndTable();
+		}
+	}
+
 	void DrawSkylightingUpdatePerformanceSettings(Skylighting& a_skylighting)
 	{
 		auto& settings = a_skylighting.settings;
@@ -163,7 +312,6 @@ namespace
 		NormalizeSettingsForRuntime(settings);
 		uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, a_skylighting.probeArrayDims[2]);
 		settings.StableSliceCount = stableSliceCount;
-		bool usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, a_skylighting.probeArrayDims[2]);
 
 		ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
 		{
@@ -173,11 +321,11 @@ namespace
 				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
 			}
 
-			ImGui::BeginDisabled(usesIncrementalProbeSlices);
+			settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
+			const int minProbeIntervalUI = static_cast<int>(ClampUpdateInterval(settings.OcclusionUpdateInterval));
 			int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
-			if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
+			if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, minProbeIntervalUI, 16))
 				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
-			ImGui::EndDisabled();
 		}
 		ImGui::EndDisabled();
 		NormalizeSettingsForRuntime(settings);
@@ -287,18 +435,7 @@ void Skylighting::RestoreDefaultSettings()
 {
 	const uint previousProbeGridQuality = settings.ProbeGridQuality;
 	ApplyPlatformDefaults(settings);
-	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
-	const bool probeGridChanged = previousProbeGridQuality != settings.ProbeGridQuality;
-	const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
-
-	if (canResetRuntimeResources && probeGridChanged)
-		SetupResources();
-
-	if (canResetRuntimeResources)
-		ResetSkylighting();
-	else
-		queuedResetSkylighting = true;
+	ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 }
 
 void Skylighting::ApplyProbeGridQuality()
@@ -340,19 +477,7 @@ void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	settings.StableSliceCount = 1;
 	settings.EnableFastProbeSampling = true;
 	settings.ProbeFieldSize = Settings::kWorldCellSize * Settings::kMinProbeFieldSizeCells;
-	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
-
-	const bool probeGridChanged = previousProbeGridQuality != settings.ProbeGridQuality;
-	const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
-
-	if (canResetRuntimeResources && probeGridChanged)
-		SetupResources();
-
-	if (canResetRuntimeResources)
-		ResetSkylighting();
-	else
-		queuedResetSkylighting = true;
+	ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 }
 
 const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
@@ -413,6 +538,8 @@ void Skylighting::DrawSettings()
 
 	ImGui::Separator();
 	ImGui::Text("Performance options (highest impact first)");
+	DrawSkylightingPerformancePresetButtons(*this, "SkylightingSettingsPerformancePresetButtons");
+
 	settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 
 	int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
@@ -431,10 +558,9 @@ void Skylighting::DrawSettings()
 
 	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
 	if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {
+		const uint previousProbeGridQuality = settings.ProbeGridQuality;
 		settings.ProbeGridQuality = static_cast<uint>(probeGridQualityUI);
-		ApplyProbeGridQuality();
-		SetupResources();
-		ResetSkylighting();
+		ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 	}
 	ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
 
@@ -457,15 +583,15 @@ void Skylighting::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("How often skylight shadowing refreshes. 1 = every frame. Higher = faster, but slower reaction.");
 
-		ImGui::BeginDisabled(usesIncrementalProbeSlices);
+		settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
+		const int minProbeIntervalUI = static_cast<int>(ClampUpdateInterval(settings.OcclusionUpdateInterval));
 		int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
-		if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
+		if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, minProbeIntervalUI, 16))
 			settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
-		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(usesIncrementalProbeSlices ?
-							"Incremental probe updates follow each fresh occlusion quadrant." :
-							"How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction. It cannot be lower than Occlusion Update Interval.");
+							"Minimum matches Occlusion Update Interval. Incremental probe updates still follow fresh occlusion quadrants at runtime." :
+							"How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction. Its minimum always matches Occlusion Update Interval.");
 	}
 	ImGui::EndDisabled();
 	NormalizeSettingsForRuntime(settings);
@@ -519,7 +645,7 @@ void Skylighting::DrawSettings()
 		ResetSkylighting();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Sets the total camera-centered skylighting probe field width. 2.5 cells matches the current default.");
+		ImGui::Text("Sets the total camera-centered skylighting probe field width. Balanced uses 3.2 cells; Performance uses 2.5 cells.");
 		ImGui::Text("Effective reach is about half this value from the camera.");
 		ImGui::Text("Higher values reach farther, but with the same probe grid each probe covers more space and local detail gets softer.");
 		ImGui::Text("Raise Probe Grid Quality too if you want more reach without losing as much detail.");
@@ -533,6 +659,8 @@ void Skylighting::DrawSettings()
 
 void Skylighting::DrawPerformanceSettings(bool a_advanced)
 {
+	DrawSkylightingPerformancePresetButtons(*this, "SkylightingPerformancePresetButtons");
+
 	settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 
 	int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
@@ -549,10 +677,9 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 
 	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
 	if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {
+		const uint previousProbeGridQuality = settings.ProbeGridQuality;
 		settings.ProbeGridQuality = static_cast<uint>(probeGridQualityUI);
-		ApplyProbeGridQuality();
-		SetupResources();
-		ResetSkylighting();
+		ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 	}
 	ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
 

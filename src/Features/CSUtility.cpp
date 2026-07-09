@@ -61,6 +61,7 @@ namespace
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CSUtility::Settings,
+	enabled,
 	skyBrightness,
 	directionalLightMult,
 	pointLightMult,
@@ -69,6 +70,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	linearSpotlightMult,
 	omnidirectionalBulbMult,
 	linearOmnidirectionalBulbMult)
+
+void CSUtility::DrawSettingsHeaderControls()
+{
+	ImGui::Checkbox(("Enable " + GetDisplayName()).c_str(), &settings.enabled);
+}
 
 void CSUtility::DrawSettings()
 {
@@ -119,21 +125,40 @@ void CSUtility::SetupResources()
 	vanillaPointLightCB = new ConstantBuffer(ConstantBufferDesc<VanillaPointLightData>(), "CSUtility::VanillaPointLightData");
 }
 
+CSUtility::Settings CSUtility::GetNeutralSettings()
+{
+	auto settings = Settings{};
+	settings.enabled = false;
+	return settings;
+}
+
 CSUtility::PerFrameData CSUtility::GetCommonBufferData() const
 {
-	Settings sanitizedSettings = globals::features::adaptiveBrightness.GetEffectiveCSUtilitySettings(settings);
-	SanitizeSettings(sanitizedSettings);
+	// Adaptive Brightness owns the shared-setting composition. When CS Utility is
+	// off, it receives a neutral base so only AB's runtime adjustments remain.
+	Settings effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveCSUtilitySettings(settings, IsRuntimeEnabled());
+	SanitizeSettings(effectiveSettings);
 
 	PerFrameData data{};
-	data.skyBrightness = sanitizedSettings.skyBrightness;
-	data.directionalLightMult = sanitizedSettings.directionalLightMult;
-	data.pointLightMult = sanitizedSettings.pointLightMult;
-	data.linearPointLightMult = sanitizedSettings.linearPointLightMult;
-	data.spotlightMult = sanitizedSettings.spotlightMult;
-	data.linearSpotlightMult = sanitizedSettings.linearSpotlightMult;
-	data.omnidirectionalBulbMult = sanitizedSettings.omnidirectionalBulbMult;
-	data.linearOmnidirectionalBulbMult = sanitizedSettings.linearOmnidirectionalBulbMult;
+	data.skyBrightness = effectiveSettings.skyBrightness;
+	data.directionalLightMult = effectiveSettings.directionalLightMult;
+	data.pointLightMult = effectiveSettings.pointLightMult;
+	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
+	data.spotlightMult = effectiveSettings.spotlightMult;
+	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;
+	data.omnidirectionalBulbMult = effectiveSettings.omnidirectionalBulbMult;
+	data.linearOmnidirectionalBulbMult = effectiveSettings.linearOmnidirectionalBulbMult;
 	return data;
+}
+
+bool CSUtility::IsRuntimeEnabled() const
+{
+	return loaded && settings.enabled;
+}
+
+bool CSUtility::NeedsVanillaPointLightData() const
+{
+	return IsRuntimeEnabled() && !globals::features::lightLimitFix.loaded;
 }
 
 void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount)
@@ -171,7 +196,7 @@ struct CSUtility::Hooks
 			func(a_shader, a_pass, a_renderFlags);
 
 			auto& csUtility = globals::features::csUtility;
-			if (!csUtility.loaded || globals::features::lightLimitFix.loaded)
+			if (!csUtility.NeedsVanillaPointLightData())
 				return;
 
 			const uint32_t lightCount = a_pass && a_pass->numLights > 0 ? a_pass->numLights - kFirstPointLightSceneIndex : 0;

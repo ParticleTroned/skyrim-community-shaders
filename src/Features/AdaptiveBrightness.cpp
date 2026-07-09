@@ -1884,10 +1884,6 @@ CSUtility::Settings AdaptiveBrightness::ApplyProfile(const CSUtility::Settings& 
 	const float pointLightScale = masterScale(0.75f) * advancedMult(a_profile.pointLightMult);
 	out.pointLightMult = ClampMultiplier(out.pointLightMult * pointLightScale);
 	out.linearPointLightMult = ClampMultiplier(out.linearPointLightMult * pointLightScale);
-	out.spotlightMult = ClampMultiplier(out.spotlightMult * pointLightScale);
-	out.linearSpotlightMult = ClampMultiplier(out.linearSpotlightMult * pointLightScale);
-	out.omnidirectionalBulbMult = ClampMultiplier(out.omnidirectionalBulbMult * pointLightScale);
-	out.linearOmnidirectionalBulbMult = ClampMultiplier(out.linearOmnidirectionalBulbMult * pointLightScale);
 
 	return out;
 }
@@ -1962,17 +1958,19 @@ LinearLighting::Settings AdaptiveBrightness::GetEffectiveLinearLightingSettings(
 	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
 }
 
-CSUtility::Settings AdaptiveBrightness::GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings) const
+CSUtility::Settings AdaptiveBrightness::GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings, bool a_csUtilityEnabled) const
 {
+	auto baseSettings = a_csUtilityEnabled ? a_csUtilitySettings : CSUtility::GetNeutralSettings();
+
 	if (!IsRuntimeEnabled())
-		return a_csUtilitySettings;
+		return baseSettings;
 
 	const auto activeProfiles = GetActiveProfileBlend();
 	if (activeProfiles.from == activeProfiles.to)
-		return ApplyProfile(a_csUtilitySettings, *activeProfiles.from);
+		return ApplyProfile(baseSettings, *activeProfiles.from);
 
-	const auto fromSettings = ApplyProfile(a_csUtilitySettings, *activeProfiles.from);
-	const auto toSettings = ApplyProfile(a_csUtilitySettings, *activeProfiles.to);
+	const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
+	const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
 	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
 }
 

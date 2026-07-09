@@ -148,7 +148,7 @@ struct AdaptiveBrightness : Feature
 
 	bool IsRuntimeEnabled() const;
 	LinearLighting::Settings GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const;
-	CSUtility::Settings GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings) const;
+	CSUtility::Settings GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings, bool a_csUtilityEnabled) const;
 
 	struct ActiveProfileBlend
 	{

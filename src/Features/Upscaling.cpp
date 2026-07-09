@@ -172,9 +172,12 @@ namespace
 	constexpr std::array<uint8_t, 6> kVRMenuBridgeDirectDrawExpectedBytes{
 		0xFF, 0x90, 0xA0, 0x00, 0x00, 0x00
 	};
-	constexpr std::array<UINT, 3> kVRMenuBridgeKnownStereoIndexCounts{ {
+	constexpr std::array<UINT, 6> kVRMenuBridgeKnownStereoIndexCounts{ {
 		6,    // mode 2: projected menu bridge
+		12,   // mode 4: MapMenu projected widget bridge
+		24,   // mode 8: MapMenu projected widget bridge
 		144,  // mode 48: HUD menu bridge variant
+		186,  // mode 62: Stats/skills widget bridge
 		504   // mode 168: HUD menu bridge variant
 	} };
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;

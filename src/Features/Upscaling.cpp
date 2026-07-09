@@ -118,6 +118,8 @@ namespace
 	constexpr uint32_t kVRUpscalingTransitionApplyDelayFrames = 6u;
 	constexpr uint32_t kVRRenderScaleRelatchBusyRetryFrames = 60u;
 	constexpr uint32_t kVRRenderScaleRelatchD3DFailureRetryFrames = 300u;
+	constexpr const char* kOpenCompositeRenderScaleBlockWarning =
+		"Open Composite upscaling is active. CS VR Render Scale Mode and VR FPS Stabilizer Sync are disabled to avoid double upscaling.";
 	constexpr uint32_t kVRRenderScalePostLoadSettleRetryFrames = kVRUpscalingTransitionApplyDelayFrames;
 	constexpr uint32_t kVRSubmitStageVendorRelatchCooldownFrames = 30u;
 	constexpr uint32_t kVRSubmitStageVendorRelatchMinCooldownFrames = 6u;
@@ -1995,6 +1997,9 @@ namespace
 	bool HasPendingVRFpsStabilizerRenderScaleIntent(const Upscaling& a_upscaling)
 	{
 		if (!globals::game::isVR || !a_upscaling.settings.vrFpsStabilizerSync)
+			return false;
+
+		if (a_upscaling.IsOpenCompositeUpscalingBlocked())
 			return false;
 
 		const uint32_t queuedFrame = a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
@@ -5034,14 +5039,6 @@ namespace
 		ImGui::TextUnformatted("CS applies menu changes after closing the menu while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
-
-	void DrawVRRenderScaleModeExperimentalNote()
-	{
-		ImGui::TextDisabled("(Experimental)");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			DrawVRRenderScaleModeTooltip();
-		}
-	}
 }
 
 void Upscaling::DrawSettings()
@@ -5214,8 +5211,9 @@ void Upscaling::DrawSettings()
 			HasPendingVRRenderScaleTransition();
 		const bool publicRenderScaleRequested = vrRenderScaleRequested;
 		const bool publicRenderScaleCanEdit =
-			(renderScaleMethodEligible && renderScaleQualitySelected) ||
-			publicRenderScaleRequested;
+			!openCompositeBlocksUpscaling &&
+			((renderScaleMethodEligible && renderScaleQualitySelected) ||
+				publicRenderScaleRequested);
 
 		ImGui::Separator();
 		if (!ImGui::TreeNodeEx("Render Pipeline", ImGuiTreeNodeFlags_DefaultOpen))
@@ -5225,7 +5223,7 @@ void Upscaling::DrawSettings()
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			if (ImGui::SliderInt("VR Render Scale Mode", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+			if (ImGui::SliderInt("Render Scale (Experimental)", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,
@@ -5238,7 +5236,9 @@ void Upscaling::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			DrawVRRenderScaleModeTooltip();
 		}
-		DrawVRRenderScaleModeExperimentalNote();
+		if (openCompositeBlocksUpscaling) {
+			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
+		}
 		if (perfMode.HasRestartRequiredChange()) {
 			Util::Text::Warning(
 				perfModeRelatchPending ?
@@ -5246,15 +5246,22 @@ void Upscaling::DrawSettings()
 					"Warning: VR Render Scale Mode relatch scheduled");
 		}
 
-		ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
+		{
+			auto disabledGuard = Util::DisableGuard(openCompositeBlocksUpscaling);
+			ImGui::Checkbox("VR FPS Stabilizer Sync", &settings.vrFpsStabilizerSync);
+		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("On save-load, reads VRFpsStabilizer.ini [Conditional] Interior/Exterior CS upscaling rows.");
-			ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and VR Render Scale Mode to the cell you loaded into.");
-			ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
-			ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
+			if (openCompositeBlocksUpscaling) {
+				ImGui::TextUnformatted(kOpenCompositeRenderScaleBlockWarning);
+			} else {
+				ImGui::TextUnformatted("On save-load, reads VRFpsStabilizer.ini [Conditional] Interior/Exterior CS upscaling rows.");
+				ImGui::TextUnformatted("Syncs Method, Upscale Preset, DLSS Profile, and VR Render Scale Mode to the cell you loaded into.");
+				ImGui::TextUnformatted("Legacy DLSSMode / RenderAtUpscaleRes rows are supported; explicit UpscaleMethod rows can select FSR.");
+				ImGui::TextUnformatted("Use this when VR FPS Stabilizer drives different interior/exterior upscaling profiles.");
+			}
 		}
 
-		if (!renderScaleMethodEligible)
+		if (!openCompositeBlocksUpscaling && !renderScaleMethodEligible)
 			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
 
 		ImGui::TreePop();
@@ -5807,14 +5814,15 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
 		const bool publicRenderScaleRequested = GetPerfModeRequested();
 		const bool publicRenderScaleCanEdit =
-			(renderScaleMethodEligible && renderScaleQualitySelected) ||
-			publicRenderScaleRequested;
+			!openCompositeBlocksUpscaling &&
+			((renderScaleMethodEligible && renderScaleQualitySelected) ||
+				publicRenderScaleRequested);
 
 		const char* renderScaleModes[] = { "Disabled", "Enabled" };
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			if (ImGui::SliderInt("VR Render Scale Mode", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
+			if (ImGui::SliderInt("Render Scale (Experimental)", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)])) {
 				const bool enableRenderScaleMode = std::clamp(renderScaleMode, 0, 1) != 0;
 				ApplyCSMenuUpscalingTransition(
 					upscaleMethod,
@@ -5827,7 +5835,9 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			DrawVRRenderScaleModeTooltip();
 		}
-		DrawVRRenderScaleModeExperimentalNote();
+		if (openCompositeBlocksUpscaling) {
+			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
+		}
 
 		if (a_advanced) {
 			SanitizeFoveatedSettings(settings);
@@ -6142,9 +6152,48 @@ void Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	const bool changedUpscaleMode =
 		settings.upscaleMethod != static_cast<uint>(UpscaleMethod::kNONE) ||
 		settings.upscaleMethodNoDLSS != static_cast<uint>(UpscaleMethod::kNONE);
+	const bool hasPendingVRTransition =
+		pendingVRUpscalingQualityMode.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset ||
+		pendingVRRenderScaleMode.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset ||
+		pendingVRDLSSPreset.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset ||
+		pendingVRPerfMode.load(std::memory_order_acquire) != kPendingVRUpscalingSettingUnset ||
+		pendingVRUpscalingTransitionFrame.load(std::memory_order_acquire) != 0;
+	const bool changedVRRenderScaleState =
+		settings.renderScaleMode != 0 ||
+		settings.perfMode != 0 ||
+		settings.vrFpsStabilizerSync ||
+		hasPendingVRTransition ||
+		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		pendingPerfModeRenderTargetRecreateFrame.load(std::memory_order_acquire) != 0 ||
+		pendingPerfModeRenderTargetRecreateDelayFrames.load(std::memory_order_acquire) != 0 ||
+		pendingPerfModeRenderTargetRecreatePostLoadSettle.load(std::memory_order_acquire) ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		pendingVRRenderScaleContractGeneration.load(std::memory_order_acquire) != 0 ||
+		perfMode.GetBootSnapshot().valid ||
+		perfMode.HasRestartRequiredChange();
 	settings.upscaleMethod = static_cast<uint>(UpscaleMethod::kNONE);
 	settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
-	if (changedUpscaleMode)
+	settings.renderScaleMode = 0;
+	settings.perfMode = 0;
+	settings.vrFpsStabilizerSync = false;
+	pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreate.store(false, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateDelayFrames.store(0, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreatePostLoadSettle.store(false, std::memory_order_release);
+	pendingPerfModeRenderTargetRecreateOrigin.store(static_cast<uint32_t>(VRUpscalingTransitionOrigin::CSMenu), std::memory_order_release);
+	pendingVRRenderScaleContractGeneration.store(0, std::memory_order_release);
+	pendingVRRenderScaleRecoverySnapshot = {};
+	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	vrLowPeakNativeRestoreCleanupActive.store(false, std::memory_order_release);
+	ClearVRRenderScaleInfoTransition();
+	if (hasPendingVRTransition)
+		ClearPendingVRUpscalingTransition();
+	perfMode.ResetBootLatch();
+	if (changedVRRenderScaleState)
+		logger::warn("[Upscaling] {}", kOpenCompositeRenderScaleBlockWarning);
+	if (changedUpscaleMode || changedVRRenderScaleState)
 		InvalidateFrameScopedUpscalingState();
 }
 
@@ -7131,6 +7180,9 @@ bool Upscaling::GetVRRenderScaleModeRequested() const
 	if (!REL::Module::IsVR())
 		return false;
 
+	if (IsOpenCompositeUpscalingBlocked())
+		return false;
+
 	const uint32_t pendingRenderScaleMode = pendingVRRenderScaleMode.load(std::memory_order_acquire);
 	if (pendingRenderScaleMode != kPendingVRUpscalingSettingUnset)
 		return pendingRenderScaleMode != 0;
@@ -7560,7 +7612,10 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 
 void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
 {
-	if (!globals::game::isVR || !settings.vrFpsStabilizerSync) {
+	const bool openCompositeBlocksUpscaling = globals::game::isVR && IsOpenCompositeUpscalingBlocked();
+	if (!globals::game::isVR || !settings.vrFpsStabilizerSync || openCompositeBlocksUpscaling) {
+		if (openCompositeBlocksUpscaling)
+			settings.vrFpsStabilizerSync = false;
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		return;
 	}
@@ -7576,7 +7631,10 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 	if (queuedFrame == 0)
 		return;
 
-	if (!globals::game::isVR || !settings.vrFpsStabilizerSync) {
+	const bool openCompositeBlocksUpscaling = globals::game::isVR && IsOpenCompositeUpscalingBlocked();
+	if (!globals::game::isVR || !settings.vrFpsStabilizerSync || openCompositeBlocksUpscaling) {
+		if (openCompositeBlocksUpscaling)
+			settings.vrFpsStabilizerSync = false;
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		return;
 	}
@@ -8314,7 +8372,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	const bool preserveActiveContractForRecoveryPreview =
 		ShouldPreserveActiveVRRenderScaleContractForRecovery(*this, previewRelatchOrigin, previewRecoverySnapshot);
 	Settings previewRelatchSettings = settings;
-	UpscaleMethod previewRelatchUpscaleMethod = GetUpscaleMethod();
+	UpscaleMethod previewRelatchUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	if (preserveActiveContractForRecoveryPreview) {
 		previewRelatchUpscaleMethod = previewRecoverySnapshot.method;
 		previewRelatchSettings.qualityMode = previewRecoverySnapshot.qualityMode;
@@ -8410,7 +8468,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	pendingPerfModeRenderTargetRecreateFrame.store(0, std::memory_order_release);
 	const auto previousBootSnapshot = perfMode.GetBootSnapshot();
 	Settings relatchSettings = settings;
-	UpscaleMethod relatchUpscaleMethod = GetUpscaleMethod();
+	UpscaleMethod relatchUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	const bool previousRenderScaleActive =
 		previousBootSnapshot.valid &&
 		previousBootSnapshot.active &&

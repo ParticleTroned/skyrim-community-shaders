@@ -253,6 +253,17 @@ namespace
 				   a_indexCount) != kVRMenuBridgeKnownStereoIndexCounts.end();
 	}
 
+	bool IsMapMenuBridgeWidgetStereoIndexCount(UINT a_indexCount)
+	{
+		return a_indexCount == 12 || a_indexCount == 24;
+	}
+
+	bool ShouldKeepOriginalVRMenuBridgeDraw(UINT a_indexCount)
+	{
+		const auto* state = globals::state;
+		return state && state->isMapMenuOpen && IsMapMenuBridgeWidgetStereoIndexCount(a_indexCount);
+	}
+
 	bool IsAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount)
 	{
 		const auto indexCount = static_cast<uint32_t>(a_indexCount);
@@ -4008,6 +4019,7 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 
 	vrMenuFinalCompositeFrame = a_frame;
 	vrMenuFinalCompositeSuppressedTargets = {};
+	vrMenuFinalCompositeHasOverlayOnlyCapture = false;
 	vrMenuFinalCompositeLayerDrawCount = 0;
 }
 
@@ -4333,7 +4345,9 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
 	ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
 
-	if (TrySuppressKnownRedundantVRMenuBridgeCapture(
+	const bool keepOriginalDraw = ShouldKeepOriginalVRMenuBridgeDraw(a_indexCount);
+	if (!keepOriginalDraw &&
+		TrySuppressKnownRedundantVRMenuBridgeCapture(
 			*this,
 			state,
 			a_callerRva,
@@ -4361,6 +4375,11 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return false;
 
 	RecordAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount);
+	if (keepOriginalDraw) {
+		vrMenuFinalCompositeHasOverlayOnlyCapture = true;
+		return false;
+	}
+
 	vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
 	return true;
 }
@@ -4444,6 +4463,11 @@ bool Upscaling::TraceVRMenuBridgeDrawOperation(
 
 bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D& a_outputTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame)
 {
+	const bool hasSuppressedTargets = std::any_of(
+		vrMenuFinalCompositeSuppressedTargets.begin(),
+		vrMenuFinalCompositeSuppressedTargets.end(),
+		[](bool suppressed) { return suppressed; });
+
 	if (!globals::game::isVR ||
 		a_eyeIndex >= 2 ||
 		!a_eyeWidth ||
@@ -4455,7 +4479,7 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 		!vrMenuFinalCompositeLayer->resource ||
 		!vrMenuFinalCompositeLayer->srv ||
 		vrMenuFinalCompositeLayerDrawCount == 0 ||
-		std::none_of(vrMenuFinalCompositeSuppressedTargets.begin(), vrMenuFinalCompositeSuppressedTargets.end(), [](bool suppressed) { return suppressed; })) {
+		(!hasSuppressedTargets && !vrMenuFinalCompositeHasOverlayOnlyCapture)) {
 		return false;
 	}
 	if (!IsKnownGameMenuContextActive() ||

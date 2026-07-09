@@ -1174,6 +1174,7 @@ private:
 	static constexpr uint32_t kVRMenuBridgeSRVSlots = 8;
 	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> vrMenuFinalCompositeSuppressedTargets{};
+	bool vrMenuFinalCompositeHasOverlayOnlyCapture = false;
 	eastl::unique_ptr<Texture2D> vrMenuFinalCompositeLayer;
 	uint32_t vrMenuFinalCompositeLayerWidth = 0;
 	uint32_t vrMenuFinalCompositeLayerHeight = 0;

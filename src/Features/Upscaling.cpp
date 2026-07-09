@@ -180,6 +180,8 @@ namespace
 		186,  // mode 62: Stats/skills widget bridge
 		504   // mode 168: HUD menu bridge variant
 	} };
+	constexpr size_t kVRMenuBridgeAdaptiveStereoIndexCountSlots = 16u;
+	constexpr uint32_t kVRMenuBridgeAdaptiveProbeBudgetPerFrame = 4u;
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
 	constexpr uint32_t kVRCellTransitionPresentationTailFrames = kVRCellTransitionTailFrames;
 	constexpr uint32_t kVRDLSSRapidRenderScaleFlipWindowFrames = 1800;
@@ -214,6 +216,9 @@ namespace
 	constexpr uint32_t kVRKnownRedundantHUDMenuBridgeCallerRva = 0xDBDDF9u;
 	thread_local VRMenuBridgeHigherCallContext g_vrMenuBridgeHigherCallContext;
 	std::atomic_bool g_vrMenuBridgeHigherCallHookInstalled{ false };
+	std::array<std::atomic_uint32_t, kVRMenuBridgeAdaptiveStereoIndexCountSlots> g_vrMenuBridgeAdaptiveStereoIndexCounts{};
+	std::atomic_uint32_t g_vrMenuBridgeAdaptiveProbeFrame{ 0 };
+	std::atomic_uint32_t g_vrMenuBridgeAdaptiveProbeCount{ 0 };
 	std::mutex g_vrMenuBridgeRuntimeDedupeMutex;
 	uint32_t g_vrMenuBridgeRuntimeDedupeFrame = 0;
 	std::vector<VRMenuBridgeRuntimeDedupeEntry> g_vrMenuBridgeRuntimeDedupeEntries;
@@ -246,6 +251,70 @@ namespace
 				   kVRMenuBridgeKnownStereoIndexCounts.begin(),
 				   kVRMenuBridgeKnownStereoIndexCounts.end(),
 				   a_indexCount) != kVRMenuBridgeKnownStereoIndexCounts.end();
+	}
+
+	bool IsAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount)
+	{
+		const auto indexCount = static_cast<uint32_t>(a_indexCount);
+		if (!indexCount)
+			return false;
+
+		return std::any_of(
+			g_vrMenuBridgeAdaptiveStereoIndexCounts.begin(),
+			g_vrMenuBridgeAdaptiveStereoIndexCounts.end(),
+			[indexCount](const std::atomic_uint32_t& a_entry) {
+				return a_entry.load(std::memory_order_relaxed) == indexCount;
+			});
+	}
+
+	bool IsAcceptedVRMenuBridgeStereoIndexCount(UINT a_indexCount)
+	{
+		return IsKnownVRMenuBridgeStereoIndexCount(a_indexCount) ||
+		       IsAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount);
+	}
+
+	bool ShouldProbeAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount, uint32_t a_frame)
+	{
+		if (!a_indexCount || IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount))
+			return false;
+
+		const uint32_t frame = std::max(a_frame, 1u);
+		uint32_t observedFrame = g_vrMenuBridgeAdaptiveProbeFrame.load(std::memory_order_relaxed);
+		if (observedFrame != frame &&
+			g_vrMenuBridgeAdaptiveProbeFrame.compare_exchange_strong(
+				observedFrame,
+				frame,
+				std::memory_order_relaxed,
+				std::memory_order_relaxed)) {
+			g_vrMenuBridgeAdaptiveProbeCount.store(0, std::memory_order_relaxed);
+		}
+
+		return g_vrMenuBridgeAdaptiveProbeCount.fetch_add(1, std::memory_order_relaxed) <
+		       kVRMenuBridgeAdaptiveProbeBudgetPerFrame;
+	}
+
+	void RecordAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount)
+	{
+		const auto indexCount = static_cast<uint32_t>(a_indexCount);
+		if (!indexCount || IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount))
+			return;
+
+		for (auto& entry : g_vrMenuBridgeAdaptiveStereoIndexCounts) {
+			uint32_t empty = 0;
+			if (entry.compare_exchange_strong(
+					empty,
+					indexCount,
+					std::memory_order_relaxed,
+					std::memory_order_relaxed)) {
+				if (ShouldEmitUpscalingDiagLogs()) {
+					logger::debug(
+						"[VRMenuBridge] Learned adaptive stereo draw count indexCount={} inferredMode={}",
+						indexCount,
+						indexCount / 3u);
+				}
+				return;
+			}
+		}
 	}
 
 	bool IsVRMenuBridgeDrawHookContextActive()
@@ -4271,6 +4340,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 			menuSourceSlot,
 			menuSourceMatch,
 			destination)) {
+		RecordAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount);
 		vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
 		return true;
 	}
@@ -4290,6 +4360,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	if (!liveLayerDrawn)
 		return false;
 
+	RecordAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount);
 	vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
 	return true;
 }
@@ -4345,11 +4416,10 @@ bool Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
 		return false;
 	}
 
-	if (!IsKnownVRMenuBridgeStereoIndexCount(a_indexCount)) {
-		return false;
-	}
+	if (IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount))
+		return true;
 
-	return true;
+	return ShouldProbeAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount, currentFrame);
 }
 
 bool Upscaling::TraceVRMenuBridgeDrawOperation(

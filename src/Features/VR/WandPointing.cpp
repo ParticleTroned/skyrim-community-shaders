@@ -165,11 +165,13 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec
 	if (settings.attachMode == AttachMode::HMDOnly || settings.attachMode == AttachMode::Both) {
 		if (ComputeWandIntersectionForOverlayType(OverlayType::HMD, controllerIndex, outUV)) {
 			intersected = true;
+			wandState.overlayType = OverlayType::HMD;
 		}
 	}
 	if (!intersected && (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both)) {
 		if (ComputeWandIntersectionForOverlayType(OverlayType::Controller, controllerIndex, outUV)) {
 			intersected = true;
+			wandState.overlayType = OverlayType::Controller;
 		}
 	}
 
@@ -184,6 +186,22 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t controllerIndex, ImVec
 	return intersected;
 }
 
+ControllerDevice VR::GetWandPointingControllerDevice() const
+{
+	if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
+		return settings.VRMenuAttachController == ControllerDevice::Primary ?
+		           ControllerDevice::Secondary :
+		           ControllerDevice::Primary;
+	}
+
+	return ControllerDevice::Primary;
+}
+
+vr::TrackedDeviceIndex_t VR::GetWandPointingControllerIndex() const
+{
+	return Util::GetControllerIndexForDevice(GetWandPointingControllerDevice(), lastKnownLeftHandedMode);
+}
+
 void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 {
 	if (!CanUseWandPointing() || !globals::menu || !globals::menu->IsEnabled)
@@ -192,17 +210,7 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate)
 	ImGuiIO& io = ImGui::GetIO();
 	wandState.isActivelyDrivingCursor = false;
 
-	vr::TrackedDeviceIndex_t pointingController = vr::k_unTrackedDeviceIndexInvalid;
-
-	if (settings.attachMode == AttachMode::ControllerOnly || settings.attachMode == AttachMode::Both) {
-		ControllerDevice oppositeController = (settings.VRMenuAttachController == ControllerDevice::Primary) ?
-		                                          ControllerDevice::Secondary :
-		                                          ControllerDevice::Primary;
-		pointingController = Util::GetControllerIndexForDevice(oppositeController, lastKnownLeftHandedMode);
-	} else {
-		pointingController = Util::GetControllerIndexForDevice(ControllerDevice::Primary, lastKnownLeftHandedMode);
-	}
-
+	const vr::TrackedDeviceIndex_t pointingController = GetWandPointingControllerIndex();
 	if (pointingController == vr::k_unTrackedDeviceIndexInvalid) {
 		wandState.isIntersecting = false;
 		return;

@@ -172,14 +172,26 @@ namespace
 	constexpr std::array<uint8_t, 6> kVRMenuBridgeDirectDrawExpectedBytes{
 		0xFF, 0x90, 0xA0, 0x00, 0x00, 0x00
 	};
-	constexpr std::array<UINT, 6> kVRMenuBridgeKnownStereoIndexCounts{ {
-		6,    // mode 2: projected menu bridge
-		12,   // mode 4: MapMenu projected widget bridge
-		24,   // mode 8: MapMenu projected widget bridge
-		144,  // mode 48: HUD menu bridge variant
-		186,  // mode 62: Stats/skills widget bridge
-		504   // mode 168: HUD menu bridge variant
-	} };
+	constexpr UINT kVRMenuBridgeProjectedMenuStereoIndexCount = 6u;        // mode 2: projected menu bridge
+	constexpr UINT kVRMenuBridgeMapMenuWidgetMode4StereoIndexCount = 12u;  // mode 4: MapMenu projected widget bridge
+	constexpr UINT kVRMenuBridgeMapMenuWidgetMode8StereoIndexCount = 24u;  // mode 8: MapMenu projected widget bridge
+	constexpr UINT kVRMenuBridgeHUDMode48StereoIndexCount = 144u;          // mode 48: HUD menu bridge variant
+	constexpr UINT kVRMenuBridgeStatsSkillsWidgetStereoIndexCount = 186u;  // mode 62: Stats/skills widget bridge
+	constexpr UINT kVRMenuBridgeHUDMode168StereoIndexCount = 504u;         // mode 168: HUD menu bridge variant
+	constexpr UINT kVRMenuBridgeAdaptiveMaxStereoIndexCount = 1024u;
+	constexpr size_t kVRMenuBridgeAdaptiveProbeMissSlots = 16u;
+	constexpr uint32_t kVRMenuBridgeAdaptiveProbeMissCooldownFrames = 15u;
+	constexpr uint32_t kVRMenuBridgeAdaptiveContextMapMenu = 1u << 0;
+	constexpr uint32_t kVRMenuBridgeAdaptiveContextSkyrimMenu = 1u << 1;
+	constexpr uint32_t kVRMenuBridgeAdaptiveContextAny =
+		kVRMenuBridgeAdaptiveContextMapMenu |
+		kVRMenuBridgeAdaptiveContextSkyrimMenu;
+	constexpr std::array<UINT, 6> kVRMenuBridgeKnownStereoIndexCounts{ { kVRMenuBridgeProjectedMenuStereoIndexCount,
+		kVRMenuBridgeMapMenuWidgetMode4StereoIndexCount,
+		kVRMenuBridgeMapMenuWidgetMode8StereoIndexCount,
+		kVRMenuBridgeHUDMode48StereoIndexCount,
+		kVRMenuBridgeStatsSkillsWidgetStereoIndexCount,
+		kVRMenuBridgeHUDMode168StereoIndexCount } };
 	constexpr size_t kVRMenuBridgeAdaptiveStereoIndexCountSlots = 16u;
 	constexpr uint32_t kVRMenuBridgeAdaptiveProbeBudgetPerFrame = 4u;
 	constexpr uint32_t kVRCellTransitionTailFrames = 4;
@@ -213,10 +225,22 @@ namespace
 		VRMenuBridgeRuntimeDedupeKey key{};
 		uint32_t captureCount = 0;
 	};
+	struct VRMenuBridgeAdaptiveStereoIndexCountEntry
+	{
+		std::atomic_uint32_t indexCount{ 0 };
+		std::atomic_uint32_t contextMask{ 0 };
+	};
+	struct VRMenuBridgeAdaptiveProbeMiss
+	{
+		std::atomic_uint32_t indexCount{ 0 };
+		std::atomic_uint32_t contextMask{ 0 };
+		std::atomic_uint32_t retryFrame{ 0 };
+	};
 	constexpr uint32_t kVRKnownRedundantHUDMenuBridgeCallerRva = 0xDBDDF9u;
 	thread_local VRMenuBridgeHigherCallContext g_vrMenuBridgeHigherCallContext;
 	std::atomic_bool g_vrMenuBridgeHigherCallHookInstalled{ false };
-	std::array<std::atomic_uint32_t, kVRMenuBridgeAdaptiveStereoIndexCountSlots> g_vrMenuBridgeAdaptiveStereoIndexCounts{};
+	std::array<VRMenuBridgeAdaptiveStereoIndexCountEntry, kVRMenuBridgeAdaptiveStereoIndexCountSlots> g_vrMenuBridgeAdaptiveStereoIndexCounts{};
+	std::array<VRMenuBridgeAdaptiveProbeMiss, kVRMenuBridgeAdaptiveProbeMissSlots> g_vrMenuBridgeAdaptiveProbeMisses{};
 	std::atomic_uint32_t g_vrMenuBridgeAdaptiveProbeFrame{ 0 };
 	std::atomic_uint32_t g_vrMenuBridgeAdaptiveProbeCount{ 0 };
 	std::mutex g_vrMenuBridgeRuntimeDedupeMutex;
@@ -224,6 +248,8 @@ namespace
 	std::vector<VRMenuBridgeRuntimeDedupeEntry> g_vrMenuBridgeRuntimeDedupeEntries;
 
 	const VRMenuBridgeHigherCallContext* GetCurrentVRMenuBridgeHigherCallContext();
+	bool IsVRMenuBridgeTraceTailActive(const State* a_state);
+	bool IsVRObservedProjectedMenuTailActive(const State* a_state);
 
 	bool ShouldEmitUpscalingDiagLogs()
 	{
@@ -253,18 +279,85 @@ namespace
 				   a_indexCount) != kVRMenuBridgeKnownStereoIndexCounts.end();
 	}
 
-	bool IsMapMenuBridgeWidgetStereoIndexCount(UINT a_indexCount)
+	bool IsPlausibleAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount)
 	{
-		return a_indexCount == 12 || a_indexCount == 24;
+		return a_indexCount >= 3 &&
+		       a_indexCount <= kVRMenuBridgeAdaptiveMaxStereoIndexCount &&
+		       (a_indexCount % 3u) == 0u;
 	}
 
-	bool ShouldKeepOriginalVRMenuBridgeDraw(UINT a_indexCount)
+	uint32_t GetCurrentVRMenuBridgeAdaptiveContextMask(bool a_allowLiveMapMenuQuery = false)
 	{
 		const auto* state = globals::state;
-		return state && state->isMapMenuOpen && IsMapMenuBridgeWidgetStereoIndexCount(a_indexCount);
+		if (!state)
+			return 0;
+
+		uint32_t contextMask = 0;
+		auto* ui = a_allowLiveMapMenuQuery ? globals::game::ui : nullptr;
+		if (state->isMapMenuOpen ||
+			(ui && ui->IsMenuOpen(RE::MapMenu::MENU_NAME))) {
+			contextMask |= kVRMenuBridgeAdaptiveContextMapMenu;
+		}
+		if (state->isMainMenuOpen || state->isLoadingMenuOpen)
+			contextMask |= kVRMenuBridgeAdaptiveContextSkyrimMenu;
+		if (!contextMask &&
+			(IsVRMenuBridgeTraceTailActive(state) || IsVRObservedProjectedMenuTailActive(state))) {
+			return kVRMenuBridgeAdaptiveContextAny;
+		}
+
+		return contextMask ? contextMask : kVRMenuBridgeAdaptiveContextSkyrimMenu;
 	}
 
-	bool IsAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount)
+	bool IsKnownMapMenuWidgetStereoIndexCount(UINT a_indexCount)
+	{
+		return a_indexCount == kVRMenuBridgeMapMenuWidgetMode4StereoIndexCount ||
+		       a_indexCount == kVRMenuBridgeMapMenuWidgetMode8StereoIndexCount;
+	}
+
+	bool ShouldKeepOriginalVRMenuBridgeDraw(
+		UINT a_indexCount,
+		uint32_t a_contextMask,
+		uint32_t a_sourceSlot,
+		RE::RENDER_TARGETS::RENDER_TARGET a_sourceTarget)
+	{
+		if ((a_contextMask & kVRMenuBridgeAdaptiveContextMapMenu) == 0)
+			return false;
+
+		if (IsKnownMapMenuWidgetStereoIndexCount(a_indexCount))
+			return true;
+
+		if (a_sourceTarget != RE::RENDER_TARGETS::kPROJECTEDMENU)
+			return false;
+
+		// Use non-zero projected SRV slots as the adaptive escape hatch for
+		// modlist-specific widgets without broadening the primary projected-menu
+		// suppression path.
+		return a_sourceSlot != 0;
+	}
+
+	bool AdaptiveVRMenuBridgeContextMasksOverlap(uint32_t a_leftMask, uint32_t a_rightMask)
+	{
+		return a_leftMask != 0 && (a_rightMask == 0 || (a_leftMask & a_rightMask) != 0);
+	}
+
+	bool MergeAdaptiveVRMenuBridgeContextMask(std::atomic_uint32_t& a_contextMask, uint32_t a_newMask)
+	{
+		uint32_t currentMask = a_contextMask.load(std::memory_order_relaxed);
+		for (;;) {
+			const uint32_t mergedMask = currentMask | a_newMask;
+			if (mergedMask == currentMask)
+				return false;
+			if (a_contextMask.compare_exchange_weak(
+					currentMask,
+					mergedMask,
+					std::memory_order_relaxed,
+					std::memory_order_relaxed)) {
+				return true;
+			}
+		}
+	}
+
+	bool IsAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount, uint32_t a_contextMask)
 	{
 		const auto indexCount = static_cast<uint32_t>(a_indexCount);
 		if (!indexCount)
@@ -273,23 +366,96 @@ namespace
 		return std::any_of(
 			g_vrMenuBridgeAdaptiveStereoIndexCounts.begin(),
 			g_vrMenuBridgeAdaptiveStereoIndexCounts.end(),
-			[indexCount](const std::atomic_uint32_t& a_entry) {
-				return a_entry.load(std::memory_order_relaxed) == indexCount;
+			[indexCount, a_contextMask](const VRMenuBridgeAdaptiveStereoIndexCountEntry& a_entry) {
+				if (a_entry.indexCount.load(std::memory_order_relaxed) != indexCount)
+					return false;
+
+				return AdaptiveVRMenuBridgeContextMasksOverlap(
+					a_entry.contextMask.load(std::memory_order_relaxed),
+					a_contextMask);
 			});
 	}
 
-	bool IsAcceptedVRMenuBridgeStereoIndexCount(UINT a_indexCount)
+	bool IsAcceptedVRMenuBridgeStereoIndexCount(UINT a_indexCount, uint32_t a_contextMask)
 	{
 		return IsKnownVRMenuBridgeStereoIndexCount(a_indexCount) ||
-		       IsAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount);
+		       IsAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount, a_contextMask);
 	}
 
-	bool ShouldProbeAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount, uint32_t a_frame)
+	bool IsAdaptiveVRMenuBridgeProbeMissCoolingDown(UINT a_indexCount, uint32_t a_contextMask, uint32_t a_frame)
 	{
-		if (!a_indexCount || IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount))
+		const auto indexCount = static_cast<uint32_t>(a_indexCount);
+		for (auto& entry : g_vrMenuBridgeAdaptiveProbeMisses) {
+			if (entry.indexCount.load(std::memory_order_relaxed) != indexCount)
+				continue;
+			if (!AdaptiveVRMenuBridgeContextMasksOverlap(
+					entry.contextMask.load(std::memory_order_relaxed),
+					a_contextMask)) {
+				continue;
+			}
+
+			return a_frame < entry.retryFrame.load(std::memory_order_relaxed);
+		}
+
+		return false;
+	}
+
+	void RecordAdaptiveVRMenuBridgeProbeMiss(UINT a_indexCount, uint32_t a_contextMask, uint32_t a_frame)
+	{
+		const auto indexCount = static_cast<uint32_t>(a_indexCount);
+		if (!IsPlausibleAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount) ||
+			IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount, a_contextMask)) {
+			return;
+		}
+
+		const uint32_t contextMask = a_contextMask ? a_contextMask : kVRMenuBridgeAdaptiveContextAny;
+		const uint32_t retryFrame = std::max(a_frame, 1u) + kVRMenuBridgeAdaptiveProbeMissCooldownFrames;
+		for (auto& entry : g_vrMenuBridgeAdaptiveProbeMisses) {
+			if (entry.indexCount.load(std::memory_order_relaxed) != indexCount)
+				continue;
+			if (!AdaptiveVRMenuBridgeContextMasksOverlap(
+					entry.contextMask.load(std::memory_order_relaxed),
+					contextMask)) {
+				continue;
+			}
+
+			entry.retryFrame.store(retryFrame, std::memory_order_relaxed);
+			(void)MergeAdaptiveVRMenuBridgeContextMask(entry.contextMask, contextMask);
+			return;
+		}
+
+		for (auto& entry : g_vrMenuBridgeAdaptiveProbeMisses) {
+			uint32_t empty = 0;
+			if (!entry.indexCount.compare_exchange_strong(
+					empty,
+					indexCount,
+					std::memory_order_relaxed,
+					std::memory_order_relaxed)) {
+				continue;
+			}
+
+			entry.contextMask.store(contextMask, std::memory_order_relaxed);
+			entry.retryFrame.store(retryFrame, std::memory_order_relaxed);
+			return;
+		}
+
+		auto& entry = g_vrMenuBridgeAdaptiveProbeMisses[a_frame % g_vrMenuBridgeAdaptiveProbeMisses.size()];
+		entry.indexCount.store(indexCount, std::memory_order_relaxed);
+		entry.contextMask.store(contextMask, std::memory_order_relaxed);
+		entry.retryFrame.store(retryFrame, std::memory_order_relaxed);
+	}
+
+	bool ShouldProbeAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount, uint32_t a_contextMask, uint32_t a_frame)
+	{
+		if (!IsPlausibleAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount) ||
+			IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount, a_contextMask)) {
 			return false;
+		}
 
 		const uint32_t frame = std::max(a_frame, 1u);
+		if (IsAdaptiveVRMenuBridgeProbeMissCoolingDown(a_indexCount, a_contextMask, frame))
+			return false;
+
 		uint32_t observedFrame = g_vrMenuBridgeAdaptiveProbeFrame.load(std::memory_order_relaxed);
 		if (observedFrame != frame &&
 			g_vrMenuBridgeAdaptiveProbeFrame.compare_exchange_strong(
@@ -304,24 +470,42 @@ namespace
 		       kVRMenuBridgeAdaptiveProbeBudgetPerFrame;
 	}
 
-	void RecordAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount)
+	void RecordAdaptiveVRMenuBridgeStereoIndexCount(UINT a_indexCount, uint32_t a_contextMask)
 	{
 		const auto indexCount = static_cast<uint32_t>(a_indexCount);
-		if (!indexCount || IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount))
+		if (!IsPlausibleAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount) ||
+			IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount, a_contextMask)) {
 			return;
+		}
 
 		for (auto& entry : g_vrMenuBridgeAdaptiveStereoIndexCounts) {
+			if (entry.indexCount.load(std::memory_order_relaxed) == indexCount) {
+				if (MergeAdaptiveVRMenuBridgeContextMask(entry.contextMask, a_contextMask) &&
+					ShouldEmitUpscalingDiagLogs()) {
+					logger::debug(
+						"[VRMenuBridge] Expanded adaptive stereo draw count indexCount={} inferredMode={} contextMask=0x{:X}",
+						indexCount,
+						indexCount / 3u,
+						a_contextMask);
+				}
+				return;
+			}
+
 			uint32_t empty = 0;
-			if (entry.compare_exchange_strong(
+			if (entry.indexCount.compare_exchange_strong(
 					empty,
 					indexCount,
 					std::memory_order_relaxed,
 					std::memory_order_relaxed)) {
+				entry.contextMask.store(
+					a_contextMask ? a_contextMask : kVRMenuBridgeAdaptiveContextAny,
+					std::memory_order_relaxed);
 				if (ShouldEmitUpscalingDiagLogs()) {
 					logger::debug(
-						"[VRMenuBridge] Learned adaptive stereo draw count indexCount={} inferredMode={}",
+						"[VRMenuBridge] Learned adaptive stereo draw count indexCount={} inferredMode={} contextMask=0x{:X}",
 						indexCount,
-						indexCount / 3u);
+						indexCount / 3u,
+						a_contextMask);
 				}
 				return;
 			}
@@ -4031,6 +4215,7 @@ void Upscaling::ResetVRMenuFinalCompositeLayer()
 	vrMenuFinalCompositeLayerFormat = DXGI_FORMAT_UNKNOWN;
 	vrMenuFinalCompositeLayerClearedFrame = std::numeric_limits<uint32_t>::max();
 	vrMenuFinalCompositeLayerDrawCount = 0;
+	vrMenuFinalCompositeHasOverlayOnlyCapture = false;
 	vrMenuParallelBridgeDrawInProgress = false;
 }
 
@@ -4285,6 +4470,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		finalWidth <= renderWidth || finalHeight <= renderHeight) {
 		return false;
 	}
+	const uint32_t adaptiveContextMask = GetCurrentVRMenuBridgeAdaptiveContextMask(true);
 
 	BeginVRMenuFinalCompositeFrame(state->frameCount);
 	VRMenuCompositionTargetMatch destination{};
@@ -4345,7 +4531,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	ExtendVRMenuPresentationTail(kVRObservedMenuPresentationTailFrames);
 	ExtendVRMenuBridgeTraceTail(kVRObservedMenuPresentationTailFrames);
 
-	const bool keepOriginalDraw = ShouldKeepOriginalVRMenuBridgeDraw(a_indexCount);
+	const bool keepOriginalDraw =
+		ShouldKeepOriginalVRMenuBridgeDraw(a_indexCount, adaptiveContextMask, menuSourceSlot, menuSourceMatch.target);
 	if (!keepOriginalDraw &&
 		TrySuppressKnownRedundantVRMenuBridgeCapture(
 			*this,
@@ -4354,7 +4541,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 			menuSourceSlot,
 			menuSourceMatch,
 			destination)) {
-		RecordAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount);
+		RecordAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount, adaptiveContextMask);
 		vrMenuFinalCompositeSuppressedTargets[menuSourceTargetIndex] = true;
 		return true;
 	}
@@ -4374,7 +4561,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	if (!liveLayerDrawn)
 		return false;
 
-	RecordAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount);
+	RecordAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount, adaptiveContextMask);
 	if (keepOriginalDraw) {
 		vrMenuFinalCompositeHasOverlayOnlyCapture = true;
 		return false;
@@ -4427,6 +4614,7 @@ bool Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
 
 	auto& upscaling = globals::features::upscaling;
 	const uint32_t currentFrame = std::max(state->frameCount, 1u);
+	const uint32_t contextMask = GetCurrentVRMenuBridgeAdaptiveContextMask();
 	if (upscaling.vrMenuFinalCompositeFrame == currentFrame &&
 		std::all_of(
 			upscaling.vrMenuFinalCompositeSuppressedTargets.begin(),
@@ -4435,10 +4623,10 @@ bool Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
 		return false;
 	}
 
-	if (IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount))
+	if (IsAcceptedVRMenuBridgeStereoIndexCount(a_indexCount, contextMask))
 		return true;
 
-	return ShouldProbeAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount, currentFrame);
+	return ShouldProbeAdaptiveVRMenuBridgeStereoIndexCount(a_indexCount, contextMask, currentFrame);
 }
 
 bool Upscaling::TraceVRMenuBridgeDrawOperation(
@@ -4451,7 +4639,7 @@ bool Upscaling::TraceVRMenuBridgeDrawOperation(
 	uint32_t a_callerRva)
 {
 	auto& upscaling = globals::features::upscaling;
-	return upscaling.TryCaptureAndSuppressVRMenuBridgeDraw(
+	const bool captured = upscaling.TryCaptureAndSuppressVRMenuBridgeDraw(
 		a_context,
 		a_indexCount,
 		a_instanceCount,
@@ -4459,6 +4647,15 @@ bool Upscaling::TraceVRMenuBridgeDrawOperation(
 		a_baseVertexLocation,
 		a_startInstanceLocation,
 		a_callerRva);
+	if (!captured) {
+		const auto* state = globals::state;
+		RecordAdaptiveVRMenuBridgeProbeMiss(
+			a_indexCount,
+			GetCurrentVRMenuBridgeAdaptiveContextMask(true),
+			state ? state->frameCount : 0u);
+	}
+
+	return captured;
 }
 
 bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D& a_outputTexture, uint32_t a_eyeWidth, uint32_t a_eyeHeight, uint32_t a_frame)

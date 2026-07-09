@@ -770,6 +770,8 @@ void AdaptiveBrightness::DrawEssentialSettings()
 		ImGui::EndTabBar();
 	}
 
+	DrawLocationOverrides(false, false);
+
 	ImGui::EndDisabled();
 }
 
@@ -978,12 +980,14 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 	ImGui::PopID();
 }
 
-void AdaptiveBrightness::DrawLocationOverrides()
+void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls)
 {
 	ImGui::SeparatorText("Location Override Profiles");
 	DrawHintText("Location overrides are per-place profiles. A saved override is used when its location or cell matches where you are.");
-	DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
-	DrawHintText(kImportedChangesSaveHint);
+	if (a_includePresetControls) {
+		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
+		DrawHintText(kImportedChangesSaveHint);
+	}
 
 	const auto target = GetCurrentLocationOverrideTarget();
 	const auto* activeOverride = GetActiveLocationOverride();
@@ -1016,7 +1020,8 @@ void AdaptiveBrightness::DrawLocationOverrides()
 		ImGui::TextDisabled("No current location or cell form is available.");
 	}
 
-	DrawLocationOverridePresetControls();
+	if (a_includePresetControls)
+		DrawLocationOverridePresetControls();
 	ImGui::SeparatorText("Saved Overrides");
 	DrawHintText("These saved overrides are matched by location or cell. Click a row to edit it.");
 
@@ -1177,7 +1182,7 @@ void AdaptiveBrightness::DrawLocationOverrides()
 		ImGui::TextWrapped("%s (%s, %s)", selectedOverride->name.c_str(), selectedOverride->type.c_str(), selectedOverride->key.c_str());
 		ImGui::PushID(selectedOverride->key.c_str());
 		if (auto* editProfile = GetLocationOverrideEditProfile(*selectedOverride)) {
-			DrawProfileSettings(*editProfile, "Override Profile Values");
+			DrawProfileSettings(*editProfile, "Override Profile Values", a_showAdvancedControls);
 			if (ImGui::Button("Save Edit")) {
 				selectedOverride->profile = *editProfile;
 				ClearLocationOverrideSelection();

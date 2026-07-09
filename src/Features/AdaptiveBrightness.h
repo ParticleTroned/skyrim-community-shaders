@@ -175,7 +175,7 @@ struct AdaptiveBrightness : Feature
 	void DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle = "Profile Values", bool a_showAdvancedControls = true);
 	void SetAdvancedControlsOpen(bool a_open);
 	void DrawGlobalPresetControls();
-	void DrawLocationOverrides();
+	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true);
 	void DrawLocationOverridePresetControls();
 	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride();

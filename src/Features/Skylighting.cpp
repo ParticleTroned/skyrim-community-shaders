@@ -88,6 +88,11 @@ namespace
 		return std::max(ClampUpdateInterval(a_settings.ProbeUpdateInterval), ClampUpdateInterval(a_settings.OcclusionUpdateInterval));
 	}
 
+	uint ClampProbeUpdateIntervalAgainstOcclusion(const Skylighting::Settings& a_settings, uint a_probeInterval)
+	{
+		return std::max(ClampUpdateInterval(a_probeInterval), ClampUpdateInterval(a_settings.OcclusionUpdateInterval));
+	}
+
 	bool UsesIncrementalProbeSlices(const Skylighting::Settings& a_settings, uint a_probeDepth)
 	{
 		return a_settings.EnableIncrementalProbeUpdates &&
@@ -147,8 +152,6 @@ namespace
 		a_settings.ProbeGridQuality = ClampProbeGridQuality(a_settings.ProbeGridQuality);
 		a_settings.OcclusionUpdateInterval = ClampUpdateInterval(a_settings.OcclusionUpdateInterval);
 		a_settings.ProbeUpdateInterval = ClampUpdateInterval(a_settings.ProbeUpdateInterval);
-		if (a_settings.ProbeUpdateInterval < a_settings.OcclusionUpdateInterval)
-			a_settings.ProbeUpdateInterval = a_settings.OcclusionUpdateInterval;
 	}
 
 	void DrawSkylightingUpdatePerformanceSettings(Skylighting& a_skylighting)
@@ -165,13 +168,15 @@ namespace
 		ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
 		{
 			int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
-			if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16))
+			if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16)) {
 				settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
+				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
+			}
 
 			ImGui::BeginDisabled(usesIncrementalProbeSlices);
 			int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
 			if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
-				settings.ProbeUpdateInterval = ClampUpdateInterval(static_cast<uint>(probeIntervalUI));
+				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
 			ImGui::EndDisabled();
 		}
 		ImGui::EndDisabled();
@@ -445,20 +450,22 @@ void Skylighting::DrawSettings()
 	ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
 	{
 		int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
-		if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16))
+		if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16)) {
 			settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
+			settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
+		}
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("How often skylight shadowing refreshes. 1 = every frame. Higher = faster, but slower reaction.");
 
 		ImGui::BeginDisabled(usesIncrementalProbeSlices);
 		int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
 		if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, 1, 16))
-			settings.ProbeUpdateInterval = ClampUpdateInterval(static_cast<uint>(probeIntervalUI));
+			settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(usesIncrementalProbeSlices ?
 							"Incremental probe updates follow each fresh occlusion quadrant." :
-							"How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction.");
+							"How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction. It cannot be lower than Occlusion Update Interval.");
 	}
 	ImGui::EndDisabled();
 	NormalizeSettingsForRuntime(settings);
@@ -468,7 +475,7 @@ void Skylighting::DrawSettings()
 		if (usesIncrementalProbeSlices)
 			ImGui::Text("Probe refresh cadence: each fresh occlusion quadrant");
 		else
-			ImGui::Text("Probe refresh cadence: every %u frame(s)", settings.ProbeUpdateInterval);
+			ImGui::Text("Probe refresh cadence: every %u frame(s)", GetProbeUpdateInterval(settings));
 	}
 
 	{

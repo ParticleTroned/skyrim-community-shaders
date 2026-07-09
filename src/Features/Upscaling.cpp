@@ -5960,6 +5960,9 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
 	}
 
+	if (a_essentialsLayout)
+		ImGui::TextDisabled("All FOV controls are available in the VR tab.");
+
 	ImGui::Dummy(ImVec2(0.0f, 6.0f));
 	ImGui::Separator();
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -6026,7 +6029,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	ImGui::BeginDisabled(!settings.periphery_taa_enable);
 	if (!settings.periphery_taa_enable)
 		ImGui::TextDisabled(a_essentialsLayout ?
-								"Enable FOV + TAA to edit the center and visible outer scales. All FOV controls are available in the VR tab." :
+								"Enable FOV + TAA to edit the center and visible outer scales." :
 								"Enable FOV + TAA to edit the center scale, transition, and visible outer scale.");
 	ImGui::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	if (settings.periphery_taa_enable) {
@@ -6052,8 +6055,6 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 			}
 		}
 		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
-	} else {
-		ImGui::TextDisabled("All FOV controls are available in the VR tab.");
 	}
 	const float taaOuterRangeMin = GetPeripheryTAAOuterScaleFloor(settings.periphery_taa_center_area);
 	ImGui::SliderFloat(

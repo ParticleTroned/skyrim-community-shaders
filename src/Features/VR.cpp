@@ -1289,6 +1289,8 @@ namespace
 
 void VR::DrawEssentialSettings()
 {
+	DrawCSMenuNavigationSettings();
+
 	ImGui::SeparatorText("Desktop");
 	DrawKeepDesktopWindowFocusedForVRMenuSetting();
 	DrawStabilizeRenderScaleDesktopMirrorSetting();

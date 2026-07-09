@@ -57,6 +57,12 @@ namespace
 			}
 		}
 	}
+
+	bool UsesPointLightTypeMultipliers(const CSUtility::Settings& a_settings)
+	{
+		return a_settings.spotlightMult != 1.0f ||
+		       a_settings.omnidirectionalBulbMult != 1.0f;
+	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -158,7 +164,15 @@ bool CSUtility::IsRuntimeEnabled() const
 
 bool CSUtility::NeedsVanillaPointLightData() const
 {
-	return IsRuntimeEnabled() && !globals::features::lightLimitFix.loaded;
+	if (!loaded || globals::features::lightLimitFix.loaded)
+		return false;
+
+	// The shared flag buffer still classifies linear point lights for Linear
+	// Lighting even when CS Utility's own runtime toggle is off.
+	if (globals::features::linearLighting.IsRuntimeEnabled())
+		return true;
+
+	return IsRuntimeEnabled() && UsesPointLightTypeMultipliers(settings);
 }
 
 void CSUtility::UpdateVanillaPointLightData(RE::BSRenderPass* a_pass, uint32_t a_lightCount)

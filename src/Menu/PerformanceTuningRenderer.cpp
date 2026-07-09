@@ -947,7 +947,7 @@ namespace
 		if (shortName == "DynamicCubemaps")
 			return "screen-space reflections, dynamic cubemap cadence, and low-visibility cubemap throttle are switched off.";
 		if (shortName == "Skylighting")
-			return "Skylighting is switched off, so probe updates stop and ambient/reflection occlusion falls back to the unoccluded path.";
+			return "the in-game Enable Skylighting toggle is switched off, so probe updates stop and ambient shading plus reflection occlusion fall back to the unoccluded path.";
 		if (shortName == "TerrainBlending")
 			return "Terrain Blending is switched off.";
 		if (shortName == "TerrainShadows")
@@ -1000,6 +1000,9 @@ namespace
 			ImGui::TextWrapped(
 				"Measures current settings for %.0f seconds, then compares with the state below using raw game timing.",
 				kFeatureCostMeasurementSeconds);
+			if (feature && feature->GetShortName() == "Skylighting") {
+				ImGui::TextWrapped("For Skylighting, the comparison state is the in-game Enable Skylighting toggle set to Off, not a lower preset.");
+			}
 			ImGui::TextWrapped(
 				"Comparison: %s - %s",
 				GetFeatureCostComparisonLabel(feature, state),

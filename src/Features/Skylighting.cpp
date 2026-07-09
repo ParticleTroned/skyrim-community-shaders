@@ -46,7 +46,7 @@ namespace
 	constexpr std::array<SkylightingPerformancePreset, 4> kSkylightingPerformancePresets = {
 		SkylightingPerformancePreset{
 			"Performance",
-			"Lowest cost profile from the provided performance baseline.",
+			"Lowest cost Skylighting preset while the feature remains enabled.",
 			0,
 			8,
 			16,
@@ -57,7 +57,7 @@ namespace
 			true },
 		SkylightingPerformancePreset{
 			"Balanced",
-			"Default profile, one third of the way from Performance toward Hoshipa.",
+			"Default Skylighting preset, one third of the way from Performance toward Hoshipa.",
 			1,
 			6,
 			13,
@@ -68,7 +68,7 @@ namespace
 			true },
 		SkylightingPerformancePreset{
 			"Quality",
-			"Higher quality profile, two thirds of the way from Performance toward Hoshipa.",
+			"Higher quality Skylighting preset, two thirds of the way from Performance toward Hoshipa.",
 			2,
 			5,
 			9,
@@ -79,7 +79,7 @@ namespace
 			true },
 		SkylightingPerformancePreset{
 			"Hoshipa",
-			"Highest quality profile from the provided Hoshipa baseline.",
+			"Highest quality Skylighting preset from the Hoshipa configuration.",
 			4,
 			3,
 			6,
@@ -236,6 +236,7 @@ namespace
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Runtime-safe toggle. Keeps shaders and hooks loaded, but disables Skylighting updates and shading until re-enabled.");
+			ImGui::Text("The performance profiler compares against this Off state, not against a lower Skylighting preset.");
 		}
 	}
 
@@ -303,6 +304,10 @@ namespace
 	void DrawSkylightingPerformancePresetButtons(Skylighting& a_skylighting, const char* a_tableId)
 	{
 		ImGui::TextUnformatted("Performance Profiles");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("These presets tune Skylighting while it stays enabled.");
+			ImGui::Text("The performance profiler compares against turning Enable Skylighting off instead of using one of these presets.");
+		}
 
 		if (ImGui::BeginTable(a_tableId, static_cast<int>(kSkylightingPerformancePresets.size()), ImGuiTableFlags_SizingStretchProp)) {
 			for (size_t i = 0; i < kSkylightingPerformancePresets.size(); ++i) {

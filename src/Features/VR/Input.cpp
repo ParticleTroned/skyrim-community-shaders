@@ -40,6 +40,7 @@ namespace
 	bool gHasLastControllerCursorPos = false;
 	bool gHasLastMenuNavigationMode = false;
 	bool gLastMenuNavigationUsesWand = false;
+	bool gWandClaimedCursorThisFrame = false;
 	constexpr float kDesktopCursorMotionThresholdSq = 2.0f * 2.0f;
 
 	void ResetVRImGuiButtonState()
@@ -62,6 +63,13 @@ namespace
 		       std::isfinite(pos.y) &&
 		       pos.x > -100000.0f &&
 		       pos.y > -100000.0f;
+	}
+
+	ImVec2 ClampCursorToDisplay(const ImVec2& pos, const ImVec2& displaySize)
+	{
+		return ImVec2(
+			std::clamp(pos.x, 0.0f, std::max(displaySize.x, 0.0f)),
+			std::clamp(pos.y, 0.0f, std::max(displaySize.y, 0.0f)));
 	}
 
 	size_t GetThumbstickIndexForController(const RE::VRControllerState* controllerState, const RE::VRControllerState& primaryControllerState)
@@ -98,6 +106,7 @@ namespace
 		gLastControllerCursorPos = ImVec2(0.0f, 0.0f);
 		gHasLastDesktopMousePos = false;
 		gHasLastControllerCursorPos = false;
+		gWandClaimedCursorThisFrame = false;
 	}
 
 	void UpdateMenuNavigationPathState(bool a_useWandNavigation)
@@ -347,6 +356,7 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 						gCursorOwner = CursorOwner::Wand;
 						gLastControllerCursorPos = io.MousePos;
 						gHasLastControllerCursorPos = true;
+						gWandClaimedCursorThisFrame = true;
 					}
 					if (mappings[i].logicalButton >= 0 && mappings[i].logicalButton < ImGuiMouseButton_COUNT) {
 						gVRMouseButtonDown[mappings[i].logicalButton] = curr;
@@ -516,16 +526,12 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 	bool desktopMouseMoved = false;
 	bool desktopMouseClicked = false;
 	if (desktopCursorUsable) {
-		if (gCursorOwner == CursorOwner::Wand && gHasLastControllerCursorPos) {
-			const float dx = desktopBaselineMousePos.x - gLastControllerCursorPos.x;
-			const float dy = desktopBaselineMousePos.y - gLastControllerCursorPos.y;
-			desktopMouseMoved = (dx * dx + dy * dy) > kDesktopCursorMotionThresholdSq;
-		} else if (gHasLastDesktopMousePos) {
+		if (gHasLastDesktopMousePos) {
 			const float dx = desktopBaselineMousePos.x - gLastDesktopMousePos.x;
 			const float dy = desktopBaselineMousePos.y - gLastDesktopMousePos.y;
 			desktopMouseMoved = (dx * dx + dy * dy) > kDesktopCursorMotionThresholdSq;
 		} else {
-			desktopMouseMoved = true;
+			desktopMouseMoved = gCursorOwner == CursorOwner::Desktop;
 		}
 	}
 	for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
@@ -538,8 +544,12 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 		}
 		gLastObservedMouseButtonDown[button] = mouseButtonDown;
 	}
+	if (gWandClaimedCursorThisFrame) {
+		desktopMouseMoved = false;
+		desktopMouseClicked = false;
+	}
 
-	if (desktopCursorUsable && (gCursorOwner == CursorOwner::Desktop || desktopMouseMoved || desktopMouseClicked)) {
+	if (desktopCursorUsable) {
 		gLastDesktopMousePos = desktopBaselineMousePos;
 		gHasLastDesktopMousePos = true;
 	} else {
@@ -569,10 +579,11 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 	if (useWandPointing) {
 		UpdateCursorFromWandPointing(false);
 		wandHandledCursor = wandState.isIntersecting;
+		const bool wandCursorUsable = io.WantSetMousePos && HasUsableCursorPos(io.MousePos);
 		const bool canAdoptWandCursor =
-			io.WantSetMousePos &&
-			HasUsableCursorPos(io.MousePos) &&
-			((wandState.isActivelyDrivingCursor && !desktopMouseMoved && !desktopMouseClicked) ||
+			wandCursorUsable &&
+			(gWandClaimedCursorThisFrame ||
+				(wandState.isActivelyDrivingCursor && !desktopMouseMoved && !desktopMouseClicked) ||
 				gCursorOwner == CursorOwner::Wand);
 		if (canAdoptWandCursor) {
 			gCursorOwner = CursorOwner::Wand;
@@ -616,18 +627,22 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 	}
 
 	if (desktopCursorUsable && gCursorOwner == CursorOwner::Desktop) {
+		const ImVec2 desktopCursorPos = ClampCursorToDisplay(desktopBaselineMousePos, io.DisplaySize);
 		wandState.isIntersecting = false;
 		wandState.isActivelyDrivingCursor = false;
-		io.MousePos = desktopBaselineMousePos;
-		io.AddMousePosEvent(desktopBaselineMousePos.x, desktopBaselineMousePos.y);
+		io.MousePos = desktopCursorPos;
+		io.AddMousePosEvent(desktopCursorPos.x, desktopCursorPos.y);
 		io.WantSetMousePos = true;
 		customVRCursorVisible = true;
-		customVRCursorPos = desktopBaselineMousePos;
+		customVRCursorPos = desktopCursorPos;
 		customVRCursorOverlayType = settings.attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
 	} else if (gHasLastControllerCursorPos && gCursorOwner == CursorOwner::Wand) {
 		io.MousePos = gLastControllerCursorPos;
 		io.AddMousePosEvent(gLastControllerCursorPos.x, gLastControllerCursorPos.y);
 		io.WantSetMousePos = true;
+		customVRCursorVisible = true;
+		customVRCursorPos = ClampCursorToDisplay(gLastControllerCursorPos, io.DisplaySize);
+		customVRCursorOverlayType = wandState.overlayType;
 	}
 }
 
@@ -670,8 +685,11 @@ void VR::ProcessControllerInputForMouseNavigationPath(bool testMode, float mouse
 	// The VR menu renderer suppresses ImGui's native mouse cursor in the HMD pass,
 	// so the mouse-navigation path still needs to surface its resolved cursor position here.
 	if (HasUsableCursorPos(io.MousePos)) {
+		const ImVec2 mouseCursorPos = ClampCursorToDisplay(io.MousePos, io.DisplaySize);
+		io.MousePos = mouseCursorPos;
+		io.AddMousePosEvent(mouseCursorPos.x, mouseCursorPos.y);
 		customVRCursorVisible = true;
-		customVRCursorPos = io.MousePos;
+		customVRCursorPos = mouseCursorPos;
 		customVRCursorOverlayType = settings.attachMode == AttachMode::ControllerOnly ? OverlayType::Controller : OverlayType::HMD;
 	}
 }
@@ -700,4 +718,5 @@ void VR::ProcessControllerInputForImGui()
 	} else {
 		ProcessControllerInputForMouseNavigationPath(testMode, mouseDeadzone, mouseSpeed, io);
 	}
+	gWandClaimedCursorThisFrame = false;
 }

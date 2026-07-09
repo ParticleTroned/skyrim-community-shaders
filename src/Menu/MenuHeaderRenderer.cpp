@@ -20,6 +20,7 @@
 namespace
 {
 	using RoleFontGuard = MenuFonts::FontRoleGuard;
+	constexpr float kHeaderActionIconScale = 0.75f;
 
 	float GetHeaderIconSize(float a_uiScale)
 	{
@@ -28,7 +29,7 @@ namespace
 
 	float GetHeaderActionIconSize(float a_uiScale)
 	{
-		return GetHeaderIconSize(a_uiScale) * 1.5f;
+		return GetHeaderIconSize(a_uiScale) * 1.5f * kHeaderActionIconScale;
 	}
 
 	float GetDockedActionIconSize(float a_uiScale, float a_titleBarHeight)
@@ -172,11 +173,20 @@ void MenuHeaderRenderer::RenderHeader(
 		const float dockHandleSpacing = showSteamVRDockHandle && !actionIcons.empty() ? iconSpacing : 0.0f;
 		const float rightControlInset = showSteamVRDockHandle ? GetSteamVRHeaderRightInset(uiScale) : 0.0f;
 		const float buttonColumnWidth = actionButtonsWidth + dockHandleSpacing + dockHandleWidth + rightControlInset;
+		const float titleLeftPadding =
+			ThemeManager::Constants::CURSOR_POSITION_PADDING +
+			(showSteamVRDockHandle ? GetSteamVRResizeHandleSize(uiScale) + ImGui::GetStyle().ItemSpacing.x : 0.0f);
+		const float headerRowHeight = std::max({ logoSize,
+			actionButtonWidth,
+			dockHandleWidth,
+			ImGui::GetFontSize() * textScaleFactor });
 
 		if ((showLogo || canShowIcons || showSteamVRDockHandle) && ImGui::BeginTable("##HeaderLayout", 2, ImGuiTableFlags_SizingStretchProp)) {
 			ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_WidthStretch);
 			ImGui::TableSetupColumn("Buttons", ImGuiTableColumnFlags_WidthFixed, buttonColumnWidth);
+			const float headerRowStartY = ImGui::GetCursorPosY();
 			ImGui::TableNextColumn();  // Title on the left with logo
+			ImGui::SetCursorPosY(headerRowStartY + std::max(0.0f, (headerRowHeight - logoSize) * 0.5f));
 
 			if (centerHeader) {
 				// Calculate the width of the content
@@ -201,7 +211,7 @@ void MenuHeaderRenderer::RenderHeader(
 				}
 			} else {
 				// Add padding for left-aligned layout
-				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ThemeManager::Constants::CURSOR_POSITION_PADDING);
+				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + titleLeftPadding);
 			}
 
 			// Always display logo if texture is available
@@ -238,6 +248,8 @@ void MenuHeaderRenderer::RenderHeader(
 
 			// Buttons on the right
 			ImGui::TableNextColumn();
+			const float buttonRowHeight = std::max(actionButtonWidth, dockHandleWidth);
+			ImGui::SetCursorPosY(headerRowStartY + std::max(0.0f, (headerRowHeight - buttonRowHeight) * 0.5f));
 			RenderUndockedIcons(actionIcons, uiScale);
 			if (showSteamVRDockHandle) {
 				if (!actionIcons.empty()) {

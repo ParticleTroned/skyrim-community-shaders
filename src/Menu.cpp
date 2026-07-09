@@ -188,6 +188,7 @@ namespace
 	{
 		ImVec2 center;
 		ImVec2 size;
+		bool constrainedByTopStatusWindow = false;
 	};
 
 	float GetVRMenuSafePadding()
@@ -205,15 +206,28 @@ namespace
 		}
 	}
 
-	void ExcludeShaderCompilationWindowFromTop(ImVec2& a_availableMin, const ImVec2& a_availableMax)
+	bool ExcludeTopStatusWindowsFromLayout(ImVec2& a_availableMin, const ImVec2& a_availableMax, float& a_topStatusLeft)
 	{
-		auto* shaderWindow = ImGui::FindWindowByName("ShaderCompilationInfo");
-		if (!shaderWindow || !shaderWindow->Active || shaderWindow->Hidden)
-			return;
+		const char* topStatusWindows[] = {
+			"ShaderCompilationInfo",
+			"UWCacheCreationInfo",
+			"ShaderBlockingInfo"
+		};
 
-		const float shaderBottom = shaderWindow->Pos.y + shaderWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
-		if (shaderBottom > a_availableMin.y)
-			a_availableMin.y = std::min(shaderBottom, a_availableMax.y);
+		bool foundTopStatusWindow = false;
+		for (const char* windowName : topStatusWindows) {
+			auto* statusWindow = ImGui::FindWindowByName(windowName);
+			if (!statusWindow || !statusWindow->Active || statusWindow->Hidden)
+				continue;
+
+			const float statusBottom = statusWindow->Pos.y + statusWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
+			if (statusBottom > a_availableMin.y)
+				a_availableMin.y = std::min(statusBottom, a_availableMax.y);
+			a_topStatusLeft = foundTopStatusWindow ? std::min(a_topStatusLeft, statusWindow->Pos.x) : statusWindow->Pos.x;
+			foundTopStatusWindow = true;
+		}
+
+		return foundTopStatusWindow;
 	}
 
 	ImVec2 FitSizeToAspect(ImVec2 a_availableSize, float a_heightOverWidth)
@@ -258,18 +272,23 @@ namespace
 				};
 			}
 
-			ExcludeShaderCompilationWindowFromTop(availableMin, availableMax);
+			float topStatusLeft = availableMin.x;
+			const bool constrainedByTopStatusWindow = ExcludeTopStatusWindowsFromLayout(availableMin, availableMax, topStatusLeft);
 			availableMin.y = std::min(availableMin.y, availableMax.y);
 
 			const ImVec2 availableSpan(
 				std::max(availableMax.x - availableMin.x, 0.0f),
 				std::max(availableMax.y - availableMin.y, 0.0f));
 			const ImVec2 size = FitSizeToAspect(availableSpan, GetVRSettingsWindowAspect());
+			const float centeredLeft = (availableMin.x + availableMax.x - size.x) * 0.5f;
+			const float maxLeft = std::max(availableMin.x, availableMax.x - size.x);
+			const float left = constrainedByTopStatusWindow ?
+			                       std::clamp(topStatusLeft, availableMin.x, maxLeft) :
+			                       std::clamp(centeredLeft, availableMin.x, maxLeft);
 			return {
-				.center = ImVec2(
-					(availableMin.x + availableMax.x) * 0.5f,
-					(availableMin.y + availableMax.y) * 0.5f),
-				.size = size
+				.center = ImVec2(left + size.x * 0.5f, (availableMin.y + availableMax.y) * 0.5f),
+				.size = size,
+				.constrainedByTopStatusWindow = constrainedByTopStatusWindow
 			};
 		}
 
@@ -834,28 +853,44 @@ void Menu::DrawSettings()
 	}
 
 	static bool menuWasOffsetForTopStatusWindow = false;
+	static bool vrTopStatusWindowLayoutWasActive = false;
 	static ImVec2 preTopStatusWindowPos;
 	bool restoreAfterTopStatusWindow = false;
 	bool autoOffsetForTopStatusWindow = false;
 	if (!willBeDocked) {
-		const ImVec2 originalWindowPos = windowPos;
-		autoOffsetForTopStatusWindow =
-			OverlayRenderer::MoveWindowBelowShaderCompilationStatus(windowPos, windowSizeForOverlap, centeredPivot);
-		if (autoOffsetForTopStatusWindow && !menuWasOffsetForTopStatusWindow) {
-			preTopStatusWindowPos = originalWindowPos;
-			menuWasOffsetForTopStatusWindow = true;
-		} else if (!autoOffsetForTopStatusWindow && menuWasOffsetForTopStatusWindow) {
-			windowPos = preTopStatusWindowPos;
-			restoreAfterTopStatusWindow = true;
+		const bool useVRTopStatusWindowLayout =
+			REL::Module::IsVR() &&
+			defaultWindowLayout.constrainedByTopStatusWindow;
+		if (useVRTopStatusWindowLayout || (REL::Module::IsVR() && vrTopStatusWindowLayoutWasActive)) {
+			windowPos = defaultWindowPos;
+			windowSizeForOverlap = defaultWindowSize;
+			autoOffsetForTopStatusWindow = useVRTopStatusWindowLayout;
+			restoreAfterTopStatusWindow = !useVRTopStatusWindowLayout && vrTopStatusWindowLayoutWasActive;
+			vrTopStatusWindowLayoutWasActive = useVRTopStatusWindowLayout;
+		} else if (!REL::Module::IsVR()) {
+			const ImVec2 originalWindowPos = windowPos;
+			autoOffsetForTopStatusWindow =
+				OverlayRenderer::MoveWindowBelowShaderCompilationStatus(windowPos, windowSizeForOverlap, centeredPivot);
+			if (autoOffsetForTopStatusWindow && !menuWasOffsetForTopStatusWindow) {
+				preTopStatusWindowPos = originalWindowPos;
+				menuWasOffsetForTopStatusWindow = true;
+			} else if (!autoOffsetForTopStatusWindow && menuWasOffsetForTopStatusWindow) {
+				windowPos = preTopStatusWindowPos;
+				restoreAfterTopStatusWindow = true;
+				menuWasOffsetForTopStatusWindow = false;
+			}
+		}
+		if (REL::Module::IsVR()) {
 			menuWasOffsetForTopStatusWindow = false;
 		}
 	} else {
 		menuWasOffsetForTopStatusWindow = false;
+		vrTopStatusWindowLayoutWasActive = false;
 	}
 
 	const auto windowPosCond = (autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowPos(windowPos, windowPosCond, centeredPivot);
-	const auto windowSizeCond = (repairSteamVRLegacyWindowSize || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
+	const auto windowSizeCond = (repairSteamVRLegacyWindowSize || autoOffsetForTopStatusWindow || restoreAfterTopStatusWindow || forceSteamVRFirstUndockedLayout) ? ImGuiCond_Always : layoutCond;
 	ImGui::SetNextWindowSize(defaultWindowSize, windowSizeCond);
 	if (forceSteamVRFirstUndockedLayout) {
 		steamVRUndockedFirstOpenLayoutApplied = true;

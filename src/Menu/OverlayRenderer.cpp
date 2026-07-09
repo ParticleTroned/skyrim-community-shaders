@@ -53,13 +53,21 @@ namespace
 
 	void ExcludeShaderCompilationWindowFromTop(ImVec2& a_availableMin, const ImVec2& a_availableMax)
 	{
-		auto* shaderWindow = ImGui::FindWindowByName("ShaderCompilationInfo");
-		if (!shaderWindow || !shaderWindow->Active || shaderWindow->Hidden)
-			return;
+		const char* topStatusWindows[] = {
+			"ShaderCompilationInfo",
+			"UWCacheCreationInfo",
+			"ShaderBlockingInfo"
+		};
 
-		const float shaderBottom = shaderWindow->Pos.y + shaderWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
-		if (shaderBottom > a_availableMin.y)
-			a_availableMin.y = std::min(shaderBottom, a_availableMax.y);
+		for (const char* windowName : topStatusWindows) {
+			auto* statusWindow = ImGui::FindWindowByName(windowName);
+			if (!statusWindow || !statusWindow->Active || statusWindow->Hidden)
+				continue;
+
+			const float statusBottom = statusWindow->Pos.y + statusWindow->Size.y + ImGui::GetStyle().ItemSpacing.y;
+			if (statusBottom > a_availableMin.y)
+				a_availableMin.y = std::min(statusBottom, a_availableMax.y);
+		}
 	}
 
 	ImVec2 FitSizeToAspect(ImVec2 a_availableSize, float a_heightOverWidth)

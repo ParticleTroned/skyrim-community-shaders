@@ -31,6 +31,7 @@
 #include <RE/B/BSMultiBoundShape.h>
 #include <RE/B/BSShaderProperty.h>
 #include <RE/B/BSTriShape.h>
+#include <RE/A/Actor.h>
 #include <RE/N/NiCamera.h>
 #include <RE/N/NiMatrix3.h>
 #include <RE/N/NiNode.h>
@@ -1319,6 +1320,13 @@ namespace MOC
 			return true;
 
 		if (a_object->GetAppCulled())
+			return true;
+
+		// Never occlusion-test ACTORS: skinned world bounds lag animation, actors move
+		// against our one-frame-stale occluder list, and they are few (cheap to keep).
+		// Vanilla culling handles them with fresh state; wrongly culling an NPC is the
+		// most visible artifact possible.
+		if (auto* ref = a_object->GetUserData(); ref && ref->As<RE::Actor>())
 			return true;
 
 		// Cheap size gate BEFORE any RTTI: skip small objects/subtrees entirely. This is a

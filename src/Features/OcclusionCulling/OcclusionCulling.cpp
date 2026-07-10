@@ -256,6 +256,23 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	// Main::DrawWorld_PreRender (REL::ID 35560, 1.5.97 0x1405B1860): the render
+	// camera's frustum is FINAL at function entry (its first act is seeding the
+	// cull processes with it), and the first cull jobs are queued only after
+	// Main::Begin + water effects. Kicking the occluder raster here gives it
+	// that whole window to complete, so the standard raster-before-test model
+	// costs (almost) no test-side waiting. Redundant with the cull-time claim
+	// (CAS per frame) -- whichever runs first wins.
+	struct DrawWorldPreRender_Hook
+	{
+		static std::int64_t thunk(void* a_main, std::int64_t a_arg2, char a_isMainMenu)
+		{
+			MOC::KickBuild();
+			return func(a_main, a_arg2, a_isMainMenu);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 }
 
 void OcclusionCulling::PostPostLoad()
@@ -347,6 +364,7 @@ void OcclusionCulling::PostPostLoad()
 	stl::detour_thunk<TestBaseVis1_Hook>(REL::RelocationID(74816, 74816));      // BSCullingProcess::TestBaseVisibility1
 	stl::detour_thunk<PTestBaseVis1_Hook>(REL::RelocationID(101605, 101605));   // BSParabolicCullingProcess::TestBaseVisibility1
 	stl::write_vfunc<0x34, MSITS_OnVisible_Hook>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);  // distant-tree LOD group culling
+	stl::detour_thunk<DrawWorldPreRender_Hook>(REL::RelocationID(35560, 35560));  // frame-start raster kick
 	// On success DetourAttach rewrites T::func to the trampoline (!= original address);
 	// equal means the attach silently failed.
 	logger::info("[OcclusionCulling] detours attached: P1base={} P2base={} P1para={} P2para={}",

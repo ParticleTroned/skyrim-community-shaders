@@ -65,6 +65,14 @@ namespace MOC
 	bool BuildOccluders(RE::NiCamera* a_camera);
 
 	/**
+	 * @brief Kick this frame's occluder raster from the earliest point of the
+	 *        frame (Main::DrawWorld_PreRender entry), so it completes before the
+	 *        first occlusion test instead of stalling the cull threads. Safe to
+	 *        call redundantly: the per-frame CAS claim makes later calls no-ops.
+	 */
+	void KickBuild();
+
+	/**
 	 * @brief Occlusion query for a scene object.
 	 * @return true if the object may be visible (keep it), false if provably occluded.
 	 *         Returns true (conservative) for all early-outs (not initialized, testing

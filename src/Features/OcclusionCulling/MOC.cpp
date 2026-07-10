@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <string_view>
@@ -89,22 +90,17 @@ namespace MOC
 		// Buffer resolution (boot-time; CS_MOC_RES=WxH overrides, W mult of 8, H mult of 4).
 		// Higher = tighter conservative tests = more culling yield; raster cost is on the
 		// worker threads, so the on-path cost is resolution-independent.
-		unsigned int MOC_WIDTH = 1280;
-		unsigned int MOC_HEIGHT = 720;
+		unsigned int MOC_WIDTH = 640;
+		unsigned int MOC_HEIGHT = 360;
 
-		// PING-PONG buffers: the builder rasterizes into the BACK instance and
-		// publishes it as FRONT on completion, so tests always read a COMPLETE
-		// buffer ("complete z prepass is enough to test against prepass + main
-		// lighting + alpha"). Testing the single shared instance mid-fill was the
-		// distant-tree flicker; a wait-for-completion gate instead starved culling
-		// entirely (first tests always precede raster completion). Cost: the front
-		// buffer is one kick old, so verdicts project current-frame rects against
-		// last-frame depth -- bounded by one frame of camera motion, absorbed by
-		// the per-frame verdict cache + tree hysteresis.
-		MaskedOcclusionCulling*              g_mocA = nullptr;
-		MaskedOcclusionCulling*              g_mocB = nullptr;
-		std::atomic<MaskedOcclusionCulling*> g_mocFront{ nullptr };
-		MaskedOcclusionCulling*              g_mocBack = nullptr;  // builder thread only
+		// STANDARD Intel MOC model (sample code / paper): ONE buffer per frame --
+		// clear, rasterize the occluders with THIS frame's matrices, and only
+		// after the raster is COMPLETE run the occlusion tests with the same
+		// matrices. Tests that arrive before completion briefly wait (bounded);
+		// raster and tests are always matched and deterministic, so every cull
+		// walk of the frame computes identical verdicts -- no verdict caches,
+		// no temporal hysteresis, no flicker by construction.
+		MaskedOcclusionCulling* g_moc = nullptr;
 		CullingThreadpool*      g_pool = nullptr;
 		bool                    g_init = false;
 
@@ -166,61 +162,40 @@ namespace MOC
 		std::atomic<std::uint64_t> g_kickCounter{ 0 };
 		std::atomic<std::uint64_t> g_settleUntilKick{ 0 };
 
-		// Determine occlusion ONCE per object per frame, and only against a
-		// COMPLETE buffer. The z-prepass-side walk (the first main-view cull to
-		// reach an object) computes the verdict; the prepass draw, the main
-		// lighting passes and the alpha passes all reuse it. Without this the
-		// same object was re-tested per walk against the async builder's
-		// progressively filling buffer, so passes could disagree within one
-		// frame -- visible flicker on distant tree groups (save 338).
-		// g_rasterFrame is the builder's "raster phase complete for frame N"
-		// publication; verdicts computed before completion are forced VISIBLE
-		// (and cached, so all walks still agree) and do not advance the
-		// occluded streak. occludedStreak = temporal hysteresis: a
-		// caller-chosen number of consecutive occluded frames is required
-		// before the verdict culls; any visible frame resets it.
+		// Raster-complete handshake: the claim path stamps g_kickFrame before
+		// waking the builder; the builder stamps g_rasterFrame when the raster
+		// phase finishes. Tests wait (bounded) until g_rasterFrame matches the
+		// frame they are testing for.
 		std::atomic<std::uint32_t> g_kickFrame{ 0xFFFFFFFFu };    // claim -> builder
 		std::atomic<std::uint32_t> g_rasterFrame{ 0xFFFFFFFFu };  // builder -> testers
-		struct FrameVerdict
-		{
-			std::uint32_t frame = 0xFFFFFFFFu;
-			std::uint8_t  occludedStreak = 0;
-			bool          culled = false;
-		};
-		constexpr std::size_t kVerdictShards = 16;  // cull walks run on concurrent job threads
-		std::mutex                                    g_verdictMtx[kVerdictShards];
-		std::unordered_map<const void*, FrameVerdict> g_verdictMap[kVerdictShards];
-		std::atomic<std::uint32_t>                    g_verdictFlips{ 0 };  // stability diag
+		std::atomic<std::uint64_t> g_waitNs{ 0 };          // total test-side wait
+		std::atomic<std::uint64_t> g_waitCount{ 0 };       // waits that actually spun
+		double                     g_lastRasterMs = 0.0;   // builder thread only
 
-		template <class TestFn>
-		bool CachedVerdict(const void* a_key, std::uint8_t a_framesToCull, TestFn&& a_test)
+		// True once the buffer for @p a_frame is complete; false when no build
+		// was kicked this frame (menus, loads) or the bounded wait expired --
+		// callers then skip culling (conservative).
+		bool WaitForRasterComplete(std::uint32_t a_frame)
 		{
-			auto*               gfx = RE::BSGraphics::State::GetSingleton();
-			const std::uint32_t frame = gfx ? gfx->frameCount : 0;
-			const std::size_t   shard = (reinterpret_cast<std::uintptr_t>(a_key) >> 4) & (kVerdictShards - 1);
-			std::scoped_lock    lk(g_verdictMtx[shard]);
-			auto&               map = g_verdictMap[shard];
-			if (map.size() > 4096)
-				map.clear();  // scene-change eviction; entries rebuild on demand
-			auto& v = map[a_key];
-			if (v.frame != frame) {
-				v.frame = frame;
-				// Front buffer is always a COMPLETE raster (ping-pong), so the
-				// verdict is always real -- no forced-visible starvation.
-				if (a_test()) {
-					v.occludedStreak = 0;
-					if (v.culled)
-						g_verdictFlips.fetch_add(1, std::memory_order_relaxed);
-					v.culled = false;
-				} else {
-					v.occludedStreak = static_cast<std::uint8_t>(std::min<int>(v.occludedStreak + 1, 250));
-					const bool cull = v.occludedStreak >= a_framesToCull;
-					if (cull != v.culled)
-						g_verdictFlips.fetch_add(1, std::memory_order_relaxed);
-					v.culled = cull;
+			if (g_rasterFrame.load(std::memory_order_acquire) == a_frame)
+				return true;
+			if (g_kickFrame.load(std::memory_order_relaxed) != a_frame)
+				return false;  // no build this frame -- nothing to test against
+			const auto t0 = std::chrono::steady_clock::now();
+			const auto deadline = t0 + std::chrono::milliseconds(4);
+			bool ok = false;
+			for (;;) {
+				if (g_rasterFrame.load(std::memory_order_acquire) == a_frame) {
+					ok = true;
+					break;
 				}
+				if (std::chrono::steady_clock::now() >= deadline)
+					break;
+				std::this_thread::yield();
 			}
-			return !v.culled;  // true = keep (possibly visible)
+			g_waitNs.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count(), std::memory_order_relaxed);
+			g_waitCount.fetch_add(1, std::memory_order_relaxed);
+			return ok;
 		}
 		std::chrono::high_resolution_clock::time_point g_buildStart;
 
@@ -244,7 +219,8 @@ namespace MOC
 		struct IndexPair
 		{
 			std::uint32_t* Data = nullptr;
-			std::uint32_t  Count = 0;  // total indices (== triCount * 3)
+			std::uint32_t  Count = 0;      // total indices (== triCount * 3)
+			std::uint32_t  VertCount = 0;  // verts in the cached position stream
 		};
 
 		std::unordered_map<void*, float*>    g_vertMap;
@@ -402,6 +378,7 @@ namespace MOC
 					p.Count = static_cast<std::uint32_t>(simplified);
 				}
 
+				p.VertCount = vertCount;
 				g_indexMap.insert_or_assign(key, p);
 				a_outIndices = p;
 			}
@@ -644,33 +621,44 @@ namespace MOC
 		LandOccluderMesh BuildLandMesh(const RE::TESObjectLAND::LoadedLandData* a_data, float a_worldX, float a_worldY)
 		{
 			LandOccluderMesh m;
-			m.verts.reserve(4u * 289u * 4u);
-			m.indices.reserve(4u * 16u * 16u * 6u);
+			m.verts.reserve(4u * 81u * 4u);
+			m.indices.reserve(4u * 8u * 8u * 6u);
 			// heights[] are CELL-LOCAL Z relative to the cell's height midpoint
 			// ((min+max)/2, stored at LoadedLandData+0x49C0) -- the engine's own
-			// consumers add it back (TESObjectLAND::GetNiPointHeight 0x14025B830:
-			// addss [loadedData+49C0h]; the render-mesh builder bakes it into the
-			// block node's local translation instead). IDA-verified 1.5.97.
+			// consumers add it back (TESObjectLAND::GetNiPointHeight 0x14025B830).
+			// IDA-verified 1.5.97.
 			const float zBase = *reinterpret_cast<const float*>(reinterpret_cast<const std::uint8_t*>(a_data) + 0x49C0);
 			for (int q = 0; q < 4; ++q) {
 				const float qx = a_worldX + static_cast<float>(q & 1) * 2048.0f;
 				const float qy = a_worldY + static_cast<float>(q >> 1) * 2048.0f;
 				const unsigned int base = static_cast<unsigned int>(m.verts.size() / 4u);
-				for (int row = 0; row < 17; ++row) {
-					for (int col = 0; col < 17; ++col) {
-						m.verts.push_back(qx + static_cast<float>(col) * 128.0f);
-						m.verts.push_back(qy + static_cast<float>(row) * 128.0f);
+				// Decimated 9x9 grid (every other sample, 256-unit step): the raster
+				// cost of full 33x33 land dominated the frame (4-5ms). Each kept
+				// vertex takes the MIN over its 2x2 source neighborhood -- lower is
+				// farther, so the coarse mesh stays a strictly WEAKER (conservative)
+				// occluder; the -16 bias guards LOD morph on top.
+				for (int row = 0; row < 9; ++row) {
+					for (int col = 0; col < 9; ++col) {
+						const int r0 = row * 2, c0 = col * 2;
+						float h = a_data->heights[q][r0 * 17 + c0];
+						if (c0 + 1 < 17)
+							h = std::min(h, a_data->heights[q][r0 * 17 + c0 + 1]);
+						if (r0 + 1 < 17) {
+							h = std::min(h, a_data->heights[q][(r0 + 1) * 17 + c0]);
+							if (c0 + 1 < 17)
+								h = std::min(h, a_data->heights[q][(r0 + 1) * 17 + c0 + 1]);
+						}
+						m.verts.push_back(qx + static_cast<float>(col) * 256.0f);
+						m.verts.push_back(qy + static_cast<float>(row) * 256.0f);
 						m.verts.push_back(1.0f);
-						// Small downward bias: keeps the occluder plane strictly conservative
-						// against LOD morphing / terrain-blending displacement.
-						m.verts.push_back(a_data->heights[q][row * 17 + col] + zBase - 16.0f);
+						m.verts.push_back(h + zBase - 16.0f);
 					}
 				}
-				for (unsigned int r = 0; r < 16; ++r) {
-					for (unsigned int c = 0; c < 16; ++c) {
-						const unsigned int i0 = base + r * 17u + c;
+				for (unsigned int r = 0; r < 8; ++r) {
+					for (unsigned int c = 0; c < 8; ++c) {
+						const unsigned int i0 = base + r * 9u + c;
 						const unsigned int i1 = i0 + 1u;
-						const unsigned int i2 = i0 + 17u;
+						const unsigned int i2 = i0 + 9u;
 						const unsigned int i3 = i2 + 1u;
 						m.indices.insert(m.indices.end(), { i0, i1, i2, i1, i3, i2 });
 					}
@@ -947,12 +935,8 @@ namespace MOC
 				const auto t0 = std::chrono::high_resolution_clock::now();
 
 				// Phase 1: rasterize last kick's prepared list. All pool calls live here.
-				// Rasterize into the BACK buffer; tests keep reading FRONT.
-				// SetBuffer AFTER WakeThreads: it Flush()es first, and Flush yield-
-				// spins until the WORKERS drain the queue -- with workers suspended
-				// the builder livelocks (28fps, gather frozen, front never updated).
+				const auto rasterT0 = std::chrono::high_resolution_clock::now();
 				g_pool->WakeThreads();
-				g_pool->SetBuffer(g_mocBack);
 				g_pool->ClearBuffer();
 				if (EnableOccluderRendering) {
 					// No triangle budget: the producer is this async builder, so job-queue
@@ -984,9 +968,18 @@ namespace MOC
 				} else {
 					g_lastOccluderCount = 0;
 				}
+				// TRUE drain before parking: SuspendThreads only SETS A FLAG and
+				// returns immediately -- it never waits for outstanding jobs. Without
+				// Flush(): (a) g_rasterFrame was published before the raster actually
+				// finished, so tests still ran against an incomplete buffer; (b) the
+				// next kick's chunk recycling freed memory that undrained jobs still
+				// referenced (AV in GatherTransformClip, garbage indices); (c) the
+				// raster timing measured enqueue only. Flush waits for pipeline-empty
+				// with the workers awake, then the park + publish are both safe.
+				g_pool->Flush();
 				g_pool->SuspendThreads();
-				// Raster complete: publish back as the new FRONT, recycle old front.
-				g_mocBack = g_mocFront.exchange(g_mocBack, std::memory_order_acq_rel);
+				g_lastRasterMs = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - rasterT0).count();
+				// Raster complete for this kick's frame: release the waiting tests.
 				g_rasterFrame.store(g_kickFrame.load(std::memory_order_acquire), std::memory_order_release);
 
 				// Publish a debug-view snapshot of the now-complete buffer (menu open).
@@ -994,7 +987,7 @@ namespace MOC
 					g_debugViewFrames.fetch_sub(1, std::memory_order_relaxed);
 					std::scoped_lock lk2(g_debugSnapMtx);
 					g_debugSnapshot.resize(static_cast<std::size_t>(MOC_WIDTH) * MOC_HEIGHT);
-					g_mocFront.load(std::memory_order_acquire)->ComputePixelDepthBuffer(g_debugSnapshot.data(), false);
+					g_moc->ComputePixelDepthBuffer(g_debugSnapshot.data(), false);
 					g_debugSnapValid = true;
 				}
 
@@ -1037,27 +1030,19 @@ namespace MOC
 
 			auto*      sp = a_geom->lightingShaderProp_cast();
 			const bool twoSided = sp && sp->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided);
-			const MaskedOcclusionCulling::BackfaceWinding winding =
-				twoSided ? MaskedOcclusionCulling::BACKFACE_NONE : MaskedOcclusionCulling::BACKFACE_CW;
 
 			const XMMATRIX worldRel = GetXMFromNiPosAdjust(a_geom->world, g_posAdjust);
 			const XMMATRIX worldViewProj = XMMatrixMultiply(worldRel, g_viewProj);
 
-			// Queue the drawcall on the threadpool (async; workers bin + rasterize).
-			// SetMatrix copies the matrix into per-job state, so the stack lifetime is
-			// fine; the cached verts/indices are persistent, satisfying the pool's
-			// keep-alive-until-flush requirement.
+			// Per-mesh submission, transform on the WORKERS (SetMatrix copies into
+			// per-job state; cached verts/indices are persistent = keep-alive safe).
+			// CLIP_PLANE_ALL: near-crossing triangles must clip, not drop.
 			g_pool->SetMatrix(reinterpret_cast<const float*>(&worldViewProj));
-			// CLIP_PLANE_ALL, not SIDES: without near-plane clipping every triangle
-			// crossing the near plane is dropped instead of clipped -- which is exactly
-			// the terrain under/ahead of the camera (and interior walls you stand
-			// against). That was the "ground is black at the bottom of the buffer"
-			// hole: mid/far terrain rasterized, the near rows vanished.
 			g_pool->RenderTriangles(
 				verts,
 				indices.Data,
 				static_cast<int>(indices.Count / 3),
-				winding,
+				twoSided ? MaskedOcclusionCulling::BACKFACE_NONE : MaskedOcclusionCulling::BACKFACE_CW,
 				MaskedOcclusionCulling::CLIP_PLANE_ALL);
 			return indices.Count / 3;
 		}
@@ -1073,10 +1058,8 @@ namespace MOC
 
 		// Request AVX2 (the shipping build targets /arch:AVX2). MOC caps the request
 		// to the best implementation the CPU actually supports.
-		g_mocA = MaskedOcclusionCulling::Create(MaskedOcclusionCulling::AVX2);
-		g_mocB = MaskedOcclusionCulling::Create(MaskedOcclusionCulling::AVX2);
-		auto* g_moc = g_mocA;  // local alias for the shared init below
-		if (!g_moc || !g_mocB) {
+		g_moc = MaskedOcclusionCulling::Create(MaskedOcclusionCulling::AVX2);
+		if (!g_moc) {
 			logger::warn("[MOC] MaskedOcclusionCulling::Create failed; occlusion culling disabled");
 			return;
 		}
@@ -1091,21 +1074,30 @@ namespace MOC
 				}
 			}
 		}
-		g_mocA->SetResolution(MOC_WIDTH, MOC_HEIGHT);
-		g_mocA->ClearBuffer();
-		g_mocB->SetResolution(MOC_WIDTH, MOC_HEIGHT);
-		g_mocB->ClearBuffer();
-		g_mocFront.store(g_mocA, std::memory_order_release);
-		g_mocBack = g_mocB;
+		g_moc->SetResolution(MOC_WIDTH, MOC_HEIGHT);
+		g_moc->ClearBuffer();
 
 		// Intel's CullingThreadpool: occluder rasterization is queued by the (single)
 		// build thread and executed by worker threads binning the screen. Bins must be
 		// tile-aligned and >= thread count: 4x4 bins of 128x72 over 512x288. maxJobs=32
 		// is Intel's recommended queue depth. Workers are woken per build and suspended
 		// right after the flush, so the pool costs nothing outside the build window.
-		const unsigned int threads = std::clamp(RasterThreads, 1, 16);  // 4x4 bins support up to 16 workers
-		g_pool = new CullingThreadpool(threads, 4, 4, 32);
-		g_pool->SetBuffer(g_mocBack);
+		unsigned int threads = static_cast<unsigned int>(std::clamp(RasterThreads, 1, 16));  // 4x4 bins support up to 16 workers
+		// Deep job queue: with ~650 per-mesh submissions and the default 32-deep
+		// queue the PRODUCER blocked on CanWrite() every 32 jobs -- worker count
+		// had no effect because submission was the bottleneck. 512 lets the
+		// builder enqueue the whole frame without stalling while the workers
+		// transform+bin+rasterize in parallel (transform belongs on the workers,
+		// as in the Intel sample -- not on the single builder thread).
+		// At least 4 workers: older persisted settings carry RasterThreads=2 and
+		// silently override the default (CS_MOC_THREADS still wins for A/B runs).
+		{
+			char tbuf[8] = {};
+			if (!GetEnvironmentVariableA("CS_MOC_THREADS", tbuf, sizeof(tbuf)) || !tbuf[0])
+				threads = std::max(threads, 4u);
+		}
+		g_pool = new CullingThreadpool(threads, 4, 4, 512);
+		g_pool->SetBuffer(g_moc);
 		g_pool->SetVertexLayout(MaskedOcclusionCulling::VertexLayout(16, 4, 12));
 		g_pool->SuspendThreads();
 
@@ -1152,7 +1144,7 @@ namespace MOC
 	// (near = bright). Called from the settings UI; returns the SRV to ImGui::Image.
 	void UpdateDebugView()
 	{
-		if (!g_init || !g_mocFront.load(std::memory_order_relaxed))
+		if (!g_init || !g_moc)
 			return;
 		EnsureDebugTexture();
 		if (!g_debugTex || !g_debugSRV)
@@ -1213,12 +1205,12 @@ namespace MOC
 	// directly (Read the image) without opening the ImGui menu. Same data + mapping the UI shows.
 	void DumpDepthImage()
 	{
-		if (!g_init || !g_mocFront.load(std::memory_order_relaxed))
+		if (!g_init || !g_moc)
 			return;
 		const std::size_t n = static_cast<std::size_t>(MOC_WIDTH) * MOC_HEIGHT;
 		if (g_debugDepth.size() != n)
 			g_debugDepth.resize(n);
-		g_mocFront.load(std::memory_order_acquire)->ComputePixelDepthBuffer(g_debugDepth.data(), false);  // flipY=false is empirically top-down (matches Nukem)
+		g_moc->ComputePixelDepthBuffer(g_debugDepth.data(), false);  // flipY=false is empirically top-down (matches Nukem)
 
 		// MOC returns FLT_MAX (or ~0) for uncovered pixels; only 0 < d < kBackground is a real
 		// rasterized occluder. Normalize over those so the silhouettes are visible.
@@ -1295,22 +1287,16 @@ namespace MOC
 		delete g_pool;
 		g_pool = nullptr;
 
-		g_mocFront.store(nullptr, std::memory_order_release);
-		g_mocBack = nullptr;
-		if (g_mocA) {
-			MaskedOcclusionCulling::Destroy(g_mocA);
-			g_mocA = nullptr;
-		}
-		if (g_mocB) {
-			MaskedOcclusionCulling::Destroy(g_mocB);
-			g_mocB = nullptr;
+		if (g_moc) {
+			MaskedOcclusionCulling::Destroy(g_moc);
+			g_moc = nullptr;
 		}
 		g_init = false;
 	}
 
 	bool IsInitialized()
 	{
-		return g_init && g_mocFront.load(std::memory_order_relaxed) != nullptr;
+		return g_init && g_moc != nullptr;
 	}
 
 	RE::NiCamera* GetMainCamera()
@@ -1366,7 +1352,7 @@ namespace MOC
 	// return false and are left untouched.
 	bool BuildOccluders(RE::NiCamera* a_camera)
 	{
-		if (!g_init || !g_mocFront.load(std::memory_order_relaxed))
+		if (!g_init || !g_moc)
 			return false;
 
 		// MAIN-pass gate by pointer identity with the engine's two main-scene cameras.
@@ -1459,15 +1445,22 @@ namespace MOC
 			const double buildMs = std::chrono::duration<double, std::milli>(
 				std::chrono::high_resolution_clock::now() - g_buildStart)
 									   .count();
-			logger::info("[MOC][diag] frame={} enqueue={:.2f}ms gather={:.2f}ms occluders={} cells={}/culled={} | tested={} culled={} (aabb {}/{} sphere {}/{}) tree {}/{} flips={}",
-				frame, buildMs, g_lastGatherMs, g_lastOccluderCount,
+			logger::info("[MOC][diag] frame={} enqueue={:.2f}ms raster={:.2f}ms gather={:.2f}ms occluders={} cells={}/culled={} | tested={} culled={} (aabb {}/{} sphere {}/{}) tree {}/{} waitMs={:.2f}/n={}",
+				frame, buildMs, g_lastRasterMs, g_lastGatherMs, g_lastOccluderCount,
 				g_cellsSeen, g_cellsCulled,
 				g_tested.load(), g_culled.load(),
 				g_culledAABB.load(), g_testedAABB.load(), g_culledSphere.load(), g_testedSphere.load(),
-				g_treeCulled.load(), g_treeTested.load(), g_verdictFlips.exchange(0, std::memory_order_relaxed));
+				g_treeCulled.load(), g_treeTested.load(),
+				g_waitNs.exchange(0, std::memory_order_relaxed) / 1e6, g_waitCount.exchange(0, std::memory_order_relaxed));
 		}
 		g_buildDone.store(frame, std::memory_order_release);
 		return true;
+	}
+
+	void KickBuild()
+	{
+		if (auto* cam = GetMainCamera())
+			BuildOccluders(cam);
 	}
 
 	void DumpDebugImages()
@@ -1478,7 +1471,7 @@ namespace MOC
 			char buf[8] = {};
 			return GetEnvironmentVariableA("CS_MOC_DUMP", buf, sizeof(buf)) && buf[0] == '1';
 		}();
-		if (!s_dump || !g_init || !g_mocFront.load(std::memory_order_relaxed))
+		if (!s_dump || !g_init || !g_moc)
 			return;
 		auto* gfxState = RE::BSGraphics::State::GetSingleton();
 		if (!gfxState || (gfxState->frameCount % 120u) != 0u)
@@ -1545,7 +1538,7 @@ namespace MOC
 				screenMax = _mm_max_ps(screenMax, xformedPos);
 			}
 
-			const auto r = g_mocFront.load(std::memory_order_acquire)->TestRect(screenMin.m128_f32[0], screenMin.m128_f32[1], screenMax.m128_f32[0], screenMax.m128_f32[1], minW);
+			const auto r = g_moc->TestRect(screenMin.m128_f32[0], screenMin.m128_f32[1], screenMax.m128_f32[0], screenMax.m128_f32[1], minW);
 			return r == MaskedOcclusionCulling::VISIBLE;
 		}
 
@@ -1613,7 +1606,7 @@ namespace MOC
 			XMVECTOR xyMins = _mm_min_ps(vCorner0NDC, _mm_min_ps(vCorner1NDC, _mm_min_ps(vCorner2NDC, vCorner3NDC)));
 			XMVECTOR xyMaxs = _mm_max_ps(vCorner0NDC, _mm_max_ps(vCorner1NDC, _mm_max_ps(vCorner2NDC, vCorner3NDC)));
 
-			const auto r = g_mocFront.load(std::memory_order_acquire)->TestRect(xyMins.m128_f32[0], xyMins.m128_f32[1], xyMaxs.m128_f32[0], xyMaxs.m128_f32[1], closestSpherePointW);
+			const auto r = g_moc->TestRect(xyMins.m128_f32[0], xyMins.m128_f32[1], xyMaxs.m128_f32[0], xyMaxs.m128_f32[1], closestSpherePointW);
 			return r == MaskedOcclusionCulling::VISIBLE;
 		}
 	}  // namespace
@@ -1650,20 +1643,19 @@ namespace MOC
 		if (a_object->worldBound.radius < OccluderTestMinRadius)
 			return true;
 
-		// Verdict computed on the first walk of the frame against the complete
-		// buffer, reused by every later pass (tallies tick once per object per
-		// FRAME, not per walk).
-		const bool visible = CachedVerdict(a_object, 1, [&] {
-			auto*      aabb = GetAABBNode(a_object);  // single RTTI lookup (was called twice)
-			const bool vis = aabb ? TestAABB(aabb) : TestSphere(a_object);
-			g_tested.fetch_add(1, std::memory_order_relaxed);
-			(aabb ? g_testedAABB : g_testedSphere).fetch_add(1, std::memory_order_relaxed);
-			if (!vis) {
-				g_culled.fetch_add(1, std::memory_order_relaxed);
-				(aabb ? g_culledAABB : g_culledSphere).fetch_add(1, std::memory_order_relaxed);
-			}
-			return vis;
-		});
+		{
+			auto* gfx = RE::BSGraphics::State::GetSingleton();
+			if (!gfx || !WaitForRasterComplete(gfx->frameCount))
+				return true;  // buffer not ready this frame -- keep (conservative)
+		}
+		auto*      aabb = GetAABBNode(a_object);  // single RTTI lookup (was called twice)
+		const bool visible = aabb ? TestAABB(aabb) : TestSphere(a_object);
+		g_tested.fetch_add(1, std::memory_order_relaxed);
+		(aabb ? g_testedAABB : g_testedSphere).fetch_add(1, std::memory_order_relaxed);
+		if (!visible) {
+			g_culled.fetch_add(1, std::memory_order_relaxed);
+			(aabb ? g_culledAABB : g_culledSphere).fetch_add(1, std::memory_order_relaxed);
+		}
 		return visible;
 	}
 
@@ -1677,16 +1669,18 @@ namespace MOC
 		if (!aabb || aabb->size.z <= 1.0f)
 			return true;  // no AABB shape (spheres etc.) or degenerate bounds -> keep
 
-		const bool visible = CachedVerdict(a_multiBound, 1, [&] {
-			const bool vis = TestAABB(aabb);
-			g_tested.fetch_add(1, std::memory_order_relaxed);
-			g_testedAABB.fetch_add(1, std::memory_order_relaxed);
-			if (!vis) {
-				g_culled.fetch_add(1, std::memory_order_relaxed);
-				g_culledAABB.fetch_add(1, std::memory_order_relaxed);
-			}
-			return vis;
-		});
+		{
+			auto* gfx = RE::BSGraphics::State::GetSingleton();
+			if (!gfx || !WaitForRasterComplete(gfx->frameCount))
+				return true;
+		}
+		const bool visible = TestAABB(aabb);
+		g_tested.fetch_add(1, std::memory_order_relaxed);
+		g_testedAABB.fetch_add(1, std::memory_order_relaxed);
+		if (!visible) {
+			g_culled.fetch_add(1, std::memory_order_relaxed);
+			g_culledAABB.fetch_add(1, std::memory_order_relaxed);
+		}
 		return visible;
 	}
 
@@ -1700,14 +1694,15 @@ namespace MOC
 		if (!g_init || !EnableOcclusionTesting || !CullTreeLODGroups || !a_aabb)
 			return true;
 
-		// 3 consecutive occluded frames before a tree group culls: these large,
-		// distant groups sit near the verdict boundary and flickered (save 338).
-		return CachedVerdict(a_aabb, 3, [&] {
-			const bool vis = TestAABB(a_aabb);
-			g_treeTested.fetch_add(1, std::memory_order_relaxed);
-			if (!vis)
-				g_treeCulled.fetch_add(1, std::memory_order_relaxed);
-			return vis;
-		});
+		{
+			auto* gfx = RE::BSGraphics::State::GetSingleton();
+			if (!gfx || !WaitForRasterComplete(gfx->frameCount))
+				return true;
+		}
+		const bool visible = TestAABB(a_aabb);
+		g_treeTested.fetch_add(1, std::memory_order_relaxed);
+		if (!visible)
+			g_treeCulled.fetch_add(1, std::memory_order_relaxed);
+		return visible;
 	}
 }

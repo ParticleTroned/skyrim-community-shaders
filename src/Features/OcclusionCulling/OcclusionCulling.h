@@ -33,9 +33,9 @@ struct OcclusionCulling : public Feature
 		float OccluderFirstLevelMinSize = 200.0f;
 		// Raster budget per frame, closest-first (not a MOC library limit). With the
 		// threaded raster + simplified meshes the default covers typical scenes fully.
-		std::int32_t MaxOccludersPerFrame = 4096;
+		std::int32_t MaxOccludersPerFrame = 384;
 		// CullingThreadpool worker count; applied at boot (pool is created once).
-		std::int32_t RasterThreads = 2;
+		std::int32_t RasterThreads = 4;
 		// meshopt_simplify occluder meshes at cache time (~half the indices).
 		bool SimplifyOccluders = true;
 		// Only objects with at least this world-bound radius are occlusion-tested.

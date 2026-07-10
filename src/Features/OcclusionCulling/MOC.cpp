@@ -65,14 +65,17 @@ namespace MOC
 	bool SimplifyOccluders = true;
 	// Only objects/subtrees with at least this world-bound radius are occlusion-tested.
 	// Lower = more tested objects (more draws saved) at more test cost per frame.
-	float OccluderTestMinRadius = 50.0f;
+	float OccluderTestMinRadius = 0.0f;
 
 	namespace
 	{
 		// Lower res = far cheaper raster (coverage cost scales with pixels) at coarser but
 		// still-conservative occlusion. 400 full-detail meshes @1280x720 cost ~65ms/frame.
-		constexpr unsigned int MOC_WIDTH = 512;
-		constexpr unsigned int MOC_HEIGHT = 288;
+		// Buffer resolution (boot-time; CS_MOC_RES=WxH overrides, W mult of 8, H mult of 4).
+		// Higher = tighter conservative tests = more culling yield; raster cost is on the
+		// worker threads, so the on-path cost is resolution-independent.
+		unsigned int MOC_WIDTH = 1280;
+		unsigned int MOC_HEIGHT = 720;
 
 		MaskedOcclusionCulling* g_moc = nullptr;
 		CullingThreadpool*      g_pool = nullptr;
@@ -113,8 +116,8 @@ namespace MOC
 		std::condition_variable g_builderCV;
 		bool                    g_builderKick = false;
 		bool                    g_builderQuit = false;
-		std::vector<GeoEntry>   g_readyList;   // published by the builder, consumed by the claim thread
-		bool                    g_readyValid = false;
+		std::vector<GeoEntry>   g_readyList;   // builder-owned prepared list
+		std::atomic<bool>       g_builderBusy{ false };  // true while a kick is being processed
 		double                  g_lastGatherMs = 0.0;
 		std::uint32_t              g_lastOccluderCount = 0;
 
@@ -574,10 +577,12 @@ namespace MOC
 		}
 
 		bool GetCachedGeometry(RE::BSGeometry* a_geom, IndexPair& a_outIndices, float*& a_outVerts);
+		std::uint32_t RasterizeOccluder(RE::BSGeometry* a_geom);
 
-		// Builder-thread main: each kick runs one gather + coverage selection + front-to-back
-		// sort + vertex-conversion pre-warm, then publishes the list for the NEXT frame's
-		// enqueue. Scene-graph reads race the game by design (Nukem's model) -- the walk is
+		// Builder-thread main: the pool's SINGLE PRODUCER. Each kick: (1) rasterize the
+		// list prepared last kick using the CURRENT frame's matrices (published by the
+		// claim thread before kicking), (2) gather + select + sort + pre-warm NEXT frame's
+		// list. Scene-graph reads race the game by design (Nukem's model) -- the walk is
 		// null-guarded throughout and only ever READS.
 		void BuilderLoop()
 		{
@@ -589,9 +594,30 @@ namespace MOC
 						return;
 					g_builderKick = false;
 				}
+				g_builderBusy.store(true, std::memory_order_release);
 
 				const auto t0 = std::chrono::high_resolution_clock::now();
 
+				// Phase 1: rasterize last kick's prepared list. All pool calls live here.
+				g_pool->WakeThreads();
+				g_pool->ClearBuffer();
+				if (EnableOccluderRendering) {
+					constexpr std::uint32_t kTriBudget = 60000;
+					std::uint32_t           trisQueued = 0;
+					std::uint32_t           enqueued = 0;
+					for (auto& e : g_readyList) {
+						if (trisQueued >= kTriBudget)
+							break;
+						trisQueued += RasterizeOccluder(e.geometry);
+						++enqueued;
+					}
+					g_lastOccluderCount = enqueued;
+				} else {
+					g_lastOccluderCount = 0;
+				}
+				g_pool->SuspendThreads();
+
+				// Phase 2: gather NEXT frame's candidates.
 				g_geoList.clear();
 				GatherOccluders();
 
@@ -616,11 +642,8 @@ namespace MOC
 					std::chrono::high_resolution_clock::now() - t0)
 				                     .count();
 
-				{
-					std::scoped_lock lk(g_builderMtx);
-					g_readyList.swap(g_geoList);
-					g_readyValid = true;
-				}
+				g_readyList.swap(g_geoList);  // builder-owned; no other consumer
+				g_builderBusy.store(false, std::memory_order_release);
 			}
 		}
 
@@ -668,6 +691,17 @@ namespace MOC
 		if (!g_moc) {
 			logger::warn("[MOC] MaskedOcclusionCulling::Create failed; occlusion culling disabled");
 			return;
+		}
+		// CS_MOC_RES=WxH (e.g. 1280x720): buffer-resolution override for A/B sweeps.
+		{
+			char resBuf[24] = {};
+			if (GetEnvironmentVariableA("CS_MOC_RES", resBuf, sizeof(resBuf)) && resBuf[0]) {
+				unsigned int w = 0, h = 0;
+				if (sscanf_s(resBuf, "%ux%u", &w, &h) == 2 && w >= 256 && h >= 144 && w <= 1920 && h <= 1080) {
+					MOC_WIDTH = w & ~7u;   // multiple of 8
+					MOC_HEIGHT = h & ~3u;  // multiple of 4
+				}
+			}
 		}
 		g_moc->SetResolution(MOC_WIDTH, MOC_HEIGHT);
 		g_moc->ClearBuffer();
@@ -1003,6 +1037,16 @@ namespace MOC
 		return *g_cullCamera;
 	}
 
+	void QuiesceBuilder()
+	{
+		// Refuse-then-drain: the claim path already refuses kicks while the loading menu
+		// is open; here we wait out any gather already in flight. Bounded (~200ms) so a
+		// wedged walk can't hang the UI thread -- by then the walk has either finished or
+		// crashed anyway.
+		for (int i = 0; i < 2000 && g_builderBusy.load(std::memory_order_acquire); ++i)
+			std::this_thread::sleep_for(std::chrono::microseconds(100));
+	}
+
 	void RemoveCachedGeometry(void* a_rendererData)
 	{
 		std::uint32_t* indices = nullptr;
@@ -1091,63 +1135,16 @@ namespace MOC
 		const XMVECTOR       up = XMVectorSet(camR.entry[0][1], camR.entry[1][1], camR.entry[2][1], 0.0f);    // up = col 1
 		g_frustum.InitializeFrustumAABB(myfar, mynear, aspect, fov, _mm_setzero_ps(), look, up);
 
-		if (!EnableOccluderRendering) {
-			g_moc->ClearBuffer();  // workers idle when rendering is off; direct clear is safe
-			g_buildDone.store(frame, std::memory_order_release);
-			return true;  // buffer cleared -> TestObject keeps everything visible
-		}
-
-		// Wake the raster workers (~100us) before touching the buffer, then clear THROUGH
-		// the pool: its ClearBuffer flushes any last-frame straggler first, so the clear
-		// can never race an in-flight rasterization.
-		g_pool->WakeThreads();
-		g_pool->ClearBuffer();
-
-		// Enqueue the list the BUILDER prepared last frame (gather + coverage selection +
-		// front-to-back sort + conversion pre-warm all happened off this thread). The list
-		// is one frame stale -- occluders are static, so at worst a newly streamed cell's
-		// occluders join a frame late (conservative). First frame after a scene change has
-		// no list yet: nothing occludes, everything stays visible.
-		static std::vector<GeoEntry> s_enqueue;
-		s_enqueue.clear();
-		{
-			std::scoped_lock lk(g_builderMtx);
-			if (g_readyValid)
-				s_enqueue.swap(g_readyList);
-			g_readyValid = false;
-		}
-		// Triangle-budgeted enqueue: the pool's job queue is 32 deep; overflowing it makes
-		// the producer SPIN until workers drain (silently re-serializing the build -- cost
-		// showed up as -25..-29% in exteriors with big terrain meshes). Coverage selection
-		// already front-loads the most valuable occluders, so a fixed triangle budget keeps
-		// the whole enqueue non-blocking while retaining most of the buffer's power.
-		constexpr std::uint32_t kTriBudget = 60000;
-		std::uint32_t           trisQueued = 0;
-		std::uint32_t           enqueued = 0;
-		for (auto& e : s_enqueue) {
-			if (trisQueued >= kTriBudget)
-				break;
-			trisQueued += RasterizeOccluder(e.geometry);
-			++enqueued;
-		}
-		g_lastOccluderCount = enqueued;
-
-		// Kick the builder to prepare NEXT frame's list with the matrices/frustum we just
-		// published above.
+		// Kick the BUILDER: it is the pool's single producer and does EVERYTHING -- wake,
+		// clear, enqueue LAST frame's prepared list with THIS frame's matrices (published
+		// above), suspend, then gather NEXT frame's candidates. The claim thread pays ~0;
+		// tests may start immediately against the filling buffer (conservatively correct
+		// per the library contract). When occluder rendering is off the builder clears.
 		{
 			std::scoped_lock lk(g_builderMtx);
 			g_builderKick = true;
 		}
 		g_builderCV.notify_one();
-
-		// NO Flush: publish immediately and let the workers keep rasterizing while the
-		// cull proceeds. Querying a partially built buffer is conservatively correct by
-		// the library contract ("may only lead to objects being incorrectly classified
-		// as visible"), and front-to-back submission puts the best occluders in first.
-		// SuspendThreads is only a flag: workers drain the whole queue, THEN park, so no
-		// work is lost and no busy-spin lingers. This removes the ~2ms rasterization wait
-		// from the critical cull path entirely (the enqueue above costs ~0.2-0.5ms).
-		g_pool->SuspendThreads();
 
 		// DIAG (rate-limited): build time (gather + raster, on whichever cull thread won
 		// the claim) + cull tally. Verification dumps are NOT done here -- BuildOccluders
@@ -1210,8 +1207,13 @@ namespace MOC
 				_mm_add_ps(_mm_add_ps(_mm_min_ps(xRow[0], xRow[1]), _mm_min_ps(yRow[0], yRow[1])), _mm_min_ps(zRow[0], zRow[1])));
 			const float minW = minVert.m128_f32[3];
 
-			if (minW < 0.00000001f)
-				return true;
+			if (minW < 0.00000001f) {
+				// Behind/straddling the near plane: fall back to the frustum verdict so
+				// MOC-exclusive culling reproduces vanilla frustum culls (see TestSphere).
+				const XMVECTOR center = _mm_sub_ps(_mm_setr_ps(a_object->center.x, a_object->center.y, a_object->center.z, 0.0f), g_posAdjustV);
+				const XMVECTOR halfExtents = _mm_setr_ps(a_object->size.x, a_object->size.y, a_object->size.z, 0.0f);
+				return g_frustum.AABBInFrustum(center, halfExtents);
+			}
 
 			static const std::uint32_t sBBxInd[8] = { 1, 0, 0, 1, 1, 1, 0, 0 };
 			static const std::uint32_t sBByInd[8] = { 1, 1, 1, 1, 0, 0, 0, 0 };
@@ -1259,8 +1261,15 @@ namespace MOC
 			closestPoint = XMVector4Transform(XMVectorSetW(closestPoint, 1.0f), g_viewProj);
 
 			const float closestSpherePointW = closestPoint.m128_f32[3];
-			if (closestSpherePointW < 0.000001f)
-				return true;
+			if (closestSpherePointW < 0.000001f) {
+				// Behind/straddling the near plane: TestRect can't decide. For MOC-exclusive
+				// culling this must match the ENGINE's frustum verdict, not blanket-keep:
+				// a sphere fully outside the view frustum (incl. behind the camera) is
+				// culled exactly like vanilla frustum culling would.
+				const XMVECTOR sphere = _mm_setr_ps(
+					c.x - g_posAdjust.x, c.y - g_posAdjust.y, c.z - g_posAdjust.z, sphereRadius);
+				return g_frustum.SphereInFrustum(sphere);
+			}
 
 			XMVECTOR viewEye = { g_view.r[0].m128_f32[3], g_view.r[1].m128_f32[3], g_view.r[2].m128_f32[3], 0.0f };
 			viewEye = XMVectorNegate(viewEye);

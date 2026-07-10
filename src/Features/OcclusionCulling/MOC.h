@@ -72,6 +72,13 @@ namespace MOC
 	 */
 	bool TestMultiBound(void* a_multiBound);
 
+	/**
+	 * @brief Block until the builder thread is idle (spin+yield, bounded). Call when a
+	 *        scene teardown is imminent (loading screen opening): a gather in flight
+	 *        races freed scene-graph nodes otherwise.
+	 */
+	void QuiesceBuilder();
+
 	/** @brief Drop the cached converted verts/indices for a torn-down BSGraphics::TriShape. */
 	void RemoveCachedGeometry(void* a_rendererData);
 

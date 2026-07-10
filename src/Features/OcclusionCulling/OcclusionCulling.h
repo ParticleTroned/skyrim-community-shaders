@@ -2,6 +2,9 @@
 
 #include "Feature.h"
 
+#include <RE/B/BSTEvent.h>
+#include <RE/M/MenuOpenCloseEvent.h>
+
 // -----------------------------------------------------------------------------
 // OcclusionCulling — CommunityShaders Feature wrapper around the MOC port.
 //
@@ -36,7 +39,7 @@ struct OcclusionCulling : public Feature
 		// meshopt_simplify occluder meshes at cache time (~half the indices).
 		bool SimplifyOccluders = true;
 		// Only objects with at least this world-bound radius are occlusion-tested.
-		float OccluderTestMinRadius = 50.0f;
+		float OccluderTestMinRadius = 0.0f;
 	};
 
 	Settings settings;
@@ -53,6 +56,13 @@ struct OcclusionCulling : public Feature
 
 	/** @brief Render-thread hook: env-gated verification dumps (CS_MOC_DUMP=1). */
 	virtual void Prepass() override;
+
+	/** @brief Menu open/close sink: quiesces the builder before scene teardown (loading screens). */
+	class MenuEventSink : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
+	};
 
 	virtual void DrawSettings() override;
 

@@ -5,6 +5,8 @@
 #include "Globals.h"
 
 #include <RE/B/BSCullingProcess.h>
+#include <RE/L/LoadingMenu.h>
+#include <RE/U/UI.h>
 #include <RE/B/BSMultiBound.h>
 #include <RE/B/BSParabolicCullingProcess.h>
 #include <RE/N/NiAVObject.h>
@@ -29,13 +31,61 @@ namespace
 	// processing / recursion driver. If the object is provably occluded during the
 	// main cull pass, skip the original call entirely so neither the object nor its
 	// subtree is accumulated.
+	// Mirror the ENGINE's own cull side effect when we skip an object: clear its
+	// kAccumulated flag exactly like BSCullingProcess does on a frustum cull (gated on
+	// recurseToGeometry + updateAccumulateFlag). Without this, downstream consumers can
+	// read a STALE accumulated bit from a previous frame on an object we occluded --
+	// i.e. MOC-culling must be a strict superset of vanilla culling's effects.
+	inline void MarkCulledLikeEngine(RE::NiCullingProcess* a_self, RE::NiAVObject* a_object)
+	{
+		auto* bsp = static_cast<RE::BSCullingProcess*>(a_self);
+		if (bsp->recurseToGeometry && a_self->updateAccumulateFlag)
+			a_object->GetFlags().reset(RE::NiAVObject::Flag::kAccumulated);
+	}
+
+	// CS_MOC_VALIDATE=1: measure the user's acceptance criterion directly -- of the
+	// objects the ENGINE culls (frustum + occlusion planes), what fraction would MOC
+	// also have culled? Detected via the kAccumulated flag across the original call
+	// (only meaningful when the process recurses + updates the flag).
+	bool                       g_validateMode = false;
+	std::atomic<std::uint64_t> g_engineCulled{ 0 };
+	std::atomic<std::uint64_t> g_engineCulledMocAgrees{ 0 };
+	std::atomic<std::uint64_t> g_enginePassed{ 0 };
+
+	template <class HookT>
+	void Process1_Impl(RE::NiCullingProcess* a_self, RE::NiAVObject* a_object, std::int32_t a_arg2)
+	{
+		const bool bracketed = a_self == g_activeCullProcess.load(std::memory_order_relaxed);
+		if (bracketed && a_object && !MOC::TestObject(a_object)) {
+			MarkCulledLikeEngine(a_self, a_object);
+			return;  // occluded -> do not accumulate / recurse
+		}
+
+		if (g_validateMode && bracketed && a_object) {
+			auto* bsp = static_cast<RE::BSCullingProcess*>(a_self);
+			if (bsp->recurseToGeometry && a_self->updateAccumulateFlag) {
+				HookT::func(a_self, a_object, a_arg2);
+				const bool accumulated = a_object->GetFlags().any(RE::NiAVObject::Flag::kAccumulated);
+				if (!accumulated) {
+					g_engineCulled.fetch_add(1, std::memory_order_relaxed);
+					// Would MOC have culled it too? (Counts frustum-outs as agreement:
+					// TestRect returns VIEW_CULLED outside the frustum.)
+					if (!MOC::TestObject(a_object))
+						g_engineCulledMocAgrees.fetch_add(1, std::memory_order_relaxed);
+				} else {
+					g_enginePassed.fetch_add(1, std::memory_order_relaxed);
+				}
+				return;
+			}
+		}
+		HookT::func(a_self, a_object, a_arg2);
+	}
+
 	struct Process1_Hook
 	{
 		static void thunk(RE::NiCullingProcess* a_self, RE::NiAVObject* a_object, std::int32_t a_arg2)
 		{
-			if (a_self == g_activeCullProcess.load(std::memory_order_relaxed) && a_object && !MOC::TestObject(a_object))
-				return;  // occluded -> do not accumulate / recurse
-			func(a_self, a_object, a_arg2);
+			Process1_Impl<Process1_Hook>(a_self, a_object, a_arg2);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -48,9 +98,7 @@ namespace
 	{
 		static void thunk(RE::NiCullingProcess* a_self, RE::NiAVObject* a_object, std::int32_t a_arg2)
 		{
-			if (a_self == g_activeCullProcess.load(std::memory_order_relaxed) && a_object && !MOC::TestObject(a_object))
-				return;  // occluded -> do not accumulate / recurse
-			func(a_self, a_object, a_arg2);
+			Process1_Impl<PProcess1_Hook>(a_self, a_object, a_arg2);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -68,6 +116,14 @@ namespace
 		if (feature->IsActive() && MOC::IsInitialized() && a_camera) {
 			if (MOC::BuildOccluders(const_cast<RE::NiCamera*>(a_camera)))
 				active = MOC::EnableOcclusionTesting;
+		}
+		if (g_validateMode && active) {
+			if (auto* gs = RE::BSGraphics::State::GetSingleton(); gs && (gs->frameCount % 120u) == 0u) {
+				logger::info("[MOC][validate] engineCulled={} mocAgrees={} ({:.1f}%) enginePassed={}",
+					g_engineCulled.load(), g_engineCulledMocAgrees.load(),
+					g_engineCulled.load() ? 100.0 * g_engineCulledMocAgrees.load() / g_engineCulled.load() : 0.0,
+					g_enginePassed.load());
+			}
 		}
 		(void)a_scene;
 		return active;
@@ -166,6 +222,9 @@ void OcclusionCulling::PostPostLoad()
 	// CS_MOC_NO_SIMPLIFY=1: disable occluder mesh simplification (A/B of cull-rate impact).
 	if (GetEnvironmentVariableA("CS_MOC_NO_SIMPLIFY", buf, sizeof(buf)) && buf[0] == '1')
 		settings.SimplifyOccluders = false;
+	// CS_MOC_VALIDATE=1: engine-cull agreement instrumentation (see Process1_Impl).
+	if (GetEnvironmentVariableA("CS_MOC_VALIDATE", buf, sizeof(buf)) && buf[0] == '1')
+		g_validateMode = true;
 	// CS_MOC_MIN_TEST_RADIUS=<n>: per-object test gate override for A/B runs.
 	if (GetEnvironmentVariableA("CS_MOC_MIN_TEST_RADIUS", buf, sizeof(buf)) && buf[0]) {
 		const int v = atoi(buf);
@@ -208,6 +267,12 @@ void OcclusionCulling::PostPostLoad()
 		Process1_Hook::func.address() != p1b, Process2_Hook::func.address() != p2b,
 		PProcess1_Hook::func.address() != p1p, PProcess2_Hook::func.address() != p2p);
 
+	// Quiesce the builder on loading-screen open (scene teardown race).
+	if (auto* ui = RE::UI::GetSingleton()) {
+		static MenuEventSink s_menuSink;
+		ui->AddEventSink<RE::MenuOpenCloseEvent>(&s_menuSink);
+	}
+
 	s_installed = true;
 	// Mark loaded (+ a nominal version) so the feature appears as a normal entry in the
 	// CS menu; it has no shader .ini so Feature::Load leaves it unloaded otherwise. The
@@ -234,6 +299,17 @@ void OcclusionCulling::SyncSettingsToMOC()
 	MOC::RasterThreads = settings.RasterThreads;      // applied at boot (pool created once)
 	MOC::SimplifyOccluders = settings.SimplifyOccluders;  // affects newly cached meshes
 	MOC::OccluderTestMinRadius = settings.OccluderTestMinRadius;
+}
+
+RE::BSEventNotifyControl OcclusionCulling::MenuEventSink::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+{
+	// A loading screen opening means a scene teardown is imminent; a builder gather in
+	// flight would race freed nodes (crashed on worldspace transitions twice). Drain it
+	// BEFORE the teardown starts. The claim-path guard then refuses new kicks until the
+	// load finishes.
+	if (a_event && a_event->opening && a_event->menuName == RE::LoadingMenu::MENU_NAME)
+		MOC::QuiesceBuilder();
+	return RE::BSEventNotifyControl::kContinue;
 }
 
 void OcclusionCulling::Prepass()

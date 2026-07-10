@@ -142,7 +142,23 @@ namespace
 		RE::NiCullingProcess* const prev = g_activeCullProcess.load(std::memory_order_relaxed);
 		if (active)
 			g_activeCullProcess.store(a_self, std::memory_order_relaxed);
+
+		// MOC-EXCLUSIVE: neutralize the vanilla occlusion planes for this main cull by
+		// zeroing the compound frustum's operator count (the engine's Process1 gate is
+		// `compoundFrustum && freeOp && ...`). View-frustum culling is unaffected (the
+		// plain m_kPlanes path still runs); MOC provides all occlusion. Restored after
+		// the pass; auxiliary passes (their own process objects) never see this.
+		auto*         cf = active && MOC::ExclusiveOcclusion ? static_cast<RE::BSCullingProcess*>(a_self)->compoundFrustum : nullptr;
+		std::uint32_t savedOps = 0;
+		if (cf) {
+			savedOps = cf->freeOp;
+			cf->freeOp = 0;
+		}
+
 		HookT::func(a_self, a_camera, a_scene, a_visibleSet);
+
+		if (cf)
+			cf->freeOp = savedOps;
 		if (active)
 			g_activeCullProcess.store(prev, std::memory_order_relaxed);
 	}
@@ -222,6 +238,9 @@ void OcclusionCulling::PostPostLoad()
 	// CS_MOC_NO_SIMPLIFY=1: disable occluder mesh simplification (A/B of cull-rate impact).
 	if (GetEnvironmentVariableA("CS_MOC_NO_SIMPLIFY", buf, sizeof(buf)) && buf[0] == '1')
 		settings.SimplifyOccluders = false;
+	// CS_MOC_EXCLUSIVE=1: MOC-exclusive occlusion (vanilla planes neutralized).
+	if (GetEnvironmentVariableA("CS_MOC_EXCLUSIVE", buf, sizeof(buf)) && buf[0] == '1')
+		settings.ExclusiveOcclusion = true;
 	// CS_MOC_VALIDATE=1: engine-cull agreement instrumentation (see Process1_Impl).
 	if (GetEnvironmentVariableA("CS_MOC_VALIDATE", buf, sizeof(buf)) && buf[0] == '1')
 		g_validateMode = true;
@@ -299,6 +318,7 @@ void OcclusionCulling::SyncSettingsToMOC()
 	MOC::RasterThreads = settings.RasterThreads;      // applied at boot (pool created once)
 	MOC::SimplifyOccluders = settings.SimplifyOccluders;  // affects newly cached meshes
 	MOC::OccluderTestMinRadius = settings.OccluderTestMinRadius;
+	MOC::ExclusiveOcclusion = settings.ExclusiveOcclusion;
 }
 
 RE::BSEventNotifyControl OcclusionCulling::MenuEventSink::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
@@ -361,6 +381,11 @@ void OcclusionCulling::DrawSettings()
 		ImGui::SetTooltip("%s", T("feature.occlusion_culling.min_test_radius_tooltip",
 			"Objects smaller than this (world-bound radius) are never occlusion-tested. Lower = more draw calls saved but more CPU per frame."));
 
+	changed |= ImGui::Checkbox(T("feature.occlusion_culling.exclusive", "Exclusive Occlusion (replace vanilla planes)"), &settings.ExclusiveOcclusion);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("feature.occlusion_culling.exclusive_tooltip",
+			"Neutralize the vanilla occlusion planes during the main cull so MOC is the only occlusion mechanism. Experimental; view-frustum culling is unaffected."));
+
 	changed |= ImGui::Checkbox(T("feature.occlusion_culling.simplify", "Simplify Occluder Meshes"), &settings.SimplifyOccluders);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("feature.occlusion_culling.simplify_tooltip",
@@ -403,6 +428,8 @@ void OcclusionCulling::LoadSettings(json& o_json)
 		settings.SimplifyOccluders = o_json["SimplifyOccluders"];
 	if (o_json["OccluderTestMinRadius"].is_number())
 		settings.OccluderTestMinRadius = o_json["OccluderTestMinRadius"];
+	if (o_json["ExclusiveOcclusion"].is_boolean())
+		settings.ExclusiveOcclusion = o_json["ExclusiveOcclusion"];
 
 	SyncSettingsToMOC();
 }
@@ -417,6 +444,7 @@ void OcclusionCulling::SaveSettings(json& o_json)
 	o_json["RasterThreads"] = settings.RasterThreads;
 	o_json["SimplifyOccluders"] = settings.SimplifyOccluders;
 	o_json["OccluderTestMinRadius"] = settings.OccluderTestMinRadius;
+	o_json["ExclusiveOcclusion"] = settings.ExclusiveOcclusion;
 }
 
 void OcclusionCulling::RestoreDefaultSettings()

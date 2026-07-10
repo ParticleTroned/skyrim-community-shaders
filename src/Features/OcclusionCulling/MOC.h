@@ -38,6 +38,7 @@ namespace MOC
 	extern std::int32_t  RasterThreads;              // CullingThreadpool worker count (applied at boot)
 	extern bool          SimplifyOccluders;          // meshopt_simplify occluder meshes at cache time
 	extern float         OccluderTestMinRadius;      // min world-bound radius for per-object tests
+	extern bool          ExclusiveOcclusion;         // neutralize vanilla occlusion planes (MOC is the only occlusion)
 
 	/** @brief Create the global MOC instance (1280x720). Safe to call once; no-op if already initialized. */
 	void Init();

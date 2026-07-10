@@ -66,6 +66,10 @@ namespace MOC
 	// Only objects/subtrees with at least this world-bound radius are occlusion-tested.
 	// Lower = more tested objects (more draws saved) at more test cost per frame.
 	float OccluderTestMinRadius = 0.0f;
+	// MOC-exclusive mode: zero the compound frustum's operator count around the main
+	// culls so the vanilla occlusion planes never process; the engine keeps its plain
+	// view-frustum culling and MOC provides ALL occlusion. Off by default.
+	bool ExclusiveOcclusion = false;
 
 	namespace
 	{

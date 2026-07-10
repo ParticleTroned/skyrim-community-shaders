@@ -40,6 +40,8 @@ struct OcclusionCulling : public Feature
 		bool SimplifyOccluders = true;
 		// Only objects with at least this world-bound radius are occlusion-tested.
 		float OccluderTestMinRadius = 0.0f;
+		// Neutralize vanilla occlusion planes: MOC is the only occlusion mechanism.
+		bool ExclusiveOcclusion = false;
 	};
 
 	Settings settings;

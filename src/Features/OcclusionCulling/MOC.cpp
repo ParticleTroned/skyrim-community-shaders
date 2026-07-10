@@ -80,6 +80,7 @@ namespace MOC
 	std::int32_t DiagForceCullPercent = 0;
 	bool CullTreeLODGroups = true;
 	bool TreeOccluders = true;
+	bool AlphaTestedOccluders = false;
 
 	namespace
 	{
@@ -539,12 +540,13 @@ namespace MOC
 							geometry->name.c_str(), static_cast<int>(geoType), geometry->worldBound.radius,
 							geometry->world.translate.x, geometry->world.translate.y, geometry->world.translate.z);
 				}
-				// OPAQUE-ONLY occluders: alpha-tested textures have holes and alpha-
-				// blended surfaces are translucent -- rasterizing either as solid depth
-				// would occlude things the player can genuinely see through them. This
-				// also covers every leaf/branch card of the tree subtrees enabled above.
+				// Alpha gate: alpha-BLENDED surfaces are translucent and never occlude.
+				// Alpha-TESTED textures have holes, so they are excluded by default --
+				// but AlphaTestedOccluders opts them in as solid occluders (aggressive:
+				// dense foliage blocks almost everything behind it in practice, at the
+				// risk of over-culling through sparse cutouts).
 				if (auto* alpha = geometry->GetGeometryRuntimeData().alphaProperty.get();
-					alpha && (alpha->GetAlphaTesting() || alpha->GetAlphaBlending()))
+					alpha && (alpha->GetAlphaBlending() || (!AlphaTestedOccluders && alpha->GetAlphaTesting())))
 					return;
 				if (geometry->worldBound.radius > OccluderMinLeafSize) {
 					const float d1 = geometry->world.translate.x - g_posAdjust.x;

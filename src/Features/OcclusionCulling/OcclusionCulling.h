@@ -44,6 +44,7 @@ struct OcclusionCulling : public Feature
 		bool ExclusiveOcclusion = false;
 		bool CullTreeLOD = true;
 		bool TreeOccluders = true;
+		bool AlphaTestedOccluders = false;
 		// Gather leaf gate: occluder meshes smaller than this are not rasterized.
 		float OccluderMinLeafSize = 100.0f;
 	};

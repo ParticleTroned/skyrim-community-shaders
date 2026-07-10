@@ -44,6 +44,7 @@ namespace MOC
 	extern std::int32_t  DiagForceCullPercent;       // DIAGNOSTIC: force-cull % of kept objects (perf probe)
 	extern bool          CullTreeLODGroups;          // occlusion-test distant-tree LOD instance groups
 	extern bool          TreeOccluders;              // rasterize opaque tree parts (trunks) as occluders
+	extern bool          AlphaTestedOccluders;       // treat alpha-TESTED geometry as solid occluders (blended never)
 
 	/** @brief Create the global MOC instance (1280x720). Safe to call once; no-op if already initialized. */
 	void Init();

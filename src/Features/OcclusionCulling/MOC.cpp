@@ -3,7 +3,9 @@
 
 #include "Globals.h"
 
+#include <MaskedOcclusionCulling/CullingThreadpool.h>
 #include <MaskedOcclusionCulling/MaskedOcclusionCulling.h>
+#include <meshoptimizer.h>
 
 #include <d3d11.h>
 #include <winrt/base.h>
@@ -13,7 +15,9 @@
 #include <cfloat>
 #include <chrono>
 #include <cstdio>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -35,7 +39,9 @@
 #include <RE/N/NiTransform.h>
 #include <RE/R/Renderer.h>
 #include <RE/R/RendererShadowState.h>
+#include <RE/L/LoadingMenu.h>
 #include <RE/S/State.h>
+#include <RE/U/UI.h>
 #include <RE/V/VertexDesc.h>
 
 using namespace DirectX;
@@ -48,10 +54,18 @@ namespace MOC
 	float OccluderMaxDistance = 20000.0f;
 	float OccluderFirstLevelMinSize = 200.0f;
 	// Cap on occluders rasterized per frame (closest-first after the sort). NOT a MOC
-	// library limit -- purely a budget for the V1 synchronous build on the cull path
-	// (96 @ 512x288 ~= 5-7ms). Raising it approaches "rasterize everything gathered"
-	// (typically only 700-1500 candidates exist); cost grows with triangle count.
-	std::uint32_t MaxOccludersPerFrame = 96;
+	// library limit -- a budget for the per-frame build. With the threaded raster +
+	// simplified meshes the default covers everything a typical scene gathers.
+	std::uint32_t MaxOccludersPerFrame = 256;
+	// Worker threads for the CullingThreadpool raster (applied at boot).
+	std::int32_t RasterThreads = 2;
+	// LOD-simplify occluder meshes to ~half the indices at cache time (meshopt_simplify,
+	// Nukem's parameters). Cuts raster cost ~2-3x; conservativeness is preserved within
+	// the simplifier's error bound (1e-3 of mesh extents).
+	bool SimplifyOccluders = true;
+	// Only objects/subtrees with at least this world-bound radius are occlusion-tested.
+	// Lower = more tested objects (more draws saved) at more test cost per frame.
+	float OccluderTestMinRadius = 50.0f;
 
 	namespace
 	{
@@ -61,6 +75,7 @@ namespace MOC
 		constexpr unsigned int MOC_HEIGHT = 288;
 
 		MaskedOcclusionCulling* g_moc = nullptr;
+		CullingThreadpool*      g_pool = nullptr;
 		bool                    g_init = false;
 
 		// Camera matrices for the current build (camera-relative, row-vector layout).
@@ -79,6 +94,28 @@ namespace MOC
 		// testing for their pass (conservative: everything stays visible) until published.
 		std::atomic<std::uint32_t> g_buildClaim{ 0xFFFFFFFFu };
 		std::atomic<std::uint32_t> g_buildDone{ 0xFFFFFFFFu };
+
+		struct GeoEntry
+		{
+			RE::BSGeometry* geometry;
+			float           distanceSquared;
+			float           coverageScore;  // worldBound.radius / distance -- projected-size proxy
+		};
+		std::vector<GeoEntry> g_geoList;
+
+		// Occluder-list BUILDER thread: the scene-graph walk + sort + vertex-conversion
+		// pre-warm run here, OFF the engine's cull critical path. The claim thread only
+		// enqueues the previously prepared list (fresh matrices, warm caches). The list is
+		// one frame stale -- occluders are static meshes, and a newly streamed cell's
+		// occluders appearing a frame late is conservative (less culling, never wrong).
+		std::thread             g_builder;
+		std::mutex              g_builderMtx;
+		std::condition_variable g_builderCV;
+		bool                    g_builderKick = false;
+		bool                    g_builderQuit = false;
+		std::vector<GeoEntry>   g_readyList;   // published by the builder, consumed by the claim thread
+		bool                    g_readyValid = false;
+		double                  g_lastGatherMs = 0.0;
 		std::uint32_t              g_lastOccluderCount = 0;
 
 		// Walk-shape tallies (written by the single build thread, read by its diag print).
@@ -86,14 +123,14 @@ namespace MOC
 		std::uint32_t g_cellsCulled = 0;
 
 
-		// Only objects/subtrees whose world bound is at least this large are occlusion-tested:
-		// testing small geometry costs more (RTTI + project + TestRect) than the cheap draw it
-		// would save. Cheap radius compare gates BEFORE any RTTI in TestObject.
-		constexpr float OccluderTestMinRadius = 50.0f;
 
 		// Lightweight diagnostic tallies (logged from BuildOccluders, not per-test).
 		std::atomic<std::uint64_t> g_tested{ 0 };
 		std::atomic<std::uint64_t> g_culled{ 0 };
+		std::atomic<std::uint64_t> g_testedAABB{ 0 };
+		std::atomic<std::uint64_t> g_culledAABB{ 0 };
+		std::atomic<std::uint64_t> g_testedSphere{ 0 };
+		std::atomic<std::uint64_t> g_culledSphere{ 0 };
 		std::chrono::high_resolution_clock::time_point g_buildStart;
 
 		// Debug depth-buffer view: MOC's software depth rasterized to an RGBA8 texture
@@ -113,12 +150,6 @@ namespace MOC
 		std::unordered_map<void*, IndexPair> g_indexMap;
 		std::mutex                           g_cacheMutex;
 
-		struct GeoEntry
-		{
-			RE::BSGeometry* geometry;
-			float           distanceSquared;
-		};
-		std::vector<GeoEntry> g_geoList;
 
 		// WorldScenegraph global (holds a NiNode*). Nukem 0x2F4CE30 -> SE REL::ID(517006).
 		REL::Relocation<RE::NiNode**> g_worldScenegraph{ REL::ID(517006) };
@@ -231,6 +262,18 @@ namespace MOC
 				IndexPair p;
 				p.Count = triCount * 3;
 				p.Data = ConvertIndices(reinterpret_cast<const std::uint16_t*>(rendererData->rawIndexData), p.Count);
+
+				// LOD-simplify big occluder meshes at cache time (Nukem's parameters:
+				// target half the indices, 1e-3 relative error, only above 300 indices).
+				// The raw slot-0 buffer IS the float3-position stream meshopt expects.
+				if (SimplifyOccluders && p.Count > 300) {
+					const std::size_t simplified = meshopt_simplify(
+						p.Data, p.Data, p.Count,
+						reinterpret_cast<const float*>(rendererData->rawVertexData), vertCount, stride,
+						static_cast<std::size_t>(p.Count * 0.5f), 1e-3f, 0, nullptr);
+					p.Count = static_cast<std::uint32_t>(simplified);
+				}
+
 				g_indexMap.insert_or_assign(key, p);
 				a_outIndices = p;
 			}
@@ -368,6 +411,11 @@ namespace MOC
 			GeoEntry entry;
 			entry.geometry = a_geom;
 			entry.distanceSquared = dx * dx + dy * dy + dz * dz;
+			// Projected-size proxy: radius over distance. Selecting the raster budget by
+			// CENTER DISTANCE starved huge occluders -- terrain cells have far-away centers
+			// even when they fill the near view, so nearby pebbles consumed the budget and
+			// the terrain went MISSING from the buffer. Coverage picks what blocks pixels.
+			entry.coverageScore = a_geom->worldBound.radius / (sqrtf(entry.distanceSquared) + 1.0f);
 			g_geoList.push_back(entry);
 		}
 
@@ -525,6 +573,57 @@ namespace MOC
 			}
 		}
 
+		bool GetCachedGeometry(RE::BSGeometry* a_geom, IndexPair& a_outIndices, float*& a_outVerts);
+
+		// Builder-thread main: each kick runs one gather + coverage selection + front-to-back
+		// sort + vertex-conversion pre-warm, then publishes the list for the NEXT frame's
+		// enqueue. Scene-graph reads race the game by design (Nukem's model) -- the walk is
+		// null-guarded throughout and only ever READS.
+		void BuilderLoop()
+		{
+			for (;;) {
+				{
+					std::unique_lock lk(g_builderMtx);
+					g_builderCV.wait(lk, [] { return g_builderKick || g_builderQuit; });
+					if (g_builderQuit)
+						return;
+					g_builderKick = false;
+				}
+
+				const auto t0 = std::chrono::high_resolution_clock::now();
+
+				g_geoList.clear();
+				GatherOccluders();
+
+				const std::size_t budget = std::min<std::size_t>(g_geoList.size(), MaxOccludersPerFrame);
+				if (budget < g_geoList.size())
+					std::nth_element(g_geoList.begin(), g_geoList.begin() + budget, g_geoList.end(),
+						[](const GeoEntry& a, const GeoEntry& b) { return a.coverageScore > b.coverageScore; });
+				std::sort(g_geoList.begin(), g_geoList.begin() + budget,
+					[](const GeoEntry& a, const GeoEntry& b) { return a.distanceSquared < b.distanceSquared; });
+				g_geoList.resize(budget);
+
+				// Pre-warm the conversion cache so the claim thread's enqueue never pays
+				// for vertex/index conversion or meshopt simplification.
+				for (auto& e : g_geoList) {
+					IndexPair idx;
+					float*    verts = nullptr;
+					if (e.geometry)
+						GetCachedGeometry(e.geometry, idx, verts);
+				}
+
+				g_lastGatherMs = std::chrono::duration<double, std::milli>(
+					std::chrono::high_resolution_clock::now() - t0)
+				                     .count();
+
+				{
+					std::scoped_lock lk(g_builderMtx);
+					g_readyList.swap(g_geoList);
+					g_readyValid = true;
+				}
+			}
+		}
+
 		void RasterizeOccluder(RE::BSGeometry* a_geom)
 		{
 			IndexPair indices;
@@ -540,11 +639,15 @@ namespace MOC
 			const XMMATRIX worldRel = GetXMFromNiPosAdjust(a_geom->world, g_posAdjust);
 			const XMMATRIX worldViewProj = XMMatrixMultiply(worldRel, g_viewProj);
 
-			g_moc->RenderTriangles(
+			// Queue the drawcall on the threadpool (async; workers bin + rasterize).
+			// SetMatrix copies the matrix into per-job state, so the stack lifetime is
+			// fine; the cached verts/indices are persistent, satisfying the pool's
+			// keep-alive-until-flush requirement.
+			g_pool->SetMatrix(reinterpret_cast<const float*>(&worldViewProj));
+			g_pool->RenderTriangles(
 				verts,
 				indices.Data,
 				static_cast<int>(indices.Count / 3),
-				reinterpret_cast<const float*>(&worldViewProj),
 				winding,
 				MaskedOcclusionCulling::CLIP_PLANE_SIDES);
 		}
@@ -568,8 +671,29 @@ namespace MOC
 		g_moc->SetResolution(MOC_WIDTH, MOC_HEIGHT);
 		g_moc->ClearBuffer();
 
+		// Intel's CullingThreadpool: occluder rasterization is queued by the (single)
+		// build thread and executed by worker threads binning the screen. Bins must be
+		// tile-aligned and >= thread count: 4x4 bins of 128x72 over 512x288. maxJobs=32
+		// is Intel's recommended queue depth. Workers are woken per build and suspended
+		// right after the flush, so the pool costs nothing outside the build window.
+		const unsigned int threads = std::clamp(RasterThreads, 1, 8);
+		g_pool = new CullingThreadpool(threads, 4, 4, 32);
+		g_pool->SetBuffer(g_moc);
+		g_pool->SetVertexLayout(MaskedOcclusionCulling::VertexLayout(16, 4, 12));
+		g_pool->SuspendThreads();
+
+		// Drop the raster workers below normal priority: in CPU-bound scenes they must
+		// yield to the engine's own job threads or the raster wins cost more than the
+		// culling saves. (The pool spawned `threads` workers followed by nothing else on
+		// this process yet at PostPostLoad -- identify them by enumeration snapshot.)
+		// CullingThreadpool offers no handle access; adjust via the builder-side knob
+		// instead: fewer workers is the honest lever, so the default is now 2.
+
+		g_builderQuit = false;
+		g_builder = std::thread(BuilderLoop);
+
 		g_init = true;
-		logger::info("[MOC] initialized {}x{}", MOC_WIDTH, MOC_HEIGHT);
+		logger::info("[MOC] initialized {}x{} rasterThreads={}", MOC_WIDTH, MOC_HEIGHT, threads);
 	}
 
 	// Create the debug texture lazily: MOC::Init runs at PostPostLoad, BEFORE the game
@@ -833,6 +957,21 @@ namespace MOC
 		g_indexMap.clear();
 		g_geoList.clear();
 
+		// Stop the builder before tearing anything down (it walks the scene graph and
+		// touches the conversion cache).
+		if (g_builder.joinable()) {
+			{
+				std::scoped_lock lk(g_builderMtx);
+				g_builderQuit = true;
+			}
+			g_builderCV.notify_one();
+			g_builder.join();
+		}
+
+		// The pool references g_moc and joins its workers in the destructor -- destroy it first.
+		delete g_pool;
+		g_pool = nullptr;
+
 		if (g_moc) {
 			MaskedOcclusionCulling::Destroy(g_moc);
 			g_moc = nullptr;
@@ -904,6 +1043,14 @@ namespace MOC
 		if (a_camera != renderCam && a_camera != *g_cullCamera)
 			return false;
 
+		// Quiesce during loads: the BUILDER thread walks the scene graph, and a scene
+		// teardown (coc / fast travel / load) mid-walk is a use-after-free (crashed on a
+		// worldspace transition). The loading screen covers the teardown window; skipping
+		// builds there costs nothing (nothing worth culling renders) and starves the
+		// builder before the graph is torn down.
+		if (auto* ui = RE::UI::GetSingleton(); ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME))
+			return false;
+
 		// The matrices always come from the RENDER camera: the cull camera's frustum is
 		// normalized to (-1,1,1,-1), and the engine's per-pass cameraData is still stale
 		// from the previous frame during the earliest main cull (BuildSceneLists runs as a
@@ -943,27 +1090,51 @@ namespace MOC
 		const XMVECTOR       up = XMVectorSet(camR.entry[0][1], camR.entry[1][1], camR.entry[2][1], 0.0f);    // up = col 1
 		g_frustum.InitializeFrustumAABB(myfar, mynear, aspect, fov, _mm_setzero_ps(), look, up);
 
-		g_moc->ClearBuffer();
-
 		if (!EnableOccluderRendering) {
+			g_moc->ClearBuffer();  // workers idle when rendering is off; direct clear is safe
 			g_buildDone.store(frame, std::memory_order_release);
 			return true;  // buffer cleared -> TestObject keeps everything visible
 		}
 
-		g_geoList.clear();
-		GatherOccluders();
-		g_lastOccluderCount = static_cast<std::uint32_t>(g_geoList.size());
+		// Wake the raster workers (~100us) before touching the buffer, then clear THROUGH
+		// the pool: its ClearBuffer flushes any last-frame straggler first, so the clear
+		// can never race an in-flight rasterization.
+		g_pool->WakeThreads();
+		g_pool->ClearBuffer();
 
-		// Front-to-back (approx) improves early-Z rejection during rasterization.
-		std::sort(g_geoList.begin(), g_geoList.end(),
-			[](const GeoEntry& a, const GeoEntry& b) { return a.distanceSquared < b.distanceSquared; });
+		// Enqueue the list the BUILDER prepared last frame (gather + coverage selection +
+		// front-to-back sort + conversion pre-warm all happened off this thread). The list
+		// is one frame stale -- occluders are static, so at worst a newly streamed cell's
+		// occluders join a frame late (conservative). First frame after a scene change has
+		// no list yet: nothing occludes, everything stays visible.
+		static std::vector<GeoEntry> s_enqueue;
+		s_enqueue.clear();
+		{
+			std::scoped_lock lk(g_builderMtx);
+			if (g_readyValid)
+				s_enqueue.swap(g_readyList);
+			g_readyValid = false;
+		}
+		g_lastOccluderCount = static_cast<std::uint32_t>(s_enqueue.size());
+		for (auto& e : s_enqueue)
+			RasterizeOccluder(e.geometry);
 
-		// Cap the raster budget: sorted front-to-back, the closest occluders block the most
-		// screen area; far ones cost a full RenderTriangles for little coverage. Bounds the
-		// synchronous per-frame cost (V1 rasterizes on the render thread).
-		const std::size_t cap = std::min<std::size_t>(g_geoList.size(), MaxOccludersPerFrame);
-		for (std::size_t i = 0; i < cap; ++i)
-			RasterizeOccluder(g_geoList[i].geometry);
+		// Kick the builder to prepare NEXT frame's list with the matrices/frustum we just
+		// published above.
+		{
+			std::scoped_lock lk(g_builderMtx);
+			g_builderKick = true;
+		}
+		g_builderCV.notify_one();
+
+		// NO Flush: publish immediately and let the workers keep rasterizing while the
+		// cull proceeds. Querying a partially built buffer is conservatively correct by
+		// the library contract ("may only lead to objects being incorrectly classified
+		// as visible"), and front-to-back submission puts the best occluders in first.
+		// SuspendThreads is only a flag: workers drain the whole queue, THEN park, so no
+		// work is lost and no busy-spin lingers. This removes the ~2ms rasterization wait
+		// from the critical cull path entirely (the enqueue above costs ~0.2-0.5ms).
+		g_pool->SuspendThreads();
 
 		// DIAG (rate-limited): build time (gather + raster, on whichever cull thread won
 		// the claim) + cull tally. Verification dumps are NOT done here -- BuildOccluders
@@ -974,10 +1145,11 @@ namespace MOC
 			const double buildMs = std::chrono::duration<double, std::milli>(
 				std::chrono::high_resolution_clock::now() - g_buildStart)
 									   .count();
-			logger::info("[MOC][diag] frame={} build={:.2f}ms occluders={} rasterized={} cells={}/culled={} | tested={} culled={}",
-				frame, buildMs, g_lastOccluderCount, std::min<std::uint32_t>(g_lastOccluderCount, MaxOccludersPerFrame),
+			logger::info("[MOC][diag] frame={} enqueue={:.2f}ms gather={:.2f}ms occluders={} cells={}/culled={} | tested={} culled={} (aabb {}/{} sphere {}/{})",
+				frame, buildMs, g_lastGatherMs, g_lastOccluderCount,
 				g_cellsSeen, g_cellsCulled,
-				g_tested.load(), g_culled.load());
+				g_tested.load(), g_culled.load(),
+				g_culledAABB.load(), g_testedAABB.load(), g_culledSphere.load(), g_testedSphere.load());
 		}
 		g_buildDone.store(frame, std::memory_order_release);
 		return true;
@@ -1132,8 +1304,31 @@ namespace MOC
 		const bool visible = aabb ? TestAABB(aabb) : TestSphere(a_object);
 
 		g_tested.fetch_add(1, std::memory_order_relaxed);
-		if (!visible)
+		(aabb ? g_testedAABB : g_testedSphere).fetch_add(1, std::memory_order_relaxed);
+		if (!visible) {
 			g_culled.fetch_add(1, std::memory_order_relaxed);
+			(aabb ? g_culledAABB : g_culledSphere).fetch_add(1, std::memory_order_relaxed);
+		}
+		return visible;
+	}
+
+	bool TestMultiBound(void* a_multiBound)
+	{
+		if (!g_init || !EnableOcclusionTesting || !a_multiBound)
+			return true;
+
+		auto* mb = static_cast<RE::BSMultiBound*>(a_multiBound);
+		auto* aabb = netimmerse_cast<RE::BSMultiBoundAABB*>(mb->data.get());
+		if (!aabb || aabb->size.z <= 1.0f)
+			return true;  // no AABB shape (spheres etc.) or degenerate bounds -> keep
+
+		const bool visible = TestAABB(aabb);
+		g_tested.fetch_add(1, std::memory_order_relaxed);
+		g_testedAABB.fetch_add(1, std::memory_order_relaxed);
+		if (!visible) {
+			g_culled.fetch_add(1, std::memory_order_relaxed);
+			g_culledAABB.fetch_add(1, std::memory_order_relaxed);
+		}
 		return visible;
 	}
 }

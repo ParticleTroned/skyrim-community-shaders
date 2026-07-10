@@ -5,6 +5,7 @@
 #include "Globals.h"
 
 #include <RE/B/BSCullingProcess.h>
+#include <RE/B/BSMultiBound.h>
 #include <RE/B/BSParabolicCullingProcess.h>
 #include <RE/N/NiAVObject.h>
 #include <RE/N/NiCamera.h>
@@ -107,6 +108,38 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	// TestBaseVisibility1(BSMultiBound&) -- the engine's CONTAINER visibility path (rooms,
+	// cells, building shells). Multibound nodes never reach Process1, so this is where the
+	// high-value tight-AABB occlusion tests belong: one occluded container prunes all its
+	// contents. Engine verdict first; we only downgrade visible -> occluded.
+	struct TestBaseVis1_Hook
+	{
+		static bool thunk(RE::BSCullingProcess* a_self, RE::BSMultiBound* a_bound)
+		{
+			const bool visible = func(a_self, a_bound);
+			if (visible && a_bound &&
+				static_cast<RE::NiCullingProcess*>(a_self) == g_activeCullProcess.load(std::memory_order_relaxed) &&
+				!MOC::TestMultiBound(a_bound))
+				return false;
+			return visible;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct PTestBaseVis1_Hook
+	{
+		static bool thunk(RE::BSCullingProcess* a_self, RE::BSMultiBound* a_bound)
+		{
+			const bool visible = func(a_self, a_bound);
+			if (visible && a_bound &&
+				static_cast<RE::NiCullingProcess*>(a_self) == g_activeCullProcess.load(std::memory_order_relaxed) &&
+				!MOC::TestMultiBound(a_bound))
+				return false;
+			return visible;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 }
 
 void OcclusionCulling::PostPostLoad()
@@ -130,6 +163,15 @@ void OcclusionCulling::PostPostLoad()
 		if (v > 0)
 			settings.MaxOccludersPerFrame = v;
 	}
+	// CS_MOC_NO_SIMPLIFY=1: disable occluder mesh simplification (A/B of cull-rate impact).
+	if (GetEnvironmentVariableA("CS_MOC_NO_SIMPLIFY", buf, sizeof(buf)) && buf[0] == '1')
+		settings.SimplifyOccluders = false;
+	// CS_MOC_MIN_TEST_RADIUS=<n>: per-object test gate override for A/B runs.
+	if (GetEnvironmentVariableA("CS_MOC_MIN_TEST_RADIUS", buf, sizeof(buf)) && buf[0]) {
+		const int v = atoi(buf);
+		if (v >= 0)
+			settings.OccluderTestMinRadius = static_cast<float>(v);
+	}
 
 	// SE 1.5.97 only: the address-library id and struct offsets used by the port are SE.
 	if (!REL::Module::IsSE()) {
@@ -137,8 +179,10 @@ void OcclusionCulling::PostPostLoad()
 		return;
 	}
 
-	MOC::Init();
+	// Sync BEFORE Init so boot-time settings (env overrides, defaults) reach the pool
+	// creation (RasterThreads is consumed inside MOC::Init).
 	SyncSettingsToMOC();
+	MOC::Init();
 
 	// Detour the Process1/Process2 FUNCTION BODIES of both culling-process classes
 	// (base BSCullingProcess and the BSParabolicCullingProcess overrides the main world
@@ -156,6 +200,8 @@ void OcclusionCulling::PostPostLoad()
 	stl::detour_thunk<Process2_Hook>(REL::RelocationID(74805, 74805));     // BSCullingProcess::Process2
 	stl::detour_thunk<PProcess1_Hook>(REL::RelocationID(101597, 101597));  // BSParabolicCullingProcess::Process1
 	stl::detour_thunk<PProcess2_Hook>(REL::RelocationID(101598, 101598));  // BSParabolicCullingProcess::Process2
+	stl::detour_thunk<TestBaseVis1_Hook>(REL::RelocationID(74816, 74816));      // BSCullingProcess::TestBaseVisibility1
+	stl::detour_thunk<PTestBaseVis1_Hook>(REL::RelocationID(101605, 101605));   // BSParabolicCullingProcess::TestBaseVisibility1
 	// On success DetourAttach rewrites T::func to the trampoline (!= original address);
 	// equal means the attach silently failed.
 	logger::info("[OcclusionCulling] detours attached: P1base={} P2base={} P1para={} P2para={}",
@@ -185,6 +231,9 @@ void OcclusionCulling::SyncSettingsToMOC()
 	MOC::OccluderMaxDistance = settings.OccluderMaxDistance;
 	MOC::OccluderFirstLevelMinSize = settings.OccluderFirstLevelMinSize;
 	MOC::MaxOccludersPerFrame = static_cast<std::uint32_t>(std::max(settings.MaxOccludersPerFrame, 1));
+	MOC::RasterThreads = settings.RasterThreads;      // applied at boot (pool created once)
+	MOC::SimplifyOccluders = settings.SimplifyOccluders;  // affects newly cached meshes
+	MOC::OccluderTestMinRadius = settings.OccluderTestMinRadius;
 }
 
 void OcclusionCulling::Prepass()
@@ -224,7 +273,22 @@ void OcclusionCulling::DrawSettings()
 	changed |= ImGui::SliderInt(T("feature.occlusion_culling.max_occluders", "Max Occluders / Frame"), &settings.MaxOccludersPerFrame, 16, 4096, "%d", ImGuiSliderFlags_Logarithmic);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("feature.occlusion_culling.max_occluders_tooltip",
-			"CPU raster budget per frame, nearest occluders first. Not a hard engine limit -- typical scenes only offer 700-1500 candidate occluders, so high values mean 'rasterize everything'. Cost is CPU time on the cull path; watch the build time below."));
+			"CPU raster budget per frame, selected by estimated screen coverage (large occluders like terrain always make the cut). Typical scenes offer 700-1600 candidates, so high values mean 'rasterize everything'."));
+
+	changed |= ImGui::SliderInt(T("feature.occlusion_culling.raster_threads", "Raster Threads"), &settings.RasterThreads, 1, 8);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("feature.occlusion_culling.raster_threads_tooltip",
+			"Worker threads for occluder rasterization (Intel CullingThreadpool). Applied at next game start."));
+
+	changed |= ImGui::SliderFloat(T("feature.occlusion_culling.min_test_radius", "Min Tested Object Size"), &settings.OccluderTestMinRadius, 0.0f, 200.0f, "%.0f");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("feature.occlusion_culling.min_test_radius_tooltip",
+			"Objects smaller than this (world-bound radius) are never occlusion-tested. Lower = more draw calls saved but more CPU per frame."));
+
+	changed |= ImGui::Checkbox(T("feature.occlusion_culling.simplify", "Simplify Occluder Meshes"), &settings.SimplifyOccluders);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("feature.occlusion_culling.simplify_tooltip",
+			"Reduce occluder meshes to ~half the triangles at cache time (meshoptimizer). Big raster speedup; affects newly loaded meshes."));
 
 	ImGui::EndDisabled();
 
@@ -257,6 +321,12 @@ void OcclusionCulling::LoadSettings(json& o_json)
 		settings.OccluderFirstLevelMinSize = o_json["OccluderFirstLevelMinSize"];
 	if (o_json["MaxOccludersPerFrame"].is_number_integer())
 		settings.MaxOccludersPerFrame = o_json["MaxOccludersPerFrame"];
+	if (o_json["RasterThreads"].is_number_integer())
+		settings.RasterThreads = o_json["RasterThreads"];
+	if (o_json["SimplifyOccluders"].is_boolean())
+		settings.SimplifyOccluders = o_json["SimplifyOccluders"];
+	if (o_json["OccluderTestMinRadius"].is_number())
+		settings.OccluderTestMinRadius = o_json["OccluderTestMinRadius"];
 
 	SyncSettingsToMOC();
 }
@@ -268,6 +338,9 @@ void OcclusionCulling::SaveSettings(json& o_json)
 	o_json["OccluderMaxDistance"] = settings.OccluderMaxDistance;
 	o_json["OccluderFirstLevelMinSize"] = settings.OccluderFirstLevelMinSize;
 	o_json["MaxOccludersPerFrame"] = settings.MaxOccludersPerFrame;
+	o_json["RasterThreads"] = settings.RasterThreads;
+	o_json["SimplifyOccluders"] = settings.SimplifyOccluders;
+	o_json["OccluderTestMinRadius"] = settings.OccluderTestMinRadius;
 }
 
 void OcclusionCulling::RestoreDefaultSettings()

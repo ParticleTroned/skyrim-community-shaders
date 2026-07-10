@@ -10,3 +10,6 @@
 [submodule "extern/MaskedOcclusionCulling"]
 	path = extern/MaskedOcclusionCulling
 	url = https://github.com/GameTechDev/MaskedOcclusionCulling.git
+[submodule "extern/meshoptimizer"]
+	path = extern/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer.git

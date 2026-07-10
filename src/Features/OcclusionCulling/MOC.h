@@ -34,7 +34,10 @@ namespace MOC
 	extern bool          EnableOccluderRendering;    // gate for occluder rasterization
 	extern float         OccluderMaxDistance;        // 2D distance cap for occluder gather (default 20000)
 	extern float         OccluderFirstLevelMinSize;  // min worldBound radius of a top-level occluder (default 200)
-	extern std::uint32_t MaxOccludersPerFrame;       // raster budget, closest-first (default 96; not a library limit)
+	extern std::uint32_t MaxOccludersPerFrame;       // raster budget, closest-first (default 512; not a library limit)
+	extern std::int32_t  RasterThreads;              // CullingThreadpool worker count (applied at boot)
+	extern bool          SimplifyOccluders;          // meshopt_simplify occluder meshes at cache time
+	extern float         OccluderTestMinRadius;      // min world-bound radius for per-object tests
 
 	/** @brief Create the global MOC instance (1280x720). Safe to call once; no-op if already initialized. */
 	void Init();
@@ -61,6 +64,13 @@ namespace MOC
 	 *         disabled, app-culled, tiny/near bounds, behind near plane).
 	 */
 	bool TestObject(RE::NiAVObject* a_object);
+
+	/**
+	 * @brief Occlusion query for a multibound container (rooms, cells, building shells)
+	 *        from the engine's TestBaseVisibility path. Tight AABB test.
+	 * @return true if possibly visible; false if provably occluded.
+	 */
+	bool TestMultiBound(void* a_multiBound);
 
 	/** @brief Drop the cached converted verts/indices for a torn-down BSGraphics::TriShape. */
 	void RemoveCachedGeometry(void* a_rendererData);

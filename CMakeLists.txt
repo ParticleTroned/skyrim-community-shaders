@@ -119,6 +119,10 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/cmake/Streamline)
 # per-file /arch flags; AVX-512 stays off. See src/Features/OcclusionCulling/.
 add_subdirectory(${CMAKE_SOURCE_DIR}/extern/MaskedOcclusionCulling)
 
+# meshoptimizer -- occluder mesh LOD-simplification for the OcclusionCulling feature
+# (meshopt_simplify to ~1/3 of the triangles before CPU rasterization, per Nukem).
+add_subdirectory(${CMAKE_SOURCE_DIR}/extern/meshoptimizer)
+
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
@@ -174,6 +178,7 @@ target_link_libraries(
         Vulkan::Vulkan
         Streamline
         MaskedOcclusionCulling
+        meshoptimizer
 )
 
 # devbench bridge: opt-out via -DDEVBENCH_BRIDGE=OFF. When off, the port isn't required

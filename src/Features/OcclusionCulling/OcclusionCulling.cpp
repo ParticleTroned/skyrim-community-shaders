@@ -238,6 +238,19 @@ void OcclusionCulling::PostPostLoad()
 	// CS_MOC_NO_SIMPLIFY=1: disable occluder mesh simplification (A/B of cull-rate impact).
 	if (GetEnvironmentVariableA("CS_MOC_NO_SIMPLIFY", buf, sizeof(buf)) && buf[0] == '1')
 		settings.SimplifyOccluders = false;
+	// CS_MOC_THREADS=<n>: raster worker count override (1..16) for A/B runs.
+	if (GetEnvironmentVariableA("CS_MOC_THREADS", buf, sizeof(buf)) && buf[0]) {
+		const int v = atoi(buf);
+		if (v >= 1 && v <= 16)
+			settings.RasterThreads = v;
+	}
+	// CS_MOC_FORCE_CULL=<pct>: DIAGNOSTIC -- force-cull a percentage of kept objects to
+	// measure the fps-per-culled-object curve. Breaks the image; env-only, never persisted.
+	if (GetEnvironmentVariableA("CS_MOC_FORCE_CULL", buf, sizeof(buf)) && buf[0]) {
+		const int v = atoi(buf);
+		if (v >= 0 && v <= 100)
+			diagForceCullPercent = v;
+	}
 	// CS_MOC_EXCLUSIVE=1: MOC-exclusive occlusion (vanilla planes neutralized).
 	if (GetEnvironmentVariableA("CS_MOC_EXCLUSIVE", buf, sizeof(buf)) && buf[0] == '1')
 		settings.ExclusiveOcclusion = true;
@@ -319,6 +332,8 @@ void OcclusionCulling::SyncSettingsToMOC()
 	MOC::SimplifyOccluders = settings.SimplifyOccluders;  // affects newly cached meshes
 	MOC::OccluderTestMinRadius = settings.OccluderTestMinRadius;
 	MOC::ExclusiveOcclusion = settings.ExclusiveOcclusion;
+	MOC::OccluderMinLeafSize = settings.OccluderMinLeafSize;
+	MOC::DiagForceCullPercent = diagForceCullPercent;  // env-only diagnostic, not persisted
 }
 
 RE::BSEventNotifyControl OcclusionCulling::MenuEventSink::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
@@ -366,12 +381,17 @@ void OcclusionCulling::DrawSettings()
 	changed |= ImGui::SliderFloat(T("feature.occlusion_culling.max_distance", "Occluder Max Distance"), &settings.OccluderMaxDistance, 1000.0f, 100000.0f, "%.0f");
 	changed |= ImGui::SliderFloat(T("feature.occlusion_culling.first_level_min_size", "Occluder Min Size"), &settings.OccluderFirstLevelMinSize, 0.0f, 2000.0f, "%.0f");
 
+	changed |= ImGui::SliderFloat(T("feature.occlusion_culling.min_leaf_size", "Min Occluder Mesh Size"), &settings.OccluderMinLeafSize, 0.0f, 500.0f, "%.0f");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("feature.occlusion_culling.min_leaf_size_tooltip",
+			"Meshes smaller than this are not rasterized into the occlusion buffer. Everything larger is rendered (no per-frame cap)."));
+
 	changed |= ImGui::SliderInt(T("feature.occlusion_culling.max_occluders", "Max Occluders / Frame"), &settings.MaxOccludersPerFrame, 16, 4096, "%d", ImGuiSliderFlags_Logarithmic);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("feature.occlusion_culling.max_occluders_tooltip",
 			"CPU raster budget per frame, selected by estimated screen coverage (large occluders like terrain always make the cut). Typical scenes offer 700-1600 candidates, so high values mean 'rasterize everything'."));
 
-	changed |= ImGui::SliderInt(T("feature.occlusion_culling.raster_threads", "Raster Threads"), &settings.RasterThreads, 1, 8);
+	changed |= ImGui::SliderInt(T("feature.occlusion_culling.raster_threads", "Raster Threads"), &settings.RasterThreads, 1, 16);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("feature.occlusion_culling.raster_threads_tooltip",
 			"Worker threads for occluder rasterization (Intel CullingThreadpool). Applied at next game start."));
@@ -430,6 +450,8 @@ void OcclusionCulling::LoadSettings(json& o_json)
 		settings.OccluderTestMinRadius = o_json["OccluderTestMinRadius"];
 	if (o_json["ExclusiveOcclusion"].is_boolean())
 		settings.ExclusiveOcclusion = o_json["ExclusiveOcclusion"];
+	if (o_json["OccluderMinLeafSize"].is_number())
+		settings.OccluderMinLeafSize = o_json["OccluderMinLeafSize"];
 
 	SyncSettingsToMOC();
 }
@@ -445,6 +467,7 @@ void OcclusionCulling::SaveSettings(json& o_json)
 	o_json["SimplifyOccluders"] = settings.SimplifyOccluders;
 	o_json["OccluderTestMinRadius"] = settings.OccluderTestMinRadius;
 	o_json["ExclusiveOcclusion"] = settings.ExclusiveOcclusion;
+	o_json["OccluderMinLeafSize"] = settings.OccluderMinLeafSize;
 }
 
 void OcclusionCulling::RestoreDefaultSettings()

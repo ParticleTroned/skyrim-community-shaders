@@ -57,7 +57,7 @@ namespace MOC
 	// Cap on occluders rasterized per frame (closest-first after the sort). NOT a MOC
 	// library limit -- a budget for the per-frame build. With the threaded raster +
 	// simplified meshes the default covers everything a typical scene gathers.
-	std::uint32_t MaxOccludersPerFrame = 256;
+	std::uint32_t MaxOccludersPerFrame = 4096;
 	// Worker threads for the CullingThreadpool raster (applied at boot).
 	std::int32_t RasterThreads = 2;
 	// LOD-simplify occluder meshes to ~half the indices at cache time (meshopt_simplify,
@@ -71,6 +71,13 @@ namespace MOC
 	// culls so the vanilla occlusion planes never process; the engine keeps its plain
 	// view-frustum culling and MOC provides ALL occlusion. Off by default.
 	bool ExclusiveOcclusion = false;
+	// Leaf gate for the occluder GATHER: geometry below this world-bound radius is not
+	// rasterized into the buffer ("render everything apart from small objects").
+	float OccluderMinLeafSize = 100.0f;
+	// DIAGNOSTIC: forcibly cull this percentage of objects that survive the real tests
+	// (stable per-object hash). Answers "at what cull volume does perf improve" on a
+	// given profile, independent of MOC's actual yield. BREAKS THE IMAGE -- probe only.
+	std::int32_t DiagForceCullPercent = 0;
 
 	namespace
 	{
@@ -229,13 +236,35 @@ namespace MOC
 		// Fetch (and lazily convert + cache) the MOC verts/indices for a static kTriShape.
 		bool GetCachedGeometry(RE::BSGeometry* a_geom, IndexPair& a_outIndices, float*& a_outVerts)
 		{
-			if (a_geom->GetType().get() != RE::BSGeometry::Type::kTriShape)
+			// Accept every BSTriShape-derived type with the standard TriShape runtime
+			// data. Critically this includes kSubIndexLandTriShape/kSubIndexTriShape --
+			// ACTIVE-CELL TERRAIN -- which the kTriShape-only gate silently rejected,
+			// leaving holes in the buffer floor ("seeing through the ground" = nothing
+			// behind terrain ever culled). Dynamic/particle/instanced types stay out.
+			switch (a_geom->GetType().get()) {
+			case RE::BSGeometry::Type::kTriShape:
+			case RE::BSGeometry::Type::kMeshLODTriShape:
+			case RE::BSGeometry::Type::kLODMultiIndexTriShape:
+			case RE::BSGeometry::Type::kMultiIndexTriShape:
+			case RE::BSGeometry::Type::kSubIndexTriShape:
+			case RE::BSGeometry::Type::kSubIndexLandTriShape:
+				break;
+			default:
 				return false;
+			}
 
 			auto&                     geomRT = a_geom->GetGeometryRuntimeData();
 			RE::BSGraphics::TriShape* rendererData = geomRT.rendererData;
-			if (!rendererData || !rendererData->rawVertexData || !rendererData->rawIndexData)
+			if (!rendererData || !rendererData->rawVertexData || !rendererData->rawIndexData) {
+				// One-shot diag: LARGE geometry rejected here = holes in the buffer floor.
+				static std::atomic<int> s_logBudget{ 8 };
+				if (a_geom->worldBound.radius > 500.0f && s_logBudget.fetch_sub(1, std::memory_order_relaxed) > 0)
+					logger::info("[MOC][reject] '{}' type={} radius={:.0f} rendererData={} rawVtx={} rawIdx={}",
+						a_geom->name.c_str(), static_cast<int>(a_geom->GetType().get()), a_geom->worldBound.radius,
+						rendererData != nullptr,
+						rendererData && rendererData->rawVertexData, rendererData && rendererData->rawIndexData);
 				return false;
+			}
 
 			void* key = rendererData;
 
@@ -263,8 +292,13 @@ namespace MOC
 
 			// The renderer's vertexDesc copy (identical to geomRT.vertexDesc).
 			const std::uint32_t stride = GetVertexStride(rendererData->vertexDesc);
-			if (stride == 0)
+			if (stride == 0) {
+				static std::atomic<int> s_strideBudget{ 8 };
+				if (a_geom->worldBound.radius > 500.0f && s_strideBudget.fetch_sub(1, std::memory_order_relaxed) > 0)
+					logger::info("[MOC][reject] '{}' type={} radius={:.0f} STRIDE0",
+						a_geom->name.c_str(), static_cast<int>(a_geom->GetType().get()), a_geom->worldBound.radius);
 				return false;  // no position stream in slot 0
+			}
 
 			if (!haveIdx) {
 				IndexPair p;
@@ -475,7 +509,17 @@ namespace MOC
 					}
 				}
 			} else if (RE::BSGeometry* geometry = a_object->AsGeometry()) {
-				if (geometry->worldBound.radius > 100.0f) {
+				// One-shot diag: LAND geometry flowing through the walk (type 8/9). Suspect:
+				// land world bounds are degenerate -> the size gate drops the ground plane.
+				const auto geoType = geometry->GetType().get();
+				if (geoType == RE::BSGeometry::Type::kSubIndexTriShape || geoType == RE::BSGeometry::Type::kSubIndexLandTriShape) {
+					static std::atomic<int> s_landLog{ 6 };
+					if (s_landLog.fetch_sub(1, std::memory_order_relaxed) > 0)
+						logger::info("[MOC][land] '{}' type={} radius={:.1f} pos=({:.0f},{:.0f},{:.0f})",
+							geometry->name.c_str(), static_cast<int>(geoType), geometry->worldBound.radius,
+							geometry->world.translate.x, geometry->world.translate.y, geometry->world.translate.z);
+				}
+				if (geometry->worldBound.radius > OccluderMinLeafSize) {
 					const float d1 = geometry->world.translate.x - g_posAdjust.x;
 					const float d2 = geometry->world.translate.y - g_posAdjust.y;
 					if (((d1 * d1) + (d2 * d2)) < (OccluderMaxDistance * OccluderMaxDistance))
@@ -502,22 +546,93 @@ namespace MOC
 			if (scene && s_dumpStructure) {
 				auto* ssn = ChildNodeAt(scene, 1);
 				auto* gs = RE::BSGraphics::State::GetSingleton();
-				if (ssn && gs && (gs->frameCount % 600u) == 0u) {
-					const std::size_t count = ssn->GetChildren().size();
-					logger::info("[MOC][diag] structure: '{}' childCount={}", ssn->name.c_str(), count);
+				static std::atomic<bool> s_ssnCensus{ false };
+				if (ssn && gs && !s_ssnCensus.exchange(true)) {
+					// Type census of EVERY shadow-scene child subtree: find where LAND
+					// geometry (t8/t9) actually hangs -- the cells contain none.
+					struct SsnCensus
+					{
+						int types[16] = {};
+						int total = 0;
+						void Walk(RE::NiAVObject* o, int depth)
+						{
+							if (!o || depth > 10)
+								return;
+							if (auto* g = o->AsGeometry()) {
+								const int t = static_cast<int>(g->GetType().get());
+								if (t >= 0 && t < 16)
+									++types[t];
+								++total;
+							} else if (auto* n = o->AsNode()) {
+								auto& kids = n->GetChildren();
+								for (std::uint16_t k = 0; k < kids.capacity(); ++k)
+									Walk(kids[k].get(), depth + 1);
+							}
+						}
+					};
+					logger::info("[MOC][diag] ssn census: '{}' childCount={}", ssn->name.c_str(), ssn->GetChildren().size());
 					for (std::uint16_t i = 0; i < ssn->GetChildren().capacity() && i < 16; ++i) {
 						auto* c = ChildAt(ssn, i);
 						if (!c)
 							continue;
-						auto* cn = c->AsNode();
-						logger::info("[MOC][diag]   ssn[{}]='{}' node={} kids={}", i, c->name.c_str(),
-							cn != nullptr, cn ? cn->GetChildren().size() : 0);
-						// One level deeper for candidate cell containers.
-						if (cn) {
-							for (std::uint16_t j = 0; j < cn->GetChildren().capacity() && j < 12; ++j)
-								if (auto* g = ChildAt(cn, j))
-									logger::info("[MOC][diag]     ssn[{}][{}]='{}' node={}", i, j, g->name.c_str(), g->AsNode() != nullptr);
-						}
+						SsnCensus cen;
+						cen.Walk(c, 0);
+						std::string typeStr;
+						for (int t = 0; t < 16; ++t)
+							if (cen.types[t])
+								typeStr += fmt::format("t{}={} ", t, cen.types[t]);
+						logger::info("[MOC][diag]   ssn[{}]='{}' geoms={} {}", i, c->name.c_str(), cen.total, typeStr);
+					}
+					// Also the two ObjectLODRoot children the cell walk skips.
+					if (auto* olr = ChildNodeAt(ssn, 3)) {
+						for (std::uint16_t i = 0; i < 2; ++i)
+							if (auto* c = ChildAt(olr, i)) {
+								SsnCensus cen;
+								cen.Walk(c, 0);
+								std::string typeStr;
+								for (int t = 0; t < 16; ++t)
+									if (cen.types[t])
+										typeStr += fmt::format("t{}={} ", t, cen.types[t]);
+								logger::info("[MOC][diag]   olr[{}]='{}' geoms={} {}", i, c->name.c_str(), cen.total, typeStr);
+							}
+					}
+				}
+				// One-shot: trace the ACTUAL land quads (TES -> cell -> cellLand ->
+				// loadedData->geom[4]) -- exact pointers, no name guessing. The parent
+				// chain shows where they hang; radius/flags/desc show which filter
+				// would drop them from the walk.
+				static std::atomic<bool> s_landChain{ false };
+				if (!s_landChain.exchange(true)) {
+					if (auto* tes = RE::TES::GetSingleton()) {
+						int logged = 0;
+						auto traceCell = [&](RE::TESObjectCELL* cell) {
+							if (!cell || logged >= 12)
+								return;
+							auto* land = cell->GetRuntimeData().cellLand;
+							if (!land || !land->loadedData)
+								return;
+							for (int q = 0; q < 4 && logged < 12; ++q) {
+								auto* g = land->loadedData->geom[q].get();
+								if (!g)
+									continue;
+								std::string chain;
+								for (RE::NiNode* pn = g->parent; pn; pn = pn->parent)
+									chain += fmt::format(" <- '{}'", pn->name.c_str());
+								const auto& rt = g->GetGeometryRuntimeData();
+								const int stride = rt.rendererData ? static_cast<int>(GetVertexStride(rt.rendererData->vertexDesc)) : -1;
+								logger::info("[MOC][landchain] quad{} '{}' type={} r={:.0f} pos=({:.0f},{:.0f},{:.0f}) stride={} flags={:X} chain:{}",
+									q, g->name.c_str(), static_cast<int>(g->GetType().get()), g->worldBound.radius,
+									g->world.translate.x, g->world.translate.y, g->world.translate.z,
+									stride, g->GetFlags().underlying(), chain);
+								++logged;
+							}
+						};
+						if (auto* grid = tes->gridCells)
+							for (std::uint32_t gx = 0; gx < grid->length; ++gx)
+								for (std::uint32_t gy = 0; gy < grid->length; ++gy)
+									traceCell(grid->GetCell(gx, gy));
+						if (logged == 0)
+							logger::info("[MOC][landchain] no land quads found in the loaded grid");
 					}
 				}
 			}
@@ -547,13 +662,37 @@ namespace MOC
 					continue;
 				}
 
-				// One-shot diag: the first unculled cell's child names, to verify layout.
-				static std::atomic<bool> s_cellNamesDumped{ false };
-				if (s_dumpStructure && !s_cellNamesDumped.exchange(true)) {
-					logger::info("[MOC][cell] first cell '{}' kids={}", cellNode->name.c_str(), cellNode->GetChildren().size());
-					for (std::uint16_t j = 0; j < cellNode->GetChildren().capacity() && j < 12; ++j)
-						if (auto* c = ChildAt(cellNode, j))
-							logger::info("[MOC][cell]   [{}]='{}' node={}", j, c->name.c_str(), c->AsNode() != nullptr);
+				// One-shot diag: EVERY cell's child census (finds where LAND geometry hangs).
+				static std::atomic<int> s_cellCensus{ 30 };
+				if (s_dumpStructure && s_cellCensus.fetch_sub(1, std::memory_order_relaxed) > 0) {
+					logger::info("[MOC][cell] cell[{}] '{}' kids={}", i, cellNode->name.c_str(), cellNode->GetChildren().size());
+					struct Census
+					{
+						int types[16] = {};
+						int total = 0;
+						void Walk(RE::NiAVObject* o, int depth)
+						{
+							if (!o || depth > 8)
+								return;
+							if (auto* g = o->AsGeometry()) {
+								const int t = static_cast<int>(g->GetType().get());
+								if (t >= 0 && t < 16)
+									++types[t];
+								++total;
+							} else if (auto* n = o->AsNode()) {
+								auto& kids = n->GetChildren();
+								for (std::uint16_t k = 0; k < kids.capacity(); ++k)
+									Walk(kids[k].get(), depth + 1);
+							}
+						}
+					};
+					Census cellCen;
+					cellCen.Walk(cellNode, 0);
+					std::string cellTypes;
+					for (int t = 0; t < 16; ++t)
+						if (cellCen.types[t])
+							cellTypes += fmt::format("t{}={} ", t, cellCen.types[t]);
+					logger::info("[MOC][cell]   TOTAL geoms={} {}", cellCen.total, cellTypes);
 				}
 
 				// Walk every child container from index 2 (skipping [0]=ActorNode and
@@ -576,6 +715,40 @@ namespace MOC
 					for (std::uint16_t k = 0; k < kids.capacity(); ++k) {
 						if (auto* child = kids[k].get())
 							RenderRecursive(child, true);
+					}
+				}
+			}
+
+			// Land pass: full-res terrain quads registered DIRECTLY from the TES grid
+			// (TES -> cell -> cellLand -> loadedData->geom). The attached land blocks
+			// hang under the unnamed cell children [0]/[1] that the container walk
+			// deliberately skips, so terrain never entered the buffer ("see-through
+			// floor"). Land is a plain BSTriShape with a readable slot-0 position
+			// stream, so it goes through the normal register/cache/raster path.
+			if (auto* tes = RE::TES::GetSingleton()) {
+				if (auto* grid = tes->gridCells) {
+					for (std::uint32_t gx = 0; gx < grid->length; ++gx) {
+						for (std::uint32_t gy = 0; gy < grid->length; ++gy) {
+							auto* cell = grid->GetCell(gx, gy);
+							if (!cell)
+								continue;
+							auto* landForm = cell->GetRuntimeData().cellLand;
+							if (!landForm || !landForm->loadedData)
+								continue;
+							for (int q = 0; q < 4; ++q) {
+								auto* g = landForm->loadedData->geom[q].get();
+								// Only blocks actually attached to the scene (detached
+								// spares have no parent and a zero bound).
+								if (!g || !g->parent || g->worldBound.radius <= 0.0f)
+									continue;
+								if (CullObject(g))
+									continue;
+								const float d1 = g->world.translate.x - g_posAdjust.x;
+								const float d2 = g->world.translate.y - g_posAdjust.y;
+								if (((d1 * d1) + (d2 * d2)) < (OccluderMaxDistance * OccluderMaxDistance))
+									RegisterGeometry(g);
+							}
+						}
 					}
 				}
 			}
@@ -607,13 +780,13 @@ namespace MOC
 				g_pool->WakeThreads();
 				g_pool->ClearBuffer();
 				if (EnableOccluderRendering) {
-					constexpr std::uint32_t kTriBudget = 60000;
-					std::uint32_t           trisQueued = 0;
-					std::uint32_t           enqueued = 0;
+					// No triangle budget: the producer is this async builder, so job-queue
+					// backpressure only stretches this thread's schedule -- the game never
+					// waits. A complete buffer (no missing floors/walls) culls strictly
+					// better; partial fills mid-frame are conservative by contract.
+					std::uint32_t enqueued = 0;
 					for (auto& e : g_readyList) {
-						if (trisQueued >= kTriBudget)
-							break;
-						trisQueued += RasterizeOccluder(e.geometry);
+						RasterizeOccluder(e.geometry);
 						++enqueued;
 					}
 					g_lastOccluderCount = enqueued;
@@ -716,7 +889,7 @@ namespace MOC
 		// tile-aligned and >= thread count: 4x4 bins of 128x72 over 512x288. maxJobs=32
 		// is Intel's recommended queue depth. Workers are woken per build and suspended
 		// right after the flush, so the pool costs nothing outside the build window.
-		const unsigned int threads = std::clamp(RasterThreads, 1, 8);
+		const unsigned int threads = std::clamp(RasterThreads, 1, 16);  // 4x4 bins support up to 16 workers
 		g_pool = new CullingThreadpool(threads, 4, 4, 32);
 		g_pool->SetBuffer(g_moc);
 		g_pool->SetVertexLayout(MaskedOcclusionCulling::VertexLayout(16, 4, 12));
@@ -1183,6 +1356,11 @@ namespace MOC
 		auto* gfxState = RE::BSGraphics::State::GetSingleton();
 		if (!gfxState || (gfxState->frameCount % 120u) != 0u)
 			return;
+		// Deterministic dump: the buffer fills ASYNCHRONOUSLY (builder + workers, no
+		// flush); reading mid-fill shows a partial buffer that varies run to run. Drain
+		// the builder, then give the workers a moment to finish the queued tail.
+		QuiesceBuilder();
+		std::this_thread::sleep_for(std::chrono::milliseconds(8));
 		DumpDepthImage();  // MOC occluder buffer -> moc_depth.png (+ raw .bin)
 		DumpGameDepth();   // game kMAIN depth -> moc_game_depth.png (+ raw .bin)
 	}
@@ -1321,6 +1499,18 @@ namespace MOC
 
 		if (a_object->GetAppCulled())
 			return true;
+
+		// DIAGNOSTIC forced culling: pseudo-randomly (stable per object) cull a share of
+		// everything that would otherwise be kept. Perf probe only; image intentionally
+		// breaks. Placed after the init/master gates but before the real work so the
+		// probe measures pure cull-volume effect.
+		if (DiagForceCullPercent > 0) {
+			const std::uintptr_t h = reinterpret_cast<std::uintptr_t>(a_object);
+			if (static_cast<std::int32_t>((h >> 4) * 2654435761u % 100u) < DiagForceCullPercent) {
+				g_culled.fetch_add(1, std::memory_order_relaxed);
+				return false;
+			}
+		}
 
 		// Never occlusion-test ACTORS: skinned world bounds lag animation, actors move
 		// against our one-frame-stale occluder list, and they are few (cheap to keep).

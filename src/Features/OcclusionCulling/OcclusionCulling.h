@@ -33,7 +33,7 @@ struct OcclusionCulling : public Feature
 		float OccluderFirstLevelMinSize = 200.0f;
 		// Raster budget per frame, closest-first (not a MOC library limit). With the
 		// threaded raster + simplified meshes the default covers typical scenes fully.
-		std::int32_t MaxOccludersPerFrame = 256;
+		std::int32_t MaxOccludersPerFrame = 4096;
 		// CullingThreadpool worker count; applied at boot (pool is created once).
 		std::int32_t RasterThreads = 2;
 		// meshopt_simplify occluder meshes at cache time (~half the indices).
@@ -42,6 +42,8 @@ struct OcclusionCulling : public Feature
 		float OccluderTestMinRadius = 0.0f;
 		// Neutralize vanilla occlusion planes: MOC is the only occlusion mechanism.
 		bool ExclusiveOcclusion = false;
+		// Gather leaf gate: occluder meshes smaller than this are not rasterized.
+		float OccluderMinLeafSize = 100.0f;
 	};
 
 	Settings settings;
@@ -49,6 +51,9 @@ struct OcclusionCulling : public Feature
 	// Master runtime gate, driven by the CS_OCCLUSION=1 env var (read once at load).
 	// When false, the installed hooks are inert pass-throughs.
 	bool envEnabled = false;
+
+	// DIAGNOSTIC (env CS_MOC_FORCE_CULL, never persisted): force-cull % of kept objects.
+	std::int32_t diagForceCullPercent = 0;
 
 	virtual std::string GetName() override { return "Occlusion Culling"; }
 	virtual std::string GetShortName() override { return "OcclusionCulling"; }

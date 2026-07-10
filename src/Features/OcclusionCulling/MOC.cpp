@@ -78,6 +78,7 @@ namespace MOC
 	// (stable per-object hash). Answers "at what cull volume does perf improve" on a
 	// given profile, independent of MOC's actual yield. BREAKS THE IMAGE -- probe only.
 	std::int32_t DiagForceCullPercent = 0;
+	bool CullTreeLODGroups = true;
 
 	namespace
 	{
@@ -146,6 +147,8 @@ namespace MOC
 		std::atomic<std::uint64_t> g_culledAABB{ 0 };
 		std::atomic<std::uint64_t> g_testedSphere{ 0 };
 		std::atomic<std::uint64_t> g_culledSphere{ 0 };
+		std::atomic<std::uint64_t> g_treeTested{ 0 };
+		std::atomic<std::uint64_t> g_treeCulled{ 0 };
 		std::chrono::high_resolution_clock::time_point g_buildStart;
 
 		// Debug depth-buffer view: MOC's software depth rasterized to an RGBA8 texture
@@ -153,6 +156,16 @@ namespace MOC
 		winrt::com_ptr<ID3D11Texture2D>          g_debugTex;
 		winrt::com_ptr<ID3D11ShaderResourceView> g_debugSRV;
 		std::vector<float>                       g_debugDepth;
+		// Flicker-free debug view: the BUILDER publishes a complete-buffer snapshot
+		// right after rasterization finishes; the UI only ever uploads settled
+		// snapshots (a live read from the UI thread races the async fill and shows
+		// half-built buffers -- "objects flicker", far/late occluders like terrain
+		// mostly absent). g_debugViewFrames > 0 keeps snapshotting for ~1s after the
+		// last UI request so the view stays live while the menu is open.
+		std::atomic<int>   g_debugViewFrames{ 0 };
+		std::mutex         g_debugSnapMtx;
+		std::vector<float> g_debugSnapshot;
+		bool               g_debugSnapValid = false;
 
 		// --- Per-mesh converted vertex/index cache, keyed by rendererData (stable GPU mesh ptr) ---
 		struct IndexPair
@@ -795,6 +808,15 @@ namespace MOC
 				}
 				g_pool->SuspendThreads();
 
+				// Publish a debug-view snapshot of the now-complete buffer (menu open).
+				if (g_debugViewFrames.load(std::memory_order_relaxed) > 0) {
+					g_debugViewFrames.fetch_sub(1, std::memory_order_relaxed);
+					std::scoped_lock lk2(g_debugSnapMtx);
+					g_debugSnapshot.resize(static_cast<std::size_t>(MOC_WIDTH) * MOC_HEIGHT);
+					g_moc->ComputePixelDepthBuffer(g_debugSnapshot.data(), false);
+					g_debugSnapValid = true;
+				}
+
 				// Phase 2: gather NEXT frame's candidates.
 				g_geoList.clear();
 				GatherOccluders();
@@ -947,12 +969,18 @@ namespace MOC
 		if (!ctx)
 			return;
 
-		// Read the buffer the CULL HOOK built this frame (with the correct main-camera
-		// matrices at cull time). Do NOT rebuild here: at menu-draw time the global
-		// shadowState holds post-process/UI matrices, so a rebuild would rasterize the
-		// occluders with the wrong transform (garbage view) -- and it doubles the per-frame
-		// cost. The cull hook already produced this frame's buffer.
-		g_moc->ComputePixelDepthBuffer(g_debugDepth.data(), false);  // flipY=false is empirically top-down (matches Nukem)
+		// Ask the builder to keep publishing complete-buffer snapshots (~1s worth per
+		// request) and display the latest one. Never read the live buffer from this
+		// thread: the async builder clears+refills it mid-frame, so a UI-time read
+		// catches a random fill state (flicker; late-rasterized far occluders like
+		// terrain mostly missing).
+		g_debugViewFrames.store(60, std::memory_order_relaxed);
+		{
+			std::scoped_lock lk(g_debugSnapMtx);
+			if (!g_debugSnapValid)
+				return;  // no complete snapshot yet (first frames after menu open)
+			g_debugDepth = g_debugSnapshot;
+		}
 
 		// MOC returns FLT_MAX (or ~0) for uncovered pixels; normalize only over real occluders
 		// (0 < d < kBackground) so their silhouettes are visible (see DumpDepthImage).
@@ -1333,11 +1361,12 @@ namespace MOC
 			const double buildMs = std::chrono::duration<double, std::milli>(
 				std::chrono::high_resolution_clock::now() - g_buildStart)
 									   .count();
-			logger::info("[MOC][diag] frame={} enqueue={:.2f}ms gather={:.2f}ms occluders={} cells={}/culled={} | tested={} culled={} (aabb {}/{} sphere {}/{})",
+			logger::info("[MOC][diag] frame={} enqueue={:.2f}ms gather={:.2f}ms occluders={} cells={}/culled={} | tested={} culled={} (aabb {}/{} sphere {}/{}) tree {}/{}",
 				frame, buildMs, g_lastGatherMs, g_lastOccluderCount,
 				g_cellsSeen, g_cellsCulled,
 				g_tested.load(), g_culled.load(),
-				g_culledAABB.load(), g_testedAABB.load(), g_culledSphere.load(), g_testedSphere.load());
+				g_culledAABB.load(), g_testedAABB.load(), g_culledSphere.load(), g_testedSphere.load(),
+				g_treeCulled.load(), g_treeTested.load());
 		}
 		g_buildDone.store(frame, std::memory_order_release);
 		return true;
@@ -1553,6 +1582,23 @@ namespace MOC
 			g_culled.fetch_add(1, std::memory_order_relaxed);
 			g_culledAABB.fetch_add(1, std::memory_order_relaxed);
 		}
+		return visible;
+	}
+
+	bool IsMainViewCamera(const RE::NiCamera* a_camera)
+	{
+		return a_camera && (a_camera == GetMainCamera() || a_camera == *g_cullCamera);
+	}
+
+	bool TestInstanceGroup(RE::BSMultiBoundAABB* a_aabb)
+	{
+		if (!g_init || !EnableOcclusionTesting || !CullTreeLODGroups || !a_aabb)
+			return true;
+
+		const bool visible = TestAABB(a_aabb);
+		g_treeTested.fetch_add(1, std::memory_order_relaxed);
+		if (!visible)
+			g_treeCulled.fetch_add(1, std::memory_order_relaxed);
 		return visible;
 	}
 }

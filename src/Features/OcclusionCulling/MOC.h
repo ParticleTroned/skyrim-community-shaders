@@ -24,6 +24,7 @@ namespace RE
 {
 	class NiCamera;
 	class NiAVObject;
+	class BSMultiBoundAABB;
 }
 
 namespace MOC
@@ -41,6 +42,7 @@ namespace MOC
 	extern bool          ExclusiveOcclusion;         // neutralize vanilla occlusion planes (MOC is the only occlusion)
 	extern float         OccluderMinLeafSize;        // gather leaf gate: skip occluder meshes smaller than this
 	extern std::int32_t  DiagForceCullPercent;       // DIAGNOSTIC: force-cull % of kept objects (perf probe)
+	extern bool          CullTreeLODGroups;          // occlusion-test distant-tree LOD instance groups
 
 	/** @brief Create the global MOC instance (1280x720). Safe to call once; no-op if already initialized. */
 	void Init();
@@ -74,6 +76,21 @@ namespace MOC
 	 * @return true if possibly visible; false if provably occluded.
 	 */
 	bool TestMultiBound(void* a_multiBound);
+
+	/**
+	 * @brief Occlusion query for one instance-group world AABB (distant-tree LOD).
+	 *        Called from the BSMultiStreamInstanceTriShape::OnVisible post-hook for
+	 *        groups the engine's frustum test kept.
+	 * @return true if possibly visible; false if provably occluded.
+	 */
+	bool TestInstanceGroup(RE::BSMultiBoundAABB* a_aabb);
+
+	/**
+	 * @brief True when @p a_camera is one of the two main-view cull cameras (render
+	 *        camera or frozen cull camera) -- the same dual-camera gate BuildOccluders
+	 *        uses. For hooks that see a NiCullingProcess rather than a process instance.
+	 */
+	bool IsMainViewCamera(const RE::NiCamera* a_camera);
 
 	/**
 	 * @brief Block until the builder thread is idle (spin+yield, bounded). Call when a

@@ -212,6 +212,50 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	// Distant-tree LOD culling seam. BSMultiStreamInstanceTriShape carries a DUMMY
+	// worldBound (radius 1.0) + kAlwaysDraw, so object-level tests never see it; its
+	// real culling is per-instance-group inside OnVisible: the engine frustum-tests
+	// each <=75-tree group's world AABB and writes a visible byte at group+0x50. This
+	// post-hook ANDs a MOC occlusion verdict into groups the engine kept. Stateless
+	// (the byte is rewritten by every walk), downgrade-only, and gated to the
+	// bracketed main cull so shadow/reflection walks keep vanilla verdicts. Grass
+	// shares this class -- distant-tree shapes are selected by their shader property
+	// (BSDistantTreeShaderProperty), grass is deliberately left untouched. Unlike
+	// Process1 this IS genuine virtual dispatch (called via vtable from the cull
+	// walk), so a vtable patch sees every call.
+	struct MSITS_OnVisible_Hook
+	{
+		static void thunk(RE::BSMultiStreamInstanceTriShape* a_this, RE::NiCullingProcess* a_process, std::int32_t a_alphaGroupIndex)
+		{
+			func(a_this, a_process, a_alphaGroupIndex);
+			// Gate on the CAMERA, not the process-instance marker: the LODRoot subtree
+			// (where LOD-tree shapes hang) is walked by concurrent scene-list job
+			// processes, and the single-instance g_activeCullProcess marker only ever
+			// matches one of them (measured: ~7 of ~340 visible groups/frame tested).
+			// The dual-camera identity check is the same gate BuildOccluders uses, so
+			// shadow/reflection/cubemap/first-person walks stay untouched.
+			if (!a_process || !MOC::IsMainViewCamera(a_process->camera))
+				return;
+			if (!MOC::CullTreeLODGroups)
+				return;
+			auto* prop = a_this->GetGeometryRuntimeData().shaderProperty.get();
+			if (!prop || !netimmerse_cast<RE::BSDistantTreeShaderProperty*>(prop))
+				return;
+			for (auto* group : a_this->GetMultiStreamTrishapeRuntimeData().unk160) {
+				if (!group)
+					continue;
+				// InstanceGroup IS-A BSMultiBoundAABB (base at offset 0); the
+				// engine's per-group visible byte lives at +0x50.
+				auto* groupBytes = reinterpret_cast<std::uint8_t*>(group);
+				if (!groupBytes[0x50])
+					continue;
+				if (!MOC::TestInstanceGroup(reinterpret_cast<RE::BSMultiBoundAABB*>(group)))
+					groupBytes[0x50] = 0;
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 }
 
 void OcclusionCulling::PostPostLoad()
@@ -254,6 +298,9 @@ void OcclusionCulling::PostPostLoad()
 	// CS_MOC_EXCLUSIVE=1: MOC-exclusive occlusion (vanilla planes neutralized).
 	if (GetEnvironmentVariableA("CS_MOC_EXCLUSIVE", buf, sizeof(buf)) && buf[0] == '1')
 		settings.ExclusiveOcclusion = true;
+	// CS_MOC_TREE_LOD=0/1: distant-tree LOD group culling override for A/B runs.
+	if (GetEnvironmentVariableA("CS_MOC_TREE_LOD", buf, sizeof(buf)) && buf[0])
+		settings.CullTreeLOD = buf[0] == '1';
 	// CS_MOC_VALIDATE=1: engine-cull agreement instrumentation (see Process1_Impl).
 	if (GetEnvironmentVariableA("CS_MOC_VALIDATE", buf, sizeof(buf)) && buf[0] == '1')
 		g_validateMode = true;
@@ -293,6 +340,7 @@ void OcclusionCulling::PostPostLoad()
 	stl::detour_thunk<PProcess2_Hook>(REL::RelocationID(101598, 101598));  // BSParabolicCullingProcess::Process2
 	stl::detour_thunk<TestBaseVis1_Hook>(REL::RelocationID(74816, 74816));      // BSCullingProcess::TestBaseVisibility1
 	stl::detour_thunk<PTestBaseVis1_Hook>(REL::RelocationID(101605, 101605));   // BSParabolicCullingProcess::TestBaseVisibility1
+	stl::write_vfunc<0x34, MSITS_OnVisible_Hook>(RE::VTABLE_BSMultiStreamInstanceTriShape[0]);  // distant-tree LOD group culling
 	// On success DetourAttach rewrites T::func to the trampoline (!= original address);
 	// equal means the attach silently failed.
 	logger::info("[OcclusionCulling] detours attached: P1base={} P2base={} P1para={} P2para={}",
@@ -333,6 +381,7 @@ void OcclusionCulling::SyncSettingsToMOC()
 	MOC::OccluderTestMinRadius = settings.OccluderTestMinRadius;
 	MOC::ExclusiveOcclusion = settings.ExclusiveOcclusion;
 	MOC::OccluderMinLeafSize = settings.OccluderMinLeafSize;
+	MOC::CullTreeLODGroups = settings.CullTreeLOD;
 	MOC::DiagForceCullPercent = diagForceCullPercent;  // env-only diagnostic, not persisted
 }
 
@@ -402,6 +451,7 @@ void OcclusionCulling::DrawSettings()
 			"Objects smaller than this (world-bound radius) are never occlusion-tested. Lower = more draw calls saved but more CPU per frame."));
 
 	changed |= ImGui::Checkbox(T("feature.occlusion_culling.exclusive", "Exclusive Occlusion (replace vanilla planes)"), &settings.ExclusiveOcclusion);
+	changed |= ImGui::Checkbox(T("feature.occlusion_culling.tree_lod", "Cull Distant Tree LOD"), &settings.CullTreeLOD);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("feature.occlusion_culling.exclusive_tooltip",
 			"Neutralize the vanilla occlusion planes during the main cull so MOC is the only occlusion mechanism. Experimental; view-frustum culling is unaffected."));
@@ -452,6 +502,8 @@ void OcclusionCulling::LoadSettings(json& o_json)
 		settings.ExclusiveOcclusion = o_json["ExclusiveOcclusion"];
 	if (o_json["OccluderMinLeafSize"].is_number())
 		settings.OccluderMinLeafSize = o_json["OccluderMinLeafSize"];
+	if (o_json["CullTreeLOD"].is_boolean())
+		settings.CullTreeLOD = o_json["CullTreeLOD"];
 
 	SyncSettingsToMOC();
 }
@@ -468,6 +520,7 @@ void OcclusionCulling::SaveSettings(json& o_json)
 	o_json["OccluderTestMinRadius"] = settings.OccluderTestMinRadius;
 	o_json["ExclusiveOcclusion"] = settings.ExclusiveOcclusion;
 	o_json["OccluderMinLeafSize"] = settings.OccluderMinLeafSize;
+	o_json["CullTreeLOD"] = settings.CullTreeLOD;
 }
 
 void OcclusionCulling::RestoreDefaultSettings()

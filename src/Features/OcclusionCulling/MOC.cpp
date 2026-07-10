@@ -624,12 +624,12 @@ namespace MOC
 			}
 		}
 
-		void RasterizeOccluder(RE::BSGeometry* a_geom)
+		std::uint32_t RasterizeOccluder(RE::BSGeometry* a_geom)
 		{
 			IndexPair indices;
 			float*    verts = nullptr;
 			if (!a_geom || !GetCachedGeometry(a_geom, indices, verts) || !verts || !indices.Data)
-				return;
+				return 0;
 
 			auto*      sp = a_geom->lightingShaderProp_cast();
 			const bool twoSided = sp && sp->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided);
@@ -650,6 +650,7 @@ namespace MOC
 				static_cast<int>(indices.Count / 3),
 				winding,
 				MaskedOcclusionCulling::CLIP_PLANE_SIDES);
+			return indices.Count / 3;
 		}
 	}  // namespace
 
@@ -1115,9 +1116,21 @@ namespace MOC
 				s_enqueue.swap(g_readyList);
 			g_readyValid = false;
 		}
-		g_lastOccluderCount = static_cast<std::uint32_t>(s_enqueue.size());
-		for (auto& e : s_enqueue)
-			RasterizeOccluder(e.geometry);
+		// Triangle-budgeted enqueue: the pool's job queue is 32 deep; overflowing it makes
+		// the producer SPIN until workers drain (silently re-serializing the build -- cost
+		// showed up as -25..-29% in exteriors with big terrain meshes). Coverage selection
+		// already front-loads the most valuable occluders, so a fixed triangle budget keeps
+		// the whole enqueue non-blocking while retaining most of the buffer's power.
+		constexpr std::uint32_t kTriBudget = 60000;
+		std::uint32_t           trisQueued = 0;
+		std::uint32_t           enqueued = 0;
+		for (auto& e : s_enqueue) {
+			if (trisQueued >= kTriBudget)
+				break;
+			trisQueued += RasterizeOccluder(e.geometry);
+			++enqueued;
+		}
+		g_lastOccluderCount = enqueued;
 
 		// Kick the builder to prepare NEXT frame's list with the matrices/frustum we just
 		// published above.

@@ -385,6 +385,13 @@ public:
 	// instead of touching frameCount directly to avoid a data race.
 	std::atomic<uint32_t> frameCountAtomic{ 0 };
 
+	// Per-frame engine draw-submission tally (BSGraphics::SetDirtyStates fires
+	// once before every engine draw; compute dispatches excluded). Incremented
+	// on the render thread only; published to the atomic at Reset() for
+	// off-thread readers (devbench inspect).
+	uint32_t drawSubmitsThisFrame = 0;
+	std::atomic<uint32_t> drawSubmitsLastFrame{ 0 };
+
 	// Skyrim constants
 	D3D_FEATURE_LEVEL featureLevel;
 

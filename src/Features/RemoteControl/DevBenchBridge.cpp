@@ -342,6 +342,7 @@ namespace
 			return json{
 				{ "plugin", "CommunityShaders" },
 				{ "frame_count", EnqueuedFrame() },
+				{ "draw_submits", globals::state ? globals::state->drawSubmitsLastFrame.load(std::memory_order_relaxed) : 0u },
 			};
 		}
 		if (kind == "profiler") {

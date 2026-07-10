@@ -220,6 +220,8 @@ void State::Reset()
 	frameCount++;
 	// Publish for off-thread readers (e.g. the MCP listener thread).
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
+	drawSubmitsLastFrame.store(drawSubmitsThisFrame, std::memory_order_relaxed);
+	drawSubmitsThisFrame = 0;
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		auto& BSImagespaceShaderApplyReflections = imageSpaceManager->GetRuntimeData().BSImagespaceShaderApplyReflections;

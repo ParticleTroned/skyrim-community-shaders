@@ -92,7 +92,19 @@ namespace MOC
 		unsigned int MOC_WIDTH = 1280;
 		unsigned int MOC_HEIGHT = 720;
 
-		MaskedOcclusionCulling* g_moc = nullptr;
+		// PING-PONG buffers: the builder rasterizes into the BACK instance and
+		// publishes it as FRONT on completion, so tests always read a COMPLETE
+		// buffer ("complete z prepass is enough to test against prepass + main
+		// lighting + alpha"). Testing the single shared instance mid-fill was the
+		// distant-tree flicker; a wait-for-completion gate instead starved culling
+		// entirely (first tests always precede raster completion). Cost: the front
+		// buffer is one kick old, so verdicts project current-frame rects against
+		// last-frame depth -- bounded by one frame of camera motion, absorbed by
+		// the per-frame verdict cache + tree hysteresis.
+		MaskedOcclusionCulling*              g_mocA = nullptr;
+		MaskedOcclusionCulling*              g_mocB = nullptr;
+		std::atomic<MaskedOcclusionCulling*> g_mocFront{ nullptr };
+		MaskedOcclusionCulling*              g_mocBack = nullptr;  // builder thread only
 		CullingThreadpool*      g_pool = nullptr;
 		bool                    g_init = false;
 
@@ -153,6 +165,63 @@ namespace MOC
 		std::atomic<std::uint64_t> g_treeCulled{ 0 };
 		std::atomic<std::uint64_t> g_kickCounter{ 0 };
 		std::atomic<std::uint64_t> g_settleUntilKick{ 0 };
+
+		// Determine occlusion ONCE per object per frame, and only against a
+		// COMPLETE buffer. The z-prepass-side walk (the first main-view cull to
+		// reach an object) computes the verdict; the prepass draw, the main
+		// lighting passes and the alpha passes all reuse it. Without this the
+		// same object was re-tested per walk against the async builder's
+		// progressively filling buffer, so passes could disagree within one
+		// frame -- visible flicker on distant tree groups (save 338).
+		// g_rasterFrame is the builder's "raster phase complete for frame N"
+		// publication; verdicts computed before completion are forced VISIBLE
+		// (and cached, so all walks still agree) and do not advance the
+		// occluded streak. occludedStreak = temporal hysteresis: a
+		// caller-chosen number of consecutive occluded frames is required
+		// before the verdict culls; any visible frame resets it.
+		std::atomic<std::uint32_t> g_kickFrame{ 0xFFFFFFFFu };    // claim -> builder
+		std::atomic<std::uint32_t> g_rasterFrame{ 0xFFFFFFFFu };  // builder -> testers
+		struct FrameVerdict
+		{
+			std::uint32_t frame = 0xFFFFFFFFu;
+			std::uint8_t  occludedStreak = 0;
+			bool          culled = false;
+		};
+		constexpr std::size_t kVerdictShards = 16;  // cull walks run on concurrent job threads
+		std::mutex                                    g_verdictMtx[kVerdictShards];
+		std::unordered_map<const void*, FrameVerdict> g_verdictMap[kVerdictShards];
+		std::atomic<std::uint32_t>                    g_verdictFlips{ 0 };  // stability diag
+
+		template <class TestFn>
+		bool CachedVerdict(const void* a_key, std::uint8_t a_framesToCull, TestFn&& a_test)
+		{
+			auto*               gfx = RE::BSGraphics::State::GetSingleton();
+			const std::uint32_t frame = gfx ? gfx->frameCount : 0;
+			const std::size_t   shard = (reinterpret_cast<std::uintptr_t>(a_key) >> 4) & (kVerdictShards - 1);
+			std::scoped_lock    lk(g_verdictMtx[shard]);
+			auto&               map = g_verdictMap[shard];
+			if (map.size() > 4096)
+				map.clear();  // scene-change eviction; entries rebuild on demand
+			auto& v = map[a_key];
+			if (v.frame != frame) {
+				v.frame = frame;
+				// Front buffer is always a COMPLETE raster (ping-pong), so the
+				// verdict is always real -- no forced-visible starvation.
+				if (a_test()) {
+					v.occludedStreak = 0;
+					if (v.culled)
+						g_verdictFlips.fetch_add(1, std::memory_order_relaxed);
+					v.culled = false;
+				} else {
+					v.occludedStreak = static_cast<std::uint8_t>(std::min<int>(v.occludedStreak + 1, 250));
+					const bool cull = v.occludedStreak >= a_framesToCull;
+					if (cull != v.culled)
+						g_verdictFlips.fetch_add(1, std::memory_order_relaxed);
+					v.culled = cull;
+				}
+			}
+			return !v.culled;  // true = keep (possibly visible)
+		}
 		std::chrono::high_resolution_clock::time_point g_buildStart;
 
 		// Debug depth-buffer view: MOC's software depth rasterized to an RGBA8 texture
@@ -878,7 +947,12 @@ namespace MOC
 				const auto t0 = std::chrono::high_resolution_clock::now();
 
 				// Phase 1: rasterize last kick's prepared list. All pool calls live here.
+				// Rasterize into the BACK buffer; tests keep reading FRONT.
+				// SetBuffer AFTER WakeThreads: it Flush()es first, and Flush yield-
+				// spins until the WORKERS drain the queue -- with workers suspended
+				// the builder livelocks (28fps, gather frozen, front never updated).
 				g_pool->WakeThreads();
+				g_pool->SetBuffer(g_mocBack);
 				g_pool->ClearBuffer();
 				if (EnableOccluderRendering) {
 					// No triangle budget: the producer is this async builder, so job-queue
@@ -911,13 +985,16 @@ namespace MOC
 					g_lastOccluderCount = 0;
 				}
 				g_pool->SuspendThreads();
+				// Raster complete: publish back as the new FRONT, recycle old front.
+				g_mocBack = g_mocFront.exchange(g_mocBack, std::memory_order_acq_rel);
+				g_rasterFrame.store(g_kickFrame.load(std::memory_order_acquire), std::memory_order_release);
 
 				// Publish a debug-view snapshot of the now-complete buffer (menu open).
 				if (g_debugViewFrames.load(std::memory_order_relaxed) > 0) {
 					g_debugViewFrames.fetch_sub(1, std::memory_order_relaxed);
 					std::scoped_lock lk2(g_debugSnapMtx);
 					g_debugSnapshot.resize(static_cast<std::size_t>(MOC_WIDTH) * MOC_HEIGHT);
-					g_moc->ComputePixelDepthBuffer(g_debugSnapshot.data(), false);
+					g_mocFront.load(std::memory_order_acquire)->ComputePixelDepthBuffer(g_debugSnapshot.data(), false);
 					g_debugSnapValid = true;
 				}
 
@@ -996,8 +1073,10 @@ namespace MOC
 
 		// Request AVX2 (the shipping build targets /arch:AVX2). MOC caps the request
 		// to the best implementation the CPU actually supports.
-		g_moc = MaskedOcclusionCulling::Create(MaskedOcclusionCulling::AVX2);
-		if (!g_moc) {
+		g_mocA = MaskedOcclusionCulling::Create(MaskedOcclusionCulling::AVX2);
+		g_mocB = MaskedOcclusionCulling::Create(MaskedOcclusionCulling::AVX2);
+		auto* g_moc = g_mocA;  // local alias for the shared init below
+		if (!g_moc || !g_mocB) {
 			logger::warn("[MOC] MaskedOcclusionCulling::Create failed; occlusion culling disabled");
 			return;
 		}
@@ -1012,8 +1091,12 @@ namespace MOC
 				}
 			}
 		}
-		g_moc->SetResolution(MOC_WIDTH, MOC_HEIGHT);
-		g_moc->ClearBuffer();
+		g_mocA->SetResolution(MOC_WIDTH, MOC_HEIGHT);
+		g_mocA->ClearBuffer();
+		g_mocB->SetResolution(MOC_WIDTH, MOC_HEIGHT);
+		g_mocB->ClearBuffer();
+		g_mocFront.store(g_mocA, std::memory_order_release);
+		g_mocBack = g_mocB;
 
 		// Intel's CullingThreadpool: occluder rasterization is queued by the (single)
 		// build thread and executed by worker threads binning the screen. Bins must be
@@ -1022,7 +1105,7 @@ namespace MOC
 		// right after the flush, so the pool costs nothing outside the build window.
 		const unsigned int threads = std::clamp(RasterThreads, 1, 16);  // 4x4 bins support up to 16 workers
 		g_pool = new CullingThreadpool(threads, 4, 4, 32);
-		g_pool->SetBuffer(g_moc);
+		g_pool->SetBuffer(g_mocBack);
 		g_pool->SetVertexLayout(MaskedOcclusionCulling::VertexLayout(16, 4, 12));
 		g_pool->SuspendThreads();
 
@@ -1069,7 +1152,7 @@ namespace MOC
 	// (near = bright). Called from the settings UI; returns the SRV to ImGui::Image.
 	void UpdateDebugView()
 	{
-		if (!g_init || !g_moc)
+		if (!g_init || !g_mocFront.load(std::memory_order_relaxed))
 			return;
 		EnsureDebugTexture();
 		if (!g_debugTex || !g_debugSRV)
@@ -1130,12 +1213,12 @@ namespace MOC
 	// directly (Read the image) without opening the ImGui menu. Same data + mapping the UI shows.
 	void DumpDepthImage()
 	{
-		if (!g_init || !g_moc)
+		if (!g_init || !g_mocFront.load(std::memory_order_relaxed))
 			return;
 		const std::size_t n = static_cast<std::size_t>(MOC_WIDTH) * MOC_HEIGHT;
 		if (g_debugDepth.size() != n)
 			g_debugDepth.resize(n);
-		g_moc->ComputePixelDepthBuffer(g_debugDepth.data(), false);  // flipY=false is empirically top-down (matches Nukem)
+		g_mocFront.load(std::memory_order_acquire)->ComputePixelDepthBuffer(g_debugDepth.data(), false);  // flipY=false is empirically top-down (matches Nukem)
 
 		// MOC returns FLT_MAX (or ~0) for uncovered pixels; only 0 < d < kBackground is a real
 		// rasterized occluder. Normalize over those so the silhouettes are visible.
@@ -1208,20 +1291,26 @@ namespace MOC
 			g_builder.join();
 		}
 
-		// The pool references g_moc and joins its workers in the destructor -- destroy it first.
+		// The pool references the MOC instances and joins its workers in the destructor -- destroy it first.
 		delete g_pool;
 		g_pool = nullptr;
 
-		if (g_moc) {
-			MaskedOcclusionCulling::Destroy(g_moc);
-			g_moc = nullptr;
+		g_mocFront.store(nullptr, std::memory_order_release);
+		g_mocBack = nullptr;
+		if (g_mocA) {
+			MaskedOcclusionCulling::Destroy(g_mocA);
+			g_mocA = nullptr;
+		}
+		if (g_mocB) {
+			MaskedOcclusionCulling::Destroy(g_mocB);
+			g_mocB = nullptr;
 		}
 		g_init = false;
 	}
 
 	bool IsInitialized()
 	{
-		return g_init && g_moc != nullptr;
+		return g_init && g_mocFront.load(std::memory_order_relaxed) != nullptr;
 	}
 
 	RE::NiCamera* GetMainCamera()
@@ -1277,7 +1366,7 @@ namespace MOC
 	// return false and are left untouched.
 	bool BuildOccluders(RE::NiCamera* a_camera)
 	{
-		if (!g_init || !g_moc)
+		if (!g_init || !g_mocFront.load(std::memory_order_relaxed))
 			return false;
 
 		// MAIN-pass gate by pointer identity with the engine's two main-scene cameras.
@@ -1358,6 +1447,7 @@ namespace MOC
 			std::scoped_lock lk(g_builderMtx);
 			g_builderKick = true;
 		}
+		g_kickFrame.store(frame, std::memory_order_release);
 		g_builderCV.notify_one();
 
 		// DIAG (rate-limited): build time (gather + raster, on whichever cull thread won
@@ -1369,12 +1459,12 @@ namespace MOC
 			const double buildMs = std::chrono::duration<double, std::milli>(
 				std::chrono::high_resolution_clock::now() - g_buildStart)
 									   .count();
-			logger::info("[MOC][diag] frame={} enqueue={:.2f}ms gather={:.2f}ms occluders={} cells={}/culled={} | tested={} culled={} (aabb {}/{} sphere {}/{}) tree {}/{}",
+			logger::info("[MOC][diag] frame={} enqueue={:.2f}ms gather={:.2f}ms occluders={} cells={}/culled={} | tested={} culled={} (aabb {}/{} sphere {}/{}) tree {}/{} flips={}",
 				frame, buildMs, g_lastGatherMs, g_lastOccluderCount,
 				g_cellsSeen, g_cellsCulled,
 				g_tested.load(), g_culled.load(),
 				g_culledAABB.load(), g_testedAABB.load(), g_culledSphere.load(), g_testedSphere.load(),
-				g_treeCulled.load(), g_treeTested.load());
+				g_treeCulled.load(), g_treeTested.load(), g_verdictFlips.exchange(0, std::memory_order_relaxed));
 		}
 		g_buildDone.store(frame, std::memory_order_release);
 		return true;
@@ -1388,7 +1478,7 @@ namespace MOC
 			char buf[8] = {};
 			return GetEnvironmentVariableA("CS_MOC_DUMP", buf, sizeof(buf)) && buf[0] == '1';
 		}();
-		if (!s_dump || !g_init || !g_moc)
+		if (!s_dump || !g_init || !g_mocFront.load(std::memory_order_relaxed))
 			return;
 		auto* gfxState = RE::BSGraphics::State::GetSingleton();
 		if (!gfxState || (gfxState->frameCount % 120u) != 0u)
@@ -1455,7 +1545,7 @@ namespace MOC
 				screenMax = _mm_max_ps(screenMax, xformedPos);
 			}
 
-			const auto r = g_moc->TestRect(screenMin.m128_f32[0], screenMin.m128_f32[1], screenMax.m128_f32[0], screenMax.m128_f32[1], minW);
+			const auto r = g_mocFront.load(std::memory_order_acquire)->TestRect(screenMin.m128_f32[0], screenMin.m128_f32[1], screenMax.m128_f32[0], screenMax.m128_f32[1], minW);
 			return r == MaskedOcclusionCulling::VISIBLE;
 		}
 
@@ -1523,7 +1613,7 @@ namespace MOC
 			XMVECTOR xyMins = _mm_min_ps(vCorner0NDC, _mm_min_ps(vCorner1NDC, _mm_min_ps(vCorner2NDC, vCorner3NDC)));
 			XMVECTOR xyMaxs = _mm_max_ps(vCorner0NDC, _mm_max_ps(vCorner1NDC, _mm_max_ps(vCorner2NDC, vCorner3NDC)));
 
-			const auto r = g_moc->TestRect(xyMins.m128_f32[0], xyMins.m128_f32[1], xyMaxs.m128_f32[0], xyMaxs.m128_f32[1], closestSpherePointW);
+			const auto r = g_mocFront.load(std::memory_order_acquire)->TestRect(xyMins.m128_f32[0], xyMins.m128_f32[1], xyMaxs.m128_f32[0], xyMaxs.m128_f32[1], closestSpherePointW);
 			return r == MaskedOcclusionCulling::VISIBLE;
 		}
 	}  // namespace
@@ -1560,15 +1650,20 @@ namespace MOC
 		if (a_object->worldBound.radius < OccluderTestMinRadius)
 			return true;
 
-		auto*      aabb = GetAABBNode(a_object);  // single RTTI lookup (was called twice)
-		const bool visible = aabb ? TestAABB(aabb) : TestSphere(a_object);
-
-		g_tested.fetch_add(1, std::memory_order_relaxed);
-		(aabb ? g_testedAABB : g_testedSphere).fetch_add(1, std::memory_order_relaxed);
-		if (!visible) {
-			g_culled.fetch_add(1, std::memory_order_relaxed);
-			(aabb ? g_culledAABB : g_culledSphere).fetch_add(1, std::memory_order_relaxed);
-		}
+		// Verdict computed on the first walk of the frame against the complete
+		// buffer, reused by every later pass (tallies tick once per object per
+		// FRAME, not per walk).
+		const bool visible = CachedVerdict(a_object, 1, [&] {
+			auto*      aabb = GetAABBNode(a_object);  // single RTTI lookup (was called twice)
+			const bool vis = aabb ? TestAABB(aabb) : TestSphere(a_object);
+			g_tested.fetch_add(1, std::memory_order_relaxed);
+			(aabb ? g_testedAABB : g_testedSphere).fetch_add(1, std::memory_order_relaxed);
+			if (!vis) {
+				g_culled.fetch_add(1, std::memory_order_relaxed);
+				(aabb ? g_culledAABB : g_culledSphere).fetch_add(1, std::memory_order_relaxed);
+			}
+			return vis;
+		});
 		return visible;
 	}
 
@@ -1582,13 +1677,16 @@ namespace MOC
 		if (!aabb || aabb->size.z <= 1.0f)
 			return true;  // no AABB shape (spheres etc.) or degenerate bounds -> keep
 
-		const bool visible = TestAABB(aabb);
-		g_tested.fetch_add(1, std::memory_order_relaxed);
-		g_testedAABB.fetch_add(1, std::memory_order_relaxed);
-		if (!visible) {
-			g_culled.fetch_add(1, std::memory_order_relaxed);
-			g_culledAABB.fetch_add(1, std::memory_order_relaxed);
-		}
+		const bool visible = CachedVerdict(a_multiBound, 1, [&] {
+			const bool vis = TestAABB(aabb);
+			g_tested.fetch_add(1, std::memory_order_relaxed);
+			g_testedAABB.fetch_add(1, std::memory_order_relaxed);
+			if (!vis) {
+				g_culled.fetch_add(1, std::memory_order_relaxed);
+				g_culledAABB.fetch_add(1, std::memory_order_relaxed);
+			}
+			return vis;
+		});
 		return visible;
 	}
 
@@ -1602,10 +1700,14 @@ namespace MOC
 		if (!g_init || !EnableOcclusionTesting || !CullTreeLODGroups || !a_aabb)
 			return true;
 
-		const bool visible = TestAABB(a_aabb);
-		g_treeTested.fetch_add(1, std::memory_order_relaxed);
-		if (!visible)
-			g_treeCulled.fetch_add(1, std::memory_order_relaxed);
-		return visible;
+		// 3 consecutive occluded frames before a tree group culls: these large,
+		// distant groups sit near the verdict boundary and flickered (save 338).
+		return CachedVerdict(a_aabb, 3, [&] {
+			const bool vis = TestAABB(a_aabb);
+			g_treeTested.fetch_add(1, std::memory_order_relaxed);
+			if (!vis)
+				g_treeCulled.fetch_add(1, std::memory_order_relaxed);
+			return vis;
+		});
 	}
 }

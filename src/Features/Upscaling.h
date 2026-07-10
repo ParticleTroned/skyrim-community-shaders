@@ -56,7 +56,7 @@ public:
 		bool reflexLowLatencyMode = false;
 		bool reflexLowLatencyBoost = false;
 		bool frameGeneration = false;
-		uint frameGenMethod = (uint)FrameGenMethod::kFSR;
+		uint frameGenMethod = (uint)FrameGenMethod::kDLSSG;  // default resolves to DLSS-G on capable HW, else FSR-FG
 		// DLSS-G fixed frame multiplier (2 = 2x single-frame … up to 6x). numFramesToGenerate = multiplier - 1.
 		// Capped at runtime to the hardware max (numFramesToGenerateMax+1): 40-series caps at 2x, 50-series up to 6x.
 		uint frameGenMultiplier = 2;
@@ -120,6 +120,10 @@ public:
 	static inline std::atomic<bool> s_windowUnfocused{ false };
 	static inline std::atomic<bool> s_windowModifying{ false };
 
+	// NOTE (Streamline-sample parity): an upscaler reconfiguration (method or quality/preset change) needs
+	// NO special DLSS-G handling — the sample changes DLSS mode with zero SL-lifecycle ceremony (no eOff,
+	// no swapchain recreate, no present skip); its DLSS-G options carry no render dims in fixed-resolution
+	// mode, so the change is invisible to DLSS-G (tag extents describe the render sub-rect per frame).
 
 	// Timing and scaling
 	double refreshRate = 0.0f;

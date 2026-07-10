@@ -1,3 +1,4 @@
+#include "D3DX9MathUpgrade.h"
 #include "Deferred.h"
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
@@ -10,6 +11,7 @@
 #include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Features/OcclusionCulling/OcclusionCulling.h"
 
 #include "ENB/ENBSeriesAPI.h"
 
@@ -87,6 +89,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				EngineFix::InstallOnPostPostLoadFixes();
 				FrameAnnotations::OnPostPostLoad();
 
+				// Occlusion Culling (Nukem MOC port) — installs its BSCullingProcess
+				// hooks here (SE-only, inert unless CS_OCCLUSION=1). Not routed through
+				// the Feature loader (no shaders/ini); direct install like EngineFix.
+				OcclusionCulling::GetSingleton()->PostPostLoad();
+
 				auto shaderCache = globals::shaderCache;
 
 				// Run feature PostPostLoad() first so features can disable themselves if needed
@@ -120,6 +127,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			}
 
 			if (errors.empty()) {
+				// Catch d3dx9 math importers that loaded after our plugin-load sweep.
+				D3DX9MathUpgrade::Sweep("data loaded");
 				globals::OnDataLoaded();
 				EngineFix::InstallOnDataLoadedFixes();
 				FrameAnnotations::OnDataLoaded();

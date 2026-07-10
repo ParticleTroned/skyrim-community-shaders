@@ -3,6 +3,7 @@
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/ExternalEmittance.h"
 
+#include "D3DX9MathUpgrade.h"
 #include "DxvkLoader.h"
 #include "Feature.h"
 #include "Globals.h"
@@ -24,6 +25,8 @@
 #include "Features/VolumetricLighting.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+
+#include <xmmintrin.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
@@ -262,20 +265,12 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
-		// Frame generation must be OFF whenever the window is not in a normal focused state —
-		// minimized, unfocused (alt-tabbed / occluded), or being resized/moved. On DXVK, an
-		// FG-wrapped swapchain that gets recreated on occlusion freezes the GPU, and DLSS-G's
-		// pacer wedges across a present gap with interpolation still eOn (guide §17). So suspend
-		// BOTH FG methods here (lightweight, resources retained — the controller's one-shot
-		// SuspendForWindowGap): DLSS-G interpolation off, FSR-FG unwrapped. This runs on the
-		// present/render thread — the only thread SL/FFX calls are safe on; the WndProc hook just
-		// sets the focus/resize atoms IsWindowUnusable reads. The normal per-frame engage path
-		// re-enables both on the first usable frame after restore.
-		//
-		// Minimized is special: the present itself is a complete no-op (nothing reaches DXVK's
-		// present chain), so short-circuit with S_OK. For focus-loss/occlusion WITHOUT minimize
-		// the present MUST still be issued (DXVK has to process the occlusion), so fall through
-		// with frame generation already suspended.
+		// Frame-generation present safety: the window must not be presented while it is not in a
+		// normal focused/visible state (minimized, alt-tabbed/occluded, resized). Driving DLSS-G's
+		// blocking pacer present against an occluded window that has fallen off the flip-model path
+		// onto GDI-copy wedges the pacer (NtDxgkSubmitPresentToHwQueue never completes) while it holds
+		// an nvoglv64 lock DXVK's CS copy then blocks on — the alt-tab freeze. Matching the Streamline
+		// sample, we simply STOP presenting while unfocused (return S_OK) — no eOff, no settle.
 		{
 			static HWND s_window = nullptr;
 			if (!s_window) {
@@ -283,11 +278,19 @@ struct IDXGISwapChain_Present
 				if (This && SUCCEEDED(This->GetDesc(&desc)))
 					s_window = desc.OutputWindow;
 			}
-			if (Upscaling::IsWindowUnusable()) {
-				FrameGen::Controller::GetSingleton()->SuspendForWindowGap();
-				if (s_window && IsIconic(s_window))
-					return S_OK;
-			}
+			// Match the Streamline sample exactly: when the window is not visible/focused, STOP
+			// presenting (skip the whole frame) rather than toggling DLSS-G or debouncing. The WndProc
+			// and this D3D11 Present hook run on the same thread (verified via log thread IDs), so the
+			// WM_ACTIVATEAPP/WM_ACTIVATE focus state IsWindowUnusable() reads is current here — no lag.
+			// Skipping the present while unfocused keeps DLSS-G's blocking pacer from ever presenting to
+			// the occluded (GDI-copy) surface, which is the exact wedge eBlockPresentingClientQueue can
+			// only avoid on the flip-model path (pacer stuck in NtDxgkSubmitPresentToHwQueue holding an
+			// nvoglv64 lock DXVK's CS copy then blocks on). No eOff, no settle — the sample's model.
+			// NOTE (sample parity): an upscaler reconfiguration (method/preset change) does NOT skip the
+			// present — the sample changes DLSS mode with zero present-path ceremony. Only the window
+			// gate above applies.
+			if (Upscaling::IsWindowUnusable())
+				return S_OK;
 		}
 
 		globals::state->Reset();
@@ -340,6 +343,11 @@ struct IDXGISwapChain_Present
 
 		if (!bridgedMarkers)
 			streamline->SetPCLMarker(Streamline::PclMarker::PresentEnd);
+
+		// eBlockNoClientQueues: capture the DLSS-G input-completion fence for the frame just presented, so the
+		// next BeginRenderFrame can wait on it before overwriting the eValidUntilPresent inputs (guide §15.1).
+		// Internally a no-op unless DLSS-G is interpolating; must run on the present thread (it does here).
+		streamline->CaptureDLSSGInputFence();
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
 
@@ -412,6 +420,23 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	func(isCompute);
 	globals::state->Draw();
+}
+
+void Hooks::BSBatchRenderer_RenderPassImmediately1::thunk(RE::BSRenderPass* pass, uint32_t technique, bool alphaTest, uint32_t renderFlags)
+{
+	// Software-pipeline the batch walk: BSBatchRenderer iterates pass->passGroupNext chains
+	// whose nodes live scattered across the engine's contiguous 4.7 MB render-pass arena
+	// (65535 x 72 B slots; the pool's lock-free LIFO freelist scrambles with alloc/free
+	// churn), so nearly every iteration begins with a cold-line load of the next node.
+	// Live IP-sampling of the render thread showed these loads as its single hottest
+	// cluster (RenderPassImmediately+0x1f/+0x64/+0x8d). Prefetching the next pass one
+	// iteration ahead lets its lines arrive while the current pass renders. A pass is
+	// 72 bytes at a 72-byte stride, so a node can straddle two cache lines.
+	if (auto* next = pass->passGroupNext) {
+		_mm_prefetch(reinterpret_cast<const char*>(next), _MM_HINT_T0);
+		_mm_prefetch(reinterpret_cast<const char*>(next) + 64, _MM_HINT_T0);
+	}
+	func(pass, technique, alphaTest, renderFlags);
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -584,10 +609,10 @@ namespace Hooks
 			if ((a_msg == WM_KILLFOCUS || a_msg == WM_SETFOCUS) && menu->initialized) {
 				menu->focusChanged = true;
 			}
-			// Track the window's focus/modification state so the present hook can suspend frame
-			// generation while the window is not normally focused (see IDXGISwapChain_Present /
-			// Upscaling::IsWindowUnusable). This runs on the game's window/message thread — set
-			// atomic flags ONLY here; every SL/FFX call is made on the render/present thread.
+			// Track the window's focus state so the present hook can skip presenting while the window
+			// is not focused/visible (see IDXGISwapChain_Present / Upscaling::IsWindowUnusable), matching
+			// the Streamline sample which stops presenting when the window is not visible. Atomic flags
+			// only here.
 			switch (a_msg) {
 			case WM_ACTIVATEAPP:
 				// Whole-application activation: wParam FALSE => another app took focus (alt-tab).
@@ -1006,6 +1031,8 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		D3DX9MathUpgrade::Install();
+
 		logger::info("Hooking BSImageSpace::Init::IBLF");
 		stl::detour_thunk<BSImageSpace_Init_IBLF>(REL::RelocationID(100480, 107198));
 
@@ -1024,6 +1051,15 @@ namespace Hooks
 
 		logger::info("Hooking BSGraphics::SetDirtyStates");
 		stl::detour_thunk<BSGraphics_SetDirtyStates>(REL::RelocationID(75580, 77386));
+
+		// CS_NO_PASS_PREFETCH=1: A/B escape hatch to run without the next-pass prefetch detour.
+		char noPassPrefetch[2] = {};
+		if (!(GetEnvironmentVariableA("CS_NO_PASS_PREFETCH", noPassPrefetch, sizeof(noPassPrefetch)) && noPassPrefetch[0] == '1')) {
+			logger::info("Hooking BSBatchRenderer::RenderPassImmediately (next-pass prefetch)");
+			stl::detour_thunk<BSBatchRenderer_RenderPassImmediately1>(REL::RelocationID(100854, 107644));
+		} else {
+			logger::info("BSBatchRenderer::RenderPassImmediately prefetch disabled via CS_NO_PASS_PREFETCH");
+		}
 
 		logger::info("Hooking BSGraphics::Renderer::InitD3D");
 		stl::write_thunk_call<BSGraphics_Renderer_Init_InitD3D>(REL::RelocationID(75595, 77226).address() + REL::Relocate(0x50, 0x2BC));

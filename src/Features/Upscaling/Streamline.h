@@ -34,12 +34,24 @@ public:
 	// The per-adapter feature probe has run (SetVulkanDevice). Until then the
 	// Is*Supported() flags read false, so method fallbacks (e.g. DLSS-G -> FSR
 	// when unsupported) give transient wrong answers during early boot.
-	[[nodiscard]] bool IsFeatureSupportResolved() const { return vulkanDeviceSet; }
+	// True once feature support is settled — either the per-adapter probe ran (vulkanDeviceSet) or
+	// Streamline is config-disabled (nothing supported, resolution is trivially final).
+	[[nodiscard]] bool IsFeatureSupportResolved() const { return vulkanDeviceSet || disabledByConfig; }
+
+	// Config gate (kNONE/kTAA + frame generation off): the whole Streamline stack is skipped — the
+	// interposer is never mapped, so DXVK talks to the real Vulkan driver directly. Loading SL costs
+	// measurable per-call driver overhead even when idle (its device is created with SL's extra
+	// extensions/features), so a no-SL config shouldn't pay it. Enabling an SL upscaler or frame
+	// generation then requires a RESTART (the interposer must be mapped before DXVK's VkInstance).
+	void SetDisabledByConfig() { disabledByConfig = true; }
+	[[nodiscard]] bool IsDisabledByConfig() const { return disabledByConfig; }
 	[[nodiscard]] bool IsDLSSSupported() const { return featureDLSS; }
 	[[nodiscard]] bool IsReflexSupported() const { return featureReflex; }
 	[[nodiscard]] bool IsDLSSGSupported() const { return featureDLSSG; }
 	[[nodiscard]] bool IsXeSSSupported() const { return featureXeSS; }
 	[[nodiscard]] bool IsFSRSupported() const { return featureFSR; }
+	//! FSR3 frame generation (sl.fsr_g / kFeatureFSR_G) — the FSR twin of IsDLSSGSupported().
+	[[nodiscard]] bool IsFSRFGSupported() const { return featureFSRFG; }
 
 	void EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
 		ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
@@ -102,18 +114,17 @@ public:
 	// a_autoMode: DLSS-G eAuto (fixed multiplier, but the driver auto-disables FG when it would lower FPS).
 	// a_dynamic: DLSS-G eDynamic (Dynamic Multi Frame Generation) — overrides a_autoMode; a_dynamicTargetFps
 	//   is the desired output fps (0 => auto-detect the monitor refresh). Use only when IsDLSSGDynamicSupported().
-	void SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
-		uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate = 1,
-		bool a_autoMode = false, bool a_dynamic = false, float a_dynamicTargetFps = 0.0f);
+	// Takes display dims only — DLSS-G options never carry render dims (Streamline_Sample fixed-res
+	// behavior; the per-frame tag extents describe the render sub-rect), so upscaler quality changes
+	// are invisible to DLSS-G.
+	void SetDLSSGMode(bool a_enable, uint32_t a_displayWidth, uint32_t a_displayHeight,
+		uint32_t a_numFramesToGenerate = 1, bool a_autoMode = false, bool a_dynamic = false,
+		float a_dynamicTargetFps = 0.0f);
 
 	// Render thread, once per frame at frame start (Main_UpdateJitter hook): establishes the
 	// explicit SL frame ID all render-thread SL calls this frame fetch their token with — the
 	// Streamline_Sample's engine-frame-counter pattern (no shared token, no cross-thread latch).
 	void BeginRenderFrame();
-
-	// Present hook, first skipped frame of a minimize: light eOff before the present gap
-	// (§17 — a gap with interpolation on wedges the pacer at resume).
-	void PauseDLSSGForWindowGap();
 
 	// Whether the DXVK present-marker bridge is active (PresentStart/End fire on DXVK's submit
 	// thread around the real vkQueuePresentKHR). When true, the present hook must call
@@ -125,6 +136,17 @@ public:
 	// Query DLSS-G capabilities (numFramesToGenerateMax, Dynamic MFG support) and cache them. MUST run on the
 	// present thread (slDLSSGGetState requirement); CS calls this from its present hook. Idempotent once cached.
 	void QueryDLSSGCapabilities();
+
+	// eBlockNoClientQueues input synchronization (DLSS-G guide §15.1). Under eBlockNoClientQueues the DLSS-G
+	// plugin consumes the eValidUntilPresent inputs (motion vectors, HUDless) on a non-presenting queue AFTER
+	// present, so the client must not overwrite those live engine targets until the plugin signals it is done.
+	//   * CaptureDLSSGInputFence() — present thread, after the present: reads the plugin-internal completion
+	//     fence (a Vulkan timeline semaphore) + its last-present value via slDLSSGGetState and stores them.
+	//   * WaitDLSSGInputFence()   — render thread, frame start (before the frame overwrites those inputs):
+	//     host-waits (vkWaitSemaphores) for the stored value. Bounded timeout; never hangs the render thread.
+	// Depth is eOnlyValidNow (SL snapshots it at tag time) and needs no wait.
+	void CaptureDLSSGInputFence();
+	void WaitDLSSGInputFence();
 	// Max numFramesToGenerate the hardware supports (0 = not yet queried). Max multiplier = this + 1.
 	[[nodiscard]] uint32_t GetDLSSGMaxFramesToGenerate() const;
 	// Whether DLSS-G Dynamic Multi Frame Generation (eDynamic) is supported (50-series + driver + D3D12).
@@ -137,6 +159,12 @@ public:
 	[[nodiscard]] bool IsDLSSGLoaded() const;
 	// Desired load state has been applied (no load/unload recreate outstanding).
 	[[nodiscard]] bool IsDLSSGLoadSettled() const;
+
+	// FSR3 frame generation (sl.fsr_g / kFeatureFSR_G) load-state — twins of the DLSS-G accessors above.
+	// The FrameGen controller keeps exactly one FG feature loaded at a time.
+	void SetFSRFGDesiredLoaded(bool a_loaded);
+	[[nodiscard]] bool IsFSRFGLoaded() const;
+	[[nodiscard]] bool IsFSRFGLoadSettled() const;
 
 	void LogReflexStatus();
 
@@ -155,18 +183,25 @@ public:
 	// sl.dlss_g gets (un)loaded and how its sticky present proxy is evicted; a_reason is logged.
 	static void RequestDxvkSwapchainRecreate(const char* a_reason = "FG method switch");
 
+	// Drive DXVK's live per-present sync-present flag (dxvkSetSyncPresent @110): ON while a
+	// frame-generation present proxy is active (alt-tab safety), OFF otherwise (async = stock DXVK,
+	// faster). Kept in lockstep with the FG load state by the FrameGen controller.
+	static void PushDxvkSyncPresent(bool a_sync);
+
 private:
 	Streamline() = default;
 
 	bool triedInit = false;
 	bool initialized = false;
 	bool vulkanDeviceSet = false;
+	bool disabledByConfig = false;
 
 	bool featureDLSS = false;
 	bool featureReflex = false;
 	bool featureDLSSG = false;
 	bool featureXeSS = false;
 	bool featureFSR = false;
+	bool featureFSRFG = false;
 
 	// Pre-slInit hardware capability (VK_NV_optical_flow on the system loader): decides
 	// whether sl.dlss_g is loaded at all — and with it, the session's frame-generation

@@ -26,6 +26,7 @@
 #include <sl_dlss.h>
 #include <sl_dlss_g.h>
 #include <sl_fsr.h>
+#include <sl_fsr_g.h>
 #include <sl_xess.h>
 #include <sl_helpers_vk.h>
 #include <sl_matrix_helpers.h>
@@ -115,7 +116,7 @@ namespace
 		// DRS upscaler stops doubling).
 		bool dlssgModeCached = false;
 		bool dlssgModeOn = false;
-		uint32_t dlssgCachedRenderW = 0, dlssgCachedRenderH = 0, dlssgCachedDisplayW = 0, dlssgCachedDisplayH = 0;
+		uint32_t dlssgCachedDisplayW = 0, dlssgCachedDisplayH = 0;
 		// Multi Frame Generation: cached numFramesToGenerate + auto-mode are part of the options key, so a
 		// multiplier/mode change re-issues slDLSSGSetOptions. dlssgMaxFramesToGenerate is the hardware cap
 		// (numFramesToGenerateMax), queried once on the present thread via QueryDLSSGCapabilities (0 = unknown).
@@ -125,6 +126,18 @@ namespace
 		float dlssgCachedDynamicFps = 0.0f;
 		std::atomic<uint32_t> dlssgMaxFramesToGenerate = 0;
 		std::atomic<bool> dlssgDynamicSupported = false;
+
+		// eBlockNoClientQueues input-completion fence (DLSS-G guide §15.1). inputsProcessingCompletionFence is a
+		// Vulkan timeline semaphore the plugin signals once it has finished consuming a present's eValidUntilPresent
+		// inputs (motion vectors, HUDless). Captured after present (present thread) and host-waited at the next
+		// frame start (render thread) before the engine overwrites those live targets. Atomics because the capture
+		// (present thread), the wait (render thread), and the reset (DXVK torn-down thread) all touch them; in the
+		// single-renderer Skyrim pipeline capture+wait are actually the same thread, so the wait sees the value the
+		// preceding present stored. dlssgInputFenceWaited is the last value already waited (skip redundant waits).
+		std::atomic<void*> dlssgInputFence{ nullptr };
+		std::atomic<uint64_t> dlssgInputFenceValue{ 0 };
+		std::atomic<uint64_t> dlssgInputFenceWaited{ 0 };
+		PFN_vkWaitSemaphores vkWaitSemaphores = nullptr;
 
 		// Whether a VALID DLSS-G input tag was set this frame (in the render pass). Reset on the render thread
 		// at frame start (BeginRenderFrame); set by TagDLSSGResources. If still false at present,
@@ -156,35 +169,66 @@ namespace
 	// copy overhead the guide warns about.
 	std::atomic<bool> g_dlssgDesiredLoaded{ false };
 	bool g_dlssgCurrentlyLoaded = false;
+	// FSR3 frame generation (sl.fsr_g / kFeatureFSR_G) is now a load-toggled feature EXACTLY like DLSS-G:
+	// loading it activates its WSI hooks (which install the FFX FrameInterpolationSwapChain), unloading
+	// removes them. Only ONE FG feature is ever desired-loaded at a time (the FrameGen controller enforces
+	// it), so a method switch unloads the outgoing feature and loads the incoming one in the SAME
+	// swapchain-recreate window. Both start loaded at slInit (both in featuresToLoad); the controller
+	// unloads the non-selected one on its first reconcile.
+	std::atomic<bool> g_fsrfgDesiredLoaded{ false };
+	bool g_fsrfgCurrentlyLoaded = false;
 
-	// Invoked by DXVK inside recreateSwapChain() between destroy and create (registered via
-	// dxvkSetSwapchainTornDownCallback). Toggles DLSS-G's loaded state to match `desired` in exactly the
-	// window the guide requires. Runs on DXVK's present/acquire thread under its surface lock.
-	void DxvkSwapchainTornDownCallback()
+	// Apply one FG feature's desired loaded-state via slSetFeatureLoaded, re-resolving its entry points on
+	// load. Free function (not a lambda) so the SEH __try has no C++ object unwinding in scope. Called from
+	// DxvkSwapchainTornDownCallback for BOTH FG features in the no-swapchain window the guide requires.
+	void ReconcileFgFeatureLoad(sl::Feature a_feature, std::atomic<bool>& a_desired, bool& a_current)
 	{
-		// ANY swapchain teardown (load/unload OR a plain resize/fullscreen recreate) invalidates DLSS-G's
-		// per-swapchain option state, so force the next SetDLSSGMode to re-issue slDLSSGSetOptions against the
-		// new swapchain dimensions. Without this, a plain recreate (desired==current, early-returns below) would
-		// leave the mode cached and the first post-resize SetDLSSGMode suppressed.
-		g_sl.dlssgModeCached = false;
-		g_sl.dlssgModeOn = false;
-
-		const bool desired = g_dlssgDesiredLoaded.load(std::memory_order_acquire);
-		if (desired == g_dlssgCurrentlyLoaded || !g_sl.slSetFeatureLoaded || g_sl.dispatchFaulted)
+		const bool want = a_desired.load(std::memory_order_acquire);
+		if (want == a_current || !g_sl.slSetFeatureLoaded || g_sl.dispatchFaulted)
 			return;
 		__try {
-			if (g_sl.slSetFeatureLoaded(sl::kFeatureDLSS_G, desired) != sl::Result::eOk)
+			if (g_sl.slSetFeatureLoaded(a_feature, want) != sl::Result::eOk)
 				return;
-			g_dlssgCurrentlyLoaded = desired;
-			// A reloaded plugin may sit at a new base — re-resolve its entry points (plugin option state is gone
-			// after an unload; the mode cache was already reset above).
-			if (desired) {
-				g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSGSetOptions));
-				g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", reinterpret_cast<void*&>(g_sl.slDLSSGGetState));
+			a_current = want;
+			// A reloaded plugin may sit at a new base — re-resolve its entry points (plugin option state is
+			// gone after an unload).
+			if (want) {
+				if (a_feature == sl::kFeatureDLSS_G) {
+					g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSGSetOptions));
+					g_sl.slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", reinterpret_cast<void*&>(g_sl.slDLSSGGetState));
+				} else if (a_feature == sl::kFeatureFSR_G) {
+					g_sl.slGetFeatureFunction(sl::kFeatureFSR_G, "slFSRFrameGenerationSetOptions", reinterpret_cast<void*&>(g_sl.slFSRFrameGenerationSetOptions));
+					g_sl.slGetFeatureFunction(sl::kFeatureFSR_G, "slFSRGetFrameGenState", reinterpret_cast<void*&>(g_sl.slFSRGetFrameGenState));
+				}
 			}
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
 			g_sl.dispatchFaulted = true;
 		}
+	}
+
+	// Invoked by DXVK inside recreateSwapChain() between destroy and create (registered via
+	// dxvkSetSwapchainTornDownCallback). Toggles each FG feature's loaded state to match `desired` in
+	// exactly the window the guide requires. Runs on DXVK's present/acquire thread under its surface lock.
+	void DxvkSwapchainTornDownCallback()
+	{
+		// ANY swapchain teardown (load/unload OR a plain resize/fullscreen recreate) invalidates DLSS-G's
+		// per-swapchain option state, so force the next SetDLSSGMode to re-issue slDLSSGSetOptions against the
+		// new swapchain dimensions. Without this, a plain recreate (desired==current) would leave the mode
+		// cached and the first post-resize SetDLSSGMode suppressed.
+		g_sl.dlssgModeCached = false;
+		g_sl.dlssgModeOn = false;
+
+		// The DLSS-G plugin's input-completion timeline semaphore is per-swapchain: any teardown invalidates it,
+		// so drop the captured handle/value and the waited watermark. The next capture re-reads a fresh semaphore
+		// and WaitDLSSGInputFence starts clean (a stale watermark could otherwise skip a needed wait on reload).
+		g_sl.dlssgInputFence.store(nullptr, std::memory_order_release);
+		g_sl.dlssgInputFenceValue.store(0, std::memory_order_release);
+		g_sl.dlssgInputFenceWaited.store(0, std::memory_order_release);
+
+		// Reconcile BOTH FG features. On a method switch the controller has set one desired=true and the
+		// other desired=false, so this unloads the outgoing feature and loads the incoming one here.
+		ReconcileFgFeatureLoad(sl::kFeatureDLSS_G, g_dlssgDesiredLoaded, g_dlssgCurrentlyLoaded);
+		ReconcileFgFeatureLoad(sl::kFeatureFSR_G, g_fsrfgDesiredLoaded, g_fsrfgCurrentlyLoaded);
 	}
 
 	// Streamline emits a handful of WARN-level diagnostics that are benign for Community Shaders' DXVK
@@ -284,7 +328,7 @@ void Streamline::PreloadInterposer()
 	// runtime LoadLibraryA from inside dxvk_d3d11.dll does NOT search the CS dxvk/ subfolder, so without
 	// this preload DXVK falls through to the real vulkan-1.dll and SL never sees the device/present.
 	// LOAD_WITH_ALTERED_SEARCH_PATH lets the interposer resolve its sibling sl.*.dll from the CS folder.
-	if (g_sl.interposer)
+	if (disabledByConfig || g_sl.interposer)
 		return;
 	const auto slDir = GetStreamlineDir();
 	if (slDir.empty())
@@ -370,6 +414,10 @@ static bool ProbeDLSSGHardware()
 
 bool Streamline::Initialize()
 {
+	// Config-disabled (kNONE/kTAA + FG off): never map the interposer or slInit — DXVK runs on the
+	// real Vulkan driver with no SL device baggage. See SetDisabledByConfig.
+	if (disabledByConfig)
+		return false;
 	if (triedInit)
 		return initialized;
 	triedInit = true;
@@ -439,7 +487,7 @@ bool Streamline::Initialize()
 	dlssgHardware = ProbeDLSSGHardware();
 
 	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL,
-		sl::kFeatureFSR, sl::kFeatureXeSS };
+		sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
 	if (dlssgHardware) {
 		featuresToLoad.push_back(sl::kFeatureDLSS_G);
 		// slInit loads the plugin, so the §18 load-state tracking starts "loaded" here (and
@@ -447,6 +495,11 @@ bool Streamline::Initialize()
 		g_dlssgDesiredLoaded.store(true, std::memory_order_release);
 		g_dlssgCurrentlyLoaded = true;
 	}
+	// kFeatureFSR_G (sl.fsr_g frame gen) is ALWAYS in featuresToLoad, so slInit loads it on every GPU —
+	// start its load-state "loaded" too. The FrameGen controller unloads whichever FG feature is not the
+	// selected method on its first reconcile, converging to exactly one loaded.
+	g_fsrfgDesiredLoaded.store(true, std::memory_order_release);
+	g_fsrfgCurrentlyLoaded = true;
 
 	sl::Preferences pref{};
 	pref.renderAPI = sl::RenderAPI::eVulkan;
@@ -521,7 +574,8 @@ void Streamline::SetVulkanDevice()
 	featureReflex = supported(sl::kFeatureReflex);
 	featureDLSSG = supported(sl::kFeatureDLSS_G);
 	featureXeSS = supported(sl::kFeatureXeSS);  // Community Shaders sl.xess plugin (any GPU)
-	featureFSR = supported(sl::kFeatureFSR);    // Community Shaders sl.fsr plugin (any GPU)
+	featureFSR = supported(sl::kFeatureFSR);    // Community Shaders sl.fsr plugin — UPSCALE (any GPU)
+	featureFSRFG = supported(sl::kFeatureFSR_G);  // Community Shaders sl.fsr_g plugin — FRAME GEN (any GPU)
 
 	// Bind the feature-specific functions (valid only after the device is set).
 	if (featureDLSS) {
@@ -545,10 +599,17 @@ void Streamline::SetVulkanDevice()
 		featureDLSSG = g_sl.slDLSSGSetOptions != nullptr && g_sl.slDLSSGGetState != nullptr;
 	}
 	if (featureFSR) {
+		// sl.fsr is now UPSCALE ONLY (kFeatureFSR).
 		g_sl.slGetFeatureFunction(sl::kFeatureFSR, "slFSRSetOptions", reinterpret_cast<void*&>(g_sl.slFSRSetOptions));
-		g_sl.slGetFeatureFunction(sl::kFeatureFSR, "slFSRFrameGenerationSetOptions", reinterpret_cast<void*&>(g_sl.slFSRFrameGenerationSetOptions));
-		g_sl.slGetFeatureFunction(sl::kFeatureFSR, "slFSRGetFrameGenState", reinterpret_cast<void*&>(g_sl.slFSRGetFrameGenState));
 		featureFSR = g_sl.slFSRSetOptions != nullptr;
+	}
+	if (featureFSRFG) {
+		// FSR3 frame generation is its own feature/plugin (kFeatureFSR_G / sl.fsr_g), a twin of sl.dlss_g,
+		// so its entry points resolve from that feature — NOT kFeatureFSR. Only one FG feature is loaded
+		// at a time (see the FrameGen controller), exactly like DLSS-G.
+		g_sl.slGetFeatureFunction(sl::kFeatureFSR_G, "slFSRFrameGenerationSetOptions", reinterpret_cast<void*&>(g_sl.slFSRFrameGenerationSetOptions));
+		g_sl.slGetFeatureFunction(sl::kFeatureFSR_G, "slFSRGetFrameGenState", reinterpret_cast<void*&>(g_sl.slFSRGetFrameGenState));
+		featureFSRFG = g_sl.slFSRFrameGenerationSetOptions != nullptr;
 	}
 	if (featureXeSS) {
 		g_sl.slGetFeatureFunction(sl::kFeatureXeSS, "slXeSSSetOptions", reinterpret_cast<void*&>(g_sl.slXeSSSetOptions));
@@ -560,8 +621,8 @@ void Streamline::SetVulkanDevice()
 	// explicit (CS_FORCE_FSR_FG also lands here via the pre-slInit hardware probe).
 	featureDLSSG = featureDLSSG && dlssgHardware;
 
-	logger::info("[Streamline] feature support: DLSS={} Reflex={} DLSS-G={} FSR={} XeSS={} (FSR-FG fns {})",
-		featureDLSS, featureReflex, featureDLSSG, featureFSR, featureXeSS,
+	logger::info("[Streamline] feature support: DLSS={} Reflex={} DLSS-G={} FSR={} FSR-G={} XeSS={} (FSR-FG fns {})",
+		featureDLSS, featureReflex, featureDLSSG, featureFSR, featureFSRFG, featureXeSS,
 		g_sl.slFSRFrameGenerationSetOptions ? "ok" : "missing");
 
 	// Present path: hardware flips for everyone (the dxvk default — FSE pNext not chained).
@@ -612,7 +673,7 @@ void Streamline::Shutdown()
 	}
 	initialized = false;
 	vulkanDeviceSet = false;
-	featureDLSS = featureReflex = featureDLSSG = featureXeSS = featureFSR = false;
+	featureDLSS = featureReflex = featureDLSSG = featureXeSS = featureFSR = featureFSRFG = false;
 }
 
 // Fetch the SL frame token for an EXPLICIT frame ID — the Streamline_Sample pattern (its every
@@ -658,23 +719,6 @@ static void CS_DxvkPresentMarkerBridge(uint64_t a_appFrameId, uint32_t a_phase)
 	}
 }
 
-void Streamline::PauseDLSSGForWindowGap()
-{
-	// Present hook, first skipped frame of a minimize: switch interpolation off (light,
-	// resources retained) BEFORE the present gap begins — a gap with the mode still eOn
-	// desyncs DLSS-G's frame pairing and the first resumed present wedges its pacer (§17).
-	// Runs on the render thread like every other SL call. The regular EngageDLSSG path
-	// re-enables on the first gameplay frame after restore (SetDLSSGMode caches, so the
-	// steady minimized state costs nothing).
-	if (!initialized || !g_sl.dlssgModeOn)
-		return;
-	SetDLSSGMode(false,
-		g_sl.dlssgCachedRenderW, g_sl.dlssgCachedRenderH,
-		g_sl.dlssgCachedDisplayW, g_sl.dlssgCachedDisplayH);
-	FrameGen::Controller::GetSingleton()->NotifyDLSSGPaused();
-	logger::info("[Streamline] DLSS-G interpolation paused (window minimized)");
-}
-
 void Streamline::BeginRenderFrame()
 {
 	// Render thread, frame start (Main_UpdateJitter hook). Establishes the explicit frame ID every
@@ -683,6 +727,81 @@ void Streamline::BeginRenderFrame()
 	// every reader strictly after every writer on this one thread.
 	g_sl.renderFrameId = globals::state->frameCount;
 	g_sl.dlssgTaggedThisFrame = false;
+
+	// Before this frame renders new motion vectors / HUDless over the live engine targets, wait for the
+	// DLSS-G plugin to finish consuming the previous present's inputs (eBlockNoClientQueues contract).
+	WaitDLSSGInputFence();
+}
+
+void Streamline::CaptureDLSSGInputFence()
+{
+	// Present thread, after the present. Read the plugin-internal input-completion timeline semaphore + the
+	// value for the inputs consumed by the just-presented frame (DLSS-G guide §15.1). Only meaningful while
+	// DLSS-G is actually interpolating; slDLSSGGetState must run on the present thread (it does here).
+	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted || !g_dlssgCurrentlyLoaded || !g_sl.dlssgModeOn)
+		return;
+	__try {
+		sl::DLSSGState state{};
+		if (g_sl.slDLSSGGetState(g_sl.viewport, state, nullptr) == sl::Result::eOk) {
+			// A different semaphore handle means the plugin re-created it (reload/resize) — reset the waited
+			// watermark so the fresh, possibly-lower value is not mistaken for already-waited.
+			if (g_sl.dlssgInputFence.exchange(state.inputsProcessingCompletionFence, std::memory_order_acq_rel) !=
+				state.inputsProcessingCompletionFence)
+				g_sl.dlssgInputFenceWaited.store(0, std::memory_order_release);
+			g_sl.dlssgInputFenceValue.store(state.lastPresentInputsProcessingCompletionFenceValue, std::memory_order_release);
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+	}
+}
+
+void Streamline::WaitDLSSGInputFence()
+{
+	// Render thread, frame start. Host-wait the input-completion timeline semaphore for the value captured
+	// after the last present, so the plugin's non-presenting-queue read of the eValidUntilPresent inputs
+	// (motion vectors, HUDless) has completed before this frame overwrites those live targets. No-op unless
+	// DLSS-G is interpolating and a newer value than we already waited on was captured.
+	if (!initialized || g_sl.dispatchFaulted || !g_sl.dlssgModeOn)
+		return;
+	void* fence = g_sl.dlssgInputFence.load(std::memory_order_acquire);
+	const uint64_t value = g_sl.dlssgInputFenceValue.load(std::memory_order_acquire);
+	if (!fence || value == 0 || value <= g_sl.dlssgInputFenceWaited.load(std::memory_order_acquire))
+		return;
+
+	auto* dxvk = DxvkInterop::GetSingleton();
+	VkDevice device = dxvk->GetDevice();
+	if (device == VK_NULL_HANDLE)
+		return;
+	if (!g_sl.vkWaitSemaphores) {
+		g_sl.vkWaitSemaphores = reinterpret_cast<PFN_vkWaitSemaphores>(
+			dxvk->GetDeviceProcAddr()(device, "vkWaitSemaphores"));
+		if (!g_sl.vkWaitSemaphores)
+			return;  // no host timeline-semaphore wait (should never happen on a DXVK 1.3 device) — skip
+	}
+
+	__try {
+		VkSemaphore sem = reinterpret_cast<VkSemaphore>(fence);
+		uint64_t waitValue = value;
+		VkSemaphoreWaitInfo wi{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+		wi.semaphoreCount = 1;
+		wi.pSemaphores = &sem;
+		wi.pValues = &waitValue;
+		// Bounded 8 ms timeout: this waits on the PREVIOUS present's consumption, which is almost always
+		// already done, so the steady-state cost is ~0. A timeout must never wedge the render thread — if it
+		// ever fires we proceed (the fence being late implies DLSS-G is stalled elsewhere) and log once.
+		const VkResult wr = g_sl.vkWaitSemaphores(device, &wi, 8ull * 1000ull * 1000ull);
+		if (wr == VK_SUCCESS)
+			g_sl.dlssgInputFenceWaited.store(value, std::memory_order_release);
+		else if (wr == VK_TIMEOUT) {
+			static bool s_warned = false;
+			if (!s_warned) {
+				s_warned = true;
+				logger::warn("[Streamline] DLSS-G input fence wait timed out (value {}) — proceeding", value);
+			}
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_sl.dispatchFaulted = true;
+	}
 }
 
 void Streamline::UpdateReflex(bool a_enable, bool a_boost, uint32_t a_frameLimitUs)
@@ -1307,7 +1426,7 @@ void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 	// FG-prepare. dlss_g also reads viewport-0 constants at present, so an isolated viewport keeps all
 	// three apart. The plugin's FG-prepare uses GLOBAL ctx (fgContext/fgWrappedSwapchain/fgEnabled), not
 	// per-viewport options, so viewport 1 is safe; it only needs its own constants + depth/MV tags.
-	if (!initialized || !featureFSR || g_sl.dispatchFaulted)
+	if (!initialized || !featureFSRFG || g_sl.dispatchFaulted)
 		return;
 	if (!a_depth || !a_motionVectors)
 		return;
@@ -1319,9 +1438,9 @@ void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 
 	__try {
 		const sl::ViewportHandle fgViewport{ 1 };
-		// Tag depth + MV (FG-prepare inputs) AND the hudless scene (present-time UI extraction). No color, so
-		// the plugin's shared kFeatureFSR evaluate runs FG-prepare, not an upscale.
-		const sl::Result evalRes = cs_EvaluateFeatureCore(sl::kFeatureFSR, fgViewport,
+		// Tag depth + MV (FG-prepare inputs) AND the hudless scene (present-time UI extraction). This drives
+		// the dedicated FSR FRAME-GEN feature (sl.fsr_g / kFeatureFSR_G) — its evaluate runs FG-prepare.
+		const sl::Result evalRes = cs_EvaluateFeatureCore(sl::kFeatureFSR_G, fgViewport,
 			nullptr, nullptr, a_depth, a_motionVectors,
 			a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight, a_jitterX, a_jitterY, a_hudlessColor);
 
@@ -1336,9 +1455,8 @@ void Streamline::EvaluateFSRFrameGen(ID3D11Resource* a_depth, ID3D11Resource* a_
 	}
 }
 
-void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_renderHeight,
-	uint32_t a_displayWidth, uint32_t a_displayHeight, uint32_t a_numFramesToGenerate, bool a_autoMode,
-	bool a_dynamic, float a_dynamicTargetFps)
+void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_displayWidth, uint32_t a_displayHeight,
+	uint32_t a_numFramesToGenerate, bool a_autoMode, bool a_dynamic, float a_dynamicTargetFps)
 {
 	if (!initialized || !featureDLSSG || g_sl.dispatchFaulted)
 		return;
@@ -1357,11 +1475,12 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 
 	// Sample-matched cadence: slDLSSGSetOptions is (re)issued EVERY frame (the Streamline_Sample
 	// calls SetDLSSGOptions unconditionally in its render loop; SL treats redundant sets as
-	// cheap no-ops). The cached fields below are kept only to log on real changes.
+	// cheap no-ops). The cached fields below are kept only to log on real changes. Render dims are
+	// deliberately NOT part of the options or this key (see the extent note below), so an upscaler
+	// quality/preset change produces bit-identical options — invisible to DLSS-G, like the sample.
 	const bool changed = !(g_sl.dlssgModeCached && g_sl.dlssgModeOn == a_enable &&
 		g_sl.dlssgCachedNumFrames == numFrames && g_sl.dlssgCachedAuto == a_autoMode &&
 		g_sl.dlssgCachedDynamic == a_dynamic && g_sl.dlssgCachedDynamicFps == a_dynamicTargetFps &&
-		g_sl.dlssgCachedRenderW == a_renderWidth && g_sl.dlssgCachedRenderH == a_renderHeight &&
 		g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight);
 
 	// DXVK blocking-mode support (eBlockPresentingClientQueue): while DLSS-G runs, SL blocks
@@ -1397,31 +1516,29 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 		// eRetainResourcesWhenOff: DLSS-G is toggled off every loading screen / menu and back on for
 		// gameplay; retaining its resources across those off periods avoids realloc stutter on re-enable.
 		options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
-		// eDynamicResolutionEnabled ONLY when an upscaler actually downscales (render < display): the depth/MV
-		// inputs are then a render-res sub-rect of the full-size targets and DLSS-G must be told the optimal
-		// render res. With TAA / native (render == display) this is FIXED-ratio — the guide says DO NOT set the
-		// DRS flag (it mis-configures DLSS-G; setting it with dynamicRes == color device-loses during interpolation).
-		// Leave dynamicResWidth/Height 0 in that case so DLSS-G treats the inputs as full color-res.
-		const bool drsActive = (a_renderWidth < a_displayWidth) || (a_renderHeight < a_displayHeight);
-		if (drsActive) {
-			options.flags |= sl::DLSSGFlags::eDynamicResolutionEnabled;
-			options.dynamicResWidth = a_renderWidth;
-			options.dynamicResHeight = a_renderHeight;
-		}
+		// NO eDynamicResolutionEnabled and NO dynamicResWidth/Height — sample-exact. The Streamline_Sample
+		// sets that flag ONLY in its true dynamic-resolution mode (per-frame varying render size); for fixed
+		// quality presets — even with the upscaler rendering below display res — its DLSSGOptions carry no
+		// render dims at all, and the per-frame sl::Extent on the mvec/depth tags describes the render
+		// sub-rect. CS has no dynamic-res mode (a quality change is a discrete re-init, not DRS), so the
+		// options must never vary with render size: keying/reissuing options on render dims made a simple
+		// quality-slider change reset DLSS-G's pacer mid-present — the "changed the preset and it froze"
+		// wedge. (Setting the DRS flag with dynamicRes == color also device-loses during interpolation.)
 		options.mvecDepthWidth = a_displayWidth;  // texture dims, not render size (extent gives the sub-rect)
 		options.mvecDepthHeight = a_displayHeight;  // texture dims, not render size (extent gives the sub-rect)
 		options.colorWidth = a_displayWidth;
 		options.colorHeight = a_displayHeight;
-		// eBlockPresentingClientQueue (the SL default) — DLSS-G's one and only queue mode here.
-		// SL blocks the presenting queue itself. The mode REQUIRES flip-model presents: on the
-		// GDI-copy path the pacer's hardware present never completes ("Pacer flush has timed
-		// out", wedged in NtDxgkSubmitPresentToHwQueue). The boot present path is per-window
-		// and sticky (Upscaling::bootPresentPathFlip), so DLSS-G is only engaged on flip-path
-		// boots — FrameGenController gates method availability on the boot path, and switching
-		// FG methods requires a restart. NOTE: the present-hook ordering bound that kept our
-		// interop-timeline evaluate/tag submissions ahead of the present was removed, so
-		// generated frames may flash without an external ordering bound.
-		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
+		// eBlockNoClientQueues (Vulkan-only; DLSS-G guide §17). SL does NOT block the presenting queue —
+		// it runs the frame-gen workload on a non-presenting queue in parallel. Unlike eBlockPresentingClientQueue
+		// (which does a blocking hardware present that REQUIRES flip-model and wedges its pacer in
+		// NtDxgkSubmitPresentToHwQueue once alt-tab occludes the window onto the GDI-copy path — the aggressive
+		// alt-tab freeze), this mode survives the occluded transition. The contract (§15.1): the client must wait
+		// on the plugin's inputsProcessingCompletionFence before overwriting the eValidUntilPresent inputs (motion
+		// vectors, HUDless) — handled by CaptureDLSSGInputFence (present) + WaitDLSSGInputFence (frame start).
+		// Depth is eOnlyValidNow (snapshotted) so it needs no wait. The present hook also skips presenting entirely
+		// while the window is occluded/minimized (Streamline-sample parity), so the pacer never touches the
+		// occluded surface at all.
+		options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
 		const sl::Result res = g_sl.slDLSSGSetOptions(g_sl.viewport, options);
 		if (res != sl::Result::eOk) {
 			if (changed)
@@ -1433,14 +1550,12 @@ void Streamline::SetDLSSGMode(bool a_enable, uint32_t a_renderWidth, uint32_t a_
 			g_sl.dlssgCachedAuto = a_autoMode;
 			g_sl.dlssgCachedDynamic = a_dynamic;
 			g_sl.dlssgCachedDynamicFps = a_dynamicTargetFps;
-			g_sl.dlssgCachedRenderW = a_renderWidth;
-			g_sl.dlssgCachedRenderH = a_renderHeight;
 			g_sl.dlssgCachedDisplayW = a_displayWidth;
 			g_sl.dlssgCachedDisplayH = a_displayHeight;
 			if (changed)
-				logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {}) render={}x{} display={}x{} drs={}", a_enable,
+				logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {}) display={}x{}", a_enable,
 					!a_enable ? "off" : a_dynamic ? "dynamic" : a_autoMode ? "auto" : "on", numFrames, a_dynamicTargetFps, maxFrames,
-					a_renderWidth, a_renderHeight, a_displayWidth, a_displayHeight, drsActive);
+					a_displayWidth, a_displayHeight);
 		}
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		g_sl.dispatchFaulted = true;
@@ -1453,9 +1568,13 @@ bool Streamline::SetFSRFrameGen(bool a_enable, uint32_t a_renderWidth, uint32_t 
 	bool a_debugView, bool a_debugTearLines, bool a_debugPacingLines, bool a_onlyPresentGenerated)
 {
 	// Returns true only when the option was actually delivered to the plugin. The caller retries until
-	// it does, because featureFSR (and the FG entry points) come up a few frames AFTER the first
+	// it does, because featureFSRFG (and the FG entry points) come up a few frames AFTER the first
 	// CheckResources — a one-shot transition would silently miss that window.
-	if (!initialized || !featureFSR || !g_sl.slFSRFrameGenerationSetOptions || g_sl.dispatchFaulted)
+	if (!initialized || !featureFSRFG || !g_sl.slFSRFrameGenerationSetOptions || g_sl.dispatchFaulted)
+		return false;
+	// sl.fsr_g may be runtime-unloaded when DLSS-G is the selected method (twin of SetDLSSGMode's guard):
+	// don't call its options entry point while unloaded.
+	if (!g_fsrfgCurrentlyLoaded)
 		return false;
 
 	bool ok = false;
@@ -1493,7 +1612,7 @@ void Streamline::LogFSRFrameGenStats()
 	// FFX swapchain is absent or passing through. The one reliable runtime signal for
 	// whether FSR-FG is actually generating frames (screen captures can't see it - the
 	// FFX overlay/present happens after CS's capture point and DWM may not composite it).
-	if (!initialized || !featureFSR || !g_sl.slFSRGetFrameGenState || g_sl.dispatchFaulted)
+	if (!initialized || !featureFSRFG || !g_sl.slFSRGetFrameGenState || g_sl.dispatchFaulted)
 		return;
 	static uint32_t s_n = 0;
 	if ((s_n++ % 120) != 0)
@@ -1845,6 +1964,24 @@ bool Streamline::IsDLSSGLoadSettled() const
 	return g_dlssgDesiredLoaded.load(std::memory_order_acquire) == g_dlssgCurrentlyLoaded;
 }
 
+void Streamline::SetFSRFGDesiredLoaded(bool a_loaded)
+{
+	// Request sl.fsr_g to be (un)loaded on the next swapchain recreate (applied by
+	// DxvkSwapchainTornDownCallback in the no-swapchain window). Twin of SetDLSSGDesiredLoaded — the
+	// caller must follow this with RequestDxvkSwapchainRecreate().
+	g_fsrfgDesiredLoaded.store(a_loaded, std::memory_order_release);
+}
+
+bool Streamline::IsFSRFGLoaded() const
+{
+	return g_fsrfgCurrentlyLoaded;
+}
+
+bool Streamline::IsFSRFGLoadSettled() const
+{
+	return g_fsrfgDesiredLoaded.load(std::memory_order_acquire) == g_fsrfgCurrentlyLoaded;
+}
+
 void Streamline::RequestDxvkSwapchainRecreate(const char* a_reason)
 {
 	// Force DXVK to recreate its Vulkan swapchain on the next acquire. This is the only window in which
@@ -1863,5 +2000,29 @@ void Streamline::RequestDxvkSwapchainRecreate(const char* a_reason)
 		logger::info("[Streamline] requested DXVK swapchain recreate ({})", a_reason);
 	} else {
 		logger::warn("[Streamline] dxvkRequestSwapchainRecreate not found — {} cannot take effect", a_reason);
+	}
+}
+
+void Streamline::PushDxvkSyncPresent(bool a_sync)
+{
+	// DXVK reads dxvkSetSyncPresent's flag LIVE per-present: ON = the render thread waits for the real
+	// vkQueuePresentKHR (required while a frame-generation present proxy is active — a DLSS-G/FFX present
+	// must never be in flight past the D3D11 hook); OFF = stock async present (safe AND faster with no
+	// FG). The FrameGen controller keeps this in lockstep with the FG load state; Upscaling::Load seeds
+	// the boot value from the saved setting. Idempotent (one atomic store in DXVK).
+	static auto setSync = []() -> void (*)(uint32_t) {
+		HMODULE dxvkModule = GetModuleHandleW(L"dxvk_d3d11.dll");
+		if (!dxvkModule)
+			return nullptr;
+		return reinterpret_cast<void (*)(uint32_t)>(GetProcAddress(dxvkModule, "dxvkSetSyncPresent"));
+	}();
+	if (setSync) {
+		setSync(a_sync ? 1u : 0u);
+	} else {
+		static bool s_warned = false;
+		if (!s_warned) {
+			s_warned = true;
+			logger::warn("[Streamline] dxvkSetSyncPresent not found - synchronous present control inactive");
+		}
 	}
 }

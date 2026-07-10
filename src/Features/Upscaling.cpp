@@ -218,6 +218,7 @@ void Upscaling::DrawSettings()
 	const bool xessAvailable = streamline->IsXeSSSupported();
 
 	const bool dlssgAvailable = streamline->IsDLSSGSupported();
+	const bool fsrfgAvailable = streamline->IsFSRFGSupported();
 	const bool reflexAvailable = streamline->IsReflexSupported();
 
 	// Selecting any upscaler sets the single upscaleMethod (so the others read off). Remember the last
@@ -297,6 +298,11 @@ void Upscaling::DrawSettings()
 		if (DrawStepper(T(TKEY("upscaling_technique"), "Upscaling Technique"), &techIdx, techLabels))
 			selectUpscaler(techMethods[std::clamp(techIdx, 0, static_cast<int>(techMethods.size()) - 1)]);
 
+		// Streamline was skipped at boot for this no-SL config (kNONE/kTAA + FG off, a real perf win) —
+		// activating an SL upscaler (FSR/XeSS/DLSS) takes effect on the next launch.
+		if (streamline->IsDisabledByConfig())
+			ImGui::TextDisabled("%s", T(TKEY("sl_restart_note"), "Upscalers and frame generation activate after a restart"));
+
 		// Upscale Preset (only for upscalers that resolve a quality level). Native = qualityMode 0 (DLAA for
 		// DLSS, native-res AA for FSR/XeSS), then Quality/Balanced/Performance/Ultra Performance.
 		const UpscaleMethod cur = (UpscaleMethod)settings.upscaleMethod;
@@ -321,40 +327,67 @@ void Upscaling::DrawSettings()
 	// ---- Frame Generation ----
 	ImGui::SeparatorText(T(TKEY("fg_header"), "Frame Generation"));
 	{
-		// ONE method per system, hardware-derived (GetFrameGenMethod): DLSS-G on hardware that
-		// supports it, FSR-FG everywhere else. The user only toggles frame generation on/off
-		// (plus the multiplier on DLSS-G hardware).
+		// Frame-generation METHOD selector: None / FSR FG / DLSS FG. DLSS-G (sl.dlss_g) and FSR-FG (sl.fsr_g)
+		// are separate, interchangeable Streamline features the FrameGen controller load-toggles so exactly
+		// one owns present (None unloads both). The single stepper picks BOTH on/off and which method — the
+		// user switches at runtime and the controller unloads one feature and loads the other. Only methods
+		// the GPU supports are offered.
+		std::vector<const char*>    fgLabels = { T(TKEY("fg_method_none"), "None") };
+		std::vector<FrameGenMethod> fgMethods = { FrameGenMethod::kFSR };  // [0] None: method value unused
+		if (fsrfgAvailable) {
+			fgLabels.push_back(T(TKEY("fg_method_fsr"), "FSR FG"));
+			fgMethods.push_back(FrameGenMethod::kFSR);
+		}
 		if (dlssgAvailable) {
-			// DLSS Frame Generation: Off / Dynamic (or Auto) / 2x … up to the hardware max.
+			fgLabels.push_back(T(TKEY("fg_method_dlssg"), "DLSS FG"));
+			fgMethods.push_back(FrameGenMethod::kDLSSG);
+		}
+
+		// Reflect the ACTIVE method (GetFrameGenMethod validates/falls back) so the stepper never shows a
+		// selection the GPU can't run.
+		int fgSel = 0;  // None
+		if (settings.frameGeneration) {
+			const FrameGenMethod active = GetFrameGenMethod();
+			for (int i = 1; i < static_cast<int>(fgMethods.size()); ++i)
+				if (fgMethods[i] == active)
+					fgSel = i;
+		}
+		if (DrawStepper(T(TKEY("fg_method"), "Frame Generation Method"), &fgSel, fgLabels)) {
+			settings.frameGeneration = (fgSel != 0);
+			if (fgSel != 0)
+				settings.frameGenMethod = (uint)fgMethods[std::clamp(fgSel, 0, static_cast<int>(fgMethods.size()) - 1)];
+		}
+		// With Streamline config-disabled (no-SL boot) both FG features are unavailable this session;
+		// the toggle saves and activates on the next launch (see the note in the Upscaling section).
+		if (streamline->IsDisabledByConfig() && fgLabels.size() == 1) {
+			DrawToggleStepper(T(TKEY("fg_enable_restart"), "Frame Generation (after restart)"), &settings.frameGeneration);
+		}
+
+		// DLSS FG has a multiplier sub-control (no 'Off' entry — None on the stepper above is the off state).
+		// FSR FG has NO additional settings.
+		if (settings.frameGeneration && GetFrameGenMethod() == FrameGenMethod::kDLSSG && dlssgAvailable) {
 			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();
 			const uint     maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
-			// The adaptive slot is "Dynamic" only when the hardware supports Dynamic
-			// MFG (RTX 50+); otherwise DLSS-G runs its automatic single-frame mode,
-			// so label it "Auto" (e.g. RTX 40 reports DynamicMFG=false).
-			std::vector<std::string> fgStrings = { "Off",
+			// The adaptive slot is "Dynamic" only when the hardware supports Dynamic MFG (RTX 50+); otherwise
+			// DLSS-G runs its automatic single-frame mode, so label it "Auto" (e.g. RTX 40 = DynamicMFG false).
+			std::vector<std::string> multStrings = {
 				streamline->IsDLSSGDynamicSupported()
 					? std::string(T(TKEY("fg_dynamic"), "Dynamic"))
 					: std::string(T(TKEY("fg_auto"), "Auto")) };
 			for (uint m = 2; m <= maxMultiplier; ++m)
-				fgStrings.push_back(std::format("{}x", m));
-			std::vector<const char*> fgStates;
-			for (auto& s : fgStrings)
-				fgStates.push_back(s.c_str());
+				multStrings.push_back(std::format("{}x", m));
+			std::vector<const char*> multStates;
+			for (auto& s : multStrings)
+				multStates.push_back(s.c_str());
 
-			int fgIdx = !settings.frameGeneration ? 0 :
-			            settings.dlssgDynamic ? 1 :
-			            std::clamp((int)settings.frameGenMultiplier, 2, (int)maxMultiplier);
-			if (DrawStepper(T(TKEY("nv_frame_generation"), "DLSS Frame Generation"), &fgIdx, fgStates)) {
-				settings.frameGeneration = fgIdx != 0;
-				if (fgIdx != 0) {
-					settings.dlssgDynamic = (fgIdx == 1);
-					if (fgIdx >= 2)
-						settings.frameGenMultiplier = (uint)fgIdx;  // 2x..maxMultiplier
-				}
+			// index 0 = Dynamic/Auto; index k = (k+1)x  (2x -> 1, 3x -> 2, …).
+			int multIdx = settings.dlssgDynamic ? 0 :
+			              std::clamp((int)settings.frameGenMultiplier - 1, 1, (int)maxMultiplier - 1);
+			if (DrawStepper(T(TKEY("fg_multiplier"), "Frame Generation Multiplier"), &multIdx, multStates)) {
+				settings.dlssgDynamic = (multIdx == 0);
+				if (multIdx >= 1)
+					settings.frameGenMultiplier = (uint)(multIdx + 1);  // 2x..maxMultiplier
 			}
-		} else {
-			// FSR Frame Generation: Off / On.
-			DrawToggleStepper(T(TKEY("amd_fsr_fg"), "FSR Frame Generation"), &settings.frameGeneration);
 		}
 	}
 
@@ -408,7 +441,7 @@ void Upscaling::LoadSettings(json& o_json)
 
 	constexpr auto fgMethodCount = 2;  // kFSR, kDLSSG
 	if (settings.frameGenMethod >= static_cast<uint>(fgMethodCount))
-		settings.frameGenMethod = static_cast<uint>(FrameGenMethod::kFSR);
+		settings.frameGenMethod = static_cast<uint>(FrameGenMethod::kDLSSG);
 
 	// Migrate legacy Reflex settings to new reflexEnabled bool.
 	if (settings.reflexLowLatencyMode && !settings.reflexEnabled) {
@@ -440,15 +473,55 @@ void Upscaling::DataLoaded()
 
 void Upscaling::Load()
 {
+	// Synchronous present (matches the Streamline sample's present model). DXVK's default present is
+	// ASYNCHRONOUS: the D3D11 Present hook only QUEUES a present onto DXVK's submit thread, which runs it
+	// later. That is why CS's "return S_OK while the window is occluded" cannot stop the DLSS-G present
+	// that hangs on the composited surface — the present is already queued on the submit thread, below the
+	// D3D11 layer. With synchronous present the render thread WAITS for the real vkQueuePresentKHR to
+	// execute (like the sample, which presents on its render thread), so a present is never in-flight past
+	// the D3D11 hook: when CS skips an occluded frame there is genuinely no present to stall.
+	//
+	// Sync present exists FOR the frame-generation present proxies, and its render-thread wait is pure
+	// overhead without one (measurably slower at kNONE/FG-off — async is stock DXVK behavior and safe with
+	// no FG). DXVK reads the flag LIVE per-present, so it is driven by the FG state: the FrameGen
+	// controller keeps it ON exactly while an FG feature is loaded (Streamline::PushDxvkSyncPresent from
+	// StepLoadState/StepPhaseCompletion). Seed the boot value from the raw saved setting here — FG
+	// configured on => sync from the very first present (the controller confirms it once probes resolve);
+	// FG off => async from boot. Use the DXVK export, NOT SetEnvironmentVariableA — DXVK is a separate DLL
+	// with its own CRT and its std::getenv does not see Win32 SetEnvironmentVariable.
+	if (DxvkLoader::IsLoaded())
+		Streamline::PushDxvkSyncPresent(settings.frameGeneration);
+
 	if (DxvkLoader::IsLoaded()) {
 		// Map sl.interposer.dll NOW so DXVK's Vulkan loader (which tries sl.interposer.dll first) aliases
 		// it at its imminent first-DXGI VkInstance creation — routing DXVK's whole Vulkan surface through
 		// Streamline (full interposition). Must precede DXVK's instance creation; this is that window.
 		//
-		// ALWAYS preloaded (do not gate on the configured upscale method): DLSS must be available
-		// on capable hardware at all times, and FSR/XeSS run as sl.* plugins too, so every runtime
-		// upscaler/frame-gen switch needs the interposition established at boot.
-		Streamline::GetSingleton()->PreloadInterposer();
+		// Gated on the SAVED config actually needing Streamline: every SL upscaler (FSR/XeSS/DLSS are all
+		// sl.* plugins) and both frame-generation methods require the interposition established at boot,
+		// BUT a kNONE/kTAA + FG-off config pays real per-call NVIDIA-driver overhead just for having SL's
+		// device configuration loaded (measured ~6% in the draw-bound interior; the cost is the device
+		// extensions/features SL requests, NOT its proxy code — hook trimming was proven useless). RAW
+		// saved settings, not GetUpscaleMethod(): the resolved getter consults feature-support probes that
+		// have not run yet at this pre-device point (and would clamp an FSR selection to kTAA here).
+		// Consequence: switching INTO an SL upscaler or enabling FG from a no-SL boot needs a restart
+		// (the interposer must be mapped before DXVK's VkInstance); the menu communicates it.
+		const auto savedMethod = static_cast<UpscaleMethod>(settings.upscaleMethod);
+		// CS_FORCE_SL_LOAD=1: A/B escape hatch — load Streamline regardless of config (the pre-gate
+		// behavior) so the gate's cost can be measured with ONE binary.
+		char forceSL[2] = {};
+		const bool needsSL = settings.frameGeneration ||
+		                     (savedMethod != UpscaleMethod::kNONE && savedMethod != UpscaleMethod::kTAA) ||
+		                     settings.reflexEnabled ||  // Reflex is an SL feature: a TAA+Reflex user needs SL loaded
+		                     (GetEnvironmentVariableA("CS_FORCE_SL_LOAD", forceSL, sizeof(forceSL)) && forceSL[0] == '1');
+		if (needsSL) {
+			Streamline::GetSingleton()->PreloadInterposer();
+		} else {
+			Streamline::GetSingleton()->SetDisabledByConfig();
+			logger::info("[Upscaling] Streamline disabled by config (upscaleMethod={}, frameGeneration=off) - "
+			             "DXVK runs on the real Vulkan driver; enabling an SL upscaler or frame generation requires a restart",
+				settings.upscaleMethod);
+		}
 	}
 
 	// Route the game's device creation to DXVK's subfolder-loaded export (set up by
@@ -560,13 +633,20 @@ void Upscaling::ApplyHardwareDefaults()
 
 Upscaling::FrameGenMethod Upscaling::GetFrameGenMethod() const
 {
-	// ONE frame-generation method per system, hardware-derived and fixed for the session:
-	// DLSS-G on hardware that supports it, FSR-FG everywhere else. Not user-selectable — the
-	// two methods need opposite present paths (DLSS-G's pacer requires hardware flips; the FFX
-	// present worker requires the copy path on NVIDIA), which the driver locks per window, so
-	// a single hardware-matched method keeps everything switch-free and boot-independent.
-	// settings.frameGenMethod is legacy-ignored.
-	return Streamline::GetSingleton()->IsDLSSGSupported() ? FrameGenMethod::kDLSSG : FrameGenMethod::kFSR;
+	// USER-SELECTABLE frame-generation method. DLSS-G (sl.dlss_g) and FSR-FG (sl.fsr_g) are now separate,
+	// interchangeable Streamline features that the FrameGen controller load-toggles so exactly one owns
+	// present. Honor the saved selection, but validate it against actual feature support so a choice the
+	// current GPU can't run falls back to one it can. The default (kDLSSG) resolves to DLSS-G on capable
+	// hardware and falls back to FSR-FG everywhere else — i.e. the old hardware-optimal default, now
+	// overridable in the menu (full runtime switch on all capable hardware).
+	auto* sl = Streamline::GetSingleton();
+	const auto selected = static_cast<FrameGenMethod>(settings.frameGenMethod);
+	if (selected == FrameGenMethod::kDLSSG)
+		return sl->IsDLSSGSupported() ? FrameGenMethod::kDLSSG : FrameGenMethod::kFSR;
+	// kFSR selected: use it when FSR-FG is supported, else fall back to DLSS-G if that is available.
+	return sl->IsFSRFGSupported() ? FrameGenMethod::kFSR :
+	       sl->IsDLSSGSupported() ? FrameGenMethod::kDLSSG :
+	                                FrameGenMethod::kFSR;
 }
 
 bool Upscaling::IsFrameGenerationActive() const
@@ -576,10 +656,10 @@ bool Upscaling::IsFrameGenerationActive() const
 	auto fgMethod = GetFrameGenMethod();
 	if (fgMethod == FrameGenMethod::kDLSSG)
 		return Streamline::GetSingleton()->IsDLSSGSupported();
-	// kFSR: the sl.fsr plugin owns frame generation via its FFX FrameInterpolationSwapChain.
-	// "Active" means FSR is supported and we've delivered the enable (settings.frameGeneration
-	// already checked above).
-	return Streamline::GetSingleton()->IsFSRSupported();
+	// kFSR: the sl.fsr_g plugin owns frame generation via its FFX FrameInterpolationSwapChain.
+	// "Active" means FSR frame generation is supported and we've delivered the enable
+	// (settings.frameGeneration already checked above).
+	return Streamline::GetSingleton()->IsFSRFGSupported();
 }
 
 bool Upscaling::GetEffectiveReflex() const
@@ -1182,13 +1262,20 @@ bool Upscaling::IsWindowGapActive()
 
 void Upscaling::NotifyWindowFocus(bool a_focused)
 {
-	// WndProc thread. Atomic store only — the render/present thread acts on it.
+	// WndProc thread. Sample-exact (donut DeviceManager::UpdateWindowSize + AnimateRenderPresent): a focus
+	// change only flips the visibility/focus state that gates the whole frame — no swapchain recreate, no
+	// DLSS-G mode change, no debounce. While unfocused, CS runs NONE of its per-frame SL work and skips the
+	// present (see the windowUsable gate + the present hook), exactly like the sample's
+	// `m_windowVisible && (m_windowIsInFocus || ShouldRenderUnfocused())` gate idling the loop. On refocus,
+	// presents resume; if the surface went stale while away, DXVK's acquire returns OUT_OF_DATE and its
+	// presenter recreates the swapchain — the sample's BeginFrame OUT_OF_DATE -> ResizeSwapChain path.
 	s_windowUnfocused.store(!a_focused, std::memory_order_relaxed);
 }
 
 void Upscaling::NotifyWindowModifying(bool a_modifying)
 {
-	// WndProc thread (WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE). Atomic store only.
+	// WndProc thread (WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE). Set the atomic; IsWindowUnusable() then gates
+	// SL work/present for the resize; DXVK's OUT_OF_DATE acquire path rebuilds the surface after.
 	s_windowModifying.store(a_modifying, std::memory_order_relaxed);
 }
 
@@ -1201,6 +1288,7 @@ bool Upscaling::IsWindowUnusable()
 	       s_windowUnfocused.load(std::memory_order_relaxed) ||
 	       s_windowModifying.load(std::memory_order_relaxed);
 }
+
 
 void Upscaling::Upscale()
 {
@@ -1492,8 +1580,21 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	// systematically biases the generated frame's camera-reprojection phase — the whole static world
 	// gets flagged dynamic and reprojected wrong, worsening with camera rotation speed (real frames,
 	// rendered by the engine, are unaffected). Matches the once-per-frame SimulationStart rule.
+	// Match the Streamline sample (DeviceManager::AnimateRenderPresent): when the window is not
+	// visible/focused it runs NONE of the per-frame Streamline work — the Reflex/PCL markers, the
+	// upscale evaluate, the frame-gen tag AND Present() all live inside one `m_windowVisible &&
+	// (m_windowIsInFocus || ShouldRenderUnfocused())` gate. Running only PART of that sequence (the
+	// old behaviour: evaluate + tag + markers, but skip Present) leaves SL's per-frame contract
+	// incoherent — the "Out of order frame" / "Unable to find 'common' constants" desync — and worse,
+	// EvaluateDLSS's forced full CS-thread sync (FlushRenderingCommands -> SynchronizeCsThread)
+	// DEADLOCKS behind the DLSS-G present stalled in the driver whenever the surface can't present
+	// (alt-tab occlusion, or loading while alt-tabbed away). So gate the entire block below on a
+	// usable window; the present hook already skips Present() for the same condition, so together CS
+	// skips the whole frame's SL work as a unit, exactly like the sample.
+	const bool windowUsable = !Upscaling::IsWindowUnusable();
+
 	auto* streamline = Streamline::GetSingleton();
-	if (upscaling.GetEffectiveReflex()) {
+	if (windowUsable && upscaling.GetEffectiveReflex()) {
 		static uint32_t s_lastSimEndFrame = UINT32_MAX;
 		const uint32_t gameFrame = globals::state->frameCount;
 		if (s_lastSimEndFrame != gameFrame) {
@@ -1503,7 +1604,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		}
 	}
 
-	if (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kXeSS || upscaleMethod == UpscaleMethod::kDLSS)
+	if (windowUsable && (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kXeSS || upscaleMethod == UpscaleMethod::kDLSS))
 		upscaling.PerformUpscaling();
 
 	// (HUDLessColor is captured later, in MenuManagerDrawInterfaceStartHook just before the UI draws, from
@@ -1511,7 +1612,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	// Frame-gen resource tagging is independent of which upscaler ran (an upscaler + frame
 	// generation can be active together), so this is its own `if`, not an `else if`.
-	if (upscaling.IsFrameGenerationActive() && !Upscaling::IsWindowUnusable()) {
+	if (windowUsable && upscaling.IsFrameGenerationActive()) {
 		auto fgMethod = upscaling.GetFrameGenMethod();
 		auto renderer = globals::game::renderer;
 		auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];

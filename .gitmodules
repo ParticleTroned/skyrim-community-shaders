@@ -7,3 +7,6 @@
 [submodule "extern/dxvk"]
 	path = extern/dxvk
 	url = https://github.com/doodlum/dxvk.git
+[submodule "extern/MaskedOcclusionCulling"]
+	path = extern/MaskedOcclusionCulling
+	url = https://github.com/GameTechDev/MaskedOcclusionCulling.git

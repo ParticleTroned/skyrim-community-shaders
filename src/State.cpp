@@ -6,6 +6,7 @@
 
 #include "Deferred.h"
 #include "FeatureIssues.h"
+#include "ParallelShaderSetup.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/ExponentialHeightFog.h"
@@ -250,6 +251,11 @@ void State::Setup()
 
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
 	globals::deferred->SetupResources();
+
+	// Parallel shader-setup plumbing (P0). Inert unless CS_PARALLEL_SETUP=1 or explicitly
+	// enabled; creates per-worker deferred contexts + render-state copies but does not yet
+	// route any pass through them. See docs/development/parallel-shader-setup.md.
+	ParallelShaderSetup::GetSingleton()->Setup();
 
 	// Load per-weather settings after features are setup
 	WeatherManager::GetSingleton()->LoadPerWeatherSettingsFromDisk();

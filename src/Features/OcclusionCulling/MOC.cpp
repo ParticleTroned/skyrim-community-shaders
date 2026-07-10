@@ -496,7 +496,10 @@ namespace MOC
 			if (!a_geom->lightingShaderProp_cast())
 				return;
 
-			if (a_geom->GetType().get() != RE::BSGeometry::Type::kTriShape)
+			// kTriShape = statics/land; kSubIndexTriShape = terrain-LOD chunks
+			// (.btr meshes under LODRoot/LandLOD -- the distant ground at vistas).
+			if (const auto t = a_geom->GetType().get();
+				t != RE::BSGeometry::Type::kTriShape && t != RE::BSGeometry::Type::kSubIndexTriShape)
 				return;
 
 			auto& geomRT = a_geom->GetGeometryRuntimeData();
@@ -665,6 +668,41 @@ namespace MOC
 				}
 			}
 			return m;
+		}
+
+		// Distant terrain LOD (LODRoot -> "LandLOD"): the loaded-grid heightmap
+		// meshes only cover ~10k units; everything past that -- the ground the
+		// player actually SEES at vistas/zooms -- is terrain-LOD geometry. No
+		// distance cap (that is the point); chunks the engine hides where full
+		// cells are loaded (kHidden/AppCulled) are skipped, so LOD and heightmap
+		// meshes never fight over the same area.
+		void RenderLandLOD(RE::NiAVObject* a_object)
+		{
+			if (!a_object || a_object->GetFlags().any(RE::NiAVObject::Flag::kHidden) || a_object->GetAppCulled())
+				return;
+			if (CullObject(a_object))
+				return;
+			if (auto* node = a_object->AsNode()) {
+				auto& kids = node->GetChildren();
+				for (std::uint16_t i = 0; i < kids.capacity(); ++i)
+					RenderLandLOD(kids[i].get());
+			} else if (auto* geom = a_object->AsGeometry()) {
+				const auto t = geom->GetType().get();
+				if (t != RE::BSGeometry::Type::kSubIndexTriShape && t != RE::BSGeometry::Type::kTriShape)
+					return;
+				if (geom->worldBound.radius < 500.0f)
+					return;  // big terrain chunks only
+				// One-shot (CS_MOC_DUMP): do .btr meshes carry CPU raw streams?
+				static std::atomic<int> s_lodDiag{ 8 };
+				if (s_lodDiag.load(std::memory_order_relaxed) > 0 && s_lodDiag.fetch_sub(1, std::memory_order_relaxed) > 0) {
+					const auto& rt = geom->GetGeometryRuntimeData();
+					logger::info("[MOC][lodland] '{}' t={} r={:.0f} rd={} rawIdx={}",
+						geom->name.c_str(), static_cast<int>(t), geom->worldBound.radius,
+						rt.rendererData != nullptr,
+						rt.rendererData && rt.rendererData->rawIndexData);
+				}
+				RegisterGeometry(geom);
+			}
 		}
 
 		// Walk the ObjectLODRoot -> cell -> {LandNode, StaticNode} hierarchy (Nukem's
@@ -910,6 +948,15 @@ namespace MOC
 					}
 				}
 			}
+			// Distant terrain LOD: the ground at vista distances.
+			if (auto* lodRoot = ChildNodeAt(shadowScene, 2)) {  // "LODRoot"
+				for (std::uint16_t i = 0; i < lodRoot->GetChildren().capacity(); ++i) {
+					auto* child = ChildAt(lodRoot, i);
+					if (child && std::string_view{ child->name.c_str() } == "LandLOD")
+						RenderLandLOD(child);
+				}
+			}
+
 		}
 
 		bool GetCachedGeometry(RE::BSGeometry* a_geom, IndexPair& a_outIndices, float*& a_outVerts);

@@ -408,7 +408,10 @@ void OcclusionCulling::SyncSettingsToMOC()
 	MOC::EnableOccluderRendering = settings.EnableOccluderRendering;
 	MOC::OccluderMaxDistance = settings.OccluderMaxDistance;
 	MOC::OccluderFirstLevelMinSize = settings.OccluderFirstLevelMinSize;
-	MOC::MaxOccludersPerFrame = static_cast<std::uint32_t>(std::max(settings.MaxOccludersPerFrame, 1));
+	// Clamp the EFFECTIVE budget: persisted settings from older sessions carry
+	// 4096 and silently override the tuned default (measured: 1463 occluders ->
+	// raster 6.5ms vs 384 -> 1.9ms). The slider can still lower it.
+	MOC::MaxOccludersPerFrame = static_cast<std::uint32_t>(std::clamp(settings.MaxOccludersPerFrame, 1, 512));
 	MOC::RasterThreads = settings.RasterThreads;      // applied at boot (pool created once)
 	MOC::SimplifyOccluders = settings.SimplifyOccluders;  // affects newly cached meshes
 	MOC::OccluderTestMinRadius = settings.OccluderTestMinRadius;

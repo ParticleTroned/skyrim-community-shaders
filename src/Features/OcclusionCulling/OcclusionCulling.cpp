@@ -55,7 +55,16 @@ namespace
 	template <class HookT>
 	void Process1_Impl(RE::NiCullingProcess* a_self, RE::NiAVObject* a_object, std::int32_t a_arg2)
 	{
-		const bool bracketed = a_self == g_activeCullProcess.load(std::memory_order_relaxed);
+		// Gate on the CAMERA, not the single-instance bracket marker: the main
+		// view runs MULTIPLE concurrent cull processes (scene-list jobs + the
+		// per-pass subtree walks), and only whichever instance held the marker
+		// got MOC-tested -- so whether a given walk culled an object depended on
+		// thread scheduling, and the depth walk could draw what the main walk
+		// culled. That per-walk disagreement flickered REGARDLESS of buffer
+		// correctness (the mechanism survived every buffer-side fix). The camera
+		// check makes testing uniform across every main-view walk while still
+		// excluding shadow/reflection/cubemap/first-person culls.
+		const bool bracketed = MOC::IsMainViewCamera(a_self->camera);
 		if (bracketed && a_object && !MOC::TestObject(a_object)) {
 			MarkCulledLikeEngine(a_self, a_object);
 			return;  // occluded -> do not accumulate / recurse
@@ -191,7 +200,7 @@ namespace
 		{
 			const bool visible = func(a_self, a_bound);
 			if (visible && a_bound &&
-				static_cast<RE::NiCullingProcess*>(a_self) == g_activeCullProcess.load(std::memory_order_relaxed) &&
+				MOC::IsMainViewCamera(static_cast<RE::NiCullingProcess*>(a_self)->camera) &&
 				!MOC::TestMultiBound(a_bound))
 				return false;
 			return visible;
@@ -205,7 +214,7 @@ namespace
 		{
 			const bool visible = func(a_self, a_bound);
 			if (visible && a_bound &&
-				static_cast<RE::NiCullingProcess*>(a_self) == g_activeCullProcess.load(std::memory_order_relaxed) &&
+				MOC::IsMainViewCamera(static_cast<RE::NiCullingProcess*>(a_self)->camera) &&
 				!MOC::TestMultiBound(a_bound))
 				return false;
 			return visible;

@@ -997,10 +997,21 @@ namespace MOC
 
 				const std::size_t budget = std::min<std::size_t>(g_geoList.size(), MaxOccludersPerFrame);
 				if (budget < g_geoList.size())
+					// Pointer tiebreakers: with a budget below the candidate count, equal
+					// scores must not let the SELECTED SUBSET vary frame to frame (an
+					// oscillating occluder set oscillates boundary verdicts).
 					std::nth_element(g_geoList.begin(), g_geoList.begin() + budget, g_geoList.end(),
-						[](const GeoEntry& a, const GeoEntry& b) { return a.coverageScore > b.coverageScore; });
+						[](const GeoEntry& a, const GeoEntry& b) {
+							if (a.coverageScore != b.coverageScore)
+								return a.coverageScore > b.coverageScore;
+							return a.geometry < b.geometry;
+						});
 				std::sort(g_geoList.begin(), g_geoList.begin() + budget,
-					[](const GeoEntry& a, const GeoEntry& b) { return a.distanceSquared < b.distanceSquared; });
+					[](const GeoEntry& a, const GeoEntry& b) {
+						if (a.distanceSquared != b.distanceSquared)
+							return a.distanceSquared < b.distanceSquared;
+						return a.geometry < b.geometry;
+					});
 				g_geoList.resize(budget);
 
 				// Pre-warm the conversion cache so the claim thread's enqueue never pays

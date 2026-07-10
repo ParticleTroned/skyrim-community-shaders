@@ -1184,116 +1184,6 @@ namespace MOC
 		}
 	}
 
-	// Read back the game's own main depth buffer (kMAIN) to a PNG, for side-by-side comparison
-	// with the MOC occluder buffer. At cull time (when BuildOccluders runs) kMAIN still holds
-	// the PREVIOUS frame's fully-rendered depth -- the per-frame depth clear happens later, in
-	// the render passes -- so for a static view this is a complete, valid depth image. The game
-	// depth contains ALL geometry (trees, actors, ...) while MOC has only the large statics, so
-	// they won't match pixel-for-pixel; what matters is whether the big silhouettes (buildings,
-	// terrain, walls) sit at the same screen positions + relative depths. If the MOC shapes are
-	// rotated / mirrored / offset vs this, the matrices are still wrong. DEBUG-only: the
-	// CopyResource + Map hard-stalls the render thread, so it is gated to the diag cadence.
-	void DumpGameDepth()
-	{
-		auto* renderer = globals::game::renderer;
-		auto* device = globals::d3d::device;
-		auto* context = globals::d3d::context;
-		if (!renderer || !device || !context)
-			return;
-
-		ID3D11Texture2D* srcTex =
-			renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture;
-		if (!srcTex)
-			return;
-
-		D3D11_TEXTURE2D_DESC desc{};
-		srcTex->GetDesc(&desc);
-
-		D3D11_TEXTURE2D_DESC sd = desc;
-		sd.Usage = D3D11_USAGE_STAGING;
-		sd.BindFlags = 0;
-		sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		sd.MiscFlags = 0;
-		winrt::com_ptr<ID3D11Texture2D> staging;
-		if (FAILED(device->CreateTexture2D(&sd, nullptr, staging.put())))
-			return;
-		context->CopyResource(staging.get(), srcTex);
-
-		D3D11_MAPPED_SUBRESOURCE map{};
-		if (FAILED(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &map)))
-			return;
-
-		const UINT W = desc.Width;
-		const UINT H = desc.Height;
-
-		// Decode one depth sample. Skyrim SE kMAIN is R24G8_TYPELESS (D24_UNORM_S8): the low 24
-		// bits are the UNORM depth. Handle R32-float and R32G8X24 too, just in case. Skyrim uses
-		// reversed-Z (near=1, far/sky=0), so mapping depth->brightness gives near=bright naturally.
-		auto readDepth = [&](const std::uint8_t* row, UINT x) -> float {
-			switch (desc.Format) {
-			case DXGI_FORMAT_R24G8_TYPELESS:
-			case DXGI_FORMAT_D24_UNORM_S8_UINT:
-			case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
-				return static_cast<float>(reinterpret_cast<const std::uint32_t*>(row)[x] & 0x00FFFFFFu) / 16777215.0f;
-			case DXGI_FORMAT_R32_TYPELESS:
-			case DXGI_FORMAT_D32_FLOAT:
-			case DXGI_FORMAT_R32_FLOAT:
-				return reinterpret_cast<const float*>(row)[x];
-			case DXGI_FORMAT_R32G8X24_TYPELESS:
-			case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
-			case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
-				return reinterpret_cast<const float*>(row)[x * 2];  // [float depth][uint stencil]
-			default:
-				return 0.0f;
-			}
-		};
-
-		// Decode the whole buffer to floats once (also dumped raw for offline correlation).
-		static std::vector<float> depths;
-		depths.resize(static_cast<std::size_t>(W) * H);
-		float mn = FLT_MAX, mx = -FLT_MAX;
-		for (UINT y = 0; y < H; ++y) {
-			const auto* row = static_cast<const std::uint8_t*>(map.pData) + static_cast<std::size_t>(y) * map.RowPitch;
-			for (UINT x = 0; x < W; ++x) {
-				const float d = readDepth(row, x);
-				depths[static_cast<std::size_t>(y) * W + x] = d;
-				if (d > 0.0f && d < 1.0f) {
-					mn = std::min(mn, d);
-					mx = std::max(mx, d);
-				}
-			}
-		}
-		context->Unmap(staging.get(), 0);
-		const float range = (mx > mn) ? (mx - mn) : 1.0f;
-
-		// near = bright, matching the MOC PNG's convention (standard-Z: small d = near).
-		static std::vector<std::uint8_t> rgba;
-		rgba.resize(static_cast<std::size_t>(W) * H * 4);
-		for (std::size_t i = 0; i < depths.size(); ++i) {
-			const float        d = depths[i];
-			const std::uint8_t g = (d > 0.0f) ? static_cast<std::uint8_t>(255.0f * std::clamp(1.0f - (d - mn) / range, 0.0f, 1.0f)) : 0;
-			rgba[i * 4 + 0] = g;
-			rgba[i * 4 + 1] = g;
-			rgba[i * 4 + 2] = g;
-			rgba[i * 4 + 3] = 255;
-		}
-
-		// Raw dump: uint32 W, uint32 H, then W*H floats of z/w (standard [0,1]), top-down.
-		if (FILE* f = nullptr; _wfopen_s(&f, L"F:\\claudetmp\\moc_game_depth.bin", L"wb") == 0 && f) {
-			const std::uint32_t wh[2] = { W, H };
-			fwrite(wh, sizeof(wh), 1, f);
-			fwrite(depths.data(), sizeof(float), depths.size(), f);
-			fclose(f);
-		}
-
-		const DirectX::Image img{ W, H, DXGI_FORMAT_R8G8B8A8_UNORM,
-			static_cast<std::size_t>(W) * 4, static_cast<std::size_t>(W) * H * 4, rgba.data() };
-		const HRESULT hr = DirectX::SaveToWICFile(img, DirectX::WIC_FLAGS_NONE,
-			DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG), L"F:\\claudetmp\\moc_game_depth.png");
-		logger::info("[MOC][depth] saved moc_game_depth.png {}x{} fmt={} range=[{:.4g},{:.4g}] hr=0x{:08X}",
-			W, H, static_cast<int>(desc.Format), mn, mx, static_cast<std::uint32_t>(hr));
-	}
-
 	void Shutdown()
 	{
 		std::scoped_lock lock(g_cacheMutex);
@@ -1507,7 +1397,6 @@ namespace MOC
 		QuiesceBuilder();
 		std::this_thread::sleep_for(std::chrono::milliseconds(8));
 		DumpDepthImage();  // MOC occluder buffer -> moc_depth.png (+ raw .bin)
-		DumpGameDepth();   // game kMAIN depth -> moc_game_depth.png (+ raw .bin)
 	}
 
 	// -------------------------------------------------------------------------

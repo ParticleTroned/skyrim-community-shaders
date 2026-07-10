@@ -150,6 +150,8 @@ namespace MOC
 		std::atomic<std::uint64_t> g_culledSphere{ 0 };
 		std::atomic<std::uint64_t> g_treeTested{ 0 };
 		std::atomic<std::uint64_t> g_treeCulled{ 0 };
+		std::atomic<std::uint64_t> g_kickCounter{ 0 };
+		std::atomic<std::uint64_t> g_settleUntilKick{ 0 };
 		std::chrono::high_resolution_clock::time_point g_buildStart;
 
 		// Debug depth-buffer view: MOC's software depth rasterized to an RGBA8 texture
@@ -553,6 +555,59 @@ namespace MOC
 			}
 		}
 
+		// Terrain occluders, built from the decoded heightmap. The engine's land
+		// render meshes keep NO CPU-side raw index copy (rendererData->rawIndexData
+		// is null for every land quad in the grid -- measured), so the normal
+		// register/cache path can never rasterize terrain. Instead one mesh per
+		// cell is generated from LoadedLandData::heights (4 quadrants of 17x17
+		// samples, 128-unit grid step) and rasterized every kick. Verts are packed
+		// (x, y, 1.0f, z) to match the pool's VertexLayout(16,4,12).
+		struct LandOccluderMesh
+		{
+			std::vector<float>        verts;
+			std::vector<unsigned int> indices;
+		};
+		std::unordered_map<std::uint64_t, LandOccluderMesh> g_landCache;  // builder thread only
+		std::vector<const LandOccluderMesh*>                g_landReady;  // filled by gather, drawn next kick
+
+		LandOccluderMesh BuildLandMesh(const RE::TESObjectLAND::LoadedLandData* a_data, float a_worldX, float a_worldY)
+		{
+			LandOccluderMesh m;
+			m.verts.reserve(4u * 289u * 4u);
+			m.indices.reserve(4u * 16u * 16u * 6u);
+			// heights[] are CELL-LOCAL Z relative to the cell's height midpoint
+			// ((min+max)/2, stored at LoadedLandData+0x49C0) -- the engine's own
+			// consumers add it back (TESObjectLAND::GetNiPointHeight 0x14025B830:
+			// addss [loadedData+49C0h]; the render-mesh builder bakes it into the
+			// block node's local translation instead). IDA-verified 1.5.97.
+			const float zBase = *reinterpret_cast<const float*>(reinterpret_cast<const std::uint8_t*>(a_data) + 0x49C0);
+			for (int q = 0; q < 4; ++q) {
+				const float qx = a_worldX + static_cast<float>(q & 1) * 2048.0f;
+				const float qy = a_worldY + static_cast<float>(q >> 1) * 2048.0f;
+				const unsigned int base = static_cast<unsigned int>(m.verts.size() / 4u);
+				for (int row = 0; row < 17; ++row) {
+					for (int col = 0; col < 17; ++col) {
+						m.verts.push_back(qx + static_cast<float>(col) * 128.0f);
+						m.verts.push_back(qy + static_cast<float>(row) * 128.0f);
+						m.verts.push_back(1.0f);
+						// Small downward bias: keeps the occluder plane strictly conservative
+						// against LOD morphing / terrain-blending displacement.
+						m.verts.push_back(a_data->heights[q][row * 17 + col] + zBase - 16.0f);
+					}
+				}
+				for (unsigned int r = 0; r < 16; ++r) {
+					for (unsigned int c = 0; c < 16; ++c) {
+						const unsigned int i0 = base + r * 17u + c;
+						const unsigned int i1 = i0 + 1u;
+						const unsigned int i2 = i0 + 17u;
+						const unsigned int i3 = i2 + 1u;
+						m.indices.insert(m.indices.end(), { i0, i1, i2, i1, i3, i2 });
+					}
+				}
+			}
+			return m;
+		}
+
 		// Walk the ObjectLODRoot -> cell -> {LandNode, StaticNode} hierarchy (Nukem's
 		// layout). Heavily null-guarded so a layout mismatch degrades to "no occluders"
 		// (safe: an empty depth buffer occludes nothing, so everything stays visible).
@@ -744,35 +799,54 @@ namespace MOC
 				}
 			}
 
-			// Land pass: full-res terrain quads registered DIRECTLY from the TES grid
-			// (TES -> cell -> cellLand -> loadedData->geom). The attached land blocks
-			// hang under the unnamed cell children [0]/[1] that the container walk
-			// deliberately skips, so terrain never entered the buffer ("see-through
-			// floor"). Land is a plain BSTriShape with a readable slot-0 position
-			// stream, so it goes through the normal register/cache/raster path.
+			// Land pass: rasterize terrain from heightmap-built meshes (see
+			// LandOccluderMesh above). Cell selection = distance gate on the cell
+			// center only; NO frustum gate (the cell the camera stands in has its
+			// center behind the view and must still occlude the foreground).
+			g_landReady.clear();
+			if (g_landCache.size() > 512)
+				g_landCache.clear();  // travel eviction; rebuilt on demand
 			if (auto* tes = RE::TES::GetSingleton()) {
-				if (auto* grid = tes->gridCells) {
+				// land3DAttached is the engine's own "all grid land is attached" flag --
+				// the strongest available guard against reading half-built LoadedLandData.
+				if (auto* grid = tes->gridCells; grid && grid->land3DAttached) {
 					for (std::uint32_t gx = 0; gx < grid->length; ++gx) {
 						for (std::uint32_t gy = 0; gy < grid->length; ++gy) {
 							auto* cell = grid->GetCell(gx, gy);
-							if (!cell)
+							// Fully-attached cells only: during the post-load attach window
+							// (after the LoadingMenu closes but before the scene settles)
+							// half-built cells carry garbage land pointers -- reading
+							// loadedData there crashed the builder (AV, crash-16-11-27).
+							if (!cell || !cell->IsAttached())
 								continue;
 							auto* landForm = cell->GetRuntimeData().cellLand;
 							if (!landForm || !landForm->loadedData)
 								continue;
-							for (int q = 0; q < 4; ++q) {
-								auto* g = landForm->loadedData->geom[q].get();
-								// Only blocks actually attached to the scene (detached
-								// spares have no parent and a zero bound).
-								if (!g || !g->parent || g->worldBound.radius <= 0.0f)
-									continue;
-								if (CullObject(g))
-									continue;
-								const float d1 = g->world.translate.x - g_posAdjust.x;
-								const float d2 = g->world.translate.y - g_posAdjust.y;
-								if (((d1 * d1) + (d2 * d2)) < (OccluderMaxDistance * OccluderMaxDistance))
-									RegisterGeometry(g);
+							auto* ext = cell->GetCoordinates();
+							if (!ext)
+								continue;
+							const float d1 = (ext->worldX + 2048.0f) - g_posAdjust.x;
+							const float d2 = (ext->worldY + 2048.0f) - g_posAdjust.y;
+							if (((d1 * d1) + (d2 * d2)) >= (OccluderMaxDistance * OccluderMaxDistance))
+								continue;
+							const std::uint64_t key =
+								(static_cast<std::uint64_t>(static_cast<std::uint32_t>(ext->cellX)) << 32) |
+								static_cast<std::uint32_t>(ext->cellY);
+							auto it = g_landCache.find(key);
+							if (it == g_landCache.end()) {
+								// One-shot decode diagnostic: height samples vs the camera and
+								// the engine's own extents -- catches wrong scale/offset fast.
+								static std::atomic<int> s_hdec{ 4 };
+								if (s_hdec.fetch_sub(1, std::memory_order_relaxed) > 0)
+									logger::info("[MOC][hdec] cell=({},{}) world=({:.0f},{:.0f}) h[0][0]={:.1f} h[0][144]={:.1f} h[3][288]={:.1f} extents=({:.1f},{:.1f}) camZ={:.1f}",
+										ext->cellX, ext->cellY, ext->worldX, ext->worldY,
+										landForm->loadedData->heights[0][0], landForm->loadedData->heights[0][144],
+										landForm->loadedData->heights[3][288],
+										landForm->loadedData->heightExtents.x, landForm->loadedData->heightExtents.y,
+										g_posAdjust.z);
+								it = g_landCache.emplace(key, BuildLandMesh(landForm->loadedData, ext->worldX, ext->worldY)).first;
 							}
+							g_landReady.push_back(&it->second);
 						}
 					}
 				}
@@ -813,6 +887,22 @@ namespace MOC
 					for (auto& e : g_readyList) {
 						RasterizeOccluder(e.geometry);
 						++enqueued;
+					}
+					// Terrain heightmap meshes: world-space verts, so camera-relative
+					// is a pure translation. BACKFACE_NONE = winding-proof; near clip
+					// required (the camera stands ON these triangles).
+					if (!g_landReady.empty()) {
+						const XMMATRIX rel = XMMatrixTranslation(-g_posAdjust.x, -g_posAdjust.y, -g_posAdjust.z);
+						const XMMATRIX mvp = XMMatrixMultiply(rel, g_viewProj);
+						g_pool->SetMatrix(reinterpret_cast<const float*>(&mvp));
+						for (const auto* lm : g_landReady) {
+							g_pool->RenderTriangles(
+								lm->verts.data(), lm->indices.data(),
+								static_cast<int>(lm->indices.size() / 3u),
+								MaskedOcclusionCulling::BACKFACE_NONE,
+								MaskedOcclusionCulling::CLIP_PLANE_ALL);
+							++enqueued;
+						}
 					}
 					g_lastOccluderCount = enqueued;
 				} else {
@@ -879,12 +969,17 @@ namespace MOC
 			// fine; the cached verts/indices are persistent, satisfying the pool's
 			// keep-alive-until-flush requirement.
 			g_pool->SetMatrix(reinterpret_cast<const float*>(&worldViewProj));
+			// CLIP_PLANE_ALL, not SIDES: without near-plane clipping every triangle
+			// crossing the near plane is dropped instead of clipped -- which is exactly
+			// the terrain under/ahead of the camera (and interior walls you stand
+			// against). That was the "ground is black at the bottom of the buffer"
+			// hole: mid/far terrain rasterized, the near rows vanished.
 			g_pool->RenderTriangles(
 				verts,
 				indices.Data,
 				static_cast<int>(indices.Count / 3),
 				winding,
-				MaskedOcclusionCulling::CLIP_PLANE_SIDES);
+				MaskedOcclusionCulling::CLIP_PLANE_ALL);
 			return indices.Count / 3;
 		}
 	}  // namespace
@@ -1311,7 +1406,16 @@ namespace MOC
 		// worldspace transition). The loading screen covers the teardown window; skipping
 		// builds there costs nothing (nothing worth culling renders) and starves the
 		// builder before the graph is torn down.
-		if (auto* ui = RE::UI::GetSingleton(); ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME))
+		if (auto* ui = RE::UI::GetSingleton(); ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)) {
+			g_settleUntilKick.store(g_kickCounter.load(std::memory_order_relaxed) + 240, std::memory_order_relaxed);
+			return false;
+		}
+		// Post-load settle window: the LoadingMenu closes BEFORE the scene finishes
+		// attaching (cells stream in for a couple of seconds); a gather in that window
+		// walks half-built cells -- two load-time crashes (16:11 AV in the land pass,
+		// 16:20 silent death mid cell-census). ~240 kicks =~ 1-2s of no culling after
+		// every load, invisible to the player.
+		if (g_kickCounter.fetch_add(1, std::memory_order_relaxed) < g_settleUntilKick.load(std::memory_order_relaxed))
 			return false;
 
 		// The matrices always come from the RENDER camera: the cull camera's frustum is

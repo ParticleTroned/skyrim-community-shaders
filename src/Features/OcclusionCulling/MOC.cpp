@@ -79,6 +79,7 @@ namespace MOC
 	// given profile, independent of MOC's actual yield. BREAKS THE IMAGE -- probe only.
 	std::int32_t DiagForceCullPercent = 0;
 	bool CullTreeLODGroups = true;
+	bool TreeOccluders = true;
 
 	namespace
 	{
@@ -513,8 +514,12 @@ namespace MOC
 				return;
 
 			if (RE::NiNode* node = a_object->AsNode()) {
-				// Don't descend into leaf anim nodes (trees, bushes, alpha plants).
-				if (!IsLeafAnimNode(node)) {
+				// Trees/bushes (BSLeafAnimNode subtrees): descend when TreeOccluders is
+				// on -- their OPAQUE parts (trunks, solid branches) are legitimate
+				// occluders; every alpha-tested/blended leaf card is rejected by the
+				// per-geometry alpha gate below. With the option off, skip the whole
+				// subtree (the pre-tree-occluder behavior).
+				if (TreeOccluders || !IsLeafAnimNode(node)) {
 					auto& children = node->GetChildren();
 					for (std::uint16_t i = 0; i < children.capacity(); ++i) {
 						if (auto* child = children[i].get())
@@ -532,6 +537,13 @@ namespace MOC
 							geometry->name.c_str(), static_cast<int>(geoType), geometry->worldBound.radius,
 							geometry->world.translate.x, geometry->world.translate.y, geometry->world.translate.z);
 				}
+				// OPAQUE-ONLY occluders: alpha-tested textures have holes and alpha-
+				// blended surfaces are translucent -- rasterizing either as solid depth
+				// would occlude things the player can genuinely see through them. This
+				// also covers every leaf/branch card of the tree subtrees enabled above.
+				if (auto* alpha = geometry->GetGeometryRuntimeData().alphaProperty.get();
+					alpha && (alpha->GetAlphaTesting() || alpha->GetAlphaBlending()))
+					return;
 				if (geometry->worldBound.radius > OccluderMinLeafSize) {
 					const float d1 = geometry->world.translate.x - g_posAdjust.x;
 					const float d2 = geometry->world.translate.y - g_posAdjust.y;

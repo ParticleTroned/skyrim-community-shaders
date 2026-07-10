@@ -301,6 +301,9 @@ void OcclusionCulling::PostPostLoad()
 	// CS_MOC_TREE_LOD=0/1: distant-tree LOD group culling override for A/B runs.
 	if (GetEnvironmentVariableA("CS_MOC_TREE_LOD", buf, sizeof(buf)) && buf[0])
 		settings.CullTreeLOD = buf[0] == '1';
+	// CS_MOC_TREE_OCCLUDERS=0/1: opaque tree parts as occluders, override for A/B runs.
+	if (GetEnvironmentVariableA("CS_MOC_TREE_OCCLUDERS", buf, sizeof(buf)) && buf[0])
+		settings.TreeOccluders = buf[0] == '1';
 	// CS_MOC_VALIDATE=1: engine-cull agreement instrumentation (see Process1_Impl).
 	if (GetEnvironmentVariableA("CS_MOC_VALIDATE", buf, sizeof(buf)) && buf[0] == '1')
 		g_validateMode = true;
@@ -382,6 +385,7 @@ void OcclusionCulling::SyncSettingsToMOC()
 	MOC::ExclusiveOcclusion = settings.ExclusiveOcclusion;
 	MOC::OccluderMinLeafSize = settings.OccluderMinLeafSize;
 	MOC::CullTreeLODGroups = settings.CullTreeLOD;
+	MOC::TreeOccluders = settings.TreeOccluders;
 	MOC::DiagForceCullPercent = diagForceCullPercent;  // env-only diagnostic, not persisted
 }
 
@@ -452,6 +456,7 @@ void OcclusionCulling::DrawSettings()
 
 	changed |= ImGui::Checkbox(T("feature.occlusion_culling.exclusive", "Exclusive Occlusion (replace vanilla planes)"), &settings.ExclusiveOcclusion);
 	changed |= ImGui::Checkbox(T("feature.occlusion_culling.tree_lod", "Cull Distant Tree LOD"), &settings.CullTreeLOD);
+	changed |= ImGui::Checkbox(T("feature.occlusion_culling.tree_occluders", "Opaque Tree Parts as Occluders"), &settings.TreeOccluders);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("feature.occlusion_culling.exclusive_tooltip",
 			"Neutralize the vanilla occlusion planes during the main cull so MOC is the only occlusion mechanism. Experimental; view-frustum culling is unaffected."));
@@ -504,6 +509,8 @@ void OcclusionCulling::LoadSettings(json& o_json)
 		settings.OccluderMinLeafSize = o_json["OccluderMinLeafSize"];
 	if (o_json["CullTreeLOD"].is_boolean())
 		settings.CullTreeLOD = o_json["CullTreeLOD"];
+	if (o_json["TreeOccluders"].is_boolean())
+		settings.TreeOccluders = o_json["TreeOccluders"];
 
 	SyncSettingsToMOC();
 }
@@ -521,6 +528,7 @@ void OcclusionCulling::SaveSettings(json& o_json)
 	o_json["ExclusiveOcclusion"] = settings.ExclusiveOcclusion;
 	o_json["OccluderMinLeafSize"] = settings.OccluderMinLeafSize;
 	o_json["CullTreeLOD"] = settings.CullTreeLOD;
+	o_json["TreeOccluders"] = settings.TreeOccluders;
 }
 
 void OcclusionCulling::RestoreDefaultSettings()

@@ -43,6 +43,7 @@ struct OcclusionCulling : public Feature
 		// Neutralize vanilla occlusion planes: MOC is the only occlusion mechanism.
 		bool ExclusiveOcclusion = false;
 		bool CullTreeLOD = true;
+		bool TreeOccluders = true;
 		// Gather leaf gate: occluder meshes smaller than this are not rasterized.
 		float OccluderMinLeafSize = 100.0f;
 	};

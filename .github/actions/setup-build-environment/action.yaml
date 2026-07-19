@@ -142,6 +142,34 @@ runs:
               if (Test-Path $cacheFile) {
                 $content = Get-Content $cacheFile -Raw
                 $stale = $false
+                $allPresets = (Get-Content "CMakePresets.json" -Raw | ConvertFrom-Json).configurePresets
+
+                function Resolve-PresetSetting(
+                  [string]$name,
+                  [string]$settingName,
+                  [bool]$isCacheVariable = $false,
+                  [hashtable]$visited = $null
+                ) {
+                  if (-not $name) { return $null }
+                  if ($null -eq $visited) { $visited = @{} }
+                  if ($visited.ContainsKey($name)) { return $null }
+                  $visited[$name] = $true
+
+                  $preset = $allPresets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+                  if (-not $preset) { return $null }
+
+                  $value = if ($isCacheVariable) { $preset.cacheVariables.$settingName } else { $preset.$settingName }
+                  if ($null -ne $value) {
+                    if ($null -ne $value.value) { return $value.value }
+                    return $value
+                  }
+
+                  foreach ($parent in @($preset.inherits)) {
+                    $resolved = Resolve-PresetSetting $parent $settingName $isCacheVariable $visited
+                    if ($null -ne $resolved) { return $resolved }
+                  }
+                  return $null
+                }
 
                 # Check drive letter mismatch
                 $expected = (Resolve-Path .).Path.Substring(0,1)
@@ -156,20 +184,7 @@ runs:
                 # configure preset, following the inherits chain.
                 if ($content -match 'CMAKE_GENERATOR:INTERNAL=(.+)') {
                   $cachedGenerator = $Matches[1].Trim()
-                  $allPresets = (Get-Content "CMakePresets.json" -Raw | ConvertFrom-Json).configurePresets
-                  function Resolve-PresetGenerator([string]$name, [int]$depth = 0) {
-                    if ($depth -gt 10) { return $null }
-                    $p = $allPresets | Where-Object { $_.name -eq $name } | Select-Object -First 1
-                    if (-not $p) { return $null }
-                    if ($p.generator) { return $p.generator }
-                    $parents = if ($p.inherits -is [array]) { $p.inherits } else { @($p.inherits) }
-                    foreach ($parent in $parents) {
-                      $gen = Resolve-PresetGenerator $parent ($depth + 1)
-                      if ($gen) { return $gen }
-                    }
-                    return $null
-                  }
-                  $expectedGenerator = Resolve-PresetGenerator "${{ inputs.cmake-preset }}"
+                  $expectedGenerator = Resolve-PresetSetting "${{ inputs.cmake-preset }}" "generator"
                   if ($expectedGenerator -and $expectedGenerator -ne $cachedGenerator) {
                     Write-Host "❌ Generator mismatch: cached='$cachedGenerator', expected='$expectedGenerator'"
                     $stale = $true
@@ -181,21 +196,7 @@ runs:
                 # find_library() results can still point at the old one.
                 if ($content -match 'VCPKG_TARGET_TRIPLET:\w+=(.+)') {
                   $cachedTriplet = $Matches[1].Trim()
-                  $allPresets = (Get-Content "CMakePresets.json" -Raw | ConvertFrom-Json).configurePresets
-                  function Resolve-PresetTriplet([string]$name, [int]$depth = 0) {
-                    if ($depth -gt 10) { return $null }
-                    $p = $allPresets | Where-Object { $_.name -eq $name } | Select-Object -First 1
-                    if (-not $p) { return $null }
-                    $tv = $p.cacheVariables.VCPKG_TARGET_TRIPLET
-                    if ($tv) { if ($tv.value) { return $tv.value } else { return $tv } }
-                    $parents = if ($p.inherits -is [array]) { $p.inherits } else { @($p.inherits) }
-                    foreach ($parent in $parents) {
-                      $t = Resolve-PresetTriplet $parent ($depth + 1)
-                      if ($t) { return $t }
-                    }
-                    return $null
-                  }
-                  $expectedTriplet = Resolve-PresetTriplet "${{ inputs.cmake-preset }}"
+                  $expectedTriplet = Resolve-PresetSetting "${{ inputs.cmake-preset }}" "VCPKG_TARGET_TRIPLET" $true
                   if ($expectedTriplet -and $expectedTriplet -ne $cachedTriplet) {
                     Write-Host "vcpkg triplet mismatch: cached='$cachedTriplet', expected='$expectedTriplet'"
                     $stale = $true

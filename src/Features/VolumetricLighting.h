@@ -57,6 +57,11 @@ public:
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void ApplyPerformanceSettings() override
+	{
+		if (initialised)
+			SetupVL();
+	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.ExteriorEnabled || settings.InteriorEnabled; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override

@@ -114,6 +114,7 @@ public:
 		(void)a_advanced;
 		DrawSettings();
 	}
+	virtual void ApplyPerformanceSettings() {}
 	virtual json CapturePerformanceSettingsState() const
 	{
 		json state;

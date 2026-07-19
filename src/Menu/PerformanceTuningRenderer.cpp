@@ -443,6 +443,7 @@ namespace
 
 		try {
 			feature->LoadSettings(currentSettings);
+			feature->ApplyPerformanceSettings();
 			anyChanged = true;
 		} catch (const std::exception& e) {
 			logger::warn("Failed to restore Performance Tuning user defaults for {}: {}", feature->GetDisplayName(), e.what());

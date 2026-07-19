@@ -661,8 +661,7 @@ void Upscaling::DrawSettings()
 		}
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
-			if (ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f"))
-				InvalidateFrameScopedUpscalingState();
+			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
 				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
@@ -924,7 +923,6 @@ void Upscaling::DrawEssentialSettings()
 		*currentUpscaleMode = static_cast<uint32_t>(selected.method);
 		if (selected.method == UpscaleMethod::kFSR)
 			settings.fsr4RuntimeEnable = selected.useRuntimeFsr4;
-		InvalidateFrameScopedUpscalingState();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted(renderDocBlocksUpscaling ? "Upscaling is disabled while RenderDoc capture is active." : "Selects the upscaling backend.");
@@ -939,14 +937,12 @@ void Upscaling::DrawEssentialSettings()
 	int qualityMode = static_cast<int>(settings.qualityMode);
 	if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), qualityLabel.c_str())) {
 		settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
-		InvalidateFrameScopedUpscalingState();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Controls the internal render scale and quality level.");
 
 	if (method == UpscaleMethod::kFSR) {
-		if (ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f"))
-			InvalidateFrameScopedUpscalingState();
+		ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
 	} else if (method == UpscaleMethod::kDLSS) {
 		ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 	}

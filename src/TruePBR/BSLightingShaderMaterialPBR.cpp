@@ -23,7 +23,9 @@ RE::BSShaderMaterial* BSLightingShaderMaterialPBR::Create()
 	// Must use regular heap (not scrap heap like Make()). BSLightingShaderProperty::LinkObject
 	// calls ScrapHeap::Free() after LinkMaterial — if Create() used scrap heap, it would pop
 	// the canonical off the stack, causing immediate use-after-free in property->material.
-	return new BSLightingShaderMaterialPBR();
+	auto* material = new BSLightingShaderMaterialPBR();
+	All.try_emplace(material, MaterialExtensions{});
+	return material;
 }
 
 void BSLightingShaderMaterialPBR::CopyMembers(RE::BSShaderMaterial* that)
@@ -50,7 +52,10 @@ void BSLightingShaderMaterialPBR::CopyMembers(RE::BSShaderMaterial* that)
 	featuresTexture0 = pbrThat->featuresTexture0;
 	featuresTexture1 = pbrThat->featuresTexture1;
 
-	All[this] = All[pbrThat];
+	if (auto it = All.find(pbrThat); it != All.end())
+		All[this] = it->second;
+	else
+		All[this] = MaterialExtensions{};
 }
 
 std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)

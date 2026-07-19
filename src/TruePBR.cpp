@@ -624,6 +624,78 @@ struct ExtendedRendererState
 	}
 } extendedRendererState;
 
+namespace
+{
+	bool IsLikelyValidPointer(const void* pointer, std::size_t alignment = alignof(void*))
+	{
+		const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+		constexpr std::uintptr_t MinUserModeAddress = 0x10000;
+		constexpr std::uintptr_t MaxUserModeAddress = 0x00007FFFFFFFFFFFULL;
+		return address >= MinUserModeAddress && address <= MaxUserModeAddress && (address & (alignment - 1)) == 0;
+	}
+
+	const char* GetGeometryName(const RE::BSGeometry* geometry)
+	{
+		return geometry && geometry->name.c_str() ? geometry->name.c_str() : "<null>";
+	}
+
+	BSLightingShaderMaterialPBR* TryGetRegisteredPBRMaterial(RE::BSShaderProperty* property, RE::BSGeometry* geometry)
+	{
+		if (property == nullptr || !property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting))
+			return nullptr;
+
+		auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
+		if (!IsLikelyValidPointer(material)) {
+			static bool loggedInvalidMaterialAddress = false;
+			if (!loggedInvalidMaterialAddress) {
+				loggedInvalidMaterialAddress = true;
+				logger::error("[TruePBR] Invalid material pointer {:X} (geometry: {}) - keeping original render state",
+					reinterpret_cast<std::uintptr_t>(material), GetGeometryName(geometry));
+			}
+			return nullptr;
+		}
+
+		if (BSLightingShaderMaterialPBR::All.find(material) == BSLightingShaderMaterialPBR::All.end()) {
+			static bool loggedUnknownPBRMaterial = false;
+			if (!loggedUnknownPBRMaterial) {
+				loggedUnknownPBRMaterial = true;
+				logger::warn("[TruePBR] Ignoring unregistered vertex-lighting material on geometry {} to avoid invalid PBR casts", GetGeometryName(geometry));
+			}
+			return nullptr;
+		}
+		return material;
+	}
+
+	BSLightingShaderMaterialPBRLandscape* TryGetRegisteredPBRLandscapeMaterial(RE::BSShaderProperty* property, RE::BSGeometry* geometry)
+	{
+		if (property == nullptr ||
+			!property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) ||
+			!property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
+			return nullptr;
+
+		auto* material = static_cast<BSLightingShaderMaterialPBRLandscape*>(property->material);
+		if (!IsLikelyValidPointer(material)) {
+			static bool loggedInvalidLandscapeMaterialAddress = false;
+			if (!loggedInvalidLandscapeMaterialAddress) {
+				loggedInvalidLandscapeMaterialAddress = true;
+				logger::error("[TruePBR] Invalid landscape material pointer {:X} (geometry: {}) - keeping original render state",
+					reinterpret_cast<std::uintptr_t>(material), GetGeometryName(geometry));
+			}
+			return nullptr;
+		}
+
+		if (BSLightingShaderMaterialPBRLandscape::All.find(material) == BSLightingShaderMaterialPBRLandscape::All.end()) {
+			static bool loggedUnknownPBRLandscapeMaterial = false;
+			if (!loggedUnknownPBRLandscapeMaterial) {
+				loggedUnknownPBRLandscapeMaterial = true;
+				logger::warn("[TruePBR] Ignoring unregistered landscape PBR material on geometry {} to avoid invalid casts", GetGeometryName(geometry));
+			}
+			return nullptr;
+		}
+		return material;
+	}
+}
+
 struct BSLightingShaderProperty_LoadBinary
 {
 	static void thunk(RE::BSLightingShaderProperty* property, RE::NiStream& stream)
@@ -732,14 +804,23 @@ struct BSLightingShaderProperty_GetRenderPasses
 		if (renderPasses == nullptr) {
 			return renderPasses;
 		}
+		if (property == nullptr)
+			return renderPasses;
+		if (!IsLikelyValidPointer(renderPasses, alignof(RE::BSShaderProperty::RenderPassArray))) {
+			static bool loggedInvalidRenderPassAddress = false;
+			if (!loggedInvalidRenderPassAddress) {
+				loggedInvalidRenderPassAddress = true;
+				logger::error("[TruePBR] Invalid GetRenderPasses pointer {:X} (geometry: {}) - returning null for safety (prevents known cold-breath CTD path)",
+					reinterpret_cast<std::uintptr_t>(renderPasses), GetGeometryName(geometry));
+			}
+			return nullptr;
+		}
 
 		const auto issEnabledAndInteriorWithSun = globals::features::interiorSun.loaded && globals::features::interiorSun.isInteriorWithSun;
 
-		bool isPbr = false;
-
-		if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) && (property->material->GetFeature() == RE::BSShaderMaterial::Feature::kDefault || property->material->GetFeature() == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend)) {
-			isPbr = true;
-		}
+		auto* pbrLandscapeMaterial = TryGetRegisteredPBRLandscapeMaterial(property, geometry);
+		auto* pbrMaterial = pbrLandscapeMaterial == nullptr ? TryGetRegisteredPBRMaterial(property, geometry) : nullptr;
+		const bool isPbr = pbrLandscapeMaterial != nullptr || pbrMaterial != nullptr;
 
 		auto currentPass = renderPasses->head;
 		while (currentPass != nullptr) {
@@ -752,14 +833,12 @@ struct BSLightingShaderProperty_GetRenderPasses
 				if (isPbr) {
 					lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr);
 					lightingFlags &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Specular);
-					if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
-						auto* material = static_cast<BSLightingShaderMaterialPBRLandscape*>(property->material);
-						if (material->HasGlint()) {
+					if (pbrLandscapeMaterial != nullptr) {
+						if (pbrLandscapeMaterial->HasGlint()) {
 							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
 						}
-					} else {
-						auto* material = static_cast<BSLightingShaderMaterialPBR*>(property->material);
-						if (material->glintParameters.enabled || (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kProjectedUV) && material->projectedMaterialGlintParameters.enabled)) {
+					} else if (pbrMaterial != nullptr) {
+						if (pbrMaterial->glintParameters.enabled || (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kProjectedUV) && pbrMaterial->projectedMaterialGlintParameters.enabled)) {
 							lightingFlags |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
 						}
 					}
@@ -1383,7 +1462,7 @@ struct TESBoundObject_Clone3D
 					if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get())) {
 						if (shaderProperty->GetMaterialType() == RE::BSShaderMaterial::Type::kLighting &&
 							shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting)) {
-							if (auto* material = static_cast<BSLightingShaderMaterialPBR*>(shaderProperty->material)) {
+							if (auto* material = TryGetRegisteredPBRMaterial(shaderProperty, geometry)) {
 								auto& ext = BSLightingShaderMaterialPBR::All[material];
 								const auto prevOwnerRefID = ext.lastOwnerRefFormID;
 
@@ -1403,7 +1482,7 @@ struct TESBoundObject_Clone3D
 								BSLightingShaderMaterialPBR* targetMat = material;
 
 								if (wouldContaminate) {
-									auto* freshMat = BSLightingShaderMaterialPBR::Make();
+									auto* freshMat = static_cast<BSLightingShaderMaterialPBR*>(material->Create());
 									if (freshMat) {
 										freshMat->CopyMembers(material);
 										shaderProperty->material = freshMat;

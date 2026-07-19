@@ -16,6 +16,54 @@
 namespace
 {
 	constexpr UINT NVIDIA_VENDOR_ID = 0x10DE;
+	void* s_streamlineDllDirectoryCookie = nullptr;
+
+	void EnsureStreamlineDllDirectory(const std::filesystem::path& a_pluginDir)
+	{
+		if (s_streamlineDllDirectoryCookie)
+			return;
+
+		auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+		if (!kernel32) {
+			logger::warn("[Streamline] Could not get kernel32 module while preparing DLL search path");
+			return;
+		}
+
+		using AddDllDirectoryFn = void*(WINAPI*)(PCWSTR);
+		auto addDllDirectory = reinterpret_cast<AddDllDirectoryFn>(GetProcAddress(kernel32, "AddDllDirectory"));
+		if (!addDllDirectory) {
+			logger::warn("[Streamline] AddDllDirectory is unavailable; interposer dependency discovery will rely on the DLL load directory and default DLL directories");
+			return;
+		}
+
+		s_streamlineDllDirectoryCookie = addDllDirectory(a_pluginDir.c_str());
+		if (!s_streamlineDllDirectoryCookie) {
+			logger::warn(
+				"[Streamline] Failed to add Streamline DLL directory {} (error {})",
+				stl::utf16_to_utf8(a_pluginDir.wstring()).value_or("<unknown>"),
+				GetLastError());
+		}
+	}
+
+	HMODULE LoadStreamlineDll(const std::filesystem::path& a_path, DWORD& a_error)
+	{
+		a_error = ERROR_SUCCESS;
+
+		constexpr DWORD kLoadFlags =
+			LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+			LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+			LOAD_LIBRARY_SEARCH_USER_DIRS;
+
+		auto module = LoadLibraryExW(a_path.c_str(), nullptr, kLoadFlags);
+		if (module)
+			return module;
+
+		a_error = GetLastError();
+		logger::warn("[Streamline] LoadLibraryEx failed for {} with error {}",
+			stl::utf16_to_utf8(a_path.wstring()).value_or("<unknown>"),
+			a_error);
+		return nullptr;
+	}
 
 	bool IsHDRDLSSInputFormat(DXGI_FORMAT a_format)
 	{
@@ -167,10 +215,16 @@ void Streamline::LoadInterposer()
 {
 	triedInitialization = true;
 
-	std::wstring interposerPath = std::wstring(Streamline::PluginDir) + L"\\sl.interposer.dll";
-	interposer = LoadLibraryW(interposerPath.c_str());
+	const std::filesystem::path pluginDir = std::filesystem::path(Streamline::PluginDir);
+	std::error_code pluginPathError;
+	auto pluginDirAbsolute = std::filesystem::absolute(pluginDir, pluginPathError);
+	if (pluginPathError)
+		pluginDirAbsolute = pluginDir;
+	const std::filesystem::path interposerPath = pluginDirAbsolute / L"sl.interposer.dll";
+	EnsureStreamlineDllDirectory(pluginDirAbsolute);
+	DWORD errorCode = ERROR_SUCCESS;
+	interposer = LoadStreamlineDll(interposerPath, errorCode);
 	if (interposer == nullptr) {
-		DWORD errorCode = GetLastError();
 		logger::info("[Streamline] Failed to load interposer: Error Code {0:x}", errorCode);
 		return;
 	} else {
@@ -178,8 +232,7 @@ void Streamline::LoadInterposer()
 	}
 
 	// Dynamically log all DLL versions in the Streamline plugin directory
-	std::filesystem::path pluginDir = std::filesystem::path(Streamline::PluginDir);
-	Streamline::dllVersions = Util::EnumerateDllVersions(pluginDir);
+	Streamline::dllVersions = Util::EnumerateDllVersions(pluginDirAbsolute);
 	for (const auto& [name, versionStr] : Streamline::dllVersions)
 		logger::info("[Streamline] {} version: {}", name, versionStr);
 
@@ -207,10 +260,6 @@ void Streamline::LoadInterposer()
 	}
 	pref.logMessageCallback = LoggingCallback;
 	pref.showConsole = false;
-	std::error_code pluginPathError;
-	auto pluginDirAbsolute = std::filesystem::absolute(std::filesystem::path(Streamline::PluginDir), pluginPathError);
-	if (pluginPathError)
-		pluginDirAbsolute = std::filesystem::path(Streamline::PluginDir);
 	static std::wstring pluginDirAbsoluteW;
 	pluginDirAbsoluteW = pluginDirAbsolute.wstring();
 	static const wchar_t* pluginPaths[1]{};

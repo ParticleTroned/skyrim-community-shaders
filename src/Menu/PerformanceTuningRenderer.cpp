@@ -869,6 +869,8 @@ namespace
 				"Comparison: %s - %s",
 				GetFeatureCostComparisonLabel(feature, state),
 				GetFeatureCostComparisonDetails(feature));
+			ImGui::TextWrapped(
+				"Results depend on the current scene. Measure features where their inputs are active, such as Grass Collision where grass is visible or Screen Space Shadows under relevant lighting.");
 		}
 		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
 			ImGui::SameLine();

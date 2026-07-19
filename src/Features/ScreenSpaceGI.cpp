@@ -44,6 +44,7 @@ namespace
 		a_settings.ResolutionMode = 0;
 		a_settings.EnableBlur = true;
 		a_settings.EnableGI = false;
+		a_settings.EnableExperimentalSpecularGI = false;
 	}
 
 	bool IsAOOnlyPreset(const ScreenSpaceGI::Settings& a_settings)
@@ -52,7 +53,8 @@ namespace
 		       a_settings.NumSteps == 6 &&
 		       a_settings.ResolutionMode == 0 &&
 		       a_settings.EnableBlur &&
-		       !a_settings.EnableGI;
+		       !a_settings.EnableGI &&
+		       !a_settings.EnableExperimentalSpecularGI;
 	}
 
 	bool DrawResolutionModeSelector(const char* a_tableId, int& a_resolutionMode)

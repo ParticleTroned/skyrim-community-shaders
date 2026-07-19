@@ -387,7 +387,7 @@ namespace
 		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
 		settings.streamlineLogLevel = std::min<uint>(settings.streamlineLogLevel, 2u);
 		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, 0.0f);
-		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, 0.0f);
+		settings.sharpnessDLSS = ClampFiniteUnitRange(settings.sharpnessDLSS, Upscaling::kDefaultDLSSSharpness);
 		if (!std::isfinite(settings.reflexFPSLimit))
 			settings.reflexFPSLimit = 60.0f;
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);

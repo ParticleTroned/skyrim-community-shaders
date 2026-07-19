@@ -63,6 +63,7 @@ public:
 	static constexpr uint32_t kDLSSPresetF = 4;
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
+	static constexpr float kDefaultDLSSSharpness = 0.9f;
 
 	static constexpr float GetQualityModeResolutionScale(uint32_t a_qualityMode)
 	{
@@ -96,7 +97,7 @@ public:
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
-		float sharpnessDLSS = 0.0f;
+		float sharpnessDLSS = kDefaultDLSSSharpness;
 		bool fsr4RuntimeEnable = true;
 		bool reflexLowLatencyMode = true;
 		bool reflexLowLatencyBoost = false;

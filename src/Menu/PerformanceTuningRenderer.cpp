@@ -866,6 +866,8 @@ namespace
 			return "particle lights, point-light contact shadows, and particle contact shadows are switched off.";
 		if (shortName == "DynamicCubemaps")
 			return "screen-space reflections, dynamic cubemap cadence, and low-visibility cubemap throttle are switched off.";
+		if (shortName == "Skylighting")
+			return "Skylighting is switched off, so probe updates stop and ambient/reflection occlusion falls back to the unoccluded path.";
 		if (shortName == "TerrainBlending")
 			return "Terrain Blending is switched off.";
 		if (shortName == "TerrainShadows")

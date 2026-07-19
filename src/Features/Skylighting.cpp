@@ -4,16 +4,42 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+namespace
+{
+	void ApplySkylightingRuntimeEnabledChange(Skylighting& a_skylighting, bool a_previousEnabled)
+	{
+		if (a_previousEnabled == a_skylighting.settings.EnableSkylighting)
+			return;
+
+		a_skylighting.inOcclusion = false;
+		a_skylighting.ResetSkylighting();
+	}
+
+	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
+	{
+		const bool previousEnabled = a_skylighting.settings.EnableSkylighting;
+		if (ImGui::Checkbox("Enable Skylighting", &a_skylighting.settings.EnableSkylighting))
+			ApplySkylightingRuntimeEnabledChange(a_skylighting, previousEnabled);
+
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Runtime-safe toggle. Keeps shaders and hooks loaded, but disables Skylighting updates and shading until re-enabled.");
+		}
+	}
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Skylighting::Settings,
 	MaxZenith,
 	MinDiffuseVisibility,
 	MinSpecularVisibility,
+	EnableSkylighting,
 	IncludeMarkedRoofOccluders)
 
 void Skylighting::LoadSettings(json& o_json)
 {
+	const bool previousEnabled = settings.EnableSkylighting;
 	settings = o_json;
+	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
 }
 
 void Skylighting::SaveSettings(json& o_json)
@@ -23,19 +49,61 @@ void Skylighting::SaveSettings(json& o_json)
 
 void Skylighting::RestoreDefaultSettings()
 {
+	const bool previousEnabled = settings.EnableSkylighting;
 	settings = {};
+	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
 }
 
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
+	if (!context || !texAccumFramesArray || !texAccumFramesArray->uav.get()) {
+		queuedResetSkylighting = true;
+		return;
+	}
+
 	UINT clr[1] = { 0 };
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
 	queuedResetSkylighting = false;
 }
 
+void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	const bool previousEnabled = settings.EnableSkylighting;
+	settings.EnableSkylighting = a_enabled;
+	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
+}
+
+bool Skylighting::IsPerformanceCostMeasurementEnabled() const
+{
+	return IsRuntimeActive();
+}
+
+const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
+{
+	return "Waiting for Skylighting state to settle";
+}
+
+double Skylighting::GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
+{
+	return a_targetEnabled ? 5.0 : 1.0;
+}
+
+void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	const bool previousEnabled = settings.EnableSkylighting;
+	settings = a_state.get<Settings>();
+	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
+}
+
 void Skylighting::DrawSettings()
 {
+	DrawSkylightingRuntimeToggle(*this);
+	ImGui::Separator();
+
 	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
@@ -174,11 +242,16 @@ void Skylighting::CompileComputeShaders()
 
 Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 {
+	auto data = Skylighting::SkylightingCB{};
+
 	if (!a_inWorld)
-		return Skylighting::SkylightingCB{};
+		return data;
+
+	if (!IsRuntimeActive())
+		return data;
 
 	if (globals::state->isMapMenuOpen)
-		return Skylighting::SkylightingCB{};
+		return data;
 
 	static float3 prevCellID = { 0, 0, 0 };
 
@@ -207,12 +280,22 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 			0 },
 		.ValidMargin = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z },
 		.MinDiffuseVisibility = settings.MinDiffuseVisibility,
-		.MinSpecularVisibility = settings.MinSpecularVisibility
+		.MinSpecularVisibility = settings.MinSpecularVisibility,
+		.Enabled = 1u
 	};
 }
 
 void Skylighting::Prepass()
 {
+	auto context = globals::d3d::context;
+	if (!IsRuntimeActive()) {
+		if (context) {
+			ID3D11ShaderResourceView* srv = nullptr;
+			context->PSSetShaderResources(50, 1, &srv);
+		}
+		return;
+	}
+
 	if (globals::state->isMapMenuOpen)
 		return;
 
@@ -225,8 +308,6 @@ void Skylighting::Prepass()
 		return;
 
 	TracyD3D11Zone(globals::state->tracyCtx, "Skylighting - Update Probes");
-
-	auto context = globals::d3d::context;
 
 	{
 		std::array<ID3D11ShaderResourceView*, 1> srvs = { texOcclusion->srv.get() };
@@ -360,6 +441,11 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 {
 	auto& skylighting = globals::features::skylighting;
 
+	if (!skylighting.IsRuntimeActive()) {
+		skylighting.inOcclusion = false;
+		return func(property, geometry, renderMode, accumulator);
+	}
+
 	auto batch = accumulator->GetRuntimeData().batchRenderer;
 	batch->geometryGroups[14]->flags &= ~1;
 
@@ -457,7 +543,7 @@ void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a
 {
 	auto& skylighting = globals::features::skylighting;
 
-	if (skylighting.inOcclusion) {
+	if (skylighting.IsRuntimeActive() && skylighting.inOcclusion) {
 		uint corner = skylighting.frameCount % 4;
 
 		float frustumSize = a_frustum->fTop;
@@ -474,6 +560,13 @@ void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a
 void Skylighting::RenderOcclusion()
 {
 	ZoneScopedS(8);
+
+	if (!IsRuntimeActive()) {
+		inOcclusion = false;
+		Main_Precipitation_RenderOcclusion::func();
+		return;
+	}
+
 	auto shaderCache = globals::shaderCache;
 	auto state = globals::state;
 	auto renderer = globals::game::renderer;

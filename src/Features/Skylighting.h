@@ -30,6 +30,13 @@ public:
 	virtual bool HasEssentialSettings() const override { return false; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
+	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override;
+	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -49,6 +56,7 @@ public:
 		float MaxZenith = 3.1415926f / 2.f;  // 90 deg
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
+		bool EnableSkylighting = true;
 		bool IncludeMarkedRoofOccluders = false;
 	} settings;
 
@@ -63,11 +71,13 @@ public:
 
 		float MinDiffuseVisibility;
 		float MinSpecularVisibility;
-		float2 _pad0;
+		uint Enabled;
+		uint _pad0;
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
+	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
 
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
 

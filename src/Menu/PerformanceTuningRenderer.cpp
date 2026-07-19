@@ -263,12 +263,13 @@ namespace
 		}
 		if (shortName == "ScreenSpaceGI") {
 			return MakeJsonMask({ "Enabled",
-				"ResourceProfile",
-				"AOInteriorsOnly",
-				"EnableAdaptiveSampling",
+				"EnableGI",
+				"EnableExperimentalSpecularGI",
 				"ResolutionMode",
 				"NumSlices",
-				"NumSteps" });
+				"NumSteps",
+				"EnableTemporalDenoiser",
+				"EnableBlur" });
 		}
 		if (shortName == "TerrainBlending") {
 			return MakeJsonMask({ "Enabled", "TerrainCullDistance" });

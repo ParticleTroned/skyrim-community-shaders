@@ -73,6 +73,99 @@ namespace
 		}
 		return clickedResolutionMode;
 	}
+
+	void DrawQualityPerformanceControls(
+		ScreenSpaceGI::Settings& a_settings,
+		bool& a_recompileFlag,
+		bool a_showAdvanced,
+		const char* a_presetsTableId,
+		const char* a_resolutionTableId)
+	{
+		auto qualityGuard = Util::DisableGuard(!a_settings.Enabled);
+		a_settings.NumSlices = std::clamp(a_settings.NumSlices, 1u, 10u);
+		a_settings.NumSteps = std::clamp(a_settings.NumSteps, 1u, 20u);
+
+		if (ImGui::BeginTable(a_presetsTableId, 5)) {
+			ImGui::TableNextColumn();
+			if (ImGui::Button(T(TKEY("ao_only"), "AO only"), { -1, 0 })) {
+				ApplyAOOnlyPreset(a_settings);
+				a_recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Full Res, 1 Slice, 6 Steps, blur enabled, no GI\n");
+
+			ImGui::TableNextColumn();
+			if (ImGui::Button(T(TKEY("low"), "Low"), { -1, 0 })) {
+				a_settings.NumSlices = 10;
+				a_settings.NumSteps = 12;
+				a_settings.ResolutionMode = 2;
+				a_settings.EnableBlur = true;
+				a_settings.EnableGI = true;
+				a_recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("low_tooltip"), "Quarter res and blurry."));
+
+			ImGui::TableNextColumn();
+			if (ImGui::Button(T(TKEY("standard"), "Standard"), { -1, 0 })) {
+				a_settings.NumSlices = 4;
+				a_settings.NumSteps = 8;
+				a_settings.ResolutionMode = 1;
+				a_settings.EnableBlur = true;
+				a_settings.EnableGI = true;
+				a_recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("standard_tooltip"), "Half res and somewhat stable."));
+
+			ImGui::TableNextColumn();
+			if (ImGui::Button(T(TKEY("extreme"), "Extreme"), { -1, 0 })) {
+				a_settings.NumSlices = 4;
+				a_settings.NumSteps = 8;
+				a_settings.ResolutionMode = 0;
+				a_settings.EnableBlur = true;
+				a_settings.EnableGI = true;
+				a_recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("extreme_tooltip"), "Full res and clean."));
+
+			ImGui::TableNextColumn();
+			if (ImGui::Button(T(TKEY("reference"), "Reference"), { -1, 0 })) {
+				a_settings.NumSlices = 8;
+				a_settings.NumSteps = 10;
+				a_settings.ResolutionMode = 0;
+				a_settings.EnableBlur = true;
+				a_settings.EnableGI = true;
+				a_recompileFlag = true;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("reference_tooltip"), "Reference mode."));
+
+			ImGui::EndTable();
+		}
+
+		if (a_showAdvanced) {
+			int numSlices = static_cast<int>(a_settings.NumSlices);
+			if (ImGui::SliderInt(T(TKEY("slices"), "Slices"), &numSlices, 1, 10))
+				a_settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("slices_tooltip"),
+									  "How many directions do the samples take.\n"
+									  "Controls noise."));
+
+			int numSteps = static_cast<int>(a_settings.NumSteps);
+			if (ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), &numSteps, 1, 20))
+				a_settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("steps_per_slice_tooltip"),
+									  "How many samples does it take in one direction.\n"
+									  "Controls accuracy of lighting, and noise when effect radius is large."));
+		}
+
+		a_settings.ResolutionMode = std::clamp(a_settings.ResolutionMode, 0, 2);
+		a_recompileFlag |= DrawResolutionModeSelector(a_resolutionTableId, a_settings.ResolutionMode);
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -126,88 +219,7 @@ void ScreenSpaceGI::DrawSettings()
 
 	///////////////////////////////
 	ImGui::SeparatorText(T(TKEY("quality_performance"), "Quality/Performance"));
-
-	{
-		auto qualityGuard = Util::DisableGuard(!settings.Enabled);
-
-		if (ImGui::BeginTable("Presets", 5)) {
-			ImGui::TableNextColumn();
-			if (ImGui::Button(T(TKEY("ao_only"), "AO only"), { -1, 0 })) {
-				ApplyAOOnlyPreset(settings);
-				recompileFlag = true;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Full Res, 1 Slice, 6 Steps, blur enabled, no GI\n");
-			}
-
-			ImGui::TableNextColumn();
-			if (ImGui::Button(T(TKEY("low"), "Low"), { -1, 0 })) {
-				settings.NumSlices = 10;
-				settings.NumSteps = 12;
-				settings.ResolutionMode = 2;
-				settings.EnableBlur = true;
-				settings.EnableGI = true;
-				recompileFlag = true;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("low_tooltip"), "Quarter res and blurry."));
-
-			ImGui::TableNextColumn();
-			if (ImGui::Button(T(TKEY("standard"), "Standard"), { -1, 0 })) {
-				settings.NumSlices = 4;
-				settings.NumSteps = 8;
-				settings.ResolutionMode = 1;
-				settings.EnableBlur = true;
-				settings.EnableGI = true;
-				recompileFlag = true;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("standard_tooltip"), "Half res and somewhat stable."));
-
-			ImGui::TableNextColumn();
-			if (ImGui::Button(T(TKEY("extreme"), "Extreme"), { -1, 0 })) {
-				settings.NumSlices = 4;
-				settings.NumSteps = 8;
-				settings.ResolutionMode = 0;
-				settings.EnableBlur = true;
-				settings.EnableGI = true;
-				recompileFlag = true;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("extreme_tooltip"), "Full res and clean."));
-
-			ImGui::TableNextColumn();
-			if (ImGui::Button(T(TKEY("reference"), "Reference"), { -1, 0 })) {
-				settings.NumSlices = 8;
-				settings.NumSteps = 10;
-				settings.ResolutionMode = 0;
-				settings.EnableBlur = true;
-				settings.EnableGI = true;
-				recompileFlag = true;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("reference_tooltip"), "Reference mode."));
-
-			ImGui::EndTable();
-		}
-
-		if (showAdvanced) {
-			ImGui::SliderInt(T(TKEY("slices"), "Slices"), (int*)&settings.NumSlices, 1, 10);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("slices_tooltip"),
-									  "How many directions do the samples take.\n"
-									  "Controls noise."));
-
-			ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 20);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("steps_per_slice_tooltip"),
-									  "How many samples does it take in one direction.\n"
-									  "Controls accuracy of lighting, and noise when effect radius is large."));
-		}
-
-		settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
-		recompileFlag |= DrawResolutionModeSelector("SSGIResolutionMode", settings.ResolutionMode);
-	}
+	DrawQualityPerformanceControls(settings, recompileFlag, showAdvanced, "Presets", "SSGIResolutionMode");
 
 	///////////////////////////////
 	ImGui::SeparatorText(T(TKEY("visual"), "Visual"));
@@ -370,6 +382,30 @@ void ScreenSpaceGI::DrawSettings()
 	}
 }
 
+void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
+{
+	if (!ShadersOK())
+		Util::Text::Error("%s", T(TKEY("shader_compile_error"), "Compute shaders failed to compile!"));
+
+	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
+	{
+		auto settingsGuard = Util::DisableGuard(!settings.Enabled);
+		recompileFlag |= ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI);
+		if (a_advanced)
+			recompileFlag |= ImGui::Checkbox(T(TKEY("hq_specular_il"), "(Experimental) HQ Specular IL"), &settings.EnableExperimentalSpecularGI);
+	}
+
+	ImGui::SeparatorText(T(TKEY("quality_performance"), "Quality/Performance"));
+	DrawQualityPerformanceControls(settings, recompileFlag, a_advanced, "SSGIPerformancePresets", "SSGIPerformanceResolutionMode");
+
+	if (a_advanced) {
+		ImGui::SeparatorText(T(TKEY("denoising"), "Denoising"));
+		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
+		recompileFlag |= ImGui::Checkbox(T(TKEY("temporal_denoiser"), "Temporal Denoiser"), &settings.EnableTemporalDenoiser);
+		ImGui::Checkbox(T(TKEY("blur"), "Blur"), &settings.EnableBlur);
+	}
+}
+
 void ScreenSpaceGI::DrawEssentialSettings()
 {
 	if (!ShadersOK())
@@ -399,6 +435,8 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
+	settings.NumSlices = std::clamp(settings.NumSlices, 1u, 10u);
+	settings.NumSteps = std::clamp(settings.NumSteps, 1u, 20u);
 
 	recompileFlag = true;
 }

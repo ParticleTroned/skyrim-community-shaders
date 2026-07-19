@@ -503,8 +503,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void LightLimitFix::DrawSettings()
 {
 	{
-		Util::BlueFrameStyleWrapper lightLimitBlueStyle(true);
-
 		ImGui::Text("ImageSpace Refraction");
 		ImGui::SliderFloat(
 			"Heat Warp Strength",

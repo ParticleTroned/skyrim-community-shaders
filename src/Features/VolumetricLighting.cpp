@@ -225,11 +225,8 @@ void VolumetricLighting::DrawSettings()
 {
 	SanitizeSettings();
 
-	{
-		Util::BlueFrameStyleWrapper disableDuringRainStyle(true);
-		if (ImGui::Checkbox("Disable Exterior Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
-			SetupVL();
-	}
+	if (ImGui::Checkbox("Disable Exterior Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
+		SetupVL();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Disables exterior volumetric lighting while rain is active and restores it after rain.");
 	}
@@ -253,7 +250,6 @@ void VolumetricLighting::DrawSettings()
 void VolumetricLighting::DrawGodrayTuningSettings()
 {
 	auto drawSlider = [](const char* label, float& value, float minValue, float maxValue, const char* tooltip) {
-		Util::YellowFrameStyleWrapper sliderStyle;
 		const bool changed = ImGui::SliderFloat(label, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(tooltip);

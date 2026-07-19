@@ -176,10 +176,7 @@ void TerrainBlending::DrawSettings()
 		ImGui::Text("%s", T(TKEY("enable_tooltip"), "Enable seamless blending between terrain and objects."));
 	}
 
-	{
-		Util::BlueFrameStyleWrapper blueFrameStyle;
-		ImGui::SliderFloat(T(TKEY("blend_depth"), "Blend Depth"), &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
-	}
+	ImGui::SliderFloat(T(TKEY("blend_depth"), "Blend Depth"), &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("blend_depth_tooltip"), "Scales the terrain blend depth. Lower values make the blend tighter."));
 	}

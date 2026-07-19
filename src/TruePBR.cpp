@@ -114,7 +114,6 @@ void TruePBR::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Global Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 		{
-			Util::BlueFrameStyleWrapper blueFrameStyle;
 			ImGui::SliderFloat("PBR Metal Reflection", &settings.pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
 			if (ImGui::IsItemHovered()) {
 				ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");

@@ -185,9 +185,14 @@ bool RenderDoc::DrawCaptureStatus()
 
 void RenderDoc::UpdateCaptureSectionVisibility(bool a_visible)
 {
-	if (a_visible && !wasSectionVisible)
+	const auto currentFrame = ImGui::GetFrameCount();
+	const bool wasVisibleRecently = lastCaptureSectionFrame >= 0 &&
+	                                (lastCaptureSectionFrame == currentFrame || lastCaptureSectionFrame == currentFrame - 1);
+
+	if (a_visible && !wasVisibleRecently)
 		InvalidateCaptureCache();
-	wasSectionVisible = a_visible;
+
+	lastCaptureSectionFrame = a_visible ? currentFrame : -1;
 }
 
 void RenderDoc::DrawCaptureUI()

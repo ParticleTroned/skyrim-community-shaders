@@ -140,7 +140,7 @@ public:
 	std::vector<CaptureFileInfo> cachedCaptureFiles;
 	std::chrono::steady_clock::time_point cacheLastUpdate;
 	bool cacheValid = false;
-	bool wasSectionVisible = false;  // Track if RenderDoc section was visible last frame
+	int lastCaptureSectionFrame = -1;
 
 	// Track files that failed to delete for UI feedback
 	std::unordered_map<std::filesystem::path, std::string> failedDeletions;

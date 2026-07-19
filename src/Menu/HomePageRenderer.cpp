@@ -277,7 +277,10 @@ void HomePageRenderer::RenderWelcomeSection()
 	if (discordIconAvailable) {
 		const ImVec2 originalSize(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
 		const float aspectRatio = originalSize.x / originalSize.y;
-		discordButtonSize.x = std::max(discordButtonSize.x, linkButtonHeight * aspectRatio);
+		discordButtonSize.x = std::clamp(
+			linkButtonHeight * aspectRatio,
+			HOME_LINK_DISCORD_BUTTON_MIN_WIDTH * scale,
+			HOME_LINK_DISCORD_BUTTON_MAX_WIDTH * scale);
 	}
 
 	const float linkRowWidth = discordButtonSize.x + linkButtonSpacing + githubButtonWidth;

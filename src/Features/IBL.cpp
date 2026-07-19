@@ -64,6 +64,13 @@ namespace
 		return std::min(a_value, kDALCPlusSkyDirectionalMode);
 	}
 
+	void DrawEnableCheckbox(const char* a_label, uint& a_disableSetting)
+	{
+		bool enableSetting = a_disableSetting == 0;
+		if (ImGui::Checkbox(a_label, &enableSetting))
+			a_disableSetting = enableSetting ? 0u : 1u;
+	}
+
 	void SanitizeSettings(IBL::Settings& a_settings)
 	{
 		const IBL::Settings defaults{};
@@ -78,6 +85,8 @@ namespace
 		a_settings.FogAmount = ClampFinite(a_settings.FogAmount, 0.0f, 1.0f, defaults.FogAmount);
 		a_settings.DALCMode = ClampDALCMode(a_settings.DALCMode);
 		a_settings.DisableInInteriors = ClampBool(a_settings.DisableInInteriors);
+		a_settings.DisableInWorldMap = ClampBool(a_settings.DisableInWorldMap);
+		a_settings.DisableInLoadingScreen = ClampBool(a_settings.DisableInLoadingScreen);
 	}
 
 	IBL::Settings GetSanitizedSettings(const IBL::Settings& a_settings)
@@ -110,6 +119,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	FogAmount,
 	DALCMode,
 	DisableInInteriors,
+	DisableInWorldMap,
+	DisableInLoadingScreen,
 	CaptureWeatherBaselineOnSliderChange)
 
 void IBL::DrawSettings()
@@ -126,6 +137,18 @@ void IBL::DrawSettings()
 	}
 
 	ImGui::BeginDisabled(settings.EnableIBL == 0);
+	if (ImGui::TreeNodeEx("Enable IBL Options", ImGuiTreeNodeFlags_None)) {
+		DrawEnableCheckbox("Enable Interior IBL", settings.DisableInInteriors);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Enables IBL in interior cells.");
+		DrawEnableCheckbox("Enable World Map IBL", settings.DisableInWorldMap);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Enables IBL while the world map is open.");
+		DrawEnableCheckbox("Enable Loading Screen IBL", settings.DisableInLoadingScreen);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Enables IBL during loading screens and the main menu.");
+		ImGui::TreePop();
+	}
 	recaptureWeatherBaseline |= Util::WeatherUI::SliderFloat("Env IBL Scale", this, "EnvIBLScale", &settings.EnvIBLScale, kIBLScaleMin, kIBLScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Intensity multiplier for the environment IBL (from Dynamic Cubemaps).\nControls how strongly the surrounding environment contributes to ambient lighting.");
@@ -198,10 +221,6 @@ void IBL::DrawSettings()
 		ImGui::Text("When enabled, manual IBL slider edits update the weather fallback baseline.");
 		ImGui::Text("This prevents values from snapping back after interior/exterior transitions");
 		ImGui::Text("when the active weather has no override for that setting.");
-	}
-	ImGui::Checkbox("Disable in interiors", (bool*)&settings.DisableInInteriors);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Disables IBL in interior cells.");
 	}
 	ImGui::EndDisabled();
 
@@ -554,10 +573,17 @@ IBL::CommonBufferData IBL::GetCommonBufferData() const
 bool IBL::IsRuntimeEnabled() const
 {
 	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);
-	const auto state = globals::state;
-	const bool menuDisabled = state && (state->IsMainOrLoadingMenuOpen() || state->isMapMenuOpen);
 	return loaded &&
 	       runtimeSettings.EnableIBL != 0 &&
-	       !menuDisabled &&
-	       !LocationContext::IsDisabledByLocation(runtimeSettings.DisableInInteriors, false);
+	       !IsDisabledForCurrentScene(runtimeSettings);
+}
+
+bool IBL::IsDisabledForCurrentScene(const IBL::Settings& a_settings) const
+{
+	const auto state = globals::state;
+	if (state && state->IsMainOrLoadingMenuOpen())
+		return a_settings.DisableInLoadingScreen != 0;
+	if (state && state->isMapMenuOpen)
+		return a_settings.DisableInWorldMap != 0;
+	return LocationContext::IsDisabledByLocation(a_settings.DisableInInteriors != 0, false);
 }

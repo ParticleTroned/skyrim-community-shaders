@@ -54,6 +54,8 @@ public:
 		float FogAmount = 0.0f;
 		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
 		uint DisableInInteriors = 1;
+		uint DisableInWorldMap = 1;
+		uint DisableInLoadingScreen = 1;
 		bool CaptureWeatherBaselineOnSliderChange = false;
 	} settings;
 
@@ -78,5 +80,6 @@ public:
 
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 	CommonBufferData GetCommonBufferData() const;
+	bool IsDisabledForCurrentScene(const Settings& a_settings) const;
 	bool IsRuntimeEnabled() const;
 };

@@ -23,6 +23,7 @@ namespace
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Runtime-safe toggle. Keeps shaders and hooks loaded, but disables Skylighting updates and shading until re-enabled.");
+			ImGui::Text("The performance profiler compares against this Off state, not against lower Skylighting settings.");
 		}
 	}
 }

@@ -9,15 +9,13 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/extern/FidelityFX-SDK/sdk)
 
 # The vendored SDK hardcodes its static libs' output to a single shared
 # ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk directory (see its CMakeLists.txt),
-# reused across every preset's separate build tree. Non-LTO presets
-# (Dev-Fast, PR) compile these objects without /GL, but Ninja's staleness
-# check only looks at its own object mtimes, not the flags baked into an
-# existing output; if a shipping preset (IPO ON, /GL) links to that shared
-# path afterward, a later non-LTO build can see its own (older) objects as
-# up to date and silently reuse the shipping /GL archive -> LNK4075
-# ("restarting link with /LTCG") -> LNK1218 under /WX. Give non-LTO presets
-# a build-tree-local output so they never share the shipping archive.
-if(MSVC AND NOT CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+# reused across every preset's separate build tree. A target's object
+# staleness is tracked inside its build tree, so a different preset or
+# toolset can otherwise overwrite the shared archive with incompatible
+# compile options while the original tree still considers its objects up to
+# date. Always keep MSVC archives local to the tree; this covers both LTO and
+# non-LTO configurations without relying on the global IPO default.
+if(MSVC)
   foreach(
     _ffx_target
     ffx_backend_dx11_x64

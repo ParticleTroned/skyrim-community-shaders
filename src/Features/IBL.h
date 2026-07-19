@@ -46,13 +46,13 @@ public:
 		uint EnableIBL = 0;
 		uint PreserveFogLuminance = 0;
 		uint UseStaticIBL = 1;
-		float DALCAmount = 1.0f;
-		float EnvIBLScale = 1.0f;
-		float SkyIBLScale = 1.0f;
+		float DALCAmount = 0.0f;
+		float EnvIBLScale = 0.75f;
+		float SkyIBLScale = 1.5f;
 		float EnvIBLSaturation = 1.0f;
 		float SkyIBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
-		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
+		uint DALCMode = 0;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
 		uint DisableInInteriors = 1;
 		uint DisableInWorldMap = 1;
 		uint DisableInLoadingScreen = 1;

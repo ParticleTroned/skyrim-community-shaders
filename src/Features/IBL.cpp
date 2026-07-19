@@ -258,6 +258,7 @@ void IBL::RestoreDefaultSettings()
 
 void IBL::RegisterWeatherVariables()
 {
+	const Settings defaults{};
 	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()
 	                     ->GetOrCreateFeatureRegistry(GetShortName());
 	// Toggle IBL for this weather (SH-based ambient replaces vanilla)
@@ -277,7 +278,7 @@ void IBL::RegisterWeatherVariables()
 		"Env IBL Scale",
 		"Intensity of environment IBL from the Dynamic Cubemaps environment cubemap",
 		&settings.EnvIBLScale,
-		1.0f,
+		defaults.EnvIBLScale,
 		kIBLScaleMin, kIBLScaleMax));
 
 	// Intensity of sky IBL (from the game's native reflections cubemap)
@@ -286,7 +287,7 @@ void IBL::RegisterWeatherVariables()
 		"Sky IBL Scale",
 		"Intensity of sky IBL from the game's native reflections cubemap",
 		&settings.SkyIBLScale,
-		1.0f,
+		defaults.SkyIBLScale,
 		kIBLScaleMin, kIBLScaleMax));
 
 	// Color saturation of environment IBL
@@ -313,7 +314,7 @@ void IBL::RegisterWeatherVariables()
 		"DALC Amount",
 		"Blend factor toward vanilla ambient brightness (0 = pure IBL, 1 = fully matched to DALC)",
 		&settings.DALCAmount,
-		1.0f,
+		defaults.DALCAmount,
 		0.0f, 1.0f));
 
 	// Fog color blending toward IBL ambient color

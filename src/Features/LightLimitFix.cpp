@@ -91,7 +91,7 @@ namespace
 	constexpr float kMaxParticleDistanceMax = 20000.0f;
 	constexpr float kJsonPlacedLightIntensityMin = 0.0f;
 	constexpr float kJsonPlacedLightIntensityMax = 8.0f;
-	constexpr std::size_t kDirectionalNiLightEngineReadSize = 0x174;
+	constexpr std::size_t kDirectionalNiLightEngineReadSize = sizeof(RE::NiDirectionalLight);
 
 	void DrawHeatWarpStrengthSetting()
 	{
@@ -158,16 +158,19 @@ namespace
 			return false;
 		}
 
-		const uint32_t frame = globals::state ? globals::state->frameCount : 0;
-		if (a_light == validated && frame == validatedFrame) {
+		const auto* state = globals::state;
+		const uint32_t frame = state ? state->frameCount : 0;
+		if (state && a_light == validated && frame == validatedFrame) {
 			return true;
 		}
 		if (!IsReadableRange(a_light, kDirectionalNiLightEngineReadSize)) {
 			return false;
 		}
 
-		validated = a_light;
-		validatedFrame = frame;
+		// Before State exists there is no advancing frame identity, so caching a
+		// successful probe would otherwise trust this address indefinitely.
+		validated = state ? a_light : nullptr;
+		validatedFrame = state ? frame : std::numeric_limits<uint32_t>::max();
 		return true;
 	}
 

@@ -61,20 +61,25 @@ public:
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.ExteriorEnabled || settings.InteriorEnabled; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
+		const Settings defaults{};
 		if (a_enabled) {
-			settings.ExteriorEnabled = Settings{}.ExteriorEnabled;
-			settings.InteriorEnabled = Settings{}.InteriorEnabled;
-			return;
+			settings.ExteriorEnabled = defaults.ExteriorEnabled;
+			settings.InteriorEnabled = defaults.InteriorEnabled;
+		} else {
+			settings.ExteriorEnabled = false;
+			settings.InteriorEnabled = false;
 		}
 
-		settings.ExteriorEnabled = false;
-		settings.InteriorEnabled = false;
+		if (initialised)
+			SetupVL();
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
 	{
 		auto state = a_state;
 		LoadSettings(state);
+		if (initialised)
+			SetupVL();
 	}
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);

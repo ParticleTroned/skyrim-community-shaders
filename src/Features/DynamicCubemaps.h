@@ -169,7 +169,11 @@ public:
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnabledSSR != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
-		settings.EnabledSSR = a_enabled ? Settings{}.EnabledSSR : 0u;
+		const uint nextEnabled = a_enabled ? Settings{}.EnabledSSR : 0u;
+		if (settings.EnabledSSR != nextEnabled) {
+			settings.EnabledSSR = nextEnabled;
+			recompileFlag = true;
+		}
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override

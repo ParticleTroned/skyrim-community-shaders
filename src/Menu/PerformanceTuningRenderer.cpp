@@ -382,8 +382,15 @@ namespace
 
 	bool SaveCrossFeaturePerformanceDefaults(Feature* feature, json& userSettings)
 	{
-		(void)feature;
-		(void)userSettings;
+		if (!feature)
+			return false;
+
+		if (feature->GetShortName() == "LightLimitFix" && globals::state) {
+			const float refractionScale = std::isfinite(globals::state->refractionScale) ?
+			                                  std::clamp(globals::state->refractionScale, 0.0f, 2.0f) :
+			                                  1.0f;
+			userSettings["Advanced"]["Refraction Scale"] = refractionScale;
+		}
 		return true;
 	}
 
@@ -453,11 +460,54 @@ namespace
 		bool& anyChanged,
 		bool& anyFailed)
 	{
-		(void)feature;
-		(void)userSettings;
-		(void)anyFound;
-		(void)anyChanged;
-		(void)anyFailed;
+		if (!feature || feature->GetShortName() != "LightLimitFix" || !globals::state)
+			return;
+
+		const auto advancedIt = userSettings.find("Advanced");
+		if (advancedIt == userSettings.end() || !advancedIt->is_object())
+			return;
+
+		const auto refractionIt = advancedIt->find("Refraction Scale");
+		if (refractionIt == advancedIt->end())
+			return;
+
+		anyFound = true;
+		if (!refractionIt->is_number()) {
+			anyFailed = true;
+			return;
+		}
+
+		try {
+			const float savedScale = refractionIt->get<float>();
+			if (!std::isfinite(savedScale)) {
+				anyFailed = true;
+				return;
+			}
+			const float restoredScale = std::clamp(savedScale, 0.0f, 2.0f);
+			if (globals::state->refractionScale != restoredScale) {
+				globals::state->refractionScale = restoredScale;
+				anyChanged = true;
+			}
+		} catch (const std::exception& e) {
+			logger::warn("Failed to restore Performance Tuning heat-warp default: {}", e.what());
+			anyFailed = true;
+		}
+	}
+
+	json CapturePerformanceUiState(Feature* feature)
+	{
+		if (!feature)
+			return json::object();
+
+		json state = feature->CapturePerformanceSettingsState();
+		if (!state.is_object())
+			state = json{ { "FeatureState", std::move(state) } };
+
+		if (feature->GetShortName() == "LightLimitFix" && globals::state) {
+			state["PerformanceTuningGlobals"]["Refraction Scale"] =
+				std::isfinite(globals::state->refractionScale) ? std::clamp(globals::state->refractionScale, 0.0f, 2.0f) : 1.0f;
+		}
+		return state;
 	}
 
 	PerformanceUserDefaultsRestoreResult RestorePerformanceSettingsFromUserDefaults(Feature* feature)
@@ -1244,7 +1294,7 @@ void PerformanceTuningRenderer::Render()
 			ImGui::SeparatorText(selectedFeature->GetDisplayName().c_str());
 			Util::PerformanceFrameStyleWrapper performanceStyle(true);
 			auto& selectedCostState = g_costMeasurementStates[selectedFeature->GetShortName()];
-			const json settingsStateBefore = selectedFeature->CapturePerformanceSettingsState();
+			const json settingsStateBefore = CapturePerformanceUiState(selectedFeature);
 			ImGui::BeginDisabled(anyMeasurementRunning);
 			ImGui::BeginGroup();
 			selectedFeature->DrawPerformanceSettings(true);
@@ -1252,7 +1302,7 @@ void PerformanceTuningRenderer::Render()
 			ImGui::EndDisabled();
 			RenderFeatureCostMeasurement(selectedFeature, selectedCostState);
 			const bool settingsRestored = RenderPerformanceUserDefaultButtons(selectedFeature, IsAnyFeatureCostMeasurementRunning());
-			const json settingsStateAfter = selectedFeature->CapturePerformanceSettingsState();
+			const json settingsStateAfter = CapturePerformanceUiState(selectedFeature);
 			const bool settingsEdited = settingsRestored || settingsStateBefore != settingsStateAfter;
 			if (settingsEdited) {
 				RegisterSettingsEdit(highlightState, timingBeforeSettings, frameCount);

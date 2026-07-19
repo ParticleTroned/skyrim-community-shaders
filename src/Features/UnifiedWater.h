@@ -95,18 +95,6 @@ struct UnifiedWater : OverlayFeature
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
-	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.UseOptimisedMeshes; }
-	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
-	{
-		settings.UseOptimisedMeshes = a_enabled ? Settings{}.UseOptimisedMeshes : false;
-	}
-	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
-	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
-	{
-		auto state = a_state;
-		LoadSettings(state);
-	}
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;

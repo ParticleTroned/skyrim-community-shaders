@@ -10,6 +10,7 @@
 #include "Menu/BackgroundBlur.h"
 #include "PaletteWindow.h"
 #include "State.h"
+#include "Utils/Subrect.h"
 #include "Utils/UI.h"
 #include "Weather/LightingTemplateWidget.h"
 #include "WeatherUtils.h"
@@ -914,7 +915,9 @@ void EditorWindow::ShowViewportWindow()
 	}
 
 	if (tempTexture && tempTexture->srv) {
-		ImGui::Image((void*)tempTexture->srv.get(), imageSize);
+		// The preview is a render-target SRV; draw it opaque so its alpha cannot
+		// turn the SE editor viewport into a transparent cutout.
+		Util::Subrect::ImageOpaque(tempTexture->srv.get(), imageSize);
 	} else {
 		ImGui::TextDisabled("%s", T(TKEY("viewport_unavailable"), "Viewport unavailable"));
 	}

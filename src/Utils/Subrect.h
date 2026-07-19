@@ -69,4 +69,13 @@ namespace Util::Subrect
 		void ClampCurrentUV();
 		void ApplyPreset(int index);
 	};
+
+	// Opaque-RGB blend state callback for render-target previews with non-1 alpha.
+	// Paired with ImDrawCallback_ResetRenderState immediately after the image draw.
+	void OpaquePreviewBlendCallback(const ImDrawList*, const ImDrawCmd*);
+
+	// Draws an ImGui image with opaque RGB blending. Use for render-target SRVs
+	// whose alpha would otherwise make the preview appear as a transparency mask.
+	void ImageOpaque(ID3D11ShaderResourceView* a_srv, const ImVec2& a_size,
+		const ImVec2& a_uv0 = ImVec2(0, 0), const ImVec2& a_uv1 = ImVec2(1, 1));
 }  // namespace Util::Subrect

@@ -34,22 +34,9 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
-	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
-	{
-		if (a_enabled) {
-			settings = Settings{};
-			recompileFlag = true;
-			return;
-		}
-
-		settings.Enabled = false;
-	}
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
-	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override
-	{
-		auto state = a_state;
-		LoadSettings(state);
-	}
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

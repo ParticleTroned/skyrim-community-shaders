@@ -4,6 +4,8 @@
 
 #include "../I18n/I18n.h"
 #include "Deferred.h"
+#include "Globals.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Util.h"
 
@@ -37,6 +39,41 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	void ClearScreenSpaceGIProfilerTimers()
+	{
+		if (globals::profiler) {
+			globals::profiler->ClearTimersForFeature("ScreenSpaceGI");
+		}
+	}
+
+	void ClearScreenSpaceGIProfilerTimersIfDisabled(bool a_wasEnabled, const ScreenSpaceGI::Settings& a_settings)
+	{
+		if (a_wasEnabled && !a_settings.Enabled) {
+			ClearScreenSpaceGIProfilerTimers();
+		}
+	}
+
+	void SetScreenSpaceGIEnabled(ScreenSpaceGI::Settings& a_settings, bool a_enabled)
+	{
+		if (a_settings.Enabled == a_enabled)
+			return;
+
+		a_settings.Enabled = a_enabled;
+		if (!a_settings.Enabled) {
+			ClearScreenSpaceGIProfilerTimers();
+		}
+	}
+
+	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI::Settings& a_settings, const char* a_label)
+	{
+		bool enabled = a_settings.Enabled;
+		if (!ImGui::Checkbox(a_label, &enabled))
+			return false;
+
+		SetScreenSpaceGIEnabled(a_settings, enabled);
+		return true;
+	}
+
 	void ApplyAOOnlyPreset(ScreenSpaceGI::Settings& a_settings)
 	{
 		a_settings.NumSlices = 1;
@@ -174,7 +211,9 @@ namespace
 
 void ScreenSpaceGI::RestoreDefaultSettings()
 {
+	const bool wasEnabled = settings.Enabled;
 	settings = {};
+	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 	recompileFlag = true;
 }
 
@@ -192,7 +231,7 @@ void ScreenSpaceGI::DrawSettings()
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
+		DrawScreenSpaceGIEnabledCheckbox(settings, T(TKEY("enabled"), "Enabled"));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
@@ -389,7 +428,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (!ShadersOK())
 		Util::Text::Error("%s", T(TKEY("shader_compile_error"), "Compute shaders failed to compile!"));
 
-	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
+	DrawScreenSpaceGIEnabledCheckbox(settings, T(TKEY("enabled"), "Enabled"));
 	{
 		auto settingsGuard = Util::DisableGuard(!settings.Enabled);
 		recompileFlag |= ImGui::Checkbox(T(TKEY("indirect_lighting"), "Indirect Lighting (IL)"), &settings.EnableGI);
@@ -410,15 +449,39 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 
 void ScreenSpaceGI::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable", &settings.Enabled);
+	DrawScreenSpaceGIEnabledCheckbox(settings, "Enable");
+}
+
+void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (!a_enabled) {
+		SetScreenSpaceGIEnabled(settings, false);
+		return;
+	}
+
+	const bool wasEnabled = settings.Enabled;
+	settings = Settings{};
+	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
+	recompileFlag = true;
+}
+
+void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_object())
+		return;
+
+	auto state = a_state;
+	LoadSettings(state);
 }
 
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
+	const bool wasEnabled = settings.Enabled;
 	settings = o_json;
 	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
 	settings.NumSlices = std::clamp(settings.NumSlices, 1u, 10u);
 	settings.NumSteps = std::clamp(settings.NumSteps, 1u, 20u);
+	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 
 	recompileFlag = true;
 }

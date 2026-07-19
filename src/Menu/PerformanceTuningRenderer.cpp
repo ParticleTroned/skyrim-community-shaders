@@ -973,7 +973,10 @@ namespace
 
 	bool ShouldShowInPerformanceTuning(Feature* feature)
 	{
-		return feature && feature->GetShortName() != "WetnessEffects";
+		if (!feature || feature->GetShortName() == "WetnessEffects")
+			return false;
+		const std::string shortName = feature->GetShortName();
+		return std::ranges::find(kPerformanceFeatureOrder, std::string_view(shortName)) != kPerformanceFeatureOrder.end();
 	}
 
 	std::vector<Feature*> BuildPerformanceFeatureList()

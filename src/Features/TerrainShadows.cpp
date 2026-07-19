@@ -65,6 +65,11 @@ void TerrainShadows::DrawSettings()
 	}
 }
 
+void TerrainShadows::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Terrain Shadow", &settings.EnableTerrainShadow);
+}
+
 void TerrainShadows::ClearShaderCache()
 {
 	if (shadowUpdateProgram) {

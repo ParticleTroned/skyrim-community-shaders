@@ -152,6 +152,47 @@ namespace
 		return PerformanceTuningRenderer::HasActiveMeasurements() && listId != selectedMenu;
 	}
 
+	int& GetFeatureUiModeValue(Feature* feature)
+	{
+		static std::unordered_map<std::string, int> featureUiModes;
+		static int fallbackMode = 0;
+		if (!feature)
+			return fallbackMode;
+		return featureUiModes[feature->GetShortName()];
+	}
+
+	bool IsFeatureAdvancedUiMode(Feature* feature)
+	{
+		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
+			return false;
+		int& mode = GetFeatureUiModeValue(feature);
+		mode = std::clamp(mode, 0, 1);
+		return mode != 0;
+	}
+
+	void DrawFeatureUiModeToggle(Feature* feature)
+	{
+		if (!feature || !globals::menu || !globals::menu->IsPerformanceUiMode())
+			return;
+		int& mode = GetFeatureUiModeValue(feature);
+		mode = std::clamp(mode, 0, 1);
+		bool advanced = mode != 0;
+		ImGui::PushID("FeatureUiMode");
+		if (ImGui::Checkbox("Advanced", &advanced))
+			mode = advanced ? 1 : 0;
+		ImGui::PopID();
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Shows every setting for this feature.");
+			ImGui::TextUnformatted("Turn it off to return to the simpler Essentials view.");
+		}
+	}
+
+	float GetFeatureUiModeToggleWidth()
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		return ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize("Advanced").x;
+	}
+
 	/**
 	 * @brief Determines if the left feature panel should be visible based on auto-hide settings and mouse position
 	 * @return true if panel should be visible, false if it should be hidden
@@ -401,13 +442,15 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
-		BuiltInMenu{ "General", drawGeneralSettings },
-		BuiltInMenu{ "Advanced", drawAdvancedSettings },
 		BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } },
 		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() { PerformanceTuningRenderer::Render(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
+	if (!globals::menu || globals::menu->IsAdvancedUiMode()) {
+		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "General", drawGeneralSettings });
+		menuList.insert(menuList.begin() + 2, BuiltInMenu{ "Advanced", drawAdvancedSettings });
+	}
 
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
@@ -536,7 +579,7 @@ void FeatureListRenderer::RenderLeftColumn(
 		}
 
 		// Add Features header and search bar after built-in settings
-		Util::DrawSectionHeader("Features", true);
+		Util::DrawSectionHeader((globals::menu && globals::menu->IsPerformanceUiMode()) ? "Essentials" : "Features", true);
 		Util::DrawFeatureSearchBar(featureSearch);
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
@@ -748,9 +791,11 @@ bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string&
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
 {
 	const auto featureName = feat->GetShortName();
+	const bool showFeatureUiModeToggle = isLoaded && globals::menu && globals::menu->IsPerformanceUiMode();
 
 	// Calculate action button widths
 	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
+	const float toggleWidth = showFeatureUiModeToggle ? GetFeatureUiModeToggleWidth() : 0.0f;
 
 	const char* overrideButtonText = "Apply Override";
 	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
@@ -762,6 +807,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	float totalButtonWidth = 0.0f;
 	if (!isDisabled && isLoaded && hasOverrides) {
 		totalButtonWidth = overrideButtonWidth;
+	}
+	if (showFeatureUiModeToggle) {
+		if (totalButtonWidth > 0.0f)
+			totalButtonWidth += ImGui::GetStyle().ItemSpacing.x;
+		totalButtonWidth += toggleWidth;
 	}
 
 	// Get available content width for positioning
@@ -785,11 +835,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	float buttonHeight = ImGui::GetFrameHeight();
 
 	// Calculate Y position to middle-align buttons with title text only (not description)
-	float buttonY = titleStartPos.y + (titleOnlyHeight - buttonHeight) * 0.5f;
+	float buttonY = titleStartPos.y + std::max(0.0f, (titleOnlyHeight - buttonHeight) * 0.5f);
+	float buttonX = titleStartPos.x + availableWidth - totalButtonWidth;
 
 	// Apply Override button (when feature has available overrides)
 	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - totalButtonWidth, buttonY));
+		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));
 		if (sceneControlled)
 			ImGui::BeginDisabled();
 		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
@@ -814,6 +865,13 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 					"the mod author's recommended settings.");
 			}
 		}
+
+		buttonX += overrideButtonWidth + ImGui::GetStyle().ItemSpacing.x;
+	}
+
+	if (showFeatureUiModeToggle) {
+		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));
+		DrawFeatureUiModeToggle(feat);
 	}
 
 	// Restore cursor position after the title and separator
@@ -840,8 +898,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::Text("Enable the feature above to access its configuration options.");
 	} else {
 		if (isLoaded) {
+			const bool globalEssentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
+			const bool featureAdvancedMode = IsFeatureAdvancedUiMode(feat);
+			const bool essentialsFeatureMode = globalEssentialsMode && !featureAdvancedMode;
+			const bool hasEssentialSettings = essentialsFeatureMode && feat->HasEssentialSettings();
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			if (weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
+			if (!essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
 				if (ImGui::Checkbox("Pause Weather Overrides", &paused)) {
 					weatherRegistry->SetFeaturePaused(feat->GetShortName(), paused);
@@ -860,7 +922,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				const auto& featureShortName = feat->GetShortName();
 				auto* sceneMgr = SceneSettingsManager::GetSingleton();
 				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
-				if (sceneControlled || scenePaused) {
+				if (!essentialsFeatureMode && (sceneControlled || scenePaused)) {
 					bool active = !scenePaused;
 					if (Util::FeatureToggle("##PauseSceneSettings", &active))
 						sceneMgr->SetFeaturePaused(featureShortName, !active);
@@ -878,9 +940,15 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::BeginDisabled();
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			feat->DrawSettings();
+			if (hasEssentialSettings) {
+				feat->DrawEssentialSettings();
+			} else if (essentialsFeatureMode) {
+				ImGui::TextDisabled("Toggle Advanced in the header to expose this feature's full UI");
+			} else {
+				feat->DrawSettings();
+			}
 
-			if (feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
+			if (!essentialsFeatureMode && feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
 			}

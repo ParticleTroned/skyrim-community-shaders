@@ -921,6 +921,11 @@ void LightLimitFix::Reset()
 	jsonPlacedLightCache.clear();
 }
 
+void LightLimitFix::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
+}
+
 void LightLimitFix::LoadSettings(json& o_json)
 {
 	settings = o_json;

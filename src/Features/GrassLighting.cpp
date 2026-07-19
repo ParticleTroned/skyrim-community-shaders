@@ -144,6 +144,24 @@ void GrassLighting::DrawSettings()
 	}
 }
 
+void GrassLighting::DrawEssentialSettings()
+{
+	SanitizeSettings();
+	ImGui::SliderFloat("Glossiness", &settings.Glossiness, kGlossinessMin, kGlossinessMax, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+	SanitizeSettings();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Specular highlight glossiness for complex grass.");
+
+	ImGui::SliderFloat("Specular Strength", &settings.SpecularStrength, kSpecularStrengthMin, kSpecularStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	SanitizeSettings();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Specular highlight strength for complex grass.");
+
+	ImGui::Checkbox("Wrapped Lighting for Vanilla Grass", reinterpret_cast<bool*>(&settings.EnableWrappedLighting));
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Softens lighting on vanilla/basic grass. Complex grass is unaffected.");
+}
+
 void GrassLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;

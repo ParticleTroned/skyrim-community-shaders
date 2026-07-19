@@ -48,6 +48,7 @@ public:
 	static bool ShouldSkipKeyRelease(uint32_t key);
 
 private:
+	static void RenderModeSection();
 	static void RenderWelcomeSection();
 	static void RenderCacheMismatchSection();
 	static void RenderQuickLinksSection();

@@ -143,6 +143,11 @@ void SkySync::DrawSettings()
 	}
 }
 
+void SkySync::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enabled", &settings.Enabled);
+}
+
 void SkySync::LoadSettings(json& o_json)
 {
 	settings = o_json;

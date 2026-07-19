@@ -117,6 +117,15 @@ void DynamicCubemaps::DrawSettings()
 	}
 }
 
+void DynamicCubemaps::DrawEssentialSettings()
+{
+	bool enabled = settings.EnabledSSR != 0;
+	if (ImGui::Checkbox("Enable Screen Space Reflections", &enabled)) {
+		settings.EnabledSSR = enabled ? 1u : 0u;
+		recompileFlag = true;
+	}
+}
+
 void DynamicCubemaps::LoadSettings(json& o_json)
 {
 	settings = o_json;

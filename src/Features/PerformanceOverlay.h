@@ -138,6 +138,8 @@ struct PerformanceOverlay : OverlayFeature
 				T("feature.performance_overlay.key_feature_7", "Movable overlay window with persistent positioning") } };
 	}
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
 	virtual void DataLoaded() override;
 	void DrawOverlay() override;
 	// Settings persistence and defaults

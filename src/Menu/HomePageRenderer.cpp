@@ -65,6 +65,33 @@ namespace
 		}
 	}
 
+	bool BigRadioButton(const char* label, int* value, int buttonValue, float diameter)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ImVec2 labelSize = ImGui::CalcTextSize(label);
+		const float rowHeight = std::max(diameter, labelSize.y);
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const ImVec2 size(diameter + style.ItemInnerSpacing.x + labelSize.x, rowHeight);
+		const bool selected = *value == buttonValue;
+
+		const bool pressed = ImGui::InvisibleButton(label, size);
+		if (pressed)
+			*value = buttonValue;
+
+		const ImVec2 center(pos.x + diameter * 0.5f, pos.y + rowHeight * 0.5f);
+		const float radius = diameter * 0.5f;
+		const ImU32 bgColor = ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->AddCircleFilled(center, radius, bgColor, 32);
+		drawList->AddCircle(center, radius, ImGui::GetColorU32(ImGuiCol_Border), 32, std::max(1.0f, 2.0f * Util::GetUIScale()));
+		if (selected)
+			drawList->AddCircleFilled(center, radius * 0.62f, ImGui::GetColorU32(ImGuiCol_CheckMark), 32);
+		drawList->AddText(
+			ImVec2(pos.x + diameter + style.ItemInnerSpacing.x, pos.y + (rowHeight - labelSize.y) * 0.5f),
+			ImGui::GetColorU32(ImGuiCol_Text), label);
+		return pressed;
+	}
+
 }
 
 // Static member definitions
@@ -95,6 +122,39 @@ void HomePageRenderer::RenderHomePage()
 	// RenderFAQSection();
 
 	ImGui::EndChild();
+}
+
+void HomePageRenderer::RenderModeSection()
+{
+	auto* menu = Menu::GetSingleton();
+	if (!menu)
+		return;
+
+	auto& settings = menu->GetSettings();
+	settings.PerformanceUiMode = std::clamp(settings.PerformanceUiMode, 0, 1);
+	const char* modeLabel = "Interface Mode";
+	const char* essentialsLabel = "Essentials (Recommended)";
+	const char* advancedLabel = "Advanced (Full UI)";
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const float contentWidth = ImGui::GetContentRegionAvail().x;
+	const float radioDiameter = ImGui::GetFrameHeight() * 2.0f;
+	const ImVec2 modeLabelSize = ImGui::CalcTextSize(modeLabel);
+	const float essentialsWidth = radioDiameter + style.ItemInnerSpacing.x + ImGui::CalcTextSize(essentialsLabel).x;
+	const float advancedWidth = radioDiameter + style.ItemInnerSpacing.x + ImGui::CalcTextSize(advancedLabel).x;
+	const float rowWidth = modeLabelSize.x + essentialsWidth + advancedWidth + style.ItemSpacing.x * 3.0f;
+	const float rowHeight = std::max(radioDiameter, modeLabelSize.y);
+	const float rowY = ImGui::GetCursorPosY();
+	const float rowX = ImGui::GetCursorPosX() + std::max(0.0f, (contentWidth - rowWidth) * 0.5f);
+
+	ImGui::SetCursorPos(ImVec2(rowX, rowY + (rowHeight - modeLabelSize.y) * 0.5f));
+	ImGui::TextUnformatted(modeLabel);
+	ImGui::PushID("HomeInterfaceMode");
+	ImGui::SetCursorPos(ImVec2(rowX + modeLabelSize.x + style.ItemSpacing.x, rowY));
+	BigRadioButton(essentialsLabel, &settings.PerformanceUiMode, 0, radioDiameter);
+	ImGui::SetCursorPos(ImVec2(rowX + modeLabelSize.x + style.ItemSpacing.x * 2.0f + essentialsWidth, rowY));
+	BigRadioButton(advancedLabel, &settings.PerformanceUiMode, 1, radioDiameter);
+	ImGui::PopID();
+	ImGui::SetCursorPosY(rowY + rowHeight);
 }
 
 void HomePageRenderer::RenderWelcomeSection()
@@ -165,6 +225,8 @@ void HomePageRenderer::RenderWelcomeSection()
 		"- Visit their Discord to get the Original and support their outstanding efforts -",
 	}, windowSize.x, forkNoticeColor);
 
+	ImGui::Spacing();
+	RenderModeSection();
 	ImGui::Spacing();
 	ImGui::Dummy(ImVec2(0.0f, 25.0f * scale));
 

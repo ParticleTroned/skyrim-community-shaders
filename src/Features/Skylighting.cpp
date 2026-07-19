@@ -58,6 +58,11 @@ void Skylighting::DrawSettings()
 
 }
 
+void Skylighting::DrawEssentialSettings()
+{
+	DrawSettings();
+}
+
 void Skylighting::SetupResources()
 {
 	auto renderer = globals::game::renderer;

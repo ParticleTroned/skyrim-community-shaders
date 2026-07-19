@@ -590,6 +590,11 @@ void SubsurfaceScattering::Reset()
 	}
 }
 
+void SubsurfaceScattering::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Subsurface Scattering", &settings.EnableSubsurfaceScattering);
+}
+
 void SubsurfaceScattering::RestoreDefaultSettings()
 {
 	settings = {};

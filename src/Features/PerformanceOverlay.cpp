@@ -206,6 +206,18 @@ void PerformanceOverlay::DrawSettings()
 	}
 }
 
+void PerformanceOverlay::DrawEssentialSettings()
+{
+	auto* menu = Menu::GetSingleton();
+	ImGui::Checkbox("Show in Overlay", &settings.ShowInOverlay);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Keeps the performance overlay open when the main menu is closed.");
+		if (menu) {
+			ImGui::Text("Toggle with %s", Util::Input::KeyIdToString(menu->GetSettings().OverlayToggleKey).c_str());
+		}
+	}
+}
+
 void PerformanceOverlay::SaveSettings(json& j)
 {
 	// Persist all overlay settings to JSON

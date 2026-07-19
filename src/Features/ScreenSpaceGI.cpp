@@ -341,6 +341,13 @@ void ScreenSpaceGI::DrawSettings()
 	}
 }
 
+void ScreenSpaceGI::DrawEssentialSettings()
+{
+	if (!ShadersOK())
+		Util::Text::Error("Compute shaders failed to compile!");
+	ImGui::Checkbox("Enable", &settings.Enabled);
+}
+
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;

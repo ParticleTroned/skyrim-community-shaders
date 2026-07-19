@@ -361,6 +361,15 @@ VolumetricLighting::TextureSize& VolumetricLighting::FetchCurrentSizeInUnits(con
 	return size;
 }
 
+void VolumetricLighting::DrawEssentialSettings()
+{
+	SanitizeSettings();
+	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
+		SetupVL();
+	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
+		SetupVL();
+}
+
 void VolumetricLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;

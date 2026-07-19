@@ -92,6 +92,11 @@ void ExtendedMaterials::DrawSettings()
 
 #undef I18N_KEY_PREFIX
 
+void ExtendedMaterials::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Complex Material", reinterpret_cast<bool*>(&settings.EnableComplexMaterial));
+}
+
 void ExtendedMaterials::LoadSettings(json& o_json)
 {
 	settings = o_json;

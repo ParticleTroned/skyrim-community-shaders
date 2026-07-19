@@ -110,18 +110,24 @@ namespace PNState
 
 void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& material, const TruePBR::PBRTextureSetData& textureSetData, uint32_t textureIndex);
 
+namespace
+{
+	void DrawPBRMetalSliders(TruePBR::Settings& settings)
+	{
+		ImGui::SliderFloat("PBR Metal Reflection", &settings.pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
+		ImGui::SliderFloat("PBR Metal Highlight", &settings.pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
+	}
+}
+
 void TruePBR::DrawSettings()
 {
 	if (ImGui::TreeNodeEx("Global Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 		{
-			ImGui::SliderFloat("PBR Metal Reflection", &settings.pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
-			}
-			ImGui::SliderFloat("PBR Metal Highlight", &settings.pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
-			if (ImGui::IsItemHovered()) {
-				ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
-			}
+			DrawPBRMetalSliders(settings);
 		}
 		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::TreePop();
@@ -319,6 +325,11 @@ void TruePBR::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+}
+
+void TruePBR::DrawEssentialSettings()
+{
+	DrawPBRMetalSliders(settings);
 }
 
 void TruePBR::SaveSettings(json& o_json)

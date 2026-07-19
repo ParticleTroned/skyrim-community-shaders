@@ -244,6 +244,13 @@ void ScreenSpaceShadows::Prepass()
 	context->PSSetShaderResources(45, 1, &view);
 }
 
+void ScreenSpaceShadows::DrawEssentialSettings()
+{
+	bool enabled = bendSettings.Enable != 0;
+	if (ImGui::Checkbox("Enable", &enabled))
+		bendSettings.Enable = enabled ? 1u : 0u;
+}
+
 void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
 	bendSettings = o_json;

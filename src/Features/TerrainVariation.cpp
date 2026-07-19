@@ -60,6 +60,18 @@ void TerrainVariation::PostPostLoad()
 	UpdateShaderSettings();
 }
 
+void TerrainVariation::DrawEssentialSettings()
+{
+	const bool oldEnabled = settings.enableTilingFix != 0;
+	ImGui::Checkbox("Enable Terrain Tiling Fix", reinterpret_cast<bool*>(&settings.enableTilingFix));
+	if (oldEnabled != (settings.enableTilingFix != 0)) {
+		UpdateShaderSettings();
+		logger::info("TerrainVariation setting changed to: {}", settings.enableTilingFix);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Reduces repeating patterns in terrain textures by varying texture sampling.");
+}
+
 void TerrainVariation::LoadSettings(json& o_json)
 {
 	settings = o_json;

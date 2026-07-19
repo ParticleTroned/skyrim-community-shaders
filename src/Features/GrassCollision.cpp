@@ -229,6 +229,11 @@ void GrassCollision::Update()
 	}
 }
 
+void GrassCollision::DrawEssentialSettings()
+{
+	ImGui::Checkbox("Enable Grass Collision", &settings.EnableGrassCollision);
+}
+
 void GrassCollision::LoadSettings(json& o_json)
 {
 	settings = o_json;

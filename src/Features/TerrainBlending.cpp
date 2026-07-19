@@ -191,6 +191,13 @@ void TerrainBlending::DrawSettings()
 	}
 }
 
+void TerrainBlending::DrawEssentialSettings()
+{
+	bool enabled = settings.Enabled != 0;
+	if (ImGui::Checkbox("Enable Terrain Blending", &enabled))
+		settings.Enabled = enabled ? 1u : 0u;
+}
+
 void TerrainBlending::LoadSettings(json& o_json)
 {
 	settings = o_json;

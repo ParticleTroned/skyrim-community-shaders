@@ -872,6 +872,86 @@ void Upscaling::SaveSettings(json& o_json)
 	}
 }
 
+void Upscaling::DrawEssentialSettings()
+{
+	struct UpscaleUiChoice
+	{
+		UpscaleMethod method;
+		bool useRuntimeFsr4;
+		const char* label;
+	};
+
+	const bool renderDocBlocksUpscaling = IsRenderDocUpscalingBlocked();
+	const bool featureDLSS = streamline.featureDLSS;
+	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
+	uint32_t* currentUpscaleMode = featureDLSS ? &settings.upscaleMethod : &settings.upscaleMethodNoDLSS;
+	if (!renderDocBlocksUpscaling &&
+		*currentUpscaleMode == static_cast<uint32_t>(UpscaleMethod::kFSR) &&
+		!runtimeFsr4AutoEligible) {
+		settings.fsr4RuntimeEnable = false;
+	}
+
+	std::vector<UpscaleUiChoice> choices = { { UpscaleMethod::kNONE, false, "None" } };
+	if (!renderDocBlocksUpscaling) {
+		choices.push_back({ UpscaleMethod::kTAA, false, "TAA" });
+		choices.push_back({ UpscaleMethod::kFSR, false, "AMD FSR3" });
+		if (runtimeFsr4AutoEligible)
+			choices.push_back({ UpscaleMethod::kFSR, true, "AMD FSR4" });
+		if (featureDLSS)
+			choices.push_back({ UpscaleMethod::kDLSS, false, "NVIDIA DLSS" });
+	}
+
+	auto matchesCurrentChoice = [&](const UpscaleUiChoice& choice) {
+		if (static_cast<uint32_t>(choice.method) != *currentUpscaleMode)
+			return false;
+		return choice.method != UpscaleMethod::kFSR || settings.fsr4RuntimeEnable == choice.useRuntimeFsr4;
+	};
+
+	int methodIndex = 0;
+	for (int i = 0; i < static_cast<int>(choices.size()); ++i) {
+		if (matchesCurrentChoice(choices[i])) {
+			methodIndex = i;
+			break;
+		}
+	}
+
+	ImGui::BeginDisabled(renderDocBlocksUpscaling);
+	const bool methodChanged = ImGui::SliderInt("Method", &methodIndex, 0, static_cast<int>(choices.size() - 1), choices[methodIndex].label);
+	ImGui::EndDisabled();
+	methodIndex = std::clamp(methodIndex, 0, static_cast<int>(choices.size() - 1));
+	const auto& selected = choices[methodIndex];
+	if (!renderDocBlocksUpscaling && (methodChanged || !matchesCurrentChoice(selected))) {
+		*currentUpscaleMode = static_cast<uint32_t>(selected.method);
+		if (selected.method == UpscaleMethod::kFSR)
+			settings.fsr4RuntimeEnable = selected.useRuntimeFsr4;
+		InvalidateFrameScopedUpscalingState();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(renderDocBlocksUpscaling ? "Upscaling is disabled while RenderDoc capture is active." : "Selects the upscaling backend.");
+
+	const auto method = GetUpscaleMethod();
+	if (method == UpscaleMethod::kNONE || method == UpscaleMethod::kTAA)
+		return;
+
+	settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
+	const char* baseLabel = GetQualityModeName(settings.qualityMode, method == UpscaleMethod::kDLSS);
+	const std::string qualityLabel = std::format("{} ( {:.2f}x )", baseLabel, GetQualityModeResolutionScale(settings.qualityMode));
+	int qualityMode = static_cast<int>(settings.qualityMode);
+	if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), qualityLabel.c_str())) {
+		settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
+		InvalidateFrameScopedUpscalingState();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Controls the internal render scale and quality level.");
+
+	if (method == UpscaleMethod::kFSR) {
+		if (ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f"))
+			InvalidateFrameScopedUpscalingState();
+	} else if (method == UpscaleMethod::kDLSS) {
+		ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+	}
+}
+
 void Upscaling::LoadSettings(json& o_json)
 {
 	const bool hasQualityModeSchemaVersion = o_json.contains("qualityModeSchemaVersion");

@@ -374,13 +374,11 @@ bool Profiler::CollectResults()
 		HRESULT hr = context->GetData(frame.disjoint.get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH);
 		if (hr != S_OK)
 			return false;
-		frame.inFlight = false;
 		hasGpuFrameData = true;
 	}
 
 	if (hasGpuFrameData && !disjointData.Disjoint && disjointData.Frequency > 0 && frame.activeCount > 0) {
 		double ticksToMs = 1000.0 / static_cast<double>(disjointData.Frequency);
-		gpuFrameComplete = true;
 
 		for (uint32_t i = 0; i < frame.activeCount; i++) {
 			auto& timer = frame.timers[i];
@@ -411,14 +409,15 @@ bool Profiler::CollectResults()
 			entry.hasCpu = true;
 			activeTotalMs += ms;
 			activeCpuTotalMs += timer.cpuMs;
-
-			auto& known = GetOrCreateTimer(timer.name);
-			known.hasGpu = true;
-			known.hasCpu = true;
-			known.gpu.PushSample(ms);
-			known.cpu.PushSample(timer.cpuMs);
 		}
+
+		if (!gpuTimerQueriesComplete)
+			return false;
+
+		gpuFrameComplete = true;
 	}
+	if (hasGpuFrameData)
+		frame.inFlight = false;
 
 	for (const auto& timer : frame.cpuTimers) {
 		if (timer.name.empty())
@@ -430,13 +429,21 @@ bool Profiler::CollectResults()
 		entry.cpuMs += timer.cpuMs;
 		entry.hasCpu = true;
 		activeCpuTotalMs += timer.cpuMs;
-
-		auto& known = GetOrCreateTimer(timer.name);
-		known.hasCpu = true;
-		known.cpu.PushSample(timer.cpuMs);
 	}
 
-	if (gpuFrameComplete && gpuTimerQueriesComplete) {
+	for (const auto& [name, active] : activeTimers) {
+		auto& known = GetOrCreateTimer(name);
+		if (active.hasGpu) {
+			known.hasGpu = true;
+			known.gpu.PushSample(active.gpuMs);
+		}
+		if (active.hasCpu) {
+			known.hasCpu = true;
+			known.cpu.PushSample(active.cpuMs);
+		}
+	}
+
+	if (gpuFrameComplete) {
 		for (auto& known : knownTimers) {
 			auto it = activeTimers.find(known.name);
 			const bool activeGpu = it != activeTimers.end() && it->second.hasGpu;
@@ -461,7 +468,7 @@ bool Profiler::CollectResults()
 
 	totalTimeMs = activeTotalMs;
 	cpuTotalTimeMs = activeCpuTotalMs;
-	if (gpuFrameComplete && gpuTimerQueriesComplete)
+	if (gpuFrameComplete)
 		totalGpuHistory.PushSample(activeTotalMs);
 	if (gpuFrameComplete || hasCompletedCpuTimers)
 		totalCpuHistory.PushSample(activeCpuTotalMs);

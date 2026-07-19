@@ -885,7 +885,14 @@ bool AdaptiveBrightness::SyncSelectedProfileTabToContext()
 		currentProfileTabSyncKey += ':';
 		currentProfileTabSyncKey += activeOverride->key;
 	}
-	if (profileTabSyncInitialized && profileTabSyncKey == currentProfileTabSyncKey)
+
+	const int currentFrame = ImGui::GetFrameCount();
+	const bool profileTabsWereVisible =
+		profileTabLastDrawFrame >= 0 &&
+		(currentFrame == profileTabLastDrawFrame || currentFrame == profileTabLastDrawFrame + 1);
+	profileTabLastDrawFrame = currentFrame;
+
+	if (profileTabsWereVisible && profileTabSyncInitialized && profileTabSyncKey == currentProfileTabSyncKey)
 		return false;
 	selectedProfileTab = currentProfile;
 	profileTabSyncKey = std::move(currentProfileTabSyncKey);
@@ -1681,6 +1688,7 @@ void AdaptiveBrightness::InvalidateProfileTabSync()
 {
 	profileTabSyncKey.clear();
 	profileTabSyncInitialized = false;
+	profileTabLastDrawFrame = -1;
 }
 
 void AdaptiveBrightness::ResetLocationOverrideEdit()

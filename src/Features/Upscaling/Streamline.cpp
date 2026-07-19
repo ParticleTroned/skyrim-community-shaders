@@ -218,8 +218,14 @@ void Streamline::LoadInterposer()
 	const std::filesystem::path pluginDir = std::filesystem::path(Streamline::PluginDir);
 	std::error_code pluginPathError;
 	auto pluginDirAbsolute = std::filesystem::absolute(pluginDir, pluginPathError);
-	if (pluginPathError)
-		pluginDirAbsolute = pluginDir;
+	if (pluginPathError) {
+		logger::warn(
+			"[Streamline] Failed to resolve absolute plugin directory {}: {}",
+			stl::utf16_to_utf8(pluginDir.wstring()).value_or("<unknown>"),
+			pluginPathError.message());
+		return;
+	}
+	pluginDirAbsolute = pluginDirAbsolute.lexically_normal();
 	const std::filesystem::path interposerPath = pluginDirAbsolute / L"sl.interposer.dll";
 	EnsureStreamlineDllDirectory(pluginDirAbsolute);
 	DWORD errorCode = ERROR_SUCCESS;

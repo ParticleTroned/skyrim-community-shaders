@@ -4,10 +4,16 @@
 #include "ShaderFileWatcher.h"
 #include "Util.h"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <d3dcompiler.h>
+#include <fstream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 
 #include "Deferred.h"
 #include "State.h"
@@ -16,12 +22,121 @@
 
 #include "Plugin.h"
 
-#include <algorithm>
-#include <cctype>
-#include <mutex>
-
 namespace SIE
 {
+	namespace
+	{
+		struct IncludeParseEntry
+		{
+			std::chrono::system_clock::time_point selfMTime;
+			std::vector<std::filesystem::path> includes;
+		};
+
+		std::string NormalizedPathKey(const std::filesystem::path& a_path)
+		{
+			std::string key = a_path.lexically_normal().string();
+#ifdef _WIN32
+			std::transform(key.begin(), key.end(), key.begin(), [](unsigned char a_char) { return static_cast<char>(std::tolower(a_char)); });
+#endif
+			return key;
+		}
+
+		std::chrono::system_clock::time_point GetMaxShaderMTimeInternal(
+			const std::filesystem::path& a_path,
+			const std::filesystem::path& a_shadersRoot,
+			std::unordered_map<std::string, IncludeParseEntry>& a_parseCache,
+			std::mutex& a_parseCacheMutex,
+			std::unordered_map<std::string, std::chrono::system_clock::time_point>& a_callResults)
+		{
+			const std::string key = NormalizedPathKey(a_path);
+			if (auto it = a_callResults.find(key); it != a_callResults.end())
+				return it->second;
+
+			// In-progress marker: include cycles resolve to min() and fall out of the max reduction.
+			a_callResults[key] = std::chrono::system_clock::time_point::min();
+
+			std::error_code ec;
+			const auto selfMTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(a_path, ec));
+			if (ec) {
+				// Unreadable sources should trigger recompilation rather than permit stale cache reuse.
+				const auto now = std::chrono::system_clock::now();
+				a_callResults[key] = now;
+				return now;
+			}
+
+			std::vector<std::filesystem::path> includes;
+			bool cached = false;
+			{
+				std::lock_guard lock(a_parseCacheMutex);
+				if (auto it = a_parseCache.find(key); it != a_parseCache.end() && it->second.selfMTime == selfMTime) {
+					includes = it->second.includes;
+					cached = true;
+				}
+			}
+
+			if (!cached) {
+				std::ifstream ifs(a_path);
+				if (!ifs.is_open()) {
+					const auto now = std::chrono::system_clock::now();
+					a_callResults[key] = now;
+					return now;
+				}
+
+				std::string line;
+				while (std::getline(ifs, line)) {
+					size_t pos = line.find_first_not_of(" \t");
+					if (pos == std::string::npos || line[pos] != '#')
+						continue;
+
+					pos = line.find_first_not_of(" \t", pos + 1);
+					if (pos == std::string::npos || line.compare(pos, 7, "include") != 0)
+						continue;
+
+					const size_t firstQuote = line.find('"', pos + 7);
+					if (firstQuote == std::string::npos)
+						continue;
+
+					const size_t secondQuote = line.find('"', firstQuote + 1);
+					if (secondQuote == std::string::npos || secondQuote == firstQuote + 1)
+						continue;
+
+					const std::string includeName = line.substr(firstQuote + 1, secondQuote - firstQuote - 1);
+
+					std::error_code rootEc, parentEc;
+					std::filesystem::path includePath = a_shadersRoot / includeName;
+					if (!std::filesystem::exists(includePath, rootEc)) {
+						includePath = a_path.parent_path() / includeName;
+						if (!std::filesystem::exists(includePath, parentEc) && !rootEc && !parentEc)
+							continue;
+					}
+
+					includes.push_back(std::move(includePath));
+				}
+
+				std::lock_guard lock(a_parseCacheMutex);
+				a_parseCache[key] = IncludeParseEntry{ selfMTime, includes };
+			}
+
+			auto maxTime = selfMTime;
+			for (const auto& includePath : includes)
+				maxTime = std::max(maxTime, GetMaxShaderMTimeInternal(includePath, a_shadersRoot, a_parseCache, a_parseCacheMutex, a_callResults));
+
+			a_callResults[key] = maxTime;
+			return maxTime;
+		}
+
+		std::chrono::system_clock::time_point GetMaxShaderMTime(
+			const std::filesystem::path& a_path,
+			const std::filesystem::path& a_shadersRoot)
+		{
+			static std::unordered_map<std::string, IncludeParseEntry> parseCache;
+			static std::mutex parseCacheMutex;
+
+			std::unordered_map<std::string, std::chrono::system_clock::time_point> callResults;
+			return GetMaxShaderMTimeInternal(a_path, a_shadersRoot, parseCache, parseCacheMutex, callResults);
+		}
+	}
+
 	// Custom include handler to track all includes during shader compilation
 	class TrackingIncludeHandler : public ID3DInclude
 	{
@@ -1368,7 +1483,7 @@ namespace SIE
 					if (diskCacheOutdated)
 						logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
 				} else if (cache.IsSkipUnchangedShaders()) {
-					// No file watcher: compare disk-cache mtime directly against the .hlsl source file mtime.
+					// No file watcher: compare the disk cache mtime against the newest source/include mtime.
 					std::error_code ec;
 					const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
 					if (ec) {
@@ -1379,12 +1494,10 @@ namespace SIE
 								static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
 								shader.fxpFilename);
 						if (std::filesystem::exists(shaderSourcePath)) {
-							const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shaderSourcePath, ec));
-							if (ec) {
-								logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
-							} else if (sourceTime > diskCacheTime) {
+							const auto sourceTime = GetMaxShaderMTime(shaderSourcePath, std::filesystem::path(shaderSourcePath).parent_path());
+							if (sourceTime > diskCacheTime) {
 								diskCacheOutdated = true;
-								logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
+								logger::debug("Disk-cached shader {} outdated: source or include is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
 							}
 						}
 					}

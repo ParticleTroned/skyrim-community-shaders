@@ -473,7 +473,8 @@ void TruePBR::ReloadTextureSetData()
 
 	for (const auto& [material, textureSets] : BSLightingShaderMaterialPBRLandscape::All) {
 		for (uint32_t textureSetIndex = 0; textureSetIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureSetIndex) {
-			SetupPBRLandscapeTextureParameters(*material, *textureSets[textureSetIndex], textureSetIndex);
+			if (const auto* textureSetData = textureSets[textureSetIndex])
+				SetupPBRLandscapeTextureParameters(*material, *textureSetData, textureSetIndex);
 		}
 	}
 }

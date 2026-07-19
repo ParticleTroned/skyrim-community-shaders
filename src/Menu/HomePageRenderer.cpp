@@ -273,14 +273,11 @@ void HomePageRenderer::RenderWelcomeSection()
 	const float linkButtonHeight = HOME_LINK_BUTTON_HEIGHT * scale;
 	const float linkButtonSpacing = HOME_LINK_BUTTON_SPACING * scale;
 	const float githubButtonWidth = HOME_LINK_GITHUB_BUTTON_WIDTH * scale;
-	ImVec2 discordButtonSize(githubButtonWidth, linkButtonHeight);
+	ImVec2 discordButtonSize(HOME_LINK_DISCORD_BUTTON_MIN_WIDTH * scale, linkButtonHeight);
 	if (discordIconAvailable) {
 		const ImVec2 originalSize(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
 		const float aspectRatio = originalSize.x / originalSize.y;
-		discordButtonSize.x = std::clamp(
-			linkButtonHeight * aspectRatio,
-			HOME_LINK_DISCORD_BUTTON_MIN_WIDTH * scale,
-			HOME_LINK_DISCORD_BUTTON_MAX_WIDTH * scale);
+		discordButtonSize.x = std::max(discordButtonSize.x, linkButtonHeight * aspectRatio);
 	}
 
 	const float linkRowWidth = discordButtonSize.x + linkButtonSpacing + githubButtonWidth;
@@ -289,9 +286,37 @@ void HomePageRenderer::RenderWelcomeSection()
 	if (discordIconAvailable) {
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 		[[maybe_unused]] auto discordButtonStyle = Util::TransparentIconButtonStyle();
-		if (Util::ImageButtonWithFlash("##HomeDiscordButton", menu->uiIcons.discord.texture, discordButtonSize)) {
+		ImGui::PushID("HomeDiscordButton");
+		const bool clicked = ImGui::InvisibleButton("##button", discordButtonSize);
+		const bool hovered = ImGui::IsItemHovered();
+		const bool hasActiveFlash = Util::IsButtonFlashActive("HomeDiscordButton");
+		if (clicked) {
 			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+			Util::TriggerButtonFlash("HomeDiscordButton");
 		}
+		const ImVec2 buttonMin = ImGui::GetItemRectMin();
+		const ImVec2 buttonMax = ImGui::GetItemRectMax();
+		const ImVec2 originalSize(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
+		const float imageAspectRatio = originalSize.x / originalSize.y;
+		ImVec2 imageSize(discordButtonSize.x, discordButtonSize.x / imageAspectRatio);
+		if (imageSize.y > discordButtonSize.y) {
+			imageSize.y = discordButtonSize.y;
+			imageSize.x = imageSize.y * imageAspectRatio;
+		}
+		const ImVec2 imageMin(
+			buttonMin.x + (discordButtonSize.x - imageSize.x) * 0.5f,
+			buttonMin.y + (discordButtonSize.y - imageSize.y) * 0.5f);
+		const ImVec2 imageMax(imageMin.x + imageSize.x, imageMin.y + imageSize.y);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		if (hovered || hasActiveFlash) {
+			ImVec4 feedbackColor = hasActiveFlash ?
+			                           Util::GetButtonFlashColor(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered)) :
+			                           ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+			feedbackColor.w = hasActiveFlash ? 0.34f : 0.18f;
+			drawList->AddRectFilled(buttonMin, buttonMax, ImGui::GetColorU32(feedbackColor), ImGui::GetStyle().FrameRounding);
+		}
+		drawList->AddImage(menu->uiIcons.discord.texture, imageMin, imageMax);
+		ImGui::PopID();
 		ImGui::PopStyleVar();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Open MGO Discord");

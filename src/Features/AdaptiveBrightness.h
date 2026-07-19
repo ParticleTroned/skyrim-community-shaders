@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "CSUtility.h"
 #include "LinearLighting.h"
 
 namespace RE
@@ -150,6 +151,7 @@ struct AdaptiveBrightness : Feature
 
 	bool IsRuntimeEnabled() const;
 	LinearLighting::Settings GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const;
+	CSUtility::Settings GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings, bool a_csUtilityEnabled) const;
 
 	struct ActiveProfileBlend
 	{
@@ -161,6 +163,8 @@ struct AdaptiveBrightness : Feature
 	LinearLighting::Settings GetNeutralLinearLightingSettings() const;
 	LinearLighting::Settings ApplyProfile(const LinearLighting::Settings& a_base, const ProfileSettings& a_profile) const;
 	LinearLighting::Settings LerpSettings(const LinearLighting::Settings& a_a, const LinearLighting::Settings& a_b, float a_t) const;
+	CSUtility::Settings ApplyProfile(const CSUtility::Settings& a_base, const ProfileSettings& a_profile) const;
+	CSUtility::Settings LerpSettings(const CSUtility::Settings& a_a, const CSUtility::Settings& a_b, float a_t) const;
 	ActiveProfileBlend GetActiveProfileBlend() const;
 	Profile GetInteriorProfile() const;
 	Profile GetCurrentProfileForUI() const;

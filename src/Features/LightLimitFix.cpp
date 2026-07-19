@@ -486,6 +486,11 @@ namespace
 		       std::max(a_tint.green, 0.0f) +
 		       std::max(a_tint.blue, 0.0f);
 	}
+
+	void SetPointLightTypeFlags(LightLimitFix::LightData& a_light, RE::BSLight* a_bsLight)
+	{
+		PointLightFlags::SetPointLightTypeFlags(a_light.lightFlags, a_bsLight);
+	}
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -1051,6 +1056,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 				light.fade = runtimeData.fade;
 			}
 
+			SetPointLightTypeFlags(light, bsLight);
 			light.fade *= bsLight->lodDimmer;
 			const bool isPortalStrict = !IsGlobalLight(bsLight);
 			ApplyJsonPlacedLightIntensityScale(light, bsLight, niLight, isPortalStrict, isInterior);
@@ -1802,6 +1808,7 @@ void LightLimitFix::UpdateLights()
 						light.fade = runtimeData.fade;
 					}
 
+					SetPointLightTypeFlags(light, bsLight);
 					light.fade *= bsLight->lodDimmer;
 					const bool isPortalStrict = !IsGlobalLight(bsLight);
 

@@ -609,7 +609,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
+				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
 				float lightShadow = 1.0;
 
 				float shadowComponent = 1.0;
@@ -802,7 +803,7 @@ PS_OUTPUT main(PS_INPUT input)
 #				endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
 
 				float lightShadow = 1.0;
 

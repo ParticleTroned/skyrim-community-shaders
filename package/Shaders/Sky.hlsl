@@ -193,6 +193,7 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor.xyz = Color::Sky(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
+	float skyBrightnessMultiplier = SharedData::csUtilitySettings.skyBrightness;
 
 #		ifdef HDR_OUTPUT
 	float hdrSunGain = HDRSun::GetHdrSunGain(
@@ -225,10 +226,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 skyVertColor = Color::UseLinearLightingColorAdjustments() ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
 	float3 sunGlareColor = Color::Sky(skyVertColor) * baseColor.xyz;
 	// Dither/noise term is the legacy sky path contribution for gradient smoothing.
-	psout.Color.xyz = (sunGlareColor + skyScale) + (Color::UseLinearLightingColorAdjustments() ? 0.0 : noiseGrad);
+	psout.Color.xyz = (sunGlareColor + skyScale) * skyBrightnessMultiplier + (Color::UseLinearLightingColorAdjustments() ? 0.0 : noiseGrad);
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
-	psout.Color.xyz = skyScale + Color::Sky(input.Color.xyz + noiseGrad);
+	psout.Color.xyz = (skyScale + Color::Sky(input.Color.xyz + noiseGrad)) * skyBrightnessMultiplier;
 	psout.Color.w = input.Color.w;
 #			endif  // TEX
 
@@ -240,11 +241,11 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * ((Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale) * skyBrightnessMultiplier);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else  // not DITHER, not MOONMASK, not HORIZFADE
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale) * skyBrightnessMultiplier;
 #		endif
 
 #	else

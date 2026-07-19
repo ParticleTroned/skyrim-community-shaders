@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "OverlayFeature.h"
+#include "Utils/PointLightFlags.h"
 
 #include "Features/LightLimitFix/ParticleLights.h"
 
@@ -36,18 +37,7 @@ public:
 
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
-	enum class LightFlags : std::uint32_t
-	{
-		PortalStrict = (1 << 0),
-		Shadow = (1 << 1),
-		Simple = (1 << 2),
-
-		Initialised = (1 << 8),
-		Disabled = (1 << 9),
-		InverseSquare = (1 << 10),
-		Linear = (1 << 11),
-		Particle = (1 << 12),
-	};
+	using LightFlags = PointLightFlags::Flags;
 
 	struct PositionOpt
 	{

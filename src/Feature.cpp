@@ -258,6 +258,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
 		&globals::features::unifiedWater,
+		&globals::features::csUtility,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
 		&globals::features::skin

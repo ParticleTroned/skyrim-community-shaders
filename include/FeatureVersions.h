@@ -13,9 +13,10 @@ namespace FeatureVersions
     inline const std::map<std::string_view, REL::Version> FEATURE_MINIMAL_VERSIONS{
         {"AdaptiveBrightness"sv,   {1,0,0}},
         {"CloudShadows"sv,         {1,4,0}},
+        {"CSUtility"sv,            {1,0,0}},
         {"CSEditor"sv,             {2,0,5}},
         {"DynamicCubemaps"sv,      {2,4,0}},
-        {"ExponentialHeightFog"sv, {1,3,0}},
+        {"ExponentialHeightFog"sv, {1,3,1}},
         {"ExtendedMaterials"sv,    {1,2,0}},
         {"ExtendedTranslucency"sv, {1,0,0}},
         {"GrassCollision"sv,       {3,1,0}},
@@ -52,6 +53,7 @@ namespace FeatureVersions
 
     inline const std::unordered_set<std::string_view> FEATURE_CORE_NAMES{
         "AdaptiveBrightness"sv,
+        "CSUtility"sv,
         "DynamicCubemaps"sv,
         "ExtendedMaterials"sv,
         "ExtendedTranslucency"sv,

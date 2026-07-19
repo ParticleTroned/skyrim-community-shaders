@@ -17,17 +17,21 @@ namespace ContactShadowFlags
 	static const uint Particle = (1u << 1);
 }
 
+#include "Common/PointLightFlags.hlsli"
+
 namespace LightFlags
 {
-	static const uint PortalStrict = (1 << 0);
-	static const uint Shadow = (1 << 1);
-	static const uint Simple = (1 << 2);
+	static const uint PortalStrict = POINT_LIGHT_FLAG_PORTAL_STRICT;
+	static const uint Shadow = POINT_LIGHT_FLAG_SHADOW;
+	static const uint Simple = POINT_LIGHT_FLAG_SIMPLE;
 
-	static const uint Initialised = (1 << 8);
-	static const uint Disabled = (1 << 9);
-	static const uint InverseSquare = (1 << 10);
-	static const uint Linear = (1 << 11);
-	static const uint Particle = (1 << 12);
+	static const uint Initialised = POINT_LIGHT_FLAG_INITIALISED;
+	static const uint Disabled = POINT_LIGHT_FLAG_DISABLED;
+	static const uint InverseSquare = POINT_LIGHT_FLAG_INVERSE_SQUARE;
+	static const uint Linear = POINT_LIGHT_FLAG_LINEAR;
+	static const uint Particle = POINT_LIGHT_FLAG_PARTICLE;
+	static const uint Spot = POINT_LIGHT_FLAG_SPOT;
+	static const uint OmniDirectional = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
 }
 
 struct ClusterAABB

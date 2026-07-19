@@ -46,8 +46,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	waterGamma,
 	vlGamma,
 	vanillaDiffuseColorMult,
-	directionalLightMult,
-	pointLightMult,
 	ambientMult,
 	emitColorMult,
 	glowmapMult,
@@ -76,7 +74,6 @@ void LinearLighting::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("water_gamma"), "Water Gamma"), &settings.waterGamma, 0.1f, 3.0f, "%.2f");
 
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
-			ImGui::SliderFloat(T(TKEY("directional_light_multiplier"), "Directional Light Multiplier"), &settings.directionalLightMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), &settings.ambientMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("glowmap_multiplier"), "Glowmap Multiplier"), &settings.glowmapMult, 0.0f, 10.0f, "%.2f");
 
@@ -96,7 +93,6 @@ void LinearLighting::DrawSettings()
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
 			ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, 0.0f, 10.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("point_light_multiplier"), "Point Light Multiplier"), &settings.pointLightMult, 0.0f, 10.0f, "%.2f");
 
 			if (ImGui::TreeNodeEx(T(TKEY("effects"), "Effects"), ImGuiTreeNodeFlags_DefaultOpen)) {
 				ImGui::SliderFloat(T(TKEY("effect_lighting_multiplier"), "Effect Lighting Multiplier"), &settings.effectLightingMult, 0.0f, 10.0f, "%.2f");
@@ -200,8 +196,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.waterGamma = effectiveSettings.waterGamma;
 	data.vlGamma = effectiveSettings.vlGamma;
 	data.vanillaDiffuseColorMult = effectiveSettings.vanillaDiffuseColorMult;
-	data.directionalLightMult = effectiveSettings.directionalLightMult;
-	data.pointLightMult = effectiveSettings.pointLightMult;
 	data.ambientMult = effectiveSettings.ambientMult;
 	data.emitColorMult = effectiveSettings.emitColorMult;
 	data.glowmapMult = effectiveSettings.glowmapMult;

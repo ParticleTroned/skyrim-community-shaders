@@ -95,6 +95,7 @@ void ExtendedMaterials::DrawSettings()
 void ExtendedMaterials::DrawEssentialSettings()
 {
 	ImGui::Checkbox("Enable Complex Material", reinterpret_cast<bool*>(&settings.EnableComplexMaterial));
+	ImGui::Checkbox("Enable Parallax", reinterpret_cast<bool*>(&settings.EnableParallax));
 }
 
 void ExtendedMaterials::LoadSettings(json& o_json)

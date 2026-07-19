@@ -35,6 +35,46 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BlurRadius,
 	DistanceNormalisation)
 
+namespace
+{
+	void ApplyAOOnlyPreset(ScreenSpaceGI::Settings& a_settings)
+	{
+		a_settings.NumSlices = 1;
+		a_settings.NumSteps = 6;
+		a_settings.ResolutionMode = 0;
+		a_settings.EnableBlur = true;
+		a_settings.EnableGI = false;
+	}
+
+	bool IsAOOnlyPreset(const ScreenSpaceGI::Settings& a_settings)
+	{
+		return a_settings.NumSlices == 1 &&
+		       a_settings.NumSteps == 6 &&
+		       a_settings.ResolutionMode == 0 &&
+		       a_settings.EnableBlur &&
+		       !a_settings.EnableGI;
+	}
+
+	bool DrawResolutionModeSelector(const char* a_tableId, int& a_resolutionMode)
+	{
+		bool clickedResolutionMode = false;
+		if (ImGui::BeginTable(a_tableId, 3, ImGuiTableFlags_SizingStretchProp)) {
+			ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			clickedResolutionMode |= ImGui::RadioButton(T(TKEY("full_res"), "Full Res"), &a_resolutionMode, 0);
+			ImGui::TableNextColumn();
+			clickedResolutionMode |= ImGui::RadioButton(T(TKEY("half_res"), "Half Res"), &a_resolutionMode, 1);
+			ImGui::TableNextColumn();
+			clickedResolutionMode |= ImGui::RadioButton(T(TKEY("quarter_res"), "Quarter Res"), &a_resolutionMode, 2);
+			ImGui::EndTable();
+		}
+		return clickedResolutionMode;
+	}
+}
+
 ////////////////////////////////////////////////////////////////////////////////////
 
 void ScreenSpaceGI::RestoreDefaultSettings()
@@ -93,14 +133,11 @@ void ScreenSpaceGI::DrawSettings()
 		if (ImGui::BeginTable("Presets", 5)) {
 			ImGui::TableNextColumn();
 			if (ImGui::Button(T(TKEY("ao_only"), "AO only"), { -1, 0 })) {
-				settings.NumSlices = 1;
-				settings.NumSteps = 6;
-				settings.EnableBlur = true;
-				settings.EnableGI = false;
+				ApplyAOOnlyPreset(settings);
 				recompileFlag = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("1 Slice, 6 Steps, blur enabled, no GI\n");
+				ImGui::Text("Full Res, 1 Slice, 6 Steps, blur enabled, no GI\n");
 			}
 
 			ImGui::TableNextColumn();
@@ -168,16 +205,8 @@ void ScreenSpaceGI::DrawSettings()
 									  "Controls accuracy of lighting, and noise when effect radius is large."));
 		}
 
-		if (ImGui::BeginTable("Less Work", 3)) {
-			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::RadioButton(T(TKEY("full_res"), "Full Res"), &settings.ResolutionMode, 0);
-			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::RadioButton(T(TKEY("half_res"), "Half Res"), &settings.ResolutionMode, 1);
-			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::RadioButton(T(TKEY("quarter_res"), "Quarter Res"), &settings.ResolutionMode, 2);
-
-			ImGui::EndTable();
-		}
+		settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
+		recompileFlag |= DrawResolutionModeSelector("SSGIResolutionMode", settings.ResolutionMode);
 	}
 
 	///////////////////////////////
@@ -346,6 +375,24 @@ void ScreenSpaceGI::DrawEssentialSettings()
 	if (!ShadersOK())
 		Util::Text::Error("Compute shaders failed to compile!");
 	ImGui::Checkbox("Enable", &settings.Enabled);
+
+	{
+		auto guard = Util::DisableGuard(!settings.Enabled);
+
+		const bool aoOnlyActive = IsAOOnlyPreset(settings);
+		{
+			[[maybe_unused]] auto style = Util::PresetButtonStyle(aoOnlyActive);
+			if (ImGui::Button("AO only", { -1, 0 })) {
+				ApplyAOOnlyPreset(settings);
+				recompileFlag = true;
+			}
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Full Res AO-only baseline with no indirect lighting.");
+
+		settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
+		recompileFlag |= DrawResolutionModeSelector("SSGIEssentialsResolutionMode", settings.ResolutionMode);
+	}
 }
 
 void ScreenSpaceGI::LoadSettings(json& o_json)

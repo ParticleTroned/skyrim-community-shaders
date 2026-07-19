@@ -44,7 +44,7 @@ namespace FeatureVersions
         {"TerrainVariation"sv,     {1,0,1}},
         {"TruePBR"sv,              {1,0,0}},
         {"UnifiedWater"sv,         {1,0,2}},
-        {"Upscaling"sv,            {1,5,0}},
+        {"Upscaling"sv,            {1,6,0}},
         {"VolumetricLighting"sv,   {1,1,5}},
         {"VolumetricShadows"sv,    {2,1,0}},
         {"WaterEffects"sv,         {1,2,0}},

@@ -47,6 +47,22 @@ namespace
 	std::atomic_bool g_renderDocDllDetected{ false };
 	std::atomic_bool g_renderDocUpscalingD3DHookBypassLogged{ false };
 
+	bool IsMainMenuContextActive()
+	{
+		auto* state = globals::state;
+		auto* ui = globals::game::ui;
+		return (state && state->isMainMenuOpen) ||
+		       (ui && ui->IsMenuOpen(RE::MainMenu::MENU_NAME));
+	}
+
+	bool IsLoadingMenuContextActive()
+	{
+		auto* state = globals::state;
+		auto* ui = globals::game::ui;
+		return (state && state->isLoadingMenuOpen) ||
+		       (ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	}
+
 	bool IsRenderDocDllLoaded(bool a_probeProcess)
 	{
 		if (g_renderDocDllDetected.load(std::memory_order_acquire))
@@ -125,9 +141,9 @@ namespace
 		return true;
 	}
 
-	struct ScopedCopySharedPipelineState
+	struct ScopedFullscreenPipelineState
 	{
-		explicit ScopedCopySharedPipelineState(ID3D11DeviceContext* a_context) :
+		explicit ScopedFullscreenPipelineState(ID3D11DeviceContext* a_context) :
 			context(a_context)
 		{
 			if (!context)
@@ -150,8 +166,12 @@ namespace
 
 			context->VSGetShader(vertexShader.put(), nullptr, nullptr);
 			context->PSGetShader(pixelShader.put(), nullptr, nullptr);
+			context->GSGetShader(geometryShader.put(), nullptr, nullptr);
+			context->HSGetShader(hullShader.put(), nullptr, nullptr);
+			context->DSGetShader(domainShader.put(), nullptr, nullptr);
 			context->RSGetState(rasterizerState.put());
 			context->OMGetBlendState(blendState.put(), blendFactor, &sampleMask);
+			context->OMGetDepthStencilState(depthStencilState.put(), &stencilRef);
 
 			ID3D11RenderTargetView* rawRenderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
 			ID3D11DepthStencilView* rawDepthStencilView = nullptr;
@@ -163,14 +183,18 @@ namespace
 			ID3D11ShaderResourceView* rawPixelShaderResources[1]{};
 			context->PSGetShaderResources(0, 1, rawPixelShaderResources);
 			pixelShaderResources[0].attach(rawPixelShaderResources[0]);
+
+			ID3D11Buffer* rawPixelShaderConstantBuffer = nullptr;
+			context->PSGetConstantBuffers(1, 1, &rawPixelShaderConstantBuffer);
+			pixelShaderConstantBuffer1.attach(rawPixelShaderConstantBuffer);
 		}
 
-		~ScopedCopySharedPipelineState()
+		~ScopedFullscreenPipelineState()
 		{
 			if (!context)
 				return;
 
-			context->RSSetViewports(viewportCount, viewports);
+			context->RSSetViewports(viewportCount, viewportCount ? viewports : nullptr);
 			context->IASetInputLayout(inputLayout.get());
 			context->IASetPrimitiveTopology(primitiveTopology);
 
@@ -182,8 +206,12 @@ namespace
 
 			context->VSSetShader(vertexShader.get(), nullptr, 0);
 			context->PSSetShader(pixelShader.get(), nullptr, 0);
+			context->GSSetShader(geometryShader.get(), nullptr, 0);
+			context->HSSetShader(hullShader.get(), nullptr, 0);
+			context->DSSetShader(domainShader.get(), nullptr, 0);
 			context->RSSetState(rasterizerState.get());
 			context->OMSetBlendState(blendState.get(), blendFactor, sampleMask);
+			context->OMSetDepthStencilState(depthStencilState.get(), stencilRef);
 
 			ID3D11RenderTargetView* rawRenderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
 			for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
@@ -192,6 +220,8 @@ namespace
 
 			ID3D11ShaderResourceView* rawPixelShaderResources[1] = { pixelShaderResources[0].get() };
 			context->PSSetShaderResources(0, 1, rawPixelShaderResources);
+			ID3D11Buffer* rawPixelShaderConstantBuffer = pixelShaderConstantBuffer1.get();
+			context->PSSetConstantBuffers(1, 1, &rawPixelShaderConstantBuffer);
 		}
 
 		ID3D11DeviceContext* context = nullptr;
@@ -207,13 +237,19 @@ namespace
 		UINT indexOffset = 0;
 		winrt::com_ptr<ID3D11VertexShader> vertexShader;
 		winrt::com_ptr<ID3D11PixelShader> pixelShader;
+		winrt::com_ptr<ID3D11GeometryShader> geometryShader;
+		winrt::com_ptr<ID3D11HullShader> hullShader;
+		winrt::com_ptr<ID3D11DomainShader> domainShader;
 		winrt::com_ptr<ID3D11RasterizerState> rasterizerState;
 		winrt::com_ptr<ID3D11BlendState> blendState;
 		FLOAT blendFactor[4]{};
 		UINT sampleMask = 0xffffffff;
+		winrt::com_ptr<ID3D11DepthStencilState> depthStencilState;
+		UINT stencilRef = 0;
 		winrt::com_ptr<ID3D11RenderTargetView> renderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
 		winrt::com_ptr<ID3D11DepthStencilView> depthStencilView;
 		winrt::com_ptr<ID3D11ShaderResourceView> pixelShaderResources[1];
+		winrt::com_ptr<ID3D11Buffer> pixelShaderConstantBuffer1;
 	};
 	uint MigrateLegacyQualityModeUInt(uint value)
 	{
@@ -1380,6 +1416,19 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS()
 	return underwaterMaskUpscalePS.get();
 }
 
+ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
+{
+	if (!cameraMotionVectorsPS) {
+		logger::debug("Compiling CameraMotionVectorsPS.hlsl");
+		cameraMotionVectorsPS.attach((ID3D11PixelShader*)Util::CompileShader(
+			L"Data/Shaders/Upscaling/CameraMotionVectorsPS.hlsl",
+			{ { "PSHADER", "" } },
+			"ps_5_0"));
+	}
+
+	return cameraMotionVectorsPS.get();
+}
+
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
 {
 	if (!upscaleVS) {
@@ -1456,6 +1505,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		auto phaseCount = GetJitterPhaseCount(renderWidth, screenWidth);
 
 		GetJitterOffset(&jitter.x, &jitter.y, state->frameCount, phaseCount);
+		// Loading screens cut vendor history every frame; unintegrated jitter only vibrates the image.
+		if (IsLoadingMenuContextActive())
+			jitter = { 0.0f, 0.0f };
 
 		a_viewport->projectionPosScaleX = -2.0f * jitter.x / renderWidth;
 
@@ -1526,6 +1578,11 @@ void Upscaling::SetupResources()
 
 	// Create upscaling data constant buffer for encode textures compute shader
 	upscalingDataCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<UpscalingDataCB>());
+	cameraMotionVectorsCB = std::make_unique<ConstantBuffer>(
+		ConstantBufferDesc<CameraMotionVectorsCB>(),
+		"Upscaling::CameraMotionVectorsCB");
+	menuCameraMVsValid = false;
+	menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
 
 	// Create blend state for depth upscaling
 	D3D11_BLEND_DESC blendDesc = {};
@@ -1572,6 +1629,7 @@ void Upscaling::ClearShaderCache()
 
 	depthRefractionUpscalePS = nullptr;  // com_ptr automatically releases
 	underwaterMaskUpscalePS = nullptr;   // com_ptr automatically releases
+	cameraMotionVectorsPS = nullptr;     // com_ptr automatically releases
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 	copyDepthToSharedBufferPS = nullptr;
 }
@@ -1608,7 +1666,7 @@ void Upscaling::CopySharedD3D12Resources()
 	}
 	loggedMissingSharedResources = false;
 
-	ScopedCopySharedPipelineState restoreState(context);
+	ScopedFullscreenPipelineState restoreState(context);
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -1859,6 +1917,91 @@ void Upscaling::RequestHistoryReset()
 	historyResetRequested = true;
 }
 
+void Upscaling::FillMenuCameraMotionVectors()
+{
+	menuCameraMVsValid = false;
+
+	auto* renderer = globals::game::renderer;
+	auto* context = globals::d3d::context;
+	if (!renderer || !context || !cameraMotionVectorsCB)
+		return;
+
+	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto* pixelShader = GetCameraMotionVectorsPS();
+	auto* vertexShader = GetUpscaleVS();
+	if (!pixelShader || !vertexShader || !motionVector.RTV || !motionVector.texture || !depth.depthSRV)
+		return;
+
+	CameraMotionVectorsCB cbData{};
+	cbData.curViewProjUnjitteredInverse = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Invert();
+	cbData.prevViewProjUnjittered = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered();
+	cameraMotionVectorsCB->Update(cbData);
+
+	ScopedFullscreenPipelineState restoreState(context);
+
+	context->IASetInputLayout(nullptr);
+	context->IASetVertexBuffers(0, 0, nullptr, nullptr, nullptr);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	context->VSSetShader(vertexShader, nullptr, 0);
+	context->PSSetShader(pixelShader, nullptr, 0);
+	context->GSSetShader(nullptr, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
+
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	ID3D11ShaderResourceView* depthSRV = depth.depthSRV;
+	context->PSSetShaderResources(0, 1, &depthSRV);
+
+	ID3D11Buffer* constantBuffer = cameraMotionVectorsCB->CB();
+	context->PSSetConstantBuffers(1, 1, &constantBuffer);
+
+	context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+	context->OMSetDepthStencilState(nullptr, 0);
+	context->RSSetState(nullptr);
+
+	D3D11_TEXTURE2D_DESC motionVectorDesc{};
+	static_cast<ID3D11Texture2D*>(motionVector.texture)->GetDesc(&motionVectorDesc);
+	D3D11_VIEWPORT viewport{};
+	viewport.Width = static_cast<float>(motionVectorDesc.Width);
+	viewport.Height = static_cast<float>(motionVectorDesc.Height);
+	viewport.MaxDepth = 1.0f;
+	context->RSSetViewports(1, &viewport);
+
+	ID3D11RenderTargetView* motionVectorRTV = motionVector.RTV;
+	context->OMSetRenderTargets(1, &motionVectorRTV, nullptr);
+	globals::profiler->BeginPass("Upscaling::MenuCameraMotionVectors");
+	context->Draw(3, 0);
+	globals::profiler->EndPass();
+
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	context->PSSetShaderResources(0, 1, &nullSRV);
+	menuCameraMVsValid = true;
+}
+
+void Upscaling::PrepareMenuCameraMotionVectors()
+{
+	auto* state = globals::state;
+	if (!state) {
+		menuCameraMVsValid = false;
+		menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
+		return;
+	}
+
+	const uint32_t frame = state->frameCount;
+	if (menuCameraMVsPreparedFrame == frame)
+		return;
+
+	menuCameraMVsPreparedFrame = frame;
+	menuCameraMVsValid = false;
+	if (!IsMainMenuContextActive() || IsLoadingMenuContextActive())
+		return;
+
+	FillMenuCameraMotionVectors();
+}
+
 bool Upscaling::ShouldResetHistoryThisFrame() const
 {
 	return historyResetThisFrame;
@@ -1881,11 +2024,14 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	if (!state)
 		return;
 
+	PrepareMenuCameraMotionVectors();
+
 	auto* ui = globals::game::ui;
 	const bool inWorld = state->inWorld;
 	const auto* viewport = globals::game::graphicsState;
 	const bool inMapMenu = ui ? ui->IsMenuOpen(RE::MapMenu::MENU_NAME) : false;
-	const bool mainOrLoadingMenuOpen = state->IsMainOrLoadingMenuOpen(ui);
+	const bool mainMenuOpen = IsMainMenuContextActive();
+	const bool loadingMenuOpen = IsLoadingMenuContextActive();
 	const float2 screenSize{
 		static_cast<float>(viewport ? viewport->screenWidth : 0),
 		static_cast<float>(viewport ? viewport->screenHeight : 0)
@@ -1934,9 +2080,12 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 		              methodChanged || fsrRuntimePathChanged || fsrRuntimeVersionChanged || longFrameGap || cameraCut;
 	}
 
-	// Main/loading menus animate without valid motion vectors, so temporal vendor
-	// upscalers must treat every frame there as a history cut.
-	if (mainOrLoadingMenuOpen)
+	// Loading screens animate geometry that camera-derived motion vectors cannot represent.
+	if (loadingMenuOpen)
+		shouldReset = true;
+	// The main menu has camera-only motion, so preserve temporal history only after
+	// the synthesized reprojection pass completed successfully.
+	if (mainMenuOpen && !menuCameraMVsValid)
 		shouldReset = true;
 
 	if (shouldReset)

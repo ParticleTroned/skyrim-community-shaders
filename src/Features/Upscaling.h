@@ -122,8 +122,17 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(UpscalingDataCB);
 
+	struct CameraMotionVectorsCB
+	{
+		float4x4 curViewProjUnjitteredInverse;
+		float4x4 prevViewProjUnjittered;
+	};
+	STATIC_ASSERT_ALIGNAS_16(CameraMotionVectorsCB);
+	static_assert(sizeof(CameraMotionVectorsCB) == 128, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
+
 	std::unique_ptr<ConstantBuffer> jitterCB;
 	std::unique_ptr<ConstantBuffer> upscalingDataCB;
+	std::unique_ptr<ConstantBuffer> cameraMotionVectorsCB;
 
 	// Runtime state
 	bool isWindowed = false;
@@ -196,6 +205,11 @@ public:
 	winrt::com_ptr<ID3D11PixelShader> underwaterMaskUpscalePS;
 	ID3D11PixelShader* GetUnderwaterMaskUpscalePS();
 
+	winrt::com_ptr<ID3D11PixelShader> cameraMotionVectorsPS;
+	ID3D11PixelShader* GetCameraMotionVectorsPS();
+	void FillMenuCameraMotionVectors();
+	void PrepareMenuCameraMotionVectors();
+
 	winrt::com_ptr<ID3D11VertexShader> upscaleVS;
 	ID3D11VertexShader* GetUpscaleVS();
 
@@ -234,7 +248,9 @@ public:
 	bool dlssSharpenerOutputValid = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
+	bool menuCameraMVsValid = false;
 	uint32_t historyResetLatchedFrame = std::numeric_limits<uint32_t>::max();
+	uint32_t menuCameraMVsPreparedFrame = std::numeric_limits<uint32_t>::max();
 	bool historyResetTrackingInitialized = false;
 	float2 previousHistoryScreenSize = { 0.0f, 0.0f };
 	float2 previousHistoryResolutionScale = { 1.0f, 1.0f };

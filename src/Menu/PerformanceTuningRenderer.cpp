@@ -19,6 +19,7 @@
 #include "Menu.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Profiler.h"
+#include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 

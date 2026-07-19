@@ -259,6 +259,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 		{
 			auto& vr = globals::features::vr;
 			auto& upscaling = globals::features::upscaling;
+			auto submit = [&](const char* a_path, const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds) {
+				const auto result = func(_this, eEye, a_texture, a_bounds, nSubmitFlags);
+				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
+					a_path,
+					eEye,
+					a_texture,
+					a_bounds,
+					nSubmitFlags,
+					result);
+				return result;
+			};
 
 			// Only process DirectX textures - skip OpenGL/Vulkan to avoid undefined behavior
 			if (pTexture && pTexture->handle && pTexture->eType == vr::TextureType_DirectX) {
@@ -269,7 +280,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						upscaledTexture.handle &&
 						upscaledTexture.eType == vr::TextureType_DirectX)
 						vr.RenderInSceneOverlay(eEye, static_cast<ID3D11Texture2D*>(upscaledTexture.handle), &upscaledBounds);
-					return func(_this, eEye, &upscaledTexture, &upscaledBounds, nSubmitFlags);
+					return submit("upscaled", &upscaledTexture, &upscaledBounds);
 				}
 
 				if (upscaling.IsSubmitStageDeviceLost() && upscaling.IsVRRenderScaleModeActive()) {
@@ -278,6 +289,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						logger::warn(
 							"[VRRenderScale] Suppressing OpenVR submit after submit-stage device loss while render-scale is still active; original texture is not a final HMD submit target.");
 					}
+					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
+						"suppressed-device-lost",
+						eEye,
+						pTexture,
+						pBounds,
+						nSubmitFlags,
+						vr::VRCompositorError_None);
 					return vr::VRCompositorError_None;
 				}
 
@@ -287,6 +305,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						logger::warn(
 							"[VRRenderScale] Suppressing OpenVR submit for reduced render-scale texture during loading/relatch; waiting for final-sized presentation output.");
 					}
+					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
+						"suppressed-reduced-fallback",
+						eEye,
+						pTexture,
+						pBounds,
+						nSubmitFlags,
+						vr::VRCompositorError_None);
 					return vr::VRCompositorError_None;
 				}
 
@@ -294,11 +319,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					!upscaling.ShouldSuppressVRInSceneOverlaySubmit()) {
 					vr::Texture_t overlayTexture{};
 					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
-						return func(_this, eEye, &overlayTexture, pBounds, nSubmitFlags);
+						return submit("in-scene-overlay", &overlayTexture, pBounds);
 					}
 				}
 			}
-			return func(_this, eEye, pTexture, pBounds, nSubmitFlags);
+			return submit("original", pTexture, pBounds);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

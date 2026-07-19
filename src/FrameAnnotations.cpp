@@ -361,6 +361,13 @@ namespace FrameAnnotations
 		static void thunk(void* shaderAccumulator, uint32_t firstPass, uint32_t lastPass, uint32_t renderFlags, int groupIndex)
 		{
 			const bool frameAnnotations = globals::state->frameAnnotations;
+			const bool vrMenuTrace = Upscaling::IsVRMenuPresentationTracingEnabled() &&
+				Upscaling::BeginVRMenuAccumulatorTrace(
+					shaderAccumulator,
+					firstPass,
+					lastPass,
+					renderFlags,
+					groupIndex);
 			if (frameAnnotations) {
 				globals::state->BeginPerfEvent(std::format("BSShaderAccumulator::RenderBatches ({:X}:{:X})[{}] <{}>", firstPass, lastPass, groupIndex,
 					renderFlags));
@@ -370,6 +377,14 @@ namespace FrameAnnotations
 
 			if (frameAnnotations) {
 				globals::state->EndPerfEvent();
+			}
+			if (vrMenuTrace) {
+				Upscaling::EndVRMenuAccumulatorTrace(
+					shaderAccumulator,
+					firstPass,
+					lastPass,
+					renderFlags,
+					groupIndex);
 			}
 		};
 		static inline REL::Relocation<decltype(thunk)> func;

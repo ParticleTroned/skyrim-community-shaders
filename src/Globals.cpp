@@ -262,7 +262,7 @@ namespace globals
 	/**
  * @brief Hooks the ID3D11DeviceContext::Map method to track mapping of the per-frame resource.
  *
- * Calls the original Map function and, if the mapped resource matches the current per-frame buffer, stores the mapped subresource pointer for later use.
+ * Calls the original Map function, tracks the current per-frame buffer, and forwards developer-mode VR resource writes to the menu presentation trace.
  *
  * @return HRESULT Result of the original Map call.
  */
@@ -275,6 +275,15 @@ namespace globals
 				if (*globals::game::perFrame.get() == pResource)
 					globals::game::mappedFrameBuffer = pMappedResource;
 			}
+			if (Upscaling::IsVRMenuPresentationTracingEnabled()) {
+				Upscaling::TraceVRMenuPresentationResourceMap(
+					This,
+					pResource,
+					Subresource,
+					MapType,
+					MapFlags,
+					hr);
+			}
 			return hr;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -283,7 +292,7 @@ namespace globals
 	/**
  * @brief Hooked implementation of ID3D11DeviceContext::Unmap that caches the frame buffer if applicable.
  *
- * If the resource being unmapped matches the current per-frame buffer and a mapped frame buffer is present, caches the frame buffer data before calling the original Unmap function.
+ * Caches the per-frame buffer before unmapping and reports completed developer-mode VR resource writes afterward.
  */
 	struct ID3D11DeviceContext_Unmap
 	{
@@ -292,6 +301,8 @@ namespace globals
 			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer)
 				CacheFramebuffer();
 			func(This, pResource, Subresource);
+			if (Upscaling::IsVRMenuPresentationTracingEnabled())
+				Upscaling::TraceVRMenuPresentationResourceUnmap(This, pResource, Subresource);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -299,11 +310,12 @@ namespace globals
 	/**
  * @brief Installs hooks on the Map and Unmap methods of the provided D3D11 device context.
  *
- * This enables interception of resource mapping and unmapping operations for frame buffer caching.
+ * This enables frame-buffer caching and developer-mode VR menu resource tracing.
  */
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
+		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
 	}
 }

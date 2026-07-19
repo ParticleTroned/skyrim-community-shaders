@@ -96,7 +96,9 @@ public:
 
 private:
 	void DrawCaptureEnableToggle();
+	bool DrawCaptureStatus();
 	void DrawCaptureUI();
+	void UpdateCaptureSectionVisibility(bool a_visible);
 	bool TriggerConfiguredCapture(bool a_checkDiskSpace = true);
 	uint32_t GetCaptureFrameCount() const;
 	void SetCaptureFrameCount(uint32_t a_frameCount);

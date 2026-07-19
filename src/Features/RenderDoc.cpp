@@ -132,42 +132,18 @@ void RenderDoc::Load()
 
 void RenderDoc::DrawSettings()
 {
-	// Track section visibility for intelligent cache refreshing
-	bool isSectionVisible = false;
-
 	DrawCaptureEnableToggle();
-
-	// The rest of the UI renders only when capture is active
-	bool renderDocCaptureEnabled = enableRenderDocCapture;
-	bool renderDocActive = IsAvailable();
-
-	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
-
-	if (renderDocCaptureEnabled && !renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.RestartNeeded, "%s", T(TKEY("restart_to_enable"), "Requires restart to enable RenderDoc capture."));
-		return;
-	}
-
-	if (!renderDocCaptureEnabled && renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", T(TKEY("restart_to_disable"), "Requires restart to disable RenderDoc capture, performance will be severely impacted."));
-		return;
-	}
-
-	if (renderDocCaptureEnabled && renderDocActive) {
-		isSectionVisible = true;
+	const bool isSectionVisible = DrawCaptureStatus();
+	if (isSectionVisible)
 		DrawCaptureUI();
-	}
-
-	if (isSectionVisible != wasSectionVisible) {
-		wasSectionVisible = isSectionVisible;
-		if (isSectionVisible)
-			InvalidateCaptureCache();
-	}
+	UpdateCaptureSectionVisibility(isSectionVisible);
 }
 
 void RenderDoc::DrawEssentialSettings()
 {
 	DrawCaptureEnableToggle();
+	DrawCaptureStatus();
+	UpdateCaptureSectionVisibility(false);
 }
 
 void RenderDoc::DrawCaptureEnableToggle()
@@ -187,28 +163,37 @@ void RenderDoc::DrawCaptureEnableToggle()
 		ImGui::Text("%s", T(TKEY("enable_capture_tooltip"), "Enable RenderDoc frame capture for providing debug captures to the Community Shaders team."));
 		ImGui::Text("%s", T(TKEY("enable_capture_tooltip2"), "Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled."));
 	}
+}
 
-	/* The full capture UI is rendered by DrawSettings. */
+bool RenderDoc::DrawCaptureStatus()
+{
+	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
+	const bool renderDocActive = IsAvailable();
+
+	if (enableRenderDocCapture && !renderDocActive) {
+		ImGui::TextColored(themeSettings.StatusPalette.RestartNeeded, "%s", T(TKEY("restart_to_enable"), "Requires restart to enable RenderDoc capture."));
+		return false;
+	}
+
+	if (!enableRenderDocCapture && renderDocActive) {
+		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", T(TKEY("restart_to_disable"), "Requires restart to disable RenderDoc capture, performance will be severely impacted."));
+		return false;
+	}
+
+	return enableRenderDocCapture && renderDocActive;
+}
+
+void RenderDoc::UpdateCaptureSectionVisibility(bool a_visible)
+{
+	if (a_visible && !wasSectionVisible)
+		InvalidateCaptureCache();
+	wasSectionVisible = a_visible;
 }
 
 void RenderDoc::DrawCaptureUI()
 {
-	bool renderDocCaptureEnabled = enableRenderDocCapture;
-	bool renderDocActive = IsAvailable();
-
 	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
-
-	if (renderDocCaptureEnabled && !renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.RestartNeeded, "%s", T(TKEY("restart_to_enable"), "Requires restart to enable RenderDoc capture."));
-		return;
-	}
-
-	if (!renderDocCaptureEnabled && renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", T(TKEY("restart_to_disable"), "Requires restart to disable RenderDoc capture, performance will be severely impacted."));
-		return;
-	}
-
-	if (renderDocCaptureEnabled && renderDocActive) {
+	{
 		// Capture Control Section
 		{
 			auto captureSection = Util::SectionWrapper(T(TKEY("capture_control"), "Capture Control"), T(TKEY("capture_control_tooltip"), "Manual capture creation and basic controls"));
@@ -485,7 +470,6 @@ void RenderDoc::DrawCaptureUI()
 				}
 			}
 		}
-
 	}
 }
 

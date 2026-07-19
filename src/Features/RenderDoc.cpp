@@ -134,9 +134,9 @@ void RenderDoc::DrawSettings()
 {
 	DrawCaptureEnableToggle();
 	const bool isSectionVisible = DrawCaptureStatus();
+	UpdateCaptureSectionVisibility(isSectionVisible);
 	if (isSectionVisible)
 		DrawCaptureUI();
-	UpdateCaptureSectionVisibility(isSectionVisible);
 }
 
 void RenderDoc::DrawEssentialSettings()

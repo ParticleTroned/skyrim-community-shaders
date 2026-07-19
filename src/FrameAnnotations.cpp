@@ -361,13 +361,12 @@ namespace FrameAnnotations
 		static void thunk(void* shaderAccumulator, uint32_t firstPass, uint32_t lastPass, uint32_t renderFlags, int groupIndex)
 		{
 			const bool frameAnnotations = globals::state->frameAnnotations;
-			const bool vrMenuTrace = Upscaling::IsVRMenuPresentationTracingEnabled() &&
-				Upscaling::BeginVRMenuAccumulatorTrace(
-					shaderAccumulator,
-					firstPass,
-					lastPass,
-					renderFlags,
-					groupIndex);
+			const bool vrMenuTrace = Upscaling::BeginVRMenuAccumulatorTrace(
+				shaderAccumulator,
+				firstPass,
+				lastPass,
+				renderFlags,
+				groupIndex);
 			if (frameAnnotations) {
 				globals::state->BeginPerfEvent(std::format("BSShaderAccumulator::RenderBatches ({:X}:{:X})[{}] <{}>", firstPass, lastPass, groupIndex,
 					renderFlags));
@@ -425,6 +424,9 @@ namespace FrameAnnotations
 	{
 		// Always install shadowmask phase tracking (required by Terrain Blending regardless of annotations).
 		stl::detour_thunk<Main_RenderShadowmasks>(REL::RelocationID(100422, 107140));
+		// VR menu diagnostics need the accumulator nesting even when frame annotations are disabled.
+		if (globals::game::isVR)
+			stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
 
 		if (!globals::state->frameAnnotations)
 			return;
@@ -1098,7 +1100,8 @@ namespace FrameAnnotations
 		stl::detour_thunk<Main_RenderFirstPersonView>(REL::RelocationID(100411, 107129));
 		stl::detour_thunk<Main_RenderPlayerView>(REL::RelocationID(35560, 36559));
 		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
-		stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
+		if (!globals::game::isVR)
+			stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
 		stl::detour_thunk<BSShaderAccumulator_RenderPersistentPassList>(REL::RelocationID(100840, 107630));
 		stl::detour_thunk<BSShaderAccumulator_RenderEffects>(REL::RelocationID(99940, 106585));
 	}

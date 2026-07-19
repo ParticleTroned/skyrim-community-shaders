@@ -735,16 +735,10 @@ public:
 		uint32_t a_renderFlags, int a_groupIndex);
 	static void EndVRMenuAccumulatorTrace(void* a_accumulator, uint32_t a_firstPass, uint32_t a_lastPass,
 		uint32_t a_renderFlags, int a_groupIndex);
-	static void TraceVRMenuPresentationResourceMap(ID3D11DeviceContext* a_context, ID3D11Resource* a_resource,
-		UINT a_subresource, D3D11_MAP a_mapType, UINT a_mapFlags, HRESULT a_result) noexcept;
-	static void TraceVRMenuPresentationResourceUnmap(ID3D11DeviceContext* a_context, ID3D11Resource* a_resource,
-		UINT a_subresource) noexcept;
 	static void TraceVRMenuPresentationOpenVRSubmit(const char* a_path, vr::EVREye a_eye,
 		const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds, vr::EVRSubmitFlags a_flags,
 		vr::EVRCompositorError a_result) noexcept;
 	static void InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context);
-	static bool IsVRMenuPresentationTracingEnabled() noexcept;
-	std::string DescribeVRMenuFinalCompositeTraceState() const;
 	bool IsVRMenuParallelBridgeDrawInProgress() const noexcept;
 	enum class DynamicResolutionUpsampleStage : uint8_t
 	{

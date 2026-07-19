@@ -410,27 +410,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 
 void ScreenSpaceGI::DrawEssentialSettings()
 {
-	if (!ShadersOK())
-		Util::Text::Error("Compute shaders failed to compile!");
 	ImGui::Checkbox("Enable", &settings.Enabled);
-
-	{
-		auto guard = Util::DisableGuard(!settings.Enabled);
-
-		const bool aoOnlyActive = IsAOOnlyPreset(settings);
-		{
-			[[maybe_unused]] auto style = Util::PresetButtonStyle(aoOnlyActive);
-			if (ImGui::Button("AO only", { -1, 0 })) {
-				ApplyAOOnlyPreset(settings);
-				recompileFlag = true;
-			}
-		}
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Full Res AO-only baseline with no indirect lighting.");
-
-		settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
-		recompileFlag |= DrawResolutionModeSelector("SSGIEssentialsResolutionMode", settings.ResolutionMode);
-	}
 }
 
 void ScreenSpaceGI::LoadSettings(json& o_json)

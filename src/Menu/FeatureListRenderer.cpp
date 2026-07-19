@@ -125,6 +125,14 @@ namespace
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
 	}
 
+	bool IsFeatureVisibleInMenuMode(Feature* feature, bool essentialsMode)
+	{
+		return feature &&
+		       !feature->IsHiddenFromUserView() &&
+		       !(essentialsMode && feature->IsHiddenInEssentialsMode()) &&
+		       feature->IsInMenu();
+	}
+
 	bool IsPerformanceTuningMenuSelected(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t selectedMenu)
 	{
 		if (selectedMenu >= menuList.size())
@@ -150,6 +158,58 @@ namespace
 	bool IsPerformanceMeasurementNavigationLocked(size_t listId, size_t selectedMenu)
 	{
 		return PerformanceTuningRenderer::HasActiveMeasurements() && listId != selectedMenu;
+	}
+
+	std::string GetSelectableMenuEntryId(const FeatureListRenderer::MenuFuncInfo& menuInfo)
+	{
+		if (const auto* menu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuInfo))
+			return "builtin:" + menu->name;
+
+		if (const auto* feature = std::get_if<Feature*>(&menuInfo); feature && *feature)
+			return "feature:" + (*feature)->GetShortName();
+
+		return {};
+	}
+
+	bool TrySelectMenuEntryById(
+		const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList,
+		const std::string& menuEntryId,
+		size_t& selectedMenu)
+	{
+		if (menuEntryId.empty())
+			return false;
+
+		for (size_t i = 0; i < menuList.size(); ++i) {
+			if (GetSelectableMenuEntryId(menuList[i]) == menuEntryId) {
+				selectedMenu = i;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool IsSelectableMenuEntry(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t selectedMenu)
+	{
+		return selectedMenu < menuList.size() && !GetSelectableMenuEntryId(menuList[selectedMenu]).empty();
+	}
+
+	void SelectFallbackMenuEntry(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t& selectedMenu)
+	{
+		if (IsSelectableMenuEntry(menuList, selectedMenu))
+			return;
+
+		if (TrySelectMenuEntryById(menuList, "builtin:Home", selectedMenu))
+			return;
+
+		for (size_t i = 0; i < menuList.size(); ++i) {
+			if (!GetSelectableMenuEntryId(menuList[i]).empty()) {
+				selectedMenu = i;
+				return;
+			}
+		}
+
+		selectedMenu = 0;
 	}
 
 	int& GetFeatureUiModeValue(Feature* feature)
@@ -383,11 +443,15 @@ void FeatureListRenderer::RenderFeatureList(
 {
 	ImGui::BeginChild("Menus Table", ImVec2(0, -footerHeight));
 
+	static std::string selectedMenuEntryId;
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
+	if (!selectedMenuEntryId.empty() && !TrySelectMenuEntryById(menuList, selectedMenuEntryId, selectedMenu))
+		selectedMenu = menuList.size();
 
 	HandlePendingFeatureSelection(pendingFeatureSelection, menuList, selectedMenu);
 	if (PerformanceTuningRenderer::HasActiveMeasurements() && !IsPerformanceTuningMenuSelected(menuList, selectedMenu))
 		TrySelectPerformanceTuningMenu(menuList, selectedMenu);
+	SelectFallbackMenuEntry(menuList, selectedMenu);
 
 	auto cancelPerformanceMeasurementsIfInactive = [&]() {
 		if (!IsPerformanceTuningMenuSelected(menuList, selectedMenu))
@@ -417,6 +481,8 @@ void FeatureListRenderer::RenderFeatureList(
 		ImGui::EndTable();
 	}
 
+	selectedMenuEntryId = IsSelectableMenuEntry(menuList, selectedMenu) ? GetSelectableMenuEntryId(menuList[selectedMenu]) : std::string{};
+
 	ImGui::EndChild();
 }
 
@@ -440,14 +506,18 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		sortedFeatureList.erase(it, sortedFeatureList.end());
 	}
 
+	const bool essentialsMode = globals::menu && globals::menu->IsPerformanceUiMode();
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
-		BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } },
 		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() { PerformanceTuningRenderer::Render(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
-	if (!globals::menu || globals::menu->IsAdvancedUiMode()) {
+
+	if (!essentialsMode)
+		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } });
+
+	if (!essentialsMode) {
 		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "General", drawGeneralSettings });
 		menuList.insert(menuList.begin() + 2, BuiltInMenu{ "Advanced", drawAdvancedSettings });
 	}
@@ -455,7 +525,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
 	for (Feature* feat : sortedFeatureList) {
-		if (feat->IsInMenu() && feat->loaded) {
+		if (IsFeatureVisibleInMenuMode(feat, essentialsMode) && feat->loaded) {
 			std::string category(feat->GetCategory());
 			categorizedFeatures[category].push_back(feat);
 		}
@@ -479,7 +549,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 			}
 
 			// Add category header
-			menuList.push_back(CategoryHeader{ category });
+			menuList.push_back(CategoryHeader{ category, static_cast<int>(categorizedFeatures[category].size()) });
 
 			// Add features only if category is expanded
 			if (categoryExpansionStates[category]) {
@@ -497,7 +567,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 			}
 
 			// Add category header
-			menuList.push_back(CategoryHeader{ category });
+			menuList.push_back(CategoryHeader{ category, static_cast<int>(features.size()) });
 
 			// Add features only if category is expanded
 			if (categoryExpansionStates[category]) {
@@ -506,8 +576,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		}
 	}
 
-	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
-		return !feat->loaded && feat->IsInMenu() && HasFeatureIni(feat) &&
+	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([essentialsMode](Feature* feat) {
+		return IsFeatureVisibleInMenuMode(feat, essentialsMode) && !feat->loaded && HasFeatureIni(feat) &&
 		       (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
@@ -555,18 +625,7 @@ void FeatureListRenderer::RenderLeftColumn(
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 	ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 	if (ImGui::BeginListBox("##MenusList", { -FLT_MIN, -FLT_MIN })) {
-		// Find where core built-in menus end (Home, General, Advanced, Display)
-		size_t coreMenuCount = 0;
-		for (size_t i = 0; i < menuList.size(); i++) {
-			if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
-				const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
-				if (IsCoreMenu(menu.name)) {
-					coreMenuCount++;
-				}
-			}
-		}
-
-		// First render the core built-in menus (Home, General, Advanced, Display)
+		// First render the core built-in menus above the feature search.
 		size_t renderedCoreMenus = 0;
 		for (size_t i = 0; i < menuList.size() && renderedCoreMenus < CORE_MENU_NAMES.size(); i++) {
 			if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
@@ -659,8 +718,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const CategoryHeader& head
 	// Use Heading font for category headers
 	{
 		MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Heading);
-		int count = Menu::categoryCounts[std::string(header.name)];
-		Util::DrawCategoryHeader(header.name.c_str(), header.name.c_str(), isExpanded, count);
+		Util::DrawCategoryHeader(header.name.c_str(), header.name.c_str(), isExpanded, header.count);
 	}
 
 	// Update expansion state
@@ -948,7 +1006,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				feat->DrawSettings();
 			}
 
-			if (!essentialsFeatureMode && feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
+			if (!globalEssentialsMode && feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
 			}

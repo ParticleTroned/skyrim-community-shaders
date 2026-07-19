@@ -56,6 +56,7 @@ public:
 	std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	bool IsCore() const override { return true; }
 	bool IsInMenu() const override { return true; }
+	bool IsHiddenInEssentialsMode() const override { return true; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return { T("feature.render_doc.description", "In-application RenderDoc capture support and convenience UI."),

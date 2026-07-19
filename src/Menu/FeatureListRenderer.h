@@ -20,6 +20,7 @@ public:
 	struct CategoryHeader
 	{
 		std::string name;
+		int count = 0;
 	};
 
 	using MenuFuncInfo = std::variant<BuiltInMenu, std::string, CategoryHeader, Feature*>;

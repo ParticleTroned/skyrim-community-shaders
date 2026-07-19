@@ -2114,7 +2114,7 @@ void LightLimitFix::UpdateStructure()
 
 		context->CSSetShader(clusterBuildingCS, nullptr, 0);
 		globals::profiler->BeginPass("LightLimitFix::ClusterBuild");
-		context->Dispatch(clusterSize[0], clusterSize[1], clusterSize[2]);
+		context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
 		globals::profiler->EndPass();
 
 		ID3D11UnorderedAccessView* null_uav = nullptr;

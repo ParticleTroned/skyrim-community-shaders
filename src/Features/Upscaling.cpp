@@ -253,6 +253,9 @@ namespace
 	// Keep the retained-record counter bounded without dropping required evidence.
 	constexpr uint32_t kVRMenuPresentationTraceMaxRecordsPerSession = 300000u;
 	constexpr uint32_t kVRMenuPresentationTraceMaxAccumulatorDepth = 16u;
+	constexpr uint32_t kVRMenuPresentationTraceMaxObservedDrawContexts = 8u;
+	constexpr std::size_t kVRMenuPresentationTraceD3DHookBankCount = 8u;
+	constexpr std::size_t kVRMenuPresentationTraceD3DHookMethodCount = 14u;
 	constexpr uint32_t kVRMenuPresentationTraceUnknownRenderMode = std::numeric_limits<uint32_t>::max();
 	struct VRMenuPresentationTraceAccumulatorContext
 	{
@@ -271,6 +274,9 @@ namespace
 		uint32_t compositionSourceDraws = 0;
 		uint32_t menuOutputDraws = 0;
 		uint32_t directBridgeDraws = 0;
+		uint32_t directBridgeDrawsIssued = 0;
+		uint32_t directBridgeDrawsSuppressed = 0;
+		uint32_t genericDirectBridgeDraws = 0;
 		uint32_t higherCallEntries = 0;
 		uint32_t bridgeDecisions = 0;
 		uint32_t internalReplayDraws = 0;
@@ -284,9 +290,17 @@ namespace
 		uint32_t destinationVRFramebuffer = 0;
 		uint32_t destinationOtherRegistered = 0;
 		uint32_t destinationUnregistered = 0;
+		std::array<std::uintptr_t, kVRMenuPresentationTraceMaxObservedDrawContexts> drawContextIdentities{};
+		std::array<std::uintptr_t, kVRMenuPresentationTraceMaxObservedDrawContexts> drawVtableIdentities{};
+		uint32_t drawContextCount = 0;
 		bool relevant = false;
 		bool higherScopeAtBegin = false;
 		bool directScopeAtBegin = false;
+		bool d3dHooksInstalledAtBegin = false;
+		bool primaryContextCoveredAtBegin = false;
+		bool drawContextOverflow = false;
+		bool drawHookCoverageChanged = false;
+		bool drawHookCoverageFailed = false;
 	};
 	struct VRMenuPresentationTraceHigherCallContext
 	{
@@ -322,9 +336,15 @@ namespace
 		std::atomic_uint32_t accumulatorRelevantEpochs{ 0 };
 		std::atomic_uint32_t accumulatorDraws{ 0 };
 		std::atomic_uint32_t accumulatorUnrelatedDraws{ 0 };
+		std::atomic_uint32_t accumulatorAuthoritativeUnrelatedDraws{ 0 };
 		std::atomic_uint32_t accumulatorHigherCallEntries{ 0 };
 		std::atomic_uint32_t accumulatorDirectBridgeDraws{ 0 };
+		std::atomic_uint32_t accumulatorDirectBridgeDrawsIssued{ 0 };
+		std::atomic_uint32_t accumulatorDirectBridgeDrawsSuppressed{ 0 };
+		std::atomic_uint32_t accumulatorGenericDirectBridgeDraws{ 0 };
 		std::atomic_uint32_t accumulatorBridgeDecisions{ 0 };
+		std::atomic_uint32_t accumulatorAuthoritativeEpochs{ 0 };
+		std::atomic_uint32_t accumulatorUncalibratedEpochs{ 0 };
 		std::atomic_uint32_t compositionDepthBound{ 0 };
 		std::atomic_uint32_t compositionDepthEnabled{ 0 };
 		std::atomic_uint32_t compositionDepthDisabled{ 0 };
@@ -377,6 +397,7 @@ namespace
 	std::atomic_bool g_vrMenuPresentationTraceFaulted{ false };
 	std::atomic_bool g_vrMenuPresentationTraceFaultLogged{ false };
 	std::atomic_bool g_vrMenuPresentationTraceD3DHooksInstalled{ false };
+	std::atomic_uint32_t g_vrMenuPresentationTraceD3DHookBanksInstalled{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTraceMenuMask{ 0 };
 	std::atomic_uint32_t g_vrMenuPresentationTraceObservedMenuMask{ 0 };
 	std::atomic_uint64_t g_vrMenuPresentationTraceNextEpochId{ 0 };
@@ -4388,9 +4409,15 @@ namespace
 		reset(g_vrMenuPresentationTraceCounters.accumulatorRelevantEpochs);
 		reset(g_vrMenuPresentationTraceCounters.accumulatorDraws);
 		reset(g_vrMenuPresentationTraceCounters.accumulatorUnrelatedDraws);
+		reset(g_vrMenuPresentationTraceCounters.accumulatorAuthoritativeUnrelatedDraws);
 		reset(g_vrMenuPresentationTraceCounters.accumulatorHigherCallEntries);
 		reset(g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDraws);
+		reset(g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDrawsIssued);
+		reset(g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDrawsSuppressed);
+		reset(g_vrMenuPresentationTraceCounters.accumulatorGenericDirectBridgeDraws);
 		reset(g_vrMenuPresentationTraceCounters.accumulatorBridgeDecisions);
+		reset(g_vrMenuPresentationTraceCounters.accumulatorAuthoritativeEpochs);
+		reset(g_vrMenuPresentationTraceCounters.accumulatorUncalibratedEpochs);
 		reset(g_vrMenuPresentationTraceCounters.compositionDepthBound);
 		reset(g_vrMenuPresentationTraceCounters.compositionDepthEnabled);
 		reset(g_vrMenuPresentationTraceCounters.compositionDepthDisabled);
@@ -4462,7 +4489,7 @@ namespace
 				g_vrMenuPresentationTraceObservedMenuMask.load(std::memory_order_acquire);
 			const uint64_t sequence = g_vrMenuPresentationTraceSequence.fetch_add(1, std::memory_order_acq_rel) + 1u;
 			logger::debug(
-				"[VRMenuTrace] session={} seq={} frame={} event=session-summary reason={} menu=\"{}\" trigger=\"{}\" frames={} menus(start=\"{}\",end=\"{}\",observed=\"{}\") targets(map={},main={},loading={},raceSex={}) records={} lifecycle(open={},close={},drawInterface={}/{}) composition(draws={},inputs(projected={},hud={}),higher={}/{},renderMode(24={},other={},unknown={}),accumulatorOverflow={},depth(bound={},enabled={},disabled={}),runtime(renderScaleActive={},renderScaleInactive={},presentationUpscalingActive={},presentationUpscalingInactive={}),destinationVRFramebuffer={},destinationMenuBG={},destinationOtherRegistered={},destinationUnregistered={}) producer(passes={},resources={},draws={},updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) globalOutput(passes={},resources={},draws={},scope(insideDrawInterface={},outsideDrawInterface={}),updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) operations={} bridge(decisions={},candidate(accepted={},rejected={}),capture(attempts={},suppressed={},kept={})) finalComposite(attempts={},applied={},rejected={}) openVRSubmit(total={},success={},failure={}) diagnostics(d3dHooksInstalled={},recordCapReached={},requiredRecordsContinued=true,perRecordFlush=true,hadFault={})",
+				"[VRMenuTrace] session={} seq={} frame={} event=session-summary reason={} menu=\"{}\" trigger=\"{}\" frames={} menus(start=\"{}\",end=\"{}\",observed=\"{}\") targets(map={},main={},loading={},raceSex={}) records={} lifecycle(open={},close={},drawInterface={}/{}) composition(draws={},inputs(projected={},hud={}),higher={}/{},renderMode(24={},other={},unknown={}),accumulatorOverflow={},depth(bound={},enabled={},disabled={}),runtime(renderScaleActive={},renderScaleInactive={},presentationUpscalingActive={},presentationUpscalingInactive={}),destinationVRFramebuffer={},destinationMenuBG={},destinationOtherRegistered={},destinationUnregistered={}) producer(passes={},resources={},draws={},updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) globalOutput(passes={},resources={},draws={},scope(insideDrawInterface={},outsideDrawInterface={}),updateModel(clearThenDraw={},fullReplaceThenDraw={},incrementalCandidate={},withoutObservedReset={},operationsOnly={}),droppedResources={}) operations={} bridge(decisions={},candidate(accepted={},rejected={}),capture(attempts={},suppressed={},kept={})) finalComposite(attempts={},applied={},rejected={}) openVRSubmit(total={},success={},failure={}) diagnostics(d3dHooksInstalled={},d3dHookBanks={},recordCapReached={},requiredRecordsContinued=true,perRecordFlush=true,hadFault={})",
 				session,
 				sequence,
 				endFrame,
@@ -4536,12 +4563,13 @@ namespace
 				g_vrMenuPresentationTraceCounters.openVRSubmitSuccesses.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.openVRSubmitFailures.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceD3DHooksInstalled.load(std::memory_order_acquire),
+				g_vrMenuPresentationTraceD3DHookBanksInstalled.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceSessionCapLogged.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceFaulted.load(std::memory_order_acquire));
 			const uint64_t epochSummarySequence =
 				g_vrMenuPresentationTraceSequence.fetch_add(1, std::memory_order_acq_rel) + 1u;
 			logger::debug(
-				"[VRMenuTrace] session={} seq={} frame={} event=session-epoch-summary accumulator(epochs={},mode24={},relevant={},draws={},unrelated={},higherEntries={},directBridgeDraws={},bridgeDecisions={},overflow={}) generation(consumptions={},complete={},incomplete={},unobserved={}) correlation(lastAccumulatorEpoch={},lastCompositionEpoch={},lastBridgeEpoch={})",
+				"[VRMenuTrace] session={} seq={} frame={} event=session-epoch-summary accumulator(epochs={},mode24={},relevant={},draws={},unrelated(observed={},authoritative={}),higherEntries={},directBridgeDraws={},directIssued={},directSuppressed={},genericDirect={},bridgeDecisions={},accounting(authoritative={},uncalibrated={}),overflow={}) generation(consumptions={},complete={},incomplete={},unobserved={}) correlation(lastAccumulatorEpoch={},lastCompositionEpoch={},lastBridgeEpoch={})",
 				session,
 				epochSummarySequence,
 				endFrame,
@@ -4550,9 +4578,15 @@ namespace
 				g_vrMenuPresentationTraceCounters.accumulatorRelevantEpochs.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.accumulatorDraws.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.accumulatorUnrelatedDraws.load(std::memory_order_acquire),
+				g_vrMenuPresentationTraceCounters.accumulatorAuthoritativeUnrelatedDraws.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.accumulatorHigherCallEntries.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDraws.load(std::memory_order_acquire),
+				g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDrawsIssued.load(std::memory_order_acquire),
+				g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDrawsSuppressed.load(std::memory_order_acquire),
+				g_vrMenuPresentationTraceCounters.accumulatorGenericDirectBridgeDraws.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.accumulatorBridgeDecisions.load(std::memory_order_acquire),
+				g_vrMenuPresentationTraceCounters.accumulatorAuthoritativeEpochs.load(std::memory_order_acquire),
+				g_vrMenuPresentationTraceCounters.accumulatorUncalibratedEpochs.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.accumulatorStackOverflows.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.generationConsumptions.load(std::memory_order_acquire),
 				g_vrMenuPresentationTraceCounters.generationCompleteConsumptions.load(std::memory_order_acquire),
@@ -4610,13 +4644,14 @@ namespace
 			g_vrMenuPresentationTraceStartMenuMask = a_menuMask;
 		}
 		logger::debug(
-			"[VRMenuTrace] session={} seq={} frame={} event=session-begin trigger=\"{}\" menus=\"{}\" d3dHooksInstalled={} recordCap={} capBehavior=counter-only requiredRecordsContinue=true perRecordFlush=true globalOutputFlush=frame-openvr-session outsideDrawRecords=complete accumulatorEpochRecords=complete allDrawEpochAccounting=true generationCorrelation=enabled bridgePipelineState=complete",
+			"[VRMenuTrace] session={} seq={} frame={} event=session-begin trigger=\"{}\" menus=\"{}\" d3dHooksInstalled={} d3dHookBanks={} recordCap={} capBehavior=counter-only requiredRecordsContinue=true perRecordFlush=true globalOutputFlush=frame-openvr-session outsideDrawRecords=complete accumulatorEpochRecords=complete allDrawEpochAccounting=self-calibrating generationCorrelation=enabled bridgePipelineState=complete",
 			session,
 			sequence,
 			frame,
 			a_triggerMenu,
 			DescribeVRMenuPresentationTraceMenuMask(a_menuMask),
 			g_vrMenuPresentationTraceD3DHooksInstalled.load(std::memory_order_acquire),
+			g_vrMenuPresentationTraceD3DHookBanksInstalled.load(std::memory_order_acquire),
 			kVRMenuPresentationTraceMaxRecordsPerSession);
 		FlushVRMenuPresentationTraceLog();
 		g_vrMenuPresentationTraceMenuMask.store(a_menuMask, std::memory_order_release);
@@ -4772,6 +4807,65 @@ namespace
 			}
 			++context->bridgeDecisions;
 		}
+	}
+
+	void TrackVRMenuPresentationTraceAccumulatorDrawContext(
+		VRMenuPresentationTraceAccumulatorContext& a_context,
+		ID3D11DeviceContext* a_d3dContext)
+	{
+		if (!a_d3dContext)
+			return;
+
+		const auto contextIdentity = reinterpret_cast<std::uintptr_t>(a_d3dContext);
+		const auto vtableIdentity = reinterpret_cast<std::uintptr_t>(
+			*reinterpret_cast<std::uintptr_t**>(a_d3dContext));
+		for (uint32_t index = 0; index < a_context.drawContextCount; ++index) {
+			if (a_context.drawContextIdentities[index] == contextIdentity &&
+				a_context.drawVtableIdentities[index] == vtableIdentity) {
+				return;
+			}
+		}
+
+		if (a_context.drawContextCount >= a_context.drawContextIdentities.size()) {
+			a_context.drawContextOverflow = true;
+			return;
+		}
+
+		const uint32_t index = a_context.drawContextCount++;
+		a_context.drawContextIdentities[index] = contextIdentity;
+		a_context.drawVtableIdentities[index] = vtableIdentity;
+	}
+
+	void RecordVRMenuPresentationTraceAccumulatorDirectBridgeDraw(
+		ID3D11DeviceContext* a_context,
+		bool a_coverageAtEntry,
+		bool a_coverageAfterInstall)
+	{
+		if (auto* context = GetCurrentVRMenuPresentationTraceAccumulatorContext()) {
+			context->relevant = true;
+			++context->directBridgeDraws;
+			TrackVRMenuPresentationTraceAccumulatorDrawContext(*context, a_context);
+			context->drawHookCoverageChanged = context->drawHookCoverageChanged ||
+				(!a_coverageAtEntry && a_coverageAfterInstall);
+			context->drawHookCoverageFailed = context->drawHookCoverageFailed || !a_coverageAfterInstall;
+		}
+	}
+
+	void RecordVRMenuPresentationTraceAccumulatorDirectBridgeDrawOutcome(bool a_suppressed)
+	{
+		if (auto* context = GetCurrentVRMenuPresentationTraceAccumulatorContext()) {
+			if (a_suppressed) {
+				++context->directBridgeDrawsSuppressed;
+			} else {
+				++context->directBridgeDrawsIssued;
+			}
+		}
+	}
+
+	void InvalidateVRMenuPresentationTraceAccumulatorDrawAccounting()
+	{
+		if (auto* context = GetCurrentVRMenuPresentationTraceAccumulatorContext())
+			context->drawHookCoverageFailed = true;
 	}
 
 	std::string GetVRMenuPresentationTraceScopeDescription()
@@ -6798,6 +6892,7 @@ namespace
 	}
 
 	void RecordVRMenuPresentationTraceAccumulatorDraw(
+		ID3D11DeviceContext* a_context,
 		const VRMenuPresentationTraceOutputDescription& a_outputs,
 		bool a_hasCompositionSource,
 		bool a_hasMenuOutput)
@@ -6810,6 +6905,7 @@ namespace
 		const bool directBridge = g_vrMenuPresentationTraceDirectDrawDepth != 0 && !internalReplay;
 		const bool relevant = a_hasCompositionSource || a_hasMenuOutput || directBridge || internalReplay;
 		++context->totalDraws;
+		TrackVRMenuPresentationTraceAccumulatorDrawContext(*context, a_context);
 		context->relevant = context->relevant || relevant;
 		context->compositionSourceDraws += a_hasCompositionSource ? 1u : 0u;
 		context->menuOutputDraws += a_hasMenuOutput ? 1u : 0u;
@@ -6822,7 +6918,7 @@ namespace
 		context->destinationUnregistered += a_outputs.unregistered ? 1u : 0u;
 
 		if (directBridge) {
-			++context->directBridgeDraws;
+			++context->genericDirectBridgeDraws;
 		}
 
 		if (!relevant) {
@@ -6858,6 +6954,7 @@ namespace
 			if (GetCurrentVRMenuPresentationTraceAccumulatorContext()) {
 				accumulatorOutputs = DescribeVRMenuPresentationTraceDrawOutputs(a_context);
 				RecordVRMenuPresentationTraceAccumulatorDraw(
+					a_context,
 					*accumulatorOutputs,
 					cache.sourceCount != 0,
 					globalOutputActive);
@@ -7038,8 +7135,10 @@ namespace
 					globals::features::upscaling.IsVRMenuParallelBridgeDrawInProgress(),
 					GetVRMenuPresentationTraceScopeDescription()); });
 		} catch (const std::exception& e) {
+			InvalidateVRMenuPresentationTraceAccumulatorDrawAccounting();
 			ReportVRMenuPresentationTraceFault("while tracing a menu composition draw", e.what());
 		} catch (...) {
+			InvalidateVRMenuPresentationTraceAccumulatorDrawAccounting();
 			ReportVRMenuPresentationTraceFault("while tracing a menu composition draw");
 		}
 	}
@@ -7290,6 +7389,7 @@ namespace
 
 namespace
 {
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawIndexed
 	{
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_startIndexLocation, INT a_baseVertexLocation)
@@ -7303,6 +7403,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11Draw
 	{
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_vertexCount, UINT a_startVertexLocation)
@@ -7316,6 +7417,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawIndexedInstanced
 	{
 		static void thunk(
@@ -7347,6 +7449,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawInstanced
 	{
 		static void thunk(
@@ -7370,6 +7473,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawAuto
 	{
 		static void thunk(ID3D11DeviceContext* a_context)
@@ -7380,6 +7484,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawIndexedInstancedIndirect
 	{
 		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer, UINT a_alignedByteOffset)
@@ -7393,6 +7498,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawInstancedIndirect
 	{
 		static void thunk(ID3D11DeviceContext* a_context, ID3D11Buffer* a_argumentBuffer, UINT a_alignedByteOffset)
@@ -7406,6 +7512,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11PSSetShaderResources
 	{
 		static void thunk(
@@ -7432,6 +7539,7 @@ namespace
 		}
 	}
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11CopySubresourceRegion
 	{
 		static void thunk(
@@ -7496,6 +7604,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11CopyResource
 	{
 		static void thunk(ID3D11DeviceContext* a_context, ID3D11Resource* a_destination, ID3D11Resource* a_source)
@@ -7514,6 +7623,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11UpdateSubresource
 	{
 		static void thunk(
@@ -7554,6 +7664,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11ClearRenderTargetView
 	{
 		static void thunk(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_rtv, const FLOAT a_color[4])
@@ -7566,6 +7677,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11ClearDepthStencilView
 	{
 		static void thunk(
@@ -7583,6 +7695,7 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	template <std::size_t Bank>
 	struct VRMenuTraceD3D11ResolveSubresource
 	{
 		static void thunk(
@@ -7615,25 +7728,184 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	template <std::size_t Index, class Hook>
+	enum class VRMenuPresentationTraceD3DHookMethod : std::size_t
+	{
+		PSSetShaderResources,
+		DrawIndexed,
+		Draw,
+		DrawIndexedInstanced,
+		DrawInstanced,
+		DrawAuto,
+		DrawIndexedInstancedIndirect,
+		DrawInstancedIndirect,
+		CopySubresourceRegion,
+		CopyResource,
+		UpdateSubresource,
+		ClearRenderTargetView,
+		ClearDepthStencilView,
+		ResolveSubresource,
+		Count
+	};
+	static_assert(
+		static_cast<std::size_t>(VRMenuPresentationTraceD3DHookMethod::Count) ==
+		kVRMenuPresentationTraceD3DHookMethodCount);
+
+	constexpr std::array<std::size_t, kVRMenuPresentationTraceD3DHookMethodCount>
+		kVRMenuPresentationTraceD3DHookSlots{
+			8u, 12u, 13u, 20u, 21u, 38u, 39u, 40u, 46u, 47u, 48u, 50u, 53u, 57u
+		};
+	constexpr std::array<VRMenuPresentationTraceD3DHookMethod, 7> kVRMenuPresentationTraceD3DDrawMethods{
+		VRMenuPresentationTraceD3DHookMethod::DrawIndexed,
+		VRMenuPresentationTraceD3DHookMethod::Draw,
+		VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstanced,
+		VRMenuPresentationTraceD3DHookMethod::DrawInstanced,
+		VRMenuPresentationTraceD3DHookMethod::DrawAuto,
+		VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstancedIndirect,
+		VRMenuPresentationTraceD3DHookMethod::DrawInstancedIndirect
+	};
+	std::mutex g_vrMenuPresentationTraceD3DHookInstallMutex;
+	std::array<
+		std::array<std::uintptr_t, kVRMenuPresentationTraceD3DHookBankCount>,
+		kVRMenuPresentationTraceD3DHookMethodCount>
+		g_vrMenuPresentationTraceD3DHookTargets{};
+	std::array<std::size_t, kVRMenuPresentationTraceD3DHookMethodCount>
+		g_vrMenuPresentationTraceD3DHookTargetCounts{};
+	std::size_t g_vrMenuPresentationTraceD3DHookBanksUsed = 0;
+
+	struct VRMenuPresentationTraceD3DHookPendingRegistration
+	{
+		std::array<std::uintptr_t, kVRMenuPresentationTraceD3DHookMethodCount> targets{};
+		std::array<bool, kVRMenuPresentationTraceD3DHookMethodCount> queued{};
+	};
+
+	bool IsVRMenuPresentationTraceD3DHookTargetCovered(
+		VRMenuPresentationTraceD3DHookMethod a_method,
+		std::uintptr_t a_target)
+	{
+		if (!a_target)
+			return false;
+		const auto method = static_cast<std::size_t>(a_method);
+		const auto begin = g_vrMenuPresentationTraceD3DHookTargets[method].begin();
+		const auto end = begin + g_vrMenuPresentationTraceD3DHookTargetCounts[method];
+		return std::find(begin, end, a_target) != end;
+	}
+
+	bool IsVRMenuPresentationTraceD3DContextDrawCoverageCompleteUnlocked(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return false;
+		auto* vtable = *reinterpret_cast<std::uintptr_t**>(a_context);
+		if (!vtable)
+			return false;
+
+		return std::all_of(
+			kVRMenuPresentationTraceD3DDrawMethods.begin(),
+			kVRMenuPresentationTraceD3DDrawMethods.end(),
+			[&](VRMenuPresentationTraceD3DHookMethod a_method) {
+				const auto method = static_cast<std::size_t>(a_method);
+				return IsVRMenuPresentationTraceD3DHookTargetCovered(
+					a_method,
+					vtable[kVRMenuPresentationTraceD3DHookSlots[method]]);
+			});
+	}
+
+	bool IsVRMenuPresentationTraceD3DContextHookCoverageCompleteUnlocked(ID3D11DeviceContext* a_context)
+	{
+		if (!a_context)
+			return false;
+		auto* vtable = *reinterpret_cast<std::uintptr_t**>(a_context);
+		if (!vtable)
+			return false;
+
+		for (std::size_t method = 0; method < kVRMenuPresentationTraceD3DHookMethodCount; ++method) {
+			if (!IsVRMenuPresentationTraceD3DHookTargetCovered(
+					static_cast<VRMenuPresentationTraceD3DHookMethod>(method),
+					vtable[kVRMenuPresentationTraceD3DHookSlots[method]])) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool IsVRMenuPresentationTraceD3DContextDrawCoverageComplete(ID3D11DeviceContext* a_context)
+	{
+		std::scoped_lock lock(g_vrMenuPresentationTraceD3DHookInstallMutex);
+		return IsVRMenuPresentationTraceD3DContextDrawCoverageCompleteUnlocked(a_context);
+	}
+
+	template <std::size_t Index, VRMenuPresentationTraceD3DHookMethod Method, class Hook>
 	struct VRMenuPresentationTraceD3DHookRegistration
 	{
-		static LONG Queue(ID3D11DeviceContext* a_context)
+		static LONG Queue(
+			ID3D11DeviceContext* a_context,
+			VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
 		{
 			auto vtable = *reinterpret_cast<std::uintptr_t**>(a_context);
-			Hook::func = vtable[Index];
-			return DetourAttach(
+			const auto method = static_cast<std::size_t>(Method);
+			const auto target = vtable[Index];
+			a_pending.targets[method] = target;
+			if (IsVRMenuPresentationTraceD3DHookTargetCovered(Method, target))
+				return NO_ERROR;
+
+			Hook::func = target;
+			const LONG result = DetourAttach(
 				reinterpret_cast<PVOID*>(&Hook::func),
 				reinterpret_cast<PVOID>(Hook::thunk));
+			a_pending.queued[method] = result == NO_ERROR;
+			return result;
 		}
 	};
 
 	template <class... Registrations>
-	LONG QueueVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context)
+	LONG QueueVRMenuPresentationTraceD3DHooks(
+		ID3D11DeviceContext* a_context,
+		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
 	{
 		LONG result = NO_ERROR;
-		((result = result == NO_ERROR ? Registrations::Queue(a_context) : result), ...);
+		((result = result == NO_ERROR ? Registrations::Queue(a_context, a_pending) : result), ...);
 		return result;
+	}
+
+	template <std::size_t Bank>
+	LONG QueueVRMenuPresentationTraceD3DHookBank(
+		ID3D11DeviceContext* a_context,
+		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+	{
+		return QueueVRMenuPresentationTraceD3DHooks<
+			VRMenuPresentationTraceD3DHookRegistration<8, VRMenuPresentationTraceD3DHookMethod::PSSetShaderResources, VRMenuTraceD3D11PSSetShaderResources<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<12, VRMenuPresentationTraceD3DHookMethod::DrawIndexed, VRMenuTraceD3D11DrawIndexed<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<13, VRMenuPresentationTraceD3DHookMethod::Draw, VRMenuTraceD3D11Draw<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<20, VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstanced, VRMenuTraceD3D11DrawIndexedInstanced<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<21, VRMenuPresentationTraceD3DHookMethod::DrawInstanced, VRMenuTraceD3D11DrawInstanced<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<38, VRMenuPresentationTraceD3DHookMethod::DrawAuto, VRMenuTraceD3D11DrawAuto<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<39, VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstancedIndirect, VRMenuTraceD3D11DrawIndexedInstancedIndirect<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<40, VRMenuPresentationTraceD3DHookMethod::DrawInstancedIndirect, VRMenuTraceD3D11DrawInstancedIndirect<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<46, VRMenuPresentationTraceD3DHookMethod::CopySubresourceRegion, VRMenuTraceD3D11CopySubresourceRegion<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<47, VRMenuPresentationTraceD3DHookMethod::CopyResource, VRMenuTraceD3D11CopyResource<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<48, VRMenuPresentationTraceD3DHookMethod::UpdateSubresource, VRMenuTraceD3D11UpdateSubresource<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<50, VRMenuPresentationTraceD3DHookMethod::ClearRenderTargetView, VRMenuTraceD3D11ClearRenderTargetView<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<53, VRMenuPresentationTraceD3DHookMethod::ClearDepthStencilView, VRMenuTraceD3D11ClearDepthStencilView<Bank>>,
+			VRMenuPresentationTraceD3DHookRegistration<57, VRMenuPresentationTraceD3DHookMethod::ResolveSubresource, VRMenuTraceD3D11ResolveSubresource<Bank>>>(
+			a_context,
+			a_pending);
+	}
+
+	LONG QueueVRMenuPresentationTraceD3DHookBank(
+		std::size_t a_bank,
+		ID3D11DeviceContext* a_context,
+		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+	{
+		switch (a_bank) {
+		case 0: return QueueVRMenuPresentationTraceD3DHookBank<0>(a_context, a_pending);
+		case 1: return QueueVRMenuPresentationTraceD3DHookBank<1>(a_context, a_pending);
+		case 2: return QueueVRMenuPresentationTraceD3DHookBank<2>(a_context, a_pending);
+		case 3: return QueueVRMenuPresentationTraceD3DHookBank<3>(a_context, a_pending);
+		case 4: return QueueVRMenuPresentationTraceD3DHookBank<4>(a_context, a_pending);
+		case 5: return QueueVRMenuPresentationTraceD3DHookBank<5>(a_context, a_pending);
+		case 6: return QueueVRMenuPresentationTraceD3DHookBank<6>(a_context, a_pending);
+		case 7: return QueueVRMenuPresentationTraceD3DHookBank<7>(a_context, a_pending);
+		default: return ERROR_NOT_ENOUGH_MEMORY;
+		}
 	}
 }
 
@@ -7649,14 +7921,24 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 			ArmVRMenuPresentationTrace("runtime-debug-enable", menuMask);
 	};
 
-	static std::mutex installMutex;
-	static bool installed = false;
-	std::scoped_lock lock(installMutex);
-	if (installed) {
+	std::unique_lock lock(g_vrMenuPresentationTraceD3DHookInstallMutex);
+	if (IsVRMenuPresentationTraceD3DContextHookCoverageCompleteUnlocked(a_context)) {
+		lock.unlock();
 		armCurrentMenu();
 		return;
 	}
+	if (g_vrMenuPresentationTraceD3DHookBanksUsed >= kVRMenuPresentationTraceD3DHookBankCount) {
+		const auto vtable = reinterpret_cast<std::uintptr_t>(*reinterpret_cast<std::uintptr_t**>(a_context));
+		lock.unlock();
+		logger::error(
+			"[VRMenuTrace] Could not cover D3D11 context=0x{:X} vtable=0x{:X}: all {} hook banks are in use.",
+			reinterpret_cast<std::uintptr_t>(a_context),
+			vtable,
+			kVRMenuPresentationTraceD3DHookBankCount);
+		return;
+	}
 
+	VRMenuPresentationTraceD3DHookPendingRegistration pending{};
 	LONG result = DetourTransactionBegin();
 	if (result != NO_ERROR) {
 		logger::error("[VRMenuTrace] Could not begin the developer-mode D3D11 hook transaction (error {}).", result);
@@ -7664,23 +7946,11 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 	}
 
 	result = DetourUpdateThread(GetCurrentThread());
-	if (result == NO_ERROR) {
-		result = QueueVRMenuPresentationTraceD3DHooks<
-			VRMenuPresentationTraceD3DHookRegistration<8, VRMenuTraceD3D11PSSetShaderResources>,
-			VRMenuPresentationTraceD3DHookRegistration<12, VRMenuTraceD3D11DrawIndexed>,
-			VRMenuPresentationTraceD3DHookRegistration<13, VRMenuTraceD3D11Draw>,
-			VRMenuPresentationTraceD3DHookRegistration<20, VRMenuTraceD3D11DrawIndexedInstanced>,
-			VRMenuPresentationTraceD3DHookRegistration<21, VRMenuTraceD3D11DrawInstanced>,
-			VRMenuPresentationTraceD3DHookRegistration<38, VRMenuTraceD3D11DrawAuto>,
-			VRMenuPresentationTraceD3DHookRegistration<39, VRMenuTraceD3D11DrawIndexedInstancedIndirect>,
-			VRMenuPresentationTraceD3DHookRegistration<40, VRMenuTraceD3D11DrawInstancedIndirect>,
-			VRMenuPresentationTraceD3DHookRegistration<46, VRMenuTraceD3D11CopySubresourceRegion>,
-			VRMenuPresentationTraceD3DHookRegistration<47, VRMenuTraceD3D11CopyResource>,
-			VRMenuPresentationTraceD3DHookRegistration<48, VRMenuTraceD3D11UpdateSubresource>,
-			VRMenuPresentationTraceD3DHookRegistration<50, VRMenuTraceD3D11ClearRenderTargetView>,
-			VRMenuPresentationTraceD3DHookRegistration<53, VRMenuTraceD3D11ClearDepthStencilView>,
-			VRMenuPresentationTraceD3DHookRegistration<57, VRMenuTraceD3D11ResolveSubresource>>(a_context);
-	}
+	if (result == NO_ERROR)
+		result = QueueVRMenuPresentationTraceD3DHookBank(
+			g_vrMenuPresentationTraceD3DHookBanksUsed,
+			a_context,
+			pending);
 
 	if (result != NO_ERROR) {
 		DetourTransactionAbort();
@@ -7694,9 +7964,30 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 		return;
 	}
 
-	installed = true;
+	for (std::size_t method = 0; method < pending.queued.size(); ++method) {
+		if (!pending.queued[method])
+			continue;
+		auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
+		g_vrMenuPresentationTraceD3DHookTargets[method][count++] = pending.targets[method];
+	}
+	const std::size_t bank = g_vrMenuPresentationTraceD3DHookBanksUsed++;
+	const bool drawCoverageComplete =
+		IsVRMenuPresentationTraceD3DContextDrawCoverageCompleteUnlocked(a_context);
 	g_vrMenuPresentationTraceD3DHooksInstalled.store(true, std::memory_order_release);
-	logger::debug("[VRMenuTrace] Installed resource-filtered developer-mode D3D11 menu presentation hooks with pass aggregation.");
+	g_vrMenuPresentationTraceD3DHookBanksInstalled.store(
+		static_cast<uint32_t>(g_vrMenuPresentationTraceD3DHookBanksUsed),
+		std::memory_order_release);
+	const auto contextIdentity = reinterpret_cast<std::uintptr_t>(a_context);
+	const auto vtableIdentity = reinterpret_cast<std::uintptr_t>(*reinterpret_cast<std::uintptr_t**>(a_context));
+	lock.unlock();
+	logger::debug(
+		"[VRMenuTrace] Installed developer-mode D3D11 menu presentation hook bank={} context=0x{:X} vtable=0x{:X} drawCoverageComplete={} banksUsed={}/{}.",
+		bank,
+		contextIdentity,
+		vtableIdentity,
+		drawCoverageComplete,
+		bank + 1u,
+		kVRMenuPresentationTraceD3DHookBankCount);
 	armCurrentMenu();
 }
 
@@ -7733,6 +8024,10 @@ bool Upscaling::BeginVRMenuAccumulatorTrace(
 	context.groupIndex = a_groupIndex;
 	context.higherScopeAtBegin = g_vrMenuPresentationTraceHigherCallDepth != 0;
 	context.directScopeAtBegin = g_vrMenuPresentationTraceDirectDrawDepth != 0;
+	context.d3dHooksInstalledAtBegin =
+		g_vrMenuPresentationTraceD3DHooksInstalled.load(std::memory_order_acquire);
+	context.primaryContextCoveredAtBegin =
+		IsVRMenuPresentationTraceD3DContextDrawCoverageComplete(globals::d3d::context);
 	context.relevant = renderMode == 24u || g_vrMenuPresentationTraceHigherCallDepth != 0 ||
 		g_vrMenuPresentationTraceDirectDrawDepth != 0;
 	const uint32_t index = g_vrMenuPresentationTraceAccumulatorDepth;
@@ -7751,7 +8046,7 @@ bool Upscaling::BeginVRMenuAccumulatorTrace(
 	LogVRMenuPresentationTraceLazy(
 		"menu-accumulator-begin",
 		[&]() { return std::format(
-			"epoch={} parentEpoch={} accumulator=0x{:X} arguments(firstPass={},lastPass={},renderFlags=0x{:X},groupIndex={}) renderMode={} depth={} inheritedScope(higher={},direct={}) menus=\"{}\"",
+			"epoch={} parentEpoch={} accumulator=0x{:X} arguments(firstPass={},lastPass={},renderFlags=0x{:X},groupIndex={}) renderMode={} depth={} inheritedScope(higher={},direct={}) drawAccounting(hooksInstalled={},primaryContextCovered={}) menus=\"{}\"",
 			context.epochId,
 			context.parentEpochId,
 			context.accumulatorIdentity,
@@ -7763,6 +8058,8 @@ bool Upscaling::BeginVRMenuAccumulatorTrace(
 			g_vrMenuPresentationTraceAccumulatorDepth,
 			context.higherScopeAtBegin,
 			context.directScopeAtBegin,
+			context.d3dHooksInstalledAtBegin,
+			context.primaryContextCoveredAtBegin,
 			DescribeVRMenuPresentationTraceMenuMask(context.menuMask)); });
 	return true;
 }
@@ -7783,6 +8080,40 @@ void Upscaling::EndVRMenuAccumulatorTrace(
 		return;
 	}
 	const auto context = *current;
+	const bool endArgumentsMatch =
+		context.accumulatorIdentity == reinterpret_cast<std::uintptr_t>(a_accumulator) &&
+		context.firstPass == a_firstPass && context.lastPass == a_lastPass &&
+		context.renderFlags == a_renderFlags && context.groupIndex == a_groupIndex;
+	const bool sessionMatch =
+		context.session == g_vrMenuPresentationTraceSession.load(std::memory_order_acquire);
+	const bool directDrawCalibrationMatch =
+		context.directBridgeDraws ==
+			context.directBridgeDrawsIssued + context.directBridgeDrawsSuppressed &&
+		context.directBridgeDrawsIssued == context.genericDirectBridgeDraws &&
+		context.directBridgeDrawsSuppressed == context.internalReplayDraws;
+	const bool unrelatedDrawAccountingAuthoritative =
+		context.directBridgeDraws != 0 &&
+		context.bridgeDecisions != 0 &&
+		endArgumentsMatch &&
+		sessionMatch &&
+		context.d3dHooksInstalledAtBegin &&
+		context.primaryContextCoveredAtBegin &&
+		!context.drawContextOverflow &&
+		!context.drawHookCoverageChanged &&
+		!context.drawHookCoverageFailed &&
+		directDrawCalibrationMatch;
+	std::string drawContexts;
+	for (uint32_t index = 0; index < context.drawContextCount; ++index) {
+		if (!drawContexts.empty())
+			drawContexts += "; ";
+		drawContexts += std::format(
+			"{}(context=0x{:X},vtable=0x{:X})",
+			index,
+			context.drawContextIdentities[index],
+			context.drawVtableIdentities[index]);
+	}
+	if (drawContexts.empty())
+		drawContexts = "none";
 	const bool overflow = g_vrMenuPresentationTraceAccumulatorDepth > kVRMenuPresentationTraceMaxAccumulatorDepth;
 	if (overflow && !g_vrMenuPresentationTraceAccumulatorOverflowStack.empty())
 		g_vrMenuPresentationTraceAccumulatorOverflowStack.pop_back();
@@ -7804,15 +8135,32 @@ void Upscaling::EndVRMenuAccumulatorTrace(
 	g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDraws.fetch_add(
 		context.directBridgeDraws,
 		std::memory_order_acq_rel);
+	g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDrawsIssued.fetch_add(
+		context.directBridgeDrawsIssued,
+		std::memory_order_acq_rel);
+	g_vrMenuPresentationTraceCounters.accumulatorDirectBridgeDrawsSuppressed.fetch_add(
+		context.directBridgeDrawsSuppressed,
+		std::memory_order_acq_rel);
+	g_vrMenuPresentationTraceCounters.accumulatorGenericDirectBridgeDraws.fetch_add(
+		context.genericDirectBridgeDraws,
+		std::memory_order_acq_rel);
 	g_vrMenuPresentationTraceCounters.accumulatorBridgeDecisions.fetch_add(
 		context.bridgeDecisions,
 		std::memory_order_acq_rel);
+	if (unrelatedDrawAccountingAuthoritative) {
+		g_vrMenuPresentationTraceCounters.accumulatorAuthoritativeUnrelatedDraws.fetch_add(
+			context.unrelatedDraws,
+			std::memory_order_acq_rel);
+		g_vrMenuPresentationTraceCounters.accumulatorAuthoritativeEpochs.fetch_add(1, std::memory_order_acq_rel);
+	} else if (context.directBridgeDraws != 0) {
+		g_vrMenuPresentationTraceCounters.accumulatorUncalibratedEpochs.fetch_add(1, std::memory_order_acq_rel);
+	}
 	g_vrMenuPresentationTraceLastAccumulatorEpochId.store(context.epochId, std::memory_order_release);
 
 	LogVRMenuPresentationTraceLazy(
 		"menu-accumulator-end",
 		[&]() { return std::format(
-			"epoch={} parentEpoch={} accumulator=0x{:X} arguments(firstPass={},lastPass={},renderFlags=0x{:X},groupIndex={}) endArgumentsMatch={} renderMode={} depth={} relevant={} inheritedScope(higher={},direct={}) draws(total={},compositionSource={},menuOutput={},directBridge={},internalReplay={},unrelated={},unrelatedPlacement(beforeFirstBridge={},betweenBridges={},afterLastBridge={})) calls(higherEntries={},bridgeDecisions={}) destination(projected={},hud={},menuBG={},vrFramebuffer={},otherRegistered={},unregistered={}) begin(session={},frame={},menus=\"{}\")",
+			"epoch={} parentEpoch={} accumulator=0x{:X} arguments(firstPass={},lastPass={},renderFlags=0x{:X},groupIndex={}) endArgumentsMatch={} renderMode={} depth={} relevant={} inheritedScope(higher={},direct={}) draws(total={},compositionSource={},menuOutput={},directBridge={},directIssued={},directSuppressed={},genericDirect={},internalReplay={},unrelated={},unrelatedPlacement(beforeFirstBridge={},betweenBridges={},afterLastBridge={})) drawAccounting(authoritative={},calibrationMatch={},sessionMatch={},hooksInstalledAtBegin={},primaryContextCoveredAtBegin={},coverageChanged={},coverageFailed={},contextOverflow={},contexts=[{}]) calls(higherEntries={},bridgeDecisions={}) destination(projected={},hud={},menuBG={},vrFramebuffer={},otherRegistered={},unregistered={}) begin(session={},frame={},menus=\"{}\")",
 			context.epochId,
 			context.parentEpochId,
 			context.accumulatorIdentity,
@@ -7820,9 +8168,7 @@ void Upscaling::EndVRMenuAccumulatorTrace(
 			context.lastPass,
 			context.renderFlags,
 			context.groupIndex,
-			context.accumulatorIdentity == reinterpret_cast<std::uintptr_t>(a_accumulator) &&
-				context.firstPass == a_firstPass && context.lastPass == a_lastPass &&
-				context.renderFlags == a_renderFlags && context.groupIndex == a_groupIndex,
+			endArgumentsMatch,
 			context.renderMode,
 			g_vrMenuPresentationTraceAccumulatorDepth + 1u,
 			context.relevant,
@@ -7832,11 +8178,23 @@ void Upscaling::EndVRMenuAccumulatorTrace(
 			context.compositionSourceDraws,
 			context.menuOutputDraws,
 			context.directBridgeDraws,
+			context.directBridgeDrawsIssued,
+			context.directBridgeDrawsSuppressed,
+			context.genericDirectBridgeDraws,
 			context.internalReplayDraws,
 			context.unrelatedDraws,
 			context.unrelatedBeforeFirstBridge,
 			context.unrelatedBetweenBridges,
 			context.unrelatedSinceLastBridge,
+			unrelatedDrawAccountingAuthoritative,
+			directDrawCalibrationMatch,
+			sessionMatch,
+			context.d3dHooksInstalledAtBegin,
+			context.primaryContextCoveredAtBegin,
+			context.drawHookCoverageChanged,
+			context.drawHookCoverageFailed,
+			context.drawContextOverflow,
+			drawContexts,
 			context.higherCallEntries,
 			context.bridgeDecisions,
 			context.destinationProjectedMenu,
@@ -8489,6 +8847,12 @@ namespace
 			const uint32_t enginePS = globals::game::currentPixelShader && *globals::game::currentPixelShader ?
 			                              (*globals::game::currentPixelShader)->id :
 			                              0u;
+			const auto contextIdentity = reinterpret_cast<std::uintptr_t>(a_context);
+			const auto* contextVtable = *reinterpret_cast<std::uintptr_t**>(a_context);
+			const auto vtableIdentity = reinterpret_cast<std::uintptr_t>(contextVtable);
+			const auto drawTarget = contextVtable ? contextVtable[20] : 0u;
+			const bool drawCoverageComplete =
+				IsVRMenuPresentationTraceD3DContextDrawCoverageComplete(a_context);
 			g_vrMenuPresentationTraceCounters.bridgeDecisionRecords.fetch_add(1, std::memory_order_acq_rel);
 			if (a_candidateAccepted) {
 				g_vrMenuPresentationTraceCounters.bridgeCandidatesAccepted.fetch_add(1, std::memory_order_acq_rel);
@@ -8506,7 +8870,7 @@ namespace
 			LogVRMenuPresentationTraceLazy(
 				"bridge-decision",
 				[&]() { return std::format(
-					"result={} candidate(accepted={},reason={}) operation(active={},reason={}) capture(attempted={},reason={}) callerRva=0x{:X} arguments=(indexCountPerInstance={},instanceCount={},startIndex={},baseVertex={},startInstance={}) sources=[{}] destination={} shaders(d3dVS=0x{:X},d3dPS=0x{:X},engineVS={},enginePS={}) pipeline=({}) higher(rawActive={},readable={},wrapper=0x{:X},subject=0x{:X},flag={},mode={},selector={},filteredActive={},hookInstalled={}) adaptiveContextMask=0x{:X} {} {}",
+					"result={} candidate(accepted={},reason={}) operation(active={},reason={}) capture(attempted={},reason={}) callerRva=0x{:X} arguments=(indexCountPerInstance={},instanceCount={},startIndex={},baseVertex={},startInstance={}) d3dContext(pointer=0x{:X},vtable=0x{:X},drawTarget=0x{:X},type={},drawCoverageComplete={}) sources=[{}] destination={} shaders(d3dVS=0x{:X},d3dPS=0x{:X},engineVS={},enginePS={}) pipeline=({}) higher(rawActive={},readable={},wrapper=0x{:X},subject=0x{:X},flag={},mode={},selector={},filteredActive={},hookInstalled={}) adaptiveContextMask=0x{:X} {} {}",
 					a_drawSuppressed ? "suppressed" : "kept-original",
 					a_candidateAccepted,
 					a_candidateReason ? a_candidateReason : "unavailable",
@@ -8520,6 +8884,11 @@ namespace
 					a_startIndexLocation,
 					a_baseVertexLocation,
 					a_startInstanceLocation,
+					contextIdentity,
+					vtableIdentity,
+					drawTarget,
+					static_cast<uint32_t>(a_context->GetType()),
+					drawCoverageComplete,
 					sources,
 					outputs.text,
 					GetCOMIdentityAddress(vertexShader),
@@ -8540,8 +8909,10 @@ namespace
 					DescribeVRMenuBridgeAdaptiveProbeState(a_indexCount, contextMask, frame),
 					GetVRMenuPresentationTraceScopeDescription()); });
 		} catch (const std::exception& e) {
+			InvalidateVRMenuPresentationTraceAccumulatorDrawAccounting();
 			ReportVRMenuPresentationTraceFault("while tracing a bridge decision", e.what());
 		} catch (...) {
+			InvalidateVRMenuPresentationTraceAccumulatorDrawAccounting();
 			ReportVRMenuPresentationTraceFault("while tracing a bridge decision");
 		}
 	}
@@ -10654,6 +11025,17 @@ struct VRMenuBridgeDirectDrawHook
 			if (presentationTrace && g_vrMenuPresentationTraceDirectDrawDepth != 0)
 				--g_vrMenuPresentationTraceDirectDrawDepth;
 		});
+		if (presentationTrace) {
+			const bool coverageAtEntry =
+				IsVRMenuPresentationTraceD3DContextDrawCoverageComplete(a_context);
+			Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
+			const bool coverageAfterInstall =
+				IsVRMenuPresentationTraceD3DContextDrawCoverageComplete(a_context);
+			RecordVRMenuPresentationTraceAccumulatorDirectBridgeDraw(
+				a_context,
+				coverageAtEntry,
+				coverageAfterInstall);
+		}
 
 		const char* candidateReason = "not-evaluated";
 		const bool bridgeCandidate = Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
@@ -10695,6 +11077,8 @@ struct VRMenuBridgeDirectDrawHook
 				drawSuppressed,
 				captureReason);
 		}
+		if (presentationTrace)
+			RecordVRMenuPresentationTraceAccumulatorDirectBridgeDrawOutcome(drawSuppressed);
 
 		if (drawSuppressed) {
 			return;

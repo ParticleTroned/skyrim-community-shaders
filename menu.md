@@ -1,16 +1,21 @@
 # SkyrimVR Full-Resolution Menu Presentation Strategy
 
-Status: RC81 ordinary-menu and crashing RaceSex evidence is incorporated;
-RC82 draw accounting is corrected; and the focused RC83 Map and RaceSex
-evidence is complete. Ordinary-menu implementation may proceed in diagnostic
-parallel mode. The RC83 streams resolve Map and startup RaceSex to full-
-resolution Render Scale fallbacks rather than submit-stage adapters. Opening
-RaceSex after Render Scale is already latched remains an implementation and
-validation requirement.
+Status: evidence collection is complete and the implementation handover is
+ready. Ordinary menus use semantic bridge transport; Map and RaceSex use an
+engine-native full-resolution transition. MainMenu and loading retain their
+existing native paths. Remaining work is implementation plus focused visual and
+failure-path validation, not another broad discovery trace.
 
 Branch: `cs-1.7-PL-VR`
 
-Baseline: `87522b1f47ef5544b92962cdd11177db8e746ea8` (`RC83`)
+Implementation head reviewed: `0c66c97b895c2ee2b939073ab6cf73c87eb6ea7f`
+
+Trace baseline: `87522b1f47ef5544b92962cdd11177db8e746ea8` (`RC83`)
+
+Open Shaders reference reviewed: development commit
+[`6070998cc5f290b929d072a76460d7965c053ea2`](https://github.com/alandtse/open-shaders/commit/6070998cc5f290b929d072a76460d7965c053ea2),
+particularly `src/Features/Upscaling/PerfMode.h`. This is an architectural
+comparison only; no Open Shaders source is copied by this document.
 
 Evidence reviewed:
 
@@ -33,9 +38,12 @@ Evidence reviewed:
   `DrawInterface` frames, authoritative mode-24 parity, continuous producer
   generations, MessageBox overlap, clean close/tail/re-latch behavior, and 618
   successful original-path OpenVR submits.
+- Post-latch RaceSex trace opening at frame 62,793 after Render Scale had
+  latched, spanning Console and MessageBox overlap, 666 completed RaceSex
+  frames, and 1,332 successful but reduced-resolution original-path OpenVR
+  submits.
 
-This document is an untracked design and verification record. It is not a
-release claim.
+This document is a design and verification record. It is not a release claim.
 
 ## Decision
 
@@ -54,7 +62,8 @@ For ordinary menus, replace discovery with semantic ownership:
 2. The exact higher engine bridge call establishes a bridge operation.
 3. The existing direct draw interception transports every operation, in order,
    into a full-resolution staging layer.
-4. The layer is committed only at the consumer epoch boundary and reused until
+4. Epochs contribute to one frame transaction. The layer is committed only when
+   that transaction is sealed before the first eye submit, then reused until
    superseded or invalidated.
 
 Remove these from ordinary-menu correctness:
@@ -78,12 +87,65 @@ Map must use the same full-resolution policy: RC83 proves that its mode-24
 epochs interleave the HUD bridge with later depth-writing Map content in the
 same `kMENUBG` destination. A HUD-only replay changes ordering, while a whole-
 epoch replay would absorb 3D Map work and require a full-resolution depth path.
-RaceSex must also use a full-resolution fallback. RC83 proves the startup guard
-keeps Render Scale unlatched from menu open through its post-close tail, while
-the engine performs the complete RaceSex composition into full-resolution
-targets. No RaceSex bridge replay is needed. A later RaceSex invocation must
-receive the same contract even when Render Scale was already active before the
-menu opened.
+RaceSex must also use a full-resolution fallback. RC83 proves that the historical
+startup guard kept Render Scale unlatched from menu open through its post-close
+tail, while the engine performed the complete RaceSex composition into full-
+resolution targets. No RaceSex bridge replay is needed.
+
+The reviewed implementation head is materially different from the RC83 trace
+baseline: `0c66c97b8` removed RaceSex startup and post-load Render Scale
+blocking. The current code therefore does not provide either the historical
+startup fallback or a post-latch fallback. Do not restore the old logical
+"inactive" flags as the fix. Implement the native-resolution transition state
+machine defined below so engine resources actually become full resolution
+before a RaceSex frame can be submitted.
+
+## Final Re-analysis And Hybrid Boundary
+
+The hybrid remains the best fit for CS, but the accumulated evidence changes
+four implementation details from the earlier outline:
+
+1. **Frame ownership, not epoch publication.** The latest RC83 Console and
+   Journal samples each contain exactly one mode-24 epoch per observed frame
+   (212 and 105 frames respectively), but correctness must not depend on that
+   count. All authorized epochs in one video frame append to one ordered staging
+   transaction, which is sealed at presentation.
+2. **Real atomic failure containment.** Resource preflight cannot guarantee that
+   every later intercepted operation will succeed. Once any reduced engine draw
+   is suppressed, a later failure poisons the frame; that frame must not fall
+   through to an original reduced OpenVR submit or a partial desktop mirror.
+3. **Separate production ownership from tracing.** The current accumulator
+   begin/end API is trace-gated. Semantic transaction state must run whenever the
+   adapter is enabled, with tracing attached only as an observer.
+4. **Exceptional menus require resource transitions.** Map and RaceSex cannot
+   be made correct by toggling presentation booleans while reduced resources
+   remain latched. They need an overlap-aware native-resolution state machine
+   that preserves user intent and controls both entry and relatch.
+
+Final routing is:
+
+| Context | Presentation policy | Reason |
+| --- | --- | --- |
+| Ordinary menus, including Console | Semantic mode-24 bridge transport to a full-resolution layer | Complete ordered bridge contract is known |
+| Map | Temporary engine-native full-resolution resources | HUD bridge and later depth-writing 3D Map draws share `kMENUBG` |
+| RaceSex | Temporary engine-native full-resolution resources | Complete composition is known; post-latch logical bypass failed |
+| MainMenu and loading | Existing engine-native fallback | Trace proves Render Scale is inactive and no ordinary consumer exists |
+| Desktop game window | Present-time blit of a complete matching eye pair | Suppression otherwise removes UI from the engine mirror path |
+
+Open Shaders obtains robust menu rendering by changing the broader rendering
+contract: it enlarges selected menu/intermediate targets, supplies a display-
+size depth target for the UI pass, adjusts viewport/copy behavior, and lets the
+engine draw the UI at output resolution. That avoids selective draw discovery
+and naturally includes unusual or modded UI, but it owns substantially more of
+the render-target, depth, post-process, and memory lifecycle.
+
+CS should retain reduced scene rendering and submit-stage upscaling. The narrow
+semantic adapter preserves that architecture, avoids broad scene-target resizing,
+and limits extra full-resolution storage to menu staging, committed layers, and
+the final eye pair. For Map and RaceSex, however, the hybrid deliberately adopts
+the Open Shaders principle rather than its implementation: let the engine run the
+complete exceptional pipeline against native resources instead of trying to
+classify or replay selected draws.
 
 ## RC81 Ordinary Log Integrity And Coverage
 
@@ -201,6 +263,68 @@ geometry. Resource deduplication can discard one and produce missing, stale, or
 temporarily mixed text. This remains a credible explanation for the reported
 `pltreeyer`-style presentation without requiring damage to the source texture.
 
+## Console Readability Evidence
+
+The user reports that the Console is visible in the HMD but absent from the
+desktop mirror, and that its HMD text is poorly readable. The trace confirms
+that the Console layer reaches the per-eye final-composite and OpenVR-submit
+path, but it does not record the desktop mirror. Console validation must
+therefore be performed in the HMD; the monitor image is not an output-equivalence
+oracle for this menu.
+
+The controlled post-latch RC83 log contains a 213-frame Console session while
+Render Scale and presentation upscaling are active. The Console is an ordinary
+mode-24 consumer, not an exceptional fallback:
+
+- after the first calibration epoch, 211 authoritative group-16 epochs each
+  contain exactly three ordered bridge operations;
+- the order is projected `6x2`, HUD `504x2`, then HUD `144x2`;
+- all three sample complete `2048x2048` projected/HUD source generations and
+  target the reduced `3290x1826` `kMENUBG`;
+- all 212 projected producer passes and all 212 HUD producer passes use
+  color-clear-then-redraw; projected passes contain 7-10 draws and HUD passes
+  contain 7-12 draws;
+- producer depth testing is disabled. HUD production uses stencil, while the
+  projected producer does not.
+
+The current capture path does not preserve that transaction. Across the
+session it accepts and suppresses 424 operations, but rejects and keeps 211.
+In every stable epoch it stages projected `6x2` and HUD `504x2`, then leaves HUD
+`144x2` in reduced `kMENUBG` with reason
+`all-menu-targets-already-suppressed`. The final layer therefore contains two
+operations, even though the authoritative epoch contains three. On the final
+Console frame the two staged operations replay into `4936x2740`, while the
+third operation remains rasterized at `3290x1826`.
+
+This proves a mixed-resolution and order-changing composition error. The
+reduced HUD `144x2` result is upscaled with the scene, then the earlier
+projected `6x2` and HUD `504x2` operations are composited over it at final
+resolution. It is not equivalent to the engine's original three-operation
+order and is a direct correctness defect consistent with the reported poor HMD
+Console readability. The trace does not identify which Console glyphs or
+panels belong to the `144x2` operation, so that narrower visual attribution
+must not be asserted.
+
+The fix is part of the generic ordinary-menu pipeline: capture all three
+operations as opaque ordered payload, suppress each reduced original only after
+its capture succeeds, fail closed if the later transaction becomes poisoned,
+and publish only the complete layer. No Console-specific index-count rule is
+appropriate. The
+`2048x2048` source resolution remains an upper bound on recoverable detail, so
+post-fix visual validation must distinguish any residual source limitation from
+the now-proven bridge omission.
+
+Suppressing the reduced originals also makes desktop-mirror presentation an
+explicit part of correctness. The RC83 Console source is `3290x1826`, while the
+two final eye outputs are each `2468x2740`. It cannot satisfy the current direct
+writeback requirement of a `4936x2740` combined target. The alternate shader
+blit runs only when `StabilizeRenderScaleDesktopMirror` is enabled, and that
+setting defaults to false. The trace does not record its value or prove that a
+writeback to the OpenVR source texture is consumed by the game window. The
+reported HMD-only Console is therefore consistent with the current design, but
+the available evidence cannot distinguish a disabled fallback from a
+writeback-order or desktop-target mismatch.
+
 ## Bridge Render State
 
 RC81 recorded one stable ordinary bridge state across all four operation
@@ -288,8 +412,9 @@ Implementation consequences:
 - do not require an observed clear;
 - do not reject an otherwise valid consumer because the generation is
   unobserved;
-- clear staging at the beginning of a new semantic consumer transaction, then
-  replay every consumer operation sampling the current persistent sources;
+- clear staging lazily at the first authorized operation of a new frame
+  transaction, then replay every consumer operation sampling the current
+  persistent sources;
 - retain the last committed layer when no new eligible consumer transaction
   occurs.
 
@@ -369,6 +494,89 @@ Protection then releases, the Render Scale latch becomes active at frame 3,576,
 the relatch recreation runs from frames 3,577 through 3,589, and a later menu at
 frame 3,753 confirms Render Scale and presentation upscaling active again. This
 proves both fail-closed entry and delayed recovery for the startup path.
+
+### Post-latch controlled run: fallback failure
+
+The later controlled run exercises the missing case directly. Render Scale
+relatches at frame 60,110 with a `4936x2740` display plan and a `3290x1826`
+render plan. RaceSex then opens at frame 62,793 while the trace still reports
+`latched=yes` and `protection=no`.
+
+RaceSex spans sessions 8 through 11 because Console is initially open and a
+`MessageBoxMenu` later opens and closes over RaceSex. Together the RaceSex
+sessions contain:
+
+- 666 matched `DrawInterface` begin/end passes;
+- 2,129 dedicated bridge decisions and 666 group-16 mode-24 epochs;
+- 1,332 successful OpenVR submissions, one per eye per completed frame;
+- no record-cap hit, trace fault, accumulator overflow, dropped resource, or
+  failed OpenVR submission;
+- a name-change hook at frame 63,457, a clean RaceSex close at frame 63,459,
+  and a 60-frame post-close tail through frame 63,519.
+
+The trace-baseline implementation does not satisfy the post-latch fallback
+contract:
+
+- RaceSex context records report Render Scale and presentation upscaling
+  inactive, and all bridge originals are kept with no capture or final
+  composite;
+- the bound `kMENUBG`, `kMAIN` depth, and `kVR_FRAMEBUFFER` resources remain at
+  the reduced `3290x1826` render extent rather than the `4936x2740` display
+  extent;
+- OpenVR receives the original reduced `3290x1826` stereo framebuffer on every
+  recorded RaceSex submit;
+- `latched=yes`, `protection=no`, and `pendingRelatch=no` persist through open,
+  close, and the protection tail, so no full-resolution recreation occurs and
+  no recovery relatch is needed.
+
+This is a clean trace-baseline implementation failure rather than a tracing or
+submission failure. Its RaceSex gate disables presentation-upscaling behavior
+logically, but does not atomically replace the already-latched reduced resource
+plan with the required full-resolution plan before the first RaceSex frame. The
+reviewed HEAD subsequently removes that gate entirely; it still lacks the
+required native transition.
+
+### Post-latch draw and producer details
+
+The stable post-latch mode-24 contract contains one projected `6x2`, one HUD
+`504x2`, and one HUD `144x2` operation. All 666 instances of each operation
+target reduced `3290x1826` `kMENUBG`. Of the 666 epochs:
+
+- 665 have authoritative three-draw generic/direct parity and `unrelated=0`;
+- frame 63,445 contains four generic composition draws: two projected `6x2`
+  draws followed by HUD `504x2` and HUD `144x2`;
+- only three dedicated bridge decisions are emitted for that four-draw epoch,
+  so calibration correctly marks it non-authoritative.
+
+The trace also records 131 projected `6x2` bridge operations outside any
+accumulator, targeting an unregistered `1024x1024` resource. Together with the
+uncalibrated four-draw epoch, these operations show that a selective RaceSex
+bridge adapter would require additional exceptional paths. The full-resolution
+fallback preserves them without classifying or moving individual draws.
+
+Producer correlation remains complete for the stable mode-24 consumer:
+
+- all 666 RaceSex projected passes clear and redraw the source, totaling
+  121,134 depth-disabled draws with per-pass counts from 36 to 192;
+- both HUD operations reuse complete generation 9,640, produced in the Console
+  session at frame 62,792 by a clear and 11 draws;
+- all 1,332 HUD consumptions refer to that unchanged pre-RaceSex generation;
+- the 132 exceptional projected consumptions outside the stable mode-24 path
+  are incomplete at their observation point and must not authorize capture.
+
+### Post-latch ordinary-layer lifecycle
+
+The Console's ordinary layer, generation 212 from frame 62,792, remains marked
+published at RaceSex open, through all RaceSex sessions, and at RaceSex close.
+It is not composed while RaceSex is active because final composition is
+disabled. The next traced Journal frame stages and publishes generation 213
+before either eye consumes a menu layer, so this run contains no stale-layer
+consumption.
+
+There is nevertheless no explicit generation-212 invalidation at RaceSex open
+or close. Correct fallback entry must invalidate any published ordinary layer;
+it must not rely on a later eligible menu producing a replacement before the
+old layer can satisfy final-composite preconditions.
 
 ### RC83 consumer contract
 
@@ -474,10 +682,11 @@ without shape filtering or resource deduplication.
 
 The consumer epoch redraws the complete RaceSex composition every frame from
 the currently bound persistent sources. Producer updates are sparse, but the
-consumer is not incremental. A staging transaction may therefore clear once at
-consumer start and replay all three operations atomically every epoch; it must
-not clear a committed layer merely because neither source was updated in that
-video frame.
+consumer is not incremental. This explains why a selective ordinary adapter
+could technically replay the three operations, but the selected native fallback
+is safer because RaceSex also owns the surrounding mixed scene/UI lifecycle. No
+path may clear a committed ordinary layer merely because neither source was
+updated in that video frame.
 
 ### RaceSex producer behavior
 
@@ -574,14 +783,19 @@ The fallback contract is:
 5. Restore Render Scale only after the tail expires and runtime-plan recreation
    completes.
 
-The startup path satisfies this contract. The current startup bypass returns
-false once Render Scale is already latched, so a later RaceSex open is not
-proven to transition atomically to the same full-resolution fallback. That case
-must be implemented or explicitly guarded before claiming general RaceSex
-coverage. The trace records a name-change hook at frame 3,478 and a clean close
-at frame 3,480, but it has no explicit race-selection event; it therefore does
-not prove that a race change occurred. Neither limitation changes the fallback
-decision.
+The historical RC83 startup path satisfies this contract. The controlled
+post-latch run proves that the trace-baseline implementation does not: it keeps
+the latch and reduced resources while merely reporting presentation upscaling
+inactive. The reviewed HEAD removes the historical startup blocker as well, so
+neither entry case is currently implemented. Fallback entry must force an atomic
+full-resolution resource-plan transition before the first RaceSex submit,
+preserve that plan across overlap and the close tail, and restore the prior
+latched plan afterward. The startup trace records a
+name-change hook at frame 3,478 and a clean close at frame 3,480, while the
+post-latch trace records its name-change hook at frame 63,457 and clean close at
+frame 63,459. Neither log contains an explicit race-selection event; user
+confirmation remains necessary if completing a race change must be distinguished
+from other RaceSex UI changes. This does not change the fallback decision.
 
 ## Map Evidence
 
@@ -733,12 +947,11 @@ decision, `directIssued == genericDirect`, and
 remain the authoritative operation records. The accumulator end arguments and
 trace session must also still match their begin values.
 
-This implementation still requires runtime verification. A successful trace
-must show that the first newly discovered context epoch is uncalibrated, later
-matching semantic epochs become authoritative, and their direct issued/generic
-counts agree. Until that evidence exists, do not use RC81 or post-RC81 zero
-unrelated counts to justify whole-epoch suppression, texture rollback, or
-restoration.
+RC82/RC83 provide that runtime verification: the first newly discovered context
+epoch is uncalibrated, later matching semantic epochs become authoritative, and
+their direct-issued/generic counts agree. This repairs the diagnostic counter;
+it does not justify whole-epoch suppression or reduced-`kMENUBG` rollback. The
+dedicated bridge records remain the ownership evidence.
 
 ## Updated Ordinary-Menu Pipeline
 
@@ -752,18 +965,26 @@ Run only when all of these are true:
 - OCU is not providing its own upscaling;
 - MainMenu, loading, save/load, Map, RaceSex, CS menu, RenderDoc, device-loss,
   and other existing blockers permit it;
-- staging and committed resources already exist;
+- separate staging and committed resources already exist;
 - shaders and immutable states are prewarmed;
-- expected formats, sample counts, and stereo dimensions are valid.
+- expected formats, sample counts, and stereo dimensions are valid;
+- once suppression is enabled, a stable prior complete eye pair is retained for
+  desktop failure containment.
 
 No allocation, shader compilation, or resource recreation may occur after a
-consumer transaction begins.
+frame transaction begins. The adapter supports only the immediate D3D11 context
+used by the verified bridge path. A different or deferred context is a contract
+failure, not a candidate for opportunistic interception.
 
-### 2. Authorize a semantic transaction
+### 2. Authorize semantic epochs independently of tracing
 
-Use the existing `BSShaderAccumulator::RenderBatches` hook.
+Use the existing `BSShaderAccumulator::RenderBatches` hook, but split the
+current trace-gated API into production begin/end ownership plus an optional
+trace observer. Production begin/end must execute whenever the ordinary adapter
+is eligible, even when developer logging is disabled. Use a scope guard so an
+exception or early return cannot leave the semantic stack active.
 
-An ordinary transaction requires:
+An ordinary operation requires:
 
 - `renderMode == 24`;
 - the exact higher bridge call nested in that epoch;
@@ -775,10 +996,22 @@ An ordinary transaction requires:
 Use the observed group-16/pass tuple as a diagnostic assertion and fail-closed
 validator where appropriate, not as the sole semantic owner.
 
-Start staging lazily on the first verified operation. Do not clear merely
-because an arbitrary mode-24 epoch began.
+The semantic state is render-thread-owned and stack-safe. Record epoch ID,
+frame, full `RenderBatches` arguments, higher-call depth, direct-call depth,
+operation count, and validity. Menu names may block exceptional contexts but
+must not authorize ordinary capture.
 
-### 3. Transport every bridge operation
+### 3. Build one ordered frame transaction
+
+Start staging lazily on the first verified operation in a video frame. Clear
+only the staging texture at that point. Never clear or mutate the committed
+layer because the frame advanced.
+
+Every eligible semantic epoch in the frame appends to the same transaction in
+D3D call order. This removes an unnecessary one-epoch-per-frame assumption and
+preserves the engine result if modded UI introduces another authorized epoch.
+Each epoch end validates its own stack and operation accounting; publication is
+deferred until the frame transaction is sealed for presentation.
 
 For every verified direct operation:
 
@@ -792,27 +1025,66 @@ For every verified direct operation:
 - draw into full-resolution staging;
 - suppress only the matching reduced `kMENUBG` operation.
 
-Do not inspect selector or index count. Do not scan for ownership. Do not
-deduplicate by resource. Operation count and geometry remain opaque payload.
+Capture into staging first. Suppress the original only when that individual
+capture completed successfully and all D3D state was restored. Use scope guards
+for the replay-in-progress flag and every acquired COM interface. A failed
+capture leaves that original engine draw intact if no earlier operation in the
+frame was suppressed.
 
-### 4. Commit atomically
+Do not inspect selector or index count. Do not use PS resource scanning to
+discover ownership. After semantic ownership is established, inspect the exact
+bound input and destination only to validate the registered
+`kPROJECTEDMENU`/`kHUDMENU` to `kMENUBG` contract and obtain the SRV/RTV. Do not
+deduplicate by resource or destination. Repeated operations using the same
+source and destination remain distinct ordered payload. The Console trace
+specifically requires projected `6x2`, HUD `504x2`, and HUD `144x2` to survive
+as one transaction.
 
-At consumer epoch end:
+### 4. Seal, publish, and fail closed
 
-- commit only when at least one verified operation was transported and the
-  transaction remained valid;
-- swap staging and committed textures rather than copying them;
-- retain epoch ID, frame, runtime-plan generation, source identities, and any
-  observed producer generations for diagnostics;
-- discard invalid staging without publishing a partial layer.
+At the first OpenVR eye submit for the frame, require:
 
-Suppression is safe only after preflight makes operation transport non-fallible
-for the duration of the epoch. The first implementation phase must capture in
-parallel without suppression. Enable suppression only after operation parity
-and output are validated.
+- the outermost `DrawInterface` call has ended;
+- no semantic, higher-call, direct-call, or internal-replay scope remains open;
+- every contributing epoch ended with matching begin/end arguments;
+- the runtime-plan and resource generation still match preflight;
+- at least one operation was captured, and every suppressed operation is
+  represented in staging.
+
+If valid, seal the transaction, swap staging and committed textures, and retain
+frame, epoch IDs, runtime-plan generation, source identities, observed producer
+generations, operation count, and layer generation. Both eyes must consume that
+same committed generation. A second semantic operation after sealing is a
+contract fault and must disable the adapter; it must never mutate the published
+layer between eye submits.
+
+Preflight alone cannot make an opaque sequence of later draw interceptions
+non-fallible. If any failure occurs after the first original draw was suppressed:
+
+1. mark the frame transaction poisoned;
+2. discard staging without replacing the committed layer;
+3. return success from the compositor hook without forwarding either reduced
+   original submit, matching the existing device-loss/reduced-fallback hold
+   behavior so OpenVR reprojects the previous complete frame;
+4. keep the previous complete desktop eye pair rather than presenting a partial
+   or mixed pair;
+5. invalidate the adapter contract and request the native-resolution recovery
+   path if the failure is structural or repeats.
+
+The current `SubmitVRUpscaledFrame` boolean is not expressive enough for all
+three outcomes. Refactor the submit decision to distinguish pass-through,
+submit replacement, and hold/reproject. A poisoned menu frame must not return a
+generic failure that falls through to `submit("original", ...)`.
+
+The first implementation phase must capture in parallel without suppression.
+Enable suppression only after operation parity, scope ordering, and output are
+validated. Keep compact assertions around `DrawInterface` end and first submit;
+another broad menu-discovery trace is unnecessary.
 
 Do not add a reduced-`kMENUBG` backup/restore path based on RC81's generic
-unrelated-draw counter. That counter is currently incomplete.
+unrelated-draw counter. RC82 repaired the counter, but the evidence still does
+not prove that rolling back the complete destination is safe across arbitrary
+ordinary menu and mod combinations.
 
 ### 5. Reuse and invalidation
 
@@ -828,7 +1100,7 @@ Stop composing or invalidate on:
 - source resource replacement or incompatible descriptor change;
 - Render Scale/runtime-plan generation change;
 - device loss or resource rebuild;
-- aborted semantic transaction after capture began.
+- a poisoned frame or semantic/hook contract failure.
 
 An ordinary menu-name change is not ownership by itself. Menu masks may inform
 transition safety but must not become a whitelist.
@@ -851,6 +1123,111 @@ composition must use:
 
 Using `SRC_ALPHA` again at final composition would multiply edge alpha twice
 and blur or darken glyph edges.
+
+### 7. Desktop mirror composition
+
+The desktop mirror must receive the same completed ordinary-menu transaction
+when CS suppresses any reduced engine bridge operation. This is a correctness
+requirement, not merely the optional Render Scale mirror-quality enhancement.
+Leaving the desktop path unchanged after suppression produces an HMD-only menu
+by construction.
+
+Reuse the final per-eye outputs after `ApplyKnownGameMenuFinalComposite`; do not
+replay menu bridge operations a second time for the monitor. Track the frame,
+runtime-plan generation, committed menu-layer generation, and readiness of both
+eye outputs. Immediately before `IDXGISwapChain::Present`:
+
+1. Require both eyes from the same completed frame and contract generation.
+2. Acquire and validate the current swap-chain back buffer and descriptor.
+3. Blit the completed eye outputs using the established desktop layout and
+   format-compatible render-target view.
+4. Draw the CS desktop overlay afterward so its existing presentation order is
+   preserved.
+5. If the current frame is complete, advance the retained pair only after both
+   eyes match. If a suppressed frame is poisoned or held, actively blit the
+   retained complete pair so the engine's partial back buffer cannot leak to the
+   monitor. Never present one new eye with one stale eye.
+
+The retained pair must reference storage that cannot be overwritten by the next
+submit-stage dispatch before Present consumes it. Validate the current hook
+ordering in the focused diagnostic. If existing output texture lifetime is not
+stable across the hold case, rotate or copy into dedicated pair storage. Do not
+store generation metadata beside mutable textures and assume that makes their
+pixels persistent.
+
+The existing post-submit writeback to the OpenVR source texture may remain as a
+quality optimization, but it is not a sufficient ownership boundary: the game
+may already have copied that texture to its desktop target, and the current
+trace does not establish otherwise. Present-time back-buffer composition makes
+the destination explicit and avoids depending on undocumented engine copy
+timing. It should run automatically only on frames where ordinary bridge draws
+were suppressed; the existing user setting can continue to control enhanced
+mirror blits on other Render Scale frames.
+
+Add compact developer diagnostics for the final eye-ready markers, source and
+back-buffer identities and dimensions, layer/contract generations, selected
+mirror path, blit result, and sequence relative to both OpenVR submits and
+`IDXGISwapChain::Present`. This requires targeted implementation validation,
+not another broad menu-discovery trace.
+
+## Exceptional Native-Resolution State Machine
+
+Map and RaceSex require one shared transition controller. Do not change the
+user's Render Scale setting to enter it. Preserve the requested method, quality,
+Render Scale intent, and active boot snapshot, then apply a transient
+forced-native policy to resource planning.
+
+Use overlap-aware reason bits and explicit states:
+
+| State | Required behavior |
+| --- | --- |
+| `ScaledGameplay` | Normal reduced scene and ordinary semantic adapter |
+| `EnteringNativeMenu` | Invalidate ordinary layer, keep engine menu draws, request native recreation, hold reduced submits and the last complete mirror pair |
+| `NativeMenu` | Require engine menu/depth/framebuffer descriptors to match the final display plan and submit the original full-size path |
+| `NativeTail` | Stay native until all exceptional reasons and dependent overlaps close; RaceSex retains its verified 60-frame tail |
+| `RelatchingScaled` | Restore the captured Render Scale intent through the existing recreation scheduler and hold mismatched submits until the reduced plan and submit-stage outputs are stable |
+
+At minimum the reason mask contains Map and RaceSex. MainMenu, loading,
+save/load, MessageBox overlap, runtime-plan changes, and device loss must
+participate in transition safety even where their existing fallback remains the
+owner. Closing one menu cannot relatch while another native reason is active.
+
+On startup RaceSex, defer the initial Render Scale latch and enter native mode
+directly. On post-latch Map or RaceSex, queue a genuine render-target recreation
+before accepting another presented frame. Add a dedicated internal transition
+origin such as `ExceptionalMenu`; do not route this through public setting
+changes. Entry is complete only after the current engine render targets, depth
+target, VR framebuffer, resolution plan, and protected-submit classification all
+agree on native dimensions. Logical `presentationUpscalingActive=false` is not
+an entry condition.
+
+If menu-open notification arrives too late to recreate before that frame's
+rendering, hold its OpenVR submits and desktop update until native descriptors
+are observed. Do not present one reduced transitional frame. On close, restore
+the exact captured plan generation only after the reason mask and tail expire.
+If user settings change while native mode is active, merge the latest requested
+intent into the relatch target rather than restoring a stale snapshot.
+
+The transition controller must be idempotent under duplicate menu events and
+must survive event/UI-state disagreement. Poll the authoritative UI state as a
+reconciliation path, but log disagreement and state changes once per transition
+instead of every frame.
+
+## Resource And Performance Budget
+
+The hybrid avoids resizing the broad Skyrim pipeline, but atomic publication is
+not free. At the observed `4936x2740` stereo output, one full stereo texture is
+about 51.6 MiB in 32-bit RGBA or 103.2 MiB in 64-bit RGBA. Staging plus committed
+layers therefore cost about 103.2 MiB or 206.4 MiB. A dedicated retained eye
+pair adds another stereo texture of the same total pixel count. A full-size
+depth target, if selected, adds its own allocation.
+
+Use the actual traced menu/output formats, not a hard-coded assumption, and log
+the calculated budget once when the plan changes. Reuse existing stable eye
+outputs for Present only if lifetime validation proves they are not overwritten.
+Otherwise allocate a bounded double-buffer/ring and include it in Render Scale
+eligibility. Allocation failure must select native recovery before suppression;
+it must not degrade into partial capture.
 
 ## Depth Policy
 
@@ -875,9 +1252,9 @@ ordinary depth policy without their own evidence.
 ## Remaining Verification
 
 Do not repeat the broad ordinary-menu, focused Map, or startup RaceSex runs.
-Their architectural decisions are complete. Remaining work is implementation
-and post-change validation, including a controlled RaceSex open after Render
-Scale is already active.
+Their architectural decisions are complete. The controlled RaceSex open after
+Render Scale was already active is also complete and exposes a reduced-resource
+fallback failure. Remaining work is implementation and post-fix validation.
 
 ### Final targeted instrumentation
 
@@ -939,12 +1316,173 @@ three-draw epoch parity, full-resolution targets, original submits, clean menu
 close, protection tail, and successful Render Scale relatch. No layer lifecycle
 is expected because the selected fallback intentionally never stages a layer.
 
-After implementing general RaceSex fallback entry, validate a RaceSex open
-while Render Scale is already latched. Confirm that no reduced RaceSex frame is
-presented, no stale ordinary layer survives, overlapping menus remain full
-resolution, and relatch occurs only after close and tail completion. Add an
-explicit test marker or user confirmation if race-change completion itself must
-be distinguished from other RaceSex UI changes.
+The controlled post-latch run is complete and fails: all 1,332 successful
+RaceSex eye submits use the reduced `3290x1826` framebuffer even though RaceSex
+context flags report Render Scale and presentation upscaling inactive. After
+fixing fallback entry, repeat this narrow case and confirm that no reduced
+RaceSex frame is presented, no stale ordinary layer survives, overlapping
+menus remain full resolution, and relatch occurs only after close and tail
+completion. Add an explicit test marker or user confirmation if race-change
+completion itself must be distinguished from other RaceSex UI changes.
+
+## SOL Implementation Handover
+
+This section is the implementation contract for an agent working on another
+machine. The trace logs are not required to begin; the relevant conclusions and
+measured contracts are preserved above. Work from branch `cs-1.7-PL-VR` at or
+after reviewed head `0c66c97b8`, and reconcile any newer changes before editing.
+
+### Current implementation gaps
+
+- `BeginVRMenuFinalCompositeFrame` invalidates the layer and resets operation
+  state every frame.
+- There is one live `vrMenuFinalCompositeLayer`; staging and committed content
+  are not independent.
+- The direct path still uses draw-shape filtering, explicit menu contexts,
+  resource scanning as discovery, target deduplication, and adaptive index
+  counts. This is the path that rejects Console's third valid operation.
+- `TryMakeVRMenuBridgeHigherFilterContext` still requires selector `0x80`, even
+  though RC81 proves selector zero is valid.
+- `BeginVRMenuAccumulatorTrace`/`EndVRMenuAccumulatorTrace` own the available
+  semantic stack only while developer tracing is active.
+- `SubmitVRUpscaledFrame` returns a boolean, so an unclassified failure can fall
+  through to the original reduced OpenVR submit.
+- Reviewed HEAD `0c66c97b8` removed RaceSex render-scale blocking without adding
+  native resource transition ownership.
+
+Treat the existing capture as diagnostic scaffolding, not as a base whose
+candidate rules should be extended with more menu-specific cases.
+
+### Required production state
+
+Keep production state separate from the large developer tracer:
+
+| State object | Minimum contents and ownership |
+| --- | --- |
+| `VRMenuSemanticEpoch` | Render-thread stack entry: epoch ID, frame, full `RenderBatches` arguments, eligible flag, validity, higher/direct depths, operation count |
+| `VRMenuFrameTransaction` | Render-thread state: frame, plan generation, staging generation, contributing epoch IDs, captured/suppressed counts, building/sealed/poisoned state, failure reason |
+| `VRMenuCommittedLayer` | Staging-independent texture/SRV, dimensions/format, layer generation, source frame, plan generation, operation count, valid bit |
+| `VRPresentedEyePair` | Stable per-eye final storage or proven-lifetime references, frame, plan/layer generation and ready bits; retain only a complete matching pair for desktop fallback |
+| `VRNativeMenuTransition` | Exceptional state, reason mask, entry generation, captured user intent/boot snapshot, latest requested intent, tail deadline, resource-readiness state |
+
+The render thread owns draw-path structures without a mutex. Menu events may
+set atomic reason inputs, but the render thread reconciles them into one ordered
+transition state. Never hold a mutex or allocate memory in the intercepted draw
+hot path.
+
+### Code touchpoints
+
+- `src/FrameAnnotations.cpp`, `BSShaderAccumulator_RenderBatches::thunk`:
+  introduce unconditional production semantic begin/end around the original
+  call. Preserve the existing trace calls as optional observers and use a scope
+  guard for balanced end handling.
+- `src/Features/Upscaling.h`: replace the single live-layer fields with the
+  state objects above. Add explicit adapter and native-transition methods. Add a
+  submit disposition that can represent pass-through, replacement, and hold.
+- `src/Features/Upscaling.cpp`, `BeginVRMenuFinalCompositeFrame`,
+  `EnsureVRMenuFinalCompositeLayer`, `TryCaptureAndSuppressVRMenuBridgeDraw`,
+  `ShouldTraceVRMenuBridgeDirectDrawCandidate`, and the higher/direct hooks:
+  convert the current discovery/dedup implementation into semantic frame
+  transport and double buffering. Keep trace formatting outside production
+  decisions.
+- `src/Features/Upscaling.cpp`, `SubmitVRUpscaledFrame` and
+  `ApplyKnownGameMenuFinalComposite`: seal/publish before first eye use, require
+  both eyes to consume one layer generation, and expose the completed eye pair
+  to the desktop path.
+- `src/Features/Upscaling.cpp`, existing boot-latch/recreation code around
+  `PerfModeState::BootSnapshot`, `RequestPerfModeRenderTargetRecreate`, and
+  `ApplyPendingPerfModeRenderTargetRecreate`: add the transient exceptional-menu
+  native policy without changing the public Render Scale request.
+- `src/Features/VR/InSceneOverlay.cpp`, `IVRCompositor_Submit::thunk`: consume
+  the explicit submit disposition. A poisoned or transitioning reduced frame
+  returns `VRCompositorError_None` without calling the original compositor
+  submit, as the existing device-loss and reduced-fallback guards already do.
+- `src/Hooks.cpp`, `IDXGISwapChain_Present::thunk`: blit a complete matching eye
+  pair to the acquired back buffer before `menu->DrawOverlay()`. Preserve the CS
+  overlay's current final ordering.
+- `features/Upscaling/Shaders/Upscaling/VRMenuLayerCompositePS.hlsl` and
+  `VRDesktopMirrorBlitPS.hlsl`: reuse the existing shaders unless diagnostic
+  alpha/depth comparison proves a shader change is necessary.
+
+### Ordinary-frame control flow
+
+1. Reconcile exceptional state and preflight resources before rendering.
+2. On each accumulator begin, push production semantic state; attach trace state
+   only when developer logging is enabled.
+3. On the exact higher call, mark only the current eligible epoch as nested.
+   Do not require selector `0x80`.
+4. On the exact direct call, require semantic/higher nesting, validate the bound
+   registered source and `kMENUBG` destination, capture into staging, restore all
+   D3D state, then suppress that original operation.
+5. At accumulator end, validate stack parity and append the epoch result to the
+   frame transaction. Do not publish or clear the committed layer there.
+6. At outer `DrawInterface` end, mark the transaction render-complete. At first
+   eye submit, require no active scope, seal and swap the valid staging layer,
+   then composite one immutable committed generation into both eye outputs.
+7. After both eyes are ready, publish the pair for the next matching Present.
+   Never expose a one-eye or cross-generation pair.
+8. On ordinary context exit with no compatible successor, runtime-plan change,
+   exceptional entry, resource replacement, or failure, invalidate explicitly
+   with a recorded reason.
+
+### Failure and transition invariants
+
+- Before any suppression, an operation failure keeps the engine draw and aborts
+  the adapter attempt without changing the committed layer.
+- After any suppression, every later frame failure poisons the transaction and
+  holds both OpenVR submits. It cannot fall back to the original reduced texture.
+- The staging texture is never sampled by submit or Present. Only a sealed
+  committed texture may be sampled.
+- The committed texture is never cleared or mutated in place. Publication is a
+  staging/committed swap.
+- A plan/resource generation mismatch prevents publication and eye reuse.
+- OCU-provided upscaling continues to block CS Render Scale and this adapter.
+- Missing hook signature, unsupported context, device loss, or repeated
+  semantic contract failure makes the adapter unavailable and enters native
+  recovery; it must not silently restore reduced blurry menus.
+- Exceptional entry preserves user intent. `SetVRRenderScaleModeRequested(false)`
+  is not an acceptable implementation because it changes public configuration.
+- A Map/RaceSex frame is presentable only after native target descriptors are
+  observed. A logical inactive flag with reduced descriptors is a failure.
+
+### Remove after diagnostic parity
+
+Delete these from production correctness once parallel validation passes:
+
+- `kVRMenuBridgeHigherExpectedSelector` and selector-based rejection;
+- fixed and adaptive index-count candidate tables;
+- menu-name authorization and target-class early termination;
+- runtime resource/destination deduplication;
+- frame-advance invalidation of the committed layer;
+- `all-menu-targets-already-suppressed` behavior;
+- producer-generation gating.
+
+Keep source/destination identity, producer generation, index count, selector,
+and menu mask only as diagnostic fields. Keep exceptional menu names only in the
+native-transition reason policy.
+
+### Focused implementation diagnostics
+
+Log one compact record per state transition or fault, plus sampled developer
+records for:
+
+- semantic/frame/layer/plan generation IDs and operation parity;
+- `DrawInterface` end to first-submit ordering;
+- staging publish, reuse, invalidation, and poison reason;
+- per-eye generation and complete-pair publication;
+- Present back-buffer identity, dimensions, format, pair generation, and result;
+- exceptional reason mask, transition state, requested/latched plan, actual
+  resource dimensions, submit disposition, and relatch result.
+
+Do not restore the broad per-draw tracer as a release-time dependency. It may
+remain behind developer logging for regression investigation.
+
+### Implementation completion criteria
+
+The implementation is complete only when ordinary transport, desktop mirroring,
+and exceptional transitions are one coherent lifecycle. A partial delivery that
+improves the HMD while leaving Console absent on the monitor, or that marks
+RaceSex inactive while retaining reduced targets, does not satisfy this design.
 
 ## Acceptance Gates
 
@@ -955,6 +1493,8 @@ be distinguished from other RaceSex UI changes.
 - Selector zero is valid and selector filtering is disproven.
 - Multiple distinct index shapes are valid and index filtering is disproven.
 - Every operation can be transported in original order without deduplication.
+- Console proves that destination/resource deduplication currently omits one
+  valid HUD operation and produces a mixed-resolution, reordered result.
 - Complete blend, rasterizer, depth/stencil, viewport, target, format, and UAV
   state is known.
 - Source dimensions are known to vary and can be queried dynamically.
@@ -970,13 +1510,23 @@ be distinguished from other RaceSex UI changes.
 
 - Diagnostic parallel output matches the engine bridge for ordinary menus.
 - A safe ordinary depth policy is visually verified.
-- Preflight guarantees no partial suppression.
+- A failure after suppression holds the frame and cannot submit or mirror a
+  partial result; a failure before suppression preserves the original draw.
 - Final premultiplied-alpha composition is verified on glyph edges.
+- Console presents all three observed operations at final resolution in engine
+  order, with no `all-menu-targets-already-suppressed` rejection, and its HMD
+  text is visually compared before and after the fix.
+- When an ordinary menu transaction suppresses reduced bridge draws, the same
+  completed per-eye result is visible in the desktop game window without
+  enabling the optional mirror-quality setting. Validate Console specifically
+  and confirm that no stale, mixed-eye, duplicated, or one-frame-late menu is
+  presented.
 - The Map fallback disables Render Scale across its complete lifecycle and is
   visually verified through open/close, MessageBox overlap, and load/runtime-
   plan transitions.
-- RaceSex opened after Render Scale is already latched transitions atomically to
-  the same full-resolution fallback and is visually verified through close and
+- Fix the demonstrated post-latch RaceSex failure so opening RaceSex transitions
+  atomically from the reduced `3290x1826` plan to the `4936x2740`
+  full-resolution fallback before its first submit, then verify close and
   relatch.
 - Menu and runtime-plan transitions cannot publish a stale committed layer.
 - The result is validated on materially different modlists and SteamVR/OCU
@@ -984,20 +1534,24 @@ be distinguished from other RaceSex UI changes.
 
 ## Implementation Phases
 
-1. Refactor semantic epoch and persistent source-generation state without
+1. Separate production semantic epochs from tracing and add frame transaction,
+   staging/committed, eye-pair, and exceptional-transition state without
    changing rendering.
-2. Add generic full-resolution staging transport in diagnostic parallel mode;
-   keep original reduced bridge draws.
-3. Validate operation count/order, output identity, alpha, transitions, and
-   depth-policy variants.
-4. Enable fail-closed all-or-nothing suppression for verified ordinary epochs.
-5. Apply premultiplied final composition and validate glyph/text edges.
-6. Implement the Map full-resolution fallback and extend the proven startup
-   RaceSex fallback to RaceSex opens after Render Scale is already latched.
-7. Remove selector scanning, adaptive index tables, menu whitelists, target
-   early termination, and resource deduplication after semantic parity is
-   proven.
-8. Run the menu/modlist/runtime validation matrix.
+2. Add ordered full-resolution transport in diagnostic parallel mode; retain
+   original reduced bridge draws and compare operation parity/output.
+3. Implement submit disposition, poison handling, double-buffer publication,
+   premultiplied final composition, and Present-time complete-pair mirroring.
+4. Validate alpha, glyph edges, scope ordering, Console's three operations, and
+   depth-policy variants before enabling suppression.
+5. Enable fail-closed suppression for verified ordinary frame transactions and
+   remove discovery, deduplication, and target-class early termination.
+6. Implement the shared Map/RaceSex native state machine, including startup,
+   post-latch entry, overlaps, tails, user changes during native mode, and stable
+   relatch.
+7. Run focused fault injection for allocation/device/hook/plan failures and
+   prove no reduced or partial frame escapes after suppression or transition.
+8. Run the menu/modlist/runtime validation matrix on SteamVR and OCU with OCU
+   upscaling disabled; separately confirm the existing OCU-upscaling blocker.
 
 ## Non-Goals
 

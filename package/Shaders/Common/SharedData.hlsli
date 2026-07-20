@@ -226,7 +226,8 @@ namespace SharedData
 	struct CloudShadowsSettings
 	{
 		float Opacity;
-		float3 pad0;
+		uint Enabled;
+		float2 pad0;
 	};
 
 	struct LODBlendingSettings
@@ -234,7 +235,7 @@ namespace SharedData
 		float LODTerrainBrightness;
 		float LODObjectBrightness;
 		float LODObjectSnowBrightness;
-		bool DisableTerrainVertexColors;
+		uint Flags;
 		float LODTerrainGamma;
 		float LODObjectGamma;
 		float LODObjectSnowGamma;
@@ -348,7 +349,8 @@ namespace SharedData
 	struct TruePBRSettings
 	{
 		float VertexAOStrength;
-		uint3 pad;
+		uint Enabled;
+		uint2 pad;
 	};
 
 	cbuffer FeatureData : register(b6)
@@ -372,6 +374,20 @@ namespace SharedData
 		TerrainBlendingSettings terrainBlendingSettings;
 		TruePBRSettings truePBRSettings;
 	};
+
+	static const uint LOD_BLENDING_FLAG_DISABLE_TERRAIN_VERTEX_COLORS = 1u;
+	static const uint LOD_BLENDING_FLAG_ENABLED = 2u;
+
+	bool IsLODBlendingEnabled()
+	{
+		return (lodBlendingSettings.Flags & LOD_BLENDING_FLAG_ENABLED) != 0;
+	}
+
+	bool ShouldDisableTerrainVertexColors()
+	{
+		return IsLODBlendingEnabled() &&
+		       (lodBlendingSettings.Flags & LOD_BLENDING_FLAG_DISABLE_TERRAIN_VERTEX_COLORS) != 0;
+	}
 
 	Texture2D<float4> DepthTexture : register(t17);
 

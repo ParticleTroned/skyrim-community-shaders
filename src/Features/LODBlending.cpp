@@ -24,6 +24,8 @@ namespace
 	constexpr float kWaterReflectionStrengthDefault = 1.0f;
 	constexpr float kWaterReflectionStrengthMin = 0.0f;
 	constexpr float kWaterReflectionStrengthMax = 4.0f;
+	constexpr uint kDisableTerrainVertexColorsFlag = 1u;
+	constexpr uint kEnabledFlag = 2u;
 
 	float ClampWaterReflectionStrength(float a_value)
 	{
@@ -61,10 +63,21 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LODObjectSnowGamma,
 	WaterReflectionStrength)
 
+namespace
+{
+	bool DrawEnabledCheckbox(bool& a_enabled)
+	{
+		ImGui::Checkbox("Enabled", &a_enabled);
+		return a_enabled;
+	}
+}
+
 void LODBlending::DrawSettings()
 {
 	settings.WaterReflectionStrength = ClampWaterReflectionStrength(settings.WaterReflectionStrength);
+	const bool enabled = DrawEnabledCheckbox(Enabled);
 
+	ImGui::BeginDisabled(!enabled);
 	ImGui::SliderFloat("LOD Terrain Brightness", &settings.LODTerrainBrightness, 0.01f, 5.f, "%.2f");
 	ImGui::SliderFloat("LOD Object Brightness", &settings.LODObjectBrightness, 0.01f, 5.f, "%.2f");
 	ImGui::SliderFloat("LOD Object Snow Brightness", &settings.LODObjectSnowBrightness, 0.01f, 5.f, "%.2f");
@@ -97,17 +110,26 @@ void LODBlending::DrawSettings()
 	if (waterReflectionChanged) {
 		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetShortName());
 	}
-	ImGui::Checkbox("Disable Terrain Vertex Colors", (bool*)&settings.DisableTerrainVertexColors);
+	bool disableTerrainVertexColors = settings.DisableTerrainVertexColors != 0;
+	if (ImGui::Checkbox("Disable Terrain Vertex Colors", &disableTerrainVertexColors))
+		settings.DisableTerrainVertexColors = disableTerrainVertexColors ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Disables vertex coloring on nearby terrain. "
 			"Best combined with terrain LOD generated in xLODGen with Vertex Color Intensity set to 0. ");
 	}
+	ImGui::EndDisabled();
+}
+
+void LODBlending::DrawEssentialSettings()
+{
+	DrawEnabledCheckbox(Enabled);
 }
 
 void LODBlending::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	Enabled = o_json.is_object() ? o_json.value("Enabled", true) : true;
 	EnableWaterReflectionStrength = o_json.is_object() ? o_json.value(kEnableWaterReflectionStrengthConfigKey, true) : true;
 	if (!o_json.contains(kWaterReflectionStrengthConfigKey) && o_json.contains(kWaterReflectionStrengthSetting)) {
 		try {
@@ -117,11 +139,13 @@ void LODBlending::LoadSettings(json& o_json)
 		}
 	}
 	settings.WaterReflectionStrength = ClampWaterReflectionStrength(settings.WaterReflectionStrength);
+	settings.DisableTerrainVertexColors = settings.DisableTerrainVertexColors ? 1u : 0u;
 }
 
 void LODBlending::SaveSettings(json& o_json)
 {
 	o_json = settings;
+	o_json["Enabled"] = Enabled;
 	o_json[kEnableWaterReflectionStrengthConfigKey] = EnableWaterReflectionStrength;
 }
 
@@ -165,7 +189,10 @@ void LODBlending::NormalizeWeatherSettings(json& o_json)
 LODBlending::Settings LODBlending::GetCommonBufferData() const
 {
 	auto data = settings;
-	data.WaterReflectionStrength = EnableWaterReflectionStrength ?
+	data.DisableTerrainVertexColors =
+		(settings.DisableTerrainVertexColors ? kDisableTerrainVertexColorsFlag : 0u) |
+		(Enabled ? kEnabledFlag : 0u);
+	data.WaterReflectionStrength = Enabled && EnableWaterReflectionStrength ?
 		ClampWaterReflectionStrength(data.WaterReflectionStrength) :
 		-1.0f;
 	return data;
@@ -174,5 +201,6 @@ LODBlending::Settings LODBlending::GetCommonBufferData() const
 void LODBlending::RestoreDefaultSettings()
 {
 	settings = {};
+	Enabled = true;
 	EnableWaterReflectionStrength = true;
 }

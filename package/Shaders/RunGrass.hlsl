@@ -528,7 +528,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
 	psout.PS.w = diffuseAlpha;
 #		else
-	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
+	if (SharedData::ShouldDisableTerrainVertexColors())
 		input.Color.xyz = 1;
 
 #			if !defined(TRUE_PBR)
@@ -838,7 +838,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
 	psout.PS.w = diffuseAlpha;
 #		else
-	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
+	if (SharedData::ShouldDisableTerrainVertexColors())
 		input.Color.xyz = 1;
 
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);

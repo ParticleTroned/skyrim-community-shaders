@@ -2,20 +2,42 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudShadows::Settings,
+	Enabled,
 	Opacity)
+
+namespace
+{
+	bool DrawEnabledCheckbox(CloudShadows::Settings& a_settings)
+	{
+		bool enabled = a_settings.Enabled != 0;
+		if (ImGui::Checkbox("Enabled", &enabled))
+			a_settings.Enabled = enabled ? 1u : 0u;
+		return enabled;
+	}
+}
 
 void CloudShadows::DrawSettings()
 {
+	const bool enabled = DrawEnabledCheckbox(settings);
+
+	ImGui::BeginDisabled(!enabled);
 	ImGui::SliderFloat("Opacity", &settings.Opacity, 0.0f, 1.0f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Higher values make cloud shadows darker.");
 	}
+	ImGui::EndDisabled();
+}
+
+void CloudShadows::DrawEssentialSettings()
+{
+	DrawEnabledCheckbox(settings);
 }
 
 void CloudShadows::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.Enabled = settings.Enabled ? 1u : 0u;
 }
 
 void CloudShadows::SaveSettings(json& o_json)
@@ -42,6 +64,11 @@ void CloudShadows::CheckResourcesSide(int side)
 
 void CloudShadows::SkyShaderHacks()
 {
+	if (!settings.Enabled) {
+		overrideSky = false;
+		return;
+	}
+
 	if (overrideSky) {
 		auto renderer = globals::game::renderer;
 		auto context = globals::d3d::context;
@@ -89,6 +116,11 @@ void CloudShadows::SkyShaderHacks()
 
 void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 {
+	if (!settings.Enabled) {
+		overrideSky = false;
+		return;
+	}
+
 	auto shadowState = globals::game::shadowState;
 
 	GET_INSTANCE_MEMBER(cubeMapRenderTarget, shadowState);
@@ -105,6 +137,9 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 
 void CloudShadows::ReflectionsPrepass()
 {
+	if (!settings.Enabled)
+		return;
+
 	Util::FrameChecker frameChecker;
 	if (frameChecker.IsNewFrame()) {
 		if ((globals::game::sky->mode.get() != RE::Sky::Mode::kFull) ||
@@ -123,6 +158,9 @@ void CloudShadows::ReflectionsPrepass()
 
 void CloudShadows::EarlyPrepass()
 {
+	if (!settings.Enabled)
+		return;
+
 	if ((globals::game::sky->mode.get() != RE::Sky::Mode::kFull) ||
 		!globals::game::sky->currentClimate)
 		return;

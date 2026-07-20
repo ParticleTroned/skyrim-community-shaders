@@ -50,7 +50,8 @@ public:
 	struct alignas(16) Settings
 	{
 		float VertexAOStrength = 1.0f;
-		uint pad[3];
+		uint Enabled = true;
+		uint pad[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
@@ -97,6 +98,7 @@ public:
 
 	std::unordered_map<std::string, PBRTextureSetData> pbrTextureSets;
 	RE::BGSTextureSet* defaultPbrLandTextureSet = nullptr;
+	RE::BGSTextureSet* originalDefaultLandTextureSet = nullptr;
 	bool defaultLandTextureSetReplaced = false;
 	std::string selectedPbrTextureSetName;
 	PBRTextureSetData* selectedPbrTextureSet = nullptr;

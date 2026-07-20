@@ -129,7 +129,7 @@ void Skylighting::DrawSettings()
 
 void Skylighting::DrawEssentialSettings()
 {
-	DrawSettings();
+	DrawSkylightingRuntimeToggle(*this);
 }
 
 void Skylighting::SetupResources()

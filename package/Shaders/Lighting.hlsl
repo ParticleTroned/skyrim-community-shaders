@@ -2581,6 +2581,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if !defined(VOLUMETRIC_SHADOWS)
 		dirSoftShadow = dirDetailedShadow;
+#	else
+		if (!SharedData::VolumetricShadowsEnabled)
+			dirSoftShadow = dirDetailedShadow;
 #	endif
 	} else {
 		dirDetailedShadow = dirVSMDetailedShadow;

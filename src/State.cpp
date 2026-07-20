@@ -1041,6 +1041,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		data.RefractionScale = refractionScale;
+		const auto& volumetricShadows = globals::features::volumetricShadows;
+		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
 
 		if (auto sky = globals::game::sky) {
 			// Process sun

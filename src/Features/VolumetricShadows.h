@@ -26,6 +26,13 @@ public:
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
+	struct Settings
+	{
+		bool Enabled = true;
+	};
+
+	Settings settings;
+
 	// Compute shaders
 	ID3D11ComputeShader* downsampleShadowMip0CS = nullptr;
 	ID3D11ComputeShader* downsampleShadowMip1CS = nullptr;
@@ -55,6 +62,8 @@ public:
 	ID3D11SamplerState* linearSampler = nullptr;
 
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
@@ -63,7 +72,6 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
-
 
 	virtual void PostPostLoad() override;
 

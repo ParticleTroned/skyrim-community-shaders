@@ -4,6 +4,18 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	VolumetricShadows::Settings,
+	Enabled)
+
+namespace
+{
+	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
+	{
+		ImGui::Checkbox(T("feature.volumetric_shadows.enabled", "Enabled"), &a_settings.Enabled);
+	}
+}
+
 void VolumetricShadows::SetupResources()
 {
 	auto device = globals::d3d::device;
@@ -74,10 +86,14 @@ void VolumetricShadows::ClearShaderCache()
 
 void VolumetricShadows::CopyShadowLightData()
 {
+	auto context = globals::d3d::context;
+	if (!settings.Enabled) {
+		SetSharedShadowMapSRV(context, nullptr);
+		return;
+	}
+
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "VolumetricShadows::CopyShadowLightData");
-
-	auto context = globals::d3d::context;
 
 	{
 		if (!globals::state->HasDirectionalShadows()) {
@@ -317,6 +333,9 @@ void VolumetricShadows::SetSharedShadowMapSRV(ID3D11DeviceContext* a_context, ID
 
 void VolumetricShadows::DrawSettings()
 {
+	DrawEnabledCheckbox(settings);
+	ImGui::BeginDisabled(!settings.Enabled);
+
 	ImGui::SeparatorText("Debug");
 
 	if (ImGui::TreeNode("Buffer Viewer")) {
@@ -341,21 +360,28 @@ void VolumetricShadows::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+	ImGui::EndDisabled();
 }
 
-void VolumetricShadows::LoadSettings(json&)
+void VolumetricShadows::DrawEssentialSettings()
 {
-	// No settings currently
+	DrawEnabledCheckbox(settings);
 }
 
-void VolumetricShadows::SaveSettings(json&)
+void VolumetricShadows::LoadSettings(json& o_json)
 {
-	// No settings currently
+	settings = o_json;
+}
+
+void VolumetricShadows::SaveSettings(json& o_json)
+{
+	o_json = settings;
 }
 
 void VolumetricShadows::RestoreDefaultSettings()
 {
-	// No settings currently
+	settings = {};
 }
 
 struct CreateDepthStencil_VolumetricLighting

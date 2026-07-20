@@ -469,10 +469,10 @@ struct CreateDepthStencil_VolumetricLighting
 {
 	static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
 	{
-		RE::BSGraphics::DepthStencilTargetProperties properties = *a_properties;
-		properties.height = 1024;
-		properties.width = 1024;
-		func(This, a_target, &properties);
+		RE::BSGraphics::DepthStencilTargetProperties overriddenProperties = *a_properties;
+		overriddenProperties.height = 1024;
+		overriddenProperties.width = 1024;
+		func(This, a_target, &overriddenProperties);
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };

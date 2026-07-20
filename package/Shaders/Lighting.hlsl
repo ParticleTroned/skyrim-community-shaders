@@ -3094,7 +3094,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(SPECULAR) && !defined(TRUE_PBR)
-	indirectLobeWeights.specular *= MaterialData.yyy;
 	specularColor *= MaterialData.yyy;
 #	endif
 

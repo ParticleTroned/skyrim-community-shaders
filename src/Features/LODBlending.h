@@ -14,12 +14,13 @@ struct LODBlending : Feature
 				T("feature.lod_blending.key_feature_2", "Enhanced terrain LOD appearance matching"),
 				T("feature.lod_blending.key_feature_3", "Snow-specific LOD brightness adjustment"),
 				T("feature.lod_blending.key_feature_4", "Optional terrain vertex color modification"),
-				T("feature.lod_blending.key_feature_5", "Seamless transition between detail levels") } };
+				T("feature.lod_blending.key_feature_5", "Seamless transition between detail levels"),
+				T("feature.lod_blending.key_feature_6", "Water reflection strength adjustment") } };
 	};
 
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
-	struct Settings
+	struct alignas(16) Settings
 	{
 		float LODTerrainBrightness = 1;
 		float LODObjectBrightness = 1;
@@ -29,10 +30,14 @@ struct LODBlending : Feature
 		float LODObjectGamma = 1;
 		float LODObjectSnowGamma = 1;
 		uint Enabled = true;
+		float WaterReflectionStrength = 1;
+		float pad0[3]{};
 	};
+	STATIC_ASSERT_ALIGNAS_16(Settings);
 
 	Settings settings;
-	Settings GetCommonBufferData() const { return settings; }
+	bool EnableWaterReflectionStrength = true;
+	Settings GetCommonBufferData() const;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }

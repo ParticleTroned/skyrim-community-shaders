@@ -44,6 +44,7 @@ PS_OUTPUT main(PS_INPUT input)
 #else
 
 #	include "Common/FrameBuffer.hlsli"
+#	include "Common/Math.hlsli"
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
@@ -778,6 +779,26 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	return result;
 }
 
+// WaterData is a 5x5 grid centered on the camera; tile 12 is the current cell.
+// The fade range is camera height above that cell's derived water plane, in game units.
+// Fade 0 keeps the original computed reflection. Fade 1 applies Water Reflection Strength.
+// The negative start means near-water views already receive partial slider influence.
+static const uint WaterReflectionCenterWaterTile = 12;
+static const float WaterReflectionHeightFadeStart = -12000.0;
+static const float WaterReflectionHeightFadeEnd = 8000.0;
+
+float GetWaterReflectionHeightFade()
+{
+	float cameraRelativeWaterHeight = SharedData::WaterData[WaterReflectionCenterWaterTile].w;
+	if (cameraRelativeWaterHeight <= WATER_HEIGHT_NO_TILE_SENTINEL)
+		return 1.0;
+
+	float cameraHeightAboveWater = max(-cameraRelativeWaterHeight, 0.0);
+	return saturate(
+		(cameraHeightAboveWater - WaterReflectionHeightFadeStart) /
+		(WaterReflectionHeightFadeEnd - WaterReflectionHeightFadeStart));
+}
+
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
 {
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
@@ -825,7 +846,13 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	}
 #			endif
 
-	return reflectionColor;
+	if (SharedData::lodBlendingSettings.WaterReflectionStrength < 0.0)
+		return reflectionColor;
+
+	float waterReflectionStrength = VarAmounts.y * SharedData::lodBlendingSettings.WaterReflectionStrength;
+	waterReflectionStrength = lerp(1.0, waterReflectionStrength, GetWaterReflectionHeightFade());
+	waterReflectionStrength = saturate(waterReflectionStrength);
+	return lerp(ReflectionColor.xyz, reflectionColor, waterReflectionStrength);
 }
 
 float GetScreenDepthWater(float2 screenPosition)

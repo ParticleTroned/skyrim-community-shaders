@@ -104,8 +104,9 @@ namespace
 	static_assert(sizeof(SkylightingSettingsCB) == 144);
 	static_assert(sizeof(CloudShadowsSettingsCB) == 16);
 	static_assert(offsetof(CloudShadowsSettingsCB, Enabled) == 4);
-	static_assert(sizeof(LODBlendingSettingsCB) == 32);
+	static_assert(sizeof(LODBlendingSettingsCB) == 48);
 	static_assert(offsetof(LODBlendingSettingsCB, Enabled) == 28);
+	static_assert(offsetof(LODBlendingSettingsCB, WaterReflectionStrength) == 32);
 	static_assert(sizeof(HairSpecularSettingsCB) == 80);
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);

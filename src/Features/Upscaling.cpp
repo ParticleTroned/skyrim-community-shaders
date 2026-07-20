@@ -393,6 +393,21 @@ namespace
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
 	}
 
+	void DrawFrameGenerationEnabledToggle(Upscaling::Settings& a_settings)
+	{
+		bool enabled = a_settings.frameGenerationMode != 0;
+		if (ImGui::Checkbox("Frame Generation", &enabled))
+			a_settings.frameGenerationMode = enabled ? 1u : 0u;
+	}
+
+	void DrawFrameGenerationForceEnableToggle(Upscaling& a_upscaling)
+	{
+		ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
+		bool forceEnabled = a_upscaling.settings.frameGenerationForceEnable != 0;
+		if (ImGui::Checkbox("Force Enable Frame Generation", &forceEnabled))
+			a_upscaling.settings.frameGenerationForceEnable = forceEnabled ? 1u : 0u;
+	}
+
 }
 
 /**
@@ -769,9 +784,7 @@ void Upscaling::DrawSettings()
 		if (!settings.frameGenerationMode && frameGenerationDx12PathActive)
 			Util::Text::Warning("Warning: Requires restart");
 
-		bool fgEnabled = settings.frameGenerationMode != 0;
-		if (ImGui::Checkbox("Frame Generation", &fgEnabled))
-			settings.frameGenerationMode = fgEnabled ? 1 : 0;
+		DrawFrameGenerationEnabledToggle(settings);
 
 		if (!frameGenerationDx12PathActive)
 			ImGui::BeginDisabled();
@@ -783,10 +796,7 @@ void Upscaling::DrawSettings()
 		if (!frameGenerationDx12PathActive)
 			ImGui::EndDisabled();
 
-		ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", refreshRate);
-		bool fgForce = settings.frameGenerationForceEnable != 0;
-		if (ImGui::Checkbox("Force Enable Frame Generation", &fgForce))
-			settings.frameGenerationForceEnable = fgForce ? 1 : 0;
+		DrawFrameGenerationForceEnableToggle(*this);
 
 		ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -962,6 +972,10 @@ void Upscaling::DrawEssentialSettings()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted(renderDocBlocksUpscaling ? "Upscaling is disabled while RenderDoc capture is active." : "Selects the upscaling backend.");
+
+	ImGui::SeparatorText("Frame Generation");
+	DrawFrameGenerationEnabledToggle(settings);
+	DrawFrameGenerationForceEnableToggle(*this);
 
 	const auto method = GetUpscaleMethod();
 	if (method == UpscaleMethod::kNONE || method == UpscaleMethod::kTAA)

@@ -333,7 +333,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint enableAdaptiveBrightness;
+		uint enableAdaptiveBrightnessColorAdjustments;
 		uint2 pad0;
 	};
 

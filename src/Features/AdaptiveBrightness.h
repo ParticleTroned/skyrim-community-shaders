@@ -105,6 +105,12 @@ struct AdaptiveBrightness : Feature
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
 
+	struct EffectiveLinearLightingSettings
+	{
+		LinearLighting::Settings settings;
+		bool hasColorAdjustments = false;
+	};
+
 	static constexpr const char* kDefaultGlobalPresetName = "Default";
 	static constexpr const char* kDefaultLocationOverridePresetName = "Default";
 	static constexpr const char* kDefaultFullPresetName = "Default";
@@ -147,7 +153,9 @@ struct AdaptiveBrightness : Feature
 	virtual void RestoreDefaultSettings() override;
 
 	bool IsRuntimeEnabled() const;
-	LinearLighting::Settings GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const;
+	EffectiveLinearLightingSettings GetEffectiveLinearLightingSettings(
+		const LinearLighting::Settings& a_linearLightingSettings,
+		bool a_linearLightingEnabled) const;
 	CSUtility::Settings GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings, bool a_csUtilityEnabled) const;
 
 	struct ActiveProfileBlend

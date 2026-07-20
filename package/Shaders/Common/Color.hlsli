@@ -10,7 +10,7 @@
 #endif
 
 #define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
-#define ENABLE_ADAPTIVE_BRIGHTNESS SharedData::linearLightingSettings.enableAdaptiveBrightness
+#define ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS SharedData::linearLightingSettings.enableAdaptiveBrightnessColorAdjustments
 
 // Object shaders opt into this so LL material/effect adjustments skip menu and
 // out-of-world draws while image-space scene passes keep the global LL state.
@@ -18,10 +18,10 @@
 #	define ENABLE_LL_COLOR_ADJUSTMENTS \
 		(ENABLE_LL && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
 #	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS \
-		(ENABLE_ADAPTIVE_BRIGHTNESS && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
+		(ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS && ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0))
 #else
 #	define ENABLE_LL_COLOR_ADJUSTMENTS ENABLE_LL
-#	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ENABLE_ADAPTIVE_BRIGHTNESS
+#	define ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS
 #endif
 
 // Adaptive Brightness shares Linear Lighting's settings payload, but it must

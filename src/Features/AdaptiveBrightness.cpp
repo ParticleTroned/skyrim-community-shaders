@@ -1866,6 +1866,27 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	return out;
 }
 
+namespace
+{
+	bool HasAdaptiveBrightnessColorAdjustments(
+		const LinearLighting::Settings& a_base,
+		const LinearLighting::Settings& a_effective)
+	{
+		// Keep this list aligned with the fields changed by the Linear Lighting
+		// ApplyProfile overload. Exact comparisons preserve the original shader
+		// path for a fully neutral profile instead of evaluating identity curves.
+		return a_effective.ambientMult != a_base.ambientMult ||
+		       a_effective.emitColorMult != a_base.emitColorMult ||
+		       a_effective.glowmapMult != a_base.glowmapMult ||
+		       a_effective.effectLightingMult != a_base.effectLightingMult ||
+		       a_effective.skyGamma != a_base.skyGamma ||
+		       a_effective.fogGamma != a_base.fogGamma ||
+		       a_effective.fogAlphaGamma != a_base.fogAlphaGamma ||
+		       a_effective.waterGamma != a_base.waterGamma ||
+		       a_effective.vlGamma != a_base.vlGamma;
+	}
+}
+
 CSUtility::Settings AdaptiveBrightness::ApplyProfile(const CSUtility::Settings& a_base, const ProfileSettings& a_profile) const
 {
 	auto out = a_base;
@@ -1942,20 +1963,28 @@ CSUtility::Settings AdaptiveBrightness::LerpSettings(const CSUtility::Settings& 
 	return out;
 }
 
-LinearLighting::Settings AdaptiveBrightness::GetEffectiveLinearLightingSettings(const LinearLighting::Settings& a_linearLightingSettings, bool a_linearLightingEnabled) const
+AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffectiveLinearLightingSettings(
+	const LinearLighting::Settings& a_linearLightingSettings,
+	bool a_linearLightingEnabled) const
 {
-	auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	const auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	auto effectiveSettings = baseSettings;
 
-	if (!IsRuntimeEnabled())
-		return baseSettings;
+	if (IsRuntimeEnabled()) {
+		const auto activeProfiles = GetActiveProfileBlend();
+		if (activeProfiles.from == activeProfiles.to) {
+			effectiveSettings = ApplyProfile(baseSettings, *activeProfiles.from);
+		} else {
+			const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
+			const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
+			effectiveSettings = LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+		}
+	}
 
-	const auto activeProfiles = GetActiveProfileBlend();
-	if (activeProfiles.from == activeProfiles.to)
-		return ApplyProfile(baseSettings, *activeProfiles.from);
-
-	const auto fromSettings = ApplyProfile(baseSettings, *activeProfiles.from);
-	const auto toSettings = ApplyProfile(baseSettings, *activeProfiles.to);
-	return LerpSettings(fromSettings, toSettings, activeProfiles.factor);
+	return {
+		.settings = effectiveSettings,
+		.hasColorAdjustments = HasAdaptiveBrightnessColorAdjustments(baseSettings, effectiveSettings)
+	};
 }
 
 CSUtility::Settings AdaptiveBrightness::GetEffectiveCSUtilitySettings(const CSUtility::Settings& a_csUtilitySettings, bool a_csUtilityEnabled) const

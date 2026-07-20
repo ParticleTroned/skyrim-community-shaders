@@ -153,8 +153,10 @@ void LinearLighting::PostPostLoad()
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
 	const bool linearLightingEnabled = IsRuntimeEnabled();
-	const bool adaptiveBrightnessEnabled = globals::features::adaptiveBrightness.IsRuntimeEnabled();
-	const auto effectiveSettings = globals::features::adaptiveBrightness.GetEffectiveLinearLightingSettings(settings, linearLightingEnabled);
+	const auto adaptiveBrightnessSettings = globals::features::adaptiveBrightness.GetEffectiveLinearLightingSettings(
+		settings,
+		linearLightingEnabled);
+	const auto& effectiveSettings = adaptiveBrightnessSettings.settings;
 
 	auto data = PerFrameData{};
 	data.enableLinearLighting = linearLightingEnabled;
@@ -182,7 +184,8 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = effectiveSettings.projectedEffectMult;
 	data.deferredEffectMult = effectiveSettings.deferredEffectMult;
 	data.otherEffectMult = effectiveSettings.otherEffectMult;
-	data.enableAdaptiveBrightness = adaptiveBrightnessEnabled;
+	// Keep neutral Adaptive Brightness profiles on the exact pre-feature shader path.
+	data.enableAdaptiveBrightnessColorAdjustments = adaptiveBrightnessSettings.hasColorAdjustments;
 	return data;
 }
 

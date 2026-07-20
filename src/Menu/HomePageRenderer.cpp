@@ -138,7 +138,7 @@ void HomePageRenderer::RenderModeSection()
 	auto& settings = menu->GetSettings();
 	settings.PerformanceUiMode = std::clamp(settings.PerformanceUiMode, 0, 1);
 
-	const char* modeLabel = "Interface Mode";
+	const char* modeLabel = "UI Mode";
 	const char* essentialsLabel = "Essentials (Recommended)";
 	const char* advancedLabel = "Advanced (Full UI)";
 	const ImGuiStyle& style = ImGui::GetStyle();

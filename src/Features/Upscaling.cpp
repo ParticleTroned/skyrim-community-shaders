@@ -973,29 +973,28 @@ void Upscaling::DrawEssentialSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted(renderDocBlocksUpscaling ? "Upscaling is disabled while RenderDoc capture is active." : "Selects the upscaling backend.");
 
+	const auto method = GetUpscaleMethod();
+	if (method != UpscaleMethod::kNONE && method != UpscaleMethod::kTAA) {
+		settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
+		const char* baseLabel = GetQualityModeName(settings.qualityMode, method == UpscaleMethod::kDLSS);
+		const std::string qualityLabel = std::format("{} ( {:.2f}x )", baseLabel, GetQualityModeResolutionScale(settings.qualityMode));
+		int qualityMode = static_cast<int>(settings.qualityMode);
+		if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), qualityLabel.c_str())) {
+			settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Controls the internal render scale and quality level.");
+
+		if (method == UpscaleMethod::kFSR) {
+			ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
+		} else if (method == UpscaleMethod::kDLSS) {
+			ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
+		}
+	}
+
 	ImGui::SeparatorText("Frame Generation");
 	DrawFrameGenerationEnabledToggle(settings);
 	DrawFrameGenerationForceEnableToggle(*this);
-
-	const auto method = GetUpscaleMethod();
-	if (method == UpscaleMethod::kNONE || method == UpscaleMethod::kTAA)
-		return;
-
-	settings.qualityMode = ClampQualityModeUInt(settings.qualityMode);
-	const char* baseLabel = GetQualityModeName(settings.qualityMode, method == UpscaleMethod::kDLSS);
-	const std::string qualityLabel = std::format("{} ( {:.2f}x )", baseLabel, GetQualityModeResolutionScale(settings.qualityMode));
-	int qualityMode = static_cast<int>(settings.qualityMode);
-	if (ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), qualityLabel.c_str())) {
-		settings.qualityMode = static_cast<uint>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
-	}
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Controls the internal render scale and quality level.");
-
-	if (method == UpscaleMethod::kFSR) {
-		ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f");
-	} else if (method == UpscaleMethod::kDLSS) {
-		ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
-	}
 }
 
 void Upscaling::LoadSettings(json& o_json)

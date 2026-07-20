@@ -39,6 +39,7 @@ namespace
 	constexpr float kMultiplierMin = 0.0f;
 	constexpr float kMultiplierMax = 5.0f;
 	constexpr float kAmbientMultiplierMax = 5.0f;
+	constexpr uint32_t kPerGeometryCBRegister = 8;
 }
 
 void LinearLighting::DrawSettings()
@@ -109,7 +110,7 @@ void LinearLighting::RestoreDefaultSettings()
 
 void LinearLighting::SetupResources()
 {
-	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>());
+	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>(), "LinearLighting::PerGeometry");
 }
 
 void LinearLighting::Prepass()
@@ -131,8 +132,8 @@ struct LinearLighting::Hooks
 	{
 		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 		{
-			globals::features::linearLighting.BSLightingShader_SetupGeometry(Pass);
 			func(This, Pass, RenderFlags);
+			globals::features::linearLighting.BSLightingShader_SetupGeometry(Pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -216,19 +217,21 @@ RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
 
 void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
-	if (!PerGeometryCB)
+	if (!PerGeometryCB || !a_pass || !globals::d3d::context)
 		return;
 
-	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
-	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
+	if (!IsRuntimeEnabled())
+		return;
 
-	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBrightness.IsRuntimeEnabled())) {
-		PerGeometryData perGeometryData{};
+	PerGeometryData perGeometryData{};
+	perGeometryData.emissiveMult = 1.0f;
+	if (auto* shaderProperty = a_pass->shaderProperty;
+		shaderProperty && shaderProperty->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get()) {
+		auto* lightProperty = static_cast<RE::BSLightingShaderProperty*>(shaderProperty);
 		perGeometryData.emissiveMult = lightProperty->emissiveMult;
-		PerGeometryCB->Update(perGeometryData);
-
-		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-		auto context = globals::d3d::context;
-		context->PSSetConstantBuffers(8, 1, &buffer);
 	}
+	PerGeometryCB->Update(perGeometryData);
+
+	ID3D11Buffer* buffer = { PerGeometryCB->CB() };
+	globals::d3d::context->PSSetConstantBuffers(kPerGeometryCBRegister, 1, &buffer);
 }

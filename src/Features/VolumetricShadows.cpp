@@ -9,8 +9,17 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	VolumetricShadows::Settings,
+	Enabled)
+
 namespace
 {
+	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
+	{
+		ImGui::Checkbox("Enabled", &a_settings.Enabled);
+	}
+
 	template <class T>
 	void SafeRelease(T*& a_ptr)
 	{
@@ -214,12 +223,18 @@ void VolumetricShadows::EnsureShadowCopyTextures()
 
 void VolumetricShadows::CopyShadowLightData()
 {
-	ZoneScoped;
-	TracyD3D11Zone(globals::state->tracyCtx, "VolumetricShadows::CopyShadowLightData");
-
 	auto* context = globals::d3d::context;
 	if (!context)
 		return;
+
+	if (!settings.Enabled) {
+		shadowCopyValid = false;
+		SetSharedShadowMapSRV(context, nullptr);
+		return;
+	}
+
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "VolumetricShadows::CopyShadowLightData");
 
 	if (!globals::state->HasDirectionalShadows()) {
 		shadowCopyValid = false;
@@ -338,7 +353,7 @@ void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
 	if (!a_context)
 		return;
 
-	const bool hasDirectionalShadows = globals::state && globals::state->HasDirectionalShadows();
+	const bool hasDirectionalShadows = settings.Enabled && globals::state && globals::state->HasDirectionalShadows();
 	if (hasDirectionalShadows)
 		SetupResources();
 
@@ -350,6 +365,9 @@ void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
 
 void VolumetricShadows::DrawSettings()
 {
+	DrawEnabledCheckbox(settings);
+	ImGui::BeginDisabled(!settings.Enabled);
+
 	ImGui::SeparatorText("Debug");
 
 	if (ImGui::TreeNode("Buffer Viewer")) {
@@ -376,18 +394,28 @@ void VolumetricShadows::DrawSettings()
 
 		ImGui::TreePop();
 	}
+
+	ImGui::EndDisabled();
 }
 
-void VolumetricShadows::LoadSettings(json&)
+void VolumetricShadows::DrawEssentialSettings()
 {
+	DrawEnabledCheckbox(settings);
 }
 
-void VolumetricShadows::SaveSettings(json&)
+void VolumetricShadows::LoadSettings(json& o_json)
 {
+	settings = o_json;
+}
+
+void VolumetricShadows::SaveSettings(json& o_json)
+{
+	o_json = settings;
 }
 
 void VolumetricShadows::RestoreDefaultSettings()
 {
+	settings = {};
 }
 
 void VolumetricShadows::ClearShaderCache()

@@ -14,6 +14,13 @@ public:
 	virtual bool SupportsVR() override { return true; }
 	virtual bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
+	struct Settings
+	{
+		bool Enabled = true;
+	};
+
+	Settings settings;
+
 	static constexpr uint32_t kSharedShadowMapShaderSlot = 18;
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -30,6 +37,8 @@ public:
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
 	virtual void LoadSettings(json&) override;
 	virtual void SaveSettings(json&) override;
 	virtual void RestoreDefaultSettings() override;

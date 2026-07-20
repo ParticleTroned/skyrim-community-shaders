@@ -3656,6 +3656,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		dirDetailedShadow *= shadowColor.x;
 #	if !defined(VOLUMETRIC_SHADOWS)
 		dirSoftShadow = dirDetailedShadow;
+#	else
+		if (!SharedData::VolumetricShadowsEnabled)
+			dirSoftShadow = dirDetailedShadow;
 #	endif
 	} else {
 #	if defined(VOLUMETRIC_SHADOWS)

@@ -117,7 +117,7 @@ namespace ShadowSampling
 
 		worldShadow *= rcpSampleCount;
 
-		if (HasDirectionalShadows()) {
+		if (SharedData::VolumetricShadowsEnabled && HasDirectionalShadows()) {
 			float vsmSurfaceShadow = 1.0;
 			float shadow = VolumetricShadows::GetVSMShadow3D(startPosition, endPosition, noise, sampleCount, eyeIndex, vsmSurfaceShadow);
 			surfaceShadow *= vsmSurfaceShadow;
@@ -267,7 +267,11 @@ namespace ShadowSampling
 			return 1.0;
 		}
 
-		return VolumetricShadows::GetVSMShadow2D(worldPosition, worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, detailedShadow);
+		if (SharedData::VolumetricShadowsEnabled)
+			return VolumetricShadows::GetVSMShadow2D(worldPosition, worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex, detailedShadow);
+
+		detailedShadow = 1.0;
+		return 1.0;
 	}
 
 	float GetLightingShadow(float noise, float3 worldPosition, uint eyeIndex)

@@ -1536,6 +1536,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.PBRMetalReflectionScale = pbrMetalReflectionScale;
 		data.PBRMetalHighlightScale = pbrMetalHighlightScale;
 		data.HasDirectionalShadows = HasDirectionalShadows();
+		const auto& volumetricShadows = globals::features::volumetricShadows;
+		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
 
 		data.SSSHumanMaleIntensity = sssHumanMaleIntensity;
 		data.SSSHumanMaleSaturation = sssHumanMaleSaturation;

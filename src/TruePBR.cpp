@@ -42,6 +42,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TruePBR::Settings,
+	Enabled,
 	VertexAOStrength,
 	pbrMetalReflectionScale,
 	pbrMetalHighlightScale);
@@ -112,6 +113,14 @@ void SetupPBRLandscapeTextureParameters(BSLightingShaderMaterialPBRLandscape& ma
 
 namespace
 {
+	bool DrawEnabledCheckbox(TruePBR::Settings& a_settings)
+	{
+		bool enabled = a_settings.Enabled != 0;
+		if (ImGui::Checkbox(T("feature.true_pbr.enabled", "Enabled"), &enabled))
+			a_settings.Enabled = enabled ? 1u : 0u;
+		return enabled;
+	}
+
 	void DrawPBRMetalSliders(TruePBR::Settings& settings)
 	{
 		ImGui::SliderFloat("PBR Metal Reflection", &settings.pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
@@ -125,6 +134,9 @@ namespace
 
 void TruePBR::DrawSettings()
 {
+	const bool enabled = DrawEnabledCheckbox(settings);
+	ImGui::BeginDisabled(!enabled);
+
 	if (ImGui::TreeNodeEx("Global Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
 		{
 			DrawPBRMetalSliders(settings);
@@ -325,11 +337,16 @@ void TruePBR::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+
+	ImGui::EndDisabled();
 }
 
 void TruePBR::DrawEssentialSettings()
 {
+	const bool enabled = DrawEnabledCheckbox(settings);
+	ImGui::BeginDisabled(!enabled);
 	DrawPBRMetalSliders(settings);
+	ImGui::EndDisabled();
 }
 
 void TruePBR::SaveSettings(json& o_json)
@@ -340,6 +357,7 @@ void TruePBR::SaveSettings(json& o_json)
 void TruePBR::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.Enabled = settings.Enabled ? 1u : 0u;
 }
 
 void TruePBR::RestoreDefaultSettings()
@@ -356,6 +374,8 @@ void TruePBR::SetupResources()
 void TruePBR::Prepass()
 {
 	SetupDefaultPBRLandTextureSet();
+	if (!settings.Enabled)
+		return;
 
 	auto context = globals::d3d::context;
 	if (!glintsNoiseTexture)
@@ -831,7 +851,7 @@ struct BSLightingShaderProperty_GetRenderPasses
 
 		auto* pbrLandscapeMaterial = TryGetRegisteredPBRLandscapeMaterial(property, geometry);
 		auto* pbrMaterial = pbrLandscapeMaterial == nullptr ? TryGetRegisteredPBRMaterial(property, geometry) : nullptr;
-		const bool isPbr = pbrLandscapeMaterial != nullptr || pbrMaterial != nullptr;
+		const bool isPbr = globals::features::truePBR.settings.Enabled && (pbrLandscapeMaterial != nullptr || pbrMaterial != nullptr);
 
 		auto currentPass = renderPasses->head;
 		while (currentPass != nullptr) {
@@ -871,6 +891,9 @@ struct BSLightingShaderProperty_GetRenderPasses
 
 bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
 {
+	if (!settings.Enabled)
+		return false;
+
 	using enum SIE::ShaderCache::LightingShaderTechniques;
 
 	const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
@@ -1242,7 +1265,7 @@ RE::TESLandTexture* GetDefaultLandTexture()
 
 bool TruePBR::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 {
-	if (land == nullptr) {
+	if (!settings.Enabled || land == nullptr) {
 		return false;
 	}
 
@@ -1623,12 +1646,24 @@ void TruePBR::DataLoaded()
 
 void TruePBR::SetupDefaultPBRLandTextureSet()
 {
-	if (!defaultLandTextureSetReplaced && defaultPbrLandTextureSet != nullptr) {
-		if (auto* defaultLandTexture = GetDefaultLandTexture()) {
-			logger::info("[TruePBR] replacing default land texture set record with {}", defaultPbrLandTextureSet->GetFormEditorID());
-			defaultLandTexture->textureSet = defaultPbrLandTextureSet;
-			defaultLandTextureSetReplaced = true;
+	auto* defaultLandTexture = GetDefaultLandTexture();
+	if (!defaultLandTexture)
+		return;
+
+	if (!settings.Enabled) {
+		if (defaultLandTextureSetReplaced) {
+			logger::info("[TruePBR] restoring the default land texture set record");
+			defaultLandTexture->textureSet = originalDefaultLandTextureSet;
+			defaultLandTextureSetReplaced = false;
 		}
+		return;
+	}
+
+	if (!defaultLandTextureSetReplaced && defaultPbrLandTextureSet != nullptr) {
+		logger::info("[TruePBR] replacing default land texture set record with {}", defaultPbrLandTextureSet->GetFormEditorID());
+		originalDefaultLandTextureSet = defaultLandTexture->textureSet;
+		defaultLandTexture->textureSet = defaultPbrLandTextureSet;
+		defaultLandTextureSetReplaced = true;
 	}
 }
 

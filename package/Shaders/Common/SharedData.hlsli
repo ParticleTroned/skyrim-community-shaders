@@ -152,7 +152,8 @@ namespace SharedData
 	struct CloudShadowsSettings
 	{
 		float Opacity;
-		float3 pad0;
+		uint Enabled;
+		float2 pad0;
 	};
 
 	struct LODBlendingSettings
@@ -164,7 +165,7 @@ namespace SharedData
 		float LODTerrainGamma;
 		float LODObjectGamma;
 		float LODObjectSnowGamma;
-		float pad0;
+		uint Enabled;
 	};
 
 	struct HairSpecularSettings
@@ -317,7 +318,7 @@ namespace SharedData
 		float VertexAOStrength;
 		float PBRMetalReflectionScale;
 		float PBRMetalHighlightScale;
-		uint pad0;
+		uint Enabled;
 	};
 
 	struct SkinData

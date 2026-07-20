@@ -443,7 +443,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
 	psout.PS.w = diffuseAlpha;
 #		else
-	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
+	if (SharedData::lodBlendingSettings.Enabled && SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		input.Color.xyz = 1;
 
 #			if !defined(TRUE_PBR)
@@ -745,7 +745,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.PS.xyz = input.Depth.xxx / input.Depth.yyy;
 	psout.PS.w = diffuseAlpha;
 #		else
-	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
+	if (SharedData::lodBlendingSettings.Enabled && SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		input.Color.xyz = 1;
 
 	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;

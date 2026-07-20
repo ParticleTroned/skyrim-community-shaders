@@ -9,6 +9,7 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ExtendedTranslucency::Settings,
+	Enabled,
 	AlphaMode,
 	AlphaReduction,
 	AlphaSoftness,
@@ -16,6 +17,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkinnedOnly);
 
 const RE::BSFixedString ExtendedTranslucency::NiExtraDataName_AnisotropicAlphaMaterial = "AnisotropicAlphaMaterial";
+
+namespace
+{
+	void DrawEnabledCheckbox(ExtendedTranslucency::Settings& a_settings)
+	{
+		ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &a_settings.Enabled);
+	}
+}
 
 void ExtendedTranslucency::BSLightingShader_SetupGeometry(RE::BSRenderPass* pass)
 {
@@ -28,6 +37,8 @@ void ExtendedTranslucency::BSLightingShader_SetupGeometry(RE::BSRenderPass* pass
 
 	// Clear the ExtraFeatureDescriptor to disable this effect on default
 	SetFeatureDescriptor(MaterialModel::DescriptorDisabled);
+	if (!globals::features::extendedTranslucency.settings.Enabled)
+		return;
 
 	if (!pass || !pass->geometry) {
 		return;
@@ -93,6 +104,9 @@ void ExtendedTranslucency::PostPostLoad()
 
 void ExtendedTranslucency::DrawSettings()
 {
+	DrawEnabledCheckbox(settings);
+	ImGui::BeginDisabled(!settings.Enabled);
+
 	if (ImGui::TreeNodeEx(T(TKEY("translucent_material"), "Translucent Material"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		const char* AlphaModeNames[] = {
 			T(TKEY("alpha_mode_disabled"), "0 - Disabled"),
@@ -147,6 +161,13 @@ void ExtendedTranslucency::DrawSettings()
 		ImGui::Spacing();
 		ImGui::TreePop();
 	}
+
+	ImGui::EndDisabled();
+}
+
+void ExtendedTranslucency::DrawEssentialSettings()
+{
+	DrawEnabledCheckbox(settings);
 }
 
 void ExtendedTranslucency::LoadSettings(json& o_json)

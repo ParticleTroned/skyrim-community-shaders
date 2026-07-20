@@ -103,7 +103,9 @@ namespace
 	static_assert(sizeof(WetnessEffectsSettingsCB) == 192);
 	static_assert(sizeof(SkylightingSettingsCB) == 144);
 	static_assert(sizeof(CloudShadowsSettingsCB) == 16);
+	static_assert(offsetof(CloudShadowsSettingsCB, Enabled) == 4);
 	static_assert(sizeof(LODBlendingSettingsCB) == 32);
+	static_assert(offsetof(LODBlendingSettingsCB, Enabled) == 28);
 	static_assert(sizeof(HairSpecularSettingsCB) == 80);
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
@@ -114,6 +116,7 @@ namespace
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
 	static_assert(sizeof(ExponentialHeightFogSettingsCB) == 192);
 	static_assert(sizeof(TruePBRSettingsCB) == 16);
+	static_assert(offsetof(TruePBRSettingsCB, Enabled) == 12);
 	static_assert(sizeof(SkinDataCB) == 112);
 
 	static_assert(std::is_standard_layout_v<FeatureDataLayout>);

@@ -22,6 +22,8 @@ struct ExtendedTranslucency final : Feature
 	virtual bool HasShaderDefine(RE::BSShader::Type shaderType) override { return RE::BSShader::Type::Lighting == shaderType; };
 	virtual void PostPostLoad() override;
 	virtual void DrawSettings() override;
+	virtual bool HasEssentialSettings() const override { return true; }
+	virtual void DrawEssentialSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
@@ -58,11 +60,15 @@ struct ExtendedTranslucency final : Feature
 	struct Settings : PerFrame
 	{
 		bool SkinnedOnly = true;
+		bool Enabled = true;
 	};
 
 	Settings settings;
 
-	const PerFrame& GetCommonBufferData() { return settings; }
+	PerFrame GetCommonBufferData() const
+	{
+		return settings.Enabled ? static_cast<const PerFrame&>(settings) : PerFrame{ .AlphaMode = MaterialModel::Disabled };
+	}
 
 	static const RE::BSFixedString NiExtraDataName_AnisotropicAlphaMaterial;
 

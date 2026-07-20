@@ -54,7 +54,7 @@ public:
 		float VertexAOStrength = 1.0f;
 		float pbrMetalReflectionScale = 1.0f;
 		float pbrMetalHighlightScale = 1.0f;
-		uint pad[1];
+		uint Enabled = true;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
@@ -100,6 +100,7 @@ public:
 
 	std::unordered_map<std::string, PBRTextureSetData> pbrTextureSets;
 	RE::BGSTextureSet* defaultPbrLandTextureSet = nullptr;
+	RE::BGSTextureSet* originalDefaultLandTextureSet = nullptr;
 	bool defaultLandTextureSetReplaced = false;
 	std::string selectedPbrTextureSetName;
 	PBRTextureSetData* selectedPbrTextureSet = nullptr;

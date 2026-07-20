@@ -370,7 +370,13 @@ namespace Color
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? (pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult) : color;
+		if (ENABLE_LL_COLOR_ADJUSTMENTS) {
+			return pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult;
+		}
+
+		// Adaptive Brightness only adjusts the multiplier. Keep the engine-authored
+		// emissive value intact so this path does not depend on LLPerGeometry.
+		return ENABLE_ADAPTIVE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.emitColorMult : color;
 	}
 #	endif
 
@@ -378,10 +384,13 @@ namespace Color
 	{
 #	if defined(TRUE_PBR)
 		color = ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.glowmapMult : color;
 #	else
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.glowmapGamma) * SharedData::linearLightingSettings.glowmapMult : color;
+		if (ENABLE_LL_COLOR_ADJUSTMENTS) {
+			color = pow(abs(color), SharedData::linearLightingSettings.glowmapGamma);
+		}
 #	endif
+
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.glowmapMult : color;
 	}
 
 	float3 Ambient(float3 color)

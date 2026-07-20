@@ -15,6 +15,7 @@ namespace
 {
 	constexpr uint kWhiteDiffuseCategoryObject = 0;
 	constexpr uint kWhiteDiffuseCategoryAnimal = 1;
+	constexpr uint32_t kPerGeometryCBRegister = 8;
 
 	bool IsAnimalGeometry(const RE::BSGeometry* a_geometry)
 	{
@@ -133,7 +134,7 @@ void LinearLighting::RestoreDefaultSettings()
 
 void LinearLighting::SetupResources()
 {
-	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>());
+	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>(), "LinearLighting::PerGeometry");
 }
 
 void LinearLighting::Prepass()
@@ -155,8 +156,8 @@ struct LinearLighting::Hooks
 	{
 		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 		{
-			globals::features::linearLighting.BSLightingShader_SetupGeometry(Pass);
 			func(This, Pass, RenderFlags);
+			globals::features::linearLighting.BSLightingShader_SetupGeometry(Pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -244,27 +245,28 @@ RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
 
 void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
-	if (!PerGeometryCB || !a_pass || !a_pass->geometry)
+	if (!PerGeometryCB || !a_pass || !a_pass->geometry || !globals::d3d::context)
 		return;
 
-	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
-	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
+	const bool linearLightingEnabled = IsRuntimeEnabled();
+	const bool adaptiveBrightnessEnabled = globals::features::adaptiveBrightness.IsRuntimeEnabled();
+	if (!linearLightingEnabled && !adaptiveBrightnessEnabled)
+		return;
 
-	if (lightProperty != nullptr && (IsRuntimeEnabled() || globals::features::adaptiveBrightness.IsRuntimeEnabled())) {
-		auto context = globals::d3d::context;
-		if (!context)
-			return;
-
-		PerGeometryData perGeometryData{};
+	PerGeometryData perGeometryData{};
+	perGeometryData.emissiveMult = 1.0f;
+	if (auto* shaderProperty = a_pass->shaderProperty;
+		linearLightingEnabled && shaderProperty && shaderProperty->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get()) {
+		auto* lightProperty = static_cast<RE::BSLightingShaderProperty*>(shaderProperty);
 		perGeometryData.emissiveMult = lightProperty->emissiveMult;
-		perGeometryData.whiteDiffuseCategory = useAnimalWhiteDiffuseCategory && IsAnimalGeometry(a_pass->geometry) ?
-		                                           kWhiteDiffuseCategoryAnimal :
-		                                           kWhiteDiffuseCategoryObject;
-		PerGeometryCB->Update(perGeometryData);
-
-		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-		context->PSSetConstantBuffers(8, 1, &buffer);
 	}
+	perGeometryData.whiteDiffuseCategory = useAnimalWhiteDiffuseCategory && IsAnimalGeometry(a_pass->geometry) ?
+	                                           kWhiteDiffuseCategoryAnimal :
+	                                           kWhiteDiffuseCategoryObject;
+	PerGeometryCB->Update(perGeometryData);
+
+	ID3D11Buffer* buffer = { PerGeometryCB->CB() };
+	globals::d3d::context->PSSetConstantBuffers(kPerGeometryCBRegister, 1, &buffer);
 }
 
 #undef I18N_KEY_PREFIX

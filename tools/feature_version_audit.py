@@ -27,8 +27,7 @@ DEFAULT_SHADER_TYPES = (".ini", ".hlsl", ".hlsli")
 RE_MOD_ID = re.compile(r'MOD_ID\s*=\s*"([^"]+)"')
 RE_FEATURE_MOD_LINK_DIRECT = re.compile(r'GetFeatureModLink\s*\([^)]*\)\s*\{\s*return\s*"(https?://[^"]+)";\s*\}')
 RE_FEATURE_MOD_LINK_NEXUS = re.compile(r'GetFeatureModLink\s*\([^)]*\)\s*\{\s*return\s*MakeNexusModURL\(MOD_ID\);')
-RE_FEATURE_SUMMARY_DIRECT = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*(?:override)?\s*\{\s*return \{\s*"([^"]+)"\s*,\s*\{([^}]*)\}', re.DOTALL)
-RE_FEATURE_SUMMARY_MULTILINE = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*(?:override)?\s*\{\s*return \{\s*((?:"[^"]*"\s*)+),\s*\{([^}]*)\}', re.DOTALL)
+RE_FEATURE_SUMMARY_DIRECT = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*(?:override)?\s*\{\s*return \{\s*(.*?)\s*,\s*\{([^}]*)\}', re.DOTALL)
 RE_FEATURE_SUMMARY_CPP = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*\{[^}]*?std::string description\s*=\s*"([^"]+)";\s*std::vector<std::string> keyFeatures\s*=\s*\{([^}]*)\}', re.DOTALL)
 RE_FEATURE_SUMMARY_CPP_MULTILINE = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*\{[^}]*?std::string description\s*=\s*((?:"[^"]*"\s*)+);\s*std::vector<std::string> keyFeatures\s*=\s*\{([^}]*)\}', re.DOTALL)
 RE_FEATURE_DESCRIPTION_DIRECT = re.compile(r'GetFeatureDescription\s*\([^)]*\)\s*\{\s*return\s*"([^"]+)";\s*\}')
@@ -60,6 +59,28 @@ def extract_regex(pattern, content, group=1):
 
 def extract_multiline_strings(multiline):
     return [d.replace("\n", " ").strip() for d in re.findall(r'"([^\"]*)"', multiline) if d.strip()]
+
+# T()'s value arg may be several adjacent C++ string literals; capture all
+# of them or the whole T(...) match fails and falls through to matching
+# the args (including the key) individually as bare strings.
+RE_T_OR_LITERAL = re.compile(r'T\s*\(\s*"[^"]*"\s*,\s*((?:"[^"]*"\s*)+)\)|"([^"]*)"', re.DOTALL)
+
+def _unescape_cpp_string(s):
+    # Only escapes plausible in a UI string; a literal \n must become a
+    # space like a real source newline does, not "\n" in the output.
+    return s.replace("\\n", " ").replace("\\t", " ").replace('\\"', '"').replace("\\\\", "\\")
+
+def extract_t_or_literal_strings(blob):
+    results = []
+    for m in RE_T_OR_LITERAL.finditer(blob):
+        if m.group(1) is not None:
+            # Adjacent literals concatenate directly; C++ has no separator.
+            parts = re.findall(r'"([^"]*)"', m.group(1))
+            text = "".join(parts)
+        else:
+            text = m.group(2)
+        results.append(_unescape_cpp_string(text).replace("\n", " ").strip())
+    return results
 
 def normalize_feature_key(name):
     return ''.join(str(name or '').lower().replace('-', ' ').split())
@@ -397,15 +418,12 @@ def parse_feature_metadata_file(path, mod_id=None, is_core=False):
             mod_link = DEFAULT_NEXUS_BASE_URL + mod_id
         if not mod_link and not is_core and mod_id:
             mod_link = DEFAULT_NEXUS_BASE_URL + mod_id
-        # GetFeatureSummary
+        # Splits key features on their own T()/literal boundaries, not a
+        # naive comma-split (which breaks inside each T("key", "text")).
         m = RE_FEATURE_SUMMARY_DIRECT.search(content)
         if m:
-            description = m.group(1).replace("\n", " ").strip()
-            key_features = [k.strip().strip('"') for k in m.group(2).split(',') if k.strip()]
-        m = RE_FEATURE_SUMMARY_MULTILINE.search(content)
-        if m:
-            description = " ".join(extract_multiline_strings(m.group(1)))
-            key_features = [k.strip().strip('"') for k in m.group(2).split(',') if k.strip()]
+            description = " ".join(extract_t_or_literal_strings(m.group(1)))
+            key_features = extract_t_or_literal_strings(m.group(2))
         m = RE_FEATURE_SUMMARY_CPP.search(content)
         if m:
             description = m.group(1).replace("\n", " ").strip()

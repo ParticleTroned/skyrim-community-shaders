@@ -2,24 +2,23 @@
 
 Status: the ordinary-menu hybrid, Map/Stats WORLDUI overlay route, fail-open
 Loading presentation, unmasked desktop mirror, projection de-jitter, buffered
-tracing, orphaned-Barter guard, and Map-symbol supersampling are implemented and
-committed through RC91. The working revision additionally supports the
-Loading-style direct consumer used by post-game MainMenu and keeps presentation
-stretch/submission active there while the reduced Render Scale contract remains
-latched.
+tracing, orphaned-Barter guard, Map-symbol supersampling, and post-game MainMenu
+presentation are implemented and committed through RC92. The working revision
+adds the static correctness/robustness/DRY audit fixes and removes avoidable
+developer-diagnostic work from the Info-level production paths.
 
 Branch: `cs-1.7-PL-VR`
 
 Implementation base reviewed: `bceaaff95b0248ff8339afbfeaf01bd6a4f73c13`
 
-Current committed implementation: `7cdfa07c5b4752e517741356743b2ae0aa861f36`
+Current committed implementation: `878af8f1a3d6de594ddaddea12c3d5f99601e0e9`
 
-Current working implementation: uncommitted post-game MainMenu direct-layer and
-presentation-fallback support on top of RC91; no build or commit has been made
-for it under the branch rules.
+Current working implementation: uncommitted hybrid-menu correctness and
+Info-level diagnostic-cost audit fixes on top of RC92; no build or commit has
+been made for them under the branch rules.
 
-Checkpoint validation: the committed checkpoint was created by the user after
-the focused Map/Console changes. Current working validation is static only.
+Checkpoint validation: RC92 was created by the user after the focused
+post-game MainMenu correction. Current working validation is static only.
 Build and runtime tests were not run under the branch rule; the focused
 acceptance matrix below remains required.
 
@@ -149,6 +148,25 @@ Map retains every relevant draw, every resource operation, exact counters and
 ordinals for all draws, while formatting only one in 256 unrelated draw records.
 This preserves the established diagnostics without making the trace itself the
 dominant frame workload.
+
+The current working audit additionally makes Info a hard diagnostic boundary:
+
+-   a fresh Info session does not install the developer D3D hook banks;
+-   switching from Debug/Trace to Info flushes the final retained passes and
+    summary, closes the trace gate, clears pre-roll/generation state, and prevents
+    stale menu masks from rearming an old session;
+-   config and in-memory A/B restores use the same log-level transition path as
+    the UI, so the logger level and diagnostic gate cannot diverge;
+-   D3D hooks already installed during Debug remain attached for runtime safety,
+    but at Info their callback path stops at one relaxed diagnostic-gate load.
+    It performs no trace formatting, COM/resource inspection, counter update,
+    mutex acquisition, or file write;
+-   the production direct-draw hook immediately forwards draws when neither an
+    authorized higher call nor developer tracing is active;
+-   non-mode-24 accumulators still push/pop the balancing semantic scope, but no
+    longer query menu, resolution, UI, or transport eligibility; and
+-   every nested higher call derives an isolated production context. A rejected
+    or ineligible nested call cannot inherit an active outer authorization.
 
 This document is a design and verification record. It is not a release claim.
 
@@ -1781,6 +1799,12 @@ run another broad discovery trace. Validate these focused cases:
 -   Repeated menu switching does not expose stale content, mixed eye generations,
     one-frame-late desktop output or unbounded resource growth. Info-level menu
     handling must not inspect broad unrelated higher/direct draws.
+-   Start once at Info and confirm that closed-menu and open-menu performance does
+    not depend on the retained developer trace. In a second run, enable Debug
+    while a menu is open, return to Info, and confirm that exactly one final
+    trace summary is written and no subsequent per-draw trace records appear.
+    Re-enabling Debug must create a new session for the currently open menu rather
+    than continuing the closed session.
 -   Validate materially different modlists under SteamVR and OpenComposite with
     OCU upscaling disabled. Separately confirm the existing OCU-upscaling blocker.
 

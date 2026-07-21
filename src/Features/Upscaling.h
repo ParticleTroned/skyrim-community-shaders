@@ -746,6 +746,7 @@ public:
 		const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds, vr::EVRSubmitFlags a_flags,
 		vr::EVRCompositorError a_result) noexcept;
 	static void InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context);
+	static void DisableVRMenuPresentationTraceDiagnostics() noexcept;
 	bool IsVRMenuParallelBridgeDrawInProgress() const noexcept;
 	enum class DynamicResolutionUpsampleStage : uint8_t
 	{
@@ -1191,7 +1192,6 @@ private:
 	bool IsVRMenuTransportContractPresent() const;
 	bool IsVRMenuSemanticAdapterEligible() const;
 	bool IsVRMenuSemanticBridgeOperationActive() const;
-	bool IsVRMenuDirectBridgeOperationActive() const;
 	bool IsVRMapMenuPresentationActive() const;
 	bool EnsureVRMapMenuUISupersampling();
 	void ReleaseVRMapMenuUISupersampling();

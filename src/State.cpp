@@ -1032,8 +1032,11 @@ void State::LoadFromJson(nlohmann::json& settings)
 		const auto maxCompilerThreads = std::max(1, static_cast<int32_t>(std::thread::hardware_concurrency()));
 		if (advanced.contains("Dump Shaders") && advanced["Dump Shaders"].is_boolean())
 			shaderCache->SetDump(advanced["Dump Shaders"]);
-		if (advanced.contains("Log Level") && advanced["Log Level"].is_number_integer())
-			logLevel = magic_enum::enum_cast<spdlog::level::level_enum>(advanced["Log Level"].get<int>()).value_or(spdlog::level::info);
+		if (advanced.contains("Log Level") && advanced["Log Level"].is_number_integer()) {
+			SetLogLevel(
+				magic_enum::enum_cast<spdlog::level::level_enum>(advanced["Log Level"].get<int>())
+					.value_or(spdlog::level::info));
+		}
 		if (advanced.contains("Shader Defines") && advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
 		if (advanced.contains("Compiler Threads") && advanced["Compiler Threads"].is_number_integer())
@@ -1131,6 +1134,9 @@ void State::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 
 void State::SetLogLevel(spdlog::level::level_enum a_level)
 {
+	if (globals::game::isVR && a_level > spdlog::level::debug)
+		Upscaling::DisableVRMenuPresentationTraceDiagnostics();
+
 	logLevel = a_level;
 	spdlog::set_level(logLevel);
 	// Debug menu tracing can emit thousands of records per frame. Keep those

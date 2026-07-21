@@ -395,6 +395,7 @@ namespace
 	std::atomic_bool g_vrMenuPresentationTraceSessionCapLogged{ false };
 	std::atomic_bool g_vrMenuPresentationTraceFaulted{ false };
 	std::atomic_bool g_vrMenuPresentationTraceFaultLogged{ false };
+	std::atomic_bool g_vrMenuPresentationTraceDiagnosticsEnabled{ false };
 	std::atomic_bool g_vrMenuPresentationTraceD3DHooksInstalled{ false };
 	std::atomic_uint32_t g_vrMenuPresentationTraceD3DHookBanksInstalled{ 0 };
 	std::atomic_bool g_vrMenuPresentationTraceCreateDeferredContextHookInstalled{ false };
@@ -437,6 +438,7 @@ namespace
 	const VRMenuBridgeHigherCallContext* GetCurrentVRMenuBridgeHigherCallContext();
 	bool IsVRMenuBridgeTraceTailActive(const State* a_state);
 	bool IsVRObservedProjectedMenuTailActive(const State* a_state);
+	bool IsVRMenuPresentationTraceActive();
 
 	bool ShouldEmitUpscalingDiagLogs()
 	{
@@ -3813,7 +3815,7 @@ namespace
 
 	void RefreshVRMenuBridgeTraceState(const State* a_state)
 	{
-		if (!globals::game::isVR || !a_state) {
+		if (!a_state || !IsVRMenuPresentationTraceActive()) {
 			g_vrMenuBridgeTraceCachedState.store(0, std::memory_order_relaxed);
 			return;
 		}
@@ -3994,13 +3996,12 @@ namespace
 	bool IsVRMenuPresentationTraceActive()
 	{
 		if (!globals::game::isVR ||
-			g_vrMenuPresentationTraceSession.load(std::memory_order_acquire) == 0 ||
-			g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire) == 0) {
+			!g_vrMenuPresentationTraceDiagnosticsEnabled.load(std::memory_order_relaxed)) {
 			return false;
 		}
 
-		auto* state = globals::state;
-		return state && state->IsDeveloperMode();
+		return g_vrMenuPresentationTraceSession.load(std::memory_order_acquire) != 0 &&
+		       g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire) != 0;
 	}
 
 	bool IsVRMenuPresentationTraceMapActive()
@@ -4274,8 +4275,10 @@ namespace
 			FlushVRMenuPresentationTraceProducerPass("developer-mode-disabled");
 			FlushVRMenuPresentationTraceGlobalOutputPass("developer-mode-disabled");
 			g_vrMenuPresentationTraceMenuMask.store(0, std::memory_order_release);
+			g_vrMenuPresentationTraceDiagnosticsEnabled.store(false, std::memory_order_relaxed);
 			return;
 		}
+		g_vrMenuPresentationTraceDiagnosticsEnabled.store(true, std::memory_order_relaxed);
 
 		FlushVRMenuPresentationTraceProducerPass("session-rearm");
 		FlushVRMenuPresentationTraceGlobalOutputPass("session-rearm");
@@ -4390,9 +4393,11 @@ namespace
 
 	void ServiceVRMenuPresentationTraceRaceSexPreRoll()
 	{
+		if (!ShouldEmitUpscalingDiagLogs())
+			return;
+
 		if (!g_vrMenuPresentationTraceRaceSexPreRollActive.load(std::memory_order_acquire)) {
 			if (g_vrMenuPresentationTraceRaceSexPreRollPending.load(std::memory_order_acquire) &&
-				ShouldEmitUpscalingDiagLogs() &&
 				GetVRStartupLoadKind() == VRStartupLoadKind::NewGame &&
 				g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire) != 0 &&
 				!g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire)) {
@@ -4491,7 +4496,9 @@ namespace
 		std::string_view a_event,
 		DetailBuilder&& a_buildDetails) noexcept
 	{
-		if (!IsVRMenuPresentationTraceEventRetained(a_event))
+		// Most production paths retain their diagnostic call sites after Debug is
+		// disabled. Reject them before scanning event names or building details.
+		if (!IsVRMenuPresentationTraceActive() || !IsVRMenuPresentationTraceEventRetained(a_event))
 			return;
 
 		try {
@@ -7847,6 +7854,11 @@ namespace
 	template <class Callback>
 	void RunVRMenuPresentationTraceHookSafely(const char* a_context, Callback&& a_callback) noexcept
 	{
+		// D3D detours installed while Debug is active cannot be removed safely.
+		// Keep their post-Debug Info path to one mode check and the original call.
+		if (!IsVRMenuPresentationTraceActive())
+			return;
+
 		try {
 			a_callback();
 		} catch (const std::exception& e) {
@@ -7881,8 +7893,6 @@ namespace
 				a_sourceSubresource,
 				a_sourceBox);
 			RunVRMenuPresentationTraceHookSafely("while tracing CopySubresourceRegion", [&]() {
-				if (!IsVRMenuPresentationTraceActive())
-					return;
 				const bool fullResource = IsFullVRMenuPresentationTraceCopy(
 					a_destination,
 					a_destinationSubresource,
@@ -8420,6 +8430,7 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 {
 	if (!globals::game::isVR || !a_context || !ShouldEmitUpscalingDiagLogs())
 		return;
+	g_vrMenuPresentationTraceDiagnosticsEnabled.store(true, std::memory_order_relaxed);
 	const auto armCurrentMenu = []() {
 		if (g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire) != 0)
 			return;
@@ -8527,6 +8538,44 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 		bank + 1u,
 		kVRMenuPresentationTraceD3DHookBankCount);
 	armCurrentMenu();
+}
+
+void Upscaling::DisableVRMenuPresentationTraceDiagnostics() noexcept
+{
+	const auto clearDiagnosticState = []() noexcept {
+		g_vrMenuPresentationTraceDiagnosticsEnabled.store(false, std::memory_order_relaxed);
+		g_vrMenuPresentationTraceMenuMask.store(0, std::memory_order_release);
+		g_vrMenuPresentationTraceObservedMenuMask.store(0, std::memory_order_release);
+		g_vrMenuPresentationTraceRaceSexPreRollPending.store(false, std::memory_order_release);
+		g_vrMenuPresentationTraceRaceSexPreRollActive.store(false, std::memory_order_release);
+		g_vrMenuPresentationTraceRaceSexPreRollEndFrame.store(0, std::memory_order_release);
+		g_vrMenuBridgeTraceCachedState.store(0, std::memory_order_relaxed);
+	};
+
+	try {
+		const uint32_t previousMenuMask =
+			g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire);
+		if (previousMenuMask != 0) {
+			// State calls this while Debug is still active, allowing the final pass
+			// evidence and session summary to be retained before the gate closes.
+			FlushVRMenuPresentationTraceProducerPass("developer-mode-disabled");
+			FlushVRMenuPresentationTraceGlobalOutputPass("developer-mode-disabled");
+			g_vrMenuPresentationTraceMenuMask.store(0, std::memory_order_release);
+			LogVRMenuPresentationTraceSummary(
+				"developer-mode-disabled",
+				"LogLevel",
+				0);
+		}
+
+		clearDiagnosticState();
+		ResetVRMenuPresentationTraceGenerations();
+		// Drain work that could have raced the first flush after the active gate
+		// has closed. These calls clear state without emitting Info-level output.
+		FlushVRMenuPresentationTraceProducerPass("developer-mode-disabled-discard");
+		FlushVRMenuPresentationTraceGlobalOutputPass("developer-mode-disabled-discard");
+	} catch (...) {
+		clearDiagnosticState();
+	}
 }
 
 bool Upscaling::IsVRMenuParallelBridgeDrawInProgress() const noexcept
@@ -9111,11 +9160,14 @@ bool Upscaling::BeginVRMenuSemanticEpoch(
 	context.renderFlags = a_renderFlags;
 	context.groupIndex = a_groupIndex;
 	context.renderMode = a_renderMode;
-	if (a_renderMode == 24u && globals::state)
+	const bool menuRenderMode = a_renderMode == 24u;
+	if (menuRenderMode && globals::state)
 		BeginVRMenuFinalCompositeFrame(globals::state->frameCount);
-	const bool adapterEligible = IsVRMenuSemanticAdapterEligible();
+	// Non-menu accumulators cannot participate in the adapter. Avoid querying
+	// resolution, UI, and transport state for every other RenderBatches call.
+	const bool adapterEligible = menuRenderMode && IsVRMenuSemanticAdapterEligible();
 	const bool postPresentationProducer =
-		a_renderMode == 24u &&
+		menuRenderMode &&
 		globals::state &&
 		vrMenuFrameTransaction.frame == globals::state->frameCount &&
 		vrMenuFrameTransaction.presentationStarted;
@@ -9124,11 +9176,11 @@ bool Upscaling::BeginVRMenuSemanticEpoch(
 	// capture. Stats and Map WORLDUI consumers share this mode-24 boundary;
 	// texture production and mixed depth-producing geometry remain outside the
 	// adapter.
-	context.eligible = a_renderMode == 24u &&
+	context.eligible = menuRenderMode &&
 	                   adapterEligible &&
 	                   !postPresentationProducer;
 	g_vrMenuSemanticEpochStack[g_vrMenuSemanticEpochDepth++] = context;
-	if (a_renderMode == 24u && adapterEligible && !postPresentationProducer &&
+	if (menuRenderMode && adapterEligible && !postPresentationProducer &&
 		!BeginVRMenuDisplayResolutionPass()) {
 		g_vrMenuSemanticEpochStack[g_vrMenuSemanticEpochDepth - 1u].eligible = false;
 		PoisonVRMenuFrameTransaction("display-resolution-pass-unavailable");
@@ -9193,19 +9245,6 @@ bool Upscaling::IsVRMenuSemanticBridgeOperationActive() const
 	return context.eligible && context.renderMode == 24u &&
 	       GetCurrentVRMenuBridgeHigherCallContext() != nullptr &&
 	       IsVRMenuSemanticAdapterEligible();
-}
-
-bool Upscaling::IsVRMenuDirectBridgeOperationActive() const
-{
-	if (!IsVRMenuSemanticAdapterEligible() ||
-		GetCurrentVRMenuBridgeHigherCallContext() == nullptr) {
-		return false;
-	}
-	// Ordinary menus are authorized only inside the proven mode-24 semantic
-	// epoch. The previous broad higher/direct monitor inspected thousands of
-	// unrelated draws per frame at Info level even though only one or two were
-	// real menu bridges. Main and Loading remain the explicit direct adapters.
-	return IsVRMenuSemanticBridgeOperationActive() || IsMainOrLoadingMenuContextActive();
 }
 
 void Upscaling::RecordVRMenuSemanticCapture(bool a_suppressed)
@@ -9750,8 +9789,9 @@ void Upscaling::BeginVRMenuDrawInterface()
 	const uint32_t frame = globals::state ? globals::state->frameCount : 0u;
 	if (vrMenuDrawInterfaceDepth == 0) {
 		EnsureRuntimeResolutionStateCurrent();
-		const bool mapUISupersamplingExpected =
-			IsVRMapMenuPresentationActive() && IsVRMenuSemanticAdapterEligible();
+		const bool mapPresentationActive = IsVRMapMenuPresentationActive();
+		const bool adapterEligible = IsVRMenuSemanticAdapterEligible();
+		const bool mapUISupersamplingExpected = mapPresentationActive && adapterEligible;
 		if (mapUISupersamplingExpected) {
 			if (!EnsureVRMapMenuUISupersampling() && vrMapMenuUISupersamplingActive)
 				ReleaseVRMapMenuUISupersampling();
@@ -9762,14 +9802,15 @@ void Upscaling::BeginVRMenuDrawInterface()
 		const bool postPresentationProducer =
 			vrMenuFrameTransaction.frame == frame &&
 			vrMenuFrameTransaction.presentationStarted;
-		const bool adapterEligible = IsVRMenuSemanticAdapterEligible();
 		const bool transportExpected =
+			!postPresentationProducer &&
+			!adapterEligible &&
+			!mapPresentationActive &&
 			IsVRMenuTransportContractPresent() &&
 			IsKnownGameMenuContextActive() &&
-			!IsVRMapMenuPresentationActive() &&
 			!IsLoadingMenuContextActive() &&
 			!IsCommunityShadersMenuOpen();
-		if (!postPresentationProducer && adapterEligible && !IsVRMapMenuPresentationActive()) {
+		if (!postPresentationProducer && adapterEligible && !mapPresentationActive) {
 			vrMenuFrameTransaction.mapLayerRequired = false;
 			const bool directPrewarmDeferred = IsMainOrLoadingMenuContextActive();
 			if (!directPrewarmDeferred && !PrewarmVRMenuFinalCompositeResources()) {
@@ -10360,14 +10401,21 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		return decide("missing-state", false);
 
 	EnsureRuntimeResolutionStateCurrent();
-	if (!IsVRMenuDirectBridgeOperationActive())
-		return decide("menu-bridge-context-inactive", false);
 	const bool semanticBridge = IsVRMenuSemanticBridgeOperationActive();
+	// Ordinary menus are authorized only inside the proven mode-24 semantic
+	// epoch. Main and Loading are the explicit direct adapters. Derive this once
+	// so capture does not repeatedly run the same resolution/UI eligibility test.
+	const bool authorizedDirectBridge =
+		!semanticBridge &&
+		GetCurrentVRMenuBridgeHigherCallContext() != nullptr &&
+		IsMainOrLoadingMenuContextActive() &&
+		IsVRMenuSemanticAdapterEligible();
+	if (!semanticBridge && !authorizedDirectBridge)
+		return decide("menu-bridge-context-inactive", false);
 	const bool statsWorldUIEligible = semanticBridge && IsStatsMenuContextActive();
 	const bool mapWorldUIEligible = semanticBridge && IsVRMapMenuPresentationActive();
 	const bool menuWorldUIEligible = statsWorldUIEligible || mapWorldUIEligible;
 	bool menuWorldUIBridge = false;
-	const bool authorizedDirectBridge = !semanticBridge && IsMainOrLoadingMenuContextActive();
 	const bool loadingDirectBridge = authorizedDirectBridge && IsLoadingMenuContextActive();
 	const bool mainMenuDirectBridge =
 		authorizedDirectBridge && !loadingDirectBridge && IsMainMenuContextActive();
@@ -10652,8 +10700,6 @@ bool Upscaling::ShouldTraceVRMenuBridgeDirectDrawCandidate(
 		!IsMainOrLoadingMenuContextActive()) {
 		return decide("outside-authorized-bridge-scope", false);
 	}
-	if (!globals::features::upscaling.IsVRMenuDirectBridgeOperationActive())
-		return decide("menu-bridge-context-inactive", false);
 
 	return decide("accepted-higher-direct-candidate", true);
 }
@@ -12835,7 +12881,7 @@ void Upscaling::NotifyGameLoadStarted(bool a_newGame)
 	g_vrStartupRaceSexFirstLoadCloseFrame.store(0, std::memory_order_release);
 	g_vrRaceSexTraceLastKey.store(std::numeric_limits<uint64_t>::max(), std::memory_order_release);
 	TraceVRRaceSexStartupSignal(a_newGame ? "notify-new-game" : "notify-post-load", true);
-	if (a_newGame)
+	if (a_newGame && ShouldEmitUpscalingDiagLogs())
 		logger::debug(
 			"[VRRenderScale] New-game startup diagnostics initialized (initialIntent={}).",
 			BoolText(HasVRStartupRenderScaleIntent(*this)));
@@ -12847,10 +12893,12 @@ void Upscaling::RaceSexMenu_ChangeName::thunk(RE::RaceSexMenu* a_this, const cha
 	g_vrStartupRaceSexNameFrame.store(
 		globals::state ? std::max(globals::state->frameCount, 1u) : 0u,
 		std::memory_order_release);
-	logger::debug(
-		"[VRRenderScale][RaceSexTrace] source=change-name-hook frame={} hasName={}",
-		globals::state ? std::max(globals::state->frameCount, 1u) : 0u,
-		BoolText(a_name && *a_name));
+	if (ShouldEmitUpscalingDiagLogs()) {
+		logger::debug(
+			"[VRRenderScale][RaceSexTrace] source=change-name-hook frame={} hasName={}",
+			globals::state ? std::max(globals::state->frameCount, 1u) : 0u,
+			BoolText(a_name && *a_name));
+	}
 	TraceVRRaceSexStartupSignal("change-name-hook", true);
 }
 
@@ -12955,43 +13003,44 @@ struct VRMenuBridgeHigherCallHook
 {
 	static std::uintptr_t thunk(std::uintptr_t a_wrapperIdentity, uint8_t a_flag, uint32_t a_mode)
 	{
-		const bool presentationTrace = IsVRMenuPresentationTraceActive();
-		const auto previousPresentationTraceContext = g_vrMenuPresentationTraceHigherCallContext;
-		if (presentationTrace) {
-			++g_vrMenuPresentationTraceHigherCallDepth;
-			RecordVRMenuPresentationTraceAccumulatorHigherCall();
-			g_vrMenuPresentationTraceHigherCallContext =
-				CaptureVRMenuPresentationTraceHigherCallContext(a_wrapperIdentity, a_flag, a_mode);
-		}
-		auto finishPresentationTrace = ScopeExit([&]() {
-			if (!presentationTrace)
-				return;
-			g_vrMenuPresentationTraceHigherCallContext = previousPresentationTraceContext;
-			if (g_vrMenuPresentationTraceHigherCallDepth != 0)
-				--g_vrMenuPresentationTraceHigherCallDepth;
-		});
+		const auto invokeProduction = [&]() -> std::uintptr_t {
+			VRMenuBridgeHigherCallContext nextContext{};
+			VRMenuBridgeHigherCallContext filterContext{};
+			if (TryMakeVRMenuBridgeHigherFilterContext(
+					a_wrapperIdentity,
+					a_flag,
+					a_mode,
+					filterContext) &&
+				Upscaling::ShouldTraceVRMenuBridgeDrawOperation()) {
+				nextContext = filterContext;
+			}
 
-		VRMenuBridgeHigherCallContext filterContext{};
-		if (!TryMakeVRMenuBridgeHigherFilterContext(a_wrapperIdentity, a_flag, a_mode, filterContext)) {
 			const auto previousContext = g_vrMenuBridgeHigherCallContext;
-			g_vrMenuBridgeHigherCallContext = {};
+			if (previousContext.active == nextContext.active)
+				return func(a_wrapperIdentity, a_flag, a_mode);
+
+			g_vrMenuBridgeHigherCallContext = nextContext;
 			auto restoreContext = ScopeExit([&]() {
 				g_vrMenuBridgeHigherCallContext = previousContext;
 			});
 			return func(a_wrapperIdentity, a_flag, a_mode);
-		}
+		};
 
-		if (!Upscaling::ShouldTraceVRMenuBridgeDrawOperation())
-			return func(a_wrapperIdentity, a_flag, a_mode);
+		const bool presentationTrace = IsVRMenuPresentationTraceActive();
+		if (!presentationTrace)
+			return invokeProduction();
 
-		const auto previousContext = g_vrMenuBridgeHigherCallContext;
-		[[maybe_unused]] auto restoreContext = ScopeExit([&]() {
-			g_vrMenuBridgeHigherCallContext = previousContext;
+		const auto previousPresentationTraceContext = g_vrMenuPresentationTraceHigherCallContext;
+		++g_vrMenuPresentationTraceHigherCallDepth;
+		RecordVRMenuPresentationTraceAccumulatorHigherCall();
+		g_vrMenuPresentationTraceHigherCallContext =
+			CaptureVRMenuPresentationTraceHigherCallContext(a_wrapperIdentity, a_flag, a_mode);
+		auto finishPresentationTrace = ScopeExit([&]() {
+			g_vrMenuPresentationTraceHigherCallContext = previousPresentationTraceContext;
+			if (g_vrMenuPresentationTraceHigherCallDepth != 0)
+				--g_vrMenuPresentationTraceHigherCallDepth;
 		});
-
-		g_vrMenuBridgeHigherCallContext = filterContext;
-
-		return func(a_wrapperIdentity, a_flag, a_mode);
+		return invokeProduction();
 	}
 
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -13039,12 +13088,22 @@ struct VRMenuBridgeDirectDrawHook
 		INT a_baseVertexLocation,
 		UINT a_startInstanceLocation)
 	{
+		const bool presentationTrace = IsVRMenuPresentationTraceActive();
+		if (!presentationTrace && GetCurrentVRMenuBridgeHigherCallContext() == nullptr) {
+			a_context->DrawIndexedInstanced(
+				a_indexCount,
+				a_instanceCount,
+				a_startIndexLocation,
+				a_baseVertexLocation,
+				a_startInstanceLocation);
+			return;
+		}
+
 		++g_vrMenuBridgeDirectDrawDepth;
 		auto finishProductionScope = ScopeExit([&]() {
 			if (g_vrMenuBridgeDirectDrawDepth != 0)
 				--g_vrMenuBridgeDirectDrawDepth;
 		});
-		const bool presentationTrace = IsVRMenuPresentationTraceActive();
 		if (presentationTrace)
 			++g_vrMenuPresentationTraceDirectDrawDepth;
 		auto finishPresentationTrace = ScopeExit([&]() {
@@ -20974,8 +21033,10 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
-	ServiceVRMenuPresentationTraceRaceSexPreRoll();
-	TraceVRRaceSexStartupSignal("configure-poll");
+	if (ShouldEmitUpscalingDiagLogs()) {
+		ServiceVRMenuPresentationTraceRaceSexPreRoll();
+		TraceVRRaceSexStartupSignal("configure-poll");
+	}
 	if (deferredVRIntermediateTextureCleanupFrame != 0)
 		ServiceVRIntermediateTextureCleanup();
 	QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(*this);

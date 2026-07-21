@@ -388,6 +388,33 @@ public:
 		bool relatchAdmitted = false;
 	};
 
+	enum class VRVendorRuntimeLifecyclePhase : uint8_t
+	{
+		Inactive,
+		Dirty,
+		WaitingForDrain,
+		Destroying,
+		Creating,
+		Ready,
+		Failed
+	};
+
+	struct VRVendorRuntimeLifecycleSnapshot
+	{
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		VRRenderScaleBackendKind backend = VRRenderScaleBackendKind::None;
+		VRVendorRuntimeLifecyclePhase phase = VRVendorRuntimeLifecyclePhase::Inactive;
+		uint64_t transitionEpoch = 0;
+		uint32_t requestedGeneration = 0;
+		uint32_t runtimeGeneration = 0;
+		uint32_t stateFrame = 0;
+		uint32_t attempts = 0;
+		uint32_t deferrals = 0;
+		uint32_t failures = 0;
+		bool resourcesPresent = false;
+		bool readyForContract = false;
+	};
+
 	/** @brief Immutable controller-visible profile at one transition milestone. */
 	struct VRRenderScaleProfileSnapshot
 	{
@@ -431,6 +458,8 @@ public:
 		VRRenderScaleRetirementSnapshot retirement{};
 		VRRenderScaleMemorySnapshot memory{};
 		VRRenderScalePostLoadRecoverySnapshot postLoadRecovery{};
+		VRVendorRuntimeLifecycleSnapshot dlssLifecycle{};
+		VRVendorRuntimeLifecycleSnapshot fsrLifecycle{};
 	};
 
 	struct PerfModeState
@@ -491,6 +520,7 @@ public:
 	/** @brief Returns a stable diagnostic name for a controller state. */
 	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	static const char* GetVRRenderScaleMemoryPressureName(VRRenderScaleMemoryPressure a_pressure);
+	static const char* GetVRVendorRuntimeLifecyclePhaseName(VRVendorRuntimeLifecyclePhase a_phase);
 	VRRenderScaleResourceKey BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot& a_profile) const;
 	static VRRenderScaleResourceCompatibility CompareVRRenderScaleResourceKeys(
 		const VRRenderScaleResourceKey& a_current,
@@ -1212,6 +1242,7 @@ public:
 	void PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch);
 	bool CanAdmitVRRenderScalePostLoadRecoveryRelatch(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
 	void CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, uint64_t a_transitionEpoch);
+	void RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VRVendorRuntimeLifecyclePhase a_phase, uint32_t a_generation = 0, const char* a_reason = nullptr);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	void ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr);

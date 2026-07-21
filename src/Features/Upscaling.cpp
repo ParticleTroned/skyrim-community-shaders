@@ -175,8 +175,8 @@ namespace
 	};
 	constexpr uint8_t kVRMenuBridgeHigherExpectedFlag = 0u;
 	constexpr uint32_t kVRMenuBridgeHigherExpectedMode = 0u;
-	constexpr uint8_t kVRLoadingMenuBridgeHigherExpectedFlag = 1u;
-	constexpr uint32_t kVRLoadingMenuBridgeHigherExpectedMode = 516u;
+	constexpr uint8_t kVRMainLoadingMenuBridgeHigherExpectedFlag = 1u;
+	constexpr uint32_t kVRMainLoadingMenuBridgeHigherExpectedMode = 516u;
 	constexpr uint32_t kVRMenuBridgeDirectDrawCallsiteRva = 0xDBDDF3u;
 	constexpr uint32_t kVRMenuBridgeDirectDrawCallerRva = 0xDBDDF9u;
 	constexpr std::array<uint8_t, 6> kVRMenuBridgeDirectDrawExpectedBytes{
@@ -1368,16 +1368,16 @@ namespace
 		const bool ordinaryMenuBridge =
 			a_flag == kVRMenuBridgeHigherExpectedFlag &&
 			a_mode == kVRMenuBridgeHigherExpectedMode;
-		// Fast-travel Loading uses the same direct PROJECTEDMENU consumer as
-		// MainMenu, but the enclosing engine call has a distinct stable signature.
-		// Authorize it only while Loading is open; the direct hook still requires
-		// the exact registered source and kVR_FRAMEBUFFER destination before it can
-		// claim or suppress the draw.
-		const bool loadingMenuBridge =
-			a_flag == kVRLoadingMenuBridgeHigherExpectedFlag &&
-			a_mode == kVRLoadingMenuBridgeHigherExpectedMode &&
-			IsLoadingMenuContextActive();
-		if (!ordinaryMenuBridge && !loadingMenuBridge) {
+		// Fast-travel Loading and the post-game MainMenu use the same direct
+		// PROJECTEDMENU consumer and stable enclosing signature. Authorize it only
+		// while one of those menus is open; the direct hook still requires the exact
+		// registered source and kVR_FRAMEBUFFER destination before it can claim or
+		// suppress the draw.
+		const bool mainOrLoadingMenuBridge =
+			a_flag == kVRMainLoadingMenuBridgeHigherExpectedFlag &&
+			a_mode == kVRMainLoadingMenuBridgeHigherExpectedMode &&
+			IsMainOrLoadingMenuContextActive();
+		if (!ordinaryMenuBridge && !mainOrLoadingMenuBridge) {
 			return false;
 		}
 
@@ -10369,6 +10369,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	bool menuWorldUIBridge = false;
 	const bool authorizedDirectBridge = !semanticBridge && IsMainOrLoadingMenuContextActive();
 	const bool loadingDirectBridge = authorizedDirectBridge && IsLoadingMenuContextActive();
+	const bool mainMenuDirectBridge =
+		authorizedDirectBridge && !loadingDirectBridge && IsMainMenuContextActive();
 	BeginVRMenuFinalCompositeFrame(state->frameCount);
 	if (vrMenuFrameTransaction.presentationStarted)
 		return decide("post-presentation-source-producer", false);
@@ -10551,6 +10553,8 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 		successReason = "semantic-layer-captured-original-suppressed";
 	} else if (loadingDirectBridge) {
 		successReason = "loading-direct-layer-captured-original-suppressed";
+	} else if (mainMenuDirectBridge) {
+		successReason = "main-menu-direct-layer-captured-original-suppressed";
 	}
 	return decide(successReason, true);
 }
@@ -21882,12 +21886,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 	const uint32_t currentFrame = state->frameCount;
 	const bool presentationUpscalingActive = IsPresentationUpscalingActive();
 	const bool vrRenderScaleMode = resolutionPlan.owner == ResolutionOwner::VRRenderScaleMode;
+	const bool mainMenuPresentationContext = IsMainMenuContextActive();
 	const bool loadingMenuPresentationContext = IsLoadingMenuContextActive();
 	const bool loadingSubmitProtectionContext = IsVRLoadingSubmitProtectionContextActive(*this, state);
-	const bool loadingPresentationFallbackActive =
+	const bool directMenuPresentationFallbackActive =
 		vrRenderScaleMode &&
-		(loadingMenuPresentationContext || loadingSubmitProtectionContext);
-	if (!presentationUpscalingActive && !loadingPresentationFallbackActive)
+		(mainMenuPresentationContext || loadingMenuPresentationContext || loadingSubmitProtectionContext);
+	if (!presentationUpscalingActive && !directMenuPresentationFallbackActive)
 		return false;
 
 	BeginVRMenuFinalCompositeFrame(currentFrame);
@@ -21959,10 +21964,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, const vr::Texture_t* a_i
 
 	const bool presentationRenderTarget = IsVRPresentationRenderTargetTexture(sourceTexture);
 	const bool currentMenuPresentationContext = IsVRMenuPresentationContextActive();
-	const bool loadingPresentationContext =
+	const bool directMenuPresentationContext =
+		mainMenuPresentationContext ||
 		loadingMenuPresentationContext || loadingSubmitProtectionContext;
 	const bool submitPresentationContext =
-		loadingPresentationContext ||
+		directMenuPresentationContext ||
 		presentationRenderTarget;
 	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
 	const bool sceneFeatureMenuPauseContext =

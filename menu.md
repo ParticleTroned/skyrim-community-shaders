@@ -2,21 +2,21 @@
 
 Status: the ordinary-menu hybrid, Map/Stats WORLDUI overlay route, fail-open
 Loading presentation, unmasked desktop mirror, projection de-jitter, buffered
-tracing, and the orphaned-Barter guard are implemented and committed through
-RC90. The working revision additionally raises only Map's `kHUDMENU` color/depth
-producer to a bounded display-oriented resolution while Map is open, so its
-rasterized location symbols reach the existing final-resolution HUD consumer
-without raising the mixed terrain pass.
+tracing, orphaned-Barter guard, and Map-symbol supersampling are implemented and
+committed through RC91. The working revision additionally supports the
+Loading-style direct consumer used by post-game MainMenu and keeps presentation
+stretch/submission active there while the reduced Render Scale contract remains
+latched.
 
 Branch: `cs-1.7-PL-VR`
 
 Implementation base reviewed: `bceaaff95b0248ff8339afbfeaf01bd6a4f73c13`
 
-Current committed implementation: `c2bfb45f4a3bd02b1187774f1467a1beee21d94c`
+Current committed implementation: `7cdfa07c5b4752e517741356743b2ae0aa861f36`
 
-Current working implementation: uncommitted Map-only display-resolution
-`kHUDMENU` production on top of RC90; no build or commit has been made for it
-under the branch rules.
+Current working implementation: uncommitted post-game MainMenu direct-layer and
+presentation-fallback support on top of RC91; no build or commit has been made
+for it under the branch rules.
 
 Checkpoint validation: the committed checkpoint was created by the user after
 the focused Map/Console changes. Current working validation is static only.
@@ -132,6 +132,16 @@ Evidence reviewed:
     Barter menu, immediate Map-to-Loading handoff, successful Loading direct
     capture, and a Barter reopen within the first 60 post-Loading frames while
     Dialogue remains closed.
+-   Focused exit-to-MainMenu trace ending 2026-07-21 14:33:04: quality 6 keeps
+    the latched combined stereo framebuffer at `1644x913` against a
+    `4936x2740` final output. MainMenu opens at frame 41,961 after Loading, but
+    its direct projected consumer uses `flag=1, mode=516`; the Loading-only
+    higher-call filter rejects it once Loading closes. Normal presentation is
+    also inactive because no world frame is complete, so both eyes repeatedly
+    take `path=suppressed-reduced-fallback` without a real compositor submit.
+    The UI continues producing frames, proving this is presentation starvation,
+    not an engine stall. Disabling Render Scale at frame 46,355 restores native
+    `4936x2740` original submissions immediately.
 
 Developer tracing remains available. Debug/Trace records no longer request a
 synchronous file flush per record; session begin/end still flush explicitly.
@@ -654,8 +664,12 @@ layer and suppressed from the reduced base; a non-matching or pre-ownership
 failure remains in Skyrim's complete framebuffer, which is stretched and really
 submitted without pre-requiring a separate layer.
 Render Scale remains latched and no engine target recreation is requested.
-Post-latch MainMenu still requires focused visual acceptance because the traces
-establish its direct contract only before the startup latch.
+The focused exit-to-MainMenu trace now establishes a second post-game signature:
+`flag=1, mode=516`. Production accepts that signature while either MainMenu or
+Loading is open, but still requires the exact registered source and
+`kVR_FRAMEBUFFER` destination. A latched post-game MainMenu is also an explicit
+presentation-stretch context even after normal world-complete presentation
+eligibility ends.
 
 ## RaceSex Evidence
 
@@ -1445,11 +1459,11 @@ implemented.
 
 Do not repeat broad discovery runs. The post-latch runs expose reduced-resource
 fallback failures even though their logical presentation blockers are active.
-The ordinary hybrid, Map/Stats WORLDUI, desktop, production-cost, and fail-open
-Loading corrections are committed through RC89. Loading direct-bridge replay is
-currently uncommitted; remaining work is focused visual validation. A post-latch MainMenu run remains
-useful as a narrow validation case because MainMenu shares Loading's
-non-semantic engine path.
+The ordinary hybrid, Map/Stats WORLDUI, desktop, production-cost, fail-open
+Loading, Loading direct-bridge, Barter lifecycle, and Map-symbol corrections are
+committed through RC91. Post-game MainMenu direct-bridge and presentation
+fallback support is currently uncommitted; remaining work is focused visual
+validation of that exit-game path.
 
 ### Final targeted instrumentation
 
@@ -1500,10 +1514,12 @@ Startup native behavior is proven. Post-latch Loading failure is independently
 proven across 1,149 completed OCU and 1,121 completed SteamVR frames, with 4,540
 reduced original submits in total. The latest fast-travel run exposes a separate
 fail-closed regression: 3,008 Loading frames suppress 6,016 eye submissions after
-their non-matching direct bridge is kept original. No additional discovery trace
-is required. Validate one startup Loading, two fast travels, one post-latch
-Loading, and one post-latch MainMenu lifecycle, including save/load tails, the
-vanilla black fade, and the stretched-base/direct-layer ordering.
+their non-matching direct bridge is kept original. The exit-game run then proves
+that post-game MainMenu shares Loading's `flag=1, mode=516` signature and needs
+the same presentation-stretch exception after world rendering ends. No additional
+discovery trace is required. Validate one startup Loading, two fast travels, one
+post-latch Loading, and one post-latch MainMenu lifecycle, including save/load
+tails, the vanilla black fade, and the stretched-base/direct-layer ordering.
 
 ### Map
 
@@ -1534,10 +1550,10 @@ changes.
 
 ## Current Implementation Reference
 
-This section describes committed checkpoint RC89 plus the uncommitted Loading
-direct-bridge extension. The trace logs are not
-required to understand the code path; the measured contracts are preserved
-above. Reconcile newer changes against these invariants before editing.
+This section describes committed checkpoint RC91 plus the uncommitted post-game
+MainMenu extension. The trace logs are not required to understand the code path;
+the measured contracts are preserved above. Reconcile newer changes against
+these invariants before editing.
 
 ### Code ownership
 
@@ -1564,6 +1580,7 @@ public control surface.
 | Desktop compositor   | Samples the left half of the sealed committed layer over Skyrim's existing backbuffer; never copies a masked HMD eye                                                                                                                                                                                                                  |
 | Map policy           | Reduced mixed 3D/depth pass with no scene-target/depth substitution; Map's fixed HUD color/depth pair is raised from its native size toward per-eye display size (minimum 1.5x, maximum 2x) only while Map is open, and exact projected/HUD plus non-writing `kWORLDUI0/1` consumers join the transparent full-resolution transaction |
 | Stats policy         | Reduced constellation production and geometry; exact non-depth/stencil-writing `kWORLDUI0/1` consumers join the same transparent full-resolution transaction                                                                                                                                                                          |
+| MainMenu policy      | Complete reduced `kVR_FRAMEBUFFER` is stretched and really submitted even after world-complete presentation eligibility ends; exact `flag=0, mode=0` and post-game `flag=1, mode=516` projected consumers are replayed into the final-resolution layer                                                                                |
 | Loading policy       | Complete reduced `kVR_FRAMEBUFFER` is stretched and submitted; the exact Loading `flag=1, mode=516` projected consumer is replayed into a separate final-resolution layer when captured                                                                                                                                               |
 
 No native-menu transition state exists. Menu events arm context/tails and
@@ -1591,10 +1608,11 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
    an observer only. Mode-24 passes are adapted only after the complete menu and
    stable reduced-plan eligibility check succeeds; unrelated mode-24 work cannot
    poison a transaction.
-3. The ordinary/MainMenu exact higher call requires flag zero and mode zero.
-   Loading additionally accepts flag one and mode 516 only while Loading is
-   open. Neither path inspects the disproven selector byte; source and
-   destination identity remain mandatory at the direct draw.
+3. The ordinary and startup MainMenu exact higher call requires flag zero and
+   mode zero. The direct MainMenu/Loading adapter additionally accepts flag one
+   and mode 516 only while MainMenu or Loading is open. Neither path inspects
+   the disproven selector byte; source and destination identity remain mandatory
+   at the direct draw.
 4. The exact direct draw requires bound slot-zero `kPROJECTEDMENU` or `kHUDMENU`.
    Index count and draw shape are recorded but do not authorize ownership.
 5. In an eligible mode-24 epoch, the destination must be `kMENUBG`.
@@ -1640,10 +1658,11 @@ existing VR dynamic-resolution path or other upscaling ownership modes.
     Staging accumulates straight-alpha bridge inputs into premultiplied color;
     final composition therefore uses `ONE`/`INV_SRC_ALPHA` and does not multiply
     glyph-edge alpha a second time.
-11. MainMenu and Loading use the presentation stretch for the reduced base.
-    MainMenu and exact Loading overlays are composited afterward at full
-    resolution. Fast-travel Loading's complete base remains a valid real-submit
-    fallback because no separately owned operation was suppressed.
+11. MainMenu and Loading use the presentation stretch for the reduced base even
+    when normal world-complete presentation eligibility is inactive. Their exact
+    overlays are composited afterward at full resolution. Fast-travel Loading's
+    complete base remains a valid real-submit fallback because no separately
+    owned operation was suppressed.
 12. The game-window Present hook preserves Skyrim's unmasked desktop base and
     alpha-composites only the committed layer's left half. It performs no HMD
     eye publication, full-eye copies, or pending/retained pair swaps.
@@ -1730,7 +1749,10 @@ run another broad discovery trace. Validate these focused cases:
     submitted rather than suppressed. At quality 6 (`0.33`), loading-tip text
     must remain sharp because the accepted `flag=1, mode=516` projected consumer
     is composited after the full-frame stretch. Debug decisions for that draw
-    should report `loading-direct-layer-captured-original-suppressed`.
+    should report `loading-direct-layer-captured-original-suppressed`. Exiting a
+    running game to MainMenu with quality 6 and Render Scale enabled must keep
+    submitting responsive full-resolution eyes; its equivalent Debug decision
+    should report `main-menu-direct-layer-captured-original-suppressed`.
 -   Close a seller's Barter menu, end Dialogue, and immediately fast travel from
     Map. The destination must return to the world without reopening the seller
     inventory. If the engine repeats the traced orphan event, the log should

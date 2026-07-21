@@ -86,6 +86,18 @@ public:
 		Active,
 		RestartRequired
 	};
+
+	enum class VRRenderScaleTransitionState : uint8_t
+	{
+		Idle,
+		Requested,
+		WaitingForSafePoint,
+		Preparing,
+		Applying,
+		Stabilizing,
+		Active
+	};
+
 	enum class VRUpscalingTransitionOrigin : uint8_t
 	{
 		CSMenu,
@@ -238,6 +250,44 @@ public:
 		uint32_t displayEyeHeight = 0;
 	};
 
+	/** @brief Immutable controller-visible profile at one transition milestone. */
+	struct VRRenderScaleProfileSnapshot
+	{
+		bool valid = false;
+		bool active = false;
+		uint64_t requestID = 0;
+		uint32_t contractGeneration = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t qualityMode = 0;
+		uint32_t dlssPreset = kDLSSPresetK;
+		uint32_t dlssSharpener = static_cast<uint32_t>(DLSSSharpenerMode::RCAS);
+		float dlssSharpness = 0.0f;
+		float fsrSharpness = 0.0f;
+		float renderScale = 1.0f;
+		bool renderScaleModeEnabled = false;
+		bool perfModeEnabled = false;
+		bool fsr4RuntimeEnabled = false;
+		uint32_t displayEyeWidth = 0;
+		uint32_t displayEyeHeight = 0;
+		uint32_t renderEyeWidth = 0;
+		uint32_t renderEyeHeight = 0;
+		uint32_t queuedFrame = 0;
+		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
+	};
+
+	/** @brief Coherent read model for the complete render-scale transition controller. */
+	struct VRRenderScaleTransitionSnapshot
+	{
+		VRRenderScaleTransitionState state = VRRenderScaleTransitionState::Idle;
+		uint32_t transitionStartFrame = 0;
+		uint32_t stateFrame = 0;
+		uint64_t revision = 0;
+		VRRenderScaleProfileSnapshot requested{};
+		VRRenderScaleProfileSnapshot applying{};
+		VRRenderScaleProfileSnapshot applied{};
+		VRRenderScaleProfileSnapshot stable{};
+	};
+
 	struct PerfModeState
 	{
 		struct BootSnapshot
@@ -291,6 +341,10 @@ public:
 	std::optional<VRRenderScaleDesiredProfile> TakePendingVRRenderScaleRequest();
 	/** @brief Rejects a request that was cleared or superseded before application began. */
 	bool IsLatestVRRenderScaleRequest(uint64_t a_requestID) const;
+	/** @brief Returns one lock-consistent copy of requested, applying, applied, and stable state. */
+	VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() const;
+	/** @brief Returns a stable diagnostic name for a controller state. */
+	static const char* GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state);
 	uint32_t GetActiveVRRenderScaleContractGeneration() const;
 	bool IsVendorRuntimeReadyForActiveContract(UpscaleMethod a_upscaleMethod) const;
 	void MarkVendorRuntimeResourcesDirty(UpscaleMethod a_upscaleMethod, uint32_t a_generation = 0);
@@ -848,6 +902,8 @@ public:
 	std::optional<VRRenderScaleDesiredProfile> pendingVRRenderScaleRequest;
 	std::atomic<uint64_t> nextVRRenderScaleRequestID{ 1 };
 	std::atomic<uint64_t> latestVRRenderScaleRequestID{ 0 };
+	mutable std::mutex vrRenderScaleTransitionControllerMutex;
+	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
 	std::atomic<bool> delayedVRPerfModeBootLatchForDLSS{ false };
@@ -964,15 +1020,18 @@ public:
 	uint32_t submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
-	bool vrRenderScaleInfoTransitionPending = false;
-	uint32_t vrRenderScaleInfoTransitionStartFrame = 0;
-
 	void CopySharedD3D12Resources();
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset();
+	void RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
+	void RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesiredProfile& a_request);
+	void SetVRRenderScaleTransitionState(VRRenderScaleTransitionState a_state, const char* a_reason = nullptr);
+	void PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigin a_origin, bool a_requiresStabilization);
+	void PublishVRRenderScaleTransitionStable();
+	void ResetVRRenderScaleTransitionController(const char* a_reason = nullptr);
 	void BeginVRRenderScaleInfoTransition(const char* a_reason = nullptr);
 	void CompleteVRRenderScaleInfoTransition(const char* a_phase, bool a_active, UpscaleMethod a_method, const float2& a_displaySize, const float2& a_renderSize);
 	void ClearVRRenderScaleInfoTransition();

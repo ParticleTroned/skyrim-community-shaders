@@ -15440,15 +15440,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			plannedRelatchWillResizeRenderTargets &&
 			previousBootWasActiveVendorRenderScale &&
 			!relatchTargetRenderScaleActive;
-		const bool preserveDLSSResourcesForRelatch =
-			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
-			previousBootWasActiveDLSS &&
-			!pendingDLSSResetForRelatch &&
-			!lowPeakNativeRestoreRelatch;
-		const bool destroyDLSSResourcesForRelatch =
-			pendingDLSSResetForRelatch ||
-			(!preserveDLSSResourcesForRelatch &&
-				(relatchUpscaleMethod == UpscaleMethod::kDLSS || previousBootWasActiveDLSS));
 		VRRenderScaleRelatchSignature relatchSignature{};
 		relatchSignature.valid = true;
 		relatchSignature.method = relatchUpscaleMethod;
@@ -15471,6 +15462,41 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrRenderScaleMemoryReliefLogged.store(false, std::memory_order_release);
 		}
 		const bool memoryReliefActiveForRelatch = IsVRRenderScaleMemoryReliefActive();
+		const bool retainWarmInactiveVendorResourcesForRelatch =
+			relatchOrigin == VRUpscalingTransitionOrigin::CSMenu &&
+			relatchTargetRenderScaleActive &&
+			previousBootWasActiveVendorRenderScale &&
+			plannedRelatchSizeKnown &&
+			!plannedRelatchWillResizeRenderTargets &&
+			memoryAtAdmission.valid &&
+			memoryAtAdmission.pressure == VRRenderScaleMemoryPressure::Normal &&
+			!memoryReliefActiveForRelatch &&
+			!postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
+			!preserveActiveContractForRecovery &&
+			!IsSubmitStageDeviceLost();
+		const bool dlssResourcesNeedTeardownForRelatch = streamline.HasDLSSResourcesPendingTeardown();
+		const bool dlssResourcesAvailableForWarmRetention =
+			vrDLSSRuntimeResourceGeneration != 0 &&
+			dlssResourcesNeedTeardownForRelatch;
+		const bool retainWarmDLSSResourcesForRelatch =
+			retainWarmInactiveVendorResourcesForRelatch &&
+			!pendingDLSSResetForRelatch &&
+			dlssResourcesAvailableForWarmRetention &&
+			(relatchUpscaleMethod != UpscaleMethod::kDLSS || !previousBootWasActiveDLSS);
+		const bool preserveActiveDLSSResourcesForRelatch =
+			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
+			previousBootWasActiveDLSS &&
+			!pendingDLSSResetForRelatch &&
+			!lowPeakNativeRestoreRelatch;
+		const bool preserveDLSSResourcesForRelatch =
+			preserveActiveDLSSResourcesForRelatch ||
+			retainWarmDLSSResourcesForRelatch;
+		const bool destroyDLSSResourcesForRelatch =
+			pendingDLSSResetForRelatch ||
+			(!preserveDLSSResourcesForRelatch &&
+				(relatchUpscaleMethod == UpscaleMethod::kDLSS ||
+					previousBootWasActiveDLSS ||
+					dlssResourcesNeedTeardownForRelatch));
 		const bool rapidAmdFsrLowPeakRelatch =
 			memoryReliefActiveForRelatch &&
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
@@ -15482,11 +15508,12 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			!rapidAmdFsrLowPeakRelatch &&
 			(amdAdapterForRelatch ||
 				(relatchTargetRenderScaleActive && plannedRelatchWillResizeRenderTargets));
-		const auto canPreserveFSRResourcesForRelatch = [&]() {
-			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
-				forceFSRResourceRecreateForRelatch ||
-				pendingFSRReset.load(std::memory_order_acquire) ||
-				!fidelityFX.HasFSRResources() ||
+		const bool previousBootWasActiveFSR =
+			previousBootSnapshot.valid &&
+			previousBootSnapshot.active &&
+			previousBootSnapshot.method == UpscaleMethod::kFSR;
+		const auto areFSRResourcesCompatibleForRelatch = [&]() {
+			if (!fidelityFX.HasFSRResources() ||
 				!perfMode.trueHMDEyeWidth ||
 				!perfMode.trueHMDEyeHeight) {
 				return false;
@@ -15499,7 +15526,26 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				perfMode.trueHMDEyeHeight,
 				2u);
 		};
-		const bool preserveFSRResourcesForRelatch = canPreserveFSRResourcesForRelatch();
+		const auto canPreserveActiveFSRResourcesForRelatch = [&]() {
+			if (relatchUpscaleMethod != UpscaleMethod::kFSR ||
+				forceFSRResourceRecreateForRelatch ||
+				pendingFSRReset.load(std::memory_order_acquire) ||
+				!areFSRResourcesCompatibleForRelatch()) {
+				return false;
+			}
+
+			return true;
+		};
+		const bool retainWarmFSRResourcesForRelatch =
+			retainWarmInactiveVendorResourcesForRelatch &&
+			!forceFSRResourceRecreateForRelatch &&
+			!pendingFSRReset.load(std::memory_order_acquire) &&
+			!fidelityFX.HasRuntimeUpscalerResources() &&
+			areFSRResourcesCompatibleForRelatch() &&
+			(relatchUpscaleMethod != UpscaleMethod::kFSR || !previousBootWasActiveFSR);
+		const bool preserveFSRResourcesForRelatch =
+			canPreserveActiveFSRResourcesForRelatch() ||
+			retainWarmFSRResourcesForRelatch;
 		const bool missingCompatibleFSRResourcesForActiveRelatch =
 			relatchUpscaleMethod == UpscaleMethod::kFSR &&
 			relatchTargetRenderScaleActive &&
@@ -15508,10 +15554,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			(forceFSRResourceRecreateForRelatch || missingCompatibleFSRResourcesForActiveRelatch) &&
 			!preserveFSRResourcesForRelatch;
 		const bool fsrResourcesNeedTeardownForRelatch = fidelityFX.HasFSRResourcesPendingTeardown();
-		const bool previousBootWasActiveFSR =
-			previousBootSnapshot.valid &&
-			previousBootSnapshot.active &&
-			previousBootSnapshot.method == UpscaleMethod::kFSR;
 		const bool destroyFSRResourcesForRelatch =
 			!preserveFSRResourcesForRelatch &&
 			(pendingFSRReset.load(std::memory_order_acquire) ||
@@ -15559,6 +15601,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.reuseRenderTargets = plannedRelatchSizeKnown && !plannedRelatchWillResizeRenderTargets;
 		relatchPlan.preserveDLSSResources = preserveDLSSResourcesForRelatch;
 		relatchPlan.preserveFSRResources = preserveFSRResourcesForRelatch;
+		relatchPlan.retainWarmDLSSResources = retainWarmDLSSResourcesForRelatch;
+		relatchPlan.retainWarmFSRResources = retainWarmFSRResourcesForRelatch;
+		relatchPlan.reuseWarmTargetRuntime =
+			(relatchUpscaleMethod == UpscaleMethod::kDLSS && retainWarmDLSSResourcesForRelatch) ||
+			(relatchUpscaleMethod == UpscaleMethod::kFSR && retainWarmFSRResourcesForRelatch);
 		relatchPlan.destroyDLSSResources = destroyDLSSResourcesForRelatch;
 		relatchPlan.destroyFSRResources = destroyFSRResourcesForRelatch;
 		relatchPlan.recreateFSRResources = recreateFSRResourcesDuringRelatch;
@@ -15586,7 +15633,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		relatchPlan.estimatedTargetBytes = EstimateVRRenderScaleResourceBytes(relatchPlan.target);
 		const bool requiresParallelAllocation =
 			!relatchPlan.compatibility.canReuseRenderTargets ||
-			!relatchPlan.compatibility.canReuseVendorRuntime;
+			(!relatchPlan.compatibility.canReuseVendorRuntime && !relatchPlan.reuseWarmTargetRuntime);
 		relatchPlan.estimatedAdditionalBytes = requiresParallelAllocation ?
 		                                           relatchPlan.estimatedTargetBytes :
 		                                           (relatchPlan.estimatedTargetBytes > relatchPlan.estimatedCurrentBytes ?
@@ -15658,17 +15705,21 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					} :
 					relatchDiagDisplaySize;
 			logger::debug(
-				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} preserveDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
+				"[VRRenderScale][Diag] Relatch resource plan method={} origin={} recoveryLocked={} amd={} lowPeakFullResolutionRestore={} retainWarmAllowed={} preserveDLSS={} retainWarmDLSS={} destroyDLSS={} forceFSRRecreate={} missingFSRForActive={} preserveFSR={} retainWarmFSR={} reuseWarmTarget={} syncFSRTeardown={} pendingDLSS={} pendingFSR={} targetActive={} targetRender={}x{} targetDisplay={}x{} hmd={}x{} quality={} renderScaleMode={} perfMode={}",
 				magic_enum::enum_name(relatchUpscaleMethod),
 				magic_enum::enum_name(relatchOrigin),
 				BoolText(preserveActiveContractForRecovery),
 				BoolText(amdAdapterForRelatch),
 				BoolText(lowPeakNativeRestoreRelatch),
+				BoolText(retainWarmInactiveVendorResourcesForRelatch),
 				BoolText(preserveDLSSResourcesForRelatch),
+				BoolText(retainWarmDLSSResourcesForRelatch),
 				BoolText(destroyDLSSResourcesForRelatch),
 				BoolText(forceFSRResourceRecreateForRelatch),
 				BoolText(missingCompatibleFSRResourcesForActiveRelatch),
 				BoolText(preserveFSRResourcesForRelatch),
+				BoolText(retainWarmFSRResourcesForRelatch),
+				BoolText(relatchPlan.reuseWarmTargetRuntime),
 				BoolText(forceSynchronousFSRTeardownForRelatch),
 				BoolText(pendingDLSSResetForRelatch),
 				BoolText(pendingFSRReset.load(std::memory_order_acquire)),
@@ -24668,10 +24719,11 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 2u;
+	constexpr uint32_t kSchemaVersion = 3u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
+	constexpr uint64_t kMaximumSteadyStateMemoryGrowthBytes = 256ull * 1024ull * 1024ull;
 	const auto controller = GetVRRenderScaleTransitionSnapshot();
 	const auto session = GetVRRenderScaleStressSessionSnapshot();
 
@@ -24683,7 +24735,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		{ "version", std::string{ Plugin::VERSION_LABEL } },
 		{ "build", std::string{ Plugin::BUILD_DESCRIBE } },
 		{ "component", "Upscaling" },
-		{ "implementationStep", 20 }
+		{ "implementationStep", 21 }
 	};
 	record["session"] = {
 		{ "id", session.sessionID },
@@ -24751,6 +24803,30 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	uint64_t outOfMemoryFailures = 0;
 	uint64_t deviceLostFailures = 0;
 	uint64_t fidelityMismatches = 0;
+	struct ProfileMemoryTrend
+	{
+		VRRenderScaleResourceKey resources{};
+		uint32_t samples = 0;
+		uint64_t previousPeakUsageBytes = 0;
+		uint64_t latestPeakUsageBytes = 0;
+	};
+	std::vector<ProfileMemoryTrend> memoryTrends;
+	const auto sameMemoryProfile = [](const VRRenderScaleResourceKey& a_lhs, const VRRenderScaleResourceKey& a_rhs) {
+		return a_lhs.valid &&
+		       a_rhs.valid &&
+		       a_lhs.active == a_rhs.active &&
+		       a_lhs.method == a_rhs.method &&
+		       a_lhs.backend == a_rhs.backend &&
+		       a_lhs.qualityMode == a_rhs.qualityMode &&
+		       (a_lhs.method != UpscaleMethod::kDLSS || a_lhs.dlssPreset == a_rhs.dlssPreset) &&
+		       a_lhs.displayEyeWidth == a_rhs.displayEyeWidth &&
+		       a_lhs.displayEyeHeight == a_rhs.displayEyeHeight &&
+		       a_lhs.renderEyeWidth == a_rhs.renderEyeWidth &&
+		       a_lhs.renderEyeHeight == a_rhs.renderEyeHeight &&
+		       a_lhs.contextCount == a_rhs.contextCount &&
+		       a_lhs.foveatedVendorDispatch == a_rhs.foveatedVendorDispatch &&
+		       a_lhs.peripheryTAA == a_rhs.peripheryTAA;
+	};
 	std::vector<uint64_t> metricEpochs;
 	auto appendMetrics = [&](const VRRenderScaleTransitionMetrics& a_metrics) {
 		if (!a_metrics.valid ||
@@ -24768,11 +24844,36 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		outOfMemoryFailures += a_metrics.outOfMemoryFailures;
 		deviceLostFailures += a_metrics.deviceLostFailures;
 		fidelityMismatches += a_metrics.fidelityMismatches;
+		if (a_metrics.completed &&
+			!a_metrics.superseded &&
+			a_metrics.peakUsageBytes != 0 &&
+			a_metrics.resources.valid &&
+			a_metrics.resources.active &&
+			IsVendorUpscalingMethod(a_metrics.resources.method)) {
+			auto trendIt = std::find_if(memoryTrends.begin(), memoryTrends.end(), [&](const ProfileMemoryTrend& a_trend) {
+				return sameMemoryProfile(a_trend.resources, a_metrics.resources);
+			});
+			if (trendIt == memoryTrends.end()) {
+				memoryTrends.emplace_back();
+				memoryTrends.back().resources = a_metrics.resources;
+				trendIt = memoryTrends.end() - 1;
+			}
+			trendIt->previousPeakUsageBytes = trendIt->latestPeakUsageBytes;
+			trendIt->latestPeakUsageBytes = a_metrics.peakUsageBytes;
+			++trendIt->samples;
+		}
 		metrics.push_back({ { "transitionEpoch", a_metrics.transitionEpoch },
 			{ "requestID", a_metrics.requestID },
 			{ "contractGeneration", a_metrics.contractGeneration },
 			{ "origin", std::string{ magic_enum::enum_name(a_metrics.origin) } },
 			{ "method", std::string{ magic_enum::enum_name(a_metrics.method) } },
+			{ "backend", std::string{ magic_enum::enum_name(a_metrics.resources.backend) } },
+			{ "qualityMode", a_metrics.resources.qualityMode },
+			{ "dlssPreset", a_metrics.resources.dlssPreset },
+			{ "renderEyeWidth", a_metrics.resources.renderEyeWidth },
+			{ "renderEyeHeight", a_metrics.resources.renderEyeHeight },
+			{ "displayEyeWidth", a_metrics.resources.displayEyeWidth },
+			{ "displayEyeHeight", a_metrics.resources.displayEyeHeight },
 			{ "completed", a_metrics.completed },
 			{ "superseded", a_metrics.superseded },
 			{ "requestedFrame", a_metrics.requestedFrame },
@@ -24835,6 +24936,7 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "valid", a_eye.valid }
 		};
 	};
+	const auto& relatchPlan = controller.relatchPlan;
 	record["controller"] = {
 		{ "state", GetVRRenderScaleTransitionStateName(controller.state) },
 		{ "targetEpoch", controller.targetEpoch },
@@ -24871,6 +24973,20 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 								  { "cleanupArmed", controller.postLoadRecovery.cleanupArmed },
 								  { "cleanupDrained", controller.postLoadRecovery.cleanupDrained },
 								  { "relatchAdmitted", controller.postLoadRecovery.relatchAdmitted } } },
+		{ "resourcePlan", { { "valid", relatchPlan.valid },
+							 { "transitionEpoch", relatchPlan.transitionEpoch },
+							 { "contractGeneration", relatchPlan.contractGeneration },
+							 { "origin", std::string{ magic_enum::enum_name(relatchPlan.origin) } },
+							 { "actionMask", relatchPlan.actionMask },
+							 { "reuseRenderTargets", relatchPlan.reuseRenderTargets },
+							 { "preserveDLSSResources", relatchPlan.preserveDLSSResources },
+							 { "preserveFSRResources", relatchPlan.preserveFSRResources },
+							 { "retainWarmDLSSResources", relatchPlan.retainWarmDLSSResources },
+							 { "retainWarmFSRResources", relatchPlan.retainWarmFSRResources },
+							 { "reuseWarmTargetRuntime", relatchPlan.reuseWarmTargetRuntime },
+							 { "destroyDLSSResources", relatchPlan.destroyDLSSResources },
+							 { "destroyFSRResources", relatchPlan.destroyFSRResources },
+							 { "memoryPressure", GetVRRenderScaleMemoryPressureName(relatchPlan.memoryPressure) } } },
 		{ "fidelity", { { "active", controller.fidelity.active },
 						  { "transitionEpoch", controller.fidelity.transitionEpoch },
 						  { "contractGeneration", controller.fidelity.contractGeneration },
@@ -24932,6 +25048,45 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 		controller.retirement.nextCleanupFrame == 0 &&
 		!controller.retirement.fencePending &&
 		!controller.retirement.capacityBlocked;
+	const auto steadyStateGrowthBytes = [](const ProfileMemoryTrend& a_trend) {
+		return a_trend.samples >= 3 && a_trend.latestPeakUsageBytes > a_trend.previousPeakUsageBytes ?
+		           a_trend.latestPeakUsageBytes - a_trend.previousPeakUsageBytes :
+		           0u;
+	};
+	bool memoryTrendEvaluated = false;
+	uint64_t maximumSteadyStateGrowthBytes = 0;
+	json profileMemoryTrends = json::array();
+	for (const auto& trend : memoryTrends) {
+		const bool evaluated = trend.samples >= 3;
+		const uint64_t growthBytes = steadyStateGrowthBytes(trend);
+		memoryTrendEvaluated = memoryTrendEvaluated || evaluated;
+		maximumSteadyStateGrowthBytes = std::max(maximumSteadyStateGrowthBytes, growthBytes);
+		profileMemoryTrends.push_back({
+			{ "method", std::string{ magic_enum::enum_name(trend.resources.method) } },
+			{ "backend", std::string{ magic_enum::enum_name(trend.resources.backend) } },
+			{ "qualityMode", trend.resources.qualityMode },
+			{ "dlssPreset", trend.resources.dlssPreset },
+			{ "renderEyeWidth", trend.resources.renderEyeWidth },
+			{ "renderEyeHeight", trend.resources.renderEyeHeight },
+			{ "displayEyeWidth", trend.resources.displayEyeWidth },
+			{ "displayEyeHeight", trend.resources.displayEyeHeight },
+			{ "samples", trend.samples },
+			{ "evaluated", evaluated },
+			{ "previousPeakUsageBytes", trend.previousPeakUsageBytes },
+			{ "latestPeakUsageBytes", trend.latestPeakUsageBytes },
+			{ "steadyStateGrowthBytes", growthBytes }
+		});
+	}
+	const bool steadyStateMemoryGrowthBounded =
+		!memoryTrendEvaluated ||
+		maximumSteadyStateGrowthBytes <= kMaximumSteadyStateMemoryGrowthBytes;
+	record["memoryTrend"] = {
+		{ "minimumSamplesPerBackend", 3 },
+		{ "evaluated", memoryTrendEvaluated },
+		{ "maximumSteadyStateGrowthBytes", maximumSteadyStateGrowthBytes },
+		{ "limitBytes", kMaximumSteadyStateMemoryGrowthBytes },
+		{ "profiles", std::move(profileMemoryTrends) }
+	};
 
 	json gates = json::array();
 	json failureReasons = json::array();
@@ -24960,6 +25115,11 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate("retirement_drained", retirementDrained, { { "pendingSets", controller.retirement.pendingSets }, { "nextCleanupFrame", controller.retirement.nextCleanupFrame }, { "fencePending", controller.retirement.fencePending }, { "capacityBlocked", controller.retirement.capacityBlocked } }, 0);
 	addGate("memory_sample_valid", memoryEvidenceValid, memoryEvidenceValid, true);
 	addGate("memory_recovered", pressureRecovered, GetVRRenderScaleMemoryPressureName(controller.memory.pressure), "Normal or Elevated with recovery inactive");
+	addGate(
+		"steady_state_memory_growth",
+		steadyStateMemoryGrowthBounded,
+		{ { "evaluated", memoryTrendEvaluated }, { "growthBytes", maximumSteadyStateGrowthBytes } },
+		{ { "maximumBytes", kMaximumSteadyStateMemoryGrowthBytes }, { "minimumSamplesPerBackend", 3 } });
 	addGate("backend_ready", lifecycleReady, lifecycleReady, true);
 	record["acceptance"] = {
 		{ "verdict", accepted ? "pass" : "fail" },
@@ -25272,6 +25432,7 @@ void Upscaling::RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesire
 		metrics.contractGeneration = profile.contractGeneration;
 		metrics.origin = profile.origin;
 		metrics.method = profile.method;
+		metrics.resources = profile.resources;
 		metrics.requestedFrame = frame;
 		metrics.peakPressure = vrRenderScaleTransitionController.memory.pressure;
 		metrics.peakUsageBytes = vrRenderScaleTransitionController.memory.currentUsageBytes;
@@ -25358,6 +25519,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			metrics.contractGeneration = a_plan.contractGeneration;
 			metrics.origin = a_plan.origin;
 			metrics.method = a_plan.target.method;
+			metrics.resources = a_plan.target;
 			if (static_cast<uint32_t>(a_plan.memoryPressure) > static_cast<uint32_t>(metrics.peakPressure))
 				metrics.peakPressure = a_plan.memoryPressure;
 		}
@@ -25366,7 +25528,7 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 
 	if (ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} preserveDLSS={} preserveFSR={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
+			"[VRRenderScale][Plan] revision={} epoch={} generation={} actions=0x{:X} changes=0x{:X} backend={} -> {} reuseTargets={} preserveDLSS={} preserveFSR={} retainWarmDLSS={} retainWarmFSR={} reuseWarmTarget={} recreateFSR={} waitFSRDrain={} lowPeakRestore={} pressure={} current={} MiB target={} MiB additional={} MiB cleanup={} deferred={}",
 			revision,
 			a_plan.transitionEpoch,
 			a_plan.contractGeneration,
@@ -25377,6 +25539,9 @@ bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a
 			BoolText(a_plan.reuseRenderTargets),
 			BoolText(a_plan.preserveDLSSResources),
 			BoolText(a_plan.preserveFSRResources),
+			BoolText(a_plan.retainWarmDLSSResources),
+			BoolText(a_plan.retainWarmFSRResources),
+			BoolText(a_plan.reuseWarmTargetRuntime),
 			BoolText(a_plan.recreateFSRResources),
 			BoolText(a_plan.waitForFSRDrain),
 			BoolText(a_plan.lowPeakNativeRestore),
@@ -25522,6 +25687,7 @@ void Upscaling::PublishVRRenderScaleTransitionApplied(VRUpscalingTransitionOrigi
 			metrics.contractGeneration = appliedProfile.contractGeneration;
 			metrics.origin = appliedProfile.origin;
 			metrics.method = appliedProfile.method;
+			metrics.resources = appliedProfile.resources;
 			if (completedSynchronously) {
 				metrics.stableFrame = frame;
 				ArchiveVRRenderScaleTransitionMetricsLocked(true, false, frame);

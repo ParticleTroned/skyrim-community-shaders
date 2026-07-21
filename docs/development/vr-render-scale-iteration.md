@@ -11,7 +11,7 @@ The VR render-scale controller can capture a bounded CS-menu stress session and 
 5. Wait for the final change to reach a stable in-world presentation, then select **Stop Capture**.
 6. Read the new record from `Data/SKSE/Plugins/CommunityShaders/Diagnostics/VRRenderScale/`.
 
-Use identical save, location, CS profile, change order, dwell frames, HMD resolution, backend, and graphics settings when comparing iterations. Run DLSS and FSR as separate scenario series.
+Use identical save, location, CS profile, change order, dwell frames, HMD resolution, backend, and graphics settings when comparing iterations. Run DLSS and FSR as separate backend-specific scenario series, then use a fixed-profile alternating series for backend-handoff residency.
 
 ## DevBench automation
 
@@ -25,7 +25,7 @@ The registered tool is `communityshaders.renderscale`:
 -   `status` returns a compact live snapshot of the controller profiles, VRAM
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, and both-eye fidelity;
--   `record` returns the complete schema-v2 record without changing capture
+-   `record` returns the complete schema-v3 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CS-menu change.
@@ -78,9 +78,29 @@ or Streamline resource-free errors remain `Failed`, so the acceptance contract
 continues to reject genuine teardown faults while allowing expected asynchronous
 GPU drain polling during DLSS/FSR handoffs and post-load recovery.
 
+Step 21 bounds repeated backend-switch allocation churn. During an ordinary
+CS-menu relatch at the same dimensions and `Normal` memory pressure, compatible
+inactive host-FSR and DLSS runtime resources remain resident and are reused when
+that backend becomes active again. Recovery, post-load, resize, pending-reset,
+device-loss, non-`Normal` pressure, and runtime-FSR paths retain the existing
+teardown behavior. The relatch plan records warm retention and target reuse so
+automation can distinguish deliberate residency from missed teardown.
+
+Schema v3 also groups completed transition peaks by exact backend profile
+(method, backend, quality, preset, and dimensions). Once one profile has three
+samples, the `steady_state_memory_growth` gate compares its final two peaks and
+rejects growth above 256 MiB. The first two samples establish cold and warm
+residency, while exact-profile grouping prevents quality or resolution changes
+from being classified as leaks.
+
+To evaluate this gate, complete at least three transitions to the same DLSS
+profile and three to the same FSR profile in alternating order. A one-time rise
+while both backends become warm is expected; the final same-profile delta must
+plateau within the bound.
+
 ## MCP contract
 
-Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 2`. An automation client should:
+Records use schema `community-shaders.vr-render-scale.iteration` and `schemaVersion: 3`. An automation client should:
 
 1. Reject unknown schema versions.
 2. Check `acceptance.accepted` before comparing performance.
@@ -104,9 +124,10 @@ The runtime currently requires:
 -   zero fidelity invariant mismatches across method, epoch, generation, dimensions, evaluation, and eye symmetry, with finalized vendor evaluation proven for both eyes;
 -   a fully drained retirement queue with no deferred cleanup frame, outstanding fence, or capacity block;
 -   a valid DXGI memory sample and pressure recovered below `High` with post-load recovery complete;
+-   no more than 256 MiB growth between the final two peaks once an exact backend profile has at least three completed samples;
 -   the active DLSS or FSR backend ready with exact requested, runtime, and stable contract generations.
 
-These thresholds are part of schema version 2. Change the schema version if their meaning or units change.
+These thresholds are part of schema version 3. Change the schema version if their meaning or units change.
 
 ## Ghidra correlation
 

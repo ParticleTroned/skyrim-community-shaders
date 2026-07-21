@@ -331,6 +331,9 @@ public:
 		bool reuseRenderTargets = false;
 		bool preserveDLSSResources = false;
 		bool preserveFSRResources = false;
+		bool retainWarmDLSSResources = false;
+		bool retainWarmFSRResources = false;
+		bool reuseWarmTargetRuntime = false;
 		bool destroyDLSSResources = false;
 		bool destroyFSRResources = false;
 		bool recreateFSRResources = false;
@@ -449,6 +452,7 @@ public:
 		uint32_t contractGeneration = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
 		UpscaleMethod method = UpscaleMethod::kNONE;
+		VRRenderScaleResourceKey resources{};
 		uint32_t requestedFrame = 0;
 		uint32_t preparingFrame = 0;
 		uint32_t applyingFrame = 0;

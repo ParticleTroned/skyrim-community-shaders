@@ -395,8 +395,13 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	} else if (featureChangeHeld) {
 		summaryText = "Your feature setup changed, but CS could not keep a usable previous cache for restore. CS is building shaders for this session and will rebuild the cache for the current setup when compilation finishes.";
 		actionText = "Restore is unavailable because no usable previous cache was kept for this change. Let compilation finish to rebuild the cache for the current setup.";
-	} else if (featureSetChanged && previousCacheAvailable) {
-		summaryText = "Your feature setup changed. CS saved the previous cache and is building a new cache for the current setup. You can restore the previous cache after compilation finishes.";
+	} else if (featureSetChanged && featureSetCacheBackedUp) {
+		if (previousCacheAvailable) {
+			summaryText = "Your feature setup changed. CS saved the previous cache and is building a new cache for the current setup. You can restore the previous cache after compilation finishes.";
+		} else {
+			summaryText = "Your feature setup changed. CS saved the previous cache and is building a new cache for the current setup. Restore availability will be verified after compilation finishes.";
+			actionText = "Let compilation finish so CS can verify the saved previous cache.";
+		}
 	} else if (featureSetChanged) {
 		summaryText = "Your feature setup changed. CS is building a new cache for the current setup. Previous cache is not available for restore.";
 		actionText = "Let compilation finish to rebuild the cache for the current setup.";

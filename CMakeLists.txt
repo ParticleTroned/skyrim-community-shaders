@@ -957,8 +957,13 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_plugin.stamp
-                # See PREPARE_AIO target-name rationale above.
-                DEPENDS PREPARE_AIO ${PROJECT_NAME}
+                # See PREPARE_AIO target-name rationale above; the target-only
+                # dependency is order-only, so also depend on the built file
+                # for the mtime edge that re-triggers on content change.
+                DEPENDS
+                    PREPARE_AIO
+                    ${PROJECT_NAME}
+                    $<TARGET_FILE:${PROJECT_NAME}>
                 COMMENT "Copy plugin DLL/PDB to ${DEPLOY_TARGET}/SKSE/Plugins"
             )
 

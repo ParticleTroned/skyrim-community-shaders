@@ -25058,8 +25058,7 @@ bool Upscaling::IsVRRenderScaleTransitionEpochCurrent(uint64_t a_epoch) const
 		return true;
 
 	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
-	return vrRenderScaleTransitionController.targetEpoch == 0 ||
-	       vrRenderScaleTransitionController.targetEpoch == a_epoch;
+	return vrRenderScaleTransitionController.targetEpoch == a_epoch;
 }
 
 bool Upscaling::RecordVRRenderScaleRelatchPlan(const VRRenderScaleRelatchPlan& a_plan)

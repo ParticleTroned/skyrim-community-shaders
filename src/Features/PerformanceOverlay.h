@@ -147,6 +147,7 @@ struct PerformanceOverlay : OverlayFeature
 	void SaveSettings(json& j) override;
 	void LoadSettings(json& j) override;
 	void RestoreDefaultSettings() override;
+	void ResetWindowLayout();
 
 	// ============================================================================
 	// CORE PERFORMANCE DISPLAY FUNCTIONS
@@ -272,9 +273,10 @@ struct PerformanceOverlay : OverlayFeature
 		static constexpr float kMaxUpdateInterval = 2.0f;            // seconds - Maximum update interval
 		static constexpr float kDefaultWindowPadding = 10.0f;        // pixels - Default window padding
 		static constexpr float kLabelPadding = 100.0f;               // pixels - Padding for labels
-		static constexpr float kDrawCallsTableWidth = 600.0f;        // pixels - Draw calls table width
+		static constexpr float kDefaultContentWidth = 500.0f;        // pixels - Default width for graphs and tables
 		static constexpr float kVRAMSectionWidth = 300.0f;           // pixels - VRAM section width
 		static constexpr float kWindowBorderPadding = 20.0f;         // pixels - Window border padding
+		static constexpr float kLayoutChangeEpsilon = 0.5f;          // pixels - Ignore insignificant content height changes
 		static constexpr float kDefaultFrameTimeMs = 16.67f;         // ms - Default frame time (60 FPS)
 		static constexpr int kMinFrameHistorySize = 120;             // 2s @ 60fps, 0.5s @ 240fps
 		static constexpr int kMaxFrameHistorySize = 1800;            // 30s @ 60fps, 7.5s @ 240fps
@@ -318,6 +320,11 @@ private:
 	// A/B testing settings diff data
 	std::vector<SettingsDiffEntry> settingsDiff;
 	bool settingsDiffLoaded = false;
+	bool resetWindowSize = false;
+	bool resizeWindowHeight = false;
+	bool hadWideContent = false;
+	float currentWindowWidth = 0.0f;
+	float lastContentHeight = 0.0f;
 
 	// Test data management
 	void CaptureTestData();
